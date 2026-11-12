@@ -18,10 +18,12 @@ return function(S)
   -- The scheduler's own tunables: its one param, the modes in option order,
   -- the beats a mode waits for (clock.sync's quantum), how near its beat a
   -- clock's resume may be posted (a tick's jitter, as the sequencer's
-  -- SEQ.wake_tolerance) and matron's FLT_EPSILON, with which its scheduler
-  -- finds a sync's beat (clock_scheduler_next_clock_beat)
+  -- SEQ.wake_tolerance), matron's FLT_EPSILON, with which its scheduler
+  -- finds a sync's beat (clock_scheduler_next_clock_beat), and the seconds
+  -- a waiting action's flash is started for: no time ends it, only the
+  -- action's run or drop (end_flash), however long it waits (#631)
   local QUANTIZE = {param_count = 1, param_id = "quantize_actions", modes = {"off", "beat", "bar"},
-    beats = {beat = 1, bar = 4}, wake_tolerance = 1 / 32, flt_epsilon = 2 ^ -23}
+    beats = {beat = 1, bar = 4}, wake_tolerance = 1 / 32, flt_epsilon = 2 ^ -23, flash_seconds = math.huge}
   M.QUANTIZE = QUANTIZE
   M.PARAM_COUNT = QUANTIZE.param_count  -- the params add_params adds
 
@@ -85,8 +87,9 @@ return function(S)
 
   -- Run fn now (quantize_actions off) or at the next beat or bar, replacing
   -- a waiting action of the same key; while it waits, label shows in the
-  -- header as "<label> at beat" or "<label> at bar" (for at most the beat
-  -- or bar, ending when fn runs). Returns whether fn ran at once and, for an
+  -- header as "<label> at beat" or "<label> at bar" (for as long as it
+  -- waits, ending when fn runs or the action is dropped, #631; another
+  -- flash can take its place). Returns whether fn ran at once and, for an
   -- action that waits, its token (waiting(key, token) tells whether that
   -- one still waits). A waiting fn that raises prints "strata: quantized
   -- <key> failed: <error>"
@@ -117,7 +120,7 @@ return function(S)
       if not ran then print("strata: quantized " .. key .. " failed: " .. tostring(failure)) end
     end)
     M.actions[key] = action
-    if action.flash then S.lib.ui_flash.start("header", action.flash, beats * clock.get_beat_sec()) end
+    if action.flash then S.lib.ui_flash.start("header", action.flash, QUANTIZE.flash_seconds) end
     return false, action.token
   end
 

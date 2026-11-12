@@ -207,6 +207,26 @@ test("an action dropped with its resume posted ends at its wake doing nothing; a
   assert_equal(runs.fourth, 1)
 end)
 
+-- The flash lasts as long as the action waits, not a bar's seconds at the
+-- tempo when it was scheduled: a slower tempo meanwhile makes the wait
+-- longer (#631)
+test("a waiting action's flash shows until it runs, through a tempo change", function()
+  local context = load_strata()
+  local S = local_value("S")
+  local quantize = S.lib.quantize
+  local runs = {}
+  run_to_beat(context, 0.2)
+  params:set("quantize_actions", BAR)
+  quantize.schedule("scene", counter(runs, "scene"), "S3")
+  params:set("clock_tempo", 30)  -- a beat is 2 s from here: the bar is about 7.6 s away
+  context.clock.run_for(3)       -- past 2 s, the bar's length at 120 BPM
+  assert_equal(runs.scene, nil, "the action still waits")
+  assert_equal(S.lib.ui_flash.text("header"), "S3 at bar", "and its flash still shows")
+  run_to_beat(context, 4.02)
+  assert_equal(runs.scene, 1, "it runs at the bar")
+  assert_equal(S.lib.ui_flash.text("header"), nil, "and its flash goes then")
+end)
+
 test("an action that fails at its beat prints a line and leaves nothing waiting", function()
   local context = load_strata()
   local quantize = local_value("S").lib.quantize
