@@ -651,10 +651,10 @@ test("learn takes the next hand-touched target", function()
   -- a param that is no target flashes, and learn waits on
   macros.learn(12, 2)
   enc_param_delta(3, "macro_2", 1)
-  assert_equal(flash.text("header"), "not a macro target")
+  assert_equal(flash.text("header"), "not a target")
   assert_equal(macros.targets(12)[2].id, "", "the row stays empty")
   enc_param_delta(3, "filter_type", 1)
-  assert_equal(flash.text("header"), "not a macro target", "an option is no target")
+  assert_equal(flash.text("header"), "not a target", "an option is no target")
   m, k = macros.learning()
   assert_equal(m, 12, "still learning"); assert_equal(k, 2)
   -- a voice's main param learns the voice's main entry
@@ -673,6 +673,89 @@ test("learn takes the next hand-touched target", function()
   assert_equal(S.macro_learn_clock, nil)
   enc_param_delta(3, "reverb_mix", 1)
   assert_equal(macros.targets(5)[8].id, "")
+end)
+
+-- Every flash learn and the banks raise fits the header's flash room
+-- (S.constants.HEADER.flash_width) whole: the refusal and the bank as they
+-- are, a learned row's label cut to fit after its macro
+test("every flash of macro learn and the banks fits the header's flash room", function()
+  local context, S, macros = loaded()
+  local room, flash = S.constants.HEADER.flash_width, S.lib.ui_flash
+  local flashes = {}
+  -- the param a touch of a target id moves: a main entry's resolved param
+  local function touched(id)
+    local voice = id:match("^v(%d+)_main$")
+    return voice and main_param_id(tonumber(voice)) or id
+  end
+  local function learned(m, id)
+    macros.learn(m, 8)
+    enc_param_delta(3, touched(id), 1)
+    table.insert(flashes, flash.text("header"))
+  end
+  local widest_id, widest_m
+  for _, id in ipairs(macros.target_ids()) do
+    if not widest_id or h.text_width(macros.target_label(id)) > h.text_width(macros.target_label(widest_id)) then
+      widest_id = id
+    end
+  end
+  for m = 1, 16 do
+    if not widest_m or h.text_width("M" .. m) > h.text_width("M" .. widest_m) then widest_m = m end
+  end
+  for m = 1, 16 do learned(m, widest_id) end
+  for _, id in ipairs(macros.target_ids()) do learned(widest_m, id) end
+  -- the refusal
+  macros.learn(1, 1)
+  enc_param_delta(3, "macro_2", 1)
+  table.insert(flashes, flash.text("header"))
+  macros.cancel_learn()
+  -- the banks
+  for b = 1, 4 do
+    macros.set_bank(b)
+    table.insert(flashes, flash.text("header"))
+  end
+  for _, text in ipairs(flashes) do
+    assert_true(h.text_width(text) <= room, text .. " (" .. h.text_width(text) .. " px) fits the header's " .. room .. " px")
+  end
+  context.clock.run_for(2)
+end)
+
+-- #626: learn's timeout clock is retired, never canceled, so learn ending
+-- (K2, a touch, a new learn) as its 10 s resume is posted raises nothing
+-- and the old clock ends nothing a newer learn armed
+test("learn ending as its timeout's resume is posted retires the clock, never cancels it (#626)", function()
+  local context, S, macros = loaded()
+  local function at_timeout(fn)
+    context.clock.advance_until(S.macro_learn_clock, fn)
+    local errors = context.clock.take_errors()
+    assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
+  end
+  macros.learn(1, 1)
+  at_timeout(function() macros.cancel_learn() end)                       -- K2
+  assert_equal(macros.learning(), nil)
+  macros.learn(1, 2)
+  at_timeout(function() enc_param_delta(3, "reverb_mix", 1) end)          -- a touch
+  assert_equal(macros.targets(1)[2].id, "reverb_mix", "the touch learned")
+  macros.learn(1, 3)
+  at_timeout(function() macros.learn(2, 4) end)                          -- a new learn
+  local m, k = macros.learning()
+  assert_equal(m, 2, "the new learn still waits"); assert_equal(k, 4)
+  assert_true(S.macro_learn_clock ~= nil, "on its own clock")
+  context.clock.run_for(10.1)
+  assert_equal(macros.learning(), nil, "and times out 10 s after it was armed")
+  -- long before its wake no resume can be posted: the clock is canceled,
+  -- so a burst of learns holds no clock slots
+  macros.learn(3, 1)
+  local early = S.macro_learn_clock
+  macros.cancel_learn()
+  assert_equal(clock.threads[early], nil, "an early end cancels the clock")
+  -- cleanup cancels a retired clock still waiting
+  macros.learn(3, 1)
+  local retired = S.macro_learn_clock
+  context.clock.run_for(9.95)
+  macros.cancel_learn()
+  assert_true(clock.threads[retired] ~= nil, "near its wake the clock is retired, and waits for its wake")
+  cleanup()
+  assert_equal(clock.threads[retired], nil, "cleanup cancels it")
 end)
 
 test("the shown bank is shared and changing it sends nothing", function()

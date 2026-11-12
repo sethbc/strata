@@ -36,6 +36,7 @@ return function(S)
   local MACROS = {
     apply_hz = 30,
     learn_seconds = 10,
+    learn_wake_margin = 0.1,  -- s before its wake a learn clock is still canceled (#626)
     save_delay = 0.1,  -- s from a change of the targets to the live file's write
     banks = math.floor(NUM_MACROS / MACRO_BANK_SIZE),
     epsilon = 1e-9,
@@ -578,10 +579,22 @@ return function(S)
   ---------------------------------------------------------------------------
 
   local learning = nil  -- {m, k} while learn waits for a touch
+  -- Learn ending never cancels its timeout clock once norns may have posted
+  -- its resume (#626, as the apply clock): within learn_wake_margin of its
+  -- wake (at wake) the clock is retired, its token goes old and at its wake
+  -- it ends, touching nothing a newer learn armed (retired[id] until then,
+  -- which cleanup cancels); earlier it is canceled, so a burst of learns
+  -- never fills matron's 100 clock slots with 10 s sleeps
+  local learn_clock = {token = 0, retired = {}, wake = -math.huge}
 
   function M.cancel_learn()
     if S.macro_learn_clock then
-      clock.cancel(S.macro_learn_clock)
+      if util.time() < learn_clock.wake - MACROS.learn_wake_margin then
+        clock.cancel(S.macro_learn_clock)  -- its resume cannot be posted yet
+      else
+        learn_clock.retired[S.macro_learn_clock] = true
+      end
+      learn_clock.token = learn_clock.token + 1
       S.macro_learn_clock = nil
     end
     if learning then
@@ -598,12 +611,18 @@ return function(S)
     if not (is_index(m, NUM_MACROS) and is_index(k, MACRO_TARGETS)) then return false end
     M.cancel_learn()
     learning = {m = m, k = k}
-    S.macro_learn_clock = clock.run(function()
+    learn_clock.token = learn_clock.token + 1
+    local token, id = learn_clock.token, nil
+    learn_clock.wake = util.time() + MACROS.learn_seconds
+    id = clock.run(function()
       clock.sleep(MACROS.learn_seconds)
+      learn_clock.retired[id] = nil
+      if token ~= learn_clock.token then return end
       S.macro_learn_clock = nil
       learning = nil
       request_redraw()
     end)
+    S.macro_learn_clock = id
     request_redraw()
     return true
   end
@@ -629,7 +648,7 @@ return function(S)
     if not learning then return end
     local id = learnable(param_id)
     if not id then
-      header_flash("not a macro target")
+      header_flash("not a target")  -- 54 px: the header's flash room is 74
       return
     end
     local m, k = learning.m, learning.k
@@ -788,6 +807,8 @@ return function(S)
     applying.pending = {}
     cancel_clocks()
     M.cancel_learn()
+    for id in pairs(learn_clock.retired) do clock.cancel(id) end
+    learn_clock.retired = {}
   end)
 
   -- A macro waits exactly while the apply clock runs, and that clock is a
@@ -810,10 +831,17 @@ return function(S)
     end
   end)
 
-  -- Learn waits exactly while its timeout clock runs
+  -- Learn waits exactly while its timeout clock runs; a retired one is
+  -- never S.macro_learn_clock and is forgotten when it ends
   S.register_invariant("macro learn", function()
     if (learning ~= nil) ~= (S.macro_learn_clock ~= nil) then
       return "learn waits: " .. tostring(learning ~= nil) .. ", but its clock is " .. tostring(S.macro_learn_clock)
+    end
+    for id in pairs(learn_clock.retired) do
+      local thread = clock.threads and clock.threads[id]
+      if id == S.macro_learn_clock or (clock.threads and (type(thread) ~= "thread" or coroutine.status(thread) == "dead")) then
+        return "the retired learn clock " .. id .. " is still the learn clock or has gone but is kept"
+      end
     end
   end)
 
