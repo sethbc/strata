@@ -63,7 +63,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 65 | set and start the `recordState` poll (`record_poll`) | `lib/record.lua` |
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
 | 80 | read the grid rotations (`grids.data`), then connect the grids (`grid_init`) | `lib/grid/core.lua` |
-| 90 | listen for MIDI (`midi_init`), then repair norns' MIDI map: a map on an id that is no param moves to its 3.4 param or goes (`S.lib.midi_in.repair_midi_map`, #602) | `lib/midi_in.lua` |
+| 90 | listen for MIDI (`midi_init`), then repair norns' MIDI map: a map on one of 3.3's own LFO ids moves to its 3.4 param or goes, and no other map is touched (`S.lib.midi_in.repair_midi_map`, #602) | `lib/midi_in.lua` |
 | 100 | add the registered scene fields to `S.SCENE_GLOBAL_PARAMS`, then load scenes.data (`load_scenes_from_disk`, sets `S.scenes_loaded`) | `lib/scenes.lua` |
 | 105 | load the macros' targets from data/strata/macros.data (`START_ORDER.macros_load`; a missing file loads them empty, one it cannot use is set aside, an unknown target id is kept with a console line), then redraw the screen and grids (3.4) | `lib/macros.lua` |
 | 107 | load the gesture recorders, stopped, from data/strata/gestures.data (`START_ORDER.gestures_load`; a missing file loads them empty, one it cannot use is set aside), then redraw the screen and grids (3.4) | `lib/gestures.lua` |
