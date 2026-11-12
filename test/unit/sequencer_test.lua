@@ -429,7 +429,12 @@ test("the pattern clock follows the clock's transport start and stop (#530)", fu
   local playing_clock = S.pattern_clock
   clock.transport.start()
   assert_equal(S.lib.sequencer.sounding_step(), 1, "a start while playing starts over from step 1")
-  assert_true(context.clock.threads[playing_clock] == nil, "the clock that played is canceled")
+  -- the clock that played is never canceled (its resume may be posted):
+  -- it ends at its next wake, playing nothing
+  assert_true(S.pattern_clock ~= playing_clock, "a new clock plays")
+  context.clock.run_for(0.125 + 1e-6)
+  assert_true(context.clock.threads[playing_clock] == nil, "the clock that played has ended")
+  assert_equal(S.lib.sequencer.sounding_step(), 2, "one 16th on, played once")
   UI_PAGES.screen_dirty = false
   clock.transport.stop()
   assert_equal(S.pattern_playing, false, "a transport stop stops the patterns")
@@ -1796,6 +1801,258 @@ end)
 
 test("a 1/32 voice never plays two steps at one instant through a jump forward a clock notices", function()
   thirty_second_jump(4.05, 30.3, "a 1/32 voice set forward")
+end)
+
+-- Ending a clock never cancels one whose resume matron may have posted:
+-- norns would deliver that resume to a coroutine it no longer has, and
+-- clock.resume raises (maiden prints the error). action runs in the
+-- scheduler step that posts the patterns' clocks (the transport's among
+-- them), after the posts and before any delivery, as an event Lua handles
+-- first does
+local function between_posts_and_deliveries(context, S, action)
+  local done = false
+  repeat
+    context.clock.advance(function()
+      local event = context.clock.events[S.pattern_clock]
+      if not done and event and not event.ready then
+        done = true
+        action()
+      end
+    end)
+  until done
+end
+
+-- The patterns' clocks: every voice's, then the transport's
+local function pattern_clock_ids(S)
+  local ids = {}
+  for voice_idx = 1, S.constants.NUM_VOICES do ids[voice_idx] = S.pattern_clocks[voice_idx] end
+  ids[S.constants.NUM_VOICES + 1] = S.pattern_clock
+  return ids
+end
+
+local function assert_no_clock_errors(context, what)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, what .. ": no clock error" .. (errors[1] and (", " .. errors[1]) or ""))
+end
+
+-- action, run while every clock of the patterns has its resume posted
+-- (between_posts_and_deliveries): no clock error and nothing printed, the
+-- step's deliveries included. Returns the clocks before it, the index of
+-- the first event after it and the beat it ran at
+local function while_posted(context, S, events, what, action)
+  local old, printed, from, beat = pattern_clock_ids(S), #context.printed, nil, nil
+  between_posts_and_deliveries(context, S, function()
+    for index = 1, #old do
+      local event = context.clock.events[old[index]]
+      assert_true(event ~= nil and not event.ready, what .. ": clock " .. index .. "'s resume is posted")
+    end
+    from, beat = #events + 1, clock.get_beats()
+    action()
+  end)
+  assert_no_clock_errors(context, what)
+  local lines = {}
+  for index = printed + 1, #context.printed do table.insert(lines, context.printed[index]) end
+  assert_equal(table.concat(lines, "\n"), "", what .. ": nothing printed")
+  return old, from, beat
+end
+
+-- One clock for every voice and one for the transport, each running and
+-- none of them one of old (whose posted resumes have come: they ended)
+local function assert_one_clock_each(context, S, old, what)
+  local new, seen = pattern_clock_ids(S), {}
+  for index = 1, #old do
+    assert_true(context.clock.threads[old[index]] == nil, what .. ": the old clock " .. index .. " has ended")
+    seen[old[index]] = true
+  end
+  for index = 1, S.constants.NUM_VOICES + 1 do
+    local id = new[index]
+    assert_true(id ~= nil and context.clock.threads[id] ~= nil and not seen[id],
+      what .. ": clock " .. index .. " is a new one, running")
+    seen[id] = true
+  end
+end
+
+-- The patterns started over at beat (the events from index from on): every
+-- voice and the transport at step 1 at once on a count of the clock's own;
+-- over the next 6.3 s voices 1 (1/16) and 2 (a bar) play step 1 first, on
+-- the start's beat, then every step on their division from it, one after
+-- another, in step with each other and the transport
+local function assert_started(context, S, events, from, beat, what)
+  local seq = S.lib.sequencer
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    assert_equal(seq.sounding_step(voice_idx), 1, what .. ": voice " .. voice_idx .. " at its step 1")
+  end
+  assert_equal(seq.sounding_step(), 1, what .. ": the transport at its 16th 1")
+  assert_equal(seq.count_offset(), 0, what .. ": the count is the clock's")
+  assert_equal(count_in_step(context, S, 6.3, what), 3, what .. ": voice 2 moves on once a bar")
+  assert_no_clock_errors(context, what .. ", playing on")
+  local after = {}
+  for index = from, #events do table.insert(after, events[index]) end
+  for voice_idx, division in pairs(DIVISIONS) do
+    local steps = voice_events(after, voice_idx, true)
+    assert_equal(steps[1] and steps[1].step, 1, what .. ": voice " .. voice_idx .. " plays its step 1 first")
+    assert_near(steps[1].beat, beat, 1e-9, what .. ": voice " .. voice_idx .. "'s step 1 on the start's beat")
+    for index, event in ipairs(steps) do
+      local divisions = (event.beat - beat) / division
+      assert_near(divisions, math.floor(divisions + 0.5), 1e-6,
+        string.format("%s: voice %d's step event %d on its division from the start", what, voice_idx, index))
+    end
+    assert_no_two_at_once(after, voice_idx, what)
+  end
+  assert_gaps_bounded(after, DIVISIONS, what)
+end
+
+-- A MIDI start the patterns follow, in matron's order: clock_start_from_source
+-- resets the beat and every waiting sync, then posts the start event. The
+-- resumes the tick posted just before the reset (every clock of the
+-- patterns is due at 20.25) are delivered first, on the old count; each
+-- clock finds the beat gone back and sleeps 0, and the next tick posts
+-- those sleeps' resumes while Lua handles the start (Strata's handler)
+-- first. That handler cancels no clock
+local function followed_start(context, S, events, what)
+  between_posts_and_deliveries(context, S, function() context.clock.transport_reset() end)
+  return while_posted(context, S, events, what, function() clock.transport.start() end)
+end
+
+test("a followed start with every clock's resume posted raises and prints nothing and starts every voice at step 1", function()
+  local context, S = setup()
+  params:set("clock_source", CLOCK_SOURCE.midi)
+  local events = in_step_setup(context, S)
+  context.clock.run_for(9.55)  -- beat 20.1
+  local old, from, beat = followed_start(context, S, events, "a followed start")
+  assert_near(beat, 0, 1e-9, "the start comes on the reset's beat 0")
+  assert_one_clock_each(context, S, old, "a followed start")
+  assert_started(context, S, events, from, beat, "a followed start")
+  pattern_clock_stop()
+end)
+
+-- A millisecond after the first start every clock it began waits on its
+-- next 16th; the second start's reset puts those syncs on beat 0, and the
+-- next tick posts them all before Lua handles the start
+test("a second followed start a millisecond after the first is as clean", function()
+  local context, S = setup()
+  params:set("clock_source", CLOCK_SOURCE.midi)
+  local events = in_step_setup(context, S)
+  context.clock.run_for(9.55)  -- beat 20.1
+  local first = followed_start(context, S, events, "the first start")
+  assert_one_clock_each(context, S, first, "the first start")
+  context.clock.run_for(0.001)
+  context.clock.transport_reset()
+  local old, from, beat = while_posted(context, S, events, "the second start", function() clock.transport.start() end)
+  assert_one_clock_each(context, S, old, "the second start")
+  assert_started(context, S, events, from, beat, "the second start")
+  pattern_clock_stop()
+end)
+
+-- The play key's stop, then its start (quantize off: at once), pressed as
+-- the clocks' resumes for beat 20 are posted
+test("the play key's stop and start with every clock's resume posted cancel none of them", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(9.45)  -- beat 19.9: every clock of the patterns is due at 20
+  local old, from, beat = while_posted(context, S, events, "the play key", function()
+    pattern_toggle()
+    assert_equal(S.pattern_playing, false, "the first press stops the patterns")
+    pattern_toggle()
+  end)
+  assert_one_clock_each(context, S, old, "the play key")
+  assert_started(context, S, events, from, beat, "the play key")
+  pattern_clock_stop()
+end)
+
+-- The play key's stop, pressed just before the internal clock's reset:
+-- Lua handles it, then the start event, then the resumes the reset brings.
+-- Every clock's sync was put on beat 0, below the beat it synced at, so
+-- each resume is posted and no clock is canceled
+test("the play key's stop with a reset's resumes posted cancels none of them", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(9.55)  -- beat 20.1: every clock of the patterns waits on a sync due at 20.25
+  context.clock.transport_reset()
+  local old = while_posted(context, S, events, "a stop after a reset", function()
+    pattern_toggle()
+    clock.transport.start()  -- the internal clock's: the patterns do not follow it
+  end)
+  assert_equal(S.pattern_playing, false, "the patterns stopped")
+  for index = 1, #old do assert_true(context.clock.threads[old[index]] == nil, "clock " .. index .. " has ended") end
+  local played = #events
+  context.clock.run_for(1.0)
+  assert_equal(#events, played, "and nothing plays")
+end)
+
+-- At a division reset's bar the transport restarts every voice still on
+-- its old anchor (restart_voice); a voice whose resume is posted on that
+-- tick and delivered after the transport's is restarted with it posted
+test("a voice restarted with its resume posted, as at a division reset's bar, cancels no clock", function()
+  local context, S = setup()
+  local events = in_step_setup(context, S)
+  context.clock.run_for(9.45)  -- beat 19.9: every clock of the patterns is due at 20
+  local old, from = while_posted(context, S, events, "a voice restarted", function()
+    S.lib.sequencer.restart_voice(1, clock.get_beats() + S.lib.sequencer.count_offset())
+  end)
+  local now = pattern_clock_ids(S)
+  assert_true(context.clock.threads[old[1]] == nil, "voice 1's old clock has ended")
+  assert_true(now[1] ~= old[1] and context.clock.threads[now[1]] ~= nil, "a new clock runs voice 1")
+  for index = 2, #old do assert_equal(now[index], old[index], "clock " .. index .. " is the same") end
+  context.clock.run_for(2.0)
+  assert_no_clock_errors(context, "a voice restarted, playing on")
+  local after = {}
+  for index = from, #events do table.insert(after, events[index]) end
+  local steps = voice_events(after, 1, true)
+  assert_equal(steps[1] and steps[1].step, 1, "voice 1 plays its step 1 first")
+  assert_no_two_at_once(after, 1, "a voice restarted")
+  assert_gaps_bounded(after, {[1] = 0.25}, "a voice restarted")
+  pattern_clock_stop()
+end)
+
+-- A stop just before the clocks' next 16th leaves them to end at it, as
+-- matron may post their resumes first; norns cancels every coroutine right
+-- after a script's cleanup, so cleanup ends them at once
+test("cleanup leaves no clock of the patterns running, those a stop left to end included", function()
+  local context, S = setup()
+  in_step_setup(context, S)
+  context.clock.run_for(9.495)  -- beat 19.99: every clock of the patterns waits on a sync due at 20
+  local old = pattern_clock_ids(S)
+  pattern_clock_stop()
+  cleanup()
+  for index = 1, #old do assert_true(context.clock.threads[old[index]] == nil, "clock " .. index .. " has ended") end
+end)
+
+local function pattern_clock_invariant(S)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "pattern clock" then return record.fn end
+  end
+end
+
+-- The invariant describes the clocks that run: a recorded clock that no
+-- longer runs, or one ended and left to end at its next wake, breaks it
+test("the pattern clock invariant sees a recorded clock that no longer runs or was ended", function()
+  local context, S = setup()
+  local check = pattern_clock_invariant(S)
+  assert_true(check ~= nil, "registered")
+  local events = in_step_setup(context, S)
+  assert_equal(check(), nil, "it holds while the patterns play")
+  clock.cancel(S.pattern_clocks[3])  -- behind the module's back, its id still recorded
+  local broken = check()
+  assert_true(broken ~= nil and tostring(broken):find("not running", 1, true) ~= nil,
+    "a canceled clock still recorded breaks it: " .. tostring(broken))
+  pattern_clock_stop()
+  assert_equal(check(), nil, "stopped: it holds")
+  pattern_clock_start()
+  context.clock.run_for(0.2)  -- every clock of the patterns is due at the next 16th
+  while_posted(context, S, events, "a restart", function()
+    local ended = S.pattern_clocks[1]
+    S.lib.sequencer.restart_voice(1, clock.get_beats() + S.lib.sequencer.count_offset())
+    assert_equal(check(), nil, "it holds with the ended clock waiting for its posted resume")
+    local running = S.pattern_clocks[1]
+    S.pattern_clocks[1] = ended
+    broken = check()
+    S.pattern_clocks[1] = running
+  end)
+  assert_true(broken ~= nil and tostring(broken):find("ended", 1, true) ~= nil,
+    "an ended clock recorded again breaks it: " .. tostring(broken))
+  assert_equal(check(), nil, "it holds after the step")
+  pattern_clock_stop()
 end)
 
 -- Rule 3: late is not a jump. Voice 1 at 1/16t (a step every 1/6 beat); its
