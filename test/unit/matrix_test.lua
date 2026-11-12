@@ -1290,8 +1290,7 @@ test("a scenes file of 16 scenes, each with 16 full macros, 16 routings and attr
   assert_true(tables <= S.lib.data_files.DATA_FILES.max_tables,
     tables .. " tables fit the reader's bound of " .. S.lib.data_files.DATA_FILES.max_tables)
   local largest = S.lib.data_files.DATA_FILES.largest_scenes_tables  -- the cap keeps 4 times it (data_files_test.lua)
-  assert_true(type(largest) == "number" and tables <= largest,
-    tables .. " tables: no more than the largest scenes file the reader's cap is sized for, " .. tostring(largest))
+  assert_equal(tables, largest, "the largest scenes file the reader's cap is sized for holds exactly its figure")
   cleanup()
   local _, next_S, next_matrix = loaded({ data_subdir = data_dir_name(context) })
   for slot = 1, next_S.constants.NUM_SCENES do

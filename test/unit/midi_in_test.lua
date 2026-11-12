@@ -770,6 +770,15 @@ test("a MIDI map on a 3.3 LFO param moves to its 3.4 param or goes at start, so 
     end
   end
   assert_equal(said, 10, "one console line per map moved or removed")
+  local function said_line(text)
+    for _, line in ipairs(context.printed) do if line == text then return true end end
+    return false
+  end
+  assert_true(said_line("midi map: lfo_shape_1 (a 3.3 LFO param) removed: 3.4 has no param of its meaning"),
+    "a 3.3 id with no 3.4 param says so")
+  assert_true(said_line("midi map: lfo_phase_2 (a 3.3 LFO param) removed: its 3.4 param strata_lfo2_phase is "
+    .. "already mapped (CC 30, channel 1, device 1)"), "a 3.3 id whose 3.4 param has its own map names that map")
+  assert_true(said_line("midi map: lfo_depth_1 (a 3.3 LFO param) moved to strata_lfo1_depth"))
   assert_equal(writes.count, 1, "the repaired map is written once")
   -- written back: the file norns reads at the next start holds the repair
   -- and the mod's map
@@ -780,6 +789,27 @@ test("a MIDI map on a 3.3 LFO param moves to its 3.4 param or goes at start, so 
   assert_equal(norns.pmap.rev[1][1][32], "master_density")
   assert_equal(norns.pmap.rev[1][1][33], "modparam_level", "the mod's map is in strata.pmap")
   assert_equal(norns.pmap.data.modparam_level.out_hi, 0.75)
+end)
+
+-- A 3.3 map whose CC another map took (a file with two maps on one CC, as
+-- norns' refresh leaves the reverse slot to one) goes, and the line names
+-- the map on that CC
+test("a 3.3 LFO map whose CC maps another param goes, and the console names that param (#602)", function()
+  local context = load_strata({ before_init = function()
+    norns.pmap.new("master_density"); norns.pmap.assign("master_density", 1, 1, 40)
+    norns.pmap.new("lfo_depth_3"); norns.pmap.data.lfo_depth_3.cc = 40  -- the same CC, its reverse slot not its own
+  end })
+  finish_startup(context)
+  assert_equal(norns.pmap.data.lfo_depth_3, nil, "the 3.3 map goes")
+  assert_equal(norns.pmap.data.strata_lfo3_depth, nil, "and does not move")
+  assert_equal(norns.pmap.rev[1][1][40], "master_density", "the CC keeps its own map")
+  local found = false
+  for _, line in ipairs(context.printed) do
+    if line == "midi map: lfo_depth_3 (a 3.3 LFO param) removed: its CC 40 (channel 1, device 1) maps master_density" then
+      found = true
+    end
+  end
+  assert_true(found, "the console names the map on its CC")
 end)
 
 test("a MIDI map with nothing of 3.3's to repair is left as it is and never written (#602)", function()
