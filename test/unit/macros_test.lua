@@ -279,12 +279,14 @@ test("an LFO on a macro moves the targets' engine values and no param", function
   macros.set_target(1, 2, "v3_grain_pitch", 0, 1)
   params:set("macro_1", 0.5); settle(context)
   local pitch = params:get("v3_grain_pitch")
-  -- without the matrix, a fast target moves nothing (and raises nothing)
-  S.lib.matrix = nil
+  -- without the matrix's fast sums, a fast target moves nothing (and raises
+  -- nothing); MAIN's mark still asks the stand-in which voices it moves
+  S.lib.matrix = { affects = function() return false end }
   S.engine_senders.macro_1(0.7)
   context.clock.run_for(0.05)
   local fast = {}
-  S.lib.matrix = { set_fast_extra = function(key, id, m) table.insert(fast, { key = key, id = id, m = m }) end }
+  S.lib.matrix = { set_fast_extra = function(key, id, m) table.insert(fast, { key = key, id = id, m = m }) end,
+    affects = function() return false end }
   context.clear_engine_calls()
   S.engine_senders.macro_1(0.7)
   assert_near(engine_value(S, "reverb_mix"), 0.7, 1e-9, "an extra offset of +0.2 on reverb_mix")
@@ -309,7 +311,7 @@ test("an LFO on a macro moves the targets' engine values and no param", function
   assert_equal(#fast, 2, "the fast extra is cleared too")
   assert_equal(fast[2].id, "v3_grain_pitch"); assert_equal(fast[2].m, nil)
   -- a real LFO on the destination macro 1: square at 100 % puts the macro at 1
-  S.lib.matrix = nil
+  S.lib.matrix = { affects = function() return false end }
   local lfos = S.lib.lfos
   local destination
   for index, entry in ipairs(S.LFO_DESTINATIONS) do
@@ -344,7 +346,8 @@ test("a target that changes or loads drops the extra an LFO on its macro gave th
   -- a main entry that resolves elsewhere: the old param's extra goes at the
   -- next LFO value, and the position it resolves to now is a fast target
   local fast = {}
-  S.lib.matrix = { set_fast_extra = function(key, id, m) fast[#fast + 1] = { key = key, id = id, m = m } end }
+  S.lib.matrix = { set_fast_extra = function(key, id, m) fast[#fast + 1] = { key = key, id = id, m = m } end,
+    affects = function() return false end }
   params:set("v2_source", S.constants.SOURCE_SYNTH + 1)
   S.engine_senders.macro_1(0.7)
   assert_near(extra(main), 0, 1e-9, "the synth param the main entry left")
@@ -468,7 +471,8 @@ end)
 test("an LFO on a macro follows a main entry that resolves elsewhere after a source change", function()
   local context, S, macros = loaded()
   local fast = {}
-  S.lib.matrix = { set_fast_extra = function(key, id, m) fast[#fast + 1] = { key = key, id = id, m = m } end }
+  S.lib.matrix = { set_fast_extra = function(key, id, m) fast[#fast + 1] = { key = key, id = id, m = m } end,
+    affects = function() return false end }
   macros.set_target(1, 1, "v2_main", 0, 1)
   params:set("macro_1", 0.5); settle(context)
   local main = main_param_id(2)

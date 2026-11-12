@@ -214,10 +214,9 @@ return function(S)
     return points[#points][2]
   end
 
-  -- Whether the matrix (package 1h) routes LFO n somewhere: read
-  -- defensively, as the matrix may not be loaded
+  -- Whether a playing routing of the matrix reads LFO n
   local function routed(n)
-    return S.lib.matrix ~= nil and S.lib.matrix.uses_source("lfo" .. n) and true or false
+    return S.lib.matrix.uses_source("lfo" .. n)
   end
 
   local function draw_lfo_row(n)
