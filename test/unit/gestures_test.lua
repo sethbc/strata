@@ -525,13 +525,13 @@ test("a live file that can be neither read nor set aside is never written over",
     local_value("S").lib.data_files.set_aside = function() return nil, "permission denied" end
   end })
   finish_startup(context)
-  local said = false
-  for _, line in ipairs(context.printed) do
-    if line:find("gestures will not be saved", 1, true) then said = true end
-  end
-  assert_true(said, "a console line says so")
   cleanup()
   assert_equal(h.file_text(live_path), bad, "not written over at cleanup")
+  local lines = 0
+  for _, line in ipairs(context.printed) do
+    if line:find("gestures will not be saved", 1, true) then lines = lines + 1 end
+  end
+  assert_equal(lines, 1, "one console line says saves are off")
 end)
 
 test("a damaged live file that is set aside loads empty and saves normally", function()
