@@ -2,7 +2,7 @@
 
 Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](../../README.md).
 
-After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **input**, **gestures**, **sequencer**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
+After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **matrix**, **input**, **gestures**, **sequencer**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
 PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that tells a PSET saved now from one saved before 3.3. An older PSET loads as it sounded: the Pulse voice's res, which ran the other way before 3.3, is turned around as it loads (see [Per-Voice Sections](#per-voice-sections)), until you save it again. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
@@ -33,6 +33,10 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 ## Scatter (group)
 - Scatter (off by default), depth (0-100 %, default 10 %), rate (0.01-1 Hz, default 0.1 Hz), and the settings it moves: pitch and position (on by default), size, cutoff and amp (off). See [Modulation](modulation.md#scatter)
 - Scenes store all eight: the depth and the rate fade, the switches change at the end of a fade
+
+## Matrix (group)
+- R1-R16 depth (-100 to 100 %, default 0) and R1-R16 on (on by default): the modulation matrix's 16 routings. Each moves its destination by its source's value times its depth, around the value you set (100 % from an LFO swings half the destination's range either side; a macro, a recorder or the input level only adds, from 0). A source is an LFO, a macro, a gesture recorder or the input level; a destination is any setting an LFO can move, never a macro. Routings on the same setting add up with its LFOs before the setting's range limits them. Macros can move the depths; no LFO can
+- A routing's source and destination are not parameters: they are saved with each PSET (in a file beside it, `<pset>.matrix.data`), in scenes and between sessions. A scene fades the depths and switches each routing's on/off at the end of a fade; a routing whose source or destination differs fades to 0 first and switches halfway
 
 ## Input (group)
 - Input follow gain (1-30, default 4): scales the live input's level, the modulation source `IN` on the MOD page and in the matrix, so a line-level input moves a destination. It does not change what you hear or the BUFFER page's meter

@@ -67,6 +67,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 100 | add the registered scene fields to `S.SCENE_GLOBAL_PARAMS`, then load scenes.data (`load_scenes_from_disk`, sets `S.scenes_loaded`) | `lib/scenes.lua` |
 | 105 | load the macros' targets from data/strata/macros.data (`START_ORDER.macros_load`; a missing file loads them empty, one it cannot use is set aside, an unknown target id is kept with a console line), then redraw the screen and grids (3.4) | `lib/macros.lua` |
 | 107 | load the gesture recorders, stopped, from data/strata/gestures.data (`START_ORDER.gestures_load`; a missing file loads them empty, one it cannot use is set aside), then redraw the screen and grids (3.4) | `lib/gestures.lua` |
+| 108 | load the matrix's routings from data/strata/matrix.data (`START_ORDER.matrix_load`; a missing file loads them empty, one it cannot use is set aside, an unknown source key or destination id is kept with a console line), then redraw the screen (3.4) | `lib/matrix.lua` |
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 125 | check every global LFO destination's param, then start the LFO clock (`S.lfo_clock`, 48 Hz, 3.4) | `lib/lfos.lua` |
@@ -75,11 +76,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 150 | start the playhead clock (`start_clock`) | `lib/playheads.lua` |
 | 160 | follow an external clock's transport: install `clock.transport.start` and `stop`, which act only when `clock_source` is not internal, keeping the handlers found (#530) | `lib/sequencer.lua` |
 
-3.4's orders are in `START_ORDER` ahead of their modules (package 0a), so no later package edits `lib/constants.lua` for one; no step is registered at them yet, and each module registers its own as it lands (`RESERVED_START_ORDERS` in `test/unit/structure_test.lua` lists the ones still waiting):
-
-| Order | Step | Module |
-|-------|------|--------|
-| 108 | load matrix.data (`matrix_load`) | lib/matrix.lua (new in 1h) |
+3.4's orders are in `START_ORDER` ahead of their modules (package 0a), so no later package edits `lib/constants.lua` for one; each module registers its own as it lands (`RESERVED_START_ORDERS` in `test/unit/structure_test.lua` lists the ones still waiting: none now).
 
 Adding a step:
 - A new resource gets its start in the module that owns it, at a free order at its place in this sequence (the orders are spaced by 10), next to its cleanup step.
@@ -115,6 +112,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 30 | save the scenes (skipped, with a message, if `load_scenes_from_disk` never ran in this session, `S.scenes_loaded`, or if scenes.data failed to load and could not be moved aside) | `lib/scenes.lua` |
 | 32 | save the macros' targets to data/strata/macros.data at once, canceling the write that waits (`S.macro_save_clock`) (`CLEANUP_ORDER.macros_save`; skipped if their start step never ran) (3.4) | `lib/macros.lua` |
 | 34 | save the gesture recorders to data/strata/gestures.data (`CLEANUP_ORDER.gestures_save`; skipped if their start step never ran; a recording is saved as if it stopped then) (3.4) | `lib/gestures.lua` |
+| 36 | save the matrix's routings to data/strata/matrix.data at once, canceling the write that waits (`S.matrix_save_clock`) (`CLEANUP_ORDER.matrix_save`; skipped if its start step never ran) (3.4) | `lib/matrix.lua` |
 | 40 | save the buffer paths (skipped the same way for buffers.data, with `S.buffers_loaded`) | `lib/buffers.lua` |
 | 50 | cancel init's start-up clock (`cancel_startup_clock`, while it waits to start voice 2) | `strata.lua` |
 | 60 | stop the frame clock | `lib/ui/frame.lua` |
@@ -128,6 +126,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 110 | cancel a scene transition | `lib/scenes.lua` |
 | 112 | cancel the morph clock (`S.morph_clock`) and drop the apply it waited for (3.4) | `lib/morph.lua` |
 | 114 | cancel the macros' apply clock (`S.macro_clock`), dropping every apply that waits, and learn's timeout (`S.macro_learn_clock`) (`CLEANUP_ORDER.macros`, 3.4) | `lib/macros.lua` |
+| 118 | cancel matrix learn's timeout (`S.matrix_learn_clock`) and forget the matrix's offsets (its extra offsets and fast sums), sending nothing; the matrix steps in the LFO clock and has no clock of its own (`CLEANUP_ORDER.matrix`, 3.4) | `lib/matrix.lua` |
 | 120 | cancel the LFO clock, release every engine-run LFO (`stopFastLfo`) and give every Lua-run LFO's destination its stored value back | `lib/lfos.lua` |
 | 122 | stop the playhead clock (`stop_clock`) | `lib/playheads.lua` |
 | 124 | cancel every voice's scrub glide and scan hold (`scrubRate` and `scanHold` back to 0) | `lib/positions.lua` |
@@ -143,12 +142,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 170 | clear every grid vport's key handler, put its grid back to rotation 0 and leave it dark, set `grid.add`/`grid.remove` to no-ops | `lib/grid/core.lua` |
 | 180 | clear the arc vport's handlers, leave the arc dark, set `arc.add`/`arc.remove` to no-ops | `lib/arc/core.lua` |
 
-3.4's orders held for their modules, as for the start steps above (`RESERVED_CLEANUP_ORDERS` in `test/unit/structure_test.lua`):
-
-| Order | Step | Module |
-|-------|------|--------|
-| 36 | save matrix.data (`matrix_save`) | lib/matrix.lua (new in 1h) |
-| 118 | the matrix clock (`matrix`) | lib/matrix.lua (1h) |
+3.4's orders held for their modules, as for the start steps above (`RESERVED_CLEANUP_ORDERS` in `test/unit/structure_test.lua`: none now).
 
 Adding a step:
 - A new resource gets its stop in the module that starts it, at a free order at its place in this sequence (the orders are spaced by 10).
@@ -232,5 +226,6 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `gesture recorders` | `lib/gestures.lua` | at most one recorder records; pattern_time's `rec` is 1 exactly while its recorder records; a free loop's metro (`pattern.play`, with the metro itself running) or a quantized loop's clock (its coroutine alive) runs exactly while it plays, never both, and the right one for its loop; the 10-minute clock runs exactly while it records an event or more; it overdubs only while it plays; it is empty exactly when it holds no event and does not record; `gesture_<k>_play` is 1 exactly while it plays (3.4) |
   | `macro apply` | `lib/macros.lua` | a macro waits for its apply exactly while the apply clock runs (`S.macro_clock`), and that clock's coroutine is not dead (3.4) |
   | `macro learn` | `lib/macros.lua` | learn waits for a touch exactly while its timeout clock runs (`S.macro_learn_clock`) (3.4) |
+  | `matrix learn` | `lib/matrix.lua` | matrix learn waits for a touch exactly while its timeout clock runs (`S.matrix_learn_clock`) (3.4) |
   | `lfo clock` | `lib/lfos.lua` | the LFO clock (`S.lfo_clock`) runs from its start step to cleanup, and only then (3.4) |
 - **Registering a cleanup step**: `S.register_cleanup(S.constants.CLEANUP_ORDER.<step>, fn)` in the module that starts the resource, and one line in `CLEANUP_ORDER` (`lib/constants.lua`) at a free order at its place in the sequence (orders are spaced by 10; two steps never share one). `cleanup()` itself is never edited.
