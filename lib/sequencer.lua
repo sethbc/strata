@@ -1108,20 +1108,24 @@ return function(S)
   -- Playing and stopping ------------------------------------------------
 
   -- The play key, SEQ and the grids: a start waits for the quantizer
-  -- (key "patterns"), a stop never does
+  -- (key "patterns"), a stop never does; a press while the start waits
+  -- takes it back (#625)
   function pattern_toggle()
     if S.pattern_playing then
       pattern_clock_stop()
-    else
+    elseif not S.lib.quantize.cancel("patterns") then
       S.lib.quantize.schedule("patterns", pattern_clock_start, "play")
     end
   end
 
   -- Start (or start again) the patterns now: every voice and the transport
   -- at step 1 on this beat, a running chain at its first scene, and every
-  -- output that failed is played again. The clocks that ran end through
+  -- output that failed is played again. A start the play key left waiting
+  -- is dropped (a followed transport start, #625; the waiting start's own
+  -- run has left the quantizer already). The clocks that ran end through
   -- end_clocks(all_posted): true for a followed transport start
   local function start_patterns(all_posted)
+    S.lib.quantize.cancel("patterns")
     end_clocks(all_posted)
     -- the sequencer's count is the clock's again (ruling 47)
     play.failed, play.started, play.reset_beat, play.offset = {}, false, nil, 0
@@ -1144,10 +1148,11 @@ return function(S)
 
   function pattern_clock_start() start_patterns(false) end
 
-  -- Stop the patterns: every clock ended (end_clocks), the playheads
-  -- cleared, every override ended and (when they played) every output's
-  -- stop run
+  -- Stop the patterns: a start the play key left waiting dropped (#625),
+  -- every clock ended (end_clocks), the playheads cleared, every override
+  -- ended and (when they played) every output's stop run
   function pattern_clock_stop()
+    S.lib.quantize.cancel("patterns")
     local was_playing = S.pattern_playing
     S.pattern_playing = false
     S.pattern_sounding_step = nil

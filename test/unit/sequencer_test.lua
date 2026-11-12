@@ -1192,6 +1192,56 @@ test("the play key starts the patterns through the quantizer", function()
   assert_equal(S.pattern_playing, false, "stopped")
 end)
 
+-- A start waiting for its bar is taken back by a second press, and dropped
+-- by any start or stop of the patterns meanwhile, so it never fires after
+-- them (#625). quantize_actions on bar, the play key pressed at beat 1.5
+local function waiting_start(context, S, clock_source)
+  S.patterns[1][1] = 15
+  params:set("clock_source", clock_source)
+  params:set("quantize_actions", 3)  -- bar
+  context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+  pattern_toggle()
+  assert_true(S.lib.quantize.waiting("patterns"), "the start waits for the bar")
+  assert_equal(S.lib.ui_flash.text("header"), "play at bar", "and says so")
+end
+
+test("a second play press while the start waits takes it back (#625)", function()
+  local context, S = setup()
+  waiting_start(context, S, CLOCK.internal)
+  pattern_toggle()
+  assert_true(not S.lib.quantize.waiting("patterns"), "a second press takes it back")
+  assert_equal(S.lib.ui_flash.text("header"), nil, "its flash goes with it")
+  context.clock.run_for(1.5)  -- past the bar
+  assert_equal(S.pattern_playing, false, "nothing starts at the bar")
+  pattern_toggle()
+  assert_true(S.lib.quantize.waiting("patterns"), "a third press waits again")
+  context.clock.run_for(2)
+  assert_equal(S.pattern_playing, true, "and starts at its bar")
+  pattern_clock_stop()
+end)
+
+test("a followed transport start drops a waiting pattern start: one step 1, not two (#625)", function()
+  local context, S = setup()
+  waiting_start(context, S, CLOCK.midi)
+  context.clear_engine_calls()
+  context.clock.transport_start()
+  assert_true(S.pattern_playing, "the transport start plays the patterns")
+  assert_true(not S.lib.quantize.waiting("patterns"), "and drops the waiting start")
+  context.clock.run_for(0.01)
+  assert_equal(#retriggers_of(context, 0), 1, "one retrigger of voice 1 on beat 0, not two")
+  pattern_clock_stop()
+end)
+
+test("a followed transport stop drops a waiting pattern start (#625)", function()
+  local context, S = setup()
+  waiting_start(context, S, CLOCK.midi)
+  context.clock.transport_stop()
+  assert_true(not S.lib.quantize.waiting("patterns"), "a followed stop drops it")
+  assert_equal(S.lib.ui_flash.text("header"), nil, "with its flash")
+  context.clock.run_for(1.5)  -- past the bar
+  assert_equal(S.pattern_playing, false, "and the patterns stay stopped")
+end)
+
 -- Gates (design 8.12)
 
 test("a gated voice gets its gate with its sync and a gate length only when it changes", function()

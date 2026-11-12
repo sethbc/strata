@@ -138,6 +138,26 @@ test("a label flashes while it waits", function()
   assert_equal(S.lib.ui_flash.text("header"), nil, "an action that runs at once shows nothing")
 end)
 
+test("cancel drops a key's waiting action and its flash, and says whether one waited (#625)", function()
+  local context = load_strata()
+  local S = local_value("S")
+  local quantize = S.lib.quantize
+  local runs = {}
+  run_to_beat(context, 1.5)
+  params:set("quantize_actions", BAR)
+  quantize.schedule("scene", counter(runs, "scene"), "S3")
+  quantize.schedule("freeze2", counter(runs, "freeze"))
+  assert_equal(quantize.cancel("scene"), true, "a waiting action is dropped")
+  assert_true(not quantize.waiting("scene"), "it waits no more")
+  assert_equal(S.lib.ui_flash.text("header"), nil, "its flash ends")
+  assert_equal(quantize.cancel("scene"), false, "nothing waits under the key now")
+  assert_equal(quantize.cancel("position7"), false, "nor under a key never scheduled")
+  assert_equal(quantize.cancel(nil), false, "a key that is no string is none")
+  run_to_beat(context, 4.02)
+  assert_equal(runs.scene, nil, "the dropped action never runs")
+  assert_equal(runs.freeze, 1, "another key's action runs")
+end)
+
 test("an action that fails at its beat prints a line and leaves nothing waiting", function()
   local context = load_strata()
   local quantize = local_value("S").lib.quantize
