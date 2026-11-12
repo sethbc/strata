@@ -18,6 +18,12 @@ var fadeFrames = (0.005 * sampleRate).round.asInteger;
 var seconds = 0.2, tone, frames;
 var inputSynth = engine.inputSynth;
 var settle = { arg time = 0.05; time.wait; server.sync };
+// bufferState (#578): the slot index a value names, ((loads % bufferStateLoads)
+// * (numBuffers + 1) + slot index) being its thousands, and a slot's
+// thousands now, which its reports carry until its next load
+var stateSlot = { arg value; (value / engine.bufferStateStride).floor.asInteger % (engine.numBuffers + 1) };
+var stateBase = { arg slot;
+    (((engine.bufferLoads[slot] % engine.bufferStateLoads) * (engine.numBuffers + 1)) + slot) * engine.bufferStateStride };
 var record = { arg slot, duration, level = 1.0, feedback = 0, source = 0, threshold = 0, loop = 0, delay = 0;
     h.command(\recordBuffer, slot, duration, level, feedback, source, threshold, loop, delay)
 };
@@ -50,8 +56,8 @@ var slotEvents = { arg slot, start;
         case
         { (msg[1] == stateIndex) and: { (whole % stride) == slot } } {
             events.add(#[armed, recording, ended, canceled][(whole div: stride) % 4]) }
-        { (msg[1] == lengthIndex) and: { (value / lengthStride).floor.asInteger == slot } } {
-            events.add(("length " ++ (value - (slot * lengthStride)).round(0.01)).asSymbol) }
+        { (msg[1] == lengthIndex) and: { stateSlot.(value) == slot } } {
+            events.add(("length " ++ (value - ((value / lengthStride).floor * lengthStride)).round(0.01)).asSymbol) }
         { (msg[1] == failedIndex) and: { (whole % stride) == slot } } {
             events.add(("loadFailed " ++ ((whole div: stride) div: 2) ++ " " ++ ((whole div: stride) % 2)).asSymbol) };
     });
@@ -924,12 +930,13 @@ test.("record: a recording longer than the slot's audio puts the old overview in
 });
 test.("record: the peaks file of the new length is in place when it is reported", {
     var path = writeLevelFile.("quarter-second.wav", 1, 0.25), v = sampleRate.round.asInteger, d = (4 * sampleRate).round.asInteger;
-    var lengthIndex = CronePollRegistry.getPollFromName(\bufferState).index, watcher, atReport, peaksPath = engine.peaksPath(4).standardizePath;
+    var lengthIndex = CronePollRegistry.getPollFromName(\bufferState).index, watcher, atReport, peaksPath = engine.peaksPath(4).standardizePath, base;
     h.command(\loadBuffer, 4, path, 0);
     h.waitFor({ engine.bufferFrames[4] == v });
     0.1.wait; server.sync;
+    base = stateBase.(4);
     watcher = OSCFunc({ arg msg;
-        if ((msg[1] == lengthIndex) and: { (msg[2] - 4004.0).abs < 0.005 } and: { atReport.isNil }) { atReport = peaksFileFrames.(peaksPath) };
+        if ((msg[1] == lengthIndex) and: { (msg[2] - (base + 4)).abs < 0.005 } and: { atReport.isNil }) { atReport = peaksFileFrames.(peaksPath) };
     }, '/poll/value');
     record.(4, 4.0, 1.0, 1.0, 0, 0, 1);
     h.waitFor({ atReport.notNil }, 2);
@@ -949,11 +956,12 @@ test.("record: the periodic bufferState never announces an arming's length befor
     var path = writeLevelFile.("quarter-second.wav", 1, 0.25), v = sampleRate.round.asInteger, d = (4 * sampleRate).round.asInteger;
     var mover = engine.areaState[\waveform][\mover], poll = engine.bufferStatePoll, peaksPath = engine.peaksPath(4).standardizePath;
     var cycle = { (engine.numBuffers + 1).collect({ poll.requestValue; poll.value }) };
-    var slotValue = { arg values; values.detect({ arg value; (value >= 4000) and: { value < 5000 } }) };
-    var during, fileDuring, armed, after, fileAfter;
+    var slotValue = { arg values; values.detect({ arg value; stateSlot.(value) == 4 }) };
+    var during, fileDuring, armed, after, fileAfter, base;
     h.command(\loadBuffer, 4, path, 0);
     h.waitFor({ engine.bufferFrames[4] == v });
     0.1.wait; server.sync;
+    base = stateBase.(4);
     ("kill -STOP " ++ mover[\pid]).systemCmd;
     record.(4, 4.0, 1.0, 1.0, 0, 0, 1);
     armed = h.waitFor({ engine.bufferFrames[4] == d }, 0.8);
@@ -967,8 +975,8 @@ test.("record: the periodic bufferState never announces an arming's length befor
     h.command(\stopRecord, 4);
     waitDone.(4);
     h.waitFor({ mover[\pending] == 0 }, 3);
-    check.((engine.bufferFrames[4] == d) and: { fileDuring != d } and: { during.notNil } and: { (during - 4001.0).abs < 0.005 }
-        and: { fileAfter == d } and: { after.notNil } and: { (after - 4004.0).abs < 0.005 },
+    check.((engine.bufferFrames[4] == d) and: { fileDuring != d } and: { during.notNil } and: { (during - (base + 1)).abs < 0.005 }
+        and: { fileAfter == d } and: { after.notNil } and: { (after - (base + 4)).abs < 0.005 },
         "record: the periodic bufferState never announces an arming's length before its peaks file (armed %; while the file held % frames: %; once it held %: %)".format(
             armed, fileDuring, during, fileAfter, after));
 });
@@ -1416,7 +1424,7 @@ test.("record: a take's peaks file is in place when its length is reported, then
     [peaksPath, takePath].do({ arg path; if (File.exists(path)) { File.delete(path) } });
     watcher = OSCFunc({ arg msg;
         var value = msg[2], whole = value.round.asInteger;
-        if ((msg[1] == lengthIndex) and: { value > ((slot * 1000) + 0.005) } and: { value < ((slot + 1) * 1000) }
+        if ((msg[1] == lengthIndex) and: { stateSlot.(value) == slot } and: { (value - ((value / 1000).floor * 1000)) > 0.005 }
             and: { order.includes(\length).not }) {
             order.add(\length);
             peaksFrames = peaksFileFrames.(peaksPath);

@@ -27,9 +27,10 @@ local function ramp(count, scale)
   return values
 end
 
--- A bufferState report of slot's seconds
-local function report(context, slot, seconds)
-  context.polls.fire("bufferState", (slot - 1) * 1000 + seconds)
+-- A bufferState report of slot's seconds, sent once the engine had
+-- load_number loadBuffer commands for the slot (#578; none when nil)
+local function report(context, slot, seconds, load_number)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(slot, load_number or 0, seconds))
 end
 
 -- Run the frame clock for this many ticks
@@ -261,16 +262,16 @@ test("a load over audio of the same length forgets the old overview until its ow
   local waveforms = local_value("S").lib.waveforms
   load_buffer(1, "/tmp/a.wav")
   write_peaks(1, ramp(64, 0.9), { frames = 480000 })   -- 10 s
-  report(context, 1, 10); tick(context, 2)
+  report(context, 1, 10, 1); tick(context, 2)
   assert_true(math.abs(waveforms.peaks(1)[64] - 0.9) < 1e-3, "a.wav's overview")
   load_buffer(1, "/tmp/b.wav")
   assert_equal(waveforms.peaks(1), nil, "nothing of a.wav once b.wav is sent")
   tick(context, 3)
   assert_equal(waveforms.peaks(1), nil, "a.wav's file is not read back while b.wav loads")
   -- the engine reports 0 s as the load takes effect, then b.wav's length
-  report(context, 1, 0); tick(context, 1)
+  report(context, 1, 0, 2); tick(context, 1)
   write_peaks(1, ramp(64, 0.2), { frames = 480000, generation = 2 })
-  report(context, 1, 10); tick(context, 2)
+  report(context, 1, 10, 2); tick(context, 2)
   assert_true(waveforms.peaks(1) ~= nil and math.abs(waveforms.peaks(1)[64] - 0.2) < 1e-3, "then b.wav's")
   -- a load that fails puts b.wav back, and its overview with it
   load_buffer(1, "/tmp/missing.wav")
@@ -290,20 +291,20 @@ test("a load over audio settles only after the engine's 0 s report for it (#401)
   local waveforms, buffers = S.lib.waveforms, local_value("buffers")
   load_buffer(1, "/tmp/a.wav")
   write_peaks(1, ramp(64, 0.9), { frames = 480000 })   -- 10 s
-  report(context, 1, 10); tick(context, 2)
+  report(context, 1, 10, 1); tick(context, 2)
   assert_equal(S.lib.buffers.status(1), "loaded")
   load_buffer(1, "/tmp/b.wav")
-  report(context, 1, 10); tick(context, 3)              -- a.wav's length, sent before the load arrived
+  report(context, 1, 10, 1); tick(context, 3)            -- a.wav's length (load 1), sent before the load arrived
   assert_equal(S.lib.buffers.status(1), "loading", "the old length settles nothing")
   assert_equal(waveforms.peaks(1), nil, "and nothing of a.wav is drawn")
-  report(context, 1, 0); tick(context, 1)               -- the load takes effect
+  report(context, 1, 0, 2); tick(context, 1)             -- the load takes effect
   assert_equal(S.lib.buffers.status(1), "loading", "0 s right after the load settles nothing either")
   write_peaks(1, ramp(64, 0.2), { frames = 480000, generation = 2 })
-  report(context, 1, 10); tick(context, 2)              -- b.wav's length, its peaks in place
+  report(context, 1, 10, 2); tick(context, 2)            -- b.wav's length, its peaks in place
   assert_equal(S.lib.buffers.status(1), "loaded"); assert_equal(buffers[1].name, "b.wav")
   assert_true(waveforms.peaks(1) ~= nil and math.abs(waveforms.peaks(1)[64] - 0.2) < 1e-3, "with b.wav's overview")
   -- a load into an empty slot settles on its first report of audio, as before
-  load_buffer(2, "/tmp/c.wav"); report(context, 2, 4)
+  load_buffer(2, "/tmp/c.wav"); report(context, 2, 4, 1)
   assert_equal(S.lib.buffers.status(2), "loaded", "an empty slot already reads 0 s")
 end)
 

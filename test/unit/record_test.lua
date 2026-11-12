@@ -216,7 +216,7 @@ local function recording_calls(context) return context.calls_named("recordBuffer
 test("recordState reports arrive as floats: an ended dub is take <n> on its scratch path", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
-  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", 2004.0)
+  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 4))
   params:set("record_feedback", 50)
   record_buffer(3)
   context.polls.fire("recordState", record_state_value(1, 1, 3) + 0.0)
@@ -243,9 +243,9 @@ test("the buffer slots invariant: a take is named for its own slot, a scratch pa
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   local function broken() return table.concat(h.check_invariants(), "; ") end
-  load_buffer(1, "/tmp/take 1.wav"); context.polls.fire("bufferState", 4)
+  load_buffer(1, "/tmp/take 1.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
   assert_equal(buffers[1].name, "take 1.wav"); assert_equal(broken(), "", "a file named take ... is not a take")
-  load_buffer(2, scratch_take_path(1)); context.polls.fire("bufferState", 1004)
+  load_buffer(2, scratch_take_path(1)); context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 4))
   assert_equal(broken(), "", "another slot's scratch take, loaded as a file, is a whole-numbered path")
   buffers[3].name = "take 4"
   assert_equal(broken(), "buffer slots: slot 3 is named take 4")
@@ -380,7 +380,7 @@ end)
 test("a playable recording stays loaded, shows its length and becomes take n when it ends", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
-  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", 2008)
+  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 8))
   assert_true(buffers[3].loaded)
   buffers[3].records_sent = 1
   params:set("record_feedback", 50); params:set("record_duration", 12)
@@ -388,7 +388,7 @@ test("a playable recording stays loaded, shows its length and becomes take n whe
   assert_equal(S_record_state(3).kind, "playable"); assert_equal(S_record_state(3).number, 2)
   assert_equal(buffers[3].name, "drone.wav"); assert_true(buffers[3].loaded); assert_equal(buffers[3].seconds, 8)
   context.polls.fire("recordState", record_state_value(2, 1, 3))
-  context.polls.fire("bufferState", 2012)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 12))
   assert_equal(buffers[3].seconds, 12); assert_true(buffers[3].loaded)
   assert_true(not buffers[3].finishing, "never settles")
   context.polls.fire("recordState", record_state_value(2, 2, 3))
@@ -401,22 +401,22 @@ end)
 test("a replace take canceled after the engine prepared its slot leaves it empty", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
-  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
   params:set("record_sync", 3)
   record_buffer(1); context.polls.fire("recordState", 32)
-  context.polls.fire("bufferState", 0)             -- the engine prepared the slot: 0 s
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 0))  -- the engine prepared the slot: 0 s
   record_buffer(1)                                -- K3: canceled
-  context.polls.fire("recordState", 56); context.polls.fire("bufferState", 0)
+  context.polls.fire("recordState", 56); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 0))
   assert_equal(buffers[1].name, "empty"); assert_true(not buffers[1].loaded); assert_true(not buffers[1].recording)
   assert_equal(buffers[1].path, nil); assert_equal(local_value("S").lib.buffers.status(1), "empty")
-  context.polls.fire("bufferState", 8)             -- a later report of audio puts nothing back
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))  -- a later report of audio puts nothing back
   assert_equal(buffers[1].name, "empty"); assert_true(not buffers[1].loaded); assert_equal(buffers[1].path, nil)
 end)
 
 test("a canceled playable recording keeps its slot", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
-  load_buffer(2, "/tmp/b.wav"); context.polls.fire("bufferState", 1006)
+  load_buffer(2, "/tmp/b.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 6))
   params:set("record_feedback", 50)
   record_buffer(2); context.polls.fire("recordState", 33); context.polls.fire("recordState", 57)
   assert_equal(buffers[2].name, "b.wav"); assert_true(buffers[2].loaded); assert_equal(buffers[2].seconds, 6)
@@ -427,13 +427,13 @@ test("a synced replace take canceled before the engine prepared its slot puts th
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   local S = local_value("S")
-  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 0.5)
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 0.5))
   params:set("record_sync", 3)
   record_buffer(1); context.polls.fire("recordState", 32)
   assert_equal(buffers[1].seconds, 0.5, "the slot keeps its length until the engine prepares it")
   assert_equal(S.lib.buffers.status(1), "armed")
   record_buffer(1)                                -- K3 again before the bar
-  context.polls.fire("recordState", 56); context.polls.fire("bufferState", 0.5)
+  context.polls.fire("recordState", 56); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 0.5))
   assert_equal(buffers[1].name, "a.wav"); assert_true(buffers[1].loaded); assert_equal(buffers[1].path, "/tmp/a.wav")
   assert_equal(params:get("buf1_file"), "/tmp/a.wav", "the file param shows it again")
   assert_equal(S.lib.buffers.status(1), "loaded")
@@ -444,15 +444,15 @@ test("a periodic report of the old audio between K3 and the canceled report neve
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   local S = local_value("S")
-  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
   params:set("record_sync", 3)
   record_buffer(1); context.polls.fire("recordState", 32)
   record_buffer(1)                                -- K3: the stop is on its way
-  context.polls.fire("bufferState", 8)             -- a periodic report, sent before the engine canceled
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))  -- a periodic report, sent before the engine canceled
   assert_true(buffers[1].name ~= "take 1", "not a take: " .. tostring(buffers[1].name))
   assert_true(buffers[1].path ~= scratch_take_path(1), "nor its path")
   assert_equal(S.lib.buffers.status(1), "finishing", "still waiting for the canceled report")
-  context.polls.fire("recordState", 56); context.polls.fire("bufferState", 8)
+  context.polls.fire("recordState", 56); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
   assert_equal(buffers[1].name, "a.wav"); assert_equal(buffers[1].path, "/tmp/a.wav"); assert_true(buffers[1].loaded)
 end)
 
@@ -461,15 +461,15 @@ test("a playable recording waits for a load the engine has not confirmed", funct
   local buffers = local_value("buffers")
   local S = local_value("S")
   S.lib.ui_keys.set_ui_page(local_value("UI_PAGES").index.BUFFER)
-  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
   load_buffer(1, "/tmp/b.wav")                     -- not confirmed yet
   params:set("record_feedback", 50)
   context.clear_engine_calls(); record_buffer(1)
   assert_equal(#recording_calls(context), 0, "no recordBuffer while the load awaits the engine")
   assert_equal(S.lib.buffers.status(1), "loading"); assert_equal(buffers[1].name, "b.wav")
   assert_equal(S.lib.ui_flash.text("hints"), "buf 1 loading")
-  context.polls.fire("bufferState", 0)             -- the load takes effect (0 s, #401)
-  context.polls.fire("bufferState", 6)             -- b.wav is in
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 2, 0))  -- the load takes effect (0 s, #401)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 2, 6))  -- b.wav is in
   record_buffer(1)
   assert_equal(#recording_calls(context), 1, "K3 once the length shows records")
   assert_equal(S.lib.buffers.status(1), "dub")
@@ -527,7 +527,7 @@ end)
 test("a playable recording into a 44.1 kHz slot flashes replaced (rate)", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
-  load_buffer(1, "/tmp/cd.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(1, "/tmp/cd.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
   buffers[1].sample_rate = 44100
   params:set("record_feedback", 50)
   local_value("S").lib.ui_keys.set_ui_page(local_value("UI_PAGES").index.BUFFER)
@@ -573,9 +573,11 @@ end)
 local DUB_FILE = "/tmp/dub60.wav"
 local function arm_dub_over_long_file(context)
   context.audio.register(DUB_FILE, {channels = 2, frames = 2880000, rate = 48000})
-  load_buffer(1, DUB_FILE); context.polls.fire("bufferState", 16)
+  load_buffer(1, DUB_FILE); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 16))
   local_value("S").lib.buffers.set_start(1, 12)
-  context.clock.run_for(0.4); context.polls.fire("bufferState", 0); context.polls.fire("bufferState", 16)
+  context.clock.run_for(0.4)                      -- the reload is the slot's load 2
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 2, 0))
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 2, 16))
   params:set("record_feedback", 50); params:set("record_threshold", 2)
   record_buffer(1)
 end
@@ -603,7 +605,7 @@ end)
 test("a loop recording downgraded by the sample rate is sent with loop 0", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
-  load_buffer(1, "/tmp/cd.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(1, "/tmp/cd.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
   buffers[1].sample_rate = 44100
   params:set("record_loop", 2)
   context.clear_engine_calls(); record_buffer(1)
@@ -627,16 +629,16 @@ test("a failed load during a dub over an empty slot leaves a named slot", functi
   assert_equal(buffers[1].path, nil, "its file comes at ended"); assert_equal(S.lib.buffers.status(1), "dub")
   load_buffer(1, "/tmp/bad.wav")
   context.polls.fire("recordState", record_state_value(1, 3, 1))   -- canceled by the load
-  context.polls.fire("bufferState", 4)                             -- the slot keeps its audio
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))  -- the slot keeps its audio
   context.polls.fire("bufferLoadFailed", (1 * 2) * 8 + 0)          -- load 1 failed
-  context.polls.fire("bufferState", 4)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
   assert_equal(S.lib.buffers.status(1), "loaded")
   assert_equal(buffers[1].name, "take 1", "named, not empty"); assert_true(not S.lib.buffers.is_free(1))
   assert_equal(buffers[1].path, nil, "no file was written for it")
   -- a dub over a file keeps the file's name until it ends
-  load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", 1008)
+  load_buffer(2, "/tmp/drone.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 8))
   record_buffer(2); context.polls.fire("recordState", record_state_value(1, 1, 2))
-  context.polls.fire("bufferState", 1012)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 12))
   assert_equal(buffers[2].name, "drone.wav")
 end)
 
@@ -645,7 +647,7 @@ end)
 test("K3 on a dub sends stopRecord and leaves it recording until its ended report", function()
   local context = load_strata(); finish_startup(context)
   local S, buffers = local_value("S"), local_value("buffers")
-  load_buffer(1, "/tmp/drone.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(1, "/tmp/drone.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
   params:set("record_feedback", 50)
   record_buffer(1); context.polls.fire("recordState", record_state_value(1, 1, 1))
   context.clear_engine_calls()
@@ -665,7 +667,7 @@ end)
 test("a failed load's report after a recording into a slot that held a file changes nothing", function()
   local context = load_strata(); finish_startup(context)
   local S, buffers = local_value("S"), local_value("buffers")
-  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", 8)   -- load 1
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))  -- load 1
   load_buffer(1, "/tmp/b.wav")                                          -- load 2
   record_buffer(1)                                                      -- a replace take supersedes it
   local before = S.lib.buffers.shown_state(1)
@@ -682,12 +684,12 @@ end)
 test("a dub's ended report causes a peaks read", function()
   local context = load_strata(); finish_startup(context)
   local frame = 1 / local_value("UI_PAGES").FRAMES_PER_SECOND
-  load_buffer(1, "/tmp/drone.wav"); context.polls.fire("bufferState", 8)
+  load_buffer(1, "/tmp/drone.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
   context.clock.run_for(3 * frame)                  -- the load's own read
   params:set("record_feedback", 50); params:set("record_duration", 4)
   record_buffer(1)
   context.polls.fire("recordState", record_state_value(1, 1, 1))
-  context.polls.fire("bufferState", 8)              -- a 4 s dub over 8 s: the length stays 8 s
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))  -- a 4 s dub over 8 s: the length stays 8 s
   local reads = 0
   local original_open = io.open
   io.open = function(path, ...)

@@ -49,7 +49,7 @@ var models = (
     cm4s: "Raspberry Pi Compute Module 4S Rev 1.0", cm3: "Raspberry Pi Compute Module 3 Plus Rev 1.0",
     pi3: "Raspberry Pi 3 Model B Plus Rev 1.3", unknown: "Generic x86 desktop", empty: ""
 );
-var decision, other, dir, text, fields, parts, stale, fresh, result, readOnlyRun, flushRun;
+var decision, other, dir, text, fields, parts, stale, fresh, result, readOnlyRun, flushRun, slotValue;
 
 File.mkdir(root);
 
@@ -320,16 +320,19 @@ check.(other.stalePartDirs.includesEqual(dir.withoutTrailingSlash),
     "performance: stalePartDirs holds the settings folder (got %)".format(other.stalePartDirs));
 h.freeEngine(other);
 
-// The bufferState poll carries slot * 1000 + seconds
+// The bufferState poll carries ((the slot's loads % 7) * 9 + slot) * 1000 + seconds (#578)
 check.(engine.bufferStateStride == 1000, "performance: bufferStateStride is 1000");
 h.command(\loadBuffer, 2, h.stereoPath, 0);
-check.(h.waitFor({ engine.bufferFrames[2] > 0 }, 3) and: { engine.bufferStateValue(2) == 2000.5 }
-    and: { h.waitFor({ h.pollValueNear(\bufferState, 2000.5, 0.001) }, 3) },
-    "performance: bufferState carries slot * 1000 + seconds (got %)".format(engine.bufferStateValue(2)));
-// matron's poll float is 32 bits: 0.01 s steps survive up to 7 * 1000 + 300 s
-check.((FloatArray[7300.0][0] == 7300) and: { (FloatArray[7299.99][0] - 7299.99).abs < 0.001 }
+slotValue = ((((engine.bufferLoads[2] % 7) * 9) + 2) * 1000) + 0.5;
+check.(h.waitFor({ engine.bufferFrames[2] > 0 }, 3) and: { engine.bufferStateValue(2) == slotValue }
+    and: { h.waitFor({ h.pollValueNear(\bufferState, slotValue, 0.001) }, 3) },
+    "performance: bufferState carries the slot's load number and index, then its seconds (% wanted, got %)".format(
+        slotValue, engine.bufferStateValue(2)));
+// matron's poll float is 32 bits: 0.01 s steps survive up to the largest
+// value, (6 * 9 + 7) * 1000 + 300 s (below 2^16: within 2^-9 s)
+check.((FloatArray[61300.0][0] == 61300) and: { (FloatArray[61299.99][0] - 61299.99).abs < 0.002 }
     and: { FloatArray[2016.5][0] == 2016.5 },
-    "performance: the largest value, 7 * 1000 + 300 s, keeps 0.01 s in a 32-bit float");
+    "performance: the largest value, (6 * 9 + 7) * 1000 + 300 s, keeps 0.01 s in a 32-bit float");
 // ... and, after the slots, the slot length: numBuffers * 1000 + bufferSeconds
 check.(engine.bufferLengthValue == 8016 and: { engine.bufferLengthValue.isKindOf(Float) } and: { h.waitFor({ h.pollValues(\bufferState).any({ arg value; (value - 8016).abs < 0.001 }) }, 3) },
     "performance: the periodic bufferState also sends the slot length, 8 * 1000 + 16 (got %)".format(

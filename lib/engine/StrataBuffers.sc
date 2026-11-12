@@ -17,8 +17,15 @@
         )
     }
 
-    // bufferState value = slot index * stride + valid seconds (Lua's BUFFER_STATE_STRIDE)
+    // bufferState value = (load number * (numBuffers + 1) + slot index) *
+    // stride + valid seconds (Lua's BUFFER_STATE_STRIDE; bufferStateReport)
     bufferStateStride { ^1000 }
+
+    // The load numbers a bufferState report names: the slot's loadBuffer
+    // count modulo this (Lua's BUFFER_STATE_LOADS, #578). 7 keeps the
+    // largest value, (6 * 9 + 7) * 1000 + 300 = 61300, below 2^16, where a
+    // 32-bit float holds it to 2^-8 s
+    bufferStateLoads { ^7 }
 
     allocBufferState {
         // Buffer slots: a left/right pair of mono buffers each, bufferSeconds
@@ -33,9 +40,10 @@
         bufferLoads = Array.fill(numBuffers, 0);
         // Per slot: the newest load number that can no longer take effect (loadsSuperseded)
         areaState[\buffers][\loadsSuperseded] = Array.fill(numBuffers, 0);
-        // Per slot: the bufferState value bufferChanged last sent, which the
-        // periodic poll repeats (announcedBufferState)
-        areaState[\buffers][\announced] = Array.fill(numBuffers, { arg index; this.bufferStateValue(index) });
+        // Per slot: the seconds bufferChanged last sent, which the periodic
+        // poll repeats with the slot's load number of that moment
+        // (announcedBufferState)
+        areaState[\buffers][\announced] = Array.fill(numBuffers, { arg index; this.bufferStateSeconds(index) });
         inputBus = Bus.audio(context.server, 2);
         // Equals Lua's _path.audio .. "strata/scratch/" on norns
         scratchDir = Platform.userHomeDir +/+ "dust/audio/strata/scratch/";
@@ -69,13 +77,14 @@
 
         // Valid seconds per slot. matron only accepts single-float value
         // polls (/poll/value is typed "if"), so each message carries one
-        // slot: slot index * bufferStateStride + seconds. The periodic poll
-        // cycles through the slots and then the slot length
-        // (bufferLengthValue: slot index numBuffers); every change is also
-        // sent at once. A slot's periodic value is the one bufferChanged
-        // last announced, never bufferFrames itself: an arming takes its
-        // new length before its peaks file is written, and announces it
-        // after (takeArmed)
+        // slot and the load it was sent after (bufferStateReport: (load
+        // number * (numBuffers + 1) + slot index) * bufferStateStride +
+        // seconds, #578). The periodic poll cycles through the slots and
+        // then the slot length (bufferLengthValue: slot index numBuffers);
+        // every change is also sent at once. A slot's periodic value is the
+        // seconds bufferChanged last announced, never bufferFrames itself:
+        // an arming takes its new length before its peaks file is written,
+        // and announces it after (takeArmed)
         bufferStatePoll = this.addPoll(\bufferState, {
             var value = if (bufferStateCursor < numBuffers) {
                 this.announcedBufferState(bufferStateCursor)
@@ -110,26 +119,50 @@
         inputBus.free;
     }
 
-    // A slot that holds frames reports at least 0.01 s (a single cycle of
-    // 128 frames would round to 0.00, which Lua takes as empty, #456); an
-    // empty one 0
-    bufferStateValue { arg index;
+    // A slot's valid seconds as bufferState reports them, to 0.01 s: a slot
+    // that holds frames reports at least 0.01 s (a single cycle of 128
+    // frames would round to 0.00, which Lua takes as empty, #456); an empty
+    // one 0
+    bufferStateSeconds { arg index;
         var seconds = (bufferFrames[index] / bufferSampleRates[index]).round(0.01);
         if (bufferFrames[index] > 0) { seconds = seconds.max(0.01) };
-        ^(index * this.bufferStateStride) + seconds
+        ^seconds
     }
 
-    // What the periodic poll reports for a slot: the value bufferChanged
+    // One bufferState message (#578): (load number * (numBuffers + 1) +
+    // index) * bufferStateStride + seconds, a Float (matron's /poll/value
+    // is typed "if"). The load number is the slot's loadBuffer commands
+    // received so far (bufferLoads, which Lua's load_buffer counts alike)
+    // modulo bufferStateLoads, whatever change the report is of (a load, a
+    // clear, a recording, a periodic repeat): Lua acts on a slot's report
+    // only when it names Lua's own count, so a report sent before the
+    // engine had a load never settles that load, while the reports of
+    // anything after it (a clear, a recording, a rejected load) name it.
+    // The slots' length (index numBuffers) names none (0). Largest value:
+    // (6 * 9 + 7) * 1000 + 300 = 61300, below 2^16: a 32-bit float keeps
+    // it to 2^-8 s, the hundredths exactly once rounded, and the slot and
+    // load exactly
+    bufferStateReport { arg index, seconds;
+        var load = if (index < numBuffers) { bufferLoads[index] % this.bufferStateLoads } { 0 };
+        ^((((load * (numBuffers + 1)) + index) * this.bufferStateStride) + seconds).asFloat
+    }
+
+    // The slot's bufferState value now: its valid seconds and load number
+    bufferStateValue { arg index; ^this.bufferStateReport(index, this.bufferStateSeconds(index)) }
+
+    // What the periodic poll reports for a slot: the seconds bufferChanged
     // last sent, so a length is never announced before the peaks file it
-    // describes is in place (docs/notes/engine/waveform.md)
-    announcedBufferState { arg index; ^areaState[\buffers][\announced][index] }
+    // describes is in place (docs/notes/engine/waveform.md), with the
+    // slot's load number now (a load rejected since, which Lua counted
+    // too, is named, so the state Lua puts back is settled by it)
+    announcedBufferState { arg index; ^this.bufferStateReport(index, areaState[\buffers][\announced][index]) }
 
     // The slots' length (bufferSeconds) as a bufferState message for the
     // slot index after the last slot: numBuffers * bufferStateStride +
-    // seconds. Lua caps its slot length to it (an old active file the
-    // engine could not replace may name more than it allocated, #153). A
-    // Float, as every bufferState value (matron's /poll/value is typed "if")
-    bufferLengthValue { ^((numBuffers * this.bufferStateStride) + bufferSeconds).asFloat }
+    // seconds (load number 0). Lua caps its slot length to it (an old
+    // active file the engine could not replace may name more than it
+    // allocated, #153)
+    bufferLengthValue { ^this.bufferStateReport(numBuffers, bufferSeconds) }
 
     // One float, as bufferState (matron's /poll/value is typed "if"):
     // (load * 2 + emptied) * numBuffers + slot index, where load is the
@@ -152,10 +185,10 @@
     // switch) only ever takes bufFrames 0: it fades out (hasAudio) before
     // the slot is zeroed or overwritten, never replays the new take in its
     // tail, and keeps its rate. voiceOn re-gates a releasing one with the
-    // slot as it is then (gateVoice). The value sent is the slot's announced
-    // one from now on, which the periodic poll repeats.
+    // slot as it is then (gateVoice). The seconds sent are the slot's
+    // announced ones from now on, which the periodic poll repeats.
     bufferChanged { arg index;
-        var live = numVoices.collect({ arg voice; synths[this.grainKey(voice)] }), value;
+        var live = numVoices.collect({ arg voice; synths[this.grainKey(voice)] }), seconds;
         this.slotGrainSynths(index).do({ arg synth;
             if (live.includes(synth)) {
                 this.sendToSynth(synth.setMsg(*this.slotLengthPairs(index)));
@@ -163,9 +196,9 @@
                 if (bufferFrames[index] == 0) { this.sendToSynth(synth.setMsg(\bufFrames, 0)) };
             };
         });
-        value = this.bufferStateValue(index);
-        areaState[\buffers][\announced][index] = value;
-        bufferStatePoll.update(value);
+        seconds = this.bufferStateSeconds(index);
+        areaState[\buffers][\announced][index] = seconds;
+        bufferStatePoll.update(this.bufferStateReport(index, seconds));
     }
 
     // The strataGrainBuf synths reading a slot that have not freed: a
