@@ -644,12 +644,23 @@ var startAllVoices = {
 // a new CronePoll, never started, and an engine built after it
 // (h.startEngine) gets that copy, so its reports never arrive (#652). So
 // this writes the registry's two class variables, polls and pollNames, as
-// register does, after removing what holds the names now.
+// register does, after removing what holds the names now. It never takes
+// another poll's index: register numbers a new poll by the registry's size,
+// so after a removal a later poll can hold a put-back poll's index. Then the
+// check fails, naming both polls and the index, the other poll keeps its
+// index, and the poll goes back under its name only.
 var putBackPolls = { arg entries;
     var slots = CronePollRegistry.classVars, slot = { arg name; slots[CronePollRegistry.classVarNames.indexOf(name)] };
     var byName = slot.(\polls), byIndex = slot.(\pollNames);
     entries.do({ arg entry; CronePollRegistry.remove(entry[0].name) });
-    entries.do({ arg entry; byName[entry[0].name] = entry[0]; byIndex[entry[0].index] = entry[0].name });
+    entries.do({ arg entry;
+        var poll = entry[0], holder = byIndex[poll.index];
+        byName[poll.name] = poll;
+        if (holder.isNil or: { holder == poll.name }) { byIndex[poll.index] = poll.name } {
+            check.(false, "putBackPolls: poll % goes back at index %, which poll % holds: % keeps it, % goes back under its name only (#652)".format(
+                poll.name, poll.index, holder, holder, poll.name));
+        };
+    });
     entries.do({ arg entry; if (entry[1]) { entry[0].start } });
 };
 // h.engine's polls as the runner leaves them for the areas: one [poll,
