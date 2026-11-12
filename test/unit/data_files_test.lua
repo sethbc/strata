@@ -175,8 +175,16 @@ test("decode refuses more than max_tables tables, and hostile 4 MB texts cost a 
   local context = load_strata()
   local data_files = local_value("S").lib.data_files
   local max_tables, max_bytes = data_files.DATA_FILES.max_tables, data_files.DATA_FILES.max_bytes
-  -- a scenes file of eight full scenes holds 546 tables (97157 bytes)
-  assert_true(max_tables >= 15 * 546, "room for fifteen times a full scenes file's tables: " .. max_tables)
+  -- The cap keeps at least SCENES_MARGIN times the tables of the largest
+  -- scenes file this version writes (DATA_FILES.largest_scenes_tables, the
+  -- one place that names it: 16 full scenes, which test/unit/matrix_test.lua
+  -- writes and checks against it), so a full file of the player's scenes
+  -- always loads, with room for later releases' blocks
+  local SCENES_MARGIN = 4
+  local largest = data_files.DATA_FILES.largest_scenes_tables
+  assert_true(type(largest) == "number" and largest > 0, "the largest scenes file's tables: " .. tostring(largest))
+  assert_true(max_tables >= SCENES_MARGIN * largest, string.format(
+    "max_tables %d keeps %d times the largest scenes file's %d tables", max_tables, SCENES_MARGIN, largest))
   local function tables_text(count, entry) return "return {\n" .. string.rep("{" .. entry .. "},\n", count) .. "}" end
   local value, problem = data_files.decode(tables_text(max_tables, "1,"))
   assert_equal(type(value), "table", tostring(problem)); assert_equal(value[1], 1)
