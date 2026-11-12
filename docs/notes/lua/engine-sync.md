@@ -14,6 +14,7 @@
 - A start redraws nothing itself: `toggle_voice` updates the voice list and redraws the screen and the grid after it, and a pattern step does so once for every voice it starts (#527).
 - **A base override is cleared only by a hand edit of its param** (3.4): the touch hook (`S.register_param_touch`, run by an encoder, arc or grid edit) clears it; the drift, morph, a macro, gesture playback, a mutation and a recall run the param's action, whose send stays under the override. Setting and clearing an override send at once.
 - **Only a deferrable send waits** (3.4): a send waits for the budget only while `S.deferrable_write` is set (`S.lib.engine_sync.deferrable(fn)`, used by the Lua LFOs, the matrix, morph, gesture playback and every macro apply). Hand edits, steps, notes, locks, recalls and voice syncs are never deferred; a send that goes at once drops its id's waiting value, so an older value never follows a newer one.
+- **The budget counts and defers `send_engine_value` only; a discrete switch is its exception** (#649, ruling 93): every engine command sent another way (a voice start or stop, a voice sync, and the actions of the option, binary and number params that call the engine themselves) is never counted and never deferred, inside `deferrable` too. So the discrete switch a recall, a transition's end or a morph crossing applies goes out whole, at once, in recall order, however full the window, and leaves the count where it was (a test pins it, with a crossing at a full window); its continuous values beside it still wait. The contract, the commands and the measured sizes are below (The send budget, The exception).
 - **A voice sync or start drops the voice's waiting values** (`forget_sent_voice_values`): they are older than what the sync sends.
 - **A voice sync or start keeps the voice's overrides and extra offsets**: after a sync's own sends (which carry the stored values) it sends every param of the voice that holds a base override or an extra offset again, through `with_lfo_offsets`, at once and never deferred; a start's own sends carried them already (above), so it records them as sent and sends again only one a grain-restart hook changed meanwhile (and the crossmod amounts); with none set either sends exactly what it sent before 3.4.
 - **`deferrable(fn)`'s `fn` never yields** (no `clock.sleep` or `clock.sync` inside it): `S.deferrable_write` would stay set across the wait, and a hand edit made meanwhile would be deferred. A caller that waits sleeps outside `deferrable` and wraps each burst of writes.
@@ -65,6 +66,38 @@ Three additions, for step locks, LFOs on macros, the matrix and the deferrable w
 - A send made outside `deferrable` always goes at once (and counts) and drops its id's pending value. `forget_sent_voice_values(voice_idx)` (a voice sync or start) drops the voice's pending values too, so a waiting value never lands after the sync's newer one.
 - `budget_state()` returns `{sent = <this window's count>, pending = <ids waiting>}`, for tests.
 - Cleanup step 127 cancels the clock and drops what waits.
+
+**The budget's contract** (#649), exactly:
+- **What it counts:** the engine messages of `send_engine_value`, the one path every `send_param_to_engine` takes (a param's action through its `S.engine_senders` entry, the Lua LFOs, the matrix, the macros' targets, morph's and gesture playback's continuous values, the drift) along with the keyed sends (the matrix's fast channels, the engine LFOs' `lfo<n> engine` and `lfo<n> sync`). Each counts its messages: one; one per running voice the master density reaches; none for a send that reaches no engine (a stopped voice's param, an id with no sender).
+- **What it defers:** only such a send made inside `deferrable`, when the window has no room for its messages (an empty window takes any). Nothing made outside `deferrable` waits.
+- **What it does not count at all, and never defers:** every engine command sent other than through `send_engine_value`, whoever sends it and whether or not `S.deferrable_write` is set.
+
+**The exception** (ruling 93): the discrete switches and the voice starts and stops that a recall, a transition's end and a morph crossing apply (`S.lib.scenes.apply_entries`, discrete entries; morph's through `{only = "discrete"}` inside its `deferrable`) go at once and uncounted, whole, in recall order: voices that stop first, sources before their params, discrete extras after their source, blocks, voices that start last, one sync per running voice whose source changed. The design never defers a hand edit, a step, a note, a lock or a recall, and a crossing's switch is a recall's. Deferring part of it would break that order (a source after its params, a param into a voice not yet started). Counting a whole voice start against a window meant for continuous values would starve the very sends the budget protects.
+
+What goes uncounted. Measured with real morph crossings, the numbers are engine messages:
+
+| Uncounted | Engine messages |
+|---|---|
+| A voice start (`start_voice`) | 59 (a voice's whole set: `setGrainSource`, every grain value and registered grain key, `voiceOn`, the synth params, crossmod, `setModSpeed`, `bend`) |
+| A voice stop (`voiceOff`) | 1 |
+| A running voice's `v<i>_source` switch | 58 (`setGrainSource`, then `sync_voice_values_to_engine`'s 57) |
+| A running voice's `v<i>_grain_env`, `v<i>_grain_mode` or `v<i>_mod_source_<k>` | 1 (`envShape`, `grainMode`, `setModSource`) |
+| A voice's `intervals` set (variation) | 9 (`interval1`-`8`, `intervalCount`) |
+| The scale's `root` or `scale` | 1 `setScale` and one `scaleNote` per running voice |
+| A voice's `quantize`'s `scaleNote` | 1 (its `quantize` grain key itself is counted) |
+| An engine-run LFO's on, destination, shape, mode or division | 2 (`setFastLfo`, `syncFastLfo`; a stop, `stopFastLfo`) |
+| A lock's `setScatter` (scatter's lock hook) | 1 |
+
+A crossing between two scenes, all uncounted:
+
+| What the two scenes differ in | Engine messages at once |
+|---|---|
+| Envelope and grain mode on seven running voices | 14 |
+| The same, with each voice's mod source 1 | 21 |
+| Envelope and grain mode on all seven voices, one of which starts while another, running, switches its source | 128 |
+| All seven voices starting | 417 |
+
+**Discrete entries that do go through `send_engine_value`, and so are counted** (and wait when deferred): the master `filter_type`; a voice's `filter_type`, `mute` and `solo`; `freeze` and `freeze_mode`; `quantize`'s grain key; `seq_gate`; `scatter` and its destination binaries; the effect bypasses; a Lua-run LFO's restore when the scene turns it off (its destination's send).
 
 Commands that carry several params:
 - `engine_param_value(id)` is the last value sent, or `params:get(id)` before any.
