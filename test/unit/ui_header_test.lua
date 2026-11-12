@@ -74,7 +74,7 @@ end
 test("the header constants are the plan's", function()
   load_strata()
   local HEADER = local_value("S").constants.HEADER
-  local expected = { dots_x = 40, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
+  local expected = { dots_x = 36, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
     mutation_x = 76, play_x = 90, rec_x = 96, scene_right = 127, status_x = 79, status_play_x = 73,
     flash_x = 40, flash_width = 74, flash_seconds = 1.5 }
   for name, value in pairs(expected) do
@@ -88,12 +88,12 @@ test("the header draws eight page dots with the current one bright", function()
   local dots = page_dots(context)
   assert_equal(#dots, 8, "eight page dots")
   for index, dot in ipairs(dots) do
-    assert_equal(dot.x, 40 + (index - 1) * 4, "dot " .. index .. " x")
+    assert_equal(dot.x, 36 + (index - 1) * 4, "dot " .. index .. " x")
     assert_equal(dot.w, 2); assert_equal(dot.h, 2)
     assert_true(dot.filled == true, "dot " .. index .. " is filled")
     assert_equal(dot.level, index == 3 and 15 or 3, "dot " .. index .. " level on SEQ")
   end
-  assert_equal(dots[3].x, 48, "SEQ's dot at x 48")
+  assert_equal(dots[3].x, 44, "SEQ's dot at x 44")
   -- every page: its own dot bright, the rest dim
   for page = 1, #PAGE_TITLES do
     show_page(page)
@@ -404,5 +404,41 @@ test("the hint row is cut to the screen", function()
   assert_screen_layout(context, "BUFFER with a long flash")
 end)
 
+-- 3.4: the dots move 4 px left (a ninth page comes in 3.4's Wave 2) and the
+-- scene runs to S16, 3 px wider than S8 (design §9.1, Question 16)
+test("eight dots from x 36 clear the play mark; S16 clears REC", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local record = S.registry.pages[S.constants.UI_PAGES.index.SEQ]
+  record.header_status = function() return "120 bpm" end
+  show_page("SEQ"); pattern_toggle(); redraw()
+  local dots = page_dots(context)
+  assert_equal(#dots, 8, "eight dots")
+  assert_equal(dots[1].x, 36, "the first at x 36")
+  local mark = play_mark(context)
+  assert_equal(mark.left, 73, "a status's play mark at x 73, the leftmost it goes")
+  assert_true(dots[8].x + dots[8].w < mark.left, "the last dot ends clear of it")
+  record.header_status = nil
+  S.current_scene = 16; S.buffers[1].recording = true
+  show_page("MAIN"); redraw()
+  local rec, scene = header_text(context, "REC"), header_text(context, "S16")
+  assert_true(rec and scene, "REC and S16 are drawn")
+  local _, rec_right = text_span(rec)
+  local scene_left, scene_right = text_span(scene)
+  assert_equal(scene_right, 127, "S16 ends at x 127")
+  assert_true(rec_right < scene_left, "REC ends before S16 begins")
+  assert_screen_layout(context, "every indicator and S16")
+  S.buffers[1].recording = false
+  params:set("record_threshold", 2); record_buffer(1); redraw()  -- armed: ARM, the wider of the two
+  local arm = header_text(context, "ARM")
+  assert_true(arm, "ARM is drawn")
+  local _, arm_right = text_span(arm)
+  assert_true(arm_right < scene_left, "ARM ends before S16 begins")
+  assert_screen_layout(context, "ARM and S16")
+  header_flash(string.rep("x", 40)); redraw()
+  local _, flash_right = text_span(header_text_starting(context, "x"))
+  assert_true(flash_right <= scene_left, "a long header flash ends by S16")
+  assert_screen_layout(context, "a long header flash and S16")
+end)
 
 end

@@ -1,7 +1,7 @@
 ## Must not break
 
 - The 256's page 4 has an explicit branch in `grid_key_256`, so it never falls through to the pattern page.
-- Pattern keys (rows 1-7) go through `step_key` (16 positions, the column) and scene save keys (page 3, row 3) through `scene_save_key`.
+- Pattern keys (rows 1-7) go through `step_key` (16 positions, the column) and scene save keys (page 3, row 3) through `scene_save_key`; scene recall keys (page 3, rows 1-2) call `recall_scene` only inside `S.lib.quantize.schedule("scene", fn, "S" .. x)` (design §8.9).
 - The FX faders follow changes made anywhere through `fx_fader_changed()`, except during a smooth scene transition, which redraws the grid once per step. The layout record's `fx_faders_page = 4` is what `any_fx_faders()` reads, so FX changes redraw the grids only while a 256 shows page 4.
 - Rows 8 and 16 work and draw the same on every page, 1-5 (`grid_key_256_transport`/`grid_redraw_256_transport`, `grid_key_256_lock`/`grid_redraw_256_lock`; page 3 has them since #442).
 - Row 15's clear (columns 1-7) and randomize (columns 9-15) keys, pages 1 and 2, act only through `grid_core.on_hold` after `LAYOUT_256.pattern_hold_seconds` (`GRID_HOLD.scene_save_seconds`, 0.5 s, #443), never at press, so a release, the grid's removal or cleanup cancels them; the hold's action redraws the grids and asks for a screen redraw (SEQ shows the patterns). They light at 2, 15 while `hold_pending`.
@@ -51,17 +51,17 @@ The local `pattern_key(port, x, y)`: a press arms `grid_core.on_hold(port, x, 15
 ## Scene page (page 3)
 
 Keys:
-- **Row 1**: scene recall (instant): press to load scene 1-8 at once.
-- **Row 2**: scene recall with transition: press to crossfade into scene 1-8.
-- **Row 3**: scene save: hold 0.5 s to capture the current state to scene 1-8 (`scene_save_key`; lit at 15 while held). The 128h's row 3 on its page 3 works the same way.
+- **Row 1**: scene recall (instant): column x loads scene x (1-16) at once, through `S.lib.quantize.schedule("scene", fn, "S" .. x)` (design §8.9; at once until the quantizer waits).
+- **Row 2**: scene recall with transition: column x crossfades into scene x (1-16), with the transition time as the key is pressed, through the quantizer as row 1.
+- **Row 3**: scene save: hold 0.5 s to capture the current state to scene x (1-16, column x) (`scene_save_key`; lit at 15 while held). The 128h's row 3 on its page 3 works the same way.
 - **Row 5, column 1**: scene sequencer on/off, set through `set_binary_param` so a controller mapped to `scene_sequencer_enabled` follows (#538).
-- **Row 5, columns 3-10**: sequence length (1-8 scenes).
+- **Row 5, columns 3-10**: sequence length 1-8; **row 6, columns 3-10**: sequence length 9-16 (`LAYOUT_256.length_rows`, `length_first_column`; 3.4). Row 6 columns 1-2 and 11-16 do nothing and stay dark.
 - **Row 8** and **row 16**: as on page 1 (play/stop, tempo, the positions and page keys; lock, the freeze hold, copy and paste), #442.
 
 LEDs:
 - Rows 1-3 at the core's scene levels (`docs/notes/lua/grid-core.md`, LEDs): populated scenes 8 (row 1) or 6 (row 2), the current scene 15 (row 1), empty scenes 2, the slot the running sequencer recalls next 10 (row 1; `S.lib.scenes.sequencer_next_slot()`: counted from its position from its start until its first recall, then from the one after its position, wrapped by the sequence length as it is now, and skipping empty slots as the sequencer does, #513), a pending save 15 (row 3, else 4). The current scene's 15 wins when they are the same key (a sequence of one slot).
 - Active sequencer: row 5 column 1 at 15 (4 when stopped).
-- Sequence length: 8 for included scenes, 2 for excluded.
+- Sequence length: rows 5 and 6, columns 3-10, 8 for included scenes, 2 for excluded (length 12 lights row 5 and columns 3-6 of row 6).
 
 It follows changes made anywhere (issue #49):
 - `recall_scene_instant` sets `S.current_scene` before its closing grid redraw, so an instant recall repaints the grid once with the scene lit;

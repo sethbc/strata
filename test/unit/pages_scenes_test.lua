@@ -6,7 +6,7 @@ return function(h)
 local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local show_page, hint_text, tap, next_frame = h.show_page, h.hint_text, h.tap, h.next_frame
-local assert_screen_layout = h.assert_screen_layout
+local assert_screen_layout, screen_shows = h.assert_screen_layout, h.screen_shows
 
 local function started_on_scenes()
   local context = load_strata(); finish_startup(context)
@@ -94,17 +94,17 @@ test("E2 runs through the slots then the fields; E3 edits", function()
   local before = params:get("scene_transition_time")
   enc(3, 2)
   assert_true(params:get("scene_transition_time") > before, "E3 on a slot edits the transition time")
-  enc(2, 7); assert_equal(S.cursors.scene, 9, "slot 9 is the first field")
-  enc(2, 100); assert_equal(S.cursors.scene, 12, "E2 stops at the last field")
-  enc(2, -1)  -- 11: sequence length
+  enc(2, 15); assert_equal(S.cursors.scene, 17, "stop 17 is the first field")
+  enc(2, 100); assert_equal(S.cursors.scene, 20, "E2 stops at the last field")
+  enc(2, -1)  -- 19: sequence length
   local length = params:get("scene_sequence_length")
-  enc(3, -1); assert_equal(params:get("scene_sequence_length"), length - 1, "field 11 is the sequence length")
-  enc(2, -1)  -- 10: sequencer on/off
+  enc(3, -1); assert_equal(params:get("scene_sequence_length"), length - 1, "field 19 is the sequence length")
+  enc(2, -1)  -- 18: sequencer on/off
   enc(3, 1); assert_equal(params:get("scene_sequencer_enabled"), 1, "E3 right turns the sequencer on")
   enc(3, -1); assert_equal(params:get("scene_sequencer_enabled"), 0, "E3 left turns it off")
-  enc(2, 2)  -- 12: duration
+  enc(2, 2)  -- 20: duration
   local duration = params:get("scene_duration")
-  enc(3, 1); assert_true(params:get("scene_duration") > duration, "field 12 is the scene duration")
+  enc(3, 1); assert_true(params:get("scene_duration") > duration, "field 20 is the scene duration")
   redraw(); assert_screen_layout(context, "SCENES on a field")
 end)
 
@@ -232,7 +232,7 @@ test("the overwrite prompt is the page's hint while armed and lapses after 2 s",
   key(1, 1); next_frame(context)
   assert_true(not UI_PAGES.screen_dirty, "nothing else asks for the next frame")
   context.set_time(102.1); next_frame(context)
-  assert_equal(hint_text(context), "K3:save", "the frame after 2 s draws, without the prompt")
+  assert_equal(hint_text(context), "K2:name K3:save", "the frame after 2 s draws, without the prompt")
   key(1, 0)
   assert_true(S.scenes_page.armed_slot == nil, "and disarms")
   local record = S.registry.pages[S.constants.UI_PAGES.index.SCENES]
@@ -305,15 +305,15 @@ test("SCENES hints", function()
   -- an empty slot: recall does nothing, so the hint names the key that does (#420)
   assert_equal(hint_text(context), "empty  ALT+K3:save", "an empty slot says so and names the save")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K3:save", "ALT on a slot: only the save")
+  assert_equal(hint_text(context), "K2:name K3:save", "ALT on a slot: name and save (an empty slot takes a name)")
   key(1, 0)
   S.lib.scenes.save(1); redraw()
   assert_equal(hint_text(context), "K2:fade K3:recall", "a saved slot: fade and recall")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K3:save", "ALT on a saved slot")
-  -- the fields: ALT+K3 returns at once, so no save is offered (#419)
+  assert_equal(hint_text(context), "K2:name K3:save", "ALT on a saved slot")
+  -- the fields: ALT+K2 and ALT+K3 return at once, so neither is offered (#419)
   key(1, 0)
-  enc(2, 8); redraw()
+  enc(2, 16); redraw()
   assert_equal(hint_text(context), "E2:move E3:edit", "a field")
   key(1, 1); redraw()
   assert_equal(hint_text(context), "E2:move E3:edit", "ALT on a field offers no K3")
@@ -367,12 +367,181 @@ test("E3 on SCENES' sequencer field echoes to a MIDI-mapped controller (#538)", 
   local controller = context.midi.plug(1)
   norns.pmap.data.scene_sequencer_enabled = { dev = 1, ch = 1, cc = 43, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
     echo = true, value = 0 }
-  S.lib.pages_scenes.move_cursor(10)   -- the sequencer on/off field
+  S.lib.pages_scenes.move_cursor(18)   -- the sequencer on/off field
   enc(3, 1)
   assert_equal(params:get("scene_sequencer_enabled"), 1, "E3 right turns the sequencer on")
   enc(3, -1)
   assert_equal(params:get("scene_sequencer_enabled"), 0, "E3 left turns it off")
   assert_equal(cc_echoes(controller, 43), "127,0", "the controller hears both")
+end)
+
+-- 3.4 (design §9.4): sixteen slots in two banks of eight, with names
+
+-- The slot numbers SCENES draws above the fields, in drawing order
+local function drawn_slot_numbers(context)
+  local numbers = {}
+  for _, entry in ipairs(context.screen.texts) do
+    local number = tonumber(entry.text)
+    if number and entry.y > 9 and entry.y < 46 then table.insert(numbers, number) end
+  end
+  return table.concat(numbers, " ")
+end
+
+test("the cursor stops at 16 slots and four fields, and ALT+E2 jumps a bank", function()
+  local context, S = started_on_scenes()
+  enc(2, 15); assert_equal(S.cursors.scene, 16, "E2 reaches slot 16")
+  enc(2, 1); assert_equal(S.cursors.scene, 17, "then the first field")
+  enc(2, 100); assert_equal(S.cursors.scene, 20, "and stops at the fourth field")
+  S.lib.pages_scenes.move_cursor(3)
+  key(1, 1)
+  enc(2, 1); assert_equal(S.cursors.scene, 11, "ALT+E2 right: slot 3 to slot 11, the same place in bank 2")
+  enc(2, 1); assert_equal(S.cursors.scene, 19, "a bank on from slot 11 is the third field")
+  enc(2, -1); assert_equal(S.cursors.scene, 11, "ALT+E2 left: back a bank")
+  enc(2, -1); assert_equal(S.cursors.scene, 3, "to slot 3")
+  enc(2, -1); assert_equal(S.cursors.scene, 1, "clamped to slot 1")
+  key(1, 0)
+  -- a jump is a cursor move: it disarms a pending overwrite
+  capture_scene(4)
+  S.lib.pages_scenes.move_cursor(4); alt_tap(3)
+  assert_equal(S.scenes_page.armed_slot, 4, "armed on S4")
+  key(1, 1); enc(2, 1); key(1, 0)
+  assert_equal(S.cursors.scene, 12, "jumped to slot 12")
+  assert_equal(S.scenes_page.armed_slot, nil, "and disarmed")
+  key(1, 1); enc(3, 1); key(1, 0)
+  assert_equal(S.cursors.scene, 12, "ALT+E3 never moves the cursor")
+end)
+
+test("the page shows the bank of the cursor's slot", function()
+  local context, S = started_on_scenes()
+  capture_scene(2); capture_scene(12)
+  S.lib.scenes.set_name(2, "dawn"); S.lib.scenes.set_name(12, "dusk")
+  redraw()
+  assert_equal(drawn_slot_numbers(context), "1 2 3 4 5 6 7 8", "slot 1: bank 1")
+  assert_true(screen_shows(context, "dawn"), "with slot 2's name")
+  assert_true(not screen_shows(context, "dusk"), "and no bank 2 name")
+  S.lib.pages_scenes.move_cursor(12); redraw()
+  assert_equal(drawn_slot_numbers(context), "9 10 11 12 13 14 15 16", "slot 12: bank 2")
+  assert_true(screen_shows(context, "dusk"), "with slot 12's name")
+  assert_true(not screen_shows(context, "dawn"), "and no bank 1 name")
+  S.lib.pages_scenes.move_cursor(17); redraw()
+  assert_equal(drawn_slot_numbers(context), "9 10 11 12 13 14 15 16", "a field shows the last bank shown")
+  S.lib.pages_scenes.move_cursor(2); S.lib.pages_scenes.move_cursor(20); redraw()
+  assert_equal(drawn_slot_numbers(context), "1 2 3 4 5 6 7 8", "bank 1 after a slot of bank 1")
+  assert_screen_layout(context, "SCENES on a field under bank 1")
+end)
+
+test("ALT+K2's release opens the name entry; its text names the slot and a cancel keeps the old name", function()
+  local context, S = started_on_scenes()
+  local te = context.textentry.library
+  local script_key, script_enc, script_redraw = key, enc, redraw
+  S.lib.pages_scenes.move_cursor(3)
+  key(1, 1); key(2, 1)
+  assert_true(not context.textentry.open, "nothing opens on the press")
+  assert_equal(S.scenes_page.naming, nil, "nothing is being named")
+  key(2, 0)
+  assert_true(context.textentry.open, "the release opens the entry")
+  assert_equal(te.heading, "scene 3 name", "headed with the slot")
+  assert_equal(te.txt, "", "starting from the slot's name")
+  assert_equal(S.scenes_page.naming, 3, "slot 3 is being named")
+  assert_equal(S.alt_held, false, "ALT is forgotten: K1's release goes to the entry")
+  assert_true(key == te.key and enc == te.enc, "the globals key and enc are the entry's")
+  assert_true(redraw == norns.none, "and redraw draws nothing of Strata's")
+  key(1, 0)                                                       -- the entry's: it ignores K1
+  assert_true(context.textentry.open, "K1's release leaves the entry open")
+  context.textentry.finish("dusk")
+  assert_equal(S.lib.scenes.name(3), "dusk", "the text names the slot")
+  assert_true(key == script_key and enc == script_enc and redraw == script_redraw, "the script's key, enc and redraw are back")
+  assert_equal(S.scenes_page.naming, nil, "nothing is being named")
+  assert_true(not S.scenes[3].populated, "an empty slot takes a name and stays empty")
+  -- opened again on the named slot, a K2 release inside the entry cancels
+  key(1, 1); key(2, 1); key(2, 0)
+  assert_equal(te.txt, "dusk", "the entry starts from the slot's name")
+  key(1, 0)
+  key(2, 1); key(2, 0)                                            -- the entry's K2
+  assert_true(not context.textentry.open, "a K2 release cancels the entry")
+  assert_equal(S.lib.scenes.name(3), "dusk", "the name is unchanged")
+  assert_equal(S.scenes_page.naming, nil, "nothing is being named")
+  assert_true(key == script_key and enc == script_enc and redraw == script_redraw, "the script has its keys again")
+  -- a field takes no name
+  S.lib.pages_scenes.move_cursor(17)
+  key(1, 1); tap(2); key(1, 0)
+  assert_true(not context.textentry.open, "ALT+K2 on a field opens nothing")
+  -- the page works on after the entry
+  enc(2, -1)
+  assert_equal(S.cursors.scene, 16, "E2 moves the cursor again")
+end)
+
+test("a name entry the norns menu took over is forgotten when the menu closes", function()
+  local context, S = started_on_scenes()
+  local te = context.textentry.library
+  local script_key, script_enc = key, enc
+  S.lib.pages_scenes.move_cursor(2)
+  key(1, 1); key(2, 1); key(2, 0)
+  assert_equal(S.scenes_page.naming, 2, "slot 2 is being named")
+  -- K1 opens the norns menu; PARAMS names a PSET through the one textentry
+  _menu.set_mode(true)
+  local pset_name
+  te.enter(function(text) pset_name = text end, "pset", "PSET NAME: 1")
+  context.textentry.finish("mine")
+  assert_equal(pset_name, "mine", "the menu's entry called the menu back")
+  assert_equal(S.scenes_page.naming, 2, "Strata's entry has not called back")
+  _menu.set_mode(false)                                           -- K1 back to play mode
+  assert_equal(S.scenes_page.naming, nil, "the entry is forgotten as the menu closes")
+  assert_true(key == script_key and enc == script_enc, "the script's key and enc are back")
+  assert_true(_menu.key == script_key and norns.encoders.callback == script_enc,
+    "and play mode routes the keys and encoders to them")
+  assert_equal(S.lib.scenes.name(2), "", "slot 2 keeps its name")
+  -- the page works again, a new entry too
+  enc(2, 1); assert_equal(S.cursors.scene, 3, "E2 moves the cursor")
+  key(1, 1); key(2, 1); key(2, 0); key(1, 0)
+  assert_equal(S.scenes_page.naming, 3, "ALT+K2 opens a new entry")
+  context.textentry.finish("noon")
+  assert_equal(S.lib.scenes.name(3), "noon", "which names its slot")
+end)
+
+test("the norns menu opened and closed over the name entry leaves it open and drawn", function()
+  local context, S = started_on_scenes()
+  local te = context.textentry.library
+  local script_key, script_redraw = key, redraw
+  S.lib.pages_scenes.move_cursor(5)
+  key(1, 1); key(2, 1); key(2, 0)
+  -- norns' set_mode(false) puts the script's redraw back and draws it, while
+  -- the entry keeps the keys: the entry takes the screen back
+  _menu.set_mode(true)
+  local drawn = te.redraws
+  _menu.set_mode(false)
+  assert_equal(S.scenes_page.naming, 5, "the entry is still open")
+  assert_true(key == te.key, "and keeps the keys")
+  assert_true(redraw == norns.none, "Strata's redraw draws nothing over it")
+  assert_true(te.redraws > drawn, "the entry is drawn again")
+  next_frame(context)
+  context.textentry.finish("rain")
+  assert_equal(S.lib.scenes.name(5), "rain", "it names its slot")
+  assert_true(key == script_key and redraw == script_redraw, "and gives the script its key and redraw back")
+end)
+
+test("SCENES' keys and the arc button recall through the quantizer", function()
+  local context, S = started_on_scenes()
+  capture_scene(11)
+  local scheduled, recalls = {}, {}
+  local real_schedule, real_recall = S.lib.quantize.schedule, recall_scene
+  S.lib.quantize.schedule = function(action_key, fn, label)
+    table.insert(scheduled, { action_key = action_key, fn = fn, label = label })
+    return false
+  end
+  recall_scene = function(slot, time) table.insert(recalls, slot .. ":" .. string.format("%g", time)) end
+  S.lib.pages_scenes.move_cursor(11); params:set("scene_transition_time", 4)
+  tap(2); tap(3)
+  S.registry.pages[S.constants.UI_PAGES.index.SCENES].arc_button()
+  assert_equal(#scheduled, 3, "K2, K3 and the arc button each schedule a recall")
+  assert_equal(#recalls, 0, "and none recalls before the quantizer runs it")
+  for index, action in ipairs(scheduled) do
+    assert_equal(action.action_key, "scene", "action " .. index .. " has the key scene")
+    assert_equal(action.label, "S11", "and the label S11")
+    action.fn()
+  end
+  S.lib.quantize.schedule, recall_scene = real_schedule, real_recall
+  assert_equal(table.concat(recalls, ","), "11:4,11:0,11:0", "K2 fades, K3 and the button recall at once")
 end)
 
 end

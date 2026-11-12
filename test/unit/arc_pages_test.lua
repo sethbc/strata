@@ -1003,6 +1003,34 @@ test("SCENES ring 1 moves the cursor through the page's move_cursor", function()
   assert_equal(S.cursors.scene, 3, "the cursor moved")
 end)
 
+-- 3.4 (design §9.4): ring 1 runs over the 16 slots and four fields
+test("SCENES ring 1 runs over 20 stops, ring 2 is the transition time, the button recalls through the quantizer", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  show_page("SCENES")
+  S.lib.pages_scenes.move_cursor(1)
+  context.arc.turn(1, 1, 150)
+  assert_equal(S.cursors.scene, 16, "150 ticks from slot 1: slot 16, in bank 2")
+  context.arc.turn(1, 1, 10)
+  assert_equal(S.cursors.scene, 17, "then the first field")
+  context.arc.turn(1, 1, 1000)
+  assert_equal(S.cursors.scene, 20, "and the last of the 20 stops")
+  S.lib.pages_scenes.move_cursor(9); arc_redraw()
+  assert_ring_fraction(device, 1, 8 / 19, "slot 9 is 8/19 of the way")
+  assert_ring_fraction(device, 2, param_fraction("scene_transition_time"), "ring 2 the transition time")
+  capture_scene(9)
+  local scheduled = {}
+  local real_schedule = S.lib.quantize.schedule
+  S.lib.quantize.schedule = function(action_key, fn, label)
+    table.insert(scheduled, action_key .. " " .. label); fn(); return true
+  end
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  S.lib.quantize.schedule = real_schedule
+  assert_equal(table.concat(scheduled, ","), "scene S9", "the button schedules the recall of slot 9")
+  assert_equal(S.current_scene, 9, "which recalls it at once")
+end)
+
 test("page and arc files keep to their record fields", function()
   local ARC_FIELDS = { arc_delta = true, arc_redraw = true, arc_alt_delta = true, arc_alt_redraw = true }
   local PAGE_FIELDS = { "name", "draw", "hints", "enc", "key", "alt_enc", "alt_key", "key_release",

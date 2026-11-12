@@ -18,7 +18,7 @@ This is version 3.3.2. Version 3.0 added buffers and live input, filter and dela
 - Per-voice freeze, grain variation (reverse, jitter, intervals), scale quantize and loop regions
 - Cross-modulation between voices, six global LFOs and probability-based mutations
 - A filter and delay and reverb sends per voice; filter, delay, reverb and a limiter on the master output
-- Eight scenes with smooth recall and a scene sequencer
+- Sixteen named scenes in two banks, with smooth recall and a scene sequencer
 - An eight-page screen UI that reaches every parameter, the patterns and the scenes without a grid or arc
 - A pattern sequencer (on the SEQ page and the grid), MIDI input and monome arc support
 

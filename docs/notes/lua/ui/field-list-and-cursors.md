@@ -7,7 +7,7 @@
 `S.cursors` (`lib/ui/cursors.lua`) holds the cursors more than one page or ring set uses:
 - `voice`: a row index into `voice_page_rows(S.selected_voice)` (a `field_list` cursor). It starts on the first selectable row (row 2: row 1 is the first section's label).
 - `seq_step`: 1..`PATTERN_LENGTH`.
-- `scene`: 1..`NUM_SCENES + #SCENES_FIELDS` (12): the eight scene slots, then the four `S.constants.SCENES_FIELDS` params (`scene_transition_time`, `scene_sequencer_enabled`, `scene_sequence_length`, `scene_duration`).
+- `scene`: 1..`NUM_SCENES + #SCENES_FIELDS` (20): the sixteen scene slots, then the four `S.constants.SCENES_FIELDS` params (`scene_transition_time`, `scene_sequencer_enabled`, `scene_sequence_length`, `scene_duration`).
 
 `S.lib.ui_cursors.move(name, d)` moves one by `d` stops, clamped at its ends (no wrap): `voice` through `S.lib.ui_field_list.move` on the selected voice's rows (section labels take no stop), the others with `util.clamp`. An unknown name is an error. `S.lib.ui_cursors.clamp_all()` puts each cursor back on a real stop: `voice` through `field_list.clamp` (the nearest selectable row at or before it, else the first), the others within their range. `redraw()` and `arc_redraw()` run it first, so a source switched by the grid, MIDI or a scene recall, or another selected voice, never leaves the cursor past the end or on a label row. None of these functions requests a redraw: their callers (`enc`, `key`, `arc_delta`) do.
 

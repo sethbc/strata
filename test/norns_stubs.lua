@@ -22,8 +22,9 @@
 --     shows util.round(value, 0.01) .. " " .. units, a number or binary
 --     returns its value (a number); a ControlSpec made without a default has
 --     none (nil), and its control starts at raw 0
---   * midi (stub_midi.lua), poll, fileselect and musicutil follow
---     core/midi.lua, core/poll.lua, lib/fileselect.lua and lib/musicutil.lua
+--   * midi (stub_midi.lua), textentry (stub_textentry.lua), poll, fileselect and
+--     musicutil follow core/midi.lua, lib/textentry.lua, core/poll.lua,
+--     lib/fileselect.lua and lib/musicutil.lua
 --   * clock follows lua/core/clock.lua over matron's scheduler
 --     (clock_scheduler.cc): clock.run resumes the coroutine at once (an
 --     error there reaches the caller); sleep and sync yield to the
@@ -2777,6 +2778,8 @@ function stubs.install(options)
   -- lua/core/midi.lua's update_devices() and SYSTEM > DEVICES' reassign
   function context.midi.update_devices() update_devices(context.midi) end
   function context.midi.reassign(from_port, to_port) reassign(context.midi, from_port, to_port) end
+  context.textentry = {}
+  context.textentry.library = require("stub_textentry")(context.textentry)
   context.fileselect = make_fileselect()
   context.polls = make_poll(options.engine_polls)
   context.musicutil = make_musicutil()
@@ -2909,6 +2912,8 @@ function stubs.install(options)
   package.preload["fileselect"] = function() return context.fileselect end
   package.loaded["pattern_time"] = nil
   package.preload["pattern_time"] = function() return require("stub_pattern_time")() end
+  package.loaded["textentry"] = nil
+  package.preload["textentry"] = function() return context.textentry.library end
 
   if options.quiet then
     _G.print = function(...)

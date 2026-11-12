@@ -287,16 +287,17 @@ test("every screen and arc redraw clamps the cursors first", function()
   assert_equal(S.cursors.voice, 2, "arc_redraw() clamps the voice cursor")
 end)
 
-test("the scene cursor covers eight slots and four fields", function()
+test("the scene cursor covers sixteen slots and four fields", function()
   load_strata()
   local S = local_value("S")
   local C = S.constants
   assert_equal(table.concat(C.SCENES_FIELDS, " "),
     "scene_transition_time scene_sequencer_enabled scene_sequence_length scene_duration")
   for _, param_id in ipairs(C.SCENES_FIELDS) do params:lookup_param(param_id) end
-  S.lib.ui_cursors.move("scene", 50); assert_equal(S.cursors.scene, 12)
+  S.lib.ui_cursors.move("scene", 50); assert_equal(S.cursors.scene, 20, "20 stops")
   assert_equal(S.cursors.scene, C.NUM_SCENES + #C.SCENES_FIELDS)
-  S.lib.ui_cursors.move("scene", -3); assert_equal(S.cursors.scene, 9, "stop 9 is the first field")
+  S.lib.ui_cursors.move("scene", -3); assert_equal(S.cursors.scene, 17, "stop 17 is the first field")
+  S.lib.ui_cursors.move("scene", -1); assert_equal(S.cursors.scene, 16, "stop 16 is the last slot")
   S.lib.ui_cursors.move("scene", -50); assert_equal(S.cursors.scene, 1)
 end)
 

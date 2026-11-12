@@ -439,8 +439,11 @@ test("every global read is defined", function()
 end)
 
 -- Globals more than one script file may write: lib/pages/buffer.lua puts
--- back the script's own key and enc when the file selector fails
-local GLOBALS_WRITTEN_IN_TWO_FILES = { key = true, enc = true }
+-- back the script's own key and enc when the file selector fails, and
+-- lib/pages/scenes.lua when the norns menu took its name entry over; the
+-- name entry puts norns.none in redraw again (as textentry.enter does)
+-- when the menu closed over it
+local GLOBALS_WRITTEN_IN_TWO_FILES = { key = true, enc = true, redraw = true }
 
 -- Every global (a global function or any other value) that more than one
 -- of a list of { path, text } files writes, as "<name>: <path>:<line>,

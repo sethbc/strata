@@ -24,7 +24,10 @@
 - A file of an older format is kept as `scenes.data.v<n>` (`keep_copy`) before the first save replaces it, and a failure to keep it fails the save (#467): at every instant scenes.data is the old file or the new one, whole. When all nine copy names are taken, copies of that format are kept already: `keep_copy` says so on the console and the save writes anyway, so the session's scenes and the exit save are never refused for it.
 - A load keeps `S.current_scene` only when the file's scene in that slot encodes to the same text as the one it replaces (`S.lib.data_files.encode`); otherwise it is 0 (#518).
 - Bounds-check the scene number (1..`NUM_SCENES`) and check the slot is populated before recalling.
-- The registered fields are read at init, never at include time: `S.registry.scene_fields` joins `S.SCENE_GLOBAL_PARAMS` in the scenes load's start step (before the file is read, each field's `set` kept by id), and the voice params' scene keys (`S.registry.voice_params`), the scene blocks (`S.registry.scene_blocks`), the migrations (`S.registry.scene_migrations`) and the lock hooks (`S.registry.lock_change`) are read at each use. Until 3.4's 0a lands the last three may not exist: they are read as `S.registry.<name> or {}`.
+- The registered fields are read at init, never at include time: `S.registry.scene_fields` joins `S.SCENE_GLOBAL_PARAMS` in the scenes load's start step (before the file is read, each field's `set` kept by id), and the voice params' scene keys (`S.registry.voice_params`), the scene blocks (`S.registry.scene_blocks`), the migrations (`S.registry.scene_migrations`) and the lock hooks (`S.registry.lock_change`) are read at each use.
+- Every slot has a name (format 6, 3.4): `validate_scene` rejects a slot, empty or not, whose `name` is not a string of at most `SCENE_NAME_MAX` (12) printable ASCII characters (bytes 32-126), so a name is part of every slot from the load on. A slot is named only through `S.lib.scenes.set_name`, which keeps the printable ASCII characters of its text, cut to 12, raises the slot's revision and writes the file at once (`autosave`, as a save does: a name never reaches memory without the file, or `S.scene_file.unsaved` says so). A capture keeps the slot's name.
+- A loaded slot with no name gets `""`, and a slot's own 3.3 default (`scene <i>` in slot i) reads as `""` only in a file older than `S.lib.scenes.NAMES_FORMAT` (6), keyed on the file's version: from format 6 a name is the player's, whatever it reads.
+- A user's recall (SCENES' K2 and K3, the arc button, the grids' recall keys) goes through `S.lib.quantize.schedule("scene", fn, "S" .. slot)` at its call site (design §8.9), so it can wait for a beat or bar once the quantizer can; `recall_scene` itself, the scene sequencer and a transition's end never do: they are not user actions, and a time-based sequence never waits for a bar.
 - Each LFO's settings (its offset among them, #103) are set before its state `strata_lfo<n>`, so an LFO a recall turns on starts with the scene's settings in place (`S.lib.lfos.SCENE_FIELDS` lists the state last).
 - A registered voice param's scene key needs its default in `scene_defaults` (the param's default; a test checks), and a key that must not crossfade needs a whole `{min, max}` in `discrete`. Discrete extras are set at a transition's end, after the voice's source.
 
@@ -34,6 +37,7 @@
 - `S.scenes`, `S.current_scene`, and the sequencer and transition state on `S` (`S.scene_sequencer_clock`, `S.scene_sequencer_enabled`, `S.scene_sequencer_position`, `S.scene_sequencer_recall_due`, `S.scene_transition_clock`, `S.scene_transition_active`, `S.scene_recall_in_progress`, `S.scene_autosave_blocked`, `S.scenes_loaded`, `S.scene_file`);
 - `S.lib.scenes.autosave()`, `S.lib.scenes.request_load()` and `S.lib.scenes.SCENE_LOAD` (Disk persistence, below);
 - `S.lib.scenes.scene_entries(scene_data)` and `S.lib.scenes.apply_entries(entries, opts)` (Entries, below) and `S.lib.scenes.revision(slot)`;
+- the banks and names (3.4): `S.lib.scenes.bank_of(slot)` (1 for slots 1-8, 2 for 9-16, nil for a number that is no slot; a bank is only a view, design Question 15), `S.lib.scenes.name(slot)` (the slot's name, `""` for none and for a number that is no slot), `S.lib.scenes.set_name(slot, text)` (What a scene holds, below) and `S.lib.scenes.NAMES_FORMAT` (6);
 - `S.SCENE_GLOBAL_PARAMS`, `S.VOICE_SCENE_DEFAULTS`, `S.SCENE_BLOCK_DEFAULTS`, `S.SCENE_TRANSITION` (with a running fade's `next_step_due`, `target`, `previous` and `step`);
 - `S.lib.scenes.fading_to()` (the scene a running fade goes to, else nil) and `S.lib.scenes.shows_current(slot)` (whether the displays light the slot as the current scene);
 - `S.lib.scenes.sequencer_next_slot()` (#303): the slot the running sequencer recalls next, else nil. While `S.scene_sequencer_recall_due` (set by `scene_sequencer_start` and each advance, cleared by the loop just before it recalls the position, and by `scene_sequencer_stop`) the count starts at the position (1 past `scene_sequence_length`, as the loop's guard); otherwise at the position + 1, wrapped to 1 past the length as it is now, as the advance does. From there it is the first slot that holds a scene (empty slots are skipped, as the loop skips them, #513), or that slot itself when no slot of the sequence holds one. Through a hold the position is the scene playing (or, with no scene in the sequence, the empty slot it holds), so the grids' scene pages light this one at 10, never the position. The hold of an empty slot redraws the grids, so the light moves on there too. The "scene sequencer" invariant: no recall is due while the sequencer is off, and the sequencer is on exactly while its clock lives (#329);
@@ -42,11 +46,11 @@
 - `S.lib.scenes.scene_data_dir`, `S.lib.scenes.move_aside_unloadable_file` and `SCENE_LOAD.start_flash_seconds`, used by `lib/buffers.lua`;
 - cleanup steps 30 (save the scenes), 100 (the sequencer) and 110 (the transition).
 
-Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene pages are in `docs/notes/lua/grid/layout_256.md` and `docs/notes/lua/grid/layout_128h.md`, the header's scene indicator in `docs/notes/lua/ui/header-and-flashes.md`.
+Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene pages are in `docs/notes/lua/grid/layout_256.md`, `docs/notes/lua/grid/layout_128h.md` and `docs/notes/lua/grid/layout_128v.md`, the header's scene indicator in `docs/notes/lua/ui/header-and-flashes.md`, the SCENES page (and its name entry) in `docs/notes/lua/pages/scenes.md`.
 
 ## What a scene holds
 
-- **Storage**: `S.scenes`, `NUM_SCENES` slots (8: 1-8), each `{name, populated, data}`. The `lib/scenes.lua` constructor builds the array afresh on every script load, empty by default. A slot's `name` is the player's, `""` for none: an empty slot's is `""`, and a loaded slot whose name is its own 3.3 default (`scene <i>` in slot i) loads as `""` (another slot's default, such as `scene 3` in slot 5, stays: a name the player could have given). No code or format assumes a one-digit slot.
+- **Storage**: `S.scenes`, `NUM_SCENES` slots (16: 1-16, two banks of `SCENE_BANK_SIZE`, 8; 3.4), each `{name, populated, data}`. The `lib/scenes.lua` constructor builds the array afresh on every script load, empty by default. A slot's `name` is the player's, `""` for none: an empty slot's is `""`, a slot can be named whether it holds a scene or not, and the name stays with the slot through captures. `S.lib.scenes.set_name(slot, text)` names one: the printable ASCII characters of `text` (bytes 32-126; the rest are dropped), cut to `SCENE_NAME_MAX` (12); a changed name raises the slot's revision, asks for a redraw and is written at once (`S.lib.scenes.autosave`); it returns false (and changes nothing) for a number that is no slot or a text that is no string. On a load, a slot with no name gets `""`, and in a file older than format 6 (`NAMES_FORMAT`) a slot whose name is its own 3.3 default (`scene <i>` in slot i) loads as `""` (another slot's default, such as `scene 3` in slot 5, stays: a name the player could have given); a format 6 file's names load as they are. No code or format assumes a one-digit slot.
 - **Revisions**: `S.lib.scenes.revision(slot)` is 0 until the slot's data first changes, then rises at each change: a capture of the slot, and any load from disk that replaces the scenes (every slot rises; a load that finds no file or an unreadable one changes none). A number that is no slot reads 0.
 - **Data**, a complete snapshot:
   - every voice parameter (synthesis, granular including the buffer params, cross-modulation) and each voice's source (not buffer contents);
@@ -82,6 +86,7 @@ end
 - Stores each registered block's `record.capture()` under `data[record.key]` (the record returns a fresh value).
 - Stores a new table each time, so capturing into a slot during a fade does not change that fade's end.
 - Raises the slot's revision.
+- Keeps the slot's name (it sets the slot's `data` and `populated` only).
 
 ## Recall
 
@@ -260,21 +265,22 @@ In the PARAMS menu (strata_scenes section):
 - `scene_sequencer_enabled` (binary): start/stop automatic scene progression.
 - `scene_transition_time` (0-30 s, default 2 s): crossfade duration for smooth transitions.
 - `scene_duration` (4-120 s, default 16 s): how long each scene plays before advancing.
-- `scene_sequence_length` (1-8, default 4): how many scenes to cycle through.
+- `scene_sequence_length` (1-`NUM_SCENES`, 1-16, default 4): how many scenes to cycle through.
 - Triggers "save scenes to disk" and "load scenes from disk".
 
 ## Disk persistence
 
 - **Location**: `~/dust/data/strata/scenes.data`.
-- **Format**: a Lua table in the layout norns' `tab.save` writes (written by `S.lib.data_files.encode`, each table's keys in a fixed order): `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 5, since 3.3).
+- **Format**: a Lua table in the layout norns' `tab.save` writes (written by `S.lib.data_files.encode`, each table's keys in a fixed order): `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 6, since 3.4).
   - Version 1 and 2 files (`{version = 1, ...}` or `{version = 2, ...}`, or the bare scenes array written before 2.1) are migrated on load and print `migrated scenes file from version <n>`. The next save keeps the older file as `scenes.data.v<n>`, then writes the current version.
   - Version 3 adds each voice's `extras` (the registered voice params), the registered global fields and the LFO offsets. With nothing registered, a migrated voice gets an empty `extras`.
   - When to bump `SCENE_DATA_VERSION`: once per release that adds scene fields, never per field, and whenever a stored value changes meaning, even inside a release. Migration fills whatever is missing whatever the file's version, so a field added within an unreleased format (the LFO offsets joined format 3 before 3.2 shipped) needs only its default; a version 3 file written without them migrates like an older one. A value that means something else needs its own boundary, since files of the old meaning already carry the old number: 3.3's development builds wrote format 4 with the Pulse res as the rq, so the turned-around res is format 5.
   - Version 4 (3.3) changes no field: a version 3 file migrates with only its version changed (registered defaults fill as before). A voice-param record's `scene_ranges` limits a continuous extra in `validate_scene`.
   - Version 5 (3.3, #314) adds no field: the Pulse voice's `res` rises with resonance (the engine plays the filter's rq as `1.1 - res`, `docs/notes/engine/voices.md`), so a scene of format 1 to 4, which holds the rq itself, has that res mirrored once as the file loads (`PULSE_RES.mirror - res`, `PULSE_RES.scene_format` = 5) and sounds the same; the next save writes 5 (keeping the older file as `scenes.data.v<n>`), and a format 5 file is never mirrored. The mirror maps 0.1-1 onto 1-0.1 and is its own inverse, so a mirrored value stays on the param's 0.01 grid and a fade between two mirrored scenes runs through the same rq values as before. The key is validated as before (a number in a voice's `params`, of a key the voice has); a res outside 0.1-1 in a hand-edited file mirrors outside it and the recall's `params:set` clamps it.
+  - Version 6 (3.4) holds 16 slots and the players' names. A file of any earlier version holds eight: they load into slots 1-8 and slots 9-16 load empty (`load_scenes_from_disk` fills every slot the file lacks with an empty one). Its names are migrated as above (no name reads `""`; a slot's own `scene <i>` reads `""`), and the migrations 3.4's packages register with `before_version` 6 run on it. Sixteen full scenes stay far inside the reader's table cap (`lib/data_files.lua`, 8192; eight full scenes held 546 at 3.3).
   - Any other version is rejected.
 - **Migration**: `load_scenes_from_disk()` runs `migrate_scene(scene, from_version)` on every loaded slot before `validate_scene_data()`.
-  - First, on a populated scene, the registered migrations (`S.registry.scene_migrations`, `{name, before_version, migrate = fn(scene)}`, `S.register_scene_migration`, 3.4's 0a) whose `before_version` is above the file's version, by `before_version`, then in registration order: each `migrate(scene)` converts what it finds in an old form, before any default fills. 3.4 registers its migrations with `before_version` 6 while `SCENE_DATA_VERSION` is still 5, so each must be idempotent (convert only what it finds, fill only what is missing): a format 5 file runs them at every load.
+  - First, on a populated scene, the registered migrations (`S.registry.scene_migrations`, `{name, before_version, migrate = fn(scene)}`, `S.register_scene_migration`, 3.4's 0a) whose `before_version` is above the file's version, by `before_version`, then in registration order: each `migrate(scene)` converts what it finds in an old form, before any default fills. 3.4 registers its migrations with `before_version` 6, `SCENE_DATA_VERSION` since 3.4's package 1c: a file older than format 6 runs them as it loads (the next save writes format 6). Each is idempotent (convert only what it finds, fill only what is missing), since 3.4's packages landed in any order, some while the constant was still 5 and a format 5 file ran them at every load.
   - Then it fills only what is missing, so it runs for every version.
   - Each global from its `SCENE_GLOBAL_PARAMS` entry's `default` (the param default).
   - Top-level blocks from `S.SCENE_BLOCK_DEFAULTS` (`{key, default}`), then each registered block that is missing from its `default()`.
@@ -298,7 +304,7 @@ In the PARAMS menu (strata_scenes section):
 - **Auto-save** (#327): every user's scene save writes the file, through `S.lib.scenes.autosave()`: nil (and `unsaved` set) when the scenes were never loaded in this session or `S.scene_autosave_blocked`, else `save_scenes_to_disk()`. `cleanup()` saves too (step 30), with the same two guards: only once `load_scenes_from_disk()` has run in this session (`S.scenes_loaded`, set when it returns), so a start that failed before init's loads (the engine did not load, an error earlier in `init`) never overwrites the saved file with the empty in-memory state (#72), and not while blocked. With nothing new the exit writes nothing (the bytes are the same). buffers.data has the same guards (`docs/notes/lua/buffers.md`).
 - **Auto-load**: its start step (`START_ORDER.scenes_load`) loads them at init, before the buffers.
 - **Manual**: the PARAMS triggers "save scenes to disk" (`save_scenes_to_disk`) and "load scenes from disk", and SETUP's `save scenes` and `load scenes` (K3). Both loads go through `S.lib.scenes.request_load()` (#328): while `S.scene_file.unsaved` the first request arms (`SCENE_LOAD.armed_until`, `confirm_seconds` = 2 s ahead) and returns `"confirm"` (SETUP flashes `K3 again: drop unsaved` for the 2 s; the PARAMS trigger prints a line), and a second inside the window loads; otherwise it loads at once, and returns what `load_scenes_from_disk` returns. With scenes written at every save, memory and the file hold the same scenes, so a stray load drops nothing.
-- **What is saved**: all 8 slots, their populated state and their data. Scenes persist across reboots, building a library of sonic palettes.
+- **What is saved**: all 16 slots, their names, populated state and data. Scenes persist across reboots, building a library of sonic palettes.
 
 ## Validation
 
@@ -307,6 +313,7 @@ Always validate scene data before using it, so a corrupted file cannot crash the
 `validate_scene(scene)` checks one slot; `validate_scene_data(scene_table)` checks every present slot of a loaded table (missing slots are allowed and filled on load). Every "number" below is a finite number: NaN, `inf` and `-inf` are invalid values (the data files' reader reads `inf` and `nan` as numbers, and `tab.load` read `1e999` as `inf`, #464). A populated scene must contain everything `recall_scene_instant()` reads:
 
 ```lua
+-- every slot, empty or not: name, a string of at most SCENE_NAME_MAX (12) printable ASCII characters
 -- every SCENE_GLOBAL_PARAMS id is a number (master_density, tempo, mutation_*, filter_*, delay_*, reverb_*,
 --   drift_amount, and per LFO its 13 fields, S.lib.lfos.SCENE_FIELDS, the state strata_lfo<n> last);
 --   an option param's value is an integer from 1 to its option count; an entry with a range
@@ -352,13 +359,15 @@ end
 
 ## Usage
 
-Manual performance, from grid page 3:
+Manual performance, from grid page 3 (the 256's and 128h's scenes 1-16 on columns 1-16):
 1. Build a sound.
 2. Hold a row 3 button for half a second (`scene_save_seconds`) to save it to a scene slot.
 3. Change parameters.
 4. Save to another slot.
 5. Press row 1 buttons to switch between scenes instantly.
 6. Press row 2 buttons to crossfade between scenes.
+
+On the screen, SCENES does the same for one bank of eight at a time and names the slots (ALT+K2, `docs/notes/lua/pages/scenes.md`).
 
 Automatic sequencing:
 

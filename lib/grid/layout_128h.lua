@@ -112,19 +112,21 @@ return function(S)
     end
   end
 
-  -- Page 3, rows 1-5
+  -- Page 3, rows 1-5: scene x (1-16) on column x of rows 1-3, length x on
+  -- row 4. A recall goes through the quantizer (design §8.9)
   local function scene_page_key(port, x, y, z)
     if y == 1 and x <= NUM_SCENES then
       -- Row 1: Scene recall (instant)
-      recall_scene(x, 0)
+      S.lib.quantize.schedule("scene", function() recall_scene(x, 0) end, "S" .. x)
     elseif y == 2 and x <= NUM_SCENES then
       -- Row 2: Scene recall (with transition)
-      recall_scene(x, params:get("scene_transition_time"))
+      local transition_time = params:get("scene_transition_time")
+      S.lib.quantize.schedule("scene", function() recall_scene(x, transition_time) end, "S" .. x)
     elseif y == 3 and x <= NUM_SCENES then
       -- Row 3: Scene save, once held
       grid_core.scene_save_key(port, x, y, z, x)
     elseif y == 4 and x <= NUM_SCENES then
-      -- Row 4: Set sequence length
+      -- Row 4: Set sequence length (1-16)
       params:set("scene_sequence_length", x)
     elseif y == 5 and x == 1 then
       -- Toggle scene sequencer
@@ -211,7 +213,8 @@ return function(S)
   end
 
   -- Page 3: the scenes (simplified from the 256's): rows 1-3 recall at
-  -- once, with the transition and save, at the core's levels
+  -- once, with the transition and save scenes 1-16, at the core's levels;
+  -- row 4 the sequence length 1-16
   local function redraw_scene_page(port, grid_device)
     for i = 1, NUM_SCENES do
       grid_device:led(i, 1, grid_core.scene_recall_level(i))

@@ -6,9 +6,9 @@
 -- to UI_PAGES at run time
 
 local NUM_VOICES = 7
-local NUM_SCENES = 8
+local NUM_SCENES = 16  -- Scene slots, in two banks of SCENE_BANK_SIZE (3.4)
 local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 5  -- Scene file format version (written into scenes.data)
+local SCENE_DATA_VERSION = 6  -- Scene file format version (written into scenes.data)
 local PSET_FORMAT = 2         -- PSET format, saved in every PSET as the hidden strata_pset_format (none: 1)
 -- The Pulse voice's res rises with resonance from scene format 5 and PSET
 -- format 2 (3.3, #314): the engine plays the filter's rq as mirror - res
@@ -96,15 +96,17 @@ UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 -- replaces the three indicators: the text at status_x, the play mark at
 -- status_play_x. A header flash (lib/ui/flash.lua) replaces the dots and
 -- indicators for flash_seconds, its text at flash_x cut to flash_width px,
--- so it ends before a right-aligned S8. (The 3.1 design's x 80/94/100 put
+-- so it ends before a right-aligned S16. (The 3.1 design's x 80/94/100 put
 -- REC over S8 under the layout test's width estimate; these keep the same
--- order and spacing and fit.)
-local HEADER = {dots_x = 40, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
+-- order and spacing and fit. 3.4 moves the dots 4 px left, so a ninth
+-- clears status_play_x.)
+local HEADER = {dots_x = 36, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
   dot_y = 4, mutation_x = 76, play_x = 90, play_y = 3, rec_x = 96, scene_right = 127, status_x = 79,
   status_play_x = 73, flash_x = 40, flash_width = 74, flash_seconds = 1.5}
 
--- The params the SCENES page lists after the eight slots: its cursor's stops
--- NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (9-12; lib/ui/cursors.lua)
+-- The params the SCENES page lists after the sixteen slots: its cursor's
+-- stops NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (17-20;
+-- lib/ui/cursors.lua)
 local SCENES_FIELDS = {"scene_transition_time", "scene_sequencer_enabled", "scene_sequence_length", "scene_duration"}
 
 -- voices[i].grain keys holding an option index rather than a continuous

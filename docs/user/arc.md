@@ -63,7 +63,7 @@ The rings adjust the voice's buffer parameters whatever its source (ready for wh
 
 On the **SCENES** page:
 
-- **Ring 1** - Scene cursor, over the same stops as E2: the eight slots, then the fields below them (10 ticks per stop). Moving it cancels a pending overwrite question, as E2 does
+- **Ring 1** - Scene cursor, over the same 20 stops as E2: the sixteen slots (turning past slot 8 shows the second bank), then the four fields below them (10 ticks per stop). Moving it cancels a pending overwrite question, as E2 does
 - **Ring 2** - Transition time
 - **Rings 3-4** - Off
 
