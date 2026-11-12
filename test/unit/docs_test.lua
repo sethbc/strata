@@ -724,7 +724,7 @@ test("the engine stub range-checks continuous arguments at the engine's own limi
   local source = engine_sources()
   local patched, count = source:gsub("feedback%.clip%(0, 0%.95%)", "feedback.clip(0, 0.5)")
   assert_equal(count, 1, "feedback patch applies")
-  patched, count = patched:gsub("msg%[2%]%.clip%(0, 1%)", "msg[2].clip(0, 0.8)")
+  patched, count = patched:gsub("velocity = msg%[2%]%.clip%(0, 1%)", "velocity = msg[2].clip(0, 0.8)")
   assert_equal(count, 1, "velocity patch applies")
   local patched_limits = stubs.engine_spec_from_source(patched).argument_limits
   assert_equal(patched_limits.setDelay[2].high, 0.5, "the delay feedback limit is read from \\strataDelay")
@@ -979,7 +979,8 @@ end
 
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
-  "effects", "mix", "performance", "rings", "freeze", "variation", "loops", "record", "waveform", "positions", "soak" }
+  "effects", "mix", "performance", "rings", "freeze", "variation", "loops", "record", "waveform", "positions", "modulation",
+  "soak" }
 
 -- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them
 -- (its onDemandAreas: the soak, #131), as a set
@@ -1790,6 +1791,19 @@ test("effects.md's sends, technical.md's voice stage and BUFFER's field homes ma
   for _, path in ipairs({"docs/user/pages/buffer.md", "docs/user/sources-and-buffers.md"}) do
     assert_true(read_repo_file(path):find("lowest-numbered", 1, true), path .. " gives the loop save's fallback voice")
   end
+end)
+
+-- 3.4's fast modulation (design §3.2): the engine's fastModBus holds
+-- numVoices x fastModNoteSlots x numFastDestinations channels, which Lua
+-- addresses with the same two numbers (setFastOffset's note slot, the
+-- scatter mask's destination bits)
+test("the engine's fast-modulation constants equal the script's", function()
+  load_strata()
+  assert_equal(engine_spec.num_fast_destinations, 5, "numFastDestinations (StrataModulation.sc)")
+  assert_equal(engine_spec.fast_mod_note_slots, 1, "fastModNoteSlots (StrataModulation.sc)")
+  assert_equal(engine_spec.num_fast_destinations, local_value("NUM_FAST_DESTINATIONS"),
+    "numFastDestinations = NUM_FAST_DESTINATIONS")
+  assert_equal(engine_spec.fast_mod_note_slots, local_value("FAST_MOD_NOTE_SLOTS"), "fastModNoteSlots = FAST_MOD_NOTE_SLOTS")
 end)
 
 end

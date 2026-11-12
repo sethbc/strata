@@ -261,13 +261,14 @@
     // lifecycle's (out, gate, kill), retrigger's (t_trig, velocity), the slot
     // a buffer grain synth reads (bufnumL/R, bufFrames, bufRateScale,
     // recHeadBus), the ring a ring grain synth reads (bufL/R, phaseBus,
-    // ringLevel), the source's rate switch (rateLevel) and the envelope's
-    // buffer (envBuf, from envShape); with them the crossmod commands'
-    // (modSlotControls). The Lua engine stub reads these lists and rejects
-    // the same names.
+    // ringLevel), the source's rate switch (rateLevel), the envelope's
+    // buffer (envBuf, from envShape) and the fast-modulation block a grain
+    // synth or stage reads (fastModIn, the modulation area's); with them the
+    // crossmod commands' (modSlotControls). The Lua engine stub reads these
+    // lists and rejects the same names.
     engineOwnedControls {
         ^#[\out, \gate, \kill, \t_trig, \velocity, \bufnumL, \bufnumR, \bufFrames, \bufRateScale, \recHeadBus,
-            \bufL, \bufR, \phaseBus, \ringLevel, \rateLevel, \envBuf]
+            \bufL, \bufR, \phaseBus, \ringLevel, \rateLevel, \envBuf, \fastModIn]
     }
 
     // The crossmod commands' controls, one of each per slot: modBus1,

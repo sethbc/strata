@@ -236,6 +236,10 @@ end
 --   standard_buffer_seconds,  standardBufferSeconds { ^N } (the standard tier's)
 --   buffer_state_stride       bufferStateStride { ^N }
 --   num_mod_slots             var <numModSlots = N; (the slots the crossmod commands accept)
+--   num_fast_destinations,    numFastDestinations { ^N }, fastModNoteSlots { ^N },
+--   fast_mod_note_slots,      numFastLfos { ^N }, numFastLfoShapes { ^N }: 3.4's
+--   num_fast_lfos,            fast modulation's destinations per voice, note
+--   num_fast_lfo_shapes       slots per voice, engine LFOs and LFO shapes
 --                             (each number is read as `var <name = N;`, with
 --                             any of < and >, or as a method `name { ^N }`)
 --   input_source              inputSource { ^numBuffers + N }
@@ -406,6 +410,11 @@ function stubs.engine_spec_from_source(source)
     standard_buffer_seconds = engine_number(source, "standardBufferSeconds"),
     buffer_state_stride = engine_number(source, "bufferStateStride"),
     num_mod_slots = engine_number(source, "numModSlots"),
+    -- 3.4's fast modulation (StrataModulation.sc)
+    num_fast_destinations = engine_number(source, "numFastDestinations"),
+    fast_mod_note_slots = engine_number(source, "fastModNoteSlots"),
+    num_fast_lfos = engine_number(source, "numFastLfos"),
+    num_fast_lfo_shapes = engine_number(source, "numFastLfoShapes"),
     synthdef_controls = {},
     synthdef_defaults = {},
     control_limits = {},
@@ -544,6 +553,10 @@ function stubs.engine_spec_problems(spec)
   need(spec.standard_buffer_seconds, "standardBufferSeconds { ^N }")
   need(spec.buffer_state_stride, "bufferStateStride { ^N }")
   need(spec.num_mod_slots, "var <numModSlots = N;")
+  need(spec.num_fast_destinations, "numFastDestinations { ^N }")
+  need(spec.fast_mod_note_slots, "fastModNoteSlots { ^N }")
+  need(spec.num_fast_lfos, "numFastLfos { ^N }")
+  need(spec.num_fast_lfo_shapes, "numFastLfoShapes { ^N }")
   need(spec.input_source, "inputSource { ^numBuffers + N }")
   need(#spec.voice_synthdefs > 0, "voiceSynthDefs = [...]")
   need(next(spec.grain_params), "the grain SynthDefs (grainDefs: [predicate -> \\name, ...])")
@@ -661,6 +674,29 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     setBypass = function(args) return range("effect", args[1], 0, 1) or range("bypassed", args[2], 0, 1) end,
     -- the engine ignores a root outside 0-11 or a mask outside 1-4095: Lua never sends one
     setScale = function(args) return range("root", args[1], 0, 11) or range("mask", args[2], 1, 4095) end,
+    -- 3.4's fast modulation (design §0.3), each index as the engine checks
+    -- it, an out-of-range one ignored there: an engine LFO
+    -- 0..numFastLfos-1 on a voice's destination 0..numFastDestinations-1
+    -- with shape 0..numFastLfoShapes-1; scatter's masks, a bit per
+    -- destination and per voice; setFastOffset's note slot
+    -- 0..fastModNoteSlots-1. The continuous arguments are the engine's
+    -- clips (argument_limits: rate, depth, offset, phase); setFastOffset's
+    -- offset need only be finite (the type check), as the engine clamps it
+    setFastLfo = function(args)
+      return range("lfo", args[1], 0, spec.num_fast_lfos - 1) or range("voice", args[2], 0, last_voice)
+        or range("destination", args[3], 0, spec.num_fast_destinations - 1)
+        or range("shape", args[4], 0, spec.num_fast_lfo_shapes - 1)
+    end,
+    stopFastLfo = function(args) return range("lfo", args[1], 0, spec.num_fast_lfos - 1) end,
+    syncFastLfo = function(args) return range("lfo", args[1], 0, spec.num_fast_lfos - 1) end,
+    setScatter = function(args)
+      return range("destinations", args[3], 0, 2 ^ spec.num_fast_destinations - 1)
+        or range("voices", args[4], 0, 2 ^ spec.num_voices - 1)
+    end,
+    setFastOffset = function(args)
+      return voice(args) or range("note slot", args[2], 0, spec.fast_mod_note_slots - 1)
+        or range("destination", args[3], 0, spec.num_fast_destinations - 1)
+    end,
   }
   for command, check in pairs(checks) do
     checks[command] = function(args) return check(args) or continuous(command, args) end

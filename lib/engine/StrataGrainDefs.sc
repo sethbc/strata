@@ -83,6 +83,11 @@
     // t_scanReset default to no scrub, and recHeadBus (a named control, as
     // its default is this engine's idle head bus: the record area's) to the
     // idle head; the engine sends a buffer synth its slot's (slotLengthPairs).
+    // 3.4's fastModIn (named, as its default is this engine's silent fast
+    // bus) is read once by fastModRead into the Event's fastMod; every grain
+    // synth starts with its voice's block (grainControls, the modulation
+    // area's). A buffer grain's position offset applies to bufPos before the
+    // reader (fastModPosition), since bufPos is not in the Event.
     addGrainDefs {
         // Granular processor for a ring: the voice's own (synth source) or
         // the input's (input source), each written by a strataRingWrite
@@ -101,6 +106,8 @@
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
             loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0;
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
+            var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index);
+            var m = this.fastModRead(fastModIn);
             var controls = (
                 out: out, gate: gate, grainSize: grainSize, grainDensity: grainDensity, pitchShift: pitchShift,
                 posSpread: posSpread, panSpread: panSpread, envBuf: envBuf, grainMode: grainMode,
@@ -109,7 +116,8 @@
                 ringLevel: ringLevel, reverseProb: reverseProb, pitchJitter: pitchJitter, panJitter: panJitter,
                 sizeJitter: sizeJitter,
                 intervals: [interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8],
-                intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote
+                intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote,
+                fastMod: m
             );
             this.grainBody(controls, this.ringGrainReader(bufL, bufR, phaseBus, posSpread, history, bufScan, freeze));
         }).add;
@@ -137,6 +145,8 @@
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
             loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0;
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
+            var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index);
+            var m = this.fastModRead(fastModIn);
             var controls = (
                 out: out, gate: gate, grainSize: grainSize, grainDensity: grainDensity, pitchShift: pitchShift,
                 posSpread: posSpread, panSpread: panSpread, envBuf: envBuf, grainMode: grainMode,
@@ -145,10 +155,11 @@
                 ringLevel: ringLevel, reverseProb: reverseProb, pitchJitter: pitchJitter, panJitter: panJitter,
                 sizeJitter: sizeJitter,
                 intervals: [interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8],
-                intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote
+                intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote,
+                fastMod: m
             );
-            this.grainBody(controls, this.slotGrainReader(bufnumL, bufnumR, bufFrames, bufRateScale, bufPos, bufRate,
-                bufScan, posSpread, freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus));
+            this.grainBody(controls, this.slotGrainReader(bufnumL, bufnumR, bufFrames, bufRateScale, this.fastModPosition(bufPos, m),
+                bufRate, bufScan, posSpread, freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus));
         }).add;
     }
 
@@ -176,9 +187,11 @@
     //      area uses before overwriting a ring). The filter, the voice-level
     //      gain, the sends, the mirror and the tap are the voice's mix stage
     //      (StrataMix.sc): one Out writes this synth's path.
+    // 3.4's fast modulation offsets pitch and size first (fastMod, the
+    // modulation area's hook, from the Event's fastMod: neutral in Wave 0).
     // Returns (sig: the stereo signal, fade: its fade).
     grainSignal { arg controls, reader;
-        var c = controls, env, modSigs, rateMod, bendRate, grainMode, mode, trig;
+        var c = this.fastMod(controls), env, modSigs, rateMod, bendRate, grainMode, mode, trig;
         var vary, rate, dur, read, panOffset, left, right, sig;
 
         env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), this.openedGate(c[\gate]), doneAction: 2) * this.killFade(c[\kill]);

@@ -1450,4 +1450,98 @@ test("stub params:write, read and delete pass norns' PSET number to the actions"
   params.action_write, params.action_read, params.action_delete = saved[1], saved[2], saved[3]
 end)
 
+-- 3.4's five modulation commands (design §0.3): the stub refuses what the
+-- engine would ignore (an index out of range, a non-finite offset) and what
+-- it would clip (the continuous arguments), so a Lua package sends neither
+local function assert_stub_refuses(expected_text, command, ...)
+  local ok, message = pcall(engine[command], ...)
+  assert_true(not ok, "engine." .. command .. " should be refused (" .. expected_text .. ")")
+  assert_true(tostring(message):find(expected_text, 1, true) ~= nil,
+    "engine." .. command .. "'s refusal names " .. expected_text .. ": " .. tostring(message))
+end
+
+test("the engine stub checks the five modulation commands", function()
+  local context = load_strata()
+  assert_stub_refuses("lfo 6 is outside 0..5", "setFastLfo", 6, 0, 0, 0, 1, 0.5, 0)
+  assert_stub_refuses("voice 7 is outside 0..6", "setFastLfo", 0, 7, 0, 0, 1, 0.5, 0)
+  assert_stub_refuses("destination 5 is outside 0..4", "setFastLfo", 0, 0, 5, 0, 1, 0.5, 0)
+  assert_stub_refuses("shape 8 is outside 0..7", "setFastLfo", 0, 0, 0, 8, 1, 0.5, 0)
+  assert_stub_refuses("rate 0.001 is outside 0.003..50", "setFastLfo", 0, 0, 0, 0, 0.001, 0.5, 0)
+  assert_stub_refuses("rate 51 is outside 0.003..50", "setFastLfo", 0, 0, 0, 0, 51, 0.5, 0)
+  assert_stub_refuses("depth 1.5 is outside 0..1", "setFastLfo", 0, 0, 0, 0, 1, 1.5, 0)
+  assert_stub_refuses("offset 2.5 is outside -2..2", "setFastLfo", 0, 0, 0, 0, 1, 0.5, 2.5)
+  assert_stub_refuses("lfo 6 is outside 0..5", "stopFastLfo", 6)
+  assert_stub_refuses("phase 1.5 is outside 0..1", "syncFastLfo", 0, 1.5)
+  assert_stub_refuses("depth 1.5 is outside 0..1", "setScatter", 1.5, 0.1, 3, 127)
+  assert_stub_refuses("rate 2 is outside 0.01..1", "setScatter", 0.1, 2, 3, 127)
+  assert_stub_refuses("destinations 32 is outside 0..31", "setScatter", 0.1, 0.1, 32, 127)
+  assert_stub_refuses("voices 128 is outside 0..127", "setScatter", 0.1, 0.1, 3, 128)
+  assert_stub_refuses("voice 7 is outside 0..6", "setFastOffset", 7, 0, 0, 0)
+  assert_stub_refuses("note slot 1 is outside 0..0", "setFastOffset", 0, 1, 0, 0)
+  assert_stub_refuses("destination 5 is outside 0..4", "setFastOffset", 0, 0, 5, 0)
+  assert_stub_refuses("must be a finite number", "setFastOffset", 0, 0, 0, 0 / 0)
+  -- the limits, and an offset past ±2, which the engine clamps (Lua's sum of routings)
+  local calls = #context.engine_calls
+  engine.setFastLfo(5, 6, 4, 7, 50, 1, -2)
+  engine.stopFastLfo(0)
+  engine.syncFastLfo(5, 1)
+  engine.setScatter(0, 0.01, 0, 0)
+  engine.setFastOffset(6, 0, 4, 2)
+  engine.setFastOffset(0, 0, 0, -3.5)
+  assert_equal(#context.engine_calls, calls + 6, "the six calls in range are taken")
+end)
+
+test("fastModIn is a control the engine sets itself", function()
+  load_strata()
+  assert_stub_refuses('"fastModIn" is a control the engine sets itself', "setGrainParam", 0, "fastModIn", 1)
+  assert_stub_refuses('"fastModIn" is a control the engine sets itself', "setVoiceParam", 0, "fastModIn", 1)
+end)
+
+test("the stub accepts the gate and mute params", function()
+  local context = load_strata()
+  local calls = #context.engine_calls
+  engine.setGrainParam(0, "seqGate", 1)
+  engine.setGrainParam(0, "gateSeconds", 0.0625)
+  engine.setGrainParam(0, "gateRelease", 0.1)
+  engine.setGrainParam(0, "voiceMute", 1)
+  assert_equal(#context.engine_calls, calls + 4, "seqGate, gateSeconds, gateRelease and voiceMute are taken")
+  assert_equal(context.engine_calls[#context.engine_calls].args[2], "voiceMute")
+end)
+
+-- test/sync_check.lua's PENDING_COMMANDS: a command the engine has before
+-- the script calls it (3.4's five, until the Wave 1 package that calls each)
+test("the sync check accepts a pending command that is not called and fails one that is", function()
+  local sync_check = h.sync_check
+  local sources = h.read_lua_sources()
+  local engine_with_ghost = h.engine_sources() .. '\nthis.addCommand(\\checkPendingGhost, "i", { arg msg; });'
+  local pending = {}
+  for _, name in ipairs(sync_check.PENDING_COMMANDS) do table.insert(pending, name) end
+  table.insert(pending, "checkPendingGhost")
+  local ok, problems = sync_check.check_sources(sources, engine_with_ghost, pending)
+  assert_true(ok, "a pending command no file calls passes:\n" .. table.concat(problems, "\n"))
+  -- once a file calls it, the check fails until its name leaves the list
+  local calling = { { path = "strata.lua", text = "" }, { path = "lib/x.lua", text = "\nengine.checkPendingGhost(1)" } }
+  for _, source in ipairs(sources) do table.insert(calling, source) end
+  ok, problems = sync_check.check_sources(calling, engine_with_ghost, pending)
+  local report = table.concat(problems, "\n")
+  assert_true(not ok and report:find("lib/x.lua:2 engine.checkPendingGhost is called but still pending", 1, true),
+    "a called pending command fails the check:\n" .. report)
+  -- off the list, the uncalled command is reported as ever
+  ok, problems = sync_check.check_sources(sources, engine_with_ghost, sync_check.PENDING_COMMANDS)
+  report = table.concat(problems, "\n")
+  assert_true(not ok and report:find("\\checkPendingGhost is never called", 1, true), "an uncalled command fails:\n" .. report)
+  -- a pending name the engine does not have is a stale entry
+  table.insert(pending, "checkNoSuchCommand")
+  ok, problems = sync_check.check_sources(sources, engine_with_ghost, pending)
+  report = table.concat(problems, "\n")
+  assert_true(not ok and report:find("checkNoSuchCommand is pending but the engine has no such command", 1, true),
+    "a pending name with no addCommand fails:\n" .. report)
+  -- the real list: every name an engine command no script file calls yet
+  ok, problems = sync_check.run(repo_root)
+  assert_true(ok, table.concat(problems, "\n"))
+  for _, name in ipairs(sync_check.PENDING_COMMANDS) do
+    assert_true(signatures[name] ~= nil, "pending " .. name .. " is an engine command")
+  end
+end)
+
 end

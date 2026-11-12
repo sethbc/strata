@@ -293,6 +293,8 @@ return {
   PLAYHEADS = PLAYHEADS,
   SCRUB = SCRUB,
   WAVEFORM_POINTS = 64,  -- Points of a slot's peak curve (engine waveformPoints)
+  NUM_FAST_DESTINATIONS = 5,  -- Engine fast-modulation destinations per voice: pitch, position, size, cutoff, amp (engine numFastDestinations)
+  FAST_MOD_NOTE_SLOTS = 1,    -- Fast-modulation note slots per voice: setFastOffset's 0..FAST_MOD_NOTE_SLOTS - 1 (engine fastModNoteSlots; 3.5 raises it)
   GRAIN_ENV_OPTIONS = GRAIN_ENV_OPTIONS,
   GRAIN_MODE_OPTIONS = GRAIN_MODE_OPTIONS,
   SOURCE_SYNTH = SOURCE_SYNTH,
