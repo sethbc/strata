@@ -513,8 +513,12 @@ test("a deferrable send past the window's budget waits with its newest value", f
   assert_equal(context.engine_calls[1].args[1], 3000)
   assert_equal(context.engine_calls[2].name, "setReverb", "then the new send")
   assert_equal(sync.budget_state().pending, 0, "nothing waits")
-  assert_equal(S.engine_budget_clock, nil, "the flush clock is canceled")
   assert_equal(sync.budget_state().sent, 2, "both count against the new window")
+  -- never canceled with its resume posted (#654): it ends at its own wake
+  assert_true(S.engine_budget_clock ~= nil, "the flush clock runs on to its wake")
+  context.clock.advance()
+  assert_equal(S.engine_budget_clock, nil, "where it finds nothing waiting and ends")
+  assert_equal(#context.calls_named("setFilter"), 1, "having sent nothing more")
 end)
 
 test("expected_value is the waiting value, else the delivered one (#591)", function()
@@ -563,10 +567,10 @@ test("a send outside deferrable is never deferred and drops the id's pending val
   assert_equal(#context.calls_named("setFilter"), 1, "past the budget a plain send still goes")
   assert_equal(context.calls_named("setFilter")[1].args[1], 500)
   assert_equal(sync.budget_state().pending, 0, "and the older waiting value is dropped")
-  assert_equal(S.engine_budget_clock, nil, "with its clock")
   assert_equal(sync.budget_state().sent, 151, "it counts")
   context.clock.run_for(0.2)
   assert_equal(#context.calls_named("setFilter"), 1, "the dropped value never goes")
+  assert_equal(S.engine_budget_clock, nil, "and the flush clock ended at its own wake (#654)")
 end)
 
 test("a voice sync or start drops the voice's pending deferred sends", function()
@@ -604,6 +608,61 @@ end)
 
 -- A waiting value whose sender raises must not kill the flush clock: the
 -- values after it still go, and the next wait gets a clock (#637)
+-- #654: another clock due in the flush clock's tick (a lower slot, so its
+-- resume is delivered first) sends, and so empties the waiting list,
+-- after the flush clock's resume is posted. The flush clock must never be
+-- canceled then (norns' clock.resume raises on a canceled coroutine): it
+-- ends at its own wake
+test("a clock in the flush clock's tick that empties the waiting list leaves the flush clock to end at its wake (#654)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  mid_window(context)
+  spend_budget(S)
+  -- started first, so its slot is below the flush clock's; it wakes at
+  -- the next window's start, as the flush clock will
+  local window = S.constants.ENGINE_BUDGET.window_seconds
+  clock.run(function()
+    clock.sleep((math.floor(util.time() / window) + 1) * window - util.time())
+    send_param_to_engine("filter_freq", 500)
+  end)
+  sync.deferrable(function() send_param_to_engine("filter_freq", 1000) end)
+  assert_equal(sync.budget_state().pending, 1, "a value waits")
+  assert_true(S.engine_budget_clock ~= nil, "for the flush clock")
+  context.clear_engine_calls()
+  context.clock.run_for(0.1)
+  assert_equal(#context.clock.take_errors(), 0, "no resume reaches a canceled flush clock")
+  local filters = context.calls_named("setFilter")
+  assert_equal(#filters, 2, "the waiting value, then the other clock's")
+  assert_equal(filters[1].args[1], 1000)
+  assert_equal(filters[2].args[1], 500)
+  assert_equal(sync.budget_state().pending, 0, "nothing waits")
+  assert_equal(S.engine_budget_clock, nil, "and the flush clock ended at its own wake")
+end)
+
+test("a value that waits while the flush clock runs on idle goes at its wake, from the same clock (#654)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  local window = S.constants.ENGINE_BUDGET.window_seconds
+  mid_window(context)
+  spend_budget(S)
+  sync.deferrable(function() send_param_to_engine("filter_freq", 1000) end)
+  local flush_clock = S.engine_budget_clock
+  send_param_to_engine("filter_freq", 500)   -- outside deferrable: the waiting value is dropped
+  assert_equal(sync.budget_state().pending, 0, "nothing waits")
+  assert_equal(S.engine_budget_clock, flush_clock, "the flush clock runs on, idle, to its wake")
+  sync.deferrable(function() send_param_to_engine("filter_freq", 2000) end)
+  assert_equal(sync.budget_state().pending, 1, "a new value waits")
+  assert_equal(S.engine_budget_clock, flush_clock, "for the same clock, never a second")
+  local wake = (math.floor(util.time() / window) + 1) * window
+  context.clear_engine_calls()
+  context.clock.advance_until(flush_clock)
+  local filters = context.calls_named("setFilter")
+  assert_equal(#filters, 1, "the clock sends it at its wake")
+  assert_equal(filters[1].args[1], 2000)
+  assert_true(util.time() - wake < h.stubs.MATRON_TICK_SECONDS, "at the next window's start")
+  assert_equal(S.engine_budget_clock, nil, "and, nothing waiting, ends")
+end)
+
 test("a waiting value whose sender raises is reported once, and the flush goes on", function()
   local context, S = buffer_voice()
   local sync = S.lib.engine_sync
@@ -788,7 +847,8 @@ test("a value that waited for a voice stopped since reaches no engine and counts
   assert_equal(#grain_sends(context, 2, "posSpread"), 0, "to no engine")
   assert_equal(#context.engine_calls, 1, "only the new send reaches the engine")
   assert_equal(sync.budget_state().sent, 1, "and only it counts")
-  assert_equal(S.engine_budget_clock, nil, "the flush clock is canceled")
+  context.clock.advance()
+  assert_equal(S.engine_budget_clock, nil, "the flush clock ended at its own wake (#654)")
   -- a later start plays the stored value, never the one that waited
   toggle_voice(2)
   local spread = grain_sends(context, 2, "posSpread")

@@ -219,9 +219,9 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `input level` | `lib/input_level.lua` | from the start step to cleanup, both input polls run (`amp_in_l`, `amp_in_r`; a poll a norns lacks is skipped) |
   | `flash slots` | `lib/ui/flash.lua` | a flash slot with a text has a clock |
   | `param turn` | `lib/ui/detent.lua` | `S.turning_param` is nil between events (a turn marks its param only while it sets it, #318) |
-  | `engine budget` | `lib/engine_sync.lua` | values wait for the send budget exactly while its flush clock runs (`S.engine_budget_clock`), and every waiting id has a value (3.4) |
+  | `engine budget` | `lib/engine_sync.lua` | a value waits for the send budget only while its flush clock runs (`S.engine_budget_clock`, which may run on with nothing waiting to its next wake and ends there, never canceled while the script runs, #654), that clock's coroutine is not dead, and every waiting id has a value (3.4) |
   | `modal owner` | `lib/ui/modal.lua` | no owner is on the modal stack twice, and every key down on an owner is on one that is pushed (3.4) |
-  | `morph clock` | `lib/morph.lua` | a morph move or a value left for the next apply always has `S.morph_clock` to apply it, and that clock's coroutine is not dead (3.4) |
+  | `morph clock` | `lib/morph.lua` | a morph move, a value left for the next apply or a waiting crossing (#653) always has `S.morph_clock` to apply it, and that clock's coroutine is not dead (3.4) |
   | `quantize` | `lib/quantize.lua` | a quantized action waits (`S.lib.quantize.actions[key]`) exactly while its clock runs (3.4) |
   | `gesture recorders` | `lib/gestures.lua` | at most one recorder records; pattern_time's `rec` is 1 exactly while its recorder records; a free loop's metro (`pattern.play`, with the metro itself running) or a quantized loop's clock (its coroutine alive) runs exactly while it plays, never both, and the right one for its loop; the 10-minute clock runs exactly while it records an event or more; it overdubs only while it plays; it is empty exactly when it holds no event and does not record; `gesture_<k>_play` is 1 exactly while it plays (3.4) |
   | `macro apply` | `lib/macros.lua` | a macro waits for its apply exactly while the apply clock runs (`S.macro_clock`), and that clock's coroutine is not dead (3.4) |

@@ -177,14 +177,6 @@ return function(S)
     end
   end
 
-  -- The clock runs exactly while a value waits: cancel it once none does
-  local function stop_budget_clock_if_idle()
-    if #budget.order == 0 and S.engine_budget_clock then
-      clock.cancel(S.engine_budget_clock)
-      S.engine_budget_clock = nil
-    end
-  end
-
   -- Whether the window has room for a send of messages more. An empty
   -- window takes any send, so one larger than a whole window costs that
   -- window and never blocks the flush
@@ -225,7 +217,13 @@ return function(S)
   end
 
   -- Start the flush clock if it is not running: it sleeps to the next
-  -- window's start, enters it and sends what waits, until nothing does
+  -- window's start, enters it and sends what waits, until nothing does.
+  -- It is never canceled while the script runs (#654): matron may have
+  -- posted its resume when a send empties the waiting list (another clock
+  -- of its tick, delivered first), and norns' clock.resume raises on a
+  -- canceled coroutine. So it ends at its own wake, once it finds nothing
+  -- waiting; a value that waits meanwhile is this clock's, sent at that
+  -- wake, the next window's start (never a second clock)
   local function start_budget_clock()
     if S.engine_budget_clock then return end
     S.engine_budget_clock = clock.run(function()
@@ -244,7 +242,6 @@ return function(S)
     enter_window(current_window())
     drop_pending(param_id)
     deliver(param_id, value, already_sent)
-    stop_budget_clock_if_idle()
   end
 
   -- Send a param's value to the engine (one path for every value), within
@@ -294,11 +291,16 @@ return function(S)
     return {sent = sent, pending = #budget.order}
   end
 
-  -- Values wait exactly while the flush clock runs
+  -- A value waits only while the flush clock runs (it may run on with
+  -- nothing waiting, to its next wake, where it ends), the clock is a live
+  -- coroutine, and every waiting id has a value (#654)
   S.register_invariant("engine budget", function()
-    local waiting = #budget.order > 0
-    if waiting ~= (S.engine_budget_clock ~= nil) then
-      return #budget.order .. " values wait but the flush clock is " .. tostring(S.engine_budget_clock)
+    if #budget.order > 0 and S.engine_budget_clock == nil then
+      return #budget.order .. " values wait but no flush clock runs"
+    end
+    local thread = S.engine_budget_clock and clock.threads and clock.threads[S.engine_budget_clock]
+    if S.engine_budget_clock and type(thread) == "thread" and coroutine.status(thread) == "dead" then
+      return "the flush clock " .. tostring(S.engine_budget_clock) .. " has ended"
     end
     for _, param_id in ipairs(budget.order) do
       if budget.pending[param_id] == nil then return param_id .. " waits with no value" end
@@ -388,7 +390,6 @@ return function(S)
       local param_id = budget.order[index]
       if param_id:sub(1, #prefix) == prefix then drop_pending(param_id) end
     end
-    stop_budget_clock_if_idle()
   end
 
   -- A start's value for a param (#632): while a base override or an extra
