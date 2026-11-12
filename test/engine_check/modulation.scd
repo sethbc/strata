@@ -326,5 +326,11 @@ if (area.isNil or: { state.isNil }) {
     checkFastModIn.value;
     checkGateControls.value;
     checkFree.value;
+    // Every awaitReply's 5 s timer runs out before the runner quits sclang:
+    // without this wait 2 of 8 full runs on 3.13 segfaulted as sclang quit
+    // after every check passed; with it the 4 runs of 8 that reached this
+    // area all passed (the other 4 failed in earlier areas). Too few runs to
+    // call the timers the cause (docs/notes/engine/modulation.md)
+    5.5.wait;
 };
 }
