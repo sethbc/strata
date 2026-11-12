@@ -1,6 +1,7 @@
 ## Must not break
 
-- Change a page's draw function (`redraw_main`, `redraw_setup`, ...), never `redraw()`. While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector, never the page.
+- Change a page's draw function (`redraw_main`, `redraw_setup`, ...), never `redraw()`: its one dispatch besides the page's is the modal owner's (`S.lib.ui_modal.top()`, below), sanctioned in 3.4 (package 0a). While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector, never the page or an owner.
+- While a modal owner is pushed (`lib/ui/modal.lua`), the screen's body and hints, E2, E3, K2, K3 and the arc are the owner's and E1 does nothing; K1 still sets ALT. A K2 or K3 the owner takes is forgotten by the page (`S.key_press_page`, `S.key_press_alt`), so a press the page saw never releases there. Push and pop only through `S.lib.ui_modal`; no owner is on the stack twice (the `modal owner` invariant).
 - Each page file creates one record at `S.registry.pages[UI_PAGES.index.<PAGE>]` and sets every field but the four arc fields (`arc_delta`, `arc_redraw`, `arc_alt_delta`, `arc_alt_redraw`), which only its `lib/arc/<page>.lua` sets. `strata.lua` includes every page file before every arc file and asserts every `UI_PAGES` name has its record with `draw`, `hints`, `enc` and `key`. A test checks who sets which field.
 - A page's `draw()` draws its body only; `redraw()` draws the hint row from the "hints" flash while one shows, else from the record's `hints(alt_held)`. Never call `draw_hints` from a page.
 - A page change goes through `S.lib.ui_keys.set_ui_page`, which runs the records' `leave`/`enter` and forgets every carried arc tick (`forget_arc_ticks()`). Never set `S.ui_page` directly.
@@ -29,7 +30,7 @@ Page records. Each page lives in its own file and creates one record at `S.regis
   - `arc_button()`: the arc's button on this page. `arc_key` (`lib/arc/core.lua`) calls the shown record's `arc_button` on a press, on every page that has one, and requests a redraw; a page without one ignores the button. MAIN's is `start_stop_selected_voice` (K3; VOICE's is `start_or_stop_selected_voice`, and `toggle_lock` locks);
   - `header_status() -> string|nil`: a text that replaces the header's indicators (`docs/notes/lua/ui/header-and-flashes.md`);
   - `layout_states`: an array of `{name, setup = function(context)}` the layout tests (`test/unit/ui_layout_test.lua`) and the page renders draw, each on a fresh script with the page shown.
-- Optional, called by the shared ALT+K2 handler (`S.lib.ui_alt.k2_up` and `k2_hint`, from the page's own `alt_key_release` and `hints`), never by strata.lua: `randomize_section() -> spec or nil, reason` (set by MAIN, VOICE, SEQ, FX and LFO) and `alt_hold()` (set by VOICE and LFO). See `docs/notes/lua/ui/alt-and-keys.md`, ALT+K2 on the randomizing pages.
+- Optional, called by the shared ALT+K2 handler (`S.lib.ui_alt.k2_up` and `k2_hint`, from the page's own `alt_key_release` and `hints`), never by strata.lua: `randomize_section() -> spec or nil, reason` (set by MAIN, VOICE, SEQ, FX and LFO), `alt_hold()` (set by VOICE and LFO) and `alt_hold_hint` (3.4: a string or a function returning one, the held hint's text in place of `reset`). See `docs/notes/lua/ui/alt-and-keys.md`, ALT+K2 on the randomizing pages.
 - Arc fields, set only by `lib/arc/<page>.lua`: `arc_delta(n, d)`, `arc_redraw(arc_port)`, `arc_alt_delta(n, d)`, `arc_alt_redraw(arc_port)` (`docs/notes/lua/arc-core.md`).
 - Ownership: the page file sets every field but the arc fields; the arc file sets only those, on `S.registry.pages[UI_PAGES.index.<PAGE>]`. So a page and its rings never edit the same file. `strata.lua` includes every page file before every arc file.
 - To add a page: add its name to `UI_PAGES` (`NUM_UI_PAGES` follows), write its file and record, include it from `strata.lua` with the other pages, and, if it has rings, an arc file like `lib/arc/fx.lua` included after the pages (`docs/notes/lua/arc-pages.md`). Every page in `UI_PAGES` already has its page file, and every page but SETUP (which has no rings) its arc file, so changing one adds no include.
@@ -38,7 +39,16 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - `screen.clear(); draw_header(); record.draw(); draw_hints(S.lib.ui_flash.text("hints") or record.hints(S.alt_held)); screen.update()`, with `record = S.registry.pages[S.ui_page]`, `record.draw` and the hint text computed in one function run through `S.lib.ui_frame.contained_call`. When it fails: `screen.clear(); draw_header(); draw_hints("draw error"); screen.update()` (`docs/notes/lua/ui/redraws.md`, Draw errors).
 - Nothing before init's first start step (`S.started`).
 - Except while the BUFFER page's file selector is open (`S.BUFFER_PAGE.file_selector_open`): then it calls `fileselect.redraw()` and returns, so neither norns' own `redraw()` calls nor Strata's frame clock draw the page over the file list (`docs/notes/lua/pages/buffer.md`).
+- While a modal owner is pushed (after the file selector's check): the header, then `owner.draw()` and `draw_hints(owner.hints(S.alt_held))` (no hints function: an empty hint row), in the same contained function as the page's; no flash replaces the owner's hints.
 - The hint row (`draw_hints(text)`: level 4, x=0, y=62) is drawn once, by `redraw()`: the "hints" flash while one shows (only on its owning page), else the record's hints.
+
+## The modal owner
+
+`lib/ui/modal.lua` (`S.lib.ui_modal`, 3.4, design §0.1): a stack of screen owners for a view that takes the screen and the controls from the page until it closes (3.4's step editor, §8.7; the scene name entry has none, since norns' `textentry` takes the keys itself).
+- `push(owner)` puts an owner on top and requests a redraw; `pop(owner)` takes it off wherever it is (an owner not on the stack: nothing); `top()` is the owner the input goes to, or nil. An owner already on the stack, or one without a `draw` function, is an error.
+- An owner is `{draw = fn(), hints = fn(alt_held) -> string, enc = fn(n, d), key = fn(n, z), arc_delta = fn(n, d), arc_key = fn(n, z), arc_redraw = fn(arc_port)}`; only `draw` is required, and a missing handler ignores its input (an owner without `arc_redraw` leaves the rings off).
+- While one is pushed: `enc` ignores E1 and sends E2 and E3 to `owner.enc(n, d)` (never the page's `alt_enc` or `enc`); `key` sets ALT from K1 as always and sends K2 and K3 presses and releases to `owner.key(n, z)` (never `alt_action`, `key_release` or `alt_key_release`), clearing the key's press marks; `redraw` draws the header, the owner's body and hints; `arc_delta`, `arc_key` (presses and releases) and `arc_redraw` (`lib/arc/core.lua`) go to the owner's handlers. A page change made elsewhere (the grid) still changes the header's page underneath.
+- The `modal owner` invariant: no owner is on the stack twice.
 
 ## Registering a page
 

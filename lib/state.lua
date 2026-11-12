@@ -40,15 +40,25 @@ return function()
     alt_release = {},   -- fn(), run when ALT goes from held to not held
     menu_close = {},    -- fn(), run after the norns menu closes (lib/ui/menu_watch.lua)
     invariants = {},    -- {name, fn} records, checked by the test harness after every unit test
+    -- 3.4's (design §0.1, §8.10, §10.1)
+    scene_blocks = {},      -- top-level scene blocks {key, default, capture, validate, apply, discrete, through_zero}
+    scene_migrations = {},  -- {name, before_version, migrate = fn(scene)}, run on older loaded scenes
+    pset_hooks = {},        -- {name, write, read, delete}, run by the PSET actions (lib/params_setup.lua)
+    param_touch = {},       -- fn(param_id, source), run after an encoder, arc or grid edit of a param
+    lock_change = {},       -- fn(voice_idx, locked), run after a voice's lock flips
+    step_outputs = {},      -- {name, play, stop, available}, each pattern hit's outputs
+    mod_sources = {},       -- modulation sources {key, name, section, value, range, describe, visible, row}
   }
 
   -- The registries init reads once (voice_params, scene_fields,
-  -- lfo_destinations, fx_params, start, menu_close) are closed when init
-  -- begins to read them (close_registries, called by the first params
-  -- record, "performance"): a registration after that is never used, so its
-  -- register function raises, naming the registry (#384)
+  -- lfo_destinations, fx_params, start, menu_close, scene_blocks,
+  -- scene_migrations, pset_hooks) are closed when init begins to read them
+  -- (close_registries, called by the first params record, "performance"): a
+  -- registration after that is never used, so its register function raises,
+  -- naming the registry (#384). The others are read at each use and stay open
   local closed = {}
-  local INIT_READ = {"voice_params", "scene_fields", "lfo_destinations", "fx_params", "start", "menu_close"}
+  local INIT_READ = {"voice_params", "scene_fields", "lfo_destinations", "fx_params", "start", "menu_close",
+    "scene_blocks", "scene_migrations", "pset_hooks"}
 
   function M.close_registries()
     for _, name in ipairs(INIT_READ) do closed[name] = true end
@@ -128,7 +138,7 @@ return function()
   local VOICE_PARAM_FIELDS = {name = true, count = true, add = true, add_first = true, grain_keys = true,
     sync = true, scene_defaults = true, discrete = true, scene_ranges = true, voice_rows = true,
     layout_states = true, normalize_scene = true, fader = true, randomize = true}
-  local SCENE_FIELD_FIELDS = {id = true, default = true, discrete = true}
+  local SCENE_FIELD_FIELDS = {id = true, default = true, discrete = true, set = true}
   local FX_PARAM_FIELDS = {name = true, count = true, add = true}
 
   local function is_grain_key(key, value)
@@ -208,7 +218,9 @@ return function()
 
   -- A global scene field (3.2: scale, root): {id = a param id, default =
   -- its param's default, discrete = true to set it at a transition's end
-  -- instead of crossfading}. Scenes read these after S.SCENE_GLOBAL_PARAMS
+  -- instead of crossfading, set = fn(value), optional (3.4): what a recall,
+  -- a transition step and apply_entries call in place of params:set, as a
+  -- macro sets itself silently}. Scenes read these after S.SCENE_GLOBAL_PARAMS
   function M.register_scene_field(field)
     local kind = "register_scene_field"
     require_open("scene_fields", kind)
@@ -217,8 +229,10 @@ return function()
     require_known_fields(field, SCENE_FIELD_FIELDS, where)
     require_arg(type(field.default) == "number", where, "a default is a number")
     require_arg(field.discrete == nil or type(field.discrete) == "boolean", where, "discrete is a boolean")
+    require_arg(field.set == nil or type(field.set) == "function", where, "set is a function")
     require_arg(not name_taken(M.registry.scene_fields, "id", field.id), kind, "a second field " .. field.id)
-    table.insert(M.registry.scene_fields, {id = field.id, default = field.default, discrete = field.discrete == true})
+    table.insert(M.registry.scene_fields, {id = field.id, default = field.default, discrete = field.discrete == true,
+      set = field.set})
   end
 
   -- fn(voice_idx, source) runs in every v<i>_source action, once the source
@@ -302,6 +316,147 @@ return function()
     require_arg(is_whole(record.count, 1), kind .. " " .. record.name, "count is a whole number, at least 1")
     require_arg(type(record.add) == "function", kind .. " " .. record.name, "add is a function")
     table.insert(M.registry.fx_params, record)
+  end
+
+  -- 3.4's registries (design §0.1, §8.10, §10.1). Each register function
+  -- checks its argument (a field outside the record's set too, #385) and
+  -- refuses a second record of the same name or key; the error points at the
+  -- registering module's line. scene_blocks, scene_migrations and pset_hooks
+  -- close at init (INIT_READ); the rest are read at each use
+
+  -- A named record's register function's common checks: a table, its name
+  -- field a non-empty string no record of registry has, only known fields.
+  -- Returns the "<kind> <name>" the field checks name
+  local function require_named(record, registry, kind, name_field, allowed)
+    require_arg(type(record) == "table", kind, "a record is a table")
+    local name = record[name_field]
+    require_arg(type(name) == "string" and name ~= "", kind, "a record needs a " .. name_field)
+    require_arg(not name_taken(M.registry[registry], name_field, name), kind, "a second record " .. name)
+    local where = kind .. " " .. name
+    require_known_fields(record, allowed, where)
+    return where
+  end
+
+  -- Whether value is nil or a function
+  local function optional_function(value) return value == nil or type(value) == "function" end
+
+  -- Whether every named field of record is a function (required) or nil or one (optional)
+  local function require_functions(record, where, required, optional)
+    for _, field in ipairs(required) do
+      require_arg(type(record[field]) == "function", where, field .. " is a function")
+    end
+    for _, field in ipairs(optional or {}) do
+      require_arg(optional_function(record[field]), where, field .. " is a function")
+    end
+  end
+
+  local SCENE_BLOCK_FIELDS = {key = true, default = true, capture = true, validate = true, apply = true,
+    discrete = true, through_zero = true}
+  local SCENE_MIGRATION_FIELDS = {name = true, before_version = true, migrate = true}
+  local PSET_HOOK_FIELDS = {name = true, write = true, read = true, delete = true}
+  local STEP_OUTPUT_FIELDS = {name = true, play = true, stop = true, available = true}
+  local MOD_SOURCE_FIELDS = {key = true, name = true, section = true, value = true, range = true, describe = true,
+    visible = true, row = true}
+  local MOD_SOURCE_ROW_FIELDS = {enc = true, fine_enc = true, press = true, alt_press = true, hints = true}
+  local MOD_SOURCE_NAME_MAX = 4  -- MOD's row label
+
+  -- A top-level scene block (lib/scenes.lua, 0b): {key, default = fn() ->
+  -- value, capture = fn() -> value, validate = fn(value) -> ok, apply =
+  -- fn(value), discrete = true (a block switches at a transition's end),
+  -- through_zero = fn(from_value, to_value) -> {{id, switch = fn()}, ...},
+  -- optional: the depths that ramp through 0 in a transition and a morph}
+  function M.register_scene_block(record)
+    local kind = "register_scene_block"
+    require_open("scene_blocks", kind)
+    local where = require_named(record, "scene_blocks", kind, "key", SCENE_BLOCK_FIELDS)
+    require_functions(record, where, {"default", "capture", "validate", "apply"}, {"through_zero"})
+    require_arg(record.discrete == true, where, "discrete is true: a block switches at a transition's end")
+    table.insert(M.registry.scene_blocks, record)
+  end
+
+  -- A scene migration (lib/scenes.lua, 0b): {name, before_version = a whole
+  -- format number, migrate = fn(scene)}: run on every loaded scene older
+  -- than before_version, by before_version then registration
+  function M.register_scene_migration(record)
+    local kind = "register_scene_migration"
+    require_open("scene_migrations", kind)
+    local where = require_named(record, "scene_migrations", kind, "name", SCENE_MIGRATION_FIELDS)
+    require_arg(is_whole(record.before_version, 1), where, "before_version is a whole format number")
+    require_functions(record, where, {"migrate"})
+    table.insert(M.registry.scene_migrations, record)
+  end
+
+  -- A PSET hook (lib/params_setup.lua runs it): {name, write = fn(path_base,
+  -- number), read = fn(path_base, number, pset_path), delete =
+  -- fn(path_base, number)}, each function optional; path_base is the PSET's
+  -- path without .pset, number norns' two-digit string or nil
+  function M.register_pset_hook(record)
+    local kind = "register_pset_hook"
+    require_open("pset_hooks", kind)
+    local where = require_named(record, "pset_hooks", kind, "name", PSET_HOOK_FIELDS)
+    require_functions(record, where, {}, {"write", "read", "delete"})
+    table.insert(M.registry.pset_hooks, record)
+  end
+
+  -- fn(param_id, source) runs after each user edit of a param through an
+  -- encoder ("enc", lib/ui/detent.lua), an arc ring ("arc") or a grid fader
+  -- ("grid", lib/grid/faders.lua), once the param is set
+  function M.register_param_touch(fn)
+    require_arg(type(fn) == "function", "register_param_touch", "a hook is a function")
+    table.insert(M.registry.param_touch, fn)
+  end
+
+  -- fn(voice_idx, locked) runs after a voice's lock flips (toggle_lock,
+  -- lib/engine_sync.lua; a scene recall's lock states, lib/scenes.lua)
+  function M.register_lock_change(fn)
+    require_arg(type(fn) == "function", "register_lock_change", "a hook is a function")
+    table.insert(M.registry.lock_change, fn)
+  end
+
+  -- A global LFO destination (3.4): one destination, label modulating
+  -- param_id, appended to the per-voice ones in registration order
+  -- ({label, param_id, global = true}); the labels share one namespace
+  function M.register_lfo_global_destination(label, param_id)
+    local kind = "register_lfo_global_destination"
+    require_open("lfo_destinations", kind)
+    require_arg(type(label) == "string" and label ~= "", kind, "a label is a string")
+    require_arg(type(param_id) == "string" and param_id ~= "", kind .. " " .. label, "a param id is a string")
+    require_arg(not name_taken(M.registry.lfo_destinations, "label", label), kind, "a second label " .. label)
+    table.insert(M.registry.lfo_destinations, {label = label, param_id = param_id, global = true})
+  end
+
+  -- A pattern hit's output (lib/sequencer.lua, design §8.10): {name, play =
+  -- fn(event), stop = fn(), available = fn(voice_idx) -> boolean}; stop and
+  -- available optional
+  function M.register_step_output(record)
+    local kind = "register_step_output"
+    local where = require_named(record, "step_outputs", kind, "name", STEP_OUTPUT_FIELDS)
+    require_functions(record, where, {"play"}, {"stop", "available"})
+    table.insert(M.registry.step_outputs, record)
+  end
+
+  -- A modulation source (lib/mod_sources.lua reads them, design §10.1):
+  -- {key, name (MOD's label, at most 4 characters), section, value = fn() ->
+  -- number, range = {min, max} (min < max; min < 0 is bipolar), describe =
+  -- fn() -> string, visible = fn() -> boolean, row = {enc, fine_enc, press,
+  -- alt_press, hints}}; describe, visible, row and each row function optional
+  function M.register_mod_source(record)
+    local kind = "register_mod_source"
+    local where = require_named(record, "mod_sources", kind, "key", MOD_SOURCE_FIELDS)
+    require_arg(type(record.name) == "string" and record.name ~= "" and #record.name <= MOD_SOURCE_NAME_MAX, where,
+      "a name is 1 to " .. MOD_SOURCE_NAME_MAX .. " characters")
+    require_arg(type(record.section) == "string" and record.section ~= "", where, "a section is a string")
+    require_functions(record, where, {"value"}, {"describe", "visible"})
+    local range = record.range
+    require_arg(type(range) == "table" and type(range[1]) == "number" and type(range[2]) == "number"
+      and range[1] < range[2], where, "range is {min, max} with min < max")
+    local row = record.row
+    require_arg(row == nil or type(row) == "table", where, "row is a table")
+    if row then
+      require_known_fields(row, MOD_SOURCE_ROW_FIELDS, where .. " row")
+      require_functions(row, where .. " row", {}, {"enc", "fine_enc", "press", "alt_press", "hints"})
+    end
+    table.insert(M.registry.mod_sources, record)
   end
 
   -- The module tables, S.lib.<name> (strata.lua stores each constructor's

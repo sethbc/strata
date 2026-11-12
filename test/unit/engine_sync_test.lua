@@ -369,4 +369,221 @@ test("a grain restart runs the hooks after voiceOn and after a running voice's s
   assert_equal(table.concat(log, ","), "1,1", "a stopped voice's change runs none")
 end)
 
+-- 3.4's base override, extra offsets and send budget (design §0.1)
+
+-- The values of every setGrainParam(voice_idx - 1, name, value) sent, in order
+local function grain_sends(context, voice_idx, name)
+  local values = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == voice_idx - 1 and call.args[2] == name then values[#values + 1] = call.args[3] end
+  end
+  return values
+end
+
+local function last_grain_send(context, voice_idx, name)
+  local values = grain_sends(context, voice_idx, name)
+  return values[#values]
+end
+
+-- Voice 1 running on buffer 1, v1_buf_pos stored 0.7
+local function buffer_voice()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  if not S.voices[1].active then toggle_voice(1) end
+  params:set("v1_source", 2)
+  params:set("v1_buf_pos", 0.7)
+  context.clear_engine_calls()
+  return context, S
+end
+
+test("a base override replaces the stored value under the LFO offsets", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  sync.set_base_override("v1_buf_pos", 0.3)
+  assert_near(last_grain_send(context, 1, "bufPos"), 0.3, 1e-9, "setting the override sends it")
+  assert_near(sync.engine_base_value("v1_buf_pos"), 0.3, 1e-9, "the base is the override")
+  context.clear_engine_calls()
+  params:set("v1_buf_pos", 0.5)
+  assert_near(params:get("v1_buf_pos"), 0.5, 1e-9, "the stored value changes")
+  assert_near(last_grain_send(context, 1, "bufPos"), 0.3, 1e-9, "the send carries the override")
+  -- an LFO on the param adds its offset to the override: 0.3 + 0.2 x half of 0-1
+  S.lfo_last_dest[1], S.lfo_scaled[1] = "v1_buf_pos", 0.2
+  send_param_to_engine("v1_buf_pos", params:get("v1_buf_pos"))
+  assert_near(last_grain_send(context, 1, "bufPos"), 0.4, 1e-9, "the LFO's offset rides on the override")
+  S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
+  context.clear_engine_calls()
+  sync.clear_base_override("v1_buf_pos")
+  assert_near(last_grain_send(context, 1, "bufPos"), 0.5, 1e-9, "clearing sends the stored value")
+  assert_near(sync.engine_base_value("v1_buf_pos"), 0.5, 1e-9, "the base is the stored value again")
+end)
+
+test("a hand edit clears the override; the drift's write does not", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  sync.set_base_override("v1_buf_pos", 0.3)
+  context.clear_engine_calls()
+  set_drifted_param("v1_buf_pos", 0.6)
+  assert_near(last_grain_send(context, 1, "bufPos"), 0.3, 1e-9, "the drift's write is held under the override")
+  assert_near(sync.engine_base_value("v1_buf_pos"), 0.3, 1e-9, "still overridden")
+  context.clear_engine_calls()
+  enc_param_delta(3, "v1_buf_pos", 1)
+  local stored = params:get("v1_buf_pos")
+  assert_true(math.abs(stored - 0.6) > 1e-6, "the encoder moved the stored value")
+  assert_near(sync.engine_base_value("v1_buf_pos"), stored, 1e-9, "the override is gone")
+  assert_near(last_grain_send(context, 1, "bufPos"), stored, 1e-9, "and the engine gets the stored value")
+end)
+
+test("extra offsets sum with the LFOs' and clamp once", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  local id = "v1_grain_size"  -- 0.01-0.5
+  params:set(id, 0.45)
+  context.clear_engine_calls()
+  sync.set_extra_offset("a", id, 0.245)
+  sync.set_extra_offset("b", id, -0.245)
+  assert_equal(#context.engine_calls, 0, "setting an extra sends nothing")
+  send_param_to_engine(id, 0.45)
+  assert_near(last_grain_send(context, 1, "grainSize"), 0.45, 1e-9, "+0.245 and -0.245, one clamp: 0.45")
+  sync.set_extra_offset("b", id, nil)
+  assert_equal(#grain_sends(context, 1, "grainSize"), 1, "clearing an extra sends nothing")
+  send_param_to_engine(id, 0.45)
+  assert_near(last_grain_send(context, 1, "grainSize"), 0.5, 1e-9, "0.45 + 0.245 clamps to 0.5")
+  -- with an LFO at full negative depth (-1 x half of 0.49 = -0.245)
+  S.lfo_last_dest[1], S.lfo_scaled[1] = id, -1
+  send_param_to_engine(id, 0.45)
+  assert_near(last_grain_send(context, 1, "grainSize"), 0.45, 1e-9, "the extra and the LFO's offset clamp once")
+  S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
+  sync.set_extra_offset("a", id, nil)
+  send_param_to_engine(id, 0.45)
+  assert_near(last_grain_send(context, 1, "grainSize"), 0.45, 1e-9, "no extra left: the value itself")
+  -- a value outside the range comes back clamped only while modulated
+  sync.set_extra_offset("a", id, 0)
+  send_param_to_engine(id, 0.7)
+  assert_near(last_grain_send(context, 1, "grainSize"), 0.5, 1e-9, "a param with an extra counts as modulated")
+  sync.set_extra_offset("a", id, nil)
+end)
+
+-- Run the clocks to the middle of the next budget window (the window is
+-- math.floor(util.time() / window_seconds)), clear of either edge's
+-- rounding, with nothing sent in it yet
+local function mid_window(context)
+  local window = local_value("S").constants.ENGINE_BUDGET.window_seconds
+  local next_start = (math.floor(util.time() / window) + 1) * window
+  context.clock.run_for(next_start + window / 2 - util.time())
+end
+
+-- Spend the window's whole budget on reverb sends, outside deferrable
+local function spend_budget(S)
+  for _ = 1, S.constants.ENGINE_BUDGET.messages_per_window do send_param_to_engine("reverb_mix", 0.25) end
+end
+
+test("a deferrable send past the window's budget waits with its newest value", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  assert_equal(S.constants.ENGINE_BUDGET.messages_per_window, 150)
+  assert_equal(S.constants.ENGINE_BUDGET.window_seconds, 0.1)
+  mid_window(context)
+  assert_equal(sync.budget_state().sent, 0, "a new window has spent nothing")
+  spend_budget(S)
+  assert_equal(sync.budget_state().sent, 150, "every send counts")
+  context.clear_engine_calls()
+  sync.deferrable(function()
+    send_param_to_engine("filter_freq", 1000)
+    send_param_to_engine("filter_freq", 2000)
+  end)
+  assert_equal(#context.calls_named("setFilter"), 0, "past the budget nothing goes")
+  assert_equal(sync.budget_state().pending, 1, "one id waits")
+  assert_true(S.engine_budget_clock ~= nil, "the flush clock runs while it waits")
+  assert_equal(S.deferrable_write, false, "the flag is back")
+  context.clock.run_for(0.1)
+  local filters = context.calls_named("setFilter")
+  assert_equal(#filters, 1, "the next window sends it once")
+  assert_equal(filters[1].args[1], 2000, "with the newest value")
+  assert_equal(engine_param_value("filter_freq"), 2000, "now the value the engine has")
+  assert_equal(sync.budget_state().pending, 0, "nothing waits")
+  assert_equal(S.engine_budget_clock, nil, "the flush clock is gone")
+  -- a send at the start of the next window goes after the waiting value
+  mid_window(context)
+  spend_budget(S)
+  sync.deferrable(function() send_param_to_engine("filter_freq", 3000) end)
+  context.clear_engine_calls()
+  context.set_time(util.time() + 0.1)  -- the next window, before the clock wakes
+  send_param_to_engine("reverb_mix", 0.3)
+  assert_equal(context.engine_calls[1].name, "setFilter", "the waiting value goes first")
+  assert_equal(context.engine_calls[1].args[1], 3000)
+  assert_equal(context.engine_calls[2].name, "setReverb", "then the new send")
+  assert_equal(sync.budget_state().pending, 0, "nothing waits")
+  assert_equal(S.engine_budget_clock, nil, "the flush clock is canceled")
+  assert_equal(sync.budget_state().sent, 2, "both count against the new window")
+end)
+
+test("deferrable restores the flag even when its function raises", function()
+  local _, S = buffer_voice()
+  local ok = pcall(S.lib.engine_sync.deferrable, function()
+    assert_equal(S.deferrable_write, true, "inside: the flag is set")
+    error("boom")
+  end)
+  assert_true(not ok, "the error comes through")
+  assert_equal(S.deferrable_write, false, "the flag is back")
+end)
+
+test("a send outside deferrable is never deferred and drops the id's pending value", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  mid_window(context)
+  spend_budget(S)
+  sync.deferrable(function() send_param_to_engine("filter_freq", 1000) end)
+  assert_equal(sync.budget_state().pending, 1, "the deferrable send waits")
+  context.clear_engine_calls()
+  send_param_to_engine("filter_freq", 500)
+  assert_equal(#context.calls_named("setFilter"), 1, "past the budget a plain send still goes")
+  assert_equal(context.calls_named("setFilter")[1].args[1], 500)
+  assert_equal(sync.budget_state().pending, 0, "and the older waiting value is dropped")
+  assert_equal(S.engine_budget_clock, nil, "with its clock")
+  assert_equal(sync.budget_state().sent, 151, "it counts")
+  context.clock.run_for(0.2)
+  assert_equal(#context.calls_named("setFilter"), 1, "the dropped value never goes")
+end)
+
+test("a voice sync or start drops the voice's pending deferred sends", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  if not S.voices[3].active then toggle_voice(3) end
+  mid_window(context)
+  spend_budget(S)
+  sync.deferrable(function()
+    send_param_to_engine("v3_grain_size", 0.2)
+    send_param_to_engine("filter_freq", 1500)
+  end)
+  assert_equal(sync.budget_state().pending, 2, "both wait")
+  sync_voice_values_to_engine(3)
+  assert_equal(sync.budget_state().pending, 1, "the sync dropped voice 3's")
+  context.clear_engine_calls()
+  context.clock.run_for(0.1)
+  assert_equal(#grain_sends(context, 3, "grainSize"), 0, "no later grainSize send for voice 3")
+  assert_equal(#context.calls_named("setFilter"), 1, "another id's value still goes")
+  -- a start drops them too
+  toggle_voice(3)
+  mid_window(context)
+  spend_budget(S)
+  sync.deferrable(function() send_param_to_engine("v3_grain_size", 0.3) end)
+  sync.start_voice(3)
+  assert_equal(sync.budget_state().pending, 0, "the start dropped it")
+  context.clear_engine_calls()
+  context.clock.run_for(0.1)
+  assert_equal(#grain_sends(context, 3, "grainSize"), 0, "no later grainSize send for voice 3")
+end)
+
+test("toggle_lock runs the lock hooks with the voice and its new state", function()
+  local log = {}
+  local context = load_strata({ before_init = function()
+    local_value("S").register_lock_change(function(voice_idx, locked) log[#log + 1] = voice_idx .. ":" .. tostring(locked) end)
+  end })
+  finish_startup(context)
+  toggle_lock(3); toggle_lock(3)
+  assert_equal(table.concat(log, " "), "3:true 3:false", "after each flip, with the new state")
+  toggle_lock(99)
+  assert_equal(#log, 2, "an ignored voice runs none")
+end)
+
 end

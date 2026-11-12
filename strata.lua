@@ -62,6 +62,9 @@ S.lib.waveforms = include("lib/waveforms")(S)
 S.lib.playheads = include("lib/playheads")(S)
 S.lib.positions = include("lib/positions")(S)
 S.lib.bookmarks = include("lib/bookmarks")(S)
+S.lib.ui_modal = include("lib/ui/modal")(S)
+S.lib.quantize = include("lib/quantize")(S)
+S.lib.mod_sources = include("lib/mod_sources")(S)
 S.lib.params_setup = include("lib/params_setup")(S)
 S.lib.ui_params = include("lib/ui/params")(S)
 S.lib.ui_voice_rows = include("lib/ui/voice_rows")(S)
@@ -180,12 +183,17 @@ end
 
 -- Encoders. E1 selects the page (with or without ALT). E2 and E3 go to the
 -- page record's enc; with ALT held, to its alt_enc first, and on to enc
--- when it has none or it returns false (not handled). Before init's first
--- start step (S.started, lib/ui/frame.lua) enc, key and redraw do nothing:
--- norns routes them to the script if its menu closes while the engine loads
+-- when it has none or it returns false (not handled). While a modal owner
+-- is pushed (S.lib.ui_modal.top(), lib/ui/modal.lua) E2 and E3 go to its
+-- enc and E1 does nothing. Before init's first start step (S.started,
+-- lib/ui/frame.lua) enc, key and redraw do nothing: norns routes them to
+-- the script if its menu closes while the engine loads
 function enc(n, d)
   if not S.started then return end
-  if n == 1 then
+  local owner = S.lib.ui_modal.top()
+  if owner then
+    if n ~= 1 and owner.enc then owner.enc(n, d) end
+  elseif n == 1 then
     S.lib.ui_keys.set_ui_page(util.clamp(S.ui_page + d, 1, NUM_UI_PAGES))
   else
     local record = S.registry.pages[S.ui_page]
@@ -203,10 +211,18 @@ end
 -- the key went down on, if it still shows (a key held across a page change
 -- does nothing when it comes up): an ALT press's to alt_key_release, even
 -- if K1 came up first, any other's to key_release (if the record has them).
+-- While a modal owner is pushed, K2 and K3 presses and releases go to its
+-- key(n, z) instead, and the page forgets the key (a press it saw never
+-- releases there)
 function key(n, z)
   if not S.started then return end
+  local owner = S.lib.ui_modal.top()
   if n == 1 then
     S.lib.ui_alt.set(z == 1)
+  elseif owner then
+    S.key_press_page[n] = nil
+    S.key_press_alt[n] = nil
+    if owner.key then owner.key(n, z) end
   elseif z == 1 then
     S.key_press_page[n] = S.ui_page
     if S.alt_held then
@@ -232,9 +248,12 @@ end
 
 -- Redraw: the header, the page record's body (draw), then the hint row:
 -- the "hints" flash while one shows (lib/ui/flash.lua), else the record's
--- hints(alt_held). A body or hints that fail still finish the frame (#424):
--- the error prints once (contained_call, key "page"), and the screen shows
--- the header of the page the keys act on and "draw error" on the hint row
+-- hints(alt_held). While a modal owner is pushed (after the file
+-- selector's check) its draw and hints(alt_held) take the page's place
+-- under the header. A body or hints that fail still finish the frame
+-- (#424): the error prints once (contained_call, key "page"), and the
+-- screen shows the header of the page the keys act on and "draw error" on
+-- the hint row
 function redraw()
   if not S.started then return end
   -- the open file selector owns the screen: norns' own redraw() calls (as
@@ -243,14 +262,20 @@ function redraw()
     fileselect.redraw()
     return
   end
+  local owner = S.lib.ui_modal.top()
   S.lib.ui_cursors.clamp_all()  -- rows may have shrunk under a cursor since the last frame
   local record = S.registry.pages[S.ui_page]
   screen.clear()
   draw_header()
   local hints
   local drawn = S.lib.ui_frame.contained_call(UI_PAGES.draw_errors, "page", "page draw", function()
-    record.draw()
-    hints = S.lib.ui_flash.text("hints") or record.hints(S.alt_held)
+    if owner then
+      owner.draw()
+      hints = owner.hints and owner.hints(S.alt_held) or ""
+    else
+      record.draw()
+      hints = S.lib.ui_flash.text("hints") or record.hints(S.alt_held)
+    end
   end)
   if drawn then
     draw_hints(hints)

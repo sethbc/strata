@@ -5,7 +5,8 @@
 -- hot-plug, and the dispatch to the page records' arc_delta and arc_redraw
 -- (arc_alt_delta and arc_alt_redraw while ALT is held) and arc_button
 -- (lib/arc/<page>.lua set the ring fields, lib/pages/<page>.lua the
--- button). The functions that were global stay global, defined here.
+-- button), or to a pushed modal owner's (lib/ui/modal.lua). The functions
+-- that were global stay global, defined here.
 
 return function(S)
   local M = {}
@@ -209,15 +210,30 @@ return function(S)
     return record[plain_field]
   end
 
+  -- While a modal owner is pushed (S.lib.ui_modal.top(), lib/ui/modal.lua)
+  -- the turns, the button and the rings are its own (its arc_delta,
+  -- arc_key, arc_redraw), never the page's; one without them ignores the
+  -- arc and leaves the rings off
   function arc_delta(n, delta)
-    local page_delta = page_ring_handler("arc_delta", "arc_alt_delta")
-    if page_delta then page_delta(n, delta) end  -- nil: the page ignores turns
+    local owner = S.lib.ui_modal.top()
+    local turn = owner and owner.arc_delta
+    if not owner then turn = page_ring_handler("arc_delta", "arc_alt_delta") end
+    if turn then turn(n, delta) end  -- nil: the page ignores turns
     request_redraw()
   end
 
   -- The button (2025 arc models): a press calls the page record's
-  -- arc_button (MAIN's is K3); a page without one ignores it
+  -- arc_button (MAIN's is K3); a page without one ignores it. A modal
+  -- owner's arc_key gets presses and releases
   function arc_key(n, s)
+    local owner = S.lib.ui_modal.top()
+    if owner then
+      if owner.arc_key then
+        owner.arc_key(n, s)
+        request_redraw()
+      end
+      return
+    end
     if s ~= 1 then return end
     local button = S.registry.pages[S.ui_page].arc_button
     if button then
@@ -231,8 +247,10 @@ return function(S)
     S.lib.ui_cursors.clamp_all()  -- rows may have shrunk under a cursor (lib/ui/cursors.lua)
 
     S.arc_device:all(0)
-    local page_redraw = page_ring_handler("arc_redraw", "arc_alt_redraw")
-    if page_redraw then page_redraw(S.arc_device) end  -- nil: rings stay off
+    local owner = S.lib.ui_modal.top()
+    local draw = owner and owner.arc_redraw
+    if not owner then draw = page_ring_handler("arc_redraw", "arc_alt_redraw") end
+    if draw then draw(S.arc_device) end  -- nil: rings stay off
     S.arc_device:refresh()
   end
 

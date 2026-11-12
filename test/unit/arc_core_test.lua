@@ -364,4 +364,15 @@ test("an arc with no port is neither followed nor taken for port 1's", function(
   h.check_invariants()
 end)
 
+
+test("an arc sweep runs the touch hooks once, as the arc", function()
+  local context = load_strata(); finish_startup(context)
+  local log = {}
+  local_value("S").register_param_touch(function(param_id, source) log[#log + 1] = param_id .. ":" .. source end)
+  local mix = params:get("reverb_mix")
+  arc_sweep_param("reverb_mix", 10)
+  assert_true(params:get("reverb_mix") > mix, "the sweep moved the param")
+  assert_equal(table.concat(log, " "), "reverb_mix:arc", "one touch, from the arc")
+end)
+
 end

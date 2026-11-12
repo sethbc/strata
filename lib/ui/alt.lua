@@ -100,11 +100,17 @@ return function(S)
 
   -- The hint for ALT+K2 on the record's page, what letting go will do:
   -- once it is held ALT_HOLD_SECONDS, "K2:reset" on a page with alt_hold
-  -- and "K2:cancel" on one without (its release does nothing); before, the
-  -- quick action's. The record animates while k2_held(), so the frame clock
-  -- draws the change at the hold time
+  -- (or "K2:" and its alt_hold_hint, a string or a function returning one,
+  -- 3.4: SEQ's edit, MOD's clear) and "K2:cancel" on one without (its
+  -- release does nothing); before, the quick action's. The record animates
+  -- while k2_held(), so the frame clock draws the change at the hold time
   function M.k2_hint(record)
-    if held_long() then return record.alt_hold and "K2:reset" or "K2:cancel" end
+    if held_long() then
+      if not record.alt_hold then return "K2:cancel" end
+      local hint = record.alt_hold_hint
+      if type(hint) == "function" then hint = hint() end
+      return "K2:" .. (hint or "reset")
+    end
     return "K2:" .. quick_action(record)
   end
 

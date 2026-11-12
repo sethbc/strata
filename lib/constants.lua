@@ -154,8 +154,9 @@ local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
 -- Grid holds (lib/grid/core.lua): a scene save key must be held this long
--- to save; the 64's half toggle (column 1) switches halves after this hold
-local GRID_HOLD = {scene_save_seconds = 0.5, half_toggle_seconds = 0.5}
+-- to save; the 64's half toggle (column 1) switches halves after this hold;
+-- a step key held step_edit_seconds opens 3.4's step editor
+local GRID_HOLD = {scene_save_seconds = 0.5, half_toggle_seconds = 0.5, step_edit_seconds = 0.3}
 
 -- The grid pages, numbered alike on every layout (#451: the 64 shows 1 and
 -- 5), and the cells of a voice's position row on every layout
@@ -195,6 +196,12 @@ local START_ORDER = {
   waveforms = 140,       -- lib/waveforms.lua: the peaks read loop
   playheads = 150,       -- lib/playheads.lua: the playhead clock
   pattern_transport = 160,  -- lib/sequencer.lua: the clock's transport start and stop handlers
+  -- 3.4's, held for the modules that register them (design §12)
+  input_level = 62,      -- lib/input_level.lua: the input level polls
+  macros_load = 105,     -- lib/macros.lua: macros.data
+  gestures_load = 107,   -- lib/gestures.lua: gestures.data
+  matrix_load = 108,     -- lib/matrix.lua: matrix.data
+  lfo_clock = 125,       -- lib/lfos.lua: the LFO clock
 }
 
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
@@ -239,6 +246,7 @@ local CLEANUP_ORDER = {
   playheads = 122,          -- lib/playheads.lua: the playhead clock
   scrub_glide = 124,        -- lib/positions.lua: the scrub glides and the scan holds
   waveforms = 126,          -- lib/waveforms.lua: the peaks read loop
+  engine_budget = 127,      -- lib/engine_sync.lua: the deferred sends' flush clock (3.4)
   buffer_start_reload = 128,  -- lib/buffers.lua: a long file's pending start reload
   buffer_polls = 130,       -- lib/buffers.lua: the polls and recording timers
   record = 132,             -- lib/record.lua: the recordState poll
@@ -248,6 +256,16 @@ local CLEANUP_ORDER = {
   voices_off = 160,         -- lib/engine_sync.lua: a voiceOff per running voice (reaches no handler on norns)
   grids_dark = 170,         -- lib/grid/core.lua
   arc_dark = 180,           -- lib/arc/core.lua
+  -- 3.4's, held for the modules that register them (design §12)
+  macros_save = 32,         -- lib/macros.lua: macros.data
+  gestures_save = 34,       -- lib/gestures.lua: gestures.data
+  matrix_save = 36,         -- lib/matrix.lua: matrix.data
+  gestures = 95,            -- lib/gestures.lua: the recorders' clocks
+  quantize = 97,            -- lib/quantize.lua: the waiting actions
+  morph_clock = 112,        -- lib/morph.lua
+  macros = 114,             -- lib/macros.lua: the apply clock
+  matrix = 118,             -- lib/matrix.lua: the matrix clock
+  scatter = 125,            -- lib/scatter.lua
 }
 
 return {
@@ -298,4 +316,16 @@ return {
   DETENT = DETENT,
   FINE_DIVISOR = FINE_DIVISOR,
   CLEANUP_ORDER = CLEANUP_ORDER,
+  -- 3.4 (design §12): fields of this table, never new locals
+  NUM_MACROS = 16,        -- Macros (lib/macros.lua)
+  MACRO_BANK_SIZE = 4,    -- Macros a bank shows (MOD, the arc)
+  MACRO_TARGETS = 8,      -- Targets per macro
+  MATRIX_SLOTS = 16,      -- Modulation matrix routings (lib/matrix.lua)
+  NUM_GESTURES = 4,       -- Gesture recorders (lib/gestures.lua)
+  SCENE_BANK_SIZE = 8,    -- Scene slots a bank shows
+  SCENE_NAME_MAX = 12,    -- Characters in a scene name
+  -- The deferrable sends' budget (lib/engine_sync.lua): at most
+  -- messages_per_window sends per window_seconds; a deferrable send past it
+  -- waits for the next window
+  ENGINE_BUDGET = {messages_per_window = 150, window_seconds = 0.1},
 }
