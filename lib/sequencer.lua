@@ -381,6 +381,13 @@ return function(S)
     if S.voices[voice_idx].active and gated(voice_idx) then send_gate_seconds(voice_idx, M.gate_seconds(voice_idx)) end
   end
 
+  -- Before a retrigger outside the patterns (a MIDI note, lib/midi_in.lua):
+  -- a running gated voice's own gate length, when the last one sent was a
+  -- step's (its gate, a ratchet's share), which the stage would keep (#639)
+  function M.note_gate(voice_idx)
+    if valid_voice(voice_idx) then resend_gate(voice_idx) end
+  end
+
   -- Whether a voice's bookmark n lies inside its loop, where a recall moves
   -- only buf_pos (outside, lib/positions.lua's jump would reset the loop)
   local function bookmark_in_loop(voice_idx, n)

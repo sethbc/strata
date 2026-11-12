@@ -219,6 +219,7 @@ return function(S)
       toggle_voice(voice_idx)
       S.midi_state.started[voice_idx] = true
     end
+    S.lib.sequencer.note_gate(voice_idx)  -- a gated voice's own gate length, never a step's (#639)
     engine.retrigger(voice_idx - 1, velocity / M.MIDI.velocity_max)
   end
 
