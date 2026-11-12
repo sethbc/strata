@@ -15,8 +15,10 @@ var area = engine.strataAreas.detect({ arg each; each[\name] == \modulation });
 var state = engine.areaState[\modulation];
 // the lines the engine posts for the commands it ignores
 var ignoredLines = List.new;
+// every voice's grain controls as the area found them (it puts them back)
+var foundControls = engine.grainControls.collect(_.copy);
 var nodeCounts, childrenOf, sameReceived, checkState, checkChannels, checkCommands, checkIgnored, checkBuses;
-var checkFastModIn, checkGateControls, checkDefaults, checkFree;
+var checkFastModIn, checkGateControls, checkDefaults, checkFree, checkVoicesLeft;
 
 // [synths, groups] on the server, from one /status reply
 nodeCounts = {
@@ -115,18 +117,24 @@ checkCommands = {
             calls.collect({ arg call; call[0][0] }).select({ arg name, index; recorded[index].not })));
 };
 
-// Step 1's out-of-range indices and non-finite offsets: each posts one
-// line, records nothing and creates no node
+// Step 1's out-of-range indices and every continuous argument's non-finite
+// value (NaN passes clip): each posts one line, records nothing and creates
+// no node
 checkIgnored = {
+    var nan = 0.0 / 0.0;
     var lfo = { arg lfo, voice, destination, shape; [\setFastLfo, lfo, voice, destination, shape, 1.0, 0.5, 0.0] };
     var bad = [
         lfo.(6, 0, 0, 0), lfo.(-1, 0, 0, 0), lfo.(0, 7, 0, 0), lfo.(0, -1, 0, 0), lfo.(0, 0, 5, 0), lfo.(0, 0, -1, 0),
         lfo.(0, 0, 0, 8), lfo.(0, 0, 0, -1), lfo.(0.5, 0, 0, 0),
+        [\setFastLfo, 0, 0, 0, 0, nan, 0.5, 0.0], [\setFastLfo, 0, 0, 0, 0, 1.0, nan, 0.0], [\setFastLfo, 0, 0, 0, 0, 1.0, 0.5, nan],
+        [\setFastLfo, 0, 0, 0, 0, inf, 0.5, 0.0], [\setFastLfo, 0, 0, 0, 0, 1.0, 0.5, inf.neg],
         [\stopFastLfo, 6], [\stopFastLfo, -1], [\syncFastLfo, 6, 0.5], [\syncFastLfo, -1, 0.5],
+        [\syncFastLfo, 0, nan], [\syncFastLfo, 0, inf],
         [\setScatter, 0.1, 0.1, 32, 127], [\setScatter, 0.1, 0.1, -1, 127], [\setScatter, 0.1, 0.1, 3, 128], [\setScatter, 0.1, 0.1, 3, -1],
+        [\setScatter, nan, 0.1, 3, 127], [\setScatter, 0.1, nan, 3, 127], [\setScatter, inf, 0.1, 3, 127],
         [\setFastOffset, 7, 0, 0, 0.0], [\setFastOffset, -1, 0, 0, 0.0], [\setFastOffset, 0, 1, 0, 0.0], [\setFastOffset, 0, -1, 0, 0.0],
         [\setFastOffset, 0, 0, 5, 0.0], [\setFastOffset, 0, 0, -1, 0.0],
-        [\setFastOffset, 0, 0, 0, 0.0 / 0.0], [\setFastOffset, 0, 0, 0, inf], [\setFastOffset, 0, 0, 0, inf.neg]
+        [\setFastOffset, 0, 0, 0, nan], [\setFastOffset, 0, 0, 0, inf], [\setFastOffset, 0, 0, 0, inf.neg]
     ];
     var kept = state[\received].deepCopy, before = nodeCounts.value, lines = List.new, unchanged = List.new;
     state[\postIgnored] = { arg line; ignoredLines.add(line) };
@@ -140,8 +148,8 @@ checkIgnored = {
     state[\postIgnored] = nil;
     check.(unchanged.every(_ == true) and: { lines.every(_ == 1) } and: { nodeCounts.value == before }
         and: { ignoredLines.every({ arg line; line.beginsWith("strata: ") }) },
-        "modulation: out-of-range indices and a non-finite offset are ignored, one line each (changed by %; lines %)".format(
-            bad.select({ arg call, index; unchanged[index].not }).collect(_[0]), lines.asSet.asArray));
+        "modulation: out-of-range indices and non-finite values are ignored, one line each (changed by %; lines %)".format(
+            bad.select({ arg call, index; unchanged[index].not }), lines.asSet.asArray));
 };
 
 // Every channel reads 0 after the commands, and fastModGroup is the first
@@ -161,14 +169,14 @@ checkBuses = {
 // A voice on each source kind, then each switched (a replacement grain
 // synth): every grain synth and every stage reads its voice's block, which
 // setGrainParam and setVoiceParam never replace. The slot stays empty (its
-// grain synth starts all the same): a load is sclang work this area does
-// not need this late in a full run (see checkDefaults)
+// grain synth starts all the same; no load: #581, docs/notes/engine/modulation.md)
 checkFastModIn = {
     var slot = 2, silent = state[\silentFastModBus].index;
     // [voice, first source, second source]
     var plan = [[0, 0, engine.inputSource], [1, slot + 1, 0], [2, engine.inputSource, slot + 1]];
     var read = { plan.collect({ arg each; getControl.(engine.synths[engine.grainKey(each[0])], \fastModIn) }) };
     var blocks = plan.collect({ arg each; engine.fastModBlock(each[0], 0) });
+    var saved = plan.collect({ arg each; engine.grainControls[each[0]].copy });
     var first, second, stages, refused, kept;
     plan.do({ arg each;
         command.(\setGrainSource, each[0], each[1]);
@@ -192,8 +200,10 @@ checkFastModIn = {
         "modulation: every grain synth and stage starts with its voice's block as fastModIn (grain synths %, after a switch %, stages %; blocks %)".format(
             first, second, stages, blocks));
     check.(refused, "modulation: setGrainParam and setVoiceParam refuse fastModIn (#458)");
+    // stopped, back on their synth sources (stopAllVoices), with their grain controls
     plan.do({ arg each; command.(\voiceOff, each[0]) });
     h.stopAllVoices;
+    plan.do({ arg each, index; engine.grainControls[each[0]] = saved[index] });
     server.sync;
 };
 
@@ -201,7 +211,7 @@ checkFastModIn = {
 // their defaults, set through setGrainParam, kept, and neutral: a synth
 // voice's tap is its synth path unchanged (filter mix 0) and an input
 // voice's tap its mirror (the other path, on the check's tone in the input
-// bus: no slot load this late in a full run), whatever they are set to
+// bus: no slot load, #581), whatever they are set to
 checkGateControls = {
     var names = [\seqGate, \gateSeconds, \gateRelease, \voiceMute], defaults = [0, 0.1, 0.1, 0];
     var synthVoice = 1, otherVoice = 4, voices = [synthVoice, otherVoice], tone;
@@ -275,8 +285,7 @@ checkGateControls = {
 // full run, whose buses are not h.engine's: the descs are h.engine's when
 // their other bus defaults (the stage's tapOut, the grain defs' recHeadBus)
 // are its buses, and only then must the silent bus be h.engine's too. Read
-// only: building anything this late in a full run (a second engine, or the
-// three defs again) ended sclang 3.13 in four of eight runs (#131, #211)
+// only: no defs built again (#581, docs/notes/engine/modulation.md)
 checkDefaults = {
     var silent = state[\silentFastModBus].index, defNames = [\strataGrainRing, \strataGrainBuf, \strataVoiceMix];
     var defaultOf = { arg defName, name;
@@ -293,7 +302,7 @@ checkDefaults = {
 
 // The area's stop frees fastModGroup and its free both buses: run here on a
 // group and two buses swapped in for the check (h.engine's own come back
-// afterward), not on a second engine (above)
+// afterward), not on a second engine (#581)
 checkFree = {
     var keys = [\fastModBus, \silentFastModBus, \fastModGroup], kept = keys.collect({ arg key; state[key] });
     var buses = [Bus.control(server, 35), Bus.control(server, 5)], group = Group.before(engine.voiceGroup), held, left;
@@ -314,6 +323,16 @@ checkFree = {
             buses.count({ arg bus; bus.index.notNil })));
 };
 
+// What the area leaves for the areas after it: every voice stopped, on its
+// synth source, with the grain controls it found
+checkVoicesLeft = {
+    var sources = engine.grainSource.copy, running = (0 .. engine.numVoices - 1).select({ arg voice; engine.voiceRunning(voice) });
+    var changed = (0 .. engine.numVoices - 1).reject({ arg voice; engine.grainControls[voice] == foundControls[voice] });
+    check.(sources.every(_ == 0) and: { running.isEmpty } and: { changed.isEmpty },
+        "modulation: the area leaves every voice on its synth source (sources %, running %, grain controls changed on %)".format(
+            sources, running, changed));
+};
+
 if (area.isNil or: { state.isNil }) {
     check.(false, "modulation: the area runs at order 160 (no strataAreaModulation)");
 } {
@@ -326,11 +345,6 @@ if (area.isNil or: { state.isNil }) {
     checkFastModIn.value;
     checkGateControls.value;
     checkFree.value;
-    // Every awaitReply's 5 s timer runs out before the runner quits sclang:
-    // without this wait 2 of 8 full runs on 3.13 segfaulted as sclang quit
-    // after every check passed; with it the 4 runs of 8 that reached this
-    // area all passed (the other 4 failed in earlier areas). Too few runs to
-    // call the timers the cause (docs/notes/engine/modulation.md)
-    5.5.wait;
+    checkVoicesLeft.value;
 };
 }

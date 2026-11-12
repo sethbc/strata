@@ -146,19 +146,29 @@
         ^false
     }
 
+    // Whether every [name, value] is a finite number (a NaN passes clip, an
+    // infinity clips to a bound); else one line naming the first that is
+    // not, and false
+    fastModValuesFinite { arg command, values;
+        var bad = values.detect({ arg value; value[1].isNaN or: { value[1].abs == inf } });
+        if (bad.isNil) { ^true };
+        this.postFastModIgnored(command, "% % is not a finite number".format(bad[0], bad[1]));
+        ^false
+    }
+
     // What a command took, for the engine check
     receiveFastMod { arg command, values;
         areaState[\modulation][\received][command] = values;
     }
 
     // The five commands (design 3.4 §3.4, §10.2). Wave 0 checks their
-    // indices (an out-of-range one, or a non-finite offset, is ignored with
-    // one line), clips their continuous arguments, records what they took
-    // and creates no node. The Lua engine stub reads these clips as its
-    // limits (and its index limits from the four numbers above); a
-    // setFastOffset offset is clipped after its finite check, so the stub
-    // checks only that it is finite (Lua's matrix sends a sum the engine
-    // clamps)
+    // indices and then every continuous argument's finiteness (a bad one of
+    // either is ignored with one line, and the command does nothing), clips
+    // the continuous arguments only then, records what they took and creates
+    // no node. The Lua engine stub reads the clips (name = msg[i].clip(...))
+    // as its limits (and its index limits from the four numbers above); a
+    // setFastOffset offset is clipped on its own name, so the stub checks
+    // only that it is finite (Lua's matrix sends a sum the engine clamps)
     addFastModCommands {
         var lastLfo = this.numFastLfos - 1, lastVoice = numVoices - 1, lastDestination = this.numFastDestinations - 1;
         var lastShape = this.numFastLfoShapes - 1, lastNoteSlot = this.fastModNoteSlots - 1;
@@ -167,10 +177,11 @@
         // Engine LFO lfo on voice's fast destination (note slot 0 in 3.4):
         // shape, rate (Hz), depth and offset (half ranges)
         this.addCommand(\setFastLfo, "iiiifff", { arg msg;
-            var lfo = msg[1], voice = msg[2], destination = msg[3], shape = msg[4];
-            var rate = msg[5].clip(0.003, 50), depth = msg[6].clip(0, 1), offset = msg[7].clip(-2, 2);
+            var lfo = msg[1], voice = msg[2], destination = msg[3], shape = msg[4], rate, depth, offset;
             if (this.fastModIndicesValid(\setFastLfo, [[\lfo, lfo, lastLfo], [\voice, voice, lastVoice],
-                [\destination, destination, lastDestination], [\shape, shape, lastShape]])) {
+                [\destination, destination, lastDestination], [\shape, shape, lastShape]])
+                and: { this.fastModValuesFinite(\setFastLfo, [[\rate, msg[5]], [\depth, msg[6]], [\offset, msg[7]]]) }) {
+                rate = msg[5].clip(0.003, 50); depth = msg[6].clip(0, 1); offset = msg[7].clip(-2, 2);
                 this.receiveFastMod(\setFastLfo, [lfo, voice, destination, shape, rate, depth, offset]);
             };
         });
@@ -183,15 +194,21 @@
 
         // Set an engine LFO's phase (0-1) now
         this.addCommand(\syncFastLfo, "if", { arg msg;
-            var lfo = msg[1], phase = msg[2].clip(0, 1);
-            if (this.fastModIndicesValid(\syncFastLfo, [[\lfo, lfo, lastLfo]])) { this.receiveFastMod(\syncFastLfo, [lfo, phase]) };
+            var lfo = msg[1], phase;
+            if (this.fastModIndicesValid(\syncFastLfo, [[\lfo, lfo, lastLfo]])
+                and: { this.fastModValuesFinite(\syncFastLfo, [[\phase, msg[2]]]) }) {
+                phase = msg[2].clip(0, 1);
+                this.receiveFastMod(\syncFastLfo, [lfo, phase]);
+            };
         });
 
         // Scatter: depth 0-1, rate (Hz), a destination mask (bit d =
         // destination d) and a voice mask (bit v = voice v)
         this.addCommand(\setScatter, "ffii", { arg msg;
-            var depth = msg[1].clip(0, 1), rate = msg[2].clip(0.01, 1), destinations = msg[3], voices = msg[4];
-            if (this.fastModIndicesValid(\setScatter, [[\destinations, destinations, destinationMask], [\voices, voices, voiceMask]])) {
+            var destinations = msg[3], voices = msg[4], depth, rate;
+            if (this.fastModIndicesValid(\setScatter, [[\destinations, destinations, destinationMask], [\voices, voices, voiceMask]])
+                and: { this.fastModValuesFinite(\setScatter, [[\depth, msg[1]], [\rate, msg[2]]]) }) {
+                depth = msg[1].clip(0, 1); rate = msg[2].clip(0.01, 1);
                 this.receiveFastMod(\setScatter, [depth, rate, destinations, voices]);
             };
         });
@@ -201,12 +218,9 @@
         this.addCommand(\setFastOffset, "iiif", { arg msg;
             var voice = msg[1], noteSlot = msg[2], destination = msg[3], offset = msg[4];
             if (this.fastModIndicesValid(\setFastOffset, [[\voice, voice, lastVoice], [\noteSlot, noteSlot, lastNoteSlot],
-                [\destination, destination, lastDestination]])) {
-                if (offset.isNaN or: { offset.abs == inf }) {
-                    this.postFastModIgnored(\setFastOffset, "offset % is not a finite number".format(offset));
-                } {
-                    this.receiveFastMod(\setFastOffset, [voice, noteSlot, destination, offset.clip(-2, 2)]);
-                };
+                [\destination, destination, lastDestination]])
+                and: { this.fastModValuesFinite(\setFastOffset, [[\offset, offset]]) }) {
+                this.receiveFastMod(\setFastOffset, [voice, noteSlot, destination, offset.clip(-2, 2)]);
             };
         });
     }
