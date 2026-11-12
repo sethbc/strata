@@ -244,6 +244,65 @@ test("a bar loop starts on its bar and follows a tempo change", function()
   assert_near(params:get("delay_mix"), 0.01, 1e-9, "the event lands on its beat at the new tempo")
 end)
 
+-- A MIDI Start or PARAMETERS > CLOCK > reset sets the beat count back: a
+-- pass sleeping between its events must not wait out the old count
+test("a quantized loop follows a beat counter that goes back", function()
+  local context, S, gestures = loaded()
+  params:set("gesture_1_quantize", BAR)
+  params:set("reverb_mix", 0.3)
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}, {0.5, "reverb_mix", 1}, {0.5, "reverb_mix", 1}}, 1)
+  assert_equal(S.gestures[1].length_beats, 4, "one bar: 0.31 at 0, 0.32 at 1, 0.33 at 2")
+  local bar = 4 * math.ceil(clock.get_beats() / 4)
+  run_to_beat(context, bar + 0.5)
+  assert_near(params:get("reverb_mix"), 0.31, 1e-9, "the pass started on its bar")
+  -- the count goes back to 0.5: by a whole number of bars, so the
+  -- harness's scheduler (which keeps its own count) and the count the
+  -- script reads agree on where the bars fall, as matron's do
+  local real_beats = clock.get_beats
+  clock.get_beats = function() return real_beats() - bar end
+  local ok, problem = pcall(function()
+    context.clock.run_for(0.5)            -- to beat 9.5: the second event's sleep is in seconds, it plays at 9
+    assert_near(params:get("reverb_mix"), 0.32, 1e-9, "the event the pass slept toward")
+    params:set("reverb_mix", 0.9)
+    context.clock.run_for(1.5)            -- 3 beats on (12.5), under one loop length
+    assert_near(params:get("reverb_mix"), 0.31, 1e-9, "the loop starts again on the new count")
+    assert_equal(S.gestures[1].loop_start, 4, "on its next bar, beat 4 of the new count")
+    context.clock.run_for(0.5)
+    assert_near(params:get("reverb_mix"), 0.32, 1e-9, "and plays on: its second event a beat later")
+  end)
+  clock.get_beats = real_beats
+  assert_true(ok, tostring(problem))
+end)
+
+test("a failed playback stops its recorder and leaves the others playing", function()
+  local context, S, gestures = loaded()
+  params:set("gesture_2_quantize", BAR)
+  record(context, gestures, 1, {{0.1, "delay_mix", 1}, {1, "reverb_mix", 1}}, 1)  -- free: delay_mix, then reverb_mix
+  record(context, gestures, 2, {{0.1, "reverb_mix", 1}}, 1)                      -- a bar loop on reverb_mix
+  record(context, gestures, 3, {{0.1, "delay_feedback", 1}}, 1)                  -- free, on delay_feedback
+  gestures.press(1); gestures.press(1)    -- from its start: delay_mix plays
+  params:set_action("reverb_mix", function() error("broken param") end)
+  fire(S, 1)                              -- reverb_mix's event raises
+  assert_equal(gestures.state(1), "stopped", "the free loop stops")
+  assert_true(not S.gestures[1].pattern.metro.running, "its metro is stopped")
+  assert_equal(params:get("gesture_1_play"), 0)
+  h.claim_script_errors(context, 1, "strata: gesture G1 failed: ", "broken param")
+  assert_equal(S.gesture_playing, false, "the flags are down")
+  assert_equal(S.deferrable_write, false)
+  run_to_beat(context, 4 * math.ceil(clock.get_beats() / 4) + 0.02)   -- the bar loop's event raises
+  assert_equal(gestures.state(2), "stopped", "the quantized loop stops")
+  assert_equal(S.gestures[2].clock, nil, "with no clock")
+  assert_equal(params:get("gesture_2_play"), 0)
+  h.claim_script_errors(context, 1, "strata: gesture G2 failed: ", "broken param")
+  assert_equal(gestures.state(3), "playing", "the others play on")
+  assert_true(S.gestures[3].pattern.metro.running)
+  gestures.press(1)                       -- played again from its start: its first event plays, then
+  assert_equal(gestures.state(1), "playing")
+  fire(S, 1)
+  assert_equal(gestures.state(1), "stopped", "it stops again at the failing event")
+  h.claim_script_errors(context, 1, "strata: gesture G1 failed: ", "broken param")
+end)
+
 test("overdub adds events to a playing loop, free and quantized", function()
   local context, S, gestures = loaded()
   params:set("reverb_mix", 0.3); params:set("v1_grain_size", 0.1)
@@ -459,7 +518,10 @@ end)
 test("an unreadable side file is set aside and the PSET still loads", function()
   local bad_bar = { version = 1, recorders = { { quantize = "bar", events = { { id = "reverb_mix", value = 0.5 } },
     beats = { 0 }, length_beats = 6 } } }  -- 6 beats is no whole number of bars
-  for _, content in ipairs({ "return {\n  {1},\n", "return {\n-- Table: {1}\n{\n   [\"version\"]=2,\n},\n}\n", bad_bar }) do
+  local no_length = { version = 1, recorders = { { quantize = "free", events = { { id = "reverb_mix", value = 0.5 },
+    { id = "delay_mix", value = 0.5 } }, times = { 0, 0 } } } }  -- its metro would fire without a pause
+  for _, content in ipairs({ "return {\n  {1},\n", "return {\n-- Table: {1}\n{\n   [\"version\"]=2,\n},\n}\n", bad_bar,
+      no_length }) do
     local context, S, gestures = loaded()
     params:set("reverb_mix", 0.7)
     local path = context.data_dir .. "strata-04.pset"

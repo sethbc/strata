@@ -10,8 +10,8 @@
 
 `lib/quantize.lua` (`S.lib.quantize`, 3.4, packages 0a and 1f):
 - The param `quantize_actions` (option `off`, `beat`, `bar`; default off), added by `add_params()`.
-- `schedule(key, fn, label)`: run `fn` now while `quantize_actions` is off (or before the params exist), else at the next beat (`clock.sync(1)`) or bar (`clock.sync(4)`) on a clock of its own; a waiting action of the same key is replaced. With a `label` the header flashes `<label> at beat` or `<label> at bar` (`S.lib.ui_flash`, for one beat or bar at the tempo then) and the flash ends when `fn` runs or is replaced. Returns whether `fn` ran at once. A key that is not a non-empty string or an action that is not a function is an error.
-- `waiting(key)`: whether an action of that key waits.
+- `schedule(key, fn, label)`: run `fn` now while `quantize_actions` is off (or before the params exist), else at the next beat (`clock.sync(1)`) or bar (`clock.sync(4)`) on a clock of its own; a waiting action of the same key is replaced. With a `label` the header flashes `<label> at beat` or `<label> at bar` (`S.lib.ui_flash`, for one beat or bar at the tempo then) and the flash ends when `fn` runs or is replaced. Returns whether `fn` ran at once and, when it waits, its token (a number no other action gets). A key that is not a non-empty string or an action that is not a function is an error.
+- `waiting(key, token)`: whether an action of that key waits; with a token, whether the one that waits is still that action (a later schedule of the key, a run or a cancel ends it), so a caller that keeps what its own action will do knows when that is stale.
 - `actions`: the waiting actions by key, `{clock, flash}` (tests read the clocks here).
 - `QUANTIZE`, the module's one table of tunables (`param_count`, `param_id`, `modes`, `beats` per mode).
 - The cleanup step `CLEANUP_ORDER.quantize` (97) and the `quantize` invariant.
@@ -22,7 +22,7 @@
 Design §8.9's keys:
 - `freeze<v>`: `S.lib.freeze.toggle_quantized(v)` (label `v<v> frz`, which fits the header flash as `v7 frz at beat`), for the grids' freeze keys (2c points them at it; VOICE's freeze row and a mapped CC set the param and act at once).
 - `position<v>`: a grid's position key (`S.lib.positions.grid_key`'s jump and its two-key loop, label `v<v> jump`; a loop replaces the jump its first key left waiting).
-- `bookmark<v>`: a grid's bookmark strip key (`S.lib.positions.strip_key`'s recall, label `v<v> bm <n>`) and BUFFER's `bm` field (E3 and ALT+E3, `docs/notes/lua/pages/buffer.md`).
+- `bookmark<v>`: `S.lib.positions.recall_bookmark_quantized(v, n)` (label `v<v> bm <n>`), for a grid's bookmark strip key and BUFFER's `bm` field (E3 and ALT+E3, `docs/notes/lua/pages/buffer.md`); `S.lib.positions.waiting_bookmark(v)` is the bookmark that waits, whichever of the two scheduled it.
 - `scene` (SCENES' keys, the grid's scene keys and the arc button, 1c) and `patterns` (the pattern start, 1d), in their own files.
 
 Not quantized: the scene sequencer, steps (a step's bookmark lock calls `S.lib.bookmarks.recall`, which recalls at once), LFOs, morph, a grid's bookmark store and whole-loop keys, the arc's scrub.

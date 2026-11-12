@@ -1411,6 +1411,24 @@ test("bm's recall waits for the bar under quantize, and E3 steps on from the one
   assert_equal(S.lib.positions.last_recalled(1), 3)
 end)
 
+test("a grid key that replaces bm's waiting recall is where E3 steps from", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  S.buffers[1].seconds = 16
+  params:set("v1_source", 2); set_running(1, true)
+  to_field(9)
+  params:set("quantize_actions", 3)  -- bar
+  context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+  enc(3, 1); enc(3, 1)
+  assert_equal(S.lib.ui_flash.text("header"), "v1 bm 2 at bar", "bm's recall of bookmark 2 waits")
+  S.lib.positions.strip_key(1, 1, 4, 1); S.lib.positions.strip_key(1, 1, 4, 0)
+  assert_equal(S.lib.ui_flash.text("header"), "v1 bm 4 at bar", "a strip key's recall of 4 replaces it")
+  enc(3, -1)
+  assert_equal(S.lib.ui_flash.text("header"), "v1 bm 3 at bar", "E3 steps from 4, the one that waits, not from 2")
+  context.clock.run_for((4.02 - clock.get_beats()) * clock.get_beat_sec())
+  assert_equal(S.lib.positions.last_recalled(1), 3)
+end)
+
 test("the start field shows - for a file that fits and steps at the resolution it shows", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local buffers = local_value("buffers")

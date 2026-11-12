@@ -23,8 +23,10 @@ return function(S)
   M.PARAM_COUNT = QUANTIZE.param_count  -- the params add_params adds
 
   -- The waiting actions, by key: {clock = the coroutine that waits, flash =
-  -- the header text it shows, or nil}. Tests read the clocks here
+  -- the header text it shows, or nil, token = its number}. Tests read the
+  -- clocks here
   M.actions = {}
+  local last_token = 0  -- each waiting action's own number, never reused
 
   -- The mode the param names ("off" before the params exist)
   local function mode()
@@ -50,8 +52,10 @@ return function(S)
   -- Run fn now (quantize_actions off) or at the next beat or bar, replacing
   -- a waiting action of the same key; while it waits, label shows in the
   -- header as "<label> at beat" or "<label> at bar" (for at most the beat
-  -- or bar, ending when fn runs). Returns whether fn ran at once. A waiting
-  -- fn that raises prints "strata: quantized <key> failed: <error>"
+  -- or bar, ending when fn runs). Returns whether fn ran at once and, for an
+  -- action that waits, its token (waiting(key, token) tells whether that
+  -- one still waits). A waiting fn that raises prints "strata: quantized
+  -- <key> failed: <error>"
   function M.schedule(key, fn, label)
     if type(key) ~= "string" or key == "" then error("quantize.schedule: a key is a string", 2) end
     if type(fn) ~= "function" then error("quantize.schedule: an action is a function", 2) end
@@ -62,7 +66,8 @@ return function(S)
       return true
     end
     local beats = QUANTIZE.beats[waits]
-    local action = {flash = label and (tostring(label) .. " at " .. waits) or nil}
+    last_token = last_token + 1
+    local action = {flash = label and (tostring(label) .. " at " .. waits) or nil, token = last_token}
     action.clock = clock.run(function()
       clock.sync(beats)
       if M.actions[key] == action then M.actions[key] = nil end
@@ -72,12 +77,14 @@ return function(S)
     end)
     M.actions[key] = action
     if action.flash then S.lib.ui_flash.start("header", action.flash, beats * clock.get_beat_sec()) end
-    return false
+    return false, action.token
   end
 
-  -- Whether an action of this key waits
-  function M.waiting(key)
-    return M.actions[key] ~= nil
+  -- Whether an action of this key waits; with a token, whether the one
+  -- that waits is the action schedule gave that token
+  function M.waiting(key, token)
+    local action = M.actions[key]
+    return action ~= nil and (token == nil or action.token == token)
   end
 
   -- The scheduler's params, PARAM_COUNT of them: quantize_actions

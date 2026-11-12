@@ -829,7 +829,7 @@ test("the PSET hooks run on write, read and delete with the path base and number
   h.claim_script_errors(context, 5, "pset hook raises: ", "boom")  -- each a script error to the harness
 end)
 
-test("the menu records for 3.4's groups follow lfos in order and add nothing without their modules", function()
+test("the menu records for 3.4's groups follow lfos in order: a landed module adds its group, the rest add nothing", function()
   local added, called = {}, {}
   load_strata({ before_init = function()
     local S = local_value("S")
@@ -852,7 +852,7 @@ test("the menu records for 3.4's groups follow lfos in order and add nothing wit
   -- landed: the gestures' group of eight, strata_seq with quantize_actions alone (no sequencer params yet)
   local landed = { gestures = 1 + 2 * S.constants.NUM_GESTURES, seq = 1 + S.lib.quantize.PARAM_COUNT }
   for _, name in ipairs({ "macros", "morph", "scatter", "matrix", "input", "gestures", "seq" }) do
-    assert_equal(added[name], landed[name] or 0, name .. " adds nothing without its module")
+    assert_equal(added[name], landed[name] or 0, name .. (landed[name] and " adds its group" or " adds nothing without its module"))
   end
   -- with its module loaded, a record calls the module's add_params
   local modules = { macros = "macros", morph = "morph", scatter = "scatter", matrix = "matrix",
