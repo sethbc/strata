@@ -729,12 +729,16 @@ test("a live file that can be neither read nor set aside is never written over",
   end })
   finish_startup(context)
   local S = local_value("S")
-  assert_true(printed_with(context, "targets will not be saved") ~= nil, "a console line says so")
   S.lib.macros.set_target(1, 1, "reverb_mix", 0, 1)
   context.clock.run_for(0.2)
   assert_equal(h.file_text(live_path), bad, "not written over after a change")
   cleanup()
   assert_equal(h.file_text(live_path), bad, "nor at cleanup")
+  local lines = 0
+  for _, line in ipairs(context.printed) do
+    if line:find("targets will not be saved", 1, true) then lines = lines + 1 end
+  end
+  assert_equal(lines, 1, "one console line says saves are off")
 end)
 
 test("a damaged live file that is set aside loads empty and saves normally", function()
