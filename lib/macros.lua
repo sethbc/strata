@@ -168,12 +168,11 @@ return function(S)
   end
 
   -- The matrix sums a fast destination's extras into its setFastOffset
-  -- (lib/matrix.lua); without a matrix a fast target does nothing. Handed
-  -- over at once: the hand-over reaches no engine, so it takes no slot of
-  -- the LFOs' round robin (#636), and the matrix's step sends the sum
+  -- (lib/matrix.lua, included after this module, so read at each call).
+  -- Handed over at once: the hand-over reaches no engine, so it takes no
+  -- slot of the LFOs' round robin (#636), and the matrix's step sends the sum
   local function set_fast_extra(m, id, value)
-    local matrix = S.lib.matrix
-    if matrix and matrix.set_fast_extra then matrix.set_fast_extra(source_key(m), id, value) end
+    S.lib.matrix.set_fast_extra(source_key(m), id, value)
   end
 
   local function send_target(id) send_param_to_engine(id, params:get(id)) end
