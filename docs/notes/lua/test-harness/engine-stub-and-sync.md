@@ -35,13 +35,13 @@ Comments:
 - An unterminated string, symbol or block comment is an error naming its line (it would otherwise swallow the rest of the file).
 
 The spec also holds:
-- `bufferSeconds` (its initial value), `standardBufferSeconds`, `bufferStateStride`, `numModSlots`;
+- `bufferSeconds` (its initial value), `standardBufferSeconds`, `bufferStateStride`, `bufferStateLoads` (#578), `numModSlots`;
 - each SynthDef's numeric argument defaults (`synthdef_defaults`);
 - `fx_commands`: the commands whose body sets an FX synth (`synths[\key] = Synth(\def, ...)`) through `this.setSynth(\key, \control, msg[i], ...)`, as a list of `{argument, synthdef, control}` read from every such `setSynth` call in the body.
 
 Tests built on it:
 - One sends every `strata_fx` param's default through `send_param_to_engine` and checks that each FX command then carries its SynthDef's defaults (the script never bangs its params, so until a param changes the engine plays those).
-- Another checks that `numVoices`, `numBuffers`, `bufferStateStride` and `numModSlots` equal `NUM_VOICES`, `NUM_BUFFERS`, `BUFFER_STATE_STRIDE` and `NUM_MOD_SLOTS` (and `numModSlots` the `modBus1..N` count), a third that `standardBufferSeconds` equals `STANDARD_BUFFER_SECONDS` (the running length is a tier value, `S.performance.buffer_seconds`), and a fourth that `numFastDestinations` and `fastModNoteSlots` equal `NUM_FAST_DESTINATIONS` (5) and `FAST_MOD_NOTE_SLOTS` (1).
+- Another checks that `numVoices`, `numBuffers`, `bufferStateStride`, `bufferStateLoads` and `numModSlots` equal `NUM_VOICES`, `NUM_BUFFERS`, `BUFFER_STATE_STRIDE`, `BUFFER_STATE_LOADS` and `NUM_MOD_SLOTS` (and `numModSlots` the `modBus1..N` count), a third that `standardBufferSeconds` equals `STANDARD_BUFFER_SECONDS` (the running length is a tier value, `S.performance.buffer_seconds`), and a fourth that `numFastDestinations` and `fastModNoteSlots` equal `NUM_FAST_DESTINATIONS` (5) and `FAST_MOD_NOTE_SLOTS` (1).
 - The engine stub reads the tier from the test's `performance_active.data` (`stubs.active_buffer_seconds`, which validates it with the script's own `parse_active_text` from `lib/performance.lua`, so a file Lua rejects runs standard in the stub too): `recordBuffer` may not ask for more seconds than a slot holds on it. `h.write_performance_active(fields)` writes that file for the next `load_strata` (fields as the engine writes them, or a string as it is; none: no file, so Lua runs standard and prints its one line). `norns.platform` is 0 (unknown) unless a test sets it.
 
 ## Sync check

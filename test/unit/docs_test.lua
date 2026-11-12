@@ -220,16 +220,20 @@ test("the engine's shared constants equal strata.lua's (#25)", function()
   assert_equal(engine_spec.num_mod_slots, local_value("NUM_MOD_SLOTS"), "numModSlots = NUM_MOD_SLOTS")
   assert_equal(engine_spec.num_mod_slots, engine_spec.mod_slots, "numModSlots = the modBus1..N controls")
   -- only buffer_state_changed, a local function, reads BUFFER_STATE_STRIDE
-  -- (declared in exactly one of the script's files)
-  local stride
+  -- and BUFFER_STATE_LOADS (#578; each declared in exactly one of the
+  -- script's files)
+  local declared = {}
   for _, source in ipairs(read_lua_sources()) do
-    local found = tonumber(source.text:match("\nlocal BUFFER_STATE_STRIDE%s*=%s*(%d+)"))
-    if found then
-      assert_equal(stride, nil, "BUFFER_STATE_STRIDE is declared once")
-      stride = found
+    for _, name in ipairs({ "BUFFER_STATE_STRIDE", "BUFFER_STATE_LOADS" }) do
+      local found = tonumber(source.text:match("\nlocal " .. name .. "%s*=%s*(%d+)"))
+      if found then
+        assert_equal(declared[name], nil, name .. " is declared once")
+        declared[name] = found
+      end
     end
   end
-  assert_equal(engine_spec.buffer_state_stride, stride, "bufferStateStride = BUFFER_STATE_STRIDE")
+  assert_equal(engine_spec.buffer_state_stride, declared.BUFFER_STATE_STRIDE, "bufferStateStride = BUFFER_STATE_STRIDE")
+  assert_equal(engine_spec.buffer_state_loads, declared.BUFFER_STATE_LOADS, "bufferStateLoads = BUFFER_STATE_LOADS")
 end)
 
 -- #459: the engine packs bufferLoadFailed, bufferSaveResult and recordState
@@ -322,7 +326,7 @@ test("the engine's event polls decode in Lua's handlers (#459)", function()
   context.polls.fire("recordState", record_state_value(2, 6, 3))
   assert_equal(buffers[3].recording, false, "recordState: canceled")
   -- bufferLoadFailed: slot 5's second load failed, its third emptied the slot
-  load_buffer(5, "/tmp/a.wav"); context.polls.fire("bufferState", 4004)
+  load_buffer(5, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(5, 1, 4))
   load_buffer(5, "/tmp/bad.wav")
   context.polls.fire("bufferLoadFailed", load_failed_value(4, 2, false))
   assert_equal(buffers[5].name, "a.wav", "bufferLoadFailed: load 2 undone")
@@ -330,7 +334,7 @@ test("the engine's event polls decode in Lua's handlers (#459)", function()
   context.polls.fire("bufferLoadFailed", load_failed_value(4, 3, true))
   assert_equal(buffers[5].name, "empty", "bufferLoadFailed: load 3 emptied the slot")
   -- bufferSaveResult: slot 6's first save written, its second failed
-  load_buffer(6, "/tmp/c.wav"); context.polls.fire("bufferState", 5004)
+  load_buffer(6, "/tmp/c.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(6, 1, 4))
   assert_true(save_buffer(6))
   context.polls.fire("bufferSaveResult", save_result_value(5, 1, false))
   assert_equal(S.lib.ui_flash.text("hints"), "saved buf 6", "bufferSaveResult: save 1 written")

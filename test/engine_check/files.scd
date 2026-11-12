@@ -16,7 +16,7 @@ var getControl = { arg synth, control; h.getControl(synth, control) };
 var bufferSample = { arg buffer, frame; h.bufferSample(buffer, frame) };
 var pollMessages = h.pollMessages, scratchRoot = h.tempDir;
 var stereoPath = h.stereoPath, longPath = h.longPath, textPath = h.textPath;
-var before, savePath, file, frames, data, info, longWritePath, writeStart, writeSeconds, rampValue, rampPeriod, reports;
+var before, savePath, file, frames, data, info, longWritePath, writeStart, writeSeconds, rampValue, rampPeriod, reports, lengthValue;
 
 // bufferSaveResult reports received so far, each decoded as [slot index,
 // the slot's save number, failed]: value = (save * 2 + failed) * numBuffers + slot index
@@ -386,11 +386,13 @@ file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2)
 file.openWrite(longWritePath);
 h.writePeriodicSeconds(file, rampPeriod, 16, server.sampleRate.asInteger);
 file.close;
-info = pollMessages.size;   // slot 8 reported 7016 before (16 s at 22.05 kHz): only later reports count
+info = pollMessages.size;   // slot 8 reported 16 s before (at 22.05 kHz): only later reports count
 command.(\loadBuffer, 7, longWritePath, 0); 1.0.wait; server.sync;
 check.(engine.bufferFrames[7] == frames, "a 16 s file at the server rate fills slot 8");
-check.(waitFor.({ pollMessages.copyToEnd(info).any({ arg msg; msg[2] == 7016 }) }),
-    "slot 8 holding 16 s reports 7016 through bufferState");
+// (its load number's thousands, #578: ((loads % 7) * 9 + 7) * 1000, then 16 s)
+lengthValue = ((((engine.bufferLoads[7] % 7) * 9) + 7) * 1000) + 16;
+check.(waitFor.({ pollMessages.copyToEnd(info).any({ arg msg; msg[2] == lengthValue }) }),
+    "slot 8 holding 16 s reports % through bufferState".format(lengthValue));
 savePath = scratchRoot +/+ "long/saved.wav";
 reports = saveResults.value.size;
 writeStart = Main.elapsedTime;

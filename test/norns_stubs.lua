@@ -237,7 +237,8 @@ end
 --   buffer_seconds,           var <>bufferSeconds = N; (its initial value: the
 --                             performance area sets the tier's at alloc)
 --   standard_buffer_seconds,  standardBufferSeconds { ^N } (the standard tier's)
---   buffer_state_stride       bufferStateStride { ^N }
+--   buffer_state_stride,      bufferStateStride { ^N }, bufferStateLoads { ^N }:
+--   buffer_state_loads        the bufferState poll's stride and its load numbers (#578)
 --   num_mod_slots             var <numModSlots = N; (the slots the crossmod commands accept)
 --   num_fast_destinations,    numFastDestinations { ^N }, fastModNoteSlots { ^N },
 --   fast_mod_note_slots,      numFastLfos { ^N }, numFastLfoShapes { ^N }: 3.4's
@@ -412,6 +413,7 @@ function stubs.engine_spec_from_source(source)
     buffer_seconds = engine_number(source, "bufferSeconds"),
     standard_buffer_seconds = engine_number(source, "standardBufferSeconds"),
     buffer_state_stride = engine_number(source, "bufferStateStride"),
+    buffer_state_loads = engine_number(source, "bufferStateLoads"),
     num_mod_slots = engine_number(source, "numModSlots"),
     -- 3.4's fast modulation (StrataModulation.sc)
     num_fast_destinations = engine_number(source, "numFastDestinations"),
@@ -555,6 +557,7 @@ function stubs.engine_spec_problems(spec)
   need(spec.buffer_seconds, "var <>bufferSeconds = N;")
   need(spec.standard_buffer_seconds, "standardBufferSeconds { ^N }")
   need(spec.buffer_state_stride, "bufferStateStride { ^N }")
+  need(spec.buffer_state_loads, "bufferStateLoads { ^N }")
   need(spec.num_mod_slots, "var <numModSlots = N;")
   need(spec.num_fast_destinations, "numFastDestinations { ^N }")
   need(spec.fast_mod_note_slots, "fastModNoteSlots { ^N }")
@@ -2638,7 +2641,7 @@ end
 local SYSTEM_POLLS = { "cpu_peak", "cpu_avg", "amp_in_l", "amp_in_r", "amp_out_l", "amp_out_r",
   "pitch_in_l", "pitch_in_r" }
 
-local function make_poll(engine_polls)
+local function make_poll(engine_polls, engine_spec)
   local poll = { polls = {} }
   local function register(name)
     local entry = { name = name, callback = nil, time = 0.25, running = false }
@@ -2665,6 +2668,28 @@ local function make_poll(engine_polls)
     assert(entry, "no poll named " .. tostring(name))
     if type(value) == "number" then value = value + 0.0 end
     if entry.running and entry.callback then entry.callback(value) end
+  end
+
+  -- test helper (no norns counterpart): the value the engine's bufferState
+  -- poll sends for Lua slot `slot` (1..numBuffers; numBuffers + 1 is the
+  -- slots' length report, load number 0) when the engine has received
+  -- `load_number` loadBuffer commands for it, holding `seconds`. Built as
+  -- the engine's bufferStateReport builds it, from the engine's own
+  -- constants (bufferStateStride, numBuffers, bufferStateLoads), so no test
+  -- hand-computes the encoding: ((load_number % bufferStateLoads) *
+  -- (numBuffers + 1) + slot index) * bufferStateStride + seconds
+  function poll.buffer_state_value(slot, load_number, seconds)
+    local spec = assert(engine_spec, "buffer_state_value needs the engine spec")
+    local slots, stride = spec.num_buffers, spec.buffer_state_stride
+    local loads = spec.buffer_state_loads
+    assert(type(slot) == "number" and slot == math.floor(slot) and slot >= 1 and slot <= slots + 1,
+      "buffer_state_value: slot 1.." .. (slots + 1) .. ", got " .. tostring(slot))
+    assert(type(load_number) == "number" and load_number == math.floor(load_number) and load_number >= 0,
+      "buffer_state_value: a load number from 0, got " .. tostring(load_number))
+    assert(slot <= slots or load_number == 0, "buffer_state_value: the length report names no load")
+    assert(type(seconds) == "number" and seconds >= 0 and seconds < stride,
+      "buffer_state_value: seconds 0.." .. stride .. ", got " .. tostring(seconds))
+    return ((load_number % loads) * (slots + 1) + slot - 1) * stride + seconds
   end
 
   return poll
@@ -3081,7 +3106,7 @@ function stubs.install(options)
   context.textentry = {}
   context.textentry.library = require("stub_textentry")(context.textentry)
   context.fileselect = make_fileselect()
-  context.polls = make_poll(options.engine_polls)
+  context.polls = make_poll(options.engine_polls, options.engine_spec)
   context.musicutil = make_musicutil()
   -- _menu.mode is true while the norns menu (K1) owns the keys and screen;
   -- in play mode _menu.key and norns.encoders.callback route the hardware

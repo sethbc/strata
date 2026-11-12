@@ -188,7 +188,7 @@ test("fill_empty leaves a named load the engine has not reported yet", function(
     "g.wav", "h.wav", "i.wav" })
   files.note_chosen(folder .. "x.wav")
   load_buffer(2, "/elsewhere/slow.wav")
-  context.set_time(util.time() + 1.1); context.polls.fire("bufferState", 1000)
+  context.set_time(util.time() + 1.1); context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 0))
   assert_equal(local_value("S").lib.buffers.status(2), "unsettled", "named, no length reported")
   context.clear_engine_calls()
   assert_equal(files.fill_empty(), 7, "the seven other slots")
@@ -259,7 +259,7 @@ test("filling eight free slots writes buffers.data once (#566)", function()
     return real_write(path, value)
   end
   assert_equal(files.fill_empty(), 8)
-  for slot = 1, 8 do context.polls.fire("bufferState", (slot - 1) * 1000 + 1) end
+  for slot = 1, 8 do context.polls.fire("bufferState", context.polls.buffer_state_value(slot, 1, 1)) end
   context.clock.run_for(0.5)
   S.lib.data_files.write = real_write
   assert_equal(count, 1, "one write for eight loads")

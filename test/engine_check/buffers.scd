@@ -20,11 +20,15 @@ var scratchRoot = h.tempDir;
 var stereoPath = h.stereoPath, monoPath = h.monoPath, longPath = h.longPath, textPath = h.textPath;
 var before, scratchFile, file, frames, info, tone, probe, peakBus, readPeak, duringPeak, afterPeak;
 
-// bufferState poll value: slot index * 1000 + valid seconds
-// (seconds below 1000, so slot * 1000 + seconds names one slot); checked
-// over the poll's values with Signal arithmetic (h.pollValueNear), never a
-// function per message: the run's messages grow all run long (#131)
-var bufferStateSeen = { arg slot, seconds; h.pollValueNear(\bufferState, (slot * 1000) + seconds, 0.011) };
+// bufferState poll value: ((the slot's loads % 7) * 9 + slot index) * 1000
+// + valid seconds (#578; seconds below 1000, so the thousands name one
+// slot and its load number); stateBase is a slot's thousands on an engine
+// (h.engine unless given) now, which the reports since its last load
+// carry. Checked over the poll's values with Signal arithmetic
+// (h.pollValueNear), never a function per message: the run's messages
+// grow all run long (#131)
+var stateBase = { arg slot, target; target = target ? engine; (((target.bufferLoads[slot] % 7) * 9) + slot) * 1000 };
+var bufferStateSeen = { arg slot, seconds, target; h.pollValueNear(\bufferState, stateBase.(slot, target) + seconds, 0.011) };
 // bufferState poll values received so far
 var bufferStateValues = { h.pollValues(\bufferState) };
 // bufferLoadFailed poll values received so far
@@ -519,7 +523,7 @@ var checkLongSlotCommands = { arg other, path60;
     loaded = waitFor.({ other.bufferFrames[0] == (60 * rate) }, 10)
         and: { (bufferSample.(other.buffersL[0], (59.5 * rate).asInteger) - 0.6).abs < 0.001 }
         and: { (bufferSample.(other.buffersR[0], (10.5 * rate).asInteger) + 0.11).abs < 0.001 }
-        and: { waitFor.({ bufferStateSeen.(0, 60) }) };
+        and: { waitFor.({ bufferStateSeen.(0, 60, other) }) };
     cmd.(\recordBuffer, 1, 20, 1.0, 0, 0, 0, 0, 0); 0.3.wait; server.sync;
     duration = other.recordSynths[1] !? { arg synth; getControl.(synth, \frames) / rate };
     cmd.(\stopRecord, 1); 0.5.wait; server.sync;
@@ -712,7 +716,7 @@ check.(synthNames.(context.xg).size == before, "recording into a slot a voice is
 check.(waitFor.({ bufferStateSeen.(2, 0.3) }), "the bufferState poll reports the recorded seconds");
 check.(bufferStateValues.value.notEmpty and: { bufferStateValues.value.every({ arg value; value.isKindOf(Float) }) },
     "bufferState is sent as a float value poll (matron's /poll/value is typed if)");
-check.(waitFor.({ (0..7).every({ arg slot; h.pollValueNear(\bufferState, (slot * 1000) + 499.95, 500) }) }),
+check.(waitFor.({ (0..7).every({ arg slot; h.pollValueNear(\bufferState, stateBase.(slot) + 499.95, 500) }) }),
     "the periodic bufferState poll reports every slot");
 scratchFile = engine.scratchDir +/+ "buf3.wav";
 check.(waitFor.({ File.exists(scratchFile) }), "a completed recording writes the scratch take buf3.wav");
@@ -947,19 +951,98 @@ checkLongSlots.value;
 // 128-frame single cycle is 0.0027 s, which rounds to 0.00: Lua would take
 // it as empty); an empty slot reports 0
 {
-    var slot = 5, path = scratchRoot +/+ "buffers-single-cycle.wav", value, emptyValue;
+    var slot = 5, path = scratchRoot +/+ "buffers-single-cycle.wav", value, emptyValue, emptyBase;
     h.writeTestFile(path, server.sampleRate.asInteger, 128, [0.5, -0.5]);
     command.(\clearBuffer, slot); server.sync;
     emptyValue = engine.bufferStateValue(slot);
+    emptyBase = stateBase.(slot);
     command.(\loadBuffer, slot, path, 0);
     waitFor.({ engine.bufferFrames[slot] == 128 });
     0.1.wait; server.sync;
     value = engine.bufferStateValue(slot);
-    check.((engine.bufferFrames[slot] == 128) and: { (value - ((slot * 1000) + 0.01)).abs < 0.001 }
-        and: { h.pollValueNear(\bufferState, (slot * 1000) + 0.01, 0.002) } and: { emptyValue == (slot * 1000) },
+    check.((engine.bufferFrames[slot] == 128) and: { (value - (stateBase.(slot) + 0.01)).abs < 0.001 }
+        and: { h.pollValueNear(\bufferState, stateBase.(slot) + 0.01, 0.002) } and: { emptyValue == emptyBase },
         "buffers: a slot holding 128 frames reports 0.01 s, an empty one 0 (% frames: %, empty: %)".format(
             engine.bufferFrames[slot], value, emptyValue));
     command.(\clearBuffer, slot); server.sync;
     File.delete(path);
+}.value;
+
+// #578: every bufferState report names the slot's load it was sent after:
+// ((loads % 7) * 9 + slot index) * 1000 + seconds, loads being the
+// loadBuffer commands the engine has received for the slot (counted from
+// 1, as Lua's load_buffer counts them), whatever change the report is of.
+// Slot 7 (index 6) is first brought to a multiple of 7 loads with missing
+// files (each rejected at once, with no bufferState report), so every
+// value below is a literal: two quick loads (the first one's length is
+// never reported), a failed load (the periodic report then names it), a
+// clear and a recording (the slot's load number), and the seventh load's
+// wrap to 0. The 32-bit float keeps the largest value to the hundredth.
+{
+    var slot = 6, missing = scratchRoot +/+ "missing.wav", start, values, near, cycle, periodic, top;
+    var poll = engine.bufferStatePoll;
+    // the slot's bufferState values received since `start`, consecutive repeats once
+    var slotValues = { arg since;
+        var found = List.new(16);
+        h.pollMessages.array.copyRange(since, h.pollMessages.size - 1).do({ arg msg;
+            var value = msg[2];
+            if ((msg[1] == poll.index) and: { ((value / 1000).floor.asInteger % 9) == slot }
+                and: { found.isEmpty or: { found.last != value } }) { found.add(value) };
+        });
+        found.asArray
+    };
+    // [load number, seconds] of a value, as Lua decodes it (the hundredths rounded)
+    var decode = { arg value; var cell = (value / 1000).floor.asInteger; [cell div: 9, ((value - (cell * 1000)) * 100).round / 100] };
+    // true when each decoded value names the load and the hundredth wanted
+    var decodes = { arg got, wanted; (got.size == wanted.size) and: { got.every({ arg value, index;
+        var pair = decode.(value); (pair[0] == wanted[index][0]) and: { (pair[1] - wanted[index][1]).abs < 1e-9 } }) } };
+    // the index the next messages take, once every message sent so far has
+    // arrived (a periodic repeat of the slot's previous value must not open
+    // the next window)
+    var from = { 0.05.wait; server.sync; h.pollMessages.size };
+    near = { arg got, wanted; (got.size == wanted.size) and: { got.every({ arg value, index; (value - wanted[index]).abs < 0.004 }) } };
+    // one whole periodic cycle, stepped now (requestValue runs the poll's function)
+    cycle = { (engine.numBuffers + 1).collect({ poll.requestValue; poll.value }) };
+    command.(\clearBuffer, slot); server.sync;
+    ((7 - (engine.bufferLoads[slot] % 7)) % 7).do({ command.(\loadBuffer, slot, missing, 0) });
+    // two quick loads: 0 s for each as it takes effect, then the second's 0.1 s
+    start = from.value;
+    command.(\loadBuffer, slot, stereoPath, 0);
+    command.(\loadBuffer, slot, monoPath, 0);
+    waitFor.({ near.(slotValues.(start), [15000.0, 24000.0, 24000.1]) });
+    values = slotValues.(start);
+    check.(near.(values, [15000.0, 24000.0, 24000.1]) and: { decodes.(values, [[1, 0], [2, 0], [2, 0.1]]) },
+        "buffers: two quick loads report 0 s as load 1, then 0 s and 0.1 s as load 2, never load 1's 0.5 s (#578; got % = %)".format(
+            values, values.collect(decode)));
+    // a failed load: the slot's next periodic report names it (Lua counted it too)
+    command.(\loadBuffer, slot, missing, 0);
+    server.sync;
+    periodic = cycle.value.detect({ arg value; ((value / 1000).floor.asInteger % 9) == slot });
+    check.(periodic.notNil and: { (periodic - 33000.1).abs < 0.004 },
+        "buffers: after a failed third load the periodic report names load 3 with the slot's 0.1 s (#578; got %)".format(periodic));
+    // a clear, then a replace take: each report names the slot's load (3)
+    start = from.value;
+    command.(\clearBuffer, slot);
+    command.(\recordBuffer, slot, 0.1, 1.0, 0, 0, 0, 0, 0, 0);
+    waitFor.({ near.(slotValues.(start), [33000.0, 33000.1]) });
+    values = slotValues.(start);
+    check.(near.(values, [33000.0, 33000.1]),
+        "buffers: a clear and a recording report the slot's load number, 3 (#578; got %)".format(values));
+    // loads 4 to 6 fail, the seventh takes the number back to 0
+    3.do({ command.(\loadBuffer, slot, missing, 0) });
+    start = from.value;
+    command.(\loadBuffer, slot, stereoPath, 0);
+    waitFor.({ near.(slotValues.(start), [6000.0, 6000.5]) });
+    values = slotValues.(start);
+    check.(near.(values, [6000.0, 6000.5]) and: { engine.bufferLoads[slot] % 7 == 0 },
+        "buffers: the seventh load's reports name load 0 (#578; got %)".format(values));
+    // the largest value, slot index 7 at load number 6 and 300 s: 61300
+    top = [61000.0, 61000.01, 61150.37, 61299.99, 61300.0];
+    values = FloatArray.newFrom(top).asArray;
+    check.(values.every({ arg value, index; (value - top[index]).abs < 0.002 })
+        and: { decodes.(values, [[6, 0], [6, 0.01], [6, 150.37], [6, 299.99], [6, 300]]) },
+        "buffers: the largest bufferState value, 61300, keeps its load number and 0.01 s in a 32-bit float (#578; got %)".format(
+            values.collect(decode)));
+    command.(\clearBuffer, slot); server.sync;
 }.value;
 }

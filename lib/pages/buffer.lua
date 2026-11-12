@@ -872,10 +872,17 @@ return function(S)
       "café_crème_très_longue.wav", "no_extension_but_long", "drone", "field_rec.flac"},
   }
 
+  -- The engine's bufferState report of the slot holding `seconds`, sent
+  -- after every load the slot was sent (#578: a report names the slot's
+  -- load; the test stub builds the value)
+  function LAYOUT.report(context, slot, seconds)
+    context.polls.fire("bufferState", context.polls.buffer_state_value(slot, S.buffers[slot].loads_sent, seconds))
+  end
+
   function LAYOUT.load_long_names(context)
     for slot = 1, NUM_BUFFERS do
       load_buffer(slot, "/tmp/" .. LAYOUT.long_names[(slot - 1) % #LAYOUT.long_names + 1])
-      context.polls.fire("bufferState", (slot - 1) * 1000 + S.performance.buffer_seconds)
+      LAYOUT.report(context, slot, S.performance.buffer_seconds)
     end
   end
 
@@ -901,7 +908,7 @@ return function(S)
   -- Every slot reports `seconds` (load_long_names, then the new length)
   function LAYOUT.slots_report(context, seconds)
     LAYOUT.load_long_names(context)
-    for slot = 1, NUM_BUFFERS do context.polls.fire("bufferState", (slot - 1) * 1000 + seconds) end
+    for slot = 1, NUM_BUFFERS do LAYOUT.report(context, slot, seconds) end
   end
 
   -- The engine's bufferSaveResult report of the slot's newest save
@@ -926,7 +933,7 @@ return function(S)
         .. table.concat(values, " ") .. "\n")
       file:close()
     end
-    context.polls.fire("bufferState", 12)
+    LAYOUT.report(context, 1, 12)
     context.clock.run_for(0.2)
   end
 
@@ -936,7 +943,7 @@ return function(S)
     local path = "/tmp/" .. LAYOUT.long_names[2]
     context.audio.files[path] = {2, 48000 * seconds, 48000}
     load_buffer(1, path)
-    context.polls.fire("bufferState", S.performance.buffer_seconds)
+    LAYOUT.report(context, 1, S.performance.buffer_seconds)
     S.lib.buffers.set_start(1, start)
     S.buffer_page.field = 10
   end
@@ -1036,7 +1043,7 @@ return function(S)
     end},
     {name = "a recording at 1:05 (high, 300 s)", setup = function(context)
       LAYOUT.as_300_s_tier(); LAYOUT.slots_report(context, 299.4)
-      context.polls.fire("bufferState", 1065)   -- slot 2 holds 1:05
+      LAYOUT.report(context, 2, 65)              -- slot 2 holds 1:05
       record_buffer(1)                           -- slot 1 records (for the default 8 s)
       LAYOUT.voices_on_slot(2, NUM_VOICES); S.buffer_page.slot = 2
       S.buffer_page.field = 3; params:set("record_duration", 65)

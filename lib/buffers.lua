@@ -15,8 +15,12 @@
 -- and recording timers) and the "buffer slots" invariant.
 
 -- At the start of a line (outside the constructor): a test finds the
--- stride by matching this line in the script's sources
-local BUFFER_STATE_STRIDE = 1000  -- bufferState value = slot index * 1000 + valid seconds (engine bufferStateStride)
+-- stride and the load numbers by matching these lines in the script's
+-- sources. bufferState value = (load number * (NUM_BUFFERS + 1) + slot
+-- index) * BUFFER_STATE_STRIDE + valid seconds, the load number being the
+-- slot's loads modulo BUFFER_STATE_LOADS (#578, buffer_state_changed)
+local BUFFER_STATE_STRIDE = 1000  -- engine bufferStateStride
+local BUFFER_STATE_LOADS = 7      -- engine bufferStateLoads
 
 return function(S)
   local M = {}
@@ -697,8 +701,23 @@ return function(S)
     buffer_display_changed()
   end
 
-  -- bufferState poll: one slot per message, slot index * 1000 + seconds. It
-  -- also settles a take or load awaiting the engine (confirm_since set,
+  -- bufferState poll: one slot per message, (load number * (NUM_BUFFERS +
+  -- 1) + slot index) * BUFFER_STATE_STRIDE + seconds (#578). The load
+  -- number is the loadBuffer commands the engine had received for the slot
+  -- when it sent the report, modulo BUFFER_STATE_LOADS, whatever change the
+  -- report is of; load_buffer counts the same commands (loads_sent). A
+  -- report with another number was sent before the engine had the slot's
+  -- newest load: it tells what that load replaces, so it is ignored, and
+  -- two quick loads never show the first one's length or status. A clear,
+  -- a recording or a failed load sent since reaches the engine after that
+  -- load, so its reports (and the periodic ones after it) carry its number.
+  -- More than BUFFER_STATE_LOADS loads of a slot in flight wrap the number:
+  -- an older report can then pass, as every report did before (the
+  -- awaiting_zero and check rules still apply); the slot and the seconds
+  -- never depend on it. Slot index NUM_BUFFERS is the slots' length, which
+  -- names no load (number 0). The seconds are rounded to the hundredth the
+  -- engine sent: a 32-bit float keeps the largest value, 61300, to 2^-8 s.
+  -- It also settles a take or load awaiting the engine (confirm_since set,
   -- settle_buffer_slot), on any report, repeated or not: audio settles it at
   -- once, 0 s only BUFFER_SETTLE.confirm_seconds after the change. A take or
   -- load that settled empty (a periodic 0 before a slow take or file read
@@ -709,16 +728,20 @@ return function(S)
   -- taking effect (its read then settles as any load's), or, over an empty
   -- slot, its new length.
   local function buffer_state_changed(value)
-    local engine_slot = math.floor(value / BUFFER_STATE_STRIDE)
-    local slot = engine_slot + 1
+    local cell = math.floor(value / BUFFER_STATE_STRIDE)
+    local engine_slot = cell % (NUM_BUFFERS + 1)
+    local load_number = math.floor(cell / (NUM_BUFFERS + 1))
+    local seconds = math.floor((value - cell * BUFFER_STATE_STRIDE) * 100 + 0.5) / 100
     -- slot index NUM_BUFFERS: the engine's slot length, not a slot (#153)
     if engine_slot == NUM_BUFFERS then
-      S.lib.performance.engine_slot_seconds(value - engine_slot * BUFFER_STATE_STRIDE)
+      if load_number == 0 then S.lib.performance.engine_slot_seconds(seconds) end
       return
     end
+    local slot = engine_slot + 1
     if not valid_buffer_slot(slot) then return end
-    local seconds = value - engine_slot * BUFFER_STATE_STRIDE
     local buffer = S.buffers[slot]
+    -- sent before the engine had the slot's newest load (#578)
+    if load_number ~= buffer.loads_sent % BUFFER_STATE_LOADS then return end
     local changed = buffer.seconds ~= seconds
     local length_changed = changed
     buffer.seconds = seconds

@@ -11,6 +11,12 @@ var check = { arg condition, message; h.check(condition, message) };
 var command = { arg name ... args; h.command(name, *args) };
 var waitFor = { arg condition, timeout = 3; h.waitFor(condition, timeout) };
 var storedPeaks = { arg target, slot; target.areaState[\waveform][\peaks][slot] };
+// bufferState (#578): the slot index a value names, ((loads % bufferStateLoads)
+// * (numBuffers + 1) + slot index) being its thousands, and a slot's
+// thousands now, which its reports carry until its next load
+var stateSlot = { arg value; (value / engine.bufferStateStride).floor.asInteger % (engine.numBuffers + 1) };
+var stateBase = { arg slot;
+    (((engine.bufferLoads[slot] % engine.bufferStateLoads) * (engine.numBuffers + 1)) + slot) * engine.bufferStateStride };
 
 // A peaks file's lines as an Event of key -> the line's other words, or nil
 var readPeaksFile = { arg path;
@@ -205,7 +211,7 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     command.(\clearBuffer, slot); server.sync;
     if (File.exists(peaksPath)) { File.delete(peaksPath) };
     watcher = OSCFunc({ arg msg;
-        if ((msg[1] == pollIndex) and: { msg[2] > ((slot * 1000) + 0.01) } and: { msg[2] < ((slot + 1) * 1000) } and: { found.isNil }) {
+        if ((msg[1] == pollIndex) and: { stateSlot.(msg[2]) == slot } and: { (msg[2] % 1000) > 0.01 } and: { found.isNil }) {
             found = File.exists(peaksPath);
         };
     }, '/poll/value');
@@ -299,7 +305,7 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     command.(\loadBuffer, slot, h.monoPath, 0);
     waitFor.({ engine.bufferFrames[slot] == 4410 });
     0.1.wait; server.sync;
-    check.((engine.bufferFrames[slot] == 4410) and: { h.pollValueNear(\bufferState, (slot * 1000) + seconds, 0.011) }
+    check.((engine.bufferFrames[slot] == 4410) and: { h.pollValueNear(\bufferState, stateBase.(slot) + seconds, 0.011) }
         and: { PathName(peaksPath).isFolder } and: { (dir +/+ "*.peaks.*.part").pathMatch.isEmpty },
         "waveform: a failed peaks write still reports the length (% frames)".format(engine.bufferFrames[slot]));
     ("rmdir " ++ peaksPath.shellQuote).systemCmd;
@@ -489,7 +495,7 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     0.1.wait; server.sync;
     fields = readPeaksFile.(engine.peaksPath(slot));
     check.(fields.notNil and: { fields[\rate] == ["22050"] } and: { fields[\frames] == ["11025"] }
-        and: { h.pollValueNear(\bufferState, (slot * 1000) + 0.5, 0.011) },
+        and: { h.pollValueNear(\bufferState, stateBase.(slot) + 0.5, 0.011) },
         "waveform: a file at another rate writes its own rate, so frames / rate equals the reported seconds (%)".format(fields));
     command.(\clearBuffer, slot); server.sync;
 }.value;

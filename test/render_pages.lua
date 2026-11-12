@@ -51,7 +51,7 @@ M.STATES = {
   end },
   { page = "BUFFER", name = "default", setup = function(context)
     load_buffer(1, "/tmp/strata-render-a-long-file-name.wav")
-    context.polls.fire("bufferState", 4)            -- buf 1 holds 4 s
+    context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))  -- buf 1 holds 4 s (its load 1)
   end },
   { page = "BUFFER", name = "recording", setup = function()
     params:set("v1_source", 2)                      -- voice 1 reads buf 1

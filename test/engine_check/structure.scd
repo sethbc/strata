@@ -212,7 +212,8 @@ var checkRollbackPolls = {
     h.commandTo(fresh, \loadBuffer, 0, h.stereoPath, 0);
     h.waitFor({ fresh.bufferFrames[0] > 0 }, 3);
     reports = (fresh.numBuffers + 1).collect({ CronePollRegistry.getPollFromName(\bufferState).instVarAt(\function).value });
-    slotOne = reports.detect({ arg value; value < fresh.bufferStateStride });
+    // slot index 0's report: its thousands are (load number * (numBuffers + 1) + 0) (#578)
+    slotOne = reports.detect({ arg value; ((value / fresh.bufferStateStride).floor.asInteger % (fresh.numBuffers + 1)) == 0 });
     h.freeEngine(failed[\engine]);
     h.freeEngine(fresh);
     server.sync;
@@ -223,7 +224,8 @@ var checkRollbackPolls = {
     held.do({ arg poll, index; if (running[index]) { poll.start } });
     restored = held.every({ arg poll; CronePollRegistry.getPollFromName(poll.name).index == poll.index });
     check.(left.isEmpty, "structure: alloc that raises leaves no poll of its own in norns' poll registry (#499; left: %)".format(left));
-    check.((slotOne !? { (slotOne - 0.5).abs < 0.01 }) == true,
+    // its own slot 1 after its one load: (1 * 9 + 0) * 1000 + 0.5 s (the dead engine's would read 0)
+    check.((slotOne !? { (slotOne - 9000.5).abs < 0.01 }) == true,
         "structure: the engine built after a failed one reports its own slots through bufferState (#499; slot 1 reads %)".format(slotOne));
     check.(restored and: { names.notEmpty } and: { names.asSet == declaredPolls.value },
         "structure: h.engine's polls are back at their indices (% of the engine's %)".format(names, declaredPolls.value.asArray));
