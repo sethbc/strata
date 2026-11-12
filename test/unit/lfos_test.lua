@@ -607,6 +607,56 @@ test("a 3.3 PSET sets every LFO param it cannot hold to its default, and a silen
   assert_equal(local_value("lfo_last_dest")[4], nil, "and LFO 4 holds nothing")
 end)
 
+-- A silent PSET read sets params without their actions: what an action
+-- would have done at once (a depth-0 restore, an engine LFO's stop) the
+-- next step does, once
+test("a silent PSET read that sets an on LFO's depth to 0 lets its destination go at the next step, once", function()
+  local context = load_strata(); finish_startup(context)
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "depth0.pset"
+  params:set("reverb_mix", 0.3)
+  hold_lfo(1, "rev mix", 0)                       -- on, at depth 0: the PSET holds that
+  params:write(path)
+  params:set(lfo_id(1, "depth"), 40)
+  lfo_step(context)
+  assert_equal(local_value("lfo_last_dest")[1], "reverb_mix", "LFO 1 holds rev mix")
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(params:get(lfo_id(1, "depth")), 0, "depth 0, silently")
+  assert_equal(params:get(lfo_id(1)), 1, "still on")
+  assert_equal(#context.calls_named("setReverb"), 0, "nothing sent by the silent read")
+  lfo_step(context)
+  local restores = context.calls_named("setReverb")
+  assert_equal(#restores, 1, "the next step restores rev mix")
+  assert_near(restores[1].args[1], 0.3, 1e-9, "to its stored value")
+  assert_equal(local_value("lfo_last_dest")[1], nil, "LFO 1 holds nothing")
+  context.clear_engine_calls()
+  lfo_step(context, 5)
+  assert_equal(#context.calls_named("setReverb"), 0, "and nothing is sent in the steps after it")
+end)
+
+test("a silent PSET read that turns an engine-run LFO off stops it at the next step, once", function()
+  local context = load_strata(); finish_startup(context)
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "off.pset"
+  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))   -- off: the PSET holds that
+  params:write(path)
+  params:set(lfo_id(2), 1)
+  assert_equal(#context.calls_named("setFastLfo"), 1, "on: the engine LFO starts")
+  lfo_step(context)
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(params:get(lfo_id(2)), 0, "off, silently")
+  assert_equal(#context.calls_named("stopFastLfo"), 0, "nothing sent by the silent read")
+  lfo_step(context)
+  local stops = context.calls_named("stopFastLfo")
+  assert_equal(#stops, 1, "the next step stops it")
+  assert_equal(stops[1].args[1], 1, "LFO 2")
+  context.clear_engine_calls()
+  lfo_step(context, 5)
+  assert_equal(#context.calls_named("stopFastLfo") + #context.calls_named("setFastLfo"), 0, "once")
+end)
+
 test("a format 5 scene's LFO fields migrate, and LFOs 4-6 default to off", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
