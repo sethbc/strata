@@ -749,6 +749,16 @@ return function(S)
     return editor ~= nil and (editor.alt_k2_at ~= nil or S.pattern_playing)
   end
 
+  -- The norns menu takes every key while it is open, so an ALT+K2 release
+  -- made there never reaches the editor: its press is forgotten as the menu
+  -- closes, or the owner would animate and its hint stay K2:reset until it
+  -- closed. (SEQ's own view needs nothing here: its hint and animates read
+  -- S.lib.ui_alt.k2_held(), whose press marks the menu's opening forgets)
+  function M.forget_editor_k2_press()
+    if editor then editor.alt_k2_at = nil end
+  end
+  S.register_menu_close(function() M.forget_editor_k2_press() end)
+
   editor_owner = {
     draw = function() if editor then draw_edit_view(views.editor) end end,
     hints = function(alt_held)
