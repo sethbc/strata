@@ -596,9 +596,22 @@ test("the hint row names each row's keys", function()
   assert_equal(hint_text(context), "K2:clear K3:dub")
   key(1, 0); redraw()
   assert_equal(hint_text(context), "K2:clear", "K1 let go while K2 is down: K2's hint alone")
-  key(2, 0)
-  S.lib.gestures.press(1)                     -- stopped: it still holds its loop
-  assert_equal(hints_on("source:gesture1", true), "K2:clear", "a stopped recorder clears, has no overdub")
+  key(2, 0)                                   -- the held press releases through alt_key_release: it clears
+  assert_equal(S.lib.gestures.state(1), "empty", "the hold cleared G1")
+  assert_equal(hints_on("source:gesture1", true), "", "emptied: no K2 and no K3 part")
+  S.lib.gestures.press(1)                     -- recording again (no move yet)
+  assert_equal(S.lib.gestures.state(1), "recording")
+  assert_equal(hints_on("source:gesture1", true), "K2:clear", "a recording recorder: the hold ends and empties it")
+  -- a recorder that holds a loop and is stopped: recorded, played, stopped
+  delta_with_detent("reverb_mix", 1); context.clock.run_for(0.5)
+  tap(3); tap(3)
+  assert_equal(S.lib.gestures.state(1), "stopped", "K3 played it, K3 again stopped it")
+  assert_equal(hints_on("source:gesture1"), "K3:play E3:quant")
+  assert_equal(hints_on("source:gesture1", true), "K2:clear", "stopped: the hold clears its loop; no overdub")
+  alt_k2_held(context); redraw()
+  assert_equal(hint_text(context), "K2:clear", "held on the stopped recorder")
+  key(2, 0); key(1, 0)
+  assert_equal(S.lib.gestures.state(1), "empty", "letting go cleared the stopped loop")
   -- a row that randomizes and has nothing to hold cancels; one that does
   -- nothing shows no K2 part, held or not
   place(S, "scatter_depth")
