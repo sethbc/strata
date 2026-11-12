@@ -149,18 +149,17 @@ return function(S)
     end
   end
 
-  -- Whether page 3's row y holds 3.4's keys (morph_key)
+  -- Whether page 3's row y holds the morph's keys (morph_key)
   local function morph_row(y)
-    return y == LAYOUT_256.recorder_row or y == LAYOUT_256.morph_row or LAYOUT_256.morph_scene_rows[y] ~= nil
+    return y == LAYOUT_256.morph_row or LAYOUT_256.morph_scene_rows[y] ~= nil
   end
 
-  -- Page 3's morph keys (presses): the recorders on row 4 columns 1-4, the
-  -- morph fader on row 7, A and B on rows 9 and 10 (scene x on column x)
-  local function morph_key(port, x, y, z)
+  -- Page 3's morph keys (presses): the morph fader on row 7, A and B on
+  -- rows 9 and 10 (scene x on column x). Row 4's recorders take presses
+  -- and releases, in grid_key_256
+  local function morph_key(x, y)
     local scene_param = LAYOUT_256.morph_scene_rows[y]
-    if y == LAYOUT_256.recorder_row then
-      grid_core.gesture_key(port, x, y, z, x)
-    elseif y == LAYOUT_256.morph_row then
+    if y == LAYOUT_256.morph_row then
       set_param_from_column("morph", x)
     elseif scene_param and x <= NUM_SCENES then
       params:set(scene_param, x)
@@ -239,8 +238,13 @@ return function(S)
     local modulation_rows = y >= LAYOUT_256.modulation_row and y < LAYOUT_256.macro_first_row + GRID_LAYOUT.fader_rows
     if page == PAGES.patterns and modulation_rows then
       -- Page 1, rows 9-13 (3.4): the recorders, mute, bank and macro keys
-      -- (presses and releases: a mute key acts at its release)
+      -- (presses and releases: a recorder or mute key acts at its release)
       modulation_key(port, x, y, z)
+      return
+    end
+    if page == PAGES.scenes and y == LAYOUT_256.recorder_row then
+      -- Page 3, row 4 (3.4): the recorders, which act at their release
+      grid_core.gesture_key(port, x, y, z, x)
       return
     end
     if z == 0 then return end  -- presses only
@@ -277,8 +281,8 @@ return function(S)
         -- Rows 5-6, columns 3-10: the sequence length (1-8, 9-16)
         params:set("scene_sequence_length", scene_length_at(x, y))
       elseif morph_row(y) then
-        -- Rows 4, 7, 9 and 10 (3.4): the recorders, the morph, A and B
-        morph_key(port, x, y, z)
+        -- Rows 7, 9 and 10 (3.4): the morph, A and B
+        morph_key(x, y)
       elseif y == 8 then
         grid_key_256_transport(x)
       elseif y == 16 then

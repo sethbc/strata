@@ -81,15 +81,12 @@ return function(S)
     return column, row
   end
 
-  -- Page 2, rows 1-7: rows 1-4 the voice's faders, or the shown bank's
-  -- macros while the port shows a bank (3.4)
+  -- Page 2, rows 1-7: rows 1-4 the port's shown faders (the voice's, or
+  -- the shown bank's macros while the port shows a bank, 3.4)
   local function fader_page_key(port, x, y)
     if y >= 1 and y <= FADER_ROWS then
-      if S.lib.grid_faders.shows_macros(port) then
-        set_param_from_column(S.lib.grid_faders.shown_macro_ids()[y], x)
-      else
-        set_fader_param(S.grid_voice_select, (S.param_page - 1) * FADER_ROWS + y, x)
-      end
+      local param_id = S.lib.grid_faders.shown_fader_ids(port)[y]
+      if param_id then set_param_from_column(param_id, x) end
     elseif y == LAYOUT_128H.fader_page_row and x == LAYOUT_128H.macro_page_column then
       S.lib.grid_faders.macro_page_key(port)
     elseif y == LAYOUT_128H.fader_page_row then
@@ -126,14 +123,21 @@ return function(S)
     end
   end
 
-  -- Page 3, rows 1-6: scene x (1-16) on column x of rows 1-3, length x on
-  -- row 4, the sequencer on row 5 column 1; 3.4's recorders on row 5
-  -- columns 13-16 and the morph fader on row 6. A recall goes through the
-  -- quantizer (design §8.9)
-  local function scene_page_key(port, x, y, z)
+  -- Page 3's recorder at (x, y), 1-4 on row 5 columns 13-16 (3.4), or nil
+  local function recorder_at(x, y)
     local recorder = x - LAYOUT_128H.recorder_first_column + 1
-    if y == LAYOUT_128H.recorder_row and recorder >= 1 then
-      grid_core.gesture_key(port, x, y, z, recorder)
+    if y ~= LAYOUT_128H.recorder_row or recorder < 1 or recorder > S.constants.NUM_GESTURES then return nil end
+    return recorder
+  end
+
+  -- Page 3, rows 1-6 (presses): scene x (1-16) on column x of rows 1-3,
+  -- length x on row 4, the sequencer on row 5 column 1; 3.4's recorders on
+  -- row 5 columns 13-16 (which take their releases too, in grid_key_128h)
+  -- and the morph fader on row 6. A recall goes through the quantizer
+  -- (design §8.9)
+  local function scene_page_key(port, x, y, z)
+    if recorder_at(x, y) then
+      grid_core.gesture_key(port, x, y, z, recorder_at(x, y))
       return
     elseif y == LAYOUT_128H.morph_row then
       set_param_from_column("morph", x)
@@ -179,12 +183,15 @@ return function(S)
   -- 16x8 grid layout (128 buttons horizontal)
   function grid_key_128h(port, x, y, z)
     local page = grid_core.page(port)
-    -- A release reaches only the positions: the position keys and the strip's
-    -- hold and store keys end on it
+    -- A release reaches only the positions (the position keys and the
+    -- strip's hold and store keys end on it) and page 3's recorders, which
+    -- act at their release (3.4)
     if z == 0 then
       if y ~= LAYOUT_128H.control_row and x >= 1 and x <= PAGES.position_cells then
         if page == PAGES.positions and y <= NUM_VOICES then
           S.lib.positions.grid_key(port, y, x, PAGES.position_cells, 0)
+        elseif page == PAGES.scenes and recorder_at(x, y) then
+          grid_core.gesture_key(port, x, y, 0, recorder_at(x, y))
         elseif page == PAGES.sources then
           local key = strip_key_of(x, y)
           if key then
@@ -222,16 +229,9 @@ return function(S)
   -- core's levels (fader_page_level, LEVELS' pick pair, lock_level)
   local function redraw_fader_page(port, grid_device)
     local levels = grid_core.LEVELS
-    if S.lib.grid_faders.shows_macros(port) then
-      for row, param_id in ipairs(S.lib.grid_faders.shown_macro_ids()) do
-        grid_redraw_fader_row(grid_device, row, param_id)
-      end
-    else
-      local ids = fader_param_ids(S.grid_voice_select)
-      for row = 1, FADER_ROWS do
-        local param_id = ids[(S.param_page - 1) * FADER_ROWS + row]
-        if param_id then grid_redraw_fader_row(grid_device, row, param_id) end
-      end
+    local ids = S.lib.grid_faders.shown_fader_ids(port)
+    for row = 1, FADER_ROWS do
+      if ids[row] then grid_redraw_fader_row(grid_device, row, ids[row]) end
     end
     for fader_page = 1, fader_page_count(S.grid_voice_select) do
       grid_device:led(fader_page, LAYOUT_128H.fader_page_row, S.lib.grid_faders.fader_page_level(fader_page))
@@ -363,10 +363,7 @@ return function(S)
   S.registry.grid_layouts["128h"] = {
     key = grid_key_128h, redraw = grid_redraw_128h, selects_grid_voice = true,
     strip_page = PAGES.sources,
-    shows_modulation = function(port)
-      local page = grid_core.page(port)
-      return page == PAGES.scenes or (page == PAGES.faders and S.lib.grid_faders.shows_macros(port))
-    end,
+    shows_modulation = function(port) return S.lib.grid_faders.shows_modulation(port) end,
   }
 
   return M

@@ -62,26 +62,19 @@ return function(S)
   M.LAYOUT = LAYOUT_128V
   local PAGES = S.constants.GRID_PAGES  -- the page numbers and position cells every layout shares
 
-  -- The fader index (into fader_param_ids) of column x on the faders page
-  local function fader_index(x)
-    return (S.param_page - 1) * GRID_LAYOUT.fader_rows + x
-  end
-
   -- A fader key's row as the 256's column: row 16 is column 1 (minimum),
   -- row 1 column 16 (maximum)
   local function fader_column_for_row(y)
     return LAYOUT_128V.fader_bottom_row + 1 - y
   end
 
-  -- Columns 1-4 are the voice's faders, or the shown bank's macros while
-  -- the port shows a bank (3.4); column 5 row 16 steps that
+  -- Columns 1-4 are the port's shown faders (the voice's, or the shown
+  -- bank's macros while the port shows a bank, 3.4); column 5 row 16
+  -- steps that
   local function grid_key_128v_faders(port, x, y)
     if x <= GRID_LAYOUT.fader_rows then
-      if S.lib.grid_faders.shows_macros(port) then
-        set_param_from_column(S.lib.grid_faders.shown_macro_ids()[x], fader_column_for_row(y))
-      else
-        set_fader_param(S.grid_voice_select, fader_index(x), fader_column_for_row(y))
-      end
+      local param_id = S.lib.grid_faders.shown_fader_ids(port)[x]
+      if param_id then set_param_from_column(param_id, fader_column_for_row(y)) end
     elseif x == LAYOUT_128V.fader_page_column and y == LAYOUT_128V.macro_page_row then
       S.lib.grid_faders.macro_page_key(port)
     elseif x == LAYOUT_128V.fader_page_column and y <= fader_page_count(S.grid_voice_select) then
@@ -101,12 +94,11 @@ return function(S)
   end
 
   -- A recall goes through the quantizer (design §8.9). Column 6 is 3.4's
-  -- morph fader and column 7 rows 1-4 its recorders
+  -- morph fader; column 7's recorders take presses and releases, in
+  -- grid_key_128v
   local function grid_key_128v_scenes(port, x, y, z)
     if x == LAYOUT_128V.morph_column then
       set_param_from_column("morph", fader_column_for_row(y))
-    elseif x == LAYOUT_128V.recorder_column then
-      grid_core.gesture_key(port, x, y, z, y)
     elseif x == LAYOUT_128V.scene_recall_column and y <= NUM_SCENES then
       S.lib.quantize.schedule("scene", function() recall_scene(y, 0) end, "S" .. y)
     elseif x == LAYOUT_128V.scene_fade_column and y <= NUM_SCENES then
@@ -165,6 +157,11 @@ return function(S)
       end
       return
     end
+    if page == PAGES.scenes and x == LAYOUT_128V.recorder_column then
+      -- the scenes page's recorders act at their release (3.4)
+      grid_core.gesture_key(port, x, y, z, y)
+      return
+    end
     if z == 0 then return end  -- presses only
     if x == LAYOUT_128V.control_column then
       grid_key_128v_controls(port, y, page, z)
@@ -199,16 +196,9 @@ return function(S)
   end
 
   local function grid_redraw_128v_faders(port, grid_device)
-    if S.lib.grid_faders.shows_macros(port) then
-      for x, param_id in ipairs(S.lib.grid_faders.shown_macro_ids()) do
-        grid_redraw_128v_fader(grid_device, x, param_id)
-      end
-    else
-      local ids = fader_param_ids(S.grid_voice_select)
-      for x = 1, GRID_LAYOUT.fader_rows do
-        local param_id = ids[fader_index(x)]
-        if param_id then grid_redraw_128v_fader(grid_device, x, param_id) end
-      end
+    local ids = S.lib.grid_faders.shown_fader_ids(port)
+    for x = 1, GRID_LAYOUT.fader_rows do
+      if ids[x] then grid_redraw_128v_fader(grid_device, x, ids[x]) end
     end
     grid_device:led(LAYOUT_128V.fader_page_column, LAYOUT_128V.macro_page_row, S.lib.grid_faders.macro_page_level(port))
     for voice_idx = 1, NUM_VOICES do
@@ -317,10 +307,7 @@ return function(S)
   -- (grid_core.any_modulation_shown)
   S.registry.grid_layouts["128v"] = {
     key = grid_key_128v, redraw = grid_redraw_128v, selects_grid_voice = true,
-    shows_modulation = function(port)
-      local page = grid_core.page(port)
-      return page == PAGES.scenes or (page == PAGES.faders and S.lib.grid_faders.shows_macros(port))
-    end,
+    shows_modulation = function(port) return S.lib.grid_faders.shows_modulation(port) end,
   }
 
   return M

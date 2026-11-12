@@ -13,36 +13,8 @@ local function tap(context, port, x, y)
   context.grid.press(port, x, y, 1); context.grid.press(port, x, y, 0)
 end
 
--- 2b's step editor (S.lib.pages_seq), as a double until it lands: the four
--- functions the grid calls, shaped as 2b gives them (open_step_editor(voice,
--- step, port) returns true, close_step_editor(port), step_editor() returns
--- {voice, step, port} or nil, step_editor_edited() a boolean). Open pushes
--- a modal owner and close pops it, as the real editor does; editor.calls
--- records each call. Install it after load_strata, in every test that holds
--- a step key 0.3 s
-local function step_editor_double()
-  local S = local_value("S")
-  local editor = {open = nil, edited = false, calls = {}}
-  local owner = {draw = function() end}
-  local seq = S.lib.pages_seq
-  function seq.open_step_editor(voice, step, port)
-    table.insert(editor.calls, "open " .. voice .. " " .. step .. " " .. port)
-    if editor.open then S.lib.ui_modal.pop(owner) end
-    editor.open, editor.edited = {voice = voice, step = step, port = port}, false
-    S.lib.ui_modal.push(owner)
-    return true
-  end
-  function seq.close_step_editor(port)
-    table.insert(editor.calls, "close " .. port)
-    if editor.open and editor.open.port == port then
-      editor.open = nil
-      S.lib.ui_modal.pop(owner)
-    end
-  end
-  function seq.step_editor() return editor.open end
-  function seq.step_editor_edited() return editor.edited end
-  return editor
-end
+-- 2b's step editor's five functions, as a double (test/helpers.lua)
+local step_editor_double = h.step_editor_double
 
 -- 3.4 (design §8.7, Question 11): a step key toggles on its release, so a
 -- held step can be edited without first toggling it
@@ -172,6 +144,132 @@ test("the step editor closes when its grid goes away, changes page or the patter
   closed("a press with no release")
   context.grid.press(1, 5, 3, 0)
   assert_equal(patterns[3][5], 15, "a press with no release: the new press is a fresh tap")
+end)
+
+-- Ruling 71: a replacement the step editor makes itself (its euclid and
+-- clear rows, its randomize and undo: step_editor_replacing() true) keeps
+-- it open; one from anywhere else closes it
+test("a pattern replaced by the step editor itself keeps it open", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local editor = step_editor_double()
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 8)
+  context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
+  context.grid.press(2, 6, 3, 1)  -- voice 3's held step on grid 2, its editor hold pending
+  context.grid.press(1, 9, 3, 1)  -- a level key of voice 3, held
+  editor.replacing = true
+  S.lib.sequencer.replace_pattern(3, {[5] = 0, [7] = 15})
+  editor.replacing = false
+  assert_true(editor.open ~= nil, "the editor's own replacement leaves it open")
+  assert_equal(editor.calls[#editor.calls], "open 3 5 1", "and closes nothing")
+  assert_true(S.lib.ui_modal.top() ~= nil, "the modal stays")
+  context.clock.run_for(0.35)
+  assert_equal(table.concat(editor.calls, ","), "open 3 5 1", "grid 2's pending editor hold was canceled")
+  context.grid.press(2, 6, 3, 0)
+  assert_equal(patterns[3][6], 0, "grid 2's held step of the voice ended: its release toggles nothing")
+  context.grid.press(1, 12, 3, 1)
+  assert_equal(patterns[3][5], 11, "the editor's key is still the voice's held step: round(12 * 15 / 16) = 11")
+  context.grid.press(1, 12, 3, 0); context.grid.press(1, 9, 3, 0)
+  assert_equal(patterns[3][9], 0, "the ended level key's release toggles nothing")
+  context.grid.press(1, 5, 3, 0)
+  assert_equal(editor.open, nil, "the opening key's release still closes it")
+  assert_equal(patterns[3][5], 11, "and toggles nothing")
+  -- from anywhere else (step_editor_replacing false) it closes, as before
+  context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
+  S.lib.sequencer.replace_pattern(3, {})
+  assert_equal(editor.open, nil, "a replacement from elsewhere closes it")
+  context.grid.press(1, 5, 3, 0)
+  assert_equal(patterns[3][5], 0, "and the key's release toggles nothing")
+end)
+
+test("a second grid opening the step editor takes it over, and the first key's release closes nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local editor = step_editor_double()
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 8)
+  context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
+  context.grid.press(2, 9, 6, 1); context.clock.run_for(0.35)
+  assert_equal(table.concat(editor.calls, ","), "open 3 5 1,open 6 9 2", "port 2's hold opened it over port 1's")
+  context.grid.press(1, 5, 3, 0)
+  assert_equal(#editor.calls, 2, "port 1's key, no longer the editor's, closes nothing")
+  assert_equal(editor.open and editor.open.port, 2, "the editor stays port 2's")
+  assert_equal(patterns[3][5], 0, "and its release toggles nothing")
+  context.grid.press(2, 9, 6, 0)
+  assert_equal(editor.calls[#editor.calls], "close 2", "port 2's release closes it")
+  assert_equal(patterns[6][9], 0)
+end)
+
+test("a page change on another grid leaves the step editor open", function()
+  local context = load_strata(); finish_startup(context)
+  local editor = step_editor_double()
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 16)
+  context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
+  tap(context, 2, 15, 8)  -- grid 2 shows page 3
+  assert_equal(grid_core().page(2), 3)
+  assert_true(editor.open ~= nil, "grid 2's page change leaves port 1's editor open")
+  assert_equal(#editor.calls, 1, "and closes nothing")
+  context.grid.press(1, 5, 3, 0)
+  assert_equal(editor.calls[#editor.calls], "close 1", "port 1's release closes it")
+  assert_equal(patterns[3][5], 0)
+end)
+
+test("a stale step key never closes an editor opened elsewhere", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local editor = step_editor_double()
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
+  -- the editor closed and opened again elsewhere, not by a grid key
+  S.lib.pages_seq.close_step_editor(1)
+  S.lib.pages_seq.open_step_editor(2, 4, 2)
+  context.grid.press(1, 5, 3, 0)
+  assert_equal(table.concat(editor.calls, ","), "open 3 5 1,close 1,open 2 4 2",
+    "port 1's release sent no close: the editor names port 2")
+  assert_equal(editor.open and editor.open.port, 2)
+end)
+
+-- Ruling 73: a recorder key acts at its release: a tap presses once; a
+-- 0.5 s hold clears (with no playback, no recording started, no other
+-- recorder's recording ended) and its release does nothing
+test("a recorder key presses at its release, and its hold only clears", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local gestures = S.lib.gestures
+  context.grid.plug(1, 16, 16)
+  local function hold(x)
+    context.grid.press(1, x, 9, 1); context.clock.run_for(0.51); context.grid.press(1, x, 9, 0)
+  end
+  context.grid.press(1, 1, 9, 1)
+  assert_equal(gestures.state(1), "empty", "a press alone does nothing")
+  context.clock.run_for(0.3)
+  context.grid.press(1, 1, 9, 0)
+  assert_equal(gestures.state(1), "recording", "a release within 0.5 s presses: recording")
+  tap(context, 1, 16, 10)  -- macro_1 to 1, recorded
+  tap(context, 1, 1, 9)
+  assert_equal(gestures.state(1), "playing", "a tap presses once: playing, not stopped")
+  tap(context, 1, 1, 9)
+  assert_equal(gestures.state(1), "stopped")
+  -- a hold on a stopped recorder clears it and plays nothing
+  params:set("macro_1", 0.25)
+  hold(1)
+  assert_equal(gestures.state(1), "empty", "held on a stopped recorder: cleared")
+  assert_near(params:get("macro_1"), 0.25, 1e-9, "with no playback (macro_1 stays where the hand put it)")
+  -- a hold on a recording recorder clears the take and plays nothing
+  tap(context, 1, 2, 9)
+  tap(context, 1, 16, 10)  -- macro_1 to 1, recorded by recorder 2
+  params:set("macro_1", 0.25)
+  hold(2)
+  assert_equal(gestures.state(2), "empty", "held while recording: cleared")
+  assert_near(params:get("macro_1"), 0.25, 1e-9, "the take never played")
+  -- a hold on an empty recorder starts nothing and ends no other recording
+  tap(context, 1, 3, 9)
+  assert_equal(gestures.state(3), "recording")
+  hold(4)
+  assert_equal(gestures.state(4), "empty", "held on an empty recorder: still empty, nothing recording")
+  assert_equal(gestures.state(3), "recording", "recorder 3's recording goes on")
+  gestures.clear(3)
 end)
 
 -- A voice has at most one held step on a port (#450): a second key of the

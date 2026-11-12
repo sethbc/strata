@@ -327,6 +327,39 @@ local function wake_buffer_clock(context, slot)
   context.clock.advance_until(local_value("buffer_record_clocks")[slot])
 end
 
+-- 3.4's step editor (2b's S.lib.pages_seq), as a double for the grid
+-- tests: the five functions the grid calls, shaped as 2b gives them
+-- (open_step_editor(voice, step, port) returns true, close_step_editor(port),
+-- step_editor() returns {voice, step, port} or nil, step_editor_edited() and
+-- step_editor_replacing() booleans, false unless a test sets editor.edited
+-- or editor.replacing). Open pushes a modal owner and close pops it, as the
+-- real editor does; editor.calls records each open and close. Install it
+-- after load_strata
+local function step_editor_double()
+  local S = local_value("S")
+  local editor = {open = nil, edited = false, replacing = false, calls = {}}
+  local owner = {draw = function() end}
+  local seq = S.lib.pages_seq
+  function seq.open_step_editor(voice, step, port)
+    table.insert(editor.calls, "open " .. voice .. " " .. step .. " " .. port)
+    if editor.open then S.lib.ui_modal.pop(owner) end
+    editor.open, editor.edited = {voice = voice, step = step, port = port}, false
+    S.lib.ui_modal.push(owner)
+    return true
+  end
+  function seq.close_step_editor(port)
+    table.insert(editor.calls, "close " .. port)
+    if editor.open and editor.open.port == port then
+      editor.open = nil
+      S.lib.ui_modal.pop(owner)
+    end
+  end
+  function seq.step_editor() return editor.open end
+  function seq.step_editor_edited() return editor.edited end
+  function seq.step_editor_replacing() return editor.replacing end
+  return editor
+end
+
 -- Deep copy of plain data tables
 local function deep_copy(value)
   if type(value) ~= "table" then return value end
@@ -850,6 +883,7 @@ return {
   finish_startup = finish_startup,
   wake = wake,
   wake_buffer_clock = wake_buffer_clock,
+  step_editor_double = step_editor_double,
   deep_copy = deep_copy,
   tabutil_text = tabutil_text,
   file_text = file_text,
