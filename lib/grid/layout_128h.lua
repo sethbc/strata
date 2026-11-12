@@ -82,7 +82,9 @@ return function(S)
   end
 
   -- Page 2, rows 1-7: rows 1-4 the port's shown faders (the voice's, or
-  -- the shown bank's macros while the port shows a bank, 3.4)
+  -- the shown bank's macros while the port shows a bank, 3.4); a fader
+  -- page key or a voice select key shows that page of that voice's
+  -- faders, leaving the macros (ruling 82)
   local function fader_page_key(port, x, y)
     if y >= 1 and y <= FADER_ROWS then
       local param_id = S.lib.grid_faders.shown_fader_ids(port)[y]
@@ -90,9 +92,15 @@ return function(S)
     elseif y == LAYOUT_128H.fader_page_row and x == LAYOUT_128H.macro_page_column then
       S.lib.grid_faders.macro_page_key(port)
     elseif y == LAYOUT_128H.fader_page_row then
-      if x <= fader_page_count(S.grid_voice_select) then S.param_page = x end
+      if x <= fader_page_count(S.grid_voice_select) then
+        S.lib.grid_faders.leave_macros(port)
+        S.param_page = x
+      end
     elseif y == LAYOUT_128H.voice_select_row then
-      if x <= NUM_VOICES then select_grid_voice(x) end
+      if x <= NUM_VOICES then
+        S.lib.grid_faders.leave_macros(port)
+        select_grid_voice(x)
+      end
     elseif y == LAYOUT_128H.lock_row then
       if x <= NUM_VOICES then toggle_lock(x) end
     end
@@ -176,6 +184,8 @@ return function(S)
     elseif voice_offset >= 1 and voice_offset <= NUM_VOICES then
       toggle_voice(voice_offset)
     elseif x == LAYOUT_128H.voice_cycle_column then
+      -- on page 2 it picks the faders' voice, as row 6 does (ruling 82)
+      if grid_core.page(port) == PAGES.faders then S.lib.grid_faders.leave_macros(port) end
       select_grid_voice(S.grid_voice_select % NUM_VOICES + 1)
     end
   end

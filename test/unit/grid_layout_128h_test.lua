@@ -794,10 +794,13 @@ test("128h page 3: scenes 9-16 on columns 9-16, lengths 9-16 on row 4", function
   assert_equal(row_levels(device, 4), "8 8 8 8 8 8 8 8 8 8 8 8 8 2 2 2", "row 4: lengths 1-13 within it")
 end)
 
--- 3.4 (design §4.6, §11): page 2's row 5 column 16 steps the faders voice
--- faders -> bank 1 -> 2 -> 3 -> 4 -> voice faders (LED 4, 6, 9, 12, 15),
--- setting the shown bank; rows 1-4 are then the bank's four macros
-test("the macro page key cycles voice faders and the four banks, with its LED", function()
+-- 3.4 (design §4.6, §11; ruling 81, #618): page 2's row 5 column 16
+-- enters the macros at the bank every surface shows, changing nothing
+-- elsewhere; each further press shows the next bank (after 4 comes 1),
+-- and the press after the fourth bank shown since entering goes back to
+-- the voice faders. LED 4 on the voice faders, 6, 9, 12, 15 on banks 1-4;
+-- rows 1-4 are the shown bank's four macros
+test("the macro page key enters at the shown bank and steps through four banks, with its LED", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 8)
   local S = local_value("S")
@@ -805,39 +808,112 @@ test("the macro page key cycles voice faders and the four banks, with its LED", 
   tap(context, 1, 6, 8)  -- page 2
   assert_equal(device:get_led(16, 5), 4, "voice faders: 4")
   S.lib.macros.set_bank(3)
+  S.lib.ui_flash.cancel_all()
   tap(context, 1, 16, 5)
-  assert_equal(S.lib.macros.bank(), 1, "from the voice faders: bank 1")
-  assert_equal(device:get_led(16, 5), 6, "bank 1: 6")
+  assert_equal(S.lib.macros.bank(), 3, "entering keeps the shown bank: MOD's is still 3")
+  assert_equal(S.lib.ui_flash.text("header"), nil, "and nothing flashes")
+  assert_equal(device:get_led(16, 5), 12, "bank 3: 12")
   tap(context, 1, 16, 1)
-  assert_near(params:get("macro_1"), 1.0, 1e-9, "row 1 is macro_1")
+  assert_near(params:get("macro_9"), 1.0, 1e-9, "row 1 is macro_9")
   assert_equal(row_levels(device, 1), "8 8 8 8 8 8 8 8 8 8 8 8 8 8 8 15", "as a fader row")
-  local expected = {9, 12, 15}
-  for bank = 2, 4 do
+  local banks, levels = {4, 1, 2}, {15, 6, 9}
+  for press = 1, 3 do
     tap(context, 1, 16, 5)
-    assert_equal(S.lib.macros.bank(), bank, "the next press: bank " .. bank)
-    assert_equal(device:get_led(16, 5), expected[bank - 1], "bank " .. bank .. "'s level")
+    assert_equal(S.lib.macros.bank(), banks[press], "press " .. press .. " after entering: bank " .. banks[press])
+    assert_equal(device:get_led(16, 5), levels[press], "bank " .. banks[press] .. "'s level")
   end
   tap(context, 1, 1, 4)
-  assert_near(params:get("macro_16"), 0, 1e-9, "bank 4: row 4 is macro_16")
-  tap(context, 1, 16, 2)
-  assert_near(params:get("macro_14"), 1.0, 1e-9, "and row 2 macro_14")
-  S.lib.macros.set_bank(2)
-  assert_equal(device:get_led(16, 5), 9, "a bank shown from elsewhere: its level")
-  tap(context, 1, 8, 1)
-  assert_near(params:get("macro_5"), 7 / 15, 1e-9, "and its macros")
-  tap(context, 1, 16, 5); tap(context, 1, 16, 5); tap(context, 1, 16, 5)
-  assert_equal(device:get_led(16, 5), 4, "after bank 4: the voice faders again")
-  assert_equal(S.lib.macros.bank(), 4, "which keep the bank")
+  assert_near(params:get("macro_8"), 0, 1e-9, "bank 2: row 4 is macro_8")
+  tap(context, 1, 16, 5)
+  assert_equal(device:get_led(16, 5), 4, "after four banks shown: the voice faders again")
+  assert_equal(S.lib.macros.bank(), 2, "which keep the bank")
   tap(context, 1, 16, 1)
   assert_equal(fader_position(ids[1]), 16, "row 1 is the voice's fader 1 again")
+  -- a bank shown from elsewhere while the grid shows the macros: its rows follow
+  tap(context, 1, 16, 5)
+  assert_equal(S.lib.macros.bank(), 2, "entered again at bank 2")
+  S.lib.macros.set_bank(1)
+  assert_equal(device:get_led(16, 5), 6, "a bank shown from elsewhere: its level")
+  tap(context, 1, 8, 1)
+  assert_near(params:get("macro_1"), 7 / 15, 1e-9, "and its macros")
+  tap(context, 1, 16, 5); tap(context, 1, 16, 5); tap(context, 1, 16, 5)
+  assert_equal(S.lib.macros.bank(), 4, "banks 2, 3 and 4: the fourth bank shown since entering")
+  tap(context, 1, 16, 5)
+  assert_equal(device:get_led(16, 5), 4, "the next press: the voice faders")
   -- the view is per grid, and a macro set off the grid shows within a tick
   local other = context.grid.plug(2, 16, 8)
   tap(context, 2, 6, 8); tap(context, 2, 16, 5)
-  assert_equal(other:get_led(16, 5), 6, "grid 2 shows bank 1")
+  assert_equal(other:get_led(16, 5), 15, "grid 2 shows bank 4, the one shown")
   assert_equal(device:get_led(16, 5), 4, "grid 1 still the voice faders")
-  params:set("macro_2", 1)
+  params:set("macro_14", 1)
   drift_update()
-  assert_equal(other:get_led(16, 2), 15, "macro_2 set elsewhere: grid 2's row 2 follows")
+  assert_equal(other:get_led(16, 2), 15, "macro_14 set elsewhere: grid 2's row 2 follows")
+end)
+
+-- Ruling 82 (#619): on page 2 showing a bank, a fader page key (row 5), a
+-- voice select key (row 6) or the voice cycle key (row 8 column 16) leaves
+-- the macros and shows that page of that voice's faders, on that grid only
+test("a fader page or voice key leaves the macros for that voice's faders", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local device, other = context.grid.plug(1, 16, 8), context.grid.plug(2, 16, 8)
+  tap(context, 1, 6, 8); tap(context, 2, 6, 8)  -- both on page 2
+  tap(context, 2, 16, 5)                        -- grid 2 shows bank 1
+  local function enter_macros()
+    tap(context, 1, 16, 5)
+    assert_equal(device:get_led(16, 5), 6, "grid 1 shows bank 1")
+  end
+  enter_macros()
+  tap(context, 1, 3, 5)
+  assert_equal(local_value("param_page"), 3, "row 5 column 3 picks fader page 3")
+  assert_equal(device:get_led(16, 5), 4, "and leaves the macros")
+  tap(context, 1, 16, 2)
+  assert_equal(fader_position(fader_param_ids(1)[10]), 16, "row 2 is voice 1's fader 10")
+  assert_near(params:get("macro_2"), 0, 1e-9, "not macro_2")
+  assert_equal(other:get_led(16, 5), 6, "grid 2 still shows bank 1")
+  enter_macros()
+  tap(context, 1, 2, 6)
+  assert_equal(S.grid_voice_select, 2, "row 6 column 2 picks voice 2")
+  assert_equal(device:get_led(16, 5), 4, "and leaves the macros")
+  tap(context, 1, 1, 1)
+  local voice_2_ids = fader_param_ids(2)
+  assert_equal(fader_position(voice_2_ids[(S.param_page - 1) * 4 + 1]), 1, "row 1 is voice 2's fader")
+  enter_macros()
+  tap(context, 1, 16, 8)
+  assert_equal(S.grid_voice_select, 3, "row 8 column 16 picks the next voice")
+  assert_equal(device:get_led(16, 5), 4, "and leaves the macros")
+  assert_equal(other:get_led(16, 5), 6, "grid 2 still shows bank 1 through it all")
+  -- a fader page key past the voice's pages does nothing, and keeps the macros
+  enter_macros()
+  tap(context, 1, fader_page_count(3) + 1, 5)
+  assert_equal(device:get_led(16, 5), 6, "a column with no fader page: still bank 1")
+end)
+
+-- Ruling 81: each grid counts the banks it showed since its own macro key
+-- entered them, whatever another grid's key does to the shared bank
+test("two 128s keep their own macro key counts", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local first, second = context.grid.plug(1, 16, 8), context.grid.plug(2, 16, 8)
+  tap(context, 1, 6, 8); tap(context, 2, 6, 8)  -- both on page 2
+  tap(context, 1, 16, 5)                        -- grid 1 enters at bank 1 (its first)
+  tap(context, 1, 16, 5)                        -- bank 2 (its second)
+  tap(context, 2, 16, 5)                        -- grid 2 enters at bank 2 (its first)
+  tap(context, 2, 16, 5)                        -- bank 3 (grid 2's second)
+  assert_equal(S.lib.macros.bank(), 3)
+  assert_equal(first:get_led(16, 5), 12, "grid 1 follows the shared bank: 3")
+  tap(context, 1, 16, 5)                        -- bank 4 (grid 1's third)
+  tap(context, 1, 16, 5)                        -- bank 1 (grid 1's fourth)
+  assert_equal(S.lib.macros.bank(), 1)
+  tap(context, 1, 16, 5)
+  assert_equal(first:get_led(16, 5), 4, "grid 1, after its fourth bank: the voice faders")
+  assert_equal(second:get_led(16, 5), 6, "grid 2 still shows the macros, bank 1")
+  tap(context, 2, 16, 5)                        -- bank 2 (grid 2's third)
+  tap(context, 2, 16, 5)                        -- bank 3 (grid 2's fourth)
+  assert_equal(second:get_led(16, 5), 12, "grid 2's fourth bank: 3")
+  tap(context, 2, 16, 5)
+  assert_equal(second:get_led(16, 5), 4, "grid 2, after its own fourth bank: the voice faders")
+  assert_equal(S.lib.macros.bank(), 3, "which keep the bank")
 end)
 
 -- 3.4 (design §11): page 3's row 5 columns 13-16 are the gesture recorders
