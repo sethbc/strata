@@ -85,7 +85,8 @@ jobs:
   # layout is as balanced as any that pairs them.
   # waveform (a 300 s high engine, where #211's collector failure shows: about 1 run in 10
   # to 16, on the 3.3 engine as on 3.4's, held for now; a record,waveform shard that fails
-  # with the collector's count errors, a signal 11 or a hang after them is rerun) shares
+  # with the collector's count-error lines, sclang ending on signal 11 or signal 8, or a
+  # hang after those lines is rerun) shares
   # its shard only with record, which builds no high engine (buffers, effects, files, freeze,
   # memory, performance and waveform do). In four full runs on 3.13 at 3.4.0 with this split,
   # every shard it changed passed all four times (record,waveform is as before).
