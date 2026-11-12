@@ -47,7 +47,15 @@
 | `fastModPosition(bufPos, m)` | `\strataGrainBuf`, in place of `bufPos` given to `slotGrainReader` (so `slotScanPhase` and `slotHeadGuard` see it) | `(bufPos + 0.5 m1).clip(0, 1)` |
 | `voiceMixMod(controls)` | the stage (`\strataVoiceMix`), before both filter banks and `voiceLevel` | declares `fastModIn`, `seqGate` (0), `gateSeconds` (0.1), `gateRelease` (0.1) and `voiceMute` (0); reads the block; sets `filterFreq × 31.62 ^ m3` clipped to 20-20000, `ampOffset` = m4 and `voiceGate` |
 
-The half ranges are `fastModHalfRanges` (`[1.875, 0.5, 0.245]`, half of the Lua specs' ranges) and the cutoff's factor `fastModCutoffFactor` (31.62, so m = ±1 is half of 20-20000 Hz's ten octaves). The cutoff then passes `voiceFilter`'s 0.05 s lag, so a cutoff LFO's depth falls above about 20 Hz; the other four destinations are not smoothed by the graph. The ring reader still clips the rate to ±4 and `grainDur` still caps at 0.5 s, so the rings' lookback bound holds whatever the offset (`docs/notes/engine/rings.md`).
+The half ranges are `fastModHalfRanges` (`[1.875, 0.5, 0.245]`, half of the Lua specs' ranges) and the cutoff's factor `fastModCutoffFactor` (31.62, so m = ±1 is half of 20-20000 Hz's ten octaves). The cutoff then passes `voiceFilter`'s 0.05 s lag, which runs on linear Hz, and the filter's rise limiter (`riseLimitedCutoff`: at most `cutoffRiseRate`, 100 octaves a second, up, any speed down; `docs/notes/engine/effects.md`), and both reshape a fast or deep cutoff LFO (#612; this paragraph said before that only the lag did, from about 20 Hz). Measured on scsynth with the stage's own expressions (an engine LFO's sine as m3, the clip, the lag and the limiter), around 632 Hz, the middle of the range, so even 100 % depth never clips, the filter keeps of the LFO's swing in octaves, and its mean log cutoff moves by:
+
+| Depth | 10 Hz | 20 Hz | 30 Hz | 50 Hz |
+|---|---|---|---|---|
+| 25 % (±1.25 octaves) | 91 %, +0.05 | 72 %, +0.10 | 56 %, +0.11 | 36 %, +0.16 |
+| 50 % | 89 %, +0.01 | 55 %, +0.03 | 37 %, +0.25 | 22 %, +0.51 |
+| 100 % (±5 octaves) | 61 %, −0.57 | 31 %, +0.66 | 21 %, +1.41 | 12 %, +2.05 |
+
+(5 Hz keeps 95-98 % at every depth.) The two pull the mean apart: the lag on linear Hz follows a sweep's upper octaves more closely than its lower ones and raises it, the limiter holds the rises back while the falls pass and lowers it (a model of each alone, at 100 % and 50 Hz: +2.6 and −4.1 octaves); together the mean falls at 10 Hz and rises from 20 Hz at 100 % depth. Around the stage's default 5000 Hz, where 20000 Hz clips the top of a deep LFO, 100 % keeps 82 % at 10 Hz and 18 % at 50 Hz (the mean +1.1 octaves), 25 % the same as around 632 Hz. So "about 40 % at 50 Hz" (design §3.3) holds only near 25 % depth. The other four destinations are not smoothed by the graph. The ring reader still clips the rate to ±4 and `grainDur` still caps at 0.5 s, so the rings' lookback bound holds whatever the offset (`docs/notes/engine/rings.md`).
 
 The stage's two level lines (`StrataMix.sc`, design 3.4 §0.3 and Question 40):
 
