@@ -259,6 +259,63 @@ return function(S)
     midi_set_bend(S.selected_voice, ratio)
   end
 
+  -- 3.3's LFO params (norns' LFO library: lfo_<field>_<n>, three LFOs)
+  -- whose 3.4 param (strata_lfo<n>_<field>) has the same meaning, as
+  -- lib/lfos.lua's 3.3 import keeps their values: depth, offset and phase
+  -- (3.3's numbers, 3.4's controls) and the clocked rate (the same
+  -- divisions). Every other 3.3 LFO param changed meaning (the shapes and
+  -- modes reordered, the free period now a rate, the state a toggle) or has
+  -- no 3.4 param
+  M.MIDI.lfo_maps_3_3 = {lfos = 3, fields = {depth = "depth", offset = "offset", phase = "phase", clocked = "division"}}
+
+  -- The 3.4 param a 3.3 LFO param's MIDI map moves to, or nil
+  local function moved_map_target(id)
+    local field, n = id:match("^lfo_(%a+)_(%d+)$")
+    local target_field = field and M.MIDI.lfo_maps_3_3.fields[field]
+    n = tonumber(n)
+    if not target_field or n < 1 or n > M.MIDI.lfo_maps_3_3.lfos then return nil end
+    return S.lib.lfos.param_id(n, target_field)
+  end
+
+  -- norns' MIDI map (norns.pmap: data[param id] and the reverse
+  -- rev[dev][ch][cc]) is read from strata.pmap before init. A map on an id
+  -- that is no param of this script makes norns' CC handler
+  -- (lua/core/menu/params.lua's menu_midi_event) raise "invalid paramset
+  -- index" on every CC it maps, and the MAP menu, which lists params,
+  -- cannot show it (#602). Run at start, once every param exists: a 3.3
+  -- LFO map moves to its 3.4 param (moved_map_target; a number's output
+  -- range becomes the control's raw range) unless that param has a map of
+  -- its own; every other such map is removed, with one console line each.
+  -- The map is then written back as norns' MAP menu writes it, every entry
+  -- (norns.pmap.write), so the next start reads it repaired
+  function M.repair_midi_map()
+    local pmap = norns and norns.pmap
+    if type(pmap) ~= "table" or type(pmap.data) ~= "table" or type(pmap.rev) ~= "table" then return end
+    local stale = {}
+    for id in pairs(pmap.data) do
+      if params.lookup[id] == nil then stale[#stale + 1] = id end
+    end
+    table.sort(stale, function(a, b) return tostring(a) < tostring(b) end)
+    for _, id in ipairs(stale) do
+      local entry = pmap.data[id]
+      local slot = type(entry) == "table" and pmap.rev[entry.dev] and pmap.rev[entry.dev][entry.ch]
+      local own = slot and slot[entry.cc] == id
+      if own then slot[entry.cc] = nil end
+      pmap.data[id] = nil
+      local target = type(id) == "string" and moved_map_target(id)
+      if own and target and params.lookup[target] and pmap.data[target] == nil then
+        local spec = params:lookup_param(target).controlspec
+        if spec then entry.out_lo, entry.out_hi = spec:unmap(entry.out_lo), spec:unmap(entry.out_hi) end
+        pmap.data[target] = entry
+        slot[entry.cc] = target
+        print("midi map: " .. id .. " (a 3.3 LFO param) moved to " .. target)
+      else
+        print("midi map: " .. tostring(id) .. " removed: no param of this script has that id")
+      end
+    end
+    if #stale > 0 and type(pmap.write) == "function" then pmap.write() end
+  end
+
   -- Listen for MIDI from init on
   S.register_start(S.constants.START_ORDER.midi, function()
     -- every start (the voice is not yet active when the hook runs) clears the
@@ -270,6 +327,7 @@ return function(S)
     midi.add = midi_added
     midi.remove = midi_removed
     midi_init()
+    M.repair_midi_map()
   end)
 
   -- Stop listening to MIDI before the voices go off, and hand hot-plug back
