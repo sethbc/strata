@@ -55,7 +55,7 @@ jobs:
   # record 110, lifecycle 106, buffers 99, effects 87, mix 69, rings 69, memory 67, voices 66,
   # freeze 63, loops 54, variation 52, files 29, grains 23, waveform 23, positions 8, structure 4, performance 3:
   # 932 s in all, and at most about 152 s a shard (voices, freeze and grains), far under each
-  # shard's 570 s. 3.4's modulation area (about 11 s) joined the lightest shard, memory's.
+  # shard's 570 s. 3.4's modulation area (about 6 s) joined the lightest shard, memory's.
   # waveform (a 300 s high engine, where #211's collector failure shows) shares
   # its shard only with record, which builds no high engine (buffers, effects, files, freeze,
   # memory and performance do); four full runs on 3.13 at 3.3.0 passed with the pair.
@@ -69,7 +69,7 @@ jobs:
       fail-fast: false
       # memory shares its shard with no area that builds a high tier engine:
       # sharing one with freeze (both build them), it was where sclang's
-      # garbage collector crashed (#131); modulation builds a standard one
+      # garbage collector crashed (#131); modulation builds no engine
       matrix:
         areas:
           - buffers,variation
