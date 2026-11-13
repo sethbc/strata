@@ -164,7 +164,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 One or two lines each: the rule, then the notes file whose "Must not break" list holds the detail, the reasons and the exceptions. Read that file before changing the code a rule names.
 
 The engine's (under docs/notes/engine/):
-- **Pattern steps and MIDI notes never create nodes**: they call `retrigger`; velocity only scales the accent envelope's `levelScale` in every voice SynthDef and in `\strataVoiceMix` (Karplus's pluck impulse is the one allowance). `docs/notes/engine/voices.md`
+- **Pattern steps and MIDI notes never create nodes**: they call `retrigger`; velocity only scales the accent envelope's `levelScale` in every voice and grain SynthDef and in `\strataVoiceMix` (Karplus's pluck impulse is the one allowance). `docs/notes/engine/voices.md`
 - **Replace, never stack**: a source switch replaces the grain synth; fading synths are cut with `cutSynth`, never a second `release`; new grain synths are placed with `startPlacedGrainSynth`. `docs/notes/engine/lifecycle.md`
 - **`openedGate(gate)`** wraps every ASR gate; never `gate.max(...)`. `docs/notes/engine/lifecycle.md`
 - **Silent bus**: unrouted mod slots read `silentBus`, never control bus 0. `docs/notes/engine/voices.md`
