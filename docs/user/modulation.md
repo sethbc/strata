@@ -83,10 +83,33 @@ Four recorders (`G1`-`G4` on the [MOD](pages/mod.md) page) record your hand move
 ## Modulation Matrix
 
 Sixteen routings (`R1`-`R16` on the [MOD](pages/mod.md) page), each from one modulation source to one setting, with a depth from −100 to +100 %:
-- **Sources** - the six LFOs (`L1`-`L6`, each at its own shape before its depth, so an LFO with no destination of its own makes a good modulator), the sixteen macros (`M1`-`M16`), the four recorders' loop places (`G1`-`G4`) and the input level (`IN`). An LFO swings both ways around the setting; a macro, a recorder and the input only add, from 0
+- **Sources** - the six LFOs (`L1`-`L6`, each at its own shape before its depth, so an LFO with no destination of its own makes a good modulator), the sixteen macros (`M1`-`M16`), the four recorders' loop places (`G1`-`G4`), the input level (`IN`) and the notes' pressure and slide (`PRES`, `SLID`, `PR1`-`PR7`, `SL1`-`SL7`: [Expression](#expression)). An LFO swings both ways around the setting; a macro, a recorder, the input and the notes only add, from 0
 - **Destinations** - any setting an LFO can move (a voice's main parameter follows its source), never a macro. At 100 % from an LFO a routing swings half the destination's range either side of your value, as the LFO itself would at full depth
 - **Around your setting** - like the LFOs, a routing moves the sound around the value you set and never changes it. Routings, LFOs and an LFO on a macro on the same setting add up before the setting's range limits them, so +100 % and −100 % cancel
 - **In the engine** - a routing to one of a voice's grain pitch, buffer position, grain size, voice filter cutoff or level is added in the engine (the destination shows `~`), at the script's update rate (24 to 48 times a second); for the smoothest fast movement put the LFO on that setting itself
 - **Editing** - K3 on a routing's row shows its source, destination, depth and on/off; E3 changes each, and a routing that gets both a source and a destination at 0 % starts at 25 %, so you hear it. ALT+K3 on its destination learns the next setting you touch. ALT+K3 on a row, or K3 in the routing, turns it on or off; ALT+K2 held clears it. A quick ALT+K2 in the matrix draws a new depth for every routing with a source and a destination (−50 to +50 %), undone by another quick press within 5 seconds
 - **Arc** - with the cursor in the matrix, the rings are the depths of the four routings around it (R1-R4, R5-R8, ...), filled from the top both ways, and the button turns the cursor's routing on or off; in a routing, ring 1 is its depth and rings 2-4 step its source, its destination and the routing shown
 - **Saving** - the depths and on/offs are parameters (PSETs, scenes, MIDI mapping, macros can move a depth); the sources and destinations are saved with each PSET (in a file beside it, `<pset>.matrix.data`), in scenes and between sessions. A routing whose source or destination is from another release is kept, drawn dim and does nothing
+
+## Expression
+
+Each note a voice plays can carry its own pressure and slide: an MPE controller's channel pressure and its CC74 slide (a LinnStrument's Y, an Osmose's or an Exquis's), or a keyboard's aftertouch. Each voice maps the two to a target of its own, on the `notes` section of [VOICE](pages/voice.md): `press target` and `press depth` for pressure, `slide target` and `slide depth` for slide, each depth from -100 to +100 % (a negative depth turns the move around).
+
+| target | what it moves | where |
+|---|---|---|
+| `amp` | the note's level, as a swell above your setting: full pressure at +100 % doubles it, no pressure leaves it as set | each note |
+| `level` | the note's level, as its loudness: at +100 % a note is silent until pressed, and full pressure is your setting. A note that has sent no pressure yet plays at your setting | each note |
+| `main` | a synth voice's expression control (the Resonator's rq, FM's index, Folder's fold, Sub's drift, Pulse's width, Karplus's decay, Ring's ratio), the position on a buffer voice, the grain size on an input voice | each note |
+| `size` | the grain size | each note on a buffer or input voice, the whole voice on a synth voice |
+| `position` | the buffer position | each note, on a buffer voice only (any other voice ignores it) |
+| `density` | the grain density | the whole voice |
+| `cutoff` | the voice filter's cutoff, by up to five octaves each way | the whole voice |
+
+- **Slide is measured from where the touch began**, so every note starts on your sound whatever its controller sends first. Pressure is read as it is
+- **The defaults** are pressure on `amp` at +100 % and slide on `main` at +50 %: nothing changes until a controller sends pressure or slide
+- **Two on one target** multiply (`amp`, `level`) or add (the others)
+- **A whole-voice target** (density, cutoff, a synth voice's size) follows the note pressed or slid furthest, so a soft finger added or lifted changes nothing. Like the LFOs and the matrix, it moves the sound around your setting and never changes it
+- **A frozen synth voice** plays its notes from the frozen sound: `size` acts per note there, and `main` does nothing
+- **Latch** - a note held after its key lifts keeps the highest pressure it reached and its last slide
+- **Modulation sources** - `PRES` and `SLID` are the largest pressure and slide (as the controller sends it, not from the touch's start) among every voice's held notes, and `PR1`-`PR7` and `SL1`-`SL7` each voice's, 0 with no note held. They are listed last on [MOD](pages/mod.md); a voice's pair shows there while it holds a note that has sent pressure or slide, and a routing can choose any of them at any time
+- Scenes and PSETs keep the four settings per voice; a scene saved before 3.5 recalls pressure on `amp` and slide on `main`, which change nothing until expression arrives
