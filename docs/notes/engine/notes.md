@@ -71,7 +71,7 @@ A note synth is watched with a watcher of its own (`watchNoteSynth`), never `wat
 
 ### Memory
 
-The note pool is sized from what a note costs. A synth voice's extra note is a voice synth, a buffer or input voice's a grain synth; the memory area measures all seven voice SynthDefs and `\strataMod` (`memory: \strataResonator takes <n> KB`, ...), each under its own limit. Karplus is the costliest note (80.9 KB with 1a's note controls, against `\strataGrainBuf`'s 73.3 KB), so the pool's worst case is seven Karplus notes, then buffer notes: 7 × 2 × 80.9 + 9 × 2 × 73.3, about 2452 KB with every slot live and cutting. The figures and the sum are in `docs/notes/engine/memory.md` (the voice SynthDefs; the floors section).
+The note pool is sized from what a note costs. A synth voice's extra note is a voice synth, a buffer or input voice's a grain synth; the memory area measures all seven voice SynthDefs and `\strataMod` (`memory: \strataResonator takes <n> KB`, ...), each under its own limit. Karplus is the costliest note (80.9 KB with 1a's note controls, against `\strataGrainBuf`'s 73.3 KB), so the pool's worst case is seven Karplus notes, then buffer notes: 7 × 2 × 80.9 + 9 × 2 × 73.3, about 2452 KB with every slot live and cutting. The memory area measures a full pool itself, on both tiers (its pool cases: the all-buffer worst case with every pool slot live and cutting, and synth -> buffer -> synth with sixteen voice synth notes, Karplus's seven first), each against 1280 KB. The figures, the sum and the cases are in `docs/notes/engine/memory.md` (the voice SynthDefs; the floors section).
 
 ### The check (`test/engine_check/notes.scd`)
 
