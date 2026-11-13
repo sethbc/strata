@@ -336,11 +336,15 @@ return function(S)
       and finite(note.pitch)
       and finite(note.velocity) and type(note.set_own) == "function"
       and (note.park == nil or type(note.park) == "boolean") and (note.quiet == nil or type(note.quiet) == "boolean")
+      and (note.fallback == nil or type(note.fallback) == "boolean")
       and (note.expression == nil or type(note.expression) == "table")
   end
 
   -- Play note = {owner, key, pitch, velocity, set_own, park, quiet,
-  -- expression} on voice (design §2.2): the slot it took, nil when refused
+  -- fallback, expression} on voice (design §2.2): the slot it took, nil
+  -- when refused. fallback (default true) false: a play that would reach
+  -- branch 6 is refused instead, sending and recording nothing (ruling 26:
+  -- a chord's further notes never fall back onto slot 1)
   function M.play(voice, note)
     if not whole_in(voice, 1, NUM_VOICES) or not valid_note(note) then return nil end
     -- a running frozen synth voice's reference, before set_own can move the
@@ -401,7 +405,9 @@ return function(S)
         return start_extra(voice, victim.slot, played, now)
       end
     end
-    -- 6. nothing can be stolen: slot 1, the newest note winning
+    -- 6. nothing can be stolen: slot 1, the newest note winning (unless
+    -- the note asked for no fallback: refused)
+    if note.fallback == false then return nil end
     return play_own(voice, note, played, now)
   end
 

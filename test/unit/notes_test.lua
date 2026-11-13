@@ -375,6 +375,53 @@ test("a note younger than the cut time is never stolen", function()
   assert_equal(call_text(context.engine_calls[1]), "noteOff(0, 1, 1)")
 end)
 
+-- ruling 26: a chord's further notes never fall back onto slot 1
+test("fallback false: a play with nothing to steal is refused; with room it plays as any play", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  local function refused(voice, key, what)
+    local held, used = notes.held(voice), notes.pool_used()
+    context.clear_engine_calls()
+    assert_equal(play(context, voice, key, 70, { fallback = false }), nil, what .. ": refused")
+    assert_equal(#context.engine_calls, 0, what .. ": nothing sent, set_own included")
+    assert_equal(notes.find(voice, "midi", key), nil, what .. ": nothing recorded")
+    assert_equal(notes.held(voice), held, what .. ": the held count stands")
+    assert_equal(notes.pool_used(), used, what .. ": and the pool's")
+  end
+  -- a cap of 1
+  params:set("v1_note_cap", 1)
+  play(context, 1, 1, 60)
+  later(context, 0.1)
+  refused(1, 2, "a cap of 1")
+  assert_equal(notes.find(1, "midi", 1), 1, "the own note keeps slot 1")
+  -- a pool of 0
+  notes.set_pool(0)
+  play(context, 2, 1, 60)
+  later(context, 0.1)
+  refused(2, 2, "a pool of 0")
+  -- every candidate younger than the cut time
+  notes.set_pool(2)
+  play(context, 3, 1, 60); play(context, 3, 2, 62); play(context, 3, 3, 64)
+  later(context, 0.01)
+  refused(3, 4, "young notes")
+  -- with room: an extra note as without it
+  context.clear_engine_calls()
+  assert_equal(play(context, 4, 1, 60, { fallback = false }), 1, "a stopped voice's slot 1 is free: taken")
+  assert_equal(table.concat(names(context), " ", 1, 1), "set_own")
+  later(context, 0.05)
+  context.clear_engine_calls()
+  assert_equal(play(context, 3, 4, 65, { fallback = false }), 4, "old enough: a steal")
+  assert_equal(table.concat(names(context), " "), "noteOff noteExpression noteOn", "as any steal")
+  context.clear_engine_calls()
+  assert_equal(play(context, 3, 4, 66, { fallback = false }), 4, "its own key again: re-pitched in place")
+  assert_equal(table.concat(names(context), " "), "noteOn")
+  -- fallback is a boolean or absent
+  context.clear_engine_calls()
+  assert_equal(play(context, 3, 5, 67, { fallback = 0 }), nil, "refused: not a boolean")
+  assert_equal(#context.engine_calls, 0)
+end)
+
 test("release: an extra note gets noteOff; the own note parks only under others and only when asked", function()
   local context = load_strata()
   local S = started(context)
