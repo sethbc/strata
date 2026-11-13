@@ -2,7 +2,8 @@
 
 - MAIN is found by index (`S.ui_page == UI_PAGES.index.MAIN`), never by its title string.
 - No MAIN string between the header and the hint row crosses the divider at x=62: it ends by x=60 or starts at x=65 (the layout tests check it for every voice, source, lock and running state, and the fields at their widest values).
-- Every voice-list entry is plain ASCII and at most `5+ pulse [L]` wide (49 px as the harness measures with norns' own advances, 11 px inside the 60 px bound, so it ends by x=60); a voice type's `MAIN_PARAMS[type].list_name` has at most 5 characters.
+- Every voice-list entry is plain ASCII and at most `5m pulse [L] 8` wide (3.5's count included: exactly the 60 px bound as the harness measures with norns' own advances, so it ends by x=60; without a count `5+ pulse [L]` is 49 px); a voice type's `MAIN_PARAMS[type].list_name` has at most 5 characters, and a count is one digit (`NOTE_SLOTS` is 8). A longer name or a wider mark leaves no room for the count.
+- The count (3.5) is `S.lib.notes.held(i)`, read at each `update_voice_list()`, never a copy: the notes module calls `update_voice_list()` and `request_redraw()` whenever a voice's held count changes, so the list never shows a count the voice no longer holds.
 - The voice list never scrolls past an end: `place_voice_list()` sets `num_above_selected` to 0 for the first voice, 2 for the last and 1 otherwise, on every `update_voice_list()` and every draw (the selection can move without `update_voice_list`).
 - The main parameter comes from `main_param_entry(voice_idx)` (`MAIN_PARAMS`, `BUFFER_MAIN_PARAM`, `INPUT_MAIN_PARAM`), never from an `if v.name ==` chain. E3, arc ring 2 and the details column all use it. The three fields come from `main_fields(voice_idx)`; E3 edits `main_fields(S.selected_voice)[S.main_field]` through `enc_param_delta`.
 - K3 and MAIN's `arc_button` are the same function (`start_stop_selected_voice`): start or stop, never lock, never fire a triggered grain.
@@ -42,11 +43,12 @@
 ## Voice list
 
 - `update_voice_list()` recreates the `UI.ScrollingList` (`S.voice_list`) on every change.
-- Each entry is `<n><+|-|m|s> <name>[ [L]]` (`m`: a running voice that `S.lib.voice_mix.silenced` says is silenced; `s`: a running voice that is soloed and not muted; a stopped voice is always `-`; the mute and solo params' actions rebuild the list), plain ASCII, so its width does not depend on how the norns font draws other glyphs:
+- Each entry is `<n><+|-|m|s> <name>[ [L]][ <count>]` (`m`: a running voice that `S.lib.voice_mix.silenced` says is silenced; `s`: a running voice that is soloed and not muted; a stopped voice is always `-`; the mute and solo params' actions rebuild the list), plain ASCII, so its width does not depend on how the norns font draws other glyphs:
   - the voice number;
   - active status (`+` running, `-` stopped);
   - the voice type's short name, `MAIN_PARAMS[type].list_name` (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`; at most 5 characters). The details column shows the full name and ON/OFF;
-  - lock status (` [L]` suffix).
+  - lock status (` [L]` suffix);
+  - 3.5: the voice's held notes (` <n>`, `S.lib.notes.held(i)`) while it holds `LAYOUT.count_from` (2) or more: `1+ reso 3`, `5m pulse [L] 8`. One note (the own note alone) shows no count.
 - Four rows (y 15-48). The norns `ScrollingList` leaves a blank first row when the first entry is selected with one row above the selection, so `place_voice_list()` sets `num_above_selected` per selection (0 first, 2 last, 1 otherwise): voices 1-4 for voice 1, 4-7 for voice 7.
 
 ## Layout
@@ -61,6 +63,6 @@ Two columns under the header (`draw_header()`, the same on every page: `docs/not
 - `mod:` (crossmod sources) is not on MAIN; the VOICE page shows them.
 - **Hint row** (y=62): see Keys.
 
-`layout_states` (drawn by `test/unit/ui_layout_test.lua` and the page renders): every voice running, locked, triggered and frozen with the cursor on field 3, with voice 1 selected; the same with voice 7 on buffer 8; voice 1 on the input; the voice list's m and s marks; `~` after RESONATOR on buffer 8 (scatter on); and voice 1 locked with ALT+K2 held `ALT_HOLD_SECONDS`, for the widest ALT hint, `K2:cancel K3:unlock`.
+`layout_states` (drawn by `test/unit/ui_layout_test.lua` and the page renders): every voice running, locked, triggered and frozen with the cursor on field 3, with voice 1 selected; the same with voice 7 on buffer 8; voice 1 on the input; the voice list's m and s marks; every voice running, muted, locked and holding eight notes (3.5's widest entries, `5m pulse [L] 8`, with voice 5 selected: the pool holds 16 extra notes at most, so the state stands in `S.lib.notes.held`); `~` after RESONATOR on buffer 8 (scatter on); and voice 1 locked with ALT+K2 held `ALT_HOLD_SECONDS`, for the widest ALT hint, `K2:cancel K3:unlock`.
 
-Layout tests: `test/unit/pages_main_test.lua` draws the list for every voice, selection and running/locked state, MAIN for buffer- and input-sourced voices, and the fields at their minimum and maximum values for every voice, source and cursor position; `test/unit/ui_layout_test.lua` draws MAIN with every voice, source, ALT state and flash, and the layout states.
+Layout tests: `test/unit/pages_main_test.lua` draws the list for every voice, selection and running/locked state, the counts (one voice's real notes coming and going, and every voice holding eight, muted and locked, for every selection), MAIN for buffer- and input-sourced voices, and the fields at their minimum and maximum values for every voice, source and cursor position; `test/unit/ui_layout_test.lua` draws MAIN with every voice, source, ALT state and flash, and the layout states.

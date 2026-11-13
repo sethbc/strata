@@ -128,6 +128,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 110 | cancel a scene transition | `lib/scenes.lua` |
 | 112 | cancel the morph clock (`S.morph_clock`) and drop the apply it waited for (3.4) | `lib/morph.lua` |
 | 114 | cancel the macros' apply clock (`S.macro_clock`), dropping every apply that waits, and learn's timeout (`S.macro_learn_clock`) (`CLEANUP_ORDER.macros`, 3.4) | `lib/macros.lua` |
+| 117 | end the zones editor's learn: cancel its timeout (`S.zones_learn_clock`) and every retired one, and clear the MIDI module's note tap (`CLEANUP_ORDER.zones_learn`, 3.5) | `lib/ui/zones.lua` |
 | 118 | cancel matrix learn's timeout (`S.matrix_learn_clock`) and forget the matrix's offsets (its extra offsets and fast sums), sending nothing; the matrix steps in the LFO clock and has no clock of its own (`CLEANUP_ORDER.matrix`, 3.4) | `lib/matrix.lua` |
 | 119 | end the note module's expression flush (`S.lib.notes.stop_flush`): nothing is due and its LFO step hook sends nothing after it (`CLEANUP_ORDER.notes`, 3.5) | `lib/notes.lua` |
 | 120 | cancel the LFO clock, release every engine-run LFO (`stopFastLfo`) and give every Lua-run LFO's destination its stored value back | `lib/lfos.lua` |
@@ -231,6 +232,7 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `macro apply` | `lib/macros.lua` | a macro waits for its apply exactly while the apply clock runs (`S.macro_clock`), and that clock's coroutine is not dead (3.4) |
   | `macro learn` | `lib/macros.lua` | learn waits for a touch exactly while its timeout clock runs (`S.macro_learn_clock`) (3.4) |
   | `matrix learn` | `lib/matrix.lua` | matrix learn waits for a touch exactly while its timeout clock runs (`S.matrix_learn_clock`) (3.4) |
+  | `zones editor` | `lib/ui/zones.lua` | the zones editor's learn waits exactly while its timeout clock runs (`S.zones_learn_clock`) and only while the editor is open, and the closed editor's owner is never the modal one (3.5) |
   | `lfo clock` | `lib/lfos.lua` | the LFO clock (`S.lfo_clock`) runs from its start step to cleanup, and only then (3.4) |
   | `step editor` | `lib/pages/seq.lua` | the step editor is open exactly while its owner is the modal one (`S.lib.ui_modal.top()`) (3.4) |
   | `notes` | `lib/notes.lua` | the note pool is a whole number in 0..`NOTE_POOL.max`, the extra notes held never exceed it, and a stopped voice holds none (3.5) |

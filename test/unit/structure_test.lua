@@ -625,7 +625,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "buffer paths saved",
   "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "gesture recorders",
   "quantized actions", "scene sequencer", "scene transition",
-  "morph clock", "macro clock", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
+  "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "midi handler",
   "voices off", "grids dark", "arc dark" }
@@ -660,6 +660,8 @@ test("cleanup runs every registered step in today's order", function()
   for k = 1, 2 do S.lib.gestures.press(k); enc_param_delta(3, "reverb_mix", 1); S.lib.gestures.press(k) end
   params:set("quantize_actions", 2); S.lib.quantize.schedule("scene", function() end)  -- an action waits
   S.lib.matrix.learn(1)  -- matrix learn's timeout clock runs
+  S.lib.midi_in.set_note_tap = function() end  -- the MIDI module's note tap (3.5's 2b): a stand-in
+  S.lib.ui_zones.open(); S.lib.ui_zones.learn(1)  -- the zones editor's learn timeout clock runs
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -693,6 +695,7 @@ test("cleanup runs every registered step in today's order", function()
     { "morph clock", S.morph_clock }, { "macro clock", S.macro_clock },
     { "gestures saved", S.gesture_save_clock },  -- the recordings' timed write (#651), canceled as the step writes
     { "gesture recorders", S.gestures[2].clock }, { "quantized actions", S.lib.quantize.actions.scene.clock },
+    { "zones learn", S.zones_learn_clock },
     { "matrix learn", S.matrix_learn_clock },
     { "lfos", S.lfo_clock } }
   for voice_idx = 1, S.constants.NUM_VOICES do table.insert(clocks, { "pattern clock", S.pattern_clocks[voice_idx] }) end

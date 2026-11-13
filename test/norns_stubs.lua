@@ -2729,7 +2729,7 @@ end
 ---------------------------------------------------------------------------
 
 -- lib/musicutil.lua's scale data and generate_scale (the scales' chord
--- tables left out), with note_num_to_freq
+-- tables left out), with note_num_to_freq and note_num_to_name
 local function make_musicutil()
   local musicutil = {}
   musicutil.NOTE_NAMES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
@@ -2778,6 +2778,12 @@ local function make_musicutil()
   }
   -- same formula as lib/musicutil.lua
   function musicutil.note_num_to_freq(note_num) return 13.75 * (2 ^ ((note_num - 9) / 12)) end
+  -- as lib/musicutil.lua writes it (60 is C3)
+  function musicutil.note_num_to_name(note_num, include_octave)
+    local name = musicutil.NOTE_NAMES[note_num % 12 + 1]
+    if include_octave then name = name .. math.floor(note_num / 12 - 2) end
+    return name
+  end
   -- lib/musicutil.lua's lookup_data: an index, or a name or alt name (any case)
   local function lookup_data(lookup_table, search)
     if type(search) == "string" then
