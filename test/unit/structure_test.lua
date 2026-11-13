@@ -1786,6 +1786,19 @@ test("the engine check runner says where a signal came between shards or before 
   assert_equal(#calls, 0, "no shard started: " .. output)
   assert_true(output:find("ENGINE CHECK FAILED: interrupted before the first shard; 2 of 2 shards did not run\nexit=130\n$") ~= nil,
     "the run says the signal came before any shard: " .. output)
+  -- a Ctrl-C reaches the list's reader too, which then fails: the stand-in
+  -- signals the run, then exits as one killed by that signal would
+  lister = "#!/bin/sh\nuntil [ -s " .. h.shell_quote(data_root .. "runner-killed-lister/runner.pid") .. " ]; do sleep 0.1; done\n"
+    .. "kill -TERM $(cat " .. h.shell_quote(data_root .. "runner-killed-lister/runner.pid") .. ")\nexit 143\n"
+  checkout = runner_checkout("killed-lister", { "alpha", "beta" }, lister)
+  output, calls = run_fake_runner("killed-lister", { checkout = checkout, body = function(_, quoted)
+    return { 'echo "$STRATA_ENGINE_CHECK_AREAS" >> ' .. quoted("calls.txt"), 'echo "ENGINE CHECK PASSED"' }
+  end, driver = "true" })
+  h.remove_tree(checkout)
+  assert_equal(#calls, 0, "no shard started: " .. output)
+  assert_true(output:find("no shard list", 1, true) == nil
+    and output:find("ENGINE CHECK FAILED: interrupted before the first shard, while the shard list was read\nexit=130\n$") ~= nil,
+    "a signal that ends the list's reader is an interrupt, not a missing list: " .. output)
 end)
 
 -- A crashed shard leaves its server: the run waits, with a bound, for it to

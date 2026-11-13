@@ -88,6 +88,12 @@ if [ -z "${STRATA_ENGINE_CHECK_AREAS:-}" ] && [ -z "${STRATA_ENGINE_CHECK_ONE_SC
   pending=
   trap 'pending=1' INT TERM HUP
   if ! shards=$(/bin/sh "$script_dir/run_engine_check_313.sh" -l); then
+    # a Ctrl-C reaches the list's reader too, which fails: an interrupt,
+    # not a missing list (the trap has run by now)
+    if [ -n "$pending" ]; then
+      echo "ENGINE CHECK FAILED: interrupted before the first shard, while the shard list was read"
+      exit 130
+    fi
     echo "ENGINE CHECK FAILED: no shard list to run (the engine-shard matrix of .github/workflows/test.yml)" >&2
     exit 2
   fi
