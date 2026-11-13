@@ -196,6 +196,7 @@ local START_ORDER = {
   macros_load = 105,     -- lib/macros.lua: macros.data (3.4)
   gestures_load = 107,   -- lib/gestures.lua: gestures.data (3.4)
   matrix_load = 108,     -- lib/matrix.lua: matrix.data (3.4)
+  notes_load = 109,      -- lib/notes.lua: notes.data, the note pool (3.5)
   buffers_load = 110,    -- lib/buffers.lua: buffers.data (sets S.buffers_loaded)
   startup_clock = 120,   -- strata.lua: voices 1 and 2
   lfo_clock = 125,       -- lib/lfos.lua: the LFO clock (3.4)
@@ -293,7 +294,9 @@ return {
   SCRUB = SCRUB,
   WAVEFORM_POINTS = 64,  -- Points of a slot's peak curve (engine waveformPoints)
   NUM_FAST_DESTINATIONS = 5,  -- Engine fast-modulation destinations per voice: pitch, position, size, cutoff, amp (engine numFastDestinations)
-  FAST_MOD_NOTE_SLOTS = 1,    -- Fast-modulation note slots per voice: setFastOffset's 0..FAST_MOD_NOTE_SLOTS - 1 (engine fastModNoteSlots; 3.5 raises it)
+  FAST_MOD_NOTE_SLOTS = 1,    -- Fast-modulation note slots per voice: setFastOffset's 0..FAST_MOD_NOTE_SLOTS - 1 (engine fastModNoteSlots; 3.5 keeps 1: per-note values are controls on the note's own synth)
+  NOTE_SLOTS = 8,  -- Notes per voice: slot 1 the voice's own, 2-8 from the pool (engine noteSlots)
+  NOTE_POOL = {max = 16, standard = 4, high = 8},  -- Extra notes all voices share: the checked maximum (engine notePoolMax) and each tier's default
   GRAIN_ENV_OPTIONS = GRAIN_ENV_OPTIONS,
   GRAIN_MODE_OPTIONS = GRAIN_MODE_OPTIONS,
   SOURCE_SYNTH = SOURCE_SYNTH,
