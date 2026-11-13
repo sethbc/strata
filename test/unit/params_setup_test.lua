@@ -962,4 +962,28 @@ test("the menu records for 3.4's groups follow lfos in order, each adding its mo
   assert_equal(table.concat(called, " "), "macros morph scatter matrix input gestures seq", "each, in menu order")
 end)
 
+-- #679: step 0 keeps what the step used to give the other readers
+test("buffer rate is exact (step 0) and its turns, display and range are as with step 0.01", function()
+  load_strata()
+  local spec = params:lookup_param("v1_buf_rate").controlspec
+  assert_equal(spec.step, 0, "no step: a set keeps the exact rate")
+  assert_equal(spec.quantum, 0.01, "a turn is still 0.01 of the raw range, not the step")
+  assert_equal(spec.minval, 0.25); assert_equal(spec.maxval, 4)
+  params:set("v1_buf_rate", 2 ^ (2 / 12))
+  assert_near(params:get("v1_buf_rate"), 2 ^ (2 / 12), 1e-12, "exact")
+  assert_equal((params:string("v1_buf_rate"):gsub("%s+$", "")), "1.12", "two decimals shown")
+  params:set("v1_buf_rate", 0.2649)
+  assert_equal((params:string("v1_buf_rate"):gsub("%s+$", "")), "0.26", "two decimals at a low rate")
+  params:set("v1_buf_rate", 1)
+  local raw = params:get_raw("v1_buf_rate")
+  enc_param_delta(3, "v1_buf_rate", 1)
+  assert_near(params:get_raw("v1_buf_rate") - raw, 0.01, 1e-9, "E3: 0.01 of the raw range")
+  key(1, 1); raw = params:get_raw("v1_buf_rate"); enc_param_delta(3, "v1_buf_rate", 1)
+  assert_near(params:get_raw("v1_buf_rate") - raw, 0.001, 1e-9, "ALT+E3: a tenth of it")
+  key(1, 0)
+  local before = params:get("v1_buf_rate")
+  arc_sweep_param("v1_buf_rate", 1)
+  assert_true(params:get("v1_buf_rate") > before, "an arc tick raises it")
+end)
+
 end

@@ -993,7 +993,10 @@ return function(S)
       type = "control",
       id = prefix .. "buf_rate",
       name = "buffer rate",
-      controlspec = controlspec.new(0.25, 4, "exp", 0.01, v.grain.buf_rate),
+      -- step 0 (#679): the own note of a MIDI or sequenced note plays the
+      -- exact rate, as its chord's extra notes do; a turn's size is the
+      -- quantum (0.01 of the range), never the step
+      controlspec = controlspec.new(0.25, 4, "exp", 0, v.grain.buf_rate),
       action = function(x)
         S.voices[voice_idx].grain.buf_rate = x
         note_param_edit(prefix .. "buf_rate")
