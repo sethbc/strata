@@ -87,8 +87,10 @@ Settings for the BUFFER page's record key (K3), the grid's record keys and each 
 - mpe lower members and mpe upper members (0-15, default 15 and 0): the member channels of each zone (the lower zone's master is channel 1 and its members follow it; the upper zone's master is channel 16 and its members count down from 15). Setting one lowers the other while both are above 0, so together they never pass 14. A controller's own configuration message (RPN 6) sets them and flashes `MPE lower <n>` or `MPE upper <n>`
 - mpe bend range (1-96 semitones, default 48): a member channel's pitch bend range; RPN 0 on a member channel sets it. Do not map CC 74, 87, 6, 38, 100 or 101 in PARAMS > MAP while an MPE controller is in use
 
+PSETs save the MIDI group; scenes never do. The note pool, how many extra notes the voices share for chords, is not a parameter: SETUP's `note pool` sets it for the norns, and no PSET or scene holds it ([SETUP](pages/setup.md)).
+
 ## Zones (group)
-Split zones for the mpe split mode. Each voice has a zone (off, lower or upper; voice 1 lower, voice 2 upper, the others off by default) and a lowest and highest note (0-127; the lowest never passes the highest, the one you set moves the other). A note plays every voice whose zone and range hold it.
+Split zones for the mpe split mode. Each voice has a zone (off, lower or upper; voice 1 lower, voice 2 upper, the others off by default) and a lowest and highest note (0-127; the lowest never passes the highest, the one you set moves the other). A note plays every voice whose zone and range hold it. SETUP's `mpe & zones` editor sets them too, and learns a voice's range from the next two notes played ([Split zones](midi.md#split-zones)). PSETs save them; scenes never do.
 
 ## Mutations
 - Mutations enabled (on/off)

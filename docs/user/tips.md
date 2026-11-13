@@ -41,6 +41,17 @@ Everything here works from the norns alone.
 3. Turn `fb` above 0% to overdub: the buffer keeps playing while each pass layers on the old audio. `loop` records over and over the same stretch until you stop it.
 4. Save a sound you like into a SCENES slot (ALT+K3 on SCENES); K3 recalls it, K2 fades to it over the transition time.
 
+## Playing Chords and MPE
+
+- Hold keys together on a MIDI keyboard to play chords on a voice: each voice plays up to eight notes, and the voices share a note pool for the notes beyond each one's first (SETUP's `note pool`; raise it for bigger chords on several voices, lower it if a CM3 drops out)
+- A buffer voice playing a recording makes a sampler: each note plays the sound at its own rate, and pressure swells each note on its own
+- A synth voice's chord is grained as one sound: turn grain size and position spread up to smear it into a cloud
+- Freeze a synth voice, then play keys: each note replays the frozen sound at its pitch, the key you froze at playing it as it was
+- With an MPE controller, choose `mpe selected` on SETUP's `channels` row and set the controller's bend range to Strata's `mpe bend range` (48 by default). Pressure swells each note and slide moves the voice's main control by default; VOICE's `notes` section maps them elsewhere (try slide on `cutoff`, or pressure on `level` for notes that sound only while pressed)
+- With a LinnStrument split in two, `mpe split` plays voice 1 from the left half and voice 2 from the right; SETUP's `mpe & zones` editor gives any voice a zone and a range (ALT+K3 on its row learns the range from the next two notes you play), and overlapping ranges layer voices
+- `release` in `note off` ends each note with its key; `latch` keeps a chord sounding after the keys lift, until the next chord's first key replaces it: a held drone you can change chord by chord
+- A sequencer step's notes play as a chord too (SEQ's `add note` row): sequence chords on one voice while you play another from MIDI
+
 ## Using Probability-Based Mutations
 
 - Enable mutations on SETUP (the `mutations` field, E3; or PARAMETERS > mutations enabled)
