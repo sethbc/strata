@@ -731,6 +731,34 @@ test("the flush sends at most 16 a step, newest values, no note starved, none fo
   S.lib.engine_sync.count_sends = real_count
 end)
 
+-- Ruling 36: what a slot holds can be read, so a note's later expression
+-- is compared with what the engine has or will have
+test("a slot's stored expression can be read, as a copy", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  play(context, 1, 1, 60)
+  local own = notes.expression(1, 1)
+  assert_equal(table.concat({ own.bend, own.amp, own.position, own.size, own.main }, " "), "1 1 0 0 0",
+    "a note played with none: neutral")
+  play(context, 1, 2, 64, { expression = { bend = 2, size = -0.5, amp = 3 } })
+  local held = notes.expression(1, 2)
+  assert_equal(table.concat({ held.bend, held.amp, held.position, held.size, held.main }, " "), "2 2 0 -0.5 0",
+    "its first expression, clipped as stored")
+  held.amp = 0
+  assert_equal(notes.expression(1, 2).amp, 2, "a copy")
+  notes.set_expression(1, 2, { amp = 0.5, main = 0.25 })
+  held = notes.expression(1, 2)
+  assert_equal(held.amp, 0.5, "a set expression, before the flush sends it"); assert_equal(held.main, 0.25)
+  assert_equal(held.bend, 2, "and what the set kept")
+  assert_equal(notes.expression(1, 3), nil, "an empty slot")
+  notes.release(1, "midi", 2)
+  assert_equal(notes.expression(1, 2), nil, "a released note's slot")
+  for _, index in ipairs({ { 0, 1 }, { 8, 1 }, { 1.5, 1 }, { "1", 1 }, { 1, 0 }, { 1, 9 }, { 1, 1.5 }, { 1, "1" } }) do
+    assert_equal(notes.expression(index[1], index[2]), nil, "no slot " .. tostring(index[1]) .. "," .. tostring(index[2]))
+  end
+end)
+
 test("a smaller pool releases the newest held extra notes past it, then tells the engine", function()
   local context = load_strata()
   local S = started(context)
