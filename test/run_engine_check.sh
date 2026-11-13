@@ -4,15 +4,26 @@
 # private bus, so it is silent) and runs the check's areas
 # (test/engine_check/<area>.scd), which exercise every engine command.
 #
-# usage: [STRATA_SC_PORT=57141] [STRATA_ENGINE_CHECK_AREAS=memory,buffers] test/run_engine_check.sh [path/to/norns]
-#   STRATA_ENGINE_CHECK_AREAS names the areas to run, comma- or
-#   space-separated (structure, voices, grains, lifecycle, memory, buffers,
-#   files, effects, performance, ...); unset or empty runs every area but
-#   the on-demand ones (soak, the long-session soak: docs/notes/engine/files.md),
-#   which run only when named. They run in
+# usage: [STRATA_SC_PORT=57141] [STRATA_ENGINE_CHECK_AREAS=memory,buffers] [STRATA_ENGINE_CHECK_ONE_SCLANG=1] test/run_engine_check.sh [path/to/norns]
+#   STRATA_ENGINE_CHECK_AREAS names the areas to run in one sclang, comma-
+#   or space-separated (structure, voices, grains, lifecycle, memory,
+#   buffers, files, effects, performance, ...). They run in
 #   the check's fixed order whatever order they are named in, and a name with
 #   no area file fails the run ("ENGINE CHECK FAILED: no area <name>"). Each
 #   area's time is printed as "area <name>: <seconds> s".
+#   Unset or empty, the run is a full run: every area but the on-demand ones
+#   (soak, the long-session soak: docs/notes/engine/files.md), which run
+#   only when named. A full run is CI's shards (#671): the engine-shard
+#   matrix of .github/workflows/test.yml, read at each start through
+#   test/run_engine_check_313.sh -l (the one reader of that list), each
+#   shard run by this script in a sclang of its own, one after another on
+#   the same port. Every shard runs; then one line a shard ("shard <areas>:
+#   passed in <n> s", or "failed in <n> s (exit <status>)") and the run's
+#   result, which passes only when every shard passed. One sclang running
+#   every area in turn crashes on SuperCollider 3.14.1 at the start of the
+#   modulation area about half the time (#671, in #131's and #211's family).
+#   STRATA_ENGINE_CHECK_ONE_SCLANG=1 runs a full run in one sclang, as
+#   before #671 (for studying it); it must be 1 or empty.
 #   STRATA_SC_PORT is the UDP port scsynth boots on (default 57110). Give each
 #   run its own port to run checks side by side (one per worktree); avoid
 #   sclang's own language port (57120, and the few above it when several
@@ -46,6 +57,73 @@ fi
 if [ ! -d "$norns_dir/sc/core" ]; then
   echo "norns source not found at $norns_dir (pass it as the first argument)" >&2
   exit 2
+fi
+
+case ${STRATA_ENGINE_CHECK_ONE_SCLANG:-} in
+  ''|1) ;;
+  *) echo "STRATA_ENGINE_CHECK_ONE_SCLANG must be 1 or empty, got \"$STRATA_ENGINE_CHECK_ONE_SCLANG\"" >&2; exit 2 ;;
+esac
+# checked here, before any shard of a full run starts (each would refuse it)
+sclang_timeout=${ENGINE_CHECK_TIMEOUT:-1800}
+case $sclang_timeout in
+  ''|*[!0-9]*) echo "ENGINE_CHECK_TIMEOUT must be a number of seconds, got \"$sclang_timeout\"" >&2; exit 2 ;;
+esac
+
+# A full run is CI's shards, each run by this script in a sclang of its own
+# (#671; the header says why). A signal stops the running shard the way its
+# own run stops (sclang's tree, its server and its folder; a backgrounded
+# shard ignores INT, so it is sent TERM) and no later shard starts.
+if [ -z "${STRATA_ENGINE_CHECK_AREAS:-}" ] && [ -z "${STRATA_ENGINE_CHECK_ONE_SCLANG:-}" ]; then
+  if ! shards=$(/bin/sh "$script_dir/run_engine_check_313.sh" -l); then
+    echo "ENGINE CHECK FAILED: no shard list to run (the engine-shard matrix of .github/workflows/test.yml)" >&2
+    exit 2
+  fi
+  total=0
+  for shard in $shards; do total=$((total + 1)); done
+  shard=
+  shard_pid=
+  stop_shards() {
+    trap '' INT TERM HUP
+    if [ -n "$shard_pid" ]; then
+      kill -TERM "$shard_pid" 2>/dev/null || true
+      wait "$shard_pid" 2>/dev/null || true
+    fi
+    echo "ENGINE CHECK FAILED: interrupted in shard $shard; the shards after it did not run" >&2
+    exit 130
+  }
+  trap stop_shards INT TERM HUP
+  newline='
+'
+  number=0
+  failed=0
+  failed_shards=
+  summary=
+  for shard in $shards; do
+    number=$((number + 1))
+    echo "--- shard $number of $total: $shard ---"
+    began=$(date +%s)
+    # in the background, so a signal's trap runs at once, not after it
+    STRATA_ENGINE_CHECK_AREAS=$shard /bin/sh "$script_dir/run_engine_check.sh" "$norns_dir" &
+    shard_pid=$!
+    status=0
+    wait "$shard_pid" || status=$?
+    shard_pid=
+    seconds=$(( $(date +%s) - began ))
+    if [ "$status" -eq 0 ]; then
+      summary="$summary${newline}shard $shard: passed in $seconds s"
+    else
+      failed=$((failed + 1))
+      failed_shards="$failed_shards${failed_shards:+; }$shard"
+      summary="$summary${newline}shard $shard: failed in $seconds s (exit $status)"
+    fi
+  done
+  echo "${summary#"$newline"}"
+  if [ "$failed" -eq 0 ]; then
+    echo "ENGINE CHECK PASSED: $total of $total shards"
+    exit 0
+  fi
+  echo "ENGINE CHECK FAILED: $failed of $total shards failed: $failed_shards"
+  exit 1
 fi
 
 # The run's temporary folder; the exit trap deletes it, and only a folder
@@ -92,11 +170,7 @@ YAML
 # the server's PID to scsynth.pid in the work dir, and the script stops it
 # after sclang ends (#152). stdbuf makes sclang's output line-buffered, so
 # an error is in the output file while sclang waits (block-buffered, it
-# never would be).
-sclang_timeout=${ENGINE_CHECK_TIMEOUT:-1800}
-case $sclang_timeout in
-  ''|*[!0-9]*) echo "ENGINE_CHECK_TIMEOUT must be a number of seconds, got \"$sclang_timeout\"" >&2; exit 2 ;;
-esac
+# never would be). sclang_timeout is checked above, with the settings.
 if [ "$sclang_timeout" -gt 60 ]; then
   STRATA_ENGINE_CHECK_DEADLINE=$((sclang_timeout - 30))
   export STRATA_ENGINE_CHECK_DEADLINE

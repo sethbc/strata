@@ -1461,8 +1461,10 @@ local function still_running(pid, seconds)
   return verdict == "running"
 end
 
-local function run_runner_without_tools(case, timeout)
-  local shell_quote, root = h.shell_quote, data_root .. "runner-" .. case
+-- A runner test's folder: bin holds links to RUNNER_TOOLS only, and
+-- norns/sc/core stands in for a norns checkout
+local function runner_folder(name)
+  local shell_quote, root = h.shell_quote, data_root .. "runner-" .. name
   os.execute("mkdir -p " .. shell_quote(root .. "/bin") .. " " .. shell_quote(root .. "/norns/sc/core"))
   local function tool_path(tool)
     local pipe = io.popen("command -v " .. tool)
@@ -1474,6 +1476,41 @@ local function run_runner_without_tools(case, timeout)
   for _, tool in ipairs(RUNNER_TOOLS) do
     os.execute("ln -s " .. shell_quote(tool_path(tool)) .. " " .. shell_quote(root .. "/bin/" .. tool))
   end
+  return root
+end
+
+-- The runner's command, run from `checkout` on that PATH with the fake
+-- sclang at root/sclang, in two parts: the setup, then the runner itself
+-- (a command of its own, to run in the background). The setup clears the
+-- caller's areas and one-sclang settings (one exported while working on an
+-- area must not change what the tests see); `environment` holds the run's
+-- own assignments
+local RUNNER_CALLER_SETTINGS = "unset STRATA_ENGINE_CHECK_AREAS STRATA_ENGINE_CHECK_ONE_SCLANG && "
+local function runner_command(root, checkout, environment, timeout)
+  local shell_quote = h.shell_quote
+  return "cd " .. shell_quote(checkout) .. " && " .. RUNNER_CALLER_SETTINGS,
+    environment .. " PATH=" .. shell_quote(root .. "/bin") .. " SCLANG=" .. shell_quote(root .. "/sclang")
+    .. " ENGINE_CHECK_TIMEOUT=" .. (timeout or 30) .. " TMPDIR=" .. shell_quote(root)
+    .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(root .. "/norns") .. " 2>&1"
+end
+
+-- The lines of a file, {} when there is none
+local function file_lines(path)
+  local file, lines = io.open(path, "r"), {}
+  if not file then return lines end
+  for line in file:lines() do lines[#lines + 1] = line end
+  file:close()
+  return lines
+end
+
+-- options.timeout: ENGINE_CHECK_TIMEOUT (30); options.environment: the
+-- run's settings (default STRATA_ENGINE_CHECK_ONE_SCLANG=1, every area in
+-- one sclang, the path these cases test; "" runs CI's shards)
+local function run_runner_without_tools(case, options)
+  options = options or {}
+  local environment = options.environment or "STRATA_ENGINE_CHECK_ONE_SCLANG=1"
+  local shell_quote = h.shell_quote
+  local root = runner_folder(case .. (environment == "" and "-shards" or ""))
   -- a script, not a link to sleep: a multi-call coreutils refuses to run
   -- under another name. It sleeps in 1 s steps, so a stopped one leaves
   -- no long sleep behind
@@ -1482,9 +1519,12 @@ local function run_runner_without_tools(case, timeout)
   server:close()
   os.execute("chmod +x " .. shell_quote(root .. "/scsynth"))
   local lines = { "#!/bin/sh", shell_quote(root .. "/scsynth") .. " 60 &", "echo $! > " .. shell_quote(root .. "/fake.pid"),
-    "echo $$ > " .. shell_quote(root .. "/sclang.pid") }
+    "echo $$ > " .. shell_quote(root .. "/sclang.pid"), "echo $$ >> " .. shell_quote(root .. "/starts.txt") }
   if case == "warning" then
-    -- a run that passes in every way but one WARNING line (#486)
+    -- a run that passes in every way but one WARNING line (#486); its
+    -- server's PID file lets the runner stop it, so the wait for its end
+    -- (#673) is short
+    lines[#lines + 1] = 'echo $! > "$STRATA_CHECK_TMPDIR/scsynth.pid"'
     lines[#lines + 1] = 'echo "WARNING: Extension overwrites a method"'
     lines[#lines + 1] = 'echo "ENGINE CHECK PASSED"'
   elseif case == "compile-error" then
@@ -1502,20 +1542,15 @@ local function run_runner_without_tools(case, timeout)
   sclang:write(table.concat(lines, "\n") .. "\n")
   sclang:close()
   os.execute("chmod +x " .. shell_quote(root .. "/sclang"))
-  local run = "cd " .. shell_quote(repo_root) .. " && PATH=" .. shell_quote(root .. "/bin")
-    .. " SCLANG=" .. shell_quote(root .. "/sclang") .. " ENGINE_CHECK_TIMEOUT=" .. (timeout or 30) .. " TMPDIR=" .. shell_quote(root)
-    .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(root .. "/norns") .. " 2>&1"
+  local setup, runner = runner_command(root, repo_root, environment, options.timeout)
+  local run = setup .. runner .. "; echo exit=$?"
   local leftover_folders
   if case == "signal" then
     -- the runner in the background; once the fake sclang has its server
     -- going, the runner is sent TERM, the way a caller's timeout would
-    run = "cd " .. shell_quote(repo_root) .. " && ( PATH=" .. shell_quote(root .. "/bin")
-      .. " SCLANG=" .. shell_quote(root .. "/sclang") .. " ENGINE_CHECK_TIMEOUT=" .. (timeout or 30) .. " TMPDIR=" .. shell_quote(root)
-      .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(root .. "/norns") .. " 2>&1 & runner=$!;"
+    run = setup .. "( " .. runner .. " & runner=$!;"
       .. " n=0; while [ ! -s " .. shell_quote(root .. "/fake.pid") .. " ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done; sleep 1;"
       .. " kill -TERM $runner; wait $runner; echo exit=$?; sleep 1 )"
-  else
-    run = run .. "; echo exit=$?"
   end
   local pipe = io.popen(run)
   local output = pipe:read("*a")
@@ -1533,8 +1568,9 @@ local function run_runner_without_tools(case, timeout)
   if sclang_file then sclang_file:close() end
   local sclang_alive = still_running(sclang_pid, 10)
   if sclang_alive then os.execute("kill " .. sclang_pid .. " 2>/dev/null") end
+  local starts = #file_lines(root .. "/starts.txt")
   h.remove_tree(root)
-  return output, pid, alive, leftover_folders, sclang_alive
+  return output, pid, alive, leftover_folders, sclang_alive, starts
 end
 
 test("the engine check runner stops sclang's scsynth without pgrep or timeout (#152)", function()
@@ -1568,7 +1604,7 @@ end)
 -- 1 s timeout: without a timeout command the runner's own loop stops it
 -- 15 s later
 test("the engine check runner tells a hung sclang from a slow check (#131)", function()
-  local output, pid, alive = run_runner_without_tools("hang", 1)
+  local output, pid, alive = run_runner_without_tools("hang", { timeout = 1 })
   assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
   assert_true(output:find("ENGINE CHECK FAILED: no result within 1 s, and its own deadline never fired: sclang hung", 1, true) ~= nil,
     "the run fails, naming a hang: " .. output)
@@ -1597,6 +1633,117 @@ end)
 test("the engine check runner fails a run that printed a WARNING line (#486)", function()
   local output = run_runner_without_tools("warning")
   assert_true(output:find("exit=1", 1, true) ~= nil, "a WARNING fails the run: " .. output)
+end)
+
+-- #671: with no areas named the runner runs CI's shards, each in a sclang
+-- of its own, one after another, read from the workflow through the 3.13
+-- runner's -l; STRATA_ENGINE_CHECK_AREAS runs its areas in one sclang, and
+-- STRATA_ENGINE_CHECK_ONE_SCLANG=1 every area in one, as before. The fake
+-- sclang records the areas each start was given (calls.txt) and whether two
+-- ran at once, and passes, or fails when its areas are `failing`
+local function workflow_shards()
+  local workflow = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r"))
+  local block = workflow:read("*a"):match("\n%s*areas:%s*\n(.-)\n%s*env:")
+  workflow:close()
+  local shards = {}
+  for shard in block:gmatch("%-%s*([%w,]+)") do shards[#shards + 1] = shard end
+  return shards
+end
+
+local function run_runner_areas(name, environment, failing, checkout)
+  local shell_quote = h.shell_quote
+  local root = runner_folder(name)
+  local calls, running = shell_quote(root .. "/calls.txt"), shell_quote(root .. "/running")
+  local sclang = assert(io.open(root .. "/sclang", "w"))
+  sclang:write(table.concat({ "#!/bin/sh",
+    'echo "${STRATA_ENGINE_CHECK_AREAS-unset}" >> ' .. calls,
+    "[ -e " .. running .. " ] && echo overlap >> " .. calls,
+    ": > " .. running, "sleep 0.2", "rm -f " .. running,
+    'if [ "${STRATA_ENGINE_CHECK_AREAS-}" = ' .. shell_quote(failing or "no shard fails") .. ' ]; then',
+    '  echo "FAIL fake: this shard fails"', "else", '  echo "ENGINE CHECK PASSED"', "fi" }, "\n") .. "\n")
+  sclang:close()
+  os.execute("chmod +x " .. shell_quote(root .. "/sclang"))
+  local setup, runner = runner_command(root, checkout or repo_root, environment)
+  local pipe = io.popen(setup .. runner .. "; echo exit=$?")
+  local output = pipe:read("*a")
+  pipe:close()
+  local lines = file_lines(root .. "/calls.txt")
+  h.remove_tree(root)
+  return output, lines
+end
+
+test("the engine check runner's full run is CI's shards, each in a sclang of its own, one after another (#671)", function()
+  local shards = workflow_shards()
+  assert_true(#shards >= 2, "the workflow has shards")
+  local output, calls = run_runner_areas("shards", "")
+  assert_equal(table.concat(calls, "\n"), table.concat(shards, "\n"), "one sclang per shard, in the workflow's order, none at once: " .. output)
+  for _, shard in ipairs(shards) do
+    assert_true(output:find("\nshard " .. shard .. ": passed in %d+ s\n") ~= nil, "a summary line for " .. shard .. ": " .. output)
+  end
+  assert_true(output:find("ENGINE CHECK PASSED: " .. #shards .. " of " .. #shards .. " shards\nexit=0\n", 1, true) ~= nil,
+    "the run passes, and says so last: " .. output)
+end)
+
+test("a failed shard fails the engine check runner's full run, and every shard still runs (#671)", function()
+  local shards = workflow_shards()
+  local output, calls = run_runner_areas("shard-fails", "", shards[2])
+  assert_equal(table.concat(calls, "\n"), table.concat(shards, "\n"), "every shard ran: " .. output)
+  assert_true(output:find("\nshard " .. shards[2] .. ": failed in %d+ s %(exit 1%)\n") ~= nil, "the failed shard's line: " .. output)
+  assert_true(output:find("\nshard " .. shards[1] .. ": passed in %d+ s\n") ~= nil, "a passed shard's line: " .. output)
+  assert_true(output:find("ENGINE CHECK FAILED: 1 of " .. #shards .. " shards failed: " .. shards[2] .. "\nexit=1\n", 1, true) ~= nil,
+    "the run fails, naming the shard: " .. output)
+end)
+
+test("the engine check runner runs named areas, or every area with STRATA_ENGINE_CHECK_ONE_SCLANG=1, in one sclang (#671)", function()
+  local output, calls = run_runner_areas("named", "STRATA_ENGINE_CHECK_AREAS=memory,rings")
+  assert_equal(table.concat(calls, "\n"), "memory,rings", "one sclang, with the named areas: " .. output)
+  assert_true(output:find("exit=0", 1, true) ~= nil and output:find("shard", 1, true) == nil, "no shards: " .. output)
+  output, calls = run_runner_areas("one", "STRATA_ENGINE_CHECK_ONE_SCLANG=1")
+  assert_equal(table.concat(calls, "\n"), "unset", "one sclang, with no areas named (every area): " .. output)
+  assert_true(output:find("exit=0", 1, true) ~= nil and output:find("shard", 1, true) == nil, "no shards: " .. output)
+  output, calls = run_runner_areas("one-bad", "STRATA_ENGINE_CHECK_ONE_SCLANG=yes")
+  assert_equal(#calls, 0, "a value other than 1 or empty starts nothing: " .. output)
+  assert_true(output:find("STRATA_ENGINE_CHECK_ONE_SCLANG must be 1 or empty, got \"yes\"\nexit=2\n", 1, true) ~= nil,
+    "and fails the start: " .. output)
+end)
+
+test("the engine check runner starts no sclang when it cannot read the workflow's shards (#671)", function()
+  local shell_quote, checkout = h.shell_quote, data_root .. "runner-no-list-checkout"
+  os.execute("mkdir -p " .. shell_quote(checkout .. "/test") .. " " .. shell_quote(checkout .. "/.github/workflows"))
+  for _, path in ipairs({ "test/run_engine_check.sh", "test/run_engine_check_313.sh" }) do
+    os.execute("cp " .. shell_quote(repo_root .. "/" .. path) .. " " .. shell_quote(checkout .. "/" .. path))
+  end
+  local workflow = assert(io.open(checkout .. "/.github/workflows/test.yml", "w"))
+  workflow:write("jobs:\n  lua:\n    runs-on: ubuntu-24.04\n")
+  workflow:close()
+  local output, calls = run_runner_areas("no-list", "", nil, checkout)
+  h.remove_tree(checkout)
+  assert_equal(#calls, 0, "no sclang started: " .. output)
+  assert_true(output:find("no shard list", 1, true) ~= nil, "the 3.13 runner's reason is shown: " .. output)
+  assert_true(output:find("\nENGINE CHECK FAILED: [^\n]*shard[^\n]*\nexit=2\n$") ~= nil, "the run ends on its own failure line: " .. output)
+end)
+
+-- #331 for a run in shards: the signal stops the running shard's sclang, its
+-- server and its folder, and no later shard starts
+test("the engine check runner's run in shards stops its shard's sclang and scsynth when it is signaled (#331, #671)", function()
+  local output, pid, alive, folders, sclang_alive, starts = run_runner_without_tools("signal", { environment = "" })
+  assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
+  assert_true(output:find("exit=130", 1, true) ~= nil, "the runner exits 130: " .. output)
+  assert_true(not alive, "the server is stopped with the runner: " .. output)
+  assert_true(not sclang_alive, "the fake sclang is gone too: " .. output)
+  assert_equal(folders, 0, "the work folder is removed")
+  assert_equal(starts, 1, "no later shard started: " .. output)
+end)
+
+-- The 3.13 image runs one sclang a container: its runner makes the shards
+-- itself (a container per shard, or every area in one with -1), so the
+-- image's check never shards again (#671)
+test("the 3.13 image's check runs its container's areas in one sclang (#671)", function()
+  local file = assert(io.open(repo_root .. "/test/docker/sc313/check.sh", "r"))
+  local check = file:read("*a")
+  file:close()
+  assert_true(check:find("\nSTRATA_ENGINE_CHECK_ONE_SCLANG=1 SCLANG=/usr/bin/sclang test/run_engine_check.sh /norns", 1, true) ~= nil,
+    "check.sh runs the runner with STRATA_ENGINE_CHECK_ONE_SCLANG=1")
 end)
 
 -- The 3.13 Docker script (#544, #545): every container carries a memory cap,
