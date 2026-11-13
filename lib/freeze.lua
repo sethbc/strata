@@ -65,11 +65,11 @@ return function(S)
     S.lib.quantize.schedule(key, function() M.toggle(voice_idx) end, "v" .. voice_idx .. " frz")
   end
 
-  -- VOICE's layout tests and page renders: every voice frozen, its cursor
-  -- on the freeze row
   -- The freeze-change hooks' last printed errors (contained_call), per hook
   local freeze_change_errors = {}
 
+  -- VOICE's layout tests and page renders: every voice frozen, its cursor
+  -- on the freeze row
   local layout_states = {}
   for voice_idx = 1, NUM_VOICES do
     table.insert(layout_states, {
