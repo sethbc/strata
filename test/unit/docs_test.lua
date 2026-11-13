@@ -1956,4 +1956,56 @@ test("the engine's note constants equal the script's", function()
   assert_equal(engine_spec.note_pool_max, pool and pool.max, "notePoolMax = NOTE_POOL.max")
 end)
 
+-- 3.5's per-note main expression (design §3.2): noteMain offsets one control
+-- of each voice SynthDef by its half range, clipped to the range, from
+-- noteMainRanges' literals (StrataVoiceDefs.sc), which are Lua's param specs
+test("the engine's expression controls and ranges equal the Lua specs", function()
+  load_strata()
+  local source = stubs.strip_sc_comments(engine_sources())
+  local block = source:match("noteMainRanges%s*{%s*%^%s*(%b())%s*}")
+  assert_true(block ~= nil, "noteMainRanges { ^(def: [\\control, lo, hi], ...) } (StrataVoiceDefs.sc)")
+  local ranges = {}
+  for def, control, low, high in block:gmatch("([%a_][%w_]*)%s*:%s*%[%s*\\([%a_][%w_]*)%s*,%s*(%-?[%d%.]+)%s*,%s*(%-?[%d%.]+)%s*%]") do
+    ranges[def] = { control = control, low = tonumber(low), high = tonumber(high) }
+  end
+  local expected = { strataResonator = "rq", strataFM = "index", strataFolder = "fold", strataSub = "drift",
+    strataPulse = "width", strataKarplus = "decay", strataRing = "ratio" }
+  for _, def in ipairs(engine_spec.voice_synthdefs) do
+    local range = ranges[def]
+    assert_true(range ~= nil, "noteMainRanges has an entry for \\" .. def)
+    assert_equal(range.control, expected[def], "\\" .. def .. "'s expression control")
+    assert_true(engine_spec.synthdef_controls[def][range.control], "\\" .. range.control .. " is a control of \\" .. def)
+    assert_true(engine_spec.synthdef_controls[def].noteMain, "\\" .. def .. " has a noteMain control")
+    local spec = get_param_spec(range.control)
+    assert_near(range.low, spec.minval, 1e-9, def .. "'s " .. range.control .. " low = its spec's min")
+    assert_near(range.high, spec.maxval, 1e-9, def .. "'s " .. range.control .. " high = its spec's max")
+  end
+  local count = 0
+  for _ in pairs(ranges) do count = count + 1 end
+  assert_equal(count, #engine_spec.voice_synthdefs, "one noteMainRanges entry per voice SynthDef")
+end)
+
+-- 3.5's per-note controls are the engine's own (design §3.2): setVoiceParam
+-- and setGrainParam refuse them, as the stub does; the envelope times are
+-- ordinary voice params (design §3.5)
+test("the stub refuses the per-note controls and accepts the envelope times", function()
+  load_strata()
+  -- (refused as the engine's, not merely as a name no SynthDef has)
+  local owned = "a control the engine sets itself"
+  assert_engine_rejects(owned, "setVoiceParam", 0, "noteGate", 0)
+  assert_engine_rejects(owned, "setVoiceParam", 0, "noteAmp", 1)
+  assert_engine_rejects(owned, "setGrainParam", 0, "notePos", 0)
+  assert_engine_rejects(owned, "setGrainParam", 0, "noteRate", 2)
+  for _, name in ipairs({"noteGate", "noteBend", "noteAmp", "noteMain", "notePos", "noteSize", "noteRate", "t_accent"}) do
+    assert_true(engine_spec.engine_controls[name], name .. " is one of engineOwnedControls")
+  end
+  engine.setVoiceParam(0, "attackTime", 0.01)
+  engine.setVoiceParam(0, "releaseTime", 30)
+  for index, def in ipairs(engine_spec.voice_synthdefs) do
+    for _, name in ipairs({"attackTime", "releaseTime"}) do
+      assert_true(engine_spec.voice_params[index][name], name .. " is a setVoiceParam name of \\" .. def)
+    end
+  end
+end)
+
 end

@@ -120,6 +120,206 @@ var checkSourceGrains = { arg voice, slot;
     File.delete(path);
 };
 
+// 3.5's note controls in both grain SynthDefs (design 3.5 §3.2): noteGate
+// (the park, 0.1 s up, grainRelease down), noteBend (on the grain rate,
+// outside rateLevel), noteAmp and the note's accent (t_accent at velocity)
+// on the fade, notePos and noteSize added to the fast offsets, and in
+// \strataGrainRing noteRate on pitchShift before quantize. The checks below
+// play pairs of real grain synths started in one bundle (every draw off, so
+// two synths of one def with the same controls play the same samples): one
+// with a note control, one with the base control it should equal
+var noteNeutral = (noteGate: 1, noteBend: 1, noteAmp: 1, notePos: 0, noteSize: 0, velocity: 1, t_accent: 0);
+var noteSlot = 5, noteVoice = 0, notePath = scratchRoot +/+ "grains-note-noise.wav";
+var silentFastIn = { engine.areaState[\modulation][\silentFastModBus].index };
+// a ring grain synth's controls on a voice's ring (as its synth source's:
+// rateLevel 0), or a buffer grain synth's on a slot, every draw off, then extra
+var noteRingArgs = { arg outBus, extra;
+    var ring = engine.ringBuffersFor(noteVoice, 0);
+    [\out, outBus.index, \bufL, ring[0].bufnum, \bufR, ring[1].bufnum, \phaseBus, ring[2].index, \grainSize, 0.1, \grainDensity, 20,
+        \pitchShift, 1, \posSpread, 0, \panSpread, 0, \rateLevel, 0, \pan, 0, \fastModIn, silentFastIn.value] ++ (extra ? [])
+};
+var noteBufArgs = { arg outBus, extra;
+    [\out, outBus.index, \bufnumL, engine.buffersL[noteSlot].bufnum, \bufnumR, engine.buffersR[noteSlot].bufnum,
+        \bufFrames, engine.bufferFrames[noteSlot], \bufRateScale, engine.bufferRateScale(noteSlot), \bufPos, 0.3,
+        \grainSize, 0.1, \grainDensity, 20, \pitchShift, 1, \posSpread, 0, \panSpread, 0, \pan, 0,
+        \fastModIn, silentFastIn.value] ++ (extra ? [])
+};
+// a slot of noise at the server rate (a grain's place and rate show in what it reads)
+var loadNoteSlot = {
+    var rate = server.sampleRate.round.asInteger;
+    var file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
+    file.openWrite(notePath);
+    file.writeData(h.stereoOf(h.noise(rate, 0.5), h.noise(rate, 0.4)));
+    file.close;
+    command.(\loadBuffer, noteSlot, notePath, 0);
+    h.waitFor({ engine.bufferFrames[noteSlot] == rate }, 3);
+    server.sync;
+};
+// The largest |a - scale x b x (1 + accent)| and the largest |b| since
+// t_reset (accent: the engine's own voiceAccent, fired by t_accent at
+// velocity, as a grain synth's note accent is)
+var addNoteDiff = {
+    SynthDef(\strataCheckNoteDiff, { arg a, b, out, scale = 1, t_reset = 0, t_accent = 0, velocity = 0;
+        var x = In.ar(a, 2), y = In.ar(b, 2) * scale * (1 + engine.voiceAccent(t_accent, velocity)), reset = T2A.ar(t_reset);
+        Out.kr(out, [A2K.kr(Peak.ar((x - y).abs.sum, reset)), A2K.kr(Peak.ar(y.abs.sum, reset))]);
+    }).add;
+    // a bus's peaks in windows after a reset: for each [start, end) of
+    // windows (s after t_reset, four pairs), the peak of |x| (both channels)
+    SynthDef(\strataCheckNoteGrainWindows, { arg in, out, t_reset = 0;
+        var x = In.ar(in, 2).abs.sum, reset = T2A.ar(t_reset), elapsed = Sweep.ar(reset, 1), windows = \windows.kr(0 ! 8);
+        Out.kr(out, 4.collect({ arg index;
+            A2K.kr(Peak.ar(x * (elapsed >= windows[2 * index]) * (elapsed < windows[(2 * index) + 1]), reset)) }));
+    }).add;
+    server.sync;
+};
+// [difference, level] of a pair started in one bundle: defName with argsA
+// on outA, with argsB on outB, measured 0.3 s after the start for 0.5 s
+var notePair = { arg defName, argsA, argsB, scale = 1, defNameB;
+    var group = Group.after(engine.processGroup), outA = Bus.audio(server, 2), outB = Bus.audio(server, 2);
+    var peaks = Bus.control(server, 2), diff, result;
+    diff = Synth(\strataCheckNoteDiff, [\a, outA, \b, outB, \out, peaks, \scale, scale], group, \addToTail);
+    server.makeBundle(nil, { [[defName, argsA.(outA)], [defNameB ? defName, argsB.(outB)]].do({ arg each;
+        Synth(each[0], each[1], group, \addToHead) }) });
+    server.sync; 0.3.wait;
+    result = measure.(diff, peaks, 0.5);
+    group.free; server.sync;
+    [outA, outB, peaks].do(_.free);
+    result
+};
+// a pair's result as "[difference, level]"
+var showPair = { arg pair; pair.round(1e-7) };
+var pairMatches = { arg pair, tolerance = 1e-6; (pair[1] > 0.01) and: { pair[0] < (pair[1] * tolerance) } };
+
+// "grains: both grain defs play 3.4's values with the note controls at
+// their defaults": the controls default to neutral (the park open, no
+// bend, gain 1, no offset, no accent, noteRate 1). The audio proof is the
+// equality checks other areas run on the real defs, unchanged: the
+// modulation area's against check-only copies of 3.3's defs within 1e-6
+// and the mix area's against 3.2's
+var checkNoteDefaults = {
+    var found = grainDefs.collect({ arg name;
+        var names = noteNeutral.keys.asArray ++ (if (name == \strataGrainRing) { [\noteRate] } { [] });
+        [name, names.reject({ arg control; controlDefault.(name, control) == (noteNeutral[control] ? 1) })]
+    });
+    check.(found.every({ arg each; each[1].isEmpty }),
+        "grains: both grain defs play 3.4's values with the note controls at their defaults (controls missing or not neutral: %)".format(found));
+};
+
+// "grains: noteAmp, notePos, noteSize and noteBend act on one grain synth"
+// (each pair against the base control it moves; a moved size is a float32
+// sum, so within 1 % as the modulation area's size offset)
+var checkNoteActs = {
+    var results = [
+        // noteAmp 0.5: half the level, on both defs
+        [\amp, notePair.(\strataGrainBuf, { arg out; noteBufArgs.(out, [\noteAmp, 0.5]) }, { arg out; noteBufArgs.(out) }, 0.5), 1e-6],
+        [\ampRing, notePair.(\strataGrainRing, { arg out; noteRingArgs.(out, [\noteAmp, 0.5]) }, { arg out; noteRingArgs.(out) }, 0.5), 1e-6],
+        // notePos 0.5 at bufPos 0.25: grains at 0.5 of the region
+        [\pos, notePair.(\strataGrainBuf, { arg out; noteBufArgs.(out, [\bufPos, 0.25, \notePos, 0.5]) },
+            { arg out; noteBufArgs.(out, [\bufPos, 0.5]) }), 1e-6],
+        // noteSize 1 at grainSize 0.1: grains of 0.345 s
+        [\size, notePair.(\strataGrainBuf, { arg out; noteBufArgs.(out, [\noteSize, 1]) },
+            { arg out; noteBufArgs.(out, [\grainSize, 0.345]) }), 1e-2],
+        // noteBend 2: twice the read rate (bufRate 2), quantize on in both
+        [\bend, notePair.(\strataGrainBuf, { arg out; noteBufArgs.(out, [\noteBend, 2, \pitchShift, 1.03, \quantize, 1]) },
+            { arg out; noteBufArgs.(out, [\bufRate, 2, \pitchShift, 1.03, \quantize, 1]) }), 1e-6]
+    ];
+    // ... and each control does something: its pair against the unmoved synth differs
+    var moved = notePair.(\strataGrainBuf, { arg out; noteBufArgs.(out, [\bufPos, 0.25, \notePos, 0.5]) },
+        { arg out; noteBufArgs.(out, [\bufPos, 0.25]) });
+    check.(results.every({ arg each; pairMatches.(each[1], each[2]) }) and: { pairMatches.(moved).not },
+        "grains: noteAmp, notePos, noteSize and noteBend act on one grain synth ([difference, level] against the moved control: %; notePos against none %)".format(
+            results.collect({ arg each; "% %".format(each[0], showPair.(each[1])) }).join(", "), showPair.(moved)));
+};
+
+// "grains: noteRate 2 doubles a ring grain's rate and is quantized with
+// pitchShift": noteRate 2 plays as pitchShift 2; with quantize on, noteRate
+// 1.5 plays as pitchShift 1.5 quantized (7 semitones), so noteRate
+// multiplies pitchShift before quantize (after it, the rate would be 1.5
+// itself, which the unquantized reference shows differs)
+var checkNoteRate = {
+    var doubled = notePair.(\strataGrainRing, { arg out; noteRingArgs.(out, [\noteRate, 2]) }, { arg out; noteRingArgs.(out, [\pitchShift, 2]) });
+    var quantized = notePair.(\strataGrainRing, { arg out; noteRingArgs.(out, [\noteRate, 1.5, \quantize, 1]) },
+        { arg out; noteRingArgs.(out, [\pitchShift, 1.5, \quantize, 1]) });
+    var unquantized = notePair.(\strataGrainRing, { arg out; noteRingArgs.(out, [\noteRate, 1.5, \quantize, 1]) },
+        { arg out; noteRingArgs.(out, [\pitchShift, 1.5]) });
+    check.(pairMatches.(doubled) and: { pairMatches.(quantized) } and: { pairMatches.(unquantized).not },
+        "grains: noteRate 2 doubles a ring grain's rate and is quantized with pitchShift ([difference, level]: noteRate 2 against pitchShift 2 %, noteRate 1.5 quantized against pitchShift 1.5 quantized %, against 1.5 unquantized %)".format(
+            showPair.(doubled), showPair.(quantized), showPair.(unquantized)));
+};
+
+// "grains: noteBend acts on a synth-source grain synth, where bend does
+// not": at rateLevel 0, noteBend 2 plays as pitchShift 2, and bend 2 as no bend
+var checkNoteBendSynthSource = {
+    var noteBend = notePair.(\strataGrainRing, { arg out; noteRingArgs.(out, [\noteBend, 2]) }, { arg out; noteRingArgs.(out, [\pitchShift, 2]) });
+    var bend = notePair.(\strataGrainRing, { arg out; noteRingArgs.(out, [\bend, 2]) }, { arg out; noteRingArgs.(out) });
+    check.(pairMatches.(noteBend) and: { pairMatches.(bend) },
+        "grains: noteBend acts on a synth-source grain synth, where bend does not ([difference, level]: noteBend 2 against pitchShift 2 %, bend 2 against none %)".format(
+            showPair.(noteBend), showPair.(bend)));
+};
+
+// "grains: t_accent at velocity 1 doubles a grain synth's level for the
+// accent's length": a buffer grain synth accented (t_accent at velocity 1)
+// plays as its unaccented twin times 1 + the accent (the voices' and the
+// stage's envelope, voiceAccent: up in 5 ms, which a control-rate envelope
+// ends at 0.8 after its whole blocks, down over 0.4 s), so twice the level
+// at its height (1.7-2 times from 4 to 12 ms), and as the twin from 0.5 s
+var checkNoteAccent = {
+    var group = Group.after(engine.processGroup), outA = Bus.audio(server, 2), outB = Bus.audio(server, 2);
+    var peaks = Bus.control(server, 2), windows = Bus.control(server, 8), synths, diff, trackers, model, levels;
+    diff = Synth(\strataCheckNoteDiff, [\a, outA, \b, outB, \out, peaks], group, \addToTail);
+    trackers = [outA, outB].collect({ arg bus, index;
+        Synth(\strataCheckNoteGrainWindows, [\in, bus, \out, windows.index + (4 * index)], group, \addToTail) });
+    trackers.do(_.setn(\windows, [0.004, 0.012, 0.5, 0.8, 0, 0, 0, 0]));
+    server.makeBundle(nil, { synths = [outA, outB].collect({ arg bus; Synth(\strataGrainBuf, noteBufArgs.(bus), group, \addToHead) }) });
+    server.sync; 0.3.wait;
+    server.makeBundle(0.2, {
+        synths[0].set(\velocity, 1, \t_accent, 1);
+        diff.set(\velocity, 1, \t_accent, 1, \t_reset, 1);
+        trackers.do(_.set(\t_reset, 1));
+    });
+    0.2.wait; 0.45.wait;
+    model = h.readBus(peaks);
+    0.4.wait; server.sync;
+    levels = h.readBus(windows).clump(4);
+    check.(pairMatches.(model, 1e-5) and: { (levels[0][0] / levels[1][0].max(1e-9)).inclusivelyBetween(1.7, 2.0) }
+        and: { (levels[0][1] - levels[1][1]).abs < (levels[1][1] * 1e-6) } and: { levels[1][1] > 0.01 },
+        "grains: t_accent at velocity 1 doubles a grain synth's level for the accent's length (against its twin times 1 + the accent over 0.45 s: [difference, level] %; level over the twin's at 4-12 ms %; peaks 0.5-0.8 s after %, %)".format(
+            showPair.(model), (levels[0][0] / levels[1][0].max(1e-9)).round(0.001), levels[0][1].round(0.0001), levels[1][1].round(0.0001)));
+    group.free; server.sync;
+    [outA, outB, peaks, windows].do(_.free);
+};
+
+// "grains: noteGate parks a grain synth and its scan keeps running": two
+// buffer grain synths scanning the slot (bufScan 0.5), one parked 0.3 s
+// after a reset: silent (under 1e-4) once its release (grainRelease) is
+// over, its node still there; unparked at 2.6 s, it plays as its twin, never
+// parked, from 0.3 s after (the park's 0.1 s attack): its scan ran on
+// while it was parked (stopped, it would read 1.15 region lengths behind)
+var checkNotePark = {
+    var group = Group.after(engine.processGroup), outA = Bus.audio(server, 2), outB = Bus.audio(server, 2);
+    var peaks = Bus.control(server, 2), windows = Bus.control(server, 4), synths, diff, tracker, there, silent, after;
+    var release = engine.grainRelease, unpark = 0.3 + release + 0.3;
+    diff = Synth(\strataCheckNoteDiff, [\a, outA, \b, outB, \out, peaks], group, \addToTail);
+    tracker = Synth(\strataCheckNoteGrainWindows, [\in, outA, \out, windows.index], group, \addToTail);
+    tracker.setn(\windows, [0.3 + release + 0.05, unpark, 0, 0, 0, 0, 0, 0]);
+    server.makeBundle(nil, { synths = [outA, outB].collect({ arg bus; Synth(\strataGrainBuf, noteBufArgs.(bus, [\bufScan, 0.5]), group, \addToHead) }) });
+    server.sync; 0.3.wait;
+    server.makeBundle(0.2, { tracker.set(\t_reset, 1) });
+    server.makeBundle(0.2 + 0.3, { synths[0].set(\noteGate, 0) });
+    server.makeBundle(0.2 + unpark, { synths[0].set(\noteGate, 1) });
+    server.makeBundle(0.2 + unpark + 0.3, { diff.set(\t_reset, 1) });
+    (0.2 + 0.3 + release + 0.1).wait;
+    there = h.synthTree(group).count({ arg node; node[\def] == \strataGrainBuf }) == 2;
+    (unpark - (0.3 + release + 0.1) + 0.3 + 0.5).wait;
+    after = h.readBus(peaks);
+    silent = h.readBus(windows)[0];
+    check.((silent < 1e-4) and: { there } and: { pairMatches.(after) },
+        "grains: noteGate parks a grain synth and its scan keeps running (parked: peak % after its % s release, both nodes there %; unparked, against its twin: [difference, level] %)".format(
+            silent, release, there, showPair.(after)));
+    group.free; server.sync;
+    [outA, outB, peaks, windows].do(_.free);
+};
+
 // SynthDefs
 grainDefs.do({ arg name;
     [\grainMode, \t_trig, \bend, \envBuf].do({ arg control;
@@ -335,5 +535,19 @@ checkSourceGrains.(1, 2);
     command.(\clearBuffer, slot);
     File.delete(path);
 }.value;
+
+// 3.5's note controls: pairs of grain synths of the area's own, reading
+// noteVoice's ring (its Resonator running since startAllVoices) or a slot
+// of noise
+checkNoteDefaults.value;
+addNoteDiff.value;
+loadNoteSlot.value;
+checkNoteActs.value;
+checkNoteRate.value;
+checkNoteBendSynthSource.value;
+checkNoteAccent.value;
+checkNotePark.value;
+command.(\clearBuffer, noteSlot);
+File.delete(notePath);
 h.stopAllVoices;
 }

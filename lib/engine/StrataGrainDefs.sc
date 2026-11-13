@@ -87,7 +87,13 @@
     // bus) is read once by fastModRead into the Event's fastMod; every grain
     // synth starts with its voice's block (grainControls, the modulation
     // area's). A buffer grain's position offset applies to bufPos before the
-    // reader (fastModPosition), since bufPos is not in the Event.
+    // reader (fastModPosition), since bufPos is not in the Event. 3.5's note
+    // controls (design 3.5 §3.2), each neutral at its default and the
+    // engine's own (engineOwnedControls): noteGate (the park), noteBend,
+    // noteAmp, notePos and noteSize, the note's accent (t_accent at
+    // velocity), and \strataGrainRing's noteRate (a frozen synth voice's
+    // note's rate; 1 in \strataGrainBuf, whose note's pitch is its own
+    // bufRate). The synth-source grain synth keeps every one at its default.
     addGrainDefs {
         // Granular processor for a ring: the voice's own (synth source) or
         // the input's (input source), each written by a strataRingWrite
@@ -104,7 +110,8 @@
             interval1=0, interval2=0, interval3=0, interval4=0,
             interval5=0, interval6=0, interval7=0, interval8=0,
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
-            loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0;
+            loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0,
+            noteGate=1, noteBend=1, noteAmp=1, notePos=0, noteSize=0, velocity=1, t_accent=0, noteRate=1;
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index);
             var m = this.fastModRead(fastModIn);
@@ -117,7 +124,8 @@
                 sizeJitter: sizeJitter,
                 intervals: [interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8],
                 intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote,
-                fastMod: m
+                fastMod: m, noteRate: noteRate, noteSize: noteSize, noteBend: noteBend,
+                noteGate: noteGate, noteAmp: noteAmp, velocity: velocity, t_accent: t_accent
             );
             this.grainBody(controls, this.ringGrainReader(bufL, bufR, phaseBus, posSpread, history, bufScan, freeze));
         }).add;
@@ -143,7 +151,8 @@
             interval1=0, interval2=0, interval3=0, interval4=0,
             interval5=0, interval6=0, interval7=0, interval8=0,
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
-            loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0;
+            loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0,
+            noteGate=1, noteBend=1, noteAmp=1, notePos=0, noteSize=0, velocity=1, t_accent=0;
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index);
             var m = this.fastModRead(fastModIn);
@@ -156,9 +165,10 @@
                 sizeJitter: sizeJitter,
                 intervals: [interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8],
                 intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote,
-                fastMod: m
+                fastMod: m, noteRate: 1, noteSize: noteSize, noteBend: noteBend,
+                noteGate: noteGate, noteAmp: noteAmp, velocity: velocity, t_accent: t_accent
             );
-            this.grainBody(controls, this.slotGrainReader(bufnumL, bufnumR, bufFrames, bufRateScale, this.fastModPosition(bufPos, m),
+            this.grainBody(controls, this.slotGrainReader(bufnumL, bufnumR, bufFrames, bufRateScale, this.fastModPosition(bufPos, m, notePos),
                 bufRate, bufScan, posSpread, freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus));
         }).add;
     }
@@ -176,7 +186,10 @@
     //   2. Rate and duration: grainRate and grainDur (StrataVariation.sc);
     //      pitchShift is the rate (an exact transposition). bend and the
     //      frequency crossmod enter it scaled by rateLevel: 0 for the synth
-    //      source, whose voice synth already applies them.
+    //      source, whose voice synth already applies them. 3.5's noteBend
+    //      (lagged noteLag) multiplies it outside rateLevel's term, so it
+    //      bends every grain synth's note, quantized or not, the synth
+    //      source's (a frozen synth voice's streams) included.
     //   3. Two stereo GrainBufs, the left buffer's grains panned to -1 and
     //      the right's to +1 (plus grainPan's offset), so the pair stays
     //      sample-aligned and keeps its image; then the slow pan wander
@@ -184,12 +197,15 @@
     //      the synth source).
     //   4. The grain synth's own fade (fade): the ASR (openedGate, released
     //      by gate), the kill fade and ringLevel (a 50 ms fade the rings
-    //      area uses before overwriting a ring). The filter, the voice-level
-    //      gain, the sends, the mirror and the tap are the voice's mix stage
-    //      (StrataMix.sc): one Out writes this synth's path.
+    //      area uses before overwriting a ring), then 3.5's note: the park
+    //      (notePark: noteGate, 0.1 s up and grainRelease down, as the ASR)
+    //      and the note's gain, noteAmp (lagged noteLag) x (1 + its accent:
+    //      voiceAccent of t_accent at velocity), clipped to 0-2. The filter,
+    //      the voice-level gain, the sends, the mirror and the tap are the
+    //      voice's mix stage (StrataMix.sc): one Out writes this synth's path.
     // 3.4's fast modulation offsets pitch and size first (fastMod, the
     // modulation area's hook, from the Event's fastMod: the block's
-    // offsets, StrataModulation.sc).
+    // offsets, StrataModulation.sc), with 3.5's noteRate and noteSize.
     // Returns (sig: the stereo signal, fade: its fade).
     grainSignal { arg controls, reader;
         var c = this.fastMod(controls), env, modSigs, rateMod, bendRate, grainMode, mode, trig;
@@ -202,7 +218,7 @@
         // by rateLevel
         modSigs = c[\modBuses].collect({ arg bus; In.kr(bus, 1) });
         rateMod = this.crossmodFreq(modSigs, c[\modFreqAmts]);
-        bendRate = 1 + (c[\rateLevel] * ((c[\bend] * (1 + rateMod)) - 1));
+        bendRate = (1 + (c[\rateLevel] * ((c[\bend] * (1 + rateMod)) - 1))) * c[\noteBend].lag(this.noteLag);
 
         // (written on the control's own name: the Lua stub reads the
         // enumeration from "grainMode.round.clip(0, 1)")
@@ -229,7 +245,8 @@
         sig = Balance2.ar(sig[0], sig[1], LFNoise1.kr(2).range(c[\panSpread].neg, c[\panSpread]));
         sig = this.panBalance(sig, c[\pan]);
 
-        ^(sig: sig, fade: env * read[\level] * c[\ringLevel].lag(0.05))
+        ^(sig: sig, fade: env * read[\level] * c[\ringLevel].lag(0.05) * this.notePark(c[\noteGate], 0.1, grainRelease)
+            * (c[\noteAmp].lag(this.noteLag) * (1 + this.voiceAccent(c[\t_accent], c[\velocity]))).clip(0, 2))
     }
 
     // One grain synth's output: its signal times its own fade, on the path

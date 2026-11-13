@@ -17,8 +17,10 @@
     // docs test compares them)
     numFastDestinations { ^5 }
 
-    // Note slots per voice on fastModBus (3.5 raises it to its tier's note
-    // limit). Lua's S.constants.FAST_MOD_NOTE_SLOTS is the same number
+    // Note slots per voice on fastModBus: one, the voice's (3.5 keeps it at
+    // one, design 3.5 Question 1: a note's own values are its synth's
+    // per-note controls, and every note of a voice reads the voice's block).
+    // Lua's S.constants.FAST_MOD_NOTE_SLOTS is the same number
     fastModNoteSlots { ^1 }
 
     // Engine LFOs (setFastLfo's lfo 0-5, Lua's LFOs 1-6) and their shapes
@@ -145,7 +147,7 @@
 
     // The channel of voice v's note slot n, destination d: index + (v x
     // slots + n) x numFastDestinations + d. Every writer and reader of
-    // fastModBus goes through fastModChannel, so 3.5's note slots change
+    // fastModBus goes through fastModChannel, so more note slots would change
     // fastModNoteSlots and nothing else; fastModChannelFor takes the slot
     // count (the engine check runs it with six)
     fastModChannelFor { arg voice, noteSlot, destination, slots;
@@ -177,19 +179,25 @@
     // fastMod: the grain controls Event with pitch and size offset (called
     // first in grainSignal, before grainRate, grainDur and the readers; the
     // offsets are the Event's fastMod), clipped to the Lua specs' ranges.
-    // The cutoff and amp channels are read and unused: the stage applies
-    // them (3.5's per-note amp becomes a gain here).
+    // 3.5's note: pitchShift x the Event's noteRate (a frozen synth voice's
+    // note's rate, before quantize; 1 in \strataGrainBuf) and the note's
+    // size offset, the Event's noteSize (half ranges, lagged noteLag), added
+    // to the block's. The cutoff and amp channels are read and unused: the
+    // stage applies them (a note's own gain is grainSignal's, from noteAmp).
     fastMod { arg controls;
         var c = controls.copy, m = controls[\fastMod], half = this.fastModHalfRanges;
-        c[\pitchShift] = (c[\pitchShift] + (half[0] * m[0])).clip(0.25, 4);
-        c[\grainSize] = (c[\grainSize] + (half[2] * m[2])).clip(0.01, 0.5);
+        c[\pitchShift] = ((c[\pitchShift] * c[\noteRate]) + (half[0] * m[0])).clip(0.25, 4);
+        c[\grainSize] = (c[\grainSize] + (half[2] * (m[2] + c[\noteSize].lag(this.noteLag)))).clip(0.01, 0.5);
         ^c
     }
 
-    // fastModPosition: a buffer grain's bufPos with its position offset
-    // (strataGrainBuf, before slotGrainReader, so slotScanPhase and
-    // slotHeadGuard see it), clipped to 0-1
-    fastModPosition { arg bufPos, m; ^(bufPos + (this.fastModHalfRanges[1] * m[1])).clip(0, 1) }
+    // fastModPosition: a buffer grain's bufPos with its position offset and
+    // 3.5's note's (notePos, half ranges, lagged noteLag) (strataGrainBuf,
+    // before slotGrainReader, so slotScanPhase and slotHeadGuard see it),
+    // clipped to 0-1
+    fastModPosition { arg bufPos, m, notePos;
+        ^(bufPos + (this.fastModHalfRanges[1] * (m[1] + notePos.lag(this.noteLag)))).clip(0, 1)
+    }
 
     // voiceMixMod: the stage's controls Event (\strataVoiceMix, before both
     // filter banks and voiceLevel). Declares the stage's fastModIn (its
