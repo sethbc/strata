@@ -850,6 +850,21 @@ test("a lock ends when the patterns stop, the pattern is replaced or cleared", f
   pattern_clock_stop()
 end)
 
+-- #679: a step's note is a base override, never a params:set, so a buffer
+-- voice's sequenced note was always exact; this pins it next to MIDI's
+test("a step's note on a buffer voice sends the exact rate", function()
+  local context, S = buffer_voice_setup()
+  local seq = S.lib.sequencer
+  params:set("v1_buf_rate", 1)
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "notes", {2})
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_near(last_sent(context, "setGrainParam", 0, "bufRate"), 2 ^ (2 / 12), 1e-9, "two semitones up, exact")
+  assert_near(params:get("v1_buf_rate"), 1, 1e-9, "the stored rate stays")
+  pattern_clock_stop()
+end)
+
 test("a note transposes the voice by scale degrees", function()
   local context, S = setup()
   local seq = S.lib.sequencer
