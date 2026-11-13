@@ -633,6 +633,37 @@ test("PARAMS' fine turn steps every one of Strata's number params whole; midi_de
   assert_equal(#context.calls_named("retrigger"), 1, "port 2 plays")
 end)
 
+-- #679: a buffer voice's own note plays the exact rate, the one its chord's
+-- extra notes play (the param's step used to round it to 0.01)
+test("a buffer voice's own note and an extra note at one pitch play the same exact rate", function()
+  local context = load_strata(); finish_startup(context)
+  local notes = local_value("S").lib.notes
+  params:set("v5_source", 3)
+  for _, pitch in ipairs({ 62, 37 }) do
+    local exact = notes.note_values(5, pitch).rate
+    context.clear_engine_calls()
+    press(context, 5, pitch)
+    assert_near(params:get("v5_buf_rate"), exact, 1e-9, "note " .. pitch .. ": the param holds the exact rate")
+    local sent = context.calls_named("setGrainParam")
+    local bufRate
+    for _, call in ipairs(sent) do if call.args[2] == "bufRate" then bufRate = call.args[3] end end
+    assert_near(bufRate, exact, 1e-9, "note " .. pitch .. ": the engine gets the exact rate")
+  end
+  -- a chord: the own note (62) and an extra note (64), each at the one rate
+  -- note_values gives its pitch, so the own note is as in tune as the extra
+  press(context, 5, 60)
+  context.clear_engine_calls()
+  note_on(context, 5, 62)
+  note_on(context, 5, 64)
+  assert_near(params:get("v5_buf_rate"), notes.note_values(5, 62).rate, 1e-9, "the own note's rate")
+  assert_near(params:get("v5_buf_rate"), 2 ^ (2 / 12), 1e-9, "2^(2/12) from a reference of 60")
+  local extra = context.calls_named("noteOn")
+  assert_equal(#extra, 1, "one extra note")
+  assert_near(extra[1].args[5], notes.note_values(5, 64).rate, 1e-9, "the extra note's rate")
+  -- the same pitch gets the same rate whichever slot plays it
+  assert_near(notes.note_values(5, 62).rate / params:get("v5_buf_rate"), 1, 1e-9, "own = note_values at 62")
+end)
+
 test("a quantized voice's MIDI notes snap to the scale, in its freq or buffer rate", function()
   local context = load_strata(); finish_startup(context)
   params:set("scale", option_index("scale", "Minor Pentatonic"))  -- C, Eb, F, G, Bb
@@ -650,7 +681,7 @@ test("a quantized voice's MIDI notes snap to the scale, in its freq or buffer ra
   -- a buffer voice: rate from the snapped note
   params:set("v5_source", 3); params:set("v5_quantize", 1)
   press(context, 5, 66)
-  assert_near(params:get("v5_buf_rate"), 2 ^ (5 / 12), 0.006, "F#4 reads at F4's rate (the rate's 0.01 step)")
+  assert_near(params:get("v5_buf_rate"), 2 ^ (5 / 12), 1e-9, "F#4 reads at F4's rate")
   -- quantize off: exact notes; scale off with quantize on: semitones
   press(context, 6, 66)
   assert_near(params:get("v6_freq"), freq_of(66), 1e-6, "an unquantized voice plays F#4")
