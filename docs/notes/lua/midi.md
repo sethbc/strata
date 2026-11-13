@@ -39,9 +39,9 @@ Grouped in tables:
 
 ## Params
 
-Group `strata_midi`, 3 params:
+Group `strata_midi`, 6 params (the last three are MPE's, `docs/notes/lua/mpe.md`):
 - `midi_device`: number 1..`#midi.vports` (norns' 16 ports), default 1, stepping whole numbers under PARAMS' K3-held fine turn (#534, `docs/notes/lua/params.md`). Action `attach_midi(x)` then `reset_midi_input()`.
-- `midi_channel_mode`: option {`per voice`, `omni to selected`}, default 1. Action `reset_midi_input(true)` (bends only).
+- `midi_channel_mode`: option {`per voice`, `omni to selected`, `mpe selected`, `mpe split`}, default 1; the two MPE modes exist and do nothing new until the MIDI package of 3.5 lands (the code treats any mode but 2 as per voice). Action `reset_midi_input(true)` (bends only).
 - `midi_note_off`: option {`ignore`, `voice off`}, default 1.
 
 ## Device lifecycle
