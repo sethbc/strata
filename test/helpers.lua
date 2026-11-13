@@ -364,6 +364,20 @@ local function file_text(path)
   return text
 end
 
+-- The engine check's CI shards, in the workflow's order: the "- a,b,c"
+-- items of the engine-shard matrix's areas list in
+-- .github/workflows/test.yml (nil when it has no such list). The tests'
+-- one Lua reader of that list; the runners read it through
+-- test/run_engine_check_313.sh -l
+local function workflow_shards()
+  local workflow = file_text(repo_root .. "/.github/workflows/test.yml")
+  local block = workflow and workflow:match("\n%s*areas:%s*\n(.-)\n%s*env:")
+  if not block then return nil end
+  local shards = {}
+  for shard in block:gmatch("%-%s*([%w,]+)") do shards[#shards + 1] = shard end
+  return shards
+end
+
 -- Write `text` to path as it is (binary mode), replacing what it held
 local function write_text(path, text)
   local file = assert(io.open(path, "wb")); file:write(text); file:close()
@@ -869,6 +883,7 @@ return {
   deep_copy = deep_copy,
   tabutil_text = tabutil_text,
   file_text = file_text,
+  workflow_shards = workflow_shards,
   write_text = write_text,
   watch_writes = watch_writes,
   maintained_docs = maintained_docs,
