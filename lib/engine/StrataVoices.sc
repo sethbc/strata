@@ -112,17 +112,19 @@
         });
 
         // Re-articulate a running voice without creating new nodes: fires
-        // the accent envelope at the given velocity (0-1) on the voice synth
-        // (the synth source, re-plucking Karplus) and, while the voice runs,
-        // on the stage (its voice-level gain on the buffer or input path),
-        // and one grain when the grain synth is in triggered mode (the grain
-        // synth takes t_trig alone: it has no accent). velocity is set in the
-        // same message as t_trig.
+        // the accent envelope at the given velocity (0-1) on the own voice
+        // synth (the synth source, re-plucking Karplus) and, while the voice
+        // runs, on the stage (its voice-level gain on the buffer or input
+        // path), and one grain on every grain synth of the voice, its extra
+        // notes' included (setGrainSynths), in triggered mode. A grain
+        // synth's own accent (3.5's t_accent) is its note's, which only the
+        // notes area fires: retrigger sends it t_trig alone. velocity is set
+        // in the same message as t_trig.
         this.addCommand(\retrigger, "if", { arg msg;
             var voice = msg[1], velocity = msg[2].clip(0, 1);
             if (this.validVoice(voice)) {
                 this.setSynth(this.voiceKey(voice), \velocity, velocity, \t_trig, 1);
-                this.setSynth(this.grainKey(voice), \t_trig, 1);
+                this.setGrainSynths(voice, \t_trig, 1);
                 if (this.voiceRunning(voice)) { this.setSynth(this.voiceMixKey(voice), \velocity, velocity, \t_trig, 1) };
             };
         });
@@ -140,8 +142,10 @@
 
         // A param an area handles (grainParamHandlers: the grains area's
         // envShape) goes to its handler, which returns true when it has
-        // dealt with it; other params pass straight through. Every value is
-        // kept so a replacement grain synth (source switch) starts with it.
+        // dealt with it; other params pass straight through, to the own grain
+        // synth and the voice's extra notes (setGrainSynths, which keeps a
+        // note's own pitch its own). Every value is kept so a replacement
+        // grain synth (source switch) starts with it.
         // A control the engine sets itself, or a voice-level one, is refused
         // (#458).
         this.addCommand(\setGrainParam, "isf", { arg msg;
@@ -150,7 +154,7 @@
                 handler = grainParamHandlers[param];
                 if (handler.isNil or: { handler.value(voice, value) != true }) {
                     grainControls[voice][param] = value;
-                    this.setSynth(this.grainKey(voice), param, value);
+                    this.setGrainSynths(voice, param, value);
                 };
             };
         });
@@ -247,7 +251,7 @@
             this.setSynth(this.voiceKey(voice), control, value);
             if (grainSource[voice] != 0) {
                 pairs = this.controlPairs(this.grainDefFor(voice), Dictionary[control -> value]);
-                if (pairs.notEmpty) { this.setSynth(this.grainKey(voice), *pairs) };
+                if (pairs.notEmpty) { this.setGrainSynths(voice, *pairs) };
             };
             pairs = this.controlPairs(\strataVoiceMix, Dictionary[control -> value]);
             if (pairs.notEmpty and: { this.voiceRunning(voice) }) { this.setSynth(this.voiceMixKey(voice), *pairs) };

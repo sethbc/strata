@@ -40,6 +40,13 @@
         ^grainDefTable.detect({ arg entry; entry.key.value(source) }).value
     }
 
+    // Key/value pairs without the pairs whose name is one of names
+    pairsWithout { arg pairs, names;
+        var kept = List.new;
+        pairs.pairsDo({ arg name, value; if (names.includes(name.asSymbol).not) { kept.add(name).add(value) } });
+        ^kept.asArray
+    }
+
     // Key/value pairs from a Dictionary for the controls a SynthDef has
     controlPairs { arg defName, controls;
         var names = controlNameSets[defName];
