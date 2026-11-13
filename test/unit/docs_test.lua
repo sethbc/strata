@@ -1102,10 +1102,10 @@ end)
 -- every area in exactly one, so none is skipped or run twice
 test("CI's engine shards run every engine check area exactly once", function()
   local file = assert(io.open(repo_root .. "/.github/workflows/test.yml", "r")); local workflow = file:read("*a"); file:close()
-  local block = workflow:match("\n%s*areas:%s*\n(.-)\n%s*env:")
-  assert_true(block ~= nil, "the engine-shard matrix lists its areas")
+  local listed = h.workflow_shards()
+  assert_true(listed ~= nil, "the engine-shard matrix lists its areas")
   local seen, shards = {}, 0
-  for shard in block:gmatch("%-%s*([%w,]+)") do
+  for _, shard in ipairs(listed) do
     shards = shards + 1
     for name in shard:gmatch("[^,]+") do
       assert_true(seen[name] == nil, name .. " is in two shards")
