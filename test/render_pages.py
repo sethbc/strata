@@ -77,6 +77,18 @@ def draw_state(state, font):
     return image
 
 
+def enlarge(image, scale):
+    # Image.resize returns NULL under Pillow 12 (#665): an RGB copy through
+    # an affine transform with nearest sampling is an exact enlargement
+    image = image.convert("RGB")
+    return image.transform(
+        (image.width * scale, image.height * scale),
+        Image.AFFINE,
+        (1.0 / scale, 0, 0, 0, 1.0 / scale, 0),
+        Image.NEAREST,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Draw Strata's page renders as PNGs")
     parser.add_argument("directory", help="the folder test/render_pages.lua wrote")
@@ -92,7 +104,7 @@ def main():
         with open(path) as handle:
             state = json.load(handle)
         image = draw_state(state, font)
-        image = image.resize((image.width * args.scale, image.height * args.scale), Image.NEAREST)
+        image = enlarge(image, args.scale)
         image.save(os.path.splitext(path)[0] + ".png")
     print("%d renders written to %s" % (len(paths), args.directory))
     return 0
