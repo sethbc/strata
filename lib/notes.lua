@@ -470,6 +470,17 @@ return function(S)
     return true
   end
 
+  -- A copy of the expression slot of voice holds ({bend, amp, position,
+  -- size, main}: the newest set, sent or still due), or nil for a slot
+  -- holding no note or a bad index (ruling 36: lib/expression.lua compares
+  -- a note's values with it)
+  function M.expression(voice, slot)
+    if not whole_in(voice, 1, NUM_VOICES) or not whole_in(slot, 1, NOTE_SLOTS) then return nil end
+    local record = slots[voice][slot]
+    if not record then return nil end
+    return copy_expression(record.expression)
+  end
+
   -- The flush (an LFO step hook): the due notes in the order first marked,
   -- at most NOTES.sends_per_step, each once with its newest values; a note
   -- that ended meanwhile sends nothing, and the rest wait for the next step
