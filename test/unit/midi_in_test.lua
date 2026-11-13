@@ -1,6 +1,7 @@
 -- test/unit/midi_in_test.lua
--- MIDI input: notes, velocity, note-off modes, pitchbend, the device param
--- and hot-plug (lib/midi_in.lua)
+-- MIDI input: notes and chords through the allocator, velocity, the note
+-- off modes (latch and release), pitchbend, pressure and MPE, the note tap,
+-- the device param and hot-plug (lib/midi_in.lua)
 -- Run alone: lua test/run.lua midi_in
 
 return function(h)
@@ -8,6 +9,57 @@ local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.as
 local load_strata, find_upvalue, local_value = h.load_strata, h.find_upvalue, h.local_value
 local next_frame, finish_startup, deep_copy = h.next_frame, h.finish_startup, h.deep_copy
 local show_page, assert_screen_layout = h.show_page, h.assert_screen_layout
+
+local function note_on(context, channel, note, velocity, port)
+  context.midi.send(port or 1, { type = "note_on", note = note, vel = velocity or 100, ch = channel })
+end
+
+local function note_off(context, channel, note, port)
+  context.midi.send(port or 1, { type = "note_off", note = note, vel = 0, ch = channel })
+end
+
+-- A key pressed and lifted: in latch mode its note keeps sounding
+local function press(context, channel, note, velocity)
+  note_on(context, channel, note, velocity)
+  note_off(context, channel, note)
+end
+
+-- MIDI's key for a note: channel * 128 + note
+local function key_of(channel, note) return channel * 128 + note end
+
+-- The names of the engine calls since the last clear, those in only (a
+-- set) if given, joined by ", "
+local function call_names(context, only)
+  local names = {}
+  for _, call in ipairs(context.engine_calls) do
+    if not only or only[call.name] then table.insert(names, call.name) end
+  end
+  return table.concat(names, ", ")
+end
+
+local function lfo_step(context, count)
+  for _ = 1, count or 1 do context.clock.advance_until(local_value("S").lfo_clock) end
+end
+
+-- The noteExpression messages sent for voice's slot (Lua numbering) since
+-- the last clear, each {bend, amp, position, size, main}
+local function expressions(context, voice, slot)
+  local list = {}
+  for _, call in ipairs(context.calls_named("noteExpression")) do
+    if call.args[1] == voice - 1 and call.args[2] == slot - 1 then
+      table.insert(list, { bend = call.args[3], amp = call.args[4], position = call.args[5], size = call.args[6],
+        main = call.args[7] })
+    end
+  end
+  return list
+end
+
+local function option_index(param_id, name)
+  for index, option in ipairs(params:lookup_param(param_id).options) do if option == name then return index end end
+  error("no option " .. name .. " in " .. param_id)
+end
+
+local function freq_of(note) return 13.75 * 2 ^ ((note - 9) / 12) end
 
 test("MIDI notes set pitch per source, start or retrigger the voice with velocity", function()
   local context = load_strata(); finish_startup(context)
@@ -17,7 +69,8 @@ test("MIDI notes set pitch per source, start or retrigger the voice with velocit
   params:set("v1_source", 2)
   context.midi.send(1, { type = "note_on", note = 72, vel = 64, ch = 1 })
   assert_near(params:get("v1_buf_rate"), 2, 1e-6); rt = context.calls_named("retrigger"); assert_near(rt[#rt].args[2], 64 / 127, 1e-9)
-  params:set("v2_source", 10); context.midi.send(1, { type = "note_on", note = 50, vel = 100, ch = 2 })  -- input source: no error
+  params:set("v2_source", 10); context.midi.send(1, { type = "note_on", note = 50, vel = 100, ch = 2 })
+  assert_near(params:get("v2_grain_pitch"), 2 ^ (-10 / 12), 1e-9, "an input voice's grain pitch")
   context.midi.send(1, { type = "note_on", note = 50, vel = 100, ch = 9 })  -- no voice: ignored
   params:set("v1_source", 1); params:set("midi_channel_mode", 2)        -- omni -> selected voice (1, synth again)
   context.midi.send(1, { type = "note_on", note = 57, vel = 100, ch = 9 })
@@ -41,27 +94,32 @@ test("MIDI note details: start order, exact pitch, clamping, ignored channels", 
   assert_true(voices[4].active, "note on starts voice 4")
   -- equal temperament is not rounded to whole hertz
   assert_near(params:get("v4_freq"), 13.75 * 2 ^ ((61 - 9) / 12), 0.01, "note 61 = 277.18 Hz")
-  -- a running voice is only retriggered (no second voiceOn)
+  -- the next key after the last one lifted: a running voice is only
+  -- retriggered (no second voiceOn)
+  note_off(context, 4, 61)
   context.clear_engine_calls()
   context.midi.send(1, { type = "note_on", note = 62, vel = 50, ch = 4 })
   assert_equal(#context.calls_named("voiceOn"), 0, "running voice: no voiceOn")
   assert_equal(#context.calls_named("retrigger"), 1, "running voice: one retrigger")
+  note_off(context, 4, 62)
   -- pitch is clamped to the voice's range
-  context.midi.send(1, { type = "note_on", note = 127, vel = 100, ch = 4 })
+  press(context, 4, 127)
   assert_near(params:get("v4_freq"), select(2, param_range("v4_freq")), 1e-9, "high notes clamp to the freq maximum")
-  context.midi.send(1, { type = "note_on", note = 0, vel = 100, ch = 4 })
+  press(context, 4, 0)
   assert_near(params:get("v4_freq"), (param_range("v4_freq")), 1e-9, "low notes clamp to the freq minimum")
   params:set("v5_source", 3)
-  context.midi.send(1, { type = "note_on", note = 120, vel = 100, ch = 5 })
+  press(context, 5, 120)
   assert_near(params:get("v5_buf_rate"), 4, 1e-9, "buffer rate clamps to 4")
-  context.midi.send(1, { type = "note_on", note = 0, vel = 100, ch = 5 })
+  press(context, 5, 0)
   assert_near(params:get("v5_buf_rate"), 0.25, 1e-9, "buffer rate clamps to 0.25")
-  -- an input-sourced voice takes no pitch but still starts and accents
+  -- an input-sourced voice takes its grain pitch (note 60 at 1, clamped to
+  -- 4), starts and accents
   params:set("v6_source", 10)
   local freq_before, rate_before = params:get("v6_freq"), params:get("v6_buf_rate")
   context.clear_engine_calls()
   context.midi.send(1, { type = "note_on", note = 90, vel = 127, ch = 6 })
   assert_equal(params:get("v6_freq"), freq_before); assert_equal(params:get("v6_buf_rate"), rate_before)
+  assert_near(params:get("v6_grain_pitch"), 4, 1e-9, "note 90 clamps to grain pitch 4")
   assert_true(voices[6].active and #context.calls_named("retrigger") == 1, "input voice started and accented")
   -- per voice: channels 8-16 address no voice; other message types are ignored
   context.clear_engine_calls()
@@ -74,15 +132,18 @@ end)
 
 test("note off mode and pitchbend", function()
   local context = load_strata(); finish_startup(context)
-  context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 1 }); assert_true(local_value("voices")[1].active)
-  params:set("midi_note_off", 2); context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 1 })
-  assert_true(not local_value("voices")[1].active)
+  press(context, 1, 60); assert_true(local_value("voices")[1].active, "auto latches in per voice mode")
+  params:set("midi_note_off", 2)
+  -- a note off no note on played changes nothing (3.4's voice off stopped the channel's voice)
+  note_off(context, 1, 62); assert_true(local_value("voices")[1].active, "a stray note off is ignored")
+  press(context, 1, 60)
+  assert_true(not local_value("voices")[1].active, "release: the key's lift stops the voice")
   context.midi.send(1, { type = "pitchbend", val = 8192 + 8191, ch = 2 })
   local calls = context.calls_named("setVoiceParam"); local last = calls[#calls]
   assert_equal(last.args[2], "bend"); assert_near(last.args[3], 2 ^ (2 / 12), 1e-3)
 end)
 
-test("voice off mode: the voice stops when its last held note is released", function()
+test("release mode: the voice stops when its last held note is released", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   params:set("midi_note_off", 2)
@@ -104,14 +165,14 @@ test("voice off mode: the voice stops when its last held note is released", func
   context.midi.send(1, { type = "note_off", note = 48, vel = 0, ch = 1 })
   assert_true(not voices[1].active, "voice 1 stops on its note's release")
   assert_true(not voices[5].active, "the newly selected voice is untouched")
-  -- ignore mode leaves voices running
+  -- auto latches in a plain mode: voices keep running
   params:set("midi_note_off", 1)
   context.midi.send(1, { type = "note_on", note = 50, vel = 100, ch = 1 })
   context.midi.send(1, { type = "note_off", note = 50, vel = 0, ch = 1 })
-  assert_true(voices[5].active, "ignore: note off does nothing")
+  assert_true(voices[5].active, "latch: note off does nothing")
 end)
 
-test("omni, voice off: a repeated note on after the selection moved releases the first voice", function()
+test("omni, release: a repeated note on after the selection moved releases the first voice", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   local midi_state = local_value("midi_state")
@@ -138,7 +199,8 @@ test("omni: the same note on two channels holds the voice until both are off", f
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 2 })
   context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 1 })
   assert_true(voices[1].active, "channel 2 still holds the note")
-  assert_true(midi_state.held[1][60], "the note stays held")
+  assert_true(midi_state.held[1][key_of(2, 60)], "channel 2's key stays held")
+  assert_true(not midi_state.held[1][key_of(1, 60)], "channel 1's key is not")
   context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 2 })
   assert_true(not voices[1].active, "both off: stopped")
   assert_equal(next(midi_state.held[1]), nil)
@@ -150,7 +212,7 @@ test("releasing a note's hold adds no script global", function()
   assert_equal(rawget(_G, "release_note_hold"), nil, "release_note_hold is local to lib/midi_in.lua")
 end)
 
-test("omni, voice off: the previous voice keeps running while it holds another note or another channel maps the note", function()
+test("omni, release: the previous voice keeps running while it holds another note or another channel maps the note", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   local midi_state = local_value("midi_state")
@@ -162,8 +224,9 @@ test("omni, voice off: the previous voice keeps running while it holds another n
   set_selected(2)
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
   assert_true(voices[1].active, "voice 1 still holds note 64")
-  assert_true(not midi_state.held[1][60] and midi_state.held[1][64], "only note 64 stays held on voice 1")
-  assert_true(midi_state.held[2][60], "voice 2 holds note 60")
+  assert_true(not midi_state.held[1][key_of(1, 60)] and midi_state.held[1][key_of(1, 64)],
+    "only note 64 stays held on voice 1")
+  assert_true(midi_state.held[2][key_of(1, 60)], "voice 2 holds note 60")
   context.midi.send(1, { type = "note_off", note = 64, vel = 0, ch = 1 })
   assert_true(not voices[1].active, "voice 1 stops with its last note")
   assert_equal(next(midi_state.held[1]), nil)
@@ -174,13 +237,13 @@ test("omni, voice off: the previous voice keeps running while it holds another n
   set_selected(3)
   context.midi.send(1, { type = "note_on", note = 70, vel = 100, ch = 1 })
   assert_true(voices[1].active, "channel 2 still maps note 70 to voice 1")
-  assert_true(midi_state.held[1][70], "note 70 stays held on voice 1")
+  assert_true(midi_state.held[1][key_of(2, 70)], "channel 2's note 70 stays held on voice 1")
   context.midi.send(1, { type = "note_off", note = 70, vel = 0, ch = 2 })
   assert_true(not voices[1].active, "voice 1 stops when channel 2's note is off")
   assert_equal(next(midi_state.held[1]), nil)
 end)
 
-test("omni, voice off ignored: a repeated note on after the selection moved clears the first voice's hold and leaves it running", function()
+test("omni, latch: a repeated note on after the selection moved clears the first voice's hold and leaves it running", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   local midi_state = local_value("midi_state")
@@ -188,9 +251,10 @@ test("omni, voice off ignored: a repeated note on after the selection moved clea
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
   local _, set_selected = find_upvalue("selected_voice"); set_selected(2)
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
-  assert_equal(next(midi_state.held[1]), nil, "voice 1 holds nothing")
-  assert_true(voices[1].active, "ignore mode keeps voice 1 running")
-  assert_true(midi_state.held[2][60], "voice 2 holds the note")
+  assert_equal(next(midi_state.held[1]), nil, "voice 1 holds no key")
+  assert_true(voices[1].active, "latch keeps voice 1 running")
+  assert_equal(local_value("S").lib.notes.held(1), 1, "and its note sounding")
+  assert_true(midi_state.held[2][key_of(1, 60)], "voice 2 holds the note")
 end)
 
 test("a MIDI-held voice stopped another way: its note off changes nothing and leaves nothing held", function()
@@ -227,7 +291,7 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
     local voice_idx = stopper.voice
     context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = voice_idx })
     assert_true(voices[voice_idx].active, stopper.name .. ": the note started the voice")
-    assert_true(midi_state.held[voice_idx][60], stopper.name .. ": note 60 held")
+    assert_true(midi_state.held[voice_idx][key_of(voice_idx, 60)], stopper.name .. ": note 60 held")
     stopper.stop()
     assert_true(not voices[voice_idx].active, stopper.name .. ": the voice stopped")
     context.clear_engine_calls()
@@ -342,10 +406,10 @@ test("unplugging a device on another port leaves the selected port's held notes 
   context.midi.plug(1, "keys"); context.midi.plug(2, "pads")
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
   context.midi.unplug(2)
-  assert_true(local_value("midi_state").held[3][60], "the note stays held")
+  assert_true(local_value("midi_state").held[3][key_of(3, 60)], "the note stays held")
 end)
 
-test("voice off: an unplug stops the voices its held keys were holding, and no other (#407)", function()
+test("release: an unplug stops the voices its held keys were holding, and no other (#407)", function()
   local context = load_strata(); finish_startup(context)
   params:set("midi_note_off", 2)
   local voices = local_value("voices")
@@ -358,27 +422,27 @@ test("voice off: an unplug stops the voices its held keys were holding, and no o
   assert_true(voices[2].active, "another voice is untouched")
 end)
 
-test("voice off: a key held across a channel mode change still releases its own voice (#407)", function()
+test("release: a channel mode change stops the voices held keys were holding, and the note offs then reach none (#407)", function()
   local context = load_strata(); finish_startup(context)
   params:set("midi_note_off", 2)
   local voices = local_value("voices")
   assert_true(voices[1].active, "voice 1, the selected voice, runs from the start")
   context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
   params:set("midi_channel_mode", 2)
+  assert_true(not voices[3].active, "voice 3 stops at the change")
   context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = 3 })
-  assert_true(not voices[3].active, "voice 3 stops")
-  assert_true(voices[1].active, "voice 1 is left alone")
+  assert_true(voices[1].active, "the note off leaves voice 1 alone")
   -- the other way round
   local_value("S").selected_voice = 5
   context.midi.send(1, { type = "note_on", note = 62, vel = 100, ch = 2 })
   assert_true(voices[5].active)
   params:set("midi_channel_mode", 1)
+  assert_true(not voices[5].active, "voice 5 stops at the change")
   context.midi.send(1, { type = "note_off", note = 62, vel = 0, ch = 2 })
-  assert_true(not voices[5].active, "voice 5 stops")
-  assert_true(voices[2].active, "voice 2 is left alone")
+  assert_true(voices[2].active, "the note off leaves voice 2 alone")
 end)
 
-test("voice off: a port change stops the voices the old port's keys held (#407)", function()
+test("release: a port change stops the voices the old port's keys held (#407)", function()
   local context = load_strata(); finish_startup(context)
   params:set("midi_note_off", 2)
   local voices = local_value("voices")
@@ -398,11 +462,11 @@ test("a device plugged in or out before init raises nothing, and init then attac
   assert_near(params:get("v1_freq"), 440, 0.01, "the device plays")
 end)
 
-test("ignore mode: a panic CC stops a voice a released key started, never one started elsewhere (#529)", function()
+test("latch: a panic CC stops a voice a released key started, never one started elsewhere (#529)", function()
   for _, cc in ipairs({ 123, 120 }) do
     local context = load_strata(); finish_startup(context)
     local voices = local_value("voices")
-    assert_equal(params:get("midi_note_off"), 1, "ignore mode")
+    assert_equal(params:get("midi_note_off"), 1, "auto: latch in per voice mode")
     assert_true(not voices[3].active)
     context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
     assert_true(voices[3].active, "the key starts voice 3")
@@ -458,7 +522,7 @@ test("all notes off and all sound off release every held note and stop its voice
     -- another CC does nothing
     context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 1 })
     context.midi.send(1, { type = "cc", cc = 121, val = 0, ch = 1 })
-    assert_true(voices[1].active and midi_state.held[1][60], "other CCs change nothing")
+    assert_true(voices[1].active and midi_state.held[1][key_of(1, 60)], "other CCs change nothing")
   end
 end)
 
@@ -571,28 +635,24 @@ end)
 
 test("a quantized voice's MIDI notes snap to the scale, in its freq or buffer rate", function()
   local context = load_strata(); finish_startup(context)
-  local function option_index(param_id, name)
-    for index, option in ipairs(params:lookup_param(param_id).options) do if option == name then return index end end
-  end
-  local function freq_of(note) return 13.75 * 2 ^ ((note - 9) / 12) end
   params:set("scale", option_index("scale", "Minor Pentatonic"))  -- C, Eb, F, G, Bb
   params:set("v4_quantize", 1)
   local expected = { [60] = 60, [61] = 60, [62] = 63, [64] = 63, [66] = 65, [68] = 67, [69] = 70, [71] = 70, [72] = 72 }
   for note, tone in pairs(expected) do
-    context.midi.send(1, { type = "note_on", note = note, vel = 100, ch = 4 })
+    press(context, 4, note)
     assert_near(params:get("v4_freq"), freq_of(tone), 1e-6, "note " .. note .. " plays " .. tone)
   end
   -- a note past the freq range plays the scale's last tone inside it (Bb6: 2000 Hz is note 95.2)
-  context.midi.send(1, { type = "note_on", note = 127, vel = 100, ch = 4 })
+  press(context, 4, 127)
   assert_near(params:get("v4_freq"), freq_of(94), 1e-6, "a high note plays the highest tone in range")
-  context.midi.send(1, { type = "note_on", note = 0, vel = 100, ch = 4 })
+  press(context, 4, 0)
   assert_near(params:get("v4_freq"), freq_of(17), 1e-6, "a low note plays the lowest (F0: 20 Hz is note 15.5)")
   -- a buffer voice: rate from the snapped note
   params:set("v5_source", 3); params:set("v5_quantize", 1)
-  context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 5 })
+  press(context, 5, 66)
   assert_near(params:get("v5_buf_rate"), 2 ^ (5 / 12), 0.006, "F#4 reads at F4's rate (the rate's 0.01 step)")
   -- quantize off: exact notes; scale off with quantize on: semitones
-  context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 6 })
+  press(context, 6, 66)
   assert_near(params:get("v6_freq"), freq_of(66), 1e-6, "an unquantized voice plays F#4")
   params:set("scale", 1)
   context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 4 })
@@ -839,7 +899,464 @@ test("an unplug of the selected port's device, then a menu visit, resets once", 
   context.midi.plug(1, "keys")
   context.midi.send(1, { type = "note_on", note = 62, vel = 100, ch = 3 })
   _menu.set_mode(true); _menu.set_mode(false)
-  assert_true(midi_state.held[3][62], "the new note survives the menu visit: no second reset")
+  assert_true(midi_state.held[3][key_of(3, 62)], "the new note survives the menu visit: no second reset")
+end)
+
+-- 3.5: chords through the allocator (S.lib.notes), latch and release,
+-- pressure, MPE and the note tap (design §5)
+
+test("a second held key adds a note where 3.4 re-pitched", function()
+  local context = load_strata(); finish_startup(context)
+  local notes = local_value("S").lib.notes
+  context.clear_engine_calls()
+  note_on(context, 1, 60, 100)
+  assert_near(params:get("v1_freq"), 261.6256, 1e-3, "the voice's own note sets its freq")
+  local accents = context.calls_named("retrigger")
+  assert_equal(#accents, 1); assert_equal(accents[1].args[1], 0); assert_near(accents[1].args[2], 100 / 127, 1e-9)
+  assert_equal(#context.calls_named("noteOn"), 0, "the own note sends no noteOn")
+  context.clear_engine_calls()
+  note_on(context, 1, 64, 100)
+  assert_near(params:get("v1_freq"), 261.6256, 1e-3, "the own note keeps its pitch")
+  assert_equal(call_names(context, { noteExpression = true, noteOn = true, retrigger = true }), "noteExpression, noteOn",
+    "an extra note: its expression, then its noteOn, and no accent")
+  local expression = context.calls_named("noteExpression")[1].args
+  for index, value in ipairs({ 0, 1, 1, 1, 0, 0, 0 }) do assert_equal(expression[index], value, "noteExpression " .. index) end
+  local on = context.calls_named("noteOn")[1].args
+  assert_equal(on[1], 0); assert_equal(on[2], 1); assert_equal(on[3], 64)
+  assert_near(on[4], 329.6276, 1e-3); assert_near(on[5], 1.259921, 1e-6); assert_near(on[6], 100 / 127, 1e-9)
+  assert_equal(notes.held(1), 2, "voice 1 holds two notes")
+end)
+
+test("with the note cap at 1 every key plays as 3.4", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("v1_note_cap", 1)
+  context.clear_engine_calls()
+  note_on(context, 1, 60, 100)
+  local first = call_names(context)
+  context.clear_engine_calls()
+  note_on(context, 1, 64, 90)   -- the first key still down
+  assert_near(params:get("v1_freq"), 329.6276, 1e-3, "the second key re-pitches the voice")
+  assert_equal(call_names(context), first, "the same messages as the first key")
+  assert_true(first:find("retrigger", 1, true) ~= nil, "a retrigger")
+  local accents = context.calls_named("retrigger"); assert_near(accents[1].args[2], 90 / 127, 1e-9)
+  assert_equal(#context.calls_named("noteOn") + #context.calls_named("noteExpression"), 0, "no note command")
+  assert_equal(local_value("S").lib.notes.held(1), 1)
+end)
+
+test("latch: lifting changes nothing, and the next chord's first key replaces the chord", function()
+  local context = load_strata(); finish_startup(context)
+  local notes = local_value("S").lib.notes
+  for _, note in ipairs({ 60, 64, 67 }) do note_on(context, 1, note) end
+  context.clear_engine_calls()
+  for _, note in ipairs({ 60, 64, 67 }) do note_off(context, 1, note) end
+  lfo_step(context)
+  assert_equal(#context.engine_calls, 0, "the lifts send nothing")
+  assert_true(local_value("voices")[1].active, "the voice runs")
+  assert_equal(notes.held(1), 3, "the chord sounds on")
+  context.clear_engine_calls()
+  note_on(context, 1, 62)
+  assert_equal(call_names(context, { noteOff = true, retrigger = true }), "noteOff, noteOff, retrigger",
+    "the chord's extra notes released, then the new key accented")
+  local offs = context.calls_named("noteOff")
+  assert_equal(offs[1].args[1], 0); assert_equal(offs[1].args[2], 1); assert_equal(offs[1].args[3], 0)
+  assert_equal(offs[2].args[1], 0); assert_equal(offs[2].args[2], 2); assert_equal(offs[2].args[3], 0)
+  assert_near(params:get("v1_freq"), 293.6648, 1e-3, "the new key is the own note")
+  assert_equal(notes.held(1), 1); assert_equal(notes.pool_used(), 0)
+  -- the next key while one is down adds to the chord
+  note_on(context, 1, 65)
+  assert_equal(notes.held(1), 2)
+end)
+
+test("release: each key's note ends with its key, the own note parks, the voice stops with the last", function()
+  local context = load_strata(); finish_startup(context)
+  local voices = local_value("voices")
+  params:set("midi_note_off", 2)
+  assert_true(voices[1].active, "voice 1 runs from the start: the norns started it")
+  note_on(context, 1, 60); note_on(context, 1, 64)
+  context.clear_engine_calls()
+  note_off(context, 1, 60)
+  assert_equal(call_names(context), "noteOff", "the own note parks")
+  local off = context.calls_named("noteOff")[1].args
+  assert_equal(off[1], 0); assert_equal(off[2], 0); assert_equal(off[3], 0)
+  assert_true(voices[1].active, "another key is down")
+  context.clear_engine_calls()
+  note_off(context, 1, 64)
+  assert_equal(call_names(context, { noteOff = true, voiceOff = true }), "noteOff, voiceOff",
+    "the last note released, then the voice stopped")
+  assert_equal(context.calls_named("voiceOff")[1].args[1], 0)
+  assert_true(not voices[1].active, "a voice the norns started stops with its last key")
+  -- a voice a key started stops too
+  note_on(context, 3, 60)
+  assert_true(voices[3].active)
+  note_off(context, 3, 60)
+  assert_true(not voices[3].active)
+end)
+
+test("auto is latch in the plain modes and release in the MPE modes", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local midi_in = S.lib.midi_in
+  assert_equal(params:string("midi_note_off"), "auto", "the default")
+  local wanted = { "latch", "latch", "release", "release" }
+  for mode = 1, 4 do
+    params:set("midi_channel_mode", mode)
+    assert_equal(midi_in.note_off_mode(), wanted[mode], "auto in mode " .. mode)
+    params:set("midi_note_off", 2); assert_equal(midi_in.note_off_mode(), "release", "release in mode " .. mode)
+    params:set("midi_note_off", 3); assert_equal(midi_in.note_off_mode(), "latch", "latch in mode " .. mode)
+    params:set("midi_note_off", 1)
+  end
+  -- mpe selected, auto: lifting the key ends the note and stops the voice
+  params:set("midi_channel_mode", 3)
+  S.selected_voice = 1
+  press(context, 2, 60)
+  assert_true(not S.voices[1].active, "release in mpe selected")
+  params:set("midi_channel_mode", 1)
+  press(context, 2, 60)
+  assert_true(S.voices[2].active, "latch in per voice")
+  assert_equal(S.lib.notes.held(2), 1, "its note sounds on")
+end)
+
+test("a note off goes to the voices its note on played", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("midi_channel_mode", 2); params:set("midi_note_off", 2)
+  S.selected_voice = 1
+  note_on(context, 1, 60)
+  S.selected_voice = 2
+  context.clear_engine_calls()
+  note_off(context, 1, 60)
+  local stops = context.calls_named("voiceOff")
+  assert_equal(#stops, 1); assert_equal(stops[1].args[1], 0, "the release reaches voice 1")
+  assert_true(S.voices[2].active, "the newly selected voice is left alone")
+  assert_equal(S.midi_state.note_voice[1], nil, "nothing remembered")
+end)
+
+test("an input voice takes its pitch from a note", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("v1_source", 10)
+  local freq = params:get("v1_freq")
+  press(context, 1, 72)
+  assert_near(params:get("v1_grain_pitch"), 2, 1e-9, "note 72 plays at 2")
+  press(context, 1, 48)
+  assert_near(params:get("v1_grain_pitch"), 0.5, 1e-9, "note 48 at 0.5")
+  press(context, 1, 0)
+  assert_near(params:get("v1_grain_pitch"), 0.25, 1e-9, "clamped to 0.25")
+  assert_equal(params:get("v1_freq"), freq, "the freq is left alone")
+  -- an extra note on an input voice: its own rate
+  note_on(context, 1, 60); context.clear_engine_calls(); note_on(context, 1, 67)
+  local on = context.calls_named("noteOn")[1].args
+  assert_equal(on[2], 1); assert_near(on[5], 2 ^ (7 / 12), 1e-9, "a fifth up")
+end)
+
+test("a quantized voice's every note is snapped", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v1_quantize", 1)
+  note_on(context, 1, 61)
+  assert_near(params:get("v1_freq"), freq_of(60), 1e-6, "the own note: C#4 plays C4")
+  context.clear_engine_calls()
+  note_on(context, 1, 66)
+  local on = context.calls_named("noteOn")[1].args
+  assert_equal(on[2], 1, "an extra note"); assert_equal(on[3], 65, "F#4 plays F4")
+  assert_near(on[4], freq_of(65), 1e-6); assert_near(on[5], 2 ^ (5 / 12), 1e-9)
+  assert_near(params:get("v1_freq"), freq_of(60), 1e-6, "the own note is unchanged")
+  context.clear_engine_calls()
+  note_on(context, 2, 66)
+  assert_near(params:get("v2_freq"), freq_of(66), 1e-6, "an unquantized voice plays F#4")
+end)
+
+test("mpe selected: a chord on member channels plays the selected voice, each note with its channel's values", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("midi_channel_mode", 3)
+  S.selected_voice = 2
+  context.midi.send(1, { type = "pitchbend", val = 9216, ch = 2 })
+  context.midi.send(1, { type = "channel_pressure", val = 64, ch = 2 })
+  context.midi.send(1, { type = "cc", cc = 74, val = 32, ch = 2 })
+  context.clear_engine_calls()
+  note_on(context, 2, 60)
+  -- 2 ^ ((1024 / 8192) * 48 / 12) = 2 ^ 0.5; pressure 64 on amp at 100 %; the slide from where the touch began: 0
+  local first = expressions(context, 2, 1)
+  assert_equal(#first, 1, "the own note's first expression")
+  assert_near(first[1].bend, 2 ^ 0.5, 1e-9); assert_near(first[1].amp, 1 + 64 / 127, 1e-9)
+  assert_equal(first[1].position, 0); assert_equal(first[1].size, 0); assert_equal(first[1].main, 0)
+  assert_near(params:get("v2_freq"), 261.6256, 1e-3)
+  note_on(context, 3, 64)
+  assert_equal(S.lib.notes.held(2), 2, "voice 2 holds two notes")
+  local second = expressions(context, 2, 2)
+  assert_equal(#second, 1); assert_equal(second[1].bend, 1, "channel 3 is unbent"); assert_equal(second[1].amp, 1)
+  assert_equal(S.lib.notes.held(1), 0, "voice 1 plays nothing")
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    assert_true(call.args[2] ~= "bend", "the voice's own bend is not used")
+  end
+end)
+
+test("mpe: a member channel's bend, pressure and slide update its held notes only", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("midi_channel_mode", 3)
+  S.selected_voice = 2
+  note_on(context, 2, 60); note_on(context, 3, 64)
+  lfo_step(context, 2)
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "channel_pressure", val = 127, ch = 3 })
+  lfo_step(context)
+  assert_equal(#expressions(context, 2, 1), 0, "channel 2's note is untouched")
+  local pressed = expressions(context, 2, 2)
+  assert_equal(#pressed, 1); assert_near(pressed[1].amp, 2, 1e-9, "channel 3's note: full pressure on amp")
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "cc", cc = 74, val = 127, ch = 2 })
+  lfo_step(context)
+  local slid = expressions(context, 2, 1)
+  assert_equal(#slid, 1); assert_near(slid[1].main, 0.5, 1e-9, "channel 2's slide on main at 50 %")
+  assert_equal(#expressions(context, 2, 2), 0)
+  -- the master channel's bend moves both
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "pitchbend", val = 16383, ch = 1 })
+  lfo_step(context)
+  local master = 2 ^ ((8191 / 8192) * 2 / 12)
+  for slot = 1, 2 do
+    local list = expressions(context, 2, slot)
+    assert_equal(#list, 1, "slot " .. slot); assert_near(list[1].bend, master, 1e-9, "slot " .. slot .. " bent")
+  end
+  assert_equal(#context.calls_named("setVoiceParam"), 0, "no voice bend in the MPE modes")
+end)
+
+test("mpe split: a note plays every voice whose zone and range hold it", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local notes = S.lib.notes
+  params:set("midi_channel_mode", 4)
+  params:set("mpe_lower_members", 7); params:set("mpe_upper_members", 7)
+  params:set("v3_zone", option_index("v3_zone", "lower"))
+  params:set("v3_zone_low", 60); params:set("v3_zone_high", 72)
+  note_on(context, 2, 64)
+  assert_equal(notes.held(1), 1, "voice 1, lower 0-127"); assert_equal(notes.held(3), 1, "voice 3, lower 60-72")
+  assert_true(S.voices[3].active, "voice 3 started"); assert_equal(notes.held(2), 0, "voice 2 is upper")
+  local list = S.midi_state.note_voice[2][64]
+  assert_equal(#list, 2); assert_equal(list[1], 1); assert_equal(list[2], 3)
+  note_on(context, 2, 50)
+  assert_equal(notes.held(1), 2, "below voice 3's range: voice 1 only"); assert_equal(notes.held(3), 1)
+  note_on(context, 15, 60)
+  assert_equal(notes.held(2), 1, "an upper member plays voice 2")
+  note_on(context, 1, 62)
+  assert_equal(notes.held(1), 3, "the lower master plays the lower zone"); assert_equal(notes.held(3), 2)
+  note_off(context, 1, 62)
+  note_off(context, 2, 64)   -- auto: release in the MPE modes
+  assert_true(not S.voices[3].active, "voice 3 stops with its last key")
+  assert_true(S.voices[1].active, "voice 1 still holds a key"); assert_equal(notes.held(1), 1)
+  -- a channel in neither zone plays nothing
+  params:set("mpe_upper_members", 0); params:set("mpe_lower_members", 3)
+  context.clear_engine_calls()
+  note_on(context, 9, 60)
+  assert_equal(#context.engine_calls, 0, "channel 9 is in neither zone")
+end)
+
+test("the plain modes: poly aftertouch is its note's pressure, channel pressure every held note's", function()
+  local context = load_strata(); finish_startup(context)
+  note_on(context, 1, 60); note_on(context, 1, 64); note_on(context, 2, 62)
+  lfo_step(context, 2)
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "key_pressure", note = 64, val = 127, ch = 1 })
+  lfo_step(context)
+  assert_equal(#expressions(context, 1, 1), 0, "note 60 is untouched")
+  local pressed = expressions(context, 1, 2)
+  assert_equal(#pressed, 1); assert_near(pressed[1].amp, 2, 1e-9, "note 64's pressure on amp")
+  assert_equal(#context.calls_named("noteExpression"), 1, "voice 2's note is untouched")
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "channel_pressure", val = 64, ch = 1 })
+  lfo_step(context)
+  for slot = 1, 2 do
+    local list = expressions(context, 1, slot)
+    assert_equal(#list, 1, "slot " .. slot); assert_near(list[1].amp, 1 + 64 / 127, 1e-9, "slot " .. slot)
+  end
+  assert_equal(#expressions(context, 2, 1), 0, "channel 2's note is untouched")
+  -- a new key takes its channel's pressure as its first expression
+  context.clear_engine_calls()
+  note_on(context, 1, 67)
+  assert_equal(call_names(context, { noteExpression = true, noteOn = true }), "noteExpression, noteOn")
+  assert_near(expressions(context, 1, 3)[1].amp, 1 + 64 / 127, 1e-9)
+  -- CC74 is not read in the plain modes; the bend is the voice's
+  lfo_step(context, 2); context.clear_engine_calls()
+  context.midi.send(1, { type = "cc", cc = 74, val = 127, ch = 1 })
+  lfo_step(context)
+  assert_equal(#context.engine_calls, 0, "CC74 moves nothing")
+  context.midi.send(1, { type = "pitchbend", val = 16383, ch = 1 })
+  assert_equal(context.calls_named("setVoiceParam")[1].args[2], "bend")
+  assert_equal(#context.calls_named("noteExpression"), 0, "the voice's bend bends every note")
+  -- a re-pressed latched key takes pressure again (its old touch is forgotten)
+  note_off(context, 1, 60)                                  -- latched at its pressure
+  context.midi.send(1, { type = "channel_pressure", val = 0, ch = 1 })
+  lfo_step(context, 2); context.clear_engine_calls()
+  note_on(context, 1, 60)                                   -- 64 and 67 still down
+  assert_near(expressions(context, 1, 1)[1].amp, 1, 1e-9, "the new touch starts at the channel's 0")
+  context.clear_engine_calls()
+  context.midi.send(1, { type = "channel_pressure", val = 127, ch = 1 })
+  lfo_step(context)
+  assert_near(expressions(context, 1, 1)[1].amp, 2, 1e-9, "and takes pressure")
+end)
+
+test("latch: a lifted key keeps the highest pressure its touch reached", function()
+  local context = load_strata(); finish_startup(context)
+  note_on(context, 1, 60); note_on(context, 1, 64)
+  context.midi.send(1, { type = "key_pressure", note = 60, val = 127, ch = 1 })
+  context.midi.send(1, { type = "key_pressure", note = 60, val = 32, ch = 1 })
+  lfo_step(context, 2)
+  context.clear_engine_calls()
+  note_off(context, 1, 60)
+  lfo_step(context)
+  local kept = expressions(context, 1, 1)
+  assert_equal(#kept, 1, "the lift hands the peak over"); assert_near(kept[1].amp, 2, 1e-9, "full pressure, its peak")
+  -- in release mode the lift ends the note instead
+  params:set("midi_note_off", 2)
+  note_on(context, 1, 67)
+  context.clear_engine_calls()
+  note_off(context, 1, 67)
+  assert_equal(call_names(context, { noteOff = true, noteExpression = true }), "noteOff")
+end)
+
+test("a port change, an unplug, a mode change and a panic release every MIDI note and empty the pool's count", function()
+  local resetters = {
+    { name = "a port change", run = function() params:set("midi_device", 2) end },
+    { name = "an unplug", run = function(context) context.midi.unplug(1) end },
+    { name = "a channel mode change", run = function(_, mode) params:set("midi_channel_mode", mode == 1 and 2 or 1) end },
+    { name = "all notes off", run = function(context) context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 }) end },
+    { name = "all sound off", run = function(context) context.midi.send(1, { type = "cc", cc = 120, val = 0, ch = 1 }) end },
+    { name = "a member count change", modes = { 3 }, run = function() params:set("mpe_lower_members", 7) end },
+    { name = "a zone change", modes = { 4 }, run = function() params:set("v1_zone_high", 100) end },
+    { name = "reset_midi_input", run = function() reset_midi_input() end },
+  }
+  for _, resetter in ipairs(resetters) do
+    for _, mode in ipairs(resetter.modes or { 1, 3 }) do
+      local name = resetter.name .. " in mode " .. mode
+      local context = load_strata(); finish_startup(context)
+      local S = local_value("S")
+      context.midi.plug(1, "keys")
+      params:set("midi_channel_mode", mode)
+      params:set("midi_note_off", 3)    -- latch in every mode
+      S.selected_voice = 1
+      local mpe = mode >= 3
+      if mpe then context.midi.send(1, { type = "channel_pressure", val = 64, ch = 2 }) end
+      -- a latched chord of four on voice 1: member channels 2-5 in the MPE modes, channel 1 in per voice
+      local chord = { 60, 64, 67, 71 }
+      for index, note in ipairs(chord) do note_on(context, mpe and index + 1 or 1, note) end
+      for index, note in ipairs(chord) do note_off(context, mpe and index + 1 or 1, note) end
+      assert_equal(S.lib.notes.held(1), 4, name .. ": the chord sounds")
+      assert_equal(S.lib.notes.pool_used(), 3, name .. ": three extra notes")
+      if mpe then assert_near(S.lib.mpe.values(2).pressure, 64 / 127, 1e-9) end
+      resetter.run(context, mode)
+      for voice = 1, S.constants.NUM_VOICES do
+        assert_true(S.lib.notes.held(voice) <= 1, name .. ": voice " .. voice .. " holds " .. S.lib.notes.held(voice))
+      end
+      assert_equal(S.lib.notes.pool_used(), 0, name .. ": the pool is empty")
+      assert_equal(next(S.midi_state.note_voice), nil, name .. ": no key remembered")
+      assert_equal(S.lib.mpe.values(2).pressure, nil, name .. ": the MPE state is reset")
+    end
+  end
+end)
+
+test("note offs for a stopped voice's forgotten notes send nothing", function()
+  for _, off_mode in ipairs({ 2, 3 }) do   -- release, latch
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    params:set("midi_note_off", off_mode)
+    for _, note in ipairs({ 60, 64, 67 }) do note_on(context, 3, note) end
+    assert_true(S.voices[3].active and S.lib.notes.held(3) == 3, "the chord started voice 3")
+    toggle_voice(3)   -- the norns stops it under the keys
+    assert_equal(S.lib.notes.held(3), 0, "its notes are forgotten")
+    context.clear_engine_calls()
+    for _, note in ipairs({ 60, 64, 67 }) do note_off(context, 3, note) end
+    lfo_step(context)
+    assert_equal(#context.engine_calls, 0, "mode " .. off_mode .. ": the note offs send nothing")
+    assert_true(not S.voices[3].active, "the voice stays stopped")
+    assert_equal(next(S.midi_state.held[3]), nil, "no key held")
+    -- a new key starts the voice again on slot 1
+    note_on(context, 3, 62)
+    assert_true(S.voices[3].active); assert_equal(S.lib.notes.find(3, "midi", key_of(3, 62)), 1)
+  end
+end)
+
+test("a note tap consumes the notes it takes, and their note offs", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local midi_in = S.lib.midi_in
+  params:set("midi_note_off", 2)
+  local seen = {}
+  midi_in.set_note_tap(function(note) table.insert(seen, note); return true end)
+  context.clear_engine_calls()
+  note_on(context, 3, 60)
+  assert_equal(#seen, 1); assert_equal(seen[1], 60, "the tap gets the note")
+  assert_equal(#context.engine_calls, 0, "nothing plays"); assert_true(not S.voices[3].active)
+  assert_equal(next(S.midi_state.held[3]), nil)
+  note_off(context, 3, 60)
+  note_on(context, 1, 62); note_off(context, 1, 62)
+  assert_equal(#context.engine_calls, 0, "the note offs do nothing")
+  assert_true(S.voices[1].active, "voice 1 runs on")
+  -- a tap that takes nothing lets the note play
+  midi_in.set_note_tap(function() return false end)
+  note_on(context, 3, 60)
+  assert_true(S.voices[3].active, "a refused note plays")
+  -- nil: every note plays
+  midi_in.set_note_tap(nil)
+  note_on(context, 4, 60)
+  assert_true(S.voices[4].active)
+  -- a tap that clears itself while it runs consumes its note; the next plays
+  seen = {}
+  midi_in.set_note_tap(function(note)
+    table.insert(seen, note)
+    midi_in.set_note_tap(nil)
+    return true
+  end)
+  context.clear_engine_calls()
+  note_on(context, 5, 60)
+  assert_equal(#context.engine_calls, 0, "the self-clearing tap's note is consumed"); assert_equal(#seen, 1)
+  note_on(context, 5, 62)
+  assert_true(S.voices[5].active, "the next note plays"); assert_equal(#seen, 1, "the tap is gone")
+  note_off(context, 5, 60)
+  assert_true(S.voices[5].active, "the consumed note's note off does nothing")
+  -- a tap that sets another: the new one takes the next note
+  local second = {}
+  midi_in.set_note_tap(function(note)
+    midi_in.set_note_tap(function(next_note) table.insert(second, next_note); return true end)
+    return true
+  end)
+  note_on(context, 6, 60); note_on(context, 6, 61)
+  assert_equal(#second, 1); assert_equal(second[1], 61, "the new tap takes the next note")
+  assert_true(not S.voices[6].active, "both consumed")
+  -- the MPE modes too; a mode change (reset_midi_input) clears the tap
+  params:set("midi_channel_mode", 3)
+  S.selected_voice = 7
+  note_on(context, 2, 60)
+  assert_true(S.voices[7].active, "the mode change cleared the tap")
+  midi_in.set_note_tap(function(note) table.insert(second, note); return true end)
+  note_on(context, 3, 64)
+  assert_equal(second[2], 64, "mpe selected: the tap takes the note")
+  assert_equal(S.lib.notes.held(7), 1)
+  -- a layout change (the zones editor's learn sets a range) keeps the tap
+  params:set("mpe_lower_members", 3)   -- channel 9 is now in neither zone
+  note_on(context, 9, 70)
+  assert_equal(second[3], 70, "the tap survives a layout change")
+  -- cleanup clears it
+  cleanup()
+  midi_event(midi.to_data({ type = "note_on", note = 71, vel = 100, ch = 9 }))
+  assert_equal(#second, 3, "after cleanup the tap is gone")
+end)
+
+test("a 3.4 PSET's channel mode and note off keep their behavior", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  assert_equal(params:string("midi_note_off"), "auto")
+  params:set("midi_note_off", 2); assert_equal(params:string("midi_note_off"), "release")
+  params:set("midi_note_off", 3); assert_equal(params:string("midi_note_off"), "latch")
+  -- midi_channel_mode 2 is omni
+  params:set("midi_channel_mode", 2); S.selected_voice = 4
+  params:set("midi_note_off", 1)   -- 3.4's ignore: latch in a plain mode
+  press(context, 9, 60)
+  assert_true(S.voices[4].active, "omni plays the selected voice")
+  assert_equal(S.lib.notes.held(4), 1, "and the note sounds on")
+  params:set("midi_note_off", 2)   -- 3.4's voice off: release
+  press(context, 9, 62)
+  assert_true(not S.voices[4].active, "release stops it")
 end)
 
 end
