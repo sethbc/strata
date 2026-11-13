@@ -542,7 +542,7 @@ var checkNoteDefaults = {
 // doneAction (the probe synth is still there)
 var checkNotePark = {
     var name = "voices: the park is 1 from the first block at noteGate 1, ramps to 0 over its release and back over its attack, and starts parked at noteGate 0";
-    var bus = Bus.control(server, 10), group = Group.tail(server), open, parked, down, up, startedParked, ramps, ramp, ok;
+    var bus = Bus.control(server, 10), group = Group.tail(server), open, parked, down, up, startedParked, ramps, ramp, probes, ok;
     var ramped = { arg levels; levels.size == 2 and: { levels.every({ arg level; (level > 0.05) and: { level < 0.95 } }) } };
     if (engine.respondsTo(\notePark).not) { check.(false, name ++ " (no notePark)") } {
         open = Synth(\strataCheckNotePark, [\out, bus.index, \attackTime, 0.05, \releaseTime, 0.05], group);
@@ -561,11 +561,13 @@ var checkNotePark = {
         server.makeBundle(0.2 + 0.3, { ramps.do(_.set(\noteGate, 1)) });
         0.8.wait; server.sync;
         ramp = h.readBus(bus).drop(6).clump(2);
+        // both park probes still there (no doneAction): the open one, parked
+        // and unparked, and the one started parked
+        probes = h.synthNames(group).occurrencesOf(\strataCheckNotePark);
         ok = (parked.keep(3) == [1, 1, 1]) and: { parked.drop(3).keep(3) == [0, 0, 0] } and: { down == 0 } and: { up == 1 }
-            and: { ramped.(ramp[0]) } and: { ramped.(ramp[1]).not }
-            and: { open.isPlaying or: { h.synthNames(group).includes(\strataCheckNotePark) } };
-        check.(ok, name ++ " (open: value, lowest, highest %; started parked %; down %; up %; at half its release and half its attack %, a jumping park's %)".format(
-            parked.keep(3), parked.drop(3).keep(3), down, up, ramp[0].collect({ arg level; level.round(0.0001) }), ramp[1]));
+            and: { ramped.(ramp[0]) } and: { ramped.(ramp[1]).not } and: { probes == 2 };
+        check.(ok, name ++ " (open: value, lowest, highest %; started parked %; down %; up %; at half its release and half its attack %, a jumping park's %; park probes there %)".format(
+            parked.keep(3), parked.drop(3).keep(3), down, up, ramp[0].collect({ arg level; level.round(0.0001) }), ramp[1], probes));
     };
     group.free; bus.free;
     server.sync;
