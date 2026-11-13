@@ -215,6 +215,10 @@ end
 -- engine lands a command before its caller adds it here, and the caller's
 -- change removes it.
 sync_check.PENDING_COMMANDS = {
+  "noteOn",
+  "noteOff",
+  "noteExpression",
+  "setNotePool",
 }
 
 -- lua_sources: { { path = "strata.lua" | "lib/...", text = source }, ... },

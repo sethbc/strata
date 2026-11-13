@@ -240,6 +240,37 @@ var checkModulationSizes = {
     group.free; controlBus.free;
 };
 
+// What each voice SynthDef and \strataMod take of the pool (design 3.5
+// §0.2, the measurement 3.5's note pool is sized from): twenty of each,
+// playing to a private bus with every crossmod slot on the silent bus, each
+// line its own (Karplus's two 0.1 s Pluck lines allocate in its first block,
+// which sizeOf waits past). 96 KB bounds a gross error only; 3.5's package
+// 1a sets each def's own limit (docs/notes/engine/memory.md)
+var voiceDefLimitKB = 96;
+var checkVoiceSynthSizes = {
+    var privateBus = Bus.audio(server, 2), controlBus = Bus.control(server, 1), group = Group.after(engine.processGroup);
+    var silent = engine.silentBus.index;
+    var defNames = h.voiceDefs ++ [\strataMod];
+    defNames.do({ arg name;
+        var desc = SynthDescLib.global.at(name), size;
+        size = if (desc.isNil) { 0 } {
+            sizeOf.({
+                if (name == \strataMod) {
+                    Synth(name, [\in, privateBus, \out, controlBus.index], group)
+                } {
+                    Synth(name, [\out, privateBus, \modBus1, silent, \modBus2, silent, \modBus3, silent], group)
+                }
+            })
+        };
+        check.((size > 0) and: { size <= voiceDefLimitKB },
+            // (the backslash goes in as an argument: in the format string
+            // "\%" would escape the placeholder)
+            "memory: % takes % KB of the pool (at most % KB; % UGens; by allocation probes)".format(
+                "\\" ++ name, size.round(0.1), voiceDefLimitKB, desc !? { desc.def.children.size }));
+    });
+    group.free; privateBus.free; controlBus.free;
+};
+
 // A scenario that errors while the groups are paused still leaves them
 // running (#218): guardedHold pauses them, throws inside a guarded body
 // (caught here), and a Sweep in processGroup must then advance
@@ -637,6 +668,7 @@ checkGrainMemorySizes.value;
 checkGrainSynthSizes.value;
 checkRecordSizes.value;
 checkModulationSizes.value;
+checkVoiceSynthSizes.value;
 check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
     "memory: the default engine runs tier standard (idle, about % KB of the pool free; a small probe % KB)".format(
         idleFreeKB.round(10), probeKB.round(0.1)));
