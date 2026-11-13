@@ -1072,48 +1072,133 @@ checkSpectralNotes = {
     server.sync;
 };
 
-// Ruling 44: the own note's park through a synth voice's freeze. The own
+// Rulings 44, 48 and 49: the own note's park through a synth voice's
+// freeze, read on the path the listener hears: the voice's synth path
+// (voicePathBus(voice, 0), which the own grain synth writes; no extra note
+// is held), with a peak meter in short windows after the unfreeze. The own
 // voice synth's noteGate follows the park, frozen or not; while frozen a
-// slot-0 command reaches the own grain synth too (the freeze itself parks
-// nothing: the frozen ring holds the chord); the unfreeze sets the grain
-// synth's noteGate back to 1 and leaves the voice synth where the park
-// says, so an unfreeze under a parked own note makes no sound of it. The
-// voice (4, Pulse, its 2 s attack waited out, then its attack and release
-// set short) is parked before its freeze, then during one; its voice
-// synth's level (a peak meter on its bus) over 0.3 s after each unfreeze
-// stays under 1% of its level playing
+// slot-0 command reaches the own grain synth too; the freeze itself parks
+// nothing. The unfreeze resumes the ring writer from its paused phase, so
+// for the reader's lookback (ringReadMargin + posSpread x
+// ringSpreadSeconds) the grains it starts still read the ring's newest
+// audio from before the freeze: the voice's ordinary ring tail, displaced
+// to the unfreeze, at most that lookback plus one grain (ruling 49,
+// accepted). The voice (4, Pulse: its 2 s attack waited out, then its
+// attack and release 0.05 and 0.3 s) plays continuous grains of a known
+// size with no size jitter. Cases:
+// - during the freeze, at spread 0 and at Pulse's default 0.35, 0.1 s
+//   grains: silent while frozen once the grain synth's park has fallen
+//   (over grainRelease); from the bound (the lookback, plus the grain, plus
+//   the margin) on silent for at least 0.5 s; the tail's peak inside it
+//   under twice the voice's level playing (a doubled stream would pass it);
+// - before the freeze, well before (0.6 s: past the release and the
+//   lookback): the frozen stream audible (the freeze parks nothing), then
+//   silent from one grain plus the margin on;
+// - before the freeze, just before (0.05 s: inside the release and the
+//   lookback): silent from the during cases' bound on.
+// The margin, 0.1 s, covers the windows' resolution (a window's peak is
+// read at its end, so a tail can land one window, about 25 ms, late), the
+// unfreeze's OSC and block latency and a grain's last samples. "Silent" is
+// under 1% of the level playing. The voice synth's own bus (granBuses,
+// which carries only it) is read too: it holds the park, so it stays
+// silent across every unfreeze (ruling 44)
 checkParkThroughFreeze = {
-    var voice = 4, probe, results, voiceSynth, grain;
+    var voice = 4, margin = 0.1, silentFraction = 0.01, heardBus = Bus.control(server, 1), voiceBus = Bus.control(server, 1);
+    var heard, voiceProbe, voiceSynth, grain, results, lookback, profile, runCase, describe, voicePlaying;
+    lookback = { arg spread; engine.ringReadMargin + (spread * engine.ringSpreadSeconds) };
+    // the heard path's peak in consecutive windows until `until` s after
+    // `since`: [start, end, peak] each, in s after `since`
+    profile = { arg since, until;
+        var list = List.new(64), windowStart;
+        while { (Main.elapsedTime - since) < until } {
+            windowStart = Main.elapsedTime - since;
+            list.add([windowStart, 0, h.measure(heard, heardBus, 0.02)[0]]);
+            list.last[1] = Main.elapsedTime - since;
+        };
+        list.asArray
+    };
+    // one case: the park before (gap s before the freeze) or during it, the
+    // unfreeze, and what the heard path and the voice synth's bus do; bound:
+    // the time after the unfreeze from which the heard path must be silent
+    runCase = { arg order, spread, size, gap, bound;
+        var playing, frozen, parkedFrozen, gatesFrozen, unfrozenAt, windows, after, tail, tailEnd, voiceAfter, gatesAfter, silent;
+        command.(\setGrainParam, voice, \posSpread, spread);
+        command.(\setGrainParam, voice, \grainSize, size);
+        server.sync; 0.6.wait;   // grains of the new settings only
+        playing = h.measure(heard, heardBus, 0.3)[0];
+        silent = playing * silentFraction;
+        if (order == \during) {
+            command.(\setGrainParam, voice, \freeze, 1.0); server.sync; 0.3.wait;
+            frozen = h.measure(heard, heardBus, 0.3)[0];
+            command.(\noteOff, voice, 0, 0); server.sync;
+            (engine.grainRelease + 0.4).wait;   // the own grain synth's park falls over grainRelease
+            parkedFrozen = h.measure(heard, heardBus, 0.3)[0];
+        } {
+            command.(\noteOff, voice, 0, 0); server.sync; gap.wait;
+            command.(\setGrainParam, voice, \freeze, 1.0); server.sync; 0.3.wait;
+            frozen = h.measure(heard, heardBus, 0.3)[0];
+            parkedFrozen = frozen;
+            0.5.wait;   // past the voice synth's release
+        };
+        gatesFrozen = [controlOf.(voiceSynth, \noteGate), controlOf.(grain, \noteGate)];
+        voiceProbe.set(\t_reset, 1);
+        unfrozenAt = Main.elapsedTime;
+        command.(\setGrainParam, voice, \freeze, 0.0);
+        windows = profile.(unfrozenAt, bound + 0.6);
+        voiceAfter = h.readBus(voiceBus)[0];
+        gatesAfter = [controlOf.(voiceSynth, \noteGate), controlOf.(grain, \noteGate)];
+        after = windows.select({ arg window; window[0] >= bound });
+        tail = windows.reject({ arg window; window[0] >= bound }).inject(0, { arg most, window; max(most, window[2]) });
+        tailEnd = windows.select({ arg window; window[2] >= silent }).inject(0, { arg last, window; max(last, window[1]) });
+        command.(\noteOn, voice, 0, 60.0, 220.0, 1.0, 1.0);   // unparked again, for the next case
+        server.sync; 0.6.wait;
+        (order: order, spread: spread, size: size, gap: gap, bound: bound, playing: playing, frozen: frozen,
+            parkedFrozen: parkedFrozen, gatesFrozen: gatesFrozen, tail: tail, tailEnd: tailEnd, gatesAfter: gatesAfter,
+            silentAfter: after.notEmpty and: { after.every({ arg window; window[2] < silent }) },
+            afterSpan: if (after.isEmpty) { 0 } { after.last[1] - after.first[0] }, voiceAfter: voiceAfter, silent: silent)
+    };
+    describe = { arg each;
+        "spread %, % s grains: playing %, frozen %, tail peak % inside the bound %, last sound % s after the unfreeze, silent after the bound for % s".format(
+            each[\spread], each[\size], each[\playing].round(0.001), each[\frozen].round(0.001), each[\tail].round(0.001),
+            each[\bound].round(0.001), each[\tailEnd].round(0.001), each[\afterSpan].round(0.01))
+    };
     startSynthVoice.(voice);
     server.sync; 2.3.wait;
     command.(\setVoiceParam, voice, \attackTime, 0.05);
     command.(\setVoiceParam, voice, \releaseTime, 0.3);
+    command.(\setGrainParam, voice, \grainMode, 0.0);
+    command.(\setGrainParam, voice, \sizeJitter, 0.0);
+    command.(\setGrainParam, voice, \bufScan, 0.0);
     voiceSynth = engine.synths[engine.voiceKey(voice)];
     grain = ownGrain.(voice);
-    probe = levelProbe.(voice);
-    server.sync;
-    results = [\before, \during].collect({ arg order;
-        var playing = h.measure(probe[0], probe[1], 0.3)[0], frozen, after, gates;
-        if (order == \before) {
-            command.(\noteOff, voice, 0, 0); server.sync; 0.6.wait;
-            command.(\setGrainParam, voice, \freeze, 1.0); server.sync; 0.3.wait;
-        } {
-            command.(\setGrainParam, voice, \freeze, 1.0); server.sync; 0.3.wait;
-            command.(\noteOff, voice, 0, 0); server.sync; 0.6.wait;
-        };
-        frozen = [controlOf.(voiceSynth, \noteGate), controlOf.(grain, \noteGate)];
-        command.(\setGrainParam, voice, \freeze, 0.0);
-        after = h.measure(probe[0], probe[1], 0.3)[0];
-        gates = [controlOf.(voiceSynth, \noteGate), controlOf.(grain, \noteGate)];
-        command.(\noteOn, voice, 0, 60.0, 220.0, 1.0, 1.0);   // unparked again, for the next order
-        server.sync; 0.5.wait;
-        [order, playing, frozen, after, gates]
+    heard = Synth(\strataCheckPeak, [\in, engine.voicePathBus(voice, 0), \out, heardBus], engine.processGroup, \addToTail);
+    voiceProbe = Synth(\strataCheckPeak, [\in, engine.granBuses[voice], \out, voiceBus], engine.processGroup, \addToTail);
+    server.sync; 0.3.wait;
+    voicePlaying = h.measure(voiceProbe, voiceBus, 0.3)[0];
+    results = [
+        [\during, 0.0, 0.1, 0, lookback.(0.0) + 0.1 + margin],
+        [\during, 0.35, 0.1, 0, lookback.(0.35) + 0.1 + margin],
+        [\before, 0.35, 0.1, 0.6, 0.1 + margin],
+        [\before, 0.35, 0.1, 0.05, lookback.(0.35) + 0.1 + margin]
+    ].collect({ arg each; runCase.(*each) });
+    heard.free; voiceProbe.free;
+    heardBus.free; voiceBus.free;
+    results.keep(2).do({ arg each;
+        check.((each[\parkedFrozen] < each[\silent]) and: { each[\silentAfter] } and: { each[\afterSpan] >= 0.5 }
+            and: { each[\tail] < (2 * each[\playing]) } and: { each[\gatesFrozen] == [0, 0] } and: { each[\gatesAfter] == [0, 1] },
+            "notes: on the heard path (the synth path), an unfreeze under an own note parked during the freeze leaves only the ring's tail: silent while frozen after the park (%), silent from the reader's lookback plus one grain plus 0.1 s on, the tail under twice the level playing (rulings 44, 49; %)".format(
+                each[\parkedFrozen].round(0.0001), describe.(each)));
     });
-    probe[0].free; probe[1].free;
-    check.(results.every({ arg each; (each[1] > 0.01) and: { each[3] < (each[1] * 0.01) } and: { each[4] == [0, 1] } })
-        and: { results[0][2] == [0, 1] } and: { results[1][2] == [0, 0] },
-        "notes: an unfreeze under a parked own note makes no sound of it, parked before the freeze or during it (ruling 44; [order, level playing, [voice synth, grain synth] noteGate frozen, level after the unfreeze, noteGate after]: %)".format(
-            results.collect({ arg each; [each[0], each[1].round(0.001), each[2], each[3].round(0.0001), each[4]] })));
+    check.((results[2][\frozen] > (results[2][\playing] * 0.02)) and: { results[2][\silentAfter] } and: { results[2][\afterSpan] >= 0.5 }
+        and: { results[2][\gatesFrozen] == [0, 1] } and: { results[2][\gatesAfter] == [0, 1] },
+        "notes: on the heard path (the synth path), an own note parked well before the freeze leaves the frozen stream audible, and after the unfreeze silence from one grain plus 0.1 s on (ruling 44's reading: the freeze parks nothing; %)".format(
+            describe.(results[2])));
+    check.(results[3][\silentAfter] and: { results[3][\afterSpan] >= 0.5 } and: { results[3][\gatesAfter] == [0, 1] },
+        "notes: on the heard path (the synth path), an own note parked just before the freeze (inside its release and the lookback) leaves only the ring's tail after the unfreeze, within the same bound (ruling 49; %)".format(
+            describe.(results[3])));
+    check.(results.every({ arg each; each[\voiceAfter] < (voicePlaying * silentFraction) }),
+        "notes: on the own voice synth's bus (granBuses), the voice synth stays silent across every unfreeze under a parked own note: it holds the park (ruling 44; playing %, after each unfreeze %)".format(
+            voicePlaying.round(0.001), results.collect({ arg each; each[\voiceAfter].round(0.0001) })));
     command.(\setVoiceParam, voice, \attackTime, 2.0);
     command.(\setVoiceParam, voice, \releaseTime, 4.0);
     h.stopAllVoices;
