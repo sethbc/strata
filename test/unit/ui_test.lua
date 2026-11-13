@@ -561,6 +561,7 @@ test("displayed changes from every source reach the screen and arc on the next f
   local arc_hardware = context.arc.plug(1)
   local grid_device = context.grid.plug(1, 16, 16)
   context.midi.plug(1, "keys")
+  params:set("midi_note_off", 2)   -- release, before a key is down (a change releases held notes)
   local voices = local_value("voices")
   show_page("MAIN")
 
@@ -585,7 +586,6 @@ test("displayed changes from every source reach the screen and arc on the next f
     context.midi.send(1, { type = "note_on", ch = 4, note = 40, vel = 100 })
   end)
   assert_true(voices[4].active, "the note started voice 4")
-  params:set("midi_note_off", 2)   -- voice off
   assert_drawn_on_next_frame(context, arc_hardware, "MIDI note off stopping a voice", function()
     context.midi.send(1, { type = "note_off", ch = 4, note = 40, vel = 0 })
   end)

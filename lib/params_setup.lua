@@ -716,7 +716,9 @@ return function(S)
       id = "midi_note_off",
       name = "midi note off",
       options = S.lib.midi_in.MIDI.note_off_options,
-      default = 1
+      default = 1,
+      -- every MIDI note is released, so no chord carries into the other behavior (ruling 37)
+      action = function() reset_midi_input() end
     }
 
     -- 3.5's MPE settings (lib/mpe.lua): the member counts and the bend range
