@@ -295,8 +295,15 @@
     // processed the voice has at most one fading grain synth and one fading
     // voice synth. A frozen voice is unfrozen first (the freeze area), and
     // the switch counts as a ring change (ringChanges), so a ring copy still
-    // waiting for its fade no longer runs.
+    // waiting for its fade no longer runs. Every extra note of the voice is
+    // cut and each live one restarted on the new source (restartNotes, the
+    // notes area's). All of it goes in one bundle, so it lands in one block.
     replaceGrainSynth { arg voice;
+        context.server.makeBundle(nil, { this.switchGrainSynth(voice) });
+    }
+
+    // replaceGrainSynth's work, inside its bundle
+    switchGrainSynth { arg voice;
         var oldGrain, voiceSynth;
 
         this.unfreezeVoice(voice);
@@ -324,6 +331,7 @@
                 fadingSynths[voice].add(voiceSynth);
             };
         };
+        this.restartNotes(voice);
     }
 
     // Cut (switchCutTime) the voice's fading synths: those an earlier
