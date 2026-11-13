@@ -3,44 +3,88 @@
 - **Four commands, exactly**, with these signatures: `noteOn(voice, slot, note, freq, rate, velocity)` `"iiffff"`, `noteOff(voice, slot, cut)` `"iii"`, `noteExpression(voice, slot, bend, amp, position, size, main)` `"iifffff"`, `setNotePool(size)` `"i"` (design 3.5 §3.1). Slots are 0-indexed in the engine: 0 is the voice's own note, 1-7 its extra notes; Lua's are 1-8 and it passes `slot - 1`.
 - **Each command checks before it acts**: its indices first (voice 0-6, slot 0..`noteSlots` - 1, `noteOff`'s `cut` 0 or 1, `setNotePool`'s size 0..`notePoolMax`), then that every continuous argument is finite, through the modulation area's `fastModIndicesValid` and `fastModValuesFinite`, as 3.4's five commands do. A bad one is ignored with one console line (`strata: noteOn ignored: voice 7 is not a whole number from 0 to 6`, posted by `postFastModIgnored`): nothing recorded, no state changed. Only then are the continuous arguments clipped (note 0-127, freq 8-20000, rate 0.25-4, velocity 0-1, bend 0.0625-16, amp 0-2, position, size and main -1..1), never ignored for being out of range.
 - **The literals** `noteSlots { ^8 }` and `notePoolMax { ^16 }` equal Lua's `NOTE_SLOTS` and `NOTE_POOL.max` (a docs test compares them), and the Lua engine stub reads them as written (`name { ^N }`) for its index checks: keep them literal methods. `noteLag { ^0.02 }` is every per-note control's lag.
-- **Until the note lifecycle lands the commands are stubs**: they record what they took and create no node (the check counts the server's nodes after each, sent to a running voice). `setNotePool` keeps the size. The note module (`S.lib.notes`) is the only one that sends them, and since it calls all four `test/sync_check.lua`'s `PENDING_COMMANDS` no longer holds them.
+- **Extra notes live only in `areaState[\notes]`'s slots**, never in `synths`, `releasingSynths`, `fadingSynths` or `cuttingSynths`: `voiceRunning`, `gateVoice`, the switch's fading and cutting sets and every other own-synth rule are the voice's own synths' alone.
+- **The engine holds the bounds whatever Lua sends**: a slot never holds two live synths (a `noteOn` on a releasing slot cuts its tail first); live and releasing extra notes never exceed the pool (before a new synth starts, the oldest releasing note anywhere is cut; with none releasing the note is refused with one line); cutting note synths never exceed one per slot (a slot's earlier cutting synth is freed at once) nor the pool in all (the oldest is freed at once).
+- **A note synth is watched as a note's** (`watchNoteSynth`): when it frees, its slot empties (or its cutting entry clears) and nothing restarts it, never `watchVoiceSynth`'s restart rule. Its start counts once the server confirms it (`watchStart`, `unconfirmedStarts`); one unconfirmed past `startConfirmWait` is forgotten at its slot's next command (`forgetFailedNoteStarts`), so a failed start frees its slot and the command meets it empty.
+- **Voice-wide sends reach a voice's notes through `setVoiceSynths` and `setGrainSynths`**: the own synth through `setSynth`, every live extra note of that kind through `sendToSynth`, without the per-note names (`perNoteVoiceControls`, `perNoteGrainControls`: a voice synth note's `freq`; a buffer note's `bufRate` and `scaleNote`; an input note's `pitchShift`; the note controls, `velocity` and `t_accent`). So the param that is a voice's own pitch moves its own note only. Every voice-wide site uses them: `setVoiceControl`, `setGrainParam`'s plain sets, the `envShape`, `history` and `t_scanReset` handlers and `retrigger`'s `t_trig`; `sendScaleNote` gives a buffer note its own `scaleNote` (`noteScaleNote`) and an input note the voice's.
+- **The own note's state lives on the synth that sounds it** (`ownNoteKey`: the own voice synth on a synth voice, the own grain synth on a buffer or input voice): slot 0's park (`noteGate`), accent and expression go there, and every own synth the engine starts or re-gates takes them (`ownNotePairs`), every other own synth the neutral values (the synth-source grain synth, which grains the chord, keeps every note control at its default). `voiceOn` starts every voice unparked at the neutral expression (`resetOwnNote`).
+- **A slot-0 `noteOn` fires the sounding synth's accent and never replaces `retrigger`** (ruling 15): Lua sends it, then `retrigger`, which alone opens the stage's step gate and accent. Lua sends a slot-0 `noteOn` only to a running voice and never an extra note to a stopped one: one that arrives is ignored with one line.
 - The area's state lives in `areaState[\notes]`; `StrataNotes.sc`, like every extension file, adds methods only, never a variable.
 
 ## The notes area (`StrataNotes.sc`, order 170)
 
-The last area in `alloc`'s order and the first in `free`'s. It has `allocState` and `addCommands` only: no SynthDef, node, bus or buffer yet, so no `start`, `stop` or `free`.
+The last area in `alloc`'s order and the first in `free`'s. It has `allocState`, `addCommands` and `stop`: its `stop` frees every note synth (quietly, `sendToSynth`) and puts every slot back as `alloc` left it, before the voices area's `stop` frees the voices' groups. It has no SynthDef, bus or buffer: a note's synth is a voice or grain SynthDef of its voice.
 
 `areaState[\notes]`:
 - `pool`: how many extra notes the pool holds, across every voice; 0 until Lua sends `setNotePool` (Lua sends its tier's default, `NOTE_POOL.standard` 4 or `NOTE_POOL.high` 8, or the player's setting from `notes.data`, at its start).
-- `slots`: per voice an Array of `noteSlots` places, nil while the slot is empty. Nothing fills them yet.
+- `slots`: per voice an Array of `noteSlots` records (`emptyNoteRecord`). Slot 0, the own note: its kept `expression` (an Event of `bend`, `amp`, `position`, `size`, `main`) and `parked`. Each extra slot: `state` (`\empty`, `\live` or `\releasing`), `synth` (live or releasing), `cutting` (its synth in the kill fade), `kind` (what its synth is: `\voice`, `\buffer`, `\input`), its last `noteOn`'s `note`, `freq`, `rate` and `velocity`, its kept `expression`, and `order` and `cutOrder` (when it started and when its cutting synth was cut).
+- `order`: a counter; every start and every cut takes the next number, so the oldest note (or cutting synth) has the lowest.
 - `received`: what each command last took (an IdentityDictionary, the command's name to its arguments, the continuous ones clipped), for the engine check, as the modulation area's `received`.
 
 ### The commands
 
-The rows of AGENTS.md's table:
+The rows of AGENTS.md's table. Each records what it took (`received`), then acts:
 
-| Command | Indices checked | Clipped | Does |
-|---|---|---|---|
-| `noteOn(voice, slot, note, freq, rate, velocity)` `"iiffff"` | voice 0-6, slot 0-7 | note 0-127, freq 8-20000, rate 0.25-4, velocity 0-1 | records; will start the slot's note (a synth voice plays `freq`, a buffer voice `rate` as its `bufRate`, an input voice as its `pitchShift`) |
-| `noteOff(voice, slot, cut)` `"iii"` | voice 0-6, slot 0-7, cut 0-1 | | records; will release the slot's note (cut 0) or cut it in 50 ms (1) |
-| `noteExpression(voice, slot, bend, amp, position, size, main)` `"iifffff"` | voice 0-6, slot 0-7 | bend 0.0625-16, amp 0-2, position, size and main -1..1 | records; will keep the slot's expression and set it on its synth (it creates no node) |
-| `setNotePool(size)` `"i"` | size 0-16 (`notePoolMax`) | | keeps the size in `pool` and records it; will trim past a smaller pool |
+| Command | Indices checked | Clipped | Slot 0 (the own note) | Slots 1-7 (extra notes) |
+|---|---|---|---|---|
+| `noteOn(voice, slot, note, freq, rate, velocity)` `"iiffff"` | voice 0-6, slot 0-7 | note 0-127, freq 8-20000, rate 0.25-4, velocity 0-1 | unparks the own note (`noteGate` 1) and fires its accent at `velocity` on the synth that sounds it; takes no pitch | starts the slot's note, or re-pitches and accents a live one (The lifecycle, below) |
+| `noteOff(voice, slot, cut)` `"iii"` | voice 0-6, slot 0-7, cut 0-1 | | parks the own note (`noteGate` 0; `cut` ignored) | `cut` 0 releases a live note, 1 cuts a live or releasing one in 50 ms; an empty slot does nothing |
+| `noteExpression(voice, slot, bend, amp, position, size, main)` `"iifffff"` | voice 0-6, slot 0-7 | bend 0.0625-16, amp 0-2, position, size and main -1..1 | kept, and set on the synth that sounds the own note | kept for the slot (a later `noteOn` starts with it) and set on its synth, live or releasing. Creates no node |
+| `setNotePool(size)` `"i"` | size 0-16 (`notePoolMax`) | | | keeps the size; past a smaller pool, cuts the oldest releasing notes, then the oldest live, and frees the oldest cutting synths |
 
 The Lua engine stub refuses the same indices and, from the clips in the source (`note = msg[3].clip(0, 127)`, ...), the clipped ranges, so Lua sends neither (`docs/notes/test-harness/engine-stub-and-sync.md`).
 
+### The lifecycle (design 3.5 §3.4)
+
+**An extra note's synth** (`startNoteSynth`) is built by its voice's state (`noteKindFor`), from the voice's controls with the note's own last, so they win: its pitch (`notePitchPairs`), its accent at its velocity (`noteAccentPairs`), `noteGate` 1 (the park open) and its kept expression (`noteExpressionPairs`):
+- **A synth voice's** (`\voice`): a voice synth of the voice's def at the head of `voiceGroup`, writing the voice's bus (`granBuses`), from `voiceControls` (as `startVoiceSynth`) with its own `freq`, `velocity`, `t_trig` 1 (its accent; a Karplus note's pluck) and `noteBend`, `noteAmp` and `noteMain`. The voice's one ring writer records the chord and its one grain synth grains it: the grain synth, ring writer and mod synth stay one each.
+- **A buffer voice's** (`\buffer`): a `\strataGrainBuf` for the voice's slot at the head of its mix group (`startGrainSynth(voice, voiceMixGroup(voice), \addToHead, notePairs, watch)`, from `grainControlPairs`), playing the note's `rate` as its `bufRate`, with a `scaleNote` of its own (`noteScaleNote`: Lua's reference note plus the rate's semitones, as `scaleNoteFor` gives the own note's), its `velocity`, `t_accent` 1 and `noteBend`, `noteAmp`, `notePos` and `noteSize`. Its scan starts at the voice's position, as any grain start does; the playheads show the own note's.
+- **An input voice's** (`\input`): a `\strataGrainRing` of the input ring, the same way, playing the note's `rate` as its `pitchShift` (an absolute rate) under the voice's one `scaleNote`.
+
+Placement is never relative to another note's synth (a group never ends). `startGrainSynth` keeps a note's grain synth in `grainSlots` or `ringReaders` (and `inputReaders` while it reads a frozen input voice's copy) as it does the own one's, and `watchNoteSynth`'s `onFree` takes it out (`forgetGrainReader`).
+
+**`noteOn` on an extra slot** (`extraNoteOn`; a stopped voice's is ignored with one line):
+- **Live:** the pitch is set on its synth and its accent fired, in one message. No node.
+- **Releasing:** the tail is cut (`cutNote`: it becomes the slot's cutting synth, an earlier cutting synth of the slot freed at once) and a new synth starts.
+- **Empty:** a new synth starts.
+- Before a new synth starts (`startNote`, `makeNoteRoom`), if live and releasing extra notes already number the pool, the oldest releasing one anywhere is cut; if none is releasing the note is refused with one line (`strata: noteOn ignored: the pool of 4 is full of live notes`): Lua never sends that, since its own count of held notes stays within the pool.
+
+**`noteOff`**: `cut` 0 sends `gate 0` (`releaseNote`: the synth frees itself after its release; the slot is releasing until then, and its tail counts against the pool); `cut` 1 cuts it (`cutNote`: `kill` 1, the 50 ms kill fade). Both through `sendToSynth`.
+
+**Cutting** (`cutNote`, `trimCuttingNotes`): a cut synth stays the slot's `cutting` until it frees; a later cut on the slot frees it at once, and when cutting note synths would pass the pool the oldest is freed at once, so they never exceed one per slot nor the pool in all (with a pool of 0, a cut frees at once).
+
+**The own note (slot 0)**: its synths are the voice's own (`synths`). `ownNoteKey` names the one that sounds the own note: the own voice synth on a synth voice, the own grain synth on a buffer or input voice. A slot-0 `noteOff` parks it (`noteGate` 0: the voice def's or grain def's second envelope, `notePark`, falls over the def's release; nothing frees), a slot-0 `noteOn` unparks it (`noteGate` 1, over the attack) and fires that synth's accent (a voice synth's `t_trig`, a grain synth's `t_accent`), and a slot-0 `noteExpression` sets its note controls there. Every own synth the engine starts (`startVoiceSynth`, `startGrainSynth` with no note pairs) or `gateVoice` re-gates takes `ownNotePairs`: slot 0's park and expression when it sounds the own note, the neutral values when not.
+
+**The voice's own commands**:
+- **`voiceOff`** releases every live extra note with the voice (`releaseVoice` calls `releaseNotes`). Their tails stay in their slots and the pool until they free.
+- **`voiceOn`** resets slot 0 (`resetOwnNote`: unparked, the neutral expression) and re-gates the voice's own synths as before, with `ownNotePairs`; it leaves the extra tails to end.
+- **`stop`** (the area's) frees every note synth with the voices.
+
+### Watching
+
+A note synth is watched with a watcher of its own (`watchNoteSynth`), never `watchVoiceSynth`'s restart rule. `watchStart` (the lifecycle's, shared with `watchVoiceSynth`) registers it and keeps it in `unconfirmedStarts` until its `/n_go`. When it frees, its slot's entry clears (the slot empties, or its cutting entry clears) and it leaves `grainSlots`, `ringReaders` and `inputReaders`; nothing restarts it. A start the server never confirms (its `/s_new` failed: no room in the real-time pool) is forgotten as `forgetFailedStarts` does (#497), at the slot's next `noteOn` or `noteOff` past `startConfirmWait` (`forgetFailedNoteStarts`, `endFailedStart`): the slot is then empty, so a `noteOn` starts it and a `noteOff` does nothing, and neither sends the server anything it fails on. Lua and the engine heal at the next note.
+
 ### Memory
 
-The note pool is sized from what a note costs. A synth voice's extra note is a voice synth, a buffer or input voice's a grain synth; the memory area measures all seven voice SynthDefs and `\strataMod` for the first time (`memory: \strataResonator takes <n> KB`, ...), each at most 96 KB, a bound against a gross error only (3.5's package 1a gives each def its own limit). Karplus is the costliest note (77.5 KB, against `\strataGrainBuf`'s 69.1), and by design 3.5 §1's sum redone from the figures a full pool of 16 leaves about 1443 KB on high and 2225 KB on standard at the tightest case, above the 1280 KB a full pool must leave. The figures and the sum are in `docs/notes/engine/memory.md` (the voice SynthDefs; the floors section).
+The note pool is sized from what a note costs. A synth voice's extra note is a voice synth, a buffer or input voice's a grain synth; the memory area measures all seven voice SynthDefs and `\strataMod` (`memory: \strataResonator takes <n> KB`, ...), each under its own limit. Karplus is the costliest note (80.9 KB with 1a's note controls, against `\strataGrainBuf`'s 73.3 KB), so the pool's worst case is seven Karplus notes, then buffer notes: 7 × 2 × 80.9 + 9 × 2 × 73.3, about 2452 KB with every slot live and cutting. The figures and the sum are in `docs/notes/engine/memory.md` (the voice SynthDefs; the floors section).
 
 ### The check (`test/engine_check/notes.scd`)
 
-About 1.5 s, in lifecycle's CI shard (`.github/workflows/test.yml`). Its checks:
-- the area runs at order 170; its literals (8, 16, 0.02) and its state as `alloc` leaves it: no pool, an empty place for every slot of every voice;
+In lifecycle's CI shard (`.github/workflows/test.yml`). Its checks:
+- the area runs at order 170; its literals (8, 16, 0.02) and its state as `alloc` leaves it: no pool, every extra slot empty, every own note unparked;
 - the four commands exist with their signatures;
-- no command creates a node: the server's synth and group counts are the same after each of seven valid calls of the four, sent to a running voice;
+- with the pool empty no command creates a node (the server's synth and group counts are the same after each of seven valid calls of the four, sent to a running voice), and the extra note the empty pool has no room for is refused with one line;
 - each command records its arguments, the continuous ones clipped (the limits themselves, and values past each limit);
 - out-of-range indices (negative, too large, fractional) and non-finite values (NaN, both infinities) of every command are ignored, one line each naming the command, with nothing recorded, the pool unchanged and no node made;
 - the check counts those lines through the modulation area's `postIgnored` hook, and gives the hook back however its body ends (`withIgnoredLines`, a `protect`): a deliberate error inside it must leave the hook as it was, so the areas after this one see their lines;
-- `setNotePool` keeps the size it is sent, and an ignored one leaves it.
+- `setNotePool` keeps the size it is sent, and an ignored one leaves it;
+- buffer and input notes: a `noteOn` on an empty slot of a buffer voice starts one `\strataGrainBuf` at the head of its mix group with its own `bufRate` and `scaleNote`; one on a live slot re-pitches and accents it (the `t_accent` 1 found in the command's bundle) with no node; `noteOff` releases a note, which frees after the grain release, and one with `cut` 1 frees it within 0.1 s; a hundred `noteOn` and `noteOff` pairs 5 ms apart on one slot never leave it more than one live and one cutting synth, in the engine or on the server; an input voice's note is a `\strataGrainRing` with its own `pitchShift`, in `ringReaders`;
+- the fan-out: a voice-wide grain param (`grainSize`, a buffer voice's `pitchShift`, `envShape`, the voice-level `pan`, an input voice's `history`, `t_scanReset`) and `retrigger`'s `t_trig` reach every note of the voice; `bufRate` and an input voice's `pitchShift` only the own note's; a new `scaleNote` moves each buffer note's by its own rate;
+- expression: kept for an empty slot, a later `noteOn` starting with it; set on a live note at once; `main` reaches a voice synth note's `noteMain`, `position` and `size` a grain note's `notePos` and `noteSize`;
+- a failed start (the note's `/s_new` held back from the command's bundle): past `startConfirmWait` the slot's next `noteOn` starts it and a `noteOff` forgets it, and `noteOff` on an empty slot sends nothing the server fails on;
+- synth-voice notes: one voice synth at the head of `voiceGroup`, on the voice's bus, with its own `freq` and started with `t_trig` 1; under a chord of eight the voice's grain synth, ring writer and mod synth stay one each; `setVoiceParam` reaches every note's synth (a synthesis param, `releaseTime`, `amp`) and `freq` only the own note's;
+- the park, on a synth voice (Pulse, its times set short), a buffer voice and an input voice (fed a test tone): `noteOff` on slot 0 sets `noteGate` 0 on the sounding synth, whose level (a peak meter on the voice's bus) falls under 1% while every synth stays; `noteOn` on slot 0 brings it back;
+- the voice's commands: `voiceOff` releases every note and `voiceOn` after it re-gates only the own synths (no node; the own note unparked and neutral), and after the longest release every slot is empty;
+- the pool: full of live and releasing notes, a new note cuts the oldest releasing one; full of live notes, a new note is refused with one line; a seeded random run of 2000 commands over seven voices (notes, releases, cuts, stops and starts, new pool sizes) never has live and releasing notes, nor cutting ones, past the pool; `setNotePool` below what is held cuts the oldest releasing note, then the oldest live; with a pool of 2, cutting note synths never pass 2.
 
-The area sets the pool back to 0 and stops the voice it started.
+The area sets the pool back to 0 and stops the voices it started; the runner's `stopAllVoices` cuts every note synth too, and after each area it checks `"<area>: leaves no note in a slot"`.

@@ -4,11 +4,13 @@
 // See docs/notes/engine/lifecycle.md and docs/notes/engine/memory.md.
 
 + Engine_Strata {
+    // The voice's own voice synth, from voiceControls, with the own note's
+    // park and expression (ownNotePairs, the notes area's)
     startVoiceSynth { arg voice;
         var defName = voiceSynthDefs[voice];
         ^this.watchVoiceSynth(voice, this.voiceKey(voice),
-            Synth(defName, [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice]),
-                target: voiceGroup))
+            Synth(defName, [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice])
+                ++ this.ownNotePairs(voice, defName), target: voiceGroup))
     }
 
     // Modulation output synth, at the tail of processGroup at the voice's
@@ -60,7 +62,8 @@
     // synth (3.5, the notes area's startNoteSynth) is this with the note's
     // controls (notePairs, last so they win) and its own watcher (watch, a
     // function of the new synth returning it): nil for the voice's own grain
-    // synth, watched by watchVoiceSynth.
+    // synth, watched by watchVoiceSynth, which takes the own note's park and
+    // expression when it sounds the own note (ownNotePairs).
     startGrainSynth { arg voice, target, addAction, notePairs, watch;
         var source = grainSource[voice];
         var defName = this.grainDefFor(voice);
@@ -73,7 +76,7 @@
         }
         { source == this.inputSource } { args = args ++ [\rateLevel, 1] }
         { args = args ++ [\rateLevel, 1] ++ this.bufferSlotPairs(voice) };
-        synth = Synth(defName, args ++ this.grainControlPairs(voice) ++ (notePairs ? []), target, addAction);
+        synth = Synth(defName, args ++ this.grainControlPairs(voice) ++ (notePairs ?? { this.ownNotePairs(voice, defName) }), target, addAction);
         synth = if (watch.notNil) { watch.value(synth) } { this.watchVoiceSynth(voice, this.grainKey(voice), synth) };
         case
         { defName == \strataGrainBuf } { grainSlots[synth] = source - 1 }
@@ -118,7 +121,8 @@
 
     // Start a voice: every synth it still has is re-gated instead of
     // stacking a new one. A running voice's synths only take the voiceOn
-    // values. A released voice's synths that are still in their release
+    // values (with the own note's park and expression, which voiceOn has
+    // reset: ownNotePairs). A released voice's synths that are still in their release
     // get gate 1 (the ASR restarts its attack from the current level) and
     // the values with set; the ones already freed are started. A releasing
     // synth that no longer fits the source (it changed while the voice was
@@ -156,7 +160,8 @@
             if (synths[voiceKey].isNil) {
                 synths[voiceKey] = this.startVoiceSynth(voice);
             } {
-                this.sendToSynth(synths[voiceKey].setMsg(\gate, 1, *this.controlPairs(voiceSynthDefs[voice], voiceControls[voice])));
+                this.sendToSynth(synths[voiceKey].setMsg(\gate, 1, *(this.controlPairs(voiceSynthDefs[voice], voiceControls[voice])
+                    ++ this.ownNotePairs(voice, voiceSynthDefs[voice]))));
             };
         };
 
@@ -173,7 +178,8 @@
         } {
             // with the slot as it is now: bufferChanged sends a releasing grain
             // synth bufFrames 0 only; with the ring grainControlPairs gives
-            this.sendToSynth(synths[grainKey].setMsg(\gate, 1, *(scanRestart ++ this.bufferSlotPairs(voice) ++ this.grainControlPairs(voice))));
+            this.sendToSynth(synths[grainKey].setMsg(\gate, 1, *(scanRestart ++ this.bufferSlotPairs(voice) ++ this.grainControlPairs(voice)
+                ++ this.ownNotePairs(voice, synths[grainKey].defName.asSymbol))));
             this.noteInputReader(voice, synths[grainKey]);
         };
 
@@ -395,7 +401,8 @@
     // otherwise release untracked, out of reach of the next switch's cut, so
     // it joins the fading set the way gateVoice's do (fadeSupersededSynths).
     // Only voice and grain synths have the kill fade; a releasing mod synth
-    // is always re-gated by voiceOn, never superseded.
+    // is always re-gated by voiceOn, never superseded. Every live extra note
+    // of the voice is released with it (releaseNotes, the notes area's).
     releaseVoice { arg voice;
         var superseded = [this.voiceKey(voice), this.grainKey(voice)].select({ arg key;
             var synth = releasingSynths[voice][key];
@@ -411,5 +418,6 @@
                 releasingSynths[voice][key] = synth;
             };
         });
+        this.releaseNotes(voice);
     }
 }
