@@ -38,12 +38,23 @@ local function target_index(voice, which, name)
 end
 
 -- A MIDI note on voice, key key, through the allocator: the slot it took
-local function play(voice, key, pitch)
+local function play(voice, key, pitch, expression)
   return local_value("S").lib.notes.play(voice, { owner = "midi", key = key, pitch = pitch or 60, velocity = 0.5,
-    park = true, set_own = function() end })
+    park = true, set_own = function() end, expression = expression })
 end
 
 local function update(voice, key, raw) return local_value("S").lib.expression.update(voice, "midi", key, raw) end
+
+-- A note on as the MIDI package plays it: a new touch (forget), the note's
+-- first expression from note_values of the controller's bend and pressure
+-- at slide 0, then its first update with the same values: the slot it took
+local function touch(voice, key, pitch, raw)
+  local expression = local_value("S").lib.expression
+  expression.forget(voice, "midi", key)
+  local slot = play(voice, key, pitch, expression.note_values(voice, { bend = raw.bend, pressure = raw.pressure, slide = 0 }))
+  update(voice, key, raw)
+  return slot
+end
 
 local function lfo_step(context, count)
   for _ = 1, count or 1 do context.clock.advance_until(local_value("S").lfo_clock) end
@@ -109,6 +120,54 @@ test("pressure on level is the loudness, and neutral until a pressure arrives", 
   assert_near(expression.note_values(1, { pressure = 0 }).amp, 0.5, 1e-9, "1 - 0.5 x (1 - 0)")
   params:set("v1_press_depth", -50)
   assert_near(expression.note_values(1, { pressure = 0.5 }).amp, 0.75, 1e-9, "below 0: 1 + depth x value")
+end)
+
+-- Ruling 34: slide is relative, 0 at every touch's start, so it cannot be
+-- a loudness: on level it acts as on amp, both ways
+test("slide on level acts as on amp: a gain of 1 + depth x slide", function()
+  local context = load_strata()
+  local S = started(context)
+  local expression = S.lib.expression
+  set_target(1, "slide", "level")
+  params:set("v1_slide_depth", 100)
+  assert_near(expression.note_values(1, { slide = 0 }).amp, 1, 1e-9, "a touch's start is the stored level, never silent")
+  assert_near(expression.note_values(1, {}).amp, 1, 1e-9, "no slide: the stored level")
+  assert_near(expression.note_values(1, { slide = 0.5 }).amp, 1.5, 1e-9, "up: louder")
+  assert_near(expression.note_values(1, { slide = -0.5 }).amp, 0.5, 1e-9, "down: quieter")
+  params:set("v1_slide_depth", -50)
+  assert_near(expression.note_values(1, { slide = 0.5 }).amp, 0.75, 1e-9, "a negative depth turns it around")
+  assert_near(expression.note_values(1, { slide = -0.5 }).amp, 1.25, 1e-9)
+  -- a held note's first slide leaves it at the stored level
+  params:set("v1_slide_depth", 100)
+  play(1, 1, 60)
+  context.clear_engine_calls()
+  update(1, 1, { slide = 0.3 })
+  lfo_step(context)
+  assert_equal(#context.calls_named("noteExpression"), 0, "nothing changes at the touch's start")
+  update(1, 1, { slide = 0.1 })
+  lfo_step(context)
+  assert_near(last_expression(context, 1, 1).amp, 0.8, 1e-9, "slid down by 0.2")
+end)
+
+test("a note's first update sends nothing its first expression already carried", function()
+  local context = load_strata()
+  local S = started(context)
+  local expression = S.lib.expression
+  local raw = { bend = 1.5, pressure = 0.5, slide = 0.4 }
+  local first = expression.note_values(1, { bend = raw.bend, pressure = raw.pressure, slide = 0 })
+  assert_near(first.amp, 1.5, 1e-9, "a first expression that is not neutral")
+  play(1, 1, 60)
+  context.clear_engine_calls()
+  assert_equal(play(1, 2, 64, first), 2, "an extra note")
+  assert_equal(#context.calls_named("noteExpression"), 1, "its first expression goes with its start")
+  context.clear_engine_calls()
+  update(1, 2, raw)
+  lfo_step(context)
+  assert_equal(#context.calls_named("noteExpression"), 0, "the same values: nothing marked due")
+  update(1, 2, { pressure = 0.7 })
+  lfo_step(context)
+  assert_near(last_expression(context, 1, 2).amp, 1.7, 1e-9, "a change goes")
+  assert_equal(last_expression(context, 1, 2).bend, 1.5, "with the note's bend")
 end)
 
 test("slide is measured from the touch's first value", function()
@@ -208,6 +267,47 @@ test("size is voice-wide on a synth voice and per note on a buffer voice", funct
   assert_near(last_expression(context, 1, 1).size, 0.5, 1e-9, "the note's own, from the next step")
 end)
 
+test("a voice stopped under held notes leaves no voice-wide offset standing", function()
+  local context = load_strata()
+  local S = started(context)
+  set_target(1, "press", "cutoff"); set_target(1, "slide", "density")
+  local stored = params:get("v1_grain_density")
+  touch(1, 1, 60, { pressure = 0.6, slide = 0.2 }); touch(1, 2, 64, { pressure = 0.3, slide = 0.5 })
+  update(1, 2, { slide = 0.9 })
+  lfo_step(context, 2)
+  assert_near(S.lib.matrix.offset("v1_filter_freq"), 0.6, 1e-9, "the cutoff offset held")
+  assert_near(S.lib.engine_sync.with_lfo_offsets("v1_grain_density", stored), stored + 0.5 * 0.4 * 49.5, 1e-9,
+    "the density offset held")
+  toggle_voice(1)
+  assert_true(not S.voices[1].active, "stopped with its keys still down")
+  lfo_step(context, 2)
+  assert_equal(S.lib.matrix.offset("v1_filter_freq"), 0, "the cutoff offset cleared")
+  assert_near(S.lib.engine_sync.with_lfo_offsets("v1_grain_density", stored), stored, 1e-9, "the density offset cleared")
+  context.clear_engine_calls()
+  toggle_voice(1)
+  local sent
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == 0 and call.args[2] == "grainDensity" then sent = call.args[3] end
+  end
+  assert_near(sent, stored * params:get("master_density"), 1e-9, "the next start plays the stored density")
+end)
+
+test("a target changed from cutoff to amp under held notes clears the cutoff and gives the notes their amp", function()
+  local context = load_strata()
+  local S = started(context)
+  set_target(1, "press", "cutoff")
+  touch(1, 1, 60, { pressure = 0.4 }); touch(1, 2, 64, { pressure = 0.7 })
+  lfo_step(context, 2)
+  assert_near(S.lib.matrix.offset("v1_filter_freq"), 0.7, 1e-9, "the cutoff offset held")
+  context.clear_engine_calls()
+  set_target(1, "press", "amp")
+  lfo_step(context, 2)
+  assert_equal(S.lib.matrix.offset("v1_filter_freq"), 0, "the cutoff offset cleared")
+  assert_equal(last_fast_offset(context, 0, 3), 0, "and the engine's")
+  assert_near(last_expression(context, 1, 1).amp, 1.4, 1e-9, "each note its amp")
+  assert_near(last_expression(context, 1, 2).amp, 1.7, 1e-9)
+end)
+
 test("density is an extra offset in the param's units", function()
   local context = load_strata()
   local S = started(context)
@@ -240,9 +340,8 @@ test("a frozen synth voice has size per note and no main", function()
   local values = S.lib.expression.note_values(1, { pressure = 0.5, slide = 0.5 })
   assert_near(values.size, 0.5, 1e-9, "size per note: the notes are streams")
   assert_equal(values.main, 0, "no main: the ring no longer hears the voice synths")
-  play(1, 1, 60)
   context.clear_engine_calls()
-  update(1, 1, { pressure = 0.5, slide = 0.2 }); update(1, 1, { slide = 0.7 })
+  touch(1, 1, 60, { pressure = 0.5, slide = 0.2 }); update(1, 1, { slide = 0.7 })
   lfo_step(context, 2)
   assert_equal(S.lib.matrix.offset("v1_grain_size"), 0, "not the voice's")
   local sent = last_expression(context, 1, 1)
@@ -258,8 +357,7 @@ end)
 test("a latched note keeps its highest pressure", function()
   local context = load_strata()
   local S = started(context)
-  play(1, 1, 60)
-  update(1, 1, { pressure = 0.8, slide = 0.2 }); update(1, 1, { pressure = 0.1 })
+  touch(1, 1, 60, { pressure = 0.8, slide = 0.2 }); update(1, 1, { pressure = 0.1 })
   context.clear_engine_calls()
   assert_equal(S.lib.expression.latch(1, "midi", 1), true)
   lfo_step(context)
@@ -272,13 +370,14 @@ test("a latched note keeps its highest pressure", function()
   assert_near(S.lib.mod_sources.normalized("slide"), 0.2, 1e-9, "its slide where it was")
   assert_equal(S.lib.expression.latch(1, "midi", 9), false, "no such note")
   -- a new touch of the same key, which the allocator still holds: the
-  -- player forgets the old one first
-  S.lib.expression.forget(1, "midi", 1)
+  -- player forgets the old one first, and the new touch's updates act
   context.clear_engine_calls()
-  update(1, 1, { pressure = 0.3, slide = 0.9 })
+  touch(1, 1, 60, { pressure = 0.3, slide = 0.9 })
+  assert_near(last_expression(context, 1, 1).amp, 1.3, 1e-9, "the new touch's first expression")
+  update(1, 1, { pressure = 0.4, slide = 0.95 })
   lfo_step(context)
-  assert_near(last_expression(context, 1, 1).amp, 1.3, 1e-9, "the new touch's pressure")
-  assert_equal(last_expression(context, 1, 1).main, 0, "and its own slide reference")
+  assert_near(last_expression(context, 1, 1).amp, 1.4, 1e-9, "its pressure acts: not latched")
+  assert_near(last_expression(context, 1, 1).main, 0.5 * 0.05, 1e-9, "its slide from its own start")
 end)
 
 test("a note the allocator no longer holds is forgotten at the next step", function()
@@ -289,20 +388,20 @@ test("a note the allocator no longer holds is forgotten at the next step", funct
   S.lib.notes.release(1, "midi", 2)
   assert_equal(S.lib.mod_sources.normalized("pressure"), 0, "the sources count held notes only")
   lfo_step(context)
-  local slot = play(1, 2, 64)
   context.clear_engine_calls()
+  local slot = play(1, 2, 64)
   update(1, 2, { pressure = 0.2, slide = 0.6 })
+  update(1, 2, { slide = 0.7 })
   lfo_step(context)
   local sent = last_expression(context, 1, slot)
   assert_near(sent.amp, 1.2, 1e-9, "a fresh touch")
-  assert_equal(sent.main, 0, "with its own slide reference")
+  assert_near(sent.main, 0.5 * 0.1, 1e-9, "with its own slide reference, not the ended note's")
 end)
 
 test("a change of a mapping reaches the held notes at the next step", function()
   local context = load_strata()
   started(context)
-  play(1, 1, 60)
-  update(1, 1, { pressure = 0.5 })
+  touch(1, 1, 60, { pressure = 0.5 })
   lfo_step(context)
   context.clear_engine_calls()
   params:set("v1_press_depth", 50)
