@@ -566,6 +566,30 @@ test("forget_owner releases the owner's extra notes, drops its own note silently
   assert_equal(#context.engine_calls, 0); assert_equal(notes.held(2), 1)
 end)
 
+-- Ruling 55: forget is forget_owner's way for one note: an extra note is
+-- released (noteOff), the own note dropped with nothing sent; true when a
+-- held note of that owner and key went
+test("forget drops one held note: an extra note released, the own note dropped silently", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  play(context, 1, 1, 60); play(context, 1, 2, 64); play(context, 1, 3, 67)
+  context.clear_engine_calls()
+  assert_equal(notes.forget(1, "midi", 1), true, "the own note")
+  assert_equal(#context.engine_calls, 0, "nothing sent for it")
+  assert_equal(notes.find(1, "midi", 1), nil, "it is no longer MIDI's")
+  assert_equal(#notes.slots(1), 2, "slot 1 is free"); assert_equal(notes.slots(1)[1].slot, 2)
+  assert_equal(notes.forget(1, "midi", 3), true, "an extra note")
+  assert_equal(table.concat(calls(context), " "), "noteOff(0, 2, 0)", "released")
+  assert_equal(notes.find(1, "midi", 2), 2, "the other note stays")
+  context.clear_engine_calls()
+  assert_equal(notes.forget(1, "seq", 2), false, "another owner's key: nothing")
+  assert_equal(notes.forget(1, "midi", 9), false, "a key not held: nothing")
+  assert_equal(notes.forget(9, "midi", 2), false, "a bad voice: nothing")
+  assert_equal(#context.engine_calls, 0)
+  assert_true(S.voices[1].active, "the voice runs on")
+end)
+
 test("a parked own note is the first choice for the next note", function()
   local context = load_strata()
   local S = started(context)

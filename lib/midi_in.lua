@@ -391,9 +391,29 @@ return function(S)
       set_own = own_setters[voice_idx],
       expression = S.lib.expression.note_values(voice_idx, {bend = raw.bend, pressure = raw.pressure, slide = 0})})
     if was_stopped and S.voices[voice_idx].active then S.midi_state.started[voice_idx] = true end
+    -- the own note, perhaps taken from a step's: its note override ends now
+    if slot == 1 then S.lib.sequencer.own_note_taken(voice_idx) end
     if slot then
       S.lib.expression.update(voice_idx, MIDI.owner, key, {bend = raw.bend, pressure = raw.pressure, slide = raw.slide})
     end
+  end
+
+  -- Ruling 55 (refining ruling 35): whether MIDI keeps voice_idx's own note
+  -- from a sequencer step, which only a key physically down does. MIDI's
+  -- own note whose key is up (latched) gives way, as in 3.4: MIDI forgets it
+  -- (S.lib.notes.forget, a reset's way for that note alone: nothing sent,
+  -- the own note sounds on as nobody's, for the step to re-pitch and
+  -- accent), with what the expression module kept of its touch, and false
+  -- is returned. false too when MIDI holds no own note there. Its latched
+  -- extra notes stay MIDI's
+  function M.keeps_own(voice_idx)
+    if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then return false end
+    local own = S.lib.notes.slots(voice_idx)[1]
+    if not (own and own.slot == 1 and own.held and own.owner == MIDI.owner) then return false end
+    if S.midi_state.held[voice_idx][own.key] then return true end
+    S.lib.notes.forget(voice_idx, MIDI.owner, own.key)
+    S.lib.expression.forget(voice_idx, MIDI.owner, own.key)
+    return false
   end
 
   -- In release mode a voice stops when no key is down on it any more,
