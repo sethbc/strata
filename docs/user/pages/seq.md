@@ -36,7 +36,7 @@ ALT+K2 held opens it on the selected voice and the step under the cursor. The li
 - **ALT+K2** - A quick press randomizes the voice's pattern (or undoes it), as on the patterns. Held past half a second, letting go resets the row under the cursor: a lock, note, gate or bookmark of the step to `off`, `prob` to 100 %, `ratchet` to one hit, the level to 0, a setting to its default (the hint says `K2:reset`). On `euclid` and `clear`, which have nothing to reset, the hint says `K2:cancel` and letting go does nothing
 - **ALT+K3** - Clear the voice's pattern
 
-A step can hold a chord of up to 8 notes (scenes and the chain keep them), one row each. E3 on a note row moves that note; turned below -14 it is removed and the notes after it move up (the first note removed leaves the others, and the last one removed leaves the step with no note). E3 on `add note` adds a note at the last note's degree, one more turn up or down moving it from there, and puts the cursor on it. ALT+K2 held on a note row removes that note; `add note` has nothing to reset.
+A step can hold a chord of up to 8 notes (scenes and the chain keep them), one row each. E3 on a note row moves that note; turned below -14 it is removed and the notes after it move up (the first note removed leaves the others, and the last one removed leaves the step with no note). E3 on `add note` adds a note at the last note's degree (a turn up) or one degree below it (a turn down), further turns moving it from there, and puts the cursor on it. ALT+K2 held on a note row removes that note; `add note` has nothing to reset.
 
 ## The step editor
 
@@ -44,4 +44,4 @@ Holding a step key on a grid opens the same edit view for that voice and step ov
 
 - **Ring 1** - `pos`, **ring 2** - `pitch`, **ring 3** - `size` (a full turn for the whole range; from `off` at the voice's own value, and turning below the start of the range sets it `off`)
 - **Ring 4** - `prob` (whole percents, a full turn for 0-100 %)
-- With **ALT** held: **ring 1** - `ratchet`, **ring 2** - `note`, **ring 3** - `bookmark` (dark without bookmarks), **ring 4** - `level` (20 ticks a step)
+- With **ALT** held: **ring 1** - `ratchet`, **ring 2** - the note under the screen's cursor (the first note while the cursor is on another row), **ring 3** - `bookmark` (dark without bookmarks), **ring 4** - `level` (20 ticks a step)
