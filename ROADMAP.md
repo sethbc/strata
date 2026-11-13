@@ -1,6 +1,6 @@
 # Strata roadmap
 
-The order and scope of the releases from 3.1 to 3.8 and 4.0. 3.1 to 3.4 have shipped (Shipped, below); **3.5, polyphony and MPE, is next.** `docs/status.md` has the open items.
+The order and scope of the releases from 3.1 to 3.8 and 4.0. 3.1 to 3.5 have shipped (Shipped, below); **3.6, integration, is next.** `docs/status.md` has the open items.
 
 Date: 2026-11-07
 Status: brainstorm, reviewed 2026-11-07; cross-release decisions added 2026-11-08 (see "Cross-release decisions (2026-11-08)"). Added 2026-11-11, at the maintainer's request: releases 3.7 (rhythm) and 3.8 (sound), with fourteen features from a review of four hardware granular instruments, and in 3.6 the iii scripts and program change. It sets the order and scope of the releases after 3.0.2. It is not a build plan: each release gets its own design document (like `docs/design/3.0-design.md`) and an implementation plan before any code is written.
@@ -79,7 +79,7 @@ The code and documents are restructured for agent-driven development, and every 
 
 ---
 
-## Shipped: 3.1 to 3.4
+## Shipped: 3.1 to 3.5
 
 | Release | Theme | Design | Shipped |
 |---|---|---|---|
@@ -87,44 +87,9 @@ The code and documents are restructured for agent-driven development, and every 
 | 3.2 | Performance setting, one grain path | `docs/design/3.2-design.md` | 3.2.0, 2026-11-09 |
 | 3.3 | Buffers as instruments | `docs/design/3.3-design.md` | 3.3.0, 2026-11-11 |
 | 3.4 | Modulation and sequencing | `docs/design/3.4-design.md` | 3.4.0, 2026-11-12 |
+| 3.5 | Polyphony and MPE | `docs/design/3.5-design.md` | 3.5.0, 2026-11-13 |
 
-Their sections of this roadmap were removed on 2026-11-12: each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table.
-
----
-
-## 3.5: Polyphony and MPE
-
-### Decided
-
-Each of the seven voices plays several notes at once on its own synth (decided 2026-11-07). A chord on a LinnStrument sounds on one voice, each note with its own pitch, pressure and slide.
-
-### Engine
-
-- **Synth voices:** one voice synth per note, all writing the voice's bus. One grain stage per voice processes the chord, cheap because the grain stage doesn't multiply. The crossmod synth keeps reading the voice bus.
-- **Buffer and input voices:** one grain stream per note, each with its own rate (pitch), affordable after 3.2's memory savings.
-- **Built on 3.3 and 3.4** (cross-release decisions, 2026-11-08): every note's grain stream feeds its voice's one per-voice mix stage (3.3), so filter and sends never multiply with notes. Per-note expression goes on 3.4's fast-modulation bus: 3.5 raises its note slots from one to the tier's note limit and writes pressure and slide into each note's block (pitch, position, size and amp per note); the cutoff stays per voice, because the filter is (the 3.5 design decides what MPE on cutoff means). Voice-wide engine LFOs and scatter keep acting on the whole voice; how they reach every note slot is 3.5's choice, inside 3.4's addressing.
-- Note limits by tier: for example 2 on standard and 6 on high, measured in the 3.5 engine check against the worst case (seven voices, full chords, switching).
-- Voice stealing: oldest note first, with a short kill fade, never stacking (the replace-never-stack rule extends to notes).
-- `voiceOn`/`voiceOff` gain note-level commands (`noteOn`, `noteOff`, `noteParam` for per-note bend, pressure and slide). This is a large command-table change, designed with the sync check.
-
-### MIDI and MPE
-
-- **MPE zones:** lower or upper zone, a master channel and member channels. Per-note pitchbend range (48 semitones default), pressure (channel pressure on the member channel), slide (CC74). Global messages on the master channel.
-- **14-bit and high resolution:** the Osmose's MPE+ and 14-bit CC74 if available.
-- **Note to voice assignment** (decided 2026-11-07): two MPE modes, plus the existing ones.
-  - **Selected voice (default):** every note goes to the selected voice.
-  - **Split zones:** keyboard zones, each playing one voice (natural on the LinnStrument's split). The 3.5 design decides how zones are set: note ranges on SETUP, or learned by playing the lowest and highest note of each zone.
-  - The existing channel-per-voice and omni modes stay for non-MPE controllers.
-- **Expression mapping,** per voice: pressure and slide each drive a chosen target (amp, brightness or main param, grain size, grain density, position, filter cutoff) with a depth. Defaults for the target MPE controllers: pressure to amp, slide to the main param.
-- **Pattern steps** and the sequencer's notes (3.4) play through the same note allocation. 3.4 already stores each step's notes as a list, so 3.5's chords need no format change: Strata's `voices` step output (3.4) plays the whole list, and SEQ and the step editor gain chord editing.
-- **MPE pressure and slide** register as 3.4 modulation sources, so MOD shows them with no MOD change.
-
-### UI
-
-- MAIN's voice list shows the held note count per voice.
-- VOICE gets a "notes" section: limit, stealing, expression mapping.
-- SETUP gets the MPE settings.
-- An arc page shows per-note pressure as ring segments, a stretch goal.
+Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13): each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table.
 
 ---
 

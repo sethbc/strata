@@ -6,7 +6,7 @@ An ambient granular soundscape generator for monome norns.
 
 Strata creates evolving ambient textures by combining seven unique synthesis voices with granular processing. Each voice has its own character and can be individually controlled, randomized, and locked, and any voice can grain a sample buffer or the live input instead of its synth. The buffers are instruments of their own: record, overdub and loop into them while they play, and jump, loop, bookmark and scrub through them. A filter, delay and reverb, six global LFOs, scenes, MIDI input and grid and arc support complete it. The result is a layered sonic landscape perfect for experimental electronic music and ambient compositions.
 
-This is version 3.4.0. [CHANGELOG.md](CHANGELOG.md) says what each release changed.
+This is version 3.5.0. [CHANGELOG.md](CHANGELOG.md) says what each release changed.
 
 ## Features
 
