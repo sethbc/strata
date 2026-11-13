@@ -721,6 +721,49 @@ test("a chord shows one row per note and an add row", function()
   assert_true(labels:find("note 8 pos", 1, true) and not labels:find("add note", 1, true), "eight notes, no add: " .. labels)
 end)
 
+test("a one-note step shows add note, and the cursor stays on the notes when the add row goes", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  seq.set_step_attr(1, 1, "notes", {0})
+  open_edit_view(context)
+  assert_true(row_labels(context):find("note add note pos", 1, true), "a one-note step has an add row")
+  local function alt_step(d) key(1, 1); enc(2, d); key(1, 0); context.screen.clear(); redraw() end
+  seq.set_step_attr(1, 1, "notes", {0, 4, 7})
+  go_to(context, "add note")
+  alt_step(1)
+  assert_equal(S.cursors.seq_step, 2)
+  assert_equal((cursor_row(context)), "note", "a step with no notes: the note row")
+  local seven = {}
+  for index = 1, 7 do seven[index] = index end
+  seq.set_step_attr(1, 1, "notes", seven)
+  seq.set_step_attr(1, 2, "notes", {1, 2, 3, 4, 5, 6, 7, 8})
+  alt_step(-1)
+  go_to(context, "add note")
+  alt_step(1)
+  assert_equal((cursor_row(context)), "note 8", "eight notes: the last note row")
+end)
+
+test("SEQ's layout states count a full chord as the sequencer's most notes", function()
+  local _, S = started_on_seq()
+  local seen = 0
+  for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states) do
+    if state.name:find("edit view eight notes rows", 1, true) then seen = seen + 1 end
+  end
+  -- 4 section labels + 9 voice + 5 step + 8 notes + 3 locks + 5 chain rows, five to a window
+  local rows = 4 + 8 + 4 + S.lib.sequencer.SEQ.max_step_notes + 3 + 5
+  assert_equal(seen, math.ceil(rows / 5), "a window for every row of an eight-note step")
+end)
+
+test("turn_note ignores an index that is not a whole number in 1..n + 1", function()
+  local _, S = started_on_seq()
+  local seq = S.lib.sequencer
+  seq.set_step_attr(1, 1, "notes", {0, 4})
+  for _, index in ipairs({0, 4, 1.5, 0 / 0, -1}) do
+    assert_true(not S.lib.pages_seq.turn_step(1, 1, "notes", 1, {index = index}), "index " .. tostring(index))
+    assert_equal(table.concat(seq.step_attr(1, 1, "notes"), ","), "0,4")
+  end
+end)
+
 test("E3 on a note row moves that note only", function()
   local context, S = started_on_seq()
   local seq = S.lib.sequencer
@@ -730,7 +773,6 @@ test("E3 on a note row moves that note only", function()
   enc(3, 1)
   local notes = seq.step_attr(1, 1, "notes")
   assert_equal(notes[1], 0); assert_equal(notes[2], 5); assert_equal(notes[3], 7)
-  assert_equal(h.hint_text(context) ~= nil, true)
   context.screen.clear(); redraw()
   assert_equal(hint_text(context), "K2:back K3:step E3:note 2", "the hint names the row")
 end)

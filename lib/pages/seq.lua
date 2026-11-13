@@ -295,7 +295,10 @@ return function(S)
     local SEQ = S.lib.sequencer.SEQ
     local notes = S.lib.sequencer.step_attr(voice_idx, step, "notes") or {}
     local count = #notes
-    if index < 1 or index > count + 1 or index > SEQ.max_step_notes then return end
+    if type(index) ~= "number" or index % 1 ~= 0 or index < 1 or index > count + 1
+      or index > SEQ.max_step_notes then
+      return
+    end
     if count > 0 and index == count + 1 then
       if d == 0 then return end
       local degree = notes[count] + (d > 0 and d - 1 or d)
@@ -425,7 +428,7 @@ return function(S)
     for index, row in ipairs(rows) do
       if row.spec and row.spec.row == view.anchor.row then return rows, index end
     end
-    if view.anchor.row:match("^note%d?$") then
+    if view.anchor.row:match("^note%d?$") or view.anchor.row == "note_add" then
       -- a note row that is gone (its note removed, or a step with fewer
       -- notes): the last note row
       local last
@@ -621,7 +624,7 @@ return function(S)
   end
 
   -- Whether reset_row has a default to put the view's row back to: every
-  -- row but euclid and clear (#596: the held hint names the reset only
+  -- row but euclid, clear and add note (#596: the held hint names the reset only
   -- where letting go resets; elsewhere it cancels the quick press)
   local function row_resets(view)
     local rows, cursor = sync_view(view)
@@ -955,6 +958,18 @@ return function(S)
     }
   end
 
+  -- How many windows of SEQ_EDIT.visible rows the edit view's rows fill when
+  -- the chord has note_rows rows (its notes and the add row): a layout state
+  -- for each, so every row is drawn
+  -- The sequencer's SEQ.max_step_notes (it is included after this module;
+  -- a test compares the two): a full chord has no add row
+  local WIDEST_CHORD_ROWS = 8
+
+  local function edit_windows(note_rows, bookmarks)
+    local total = #EDIT_ROWS - 1 + note_rows - (bookmarks and 0 or 1)
+    return math.ceil(total / SEQ_EDIT.visible)
+  end
+
   -- A step with the most notes, every one at its widest (-14)
   local function eight_notes(voice_idx, step)
     local SEQ = S.lib.sequencer.SEQ
@@ -1012,6 +1027,15 @@ return function(S)
       widest_values(NUM_VOICES, PATTERN_LENGTH, true)
       M.open_step_editor(NUM_VOICES, PATTERN_LENGTH, 1)
     end},
+    -- 3.5: a three-note step in the step editor, on its add row
+    {name = "a step with three notes", setup = function()
+      widest_values(NUM_VOICES, PATTERN_LENGTH, true)
+      S.lib.sequencer.set_step_attr(NUM_VOICES, PATTERN_LENGTH, "notes", {-14, 4, 12})
+      M.open_step_editor(NUM_VOICES, PATTERN_LENGTH, 1)
+      for index, row in ipairs(edit_rows(NUM_VOICES, PATTERN_LENGTH)) do
+        if row.spec and row.spec.row == "note_add" then place_view(views.editor, index) end
+      end
+    end},
     -- 3.5: a step with eight notes in the step editor, on its last note row
     {name = "a step with eight notes", setup = function()
       widest_values(NUM_VOICES, PATTERN_LENGTH, true)
@@ -1023,7 +1047,7 @@ return function(S)
     end},
   }
   -- the edit view with eight notes, every window of its rows
-  for window = 1, 7 do
+  for window = 1, edit_windows(WIDEST_CHORD_ROWS, false) do
     table.insert(layout_states, {
       name = "edit view eight notes rows " .. window,
       setup = function()
@@ -1039,7 +1063,7 @@ return function(S)
   -- at step 16, with and without bookmarks, five windows each
   for _, voice_idx in ipairs({1, NUM_VOICES}) do
     for _, bookmarks in ipairs({false, true}) do
-      for window = 1, SEQ_EDIT.visible do
+      for window = 1, edit_windows(2, bookmarks) do  -- widest_values: one note and the add row
         table.insert(layout_states, edit_state(voice_idx, PATTERN_LENGTH, bookmarks, window))
       end
     end
