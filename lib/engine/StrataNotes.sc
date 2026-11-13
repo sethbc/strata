@@ -4,9 +4,11 @@
 // commands. Lua allocates the slots and owns every value; the engine holds
 // the bounds: a slot never holds two live synths, and live and releasing
 // extra notes never exceed the pool. An extra note is a synth of its own in
-// its slot: a buffer or input voice's a grain synth at the head of the
-// voice's mix group, with its own pitch. Voice-wide sends reach a voice's
-// notes through setGrainSynths. See docs/notes/engine/notes.md.
+// its slot: a synth voice's a voice synth at the head of voiceGroup, on the
+// voice's bus (its one grain synth grains the chord); a buffer or input
+// voice's a grain synth at the head of the voice's mix group. Each has its
+// own pitch. Voice-wide sends reach a voice's notes through setVoiceSynths
+// and setGrainSynths. See docs/notes/engine/notes.md.
 
 + Engine_Strata {
     // Note slots per voice: 0 the voice's own note, 1-7 its extra notes. Lua's
@@ -51,8 +53,8 @@
     // A slot as alloc leaves it. Slot 0 (the own note, whose synths are the
     // voice's): its kept expression and whether it is parked. An extra slot:
     // its state (\empty, \live, \releasing), its synth (live or releasing),
-    // its cutting synth (in its kill fade), its kind (\buffer, \input: what
-    // its synth is), its last noteOn's note, freq, rate and velocity, its
+    // its cutting synth (in its kill fade), its kind (\voice, \buffer,
+    // \input: what its synth is), its last noteOn's note, freq, rate and velocity, its
     // kept expression, and the order it started at and its cutting synth's
     emptyNoteRecord { arg slot;
         if (slot == 0) { ^(expression: this.neutralNoteExpression, parked: false) };
@@ -97,33 +99,56 @@
         ^this.extraNoteRecords.select({ arg record; record[\cutting].notNil })
     }
 
-    // What the voice's next extra note is: a grain synth of its buffer slot
-    // or of the input
+    // What the voice's next extra note is: a voice synth (a synth voice), or
+    // a grain synth of its buffer slot or of the input
     noteKindFor { arg voice;
         var source = grainSource[voice];
         if (source == this.inputSource) { ^\input };
         if (source.inclusivelyBetween(1, numBuffers)) { ^\buffer };
-        ^nil
+        ^\voice
     }
 
-    // A note's pitch as its synth's controls: a buffer note's rate as its
-    // bufRate with a scaleNote of its own, an input note's as its pitchShift
+    // A note's pitch as its synth's controls: a synth voice's note plays its
+    // freq, a buffer note its rate as its bufRate with a scaleNote of its
+    // own, an input note its rate as its pitchShift
     notePitchPairs { arg voice, record;
         ^switch (record[\kind])
+        { \voice } { [\freq, record[\freq]] }
         { \buffer } { [\bufRate, record[\rate], \scaleNote, this.noteScaleNote(voice, record[\rate])] }
         { \input } { [\pitchShift, record[\rate]] }
         { [] }
     }
 
-    // A note's accent at its velocity (a grain synth's t_accent)
+    // A note's accent at its velocity: a voice synth's t_trig (which
+    // re-plucks a Karplus note), a grain synth's t_accent
     noteAccentPairs { arg record;
-        ^[\velocity, record[\velocity], \t_accent, 1]
+        ^[\velocity, record[\velocity], if (record[\kind] == \voice) { \t_trig } { \t_accent }, 1]
     }
 
-    // A note's expression as its synth's controls (a grain synth's: bend,
-    // amp, position and size; main is a voice synth's)
+    // A note's expression as its synth's controls: bend and amp, then a voice
+    // synth's main (noteMain), a grain synth's position and size
     noteExpressionPairs { arg kind, expression;
-        ^[\noteBend, expression[\bend], \noteAmp, expression[\amp], \notePos, expression[\position], \noteSize, expression[\size]]
+        var pairs = [\noteBend, expression[\bend], \noteAmp, expression[\amp]];
+        if (kind == \voice) { ^pairs ++ [\noteMain, expression[\main]] };
+        ^pairs ++ [\notePos, expression[\position], \noteSize, expression[\size]]
+    }
+
+    // The controls only one voice synth note takes, never a voice-wide
+    // send's (design 3.5 §3.2): its freq, its velocity and accent, its note
+    // controls
+    perNoteVoiceControls { ^#[\freq, \velocity, \t_trig, \noteGate, \noteBend, \noteAmp, \noteMain] }
+
+    // A voice-wide voice synth send: the own voice synth (setSynth) and every
+    // live voice synth note of the voice (sendToSynth), the latter without
+    // the per-note names
+    setVoiceSynths { arg voice ... pairs;
+        var notePairs, notes;
+        this.setSynth(this.voiceKey(voice), *pairs);
+        notes = this.noteSynths(voice, \voice);
+        if (notes.notEmpty) {
+            notePairs = this.pairsWithout(pairs, this.perNoteVoiceControls);
+            if (notePairs.notEmpty) { this.sendToSynth(*notes.collect({ arg synth; synth.setMsg(*notePairs) })) };
+        };
     }
 
     // The controls only one note's synth takes, never a voice-wide send's
@@ -151,17 +176,24 @@
     }
 
     // Start the slot's note (its record holds the noteOn's values): its
-    // synth, watched as a note's (watchNoteSynth). A buffer or input voice's
-    // note is a grain synth for the voice's source at the head of its mix
-    // group (startGrainSynth: the voice's grain controls, then the note's
-    // pitch, accent, park open and expression, last so they win). Placement
-    // is never relative to another note's synth
+    // synth, watched as a note's (watchNoteSynth), with the voice's controls,
+    // then the note's pitch, accent, park open and expression, last so they
+    // win. A synth voice's note is a voice synth of the voice's def at the
+    // head of voiceGroup writing the voice's bus, from voiceControls (as
+    // startVoiceSynth); a buffer or input voice's a grain synth for the
+    // voice's source at the head of its mix group (startGrainSynth, from
+    // grainControlPairs). Placement is never relative to another note's synth
     startNoteSynth { arg voice, slot;
-        var record = this.noteRecord(voice, slot), kind = this.noteKindFor(voice);
+        var record = this.noteRecord(voice, slot), kind = this.noteKindFor(voice), defName, notePairs;
         record[\kind] = kind;
-        ^this.startGrainSynth(voice, this.voiceMixGroup(voice), \addToHead,
-            this.notePitchPairs(voice, record) ++ this.noteAccentPairs(record) ++ [\noteGate, 1]
-                ++ this.noteExpressionPairs(kind, record[\expression]),
+        notePairs = this.notePitchPairs(voice, record) ++ this.noteAccentPairs(record) ++ [\noteGate, 1]
+            ++ this.noteExpressionPairs(kind, record[\expression]);
+        if (kind == \voice) {
+            defName = voiceSynthDefs[voice];
+            ^this.watchNoteSynth(voice, slot, Synth(defName,
+                [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice]) ++ notePairs, voiceGroup, \addToHead))
+        };
+        ^this.startGrainSynth(voice, this.voiceMixGroup(voice), \addToHead, notePairs,
             { arg synth; this.watchNoteSynth(voice, slot, synth) })
     }
 
@@ -276,9 +308,6 @@
         this.forgetFailedNoteStarts(record);
         if (this.voiceRunning(voice).not) {
             ^this.postFastModIgnored(\noteOn, "voice % is stopped".format(voice))
-        };
-        if (this.noteKindFor(voice).isNil) {
-            ^this.postFastModIgnored(\noteOn, "voice % plays no extra note on its source yet".format(voice))
         };
         record[\note] = note;
         record[\freq] = freq;
