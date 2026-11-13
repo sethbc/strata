@@ -512,7 +512,7 @@ return function(S)
   -- retrigger (ruling 13: only a running voice gets an extra slot): at the
   -- step's first hit notes 2 to n; at a later hit (a ratchet) every note
   -- held in an extra slot again, an accent with no node (the retrigger
-  -- accents slot 1's). One that does not fit is refused (ruling 26)
+  -- accents slot 1's). One that finds no free room is refused (ruling 32)
   local function play_chord(voice_idx, event)
     local chord = chords[voice_idx]
     if not chord or not S.voices[voice_idx].active then return end

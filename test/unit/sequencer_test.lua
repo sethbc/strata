@@ -2492,7 +2492,7 @@ test("a one-note step and a step without notes send 3.4's messages", function()
   pattern_clock_stop()
 end)
 
--- ruling 26: a chord's further notes never fall back onto slot 1
+-- rulings 26 and 32: a chord's further notes never fall back onto slot 1
 test("with a note cap of 1 or a pool of 0 a three-note step sends what a one-note step sends in 3.4", function()
   local one = step_calls({3}, function(state) state.patterns[1][2] = 0 end)
   for _, case in ipairs({
@@ -2747,6 +2747,73 @@ test("an input voice's chord measures every note from the step's pitch lock", fu
   local ons = note_calls(context, "noteOn", 0)
   assert_equal(#ons, 1, "one extra note")
   assert_near(ons[1].args[5], 2 * 2 ^ (7 / 12), 1e-9, "the first note's rate times 2 ^ (7 / 12)")
+  pattern_clock_stop()
+end)
+
+-- ruling 32: a chord's further notes take only free room, never a steal
+-- (the review's first finding: the notes that had not fitted stole the
+-- kept ones at the next step, once those were 0.05 s old)
+test("a chord past the cap or the pool keeps its first notes at every step, ending and starting none after the first", function()
+  for _, case in ipairs({
+      {what = "pool 2", notes = {0, 2, 4, 5, 7}, held = 3, prepare = function(S) S.lib.notes.set_pool(2) end},
+      {what = "note cap 4", notes = {0, 1, 2, 3, 4, 5, 6, 7}, held = 4,
+        prepare = function() params:set("v1_note_cap", 4) end}}) do
+    local context, S = setup()
+    local seq, notes = S.lib.sequencer, S.lib.notes
+    case.prepare(S)
+    for step = 1, 3 do
+      S.patterns[1][step] = 15
+      seq.set_step_attr(1, step, "notes", case.notes)
+    end
+    local function assert_first_held(what)
+      for key = 1, #case.notes do
+        assert_equal(notes.find(1, "seq", key) ~= nil, key <= case.held,
+          case.what .. ", " .. what .. ": note " .. key .. (key <= case.held and " held" or " not played"))
+      end
+    end
+    pattern_clock_start()
+    assert_first_held("step 1")
+    for step = 2, 3 do
+      context.clear_engine_calls()
+      context.clock.advance_until(S.pattern_clocks[1])
+      assert_equal(seq.sounding_step(1), step, case.what .. ": step " .. step .. " played")
+      assert_first_held("step " .. step)
+      assert_equal(#note_calls(context, "noteOff", 0), 0, case.what .. ", step " .. step .. ": no note ended")
+      assert_equal(#note_calls(context, "noteExpression", 0), 0, case.what .. ", step " .. step .. ": no node started")
+      assert_equal(#note_calls(context, "noteOn", 0), case.held - 1, case.what .. ", step " .. step .. ": the kept notes")
+    end
+    pattern_clock_stop()
+  end
+end)
+
+-- ruling 32 (the review's second finding): a further note found slot 1
+-- free once MIDI's own note parked, and took it as the voice's own
+test("after MIDI lets go of a voice, a chord's further notes never take its slot 1", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  assert_equal(midi_note(S, 1, 60), 1, "MIDI holds slot 1")
+  for step = 1, 3 do S.patterns[1][step] = 15 end
+  seq.set_step_attr(1, 1, "notes", {0, 4})
+  seq.set_step_attr(1, 2, "notes", {0, 4, 7}); seq.set_step_attr(1, 2, "ratchet", 2)
+  seq.set_step_attr(1, 3, "notes", {0, 4, 7})
+  local started_at = util.time()
+  pattern_clock_start()
+  assert_equal(notes.find(1, "seq", 1), 2, "the step's first note in an extra slot")
+  notes.release(1, "midi", 60)
+  assert_equal(notes.slots(1)[1].parked, true, "MIDI's own note parks under the chord")
+  -- step 2's two hits (0.125 s and 0.1875 s), then step 3 (0.25 s)
+  for _, hit in ipairs({{"step 2", 0.15}, {"step 2's second hit", 0.2}, {"step 3", 0.28}}) do
+    context.clear_engine_calls()
+    context.clock.run_for(started_at + hit[2] - util.time())
+    assert_equal(#retriggers_of(context, 0), 1, hit[1] .. ": one retrigger")
+    assert_equal(last_sent(context, "setVoiceParam", 0, "freq"), nil, hit[1] .. ": no note override")
+    for _, on in ipairs(note_calls(context, "noteOn", 0)) do
+      assert_true(on.args[2] > 0, hit[1] .. ": no noteOn on slot 0")
+    end
+    local own = notes.slots(1)[1]
+    assert_true(own.slot == 1 and own.owner == "midi" and own.parked, hit[1] .. ": slot 1 is MIDI's parked note")
+  end
+  assert_equal(notes.find(1, "seq", 3) ~= nil and notes.find(1, "seq", 3) > 1, true, "the third note an extra one")
   pattern_clock_stop()
 end)
 
