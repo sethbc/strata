@@ -435,11 +435,11 @@
     // A synth voice's unfreeze (the freeze area's unfreezeWithControl, in
     // its bundle, the voice already unfrozen): the own grain synth back to
     // the neutral note controls (noteRate 1, its park open), the own note's
-    // park and expression on the voice synth again (ownNotePairs), every
-    // ring-stream note cut and each live one restarted as a voice synth at
-    // its kept freq, keeping its order, silent (ruling 45); a releasing one
-    // is not restarted. The voice synth is already where the park says
-    // (ruling 44: ownNoteOff and ownNoteOn reach it while frozen)
+    // expression on the voice synth again (ownNotePairs, which also resends
+    // the park the voice synth already holds: ruling 44, ownNoteOff and
+    // ownNoteOn reach it while frozen), every ring-stream note cut and each
+    // live one restarted as a voice synth at its kept freq, keeping its
+    // order, silent (ruling 45); a releasing one is not restarted
     notesUnfrozen { arg voice;
         this.noteRecord(voice, 0)[\rate] = 1;
         this.setSynth(this.grainKey(voice), *this.ownNotePairs(voice, \strataGrainRing));

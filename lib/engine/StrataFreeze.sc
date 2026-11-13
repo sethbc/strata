@@ -255,8 +255,10 @@
     // grainMaxSeconds back (rings.scd shows it). The control reaches the
     // voice's extra grain notes too (setGrainSynths). A synth voice's
     // unfreeze moves its notes in the same bundle (the notes area's
-    // notesUnfrozen: the own grain synth's noteRate back to 1, a park back
-    // on the voice synth, its ring-stream notes restarted as voice synths)
+    // notesUnfrozen: the own grain synth's noteRate back to 1 and its park
+    // open, the own note's expression on the voice synth again, which already
+    // holds the park (ruling 44), its ring-stream notes restarted as voice
+    // synths)
     unfreezeWithControl { arg voice, value;
         var synthVoice = this.frozenSynthVoice(voice);
         context.server.makeBundle(nil, {
