@@ -69,7 +69,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 105 | load the macros' targets from data/strata/macros.data (`START_ORDER.macros_load`; a missing file loads them empty, one it cannot use is set aside, an unknown target id is kept with a console line), then redraw the screen and grids (3.4) | `lib/macros.lua` |
 | 107 | load the gesture recorders, stopped, from data/strata/gestures.data (`START_ORDER.gestures_load`; a missing file loads them empty, one it cannot use is set aside), then redraw the screen and grids (3.4) | `lib/gestures.lua` |
 | 108 | load the matrix's routings from data/strata/matrix.data (`START_ORDER.matrix_load`; a missing file loads them empty, one it cannot use is set aside, an unknown source key or destination id is kept with a console line), then redraw the screen (3.4) | `lib/matrix.lua` |
-| 109 | read the note pool from data/strata/notes.data (`START_ORDER.notes_load`; a missing file leaves the tier's default, one it cannot use too, with a console line) (3.5) | `lib/notes.lua` |
+| 109 | read the note pool from data/strata/notes.data (`START_ORDER.notes_load`; a missing file leaves the tier's default, one it cannot use too, with a console line), send it (`setNotePool`) and join the expression flush to the LFO clock's step hooks (3.5) | `lib/notes.lua` |
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 125 | check every global LFO destination's param, then start the LFO clock (`S.lfo_clock`, 48 Hz, 3.4) | `lib/lfos.lua` |
@@ -129,6 +129,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 112 | cancel the morph clock (`S.morph_clock`) and drop the apply it waited for (3.4) | `lib/morph.lua` |
 | 114 | cancel the macros' apply clock (`S.macro_clock`), dropping every apply that waits, and learn's timeout (`S.macro_learn_clock`) (`CLEANUP_ORDER.macros`, 3.4) | `lib/macros.lua` |
 | 118 | cancel matrix learn's timeout (`S.matrix_learn_clock`) and forget the matrix's offsets (its extra offsets and fast sums), sending nothing; the matrix steps in the LFO clock and has no clock of its own (`CLEANUP_ORDER.matrix`, 3.4) | `lib/matrix.lua` |
+| 119 | end the note module's expression flush (`S.lib.notes.stop_flush`): nothing is due and its LFO step hook sends nothing after it (`CLEANUP_ORDER.notes`, 3.5) | `lib/notes.lua` |
 | 120 | cancel the LFO clock, release every engine-run LFO (`stopFastLfo`) and give every Lua-run LFO's destination its stored value back | `lib/lfos.lua` |
 | 122 | stop the playhead clock (`stop_clock`) | `lib/playheads.lua` |
 | 124 | cancel every voice's scrub glide and scan hold (`scrubRate` and `scanHold` back to 0) | `lib/positions.lua` |

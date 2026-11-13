@@ -156,5 +156,6 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | seq gate length | 0.05-16 st | 0.5 | In steps |
 | seq gate release | 0.005-4 s | 0.1 | |
 | seq swing | 50-75 | 50 | Percent: 50 is straight |
+| note cap | 1-8 | 8 | How many notes the voice plays at once: its own and up to seven more from the note pool all voices share. 1 plays one note at a time. Kept in PSETs, never in scenes ([VOICE](pages/voice.md)) |
 
-None of the extras (history to seq swing) is changed by MAIN's randomize or the mutations, or is on the grid's fader pages; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).
+None of the extras (history to note cap) is changed by MAIN's randomize or the mutations, or is on the grid's fader pages; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).

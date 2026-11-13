@@ -1,29 +1,49 @@
 -- lib/notes.lua
--- Notes (3.5, design §2): a voice's NOTE_SLOTS slots, slot 1 its own note
--- and the rest extra notes from a pool every voice shares. Package 0a's
--- skeleton, which nothing calls yet and which sends nothing: the pool
--- setting, kept in data/strata/notes.data (read at the start step
--- notes_load, written by set_pool, through S.lib.data_files), note_values,
--- and every voice at one note (held and pool_used are 0). Registers the
--- invariant "notes". Package 1b adds the allocator, the four note commands,
--- the flush and the hooks. See docs/notes/lua/notes.md.
+-- Notes (3.5, design §2, §6.4): a voice's NOTE_SLOTS slots, slot 1 its own
+-- note and the rest extra notes from a pool every voice shares. The one
+-- module that allocates slots, steals, and sends noteOn, noteOff,
+-- noteExpression and setNotePool. play's six branches, release and the
+-- own note's park, the pool setting (data/strata/notes.data, read at the
+-- start step notes_load, written by set_pool, through S.lib.data_files),
+-- note_values and the freeze reference, the expression flush (an LFO step
+-- hook, at most NOTES.sends_per_step a step), the per-voice note cap
+-- (v<i>_note_cap, a registered voice param, PSET only), the voice-stop and
+-- freeze-change hooks, the cleanup step notes and the invariant "notes".
+-- See docs/notes/lua/notes.md.
 
 return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
+  local NOTE_SLOTS = S.constants.NOTE_SLOTS
   local NOTE_POOL = S.constants.NOTE_POOL
   local musicutil = require "musicutil"
 
   -- The module's tunables: notes.data's name and format version, a stolen
-  -- note's cut (the engine's fade, seconds; 1b never steals a note younger
-  -- than it), the most noteExpression messages one 48 Hz step sends, the
-  -- note that plays at rate 1 and the engine's rate range
+  -- note's cut (the engine's fade, seconds: no note younger than it is
+  -- stolen), the most noteExpression messages one 48 Hz step sends, the
+  -- note that plays at rate 1, the engine's rate and note ranges, A4 (a
+  -- frequency's note), the owners, a note's expression (its keys in
+  -- noteExpression's order, the neutral values, the engine's ranges) and
+  -- the note cap's param and VOICE section
   local NOTES = {file = "notes.data", version = 1, cut_seconds = 0.05, sends_per_step = 16,
-    rate_root_note = 60, rate_range = {0.25, 4}}
+    rate_root_note = 60, rate_range = {0.25, 4}, note_range = {0, 127}, a4 = {note = 69, freq = 440},
+    owners = {midi = true, seq = true},
+    expression_keys = {"bend", "amp", "position", "size", "main"},
+    neutral = {bend = 1, amp = 1, position = 0, size = 0, main = 0},
+    expression_ranges = {bend = {0.0625, 16}, amp = {0, 2}, position = {-1, 1}, size = {-1, 1}, main = {-1, 1}},
+    cap = {key = "note_cap", name = "note cap", section = "notes", before = "variation"}}
   M.NOTES = NOTES
 
   -- The pool notes.data holds (nil: none read or set, the tier's default)
   local pool_setting = nil
+
+  -- Per voice: slots[v][s] the note in slot s (nil: free); ended[v][s] when
+  -- the slot's last note ended (nil: never used); sent[v][s] the expression
+  -- the engine keeps for the slot; references[v] a frozen synth voice's
+  -- freeze reference; lowered[v] while its cap was lowered under a used slot
+  local slots, ended, sent, references, lowered = {}, {}, {}, {}, {}
+  -- The flush: the notes due, in the order first marked
+  local flush = {queue = {}, stopped = false, hooked = false}
 
   local function whole_in(value, low, high)
     return type(value) == "number" and value % 1 == 0 and value >= low and value <= high
@@ -33,11 +53,189 @@ return function(S)
     return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
   end
 
+  local function copy_expression(expression)
+    local copy = {}
+    for _, key in ipairs(NOTES.expression_keys) do copy[key] = expression[key] end
+    return copy
+  end
+
+  for voice = 1, NUM_VOICES do
+    slots[voice], ended[voice], sent[voice] = {}, {}, {}
+    for slot = 1, NOTE_SLOTS do sent[voice][slot] = copy_expression(NOTES.neutral) end
+  end
+
   local function notes_path() return _path.data .. "strata/" .. NOTES.file end
 
   -- The running tier's default pool (standard's while the tier is unknown)
   local function tier_default()
     return NOTE_POOL[S.performance and S.performance.tier] or NOTE_POOL.standard
+  end
+
+  -- base with each finite number of values (a table, or nil) clipped to its
+  -- range in its place; what values lacks is base's
+  local function merged_expression(base, values)
+    local merged = copy_expression(base)
+    if type(values) == "table" then
+      for _, key in ipairs(NOTES.expression_keys) do
+        if finite(values[key]) then
+          local range = NOTES.expression_ranges[key]
+          merged[key] = util.clamp(values[key], range[1], range[2])
+        end
+      end
+    end
+    return merged
+  end
+
+  local function same_expression(a, b)
+    for _, key in ipairs(NOTES.expression_keys) do
+      if a[key] ~= b[key] then return false end
+    end
+    return true
+  end
+
+  local function note_cap(voice)
+    local extras = S.voices[voice].extras
+    local cap = extras and extras[NOTES.cap.key]
+    if whole_in(cap, 1, NOTE_SLOTS) then return cap end
+    return NOTE_SLOTS
+  end
+
+  local function frozen_synth(voice)
+    return voice_uses_synth(voice) and S.lib.freeze.is_frozen(voice)
+  end
+
+  -- What a voice's freq plays now (a step's note override included), as a
+  -- fractional MIDI note
+  local function freq_note(voice)
+    local freq = S.lib.engine_sync.engine_base_value("v" .. voice .. "_freq")
+    return NOTES.a4.note + 12 * math.log(freq / NOTES.a4.freq) / math.log(2)
+  end
+
+  -- Messages: each counted in the engine budget's window, never deferred
+  local function count(n) if n > 0 then S.lib.engine_sync.count_sends(n) end end
+
+  local function send_expression(voice, slot, expression)
+    engine.noteExpression(voice - 1, slot - 1, expression.bend, expression.amp, expression.position,
+      expression.size, expression.main)
+    sent[voice][slot] = copy_expression(expression)
+  end
+
+  local function send_note_on(voice, slot, record)
+    local values = M.note_values(voice, record.pitch)
+    engine.noteOn(voice - 1, slot - 1, values.note, values.freq, values.rate, record.velocity)
+  end
+
+  -- The count MAIN shows changed
+  local function held_changed()
+    update_voice_list()
+    request_redraw()
+  end
+
+  local function update_lowered(voice)
+    local cap = note_cap(voice)
+    lowered[voice] = nil
+    for slot = cap + 1, NOTE_SLOTS do
+      if slots[voice][slot] then lowered[voice] = true end
+    end
+  end
+
+  local function new_record(voice, slot, played, now)
+    return {voice = voice, slot = slot, owner = played.owner, key = played.key, pitch = played.pitch,
+      velocity = played.velocity, park = played.park, held = true, parked = false, started = now,
+      expression = copy_expression(played.expression), due = false}
+  end
+
+  -- A note leaves its slot: the flush skips it, and a held one's slot ended now
+  local function forget(record, now)
+    slots[record.voice][record.slot] = nil
+    record.due = false
+    if record.held then ended[record.voice][record.slot] = now end
+    record.held = false
+  end
+
+  local function mark_due(record)
+    if flush.stopped or record.due then return end
+    record.due = true
+    table.insert(flush.queue, record)
+  end
+
+  -- The oldest held extra note that accepts(record) and started at least
+  -- the cut time ago (a tie: the first by voice, then slot)
+  local function oldest(accepts, now)
+    local found
+    for voice = 1, NUM_VOICES do
+      for slot = 2, NOTE_SLOTS do
+        local record = slots[voice][slot]
+        if record and now - record.started >= NOTES.cut_seconds and accepts(record)
+            and (found == nil or record.started < found.started) then
+          found = record
+        end
+      end
+    end
+    return found
+  end
+
+  -- The free extra slot under the cap whose last note ended longest ago (a
+  -- never used one first; a tie: the lowest)
+  local function free_slot(voice, cap)
+    local found, found_end
+    for slot = 2, cap do
+      if slots[voice][slot] == nil then
+        local slot_end = ended[voice][slot] or -math.huge
+        if found == nil or slot_end < found_end then found, found_end = slot, slot_end end
+      end
+    end
+    return found
+  end
+
+  local function others_held(voice)
+    for slot = 2, NOTE_SLOTS do
+      if slots[voice][slot] then return true end
+    end
+    return false
+  end
+
+  function M.held(voice)
+    if not whole_in(voice, 1, NUM_VOICES) then return 0 end
+    local held = 0
+    for slot = 1, NOTE_SLOTS do
+      if slots[voice][slot] and slots[voice][slot].held then held = held + 1 end
+    end
+    return held
+  end
+
+  function M.pool_used()
+    local used = 0
+    for voice = 1, NUM_VOICES do
+      for slot = 2, NOTE_SLOTS do
+        if slots[voice][slot] then used = used + 1 end
+      end
+    end
+    return used
+  end
+
+  -- The slot of voice's held note of owner and key (nil: none)
+  function M.find(voice, owner, key)
+    if not whole_in(voice, 1, NUM_VOICES) then return nil end
+    for slot = 1, NOTE_SLOTS do
+      local record = slots[voice][slot]
+      if record and record.held and record.owner == owner and record.key == key then return slot end
+    end
+    return nil
+  end
+
+  -- voice's used slots, in order: copies of {slot, owner, key, pitch, held, parked}
+  function M.slots(voice)
+    local list = {}
+    if not whole_in(voice, 1, NUM_VOICES) then return list end
+    for slot = 1, NOTE_SLOTS do
+      local record = slots[voice][slot]
+      if record then
+        table.insert(list, {slot = slot, owner = record.owner, key = record.key, pitch = record.pitch,
+          held = record.held, parked = record.parked})
+      end
+    end
+    return list
   end
 
   -- The extra notes the voices share: notes.data's, else the tier's default
@@ -46,11 +244,241 @@ return function(S)
     return tier_default()
   end
 
+  -- A frozen synth voice's freeze reference (a fractional MIDI note): the
+  -- note its freq played when it froze, taken by the freeze-change hook, or,
+  -- for one that froze without it (a recall, a PSET), when first asked for.
+  -- nil for any other voice
+  function M.freeze_reference(voice)
+    if not whole_in(voice, 1, NUM_VOICES) or not frozen_synth(voice) then return nil end
+    if references[voice] == nil then references[voice] = freq_note(voice) end
+    return references[voice]
+  end
+
+  -- What the engine plays for pitch (a MIDI note number, fractional
+  -- allowed) on voice: {note = pitch clamped to 0-127, freq = its frequency
+  -- clamped to the voice's freq range, rate = 2 ^ ((pitch - 60) / 12), or
+  -- from the freeze reference on a frozen synth voice, clamped to the
+  -- engine's 0.25-4}; nil for a voice outside 1..NUM_VOICES or a pitch that
+  -- is not a finite number. The one place a pitch becomes what the engine plays
+  function M.note_values(voice, pitch)
+    if not whole_in(voice, 1, NUM_VOICES) or not finite(pitch) then return nil end
+    local min_freq, max_freq = param_range("v" .. voice .. "_freq")
+    local root = M.freeze_reference(voice) or NOTES.rate_root_note
+    return {
+      note = util.clamp(pitch, NOTES.note_range[1], NOTES.note_range[2]),
+      freq = util.clamp(musicutil.note_num_to_freq(pitch), min_freq, max_freq),
+      rate = util.clamp(2 ^ ((pitch - root) / 12), NOTES.rate_range[1], NOTES.rate_range[2]),
+    }
+  end
+
+  -- Slot 1 (branches 1, 2 and 6): the player pitches the own note, a
+  -- stopped voice starts, then the accent: retrigger, noteOn on slot 0 in
+  -- its place for a parked own note, noteOn before it on a frozen synth
+  -- voice (its rate); the note's expression first when the engine's
+  -- differs. quiet: set_own alone, the caller starts and accents (an
+  -- expression that differs waits for the flush)
+  local function play_own(voice, note, played, now)
+    local previous = slots[voice][1]
+    local was_parked = previous ~= nil and previous.parked
+    local held_before = M.held(voice)
+    note.set_own(played.pitch)
+    if not note.quiet and not S.voices[voice].active then toggle_voice(voice) end
+    if previous then forget(previous, now) end
+    local record = new_record(voice, 1, played, now)
+    slots[voice][1] = record
+    if note.quiet then
+      if not same_expression(record.expression, sent[voice][1]) then mark_due(record) end
+    else
+      local messages = 0
+      if not same_expression(record.expression, sent[voice][1]) then
+        send_expression(voice, 1, record.expression)
+        messages = 1
+      end
+      if was_parked or frozen_synth(voice) then
+        send_note_on(voice, 1, record)
+        messages = messages + 1
+      end
+      if not was_parked then engine.retrigger(voice - 1, record.velocity) end
+      count(messages)
+    end
+    if M.held(voice) ~= held_before then held_changed() end
+    return 1
+  end
+
+  -- An extra note starts in slot (free, or stolen in place): its first
+  -- expression, then its noteOn
+  local function start_extra(voice, slot, played, now)
+    local record = new_record(voice, slot, played, now)
+    slots[voice][slot] = record
+    send_expression(voice, slot, record.expression)
+    send_note_on(voice, slot, record)
+    count(2)
+    return slot
+  end
+
+  local function valid_note(note)
+    -- a key equals itself (never nil or NaN), or the note could never be found again
+    return type(note) == "table" and NOTES.owners[note.owner] == true and note.key ~= nil and note.key == note.key
+      and finite(note.pitch)
+      and finite(note.velocity) and type(note.set_own) == "function"
+      and (note.park == nil or type(note.park) == "boolean") and (note.quiet == nil or type(note.quiet) == "boolean")
+      and (note.expression == nil or type(note.expression) == "table")
+  end
+
+  -- Play note = {owner, key, pitch, velocity, set_own, park, quiet,
+  -- expression} on voice (design §2.2): the slot it took, nil when refused
+  function M.play(voice, note)
+    if not whole_in(voice, 1, NUM_VOICES) or not valid_note(note) then return nil end
+    M.freeze_reference(voice)  -- taken before set_own can move the freq
+    local now = util.time()
+    local played = {owner = note.owner, key = note.key, pitch = note.pitch, park = note.park == true,
+      velocity = util.clamp(note.velocity, 0, 1), expression = merged_expression(NOTES.neutral, note.expression)}
+    -- 1. the same owner and key held: that slot again, re-pitched and accented
+    local slot = M.find(voice, note.owner, note.key)
+    if slot == 1 then return play_own(voice, note, played, now) end
+    if slot then
+      local record = slots[voice][slot]
+      record.pitch, record.velocity, record.park = played.pitch, played.velocity, played.park
+      record.expression, record.due = played.expression, false
+      local messages = 1
+      if not same_expression(played.expression, sent[voice][slot]) then
+        send_expression(voice, slot, played.expression)
+        messages = 2
+      end
+      send_note_on(voice, slot, record)
+      count(messages)
+      return slot
+    end
+    -- 2. slot 1 free (nothing held, or the own note parked)
+    local own = slots[voice][1]
+    if own == nil or own.parked then return play_own(voice, note, played, now) end
+    local cap = note_cap(voice)
+    local free = free_slot(voice, cap)
+    if free then
+      -- 3. room in the pool; 4. else the oldest held extra note anywhere is
+      -- cut, but a locked voice's for another voice
+      if M.pool_used() >= M.pool() then
+        local victim = oldest(function(record) return record.voice == voice or not S.frozen[record.voice] end, now)
+        if victim then
+          engine.noteOff(victim.voice - 1, victim.slot - 1, 1)
+          count(1)
+          forget(victim, now)
+          update_lowered(victim.voice)
+        else
+          free = nil
+        end
+      end
+      if free then
+        start_extra(voice, free, played, now)
+        held_changed()
+        return free
+      end
+    else
+      -- 5. no free slot under the cap: the voice's oldest extra note under it, in place
+      local victim = oldest(function(record) return record.voice == voice and record.slot <= cap end, now)
+      if victim then
+        forget(victim, now)
+        return start_extra(voice, victim.slot, played, now)
+      end
+    end
+    -- 6. nothing can be stolen: slot 1, the newest note winning
+    return play_own(voice, note, played, now)
+  end
+
+  -- End voice's held note of owner and key: noteOff (a release) for an
+  -- extra note; the own note parks (noteOff on slot 0) when it asked to and
+  -- another note is held, and otherwise sends nothing. true when a note ended
+  function M.release(voice, owner, key)
+    local slot = M.find(voice, owner, key)
+    if not slot then return false end
+    local record = slots[voice][slot]
+    if slot > 1 then
+      engine.noteOff(voice - 1, slot - 1, 0)
+      count(1)
+      forget(record, util.time())
+      update_lowered(voice)
+    elseif record.park and others_held(voice) then
+      engine.noteOff(voice - 1, 0, 0)
+      count(1)
+      record.held, record.parked, record.due = false, true, false
+    else
+      forget(record, util.time())
+    end
+    held_changed()
+    return true
+  end
+
+  -- Every held note of owner on voice, the extra ones first, then the own
+  -- note (which so parks only under another owner's)
+  function M.release_owner(voice, owner)
+    if not whole_in(voice, 1, NUM_VOICES) then return end
+    local order = {}
+    for slot = 2, NOTE_SLOTS do table.insert(order, slot) end
+    table.insert(order, 1)
+    for _, slot in ipairs(order) do
+      local record = slots[voice][slot]
+      if record and record.held and record.owner == owner then M.release(voice, owner, record.key) end
+    end
+  end
+
+  -- Forget every note of voice, parked included, sending nothing: for a
+  -- voice the engine has stopped (voiceOff ends all its notes)
+  function M.release_all(voice)
+    if not whole_in(voice, 1, NUM_VOICES) then return end
+    local held_before, now = M.held(voice), util.time()
+    for slot = 1, NOTE_SLOTS do
+      if slots[voice][slot] then forget(slots[voice][slot], now) end
+    end
+    lowered[voice] = nil
+    if held_before > 0 then held_changed() end
+  end
+
+  -- A held note's expression: values' keys (bend, amp, position, size,
+  -- main; each finite number clipped to its range) replace the note's, the
+  -- rest kept, and the note is due for the flush. false when slot of voice
+  -- holds no note
+  function M.set_expression(voice, slot, values)
+    if not whole_in(voice, 1, NUM_VOICES) or not whole_in(slot, 1, NOTE_SLOTS) then return false end
+    local record = slots[voice][slot]
+    if not record or not record.held then return false end
+    record.expression = merged_expression(record.expression, values)
+    mark_due(record)
+    return true
+  end
+
+  -- The flush (an LFO step hook): the due notes in the order first marked,
+  -- at most NOTES.sends_per_step, each once with its newest values; a note
+  -- that ended meanwhile sends nothing, and the rest wait for the next step
+  local function flush_step()
+    if flush.stopped then return end
+    local waiting, messages = {}, 0
+    for _, record in ipairs(flush.queue) do
+      if record.due and record.held and slots[record.voice][record.slot] == record then
+        if messages < NOTES.sends_per_step then
+          record.due = false
+          send_expression(record.voice, record.slot, record.expression)
+          messages = messages + 1
+        else
+          table.insert(waiting, record)
+        end
+      end
+    end
+    flush.queue = waiting
+    count(messages)
+  end
+
+  -- The flush ends (cleanup): nothing is due, nothing is sent after it
+  function M.stop_flush()
+    flush.stopped = true
+    for _, record in ipairs(flush.queue) do record.due = false end
+    flush.queue = {}
+  end
+
   -- Set the pool, a whole number clamped to 0..NOTE_POOL.max: notes.data is
   -- written first, so a write that fails sets nothing (false), as
-  -- S.lib.grid_core.set_rotation does; true once set. false for anything
-  -- but a whole number. Sends nothing yet (1b releases the newest extra
-  -- notes past a smaller pool, then sends setNotePool)
+  -- S.lib.grid_core.set_rotation does. Then the newest held extra notes past
+  -- a smaller pool are released and the engine gets setNotePool; true.
+  -- false for anything but a whole number
   function M.set_pool(n)
     if not finite(n) or n % 1 ~= 0 then return false end
     n = util.clamp(n, 0, NOTE_POOL.max)
@@ -61,35 +489,58 @@ return function(S)
       return false
     end
     pool_setting = n
+    while M.pool_used() > n do
+      local newest
+      for voice = 1, NUM_VOICES do
+        for slot = 2, NOTE_SLOTS do
+          local record = slots[voice][slot]
+          if record and (newest == nil or record.started >= newest.started) then newest = record end
+        end
+      end
+      M.release(newest.voice, newest.owner, newest.key)
+    end
+    engine.setNotePool(n)
     return true
   end
 
-  -- The extra notes voice holds (the count MAIN will show), and those every
-  -- voice holds: none until 1b, every voice playing its own note only
-  function M.held(voice) return 0 end
-  function M.pool_used() return 0 end
-
-  -- What the engine plays for pitch (a MIDI note number, fractional
-  -- allowed) on voice: {note = pitch, freq = its frequency clamped to the
-  -- voice's freq range, rate = 2 ^ ((pitch - 60) / 12) clamped to the
-  -- engine's 0.25-4}; nil for a voice outside 1..NUM_VOICES or a pitch that
-  -- is not a finite number. The one place a pitch becomes what the engine
-  -- plays (1b: a frozen synth voice's rate from its freeze reference)
-  function M.note_values(voice, pitch)
-    if not whole_in(voice, 1, NUM_VOICES) or not finite(pitch) then return nil end
-    local min_freq, max_freq = param_range("v" .. voice .. "_freq")
-    return {
-      note = pitch,
-      freq = util.clamp(musicutil.note_num_to_freq(pitch), min_freq, max_freq),
-      rate = util.clamp(2 ^ ((pitch - NOTES.rate_root_note) / 12), NOTES.rate_range[1], NOTES.rate_range[2]),
-    }
+  -- The note cap (v<i>_note_cap, 1-NOTE_SLOTS, default NOTE_SLOTS): a
+  -- registered voice param in VOICE's notes section, PSET only. Lowering it
+  -- under held notes keeps them. VOICE's layout tests and renders draw its
+  -- row under the cursor on every voice
+  local cap_layout_states = {}
+  for voice = 1, NUM_VOICES do
+    table.insert(cap_layout_states, {
+      name = string.format("v%d %s", voice, NOTES.cap.name),
+      setup = function()
+        S.selected_voice = voice
+        S.lib.pages_voice.place_cursor(S.lib.pages_voice.row_of("v" .. voice .. "_" .. NOTES.cap.key))
+      end,
+    })
   end
+  local cap_record
+  cap_record = {
+    name = "notes",
+    count = 1,
+    add = function(voice)
+      S.lib.params_setup.add_voice_extra(voice, cap_record, NOTES.cap.key, {
+        type = "number", name = NOTES.cap.name, min = 1, max = NOTE_SLOTS, default = NOTE_SLOTS,
+        -- a number param's own string is its number (norns' Number:string)
+        formatter = function(param) return tostring(param:get()) end,
+        action = function() update_lowered(voice) end,
+      })
+    end,
+    voice_rows = {section = NOTES.cap.section, rows = {NOTES.cap.key}, before = NOTES.cap.before},
+    layout_states = cap_layout_states,
+    fader = false,
+  }
+  S.register_voice_params(cap_record)
 
   -- The start step: read notes.data (parsed, never run). A version
   -- NOTES.version file whose pool is a whole number in 0..NOTE_POOL.max
   -- sets the pool; no file leaves the tier's default, and so does anything
   -- else (text that does not parse, another version, a bad pool), with one
-  -- console line
+  -- console line. Then the engine gets the pool, and the flush joins the
+  -- LFO clock's step hooks (after those registered at include time)
   S.register_start(S.constants.START_ORDER.notes_load, function()
     pool_setting = nil
     local value, problem, why = S.lib.data_files.read(notes_path())
@@ -99,10 +550,67 @@ return function(S)
       print("strata: " .. NOTES.file .. " not used (" .. tostring(why or "not a note pool setting")
         .. "): the pool is the tier's default, " .. tier_default())
     end
+    engine.setNotePool(M.pool())
+    flush.stopped = false
+    if not flush.hooked then
+      flush.hooked = true
+      S.lib.lfos.on_step(flush_step)
+    end
   end)
 
-  -- The pool is a whole number in 0..NOTE_POOL.max, the extra notes held
-  -- never exceed it, and a stopped voice holds none
+  -- The cleanup step: the flush ends
+  S.register_cleanup(S.constants.CLEANUP_ORDER.notes, function() M.stop_flush() end)
+
+  -- A stopped voice's notes are forgotten (whoever stopped it); its next
+  -- start resets slot 0's expression in the engine
+  S.register_voice_stop(function(voice)
+    M.release_all(voice)
+    sent[voice][1] = copy_expression(NOTES.neutral)
+  end)
+
+  -- A synth voice's freeze: its reference taken, its extra notes cut and
+  -- forgotten (their sound is in the frozen ring); scaleNote resent (the
+  -- reference while frozen, the freq's note after)
+  S.register_freeze_change(function(voice, frozen)
+    references[voice] = nil
+    if not voice_uses_synth(voice) then return end
+    if frozen then
+      references[voice] = freq_note(voice)
+      local now, cut = util.time(), 0
+      for slot = 2, NOTE_SLOTS do
+        if slots[voice][slot] then
+          engine.noteOff(voice - 1, slot - 1, 1)
+          forget(slots[voice][slot], now)
+          cut = cut + 1
+        end
+      end
+      count(cut)
+      if cut > 0 then
+        update_lowered(voice)
+        held_changed()
+      end
+    end
+    S.lib.variation.send_scale_note(voice, S.lib.engine_sync.engine_base_value("v" .. voice .. "_freq"))
+  end)
+
+  -- A slot record's problem (nil: whole)
+  local function record_problem(record, voice, slot)
+    if record.voice ~= voice or record.slot ~= slot then return "the record names another slot" end
+    if NOTES.owners[record.owner] ~= true or record.key == nil then return "no owner and key" end
+    if not finite(record.pitch) or not finite(record.started) then return "no pitch or start" end
+    if not (finite(record.velocity) and record.velocity >= 0 and record.velocity <= 1) then return "a bad velocity" end
+    if type(record.held) ~= "boolean" or record.parked == record.held then return "neither held nor parked" end
+    if record.parked and slot ~= 1 then return "an extra note is parked" end
+    for _, key in ipairs(NOTES.expression_keys) do
+      local value, range = record.expression[key], NOTES.expression_ranges[key]
+      if not (finite(value) and value >= range[1] and value <= range[2]) then return "a bad " .. key end
+    end
+  end
+
+  -- The pool is a whole number in 0..NOTE_POOL.max and the held extra notes
+  -- never exceed it; every slot record is whole; a voice's used slots are
+  -- under its cap unless it was lowered under them; a stopped voice holds
+  -- none; a voice holds each owner and key once
   S.register_invariant("notes", function()
     local pool = M.pool()
     if not whole_in(pool, 0, NOTE_POOL.max) then
@@ -110,8 +618,23 @@ return function(S)
     end
     if M.pool_used() > pool then return M.pool_used() .. " extra notes are held, past the pool's " .. pool end
     for voice = 1, NUM_VOICES do
-      if M.held(voice) > 0 and not S.voices[voice].active then
-        return "stopped voice " .. voice .. " holds " .. M.held(voice) .. " extra notes"
+      local held = {}
+      for slot = 1, NOTE_SLOTS do
+        local record = slots[voice][slot]
+        if record then
+          local problem = record_problem(record, voice, slot)
+          if problem then return "voice " .. voice .. " slot " .. slot .. ": " .. problem end
+          if not S.voices[voice].active then return "stopped voice " .. voice .. " holds a note in slot " .. slot end
+          if slot > note_cap(voice) and not lowered[voice] then
+            return "voice " .. voice .. " holds slot " .. slot .. " past its cap of " .. note_cap(voice)
+          end
+          for _, other in ipairs(held) do
+            if record.held and other.owner == record.owner and other.key == record.key then
+              return "voice " .. voice .. " holds " .. record.owner .. " key " .. tostring(record.key) .. " twice"
+            end
+          end
+          if record.held then table.insert(held, record) end
+        end
       end
     end
   end)

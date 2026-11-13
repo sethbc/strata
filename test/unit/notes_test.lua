@@ -1,7 +1,8 @@
 -- test/unit/notes_test.lua
--- The notes module (lib/notes.lua, S.lib.notes), 3.5's skeleton (design
--- §0.1, §2.2, §2.3): the pool setting and notes.data, note_values, and every
--- voice at one note.
+-- The notes module (lib/notes.lua, S.lib.notes, design §2, §6.4): the pool
+-- setting and notes.data, note_values, the allocator's six branches, release
+-- and parking, stealing, the freeze reference, the voice-stop and
+-- freeze-change hooks, the expression flush and the note cap.
 -- Run alone: lua test/run.lua notes
 
 return function(h)
@@ -66,12 +67,15 @@ test("set_pool clamps, writes first and keeps the old value when the write fails
   end
   assert_equal(notes.set_pool(), false, "refused: nil")
   assert_equal(notes.pool(), 0, "unchanged")
-  assert_equal(#context.engine_calls, 0, "nothing is sent yet")
+  local told = context.calls_named("setNotePool")
+  assert_equal(#context.engine_calls, 2, "only the two pools set are sent")
+  assert_equal(#told, 2); assert_equal(told[1].args[1], 16); assert_equal(told[2].args[1], 0)
   -- a write that fails sets nothing
   os.execute("mkdir -p '" .. notes_path(context) .. ".part/inside'")  -- the .part is a folder: the write fails
   assert_equal(notes.set_pool(5), false, "not set")
   assert_equal(notes.pool(), 0, "the old value")
   assert_equal(S.lib.data_files.read(notes_path(context)).pool, 0, "the file keeps it")
+  assert_equal(#context.calls_named("setNotePool"), 2, "and the engine is not told")
   -- the next start reads the file back, on any tier
   h.write_performance_active(HIGH)
   load_strata({ data_subdir = subdir })
@@ -113,6 +117,511 @@ test("note_values gives a note, its frequency and its rate", function()
   for _, pitch in ipairs({ "60", 0 / 0, math.huge, -math.huge }) do
     assert_equal(notes.note_values(1, pitch), nil, "no values for pitch " .. tostring(pitch))
   end
+end)
+
+-------------------------------------------------------------------------------
+-- The allocator (package 1b)
+-------------------------------------------------------------------------------
+
+-- A note for S.lib.notes.play: MIDI's, key `key`, velocity 0.5, parking,
+-- with a set_own that logs set_own(pitch) among the engine calls, so its
+-- order against them shows. fields overrides any of them
+local function note(context, key, pitch, fields)
+  local played = { owner = "midi", key = key, pitch = pitch, velocity = 0.5, park = true,
+    set_own = function(own_pitch) table.insert(context.engine_calls, { name = "set_own", args = { own_pitch } }) end }
+  for name, value in pairs(fields or {}) do played[name] = value end
+  return played
+end
+
+local function play(context, voice, key, pitch, fields)
+  return local_value("S").lib.notes.play(voice, note(context, key, pitch, fields))
+end
+
+-- The engine calls since the last clear, as "name(arg, ...)" with numbers to
+-- 4 decimals, set_own included
+local function call_text(call)
+  local args = {}
+  for index, value in ipairs(call.args) do
+    args[index] = type(value) == "number" and (string.format("%.4f", value):gsub("%.?0+$", "")) or tostring(value)
+    if args[index] == "-0" or args[index] == "" then args[index] = "0" end
+  end
+  return call.name .. "(" .. table.concat(args, ", ") .. ")"
+end
+
+local function calls(context)
+  local texts = {}
+  for _, call in ipairs(context.engine_calls) do table.insert(texts, call_text(call)) end
+  return texts
+end
+
+local function names(context)
+  local list = {}
+  for _, call in ipairs(context.engine_calls) do table.insert(list, call.name) end
+  return list
+end
+
+local function later(context, seconds) context.set_time(util.time() + seconds) end
+
+local function lfo_step(context, count)
+  for _ = 1, count or 1 do context.clock.advance_until(local_value("S").lfo_clock) end
+end
+
+local function started(context)
+  finish_startup(context)
+  local S = local_value("S")
+  assert_true(S.voices[1].active and S.voices[2].active and not S.voices[3].active, "voices 1 and 2 run")
+  return S
+end
+
+test("the first note on a voice is its own note, with today's messages", function()
+  local context = load_strata()
+  local S = started(context)
+  -- what a start sends, as toggle_voice sends it
+  toggle_voice(1)
+  context.clear_engine_calls()
+  toggle_voice(1)
+  local start = names(context)
+  assert_true(#start > 3, "a start sends its messages")
+  toggle_voice(1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 1, 60), 1, "slot 1")
+  local sent = names(context)
+  assert_equal(call_text(context.engine_calls[1]), "set_own(60)", "the pitch first")
+  assert_equal(table.concat(sent, ",", 2, #sent - 1), table.concat(start, ","), "then the voice's start")
+  assert_equal(call_text(context.engine_calls[#sent]), "retrigger(0, 0.5)", "then today's accent")
+  assert_equal(#context.calls_named("noteOn") + #context.calls_named("noteExpression"), 0, "no note command")
+  assert_true(S.voices[1].active, "the voice runs")
+  assert_equal(S.lib.notes.held(1), 1); assert_equal(S.lib.notes.pool_used(), 0)
+  -- on a running voice: the pitch, then the accent
+  context.clear_engine_calls()
+  assert_equal(play(context, 2, 1, 62), 1)
+  assert_equal(table.concat(calls(context), " "), "set_own(62) retrigger(1, 0.5)")
+end)
+
+test("quiet: slot 1 only sets the pitch, and the caller starts and accents the voice", function()
+  local context = load_strata()
+  local S = started(context)
+  context.clear_engine_calls()
+  assert_equal(play(context, 3, 1, 60, { quiet = true }), 1, "slot 1")
+  assert_equal(table.concat(calls(context), " "), "set_own(60)", "the pitch alone")
+  assert_true(not S.voices[3].active, "the voice is the caller's to start")
+  assert_equal(S.lib.notes.held(3), 1, "the note is recorded")
+  toggle_voice(3)
+  assert_equal(S.lib.notes.held(3), 1, "and kept through the caller's start")
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 1, 64, { quiet = true }), 1)
+  assert_equal(table.concat(calls(context), " "), "set_own(64)", "a running voice: no accent")
+  -- an extra slot plays as without quiet
+  context.clear_engine_calls()
+  assert_equal(play(context, 3, 2, 64, { quiet = true }), 2)
+  assert_equal(table.concat(names(context), " "), "noteExpression noteOn")
+end)
+
+test("a second note is an extra note: its expression, then its noteOn", function()
+  local context = load_strata()
+  local S = started(context)
+  play(context, 1, 1, 60)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 2, 64), 2, "slot 2")
+  local sent = context.engine_calls
+  assert_equal(#sent, 2, "two messages")
+  assert_equal(call_text(sent[1]), "noteExpression(0, 1, 1, 1, 0, 0, 0)", "the neutral expression first")
+  assert_equal(sent[2].name, "noteOn")
+  assert_equal(sent[2].args[1], 0); assert_equal(sent[2].args[2], 1); assert_equal(sent[2].args[3], 64)
+  assert_near(sent[2].args[4], 329.6276, 1e-3, "E4's frequency")
+  assert_near(sent[2].args[5], 1.259921, 1e-6, "four semitones above middle C")
+  assert_equal(sent[2].args[6], 0.5, "the velocity")
+  assert_equal(S.lib.notes.held(1), 2); assert_equal(S.lib.notes.pool_used(), 1)
+  -- a note's own expression goes with its start, and what it lacks is neutral
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 3, 67, { expression = { bend = 2, size = -0.5 } }), 3)
+  assert_equal(call_text(context.engine_calls[1]), "noteExpression(0, 2, 2, 1, 0, -0.5, 0)")
+  local listed = S.lib.notes.slots(1)
+  assert_equal(#listed, 3, "three slots in use")
+  assert_equal(listed[2].slot, 2); assert_equal(listed[2].owner, "midi"); assert_equal(listed[2].key, 2)
+  assert_equal(listed[2].pitch, 64); assert_equal(listed[2].held, true); assert_equal(listed[2].parked, false)
+  listed[2].pitch = 0
+  assert_equal(S.lib.notes.slots(1)[2].pitch, 64, "slots gives copies")
+  assert_equal(S.lib.notes.find(1, "midi", 3), 3); assert_equal(S.lib.notes.find(1, "seq", 3), nil, "another owner")
+  -- a refused note plays nothing
+  context.clear_engine_calls()
+  for _, bad in ipairs({ { owner = "grid" }, { pitch = 0 / 0 }, { set_own = 1 }, { velocity = "1" }, { key = 0 / 0 },
+      { park = 1 }, { expression = 2 } }) do
+    assert_equal(play(context, 1, 9, 60, bad), nil, "refused")
+  end
+  assert_equal(S.lib.notes.play(8, note(context, 9, 60)), nil, "no voice 8")
+  assert_equal(#context.engine_calls, 0, "nothing sent")
+end)
+
+test("the same owner and key again re-pitches its slot and creates nothing", function()
+  local context = load_strata()
+  local S = started(context)
+  play(context, 1, 1, 60); play(context, 1, 2, 64)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 2, 67), 2, "its slot again")
+  assert_equal(table.concat(names(context), " "), "noteOn", "re-pitched and accented, its expression unchanged")
+  assert_equal(context.engine_calls[1].args[2], 1); assert_equal(context.engine_calls[1].args[3], 67)
+  assert_equal(S.lib.notes.slots(1)[2].pitch, 67)
+  assert_equal(S.lib.notes.held(1), 2); assert_equal(S.lib.notes.pool_used(), 1, "no slot more")
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 1, 62), 1, "the own note's key again")
+  assert_equal(table.concat(calls(context), " "), "set_own(62) retrigger(0, 0.5)")
+end)
+
+test("a free slot is the one whose note ended longest ago", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_note_cap", 4)
+  play(context, 1, 1, 60)
+  for key = 2, 4 do assert_equal(play(context, 1, key, 60 + key), key) end
+  for _, key in ipairs({ 3, 2, 4 }) do
+    later(context, 0.1)
+    S.lib.notes.release(1, "midi", key)
+  end
+  later(context, 0.1)
+  for index, slot in ipairs({ 3, 2, 4 }) do
+    assert_equal(play(context, 1, 10 + index, 70 + index), slot, "note " .. index)
+  end
+end)
+
+test("the pool full: the oldest held extra note anywhere is cut for the new one", function()
+  local context = load_strata()
+  local S = started(context)
+  S.lib.notes.set_pool(2)
+  play(context, 1, 1, 60); play(context, 1, 2, 64)
+  later(context, 0.01)
+  play(context, 2, 1, 60); play(context, 2, 2, 64)
+  assert_equal(S.lib.notes.pool_used(), 2)
+  later(context, 0.1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 2, 3, 67), 3, "voice 2's next free slot")
+  assert_equal(table.concat(names(context), " "), "noteOff noteExpression noteOn")
+  assert_equal(call_text(context.engine_calls[1]), "noteOff(0, 1, 1)", "voice 1's slot 2 cut first")
+  assert_equal(context.engine_calls[2].args[1], 1); assert_equal(context.engine_calls[2].args[2], 2)
+  assert_equal(context.engine_calls[3].args[1], 1); assert_equal(context.engine_calls[3].args[2], 2)
+  assert_equal(S.lib.notes.held(1), 1, "voice 1 keeps its own note")
+  assert_equal(S.lib.notes.pool_used(), 2)
+  context.clear_engine_calls()
+  S.lib.notes.release(1, "midi", 2)
+  assert_equal(#context.engine_calls, 0, "the stolen note's release sends nothing")
+end)
+
+test("the cap reached: the voice's oldest extra note is re-pitched in place", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_note_cap", 3)
+  play(context, 1, "a", 60)
+  play(context, 1, "b", 62)
+  later(context, 0.01)
+  play(context, 1, "c", 64)
+  later(context, 0.1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, "d", 65), 2, "b's slot")
+  assert_equal(table.concat(names(context), " "), "noteExpression noteOn", "no noteOff")
+  assert_equal(context.engine_calls[2].args[2], 1); assert_equal(context.engine_calls[2].args[3], 65)
+  assert_equal(S.lib.notes.find(1, "midi", "b"), nil); assert_equal(S.lib.notes.find(1, "midi", "d"), 2)
+  assert_equal(S.lib.notes.held(1), 3); assert_equal(S.lib.notes.pool_used(), 2)
+  -- a cap lowered under held notes keeps them; the next note steals under the new cap
+  params:set("v1_note_cap", 2)
+  later(context, 0.1)
+  assert_equal(play(context, 1, "e", 67), 2, "the slot under the cap")
+  assert_equal(S.lib.notes.find(1, "midi", "c"), 3, "the note above it stays")
+end)
+
+test("nothing to steal: slot 1 is re-pitched, the newest note winning", function()
+  local context = load_strata()
+  local S = started(context)
+  -- a cap of 1
+  params:set("v1_note_cap", 1)
+  play(context, 1, 1, 60)
+  later(context, 0.1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 2, 64), 1)
+  assert_equal(table.concat(calls(context), " "), "set_own(64) retrigger(0, 0.5)", "3.4's messages")
+  assert_equal(S.lib.notes.find(1, "midi", 1), nil, "the older note lost the slot")
+  assert_equal(S.lib.notes.find(1, "midi", 2), 1)
+  -- a pool of 0 with a cap of 8
+  S.lib.notes.set_pool(0)
+  play(context, 2, 1, 60)
+  later(context, 0.1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 2, 2, 64), 1)
+  assert_equal(table.concat(calls(context), " "), "set_own(64) retrigger(1, 0.5)")
+  -- a pool held wholly by a locked voice
+  S.lib.notes.set_pool(2)
+  play(context, 3, 1, 60); play(context, 3, 2, 62); play(context, 3, 3, 64)
+  toggle_lock(3)
+  later(context, 0.1)
+  params:set("v1_note_cap", 8)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 3, 67), 1, "past its own note")
+  assert_equal(table.concat(calls(context), " "), "set_own(67) retrigger(0, 0.5)", "no noteOff")
+  assert_equal(S.lib.notes.held(3), 3, "the locked voice keeps its notes")
+end)
+
+test("a note younger than the cut time is never stolen", function()
+  local context = load_strata()
+  local S = started(context)
+  S.lib.notes.set_pool(2)
+  play(context, 1, 1, 60); play(context, 1, 2, 62); play(context, 1, 3, 64)
+  later(context, 0.01)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 4, 65), 1, "branch 6")
+  assert_equal(table.concat(calls(context), " "), "set_own(65) retrigger(0, 0.5)", "no noteOff")
+  later(context, 0.05)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 5, 67), 4, "a never used slot")
+  assert_equal(table.concat(names(context), " "), "noteOff noteExpression noteOn", "a steal")
+  assert_equal(call_text(context.engine_calls[1]), "noteOff(0, 1, 1)")
+end)
+
+test("release: an extra note gets noteOff; the own note parks only under others and only when asked", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  -- an extra note
+  play(context, 1, 1, 60); play(context, 1, 2, 64)
+  context.clear_engine_calls()
+  notes.release(1, "midi", 2)
+  assert_equal(table.concat(calls(context), " "), "noteOff(0, 1, 0)")
+  assert_equal(notes.held(1), 1); assert_equal(notes.pool_used(), 0)
+  -- the own note asked to park, another held
+  play(context, 2, 1, 60); play(context, 2, 2, 64)
+  context.clear_engine_calls()
+  notes.release(2, "midi", 1)
+  assert_equal(table.concat(calls(context), " "), "noteOff(1, 0, 0)", "parked")
+  assert_equal(notes.slots(2)[1].slot, 1); assert_equal(notes.slots(2)[1].parked, true)
+  assert_equal(notes.slots(2)[1].held, false); assert_equal(notes.held(2), 1)
+  -- the own note not asked to park
+  play(context, 3, 1, 60, { park = false }); play(context, 3, 2, 64)
+  context.clear_engine_calls()
+  notes.release(3, "midi", 1)
+  assert_equal(#context.engine_calls, 0, "nothing sent")
+  assert_equal(notes.slots(3)[1].slot, 2, "slot 1 is free"); assert_equal(notes.held(3), 1)
+  -- the own note alone
+  play(context, 4, 1, 60)
+  context.clear_engine_calls()
+  notes.release(4, "midi", 1)
+  assert_equal(#context.engine_calls, 0, "nothing sent")
+  assert_equal(#notes.slots(4), 0); assert_equal(notes.held(4), 0)
+  -- an owner's notes, and an unknown key
+  play(context, 5, 1, 60); play(context, 5, 2, 62, { owner = "seq" }); play(context, 5, 3, 64)
+  context.clear_engine_calls()
+  notes.release(5, "midi", 9)
+  assert_equal(#context.engine_calls, 0, "an unknown key sends nothing")
+  notes.release_owner(5, "midi")
+  assert_equal(table.concat(calls(context), " "), "noteOff(4, 2, 0) noteOff(4, 0, 0)", "extras first, then the park")
+  assert_equal(notes.held(5), 1); assert_equal(notes.find(5, "seq", 2), 2)
+end)
+
+test("a parked own note is the first choice for the next note", function()
+  local context = load_strata()
+  local S = started(context)
+  play(context, 1, 1, 60); play(context, 1, 2, 64)
+  S.lib.notes.release(1, "midi", 1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 3, 67), 1)
+  assert_equal(table.concat(names(context), " "), "set_own noteOn", "no retrigger")
+  assert_equal(context.engine_calls[2].args[2], 0, "slot 0"); assert_equal(context.engine_calls[2].args[3], 67)
+  assert_equal(S.lib.notes.slots(1)[1].parked, false)
+  assert_equal(S.lib.notes.held(1), 2)
+end)
+
+test("a voice stopped by anything forgets its notes", function()
+  local context = load_strata()
+  local S = started(context)
+  play(context, 1, 1, 60); play(context, 1, 2, 64); play(context, 1, 3, 67)
+  S.lib.notes.set_expression(1, 2, { bend = 2 })
+  context.clear_engine_calls()
+  toggle_voice(1)
+  assert_equal(table.concat(names(context), " "), "voiceOff", "no noteOff: voiceOff ends them all")
+  assert_equal(S.lib.notes.held(1), 0); assert_equal(S.lib.notes.pool_used(), 0)
+  assert_equal(#S.lib.notes.slots(1), 0)
+  S.lib.notes.release(1, "midi", 2)
+  lfo_step(context)
+  assert_equal(#context.calls_named("noteOff") + #context.calls_named("noteExpression"), 0, "nothing for it later")
+  -- the next key starts the voice again on slot 1
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 2, 64), 1)
+  assert_true(S.voices[1].active)
+end)
+
+test("a frozen synth voice plays rates from its freeze reference", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  params:set("v1_freq", 440)
+  assert_equal(notes.freeze_reference(1), nil, "no reference unfrozen")
+  params:set("v1_freeze", 1)
+  assert_near(notes.freeze_reference(1), 69, 1e-9, "A4")
+  play(context, 1, 1, 69)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 2, 76), 2)
+  local on = context.calls_named("noteOn")[1]
+  assert_equal(on.args[2], 1); assert_equal(on.args[3], 76)
+  assert_near(on.args[4], 659.2551, 1e-3, "E5"); assert_near(on.args[5], 1.498307, 1e-6, "a fifth up")
+  assert_equal(on.args[6], 0.5)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 1, 81), 1, "the own note again")
+  assert_equal(table.concat(calls(context), " "), "set_own(81) noteOn(0, 0, 81, 880, 2, 0.5) retrigger(0, 0.5)")
+  -- the reference stays through a freq change, and goes at the unfreeze
+  params:set("v1_freq", 220)
+  assert_near(notes.freeze_reference(1), 69, 1e-9, "kept")
+  params:set("v1_freeze", 0)
+  assert_equal(notes.freeze_reference(1), nil)
+  assert_near(notes.note_values(1, 72).rate, 2, 1e-9, "C5 against middle C again")
+  -- a buffer voice has none
+  params:set("v2_source", 2); params:set("v2_freeze", 1)
+  assert_equal(notes.freeze_reference(2), nil, "a buffer voice")
+end)
+
+test("a synth voice's extra notes are cut and forgotten when it freezes", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_freq", 220)
+  play(context, 1, 1, 60); play(context, 1, 2, 64); play(context, 1, 3, 67)
+  context.clear_engine_calls()
+  params:set("v1_freeze", 1)
+  local offs = context.calls_named("noteOff")
+  assert_equal(#offs, 2)
+  assert_equal(call_text(offs[1]), "noteOff(0, 1, 1)"); assert_equal(call_text(offs[2]), "noteOff(0, 2, 1)")
+  assert_equal(S.lib.notes.held(1), 1); assert_equal(S.lib.notes.pool_used(), 0)
+  local scale = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == 0 and call.args[2] == "scaleNote" then table.insert(scale, call.args[3]) end
+  end
+  assert_near(scale[#scale], 57, 1e-9, "scaleNote is the reference")
+  context.clear_engine_calls()
+  params:set("v1_freeze", 0)
+  assert_equal(#context.calls_named("noteOff"), 0, "an unfreeze cuts nothing")
+  -- a buffer voice keeps its notes
+  params:set("v2_source", 2)
+  play(context, 2, 1, 60); play(context, 2, 2, 64)
+  context.clear_engine_calls()
+  params:set("v2_freeze", 1)
+  assert_equal(#context.calls_named("noteOff"), 0, "a buffer voice's notes are streams already")
+  assert_equal(S.lib.notes.held(2), 2)
+end)
+
+test("the flush sends at most 16 a step, newest values, no note starved, none for an ended note", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  notes.set_pool(16)
+  local counts = { 8, 8, 3, 1 }  -- 20 notes, 16 of them extra
+  for voice, count in ipairs(counts) do
+    for key = 1, count do play(context, voice, key, 60 + key) end
+  end
+  assert_equal(notes.pool_used(), 16)
+  local counted = {}
+  local real_count = S.lib.engine_sync.count_sends
+  S.lib.engine_sync.count_sends = function(n) table.insert(counted, n); return real_count(n) end
+  local marked = {}
+  for voice, count in ipairs(counts) do
+    for slot = 1, count do
+      assert_equal(notes.set_expression(voice, slot, { bend = 1 + #marked / 100 }), true)
+      table.insert(marked, (voice - 1) .. "," .. (slot - 1))
+    end
+  end
+  local function sent_keys()
+    local keys = {}
+    for _, call in ipairs(context.calls_named("noteExpression")) do
+      table.insert(keys, call.args[1] .. "," .. call.args[2])
+    end
+    return keys
+  end
+  context.clear_engine_calls()
+  lfo_step(context)
+  assert_equal(table.concat(sent_keys(), " "), table.concat(marked, " ", 1, 16), "the first 16 marked")
+  assert_equal(table.concat(counted, ","), "16", "counted in the budget")
+  -- the first 16 are marked again: the 4 still waiting go first
+  for index = 1, 16 do
+    local voice, slot = marked[index]:match("(%d+),(%d+)")
+    notes.set_expression(tonumber(voice) + 1, tonumber(slot) + 1, { amp = 0.5 })
+  end
+  context.clear_engine_calls()
+  lfo_step(context)
+  local second = sent_keys()
+  assert_equal(#second, 16)
+  assert_equal(table.concat(second, " ", 1, 4), table.concat(marked, " ", 17, 20), "none starved")
+  context.clear_engine_calls()
+  lfo_step(context)
+  assert_equal(#sent_keys(), 4, "the rest at the next step")
+  context.clear_engine_calls()
+  lfo_step(context)
+  assert_equal(#sent_keys(), 0, "nothing due")
+  assert_equal(table.concat(counted, ","), "16,16,4", "each step's count")
+  -- marked twice in a step: once, with the newest values, keeping what the second lacks
+  notes.set_expression(1, 2, { bend = 1.5 })
+  notes.set_expression(1, 2, { amp = 0.25, main = 2 })
+  context.clear_engine_calls()
+  lfo_step(context)
+  assert_equal(table.concat(calls(context), " "), "noteExpression(0, 1, 1.5, 0.25, 0, 0, 1)", "main clipped to 1")
+  -- a note released before the step sends nothing
+  notes.set_expression(1, 3, { bend = 2 })
+  notes.release(1, "midi", 3)
+  context.clear_engine_calls()
+  lfo_step(context)
+  assert_equal(#context.calls_named("noteExpression"), 0, "an ended note")
+  assert_equal(notes.set_expression(1, 3, { bend = 2 }), false, "an empty slot is not marked")
+  S.lib.engine_sync.count_sends = real_count
+end)
+
+test("a smaller pool releases the newest held extra notes past it, then tells the engine", function()
+  local context = load_strata()
+  local S = started(context)
+  assert_equal(context.calls_named("setNotePool")[1].args[1], 4, "the start tells the engine the pool")
+  play(context, 1, 1, 60)
+  for key = 2, 5 do later(context, 0.01); play(context, 1, key, 60 + key) end
+  assert_equal(S.lib.notes.pool_used(), 4)
+  context.clear_engine_calls()
+  assert_equal(S.lib.notes.set_pool(2), true)
+  assert_equal(table.concat(calls(context), " "), "noteOff(0, 4, 0) noteOff(0, 3, 0) setNotePool(2)")
+  assert_equal(S.lib.notes.pool_used(), 2); assert_equal(S.lib.notes.find(1, "midi", 3), 3)
+  context.clear_engine_calls()
+  S.lib.notes.set_pool(6)
+  assert_equal(table.concat(calls(context), " "), "setNotePool(6)", "a larger pool releases nothing")
+  h.write_performance_active(HIGH)
+  context = load_strata()
+  assert_equal(context.calls_named("setNotePool")[1].args[1], 8, "high's default")
+end)
+
+test("the note cap is a row of VOICE's notes section and is not a scene field", function()
+  local context = load_strata()
+  local S = started(context)
+  local param = params:lookup_param("v1_note_cap")
+  assert_equal(param.name, "note cap")
+  assert_equal(params:get("v1_note_cap"), S.constants.NOTE_SLOTS, "8 by default")
+  local min, max = param_range("v1_note_cap")
+  assert_equal(min, 1); assert_equal(max, 8)
+  for voice = 1, S.constants.NUM_VOICES do
+    local sections, cap_section = {}, nil
+    for _, row in ipairs(voice_page_rows(voice)) do
+      if row.selectable == false then table.insert(sections, row.section) end
+      if row.param_id == "v" .. voice .. "_note_cap" then cap_section = row.section end
+    end
+    assert_equal(cap_section, "notes", "voice " .. voice)
+    local order = table.concat(sections, ",")
+    assert_true(order:find("notes,variation", 1, true) ~= nil, "notes just before variation: " .. order)
+  end
+  -- VOICE's layout tests and renders draw the row under the cursor on every voice
+  local states = {}
+  for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.VOICE].layout_states) do
+    states[state.name] = state
+  end
+  for voice = 1, S.constants.NUM_VOICES do
+    local state = states["v" .. voice .. " note cap"]
+    assert_true(state ~= nil, "a layout state for voice " .. voice)
+    state.setup(context)
+    assert_equal(S.selected_voice, voice)
+    local rows, cursor = S.lib.pages_voice.sync_cursor()
+    assert_equal(rows[cursor].param_id, "v" .. voice .. "_note_cap", "the cursor on the row")
+  end
+  params:set("v1_note_cap", 3)
+  capture_scene(1)
+  local extras = S.scenes[1].data.voices[1].extras
+  assert_true(extras.freeze ~= nil, "a scene captures the extras")
+  assert_equal(extras.note_cap, nil, "but not the note cap")
 end)
 
 end
