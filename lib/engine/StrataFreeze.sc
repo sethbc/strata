@@ -253,12 +253,17 @@
     // the freeze flag for the block: a reader set back to the input ring a
     // block before its freeze 0 would start that block's grains a further
     // grainMaxSeconds back (rings.scd shows it). The control reaches the
-    // voice's extra grain notes too (setGrainSynths)
+    // voice's extra grain notes too (setGrainSynths). A synth voice's
+    // unfreeze moves its notes in the same bundle (the notes area's
+    // notesUnfrozen: the own grain synth's noteRate back to 1, a park back
+    // on the voice synth, its ring-stream notes restarted as voice synths)
     unfreezeWithControl { arg voice, value;
+        var synthVoice = this.frozenSynthVoice(voice);
         context.server.makeBundle(nil, {
             this.unfreezeVoice(voice);
             grainControls[voice][\freeze] = value;
             this.setGrainSynths(voice, \freeze, value);
+            if (synthVoice) { this.notesUnfrozen(voice) };
         });
     }
 

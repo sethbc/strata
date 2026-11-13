@@ -5,9 +5,9 @@
 // the bounds: a slot never holds two live synths, and live and releasing
 // extra notes never exceed the pool. An extra note is a synth of its own in
 // its slot: a synth voice's a voice synth at the head of voiceGroup, on the
-// voice's bus (its one grain synth grains the chord); a buffer or input
-// voice's a grain synth at the head of the voice's mix group. Each has its
-// own pitch. Voice-wide sends reach a voice's notes through setVoiceSynths
+// voice's bus (its one grain synth grains the chord), or, while the voice is
+// frozen, a stream of its frozen ring; a buffer or input voice's a grain
+// synth at the head of the voice's mix group. Each has its own pitch. Voice-wide sends reach a voice's notes through setVoiceSynths
 // and setGrainSynths. See docs/notes/engine/notes.md.
 
 + Engine_Strata {
@@ -51,13 +51,14 @@
     neutralNoteExpression { ^(bend: 1, amp: 1, position: 0, size: 0, main: 0) }
 
     // A slot as alloc leaves it. Slot 0 (the own note, whose synths are the
-    // voice's): its kept expression and whether it is parked. An extra slot:
+    // voice's): its kept expression, whether it is parked, and its rate (a
+    // frozen synth voice's own grain synth's noteRate). An extra slot:
     // its state (\empty, \live, \releasing), its synth (live or releasing),
     // its cutting synth (in its kill fade), its kind (\voice, \buffer,
-    // \input: what its synth is), its last noteOn's note, freq, rate and velocity, its
+    // \input, \stream: what its synth is), its last noteOn's note, freq, rate and velocity, its
     // kept expression, and the order it started at and its cutting synth's
     emptyNoteRecord { arg slot;
-        if (slot == 0) { ^(expression: this.neutralNoteExpression, parked: false) };
+        if (slot == 0) { ^(expression: this.neutralNoteExpression, parked: false, rate: 1) };
         ^(state: \empty, synth: nil, cutting: nil, kind: nil, note: 60, freq: 440, rate: 1, velocity: 1,
             expression: this.neutralNoteExpression, order: 0, cutOrder: 0)
     }
@@ -86,8 +87,15 @@
         }).collect({ arg record; record[\synth] })
     }
 
-    // The kinds of note whose synth is a grain synth
-    grainNoteKinds { ^#[\buffer, \input] }
+    // The kinds of note whose synth is a grain synth (\stream: a frozen synth
+    // voice's ring)
+    grainNoteKinds { ^#[\buffer, \input, \stream] }
+
+    // Whether the voice is a frozen synth voice: on its synth source, its
+    // ring held (the freeze area's)
+    frozenSynthVoice { arg voice;
+        ^(grainSource[voice] == 0) and: { areaState[\freeze][\frozen][voice] }
+    }
 
     // Live and releasing extra notes, across every voice: what the pool bounds
     heldNoteCount {
@@ -99,23 +107,27 @@
         ^this.extraNoteRecords.select({ arg record; record[\cutting].notNil })
     }
 
-    // What the voice's next extra note is: a voice synth (a synth voice), or
-    // a grain synth of its buffer slot or of the input
+    // What the voice's next extra note is: a voice synth (a synth voice), a
+    // stream of its frozen ring (a frozen synth voice), or a grain synth of
+    // its buffer slot or of the input
     noteKindFor { arg voice;
         var source = grainSource[voice];
         if (source == this.inputSource) { ^\input };
         if (source.inclusivelyBetween(1, numBuffers)) { ^\buffer };
+        if (this.frozenSynthVoice(voice)) { ^\stream };
         ^\voice
     }
 
     // A note's pitch as its synth's controls: a synth voice's note plays its
     // freq, a buffer note its rate as its bufRate with a scaleNote of its
-    // own, an input note its rate as its pitchShift
+    // own, an input note its rate as its pitchShift, a frozen synth voice's
+    // its rate as its stream's noteRate (the voice's pitchShift stays)
     notePitchPairs { arg voice, record;
         ^switch (record[\kind])
         { \voice } { [\freq, record[\freq]] }
         { \buffer } { [\bufRate, record[\rate], \scaleNote, this.noteScaleNote(voice, record[\rate])] }
         { \input } { [\pitchShift, record[\rate]] }
+        { \stream } { [\noteRate, record[\rate]] }
         { [] }
     }
 
@@ -182,7 +194,11 @@
     // head of voiceGroup writing the voice's bus, from voiceControls (as
     // startVoiceSynth); a buffer or input voice's a grain synth for the
     // voice's source at the head of its mix group (startGrainSynth, from
-    // grainControlPairs). Placement is never relative to another note's synth
+    // grainControlPairs); a frozen synth voice's a \strataGrainRing reading
+    // the voice's ring (grainReadPairs, as its own grain synth does, the
+    // freeze on) at the head of processGroup, writing the synth path with
+    // rateLevel and pan 0 (startGrainSynth's synth source), at noteRate the
+    // note's rate. Placement is never relative to another note's synth
     startNoteSynth { arg voice, slot;
         var record = this.noteRecord(voice, slot), kind = this.noteKindFor(voice), defName, notePairs;
         record[\kind] = kind;
@@ -193,7 +209,7 @@
             ^this.watchNoteSynth(voice, slot, Synth(defName,
                 [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice]) ++ notePairs, voiceGroup, \addToHead))
         };
-        ^this.startGrainSynth(voice, this.voiceMixGroup(voice), \addToHead, notePairs,
+        ^this.startGrainSynth(voice, if (kind == \stream) { processGroup } { this.voiceMixGroup(voice) }, \addToHead, notePairs,
             { arg synth; this.watchNoteSynth(voice, slot, synth) })
     }
 
@@ -359,9 +375,10 @@
     }
 
     // Whether the voice's own note sounds through its grain synth (a buffer
-    // or input voice) rather than its voice synth (a synth voice)
+    // or input voice, and a frozen synth voice, whose grain synth plays the
+    // frozen ring) rather than its voice synth (a synth voice)
     ownNoteOnGrain { arg voice;
-        ^grainSource[voice] != 0
+        ^(grainSource[voice] != 0) or: { this.frozenSynthVoice(voice) }
     }
 
     // The key of the synth that sounds the voice's own note: the one slot 0's
@@ -381,7 +398,8 @@
         if (sounds.not) { expression = this.neutralNoteExpression };
         controls = Dictionary[\noteGate -> (if (sounds and: { own[\parked] }) { 0 } { 1 }),
             \noteBend -> expression[\bend], \noteAmp -> expression[\amp], \noteMain -> expression[\main],
-            \notePos -> expression[\position], \noteSize -> expression[\size]];
+            \notePos -> expression[\position], \noteSize -> expression[\size],
+            \noteRate -> (if (sounds and: { this.frozenSynthVoice(voice) }) { own[\rate] } { 1 })];
         ^this.controlPairs(defName, controls)
     }
 
@@ -391,17 +409,40 @@
         var own = this.noteRecord(voice, 0);
         own[\parked] = false;
         own[\expression] = this.neutralNoteExpression;
+        own[\rate] = 1;
+    }
+
+    // A synth voice's unfreeze (the freeze area's unfreezeWithControl, in
+    // its bundle, the voice already unfrozen): the own grain synth back to
+    // the neutral note controls (noteRate 1, its park open), the own note's
+    // park and expression on the voice synth again (ownNotePairs), every
+    // ring-stream note cut and each live one restarted as a voice synth at
+    // its kept freq, keeping its order; a releasing one is not restarted
+    notesUnfrozen { arg voice;
+        this.noteRecord(voice, 0)[\rate] = 1;
+        this.setSynth(this.grainKey(voice), *this.ownNotePairs(voice, \strataGrainRing));
+        this.setSynth(this.voiceKey(voice), *this.ownNotePairs(voice, voiceSynthDefs[voice]));
+        (1 .. (this.noteSlots - 1)).do({ arg slot;
+            var record = this.noteRecord(voice, slot), wasLive = record[\state] == \live, order = record[\order];
+            if ((record[\kind] == \stream) and: { record[\synth].notNil }) {
+                this.cutNote(voice, slot);
+                if (wasLive) { this.startNote(voice, slot, order) };
+            };
+        });
     }
 
     // noteOn on slot 0: the own note unparked (noteGate 1) and its accent
     // fired at velocity on the synth that sounds it (a voice synth's t_trig,
-    // a grain synth's t_accent). Lua follows it with retrigger, which opens
-    // the stage's step gate and accent (ruling 15)
+    // a grain synth's t_accent); on a frozen synth voice also the own grain
+    // synth's noteRate, parked or not (the own note's only pitch there).
+    // Lua follows it with retrigger, which opens the stage's step gate and
+    // accent (ruling 15)
     ownNoteOn { arg voice, rate, velocity;
-        var own = this.noteRecord(voice, 0);
+        var own = this.noteRecord(voice, 0), ratePairs = [];
         own[\parked] = false;
+        if (this.frozenSynthVoice(voice)) { own[\rate] = rate; ratePairs = [\noteRate, rate] };
         this.setSynth(this.ownNoteKey(voice), \noteGate, 1, \velocity, velocity,
-            if (this.ownNoteOnGrain(voice)) { \t_accent } { \t_trig }, 1);
+            if (this.ownNoteOnGrain(voice)) { \t_accent } { \t_trig }, 1, *ratePairs);
     }
 
     // noteOff on slot 0: the own note parked (noteGate 0 on the synth that
