@@ -1,8 +1,10 @@
-# Strata 3.1-3.8 and 4.0: roadmap
+# Strata roadmap
+
+The order and scope of the releases from 3.1 to 3.8 and 4.0. 3.1 to 3.4 have shipped (Shipped, below); **3.5, polyphony and MPE, is next.** `docs/status.md` has the open items.
 
 Date: 2026-11-07
 Status: brainstorm, reviewed 2026-11-07; cross-release decisions added 2026-11-08 (see "Cross-release decisions (2026-11-08)"). Added 2026-11-11, at the maintainer's request: releases 3.7 (rhythm) and 3.8 (sound), with fourteen features from a review of four hardware granular instruments, and in 3.6 the iii scripts and program change. It sets the order and scope of the releases after 3.0.2. It is not a build plan: each release gets its own design document (like `docs/design/3.0-design.md`) and an implementation plan before any code is written.
-Builds on: Strata 3.0.2, the UI review of 2026-11-07 (summarized in 3.1 below) and a survey of other norns granular scripts (glut, angl, mangl, rangl, twine, twins, granchild, grains, graintopia, silos, haze, Pappus, oooooo, barcode, amen, cheat codes 2, sam).
+Builds on: Strata 3.0.2, the UI review of 2026-11-07 (summarized in the 3.1 section, since removed) and a survey of other norns granular scripts (glut, angl, mangl, rangl, twine, twins, granchild, grains, graintopia, silos, haze, Pappus, oooooo, barcode, amen, cheat codes 2, sam).
 
 ## Intent
 
@@ -43,7 +45,7 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 - Everything in AGENTS.md still applies: Lua and engine in sync, the command table, named constants, `send_param_to_engine`, replace-never-stack, the tests and the docs check.
 - **scsynth's real-time pool is 8192 KB on every norns, Pi 4 included, whatever the board's RAM.** It is a fixed area scsynth reserves at boot for the delay lines and tables of running synths. norns' `Crone.sc` boots the server with `memSize` at SuperCollider's default (8192 KB), and a script can't change it: the server is already running when the script starts. When it runs out, a UGen silently outputs zeros, so a voice goes quiet with nothing on screen. A user can raise it on their own norns by editing `Crone.sc`, but a norns update undoes that and other users don't have it, so Strata must fit in 8192 KB. Buffers (`b_alloc`) are not in that pool: they come from ordinary RAM, where the development Pi 4 has 8 GB.
 - **scsynth is single-threaded.** A Pi 4 has about twice a CM3's per-core speed, not four times.
-- **Lua's 200-local limit.** `strata.lua` is 5063 lines and its main chunk uses 184 locals. 3.1 starts by splitting it into modules (below).
+- **Lua's 200-local limit.** `strata.lua` is 5063 lines and its main chunk uses 184 locals. 3.1 started by splitting it into modules.
 - **CI** compiles the engine against norns' `sc/core` without sc3-plugins. Any UGen from sc3-plugins (JPverb, Greyhole, ...) means adding sc3-plugins to CI and checking that norns ships the same version.
 - matron polls carry one float, so any engine-to-Lua data stream (meters, playheads, waveforms) must be encoded as `bufferState` is, or written to a file.
 
@@ -71,279 +73,22 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 ## Development approach (all releases)
 
 The code and documents are restructured for agent-driven development, and every release is planned to run as parallel as possible (decided 2026-11-07). In practice:
-- **3.1 starts by restructuring.** Modules with registries, one file per page, grid layout and arc page, tests and notes split per module, changelog fragments, engine checks on a configurable port, and a recommended merge queue (`docs/design/3.1-design.md` §0).
-- **3.2 starts with the same for the engine.** `lib/Engine_Strata.sc` (1932 lines) is split into class-extension files (`+ Engine_Strata { ... }` in `lib/engine/*.sc`, prefixed so they can't collide with other scripts' classes in `~/dust`), one per area: SynthDefs, voices, grain sources, buffers, effects. `docs/notes/engine.md` splits to match, and the engine check gains per-area entry points. The 3.2 design must confirm that norns compiles extension files from a script's `lib/` and that CI compiles them too.
+- **The restructure is done.** 3.1 split the script into modules with registries, one file per page, grid layout and arc page, with tests and notes per module, changelog fragments and engine checks on a configurable port; 3.2 did the same for the engine (class-extension files under lib/engine/, one check area and notes file each). AGENTS.md describes the result and `docs/workflow.md` how packages run through agents.
 - **Every release design ends with work packages.** Each lists the files it owns, the interfaces it depends on, its tests, and which packages run at the same time, grouped in waves.
 - **Releases can overlap.** Once 3.1's restructure is merged, Lua-only work in a later release (for example 3.4's sequencer or 3.6's controller layouts) can run alongside engine work in another, because they touch different files.
 
 ---
 
-## 3.1: Playable from the norns alone
-
-### Why
-
-The UI review found that a norns without a grid can't stop a voice, save or recall a scene, or edit a pattern. Several of the screen controls are hard to use, and the 128h, 128v and 64 grids are missing whole features.
-
-### 0. Module split (first)
-
-Split `strata.lua` into `lib/` modules loaded with norns' `include("strata/lib/<name>")`: for example `ui_pages`, `grid_ui`, `arc_ui`, `midi_in`, `scenes`, `buffers`, `lfos`, `mutations`. Each module returns a table, so its functions and constants stop counting against the main chunk's 200 locals.
-- The test harness needs an `include` stub that resolves paths from the repo root. Its `find_upvalue()` access to script locals moves to module tables, which tests can reach directly. That is simpler than upvalue searching.
-- `test/sync_check.lua` and the docs check must scan every Lua file, not only `strata.lua`.
-- Do this as its own pull request, with no behavior change, before any 3.1 feature.
-
-### 1. Keys and the shift key
-
-norns passes a held K1 to the script (a short tap still opens the menu; `lua/core/menu.lua`). 3.1 uses **K1 held as ALT** everywhere:
-
-| Page | E2 | E3 | K2 | K3 | ALT+K2 | ALT+K3 |
-|---|---|---|---|---|---|---|
-| MAIN | voice | field value | next field | start/stop voice | randomize (undoable) | freeze/unfreeze |
-| VOICE | field | value | previous section | next section | reset field to default | lock/unlock voice |
-| FX | field | value | — | bypass the effect on that row | — | — |
-| LFO | field | value | previous LFO | LFO on/off | — | — |
-| BUFFER | slot | field value | load (on release) | record/stop | clear slot | save slot |
-| SEQ | step | step level | play/stop | step on/off | clear pattern | randomize pattern |
-| SCENES | scene | transition time | recall (fade) | recall (instant) | — | save to scene |
-| SETUP | field | value | — | — | — | — |
-
-- **ALT+E3 is fine adjustment** on every page: a tenth of the normal step. This answers the forum requests for fine and detented control.
-- **Center detents:** a value that goes below zero (pan, scan, crossmod amounts, LFO offset) sticks at 0 for a few extra detents when it crosses it, on encoders and arc alike.
-- The hint row shows the ALT layer while K1 is held.
-- K2 on BUFFER keeps acting on release, as today.
-
-### 2. Lock versus freeze
-
-- Today's "freeze" (protection from randomize and mutation) is renamed **lock**: `[L]` in the voice list, `[LOCK]` on MAIN. The main param stays at full brightness while locked, because it can still be edited.
-- "Freeze" is kept for the real audio freeze in 3.2. Until then ALT+K3 on MAIN does nothing, and its hint is hidden.
-- The scene field keeps its stored name (`frozen`) and migrates as is, so old scenes load unchanged.
-
-### 3. Randomize undo
-
-`randomize_voice` stores the voice's previous values. ALT+K2 pressed again within a few seconds (shown as `K2:undo` in the hint row) puts them back. One level only. Mutations are not undoable (they are continuous).
-
-### 4. Pages
-
-Eight pages: **MAIN, VOICE, SEQ, FX, LFO, BUFFER, SCENES, SETUP** (`NUM_UI_PAGES` 8). SEQ (added 2026-11-07) shows all seven patterns, the transport and the tempo, so patterns no longer need a grid; 3.4's sequencer features live there. Every page except MAIN uses a field cursor: E2 picks a field (a highlighted row), E3 changes it.
-
-**Header** (all pages): page title, a page indicator (seven dots, the current one bright), `[M]` while mutations run, a play triangle while patterns play, `REC` while any slot records, and the scene at the right. Master density moves off the header to FX and to MAIN's arc ring 1.
-
-**MAIN** shows what each voice is playing:
-
-```
-MAIN ··•····           ▶ REC  S3
-1+ reso    RESONATOR   synth
-2+ fm      ON
-3- karp   >freq      100 Hz
-4+ sub     size      0.10 s
-           dens       20 /s
-K2:field K3:stop   K1:alt
-```
-
-- The voice list shows voice numbers, so `mod:V3` reads against it.
-- The details column shows the source (`synth`, `buf 2`, `input`).
-- MAIN has three fields: the main param, grain size and grain density. K2 steps the field, E3 edits it.
-- The list keeps four voices visible at the ends too (no blank top row).
-
-**VOICE** (new) is every param of the selected voice in sections: synth (or buffer, or input), grain, crossmod, mix. This is the same list the 256 grid's fader page uses (`fader_param_ids`), so the screen and grid stay in step.
-
-**FX** keeps its rows, grouped under small section labels (master, filter, delay, reverb). It shows mixes in percent, a scroll position marker, and bypass for every effect (K3 on the row).
-
-**LFO** fields per LFO: destination, shape, rate (free Hz or clocked division), depth, offset, on/off.
-- E3 on the destination steps both ways.
-- ALT+E3 on the destination jumps a whole group: global, then one group per voice.
-- New LFOs start off with 25% depth, so turning one on is audible.
-- Rate shows in Hz or as a division.
-
-**BUFFER:**
-- E2 picks any slot, not only the selected voice's. Recording into a slot no voice uses works.
-- Each slot row lists the voices reading it (for example `v2 v6`).
-- A field for duration and level, and an input meter drawn from norns' `amp_in_l`/`amp_in_r` polls (Lua only, no engine change).
-- File names get the full width of the selected row, and the row spacing grows to 7 px so descenders no longer touch.
-- The waveform comes in 3.3.
-
-**SCENES** (new): eight slots showing populated, current and sequencer position, the transition time, and the sequencer on/off and length. K2 and K3 recall, ALT+K3 saves. Saving over a populated scene asks for a second ALT+K3 within two seconds.
-
-**SETUP:** MIDI port and channel mode, mutation on/off, rate, probability and amount, the performance setting (3.2), and save/load scenes to disk, all as fields. The device status lines stay.
-
-### 5. Grid parity
-
-| Layout | Change |
-|---|---|
-| 256 | Page 1 rows 9-13: a per-voice level row (16-step fader per voice is too many; use row 9 as "selected voice level", rows 10-13 for the four macro faders from 3.4, dark until then). Row 16 columns 9-16 (dead today): pattern copy/paste (hold a voice's copy key, press another's paste key). Tempo keys light by how far the tempo is from the default. On the scene page, the sequencer position at level 10 and the current scene at 15. Saving a scene needs a hold of 0.5 s. |
-| 128h | Page 2 becomes a real fader page: rows 1-4 are four faders for the selected voice, row 5 the fader page selector, rows 6-7 voice select and on/off. A page 4 matches the 256's buffers and sources page, cut to 8 rows (record, clear, then seven source rows, one per voice). |
-| 128v | A second page (column 8, row 16 held) shows scenes: rows 1-8 recall, rows 9-16 save on hold. Voice selection drives a 4-fader page (rows 1-8 hold four 8-step faders across columns 1-7 is too narrow, so the faders run vertically, one per column, for four params). |
-| 64 | Row 8: column 1 play/stop, column 2 steps 1-8 or 9-16 (toggles the visible half), columns 3-8 voices 1-6 on/off, and voice 7 on column 8 (so all seven fit, voice 7 sharing nothing). Lock on a held voice key. The playhead shows on the visible half only. |
-
-All layouts: a held step key sets the step's level with a second key on the same row (column = level), so velocity no longer needs randomize.
-
-### 6. Arc
-
-- The rings for values that go below zero fill from the center.
-- MAIN: ring 1 master density, ring 2 main param, ring 3 grain size, ring 4 grain density, all for the selected voice (as now). With ALT held, rings 1-4 become pitch, spread, level and pan.
-- SCENES: ring 1 picks the scene, ring 2 is transition time. (Ring 3 is the 3.4 morph.)
-- SETUP: no rings, as now.
-- The arc button acts on every page: start/stop on MAIN and VOICE, LFO on/off on LFO, record on BUFFER, recall on SCENES.
-
-### 3.1 cost if wrong
-
-The key map is the biggest call. If ALT on K1 feels wrong on hardware (the hold before ALT engages is norns' menu timer), the fallback is K2-hold as ALT on pages where K2 does nothing on press.
-
----
-
-## 3.2: Performance setting and one grain path
-
-### Why
-
-A Pi 4 has headroom, other scripts have freeze, reverse grains and live-input history, and polyphony (3.5) needs memory per voice to drop. One engine change does all three.
-
-### 1. The performance setting
-
-- A `performance` param: `auto` (default), `standard`, `high`. `auto` reads `norns.platform` (2 CM3, 3 Pi 3, 4 Pi 4, 5 CM4, 6 CM4S; from matron's `platform.h`) and picks `high` for Pi 4, CM4 and CM4S.
-- It is a hardware setting, so scenes and PSETs don't store it (it lives in its own small file under `data/strata/`).
-- What it changes:
-  - grain density and overlap limits (Lua spec maximums and the engine's `maxGrains`);
-  - the polyphony note count (3.5);
-  - buffer length (below);
-  - the reverb choice;
-  - which costly options are offered (spectral freeze, per-voice filters).
-- Changing it takes effect at the next script start, because `maxGrains` and buffer sizes are fixed when the engine allocates. The SETUP field says so.
-- The engine must know the tier at `alloc`, before Lua can send anything. Either the engine reads the platform itself (`/proc/device-tree/model`) and Lua's override is applied through the file the engine reads at alloc, or the engine allocates the high tier only when told. The 3.2 design picks one.
-
-### 2. One grain path (the center of 3.2)
-
-Today the synth and input sources use `GrainIn` on the live signal followed by a `PitchShift`, and buffers use `GrainBuf` followed by the same `PitchShift`. The `PitchShift` (128 KB) and the input path's spread `DelayC` (128 KB) are most of a grain synth's real-time memory.
-
-Proposed: **every source becomes `GrainBuf` reading a buffer.**
-- **Synth voices** write their output into a short per-voice ring buffer (`BufWr`, 2-4 s stereo, ordinary RAM: about 11 MB for seven voices at 4 s). Their grains read just behind the write head.
-- **The input** writes one shared ring (16 s, or the tier's buffer length). Input voices read from it at any point in the last 16 s. This is the "live input with history" that mangl users keep asking for.
-- **Buffers** read their slot as now.
-- **Pitch becomes the grain's playback rate,** which is true granular transposition, independent of scan speed. The `PitchShift` and the spread `DelayC` go away. Position spread becomes a real random offset into the buffer, for synth and input voices too.
-
-What it frees: about 250 KB per grain synth. At 3.0.2's measured peak (21 grain synths) that is about 5 MB of the 8 MB pool, to be measured by the engine check. This is what makes per-note grain streams affordable in 3.5.
-
-What it costs:
-- Grains of synth and input voices start a grain length (plus a margin) in the past, so triggered accents are a few tens of milliseconds later. For ambient material that is acceptable. Triggered mode reads the newest audio it safely can.
-- The pitch of synth voices sounds different: granular rate transposition instead of a pitch shifter. Old scenes keep their values, but they won't sound identical. CHANGELOG and README must say so.
-- The rework touches the subtlest code in the engine: replace-never-stack, kill fades, fade-before-zeroing and `grainSlots` all now cover ring buffers too. The engine check grows accordingly.
-
-This sound change was accepted (2026-11-07). The rejected fallback was to keep `GrainIn` plus `PitchShift` for synth voices and use rings only for the input and freeze, losing most of the memory win.
-
-### 3. Freeze (real)
-
-- **Synth and input voices:** freeze stops the voice's view of its ring from moving. A synth voice's ring writer pauses. An input voice copies the last few seconds of the shared ring into its own freeze buffer (`/b_gen copy`), so the shared writer never stops. Grains keep playing the frozen audio, and scan, spread and pitch still move.
-- **Buffer voices:** freeze stops the scan.
-- **Optional, high tier:** spectral freeze (`PV_MagFreeze` on the voice output) as a freeze mode for a smeared, pad-like hold.
-- **Controls:** ALT+K3 on MAIN (the slot 3.1 reserved), grid row 16 on the 256 (alongside lock), and a scene field. Freeze switches at the end of a scene transition, like the other discrete keys.
-
-### 4. Per-grain variation and scales
-
-These are per-grain random draws on each grain's trigger (`TRand`/`TIRand`), so they cost no memory:
-- **reverse probability** (0-100%): a grain plays backwards;
-- **pitch jitter** (in semitones);
-- **pan jitter**, replacing the slow `LFNoise1` pan spread;
-- **size jitter**;
-- **interval sets:** each grain picks its pitch from a chosen set (for example octaves, fifths, a scale's chord tones, or five chosen intervals like twine), with a probability for "off-set" grains;
-- **scale quantize** for grain pitch, MIDI notes and the main param of pitched voices, with norns' `musicutil` scales and a root.
-
-### 5. Loop regions
-
-Each buffer voice gets a loop start and length (fractions of the slot). The scan and spread wrap inside the region. On grid and arc this becomes the mlr-style "hold two keys" gesture in 3.3.
-
-### 6. Mix and CPU
-
-- **Per-voice filter** (an SVF before the grain stage or after it, the 3.2 design decides) with its own cutoff and resonance. Offered on both tiers; cheap.
-- **Per-voice sends.** Delay and reverb become send effects with a send level per voice. Default sends reproduce 3.0's serial chain as closely as possible. The design must spell out the default mapping, since serial and parallel can't sound identical.
-- **Effect bypass frees CPU.** The filter, delay and reverb nodes are paused (`/n_run 0`) while their mix is 0, after a short fade.
-- **High tier reverb:** a richer reverb (a core-UGen FDN, or JPverb if sc3-plugins is accepted in CI).
-
-### 7. Longer buffers (high tier)
-
-Buffers come from ordinary RAM, not the real-time pool. 8 slots × 2 channels × 48 kHz × 4 bytes is about 3 MB per second of slot length: 16 s is 49 MB, 60 s is 184 MB and 300 s is 922 MB. The development Pi 4 has 8 GB. Proposal:
-- standard: 16 s, as now;
-- high: a `buffer length` setting (16, 60, 120 or 300 s), offered up to what `/proc/meminfo` allows while leaving at least 1 GB free. Default 60 s.
-
-`bufferSeconds` becomes a value chosen at alloc instead of a constant, and `BUFFER_SECONDS` in Lua follows it. Long slots cost time rather than memory: loading, the decode check and saving (the interleave is a per-frame loop in sclang) all grow with length, so the 3.2 design measures a 300 s save on the Pi 4 and may move the interleave into a server-side write. Saved files longer than the slot load truncated, as now. Scenes don't store audio, so nothing else changes.
-
----
-
-## 3.3: Buffers as instruments
-
-### Recording
-
-- **Overdub with feedback:** a `feedback` (pre-level) control for recording. Recording over a slot keeps the old audio scaled by the feedback. The record command gains an argument (a command-table change).
-- **Record source:** input (as now), Strata's output (resample, pre-master or post-master), or one voice's output. This fills the gap forum users name most ("dump a sample of the process").
-- **Threshold arming:** recording waits until the input crosses a level, engine-side for timing.
-- **Clock-synced recording:** start on the next beat or bar, and record a length in beats.
-- **Loop recording:** record continuously into a slot, wrapping, until stopped. The slot is playable while it records.
-
-### Files
-
-- Load a random file from a folder into a slot (K2 long press on BUFFER), and "fill empty slots from a folder".
-- Long files: choose the start point when loading a file longer than the slot (a load argument).
-- Trim: save only the loop region (sam-style).
-
-### Seeing the audio
-
-- **Waveform on BUFFER:** the engine computes a 64-point peak overview per slot when its audio changes and writes it to a small file next to the scratch takes. A `bufferState` change tells Lua to reread it. Polls are too narrow for 64 values. The BUFFER page draws it, with the loop region and one playhead per voice reading the slot.
-- **Playheads** are estimated in Lua from `buf_pos`, scan and elapsed time, like the LFO page's phase estimate. Free, and close enough at 15 fps. Spread and jitter are drawn as a smear around the head.
-
-### Playing positions
-
-- **Grid position rows (glut/mlr style):** a 256 page where each row is a buffer voice and its 16 columns are positions in the voice's slot (or loop region). Press to jump, hold two keys to set a loop region, and the playhead LED moves along the row. On 128h, the same for the voice rows that fit. On 64 and 128v, one voice at a time.
-- **Arc scrub:** on BUFFER, ring 1 scrubs the position directly. A held ALT stops the scan, as in angl's speed-to-zero. A friction setting gives the scan inertia that follows how fast the ring was turned (rangl).
-- **Position bookmarks:** four saved positions per voice, recalled from grid, keys or pattern steps (3.4's step locks). Forum users asked for exactly this.
-
-### The per-voice mix stage (decided 2026-11-08)
-
-3.3's Wave 0 (package 0c) moves the voice filter and the sends out of every grain synth into one per-voice stage after the grains (cross-release decision 1). One filter per voice instead of one per grain synth: it frees memory in every grain synth, gives 3.4's cutoff and amp modulation one place to act, and lets 3.5's per-note grain streams share their voice's filter and sends.
-
----
-
-## 3.4: Modulation and sequencing
-
-### Scene morph
-
-- A `morph` param (0-1) between two chosen scenes, A and B. Continuous values interpolate as transitions already do. Discrete keys switch at 0.5.
-- Controls: arc ring 3 on SCENES, a grid fader row, and MIDI CC through PARAMS > MAP.
-- Morphing doesn't recall scenes. It writes the interpolated values to the params, so the end state can be saved as a new scene.
-- A four-corner (XY) morph on the 256 grid as a stretch goal.
-
-### Macros
-
-- 16 macros in four banks of four (decided 2026-11-08, in place of four; cross-release decision 7). Each drives up to eight targets, each target with its own range (min and max, inverted allowed). One shown bank is shared by MOD, the arc and the grids.
-- Edited on a new **MOD** page, which also holds the morph and the LFO matrix overview. MOD lists the registered modulation sources generically (cross-release decision 5).
-- **A modulation matrix** (decided 2026-11-08): 16 routings from any registered source to any LFO destination except the macros, each with a bipolar depth, summed with the LFOs around the stored values; on MOD. 3.5's and 3.6's sources route through it.
-- Macros are params, so CC mapping and LFOs reach them. Scenes store their targets and values.
-
-### LFOs
-
-- **Six LFOs** (`NUM_LFOS` 6), with new shapes: random (smooth), sample-and-hold, drunk walk.
-- **LFOs can modulate other LFOs' rate and depth.**
-- **Fast modulation in the engine:** a small set of destinations (grain pitch, position, size, filter cutoff, amp) gets an engine-side modulation input, so LFOs above norns' 10 Hz Lua limit run as control-rate synths. Lua stays the owner of values; the engine adds the offset. This needs one modulation bus per destination per voice, and the 3.4 design must size it. Decided 2026-11-08 (cross-release decision 2): the bus is indexed by (voice, note slot, destination), with one note slot per voice in 3.4, and the cutoff and the voice-level amp act on 3.3's per-voice mix stage.
-- **Random LFOs on demand:** "scatter" gives every voice slow random modulation on chosen params at a set depth (barcode/oooooo style), as one switch instead of six LFOs.
-
-### Gesture recorders
-
-Four pattern recorders (norns `lib/pattern_time`) that record encoder, arc and grid fader moves and loop them, quantized to the clock or free. Grid: four keys on the 256 (record, play, clear by hold). Screen: a field on MOD. Scenes store whether each runs, not their contents (contents saved per PSET).
-
-### Step sequencer
-
-On 3.1's SEQ page and the grid.
-
-
-- Per-voice pattern length (1-16) and clock division, for polyrhythms.
-- Step probability and ratchets (2-4 repeats).
-- **Step locks:** a step can set grain position, pitch, size or a bookmark (3.3) as it fires, Elektron-style. Edited by holding a step on the grid and turning an encoder or arc ring.
-- Euclidean fill per voice (hits, length, rotation).
-- **Notes per step:** a step can carry a pitch (scale degree). This feeds the polyphony of 3.5. Decided 2026-11-08 (cross-release decision 3): a step stores a list of notes, 3.4 plays the first, and 3.5 adds chords with no format change.
-- Pattern chaining and per-scene patterns (already stored).
-- **Beat-quantized actions:** freeze, position jumps and scene recalls can wait for the next beat or bar. This answers the forum gap about grains and the clock.
-- **Step outputs** (decided 2026-11-08, cross-release decision 4): the sequencer plays every step through registered outputs; 3.4 registers only Strata's own voices.
-- **Transport** (moved from 3.6 on 2026-11-08, cross-release decision 6): patterns start and stop with norns' clock transport, so Link and MIDI clock start and stop Strata; a SETUP option, on by default.
-
-### Scenes
-
-16 scenes in two banks of eight (grid shows a bank), and scene names (edited with norns' `textentry`, shown on SCENES).
+## Shipped: 3.1 to 3.4
+
+| Release | Theme | Design | Shipped |
+|---|---|---|---|
+| 3.1 | Playable from the norns alone | `docs/design/3.1-design.md` | 3.1.0, 2026-11-07 |
+| 3.2 | Performance setting, one grain path | `docs/design/3.2-design.md` | 3.2.0, 2026-11-09 |
+| 3.3 | Buffers as instruments | `docs/design/3.3-design.md` | 3.3.0, 2026-11-11 |
+| 3.4 | Modulation and sequencing | `docs/design/3.4-design.md` | 3.4.0, 2026-11-12 |
+
+Their sections of this roadmap were removed on 2026-11-12: each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table.
 
 ---
 
@@ -486,7 +231,7 @@ Added 2026-11-11, at the maintainer's request. It widens what a voice can be. It
 
 ### More voice types
 
-- Each of the seven voices has one fixed synth today (Resonator, FM, Folder, Sub, Pulse, Karplus, Ring). This release lets a voice choose its type, and adds types to choose from: a wavetable voice, an additive voice and a noise or texture voice are the candidates `docs/notes/lua/version-history.md` has listed since 1.0.
+- Each of the seven voices has one fixed synth today (Resonator, FM, Folder, Sub, Pulse, Karplus, Ring). This release lets a voice choose its type, and adds types to choose from: a wavetable voice, an additive voice and a noise or texture voice are the candidates `docs/history.md` has listed since 1.0.
 - Seven voices stay seven (the non-goal above stands): this is a choice per voice, not more voices.
 - The design decides: which types; how a voice's params, its MAIN param, its scenes and its PSETs follow a type change (a scene made with one type recalled on another); what each new SynthDef costs in real-time memory against 3.5's notes per voice; whether old scenes need a migration (each voice's type defaults to today's).
 
@@ -548,7 +293,7 @@ Added 2026-11-08. After 3.8 ships (3.6, until 3.7 and 3.8 were added on 2026-11-
 1. **3.2's sound change:** accepted. Synth voices transpose by grain rate, and their grains start a grain length in the past.
 2. **3.5 note assignment:** both modes, selected voice as the default (3.5, MIDI and MPE).
 3. **3.6 hardware:** crow, Just Friends, W/, ER-301, TELEXo, Teletype, Launchpad, TouchOSC, Disting NT, OXI One, OXI E16, Faderpunk and Faderbank (including the Faderbank 16nx; added 2026-11-11, #555). The E16 takes the place the Midi Fighter Twister had in the brainstorm (no Twister layout is planned).
-4. **Pi 4 RAM:** 8 GB, so the high tier offers buffers up to 300 s (3.2 §7).
+4. **Pi 4 RAM:** 8 GB, so the high tier offers buffers up to 300 s (the 3.2 section's "Longer buffers", since removed).
 5. **After the last feature release** (2026-11-08; 3.6 then, 3.8 since 2026-11-11): a full code review of the whole project as a pre-4.0 release, then 4.0 (see pre-4.0 and 4.0 above). Every finding, whatever its priority, gets its own issue and its own fix; none is deferred or accepted.
 
 ## Cross-release decisions (2026-11-08)

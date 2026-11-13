@@ -1944,7 +1944,7 @@ test("the engine notes give the runner's area order and the full run's time (#49
   for seconds in times:gmatch("%a+ (%d+)") do total = total + tonumber(seconds) end
   assert_true(total > 500, "the workflow's area times sum (" .. total .. " s)")
   local minutes = math.floor(total / 60 + 0.5)
-  for _, path in ipairs({ "AGENTS.md", "docs/status.md", "docs/notes/lua/test-harness/engine-check-runner.md",
+  for _, path in ipairs({ "AGENTS.md", "docs/checks.md", "docs/notes/test-harness/engine-check-runner.md",
       "docs/notes/engine/structure.md", "test/run_engine_check.sh" }) do
     local text = read_repo_text(path)
     assert_true(text:find("about " .. minutes .. " minutes", 1, true) ~= nil,

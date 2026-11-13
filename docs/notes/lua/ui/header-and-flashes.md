@@ -3,6 +3,7 @@
 - Transient texts go through `S.lib.ui_flash` (one clock per slot, canceled before a new flash in that slot starts, and at cleanup). Never give a page its own flash clock.
 - A text that stands while a module's state lasts (MOD's learn waiting, on every page) is a standing notice (`add_notice`), never a flash restarted to cover it: it has no clock, shows only while no flash shows in its slot, and goes the moment its function gives nil, so it can never outlive the state or hide a flash.
 - The header has no `dens:`: master density is on FX's first row, MAIN's arc ring 1 and in params.
+- Status indicators use brackets (`[M]`, `[L]`, `[T]`, `[F]`). Screen levels: 15 bright, 4 dim, 1-2 subtle.
 - `draw_hints` draws its text as norns' font can (`S.lib.ui_text.printable`: a flash naming a file with accented letters shows them plainly, never as gaps, #551) and cuts it to the screen's 128 px (`fit_text`, on the text it draws), so a flash naming a long file or folder never leaves the screen; the flash itself keeps its whole text. Only a changed text is measured again. `S.lib.ui_header.hint_fits(text)` says whether the row draws a text whole, under the same two steps (#432).
 
 ## Header and flashes

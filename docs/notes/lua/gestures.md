@@ -22,7 +22,7 @@
 - `S.gesture_save_clock`: the live file's timed write while it waits (#651).
 - `press(k)`, `clear(k)`, `overdub(k)`, `state(k)`, `describe(k)`, `phase(k)`, `add_params()`, `GESTURES` (the tunables).
 - The group `strata_gestures` (8 params), the scene fields `gesture_<k>_play`, the PSET hook `gestures`, the start step `gestures_load` (107), the cleanup steps `gestures_save` (34) and `gestures` (95), the modulation sources `gesture1`..`gesture4`.
-- Its tests: `test/unit/gestures_test.lua`. The harness's pattern_time is `test/stub_pattern_time.lua` (`docs/notes/lua/test-harness/stubs.md`).
+- Its tests: `test/unit/gestures_test.lua`. The harness's pattern_time is `test/stub_pattern_time.lua` (`docs/notes/test-harness/stubs.md`).
 
 ## The keys
 

@@ -20,7 +20,7 @@ The engine decides the tier at `alloc` and writes `performance_active.data` befo
 - **`setting()`** returns a copy of `{performance, buffer_seconds}`, read from `performance.data` the first time and cached in `S.performance_setting`.
 - **`set_setting(key, value)`** (`"performance"`: auto, standard or high; `"buffer_seconds"`: 16, 60, 120 or 300) writes the file and, only when the write worked, updates the cache and requests a redraw, and returns true. An unknown key or value, or a failed write (one console line `strata: cannot write <path>`), returns false and leaves the cache and so `setting()` as it was (#236). It applies at the next start.
 - `record_buffer` also caps a take at `S.performance.buffer_seconds` (the param's range already ends there).
-- The test harness writes the active file with `h.write_performance_active(fields)` before a `load_strata` (fields in the engine's order, or a string written as it is), and the engine stub's `recordBuffer` limit follows that file (`stubs.active_buffer_seconds`). See [test-harness.md](test-harness.md).
+- The test harness writes the active file with `h.write_performance_active(fields)` before a `load_strata` (fields in the engine's order, or a string written as it is), and the engine stub's `recordBuffer` limit follows that file (`stubs.active_buffer_seconds`). See [test-harness.md](../test-harness.md).
 
 ## States
 

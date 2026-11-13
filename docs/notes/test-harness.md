@@ -1,6 +1,6 @@
 ## Must not break
 
-- Each part of the test harness has its own notes file under docs/notes/lua/test-harness/ (listed below), each opening with its own "Must not break" list. Read the one for the part you change.
+- Each part of the test harness has its own notes file under docs/notes/test-harness/ (listed below), each opening with its own "Must not break" list. Read the one for the part you change.
 
 ## Files
 
@@ -20,5 +20,5 @@ The test harness's notes, one file per part:
 On norns, norns shield or fates:
 - Use maiden (the norns web IDE at `http://norns.local/maiden`) to edit files and watch the console.
 - The maiden REPL is useful for trying Lua code.
-- SuperCollider changes need a script restart.
+- An engine change needs a norns restart (SYSTEM > RESTART), not a script restart: `docs/checks.md` (On norns).
 - Watch for errors in the maiden console (bottom panel).

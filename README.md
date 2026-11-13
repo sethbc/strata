@@ -77,7 +77,11 @@ After installing, restart norns from its own menu: SYSTEM > RESTART. Strata's en
 - [Usage Tips](docs/user/tips.md) - workflows and starting points
 - [Technical Details](docs/user/technical.md) - architecture, signal flow and the development checks
 
-Page renders: `lua test/render_pages.lua <dir>` then `python3 test/render_pages.py <dir>` draw every screen page state as a PNG (`docs/status.md`, Running the checks).
+## Development
+
+- [CHANGELOG.md](CHANGELOG.md) - every change of every release; [ROADMAP.md](ROADMAP.md) - the releases planned next
+- [AGENTS.md](AGENTS.md) - the rules every change follows, the engine command table and the map of the developer docs under docs/
+- [Running the checks](docs/checks.md) - the Lua tests, the engine check and CI. Page renders: `lua test/render_pages.lua <dir>` then `python3 test/render_pages.py <dir>` draw every screen page state as a PNG.
 
 ## License
 
