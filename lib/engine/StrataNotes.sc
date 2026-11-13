@@ -549,7 +549,11 @@
         var lastVoice = numVoices - 1, lastSlot = this.noteSlots - 1;
 
         // Start voice's slot: note 0-127 (the scale reference), freq 8-20000
-        // Hz, rate 0.25-4, velocity 0-1
+        // Hz, rate 0.25-4, velocity 0-1. The engine keeps note in the slot's
+        // record and does not use it yet (ruling 46): a buffer note's
+        // scaleNote comes from the voice's reference note and its rate
+        // (noteScaleNote), the same today; a later release's tunings will
+        // need a note's number apart from its rate
         this.addCommand(\noteOn, "iiffff", { arg msg;
             var voice = msg[1], slot = msg[2], note, freq, rate, velocity;
             if (this.fastModIndicesValid(\noteOn, [[\voice, voice, lastVoice], [\slot, slot, lastSlot]])
