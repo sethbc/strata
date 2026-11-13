@@ -104,13 +104,13 @@ The rows of AGENTS.md's table:
 
 | Command | Indices checked | Clipped | Does |
 |---|---|---|---|
-| `setFastLfo(lfo, voice, destination, shape, rate, depth, offset)` `"iiiifff"` | lfo 0-5, voice 0-6, destination 0-4, shape 0-7 | rate 0.003-50, depth 0-1, offset −2..2 | the LFO's node made, set, replaced or moved (above) |
-| `stopFastLfo(lfo)` `"i"` | lfo 0-5 | | releases a running node |
+| `setFastLfo(lfo, voice, destination, shape, rate, depth, offset)` `"iiiifff"` | lfo 0-5, voice 0-6, destination 0-4, shape 0-7 | rate 0.003-50, depth 0-1, offset −2..2 | the LFO's node made, set, replaced or moved (above); it writes the voice's note slot 0 channel, so it moves the whole voice in 3.4 |
+| `stopFastLfo(lfo)` `"i"` | lfo 0-5 | | releases a running node; nothing without one |
 | `syncFastLfo(lfo, phase)` `"if"` | lfo 0-5 | phase 0-1 | sets the phase of the place's node |
 | `setScatter(depth, rate, destinations, voices)` `"ffii"` | destinations 0-31 (a bit per destination), voices 0-127 (a bit per voice) | depth 0-1, rate 0.01-1 | scatter's node made, set or released |
-| `setFastOffset(voice, noteSlot, destination, offset)` `"iiif"` | voice 0-6, note slot 0..`fastModNoteSlots` − 1, destination 0-4 | offset −2..2 (after the finiteness check) | one value of the offset node |
+| `setFastOffset(voice, noteSlot, destination, offset)` `"iiif"` | voice 0-6, note slot 0..`fastModNoteSlots` − 1, destination 0-4 | offset −2..2 (after the finiteness check) | one value of the offset node; it creates no node |
 
-An index that is not a whole number in its range, or a NaN or infinite continuous argument (each checked before any is clipped, `setFastOffset`'s offset included), makes the command do nothing but post one line (`strata: setFastLfo ignored: lfo 6 is not a whole number from 0 to 5`, `strata: setFastOffset ignored: offset nan is not a finite number`): nothing recorded, no node, no channel changed. Each command records what it took in `received`. The Lua engine stub refuses the same indices and the clipped ranges (Lua sends neither); for `setFastOffset` it checks only that the offset is finite, since Lua's matrix sends a sum the engine clamps (`docs/notes/lua/test-harness/engine-stub-and-sync.md`). The script calls all five (1b the three LFO commands, 1e `setScatter`, 1h `setFastOffset`), so `test/sync_check.lua`'s `PENDING_COMMANDS` holds none of them.
+An index that is not a whole number in its range, or a NaN or infinite continuous argument (each checked before any is clipped, `setFastOffset`'s offset included), makes the command do nothing but post one line (`strata: setFastLfo ignored: lfo 6 is not a whole number from 0 to 5`, `strata: setFastOffset ignored: offset nan is not a finite number`): nothing recorded, no node, no channel changed. Each command records what it took in `received`. The Lua engine stub refuses the same indices and the clipped ranges (Lua sends neither); for `setFastOffset` it checks only that the offset is finite, since Lua's matrix sends a sum the engine clamps (`docs/notes/test-harness/engine-stub-and-sync.md`). The script calls all five (1b the three LFO commands, 1e `setScatter`, 1h `setFastOffset`), so `test/sync_check.lua`'s `PENDING_COMMANDS` holds none of them.
 
 ### Memory
 

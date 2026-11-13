@@ -773,6 +773,20 @@ test("AGENTS.md is the only agent instructions file", function()
   assert_true(old == nil, "CLAUDE.md is gone: the instructions live in AGENTS.md alone")
 end)
 
+-- Every agent loads all of AGENTS.md, so it stays an index: a rule there is
+-- a line or two naming the notes file that holds the detail. The limit is
+-- in words as `wc -w` counts them (the file says the same number)
+local AGENTS_WORD_LIMIT = 8000
+test("AGENTS.md stays within its word budget", function()
+  local file = assert(io.open(repo_root .. "/AGENTS.md", "r")); local doc = file:read("*a"); file:close()
+  local words = 0
+  for _ in doc:gmatch("%S+") do words = words + 1 end
+  assert_true(words <= AGENTS_WORD_LIMIT, "AGENTS.md has " .. words .. " words, over its budget of " .. AGENTS_WORD_LIMIT
+    .. ": move detail to the module's notes file and keep the rule's line")
+  local stated = doc:match("a test fails above ([%d,]+) words")
+  assert_equal(stated and tonumber((stated:gsub(",", ""))), AGENTS_WORD_LIMIT, "the budget AGENTS.md states")
+end)
+
 test("AGENTS.md command table lists exactly the engine's commands", function()
   local file = assert(io.open(repo_root .. "/AGENTS.md", "r")); local doc = file:read("*a"); file:close()
   -- table rows: | `engine.<name>(<args>)` | `"<signature>"` | purpose |
@@ -796,9 +810,13 @@ test("AGENTS.md command table lists exactly the engine's commands", function()
     assert_true(signatures[name] ~= nil, "AGENTS.md command table lists engine." .. name .. ", which the engine does not have")
   end
   -- no engine command mentioned anywhere in AGENTS.md, README.md,
-  -- docs/status.md or docs/notes is gone
+  -- ROADMAP.md, docs/status.md, the other docs/*.md, docs/decisions or
+  -- docs/notes is gone
   local doc_names = maintained_docs()
-  for _, note in ipairs({"docs/status.md", "docs/notes/engine/structure.md", "docs/notes/lua/state-and-voices.md"}) do
+  for _, note in ipairs({"ROADMAP.md", "docs/status.md", "docs/checks.md", "docs/workflow.md", "docs/history.md",
+      "docs/decisions/README.md", "docs/decisions/3.4.md", "docs/notes/test-harness.md",
+      "docs/notes/test-harness/run-and-helpers.md", "docs/notes/engine/structure.md",
+      "docs/notes/lua/state-and-voices.md"}) do
     local listed = false
     for _, doc_name in ipairs(doc_names) do listed = listed or doc_name == note end
     assert_true(listed, "the check reads " .. note)
@@ -896,8 +914,12 @@ local function read_repo_file(path)
   return text
 end
 
-test("every docs/notes/lua file opens with a Must not break section", function()
+test("every docs/notes/lua and test-harness file opens with a Must not break section", function()
   local files = markdown_files("docs/notes/lua")
+  local harness = markdown_files("docs/notes/test-harness")
+  assert_true(#harness >= 5, "the check reads the test harness's notes (" .. #harness .. " found)")
+  for _, path in ipairs(harness) do table.insert(files, path) end
+  table.insert(files, "docs/notes/test-harness.md")
   local nested = 0
   for _, path in ipairs(files) do
     if path:match("^docs/notes/lua/.+/") then nested = nested + 1 end
@@ -1039,10 +1061,10 @@ test("the engine check areas and the engine notes files match one to one", funct
 end)
 
 -- An on-demand area has a file, runs last in the fixed order, and the docs
--- say how to run it (status.md's checks, and the engine notes)
+-- say how to run it (docs/checks.md, and the engine notes)
 test("every on-demand engine check area is documented and has a file (#131)", function()
   local on_demand, count = on_demand_areas(), 0
-  local status = read_repo_file("docs/status.md")
+  local checks = read_repo_file("docs/checks.md")
   local files_notes = read_repo_file("docs/notes/engine/files.md")
   local seen_on_demand = false
   for _, name in ipairs(ENGINE_CHECK_AREA_ORDER) do
@@ -1055,7 +1077,7 @@ test("every on-demand engine check area is documented and has a file (#131)", fu
     assert_true(file ~= nil, "on-demand area " .. name .. " has test/engine_check/" .. name .. ".scd")
     if file then file:close() end
     local run = "STRATA_ENGINE_CHECK_AREAS=" .. name
-    assert_true(status:find(run, 1, true) ~= nil, "docs/status.md says how to run " .. name .. " (" .. run .. ")")
+    assert_true(checks:find(run, 1, true) ~= nil, "docs/checks.md says how to run " .. name .. " (" .. run .. ")")
     assert_true(files_notes:find(run, 1, true) ~= nil, "docs/notes/engine/files.md says how to run " .. name)
   end
   assert_true(count >= 1, "the runner names its on-demand areas (the soak)")
@@ -1181,13 +1203,13 @@ test("the 3.13 runner's shard list is the workflow's", function()
   assert_equal(output, table.concat(expected, "\n") .. "\nexit=0\n", "-l prints the workflow's shards, one a line, in order, and nothing else")
 end)
 
-test("the 3.13 runner's synopsis is the same in its usage, AGENTS.md, docs/status.md and the runner notes", function()
+test("the 3.13 runner's synopsis is the same in its usage, AGENTS.md, docs/checks.md and the runner notes", function()
   local script = read_repo_file("test/run_engine_check_313.sh")
   local usage = script:match('echo "usage: %$0 (%[[^"]-)" >&2')
   assert_true(usage ~= nil, "the script prints a usage line")
   for _, flag in ipairs({ "[-1]", "[-l]", "[-c]" }) do assert_true(usage:find(flag, 1, true) ~= nil, "the usage names " .. flag) end
   assert_equal(script:match("\n# usage: [^\n]-test/run_engine_check_313%.sh (%[[^\n]*)"), usage, "the header comment's usage")
-  for _, path in ipairs({ "AGENTS.md", "docs/status.md", "docs/notes/lua/test-harness/engine-check-runner.md" }) do
+  for _, path in ipairs({ "AGENTS.md", "docs/checks.md", "docs/notes/test-harness/engine-check-runner.md" }) do
     local count = 0
     for synopsis in read_repo_file(path):gmatch("`test/run_engine_check_313%.sh (%[[^`]*)`") do
       count = count + 1
@@ -1227,7 +1249,7 @@ end)
 
 test("the 3.13 runner documents its sharded default", function()
   local bullet = read_repo_file("AGENTS.md"):match("\n%- `test/run_engine_check_313%.sh[^\n]*")
-  local section = read_repo_file("docs/notes/lua/test-harness/engine-check-runner.md"):match("\n### The engine check on SuperCollider 3%.13.*$")
+  local section = read_repo_file("docs/notes/test-harness/engine-check-runner.md"):match("\n### The engine check on SuperCollider 3%.13.*$")
   for name, text in pairs({ ["AGENTS.md's bullet on the 3.13 runner"] = bullet or "", ["the runner notes' 3.13 section"] = section or "" }) do
     assert_true(text:find("`-1`", 1, true) ~= nil, name .. " names -1, the run in one sclang")
     assert_true(text:find("`-l`", 1, true) ~= nil, name .. " names -l, the shard list")

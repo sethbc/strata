@@ -4,7 +4,7 @@ How a session runs a release's work packages (or a batch of fixes) through agent
 
 ## Roles
 
-- **Controller**: the session that plans the dispatches, writes the briefs, starts workers and reviewers, rules on their questions, builds and lands the batches' pull requests and keeps the ledger. It runs from the main checkout `/home/sethbc/src/strata`, never from a worktree.
+- **Controller**: the session that plans the dispatches, writes the briefs, starts workers and reviewers, rules on their questions, builds and lands the batches' pull requests and keeps the ledger. It runs from the main checkout (the repository's own folder), never from a worktree.
 - **Worker**: one agent building one package in its own worktree, from one brief. It neither dispatches agents nor merges.
 - **Reviewer**: one agent reading one package's diff against its brief, read-only.
 
@@ -12,8 +12,8 @@ How a session runs a release's work packages (or a batch of fixes) through agent
 
 The process runs on the superpowers skills. The session doing a step invokes its skill at that step, and a resumed session invokes it again. Where a skill differs from this file or AGENTS.md, this file and AGENTS.md win.
 
-- **Design**: `superpowers:brainstorming`, for anything new. The design goes in `docs/design/<release>-design.md`, not the skill's default folder. An approved design is not brainstormed again.
-- **Plan**: `superpowers:writing-plans`, saved under docs/superpowers/plans/.
+- **Design**: `superpowers:brainstorming`, for anything new. The design goes in `docs/design/<release>-design.md` (a smaller one as `docs/design/<release>-<topic>-design.md`), not the skill's default folder. An approved design is not brainstormed again.
+- **Plan**: `superpowers:writing-plans`, saved under docs/superpowers/plans/ while its release is open and removed at the release (At a release, below).
 - **Workspace**: `superpowers:using-git-worktrees`. A worker starts in the worktree made for it and makes no other. The controller stays in the main checkout.
 - **Execution**: `superpowers:subagent-driven-development`, by the controller at the start of a plan and on every resume. Packages run in parallel, one worktree and branch each, where the skill runs one implementer at a time; the file ownership in each brief is what makes that safe. The skill's ledger is the ledger below.
 - **Code**: `superpowers:test-driven-development`, by every worker whose package changes code or tests. A docs-only package skips it.
@@ -25,7 +25,7 @@ The process runs on the superpowers skills. The session doing a step invokes its
 - The ledger (the record of dispatches, rulings and progress) is `.superpowers/sdd/<plan>/progress.md` in the main checkout, untracked (`.superpowers/` is in `.git/info/exclude`). The plan's folder also holds the briefs (`task-<N>-brief.md`), the common instructions and the review diffs.
 - Never inside a worktree: a worktree is removed when its work is done, and the ledger with it.
 - When resuming, read the ledger's tail first.
-- Record each ruling with its reason and what it costs if wrong, as `docs/decisions.md` records decisions.
+- Record each ruling with its reason and what it costs if wrong, as the files under docs/decisions/ record decisions (`docs/decisions/README.md`).
 
 ## Briefs
 
@@ -52,7 +52,7 @@ Where a brief is ambiguous or conflicts with the merged code, the worker reports
 - **TDD**: invoke `superpowers:test-driven-development`, then write the brief's failing tests first, see them fail, implement, see them pass.
 - **Screen changes**: anything drawn follows AGENTS.md's layout rules; look at the page renders (`lua test/render_pages.lua` then `python3 test/render_pages.py`), since the layout tests miss text over a line and strings crowding nearby baselines.
 - US English everywhere (a test enforces it); never name the maintainer in docs, commits or pull requests.
-- **Checks before each commit**: `lua test/run.lua`, `luajit test/run.lua` and `lua test/sync_check.lua`. A package that touches engine code or a check area also runs the engine check: its own areas while working (`STRATA_ENGINE_CHECK_AREAS`, on its own `STRATA_SC_PORT`), then every area before pushing, on SuperCollider 3.14.1 (`test/run_engine_check.sh`) and on 3.13, norns' and CI's version (`test/run_engine_check_313.sh`, in Docker: `docs/notes/lua/test-harness/engine-check-runner.md`). It reports #131's rate on 3.13: how many runs passed, failed and crashed, out of how many, and how many ran at once.
+- **Checks before each commit**: `lua test/run.lua`, `luajit test/run.lua` and `lua test/sync_check.lua`. A package that touches engine code or a check area also runs the engine check: its own areas while working (`STRATA_ENGINE_CHECK_AREAS`, on its own `STRATA_SC_PORT`), then every area before pushing, on SuperCollider 3.14.1 (`test/run_engine_check.sh`) and on 3.13, norns' and CI's version (`test/run_engine_check_313.sh`, in Docker: `docs/notes/test-harness/engine-check-runner.md`). It reports #131's rate on 3.13: how many runs passed, failed and crashed, out of how many, and how many ran at once.
 - Commit with the brief's message, ending with the session's attribution line, then `git push -u origin HEAD`. A worker opens no pull request: its pushed branch is what the controller's batch lands.
 
 ## Findings
@@ -82,6 +82,17 @@ Reviewed packages land in batches, one pull request per batch, not one per packa
 - **A red batch** (a conflict while cherry-picking, a failing check, a red CI run) blocks only until it is fixed: the package is fixed (its worker is resumed, and the batch rebuilt) or dropped from the batch and landed later. A failed CI job is rerun once (an engine shard can fail on a slow runner's timing) before the batch counts as red.
 - **After a batch where two packages edit the same user page** (or any shared doc), check that the later one did not overwrite the earlier's lines: a package built before the earlier one landed can carry a line's old text back onto `main` (the final review found a line of `docs/user/pages/lfo.md` reverted that way).
 - The controller merges a batch's pull request once CI is green, by rebase (`gh pr merge --rebase`), so `main` stays linear.
+
+## At a release
+
+The release pull request, besides the code's own version lines (`strata.lua`'s header and README.md name the release; a test checks them against CHANGELOG.md):
+- merges the changelog fragments into CHANGELOG.md under the new version and deletes them (`changes/README.md`);
+- adds the release's paragraph and its landing line to `docs/history.md`;
+- updates `docs/status.md` (its first section, the open items the release closed, the limits it moved) and AGENTS.md's "The current release is" line;
+- moves the release's row in `ROADMAP.md` from its section to the Shipped table, and removes the section;
+- adds the release's decisions as `docs/decisions/<release>.md`, with its line in `docs/decisions/README.md` (rulings keep the numbers code comments cite);
+- marks the lines of `docs/design/<release>-design.md` the build differs from ("amended <date>, as built"), since a shipped design is history and is not rewritten;
+- removes the release's plan from docs/superpowers/plans/: git history keeps it, CHANGELOG.md says what it built and the decisions file keeps its rulings.
 
 ## Merging and cleanup
 

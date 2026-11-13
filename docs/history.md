@@ -1,8 +1,12 @@
-## Must not break
+# Strata release history
 
-- Each release gets a short entry here (highlights only). CHANGELOG.md holds the full list and `docs/decisions.md` the decisions.
+Each release in a paragraph: what it added and how it was built. CHANGELOG.md has the full list of changes, docs/decisions/ the decisions and `ROADMAP.md` what comes next.
+
+## Keeping this file
+
+- Each release gets a short entry here (highlights only). CHANGELOG.md holds the full list and docs/decisions/ the decisions (`docs/decisions/README.md`, one file per release line).
 - Entries describe a release as it shipped. Do not rewrite old entries to today's names or layout.
-- The docs check reads this file (it covers every file under docs/notes/): every repo path it names in backticks must still exist, and every `engine.<name>(` must name a command the engine has. Name commands without `engine.` and parentheses (`setFilter`), and name a file that has since moved by its plain name.
+- The docs check reads this file (it is one of the maintained docs, `docs/notes/test-harness/run-and-helpers.md`): every repo path it names in backticks must still exist, and every `engine.<name>(` must name a command the engine has. Name commands without `engine.` and parentheses (`setFilter`), and name a file that has since moved by its plain name or its new path.
 - When an idea under Future extension points ships, strike it through and add the version.
 
 ## Future extension points
@@ -29,7 +33,7 @@
 - Undo/redo for parameter changes
 - ~~Parameter automation recording~~ ✓ Implemented (v3.4 - four gesture recorders, `lib/gestures.lua`)
 
-The agreed order of the next releases is `docs/design/3.1-3.6-roadmap.md`.
+The agreed order of the next releases is `ROADMAP.md`.
 
 ## Version 3.4.0 (2026-11-12)
 
@@ -43,13 +47,13 @@ Modulation and sequencing (design: `docs/design/3.4-design.md`, amended where th
 - Memory: every floor holds with six engine LFOs and scatter running; the stage's check limit 42 KB (`docs/notes/engine/memory.md`).
 - Tests: 1757 Lua tests; the engine check's modulation area; CI's Lua suites in two parallel jobs.
 
-Before the release, a whole-release review split by area filed #595-#641, each fixed in a fix wave of seven groups by file ownership; then the late fixes: `bufferState` reports numbered per load (#578, `(load × 9 + slot) × 1000 + seconds`, `bufferStateLoads`), the clock stub's instant as matron's tick (#588, #650), a send budget that counts exactly the messages reaching the engine with discrete switches outside it (#642, #644-#646, #649), morph crossings at most once per `MORPH.crossing_seconds` (#653), one side-file helper (`lib/side_files.lua`, #648) and the matrix's sends through `expected_value` (#647), the recorders' live file written soon after each change (#651), the engine check's areas independent of their order (#652) and the budget's flush clock ending at its own wake (#654). #211 (sclang's collector in the waveform area's 300 s check, about 1 run in 10 to 16 as measured at the release, on the 3.3 engine about as often as on 3.4's) is held. The decisions, with the rulings by number, are in `docs/decisions.md` (3.4).
+Before the release, a whole-release review split by area filed #595-#641, each fixed in a fix wave of seven groups by file ownership; then the late fixes: `bufferState` reports numbered per load (#578, `(load × 9 + slot) × 1000 + seconds`, `bufferStateLoads`), the clock stub's instant as matron's tick (#588, #650), a send budget that counts exactly the messages reaching the engine with discrete switches outside it (#642, #644-#646, #649), morph crossings at most once per `MORPH.crossing_seconds` (#653), one side-file helper (`lib/side_files.lua`, #648) and the matrix's sends through `expected_value` (#647), the recorders' live file written soon after each change (#651), the engine check's areas independent of their order (#652) and the budget's flush clock ending at its own wake (#654). #211 (sclang's collector in the waveform area's 300 s check, about 1 run in 10 to 16 as measured at the release, on the 3.3 engine about as often as on 3.4's) is held. The decisions, with the rulings by number, are in `docs/decisions/3.4.md`.
 
 See CHANGELOG.md and `docs/status.md`.
 
 ## Version 3.3.2 (2026-11-11)
 
-Page randomize (#557; design: `docs/superpowers/specs/2026-11-11-page-randomize-design.md`). ALT+K2 randomizes on MAIN, VOICE, SEQ, FX and LFO (the section under the cursor on VOICE, FX and LFO), acting on release (a quick press under 0.5 s; held past it, the page's hold action), with one undo for the whole script on the same key. SEQ's ALT+K2 randomizes and ALT+K3 clears; VOICE's and LFO's reset to default is ALT+K2 held. No engine file changed. See CHANGELOG.md and `docs/status.md`.
+Page randomize (#557; design: `docs/design/3.3.2-page-randomize-design.md`). ALT+K2 randomizes on MAIN, VOICE, SEQ, FX and LFO (the section under the cursor on VOICE, FX and LFO), acting on release (a quick press under 0.5 s; held past it, the page's hold action), with one undo for the whole script on the same key. SEQ's ALT+K2 randomizes and ALT+K3 clears; VOICE's and LFO's reset to default is ALT+K2 held. No engine file changed. See CHANGELOG.md and `docs/status.md`.
 
 ## Version 3.3.1 (2026-11-11)
 
@@ -67,7 +71,7 @@ Buffers as instruments (design: `docs/design/3.3-design.md`). 3.2's sound by def
 - Memory: floors of 3 MB standard and 3.5 MB high, the all-buffer and synth -> buffer -> synth worst cases, recordings in the check; a copy ring per voice for a frozen input (`docs/notes/engine/memory.md`).
 - Tests: 1189 Lua tests; the engine check has record, waveform and positions areas.
 
-Before the release, three rounds of fixes landed on main: an audit of the script's state handling (#232-#258, #295), with the invariants harness (`S.register_invariant`, checked after every unit test); an audit of the engine's state (#259-#262) and CI's job timeouts (#225); and a whole-project code review's 236 issues (#300-#535) and the issues its fixes filed (to #559), landed as reviewed packages in batches, one pull request per batch (`docs/process/agents.md`), with a final review and one fix wave. Their decisions are in `docs/decisions.md` (3.3).
+Before the release, three rounds of fixes landed on main: an audit of the script's state handling (#232-#258, #295), with the invariants harness (`S.register_invariant`, checked after every unit test); an audit of the engine's state (#259-#262) and CI's job timeouts (#225); and a whole-project code review's 236 issues (#300-#535) and the issues its fixes filed (to #559), landed as reviewed packages in batches, one pull request per batch (`docs/workflow.md`), with a final review and one fix wave. Their decisions are in `docs/decisions/3.3.md`.
 
 See CHANGELOG.md and `docs/status.md`.
 
@@ -195,3 +199,17 @@ Initial release with:
 - Scene system with disk persistence
 - Grid and arc integration
 - Pattern sequencer
+
+## How each release landed
+
+The pull requests and waves of each release, as `docs/status.md` recorded them until 3.4.0. A release adds its line.
+
+- 3.0 (sample and input sources, filter and delay, grain envelopes and triggered grains, LFOs, MIDI, paged screen) through PR #3, and CI through PR #4.
+- 3.0.1, the minor findings deferred from the 3.0 reviews, through PR #7.
+- 3.0.2, the fixes from a whole-codebase review of 3.0.1 (issues #10-#27), from a final review of those fixes (#46-#52) and #5, one pull request per issue (#28-#45, #53-#59, then the docs pull request that closes #52). CHANGELOG.md lists each fix with its pull request.
+- 3.1.0, playable from the norns alone (`docs/design/3.1-design.md`): Wave 0, the restructure for parallel work (#62-#79, fixing #67, #68, #72 and #73 on the way); Wave 1, the shared UI, grid and arc interfaces (#80-#90, #94, and #93 for #91); Wave 2, twelve page, grid and arc packages built in parallel (#95-#108); Wave 3, the docs pass (#110), the follow-ups (#111), the final-review fixes (#115) and the release.
+- 3.2.0, the performance setting and one grain path (`docs/design/3.2-design.md`): Wave 0, the engine split, the check per area and the Lua registries; Wave 1, the performance setting and the grain path; Wave 2, freeze, variation, loop regions, the voice mix and long buffers, built in parallel; Wave 3, one issue and pull request per remaining finding, the docs restructure and the release.
+- 3.3.0, buffers as instruments (`docs/design/3.3-design.md`): Wave 0, the engine surface, the Lua scaffolding and the per-voice mix stage; Wave 1, recording, waveforms and files, and positions, engine and Lua, built in parallel; Wave 2, the BUFFER page, its arc rings and the four grid layouts' position pages, with the fixes #199, #207-#210, #217, #218 and #221 on the way. Then three rounds of fixes: the state machine fixes (#232-#258, #295) with the invariants harness (`S.register_invariant`, every module's state invariant checked after every unit test); the engine state fixes (#259-#262) and CI's job timeouts (#225); and the whole-project review's fixes (#300-#559, 29 reviewed packages landed in batches, one pull request per batch, then a final review and its fix wave). Wave 3, the release.
+- 3.3.1, a fix release: a clock-synced recording follows a tempo change and starts on time while the engine is busy (#565, #567; `recordBuffer` gains a ninth argument, `sent`, so one norns restart), `buffers.data` written once per burst of changes, 0.1 s after the first (#566), the engine check's freeze precondition and default timeout (#569, #570), and the design docs for 3.4 and 3.6 (#229, #555).
+- 3.3.2, page randomize (#557): ALT+K2 randomizes on MAIN, VOICE, SEQ, FX and LFO (the section under the cursor on VOICE, FX and LFO), acting on release, with one undo on the same key; SEQ's keys swapped, VOICE's and LFO's reset moved to ALT+K2 held. No engine file changed. Also #575's check tooling (the 3.13 image's python3, the record check's sender timeout).
+- 3.4.0, modulation and sequencing (`docs/design/3.4-design.md`): Wave 0, the script's hooks, the scene format and the engine's modulation skeleton; Wave 1, the engine's fast modulation, the LFOs, scene banks and names, the sequencer, macros and scatter, gestures and quantized actions, the morph, the matrix, the input level and mute and solo, built in parallel and landed in three batches; Wave 2, the MOD page, SEQ's edit view and the step editor, and the grids; then the XY morph, a whole-release review split by area (#595-#641, each finding its own issue and fix, in a fix wave of seven groups), and, landed after the release branch was built, #578 (`bufferState` reports numbered per load, an engine change), #588 and #650 (the clock stub), #642 with #644-#646 (the send budget counts exactly what reaches the engine), #649 (its exception for discrete switches, documented), #653 (morph crossings at most once per 0.3 s), #647 and #648 (the matrix's sends, one side-file helper), #651 (the recorders' live file written soon after each change), #652 (the engine check's areas independent of their order) and #654 (the budget's flush clock); then the release. One new engine file and four changed, so one norns restart.

@@ -4,7 +4,7 @@
 - The handler lives on the vport only (`S.midi_device = midi.connect(port)`), never on the raw device. Cleanup detaches it (step 150), before the voices go off.
 - A note off goes to the voice its note on played (`S.midi_state.note_voice`), even if the omni selection moved since.
 - A note has one owning voice: `held[voice][note]` is set exactly when some channel's `note_voice[ch][note]` is that voice (the invariant `midi notes` checks it). A note on whose voice changed releases the previous voice first; a note off clears `held` only through `release_note_hold` (a local of the module's constructor, not a script global), which keeps it while another channel still maps the note to the voice.
-- After init, `S.selected_voice` changes only in `select_voice_by`, which calls `midi_bend_follow_selection`, so an omni bend follows the selection (the pages' `layout_states`, test setups, set it directly).
+- After init, `S.selected_voice` changes only in `select_voice_by`, which calls `midi_bend_follow_selection`, so an omni bend follows the selection (the pages' `layout_states`, test setups, set it directly). Callers reach it as `S.lib.ui_keys.select_voice_by` (`lib/ui/keys.lua`).
 - The `freq` controlspec has step 0, so notes keep exact equal-tempered pitch.
 - A quantized voice's note snaps to the scale before it sets `freq` or `buf_rate`; an unquantized voice's never does.
 - The selected vport's device is reconciled when the norns menu closes (`M.reconcile`, a `register_menu_close` hook). Only a change of device resets the held notes, never an ordinary menu visit: SYSTEM > DEVICES moves a device with `update_devices()` and calls neither `midi.add` nor `midi.remove`.

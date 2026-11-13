@@ -170,7 +170,7 @@ Order of voice changes (#46):
 
 So a recall sends at most one full sync per voice, after its params. An instant recall and a smooth transition (which ends in `recall_scene_instant`) both leave the engine with the Lua state of every running voice.
 
-A failed instant recall keeps the previous scene current (`docs/decisions.md`, 3.0.2), and a fade that does not land puts it back (#253, below). A failed `recall_scene_instant(scene_num, scene_data, current_if_failed)` never makes its scene current: it sets `S.current_scene` to `current_if_failed` when one is given (a fade's landing passes its `previous`; nil leaves the current scene as it is), then redraws the screen and grids once and raises its error, so they show the scene that is current and whatever was applied.
+A failed instant recall keeps the previous scene current (`docs/decisions/3.0.md`, 3.0.2), and a fade that does not land puts it back (#253, below). A failed `recall_scene_instant(scene_num, scene_data, current_if_failed)` never makes its scene current: it sets `S.current_scene` to `current_if_failed` when one is given (a fade's landing passes its `previous`; nil leaves the current scene as it is), then redraws the screen and grids once and raises its error, so they show the scene that is current and whatever was applied.
 
 ### Smooth transitions
 

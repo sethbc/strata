@@ -1,6 +1,7 @@
 ## Must not break
 
 - CI's LuaJIT is built without Lua 5.2 compatibility, so `table.unpack`, `table.pack`, `table.move`, `math.type`, `math.tointeger`, `utf8.*`, `string.pack` and `string.unpack` are nil there, though a local LuaJIT may have them. Never use them in `lib/`, `test/` or `strata.lua` without a fallback in the same expression (`table.unpack or unpack`). A static check in `test/unit/structure_test.lua` fails any other use (comments and strings are skipped).
+- No unguarded recursive delete, in code or in the shell commands you run. The code's rule (`h.remove_tree`, the engine check's own templates, the structure test) is under Temporary folders below. In your own commands, quote the path, fail on an empty variable and pass it after `--` (`rm -rf -- "${dir:?}"`), spell out an absolute prefix rather than a bare `$var/...`, and remove a worktree with `git worktree remove`, never `rm`.
 
 ## The Lua test run
 
@@ -42,9 +43,10 @@ The Wave 0 golden master (a logged scripted session compared with a fixture) pro
 ### Docs checks
 
 - AGENTS.md's command table under "Lua ↔ SuperCollider Communication" must have exactly one row per engine `addCommand`, with the same signature and argument count. Update the table in the same commit as the engine.
-- No `engine.<name>(` mentioned in the maintained docs may name a command the engine no longer has. The maintained docs are AGENTS.md, README.md, `docs/status.md`, `docs/decisions.md` and every `.md` under docs/notes/ (recursively), docs/user/ and docs/process/ (`maintained_docs` in `test/helpers.lua`).
+- AGENTS.md stays within its word budget (`AGENTS_WORD_LIMIT` in `test/unit/docs_test.lua`, 8,000 words as `wc -w` counts them, the number the file itself states): every agent loads all of it, so detail goes to the module's notes file and the rule keeps a line.
+- No `engine.<name>(` mentioned in the maintained docs may name a command the engine no longer has. The maintained docs are AGENTS.md, README.md, `ROADMAP.md`, every `.md` directly in docs/ (`docs/status.md`, `docs/checks.md`, `docs/workflow.md`, `docs/history.md`, and any added later) and every `.md` under docs/notes/, docs/user/ and docs/decisions/, recursively (`maintained_docs` in `test/helpers.lua`). CHANGELOG.md and docs/design/ are history and are not checked.
 - Every repo path the maintained docs name in backticks (under docs/, test/, .github/, lib/ and changes/, and the root files: an all-capitals `.md` name such as `README.md`, and `strata.lua`) must exist, from the repo root; a bare lowercase name such as `voice.md` is a page's and is not checked. A relative Markdown link target must exist relative to the doc's own folder (`doc_paths_missing(text, doc_name)`), and a link with an `#anchor` must name one of the target's headings, as GitHub makes its anchors (lowercase, punctuation but `-` and `_` dropped, spaces as `-`, a repeat numbered `-1`, `-2`; headings in code fences do not count) (#489). A norns library is named by its path in the norns repo (`lua/lib/lfo.lua`), which is not checked.
-- Every file in docs/notes/lua/ must have `## Must not break` as its first heading (headings inside code fences do not count).
+- Every file in docs/notes/lua/ and docs/notes/test-harness/, and `docs/notes/test-harness.md`, must have `## Must not break` as its first heading (headings inside code fences do not count).
 - Every changelog fragment in changes/ (`changes/README.md` aside) must hold an `### Added`, `### Changed` or `### Fixed` heading with a bullet under it.
 - Every docs/notes/engine/ file's first heading is `## Must not break` too; AGENTS.md names every engine notes file and `STRATA_ENGINE_CHECK_AREAS`; every engine check area has a notes file of the same name and a place in the runner's `areaOrder`, and every docs/notes/engine/ file has an area.
 - Every `docs/user/pages/` and `docs/user/grid/` file is linked from `docs/user/controls.md` or `docs/user/grid.md`.

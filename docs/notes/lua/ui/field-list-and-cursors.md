@@ -1,6 +1,7 @@
 ## Must not break
 
 - `S.cursors.voice` is a row index into `voice_page_rows(S.selected_voice)`, always on a selectable row once clamped. The rows change with the voice's source and with the selected voice, so `redraw()` and `arc_redraw()` start with `S.lib.ui_cursors.clamp_all()`. Code that reads the voice cursor outside a redraw (a ring turn, a key) calls `S.lib.ui_cursors.sync("voice")` (or the VOICE page's `sync_cursor()`, the same function) first, never `clamp_all()` alone: `clamp_all` only clamps the index and would lose the anchored param (a source change A → B → A must come back to the same param). Code that sets the cursor calls `S.lib.ui_cursors.place("voice", index)` or `move("voice", d)` (or the page's `place_cursor(index)`), never a bare assignment, which the next sync takes back. Only `move` and `place` set an anchor; `sync` and `clamp_all` never do.
+- A cursor another module moves goes through its owner: the VOICE cursor through `S.lib.ui_cursors`, the SCENES cursor through `S.lib.pages_scenes.move_cursor` (`docs/notes/lua/pages/scenes.md`), a row page's through `S.lib.ui_field_list`. A ring never reaches into a page's state.
 
 ## Cursors and VOICE rows
 

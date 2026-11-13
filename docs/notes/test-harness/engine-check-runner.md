@@ -41,7 +41,7 @@ Start-up (the check's own, `test/engine_check.scd`):
 - CI's engine shards also run the check with an unknown area and require its failure line without an `ERROR` line (#485). The record and waveform shard also runs it against a port a `scsynth` already holds (the failure line naming the port, and that server still running afterward, #471) and against a port held by a silent UDP socket (`scsynth did not boot` within 40 s, #472). A boot is ended by a watch on the server's pid: `waitForBoot`'s own limit and `onFailure` are not applied by sclang 3.13 or 3.14.1.
 
 Ports:
-- Each run boots scsynth on `$STRATA_SC_PORT` (default 57110). Runs on different ports (avoid 57120 and the few above it, used by sclang itself) can overlap; runs on the same port collide. `docs/status.md` (Running the checks) has the details.
+- Each run boots scsynth on `$STRATA_SC_PORT` (default 57110). Runs on different ports (avoid 57120 and the few above it, used by sclang itself) can overlap; runs on the same port collide. `docs/checks.md` (The engine check) has the details.
 
 Setup:
 - Needs SuperCollider: sclang is `$SCLANG` if set, else `sclang` on `PATH`, else the macOS app path.

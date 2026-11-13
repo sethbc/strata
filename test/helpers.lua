@@ -409,16 +409,20 @@ local function watch_writes(part, fail)
 end
 
 -- The maintained docs (paths from the repo root): AGENTS.md, README.md,
--- docs/status.md, docs/decisions.md, every .md file under docs/notes
--- (recursively), docs/user and docs/process. Their engine.<name>( mentions must name commands the engine
--- has, and the repo paths they name must exist. CHANGELOG.md and docs/design/ are history: they describe a release
--- as it was, so they are not held to today's commands and files
+-- ROADMAP.md, every .md file directly in docs/ (docs/status.md,
+-- docs/checks.md, docs/workflow.md, docs/history.md and any added later)
+-- and every .md file under docs/notes, docs/user and docs/decisions
+-- (recursively). Their engine.<name>( mentions must name commands the
+-- engine has, and the repo paths they name must exist. CHANGELOG.md and
+-- docs/design/ are history: they describe a release as it was, so they are
+-- not held to today's commands and files
 local function maintained_docs()
-  local docs = { "AGENTS.md", "README.md", "docs/status.md", "docs/decisions.md" }
+  local docs = { "AGENTS.md", "README.md", "ROADMAP.md" }
   local prefix = repo_root .. "/"
   local found = {}
-  for _, dir in ipairs({ "docs/notes", "docs/user", "docs/process" }) do
-    local listing = io.popen('find "' .. prefix .. dir .. '" -name "*.md" 2>/dev/null')
+  for _, dir in ipairs({ "docs", "docs/notes", "docs/user", "docs/decisions" }) do
+    local depth = dir == "docs" and "-maxdepth 1 " or ""
+    local listing = io.popen('find "' .. prefix .. dir .. '" ' .. depth .. '-name "*.md" 2>/dev/null')
     for path in listing:read("*a"):gmatch("[^\n]+") do
       if path:sub(1, #prefix) == prefix then table.insert(found, path:sub(#prefix + 1)) end
     end
