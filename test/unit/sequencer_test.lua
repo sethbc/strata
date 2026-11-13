@@ -2817,4 +2817,87 @@ test("after MIDI lets go of a voice, a chord's further notes never take its slot
   pattern_clock_stop()
 end)
 
+-- Ruling 35: a sequenced step never takes anything from another owner.
+-- While MIDI holds a voice's slot 1, the step's first note is only an
+-- extra note too: a free extra slot, or nothing
+
+-- MIDI's notes on voice 1 as {slot, key, pitch, parked}, in slot order
+local function midi_slots(S, voice_idx)
+  local list = {}
+  for _, used in ipairs(S.lib.notes.slots(voice_idx)) do
+    if used.owner == "midi" then table.insert(list, used.slot .. ":" .. used.key .. ":" .. used.pitch
+      .. (used.parked and ":parked" or "")) end
+  end
+  return table.concat(list, " ")
+end
+
+test("with MIDI on slot 1 at a note cap of 1, a noted step sends what a step without notes sends", function()
+  local function first_hit(notes)
+    local context, S = setup()
+    params:set("v1_note_cap", 1)
+    params:set("v1_seq_gate", 2)
+    assert_equal(midi_note(S, 1, 60), 1, "MIDI holds slot 1")
+    S.patterns[1][1] = 15
+    if notes then S.lib.sequencer.set_step_attr(1, 1, "notes", notes) end
+    context.clear_engine_calls()
+    pattern_clock_start()
+    local texts = call_texts(context)
+    local midi = midi_slots(S, 1)
+    local base = S.lib.engine_sync.engine_base_value("v1_freq")
+    pattern_clock_stop()
+    return texts, midi, base, params:get("v1_freq")
+  end
+  local plain = first_hit(nil)
+  local noted, midi, base, stored = first_hit({3})
+  assert_texts(noted, plain, "the gate and the retrigger, nothing more")
+  assert_equal(midi, "1:60:60", "MIDI's note keeps slot 1 and its pitch")
+  assert_near(base, stored, 1e-9, "no note override")
+end)
+
+test("a step's note never cuts another voice's MIDI note at a full pool", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  notes.set_pool(1)
+  assert_equal(midi_note(S, 2, 60), 1); assert_equal(midi_note(S, 2, 64), 2, "voice 2's MIDI extra note fills the pool")
+  assert_equal(midi_note(S, 1, 62), 1, "MIDI holds voice 1's slot 1")
+  context.set_time(util.time() + 0.1)  -- every note old enough to steal
+  for step = 1, 3 do S.patterns[1][step] = 15 end
+  for step = 1, 3 do seq.set_step_attr(1, step, "notes", {0}) end
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_equal(#context.calls_named("noteOff"), 0, "nothing cut")
+  assert_equal(notes.find(1, "seq", 1), nil, "the step's note refused")
+  assert_equal(midi_slots(S, 2), "1:60:60 2:64:64", "voice 2's MIDI notes stand")
+  assert_equal(midi_slots(S, 1), "1:62:62", "and voice 1's")
+  -- MIDI lets go of voice 1: the next step's note is the voice's own, and
+  -- the step after plays it again in place, reaching no steal either
+  notes.release(1, "midi", 62)
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_equal(notes.find(1, "seq", 1), 1, "step 2's note takes the free slot 1")
+  context.clock.advance_until(S.pattern_clocks[1])  -- 0.125 s on: step 2's note is old enough to steal
+  assert_equal(seq.sounding_step(1), 3, "step 3")
+  assert_equal(notes.find(1, "seq", 1), 1, "step 3's note plays slot 1 again (branch 1)")
+  assert_equal(#context.calls_named("noteOff"), 0, "nothing cut at any step")
+  assert_equal(midi_slots(S, 2), "1:60:60 2:64:64", "voice 2's MIDI notes stand")
+  pattern_clock_stop()
+end)
+
+test("a step's chord takes nothing in place from MIDI notes that fill the voice's cap", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  params:set("v1_note_cap", 3)
+  for index, number in ipairs({60, 64, 67}) do assert_equal(midi_note(S, 1, number), index) end
+  context.set_time(util.time() + 0.1)  -- every note old enough to steal
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "notes", {0, 4})
+  context.clear_engine_calls()
+  pattern_clock_start()
+  for _, name in ipairs({"noteOn", "noteOff", "noteExpression"}) do
+    assert_equal(#context.calls_named(name), 0, "no " .. name)
+  end
+  assert_equal(midi_slots(S, 1), "1:60:60 2:64:64 3:67:67", "MIDI's three notes stand, each at its pitch")
+  assert_equal(#retriggers_of(context, 0), 1, "the step's retrigger")
+  pattern_clock_stop()
+end)
+
 end
