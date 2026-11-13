@@ -603,10 +603,30 @@ var voiceNodesLeft = { arg target;
     synthNames.(target.context.xg).select({ arg name; engineVoiceDefs.includes(name) })
 };
 
+// Every note synth an engine's notes area tracks for a voice (3.5): each
+// extra slot's synth (live or releasing) and its cutting synth
+var noteSynthsTracked = { arg target, voice;
+    var slots = target.areaState[\notes] !? { arg state; state[\slots] !? { arg each; each[voice] } };
+    (slots ? []).reject(_.isNil).collect({ arg record; [record[\synth], record[\cutting]] }).flatten.reject(_.isNil)
+};
+
+// The extra slots a notes area still holds something in, as [voice, slot]
+// (a state but empty, a synth or a cutting synth)
+var noteRecordsLeft = { arg target;
+    var slots = target.areaState[\notes] !? { arg state; state[\slots] }, left = List.new;
+    (slots ? []).do({ arg records, voice;
+        records.do({ arg record, slot;
+            if ((slot > 0) and: { record.notNil } and: { (record[\state] ? \empty) != \empty
+                or: { record[\synth].notNil } or: { record[\cutting].notNil } }) { left.add([voice, slot]) };
+        });
+    });
+    left.asArray
+};
+
 // Stop every voice of an engine (h.engine by default) and put it back on its
-// synth source, then cut what still releases or fades (a mod synth, which
-// has no kill fade, is freed) and wait until none of its voice, grain or
-// mod synths is left. Each area ends with this.
+// synth source, then cut what still releases or fades, its note synths
+// included (a mod synth, which has no kill fade, is freed), and wait until
+// none of its voice, grain or mod synths is left. Each area ends with this.
 var stopAllVoices = { arg target;
     target = target ? engine;
     target.numVoices.do({ arg voice;
@@ -616,7 +636,7 @@ var stopAllVoices = { arg target;
     server.sync;
     target.numVoices.do({ arg voice;
         (target.releasingSynths[voice].values.asArray ++ target.fadingSynths[voice].asArray
-            ++ target.cuttingSynths[voice].asArray).do({ arg synth;
+            ++ target.cuttingSynths[voice].asArray ++ noteSynthsTracked.(target, voice)).do({ arg synth;
             if (synth.isPlaying) {
                 if (synth.defName.asSymbol == \strataMod) { target.sendToSynth(synth.freeMsg) } { target.cutSynth(synth) };
             };
@@ -689,10 +709,13 @@ var pollsMoved = {
 // does), every slot is empty
 var finishArea = { arg name, seconds;
     var left = voiceNodesLeft.(engine), keys = engine.synths.keys.reject({ arg key; engine.effectKeys.includes(key) });
+    var notes = noteRecordsLeft.(engine);
     var message = "%: leaves no voice, grain or mod synth running".format(name), moved = pollsMoved.value;
     if (left.notEmpty or: { keys.notEmpty }) { message = message ++ " (left: %, tracked: %)".format(left, keys) };
     check.(left.isEmpty and: { keys.isEmpty }, message);
-    if (left.notEmpty or: { keys.notEmpty }) { stopAllVoices.value };
+    // (3.5) every extra note slot empty: no note record left behind
+    check.(notes.isEmpty, "%: leaves no note in a slot%".format(name, if (notes.isEmpty) { "" } { " (voice and slot: %)".format(notes) }));
+    if (left.notEmpty or: { keys.notEmpty } or: { notes.notEmpty }) { stopAllVoices.value };
     check.(moved.isEmpty, "%: leaves h.engine's polls in norns' poll registry, the same objects at their indices, running as before%".format(
         name, if (moved.isEmpty) { "" } { " (moved: %)".format(moved) }));
     if (moved.notEmpty) { putBackPolls.(enginePolls) };
@@ -843,6 +866,8 @@ runChecks = {
             synthNames: { arg self, group; synthNames.(group) },
             synthTree: { arg self, group; synthNodes.(group) },
             voiceSynths: { arg self, voice; voiceTrio.(voice) },
+            // the voice's live extra note synths (3.5: the notes area's noteSynths)
+            noteSynths: { arg self, voice; engine.tryPerform(\noteSynths, voice) ? [] },
             controlFeedsAUGen: { arg self, defName, controlName; controlFeedsAUGen.(defName, controlName) },
             // a poll's values so far, oldest first (an Array of just those,
             // copied from its List's room for pollListCapacity)

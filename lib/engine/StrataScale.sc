@@ -48,13 +48,27 @@
         ^note
     }
 
+    // The scaleNote of a buffer voice's note playing its slot at rate (3.5):
+    // Lua's reference note plus the semitones of that rate, as scaleNoteFor
+    // gives the own note's from its bufRate
+    noteScaleNote { arg voice, rate;
+        ^areaState[\scale][\notes][voice] + rate.max(0.001).ratiomidi
+    }
+
     // Keep and send a voice's scaleNote (scaleNoteFor), so a replacement
     // grain synth starts with it. Lua resends scaleNote after every source
-    // switch, which recomputes it for the new source
+    // switch, which recomputes it for the new source. A buffer voice's
+    // extra notes each get their own (noteScaleNote of their rate); an input
+    // voice's take the voice's
     sendScaleNote { arg voice;
-        var note = this.scaleNoteFor(voice);
+        var note = this.scaleNoteFor(voice), notes = this.noteSynths(voice, \grain);
         grainControls[voice][\scaleNote] = note;
         this.setSynth(this.grainKey(voice), \scaleNote, note);
+        if (notes.notEmpty) {
+            this.sendToSynth(*this.extraNoteRecords.select({ arg record; notes.includes(record[\synth]) }).collect({ arg record;
+                record[\synth].setMsg(\scaleNote, if (record[\kind] == \buffer) { this.noteScaleNote(voice, record[\rate]) } { note })
+            }));
+        };
     }
 
     // 12 frames, one per pitch class (0 = C): the semitones from that pitch

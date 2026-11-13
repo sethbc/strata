@@ -6,6 +6,7 @@
 + Engine_Strata {
     // The positions area (order 150). t_scanReset is handled here so nothing
     // stores it: a replacement grain synth never starts with a stale trigger.
+    // It reaches the voice's extra notes too (setGrainSynths).
     // scrubRate and scanHold are plain grain controls, stored and sent, so a
     // switch mid-glide keeps gliding.
     strataAreaPositions {
@@ -13,7 +14,7 @@
             order: 150,
             grainParamHandlers: (
                 t_scanReset: { arg voice, value;
-                    this.setSynth(this.grainKey(voice), \t_scanReset, value);
+                    this.setGrainSynths(voice, \t_scanReset, value);
                     true
                 }
             )

@@ -2,9 +2,11 @@
 // The notes area (3.5): each voice's eight note slots (slot 0 the voice's
 // own note, 1-7 extra notes from a pool all voices share) and the four note
 // commands. Lua allocates the slots and owns every value; the engine holds
-// the bounds. Until the note lifecycle lands the commands are checked
-// stubs: each validates its arguments, clips the continuous ones, records
-// them and does nothing else. See docs/notes/engine/notes.md.
+// the bounds: a slot never holds two live synths, and live and releasing
+// extra notes never exceed the pool. An extra note is a synth of its own in
+// its slot: a buffer or input voice's a grain synth at the head of the
+// voice's mix group, with its own pitch. Voice-wide sends reach a voice's
+// notes through setGrainSynths. See docs/notes/engine/notes.md.
 
 + Engine_Strata {
     // Note slots per voice: 0 the voice's own note, 1-7 its extra notes. Lua's
@@ -18,24 +20,322 @@
     // The lag (s) of every per-note control, smoothing Lua's 48 Hz steps
     noteLag { ^0.02 }
 
-    // The notes area (order 170)
+    // The notes area (order 170): the last in alloc's order, the first in
+    // free's, so its stop frees the note synths before the voices' groups go
     strataAreaNotes {
         ^(
             order: 170,
             allocState: { this.allocNoteState },
-            addCommands: { this.addNoteCommands }
+            addCommands: { this.addNoteCommands },
+            stop: { this.stopNotes }
         )
     }
 
     // areaState[\notes]: pool (how many extra notes the pool holds: 0 until
-    // Lua sends setNotePool), slots (per voice an Array of noteSlots places,
-    // nil while empty) and received (what each command last took, for the
-    // engine check)
+    // Lua sends setNotePool), slots (per voice an Array of noteSlots records:
+    // slot 0's its kept expression and parked flag, each extra slot's
+    // emptyNoteRecord), order (a counter: each started note and each cut
+    // takes the next number, so the oldest is the lowest) and received (what
+    // each command last took, for the engine check)
     allocNoteState {
         var state = areaState[\notes];
         state[\pool] = 0;
-        state[\slots] = numVoices.collect({ Array.newClear(this.noteSlots) });
+        state[\order] = 0;
+        state[\slots] = numVoices.collect({ this.noteSlots.collect({ arg slot; this.emptyNoteRecord(slot) }) });
         state[\received] = IdentityDictionary.new;
+    }
+
+    // A note's expression at rest: no bend, unit gain, no offsets
+    neutralNoteExpression { ^(bend: 1, amp: 1, position: 0, size: 0, main: 0) }
+
+    // A slot as alloc leaves it. Slot 0 (the own note, whose synths are the
+    // voice's): its kept expression and whether it is parked. An extra slot:
+    // its state (\empty, \live, \releasing), its synth (live or releasing),
+    // its cutting synth (in its kill fade), its kind (\buffer, \input: what
+    // its synth is), its last noteOn's note, freq, rate and velocity, its
+    // kept expression, and the order it started at and its cutting synth's
+    emptyNoteRecord { arg slot;
+        if (slot == 0) { ^(expression: this.neutralNoteExpression, parked: false) };
+        ^(state: \empty, synth: nil, cutting: nil, kind: nil, note: 60, freq: 440, rate: 1, velocity: 1,
+            expression: this.neutralNoteExpression, order: 0, cutOrder: 0)
+    }
+
+    noteRecord { arg voice, slot; ^areaState[\notes][\slots][voice][slot] }
+
+    // The next order number (oldest lowest)
+    nextNoteOrder {
+        var state = areaState[\notes];
+        state[\order] = state[\order] + 1;
+        ^state[\order]
+    }
+
+    // Every extra slot's record, of every voice
+    extraNoteRecords {
+        ^areaState[\notes][\slots].collect({ arg slots; slots.copyToEnd(1) }).flatten
+    }
+
+    // The live extra note synths of a voice (of one kind: \grain for every
+    // grain synth note; nil for all)
+    noteSynths { arg voice, kind;
+        if (this.validVoice(voice).not) { ^[] };
+        ^areaState[\notes][\slots][voice].copyToEnd(1).select({ arg record;
+            (record[\state] == \live) and: { record[\synth].notNil }
+                and: { kind.isNil or: { (kind == \grain) and: { this.grainNoteKinds.includes(record[\kind]) } } or: { record[\kind] == kind } }
+        }).collect({ arg record; record[\synth] })
+    }
+
+    // The kinds of note whose synth is a grain synth
+    grainNoteKinds { ^#[\buffer, \input] }
+
+    // Live and releasing extra notes, across every voice: what the pool bounds
+    heldNoteCount {
+        ^this.extraNoteRecords.count({ arg record; (record[\state] == \live) or: { record[\state] == \releasing } })
+    }
+
+    // Extra note synths in their kill fade, across every voice
+    cuttingNoteRecords {
+        ^this.extraNoteRecords.select({ arg record; record[\cutting].notNil })
+    }
+
+    // What the voice's next extra note is: a grain synth of its buffer slot
+    // or of the input
+    noteKindFor { arg voice;
+        var source = grainSource[voice];
+        if (source == this.inputSource) { ^\input };
+        if (source.inclusivelyBetween(1, numBuffers)) { ^\buffer };
+        ^nil
+    }
+
+    // A note's pitch as its synth's controls: a buffer note's rate as its
+    // bufRate with a scaleNote of its own, an input note's as its pitchShift
+    notePitchPairs { arg voice, record;
+        ^switch (record[\kind])
+        { \buffer } { [\bufRate, record[\rate], \scaleNote, this.noteScaleNote(voice, record[\rate])] }
+        { \input } { [\pitchShift, record[\rate]] }
+        { [] }
+    }
+
+    // A note's accent at its velocity (a grain synth's t_accent)
+    noteAccentPairs { arg record;
+        ^[\velocity, record[\velocity], \t_accent, 1]
+    }
+
+    // A note's expression as its synth's controls (a grain synth's: bend,
+    // amp, position and size; main is a voice synth's)
+    noteExpressionPairs { arg kind, expression;
+        ^[\noteBend, expression[\bend], \noteAmp, expression[\amp], \notePos, expression[\position], \noteSize, expression[\size]]
+    }
+
+    // The controls only one note's synth takes, never a voice-wide send's
+    // (design 3.5 §3.2): the note controls, its velocity and accent, and the
+    // control that is its pitch: a buffer note's bufRate and scaleNote, an
+    // input note's pitchShift
+    perNoteGrainControls { arg voice;
+        var names = [\noteGate, \noteBend, \noteAmp, \notePos, \noteSize, \noteRate, \velocity, \t_accent];
+        if (grainSource[voice] == this.inputSource) { ^names ++ [\pitchShift] };
+        if (grainSource[voice].inclusivelyBetween(1, numBuffers)) { ^names ++ [\bufRate, \scaleNote] };
+        ^names
+    }
+
+    // A voice-wide grain send: the own grain synth (setSynth) and every live
+    // extra grain note of the voice (sendToSynth), the latter without the
+    // per-note names
+    setGrainSynths { arg voice ... pairs;
+        var notePairs, notes;
+        this.setSynth(this.grainKey(voice), *pairs);
+        notes = this.noteSynths(voice, \grain);
+        if (notes.notEmpty) {
+            notePairs = this.pairsWithout(pairs, this.perNoteGrainControls(voice));
+            if (notePairs.notEmpty) { this.sendToSynth(*notes.collect({ arg synth; synth.setMsg(*notePairs) })) };
+        };
+    }
+
+    // Start the slot's note (its record holds the noteOn's values): its
+    // synth, watched as a note's (watchNoteSynth). A buffer or input voice's
+    // note is a grain synth for the voice's source at the head of its mix
+    // group (startGrainSynth: the voice's grain controls, then the note's
+    // pitch, accent, park open and expression, last so they win). Placement
+    // is never relative to another note's synth
+    startNoteSynth { arg voice, slot;
+        var record = this.noteRecord(voice, slot), kind = this.noteKindFor(voice);
+        record[\kind] = kind;
+        ^this.startGrainSynth(voice, this.voiceMixGroup(voice), \addToHead,
+            this.notePitchPairs(voice, record) ++ this.noteAccentPairs(record) ++ [\noteGate, 1]
+                ++ this.noteExpressionPairs(kind, record[\expression]),
+            { arg synth; this.watchNoteSynth(voice, slot, synth) })
+    }
+
+    // Watch a note's synth until it frees: its start counts once the server
+    // confirms it (watchStart, as a voice's synths), and when it frees its
+    // slot empties (or its cutting entry clears) and it leaves the readers;
+    // nothing restarts it (never watchVoiceSynth's restart rule)
+    watchNoteSynth { arg voice, slot, synth;
+        this.watchStart(synth);
+        synth.onFree({
+            var record = this.noteRecord(voice, slot);
+            this.forgetGrainReader(synth);
+            if (record[\synth] === synth) { record[\synth] = nil; record[\state] = \empty };
+            if (record[\cutting] === synth) { record[\cutting] = nil };
+        });
+        ^synth
+    }
+
+    // A slot's synths whose start the server never confirmed past
+    // startConfirmWait are forgotten as an /n_end would have them forgotten
+    // (endFailedStart runs their onFree, which empties the slot), so the
+    // slot's command meets it as it is: a failed start frees its slot
+    forgetFailedNoteStarts { arg record;
+        [record[\synth], record[\cutting]].do({ arg synth;
+            if (synth.notNil and: { this.startFailed(synth) }) { this.endFailedStart(synth) };
+        });
+    }
+
+    // Free a slot's cutting synth at once (one may have ended its fade on the
+    // server already: sendToSynth)
+    freeNoteCutting { arg record;
+        var synth = record[\cutting];
+        if (synth.notNil) {
+            if (synth.isPlaying) { this.sendToSynth(synth.freeMsg) };
+            record[\cutting] = nil;
+        };
+    }
+
+    // Cut a slot's note (live or releasing) in the kill fade: it becomes the
+    // slot's cutting synth and the slot empties. An earlier cutting synth of
+    // the slot is freed at once, and so is the oldest cutting note synth
+    // anywhere when cutting synths would pass the pool, so they never
+    // exceed one per slot nor the pool in all
+    cutNote { arg voice, slot;
+        var record = this.noteRecord(voice, slot), synth = record[\synth];
+        record[\synth] = nil;
+        record[\state] = \empty;
+        if (synth.isNil or: { synth.isPlaying.not }) { ^this };
+        this.freeNoteCutting(record);
+        this.cutSynth(synth);
+        record[\cutting] = synth;
+        record[\cutOrder] = this.nextNoteOrder;
+        this.trimCuttingNotes(areaState[\notes][\pool]);
+    }
+
+    // Free the oldest cutting note synths until at most `most` are left
+    trimCuttingNotes { arg most;
+        var cutting = this.cuttingNoteRecords.sort({ arg a, b; a[\cutOrder] < b[\cutOrder] });
+        (cutting.size - most.max(0)).do({ arg index; this.freeNoteCutting(cutting[index]) });
+    }
+
+    // Release a live note: its synth's gate 0, the slot releasing until the
+    // synth frees after its release
+    releaseNote { arg voice, slot;
+        var record = this.noteRecord(voice, slot);
+        if (record[\state] != \live) { ^this };
+        this.sendToSynth(record[\synth].setMsg(\gate, 0));
+        record[\state] = \releasing;
+    }
+
+    // Room in the pool for one more extra note: when live and releasing
+    // notes already number it, the oldest releasing one anywhere is cut.
+    // false when none is releasing (a full pool of live notes: Lua never
+    // sends that)
+    makeNoteRoom {
+        var releasing;
+        if (this.heldNoteCount < areaState[\notes][\pool]) { ^true };
+        releasing = this.extraNoteRecords.select({ arg record; record[\state] == \releasing });
+        if (releasing.isEmpty) { ^false };
+        releasing = releasing.minItem({ arg record; record[\order] });
+        this.cutNote(*this.noteVoiceAndSlot(releasing));
+        ^this.heldNoteCount < areaState[\notes][\pool]
+    }
+
+    // [voice, slot] of an extra slot's record
+    noteVoiceAndSlot { arg record;
+        areaState[\notes][\slots].do({ arg slots, voice;
+            slots.do({ arg each, slot; if (each === record) { ^[voice, slot] } });
+        });
+        ^nil
+    }
+
+    // Start the slot's note if the pool has room, else refuse it with one line
+    startNote { arg voice, slot;
+        var record = this.noteRecord(voice, slot);
+        if (this.makeNoteRoom.not) {
+            this.postFastModIgnored(\noteOn, "the pool of % is full of live notes".format(areaState[\notes][\pool]));
+            ^this
+        };
+        record[\order] = this.nextNoteOrder;
+        record[\synth] = this.startNoteSynth(voice, slot);
+        record[\state] = \live;
+    }
+
+    // noteOn on an extra slot (design 3.5 §3.4): on a live slot the pitch is
+    // set on its synth and its accent fired (no node); a releasing slot's
+    // tail is cut and a new synth starts; an empty slot starts one. A
+    // stopped voice takes no extra note (Lua never sends one): ignored with
+    // one line
+    extraNoteOn { arg voice, slot, note, freq, rate, velocity;
+        var record = this.noteRecord(voice, slot);
+        this.forgetFailedNoteStarts(record);
+        if (this.voiceRunning(voice).not) {
+            ^this.postFastModIgnored(\noteOn, "voice % is stopped".format(voice))
+        };
+        if (this.noteKindFor(voice).isNil) {
+            ^this.postFastModIgnored(\noteOn, "voice % plays no extra note on its source yet".format(voice))
+        };
+        record[\note] = note;
+        record[\freq] = freq;
+        record[\rate] = rate;
+        record[\velocity] = velocity;
+        switch (record[\state])
+        { \live } {
+            this.sendToSynth(record[\synth].setMsg(*(this.notePitchPairs(voice, record) ++ this.noteAccentPairs(record))));
+        }
+        { \releasing } {
+            this.cutNote(voice, slot);
+            this.startNote(voice, slot);
+        }
+        { this.startNote(voice, slot) };
+    }
+
+    // noteOff on an extra slot: cut 0 releases a live note, cut 1 cuts a live
+    // or releasing one; an empty slot does nothing
+    extraNoteOff { arg voice, slot, cut;
+        var record = this.noteRecord(voice, slot);
+        this.forgetFailedNoteStarts(record);
+        if (record[\synth].isNil) { ^this };
+        if (cut == 1) { this.cutNote(voice, slot) } { this.releaseNote(voice, slot) };
+    }
+
+    // noteExpression on an extra slot: kept for the slot (a later noteOn
+    // starts with it) and set on its synth, live or releasing
+    extraNoteExpression { arg voice, slot, expression;
+        var record = this.noteRecord(voice, slot);
+        record[\expression] = expression;
+        if (record[\synth].notNil) {
+            this.sendToSynth(record[\synth].setMsg(*this.noteExpressionPairs(record[\kind], expression)));
+        };
+    }
+
+    // The pool, 0..notePoolMax; notes past a smaller one are cut (the
+    // oldest releasing first, then the oldest live), and cutting note synths
+    // past it are freed
+    setNotePool { arg size;
+        var held;
+        areaState[\notes][\pool] = size;
+        while { this.heldNoteCount > size } {
+            held = this.extraNoteRecords.select({ arg record; record[\state] == \releasing });
+            if (held.isEmpty) { held = this.extraNoteRecords.select({ arg record; record[\state] == \live }) };
+            this.cutNote(*this.noteVoiceAndSlot(held.minItem({ arg record; record[\order] })));
+        };
+        this.trimCuttingNotes(size);
+    }
+
+    // The area's stop: every note synth freed (quietly) and every slot as
+    // alloc left it, before the voices' groups go
+    stopNotes {
+        var slots = areaState[\notes][\slots];
+        slots.do({ arg records; records.copyToEnd(1).do({ arg record;
+            [record[\synth], record[\cutting]].do({ arg synth; if (synth.notNil and: { synth.isPlaying }) { this.sendToSynth(synth.freeMsg) } });
+        }) });
+        areaState[\notes][\slots] = numVoices.collect({ this.noteSlots.collect({ arg slot; this.emptyNoteRecord(slot) }) });
     }
 
     // What a command took, for the engine check
@@ -48,10 +348,9 @@
     // commands do and through the same checks (fastModIndicesValid and
     // fastModValuesFinite, StrataModulation.sc: a bad one of either is
     // ignored with one line, and the command does nothing), clips the
-    // continuous arguments only then and records what it took. The Lua
+    // continuous arguments only then, records what it took and acts. The Lua
     // engine stub reads the clips (name = msg[i].clip(...)) as its limits,
-    // and its index limits from noteSlots and notePoolMax. They create no
-    // node; setNotePool keeps the size.
+    // and its index limits from noteSlots and notePoolMax.
     addNoteCommands {
         var lastVoice = numVoices - 1, lastSlot = this.noteSlots - 1;
 
@@ -63,6 +362,7 @@
                 and: { this.fastModValuesFinite(\noteOn, [[\note, msg[3]], [\freq, msg[4]], [\rate, msg[5]], [\velocity, msg[6]]]) }) {
                 note = msg[3].clip(0, 127); freq = msg[4].clip(8, 20000); rate = msg[5].clip(0.25, 4); velocity = msg[6].clip(0, 1);
                 this.receiveNote(\noteOn, [voice, slot, note, freq, rate, velocity]);
+                if (slot > 0) { this.extraNoteOn(voice, slot, note, freq, rate, velocity) };
             };
         });
 
@@ -71,6 +371,7 @@
             var voice = msg[1], slot = msg[2], cut = msg[3];
             if (this.fastModIndicesValid(\noteOff, [[\voice, voice, lastVoice], [\slot, slot, lastSlot], [\cut, cut, 1]])) {
                 this.receiveNote(\noteOff, [voice, slot, cut]);
+                if (slot > 0) { this.extraNoteOff(voice, slot, cut) };
             };
         });
 
@@ -84,6 +385,9 @@
                 bend = msg[3].clip(0.0625, 16); amp = msg[4].clip(0, 2);
                 position = msg[5].clip(-1, 1); size = msg[6].clip(-1, 1); main = msg[7].clip(-1, 1);
                 this.receiveNote(\noteExpression, [voice, slot, bend, amp, position, size, main]);
+                if (slot > 0) {
+                    this.extraNoteExpression(voice, slot, (bend: bend, amp: amp, position: position, size: size, main: main));
+                };
             };
         });
 
@@ -91,8 +395,8 @@
         this.addCommand(\setNotePool, "i", { arg msg;
             var size = msg[1];
             if (this.fastModIndicesValid(\setNotePool, [[\size, size, this.notePoolMax]])) {
-                areaState[\notes][\pool] = size;
                 this.receiveNote(\setNotePool, [size]);
+                this.setNotePool(size);
             };
         });
     }
