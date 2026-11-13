@@ -172,7 +172,7 @@
             if (this.validVoice(voice) and: { this.validSource(source) }
                 and: { source != grainSource[voice] }) {
                 grainSource[voice] = source;
-                if (this.voiceRunning(voice)) { this.replaceGrainSynth(voice) };
+                if (this.voiceRunning(voice)) { this.areaCall(\replaceGrainSynth, voice) };
             };
         });
 
