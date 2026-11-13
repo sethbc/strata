@@ -177,16 +177,21 @@ test("3.5 end to end: a zone learn, an MPE chord on a buffer voice, a switch, a 
     params:set("v1_zone", 1)  -- off: only voice 3's learned range routes the lower zone
     params:set("v3_zone", 2)  -- lower
     show_page("SETUP")
-    S.lib.ui_zones.open()
+    enc(2, -20)                   -- SETUP's rows from the top, to mpe & zones
+    while S.lib.pages_setup.setup_rows()[S.setup_cursor].label ~= "mpe & zones" do enc(2, 1) end
+    tap(3)                        -- K3 opens the zones editor
+    assert_true(S.lib.ui_zones.is_open(), name .. ": SETUP's K3 opened the editor")
     enc(2, 5)                     -- the rows: lower members, upper members, bend range, v1, v2, v3
     key(1, 1); tap(3); key(1, 0)  -- ALT+K3 learns the row's voice
     assert_equal(S.lib.ui_zones.learning(), 3, name .. ": learn waits for voice 3's notes")
+    assert_equal(local_value("note_tap"), S.lib.ui_zones.note, name .. ": the editor's note is MIDI's note tap")
     context.clear_engine_calls()
     note_on(2, 72); note_on(3, 60)
     note_off(2, 72); note_off(3, 60)
     assert_equal(params:get("v3_zone_low"), 60, name .. ": the lower note is the lowest")
     assert_equal(params:get("v3_zone_high"), 72, name .. ": the higher the highest")
     assert_equal(S.lib.ui_zones.learning(), nil, name .. ": learn ends")
+    assert_equal(local_value("note_tap"), nil, name .. ": and MIDI's note tap is cleared")
     assert_equal(#context.engine_calls, 0, name .. ": neither learned note sends anything")
     for voice = 1, S.constants.NUM_VOICES do
       assert_equal(notes.held(voice), 0, name .. ": voice " .. voice .. " holds no note")
@@ -226,10 +231,10 @@ test("3.5 end to end: a zone learn, an MPE chord on a buffer voice, a switch, a 
       name .. ": the own note starts the stopped voice, then its expression, then the accent")
     local rate_set = setgrain_index("bufRate")
     assert_true(rate_set ~= nil and rate_set < first_index("voiceOn"), name .. ": its rate goes with the start (ruling 6)")
-    -- the own note's rate is the v3_buf_rate param's, which steps in 0.01
-    -- (3.4's spec): note 62 within half a step of 2 ^ (2 / 12)
+    -- the own note's rate is the v3_buf_rate param's, exact since its step
+    -- is 0 (#679: 3.4's 0.01 step played note 62 at 1.12)
     assert_equal(context.engine_calls[rate_set].args[3], params:get("v3_buf_rate"), name .. ": the param's rate")
-    assert_near(context.engine_calls[rate_set].args[3], 2 ^ (2 / 12), 0.005, name .. ": note 62's rate")
+    assert_near(context.engine_calls[rate_set].args[3], 2 ^ (2 / 12), 1e-9, name .. ": note 62 plays at 2 ^ (2 / 12)")
     expression_is(calls_for(context, "noteExpression", 2, 0)[1], 2 ^ 0.5, 2, name .. ": the own note's first expression (b)")
     assert_near(calls_for(context, "retrigger", 2)[1][2], velocity, 1e-9, name .. ": accented at the note's velocity")
     context.clear_engine_calls()
