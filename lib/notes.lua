@@ -300,15 +300,23 @@ return function(S)
 
   -- Ruling 39: a running voice with no held note never keeps its own note
   -- parked. When a release, a steal or a freeze's cuts end a voice's last
-  -- held note under its parked own note, the own note returns at once, at
-  -- the voice's pitch and with no accent (velocity 0), and its record goes:
-  -- the voice sounds on as its drone, nobody's note
+  -- held note under its parked own note, the own note returns at once,
+  -- neutral (a noteExpression of the neutral values first, when the
+  -- engine's for slot 0 is not neutral: the lifted finger's bend or amp
+  -- never carries into the drone), at the voice's pitch and with no accent
+  -- (velocity 0), and its record goes: the voice sounds on as its drone,
+  -- nobody's note
   local function unpark_alone(voice, now)
     local own = slots[voice][1]
     if not (own and own.parked and S.voices[voice].active) or M.held(voice) > 0 then return end
+    local messages = 1
+    if not same_expression(sent[voice][1], NOTES.neutral) then
+      send_expression(voice, 1, NOTES.neutral)
+      messages = 2
+    end
     local values = M.note_values(voice, own_pitch(voice))
     engine.noteOn(voice - 1, 0, values.note, values.freq, values.rate, 0)
-    count(1)
+    count(messages)
     forget(own, now)
   end
 
