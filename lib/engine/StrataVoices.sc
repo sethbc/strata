@@ -99,6 +99,9 @@
                 grainControls[voice].putAll(Dictionary[
                     \grainSize -> msg[5], \grainDensity -> msg[6], \pitchShift -> msg[7]
                 ]);
+                // the own note unparked at the neutral expression (the notes
+                // area's), which the synths gateVoice re-gates or starts take
+                this.resetOwnNote(voice);
 
                 // Re-gates the synths the voice still has (running or
                 // releasing) and starts the missing ones; never stacks. The
