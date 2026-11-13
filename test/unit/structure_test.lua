@@ -1446,6 +1446,21 @@ end)
 -- holding only the tools it needs.
 local RUNNER_TOOLS = { "dirname", "mktemp", "cp", "mkdir", "uname", "cat", "grep", "sleep", "rm", "ps", "awk", "date" }
 
+-- Whether the process numbered pid is still running after up to `seconds`
+-- of waiting for its end, polled every 0.1 s (#673): a signaled process
+-- ends a moment after kill returns, and a zombie (ended, not yet reaped:
+-- kill -0 still finds it) has ended
+local function still_running(pid, seconds)
+  if pid == nil or pid:match("^%d+$") == nil then return false end
+  local pipe = io.popen("n=0; while kill -0 " .. pid .. " 2>/dev/null; do"
+    .. " case $(ps -o stat= -p " .. pid .. " 2>/dev/null) in *Z*) break ;; esac;"
+    .. " [ $n -ge " .. math.ceil(seconds * 10) .. " ] && { echo running; exit 0; };"
+    .. " sleep 0.1; n=$((n + 1)); done; echo ended")
+  local verdict = pipe:read("*l")
+  pipe:close()
+  return verdict == "running"
+end
+
 local function run_runner_without_tools(case, timeout)
   local shell_quote, root = h.shell_quote, data_root .. "runner-" .. case
   os.execute("mkdir -p " .. shell_quote(root .. "/bin") .. " " .. shell_quote(root .. "/norns/sc/core"))
@@ -1511,14 +1526,12 @@ local function run_runner_without_tools(case, timeout)
   local pid_file = io.open(root .. "/fake.pid", "r")
   local pid = pid_file and pid_file:read("*l")
   if pid_file then pid_file:close() end
-  local alive = pid ~= nil and pid:match("^%d+$") ~= nil and os.execute("kill -0 " .. pid .. " 2>/dev/null")
-  alive = alive == true or alive == 0
+  local alive = still_running(pid, 10)
   if alive then os.execute("kill " .. pid .. " 2>/dev/null") end
   local sclang_file = io.open(root .. "/sclang.pid", "r")
   local sclang_pid = sclang_file and sclang_file:read("*l")
   if sclang_file then sclang_file:close() end
-  local sclang_alive = sclang_pid ~= nil and sclang_pid:match("^%d+$") ~= nil and os.execute("kill -0 " .. sclang_pid .. " 2>/dev/null")
-  sclang_alive = sclang_alive == true or sclang_alive == 0
+  local sclang_alive = still_running(sclang_pid, 10)
   if sclang_alive then os.execute("kill " .. sclang_pid .. " 2>/dev/null") end
   h.remove_tree(root)
   return output, pid, alive, leftover_folders, sclang_alive
@@ -1529,6 +1542,27 @@ test("the engine check runner stops sclang's scsynth without pgrep or timeout (#
   assert_true(pid ~= nil, "the fake sclang started its server: " .. output)
   assert_true(output:find("sclang reported a compile error", 1, true) ~= nil, "the runner stopped sclang: " .. output)
   assert_true(not alive, "the server sclang started is stopped with it")
+end)
+
+-- #673: a signaled process ends a moment after kill returns, and stays a
+-- zombie (kill -0 still finds it) until its parent or init reaps it, so the
+-- runner tests wait for its end, with a bound, and count a zombie as ended
+test("the runner tests wait for a process's end and count a zombie as ended (#673)", function()
+  local function started(command)
+    local pipe = io.popen(command)
+    local pid = pipe:read("*l")
+    pipe:close()
+    assert_true(pid ~= nil and pid:match("^%d+$") ~= nil, "started: " .. command)
+    return pid
+  end
+  local ending = started("sleep 1 > /dev/null 2>&1 & echo $!")
+  assert_true(not still_running(ending, 10), "a process that ends a second later is waited for")
+  -- sleep 0's parent becomes sleep 3, which never reaps it
+  local zombie = started("sh -c 'sleep 0 > /dev/null 2>&1 & echo $!; exec sleep 3 > /dev/null 2>&1' &")
+  assert_true(not still_running(zombie, 10), "a zombie has ended")
+  local running = started("sleep 5 > /dev/null 2>&1 & echo $!")
+  assert_true(still_running(running, 0.5), "a process that outlives the bound is still running")
+  os.execute("kill " .. running .. " 2>/dev/null")
 end)
 
 -- 1 s timeout: without a timeout command the runner's own loop stops it
