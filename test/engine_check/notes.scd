@@ -22,6 +22,7 @@ var startSynthVoice, checkSynthNote, checkSynthChord, checkVoiceFanOut, checkExp
 var levelProbe, checkPark, checkVoiceCommands, checkPoolFull, checkPoolRandom, checkPoolShrink, checkCuttingBound;
 var heldCount, cuttingCount;
 var checkSourceSwitch, checkBufferLoad, checkInputFreeze;
+var checkFrozenNotes, checkSpectralNotes;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -896,6 +897,122 @@ checkInputFreeze = {
     h.stopAllVoices;
 };
 
+// A frozen synth voice (3, Sub, frozen on hold) plays its notes as streams
+// of its frozen ring: an extra note is a \strataGrainRing of the voice's own
+// ring at the head of processGroup, writing its synth path (rateLevel and
+// pan 0, the freeze on), at noteRate the note's rate. Slot 0's noteOn sets
+// the own grain synth's noteRate and fires its accent; its noteOff parks the
+// own grain synth, the synth that sounds a frozen voice's own note. The
+// unfreeze, in its bundle: every ring-stream note cut, each live one
+// restarted as a voice synth at its kept freq (a releasing one not), the own
+// grain synth's noteRate back to 1 and its park open, and a parked own
+// note's park on the voice synth again
+checkFrozenNotes = {
+    var voice = 3, ring = engine.ringBuffersFor(voice, 0), grainRingName = "\\strataGrainRing";
+    var own, ownVoice, note, nodes, bundle, streams, restarted, parkedOn, ok;
+    startSynthVoice.(voice);
+    command.(\setNotePool, 8);
+    server.sync; 0.2.wait;
+    command.(\setGrainParam, voice, \freeze, 1.0);
+    server.sync;
+    own = ownGrain.(voice);
+    ownVoice = engine.synths[engine.voiceKey(voice)];
+    playNote.(voice, 1, 1.5, 1.0, 330.0);
+    server.sync;
+    note = slotSynth.(voice, 1);
+    nodes = h.synthTree(engine.processGroup);
+    check.(note.notNil and: { slotRecord.(voice, 1)[\kind] == \stream } and: { nodes.first.notNil } and: { nodes.first[\id] == note.nodeID }
+        and: { nodes.first[\def] == \strataGrainRing } and: { near.(nodes.first[\controls][\noteRate], 1.5) }
+        and: { nodes.first[\controls][\bufL] == ring[0].bufnum } and: { nodes.first[\controls][\phaseBus] == ring[2].index }
+        and: { nodes.first[\controls][\out] == engine.voicePathBus(voice, 0).index } and: { nodes.first[\controls][\rateLevel] == 0 }
+        and: { nodes.first[\controls][\pan] == 0 } and: { nodes.first[\controls][\freeze] == 1 } and: { engine.ringReaders[note] == voice }
+        and: { near.(controlOf.(own, \noteRate), 1) },
+        "notes: on a frozen synth voice a note is a % of the voice's ring at the head of processGroup, at noteRate (first node %)".format(
+            grainRingName, nodes.first !? { arg node; [node[\def], node[\controls][\noteRate], node[\controls][\bufL], node[\controls][\out]] }));
+
+    bundle = server.makeBundle(false, { command.(\noteOn, voice, 0, 62.0, 123.0, 1.25, 0.9) });
+    server.sendBundle(nil, *bundle);
+    server.sync;
+    check.(near.(sentValue.(bundle, own, \noteRate), 1.25) and: { sentValue.(bundle, own, \t_accent) == 1 }
+        and: { near.(sentValue.(bundle, own, \velocity), 0.9) } and: { near.(controlOf.(own, \noteRate), 1.25) },
+        "notes: noteOn on slot 0 of a frozen synth voice sets the own grain synth's noteRate and fires its accent (sent %)".format(
+            sentSets.(bundle, own)));
+
+    command.(\noteOff, voice, 0, 0);
+    server.sync;
+    parkedOn = [controlOf.(own, \noteGate), controlOf.(ownVoice, \noteGate)];
+    check.((parkedOn == [0, 1]) and: { slotRecord.(voice, 0)[\parked] },
+        "notes: slot 0 of a frozen synth voice parks on its grain synth ([grain synth, voice synth] noteGate: %)".format(parkedOn));
+
+    playNote.(voice, 2, 0.75, 1.0, 165.0);
+    playNote.(voice, 3, 1.0, 1.0, 220.0);
+    command.(\noteOff, voice, 3, 0);
+    server.sync;
+    streams = (1 .. 3).collect({ arg slot; slotSynth.(voice, slot) });
+    bundle = server.makeBundle(false, { command.(\setGrainParam, voice, \freeze, 0.0) });
+    restarted = [1, 2].collect({ arg slot; slotSynth.(voice, slot) });
+    server.sendBundle(nil, *bundle);
+    server.sync;
+    ok = streams.every({ arg synth; synth.notNil and: { sentValue.(bundle, synth, \kill) == 1 } })
+        and: { restarted.every({ arg synth; synth.notNil and: { streams.includes(synth).not }
+            and: { bundle.any({ arg msg; (msg[0] == 9) and: { msg[2] == synth.nodeID } and: { msg[1].asSymbol == engine.voiceSynthDefs[voice] } }) } }) }
+        and: { [1, 2].every({ arg slot; slotRecord.(voice, slot)[\kind] == \voice }) } and: { slotState.(voice, 3) == \empty }
+        and: { near.(controlOf.(restarted[0], \freq), 330) } and: { near.(controlOf.(restarted[1], \freq), 165) }
+        and: { near.(sentValue.(bundle, own, \noteRate), 1) } and: { sentValue.(bundle, own, \noteGate) == 1 }
+        and: { sentValue.(bundle, ownVoice, \noteGate) == 0 } and: { near.(controlOf.(own, \noteRate), 1) }
+        and: { controlOf.(ownVoice, \noteGate) == 0 } and: { controlOf.(own, \freeze) == 0 };
+    check.(ok,
+        "notes: an unfreeze cuts the ring-stream notes, restarts the held ones as voice synths at their freq, and returns noteRate to 1, in the unfreeze's bundle (restarted kinds %, freqs %, own grain noteRate % noteGate %, own voice synth noteGate %)".format(
+            [1, 2].collect({ arg slot; slotRecord.(voice, slot)[\kind] }), restarted.collect({ arg synth; controlOf.(synth, \freq) }),
+            controlOf.(own, \noteRate), controlOf.(own, \noteGate), controlOf.(ownVoice, \noteGate)));
+    h.stopAllVoices;
+};
+
+// Spectral freeze (the high tier, an engine of its own): a frozen synth
+// voice's spectral writer holds its ring, and a note played on it is a
+// ring-stream note like a hold's; with the own note parked (on its grain
+// synth) the voice's synth path still carries the note's stream of the
+// frozen sound. The voice (4, Pulse) plays 2.2 s first, so its ring holds
+// sound
+checkSpectralNotes = {
+    var root = h.tempDir +/+ "notes-high/", write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
+    var other, to, voice = 4, note, writer, probe, bus, level, kind;
+    File.mkdir(root);
+    write.(root +/+ "performance.data", "performance high\nbuffer_seconds 16\n");
+    write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
+    write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
+    other = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
+    to = { arg name ... args; h.commandTo(other, name, *args) };
+    to.(\setGrainSource, voice, 0);
+    to.(\voiceOn, voice, 110.0, 0.4, 0.0, 0.1, 20.0, 1.0);
+    to.(\setNotePool, 8);
+    server.sync; 2.2.wait;
+    to.(\setGrainParam, voice, \freezeMode, 1.0);
+    to.(\setGrainParam, voice, \freeze, 1.0);
+    server.sync; 0.3.wait;
+    to.(\noteExpression, voice, 1, *neutralExpression);
+    to.(\noteOn, voice, 1, 67.0, 165.0, 1.5, 1.0);
+    to.(\noteOff, voice, 0, 0);
+    server.sync;
+    note = other.areaState[\notes][\slots][voice][1][\synth];
+    kind = other.areaState[\notes][\slots][voice][1][\kind];
+    writer = other.ringWriterFor(voice);
+    2.4.wait;   // the own grain synth's park closes over the grain release
+    bus = Bus.control(server, 1);
+    probe = Synth(\strataCheckPeak, [\in, other.voicePathBus(voice, 0), \out, bus], other.processGroup, \addToTail);
+    server.sync;
+    level = h.measure(probe, bus, 0.5)[0];
+    probe.free; bus.free;
+    check.((other.tier == \high) and: { writer.notNil } and: { writer.defName.asSymbol == \strataRingWriteSpectral }
+        and: { kind == \stream } and: { note.notNil } and: { note.defName.asSymbol == \strataGrainRing }
+        and: { near.(controlOf.(note, \noteRate), 1.5) } and: { level > 0.001 },
+        "notes: spectral freeze plays ring-stream notes too (tier %, ring writer %, note %, kind %, the synth path's level with the own note parked %)".format(
+            other.tier, writer !? { writer.defName }, note !? { note.defName }, kind, level));
+    h.stopAllVoices(other);
+    h.freeEngine(other);
+    server.sync;
+};
+
 if (area.isNil or: { state.isNil }) {
     check.(false, "notes: the area runs at order 170 (no strataAreaNotes)");
 } {
@@ -932,6 +1049,10 @@ if (area.isNil or: { state.isNil }) {
     checkSourceSwitch.value;
     checkBufferLoad.value;
     checkInputFreeze.value;
+    h.stopAllVoices;
+    // frozen synth voices
+    checkFrozenNotes.value;
+    checkSpectralNotes.value;
     h.stopAllVoices;
     // the pool as the area found it: none
     command.(\setNotePool, 0);
