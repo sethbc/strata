@@ -1060,7 +1060,7 @@ end)
 -- The engine areas and their orders (the 3.2 design, §0)
 local ENGINE_AREAS = { performance = 10, voices = 20, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70,
   scale = 80, variation = 90, loop = 100, freeze = 110, mix = 120, record = 130, waveform = 140, positions = 150,
-  modulation = 160 }
+  modulation = 160, notes = 170 }
 
 test("every engine file is named Strata*.sc and defines each strataArea method once", function()
   local files, areas, orders = engine_files(), {}, {}

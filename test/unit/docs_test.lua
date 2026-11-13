@@ -1006,7 +1006,7 @@ end
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
   "effects", "mix", "performance", "rings", "freeze", "variation", "loops", "record", "waveform", "positions", "modulation",
-  "soak" }
+  "notes", "soak" }
 
 -- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them
 -- (its onDemandAreas: the soak, #131), as a set
@@ -1942,6 +1942,18 @@ test("the engine's fast-modulation half ranges equal the Lua specs", function()
   local cutoff = params:lookup_param("v1_filter_freq").controlspec
   assert_near(factor * factor / (cutoff.maxval / cutoff.minval), 1, 0.001,
     "fastModCutoffFactor squared against v1_filter_freq's max over min")
+end)
+
+-- 3.5's notes (design §1): a voice's eight note slots and the pool of extra
+-- notes all voices share, the same numbers on both sides (StrataNotes.sc's
+-- noteSlots and notePoolMax, lib/constants.lua's NOTE_SLOTS and NOTE_POOL.max)
+test("the engine's note constants equal the script's", function()
+  load_strata()
+  assert_equal(engine_spec.note_slots, 8, "noteSlots (StrataNotes.sc)")
+  assert_equal(engine_spec.note_pool_max, 16, "notePoolMax (StrataNotes.sc)")
+  assert_equal(engine_spec.note_slots, local_value("NOTE_SLOTS"), "noteSlots = NOTE_SLOTS")
+  local pool = local_value("NOTE_POOL")
+  assert_equal(engine_spec.note_pool_max, pool and pool.max, "notePoolMax = NOTE_POOL.max")
 end)
 
 end

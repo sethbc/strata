@@ -246,6 +246,8 @@ end
 --   num_fast_lfo_shapes       slots per voice, engine LFOs and LFO shapes
 --                             (each number is read as `var <name = N;`, with
 --                             any of < and >, or as a method `name { ^N }`)
+--   note_slots,               noteSlots { ^N }, notePoolMax { ^N }: 3.5's note
+--   note_pool_max             slots per voice and the pool's largest size
 --   input_source              inputSource { ^numBuffers + N }
 --   synthdef_controls[def]    the SynthDef's `arg a, b=1, ...;` (or |...|) names
 --   synthdef_defaults[def]    its arguments' numeric defaults (b = 1)
@@ -420,6 +422,9 @@ function stubs.engine_spec_from_source(source)
     fast_mod_note_slots = engine_number(source, "fastModNoteSlots"),
     num_fast_lfos = engine_number(source, "numFastLfos"),
     num_fast_lfo_shapes = engine_number(source, "numFastLfoShapes"),
+    -- 3.5's notes (StrataNotes.sc)
+    note_slots = engine_number(source, "noteSlots"),
+    note_pool_max = engine_number(source, "notePoolMax"),
     synthdef_controls = {},
     synthdef_defaults = {},
     control_limits = {},
@@ -563,6 +568,8 @@ function stubs.engine_spec_problems(spec)
   need(spec.fast_mod_note_slots, "fastModNoteSlots { ^N }")
   need(spec.num_fast_lfos, "numFastLfos { ^N }")
   need(spec.num_fast_lfo_shapes, "numFastLfoShapes { ^N }")
+  need(spec.note_slots, "noteSlots { ^N }")
+  need(spec.note_pool_max, "notePoolMax { ^N }")
   need(spec.input_source, "inputSource { ^numBuffers + N }")
   need(#spec.voice_synthdefs > 0, "voiceSynthDefs = [...]")
   need(next(spec.grain_params), "the grain SynthDefs (grainDefs: [predicate -> \\name, ...])")
@@ -634,6 +641,7 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
   local function voice(args) return range("voice", args[1], 0, last_voice) end
   local function slot(args) return range("slot", args[1], 0, spec.num_buffers - 1) end
   local function voice_and_mod_slot(args) return voice(args) or range("mod slot", args[2], 1, spec.mod_slots) end
+  local function note_slot(args) return voice(args) or range("slot", args[2], 0, spec.note_slots - 1) end
   local function named_param(args, accepted, what)
     if spec.engine_controls[args[2]] then
       return string.format("param \"%s\" is a control the engine sets itself, which it refuses (#458)", args[2])
@@ -703,6 +711,14 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
       return voice(args) or range("note slot", args[2], 0, spec.fast_mod_note_slots - 1)
         or range("destination", args[3], 0, spec.num_fast_destinations - 1)
     end,
+    -- 3.5's notes (design §3.1), each index as the engine checks it, an
+    -- out-of-range one ignored there: a voice's slot 0..noteSlots-1,
+    -- noteOff's cut 0 or 1, the pool 0..notePoolMax. The continuous
+    -- arguments are the engine's clips (argument_limits: note, freq, rate,
+    -- velocity, bend, amp, position, size, main)
+    noteOn = note_slot, noteExpression = note_slot,
+    noteOff = function(args) return note_slot(args) or range("cut", args[3], 0, 1) end,
+    setNotePool = function(args) return range("size", args[1], 0, spec.note_pool_max) end,
   }
   for command, check in pairs(checks) do
     checks[command] = function(args) return check(args) or continuous(command, args) end

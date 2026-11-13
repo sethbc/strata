@@ -80,6 +80,8 @@ jobs:
   # structure 4, performance 3: 1030 s in all, and at most about 153 s a shard (effects and
   # voices; 163 s for memory and modulation before this split), far under each shard's 570 s.
   # memory runs first in its shard (areaOrder), so CI's memory figures are the area's alone.
+  # 3.5's notes area (about 1.5 s while its four commands are stubs) joins the lightest shard
+  # but record and waveform's, which stays those two alone (#211's rerun, below).
   # Since #652 the areas no longer depend on each other's order, so the grouping is a
   # choice for the times alone; files and structure share no shard only because this
   # layout is as balanced as any that pairs them.
@@ -104,7 +106,7 @@ jobs:
       matrix:
         areas:
           - buffers,loops
-          - lifecycle,files,positions
+          - lifecycle,files,positions,notes
           - effects,voices
           - mix,variation,grains,structure,performance
           - modulation,freeze
