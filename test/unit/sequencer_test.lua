@@ -2396,10 +2396,30 @@ local function note_starts(context)
   return starts, repeats
 end
 
--- A note MIDI holds on voice: its own note when nothing else holds the voice
+-- MIDI's key for note number on voice_idx's channel (per voice): channel * 128 + note
+local function held_key(voice_idx, number) return voice_idx * 128 + number end
+
+-- A note MIDI holds on voice, its key down (ruling 55: only a key down keeps
+-- slot 1 from a step), in MIDI's key state as a note on leaves it: its own
+-- note when nothing else holds the voice
 local function midi_note(S, voice_idx, number)
-  return S.lib.notes.play(voice_idx, {owner = "midi", key = number, pitch = number, velocity = 0.5, park = true,
+  local key = held_key(voice_idx, number)
+  S.midi_state.held[voice_idx][key] = true
+  S.midi_state.note_voice[voice_idx] = S.midi_state.note_voice[voice_idx] or {}
+  S.midi_state.note_voice[voice_idx][number] = {voice_idx}
+  return S.lib.notes.play(voice_idx, {owner = "midi", key = key, pitch = number, velocity = 0.5, park = true,
     set_own = function() end})
+end
+
+-- That key lifted in release mode: its note released (the own note parks
+-- under others), the key gone from MIDI's state
+local function midi_release(S, voice_idx, number)
+  local key = held_key(voice_idx, number)
+  S.midi_state.held[voice_idx][key] = nil
+  local channel_notes = S.midi_state.note_voice[voice_idx]
+  channel_notes[number] = nil
+  if next(channel_notes) == nil then S.midi_state.note_voice[voice_idx] = nil end
+  return S.lib.notes.release(voice_idx, "midi", key)
 end
 
 test("a step's chord plays its first note as the override and the rest as extra notes", function()
@@ -2693,7 +2713,7 @@ test("a chord on a voice MIDI holds plays wholly as extra notes", function()
   assert_near(ons[1].args[3], pitch, 1e-9, "the first on the voice's pitch")
   assert_near(ons[2].args[3], pitch + 4, 1e-9, "the second four semitones up")
   assert_equal(notes.find(1, "seq", 1), 2, "the first note in an extra slot")
-  assert_equal(notes.find(1, "midi", 60), 1, "MIDI keeps slot 1")
+  assert_equal(notes.find(1, "midi", held_key(1, 60)), 1, "MIDI keeps slot 1")
   assert_equal(last_sent(context, "setVoiceParam", 0, "freq"), nil, "no freq override")
   assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), freq, 1e-9, "the stored freq")
   assert_equal(#retriggers_of(context, 0), 1, "the voice's retrigger")
@@ -2814,7 +2834,7 @@ test("after MIDI lets go of a voice, a chord's further notes never take its slot
   local started_at = util.time()
   pattern_clock_start()
   assert_equal(notes.find(1, "seq", 1), 2, "the step's first note in an extra slot")
-  notes.release(1, "midi", 60)
+  midi_release(S, 1, 60)
   assert_equal(notes.slots(1)[1].parked, true, "MIDI's own note parks under the chord")
   -- step 2's two hits (0.125 s and 0.1875 s), then step 3 (0.25 s)
   for _, hit in ipairs({{"step 2", 0.15}, {"step 2's second hit", 0.2}, {"step 3", 0.28}}) do
@@ -2836,11 +2856,11 @@ end)
 -- While MIDI holds a voice's slot 1, the step's first note is only an
 -- extra note too: a free extra slot, or nothing
 
--- MIDI's notes on voice 1 as {slot, key, pitch, parked}, in slot order
+-- MIDI's notes on voice 1 as {slot, note (its key's), pitch, parked}, in slot order
 local function midi_slots(S, voice_idx)
   local list = {}
   for _, used in ipairs(S.lib.notes.slots(voice_idx)) do
-    if used.owner == "midi" then table.insert(list, used.slot .. ":" .. used.key .. ":" .. used.pitch
+    if used.owner == "midi" then table.insert(list, used.slot .. ":" .. used.key % 128 .. ":" .. used.pitch
       .. (used.parked and ":parked" or "")) end
   end
   return table.concat(list, " ")
@@ -2886,7 +2906,7 @@ test("a step's note never cuts another voice's MIDI note at a full pool", functi
   assert_equal(midi_slots(S, 1), "1:62:62", "and voice 1's")
   -- MIDI lets go of voice 1: the next step's note is the voice's own, and
   -- the step after plays it again in place, reaching no steal either
-  notes.release(1, "midi", 62)
+  midi_release(S, 1, 62)
   context.clock.advance_until(S.pattern_clocks[1])
   assert_equal(notes.find(1, "seq", 1), 1, "step 2's note takes the free slot 1")
   context.clock.advance_until(S.pattern_clocks[1])  -- 0.125 s on: step 2's note is old enough to steal
@@ -2912,6 +2932,134 @@ test("a step's chord takes nothing in place from MIDI notes that fill the voice'
   end
   assert_equal(midi_slots(S, 1), "1:60:60 2:64:64 3:67:67", "MIDI's three notes stand, each at its pitch")
   assert_equal(#retriggers_of(context, 0), 1, "the step's retrigger")
+  pattern_clock_stop()
+end)
+
+-- Ruling 55 (refining ruling 35): only a key physically down keeps the
+-- voice's own note from the sequencer. Real MIDI on channel 1 (per voice,
+-- note off auto: latch on a plain keyboard), so MIDI's key is 1 * 128 + note
+
+local function midi_on(context, note) context.midi.send(1, {type = "note_on", note = note, vel = 100, ch = 1}) end
+local function midi_off(context, note) context.midi.send(1, {type = "note_off", note = note, vel = 0, ch = 1}) end
+local function midi_key(note) return 128 + note end
+
+-- Every invariant holds now (the allocator's and MIDI's among them)
+local function assert_invariants(what)
+  local broken = h.check_invariants()
+  assert_equal(#broken, 0, what .. ": every invariant holds (" .. table.concat(broken, "; ") .. ")")
+end
+
+-- 3.4's case: a latched MIDI note, then a pattern on the voice. At a note
+-- cap of 1 and at a pool of 0 every step plays, on the voice's own note, as
+-- 3.4's did: the step's note override and the retrigger, nothing else; MIDI
+-- forgets its note, sending nothing
+test("a latched MIDI note gives way to a pattern's steps at a note cap of 1 and a pool of 0 (ruling 55)", function()
+  for _, case in ipairs({
+      {"a note cap of 1", function() params:set("v1_note_cap", 1) end},
+      {"a pool of 0", function(S) S.lib.notes.set_pool(0) end}}) do
+    local context, S = setup()
+    local seq, notes = S.lib.sequencer, S.lib.notes
+    context.midi.plug(1, "keys")
+    case[2](S)
+    midi_on(context, 60); midi_off(context, 60)  -- latched: the key is up, the note sounds on
+    assert_equal(notes.find(1, "midi", midi_key(60)), 1, case[1] .. ": MIDI's latched note holds slot 1")
+    local stored = params:get("v1_freq")
+    for step, semitones in ipairs({3, 5, 7}) do
+      S.patterns[1][step] = 15
+      seq.set_step_attr(1, step, "notes", {semitones})
+    end
+    context.clear_engine_calls()
+    pattern_clock_start()
+    for step, semitones in ipairs({3, 5, 7}) do
+      local what = case[1] .. ", step " .. step
+      if step > 1 then
+        context.clear_engine_calls()
+        context.clock.advance_until(S.pattern_clocks[1])
+      end
+      assert_equal(seq.sounding_step(1), step, what .. ": played")
+      assert_equal(notes.find(1, "seq", 1), 1, what .. ": the step's note is the voice's own")
+      assert_equal(notes.find(1, "midi", midi_key(60)), nil, what .. ": MIDI's latched note is forgotten")
+      assert_near(last_sent(context, "setVoiceParam", 0, "freq"), stored * 2 ^ (semitones / 12), 1e-6,
+        what .. ": its note override")
+      assert_equal(#retriggers_of(context, 0), 1, what .. ": one retrigger")
+      for _, name in ipairs({"noteOn", "noteOff", "noteExpression", "voiceOff"}) do
+        assert_equal(#context.calls_named(name), 0, what .. ": no " .. name)
+      end
+      assert_invariants(what)
+    end
+    pattern_clock_stop()
+  end
+end)
+
+-- A key held down through the steps keeps slot 1 (ruling 35 stands for
+-- it): at a note cap of 1 the step's note is refused, at 8 it is an extra
+-- note; lifted (latched) it gives way at the next step, where the step's
+-- note leaves its extra slot for slot 1 (the reviewer's minor 1: it stayed
+-- an extra note over the own note's drone)
+test("a MIDI key held down keeps the voice's own note from the steps, and once lifted gives way at the next step", function()
+  for _, cap in ipairs({1, 8}) do
+    local context, S = setup()
+    local seq, notes = S.lib.sequencer, S.lib.notes
+    context.midi.plug(1, "keys")
+    params:set("v1_note_cap", cap)
+    local what = "note cap " .. cap
+    midi_on(context, 60)  -- held
+    local stored = params:get("v1_freq")
+    for step = 1, 2 do
+      S.patterns[1][step] = 15
+      seq.set_step_attr(1, step, "notes", {3})
+    end
+    context.clear_engine_calls()
+    pattern_clock_start()
+    assert_equal(notes.find(1, "midi", midi_key(60)), 1, what .. ": the held key keeps slot 1")
+    if cap == 1 then
+      assert_equal(notes.find(1, "seq", 1), nil, what .. ": the step's note refused")
+    else
+      assert_equal(notes.find(1, "seq", 1), 2, what .. ": the step's note an extra note")
+    end
+    assert_equal(last_sent(context, "setVoiceParam", 0, "freq"), nil, what .. ": no note override")
+    assert_invariants(what .. ", step 1")
+    midi_off(context, 60)  -- latched
+    context.clear_engine_calls()
+    context.clock.advance_until(S.pattern_clocks[1])
+    assert_equal(seq.sounding_step(1), 2, what .. ": step 2 played")
+    assert_equal(notes.find(1, "seq", 1), 1, what .. ": step 2's note is the voice's own")
+    assert_equal(notes.find(1, "midi", midi_key(60)), nil, what .. ": MIDI forgot its latched note")
+    assert_near(last_sent(context, "setVoiceParam", 0, "freq"), stored * 2 ^ (3 / 12), 1e-6, what .. ": the note override")
+    local offs = context.calls_named("noteOff")
+    if cap == 1 then
+      assert_equal(#offs, 0, what .. ": nothing to release")
+    else
+      assert_equal(#offs, 1, what .. ": the step's extra note released")
+      assert_equal(call_text(offs[1]), "noteOff(0, 1, 0)", what .. ": its slot, released")
+    end
+    assert_equal(notes.held(1), 1, what .. ": the own note alone")
+    assert_invariants(what .. ", step 2")
+    pattern_clock_stop()
+  end
+end)
+
+-- The reviewer's minor 2: MIDI taking slot 1 from a step's note (branch 6,
+-- the voice's cap full) plays MIDI's pitch at once, not the step's note
+-- override until the next step
+test("a MIDI note that takes the voice's own note from a step ends the step's note override", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  context.midi.plug(1, "keys")
+  params:set("v1_note_cap", 1)
+  params:set("v1_freq", 440)
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "notes", {3})
+  pattern_clock_start()
+  assert_equal(notes.find(1, "seq", 1), 1, "the step holds slot 1")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), 440 * 2 ^ (3 / 12), 1e-6, "at its note override")
+  context.clear_engine_calls()
+  midi_on(context, 62)
+  assert_equal(notes.find(1, "midi", midi_key(62)), 1, "MIDI took slot 1")
+  local midi_freq = 440 * 2 ^ ((62 - 69) / 12)
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), midi_freq, 1e-6, "the voice plays MIDI's note")
+  assert_near(last_sent(context, "setVoiceParam", 0, "freq"), midi_freq, 1e-6, "sent to the engine")
+  assert_invariants("after MIDI's note")
   pattern_clock_stop()
 end)
 

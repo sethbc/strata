@@ -521,6 +521,21 @@ return function(S)
     end
   end
 
+  -- Ruling 55: forget_owner's way for one held note of owner and key: an
+  -- extra note is released (noteOff), the own note dropped from the records
+  -- with nothing sent (it sounds on as nobody's). true when a note went
+  function M.forget(voice, owner, key)
+    local slot = M.find(voice, owner, key)
+    if not slot then return false end
+    if slot > 1 then
+      release_slot(voice, slot)
+    else
+      forget(slots[voice][1], util.time())
+      held_changed()
+    end
+    return true
+  end
+
   -- Forget every note of voice, parked included, sending nothing: for a
   -- voice the engine has stopped (voiceOff ends all its notes)
   function M.release_all(voice)

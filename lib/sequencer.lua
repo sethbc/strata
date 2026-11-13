@@ -441,10 +441,13 @@ return function(S)
   end
 
   -- Whether another owner (MIDI) holds the voice's slot 1: a held note,
-  -- not parked, whose owner is not the sequencer
+  -- not parked, whose owner is not the sequencer, and (ruling 55) whose key
+  -- is down: MIDI forgets a latched own note here, which then gives way
   local function other_owns_slot_1(voice_idx)
     for _, used in ipairs(S.lib.notes.slots(voice_idx)) do
-      if used.slot == 1 then return used.held and not used.parked and used.owner ~= SEQ.note_owner end
+      if used.slot == 1 then
+        return used.held and not used.parked and used.owner ~= SEQ.note_owner and S.lib.midi_in.keeps_own(voice_idx)
+      end
     end
     return false
   end
@@ -467,6 +470,46 @@ return function(S)
         overrides[voice_idx] = overrides[voice_idx] or {}
         overrides[voice_idx][chord.note_id] = true
       end}
+  end
+
+  -- The reviewer's minor 1 (ruling 55): the step's first note held in an
+  -- extra slot while slot 1 holds no note (MIDI let go of it: a latched
+  -- note given way, or a reset) is released there, so the step's note is
+  -- the voice's own again rather than an extra note over the own note's
+  -- drone. A parked own note is left: it is silent, the extra note plays on
+  local function leave_extra_slot(voice_idx)
+    local first = S.lib.notes.slots(voice_idx)[1]
+    local slot = S.lib.notes.find(voice_idx, SEQ.note_owner, 1)
+    if slot and slot > 1 and not (first and first.slot == 1) then S.lib.notes.release(voice_idx, SEQ.note_owner, 1) end
+  end
+
+  -- The step's first note is not the voice's own (an extra note, none, or
+  -- MIDI took it): the note param keeps the step's lock on it, or goes back
+  -- to its stored value
+  local function end_note_override(voice_idx, note_id, lock_value)
+    if lock_value ~= nil then
+      set_override(voice_idx, note_id, lock_value)
+    elseif overrides[voice_idx] and overrides[voice_idx][note_id] then
+      clear_override(voice_idx, note_id)
+    end
+  end
+
+  -- The reviewer's minor 2: a MIDI note took the voice's own note from the
+  -- step's (branch 6: the voice's cap or the pool full; lib/midi_in.lua
+  -- calls this when its note lands on slot 1). The step's note override
+  -- ends at once, as for a first note that is not the voice's own, so MIDI's
+  -- pitch plays now rather than at the next step. Nothing when the step's
+  -- first note was not the voice's own or still is
+  function M.own_note_taken(voice_idx)
+    local chord = valid_voice(voice_idx) and chords[voice_idx]
+    if not (chord and chord.own) or S.lib.notes.find(voice_idx, SEQ.note_owner, 1) == 1 then return end
+    chord.own = false
+    end_note_override(voice_idx, chord.note_id, chord.lock_value)
+    local held = overrides[voice_idx]
+    if held and chord.lock_value == nil then
+      held[chord.note_id] = nil
+      if next(held) == nil then overrides[voice_idx] = nil end
+    end
   end
 
   -- A step's first hit on a voice: the locks, the bookmark and the note, as
@@ -505,13 +548,14 @@ return function(S)
     end
     chords[voice_idx] = chord
     local own = note_id and not other_owns_slot_1(voice_idx)
-    if note_id and S.lib.notes.play(voice_idx, chord_note(voice_idx, chord, 1, event.velocity, own)) ~= 1 then
-      -- an extra note, or none: the param keeps its lock, or goes back to its stored value
-      wanted[note_id] = lock_value
-      if lock_value ~= nil then
-        set_override(voice_idx, note_id, lock_value)
-      elseif overrides[voice_idx] and overrides[voice_idx][note_id] then
-        clear_override(voice_idx, note_id)
+    if own then leave_extra_slot(voice_idx) end
+    if note_id then
+      chord.lock_value = lock_value
+      chord.own = S.lib.notes.play(voice_idx, chord_note(voice_idx, chord, 1, event.velocity, own)) == 1
+      if not chord.own then
+        -- an extra note, or none
+        wanted[note_id] = lock_value
+        end_note_override(voice_idx, note_id, lock_value)
       end
     end
     local held = {}
