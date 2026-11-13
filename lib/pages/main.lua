@@ -30,6 +30,7 @@ return function(S)
     left = 65, right = 127, divider_x = 62, name_y = 18, name_gap = 1,
     state_y = 26, lock_x = 84, trig_x = 99, freeze_x = 113, field_rows = {34, 42, 50}, label_x = 71,
     bright = 15, dim = 4, trig_level = 8, field_count = 3, modulated_mark = "~", mark_gap = 1,
+    count_from = 2,  -- the voice list shows a voice's held notes from two (3.5)
   }
   M.LAYOUT = LAYOUT
 
@@ -61,9 +62,12 @@ return function(S)
 
   -- MAIN's voice list: "<n><+|-|m|s> <name>", "+" for a running voice, "-" for a
   -- stopped one, "m" for a running voice that is silenced (muted, or another
-  -- is soloed) and "s" for a soloed one, the type's short name, then " [L]" when locked. Plain
-  -- ASCII, so the entries' width does not depend on the font drawing other
-  -- glyphs (the details column shows the full name and ON/OFF)
+  -- is soloed) and "s" for a soloed one, the type's short name, then " [L]" when locked,
+  -- then (3.5) " <n>" while the voice holds count_from notes or more
+  -- (S.lib.notes.held; the notes module rebuilds the list when it changes).
+  -- Plain ASCII, so the entries' width does not depend on the font drawing
+  -- other glyphs (the details column shows the full name and ON/OFF). The
+  -- widest, "5m pulse [L] 8", is exactly the list's 60 px
   function update_voice_list()
     local items = {}
     for i = 1, NUM_VOICES do
@@ -76,7 +80,9 @@ return function(S)
         end
       end
       local lock = S.frozen[i] and " [L]" or ""
-      items[i] = i .. status .. " " .. MAIN_PARAMS[S.voices[i].name].list_name .. lock
+      local held = S.lib.notes.held(i)
+      local count = held >= LAYOUT.count_from and (" " .. held) or ""
+      items[i] = i .. status .. " " .. MAIN_PARAMS[S.voices[i].name].list_name .. lock .. count
     end
     S.voice_list = UI.ScrollingList.new(0, 10, 1, items)
     S.voice_list.num_visible = 4  -- rows at y 15-48, clear of the hint row at y 62
@@ -332,6 +338,19 @@ return function(S)
       {name = "~ after the name, scatter on, buf 8", setup = function()
         params:set("v1_source", S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS)
         params:set("scatter", 1)
+        update_voice_list()
+      end},
+      -- 3.5's counts at their widest ("5m pulse [L] 8", the list's 60 px):
+      -- the pool holds 16 extra notes at most, so no seven voices hold
+      -- eight at once and the state stands in the count
+      {name = "every voice holding eight notes, muted and locked", setup = function()
+        S.lib.notes.held = function() return S.constants.NOTE_SLOTS end
+        for i = 1, NUM_VOICES do
+          if not S.voices[i].active then toggle_voice(i) end
+          if not S.frozen[i] then toggle_lock(i) end
+          params:set("v" .. i .. "_mute", 1)
+        end
+        S.lib.ui_keys.select_voice_by(5 - S.selected_voice)  -- pulse, the widest name
         update_voice_list()
       end},
       -- the widest ALT+K2 hint: K2:cancel K3:unlock

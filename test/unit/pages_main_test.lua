@@ -866,4 +866,71 @@ test("MAIN's mark reads whether an LFO plays in the engine from the LFO module",
   assert_true(not screen_shows(context, "~"))
 end)
 
+
+-- 3.5 (design 9.1): a voice holding two or more notes shows the count
+-- after its entry. S.lib.notes calls update_voice_list() when the count
+-- changes
+local function held_note(key, pitch)
+  return { owner = "midi", key = key, pitch = pitch, velocity = 0.5, park = true, set_own = function() end }
+end
+
+test("a voice holding two or more notes shows the count", function()
+  local context = load_strata(); finish_startup(context)  -- voices 1 and 2 run
+  local S = local_value("S")
+  local notes = S.lib.notes
+  assert_equal(local_value("voice_list").entries[1], "1+ reso", "no note held")
+  assert_equal(notes.play(1, held_note(1, 60)), 1, "the own note")
+  assert_equal(notes.held(1), 1)
+  assert_equal(local_value("voice_list").entries[1], "1+ reso", "one note: no count")
+  notes.play(1, held_note(2, 64)); notes.play(1, held_note(3, 67))
+  assert_equal(notes.held(1), 3, "two extra notes")
+  assert_equal(local_value("voice_list").entries[1], "1+ reso 3", "three notes: the count")
+  assert_equal(local_value("voice_list").entries[2], "2+ fm", "another voice holds none")
+  notes.release(1, "midi", 3)
+  assert_equal(local_value("voice_list").entries[1], "1+ reso 2", "two notes")
+  notes.release(1, "midi", 2)
+  assert_equal(local_value("voice_list").entries[1], "1+ reso", "the own note alone: no count")
+  show_page("MAIN")
+  assert_screen_layout(context, "MAIN with a count")
+end)
+
+-- The pool cannot give every voice eight notes (16 extra notes at most), so
+-- the widest entries stand in the count
+test("the widest entries with a count end by x 60: every voice running, muted, locked and holding eight", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.lib.notes.held = function() return S.constants.NOTE_SLOTS end
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
+    if not S.frozen[voice_idx] then toggle_lock(voice_idx) end
+    params:set("v" .. voice_idx .. "_mute", 1)
+  end
+  local entries = local_value("voice_list").entries
+  assert_equal(entries[5], "5m pulse [L] 8", "the widest entry")
+  for _, entry in ipairs(entries) do
+    assert_true(h.text_width(entry) <= 60, "'" .. entry .. "' ends by x 60")
+  end
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    select_voice(voice_idx)
+    show_page("MAIN")
+    assert_screen_layout(context, "MAIN, eight notes on every voice, voice " .. voice_idx)
+  end
+end)
+
+test("MAIN's layout states hold every voice's widest entry with a count", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local state
+  for _, entry in ipairs(S.registry.pages[S.constants.UI_PAGES.index.MAIN].layout_states) do
+    if entry.name == "every voice holding eight notes, muted and locked" then state = entry end
+  end
+  assert_true(state ~= nil, "the layout state")
+  show_page("MAIN")
+  state.setup(context)
+  assert_equal(local_value("voice_list").entries[5], "5m pulse [L] 8", "the widest entry")
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    assert_true(local_value("voice_list").entries[voice_idx]:find(" 8$") ~= nil, "voice " .. voice_idx .. " shows 8")
+  end
+end)
+
 end

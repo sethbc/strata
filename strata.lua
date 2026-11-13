@@ -89,6 +89,7 @@ S.lib.ui_keys = include("lib/ui/keys")(S)
 S.lib.ui_alt = include("lib/ui/alt")(S)
 S.lib.ui_detent = include("lib/ui/detent")(S)
 S.lib.ui_menu_watch = include("lib/ui/menu_watch")(S)
+S.lib.ui_zones = include("lib/ui/zones")(S)
 
 -- The screen pages, in UI_PAGES order: each creates its record at
 -- S.registry.pages[UI_PAGES.index.<PAGE>] (every field but the four arc

@@ -1,12 +1,14 @@
 -- lib/pages/setup.lua
--- The SETUP page: a field list (MIDI port, channel mode, mutations on/off,
--- rate, probability, amount, save scenes, load scenes, each grid port's
--- rotation, the performance setting and its buffer length) with the status
+-- The SETUP page: a field list (MIDI port, channel mode, 3.5's note off,
+-- mpe & zones (K3 opens S.lib.ui_zones' editor) and note pool, mutations
+-- on/off, rate, probability, amount, save scenes, load scenes, each grid
+-- port's rotation, the performance setting and its buffer length) with the status
 -- lines (the running tier,
 -- grids, arc, buffers) below it; E2 moves the cursor, E3 edits the field's
--- value, K3 runs a save/load field. It scrolls like FX
+-- value, K3 runs an action field (save, load, mpe & zones). It scrolls like FX
 -- (S.lib.ui_field_list). The performance fields edit the setting
--- (S.lib.performance), the rotation fields S.lib.grid_core's, not params.
+-- (S.lib.performance), the rotation fields S.lib.grid_core's, the note pool
+-- S.lib.notes', not params.
 -- Registers its S.registry.pages record.
 -- The functions that were global stay global.
 
@@ -14,6 +16,7 @@ return function(S)
   local M = {}
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local UI_PAGES = S.constants.UI_PAGES
+  local NOTE_POOL = S.constants.NOTE_POOL
   local field_list = S.lib.ui_field_list
 
   local SETUP_PAGE = {
@@ -23,6 +26,7 @@ return function(S)
     value_right = 124,    -- the scroll marker owns x 127
     note_indent = 8,      -- a field's dim note row ("(next start)", ...) starts here
     xrun_platforms = {[2] = true, [3] = true},  -- norns.platform: CM3, Pi 3 (matron's platform.h)
+    xrun_note = "may xrun",  -- the performance fields' and the note pool's warning
     -- the hint row's flash for each answer of S.lib.scenes.request_load
     load_texts = {loaded = "scenes loaded", missing = "no scenes file", unreadable = "scenes unreadable",
       confirm = "K3 again: drop unsaved"},
@@ -47,10 +51,17 @@ return function(S)
   -- <device>". kind "action": K3 calls run and hint names the K3 hint (run
   -- looks the scenes function up as it runs, so a test can stand in for it)
   -- and flashes what it did (#463): the load asks for a second K3 while a
-  -- scene of this session is not on disk (#328)
+  -- scene of this session is not on disk (#328). 3.5's three rows follow
+  -- channels whatever its mode (no field moves when it changes, ruling 10):
+  -- the note off param; mpe & zones, whose K3 opens the zones editor
+  -- (S.lib.ui_zones, a modal owner); the note pool (kind "pool": E3 steps
+  -- S.lib.notes.set_pool, a device setting in notes.data)
   local SETUP_FIELDS = {
     {label = "midi", kind = "param", param_id = "midi_device"},
     {label = "channels", kind = "param", param_id = "midi_channel_mode"},
+    {label = "note off", kind = "param", param_id = "midi_note_off"},
+    {label = "mpe & zones", kind = "action", hint = "edit", run = function() S.lib.ui_zones.open() end},
+    {label = "note pool", kind = "pool"},
     {label = "mutations", kind = "param", param_id = "mutation_enabled"},
     {label = "mutation rate", kind = "param", param_id = "mutation_rate", format = "%.1f s"},
     {label = "mutation prob", kind = "param", param_id = "mutation_probability", format = "%.2f"},
@@ -123,7 +134,7 @@ return function(S)
       table.insert(notes, "(next start)")
     end
     if setting.performance == "high" and SETUP_PAGE.xrun_platforms[norns.platform] then
-      table.insert(notes, "may xrun")
+      table.insert(notes, SETUP_PAGE.xrun_note)
     end
     if #notes > 0 then table.insert(rows, note_row(table.concat(notes, ", "))) end
     if buffer_shown and running.tier == "high" and setting.buffer_seconds == start.buffer_seconds
@@ -168,7 +179,15 @@ return function(S)
   -- remembered paths not found on start
   function M.setup_rows()
     local rows = {}
-    for _, field in ipairs(SETUP_FIELDS) do table.insert(rows, field) end
+    for _, field in ipairs(SETUP_FIELDS) do
+      table.insert(rows, field)
+      -- on standard a pool above the tier's default may xrun (design §2.5);
+      -- the pool changes only under the cursor on its own row, so this
+      -- note never moves the field the cursor is on
+      if field.kind == "pool" and S.performance.tier == "standard" and S.lib.notes.pool() > NOTE_POOL.standard then
+        table.insert(rows, note_row(SETUP_PAGE.xrun_note))
+      end
+    end
     add_rotation_rows(rows)
     add_performance_rows(rows)
     table.insert(rows, {selectable = false, text = S.performance.tier == "high"
@@ -194,6 +213,7 @@ return function(S)
   local setup_rows = M.setup_rows
 
   local function field_value(field)
+    if field.kind == "pool" then return tostring(S.lib.notes.pool()) end
     if field.kind == "rotation" then
       return tostring(S.lib.grid_core.rotation(field.port) * SETUP_PAGE.rotation_degrees)
     end
@@ -220,7 +240,7 @@ return function(S)
     else
       screen.level(selected and 15 or 4)
       screen.text(row.label)
-      if row.kind == "param" or row.kind == "performance" or row.kind == "rotation" then
+      if row.kind == "param" or row.kind == "performance" or row.kind == "rotation" or row.kind == "pool" then
         screen.move(value_right, y)
         screen.text_right(field_value(row))
       end
@@ -292,6 +312,18 @@ return function(S)
     end
   end
 
+  -- E3 on the note pool: one more or fewer (clamped at 0 and
+  -- NOTE_POOL.max), saved at once (notes.data, by S.lib.notes.set_pool,
+  -- which also tells the engine)
+  local function step_pool_field(d)
+    local notes = S.lib.notes
+    local pool = notes.pool()
+    local stepped = util.clamp(pool + d, 0, NOTE_POOL.max)
+    if stepped ~= pool and not notes.set_pool(stepped) then
+      S.lib.ui_flash.start("hints", "setting not saved", nil, UI_PAGES.index.SETUP)
+    end
+  end
+
   -- E2 moves over the fields, E3 edits the one under the cursor. While E2
   -- has scrolled the view on past the last field (#319), the field may be
   -- out of view: E3 then only scrolls back to it, editing nothing
@@ -305,6 +337,8 @@ return function(S)
       local field = setup_rows()[S.setup_cursor]
       if field and field.kind == "rotation" then
         step_rotation_field(field, d)
+      elseif field and field.kind == "pool" then
+        step_pool_field(d)
       elseif field and field.kind == "performance" then
         step_performance_field(field, d)
       elseif field and field.kind == "param" then
@@ -322,6 +356,30 @@ return function(S)
   local function plug_grids(context)
     context.grid.plug(1, 16, 16)
     context.grid.plug(2, 16, 8)
+  end
+
+  -- The zones editor (S.lib.ui_zones) opened from its row, the cursor on
+  -- row (an index of its rows) and column (1 zone, 2 low, 3 high); widest:
+  -- every voice's zone upper and its range C#-2 (the widest note name), the
+  -- bend range 96 st
+  local function zones_editor_state(name, row, column, widest, learn)
+    return {name = name, setup = function()
+      if widest then
+        params:set("mpe_bend_range", 96)
+        for voice = 1, S.constants.NUM_VOICES do
+          params:set("v" .. voice .. "_zone", 3)
+          params:set("v" .. voice .. "_zone_low", 1); params:set("v" .. voice .. "_zone_high", 1)
+        end
+      end
+      -- a layout state plays no MIDI: the MIDI module's note tap is a
+      -- do-nothing stand-in, so a learn can wait
+      if learn then S.lib.midi_in.set_note_tap = function() end end
+      S.lib.ui_zones.open()
+      enc(2, row - 1)
+      for _ = 2, column do key(3, 1); key(3, 0) end
+      if learn then S.lib.ui_zones.learn(S.constants.NUM_VOICES) end
+      if learn == "high" then S.lib.ui_zones.note(1) end
+    end}
   end
 
   -- The page's record, at SETUP's place in UI_PAGES: enc, key and redraw in
@@ -345,7 +403,7 @@ return function(S)
         S.scene_file.problem, S.buffer_file.problem = "not saved", "unreadable"; enc(2, 20)
       end},
       {name = "load prompt", setup = function()
-        enc(2, 7)  -- load scenes
+        enc(2, 10)  -- load scenes
         M.flash(SETUP_PAGE.load_texts.confirm, S.lib.scenes.SCENE_LOAD.confirm_seconds)
       end},
       {name = "data files unreadable, high setting with notes", setup = function()
@@ -359,7 +417,7 @@ return function(S)
         enc(2, 60)
       end},
       {name = "a 16x8 turned upright, the rotation fields", setup = function(context)
-        context.grid.plug(1, 16, 8); S.lib.grid_core.set_rotation(1, 1); enc(2, 9)
+        context.grid.plug(1, 16, 8); S.lib.grid_core.set_rotation(1, 1); enc(2, 12)
       end},
       {name = "buffers missing", setup = function()
         S.buffers[1].missing_path = "/x/a.wav"; S.buffers[2].missing_path = "/x/b.wav"
@@ -388,6 +446,15 @@ return function(S)
         S.performance_start_setting = {performance = "high", buffer_seconds = 300}
         enc(2, 20)
       end},
+      -- 3.5: the note pool at its maximum on standard (may xrun), and the
+      -- zones editor
+      {name = "note pool at its maximum on standard", setup = function()
+        enc(2, 4); enc(3, NOTE_POOL.max)
+      end},
+      zones_editor_state("mpe & zones editor", 1, 1),
+      zones_editor_state("mpe & zones editor, v7's high at its widest", 3 + S.constants.NUM_VOICES, 3, true),
+      zones_editor_state("mpe & zones editor, learning v7's low", 3 + S.constants.NUM_VOICES, 2, true, "low"),
+      zones_editor_state("mpe & zones editor, learning v7's high", 3 + S.constants.NUM_VOICES, 3, true, "high"),
       {name = "performance: active file not written", setup = function()
         S.performance = {tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
           reason = "standard: performance_active.data could not be written"}
