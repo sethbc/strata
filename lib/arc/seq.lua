@@ -8,7 +8,8 @@
 -- (lib/pages/seq.lua). Also the step editor's rings (design 8.7), set on
 -- its modal owner (S.lib.pages_seq.step_editor_owner): 1 pos, 2 pitch, 3
 -- size (each a lock, a full turn its param's range), 4 prob (whole
--- percents); with ALT 1 ratchet, 2 note, 3 bookmark, 4 level (whole steps).
+-- percents); with ALT 1 ratchet, 2 note (the one the screen's cursor is on,
+-- the first off the note rows), 3 bookmark, 4 level (whole steps).
 -- The edits go through S.lib.pages_seq.turn_step, the edit view's own.
 
 return function(S)
@@ -121,8 +122,12 @@ return function(S)
     if S.alt_held then
       local attr = ARC_SEQ.editor_alt_rings[n]
       if attr == nil or (attr == "bookmark" and not S.lib.pages_seq.has_bookmarks(voice_idx)) then return end
-      local steps = editor_steps("seq_editor:alt:" .. n, voice_idx, step, delta, ARC_SEQ.editor_ticks)
-      if steps ~= 0 then turn_step(voice_idx, step, attr, steps) end
+      -- the note ring turns the note the screen's cursor is on; its ticks
+      -- belong to "<voice>:<step>:<index>"
+      local index = attr == "notes" and S.lib.pages_seq.editor_note_index() or nil
+      local place = index and (step .. ":" .. index) or step
+      local steps = editor_steps("seq_editor:alt:" .. n, voice_idx, place, delta, ARC_SEQ.editor_ticks)
+      if steps ~= 0 then turn_step(voice_idx, step, attr, steps, {index = index}) end
     elseif ARC_SEQ.editor_rings[n] == "prob" then
       local SEQ = S.lib.sequencer.SEQ
       local steps = editor_steps("seq_editor:" .. n, voice_idx, step, delta, UI_PAGES.ARC_TICKS_PER_SWEEP / SEQ.max_prob)
@@ -153,7 +158,8 @@ return function(S)
     if S.alt_held then
       fill_whole(arc_port, 1, seq.step_attr(voice_idx, step, "ratchet"), 1, 1, SEQ.max_ratchet)
       local notes = seq.step_attr(voice_idx, step, "notes")
-      fill_whole(arc_port, 2, notes and notes[1], 0, -SEQ.max_degree, SEQ.max_degree)
+      fill_whole(arc_port, 2, notes and notes[S.lib.pages_seq.editor_note_index()], 0, -SEQ.max_degree,
+        SEQ.max_degree)
       if S.lib.pages_seq.has_bookmarks(voice_idx) then
         fill_whole(arc_port, 3, seq.step_attr(voice_idx, step, "bookmark"), 1, 1, NUM_BOOKMARKS)
       end

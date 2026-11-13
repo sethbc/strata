@@ -37,7 +37,7 @@ While a grid's **step editor** is open (a step key held on the grid, over any pa
 
 - **Ring 1** - Position, **Ring 2** - pitch, **Ring 3** - size, the step's step locks (see [Sequencer](sequencer.md)): a full turn for the whole range of the voice's own parameter. A step lock that is off starts from the voice's own value; turning below the start of the range turns it off again
 - **Ring 4** - Probability, in whole percents (a full turn for 0-100 %)
-- With **ALT** held: **Ring 1** - ratchets, **Ring 2** - note, **Ring 3** - bookmark (dark and does nothing without bookmarks), **Ring 4** - the step's level (20 ticks per step)
+- With **ALT** held: **Ring 1** - ratchets, **Ring 2** - the note the screen's cursor is on (the first note while the cursor is on another row), **Ring 3** - bookmark (dark and does nothing without bookmarks), **Ring 4** - the step's level (20 ticks per step)
 
 A set step lock, note or bookmark is drawn bright; one that is off is drawn dim at the value a turn starts from.
 
