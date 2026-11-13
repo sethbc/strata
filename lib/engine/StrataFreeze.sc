@@ -252,12 +252,13 @@
     // sent, in one bundle, so they land in one block. ringGrainReader holds
     // the freeze flag for the block: a reader set back to the input ring a
     // block before its freeze 0 would start that block's grains a further
-    // grainMaxSeconds back (rings.scd shows it)
+    // grainMaxSeconds back (rings.scd shows it). The control reaches the
+    // voice's extra grain notes too (setGrainSynths)
     unfreezeWithControl { arg voice, value;
         context.server.makeBundle(nil, {
             this.unfreezeVoice(voice);
             grainControls[voice][\freeze] = value;
-            this.setSynth(this.grainKey(voice), \freeze, value);
+            this.setGrainSynths(voice, \freeze, value);
         });
     }
 
@@ -423,15 +424,16 @@
         this.pointAtCopyRing(voice);
     }
 
-    // Set the voice's live input grain synth to read what grainReadPairs
-    // says (the copy, once it is in: the copy ring at history 0; GrainBuf
-    // latches its buffer per grain: seamless), and count it among the copy
-    // ring's readers
+    // Set the voice's live input grain synths, its own and its live extra
+    // notes' (3.5: setGrainSynths), to read what grainReadPairs says (the
+    // copy, once it is in: the copy ring at history 0; GrainBuf latches its
+    // buffer per grain: seamless), and count them among the copy ring's
+    // readers
     pointAtCopyRing { arg voice;
         var synth = synths[this.grainKey(voice)];
         if (synth.isNil or: { grainSource[voice] != this.inputSource }) { ^this };
-        this.sendToSynth(synth.setMsg(*this.grainReadPairs(voice)));
-        this.noteInputReader(voice, synth);
+        this.setGrainSynths(voice, *this.grainReadPairs(voice));
+        ([synth] ++ this.noteSynths(voice, \grain)).do({ arg each; this.noteInputReader(voice, each) });
     }
 
     // Whether the voice's grain synth reads its input copy: the voice is on

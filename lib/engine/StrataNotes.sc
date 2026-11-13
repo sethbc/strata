@@ -286,14 +286,15 @@
         ^nil
     }
 
-    // Start the slot's note if the pool has room, else refuse it with one line
-    startNote { arg voice, slot;
+    // Start the slot's note if the pool has room, else refuse it with one
+    // line. A restarted note keeps the order it started at (order)
+    startNote { arg voice, slot, order;
         var record = this.noteRecord(voice, slot);
         if (this.makeNoteRoom.not) {
             this.postFastModIgnored(\noteOn, "the pool of % is full of live notes".format(areaState[\notes][\pool]));
             ^this
         };
-        record[\order] = this.nextNoteOrder;
+        record[\order] = order ?? { this.nextNoteOrder };
         record[\synth] = this.startNoteSynth(voice, slot);
         record[\state] = \live;
     }
@@ -416,6 +417,21 @@
         var key = this.ownNoteKey(voice);
         this.noteRecord(voice, 0)[\expression] = expression;
         this.setSynth(key, *this.noteExpressionPairs(if (this.ownNoteOnGrain(voice)) { \buffer } { \voice }, expression));
+    }
+
+    // A running voice's source switch (replaceGrainSynth, in its bundle):
+    // every extra note of the voice is cut, and each that was live restarts
+    // on the new source from its kept values (startNoteSynth by the voice's
+    // state now), keeping its order; a releasing one is not restarted. So a
+    // slot holds a live and a cutting synth at most
+    restartNotes { arg voice;
+        (1 .. (this.noteSlots - 1)).do({ arg slot;
+            var record = this.noteRecord(voice, slot), wasLive = record[\state] == \live, order = record[\order];
+            if (record[\synth].notNil) {
+                this.cutNote(voice, slot);
+                if (wasLive) { this.startNote(voice, slot, order) };
+            };
+        });
     }
 
     // voiceOff releases every live extra note of the voice with it: their
