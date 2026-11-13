@@ -1210,16 +1210,18 @@ end
 local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "free" }
 -- methods that keep a closure and are called from a function (a SynthDef
 -- function, an onFree, a fork, a scheduled function, a makeBundle
--- function): never called but through areaCall. Each is defined and called
--- through areaCall at least once
+-- function, a command function): never called but through areaCall. Each
+-- is defined and called through areaCall at least once. The last six are
+-- the commands' (loadBuffer, clearBuffer, saveBuffer, recordBuffer,
+-- stopRecord, setBypass)
 local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "inputHeadFrame", "gateVoice",
-  "voiceSynthFreed", "prepareTake", "startFastLfo" }
--- the commands whose methods keep a closure that outlives the command: on
--- norns each is reached from the OSC dispatcher's method frame only because
--- CroneEngine's wrapper and the command function tail-call it, so each
--- command function stays one call of its method
-local SINGLE_CALL_COMMANDS = { loadBuffer = "loadSlot", saveBuffer = "saveSlot", recordBuffer = "recordSlot",
-  stopRecord = "stopRecordSlot" }
+  "voiceSynthFreed", "prepareTake", "startFastLfo", "watchFastLfo",
+  "loadSlot", "clearSlot", "saveSlot", "recordSlot", "stopRecordSlot", "setEffectBypass" }
+-- the calls that hand a function to something that runs it later (the
+-- class library's and the engine's own): a method that makes one keeps its
+-- frame past its return
+local DEFERRING_CALLS = { "sched", "fork", "onFree", "OSCFunc", "OSCdef", "Routine", "defer", "afterSlotFade",
+  "writeSlot", "writeSlotPeaks", "renameIntoPlace" }
 
 -- SC source with its comments stripped and the text of its strings, quoted
 -- symbols and characters blanked, so a brace inside one never ends a %b{}
@@ -1337,30 +1339,75 @@ test("an area hook, strataAreas and a method that keeps a closure are called thr
     "lib/engine/StrataUtil.sc: areaCall assigns the method's result and then returns it (never ^this.performList)")
 end)
 
--- The commands in SINGLE_CALL_COMMANDS: each command function is one call
--- of its method, `{ arg msg; this.<method>(...); }`, a tail call (#211: on
--- norns the method's caller is then the OSC dispatcher's method frame,
--- never a function frame freed when it returns)
-local function command_function(code, name)
-  local start = code:find("addCommand%(%s*\\" .. name .. "%s*,")
-  if not start then return nil end
-  return code:match("%b{}", code:find("{", start, true))
+-- The direct calls (this.<method>(...), not through areaCall) a command
+-- function makes of an engine method that makes a deferring call
+-- (DEFERRING_CALLS), in files { { path, text } }: { "path:line: ..." }.
+-- #211: such a method's frame outlives the command, and its caller is the
+-- command function's frame, freed as it returns, or, tail-called, the
+-- frame that called the command function: on norns the OSC dispatcher's,
+-- in the engine check a function's. Through areaCall it is a live frame
+-- either way. One level deep: a deeper method that keeps a closure is
+-- listed in AREA_CALL_METHODS
+local function commands_deferring_directly(files)
+  local code, bodies, found = {}, {}, {}
+  for _, file in ipairs(files) do code[#code + 1] = { path = file.path, text = sc_code_only(file.text) } end
+  local function deferring_calls(name)
+    if bodies[name] == nil then
+      bodies[name] = {}
+      for _, file in ipairs(code) do
+        local body = sc_method_body(file.text, name)
+        if body then
+          for _, call in ipairs(DEFERRING_CALLS) do
+            if body:find("%f[%w_]" .. call .. "%f[^%w_]") then table.insert(bodies[name], call) end
+          end
+          break
+        end
+      end
+    end
+    return bodies[name]
+  end
+  for _, file in ipairs(code) do
+    for command, open in file.text:gmatch('addCommand%(%s*\\([%w_]+)%s*,%s*"[^"]*"%s*,%s*(){') do
+      local body = file.text:match("^%b{}", open)
+      for offset, method in body:gmatch("()this%.([%a_][%w_]*)%s*%(") do
+        local calls = method ~= "areaCall" and deferring_calls(method) or {}
+        if #calls > 0 then
+          local _, newlines = file.text:sub(1, open + offset - 1):gsub("\n", "")
+          found[#found + 1] = string.format("%s:%d: %s's command calls this.%s directly, and %s hands a function to %s:"
+            .. " call it through this.areaCall(\\%s, ...) (docs/notes/engine/structure.md, Areas)",
+            file.path, newlines + 1, command, method, method, table.concat(calls, ", "), method)
+        end
+      end
+    end
+  end
+  return found
 end
 
-test("the commands whose methods keep a closure are one tail call each (#211)", function()
-  local single = "^{%s*arg%s+msg%s*;%s*this%.([%a_][%w_]*)(%b())%s*;?%s*}$"
-  assert_equal(("{ arg msg; this.loadSlot(msg[1], msg[2]); }"):match(single), "loadSlot", "the shape: one call")
-  assert_true(("{ arg msg; var x = this.loadSlot(msg[1]); x }"):match(single) == nil, "caught: not a tail call")
-  assert_true(("{ arg msg; this.check(msg); this.loadSlot(msg[1]); }"):match(single) == nil, "caught: two statements")
-  local code, files = {}, engine_files()
-  for index = 2, #files do code[#code + 1] = sc_code_only(files[index].text) end
-  code = table.concat(code, "\n")
-  for name, method in pairs(SINGLE_CALL_COMMANDS) do
-    local body = command_function(code, name)
-    assert_true(body ~= nil, "the engine has the command " .. name)
-    assert_equal(body and body:gsub("%s+", " "):match(single), method,
-      name .. "'s command function is one call of this." .. method .. " (docs/notes/engine/structure.md, Areas)")
+test("a command calls a method that hands a function on only through areaCall (#211)", function()
+  local probe = { { path = "probe.sc", text = '+ Engine_Strata {\n    addProbeCommands {\n'
+    .. '        this.addCommand(\\probeLater, "i", { arg msg; this.validProbe(msg[1]); this.probeLater(msg[1]); });\n'
+    .. '        this.addCommand(\\probeCalled, "i", { arg msg; this.areaCall(\\probeLater, msg[1]); });\n'
+    .. '        this.addCommand(\\probeFork, "i", { arg msg; if (msg[1] > 0) { this.probeFork(msg[1]) }; });\n    }\n'
+    .. '    validProbe { arg x; ^x.notNil }\n'
+    .. '    probeLater { arg x; SystemClock.sched(1, { x.postln; nil }) }\n'
+    .. '    probeFork { arg x; fork { x.postln } }\n}\n' } }
+  local found = commands_deferring_directly(probe)
+  assert_equal(#found, 2, "the probe's two direct calls: " .. table.concat(found, "; "))
+  assert_true(found[1] and found[1]:match("^probe%.sc:3: probeLater's command calls this%.probeLater directly, and probeLater hands a function to sched"),
+    "names the file, the line, the command, the method and the call: " .. tostring(found[1]))
+  assert_true(found[2] and found[2]:match("^probe%.sc:5: probeFork's command calls this%.probeFork directly.* to fork"),
+    "inside an if too: " .. tostring(found[2]))
+
+  local files = engine_files()
+  table.remove(files, 1)
+  found = commands_deferring_directly(files)
+  assert_true(#found == 0, table.concat(found, "\n"))
+  -- the guard sees the engine's commands and the methods it reads
+  local commands = 0
+  for _, file in ipairs(files) do
+    for _ in sc_code_only(file.text):gmatch('addCommand%(%s*\\[%w_]+%s*,%s*"[^"]*"%s*,%s*{') do commands = commands + 1 end
   end
+  assert_true(commands >= 30, "the engine's command functions are found (" .. commands .. ")")
 end)
 
 test("the engine's sample paths run no sclang function per sample (#131)", function()

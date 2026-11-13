@@ -276,7 +276,7 @@
         // msg: effect (0 delay, 1 reverb; others ignored), bypassed (0 or 1)
         this.addCommand(\setBypass, "ii", { arg msg;
             var key = if (msg[1].isInteger) { this.bypassKeys[msg[1]] };
-            if (key.notNil and: { [0, 1].includes(msg[2]) }) { this.setEffectBypass(key, msg[2] == 1) };
+            if (key.notNil and: { [0, 1].includes(msg[2]) }) { this.areaCall(\setEffectBypass, key, msg[2] == 1) };
         });
     }
 

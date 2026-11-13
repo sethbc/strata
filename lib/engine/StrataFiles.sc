@@ -26,7 +26,7 @@
         // msg: slot index, path of the stereo 16-bit WAV to write, start and
         // length (fractions of the valid region; 0 and 1 write all of it)
         this.addCommand(\saveBuffer, "isff", { arg msg;
-            this.saveSlot(msg[1], msg[2].asString, msg[3], msg[4]);
+            this.areaCall(\saveSlot, msg[1], msg[2].asString, msg[3], msg[4]);
         });
 
         // How a save ended: one message per saveBuffer whose write ends,
