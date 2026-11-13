@@ -10,7 +10,7 @@ Below it, five rows at a time, the voice's parameters in seven sections, each un
 - **grain** - size, density, pitch, position spread, envelope, mode
 - **crossmod** - modulation speed, then for each of the three slots its source, amplitude amount and frequency amount. A source shows the voice's number and short name (`3 fold`), or `none`
 - **mix** - source (`synth`, `buf 1`-`buf 8`, `input`), level (amp), pan (the Sub has no pan) and freeze. With the high performance setting a freeze mode row follows: `hold` or `spectral`
-- **notes** - `note cap` (1-8, default 8): how many notes the voice plays at once, its own and up to seven more from the note pool all voices share; at 1 it plays one note at a time, as before 3.5. PSETs keep it, scenes do not. Nothing plays more than one note yet: MIDI and the sequencer will play chords through it
+- **notes** - `note cap` (1-8, default 8): how many notes the voice plays at once, its own and up to seven more from the note pool all voices share; at 1 it plays one note at a time, as before 3.5. PSETs keep it, scenes do not. Nothing plays more than one note yet: MIDI and the sequencer will play chords through it. Then `press target`, `press depth`, `slide target` and `slide depth`: what each note's pressure and slide move and how far (-100 to +100 %; amp at +100 % and main at +50 % by default), as [Expression](../modulation.md#expression) describes. The targets are `off`, `amp`, `level`, `main`, `size`, `density`, `position` and `cutoff`; E3 offers `position` on a buffer voice only, and on any other voice a target left at `position` does nothing. Scenes and PSETs keep all four. Nothing sends pressure or slide yet: 3.5's MIDI input will
 - **variation** - reverse, pitch, pan and size jitter, intervals, interval probability and quantize (see [Voices and Granular Processing](../voices-and-grains.md))
 - **filter & sends** - the voice's own filter (type, freq, res, mix; mix 0 leaves it out), its delay and reverb sends (see [Global Controls and Effects](../effects.md)), then `mute` and `solo` (off/on; see [Mute and solo](../voices-and-grains.md#mute-and-solo))
 
@@ -46,7 +46,7 @@ A quick ALT+K2 changes only the section the cursor is in, within ranges that kee
 - **grain** - size (0.05-0.35), density (2-40), pitch (0.5-2.5), spread (0-0.6) and the envelope. The mode stays
 - **crossmod** - the speed (0.2-10 Hz) and each slot's amplitude and frequency amounts (-0.5 to 0.5). The sources stay
 - **mix** - the pan (-0.8 to 0.8). The Sub has no pan, so the press does nothing there. The source, level, freeze and freeze mode stay
-- **notes** - nothing: the note cap stays
+- **notes** - the four expression rows: each target a choice the voice offers (never `off`, and `position` on a buffer voice only) and each depth across -100 to +100 %. The note cap stays
 - **variation** - reverse (0-50 %), pitch jitter (0-6 st), pan and size jitter (0-0.5) and interval probability (0-100 %). The intervals, the custom intervals and quantize stay
 - **filter & sends** - the filter's type, freq (100-8000 Hz) and res (0-0.7), and both sends (0-60 %). The filter's mix stays, so a filter left out stays out
 - **bookmarks** - four new positions, in order: bookmark 1 is the lowest

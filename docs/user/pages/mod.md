@@ -12,7 +12,7 @@ macros
 K3:targets E3:value
 ```
 
-The page is a list under dim section names, five rows at a time, with a thin scroll marker at the right: **macros** (the `bank` row, then the shown bank's four macros), **morph** (`A`, `B`, `C`, `D`, `morph`, `y`), **scatter** (`on`, `depth`, `rate`, then `pitch`, `pos`, `size`, `cutoff`, `amp`), **gestures** (`G1`-`G4`), **lfos** (`L1`-`L6`), **matrix** (`R1`-`R16`), then **audio** (`IN`, the input level). A section added by a later release shows after these. The row under the cursor is bright.
+The page is a list under dim section names, five rows at a time, with a thin scroll marker at the right: **macros** (the `bank` row, then the shown bank's four macros), **morph** (`A`, `B`, `C`, `D`, `morph`, `y`), **scatter** (`on`, `depth`, `rate`, then `pitch`, `pos`, `size`, `cutoff`, `amp`), **gestures** (`G1`-`G4`), **lfos** (`L1`-`L6`), **matrix** (`R1`-`R16`), **audio** (`IN`, the input level), then **notes** (`PRES`, `SLID`, then `PR1`-`PR7` and `SL1`-`SL7` for the voices holding a note that has sent pressure or slide). A section added by a later release shows after these. The row under the cursor is bright.
 
 What each row shows:
 - **bank** - the bank shown (`1  M1-M4`: bank 1 holds macros 1-4). The MOD page, its arc rings and the grids show the same bank
@@ -23,6 +23,7 @@ What each row shows:
 - **L1**-**L6** - each LFO's destination (`~` when it runs in the engine), depth, and the LFOs its rate and depth follow (`v3 pitch~ 25% <L2`)
 - **R1**-**R16** - each routing: its source, `>`, its destination and its depth (`R3 L2>v3 pitch~  +40%`), or `-` when empty. A routing that is off, or misses its source or destination, is dim
 - **IN** - the input level now, as a routing reads it
+- **PRES**, **SLID** - the largest pressure and slide among every voice's held notes (slide as the controller sends it); **PR1**-**PR7**, **SL1**-**SL7** - each voice's. Read-only, as a routing reads them ([Expression](../modulation.md#expression))
 
 ## The list
 
