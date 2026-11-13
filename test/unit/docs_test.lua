@@ -1949,6 +1949,16 @@ test("the engine's note constants equal the script's", function()
   assert_equal(engine_spec.note_slots, local_value("NOTE_SLOTS"), "noteSlots = NOTE_SLOTS")
   local pool = local_value("NOTE_POOL")
   assert_equal(engine_spec.note_pool_max, pool and pool.max, "notePoolMax = NOTE_POOL.max")
+  -- ruling 53: the engine derives a ring-stream note's rate on a buffer or
+  -- the input from its note as Lua's note_values does, from the same root
+  local source = stubs.strip_sc_comments(engine_sources())
+  local root = tonumber(source:match("noteRateRootNote%s*{%s*%^%s*(%d+)%s*}"))
+  local S = local_value("S")
+  assert_equal(root, S.lib.notes.NOTES.rate_root_note, "noteRateRootNote = NOTES.rate_root_note")
+  assert_equal(root, S.lib.midi_in.MIDI.rate_root_note, "noteRateRootNote = MIDI.rate_root_note")
+  local low, high = source:match("absoluteNoteRate%s*{.-%.clip%(%s*([%d%.]+)%s*,%s*([%d%.]+)%s*%)")
+  assert_equal(tonumber(low), S.lib.notes.NOTES.rate_range[1], "absoluteNoteRate's low clip = NOTES.rate_range")
+  assert_equal(tonumber(high), S.lib.notes.NOTES.rate_range[2], "absoluteNoteRate's high clip = NOTES.rate_range")
 end)
 
 -- 3.5's per-note main expression (design §3.2): noteMain offsets one control

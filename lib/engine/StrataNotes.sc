@@ -22,6 +22,26 @@
     // The lag (s) of every per-note control, smoothing Lua's 48 Hz steps
     noteLag { ^0.02 }
 
+    // The note that plays at rate 1 on a buffer or input voice: Lua's
+    // NOTES.rate_root_note (a docs test compares them)
+    noteRateRootNote { ^60 }
+
+    // The rate Lua's note_values gives a buffer or input voice's note
+    // (ruling 53): 2 ^ ((note - noteRateRootNote) / 12), clipped as noteOn
+    // clips a rate. A ring-stream note's kept rate is against the freeze
+    // reference instead, which only Lua holds, so a note that leaves the
+    // stream takes this from its kept note (ruling 46's note put to use)
+    absoluteNoteRate { arg note;
+        ^(2 ** ((note - this.noteRateRootNote) / 12)).clip(0.25, 4)
+    }
+
+    // A ring-stream note leaving the stream (restartNotes, notesUnfrozen):
+    // its kept rate becomes its note's (absoluteNoteRate), so a later
+    // restart on a buffer or the input plays its pitch there (#682)
+    leaveStream { arg record;
+        if (record[\kind] == \stream) { record[\rate] = this.absoluteNoteRate(record[\note]) };
+    }
+
     // The notes area (order 170): the last in alloc's order, the first in
     // free's, so its stop frees the note synths before the voices' groups go
     strataAreaNotes {
@@ -439,7 +459,8 @@
     // the park the voice synth already holds: ruling 44, ownNoteOff and
     // ownNoteOn reach it while frozen), every ring-stream note cut and each
     // live one restarted as a voice synth at its kept freq, keeping its
-    // order, silent (ruling 45); a releasing one is not restarted
+    // order, silent (ruling 45), its kept rate now its note's (leaveStream,
+    // ruling 53); a releasing one is not restarted
     notesUnfrozen { arg voice;
         this.noteRecord(voice, 0)[\rate] = 1;
         this.setSynth(this.grainKey(voice), *this.ownNotePairs(voice, \strataGrainRing));
@@ -448,6 +469,7 @@
             var record = this.noteRecord(voice, slot), wasLive = record[\state] == \live, order = record[\order];
             if ((record[\kind] == \stream) and: { record[\synth].notNil }) {
                 this.cutNote(voice, slot);
+                this.leaveStream(record);
                 if (wasLive) { this.startNote(voice, slot, order, true) };
             };
         });
@@ -504,13 +526,15 @@
     // every extra note of the voice is cut, and each that was live restarts
     // on the new source from its kept values (startNoteSynth by the voice's
     // state now), keeping its order, silent (ruling 45); a releasing one is
-    // not restarted. So a
-    // slot holds a live and a cutting synth at most
+    // not restarted. A ring-stream note restarts at its note's rate
+    // (leaveStream, ruling 53). So a slot holds a live and a cutting synth
+    // at most
     restartNotes { arg voice;
         (1 .. (this.noteSlots - 1)).do({ arg slot;
             var record = this.noteRecord(voice, slot), wasLive = record[\state] == \live, order = record[\order];
             if (record[\synth].notNil) {
                 this.cutNote(voice, slot);
+                this.leaveStream(record);
                 if (wasLive) { this.startNote(voice, slot, order, true) };
             };
         });
@@ -550,10 +574,10 @@
 
         // Start voice's slot: note 0-127 (the scale reference), freq 8-20000
         // Hz, rate 0.25-4, velocity 0-1. The engine keeps note in the slot's
-        // record and does not use it yet (ruling 46): a buffer note's
-        // scaleNote comes from the voice's reference note and its rate
-        // (noteScaleNote), the same today; a later release's tunings will
-        // need a note's number apart from its rate
+        // record (ruling 46): a ring-stream note leaving the stream takes its
+        // rate from it (leaveStream, ruling 53); a buffer note's scaleNote
+        // comes from the voice's reference note and its rate (noteScaleNote);
+        // a later release's tunings will need a note's number apart from its rate
         this.addCommand(\noteOn, "iiffff", { arg msg;
             var voice = msg[1], slot = msg[2], note, freq, rate, velocity;
             if (this.fastModIndicesValid(\noteOn, [[\voice, voice, lastVoice], [\slot, slot, lastSlot]])
