@@ -981,6 +981,12 @@ test("buffer rate is exact (step 0) and its turns, display and range are as with
   key(1, 1); raw = params:get_raw("v1_buf_rate"); enc_param_delta(3, "v1_buf_rate", 1)
   assert_near(params:get_raw("v1_buf_rate") - raw, 0.001, 1e-9, "ALT+E3: a tenth of it")
   key(1, 0)
+  params:set("v1_buf_rate", 1)
+  for _ = 1, 5 do enc_param_delta(3, "v1_buf_rate", 1) end
+  for _ = 1, 5 do enc_param_delta(3, "v1_buf_rate", -1) end
+  assert_equal(params:get("v1_buf_rate"), 1, "E3 up and down by the same clicks returns exactly 1")
+  arc_sweep_param("v1_buf_rate", 3); arc_sweep_param("v1_buf_rate", -3)
+  assert_near(params:get("v1_buf_rate"), 1, 1e-9, "an arc up and down returns to 1")
   local before = params:get("v1_buf_rate")
   arc_sweep_param("v1_buf_rate", 1)
   assert_true(params:get("v1_buf_rate") > before, "an arc tick raises it")
