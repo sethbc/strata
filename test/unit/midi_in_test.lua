@@ -981,8 +981,8 @@ test("release: each key's note ends with its key, the own note parks, the voice 
   assert_true(voices[1].active, "another key is down")
   context.clear_engine_calls()
   note_off(context, 1, 64)
-  assert_equal(call_names(context, { noteOff = true, voiceOff = true }), "noteOff, voiceOff",
-    "the last note released, then the voice stopped")
+  assert_equal(call_names(context, { noteOff = true, noteOn = true, voiceOff = true }), "voiceOff",
+    "the last key stops the voice, which ends its notes: no release or unpark before it")
   assert_equal(context.calls_named("voiceOff")[1].args[1], 0)
   assert_true(not voices[1].active, "a voice the norns started stops with its last key")
   -- a voice a key started stops too
@@ -1266,21 +1266,40 @@ test("a port change, an unplug, a mode change and a panic release every MIDI not
       assert_nothing_parked(S, name)
     end
   end
-  -- a reset whose new behavior is latch never leaves an own note parked
-  -- under released keys: the voice, silent already, stops
+  -- a reset whose new behavior is latch parks nothing and leaves no own note
+  -- parked silent: one parked already returns, unaccented, as the voice's
+  -- drone when the voice's last note ends (ruling 39)
+  local function seq_note(pitch)
+    return { owner = "seq", key = "chord", pitch = pitch, velocity = 0.5, set_own = function() end, extra_only = true }
+  end
   local probes = {
     { name = "mpe selected to per voice with the own note parked", run = function(context, S)
       params:set("midi_channel_mode", 3); S.selected_voice = 1
       note_on(context, 2, 60); note_on(context, 3, 64); note_off(context, 2, 60)   -- auto: release; the own note parks
       assert_true(S.lib.notes.slots(1)[1].parked, "the own note parked")
+      context.clear_engine_calls()
       params:set("midi_channel_mode", 1)                                          -- the reset reads latch
+      assert_equal(call_names(context, { noteOff = true, noteOn = true, voiceOff = true }), "noteOff, noteOn",
+        "the extra note ends, the voice's last: its own note returns")
+      local back = context.calls_named("noteOn")[1].args
+      assert_equal(back[2], 0, "on slot 0"); assert_equal(back[6], 0, "unaccented")
       note_off(context, 3, 64)
     end },
-    { name = "release to latch mid-chord, then an unplug", run = function(context)
+    { name = "the own note parked under a sequenced note, then an unplug under latch", run = function(context, S)
       params:set("midi_note_off", 2)
-      note_on(context, 1, 60); note_on(context, 1, 64); note_off(context, 1, 60)   -- the own note parks
-      params:set("midi_note_off", 3)
+      note_on(context, 1, 60); note_on(context, 1, 64)
+      assert_equal(S.lib.notes.play(1, seq_note(67)), 3, "the sequencer's note in slot 3")
+      note_off(context, 1, 60)                                                     -- parks under 64 and the sequencer's
+      params:set("midi_note_off", 3)                                               -- a reset under latch: 64 ends
+      assert_true(S.lib.notes.slots(1)[1].parked, "still parked under the sequencer's note")
+      context.clear_engine_calls()
       context.midi.unplug(1)
+      assert_equal(#context.engine_calls, 0, "a reset meeting the parked note sends nothing")
+      assert_true(S.voices[1].active and S.lib.notes.find(1, "seq", "chord") == 3, "the sequencer's note plays on")
+      S.lib.notes.release(1, "seq", "chord")                                       -- the voice's last note ends
+      assert_equal(call_names(context, { noteOff = true, noteOn = true, voiceOff = true }), "noteOff, noteOn",
+        "the own note returns as the sequencer's note ends")
+      assert_equal(context.calls_named("noteOn")[1].args[6], 0, "unaccented")
     end },
   }
   for _, probe in ipairs(probes) do
@@ -1290,12 +1309,40 @@ test("a port change, an unplug, a mode change and a panic release every MIDI not
     assert_true(S.voices[1].active, probe.name .. ": voice 1 runs from the start")
     probe.run(context, S)
     assert_nothing_parked(S, probe.name)
-    assert_true(not S.voices[1].active, probe.name .. ": voice 1, silent under its parked note, stopped")
+    assert_true(S.voices[1].active, probe.name .. ": voice 1 sounds on as its drone")
     assert_equal(S.lib.notes.held(1), 0, probe.name); assert_equal(S.lib.notes.pool_used(), 0, probe.name)
     -- a later panic and key find nothing stuck
     context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 })
     note_on(context, 1, 62)
     assert_true(S.voices[1].active and S.lib.notes.find(1, "midi", key_of(1, 62)) == 1, probe.name .. ": the next key plays")
+  end
+end)
+
+-- The review's probe: a reset under latch never stops or cuts a voice
+-- another owner plays
+test("a reset under latch forgets MIDI's notes and leaves another owner's playing", function()
+  local resets = {
+    { name = "a port change", run = function() params:set("midi_device", 2) end },
+    { name = "an unplug", run = function(context) context.midi.unplug(1) end },
+    { name = "a channel mode change", run = function() params:set("midi_channel_mode", 2) end },
+  }
+  for _, reset in ipairs(resets) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    context.midi.plug(1, "keys")
+    press(context, 1, 60)                                -- latched: MIDI's own note on voice 1
+    assert_equal(S.lib.notes.play(1, { owner = "seq", key = "step", pitch = 67, velocity = 0.5,
+      set_own = function() end, extra_only = true }), 2, reset.name .. ": a sequenced note in slot 2")
+    context.clear_engine_calls()
+    reset.run(context)
+    assert_equal(#context.calls_named("voiceOff"), 0, reset.name .. ": no voiceOff")
+    for _, call in ipairs(context.calls_named("noteOff")) do
+      assert_true(not (call.args[1] == 0 and call.args[2] == 1), reset.name .. ": the sequencer's slot is not ended")
+    end
+    assert_equal(#context.calls_named("noteOff"), 0, reset.name .. ": nothing parked or released")
+    assert_true(S.voices[1].active, reset.name .. ": voice 1 runs")
+    assert_equal(S.lib.notes.find(1, "seq", "step"), 2, reset.name .. ": the sequencer's note plays on")
+    assert_nothing_parked(S, reset.name)
   end
 end)
 
@@ -1307,9 +1354,13 @@ test("a note off change releases every MIDI note, as a channel mode change does"
   for _, note in ipairs({ 60, 64, 67 }) do note_on(context, 1, note) end
   note_off(context, 1, 60)
   assert_true(S.lib.notes.slots(1)[1].parked, "the own note parked")
+  context.clear_engine_calls()
   params:set("midi_note_off", 3)
   assert_nothing_parked(S, "release to latch")
-  assert_true(not S.voices[1].active, "release to latch: the silent voice stops")
+  assert_true(S.voices[1].active, "release to latch: the voice sounds on")
+  assert_equal(call_names(context, { noteOff = true, noteOn = true, voiceOff = true }), "noteOff, noteOff, noteOn",
+    "the extra notes end, then the own note returns as the voice's drone")
+  assert_equal(context.calls_named("noteOn")[1].args[6], 0, "unaccented")
   assert_equal(next(S.midi_state.held[1]), nil, "no key held"); assert_equal(next(S.midi_state.note_voice), nil)
   context.clear_engine_calls()
   note_off(context, 1, 64); note_off(context, 1, 67)
