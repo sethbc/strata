@@ -24,7 +24,7 @@ var heldCount, cuttingCount;
 var checkSourceSwitch, checkBufferLoad, checkInputFreeze;
 var checkFrozenNotes, checkSpectralNotes;
 var wireMessages, sentCount, startValue, checkParkThroughFreeze, checkSilentRestarts, checkOwnNoteOnAccent;
-var withheldNote, checkFailedStartRoom, checkFreedLeaveWatchers, checkRestartPitches;
+var withheldNote, checkFailedStartRoom, checkFreedLeaveWatchers, checkRestartPitches, checkExtraNoteGate;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -1313,6 +1313,67 @@ checkRestartPitches = {
     results.do({ arg each; report.(each[0]) });
 };
 
+// Ruling 54 (#683): on a gated voice an extra note's start, a player's or a
+// step's (extraNoteOn), opens the stage's step gate as retrigger does, with
+// no accent: the stage gets t_gate alone (no t_trig: no accent on the
+// stage), and no own synth a t_trig (no pluck, no grain trigger). An input
+// voice (2, fed the check's tone, gated: 0.1 s and a 0.05 s release) read on
+// its tap (the stage's whole output): closed once its gate has passed; an
+// extra note's start opens it (heard 0.08 s on) and it closes again after
+// the gate; a noteOn on the live note (a re-strike) opens it too. A step's
+// chord (its retrigger, then a further note's noteOn at once) opens and
+// closes the gate as the retrigger alone does. The engine's own restart of
+// the note (a switch to a buffer under it, ruling 45) opens nothing
+checkExtraNoteGate = {
+    var voice = 2, saved = engine.grainControls[voice].copy, tap = engine.areaState[\record][\voiceTaps][voice];
+    var peakBus = Bus.control(server, 1), tone, probe, stage, own, messages, closed, opened, after, restruck, switched, stepped;
+    var heard = { arg body; probe.set(\t_reset, 1); body.value; 0.08.wait; server.sync; h.readBus(peakBus)[0] };
+    tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.inputSynth, \addBefore);
+    if (engine.bufferFrames[0] == 0) { command.(\loadBuffer, 0, h.stereoPath, 0); h.waitFor({ engine.bufferFrames[0] > 0 }, 3) };
+    command.(\setGrainParam, voice, \history, 0);
+    startInputVoice.(voice);
+    command.(\setNotePool, 8);
+    [\seqGate, 1, \gateSeconds, 0.1, \gateRelease, 0.05].pairsDo({ arg name, value; command.(\setGrainParam, voice, name, value) });
+    server.sync;
+    probe = Synth(\strataCheckPeak, [\in, tap, \out, peakBus], engine.processGroup, \addAfter);
+    1.0.wait;
+    closed = h.measure(probe, peakBus, 0.2)[0];
+    stage = engine.synths[engine.voiceMixKey(voice)];
+    own = ownGrain.(voice);
+    opened = heard.({ messages = wireMessages.(h.wireUnits({ playNote.(voice, 1, 1.25, 0.8) })) });
+    0.3.wait;
+    after = h.measure(probe, peakBus, 0.2)[0];
+    restruck = heard.({ command.(\noteOn, voice, 1, 64.0, 329.63, 1.26, 0.8) });
+    // a step's chord, as the sequencer sends it: the retrigger, then its
+    // further note's noteOn at once. The gate opens once and closes after
+    // the step's gate and release as with the retrigger alone (a further
+    // note's t_gate lands with the retrigger's t_trig: at most a block apart)
+    0.4.wait;
+    stepped = [{ command.(\retrigger, voice, 1.0) }, { command.(\retrigger, voice, 1.0); playNote.(voice, 2, 1.5, 0.8) }].collect({ arg step;
+        var open = heard.(step), shut;
+        0.12.wait;
+        shut = h.measure(probe, peakBus, 0.15)[0];
+        0.3.wait;
+        [open, shut]
+    });
+    switched = heard.({ command.(\setGrainSource, voice, 1) });
+    check.((closed < 1e-4) and: { opened > 0.01 } and: { after < 1e-4 } and: { restruck > 0.01 } and: { switched < 1e-4 }
+        and: { sentCount.(messages, stage, \t_gate, 1) == 1 } and: { sentCount.(messages, stage, \t_trig, 1) == 0 }
+        and: { sentCount.(messages, own, \t_trig, 1) == 0 } and: { sentCount.(messages, own, \t_accent, 1) == 0 },
+        "notes: on a gated voice an extra note's start opens the step gate with no accent, and the engine's restart opens nothing (ruling 54; tap closed %, at the note %, after the gate %, at a re-strike %, at a switch %; the stage's t_gate %, t_trig %, the own grain synth's t_trig %, t_accent %)".format(
+            closed.round(1e-6), opened.round(1e-4), after.round(1e-6), restruck.round(1e-4), switched.round(1e-6),
+            sentCount.(messages, stage, \t_gate, 1), sentCount.(messages, stage, \t_trig, 1),
+            sentCount.(messages, own, \t_trig, 1), sentCount.(messages, own, \t_accent, 1)));
+    check.(stepped.every({ arg each; (each[0] > 0.01) and: { each[1] < 1e-4 } }),
+        "notes: a step's retrigger with its further note's noteOn opens and closes the gate as the retrigger alone does (ruling 54; [tap at 0.08 s, 0.2-0.35 s]: retrigger alone %, with a further note %)".format(
+            stepped[0].round(1e-4), stepped[1].round(1e-4)));
+    [\seqGate, 0, \gateSeconds, 0.1, \gateRelease, 0.1, \voiceMute, 0].pairsDo({ arg name, value; command.(\setGrainParam, voice, name, value) });
+    probe.free; tone.free; peakBus.free;
+    h.stopAllVoices;
+    engine.grainControls[voice] = saved;
+    server.sync;
+};
+
 // Ruling 47: a slot-0 noteOn on an unfrozen voice only unparks the own note
 // (noteGate 1): Lua's retrigger after it accents the voice and plucks
 // Karplus once. On a Karplus voice (5) a slot-0 noteOn and a retrigger send
@@ -1442,8 +1503,10 @@ if (area.isNil or: { state.isNil }) {
     checkSilentRestarts.value;
     checkOwnNoteOnAccent.value;
     h.stopAllVoices;
-    // the final review's fixes: a restarted note's pitch (ruling 53)
+    // the final review's fixes: a restarted note's pitch (ruling 53), an
+    // extra note's start opening the step gate (ruling 54)
     checkRestartPitches.value;
+    checkExtraNoteGate.value;
     h.stopAllVoices;
     // failed starts
     checkFailedStartRoom.value;
