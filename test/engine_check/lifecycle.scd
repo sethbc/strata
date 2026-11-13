@@ -891,16 +891,20 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
     File.delete(path);
 }.value;
 
-// The switch and recall stress with a chord held (3.5): the voice holds a
-// chord of four (its own note and three extra notes, slots 1-3) through the
-// same bursts, spaced switches and fast stop / source / start / switch
-// cycles as above (the cycles play the chord again after each start, as a
-// held chord's keys would). Each switch cuts the notes and restarts the live
-// ones on the new source, so the own synths keep their bounds above, counted
-// without the note synths, and every slot holds at most one live and one
-// cutting synth, the live notes three, within the pool
+// The switch and recall stress with chords held (3.5): five voices (0-4)
+// each hold a chord of four (the own note and three extra notes, slots 1-3:
+// 15 extra notes, within the pool of 16, where seven voices' 21 would not
+// fit) through the same bursts, spaced switches and fast stop / source /
+// start / switch cycles as above, voice 4 switched and voice 3 cycled (it
+// plays its chord again at each start, as a held chord's keys would). Each
+// switch cuts the switched voice's notes and restarts the live ones on the
+// new source, so the own synths keep their bounds above, counted without the
+// note synths, every slot holds at most one live and one cutting synth, the
+// live notes stay three a voice, within the pool, and after each stress the
+// note synths the server runs are exactly those the slots hold
+// (h.noteNodesAgree, one /g_queryTree)
 {
-    var voice = 4, cycleVoice = 3, slots = engine.areaState[\notes] !? { arg state; state[\slots] };
+    var voice = 4, cycleVoice = 3, chordVoices = [0, 1, 2, 3, 4], slots = engine.areaState[\notes] !? { arg state; state[\slots] };
     var bursts = [1, 2, 0, 9, 0, 3, 4, 0, 5, 6], cycles = [[9, 3], [0, 9], [4, 0], [9, 0], [4, 3], [0, 9]];
     var chord = { arg target;
         (1 .. 3).do({ arg slot;
@@ -914,7 +918,7 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
         (slots ? []).collect({ arg records; records.copyToEnd(1).collect({ arg record; [record[\synth], record[\cutting]] }) })
             .flatten(2).reject(_.isNil).collect(_.nodeID).as(IdentitySet)
     };
-    var slotsBounded = { arg target;
+    var slotsBounded = {
         (slots ? []).every({ arg records; records.copyToEnd(1).every({ arg record; record[\state] != \live or: { record[\synth].notNil } }) })
             and: { (slots ? []).sum({ arg records; records.copyToEnd(1).count({ arg record; [\live, \releasing].includes(record[\state]) }) })
                 <= engine.areaState[\notes][\pool] }
@@ -922,6 +926,7 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
                 <= engine.areaState[\notes][\pool] }
     };
     var liveNotes = { arg target; slots !? { slots[target].copyToEnd(1).count({ arg record; record[\state] == \live }) } ? 0 };
+    var chordsHeld = { chordVoices.every({ arg each; liveNotes.(each) == 3 }) };
     // the voice's own grain synths and voice synths on the server, without its notes'
     var ownCounts = { arg target;
         var nodes = synthNodes.(context.xg), ids = noteIDs.value, own = nodes.reject({ arg node; ids.includes(node[\id]) });
@@ -929,21 +934,25 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
             own.count({ arg node; (node.def == engine.voiceSynthDefs[target]) and: { node.controls[\out].asInteger == engine.granBuses[target].index } })]
     };
     var grainBefore, voiceBefore, grainCount, voiceCount, bounded = true, live = List.new, maxGrain = 0, maxVoice = 0;
-    var trackedGrains = 0, trackedVoices = 0;
+    var trackedGrains = 0, trackedVoices = 0, agree = List.new;
     command.(\setNotePool, 16);
-    command.(\setGrainSource, voice, 0);
-    command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0);
-    chord.(voice);
+    chordVoices.do({ arg each;
+        command.(\setGrainSource, each, 0);
+        command.(\voiceOn, each, 110.0 + each, 0.2, 0.0, 0.1, 10.0, 1.0);
+        chord.(each);
+    });
     server.sync; 0.3.wait; server.sync;
     # grainBefore, voiceBefore = ownCounts.(voice);
     // a burst of ten switches at once
     bursts.do({ arg source; command.(\setGrainSource, voice, source); bounded = bounded and: { slotsBounded.value } });
-    live.add(liveNotes.(voice));
+    live.add(chordsHeld.value);
     0.3.wait; server.sync;
     # grainCount, voiceCount = ownCounts.(voice);
-    check.((grainCount == (grainBefore + 1)) and: { voiceCount == (voiceBefore - 1) } and: { bounded } and: { live.last == 3 },
-        "lifecycle: with a chord of four held, 10 source switches leave the own live grain synth and one releasing, and cut the own voice synth (% grain and % voice synths of its own, % and % before; slots bounded %, live notes %)".format(
-            grainCount, voiceCount, grainBefore, voiceBefore, bounded, live.last));
+    agree.add(h.noteNodesAgree);
+    check.((grainCount == (grainBefore + 1)) and: { voiceCount == (voiceBefore - 1) } and: { bounded } and: { live.last }
+        and: { agree.last[0] },
+        "lifecycle: with a chord of four held on five voices, 10 source switches leave the own live grain synth and one releasing, and cut the own voice synth (% grain and % voice synths of its own, % and % before; slots bounded %, chords held %, the server's note synths the slots' %)".format(
+            grainCount, voiceCount, grainBefore, voiceBefore, bounded, live.last, agree.last[0]));
     command.(\setGrainSource, voice, 0); 2.5.wait; server.sync;
     // the same switches 0.2 s apart
     # grainBefore, voiceBefore = ownCounts.(voice);
@@ -951,26 +960,23 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
     bursts.do({ arg source;
         command.(\setGrainSource, voice, source);
         bounded = bounded and: { slotsBounded.value };
-        live.add(liveNotes.(voice));
+        live.add(chordsHeld.value);
         0.2.wait; server.sync;
         # grainCount, voiceCount = ownCounts.(voice);
         maxGrain = max(maxGrain, grainCount);
         maxVoice = max(maxVoice, voiceCount);
     });
-    check.((maxGrain <= (grainBefore + 1)) and: { maxVoice <= (voiceBefore + 1) } and: { bounded } and: { live.every(_ == 3) },
-        "lifecycle: with a chord of four held, switches 0.2 s apart keep at most the own live grain synth and one releasing, and one releasing voice synth (at most % grain and % voice synths of its own, % and % before; slots bounded %, live notes %)".format(
-            maxGrain, maxVoice, grainBefore, voiceBefore, bounded, live.asArray.asSet.asArray));
+    agree.add(h.noteNodesAgree);
+    check.((maxGrain <= (grainBefore + 1)) and: { maxVoice <= (voiceBefore + 1) } and: { bounded } and: { live.every(_ == true) }
+        and: { agree.last[0] },
+        "lifecycle: with a chord of four held on five voices, switches 0.2 s apart keep at most the own live grain synth and one releasing, and one releasing voice synth (at most % grain and % voice synths of its own, % and % before; slots bounded %, chords held %, the server's note synths the slots' %)".format(
+            maxGrain, maxVoice, grainBefore, voiceBefore, bounded, live.every(_ == true), agree.last[0]));
     command.(\setGrainSource, voice, 0); 2.5.wait; server.sync;
-    command.(\voiceOff, voice);
-    // the fast stop / source / start / switch cycles, the chord played
-    // again at each start; the own synths counted as checkStopStartCycles
-    // counts them (the engine's tracking, after every command, without a
-    // yield)
+    // the fast stop / source / start / switch cycles on voice 3, its chord
+    // played again at each start, the other four voices' chords held; the
+    // own synths counted as checkStopStartCycles counts them (the engine's
+    // tracking, after every command, without a yield)
     bounded = true;
-    command.(\setGrainSource, cycleVoice, 0);
-    command.(\voiceOn, cycleVoice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0);
-    chord.(cycleVoice);
-    server.sync;
     cycles.do({ arg sources;
         [{ command.(\voiceOff, cycleVoice) }, { command.(\setGrainSource, cycleVoice, sources[0]) },
             { command.(\voiceOn, cycleVoice, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); chord.(cycleVoice) },
@@ -986,9 +992,12 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
             bounded = bounded and: { slotsBounded.value };
         });
     });
-    check.((trackedGrains <= 3) and: { trackedVoices <= 3 } and: { trackedVoices >= 2 } and: { bounded } and: { liveNotes.(cycleVoice) == 3 },
-        "lifecycle: with a chord of four held, six fast stop / source / start / switch cycles hold at most three own grain synths and three own voice synths after every command (worst % and %; slots bounded %, live notes %)".format(
-            trackedGrains, trackedVoices, bounded, liveNotes.(cycleVoice)));
+    server.sync; 0.1.wait; server.sync;
+    agree.add(h.noteNodesAgree);
+    check.((trackedGrains <= 3) and: { trackedVoices <= 3 } and: { trackedVoices >= 2 } and: { bounded } and: { chordsHeld.value }
+        and: { agree.last[0] },
+        "lifecycle: with a chord of four held on five voices, six fast stop / source / start / switch cycles hold at most three own grain synths and three own voice synths after every command (worst % and %; slots bounded %, chords held %, the server's note synths the slots' % (server %, slots %))".format(
+            trackedGrains, trackedVoices, bounded, chordsHeld.value, agree.last[0], agree.last[1].size, agree.last[2].size));
     command.(\setGrainSource, cycleVoice, 0);
     h.stopAllVoices;
     command.(\setNotePool, 0);
