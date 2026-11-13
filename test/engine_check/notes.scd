@@ -21,6 +21,7 @@ var checkBufferNotes, checkSlotChurn, checkInputNote, checkGrainFanOut, checkExp
 var startSynthVoice, checkSynthNote, checkSynthChord, checkVoiceFanOut, checkExpressionKinds;
 var levelProbe, checkPark, checkVoiceCommands, checkPoolFull, checkPoolRandom, checkPoolShrink, checkCuttingBound;
 var heldCount, cuttingCount;
+var checkSourceSwitch, checkBufferLoad, checkInputFreeze;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -788,6 +789,113 @@ checkCuttingBound = {
     h.stopAllVoices;
 };
 
+// A source switch of a running voice under a chord (voice 6, Ring): three
+// live extra notes (slots 1-3) and one releasing (slot 4). Synth -> buffer
+// (slot 1) -> input -> synth: each switch cuts every extra note and
+// restarts each live one on the new source from its kept values, in the
+// switch's bundle (a kill 1 to each old note's synth and an /s_new of each
+// new one, in the one bundle the command sends); the releasing one is cut
+// and not restarted. The live count is the same before and after, each live
+// slot holds its new synth (of the new source's kind) and the old one only
+// as its cutting synth
+checkSourceSwitch = {
+    var voice = 6, results = List.new, kindOf = IdentityDictionary[0 -> \voice, 1 -> \buffer], defOf;
+    kindOf[engine.inputSource] = \input;
+    defOf = (voice: engine.voiceSynthDefs[voice], buffer: \strataGrainBuf, input: \strataGrainRing);
+    startSynthVoice.(voice);
+    command.(\setNotePool, 16);
+    if (engine.bufferFrames[0] == 0) { command.(\loadBuffer, 0, h.stereoPath, 0); h.waitFor({ engine.bufferFrames[0] > 0 }, 3) };
+    (1 .. 4).do({ arg slot; playNote.(voice, slot, 1.0 + (slot / 8), 1.0, 220.0 + (slot * 55)) });
+    command.(\noteOff, voice, 4, 0);
+    server.sync;
+    [1, engine.inputSource, 0].do({ arg source;
+        var old = (1 .. 4).collect({ arg slot; slotSynth.(voice, slot) }), live = (1 .. 4).select({ arg slot; slotState.(voice, slot) == \live });
+        // (the cutting entries read before any yield: a kill fade ends 50 ms on)
+        var bundle = server.makeBundle(false, { command.(\setGrainSource, voice, source) }), new, nodes, ok;
+        var cutting = (1 .. 4).collect({ arg slot; slotCutting.(voice, slot) });
+        server.sendBundle(nil, *bundle);
+        server.sync;
+        new = (1 .. 4).collect({ arg slot; slotSynth.(voice, slot) });
+        nodes = h.synthTree(h.context.xg);
+        ok = ((1 .. 4).select({ arg slot; slotState.(voice, slot) == \live }) == live) and: { slotState.(voice, 4) == \empty }
+            and: { live.every({ arg slot; var synth = new[slot - 1];
+                synth.notNil and: { synth !== old[slot - 1] } and: { cutting[slot - 1] === old[slot - 1] }
+                    and: { slotRecord.(voice, slot)[\kind] == kindOf[source] }
+                    and: { nodes.detect({ arg node; node[\id] == synth.nodeID }) !? { arg node; node[\def] == defOf[kindOf[source]] } ? false }
+                    and: { bundle.any({ arg msg; (msg[0] == 9) and: { msg[2] == synth.nodeID } }) } }) }
+            and: { old.reject(_.isNil).every({ arg synth; sentValue.(bundle, synth, \kill) == 1 }) };
+        results.add([source, ok, live]);
+    });
+    check.(results.every({ arg each; each[1] }) and: { results.every({ arg each; each[2] == [1, 2, 3] }) }
+        and: { (1 .. 3).every({ arg slot; near.(controlOf.(slotSynth.(voice, slot), \freq), 220.0 + (slot * 55)) }) },
+        "notes: a source switch under a chord cuts every extra note and restarts the held ones on the new source in one bundle ([source, ok, live slots]: %)".format(
+            results.asArray));
+    h.stopAllVoices;
+};
+
+// A buffer load into the slot a buffer voice reads, under its notes (two
+// live, one releasing): the load's first step (in the command's bundle)
+// sends every grain synth reading the slot bufFrames 0 (the fade), the
+// notes' included; once the
+// file is in, the voice's live grain synths, its live notes' included, take
+// the slot's new length and rate, and the releasing note keeps bufFrames 0
+checkBufferLoad = {
+    var voice = 1, notes, tail, own, faded, loaded, bundle;
+    startBufferVoice.(voice);
+    command.(\setNotePool, 8);
+    (1 .. 3).do({ arg slot; playNote.(voice, slot, 1.0) });
+    command.(\noteOff, voice, 3, 0);
+    server.sync;
+    own = ownGrain.(voice);
+    notes = [slotSynth.(voice, 1), slotSynth.(voice, 2)];
+    tail = slotSynth.(voice, 3);
+    // (the load's first step, the fade, is in the command's own bundle:
+    // read there, since the rest follows within bufferFadeWait)
+    bundle = server.makeBundle(false, { command.(\loadBuffer, 0, h.monoPath, 0) });
+    server.sendBundle(nil, *bundle);
+    faded = ([own, tail] ++ notes).collect({ arg synth; sentValue.(bundle, synth, \bufFrames) });
+    h.waitFor({ engine.bufferFrames[0] == 4410 }, 3);
+    server.sync; 0.05.wait;
+    loaded = ([own] ++ notes).collect({ arg synth; [controlOf.(synth, \bufFrames), controlOf.(synth, \bufRateScale)] });
+    check.(faded.every(_ == 0) and: { loaded.every({ arg pair; (pair[0] == 4410) and: { near.(pair[1], engine.bufferRateScale(0)) } }) }
+        and: { controlOf.(tail, \bufFrames) == 0 },
+        "notes: a buffer load fades every note reading the slot (bufFrames at the load: %; once in, the own and live notes' [bufFrames, bufRateScale]: %; the releasing note's %)".format(
+            faded, loaded, controlOf.(tail, \bufFrames)));
+    h.stopAllVoices;
+    command.(\clearBuffer, 0);
+    server.sync;
+};
+
+// An input freeze (hold) under notes (voice 2, two live notes): once the copy
+// is in, the own grain synth and every live note read the voice's copy ring
+// at history 0 and count among its readers, and a note started while frozen
+// reads it too; the freeze control reaches them all; the unfreeze sets them
+// all back to the input ring, with freeze 0
+checkInputFreeze = {
+    var voice = 2, copy = engine.copyRingFor(voice), input = engine.ringBuffersFor(voice, engine.inputSource);
+    var readers = engine.areaState[\freeze][\inputReaders], synths, frozen, back, reading;
+    startInputVoice.(voice);
+    command.(\setNotePool, 8);
+    [1, 2].do({ arg slot; playNote.(voice, slot, 1.0 + (slot / 4)) });
+    server.sync;
+    command.(\setGrainParam, voice, \freeze, 1.0);
+    h.waitFor({ engine.areaState[\freeze][\copied][voice] }, 3);
+    server.sync;
+    playNote.(voice, 3, 0.75);
+    server.sync;
+    synths = [ownGrain.(voice)] ++ (1 .. 3).collect({ arg slot; slotSynth.(voice, slot) });
+    reading = { arg synth, ring; (controlOf.(synth, \bufL) == ring[0].bufnum) and: { controlOf.(synth, \phaseBus) == ring[2].index } };
+    frozen = synths.collect({ arg synth; synth.notNil and: { reading.(synth, copy) } and: { controlOf.(synth, \history) == 0 }
+        and: { controlOf.(synth, \freeze) == 1 } and: { readers[synth].notNil } });
+    command.(\setGrainParam, voice, \freeze, 0.0);
+    server.sync;
+    back = synths.collect({ arg synth; synth.notNil and: { reading.(synth, input) } and: { controlOf.(synth, \freeze) == 0 } });
+    check.(frozen.every(_ == true) and: { back.every(_ == true) },
+        "notes: an input freeze points every note of the voice at the copy ring (own, notes 1-3 on the copy: %; back on the input ring after the unfreeze: %)".format(
+            frozen, back));
+    h.stopAllVoices;
+};
+
 if (area.isNil or: { state.isNil }) {
     check.(false, "notes: the area runs at order 170 (no strataAreaNotes)");
 } {
@@ -819,6 +927,11 @@ if (area.isNil or: { state.isNil }) {
     checkPoolRandom.value;
     checkPoolShrink.value;
     checkCuttingBound.value;
+    h.stopAllVoices;
+    // sources, buffers and the input freeze
+    checkSourceSwitch.value;
+    checkBufferLoad.value;
+    checkInputFreeze.value;
     h.stopAllVoices;
     // the pool as the area found it: none
     command.(\setNotePool, 0);

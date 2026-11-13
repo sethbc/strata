@@ -179,7 +179,8 @@
     }
 
     // A slot's valid length or rate changed: tell the grain synths reading it and Lua.
-    // A voice's live grain synth takes the slot's length (and, when it holds
+    // A voice's live grain synths, its own and its live extra notes' (3.5:
+    // noteSynths), take the slot's length (and, when it holds
     // audio, its rate: slotLengthPairs). Any other strataGrainBuf still
     // reading it (releasing after voiceOff, fading or cutting after a source
     // switch) only ever takes bufFrames 0: it fades out (hasAudio) before
@@ -188,7 +189,7 @@
     // slot as it is then (gateVoice). The seconds sent are the slot's
     // announced ones from now on, which the periodic poll repeats.
     bufferChanged { arg index;
-        var live = numVoices.collect({ arg voice; synths[this.grainKey(voice)] }), seconds;
+        var live = numVoices.collect({ arg voice; [synths[this.grainKey(voice)]] ++ this.noteSynths(voice, \grain) }).flatten, seconds;
         this.slotGrainSynths(index).do({ arg synth;
             if (live.includes(synth)) {
                 this.sendToSynth(synth.setMsg(*this.slotLengthPairs(index)));
