@@ -85,7 +85,7 @@ Reviewed packages land in batches, one pull request per batch, not one per packa
 
 ## At a release
 
-The release pull request, besides the code's own version lines (`strata.lua`'s header and README.md name the release; a test checks them against CHANGELOG.md):
+The release pull request, besides the code's own version lines (`strata.lua`'s header and README.md name the release; a test checks them against CHANGELOG.md; README.md's line gives the version and points at CHANGELOG.md, and never summarizes releases):
 - merges the changelog fragments into CHANGELOG.md under the new version and deletes them (`changes/README.md`);
 - adds the release's paragraph and its landing line to `docs/history.md`;
 - updates `docs/status.md` (its first section, the open items the release closed, the limits it moved) and AGENTS.md's "The current release is" line;
