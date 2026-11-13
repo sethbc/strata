@@ -1209,11 +1209,23 @@ test("latch: a lifted key keeps the highest pressure its touch reached", functio
   assert_equal(#kept, 1, "the lift hands the peak over"); assert_near(kept[1].amp, 2, 1e-9, "full pressure, its peak")
   -- in release mode the lift ends the note instead
   params:set("midi_note_off", 2)
-  note_on(context, 1, 67)
+  note_on(context, 1, 60); note_on(context, 1, 67)
   context.clear_engine_calls()
   note_off(context, 1, 67)
   assert_equal(call_names(context, { noteOff = true, noteExpression = true }), "noteOff")
 end)
+
+-- No voice is left with a MIDI note in any slot, and no running voice's own
+-- note is parked: a parked own note is silent and nothing could unpark it
+local function assert_nothing_parked(S, name)
+  for voice = 1, S.constants.NUM_VOICES do
+    for _, used in ipairs(S.lib.notes.slots(voice)) do
+      assert_true(used.owner ~= "midi", name .. ": voice " .. voice .. " slot " .. used.slot .. " holds a MIDI note")
+      assert_true(not (used.parked and S.voices[voice].active),
+        name .. ": voice " .. voice .. " runs silent on a parked own note")
+    end
+  end
+end
 
 test("a port change, an unplug, a mode change and a panic release every MIDI note and empty the pool's count", function()
   local resetters = {
@@ -1251,7 +1263,127 @@ test("a port change, an unplug, a mode change and a panic release every MIDI not
       assert_equal(S.lib.notes.pool_used(), 0, name .. ": the pool is empty")
       assert_equal(next(S.midi_state.note_voice), nil, name .. ": no key remembered")
       assert_equal(S.lib.mpe.values(2).pressure, nil, name .. ": the MPE state is reset")
+      assert_nothing_parked(S, name)
     end
+  end
+  -- a reset whose new behavior is latch never leaves an own note parked
+  -- under released keys: the voice, silent already, stops
+  local probes = {
+    { name = "mpe selected to per voice with the own note parked", run = function(context, S)
+      params:set("midi_channel_mode", 3); S.selected_voice = 1
+      note_on(context, 2, 60); note_on(context, 3, 64); note_off(context, 2, 60)   -- auto: release; the own note parks
+      assert_true(S.lib.notes.slots(1)[1].parked, "the own note parked")
+      params:set("midi_channel_mode", 1)                                          -- the reset reads latch
+      note_off(context, 3, 64)
+    end },
+    { name = "release to latch mid-chord, then an unplug", run = function(context)
+      params:set("midi_note_off", 2)
+      note_on(context, 1, 60); note_on(context, 1, 64); note_off(context, 1, 60)   -- the own note parks
+      params:set("midi_note_off", 3)
+      context.midi.unplug(1)
+    end },
+  }
+  for _, probe in ipairs(probes) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    context.midi.plug(1, "keys")
+    assert_true(S.voices[1].active, probe.name .. ": voice 1 runs from the start")
+    probe.run(context, S)
+    assert_nothing_parked(S, probe.name)
+    assert_true(not S.voices[1].active, probe.name .. ": voice 1, silent under its parked note, stopped")
+    assert_equal(S.lib.notes.held(1), 0, probe.name); assert_equal(S.lib.notes.pool_used(), 0, probe.name)
+    -- a later panic and key find nothing stuck
+    context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 })
+    note_on(context, 1, 62)
+    assert_true(S.voices[1].active and S.lib.notes.find(1, "midi", key_of(1, 62)) == 1, probe.name .. ": the next key plays")
+  end
+end)
+
+test("a note off change releases every MIDI note, as a channel mode change does", function()
+  -- release to latch, the own note parked under a held key
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("midi_note_off", 2)
+  for _, note in ipairs({ 60, 64, 67 }) do note_on(context, 1, note) end
+  note_off(context, 1, 60)
+  assert_true(S.lib.notes.slots(1)[1].parked, "the own note parked")
+  params:set("midi_note_off", 3)
+  assert_nothing_parked(S, "release to latch")
+  assert_true(not S.voices[1].active, "release to latch: the silent voice stops")
+  assert_equal(next(S.midi_state.held[1]), nil, "no key held"); assert_equal(next(S.midi_state.note_voice), nil)
+  context.clear_engine_calls()
+  note_off(context, 1, 64); note_off(context, 1, 67)
+  assert_equal(#context.engine_calls, 0, "the keys' later lifts send nothing")
+  -- latch to release, a chord held
+  context = load_strata(); finish_startup(context)
+  S = local_value("S")
+  params:set("midi_note_off", 3)
+  for _, note in ipairs({ 60, 64, 67 }) do note_on(context, 1, note) end
+  params:set("midi_note_off", 2)
+  assert_nothing_parked(S, "latch to release")
+  assert_true(not S.voices[1].active, "latch to release: the voice whose keys were down stops")
+  assert_equal(S.lib.notes.pool_used(), 0)
+  -- latch to release, a chord latched with every key up: the extra notes
+  -- go, the own note sounds on as latch left it
+  params:set("midi_note_off", 3)
+  for _, note in ipairs({ 60, 64, 67 }) do note_on(context, 2, note) end
+  for _, note in ipairs({ 60, 64, 67 }) do note_off(context, 2, note) end
+  assert_equal(S.lib.notes.held(2), 3)
+  params:set("midi_note_off", 2)
+  assert_nothing_parked(S, "a latched chord to release")
+  assert_true(S.voices[2].active, "voice 2 sounds on"); assert_equal(S.lib.notes.pool_used(), 0)
+end)
+
+test("the layout hook acts only in the MPE modes, and a second run sends nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  -- per voice: a zone edit leaves a latched chord and held keys alone
+  for _, note in ipairs({ 60, 64, 67 }) do note_on(context, 1, note) end
+  for _, note in ipairs({ 60, 64, 67 }) do note_off(context, 1, note) end
+  note_on(context, 3, 60)
+  context.clear_engine_calls()
+  params:set("v5_zone_high", 100)
+  assert_equal(#context.engine_calls, 0, "per voice: nothing sent")
+  assert_equal(S.lib.notes.held(1), 3, "the latched chord sounds on")
+  assert_true(S.midi_state.held[3][key_of(3, 60)], "the key stays down")
+  -- mpe selected: the first change releases, the second finds nothing to send
+  params:set("midi_channel_mode", 3); S.selected_voice = 1
+  params:set("midi_note_off", 3)
+  for index, note in ipairs({ 60, 64, 67 }) do note_on(context, index + 1, note) end
+  for index, note in ipairs({ 60, 64, 67 }) do note_off(context, index + 1, note) end
+  assert_equal(S.lib.notes.held(1), 3)
+  params:set("v5_zone_high", 90)
+  assert_equal(S.lib.notes.held(1), 0, "the first run releases"); assert_equal(S.lib.notes.pool_used(), 0)
+  context.clear_engine_calls()
+  params:set("v5_zone_high", 80)
+  assert_equal(#context.engine_calls, 0, "the second run sends nothing")
+  assert_nothing_parked(S, "the second run")
+end)
+
+test("RPN 6 with notes held releases them mid-handler and leaves the key state and the allocator agreeing", function()
+  for _, off_mode in ipairs({ 1, 3 }) do   -- auto (release in mpe selected), latch
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    params:set("midi_channel_mode", 3); S.selected_voice = 1
+    params:set("midi_note_off", off_mode)
+    for index, note in ipairs({ 60, 64, 67 }) do note_on(context, index + 1, note) end
+    assert_equal(S.lib.notes.held(1), 3)
+    -- the controller's configuration: RPN 6 on the lower master, 7 members
+    context.midi.send(1, { type = "cc", cc = 101, val = 0, ch = 1 })
+    context.midi.send(1, { type = "cc", cc = 100, val = 6, ch = 1 })
+    context.midi.send(1, { type = "cc", cc = 6, val = 7, ch = 1 })
+    local name = "note off " .. off_mode
+    assert_equal(params:get("mpe_lower_members"), 7, name .. ": RPN 6 set the count")
+    assert_equal(S.lib.notes.held(1), 0, name .. ": released"); assert_equal(S.lib.notes.pool_used(), 0, name)
+    assert_equal(next(S.midi_state.held[1]), nil, name .. ": no key down"); assert_equal(next(S.midi_state.note_voice), nil)
+    assert_nothing_parked(S, name)
+    assert_equal(S.voices[1].active, off_mode == 3, name .. ": release stops the voice its keys held, latch leaves it")
+    -- the old keys' lifts find nothing; a new key plays
+    context.clear_engine_calls()
+    for index, note in ipairs({ 60, 64, 67 }) do note_off(context, index + 1, note) end
+    assert_equal(#context.engine_calls, 0, name .. ": the lifts send nothing")
+    note_on(context, 2, 62)
+    assert_equal(S.lib.notes.find(1, "midi", key_of(2, 62)), 1, name .. ": the next key plays slot 1")
   end
 end)
 
