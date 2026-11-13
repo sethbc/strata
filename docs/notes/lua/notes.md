@@ -27,9 +27,9 @@ A voice has `NOTE_SLOTS` (8) slots. Slot 1 is its own note: its pitch is the voi
 3. **A free extra slot under the cap and room in the pool:** the free slot among 2..cap whose last note ended longest ago (a never used one first; a tie, the lowest), so a tail has the longest time to fade: `noteExpression`, then `noteOn`.
 4. **A free slot but the pool full:** the oldest held extra note on any voice that may be stolen (by `started`; a tie, the lowest voice, then slot) is cut, `noteOff(v2 - 1, slot2 - 1, 1)`, and forgotten; the new note starts as in 3. None that may be stolen: branch 6.
 5. **No free slot under the cap:** the voice's oldest held extra note in slots 2..cap that may be stolen is replaced in place (`noteExpression`, `noteOn`, no `noteOff`). None: branch 6.
-6. **Nothing can be stolen** (a cap of 1, a pool of 0, every candidate protected): slot 1 as in 2, whoever held it. A note with `fallback = false` (a boolean, default true: a chord's further notes, ruling 26) is refused here instead: nil, nothing sent or recorded.
+6. **Nothing can be stolen** (a cap of 1, a pool of 0, every candidate protected): slot 1 as in 2, whoever held it.
 
-Branches 3 to 6 run only on a running voice: on a stopped voice every play is branch 1 or 2, slot 1. `quiet` changes nothing for an extra slot.
+Branches 3 to 6 run only on a running voice: on a stopped voice every play is branch 1 or 2, slot 1. `quiet` changes nothing for an extra slot. A note with `extra_only = true` (a boolean, default false: a chord's further notes, ruling 32) takes only branch 1 or 3, on a running voice: never slot 1 by branch 2 or 6, never a steal; otherwise it is refused (nil, nothing sent or recorded).
 
 ### Release
 

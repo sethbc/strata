@@ -336,15 +336,16 @@ return function(S)
       and finite(note.pitch)
       and finite(note.velocity) and type(note.set_own) == "function"
       and (note.park == nil or type(note.park) == "boolean") and (note.quiet == nil or type(note.quiet) == "boolean")
-      and (note.fallback == nil or type(note.fallback) == "boolean")
+      and (note.extra_only == nil or type(note.extra_only) == "boolean")
       and (note.expression == nil or type(note.expression) == "table")
   end
 
   -- Play note = {owner, key, pitch, velocity, set_own, park, quiet,
-  -- fallback, expression} on voice (design §2.2): the slot it took, nil
-  -- when refused. fallback (default true) false: a play that would reach
-  -- branch 6 is refused instead, sending and recording nothing (ruling 26:
-  -- a chord's further notes never fall back onto slot 1)
+  -- extra_only, expression} on voice (design §2.2): the slot it took, nil
+  -- when refused. extra_only (default false) true: only branch 1 (its own
+  -- held slot again) or 3 (a free extra slot with room in the pool); never
+  -- slot 1 otherwise, never a steal: refused, sending and recording nothing
+  -- (ruling 32: a chord's further notes take only free room)
   function M.play(voice, note)
     if not whole_in(voice, 1, NUM_VOICES) or not valid_note(note) then return nil end
     -- a running frozen synth voice's reference, before set_own can move the
@@ -375,6 +376,14 @@ return function(S)
     -- quiet note its caller never started), so branches 3 to 6 run only on
     -- a running voice
     local own = slots[voice][1]
+    if note.extra_only then
+      -- 3 alone: a free extra slot under the cap, room in the pool, a running voice
+      local free = S.voices[voice].active and free_slot(voice, note_cap(voice))
+      if not free or M.pool_used() >= M.pool() then return nil end
+      start_extra(voice, free, played, now)
+      held_changed()
+      return free
+    end
     if own == nil or own.parked or not S.voices[voice].active then return play_own(voice, note, played, now) end
     local cap = note_cap(voice)
     local free = free_slot(voice, cap)
@@ -405,9 +414,7 @@ return function(S)
         return start_extra(voice, victim.slot, played, now)
       end
     end
-    -- 6. nothing can be stolen: slot 1, the newest note winning (unless
-    -- the note asked for no fallback: refused)
-    if note.fallback == false then return nil end
+    -- 6. nothing can be stolen: slot 1, the newest note winning
     return play_own(voice, note, played, now)
   end
 

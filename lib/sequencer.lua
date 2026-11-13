@@ -441,14 +441,16 @@ return function(S)
   end
 
   -- Note k of a chord for S.lib.notes.play. The first is quiet (the voices
-  -- output starts and accents the voice itself, ruling 13); every further
-  -- note asks no fallback (ruling 26: refused rather than onto slot 1).
+  -- output starts and accents the voice itself, ruling 13) and keeps every
+  -- branch: it is the step's note, as in 3.4. Every further note is
+  -- extra_only (ruling 32): its own held slot again, or a free extra slot
+  -- with room in the pool; never slot 1, never a steal: else refused.
   -- set_own makes the note the voice's own: its value as the note override
   -- (3.4's), held with the step's overrides
   local function chord_note(voice_idx, chord, k, velocity)
     local first = k == 1
     return {owner = SEQ.note_owner, key = k, pitch = chord.pitches[k], velocity = velocity, park = false,
-      quiet = first, fallback = first,
+      quiet = first, extra_only = not first,
       set_own = function()
         if chord.values[k] == nil then return end
         set_override(voice_idx, chord.note_id, chord.values[k])
