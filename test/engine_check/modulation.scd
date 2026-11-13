@@ -30,7 +30,7 @@ var checkDefaults, checkVoicesLeft, checkOffsetNode, checkOffsetWrites, checkLfo
 var checkSync, checkScatter, checkReleases, checkPitch, checkGrainTaps, checkGrainChannels, checkStageTaps;
 var checkStageCutoff, checkStageAmp, checkEqual33, checkGates, checkGateEngine, checkMute, checkDefsSafe;
 var checkVelocity, checkStartStop, checkGateKept, checkRegateEnded, stageArgs, ringArgs, bufArgs;
-var checkScatterGlides, checkRestartPhase, checkGateLag;
+var checkScatterGlides, checkRestartPhase, checkGateLag, checkRegateSplit;
 
 // [synths, groups] on the server, from one /status reply
 nodeCounts = {
@@ -567,6 +567,68 @@ checkLfoSeries = {
         "modulation: one node per LFO through starts, shape changes, moves and stops at 20 Hz for 2 s, and none once stopped (% steps sent over % s, the slowest tree read % s; at each step's commands every LFO node is its place's, a releasing one included, each running LFO has one, of its shape on its channel, and each stopped a step before has none: steps wrong %, at most % LFO nodes and % releasing at once, % left, % re-gates that found their node ended and waited for its restart, actions %)".format(
             steps, span.round(0.001), queries.maxItem.round(0.001), wrong.keep(4), maxNodes, maxReleasing, final.size, restarted,
             actions.contents));
+    resetModulation.value;
+};
+
+// The series' split, made every time (#677): one LFO running on a channel,
+// stopFastLfo, then the same-shape setFastLfo once the node has ended on the
+// server, its /n_end not yet handled (the interpreter held, in a loop that
+// allocates nothing, so no reply is handled meanwhile). The hold: scsynth
+// takes a message at the start of the first callback after it arrives (at
+// most one callback later) and runs a callback's blocks at once, so the
+// release, fastLfoFadeSeconds long, has run to its end at most its own
+// length after that callback starts, plus the time to compute it: the
+// release and two callbacks is enough, one to spare. The callback is
+// measured: back-to-back /status replies, each answered at the start of the
+// next one (21.3 ms at JACK's 1024 frames). The re-gate then reaches no node
+// and the engine starts the LFO again (fastLfoEnded) once the interpreter is
+// free: it must come back within 0.5 s on exactly one node, a new one (so a
+// hold too short to split them fails here instead of passing untested), of
+// its shape on its channel, which it writes again; no tree read in the wait
+// shows two; no /fail reply; and a stop then leaves no node and no place
+checkRegateSplit = {
+    var lfo = 5, voice = 4, destination = 2, shape = 2, depth = 0.2, offset = 0.3, expected = depth + offset;
+    var fails = 0, responder = OSCFunc({ fails = fails + 1 }, '/fail', server.addr);
+    var callback, hold, until, old, before, most = 0, back, nodes, node, value, ended, start, ok;
+    // (square at phase 0, rate 0.003 Hz: the phase holds, u = 1, so the
+    // channel reads depth + offset, at the start and after the restart)
+    command.(\setFastLfo, lfo, voice, destination, shape, 0.003, depth, offset);
+    server.sync; 0.1.wait;
+    before = readChannel.(voice, destination);
+    old = placeSynth.(lfo);
+    nodeCounts.value;
+    start = Main.elapsedTime;
+    4.do({ nodeCounts.value });
+    callback = (Main.elapsedTime - start) / 4;
+    hold = engine.fastLfoFadeSeconds + (2 * callback);
+    command.(\stopFastLfo, lfo);
+    until = Main.elapsedTime + hold;
+    while { Main.elapsedTime < until } { };
+    command.(\setFastLfo, lfo, voice, destination, shape, 0.003, depth, offset);
+    // the /n_end is handled from here: read the tree until the place's new
+    // node is in it, at most 0.5 s, and three times more
+    until = Main.elapsedTime + 0.5;
+    back = false;
+    while { back.not and: { Main.elapsedTime < until } } {
+        nodes = lfoNodes.value;
+        most = most.max(nodes.size);
+        back = placeSynth.(lfo) !? { arg synth; (synth !== old) and: { nodes.any({ arg each; each[\id] == synth.nodeID }) } } ? false;
+    };
+    3.do({ nodes = lfoNodes.value; most = most.max(nodes.size) });
+    node = nodes.detect({ arg each; placeSynth.(lfo) !? { arg synth; each[\id] == synth.nodeID } ? false });
+    0.1.wait;
+    value = readChannel.(voice, destination);
+    command.(\stopFastLfo, lfo);
+    server.sync; 0.1.wait; server.sync;
+    ended = lfoNodes.value.isEmpty and: { placeSynth.(lfo).isNil } and: { readChannel.(voice, destination) == 0 };
+    server.sync;
+    responder.free;
+    ok = (fails == 0) and: { (before - expected).abs < 0.005 } and: { back } and: { most == 1 } and: { nodes.size == 1 }
+        and: { node.notNil } and: { node[\def] == lfoDefs[shape] } and: { node[\controls][\out] == engine.fastModChannel(voice, 0, destination) }
+        and: { (value - expected).abs < 0.005 } and: { ended };
+    check.(ok, "modulation: an LFO stopped, then re-gated with its shape after its node ended on the server (a hold of % s: the release and two callbacks of % s), comes back on exactly one new node of its shape on its channel, never two, writes its channel again, and a stop then leaves none (% /fail replies; back within 0.5 s: %; at most % LFO nodes in a read; its node %; the channel % before, % after, of %; none and no place after the stop: %)".format(
+        hold.round(0.0001), callback.round(0.0001), fails, back, most, node !? { [node[\def], node[\controls][\out]] },
+        before.round(0.0001), value.round(0.0001), expected, ended));
     resetModulation.value;
 };
 
@@ -1669,6 +1731,7 @@ if (area.isNil or: { state.isNil }) {
     checkBuses.value;
     checkOffsetWrites.value;
     checkLfoSeries.value;
+    checkRegateSplit.value;
     checkLfoSums.value;
     checkShapes.value;
     checkSync.value;
