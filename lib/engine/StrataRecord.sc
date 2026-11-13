@@ -146,13 +146,13 @@
         // runs from the send (#376, #565). A command without sent (h.command's
         // eight arguments, nil) counts from when sclang handles it
         this.addCommand(\recordBuffer, "ifffififf", { arg msg;
-            this.recordSlot(msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7], msg[8], msg[9]);
+            this.areaCall(\recordSlot, msg[1], msg[2], msg[3], msg[4], msg[5], msg[6], msg[7], msg[8], msg[9]);
         });
 
         // End a recording now, with its fade, keeping what was captured;
         // cancels one that has not started
         this.addCommand(\stopRecord, "i", { arg msg;
-            this.stopRecordSlot(msg[1]);
+            this.areaCall(\stopRecordSlot, msg[1]);
         });
 
         // One message per change of a recording's state (recordStateValue).

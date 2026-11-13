@@ -65,11 +65,11 @@
         // msg: slot index (0-7), sound file path, start seconds into the
         // file (at its own rate; clipped to the file; 0 = the beginning)
         this.addCommand(\loadBuffer, "isf", { arg msg;
-            this.loadSlot(msg[1], msg[2].asString, msg[3]);
+            this.areaCall(\loadSlot, msg[1], msg[2].asString, msg[3]);
         });
 
         this.addCommand(\clearBuffer, "i", { arg msg;
-            this.clearSlot(msg[1]);
+            this.areaCall(\clearSlot, msg[1]);
         });
 
         // recordBuffer and stopRecord are the record area's;
