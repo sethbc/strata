@@ -1220,8 +1220,17 @@ local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFr
 -- the calls that hand a function to something that runs it later (the
 -- class library's and the engine's own): a method that makes one keeps its
 -- frame past its return
+-- (#680: each of the last nine keeps a function or an action too: getn's
+-- action in readSlotPeaks and shrinkSlotPeaks, unixCmd's in the waveform
+-- area's mover and renameIntoPlace, addDependant's `confirm` in watchStart;
+-- watchVoiceSynth, watchNoteSynth and watchStart register an onFree or a
+-- dependant. A `get` is one only with a function argument, see
+-- frame_guard.deferring_names; the engine has none today.) A method that
+-- calls any of these, or an engine method that does, through any chain of
+-- direct calls, is one that hands a function on (frame_guard.deferring_methods)
 local DEFERRING_CALLS = { "sched", "fork", "onFree", "OSCFunc", "OSCdef", "Routine", "defer", "afterSlotFade",
-  "writeSlot", "writeSlotPeaks", "renameIntoPlace" }
+  "writeSlot", "writeSlotPeaks", "renameIntoPlace", "getn", "unixCmd", "addDependant", "readSlotPeaks",
+  "shrinkSlotPeaks", "watchVoiceSynth", "watchNoteSynth", "watchStart" }
 
 -- SC source with its comments stripped and the text of its strings, quoted
 -- symbols and characters blanked, so a brace inside one never ends a %b{}
@@ -1339,43 +1348,120 @@ test("an area hook, strataAreas and a method that keeps a closure are called thr
     "lib/engine/StrataUtil.sc: areaCall assigns the method's result and then returns it (never ^this.performList)")
 end)
 
--- The direct calls (this.<method>(...), not through areaCall) a command
--- function makes of an engine method that makes a deferring call
--- (DEFERRING_CALLS), in files { { path, text } }: { "path:line: ..." }.
--- #211: such a method's frame outlives the command, and its caller is the
--- command function's frame, freed as it returns, or, tail-called, the
--- frame that called the command function: on norns the OSC dispatcher's,
--- in the engine check a function's. Through areaCall it is a live frame
--- either way. One level deep: a deeper method that keeps a closure is
--- listed in AREA_CALL_METHODS
-local function commands_deferring_directly(files)
-  local code, bodies, found = {}, {}, {}
-  for _, file in ipairs(files) do code[#code + 1] = { path = file.path, text = sc_code_only(file.text) } end
-  local function deferring_calls(name)
-    if bodies[name] == nil then
-      bodies[name] = {}
-      for _, file in ipairs(code) do
-        local body = sc_method_body(file.text, name)
-        if body then
-          for _, call in ipairs(DEFERRING_CALLS) do
-            if body:find("%f[%w_]" .. call .. "%f[^%w_]") then table.insert(bodies[name], call) end
+-- The direct calls (this.<method>, with or without arguments, not through
+-- areaCall) that a function sclang keeps and calls later makes of an engine
+-- method that hands a function on, in files { { path, text } }:
+-- { "path:line: ..." }. The functions are the commands' (addCommand), the
+-- area Events' grainParamHandlers (the Event's entries and any
+-- grainParamHandlers[\name] = { ... } an area adds) and grainDefs.
+-- #211: such a method's frame outlives the call, and its caller is the
+-- function's frame, freed as it returns, or, tail-called, the frame that
+-- called the function: on norns the OSC dispatcher's, in the engine check a
+-- function's. Through areaCall it is a live frame either way. A method
+-- hands a function on when its body holds a DEFERRING_CALLS name or it calls,
+-- anywhere (a tail call too), an engine method that does (#680); the
+-- methods are the ones the engine's class and extensions define, so a
+-- this.name that is a variable's getter is never one.
+local frame_guard = {}
+
+-- DEFERRING_CALLS names a piece of code (comments, strings blanked) holds
+function frame_guard.deferring_names(code)
+  local names = {}
+  for _, call in ipairs(DEFERRING_CALLS) do
+    if code:find("%f[%w_]" .. call .. "%f[^%w_]") then names[#names + 1] = call end
+  end
+  for arguments in code:gmatch("%.get%s*(%b())") do
+    if arguments:find("{") then names[#names + 1] = "get"; break end
+  end
+  return names
+end
+
+-- The engine's methods { name = body code } of the files (the class and its
+-- extensions: the helper classes' are not called on this)
+function frame_guard.engine_methods(files)
+  local methods = {}
+  for _, file in ipairs(files) do
+    for _, block in ipairs(sc_blocks(file.text)) do
+      if block.head:find("Engine_Strata", 1, true) then
+        for _, method in ipairs(block.methods) do methods[(method.name:gsub("^%*", ""))] = sc_code_only(method.body) end
+      end
+    end
+  end
+  return methods
+end
+
+-- Every this.<name> a piece of code holds, with or without arguments:
+-- { { name, offset } }
+function frame_guard.this_calls(code)
+  local calls = {}
+  for offset, name in code:gmatch("()%f[%w_]this%.([%a_][%w_]*)%f[^%w_]") do calls[#calls + 1] = { name = name, offset = offset } end
+  return calls
+end
+
+-- { method = chain } for each method that hands a function on: the chain is
+-- "method -> next -> ... -> the deferring call", by a fixed point over the
+-- direct calls (through areaCall a call is not one: its callee's frame is
+-- live)
+function frame_guard.deferring_methods(methods)
+  local chains, changed = {}, true
+  for name, body in pairs(methods) do
+    local names = frame_guard.deferring_names(body)
+    if #names > 0 then chains[name] = name .. " -> " .. names[1] end
+  end
+  while changed do
+    changed = false
+    for name, body in pairs(methods) do
+      if not chains[name] then
+        for _, call in ipairs(frame_guard.this_calls(body)) do
+          if call.name ~= "areaCall" and call.name ~= name and chains[call.name] then
+            chains[name] = name .. " -> " .. chains[call.name]
+            changed = true
+            break
           end
-          break
         end
       end
     end
-    return bodies[name]
   end
+  return chains
+end
+
+-- The functions of a file's code that are kept and called later:
+-- { { label, key, open (the offset of its brace), body } }
+function frame_guard.kept_functions(code)
+  local found = {}
+  for command, open in code:gmatch('addCommand%(%s*\\([%w_]+)%s*,%s*"[^"]*"%s*,%s*(){') do
+    found[#found + 1] = { label = command .. "'s command", key = command, open = open, body = code:match("^%b{}", open) }
+  end
+  for area_start in code:gmatch("()grainParamHandlers:%s*%(") do
+    local event_start = code:find("(", area_start, true)
+    local event = code:match("^%b()", event_start)
+    for key, open in event:gmatch("%f[%w_]([%a_][%w_]*):%s*(){") do
+      found[#found + 1] = { label = key .. "'s grain param handler", key = key, open = event_start + open - 1,
+        body = event:match("^%b{}", open) }
+    end
+  end
+  for key, open in code:gmatch("grainParamHandlers%[\\([%w_]+)%]%s*=%s*(){") do
+    found[#found + 1] = { label = key .. "'s grain param handler", key = key, open = open, body = code:match("^%b{}", open) }
+  end
+  for list_start in code:gmatch("grainDefs:%s*()%[") do
+    found[#found + 1] = { label = "a grainDefs function", key = "grainDefs", open = list_start, body = code:match("^%b[]", list_start) }
+  end
+  return found
+end
+
+local function kept_functions_deferring(files)
+  local code, found = {}, {}
+  for _, file in ipairs(files) do code[#code + 1] = { path = file.path, text = sc_code_only(file.text) } end
+  local chains = frame_guard.deferring_methods(frame_guard.engine_methods(files))
   for _, file in ipairs(code) do
-    for command, open in file.text:gmatch('addCommand%(%s*\\([%w_]+)%s*,%s*"[^"]*"%s*,%s*(){') do
-      local body = file.text:match("^%b{}", open)
-      for offset, method in body:gmatch("()this%.([%a_][%w_]*)%s*%(") do
-        local calls = method ~= "areaCall" and deferring_calls(method) or {}
-        if #calls > 0 then
-          local _, newlines = file.text:sub(1, open + offset - 1):gsub("\n", "")
-          found[#found + 1] = string.format("%s:%d: %s's command calls this.%s directly, and %s hands a function to %s:"
+    for _, fn in ipairs(frame_guard.kept_functions(file.text)) do
+      for _, call in ipairs(frame_guard.this_calls(fn.body)) do
+        local chain = call.name ~= "areaCall" and chains[call.name]
+        if chain then
+          local _, newlines = file.text:sub(1, fn.open + call.offset - 1):gsub("\n", "")
+          found[#found + 1] = string.format("%s:%d: %s calls this.%s directly, and %s hands a function to %s (%s):"
             .. " call it through this.areaCall(\\%s, ...) (docs/notes/engine/structure.md, Areas)",
-            file.path, newlines + 1, command, method, method, table.concat(calls, ", "), method)
+            file.path, newlines + 1, fn.label, call.name, call.name, chain:match("([%w_]+)$"), chain, call.name)
         end
       end
     end
@@ -1391,16 +1477,39 @@ test("a command calls a method that hands a function on only through areaCall (#
     .. '    validProbe { arg x; ^x.notNil }\n'
     .. '    probeLater { arg x; SystemClock.sched(1, { x.postln; nil }) }\n'
     .. '    probeFork { arg x; fork { x.postln } }\n}\n' } }
-  local found = commands_deferring_directly(probe)
+  local found = kept_functions_deferring(probe)
   assert_equal(#found, 2, "the probe's two direct calls: " .. table.concat(found, "; "))
   assert_true(found[1] and found[1]:match("^probe%.sc:3: probeLater's command calls this%.probeLater directly, and probeLater hands a function to sched"),
     "names the file, the line, the command, the method and the call: " .. tostring(found[1]))
   assert_true(found[2] and found[2]:match("^probe%.sc:5: probeFork's command calls this%.probeFork directly.* to fork"),
     "inside an if too: " .. tostring(found[2]))
 
+  -- #680 (a): a method that reaches a deferring one by a tail call
+  local tail = { { path = "probe.sc", text = '+ Engine_Strata {\n    addProbeCommands {\n'
+    .. '        this.addCommand(\\probeTail, "i", { arg msg; this.startProbe(msg[1]); });\n    }\n'
+    .. '    startProbe { arg x; ^this.watchProbe(x) }\n'
+    .. '    watchProbe { arg x; x.onFree({ x.postln }) }\n}\n' } }
+  found = kept_functions_deferring(tail)
+  assert_equal(#found, 1, "a tail hop to a deferring method is caught: " .. table.concat(found, "; "))
+  -- #680 (b): a call without parentheses
+  local bare = { { path = "probe.sc", text = '+ Engine_Strata {\n    addProbeCommands {\n'
+    .. '        this.addCommand(\\probeBare, "i", { arg msg; this.probeLater; });\n'
+    .. '        this.addCommand(\\probeBareIf, "i", { arg msg; if (msg[1] > 0) { ^this.probeLater }; this.probeValue });\n    }\n'
+    .. '    probeValue { ^3 }\n    numProbe { ^numVoices }\n'
+    .. '    probeLater { SystemClock.sched(1, { 1.postln; nil }) }\n}\n' } }
+  found = kept_functions_deferring(bare)
+  assert_equal(#found, 2, "a call with no parentheses is caught, a plain method is not: " .. table.concat(found, "; "))
+  -- #680 (c): a grain param handler
+  local handler = { { path = "probe.sc", text = '+ Engine_Strata {\n    strataAreaProbe {\n        ^(order: 1,\n'
+    .. '            grainParamHandlers: (\n                a: { arg voice, value; this.probeLater(voice); true },\n'
+    .. '                b: { arg voice, value; this.probeValue(voice); true }\n            )\n        )\n    }\n'
+    .. '    probeValue { arg x; ^x }\n    probeLater { arg x; x.fork }\n}\n' } }
+  found = kept_functions_deferring(handler)
+  assert_equal(#found, 1, "a grain param handler's direct call is caught: " .. table.concat(found, "; "))
+
   local files = engine_files()
   table.remove(files, 1)
-  found = commands_deferring_directly(files)
+  found = kept_functions_deferring(files)
   assert_true(#found == 0, table.concat(found, "\n"))
   -- the guard sees the engine's commands and the methods it reads
   local commands = 0
@@ -1408,6 +1517,10 @@ test("a command calls a method that hands a function on only through areaCall (#
     for _ in sc_code_only(file.text):gmatch('addCommand%(%s*\\[%w_]+%s*,%s*"[^"]*"%s*,%s*{') do commands = commands + 1 end
   end
   assert_true(commands >= 30, "the engine's command functions are found (" .. commands .. ")")
+  local chains, deferring = frame_guard.deferring_methods(frame_guard.engine_methods(files)), 0
+  for _ in pairs(chains) do deferring = deferring + 1 end
+  assert_true(deferring >= 20 and chains.startVoiceSynth and chains.startVoiceSynth:find("watchVoiceSynth", 1, true),
+    "the fixed point finds the methods that hand a function on, startVoiceSynth through its tail call (" .. deferring .. ")")
 end)
 
 test("the engine's sample paths run no sclang function per sample (#131)", function()

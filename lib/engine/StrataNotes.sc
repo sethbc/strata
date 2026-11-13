@@ -597,7 +597,7 @@
                 and: { this.fastModValuesFinite(\noteOn, [[\note, msg[3]], [\freq, msg[4]], [\rate, msg[5]], [\velocity, msg[6]]]) }) {
                 note = msg[3].clip(0, 127); freq = msg[4].clip(8, 20000); rate = msg[5].clip(0.25, 4); velocity = msg[6].clip(0, 1);
                 this.receiveNote(\noteOn, [voice, slot, note, freq, rate, velocity]);
-                if (slot > 0) { this.extraNoteOn(voice, slot, note, freq, rate, velocity) } { this.ownNoteOn(voice, rate, velocity) };
+                if (slot > 0) { this.areaCall(\extraNoteOn, voice, slot, note, freq, rate, velocity) } { this.ownNoteOn(voice, rate, velocity) };
             };
         });
 
