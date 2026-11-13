@@ -207,13 +207,14 @@ function sync_check.sc_commands(sc_source)
   return stubs.engine_signatures_from_source(sc_source)
 end
 
--- Commands the engine has before the script calls them (empty: 3.4's five
--- fast-modulation commands, pending until the Lua that calls each landed,
--- are all called now). A pending command may go uncalled; one a script
--- file calls fails the check, as does a name the engine does not have, so
--- the list never outlives its use. One name per line: a release whose
--- engine lands a command before its caller adds it here, and the caller's
--- change removes it.
+-- Commands the engine has before the script calls them, so the check lets
+-- them go uncalled while their engine side lands first. Today 3.5's four
+-- note commands: the engine has them as checked stubs, and each leaves the
+-- list when the note module (S.lib.notes), the only one that sends them,
+-- calls it. A pending command a script file calls fails the check, as does
+-- a name the engine does not have, so the list never outlives its use. One
+-- name per line: a release whose engine lands a command before its caller
+-- adds it here, and the caller's change removes it.
 sync_check.PENDING_COMMANDS = {
   "noteOn",
   "noteOff",
