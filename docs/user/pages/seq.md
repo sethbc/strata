@@ -24,7 +24,7 @@ The patterns step on norns' clock (PARAMETERS > CLOCK), so with the clock's sour
 ALT+K2 held opens it on the selected voice and the step under the cursor. The line under the header shows them (`v3 step 5`) and the voice's sixteen steps, the one being edited outlined. Below it, a list in three sections:
 
 - **voice** - `length` (1-16 steps), `division` (`1/32` to `1 bar`), `swing` (50-75 %), `gate` (off or on), `gate len` (the gate's length in steps, `0.50 st`), `gate rel` (its release, `0.10 s`), `euclid` (a Euclidean fill: `5/12 +2` is 5 hits over the voice's 12 steps, turned by 2) and `clear` (K3 clears the pattern)
-- **step** (named after the step: `step 5`) - `level` (0-15), `prob` (the chance it plays, `80%`), `ratchet` (hits, `x2`), `gate` (the step's own gate length, `2.00 st`, or `off` for the voice's), `note` (a scale degree from the voice's pitch, `+3`, or `off`), the step locks `pos` (`0.42`), `pitch` (`1.50x`) and `size` (`0.12 s`), each `off` until set, and `bookmark` (`2` or `off`; only for a buffer voice whose buffer holds audio)
+- **step** (named after the step: `step 5`) - `level` (0-15), `prob` (the chance it plays, `80%`), `ratchet` (hits, `x2`), `gate` (the step's own gate length, `2.00 st`, or `off` for the voice's), `note` (a scale degree from the voice's pitch, `+3`, or `off`), then `note 2` to `note 8`, one row for each further note of the step's chord, and `add note` while the step has one to seven notes, the step locks `pos` (`0.42`), `pitch` (`1.50x`) and `size` (`0.12 s`), each `off` until set, and `bookmark` (`2` or `off`; only for a buffer voice whose buffer holds audio)
 - **chain** - `chain` (off or on), `from`, `scenes` and `bars`, and `quantize` (quantized actions: off, beat or bar), the settings every voice shares
 
 - **E2** - Move through the list
@@ -36,7 +36,7 @@ ALT+K2 held opens it on the selected voice and the step under the cursor. The li
 - **ALT+K2** - A quick press randomizes the voice's pattern (or undoes it), as on the patterns. Held past half a second, letting go resets the row under the cursor: a lock, note, gate or bookmark of the step to `off`, `prob` to 100 %, `ratchet` to one hit, the level to 0, a setting to its default (the hint says `K2:reset`). On `euclid` and `clear`, which have nothing to reset, the hint says `K2:cancel` and letting go does nothing
 - **ALT+K3** - Clear the voice's pattern
 
-The `note` row edits the step's first note. A step can hold a chord of up to 8 notes (scenes and the chain keep them); the row changes only the first, and `off` clears them all.
+A step can hold a chord of up to 8 notes (scenes and the chain keep them), one row each. E3 on a note row moves that note; turned below -14 it is removed and the notes after it move up (the first note removed leaves the others, and the last one removed leaves the step with no note). E3 on `add note` adds a note at the last note's degree, one more turn up or down moving it from there, and puts the cursor on it. ALT+K2 held on a note row removes that note; `add note` has nothing to reset.
 
 ## The step editor
 
