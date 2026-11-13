@@ -427,11 +427,14 @@
 
         prepareAt = (startAt - (bufferFadeWait + this.recordPrepMargin)) - now;
         if (prepareAt > 0) {
+            // (prepareTake through areaCall: the take's onFree keeps the
+            // frames it starts, whose caller must not be this function's
+            // frame, freed as it returns, #211)
             SystemClock.sched(prepareAt, {
-                if (slotChanges[index] == take[\change]) { this.prepareTake(index, take) };
+                if (slotChanges[index] == take[\change]) { this.areaCall(\prepareTake, index, take) };
                 nil
             });
-        } { this.prepareTake(index, take) };
+        } { this.areaCall(\prepareTake, index, take) };
     }
 
     // Get a slot ready for a recording (at once, or just before a synced

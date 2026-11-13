@@ -1209,14 +1209,49 @@ end
 -- and every call of a method in AREA_CALL_METHODS (docs/notes/engine/structure.md).
 local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "free" }
 -- methods that keep a closure and are called from a function (a SynthDef
--- function, an onFree, a fork): never called but through areaCall
-local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "inputHeadFrame", "gateVoice" }
+-- function, an onFree, a fork, a scheduled function, a makeBundle
+-- function): never called but through areaCall. Each is defined and called
+-- through areaCall at least once
+local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "inputHeadFrame", "gateVoice",
+  "voiceSynthFreed", "prepareTake", "startFastLfo" }
+-- the commands whose methods keep a closure that outlives the command: on
+-- norns each is reached from the OSC dispatcher's method frame only because
+-- CroneEngine's wrapper and the command function tail-call it, so each
+-- command function stays one call of its method
+local SINGLE_CALL_COMMANDS = { loadBuffer = "loadSlot", saveBuffer = "saveSlot", recordBuffer = "recordSlot",
+  stopRecord = "stopRecordSlot" }
+
+-- SC source with its comments stripped and the text of its strings, quoted
+-- symbols and characters blanked, so a brace inside one never ends a %b{}
+-- match (a hook holds none today; this keeps it so)
+local function sc_code_only(text)
+  local code, out, index = stubs.strip_sc_comments(text), {}, 1
+  while index <= #code do
+    local char = code:sub(index, index)
+    if char == '"' or char == "'" then
+      local finish = index + 1
+      while finish <= #code and code:sub(finish, finish) ~= char do
+        finish = finish + (code:sub(finish, finish) == "\\" and 2 or 1)
+      end
+      out[#out + 1] = char .. code:sub(index + 1, finish - 1):gsub("[^\n]", " ") .. char
+      index = finish + 1
+    elseif char == "$" then
+      local width = code:sub(index + 1, index + 1) == "\\" and 2 or 1
+      out[#out + 1] = "$" .. string.rep(" ", width)
+      index = index + 1 + width
+    else
+      out[#out + 1] = char
+      index = index + 1
+    end
+  end
+  return table.concat(out)
+end
 
 -- The calls of methods on `this` that do not go through areaCall in an
 -- engine file's area hooks (in each strataArea<Name> method), and anywhere
 -- of a method in AREA_CALL_METHODS: { "path:line: ..." }
 local function direct_calls(path, text)
-  local code, found = stubs.strip_sc_comments(text), {}
+  local code, found = sc_code_only(text), {}
   local function line_of(position)
     local _, newlines = code:sub(1, position):gsub("\n", "")
     return newlines + 1
@@ -1277,6 +1312,17 @@ test("an area hook, strataAreas and a method that keeps a closure are called thr
   end
   assert_true(#found == 0, table.concat(found, "\n"))
   assert_true(hooks >= 50, "the areas' hooks are found and go through areaCall (" .. hooks .. ")")
+  -- each listed method is the engine's and is called through areaCall
+  local all = {}
+  for index = 2, #files do all[#all + 1] = sc_code_only(files[index].text) end
+  all = table.concat(all, "\n")
+  for _, name in ipairs(AREA_CALL_METHODS) do
+    assert_true(all:match("\n    " .. name .. "%s*{") ~= nil, name .. " is an engine method (lib/engine/Strata*.sc)")
+    assert_true(all:match("this%.areaCall%(\\" .. name .. "[,)]") ~= nil, name .. " is called through this.areaCall(\\" .. name .. ", ...)")
+  end
+  -- a brace in a string or a character never ends a hook's match
+  assert_equal(#direct_calls("probe.sc", '+ Engine_Strata {\n    strataAreaQuoted {\n        ^(order: 1, start: { "}"; $}; this.startQuoted })\n    }\n}\n'), 1,
+    "a quoted brace inside a hook does not end it")
 
   -- strataAreas reaches each strataArea<Name> through areaCall, and
   -- areaCall itself never makes it a tail call (^this.performList would
@@ -1289,6 +1335,32 @@ test("an area hook, strataAreas and a method that keeps a closure are called thr
   local call_body = sc_method_body(util, "areaCall") or ""
   assert_true(call_body:match("result%s*=%s*this%.performList%(selector,%s*args%)") and call_body:match("%^%s*result%s*$"),
     "lib/engine/StrataUtil.sc: areaCall assigns the method's result and then returns it (never ^this.performList)")
+end)
+
+-- The commands in SINGLE_CALL_COMMANDS: each command function is one call
+-- of its method, `{ arg msg; this.<method>(...); }`, a tail call (#211: on
+-- norns the method's caller is then the OSC dispatcher's method frame,
+-- never a function frame freed when it returns)
+local function command_function(code, name)
+  local start = code:find("addCommand%(%s*\\" .. name .. "%s*,")
+  if not start then return nil end
+  return code:match("%b{}", code:find("{", start, true))
+end
+
+test("the commands whose methods keep a closure are one tail call each (#211)", function()
+  local single = "^{%s*arg%s+msg%s*;%s*this%.([%a_][%w_]*)(%b())%s*;?%s*}$"
+  assert_equal(("{ arg msg; this.loadSlot(msg[1], msg[2]); }"):match(single), "loadSlot", "the shape: one call")
+  assert_true(("{ arg msg; var x = this.loadSlot(msg[1]); x }"):match(single) == nil, "caught: not a tail call")
+  assert_true(("{ arg msg; this.check(msg); this.loadSlot(msg[1]); }"):match(single) == nil, "caught: two statements")
+  local code, files = {}, engine_files()
+  for index = 2, #files do code[#code + 1] = sc_code_only(files[index].text) end
+  code = table.concat(code, "\n")
+  for name, method in pairs(SINGLE_CALL_COMMANDS) do
+    local body = command_function(code, name)
+    assert_true(body ~= nil, "the engine has the command " .. name)
+    assert_equal(body and body:gsub("%s+", " "):match(single), method,
+      name .. "'s command function is one call of this." .. method .. " (docs/notes/engine/structure.md, Areas)")
+  end
 end)
 
 test("the engine's sample paths run no sclang function per sample (#131)", function()
