@@ -745,6 +745,7 @@ end)
 
 test("SEQ's layout states count a full chord as the sequencer's most notes", function()
   local _, S = started_on_seq()
+  assert_equal(S.lib.pages_seq.WIDEST_CHORD_ROWS, S.lib.sequencer.SEQ.max_step_notes, "the widest chord is the sequencer's")
   local seen = 0
   for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states) do
     if state.name:find("edit view eight notes rows", 1, true) then seen = seen + 1 end
