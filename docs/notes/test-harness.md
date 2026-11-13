@@ -13,7 +13,7 @@ The test harness's notes, one file per part:
 
 ## Owns
 
-`test/run.lua` (the runner), `test/helpers.lua` (the shared harness), the unit files under test/unit/ (one per module; AGENTS.md's module table names each), `test/norns_stubs.lua`, `test/stub_midi.lua`, `test/sync_check.lua`, `test/run_engine_check.sh`, `test/run_engine_check_313.sh` and its image (`test/docker/sc313/Dockerfile`, `test/docker/sc313/check.sh`), `test/engine_check.scd`, `test/StrataTestNoBoot.sc.in`, `test/StrataTestTempDir.sc.in`, `test/StrataTestNoBootOSX.sc.in`.
+`test/run.lua` (the runner), `test/helpers.lua` (the shared harness), the unit files under test/unit/ (one per module; AGENTS.md's module table names each), `test/norns_stubs.lua`, `test/stub_midi.lua`, `test/notes_model.lua` (the engine's note slots, modeled: [run-and-helpers](test-harness/run-and-helpers.md)), `test/sync_check.lua`, `test/run_engine_check.sh`, `test/run_engine_check_313.sh` and its image (`test/docker/sc313/Dockerfile`, `test/docker/sc313/check.sh`), `test/engine_check.scd`, `test/StrataTestNoBoot.sc.in`, `test/StrataTestTempDir.sc.in`, `test/StrataTestNoBootOSX.sc.in`.
 
 ## On hardware
 

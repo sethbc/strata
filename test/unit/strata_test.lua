@@ -396,4 +396,98 @@ test("3.5 end to end: a zone learn, an MPE chord on a buffer voice, a switch, a 
   end)
 end)
 
+---------------------------------------------------------------------------
+-- Ruling 57 (#686): Lua's held notes against the engine's slots. A model
+-- of the notes area (test/notes_model.lua), fed every engine call the stub
+-- records, follows the engine's rules; after every step of a seeded random
+-- sequence (MIDI notes, the note off modes, a panic, patterns with chords,
+-- the voices started and stopped, sources switched, freezes, the pool and
+-- the note cap, scenes captured and recalled, time passing) Lua's view (S.lib.notes' held slots, the own
+-- note's park, the pool, each note's pitch through note_values) must be the
+-- model's, the engine must have refused or ignored nothing, and every
+-- invariant must hold
+---------------------------------------------------------------------------
+
+-- MINSTD: the same numbers in Lua and LuaJIT (every product under 2 ^ 53),
+-- and none of the script's math.random draws
+local function seeded(seed)
+  local state = seed
+  return function(n)
+    state = (state * 48271) % 2147483647
+    return state % n + 1
+  end
+end
+
+test("Lua's held notes agree with a model of the engine's slots over seeded random play (ruling 57)", function()
+  local Model = require("notes_model")
+  local reached = {}  -- the model's paths, summed over the seeds
+  for _, seed in ipairs({ 2026, 15838, 95028 }) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    local random = seeded(seed)
+    local model = Model.new(S.constants)
+    context.midi.plug(1, "keys")
+    local sources = { S.constants.SOURCE_SYNTH, S.constants.SOURCE_SYNTH + 1, S.constants.SOURCE_INPUT }
+    for voice = 1, 3 do
+      for step = 1, 16 do
+        if random(3) == 1 then
+          S.patterns[voice][step] = 15
+          local chord = {}
+          for k = 1, random(4) do chord[k] = (k - 1) * 3 + random(3) - 2 end
+          S.lib.sequencer.set_step_attr(voice, step, "notes", chord)
+        end
+      end
+    end
+    local ops = {
+      { 6, function() context.midi.send(1, { type = "note_on", ch = random(3), note = 47 + random(26), vel = 30 + random(97) }) end },
+      { 5, function()
+        local down = {}
+        for channel, channel_notes in pairs(S.midi_state.note_voice) do
+          for note in pairs(channel_notes) do down[#down + 1] = { channel, note } end
+        end
+        table.sort(down, function(a, b) return a[1] * 128 + a[2] < b[1] * 128 + b[2] end)
+        local key = down[random(#down + 1)] or { random(3), 47 + random(26) }
+        context.midi.send(1, { type = "note_off", ch = key[1], note = key[2], vel = 0 })
+      end },
+      { 5, function() context.clock.run_for(0.01 * random(25)) end },
+      { 2, function()  -- two keys, the first lifted: in release mode the own note parks under the second
+        local channel, low = random(3), 47 + random(20)
+        context.midi.send(1, { type = "note_on", ch = channel, note = low, vel = 90 })
+        context.midi.send(1, { type = "note_on", ch = channel, note = low + 1 + random(5), vel = 90 })
+        context.midi.send(1, { type = "note_off", ch = channel, note = low, vel = 0 })
+      end },
+      { 1, function() params:set("midi_note_off", random(3)) end },
+      { 1, function() if S.pattern_playing then pattern_clock_stop() else pattern_clock_start() end end },
+      { 1, function() toggle_voice(random(3)) end },
+      { 2, function() params:set("v" .. random(3) .. "_source", sources[random(3)]) end },
+      { 2, function() params:set("v" .. random(3) .. "_freeze", random(2) - 1) end },
+      { 1, function() S.lib.notes.set_pool(random(7) - 1) end },
+      { 1, function() params:set("v" .. random(3) .. "_note_cap", random(S.constants.NOTE_SLOTS)) end },
+      { 0.3, function() context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 }) end },
+      { 1, function() if random(2) == 1 then capture_scene(random(2)) else recall_scene(random(2)) end end },
+    }
+    local total = 0
+    for _, op in ipairs(ops) do total = total + op[1] end
+    model:feed(context.engine_calls)  -- every call since the load: the voices' starts, the pool
+    S.lib.notes.set_pool(random(7) - 1)
+    for step = 1, 400 do
+      local pick, index = random(1000) * total / 1000, 0
+      repeat index = index + 1; pick = pick - ops[index][1] until pick <= 0 or index == #ops
+      ops[index][2]()
+      model:feed(context.engine_calls)
+      local problems = model:compare(S)
+      for _, broken in ipairs(check_invariants()) do problems[#problems + 1] = "invariant " .. broken end
+      assert_equal(table.concat(problems, "; "), "", "seed " .. seed .. ", step " .. step .. " (op " .. index .. ")")
+    end
+    if S.pattern_playing then pattern_clock_stop() end
+    for name, count in pairs(model.counts) do reached[name] = (reached[name] or 0) + count end
+  end
+  -- the sequences reach every path the model follows: starts, restarts
+  -- (switches, unfreezes), streams leaving a freeze, a note once a stream
+  -- restarted on a buffer or the input (#682's path), cuts, parks, unparks
+  for _, name in ipairs({ "starts", "restarts", "streams_left", "regrained", "cuts", "parks", "unparks" }) do
+    assert_true((reached[name] or 0) > 0, "the sequences reached " .. name .. " (" .. tostring(reached[name]) .. ")")
+  end
+end)
+
 end
