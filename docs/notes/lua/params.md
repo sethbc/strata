@@ -43,11 +43,11 @@ Every adjustable value is a norns param:
 1. Defined in its `S.registry.params` record with `params:add{}`, run from `init()`.
 2. With an `action` function that updates the engine.
 3. Read with `params:get("id")`, set with `params:set("id", value)`.
-4. Grouped with `params:add_separator()`, or `params:add_group(id, name, n)` for a collapsible section (`strata_fx`, `strata_lfo_<n>` per LFO, `strata_buffers`, `strata_midi`).
+4. Grouped with `params:add_separator()`, or `params:add_group(id, name, n)` for a collapsible section (`strata_fx`, `strata_lfo_<n>` per LFO, `strata_buffers`, `strata_midi`, `strata_zones`).
 
 Menu order:
 - `strata` (the hidden `strata_pset_format`, master density, tempo), `strata_mutations` (named `mutations`), `strata_scenes` (named `scenes`);
-- the fx, LFO 1-6, input (`strata_input`, `lib/input_level.lua`) and buffers groups, then the `strata_record` and `strata_positions` groups, the `midi` group and the `scale` section;
+- the fx, LFO 1-6, input (`strata_input`, `lib/input_level.lua`) and buffers groups, then the `strata_record` and `strata_positions` groups, the `midi` group (6 params since 3.5: `lib/mpe.lua`'s `add_midi_params` adds the last three), 3.5's `zones` group (`strata_zones`, 21, `S.lib.mpe.add_params`) and the `scale` section;
 - then each voice's synthesis (after any registered record's `add_first` params), granular and cross-modulation sections, and, when any voice-param record is registered, its `voice <i> extras` section.
 
 ## Registries
