@@ -19,7 +19,11 @@
 #   shard run by this script in a sclang of its own, one after another on
 #   the same port. Every shard runs; then one line a shard ("shard <areas>:
 #   passed in <n> s", or "failed in <n> s (exit <status>)") and the run's
-#   result, which passes only when every shard passed. One sclang running
+#   result, which passes only when every shard passed. A signal stops the
+#   running shard (its line: "interrupted after <n> s"), then the lines of
+#   what ran and where it came ("interrupted in shard <areas>", "before the
+#   first shard" or "after shard <areas>"), exit 130. A shard whose scsynth
+#   outlived its stop (exit 3, below) is the last to run. One sclang running
 #   every area in turn crashes on SuperCollider 3.14.1 at the start of the
 #   modulation area about half the time (#671, in #131's and #211's family).
 #   STRATA_ENGINE_CHECK_ONE_SCLANG=1 runs a full run in one sclang, as
@@ -68,61 +72,98 @@ sclang_timeout=${ENGINE_CHECK_TIMEOUT:-1800}
 case $sclang_timeout in
   ''|*[!0-9]*) echo "ENGINE_CHECK_TIMEOUT must be a number of seconds, got \"$sclang_timeout\"" >&2; exit 2 ;;
 esac
+# How long a scsynth sclang left running may take to end once signaled
+# (stop_leftover_server, below) before the run says it still holds its port
+server_stop_seconds=10
 
 # A full run is CI's shards, each run by this script in a sclang of its own
-# (#671; the header says why). A signal stops the running shard the way its
-# own run stops (sclang's tree, its server and its folder; a backgrounded
-# shard ignores INT, so it is sent TERM) and no later shard starts.
+# (#671; the header says why). A signal is only noted (pending), from before
+# the list is read, and acted on at the checks: before each shard and once a
+# second while one runs. So no signal falls between a shard's start and the
+# note of its PID, and the run always knows where it came. One during a
+# shard stops it the way its own run stops (sclang's tree, its server and
+# its folder; a backgrounded shard ignores INT, so it is sent TERM); then
+# the summary of what ran, where the signal came, and no later shard starts.
 if [ -z "${STRATA_ENGINE_CHECK_AREAS:-}" ] && [ -z "${STRATA_ENGINE_CHECK_ONE_SCLANG:-}" ]; then
+  pending=
+  trap 'pending=1' INT TERM HUP
   if ! shards=$(/bin/sh "$script_dir/run_engine_check_313.sh" -l); then
     echo "ENGINE CHECK FAILED: no shard list to run (the engine-shard matrix of .github/workflows/test.yml)" >&2
     exit 2
   fi
   total=0
   for shard in $shards; do total=$((total + 1)); done
-  shard=
-  shard_pid=
-  stop_shards() {
-    trap '' INT TERM HUP
-    if [ -n "$shard_pid" ]; then
-      kill -TERM "$shard_pid" 2>/dev/null || true
-      wait "$shard_pid" 2>/dev/null || true
-    fi
-    echo "ENGINE CHECK FAILED: interrupted in shard $shard; the shards after it did not run" >&2
-    exit 130
-  }
-  trap stop_shards INT TERM HUP
   newline='
 '
-  number=0
+  started=0
   failed=0
   failed_shards=
+  previous=
   summary=
+  print_summary() { [ -z "$summary" ] || echo "${summary#"$newline"}"; }
+  # $1: where the signal came; the shards never started did not run
+  interrupted() {
+    trap '' INT TERM HUP
+    print_summary
+    echo "ENGINE CHECK FAILED: interrupted $1; $((total - started)) of $total shards did not run"
+    exit 130
+  }
+  # whether the shard's run is running (a zombie, ended but not yet
+  # reaped, is not)
+  shard_running() {
+    kill -0 "$1" 2>/dev/null || return 1
+    case $(ps -o stat= -p "$1" 2>/dev/null) in *Z*) return 1 ;; esac
+    return 0
+  }
   for shard in $shards; do
-    number=$((number + 1))
-    echo "--- shard $number of $total: $shard ---"
+    if [ -n "$pending" ]; then
+      [ "$started" -gt 0 ] || interrupted "before the first shard"
+      interrupted "after shard $previous"
+    fi
+    started=$((started + 1))
+    echo "--- shard $started of $total: $shard ---"
     began=$(date +%s)
-    # in the background, so a signal's trap runs at once, not after it
     STRATA_ENGINE_CHECK_AREAS=$shard /bin/sh "$script_dir/run_engine_check.sh" "$norns_dir" &
     shard_pid=$!
+    while [ -z "$pending" ] && shard_running "$shard_pid"; do sleep 1; done
+    seconds=$(( $(date +%s) - began ))
+    if shard_running "$shard_pid"; then
+      # the signal came during the shard: its own stop ends it
+      trap '' INT TERM HUP
+      kill -TERM "$shard_pid" 2>/dev/null || true
+      wait "$shard_pid" 2>/dev/null || true
+      summary="$summary${newline}shard $shard: interrupted after $seconds s"
+      interrupted "in shard $shard"
+    fi
     status=0
     wait "$shard_pid" || status=$?
-    shard_pid=
-    seconds=$(( $(date +%s) - began ))
-    if [ "$status" -eq 0 ]; then
-      summary="$summary${newline}shard $shard: passed in $seconds s"
-    else
-      failed=$((failed + 1))
-      failed_shards="$failed_shards${failed_shards:+; }$shard"
-      summary="$summary${newline}shard $shard: failed in $seconds s (exit $status)"
-    fi
+    previous=$shard
+    case $status in
+      0) summary="$summary${newline}shard $shard: passed in $seconds s" ;;
+      3)
+        # its scsynth outlived the stop and may hold the port: the next
+        # shard would fail on it, so none starts
+        failed=$((failed + 1))
+        failed_shards="$failed_shards${failed_shards:+; }$shard"
+        summary="$summary${newline}shard $shard: failed in $seconds s (exit 3: its scsynth was still running $server_stop_seconds s after it was stopped)"
+        break
+        ;;
+      *)
+        failed=$((failed + 1))
+        failed_shards="$failed_shards${failed_shards:+; }$shard"
+        summary="$summary${newline}shard $shard: failed in $seconds s (exit $status)"
+        ;;
+    esac
   done
-  echo "${summary#"$newline"}"
+  [ -z "$pending" ] || interrupted "after shard $previous"
+  print_summary
   if [ "$failed" -eq 0 ]; then
     echo "ENGINE CHECK PASSED: $total of $total shards"
     exit 0
   fi
-  echo "ENGINE CHECK FAILED: $failed of $total shards failed: $failed_shards"
+  result="ENGINE CHECK FAILED: $failed of $total shards failed: $failed_shards"
+  [ "$started" -eq "$total" ] || result="$result; $((total - started)) did not run"
+  echo "$result"
   exit 1
 fi
 
@@ -199,18 +240,36 @@ kill_tree() (
   kill "$1" 2>/dev/null
 )
 
-# Stop the scsynth the check booted if it outlived sclang: the PID in
-# scsynth.pid, signaled only while its command line still names scsynth
-# (never a process that took the PID over)
+# Whether the process numbered $1 is a running scsynth: its command line
+# still names scsynth (never a process that took the PID over), and it is
+# not a zombie (ended, so its port is free, but not yet reaped)
+server_running() {
+  case $(ps -p "$1" -o args= 2>/dev/null) in *scsynth*) ;; *) return 1 ;; esac
+  case $(ps -p "$1" -o stat= 2>/dev/null) in *Z*) return 1 ;; esac
+  return 0
+}
+
+# Stop the scsynth the check booted if it outlived sclang (the PID in
+# scsynth.pid), then wait up to server_stop_seconds for it to end, so the
+# next run on the port (a full run's next shard) never meets it. One still
+# running then is reported, and the run exits 3 (server_left)
+server_left=
 stop_leftover_server() {
   server_pid=$(cat "$work_dir/scsynth.pid" 2>/dev/null) || return 0
   case $server_pid in ''|*[!0-9]*) return 0 ;; esac
-  case $(ps -p "$server_pid" -o args= 2>/dev/null) in
-    *scsynth*)
-      kill_tree "$server_pid"
-      echo "stopped the scsynth sclang left running (pid $server_pid)" >&2
-      ;;
-  esac
+  server_running "$server_pid" || return 0
+  kill_tree "$server_pid"
+  echo "stopped the scsynth sclang left running (pid $server_pid)" >&2
+  waited=0
+  while server_running "$server_pid"; do
+    if [ "$waited" -ge "$server_stop_seconds" ]; then
+      server_left=$server_pid
+      echo "ENGINE CHECK FAILED: the scsynth sclang left running (pid $server_pid) was still running $server_stop_seconds s after it was stopped; its port may still be held" >&2
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
 }
 
 # A signal ends the run like its own stop does (#331): sclang's tree and its
@@ -285,11 +344,13 @@ grep -E "^(ok |FAIL|ERROR|WARNING|\*\*\* ERROR|ENGINE CHECK|compiled|area )|FAIL
 # then outputs zeros) and "Too many grains!" when a GrainIn or GrainBuf would
 # run more than its maxGrains (it drops the grain), and the engine "Strata
 # invariant broken" when its synth bookkeeping finds a state it should never
-# reach; in any part of the check each is a failure
-if grep -q "ENGINE CHECK PASSED" "$output" && [ "$status" -eq 0 ] \
+# reach; in any part of the check each is a failure. So is a scsynth still
+# running after its stop (exit 3: a full run starts no shard after it)
+if grep -q "ENGINE CHECK PASSED" "$output" && [ "$status" -eq 0 ] && [ -z "$server_left" ] \
   && ! grep -qE "^ERROR|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken" "$output"; then
   exit 0
 fi
 echo "--- full sclang output ---"
 cat "$output"
+[ -z "$server_left" ] || exit 3
 exit 1
