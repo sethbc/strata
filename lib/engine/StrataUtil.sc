@@ -166,7 +166,7 @@
         this.class.methods.do({ arg method;
             var selector = method.name.asString, area, name;
             if ((selector.size > 10) and: { selector.beginsWith("strataArea") } and: { selector[10].isUpper }) {
-                area = this.perform(method.name);
+                area = this.areaCall(method.name);
                 name = (selector[10].toLower.asString ++ selector.copyToEnd(11)).asSymbol;
                 if (orders[area[\order]].notNil) {
                     Error("Strata: the % and % areas share order %".format(orders[area[\order]], name, area[\order])).throw;
@@ -178,6 +178,19 @@
         });
         ^found.sort({ arg a, b; a[\order] < b[\order] }).asArray
     }
+
+    // Call a method from a method frame (#211). sclang 3.13 and 3.14.1 free
+    // a function's frame as it returns, while a method frame that a kept
+    // closure holds (a SynthDef function, a command, an onFree, a fork)
+    // keeps its caller slot: called straight from a function, it would
+    // point at freed memory, which the collector's scan, once its colors
+    // come round, takes for a live object, corrupting a free list. A method
+    // frame is never freed that way, and this one clears its own caller as
+    // it returns. Never a tail call: ^this.performList(...) would give the
+    // method this one's caller instead. Every area hook, strataAreas and a
+    // method that keeps a closure, called from a function, go through it
+    // (a structure test checks; docs/notes/engine/structure.md).
+    areaCall { arg selector ... args; var result; result = this.performList(selector, args); ^result }
 
     // CroneEngine's addPoll, for a name no poll holds yet. A name another
     // engine on the same server already holds (CronePollRegistry keeps the

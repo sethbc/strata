@@ -35,16 +35,16 @@
     strataAreaFreeze {
         ^(
             order: 110,
-            allocState: { this.allocFreezeState },
-            addDefs: { this.addFreezeDefs; [] },
+            allocState: { this.areaCall(\allocFreezeState) },
+            addDefs: { this.areaCall(\addFreezeDefs); [] },
             grainParamHandlers: (
                 freeze: { arg voice, value;
                     if (value > 0.5) { this.freezeVoice(voice); false } { this.unfreezeWithControl(voice, value); true }
                 },
                 freezeMode: { arg voice, value; this.setFreezeMode(voice, value); false }
             ),
-            stop: { areaState[\freeze][\stopped] = true; this.stopCopyWriters },
-            free: { this.freeSpectralBuffers },
+            stop: { areaState[\freeze][\stopped] = true; this.areaCall(\stopCopyWriters) },
+            free: { this.areaCall(\freeSpectralBuffers) },
             effectKeys: this.copyWriterKeys
         )
     }
@@ -377,7 +377,7 @@
         fork({
             var head;
             if (readers.notEmpty) { bufferFadeWait.wait };
-            if (current.value) { head = this.inputHeadFrame };
+            if (current.value) { head = this.areaCall(\inputHeadFrame) };
             if (current.value and: { head.notNil }) {
                 this.copyInputSpan(voice, head);
                 server.sync;  // answered once both channels' copies are done

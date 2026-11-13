@@ -12,12 +12,12 @@
     strataAreaRecord {
         ^(
             order: 130,
-            allocState: { this.allocRecordState },
-            addDefs: { this.addRecordDefs; [] },
-            addCommands: { this.addRecordCommands },
-            start: { this.startRecordTaps },
-            stop: { this.stopRecords },
-            free: { this.freeRecordState },
+            allocState: { this.areaCall(\allocRecordState) },
+            addDefs: { this.areaCall(\addRecordDefs); [] },
+            addCommands: { this.areaCall(\addRecordCommands) },
+            start: { this.areaCall(\startRecordTaps) },
+            stop: { this.areaCall(\stopRecords) },
+            free: { this.areaCall(\freeRecordState) },
             effectKeys: [\tapPreMaster]
         )
     }
@@ -492,7 +492,7 @@
         // Marked playing from the moment it is sent (not when /n_go arrives),
         // so stopRecording frees it from here on
         synth.register(true);
-        synth.onFree({ this.recordSynthFreed(index, take) });
+        synth.onFree({ this.areaCall(\recordSynthFreed, index, take) });
         recordFrameBuses[index].set(0);
         message = synth.newMsg(areaState[\record][\tapGroup], [
             \in, this.recordSourceBus(take[\source]).index,

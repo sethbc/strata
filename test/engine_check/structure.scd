@@ -117,6 +117,42 @@ var checkFreeContained = {
         "structure: free reports each area phase that raised, by name (% lines)".format(lines.size));
 };
 
+// No frame the engine's SynthDef functions keep points at a freed frame
+// (#211): each function's home method frame was called through areaCall,
+// so its callers, walked from there, are live method frames up to an
+// Engine_Strata:areaCall frame (whose own caller areaCall cleared). Only
+// the engine's own defs are walked (their home method is an Engine_Strata
+// method); a caller that is not a method frame (a function's, freed when
+// it returned: what the rule prevents) ends the walk as a failure before it
+// is read any further.
+var checkDefCallers = {
+    var areaCall = Engine_Strata.findMethod(\areaCall), walked = 0, bad = List.new;
+    // (a frame sclang has freed reads as empty: its method is nil)
+    var frameMethod = { arg frame; if (frame.isKindOf(Frame)) { try { frame.instVarAt(0) } } };
+    SynthDescLib.global.synthDescs.keysValuesDo({ arg name, desc;
+        var func = desc.def !? { desc.def.func }, frame, method, found = false, steps = 0;
+        if (func.isKindOf(Function)) {
+            frame = func.instVarAt(1);  // the function's context
+            frame = if (frame.isKindOf(Frame)) { frame.instVarAt(3) };  // its home method frame
+            method = frameMethod.(frame);
+            if (method.isKindOf(Method) and: { method.ownerClass == Engine_Strata }) {
+                walked = walked + 1;
+                while { found.not and: { method.isKindOf(Method) } and: { steps < 16 } } {
+                    if (method === areaCall) { found = true } {
+                        frame = frame.instVarAt(1);  // the caller
+                        method = frameMethod.(frame);
+                        steps = steps + 1;
+                    };
+                };
+                if (found.not) { bad.add(name) };
+            };
+        };
+    });
+    check.((walked >= 20) and: { bad.isEmpty },
+        "structure: each engine SynthDef function's home frame was called through areaCall, so it keeps no freed caller (#211; walked %, not through areaCall: %)".format(
+            walked, bad.asArray.sort));
+};
+
 // alloc that raises frees what it built, then raises again (#499). The
 // engine's context reads as norns' does, but its output bus raises when the
 // effects area's start asks for it (the master's out): every area's
@@ -421,4 +457,5 @@ check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other) == [0, 0, 0] }
 checkFreeContained.value;
 checkAllocRolledBack.value;
 checkRollbackPolls.value;
+checkDefCallers.value;
 }

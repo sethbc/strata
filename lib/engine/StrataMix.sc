@@ -13,11 +13,11 @@
     strataAreaMix {
         ^(
             order: 120,
-            allocState: { this.allocMixBuses },
-            addDefs: { this.addVoiceMixDef; [\strataVoiceMix] },
-            start: { this.startVoiceMixes },
-            stop: { this.stopVoiceMixes },
-            free: { this.freeMixBuses },
+            allocState: { this.areaCall(\allocMixBuses) },
+            addDefs: { this.areaCall(\addVoiceMixDef); [\strataVoiceMix] },
+            start: { this.areaCall(\startVoiceMixes) },
+            stop: { this.areaCall(\stopVoiceMixes) },
+            free: { this.areaCall(\freeMixBuses) },
             effectKeys: numVoices.collect({ arg voice; this.voiceMixKey(voice) }),
             // The stage's own grain params: kept with the voice's other grain
             // controls (so a replaced stage restarts with them), then sent

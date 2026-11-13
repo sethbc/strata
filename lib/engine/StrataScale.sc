@@ -13,9 +13,9 @@
     strataAreaScale {
         ^(
             order: 80,
-            allocState: { this.allocScaleBuffer },
-            addCommands: { this.addScaleCommands },
-            free: { this.freeScaleBuffer },
+            allocState: { this.areaCall(\allocScaleBuffer) },
+            addCommands: { this.areaCall(\addScaleCommands) },
+            free: { this.areaCall(\freeScaleBuffer) },
             // scaleNote is Lua's reference note; a buffer voice's grains
             // quantize around the rate it plays its slot at, so bufRate
             // moves the note the grain synth gets (scaleNoteFor)
