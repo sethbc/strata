@@ -24,6 +24,7 @@ var heldCount, cuttingCount;
 var checkSourceSwitch, checkBufferLoad, checkInputFreeze;
 var checkFrozenNotes, checkSpectralNotes;
 var wireMessages, sentCount, startValue, checkParkThroughFreeze, checkSilentRestarts, checkOwnNoteOnAccent;
+var withheldNote, checkFailedStartRoom, checkFreedLeaveWatchers;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -62,6 +63,18 @@ startValue = { arg msg, name;
     var value;
     (5, 7 .. (msg.size - 2)).do({ arg index; if (msg[index].asSymbol == name) { value = msg[index + 1] } });
     value
+};
+// A note whose /s_new never reaches the server: its expression and noteOn as
+// Lua sends them, the start held back from the command's bundle
+// (makeBundle(false)), as for a start with no room in the real-time pool.
+// Returns the synth the engine took as started
+withheldNote = { arg voice, slot;
+    var bundle, synth;
+    command.(\noteExpression, voice, slot, *neutralExpression);
+    bundle = server.makeBundle(false, { command.(\noteOn, voice, slot, 60.0, 220.0, 1.0, 1.0) });
+    synth = slotSynth.(voice, slot);
+    server.sendBundle(nil, *bundle.reject({ arg msg; synth.notNil and: { msg[0] == 9 } and: { msg[2] == synth.nodeID } }));
+    synth
 };
 // voice on buffer slot (index slot, loaded with the stereo test file if
 // empty) at scaleNote 60 and bufRate 1, running
@@ -1143,6 +1156,60 @@ checkOwnNoteOnAccent = {
     h.stopAllVoices;
 };
 
+// A failed note start frees its room in the pool (review item 7): past
+// startConfirmWait, makeNoteRoom forgets every unconfirmed note start before
+// it counts, whatever slot the next note takes. With a pool of 16, one start
+// that failed (on voice 3's slot 3), then sixteen notes on other slots
+// (voices 1 and 2's seven, voice 3's two): all sixteen start, the server's
+// note synths are the slots' (h.noteNodesAgree), and the failed one is
+// forgotten
+checkFailedStartRoom = {
+    var failed, slots, started, agree;
+    startBufferVoice.(1);
+    startInputVoice.(2);
+    startSynthVoice.(3);
+    command.(\setNotePool, 16);
+    server.sync;
+    failed = withheldNote.(3, 3);
+    server.sync;
+    (engine.startConfirmWait + 0.1).wait;
+    slots = (1 .. 7).collect({ arg slot; [1, slot] }) ++ (1 .. 7).collect({ arg slot; [2, slot] }) ++ [[3, 1], [3, 2]];
+    withIgnoredLines.(List.new, { slots.do({ arg pair; playNote.(pair[0], pair[1], 1.0) }) });
+    server.sync;
+    started = slots.count({ arg pair; slotState.(*pair) == \live });
+    agree = h.noteNodesAgree;
+    check.(failed.notNil and: { started == 16 } and: { agree[0] } and: { engine.unconfirmedStarts[failed].isNil }
+        and: { slotSynth.(3, 3) !== failed },
+        "notes: a failed note start frees its room: after one that failed, sixteen notes all start (% of 16 started; the server's note synths the slots' %; the failed start forgotten %)".format(
+            started, agree[0], engine.unconfirmedStarts[failed].isNil));
+    command.(\noteOff, 3, 3, 1);   // (a failed start a slot still held is forgotten at its slot's next command)
+    h.stopAllVoices;
+};
+
+// A note synth freed in its kill fade (a later cut on its slot, or the
+// pool's cap: freeNoteCutting, trimCuttingNotes) leaves every list it was
+// in: the NodeWatcher's nodes and unconfirmedStarts, as an /n_end would
+// have it (a synth that never started sends none). A pool of 2 on the
+// buffer voice, five starts that never reach the server, each cut at once:
+// the three the cap freed are in neither, the two still a slot's cutting
+// synth are
+checkFreedLeaveWatchers = {
+    var voice = 1, watcher = NodeWatcher.newFrom(server), churned, kept, left;
+    startBufferVoice.(voice);
+    command.(\setNotePool, 2);
+    server.sync;
+    churned = (1 .. 5).collect({ arg slot; var synth = withheldNote.(voice, slot); command.(\noteOff, voice, slot, 1); synth });
+    server.sync; 0.1.wait;
+    kept = churned.select({ arg synth; (1 .. 7).any({ arg slot; slotCutting.(voice, slot) === synth }) });
+    left = churned.select({ arg synth; engine.unconfirmedStarts[synth].notNil or: { watcher.nodes[synth.nodeID].notNil } });
+    check.((kept.size == 2) and: { left.asSet == kept.asSet },
+        "notes: a note synth freed in its kill fade leaves unconfirmedStarts and the NodeWatcher (% of 5 still listed, % still a slot's cutting synth)".format(
+            left.size, kept.size));
+    (engine.startConfirmWait + 0.1).wait;
+    (1 .. 5).do({ arg slot; command.(\noteOff, voice, slot, 1) });   // forgets the two never-started cutting synths
+    h.stopAllVoices;
+};
+
 if (area.isNil or: { state.isNil }) {
     check.(false, "notes: the area runs at order 170 (no strataAreaNotes)");
 } {
@@ -1189,6 +1256,10 @@ if (area.isNil or: { state.isNil }) {
     checkParkThroughFreeze.value;
     checkSilentRestarts.value;
     checkOwnNoteOnAccent.value;
+    h.stopAllVoices;
+    // failed starts
+    checkFailedStartRoom.value;
+    checkFreedLeaveWatchers.value;
     h.stopAllVoices;
     // the pool as the area found it: none
     command.(\setNotePool, 0);

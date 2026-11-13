@@ -241,14 +241,23 @@
         });
     }
 
-    // Free a slot's cutting synth at once (one may have ended its fade on the
-    // server already: sendToSynth)
+    // Free a slot's cutting synth at once (endNoteSynth)
     freeNoteCutting { arg record;
         var synth = record[\cutting];
         if (synth.notNil) {
-            if (synth.isPlaying) { this.sendToSynth(synth.freeMsg) };
             record[\cutting] = nil;
+            this.endNoteSynth(synth);
         };
+    }
+
+    // Free a note synth now and forget it everywhere it was registered, as
+    // its /n_end would (endFailedStart: quietly freed, out of the
+    // NodeWatcher, its onFree run, out of unconfirmedStarts): one that never
+    // started sends no /n_end, so nothing else would forget it (review item
+    // 7). One that did start is freed all the same; its late /n_end finds no
+    // watched node
+    endNoteSynth { arg synth;
+        this.endFailedStart(synth);
     }
 
     // Cut a slot's note (live or releasing) in the kill fade: it becomes the
@@ -284,11 +293,15 @@
     }
 
     // Room in the pool for one more extra note: when live and releasing
-    // notes already number it, the oldest releasing one anywhere is cut.
+    // notes already number it (failed starts forgotten first), the oldest
+    // releasing one anywhere is cut.
     // false when none is releasing (a full pool of live notes: Lua never
     // sends that)
     makeNoteRoom {
         var releasing;
+        // a start the server never confirmed past startConfirmWait holds no
+        // room: forgotten first, whatever slot it is in (review item 7)
+        this.extraNoteRecords.do({ arg record; this.forgetFailedNoteStarts(record) });
         if (this.heldNoteCount < areaState[\notes][\pool]) { ^true };
         releasing = this.extraNoteRecords.select({ arg record; record[\state] == \releasing });
         if (releasing.isEmpty) { ^false };
@@ -514,7 +527,7 @@
     stopNotes {
         var slots = areaState[\notes][\slots];
         slots.do({ arg records; records.copyToEnd(1).do({ arg record;
-            [record[\synth], record[\cutting]].do({ arg synth; if (synth.notNil and: { synth.isPlaying }) { this.sendToSynth(synth.freeMsg) } });
+            [record[\synth], record[\cutting]].do({ arg synth; if (synth.notNil) { this.endNoteSynth(synth) } });
         }) });
         areaState[\notes][\slots] = numVoices.collect({ this.noteSlots.collect({ arg slot; this.emptyNoteRecord(slot) }) });
     }
