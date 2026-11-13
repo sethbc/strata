@@ -1,5 +1,92 @@
 # Strata Changelog
 
+## Version 3.5.0 - 2026-11-13
+
+Polyphony and MPE: every voice plays chords of up to eight notes, its own note and extra notes from a pool the seven voices share, a synth voice's extra notes as synths of its own kind and a buffer or input voice's as grain streams of their own, each at its own pitch, bend, level and expression; MIDI chords with latch and release, poly and channel aftertouch, and MPE in two modes, every note to the selected voice or split zones with a learn, each note with its own pitch bend, pressure and slide; pressure and slide mapped per voice to a target with a depth, and offered as modulation sources; sequencer chords, edited on SEQ and the step editor; attack and release times per voice; a frozen synth voice played as chords of its frozen sound. Underneath, the engine gains a notes area with four new commands. A voice nothing plays chords on sounds as before, and so does every scene and PSET saved with 3.4.
+
+### Upgrade Notes
+
+- **Restart norns after updating** (SYSTEM > RESTART): the engine has a new file, `lib/engine/StrataNotes.sc`, and changed ones, which SuperCollider compiles only at a restart. No engine file was renamed or deleted since 3.4.
+- **A second key held on a voice adds a note** where 3.4 re-pitched the voice's one note. A voice's `note cap` at 1 (VOICE's new `notes` section), or the `note pool` at 0 (SETUP), plays one note as 3.4 did.
+- **MIDI note off has three choices** (`auto`, `release`, `latch`): a PSET saved with 3.4 keeps its behavior, its `ignore` loading as `auto` (latch on a plain keyboard) and its `voice off` as `release`.
+- **Changing the MIDI channel mode or the note off releases every MIDI note,** as a port change does: every chord's extra notes end (latched or held), each voice keeps sounding its own note, the sequencer's notes play on, the keys still down are forgotten, and the new setting decides what happens to their voices. Under release (with auto, any MPE mode) those voices stop, so switching from per voice or omni to an MPE mode with keys down stops the voices they held; under latch every voice keeps sounding. In 3.4 a channel mode change kept the held notes. In release mode a note off that no note on played (a stray one, or one after a reset) changes nothing; in 3.4's `voice off` it stopped its channel's voice.
+- **MIDI notes pitch input voices:** a note sets an input-sourced voice's grain pitch (note 60 plays at 1).
+- **Scenes are saved as format 7** (each voice's pressure and slide mappings and its attack and release). A scene saved with 3.4 recalls as before, with pressure on amp and slide on the main param and each voice's own times; the first save keeps the older file as `scenes.data.v6`.
+- **A new data file,** `notes.data` in `~/dust/data/strata/`: the note pool, a setting of the norns, never of a PSET or scene (4 extra notes by default on the standard tier, 8 on high).
+- **SEQ's note rows:** turning a step's `note` below -14 removes that note, not the whole chord, and ALT+K2 held on a `note` row removes that note and no longer clears the chord.
+
+### Sound Changes
+
+- **Chords:** a second key held on a voice, or a sequencer step's further notes, now sound as notes of their own (above).
+- **A frozen synth voice's quantize measures from the pitch it had when it froze:** changing its freq while it is frozen no longer moves the scale its grains snap to; unfreezing goes back to the freq's note.
+
+### Chords
+
+- **Up to eight notes on a voice:** its own note and up to seven extra notes from a pool all voices share. A synth voice's extra note is a synth of its own kind on the voice's bus, which the voice's one grain stage grains with the rest; a buffer or input voice's is a grain stream of its own. Each plays at its own pitch with its own bend, level and expression, and every voice-wide setting reaches them all. The voice's own note can rest silent (parked) while other notes hold and returns when its key comes back, and a running voice whose last note ends sounds on. A voice's notes follow its stop, a source switch (each held note restarts on the new source, without being struck again), a buffer load and a freeze, and the engine never holds more notes than the pool.
+- **The note allocator** picks each note's slot: a free one first, then the oldest extra note is stolen, when the pool or the voice's cap is full (never a locked voice's note for another voice, never one younger than 50 ms), and it sends at most 16 expression messages a step.
+- **A `note cap` per voice** (VOICE's new `notes` section, 1-8, default 8; kept in PSETs, never in scenes): how many notes the voice plays at once.
+- **The note pool** (SETUP's `note pool` row, 0-16, kept in `notes.data`): how many extra notes the voices share; `may xrun` shows on the standard tier above 4.
+- **An attack and a release time for each voice** (VOICE's `notes` section, 0.005-30 s and 0.01-30 s), starting at each voice's own times, so nothing sounds different until you turn them; scenes keep them.
+- **A frozen synth voice plays chords of its frozen sound:** freezing a synth voice ends its extra notes (their sound is in the frozen recording), a note played while it is frozen plays the frozen sound at the note's pitch, measured from the pitch the voice froze at, and unfreezing turns the held notes back into synths.
+- **MAIN's voice list shows how many notes a voice plays at once,** from two (`1+ reso 3`).
+
+### MIDI and MPE
+
+- **Chords from MIDI:** a key played while another is down on the same voice adds a note, up to eight on a voice, from the pool of extra notes all voices share.
+- **Note off:** latch (a chord sounds on, each note at the highest pressure it reached, until the next chord's first key replaces it), release (each note ends with its key, and the voice stops with the last) and auto, the default (latch on a plain keyboard, release in the MPE modes). SETUP has a `note off` row.
+- **MPE in two modes:** `mpe selected` plays an MPE controller's notes on the selected voice, `mpe split` on every voice whose zone and note range hold them, each note with its own pitch bend (48 semitones by default, on its zone's master bend), pressure and slide (CC 74, measured from where the touch began; with CC 87 before it, 14-bit). The lower and upper zones' member counts, the bend range and a zone and note range per voice are parameters, which a controller's own MPE configuration message (RPN 6) and bend range (RPN 0) set too. A LinnStrument, an Osmose or an Exquis plays chords on one voice with every finger's own expression.
+- **The `mpe & zones` editor** (SETUP, K3): the zones' member counts, the bend range and each voice's split zone and range, notes named as norns names them; ALT+K3 on a voice learns its range from the next two notes played, which sound nothing.
+- **Poly aftertouch presses its own note,** and channel aftertouch every note its channel holds.
+- **A voice's own note that faded under other notes** (its key lifted in release mode while others sounded) comes back, without an accent, when the voice's last note ends and the voice runs on (a sequenced note ending, or a change to latch), so a running voice never falls silent for want of a note.
+
+### Expression
+
+- **Pressure and slide mapped per voice** to amp, level, the main param, size, density, position or cutoff: four rows in VOICE's `notes` section (`press target` and `press depth`, `slide target` and `slide depth`), kept in scenes and PSETs. Pressure on amp and slide on the main param by default, which change nothing until a controller sends them. A target the voice has once (density, cutoff, a synth voice's size) follows the note pressed or slid furthest.
+- **Pressure and slide as modulation sources:** `PRES` and `SLID` for every voice, `PR1`-`PR7` and `SL1`-`SL7` for each, listed last on MOD and offered to every routing.
+
+### Sequencer
+
+- **A step's notes sound together as a chord:** its first note is the voice's own, the rest extra notes from the note pool, each measured from the first. A chord ends wherever a step's note ends (the voice's next played step, a stop, a replaced pattern, a shorter length). A chord takes only free room: past the voice's note cap or the pool it keeps its first notes at every step, and a step never ends, replaces or re-pitches a note MIDI holds (a MIDI note may take a sequenced one's place).
+- **SEQ's edit view and the step editor edit a step's whole chord:** one row per note (`note`, `note 2` to `note 8`) and an `add note` row; ALT+K2 held on a note row removes it, and the step editor's ALT ring 2 turns the note the cursor is on.
+
+### Fixes
+
+- **Development: the local engine check's full run no longer crashes at the start of the modulation area on SuperCollider 3.14.1** (#671). With no areas named, `test/run_engine_check.sh` runs the areas in CI's shards (read from `.github/workflows/test.yml`), each in a sclang of its own, one after another, and prints a line per shard; the run passes only when every shard passed. A signal stops the running shard and says where it came, after the lines of what ran, and no shard starts while a crashed shard's server may still hold the port. One sclang running every area failed there about half the time. `STRATA_ENGINE_CHECK_ONE_SCLANG=1` still runs every area in one sclang.
+- **Development: the engine check runner's tests no longer depend on timing** (#673). The tests that check the runner stopped a process (sclang's scsynth, a crashed sclang's server, a signaled run's sclang) wait up to 10 s for its end, and count a zombie as ended, instead of asking once at the moment the runner returns.
+- **Development: the page render script** (`test/render_pages.py`) runs on Pillow 12 again.
+- **Development: notes lines corrected:** two engine notes named the CI shard the modulation check area runs in wrongly (#669); the engine's variation notes' per-synth figures, the scenes notes' table cap, the Lua variation notes' voice start and MAIN's widest list entry.
+
+### Deviations from the 3.5 design
+
+The design's lines are marked where the build differs (*amended 2026-11-13, as built*); the rulings are in `docs/decisions/3.5.md`.
+- **The own note's `noteOn` never stands in for the `retrigger`** (rulings 6, 15, 18, 47): a play on slot 1 pitches the own note first, then starts a stopped voice, then accents it; a parked own note, or any slot-1 play on a frozen synth voice, gets the slot-0 `noteOn` and then the `retrigger`, since the voice's step gate and accent open only on the `retrigger`, and the engine's slot-0 `noteOn` fires no accent on an unfrozen voice, so a returning note is accented once. A `quiet` play lets the sequencer start and accent the voice itself.
+- **On a stopped voice the own note's slot is always free** (ruling 19): any play there takes it, and no play is refused because the voice is stopped.
+- **A sequenced chord takes only free room and never takes from another player** (rulings 26, 32, 35): past the cap or the pool it keeps its first notes, where the design kept its first and last three by stealing; a step never re-pitches or cuts a note MIDI holds, while a MIDI note may take a sequenced one's place. Its further notes are measured from the first note's base in the step, an input voice's pitch lock included (ruling 27).
+- **A running voice never stays parked with no note held** (ruling 39): its own note returns, neutral and without an accent, when its last note ends; a player's reset forgets its notes without parking anything (ruling 40).
+- **The zones editor names notes as norns does** (ruling 28): 60 is C3, so a whole range shows `C-2` and `G8`, not the design's `C-1` and `G9`.
+- **Slide on `level` acts as on `amp`** (ruling 34): `level`'s loudness formula is pressure's, since a slide starts at 0 with every touch.
+- **A voice-wide target follows the note whose value is furthest from 0** (ruling 31), Question 3's "largest", so with a negative depth the hardest-pressed note still wins.
+- **A change of `midi_note_off` releases every MIDI note,** as a channel mode change does (ruling 37).
+- **The park follows the own voice synth through a freeze** (ruling 44), and the notes the engine restarts itself (a source switch, an unfreeze) are not struck again (ruling 45). An unfreeze under an own note lifted during the freeze lets the voice's ordinary ring tail of that note sound, up to the reader's lookback plus a grain (about 0.3 s at the defaults), rather than cut the held chord at every unfreeze (rulings 48, 49).
+- **`noteOn`'s `note` is kept and not used yet** (ruling 46): a note's scale reference comes from the voice's and its rate, the same today.
+- **The pool's maximum stayed 16,** now measured rather than estimated (rulings 11, 42): with the pool full the tightest case leaves 2070 KB on high and 2560 KB on standard in CI's memory shard, against the 1280 KB floor.
+
+### Internals and Development
+
+- **The notes area** (`lib/engine/StrataNotes.sc`, order 170): per voice eight slots, slot 0 the voice's own note and slots 1-7 extra notes, each holding at most one live and one cutting synth, with the pool's count and the oldest-first trims the engine enforces whatever Lua sends. Four new commands, `noteOn`, `noteOff`, `noteExpression` and `setNotePool` (AGENTS.md's table); no other command changes. Voice-wide sends reach every note through `setVoiceSynths` and `setGrainSynths`; a note synth has its own watcher, and a start the server never confirms frees its slot.
+- **The SynthDefs' note controls:** every voice SynthDef gains a park (`noteGate`), `noteBend`, `noteAmp` and `noteMain` (its expression control: Resonator rq, FM index, Folder fold, Sub drift, Pulse width, Karplus decay, Ring ratio) and takes its attack and release as controls (`attackTime`, `releaseTime`, defaulting to 3.4's times); both grain SynthDefs gain a park, `noteBend`, `noteAmp`, `notePos`, `noteSize`, `velocity` and `t_accent`, and the ring def `noteRate`. With every note control at its default each def plays 3.4's values.
+- **Real-time memory:** the voice SynthDefs are measured for the first time, each under its own limit (Resonator 21.9 KB, FM 19.4, Folder 16.0, Sub 14.3, Pulse 16.9, Karplus 80.9, Ring 17.7, `\strataMod` 5.9, on SuperCollider 3.13), and the memory area adds two cases with the pool full on both tiers: the all-buffer worst case with every pool slot live and cutting, and synth -> buffer -> synth with sixteen voice synth notes, Karplus's seven first. As CI's memory shard measures them, the pool cases leave 2560 and 2740 KB on standard and 2440 and 2070-2080 KB on high (2420, 2600, 2310 and 1960 KB in a full run on 3.14.1), against 1280; with no extra note, the tightest cases leave 4670 KB on standard and 3980-4000 KB on high. `\strataGrainBuf` is 73.3 KB of its 88 KB limit and `\strataGrainRing` 63.2.
+- **The script's hooks:** voice-stop and freeze-change registries (`S.register_voice_stop`, `S.register_freeze_change`), direct sends counted in the engine budget's window (`S.lib.engine_sync.count_sends`).
+- **New modules:** `lib/notes.lua` (the allocator, the pool, the note cap, the envelope times and the expression flush), `lib/mpe.lua` (zones, RPNs, per-channel values, assignment), `lib/expression.lua` (the mappings, a note's values, the voice-wide values, the sources) and `lib/ui/zones.lua` (the zones editor and its learn); `lib/midi_in.lua` plays every note through the allocator.
+- **Development: the engine check** has a notes area (the commands, the lifecycle on every source, a frozen synth voice's streams, the park and the unfreeze's tail on the heard path, the fan-out, failed starts, the pool's bounds under a seeded random run), in the `lifecycle,files,positions,notes` shard.
+- **Development: tests.** A whole-system test plays 3.5 end to end against the engine stub (a zone learn through real MIDI notes, an MPE chord on a buffer voice, a source switch, a freeze and an unfreeze under a chord, a scene recall, the keys lifted), checking each stage's note commands and every invariant; the stub's `musicutil` gains `note_num_to_name`, mirroring norns'.
+- **Development: the docs.** The roadmap is `ROADMAP.md` at the root (its shipped sections removed: their designs hold them); the agent process is `docs/workflow.md` and gains a release's steps; how to run the checks, and CI, is `docs/checks.md`; the release history is `docs/history.md`; the decisions are one file per release line under docs/decisions/; the test harness's notes are under docs/notes/test-harness/. `docs/status.md` is the open items and limits alone, and AGENTS.md is back to about two thirds of its size. README.md gives the version and points at this file instead of summarizing every release. `docs/design/3.5-design.md` is the design, approved on 2026-11-12 with its twelve questions decided, and was built by an implementation plan in three waves, removed at the release.
+- `lua test/run.lua` / `luajit test/run.lua` grew from 1757 to 1920 tests.
+
+### Decisions
+
+The full list, with what each costs if wrong, is in `docs/decisions/3.5.md`: the design's twelve questions and fifty rulings, by the numbers code comments cite.
+
 ## Version 3.4.0 - 2026-11-12
 
 Modulation and sequencing: six LFOs, the fast ones running in the engine at up to 50 Hz, sixteen macros, a morph between two or four scenes, scatter, four gesture recorders and a sixteen-routing modulation matrix, on a new MOD page; a sequencer with a length, division and swing per voice, probability, ratchets, step locks, notes, bookmark jumps and gates per step, Euclidean fill, pattern chaining and transport following, with a step edit view on SEQ and a step editor on the grids; sixteen named scenes in two banks; mute and solo per voice; actions that wait for the beat or bar. Underneath, the engine gains a fast-modulation area with five new commands. Scenes, PSETs and PARAMS > MAP mappings from 3.3 load, and every new setting starts where it sounds as 3.3 did; what does sound or play differently is under Sound Changes and Upgrade Notes. norns needs one restart after updating.

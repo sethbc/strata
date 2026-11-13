@@ -29,11 +29,28 @@ Each release in a paragraph: what it added and how it was built. CHANGELOG.md ha
 - ~~Global LFOs~~ ✓ Implemented (v3.0 - three, on norns `lua/lib/lfo.lua`)
 - ~~Engine-side LFOs (above the Lua library's 10 Hz ceiling)~~ ✓ Implemented (v3.4 - on the five fast destinations, up to 50 Hz, `lib/engine/StrataModulation.sc`)
 - ~~Buffer waveform display on the BUFFER page~~ ✓ Implemented (v3.3 - peaks files, `lib/waveforms.lua`)
+- ~~Polyphony inside each voice, and MPE~~ ✓ Implemented (v3.5 - up to eight notes a voice from a shared pool, `lib/notes.lua`; MPE zones, `lib/mpe.lua`)
+- An arc page showing each held note's pressure as ring segments (3.5's stretch goal, not built)
 - Tempo-synced delay times
 - Undo/redo for parameter changes
 - ~~Parameter automation recording~~ ✓ Implemented (v3.4 - four gesture recorders, `lib/gestures.lua`)
 
 The agreed order of the next releases is `ROADMAP.md`.
+
+## Version 3.5.0 (2026-11-13)
+
+Polyphony and MPE (design: `docs/design/3.5-design.md`, amended where the build differs). 3.4's sound by default: a voice nothing plays chords on, and every scene and PSET saved with 3.4, sounds the same. Highlights:
+- Notes in the engine: the notes area (`lib/engine/StrataNotes.sc`, order 170) with eight slots a voice (slot 0 the own note) and a pool of extra notes all voices share (at most 16); a synth voice's extra note is a voice synth, a buffer or input voice's a grain synth of its own, a frozen synth voice's a stream of its ring; four commands (`noteOn`, `noteOff`, `noteExpression`, `setNotePool`); the voice and grain defs' note controls (the park, `noteBend`, `noteAmp`, `noteMain`, `notePos`, `noteSize`, `noteRate`, `attackTime`, `releaseTime`); voice-wide sends through `setVoiceSynths` and `setGrainSynths`.
+- Notes in Lua: the allocator (`lib/notes.lua`: six branches, stealing, the own note's park, the pool in `notes.data`, the note cap, the attack and release times, the expression flush at 16 a step), with the voice-stop and freeze-change registries and `count_sends` beneath it.
+- Players: MIDI chords with latch and release and aftertouch (`lib/midi_in.lua`), MPE zones, RPNs and assignment (`lib/mpe.lua`), the expression mapping and its sources (`lib/expression.lua`), sequencer chords (`lib/sequencer.lua`, whose further notes take only free room) edited on SEQ and the arc's step editor.
+- UI: MAIN's note count, VOICE's `notes` section, SETUP's `note off`, `mpe & zones` (`lib/ui/zones.lua`, its learn through MIDI's note tap) and `note pool`, MOD's pressure and slide sources.
+- Scenes: format 7.
+- Memory: every voice SynthDef measured for the first time; two cases with the pool full, the tightest leaving 2070 KB on high in CI's shard against a 1280 KB floor (`docs/notes/engine/memory.md`).
+- Tests: 1920 Lua tests, among them a whole-system test that plays 3.5 end to end against the engine stub; the engine check's notes area.
+
+It was built from a plan in three waves of parallel packages, landed in five batches, with fifty rulings taken on the way, each kept by number in `docs/decisions/3.5.md`. Found and fixed while it was built: the design's findings (#662-#666), two notes' stale shard text (#669), and the local engine check's full run, which now runs CI's shards, each in a fresh sclang (#671), and its timing-dependent runner test (#673); #211, sclang's collector failing in the waveform area's 300 s check, was traced to the engine's own area hooks and fixed before the release (ruling 50). #677, a rare failure of the modulation area's LFO-node timing check, is open.
+
+See CHANGELOG.md and `docs/status.md`.
 
 ## Version 3.4.0 (2026-11-12)
 
@@ -213,3 +230,4 @@ The pull requests and waves of each release, as `docs/status.md` recorded them u
 - 3.3.1, a fix release: a clock-synced recording follows a tempo change and starts on time while the engine is busy (#565, #567; `recordBuffer` gains a ninth argument, `sent`, so one norns restart), `buffers.data` written once per burst of changes, 0.1 s after the first (#566), the engine check's freeze precondition and default timeout (#569, #570), and the design docs for 3.4 and 3.6 (#229, #555).
 - 3.3.2, page randomize (#557): ALT+K2 randomizes on MAIN, VOICE, SEQ, FX and LFO (the section under the cursor on VOICE, FX and LFO), acting on release, with one undo on the same key; SEQ's keys swapped, VOICE's and LFO's reset moved to ALT+K2 held. No engine file changed. Also #575's check tooling (the 3.13 image's python3, the record check's sender timeout).
 - 3.4.0, modulation and sequencing (`docs/design/3.4-design.md`): Wave 0, the script's hooks, the scene format and the engine's modulation skeleton; Wave 1, the engine's fast modulation, the LFOs, scene banks and names, the sequencer, macros and scatter, gestures and quantized actions, the morph, the matrix, the input level and mute and solo, built in parallel and landed in three batches; Wave 2, the MOD page, SEQ's edit view and the step editor, and the grids; then the XY morph, a whole-release review split by area (#595-#641, each finding its own issue and fix, in a fix wave of seven groups), and, landed after the release branch was built, #578 (`bufferState` reports numbered per load, an engine change), #588 and #650 (the clock stub), #642 with #644-#646 (the send budget counts exactly what reaches the engine), #649 (its exception for discrete switches, documented), #653 (morph crossings at most once per 0.3 s), #647 and #648 (the matrix's sends, one side-file helper), #651 (the recorders' live file written soon after each change), #652 (the engine check's areas independent of their order) and #654 (the budget's flush clock); then the release. One new engine file and four changed, so one norns restart.
+- 3.5.0, polyphony and MPE (`docs/design/3.5-design.md`): Wave 0, the Lua hooks, the engine's notes area as stubs with every voice SynthDef measured, and the design's findings (#662-#666), as PR #670; Wave 1, the note controls, the allocator and the MPE parser, as PR #672 (closing #669); Wave 2, the note lifecycle, MIDI, expression, sequencer chords, SEQ and the arc, MAIN and SETUP, the envelope times and the engine check runner's fixes (#671, #673), built in parallel and landed as PRs #674, #676 and #678; README.md's version line (#675) outside the plan; then #211's fix and the release.
