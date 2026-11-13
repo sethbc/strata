@@ -591,8 +591,9 @@ return function(S)
     sync = function(voice)
       if S.voices[voice].active then send_envelope(voice) end
     end,
-    -- voice 1's values: a scene older than 3.5 gets each voice's own from
-    -- the migration below, which runs before migrate_scene fills the rest
+    -- voice 1's values: a scene older than version 7 gets each voice's own
+    -- from the migration below, but a current-version scene lacking the
+    -- key for a voice (a hand-edited file) gets these for every voice
     scene_defaults = {attack = NOTES.envelope[1][1], release = NOTES.envelope[1][2]},
     scene_ranges = {attack = NOTES.envelope_ranges.attack, release = NOTES.envelope_ranges.release},
     voice_rows = {section = NOTES.cap.section, rows = {NOTES.cap.key, "attack", "release"}, before = NOTES.cap.before},
