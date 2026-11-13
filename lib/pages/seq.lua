@@ -958,13 +958,13 @@ return function(S)
     }
   end
 
+  -- The sequencer's SEQ.max_step_notes (it is included after this module;
+  -- a test compares the two): a full chord has no add row
+  M.WIDEST_CHORD_ROWS = 8
+
   -- How many windows of SEQ_EDIT.visible rows the edit view's rows fill when
   -- the chord has note_rows rows (its notes and the add row): a layout state
   -- for each, so every row is drawn
-  -- The sequencer's SEQ.max_step_notes (it is included after this module;
-  -- a test compares the two): a full chord has no add row
-  local WIDEST_CHORD_ROWS = 8
-
   local function edit_windows(note_rows, bookmarks)
     local total = #EDIT_ROWS - 1 + note_rows - (bookmarks and 0 or 1)
     return math.ceil(total / SEQ_EDIT.visible)
@@ -1047,7 +1047,7 @@ return function(S)
     end},
   }
   -- the edit view with eight notes, every window of its rows
-  for window = 1, edit_windows(WIDEST_CHORD_ROWS, false) do
+  for window = 1, edit_windows(M.WIDEST_CHORD_ROWS, false) do
     table.insert(layout_states, {
       name = "edit view eight notes rows " .. window,
       setup = function()
