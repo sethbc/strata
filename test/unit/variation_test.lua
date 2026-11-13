@@ -753,4 +753,23 @@ test("an interval set change on a stopped voice sends nothing (#412)", function(
   assert_equal(table.concat(sent_intervals(context, 2), ","), "-12,-5,0,7,12", "its start sends the set")
 end)
 
+-- 3.5 (design §2.4): while a synth voice is frozen its scaleNote is its
+-- freeze reference (S.lib.notes.freeze_reference), whatever freq is passed
+test("a frozen synth voice's scaleNote is its freeze reference, whatever freq", function()
+  local context = load_strata(); finish_startup(context)
+  local variation = local_value("S").lib.variation
+  params:set("v1_freq", 440)
+  params:set("v1_freeze", 1)
+  assert_near(variation.scale_note(1, 880), 69, 1e-9, "the reference, not 880 Hz's 81")
+  assert_near(variation.scale_note(1), 69, 1e-9, "nor the stored freq's")
+  context.clear_engine_calls()
+  params:set("v1_freq", 220)
+  assert_near(last_grain(context, 0, "scaleNote"), 69, 1e-9, "a freq change resends the reference")
+  toggle_voice(1); toggle_voice(1)
+  assert_near(last_grain(context, 0, "scaleNote"), 69, 1e-9, "and so does a start")
+  params:set("v1_freeze", 0)
+  assert_near(variation.scale_note(1, 880), 81, 1e-9, "unfrozen: the freq's note")
+  assert_near(last_grain(context, 0, "scaleNote"), 57, 1e-9, "the unfreeze resends the stored freq's")
+end)
+
 end

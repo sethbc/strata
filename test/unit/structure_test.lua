@@ -625,7 +625,8 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "buffer paths saved",
   "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "gesture recorders",
   "quantized actions", "scene sequencer", "scene transition",
-  "morph clock", "macro clock", "matrix learn", "lfos", "playheads clock", "scan holds", "waveform loop", "engine budget",
+  "morph clock", "macro clock", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
+  "engine budget",
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "midi handler",
   "voices off", "grids dark", "arc dark" }
 
@@ -718,6 +719,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(S.mutation_metro, "stop", "mutation metro")
   watch_method(S.gestures[1].pattern.metro, "stop", "gesture recorders")
   watch_method(S.lib.positions, "hold_scan", "scan holds")
+  watch_method(S.lib.notes, "stop_flush", "notes flush")
   local real_set = params.set
   params.set = function(self, id, ...)
     if param_steps[id] then observe(param_steps[id]) end
@@ -809,7 +811,7 @@ local function start_steps()
     { "macros load", { "file read macros.data", "redraw requested", "grid redrawn" } },
     { "gestures load", { "file read gestures.data", "redraw requested", "grid redrawn" } },
     { "matrix load", { "file read matrix.data", "redraw requested" } },
-    { "notes load", { "file read notes.data" } },
+    { "notes load", { "file read notes.data", "engine.setNotePool" } },
     { "buffers load", { "file read buffers.data", "engine.loadBuffer", "redraw requested", "grid redrawn",
       "print 1 buffers reloading from buffers.data" } },
     { "startup clock", voice_sync },

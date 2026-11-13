@@ -4,18 +4,19 @@ Every parameter of the selected voice. Back to [Screen Controls](../controls.md)
 
 The selected voice is the one picked on MAIN (or from the grid). The line under the header shows it as on MAIN's list (`3- fold [L]`: its number, `+` running or `-` stopped, its short name, `[L]` when locked) and, at the right, the section the cursor is in and its place among the voice's sections (`grain 2/6`).
 
-Below it, five rows at a time, the voice's parameters in six sections, each under a dim section name:
+Below it, five rows at a time, the voice's parameters in seven sections, each under a dim section name:
 - **synth** - the synth's own parameters (everything but level and pan). A buffer-sourced voice shows its buffer position, rate and scan here instead, then its loop start and loop length (see [Audio Sources and Buffers](../sources-and-buffers.md)); an input-sourced voice has no synth section and shows its input section instead
 - **input** - an input-sourced voice only: its history, how far back in the input it plays (0 s is now; up to 16 s, 60 s on the high performance setting)
 - **grain** - size, density, pitch, position spread, envelope, mode
 - **crossmod** - modulation speed, then for each of the three slots its source, amplitude amount and frequency amount. A source shows the voice's number and short name (`3 fold`), or `none`
 - **mix** - source (`synth`, `buf 1`-`buf 8`, `input`), level (amp), pan (the Sub has no pan) and freeze. With the high performance setting a freeze mode row follows: `hold` or `spectral`
+- **notes** - `note cap` (1-8, default 8): how many notes the voice plays at once, its own and up to seven more from the note pool all voices share; at 1 it plays one note at a time, as before 3.5. PSETs keep it, scenes do not. Nothing plays more than one note yet: MIDI and the sequencer will play chords through it
 - **variation** - reverse, pitch, pan and size jitter, intervals, interval probability and quantize (see [Voices and Granular Processing](../voices-and-grains.md))
 - **filter & sends** - the voice's own filter (type, freq, res, mix; mix 0 leaves it out), its delay and reverb sends (see [Global Controls and Effects](../effects.md)), then `mute` and `solo` (off/on; see [Mute and solo](../voices-and-grains.md#mute-and-solo))
 
 ### Bookmarks
 
-A voice reading a buffer has a seventh section, **bookmarks**: four rows, `bookmark 1` to `bookmark 4`, each a position in the buffer (0-1 of its length, default 0, 0.25, 0.5 and 0.75). E3 edits one like any row. A row only sets its position (as a grid's store key does); a bookmark is recalled with BUFFER's `bm` field (E3, no grid needed: see [BUFFER](buffer.md)) or a grid's bookmark keys, or by a pattern step's bookmark lock ([Sequencer](../sequencer.md)). See [Voices and Granular Processing](../voices-and-grains.md#bookmarks).
+A voice reading a buffer has an eighth section, **bookmarks**: four rows, `bookmark 1` to `bookmark 4`, each a position in the buffer (0-1 of its length, default 0, 0.25, 0.5 and 0.75). E3 edits one like any row. A row only sets its position (as a grid's store key does); a bookmark is recalled with BUFFER's `bm` field (E3, no grid needed: see [BUFFER](buffer.md)) or a grid's bookmark keys, or by a pattern step's bookmark lock ([Sequencer](../sequencer.md)). See [Voices and Granular Processing](../voices-and-grains.md#bookmarks).
 
 ### Freeze
 
@@ -45,6 +46,7 @@ A quick ALT+K2 changes only the section the cursor is in, within ranges that kee
 - **grain** - size (0.05-0.35), density (2-40), pitch (0.5-2.5), spread (0-0.6) and the envelope. The mode stays
 - **crossmod** - the speed (0.2-10 Hz) and each slot's amplitude and frequency amounts (-0.5 to 0.5). The sources stay
 - **mix** - the pan (-0.8 to 0.8). The Sub has no pan, so the press does nothing there. The source, level, freeze and freeze mode stay
+- **notes** - nothing: the note cap stays
 - **variation** - reverse (0-50 %), pitch jitter (0-6 st), pan and size jitter (0-0.5) and interval probability (0-100 %). The intervals, the custom intervals and quantize stay
 - **filter & sends** - the filter's type, freq (100-8000 Hz) and res (0-0.7), and both sends (0-60 %). The filter's mix stays, so a filter left out stays out
 - **bookmarks** - four new positions, in order: bookmark 1 is the lowest
