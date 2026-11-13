@@ -684,7 +684,7 @@ return function(S)
   register_params("midi", function()
     -- MIDI input (CC mapping is norns' own PARAMS > MAP). The group size must
     -- match the params below exactly.
-    params:add_group("strata_midi", "midi", 3)
+    params:add_group("strata_midi", "midi", 6)
 
     params:add{
       type = "number",
@@ -718,7 +718,13 @@ return function(S)
       options = S.lib.midi_in.MIDI.note_off_options,
       default = 1
     }
+
+    -- 3.5's MPE settings (lib/mpe.lua): the member counts and the bend range
+    S.lib.mpe.add_midi_params()
   end)
+
+  -- 3.5's split zones: a zone and a note range per voice (lib/mpe.lua)
+  register_params("zones", function() S.lib.mpe.add_params() end)
 
   -- The global scale and root grains and quantized voices snap to
   -- (lib/variation.lua), before the voices

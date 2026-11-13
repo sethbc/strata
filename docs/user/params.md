@@ -2,7 +2,7 @@
 
 Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](../../README.md).
 
-After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **matrix**, **input**, **gestures**, **sequencer**, **buffers**, **record**, **positions** and **midi** groups, then the **scale** section, then one section per voice. Grouped by topic:
+After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **matrix**, **input**, **gestures**, **sequencer**, **buffers**, **record**, **positions**, **midi** and **zones** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
 PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that tells a PSET saved now from one saved before 3.3. An older PSET loads as it sounded: the Pulse voice's res, which ran the other way before 3.3, is turned around as it loads (see [Per-Voice Sections](#per-voice-sections)), until you save it again. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
@@ -84,6 +84,12 @@ Settings for the BUFFER page's record key (K3), the grid's record keys and each 
 - MIDI device: the port Strata listens to (1-16, the norns MIDI slots, default 1)
 - MIDI channels: per voice (channels 1-7 play voices 1-7, the default) or omni to selected
 - MIDI note off: ignore (the default) or voice off
+- MIDI channels also lists mpe selected and mpe split, for MPE controllers; they play like per voice until 3.5's MIDI playing lands
+- MPE lower members and MPE upper members (0-15, default 15 and 0): the member channels of each zone (the lower zone's master is channel 1 and its members follow it; the upper zone's master is channel 16 and its members count down from 15). Setting one lowers the other while both are above 0, so together they never pass 14. A controller's own configuration message (RPN 6) sets them and flashes `MPE lower <n>` or `MPE upper <n>`
+- MPE bend range (1-96 semitones, default 48): a member channel's pitch bend range; RPN 0 on a member channel sets it. Do not map CC 74, 87, 6, 38, 100 or 101 in PARAMS > MAP while an MPE controller is in use
+
+## Zones (group)
+Split zones for the mpe split mode. Each voice has a zone (off, lower or upper; voice 1 lower, voice 2 upper, the others off by default) and a lowest and highest note (0-127; the lowest never passes the highest, the one you set moves the other). A note plays every voice whose zone and range hold it.
 
 ## Mutations
 - Mutations enabled (on/off)

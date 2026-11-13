@@ -17,7 +17,7 @@ return function(S)
     rate_root_note = 60,      -- buffer-sourced voices: this note plays at rate 1
     bend_center = 8192,       -- 14-bit pitchbend value at rest
     bend_semitones = 2,       -- full wheel throw either way
-    channel_mode_options = {"per voice", "omni to selected"},
+    channel_mode_options = {"per voice", "omni to selected", "mpe selected", "mpe split"},
     note_off_options = {"ignore", "voice off"},
   }
   S.midi_device = nil     -- the MIDI vport (midi.connect) Strata listens to

@@ -1,0 +1,237 @@
+-- test/unit/mpe_test.lua
+-- MPE (lib/mpe.lua, S.lib.mpe): the zones, the per-channel values, the
+-- RPNs, the assignment and the MPE and zone params
+-- Run alone: lua test/run.lua mpe
+
+return function(h)
+local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
+local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
+
+local function setup(mode)
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("midi_channel_mode", mode or 3)
+  S.lib.mpe.reset()
+  return context, S, S.lib.mpe
+end
+
+local function same(list, expected, label)
+  assert_equal(#list, #expected, (label or "list") .. " length " .. #list)
+  for index, value in ipairs(expected) do assert_equal(list[index], value, (label or "list") .. " " .. index) end
+end
+
+-- send a control change on a channel
+local function cc(mpe, channel, number, value) return mpe.control({type = "cc", ch = channel, cc = number, val = value}) end
+local function rpn(mpe, channel, number, value)
+  cc(mpe, channel, 101, 0); cc(mpe, channel, 100, number); return cc(mpe, channel, 6, value)
+end
+
+test("the module's constants and the mode names", function()
+  local _, S, mpe = setup(1)
+  assert_equal(mpe.MPE.slide_cc, 74); assert_equal(mpe.MPE.fine_cc, 87); assert_equal(mpe.MPE.master_bend, 2)
+  assert_equal(params:string("midi_channel_mode"), "per voice")
+  params:set("midi_channel_mode", 3); assert_equal(params:string("midi_channel_mode"), "mpe selected")
+  assert_true(mpe.active())
+  params:set("midi_channel_mode", 4); assert_equal(params:string("midi_channel_mode"), "mpe split")
+  assert_true(mpe.active())
+  params:set("midi_channel_mode", 2); assert_true(not mpe.active())
+  params:set("midi_channel_mode", 1); assert_true(not mpe.active())
+  assert_equal(params:get("mpe_lower_members"), 15); assert_equal(params:get("mpe_upper_members"), 0)
+  assert_equal(params:get("mpe_bend_range"), 48)
+end)
+
+test("the zones are their master and member channels", function()
+  local _, _, mpe = setup()
+  local zone, master = mpe.zone(1); assert_equal(zone, "lower"); assert_equal(master, true)
+  zone, master = mpe.zone(2); assert_equal(zone, "lower"); assert_equal(master, false)
+  zone, master = mpe.zone(16); assert_equal(zone, "lower"); assert_equal(master, false)
+  params:set("mpe_lower_members", 7); params:set("mpe_upper_members", 7)
+  assert_equal(mpe.zone(8), "lower"); assert_equal(mpe.zone(9), "upper")
+  zone, master = mpe.zone(16); assert_equal(zone, "upper"); assert_equal(master, true)
+  zone, master = mpe.zone(15); assert_equal(zone, "upper"); assert_equal(master, false)
+  params:set("mpe_upper_members", 0); params:set("mpe_lower_members", 3)
+  assert_equal(mpe.zone(5), nil); assert_equal(mpe.zone(4), "lower"); assert_equal(mpe.zone(0), nil)
+  assert_equal(mpe.zone(17), nil)
+  params:set("mpe_lower_members", 0)
+  assert_equal(mpe.zone(1), nil, "a zone without members is off, its master too")
+end)
+
+test("the member counts never overlap", function()
+  local _ = setup()
+  params:set("mpe_lower_members", 15); params:set("mpe_upper_members", 4)
+  assert_equal(params:get("mpe_lower_members"), 10); assert_equal(params:get("mpe_upper_members"), 4)
+  params:set("mpe_upper_members", 0); params:set("mpe_lower_members", 15)
+  assert_equal(params:get("mpe_lower_members"), 15)
+  params:set("mpe_lower_members", 10); params:set("mpe_upper_members", 4)
+  params:set("mpe_lower_members", 12)
+  assert_equal(params:get("mpe_upper_members"), 2, "the other is lowered")
+  params:set("mpe_lower_members", 15)
+  assert_equal(params:get("mpe_upper_members"), 0, "15 members leave the other zone off")
+end)
+
+test("a note outside both zones has no target", function()
+  local _, _, mpe = setup()
+  params:set("mpe_lower_members", 3)
+  same(mpe.targets(9, 60), {})
+  same(mpe.targets(5, 60), {})
+end)
+
+test("mpe selected sends every zone note to the selected voice; mpe split to every voice whose zone and range hold it", function()
+  local _, S, mpe = setup(3)
+  S.selected_voice = 4
+  same(mpe.targets(2, 60), {4}); same(mpe.targets(1, 60), {4}, "the master channel")
+  params:set("midi_channel_mode", 4)
+  same(mpe.targets(2, 60), {1})
+  params:set("mpe_lower_members", 7); params:set("mpe_upper_members", 7)
+  same(mpe.targets(15, 60), {2}); same(mpe.targets(16, 60), {2})
+  params:set("v3_zone", 2); params:set("v3_zone_low", 48); params:set("v3_zone_high", 72)
+  same(mpe.targets(2, 60), {1, 3}); same(mpe.targets(2, 80), {1}); same(mpe.targets(2, 47), {1})
+  params:set("midi_channel_mode", 1); same(mpe.targets(2, 60), {}, "outside the MPE modes")
+end)
+
+test("a member channel's bend uses the bend range, times its zone's master bend", function()
+  local _, _, mpe = setup()
+  assert_equal(mpe.values(2).bend, 1)
+  local changed = mpe.control({type = "pitchbend", ch = 2, val = 16383})
+  same(changed, {2})
+  assert_near(mpe.values(2).bend, 2 ^ ((8191 / 8192) * 48 / 12), 1e-9)
+  local member = mpe.values(2).bend
+  changed = mpe.control({type = "pitchbend", ch = 1, val = 16383})
+  assert_equal(#changed, 15); assert_equal(changed[1], 2); assert_equal(changed[15], 16)
+  assert_near(mpe.values(2).bend, member * 2 ^ ((8191 / 8192) * 2 / 12), 1e-9)
+  assert_near(mpe.values(5).bend, 2 ^ ((8191 / 8192) * 2 / 12), 1e-9, "another member: only the master's")
+  assert_near(mpe.values(1).bend, 2 ^ ((8191 / 8192) * 2 / 12), 1e-9, "the master's own bend")
+  params:set("mpe_bend_range", 12)
+  assert_near(mpe.values(2).bend, 2 ^ ((8191 / 8192) * 12 / 12) * 2 ^ ((8191 / 8192) * 2 / 12), 1e-9)
+  mpe.control({type = "pitchbend", ch = 2, val = 0})
+  assert_near(mpe.values(2).bend, 2 ^ -1 * 2 ^ ((8191 / 8192) * 2 / 12), 1e-9)
+end)
+
+test("a master bend changes only its own zone's members", function()
+  local _, _, mpe = setup()
+  params:set("mpe_lower_members", 7); params:set("mpe_upper_members", 7)
+  local changed = mpe.control({type = "pitchbend", ch = 16, val = 16383})
+  same(changed, {9, 10, 11, 12, 13, 14, 15})
+  assert_equal(mpe.values(2).bend, 1)
+  assert_true(mpe.values(9).bend > 1)
+end)
+
+test("pressure is nil until first received; slide and pressure are 0-1", function()
+  local _, _, mpe = setup()
+  assert_equal(mpe.values(3).pressure, nil); assert_equal(mpe.values(3).slide, 0)
+  same(mpe.control({type = "channel_pressure", ch = 3, val = 64}), {3})
+  assert_near(mpe.values(3).pressure, 64 / 127, 1e-12)
+  same(cc(mpe, 3, 74, 127), {3})
+  assert_equal(mpe.values(3).slide, 1)
+  mpe.control({type = "channel_pressure", ch = 3, val = 0}); assert_equal(mpe.values(3).pressure, 0)
+  assert_equal(mpe.values(4).pressure, nil, "per channel")
+end)
+
+test("CC87 is the low seven bits of the channel's next pressure or CC74, once", function()
+  local _, _, mpe = setup()
+  same(cc(mpe, 4, 87, 100), {})
+  mpe.control({type = "channel_pressure", ch = 4, val = 64})
+  assert_near(mpe.values(4).pressure, (64 * 128 + 100) / 16383, 1e-12)
+  mpe.control({type = "channel_pressure", ch = 4, val = 64})
+  assert_near(mpe.values(4).pressure, 64 / 127, 1e-12)
+  cc(mpe, 4, 87, 5); cc(mpe, 4, 74, 127)
+  assert_near(mpe.values(4).slide, (127 * 128 + 5) / 16383, 1e-12)
+  cc(mpe, 4, 74, 127); assert_equal(mpe.values(4).slide, 1, "once")
+end)
+
+test("a stale CC87 never reaches a later message on another channel", function()
+  local _, _, mpe = setup()
+  cc(mpe, 4, 87, 100); cc(mpe, 5, 74, 64)
+  assert_near(mpe.values(5).slide, 64 / 127, 1e-12)
+  mpe.control({type = "channel_pressure", ch = 4, val = 64})
+  assert_near(mpe.values(4).pressure, (64 * 128 + 100) / 16383, 1e-12, "channel 4's still waits for it")
+end)
+
+test("RPN 6 sets a zone's member count and RPN 0 a bend range", function()
+  local _, S, mpe = setup()
+  local flash = S.lib.ui_flash
+  rpn(mpe, 1, 6, 7)
+  assert_equal(params:get("mpe_lower_members"), 7); assert_equal(flash.text("header"), "MPE lower 7")
+  rpn(mpe, 16, 6, 5)
+  assert_equal(params:get("mpe_upper_members"), 5); assert_equal(flash.text("header"), "MPE upper 5")
+  assert_equal(params:get("mpe_lower_members"), 7)
+  rpn(mpe, 2, 0, 24); assert_equal(params:get("mpe_bend_range"), 24)
+  rpn(mpe, 1, 0, 12)
+  assert_equal(params:get("mpe_bend_range"), 24, "the master's range is kept apart")
+  mpe.control({type = "pitchbend", ch = 1, val = 16383})
+  assert_near(mpe.values(2).bend, 2 ^ ((8191 / 8192) * 12 / 12), 1e-9,
+    "the lower master's range is 12")
+  rpn(mpe, 16, 0, 1); assert_equal(params:get("mpe_bend_range"), 24)
+  rpn(mpe, 1, 6, 99); assert_equal(params:get("mpe_lower_members"), 15, "a count over 15 clamps")
+  assert_equal(params:get("mpe_upper_members"), 0, "and leaves the other zone off")
+  rpn(mpe, 3, 6, 4); assert_equal(params:get("mpe_lower_members"), 15, "RPN 6 on a member channel is no configuration")
+  rpn(mpe, 1, 6, 0); assert_equal(params:get("mpe_lower_members"), 0)
+end)
+
+test("a data entry changes a setting only under RPN 0 or 6", function()
+  local _, _, mpe = setup()
+  cc(mpe, 1, 6, 3); assert_equal(params:get("mpe_lower_members"), 15)
+  cc(mpe, 1, 101, 0); cc(mpe, 1, 100, 5); cc(mpe, 1, 6, 3)
+  assert_equal(params:get("mpe_lower_members"), 15, "another RPN")
+  cc(mpe, 1, 101, 0); cc(mpe, 1, 100, 6); cc(mpe, 1, 101, 127); cc(mpe, 1, 100, 127); cc(mpe, 1, 6, 3)
+  assert_equal(params:get("mpe_lower_members"), 15, "the null RPN")
+  cc(mpe, 1, 101, 0); cc(mpe, 1, 100, 6); cc(mpe, 1, 38, 0)
+  assert_equal(params:get("mpe_lower_members"), 15, "the LSB alone changes nothing")
+  cc(mpe, 2, 6, 3); assert_equal(params:get("mpe_lower_members"), 15, "the selection is per channel")
+  cc(mpe, 1, 6, 3); assert_equal(params:get("mpe_lower_members"), 3, "the selection stands")
+  mpe.reset(); cc(mpe, 1, 6, 4); assert_equal(params:get("mpe_lower_members"), 3, "a reset forgets it")
+end)
+
+test("pressure and CC74 on a master channel are ignored; outside the MPE modes control returns nil", function()
+  local _, _, mpe = setup()
+  params:set("mpe_lower_members", 3)
+  mpe.control({type = "channel_pressure", ch = 1, val = 64}); assert_equal(mpe.values(1).pressure, nil)
+  cc(mpe, 1, 74, 64); assert_equal(mpe.values(1).slide, 0)
+  mpe.control({type = "channel_pressure", ch = 9, val = 64}); assert_equal(mpe.values(9).pressure, nil)
+  mpe.control({type = "pitchbend", ch = 9, val = 16383}); assert_equal(mpe.values(9).bend, 1, "outside both zones")
+  assert_equal(mpe.control({type = "note_on", ch = 2, note = 60, vel = 1}), nil)
+  assert_equal(mpe.control({type = "key_pressure", ch = 2, note = 60, val = 1}), nil)
+  assert_equal(cc(mpe, 2, 7, 1), nil, "a CC that is not MPE's")
+  params:set("midi_channel_mode", 2)
+  assert_equal(mpe.control({type = "pitchbend", ch = 2, val = 16383}), nil)
+  assert_equal(cc(mpe, 2, 74, 64), nil)
+  assert_equal(mpe.values(2).slide, 0)
+  params:set("midi_channel_mode", 3)
+  assert_equal(mpe.values(2).bend, 1)
+end)
+
+test("reset forgets every channel's values", function()
+  local _, _, mpe = setup()
+  mpe.control({type = "pitchbend", ch = 2, val = 16383}); mpe.control({type = "channel_pressure", ch = 2, val = 9})
+  cc(mpe, 2, 74, 9); cc(mpe, 2, 87, 9)
+  mpe.reset()
+  local values = mpe.values(2)
+  assert_equal(values.bend, 1); assert_equal(values.pressure, nil); assert_equal(values.slide, 0)
+  mpe.control({type = "channel_pressure", ch = 2, val = 64})
+  assert_near(mpe.values(2).pressure, 64 / 127, 1e-12, "the pending CC87 went too")
+end)
+
+test("the zone params: defaults, and a low never passes its high", function()
+  local _ = setup()
+  assert_equal(params:string("v1_zone"), "lower"); assert_equal(params:string("v2_zone"), "upper")
+  for voice = 3, 7 do assert_equal(params:string("v" .. voice .. "_zone"), "off") end
+  for voice = 1, 7 do
+    assert_equal(params:get("v" .. voice .. "_zone_low"), 0); assert_equal(params:get("v" .. voice .. "_zone_high"), 127)
+  end
+  params:set("v1_zone_high", 40); params:set("v1_zone_low", 60)
+  assert_equal(params:get("v1_zone_high"), 60, "the low pushes the high up")
+  params:set("v1_zone_high", 30)
+  assert_equal(params:get("v1_zone_low"), 30, "the high pulls the low down")
+  assert_equal(params:get("v1_zone_high"), 30)
+end)
+
+test("the groups' sizes match their params", function()
+  local _ = setup()
+  local group_size = {}
+  for _, param in ipairs(params.params) do
+    if param.t == params.tGROUP then group_size[param.id] = param.n end
+  end
+  assert_equal(group_size.strata_midi, 6); assert_equal(group_size.strata_zones, 21)
+end)
+
+end
