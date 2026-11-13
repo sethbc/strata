@@ -263,12 +263,17 @@
     // recHeadBus), the ring a ring grain synth reads (bufL/R, phaseBus,
     // ringLevel), the source's rate switch (rateLevel), the envelope's
     // buffer (envBuf, from envShape) and the fast-modulation block a grain
-    // synth or stage reads (fastModIn, the modulation area's); with them the
-    // crossmod commands' (modSlotControls). The Lua engine stub reads these
-    // lists and rejects the same names.
+    // synth or stage reads (fastModIn, the modulation area's), and 3.5's
+    // per-note controls, which the notes area sets on one note's synth
+    // (noteGate, noteBend, noteAmp, noteMain, notePos, noteSize, noteRate
+    // and the note's accent, t_accent); with them the crossmod commands'
+    // (modSlotControls). The envelope times (attackTime, releaseTime) are
+    // ordinary voice params. The Lua engine stub reads these lists and
+    // rejects the same names.
     engineOwnedControls {
         ^#[\out, \gate, \kill, \t_trig, \velocity, \bufnumL, \bufnumR, \bufFrames, \bufRateScale, \recHeadBus,
-            \bufL, \bufR, \phaseBus, \ringLevel, \rateLevel, \envBuf, \fastModIn]
+            \bufL, \bufR, \phaseBus, \ringLevel, \rateLevel, \envBuf, \fastModIn,
+            \noteGate, \noteBend, \noteAmp, \noteMain, \notePos, \noteSize, \noteRate, \t_accent]
     }
 
     // The crossmod commands' controls, one of each per slot: modBus1,

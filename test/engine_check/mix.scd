@@ -57,7 +57,10 @@ var addSplitReferences = {
             intervals: (1..8).collect({ arg index; ("interval" ++ index).asSymbol.kr(0) }),
             intervalCount: \intervalCount.kr(0), intervalProb: \intervalProb.kr(1), quantize: \quantize.kr(0), scaleNote: \scaleNote.kr(60),
             filterType: \filterType.kr(0), filterFreq: \filterFreq.kr(5000), filterRes: \filterRes.kr(0.5), filterMix: \filterMix.kr(0),
-            delaySend: \delaySend.kr(1), reverbSend: \reverbSend.kr(1), fastMod: 0 ! 5
+            delaySend: \delaySend.kr(1), reverbSend: \reverbSend.kr(1), fastMod: 0 ! 5,
+            // (3.5's note controls, at their neutral defaults: the grain's own note)
+            noteRate: 1, noteSize: \noteSize.kr(0), noteBend: \noteBend.kr(1), noteGate: \noteGate.kr(1), noteAmp: \noteAmp.kr(1),
+            t_accent: \t_accent.tr(0)
         )
     };
     SynthDef(\strataCheckGrainRing32Split, {
@@ -301,12 +304,12 @@ var checkGroupOrder = {
     h.stopAllVoices;
 };
 var checkGrainDefsLostControls = {
-    var removed = [\amp, \velocity, \accentAmt, \modLevel, \modAmpAmt1, \modAmpAmt2, \modAmpAmt3, \mirrorOut, \mirrorLevel,
+    var removed = [\amp, \accentAmt, \modLevel, \modAmpAmt1, \modAmpAmt2, \modAmpAmt3, \mirrorOut, \mirrorLevel,
         \filterType, \filterFreq, \filterRes, \filterMix, \delaySend, \reverbSend, \delaySendOut, \reverbSendOut, \fxMixIn];
     var left = h.grainDefs.collect({ arg name;
         SynthDescLib.global.at(name).controlNames.collect(_.asSymbol).select({ arg control; removed.includes(control) })
     }).flatten;
-    check.(left.isEmpty, "mix: no grain SynthDef has a filter, send, mirror, accent or amp control (left: %)".format(left));
+    check.(left.isEmpty, "mix: no grain SynthDef has a filter, send, mirror, voice-level accent or amp control (left: %)".format(left));
 };
 
 var checkStageValues = {
