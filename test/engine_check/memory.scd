@@ -119,11 +119,10 @@ var checkGrainSynthSizes = {
         synths.do(_.free); server.sync;
         (before - after) * probeKB / count
     });
-    // (3.2's 69 and 75 KB; 88 KB is 3.3's and 3.4's limit: design Question 1)
-    check.(sizes.every({ arg size; (size > 0) and: { size < 88 } }),
-        "memory: each grain synth takes under 88 KB of the pool (% KB, by allocation probes)".format(
-            [grainDefs, sizes.round(0.1)].flop.collect({ arg pair; "% %".format(*pair) }).join(", ")));
-    // ... against check-only copies of 3.2's defs, measured the same way
+    // ... and check-only copies of 3.2's defs, measured the same way, for
+    // the record only: 3.3's saving against them is spent (3.4 and 3.5 added
+    // to both defs, and 3.5's buffer def is within a KB of 3.2's), so no
+    // line asserts a margin under them (docs/notes/engine/memory.md)
     sizes32 = [h.def32[\grainRing], h.def32[\grainBuf]].collect({ arg name, index;
         var before = floodFit.value, synths, after;
         var defName = grainDefs[index];
@@ -134,19 +133,11 @@ var checkGrainSynthSizes = {
         synths.do(_.free); server.sync;
         (before - after) * probeKB / count
     });
-    // (the buffer def pays for the head guard: about 8 KB of its 16 KB
-    // saving. 3.4's fast modulation then adds to both defs, the block's
-    // In.kr and the pitch and size offsets, and to the buffer def the
-    // position offset: 0.9 KB to the ring, 1.7 KB to the buffer def, which
-    // took the margins from 3.3's 12 and 6 KB to 10 and 4. 3.5's note
-    // controls (the park, the note's bend, gain and accent, its size offset,
-    // the ring's noteRate and the buffer def's position offset; design 3.5
-    // §3.2) add 3.4 and 4.2 KB: 7.5 and 0.9 KB measured with the memory area
-    // alone on 3.14.1, so the margins are 6 KB for the ring and none for the
-    // buffer def, which is now as large as 3.2's but for a KB, each about a
-    // KB under its figure; 88 KB above is the limit)
-    check.((sizes.size == 2) and: { (sizes[0] - sizes32[0]) <= -6 } and: { (sizes[1] - sizes32[1]) <= 0 },
-        "memory: each grain synth is at most 3.2's (at least 6 KB under for the ring, no more for the buffer def with its head guard, with 3.4's offsets and 3.5's note controls) (% KB now, % KB 3.2's copies)".format(sizes.round(0.1), sizes32.round(0.1)));
+    // (88 KB is 3.3's, 3.4's and 3.5's limit: design 3.3 Question 1)
+    check.(sizes.every({ arg size; (size > 0) and: { size < 88 } }),
+        "memory: each grain synth takes under 88 KB of the pool (% KB, by allocation probes; 3.2's copies, with their filter and sends: % KB)".format(
+            [grainDefs, sizes.round(0.1)].flop.collect({ arg pair; "% %".format(*pair) }).join(", "),
+            sizes32.round(0.1)));
     // the stage's size (design 3.3 §0c.6): under 42 KB since 3.4, where 3.3
     // kept 40. 3.4's cutoff and amp offsets, step gate and mute take it past
     // 40 KB, and every floor still holds with them
@@ -247,12 +238,14 @@ var checkModulationSizes = {
 // §0.2, the measurement 3.5's note pool is sized from): twenty of each,
 // playing to a private bus with every crossmod slot on the silent bus, each
 // line its own (Karplus's two 0.1 s Pluck lines allocate in its first block,
-// which sizeOf waits past). Each def's limit (design 3.5 §3.6) is its size
-// as package 0b measured it, before 3.5's note controls, plus 4 KB: 18.5,
-// 16.9, 12.6, 11.8, 13.5, 77.5 and 14.3 KB for the seven, 5.9 for
-// \strataMod (docs/notes/engine/memory.md)
-var voiceDefLimitsKB = (strataResonator: 22.5, strataFM: 20.9, strataFolder: 16.6, strataSub: 15.8,
-    strataPulse: 17.5, strataKarplus: 81.5, strataRing: 18.3, strataMod: 9.9);
+// which sizeOf waits past). Each voice def's limit (design 3.5 §3.6, the
+// controller's ruling 22) is its size with 3.5's note controls (package 1a,
+// the memory shard on 3.13: 21.9, 19.4, 16.0, 14.3, 16.9, 80.9 and 17.7 KB)
+// plus 2 KB, rounded up to a whole KB, so a reading a probe step (0.85 KB)
+// higher passes and a def that grows by more than a KB or two fails;
+// \strataMod's is package 0b's 5.9 KB plus 4 (docs/notes/engine/memory.md)
+var voiceDefLimitsKB = (strataResonator: 24, strataFM: 22, strataFolder: 18, strataSub: 17,
+    strataPulse: 19, strataKarplus: 83, strataRing: 20, strataMod: 9.9);
 var checkVoiceSynthSizes = {
     var privateBus = Bus.audio(server, 2), controlBus = Bus.control(server, 1), group = Group.after(engine.processGroup);
     var silent = engine.silentBus.index;

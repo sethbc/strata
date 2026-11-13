@@ -477,6 +477,18 @@ var addNoteDefs = {
             Out.kr(out, [park, RunningMin.kr(park), RunningMax.kr(park)]);
         }).add;
     };
+    // a park's level latched at times after t_reset (server time): notePark,
+    // and a check-only park that jumps (noteGate itself), which the ramp
+    // check must reject
+    [[\strataCheckNoteParkRamp, { arg noteGate, attackTime, releaseTime; engine.notePark(noteGate, attackTime, releaseTime) }],
+        [\strataCheckNoteParkJump, { arg noteGate; noteGate }]].do({ arg pair;
+        if (engine.respondsTo(\notePark)) {
+            SynthDef(pair[0], { arg out, noteGate = 1, attackTime = 0.2, releaseTime = 0.2, t_reset = 0;
+                var park = pair[1].value(noteGate, attackTime, releaseTime), elapsed = Sweep.kr(t_reset, 1);
+                Out.kr(out, \times.kr([0.1, 0.4]).collect({ arg time; Latch.kr(park, elapsed >= time) }));
+            }).add;
+        };
+    });
     // what noteMainValue computes for each def's entry of noteMainRanges
     if (engine.respondsTo(\noteMainValue) and: { engine.respondsTo(\noteMainRanges) }) {
         voiceDefs.do({ arg defName;
@@ -522,24 +534,38 @@ var checkNoteDefaults = {
 
 // The park (notePark: design 3.5 §3.2, ruling 4): 1 from the first block
 // while noteGate is 1; at noteGate 0 down to 0 over the release, back to 1
-// over the attack at noteGate 1; a synth started with noteGate 0 is parked
-// from its first block (a parked note's new synth); and no doneAction (the
-// probe synth is still there)
+// over the attack at noteGate 1, and ramping both ways, not jumping (at
+// half its 0.2 s release and half its 0.2 s attack it is between 0.05 and
+// 0.95: on the ASR's curve, -4, about 0.12 and 0.88; a check-only park that
+// jumps reads 0 and 1 there and must fail); a synth started with noteGate 0
+// is parked from its first block (a parked note's new synth); and no
+// doneAction (the probe synth is still there)
 var checkNotePark = {
-    var bus = Bus.control(server, 6), group = Group.tail(server), open, parked, down, up, startedParked, ok;
-    if (engine.respondsTo(\notePark).not) { check.(false, "voices: the park (no notePark)") } {
+    var name = "voices: the park is 1 from the first block at noteGate 1, ramps to 0 over its release and back over its attack, and starts parked at noteGate 0";
+    var bus = Bus.control(server, 10), group = Group.tail(server), open, parked, down, up, startedParked, ramps, ramp, ok;
+    var ramped = { arg levels; levels.size == 2 and: { levels.every({ arg level; (level > 0.05) and: { level < 0.95 } }) } };
+    if (engine.respondsTo(\notePark).not) { check.(false, name ++ " (no notePark)") } {
         open = Synth(\strataCheckNotePark, [\out, bus.index, \attackTime, 0.05, \releaseTime, 0.05], group);
         startedParked = Synth(\strataCheckNotePark, [\out, bus.index + 3, \noteGate, 0], group);
+        ramps = [\strataCheckNoteParkRamp, \strataCheckNoteParkJump].collect({ arg defName, index;
+            Synth(defName, [\out, bus.index + 6 + (2 * index)], group) });
         server.sync; 0.1.wait;
         parked = h.readBus(bus);
         open.set(\noteGate, 0); server.sync; 0.15.wait;
         down = h.readBus(bus)[0];
         open.set(\noteGate, 1); server.sync; 0.15.wait;
         up = h.readBus(bus)[0];
-        ok = (parked.keep(3) == [1, 1, 1]) and: { parked.drop(3) == [0, 0, 0] } and: { down == 0 } and: { up == 1 }
-            and: { open.isPlaying or: { h.synthNames(group).size == 2 } };
-        check.(ok, "voices: the park is 1 from the first block at noteGate 1, falls to 0 over its release, returns over its attack, and starts parked at noteGate 0 (open: value, lowest, highest %; started parked %; down %; up %)".format(
-            parked.keep(3), parked.drop(3), down, up));
+        // the ramps, in server time: parked with the reset, unparked 0.3 s
+        // later; latched at 0.1 s (half the release) and 0.4 s (half the attack)
+        server.makeBundle(0.2, { ramps.do(_.set(\noteGate, 0, \t_reset, 1)) });
+        server.makeBundle(0.2 + 0.3, { ramps.do(_.set(\noteGate, 1)) });
+        0.8.wait; server.sync;
+        ramp = h.readBus(bus).drop(6).clump(2);
+        ok = (parked.keep(3) == [1, 1, 1]) and: { parked.drop(3).keep(3) == [0, 0, 0] } and: { down == 0 } and: { up == 1 }
+            and: { ramped.(ramp[0]) } and: { ramped.(ramp[1]).not }
+            and: { open.isPlaying or: { h.synthNames(group).includes(\strataCheckNotePark) } };
+        check.(ok, name ++ " (open: value, lowest, highest %; started parked %; down %; up %; at half its release and half its attack %, a jumping park's %)".format(
+            parked.keep(3), parked.drop(3).keep(3), down, up, ramp[0].collect({ arg level; level.round(0.0001) }), ramp[1]));
     };
     group.free; bus.free;
     server.sync;
@@ -625,22 +651,27 @@ var checkNoteAttack = {
 
 // "voices: the default attack and release are each def's times of 3.4":
 // attackTime and releaseTime default to them, and the ASR (the EnvGen that
-// frees the synth) takes its times from both, clipped to 0.005-30 and
-// 0.01-30 s
+// frees the synth) takes its times from both, clipped to attackTimeRange
+// and releaseTimeRange (0.005-30 and 0.01-30 s), as every def's
+// voiceEnvelope does
 var checkNoteTimes = {
+    var attackRange = engine.tryPerform(\attackTimeRange) ? [nil, nil], releaseRange = engine.tryPerform(\releaseTimeRange) ? [nil, nil];
     var found = voiceDefs.collect({ arg defName;
         var ugens = SynthDescLib.global.at(defName).def.children;
         var isAttack = isControlOf.(defName, \attackTime), isRelease = isControlOf.(defName, \releaseTime);
         var clipOf = { arg test, low, high; { arg input; input.isKindOf(Clip) and: { test.(input.inputs[0]) }
             and: { input.inputs[1] == low } and: { input.inputs[2] == high } } };
         var asr = ugens.detect({ arg ugen; ugen.isKindOf(EnvGen) and: { ugen.inputs[4] == 2 }
-            and: { ugen.inputs.any(clipOf.(isAttack, 0.005, 30)) } and: { ugen.inputs.any(clipOf.(isRelease, 0.01, 30)) } });
+            and: { ugen.inputs.any(clipOf.(isAttack, attackRange[0], attackRange[1])) }
+            and: { ugen.inputs.any(clipOf.(isRelease, releaseRange[0], releaseRange[1])) } });
         var defaults = [controlDefault.(defName, \attackTime), controlDefault.(defName, \releaseTime)];
         [defName, defaults, asr.notNil]
     });
-    check.(found.every({ arg each; each[2] and: { [each[1], asrTimes34[each[0]]].flop.every({ arg pair;
-        pair[0].notNil and: { pair[0].equalWithPrecision(pair[1], 1e-6) } }) } }),
-        "voices: the default attack and release are each def's times of 3.4 (defaults, and the ASR takes them: %)".format(found));
+    check.((attackRange.asArray == [0.005, 30]) and: { releaseRange.asArray == [0.01, 30] }
+        and: { found.every({ arg each; each[2] and: { [each[1], asrTimes34[each[0]]].flop.every({ arg pair;
+            pair[0].notNil and: { pair[0].equalWithPrecision(pair[1], 1e-6) } }) } }) },
+        "voices: the default attack and release are each def's times of 3.4 (ranges %, %; defaults, and the ASR takes them: %)".format(
+            attackRange, releaseRange, found));
 };
 
 // "voices: noteMain 1 puts each def's expression control at its range's

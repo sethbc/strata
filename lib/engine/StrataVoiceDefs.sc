@@ -34,6 +34,24 @@
         ^EnvGen.kr(Env([noteGate, 1, 0], [attackTime, releaseTime], -4, releaseNode: 1), noteGate)
     }
 
+    // The envelope every voice SynthDef multiplies into its output: its ASR
+    // (gated through openedGate, freeing the synth at its release's end)
+    // times the engine's cut (killFade) times the own note's park
+    // (notePark), the ASR and the park on the same times: attackTime and
+    // releaseTime, clipped to attackTimeRange and releaseTimeRange (each
+    // def's 3.4 times by default, design 3.5 §3.5)
+    voiceEnvelope { arg gate, kill, noteGate, attackTime, releaseTime;
+        var attack = attackTime.clip(this.attackTimeRange[0], this.attackTimeRange[1]);
+        var release = releaseTime.clip(this.releaseTimeRange[0], this.releaseTimeRange[1]);
+        ^EnvGen.kr(Env.asr(attack, 1, release), this.openedGate(gate), doneAction: 2) * this.killFade(kill)
+            * this.notePark(noteGate, attack, release)
+    }
+
+    // The ranges (s) of every voice def's attackTime and releaseTime (a
+    // later Lua param's spec is compared with them)
+    attackTimeRange { ^#[0.005, 30] }
+    releaseTimeRange { ^#[0.01, 30] }
+
     // Each voice def's expression control, the one 3.5's per-note main
     // expression (noteMain) moves, and its range: Lua's param spec of that
     // control (VOICE_PARAM_SPECS, lib/params_setup.lua; a docs test compares
@@ -107,12 +125,13 @@
 
         // Every voice and grain SynthDef gates its ASR through openedGate
         // and multiplies killFade (the engine's cut) into it; see those
-        // methods. 3.5's note controls (design 3.5 §3.2, §3.5), each neutral
-        // at its default: noteGate (the park, notePark, on the ASR's times),
+        // methods. Each voice def takes its envelope from voiceEnvelope.
+        // 3.5's note controls (design 3.5 §3.2, §3.5), each neutral at its
+        // default: noteGate (the park, notePark, on the ASR's times),
         // noteBend and noteAmp (voiceModulation), noteMain (the def's
         // expression control, noteMainValue), and attackTime and
         // releaseTime, the ASR's times (each def's 3.4 times by default,
-        // clipped to 0.005-30 and 0.01-30 s)
+        // clipped to attackTimeRange and releaseTimeRange)
         SynthDef(\strataResonator, {
             arg out, gate=1, freq=100, rq=0.1, noise=0.5,
             mod1=0.1, mod2=0.15, amp=0.3, pan=0,
@@ -121,11 +140,9 @@
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             t_trig=0, velocity=1, bend=1, kill=0,
             noteGate=1, noteBend=1, noteAmp=1, noteMain=0, attackTime=4, releaseTime=8;
-            var sig, env, noiseSource, modSig, modFreq, modAmp, modulation, attack, release;
+            var sig, env, noiseSource, modSig, modFreq, modAmp, modulation;
 
-            attack = attackTime.clip(0.005, 30); release = releaseTime.clip(0.01, 30);
-            env = EnvGen.kr(Env.asr(attack, 1, release), this.openedGate(gate), doneAction: 2) * this.killFade(kill)
-                * this.notePark(noteGate, attack, release);
+            env = this.voiceEnvelope(gate, kill, noteGate, attackTime, releaseTime);
             // the accent, crossmod, bend and level every voice shares (voiceModulation)
             modulation = this.voiceModulation(freq, bend, amp, [modBus1, modBus2, modBus3],
                 [modAmpAmt1, modAmpAmt2, modAmpAmt3], [modFreqAmt1, modFreqAmt2, modFreqAmt3], t_trig, velocity, noteBend, noteAmp);
@@ -178,11 +195,9 @@
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             t_trig=0, velocity=1, bend=1, kill=0,
             noteGate=1, noteBend=1, noteAmp=1, noteMain=0, attackTime=5, releaseTime=10;
-            var sig, mod, env, carrier, modSig, modFreqVal, modAmp, modulation, attack, release;
+            var sig, mod, env, carrier, modSig, modFreqVal, modAmp, modulation;
 
-            attack = attackTime.clip(0.005, 30); release = releaseTime.clip(0.01, 30);
-            env = EnvGen.kr(Env.asr(attack, 1, release), this.openedGate(gate), doneAction: 2) * this.killFade(kill)
-                * this.notePark(noteGate, attack, release);
+            env = this.voiceEnvelope(gate, kill, noteGate, attackTime, releaseTime);
             // the accent, crossmod, bend and level every voice shares (voiceModulation)
             modulation = this.voiceModulation(freq, bend, amp, [modBus1, modBus2, modBus3],
                 [modAmpAmt1, modAmpAmt2, modAmpAmt3], [modFreqAmt1, modFreqAmt2, modFreqAmt3], t_trig, velocity, noteBend, noteAmp);
@@ -213,11 +228,9 @@
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             t_trig=0, velocity=1, bend=1, kill=0,
             noteGate=1, noteBend=1, noteAmp=1, noteMain=0, attackTime=3, releaseTime=6;
-            var sig, env, foldAmt, modSig, modFreq, modAmp, modulation, attack, release;
+            var sig, env, foldAmt, modSig, modFreq, modAmp, modulation;
 
-            attack = attackTime.clip(0.005, 30); release = releaseTime.clip(0.01, 30);
-            env = EnvGen.kr(Env.asr(attack, 1, release), this.openedGate(gate), doneAction: 2) * this.killFade(kill)
-                * this.notePark(noteGate, attack, release);
+            env = this.voiceEnvelope(gate, kill, noteGate, attackTime, releaseTime);
             // the accent, crossmod, bend and level every voice shares (voiceModulation)
             modulation = this.voiceModulation(freq, bend, amp, [modBus1, modBus2, modBus3],
                 [modAmpAmt1, modAmpAmt2, modAmpAmt3], [modFreqAmt1, modFreqAmt2, modFreqAmt3], t_trig, velocity, noteBend, noteAmp);
@@ -241,18 +254,19 @@
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             t_trig=0, velocity=1, bend=1, kill=0,
             noteGate=1, noteBend=1, noteAmp=1, noteMain=0, attackTime=8, releaseTime=12;
-            var sig, env, modFreq, modSig, modAmp, modulation, attack, release;
+            var sig, env, modFreq, modSig, modAmp, modulation;
 
-            attack = attackTime.clip(0.005, 30); release = releaseTime.clip(0.01, 30);
-            env = EnvGen.kr(Env.asr(attack, 1, release), this.openedGate(gate), doneAction: 2) * this.killFade(kill)
-                * this.notePark(noteGate, attack, release);
+            env = this.voiceEnvelope(gate, kill, noteGate, attackTime, releaseTime);
             // the accent, crossmod, bend and level every voice shares (voiceModulation)
             modulation = this.voiceModulation(freq, bend, amp, [modBus1, modBus2, modBus3],
                 [modAmpAmt1, modAmpAmt2, modAmpAmt3], [modFreqAmt1, modFreqAmt2, modFreqAmt3], t_trig, velocity, noteBend, noteAmp);
             modSig = modulation[\modSig];
             modFreq = modulation[\modFreq];
             modAmp = modulation[\modAmp];
-            // Slow pitch drift whose depth is the drift amount (0 = none)
+            // Slow pitch drift whose depth is the drift amount: Lua's drift
+            // param is 0.001-0.1, so it never reaches 0, and noteMainValue's
+            // clip to that range changes no value Lua sends (only noteMain
+            // moves it, within the range)
             modFreq = modFreq * (1 + (LFNoise1.kr(0.1) * this.noteMainValue(\strataSub, drift, noteMain)));
 
             sig = SinOsc.ar(modFreq ! 2);
@@ -269,11 +283,9 @@
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             t_trig=0, velocity=1, bend=1, kill=0,
             noteGate=1, noteBend=1, noteAmp=1, noteMain=0, attackTime=2, releaseTime=4;
-            var sig, env, modSig, modFreq, modAmp, modWidth, modulation, attack, release;
+            var sig, env, modSig, modFreq, modAmp, modWidth, modulation;
 
-            attack = attackTime.clip(0.005, 30); release = releaseTime.clip(0.01, 30);
-            env = EnvGen.kr(Env.asr(attack, 1, release), this.openedGate(gate), doneAction: 2) * this.killFade(kill)
-                * this.notePark(noteGate, attack, release);
+            env = this.voiceEnvelope(gate, kill, noteGate, attackTime, releaseTime);
             // the accent, crossmod, bend and level every voice shares (voiceModulation)
             modulation = this.voiceModulation(freq, bend, amp, [modBus1, modBus2, modBus3],
                 [modAmpAmt1, modAmpAmt2, modAmpAmt3], [modFreqAmt1, modFreqAmt2, modFreqAmt3], t_trig, velocity, noteBend, noteAmp);
@@ -310,11 +322,9 @@
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             t_trig=0, velocity=1, bend=1, kill=0,
             noteGate=1, noteBend=1, noteAmp=1, noteMain=0, attackTime=0.01, releaseTime=2;
-            var sig, env, modSig, modFreq, modAmp, noise, pluck, exciteTrig, modulation, decayTime, attack, release;
+            var sig, env, modSig, modFreq, modAmp, noise, pluck, exciteTrig, modulation, decayTime;
 
-            attack = attackTime.clip(0.005, 30); release = releaseTime.clip(0.01, 30);
-            env = EnvGen.kr(Env.asr(attack, 1, release), this.openedGate(gate), doneAction: 2) * this.killFade(kill)
-                * this.notePark(noteGate, attack, release);
+            env = this.voiceEnvelope(gate, kill, noteGate, attackTime, releaseTime);
             // the accent, crossmod, bend and level every voice shares (voiceModulation)
             modulation = this.voiceModulation(freq, bend, amp, [modBus1, modBus2, modBus3],
                 [modAmpAmt1, modAmpAmt2, modAmpAmt3], [modFreqAmt1, modFreqAmt2, modFreqAmt3], t_trig, velocity, noteBend, noteAmp);
@@ -368,11 +378,9 @@
             modFreqAmt1=0, modFreqAmt2=0, modFreqAmt3=0,
             t_trig=0, velocity=1, bend=1, kill=0,
             noteGate=1, noteBend=1, noteAmp=1, noteMain=0, attackTime=3, releaseTime=5;
-            var sig, env, modSig, modFreq, modAmp, car, modulator, ring, modulation, attack, release;
+            var sig, env, modSig, modFreq, modAmp, car, modulator, ring, modulation;
 
-            attack = attackTime.clip(0.005, 30); release = releaseTime.clip(0.01, 30);
-            env = EnvGen.kr(Env.asr(attack, 1, release), this.openedGate(gate), doneAction: 2) * this.killFade(kill)
-                * this.notePark(noteGate, attack, release);
+            env = this.voiceEnvelope(gate, kill, noteGate, attackTime, releaseTime);
             // the accent, crossmod, bend and level every voice shares (voiceModulation)
             modulation = this.voiceModulation(freq, bend, amp, [modBus1, modBus2, modBus3],
                 [modAmpAmt1, modAmpAmt2, modAmpAmt3], [modFreqAmt1, modFreqAmt2, modFreqAmt3], t_trig, velocity, noteBend, noteAmp);
