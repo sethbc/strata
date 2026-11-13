@@ -68,6 +68,7 @@ return function(S)
     hop_beats = 1 / 4,               -- no wait spans more than a 16th (wait_for)
     flt_epsilon = 2 ^ -23,           -- matron's FLT_EPSILON (clock_scheduler_next_clock_beat)
     loop_tolerance = 1e-6,           -- as lib/positions.lua's jump: inside the loop
+    note_owner = "seq",              -- a chord's notes in S.lib.notes (design §4)
   }
   M.SEQ = SEQ
 
@@ -116,10 +117,12 @@ return function(S)
   -- next wake (end_clock);
   -- overrides: per voice, the param ids its last played step overrides;
   -- last_played: per voice, that step; gate_sent: per voice, the
-  -- gateSeconds sent last
+  -- gateSeconds sent last; chords: per voice, the notes its last played
+  -- step plays through S.lib.notes (owner "seq", key k: the step's k-th
+  -- note), {note_id, count, pitches, values} (step_chord), or nil
   local play = {voices = {}, transport = {}, failed = {}, started = false, reset_beat = nil, offset = 0,
     generation = 0, retired = {}}
-  local overrides, last_played, gate_sent = {}, {}, {}
+  local overrides, last_played, gate_sent, chords = {}, {}, {}, {}
   -- the chain: the scene loaded last and the beat of the next link
   local chain = {current = nil, next_beat = nil}
 
@@ -298,9 +301,20 @@ return function(S)
     if param_id == voice_param(voice_idx, "freq") then S.lib.variation.send_scale_note(voice_idx) end
   end
 
-  -- End every override a voice's step set: each param goes back to its
-  -- stored value at once
+  -- A voice's chord ends (design §4): every note its last played step
+  -- plays is released, an extra note with noteOff, the first (the voice's
+  -- own) sending nothing (it asked no park: its override ends with the
+  -- overrides). Run once: with no chord, nothing
+  local function end_chord(voice_idx)
+    if chords[voice_idx] == nil then return end
+    chords[voice_idx] = nil
+    S.lib.notes.release_owner(voice_idx, SEQ.note_owner)
+  end
+
+  -- End every override a voice's step set, and its chord: each param goes
+  -- back to its stored value at once
   local function end_overrides(voice_idx)
+    end_chord(voice_idx)
     local held = overrides[voice_idx]
     overrides[voice_idx], last_played[voice_idx] = nil, nil
     if not held then return end
@@ -315,23 +329,24 @@ return function(S)
 
   local function log2(x) return math.log(x) / math.log(2) end
 
-  -- The voice's own pitch as a (fractional) note: a synth voice's freq; a
-  -- buffer or input voice's rate (buf_rate, grain_pitch) as the note a MIDI
-  -- note plays at that rate (rate 1: MIDI's rate_root_note)
-  local function voice_pitch_note(voice_idx)
-    if voice_uses_synth(voice_idx) then
-      return SEQ.a4_note + SEQ.semitones * log2(params:get(voice_param(voice_idx, "freq")) / SEQ.a4_freq)
-    end
-    local key = voice_uses_buffer(voice_idx) and "buf_rate" or "grain_pitch"
-    return S.lib.midi_in.MIDI.rate_root_note + SEQ.semitones * log2(params:get(voice_param(voice_idx, key)))
-  end
-
   -- The param a note transposes: freq, buf_rate or grain_pitch
   local function note_param(voice_idx)
     if voice_uses_synth(voice_idx) then return voice_param(voice_idx, "freq") end
     if voice_uses_buffer(voice_idx) then return voice_param(voice_idx, "buf_rate") end
     return voice_param(voice_idx, "grain_pitch")
   end
+
+  -- A value of the param a note transposes (note_param) as a (fractional)
+  -- note: a synth voice's freq; a buffer or input voice's rate (buf_rate,
+  -- grain_pitch) as the note a MIDI note plays at that rate (rate 1: MIDI's
+  -- rate_root_note)
+  local function value_note(voice_idx, value)
+    if voice_uses_synth(voice_idx) then return SEQ.a4_note + SEQ.semitones * log2(value / SEQ.a4_freq) end
+    return S.lib.midi_in.MIDI.rate_root_note + SEQ.semitones * log2(value)
+  end
+
+  -- The voice's own pitch as a (fractional) note: its note param's stored value's
+  local function voice_pitch_note(voice_idx) return value_note(voice_idx, params:get(note_param(voice_idx))) end
 
   -- The semitones from the voice's pitch to its k-th tone above (below, for
   -- a negative k) among the global scale's tones, the root included; 0 for
@@ -397,8 +412,57 @@ return function(S)
     return position >= start and position < start + length - SEQ.loop_tolerance
   end
 
+  local function finite(value) return type(value) == "number" and value == value and value > -math.huge
+    and value < math.huge end
+
+  -- A step's chord (design §4): note k's value (its note param's, the
+  -- stored value or the step's lock on it, x 2^(semitones / 12), clamped to
+  -- the param's range: 3.4's note override for the first) and its pitch
+  -- (that same base as a note, plus its semitones), every note from the one
+  -- base the first note's override is worked out from (ruling 27: an input
+  -- voice's pitch lock included). nil without notes, or when the first
+  -- note's value is not a finite number
+  local function step_chord(voice_idx, semitones, wanted)
+    if not semitones or semitones[1] == nil then return nil end
+    local note_id = note_param(voice_idx)
+    local low, high = param_range(note_id)
+    local base = wanted[note_id] or params:get(note_id)
+    local base_note = value_note(voice_idx, base)
+    local chord = {note_id = note_id, count = #semitones, pitches = {}, values = {}}
+    for k = 1, chord.count do
+      if type(semitones[k]) == "number" then
+        local value = base * 2 ^ (semitones[k] / SEQ.semitones)
+        if finite(value) then chord.values[k] = util.clamp(value, low, high) end
+        chord.pitches[k] = base_note + semitones[k]
+      end
+    end
+    if chord.values[1] == nil then return nil end
+    return chord
+  end
+
+  -- Note k of a chord for S.lib.notes.play. The first is quiet (the voices
+  -- output starts and accents the voice itself, ruling 13); every further
+  -- note asks no fallback (ruling 26: refused rather than onto slot 1).
+  -- set_own makes the note the voice's own: its value as the note override
+  -- (3.4's), held with the step's overrides
+  local function chord_note(voice_idx, chord, k, velocity)
+    local first = k == 1
+    return {owner = SEQ.note_owner, key = k, pitch = chord.pitches[k], velocity = velocity, park = false,
+      quiet = first, fallback = first,
+      set_own = function()
+        if chord.values[k] == nil then return end
+        set_override(voice_idx, chord.note_id, chord.values[k])
+        overrides[voice_idx] = overrides[voice_idx] or {}
+        overrides[voice_idx][chord.note_id] = true
+      end}
+  end
+
   -- A step's first hit on a voice: the locks, the bookmark and the note, as
-  -- base overrides; the previous played step's overrides this one lacks end
+  -- base overrides; the previous played step's overrides this one lacks
+  -- end, and its chord's notes this one lacks are released (by key: a note
+  -- it keeps is played again in place). The first note plays here, where
+  -- 3.4 set its override: the voice's own (slot 1) as that override, or an
+  -- extra note when another player holds slot 1 (then no note override)
   local function apply_step(voice_idx, event)
     local locks = event.locks or {}
     local wanted, lock_ids = {}, {}  -- param id -> value: the locks, then the note
@@ -409,18 +473,12 @@ return function(S)
         lock_ids[#lock_ids + 1] = param_id
       end
     end
-    -- the note, on its param's stored value (an input voice's: on the
-    -- step's pitch lock), clamped to the param's range
-    local semitones = event.semitones and event.semitones[1]
-    local note_id = semitones and note_param(voice_idx)
-    if note_id then
-      local low, high = param_range(note_id)
-      local value = (wanted[note_id] or params:get(note_id)) * 2 ^ (semitones / SEQ.semitones)
-      if value == value and value > -math.huge and value < math.huge then
-        wanted[note_id] = util.clamp(value, low, high)
-      else
-        note_id = nil
-      end
+    local chord = step_chord(voice_idx, event.semitones, wanted)
+    local note_id = chord and chord.note_id
+    local lock_value = note_id and wanted[note_id]  -- an input voice's pitch lock, the note's own param
+    if note_id then wanted[note_id] = chord.values[1] end
+    for k = (chord and chord.count or 0) + 1, SEQ.max_step_notes do
+      S.lib.notes.release(voice_idx, SEQ.note_owner, k)
     end
     for _, param_id in ipairs(sorted_keys(overrides[voice_idx] or {})) do
       if wanted[param_id] == nil then clear_override(voice_idx, param_id) end
@@ -432,17 +490,43 @@ return function(S)
     if n and S.lib.bookmarks.is_set(voice_idx, n) and bookmark_in_loop(voice_idx, n) then
       S.lib.bookmarks.recall(voice_idx, n)
     end
-    if note_id then set_override(voice_idx, note_id, wanted[note_id]) end
+    chords[voice_idx] = chord
+    if note_id and S.lib.notes.play(voice_idx, chord_note(voice_idx, chord, 1, event.velocity)) ~= 1 then
+      -- an extra note: the param keeps its lock, or goes back to its stored value
+      wanted[note_id] = lock_value
+      if lock_value ~= nil then
+        set_override(voice_idx, note_id, lock_value)
+      elseif overrides[voice_idx] and overrides[voice_idx][note_id] then
+        clear_override(voice_idx, note_id)
+      end
+    end
     local held = {}
     for param_id in pairs(wanted) do held[param_id] = true end
     overrides[voice_idx] = next(held) ~= nil and held or nil
     last_played[voice_idx] = event.step
   end
 
+  -- A chord's further notes, on a running voice after its start and
+  -- retrigger (ruling 13: only a running voice gets an extra slot): at the
+  -- step's first hit notes 2 to n; at a later hit (a ratchet) every note
+  -- held in an extra slot again, an accent with no node (the retrigger
+  -- accents slot 1's). One that does not fit is refused (ruling 26)
+  local function play_chord(voice_idx, event)
+    local chord = chords[voice_idx]
+    if not chord or not S.voices[voice_idx].active then return end
+    for k = 1, chord.count do
+      local slot = S.lib.notes.find(voice_idx, SEQ.note_owner, k)
+      if (event.first and k > 1) or (not event.first and slot and slot > 1) then
+        S.lib.notes.play(voice_idx, chord_note(voice_idx, chord, k, event.velocity))
+      end
+    end
+  end
+
   -- Strata's own voices: a stopped voice is started at the step's first
   -- hit (a gated one is then retriggered), a running one retriggered at
-  -- each hit, a gated one's gate length sent first when it changed. Never a
-  -- node: start_voice for a stopped voice, retrigger for a running one. The
+  -- each hit, a gated one's gate length sent first when it changed, then
+  -- the chord's further notes. Never a node for the voice's own note:
+  -- start_voice for a stopped voice, retrigger for a running one. The
   -- step's locks and note are set first: a stopped voice's sends wait for
   -- its start, which carries them, so its first grain plays the step (#632)
   local function voices_play(event)
@@ -456,12 +540,19 @@ return function(S)
         started = true
       end
     end
-    if not voice.active or (started and not gated(voice_idx)) then return end
-    if gated(voice_idx) then send_gate_seconds(voice_idx, M.gate_seconds(voice_idx, event.step, event.hits)) end
-    engine.retrigger(voice_idx - 1, event.velocity)
+    if not voice.active then return end
+    if not started or gated(voice_idx) then
+      if gated(voice_idx) then send_gate_seconds(voice_idx, M.gate_seconds(voice_idx, event.step, event.hits)) end
+      engine.retrigger(voice_idx - 1, event.velocity)
+    end
+    play_chord(voice_idx, event)
   end
 
-  local voices_output = {name = "voices", play = voices_play}
+  -- Its stop ends every voice's chord: at a pattern stop the overrides'
+  -- end (end_all_overrides, first) has done it, so it finds none
+  local voices_output = {name = "voices", play = voices_play, stop = function()
+    for voice_idx = 1, NUM_VOICES do end_chord(voice_idx) end
+  end}
   S.register_step_output(voices_output)
 
   -- The outputs (design 8.10) --------------------------------------------
@@ -524,9 +615,14 @@ return function(S)
     end
   end
 
+  -- Every output's stop, the voices output's called directly (ruling 38)
   local function stop_outputs()
     for _, output in ipairs(S.registry.step_outputs) do
-      if output.stop then run_output(stop_output, output) end
+      if output == voices_output then
+        stop_output(output)
+      elseif output.stop then
+        run_output(stop_output, output)
+      end
     end
   end
 
@@ -843,8 +939,10 @@ return function(S)
     if state.position > state.pass_length then
       state.position, state.pass_length = 1, length
       -- the wrap: with no set step left inside its length, no step of the
-      -- voice will end its overrides (its only set step was turned off)
-      if overrides[voice_idx] and not M.has_set_step(voice_idx) then end_overrides(voice_idx) end
+      -- voice will end its overrides or chord (its only set step was turned off)
+      if (overrides[voice_idx] or chords[voice_idx]) and not M.has_set_step(voice_idx) then
+        end_overrides(voice_idx)
+      end
     end
     local step = state.position
     state.position = step + 1

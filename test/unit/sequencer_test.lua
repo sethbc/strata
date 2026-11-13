@@ -909,7 +909,7 @@ test("a note transposes the voice by scale degrees", function()
   pattern_clock_stop()
 end)
 
-test("a step with several notes plays its first and hands every output the list", function()
+test("a step with several notes plays its first as the voice's own and hands every output the list", function()
   local context, S = setup()
   local seq = S.lib.sequencer
   local events = record_output(S, "probe")
@@ -2319,6 +2319,435 @@ test("euclid wraps any whole rotation into the length and clamps the hits", func
   assert_equal(S.seq_euclid[1][1], 8, "the clamped hits"); assert_equal(S.seq_euclid[1][2], 7, "-1 is 7")
   seq.euclid(1, 3, 1.5)
   assert_equal(S.seq_euclid[1][2], 7, "a rotation that is no whole number does nothing")
+end)
+
+-- 3.5 (design §4, rulings 13, 26 and 27): a step's notes play as a chord
+-- through the note allocator (S.lib.notes): the first note is the voice's
+-- own (3.4's override), the rest extra notes, each ended where 3.4 ends a
+-- step's note
+
+-- An engine call as "name(arg, ...)", numbers to 4 decimals
+local function call_text(call)
+  local args = {}
+  for index, value in ipairs(call.args) do
+    args[index] = type(value) == "number" and (string.format("%.4f", value):gsub("%.?0+$", "")) or tostring(value)
+    if args[index] == "-0" or args[index] == "" then args[index] = "0" end
+  end
+  return call.name .. "(" .. table.concat(args, ", ") .. ")"
+end
+
+local function call_texts(context)
+  local texts = {}
+  for _, call in ipairs(context.engine_calls) do table.insert(texts, call_text(call)) end
+  return texts
+end
+
+-- The index of the first call named name to engine voice engine_voice (nil: none)
+local function first_call(context, name, engine_voice)
+  for index, call in ipairs(context.engine_calls) do
+    if call.name == name and call.args[1] == engine_voice then return index end
+  end
+  return nil
+end
+
+-- noteOn and noteOff calls to engine voice engine_voice, in order
+local function note_calls(context, name, engine_voice)
+  local calls = {}
+  for _, call in ipairs(context.calls_named(name)) do
+    if call.args[1] == engine_voice then table.insert(calls, call) end
+  end
+  return calls
+end
+
+-- The note synths the engine starts per engine voice: a noteOn on an extra
+-- slot (engine slot 1-7) holding no live note (none yet, or ended by a
+-- noteOff since); and the noteOns on a live one (an accent, no node)
+local function note_starts(context)
+  local live, starts, repeats = {}, {}, {}
+  for _, call in ipairs(context.engine_calls) do
+    local voice, slot = call.args[1], call.args[2]
+    if (call.name == "noteOn" or call.name == "noteOff") and slot > 0 then
+      local key = voice .. ":" .. slot
+      if call.name == "noteOff" then
+        live[key] = nil
+      elseif live[key] then
+        repeats[voice] = (repeats[voice] or 0) + 1
+      else
+        live[key] = true
+        starts[voice] = (starts[voice] or 0) + 1
+      end
+    end
+  end
+  return starts, repeats
+end
+
+-- A note MIDI holds on voice: its own note when nothing else holds the voice
+local function midi_note(S, voice_idx, number)
+  return S.lib.notes.play(voice_idx, {owner = "midi", key = number, pitch = number, velocity = 0.5, park = true,
+    set_own = function() end})
+end
+
+test("a step's chord plays its first note as the override and the rest as extra notes", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  params:set("v1_freq", 440)
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "notes", {0, 4, 7})
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_near(last_sent(context, "setVoiceParam", 0, "freq"), 440, 1e-9, "the first note is the freq override")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), 440, 1e-9, "a base override")
+  local ons = note_calls(context, "noteOn", 0)
+  assert_equal(#ons, 2, "two extra notes")
+  assert_true(first_call(context, "retrigger", 0) < first_call(context, "noteOn", 0), "after the voice's retrigger")
+  assert_equal(#retriggers_of(context, 0), 1, "one retrigger")
+  assert_near(retriggers_of(context, 0)[1].args[2], 1, 1e-9, "at the step's velocity")
+  local expected = {{1, 73, 554.3653}, {2, 76, 659.2551}}
+  for index, values in ipairs(expected) do
+    local args = ons[index].args
+    assert_equal(args[2], values[1], "note " .. index + 1 .. ": its slot")
+    assert_near(args[3], values[2], 1e-9, "note " .. index + 1 .. ": its note")
+    assert_near(args[4], values[3], 1e-3, "note " .. index + 1 .. ": its freq")
+    assert_near(args[6], 1, 1e-9, "note " .. index + 1 .. ": the step's velocity")
+  end
+  assert_equal(#context.calls_named("noteExpression"), 2, "each extra note's first expression")
+  assert_equal(notes.find(1, "seq", 1), 1, "the first note is slot 1")
+  assert_equal(notes.find(1, "seq", 2), 2); assert_equal(notes.find(1, "seq", 3), 3)
+  assert_equal(notes.held(1), 3); assert_equal(notes.pool_used(), 2)
+  pattern_clock_stop()
+end)
+
+test("a chord step on a stopped voice starts it, then takes its further notes", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  assert_true(not S.voices[3].active, "voice 3 is stopped")
+  params:set("v3_freq", 440)
+  S.patterns[3][1] = 15
+  seq.set_step_attr(3, 1, "notes", {0, 4})
+  for _, gate in ipairs({1, 2}) do  -- ungated, then gated (a gated start is retriggered too)
+    params:set("v3_seq_gate", gate)
+    context.clear_engine_calls()
+    pattern_clock_start()
+    assert_true(S.voices[3].active, "the step started voice 3")
+    local voice_on, note_on = first_call(context, "voiceOn", 2), first_call(context, "noteOn", 2)
+    assert_true(voice_on ~= nil and note_on ~= nil and voice_on < note_on, "the start, then the extra note")
+    if gate == 2 then assert_true(first_call(context, "retrigger", 2) < note_on, "gated: the retrigger first too") end
+    assert_near(context.engine_calls[note_on].args[3], 73, 1e-9, "the second note, four semitones up")
+    assert_equal(notes.find(3, "seq", 1), 1, "the first note is the voice's own")
+    assert_equal(notes.find(3, "seq", 2) ~= nil, true, "the second an extra note")
+    pattern_clock_stop()
+    toggle_voice(3)  -- stopped again for the next case
+  end
+end)
+
+-- The engine calls of a fresh script's first step 1 on voice 1 (running, at
+-- 220 Hz, the scale off) with notes (nil: none), then of its plain step 2,
+-- then of the stop; prepare(S) runs before the start
+local function step_calls(notes, prepare)
+  local context, S = setup()
+  params:set("v1_freq", 220)
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  if notes then S.lib.sequencer.set_step_attr(1, 1, "notes", notes) end
+  if prepare then prepare(S) end
+  context.clear_engine_calls()
+  pattern_clock_start()
+  local first = call_texts(context)
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])
+  local second = call_texts(context)
+  context.clear_engine_calls()
+  pattern_clock_stop()
+  return {first = first, second = second, stop = call_texts(context)}, S, context
+end
+
+local function assert_texts(actual, expected, what)
+  assert_equal(table.concat(actual, " "), table.concat(expected, " "), what)
+end
+
+test("a one-note step and a step without notes send 3.4's messages", function()
+  local calls, S = step_calls({3})
+  assert_texts(calls.first, {"setVoiceParam(0, freq, 261.6256)", "setGrainParam(0, scaleNote, 60)", "retrigger(0, 1)"},
+    "a one-note step: the override, its scaleNote, the retrigger")
+  assert_texts(calls.second, {"setVoiceParam(0, freq, 220)", "setGrainParam(0, scaleNote, 57)", "retrigger(0, 1)"},
+    "the next step without notes: the voice's own freq and scaleNote back")
+  assert_texts(calls.stop, {}, "the stop: nothing left to end")
+  assert_equal(S.lib.notes.held(1), 0, "nothing held")
+  calls = step_calls(nil)
+  assert_texts(calls.first, {"retrigger(0, 1)"}, "a step without notes: 3.4's retrigger")
+  assert_texts(calls.second, {"retrigger(0, 1)"})
+  -- the stop of a one-note step that still holds its note
+  local context
+  calls, S, context = step_calls({3}, function(state) state.patterns[1][2] = 0 end)
+  assert_texts(calls.stop, {"setVoiceParam(0, freq, 220)", "setGrainParam(0, scaleNote, 57)"}, "the stop ends the note")
+  -- a one-note step that starts a stopped voice sends no note command
+  context.clear_engine_calls()
+  S.patterns[3][1] = 15
+  S.lib.sequencer.set_step_attr(3, 1, "notes", {5})
+  pattern_clock_start()
+  assert_true(S.voices[3].active, "the step started voice 3")
+  for _, name in ipairs({"noteOn", "noteOff", "noteExpression"}) do
+    assert_equal(#context.calls_named(name), 0, "no " .. name)
+  end
+  assert_equal(S.lib.notes.find(3, "seq", 1), 1, "its note is the voice's own")
+  pattern_clock_stop()
+end)
+
+-- ruling 26: a chord's further notes never fall back onto slot 1
+test("with a note cap of 1 or a pool of 0 a three-note step sends what a one-note step sends in 3.4", function()
+  local one = step_calls({3}, function(state) state.patterns[1][2] = 0 end)
+  for _, case in ipairs({
+      {"a note cap of 1", function() params:set("v1_note_cap", 1) end},
+      {"a pool of 0", function(state) state.lib.notes.set_pool(0) end}}) do
+    local three = step_calls({3, 7, 10}, function(state)
+      case[2](state)
+      state.patterns[1][2] = 0
+    end)
+    assert_texts(three.first, one.first, case[1] .. ": the step")
+    assert_texts(three.second, one.second, case[1] .. ": the next step")
+    assert_texts(three.stop, one.stop, case[1] .. ": the stop")
+  end
+end)
+
+test("the next played step re-pitches the notes it keeps and releases the ones it lacks", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  params:set("v1_freq", 440)
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  seq.set_step_attr(1, 1, "notes", {0, 4, 7})
+  seq.set_step_attr(1, 2, "notes", {0, 5})
+  pattern_clock_start()
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])
+  local ons, offs = note_calls(context, "noteOn", 0), note_calls(context, "noteOff", 0)
+  assert_equal(#offs, 1, "one note released")
+  assert_equal(call_text(offs[1]), "noteOff(0, 2, 0)", "the third note, released")
+  assert_equal(#ons, 1, "one note re-pitched")
+  assert_equal(ons[1].args[2], 1, "on its live slot"); assert_near(ons[1].args[3], 74, 1e-9, "five semitones up")
+  assert_equal(#context.calls_named("noteExpression"), 0, "no new note: no first expression")
+  assert_true(first_call(context, "noteOff", 0) < first_call(context, "noteOn", 0), "the release first")
+  assert_near(last_sent(context, "setVoiceParam", 0, "freq"), 440, 1e-9, "the first note kept as the override")
+  assert_equal(notes.held(1), 2); assert_equal(notes.pool_used(), 1)
+  -- a step without notes releases every one
+  context.clear_engine_calls()
+  S.patterns[1][3] = 15
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_texts({call_text(note_calls(context, "noteOff", 0)[1])}, {"noteOff(0, 1, 0)"}, "the second note released")
+  assert_equal(#note_calls(context, "noteOn", 0), 0, "nothing played")
+  assert_equal(notes.held(1), 0, "and the first ended with its override")
+  pattern_clock_stop()
+end)
+
+test("a chord ends when the patterns stop, the pattern is replaced or cleared, the length is cut or the wrap passes it", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  local function chord_step(step)
+    S.patterns[1][step] = 15
+    seq.set_step_attr(1, step, "notes", {0, 4, 7})
+  end
+  local function assert_ended(what)
+    local offs = note_calls(context, "noteOff", 0)
+    assert_equal(#offs, 2, what .. ": both extra notes released")
+    for index, off in ipairs(offs) do
+      assert_true(off.args[2] > 0 and off.args[3] == 0, what .. ": note " .. index + 1 .. " released, " .. call_text(off))
+    end
+    assert_equal(notes.held(1), 0, what .. ": nothing held")
+    assert_equal(notes.pool_used(), 0, what .. ": the pool free")
+  end
+  local function playing(what)
+    assert_equal(notes.held(1), 3, what .. ": the chord sounds")
+    context.clear_engine_calls()
+  end
+  chord_step(1)
+  pattern_clock_start(); playing("playing")
+  pattern_clock_stop(); assert_ended("the stop")
+  pattern_clock_start(); playing("again")
+  clear_pattern(1); assert_ended("a cleared pattern")
+  chord_step(1); pattern_clock_start(); playing("a new start")
+  seq.replace_pattern(1, {15}); assert_ended("a replaced pattern")
+  pattern_clock_stop()
+  -- a scene recall (it replaces every pattern)
+  capture_scene(2)
+  pattern_clock_start(); playing("before the recall")
+  recall_scene(2); assert_ended("a scene recall")
+  pattern_clock_stop()
+  -- the length set below the step that played it
+  clear_pattern(1); seq.set_step_attr(1, 1, "notes", nil); chord_step(5)
+  pattern_clock_start()
+  for _ = 1, 4 do context.clock.advance_until(S.pattern_clocks[1]) end
+  assert_equal(seq.sounding_step(1), 5, "step 5 played")
+  playing("step 5's chord")
+  params:set("v1_seq_length", 4); assert_ended("a length below the step")
+  pattern_clock_stop()
+  -- the wrap, with the voice's only set step turned off
+  params:set("v1_seq_length", 16)
+  pattern_clock_start()
+  for _ = 1, 4 do context.clock.advance_until(S.pattern_clocks[1]) end
+  playing("step 5 again")
+  toggle_pattern_step(1, 5)
+  context.clock.run_for(1.0)
+  assert_equal(#note_calls(context, "noteOff", 0), 0, "before the wrap the chord holds")
+  context.clock.run_for(1.0)
+  assert_ended("the wrap")
+  pattern_clock_stop()
+  -- a chain link (between two of the voice's steps: three steps of 1/16)
+  params:set("v1_seq_length", 3); clear_pattern(1); seq.set_step_attr(1, 5, "notes", nil); chord_step(1)
+  capture_scene(3)
+  params:set("seq_chain", 1); params:set("seq_chain_from", 3); params:set("seq_chain_scenes", 1)
+  params:set("seq_chain_bars", 1)
+  pattern_clock_start(); playing("the chain's first scene")
+  context.clock.run_for(2.0 - 0.01)  -- step 1 again at beat 3.75 after the start
+  context.clear_engine_calls()
+  context.clock.run_for(0.02)        -- the bar: the link, and step 2 (empty)
+  assert_ended("a chain link")
+  pattern_clock_stop()
+end)
+
+test("every ratchet hit accents every chord note", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "notes", {0, 4})
+  seq.set_step_attr(1, 1, "ratchet", 3)
+  context.clear_engine_calls()
+  pattern_clock_start()
+  context.clock.run_for(0.12)  -- inside step 1 (0.125 s)
+  local retriggers, ons = retriggers_of(context, 0), note_calls(context, "noteOn", 0)
+  assert_equal(#retriggers, 3, "three retriggers, the first note's accents")
+  assert_equal(#ons, 3, "three noteOns for the second note")
+  for index, on in ipairs(ons) do assert_equal(on.args[2], 1, "hit " .. index .. ": its slot") end
+  assert_true(first_call(context, "retrigger", 0) < first_call(context, "noteOn", 0), "after the retrigger")
+  local starts, repeats = note_starts(context)
+  assert_equal(starts[0], 1, "one node"); assert_equal(repeats[0], 2, "the later hits accent it")
+  assert_equal(#context.calls_named("noteExpression"), 1, "one first expression")
+  assert_equal(#context.calls_named("voiceOn"), 0, "no voiceOn")
+  pattern_clock_stop()
+end)
+
+test("64 steps of chords with ratchets and locks create one node per extra note and none on a repeat", function()
+  local context, S = buffer_voice_setup()  -- voice 1 on a buffer, voice 2 on its synth
+  local seq = S.lib.sequencer
+  for step = 1, 16 do
+    S.patterns[1][step] = 15; S.patterns[2][step] = 10
+    seq.set_step_attr(1, step, "notes", step % 2 == 1 and {0, 4, 7} or {0, 5})  -- the third note on odd steps
+    seq.set_step_attr(2, step, "notes", {0, 3, 7})                              -- kept on every step
+  end
+  for step = 1, 16, 3 do
+    seq.set_step_attr(1, step, "ratchet", 4)
+    seq.set_step_attr(1, step, "pos", step / 16)
+  end
+  for step = 2, 16, 4 do
+    seq.set_step_attr(2, step, "ratchet", 3)
+    seq.set_step_attr(2, step, "pitch", 1.5)
+  end
+  context.clear_engine_calls()
+  pattern_clock_start()
+  context.clock.run_for(64 * 0.125 - 0.01)  -- 64 steps
+  assert_equal(seq.sounding_step(1), 16, "four passes")
+  local starts, repeats = note_starts(context)
+  assert_equal(starts[0], 2 + 31, "voice 1: two notes, then its third note at each of 31 odd steps")
+  assert_equal(starts[1], 2, "voice 2: its two extra notes, once")
+  assert_true(repeats[0] > 64 and repeats[1] > 64, "every other hit accents its live notes")
+  for engine_voice = 0, 1 do
+    local expressions = 0
+    for _, call in ipairs(context.calls_named("noteExpression")) do
+      if call.args[1] == engine_voice then expressions = expressions + 1 end
+    end
+    assert_equal(expressions, starts[engine_voice], "voice " .. engine_voice + 1 .. ": an expression per node")
+  end
+  for _, call in ipairs(context.calls_named("noteOn")) do assert_true(call.args[2] > 0, "never slot 0") end
+  assert_equal(#context.calls_named("voiceOn"), 0, "no voiceOn")
+  assert_true(S.lib.notes.pool_used() <= S.lib.notes.pool(), "within the pool")
+  pattern_clock_stop()
+  assert_equal(S.lib.notes.pool_used(), 0, "the stop frees the pool")
+end)
+
+test("a chord on a voice MIDI holds plays wholly as extra notes", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  local freq = params:get("v1_freq")
+  assert_equal(midi_note(S, 1, 60), 1, "MIDI holds slot 1")
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  seq.set_step_attr(1, 1, "notes", {0, 4})
+  seq.set_step_attr(1, 1, "ratchet", 2)
+  context.clear_engine_calls()
+  pattern_clock_start()
+  local ons = note_calls(context, "noteOn", 0)
+  assert_equal(#ons, 2, "both notes extra")
+  assert_equal(ons[1].args[2], 1); assert_equal(ons[2].args[2], 2)
+  local pitch = 69 + 12 * math.log(freq / 440) / math.log(2)
+  assert_near(ons[1].args[3], pitch, 1e-9, "the first on the voice's pitch")
+  assert_near(ons[2].args[3], pitch + 4, 1e-9, "the second four semitones up")
+  assert_equal(notes.find(1, "seq", 1), 2, "the first note in an extra slot")
+  assert_equal(notes.find(1, "midi", 60), 1, "MIDI keeps slot 1")
+  assert_equal(last_sent(context, "setVoiceParam", 0, "freq"), nil, "no freq override")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), freq, 1e-9, "the stored freq")
+  assert_equal(#retriggers_of(context, 0), 1, "the voice's retrigger")
+  context.clear_engine_calls()
+  context.clock.run_for(0.07)  -- the ratchet's second hit, 62.5 ms on
+  ons = note_calls(context, "noteOn", 0)
+  assert_equal(#ons, 2, "the second hit accents both")
+  assert_equal(ons[1].args[2], 1); assert_equal(ons[2].args[2], 2)
+  assert_equal(#context.calls_named("noteExpression"), 0, "no node")
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])  -- step 2, without notes
+  local offs = note_calls(context, "noteOff", 0)
+  assert_equal(#offs, 2, "both released")
+  assert_equal(call_text(offs[1]), "noteOff(0, 1, 0)"); assert_equal(call_text(offs[2]), "noteOff(0, 2, 0)")
+  assert_equal(notes.held(1), 1, "MIDI's note stays")
+  assert_equal(last_sent(context, "setVoiceParam", 0, "freq"), nil, "and no freq is sent")
+  pattern_clock_stop()
+end)
+
+test("a chord past the cap or the pool keeps its first notes", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  params:set("v1_freq", 440)
+  params:set("v1_note_cap", 4)
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "notes", {0, 1, 2, 3, 4, 5, 6, 7})
+  context.clear_engine_calls()
+  pattern_clock_start()
+  for key = 1, 8 do
+    assert_equal(notes.find(1, "seq", key), key <= 4 and key or nil, "note " .. key)
+  end
+  assert_equal(#retriggers_of(context, 0), 1, "one retrigger")
+  local freqs = 0
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 0 and call.args[2] == "freq" then freqs = freqs + 1 end
+  end
+  assert_equal(freqs, 1, "one freq: the first note's override")
+  assert_near(last_sent(context, "setVoiceParam", 0, "freq"), 440, 1e-9)
+  assert_equal(#note_calls(context, "noteOn", 0), 3, "three extra notes")
+  pattern_clock_stop()
+  -- a pool of 2 under a cap of 8
+  params:set("v1_note_cap", 8)
+  notes.set_pool(2)
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_equal(notes.find(1, "seq", 1), 1, "pool 2: the first note")
+  for key = 2, 8 do
+    assert_equal(notes.find(1, "seq", key) ~= nil, key <= 3, "pool 2: note " .. key .. (key <= 3 and " held" or " refused"))
+  end
+  assert_equal(#retriggers_of(context, 0), 1, "one retrigger")
+  pattern_clock_stop()
+end)
+
+-- ruling 27: a chord's further notes are measured from its first note's base
+test("an input voice's chord measures every note from the step's pitch lock", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  params:set("v1_grain_pitch", 1)
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "pitch", 2)
+  seq.set_step_attr(1, 1, "notes", {0, 7})
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_near(last_sent(context, "setGrainParam", 0, "pitchShift"), 2, 1e-9, "the first note: the lock")
+  local ons = note_calls(context, "noteOn", 0)
+  assert_equal(#ons, 1, "one extra note")
+  assert_near(ons[1].args[5], 2 * 2 ^ (7 / 12), 1e-9, "the first note's rate times 2 ^ (7 / 12)")
+  pattern_clock_stop()
 end)
 
 end
