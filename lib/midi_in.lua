@@ -145,11 +145,20 @@ return function(S)
     note_tap = fn
   end
 
+  -- Whether voice's own note (slot 1) is a parked MIDI note: silent, and
+  -- once the keys are forgotten nothing can unpark it
+  local function parked_own(voice_idx)
+    local own = S.lib.notes.slots(voice_idx)[1]
+    return own ~= nil and own.slot == 1 and own.parked and own.owner == MIDI.owner
+  end
+
   -- Release every MIDI note: each voice's MIDI notes (release_owner), the
   -- keys and the plain pressures forgotten, S.lib.mpe's state reset. A
   -- voice whose keys were down stops in release mode, and, with stop_all
   -- (a panic), so does every voice a MIDI note started: nothing can release
-  -- them any more (#407, #529). Such a voice's notes go with its stop (the
+  -- them any more (#407, #529). So does a voice left with its own note
+  -- parked, whatever the mode (release_owner covers held notes only, and a
+  -- parked note is silent). Such a voice's notes go with its stop (the
   -- allocator's voice-stop hook forgets them). Cheap with nothing held: the
   -- layout hook runs it several times in one PSET load
   local function release_held_notes(stop_all)
@@ -159,11 +168,11 @@ return function(S)
       local wanted = next(S.midi_state.held[i]) ~= nil and (release_mode or stop_all)
       -- a panic also stops a voice a released key started and left running
       if stop_all and S.midi_state.started[i] then wanted = true end
-      if wanted and S.voices[i].active then
-        to_stop[#to_stop + 1] = i
-      else
+      if not wanted then
         S.lib.notes.release_owner(i, MIDI.owner)
+        wanted = parked_own(i)
       end
+      if wanted and S.voices[i].active then to_stop[#to_stop + 1] = i end
       S.midi_state.held[i] = {}
     end
     S.midi_state.note_voice = {}
@@ -522,10 +531,14 @@ return function(S)
     midi_init()
     M.repair_midi_map()
     -- a member count or zone change (the menu, RPN 6, a PSET load, the
-    -- zones editor) releases every MIDI note: their note offs may name a
-    -- layout that no longer routes them (ruling 14). The tap stays (the
-    -- zones editor's learn sets a range while it is set)
-    S.lib.mpe.on_layout_change(function() release_held_notes(false) end)
+    -- zones editor) in the MPE modes releases every MIDI note: their note
+    -- offs may name a layout that no longer routes them (ruling 14). The
+    -- plain modes route nothing through the zones, so there it does
+    -- nothing. The tap stays (the zones editor's learn sets a range while
+    -- it is set)
+    S.lib.mpe.on_layout_change(function()
+      if S.lib.mpe.active() then release_held_notes(false) end
+    end)
   end)
 
   -- Stop listening to MIDI before the voices go off, clear the note tap, and
