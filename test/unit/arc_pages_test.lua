@@ -1509,4 +1509,46 @@ test("SCENES ring 3 sweeps morph and ring 4 steps morph_b", function()
   assert_equal(params:get("morph_b"), 5, "the carry is gone")
 end)
 
+
+test("the step editor's ALT ring 2 turns the note under the cursor", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  local seq = S.lib.sequencer
+  show_page("SEQ")
+  seq.set_step_attr(2, 7, "notes", {0, 4, 7})
+  assert_true(S.lib.pages_seq.open_step_editor(2, 7, 1))
+  local function enc(n, d) _G.enc(n, d) end
+  -- the cursor opens on level, off the note rows: ring 2 turns the first note
+  key(1, 1)
+  context.arc.turn(1, 2, 20)
+  assert_equal(seq.step_attr(2, 7, "notes")[1], 1, "the first note off the note rows")
+  -- the cursor on note 3
+  key(1, 0)
+  for _ = 1, 40 do
+    enc(2, 1)
+    context.screen.clear(); redraw()
+    local cursor = S.lib.pages_seq.editor_note_index()
+    if cursor == 3 then break end
+  end
+  assert_equal(S.lib.pages_seq.editor_note_index(), 3, "the cursor reached note 3")
+  key(1, 1)
+  context.arc.turn(1, 2, 20)
+  local notes = seq.step_attr(2, 7, "notes")
+  assert_equal(notes[1], 1); assert_equal(notes[2], 4); assert_equal(notes[3], 8, "note 3 turned")
+  -- ticks carried on note 3 never turn another note after the cursor moves
+  context.arc.turn(1, 2, 10)
+  key(1, 0); enc(2, -1); key(1, 1)
+  assert_equal(S.lib.pages_seq.editor_note_index(), 2)
+  context.arc.turn(1, 2, 10)
+  assert_equal(seq.step_attr(2, 7, "notes")[2], 4, "the carried ticks were forgotten")
+  context.arc.turn(1, 2, 10)
+  assert_equal(seq.step_attr(2, 7, "notes")[2], 5, "twenty fresh ticks on note 2")
+  -- the ring draws that note: 5 of -14..14
+  arc_redraw()
+  assert_near(device.segments[2].to, (5 + 14) / 28 * math.pi * 2, 1e-9)
+  key(1, 0)
+  S.lib.pages_seq.close_step_editor(1)
+end)
+
 end

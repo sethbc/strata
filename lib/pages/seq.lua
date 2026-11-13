@@ -81,7 +81,7 @@ return function(S)
     {row = "prob", label = "prob", attr = "prob"},
     {row = "ratchet", label = "ratchet", attr = "ratchet"},
     {row = "step_gate", label = "gate", attr = "gate"},
-    {row = "note", label = "note", attr = "notes"},
+    {row = "note", label = "note", attr = "notes", chord = true},
     {row = "pos", label = "pos", attr = "pos"},
     {row = "pitch", label = "pitch", attr = "pitch"},
     {row = "size", label = "size", attr = "size"},
@@ -99,6 +99,23 @@ return function(S)
   -- step locks' params are the sequencer's (SEQ.lock_params: lock_param_name)
   local ATTR_FORMATS = {pos = "%.2f", pitch = "%.2fx", size = "%.2f s", gate = "%.2f st"}
   local STEP_GATE_PARAM = "seq_gate_length"
+
+  -- The chord's rows (design 9.4): note k of a step's list has row key
+  -- "note" (the first) or "note<k>" and label "note" or "note <k>"; the add
+  -- row follows them while the step has 1 to SEQ.max_step_notes - 1 notes.
+  -- edit_rows expands EDIT_ROWS' "note" entry into them
+  local NOTE_ADD_SPEC = {row = "note_add", label = "add note", attr = "notes", add = true}
+  local note_specs = {}
+
+  local function note_spec(index)
+    local spec = note_specs[index]
+    if spec == nil then
+      spec = {row = index == 1 and "note" or ("note" .. index), label = index == 1 and "note" or ("note " .. index),
+        attr = "notes", index = index}
+      note_specs[index] = spec
+    end
+    return spec
+  end
 
   -- The step under the cursor, on the selected voice's row
   local function cursor_step()
@@ -209,11 +226,17 @@ return function(S)
 
   -- What a step holds for key: its level, notes[1] for "notes", else the
   -- attribute (nil while off)
-  local function step_value(voice_idx, step, key)
+  local function step_value(voice_idx, step, key, index)
     if key == "level" then return S.patterns[voice_idx][step] end
     local value = S.lib.sequencer.step_attr(voice_idx, step, key)
-    if key == "notes" then return value and value[1] end
+    if key == "notes" then return value and value[index or 1] end
     return value
+  end
+
+  -- A step's notes list as text, to tell whether a turn changed any note
+  local function notes_signature(voice_idx, step)
+    local notes = S.lib.sequencer.step_attr(voice_idx, step, "notes")
+    return notes and table.concat(notes, ",") or ""
   end
 
   -- Per "<voice>:<step>:<key>": the raw place (0-1 on its param's
@@ -263,6 +286,28 @@ return function(S)
     return math.min(value, high)
   end
 
+  -- Note index of a step's chord turned by d (design 9.4): index 1..n moves
+  -- that note (below -max_degree it is removed and the gap closes; the
+  -- list left empty is nil); index n + 1 appends a note at the last note's
+  -- degree turned d - 1 steps (d when d < 0), nothing when the chord is
+  -- full or d is 0; from no notes, index 1 starts a note at 0
+  local function turn_note(voice_idx, step, d, index)
+    local SEQ = S.lib.sequencer.SEQ
+    local notes = S.lib.sequencer.step_attr(voice_idx, step, "notes") or {}
+    local count = #notes
+    if index < 1 or index > count + 1 or index > SEQ.max_step_notes then return end
+    if count > 0 and index == count + 1 then
+      if d == 0 then return end
+      local degree = notes[count] + (d > 0 and d - 1 or d)
+      if degree < -SEQ.max_degree then return end
+      notes[index] = math.min(degree, SEQ.max_degree)
+    else
+      local turned = turned_optional(notes[index], 0, -SEQ.max_degree, SEQ.max_degree, d)
+      if turned == nil then table.remove(notes, index) else notes[index] = turned end
+    end
+    S.lib.sequencer.set_step_attr(voice_idx, step, "notes", #notes > 0 and notes or nil)
+  end
+
   -- The step editor, while it is open: {voice, step, port, alt_k2_at (the
   -- time ALT+K2 went down on it, until its release)}
   local editor = nil
@@ -287,6 +332,7 @@ return function(S)
     local seq = S.lib.sequencer
     local SEQ = seq.SEQ
     local before = step_value(voice_idx, step, key)
+    local notes_before = key == "notes" and notes_signature(voice_idx, step)
     if key == "level" then
       local pattern = S.patterns[voice_idx]
       pattern[step] = util.clamp(pattern[step] + d, 0, MAX_STEP_LEVEL)
@@ -299,10 +345,8 @@ return function(S)
       local hits = util.clamp((before or 1) + d, 1, SEQ.max_ratchet)
       seq.set_step_attr(voice_idx, step, key, hits > 1 and hits or nil)
     elseif key == "notes" then
-      -- notes[1] only: further entries stay; off clears the whole list
-      local notes = seq.step_attr(voice_idx, step, key) or {}
-      notes[1] = turned_optional(before, 0, -SEQ.max_degree, SEQ.max_degree, d)
-      seq.set_step_attr(voice_idx, step, key, notes[1] and notes or nil)
+      turn_note(voice_idx, step, d, opts.index or 1)
+      return notes_signature(voice_idx, step) ~= notes_before
     elseif key == "bookmark" then
       if not M.has_bookmarks(voice_idx) then return false end
       seq.set_step_attr(voice_idx, step, key, turned_optional(before, 0, 1, NUM_BOOKMARKS, d))
@@ -332,6 +376,15 @@ return function(S)
         section = spec.section
         rows[#rows + 1] = {label = section == "step" and ("step " .. step) or section, selectable = false,
           section = section}
+      elseif spec.chord then
+        local notes = S.lib.sequencer.step_attr(voice_idx, step, "notes")
+        local count = notes and #notes or 0
+        for index = 1, math.max(count, 1) do
+          rows[#rows + 1] = {label = note_spec(index).label, section = section, spec = note_spec(index)}
+        end
+        if count >= 1 and count < S.lib.sequencer.SEQ.max_step_notes then
+          rows[#rows + 1] = {label = NOTE_ADD_SPEC.label, section = section, spec = NOTE_ADD_SPEC}
+        end
       elseif spec.row ~= "bookmark" or bookmarks then
         local param_id = spec.param_id or (spec.voice_param and voice_param_id(voice_idx, spec.voice_param))
         rows[#rows + 1] = {label = spec.label, section = section, param_id = param_id, spec = spec}
@@ -372,6 +425,15 @@ return function(S)
     for index, row in ipairs(rows) do
       if row.spec and row.spec.row == view.anchor.row then return rows, index end
     end
+    if view.anchor.row:match("^note%d?$") then
+      -- a note row that is gone (its note removed, or a step with fewer
+      -- notes): the last note row
+      local last
+      for index, row in ipairs(rows) do
+        if row.spec and row.spec.attr == "notes" and not row.spec.add then last = index end
+      end
+      if last then return rows, last end
+    end
     return rows, field_list.clamp(rows, view.anchor.index)
   end
 
@@ -406,7 +468,8 @@ return function(S)
       return fill[1] .. "/" .. whole_text(voice_length(voice_idx)) .. " +" .. fill[2]
     end
     local SEQ = S.lib.sequencer.SEQ
-    local value = step_value(voice_idx, step, spec.attr)
+    if spec.add then return "" end
+    local value = step_value(voice_idx, step, spec.attr, spec.index)
     if spec.attr == "level" then return tostring(value) end
     if spec.attr == "prob" then return whole_text(value or SEQ.max_prob) .. "%" end
     if spec.attr == "ratchet" then return "x" .. whole_text(value or 1) end
@@ -486,6 +549,19 @@ return function(S)
       set_binary_param(row.param_id, d > 0 and 1 or 0)
     elseif row.param_id then
       enc_param_delta(3, row.param_id, d)
+    elseif spec.attr == "notes" then
+      local notes = S.lib.sequencer.step_attr(voice_idx, step, "notes")
+      local count = notes and #notes or 0
+      M.turn_step(voice_idx, step, "notes", d, {fine = S.alt_held, index = spec.add and count + 1 or spec.index})
+      local after = S.lib.sequencer.step_attr(voice_idx, step, "notes")
+      if spec.add and after and #after > count then
+        -- the cursor moves to the note just added
+        for index, row in ipairs(edit_rows(voice_idx, step)) do
+          if row.spec == note_spec(#after) then place_view(view, index) end
+        end
+      else
+        place_view(view, select(2, sync_view(view)))
+      end
     elseif spec.attr then
       M.turn_step(voice_idx, step, spec.attr, d, {fine = S.alt_held})
     end
@@ -530,6 +606,14 @@ return function(S)
     elseif spec.attr == "level" then
       S.patterns[voice_idx][step] = 0
       S.lib.mutation.note_pattern_edit(voice_idx)
+    elseif spec.attr == "notes" then
+      -- a note row removes that note (the add row has nothing to reset)
+      if spec.index then
+        local notes = S.lib.sequencer.step_attr(voice_idx, step, "notes") or {}
+        table.remove(notes, spec.index)
+        S.lib.sequencer.set_step_attr(voice_idx, step, "notes", #notes > 0 and notes or nil)
+        place_view(view, select(2, sync_view(view)))
+      end
     elseif spec.attr then
       S.lib.sequencer.set_step_attr(voice_idx, step, spec.attr, nil)
     end
@@ -542,7 +626,16 @@ return function(S)
   local function row_resets(view)
     local rows, cursor = sync_view(view)
     local row = rows[cursor]
-    return row.param_id ~= nil or row.spec.attr ~= nil
+    return row.param_id ~= nil or (row.spec.attr ~= nil and not row.spec.add)
+  end
+
+  -- The note index the step editor's cursor is on (1 off the note rows and
+  -- on the add row): what its arc ring turns (design 9.4)
+  function M.editor_note_index()
+    if editor == nil then return 1 end
+    local rows, cursor = sync_view(views.editor)
+    local spec = rows[cursor].spec
+    return spec.attr == "notes" and spec.index or 1
   end
 
   -- The edit view's hints: k2_text is ALT+K2's (what letting go does) and
@@ -862,6 +955,14 @@ return function(S)
     }
   end
 
+  -- A step with the most notes, every one at its widest (-14)
+  local function eight_notes(voice_idx, step)
+    local SEQ = S.lib.sequencer.SEQ
+    local notes = {}
+    for index = 1, SEQ.max_step_notes do notes[index] = -SEQ.max_degree end
+    S.lib.sequencer.set_step_attr(voice_idx, step, "notes", notes)
+  end
+
   local layout_states = {
     {name = "cursor-v1-s1", setup = show_cursor(1, 1)},
     {name = "cursor-v1-s16", setup = show_cursor(1, PATTERN_LENGTH)},
@@ -911,7 +1012,29 @@ return function(S)
       widest_values(NUM_VOICES, PATTERN_LENGTH, true)
       M.open_step_editor(NUM_VOICES, PATTERN_LENGTH, 1)
     end},
+    -- 3.5: a step with eight notes in the step editor, on its last note row
+    {name = "a step with eight notes", setup = function()
+      widest_values(NUM_VOICES, PATTERN_LENGTH, true)
+      eight_notes(NUM_VOICES, PATTERN_LENGTH)
+      M.open_step_editor(NUM_VOICES, PATTERN_LENGTH, 1)
+      for index, row in ipairs(edit_rows(NUM_VOICES, PATTERN_LENGTH)) do
+        if row.spec and row.spec.row == "note8" then place_view(views.editor, index) end
+      end
+    end},
   }
+  -- the edit view with eight notes, every window of its rows
+  for window = 1, 7 do
+    table.insert(layout_states, {
+      name = "edit view eight notes rows " .. window,
+      setup = function()
+        show_cursor(NUM_VOICES, PATTERN_LENGTH)()
+        widest_values(NUM_VOICES, PATTERN_LENGTH, true)
+        eight_notes(NUM_VOICES, PATTERN_LENGTH)
+        edit_open = true
+        place_view(views.page, (window - 1) * SEQ_EDIT.visible + 2)
+      end,
+    })
+  end
   -- the edit view with every row at its widest value, on voices 1 and 7
   -- at step 16, with and without bookmarks, five windows each
   for _, voice_idx in ipairs({1, NUM_VOICES}) do
