@@ -470,8 +470,9 @@ checkBuses = {
 // Starts, shape changes, moves, sets and stops of the six LFOs at 20 Hz for
 // 2 s (seeded): 40 steps, each sent 50 ms after the last began (a deadline
 // from the series' start, so a slow step never slows the rest), with starts
-// and shape changes also sent in the same tick as a stop, so they reach an
-// LFO in its release. One tree read a step, asked for in the same tick as
+// and shape changes also sent in the same tick as a stop (taken by the
+// server with the stop, before the release begins, or after the release has
+// ended: below). One tree read a step, asked for in the same tick as
 // the step's commands, with no sync between (a sync takes about 27 ms here,
 // past the release): the server answers it after the commands, in order, and
 // the places' nodes are taken as the commands leave them. Each read asserts
@@ -480,14 +481,37 @@ checkBuses = {
 // change frees it as the new node starts, or replaces a running one in one
 // server step); each running LFO has exactly one, of its shape and writing
 // its channel; and each LFO stopped in the step before, 50 ms earlier, past
-// its 20 ms release, has none and no place. None once all are stopped
+// its 20 ms release, has none and no place. None once all are stopped.
+// A stop and the re-gate sent after it in one tick can reach the server in
+// two of its driver's callbacks (scsynth takes the messages that have
+// arrived at the start of each, then runs the callback's control blocks at
+// once: 16 under JACK's 1024 frames, more than the 15 of the release), so
+// the release ends before the re-gate is taken, the read finds that LFO
+// without a node, and the engine starts it again when the node's end
+// reaches sclang (fastLfoEnded; #677). Such a step waits for that restart
+// (at most 0.5 s) and reads the tree again, where the bound must hold with
+// the LFO on exactly its new node, of its shape on its channel
 checkLfoSeries = {
     var steps = 40, period = 0.05, wrong = List.new, maxNodes = 0, maxReleasing = 0, actions = Bag.new, settings = Array.newClear(6);
-    var stoppedBefore = [], times = List.new(steps), queries = List.new(steps), t0, final, places, span;
+    var stoppedBefore = [], times = List.new(steps), queries = List.new(steps), t0, final, places, span, restarted = 0;
+    // The places' nodes now (nil for an LFO without one)
+    var placeNodes = { (0 .. 5).collect({ arg lfo; placeSynth.(lfo) !? _.nodeID }) };
+    // Whether a tree read breaks the bound against the places' nodes own:
+    // an LFO node that is no place's, two of one, or a running LFO (but
+    // those excused) without exactly its place's node, of its shape on its
+    // channel
+    var breaks = { arg nodes, own, excused;
+        var ids = nodes.collect(_[\id]);
+        (ids.asSet.size != ids.size) or: { ids.any({ arg id; own.includes(id).not }) }
+            or: { settings.any({ arg each, lfo;
+                var node = nodes.detect({ arg node; node[\id] == own[lfo] });
+                each.notNil and: { excused.includes(lfo).not } and: { node.isNil or: { node[\def] != lfoDefs[each[2]] }
+                    or: { node[\controls][\out] != engine.fastModChannel(each[0], 0, each[1]) } } }) }
+    };
     thisThread.randSeed = 3401;
     t0 = Main.elapsedTime;
     steps.do({ arg step;
-        var stopped = List.new, own, releasing, nodes, ids, running, queryStart;
+        var stopped = List.new, regated = List.new, own, releasing, nodes, ids, running, ended, queryStart;
         ((t0 + (period * step)) - Main.elapsedTime).max(0).wait;
         times.add(Main.elapsedTime - t0);
         6.do({ arg lfo;
@@ -502,13 +526,13 @@ checkLfoSeries = {
             { \move } { current = current.copy.put(0, 7.rand).put(1, 5.rand) }
             { \set } { current = current.copy.put(3, exprand(0.1, 50.0)).put(4, 1.0.rand) }
             { \stop } { current = nil; command.(\stopFastLfo, lfo); stopped.add(lfo) }
-            // (into its release: the same settings, or a new shape)
-            { \restart } { command.(\stopFastLfo, lfo) }
+            // (in the stop's tick: the same settings, or a new shape)
+            { \restart } { command.(\stopFastLfo, lfo); regated.add(lfo) }
             { \reshape } { command.(\stopFastLfo, lfo); current = current.copy.put(2, (current[2] + 1 + 6.rand) % 8) };
             if (current.notNil and: { action != \none }) { command.(\setFastLfo, lfo, *current) };
             settings[lfo] = current;
         });
-        own = (0 .. 5).collect({ arg lfo; placeSynth.(lfo) !? _.nodeID });
+        own = placeNodes.value;
         releasing = (0 .. 5).select({ arg lfo; state[\lfos][lfo] !? { arg place; place[\running].not } ? false })
             .collect({ arg lfo; own[lfo] });
         queryStart = Main.elapsedTime;
@@ -518,12 +542,17 @@ checkLfoSeries = {
         running = settings.collect({ arg each, lfo; if (each.notNil) { [lfo, each] } }).reject(_.isNil);
         maxNodes = maxNodes.max(ids.size);
         maxReleasing = maxReleasing.max(ids.count({ arg id; releasing.includes(id) }));
-        if ((ids.asSet.size != ids.size) or: { ids.any({ arg id; own.includes(id).not }) }
-            or: { running.any({ arg pair;
-                var node = nodes.detect({ arg each; each[\id] == own[pair[0]] });
-                node.isNil or: { node[\def] != lfoDefs[pair[1][2]] }
-                    or: { node[\controls][\out] != engine.fastModChannel(pair[1][0], 0, pair[1][1]) } }) }
-            or: { stoppedBefore.any({ arg lfo; settings[lfo].isNil and: { own[lfo].notNil } }) }) {
+        // the LFOs stopped and re-gated in this tick whose node the server
+        // ended before the re-gate (above): excused in this read, each must
+        // be started again, and the second read must hold the bound
+        ended = regated.select({ arg lfo; ids.includes(own[lfo]).not });
+        if (breaks.(nodes, own, ended)
+            or: { stoppedBefore.any({ arg lfo; settings[lfo].isNil and: { own[lfo].notNil } }) }
+            or: { ended.notEmpty and: {
+                var again;
+                restarted = restarted + ended.size;
+                h.waitFor({ ended.every({ arg lfo; placeSynth.(lfo) !? { arg synth; synth.nodeID != own[lfo] } ? false }) }, 0.5).not
+                    or: { again = placeNodes.value; breaks.(lfoNodes.value, again, []) } } }) {
             wrong.add([step, ids.size, running.size]);
         };
         stoppedBefore = stopped;
@@ -535,8 +564,9 @@ checkLfoSeries = {
     places = state[\lfos] ? [0];
     check.(wrong.isEmpty and: { maxNodes <= 6 } and: { maxReleasing > 0 } and: { final.isEmpty } and: { places.every(_.isNil) }
         and: { readAll.value.every(_ == 0) },
-        "modulation: one node per LFO through starts, shape changes, moves and stops at 20 Hz for 2 s, and none once stopped (% steps sent over % s, the slowest tree read % s; at each step's commands every LFO node is its place's, a releasing one included, each running LFO has one, of its shape on its channel, and each stopped a step before has none: steps wrong %, at most % LFO nodes and % releasing at once, % left, actions %)".format(
-            steps, span.round(0.001), queries.maxItem.round(0.001), wrong.keep(4), maxNodes, maxReleasing, final.size, actions.contents));
+        "modulation: one node per LFO through starts, shape changes, moves and stops at 20 Hz for 2 s, and none once stopped (% steps sent over % s, the slowest tree read % s; at each step's commands every LFO node is its place's, a releasing one included, each running LFO has one, of its shape on its channel, and each stopped a step before has none: steps wrong %, at most % LFO nodes and % releasing at once, % left, % re-gates that found their node ended and waited for its restart, actions %)".format(
+            steps, span.round(0.001), queries.maxItem.round(0.001), wrong.keep(4), maxNodes, maxReleasing, final.size, restarted,
+            actions.contents));
     resetModulation.value;
 };
 

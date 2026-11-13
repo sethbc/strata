@@ -1,0 +1,2 @@
+### Fixed
+- **Development: the modulation area's 20 Hz engine LFO check no longer fails now and then (about once in 60 runs).** A stop and the restart sent right after it could reach scsynth in two of its audio callbacks, so the LFO's 20 ms release had ended before the restart arrived; the engine starts such an LFO again, as designed, but the check's read of the server, made in that moment, found it without a node. The check now waits for that restart and reads the server again, where the LFO must have exactly one node (#677).
