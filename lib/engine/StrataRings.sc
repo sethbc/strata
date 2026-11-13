@@ -34,11 +34,11 @@
     strataAreaRings {
         ^(
             order: 70,
-            allocState: { this.allocRings },
-            addDefs: { this.addRingDefs; [] },
-            start: { this.startRingWriters },
-            stop: { this.stopRingWriters },
-            free: { this.freeRings },
+            allocState: { this.areaCall(\allocRings) },
+            addDefs: { this.areaCall(\addRingDefs); [] },
+            start: { this.areaCall(\startRingWriters) },
+            stop: { this.areaCall(\stopRingWriters) },
+            free: { this.areaCall(\freeRings) },
             effectKeys: this.ringWriterKeys
         )
     }

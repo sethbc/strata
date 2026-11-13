@@ -10,12 +10,12 @@
     strataAreaEffects {
         ^(
             order: 60,
-            allocState: { this.allocEffectBuses },
-            addDefs: { this.addEffectDefs; [] },
-            addCommands: { this.addEffectCommands },
-            start: { this.startEffectsChain },
-            stop: { this.stopEffects },
-            free: { this.freeEffects },
+            allocState: { this.areaCall(\allocEffectBuses) },
+            addDefs: { this.areaCall(\addEffectDefs); [] },
+            addCommands: { this.areaCall(\addEffectCommands) },
+            start: { this.areaCall(\startEffectsChain) },
+            stop: { this.areaCall(\stopEffects) },
+            free: { this.areaCall(\freeEffects) },
             effectKeys: this.effectChainKeys
         )
     }

@@ -1200,6 +1200,97 @@ local function per_sample_loops(code)
   return found
 end
 
+-- #211: sclang 3.13 and 3.14.1 free a function's frame as it returns, but a
+-- method frame a kept closure holds keeps its caller pointing at that freed
+-- frame, and once the collector's colors come round its scan revives dead
+-- objects and can corrupt a free list (the collector's count error, crashes, hangs). So
+-- a method whose frame outlives its call is called through areaCall (a
+-- method frame, which clears its own caller): every area hook, strataAreas,
+-- and every call of a method in AREA_CALL_METHODS (docs/notes/engine/structure.md).
+local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "free" }
+-- methods that keep a closure and are called from a function (a SynthDef
+-- function, an onFree, a fork): never called but through areaCall
+local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "inputHeadFrame", "gateVoice" }
+
+-- The calls of methods on `this` that do not go through areaCall in an
+-- engine file's area hooks (in each strataArea<Name> method), and anywhere
+-- of a method in AREA_CALL_METHODS: { "path:line: ..." }
+local function direct_calls(path, text)
+  local code, found = stubs.strip_sc_comments(text), {}
+  local function line_of(position)
+    local _, newlines = code:sub(1, position):gsub("\n", "")
+    return newlines + 1
+  end
+  local function report(position, what) found[#found + 1] = string.format("%s:%d: %s", path, line_of(position), what) end
+  for area_start, area in code:gmatch("()(strataArea%u[%w_]*)%s*{") do
+    local body_start = code:find("{", area_start, true)
+    local body = code:match("%b{}", body_start)
+    for _, hook in ipairs(AREA_HOOKS) do
+      local search = 1
+      while true do
+        local start, finish = body:find("%f[%w_]" .. hook .. ":%s*", search)
+        if not start then break end
+        local hook_body = body:match("^%b{}", finish + 1)
+        if hook_body then
+          for offset, name, after in hook_body:gmatch("()this%.([%a_][%w_]*)(.?.?)") do
+            local position = body_start + finish + offset - 1
+            if name ~= "areaCall" then
+              report(position, area .. "'s " .. hook .. " hook calls this." .. name .. " directly, not through this.areaCall(\\" .. name .. ")")
+            elseif after ~= "(\\" then
+              report(position, area .. "'s " .. hook .. " hook calls areaCall without a method's symbol")
+            end
+          end
+        end
+        search = finish + 1
+      end
+    end
+  end
+  for _, name in ipairs(AREA_CALL_METHODS) do
+    for position in code:gmatch("()%f[%w_]this%." .. name .. "%f[^%w_]") do
+      report(position, "this." .. name .. " is called directly, not through this.areaCall(\\" .. name .. ", ...)")
+    end
+  end
+  return found
+end
+
+test("an area hook, strataAreas and a method that keeps a closure are called through areaCall (#211)", function()
+  local probe = direct_calls("probe.sc", "+ Engine_Strata {\n    strataAreaProbe {\n        ^(order: 1,\n"
+    .. "            addDefs: { this.addProbeDefs; [] },  // not this.areaCall\n"
+    .. "            start: { this.areaCall(\\startProbe) },\n"
+    .. "            stop: { areaState[\\probe][\\stopped] = true; this.areaCall(\\stopProbe) },\n"
+    .. "            free: { this.areaCall(selector) })\n    }\n"
+    .. "    defs { SynthDef(\\p, { this.grainBody(c, this.ringGrainReader(1)) }).add }\n}\n")
+  assert_equal(#probe, 3, "the probe's three direct calls: " .. table.concat(probe, "; "))
+  assert_true(probe[1] and probe[1]:match("^probe%.sc:4: strataAreaProbe's addDefs hook calls this%.addProbeDefs directly"),
+    "names the file, the line, the area, the hook and the method: " .. tostring(probe[1]))
+  assert_true(probe[2] and probe[2]:match("^probe%.sc:7: strataAreaProbe's free hook calls areaCall without a method's symbol"),
+    "an areaCall must name the method: " .. tostring(probe[2]))
+  assert_true(probe[3] and probe[3]:match("^probe%.sc:9: this%.ringGrainReader is called directly"), "and a kept closure's method: " .. tostring(probe[3]))
+
+  local found, hooks, files = {}, 0, engine_files()
+  for index = 2, #files do
+    local file = files[index]
+    for _, line in ipairs(direct_calls(file.path, file.text)) do found[#found + 1] = line end
+    for _, hook in ipairs(AREA_HOOKS) do
+      for _ in stubs.strip_sc_comments(file.text):gmatch("%f[%w_]" .. hook .. ":%s*{%s*[^}]*this%.areaCall%(") do hooks = hooks + 1 end
+    end
+  end
+  assert_true(#found == 0, table.concat(found, "\n"))
+  assert_true(hooks >= 50, "the areas' hooks are found and go through areaCall (" .. hooks .. ")")
+
+  -- strataAreas reaches each strataArea<Name> through areaCall, and
+  -- areaCall itself never makes it a tail call (^this.performList would
+  -- give the method the caller of areaCall again)
+  local util
+  for _, file in ipairs(files) do if file.path == "lib/engine/StrataUtil.sc" then util = file.text end end
+  local areas_body = sc_method_body(util, "strataAreas") or ""
+  assert_true(areas_body:match("this%.areaCall%(method%.name%)") and not areas_body:match("this%.perform%("),
+    "lib/engine/StrataUtil.sc: strataAreas calls each area's method through this.areaCall(method.name)")
+  local call_body = sc_method_body(util, "areaCall") or ""
+  assert_true(call_body:match("result%s*=%s*this%.performList%(selector,%s*args%)") and call_body:match("%^%s*result%s*$"),
+    "lib/engine/StrataUtil.sc: areaCall assigns the method's result and then returns it (never ^this.performList)")
+end)
+
 test("the engine's sample paths run no sclang function per sample (#131)", function()
   local old_loop = "while { true } { interleaved = FloatArray.newClear(n); left.size.do({ arg frame; "
     .. "interleaved[frame * 2] = left[frame].clip(-1, 1) }) }"

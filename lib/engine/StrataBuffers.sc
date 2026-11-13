@@ -8,12 +8,12 @@
     strataAreaBuffers {
         ^(
             order: 40,
-            allocState: { this.allocBufferState },
-            addDefs: { this.addBufferDefs; [] },
-            addCommands: { this.addBufferCommands },
-            start: { this.startInputSynth },
-            stop: { this.stopBuffers },
-            free: { this.freeBuffers }
+            allocState: { this.areaCall(\allocBufferState) },
+            addDefs: { this.areaCall(\addBufferDefs); [] },
+            addCommands: { this.areaCall(\addBufferCommands) },
+            start: { this.areaCall(\startInputSynth) },
+            stop: { this.areaCall(\stopBuffers) },
+            free: { this.areaCall(\freeBuffers) }
         )
     }
 

@@ -9,9 +9,9 @@
     strataAreaWaveform {
         ^(
             order: 140,
-            allocState: { this.allocWaveformState },
+            allocState: { this.areaCall(\allocWaveformState) },
             free: {
-                this.stopPeaksMover;
+                this.areaCall(\stopPeaksMover);
                 areaState[\waveform][\peakBuffers].do({ arg buffer; buffer.free })
             }
         )

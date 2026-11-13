@@ -16,9 +16,9 @@
                 // the chunks fileDecodes has read since alloc (the check counts them)
                 areaState[\files][\decodeChunks] = 0;
                 areaState[\files][\renames] = Dictionary.new;
-                this.deleteStaleParts
+                this.areaCall(\deleteStaleParts)
             },
-            addCommands: { this.addFileCommands }
+            addCommands: { this.areaCall(\addFileCommands) }
         )
     }
 

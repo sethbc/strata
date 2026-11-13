@@ -9,12 +9,12 @@
     strataAreaVoices {
         ^(
             order: 20,
-            allocState: { this.allocVoiceState },
-            addDefs: { this.addVoiceDefs; voiceSynthDefs },
-            addCommands: { this.addVoiceCommands },
-            start: { this.startVoiceGroups },
-            stop: { this.stopVoices },
-            free: { this.freeVoices }
+            allocState: { this.areaCall(\allocVoiceState) },
+            addDefs: { this.areaCall(\addVoiceDefs); voiceSynthDefs },
+            addCommands: { this.areaCall(\addVoiceCommands) },
+            start: { this.areaCall(\startVoiceGroups) },
+            stop: { this.areaCall(\stopVoices) },
+            free: { this.areaCall(\freeVoices) }
         )
     }
 
@@ -109,7 +109,9 @@
                 // level and the first grain land in one block.
                 context.server.makeBundle(nil, {
                     this.setSynth(this.voiceMixKey(voice), *this.controlPairs(\strataVoiceMix, voiceControls[voice]));
-                    this.gateVoice(voice);
+                    // (through areaCall: the synths' onFree watchers keep this
+                    // frame, and a function's frame is freed as it returns, #211)
+                    this.areaCall(\gateVoice, voice);
                 });
             };
         });
