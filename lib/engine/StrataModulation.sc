@@ -316,7 +316,7 @@
         };
         place[\released] = false;
         this.anchorFastLfo(place, phase ? 0);
-        ^this.watchFastLfo(lfo, synth, place[\channel])
+        ^this.areaCall(\watchFastLfo, lfo, synth, place[\channel])
     }
 
     // An LFO's phase anchor (#611): place[\anchor] = [phase, time, rate],
@@ -390,13 +390,14 @@
         if (shape != place[\shape]) {
             place[\shape] = shape;
             old = place[\synth];
+            // (watchFastLfo and startFastLfo through areaCall: the node's
+            // onFree keeps the frame watching it, which, called directly,
+            // would keep this method's frame and its caller, maybe a
+            // function's frame, freed as it returns, #211)
             place[\synth] = if (place[\released].not) {
                 this.anchorFastLfo(place, 0);
-                this.watchFastLfo(lfo, Synth.replace(old, this.fastLfoDefName(shape), controls), channel)
+                this.areaCall(\watchFastLfo, lfo, Synth.replace(old, this.fastLfoDefName(shape), controls), channel)
             } {
-                // (startFastLfo through areaCall: the node's onFree keeps
-                // the frame watching it, whose caller must not be this
-                // function's frame, freed as it returns, #211)
                 context.server.makeBundle(nil, {
                     this.sendToSynth(old.freeMsg);
                     fresh = this.areaCall(\startFastLfo, lfo, place);
