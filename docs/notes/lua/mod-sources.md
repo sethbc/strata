@@ -22,4 +22,4 @@
 - `name`: MOD's row label, 1 to 4 characters. `section`: MOD's section; a new name is a new section.
 - `value`: the value now, in the source's own units, within `range`. `range[1] < range[2]`; `range[1] < 0` marks a bipolar source, drawn from the center.
 - `describe`, `visible` and `row` are optional, and so is each row function; a source without `row` is read-only on MOD. A field outside the set is refused (#385).
-- 3.4 registers `lfo1`..`lfo6` (section `lfos`, −1..1, 1b), `macro1`..`macro16` (`macros`, 0..1, visible in the shown bank, 1e), `gesture1`..`gesture4` (`gestures`, the loop's phase, 1f) and `input` (`audio`, 0..1, 1i).
+- 3.4 registers `lfo1`..`lfo6` (section `lfos`, −1..1, 1b), `macro1`..`macro16` (`macros`, 0..1, visible in the shown bank, 1e), `gesture1`..`gesture4` (`gestures`, the loop's phase, 1f) and `input` (`audio`, 0..1, 1i). 3.5 registers `pressure`, `slide`, `pressure1`..`pressure7` and `slide1`..`slide7` (`notes`, 0..1, read-only, a voice's pair visible while it holds a note that has sent expression, 2c, `docs/notes/lua/expression.md`).

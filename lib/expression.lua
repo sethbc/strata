@@ -105,9 +105,13 @@ return function(S)
 
   -- A gain (design §6.2, Question 12): amp a swell, 1 + depth x value;
   -- level the loudness, 1 - depth x (1 - value) above 0 and 1 + depth x
-  -- value below; each clipped 0-2
-  local function gain(target, depth, value)
-    if target == "level" and depth > 0 then return clip(1 - depth * (1 - value), EXPRESSION.gain_range) end
+  -- value below, for pressure only: a slide is relative, 0 at every
+  -- touch's start, so it cannot be a loudness, and on level it acts as on
+  -- amp (ruling 34); each clipped 0-2
+  local function gain(target, depth, value, source)
+    if target == "level" and source == "pressure" and depth > 0 then
+      return clip(1 - depth * (1 - value), EXPRESSION.gain_range)
+    end
     return clip(1 + depth * value, EXPRESSION.gain_range)
   end
 
@@ -126,7 +130,7 @@ return function(S)
       local target, depth = mapping_of(voice, mapping)
       local kind, key = placement(voice, target)
       if value ~= nil and kind == "note" and key == "amp" then
-        values.amp = clip(values.amp * gain(target, depth, value), EXPRESSION.gain_range)
+        values.amp = clip(values.amp * gain(target, depth, value, mapping.value), EXPRESSION.gain_range)
       elseif value ~= nil and kind == "note" then
         values[key] = clip(values[key] + clip(depth * value, EXPRESSION.offset_range), EXPRESSION.offset_range)
       elseif value ~= nil and kind == "wide" then
@@ -159,8 +163,9 @@ return function(S)
   -- Per voice, the held notes this module keeps values for, each
   -- {owner, key, bend, pressure (nil until the first), peak (the highest
   -- of the touch), slide (absolute, nil until the first), reference (the
-  -- touch's first slide), latched, values (what set_expression last got;
-  -- neutral at first, as a note's first expression is without pressure)}
+  -- touch's first slide), latched, values (what the allocator holds for
+  -- the note: at first its first expression, then what set_expression
+  -- last got)}
   local records = {}
   -- Per voice, the voice-wide values this module holds: cutoff and size
   -- (m, the matrix's fast extras), density (the extra offset, param
@@ -178,8 +183,8 @@ return function(S)
     return nil
   end
 
-  local function new_record(voice, owner, key)
-    local record = {owner = owner, key = key, bend = 1, latched = false, values = neutral()}
+  local function new_record(voice, owner, key, values)
+    local record = {owner = owner, key = key, bend = 1, latched = false, values = values or neutral()}
     table.insert(records[voice], record)
     return record
   end
@@ -211,7 +216,11 @@ return function(S)
     if not valid_voice(voice) or type(raw) ~= "table" then return false end
     local slot = S.lib.notes.find(voice, owner, key)
     if not slot then return false end
-    local record = find_record(voice, owner, key) or new_record(voice, owner, key)
+    -- a new record's note holds its first expression: the MIDI package gave
+    -- play note_values of the same bend and pressure at slide 0 (the touch's
+    -- start), so the first update sends only what differs from it
+    local record = find_record(voice, owner, key)
+      or new_record(voice, owner, key, M.note_values(voice, {bend = raw.bend, pressure = raw.pressure, slide = 0}))
     if record.latched then return false end
     if finite(raw.bend) then record.bend = bend_value(raw.bend) end
     if finite(raw.pressure) then
