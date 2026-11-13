@@ -644,11 +644,17 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         engage.value(command);
         probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart, sixteen buffer notes live and cutting",
             "all-buffer worst case with the pool full", 5, { arg fits, freeKB;
-                var held = poolHeld.value;
+                var held = poolHeld.value, names = h.synthNames(target.context.xg);
+                var bufs = names.count(_ == \strataGrainBuf);
                 poolFigures.add([target.tier, "all-buffer, every pool slot live and cutting", freeKB.round(1)]);
                 check.(fits and: { held == [16, 16] },
                     "memory: the all-buffer worst case with the pool full, every pool slot live and cutting, leaves 1280 KB (% tier: about % KB free; live and cutting notes %)".format(
                         target.tier, freeKB.round(10), held));
+                // on the server at the probe: the voices' 21 (live, fading,
+                // cutting) and the pool's 16 live and 16 cutting
+                check.(bufs == 53,
+                    "memory: the all-buffer case with the pool full holds 53 strataGrainBuf at the probes, 21 the voices' and 32 the pool's (% tier: %)".format(
+                        target.tier, bufs));
             }, target.numVoices + target.notePoolMax);
         h.stopAllVoices(target);
         target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
@@ -674,11 +680,21 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         engage.value(command);
         probeHeadroom.("seven voices at grain size 0.5, switched synth -> buffer -> synth 0.2 s apart, sixteen voice synth notes (Karplus's seven first)",
             "worst case with the pool full", 5, { arg fits, freeKB;
-                var held = poolHeld.value, karplus = poolKarplus.value;
+                var held = poolHeld.value, karplus = poolKarplus.value, names = h.synthNames(target.context.xg);
+                var counts = [names.count(_ == \strataGrainBuf), names.count(_ == \strataGrainRing),
+                    names.count({ arg name; h.voiceDefs.includes(name) }), names.count(_ == \strataKarplus)];
                 poolFigures.add([target.tier, "synth -> buffer -> synth, Karplus's seven first", freeKB.round(1)]);
                 check.(fits and: { held == [16, 16] } and: { karplus == 7 },
                     "memory: synth -> buffer -> synth with the pool full of voice-synth notes, Karplus's seven first, leaves 1280 KB (% tier: about % KB free; live and cutting notes %, Karplus notes %)".format(
                         target.tier, freeKB.round(10), held, karplus));
+                // on the server at the probe: the voices' own (a ring grain
+                // synth live and one cutting, the buffer grain synth fading, a
+                // voice synth live and one cutting, each voice) and the pool's
+                // 16 cutting buffer notes and 16 live voice synth notes (seven
+                // Karplus, beside the Karplus voice's own two)
+                check.(counts == [23, 14, 30, 9],
+                    "memory: synth -> buffer -> synth with the pool full holds its synths at the probes: 23 strataGrainBuf (7 fading, 16 cutting notes), 14 strataGrainRing, 30 voice synths (14 the voices', 16 notes), 9 strataKarplus (% tier: %)".format(
+                        target.tier, counts));
             }, (2 * target.numVoices) + target.notePoolMax);
         h.stopAllVoices(target);
         command.(\setNotePool, 0);

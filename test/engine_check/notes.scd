@@ -740,9 +740,11 @@ checkPoolFull = {
 // two buffer voices, two input voices, all running): noteOn, noteOff (a
 // release or a cut) on random extra slots, now and then a voiceOff and
 // voiceOn or a new pool size. After every command live and releasing extra
-// notes are within the pool, and cutting note synths within it too
+// notes are within the pool, and cutting note synths within it too; at the
+// end the note synths the server runs (one /g_queryTree) are exactly those
+// the slots hold, none held twice (h.noteNodesAgree)
 checkPoolRandom = {
-    var random = Pseed(7, Pwhite(0.0, 1.0)).asStream, held = 0, cutting = 0, over = List.new, pool = 8;
+    var random = Pseed(7, Pwhite(0.0, 1.0)).asStream, held = 0, cutting = 0, over = List.new, pool = 8, agree;
     var sources = [0, 1, 2, engine.inputSource, 0, engine.inputSource, 0];
     [0, 1].do({ arg slot;
         if (engine.bufferFrames[slot] == 0) { command.(\loadBuffer, slot, h.stereoPath, 0); h.waitFor({ engine.bufferFrames[slot] > 0 }, 3) };
@@ -768,9 +770,11 @@ checkPoolRandom = {
             if ((index % 25) == 24) { server.sync; 0.01.wait };
         });
     });
-    check.(over.isEmpty and: { held > 0 },
-        "notes: live and releasing extra notes never exceed the pool (2000 commands over seven voices: at most % held and % cutting; over the pool at %)".format(
-            held, cutting, over.keep(5)));
+    server.sync;
+    agree = h.noteNodesAgree;
+    check.(over.isEmpty and: { held > 0 } and: { agree[0] },
+        "notes: live and releasing extra notes never exceed the pool (2000 commands over seven voices: at most % held and % cutting; over the pool at %; at the end the server's note synths the slots' %, % on the server, % in the slots, held twice %)".format(
+            held, cutting, over.keep(5), agree[0], agree[1].size, agree[2].size, agree[3]));
     h.stopAllVoices;
 };
 
@@ -796,10 +800,11 @@ checkPoolShrink = {
 // With a pool of 2, notes started and cut on every extra slot of the buffer
 // voice in turn, the commands sent without a yield (no /n_end is handled
 // meanwhile, so no kill fade ends on its own for sclang): after each command
-// at most two cutting note synths, the oldest freed at once, and on the
-// server at most two in their kill fade (kill 1) once it has them all
+// at most two cutting note synths, the oldest freed at once; on the server,
+// with a live note started on slot 1 after each round, exactly two in their
+// kill fade (kill 1) beside one live (gate 1, kill 0): the bound reached
 checkCuttingBound = {
-    var voice = 1, worst = 0, worstServer = 0, own;
+    var voice = 1, worst = 0, worstServer = 0, own, rounds = List.new;
     startBufferVoice.(voice);
     command.(\setNotePool, 2);
     own = ownGrain.(voice);
@@ -810,13 +815,19 @@ checkCuttingBound = {
             command.(\noteOff, voice, slot, 1);
             worst = max(worst, cuttingCount.value);
         });
+        playNote.(voice, 1, 1.0);
         server.sync;
-        worstServer = max(worstServer, h.synthTree(engine.voiceMixGroup(voice)).count({ arg node;
-            (node[\def] == \strataGrainBuf) and: { node[\id] != own.nodeID } and: { node[\controls][\kill] > 0 } }));
+        rounds.add(h.synthTree(engine.voiceMixGroup(voice)).select({ arg node; (node[\def] == \strataGrainBuf) and: { node[\id] != own.nodeID } })
+            .inject([0, 0], { arg counts, node;
+                [counts[0] + ((node[\controls][\kill] > 0).binaryValue),
+                    counts[1] + (((node[\controls][\gate] > 0) and: { node[\controls][\kill] == 0 }).binaryValue)] }));
+        worstServer = max(worstServer, rounds.last[0]);
+        command.(\noteOff, voice, 1, 1);
         0.1.wait;
     });
-    check.((worst == 2) and: { worstServer <= 2 },
-        "notes: cutting note synths never exceed the pool (a pool of 2: at most % cutting tracked, % on the server)".format(worst, worstServer));
+    check.((worst == 2) and: { rounds.every({ arg counts; counts == [2, 1] }) },
+        "notes: cutting note synths never exceed the pool (a pool of 2: at most % cutting tracked; on the server after each round [cutting, live]: %)".format(
+            worst, rounds.asArray));
     h.stopAllVoices;
 };
 
@@ -824,8 +835,9 @@ checkCuttingBound = {
 // live extra notes (slots 1-3) and one releasing (slot 4). Synth -> buffer
 // (slot 1) -> input -> synth: each switch cuts every extra note and
 // restarts each live one on the new source from its kept values, in the
-// switch's bundle (a kill 1 to each old note's synth and an /s_new of each
-// new one, in the one bundle the command sends); the releasing one is cut
+// switch's bundle (a kill 1 to each old note's synth, an /s_new of each
+// new one and of the voice's new own grain synth, all in one bundle of what
+// reached the server's NetAddr: h.wireUnits); the releasing one is cut
 // and not restarted. The live count is the same before and after, each live
 // slot holds its new synth (of the new source's kind) and the old one only
 // as its cutting synth
@@ -842,11 +854,18 @@ checkSourceSwitch = {
     [1, engine.inputSource, 0].do({ arg source;
         var old = (1 .. 4).collect({ arg slot; slotSynth.(voice, slot) }), live = (1 .. 4).select({ arg slot; slotState.(voice, slot) == \live });
         // (the cutting entries read before any yield: a kill fade ends 50 ms on)
-        var bundle = server.makeBundle(false, { command.(\setGrainSource, voice, source) }), new, nodes, ok;
+        var units = h.wireUnits({ command.(\setGrainSource, voice, source) }), bundle, new, nodes, ok, ownGrainSynth;
         var cutting = (1 .. 4).collect({ arg slot; slotCutting.(voice, slot) });
-        server.sendBundle(nil, *bundle);
-        server.sync;
         new = (1 .. 4).collect({ arg slot; slotSynth.(voice, slot) });
+        ownGrainSynth = ownGrain.(voice);
+        // the one sent bundle that holds every restarted note's start, the own
+        // grain synth's start and every old note's kill (nil if they were split)
+        bundle = units.detect({ arg unit;
+            ([ownGrainSynth] ++ live.collect({ arg slot; new[slot - 1] })).every({ arg synth;
+                synth.notNil and: { unit.any({ arg msg; (msg[0] == 9) and: { msg[2] == synth.nodeID } }) } })
+                and: { old.reject(_.isNil).every({ arg synth; sentValue.(unit, synth, \kill) == 1 }) }
+        }) ? [];
+        server.sync;
         nodes = h.synthTree(h.context.xg);
         ok = ((1 .. 4).select({ arg slot; slotState.(voice, slot) == \live }) == live) and: { slotState.(voice, 4) == \empty }
             and: { live.every({ arg slot; var synth = new[slot - 1];
@@ -855,11 +874,11 @@ checkSourceSwitch = {
                     and: { nodes.detect({ arg node; node[\id] == synth.nodeID }) !? { arg node; node[\def] == defOf[kindOf[source]] } ? false }
                     and: { bundle.any({ arg msg; (msg[0] == 9) and: { msg[2] == synth.nodeID } }) } }) }
             and: { old.reject(_.isNil).every({ arg synth; sentValue.(bundle, synth, \kill) == 1 }) };
-        results.add([source, ok, live]);
+        results.add([source, ok and: { bundle.notEmpty }, live, units.size]);
     });
     check.(results.every({ arg each; each[1] }) and: { results.every({ arg each; each[2] == [1, 2, 3] }) }
         and: { (1 .. 3).every({ arg slot; near.(controlOf.(slotSynth.(voice, slot), \freq), 220.0 + (slot * 55)) }) },
-        "notes: a source switch under a chord cuts every extra note and restarts the held ones on the new source in one bundle ([source, ok, live slots]: %)".format(
+        "notes: a source switch under a chord cuts every extra note and restarts the held ones on the new source in one bundle ([source, ok, live slots, bundles and messages sent]: %)".format(
             results.asArray));
     h.stopAllVoices;
 };
@@ -933,13 +952,14 @@ checkInputFreeze = {
 // pan 0, the freeze on), at noteRate the note's rate. Slot 0's noteOn sets
 // the own grain synth's noteRate and fires its accent; its noteOff parks the
 // own grain synth, the synth that sounds a frozen voice's own note. The
-// unfreeze, in its bundle: every ring-stream note cut, each live one
+// unfreeze, in its one bundle (as it reached the server: h.wireUnits):
+// every ring-stream note cut, each live one
 // restarted as a voice synth at its kept freq (a releasing one not), the own
 // grain synth's noteRate back to 1 and its park open, and a parked own
 // note's park on the voice synth again
 checkFrozenNotes = {
     var voice = 3, ring = engine.ringBuffersFor(voice, 0), grainRingName = "\\strataGrainRing";
-    var own, ownVoice, note, nodes, bundle, streams, restarted, parkedOn, ok;
+    var own, ownVoice, note, nodes, bundle, streams, restarted, parkedOn, ok, units;
     startSynthVoice.(voice);
     command.(\setNotePool, 8);
     server.sync; 0.2.wait;
@@ -979,9 +999,18 @@ checkFrozenNotes = {
     command.(\noteOff, voice, 3, 0);
     server.sync;
     streams = (1 .. 3).collect({ arg slot; slotSynth.(voice, slot) });
-    bundle = server.makeBundle(false, { command.(\setGrainParam, voice, \freeze, 0.0) });
+    units = h.wireUnits({ command.(\setGrainParam, voice, \freeze, 0.0) });
     restarted = [1, 2].collect({ arg slot; slotSynth.(voice, slot) });
-    server.sendBundle(nil, *bundle);
+    // the one bundle of what reached the server that holds all of the
+    // unfreeze (the ring writer resumed, freeze 0, the own synths' note
+    // controls, the cuts, the restarts), or nothing if it was split
+    bundle = units.detect({ arg unit;
+        unit.any({ arg msg; (msg[0] == 12) and: { msg[1] == engine.ringWriterFor(voice).nodeID } and: { msg[2] == 1 } })
+            and: { sentValue.(unit, own, \freeze) == 0 } and: { sentValue.(unit, own, \noteRate).notNil }
+            and: { sentValue.(unit, ownVoice, \noteGate).notNil }
+            and: { streams.every({ arg synth; sentValue.(unit, synth, \kill) == 1 }) }
+            and: { restarted.every({ arg synth; synth.notNil and: { unit.any({ arg msg; (msg[0] == 9) and: { msg[2] == synth.nodeID } }) } }) }
+    }) ? [];
     server.sync;
     ok = streams.every({ arg synth; synth.notNil and: { sentValue.(bundle, synth, \kill) == 1 } })
         and: { restarted.every({ arg synth; synth.notNil and: { streams.includes(synth).not }
@@ -990,7 +1019,7 @@ checkFrozenNotes = {
         and: { near.(controlOf.(restarted[0], \freq), 330) } and: { near.(controlOf.(restarted[1], \freq), 165) }
         and: { near.(sentValue.(bundle, own, \noteRate), 1) } and: { sentValue.(bundle, own, \noteGate) == 1 }
         and: { sentValue.(bundle, ownVoice, \noteGate) == 0 } and: { near.(controlOf.(own, \noteRate), 1) }
-        and: { controlOf.(ownVoice, \noteGate) == 0 } and: { controlOf.(own, \freeze) == 0 };
+        and: { controlOf.(ownVoice, \noteGate) == 0 } and: { controlOf.(own, \freeze) == 0 } and: { bundle.notEmpty };
     check.(ok,
         "notes: an unfreeze cuts the ring-stream notes, restarts the held ones as voice synths at their freq, and returns noteRate to 1, in the unfreeze's bundle (restarted kinds %, freqs %, own grain noteRate % noteGate %, own voice synth noteGate %)".format(
             [1, 2].collect({ arg slot; slotRecord.(voice, slot)[\kind] }), restarted.collect({ arg synth; controlOf.(synth, \freq) }),
