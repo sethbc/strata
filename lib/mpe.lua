@@ -63,12 +63,12 @@ return function(S)
     return nil
   end
 
-  -- The member channels of a zone, ascending
-  local function members(zone)
+  -- Every channel of a zone, its master included, ascending: a master's own
+  -- bend and range change what a note held on the master plays
+  local function zone_channels(zone)
     local list = {}
     for channel = 1, MPE.channels do
-      local found, master = M.zone(channel)
-      if found == zone and not master then list[#list + 1] = channel end
+      if M.zone(channel) == zone then list[#list + 1] = channel end
     end
     return list
   end
@@ -87,7 +87,8 @@ return function(S)
   -- range holds the note; nothing outside both zones or the MPE modes
   function M.targets(channel, note)
     local list = {}
-    if not M.active() then return list end
+    if not M.active() or not whole_channel(channel) then return list end
+    if type(note) ~= "number" or note % 1 ~= 0 or note < 0 or note > 127 then return list end
     local zone = M.zone(channel)
     if not zone then return list end
     if params:get("midi_channel_mode") == MPE.modes.selected then
@@ -113,15 +114,15 @@ return function(S)
     if not whole_channel(channel) then return {bend = 1, slide = 0} end
     local own = state.channel[channel]
     local zone, master = M.zone(channel)
-    local bend
-    if master then
+    local bend = 1
+    if not zone then
+      -- outside both zones: a value kept from an earlier layout is not played
+    elseif master then
       bend = ratio(own.bend, state.master_range[zone])
     else
-      bend = ratio(own.bend, params:get("mpe_bend_range"))
-      if zone then
-        local master_channel = zone == "lower" and MPE.lower_master or MPE.upper_master
-        bend = bend * ratio(state.channel[master_channel].bend, state.master_range[zone])
-      end
+      local master_channel = zone == "lower" and MPE.lower_master or MPE.upper_master
+      bend = ratio(own.bend, params:get("mpe_bend_range")) *
+        ratio(state.channel[master_channel].bend, state.master_range[zone])
     end
     return {bend = bend, pressure = own.pressure, slide = own.slide}
   end
@@ -150,7 +151,7 @@ return function(S)
       if not zone then return {} end
       if master then
         state.master_range[zone] = util.clamp(value, 0, 96)
-        return members(zone)
+        return zone_channels(zone)
       end
       params:set("mpe_bend_range", util.clamp(value, 1, 96))
       return all_members()
@@ -188,7 +189,7 @@ return function(S)
     local own = state.channel[channel]
     if msg.type == "pitchbend" then
       own.bend = util.clamp(msg.val, 0, MPE.bend_max)
-      if master then return members(zone) end
+      if master then return zone_channels(zone) end
       return {channel}
     end
     if master then return {} end
@@ -196,13 +197,30 @@ return function(S)
     return {channel}
   end
 
+  -- The hooks run after a change of a member count or a zone param
+  local layout_hooks, layout_errors = {}, {}
+
+  function M.on_layout_change(fn)
+    if type(fn) ~= "function" then error("mpe.on_layout_change: fn is a function", 2) end
+    layout_hooks[#layout_hooks + 1] = fn
+  end
+
+  -- Each hook runs contained: one that raises is reported and skipped
+  local function layout_changed()
+    for index, hook in ipairs(layout_hooks) do
+      S.lib.ui_frame.contained_call(layout_errors, index, "mpe layout hook", hook)
+    end
+  end
+
   -- The member counts never overlap: while both are above 0, setting one
-  -- lowers the other so their sum is at most 14 (silent: no second action)
+  -- lowers the other so their sum is at most 14 (that set runs its own
+  -- action, so its change reaches the hooks once too)
   local function keep_apart(changed, other)
     local count, other_count = params:get(changed), params:get(other)
     if count > 0 and other_count > 0 and count + other_count > MPE.max_total_members then
-      params:set(other, math.max(0, MPE.max_total_members - count), true)
+      params:set(other, math.max(0, MPE.max_total_members - count))
     end
+    layout_changed()
   end
 
   -- Inside the midi group (lib/params_setup.lua sizes it)
@@ -224,14 +242,16 @@ return function(S)
         if index == voice then default = index + 1; assert(MPE.zone_options[default] == name) end
       end
       params:add{type = "option", id = prefix, name = "voice " .. voice .. " zone", options = MPE.zone_options,
-        default = default}
+        default = default, action = layout_changed}
       params:add{type = "number", id = prefix .. "_low", name = "voice " .. voice .. " lowest note", min = 0,
         max = 127, default = 0, action = function(low)
-          if low > params:get(prefix .. "_high") then params:set(prefix .. "_high", low, true) end
+          if low > params:get(prefix .. "_high") then params:set(prefix .. "_high", low) end
+          layout_changed()
         end}
       params:add{type = "number", id = prefix .. "_high", name = "voice " .. voice .. " highest note", min = 0,
         max = 127, default = 127, action = function(high)
-          if high < params:get(prefix .. "_low") then params:set(prefix .. "_low", high, true) end
+          if high < params:get(prefix .. "_low") then params:set(prefix .. "_low", high) end
+          layout_changed()
         end}
     end
   end

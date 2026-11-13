@@ -245,7 +245,7 @@ end)
 -- the next group or separator, or at the end of the list after init()
 test("stub params: each group is followed by exactly n params (#25)", function()
   -- the 3.0.1 review's mutation: the strata_midi group one param short or long
-  for _, size in ipairs({2, 4}) do
+  for _, size in ipairs({5, 7}) do
     local mutated, count = patched_script('params:add_group%("strata_midi", "midi", 6%)',
       'params:add_group("strata_midi", "midi", ' .. size .. ')')
     assert_equal(count, 1, "test patch applies")
