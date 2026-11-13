@@ -1295,7 +1295,7 @@ test("v1 scene file migrates to v2 with fx defaults", function()
   assert_true(local_value("scenes")[2].populated, "versioned v1 file loads")
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
-  assert_equal(saved.version, 6, "scenes are saved as version 6")
+  assert_equal(saved.version, 7, "scenes are saved as version 7")
   assert_near(saved.scenes[2].data.filter_freq, 5000, 1, "migrated default saved")
 end)
 
@@ -1524,7 +1524,7 @@ test("LFO offsets in scenes: save and load, migration of older scenes, validatio
   assert_true(table.concat(context.printed, "\n"):find("scene file corrupted", 1, true), "the bad file is reported")
 end)
 
-test("scenes save as version 6 and a version 4 file loads unchanged but for the pulse res, mirrored (#314)", function()
+test("scenes save as version 7 and a version 4 file loads unchanged but for the pulse res, mirrored (#314)", function()
   local context = load_strata(); finish_startup(context)
   scramble_state(5)
   capture_scene(2)
@@ -1532,7 +1532,7 @@ test("scenes save as version 6 and a version 4 file loads unchanged but for the 
   save_scenes_to_disk()
   local path = context.data_dir .. "strata/scenes.data"
   local saved = context.tab.load(path)
-  assert_equal(saved.version, 6, "scenes are saved as version 6")
+  assert_equal(saved.version, 7, "scenes are saved as version 7")
   saved.version = 4
   context = load_strata({ data_subdir = "v4" })
   os.execute("mkdir -p '" .. context.data_dir .. "strata'")
@@ -1605,7 +1605,7 @@ test("a scene saved before format 5 loads the pulse voice's res mirrored, once (
   end
   assert_true(sent ~= nil and math.abs(sent - 0.8) < 1e-6, "the engine plays res 0.8 (sent: " .. tostring(sent) .. ")")
   assert_true(save_scenes_to_disk(), "the migrated file saves")
-  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 6, "as format 6")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 7, "as format 7")
   assert_true(util.file_exists(dir .. "scenes.data.v4"), "the format 4 file is kept as scenes.data.v4")
   load_scenes_from_disk()
   assert_near(S.scenes[1].data.voices[pulse].params.res, 0.8, 1e-9, "a format 5 file read back is not mirrored again")
@@ -1668,7 +1668,7 @@ test("a full set of format copies never blocks a scene save", function()
   assert_true(S.scenes[1].populated, "the format 4 file loads")
   capture_scene(2)
   assert_true(save_scenes_to_disk(), "the save goes ahead")
-  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 6, "scenes.data is written, as format 6")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 7, "scenes.data is written, as format 7")
   assert_true(S.lib.data_files.read(dir .. "scenes.data").scenes[2].populated, "with this session's scenes")
   for number = 1, 9 do
     assert_equal(h.file_text(copies[number]), "copy " .. number, "copy " .. number .. " is kept as it was")
@@ -1852,7 +1852,7 @@ test("an older format's scenes.data is kept as scenes.data.v<n> when it is first
   assert_equal(printed_count(context, "kept as " .. dir .. "scenes.data.v3"), 1,
     "the copy is named once, when it is made")
   assert_equal(file_text(dir .. "scenes.data.v3"), original, "the older file's bytes are kept")
-  assert_equal(local_value("S").lib.data_files.read(dir .. "scenes.data").version, 6, "the file is this format now")
+  assert_equal(local_value("S").lib.data_files.read(dir .. "scenes.data").version, 7, "the file is this format now")
   load_strata({ data_subdir = "scene_old" }); local_value("S").lib.scenes.save(2); cleanup()
   assert_true(not util.file_exists(dir .. "scenes.data.v3.2"), "no second copy")
   assert_equal(file_text(dir .. "scenes.data.v3"), original)
@@ -2822,9 +2822,9 @@ test("an old default slot name loads empty, from a file older than format 6", fu
   assert_equal(S.scenes[6].name, "", "an empty slot's old default loads empty")
   assert_equal(S.scenes[7].name, "", "a slot with no name loads named empty")
   assert_equal(S.scenes[8].name, "", "an empty slot is named empty")
-  -- a format 6 file holds the player's names: "scene 3" in slot 3 stays
+  -- a format 6 or later file holds the player's names: "scene 3" in slot 3 stays
   S.lib.scenes.set_name(3, "scene 3")
-  assert_true(save_scenes_to_disk(), "saved as format 6")
+  assert_true(save_scenes_to_disk(), "saved as the current format, 7")
   load_strata({ data_subdir = "scene_names" })
   S = local_value("S")
   assert_equal(S.scenes[3].name, "scene 3", "a current file's name stays, whatever it reads")
@@ -2835,7 +2835,7 @@ test("16 slots; a format 5 file loads into slots 1-8 and leaves 9-16 empty", fun
   local S = local_value("S")
   assert_equal(S.constants.NUM_SCENES, 16, "sixteen slots")
   assert_equal(#S.scenes, 16, "S.scenes holds them")
-  assert_equal(S.constants.SCENE_DATA_VERSION, 6, "the file format is 6")
+  assert_equal(S.constants.SCENE_DATA_VERSION, 7, "the file format is 7")
   capture_scene(1); capture_scene(8)
   local eight = {}
   for slot = 1, 8 do eight[slot] = deep_copy(S.scenes[slot]) end
@@ -2856,7 +2856,7 @@ test("16 slots; a format 5 file loads into slots 1-8 and leaves 9-16 empty", fun
   capture_scene(12)
   assert_true(save_scenes_to_disk(), "saved")
   local written = S.lib.data_files.read(context.data_dir .. "strata/scenes.data")
-  assert_equal(written.version, 6, "the save writes format 6")
+  assert_equal(written.version, 7, "the save writes format 7")
   assert_true(written.scenes[12].populated, "with slot 12")
   assert_true(S.lib.data_files.read(context.data_dir .. "strata/scenes.data.v5") ~= nil,
     "and keeps the format 5 file as scenes.data.v5")
@@ -3142,6 +3142,35 @@ test("takeovers counts every recall and every transition started", function()
   capture_scene(6); S.scenes[6].data.tempo = "fast"
   recall_scene(6, 0)
   assert_equal(scenes.takeovers(), count + 3, "nor an invalid scene's")
+end)
+
+-- Format 7 (3.5): each voice's four expression keys. A format 6 file (3.4's)
+-- loads with their defaults, and its first save writes format 7, keeping
+-- the format 6 file as scenes.data.v6
+test("a format 6 file loads, and its first save writes format 7 and keeps it as scenes.data.v6", function()
+  local context = load_strata({ data_subdir = "format6_to_7" })
+  local S = local_value("S")
+  capture_scene(4)
+  local scene = deep_copy(S.scenes[4])
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    for _, key in ipairs({ "press_target", "press_depth", "slide_target", "slide_depth" }) do
+      scene.data.voices[voice_idx].extras[key] = nil
+    end
+  end
+  local dir = context.data_dir .. "strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  assert_true(S.lib.data_files.write(dir .. "scenes.data", { version = 6, scenes = { [4] = scene } }),
+    "a format 6 file written")
+  load_strata({ data_subdir = "format6_to_7" })
+  S = local_value("S")
+  assert_true(S.scenes[4].populated, "the format 6 file loads")
+  assert_equal(S.scene_file.version, 6, "known as format 6")
+  assert_equal(S.scenes[4].data.voices[2].extras.slide_depth, 50, "a 3.4 scene gets the expression defaults")
+  assert_true(validate_scene(S.scenes[4]), "and validates")
+  assert_true(save_scenes_to_disk(), "saved")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 7, "as format 7")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data.v6").version, 6, "the format 6 file kept as scenes.data.v6")
+  assert_equal(S.scene_file.version, nil, "the file is the current format now")
 end)
 
 end

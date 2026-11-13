@@ -8,7 +8,7 @@
 local NUM_VOICES = 7
 local NUM_SCENES = 16  -- Scene slots, in two banks of SCENE_BANK_SIZE (3.4)
 local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 6  -- Scene file format version (written into scenes.data)
+local SCENE_DATA_VERSION = 7  -- Scene file format version (written into scenes.data)
 local PSET_FORMAT = 2         -- PSET format, saved in every PSET as the hidden strata_pset_format (none: 1)
 -- The Pulse voice's res rises with resonance from scene format 5 and PSET
 -- format 2 (3.3, #314): the engine plays the filter's rq as mirror - res

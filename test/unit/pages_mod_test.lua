@@ -159,10 +159,10 @@ test("the list draws each section's sources from their records, in section order
   local walk = {}
   for _, label in ipairs(labels) do if walk[#walk] ~= label then walk[#walk + 1] = label end end
   assert_equal(table.concat(walk, " "), "bank M1 M2 M3 M4 A B C D morph y on depth rate pitch pos size cutoff amp "
-    .. "G1 G2 G3 G4 L1 L2 L3 L4 L5 L6 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 IN",
+    .. "G1 G2 G3 G4 L1 L2 L3 L4 L5 L6 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 IN PRES SLID",
     "the rows in section order")
-  assert_equal(table.concat(sections, " "), "macros morph scatter gestures lfos matrix audio",
-    "MOD_PAGE.sections, then the input level's own section")
+  assert_equal(table.concat(sections, " "), "macros morph scatter gestures lfos matrix audio notes",
+    "MOD_PAGE.sections, then the input level's and the expression's own sections")
   assert_equal(table.concat(S.MOD_PAGE.sections, " "), "macros morph scatter gestures lfos matrix")
   -- an LFO row is its record's describe: destination, depth, its inputs
   params:set("strata_lfo2_dest", 1)
@@ -183,8 +183,10 @@ test("a section registered by a test shows after the matrix, read-only without a
   local before = param_snapshot()
   enc(3, 5); tap(3); key(1, 1); tap(3); key(1, 0)
   assert_equal(param_snapshot(), before, "E3, K3 and ALT+K3 do nothing")
-  -- the matrix comes before it
+  -- the expression's, the input's and the matrix's come before it
   enc(2, -1); redraw()
+  assert_equal(cursor_label(context), "SLID")
+  enc(2, -2); redraw()
   assert_equal(cursor_label(context), "IN")
   enc(2, -1); redraw()
   assert_equal(cursor_label(context), "R16")
@@ -525,11 +527,11 @@ test("the routing view offers every source, whatever bank is shown", function()
   assert_equal(matrix.routing(2).source, "macro8", "M9 steps down to M8")
   enc(3, 2)
   assert_equal(matrix.routing(2).source, "macro10", "and up to M10")
-  -- arc ring 2 draws M9 at its own place: 15 of 27 steps (none, 6 LFOs,
-  -- 16 macros, 4 recorders, the input)
+  -- arc ring 2 draws M9 at its own place: 15 of 43 steps (none, 6 LFOs,
+  -- 16 macros, 4 recorders, the input, 16 expression sources)
   local device = context.arc.plug(1)
   matrix.set_routing(2, "macro9", "reverb_mix"); arc_redraw()
-  assert_near(device.segments[2].to, 15 / 27 * math.pi * 2, 1e-9, "ring 2 at M9's place")
+  assert_near(device.segments[2].to, 15 / 43 * math.pi * 2, 1e-9, "ring 2 at M9's place")
   -- an unknown key shows as stored and steps away from none, as before
   matrix.set_routing(2, "later_source", "reverb_mix"); redraw()
   assert_equal(row_text(context, 24, 0), "source  later_source")
