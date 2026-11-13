@@ -1,7 +1,7 @@
 # The engine check on SuperCollider 3.13, norns' version, on any machine.
 # test/run_engine_check_313.sh builds this image (as strata-sc313) when it
 # is missing or this folder's files changed, and runs it; see
-# docs/notes/lua/test-harness/engine-check-runner.md.
+# docs/notes/test-harness/engine-check-runner.md.
 #
 # The packages are CI's: Ubuntu 24.04 and SC_APT_VERSION in
 # .github/workflows/test.yml (test/unit/docs_test.lua checks that the two
