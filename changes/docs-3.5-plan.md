@@ -1,0 +1,2 @@
+### Changed
+- **Development: the 3.5 implementation plan.** No code changes. `docs/superpowers/plans/2026-11-12-3.5-plan.md` builds `docs/design/3.5-design.md` in three waves of packages: the Lua hooks, the engine's notes area as stubs and the voice SynthDefs measured; then the per-note controls, the note allocator and the MPE parser; then the engine's note lifecycle, MIDI, expression, sequencer chords and the pages.
