@@ -1,0 +1,2 @@
+### Changed
+- **Development: the 3.5 design.** No code changes. `docs/design/3.5-design.md` is the design for polyphony and MPE, for review: up to eight notes on a voice from a pool of extra notes the seven voices share, a note as a voice synth on a synth voice and a grain stream on a buffer or input voice, note allocation in Lua, MPE zones with per-note bend, pressure and slide, an expression mapping per voice, sequencer chords, and its twelve open questions, each with a recommendation.
