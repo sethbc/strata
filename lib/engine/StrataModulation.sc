@@ -213,20 +213,22 @@
     // attack and release are unchanged)
     // env is gateAttackSeconds up (5 ms in whole control blocks),
     // gateSeconds held, gateRelease down, started by the
-    // stage's t_trig (retrigger's, the accent's) and restarted from its level
-    // by a new one; velocity never reaches it. With every channel at 0,
-    // seqGate 0 and voiceMute 0 the stage plays 3.3's graph's values.
+    // stage's t_trig (retrigger's, the accent's) or its t_gate (an extra
+    // note's start, which opens the gate with no accent: ruling 54) and
+    // restarted from its level by a new one; velocity never reaches it.
+    // With every channel at 0, seqGate 0 and voiceMute 0 the stage plays
+    // 3.3's graph's values.
     voiceMixMod { arg controls;
         var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index), m = this.fastModRead(fastModIn);
         var seqGate = \seqGate.kr(0), gateSeconds = \gateSeconds.kr(0.1), gateRelease = \gateRelease.kr(0.1);
-        var voiceMute = \voiceMute.kr(0), gate, mute, env;
+        var voiceMute = \voiceMute.kr(0), t_gate = \t_gate.tr(0), gate, mute, env;
         // (written on the controls' own names: the Lua stub reads the
         // enumerations from "seqGate.round.clip(0, 1)" and
         // "voiceMute.round.clip(0, 1)")
         gate = seqGate.round.clip(0, 1);
         mute = voiceMute.round.clip(0, 1);
         env = EnvGen.kr(Env([0, 1, 1, 0], [this.gateAttackSeconds, gateSeconds.clip(0.005, 120), gateRelease.clip(0.005, 4)]),
-            controls[\t_trig]);
+            controls[\t_trig] + t_gate);
         controls[\fastModIn] = fastModIn;
         controls[\seqGate] = seqGate;
         controls[\gateSeconds] = gateSeconds;

@@ -356,7 +356,10 @@
     // set on its synth and its accent fired (no node); a releasing slot's
     // tail is cut and a new synth starts; an empty slot starts one. A
     // stopped voice takes no extra note (Lua never sends one): ignored with
-    // one line
+    // one line. A note that sounds then opens the voice's step gate
+    // (openStepGate, ruling 54), as retrigger does for the own note; the
+    // engine's own restarts (startNote from restartNotes, notesUnfrozen)
+    // open nothing
     extraNoteOn { arg voice, slot, note, freq, rate, velocity;
         var record = this.noteRecord(voice, slot);
         this.forgetFailedNoteStarts(record);
@@ -376,6 +379,16 @@
             this.startNote(voice, slot);
         }
         { this.startNote(voice, slot) };
+        if (record[\state] == \live) { this.openStepGate(voice) };
+    }
+
+    // Ruling 54 (#683): the voice's step gate opens for an extra note's
+    // start as for retrigger's, with no accent: the stage's t_gate starts
+    // its gate envelope (voiceMixMod) and nothing else, so no accent on the
+    // stage, no pluck and no grain trigger. With the gate off (seqGate 0)
+    // it changes nothing heard
+    openStepGate { arg voice;
+        this.setSynth(this.voiceMixKey(voice), \t_gate, 1);
     }
 
     // noteOff on an extra slot: cut 0 releases a live note, cut 1 cuts a live

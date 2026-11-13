@@ -3039,6 +3039,42 @@ test("a MIDI key held down keeps the voice's own note from the steps, and once l
   end
 end)
 
+-- Ruling 54: the engine opens a gated voice's step gate at an extra note's
+-- start (extraNoteOn), with no new command. A sequenced chord's further
+-- notes ride the first note's retrigger as before: on a gated voice a chord
+-- step sends the gate length, one retrigger, then each further note's
+-- noteExpression and noteOn, and nothing more, at its first hit and at a
+-- ratchet's later hit
+test("on a gated voice a chord step sends its gate, one retrigger and its further notes, nothing more (ruling 54)", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  params:set("v1_freq", 220)
+  params:set("v1_seq_gate", 2)
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "notes", {0, 4, 7})
+  seq.set_step_attr(1, 1, "ratchet", 2)
+  context.clear_engine_calls()
+  pattern_clock_start()
+  local names = {}
+  for _, call in ipairs(context.engine_calls) do
+    if call.args[1] == 0 and call.name ~= "setVoiceParam" and not (call.name == "setGrainParam" and call.args[2] == "scaleNote") then
+      names[#names + 1] = call.name .. (call.name == "setGrainParam" and " " .. call.args[2] or "")
+        .. ((call.name == "noteOn" or call.name == "noteExpression") and " " .. call.args[2] or "")
+    end
+  end
+  assert_equal(table.concat(names, ", "), "setGrainParam gateSeconds, retrigger, noteExpression 1, noteOn 1, noteExpression 2, noteOn 2",
+    "the first hit: the gate, one retrigger, the further notes")
+  context.clear_engine_calls()
+  context.clock.run_for(0.07)  -- the ratchet's second hit
+  names = {}
+  for _, call in ipairs(context.engine_calls) do
+    if call.args[1] == 0 then names[#names + 1] = call.name .. (call.name == "noteOn" and " " .. call.args[2] or "") end
+  end
+  assert_equal(table.concat(names, ", "), "retrigger, noteOn 1, noteOn 2",
+    "the later hit (its gate share unchanged, not resent): one retrigger, the further notes accented")
+  pattern_clock_stop()
+end)
+
 -- The reviewer's minor 2: MIDI taking slot 1 from a step's note (branch 6,
 -- the voice's cap full) plays MIDI's pitch at once, not the step's note
 -- override until the next step
