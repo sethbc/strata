@@ -35,6 +35,8 @@ var reserveBus = Bus.control(server, 1);
 // 3.4's modulation nodes at each probe of the worst cases, both tiers:
 // [tier, case, [engine LFO nodes, scatter nodes, offset nodes]]
 var modulationRunning = List.new;
+// 3.5's pool cases' figures, both tiers: [tier, case, free KB]
+var poolFigures = List.new;
 
 // Send the flood of small probes now (in processGroup, at the tail), with
 // error reports off for that bundle. Returns their bus and node IDs; read
@@ -400,9 +402,24 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     // memory, until the probes are done; then it runs on and frees itself.
     // Only the check's own messages pause anything: the engine and its 50 ms
     // fade are unchanged.
+    // 3.5's pool cases: [voice, slot] for counts of extra notes per voice (slots 1 up)
+    var poolNotes = { arg counts; counts.collect({ arg count, voice; (1 .. count).collect({ arg slot; [voice, slot] }) }).flatten };
+    var playPoolNote = { arg voice, slot;
+        command.(\noteExpression, voice, slot, 1.0, 1.0, 0.0, 0.0, 0.0);
+        command.(\noteOn, voice, slot, 60.0 + slot, 110.0 * (1 + (slot / 8)), 1.0, 1.0);
+    };
+    // [live, cutting] extra notes across every voice, and the live Karplus notes
+    var poolHeld = {
+        var slots = target.areaState[\notes][\slots].collect({ arg each; each.copyToEnd(1) }).flatten;
+        [slots.count({ arg record; record[\state] == \live }), slots.count({ arg record; record[\cutting].notNil })]
+    };
+    var poolKarplus = {
+        target.areaState[\notes][\slots][5].copyToEnd(1).count({ arg record;
+            (record[\state] == \live) and: { record[\synth] !? { arg synth; synth.defName.asSymbol == \strataKarplus } ? false } })
+    };
     var engineGroups = [target.voiceGroup, target.processGroup];
     var cutHoldSeconds = 0.01, voicesHeld = false;
-    var pendingHolds = List.new(target.numVoices * 2);   // [hold, cut synth] node pairs probeHeadroom made and has not yet released
+    var pendingHolds = List.new((target.numVoices * 2) + target.notePoolMax);   // [hold, cut synth] node pairs probeHeadroom made and has not yet released
     var holdVoices = {
         server.sendBundle(nil, *engineGroups.collect({ arg group; ['/n_run', group.nodeID, 0] }));
         voicesHeld = true;
@@ -412,8 +429,16 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     // function of (all allocated, free KB) instead of the floor's own check;
     // cutBound: the cutting set's size this scenario makes (numVoices, one
     // grain synth per voice, unless given)
+    // the notes area's cutting synths (3.5: an extra note's synth in its kill
+    // fade), every voice's
+    var noteCutting = {
+        (target.areaState[\notes] !? { arg state; state[\slots] } ? []).collect({ arg slots;
+            slots.copyToEnd(1).collect({ arg record; record[\cutting] }).reject(_.isNil)
+        }).flatten
+    };
     var probeHeadroom = { arg label, scenario = "worst case", count, report, cutBound;
-        var cutting = target.numVoices.collect({ arg voice; target.cuttingSynths[voice].asArray.collect(_.nodeID) }).flatten;
+        var cutting = target.numVoices.collect({ arg voice; target.cuttingSynths[voice].asArray.collect(_.nodeID) }).flatten
+            ++ noteCutting.value.collect(_.nodeID);
         var holds = cutting.collect({ server.nextNodeID }), resumedAt, wasHeld = voicesHeld;
         var probes, flood, infos = IdentitySet.new, watcher, present, values, freeKB, fits;
         count = count ? probeCount;
@@ -441,7 +466,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         freeKB = (count * 256) + (floodResult.(flood) * probeKB) + reserveKB;
         watcher.free;
         present = cutting.count({ arg id; infos.includes(id) });
-        if (scenario.contains("all-buffer")) {
+        if (scenario.contains("all-buffer") and: { scenario.contains("pool").not }) {
             // the 7 cutting (held in their fade) and the 14 live and fading
             var running = h.synthNames(target.processGroup).count({ arg name; name == \strataGrainBuf });
             check.((present == target.numVoices) and: { running >= (target.numVoices * 2) },
@@ -597,6 +622,66 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
             });
         target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
         h.stopAllVoices(target);
+        // 3.5's pool cases, the pool full (16 extra notes). The all-buffer
+        // worst case with every pool slot live and cutting: each note
+        // started, released and started again (the noteOn on its releasing
+        // slot cuts the tail), all inside the hold of the last switch, so
+        // each slot holds a live and a cutting \strataGrainBuf beside the
+        // voices' 21 (the notes 3, 3, 2, 2, 2, 2 and 2 a voice)
+        command.(\setNotePool, target.notePoolMax);
+        target.numBuffers.do({ arg slot; command.(\loadBuffer, slot, h.stereoPath, 0) });
+        h.waitFor({ target.bufferFrames.every({ arg frames; frames > 0 }) }, 3);
+        target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, 0)) });
+        startAll.value;
+        server.sync; 0.2.wait;
+        2.do({ arg step;
+            if (step > 0) { 0.2.wait; server.sync; holdVoices.value };
+            target.numVoices.do({ arg voice; command.(\setGrainSource, voice, slotOf.(voice, step + 1)) });
+        });
+        poolNotes.([3, 3, 2, 2, 2, 2, 2]).do({ arg pair; playPoolNote.(*pair) });
+        poolNotes.([3, 3, 2, 2, 2, 2, 2]).do({ arg pair; command.(\noteOff, pair[0], pair[1], 0) });
+        poolNotes.([3, 3, 2, 2, 2, 2, 2]).do({ arg pair; playPoolNote.(*pair) });
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart, sixteen buffer notes live and cutting",
+            "all-buffer worst case with the pool full", 5, { arg fits, freeKB;
+                var held = poolHeld.value;
+                poolFigures.add([target.tier, "all-buffer, every pool slot live and cutting", freeKB.round(1)]);
+                check.(fits and: { held == [16, 16] },
+                    "memory: the all-buffer worst case with the pool full, every pool slot live and cutting, leaves 1280 KB (% tier: about % KB free; live and cutting notes %)".format(
+                        target.tier, freeKB.round(10), held));
+            }, target.numVoices + target.notePoolMax);
+        h.stopAllVoices(target);
+        target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
+        server.sync;
+        // synth -> buffer -> synth with the pool full of voice-synth notes,
+        // Karplus's seven first (the costliest note), then nine on the other
+        // voices: the first switch cuts them and restarts them as buffer
+        // notes, the second (held) cuts those and restarts them as voice
+        // synths, so at the probes the pool holds sixteen live voice synth
+        // notes and sixteen cutting buffer notes, beside the voices' own
+        // synths of the existing case (a ring grain synth and a voice synth
+        // cutting per voice)
+        startAll.value;
+        // (a freeze an earlier case engaged is lifted first, as Lua's start
+        // sends each voice's freeze: these voices' notes are voice synths)
+        target.numVoices.do({ arg voice; command.(\setGrainParam, voice, \freeze, 0.0) });
+        poolNotes.([2, 2, 2, 1, 1, 7, 1]).do({ arg pair; playPoolNote.(*pair) });
+        server.sync; 0.2.wait;
+        switchAll.({ arg voice; voice + 1 });
+        0.2.wait; server.sync;
+        holdVoices.value;
+        switchAll.({ 0 });
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, switched synth -> buffer -> synth 0.2 s apart, sixteen voice synth notes (Karplus's seven first)",
+            "worst case with the pool full", 5, { arg fits, freeKB;
+                var held = poolHeld.value, karplus = poolKarplus.value;
+                poolFigures.add([target.tier, "synth -> buffer -> synth, Karplus's seven first", freeKB.round(1)]);
+                check.(fits and: { held == [16, 16] } and: { karplus == 7 },
+                    "memory: synth -> buffer -> synth with the pool full of voice-synth notes, Karplus's seven first, leaves 1280 KB (% tier: about % KB free; live and cutting notes %, Karplus notes %)".format(
+                        target.tier, freeKB.round(10), held, karplus));
+            }, (2 * target.numVoices) + target.notePoolMax);
+        h.stopAllVoices(target);
+        command.(\setNotePool, 0);
         stopModulation.value;
         server.sync; 0.6.wait;
         probeBus.free;
@@ -637,7 +722,8 @@ var checkHighWorstCase = {
         spectral.add(high.numVoices.collect({ arg voice; high.ringWriterFor(voice) })
             .count({ arg writer; writer.defName.asSymbol == \strataRingWriteSpectral }));
     });
-    check.((spectral[0] == high.numVoices) and: { spectral[1] == high.numVoices } and: { spectral[3] == high.numVoices },
+    check.((spectral[0] == high.numVoices) and: { spectral[1] == high.numVoices } and: { spectral[3] == high.numVoices }
+        and: { spectral[9] == high.numVoices },
         "memory: the high run engages spectral freeze on every voice (spectral writers per scenario: %)".format(spectral));
     engine = h.replaceEngine(nil);
     check.(engine.tier == \standard, "memory: the default engine is back for the areas that follow");
@@ -674,12 +760,13 @@ check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
 checkGuardResumes.value;
 checkMemoryWorstCase.(engine, 12, "3 MB");
 checkHighWorstCase.value;
-check.((modulationRunning.size == 16) and: { modulationRunning.every({ arg each; each[2] == [6, 1, 1] }) },
+check.((modulationRunning.size == 20) and: { modulationRunning.every({ arg each; each[2] == [6, 1, 1] }) },
     "memory: six engine LFOs and scatter on every voice and destination run through every worst case on both tiers (% probes; cases without them: %)".format(
         modulationRunning.size, modulationRunning.reject({ arg each; each[2] == [6, 1, 1] }).collect({ arg each; [each[0], each[2]] })));
 check.((recordingFits.size == 2) and: { recordingFits.every({ arg each; each[1] }) },
     "memory: 3 MB free on both tiers with eight recordings running (%)".format(
         recordingFits.collect({ arg each; "% about % KB free".format(each[0], each[2]) }).join(", ")));
+("memory: the pool cases leave (KB free): %".format(poolFigures.collect({ arg each; "% %: %".format(*each) }).join("; "))).postln;
 h.stopAllVoices;
 reserveBus.free;
 }
