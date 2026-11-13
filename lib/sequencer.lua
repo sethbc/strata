@@ -440,17 +440,27 @@ return function(S)
     return chord
   end
 
-  -- Note k of a chord for S.lib.notes.play. The first is quiet (the voices
-  -- output starts and accents the voice itself, ruling 13) and keeps every
-  -- branch: it is the step's note, as in 3.4. Every further note is
-  -- extra_only (ruling 32): its own held slot again, or a free extra slot
-  -- with room in the pool; never slot 1, never a steal: else refused.
-  -- set_own makes the note the voice's own: its value as the note override
-  -- (3.4's), held with the step's overrides
-  local function chord_note(voice_idx, chord, k, velocity)
-    local first = k == 1
+  -- Whether another owner (MIDI) holds the voice's slot 1: a held note,
+  -- not parked, whose owner is not the sequencer
+  local function other_owns_slot_1(voice_idx)
+    for _, used in ipairs(S.lib.notes.slots(voice_idx)) do
+      if used.slot == 1 then return used.held and not used.parked and used.owner ~= SEQ.note_owner end
+    end
+    return false
+  end
+
+  -- Note k of a chord for S.lib.notes.play. own: the note may be the
+  -- voice's own, quiet (the voices output starts and accents the voice
+  -- itself, ruling 13) with every branch, as the step's note was in 3.4: the
+  -- first note, unless another owner holds slot 1. Any other is extra_only
+  -- (rulings 32 and 35): its own held slot again, or a free extra slot with
+  -- room in the pool; never slot 1, never a steal: else refused. So a step
+  -- never takes a slot or a note from another owner. set_own makes the note
+  -- the voice's own: its value as the note override (3.4's), held with the
+  -- step's overrides
+  local function chord_note(voice_idx, chord, k, velocity, own)
     return {owner = SEQ.note_owner, key = k, pitch = chord.pitches[k], velocity = velocity, park = false,
-      quiet = first, extra_only = not first,
+      quiet = own, extra_only = not own,
       set_own = function()
         if chord.values[k] == nil then return end
         set_override(voice_idx, chord.note_id, chord.values[k])
@@ -463,8 +473,9 @@ return function(S)
   -- base overrides; the previous played step's overrides this one lacks
   -- end, and its chord's notes this one lacks are released (by key: a note
   -- it keeps is played again in place). The first note plays here, where
-  -- 3.4 set its override: the voice's own (slot 1) as that override, or an
-  -- extra note when another player holds slot 1 (then no note override)
+  -- 3.4 set its override: the voice's own (slot 1) as that override, or,
+  -- while another owner holds slot 1, only an extra note in free room
+  -- (ruling 35), with no note override
   local function apply_step(voice_idx, event)
     local locks = event.locks or {}
     local wanted, lock_ids = {}, {}  -- param id -> value: the locks, then the note
@@ -493,8 +504,9 @@ return function(S)
       S.lib.bookmarks.recall(voice_idx, n)
     end
     chords[voice_idx] = chord
-    if note_id and S.lib.notes.play(voice_idx, chord_note(voice_idx, chord, 1, event.velocity)) ~= 1 then
-      -- an extra note: the param keeps its lock, or goes back to its stored value
+    local own = note_id and not other_owns_slot_1(voice_idx)
+    if note_id and S.lib.notes.play(voice_idx, chord_note(voice_idx, chord, 1, event.velocity, own)) ~= 1 then
+      -- an extra note, or none: the param keeps its lock, or goes back to its stored value
       wanted[note_id] = lock_value
       if lock_value ~= nil then
         set_override(voice_idx, note_id, lock_value)
@@ -519,7 +531,7 @@ return function(S)
     for k = 1, chord.count do
       local slot = S.lib.notes.find(voice_idx, SEQ.note_owner, k)
       if (event.first and k > 1) or (not event.first and slot and slot > 1) then
-        S.lib.notes.play(voice_idx, chord_note(voice_idx, chord, k, event.velocity))
+        S.lib.notes.play(voice_idx, chord_note(voice_idx, chord, k, event.velocity, false))
       end
     end
   end
