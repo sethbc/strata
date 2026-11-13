@@ -94,9 +94,13 @@ return function(S)
 
   -- The voice's reference note for grain quantize (scaleNote): a synth
   -- voice's freq (freq, or its stored freq) as a fractional MIDI note; for a
-  -- buffer or input voice, whose content's key is unknown, the root + 60
+  -- buffer or input voice, whose content's key is unknown, the root + 60.
+  -- A frozen synth voice's is its freeze reference whatever freq is passed
+  -- (3.5: S.lib.notes.freeze_reference), so no resend moves it
   function M.scale_note(voice_idx, freq)
     if voice_uses_synth(voice_idx) then
+      local reference = S.lib.notes and S.lib.notes.freeze_reference(voice_idx)
+      if reference then return reference end
       return freq_to_note(freq or S.voices[voice_idx].params.freq)
     end
     return M.root() + V.reference_octave
