@@ -1167,4 +1167,96 @@ test("toggle_lock runs the lock hooks with the voice and its new state", functio
   assert_equal(#log, 2, "an ignored voice runs none")
 end)
 
+-- 3.5's voice-stop registry (design §0.1): every engine.voiceOff the
+-- script sends is followed by the hooks, with the voice's index
+test("every voice stop runs the voice-stop hooks", function()
+  local log, failing, context = {}, false, nil
+  context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_voice_stop(function(voice_idx)
+      local offs = context.calls_named("voiceOff")
+      local last = offs[#offs]
+      log[#log + 1] = { voice = voice_idx, after_off = last ~= nil and last.args[1] == voice_idx - 1,
+        active = S.voices[voice_idx].active }
+    end)
+    S.register_grain_restart(function(voice_idx)
+      if failing and voice_idx == 4 then error("hook failed") end
+    end)
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  assert_equal(#log, 0, "starting voices runs none")
+  toggle_voice(3)
+  assert_equal(#log, 0, "a start runs none")
+  toggle_voice(3)
+  assert_equal(#log, 1, "a stop runs the hooks once")
+  assert_equal(log[1].voice, 3, "with the voice")
+  assert_true(log[1].after_off, "after its voiceOff")
+  assert_equal(log[1].active, false, "with the voice shown stopped")
+  toggle_voice(99)
+  assert_equal(#log, 1, "an ignored voice runs none")
+  -- a start that fails once voiceOn is sent: its voiceOff, then the hooks
+  failing = true
+  assert_true(not pcall(toggle_voice, 4), "the start raises")
+  failing = false
+  assert_equal(#log, 2, "the failed start's voiceOff runs the hooks once")
+  assert_equal(log[2].voice, 4)
+  assert_true(log[2].after_off, "after its voiceOff")
+  -- cleanup's voiceOff for every running voice
+  local running = {}
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    if S.voices[voice_idx].active then running[#running + 1] = tostring(voice_idx) end
+  end
+  assert_true(#running >= 2, "voices 1 and 2 run")
+  log = {}
+  cleanup()
+  local stopped = {}
+  for index, entry in ipairs(log) do
+    stopped[index] = tostring(entry.voice)
+    assert_true(entry.after_off, "voice " .. entry.voice .. "'s hooks follow its voiceOff")
+  end
+  assert_equal(table.concat(stopped, " "), table.concat(running, " "), "once per running voice")
+end)
+
+-- count_sends (design §6.4): messages sent outside the budget's own path
+-- (the notes' sends) count in the current window, and are never deferred
+test("count_sends enters direct sends in the budget's window", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  mid_window(context)
+  assert_equal(sync.budget_state().sent, 0, "a new window has spent nothing")
+  context.clear_engine_calls()
+  sync.count_sends(149)
+  assert_equal(#context.engine_calls, 0, "counting sends nothing")
+  assert_equal(sync.budget_state().sent, 149, "the window holds them")
+  sync.deferrable(function() send_param_to_engine("filter_freq", 1000) end)
+  assert_equal(#context.calls_named("setFilter"), 1, "one deferrable send still fits the window")
+  assert_equal(sync.budget_state().sent, 150)
+  sync.deferrable(function() send_param_to_engine("filter_freq", 2000) end)
+  assert_equal(#context.calls_named("setFilter"), 1, "the next waits")
+  assert_equal(sync.budget_state().pending, 1, "its value waits")
+  sync.count_sends(0)
+  assert_equal(sync.budget_state().sent, 150, "count_sends(0) changes nothing")
+  assert_equal(sync.budget_state().pending, 1)
+  for _, bad in ipairs({ -1, 1.5, "2", math.huge, 0 / 0 }) do
+    assert_true(not pcall(sync.count_sends, bad), "count_sends(" .. tostring(bad) .. ") raises")
+  end
+  assert_true(not pcall(sync.count_sends), "count_sends() raises")
+  assert_equal(sync.budget_state().sent, 150, "nothing refused counts")
+  -- the next window: the waiting value goes first, then a count starts from it
+  context.clock.run_for(0.1)
+  assert_equal(sync.budget_state().pending, 0, "the waiting value went")
+  mid_window(context)
+  sync.count_sends(3)
+  assert_equal(sync.budget_state().sent, 3, "a count in a new window starts from 0")
+  -- a count past the window never defers: it goes over, and the deferrable sends wait
+  sync.count_sends(200)
+  assert_equal(sync.budget_state().sent, 203)
+  context.clear_engine_calls()
+  sync.deferrable(function() send_param_to_engine("filter_freq", 3000) end)
+  assert_equal(#context.calls_named("setFilter"), 0, "a full window defers the next deferrable send")
+  context.clock.run_for(0.1)
+  assert_equal(#context.calls_named("setFilter"), 1, "which goes in the next window")
+end)
+
 end

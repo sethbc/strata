@@ -392,4 +392,30 @@ test("a second freeze key press while its toggle waits takes it back", function(
   assert_true(S.lib.freeze.is_frozen(4), "and freezes at its bar")
 end)
 
+-- 3.5's freeze-change registry (design §0.1): the param's action runs the
+-- hooks once the value is stored and sent, before its grid redraw
+test("the freeze param runs the freeze-change hooks", function()
+  local log, context = {}, nil
+  context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_freeze_change(function(voice_idx, frozen)
+      local sent = sent_freeze(context)
+      local last = sent[#sent]
+      log[#log + 1] = string.format("%d:%s stored %s sent %s", voice_idx, tostring(frozen),
+        tostring(S.lib.freeze.is_frozen(voice_idx)), last and (last.voice .. "=" .. last.value) or "none")
+    end)
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  assert_true(S.voices[2].active, "voice 2 runs")
+  local real_grid_redraw = grid_redraw
+  grid_redraw = function(...) log[#log + 1] = "grid"; return real_grid_redraw(...) end
+  context.clear_engine_calls()
+  params:set("v2_freeze", 1)
+  params:set("v2_freeze", 0)
+  grid_redraw = real_grid_redraw
+  assert_equal(table.concat(log, ", "), "2:true stored true sent 1=1, grid, 2:false stored false sent 1=0, grid",
+    "each change runs the hooks with the voice and its state, after the send, before the grid redraw")
+end)
+
 end

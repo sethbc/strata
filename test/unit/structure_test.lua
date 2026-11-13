@@ -809,6 +809,7 @@ local function start_steps()
     { "macros load", { "file read macros.data", "redraw requested", "grid redrawn" } },
     { "gestures load", { "file read gestures.data", "redraw requested", "grid redrawn" } },
     { "matrix load", { "file read matrix.data", "redraw requested" } },
+    { "notes load", { "file read notes.data" } },
     { "buffers load", { "file read buffers.data", "engine.loadBuffer", "redraw requested", "grid redrawn",
       "print 1 buffers reloading from buffers.data" } },
     { "startup clock", voice_sync },
