@@ -109,6 +109,10 @@ Each grain can differ from the one before it. These are the rows of the VOICE pa
 
 Scenes capture all of them; intervals, quantize and the custom intervals switch at the end of a fade, the rest fade. Randomize and mutations leave them alone, and they are not on the grid's fader pages.
 
+### Envelope times
+
+Every voice fades in over an attack and out over a release, set in VOICE's `notes` section by `attack` (0.005-30 s) and `release` (0.01-30 s). Each voice starts at its own times, the ones it always had (Resonator 4 and 8 s, FM 5 and 10, Folder 3 and 6, Sub 8 and 12, Pulse 2 and 4, Karplus 0.01 and 2, Ring 3 and 5), so nothing sounds different until you turn them. They apply to the next start or note and to a voice fading out now; scenes store them and crossfade them, and randomize leaves them alone.
+
 ### Mute and solo
 
 Each voice has `mute` and `solo` rows at the end of VOICE's filter & sends section (and params `v1_mute`, `v1_solo`, ...). A voice is silenced while it is muted, or while any voice is soloed and it is not; a mute wins over the voice's own solo. Silencing happens in the voice's mix stage: the voice keeps running, its pattern keeps stepping, its LFOs and scenes keep acting on it, other voices still hear it through crossmod, and the delay and reverb tails already sent ring out. MAIN's voice list shows `m` for a silenced running voice and `s` for a soloed one. Scenes keep each voice's mute and never its solo, so a recall mutes and unmutes voices and leaves a solo as it is. Randomize and mutations never change either, and neither is a grid fader.
