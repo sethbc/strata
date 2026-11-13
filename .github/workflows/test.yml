@@ -74,24 +74,19 @@ jobs:
   # groups are balanced from the per-area times the check prints ("area
   # <name>: <seconds> s"); every area is in exactly one shard
   # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
-  # Area times on SuperCollider 3.13 at 3.4.0 (s, the mean of four full runs in Docker; 3.14.1's are within 1.5 s):
-  # record 113, lifecycle 106, buffers 99, modulation 88, effects 87, memory 75, rings 69, mix 69,
-  # voices 66, freeze 63, loops 54, variation 52, files 29, grains 23, waveform 22, positions 8,
-  # structure 4, performance 3: 1030 s in all, and at most about 153 s a shard (effects and
-  # voices; 163 s for memory and modulation before this split), far under each shard's 570 s.
+  # Area times on SuperCollider 3.13 at 3.5.0 (s, the mean of four full runs in Docker; 3.14.1's are within 1 s):
+  # lifecycle 114, record 113, buffers 100, memory 95, modulation 89, effects 87, notes 79, voices 75,
+  # rings 69, mix 69, freeze 63, loops 54, variation 52, grains 38, files 29, waveform 23, positions 8,
+  # structure 4, performance 3: 1165 s in all. The slowest shard is lifecycle, files, positions and
+  # notes, about 231 s of areas (236 s with its sclang's start in the slowest of the four runs), far
+  # under each shard's 570 s; the other six take 136-167 s. In those four runs every shard passed.
   # memory runs first in its shard (areaOrder), so CI's memory figures are the area's alone.
-  # 3.5's notes area (about 79 s with its note lifecycle, package 2a; 1.5 s as stubs) joins the lightest shard
-  # but record and waveform's, which stays those two alone (#211's rerun, below): about 240 s for the four on 3.13.
   # Since #652 the areas no longer depend on each other's order, so the grouping is a
   # choice for the times alone; files and structure share no shard only because this
-  # layout is as balanced as any that pairs them.
-  # waveform (a 300 s high engine, where #211's collector failure shows: about 1 run in 10
-  # to 16, on the 3.3 engine as on 3.4's, held for now; a record,waveform shard that fails
-  # with the collector's count-error lines, sclang ending on signal 11 or signal 8, or a
-  # hang after those lines is rerun) shares
-  # its shard only with record, which builds no high engine (buffers, effects, files, freeze,
-  # memory, performance and waveform do). In four full runs on 3.13 at 3.4.0 with this split,
-  # every shard it changed passed all four times (record,waveform is as before).
+  # layout is as balanced as any that pairs them. record and waveform share a shard for the
+  # times alone too: #211's collector failure in waveform's 300 s check is fixed (#681), and its
+  # count-error lines seen again in any shard are a regression of the areaCall rule to find
+  # (docs/status.md), not a run to repeat.
   engine-shard:
     name: engine (${{ matrix.areas }})
     # Covers setup (norns clone, apt install, JACK) plus the check's own 600 s
