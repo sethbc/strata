@@ -623,6 +623,50 @@ var noteRecordsLeft = { arg target;
     left.asArray
 };
 
+// What reaches the server's NetAddr while body runs (3.5): one entry per
+// call of the real address (a message, or a bundle as the engine's
+// makeBundle or sendToSynth sends it: its messages), so a check can tell
+// whether the engine sent messages in one bundle. The server's address is a
+// forwarding stand-in for the duration (everything still goes out), so body
+// must not wait on the server (no sync: its replies would not match the
+// stand-in); the real one comes back however body ends.
+var wireUnits = { arg body;
+    var real = server.addr, units = List.new, standIn;
+    standIn = (addr: real.addr, port: real.port, hostname: real.hostname, socket: real.socket, isLocal: real.isLocal,
+        hasBundle: false,
+        sendMsg: { arg self ... msg; units.add([msg]); real.sendMsg(*msg) },
+        sendBundle: { arg self, time ... msgs; units.add(msgs); real.sendBundle(time, *msgs) },
+        sendClumpedBundles: { arg self, time ... msgs; units.add(msgs); real.sendClumpedBundles(time, *msgs) },
+        sendRaw: { arg self, raw; units.add([raw]); real.sendRaw(raw) });
+    server.addr = standIn;
+    body.protect({ server.addr = real });
+    units.asArray
+};
+
+// Whether the note synths an engine's server runs (every voice and grain
+// SynthDef synth in its context but the voices' own: live, releasing,
+// fading or cutting) are exactly those its notes area's slots hold, and no
+// synth is held by two slot fields (3.5). Read at once from one
+// /g_queryTree: [agree, server IDs, slot IDs, synths held twice]
+var noteNodesAgree = { arg target;
+    var own = IdentitySet.new, slotIDs = List.new, nodes, serverIDs, twice;
+    target = target ? engine;
+    target.numVoices.do({ arg voice;
+        [target.voiceKey(voice), target.grainKey(voice), target.modKey(voice)].do({ arg key;
+            target.synths[key] !? { arg synth; own.add(synth.nodeID) } });
+        (target.releasingSynths[voice].values.asArray ++ target.fadingSynths[voice].asArray
+            ++ target.cuttingSynths[voice].asArray).do({ arg synth; own.add(synth.nodeID) });
+    });
+    nodes = synthNodes.(target.context.xg);
+    (target.areaState[\notes] !? { arg state; state[\slots] } ? []).do({ arg records;
+        records.copyToEnd(1).do({ arg record; [record[\synth], record[\cutting]].do({ arg synth; synth !? { slotIDs.add(synth.nodeID) } }) });
+    });
+    serverIDs = nodes.select({ arg node; engineVoiceDefs.includes(node[\def]) and: { node[\def] != \strataMod }
+        and: { own.includes(node[\id]).not } }).collect({ arg node; node[\id] });
+    twice = slotIDs.select({ arg id; slotIDs.occurrencesOf(id) > 1 }).asSet.asArray;
+    [(serverIDs.asSet == slotIDs.asSet) and: { twice.isEmpty }, serverIDs.asArray.sort, slotIDs.asArray.sort, twice]
+};
+
 // Stop every voice of an engine (h.engine by default) and put it back on its
 // synth source, then cut what still releases or fades, its note synths
 // included (a mod synth, which has no kill fade, is freed), and wait until
@@ -868,6 +912,10 @@ runChecks = {
             voiceSynths: { arg self, voice; voiceTrio.(voice) },
             // the voice's live extra note synths (3.5: the notes area's noteSynths)
             noteSynths: { arg self, voice; engine.tryPerform(\noteSynths, voice) ? [] },
+            // what reaches the server's NetAddr while body runs, call by call (3.5)
+            wireUnits: { arg self, body; wireUnits.(body) },
+            // whether the server's note synths are the slots' (3.5)
+            noteNodesAgree: { arg self, target; noteNodesAgree.(target) },
             controlFeedsAUGen: { arg self, defName, controlName; controlFeedsAUGen.(defName, controlName) },
             // a poll's values so far, oldest first (an Array of just those,
             // copied from its List's room for pollListCapacity)
