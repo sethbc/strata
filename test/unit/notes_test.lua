@@ -421,10 +421,63 @@ test("a parked own note is the first choice for the next note", function()
   S.lib.notes.release(1, "midi", 1)
   context.clear_engine_calls()
   assert_equal(play(context, 1, 3, 67), 1)
-  assert_equal(table.concat(names(context), " "), "set_own noteOn", "no retrigger")
-  assert_equal(context.engine_calls[2].args[2], 0, "slot 0"); assert_equal(context.engine_calls[2].args[3], 67)
+  -- unparked, then accented: the stage's step gate and accent open only on retrigger (ruling 15)
+  assert_equal(table.concat(calls(context), " "), "set_own(67) noteOn(0, 0, 67, 391.9954, 1.4983, 0.5) retrigger(0, 0.5)")
   assert_equal(S.lib.notes.slots(1)[1].parked, false)
   assert_equal(S.lib.notes.held(1), 2)
+end)
+
+test("quiet over a parked own note unparks it and leaves the accent to the caller", function()
+  local context = load_strata()
+  local S = started(context)
+  play(context, 1, 1, 60); play(context, 1, 2, 64)
+  S.lib.notes.release(1, "midi", 1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 3, 67, { quiet = true }), 1)
+  assert_equal(table.concat(calls(context), " "), "set_own(67) noteOn(0, 0, 67, 391.9954, 1.4983, 0.5)", "no retrigger")
+  assert_equal(S.lib.notes.slots(1)[1].parked, false, "Lua and the engine agree: not parked")
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 3, 67), 1, "the same key again")
+  assert_equal(table.concat(calls(context), " "), "set_own(67) retrigger(0, 0.5)", "no second noteOn")
+end)
+
+test("an extra slot needs a running voice: a quiet note's stopped voice refuses one", function()
+  local context = load_strata()
+  local S = started(context)
+  assert_equal(play(context, 3, 1, 60, { quiet = true }), 1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 3, 2, 64), nil, "refused")
+  assert_equal(play(context, 3, 3, 67, { quiet = true }), nil, "quiet or not")
+  assert_equal(#context.engine_calls, 0, "nothing sent")
+  assert_equal(S.lib.notes.held(3), 1); assert_equal(S.lib.notes.pool_used(), 0)
+  assert_equal(play(context, 3, 1, 62, { quiet = true }), 1, "the quiet note's own key still re-pitches slot 1")
+  local invariant
+  for _, record in ipairs(S.registry.invariants) do if record.name == "notes" then invariant = record.fn end end
+  assert_equal(invariant(), nil, "a stopped voice may hold a quiet note awaiting its caller's start")
+  toggle_voice(3)  -- the caller's start
+  assert_equal(play(context, 3, 2, 64), 2, "a running voice gets its extra slot")
+end)
+
+test("a change of a voice's held count updates the voice list and asks for a redraw", function()
+  local context = load_strata()
+  local S = started(context)
+  local lists, redraws = 0, 0
+  local real_list, real_redraw = update_voice_list, request_redraw
+  update_voice_list = function(...) lists = lists + 1; return real_list(...) end
+  request_redraw = function(...) redraws = redraws + 1; return real_redraw(...) end
+  local function changed(what, expected)
+    assert_equal(lists > 0, expected, what .. ": the voice list")
+    assert_equal(redraws > 0, expected, what .. ": a redraw")
+    lists, redraws = 0, 0
+  end
+  play(context, 1, 1, 60); changed("the own note", true)
+  play(context, 1, 2, 64); changed("an extra note", true)
+  play(context, 1, 2, 65); changed("a held extra slot re-pitched", false)
+  play(context, 1, 1, 62); changed("the held own note re-pitched", false)
+  S.lib.notes.release(1, "midi", 2); changed("a release", true)
+  play(context, 1, 2, 64); lists, redraws = 0, 0
+  params:set("v1_freeze", 1); changed("a freeze's cuts", true)
+  update_voice_list, request_redraw = real_list, real_redraw
 end)
 
 test("a voice stopped by anything forgets its notes", function()
@@ -473,6 +526,27 @@ test("a frozen synth voice plays rates from its freeze reference", function()
   -- a buffer voice has none
   params:set("v2_source", 2); params:set("v2_freeze", 1)
   assert_equal(notes.freeze_reference(2), nil, "a buffer voice")
+end)
+
+test("a voice that leaves the frozen synth state by another path never reuses its old reference", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  params:set("v1_freq", 440)
+  params:set("v1_freeze", 1)
+  assert_near(notes.freeze_reference(1), 69, 1e-9)
+  -- a recall's source switch runs no source-change hook: freeze stays 1, and no freeze-change hook runs
+  local function recall_source(option)
+    S.scene_recall_in_progress = true
+    params:set("v1_source", option)
+    S.scene_recall_in_progress = false
+  end
+  recall_source(2)
+  assert_equal(notes.freeze_reference(1), nil, "a buffer voice has none")
+  params:set("v1_freq", 220)
+  recall_source(S.constants.SOURCE_SYNTH)
+  assert_true(S.lib.freeze.is_frozen(1), "frozen all along")
+  assert_near(notes.freeze_reference(1), 57, 1e-9, "a fresh reference, not the old 69")
 end)
 
 test("a synth voice's extra notes are cut and forgotten when it freezes", function()
