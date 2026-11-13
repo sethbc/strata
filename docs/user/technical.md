@@ -6,9 +6,10 @@ Architecture and signal flow of the engine, and the off-device checks, for the c
 
 The engine uses SuperCollider for synthesis and granular processing:
 - Seven independent synthesis voices
+- Up to eight notes on each voice: its own note and up to seven extra notes from a note pool the seven voices share (Performance tiers, below). A synth voice's extra note is another synth of the voice's kind on its voice bus, so the voice's one granular processor grains the whole chord; a buffer or input voice's extra note is a granular processor of its own, playing at the note's rate; a frozen synth voice's notes are streams of its frozen sound. Every note of a voice goes through the voice's one mix stage. The script decides which slot a note takes and which note a new one replaces; the engine holds at most one sounding and one fading synth in a slot, and never more notes than the pool, whatever arrives
 - Individual audio buses for each voice
 - Per-voice granular processors: two sample-aligned `GrainBuf`s (left and right) per voice. A synth- or input-sourced voice's grains read a ring buffer of its recent sound, a buffer-sourced voice's read the sample; both pan their grains the same way (the same fixed pan spread), and a buffer- or input-sourced voice's pan places it as it does a synth voice. A buffer grain never reads past the end of the sample, so short samples play at an even level. Grain pitch is the grain's playback rate, an exact transposition with no pitch-shifter stage
-- Real-time synthesis memory does not depend on grain size: what counts is how many synths run at once. Each voice keeps at most its running synths plus one fading out and one being cut, however fast its source changes or scenes are recalled, so all seven voices fit in norns' 8 MB real-time pool with room to spare: at the worst moment, with six engine LFOs and scatter running, about 3.4 MB in use on the standard tier and about 4.1 MB on the high tier, and the engine check requires at least 3 MB of the pool left free on standard (3.5 MB on high)
+- Real-time synthesis memory does not depend on grain size: what counts is how many synths run at once. Each voice keeps at most its running synths plus one fading out and one being cut, and each extra note one sounding and one being cut, however fast notes, source changes or scene recalls come, so all seven voices fit in norns' 8 MB real-time pool with room to spare. With no extra note playing, at the worst moment, with six engine LFOs and scatter running, about 3.5 MB is in use on the standard tier and about 4.2 MB on the high tier, and the engine check requires at least 3 MB of the pool left free on standard (3.5 MB on high). With all sixteen extra notes the pool allows playing at once, the worst moment the check measures (its memory test as CI runs it, on SuperCollider 3.13) leaves 2560 KB free on standard and 2070 KB on high (1960 KB on high in a full run of every check on 3.14.1), against the 1280 KB the check requires there
 - Eight stereo buffers (each a pair of mono buffers: 16 s on the standard tier, about 49 MB in all, up to 300 s on the high tier) and a live stereo input bus. Each voice also keeps the last 4 s of its own sound and, for a frozen input, a 4 s copy of the input of its own (about 22 MB for the seven), and the input keeps its history (16 s, 60 s on the high tier)
 - Switching a voice's source replaces its grain synth; synths never stack
 - Cross-modulation routing via control buses
@@ -27,11 +28,14 @@ Strata runs on one of two tiers, chosen by the engine each time the script start
 | buffer length (each of the eight) | 16 s | 16, 60, 120 or 300 s (60 by default) |
 | grains per voice (at most) | 128 | 128 |
 | live input history | 16 s | 60 s |
+| note pool (extra notes the voices share, by default) | 4 | 8 |
 
 The **performance** field on the SETUP page picks the tier ([SETUP](pages/setup.md)):
 - **auto** (the default) - high on a Pi 4 or Compute Module 4 norns (CM4, CM4S), standard on a CM3, a Pi 3 or anything else
 - **standard** - standard on every norns
 - **high** - high on every norns; on a CM3 or Pi 3 it may cause audio dropouts (xruns), and SETUP says `may xrun`
+
+The **note pool** field on SETUP sets how many extra notes the seven voices can play at once, 0-16 on either tier (0 plays one note per voice). The default follows the tier: 4 on standard, 8 on high. Every extra note is another synth running, so a large pool asks more of the CPU: on the standard tier SETUP shows `may xrun` under a pool above 4, since how many notes a CM3 plays without dropouts has not been measured on a norns yet. The real-time memory holds the full 16 on both tiers (Architecture, above). Like the performance setting, the pool is a setting of the norns, not of a patch: it is saved at once to `notes.data` in Strata's data folder and no PSET or scene holds it, but it takes effect at once.
 
 On the high tier the **buffer length** field sets how long each buffer is. The buffers live in the norns' memory (eight stereo buffers of 300 s take about 922 MB), so the engine checks how much memory is free when it starts: if the chosen length would leave less than 1 GB free, it steps down to 120, 60 or 16 s, and SETUP shows it (`300 s -> 120 s (memory)`).
 
@@ -57,6 +61,7 @@ Voice Stage ─ dry ────────── Filter ───────�
             ─ reverb send ── Filter ─────────┴→ Reverb ──┴→ Master (drift, limiter, saturation) → Output
 
 (one Voice Stage per voice: the voice filter, its level, the delay and reverb sends, and the copy of a buffer or input voice's grains to its Voice Bus)
+(a synth voice's extra notes are more Voice Synths on its Voice Bus; a buffer or input voice's are more Granular Processors into its Voice Stage)
 
 Voice Bus → Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)
 ```
