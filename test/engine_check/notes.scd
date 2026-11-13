@@ -18,6 +18,7 @@ var checkHookRestored, checkPool;
 var slotRecord, slotState, slotSynth, slotCutting, near, controlOf, sentSets, sentValue, startBufferVoice, startInputVoice;
 var playNote, neutralExpression, ownGrain, notesOf, neutralSlots;
 var checkBufferNotes, checkSlotChurn, checkInputNote, checkGrainFanOut, checkExpression, checkFailedNoteStart;
+var startSynthVoice, checkSynthNote, checkSynthChord, checkVoiceFanOut, checkExpressionKinds;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -56,6 +57,12 @@ startBufferVoice = { arg voice, slot = 0;
 };
 startInputVoice = { arg voice;
     command.(\setGrainSource, voice, engine.inputSource);
+    command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
+    server.sync; 0.05.wait;
+};
+// voice running on its synth source
+startSynthVoice = { arg voice;
+    command.(\setGrainSource, voice, 0);
     command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
     server.sync; 0.05.wait;
 };
@@ -479,6 +486,99 @@ checkFailedNoteStart = {
     server.sync; 0.1.wait;
 };
 
+// A synth voice's extra note: one voice synth of the voice's def at the
+// head of voiceGroup, writing the voice's bus (which its one ring writer
+// records and its one grain synth grains), at the note's own freq, started
+// with its accent (t_trig 1 at its velocity) and its park open. The voice
+// (3, Sub) runs on its synth source
+checkSynthNote = {
+    var voice = 3, own, synth, nodes, bundle, start;
+    startSynthVoice.(voice);
+    command.(\setNotePool, 16);
+    own = engine.synths[engine.voiceKey(voice)];
+    command.(\noteExpression, voice, 1, *neutralExpression);
+    bundle = server.makeBundle(false, { command.(\noteOn, voice, 1, 57.0, 220.0, 1.0, 0.6) });
+    server.sendBundle(nil, *bundle);
+    server.sync;
+    synth = slotSynth.(voice, 1);
+    start = bundle.detect({ arg msg; (msg[0] == 9) and: { synth.notNil } and: { msg[2] == synth.nodeID } });
+    nodes = h.synthTree(engine.voiceGroup);
+    check.(synth.notNil and: { slotState.(voice, 1) == \live } and: { nodes.first.notNil } and: { nodes.first[\id] == synth.nodeID }
+        and: { nodes.first[\def] == engine.voiceSynthDefs[voice] }
+        and: { nodes.first[\controls][\out] == engine.granBuses[voice].index }
+        and: { near.(nodes.first[\controls][\freq], 220) } and: { near.(controlOf.(own, \freq), 110) }
+        and: { near.(nodes.first[\controls][\velocity], 0.6) } and: { nodes.first[\controls][\noteGate] == 1 }
+        and: { start.notNil and: { start.indexOf(\t_trig).notNil } and: { start[start.indexOf(\t_trig) + 1] == 1 } },
+        "notes: a synth voice's note is one voice synth at the head of voiceGroup, on the voice's bus, with its own freq (first node %, started with t_trig %)".format(
+            nodes.first !? { arg node; [node[\def], node[\controls][\out], node[\controls][\freq]] },
+            start !? { start.indexOf(\t_trig) !? { arg index; start[index + 1] } }));
+};
+
+// A chord of eight on the synth voice (its own note and seven extra notes):
+// eight voice synths of its def on its bus, and still one grain synth on its
+// synth path, one ring writer of its bus and one mod synth reading it
+checkSynthChord = {
+    var voice = 3, nodes, voiceSynths, grains, writers, mods;
+    (2 .. 7).do({ arg slot; playNote.(voice, slot, 1.0, 1.0, 110.0 * (1 + (slot / 4))) });
+    server.sync;
+    nodes = h.synthTree(h.context.xg);
+    voiceSynths = nodes.count({ arg node; (node[\def] == engine.voiceSynthDefs[voice]) and: { node[\controls][\out] == engine.granBuses[voice].index } });
+    grains = nodes.count({ arg node; h.grainDefs.includes(node[\def]) and: { node[\controls][\out] == engine.voicePathBus(voice, 0).index } });
+    writers = nodes.count({ arg node; node[\def].asString.beginsWith("strataRingWrite") and: { node[\controls][\in] == engine.granBuses[voice].index } });
+    mods = nodes.count({ arg node; (node[\def] == \strataMod) and: { node[\controls][\in] == engine.granBuses[voice].index } });
+    check.((voiceSynths == 8) and: { grains == 1 } and: { writers == 1 } and: { mods == 1 } and: { notesOf.(voice).size == 7 },
+        "notes: the voice's grain synth, ring writer and mod synth stay one each under a chord of eight (% voice synths, % grain synths, % ring writers, % mod synths)".format(
+            voiceSynths, grains, writers, mods));
+};
+
+// setVoiceParam on the chord's voice: a synthesis param (drift), the voice's
+// release time and amp reach every note's voice synth; freq only the own
+// note's
+checkVoiceFanOut = {
+    var voice = 3, own = engine.synths[engine.voiceKey(voice)], notes = notesOf.(voice), all, freqs;
+    command.(\setVoiceParam, voice, \drift, 0.05);
+    command.(\setVoiceParam, voice, \releaseTime, 1.5);
+    command.(\setVoiceParam, voice, \amp, 0.3);
+    command.(\setVoiceParam, voice, \freq, 55.0);
+    server.sync;
+    all = [own] ++ notes;
+    freqs = notes.collect({ arg synth; controlOf.(synth, \freq) });
+    check.((notes.size == 7) and: { all.every({ arg synth; near.(controlOf.(synth, \drift), 0.05) and: { near.(controlOf.(synth, \releaseTime), 1.5) }
+            and: { near.(controlOf.(synth, \amp), 0.3) } }) }
+        and: { near.(controlOf.(own, \freq), 55) } and: { freqs.every({ arg freq; freq.notNil and: { freq > 100 } }) },
+        "notes: setVoiceParam reaches every note's synth, and freq only the own note's (own freq %, the notes' %)".format(
+            controlOf.(own, \freq), freqs));
+    command.(\setVoiceParam, voice, \drift, 0.02);
+    command.(\setVoiceParam, voice, \releaseTime, 12.0);
+    command.(\setVoiceParam, voice, \amp, 0.2);
+    command.(\setVoiceParam, voice, \freq, 110.0);
+};
+
+// A note's expression by its kind: a voice synth note takes bend, amp and
+// main (noteMain), a grain note bend, amp, position and size (notePos,
+// noteSize). The buffer voice (1) plays a note in slot 1
+checkExpressionKinds = {
+    var synthVoice = 3, bufferVoice = 1, voiceNote = slotSynth.(synthVoice, 1), grainNote, voiceValues, grainValues;
+    startBufferVoice.(bufferVoice);
+    playNote.(bufferVoice, 1, 1.0);
+    server.sync;
+    grainNote = slotSynth.(bufferVoice, 1);
+    command.(\noteExpression, synthVoice, 1, 1.5, 0.8, 0.3, -0.3, 0.6);
+    command.(\noteExpression, bufferVoice, 1, 0.75, 1.2, 0.4, -0.4, 0.9);
+    server.sync;
+    voiceValues = [\noteBend, \noteAmp, \noteMain].collect({ arg name; controlOf.(voiceNote, name) });
+    grainValues = [\noteBend, \noteAmp, \notePos, \noteSize].collect({ arg name; controlOf.(grainNote, name) });
+    check.(voiceNote.notNil and: { grainNote.notNil }
+        and: { [voiceValues, [1.5, 0.8, 0.6]].flop.every({ arg pair; near.(pair[0], pair[1]) }) }
+        and: { [grainValues, [0.75, 1.2, 0.4, -0.4]].flop.every({ arg pair; near.(pair[0], pair[1]) }) },
+        "notes: main reaches a voice-synth note's noteMain and position and size a grain note's (voice synth note: %; grain note: %)".format(
+            voiceValues, grainValues));
+    (1 .. 7).do({ arg slot; command.(\noteOff, synthVoice, slot, 1); command.(\noteExpression, synthVoice, slot, *neutralExpression) });
+    command.(\noteOff, bufferVoice, 1, 1);
+    command.(\noteExpression, bufferVoice, 1, *neutralExpression);
+    server.sync; 0.1.wait;
+};
+
 if (area.isNil or: { state.isNil }) {
     check.(false, "notes: the area runs at order 170 (no strataAreaNotes)");
 } {
@@ -496,6 +596,12 @@ if (area.isNil or: { state.isNil }) {
     checkGrainFanOut.value;
     checkExpression.value;
     checkFailedNoteStart.value;
+    h.stopAllVoices;
+    // synth-voice notes
+    checkSynthNote.value;
+    checkSynthChord.value;
+    checkVoiceFanOut.value;
+    checkExpressionKinds.value;
     h.stopAllVoices;
     // the pool as the area found it: none
     command.(\setNotePool, 0);

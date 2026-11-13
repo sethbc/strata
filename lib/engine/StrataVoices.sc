@@ -238,7 +238,9 @@
     }
 
     // A voice-level control (synthesis param, crossmod routing or amount):
-    // kept for restarts, sent to the voice synth, to the grain synth when
+    // kept for restarts, sent to the voice synth and the voice's extra voice
+    // synth notes (setVoiceSynths: freq only to the own note's), to the grain
+    // synth and the extra grain notes (setGrainSynths) when
     // that has the control (pan, bend and the frequency crossmod) while the
     // voice is not on its synth source, and, whatever the source, to the
     // stage when that has the control (amp and the amplitude crossmod) while
@@ -248,7 +250,7 @@
         var pairs;
         if (this.validVoice(voice)) {
             voiceControls[voice][control] = value;
-            this.setSynth(this.voiceKey(voice), control, value);
+            this.setVoiceSynths(voice, control, value);
             if (grainSource[voice] != 0) {
                 pairs = this.controlPairs(this.grainDefFor(voice), Dictionary[control -> value]);
                 if (pairs.notEmpty) { this.setGrainSynths(voice, *pairs) };
