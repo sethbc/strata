@@ -766,10 +766,12 @@ test("a frozen synth voice's scaleNote is its freeze reference, whatever freq", 
   params:set("v1_freq", 220)
   assert_near(last_grain(context, 0, "scaleNote"), 69, 1e-9, "a freq change resends the reference")
   toggle_voice(1); toggle_voice(1)
-  assert_near(last_grain(context, 0, "scaleNote"), 69, 1e-9, "and so does a start")
+  assert_near(last_grain(context, 0, "scaleNote"), 57, 1e-9, "a start takes a fresh reference: the freq's then")
+  params:set("v1_freq", 330)
+  assert_near(last_grain(context, 0, "scaleNote"), 57, 1e-9, "which a freq change leaves")
   params:set("v1_freeze", 0)
   assert_near(variation.scale_note(1, 880), 81, 1e-9, "unfrozen: the freq's note")
-  assert_near(last_grain(context, 0, "scaleNote"), 57, 1e-9, "the unfreeze resends the stored freq's")
+  assert_near(last_grain(context, 0, "scaleNote"), note_of(330), 1e-9, "the unfreeze resends the stored freq's")
 end)
 
 end
