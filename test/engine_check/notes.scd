@@ -23,6 +23,7 @@ var levelProbe, checkPark, checkVoiceCommands, checkPoolFull, checkPoolRandom, c
 var heldCount, cuttingCount;
 var checkSourceSwitch, checkBufferLoad, checkInputFreeze;
 var checkFrozenNotes, checkSpectralNotes;
+var wireMessages, sentCount, startValue, checkParkThroughFreeze, checkSilentRestarts, checkOwnNoteOnAccent;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -44,6 +45,22 @@ sentValue = { arg bundle, synth, name;
     sentSets.(bundle, synth).do({ arg msg;
         (2, 4 .. (msg.size - 2)).do({ arg index; if (msg[index].asSymbol == name) { value = msg[index + 1] } });
     });
+    value
+};
+// The messages of h.wireUnits' entries, in order (what reached the server)
+wireMessages = { arg units; units.collect({ arg unit; unit }).flatten(1) };
+// How many of the messages set name to value on synth
+sentCount = { arg messages, synth, name, value;
+    messages.count({ arg msg;
+        synth.notNil and: { (msg[0] == 15) or: { msg[0] == '/n_set' } } and: { msg[1] == synth.nodeID }
+            and: { (2, 4 .. (msg.size - 2)).any({ arg index; (msg[index].asSymbol == name) and: { msg[index + 1] == value } }) }
+    })
+};
+// The value a synth's /s_new message gives a control (nil for none): its
+// pairs follow the def, node, add action and target
+startValue = { arg msg, name;
+    var value;
+    (5, 7 .. (msg.size - 2)).do({ arg index; if (msg[index].asSymbol == name) { value = msg[index + 1] } });
     value
 };
 // voice on buffer slot (index slot, loaded with the stereo test file if
@@ -941,8 +958,8 @@ checkFrozenNotes = {
     command.(\noteOff, voice, 0, 0);
     server.sync;
     parkedOn = [controlOf.(own, \noteGate), controlOf.(ownVoice, \noteGate)];
-    check.((parkedOn == [0, 1]) and: { slotRecord.(voice, 0)[\parked] },
-        "notes: slot 0 of a frozen synth voice parks on its grain synth ([grain synth, voice synth] noteGate: %)".format(parkedOn));
+    check.((parkedOn == [0, 0]) and: { slotRecord.(voice, 0)[\parked] },
+        "notes: slot 0 of a frozen synth voice parks on its grain synth, and its voice synth with it (ruling 44; [grain synth, voice synth] noteGate: %)".format(parkedOn));
 
     playNote.(voice, 2, 0.75, 1.0, 165.0);
     playNote.(voice, 3, 1.0, 1.0, 220.0);
@@ -1013,6 +1030,119 @@ checkSpectralNotes = {
     server.sync;
 };
 
+// Ruling 44: the own note's park through a synth voice's freeze. The own
+// voice synth's noteGate follows the park, frozen or not; while frozen a
+// slot-0 command reaches the own grain synth too (the freeze itself parks
+// nothing: the frozen ring holds the chord); the unfreeze sets the grain
+// synth's noteGate back to 1 and leaves the voice synth where the park
+// says, so an unfreeze under a parked own note makes no sound of it. The
+// voice (4, Pulse, its 2 s attack waited out, then its attack and release
+// set short) is parked before its freeze, then during one; its voice
+// synth's level (a peak meter on its bus) over 0.3 s after each unfreeze
+// stays under 1% of its level playing
+checkParkThroughFreeze = {
+    var voice = 4, probe, results, voiceSynth, grain;
+    startSynthVoice.(voice);
+    server.sync; 2.3.wait;
+    command.(\setVoiceParam, voice, \attackTime, 0.05);
+    command.(\setVoiceParam, voice, \releaseTime, 0.3);
+    voiceSynth = engine.synths[engine.voiceKey(voice)];
+    grain = ownGrain.(voice);
+    probe = levelProbe.(voice);
+    server.sync;
+    results = [\before, \during].collect({ arg order;
+        var playing = h.measure(probe[0], probe[1], 0.3)[0], frozen, after, gates;
+        if (order == \before) {
+            command.(\noteOff, voice, 0, 0); server.sync; 0.6.wait;
+            command.(\setGrainParam, voice, \freeze, 1.0); server.sync; 0.3.wait;
+        } {
+            command.(\setGrainParam, voice, \freeze, 1.0); server.sync; 0.3.wait;
+            command.(\noteOff, voice, 0, 0); server.sync; 0.6.wait;
+        };
+        frozen = [controlOf.(voiceSynth, \noteGate), controlOf.(grain, \noteGate)];
+        command.(\setGrainParam, voice, \freeze, 0.0);
+        after = h.measure(probe[0], probe[1], 0.3)[0];
+        gates = [controlOf.(voiceSynth, \noteGate), controlOf.(grain, \noteGate)];
+        command.(\noteOn, voice, 0, 60.0, 220.0, 1.0, 1.0);   // unparked again, for the next order
+        server.sync; 0.5.wait;
+        [order, playing, frozen, after, gates]
+    });
+    probe[0].free; probe[1].free;
+    check.(results.every({ arg each; (each[1] > 0.01) and: { each[3] < (each[1] * 0.01) } and: { each[4] == [0, 1] } })
+        and: { results[0][2] == [0, 1] } and: { results[1][2] == [0, 0] },
+        "notes: an unfreeze under a parked own note makes no sound of it, parked before the freeze or during it (ruling 44; [order, level playing, [voice synth, grain synth] noteGate frozen, level after the unfreeze, noteGate after]: %)".format(
+            results.collect({ arg each; [each[0], each[1].round(0.001), each[2], each[3].round(0.0001), each[4]] })));
+    command.(\setVoiceParam, voice, \attackTime, 2.0);
+    command.(\setVoiceParam, voice, \releaseTime, 4.0);
+    h.stopAllVoices;
+};
+
+// Ruling 45: the held notes the engine restarts itself start silent: no
+// t_accent, no t_trig, their velocity kept. A chord on a synth voice (6,
+// Ring: three notes at velocity 0.7) through synth -> buffer -> input ->
+// synth, then frozen with ring-stream notes and unfrozen: every /s_new of a
+// restarted note that reached the server carries no accent or trigger and
+// the note's velocity
+checkSilentRestarts = {
+    var voice = 6, starts = List.new, restartedOf, units;
+    startSynthVoice.(voice);
+    command.(\setNotePool, 16);
+    if (engine.bufferFrames[0] == 0) { command.(\loadBuffer, 0, h.stereoPath, 0); h.waitFor({ engine.bufferFrames[0] > 0 }, 3) };
+    (1 .. 3).do({ arg slot; playNote.(voice, slot, 1.0, 0.7, 220.0 + (slot * 55)) });
+    server.sync;
+    restartedOf = { arg messages;
+        (1 .. 3).collect({ arg slot; slotSynth.(voice, slot) }).collect({ arg synth;
+            messages.detect({ arg msg; synth.notNil and: { msg[0] == 9 } and: { msg[2] == synth.nodeID } }) })
+    };
+    [1, engine.inputSource, 0].do({ arg source;
+        units = h.wireUnits({ command.(\setGrainSource, voice, source) });
+        starts.addAll(restartedOf.(wireMessages.(units)));
+        server.sync;
+    });
+    command.(\setGrainParam, voice, \freeze, 1.0);
+    server.sync;
+    (1 .. 3).do({ arg slot; command.(\noteOff, voice, slot, 1) });
+    (1 .. 3).do({ arg slot; playNote.(voice, slot, 1.0, 0.7, 220.0 + (slot * 55)) });
+    server.sync;
+    units = h.wireUnits({ command.(\setGrainParam, voice, \freeze, 0.0) });
+    starts.addAll(restartedOf.(wireMessages.(units)));
+    server.sync;
+    check.((starts.size == 12) and: { starts.every(_.notNil) }
+        and: { starts.every({ arg msg; ((startValue.(msg, \t_accent) ? 0) == 0) and: { (startValue.(msg, \t_trig) ? 0) == 0 }
+            and: { near.(startValue.(msg, \velocity), 0.7) } }) },
+        "notes: notes the engine restarts (a source switch, an unfreeze) start with no accent or trigger, their velocity kept (ruling 45; [t_accent, t_trig, velocity] of each start: %)".format(
+            starts.collect({ arg msg; msg !? { [startValue.(msg, \t_accent), startValue.(msg, \t_trig), startValue.(msg, \velocity)] } })));
+    h.stopAllVoices;
+};
+
+// Ruling 47: a slot-0 noteOn on an unfrozen voice only unparks the own note
+// (noteGate 1): Lua's retrigger after it accents the voice and plucks
+// Karplus once. On a Karplus voice (5) a slot-0 noteOn and a retrigger send
+// the own voice synth t_trig once; on a buffer voice (1) the slot-0 noteOn
+// sends the own grain synth no t_accent (the stage's accent is the
+// retrigger's)
+checkOwnNoteOnAccent = {
+    var karplus = 5, buffer = 1, voiceSynth, grain, karplusMessages, bufferMessages;
+    startSynthVoice.(karplus);
+    startBufferVoice.(buffer);
+    voiceSynth = engine.synths[engine.voiceKey(karplus)];
+    grain = ownGrain.(buffer);
+    command.(\noteOff, karplus, 0, 0);
+    command.(\noteOff, buffer, 0, 0);
+    server.sync;
+    karplusMessages = wireMessages.(h.wireUnits({
+        command.(\noteOn, karplus, 0, 60.0, 220.0, 1.0, 0.8);
+        command.(\retrigger, karplus, 0.8);
+    }));
+    bufferMessages = wireMessages.(h.wireUnits({ command.(\noteOn, buffer, 0, 60.0, 220.0, 1.0, 0.8) }));
+    server.sync;
+    check.((sentCount.(karplusMessages, voiceSynth, \t_trig, 1) == 1) and: { sentCount.(karplusMessages, voiceSynth, \noteGate, 1) == 1 }
+        and: { sentCount.(bufferMessages, grain, \t_accent, 1) == 0 } and: { sentCount.(bufferMessages, grain, \noteGate, 1) == 1 },
+        "notes: a slot-0 noteOn on an unfrozen voice only unparks it: with the retrigger after it Karplus gets one t_trig, and a buffer voice's grain synth no t_accent (ruling 47; Karplus t_trig sent %, buffer t_accent sent %)".format(
+            sentCount.(karplusMessages, voiceSynth, \t_trig, 1), sentCount.(bufferMessages, grain, \t_accent, 1)));
+    h.stopAllVoices;
+};
+
 if (area.isNil or: { state.isNil }) {
     check.(false, "notes: the area runs at order 170 (no strataAreaNotes)");
 } {
@@ -1053,6 +1183,12 @@ if (area.isNil or: { state.isNil }) {
     // frozen synth voices
     checkFrozenNotes.value;
     checkSpectralNotes.value;
+    h.stopAllVoices;
+    // the fix round's rulings: the park through a freeze, silent restarts,
+    // the slot-0 noteOn's accent
+    checkParkThroughFreeze.value;
+    checkSilentRestarts.value;
+    checkOwnNoteOnAccent.value;
     h.stopAllVoices;
     // the pool as the area found it: none
     command.(\setNotePool, 0);
