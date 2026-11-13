@@ -251,6 +251,7 @@ local CLEANUP_ORDER = {
   scene_transition = 110,   -- lib/scenes.lua
   morph_clock = 112,        -- lib/morph.lua (3.4)
   macros = 114,             -- lib/macros.lua: the apply clock (3.4)
+  zones_learn = 117,        -- lib/ui/zones.lua: the zones editor's learn timeout clock (3.5)
   matrix = 118,             -- lib/matrix.lua: matrix learn's timeout clock (3.4)
   notes = 119,              -- lib/notes.lua: the expression flush ends (3.5)
   lfos = 120,               -- lib/lfos.lua: stopped, destinations restored

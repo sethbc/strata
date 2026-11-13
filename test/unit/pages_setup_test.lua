@@ -24,21 +24,21 @@ test("SETUP lists the fields and E3 edits the one under the cursor", function()
   assert_equal(params:get("midi_channel_mode"), 2, "cursor 2: the channel mode")
   redraw()
   assert_true(screen_shows(context, "omni to selected"), "the channel mode's name is the value")
-  enc(2, 1); enc(3, 1)
-  assert_equal(params:get("mutation_enabled"), 1, "cursor 3: mutations on")
+  enc(2, 4); enc(3, 1)  -- past 3.5's note off, mpe & zones and note pool
+  assert_equal(params:get("mutation_enabled"), 1, "cursor 6: mutations on")
   redraw()
   assert_true(screen_shows(context, "on"), "shown as on")
   enc(2, 1); enc(3, 1)
-  assert_true(math.abs(params:get("mutation_rate") - 2.1) < 1e-9, "cursor 4: the mutation rate steps 0.1")
+  assert_true(math.abs(params:get("mutation_rate") - 2.1) < 1e-9, "cursor 7: the mutation rate steps 0.1")
   redraw()
   assert_true(screen_shows(context, "2.1 s"), "the rate shows its unit")
   enc(2, 1); enc(3, 1)
-  assert_true(math.abs(params:get("mutation_probability") - 0.16) < 1e-9, "cursor 5: probability")
+  assert_true(math.abs(params:get("mutation_probability") - 0.16) < 1e-9, "cursor 8: probability")
   enc(2, 1); enc(3, 1)
-  assert_true(math.abs(params:get("mutation_amount") - 0.26) < 1e-9, "cursor 6: amount")
+  assert_true(math.abs(params:get("mutation_amount") - 0.26) < 1e-9, "cursor 9: amount")
   enc(2, 1); enc(3, 1); enc(2, 1); enc(3, 1)
   assert_equal(params:get("midi_device"), 2, "E3 on save and load edits nothing")
-  assert_equal(local_value("S").setup_cursor, 8, "the cursor stops on load scenes")
+  assert_equal(local_value("S").setup_cursor, 11, "the cursor stops on load scenes")
 end)
 
 test("SETUP shows the MIDI device and status lines", function()
@@ -81,7 +81,7 @@ test("K3 on save and load runs them and does nothing elsewhere", function()
   assert_true(not util.file_exists(scene_file), "no scenes file yet")
   tap(3)
   assert_true(not util.file_exists(scene_file), "K3 on the MIDI port does nothing")
-  enc(2, 5); tap(3)
+  enc(2, 8); tap(3)
   assert_true(not util.file_exists(scene_file), "K3 on a mutation field does nothing")
   assert_equal(params:get("mutation_rate"), 2, "and changes no param")
   enc(2, 1); tap(3)
@@ -118,7 +118,7 @@ test("every SETUP field shows its own label on its row", function()
     enc(2, 1)
     if S.setup_cursor == before then break end
   end
-  assert_equal(seen, 14, "the fourteen fields: ten, and four grid rotations (no buffer length on the standard setting)")
+  assert_equal(seen, 17, "the seventeen fields: thirteen, and four grid rotations (no buffer length on the standard setting)")
 end)
 
 test("SETUP's save and load fields run the function their record holds", function()
@@ -138,21 +138,21 @@ test("SETUP's save and load fields run the function their record holds", functio
       field.run = real
     end
   end
-  assert_equal(table.concat(ran, ","), "save scenes,load scenes", "K3 runs each field's own function")
+  assert_equal(table.concat(ran, ","), "mpe & zones,save scenes,load scenes", "K3 runs each field's own function")
 end)
 
 test("SETUP scrolls with a marker and reaches both ends", function()
   local context = load_strata(); finish_startup(context)
   context.grid.plug(1, 16, 16)
   show_page("SETUP")
-  enc(2, 13)
+  enc(2, 16)
   redraw()
-  assert_equal(local_value("S").setup_cursor, 14, "the cursor is on performance, the last field")
+  assert_equal(local_value("S").setup_cursor, 17, "the cursor is on performance, the last field")
   assert_true(screen_shows(context, "grid 4 rotation"), "the field above it, grid 4 rotation, is drawn")
   assert_true(not screen_shows(context, "buffers: 0 restored"), "the last status line is below the view")
   enc(2, 20)  -- E2 on the last field scrolls over the status rows (#319)
   redraw()
-  assert_equal(local_value("S").setup_cursor, 14, "the cursor stays on performance")
+  assert_equal(local_value("S").setup_cursor, 17, "the cursor stays on performance")
   assert_true(screen_shows(context, "buffers: 0 restored"), "the last status line is drawn")
   assert_true(not text_entry(context, "midi 1: none"), "the first fields scrolled out")
   local marker_bottom
@@ -172,14 +172,14 @@ test("SETUP hints", function()
   show_page("SETUP")
   assert_true(hint_text(context):find("E3:value", 1, true), "E3:value")
   assert_true(not hint_text(context):find("K3", 1, true), "no K3 on a value field")
-  enc(2, 6); redraw()
+  enc(2, 9); redraw()
   assert_equal(hint_text(context), "E2:field K3:save", "an action row: no E3:value, which does nothing there (#420)")
   enc(2, 1); redraw()
   assert_equal(hint_text(context), "E2:field K3:load", "K3:load on load scenes")
   -- with ALT held no K3 is offered: ALT+K3 does nothing on SETUP (#419)
   key(1, 1); redraw()
   assert_true(not hint_text(context):find("K3", 1, true), "ALT on an action row names no K3: " .. tostring(hint_text(context)))
-  enc(2, -20); enc(2, 3); redraw()
+  enc(2, -20); enc(2, 6); redraw()
   assert_equal(hint_text(context), "E2:field E3:fine", "ALT on a value field offers the fine turn")
   key(1, 0)
 end)
@@ -199,7 +199,7 @@ local function scrolled_off_the_last_field(context)
   S.scene_file.problem = "unreadable"   -- one unreadable scenes file: two more rows below
   show_page("SETUP")
   enc(2, 60); redraw()
-  assert_equal(S.setup_cursor, 14, "the cursor is on performance, the last field")
+  assert_equal(S.setup_cursor, 17, "the cursor is on performance, the last field")
   assert_true(not text_entry(context, "performance"), "the performance row has scrolled out of view")
   return S
 end
@@ -219,7 +219,7 @@ test("SETUP's E3 while scrolled brings the cursor's field back; the next E3 edit
   local S = scrolled_off_the_last_field(context)
   enc(3, -1); redraw()
   assert_true(text_entry(context, "performance") ~= nil, "the performance row is back in view")
-  assert_equal(S.setup_cursor, 14, "the cursor stays on performance")
+  assert_equal(S.setup_cursor, 17, "the cursor stays on performance")
   enc(3, 1)
   assert_equal(S.lib.performance.setting().performance, "standard", "with the field in view E3 edits it")
 end)
@@ -239,7 +239,7 @@ end)
 
 test("SETUP saves once per K3 press; the release does nothing", function()
   local context = load_strata(); finish_startup(context)
-  show_page("SETUP"); enc(2, 6)
+  show_page("SETUP"); enc(2, 9)
   local saved = 0
   local real_save = save_scenes_to_disk
   save_scenes_to_disk = function() saved = saved + 1 end
@@ -740,12 +740,125 @@ test("E3 on SETUP's mutations row echoes to a MIDI-mapped controller (#538)", fu
   norns.pmap.data.mutation_enabled = { dev = 1, ch = 1, cc = 44, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
     echo = true, value = 0 }
   show_page("SETUP")
-  enc(2, 2)   -- mutations
+  enc(2, 5)   -- mutations
   enc(3, 1)
   assert_equal(params:get("mutation_enabled"), 1, "E3 right turns mutations on")
   enc(3, -1)
   assert_equal(params:get("mutation_enabled"), 0, "E3 left turns them off")
   assert_equal(cc_echoes(controller, 44), "127,0", "the controller hears both")
+end)
+
+
+-- 3.5 (design 9.3, ruling 10): note off, mpe & zones and note pool follow
+-- channels and are always there, so no field moves when the mode changes
+local function field_labels(count)
+  local labels = {}
+  for _, row in ipairs(local_value("S").lib.pages_setup.setup_rows()) do
+    if row.selectable ~= false and #labels < count then labels[#labels + 1] = row.label end
+  end
+  return table.concat(labels, ", ")
+end
+
+test("note off, mpe & zones and note pool follow channels, whatever the mode", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local expected = "midi, channels, note off, mpe & zones, note pool, mutations, mutation rate"
+  for mode = 1, #S.lib.midi_in.MIDI.channel_mode_options do
+    params:set("midi_channel_mode", mode)
+    assert_equal(field_labels(7), expected, "the same fields in channel mode " .. mode)
+  end
+  params:set("midi_channel_mode", 1)
+  show_page("SETUP")
+  enc(2, 2); redraw()  -- note off
+  assert_equal(value_beside(context, "note off"), params:string("midi_note_off"), "the param's own option name")
+  assert_equal(hint_text(context), "E2:field E3:value")
+  local before = params:get("midi_note_off")
+  enc(3, 1)
+  assert_equal(params:get("midi_note_off"), before + 1, "E3 steps midi_note_off")
+  enc(2, 1); redraw()
+  assert_equal(hint_text(context), "E2:field K3:edit", "mpe & zones is an action row")
+  assert_equal(value_beside(context, "mpe & zones"), nil, "with no value")
+  enc(3, 1)
+  assert_true(not S.lib.ui_zones.is_open(), "E3 opens nothing")
+  enc(2, 1); redraw()
+  assert_equal(value_beside(context, "note pool"), tostring(S.lib.notes.pool()), "the pool")
+  assert_equal(hint_text(context), "E2:field E3:value")
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "E2:field", "no fine turn on the pool")
+  key(1, 0)
+  assert_screen_layout(context, "SETUP's note rows")
+end)
+
+test("note pool steps the device setting and marks standard above its default", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local notes, NOTE_POOL = S.lib.notes, S.constants.NOTE_POOL
+  local spacing = S.lib.pages_setup.SETUP_PAGE.spacing
+  assert_equal(S.performance.tier, "standard")
+  show_page("SETUP"); cursor_on("note pool"); redraw()
+  assert_equal(notes.pool(), NOTE_POOL.standard, "the standard tier's default")
+  assert_equal(value_beside(context, "note pool"), tostring(NOTE_POOL.standard))
+  assert_true(not screen_shows(context, "may xrun"), "no note at the default")
+  context.clear_engine_calls()
+  enc(3, 1); redraw()
+  assert_equal(notes.pool(), NOTE_POOL.standard + 1, "E3 +1 steps the pool")
+  assert_equal(value_beside(context, "note pool"), tostring(NOTE_POOL.standard + 1))
+  assert_equal(#context.calls_named("setNotePool"), 1, "the engine has it")
+  local note, field = entry_named(context, "may xrun"), entry_named(context, "note pool")
+  assert_true(note ~= nil, "a pool above standard's default may xrun")
+  assert_equal(note.level, 4, "a dim note")
+  assert_equal(note.x, S.lib.pages_setup.SETUP_PAGE.note_indent, "indented")
+  assert_equal(note.y - field.y, spacing, "directly under the field")
+  assert_equal(S.lib.pages_setup.setup_rows()[S.setup_cursor].label, "note pool", "the cursor stays on the pool")
+  assert_screen_layout(context, "SETUP note pool may xrun")
+  enc(2, 1)
+  assert_equal(S.lib.pages_setup.setup_rows()[S.setup_cursor].label, "mutations", "E2 steps over the note")
+  enc(2, -1)
+  enc(3, 30); redraw()
+  assert_equal(notes.pool(), NOTE_POOL.max, "clamped at the maximum")
+  assert_equal(value_beside(context, "note pool"), tostring(NOTE_POOL.max))
+  assert_screen_layout(context, "SETUP note pool at its maximum")
+  enc(3, -30); redraw()
+  assert_equal(notes.pool(), 0, "clamped at 0")
+  assert_true(not screen_shows(context, "may xrun"), "no note at 0")
+  context.clear_engine_calls()
+  enc(3, -1)
+  assert_equal(#context.calls_named("setNotePool"), 0, "nothing sent at the end of the range")
+  -- a write that fails keeps the pool and says so
+  os.execute("mkdir -p '" .. context.data_dir .. "strata/notes.data.part/inside'")
+  enc(3, 1); next_frame(context)
+  assert_equal(notes.pool(), 0, "not set")
+  assert_equal(hint_text(context), "setting not saved", "the hint row says so")
+  assert_equal(value_beside(context, "note pool"), "0", "the old value shows")
+  -- the high tier: no note at any pool
+  context = load_setup(HIGH_60, "performance high\nbuffer_seconds 60\n")
+  S = local_value("S")
+  assert_equal(S.lib.notes.pool(), NOTE_POOL.high, "the high tier's default")
+  cursor_on("note pool")
+  enc(3, 30); redraw()
+  assert_equal(S.lib.notes.pool(), NOTE_POOL.max)
+  for _, row in ipairs(S.lib.pages_setup.setup_rows()) do
+    assert_true(row.text ~= "may xrun", "no may xrun under the pool on high")
+  end
+end)
+
+test("K3 on mpe & zones opens the editor, and K2 closes it", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("SETUP"); cursor_on("mpe & zones")
+  local cursor = S.setup_cursor
+  assert_true(not S.lib.ui_zones.is_open(), "closed")
+  tap(3)
+  assert_true(S.lib.ui_zones.is_open(), "K3 opens the editor")
+  next_frame(context)
+  assert_true(screen_shows(context, "lower members"), "its rows")
+  assert_true(not screen_shows(context, "mpe & zones"), "over SETUP's")
+  assert_screen_layout(context, "SETUP's zones editor")
+  tap(2)
+  assert_true(not S.lib.ui_zones.is_open(), "K2 closes it")
+  next_frame(context)
+  assert_true(screen_shows(context, "mpe & zones"), "SETUP shows again")
+  assert_equal(S.setup_cursor, cursor, "on the row it opened from")
 end)
 
 end

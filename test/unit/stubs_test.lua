@@ -2021,4 +2021,19 @@ test("stub er.gen is norns' lib/er.lua", function()
   assert_equal(pattern(2, 5, -1), "..x.x", "a negative shift wraps")
 end)
 
+
+-- norns' lib/musicutil.lua's note_num_to_name: 60 is C3, the octave only
+-- with include_octave (ruling 28: the zones editor names notes as norns does)
+test("stub musicutil.note_num_to_name is norns' lib/musicutil.lua", function()
+  load_strata()
+  local musicutil = require("musicutil")
+  assert_equal(musicutil.note_num_to_name(0, true), "C-2", "the lowest note")
+  assert_equal(musicutil.note_num_to_name(12, true), "C-1")
+  assert_equal(musicutil.note_num_to_name(60, true), "C3", "middle C is C3")
+  assert_equal(musicutil.note_num_to_name(61, true), "C#3")
+  assert_equal(musicutil.note_num_to_name(127, true), "G8", "the highest note")
+  assert_equal(musicutil.note_num_to_name(61), "C#", "no octave without include_octave")
+  assert_equal(musicutil.note_num_to_name(1, true), "C#-2", "the widest name")
+end)
+
 end
