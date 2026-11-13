@@ -163,9 +163,10 @@ return function(S)
   -- Per voice, the held notes this module keeps values for, each
   -- {owner, key, bend, pressure (nil until the first), peak (the highest
   -- of the touch), slide (absolute, nil until the first), reference (the
-  -- touch's first slide), latched, values (what the allocator holds for
-  -- the note: at first its first expression, then what set_expression
-  -- last got)}
+  -- touch's first slide), latched, inert (latched before any update: the
+  -- module knows nothing of its touch, so it keeps what the allocator
+  -- holds), values (what the allocator holds for the note: read from it
+  -- when the record is made, then what set_expression last got)}
   local records = {}
   -- Per voice, the voice-wide values this module holds: cutoff and size
   -- (m, the matrix's fast extras), density (the extra offset, param
@@ -183,8 +184,11 @@ return function(S)
     return nil
   end
 
-  local function new_record(voice, owner, key, values)
-    local record = {owner = owner, key = key, bend = 1, latched = false, values = values or neutral()}
+  -- A record for the note in slot, its values what the allocator holds
+  -- there (ruling 36: whatever play was given), neutral when it holds none
+  local function new_record(voice, slot, owner, key)
+    local record = {owner = owner, key = key, bend = 1, latched = false, inert = false,
+      values = S.lib.notes.expression(voice, slot) or neutral()}
     table.insert(records[voice], record)
     return record
   end
@@ -196,8 +200,10 @@ return function(S)
   end
 
   -- The note's values to the allocator when they changed: it marks the
-  -- note due for its flush, which sends them
+  -- note due for its flush, which sends them. An inert record hands over
+  -- nothing and reaches no voice-wide target
   local function hand_over(voice, slot, record)
+    if record.inert then return {} end
     local values, wide = mapped(voice, relative_of(record))
     if not same_values(values, record.values) then
       record.values = values
@@ -216,11 +222,9 @@ return function(S)
     if not valid_voice(voice) or type(raw) ~= "table" then return false end
     local slot = S.lib.notes.find(voice, owner, key)
     if not slot then return false end
-    -- a new record's note holds its first expression: the MIDI package gave
-    -- play note_values of the same bend and pressure at slide 0 (the touch's
-    -- start), so the first update sends only what differs from it
-    local record = find_record(voice, owner, key)
-      or new_record(voice, owner, key, M.note_values(voice, {bend = raw.bend, pressure = raw.pressure, slide = 0}))
+    -- a new record starts from what the allocator holds for the note, so
+    -- the first update sends exactly when it differs from that
+    local record = find_record(voice, owner, key) or new_record(voice, slot, owner, key)
     if record.latched then return false end
     if finite(raw.bend) then record.bend = bend_value(raw.bend) end
     if finite(raw.pressure) then
@@ -239,13 +243,19 @@ return function(S)
 
   -- A held note lifted in latch mode (the MIDI package's note off): its
   -- pressure becomes the highest it reached in its touch and its slide
-  -- stays where it is; later updates change nothing. false for a note the
-  -- allocator does not hold
+  -- stays where it is; later updates change nothing. A note this module
+  -- never had an update for keeps what the allocator holds (its record is
+  -- seeded from it and inert: no pressure of its touch is known). false
+  -- for a note the allocator does not hold
   function M.latch(voice, owner, key)
     if not valid_voice(voice) then return false end
     local slot = S.lib.notes.find(voice, owner, key)
     if not slot then return false end
-    local record = find_record(voice, owner, key) or new_record(voice, owner, key)
+    local record = find_record(voice, owner, key)
+    if not record then
+      record = new_record(voice, slot, owner, key)
+      record.inert = true
+    end
     record.latched = true
     record.pressure = record.peak
     hand_over(voice, slot, record)
