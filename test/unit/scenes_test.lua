@@ -1116,7 +1116,10 @@ test("scene recall: one full sync per voice whose source changed, after its para
       if call.args[1] == engine_voice then
         if call.name == "setVoiceParam" and call.args[2] == "bend" then
           count = count + 1; last_sync = index
-        elseif call.name == "setGrainParam" and registered[call.args[2]] and last_sync and last_sync == last_call then
+        elseif ((call.name == "setGrainParam" and registered[call.args[2]])
+            -- (lib/notes.lua's sync: the envelope times)
+            or (call.name == "setVoiceParam" and (call.args[2] == "attackTime" or call.args[2] == "releaseTime")))
+          and last_sync and last_sync == last_call then
           last_sync = index
         end
         last_call = index

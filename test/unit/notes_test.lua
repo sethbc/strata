@@ -788,4 +788,111 @@ test("the note cap is a row of VOICE's notes section and is not a scene field", 
   assert_equal(extras.note_cap, nil, "but not the note cap")
 end)
 
+-------------------------------------------------------------------------------
+-- The envelope times (package 2g)
+-------------------------------------------------------------------------------
+
+test("attack and release default to each voice's times of 3.4", function()
+  local context = load_strata()
+  local S = started(context)
+  local envelope = S.lib.notes.NOTES.envelope
+  assert_equal(#envelope, S.constants.NUM_VOICES, "a pair per voice")
+  for voice = 1, S.constants.NUM_VOICES do
+    assert_near(params:get("v" .. voice .. "_attack"), envelope[voice][1], 1e-9, "voice " .. voice .. " attack")
+    assert_near(params:get("v" .. voice .. "_release"), envelope[voice][2], 1e-9, "voice " .. voice .. " release")
+  end
+  assert_near(params:get("v1_attack"), 4, 1e-9); assert_near(params:get("v1_release"), 8, 1e-9)
+  assert_near(params:get("v4_attack"), 8, 1e-9); assert_near(params:get("v4_release"), 12, 1e-9)
+  assert_near(params:get("v6_attack"), 0.01, 1e-9); assert_near(params:get("v6_release"), 2, 1e-9)
+  local a_min, a_max = param_range("v1_attack")
+  local r_min, r_max = param_range("v1_release")
+  assert_equal(a_min, 0.005); assert_equal(a_max, 30)
+  assert_equal(r_min, 0.01); assert_equal(r_max, 30)
+  for voice = 1, S.constants.NUM_VOICES do
+    local rows = {}
+    for _, row in ipairs(voice_page_rows(voice)) do rows[#rows + 1] = row.param_id or row.section end
+    local text = table.concat(rows, ",")
+    assert_true(text:find("v" .. voice .. "_note_cap,v" .. voice .. "_attack,v" .. voice .. "_release", 1, true)
+      ~= nil, "attack and release follow note cap: " .. text)
+  end
+end)
+
+test("they reach the engine as attackTime and releaseTime, at a turn and at a start", function()
+  local context = load_strata()
+  local S = started(context)
+  context.clear_engine_calls()
+  params:set("v2_attack", 0.05)
+  params:set("v2_release", 3)
+  local sent = context.calls_named("setVoiceParam")
+  assert_equal(#sent, 2, "one message each")
+  assert_equal(sent[1].args[1], 1); assert_equal(sent[1].args[2], "attackTime"); assert_near(sent[1].args[3], 0.05, 1e-9)
+  assert_equal(sent[2].args[2], "releaseTime"); assert_near(sent[2].args[3], 3, 1e-9)
+  -- a stopped voice sends nothing at a turn
+  context.clear_engine_calls()
+  params:set("v3_attack", 0.5)
+  assert_equal(#context.calls_named("setVoiceParam"), 0, "stopped: nothing")
+  -- a start sends both after voiceOn
+  context.clear_engine_calls()
+  toggle_voice(3)
+  local order, seen = {}, {}
+  for index, call in ipairs(context.engine_calls) do
+    if call.name == "voiceOn" then order.on = index end
+    if call.name == "setVoiceParam" and (call.args[2] == "attackTime" or call.args[2] == "releaseTime") then
+      seen[call.args[2]] = call.args[3]; order[call.args[2]] = index
+    end
+  end
+  assert_near(seen.attackTime, 0.5, 1e-9, "the start sends the attack"); assert_near(seen.releaseTime, 6, 1e-9, "and the release")
+  assert_true(order.attackTime > order.on and order.releaseTime > order.on, "after voiceOn")
+  -- a sync of a running voice sends both
+  context.clear_engine_calls()
+  sync_voice_values_to_engine(2)
+  local synced = {}
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do synced[call.args[2]] = call.args[3] end
+  assert_near(synced.attackTime, 0.05, 1e-9, "a sync sends the attack"); assert_near(synced.releaseTime, 3, 1e-9)
+end)
+
+test("a 3.4 scene recalls each voice's default times", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_attack", 9)
+  capture_scene(1)
+  assert_near(S.scenes[1].data.voices[1].extras.attack, 9, 1e-9, "a scene captures the attack")
+  local scene = {populated = true, data = S.scenes[1].data}
+  for voice = 1, S.constants.NUM_VOICES do
+    scene.data.voices[voice].extras.attack = nil
+    scene.data.voices[voice].extras.release = nil
+  end
+  migrate_scene(scene, 6)
+  local envelope = S.lib.notes.NOTES.envelope
+  for voice = 1, S.constants.NUM_VOICES do
+    assert_equal(scene.data.voices[voice].extras.attack, envelope[voice][1], "voice " .. voice .. " attack")
+    assert_equal(scene.data.voices[voice].extras.release, envelope[voice][2], "voice " .. voice .. " release")
+  end
+  scene.data.voices[1].extras.attack = 2
+  migrate_scene(scene, 6)
+  assert_equal(scene.data.voices[1].extras.attack, 2, "a stored value is kept (idempotent)")
+end)
+
+test("the engine's default times equal NOTES.envelope", function()
+  load_strata()
+  local file = assert(io.open("lib/engine/StrataVoiceDefs.sc"))
+  local text = file:read("*a"); file:close()
+  local pairs_found = {}
+  for attack, release in text:gmatch("attackTime=([%d%.]+), releaseTime=([%d%.]+);") do
+    pairs_found[#pairs_found + 1] = {tonumber(attack), tonumber(release)}
+  end
+  local envelope = local_value("S").lib.notes.NOTES.envelope
+  assert_equal(#pairs_found, #envelope, "one default pair per voice def")
+  for voice = 1, #envelope do
+    assert_equal(pairs_found[voice][1], envelope[voice][1], "voice " .. voice .. " attack")
+    assert_equal(pairs_found[voice][2], envelope[voice][2], "voice " .. voice .. " release")
+  end
+  local a_lo, a_hi = text:match("attackTimeRange { %^#%[([%d%.]+), ([%d%.]+)%] }")
+  local r_lo, r_hi = text:match("releaseTimeRange { %^#%[([%d%.]+), ([%d%.]+)%] }")
+  local a_min, a_max = param_range("v1_attack")
+  local r_min, r_max = param_range("v1_release")
+  assert_equal(tonumber(a_lo), a_min); assert_equal(tonumber(a_hi), a_max)
+  assert_equal(tonumber(r_lo), r_min); assert_equal(tonumber(r_hi), r_max)
+end)
+
 end

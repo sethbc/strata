@@ -711,7 +711,11 @@ test("every registered scene default equals its param's default", function()
     for key, default in pairs(record.scene_defaults or {}) do
       for voice_idx = 1, S.constants.NUM_VOICES do
         local param_id = "v" .. voice_idx .. "_" .. key
-        assert_equal(param_default(param_id), default, record.name .. ": " .. param_id)
+        -- the envelope times default to each voice's own (lib/notes.lua's
+        -- scene default is voice 1's, its migration fills the rest)
+        local envelope = record.name == "notes" and (key == "attack" or key == "release")
+          and S.lib.notes.NOTES.envelope[voice_idx][key == "attack" and 1 or 2]
+        assert_equal(param_default(param_id), envelope or default, record.name .. ": " .. param_id)
       end
     end
   end

@@ -31,7 +31,13 @@ return function(S)
     expression_keys = {"bend", "amp", "position", "size", "main"},
     neutral = {bend = 1, amp = 1, position = 0, size = 0, main = 0},
     expression_ranges = {bend = {0.0625, 16}, amp = {0, 2}, position = {-1, 1}, size = {-1, 1}, main = {-1, 1}},
-    cap = {key = "note_cap", name = "note cap", section = "notes", before = "variation"}}
+    cap = {key = "note_cap", name = "note cap", section = "notes", before = "variation"},
+    -- each voice's {attack, release} (s): its def's times, which the engine
+    -- plays when no param says otherwise (a docs test compares them), and
+    -- the engine's ranges (voiceEnvelope clips to them)
+    envelope = {{4, 8}, {5, 10}, {3, 6}, {8, 12}, {2, 4}, {0.01, 2}, {3, 5}},
+    envelope_ranges = {attack = {0.005, 30}, release = {0.01, 30}},
+    envelope_keys = {"attack", "release"}, envelope_engine = {attack = "attackTime", release = "releaseTime"}}
   M.NOTES = NOTES
 
   -- The pool notes.data holds (nil: none read or set, the tier's default)
@@ -532,19 +538,37 @@ return function(S)
   -- under held notes keeps them. VOICE's layout tests and renders draw its
   -- row under the cursor on every voice
   local cap_layout_states = {}
-  for voice = 1, NUM_VOICES do
+  local function add_layout_state(voice, key, name)
     table.insert(cap_layout_states, {
-      name = string.format("v%d %s", voice, NOTES.cap.name),
+      name = string.format("v%d %s", voice, name),
       setup = function()
         S.selected_voice = voice
-        S.lib.pages_voice.place_cursor(S.lib.pages_voice.row_of("v" .. voice .. "_" .. NOTES.cap.key))
+        S.lib.pages_voice.place_cursor(S.lib.pages_voice.row_of("v" .. voice .. "_" .. key))
       end,
     })
+  end
+  for voice = 1, NUM_VOICES do
+    add_layout_state(voice, NOTES.cap.key, NOTES.cap.name)
+    for _, key in ipairs(NOTES.envelope_keys) do add_layout_state(voice, key, key) end
+  end
+
+  -- The envelope times (v<i>_attack, v<i>_release, seconds, exponential,
+  -- default the voice def's): voice params the engine takes with
+  -- setVoiceParam (attackTime, releaseTime), not grain params. They are
+  -- scene fields (a crossfade), and no randomize draws them. voiceOn resets
+  -- them: a start sends both after it (the grain-restart hook below), a
+  -- sync of a running voice through the record's sync, a turn through the
+  -- sender (running voices only)
+  local function send_envelope(voice)
+    local extras = S.voices[voice].extras
+    for _, key in ipairs(NOTES.envelope_keys) do
+      engine.setVoiceParam(voice - 1, NOTES.envelope_engine[key], extras[key])
+    end
   end
   local cap_record
   cap_record = {
     name = "notes",
-    count = 1,
+    count = 1 + #NOTES.envelope_keys,
     add = function(voice)
       S.lib.params_setup.add_voice_extra(voice, cap_record, NOTES.cap.key, {
         type = "number", name = NOTES.cap.name, min = 1, max = NOTE_SLOTS, default = NOTE_SLOTS,
@@ -552,12 +576,52 @@ return function(S)
         formatter = function(param) return tostring(param:get()) end,
         action = function() update_lowered(voice) end,
       })
+      for index, key in ipairs(NOTES.envelope_keys) do
+        local range = NOTES.envelope_ranges[key]
+        S.lib.params_setup.add_voice_extra(voice, cap_record, key, {
+          type = "control", name = key,
+          controlspec = controlspec.new(range[1], range[2], "exp", 0, NOTES.envelope[voice][index], "s"),
+        })
+        S.lib.engine_sync.add_voice_sender(voice, "v" .. voice .. "_" .. key, function(value)
+          engine.setVoiceParam(voice - 1, NOTES.envelope_engine[key], value)
+        end)
+      end
     end,
-    voice_rows = {section = NOTES.cap.section, rows = {NOTES.cap.key}, before = NOTES.cap.before},
+    -- a running voice's sync (a start sends them after voiceOn instead)
+    sync = function(voice)
+      if S.voices[voice].active then send_envelope(voice) end
+    end,
+    -- voice 1's values: a scene older than 3.5 gets each voice's own from
+    -- the migration below, which runs before migrate_scene fills the rest
+    scene_defaults = {attack = NOTES.envelope[1][1], release = NOTES.envelope[1][2]},
+    scene_ranges = {attack = NOTES.envelope_ranges.attack, release = NOTES.envelope_ranges.release},
+    voice_rows = {section = NOTES.cap.section, rows = {NOTES.cap.key, "attack", "release"}, before = NOTES.cap.before},
     layout_states = cap_layout_states,
     fader = false,
   }
   S.register_voice_params(cap_record)
+
+  -- After voiceOn (which resets them), every start and every source change
+  -- of a running voice sends both times
+  S.register_grain_restart(send_envelope)
+
+  -- A scene older than 3.5 recalls each voice's own default times (the
+  -- record's scene_defaults are voice 1's). Fills only what is missing
+  S.register_scene_migration({name = "notes envelope", before_version = 7, migrate = function(scene)
+    local voices = type(scene.data) == "table" and scene.data.voices
+    if type(voices) ~= "table" then return end
+    for voice = 1, NUM_VOICES do
+      local voice_data = voices[voice]
+      if type(voice_data) == "table" then
+        if voice_data.extras == nil then voice_data.extras = {} end
+        if type(voice_data.extras) == "table" then
+          for index, key in ipairs(NOTES.envelope_keys) do
+            if voice_data.extras[key] == nil then voice_data.extras[key] = NOTES.envelope[voice][index] end
+          end
+        end
+      end
+    end
+  end})
 
   -- The start step: read notes.data (parsed, never run). A version
   -- NOTES.version file whose pool is a whole number in 0..NOTE_POOL.max
