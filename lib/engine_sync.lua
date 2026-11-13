@@ -509,9 +509,16 @@ return function(S)
   end
 
   -- The voice-stop hooks (S.registry.voice_stop, 3.5), run after each
-  -- engine.voiceOff the script sends, with the voice
+  -- engine.voiceOff the script sends, with the voice. Each is protected,
+  -- as the LFO step hooks are: one that raises is printed with its
+  -- traceback once per distinct message per hook (contained_call) and the
+  -- next still runs, so no hook breaks a stop (its redraws, a failed
+  -- start's own error, the other voices' voiceOffs and later cleanup steps)
+  local voice_stop_errors = {}
   local function run_voice_stop_hooks(voice_idx)
-    for _, hook in ipairs(S.registry.voice_stop) do hook(voice_idx) end
+    for index, hook in ipairs(S.registry.voice_stop) do
+      S.lib.ui_frame.contained_call(voice_stop_errors, index, "voice stop hook", hook, voice_idx)
+    end
   end
 
   function toggle_voice(voice_idx)

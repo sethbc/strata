@@ -1218,6 +1218,69 @@ test("every voice stop runs the voice-stop hooks", function()
   assert_equal(table.concat(stopped, " "), table.concat(running, " "), "once per running voice")
 end)
 
+-- A voice-stop hook that raises is reported (once per distinct message) and
+-- skipped: every stop still completes and the other hooks still run
+test("a raising voice-stop hook is reported and skipped on every stop path", function()
+  local log, failing_start, later_step_ran = {}, false, false
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_voice_stop(function(voice_idx) error("stop hook boom " .. voice_idx) end)
+    S.register_voice_stop(function(voice_idx) log[#log + 1] = voice_idx end)
+    S.register_grain_restart(function(voice_idx)
+      if failing_start and voice_idx == 4 then error("start failed") end
+    end)
+    -- a cleanup step after the voices' (160)
+    S.register_cleanup(S.constants.CLEANUP_ORDER.voices_off + 15, function() later_step_ran = true end)
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  local redraws = {}
+  local real = { update_voice_list = update_voice_list, request_redraw = request_redraw, grid_redraw = grid_redraw }
+  for name, fn in pairs(real) do
+    _G[name] = function(...) redraws[#redraws + 1] = name; return fn(...) end
+  end
+  -- toggle_voice's stop: the voice stops and everything redraws
+  toggle_voice(3)
+  redraws = {}
+  local stopped, stop_error = pcall(toggle_voice, 3)
+  for name, fn in pairs(real) do _G[name] = fn end
+  assert_true(stopped, "the stop completes: " .. tostring(stop_error))
+  assert_equal(S.voices[3].active, false, "the voice is stopped")
+  assert_equal(table.concat(log, " "), "3", "the good hook still runs")
+  table.sort(redraws)
+  assert_equal(table.concat(redraws, " "), "grid_redraw request_redraw update_voice_list", "the list, screen and grid redraw")
+  h.claim_script_errors(context, 1, "strata: voice stop hook failed: ", "stop hook boom 3")
+  -- the same error again is not printed again
+  toggle_voice(3); toggle_voice(3)
+  assert_equal(table.concat(log, " "), "3 3")
+  assert_equal(#context.take_script_errors(), 0, "a hook's same error is reported once")
+  -- a start that failed: its own error is the one raised
+  failing_start = true
+  local started, start_error = pcall(toggle_voice, 4)
+  failing_start = false
+  assert_true(not started, "the start raises")
+  assert_true(tostring(start_error):find("start failed", 1, true) ~= nil, "its own error: " .. tostring(start_error))
+  assert_true(tostring(start_error):find("stop hook boom", 1, true) == nil, "not the hook's")
+  assert_equal(table.concat(log, " "), "3 3 4", "the good hook still runs")
+  h.claim_script_errors(context, 1, "strata: voice stop hook failed: ", "stop hook boom 4")
+  -- cleanup's stop of every voice: every voiceOff goes and the later steps run
+  local running = {}
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    if S.voices[voice_idx].active then running[#running + 1] = voice_idx end
+  end
+  assert_true(#running >= 2, "voices 1 and 2 run")
+  log = {}
+  context.clear_engine_calls()
+  local cleaned, cleanup_error = pcall(cleanup)
+  assert_true(cleaned, "cleanup completes: " .. tostring(cleanup_error))
+  local offs = {}
+  for _, call in ipairs(context.calls_named("voiceOff")) do offs[#offs + 1] = call.args[1] + 1 end
+  assert_equal(table.concat(offs, " "), table.concat(running, " "), "a voiceOff for every running voice")
+  assert_equal(table.concat(log, " "), table.concat(running, " "), "the good hook runs for each")
+  assert_true(later_step_ran, "the cleanup steps after the voices' still run")
+  h.claim_script_errors(context, #running, "strata: voice stop hook failed: ", "stop hook boom " .. running[#running])
+end)
+
 -- count_sends (design §6.4): messages sent outside the budget's own path
 -- (the notes' sends) count in the current window, and are never deferred
 test("count_sends enters direct sends in the budget's window", function()
