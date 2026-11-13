@@ -428,11 +428,12 @@ check.(engine.respondsTo(\writeGenerations) and: { engine.writeGenerations[saveP
 info = tempFloatFiles.value - tempFilesBefore;
 check.(info.isEmpty, "a failed write leaves no temporary float files (new: %)".format(info.asArray));
 checkStaleParts.value;
-// alloc runs every area's allocState: the files area's calls it
+// alloc runs every area's allocState: the files area's calls it, through
+// areaCall as every hook does (#211)
 file = Engine_Strata.findMethod(\strataAreaFiles);
 data = File.readAllString(file.filenameSymbol.asString);
 data = data.copyRange(file.charPos, data.find("\n    }", offset: file.charPos) ? (data.size - 1));
-check.(data.contains("this.deleteStaleParts"), "alloc calls deleteStaleParts");
+check.(data.contains("this.areaCall(\\deleteStaleParts)"), "alloc calls deleteStaleParts, through areaCall");
 // A scratchDir with no directory part has no parent to clean: the
 // working directory's .part files are left alone
 info = [engine.scratchDir, File.getcwd +/+ ("strata-engine-check-" ++ Date.getDate.stamp ++ ".part")];

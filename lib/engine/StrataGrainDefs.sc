@@ -23,8 +23,8 @@
     strataAreaGrains {
         ^(
             order: 30,
-            allocState: { this.allocEnvelopeBuffers },
-            addDefs: { this.addGrainDefs; [\strataGrainRing, \strataGrainBuf] },
+            allocState: { this.areaCall(\allocEnvelopeBuffers) },
+            addDefs: { this.areaCall(\addGrainDefs); [\strataGrainRing, \strataGrainBuf] },
             // A buffer slot's voice reads it with strataGrainBuf; the synth
             // and input sources read their ring with strataGrainRing (the
             // first match wins)
@@ -55,7 +55,7 @@
                     true
                 }
             ),
-            free: { this.freeEnvelopeBuffers }
+            free: { this.areaCall(\freeEnvelopeBuffers) }
         )
     }
 
@@ -128,7 +128,7 @@
                 fastMod: m, noteRate: noteRate, noteSize: noteSize, noteBend: noteBend,
                 noteGate: noteGate, noteAmp: noteAmp, velocity: velocity, t_accent: t_accent
             );
-            this.grainBody(controls, this.ringGrainReader(bufL, bufR, phaseBus, posSpread, history, bufScan, freeze));
+            this.grainBody(controls, this.areaCall(\ringGrainReader, bufL, bufR, phaseBus, posSpread, history, bufScan, freeze));
         }).add;
 
         // Granular processor for a buffer slot (bufnumL/R). bufPos (0-1) and
@@ -169,7 +169,7 @@
                 fastMod: m, noteRate: 1, noteSize: noteSize, noteBend: noteBend,
                 noteGate: noteGate, noteAmp: noteAmp, velocity: velocity, t_accent: t_accent
             );
-            this.grainBody(controls, this.slotGrainReader(bufnumL, bufnumR, bufFrames, bufRateScale, this.fastModPosition(bufPos, m, notePos),
+            this.grainBody(controls, this.areaCall(\slotGrainReader, bufnumL, bufnumR, bufFrames, bufRateScale, this.fastModPosition(bufPos, m, notePos),
                 bufRate, bufScan, posSpread, freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus));
         }).add;
     }

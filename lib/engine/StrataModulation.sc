@@ -68,12 +68,12 @@
     strataAreaModulation {
         ^(
             order: 160,
-            allocState: { this.allocFastModulation },
-            addDefs: { this.addFastModDefs; [] },
-            addCommands: { this.addFastModCommands },
-            start: { this.startFastModulation },
-            stop: { this.stopFastModulation },
-            free: { this.freeFastModBuses },
+            allocState: { this.areaCall(\allocFastModulation) },
+            addDefs: { this.areaCall(\addFastModDefs); [] },
+            addCommands: { this.areaCall(\addFastModCommands) },
+            start: { this.areaCall(\startFastModulation) },
+            stop: { this.areaCall(\stopFastModulation) },
+            free: { this.areaCall(\freeFastModBuses) },
             effectKeys: [this.fastOffsetsKey],
             // The stage's gate and mute (design 3.4 §8.12, §8.14), as the mix
             // area's filter and send params: kept with the voice's grain

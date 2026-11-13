@@ -55,7 +55,7 @@
     strataAreaPerformance {
         ^(
             order: 10,
-            allocState: { this.allocPerformance }
+            allocState: { this.areaCall(\allocPerformance) }
         )
     }
 

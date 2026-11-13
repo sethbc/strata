@@ -27,9 +27,9 @@
     strataAreaNotes {
         ^(
             order: 170,
-            allocState: { this.allocNoteState },
-            addCommands: { this.addNoteCommands },
-            stop: { this.stopNotes }
+            allocState: { this.areaCall(\allocNoteState) },
+            addCommands: { this.areaCall(\addNoteCommands) },
+            stop: { this.areaCall(\stopNotes) }
         )
     }
 
