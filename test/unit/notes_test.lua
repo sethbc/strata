@@ -463,6 +463,85 @@ test("release: an extra note gets noteOff; the own note parks only under others 
   assert_equal(notes.held(5), 1); assert_equal(notes.find(5, "seq", 2), 2)
 end)
 
+-- Ruling 39: a running voice with no held note never keeps its own note
+-- parked. Voice 1's freq is 100 Hz: note 43.35, rate 0.3822 (60 at 1)
+test("a parked own note returns, unaccented, when the voice's last held note ends", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  play(context, 1, 1, 60); play(context, 1, 2, 64); play(context, 1, 3, 67, { owner = "seq" })
+  notes.release(1, "midi", 1)
+  assert_equal(notes.slots(1)[1].parked, true, "the own note parked")
+  context.clear_engine_calls()
+  notes.release(1, "midi", 2)
+  assert_equal(table.concat(calls(context), " "), "noteOff(0, 1, 0)", "another note still held: nothing more")
+  assert_equal(notes.slots(1)[1].parked, true, "still parked")
+  context.clear_engine_calls()
+  notes.release(1, "seq", 3)
+  assert_equal(table.concat(calls(context), " "), "noteOff(0, 2, 0) noteOn(0, 0, 43.35, 100, 0.3822, 0)",
+    "the last note ends: the own note returns at the voice's pitch, velocity 0")
+  local own = notes.slots(1)[1]
+  assert_true(own == nil or not own.parked, "no longer parked")
+  assert_equal(notes.held(1), 0); assert_true(S.voices[1].active, "the voice sounds on as its drone")
+  -- the same through release_owner and a steal: no running voice is left parked with nothing held
+  play(context, 2, 1, 60); play(context, 2, 2, 64)
+  notes.release(2, "midi", 1)
+  context.clear_engine_calls()
+  notes.release_owner(2, "midi")
+  assert_equal(table.concat(calls(context), " "), "noteOff(1, 1, 0) noteOn(1, 0, 39.4868, 80, 0.3058, 0)")
+  -- a stopped voice's parked note is forgotten with it, nothing sent
+  play(context, 1, 4, 60); play(context, 1, 5, 64); notes.release(1, "midi", 4)
+  context.clear_engine_calls()
+  toggle_voice(1)
+  assert_equal(#context.calls_named("noteOn"), 0, "a stop unparks nothing")
+end)
+
+test("a steal that takes a voice's last held note returns its parked own note", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  notes.set_pool(1)
+  play(context, 1, 1, 60); play(context, 1, 2, 64)
+  notes.release(1, "midi", 1)                     -- voice 1: own parked under its one extra note
+  play(context, 2, 1, 60)
+  later(context, 1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 2, 2, 67), 2, "voice 2's new note takes the pool")
+  local sent = table.concat(calls(context), " ")
+  assert_true(sent:find("noteOff(0, 1, 1) noteOn(0, 0, 43.35, 100, 0.3822, 0)", 1, true) == 1,
+    "the steal, then voice 1's own note back: " .. sent)
+  local own = notes.slots(1)[1]
+  assert_true(own == nil or not own.parked, "voice 1 is not left parked")
+end)
+
+-- Ruling 40: forget_owner drops an owner's notes from a voice without
+-- parking anything
+test("forget_owner releases the owner's extra notes, drops its own note silently and leaves other owners' notes", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  play(context, 1, 1, 60); play(context, 1, 2, 64); play(context, 1, 3, 67, { owner = "seq" })
+  context.clear_engine_calls()
+  notes.forget_owner(1, "midi")
+  assert_equal(table.concat(calls(context), " "), "noteOff(0, 1, 0)", "the extra note released, nothing for slot 1")
+  for _, used in ipairs(notes.slots(1)) do
+    assert_true(used.owner ~= "midi", "no MIDI note left in slot " .. used.slot)
+    assert_true(not used.parked, "nothing parked")
+  end
+  assert_equal(notes.find(1, "seq", 3), 3, "the sequencer's note stays"); assert_equal(notes.held(1), 1)
+  assert_true(S.voices[1].active)
+  -- the own note alone: nothing sent, and slot 1 is free for the next note
+  play(context, 2, 1, 60)
+  context.clear_engine_calls()
+  notes.forget_owner(2, "midi")
+  assert_equal(#context.engine_calls, 0, "nothing sent"); assert_equal(#notes.slots(2), 0)
+  assert_equal(play(context, 2, 1, 62), 1, "the next note takes slot 1")
+  -- another owner, a bad voice: nothing
+  context.clear_engine_calls()
+  notes.forget_owner(2, "seq"); notes.forget_owner(9, "midi")
+  assert_equal(#context.engine_calls, 0); assert_equal(notes.held(2), 1)
+end)
+
 test("a parked own note is the first choice for the next note", function()
   local context = load_strata()
   local S = started(context)

@@ -287,6 +287,31 @@ return function(S)
     }
   end
 
+  -- The voice's own pitch now, as a fractional MIDI note: a synth voice's
+  -- freq, a buffer voice's rate, an input voice's grain pitch (rate 1 at
+  -- NOTES.rate_root_note), each as the engine plays it (a step's override
+  -- included)
+  local function own_pitch(voice)
+    if voice_uses_synth(voice) then return freq_note(voice) end
+    local key = voice_uses_buffer(voice) and "buf_rate" or "grain_pitch"
+    local rate = S.lib.engine_sync.engine_base_value("v" .. voice .. "_" .. key)
+    return NOTES.rate_root_note + 12 * math.log(rate) / math.log(2)
+  end
+
+  -- Ruling 39: a running voice with no held note never keeps its own note
+  -- parked. When a release, a steal or a freeze's cuts end a voice's last
+  -- held note under its parked own note, the own note returns at once, at
+  -- the voice's pitch and with no accent (velocity 0), and its record goes:
+  -- the voice sounds on as its drone, nobody's note
+  local function unpark_alone(voice, now)
+    local own = slots[voice][1]
+    if not (own and own.parked and S.voices[voice].active) or M.held(voice) > 0 then return end
+    local values = M.note_values(voice, own_pitch(voice))
+    engine.noteOn(voice - 1, 0, values.note, values.freq, values.rate, 0)
+    count(1)
+    forget(own, now)
+  end
+
   -- Slot 1 (branches 1, 2 and 6), one rule for both kinds of play: the
   -- player pitches the own note (set_own); unless quiet, a stopped voice
   -- starts and the note's expression goes when the engine's differs (quiet:
@@ -403,6 +428,7 @@ return function(S)
           count(1)
           forget(victim, now)
           update_lowered(victim.voice)
+          unpark_alone(victim.voice, now)  -- ruling 39: the victim's voice may hold nothing now
         else
           free = nil
         end
@@ -425,15 +451,19 @@ return function(S)
   end
 
   -- End voice's held note of owner and key: noteOff (a release) for an
-  -- extra note; the own note parks (noteOff on slot 0) when it asked to and
-  -- another note is held, and otherwise sends nothing. true when a note ended
+  -- extra note (and, when it was the voice's last held note, its parked own
+  -- note returns, ruling 39); the own note parks (noteOff on slot 0) when it
+  -- asked to and another note is held, and otherwise sends nothing. true
+  -- when a note ended
   local function release_slot(voice, slot)
     local record = slots[voice][slot]
     if slot > 1 then
+      local now = util.time()
       engine.noteOff(voice - 1, slot - 1, 0)
       count(1)
-      forget(record, util.time())
+      forget(record, now)
       update_lowered(voice)
+      unpark_alone(voice, now)
     elseif record.park and others_held(voice) then
       engine.noteOff(voice - 1, 0, 0)
       count(1)
@@ -461,6 +491,25 @@ return function(S)
     for _, slot in ipairs(order) do
       local record = slots[voice][slot]
       if record and record.held and record.owner == owner then release_slot(voice, slot) end
+    end
+  end
+
+  -- Ruling 40: owner lets go of voice without parking anything. Its held
+  -- extra notes are released (noteOff), and its held own note is dropped
+  -- from the records with nothing sent: the own note keeps sounding and is
+  -- simply no longer the owner's. An own note it parked earlier stays
+  -- parked under the other owners' notes and returns when the voice's last
+  -- note ends (ruling 39)
+  function M.forget_owner(voice, owner)
+    if not whole_in(voice, 1, NUM_VOICES) then return end
+    for slot = 2, NOTE_SLOTS do
+      local record = slots[voice][slot]
+      if record and record.held and record.owner == owner then release_slot(voice, slot) end
+    end
+    local own = slots[voice][1]
+    if own and own.held and own.owner == owner then
+      forget(own, util.time())
+      held_changed()
     end
   end
 
@@ -722,6 +771,7 @@ return function(S)
       if cut > 0 then
         update_lowered(voice)
         held_changed()
+        unpark_alone(voice, now)  -- ruling 39: the cuts may have taken the voice's last held note
       end
     end
     S.lib.variation.send_scale_note(voice, S.lib.engine_sync.engine_base_value("v" .. voice .. "_freq"))
@@ -747,7 +797,8 @@ return function(S)
   -- under its cap unless it was lowered under them; a stopped voice holds no
   -- extra note, and its slot 1 at most a held quiet note awaiting its
   -- caller's start; a voice holds each owner and key once (so slot 1's
-  -- holder is one owner and key)
+  -- holder is one owner and key); a running voice with no held note keeps
+  -- no parked own note (ruling 39)
   S.register_invariant("notes", function()
     local pool = M.pool()
     if not whole_in(pool, 0, NOTE_POOL.max) then
@@ -767,6 +818,9 @@ return function(S)
           end
           if slot > note_cap(voice) and not lowered[voice] then
             return "voice " .. voice .. " holds slot " .. slot .. " past its cap of " .. note_cap(voice)
+          end
+          if record.parked and S.voices[voice].active and M.held(voice) == 0 then
+            return "running voice " .. voice .. " holds no note but keeps its own note parked"
           end
           for _, other in ipairs(held) do
             if record.held and other.owner == record.owner and other.key == record.key then
