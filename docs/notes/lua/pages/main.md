@@ -2,7 +2,7 @@
 
 - MAIN is found by index (`S.ui_page == UI_PAGES.index.MAIN`), never by its title string.
 - No MAIN string between the header and the hint row crosses the divider at x=62: it ends by x=60 or starts at x=65 (the layout tests check it for every voice, source, lock and running state, and the fields at their widest values).
-- Every voice-list entry is plain ASCII and at most `7+ pulse [L]` wide (59 px by the harness estimate, so it ends by x=60); a voice type's `MAIN_PARAMS[type].list_name` has at most 5 characters.
+- Every voice-list entry is plain ASCII and at most `5+ pulse [L]` wide (49 px as the harness measures with norns' own advances, 11 px inside the 60 px bound, so it ends by x=60); a voice type's `MAIN_PARAMS[type].list_name` has at most 5 characters.
 - The voice list never scrolls past an end: `place_voice_list()` sets `num_above_selected` to 0 for the first voice, 2 for the last and 1 otherwise, on every `update_voice_list()` and every draw (the selection can move without `update_voice_list`).
 - The main parameter comes from `main_param_entry(voice_idx)` (`MAIN_PARAMS`, `BUFFER_MAIN_PARAM`, `INPUT_MAIN_PARAM`), never from an `if v.name ==` chain. E3, arc ring 2 and the details column all use it. The three fields come from `main_fields(voice_idx)`; E3 edits `main_fields(S.selected_voice)[S.main_field]` through `enc_param_delta`.
 - K3 and MAIN's `arc_button` are the same function (`start_stop_selected_voice`): start or stop, never lock, never fire a triggered grain.
