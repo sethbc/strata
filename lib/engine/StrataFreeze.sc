@@ -39,9 +39,9 @@
             addDefs: { this.areaCall(\addFreezeDefs); [] },
             grainParamHandlers: (
                 freeze: { arg voice, value;
-                    if (value > 0.5) { this.freezeVoice(voice); false } { this.unfreezeWithControl(voice, value); true }
+                    if (value > 0.5) { this.areaCall(\freezeVoice, voice); false } { this.areaCall(\unfreezeWithControl, voice, value); true }
                 },
-                freezeMode: { arg voice, value; this.setFreezeMode(voice, value); false }
+                freezeMode: { arg voice, value; this.areaCall(\setFreezeMode, voice, value); false }
             ),
             stop: { areaState[\freeze][\stopped] = true; this.areaCall(\stopCopyWriters) },
             free: { this.areaCall(\freeSpectralBuffers) },

@@ -598,7 +598,7 @@
                 and: { this.fastModValuesFinite(\setScatter, [[\depth, msg[1]], [\rate, msg[2]]]) }) {
                 depth = msg[1].clip(0, 1); rate = msg[2].clip(0.01, 1);
                 this.receiveFastMod(\setScatter, [depth, rate, destinations, voices]);
-                this.setScatter(depth, rate, destinations, voices);
+                this.areaCall(\setScatter, depth, rate, destinations, voices);
             };
         });
 
