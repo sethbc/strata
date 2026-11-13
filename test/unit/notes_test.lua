@@ -496,6 +496,30 @@ test("a parked own note returns, unaccented, when the voice's last held note end
   assert_equal(#context.calls_named("noteOn"), 0, "a stop unparks nothing")
 end)
 
+test("a returning own note returns neutral: its expression is reset first when it is not", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  -- the own note played bent and loud (an MPE finger), parked under an extra note
+  play(context, 1, 1, 60, { expression = { bend = 1.5, amp = 1.5 } }); play(context, 1, 2, 64)
+  notes.release(1, "midi", 1)
+  context.clear_engine_calls()
+  notes.release(1, "midi", 2)
+  assert_equal(table.concat(calls(context), " "),
+    "noteOff(0, 1, 0) noteExpression(0, 0, 1, 1, 0, 0, 0) noteOn(0, 0, 43.35, 100, 0.3822, 0)",
+    "the neutral expression goes before the velocity-0 noteOn")
+  -- stored as neutral: a later neutral note on slot 1 sends no expression
+  context.clear_engine_calls()
+  play(context, 1, 3, 62)
+  assert_equal(#context.calls_named("noteExpression"), 0, "the slot is neutral already")
+  -- a neutral own note: only the noteOn
+  play(context, 2, 1, 60); play(context, 2, 2, 64)
+  notes.release(2, "midi", 1)
+  context.clear_engine_calls()
+  notes.release(2, "midi", 2)
+  assert_equal(table.concat(calls(context), " "), "noteOff(1, 1, 0) noteOn(1, 0, 39.4868, 80, 0.3058, 0)")
+end)
+
 test("a steal that takes a voice's last held note returns its parked own note", function()
   local context = load_strata()
   local S = started(context)
