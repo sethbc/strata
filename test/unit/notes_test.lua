@@ -82,7 +82,7 @@ test("an unreadable or wrong-version notes.data gives the default and one line",
   local cases = {
     "return {", "ran_notes_data = true return {}", { version = 2, pool = 3 }, { version = 1, pool = 17 },
     { version = 1, pool = -1 }, { version = 1, pool = 2.5 }, { version = 1, pool = "3" }, { version = 1 },
-    { version = 1, pool = math.huge }, { 5 },
+    { version = 1, pool = math.huge }, { pool = 3 },  -- the last: a pool but no version
   }
   for index, case in ipairs(cases) do
     local context = load_strata({ before_init = with_notes_file(case) })
