@@ -1191,11 +1191,8 @@ end)
 -- #581: a full run on 3.13 is CI's shards, each in a fresh sclang, read from
 -- the workflow at each start; -l prints them and starts nothing
 test("the 3.13 runner's shard list is the workflow's", function()
-  local workflow = read_repo_file(".github/workflows/test.yml")
-  local block = workflow:match("\n%s*areas:%s*\n(.-)\n%s*env:")
-  assert_true(block ~= nil, "the engine-shard matrix lists its areas")
-  local expected = {}
-  for shard in block:gmatch("%-%s*([%w,]+)") do expected[#expected + 1] = shard end
+  local expected = h.workflow_shards()
+  assert_true(expected ~= nil, "the engine-shard matrix lists its areas")
   assert_true(#expected >= 2, "the workflow has shards")
   local pipe = io.popen("cd " .. h.shell_quote(repo_root) .. " && /bin/sh test/run_engine_check_313.sh -l 2>&1; echo exit=$?")
   local output = pipe:read("*a")
@@ -1237,9 +1234,7 @@ test("every doc that counts CI's engine shards counts the workflow's (#582)", fu
   local found = {}
   for _, entry in ipairs(sample) do found[#found + 1] = entry.count end
   assert_equal(table.concat(found, " "), "7 4 3", "the counts a doc can quote are found, and only those")
-  local block = read_repo_file(".github/workflows/test.yml"):match("\n%s*areas:%s*\n(.-)\n%s*env:")
-  local shards = 0
-  for _ in block:gmatch("%-%s*([%w,]+)") do shards = shards + 1 end
+  local shards = #h.workflow_shards()
   for _, path in ipairs(maintained_docs()) do
     for _, entry in ipairs(shard_counts(read_repo_file(path))) do
       assert_equal(entry.count, shards, path .. " says \"" .. entry.word .. " shards\"; the workflow has " .. shards)
