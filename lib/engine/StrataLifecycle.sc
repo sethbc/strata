@@ -56,8 +56,12 @@
     // A strataGrainRing is kept in ringReaders (and, reading a frozen input
     // voice's copy, in the freeze area's inputReaders) and a strataGrainBuf
     // in grainSlots (with its slot, so a slot change reaches it in its
-    // release too: bufferChanged) until it frees.
-    startGrainSynth { arg voice, target, addAction;
+    // release too: bufferChanged) until it frees. An extra note's grain
+    // synth (3.5, the notes area's startNoteSynth) is this with the note's
+    // controls (notePairs, last so they win) and its own watcher (watch, a
+    // function of the new synth returning it): nil for the voice's own grain
+    // synth, watched by watchVoiceSynth.
+    startGrainSynth { arg voice, target, addAction, notePairs, watch;
         var source = grainSource[voice];
         var defName = this.grainDefFor(voice);
         var args = [\out, this.voicePathBus(voice, source)], synth;
@@ -69,8 +73,8 @@
         }
         { source == this.inputSource } { args = args ++ [\rateLevel, 1] }
         { args = args ++ [\rateLevel, 1] ++ this.bufferSlotPairs(voice) };
-        synth = this.watchVoiceSynth(voice, this.grainKey(voice),
-            Synth(defName, args ++ this.grainControlPairs(voice), target, addAction));
+        synth = Synth(defName, args ++ this.grainControlPairs(voice) ++ (notePairs ? []), target, addAction);
+        synth = if (watch.notNil) { watch.value(synth) } { this.watchVoiceSynth(voice, this.grainKey(voice), synth) };
         case
         { defName == \strataGrainBuf } { grainSlots[synth] = source - 1 }
         { defName == \strataGrainRing } {
@@ -190,23 +194,12 @@
     // runs, the synth is kept in unconfirmedStarts with its start time: one
     // whose /s_new failed never sends /n_go or /n_end (startFailed, #497).
     watchVoiceSynth { arg voice, key, synth;
-        var unconfirmed = this.unconfirmedStarts, confirm;
-        synth.register(true);  // playing from now on, so gateVoice can re-gate it at once
-        // (isPlaying only once NodeWatcher watches it: only then can a /n_go come)
-        if (synth.isPlaying) {
-            unconfirmed[synth] = Main.elapsedTime;
-            confirm = { arg node, what;
-                if ((what == \n_go) or: { what == \n_end }) { unconfirmed.removeAt(node); node.removeDependant(confirm) };
-            };
-            synth.addDependant(confirm);
-        };
+        this.watchStart(synth);
         synth.onFree({
             if (releasingSynths[voice][key] === synth) { releasingSynths[voice].removeAt(key) };
             fadingSynths[voice].remove(synth);
             cuttingSynths[voice].remove(synth);
-            grainSlots.removeAt(synth);
-            this.ringReaders.removeAt(synth);
-            this.forgetInputReader(synth);
+            this.forgetGrainReader(synth);
             if (synths[key] === synth) {
                 synths.removeAt(key);
                 case
@@ -218,6 +211,31 @@
             };
         });
         ^synth
+    }
+
+    // A new synth playing from now on (register(true), so gateVoice can
+    // re-gate it at once; isPlaying only once NodeWatcher watches it: only
+    // then can a /n_go come), and kept in unconfirmedStarts with its start
+    // time until its /n_go (or /n_end): every voice, grain and mod synth's
+    // and every note synth's (#497)
+    watchStart { arg synth;
+        var unconfirmed = this.unconfirmedStarts, confirm;
+        synth.register(true);
+        if (synth.isPlaying) {
+            unconfirmed[synth] = Main.elapsedTime;
+            confirm = { arg node, what;
+                if ((what == \n_go) or: { what == \n_end }) { unconfirmed.removeAt(node); node.removeDependant(confirm) };
+            };
+            synth.addDependant(confirm);
+        };
+    }
+
+    // A grain synth that frees reads nothing: it leaves grainSlots,
+    // ringReaders and the freeze area's inputReaders
+    forgetGrainReader { arg synth;
+        grainSlots.removeAt(synth);
+        this.ringReaders.removeAt(synth);
+        this.forgetInputReader(synth);
     }
 
     // Seconds a new synth has for the server's /n_go (a reply within a

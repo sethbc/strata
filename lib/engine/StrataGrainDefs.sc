@@ -40,17 +40,18 @@
                     var bufnum = this.envBufnumFor(value.round.asInteger);
                     if (bufnum.notNil) {
                         grainControls[voice][\envBuf] = bufnum;
-                        this.setSynth(this.grainKey(voice), \envBuf, bufnum);
+                        this.setGrainSynths(voice, \envBuf, bufnum);
                     };
                     true
                 },
                 // history (s back from the input ring's head) is kept for
                 // every voice but reaches only an input voice's grain synth:
                 // the synth source reads its own 4 s ring at history 0
-                // (grainControlPairs)
+                // (grainControlPairs). Both reach the voice's extra notes too
+                // (setGrainSynths)
                 history: { arg voice, value;
                     grainControls[voice][\history] = value;
-                    if (grainSource[voice] == this.inputSource) { this.setSynth(this.grainKey(voice), \history, value) };
+                    if (grainSource[voice] == this.inputSource) { this.setGrainSynths(voice, \history, value) };
                     true
                 }
             ),
