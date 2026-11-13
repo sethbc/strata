@@ -428,6 +428,283 @@ var checkVoiceParamSends = { arg voice;
         "voices: setVoiceParam pan sends a buffer voice's grain synth one /n_set with pan (#501; sent %)".format(panSent));
 };
 
+// 3.5's note controls (design 3.5 §3.2, §3.5): noteGate (the own note's
+// park), noteBend, noteAmp and noteMain in every voice SynthDef, and the
+// ASR's times as the controls attackTime and releaseTime. Their defaults
+// play 3.4's sound: the area's own output checks (the Resonator's level and
+// ceiling, the subsonic block, the Pulse's res) and the other areas' pass
+// unchanged with no tolerance widened, which is the audio proof (two voice
+// synths never match sample for sample: every def draws random values)
+var noteControlDefaults = (noteGate: 1, noteBend: 1, noteAmp: 1, noteMain: 0);
+// each def's ASR times in 3.4 (design 3.5 §3.5)
+var asrTimes34 = (strataResonator: [4, 8], strataFM: [5, 10], strataFolder: [3, 6], strataSub: [8, 12],
+    strataPulse: [2, 4], strataKarplus: [0.01, 2], strataRing: [3, 5]);
+var controlDefault = { arg defName, controlName;
+    var control = SynthDescLib.global.at(defName).controls.detect({ arg each; each.name == controlName });
+    control !? { control.defaultValue }
+};
+// a function true of a UGen input that is the named control of the def
+var isControlOf = { arg defName, controlName;
+    var control = SynthDescLib.global.at(defName).controls.detect({ arg each; each.name == controlName });
+    { arg input; control.notNil and: { input.isKindOf(OutputProxy) } and: { input.source.isKindOf(Control) }
+        and: { (input.source.specialIndex + input.outputIndex) == control.index } }
+};
+// true when input, or a UGen at most depth inputs above it, passes test
+var reaches = { arg input, test, depth;
+    test.(input) or: { (depth > 0) and: { input.isKindOf(UGen) } and: {
+        (input.inputs ? []).any({ arg each; reaches.(each, test, depth - 1) }) } }
+};
+var noteSilent = { engine.silentBus.index };
+// A private bus's peaks in windows after a reset (server time, so commands
+// sent in timestamped bundles meet them exactly): for each [start, end) of
+// windows (s after t_reset, four pairs), the peak of channel's |x|
+var addNoteDefs = {
+    SynthDef(\strataCheckNoteWindows, { arg in, out, t_reset = 0, channel = 0;
+        var x = Select.ar(channel, In.ar(in, 2)).abs, reset = T2A.ar(t_reset), elapsed = Sweep.ar(reset, 1);
+        var windows = \windows.kr(0 ! 8);
+        Out.kr(out, 4.collect({ arg index;
+            A2K.kr(Peak.ar(x * (elapsed >= windows[2 * index]) * (elapsed < windows[(2 * index) + 1]), reset)) }));
+    }).add;
+    // the peak of a bus's left channel and its upward zero crossings since t_reset
+    SynthDef(\strataCheckNoteCount, { arg in, out, t_reset = 0;
+        var x = In.ar(in, 2)[0], reset = T2A.ar(t_reset);
+        Out.kr(out, A2K.kr([Peak.ar(x.abs, reset), PulseCount.ar(x > 0, reset)]));
+    }).add;
+    // what notePark computes, and its lowest and highest from the start
+    if (engine.respondsTo(\notePark)) {
+        SynthDef(\strataCheckNotePark, { arg out, noteGate = 1, attackTime = 0.05, releaseTime = 0.05;
+            var park = engine.notePark(noteGate, attackTime, releaseTime);
+            Out.kr(out, [park, RunningMin.kr(park), RunningMax.kr(park)]);
+        }).add;
+    };
+    // what noteMainValue computes for each def's entry of noteMainRanges
+    if (engine.respondsTo(\noteMainValue) and: { engine.respondsTo(\noteMainRanges) }) {
+        voiceDefs.do({ arg defName;
+            SynthDef(("strataCheckNoteMain_" ++ defName).asSymbol, { arg out, value = 0, noteMain = 0;
+                Out.kr(out, engine.noteMainValue(defName, value, noteMain));
+            }).add;
+        });
+    };
+    server.sync;
+};
+var startPrivate = { arg defName, bus, group, args;
+    Synth(defName, [\out, bus, \modBus1, noteSilent.value, \modBus2, noteSilent.value, \modBus3, noteSilent.value] ++ args, group)
+};
+
+// "voices: every voice def plays 3.4's values with the note controls at
+// their defaults": each def's note controls default to neutral values, and
+// what they compute is exactly neutral on the server from the first block
+// (the park 1, noteMainValue the control itself)
+var checkNoteDefaults = {
+    var bus = Bus.control(server, 3 + voiceDefs.size), group = Group.tail(server), values, mains;
+    var defaults = voiceDefs.every({ arg defName;
+        noteControlDefaults.keys.every({ arg name; controlDefault.(defName, name) == noteControlDefaults[name] })
+    });
+    var probes = engine.respondsTo(\notePark) and: { engine.respondsTo(\noteMainValue) };
+    if (probes) {
+        Synth(\strataCheckNotePark, [\out, bus.index, \attackTime, 4, \releaseTime, 8], group);
+        voiceDefs.do({ arg defName, index;
+            var entry = engine.noteMainRanges[defName];
+            Synth(("strataCheckNoteMain_" ++ defName).asSymbol, [\out, bus.index + 3 + index,
+                \value, controlDefault.(defName, entry[0]), \noteMain, 0], group);
+        });
+    };
+    server.sync; 0.2.wait;
+    values = h.readBus(bus);
+    mains = if (probes) { voiceDefs.collect({ arg defName, index;
+        (values[3 + index] - controlDefault.(defName, engine.noteMainRanges[defName][0])).abs }) } { [1] };
+    check.(defaults and: { probes } and: { values.keep(3) == [1, 1, 1] } and: { mains.every({ arg error; error < 1e-6 }) },
+        "voices: every voice def plays 3.4's values with the note controls at their defaults (defaults %, the park and its lowest and highest %, noteMainValue at noteMain 0 off its control by %)".format(
+            defaults, values.keep(3), mains));
+    group.free; bus.free;
+    server.sync;
+};
+
+// The park (notePark: design 3.5 §3.2, ruling 4): 1 from the first block
+// while noteGate is 1; at noteGate 0 down to 0 over the release, back to 1
+// over the attack at noteGate 1; a synth started with noteGate 0 is parked
+// from its first block (a parked note's new synth); and no doneAction (the
+// probe synth is still there)
+var checkNotePark = {
+    var bus = Bus.control(server, 6), group = Group.tail(server), open, parked, down, up, startedParked, ok;
+    if (engine.respondsTo(\notePark).not) { check.(false, "voices: the park (no notePark)") } {
+        open = Synth(\strataCheckNotePark, [\out, bus.index, \attackTime, 0.05, \releaseTime, 0.05], group);
+        startedParked = Synth(\strataCheckNotePark, [\out, bus.index + 3, \noteGate, 0], group);
+        server.sync; 0.1.wait;
+        parked = h.readBus(bus);
+        open.set(\noteGate, 0); server.sync; 0.15.wait;
+        down = h.readBus(bus)[0];
+        open.set(\noteGate, 1); server.sync; 0.15.wait;
+        up = h.readBus(bus)[0];
+        ok = (parked.keep(3) == [1, 1, 1]) and: { parked.drop(3) == [0, 0, 0] } and: { down == 0 } and: { up == 1 }
+            and: { open.isPlaying or: { h.synthNames(group).size == 2 } };
+        check.(ok, "voices: the park is 1 from the first block at noteGate 1, falls to 0 over its release, returns over its attack, and starts parked at noteGate 0 (open: value, lowest, highest %; started parked %; down %; up %)".format(
+            parked.keep(3), parked.drop(3), down, up));
+    };
+    group.free; bus.free;
+    server.sync;
+};
+
+// "voices: noteAmp 0.5 halves a voice synth's level and noteBend 2 doubles
+// its frequency": Subs at 100 Hz with the least drift (0.001, a pitch
+// wander of 0.1 %) and a 10 ms attack, on private buses: one at noteAmp
+// 0.5 peaks at half the reference's (within 1e-3: one waveform, so one
+// peak), one at noteBend 2 crosses zero upward as often as a reference at
+// 200 Hz (within 2 in a second) and twice as often as the 100 Hz one
+var checkNoteAmpBend = {
+    var group = Group.tail(server), buses = 4.collect({ Bus.audio(server, 2) }), counts = Bus.control(server, 8), trackers, values;
+    var base = [\freq, 100, \drift, 0.001, \amp, 0.4, \attackTime, 0.01];
+    [base, base ++ [\noteAmp, 0.5], base ++ [\noteBend, 2], base ++ [\freq, 200]].do({ arg args, index;
+        startPrivate.(\strataSub, buses[index], group, args) });
+    trackers = buses.collect({ arg bus, index; Synth(\strataCheckNoteCount, [\in, bus, \out, counts.index + (2 * index)], group, \addToTail) });
+    server.sync; 0.3.wait;
+    server.makeBundle(nil, { trackers.do(_.set(\t_reset, 1)) });
+    1.0.wait;
+    values = h.readBus(counts).clump(2);
+    check.((values[0][0] > 0.1) and: { ((values[1][0] / values[0][0]) - 0.5).abs < 1e-3 }
+        and: { (values[2][1] - values[3][1]).abs <= 2 } and: { ((values[2][1] / values[0][1].max(1)) - 2).abs < 0.03 },
+        "voices: noteAmp 0.5 halves a voice synth's level and noteBend 2 doubles its frequency (Sub: peaks %, upward zero crossings in 1 s %: reference, noteAmp 0.5, noteBend 2, 200 Hz)".format(
+            values.collect({ arg each; each[0].round(0.0001) }), values.collect(_[1])));
+    group.free; buses.do(_.free); counts.free;
+    server.sync;
+};
+
+// "voices: noteGate 0 silences a voice synth within its release and leaves
+// it running; noteGate 1 brings it back": a Pulse with releaseTime 0.05 and
+// attackTime 0.1 (its ASR and its park take both), parked 0.3 s after a
+// reset, silent (under 1e-4) from 0.15 s after, its node still there, and
+// unparked at 0.7 s: above half its level by the end of its attack
+var checkNoteGateVoice = {
+    var group = Group.tail(server), bus = Bus.audio(server, 2), peaks = Bus.control(server, 4), pulse, tracker, values, there;
+    pulse = startPrivate.(\strataPulse, bus, group, [\freq, 250, \amp, 0.3, \attackTime, 0.1, \releaseTime, 0.05]);
+    tracker = Synth(\strataCheckNoteWindows, [\in, bus, \out, peaks.index], group, \addToTail);
+    tracker.setn(\windows, [0, 0.3, 0.45, 0.65, 0.7, 0.8, 0.85, 1.0]);
+    server.sync; 0.4.wait;
+    server.makeBundle(0.2, { tracker.set(\t_reset, 1) });
+    server.makeBundle(0.2 + 0.3, { pulse.set(\noteGate, 0) });
+    server.makeBundle(0.2 + 0.7, { pulse.set(\noteGate, 1) });
+    0.75.wait;                             // 0.55 s after the reset: parked
+    there = h.synthNames(group).includes(\strataPulse);
+    0.55.wait; server.sync;
+    values = h.readBus(peaks);
+    check.((values[0] > 0.01) and: { values[1] < 1e-4 } and: { there } and: { values[2] > (0.5 * values[0]) },
+        "voices: noteGate 0 silences a voice synth within its release and leaves it running; noteGate 1 brings it back (Pulse, releaseTime 0.05: peak before %, 0.15-0.35 s after the park %, node there %, within the 0.1 s attack after %, after %)".format(
+            values[0].round(0.0001), values[1], there, values[2].round(0.0001), values[3].round(0.0001)));
+    group.free; bus.free; peaks.free;
+    server.sync;
+};
+
+// "voices: attackTime 0.01 brings the Resonator to nine tenths of its level
+// within 0.1 s": a Resonator at the extremes, hard right (its limiter holds
+// the right channel at about its level, 0.9-1.05, whatever the noise: the
+// level check below), with attackTime 0.01 and releaseTime 0.5. Its gate goes
+// to 0 0.3 s after a reset (the release has it under half its level 0.15-0.2
+// s later) and back to 1 at 0.5 s: within 0.1 s it is back at nine tenths of
+// the level before (the 3.4 attack of 4 s would be about a quarter)
+var checkNoteAttack = {
+    var group = Group.tail(server), bus = Bus.audio(server, 2), peaks = Bus.control(server, 4), modBus = Bus.control(server, 1);
+    var resonator, tracker, values;
+    modBus.set(1);
+    resonator = Synth(\strataResonator, [\out, bus, \freq, 20, \rq, 0.01, \noise, 1, \amp, 1, \pan, 1,
+        \modBus1, modBus.index, \modBus2, noteSilent.value, \modBus3, noteSilent.value, \modAmpAmt1, 2,
+        \attackTime, 0.01, \releaseTime, 0.5], group);
+    tracker = Synth(\strataCheckNoteWindows, [\in, bus, \out, peaks.index, \channel, 1], group, \addToTail);
+    tracker.setn(\windows, [0, 0.3, 0.45, 0.5, 0.5, 0.6, 0.6, 0.9]);
+    server.sync; 1.5.wait;
+    server.makeBundle(0.2, { tracker.set(\t_reset, 1) });
+    server.makeBundle(0.2 + 0.3, { resonator.set(\gate, 0) });
+    server.makeBundle(0.2 + 0.5, { resonator.set(\gate, 1) });
+    1.2.wait; server.sync;
+    values = h.readBus(peaks);
+    check.((values[0] > 0.5) and: { values[1] < (0.5 * values[0]) } and: { values[2] >= (0.9 * values[0]) },
+        "voices: attackTime 0.01 brings the Resonator to nine tenths of its level within 0.1 s (right channel peaks: before %, in the release %, 0.1 s after the gate %, after %)".format(
+            *values.collect({ arg value; value.round(0.0001) })));
+    group.free; bus.free; peaks.free; modBus.free;
+    server.sync;
+};
+
+// "voices: the default attack and release are each def's times of 3.4":
+// attackTime and releaseTime default to them, and the ASR (the EnvGen that
+// frees the synth) takes its times from both, clipped to 0.005-30 and
+// 0.01-30 s
+var checkNoteTimes = {
+    var found = voiceDefs.collect({ arg defName;
+        var ugens = SynthDescLib.global.at(defName).def.children;
+        var isAttack = isControlOf.(defName, \attackTime), isRelease = isControlOf.(defName, \releaseTime);
+        var clipOf = { arg test, low, high; { arg input; input.isKindOf(Clip) and: { test.(input.inputs[0]) }
+            and: { input.inputs[1] == low } and: { input.inputs[2] == high } } };
+        var asr = ugens.detect({ arg ugen; ugen.isKindOf(EnvGen) and: { ugen.inputs[4] == 2 }
+            and: { ugen.inputs.any(clipOf.(isAttack, 0.005, 30)) } and: { ugen.inputs.any(clipOf.(isRelease, 0.01, 30)) } });
+        var defaults = [controlDefault.(defName, \attackTime), controlDefault.(defName, \releaseTime)];
+        [defName, defaults, asr.notNil]
+    });
+    check.(found.every({ arg each; each[2] and: { [each[1], asrTimes34[each[0]]].flop.every({ arg pair;
+        pair[0].notNil and: { pair[0].equalWithPrecision(pair[1], 1e-6) } }) } }),
+        "voices: the default attack and release are each def's times of 3.4 (defaults, and the ASR takes them: %)".format(found));
+};
+
+// "voices: noteMain 1 puts each def's expression control at its range's
+// end" (ruling 5: every voice def draws random values, so two synths never
+// match and no def is proven by its audio). noteMainValue, the one formula
+// every def calls, is proven on the server for each entry of
+// noteMainRanges: from the range's middle, noteMain 1 gives hi, -1 lo and
+// 0.5 the middle plus a quarter of the range; from either end, noteMain past
+// it stays at the end (the clip); at noteMain 0 the value itself. Each def's
+// use of it is proven by its graph: a Clip to the entry's lo and hi whose
+// input reads both the def's expression control and noteMain
+var checkNoteMain = {
+    var ranges = engine.tryPerform(\noteMainRanges), cases, bus, group, values, expected, errors, graphs;
+    if (ranges.isNil or: { engine.respondsTo(\noteMainValue).not }) {
+        check.(false, "voices: noteMain 1 puts each def's expression control at its range's end (no noteMainRanges or noteMainValue)");
+    } {
+        // [value, noteMain, expected] from the entry's lo and hi
+        cases = { arg low, high; var mid = (low + high) / 2;
+            [[mid, 1, high], [mid, -1, low], [mid, 0.5, mid + ((high - low) / 4)], [high, 1, high], [low, -1, low],
+                [mid, 0, mid], [high, -0.5, high - ((high - low) / 4)]] };
+        bus = Bus.control(server, voiceDefs.size * 7);
+        group = Group.tail(server);
+        expected = List.new;
+        voiceDefs.do({ arg defName, defIndex;
+            var entry = ranges[defName];
+            cases.(entry[1], entry[2]).do({ arg each, caseIndex;
+                Synth(("strataCheckNoteMain_" ++ defName).asSymbol, [\out, bus.index + (defIndex * 7) + caseIndex,
+                    \value, each[0], \noteMain, each[1]], group);
+                expected.add(each[2]);
+            });
+        });
+        server.sync; 0.2.wait;
+        values = h.readBus(bus);
+        errors = [values, expected].flop.collect({ arg pair; (pair[0] - pair[1]).abs });
+        graphs = voiceDefs.collect({ arg defName;
+            var entry = ranges[defName], ugens = SynthDescLib.global.at(defName).def.children;
+            var isMain = isControlOf.(defName, \noteMain), isExpression = isControlOf.(defName, entry[0]);
+            ugens.any({ arg ugen; ugen.isKindOf(Clip) and: { ugen.inputs[1] == entry[1] } and: { ugen.inputs[2] == entry[2] }
+                and: { reaches.(ugen.inputs[0], isMain, 3) } and: { reaches.(ugen.inputs[0], isExpression, 2) }
+                and: { ugens.any({ arg user; (user.inputs ? []).any({ arg input; input === ugen }) }) } })
+        });
+        check.((values.size == expected.size) and: { errors.every({ arg error; error < 1e-6 }) } and: { graphs.every(_ == true) },
+            "voices: noteMain 1 puts each def's expression control at its range's end (noteMainValue on the server, largest error % over % cases; each def's graph clips noteMain's offset of its control to the range: %)".format(
+                errors.maxItem, expected.size, [voiceDefs, graphs].flop));
+        group.free; bus.free;
+        server.sync;
+    };
+};
+
+// "voices: in a grain def, velocity feeds only the accent's levelScale"
+// (3.5: a grain def's note accent, t_accent at velocity; before 3.5 the
+// grain defs had no velocity): the strict check above, and the EnvGen it
+// scales is gated by t_accent
+var checkGrainVelocity = {
+    var found = grainDefs.collect({ arg defName;
+        var ugens = SynthDescLib.global.at(defName).def.children;
+        var isVelocity = isControlOf.(defName, \velocity), isAccent = isControlOf.(defName, \t_accent);
+        [defName, velocityOnlyScalesAccents.(defName, false),
+            ugens.any({ arg ugen; ugen.isKindOf(EnvGen) and: { isVelocity.(ugen.inputs[1]) } and: { isAccent.(ugen.inputs[0]) } })]
+    });
+    check.(found.every({ arg each; each[1] and: { each[2] } }),
+        "voices: in a grain def, velocity feeds only the accent's levelScale (an EnvGen gated by t_accent: %)".format(found));
+};
+
 // SynthDefs
 voiceDefs.do({ arg name;
     var controls = SynthDescLib.global.at(name).controlNames.collect(_.asSymbol);
@@ -454,6 +731,17 @@ SynthDef(\strataCheckBentVoiceMix, { arg out, t_trig = 0, velocity = 1;
 server.sync;
 check.(velocityOnlyScalesAccents.(\strataCheckBentVoiceMix, false).not, "voices: a bent copy of strataVoiceMix fails the velocity check");
 checkKarplusMutants.value;
+
+// 3.5's note controls, on synths of the area's own (private buses)
+addNoteDefs.value;
+checkNoteDefaults.value;
+checkNotePark.value;
+checkNoteTimes.value;
+checkNoteMain.value;
+checkGrainVelocity.value;
+checkNoteAmpBend.value;
+checkNoteGateVoice.value;
+checkNoteAttack.value;
 
 // Silent bus (I4)
 silentIndex = engine.silentBus.index;

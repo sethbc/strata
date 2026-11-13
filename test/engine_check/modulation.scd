@@ -140,10 +140,10 @@ addCheckDefs = {
         )
     };
     // what the grain hooks compute: [pitchShift, bufPos, grainSize]
-    SynthDef(\strataCheckFastTaps, { arg out, pitchShift = 1, bufPos = 0.3, grainSize = 0.1;
+    SynthDef(\strataCheckFastTaps, { arg out, pitchShift = 1, bufPos = 0.3, grainSize = 0.1, noteRate = 1, noteSize = 0, notePos = 0;
         var m = engine.fastModRead(\fastModIn.kr(silent));
-        var c = engine.fastMod((pitchShift: pitchShift, grainSize: grainSize, fastMod: m));
-        Out.kr(out, [c[\pitchShift], engine.fastModPosition(bufPos, m), c[\grainSize]].collect({ arg value;
+        var c = engine.fastMod((pitchShift: pitchShift, grainSize: grainSize, fastMod: m, noteRate: noteRate, noteSize: noteSize));
+        Out.kr(out, [c[\pitchShift], engine.fastModPosition(bufPos, m, notePos), c[\grainSize]].collect({ arg value;
             if (value.isNumber) { DC.kr(value) } { value } }));
     }).add;
     // what voiceMixMod computes: [filterFreq, ampOffset, voiceGate]
