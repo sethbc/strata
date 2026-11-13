@@ -20,4 +20,4 @@
 - `add_midi_params()` (the last three of `strata_midi`, called inside `lib/params_setup.lua`'s midi record): `mpe_lower_members` (0-15, default 15), `mpe_upper_members` (0-15, 0), `mpe_bend_range` (1-96, 48).
 - `add_params()` (the record `zones`): group `strata_zones`, 21 params: per voice `v<i>_zone` (`off`, `lower`, `upper`; voice 1 lower, voice 2 upper, the rest off), `v<i>_zone_low` and `v<i>_zone_high` (0-127, 0 and 127; each clamps the other so a low never passes its high).
 
-`midi_channel_mode`'s two MPE options are in `S.lib.midi_in.MIDI.channel_mode_options`; until the MIDI package lands the modes play as `per voice` (`docs/notes/lua/midi.md`).
+`midi_channel_mode`'s two MPE options are in `S.lib.midi_in.MIDI.channel_mode_options`; `lib/midi_in.lua` plays them (`docs/notes/lua/midi.md`).

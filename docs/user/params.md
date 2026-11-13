@@ -82,9 +82,8 @@ Settings for the BUFFER page's record key (K3), the grid's record keys and each 
 
 ## MIDI (group)
 - MIDI device: the port Strata listens to (1-16, the norns MIDI slots, default 1)
-- MIDI channels: per voice (channels 1-7 play voices 1-7, the default) or omni to selected
-- MIDI note off: ignore (the default) or voice off
-- MIDI channels also lists mpe selected and mpe split, for MPE controllers; they play like per voice until 3.5's MIDI playing lands
+- MIDI channels: per voice (channels 1-7 play voices 1-7, the default), omni to selected, or, for MPE controllers, mpe selected and mpe split ([MIDI Input](midi.md))
+- MIDI note off: auto (the default: latch in the per voice and omni modes, release in the MPE modes), release (each note ends with its key) or latch (chords sound on until the next)
 - mpe lower members and mpe upper members (0-15, default 15 and 0): the member channels of each zone (the lower zone's master is channel 1 and its members follow it; the upper zone's master is channel 16 and its members count down from 15). Setting one lowers the other while both are above 0, so together they never pass 14. A controller's own configuration message (RPN 6) sets them and flashes `MPE lower <n>` or `MPE upper <n>`
 - mpe bend range (1-96 semitones, default 48): a member channel's pitch bend range; RPN 0 on a member channel sets it. Do not map CC 74, 87, 6, 38, 100 or 101 in PARAMS > MAP while an MPE controller is in use
 
