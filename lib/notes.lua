@@ -276,13 +276,14 @@ return function(S)
     }
   end
 
-  -- Slot 1 (branches 1, 2 and 6): the player pitches the own note, a
-  -- stopped voice starts, the note's expression goes when the engine's
-  -- differs, noteOn on slot 0 unparks a parked own note or carries a frozen
-  -- synth voice's rate, then retrigger accents (the stage's step gate and
-  -- accent open only on it, ruling 15). quiet: set_own, and a parked own
-  -- note's unpark (noteOn on slot 0) so Lua and the engine agree; the caller
-  -- starts and accents (an expression that differs waits for the flush)
+  -- Slot 1 (branches 1, 2 and 6), one rule for both kinds of play: the
+  -- player pitches the own note (set_own); unless quiet, a stopped voice
+  -- starts and the note's expression goes when the engine's differs (quiet:
+  -- it waits for the flush); noteOn on slot 0 when the own note was parked
+  -- (the unpark, so Lua and the engine agree) or the voice is a frozen synth
+  -- voice (it alone carries the rate, ruling 18); then retrigger unless
+  -- quiet (the stage's step gate and accent open only on it, ruling 15: a
+  -- quiet play's caller starts and accents)
   local function play_own(voice, note, played, now)
     local previous = slots[voice][1]
     local was_parked = previous ~= nil and previous.parked
@@ -293,23 +294,19 @@ return function(S)
     local record = new_record(voice, 1, played, now)
     slots[voice][1] = record
     local messages = 0
-    if note.quiet then
-      if not same_expression(record.expression, sent[voice][1]) then mark_due(record) end
-      if was_parked then
-        send_note_on(voice, 1, record)
-        messages = 1
-      end
-    else
-      if not same_expression(record.expression, sent[voice][1]) then
+    if not same_expression(record.expression, sent[voice][1]) then
+      if note.quiet then
+        mark_due(record)
+      else
         send_expression(voice, 1, record.expression)
         messages = 1
       end
-      if was_parked or frozen_synth(voice) then
-        send_note_on(voice, 1, record)
-        messages = messages + 1
-      end
-      engine.retrigger(voice - 1, record.velocity)
     end
+    if was_parked or frozen_synth(voice) then
+      send_note_on(voice, 1, record)
+      messages = messages + 1
+    end
+    if not note.quiet then engine.retrigger(voice - 1, record.velocity) end
     count(messages)
     if M.held(voice) ~= held_before then held_changed() end
     return 1
