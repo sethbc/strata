@@ -245,18 +245,23 @@ return function(S)
   end
 
   -- A frozen synth voice's freeze reference (a fractional MIDI note): the
-  -- note its freq played when it froze, taken by the freeze-change hook, or,
-  -- for one that froze without it (a recall, a PSET), when first asked for.
-  -- nil for any other voice, whose reference is dropped: a voice that left
-  -- the state by a path that runs no hook never reuses an old one
+  -- note its freq played when it froze or, since, when it last started or
+  -- changed source (the hooks below keep it; a running voice found without
+  -- one takes it then). A stopped voice keeps none: asked, it gives its
+  -- freq's note now, what its start will take. nil for any other voice
   function M.freeze_reference(voice)
-    if not whole_in(voice, 1, NUM_VOICES) then return nil end
-    if not frozen_synth(voice) then
-      references[voice] = nil
-      return nil
-    end
-    if references[voice] == nil then references[voice] = freq_note(voice) end
+    if not whole_in(voice, 1, NUM_VOICES) or not frozen_synth(voice) then return nil end
+    if references[voice] ~= nil then return references[voice] end
+    if not S.voices[voice].active then return freq_note(voice) end
+    references[voice] = freq_note(voice)
     return references[voice]
+  end
+
+  -- A start or a source change: the old reference goes, and a fresh one is
+  -- taken when the voice is a frozen synth voice and take is true
+  local function refresh_reference(voice, take)
+    references[voice] = nil
+    if take and frozen_synth(voice) then references[voice] = freq_note(voice) end
   end
 
   -- What the engine plays for pitch (a MIDI note number, fractional
@@ -279,18 +284,20 @@ return function(S)
   -- Slot 1 (branches 1, 2 and 6), one rule for both kinds of play: the
   -- player pitches the own note (set_own); unless quiet, a stopped voice
   -- starts and the note's expression goes when the engine's differs (quiet:
-  -- it waits for the flush); noteOn on slot 0 when the own note was parked
-  -- (the unpark, so Lua and the engine agree) or the voice is a frozen synth
-  -- voice (it alone carries the rate, ruling 18); then retrigger unless
-  -- quiet (the stage's step gate and accent open only on it, ruling 15: a
-  -- quiet play's caller starts and accents)
+  -- it waits for the flush); noteOn on slot 0, to a running voice only, when
+  -- the own note was parked (the unpark, so Lua and the engine agree) or the
+  -- voice is a frozen synth voice (it alone carries the rate, ruling 18: a
+  -- stopped one gets it from the grain-restart hook at its start); then
+  -- retrigger unless quiet (the stage's step gate and accent open only on
+  -- it, ruling 15: a quiet play's caller starts and accents). The old record
+  -- goes before the start, so the hook never plays it
   local function play_own(voice, note, played, now)
     local previous = slots[voice][1]
     local was_parked = previous ~= nil and previous.parked
     local held_before = M.held(voice)
     note.set_own(played.pitch)
-    if not note.quiet and not S.voices[voice].active then toggle_voice(voice) end
     if previous then forget(previous, now) end
+    if not note.quiet and not S.voices[voice].active then toggle_voice(voice) end
     local record = new_record(voice, 1, played, now)
     slots[voice][1] = record
     local messages = 0
@@ -302,7 +309,7 @@ return function(S)
         messages = 1
       end
     end
-    if was_parked or frozen_synth(voice) then
+    if (was_parked or frozen_synth(voice)) and S.voices[voice].active then
       send_note_on(voice, 1, record)
       messages = messages + 1
     end
@@ -336,7 +343,9 @@ return function(S)
   -- expression} on voice (design §2.2): the slot it took, nil when refused
   function M.play(voice, note)
     if not whole_in(voice, 1, NUM_VOICES) or not valid_note(note) then return nil end
-    M.freeze_reference(voice)  -- taken before set_own can move the freq
+    -- a running frozen synth voice's reference, before set_own can move the
+    -- freq (the hooks keep one already; a stopped voice's start takes its own)
+    if S.voices[voice].active then M.freeze_reference(voice) end
     local now = util.time()
     local played = {owner = note.owner, key = note.key, pitch = note.pitch, park = note.park == true,
       quiet = note.quiet == true, velocity = util.clamp(note.velocity, 0, 1),
@@ -357,12 +366,12 @@ return function(S)
       count(messages)
       return slot
     end
-    -- 2. slot 1 free (nothing held, or the own note parked)
+    -- 2. slot 1 free: nothing held, the own note parked, or the voice
+    -- stopped (ruling 19: a stopped voice's slot 1 is always free, whatever
+    -- quiet note its caller never started), so branches 3 to 6 run only on
+    -- a running voice
     local own = slots[voice][1]
-    if own == nil or own.parked then return play_own(voice, note, played, now) end
-    -- an extra slot needs a running voice: a stopped one whose slot 1 holds
-    -- a quiet note (its caller has not started it yet) refuses it
-    if not S.voices[voice].active then return nil end
+    if own == nil or own.parked or not S.voices[voice].active then return play_own(voice, note, played, now) end
     local cap = note_cap(voice)
     local free = free_slot(voice, cap)
     if free then
@@ -581,16 +590,41 @@ return function(S)
   S.register_voice_stop(function(voice)
     M.release_all(voice)
     sent[voice][1] = copy_expression(NOTES.neutral)
+    references[voice] = nil  -- a stopped voice keeps no freeze reference
+  end)
+
+  -- Every start (after its voiceOn, the voice not yet marked running) and
+  -- every running voice's source change, a recall's included: a fresh
+  -- freeze reference, and a frozen synth voice's own note gets its rate on
+  -- the new own grain synth (noteOn on slot 0 from slot 1's held note: a
+  -- quiet note whose caller starts the voice now, or a held note over a
+  -- recall's switch). A play that starts the voice writes its record after
+  -- the start, and sends that noteOn itself
+  S.register_grain_restart(function(voice)
+    refresh_reference(voice, true)
+    local record = slots[voice][1]
+    if record and record.held and frozen_synth(voice) then
+      send_note_on(voice, 1, record)
+      count(1)
+    end
+  end)
+
+  -- A source change outside a recall (a stopped voice's included, which
+  -- runs no grain restart): a fresh reference for a running frozen synth
+  -- voice, none for a stopped one (its start takes it). With the hook above
+  -- every start and every source change is covered: a stopped voice's
+  -- switch inside a recall runs neither, and a stopped voice keeps none
+  S.register_source_change(function(voice)
+    refresh_reference(voice, S.voices[voice].active)
   end)
 
   -- A synth voice's freeze: its reference taken, its extra notes cut and
   -- forgotten (their sound is in the frozen ring); scaleNote resent (the
   -- reference while frozen, the freq's note after)
   S.register_freeze_change(function(voice, frozen)
-    references[voice] = nil
+    refresh_reference(voice, frozen and S.voices[voice].active)  -- a stopped voice's start takes it
     if not voice_uses_synth(voice) then return end
     if frozen then
-      references[voice] = freq_note(voice)
       local now, cut = util.time(), 0
       for slot = 2, NOTE_SLOTS do
         if slots[voice][slot] then

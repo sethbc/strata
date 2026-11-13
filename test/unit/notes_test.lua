@@ -441,21 +441,28 @@ test("quiet over a parked own note unparks it and leaves the accent to the calle
   assert_equal(table.concat(calls(context), " "), "set_own(67) retrigger(0, 0.5)", "no second noteOn")
 end)
 
-test("an extra slot needs a running voice: a quiet note's stopped voice refuses one", function()
+test("on a stopped voice slot 1 is always free: a quiet note never makes it refuse a key", function()
   local context = load_strata()
   local S = started(context)
-  assert_equal(play(context, 3, 1, 60, { quiet = true }), 1)
-  context.clear_engine_calls()
-  assert_equal(play(context, 3, 2, 64), nil, "refused")
-  assert_equal(play(context, 3, 3, 67, { quiet = true }), nil, "quiet or not")
-  assert_equal(#context.engine_calls, 0, "nothing sent")
-  assert_equal(S.lib.notes.held(3), 1); assert_equal(S.lib.notes.pool_used(), 0)
-  assert_equal(play(context, 3, 1, 62, { quiet = true }), 1, "the quiet note's own key still re-pitches slot 1")
+  local notes = S.lib.notes
+  assert_equal(play(context, 3, 1, 60, { quiet = true }), 1)  -- its caller never starts the voice
   local invariant
   for _, record in ipairs(S.registry.invariants) do if record.name == "notes" then invariant = record.fn end end
   assert_equal(invariant(), nil, "a stopped voice may hold a quiet note awaiting its caller's start")
-  toggle_voice(3)  -- the caller's start
-  assert_equal(play(context, 3, 2, 64), 2, "a running voice gets its extra slot")
+  context.clear_engine_calls()
+  assert_equal(play(context, 3, 2, 64, { quiet = true }), 1, "a second quiet note takes slot 1")
+  assert_equal(table.concat(calls(context), " "), "set_own(64)")
+  assert_equal(notes.find(3, "midi", 1), nil, "replacing the first"); assert_equal(notes.find(3, "midi", 2), 1)
+  assert_true(not S.voices[3].active)
+  context.clear_engine_calls()
+  assert_equal(play(context, 3, 3, 67), 1, "a note not quiet takes slot 1 too")
+  local sent = calls(context)
+  assert_equal(sent[1], "set_own(67)")
+  assert_equal(#context.calls_named("voiceOn"), 1, "and starts the voice")
+  assert_equal(sent[#sent], "retrigger(2, 0.5)")
+  assert_true(S.voices[3].active)
+  assert_equal(notes.held(3), 1); assert_equal(notes.find(3, "midi", 3), 1); assert_equal(notes.pool_used(), 0)
+  assert_equal(play(context, 3, 4, 69), 2, "a running voice gets its extra slot")
 end)
 
 test("a change of a voice's held count updates the voice list and asks for a redraw", function()
@@ -538,25 +545,59 @@ test("a quiet play on a frozen synth voice sends its rate, and leaves the accent
   assert_equal(table.concat(calls(context), " "), "set_own(81) noteOn(0, 0, 81, 880, 2, 0.5)", "no retrigger")
 end)
 
+test("a quiet play on a stopped frozen synth voice leaves its rate to the start that follows", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v3_freq", 440)
+  params:set("v3_freeze", 1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 3, 1, 81, { quiet = true }), 1)
+  assert_equal(table.concat(calls(context), " "), "set_own(81)", "nothing for a stopped voice but the pitch")
+  toggle_voice(3)  -- the caller's start
+  local sent, voice_on, note_on = calls(context), nil, nil
+  for index, text in ipairs(sent) do
+    if text:find("^voiceOn%(2,") then voice_on = index end
+    if text:find("^noteOn%(") then note_on = index; assert_equal(text, "noteOn(2, 0, 81, 880, 2, 0.5)", "its rate") end
+  end
+  assert_true(voice_on ~= nil and note_on ~= nil and note_on > voice_on, "the noteOn after voiceOn")
+  assert_equal(#context.calls_named("noteOn"), 1, "once")
+end)
+
 test("a voice that leaves the frozen synth state by another path never reuses its old reference", function()
   local context = load_strata()
   local S = started(context)
   local notes = S.lib.notes
-  params:set("v1_freq", 440)
-  params:set("v1_freeze", 1)
-  assert_near(notes.freeze_reference(1), 69, 1e-9)
   -- a recall's source switch runs no source-change hook: freeze stays 1, and no freeze-change hook runs
-  local function recall_source(option)
+  local function recall_source(voice, option)
     S.scene_recall_in_progress = true
-    params:set("v1_source", option)
+    params:set("v" .. voice .. "_source", option)
     S.scene_recall_in_progress = false
   end
-  recall_source(2)
-  assert_equal(notes.freeze_reference(1), nil, "a buffer voice has none")
+  -- a running voice, no read in between
+  params:set("v1_freq", 440)
+  params:set("v1_freeze", 1)
+  recall_source(1, 2)
   params:set("v1_freq", 220)
-  recall_source(S.constants.SOURCE_SYNTH)
+  recall_source(1, S.constants.SOURCE_SYNTH)
   assert_true(S.lib.freeze.is_frozen(1), "frozen all along")
   assert_near(notes.freeze_reference(1), 57, 1e-9, "a fresh reference, not the old 69")
+  -- a stopped voice: its start takes a fresh one, and its scaleNote agrees
+  params:set("v3_freq", 440)
+  params:set("v3_freeze", 1)
+  toggle_voice(3)
+  assert_near(notes.freeze_reference(3), 69, 1e-9)
+  toggle_voice(3)
+  recall_source(3, 2)
+  params:set("v3_freq", 220)
+  recall_source(3, S.constants.SOURCE_SYNTH)
+  context.clear_engine_calls()
+  toggle_voice(3)
+  local scale
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == 2 and call.args[2] == "scaleNote" then scale = call.args[3] end
+  end
+  assert_near(scale, 57, 1e-9, "the start's scaleNote is the fresh reference")
+  assert_near(notes.freeze_reference(3), 57, 1e-9, "a fresh reference at the start")
 end)
 
 test("a synth voice's extra notes are cut and forgotten when it freezes", function()
