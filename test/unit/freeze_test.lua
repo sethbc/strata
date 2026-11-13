@@ -418,4 +418,27 @@ test("the freeze param runs the freeze-change hooks", function()
     "each change runs the hooks with the voice and its state, after the send, before the grid redraw")
 end)
 
+-- A freeze-change hook that raises is reported (once per distinct message)
+-- and skipped: the other hooks and the grid redraw still run
+test("a raising freeze-change hook is reported and skipped", function()
+  local log = {}
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_freeze_change(function(voice_idx, frozen) error("freeze hook boom " .. tostring(frozen)) end)
+    S.register_freeze_change(function(voice_idx, frozen) log[#log + 1] = voice_idx .. ":" .. tostring(frozen) end)
+  end })
+  finish_startup(context)
+  local real_grid_redraw = grid_redraw
+  grid_redraw = function(...) log[#log + 1] = "grid"; return real_grid_redraw(...) end
+  local set, set_error = pcall(params.set, params, "v2_freeze", 1)
+  assert_true(set, "the set completes: " .. tostring(set_error))
+  assert_true(local_value("S").lib.freeze.is_frozen(2), "the voice is frozen")
+  h.claim_script_errors(context, 1, "strata: freeze change hook failed: ", "freeze hook boom true")
+  set, set_error = pcall(params.set, params, "v2_freeze", 0)
+  grid_redraw = real_grid_redraw
+  assert_true(set, "the unfreeze completes: " .. tostring(set_error))
+  h.claim_script_errors(context, 1, "strata: freeze change hook failed: ", "freeze hook boom false")
+  assert_equal(table.concat(log, ", "), "2:true, grid, 2:false, grid", "the good hook and the grid redraw still run")
+end)
+
 end

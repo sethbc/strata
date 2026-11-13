@@ -67,6 +67,9 @@ return function(S)
 
   -- VOICE's layout tests and page renders: every voice frozen, its cursor
   -- on the freeze row
+  -- The freeze-change hooks' last printed errors (contained_call), per hook
+  local freeze_change_errors = {}
+
   local layout_states = {}
   for voice_idx = 1, NUM_VOICES do
     table.insert(layout_states, {
@@ -92,10 +95,14 @@ return function(S)
         name = "freeze",
         behavior = "toggle",
         default = 0,
-        -- the freeze-change hooks (3.5), then MAIN's [F] (the param actions
+        -- the freeze-change hooks (3.5; each protected, as the LFO step
+        -- hooks are: one that raises is printed once per distinct message
+        -- and the rest still run), then MAIN's [F] (the param actions
         -- request a redraw) and the grid's keys
         action = function(value)
-          for _, hook in ipairs(S.registry.freeze_change) do hook(voice_idx, value == 1) end
+          for index, hook in ipairs(S.registry.freeze_change) do
+            S.lib.ui_frame.contained_call(freeze_change_errors, index, "freeze change hook", hook, voice_idx, value == 1)
+          end
           grid_redraw()
         end,
       })
