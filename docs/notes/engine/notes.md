@@ -40,6 +40,7 @@ About 1.5 s, in lifecycle's CI shard (`.github/workflows/test.yml`). Its checks:
 - no command creates a node: the server's synth and group counts are the same after each of seven valid calls of the four, sent to a running voice;
 - each command records its arguments, the continuous ones clipped (the limits themselves, and values past each limit);
 - out-of-range indices (negative, too large, fractional) and non-finite values (NaN, both infinities) of every command are ignored, one line each naming the command, with nothing recorded, the pool unchanged and no node made;
+- the check counts those lines through the modulation area's `postIgnored` hook, and gives the hook back however its body ends (`withIgnoredLines`, a `protect`): a deliberate error inside it must leave the hook as it was, so the areas after this one see their lines;
 - `setNotePool` keeps the size it is sent, and an ignored one leaves it.
 
 The area sets the pool back to 0 and stops the voice it started.
