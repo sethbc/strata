@@ -14,7 +14,9 @@
 -- 3.4's hooks are fields too: the base override (set_base_override,
 -- clear_base_override, engine_base_value), extra offsets
 -- (set_extra_offset) and the send budget (deferrable, budget_state;
--- S.deferrable_write, S.engine_budget_clock). Registers the cleanup step
+-- S.deferrable_write, S.engine_budget_clock). 3.5's: count_sends (direct
+-- sends counted in the budget's window) and the voice-stop hooks
+-- (S.registry.voice_stop) after every voiceOff. Registers the cleanup step
 -- that sends a voiceOff for every running voice (norns has freed the
 -- engine by then, so none arrives: the voices stopped with it) and the
 -- budget's.
@@ -284,6 +286,20 @@ return function(S)
     return S.engine_param_values[param_id]
   end
 
+  -- Count n engine messages (a whole number, at least 0) a module sent
+  -- itself, outside send_engine_value (3.5's notes, design §6.4), in the
+  -- current window, as deliver counts a send (a new window first, with its
+  -- waiting values). Defers nothing and sends nothing: the deferrable sends
+  -- make room. Anything else raises
+  function M.count_sends(n)
+    if type(n) ~= "number" or n ~= n or n < 0 or n == math.huge or n % 1 ~= 0 then
+      error("count_sends: a whole number of messages, at least 0, not " .. tostring(n), 2)
+    end
+    if n == 0 then return end
+    enter_window(current_window())
+    budget.sent = budget.sent + n
+  end
+
   -- For tests: this window's sends and the ids waiting
   function M.budget_state()
     local sent = budget.sent
@@ -492,6 +508,12 @@ return function(S)
     if changed and S.voices[voice_idx].active then run_grain_restart_hooks(voice_idx) end
   end
 
+  -- The voice-stop hooks (S.registry.voice_stop, 3.5), run after each
+  -- engine.voiceOff the script sends, with the voice
+  local function run_voice_stop_hooks(voice_idx)
+    for _, hook in ipairs(S.registry.voice_stop) do hook(voice_idx) end
+  end
+
   function toggle_voice(voice_idx)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
     local voice = S.voices[voice_idx]
@@ -499,6 +521,7 @@ return function(S)
     if voice.active then
       engine.voiceOff(voice_idx - 1)
       voice.active = false
+      run_voice_stop_hooks(voice_idx)
     else
       M.start_voice(voice_idx)
     end
@@ -653,6 +676,7 @@ return function(S)
     end, with_traceback)
     if not started then
       engine.voiceOff(voice_idx - 1)
+      run_voice_stop_hooks(voice_idx)
       -- level 0: the message already carries its traceback
       error(start_error, 0)
     end
@@ -670,6 +694,7 @@ return function(S)
     for i = 1, NUM_VOICES do
       if S.voices[i].active then
         engine.voiceOff(i - 1)
+        run_voice_stop_hooks(i)
       end
     end
   end)

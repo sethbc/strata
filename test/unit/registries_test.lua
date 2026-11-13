@@ -966,4 +966,27 @@ test("a scene field's set function is kept on its record", function()
   assert_true(refused(S.register_scene_field, { id = "bad_set", default = 0, set = 1 }), "set is a function")
 end)
 
+-- 3.5's hooks (design §0.1): plain function hooks, read at each use, so
+-- they stay open after init
+test("the voice-stop and freeze-change registries take functions only", function()
+  local S = fresh_state()
+  assert_true(refused(S.register_voice_stop, 1), "a voice-stop hook is a function")
+  assert_true(refused(S.register_voice_stop, nil), "not nil")
+  assert_true(refused(S.register_freeze_change, "x"), "a freeze-change hook is a function")
+  assert_equal(#S.registry.voice_stop, 0, "nothing refused was kept")
+  assert_equal(#S.registry.freeze_change, 0, "nothing refused was kept")
+  local stop_hook, freeze_hook = function() end, function() end
+  S.register_voice_stop(stop_hook); S.register_freeze_change(freeze_hook)
+  assert_equal(S.registry.voice_stop[1], stop_hook, "a voice-stop hook is kept")
+  assert_equal(S.registry.freeze_change[1], freeze_hook, "a freeze-change hook is kept")
+  -- after init
+  load_strata()
+  local script = local_value("S")
+  local stops, freezes = #script.registry.voice_stop, #script.registry.freeze_change
+  script.register_voice_stop(function() end)
+  script.register_freeze_change(function() end)
+  assert_equal(#script.registry.voice_stop, stops + 1, "a voice-stop hook after init")
+  assert_equal(#script.registry.freeze_change, freezes + 1, "a freeze-change hook after init")
+end)
+
 end

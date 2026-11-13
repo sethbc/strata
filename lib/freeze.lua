@@ -92,8 +92,12 @@ return function(S)
         name = "freeze",
         behavior = "toggle",
         default = 0,
-        -- MAIN's [F] (the param actions request a redraw) and the grid's keys
-        action = function() grid_redraw() end,
+        -- the freeze-change hooks (3.5), then MAIN's [F] (the param actions
+        -- request a redraw) and the grid's keys
+        action = function(value)
+          for _, hook in ipairs(S.registry.freeze_change) do hook(voice_idx, value == 1) end
+          grid_redraw()
+        end,
       })
       S.lib.params_setup.add_voice_extra(voice_idx, record, M.FREEZE.mode_key, {
         type = "option",

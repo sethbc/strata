@@ -48,6 +48,9 @@ return function()
     lock_change = {},       -- fn(voice_idx, locked), run after a voice's lock flips
     step_outputs = {},      -- {name, play, stop, available}, each pattern hit's outputs
     mod_sources = {},       -- modulation sources {key, name, section, value, range, describe, visible, row}
+    -- 3.5's (design §0.1)
+    voice_stop = {},        -- fn(voice_idx), run after every engine.voiceOff the script sends
+    freeze_change = {},     -- fn(voice_idx, frozen), run by every v<i>_freeze action
   }
 
   -- The registries init reads once (voice_params, scene_fields,
@@ -458,6 +461,23 @@ return function()
       require_functions(row, where .. " row", {}, {"enc", "fine_enc", "press", "alt_press", "hints"})
     end
     table.insert(M.registry.mod_sources, record)
+  end
+
+  -- 3.5's hooks (design §0.1), read at each use, so they stay open
+
+  -- fn(voice_idx) runs after each engine.voiceOff the script sends
+  -- (lib/engine_sync.lua: toggle_voice's stop, a start that failed once its
+  -- voiceOn went, cleanup's stop of every running voice)
+  function M.register_voice_stop(fn)
+    require_arg(type(fn) == "function", "register_voice_stop", "a hook is a function")
+    table.insert(M.registry.voice_stop, fn)
+  end
+
+  -- fn(voice_idx, frozen) runs in every v<i>_freeze action (lib/freeze.lua),
+  -- once the value is stored and sent, frozen true for 1
+  function M.register_freeze_change(fn)
+    require_arg(type(fn) == "function", "register_freeze_change", "a hook is a function")
+    table.insert(M.registry.freeze_change, fn)
   end
 
   -- The module tables, S.lib.<name> (strata.lua stores each constructor's
