@@ -232,7 +232,7 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `macro apply` | `lib/macros.lua` | a macro waits for its apply exactly while the apply clock runs (`S.macro_clock`), and that clock's coroutine is not dead (3.4) |
   | `macro learn` | `lib/macros.lua` | learn waits for a touch exactly while its timeout clock runs (`S.macro_learn_clock`) (3.4) |
   | `matrix learn` | `lib/matrix.lua` | matrix learn waits for a touch exactly while its timeout clock runs (`S.matrix_learn_clock`) (3.4) |
-  | `zones editor` | `lib/ui/zones.lua` | the zones editor's learn waits exactly while its timeout clock runs (`S.zones_learn_clock`) and only while the editor is open, and the closed editor's owner is never the modal one (3.5) |
+  | `zones editor` | `lib/ui/zones.lua` | the zones editor's learn waits exactly while its timeout clock is pending (`S.zones_learn_clock`, its coroutine alive) and the note tap is set, and only while the editor is open; the open editor's own owner is the modal one (or beneath SEQ's step editor), the closed editor's never (3.5) |
   | `lfo clock` | `lib/lfos.lua` | the LFO clock (`S.lfo_clock`) runs from its start step to cleanup, and only then (3.4) |
   | `step editor` | `lib/pages/seq.lua` | the step editor is open exactly while its owner is the modal one (`S.lib.ui_modal.top()`) (3.4) |
   | `notes` | `lib/notes.lua` | the note pool is a whole number in 0..`NOTE_POOL.max`, the extra notes held never exceed it, and a stopped voice holds none (3.5) |

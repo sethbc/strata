@@ -128,7 +128,10 @@ test("learn takes the next two notes as a voice's lowest and highest", function(
   assert_equal(zones.learning(), nil, "learn ends")
   assert_equal(double.fn, nil, "and clears the tap")
   assert_equal(S.lib.ui_flash.text("header"), nil, "the notice goes")
-  assert_equal(#context.engine_calls, 0, "neither note sounds")
+  -- the learn consumes both notes (M.note returned true for each, above)
+  -- and sends nothing for them; that a consumed MIDI note is silent is the
+  -- MIDI module's tap and the release's whole-system test
+  assert_equal(#context.engine_calls, 0, "taking the two notes sends no engine command")
   assert_equal(zones.note(60), false, "with no learn waiting a note is not taken")
   -- a higher second note keeps the order
   enc(2, 1)  -- v4
@@ -298,19 +301,71 @@ test("the editor's every state stays inside the layout", function()
   local names = {}
   for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.SETUP].layout_states) do names[state.name] = true end
   for _, name in ipairs({ "mpe & zones editor", "mpe & zones editor, v7's high at its widest",
-      "mpe & zones editor, learning v7's low" }) do
+      "mpe & zones editor, learning v7's low", "mpe & zones editor, learning v7's high" }) do
     assert_true(names[name], "SETUP's layout state: " .. name)
   end
 end)
 
-test("the editor's invariant is registered", function()
-  load_strata()
-  local S = local_value("S")
-  local found = false
-  for _, record in ipairs(S.registry.invariants) do
-    if record.name == "zones editor" then found = true end
+test("K3 on a count row leaves the column alone and changes nothing", function()
+  local context, S, zones = loaded()
+  local function values()
+    local list = {}
+    for _, id in ipairs({ "mpe_lower_members", "mpe_upper_members", "mpe_bend_range" }) do list[#list + 1] = params:get(id) end
+    for voice = 1, S.constants.NUM_VOICES do
+      for _, suffix in ipairs({ "", "_low", "_high" }) do list[#list + 1] = params:get("v" .. voice .. "_zone" .. suffix) end
+    end
+    return table.concat(list, ",")
   end
-  assert_true(found, "the zones editor invariant")
+  local before = values()
+  for row_index = 1, 3 do
+    enc(2, -20); enc(2, row_index - 1)
+    tap(3); tap(3)
+    assert_equal(values(), before, "K3 on count row " .. row_index .. " changes nothing")
+    assert_equal(zones.learning(), nil, "and learns nothing")
+  end
+  enc(2, 1)  -- v1, its column still the zone's
+  enc(3, 1)
+  assert_equal(params:string("v1_zone"), "upper", "E3 on v1 turns the zone: the column did not move")
+  assert_equal(params:get("v1_zone_low"), 0); assert_equal(params:get("v1_zone_high"), 127)
+end)
+
+-- The zones editor invariant (S.registry.invariants), called as the harness
+-- calls it: nil while it holds, else what is broken
+local function zones_invariant(S)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "zones editor" then return record.fn end
+  end
+end
+
+test("the editor's invariant holds its own owner and a waiting learn's clock", function()
+  local context, S, zones = loaded()
+  local invariant = zones_invariant(S)
+  assert_true(invariant ~= nil, "the zones editor invariant is registered")
+  assert_equal(invariant(), nil, "open, its owner the modal one")
+  -- another owner in its owner's place: not the editor's own
+  local own = S.lib.ui_modal.top()
+  local stranger = { draw = function() end }
+  S.lib.ui_modal.pop(own); S.lib.ui_modal.push(stranger)
+  assert_true(invariant() ~= nil, "open, but another owner is on the stack: " .. tostring((invariant())))
+  S.lib.ui_modal.pop(stranger); S.lib.ui_modal.push(own)
+  assert_equal(invariant(), nil, "its own owner back")
+  -- a grid's step editor over it (the one owner that can be pushed over it)
+  assert_true(S.lib.pages_seq.open_step_editor(1, 1, 1), "the step editor opens over it")
+  assert_equal(invariant(), nil, "beneath the step editor")
+  S.lib.pages_seq.close_step_editor(1)
+  assert_equal(S.lib.ui_modal.top(), own, "the editor on top again")
+  assert_equal(invariant(), nil)
+  -- a waiting learn: open, the tap set, its clock pending
+  tap_double(S)
+  zones.learn(3)
+  assert_equal(invariant(), nil, "a learn waiting")
+  zones.note(60)
+  assert_equal(invariant(), nil, "after its first note")
+  local learn_clock = S.zones_learn_clock
+  clock.cancel(learn_clock)  -- its coroutine gone under it
+  assert_true(invariant() ~= nil, "a learn whose clock has ended: " .. tostring((invariant())))
+  zones.cancel_learn()
+  assert_equal(invariant(), nil, "learn ended")
 end)
 
 end

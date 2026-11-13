@@ -56,6 +56,14 @@ return function(S)
   -- until then, which cleanup cancels)
   local learn_clock = {token = 0, retired = {}, wake = -math.huge}
   S.zones_learn_clock = nil
+  -- whether the editor's M.note is the MIDI module's note tap now (set
+  -- when a learn starts, cleared when it ends)
+  local tap_set = false
+
+  local function set_tap(fn)
+    S.lib.midi_in.set_note_tap(fn)
+    tap_set = fn ~= nil
+  end
 
   local function whole_in(value, low, high)
     return type(value) == "number" and value % 1 == 0 and value >= low and value <= high
@@ -87,7 +95,7 @@ return function(S)
     end
     if learning then
       learning = nil
-      S.lib.midi_in.set_note_tap(nil)
+      set_tap(nil)
       request_redraw()
     end
   end
@@ -109,11 +117,11 @@ return function(S)
       if token ~= learn_clock.token then return end
       S.zones_learn_clock = nil
       learning = nil
-      S.lib.midi_in.set_note_tap(nil)
+      set_tap(nil)
       request_redraw()
     end)
     S.zones_learn_clock = id
-    S.lib.midi_in.set_note_tap(M.note)
+    set_tap(M.note)
     request_redraw()
     return true
   end
@@ -268,13 +276,22 @@ return function(S)
     learn_clock.retired = {}
   end)
 
-  -- Learn waits exactly while its timeout clock runs and only while the
-  -- editor is open; a retired clock is never S.zones_learn_clock and is
-  -- forgotten when it ends; the closed editor's owner is never the modal
-  -- one, an open one is pushed; the cursor is on a row and a column
+  -- Learn waits exactly while its timeout clock is pending (its coroutine
+  -- alive) and the note tap is the editor's, and only while the editor is
+  -- open; a retired clock is never S.zones_learn_clock and is forgotten
+  -- when it ends; the closed editor's owner is never the modal one, the
+  -- open editor's own owner is (or is beneath SEQ's step editor); the
+  -- cursor is on a row and a column
   S.register_invariant("zones editor", function()
     if (learning ~= nil) ~= (S.zones_learn_clock ~= nil) then
       return "learn waits: " .. tostring(learning ~= nil) .. ", but its clock is " .. tostring(S.zones_learn_clock)
+    end
+    local pending = S.zones_learn_clock and clock.threads and clock.threads[S.zones_learn_clock]
+    if S.zones_learn_clock and clock.threads and (type(pending) ~= "thread" or coroutine.status(pending) == "dead") then
+      return "learn's clock " .. tostring(S.zones_learn_clock) .. " is no longer pending"
+    end
+    if (learning ~= nil) ~= tap_set then
+      return "learn waits: " .. tostring(learning ~= nil) .. ", but the note tap is " .. (tap_set and "set" or "not set")
     end
     if learning and not editor.open then return "learn waits with the editor closed" end
     for id in pairs(learn_clock.retired) do
@@ -283,8 +300,13 @@ return function(S)
         return "the retired learn clock " .. id .. " is still the learn clock or has gone but is kept"
       end
     end
-    if not editor.open and S.lib.ui_modal.top() == owner then return "the editor is closed but its owner is the modal one" end
-    if editor.open and S.lib.ui_modal.top() == nil then return "the editor is open but no owner is pushed" end
+    local top = S.lib.ui_modal.top()
+    if not editor.open and top == owner then return "the editor is closed but its owner is the modal one" end
+    -- open: its own owner is the modal one, but for the one owner a grid
+    -- can push over it, SEQ's step editor (its own invariant holds that)
+    if editor.open and top ~= owner and not (top == S.lib.pages_seq.step_editor_owner and S.lib.pages_seq.step_editor()) then
+      return "the editor is open but the modal owner is " .. tostring(top) .. ", not its own"
+    end
     if not whole_in(editor.row, 1, #ROWS) or not whole_in(editor.column, 1, #ZONES_EDITOR.columns) then
       return "the cursor is on row " .. tostring(editor.row) .. ", column " .. tostring(editor.column)
     end
