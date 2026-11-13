@@ -706,8 +706,8 @@ return function(S)
       options = S.lib.midi_in.MIDI.channel_mode_options,
       default = 1,
       action = function()
-        -- bends re-center; held notes stay, so their note offs reach the voices their note ons played
-        reset_midi_input(true)
+        -- bends re-center and every MIDI note is released: the new mode routes the note offs elsewhere
+        reset_midi_input()
       end
     }
 
