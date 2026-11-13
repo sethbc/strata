@@ -561,6 +561,45 @@ test("a quiet play on a stopped frozen synth voice leaves its rate to the start 
   end
   assert_true(voice_on ~= nil and note_on ~= nil and note_on > voice_on, "the noteOn after voiceOn")
   assert_equal(#context.calls_named("noteOn"), 1, "once")
+  -- a real player's set_own moves the voice's freq: the start takes its
+  -- reference from it, so the note plays the frozen sound as it is (rate 1)
+  toggle_voice(4)
+  params:set("v4_freq", 440)
+  params:set("v4_freeze", 1)
+  toggle_voice(4)
+  local function set_freq(pitch) params:set("v4_freq", 440 * 2 ^ ((pitch - 69) / 12)) end
+  context.clear_engine_calls()
+  assert_equal(play(context, 4, 1, 81, { quiet = true, set_own = set_freq }), 1)
+  assert_equal(#context.calls_named("noteOn"), 0, "nothing before the start")
+  toggle_voice(4)
+  sent, voice_on, note_on = calls(context), nil, nil
+  for index, text in ipairs(sent) do
+    if text:find("^voiceOn%(3,") then voice_on = index end
+    if text:find("^noteOn%(") then note_on = index; assert_equal(text, "noteOn(3, 0, 81, 880, 1, 0.5)", "rate 1") end
+  end
+  assert_true(voice_on ~= nil and note_on ~= nil and note_on > voice_on, "the noteOn after voiceOn")
+  assert_near(S.lib.notes.freeze_reference(4), 81, 1e-9, "the reference is the played pitch")
+end)
+
+test("a running voice's source switch sends no slot-0 noteOn, a recall's neither", function()
+  local context = load_strata()
+  local S = started(context)
+  local function recall_source(option)
+    S.scene_recall_in_progress = true
+    params:set("v1_source", option)
+    S.scene_recall_in_progress = false
+  end
+  for _, switch in ipairs({ function(option) params:set("v1_source", option) end, recall_source }) do
+    params:set("v1_source", 2)
+    params:set("v1_freeze", 1)
+    play(context, 1, 1, 72)
+    assert_equal(S.lib.notes.held(1), 1, "slot 1 held")
+    context.clear_engine_calls()
+    switch(S.constants.SOURCE_SYNTH)
+    assert_equal(#context.calls_named("noteOn"), 0, "a source switch needs nothing from Lua")
+    params:set("v1_freeze", 0)
+    S.lib.notes.release(1, "midi", 1)
+  end
 end)
 
 test("a voice that leaves the frozen synth state by another path never reuses its old reference", function()
