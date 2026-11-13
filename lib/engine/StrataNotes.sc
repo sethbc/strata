@@ -357,6 +357,73 @@
         this.trimCuttingNotes(size);
     }
 
+    // Whether the voice's own note sounds through its grain synth (a buffer
+    // or input voice) rather than its voice synth (a synth voice)
+    ownNoteOnGrain { arg voice;
+        ^grainSource[voice] != 0
+    }
+
+    // The key of the synth that sounds the voice's own note: the one slot 0's
+    // park, accent and expression reach
+    ownNoteKey { arg voice;
+        ^if (this.ownNoteOnGrain(voice)) { this.grainKey(voice) } { this.voiceKey(voice) }
+    }
+
+    // What one of the voice's own synths (a synth of defName) starts or is
+    // re-gated with of the note controls: the one that sounds the own note
+    // takes slot 0's park and kept expression, every other own synth (a synth
+    // voice's grain synth, which grains the whole chord) the neutral values,
+    // its defaults. Only the controls defName has
+    ownNotePairs { arg voice, defName;
+        var own = this.noteRecord(voice, 0), expression = own[\expression], controls;
+        var sounds = voiceSynthDefs.includes(defName) == this.ownNoteOnGrain(voice).not;
+        if (sounds.not) { expression = this.neutralNoteExpression };
+        controls = Dictionary[\noteGate -> (if (sounds and: { own[\parked] }) { 0 } { 1 }),
+            \noteBend -> expression[\bend], \noteAmp -> expression[\amp], \noteMain -> expression[\main],
+            \notePos -> expression[\position], \noteSize -> expression[\size]];
+        ^this.controlPairs(defName, controls)
+    }
+
+    // voiceOn starts every voice unparked, its own note's expression neutral
+    // (as it resets bend); gateVoice gives the own synths ownNotePairs
+    resetOwnNote { arg voice;
+        var own = this.noteRecord(voice, 0);
+        own[\parked] = false;
+        own[\expression] = this.neutralNoteExpression;
+    }
+
+    // noteOn on slot 0: the own note unparked (noteGate 1) and its accent
+    // fired at velocity on the synth that sounds it (a voice synth's t_trig,
+    // a grain synth's t_accent). Lua follows it with retrigger, which opens
+    // the stage's step gate and accent (ruling 15)
+    ownNoteOn { arg voice, rate, velocity;
+        var own = this.noteRecord(voice, 0);
+        own[\parked] = false;
+        this.setSynth(this.ownNoteKey(voice), \noteGate, 1, \velocity, velocity,
+            if (this.ownNoteOnGrain(voice)) { \t_accent } { \t_trig }, 1);
+    }
+
+    // noteOff on slot 0: the own note parked (noteGate 0 on the synth that
+    // sounds it: its level falls over the release, every synth stays)
+    ownNoteOff { arg voice;
+        this.noteRecord(voice, 0)[\parked] = true;
+        this.setSynth(this.ownNoteKey(voice), \noteGate, 0);
+    }
+
+    // noteExpression on slot 0: kept, and set on the synth that sounds the
+    // own note
+    ownNoteExpression { arg voice, expression;
+        var key = this.ownNoteKey(voice);
+        this.noteRecord(voice, 0)[\expression] = expression;
+        this.setSynth(key, *this.noteExpressionPairs(if (this.ownNoteOnGrain(voice)) { \buffer } { \voice }, expression));
+    }
+
+    // voiceOff releases every live extra note of the voice with it: their
+    // tails stay in their slots and the pool until they free
+    releaseNotes { arg voice;
+        (1 .. (this.noteSlots - 1)).do({ arg slot; this.releaseNote(voice, slot) });
+    }
+
     // The area's stop: every note synth freed (quietly) and every slot as
     // alloc left it, before the voices' groups go
     stopNotes {
@@ -391,7 +458,7 @@
                 and: { this.fastModValuesFinite(\noteOn, [[\note, msg[3]], [\freq, msg[4]], [\rate, msg[5]], [\velocity, msg[6]]]) }) {
                 note = msg[3].clip(0, 127); freq = msg[4].clip(8, 20000); rate = msg[5].clip(0.25, 4); velocity = msg[6].clip(0, 1);
                 this.receiveNote(\noteOn, [voice, slot, note, freq, rate, velocity]);
-                if (slot > 0) { this.extraNoteOn(voice, slot, note, freq, rate, velocity) };
+                if (slot > 0) { this.extraNoteOn(voice, slot, note, freq, rate, velocity) } { this.ownNoteOn(voice, rate, velocity) };
             };
         });
 
@@ -400,23 +467,22 @@
             var voice = msg[1], slot = msg[2], cut = msg[3];
             if (this.fastModIndicesValid(\noteOff, [[\voice, voice, lastVoice], [\slot, slot, lastSlot], [\cut, cut, 1]])) {
                 this.receiveNote(\noteOff, [voice, slot, cut]);
-                if (slot > 0) { this.extraNoteOff(voice, slot, cut) };
+                if (slot > 0) { this.extraNoteOff(voice, slot, cut) } { this.ownNoteOff(voice) };
             };
         });
 
         // Voice's slot's expression: bend a ratio 0.0625-16, amp a gain 0-2,
         // position, size and main offsets of -1..1 half ranges
         this.addCommand(\noteExpression, "iifffff", { arg msg;
-            var voice = msg[1], slot = msg[2], bend, amp, position, size, main;
+            var voice = msg[1], slot = msg[2], bend, amp, position, size, main, expression;
             if (this.fastModIndicesValid(\noteExpression, [[\voice, voice, lastVoice], [\slot, slot, lastSlot]])
                 and: { this.fastModValuesFinite(\noteExpression, [[\bend, msg[3]], [\amp, msg[4]], [\position, msg[5]],
                     [\size, msg[6]], [\main, msg[7]]]) }) {
                 bend = msg[3].clip(0.0625, 16); amp = msg[4].clip(0, 2);
                 position = msg[5].clip(-1, 1); size = msg[6].clip(-1, 1); main = msg[7].clip(-1, 1);
                 this.receiveNote(\noteExpression, [voice, slot, bend, amp, position, size, main]);
-                if (slot > 0) {
-                    this.extraNoteExpression(voice, slot, (bend: bend, amp: amp, position: position, size: size, main: main));
-                };
+                expression = (bend: bend, amp: amp, position: position, size: size, main: main);
+                if (slot > 0) { this.extraNoteExpression(voice, slot, expression) } { this.ownNoteExpression(voice, expression) };
             };
         });
 

@@ -19,6 +19,8 @@ var slotRecord, slotState, slotSynth, slotCutting, near, controlOf, sentSets, se
 var playNote, neutralExpression, ownGrain, notesOf, neutralSlots;
 var checkBufferNotes, checkSlotChurn, checkInputNote, checkGrainFanOut, checkExpression, checkFailedNoteStart;
 var startSynthVoice, checkSynthNote, checkSynthChord, checkVoiceFanOut, checkExpressionKinds;
+var levelProbe, checkPark, checkVoiceCommands, checkPoolFull, checkPoolRandom, checkPoolShrink, checkCuttingBound;
+var heldCount, cuttingCount;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -65,6 +67,16 @@ startSynthVoice = { arg voice;
     command.(\setGrainSource, voice, 0);
     command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
     server.sync; 0.05.wait;
+};
+// Live and releasing extra notes, and cutting note synths, across every voice
+heldCount = { state[\slots].sum({ arg slots; slots.copyToEnd(1).count({ arg record; [\live, \releasing].includes(record[\state]) }) }) };
+cuttingCount = { state[\slots].sum({ arg slots; slots.copyToEnd(1).count({ arg record; record[\cutting].notNil }) }) };
+// A peak meter on a voice's bus (granBuses: its voice synths', or the stage's
+// mirror of its other path), at the tail of processGroup: [the probe, the
+// control bus it writes], for h.measure
+levelProbe = { arg voice;
+    var bus = Bus.control(server, 1);
+    [Synth(\strataCheckPeak, [\in, engine.granBuses[voice], \out, bus], engine.processGroup, \addToTail), bus]
 };
 // A note as Lua starts one: its expression (neutral unless given), then its noteOn
 neutralExpression = [1.0, 1.0, 0.0, 0.0, 0.0];
@@ -579,6 +591,203 @@ checkExpressionKinds = {
     server.sync; 0.1.wait;
 };
 
+// The own note's park (slot 0), on a synth voice (4, Pulse: once its 2 s
+// attack is over, its attack and release set short, since the park takes the
+// voice's times), a buffer voice
+// (1) and an input voice (2, fed a test tone): noteOff on slot 0 sets
+// noteGate 0 on the synth that sounds the own note (the voice synth, or the
+// grain synth), whose level falls to 0 over its release while every synth
+// stays; noteOn on slot 0 sets it to 1 and the level comes back (no node
+// either way)
+checkPark = {
+    var tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.voiceGroup, \addToHead), results;
+    startSynthVoice.(4);
+    startBufferVoice.(1);
+    startInputVoice.(2);
+    server.sync; 2.3.wait;
+    command.(\setVoiceParam, 4, \attackTime, 0.05);
+    command.(\setVoiceParam, 4, \releaseTime, 0.3);
+    results = [[4, engine.voiceKey(4), 0.6], [1, engine.grainKey(1), 2.4], [2, engine.grainKey(2), 2.4]].collect({ arg each;
+        var voice = each[0], synth = engine.synths[each[1]], probe = levelProbe.(voice), before, parked, back, nodes, gate, kept;
+        server.sync;
+        before = h.measure(probe[0], probe[1], 0.3)[0];
+        nodes = h.synthNames(h.context.xg).size;
+        command.(\noteOff, voice, 0, 0);
+        server.sync;
+        gate = controlOf.(synth, \noteGate);
+        each[2].wait;
+        parked = h.measure(probe[0], probe[1], 0.2)[0];
+        kept = (engine.synths[each[1]] === synth) and: { synth.isPlaying } and: { h.synthNames(h.context.xg).size == nodes };
+        command.(\noteOn, voice, 0, 60.0, 220.0, 1.0, 1.0);
+        server.sync; 0.4.wait;
+        back = h.measure(probe[0], probe[1], 0.3)[0];
+        probe[0].free; probe[1].free;
+        [voice, gate, before, parked, back, kept, controlOf.(synth, \noteGate)]
+    });
+    tone.free;
+    check.(results.every({ arg each; (each[1] == 0) and: { each[2] > 0.01 } and: { each[3] < (each[2] * 0.01) }
+            and: { each[4] > (each[2] * 0.5) } and: { each[5] } and: { each[6] == 1 } }),
+        "notes: noteOff on slot 0 parks the own note: its synths stay, its level falls to 0; noteOn on slot 0 brings it back (per voice [voice, noteGate parked, level before, parked, back, synths kept, noteGate after]: %)".format(
+            results.collect({ arg each; [each[0], each[1], each[2].round(0.001), each[3].round(0.0001), each[4].round(0.001), each[5], each[6]] })));
+    command.(\setVoiceParam, 4, \attackTime, 2.0);
+    command.(\setVoiceParam, 4, \releaseTime, 4.0);
+    h.stopAllVoices;
+};
+
+// voiceOff releases every extra note with the voice (their gate 0, their
+// slots releasing); voiceOn after it re-gates only the own synths (no new
+// node) and leaves the extra tails to end; after the longest release (the
+// grain synths' 2 s, Karplus's 2 s) every slot is empty. A buffer voice (1)
+// and a synth voice (5) hold three extra notes each; voiceOn also unparks
+// the own note and puts its expression back to neutral
+checkVoiceCommands = {
+    var voices = [1, 5], notes, own, nodes, released, regated, tails, parkReset;
+    command.(\setNotePool, 8);
+    startBufferVoice.(1);
+    startSynthVoice.(5);
+    voices.do({ arg voice; (1 .. 3).do({ arg slot; playNote.(voice, slot, 1.0 + (slot / 4), 1.0, 220.0 * (1 + (slot / 4))) }) });
+    command.(\noteOff, 1, 0, 0);
+    command.(\noteExpression, 1, 0, 2.0, 0.5, 0.5, 0.5, 0.5);
+    server.sync;
+    notes = voices.collect({ arg voice; notesOf.(voice) });
+    own = voices.collect({ arg voice; h.voiceSynths(voice) });
+    voices.do({ arg voice; command.(\voiceOff, voice) });
+    server.sync;
+    released = voices.every({ arg voice, index; (1 .. 3).every({ arg slot; slotState.(voice, slot) == \releasing })
+        and: { notes[index].every({ arg synth; controlOf.(synth, \gate) == 0 }) } });
+    nodes = h.synthNames(h.context.xg).size;
+    voices.do({ arg voice; command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0) });
+    server.sync;
+    regated = (h.synthNames(h.context.xg).size == nodes)
+        and: { voices.every({ arg voice, index; h.voiceSynths(voice).every({ arg synth, key; synth === own[index][key] }) }) }
+        and: { voices.every({ arg voice, index; (1 .. 3).every({ arg slot; slotState.(voice, slot) == \releasing })
+            and: { notes[index].every({ arg synth; controlOf.(synth, \gate) == 0 }) } }) };
+    parkReset = (slotRecord.(1, 0)[\parked] == false) and: { slotRecord.(1, 0)[\expression][\bend] == 1 }
+        and: { controlOf.(ownGrain.(1), \noteGate) == 1 } and: { near.(controlOf.(ownGrain.(1), \noteBend), 1) };
+    check.(released and: { regated } and: { parkReset },
+        "notes: voiceOff releases every note and voiceOn after it re-gates only the own synths (released %, re-gated only the own %, own note unparked and neutral %)".format(
+            released, regated, parkReset));
+    tails = h.waitFor({ voices.every({ arg voice; (1 .. 7).every({ arg slot; slotState.(voice, slot) == \empty }) }) }, 3);
+    check.(tails and: { notes.flatten.every({ arg synth; synth.isPlaying.not }) },
+        "notes: after voiceOff and the longest release every slot is empty (% slots left)".format(
+            voices.collect({ arg voice; (1 .. 7).reject({ arg slot; slotState.(voice, slot) == \empty }) })));
+    h.stopAllVoices;
+};
+
+// A full pool (4) on the buffer voice (1): two live notes and two releasing
+// (the older first); a new note cuts the oldest releasing one (its slot
+// empty, its synth cutting) and leaves the other releasing. With the pool
+// full of live notes a new note is refused with one line, starting nothing
+checkPoolFull = {
+    var voice = 1, before, lines = List.new, cut;
+    startBufferVoice.(voice);
+    command.(\setNotePool, 4);
+    (1 .. 4).do({ arg slot; playNote.(voice, slot, 1.0) });
+    server.sync;
+    command.(\noteOff, voice, 2, 0);
+    command.(\noteOff, voice, 3, 0);
+    cut = slotSynth.(voice, 2);
+    playNote.(voice, 5, 1.5);
+    server.sync;
+    check.((slotState.(voice, 2) == \empty) and: { slotCutting.(voice, 2) === cut } and: { slotState.(voice, 3) == \releasing }
+        and: { slotState.(voice, 5) == \live } and: { heldCount.value == 4 },
+        "notes: with the pool full of live and releasing notes a new note cuts the oldest releasing one (slots 1-5: %, % held)".format(
+            (1 .. 5).collect({ arg slot; slotState.(voice, slot) }), heldCount.value));
+    playNote.(voice, 3, 1.0);   // slot 3 was releasing: its tail is cut, a new note starts
+    server.sync; 0.1.wait; server.sync;   // past the kill fade
+    before = h.synthNames(h.context.xg).size;
+    withIgnoredLines.(lines, { playNote.(voice, 6, 1.0) });
+    server.sync;
+    check.((lines.size == 1) and: { lines.first.beginsWith("strata: noteOn ignored: ") } and: { slotState.(voice, 6) == \empty }
+        and: { h.synthNames(h.context.xg).size == before } and: { heldCount.value == 4 },
+        "notes: with the pool full of live notes a new note is refused with one line (%; % held)".format(lines.asArray, heldCount.value));
+    h.stopAllVoices;
+};
+
+// A random run of 2000 commands over the seven voices (three synth voices,
+// two buffer voices, two input voices, all running): noteOn, noteOff (a
+// release or a cut) on random extra slots, now and then a voiceOff and
+// voiceOn or a new pool size. After every command live and releasing extra
+// notes are within the pool, and cutting note synths within it too
+checkPoolRandom = {
+    var random = Pseed(7, Pwhite(0.0, 1.0)).asStream, held = 0, cutting = 0, over = List.new, pool = 8;
+    var sources = [0, 1, 2, engine.inputSource, 0, engine.inputSource, 0];
+    [0, 1].do({ arg slot;
+        if (engine.bufferFrames[slot] == 0) { command.(\loadBuffer, slot, h.stereoPath, 0); h.waitFor({ engine.bufferFrames[slot] > 0 }, 3) };
+    });
+    sources.do({ arg source, voice;
+        command.(\setGrainSource, voice, source);
+        command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+    });
+    command.(\setNotePool, pool);
+    server.sync;
+    withIgnoredLines.(List.new, {
+        2000.do({ arg index;
+            var draw = random.next, voice = (random.next * 7).floor.asInteger.min(6), slot = (random.next * 7).floor.asInteger.min(6) + 1;
+            case
+            { draw < 0.5 } { playNote.(voice, slot, 0.5 + random.next, 1.0, 110.0 + (random.next * 400)) }
+            { draw < 0.75 } { command.(\noteOff, voice, slot, 0) }
+            { draw < 0.9 } { command.(\noteOff, voice, slot, 1) }
+            { draw < 0.95 } { command.(\voiceOff, voice); command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0) }
+            { pool = (random.next * 17).floor.asInteger.min(16); command.(\setNotePool, pool) };
+            held = max(held, heldCount.value);
+            cutting = max(cutting, cuttingCount.value);
+            if ((heldCount.value > pool) or: { cuttingCount.value > pool }) { over.add([index, heldCount.value, cuttingCount.value, pool]) };
+            if ((index % 25) == 24) { server.sync; 0.01.wait };
+        });
+    });
+    check.(over.isEmpty and: { held > 0 },
+        "notes: live and releasing extra notes never exceed the pool (2000 commands over seven voices: at most % held and % cutting; over the pool at %)".format(
+            held, cutting, over.keep(5)));
+    h.stopAllVoices;
+};
+
+// setNotePool below what is held cuts the notes past it: the oldest
+// releasing first, then the oldest live. Six notes on the buffer voice
+// (slots 1-6, in that order), slot 6 then released: a pool of 4 cuts slot 6
+// (releasing) and slot 1 (the oldest live)
+checkPoolShrink = {
+    var voice = 1;
+    startBufferVoice.(voice);
+    command.(\setNotePool, 8);
+    (1 .. 6).do({ arg slot; playNote.(voice, slot, 1.0) });
+    command.(\noteOff, voice, 6, 0);
+    command.(\setNotePool, 4);
+    server.sync;
+    check.(([\empty, \live, \live, \live, \live, \empty] == (1 .. 6).collect({ arg slot; slotState.(voice, slot) }))
+        and: { slotCutting.(voice, 1).notNil } and: { slotCutting.(voice, 6).notNil } and: { heldCount.value == 4 },
+        "notes: setNotePool below what is held cuts the oldest notes past it (slots 1-6: %)".format(
+            (1 .. 6).collect({ arg slot; slotState.(voice, slot) })));
+    h.stopAllVoices;
+};
+
+// With a pool of 2, notes started and cut on every extra slot of the buffer
+// voice in turn, the commands sent without a yield (no /n_end is handled
+// meanwhile, so no kill fade ends on its own for sclang): after each command
+// at most two cutting note synths, the oldest freed at once, and on the
+// server at most two in their kill fade (kill 1) once it has them all
+checkCuttingBound = {
+    var voice = 1, worst = 0, worstServer = 0, own;
+    startBufferVoice.(voice);
+    command.(\setNotePool, 2);
+    own = ownGrain.(voice);
+    3.do({
+        (1 .. 7).do({ arg slot;
+            playNote.(voice, slot, 1.0);
+            worst = max(worst, cuttingCount.value);
+            command.(\noteOff, voice, slot, 1);
+            worst = max(worst, cuttingCount.value);
+        });
+        server.sync;
+        worstServer = max(worstServer, h.synthTree(engine.voiceMixGroup(voice)).count({ arg node;
+            (node[\def] == \strataGrainBuf) and: { node[\id] != own.nodeID } and: { node[\controls][\kill] > 0 } }));
+        0.1.wait;
+    });
+    check.((worst == 2) and: { worstServer <= 2 },
+        "notes: cutting note synths never exceed the pool (a pool of 2: at most % cutting tracked, % on the server)".format(worst, worstServer));
+    h.stopAllVoices;
+};
+
 if (area.isNil or: { state.isNil }) {
     check.(false, "notes: the area runs at order 170 (no strataAreaNotes)");
 } {
@@ -602,6 +811,14 @@ if (area.isNil or: { state.isNil }) {
     checkSynthChord.value;
     checkVoiceFanOut.value;
     checkExpressionKinds.value;
+    h.stopAllVoices;
+    // the park, the voice's commands and the pool
+    checkPark.value;
+    checkVoiceCommands.value;
+    checkPoolFull.value;
+    checkPoolRandom.value;
+    checkPoolShrink.value;
+    checkCuttingBound.value;
     h.stopAllVoices;
     // the pool as the area found it: none
     command.(\setNotePool, 0);
