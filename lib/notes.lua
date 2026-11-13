@@ -595,27 +595,23 @@ return function(S)
 
   -- Every start (after its voiceOn, the voice not yet marked running) and
   -- every running voice's source change, a recall's included: a fresh
-  -- freeze reference, and a frozen synth voice's own note gets its rate on
-  -- the new own grain synth (noteOn on slot 0 from slot 1's held note: a
-  -- quiet note whose caller starts the voice now, or a held note over a
-  -- recall's switch). A play that starts the voice writes its record after
-  -- the start, and sends that noteOn itself
+  -- freeze reference. At a start only, a frozen synth voice's own note gets
+  -- its rate on the new own grain synth: noteOn on slot 0 from slot 1's held
+  -- note, a quiet note whose caller starts the voice now (a play that starts
+  -- the voice writes its record after the start, and sends that noteOn
+  -- itself). A running voice's source switch sends nothing (design §2.4: a
+  -- source switch needs nothing from Lua; the source is sent before the
+  -- freeze module's hook unfreezes the voice, and slot 1's pitch was its old
+  -- source's). With the voice-stop hook this covers every start and source
+  -- change: a stopped voice's switch runs no hook, and a stopped voice keeps
+  -- no reference
   S.register_grain_restart(function(voice)
     refresh_reference(voice, true)
     local record = slots[voice][1]
-    if record and record.held and frozen_synth(voice) then
+    if not S.voices[voice].active and record and record.held and frozen_synth(voice) then
       send_note_on(voice, 1, record)
       count(1)
     end
-  end)
-
-  -- A source change outside a recall (a stopped voice's included, which
-  -- runs no grain restart): a fresh reference for a running frozen synth
-  -- voice, none for a stopped one (its start takes it). With the hook above
-  -- every start and every source change is covered: a stopped voice's
-  -- switch inside a recall runs neither, and a stopped voice keeps none
-  S.register_source_change(function(voice)
-    refresh_reference(voice, S.voices[voice].active)
   end)
 
   -- A synth voice's freeze: its reference taken, its extra notes cut and
