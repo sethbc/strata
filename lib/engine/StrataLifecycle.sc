@@ -199,24 +199,31 @@
     // when the engine is freed. Until the server's /n_go confirms that it
     // runs, the synth is kept in unconfirmedStarts with its start time: one
     // whose /s_new failed never sends /n_go or /n_end (startFailed, #497).
+    // (the onFree goes through areaCall: a synth it starts again is watched
+    // by a frame its own onFree keeps, whose caller must not be this
+    // function's frame, freed as it returns, #211)
     watchVoiceSynth { arg voice, key, synth;
         this.watchStart(synth);
-        synth.onFree({
-            if (releasingSynths[voice][key] === synth) { releasingSynths[voice].removeAt(key) };
-            fadingSynths[voice].remove(synth);
-            cuttingSynths[voice].remove(synth);
-            this.forgetGrainReader(synth);
-            if (synths[key] === synth) {
-                synths.removeAt(key);
-                case
-                { key == this.voiceKey(voice) } {
-                    if (grainSource[voice] == 0) { synths[key] = this.startVoiceSynth(voice) };
-                }
-                { key == this.grainKey(voice) } { synths[key] = this.startPlacedGrainSynth(voice) }
-                { synths[key] = this.startModSynth(voice) };
-            };
-        });
+        synth.onFree({ this.areaCall(\voiceSynthFreed, voice, key, synth) });
         ^synth
+    }
+
+    // A voice's synth has freed (watchVoiceSynth): forgotten, and started
+    // again if the voice still uses it
+    voiceSynthFreed { arg voice, key, synth;
+        if (releasingSynths[voice][key] === synth) { releasingSynths[voice].removeAt(key) };
+        fadingSynths[voice].remove(synth);
+        cuttingSynths[voice].remove(synth);
+        this.forgetGrainReader(synth);
+        if (synths[key] === synth) {
+            synths.removeAt(key);
+            case
+            { key == this.voiceKey(voice) } {
+                if (grainSource[voice] == 0) { synths[key] = this.startVoiceSynth(voice) };
+            }
+            { key == this.grainKey(voice) } { synths[key] = this.startPlacedGrainSynth(voice) }
+            { synths[key] = this.startModSynth(voice) };
+        };
     }
 
     // A new synth playing from now on (register(true), so gateVoice can

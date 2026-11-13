@@ -351,7 +351,7 @@
         if (state[\stopped]) { ^this };
         place = state[\lfos][lfo];
         if (place.notNil and: { place[\synth] === synth }) {
-            if (place[\running]) { place[\synth] = this.startFastLfo(lfo, place, this.fastLfoPhaseNow(place)) } {
+            if (place[\running]) { place[\synth] = this.areaCall(\startFastLfo, lfo, place, this.fastLfoPhaseNow(place)) } {
                 state[\lfos][lfo] = nil;
                 channel !? { this.zeroFastModChannels(channel, 1) };
             };
@@ -379,7 +379,7 @@
         if (place.isNil) {
             place = (shape: shape, channel: channel, controls: controls, running: true);
             state[\lfos][lfo] = place;
-            place[\synth] = this.startFastLfo(lfo, place);
+            place[\synth] = this.areaCall(\startFastLfo, lfo, place);
             ^this
         };
         oldChannel = place[\channel];
@@ -394,9 +394,12 @@
                 this.anchorFastLfo(place, 0);
                 this.watchFastLfo(lfo, Synth.replace(old, this.fastLfoDefName(shape), controls), channel)
             } {
+                // (startFastLfo through areaCall: the node's onFree keeps
+                // the frame watching it, whose caller must not be this
+                // function's frame, freed as it returns, #211)
                 context.server.makeBundle(nil, {
                     this.sendToSynth(old.freeMsg);
-                    fresh = this.startFastLfo(lfo, place);
+                    fresh = this.areaCall(\startFastLfo, lfo, place);
                 });
                 fresh
             };
