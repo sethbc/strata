@@ -20,7 +20,9 @@ fi
 
 cd /src
 status=0
-SCLANG=/usr/bin/sclang test/run_engine_check.sh /norns || status=$?
+# One sclang a container: the host's script makes the shards itself, a
+# container each, or every area in one container with -1 (#671)
+STRATA_ENGINE_CHECK_ONE_SCLANG=1 SCLANG=/usr/bin/sclang test/run_engine_check.sh /norns || status=$?
 # Did the container's memory cap kill a process (cgroup v2)? The host's
 # script reads this line to tell a capped run from a crash (#544)
 if [ -r /sys/fs/cgroup/memory.events ]; then
