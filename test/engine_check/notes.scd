@@ -24,7 +24,7 @@ var heldCount, cuttingCount;
 var checkSourceSwitch, checkBufferLoad, checkInputFreeze;
 var checkFrozenNotes, checkSpectralNotes;
 var wireMessages, sentCount, startValue, checkParkThroughFreeze, checkSilentRestarts, checkOwnNoteOnAccent;
-var withheldNote, checkFailedStartRoom, checkFreedLeaveWatchers;
+var withheldNote, checkFailedStartRoom, checkFreedLeaveWatchers, checkRestartPitches;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -1242,6 +1242,77 @@ checkSilentRestarts = {
     h.stopAllVoices;
 };
 
+// Ruling 53 (#682): a held note the engine restarts plays its own pitch on
+// the new source. A ring-stream note's rate is against the freeze
+// reference (Lua's: the engine holds none), so a note that leaves the
+// stream (a frozen synth voice switched to a buffer or the input, or
+// unfrozen and then switched) takes its rate from its kept note, 2 ^ ((note
+// - 60) / 12), as Lua's note_values gives a buffer or input voice's note.
+// The notes go as Lua sends them: each its note, its freq and the rate for
+// the voice's state (on the frozen synth voice, 3, Sub at note 45, the
+// reference, against 45). Each case its own line: frozen, switched to
+// buffer slot 1, then the input, then back to the synth source; frozen,
+// unfrozen (with no switch: voice synths at each note's freq), then
+// switched to the buffer; a buffer voice's chord switched to the input,
+// then to the synth source. A buffer note's scaleNote is the voice's
+// reference note plus its rate's semitones (noteScaleNote)
+checkRestartPitches = {
+    var voice = 3, reference = 45, pitches = [52, 57, 64], slots = [1, 2, 3], results = List.new;
+    var absolute = pitches.collect({ arg pitch; 2 ** ((pitch - 60) / 12) }), freqs = pitches.collect(_.midicps);
+    var streams = pitches.collect({ arg pitch; 2 ** ((pitch - reference) / 12) });
+    var playChord = { arg rates;
+        pitches.do({ arg pitch, index; playNote.(voice, slots[index], rates[index], 1.0, freqs[index], pitch.asFloat) });
+        server.sync;
+    };
+    var read = { arg name; slots.collect({ arg slot; controlOf.(slotSynth.(voice, slot), name) }) };
+    var agree = { arg values, expected, tolerance;
+        (values.size == expected.size) and: { values.every({ arg value, index; near.(value, expected[index], tolerance) }) }
+    };
+    var switchTo = { arg source; command.(\setGrainSource, voice, source); server.sync };
+    var freeze = { arg value; command.(\setGrainParam, voice, \freeze, value); server.sync };
+    // [what, the name read, read, expected, tolerance]
+    var record = { arg what, name, expected, tolerance = 0.0001; results.add([what, name, read.(name), expected, tolerance]) };
+    var scaleNotes = { absolute.collect({ arg rate; engine.areaState[\scale][\notes][voice] + rate.ratiomidi }) };
+    var report = { arg what;
+        var result = results.detect({ arg each; each[0] == what });
+        check.(agree.(result[2], result[3], result[4]),
+            "notes: %: each note's % on the server % against % (ruling 53)".format(what, result[1],
+                result[2].collect({ arg value; value !? { value.round(0.0001) } }), result[3].collect(_.round(0.0001))));
+    };
+    command.(\setNotePool, 8);
+    if (engine.bufferFrames[0] == 0) { command.(\loadBuffer, 0, h.stereoPath, 0); h.waitFor({ engine.bufferFrames[0] > 0 }, 3) };
+    // a frozen synth voice's chord switched to a buffer, the input, its synth
+    startSynthVoice.(voice);
+    freeze.(1.0);
+    playChord.(streams);
+    switchTo.(1);
+    record.("a frozen synth voice's chord switched to a buffer", \bufRate, absolute);
+    results.add(["its buffer notes' scaleNote", \scaleNote, read.(\scaleNote), scaleNotes.value, 0.001]);
+    switchTo.(engine.inputSource);
+    record.("then to the input", \pitchShift, absolute);
+    switchTo.(0);
+    record.("then to its synth source", \freq, freqs, 0.01);
+    h.stopAllVoices;
+    // frozen, unfrozen (no switch), then switched to the buffer
+    startSynthVoice.(voice);
+    freeze.(1.0);
+    playChord.(streams);
+    freeze.(0.0);
+    record.("a frozen synth voice's chord unfrozen", \freq, freqs, 0.01);
+    switchTo.(1);
+    record.("then switched to a buffer", \bufRate, absolute);
+    h.stopAllVoices;
+    // a buffer voice's chord switched to the input, then to the synth source
+    startBufferVoice.(voice);
+    playChord.(absolute);
+    switchTo.(engine.inputSource);
+    record.("a buffer voice's chord switched to the input", \pitchShift, absolute);
+    switchTo.(0);
+    record.("then to the synth source", \freq, freqs, 0.01);
+    h.stopAllVoices;
+    results.do({ arg each; report.(each[0]) });
+};
+
 // Ruling 47: a slot-0 noteOn on an unfrozen voice only unparks the own note
 // (noteGate 1): Lua's retrigger after it accents the voice and plucks
 // Karplus once. On a Karplus voice (5) a slot-0 noteOn and a retrigger send
@@ -1370,6 +1441,9 @@ if (area.isNil or: { state.isNil }) {
     checkParkThroughFreeze.value;
     checkSilentRestarts.value;
     checkOwnNoteOnAccent.value;
+    h.stopAllVoices;
+    // the final review's fixes: a restarted note's pitch (ruling 53)
+    checkRestartPitches.value;
     h.stopAllVoices;
     // failed starts
     checkFailedStartRoom.value;
