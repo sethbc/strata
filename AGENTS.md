@@ -33,7 +33,7 @@ Every piece of work runs on the superpowers skills: the session doing a step inv
 - **Running a plan or a batch**, at its start and on every resume: `superpowers:subagent-driven-development`.
 - **Sending two or more agents at once**: `superpowers:dispatching-parallel-agents`.
 - **Changing code or tests** (every worker): `superpowers:test-driven-development`.
-- **A failing test or check, or a bug**, before any fix: `superpowers:systematic-debugging`.
+- **A test or check that fails unexpectedly, or a bug**, before any fix: `superpowers:systematic-debugging`.
 - **A review outside a plan's task loop** (a design, a docs change, a release): `superpowers:requesting-code-review`.
 - **Acting on a review's findings**: `superpowers:receiving-code-review`.
 - **Before reporting a status, landing or merging**: `superpowers:verification-before-completion`.

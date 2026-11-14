@@ -1493,28 +1493,36 @@ local function skill_set_problems(found_set, expected_lists, where)
   return problems
 end
 
--- `text` without its code fences: a fence closes only on a line of at least
--- its opening backticks, so a ```` fence may quote a ``` one
+-- `text` without its code fences (``` or ~~~): a fence closes only on a line
+-- of its own mark at least as long as its opening, so a ```` fence may quote
+-- a ``` one
 local function without_code_fences(text)
-  local kept, fence = {}, nil
+  local kept, fence_mark, fence_length = {}, nil, 0
   for line in (text .. "\n"):gmatch("([^\n]*)\n") do
-    local ticks = line:match("^%s*(```+)")
-    if fence then
-      if ticks and #ticks >= fence and line:match("^%s*`+%s*$") then fence = nil end
-    elseif ticks then
-      fence = #ticks
+    local marks = line:match("^%s*(```+)") or line:match("^%s*(~~~+)")
+    if fence_mark then
+      if marks and marks:sub(1, 1) == fence_mark and #marks >= fence_length
+          and line:match("^%s*" .. marks .. "%s*$") then
+        fence_mark = nil
+      end
+    elseif marks then
+      fence_mark, fence_length = marks:sub(1, 1), #marks
     else
       table.insert(kept, line)
     end
   end
-  return table.concat(kept, "\n")
+  -- the second value is true when the text ends inside a fence
+  return table.concat(kept, "\n"), fence_mark ~= nil
 end
 
--- A plan's skill problems, outside its code fences: no execution skill, or a
--- `### Task` section with no `**Skills:**` line naming a process skill
+-- A plan's skill problems, outside its code fences: an unclosed fence, no
+-- execution skill, or a `### Task` section with no `**Skills:**` line naming
+-- a process skill
 local function plan_skill_problems(text)
-  text = without_code_fences(text)
+  local unclosed
+  text, unclosed = without_code_fences(text)
   local problems = {}
+  if unclosed then table.insert(problems, "the plan has an unclosed code fence") end
   if not skills_named(text)["subagent-driven-development"] then
     table.insert(problems, "the plan does not name superpowers:subagent-driven-development")
   end
@@ -1617,6 +1625,11 @@ test("every plan under docs/superpowers/plans names the execution skill and a sk
     "a Skills line naming no process skill is reported")
   assert_equal(#plan_skill_problems(good .. "\n```markdown\n### Task 9: an example\n\n- [ ] step\n```\n"), 0,
     "a task heading inside a code fence is not a task")
+  assert_equal(#plan_skill_problems(good .. "\n~~~\n### Task 9: an example\n\n- [ ] step\n~~~\n"), 0,
+    "a task heading inside a tilde fence is not a task")
+  local unclosed = plan_skill_problems(good .. "\n```markdown\n### Task 9: an example\n")
+  assert_equal(#unclosed, 1, "a plan with an unclosed fence has one problem")
+  assert_true((unclosed[1] or ""):find("unclosed code fence", 1, true) ~= nil, "the problem names the unclosed code fence")
   for _, plan in ipairs(markdown_files("docs/superpowers/plans")) do
     assert_equal(table.concat(plan_skill_problems(read_repo_file(plan)), "; "), "", plan)
   end
