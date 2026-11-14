@@ -421,7 +421,7 @@ end
 test("Lua's held notes agree with a model of the engine's slots over seeded random play (ruling 57)", function()
   local Model = require("notes_model")
   local reached = {}  -- the model's paths, summed over the seeds
-  for _, seed in ipairs({ 2026, 15838, 95028 }) do
+  for _, seed in ipairs({ 2026, 15838, 95028, 11 }) do
     local context = load_strata(); finish_startup(context)
     local S = local_value("S")
     local random = seeded(seed)

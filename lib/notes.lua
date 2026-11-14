@@ -754,24 +754,53 @@ return function(S)
     references[voice] = nil  -- a stopped voice keeps no freeze reference
   end)
 
+  -- A voice that becomes a frozen synth voice: its extra notes cut
+  -- (noteOff with cut 1, in slot order) and forgotten, their sound in the
+  -- frozen ring; then, when any went, the held count's redraws and the own
+  -- note's return if it was parked under them (ruling 39)
+  local function cut_extras(voice)
+    local now, cut = util.time(), 0
+    for slot = 2, NOTE_SLOTS do
+      if slots[voice][slot] then
+        engine.noteOff(voice - 1, slot - 1, 1)
+        forget(slots[voice][slot], now)
+        cut = cut + 1
+      end
+    end
+    count(cut)
+    if cut > 0 then
+      update_lowered(voice)
+      held_changed()
+      unpark_alone(voice, now)  -- ruling 39: the cuts may have taken the voice's last held note
+    end
+  end
+
   -- Every start (after its voiceOn, the voice not yet marked running) and
   -- every running voice's source change, a recall's included: a fresh
   -- freeze reference. At a start only, a frozen synth voice's own note gets
   -- its rate on the new own grain synth: noteOn on slot 0 from slot 1's held
   -- note, a quiet note whose caller starts the voice now (a play that starts
   -- the voice writes its record after the start, and sends that noteOn
-  -- itself). A running voice's source switch sends nothing (design §2.4: a
-  -- source switch needs nothing from Lua; the source is sent before the
-  -- freeze module's hook unfreezes the voice, and slot 1's pitch was its old
-  -- source's). With the voice-stop hook this covers every start and source
-  -- change: a stopped voice's switch runs no hook, and a stopped voice keeps
-  -- no reference
+  -- itself). A running voice's source switch otherwise sends nothing (design
+  -- §2.4: a source switch needs nothing from Lua; the source is sent before
+  -- the freeze module's hook unfreezes the voice, and slot 1's pitch was its
+  -- old source's), but for ruling 58 (#690): a recall's switch that leaves
+  -- the voice a frozen synth voice (a frozen buffer or input voice to the
+  -- synth source, the scene's freeze on and unchanged, so no freeze hook
+  -- runs) cuts its extra notes as a freeze does; the engine would restart
+  -- them as voice synths under the frozen ring. Outside a recall the freeze
+  -- module's source-change hook, which runs after this one, unfreezes the
+  -- voice, so it keeps its notes. With the voice-stop hook this covers every
+  -- start and source change: a stopped voice's switch runs no hook, and a
+  -- stopped voice keeps no reference
   S.register_grain_restart(function(voice)
     refresh_reference(voice, true)
     local record = slots[voice][1]
     if not S.voices[voice].active and record and record.held and frozen_synth(voice) then
       send_note_on(voice, 1, record)
       count(1)
+    elseif S.voices[voice].active and S.scene_recall_in_progress and frozen_synth(voice) then
+      cut_extras(voice)
     end
   end)
 
@@ -781,22 +810,7 @@ return function(S)
   S.register_freeze_change(function(voice, frozen)
     refresh_reference(voice, frozen and S.voices[voice].active)  -- a stopped voice's start takes it
     if not voice_uses_synth(voice) then return end
-    if frozen then
-      local now, cut = util.time(), 0
-      for slot = 2, NOTE_SLOTS do
-        if slots[voice][slot] then
-          engine.noteOff(voice - 1, slot - 1, 1)
-          forget(slots[voice][slot], now)
-          cut = cut + 1
-        end
-      end
-      count(cut)
-      if cut > 0 then
-        update_lowered(voice)
-        held_changed()
-        unpark_alone(voice, now)  -- ruling 39: the cuts may have taken the voice's last held note
-      end
-    end
+    if frozen then cut_extras(voice) end
     S.lib.variation.send_scale_note(voice, S.lib.engine_sync.engine_base_value("v" .. voice .. "_freq"))
   end)
 

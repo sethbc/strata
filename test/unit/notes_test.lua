@@ -1099,4 +1099,65 @@ test("the engine's default times equal NOTES.envelope", function()
   assert_equal(tonumber(r_lo), r_min); assert_equal(tonumber(r_hi), r_max)
 end)
 
+-- Ruling 58 (#690): a scene recall that makes a running frozen buffer voice
+-- a frozen synth voice (the scene's source the synth, its freeze on) cuts
+-- and forgets the voice's held extra notes, as a freeze of a synth voice
+-- does: otherwise the engine restarts them as voice synths under the frozen
+-- ring, silent and holding pool room. Both orders a scene produces: the
+-- freeze already on and unchanged by the recall, and the freeze turned on by
+-- the same recall (its entry comes before the source's, while the voice is
+-- still a buffer voice, so the freeze hook cuts nothing then). A later key-up
+-- of a cut note sends nothing, as after a freeze. A switch outside a recall
+-- unfreezes the voice (the freeze module's source-change hook) and keeps its
+-- notes
+test("a recall into a frozen synth voice cuts its held extra notes, as a freeze does (ruling 58)", function()
+  for _, case in ipairs({"freeze already on", "freeze turned on by the recall", "a freeze of the synth voice"}) do
+    local context = load_strata()
+    local S = started(context)
+    local notes = S.lib.notes
+    local buffer = S.constants.SOURCE_SYNTH + 1
+    context.midi.plug(1, "keys")
+    if case ~= "a freeze of the synth voice" then
+      params:set("v1_source", S.constants.SOURCE_SYNTH)
+      params:set("v1_freeze", 1)
+      capture_scene(1)                  -- voice 1 on its synth source, frozen
+      params:set("v1_source", buffer)   -- the switch unfreezes it
+      params:set("v1_freeze", case == "freeze already on" and 1 or 0)
+    end
+    for _, note in ipairs({60, 64, 67}) do context.midi.send(1, {type = "note_on", ch = 1, note = note, vel = 100}) end
+    assert_equal(notes.held(1), 3, case .. ": the chord is held"); assert_equal(notes.pool_used(), 2)
+    context.set_time(util.time() + 0.1)
+    context.clear_engine_calls()
+    if case == "a freeze of the synth voice" then params:set("v1_freeze", 1) else recall_scene(1) end
+    assert_true(voice_uses_synth(1) and S.lib.freeze.is_frozen(1), case .. ": voice 1 is a frozen synth voice")
+    local cuts = {}
+    for _, call in ipairs(context.calls_named("noteOff")) do
+      if call.args[1] == 0 then table.insert(cuts, call_text(call)) end
+    end
+    assert_equal(table.concat(cuts, " "), "noteOff(0, 1, 1) noteOff(0, 2, 1)", case .. ": each extra note cut, the own note not")
+    assert_equal(notes.pool_used(), 0, case .. ": the pool's room back")
+    assert_equal(notes.held(1), 1, case .. ": the own note alone")
+    local own = notes.slots(1)[1]
+    assert_true(own.slot == 1 and own.owner == "midi" and own.held, case .. ": the own note MIDI's, held")
+    local broken = h.check_invariants()
+    assert_equal(#broken, 0, case .. ": every invariant holds (" .. table.concat(broken, "; ") .. ")")
+    -- a cut note's key lifted (latch, auto on a plain keyboard): nothing is sent
+    context.clear_engine_calls()
+    context.midi.send(1, {type = "note_off", ch = 1, note = 64, vel = 0})
+    assert_equal(table.concat(calls(context), " "), "", case .. ": a cut note's key-up sends nothing")
+  end
+  -- outside a recall a switch unfreezes the voice and keeps its notes
+  local context = load_strata()
+  local S = started(context)
+  context.midi.plug(1, "keys")
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  params:set("v1_freeze", 1)
+  for _, note in ipairs({60, 64, 67}) do context.midi.send(1, {type = "note_on", ch = 1, note = note, vel = 100}) end
+  context.clear_engine_calls()
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  assert_true(not S.lib.freeze.is_frozen(1), "a switch outside a recall unfreezes")
+  assert_equal(#context.calls_named("noteOff"), 0, "and cuts nothing")
+  assert_equal(S.lib.notes.held(1), 3, "the chord is held"); assert_equal(S.lib.notes.pool_used(), 2)
+end)
+
 end
