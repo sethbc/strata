@@ -233,7 +233,7 @@
                 [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice]) ++ notePairs, voiceGroup, \addToHead))
         };
         ^this.startGrainSynth(voice, if (kind == \stream) { processGroup } { this.voiceMixGroup(voice) }, \addToHead, notePairs,
-            { arg synth; this.watchNoteSynth(voice, slot, synth) })
+            { arg synth; this.areaCall(\watchNoteSynth, voice, slot, synth) })
     }
 
     // Watch a note's synth until it frees: its start counts once the server
@@ -483,7 +483,7 @@
             if ((record[\kind] == \stream) and: { record[\synth].notNil }) {
                 this.cutNote(voice, slot);
                 this.leaveStream(record);
-                if (wasLive) { this.startNote(voice, slot, order, true) };
+                if (wasLive) { this.areaCall(\startNote, voice, slot, order, true) };
             };
         });
     }
@@ -548,7 +548,7 @@
             if (record[\synth].notNil) {
                 this.cutNote(voice, slot);
                 this.leaveStream(record);
-                if (wasLive) { this.startNote(voice, slot, order, true) };
+                if (wasLive) { this.areaCall(\startNote, voice, slot, order, true) };
             };
         });
     }

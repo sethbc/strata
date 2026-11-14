@@ -485,7 +485,7 @@
             synth = Synth(\strataScatter, [\out, this.fastModBlock(0, 0), \rate, place[\rate]], areaState[\modulation][\fastModGroup], \addToTail);
             synth.setn(\gains, place[\gains]);
         });
-        synth.onFree({ this.scatterEnded(synth) });
+        synth.onFree({ this.areaCall(\scatterEnded, synth) });
         ^synth
     }
 

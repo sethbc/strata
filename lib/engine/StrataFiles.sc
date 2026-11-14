@@ -334,7 +334,7 @@
                     if (folder) { postln("strata: cannot write " ++ path ++ " (a folder is in the way)") };
                     writeGenerations.removeAt(path);
                     if (written and: { folder.not }) {
-                        this.renameIntoPlace(partPath, path, { arg moved;
+                        this.areaCall(\renameIntoPlace, partPath, path, { arg moved;
                             renameEnded = true;
                             if (this.pathRenames[path] == generation) { this.pathRenames.removeAt(path) };
                             if (moved) {

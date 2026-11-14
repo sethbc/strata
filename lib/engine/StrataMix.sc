@@ -184,7 +184,7 @@
             synths[this.voiceMixKey(voice)] = Synth(\strataVoiceMix, this.voiceMixArgs(voice),
                 state[\mixGroups][voice], \addToTail);
         });
-        state[\badResponder] = OSCFunc({ arg msg; this.replaceBadVoiceMix(msg[1], msg[3].asInteger) },
+        state[\badResponder] = OSCFunc({ arg msg; this.areaCall(\replaceBadVoiceMix, msg[1], msg[3].asInteger) },
             '/strataVoiceMixBad', context.server.addr);
     }
 

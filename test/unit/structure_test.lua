@@ -1535,6 +1535,406 @@ test("a command calls a method that hands a function on only through areaCall (#
     "the fixed point finds the methods that hand a function on, startVoiceSynth through its tail call (" .. deferring .. ")")
 end)
 
+-- #689: every function literal of the engine's methods, wherever it is (an
+-- onFree, sched, fork, Routine, makeBundle, do or collect function, a reply
+-- or an action, a function stored in an Event or a variable, a command, a
+-- grain param handler, a SynthDef function, one nested in another), is
+-- scanned as the commands are: a direct call in it of a method that hands a
+-- function on is a failure. A block sclang inlines is no function: its code
+-- is the enclosing method's or function's. Which blocks it inlines is read
+-- from the compiler, lang/LangSource/PyrParseNode.cpp, identical in 3.13.0
+-- and 3.14.1 for these: conjureSelectorIndex gives the selectors if, while,
+-- and, or, case, switch, loop, ?, ?? and !?; compileAnyIfMsg, compileIfMsg
+-- and compileIfNilMsg inline an if's one block, or its two only if both
+-- inline; compileWhileMsg a while's one block, or its two (the first may be
+-- a literal true, isWhileTrue); compileLoopMsg a loop's one block;
+-- compileAndMsg, compileOrMsg, compileQQMsg and compileXQMsg the block
+-- after and, or, ?? and !?; compileCaseMsg every block of a case or none;
+-- compileSwitchMsg every block of a switch whose tests are all atomic
+-- literals (isAtomicLiteral, isAnInlineableAtomicLiteralBlock) or none;
+-- compileQMsg (?) inlines nothing. isAnInlineableBlock: only a literal block
+-- that declares no arg and no var inlines. PyrCallNode::compileCall inlines
+-- nothing in a call with a keyword argument, or with more than 15 arguments
+-- but for case and switch.
+
+-- The first character at or after index that is not a space, the last at
+-- or before it
+function frame_guard.skip_space(code, index) return code:find("[^%s]", index) or (#code + 1) end
+function frame_guard.back_space(code, index)
+  while index > 0 and code:sub(index, index):match("%s") do index = index - 1 end
+  return index
+end
+-- The name (a method's, with its * if it has one) that ends at or before
+-- index, or nil
+function frame_guard.word_before(code, index)
+  local last = frame_guard.back_space(code, index)
+  local first = last
+  while first > 0 and code:sub(first, first):match("[%w_%*]") do first = first - 1 end
+  return code:sub(first + 1, last):match("^%*?[%a_][%w_]*$")
+end
+
+-- The brackets of code (comments stripped, strings blanked): { pairs =
+-- { [open] = close }, opens = { [close] = open }, parent = { [open] = the
+-- innermost bracket around it }, depth = { [brace] = braces around it } }
+function frame_guard.brackets(code)
+  local found, stack, braces = { pairs = {}, opens = {}, parent = {}, depth = {} }, {}, 0
+  for index, char in code:gmatch("()([%{%}%(%)%[%]])") do
+    if char == "{" or char == "(" or char == "[" then
+      found.parent[index] = stack[#stack]
+      stack[#stack + 1] = index
+      if char == "{" then found.depth[index], braces = braces, braces + 1 end
+    else
+      local open = table.remove(stack)
+      if open then found.pairs[open], found.opens[index] = index, open end
+      if char == "}" then braces = braces - 1 end
+    end
+  end
+  return found
+end
+
+-- An atomic literal (isAtomicLiteral): a number, a symbol, a character,
+-- nil, true or false
+function frame_guard.atomic(text)
+  for _, pattern in ipairs({ "^%-?%d[%w%.]*$", "^\\[%a_][%w_]*$", "^'%s*'$", "^'[^']*'$", "^%$$", "^nil$", "^true$", "^false$" }) do
+    if text:match(pattern) then return true end
+  end
+  return false
+end
+
+-- One argument of a call, from first to last: { kind = "block" (with
+-- open, declares: an arg or a var, body: its trimmed text), "keyword",
+-- "atomic" or "other" }
+function frame_guard.argument(code, first, last, brackets)
+  first, last = frame_guard.skip_space(code, first), frame_guard.back_space(code, last)
+  local text = code:sub(first, last)
+  if code:sub(first, first) == "{" and brackets.pairs[first] == last then
+    local inner = code:sub(first + 1, last - 1)
+    return { kind = "block", open = first, body = inner:match("^%s*(.-)%s*$"),
+      declares = (inner:match("^%s*arg%f[^%w_]") or inner:match("^%s*var%f[^%w_]") or inner:match("^%s*|")) ~= nil }
+  end
+  if text:match("^[%a_][%w_]*%s*:%f[^:]") then return { kind = "keyword" } end
+  return { kind = frame_guard.atomic(text) and "atomic" or "other", body = text }
+end
+
+-- The arguments of a paren group at open, added to list
+function frame_guard.paren_arguments(code, open, brackets, list)
+  local close = brackets.pairs[open]
+  if code:sub(open + 1, close - 1):match("^%s*$") then return end
+  local start, index = open + 1, open + 1
+  while index < close do
+    local char = code:sub(index, index)
+    if (char == "(" or char == "[" or char == "{") and brackets.pairs[index] then
+      index = brackets.pairs[index] + 1
+    else
+      if char == "," then
+        list[#list + 1] = frame_guard.argument(code, start, index - 1, brackets)
+        start = index + 1
+      end
+      index = index + 1
+    end
+  end
+  list[#list + 1] = frame_guard.argument(code, start, close - 1, brackets)
+end
+
+-- A binary operator's right operand from index: a block only when no
+-- message is sent to it ({ ... }.value is a call, not a literal block)
+function frame_guard.operand(code, index, brackets)
+  index = frame_guard.skip_space(code, index)
+  local close = code:sub(index, index) == "{" and brackets.pairs[index]
+  if not close then return { kind = "other" } end
+  if code:sub(frame_guard.skip_space(code, close + 1), frame_guard.skip_space(code, close + 1)) == "." then return { kind = "other" } end
+  return frame_guard.argument(code, index, close, brackets)
+end
+
+-- The indexes of a call's arguments sclang inlines, by its selector
+function frame_guard.inlines(arg) return arg ~= nil and arg.kind == "block" and not arg.declares end
+function frame_guard.while_true(arg)
+  return arg.body == "true" and (arg.kind == "atomic" or frame_guard.inlines(arg))
+end
+frame_guard.INLINED = {
+  ["if"] = function(args)
+    if #args == 2 and frame_guard.inlines(args[2]) then return { 2 } end
+    if #args == 3 and frame_guard.inlines(args[2]) and frame_guard.inlines(args[3]) then return { 2, 3 } end
+  end,
+  ["while"] = function(args)
+    if #args == 1 and frame_guard.inlines(args[1]) then return { 1 } end
+    if #args == 2 and (frame_guard.while_true(args[1]) or frame_guard.inlines(args[1])) and frame_guard.inlines(args[2]) then return { 1, 2 } end
+  end,
+  loop = function(args) if #args == 1 and frame_guard.inlines(args[1]) then return { 1 } end end,
+  case = function(args)
+    for _, arg in ipairs(args) do if not frame_guard.inlines(arg) then return end end
+    local all = {}
+    for index = 1, #args do all[index] = index end
+    return all
+  end,
+  switch = function(args)
+    if #args < 3 then return end
+    local index, all = 2, {}
+    while index <= #args do
+      if index < #args then
+        local test = args[index]
+        if not (test.kind == "atomic" or (frame_guard.inlines(test) and frame_guard.atomic(test.body))) then return end
+        if not frame_guard.inlines(args[index + 1]) then return end
+        all[#all + 1], all[#all + 2], index = index, index + 1, index + 2
+      else
+        if not frame_guard.inlines(args[index]) then return end
+        all[#all + 1], index = index, index + 1
+      end
+    end
+    return all
+  end,
+}
+for _, name in ipairs({ "and", "or", "??", "!?" }) do
+  frame_guard.INLINED[name] = function(args) if #args == 2 and frame_guard.inlines(args[2]) then return { 2 } end end
+end
+
+-- The receiver of a .selector at dot: a block when it is a bare literal block
+function frame_guard.receiver(code, dot, brackets)
+  local before = frame_guard.back_space(code, dot - 1)
+  local open = code:sub(before, before) == "}" and brackets.opens[before]
+  if not open then return { kind = "other" } end
+  local ahead = code:sub(frame_guard.back_space(code, open - 1), frame_guard.back_space(code, open - 1))
+  if ahead:match("[%w_%)%]%}]") then return { kind = "other" } end
+  return frame_guard.argument(code, open, before, brackets)
+end
+
+-- The opening braces of the blocks sclang inlines in code: { [open] = true }
+function frame_guard.inlined_blocks(code, brackets)
+  local inlined = {}
+  local function apply(name, args)
+    for _, arg in ipairs(args) do if arg.kind == "keyword" then return end end
+    if #args > 15 and name ~= "case" and name ~= "switch" then return end
+    for _, index in ipairs(frame_guard.INLINED[name](args) or {}) do
+      if args[index].kind == "block" then inlined[args[index].open] = true end
+    end
+  end
+  for _, name in ipairs({ "if", "while", "loop", "case", "switch", "and", "or" }) do
+    for start, finish in code:gmatch("()%f[%w_]" .. name .. "%f[^%w_]()") do
+      local before, next_index = code:sub(start - 1, start - 1), frame_guard.skip_space(code, finish)
+      local char, args = code:sub(next_index, next_index), {}
+      if before ~= "\\" then
+        if before == "." then args[1] = frame_guard.receiver(code, start - 1, brackets) end
+        if char == "(" and brackets.pairs[next_index] then
+          frame_guard.paren_arguments(code, next_index, brackets, args)
+          next_index = frame_guard.skip_space(code, brackets.pairs[next_index] + 1)
+          char = code:sub(next_index, next_index)
+        end
+        while char == "{" and brackets.pairs[next_index] do
+          args[#args + 1] = frame_guard.argument(code, next_index, brackets.pairs[next_index], brackets)
+          next_index = frame_guard.skip_space(code, brackets.pairs[next_index] + 1)
+          char = code:sub(next_index, next_index)
+        end
+        if #args > (before == "." and 1 or 0) or (before == "." and args[1].kind == "block") then
+          apply(name, args)
+        elseif (name == "and" or name == "or") and before ~= "." and char == ":" and code:sub(next_index + 1, next_index + 1) ~= ":" then
+          apply(name, { { kind = "other" }, frame_guard.operand(code, next_index + 1, brackets) })
+        end
+      end
+    end
+  end
+  for _, operator in ipairs({ "??", "!?" }) do
+    for finish in code:gmatch(operator:gsub("%p", "%%%0") .. "()") do
+      apply(operator, { { kind = "other" }, frame_guard.operand(code, finish, brackets) })
+    end
+  end
+  return inlined
+end
+
+-- What a function at open is given to, for a report: "given to do",
+-- "stored at later", ...
+function frame_guard.function_place(code, open, brackets)
+  local before = frame_guard.back_space(code, open - 1)
+  local char = code:sub(before, before)
+  local function word_before(index) return frame_guard.word_before(code, index) end
+  if char:match("[%w_]") then return "given to " .. (word_before(before) or "a call") end
+  if char == ":" then return "stored at " .. (word_before(before - 1) or "a key") end
+  if char == "(" or char == "," then
+    local parent = brackets.parent[open]
+    local name = parent and code:sub(parent, parent) == "(" and word_before(parent - 1)
+    if name then return "given to " .. name end
+  end
+  if char == "=" then return "assigned" end
+  return "in an expression"
+end
+
+-- The real function literals of code (comments stripped, strings blanked)
+-- inside the engine's methods: { { open, close, method, place } }
+function frame_guard.function_literals(code, brackets)
+  brackets = brackets or frame_guard.brackets(code)
+  local inlined, found, engine_block, method = frame_guard.inlined_blocks(code, brackets), {}, false, nil
+  local opens = {}
+  for open in pairs(brackets.depth) do opens[#opens + 1] = open end
+  table.sort(opens)
+  for _, open in ipairs(opens) do
+    local depth = brackets.depth[open]
+    if depth == 0 then
+      engine_block = code:sub(math.max(1, open - 80), open - 1):match("Engine_Strata[^{};]*$") ~= nil
+    elseif depth == 1 then
+      method = frame_guard.word_before(code, open - 1)
+    elseif engine_block and not inlined[open] and brackets.pairs[open] then
+      found[#found + 1] = { open = open, close = brackets.pairs[open], method = method, place = frame_guard.function_place(code, open, brackets) }
+    end
+  end
+  -- a partial application is a function too: _.name is { arg x; x.name },
+  -- this.name(_, ...) is { arg x; this.name(x, ...) } (one per call)
+  local partial_calls = {}
+  local function method_at(position)
+    local name, best = nil, 0
+    for open, depth in pairs(brackets.depth) do
+      if depth == 1 and open > best and open < position and position < (brackets.pairs[open] or 0) then
+        best, name = open, frame_guard.word_before(code, open - 1)
+      end
+    end
+    return name
+  end
+  for position in code:gmatch("()%f[%w_]_%f[^%w_]") do
+    local method_name = method_at(position)
+    local paren = 0
+    for open, close in pairs(brackets.pairs) do
+      if open < position and position < close and open > paren and code:sub(open, open) == "(" then paren = open end
+    end
+    local after = code:sub(frame_guard.skip_space(code, position + 1), frame_guard.skip_space(code, position + 1))
+    local before = code:sub(frame_guard.back_space(code, position - 1), frame_guard.back_space(code, position - 1))
+    if not method_name then
+      -- outside the engine's methods
+    elseif after == "." then
+      found[#found + 1] = { open = position - 1, close = position + 1, method = method_name, place = "made by a partial application (_)" }
+    elseif paren > 0 and (before == "(" or before == ",") and not partial_calls[paren] then
+      partial_calls[paren] = true
+      local start = paren
+      while start > 1 and code:sub(start - 1, start - 1):match("[%w_%.%s]") do start = start - 1 end
+      found[#found + 1] = { open = start - 1, close = brackets.pairs[paren], method = method_name, place = "made by a partial application (_)" }
+    end
+  end
+  table.sort(found, function(a, b) return a.open < b.open end)
+  return found
+end
+
+-- Every this.<name> in code with the innermost real function it is in (fn,
+-- nil for its method's own code) and, for an areaCall, the method it names
+-- (target): { { name, offset, fn, target } }
+function frame_guard.function_calls(code)
+  local functions, calls = frame_guard.function_literals(code), {}
+  for _, call in ipairs(frame_guard.this_calls(code)) do
+    for _, fn in ipairs(functions) do
+      if fn.open >= call.offset then break end
+      if call.offset < fn.close then call.fn = fn end
+    end
+    if call.name == "areaCall" then call.target = code:match("^this%.areaCall%s*%(%s*\\([%a_][%w_]*)", call.offset) end
+    calls[#calls + 1] = call
+  end
+  return calls
+end
+
+-- The direct calls (this.<method>, with or without arguments) of an engine
+-- method that hands a function on made from a real function literal of the
+-- files: { "path:line: ..." }
+function frame_guard.functions_deferring(files)
+  local found, chains = {}, frame_guard.deferring_methods(frame_guard.engine_methods(files))
+  for _, file in ipairs(files) do
+    local code = sc_code_only(file.text)
+    for _, call in ipairs(frame_guard.function_calls(code)) do
+      local chain = call.fn and call.name ~= "areaCall" and chains[call.name]
+      if chain then
+        local _, newlines = code:sub(1, call.offset):gsub("\n", "")
+        found[#found + 1] = string.format("%s:%d: a function %s in %s calls this.%s directly, and %s hands a function to %s (%s):"
+          .. " call it through this.areaCall(\\%s, ...) (docs/notes/engine/structure.md, Areas)",
+          file.path, newlines + 1, call.fn.place, call.fn.method or "?", call.name, call.name, chain:match("([%w_]+)$"), chain, call.name)
+      end
+    end
+  end
+  return found
+end
+
+test("a function the engine keeps or runs calls a method that hands a function on only through areaCall (#689)", function()
+  local probe = { { path = "probe.sc", text = '+ Engine_Strata {\n'
+    .. '    probeLater { arg x; SystemClock.sched(1, { x.postln; nil }) }\n'
+    .. '    probeUses { arg synth;\n'
+    .. '        synth.onFree({ this.probeLater(1) });\n'
+    .. '        context.server.makeBundle(nil, { this.probeLater(2) });\n'
+    .. '        [1, 2].do({ arg each; this.probeLater(each) });\n'
+    .. '        areaState[\\probe] = (later: { this.probeLater(3) });\n'
+    .. '        synth.onFree({ this.areaCall(\\probeLater, 1) });\n'
+    .. '        context.server.makeBundle(nil, { this.areaCall(\\probeLater, 2) });\n'
+    .. '        [1, 2].do({ arg each; this.areaCall(\\probeLater, each) });\n'
+    .. '        areaState[\\probe] = (later: { this.areaCall(\\probeLater, 3) });\n'
+    .. '        this.probeLater(4);\n    }\n}\n' } }
+  local found = frame_guard.functions_deferring(probe)
+  assert_equal(#found, 4, "the probe's four direct calls from functions: " .. table.concat(found, "; "))
+  for index, line in ipairs({ 4, 5, 6, 7 }) do
+    local report = found[index] or ""
+    assert_true(report:match("^probe%.sc:" .. line .. ": ") and report:find("calls this.probeLater directly", 1, true)
+      and report:find("this.areaCall(\\probeLater, ...)", 1, true),
+      "names the file, the line " .. line .. ", the method and the fix: " .. report)
+  end
+end)
+
+test("an inlined block is its method's own code, a block with a var or inside a function is not (#689)", function()
+  local probe = { { path = "probe.sc", text = '+ Engine_Strata {\n'
+    .. '    probeLater { arg x; x.fork }\n'
+    .. '    probeInline { arg x;\n'
+    .. '        if (x) { this.probeLater(1) } { this.probeLater(0) };\n'
+    .. '        while { x.notNil } { this.probeLater(2); x = nil };\n'
+    .. '        case { x == 1 } { this.probeLater(3) } { true } { this.probeLater(4) };\n'
+    .. '        switch (x) { \\a } { this.probeLater(5) } { this.probeLater(6) };\n'
+    .. '        x ?? { this.probeLater(7) }; (x > 0) and: { this.probeLater(8) }; loop { this.probeLater(9) };\n'
+    .. '        if (x) { var y = 1; this.probeLater(y) };\n'
+    .. '        [1].do({ arg each; if (each > 0) { this.probeLater(each) } });\n'
+    .. '        x !? { arg y; this.probeLater(y) };\n'
+    .. '    }\n}\n' } }
+  local found = frame_guard.functions_deferring(probe)
+  assert_equal(#found, 3, "a block with a var, one inside a function and one with an arg: " .. table.concat(found, "; "))
+  for index, line in ipairs({ 9, 10, 11 }) do
+    assert_true((found[index] or ""):match("^probe%.sc:" .. line .. ": "), "line " .. line .. ": " .. tostring(found[index]))
+  end
+  -- an if whose other block declares a var is inlined in neither block
+  -- (compileIfMsg inlines both or none), a case or a switch likewise
+  local mixed = { { path = "probe.sc", text = '+ Engine_Strata {\n    probeLater { arg x; x.fork }\n'
+    .. '    probeMixed { arg x;\n        if (x) { this.probeLater(1) } { var y; this.probeLater(2) };\n'
+    .. '        case { x } { this.probeLater(3) } { var z; z };\n'
+    .. '        switch (x) { "s" } { this.probeLater(4) };\n'
+    .. '        [1].do(this.probeLater(_)); [1].do(_.probeLater);\n    }\n}\n' } }
+  found = frame_guard.functions_deferring(mixed)
+  assert_equal(#found, 5, "an if, a case and a switch that cannot be inlined, and a partial application, are functions: "
+    .. table.concat(found, "; "))
+  assert_true((found[5] or ""):match("^probe%.sc:7: a function made by a partial application %(_%) in probeMixed calls this%.probeLater directly"),
+    "a partial application of this.name is a function: " .. tostring(found[5]))
+end)
+
+test("a transitively marked method is caught from an engine function (#689)", function()
+  local probe = { { path = "probe.sc", text = '+ Engine_Strata {\n'
+    .. '    probeLater { arg x; x.onFree({ x.postln }) }\n'
+    .. '    probeOuter { arg x; ^this.probeLater(x) }\n'
+    .. '    probeForks { arg x; fork { this.probeOuter(x) }; fork { this.areaCall(\\probeOuter, x) } }\n}\n' } }
+  local found = frame_guard.functions_deferring(probe)
+  assert_equal(#found, 1, "the fork function's direct call of probeOuter: " .. table.concat(found, "; "))
+  assert_true((found[1] or ""):match("^probe%.sc:4: .*this%.probeOuter directly, and probeOuter hands a function to onFree %(probeOuter %-> probeLater %-> onFree%)"),
+    "names the chain: " .. tostring(found[1]))
+end)
+
+test("the engine's own functions pass the scan (#689)", function()
+  -- lib/Engine_Strata.sc's alloc and free too, though it is never edited
+  local files = engine_files()
+  local found = frame_guard.functions_deferring(files)
+  assert_true(#found == 0, table.concat(found, "\n"))
+  -- 470 in lib/engine/Strata*.sc when the scan was written (#689), as many
+  -- as sclang 3.14.1 compiles there (the FunctionDefs in each method's
+  -- literals, method by method)
+  local literals = 0
+  for index = 2, #files do literals = literals + #frame_guard.function_literals(sc_code_only(files[index].text)) end
+  assert_true(literals >= 450, "the scan finds the engine's function literals (" .. literals .. ")")
+  -- the issue's calls sit in functions and go through areaCall
+  local routed = {}
+  for _, file in ipairs(files) do
+    for _, call in ipairs(frame_guard.function_calls(sc_code_only(file.text))) do
+      if call.fn and call.target then routed[call.target] = true end
+    end
+  end
+  for _, name in ipairs({ "scatterEnded", "switchGrainSynth", "notesUnfrozen", "startNote" }) do
+    assert_true(routed[name], name .. " is called from an engine function through this.areaCall(\\" .. name .. ", ...)")
+  end
+end)
+
 test("the engine's sample paths run no sclang function per sample (#131)", function()
   local old_loop = "while { true } { interleaved = FloatArray.newClear(n); left.size.do({ arg frame; "
     .. "interleaved[frame * 2] = left[frame].clip(-1, 1) }) }"
