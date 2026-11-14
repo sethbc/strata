@@ -12,7 +12,10 @@
 -- engine would refuse or ignore that Lua should never send is an error
 -- (model.errors). A test-side helper, not part of the shared stub: the stub
 -- checks each call alone, the model the state a sequence of them leaves.
--- Used by test/unit/strata_test.lua.
+-- Its blind spot: when Lua cuts notes the engine would have kept, both
+-- sides agree, so the comparison cannot see it; model.live_cuts lists the
+-- voice of every playing note a cut ended, for the test to judge by what
+-- caused it. Used by test/unit/strata_test.lua.
 
 local Model = {}
 Model.__index = Model
@@ -23,7 +26,7 @@ function Model.new(constants)
   local model = setmetatable({pool = 0, order = 0, errors = {}, voices = {}, input = constants.NUM_BUFFERS + 1,
     slots = constants.NOTE_SLOTS, buffers = constants.NUM_BUFFERS, read = 0,
     -- how often each path ran, so a test can tell its sequence reached them
-    counts = {starts = 0, restarts = 0, streams_left = 0, cuts = 0, parks = 0, unparks = 0, regrained = 0}}, Model)
+    counts = {starts = 0, restarts = 0, streams_left = 0, cuts = 0, parks = 0, unparks = 0, regrained = 0}, live_cuts = {}}, Model)
   for voice = 0, constants.NUM_VOICES - 1 do
     local state = {running = false, source = 0, frozen = false, own = {parked = false}, extra = {}}
     for slot = 1, constants.NOTE_SLOTS - 1 do state.extra[slot] = {state = "empty"} end
@@ -168,7 +171,10 @@ Model.commands.noteOff = function(self, voice, slot, cut_it)
   if slot == 0 then state.own.parked, self.counts.parks = true, self.counts.parks + 1; return end
   local record = state.extra[slot]
   if record.state == "empty" then return end
-  if cut_it == 1 and record.state == "live" then self.counts.cuts = self.counts.cuts + 1 end
+  if cut_it == 1 and record.state == "live" then
+    self.counts.cuts = self.counts.cuts + 1
+    table.insert(self.live_cuts, voice)
+  end
   if cut_it == 1 then cut(record) elseif record.state == "live" then record.state = "releasing" end
 end
 

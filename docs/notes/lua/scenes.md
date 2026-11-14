@@ -161,7 +161,7 @@ A block is a top-level part of a scene that a module owns (3.4: macro targets, s
 `apply_entries` (and so `recall_scene_instant`) sets `S.scene_recall_in_progress` while it sets params:
 - The body runs in an `xpcall` with `with_traceback`. The flag is always cleared, the end-of-recall syncs run for whatever was applied before an error, and only then is the error raised again with `error(apply_error, 0)`, so the engine never lags the Lua state. `recall_scene_instant` runs it in its own `xpcall`, which keeps the traceback (`with_traceback` adds none to a message that has one), handles the current scene and redraws before raising it again.
 - While the flag is set, the `v<i>_source` action sends `setGrainSource` but not its `sync_voice_values_to_engine` (which would send the old values to the new grain synth before the recalled ones).
-- After every param is set and the flag is cleared, each voice that is running and whose source changed gets one `sync_voice_values_to_engine`. A voice the recall starts is synced by `toggle_voice` instead.
+- After every param is set and the flag is cleared, each voice that is running and whose source changed gets one `sync_voice_values_to_engine`, then `S.lib.notes.recall_switched(voice)`: its held extra notes are cut when the voice now is a frozen synth voice (rulings 58 and 59, `docs/notes/lua/notes.md`). A voice the recall starts is synced by `toggle_voice` instead.
 
 Order of voice changes (#46):
 - A voice the recall stops is stopped (`toggle_voice`) before its source and params are set, so its release tail keeps the outgoing scene's values (param actions reach the engine only while a voice is active).
