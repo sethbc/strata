@@ -1,0 +1,3 @@
+### Changed
+- **Development: the 3.6 implementation plan.** No code changes. `docs/superpowers/plans/2026-11-14-3.6-plan.md` builds `docs/design/3.6-design.md` in four waves of packages: the hooks, one owner for the MIDI ports, the IO page's shell, the rig settings, test stubs and shared actions; then the targets core, crow, the controllers, remote grids and arcs, OSC and the tape loop; then MIDI out, the ii bus with Teletype, Just Friends, W/, the ER-301, the TELEXo and nb; then a whole-system test, the docs pass and the release.
+- **Development: AGENTS.md makes room for 3.6** (#696). The polls' formulas and the engine notes' one-line contents now live only in the notes files that already held them.
