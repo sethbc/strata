@@ -2490,7 +2490,7 @@ test("the 3.13 script classifies a run by its log (#545, #544)", function()
     { status = 1, log = COUNT_ERROR .. "\n" .. COUNT_ERROR .. "\ncaught exception '" .. COUNT_ERROR .. "\n' in primitive in method Meta_Thread:primitiveErrorString\nENGINE CHECK FAILED: sclang ended on signal 11 after 300 s; sclang stopped\n" },
     -- a bare signal: #131
     { status = 1, log = "ok a check\nENGINE CHECK FAILED: sclang ended on signal 6 after 90 s; sclang stopped\n" },
-    -- the memory cap's kill
+    -- the memory cap's kill, with count errors: still the collector failure (#687)
     { status = 1, log = COUNT_ERROR .. "\nENGINE CHECK FAILED: sclang ended on signal 9 after 400 s; sclang stopped\nstrata cgroup oom_kill: 3\n" },
     -- ERROR and an invariant line are failures too
     { status = 1, log = "ERROR: something\nENGINE CHECK FAILED: sclang ended on signal 9 after 4 s; sclang stopped\n" },
@@ -2514,10 +2514,10 @@ test("the 3.13 script classifies a run by its log (#545, #544)", function()
   assert_equal(#made, 0, "no log folder is made when only classifying")
   local output = run_313_script(root, "-c -n " .. #fixtures .. " -o " .. shell_quote(root))
   for _, expected in ipairs({ "run 1: failed (FAIL waveform", "run 2: collector failure (#211", "run 3: crashed (sclang ended on signal 6",
-      "run 4: capped (", "run 5: failed (ERROR: something", "run 6: passed", "run 7: killed (exit 137", "run 8: collector failure (#211", "exit=1" }) do
+      "run 4: collector failure (#211; count errors; the memory cap killed a process (#544)", "run 5: failed (ERROR: something", "run 6: passed", "run 7: killed (exit 137", "run 8: collector failure (#211", "exit=1" }) do
     assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
   end
-  assert_true(output:find("passed 1 of 8; failed 2; capped 1 (#544); killed 1; collector failure 2 (#211); crashed 1 (#131)", 1, true) ~= nil,
+  assert_true(output:find("passed 1 of 8; failed 2; capped 0 (#544); killed 1; collector failure 3 (#211); crashed 1 (#131)", 1, true) ~= nil,
     "the counts: " .. output)
   -- a cap kill with no FAIL line is its own outcome
   os.execute("rm -f -- " .. shell_quote(root .. "/run-1.log") .. " " .. shell_quote(root .. "/run-1.status"))
@@ -2527,6 +2527,66 @@ test("the 3.13 script classifies a run by its log (#545, #544)", function()
   local capped_status = assert(io.open(root .. "/run-1.status", "w")); capped_status:write("1\n"); capped_status:close()
   output = run_313_script(root, "-c -n 1 -o " .. shell_quote(root))
   assert_true(output:find("run 1: capped (", 1, true) ~= nil and output:find("capped 1 (#544)", 1, true) ~= nil, "a cap kill is capped: " .. output)
+  h.remove_tree(root)
+end)
+
+-- #687: every log that holds the collector's count-error lines is a collector
+-- failure, the worst class, whatever else it shows and even at status 0
+local COLLECTOR_LINE = "gr" .. "ey count error"
+
+test("the 3.13 script counts a failed log with collector errors as a collector failure (#687)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc313-collector-failed"
+  write_shard_fixtures(root, { { "1", 1, COLLECTOR_LINE .. "\n" .. COLLECTOR_LINE .. "\nFAIL waveform: a 300 s load\n" } })
+  local output = run_313_script(root, "-c -n 1 -o " .. shell_quote(root))
+  for _, expected in ipairs({ "run 1: collector failure (#211; count errors; FAIL waveform: a 300 s load)",
+      "passed 0 of 1; failed 0; capped 0 (#544); killed 0; collector failure 1 (#211); crashed 0 (#131)", "exit=1" }) do
+    assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
+  end
+  h.remove_tree(root)
+end)
+
+test("the 3.13 script never passes a log with collector errors (#687)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc313-collector-passed"
+  write_shard_fixtures(root, { { "1", 0, COLLECTOR_LINE .. "\nENGINE CHECK PASSED\n" } })
+  local output = run_313_script(root, "-c -n 1 -o " .. shell_quote(root))
+  for _, expected in ipairs({ "run 1: collector failure (#211; count errors; the check itself passed)",
+      "passed 0 of 1;", "collector failure 1 (#211)", "exit=1" }) do
+    assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
+  end
+  h.remove_tree(root)
+end)
+
+test("a sharded run with a collector shard is a collector failure whatever its other shards show (#687)", function()
+  local shell_quote, checkout = h.shell_quote, data_root .. "sc313-collector-shards"
+  fake_313_checkout(checkout, { "alpha", "beta", "gamma" }, "    exit 0")
+  local root = checkout .. "/logs"
+  write_shard_fixtures(root, {
+    { "1-alpha", 1, "FAIL alpha: a check\n" },
+    { "1-beta", 1, "FAIL beta: a check\n" .. COLLECTOR_LINE .. "\n" },
+    { "1-gamma", 0, "ENGINE CHECK PASSED\n" },
+  })
+  local output = run_fake_313(checkout, "-c -n 1 -o " .. shell_quote(root))
+  for _, expected in ipairs({ "run 1: collector failure in beta (#211; count errors; FAIL beta: a check), " .. root .. "/run-1-beta.log\n",
+      "  and failed in alpha (FAIL alpha: a check), " .. root .. "/run-1-alpha.log",
+      "passed 0 of 1; failed 0; capped 0 (#544); killed 0; collector failure 1 (#211); crashed 0 (#131)",
+      "shards: passed 1 of 3; failed 1; capped 0 (#544); killed 0; collector failure 1 (#211)", "exit=1" }) do
+    assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
+  end
+  h.remove_tree(checkout)
+end)
+
+test("a capped or killed log with collector errors is a collector failure that says so (#687)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc313-collector-capped"
+  write_shard_fixtures(root, {
+    { "1", 1, COLLECTOR_LINE .. "\nENGINE CHECK FAILED: sclang ended on signal 9 after 400 s; sclang stopped\nstrata cgroup oom_kill: 2\n" },
+    { "2", 137, COLLECTOR_LINE .. "\nstrata cgroup oom_kill: 0\n" },
+  })
+  local output = run_313_script(root, "-c -n 2 -o " .. shell_quote(root))
+  for _, expected in ipairs({ "run 1: collector failure (#211; count errors; the memory cap killed a process (#544); sclang ended on signal 9 after 400 s)",
+      "run 2: collector failure (#211; count errors; exit 137)",
+      "passed 0 of 2; failed 0; capped 0 (#544); killed 0; collector failure 2 (#211); crashed 0 (#131)", "exit=1" }) do
+    assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
+  end
   h.remove_tree(root)
 end)
 
