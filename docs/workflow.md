@@ -10,15 +10,21 @@ How a session runs a release's work packages (or a batch of fixes) through agent
 
 ## Skills
 
-The process runs on the superpowers skills. The session doing a step invokes its skill at that step, and a resumed session invokes it again. Where a skill differs from this file or AGENTS.md, this file and AGENTS.md win.
+The process runs on the superpowers skills. The session doing a step invokes its skill with the Skill tool at that step, and a resumed session invokes it again; following a skill from memory does not count. Where a skill differs from this file or AGENTS.md, this file and AGENTS.md win. Work outside a release (a batch of fixes, a docs change) runs on the same skills.
 
 - **Design**: `superpowers:brainstorming`, for anything new. The design goes in `docs/design/<release>-design.md` (a smaller one as `docs/design/<release>-<topic>-design.md`), not the skill's default folder. An approved design is not brainstormed again.
-- **Plan**: `superpowers:writing-plans`, saved under docs/superpowers/plans/ while its release is open and removed at the release (At a release, below).
-- **Workspace**: `superpowers:using-git-worktrees`. A worker starts in the worktree made for it and makes no other. The controller stays in the main checkout.
-- **Execution**: `superpowers:subagent-driven-development`, by the controller at the start of a plan and on every resume. Packages run in parallel, one worktree and branch each, where the skill runs one implementer at a time; the file ownership in each brief is what makes that safe. The skill's ledger is the ledger below.
+- **Plan**: `superpowers:writing-plans`. A release's plan is saved under docs/superpowers/plans/ while the release is open and removed at the release (At a release, below); a smaller change's plan stays in its ledger folder. Every task of a plan has a `**Skills:**` line naming the skills its worker invokes.
+- **Workspace**: `superpowers:using-git-worktrees`, by the session that makes a worktree. A worker starts in the worktree made for it, makes no other and does not invoke it. The controller stays in the main checkout.
+- **Execution**: `superpowers:subagent-driven-development`, by the controller at the start of a plan or a batch and on every resume. Packages run in parallel, one worktree and branch each, where the skill runs one implementer at a time; the file ownership in each brief is what makes that safe. The skill's ledger is the ledger below.
+- **Parallel dispatch**: `superpowers:dispatching-parallel-agents`, by the controller each time it sends two or more agents at once: a wave's packages, a design's fact gathering, a review split between several reviewers. It comes after the execution skill and is not invoked for a single dispatch.
 - **Code**: `superpowers:test-driven-development`, by every worker whose package changes code or tests. A docs-only package skips it.
+- **Debugging**: `superpowers:systematic-debugging`, by whoever meets a failing test, a failing check or behavior it did not expect, before it proposes or makes a fix. A worker whose package fixes a bug invokes it first, then the code skill. A failure the brief or the dispatch names as known (a flaky check with an issue) is rerun as told, not debugged.
 - **Review**: a plan's packages are reviewed with `superpowers:subagent-driven-development`'s own task-reviewer and re-review templates, with "Review" below as the reviewer's criteria; `superpowers:requesting-code-review`, by the controller, is for a review outside a plan's task loop (a design, a docs change, a release).
+- **Review findings**: `superpowers:receiving-code-review`, by a worker resumed with a reviewer's findings and by the controller with a final review's or a pull request's findings, before changing anything.
+- **Verification**: `superpowers:verification-before-completion`, by a worker before it reports a status and by the controller before it lands a batch, merges a pull request, closes an issue or calls a release done.
 - **Finishing**: `superpowers:finishing-a-development-branch`, by the controller at the end of a plan. The choice is always its pull request option, never a local merge: `main` takes rebase merges only.
+
+Two roles invoke no skill of their own: a reviewer works from the execution skill's templates, and a read-only agent gathering facts works from its dispatch. `superpowers:executing-plans` is not used: a plan runs through the execution skill.
 
 ## The ledger
 
@@ -34,11 +40,27 @@ A brief is everything a worker knows about its package, so it is exact:
 - the files the package owns, by path (its ownership: it edits only those, plus registration lines);
 - the interfaces it provides and consumes, by exact name and shape (functions, fields, registry records, engine commands with their signatures);
 - the tests to write, by name and file, with the values they check;
+- the skills its worker invokes (Dispatch, below), and any the package skips with the reason (a docs-only package skips `superpowers:test-driven-development`);
 - the notes and user docs to update;
 - the commit message;
 - the scratch folder name and, for engine work, the scsynth port.
 
 Where a brief is ambiguous or conflicts with the merged code, the worker reports NEEDS_CONTEXT rather than guess, and the controller rules in the ledger.
+
+## Dispatch
+
+A subagent is told to skip the skills' own start-up instructions, so a worker invokes a skill only when its dispatch says so. Every worker's dispatch, or the common instructions it names, carries these lines word for word:
+
+```
+Invoke each of these skills with the Skill tool at its step, and follow it. Reading or remembering a skill does not count.
+- superpowers:test-driven-development: before you write code or tests. A docs-only package skips it.
+- superpowers:systematic-debugging: at a failing test, a failing check or behavior you did not expect, before you propose or make a fix. A failure your brief names as known is rerun as it says.
+- superpowers:receiving-code-review: when you are resumed with a reviewer's findings, before you change anything.
+- superpowers:verification-before-completion: before you write your report's status.
+Your report's "Skills" line lists each skill you invoked and at which step, or says why one did not apply.
+```
+
+A reviewer's dispatch and a fact-gathering agent's carry no skill lines (Skills, above).
 
 ## Worker rules
 
@@ -49,7 +71,7 @@ Where a brief is ambiguous or conflicts with the merged code, the worker reports
 - **Step 0**: check every name the brief consumes against the merged code. Where a merged name differs, use it and say so in the report; where a consumed interface is missing, report NEEDS_CONTEXT.
 - **Ownership**: edit only the brief's files plus registration lines (an include, a `register_params` call, a `START_ORDER`/`CLEANUP_ORDER` entry, a AGENTS.md module-table row, command-table row or invariant bullet). If a test outside the package breaks because of its intended behavior change, change only the minimum lines and list them in the report.
 - **Shared files**: never edit CHANGELOG.md; add the changelog fragment the brief names (`changes/<name>.md`, see `changes/README.md`). Edit `docs/status.md` only where the package needs to: a pull request that closes an open item removes that item's line.
-- **TDD**: invoke `superpowers:test-driven-development`, then write the brief's failing tests first, see them fail, implement, see them pass.
+- **Skills**: invoke each skill of the dispatch at its step (Dispatch, above). For code: `superpowers:test-driven-development`, then write the brief's failing tests first, see them fail, implement, see them pass. At a failure you did not expect: `superpowers:systematic-debugging` before any fix. Before the report's status: `superpowers:verification-before-completion`.
 - **Screen changes**: anything drawn follows AGENTS.md's layout rules; look at the page renders (`lua test/render_pages.lua` then `python3 test/render_pages.py`), since the layout tests miss text over a line and strings crowding nearby baselines.
 - US English everywhere (a test enforces it); never name the maintainer in docs, commits or pull requests.
 - **Checks before each commit**: `lua test/run.lua`, `luajit test/run.lua` and `lua test/sync_check.lua`. A package that touches engine code or a check area also runs the engine check: its own areas while working (`STRATA_ENGINE_CHECK_AREAS`, on its own `STRATA_SC_PORT`), then every area before pushing, on SuperCollider 3.14.1 (`test/run_engine_check.sh`) and on 3.13, norns' and CI's version (`test/run_engine_check_313.sh`, in Docker: `docs/notes/test-harness/engine-check-runner.md`). It reports #131's rate on 3.13: how many runs passed, failed and crashed, out of how many, and how many ran at once.
@@ -61,7 +83,7 @@ Every problem found along the way (by a worker, a reviewer or the controller) ge
 
 ## Reports
 
-- A worker writes its full report to `TASK-<N>-REPORT.md` in its worktree root (gitignored, never committed): what changed per file, the TDD red and green evidence, Step 0's name differences, the test totals, the engine runs (with #131's rate), every file touched outside its list and why, and its concerns.
+- A worker writes its full report to `TASK-<N>-REPORT.md` in its worktree root (gitignored, never committed): what changed per file, its "Skills" line (each skill it invoked and at which step, or why one did not apply), the TDD red and green evidence, Step 0's name differences, the test totals, the engine runs (with #131's rate), every file touched outside its list and why, and its concerns.
 - Its reply to the controller is short (under 12 lines): status (DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT or BLOCKED), branch, commit, test totals, concerns and the report's path.
 - The controller copies what it needs into the ledger (`task-<N>-report.md` there), since the worktree goes.
 
@@ -71,13 +93,13 @@ A reviewer checks one package against its brief, then its build quality. It is a
 - Inputs: the brief, the plan's common instructions and constraints, the worker's report and the diff file the dispatch names. Files outside the diff are read with `git show origin/<branch>:<path>` from the main checkout, and only for a concrete named risk.
 - Read-only: never modify a working tree, index, HEAD or branch, never dispatch agents, never rerun the full suites (the report carries the evidence). A focused check for a specific doubt is fine in a temporary worktree inside the reviewer's own scratch folder, removed after: `lua test/run.lua <filter>`, or one engine area with `STRATA_ENGINE_CHECK_AREAS=<area>` on a port of its own.
 - Flag any edit outside the package's files that is not a registration line or a minimal fix of a test its intended change broke, and any interface whose name or shape differs from the brief, the plan or the merged code (other packages build against those names).
-- Check also: the TDD evidence, the plan's constraints, the screen layout rules if anything is drawn, US English, the changelog fragment, the notes file and the user docs.
+- Check also: the report's "Skills" line against the work (code or tests changed without `superpowers:test-driven-development`, a fix round without `superpowers:receiving-code-review`, a status without `superpowers:verification-before-completion`: changes requested, and the worker is resumed to invoke the skill and redo the step), the TDD evidence, the plan's constraints, the screen layout rules if anything is drawn, US English, the changelog fragment, the notes file and the user docs.
 - Output: part 1, spec compliance (pass or fail, with what is missing, extra or misunderstood); part 2, quality (critical, important, minor, each with file:line and why); then the verdict (spec pass or fail; approved or changes requested), in under 450 words.
 
 ## Landing in batches
 
 Reviewed packages land in batches, one pull request per batch, not one per package, so CI runs once for a batch instead of about three times a package (at its opening, after its rebase and on `main`):
-- **A batch** is reviewed packages whose files are disjoint, or already ordered. The controller cherry-picks each package's own commits, in order, onto `origin/main` as one landing branch (`land/batch-<n>`), so every package keeps its commits and messages (a branch stacked on another package contributes only its last commits). It runs the three Lua checks there, pushes the branch and opens one pull request whose body has every package's section and every `Fixes #<n>` line.
+- **A batch** is reviewed packages whose files are disjoint, or already ordered. The controller cherry-picks each package's own commits, in order, onto `origin/main` as one landing branch (`land/batch-<n>`), so every package keeps its commits and messages (a branch stacked on another package contributes only its last commits). It invokes `superpowers:verification-before-completion`, runs the three Lua checks there, pushes the branch and opens one pull request whose body has every package's section and every `Fixes #<n>` line.
 - **Workers push their branches, but no pull request is opened per package,** and workers do not rebase: the batch does that. A package pull request already open is closed when its batch lands.
 - **A red batch** (a conflict while cherry-picking, a failing check, a red CI run) blocks only until it is fixed: the package is fixed (its worker is resumed, and the batch rebuilt) or dropped from the batch and landed later. A failed CI job is rerun once (an engine shard can fail on a slow runner's timing) before the batch counts as red, but for sclang's collector errors, which are a regression of the `areaCall` rule to find, never rerun (`docs/status.md`).
 - **After a batch where two packages edit the same user page** (or any shared doc), check that the later one did not overwrite the earlier's lines: a package built before the earlier one landed can carry a line's old text back onto `main` (the final review found a line of `docs/user/pages/lfo.md` reverted that way).
@@ -96,7 +118,7 @@ The release pull request, besides the code's own version lines (`strata.lua`'s h
 
 ## Merging and cleanup
 
-- A pull request outside a batch (a release, a docs change) is merged the same way, once CI is green, by rebase.
+- A pull request outside a batch (a release, a docs change) is merged the same way, once CI is green, by rebase. The controller invokes `superpowers:verification-before-completion` before every merge.
 - Pull requests that touch the same file land one at a time: the later one waits until the earlier merges, then is rebuilt or rebased on `main` and reruns the checks.
 - On a conflict in a registration line, keep both lines in the order the sequence needs (AGENTS.md, Working in parallel).
 - Leftover worktrees and folders of a finished worker (reported, or stopped) are cleaned up by the controller that dispatched it or by the maintainer, never by another worker. First check that nothing is uncommitted or unpushed (`git -C <worktree> status --short`, `git log @{u}..`), then `git worktree remove <path>` and `git worktree prune`. A worktree whose branch is merged or abandoned goes; one with work not yet pushed is pushed or reported first.
