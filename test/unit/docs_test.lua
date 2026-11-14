@@ -1493,9 +1493,27 @@ local function skill_set_problems(found_set, expected_lists, where)
   return problems
 end
 
--- A plan's skill problems: no execution skill, or a `### Task` section with
--- no `**Skills:**` line naming a process skill
+-- `text` without its code fences: a fence closes only on a line of at least
+-- its opening backticks, so a ```` fence may quote a ``` one
+local function without_code_fences(text)
+  local kept, fence = {}, nil
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    local ticks = line:match("^%s*(```+)")
+    if fence then
+      if ticks and #ticks >= fence and line:match("^%s*`+%s*$") then fence = nil end
+    elseif ticks then
+      fence = #ticks
+    else
+      table.insert(kept, line)
+    end
+  end
+  return table.concat(kept, "\n")
+end
+
+-- A plan's skill problems, outside its code fences: no execution skill, or a
+-- `### Task` section with no `**Skills:**` line naming a process skill
 local function plan_skill_problems(text)
+  text = without_code_fences(text)
   local problems = {}
   if not skills_named(text)["subagent-driven-development"] then
     table.insert(problems, "the plan does not name superpowers:subagent-driven-development")
@@ -1533,6 +1551,12 @@ test("AGENTS.md's process section and the workflow's Skills name the same superp
 end)
 
 test("the workflow's dispatch text gives a worker every worker skill, and reports and reviews carry the Skills line", function()
+  -- the check reports each expected skill a text does not name
+  local missing = skill_set_problems({}, { SKILLS.worker }, "sample")
+  assert_equal(#missing, 4, "an empty set misses the four worker skills")
+  for _, problem in ipairs(missing) do
+    assert_true(problem:find("does not name", 1, true) ~= nil, "a missing skill is reported as not named: " .. problem)
+  end
   local workflow = read_repo_file("docs/workflow.md")
   local dispatch = doc_section(workflow, "## Dispatch")
   assert_true(dispatch ~= nil, "docs/workflow.md has the section \"Dispatch\"")
@@ -1561,11 +1585,19 @@ test("every superpowers skill a maintained doc or a plan names is one the proces
   assert_equal(#unknown("invoke superpowers:test-driven-developement first", "sample"), 1, "a misspelled skill is reported")
   assert_equal(#unknown("`superpowers:subagent-driven-development`'s templates; superpowers:brainstorming.", "sample"), 0,
     "a name before a backtick, a possessive or a period is read bare")
-  local docs = maintained_docs()
-  for _, plan in ipairs(markdown_files("docs/superpowers/plans")) do table.insert(docs, plan) end
+  -- a plan is read outside its code fences (it may quote a test's samples);
+  -- a maintained doc is read whole (the workflow's dispatch text is fenced)
+  local function plan_unknown(text, where) return unknown(without_code_fences(text), where) end
+  local quoted = "# Plan\n\n````lua\n```\ninvoke superpowers:test-driven-developement first\n```\n````\n"
+  assert_equal(#plan_unknown(quoted, "sample"), 0, "a plan's fenced unknown name is not reported")
+  assert_equal(#plan_unknown((quoted:gsub("````lua\n```\n", "")), "sample"), 1,
+    "a plan's unknown name outside a fence is reported")
   local problems = {}
-  for _, doc_name in ipairs(docs) do
+  for _, doc_name in ipairs(maintained_docs()) do
     for _, problem in ipairs(unknown(read_repo_file(doc_name), doc_name)) do table.insert(problems, problem) end
+  end
+  for _, plan in ipairs(markdown_files("docs/superpowers/plans")) do
+    for _, problem in ipairs(plan_unknown(read_repo_file(plan), plan)) do table.insert(problems, problem) end
   end
   assert_equal(table.concat(problems, "; "), "", "unknown skill names")
 end)
@@ -1583,6 +1615,8 @@ test("every plan under docs/superpowers/plans names the execution skill and a sk
   assert_true((problems[1] or ""):find("### Task 1: one", 1, true) ~= nil, "the problem names the task's heading")
   assert_equal(#plan_skill_problems((good:gsub("`superpowers:verification%-before%-completion`", "none"))), 1,
     "a Skills line naming no process skill is reported")
+  assert_equal(#plan_skill_problems(good .. "\n```markdown\n### Task 9: an example\n\n- [ ] step\n```\n"), 0,
+    "a task heading inside a code fence is not a task")
   for _, plan in ipairs(markdown_files("docs/superpowers/plans")) do
     assert_equal(table.concat(plan_skill_problems(read_repo_file(plan)), "; "), "", plan)
   end
