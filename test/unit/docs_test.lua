@@ -2004,6 +2004,9 @@ test("the stub refuses the per-note controls and accepts the envelope times", fu
   for _, name in ipairs({"noteGate", "noteBend", "noteAmp", "noteMain", "notePos", "noteSize", "noteRate", "t_accent"}) do
     assert_true(engine_spec.engine_controls[name], name .. " is one of engineOwnedControls")
   end
+  -- the stage's t_gate (ruling 54), refused as the engine's
+  assert_engine_rejects(owned, "setGrainParam", 0, "t_gate", 1)
+  assert_engine_rejects(owned, "setVoiceParam", 0, "t_gate", 1)
   engine.setVoiceParam(0, "attackTime", 0.01)
   engine.setVoiceParam(0, "releaseTime", 30)
   for index, def in ipairs(engine_spec.voice_synthdefs) do

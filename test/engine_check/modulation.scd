@@ -1607,15 +1607,21 @@ checkFastModIn = {
     kept = engine.grainControls[0][\fastModIn];
     command.(\setGrainParam, 0, \fastModIn, silent);
     command.(\setVoiceParam, 0, \fastModIn, silent);
+    // the stage's t_gate (ruling 54) is the engine's too: kept, it would
+    // open the voice's gate at every rebuilt stage
+    command.(\setGrainParam, 0, \t_gate, 1);
+    command.(\setVoiceParam, 0, \t_gate, 1);
     server.sync;
     refused = (engine.grainControls[0][\fastModIn] == kept) and: { engine.voiceControls[0][\fastModIn].isNil }
-        and: { getControl.(engine.synths[engine.grainKey(0)], \fastModIn) == blocks[0] };
+        and: { getControl.(engine.synths[engine.grainKey(0)], \fastModIn) == blocks[0] }
+        and: { engine.grainControls[0][\t_gate].isNil } and: { engine.voiceControls[0][\t_gate].isNil };
     check.((first == blocks) and: { second == blocks }
         and: { stages == engine.numVoices.collect({ arg voice; engine.fastModBlock(voice, 0) }) }
         and: { blocks.every({ arg block; block != silent }) },
         "modulation: every grain synth and stage starts with its voice's block as fastModIn (grain synths %, after a switch %, stages %; blocks %)".format(
             first, second, stages, blocks));
-    check.(refused, "modulation: setGrainParam and setVoiceParam refuse fastModIn (#458)");
+    check.(refused, "modulation: setGrainParam and setVoiceParam refuse fastModIn and the stage's t_gate (#458; t_gate kept: %, %)".format(
+        engine.grainControls[0][\t_gate], engine.voiceControls[0][\t_gate]));
     plan.do({ arg each; command.(\voiceOff, each[0]) });
     h.stopAllVoices;
     plan.do({ arg each, index; engine.grainControls[each[0]] = saved[index] });
