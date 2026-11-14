@@ -1921,7 +1921,9 @@ test("the engine's own functions pass the scan (#689)", function()
   -- as sclang 3.14.1 compiles there (the FunctionDefs in each method's
   -- literals, method by method)
   local literals = 0
-  for index = 2, #files do literals = literals + #frame_guard.function_literals(sc_code_only(files[index].text)) end
+  for _, file in ipairs(files) do
+    if file.path:match("^lib/engine/") then literals = literals + #frame_guard.function_literals(sc_code_only(file.text)) end
+  end
   assert_true(literals >= 450, "the scan finds the engine's function literals (" .. literals .. ")")
   -- the issue's calls sit in functions and go through areaCall
   local routed = {}
