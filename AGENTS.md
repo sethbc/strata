@@ -23,6 +23,24 @@ Strata is an ambient granular soundscape generator for monome norns. It has seve
 - `docs/workflow.md`: how a session runs work packages through agents (the skills at each step, the controller, workers and reviewers, the ledger, briefs, reports, landing, a release's steps).
 - README.md: a short overview, quick start and index of the user documentation, which is one page per area under docs/user/ (`docs/user/controls.md`, `docs/user/grid.md`, `docs/user/arc.md`, `docs/user/params.md`, ...).
 
+## How work is done: the superpowers skills
+
+Every piece of work runs on the superpowers skills: the session doing a step invokes its skill with the Skill tool at that step and on every resume, and following a skill from memory does not count. `docs/workflow.md` says who invokes each and when (Skills) and gives the lines every worker's dispatch carries (Dispatch); where a skill differs from it or this file, those win (parallel packages, batch landings, rebase-only merges).
+
+- **A new design**: `superpowers:brainstorming`.
+- **A plan**: `superpowers:writing-plans`.
+- **A worktree**: `superpowers:using-git-worktrees`.
+- **Running a plan or a batch**, at its start and on every resume: `superpowers:subagent-driven-development`.
+- **Sending two or more agents at once**: `superpowers:dispatching-parallel-agents`.
+- **Changing code or tests** (every worker): `superpowers:test-driven-development`.
+- **A failing test or check, or a bug**, before any fix: `superpowers:systematic-debugging`.
+- **A review outside a plan's task loop** (a design, a docs change, a release): `superpowers:requesting-code-review`.
+- **Acting on a review's findings**: `superpowers:receiving-code-review`.
+- **Before reporting a status, landing or merging**: `superpowers:verification-before-completion`.
+- **The end of a plan** (pull request only): `superpowers:finishing-a-development-branch`.
+
+A worker's report lists the skills it invoked, and a review fails a package missing one its work required.
+
 ## Architecture
 
 The project is written in two languages that must stay in sync:
@@ -240,7 +258,6 @@ The Lua side's, across modules:
 ## Working in parallel
 
 Several pull requests are built at once, often by agents: a feature lives in files that only its work edits, apart from one-line registrations. How a session runs packages through agents (the controller, workers and reviewers, scratch folders, the ledger, briefs, reports, landing, a release's steps and cleanup) is in `docs/workflow.md`. The rules every change follows:
-- **Superpowers skills, invoked, not imitated**: each session invokes the skill for its step with the Skill tool, as `docs/workflow.md` (Skills) lists them: `superpowers:brainstorming` for a new design, `superpowers:writing-plans`, `superpowers:using-git-worktrees`, `superpowers:subagent-driven-development` (the controller, at a plan's start and on every resume), `superpowers:test-driven-development` (every worker changing code or tests), `superpowers:requesting-code-review` (a review outside a plan's task loop) and `superpowers:finishing-a-development-branch` (pull request only). Following a skill from memory does not count. Where a skill differs from `docs/workflow.md` or this file, those win (parallel packages, rebase-only merges).
 - **Rebase, never merge main in**: `git fetch -q origin && git rebase origin/main`, then `git push --force-with-lease`; never `git merge origin/main`, never `gh pr update-branch` without `--rebase`. Pull requests merge with rebase (`gh pr merge --rebase`), so `main` stays linear. A plan's reviewed packages land in batches, one pull request per batch, so a worker rebases only when the controller asks (`docs/workflow.md`, Landing in batches).
 - **One worktree per pull request**, branched from an up-to-date `main`; never share a checkout between two pieces of work. Engine checks in different worktrees run on different `$STRATA_SC_PORT` ports.
 - **Own scratch folder and worktree, nothing else**: never write to, rename or delete another worker's folder, worktree, logs or containers. Remove only a worktree you created, with `git worktree remove`; leftovers are the controller's or the maintainer's to clean up. The controller's ledger is `.superpowers/sdd/<plan>/progress.md` in the main checkout, never in a worktree.

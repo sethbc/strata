@@ -1448,6 +1448,146 @@ local function doc_section(text, heading)
   return inside and table.concat(lines, "\n") or nil
 end
 
+-- The superpowers skills the process runs on (docs/workflow.md, Skills):
+-- `process` are required steps, `unused` is named only as not used, and
+-- `worker` are the ones a worker's dispatch carries (Dispatch)
+local SKILLS = {
+  process = { "brainstorming", "writing-plans", "using-git-worktrees", "subagent-driven-development",
+    "dispatching-parallel-agents", "test-driven-development", "systematic-debugging",
+    "requesting-code-review", "receiving-code-review", "verification-before-completion",
+    "finishing-a-development-branch" },
+  unused = { "executing-plans" },
+  worker = { "test-driven-development", "systematic-debugging", "receiving-code-review",
+    "verification-before-completion" },
+}
+
+-- Every `superpowers:<name>` in `text`, as a set of the bare names (a name
+-- ends at the first character that is not a letter or a hyphen)
+local function skills_named(text)
+  local found = {}
+  for name in text:gmatch("superpowers:([%a-]+)") do found[name] = true end
+  return found
+end
+
+-- The differences between a set of found names and the expected lists: each
+-- expected name the set lacks, and each found name in no expected list
+local function skill_set_problems(found_set, expected_lists, where)
+  local problems, expected = {}, {}
+  for _, list in ipairs(expected_lists) do
+    for _, name in ipairs(list) do expected[name] = true end
+  end
+  local names = {}
+  for name in pairs(expected) do table.insert(names, name) end
+  table.sort(names)
+  for _, name in ipairs(names) do
+    if not found_set[name] then table.insert(problems, where .. " does not name superpowers:" .. name) end
+  end
+  names = {}
+  for name in pairs(found_set) do
+    if not expected[name] then table.insert(names, name) end
+  end
+  table.sort(names)
+  for _, name in ipairs(names) do
+    table.insert(problems, where .. " names superpowers:" .. name .. ", which is not expected there")
+  end
+  return problems
+end
+
+-- A plan's skill problems: no execution skill, or a `### Task` section with
+-- no `**Skills:**` line naming a process skill
+local function plan_skill_problems(text)
+  local problems = {}
+  if not skills_named(text)["subagent-driven-development"] then
+    table.insert(problems, "the plan does not name superpowers:subagent-driven-development")
+  end
+  for heading in (text .. "\n"):gmatch("([^\n]*)\n") do
+    if heading:sub(1, 9) == "### Task " then
+      local named = false
+      for line in ((doc_section(text, heading) or "") .. "\n"):gmatch("([^\n]*)\n") do
+        if line:sub(1, 11) == "**Skills:**" then
+          local skills = skills_named(line)
+          for _, name in ipairs(SKILLS.process) do named = named or skills[name] == true end
+        end
+      end
+      if not named then table.insert(problems, heading .. " has no **Skills:** line naming a process skill") end
+    end
+  end
+  return problems
+end
+
+test("AGENTS.md's process section and the workflow's Skills name the same superpowers skills", function()
+  local agents = doc_section(read_repo_file("AGENTS.md"), "## How work is done: the superpowers skills")
+  assert_true(agents ~= nil, "AGENTS.md has the section \"How work is done: the superpowers skills\"")
+  local workflow = doc_section(read_repo_file("docs/workflow.md"), "## Skills")
+  assert_true(workflow ~= nil, "docs/workflow.md has the section \"Skills\"")
+  local problems = skill_set_problems(skills_named(agents or ""), { SKILLS.process }, "AGENTS.md's process section")
+  for _, problem in ipairs(skill_set_problems(skills_named(workflow or ""), { SKILLS.process, SKILLS.unused },
+      "docs/workflow.md's Skills")) do
+    table.insert(problems, problem)
+  end
+  assert_equal(table.concat(problems, "; "), "", "the two skill lists")
+  -- the section comes before Architecture: every agent meets it first
+  local doc = read_repo_file("AGENTS.md")
+  assert_true((doc:find("\n## How work is done: the superpowers skills\n", 1, true) or math.huge)
+    < doc:find("\n## Architecture\n", 1, true), "the process section is above Architecture")
+end)
+
+test("the workflow's dispatch text gives a worker every worker skill, and reports and reviews carry the Skills line", function()
+  local workflow = read_repo_file("docs/workflow.md")
+  local dispatch = doc_section(workflow, "## Dispatch")
+  assert_true(dispatch ~= nil, "docs/workflow.md has the section \"Dispatch\"")
+  local block = (dispatch or ""):match("```\n(.-)\n```")
+  assert_true(block ~= nil, "the Dispatch section holds the worker's lines in a code fence")
+  assert_equal(table.concat(skill_set_problems(skills_named(block or ""), { SKILLS.worker }, "the dispatch text"), "; "),
+    "", "the dispatch text's skills")
+  for _, heading in ipairs({ "## Dispatch", "## Reports", "## Review" }) do
+    assert_true((doc_section(workflow, heading) or ""):find('"Skills" line', 1, true) ~= nil,
+      "docs/workflow.md's " .. heading:sub(4) .. " names the report's \"Skills\" line")
+  end
+  assert_true((doc_section(workflow, "## Briefs") or ""):find("the skills its worker invokes", 1, true) ~= nil,
+    "a brief names the skills its worker invokes")
+end)
+
+test("every superpowers skill a maintained doc or a plan names is one the process knows", function()
+  local known = { SKILLS.process, SKILLS.unused }
+  local function unknown(text, where)
+    local problems = {}
+    for _, problem in ipairs(skill_set_problems(skills_named(text), known, where)) do
+      if problem:find("which is not expected there", 1, true) then table.insert(problems, problem) end
+    end
+    return problems
+  end
+  -- the check sees a misspelled name, and reads a name before punctuation
+  assert_equal(#unknown("invoke superpowers:test-driven-developement first", "sample"), 1, "a misspelled skill is reported")
+  assert_equal(#unknown("`superpowers:subagent-driven-development`'s templates; superpowers:brainstorming.", "sample"), 0,
+    "a name before a backtick, a possessive or a period is read bare")
+  local docs = maintained_docs()
+  for _, plan in ipairs(markdown_files("docs/superpowers/plans")) do table.insert(docs, plan) end
+  local problems = {}
+  for _, doc_name in ipairs(docs) do
+    for _, problem in ipairs(unknown(read_repo_file(doc_name), doc_name)) do table.insert(problems, problem) end
+  end
+  assert_equal(table.concat(problems, "; "), "", "unknown skill names")
+end)
+
+test("every plan under docs/superpowers/plans names the execution skill and a skill for each task", function()
+  local good = "# Plan\n\n> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development\n\n"
+    .. "### Task 1: one\n\n**Skills:** `superpowers:test-driven-development`\n\n- [ ] step\n\n"
+    .. "### Task 2: docs\n\n**Skills:** `superpowers:verification-before-completion` (docs only)\n"
+  assert_equal(#plan_skill_problems(good), 0, "a plan naming its skills has no problem")
+  assert_equal(#plan_skill_problems((good:gsub("superpowers:subagent%-driven%-development", "the usual skill"))), 1,
+    "a plan without the execution skill is reported")
+  local bare = good:gsub("%*%*Skills:%*%* `superpowers:test%-driven%-development`", "**Files:** none")
+  local problems = plan_skill_problems(bare)
+  assert_equal(#problems, 1, "a task without a Skills line is reported")
+  assert_true((problems[1] or ""):find("### Task 1: one", 1, true) ~= nil, "the problem names the task's heading")
+  assert_equal(#plan_skill_problems((good:gsub("`superpowers:verification%-before%-completion`", "none"))), 1,
+    "a Skills line naming no process skill is reported")
+  for _, plan in ipairs(markdown_files("docs/superpowers/plans")) do
+    assert_equal(table.concat(plan_skill_problems(read_repo_file(plan)), "; "), "", plan)
+  end
+end)
+
 -- A menu name without its trailing number: "LFO 1" and "LFO 1-3" are
 -- "LFO", "custom 5" is "custom"
 local function menu_family(name)
