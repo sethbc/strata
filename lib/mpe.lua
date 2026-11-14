@@ -28,13 +28,22 @@ return function(S)
   -- per zone, the master channel's bend range in semitones
   local state = {channel = {}, master_range = {}}
 
+  -- Both zones' master bend ranges back to the default. A controller sets
+  -- its range once (RPN 0 on the master channel) and does not send it again,
+  -- so only a new MPE configuration for the zone, or another controller (a
+  -- port or device change), puts it back (#688)
+  function M.reset_ranges()
+    state.master_range = {lower = MPE.master_bend, upper = MPE.master_bend}
+  end
+
+  -- Forget every channel's values and selected RPN; the master ranges stay
   function M.reset()
     state.channel = {}
     for channel = 1, MPE.channels do
       state.channel[channel] = {bend = MPE.bend_center, slide = 0}
     end
-    state.master_range = {lower = MPE.master_bend, upper = MPE.master_bend}
   end
+  M.reset_ranges()
   M.reset()
 
   local function whole_channel(channel)
@@ -144,6 +153,9 @@ return function(S)
       if channel == MPE.lower_master then name = "lower" elseif channel == MPE.upper_master then name = "upper" end
       if not name then return {} end
       local count = util.clamp(value, 0, MPE.max_members)
+      -- an MPE configuration puts the zone's master range back to the default
+      -- (the specification's rule); before the count's hooks run (#688)
+      state.master_range[name] = MPE.master_bend
       params:set(name == "lower" and "mpe_lower_members" or "mpe_upper_members", count)
       if S.lib.ui_flash then S.lib.ui_flash.start("header", "MPE " .. name .. " " .. count) end
       return {}

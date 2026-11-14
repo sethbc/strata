@@ -92,6 +92,8 @@ return function(S)
   -- the start step (below), never at include time (#469).
   local function midi_added(device)
     attach_midi(params:get("midi_device"))
+    -- another controller may be on the port: its master bend range is its own (#688)
+    if device.port == vport_index(params:get("midi_device")) then S.lib.mpe.reset_ranges() end
     request_redraw()  -- SETUP shows the device
     print("midi connected: " .. tostring(device.name))
   end
@@ -99,6 +101,7 @@ return function(S)
   local function midi_removed(device)
     if device.port == vport_index(params:get("midi_device")) then
       reset_midi_input()
+      S.lib.mpe.reset_ranges()
       attached_device = nil
     end
     -- SETUP shows the port as empty: norns clears the vport as midi.remove
@@ -115,6 +118,7 @@ return function(S)
     local current = S.midi_device and S.midi_device.device
     if current == attached_device then return end
     if attached_device ~= nil then reset_midi_input() end
+    S.lib.mpe.reset_ranges()
     attached_device = current
     request_redraw()
   end
@@ -146,7 +150,7 @@ return function(S)
   end
 
   -- Release every MIDI note: the keys and the plain pressures forgotten,
-  -- S.lib.mpe's state reset (a master channel's bend range back to 2). A
+  -- S.lib.mpe's channel values reset (the master channels' bend ranges stay, #688). A
   -- voice whose keys were down stops in release mode (the mode read after
   -- the change), and, with stop_all (a panic), so does every voice a MIDI
   -- note started: nothing can release them any more (#407, #529); its notes

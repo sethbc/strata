@@ -696,6 +696,7 @@ return function(S)
       action = function(x)
         attach_midi(x)
         reset_midi_input()  -- the old port's note offs and bend returns will not arrive
+        S.lib.mpe.reset_ranges()  -- another controller: its master bend range is its own (#688)
       end
     }
 
