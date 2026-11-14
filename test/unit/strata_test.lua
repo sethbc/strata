@@ -456,15 +456,15 @@ test("Lua's held notes agree with a model of the engine's slots over seeded rand
         context.midi.send(1, { type = "note_on", ch = channel, note = low + 1 + random(5), vel = 90 })
         context.midi.send(1, { type = "note_off", ch = channel, note = low, vel = 0 })
       end },
-      { 1, function() params:set("midi_note_off", random(3)) end },
+      { 1, function() params:set("midi_note_off", random(3)) end, "never" },
       { 1, function() if S.pattern_playing then pattern_clock_stop() else pattern_clock_start() end end },
-      { 1, function() toggle_voice(random(3)) end },
-      { 2, function() params:set("v" .. random(3) .. "_source", sources[random(3)]) end },
+      { 1, function() toggle_voice(random(3)) end, "never" },
+      { 2, function() params:set("v" .. random(3) .. "_source", sources[random(3)]) end, "never" },
       { 2, function() params:set("v" .. random(3) .. "_freeze", random(2) - 1) end },
       { 1, function() S.lib.notes.set_pool(random(7) - 1) end },
-      { 1, function() params:set("v" .. random(3) .. "_note_cap", random(S.constants.NOTE_SLOTS)) end },
-      { 0.3, function() context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 }) end },
-      { 1, function() if random(2) == 1 then capture_scene(random(2)) else recall_scene(random(2)) end end },
+      { 1, function() params:set("v" .. random(3) .. "_note_cap", random(S.constants.NOTE_SLOTS)) end, "never" },
+      { 0.3, function() context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 }) end, "never" },
+      { 1, function() if random(2) == 1 then capture_scene(random(2)) else recall_scene(random(2)) end end, "frozen" },
     }
     local total = 0
     for _, op in ipairs(ops) do total = total + op[1] end
@@ -476,6 +476,17 @@ test("Lua's held notes agree with a model of the engine's slots over seeded rand
       ops[index][2]()
       model:feed(context.engine_calls)
       local problems = model:compare(S)
+      -- the blind spot: a playing note cut where the op cuts none (a plain
+      -- switch, a mode, a stop, the cap, a panic), or by a recall on a voice
+      -- that does not end a frozen synth voice (ruling 59)
+      for _, engine_voice in ipairs(model.live_cuts) do
+        local voice = engine_voice + 1
+        local frozen_synth = voice_uses_synth(voice) and S.lib.freeze.is_frozen(voice)
+        if ops[index][3] == "never" or (ops[index][3] == "frozen" and not frozen_synth) then
+          problems[#problems + 1] = "voice " .. voice .. ": a playing note cut by op " .. index
+        end
+      end
+      model.live_cuts = {}
       for _, broken in ipairs(check_invariants()) do problems[#problems + 1] = "invariant " .. broken end
       assert_equal(table.concat(problems, "; "), "", "seed " .. seed .. ", step " .. step .. " (op " .. index .. ")")
     end

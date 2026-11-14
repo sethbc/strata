@@ -665,10 +665,13 @@ return function(S)
     S.scene_recall_in_progress = false
 
     -- even after an error: a running voice whose source switched gets its sync
-    -- (of whatever was applied), so the engine never lags the Lua state
+    -- (of whatever was applied), so the engine never lags the Lua state; then
+    -- its held extra notes follow what it now is (S.lib.notes.recall_switched:
+    -- cut when it ends a frozen synth voice, rulings 58 and 59)
     for i = 1, NUM_VOICES do
       if state.source_changed[i] and S.voices[i].active then
         sync_voice_values_to_engine(i)
+        S.lib.notes.recall_switched(i)
       end
     end
     if not applied then error(apply_error, 0) end

@@ -1160,4 +1160,66 @@ test("a recall into a frozen synth voice cuts its held extra notes, as a freeze 
   assert_equal(S.lib.notes.held(1), 3, "the chord is held"); assert_equal(S.lib.notes.pool_used(), 2)
 end)
 
+-- Ruling 59 (correcting ruling 58's build): what a recall does to a voice's
+-- held extra notes is decided by what the voice is once the recall has
+-- applied every entry. A running voice whose source the recall switches from
+-- a buffer or the input to its synth, frozen or not before, the scene's
+-- freeze on or off: only a voice that ends a frozen synth voice has its
+-- extra notes cut (noteOff with cut 1) and forgotten; one that ends unfrozen
+-- keeps them, as the voice synths the engine restarted them as. A fade's
+-- landing (the transition's end applies the discrete values) follows the
+-- same rule
+test("a recall cuts a voice's held extra notes only when it ends a frozen synth voice (ruling 59)", function()
+  local function chord_through(source_name, frozen_before, scene_freeze, transition)
+    local what = string.format("%s, %s before, the scene's freeze %s%s", source_name,
+      frozen_before == 1 and "frozen" or "not frozen", scene_freeze == 1 and "on" or "off",
+      transition and ", at a fade's landing" or "")
+    local context = load_strata()
+    local S = started(context)
+    local notes = S.lib.notes
+    local source = source_name == "buffer" and S.constants.SOURCE_SYNTH + 1 or S.constants.SOURCE_INPUT
+    context.midi.plug(1, "keys")
+    params:set("v1_source", S.constants.SOURCE_SYNTH)
+    params:set("v1_freeze", scene_freeze)
+    capture_scene(1)                     -- voice 1 on its synth source, the scene's freeze
+    params:set("v1_freeze", 0)
+    params:set("v1_source", source)
+    params:set("v1_freeze", frozen_before)
+    for _, note in ipairs({60, 64, 67}) do context.midi.send(1, {type = "note_on", ch = 1, note = note, vel = 100}) end
+    assert_equal(notes.held(1), 3, what .. ": the chord is held"); assert_equal(notes.pool_used(), 2)
+    context.set_time(util.time() + 0.1)
+    context.clear_engine_calls()
+    if transition then
+      recall_scene(1, transition)
+      assert_equal(#context.calls_named("noteOff"), 0, what .. ": nothing cut during the fade")
+      context.clock.run_for(transition + 0.5)
+    else
+      recall_scene(1)
+    end
+    assert_true(voice_uses_synth(1), what .. ": voice 1 ends on its synth source")
+    assert_equal(S.lib.freeze.is_frozen(1), scene_freeze == 1, what .. ": with the scene's freeze")
+    local cuts = {}
+    for _, call in ipairs(context.calls_named("noteOff")) do
+      if call.args[1] == 0 then table.insert(cuts, call_text(call)) end
+    end
+    local cut = scene_freeze == 1
+    assert_equal(table.concat(cuts, " "), cut and "noteOff(0, 1, 1) noteOff(0, 2, 1)" or "",
+      what .. (cut and ": each extra note cut" or ": nothing cut"))
+    assert_equal(notes.pool_used(), cut and 0 or 2, what .. ": the pool")
+    assert_equal(notes.held(1), cut and 1 or 3, what .. ": what Lua holds")
+    for _, key in ipairs({64, 67}) do
+      assert_equal(notes.find(1, "midi", 128 + key) ~= nil, not cut, what .. ": key " .. key .. (cut and " gone" or " held"))
+    end
+    local broken = h.check_invariants()
+    assert_equal(#broken, 0, what .. ": every invariant holds (" .. table.concat(broken, "; ") .. ")")
+  end
+  for _, source_name in ipairs({"buffer", "input"}) do
+    for _, frozen_before in ipairs({0, 1}) do
+      for _, scene_freeze in ipairs({0, 1}) do chord_through(source_name, frozen_before, scene_freeze) end
+    end
+  end
+  chord_through("buffer", 1, 0, 1.0)
+  chord_through("buffer", 1, 1, 1.0)
+end)
+
 end

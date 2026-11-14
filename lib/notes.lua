@@ -781,28 +781,33 @@ return function(S)
   -- its rate on the new own grain synth: noteOn on slot 0 from slot 1's held
   -- note, a quiet note whose caller starts the voice now (a play that starts
   -- the voice writes its record after the start, and sends that noteOn
-  -- itself). A running voice's source switch otherwise sends nothing (design
-  -- §2.4: a source switch needs nothing from Lua; the source is sent before
-  -- the freeze module's hook unfreezes the voice, and slot 1's pitch was its
-  -- old source's), but for ruling 58 (#690): a recall's switch that leaves
-  -- the voice a frozen synth voice (a frozen buffer or input voice to the
-  -- synth source, the scene's freeze on and unchanged, so no freeze hook
-  -- runs) cuts its extra notes as a freeze does; the engine would restart
-  -- them as voice synths under the frozen ring. Outside a recall the freeze
-  -- module's source-change hook, which runs after this one, unfreezes the
-  -- voice, so it keeps its notes. With the voice-stop hook this covers every
-  -- start and source change: a stopped voice's switch runs no hook, and a
-  -- stopped voice keeps no reference
+  -- itself). A running voice's source switch sends nothing (design §2.4: a
+  -- source switch needs nothing from Lua; the source is sent before the
+  -- freeze module's hook unfreezes the voice, and slot 1's pitch was its old
+  -- source's; a recall's switch is settled at the recall's end, below). With
+  -- the voice-stop hook this covers every start and source change: a stopped
+  -- voice's switch runs no hook, and a stopped voice keeps no reference
   S.register_grain_restart(function(voice)
     refresh_reference(voice, true)
     local record = slots[voice][1]
     if not S.voices[voice].active and record and record.held and frozen_synth(voice) then
       send_note_on(voice, 1, record)
       count(1)
-    elseif S.voices[voice].active and S.scene_recall_in_progress and frozen_synth(voice) then
-      cut_extras(voice)
     end
   end)
+
+  -- Rulings 58 and 59 (#690): a running voice whose source a recall switched
+  -- (lib/scenes.lua's apply_entries calls this for each, once every entry is
+  -- applied: an instant recall, a fade's landing, a morph's discrete
+  -- switches). What the voice is then decides: a frozen synth voice has its
+  -- extra notes cut and forgotten, as a freeze does (the switch restarted
+  -- them as voice synths under the frozen ring, and with the freeze already
+  -- on no freeze hook ran); any other keeps them (the engine restarted them,
+  -- sounding, on the new source). A voice outside 1..NUM_VOICES, or stopped,
+  -- is left alone
+  function M.recall_switched(voice)
+    if whole_in(voice, 1, NUM_VOICES) and S.voices[voice].active and frozen_synth(voice) then cut_extras(voice) end
+  end
 
   -- A synth voice's freeze: its reference taken, its extra notes cut and
   -- forgotten (their sound is in the frozen ring); scaleNote resent (the
