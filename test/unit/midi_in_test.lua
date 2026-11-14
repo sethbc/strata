@@ -1442,6 +1442,61 @@ test("the layout hook acts only in the MPE modes, and a second run sends nothing
   assert_nothing_parked(S, "the second run")
 end)
 
+-- #688: the lower zone's master bend range, set by RPN 0 through the MIDI handler
+local function set_master_range(context, semitones)
+  context.midi.send(1, { type = "cc", cc = 101, val = 0, ch = 1 })
+  context.midi.send(1, { type = "cc", cc = 100, val = 0, ch = 1 })
+  context.midi.send(1, { type = "cc", cc = 6, val = semitones, ch = 1 })
+end
+-- the ratio a lower member plays at a full-up master bend (the master back to center after)
+local function master_bend_ratio(context, S)
+  context.midi.send(1, { type = "pitchbend", val = 16383, ch = 1 })
+  local ratio = S.lib.mpe.values(2).bend
+  context.midi.send(1, { type = "pitchbend", val = 8192, ch = 1 })
+  return ratio
+end
+local function full_up(range) return 2 ^ ((16383 - 8192) / 8192 * range / 12) end
+
+test("a note-off mode change, a channel-mode change within MPE and a panic keep the controller's master bend range (#688)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.midi.plug(1, "keys")
+  params:set("midi_channel_mode", 3); params:set("mpe_lower_members", 7)
+  set_master_range(context, 12)
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "the range is set")
+  params:set("midi_note_off", 2)
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "a note-off mode change")
+  params:set("midi_channel_mode", 4)
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "a channel-mode change within MPE")
+  context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 })
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "a panic")
+  params:set("mpe_lower_members", 5)
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "a layout change made on the norns")
+end)
+
+test("a port change and a device change reset the master bend range", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.midi.plug(1, "keys")
+  params:set("midi_channel_mode", 3); params:set("mpe_lower_members", 7)
+  set_master_range(context, 12)
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9)
+  params:set("midi_device", 2)
+  params:set("midi_device", 1)
+  assert_near(master_bend_ratio(context, S), full_up(2), 1e-9, "a port change")
+  set_master_range(context, 12)
+  context.midi.unplug(1)
+  assert_near(master_bend_ratio(context, S), full_up(2), 1e-9, "the device removed")
+  context.midi.plug(1, "keys")
+  set_master_range(context, 12)
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "set again")
+  context.midi.unplug(1); context.midi.plug(1, "other")
+  assert_near(master_bend_ratio(context, S), full_up(2), 1e-9, "a device added")
+  set_master_range(context, 12)
+  context.midi.plug(2, "pads")
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "a device on another port changes nothing")
+end)
+
 test("RPN 6 with notes held releases them mid-handler and leaves the key state and the allocator agreeing", function()
   for _, off_mode in ipairs({ 1, 3 }) do   -- auto (release in mpe selected), latch
     local context = load_strata(); finish_startup(context)

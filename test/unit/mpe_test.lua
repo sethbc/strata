@@ -11,7 +11,7 @@ local function setup(mode)
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   params:set("midi_channel_mode", mode or 3)
-  S.lib.mpe.reset()
+  S.lib.mpe.reset(); S.lib.mpe.reset_ranges()
   return context, S, S.lib.mpe
 end
 
@@ -114,6 +114,64 @@ test("a master bend changes only its own zone's members", function()
   same(changed, {9, 10, 11, 12, 13, 14, 15, 16})
   assert_equal(mpe.values(2).bend, 1)
   assert_true(mpe.values(9).bend > 1)
+end)
+
+-- a full-up master bend on `channel`, then the ratio a member of that zone plays
+-- (full up is raw 16383, one step short of +1)
+local function full_up(range) return 2 ^ ((16383 - 8192) / 8192 * range / 12) end
+local function master_ratio(mpe, master_channel, member)
+  mpe.control({type = "pitchbend", ch = master_channel, val = 16383})
+  local ratio = mpe.values(member).bend
+  mpe.control({type = "pitchbend", ch = master_channel, val = 8192})
+  return ratio
+end
+
+test("a reset keeps the master bend range the controller set (#688)", function()
+  local _, _, mpe = setup()
+  params:set("mpe_lower_members", 7)
+  rpn(mpe, 1, 0, 12)
+  mpe.reset()
+  assert_near(master_ratio(mpe, 1, 2), full_up(12), 1e-9, "12 semitones, not 2")
+end)
+
+test("a reset still forgets every channel's values and selected RPN", function()
+  local _, _, mpe = setup()
+  params:set("mpe_lower_members", 7)
+  mpe.control({type = "pitchbend", ch = 3, val = 16383})
+  mpe.control({type = "channel_pressure", ch = 3, val = 64})
+  cc(mpe, 3, 74, 127); cc(mpe, 3, 87, 5)
+  cc(mpe, 3, 101, 0); cc(mpe, 3, 100, 0)
+  mpe.reset()
+  assert_equal(mpe.values(3).bend, 1)
+  assert_equal(mpe.values(3).pressure, nil)
+  assert_equal(mpe.values(3).slide, 0)
+  local range = params:get("mpe_bend_range")
+  cc(mpe, 3, 6, 12)
+  assert_equal(params:get("mpe_bend_range"), range, "the selected RPN was forgotten")
+  cc(mpe, 3, 74, 64)
+  assert_near(mpe.values(3).slide, 64 / 127, 1e-12, "the pending CC87 was forgotten")
+end)
+
+test("an MPE configuration message resets its zone's master bend range and leaves the other zone's (#688)", function()
+  local _, _, mpe = setup()
+  params:set("mpe_lower_members", 7); params:set("mpe_upper_members", 7)
+  rpn(mpe, 1, 0, 12); rpn(mpe, 16, 0, 7)
+  rpn(mpe, 1, 6, 7)
+  assert_near(master_ratio(mpe, 1, 2), full_up(2), 1e-9, "the lower zone is back to 2")
+  assert_near(master_ratio(mpe, 16, 9), full_up(7), 1e-9, "the upper zone keeps 7")
+  rpn(mpe, 1, 0, 24)
+  assert_near(master_ratio(mpe, 1, 2), full_up(24), 1e-9, "RPN 0 after it is stored")
+  rpn(mpe, 1, 6, 0); params:set("mpe_lower_members", 7)
+  assert_near(master_ratio(mpe, 1, 2), full_up(2), 1e-9, "a count of 0 resets it too")
+end)
+
+test("reset_ranges puts both master bend ranges back to 2", function()
+  local _, _, mpe = setup()
+  params:set("mpe_lower_members", 7); params:set("mpe_upper_members", 7)
+  rpn(mpe, 1, 0, 12); rpn(mpe, 16, 0, 7)
+  mpe.reset_ranges()
+  assert_near(master_ratio(mpe, 1, 2), full_up(2), 1e-9)
+  assert_near(master_ratio(mpe, 16, 9), full_up(2), 1e-9)
 end)
 
 test("pressure is nil until first received; slide and pressure are 0-1", function()
