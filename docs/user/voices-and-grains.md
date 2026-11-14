@@ -111,7 +111,7 @@ Scenes capture all of them; intervals, quantize and the custom intervals switch 
 
 ### Envelope times
 
-Every voice fades in over an attack and out over a release, set in VOICE's `notes` section by `attack` (0.005-30 s) and `release` (0.01-30 s). Each voice starts at its own times, the ones it always had (Resonator 4 and 8 s, FM 5 and 10, Folder 3 and 6, Sub 8 and 12, Pulse 2 and 4, Karplus 0.01 and 2, Ring 3 and 5), so nothing sounds different until you turn them. They apply to the next start or note and to a voice fading out now; scenes store them and crossfade them, and randomize leaves them alone.
+Every synth voice fades in over an attack and out over a release, set in VOICE's `notes` section by `attack` (0.005-30 s) and `release` (0.01-30 s). Each voice starts at its own times, the ones it always had (Resonator 4 and 8 s, FM 5 and 10, Folder 3 and 6, Sub 8 and 12, Pulse 2 and 4, Karplus 0.01 and 2, Ring 3 and 5), so nothing sounds different until you turn them. They apply to the next start or note and to a voice fading out now; scenes store them and crossfade them, and randomize leaves them alone. They shape a synth voice's synths only: a buffer or input voice's notes, and a frozen synth voice's, are granular processors with fades of their own (0.1 s in, 2 s out), which the two leave alone (a frozen voice's times apply again once it unfreezes).
 
 ### Chords
 
@@ -121,7 +121,7 @@ A voice plays up to eight notes at once: its own note, which its settings pitch 
 - **an input voice**: another granular processor reading the input at the note's pitch
 - **a frozen synth voice**: freezing a synth voice ends its extra notes (their sound is in the frozen recording), and a note played while it is frozen plays the frozen sound itself at the note's pitch: the key the voice was at when it froze plays it as it is, a key a fifth above plays it a fifth up. Unfreezing turns the notes still held into synths again, at their pitches
 
-Every setting of the voice reaches all its notes: its grain settings (but a buffer voice's buffer rate and an input voice's grain pitch, which are its own note's pitch), its filter, sends, level and mute, its LFOs and the matrix. Changing the voice's source, or recalling a scene, while notes are held keeps every note sounding on what the voice now plays; stopping the voice ends them all. A chord is louder than a note: nothing turns a voice down for its number of notes, and the master limiter is the bound.
+Every setting of the voice reaches all its notes: its grain settings (but a buffer voice's buffer rate and an input voice's grain pitch, which are its own note's pitch), its filter, sends, level and mute, its LFOs and the matrix. Changing the voice's source, or recalling a scene, while notes are held keeps every note sounding on what the voice now plays, each at its own pitch; stopping the voice ends them all. With `seq gate` on, every note started opens the voice's gate ([Sequencer](sequencer.md#gates)). A chord is louder than a note: nothing turns a voice down for its number of notes, and the master limiter is the bound.
 
 ### Mute and solo
 
