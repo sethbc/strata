@@ -48,21 +48,23 @@
 # their hash), so a fresh machine needs no manual step; the one-time build
 # takes about a minute (it downloads Ubuntu's SuperCollider and JACK).
 #
-# Each container ends in one of six ways (#545): passed; failed (any FAIL,
-# ERROR or "Strata invariant broken" line, whatever ended it); capped (the
-# memory cap killed a process in the container: oom_kill above 0, #544);
-# killed (exit 137 with no cap kill: stopped from outside); collector
-# (sclang ended on a signal after the collector's count-error lines, the
-# collector failure of #211; sclang spells the word with an e, so the
-# pattern is written gr[e]y for the US spelling check); or crashed (a
-# signal with none of those: #131). A sharded run that did not pass takes
-# the class of its worst shard (the first in that order, after passed; of
-# two alike, the first in the run's order), and the summary names that
-# shard, then any other shard that did not pass; a run -c finds incomplete
-# says which shards have no log. The summary counts runs by class (and the
-# incomplete ones), then for sharded runs their shards by class (and the
-# missing ones: a run's other shards show only there) and names the slowest
-# shard; the exit status is 0 only when every run passed.
+# Each container ends in one of six ways (#545, #687), the worst first:
+# collector failure (the log holds the collector's count-error lines, the
+# collector failure of #211, whatever else it shows and at exit status 0
+# too; sclang spells the word with an e, so the pattern is written gr[e]y
+# for the US spelling check); failed (any FAIL, ERROR or "Strata invariant
+# broken" line, whatever ended it); capped (the memory cap killed a process
+# in the container: oom_kill above 0, #544); killed (exit 137 with no cap
+# kill: stopped from outside); crashed (a signal with none of those: #131);
+# or passed. The detail of a collector failure says what else the log
+# shows. A sharded run that did not pass takes the class of its worst shard
+# (the first in that order, after passed; of two alike, the first in the
+# run's order), and the summary names that shard, then any other shard that
+# did not pass; a run -c finds incomplete says which shards have no log.
+# The summary counts runs by class (and the incomplete ones), then for
+# sharded runs their shards by class (and the missing ones: a run's other
+# shards show only there) and names the slowest shard; the exit status is 0
+# only when every run passed.
 set -eu
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
@@ -271,37 +273,48 @@ if [ -n "$classify_only" ]; then
   done
 fi
 
-# classify <log> <status file>: sets class (failed, capped, killed,
-# collector, crashed or passed), rank (its place in that order: a sharded
-# run takes its lowest), label (the summary's word) and detail
+# classify <log> <status file>: sets class (collector, failed, capped,
+# killed, crashed or passed), rank (its place in that order: a sharded run
+# takes its lowest), label (the summary's word) and detail. A log holding
+# the collector's count-error lines is the collector class whatever else it
+# shows, a passing one too (#687); its detail says what else the log shows.
 classify() {
   status=$(cat "$2" 2> /dev/null || echo 1)
   signal=$(grep -o "sclang ended on signal [0-9]* after [0-9]* s" "$1" 2> /dev/null | head -n 1)
   detail=
-  if [ "$status" = 0 ]; then
+  if grep -q "gr[e]y count error" "$1" 2> /dev/null; then
+    class=collector rank=1
+    detail="#211; count errors"
+    if grep -qE "^FAIL|^ERROR|Strata invariant broken" "$1"; then
+      detail="$detail; $(grep -m 1 -E "^FAIL|^ERROR|Strata invariant broken" "$1")"
+    fi
+    grep -qE "^strata cgroup oom_kill: [1-9]" "$1" && detail="$detail; the memory cap killed a process (#544)"
+    [ "$status" != 137 ] || detail="$detail; exit 137"
+    if [ -n "$signal" ]; then
+      detail="$detail; $signal"
+    elif [ "$status" = 0 ]; then
+      detail="$detail; the check itself passed"
+    fi
+  elif [ "$status" = 0 ]; then
     class=passed rank=6
   elif grep -qE "^FAIL|^ERROR|Strata invariant broken" "$1" 2> /dev/null; then
-    class=failed rank=1
+    class=failed rank=2
     note=
-    grep -q "gr[e]y count error" "$1" && note="; the collector failed too (#211)"
-    grep -qE "^strata cgroup oom_kill: [1-9]" "$1" && note="$note; the memory cap killed a process (#544)"
+    grep -qE "^strata cgroup oom_kill: [1-9]" "$1" && note="; the memory cap killed a process (#544)"
     detail="$(grep -m 1 -E "^FAIL|^ERROR|Strata invariant broken" "$1")$note"
   elif grep -qE "^strata cgroup oom_kill: [1-9]" "$1" 2> /dev/null; then
-    class=capped rank=2
+    class=capped rank=3
     detail="the container's memory cap of $memory_cap killed it; ${signal:-no sclang signal}"
   elif [ "$status" = 137 ]; then
     # SIGKILL from outside (a docker kill, the host's own out-of-memory
     # killer) with no cap kill in the container's own count
-    class=killed rank=3
+    class=killed rank=4
     detail="exit 137 with no memory-cap kill: stopped from outside"
-  elif [ -n "$signal" ] && grep -q "gr[e]y count error" "$1"; then
-    class=collector rank=4
-    detail="#211; $signal, after count errors"
   elif [ -n "$signal" ]; then
     class=crashed rank=5
     detail=$signal
   else
-    class=failed rank=1
+    class=failed rank=2
     detail=$(grep -m 1 -E "ENGINE CHECK FAILED|FAILURE" "$1" 2> /dev/null || echo "see the log")
   fi
   label=$class
