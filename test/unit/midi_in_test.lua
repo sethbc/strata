@@ -1457,7 +1457,7 @@ local function master_bend_ratio(context, S)
 end
 local function full_up(range) return 2 ^ ((16383 - 8192) / 8192 * range / 12) end
 
-test("a note-off mode change, a channel-mode change within MPE and a panic keep the controller's master bend range (#688)", function()
+test("a note-off mode change, a channel-mode change within MPE, a panic and a layout change made on the norns keep the controller's master bend range (#688)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   context.midi.plug(1, "keys")
@@ -1490,11 +1490,45 @@ test("a port change and a device change reset the master bend range", function()
   context.midi.plug(1, "keys")
   set_master_range(context, 12)
   assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "set again")
-  context.midi.unplug(1); context.midi.plug(1, "other")
-  assert_near(master_bend_ratio(context, S), full_up(2), 1e-9, "a device added")
-  set_master_range(context, 12)
   context.midi.plug(2, "pads")
-  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "a device on another port changes nothing")
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "a device added on another port changes nothing")
+end)
+
+test("a device added on the selected port resets the master bend range (#688)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("midi_channel_mode", 3); params:set("mpe_lower_members", 7)
+  -- no device on port 1: the range is set directly, so no unplug resets it first
+  S.lib.mpe.control({ type = "cc", ch = 1, cc = 101, val = 0 })
+  S.lib.mpe.control({ type = "cc", ch = 1, cc = 100, val = 0 })
+  S.lib.mpe.control({ type = "cc", ch = 1, cc = 6, val = 12 })
+  local function direct_ratio()   -- no device is attached yet: the bend goes to mpe directly
+    S.lib.mpe.control({ type = "pitchbend", ch = 1, val = 16383 })
+    local ratio = S.lib.mpe.values(2).bend
+    S.lib.mpe.control({ type = "pitchbend", ch = 1, val = 8192 })
+    return ratio
+  end
+  assert_near(direct_ratio(), full_up(12), 1e-9, "the range is set before the device")
+  context.midi.plug(2, "pads")
+  assert_near(direct_ratio(), full_up(12), 1e-9, "a device on another port leaves it")
+  context.midi.plug(1, "keys")
+  assert_near(direct_ratio(), full_up(2), 1e-9, "a device added on the selected port")
+end)
+
+test("the menu's reconcile resets the master bend range only when the device changed (#688)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("midi_channel_mode", 3); params:set("mpe_lower_members", 7)
+  context.midi.plug(2, "keys")
+  set_master_range(context, 12)
+  S.lib.midi_in.reconcile()
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "nothing moved, the range stays")
+  context.midi.reassign(2, 1)
+  S.lib.midi_in.reconcile()
+  assert_near(master_bend_ratio(context, S), full_up(2), 1e-9, "a device moved onto the selected port")
+  set_master_range(context, 12)
+  S.lib.midi_in.reconcile()
+  assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "the same device again keeps it")
 end)
 
 test("RPN 6 with notes held releases them mid-handler and leaves the key state and the allocator agreeing", function()
