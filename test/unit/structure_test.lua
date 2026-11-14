@@ -2580,13 +2580,19 @@ test("a capped or killed log with collector errors is a collector failure that s
   write_shard_fixtures(root, {
     { "1", 1, COLLECTOR_LINE .. "\nENGINE CHECK FAILED: sclang ended on signal 9 after 400 s; sclang stopped\nstrata cgroup oom_kill: 2\n" },
     { "2", 137, COLLECTOR_LINE .. "\nstrata cgroup oom_kill: 0\n" },
+    -- a cap kill with no signal line and a non-zero status: the cap's note alone
+    { "3", 1, COLLECTOR_LINE .. "\nstrata cgroup oom_kill: 1\n" },
   })
-  local output = run_313_script(root, "-c -n 2 -o " .. shell_quote(root))
+  local output = run_313_script(root, "-c -n 3 -o " .. shell_quote(root))
   for _, expected in ipairs({ "run 1: collector failure (#211; count errors; the memory cap killed a process (#544); sclang ended on signal 9 after 400 s)",
       "run 2: collector failure (#211; count errors; exit 137)",
-      "passed 0 of 2; failed 0; capped 0 (#544); killed 0; collector failure 2 (#211); crashed 0 (#131)", "exit=1" }) do
+      "run 3: collector failure (#211; count errors; the memory cap killed a process (#544)), ",
+      "passed 0 of 3; failed 0; capped 0 (#544); killed 0; collector failure 3 (#211); crashed 0 (#131)", "exit=1" }) do
     assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
   end
+  local third = output:match("run 3:[^\n]*")
+  assert_true(third ~= nil and third:find("sclang ended on signal", 1, true) == nil and third:find("the check itself passed", 1, true) == nil,
+    "run 3 has neither a signal text nor a passed note: " .. tostring(third))
   h.remove_tree(root)
 end)
 
