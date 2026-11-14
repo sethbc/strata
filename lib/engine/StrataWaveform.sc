@@ -180,7 +180,7 @@
             if (thisThread.isKindOf(Routine)) {
                 var started = Main.elapsedTime;
                 while { File.exists(fifo) and: { (Main.elapsedTime - started) < this.peaksMoverTimeout } } { this.peaksMoverPollStep.wait };
-                if (File.exists(fifo)) { this.abandonPeaksMover(mover, fifo, "it never opened " ++ fifo) };
+                if (File.exists(fifo)) { this.areaCall(\abandonPeaksMover, mover, fifo, "it never opened " ++ fifo) };
             };
         } {
             this.abandonPeaksMover(mover, fifo, "cannot open " ++ fifo);
@@ -226,7 +226,7 @@
         var partGone = { moverFailed.not and: { File.exists(failPath).not } };
         var usable = mover.notNil and: { mover[\alive] } and: { mover[\pending] < this.peaksMoverBacklog }
             and: { [partPath, path, ackPath].every({ arg each; each.includes($\n).not }) };
-        var bySubprocess = { if (finished.not) { finished = true; this.renameBySubprocess(partPath, path, finish, partGone) } };
+        var bySubprocess = { if (finished.not) { finished = true; this.areaCall(\renameBySubprocess, partPath, path, finish, partGone) } };
         if (usable and: {
             try { mover[\file].write(partPath ++ "\n" ++ path ++ "\n" ++ ackPath ++ "\n"); mover[\file].flush; true } { false }
         }) {

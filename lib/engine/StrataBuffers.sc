@@ -266,7 +266,7 @@
             decodes = this.fileDecodes(file, frames, true, peaks, { load > this.loadsSuperseded(index) });
             file.close;
             if (load > this.loadsSuperseded(index)) {
-                if (decodes) { this.applyLoad(index, load, path, frames, rightChannel, sampleRate, startFrame, peaks) } {
+                if (decodes) { this.areaCall(\applyLoad, index, load, path, frames, rightChannel, sampleRate, startFrame, peaks) } {
                     this.rejectLoad(index, load, damaged, canceled)
                 };
             };
@@ -336,7 +336,7 @@
                     if (slotChanges[index] == change) {
                         bufferSampleRates[index] = sampleRate;
                         this.storeSlotPeaks(index, peaks);
-                        this.writeSlotPeaks(index, frames, {
+                        this.areaCall(\writeSlotPeaks, index, frames, {
                             bufferFrames[index] = frames;
                             this.bufferChanged(index);
                         });

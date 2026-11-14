@@ -306,7 +306,7 @@
     // cut and each live one restarted on the new source (restartNotes, the
     // notes area's). All of it goes in one bundle, so it lands in one block.
     replaceGrainSynth { arg voice;
-        context.server.makeBundle(nil, { this.switchGrainSynth(voice) });
+        context.server.makeBundle(nil, { this.areaCall(\switchGrainSynth, voice) });
     }
 
     // replaceGrainSynth's work, inside its bundle

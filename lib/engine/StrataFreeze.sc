@@ -265,7 +265,7 @@
             this.unfreezeVoice(voice);
             grainControls[voice][\freeze] = value;
             this.setGrainSynths(voice, \freeze, value);
-            if (synthVoice) { this.notesUnfrozen(voice) };
+            if (synthVoice) { this.areaCall(\notesUnfrozen, voice) };
         });
     }
 
