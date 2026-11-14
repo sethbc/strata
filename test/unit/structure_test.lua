@@ -1220,17 +1220,18 @@ local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFr
 -- the calls that hand a function to something that runs it later (the
 -- class library's and the engine's own): a method that makes one keeps its
 -- frame past its return
--- (#680: each of the last nine keeps a function or an action too: getn's
--- action in readSlotPeaks and shrinkSlotPeaks, unixCmd's in the waveform
--- area's mover and renameIntoPlace, addDependant's `confirm` in watchStart;
--- watchVoiceSynth, watchNoteSynth and watchStart register an onFree or a
--- dependant. A `get` is one only with a function argument, see
--- frame_guard.deferring_names; the engine has none today.) A method that
--- calls any of these, or an engine method that does, through any chain of
--- direct calls, is one that hands a function on (frame_guard.deferring_methods)
-local DEFERRING_CALLS = { "sched", "fork", "onFree", "OSCFunc", "OSCdef", "Routine", "defer", "afterSlotFade",
-  "writeSlot", "writeSlotPeaks", "renameIntoPlace", "getn", "unixCmd", "addDependant", "readSlotPeaks",
-  "shrinkSlotPeaks", "watchVoiceSynth", "watchNoteSynth", "watchStart" }
+-- (class-library names only, #680: getn's action in readSlotPeaks and
+-- shrinkSlotPeaks, unixCmd's in the waveform area's mover, addDependant's
+-- `confirm` in watchStart. An engine method such as afterSlotFade, writeSlot,
+-- renameIntoPlace, readSlotPeaks or watchVoiceSynth is marked from its own
+-- body, never by name: a name here would also match the symbol in
+-- this.areaCall(\writeSlot, ...). A `get` is one only with a function
+-- argument, see frame_guard.deferring_names; the engine has none today.) A
+-- method that calls any of these, or an engine method that does, through any
+-- chain of direct calls, is one that hands a function on
+-- (frame_guard.deferring_methods)
+local DEFERRING_CALLS = { "sched", "fork", "onFree", "OSCFunc", "OSCdef", "Routine", "defer", "getn", "unixCmd",
+  "addDependant" }
 
 -- SC source with its comments stripped and the text of its strings, quoted
 -- symbols and characters blanked, so a brace inside one never ends a %b{}
@@ -1364,9 +1365,11 @@ end)
 -- this.name that is a variable's getter is never one.
 local frame_guard = {}
 
--- DEFERRING_CALLS names a piece of code (comments, strings blanked) holds
+-- DEFERRING_CALLS names a piece of code (comments, strings blanked) holds;
+-- a symbol (\fork) is not a call
 function frame_guard.deferring_names(code)
   local names = {}
+  code = code:gsub("\\[%a_][%w_]*", function(symbol) return (" "):rep(#symbol) end)
   for _, call in ipairs(DEFERRING_CALLS) do
     if code:find("%f[%w_]" .. call .. "%f[^%w_]") then names[#names + 1] = call end
   end
@@ -1519,6 +1522,15 @@ test("a command calls a method that hands a function on only through areaCall (#
   assert_true(commands >= 30, "the engine's command functions are found (" .. commands .. ")")
   local chains, deferring = frame_guard.deferring_methods(frame_guard.engine_methods(files)), 0
   for _ in pairs(chains) do deferring = deferring + 1 end
+  -- the engine's own methods that keep a function or an action are marked from their bodies, not by name
+  for _, name in ipairs({ "afterSlotFade", "writeSlot", "writeSlotPeaks", "renameIntoPlace", "readSlotPeaks",
+    "shrinkSlotPeaks", "watchVoiceSynth", "watchNoteSynth", "watchStart" }) do
+    assert_true(chains[name] ~= nil, name .. " hands a function on (fixed point)")
+  end
+  -- a symbol is not a call (#680): only the method that calls fork is marked
+  local symbol_chains = frame_guard.deferring_methods(frame_guard.engine_methods({ { path = "probe.sc", text =
+    '+ Engine_Strata {\n    named { this.areaCall(\\fork, 1); ^\\onFree }\n    calls { arg x; x.fork({ 1 }) }\n}\n' } }))
+  assert_true(symbol_chains.named == nil and symbol_chains.calls ~= nil, "a symbol \\fork marks no method, a call does")
   assert_true(deferring >= 20 and chains.startVoiceSynth and chains.startVoiceSynth:find("watchVoiceSynth", 1, true),
     "the fixed point finds the methods that hand a function on, startVoiceSynth through its tail call (" .. deferring .. ")")
 end)
