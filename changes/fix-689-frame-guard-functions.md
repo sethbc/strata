@@ -1,0 +1,2 @@
+### Fixed
+- **Development: the long-lived-frame guard scans every function in the engine** (#689). The structure test now checks every function literal of the engine's methods (an `onFree`, `fork`, `makeBundle`, `do`, reply or stored function, a partial application), leaving out the blocks sclang inlines as its compiler decides them, and the 20 calls it found of methods that hand a function on, from the scatter, source switch, freeze, notes, buffer load, recording, file and peaks code, now go through `areaCall`; they were safe before, and no sound or behavior changes.

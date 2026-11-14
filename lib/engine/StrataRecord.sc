@@ -187,7 +187,7 @@
         state[\armReplies] = OSCFunc({ arg msg;
             var index = msg[2].asInteger, take = if (this.validBuffer(index)) { state[\takes][index] };
             // only this take's synth (another engine on the same server has its own)
-            if (take.notNil and: { take[\synth].nodeID == msg[1] }) { this.takeArmed(index, take) };
+            if (take.notNil and: { take[\synth].nodeID == msg[1] }) { this.areaCall(\takeArmed, index, take) };
         }, '/strataRecord', context.server.addr);
     }
 
@@ -456,7 +456,7 @@
                 buffersR[index].zero;
                 // sclang's copy too: the file written at arming is made from it
                 this.clearSlotPeaks(index);
-                fork({ context.server.sync; this.startTake(index, take) }, SystemClock);
+                fork({ context.server.sync; this.areaCall(\startTake, index, take) }, SystemClock);
             });
         } { this.startTake(index, take) };
     }
@@ -477,7 +477,7 @@
             this.shrinkSlotPeaks(index, valid, length, { arg before;
                 if (current.value) {
                     take[\peaksBefore] = before;
-                    this.sendTake(index, take, length);
+                    this.areaCall(\sendTake, index, take, length);
                 };
             });
         } { this.sendTake(index, take, length) };
@@ -563,14 +563,14 @@
         SystemClock.sched(this.peakRefreshSeconds, {
             var now = thisThread.seconds;
             if (state[\takes][index] === take) {
-                this.readSlotPeaks(index, this.waveformPoints, {
+                this.areaCall(\readSlotPeaks, index, this.waveformPoints, {
                     if (state[\takes][index] === take) {
                         case
                         { this.peaksUnchanged(index, bufferFrames[index]) } { counters[\unchanged] = counters[\unchanged] + 1 }
                         { (now - take[\peaksWrittenAt]) < (this.peakWriteSeconds - 1e-6) } { counters[\held] = counters[\held] + 1 }
                         {
                             take[\peaksWrittenAt] = now;
-                            this.writeRecordPeaks(index, bufferFrames[index], nil)
+                            this.areaCall(\writeRecordPeaks, index, bufferFrames[index], nil)
                         };
                     };
                 });
@@ -616,7 +616,7 @@
         if (take[\stopping] and: { take[\kind] == \replace }) {
             recordFrameBuses[index].get({ arg recorded;
                 if (stopReplies[index] == change) { stopReplies[index] = nil };
-                if (slotChanges[index] == change) { this.endTake(index, take, (recorded.round.asInteger + context.server.options.blockSize).clip(0, take[\frames])) };
+                if (slotChanges[index] == change) { this.areaCall(\endTake, index, take, (recorded.round.asInteger + context.server.options.blockSize).clip(0, take[\frames])) };
             });
         } {
             if (slotChanges[index] == change) { this.endTake(index, take, take[\frames]) };
@@ -640,7 +640,7 @@
         var kept = { (state[\takes][index] === take) and: { slotChanges[index] == change } };
         this.readSlotPeaks(index, usedBins, {
             if (kept.value) {
-                this.writeRecordPeaks(index, valid, {
+                this.areaCall(\writeRecordPeaks, index, valid, {
                     if (kept.value) {
                         if (replace) {
                             bufferFrames[index] = frames;
@@ -648,7 +648,7 @@
                         };
                         state[\takes][index] = nil;
                         this.reportRecordState(index, take[\number], 2);
-                        this.writeSlot(index, this.scratchPath(index), { arg written;
+                        this.areaCall(\writeSlot, index, this.scratchPath(index), { arg written;
                             if (written.not) { this.takeWriteFailedPoll.update(this.takeWriteFailedValue(index, take[\number])) };
                         });
                     };
