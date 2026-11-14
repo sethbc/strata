@@ -97,7 +97,7 @@ Each note a voice plays can carry its own pressure and slide: an MPE controller'
 
 | target | what it moves | where |
 |---|---|---|
-| `amp` | the note's level, as a swell above your setting: full pressure at +100 % doubles it, no pressure leaves it as set | each note |
+| `amp` | the note's level, as a swell above your setting: full pressure at +100 % doubles it (+6 dB), no pressure leaves it as set. It is the default for pressure, so a keyboard's aftertouch swells its notes; `off` plays it as 3.4 did | each note |
 | `level` | pressure: the note's level, as its loudness: at +100 % a note is silent until pressed, and full pressure is your setting. A note that has sent no pressure yet plays at your setting. Slide on `level` acts as on `amp`, since a slide starts at 0 with every touch | each note |
 | `main` | a synth voice's expression control (the Resonator's rq, FM's index, Folder's fold, Sub's drift, Pulse's width, Karplus's decay, Ring's ratio), the position on a buffer voice, the grain size on an input voice | each note |
 | `size` | the grain size | each note on a buffer or input voice, the whole voice on a synth voice |

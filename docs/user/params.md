@@ -164,10 +164,10 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | seq gate release | 0.005-4 s | 0.1 | |
 | seq swing | 50-75 | 50 | Percent: 50 is straight |
 | note cap | 1-8 | 8 | How many notes the voice plays at once: its own and up to seven more from the note pool all voices share. 1 plays one note at a time. Kept in PSETs, never in scenes ([VOICE](pages/voice.md)) |
-| attack | 0.005-30 s | by voice: 4, 5, 3, 8, 2, 0.01, 3 | The time the voice takes to fade in; each voice starts at its own, as before 3.5. Kept in scenes ([VOICE](pages/voice.md)) |
-| release | 0.01-30 s | by voice: 8, 10, 6, 12, 4, 2, 5 | The time the voice takes to fade out. Kept in scenes ([VOICE](pages/voice.md)) |
+| attack | 0.005-30 s | by voice: 4, 5, 3, 8, 2, 0.01, 3 | The time a synth voice takes to fade in; each voice starts at its own, as before 3.5. A buffer or input voice's notes, and a frozen synth voice's, keep their grain fades (0.1 s in, 2 s out). Kept in scenes ([VOICE](pages/voice.md)) |
+| release | 0.01-30 s | by voice: 8, 10, 6, 12, 4, 2, 5 | The time a synth voice takes to fade out; as `attack`, a synth voice's only. Kept in scenes ([VOICE](pages/voice.md)) |
 | press target | off, amp, level, main, size, density, position, cutoff | amp | What a note's pressure moves; position acts on a buffer voice only ([Expression](modulation.md#expression)) |
-| press depth | -100 to 100% | 100 | How far: at 100% full pressure doubles the note's level on amp |
+| press depth | -100 to 100% | 100 | How far: at 100% full pressure doubles the note's level on amp (+6 dB), so a keyboard's aftertouch swells its notes; `press target` off, or a depth of 0, turns that off |
 | slide target | off, amp, level, main, size, density, position, cutoff | main | What a note's slide moves, from where its touch began |
 | slide depth | -100 to 100% | 50 | |
 
