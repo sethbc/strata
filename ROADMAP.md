@@ -40,6 +40,8 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 - Changing what a grid row means on a layout that already has it, unless a release says so and the README is updated in the same change.
 - Hiding state. Anything that changes the sound shows on the screen with its unit.
 
+*2026-11-15:* before 4.0, the second and third of these no longer limit a design: layouts, menus and storage may change where a release is better for it, and the release says so (the maintainer, during the 3.7 brainstorm; `docs/design/3.7-design.md`, decision 18). A file an older build cannot read is still set aside, never overwritten.
+
 ## Constraints (all releases)
 
 - Everything in AGENTS.md still applies: Lua and engine in sync, the command table, named constants, `send_param_to_engine`, replace-never-stack, the tests and the docs check.
