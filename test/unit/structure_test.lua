@@ -628,7 +628,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "targets ended",
-  "crow lines", "remote", "osc event", "tape off", "midi handler",
+  "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler",
   "midi ports", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
@@ -661,13 +661,14 @@ test("cleanup runs every registered step in today's order", function()
   for k = 1, 2 do S.lib.gestures.press(k); enc_param_delta(3, "reverb_mix", 1); S.lib.gestures.press(k) end
   params:set("quantize_actions", 2); S.lib.quantize.schedule("scene", function() end)  -- an action waits
   S.lib.matrix.learn(1)  -- matrix learn's timeout clock runs
+  assert_true(S.lib.io_rig.set("e16_port", 2))  -- the controllers' echo clock runs while a port is set
   S.lib.midi_in.set_note_tap = function() end  -- the MIDI module's note tap (3.5's 2b): a stand-in
   S.lib.ui_zones.open(); S.lib.ui_zones.learn(1)  -- the zones editor's learn timeout clock runs
   context.crow.plug(); params:set("crow_in2_mode", 2)  -- a crow with a jack set: its cleanup sends lines
-  -- a remote grid on port 2 (3.6's 1d): its hello attaches it and its draw clock runs
-  S.lib.io_rig.set("remote_grid_port", 2)
-  context.midi.plug(2, "iii grid")
-  for cc, value in ipairs({ 16, 8, 1 }) do context.midi.send(2, { type = "cc", cc = cc - 1, val = value, ch = 1 }) end
+  -- a remote grid on port 3 (3.6's 1d; the E16 above holds port 2): its hello attaches it and its draw clock runs
+  S.lib.io_rig.set("remote_grid_port", 3)
+  context.midi.plug(3, "iii grid")
+  for cc, value in ipairs({ 16, 8, 1 }) do context.midi.send(3, { type = "cc", cc = cc - 1, val = value, ch = 1 }) end
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -704,6 +705,7 @@ test("cleanup runs every registered step in today's order", function()
     { "zones learn", S.zones_learn_clock },
     { "matrix learn", S.matrix_learn_clock },
     { "remote", S.lib.io_remote.clock_id() },
+    { "controllers", S.lib.io_controllers.clock_id() },
     { "lfos", S.lfo_clock } }
   for voice_idx = 1, S.constants.NUM_VOICES do table.insert(clocks, { "pattern clock", S.pattern_clocks[voice_idx] }) end
   local clock_steps = {}
@@ -825,6 +827,7 @@ local function start_steps()
     { "io ports", {} },
     { "midi", {} },
     { "io crow", {} },
+    { "io controllers", {} },
     { "io remote", {} },
     { "io osc", {} },
     { "io tape", {} },
