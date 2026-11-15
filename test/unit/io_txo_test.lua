@@ -443,13 +443,36 @@ test("the two TELEXo layout states are listed and each draws its look", function
   local on = state_named("voice: txo on an output")
   local open = state_named("voice: txo detail list open")
   assert_true(on ~= nil and open ~= nil, "both are listed")
+  -- other targets' rows come ahead of the TELEXo's in the voice section
+  local ahead = 0
+  for _, entry in ipairs(S.lib.pages_io.rows()) do
+    if entry.section == "voice" and entry.id == "txo" then break end
+    if entry.section == "voice" and entry.selectable then ahead = ahead + 1 end
+  end
+  assert_true(ahead >= S.lib.pages_io.IO_PAGE.visible, "enough rows ahead to push the TELEXo's off screen")
   h.show_page("IO")
   on.setup(context); redraw()
+  local cursor_row = S.lib.pages_io.rows()[S.io_cursor]
+  assert_true(cursor_row.section == "voice" and cursor_row.id == "txo", "the cursor is on the TELEXo's row")
   assert_true(h.screen_shows(context, "out 3  envelope"), "the row's text")
   h.assert_screen_layout(context, "txo on an output")
   open.setup(context); redraw()
   assert_true(h.screen_shows(context, "output") and h.screen_shows(context, "mode"), "the detail list's fields")
   h.assert_screen_layout(context, "txo detail list open")
+end)
+
+test("each TELEXo layout state raises naming the row when the voice section lacks it", function()
+  local context, S = started()
+  target_of(S).rows = function() return {} end
+  for _, name in ipairs({"voice: txo on an output", "voice: txo detail list open"}) do
+    for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states) do
+      if state.name == name then
+        local ok, problem = pcall(state.setup, context)
+        assert_true(not ok, name .. " raises")
+        assert_true(tostring(problem):find("txo row", 1, true) ~= nil, name .. ": " .. tostring(problem))
+      end
+    end
+  end
 end)
 
 test("without the ii module the layout states are listed and do nothing", function()

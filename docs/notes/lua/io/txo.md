@@ -7,7 +7,7 @@
 
 ## Owns
 
-- `lib/io/txo.lua` (`S.lib.io_txo`): `TXO` (every tunable), the note target `txo`, the ii device `txo` (16 params), the rows `txo` (a detail list of output and mode), `txo attack` and `txo decay`, and two layout states carried by its target record (`txo on an output`, `txo detail list open`; the IO page lists them with the `voice` section's, ruling 11). They do nothing where the params were never added.
+- `lib/io/txo.lua` (`S.lib.io_txo`): `TXO` (every tunable), the note target `txo`, the ii device `txo` (16 params), the rows `txo` (a detail list of output and mode), `txo attack` and `txo decay`, and two layout states carried by its target record (`txo on an output`, `txo detail list open`; the IO page lists them with the `voice` section's, ruling 11). Each sets voice 1's output to 3 (the first also its mode to envelope), then reaches the `txo` row as a player does, through one local helper: `S.lib.pages_io.show_section("voice")`, the row found by its `id` within the section, E2 over the selectable rows to it; it raises naming the row when the row is not there or the cursor did not land on it, since the other targets' rows come first and push it below the screen. The first leaves the cursor on the row, the second presses K3 to open its detail list. They do nothing where the params were never added.
 - Tests: `test/unit/io_txo_test.lua`, against a double of `S.lib.io_ii`.
 - User page: `docs/user/io/er301-txo.md`.
 
