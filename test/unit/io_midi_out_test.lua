@@ -401,6 +401,73 @@ test("with three played notes on a shared channel, the middle one ending puts ba
   lift(context, 2, 60); lift(context, 4, 67)
 end)
 
+-- The bends sent on channel since the device was last cleared, the last one
+local function last_bend_on(device, channel)
+  return bends(device, channel):match("(%d+)$")
+end
+
+test("a new note's first values on a shared channel stand over a resend that was pending", function()
+  local context, S, device = one_member()
+  press(context, 2, 60, 8704)  -- A
+  press(context, 3, 64, 7000)  -- B
+  step(context, S, 2)
+  clear(device)
+  lift(context, 3, 64)         -- B ends: A would resend at the next step
+  press(context, 4, 67, 8533)  -- C, before any step
+  assert_equal(bends(device, 2), "8533", "C's first bend")
+  step(context, S, 3)
+  assert_equal(last_bend_on(device, 2), "8533", "C's bend stands: " .. sent(device))
+  assert_equal(bends(device, 2), "8533", "A sent nothing")
+  clear(device)
+  lift(context, 4, 67)         -- C ends: A's values go once
+  step(context, S)
+  assert_equal(bends(device, 2), "8704", "A's bend once")
+  clear(device)
+  step(context, S, 3)
+  assert_equal(sent(device), "", "and nothing after")
+  lift(context, 2, 60)
+end)
+
+test("a played note re-pitched in place on a shared channel keeps its own values there", function()
+  local context, S, device = one_member()
+  press(context, 2, 60, 8704)  -- A
+  press(context, 3, 64, 7000)  -- B
+  step(context, S, 2)
+  local hook
+  for _, record in ipairs(S.registry.note_hooks) do
+    if record.name == "targets" then hook = record end
+  end
+  local key
+  for id, record in pairs(S.lib.io_targets.sounding(1)) do
+    if record.pitch == 64 then key = tonumber(id:match("^m(%d+)$")) end
+  end
+  assert_true(hook ~= nil and key ~= nil, "the targets hook and B's key")
+  clear(device)
+  hook.moved(1, 2, {owner = "midi", key = key, pitch = 65, velocity = 0.8})  -- the targets' end plus start
+  assert_true(sent(device):match("note_on 65 %d+ 2$") ~= nil, "B on its new note: " .. sent(device))
+  assert_equal(bends(device, 2), "7000", "B's first bend again")
+  step(context, S, 3)
+  assert_equal(bends(device, 2), "7000", "A sent nothing over it: " .. sent(device))
+  lift(context, 3, 64); lift(context, 2, 60)
+end)
+
+test("a value of the older note that changes after the new note's start is sent at the next step", function()
+  local context, S, device = one_member()
+  press(context, 2, 60, 8704)  -- A
+  press(context, 3, 64, 7000)  -- B
+  step(context, S, 2)
+  lift(context, 3, 64)
+  press(context, 4, 67, 8533)  -- C, before any step
+  clear(device)
+  context.midi.send(1, {type = "pitchbend", val = 9100, ch = 2})  -- A's bend really changes
+  step(context, S)
+  assert_equal(bends(device, 2), "9100", "A's new value goes: " .. sent(device))
+  clear(device)
+  step(context, S, 3)
+  assert_equal(sent(device), "", "once")
+  lift(context, 4, 67); lift(context, 2, 60)
+end)
+
 test("a step note ending on a shared channel puts nothing back: it sent nothing there", function()
   local context, S, device = one_member()
   local target = midi_target(S)
