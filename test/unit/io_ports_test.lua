@@ -129,6 +129,10 @@ test("a port names no device while its device's removal is told (#704)", functio
   assert_equal(ports.device(2), "box", "plugged again: named")
 end)
 
+-- run_set contains a change hook's error (one console line, the next hook
+-- runs), so this pins only that: the removal still ends normally and the next
+-- device is named. The protected call in removed, whose clear a raise must
+-- not skip, is reached only by the kept handler (the next test)
 test("a removal hook that raises leaves the port naming its next device", function()
   local context = load_strata()
   local ports = local_value("S").lib.io_ports
@@ -138,6 +142,22 @@ test("a removal hook that raises leaves the port naming its next device", functi
   h.claim_script_errors(context, 1, "strata: midi change hook bad failed: ", "a removal hook's error")
   local during
   ports.on_change("bad", function(port, name) if name ~= nil then during = ports.device(port) end end)
+  context.midi.plug(2, "next")
+  assert_equal(during, "next", "named during its add hooks")
+  assert_equal(ports.device(2), "next", "and once they return")
+end)
+
+test("a kept remove handler that raises leaves no port marked (#704)", function()
+  local context = load_strata({before_init = function()
+    midi.remove = function() error("a kept remove's error") end  -- found at start: the kept handler
+  end})
+  local ports = local_value("S").lib.io_ports
+  context.midi.plug(2, "box")
+  local ran, problem = pcall(context.midi.unplug, 2)
+  assert_equal(ran, false, "the error surfaces, as before this task")
+  assert_true(tostring(problem):find("a kept remove's error", 1, true) ~= nil, "with its own message: " .. tostring(problem))
+  local during
+  ports.on_change("probe", function(port, name) if name ~= nil then during = ports.device(port) end end)
   context.midi.plug(2, "next")
   assert_equal(during, "next", "named during its add hooks")
   assert_equal(ports.device(2), "next", "and once they return")
