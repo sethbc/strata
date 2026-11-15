@@ -32,9 +32,10 @@ local SYSTEM = {
   -- second pattern step set (a chord of eight in four hits every 0.2 s on
   -- each voice); the fifteen MPE notes' values moving every fourth LFO step
   -- (12 Hz each: 45 values at a time, still more than MIDI out's 24 a
-  -- step); every third LFO step is 16 Hz, at least one redraw of the
-  -- remote grid each 15 Hz frame, and the faders and the watched params
-  -- moved as often (an E16 encoder turned at half that)
+  -- step); the remote grid flipped between two pages and redrawn every
+  -- third LFO step (16 times a second, against the remote's 30 Hz draw
+  -- tick), and the faders and the watched params moved as often (an E16
+  -- encoder turned at half that)
   density = {step_every = 2, mpe_every = 4, frame_every = 3, move_every = 3},
   -- the bus test's minutes, which count ii lines and no bound: one step in
   -- four, the MPE values every eighth LFO step, the grid redrawn and the
@@ -450,10 +451,12 @@ local function everything_moves(rig)
     if n % (2 * rig.density.move_every) == 0 then
       context.midi.send(SYSTEM.e16_port, {type = "cc", cc = 102 + math.floor(n / 6) % 16, val = 1, ch = 16})
     end
-    -- a full redraw each frame: the remote grid alternates between its
-    -- second and third pages, which differ in well over a draw tick's 96
-    -- cells (the remote clock sends only the cells that changed, so a
-    -- frame that changed little would not load its bound)
+    -- every frame_every-th LFO step (16 times a second in the bounds
+    -- minute, against the remote's 30 Hz draw tick) the remote grid flips
+    -- between its second and third pages, which differ in well over a
+    -- tick's 96 cells, and is redrawn (the remote clock sends only the
+    -- cells that changed, so a redraw that changed little would not load
+    -- its bound)
     if n % rig.density.frame_every == 0 then
       local remote = S.constants.GRID_PORTS.remote
       S.lib.grid_core.set_page(remote, S.lib.grid_core.page(remote) == 2 and 3 or 2)
@@ -634,18 +637,37 @@ local function hits_at(rig)
   return index
 end
 
+-- Whether the note off at log[index] is a retrigger: a note on for the
+-- same channel and note follows it at the same moment (with only other
+-- messages between)
+local function retriggers(log, index, msg)
+  local entry = log[index]
+  for later = index + 1, #log do
+    local next_entry = log[later]
+    if next_entry.t ~= entry.t then return false end
+    local next_msg = message_of(next_entry)
+    if next_msg.ch == msg.ch and next_msg.note == msg.note then return next_msg.type == "note_on" end
+  end
+  return false
+end
+
 -- Each MIDI note off that ends step notes later than one LFO step after
 -- the latest of their ends, as text (a note that a played key holds too,
 -- or whose on matched no hit, has no end to keep). Ids on one port,
--- channel and note are counted and their off goes once, when the last
--- ends (docs/notes/lua/io/midi_out.md), so the end kept is the latest
+-- channel and note are counted (docs/notes/lua/io/midi_out.md): a note's
+-- last off goes when the last id holding it ends, so the end kept is the
+-- latest of its holders', and none when any holder has none. A note on
+-- for a note already on (main's MIDI out) or a note off followed at once
+-- by a note on for it (a retrigger, #709's MIDI out) adds a holder to the
+-- note's record and is no end; only the off that ends the record is timed
 local function late_midi_offs(rig)
   local late, checked = {}, 0
   local index = hits_at(rig)
   local allowed = SYSTEM.step + SYSTEM.tick_tolerance + 1e-6
   for _, port in ipairs(SYSTEM.midi_ports) do
     local open = {}
-    for _, entry in ipairs(rig.devices[port].log) do
+    local log = rig.devices[port].log
+    for position, entry in ipairs(log) do
       local msg = message_of(entry)
       local key = msg.ch and msg.note and (msg.ch * 128 + msg.note)
       if is_status(msg, "note_on") then
@@ -662,7 +684,7 @@ local function late_midi_offs(rig)
         if not record then open[key] = {due = due}
         elseif record.due and due then record.due = math.max(record.due, due)
         else record.due = false end
-      elseif is_status(msg, "note_off") then
+      elseif is_status(msg, "note_off") and not retriggers(log, position, msg) then
         local record = open[key]
         open[key] = nil
         if record and record.due then
@@ -972,6 +994,9 @@ test("after that minute everything stops with no note left", function()
   pattern_clock_stop()
   release_mpe_keys(rig)
   rig.waiting_at_cleanup = S.lib.io_ii.queued()
+  -- the case this test is for: cleanup with the ii queue full
+  assert_true(rig.waiting_at_cleanup >= S.lib.io_ii.II.queue_max, "the ii queue is full at cleanup: "
+    .. rig.waiting_at_cleanup .. " lines wait")
   cleanup()
 
   -- Every MIDI note on has its note off (design §3.4, §14): on every port
