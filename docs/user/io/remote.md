@@ -27,7 +27,7 @@ They are on IO's `remote` section and are rig settings (kept in `io.data`, never
 | arc port | off, 1-16 | the MIDI port an arc in iii mode is on |
 | midi grid | off, on | a MIDI grid through the midigrid mod |
 
-Once a port is set and the device is there, Strata asks it to say hello, and it attaches as soon as it answers: a grid plays the layout of its size (a 16 by 8 grid the [128 horizontal](../grid/128h.md) layout, a 16 by 16 the [256](../grid/256.md), an 8 by 16 the [128 vertical](../grid/128v.md), an 8 by 8 the [64](../grid/64.md); a hello of any other size is refused), on a port of its own besides norns' four grid ports, with its own page; the arc becomes the arc Strata follows. The iii grids the documents describe are 16 by 16 and 16 by 8. While a monome arc is plugged into norns, that arc is followed instead, and the remote arc takes over again when it is unplugged. The port is the remote device's alone while it is set: Strata's MIDI input and the controllers leave it.
+Once a port is set and the device is there, Strata asks it to say hello, and it attaches as soon as it answers: a grid plays the layout of its size (a 16 by 8 grid the [128 horizontal](../grid/128h.md) layout, a 16 by 16 the [256](../grid/256.md), an 8 by 16 the [128 vertical](../grid/128v.md), an 8 by 8 the [64](../grid/64.md); a hello of any other size is refused), on a port of its own besides norns' four grid ports, with its own page; the arc becomes the arc Strata follows. The iii grids the documents describe are 16 by 16 and 16 by 8. While a monome arc is plugged into norns, that arc is followed instead, and the remote arc takes over again when it is unplugged. The port is the remote device's alone while its device is there: Strata's MIDI input, the controllers and MIDI out leave it (a voice's MIDI out route to that port sends nothing, since the device reads notes as its lights).
 
 The section shows a line per device that is set, `grid: ...`, `arc: ...` and `midigrid: ...`, ending in:
 - `16x8`, `16x16` (a grid's size) or `4 rings` (the arc): attached
@@ -37,13 +37,15 @@ The section shows a line per device that is set, `grid: ...`, `arc: ...` and `mi
 - `size 12x6?`: a grid of a size Strata has no layout for
 - `in use`: another part of Strata (a controller) has that port
 
-**rescan** (K3) asks each device again, and connects the midigrid again.
+**rescan** (K3) asks each device again, and connects the midigrid when none is attached.
 
 Unplugging the device detaches it; plugging it back in asks again. A remote grid's LEDs are sent thirty times a second, at most 96 changes each time, so a whole new page reaches a 16 by 16 grid within a tenth of a second.
 
 ## A MIDI grid through the midigrid mod
 
 With the midigrid mod installed and on (SYSTEM > MODS), turn `midi grid` on. Strata asks the mod for its grid; when the mod has found a supported device (a Launchpad, an APC mini, a Push and others), that grid attaches as one more of Strata's grids and plays the layout of the mod's size (its default, 128, is 16 by 8: the 128 horizontal layout). With no supported device, or with the mod off, nothing attaches and the line shows `[--]`; plug the device in and press **rescan**. Turning `midi grid` off detaches it and leaves it dark.
+
+While the MIDI grid is attached, its device's MIDI port belongs to it: its pads play no voice through Strata's MIDI input (even on the `midi device` port), SETUP's `midi` row shows `(midigrid)`, and MIDI out sends nothing there. Turning `midi grid` off gives the port back.
 
 What a Launchpad keeps for itself: with one 8 by 8 device on a 128 or 256 layout, the mod uses the device's top row (its round buttons) to choose which 8 by 8 quarter of the grid it shows; those buttons never reach Strata. With two devices the mod gives each a quarter. Colors stand for the sixteen brightness levels, so they look different from a monome grid's.
 

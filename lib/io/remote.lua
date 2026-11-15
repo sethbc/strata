@@ -50,7 +50,10 @@ return function(S)
     arc = new_record("arc", "remote_arc_port", "remote arc", "arc", PROTOCOL.arc_channel),
   }
   local KINDS = {"grid", "arc"}
-  local midigrid = {device = nil}
+  -- midigrid: the object attached at GRID_PORTS.midigrid, and ports (port
+  -- -> true) the MIDI ports claimed as MIDIGRID_OWNER while it is attached
+  local MIDIGRID_OWNER = "midigrid"
+  local midigrid = {device = nil, ports = {}}
   local draw = {clock = nil}
   local state = {started = false, errors = {}}
 
@@ -211,7 +214,7 @@ return function(S)
     for _, kind in ipairs(KINDS) do
       if records[kind].claimed_port == port then return true end
     end
-    return midigrid.ports ~= nil and midigrid.ports[port] == true
+    return midigrid.ports[port] == true
   end
 
   -- The virtual device goes (its grid detached or its arc unfollowed);
@@ -370,11 +373,36 @@ return function(S)
     return true
   end
 
-  -- The midigrid object goes: detached, then left dark
+  -- midigrid sets the device-level event of each Launchpad it takes, and
+  -- norns still calls the port's vport event after it (checks.md §7): each
+  -- port whose device has a device-level handler is claimed as midigrid
+  -- while the object is attached, so the MIDI input leaves it alone (and
+  -- MIDI out, through holds). A port another owner holds is left to it
+  local function claim_midigrid_ports()
+    for port = 1, S.lib.io_ports.PORTS.count do
+      if not midigrid.ports[port] and S.lib.io_ports.device_handled(port)
+        and S.lib.io_ports.claim(port, MIDIGRID_OWNER) then
+        midigrid.ports[port] = true
+      end
+    end
+  end
+
+  local function release_midigrid_port(port)
+    if not midigrid.ports[port] then return end
+    midigrid.ports[port] = nil
+    S.lib.io_ports.release(port, MIDIGRID_OWNER)
+  end
+
+  local function release_midigrid_ports()
+    for port = 1, S.lib.io_ports.PORTS.count do release_midigrid_port(port) end
+  end
+
+  -- The midigrid object goes: detached, its ports released, then left dark
   local function midigrid_detach()
     local device = midigrid.device
     if device == nil then return end
     midigrid.device = nil
+    release_midigrid_ports()
     if S.grids[GRID_PORTS.midigrid] == device then S.lib.grid_core.detach_virtual(GRID_PORTS.midigrid) end
     contained("midigrid dark", "remote midigrid dark", function()
       device:all(0)
@@ -389,20 +417,25 @@ return function(S)
     contained("midigrid connect", "remote midigrid connect", function() candidate = grid.connect() end)
     if midigrid_usable(candidate) then
       if candidate.rotation == nil then candidate.rotation = function() end end
-      if S.lib.grid_core.attach_virtual(GRID_PORTS.midigrid, candidate) then midigrid.device = candidate end
+      if S.lib.grid_core.attach_virtual(GRID_PORTS.midigrid, candidate) then
+        midigrid.device = candidate
+        claim_midigrid_ports()
+      end
     end
     request_redraw()
   end
 
   -- IO's rescan action: each remote device on its port asked for its hello
-  -- again, and with midi grid on, midigrid connected again
+  -- again, and with midi grid on and no midigrid object attached, midigrid
+  -- connected (each connect that finds a device wraps midi.add again,
+  -- checks.md §7, so an attached one is left as it is)
   function M.rescan()
     if not state.started then return end
     for _, kind in ipairs(KINDS) do
       local record = records[kind]
       if record.claimed_port then ask_hello(record) else connect(record) end
     end
-    if rig.get("midi_grid") == "on" then midigrid_connect() end
+    if rig.get("midi_grid") == "on" and midigrid.device == nil then midigrid_connect() end
   end
 
   -- What a device's status line says: nil while its setting is off; in
@@ -443,6 +476,7 @@ return function(S)
   -- leaving disconnects it
   S.lib.io_ports.on_change("remote", function(port, name)
     if not state.started then return end
+    if name == nil then release_midigrid_port(port) end
     for _, kind in ipairs(KINDS) do
       local record = records[kind]
       if name == nil and record.claimed_port == port then

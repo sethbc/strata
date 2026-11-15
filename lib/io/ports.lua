@@ -140,6 +140,17 @@ return function(S)
     return vport.name
   end
 
+  -- Whether the port's device has a device-level event handler set
+  -- (norns' midi.devices[id].event, called before the vport's): Strata
+  -- never sets one, and norns' midi.cleanup clears them, so a set one is
+  -- another library's, as midigrid's on the Launchpad it takes
+  -- (docs/design/3.6-facts/checks.md §7)
+  function M.device_handled(port)
+    if not valid_port(port) or state.leaving[port] then return false end
+    local device = norns_midi().vports[port].device
+    return device ~= nil and type(device.event) == "function"
+  end
+
   -- fn(port, device_name | nil) when a device arrives at or leaves a port
   function M.on_change(name, fn)
     require_name("on_change", name)

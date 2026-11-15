@@ -17,6 +17,7 @@
 - `M.listen(port, name, fn)`, `M.unlisten(port, name)`: `fn(data)` gets every message of the port, the raw bytes norns delivers to `vports[port].event`;
 - `M.out(port) -> vport | nil`: the port's vport (norns' own `vports[port]`), to send through (`:note_on`, `:cc`, ...);
 - `M.device(port) -> name | nil`: the name of the device on the port (the vport's name while it holds a device);
+- `M.device_handled(port) -> boolean`: whether the port's device has a device-level `event` handler set (norns' `midi.devices[id].event`, which norns calls before the vport's). Strata never sets one and norns' `midi.cleanup` clears them, so a set one is another library's: midigrid's, on each Launchpad it takes (`docs/design/3.6-facts/checks.md` §7). `lib/io/remote.lua` claims those ports as `midigrid` while its object is attached. False outside 1..16 and while the port's device is leaving;
 - `M.on_change(name, fn)`: `fn(port, device_name | nil)` when a device arrives at or leaves a port;
 - `M.claim(port, name) -> boolean`, `M.release(port, name)`, `M.owner(port) -> name | nil`, `M.on_claim(name, fn)`: `fn(port, owner | nil)`;
 - start step 88 (`START_ORDER.io_ports`, before `midi` 90) and cleanup step 152 (`CLEANUP_ORDER.io_ports`, after `midi_handler` 150);
