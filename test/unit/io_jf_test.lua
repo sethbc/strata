@@ -195,13 +195,17 @@ test("its eight params are PSET-only and its rows show on the voice section", fu
         .. "'s grain pitch, source " .. source)
     end
     assert_held("a randomize of every voice, source " .. source)
-    -- Positive control: mutate_voices draws grain_size on every source (chance 0.5 x probability 1
-    -- a step, by up to 0.2 of the range at amount 1). The walk is clamped to 0.01-0.5 and a step
-    -- can land back on the start, so the control is that the size differed from its start at some
-    -- step (not at the end). From the middle of the range, over 40 steps, the chance of no draw is
-    -- 0.5^40 and a draw that leaves the value unchanged has probability 0 (a clamp at the start
-    -- of 0.5, the range's top, ended one run there: the start is 0.25). Every voice is active and
-    -- none is locked
+    -- Positive control: mutate_voices draws grain_size on every source with chance 0.5 (0.5 x
+    -- mutation_probability 1) a step, adding a delta that is triangular over -0.2 to 0.2 at
+    -- mutation_amount 1 (lib/mutation.lua: the mean of two uniforms, times 2 x amount x 0.2). The
+    -- param's spec has a step of 0.01 (lib/params_setup.lua), so a delta under 0.005 either way
+    -- (about 5%: the triangle's density at 0 is 5 a unit) rounds back to the old value, and a
+    -- clamp at 0.01 or 0.5 can too. One step leaves the size unchanged in about 0.5 + 0.5 x 0.05
+    -- = 0.525 of cases, so a visible change a step is about 0.475; none in 40 steps is
+    -- 0.525^40, about 6e-12 per voice and source. The walk can also return to its start, so the
+    -- control is that the size differed from the start at some step (not at the end), from the
+    -- middle of the range (a start of 0.5, the top, ended one run there after a clamp). Every
+    -- voice is active and none is locked
     local starts, moved = {}, {}
     for voice = 1, S.constants.NUM_VOICES do
       params:set("v" .. voice .. "_grain_size", 0.25)
