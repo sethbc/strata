@@ -5,7 +5,7 @@ The MIDI input (with MPE and the voices' split zones), the note pool, mutations,
 A list of fields, with the status lines below it. The list scrolls (a thin bar at the right edge shows where you are). Turn E2 past the last field and the view scrolls on over the status lines (`running:`, `grid:`, `arc:`, `buffers:` and any data file that had a problem), so each can be read; E2 back brings the fields up again. While the view is scrolled that far the field may be out of sight, so E3 changes nothing: it brings the field back into view (the hint row reads `E2:field E3:back`), and the next E3 changes it.
 
 Fields:
-- **midi** - the port Strata listens to (1-16) and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`)
+- **midi** - the port Strata listens to (1-16) and the device on it (`midi 1: <device>`, shortened if the name is long, or `none`). While another part of Strata holds that port, the row shows the owner in parentheses instead (`midi 1: (e16)`, `(faders)`, `(remote grid)`, `(remote arc)` or `(midigrid)`), and the MIDI input plays no notes from it until the owner lets go ([IO](io.md))
 - **channels** - per voice, or omni to the selected voice (the [MIDI Input](../midi.md) page describes every mode)
 - **note off** - what releasing a key does: the same setting as PARAMETERS > midi > midi note off ([MIDI Input](../midi.md))
 - **mpe & zones** - K3 opens the MPE and zones editor (below)
