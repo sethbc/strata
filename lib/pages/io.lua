@@ -548,9 +548,9 @@ return function(S)
   end
 
   -- The page's record, at IO's place in UI_PAGES (the tenth: appended, so
-  -- no other page's index moved). No arc fields yet (lib/arc/io.lua, the
-  -- tape's rings, comes later); its layout states are its own (ALT's hint
-  -- row), then the sections'
+  -- no other page's index moved). Its arc fields are lib/arc/io.lua's (the
+  -- tape's rings); its layout states are its own (ALT's hint row), then the
+  -- sections'
   local layout_states = {
     {name = "ALT held", setup = function() key(1, 1) end},
   }

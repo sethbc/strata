@@ -4,7 +4,7 @@
 -- holding the chosen key. A PSET keeps the key, never the option's index,
 -- so a list that gains an entry (a modulation source a later release
 -- registers) never moves a saved choice onto another. crow's output
--- sources and the nb selector use it; MIDI out's CC slots are meant to.
+-- sources, the nb selector and MIDI out's CC slot sources use it.
 -- Notes: docs/notes/lua/io/keyed.md
 
 return function(S)
