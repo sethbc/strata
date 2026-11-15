@@ -62,11 +62,11 @@ Each device or connection IO reaches has its own page, listed here as it arrives
 - [MIDI out](../io/midi-out.md): a voice's notes to a MIDI synth, plain or MPE, eight CC out slots, program change in and out
 - [crow](../io/crow.md): its inputs as modulation or triggers, its outputs for modulation, a voice's pitch or gate, and the clock
 - [The ii bus and Teletype](../io/ii.md): who leads the ii bus, and Teletype's three calls to scenes, voices, macros and the patterns
+- [Just Friends](../io/jf.md): a voice's notes to Just Friends over the ii bus
 - [W/](../io/w.md): W/ synth as a target, and W/ tape's transport from the `w/ tape` section
+- [ER-301 and TELEXo](../io/er301-txo.md): a voice's notes to an ER-301 port or a TELEXo output over the ii bus
 - [nb voices](../io/nb.md): a voice's steps and played notes to a player an installed nb voice mod offers
 - [Controllers](../io/controllers.md): an OXI E16 and a box of sixteen faders on the sixteen macros
 - [Remote grids and arcs](../io/remote.md): a grid or arc in iii mode, and a MIDI grid through the midigrid mod
 - [OSC and TouchOSC](../io/osc.md): scenes, voices and the patterns from an OSC app, feedback, two TouchOSC layouts
-- [ER-301 and TELEXo](../io/er301-txo.md): a voice's notes to an ER-301 port or a TELEXo output over the ii bus
 - [The tape loop](../io/tape.md): a stereo loop of Strata's output on softcut, the `tape` section
-- [Just Friends](../io/jf.md): a voice's notes to Just Friends over the ii bus

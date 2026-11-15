@@ -107,10 +107,21 @@ test("the route's change ends the voice's target notes", function()
   assert_equal(calls[#calls], 3)
 end)
 
-test("its eight params are one group and its rows show on the voice section", function()
+test("its eight params are in the ii group and its rows show on the voice section", function()
   local _, S = started()
   assert_equal(device_of(S).param_count, 8)
-  assert_equal(params:lookup_param("strata_out_ii").n, 8)
+  -- the group holds every registered device's params, W/ synth's eight among them
+  local total = 0
+  for _, device in ipairs(S.registry.ii_devices) do total = total + device.param_count end
+  assert_equal(params:lookup_param("strata_out_ii").n, total, "the group: every device's params")
+  local group = params.lookup.strata_out_ii
+  local ids = {"wsyn_level"}
+  for voice = 1, S.constants.NUM_VOICES do ids[#ids + 1] = "v" .. voice .. "_out_wsyn" end
+  assert_equal(#ids, 8)
+  for _, id in ipairs(ids) do
+    local index = params.lookup[id]
+    assert_true(index ~= nil and index > group and index <= group + total, id .. " is inside the ii group")
+  end
   assert_equal(params:lookup_param("v1_out_wsyn").t, params.tBINARY)
   local rows = target_of(S).rows(1)
   assert_equal(#rows, 2)

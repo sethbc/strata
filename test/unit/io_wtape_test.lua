@@ -201,20 +201,30 @@ test("the not-leading state draws the not-leading look", function()
   assert_equal(title_status(S), "[--]")
 end)
 
+-- The W/ tape lines of the double's log: the real ii module takes the lead
+-- when a state turns the bus to strata, and the other devices' ready sends
+-- go through the double too
+local function wtape_lines(log)
+  local lines = {}
+  for _, entry in ipairs(log) do
+    if entry[2] == "wtape" then lines[#lines + 1] = line(entry) end
+  end
+  return lines
+end
+
 test("the leading states end with the bus leading and show what a player's presses would", function()
   local context, S, log = started_real_bus(true)
   state_named(S, "leading before any command").setup(context)
   assert_true(S.lib.io_ii.leads(), "the bus leads")
   assert_equal(S.lib.io_rig.get("ii_bus"), "strata")
-  assert_equal(#log, 0, "nothing sent yet")
+  assert_equal(#wtape_lines(log), 0, "nothing sent yet")
   assert_equal(title_status(S), nil)
   assert_equal(row(S, "record").shown, "-")
 
   context, S, log = started_real_bus(true)
   state_named(S, "leading after commands").setup(context)
   assert_true(S.lib.io_ii.leads(), "the bus leads")
-  local lines = {}
-  for _, entry in ipairs(log) do lines[#lines + 1] = line(entry) end
+  local lines = wtape_lines(log)
   assert_equal(table.concat(lines, "|"), "send,wtape,record,1|send,wtape,play,1|send,wtape,reverse|"
     .. "send,wtape,loop_start|send,wtape,loop_end|send,wtape,loop_active,1")
   assert_equal(row(S, "record").shown, "on"); assert_equal(row(S, "play").shown, "on")

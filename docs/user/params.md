@@ -58,6 +58,10 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 - In 1 and in 2: mode (off, cv, trigger; off), range (-5..5, 0..5, 0..10 V; -5..5), action (retrigger, next scene, freeze, record, patterns; retrigger) and voice (sel, the selected voice, or 1-7; sel). Out 1 to out 4: source (off, a modulation source, a voice's pitch or gate, or clock; off), range (0..5, 0..10, -5..5 V; 0..5) and div (1/16 to 4 beats; 1). See [crow](io/crow.md)
 - A PSET stores them; scenes do not
 
+## out ii (group)
+- The ii devices' settings, in this order. Just Friends: jf out v1 to v7 (off, on; off) and jf level (0-10 V; 5). W/ synth: v1 w/ syn to v7 w/ syn (off, on; off) and w/ syn level (0-10 V; 5). ER-301: v1 er-301 port to v7 er-301 port (off or 1-100; off). TELEXo: per voice its txo output (off or 1-32; off) and txo mode (pitch, envelope; pitch), then txo attack and txo decay (1-10000 ms; 10 and 500). See [Just Friends](io/jf.md), [W/](io/w.md) and [ER-301 and TELEXo](io/er301-txo.md)
+- A PSET stores them; scenes do not
+
 ## out nb (group)
 - V1 nb to v7 nb (none, or a player an installed nb voice mod offers; none): the player each voice's steps and played notes go to, kept by name. See [nb voices](io/nb.md)
 - A PSET stores them; scenes do not

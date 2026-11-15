@@ -516,11 +516,9 @@ end)
 
 test("the voice section shows the selected voice's rows in the targets' order", function()
   local context, S, targets = started()
-  -- the probes below take the names of real targets: those records go first (ruling 26)
-  for index = #S.registry.note_targets, 1, -1 do
-    local name = S.registry.note_targets[index].name
-    if name == "midi" or name == "nb" then table.remove(S.registry.note_targets, index) end
-  end
+  -- the probes below stand alone: every registered target goes first (two
+  -- take real targets' names, ruling 26; the rest would add their rows)
+  for index = #S.registry.note_targets, 1, -1 do table.remove(S.registry.note_targets, index) end
   local function voice_rows()
     local rows = {}
     for _, row in ipairs(S.lib.pages_io.rows()) do
