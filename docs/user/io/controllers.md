@@ -39,7 +39,9 @@ PARAMS > MAP also acts on a CC if you mapped it. A controller whose CC is mapped
 ## When something is wrong
 
 - `[--]` on the section title: a port is set and no device is on it.
-- `port taken`: a port is set that another part of Strata holds (the MIDI input's port, a remote grid, the other controller). That controller does nothing until it is set to another port or the holder lets go, when it takes the port by itself.
+- `port taken`: a port is set that another part of Strata holds (a remote grid or arc, a MIDI grid through midigrid, the other controller). That controller does nothing until it is set to another port or the holder lets go, when it takes the port by itself.
+
+The MIDI input never holds a port. A controller set to the MIDI input's port (the `midi device` port, 1 by default) takes it: Strata then plays no notes from that port, and SETUP's `midi` row shows the owner in place of the device's name (`midi 1: (e16)` or `midi 1: (faders)`). Set the controller to its own port to keep playing notes from the keyboard there.
 
 ## Sources
 
