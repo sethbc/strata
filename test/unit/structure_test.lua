@@ -3231,13 +3231,16 @@ end)
 
 -- 3.6 (design §2.3): a rig setting changes only from a row of the IO page,
 -- never from a PSET, a scene, a controller, OSC or a Teletype call. So
--- outside lib/pages/io.lua and lib/io/rig.lua every reach of the module
--- reads: rig_misuses(text) lists each place in a Lua source (comments and
--- strings blanked) where the module (`<x>.io_rig`, `<x>["io_rig"]`, or a
--- name it was given with `local name = <x>.io_rig`, wherever that name is
--- used later) is followed by anything but .get(, .text(, .on_change( or
--- .RIG; a string "io_rig" anywhere else; and an order named io_rig
--- (START_ORDER.io_rig) or the include in strata.lua are not uses
+-- outside lib/pages/io.lua and lib/io/rig.lua the module is only read:
+-- rig_misuses(text) lists each place in a Lua source (comments and strings
+-- blanked, sync_check's sanitize_lua) where the token io_rig is neither
+-- (i) followed by .get(, .text(, .on_change( or .RIG, nor (ii) the whole
+-- right-hand side of `local <name> = <chain>.io_rig` (or <chain>["io_rig"]),
+-- and each later use of such a <name> that is not followed by one of the
+-- four; a string holding exactly io_rig anywhere but a short-quoted index
+-- ([[io_rig]] included) is one too. Three spellings name something else
+-- and pass: an order (START_ORDER.io_rig), a number keyed io_rig (the
+-- order's own line in lib/constants.lua) and strata.lua's include
 local RIG_READS = { "get%s*%(", "text%s*%(", "on_change%s*%(", "RIG%f[^%w_]" }
 local function rig_misuses(text)
   local code = h.sync_check.sanitize_lua(text)
@@ -3252,10 +3255,10 @@ local function rig_misuses(text)
     end
     return false
   end
-  -- a real string "io_rig" (the blanked code keeps its quote there; a
-  -- comment's is blank, another string's an underscore): as an index
-  -- (["io_rig"]) it becomes .io_rig, padded to the same length, anything
-  -- else is a misuse
+  -- A string holding exactly io_rig: the blanked code keeps its opening
+  -- quote there (a comment's is blank, another string's an underscore).
+  -- Short-quoted as an index (["io_rig"]) it becomes .io_rig, padded to the
+  -- same length; anywhere else, and every long-bracket one, is a misuse
   for start, quote, finish in text:gmatch("()([\"'])io_rig%2()") do
     if code:sub(start, start) == quote then
       local open = code:sub(1, start - 1):match("()%[%s*$")
@@ -3267,37 +3270,42 @@ local function rig_misuses(text)
       end
     end
   end
+  for start in text:gmatch("()%[=*%[io_rig%]=*%]") do
+    if code:sub(start, start) == '"' then add(start, "a long-bracket string io_rig") end
+  end
   local aliases = {}
-  for dot, finish in code:gmatch("()%.%s*io_rig%f[^%w_]()") do
-    local chain_start = dot
+  for start, finish in code:gmatch("()%f[%w_]io_rig%f[^%w_]()") do
+    local chain_start = start
     while chain_start > 1 and code:sub(chain_start - 1, chain_start - 1):match("[%w_%.]") do
       chain_start = chain_start - 1
     end
     local chain = code:sub(chain_start, finish - 1)
+    local dotted = chain:find("%.io_rig$") ~= nil
     local line_before = code:sub(1, chain_start - 1):match("[^\n]*$")
     local alias = line_before:match("^%s*local%s+([%a_][%w_]*)%s*=%s*$")
-      or line_before:match("^%s*([%a_][%w_]*)%s*=%s*$")
     local statement_ends = code:find("^[ \t]*\n", finish) or code:find("^[ \t]*;", finish)
       or code:find("^%s*$", finish)
-    if chain:match("ORDER%.io_rig$") then
-      -- START_ORDER.io_rig: an order, not the module
-    elseif reads(finish) then
-      -- a read
-    elseif chain == "S.lib.io_rig" and code:find("^%s*=%s*include%s*%(", finish) then
+    if reads(finish) then
+      -- (i) a read
+    elseif dotted and alias and statement_ends then
+      -- (ii) local <name> = <chain>.io_rig
+      aliases[#aliases + 1] = { name = alias, from = finish }
+    elseif chain:match("%f[%w_]START_ORDER%.io_rig$") then
+      -- the order, not the module
+    elseif not dotted and code:find("^%s*=%s*%d", finish) then
+      -- io_rig = 85: the order's own line
+    elseif chain == "S.lib.io_rig" and line_before == "" and code:find("^%s*=%s*include%s*%(", finish) then
       -- strata.lua's include
-    elseif alias and statement_ends then
-      aliases[#aliases + 1] = {name = alias, at = chain_start}
     else
-      add(dot, chain .. " used other than to read")
+      add(start, chain .. " used other than to read")
     end
   end
-  -- each later use of a name the module was given must read too
+  -- each later use of a name the module was given must read too (the name
+  -- as a field of something else, x.rig, is another thing)
   for _, alias in ipairs(aliases) do
     for start, finish in code:gmatch("()%f[%w_]" .. alias.name .. "%f[^%w_]()") do
-      local declaration = code:find("^%s*=", finish) and start < alias.at
-        and not code:sub(start, alias.at):find("\n")
       local field = code:sub(1, start - 1):find("[%.:]%s*$")
-      if not declaration and not field and not reads(finish) then
+      if start > alias.from and not field and not reads(finish) then
         add(start, alias.name .. " (the rig module) used other than to read")
       end
     end
@@ -3321,6 +3329,14 @@ test("the rig guard catches every way to reach set or step, and only those", fun
     'other(S.lib.io_rig)',
     'local rig = rawget(S.lib, "io_rig")',
     'local a, rig = 1, S.lib.io_rig',
+    'rig_global = S.lib.io_rig',
+    'local t = {\n  rig = S.lib.io_rig\n}\nt.rig.set("ii_bus", "off")',
+    'local t = { rig = S.lib.io_rig }',
+    'S.lib[ [[io_rig]] ].set("ii_bus", "off")',
+    'S.lib[ [==[io_rig]==] ].step("e16_port", 1)',
+    'local rig = S.lib.io_rig\nf(1, rig)',
+    'local rig = S.lib.io_rig\nreturn rig',
+    'return S.lib.io_rig',
   }
   local missed = {}
   for _, sample in ipairs(caught) do
