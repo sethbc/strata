@@ -26,7 +26,7 @@ An MPE voice takes its port's lower zone: channel 1 is the master and channels 2
 
 A note takes the member channel freed longest ago; when every channel has a note, it shares the one with the fewest. A note you play carries its own bend, pressure and slide (CC 74): the values your controller sent go just before the note on, and later changes follow, whatever the voice's own pressure and slide targets are (those only decide what Strata's sound does with them). Strata sends at most 24 such messages each 1/48 s, the newest values, every note in turn. A step note has no expression: its channel gets a centered bend before its note on.
 
-Only one voice can be MPE on a port, and a plain voice on that port needs a channel outside the zone. A setting that would break that is put back, with the message `port has an mpe voice`. Plain and MPE voices can share a port on different channels (an MPE voice with 7 members leaves channels 9 to 16 free).
+Only one voice can be MPE on a port, and a plain voice on that port needs a channel outside the zone. A setting that would break that is put back, with the message `port has an mpe voice`. Plain and MPE voices can share a port on different channels (an MPE voice with 7 members leaves channels 9 to 16 free). A PSET brings every route back as it was saved. Only a file that breaks the rule (one edited by hand) is changed: its voices are taken in order, and a voice that clashes with a lower-numbered one comes back off, with the same message.
 
 ### When the synth comes back
 
@@ -44,6 +44,6 @@ A slot sends its source across 0 to 127 whenever the value changes, while its po
 
 Both start off; the five rows are at the end of IO's `midi` section:
 - **pc in**: a program change 0 to 15 on the `midi device` port recalls scene 1 to 16, as a scene key does (quantized when PARAMETERS > seq quantizes actions). **pc channel** picks the channel it listens on, or `any`. An empty scene does nothing, and so does any other program number.
-- **pc out**: each scene recall sends program change scene - 1 on **pc out port** and **pc out channel**. A recall a program change asked for is not sent back to the port it came from.
+- **pc out**: each scene recall sends program change scene - 1 on **pc out port** and **pc out channel**. A recall a program change asked for is not sent back to the port it came from, even when it waits for the beat or bar and other scenes are recalled meanwhile. If that waiting recall never happens (another scene key replaced it), the next recall of its scene sends nothing to that port, once.
 
 The section's title line shows `[--]` while a port some setting sends on has no device.
