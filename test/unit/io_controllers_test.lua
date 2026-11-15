@@ -29,6 +29,7 @@ local function rig_with(context, S, options)
   if options.e16 ~= false then
     assert_true(rig.set("e16_port", E16_PORT))
     devices.e16 = context.midi.plug(E16_PORT, "OXI E16")
+    context.clock.run_for(0.1)  -- the arrival's first tick sends every macro (below); settled
     devices.e16.sent = {}
   end
   if options.faders then
@@ -195,6 +196,16 @@ test("labels and the title go at the device's arrival and when a first target ch
   assert_equal(table.concat(frames[1], ","), "240,125,83,84,2,0,77,49,32,32,247", "macro 1: M1 and two spaces")
   assert_equal(string.char(frames[10][7], frames[10][8], frames[10][9], frames[10][10]), "M10 ", "macro 10")
   assert_equal(table.concat(frames[17], ","), "240,125,83,84,3,83,84,82,65,84,65,247", "the title STRATA")
+  -- nothing has been echoed yet: the next tick gives the rings and every macro's CC
+  device.sent = {}
+  context.clock.run_for(0.1)
+  ccs, frames = split_sent(device)
+  assert_equal(#ccs, 16, "a freshly plugged E16 gets all sixteen CCs")
+  assert_equal(ccs[1][2], 102)
+  assert_equal(ccs[16][2], 117)
+  assert_equal(#frames, 1, "and one ring frame")
+  assert_equal(#frames[1], 38)
+  assert_equal(frames[1][5], 0x01)
   device.sent = {}
   local id = S.lib.macros.target_ids()[1]
   assert_true(S.lib.macros.set_target(2, 1, id, 0, 1))
@@ -214,7 +225,7 @@ test("labels and the title go at the device's arrival and when a first target ch
   assert_equal(#device.sent, 0, "unchanged: nothing again")
 end)
 
-test("the echo of a macro is never read as a turn", function()
+test("the echo of a macro is never read as a turn, and it costs at most one step", function()
   local context, S = loaded()
   local _, devices = rig_with(context, S)
   assert_near(e16_turn(context, 1, 1), 0.01, 1e-9, "a turn")
@@ -224,9 +235,25 @@ test("the echo of a macro is never read as a turn", function()
   assert_equal(ccs[1][3], 1, "round(0.01 * 127) = 1, which reads as a turn up")
   cc(context, E16_PORT, ccs[1][2], ccs[1][3], 16)
   assert_near(params:get("macro_1"), 0.01, 1e-9, "the echo delivered back moves nothing")
-  context.clock.run_for(0.2)
   cc(context, E16_PORT, 102, 1, 16)
-  assert_near(params:get("macro_1"), 0.02, 1e-9, "the same CC later is a turn again")
+  assert_near(params:get("macro_1"), 0.02, 1e-9, "the same CC a second time is a turn: an echo is used up by one CC")
+end)
+
+test("steps up after an echo that looks like a step are not swallowed", function()
+  -- the review's case: from 0 the first step's echo is CC value 1, the same
+  -- code as rel1's step up; with Thru off the E16 never sends it back
+  local context, S = loaded()
+  local _, devices = rig_with(context, S)
+  assert_near(e16_turn(context, 1, 1), 0.01, 1e-9)
+  context.clock.run_for(0.07)  -- the echo, value 1, goes out
+  assert_equal(split_sent(devices.e16)[1][3], 1)
+  for _ = 1, 9 do
+    cc(context, E16_PORT, 102, 1, 16)
+    context.clock.run_for(0.01)
+  end
+  assert_true(params:get("macro_1") >= 0.09 - 1e-9,
+    "ten steps of 1 sent 10 ms apart move it by at least 0.09 (one may be taken for the echo), got "
+    .. params:get("macro_1"))
 end)
 
 test("a fader moves its macro only once picked up", function()
@@ -314,8 +341,38 @@ test("a port a controller holds has one owner, and a port change moves the claim
   assert_equal(S.lib.io_ports.owner(4), "e16", "a port another owner holds is not taken")
   assert_equal(S.lib.io_ports.owner(FADERS_PORT), nil)
   assert_true(rig.set("e16_port", 0))
-  assert_equal(S.lib.io_ports.owner(4), nil, "off releases")
+  assert_equal(S.lib.io_ports.owner(4), "faders", "off releases, and the controller that waited takes it")
   assert_true(S.lib.io_controllers.clock_id() ~= nil, "the faders' port is still set: the clock runs")
+end)
+
+test("a port a controller cannot take shows as taken and is claimed when released", function()
+  local context, S, controllers = loaded()
+  local rig = S.lib.io_rig
+  local record = section(S, "controllers")
+  assert_true(rig.set("e16_port", 2) and rig.set("faders_port", 2))
+  assert_equal(S.lib.io_ports.owner(2), "e16", "the first has it")
+  assert_equal(record.status(), "port taken", "the second does not: IO says so")
+  context.midi.plug(2, "OXI E16")
+  assert_equal(record.status(), "port taken", "whatever device is on it")
+  params:set("macro_1", 0.5)
+  cc(context, 2, 32, 64, 1)
+  assert_near(params:get("macro_1"), 0.5, 1e-9, "only the first acts: the faders' CC moves nothing")
+  assert_true(not controllers.pickup(1))
+  assert_near(e16_turn(context, 1, 1), 0.01, 1e-9, "the E16 turns")
+  assert_true(rig.set("e16_port", 3))
+  assert_equal(S.lib.io_ports.owner(2), "faders", "the first leaving lets the second take port 2, with no further setting")
+  cc(context, 2, 32, 64, 1)
+  assert_true(controllers.pickup(1), "and it acts")
+  assert_equal(record.status(), "[--]", "the E16's new port has no device: no longer taken")
+  -- a port another owner holds, then released
+  assert_true(rig.set("e16_port", 5))
+  assert_true(S.lib.io_ports.claim(6, "midi_in"))
+  assert_true(rig.set("e16_port", 6))
+  assert_equal(S.lib.io_ports.owner(6), "midi_in")
+  assert_equal(record.status(), "port taken")
+  S.lib.io_ports.release(6, "midi_in")
+  assert_equal(S.lib.io_ports.owner(6), "e16", "released by its holder: claimed")
+  assert_true(record.status() ~= "port taken")
 end)
 
 test("a MIDI map on a controller's CC shows as a clash", function()
@@ -404,6 +461,138 @@ test("the E16 script draws rings, labels and the title from Strata's frames", fu
   e16.sysex({0xF0, 0x7D, 0x53, 0xF7})
   e16.sysex({})
   assert_equal(#e16.calls, calls, "another header, a short frame or an unknown command: nothing")
+end)
+
+test("a device already on the port at the setting gets its labels, then every CC and the rings", function()
+  local context, S = loaded()
+  local device = context.midi.plug(E16_PORT, "OXI E16")
+  assert_true(S.lib.io_rig.set("e16_port", E16_PORT))
+  local ccs, frames = split_sent(device)
+  assert_equal(#ccs, 0)
+  assert_equal(#frames, 17, "sixteen labels and the title at once")
+  device.sent = {}
+  context.clock.run_for(0.1)
+  ccs, frames = split_sent(device)
+  assert_equal(#ccs, 16, "then all sixteen CCs")
+  assert_equal(#frames, 1, "and the rings")
+end)
+
+test("drawing IO with the controllers section shown requests no redraw", function()
+  local context, S, controllers = loaded()
+  rig_with(context, S, {e16 = false, faders = true})
+  params:set("macro_1", 0.5)
+  cc(context, FADERS_PORT, 32, 64)
+  assert_true(controllers.pickup(1))
+  h.show_page("IO")
+  S.lib.pages_io.show_section("controllers")
+  params:set("macro_1", 0.2)  -- the pickup ends without a message from the fader
+  local requests = 0
+  local real_request = _G.request_redraw
+  _G.request_redraw = function(...) requests = requests + 1; return real_request(...) end
+  redraw()
+  _G.request_redraw = real_request
+  assert_equal(requests, 0, "a draw only reads")
+  assert_true(not controllers.pickup(1), "and the strip already shows the pickup ended")
+  context.clock.run_for(0.1)
+  assert_true(not controllers.pickup(1), "it stays ended after a tick")
+  params:set("macro_1", 64 / 127)
+  assert_true(not controllers.pickup(1), "the param back where the fader left it does not bring it back")
+end)
+
+test("the layout states set the rig the way a user does", function()
+  local context, S, controllers = loaded()
+  h.show_page("IO")
+  local states = S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states
+  local by_name = {}
+  for _, state in ipairs(states) do by_name[state.name] = state end
+  local record = section(S, "controllers")
+  local function run(name)
+    h.show_page("IO")
+    by_name["controllers: " .. name].setup(context)
+  end
+  run("no port set")
+  assert_equal(S.lib.io_rig.get("e16_port"), 0)
+  assert_equal(S.lib.io_rig.get("faders_port"), 0)
+  assert_equal(record.status(), nil)
+  run("port without device")
+  assert_equal(S.lib.io_rig.get("e16_port"), 2, "E3 on the e16 port row")
+  assert_equal(S.lib.io_rig.get("faders_port"), 3, "and on the faders port row")
+  assert_equal(record.status(), "[--]")
+  run("both present")
+  assert_true(S.lib.io_ports.device(2) ~= nil and S.lib.io_ports.device(3) ~= nil, "both plugged in")
+  assert_equal(record.status(), nil)
+  local marks = 0
+  for m = 1, 16 do
+    if controllers.pickup(m) then marks = marks + 1 end
+  end
+  assert_equal(marks, 7, "some faders picked up, by CCs the box sent")
+  run("map clash")
+  assert_equal(record.status(), "map clash")
+  run("no port set")
+  assert_equal(record.status(), nil, "back to none: ports off, devices gone, the map cleared")
+  assert_true(S.lib.io_ports.device(2) == nil)
+  for _, row in ipairs(S.lib.pages_io.rows()) do
+    assert_true(row.key ~= "e16_port" or S.lib.io_rig.text("e16_port") == "off")
+  end
+end)
+
+test("a failure in a tick prints one line and the clock goes on", function()
+  local context, S = loaded()
+  local _, devices = rig_with(context, S, {faders = true})
+  params:set("macro_1", 0.5)
+  cc(context, FADERS_PORT, 32, 64)  -- picked up: the strip reads the param
+  assert_true(S.lib.io_controllers.pickup(1))
+  context.clock.run_for(0.2)  -- the macro's own apply has run
+  local failing = true
+  local real_get = params.get
+  params.get = function(self, id, ...)
+    if failing and id == "macro_1" then error("probe failure") end
+    return real_get(self, id, ...)
+  end
+  context.clock.run_for(0.2)
+  params.get = real_get
+  failing = false
+  h.claim_script_errors(context, 1, "strata: controllers tick failed: ", "probe failure")
+  params:set("macro_2", 0.5)
+  context.clock.run_for(0.1)
+  local ccs = split_sent(devices.e16)
+  assert_true(#ccs > 0, "the clock still ticks and echoes")
+end)
+
+test("a setting of one controller resets only its own state", function()
+  local context, S, controllers = loaded()
+  local rig, devices = rig_with(context, S, {faders = true})
+  params:set("macro_1", 0.5)
+  cc(context, FADERS_PORT, 32, 64)
+  assert_true(controllers.pickup(1))
+  assert_true(rig.set("e16_channel", 5) and rig.set("e16_cc", 20) and rig.set("e16_encoding", "rel2"))
+  assert_true(controllers.pickup(1), "an E16 setting leaves the faders' pickup")
+  devices.e16.sent = {}
+  context.clock.run_for(0.1)
+  local ccs = split_sent(devices.e16)
+  assert_equal(#ccs, 16, "and the E16 goes out again on its new numbers")
+  assert_equal(ccs[1][1], 0xB4)
+  assert_equal(ccs[1][2], 20)
+  assert_true(rig.set("faders_cc", 40))
+  assert_true(not controllers.pickup(1), "a faders setting drops the pickup")
+  devices.e16.sent = {}
+  context.clock.run_for(0.2)
+  assert_equal(#devices.e16.sent, 0, "and leaves the E16's echo alone")
+end)
+
+test("an idle tick builds no label", function()
+  local context, S = loaded()
+  rig_with(context, S)
+  local calls = 0
+  local real_label, real_targets = S.lib.macros.target_label, S.lib.macros.targets
+  S.lib.macros.target_label = function(...) calls = calls + 1; return real_label(...) end
+  S.lib.macros.targets = function(...) calls = calls + 1; return real_targets(...) end
+  context.clock.run_for(1)
+  assert_equal(calls, 0, "no macro's targets are copied or labeled while no first target changes")
+  assert_true(S.lib.macros.set_target(2, 1, S.lib.macros.target_ids()[1], 0, 1))
+  context.clock.run_for(0.1)
+  S.lib.macros.target_label, S.lib.macros.targets = real_label, real_targets
+  assert_true(calls >= 1, "a changed first target is labeled")
 end)
 
 end

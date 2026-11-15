@@ -4,7 +4,7 @@ An OXI E16 or a box of sixteen faders on Strata's sixteen macros. Back to the [I
 
 Both controllers map onto all sixteen macros, whatever bank MOD shows: encoder or fader 1 is macro 1, and so on to 16. Choose each one's MIDI port on IO's `controllers` section (the settings are the rig settings described on the IO page). Everything starts off.
 
-All of this is unverified on the devices until the 4.0 hardware check; it follows the makers' documents (below).
+All of this is unverified on the devices until the 4.0 hardware check; it follows the makers' documents (below). In particular, the script uses `string.char`, which the E16 manual does not list among its Lua functions.
 
 ## An OXI E16
 
@@ -17,9 +17,11 @@ Strata reads the E16's encoders as relative turns and, with a small script loade
 
 **What a turn does.** Under `rel1` the E16 sends 1 for a step up and 127 for a step down; under `rel2` 63 for up and 65 for down. A turn is a turn of the macro's encoder on the norns: one detent (1 %) a step, so macro learn, the gesture recorders and MOD see it as a hand edit.
 
-**What Strata sends back.** Up to fifteen times a second, for each macro whose value changed: its value as a CC (the same number and channel the control sends), and one SysEx frame with all sixteen values for the script's rings. When the E16 is connected, Strata sends each control's label (the macro's first target, cut to four characters, or `M1` to `M16`) and the title `STRATA`; a label is sent again when a macro's first target changes. A macro moved by an LFO or the modulation matrix moves only the sound, never the macro's value, the rings or the CCs. Without the script the CCs may still move the controls if the E16's firmware follows incoming CCs; the rings and labels need the script.
+**What Strata sends back.** Up to fifteen times a second, for each macro whose value changed: its value as a CC (the same number and channel the control sends), and one SysEx frame with all sixteen values for the script's rings. When the E16 is connected, Strata sends each control's label (the macro's first target, cut to four characters, or `M1` to `M16`) and the title `STRATA`; a label is sent again when a macro's first target changes. If the E16 sends your own turn's CC back (its Thru), Strata takes the first CC that matches what it just sent for that echo and ignores it; a real step that looks the same as the echo (the first step up from 0 under `rel1` echoes as 1) can be lost once, never more.
 
-The rings show a macro's value once it first changes after Strata or the E16 starts.
+A macro moved by an LFO or the modulation matrix moves only the sound, never the macro's value, the rings or the CCs. Without the script the CCs may still move the controls if the E16's firmware follows incoming CCs; the rings and labels need the script.
+
+When the E16 is connected Strata sends every macro's CC and the rings within a tick, so the rings show the macros at once.
 
 ## A box of faders
 
@@ -37,7 +39,7 @@ PARAMS > MAP also acts on a CC if you mapped it. A controller whose CC is mapped
 ## When something is wrong
 
 - `[--]` on the section title: a port is set and no device is on it.
-- A port another part of Strata holds (the MIDI input's port, a remote grid, the other controller) is not taken by a controller: set it to another port.
+- `port taken`: a port is set that another part of Strata holds (the MIDI input's port, a remote grid, the other controller). That controller does nothing until it is set to another port or the holder lets go, when it takes the port by itself.
 
 ## Sources
 
