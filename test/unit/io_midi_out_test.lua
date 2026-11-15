@@ -779,7 +779,7 @@ test("a PSET that swaps two MPE voices' ports reads back swapped, in either line
     if reversed then reverse_route_lines(path) end
     context, S = started()
     devices = {[2] = context.midi.plug(2, "a"), [3] = context.midi.plug(3, "b")}
-    mpe_voice(1, 2); mpe_voice(2, 3)
+    mpe_voice(1, 2); mpe_voice(2, 3); settled(context)
     clear(devices[2]); clear(devices[3])
     params:read(path)
     local why = reversed and "reversed" or "in order"
@@ -787,8 +787,8 @@ test("a PSET that swaps two MPE voices' ports reads back swapped, in either line
     assert_equal(route_of(2), "2 2 mpe 15", why)
     assert_true(S.lib.ui_flash.text("header") ~= REFUSED, why .. ": no flash")
     for port = 2, 3 do
-      local text = sent(devices[port])
-      assert_true(text:sub(-#SETUP_15_48) == SETUP_15_48, why .. ": port " .. port .. " ends set up: " .. text)
+      assert_equal(sent(devices[port]), TAKEDOWN .. "|" .. SETUP_15_48,
+        why .. ": port " .. port .. " passes to the other voice: one takedown, one setup")
     end
   end
 end)
@@ -1018,6 +1018,24 @@ test("a refused hand change is put back with one flash and nothing sent", functi
   assert_equal(seen.routes[2], nil, "no route changed")
   step(context, S, 3)
   assert_equal(seen.flashes, 1, "still one flash")
+end)
+
+test("a bend range changed beside a refused route change stands, and the zone gets its setup", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "synth")
+  mpe_voice(1, 2, 7)
+  step(context, S)
+  clear(device)
+  local seen = watch(S)
+  params:set("midi_out_bend_range", 24)
+  params:set("v2_out_mode", MPE_INDEX)
+  params:set("v2_out_port", 2)
+  step(context, S)
+  assert_equal(params:get("v2_out_port"), 0, "the route put back")
+  assert_equal(params:string("v2_out_mode"), "plain")
+  assert_equal(seen.flashes, 1, "one flash")
+  assert_equal(params:get("midi_out_bend_range"), 24, "the bend range stands")
+  assert_equal(sent(device), (SETUP_7:gsub("cc 6 48 2", "cc 6 24 2")), "one setup carrying it")
 end)
 
 test("an illegal PSET with its lines reversed keeps the lower voice, with one flash", function()
