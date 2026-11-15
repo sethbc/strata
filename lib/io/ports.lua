@@ -44,7 +44,7 @@ return function(S)
   -- port -> name; seen: port -> the device last seen on it; hot_plug: the
   -- handlers found installed, and whether ours are
   local state = {
-    listeners = {}, dispatchers = {}, owners = {}, seen = {}, errors = {},
+    listeners = {}, dispatchers = {}, owners = {}, seen = {}, errors = {}, leaving = {},
     changes = new_set(), claims = new_set(),
     -- wrapped_*: a cleanup found something installed over ours, which then
     -- stays and still leads to ours; entered_*: ours is running
@@ -128,9 +128,13 @@ return function(S)
     return norns_midi().vports[port]
   end
 
-  -- The name of the device on the port, or nil
+  -- The name of the device on the port, or nil. nil too from the moment its
+  -- device's removal enters the module until removed returns: norns clears
+  -- the vport only after midi.remove, so the vport still names a device
+  -- that is leaving while the hooks run, and an owner that releases the port
+  -- there would hand it on (#704)
   function M.device(port)
-    if not valid_port(port) then return nil end
+    if not valid_port(port) or state.leaving[port] then return nil end
     local vport = norns_midi().vports[port]
     if vport.device == nil then return nil end
     return vport.name
@@ -206,11 +210,17 @@ return function(S)
 
   local function removed(device)
     local port = device and device.port
-    if state.hot_plug.installed and valid_port(port) then
-      state.seen[port] = nil
-      run_set(state.changes, "midi change hook", port, nil)
-    end
-    if state.hot_plug.kept_remove then state.hot_plug.kept_remove(device) end
+    local marked = state.hot_plug.installed and valid_port(port)
+    if marked then state.leaving[port] = true end
+    local ran, problem = pcall(function()
+      if marked then
+        state.seen[port] = nil
+        run_set(state.changes, "midi change hook", port, nil)
+      end
+      if state.hot_plug.kept_remove then state.hot_plug.kept_remove(device) end
+    end)
+    if marked then state.leaving[port] = nil end
+    if not ran then error(problem, 0) end
   end
 
   local function device_added(device) once("entered_add", added, device) end

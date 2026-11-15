@@ -108,6 +108,52 @@ test("on_change tells of an arrival, a departure and a move made in the menu", f
   assert_equal(ports.device(17), nil, "no device outside 1 to 16")
 end)
 
+test("a port names no device while its device's removal is told (#704)", function()
+  local context = load_strata()
+  local ports = local_value("S").lib.io_ports
+  context.midi.plug(2, "box")
+  assert_equal(ports.claim(2, "a"), true, "a holds port 2")
+  local seen = {}
+  ports.on_claim("b", function(port, owner)
+    if port == 2 and owner == nil then seen[#seen + 1] = "claim hook " .. tostring(ports.device(2)) end
+  end)
+  ports.on_change("a", function(port, name)
+    if port ~= 2 or name ~= nil then return end
+    seen[#seen + 1] = "change hook " .. tostring(ports.device(2))
+    ports.release(2, "a")
+  end)
+  context.midi.unplug(2)
+  assert_equal(table.concat(seen, ", "), "change hook nil, claim hook nil", "nil in the hook and in the release it runs")
+  assert_equal(ports.device(2), nil, "nil after the unplug")
+  context.midi.plug(2, "box")
+  assert_equal(ports.device(2), "box", "plugged again: named")
+end)
+
+test("a removal hook that raises leaves the port naming its next device", function()
+  local context = load_strata()
+  local ports = local_value("S").lib.io_ports
+  context.midi.plug(2, "box")
+  ports.on_change("bad", function(port, name) if name == nil then error("a removal hook's error") end end)
+  context.midi.unplug(2)
+  h.claim_script_errors(context, 1, "strata: midi change hook bad failed: ", "a removal hook's error")
+  local during
+  ports.on_change("bad", function(port, name) if name ~= nil then during = ports.device(port) end end)
+  context.midi.plug(2, "next")
+  assert_equal(during, "next", "named during its add hooks")
+  assert_equal(ports.device(2), "next", "and once they return")
+end)
+
+test("a device moved in the menu is named at its new port while the hooks run", function()
+  local context = load_strata()
+  local ports = local_value("S").lib.io_ports
+  context.midi.plug(2, "box")
+  local seen = {}
+  ports.on_change("test", function(port, name) seen[#seen + 1] = port .. " " .. tostring(ports.device(port)) end)
+  _menu.set_mode(true); context.midi.reassign(2, 5)
+  _menu.set_mode(false)
+  assert_equal(table.concat(seen, ", "), "2 nil, 5 box", "as before this task")
+end)
+
 test("the hot-plug handlers found installed still run, after the listeners, and come back at cleanup", function()
   local calls = {}
   local found_add = function(device) calls[#calls + 1] = "found add " .. device.name end

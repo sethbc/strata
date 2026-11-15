@@ -433,6 +433,23 @@ test("a device leaving one kind's port is not claimed by the other kind waiting 
   assert_equal(S.lib.io_remote.status("arc"), "in use")
 end)
 
+test("another owner that releases as its device leaves hands remote no leaving device (#704)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "iii grid")
+  S.lib.io_ports.claim(3, "probe")
+  S.lib.io_ports.on_change("probe", function(port, name)
+    if port == 3 and name == nil then S.lib.io_ports.release(3, "probe") end
+  end)
+  set_rig(S, "remote_grid_port", 3)
+  assert_equal(S.lib.io_remote.status("grid"), "in use", "the probe holds the port")
+  local before = #device.sent
+  context.midi.unplug(3)
+  assert_equal(#device.sent, before, "nothing sent to the leaving device")
+  assert_equal(S.grids[5], nil, "the grid never attached")
+  assert_equal(S.lib.io_remote.status("grid"), "[--]")
+  assert_equal(S.lib.io_ports.owner(3), nil, "nothing holds the port")
+end)
+
 test("a monome arc takes over from a remote one and hands back", function()
   local context, S = started()
   local turns = {}
