@@ -36,9 +36,11 @@ return function(S)
 
   -- leading: the flag send reads (set while the rig says strata with a
   -- crow there, cleared only at the end of the leaving sequence); queue:
-  -- the entries waiting, each {line, off, key}; lines: each line's state
-  -- while Strata leads ({high, waiting}, by key)
-  local state = {started = false, stopped = false, leading = false, queue = {}, lines = {}, dropped = 0, errors = {}}
+  -- the entries waiting, each {line, off, pair, key}; pairs: the (device,
+  -- command) pairs that have had an off this lead; lines: their lines'
+  -- state ({high, waiting}, by key)
+  local state = {started = false, stopped = false, leading = false, queue = {}, lines = {}, pairs = {}, dropped = 0,
+    errors = {}}
 
   local function bus() return S.lib.io_rig.get(SPEC.bus_key) end
   local function present() return S.lib.io_crow.present() end
@@ -66,21 +68,44 @@ return function(S)
   -- ii.er301.tr(3, 1) and ii.er301.tr(3, 0) are one line)
   local function entry_for(off, device, command, ...)
     local first = select("#", ...) > 0 and S.lib.io_crow.number((...)) or ""
-    return {line = line_for(device, command, ...), off = off, key = device .. "\n" .. command .. "\n" .. first}
+    local pair = device .. "\n" .. command
+    return {line = line_for(device, command, ...), off = off, pair = pair, key = pair .. "\n" .. first}
   end
 
-  -- Per line while Strata leads (ruling 24): high (a send for it reached
-  -- crow and no off since) and waiting (its sends in the queue)
+  -- Per line while Strata leads (ruling 24), only for the (device,
+  -- command) pairs that have had an off this lead (state.pairs): high
+  -- (true: a send of it reached crow since its last off; false: its off
+  -- did, and nothing raised it since; nil: unknown, it may have gone high
+  -- before its pair was learned) and waiting (its sends in the queue).
+  -- Lines that never take an off (play_note, cv, mode) keep nothing
   local function line_state(key)
     local line = state.lines[key]
     if not line then
-      line = {high = false, waiting = 0}
+      line = {high = nil, waiting = 0}
       state.lines[key] = line
     end
     return line
   end
 
-  local function forget_lines() state.lines = {} end
+  local function forget_lines() state.lines, state.pairs = {}, {} end
+
+  -- Learn a pair at its first off: its sends already waiting are counted now
+  local function learn_pair(pair)
+    state.pairs[pair] = true
+    for _, waiting in ipairs(state.queue) do
+      if waiting.pair == pair and not waiting.off then
+        local line = line_state(waiting.key)
+        line.waiting = line.waiting + 1
+      end
+    end
+  end
+
+  -- For tests: how many lines the module keeps state for
+  function M.lines_kept()
+    local count = 0
+    for _ in pairs(state.lines) do count = count + 1 end
+    return count
+  end
 
   -- The line joins the queue (true), or with queue_max waiting is dropped
   -- and counted (false); false and nothing unless Strata leads. A line
@@ -93,24 +118,31 @@ return function(S)
       return false
     end
     table.insert(state.queue, entry)
-    local line = line_state(entry.key)
-    line.waiting = line.waiting + 1
+    if state.pairs[entry.pair] then
+      local line = line_state(entry.key)
+      line.waiting = line.waiting + 1
+    end
     return true
   end
 
   -- An off (a gate low or a note's release) is queued exactly when its
-  -- line owes one (ruling 24): the line is high on the device or a send
-  -- for it waits. An owed off joins the end of the queue whatever its
-  -- length (it never displaces a line and is never dropped), unless the
-  -- newest waiting entry of its line is already an off: then nothing is
-  -- added; true either way. An off not owed (its on was dropped at a full
+  -- line owes one (ruling 24): the pair's first off this lead (the pair is
+  -- learned then), or a line that is high, unknown, or has a send waiting.
+  -- An owed off joins the end of the queue whatever its length (it never
+  -- displaces a line and is never dropped), unless the newest waiting
+  -- entry of its line is already an off: then nothing is added; true
+  -- either way. An off for a line known low (its on was dropped at a full
   -- queue) adds nothing, is not counted, false. False and nothing unless
   -- Strata leads
   function M.send_off(device, command, ...)
     if not state.leading then return false end
     local entry = entry_for(true, device, command, ...)
-    local line = state.lines[entry.key]
-    if not (line and (line.high or line.waiting > 0)) then return false end
+    if state.pairs[entry.pair] then
+      local line = state.lines[entry.key]
+      if line and line.high == false and line.waiting == 0 then return false end
+    else
+      learn_pair(entry.pair)
+    end
     for index = #state.queue, 1, -1 do
       local waiting = state.queue[index]
       if waiting.key == entry.key then
@@ -129,19 +161,22 @@ return function(S)
   end
 
   -- The first sends_per_step waiting, in order, from the LFO clock's step;
-  -- each sent entry moves its line's state (a send raises it, an off lowers it)
+  -- each sent entry of a learned pair moves its line's state (a send
+  -- raises it, an off lowers it; a line known low is kept, so its next off
+  -- is not owed unless something raises it)
   S.lib.lfos.on_step(function()
     if not state.leading then return end
     for _ = 1, math.min(II.sends_per_step, #state.queue) do
       local entry = table.remove(state.queue, 1)
       S.lib.io_crow.send_now(entry.line)
-      local line = line_state(entry.key)
-      if entry.off then
-        line.high = false
-      else
-        line.high, line.waiting = true, line.waiting - 1
+      if state.pairs[entry.pair] then
+        local line = line_state(entry.key)
+        if entry.off then
+          line.high = false
+        else
+          line.high, line.waiting = true, math.max(0, line.waiting - 1)
+        end
       end
-      if not line.high and line.waiting == 0 then state.lines[entry.key] = nil end
     end
   end)
 
