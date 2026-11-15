@@ -1306,11 +1306,17 @@ test("every control param with a sender sends its LFO-offset value; one without 
     if math.abs(value - params:get(param.id)) < 1e-9 then value = spec:map(0.65) end
     return value
   end
+  -- the tape's four macro targets: their senders reach softcut, not the
+  -- engine (lib/io/tape.lua); test/unit/io_tape_test.lua checks that they
+  -- send the offset value
+  local softcut_senders = {}
+  for _, id in ipairs(S.lib.io_tape.TAPE.macro_targets) do softcut_senders[id] = true end
   local checked = 0
   for _, param in ipairs(params.params) do
     -- a macro's sender takes an LFO's value for its targets' round robin
     -- sends (lib/macros.lua, macros_test.lua), never an engine call
-    if param.t == params.tCONTROL and param.id:sub(1, 6) ~= "strata" and not param.id:match("^macro_%d+$") then
+    if param.t == params.tCONTROL and param.id:sub(1, 6) ~= "strata" and not param.id:match("^macro_%d+$")
+        and not softcut_senders[param.id] then
       local sender = S.engine_senders[param.id]
       local value = other_value(param)
       if sender then

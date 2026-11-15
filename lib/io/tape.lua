@@ -26,6 +26,11 @@ return function(S)
     wear = {default = 0.2},
     level = {default = 0.7},
     param_count = 7,
+    -- the four params a macro can move (one list: their senders, macro targets and the
+    -- LFO sender test's skip list), each with its macro label
+    macro_targets = {"tapeloop_level", "tapeloop_rate", "tapeloop_feedback", "tapeloop_wear"},
+    macro_labels = {tapeloop_level = "tape level", tapeloop_rate = "tape speed", tapeloop_feedback = "tape fb",
+      tapeloop_wear = "tape wear"},
   }
   M.TAPE = TAPE
 
@@ -145,15 +150,12 @@ return function(S)
   -- These senders call softcut and no engine command; each does nothing
   -- while the tape is off
   local function while_on(send) return function(value) if engaged then send(value) end end end
-  S.engine_senders.tapeloop_level = while_on(send_level)
-  S.engine_senders.tapeloop_rate = while_on(send_rate)
-  S.engine_senders.tapeloop_feedback = while_on(send_feedback)
-  S.engine_senders.tapeloop_wear = while_on(send_wear)
-
-  S.register_macro_target("tapeloop_level", "tape level")
-  S.register_macro_target("tapeloop_rate", "tape speed")
-  S.register_macro_target("tapeloop_feedback", "tape fb")
-  S.register_macro_target("tapeloop_wear", "tape wear")
+  local SENDERS = {tapeloop_level = send_level, tapeloop_rate = send_rate, tapeloop_feedback = send_feedback,
+    tapeloop_wear = send_wear}
+  for _, id in ipairs(TAPE.macro_targets) do
+    S.engine_senders[id] = while_on(SENDERS[id])
+    S.register_macro_target(id, TAPE.macro_labels[id])
+  end
 
   -- IO's tape section: the seven params, no status
   S.register_io_section({
