@@ -993,4 +993,73 @@ test("the voice-stop and freeze-change registries take functions only", function
   assert_equal(#script.registry.freeze_change, freezes + 1, "a freeze-change hook after init")
 end)
 
+-- 3.6's registries (design §0.1, rulings 4, 8 and 9): each open, read at
+-- each use
+test("the 3.6 registries take what their records allow", function()
+  local S = fresh_state()
+  local function fn() end
+  -- note hooks, by name; every other field an optional function
+  S.register_note_hook({ name = "x" })
+  assert_equal(#S.registry.note_hooks, 1, "a hook record is kept")
+  assert_true(refused(S.register_note_hook, { name = "x" }), "a second x")
+  assert_true(refused(S.register_note_hook, { name = "y", started = 1 }), "started is a function")
+  assert_true(refused(S.register_note_hook, { name = "z", bogus = fn }), "an unknown field")
+  assert_true(refused(S.register_note_hook, { started = fn }), "a hook record needs a name")
+  S.register_note_hook({ name = "all", started = fn, ended = fn, moved = fn, expressed = fn })
+  assert_equal(#S.registry.note_hooks, 2, "nothing refused was kept")
+  -- the scene-recalled and silence-change hooks are functions
+  assert_true(refused(S.register_scene_recalled, 1), "a scene hook is a function")
+  assert_true(refused(S.register_silence_change, "x"), "a silence hook is a function")
+  S.register_scene_recalled(fn); S.register_silence_change(fn)
+  assert_equal(S.registry.scene_recalled[1], fn, "a scene hook is kept")
+  assert_equal(S.registry.silence_change[1], fn, "a silence hook is kept")
+  -- note targets: name, routed, note_on, note_off required
+  local function target(overrides)
+    local record = { name = "t", routed = fn, note_on = fn, note_off = fn }
+    for field, value in pairs(overrides or {}) do record[field] = value end
+    return record
+  end
+  for _, field in ipairs({ "routed", "note_on", "note_off" }) do
+    local record = target({ name = "no_" .. field }); record[field] = nil
+    assert_true(refused(S.register_note_target, record), "a target needs " .. field)
+  end
+  assert_true(refused(S.register_note_target, target({ name = "bad", rows = 1 })), "rows is a function")
+  assert_true(refused(S.register_note_target, target({ name = "bad2", shade = fn })), "an unknown field")
+  S.register_note_target(target({ rows = fn, status = fn, express = fn, stop_all = fn }))
+  assert_equal(S.registry.note_targets[1].name, "t", "a target is kept")
+  assert_true(refused(S.register_note_target, target()), "a second t")
+  assert_equal(#S.registry.note_targets, 1, "nothing refused was kept")
+  -- ii devices: param_count whole, at least 0, more than 0 only with add_params
+  S.register_ii_device({ name = "jf", param_count = 8, add_params = fn })
+  assert_true(refused(S.register_ii_device, { name = "jf" }), "a second jf")
+  assert_true(refused(S.register_ii_device, { name = "a", param_count = -1, add_params = fn }), "a count of -1")
+  assert_true(refused(S.register_ii_device, { name = "b", param_count = 1.5, add_params = fn }), "a count of 1.5")
+  assert_true(refused(S.register_ii_device, { name = "c", param_count = 8 }), "a count without add_params")
+  assert_true(refused(S.register_ii_device, { name = "d", ready = 1 }), "ready is a function")
+  assert_true(refused(S.register_ii_device, { name = "e", reset = fn }), "an unknown field")
+  S.register_ii_device({ name = "plain", ready = fn, release = fn })
+  assert_equal(#S.registry.ii_devices, 2, "nothing refused was kept")
+  assert_equal(S.registry.ii_devices[2].param_count, 0, "param_count defaults to 0")
+  -- macro targets: two non-empty strings, never a macro
+  S.register_macro_target("tapeloop_level", "tape level")
+  assert_equal(S.registry.macro_targets[1].id, "tapeloop_level")
+  assert_equal(S.registry.macro_targets[1].label, "tape level")
+  assert_true(refused(S.register_macro_target, "tapeloop_level", "again"), "a second tapeloop_level")
+  assert_true(refused(S.register_macro_target, "macro_3", "macro 3"), "a macro is no target")
+  assert_true(refused(S.register_macro_target, "", "empty"), "an id is a non-empty string")
+  assert_true(refused(S.register_macro_target, "x_level", ""), "a label is a non-empty string")
+  assert_equal(#S.registry.macro_targets, 1, "nothing refused was kept")
+  -- open after init
+  load_strata()
+  local script = local_value("S")
+  script.register_note_hook({ name = "late" })
+  script.register_scene_recalled(fn); script.register_silence_change(fn)
+  script.register_note_target(target({ name = "late" }))
+  script.register_ii_device({ name = "late" })
+  script.register_macro_target("late_level", "late")
+  assert_equal(script.registry.note_hooks[#script.registry.note_hooks].name, "late", "a note hook after init")
+  assert_equal(script.registry.note_targets[#script.registry.note_targets].name, "late", "a target after init")
+  assert_equal(script.registry.ii_devices[#script.registry.ii_devices].name, "late", "an ii device after init")
+end)
+
 end

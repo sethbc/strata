@@ -51,6 +51,13 @@ return function()
     -- 3.5's (design §0.1)
     voice_stop = {},        -- fn(voice_idx), run after every engine.voiceOff the script sends
     freeze_change = {},     -- fn(voice_idx, frozen), run by every v<i>_freeze action
+    -- 3.6's (design §0.1), read at each use
+    note_hooks = {},        -- {name, started, ended, moved, expressed}, run by lib/notes.lua
+    scene_recalled = {},    -- fn(scene_num), run once per scene recall (lib/scenes.lua)
+    silence_change = {},    -- fn(voice_idx, silenced), run as a mute or solo changes silenced(voice)
+    note_targets = {},      -- {name, routed, note_on, note_off, express, stop_all, rows, status}
+    ii_devices = {},        -- {name, ready, release, param_count, add_params}
+    macro_targets = {},     -- {id, label}: control params the macros offer after the matrix depths
   }
 
   -- The registries init reads once (voice_params, scene_fields,
@@ -478,6 +485,74 @@ return function()
   function M.register_freeze_change(fn)
     require_arg(type(fn) == "function", "register_freeze_change", "a hook is a function")
     table.insert(M.registry.freeze_change, fn)
+  end
+
+  -- 3.6's registries (design §0.1, rulings 4, 8 and 9), read at each use,
+  -- so they stay open
+  local NOTE_HOOK_FIELDS = {name = true, started = true, ended = true, moved = true, expressed = true}
+  local NOTE_TARGET_FIELDS = {name = true, routed = true, note_on = true, note_off = true, express = true,
+    stop_all = true, rows = true, status = true}
+  local II_DEVICE_FIELDS = {name = true, ready = true, release = true, param_count = true, add_params = true}
+
+  -- A note hook (lib/notes.lua runs each, contained): {name, started, ended,
+  -- moved, expressed}, each function optional, called with (voice_idx,
+  -- slot, note = {owner, key, pitch, velocity}); a hook never yields and
+  -- never calls S.lib.notes.play
+  function M.register_note_hook(record)
+    local kind = "register_note_hook"
+    local where = require_named(record, "note_hooks", kind, "name", NOTE_HOOK_FIELDS)
+    require_functions(record, where, {}, {"started", "ended", "moved", "expressed"})
+    table.insert(M.registry.note_hooks, record)
+  end
+
+  -- fn(scene_num) runs once per scene recall (lib/scenes.lua): at a fade's
+  -- first step, or at an instant recall that is not a fade's landing
+  function M.register_scene_recalled(fn)
+    require_arg(type(fn) == "function", "register_scene_recalled", "a hook is a function")
+    table.insert(M.registry.scene_recalled, fn)
+  end
+
+  -- fn(voice_idx, silenced) runs (lib/voice_mix.lua) for each voice whose
+  -- S.lib.voice_mix.silenced(voice_idx) answer a mute or solo changed
+  function M.register_silence_change(fn)
+    require_arg(type(fn) == "function", "register_silence_change", "a hook is a function")
+    table.insert(M.registry.silence_change, fn)
+  end
+
+  -- A note target (lib/io/targets.lua reads them, design §3): {name, routed
+  -- = fn, note_on = fn, note_off = fn, express, stop_all, rows, status};
+  -- the last four optional (rows and status: IO's voice section, ruling 9)
+  function M.register_note_target(record)
+    local kind = "register_note_target"
+    local where = require_named(record, "note_targets", kind, "name", NOTE_TARGET_FIELDS)
+    require_functions(record, where, {"routed", "note_on", "note_off"}, {"express", "stop_all", "rows", "status"})
+    table.insert(M.registry.note_targets, record)
+  end
+
+  -- An ii device (lib/io/ii.lua reads them, ruling 8): {name, ready = fn,
+  -- release = fn, param_count = the params add_params adds (a whole number,
+  -- 0 by default), add_params = fn}; every field but name optional, and a
+  -- param_count above 0 needs add_params
+  function M.register_ii_device(record)
+    local kind = "register_ii_device"
+    local where = require_named(record, "ii_devices", kind, "name", II_DEVICE_FIELDS)
+    require_functions(record, where, {}, {"ready", "release", "add_params"})
+    if record.param_count == nil then record.param_count = 0 end
+    require_arg(is_whole(record.param_count, 0), where, "param_count is a whole number, at least 0")
+    require_arg(record.param_count == 0 or record.add_params ~= nil, where,
+      "a param_count above 0 needs add_params")
+    table.insert(M.registry.ii_devices, record)
+  end
+
+  -- A macro target (lib/macros.lua's catalog lists each after the matrix
+  -- depths, ruling 4): a control param id and its label; never a macro
+  function M.register_macro_target(id, label)
+    local kind = "register_macro_target"
+    require_arg(type(id) == "string" and id ~= "", kind, "an id is a non-empty string")
+    require_arg(type(label) == "string" and label ~= "", kind .. " " .. id, "a label is a non-empty string")
+    require_arg(not id:match("^macro_%d+$"), kind .. " " .. id, "a macro is never a macro's target")
+    require_arg(not name_taken(M.registry.macro_targets, "id", id), kind, "a second target " .. id)
+    table.insert(M.registry.macro_targets, {id = id, label = label})
   end
 
   -- The module tables, S.lib.<name> (strata.lua stores each constructor's

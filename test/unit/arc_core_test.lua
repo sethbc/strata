@@ -375,4 +375,60 @@ test("an arc sweep runs the touch hooks once, as the arc", function()
   assert_equal(table.concat(log, " "), "reverb_mix:arc", "one touch, from the arc")
 end)
 
+-- 3.6 (design §0.1): an arc that is no norns device (a remote arc)
+local function virtual_arc()
+  local device = { device = true, cleared = 0, refreshes = 0, lit = 0 }
+  function device:all() self.cleared = self.cleared + 1 end
+  function device:refresh() self.refreshes = self.refreshes + 1 end
+  function device:segment() self.lit = self.lit + 1 end
+  function device:led() self.lit = self.lit + 1 end
+  return device
+end
+
+test("a virtual arc is followed only while no monome arc is connected", function()
+  local context = load_strata(); finish_startup(context)
+  local S, core = local_value("S"), local_value("S").lib.arc_core
+  local port_1 = arc.connect(1)
+  local device = virtual_arc()
+  core.follow_virtual(device)
+  assert_equal(S.arc_device, device, "followed")
+  assert_true(S.arc_connected, "and connected")
+  assert_equal(port_1.delta, nil, "port 1's vport keeps no handler")
+  show_page("MAIN")
+  local density = params:lookup_param("master_density")
+  local before = density.raw
+  device.delta(1, 4)
+  assert_near(density.raw - before, 4 / local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1e-9, "a turn reaches the page")
+  next_frame(context)
+  assert_true(device.refreshes >= 1 and device.lit > 0, "its rings are drawn")
+  -- a monome arc takes over, and hands back when it leaves
+  local monome = context.arc.plug(2)
+  assert_equal(S.arc_device, arc.connect(2), "a monome arc that arrives is followed")
+  assert_equal(device.delta, nil, "the virtual arc's handler is cleared")
+  assert_equal(#h.check_invariants(), 0, "every invariant holds")
+  context.arc.unplug(2)
+  assert_equal(S.arc_device, device, "the virtual arc again")
+  assert_true(S.arc_connected)
+  assert_true(device.delta ~= nil, "with its handler")
+  -- the menu closing changes nothing while it is followed
+  _menu.set_mode(true); _menu.set_mode(false)
+  assert_equal(S.arc_device, device, "reconcile keeps it")
+  assert_equal(#h.check_invariants(), 0, "every invariant holds")
+  core.unfollow_virtual()
+  assert_equal(S.arc_device, port_1, "port 1's vport")
+  assert_true(not S.arc_connected, "not connected")
+  assert_equal(device.delta, nil, "its handler cleared")
+  -- while a monome arc is followed, a virtual one waits
+  monome = context.arc.plug(1)
+  core.follow_virtual(device)
+  assert_equal(S.arc_device, port_1, "the monome arc stays followed")
+  context.arc.unplug(1)
+  assert_equal(S.arc_device, device, "the virtual one once it leaves")
+  -- refused: a device without its fields
+  core.unfollow_virtual()
+  core.follow_virtual({ device = true })
+  assert_equal(S.arc_device, port_1, "a table without the functions is not followed")
+  assert_true(monome ~= nil)
+end)
+
 end

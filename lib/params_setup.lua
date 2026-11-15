@@ -643,6 +643,17 @@ return function(S)
     register_params(group[1], function() S.lib[module_name].add_params() end)
   end
 
+  -- 3.6's groups, in menu order (design §13): each record calls its
+  -- module's add_params only when the module is loaded (each module's
+  -- package adds its include), so a branch without it adds nothing
+  for _, group in ipairs({{"out midi", "io_midi_out"}, {"crow", "io_crow"}, {"out ii", "io_ii"},
+      {"out nb", "io_nb"}, {"tape", "io_tape"}}) do
+    local module_name = group[2]
+    register_params(group[1], function()
+      if S.lib[module_name] then S.lib[module_name].add_params() end
+    end)
+  end
+
   -- strata_seq: the sequencer's add_params adds the group, its own params
   -- and, through S.lib.quantize.add_params, the quantizer's
   register_params("seq", function() S.lib.sequencer.add_params() end)

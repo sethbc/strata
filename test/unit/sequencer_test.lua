@@ -3099,4 +3099,76 @@ test("a MIDI note that takes the voice's own note from a step ends the step's no
   pattern_clock_stop()
 end)
 
+-- 3.6 (design §0.1): every hit's absolute pitches, for the targets
+test("every hit's event carries its absolute pitches", function()
+  local context, S = buffer_voice_setup()  -- voice 1 reads buffer 1
+  local seq = S.lib.sequencer
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  params:set("v1_freq", 220)                                   -- note 57
+  params:set("v2_source", S.constants.SOURCE_SYNTH + 1); params:set("v2_buf_rate", 2)  -- note 72
+  params:set("v3_source", S.constants.SOURCE_INPUT)            -- grain pitch 1: note 60
+  S.patterns[1][1], S.patterns[1][2], S.patterns[1][3], S.patterns[1][4] = 15, 15, 15, 15
+  seq.set_step_attr(1, 2, "notes", {0, 4, 7}); seq.set_step_attr(1, 2, "ratchet", 2)
+  seq.set_step_attr(1, 3, "notes", {0, 4, 7}); seq.set_step_attr(1, 3, "pitch", 2)
+  seq.set_step_attr(1, 4, "pitch", 2)
+  S.patterns[2][1] = 15
+  S.patterns[3][1], S.patterns[3][2] = 15, 15
+  seq.set_step_attr(3, 2, "pitch", 0.5); seq.set_step_attr(3, 2, "notes", {0, 3})
+  local events = record_output(S, "probe")
+  pattern_clock_start()
+  context.clock.run_for(0.45)
+  pattern_clock_stop()
+  local hits = voice_events(events, 1)
+  assert_equal(#hits, 5, "four steps, the second two hits")
+  assert_list_near(hits[1].pitches, {57}, 1e-9, "a plain step: the voice's own pitch")
+  assert_list_near(hits[2].pitches, {57, 61, 64}, 1e-9, "a chord")
+  assert_list_near(hits[3].pitches, {57, 61, 64}, 1e-9, "each ratchet hit carries them")
+  assert_true(hits[2].pitches ~= hits[3].pitches, "a copy per event")
+  -- a synth voice's pitch lock is its grain pitch, not its note
+  assert_list_near(hits[4].pitches, {57, 61, 64}, 1e-9, "a synth voice's chord under a pitch lock")
+  assert_list_near(hits[5].pitches, {57}, 1e-9, "and its own pitch")
+  assert_list_near(voice_events(events, 2)[1].pitches, {72}, 1e-9, "a buffer voice at rate 2")
+  local input = voice_events(events, 3)
+  assert_list_near(input[1].pitches, {60}, 1e-9, "an input voice at grain pitch 1")
+  assert_list_near(input[2].pitches, {48, 51}, 1e-9, "an input voice's pitch lock moves its note")
+end)
+
+test("an output cannot change what another output or the next hit gets", function()
+  -- what the voices output sends for a chord step with two hits, then a plain step
+  local function run(empties)
+    local context, S = setup()
+    local seq = S.lib.sequencer
+    params:set("v1_freq", 220)
+    S.patterns[1][1], S.patterns[1][2] = 15, 15
+    seq.set_step_attr(1, 1, "notes", {0, 4, 7}); seq.set_step_attr(1, 1, "ratchet", 2)
+    if empties then
+      -- an output that plays before the voices output, as one included
+      -- earlier would, and empties the first hit's pitches
+      local emptied = false
+      table.insert(S.registry.step_outputs, 1, {name = "emptier", play = function(event)
+        if emptied then return end
+        emptied = true
+        for index = #event.pitches, 1, -1 do event.pitches[index] = nil end
+      end})
+    end
+    local seen = {}
+    S.register_step_output({name = "after", play = function(event) table.insert(seen, #event.pitches) end})
+    context.clear_engine_calls()
+    pattern_clock_start()
+    context.clock.run_for(0.2)
+    pattern_clock_stop()
+    local sent = {}
+    for _, call in ipairs(context.engine_calls) do
+      local args = {}
+      for index, value in ipairs(call.args) do args[index] = tostring(value) end
+      table.insert(sent, call.name .. "(" .. table.concat(args, ", ") .. ")")
+    end
+    return table.concat(sent, " "), seen
+  end
+  local plain = run(false)
+  local emptied, seen = run(true)
+  assert_equal(emptied, plain, "the voices output sends what it sent without it")
+  assert_equal(table.concat(seen, " "), "0 3 1", "the emptied hit's own; the next hits' are whole")
+end)
+
 end

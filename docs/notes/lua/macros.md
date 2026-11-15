@@ -32,12 +32,13 @@ Elsewhere: the MOD page and its rings (package 2a) draw and edit the macros thro
 
 ## Targets
 
-`target_ids()`, in this order, only ids whose params exist now (the list is rebuilt when params are added):
+`target_ids()`, in this order, only ids whose params exist now (the list is rebuilt when params are added or a target is registered):
 - every LFO destination (`S.LFO_DESTINATIONS`) but `none` and the global entries whose param is a macro: the built-in ones (a voice's `main` as `v<i>_main`), then the registered ones (`hist`, `vfilt`, `dsend`, `rsend`, `amp` per voice), 102 in all;
 - each LFO's `strata_lfo<n>_rate` and `strata_lfo<n>_depth` (n 1-6);
-- each routing's `matrix_<k>_depth` (k 1-16, `lib/matrix.lua`).
+- each routing's `matrix_<k>_depth` (k 1-16, `lib/matrix.lua`);
+- 3.6's registered targets (`S.register_macro_target(id, label)`, `S.registry.macro_targets`, ruling 4: a module's own control params, such as the tape's), in registration order, each only while its param exists and is a control (an id with no param, or an option, is left out). The register function refuses a `macro_<n>` id, so no macro becomes a target this way.
 
-`target_label(id)` is the LFO destination's label (`v3 pitch`, `rev mix`, `v3 main`), `L<n> rate` or `L<n> depth`, `R<k> depth`, or the id itself when unknown.
+`target_label(id)` is the LFO destination's label (`v3 pitch`, `rev mix`, `v3 main`), `L<n> rate` or `L<n> depth`, `R<k> depth`, a registered target's own label, or the id itself when unknown.
 
 ## Applying
 

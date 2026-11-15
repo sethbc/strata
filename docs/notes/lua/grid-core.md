@@ -24,6 +24,7 @@
 - Every freeze key calls `S.lib.freeze.toggle_quantized` (3.4, design §8.9), never `toggle`, so it waits for the beat or bar under `quantize_actions`.
 - A voice's on/off key lights through `voice_level`: 12 running, 6 running and silenced (`S.lib.voice_mix.silenced`, design §8.14), 2 stopped. A stopped voice stays at 2 whether it is silenced or not.
 - Every whole-pattern change ends the voice's step gestures (`end_step_gestures`, run by `S.lib.sequencer.replace_pattern`), and a page change and a 64's half switch end its port's (`end_port_step_gestures`), so a held step never takes a level, toggles or keeps the step editor open in a pattern, page or half it was not pressed in (#242).
+- **Virtual grids (3.6's 0a)**: a grid that is no norns device (a remote grid, the midigrid mod's) attaches only through `S.lib.grid_core.attach_virtual(port, device)` on a port of `S.constants.GRID_PORTS` (`remote` 5, `midigrid` 6), above norns' four, and leaves through `detach_virtual(port)`. Ports 1 to `S.MAX_GRID_PORTS` take norns' own vports only: what `grid.connect(port)` returns is attached only when it is `grid.vports[port]` (`norns_vport`), so a mod that replaces `grid.connect` never puts a device on them. The loops that reconcile, rotate and count ports stay 1 to `S.MAX_GRID_PORTS`; every per-port check (`set_page`, `end_port_step_gestures`, the cleanup's `forget_port`, the "grid keys" invariant) takes a virtual port, and `grid_redraw`, `grid_key` and the cleanup's dark step walk `S.grids` as they do for any grid.
 - Each layout's rules are in its own notes file (`docs/notes/lua/grid/layout_256.md`, `layout_128h.md`, `layout_128v.md`, `layout_64.md`); the pattern sequencer's in `docs/notes/lua/sequencer.md`.
 
 ## Owns
@@ -50,6 +51,7 @@ Strata supports several grids at once and adapts its layout to each grid's size.
 - `S.grids` stores the **vport** (`grid.connect(port)`) of each connected grid, indexed by port (1-4). `grid_init`, `grid.add` and `reconcile_ports` go through `attach_grid(port)`, which also records the device the vport holds then (`attached_devices[port]`) and turns the grid to the port's rotation (`apply_rotation`, which notes the size it then reports).
 - `S.lib.grid_core.reconcile_ports()`: SYSTEM > DEVICES moves a grid between ports through norns' `update_devices()` alone, which rewrites the vports' `device`, `cols` and `rows` and the device's `port` but calls neither `grid.add` nor `grid.remove`. So, as the norns menu closes (registered with `S.register_menu_close`), for each port 1..`S.MAX_GRID_PORTS`: a vport holding a device that is not attached, or another device than `attached_devices[port]`, is forgotten and attached, as `grid.add` does; an attached port whose vport is empty loses its `key` handler and its `S.grids` slot and is forgotten, as `grid.remove` does. Then `grid_redraw()` and `request_redraw()` (SETUP counts the grids). A grid moved from port 1 to 2 thus starts on port 2 with no held keys, on page 1, and port 1 is no longer drawn.
 - Why never the raw device: devices have no `.device` field (so `grid_redraw` would skip them), and norns fires both `device.key` and `vports[port].key`, so handlers on both would run every press twice. The arc uses the same vport-only pattern (`attach_arc`).
+- `attach_virtual(port, device) -> boolean` (3.6): `port` one of `S.constants.GRID_PORTS`' values, `device` a table with whole-number `cols` and `rows` (at least 1), a truthy `device` field and the methods `led`, `all`, `refresh` and `rotation`; false for anything else, with nothing attached. It forgets the port's old state (and clears an old device's `key`), stores the device in `S.grids[port]` with `attached_devices[port] = device.device` and its size (so `follow_size` keeps it), sets `device.key` to call `grid_key(port, x, y, z)` and redraws the grids. Its layout is picked by its size, as for any grid; no rotation is applied at attach (cleanup still turns it to 0). `detach_virtual(port)`: its held keys and holds forgotten (`forget_port`), `device.key` cleared, the entry removed; any other port does nothing.
 
 ## Rotation
 
@@ -127,6 +129,7 @@ A port's attachment is `S.grids[port]` (the vport, or nil) with `attached_device
 |------------|----------|
 | Attach (init, hot-plug, the menu closing) | `attach_grid`, from `grid_init`, `grid.add`, `reconcile_ports` |
 | Detach (unplug, the menu closing) | `grid.remove`, `reconcile_ports` |
+| Attach or detach a virtual grid (ports 5 and 6) | `attach_virtual`, `detach_virtual` |
 
 ## LEDs
 

@@ -165,6 +165,11 @@ local GRID_HOLD = {scene_save_seconds = 0.5, half_toggle_seconds = 0.5, step_edi
 local GRID_PAGES = {patterns = 1, faders = 2, scenes = 3, sources = 4, positions = 5, count = 5,
   position_cells = 16}
 
+-- 3.6: the ports of the grids that are no norns device, above norns' four
+-- (S.MAX_GRID_PORTS): a remote grid and the midigrid mod's
+-- (S.lib.grid_core.attach_virtual)
+local GRID_PORTS = {remote = 5, midigrid = 6}
+
 -- The key levels every grid layout shares (#526; lib/grid/core.lua reads
 -- them): a voice's on/off key (running, stopped), a page key (shown,
 -- other), a pick key (the grid voice or the fader page shown, the others),
@@ -315,6 +320,7 @@ return {
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
   GRID_HOLD = GRID_HOLD,
   GRID_PAGES = GRID_PAGES,
+  GRID_PORTS = GRID_PORTS,
   GRID_LEVELS = GRID_LEVELS,
   START_ORDER = START_ORDER,
   UNDO_SECONDS = UNDO_SECONDS,

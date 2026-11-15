@@ -90,6 +90,25 @@ return function(S)
     end
   end
 
+  -- 3.6's silence hooks (S.registry.silence_change, read at each call): the
+  -- answer of silenced(voice) the module last told them, per voice (false
+  -- at start). Kept apart from sent_mute, which a voice's sync also writes
+  -- (ruling 16). Each hook runs contained, with (voice_idx, silenced), for
+  -- each voice whose answer changed, in voice order
+  local told_silenced = {}
+  local silence_errors = {}
+  local function tell_silence_changes()
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      local silenced = M.silenced(voice_idx)
+      if (told_silenced[voice_idx] or false) ~= silenced then
+        told_silenced[voice_idx] = silenced
+        for index, hook in ipairs(S.registry.silence_change) do
+          S.lib.ui_frame.contained_call(silence_errors, index, "silence change hook " .. index, hook, voice_idx, silenced)
+        end
+      end
+    end
+  end
+
   -- The sends are 0-1 values shown as a percent (display only)
   local function send_percent(param) return string.format("%d %%", math.floor(param:get() * 100 + 0.5)) end
 
@@ -98,6 +117,7 @@ return function(S)
     if key == "mute" or key == "solo" then
       return {type = "binary", name = key, behavior = "toggle", default = 0,
         action = function()
+          tell_silence_changes()
           update_voice_list()  -- MAIN's list marks it
           request_redraw()
           grid_redraw()  -- the grids light a silenced voice

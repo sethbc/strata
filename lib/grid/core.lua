@@ -21,6 +21,7 @@ return function(S)
   local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
   local GRID_HOLD = S.constants.GRID_HOLD
+  local GRID_PORTS = S.constants.GRID_PORTS
 
   -- Grid devices (support multiple grids); SETUP counts S.MAX_GRID_PORTS
   S.MAX_GRID_PORTS = 4
@@ -55,6 +56,20 @@ return function(S)
     return type(value) == "number" and value >= low and value <= high and value % 1 == 0
   end
 
+  -- 3.6: a port of a grid that is no norns device (S.constants.GRID_PORTS,
+  -- above norns' 1..S.MAX_GRID_PORTS), attached by M.attach_virtual
+  local function virtual_port(port)
+    for _, each in pairs(GRID_PORTS) do
+      if port == each then return true end
+    end
+    return false
+  end
+
+  -- Any port a grid can be on: norns' four or a virtual one
+  local function grid_port_number(port)
+    return whole_number_in(port, 1, S.MAX_GRID_PORTS) or virtual_port(port)
+  end
+
   -- Pages per port: page(port) is 1 until set_page gives the port another
   function M.page(port)
     return S.grid_pages[port] or 1
@@ -68,7 +83,7 @@ return function(S)
   -- solo) and its keys' roles are forgotten (a recorder or mute key's
   -- release does nothing). Another port's keys are left alone
   function M.set_page(port, page)
-    if not whole_number_in(port, 1, S.MAX_GRID_PORTS) then return end
+    if not grid_port_number(port) then return end
     if not whole_number_in(page, 1, MAX_GRID_PAGES) then return end
     if page ~= M.page(port) then
       M.end_port_step_gestures(port)
@@ -359,9 +374,9 @@ return function(S)
   -- voice: a page change and a 64's half switch call it, so a step held on
   -- the page or half no longer shown never takes a level, never toggles at
   -- its release and closes a step editor it opened. The keys stay held. A
-  -- port that is not a whole number in 1..S.MAX_GRID_PORTS does nothing
+  -- port that is neither 1..S.MAX_GRID_PORTS nor a virtual one does nothing
   function M.end_port_step_gestures(port)
-    if not whole_number_in(port, 1, S.MAX_GRID_PORTS) then return end
+    if not grid_port_number(port) then return end
     for key_x, rows in pairs(step_keys[port] or {}) do
       for key_y in pairs(rows) do drop_step_key(port, key_x, key_y) end
     end
@@ -607,8 +622,19 @@ return function(S)
   -- grid to the port's rotation. Handlers live on the vport only: norns
   -- fires both device.key and vports[port].key, so also setting them on the
   -- device would run grid_key twice per press.
-  local function attach_grid(port)
+  -- Ports 1..S.MAX_GRID_PORTS take norns' own vports only (3.6): what
+  -- grid.connect(port) returns is the port's grid only when it is
+  -- grid.vports[port], so a mod that replaces grid.connect (midigrid) never
+  -- puts a device there (its grid attaches as a virtual one). nil otherwise
+  local function norns_vport(port)
     local grid_port = grid.connect(port)
+    if grid_port ~= nil and grid_port == grid.vports[port] then return grid_port end
+    return nil
+  end
+
+  local function attach_grid(port)
+    local grid_port = norns_vport(port)
+    if grid_port == nil then return nil end
     S.grids[port] = grid_port
     attached_devices[port] = grid_port.device
     grid_port.key = function(x, y, z)
@@ -662,7 +688,8 @@ return function(S)
     read_rotations()
     -- Connect up to 4 grids
     for port = 1, S.MAX_GRID_PORTS do
-      if grid.connect(port).device then
+      local vport = norns_vport(port)
+      if vport and vport.device then
         local grid_port = attach_grid(port)
         print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
       end
@@ -675,7 +702,7 @@ return function(S)
   -- A grid plugged in starts with no held keys, on page 1.
   function grid.add(device)
     local port = device.port
-    if not port then return end  -- device not assigned to a grid port
+    if not port or norns_vport(port) == nil then return end  -- device not assigned to a grid port
     forget_port(port)
     local grid_port = attach_grid(port)
     print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
@@ -703,12 +730,16 @@ return function(S)
   -- grid.remove. Run as the norns menu closes: a vport holding a device that
   -- is not attached, or another device than the one attached, is forgotten
   -- and attached, as grid.add does; an attached port whose vport is empty is
-  -- detached and forgotten, as grid.remove does
+  -- detached and forgotten, as grid.remove does. A port whose grid.connect
+  -- is no norns vport (norns_vport) is left as it is; a virtual grid's port
+  -- is never looked at
   function M.reconcile_ports()
     for port = 1, S.MAX_GRID_PORTS do
-      local grid_port = grid.connect(port)
+      local grid_port = norns_vport(port)
       local attached = S.grids[port]
-      if grid_port.device and (attached == nil or attached_devices[port] ~= grid_port.device) then
+      if grid_port == nil then
+        -- not norns' vport: nothing to follow here
+      elseif grid_port.device and (attached == nil or attached_devices[port] ~= grid_port.device) then
         forget_port(port)
         attach_grid(port)
         print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
@@ -726,6 +757,51 @@ return function(S)
   end
 
   S.register_menu_close(function() M.reconcile_ports() end)
+
+  -- 3.6 (design §0.1, §9): a grid that is no norns device (a remote grid,
+  -- the midigrid mod's) on a virtual port, one of S.constants.GRID_PORTS'
+  -- values. device is a table with whole-number cols and rows (at least
+  -- 1), a truthy device field and the functions led, all, refresh and
+  -- rotation, called as methods; its key is set to reach grid_key(port, ...).
+  -- The port's old state (and an old device's handler) is forgotten, and
+  -- the grids redraw. true when attached; false for any other port or device
+  local function virtual_device(device)
+    if type(device) ~= "table" or not device.device then return false end
+    if not whole_number_in(device.cols, 1, math.huge) or not whole_number_in(device.rows, 1, math.huge) then
+      return false
+    end
+    for _, method in ipairs({"led", "all", "refresh", "rotation"}) do
+      if type(device[method]) ~= "function" then return false end
+    end
+    return true
+  end
+
+  function M.attach_virtual(port, device)
+    if not virtual_port(port) or not virtual_device(device) then return false end
+    local old = S.grids[port]
+    if old and old ~= device then old.key = nil end
+    forget_port(port)
+    S.grids[port] = device
+    attached_devices[port] = device.device
+    GRID_ROTATION.sizes[port] = size_of(device)
+    device.key = function(x, y, z)
+      grid_key(port, x, y, z)
+    end
+    grid_redraw()
+    return true
+  end
+
+  -- A virtual port's grid goes: its held keys and holds are forgotten, its
+  -- key handler cleared, its entry removed. Any other port does nothing
+  function M.detach_virtual(port)
+    if not virtual_port(port) then return end
+    local device = S.grids[port]
+    if device then device.key = nil end
+    S.grids[port] = nil
+    attached_devices[port] = nil
+    GRID_ROTATION.sizes[port] = nil
+    forget_port(port)
+  end
 
   -- While grid_key handles a key, grid_redraw() calls from its actions (a
   -- param action that redraws, toggle_voice, ...) only wait: grid_key
@@ -822,6 +898,7 @@ return function(S)
   -- meanwhile reaches nothing (#468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()
     for port = 1, S.MAX_GRID_PORTS do forget_port(port) end
+    for _, port in pairs(GRID_PORTS) do forget_port(port) end
     for _, grid_port in pairs(S.grids) do
       grid_port.key = nil
       grid_port:rotation(0)
@@ -833,9 +910,16 @@ return function(S)
   end)
 
   -- Only a held key is consumed or waits for a hold; a port has an attached
-  -- device recorded exactly while it is attached
+  -- device recorded exactly while it is attached (norns' ports and the
+  -- virtual ones), and no grid is on any other port
   S.register_invariant("grid keys", function()
-    for port = 1, S.MAX_GRID_PORTS do
+    for port in pairs(S.grids) do
+      if not grid_port_number(port) then return "a grid is attached on port " .. tostring(port) end
+    end
+    local ports = {}
+    for port = 1, S.MAX_GRID_PORTS do ports[#ports + 1] = port end
+    for _, port in pairs(GRID_PORTS) do ports[#ports + 1] = port end
+    for _, port in ipairs(ports) do
       if (S.grids[port] ~= nil) ~= (attached_devices[port] ~= nil) then
         return "grid " .. port .. (S.grids[port] and " is attached with no device recorded"
           or " is not attached but has a device recorded")
