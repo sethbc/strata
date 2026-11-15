@@ -4,7 +4,7 @@ monome crow on norns' USB: its two inputs move Strata's modulation or fire an ac
 
 Everything starts off. Until you set an input or an output, Strata sends crow nothing, and with crow unplugged it sends nothing at all and keeps your settings. When crow is plugged in (again), Strata resets it, as norns does, then sets each jack up from the current settings.
 
-Built from crow's firmware v4.0.5 and its reference (monome's crow documentation, https://monome.org/docs/crow/reference/), and from norns' `lua/core/crow.lua`. It is unverified on the device until the 4.0 hardware check.
+Built from crow's firmware v4.0.5-4 and its reference (monome's crow documentation, https://monome.org/docs/crow/reference/), and from norns' `lua/core/crow.lua`. It is unverified on the device until the 4.0 hardware check.
 
 ## On the IO page
 
@@ -45,4 +45,4 @@ Strata sends crow at most 32 lines each tenth of a second. Notes, gates, trigger
 
 ## Sources
 
-crow's firmware v4.0.5 and its reference, and norns' `lua/core/crow.lua`. Unverified on the device until the 4.0 hardware check.
+crow's firmware v4.0.5-4 and its reference, and norns' `lua/core/crow.lua`. Unverified on the device until the 4.0 hardware check.

@@ -2,7 +2,7 @@
 
 ii is the small bus behind your modules that lets crow, Teletype, Just Friends, W/, an ER-301 or a TELEXo talk to each other. Strata reaches it only through crow, and only when you say so. Back to [IO](../pages/io.md).
 
-Built from crow's firmware v4.0.5 (its `lua/ii/` descriptors and `lua/ii.lua`), Teletype v5.0.0's `CROW.*` ops, and monome's ii page (https://monome.org/docs/modular/ii). It is unverified on the device until the 4.0 hardware check.
+Built from crow's firmware v4.0.5-4 (its `lua/ii/` descriptors and `lua/ii.lua`), Teletype v5.0.0-6's `CROW.*` ops, and monome's ii page (https://monome.org/docs/modular/ii). It is unverified on the device until the 4.0 hardware check.
 
 ## Who leads the bus
 
@@ -34,4 +34,4 @@ A call with a number out of range does nothing and prints one line in maiden. `C
 
 ## Sources
 
-crow's firmware v4.0.5 (`lua/ii/` and `lua/ii.lua`), Teletype v5.0.0's `CROW.*` ops and monome's ii page. Unverified on the device until the 4.0 hardware check.
+crow's firmware v4.0.5-4 (`lua/ii/` and `lua/ii.lua`), Teletype v5.0.0-6's `CROW.*` ops and monome's ii page. Unverified on the device until the 4.0 hardware check.
