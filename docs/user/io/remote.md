@@ -37,7 +37,7 @@ The section shows a line per device that is set, `grid: ...`, `arc: ...` and `mi
 - `size 12x6?`: a grid of a size Strata has no layout for
 - `in use`: another part of Strata (a controller) has that port
 
-**rescan** (K3) asks each device again, and connects the midigrid when none is attached.
+**rescan** (K3) asks each device again, and connects the midigrid when none is attached. A rescan leaves an attached MIDI grid as it is, so after unplugging its device and plugging it back in, turn `midi grid` off and on to connect it again.
 
 Unplugging the device detaches it; plugging it back in asks again. A remote grid's LEDs are sent thirty times a second, at most 96 changes each time, so a whole new page reaches a 16 by 16 grid within a tenth of a second.
 
