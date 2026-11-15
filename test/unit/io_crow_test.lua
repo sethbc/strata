@@ -460,6 +460,7 @@ test("norns' clock moving on and off crow's jacks sends nothing for a jack left 
   context.crow.clear()
   params:set("clock_source", 1)
   context.clock.run_for(0.2)
+  assert_equal(#context.crow.sent, 2, "input 1's two lines, nothing else")
   assert_equal(context.crow.sent[2], "input[1].mode('stream', 0.02)", "input 1's lines again")
 end)
 

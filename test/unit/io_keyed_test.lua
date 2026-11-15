@@ -115,6 +115,36 @@ test("a PSET keeps the key, not the index, and ends on the key's choice in eithe
   end
 end)
 
+test("add refuses a key a PSET cannot hold", function()
+  -- norns' params:read (lua/core/paramset.lua) reads a text param's value back as the line's text after
+  -- "id: " (leading spaces dropped, a newline ends it) and turns inf and -inf into numbers
+  local _, S = started()
+  local refused = {
+    {64, "not a non-empty string"}, {"", "not a non-empty string"}, {"64", "reads as a number"},
+    {"0x10", "reads as a number"}, {"1e3", "reads as a number"}, {"inf", "reads as a number"},
+    {"-inf", "reads as a number"}, {"two\nlines", "a newline"}, {" lead", "a surrounding space"},
+    {"trail ", "a surrounding space"}}
+  for index, case in ipairs(refused) do
+    local ok, message = pcall(S.lib.io_keyed.add, "probe_bad_" .. index, "probe bad", {"off", case[1]},
+      {"off", "X"}, function() end)
+    assert_true(not ok, "refused: " .. tostring(case[1]))
+    assert_true(tostring(message):find(case[2], 1, true) ~= nil, "says why: " .. tostring(message))
+    assert_equal(params.lookup["probe_bad_" .. index], nil, "and adds no param")
+  end
+end)
+
+test("a key with an inner space and punctuation survives a PSET", function()
+  local context, S = started()
+  S.lib.io_keyed.add("probe_pick", "probe pick", {"off", "crow 1/2", "lfo:3 (x)"}, {"off", "C", "L"}, function() end)
+  params:set("probe_pick", 2)
+  local path = context.data_dir .. "punctuation.pset"
+  params:write(path)
+  params:set("probe_pick", 3)
+  params:read(path)
+  assert_equal(S.lib.io_keyed.key("probe_pick"), "crow 1/2")
+  assert_equal(params:get("probe_pick"), 2)
+end)
+
 test("a PSET without the key puts the first key back", function()
   local context, S = started()
   local got = probe(S)
