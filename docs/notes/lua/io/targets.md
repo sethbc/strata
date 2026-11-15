@@ -1,0 +1,38 @@
+## Must not break
+
+- **One door**: a voice's external notes start, end and are expressed only through `S.lib.io_targets`. No target is called by any other module: a target registers with `S.register_note_target` and waits for the core's calls.
+- **An off goes to exactly the targets its on went to**, whatever is routed by then: each sounding note keeps the names of the targets whose `note_on` ran without raising (`sounding[voice][id].targets`), and its off goes to those names alone. A target whose `note_on` raised is not on the note and never gets its off.
+- **Every note on gets its off.** A note ends at its gate (a step's), at its hook's `ended` (a played note's), when its id plays again (ended first), and at every stop: the voice's stop (`voice_stop`), a route change (`route_changed(voice)`, from every route param's action, so a PSET load too), the voice becoming silenced by a mute or a solo (`silence_change`), the step output's `stop` (the patterns stopped: its step notes) and cleanup (step 142, every note). Cleanup sends every off at once: the LFO clock has stopped at 120, so nothing waits for a step.
+- **One list of offs**, checked from one `S.lib.lfos.on_step` hook against `clock.get_beats()`; no coroutine or clock per note. A note on for an id that sounds ends it first, which drops its pending off, so an off never lands after the note that replaced it.
+- **A silenced voice starts no target note** (`S.lib.voice_mix.silenced`); `available(voice)` is false for it, and its sounding notes end as it becomes silenced.
+- **Every call to a target is contained** (`S.lib.ui_frame.contained_call`): one that raises prints `strata: target <name> failed:` with its traceback once and is skipped (every field, `routed` included) until the step output's `stop` or a `route_changed` of any voice clears the failures. `stop_all` at cleanup is called on every target, failed or not.
+- **Hooks and targets never yield** and never call `S.lib.notes.play`: the core runs inside the note hooks, the step output's coroutine and the LFO step.
+- **The ids**: `"s" .. k` for a step's k-th pitch (`event.pitches`, which already carry the step's pitch lock: played as given), `"m" .. key` for a played note of owner `midi`. A note of any other owner (the sequencer's `seq` notes) is ignored by the hook: the step output carries them, with their gates.
+- **The `targets` step output plays after `voices`**: it is registered at the start step `io_targets` (161), after the sequencer's include registered `voices`.
+
+## Owns
+
+- `lib/io/targets.lua` (`S.lib.io_targets`): `TARGETS` (`order`, `zero_volt_note` 60, `notes_per_volt` 12, and the ids' prefixes and the played owner), `volts(pitch)`, `route_changed(voice)`, `end_target(name)`, `stop_all()`, `sounding(voice)`.
+- The step output `targets`, the note hook `targets`, an LFO step hook, a voice-stop hook, a silence hook, IO's `voice` section, the start step `io_targets` (161), the cleanup step `io_targets` (142) and the invariant `targets`.
+- Its unit tests: `test/unit/io_targets_test.lua`.
+
+## A target
+
+`S.register_note_target({name, routed, note_on, note_off, express, stop_all, rows, status})`, the first four required:
+- `routed(voice)`: true when the voice plays the target now. The target's route params call `S.lib.io_targets.route_changed(voice)` from their actions.
+- `note_on(voice, id, pitch, velocity, info)`: `pitch` a fractional MIDI note, `velocity` 0 to 1, `info` `{source = "step"}` or `{source = "midi", owner = "midi", key}`. `S.lib.io_targets.volts(pitch)` is `(pitch - 60) / 12`, the one conversion for every target that takes volts; each target clamps to its device's range.
+- `note_off(voice, id)`; `express(voice, id)` (optional: a played note's expression changed; read it with `S.lib.expression.raw(voice, info.owner, info.key)`); `stop_all()` (optional: at cleanup, after every off).
+- `rows(voice)` and `status(voice)` (optional): the rows the target adds to IO's `voice` section for the selected voice, and a mark for its title row.
+
+## How it works
+
+- `sounding[voice][id] = {pitch, targets = {name, ...}, off_beat}`; `offs` is the list of pending offs, each naming the record it ends. `sounding(voice)` returns a copy.
+- **Steps**: `available(voice)` is true when the voice is not silenced and some target's `routed(voice)` is. `play(event)` starts, for each `k, pitch` of `event.pitches`, the note `"s" .. k` on every routed target with `event.velocity` and its off at `event.beat + event.gate_beats`. `stop` clears the failures and ends every voice's `s` notes.
+- **Played notes**: the hook's `started` and `moved` start `"m" .. key` (a sounding one ended first, so a move is an off then an on at the new pitch); `ended` ends it; `expressed` calls `express(voice, id)` on the note's targets that have one.
+- **`end_target(name)`**: that target's off for every sounding note that names it, its name dropped from them (a note left on no target is forgotten).
+- **`stop_all()`**: every note ended (each voice, in id order), then each registered target's `stop_all`.
+- **Order of targets**: `TARGETS.order` (`midi`, `crow`, `jf`, `wsyn`, `er301`, `txo`, `nb`), then any other name in registration order: the order of note ons and of IO's rows.
+
+## IO's voice section
+
+Titled `voice <n>` for the selected voice (ALT+E2 on IO selects it). Its rows are each target's `rows(voice)`, in the targets' order; its status the targets' non-nil `status(voice)` texts joined by a space, drawn at the right of the title. A target's `rows` or `status` that raises is contained (one console line per new message) and left out. With no target registered the section is its title alone. Its layout states: `no targets`, and `a target's rows`, which registers a layout probe target (once per script) with a param row, a status row and the mark `[!]`.

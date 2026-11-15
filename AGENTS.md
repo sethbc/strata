@@ -248,6 +248,7 @@ The Lua side's, across modules:
 - **Step locks and notes are base overrides** (`S.lib.engine_sync.set_base_override`), never `params:set`; they end at the voice's next step without them, a stop, `replace_pattern` or a shorter length. `docs/notes/lua/sequencer.md`
 - **Strata follows the transport and never leads it**: `clock.transport` start and stop move the patterns only while `seq_follow_transport` is on; nothing calls the clock's own start or stop; a clock tests the beat its `clock.sync` returned, never the live beat. `docs/notes/lua/sequencer.md`
 - **Notes** are played, released and expressed only through `S.lib.notes`, which alone calls `noteOn`, `noteOff`, `noteExpression` and `setNotePool`; its flush sends at most 16 `noteExpression` a step, counted (`count_sends`), never deferred. `docs/notes/lua/notes.md`
+- **Targets**: a voice's external notes start, end and are expressed only through `S.lib.io_targets`; an off goes to exactly the targets its on went to, and a voice's stop, a route change, a mute, the patterns' stop and cleanup end every note. `docs/notes/lua/io/targets.md`
 
 ## Working in parallel
 

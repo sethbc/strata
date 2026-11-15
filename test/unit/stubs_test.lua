@@ -30,7 +30,10 @@ local function stub_state_source(extra_registry)
     .. " register_lock_change = function() end, register_lfo_global_destination = function() end,"
     .. " register_step_output = function() end, register_mod_source = function() end,"
     -- 3.5's
-    .. " register_voice_stop = function() end, register_freeze_change = function() end } end"
+    .. " register_voice_stop = function() end, register_freeze_change = function() end,"
+    -- 3.6's (lib/io/targets.lua calls these as it loads)
+    .. " register_note_hook = function() end, register_silence_change = function() end,"
+    .. " register_io_section = function() end } end"
 end
 
 test("each load gets its own data directory, even after the same random seed (#50)", function()

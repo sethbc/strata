@@ -34,6 +34,18 @@ Some rows are rig settings: they describe how your rig is wired, not a sound, so
 
 Each setting takes effect once the part of the rig that reads it arrives with its section.
 
+## Voice routes
+
+The `voice` section comes first. Its title names the selected voice (`voice 3`); ALT+E2 selects another. Under it, each external instrument Strata can play (MIDI out, crow, Just Friends, W/, ER-301, TELEXo, nb voices, each arriving in its own part of 3.6) adds its routes for that voice, and a mark at the right of the title tells you when one needs attention. Until one arrives the section is its title alone.
+
+What a routed voice plays on its targets:
+- **its pattern steps**: each step plays the step's pitches (the chord's notes, or the voice's own pitch, moved by the step's pitch lock) at the step's level, and each note ends when the step's gate does; a ratchet's next hit ends the note before it plays again
+- **its played notes**: each MIDI note you play on the voice, held for as long as you hold it (or latch it), with its bend, pressure and slide where the target takes them
+
+A note always ends on the instruments it started on, even if you change a route while it sounds. Every note a voice sounds ends when you stop the voice, change one of its routes, stop the patterns (their step notes), load a PSET or leave the script. A muted voice, or one silenced by another's solo, plays nothing on its targets, and its notes end as it falls silent.
+
+Pitch to volts: a target that takes volts plays MIDI note 60 (middle C) at 0 V, one volt an octave, so note 72 is 1 V and note 48 is -1 V; each clamps to its device's range.
+
 ## Controls
 
 - **E2** - Move to the next or previous row; past the last one, scroll over the lines below it

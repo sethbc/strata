@@ -213,6 +213,7 @@ local START_ORDER = {
   waveforms = 140,       -- lib/waveforms.lua: the peaks read loop
   playheads = 150,       -- lib/playheads.lua: the playhead clock
   pattern_transport = 160,  -- lib/sequencer.lua: the clock's transport start and stop handlers
+  io_targets = 161,      -- lib/io/targets.lua: the targets step output, after voices (3.6)
 }
 
 -- How long a randomize can be undone (lib/mutation.lua, S.undo)
@@ -274,6 +275,7 @@ local CLEANUP_ORDER = {
   record = 132,             -- lib/record.lua: the recordState poll
   input_meter = 135,        -- lib/input_level.lua: the input level polls
   ui_flash = 140,           -- lib/ui/flash.lua: the header's and hint row's flash clocks
+  io_targets = 142,         -- lib/io/targets.lua: every target note ended at once (3.6)
   midi_handler = 150,       -- lib/midi_in.lua
   io_ports = 152,           -- lib/io/ports.lua: the hot-plug handlers found back, the vport events cleared (3.6)
   voices_off = 160,         -- lib/engine_sync.lua: a voiceOff per running voice (reaches no handler on norns)
