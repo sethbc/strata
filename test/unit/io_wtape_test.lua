@@ -12,7 +12,10 @@ local function started(leading)
   local log, state = {}, {leading = leading ~= false}
   local context = load_strata({before_init = function()
     local function record(name)
-      return function(...) log[#log + 1] = {name, ...}; return state.leading end
+      return function(...)
+        log[#log + 1] = {name, ...}
+        return state.leading and state.accept ~= false
+      end
     end
     local_value("S").lib.io_ii = {leads = function() return state.leading end,
       send = record("send"), send_off = record("send_off"), send_direct = record("send_direct"),
@@ -101,5 +104,128 @@ test("without the ii module the device does nothing and the page draws", functio
   assert_equal(title_status(S), "[--]")
   local ok, problem = pcall(redraw)
   assert_true(ok, tostring(problem))
+end)
+
+test("a command the queue dropped is not shown as sent, and the next press sends the same value", function()
+  -- ruling 13: while the bus leads and send returns false the row and its next value stay
+  local _, S, log, state = started()
+  state.accept = false
+  press(S, "play")
+  assert_equal(#log, 1, "the line was offered")
+  assert_equal(row(S, "play").shown, "-", "not shown as sent")
+  assert_equal(S.lib.ui_flash.text("hints"), "ii queue full")
+  state.accept = true
+  press(S, "play")
+  assert_equal(line(log[2]), "send,wtape,play,1", "the same value again")
+  assert_equal(row(S, "play").shown, "on")
+  state.accept = false
+  press(S, "play")
+  assert_equal(row(S, "play").shown, "on", "a dropped press leaves the text")
+  state.accept = true
+  press(S, "play")
+  assert_equal(line(log[4]), "send,wtape,play,0", "and the alternation")
+  assert_equal(row(S, "play").shown, "off")
+end)
+
+test("the bus leaving and returning mid-sequence", function()
+  local _, S, log, state = started()
+  press(S, "record")
+  assert_equal(line(log[1]), "send,wtape,record,1"); assert_equal(row(S, "record").shown, "on")
+  state.leading = false
+  press(S, "record")
+  assert_equal(#log, 1, "nothing is sent while the bus does not lead")
+  assert_equal(row(S, "record").shown, "on", "the text stays on")
+  state.leading = true
+  press(S, "record")
+  assert_equal(line(log[2]), "send,wtape,record,0")
+  assert_equal(row(S, "record").shown, "off")
+end)
+
+-- The layout states reach the leading look as a player does: through the
+-- real leads() (the rig's ii_bus and a crow), the ii section's rig row and
+-- K3 (ruling 12). The double's leads() answers from that real state.
+local function started_real_bus(with_ii)
+  local log = {}
+  local context = load_strata({before_init = function()
+    local S = local_value("S")
+    if not with_ii then return end
+    S.lib.io_ii = {
+      leads = function() return S.lib.io_rig.get("ii_bus") == "strata" and S.lib.io_crow.present() end,
+      send = function(...) log[#log + 1] = {"send", ...}; return S.lib.io_ii.leads() end,
+      send_off = function() return false end, send_direct = function() return false end,
+      add_params = function() end}
+  end})
+  finish_startup(context)
+  local S = local_value("S")
+  if with_ii then
+    for index = #S.registry.io_sections, 1, -1 do
+      if S.registry.io_sections[index].name == "ii" then table.remove(S.registry.io_sections, index) end
+    end
+    S.register_io_section({name = "ii", title = "ii",
+      rows = function() return {{kind = "rig", key = "ii_bus", label = "bus"}} end})
+  end
+  return context, S, log
+end
+
+local function wtape_states(S)
+  for _, record in ipairs(S.registry.io_sections) do
+    if record.name == "wtape" then return record.layout_states end
+  end
+end
+
+local function state_named(S, name)
+  for _, state in ipairs(wtape_states(S)) do if state.name == name then return state end end
+  error("no layout state " .. name)
+end
+
+test("the not-leading state draws the not-leading look", function()
+  local context, S = started_real_bus(true)
+  state_named(S, "the bus not leading").setup(context)
+  assert_equal(S.lib.io_ii.leads(), false)
+  assert_equal(title_status(S), "[--]")
+end)
+
+test("the leading states end with the bus leading and show what a player's presses would", function()
+  local context, S, log = started_real_bus(true)
+  state_named(S, "leading before any command").setup(context)
+  assert_true(S.lib.io_ii.leads(), "the bus leads")
+  assert_equal(S.lib.io_rig.get("ii_bus"), "strata")
+  assert_equal(#log, 0, "nothing sent yet")
+  assert_equal(title_status(S), nil)
+  assert_equal(row(S, "record").shown, "-")
+
+  context, S, log = started_real_bus(true)
+  state_named(S, "leading after commands").setup(context)
+  assert_true(S.lib.io_ii.leads(), "the bus leads")
+  local lines = {}
+  for _, entry in ipairs(log) do lines[#lines + 1] = line(entry) end
+  assert_equal(table.concat(lines, "|"), "send,wtape,record,1|send,wtape,play,1|send,wtape,reverse|"
+    .. "send,wtape,loop_start|send,wtape,loop_end|send,wtape,loop_active,1")
+  assert_equal(row(S, "record").shown, "on"); assert_equal(row(S, "play").shown, "on")
+  assert_equal(row(S, "reverse").shown, "sent"); assert_equal(row(S, "loop").shown, "on")
+end)
+
+test("without the ii module each layout state draws and sends nothing", function()
+  local context, S = started_real_bus(false)
+  for _, state in ipairs(wtape_states(S)) do
+    state.setup(context)
+    local ok, problem = pcall(redraw)
+    assert_true(ok, state.name .. ": " .. tostring(problem))
+    assert_equal(title_status(S), "[--]", state.name)
+  end
+  assert_equal(#context.crow.sent, 0, "nothing reached crow")
+end)
+
+test("a layout state raises where the ii section is present and the bus still does not lead", function()
+  local context, S = started_real_bus(true)
+  S.lib.io_ii.leads = function() return false end  -- a bus that never leads, whatever the row says
+  local ok, problem = pcall(state_named(S, "leading before any command").setup, context)
+  assert_true(not ok, "raises")
+  assert_true(tostring(problem):find("ii_bus", 1, true), tostring(problem))
+  -- and without the row the state quietly stays on the not-leading look
+  for _, record in ipairs(S.registry.io_sections) do
+    if record.name == "ii" then record.rows = function() return {{kind = "status", text = "no bus row"}} end end
+  end
+  assert_true(pcall(state_named(S, "leading after commands").setup, context), "no row: no raise")
 end)
 end

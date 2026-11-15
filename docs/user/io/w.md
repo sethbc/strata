@@ -4,7 +4,7 @@ Whimsical Raps' W/ over the ii bus: W/ synth plays a voice's notes, and W/ tape'
 
 Both need the ii bus to be Strata's (the ii bus setting on IO) and a crow connected. With the bus off, or led by a Teletype, Strata sends W/ nothing.
 
-A W/ runs one engine at a time (Tape, Delay or Synth) and you switch engines from its panel. Strata talks to the engine by its ii address, so the synth rows work while W/ runs Synth and the tape rows while it runs Tape.
+A W/ runs one engine at a time (Tape, Delay or Synth) and you switch engines from its panel. Each engine has its own ii address. Strata cannot tell which engine is running, and it is not known whether W/ ignores commands for an engine it is not running, so run Synth for the synth rows and Tape for the tape rows.
 
 ## W/ synth
 
@@ -23,7 +23,7 @@ The `w/ tape` section has six rows. Each press sends one command and the row sho
 | loop end | loop end at the current time | sent |
 | loop | loop on, then off | on, off |
 
-While the bus is not Strata's a press sends nothing, flashes `ii bus is not strata's`, and the section shows `[--]`.
+While the bus is not Strata's a press sends nothing, flashes `ii bus is not strata's`, and the section shows `[--]`. A row changes only when its command was queued: if the bus's queue is full the press flashes `ii queue full`, the row keeps what it showed, and pressing again sends the same command.
 
 ## Good to know
 
