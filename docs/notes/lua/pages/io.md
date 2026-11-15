@@ -11,11 +11,12 @@
 - **While the cursor's row is out of view E3 and K3 only bring it back** (`hidden`: scrolled past it with E2, as SETUP, or a section `show_section` put at the top without it); the hint row then reads `E2:row E3:back`.
 - **A rig row's failed write flashes `setting not saved`** on the hint row (`S.lib.ui_flash`, scoped to IO), as SETUP's device settings do.
 - **ALT+E2 selects the voice through `S.lib.ui_keys.select_voice_by`**, never by setting `S.selected_voice`; ALT+E3 on a rig row steps it finely (`step(key, d, true)`), and on a param row reaches `enc_param_delta`, which is fine with ALT held.
+- **A layout state reaches a row only through `go_to_row(who, section, match)`** (#707): it shows the section, finds the first of its rows with `match`'s one identity (`param_id`, `key` or `id`), turns E2 over the selectable rows between the cursor and it (either way), checks the cursor landed and returns the row. It turns nothing and presses nothing: E3 on a rig row, K3 on an action or detail row stays the caller's. It raises at level 0, `<who> layout: no row <identity> in <section>` (before the cursor moves) or `<who> layout: the cursor did not reach <identity>`, where `<identity>` is the field and its value (`key e16_port`). A module carries no copy of these lines; a section never lists one identity twice.
 - **No arc fields**: IO's arc file (the tape's rings) comes later in 3.6; until then the rings stay dark on IO (`test/unit/ui_pages_test.lua` exempts IO beside SETUP).
 
 ## Owns
 
-- `lib/pages/io.lua` (`S.lib.pages_io`): the IO record (`draw`, `hints`, `enc`, `alt_enc`, `key`, `leave`, `layout_states`), `S.io_cursor`; on the module `IO_PAGE` (the layout, the section order, the row kinds and the texts), `rows()` and `show_section(name)`.
+- `lib/pages/io.lua` (`S.lib.pages_io`): the IO record (`draw`, `hints`, `enc`, `alt_enc`, `key`, `leave`, `layout_states`), `S.io_cursor`; on the module `IO_PAGE` (the layout, the section order, the row kinds and the texts), `rows()`, `show_section(name)` and `go_to_row(who, section, match)`, the one way a layout state reaches a row (the controllers', remote, w/ tape, ii, TELEXo and targets' states use it).
 - The registry it reads, `S.registry.io_sections`, and its register function `S.register_io_section` are in `lib/state.lua` (`docs/notes/lua/state-and-voices.md`).
 - Its unit tests: `test/unit/pages_io_test.lua`; the registry's checks are in `test/unit/registries_test.lua`.
 

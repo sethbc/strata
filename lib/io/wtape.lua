@@ -72,35 +72,19 @@ return function(S)
   end
 
   -- The layout states below act as a player does, through the IO page's
-  -- keys. The rows of a section, found by label or rig key
-  local function section_index(rows, section, matches)
-    for index, row in ipairs(rows) do
-      if row.section == section and matches(row) then return index end
-    end
-  end
-
-  -- E2 to the row at `target` (counting selectable rows between), checked
-  local function move_to(section, matches, what)
+  -- keys: on IO's page, S.lib.pages_io.go_to_row puts the cursor on the
+  -- row (a rig row by its key, an action row by its id, its label; its E2
+  -- turn ends the pinned view, so the page acts on the row)
+  local function move_to(section, match)
     S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.IO)
-    S.lib.pages_io.show_section(section)
-    enc(2, 1); enc(2, -1)  -- the page acts only on a row the user has moved to
-    local rows = S.lib.pages_io.rows()
-    local target = section_index(rows, section, matches)
-    if not target then error("wtape layout: the IO page has no " .. what, 3) end
-    local from = S.io_cursor
-    local first, last = math.min(from, target), math.max(from, target)
-    local moves = 0
-    for index = first, last do
-      if rows[index].selectable ~= false and index ~= from then moves = moves + 1 end
-    end
-    enc(2, target >= from and moves or -moves)
-    if S.lib.pages_io.rows()[S.io_cursor] == nil or S.io_cursor ~= target then
-      error("wtape layout: E2 did not reach " .. what, 3)
-    end
+    S.lib.pages_io.go_to_row("wtape", section, match)
   end
 
-  local function has_row(section, matches)
-    return section_index(S.lib.pages_io.rows(), section, matches) ~= nil
+  local function has_row(section, key)
+    for _, row in ipairs(S.lib.pages_io.rows()) do
+      if row.section == section and row.key == key then return true end
+    end
+    return false
   end
 
   -- With the bus reachable (an ii module and the ii section's bus row) the
@@ -108,10 +92,9 @@ return function(S)
   -- raises when the bus still does not lead. Where it is not reachable the
   -- state stays on the not-leading look
   local function lead_the_bus(context)
-    local is_bus = function(row) return row.key == WTAPE.bus_key end
-    if not S.lib.io_ii or not has_row(WTAPE.bus_section, is_bus) then return false end
+    if not S.lib.io_ii or not has_row(WTAPE.bus_section, WTAPE.bus_key) then return false end
     context.crow.plug()
-    move_to(WTAPE.bus_section, is_bus, "row for rig key " .. WTAPE.bus_key)
+    move_to(WTAPE.bus_section, {key = WTAPE.bus_key})
     -- one detent at a time toward the value, by the spec's own order, and
     -- no more turns than the spec has values
     local choices = S.lib.io_rig.RIG.specs[WTAPE.bus_key].values
@@ -131,7 +114,7 @@ return function(S)
 
   local function press_rows_with_k3()
     for _, spec in ipairs(WTAPE.rows) do
-      move_to(WTAPE.section, function(row) return row.label == spec.label end, "row " .. spec.label)
+      move_to(WTAPE.section, {id = spec.label})
       key(3, 1); key(3, 0)
     end
   end
@@ -142,7 +125,7 @@ return function(S)
     rows = function()
       local rows = {}
       for _, spec in ipairs(WTAPE.rows) do
-        rows[#rows + 1] = {label = spec.label, kind = "action", hint = spec.label,
+        rows[#rows + 1] = {label = spec.label, id = spec.label, kind = "action", hint = spec.label,
           run = function() press(spec) end,
           text = function() return shown[spec.label] or WTAPE.unsent end}
       end

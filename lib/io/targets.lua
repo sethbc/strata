@@ -301,8 +301,8 @@ return function(S)
   -- The layout target both probe states register (once a script), after
   -- the real targets' rows: "a target's status" leaves the section at its
   -- top (the title with the probe's mark); "a target's rows" reaches the
-  -- probe's row as a player does (the section shown, the row found by its
-  -- id, E2 over the selectable rows to it) and raises when it is not there
+  -- probe's row as a player does (S.lib.pages_io.go_to_row, by its id),
+  -- which raises when it is not there
   local LAYOUT_TARGET = "layout probe"
   local function register_layout_target()
     if target_named(LAYOUT_TARGET) then return end
@@ -323,23 +323,7 @@ return function(S)
 
   local function layout_target_rows()
     register_layout_target()
-    S.lib.pages_io.show_section("voice")
-    local rows = S.lib.pages_io.rows()
-    local target
-    for index, row in ipairs(rows) do
-      if row.section == "voice" and row.id == "probe" then target = index end
-    end
-    if not target then error("targets layout: the IO page has no layout probe row in the voice section", 0) end
-    local from = S.io_cursor
-    local moves = 0
-    for index = math.min(from, target), math.max(from, target) do
-      if rows[index].selectable ~= false and index ~= from then moves = moves + 1 end
-    end
-    enc(2, target >= from and moves or -moves)
-    local row = S.lib.pages_io.rows()[S.io_cursor]
-    if not (row and row.section == "voice" and row.id == "probe") then
-      error("targets layout: E2 did not reach the layout probe row", 0)
-    end
+    S.lib.pages_io.go_to_row("targets", "voice", {id = "probe"})
   end
 
   S.register_io_section({name = "voice",

@@ -165,28 +165,11 @@ return function(S)
     end
   end
 
-  -- The layout states reach the TELEXo's row as a player does: the voice
-  -- section shown, the row found by its id within it, E2 over the
-  -- selectable rows to it; a raise naming the row when it is not there or
-  -- the cursor did not land on it
+  -- The layout states reach the TELEXo's row as a player does, through
+  -- S.lib.pages_io.go_to_row (its id in the voice section), which raises
+  -- naming the row when it is not there or the cursor did not land on it
   local function move_to_row()
-    S.lib.pages_io.show_section("voice")
-    local rows = S.lib.pages_io.rows()
-    local target
-    for index, row in ipairs(rows) do
-      if row.section == "voice" and row.id == TXO.labels.row then target = index end
-    end
-    if not target then error("txo layout: the IO page has no txo row in the voice section", 0) end
-    local from = S.io_cursor
-    local moves = 0
-    for index = math.min(from, target), math.max(from, target) do
-      if rows[index].selectable ~= false and index ~= from then moves = moves + 1 end
-    end
-    enc(2, target >= from and moves or -moves)
-    local row = S.lib.pages_io.rows()[S.io_cursor]
-    if not (row and row.section == "voice" and row.id == TXO.labels.row) then
-      error("txo layout: E2 did not reach the txo row", 0)
-    end
+    S.lib.pages_io.go_to_row("txo", "voice", {id = TXO.labels.row})
   end
 
   S.register_note_target({name = "txo",

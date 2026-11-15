@@ -360,8 +360,9 @@ return function(S)
   -- IO's ii section
   ---------------------------------------------------------------------------
 
-  -- The bus row turned as a user turns it (ruling 26): the section shown,
-  -- E2 to the row, E3 to value; raises when the page cannot get there
+  -- The bus row turned as a user turns it (ruling 26): the cursor put on
+  -- the row by S.lib.pages_io.go_to_row, E3 to value; raises when the page
+  -- cannot get there
   local function turn_bus(value)
     local values = S.lib.io_rig.RIG.specs[SPEC.bus_key].values
     local function index_of(choice)
@@ -370,23 +371,7 @@ return function(S)
       end
       error("ii layout: no bus setting " .. tostring(choice), 3)
     end
-    S.lib.pages_io.show_section("ii")
-    local rows = S.lib.pages_io.rows()
-    local target
-    for index, row in ipairs(rows) do
-      if row.section == "ii" and row.key == SPEC.bus_key then target = index end
-    end
-    if not target then error("ii layout: the IO page has no ii row for " .. SPEC.bus_key, 2) end
-    local from = S.io_cursor
-    local moves = 0
-    for index = math.min(from, target), math.max(from, target) do
-      if rows[index].selectable ~= false and index ~= from then moves = moves + 1 end
-    end
-    enc(2, target >= from and moves or -moves)
-    local row = S.lib.pages_io.rows()[S.io_cursor]
-    if not (row and row.section == "ii" and row.key == SPEC.bus_key) then
-      error("ii layout: E2 did not reach the " .. SPEC.bus_key .. " row", 2)
-    end
+    S.lib.pages_io.go_to_row("ii", "ii", {key = SPEC.bus_key})
     enc(3, index_of(value) - index_of(bus()))
     if bus() ~= value then error("ii layout: E3 did not set the bus to " .. value, 2) end
   end
