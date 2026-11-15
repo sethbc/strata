@@ -5,11 +5,13 @@
 -- S.lib.mpe), with the note off modes latch and release (auto: latch in
 -- the plain modes, release in the MPE modes). Velocity, the plain modes'
 -- pitchbend per voice, poly aftertouch and channel pressure, and MPE's
--- per-note bend, pressure and slide (S.lib.expression). The vport hot-plug
--- handlers, the note tap the zones editor learns through, and the key and
--- bend state (S.midi_device, S.midi_state). The functions stay global. The
--- MIDI constants are a field of this module's table (S.lib.midi_in.MIDI)
--- for the MIDI params in lib/params_setup.lua. Registers the cleanup step
+-- per-note bend, pressure and slide (S.lib.expression). It listens, and
+-- hears of devices and claims, through S.lib.io_ports (lib/io/ports.lua),
+-- never on a port another name claims. The note tap the zones editor
+-- learns through, and the key and bend state (S.midi_device,
+-- S.midi_state). The functions stay global. The MIDI constants are a
+-- field of this module's table (S.lib.midi_in.MIDI) for the MIDI params in
+-- lib/params_setup.lua. Registers the cleanup step
 -- that detaches MIDI. See docs/notes/lua/midi.md.
 
 return function(S)
@@ -61,11 +63,17 @@ return function(S)
   -- Listen to MIDI vport `port`. The handler lives on the vport only (as for
   -- grids and arc): norns fires both device.event and vports[port].event, so
   -- setting it on the device as well would play every note twice.
+  -- S.lib.io_ports sets the vport's event (its listener "midi_in").
   -- The device last seen on the selected vport (nil: none, or it was
   -- unplugged). SYSTEM > DEVICES moves a device with update_devices() only,
   -- calling neither midi.add nor midi.remove, so a swap is visible only
-  -- against this record (M.reconcile).
+  -- against this record (M.reconcile, and S.lib.io_ports' change at the
+  -- menu's close). listening_port: the port midi_event listens on (nil:
+  -- none, the selected one claimed). port_names: each port's device name
+  -- as last heard, for the unplug's console line
   local attached_device = nil
+  local listening_port = nil
+  local port_names = {}
 
   -- A port number as a vport index: rounded and kept to norns' ports, so a
   -- fraction (a PSET written before the midi_device param stepped whole
@@ -74,11 +82,17 @@ return function(S)
     return util.clamp(util.round(port), 1, #midi.vports)
   end
 
+  -- A port another name claims (a controller, a remote grid) is not
+  -- listened to: its notes are never played
   function attach_midi(port)
     port = vport_index(port)
-    if S.midi_device then S.midi_device.event = nil end
+    if listening_port then S.lib.io_ports.unlisten(listening_port, "midi_in") end
+    listening_port = nil
     S.midi_device = midi.connect(port)
-    S.midi_device.event = midi_event
+    if S.lib.io_ports.owner(port) == nil then
+      S.lib.io_ports.listen(port, "midi_in", midi_event)
+      listening_port = port
+    end
     attached_device = S.midi_device.device
   end
 
@@ -86,20 +100,22 @@ return function(S)
     attach_midi(params:get("midi_device"))
   end
 
-  -- Hot-plug. norns assigns the device to its vport before calling midi.add,
-  -- and clears the vport only after midi.remove returns.
-  -- They read the midi_device param, which init adds, so they are assigned in
-  -- the start step (below), never at include time (#469).
-  local function midi_added(device)
+  -- Hot-plug, through S.lib.io_ports.on_change: norns assigns the device to
+  -- its vport before calling midi.add, and clears the vport only after
+  -- midi.remove returns. They read the midi_device param, which init adds,
+  -- so they are registered in the start step (below), never at include
+  -- time (#469).
+  local function midi_added(port, name)
+    port_names[port] = name
     attach_midi(params:get("midi_device"))
     -- another controller may be on the port: its master bend range is its own (#688)
-    if device.port == vport_index(params:get("midi_device")) then S.lib.mpe.reset_ranges() end
+    if port == vport_index(params:get("midi_device")) then S.lib.mpe.reset_ranges() end
     request_redraw()  -- SETUP shows the device
-    print("midi connected: " .. tostring(device.name))
+    print("midi connected: " .. tostring(name))
   end
 
-  local function midi_removed(device)
-    if device.port == vport_index(params:get("midi_device")) then
+  local function midi_removed(port)
+    if port == vport_index(params:get("midi_device")) then
       reset_midi_input()
       S.lib.mpe.reset_ranges()
       attached_device = nil
@@ -107,7 +123,23 @@ return function(S)
     -- SETUP shows the port as empty: norns clears the vport as midi.remove
     -- returns, before the next frame draws
     request_redraw()
-    print("midi disconnected: " .. tostring(device.name))
+    print("midi disconnected: " .. tostring(port_names[port]))
+    port_names[port] = nil
+  end
+
+  local function port_changed(port, name)
+    if name ~= nil then midi_added(port, name) else midi_removed(port) end
+  end
+
+  -- A claim of the selected port releases every MIDI note, as a port change
+  -- does, and stops the listening; its release listens again
+  local function port_claimed(port, owner)
+    if port ~= vport_index(params:get("midi_device")) then return end
+    attach_midi(port)
+    if owner ~= nil then
+      reset_midi_input()
+      S.lib.mpe.reset_ranges()
+    end
   end
 
   -- Called as the norns menu closes: if the device on the selected vport is
@@ -549,8 +581,9 @@ return function(S)
     S.register_grain_restart(function(voice_idx)
       if not S.voices[voice_idx].active then S.midi_state.started[voice_idx] = nil end
     end)
-    midi.add = midi_added
-    midi.remove = midi_removed
+    for port = 1, #midi.vports do port_names[port] = S.lib.io_ports.device(port) end
+    S.lib.io_ports.on_change("midi_in", port_changed)
+    S.lib.io_ports.on_claim("midi_in", port_claimed)
     midi_init()
     M.repair_midi_map()
     -- a member count or zone change (the menu, RPN 6, a PSET load, the
@@ -564,14 +597,13 @@ return function(S)
     end)
   end)
 
-  -- Stop listening to MIDI before the voices go off, clear the note tap, and
-  -- hand hot-plug back (no-ops, as norns' midi.cleanup() leaves them at a
-  -- script change; SLEEP runs only cleanup(), #468)
+  -- Stop listening to MIDI before the voices go off and clear the note tap
+  -- (S.lib.io_ports' own step, after this one, hands hot-plug back; SLEEP
+  -- runs only cleanup(), #468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.midi_handler, function()
-    if S.midi_device then S.midi_device.event = nil end
+    if listening_port then S.lib.io_ports.unlisten(listening_port, "midi_in") end
+    listening_port = nil
     note_tap = nil
-    midi.add = function() end
-    midi.remove = function() end
   end)
 
   -- A key is down on a voice exactly while some channel's note on lists the

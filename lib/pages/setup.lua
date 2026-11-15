@@ -233,10 +233,14 @@ return function(S)
       screen.level(row.dim and 4 or 10)
       screen.text(row.text)
     elseif row.param_id == "midi_device" then
-      -- the label, the selected port and its device, cut to end by x value_right
+      -- the label, the selected port and its device, or the claim's owner in
+      -- parentheses (a controller, a remote grid), cut to end by x value_right
       screen.level(selected and 15 or 4)
-      local prefix = row.label .. " " .. params:get("midi_device") .. ": "
-      screen.text(prefix .. S.lib.ui_text.fit_text(midi_device_name(), value_right - screen.text_extents(prefix)))
+      local port = params:get("midi_device")
+      local prefix = row.label .. " " .. port .. ": "
+      local owner = S.lib.io_ports.owner(util.round(port))
+      local name = owner and ("(" .. owner .. ")") or midi_device_name()
+      screen.text(prefix .. S.lib.ui_text.fit_text(name, value_right - screen.text_extents(prefix)))
     else
       screen.level(selected and 15 or 4)
       screen.text(row.label)

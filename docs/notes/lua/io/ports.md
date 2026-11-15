@@ -1,0 +1,32 @@
+## Must not break
+
+- **One module owns the MIDI ports**: only `lib/io/ports.lua` sets `midi.add`, `midi.remove` or a MIDI vport's `event` (a structure test checks every other `lib/**.lua` and `strata.lua`, including names assigned from `midi.connect` or `midi.vports`). A module listens through `M.listen`, sends through `M.out`, hears of devices through `M.on_change` and takes a port through `M.claim`; it never sets a handler itself, or two modules would overwrite each other (3.6 design §0.2, `docs/design/3.6-facts/code.md`).
+- **A vport's `event` is the dispatcher exactly while the port has a listener** (the invariant `midi ports`): the first `listen` on a port sets it, the last `unlisten` clears it. Only this module sets an `event`, so a port with no listener has none.
+- **Listeners run in the order their names were first registered**, each through `S.lib.ui_frame.contained_call`: one that raises prints one line (`strata: midi port <n> listener <name> failed: ...`, once per distinct message) and the next still runs. The same name again replaces its function and keeps its place. The dispatcher walks a copy of the names, so a listener may unlisten or listen while it runs.
+- **The hot-plug handlers found installed still run**, after the `on_change` listeners, as the transport handlers chain (`lib/sequencer.lua`): the start step keeps the `midi.add` and `midi.remove` it finds (a mod's wrapper, midigrid's) and installs its own; the cleanup step puts them back unless something replaced the module's own since. Installing again (init run twice) never chains the module to itself.
+- **A claimed port has one owner**: `claim` is refused (false) while another name holds the port, its owner may claim it again (true, nothing told), and only the owner's `release` frees it. `on_claim` listeners hear each change of owner, and nothing else. `lib/midi_in.lua` does not listen to a port another name owns, and SETUP's `midi` row shows `(<owner>)` for it.
+- **Ports are 1 to 16** (`M.PORTS.count`, norns' vports): a port outside that, or a fraction, does nothing; `listen` returns nil, `claim` false, `out`, `device` and `owner` nil. A bad name or function is a caller's error and raises.
+- `S.lib.io_ports` is included directly before `lib/midi_in.lua`, its first user.
+
+## Owns
+
+`lib/io/ports.lua` (`S.lib.io_ports`, 3.6):
+- `M.listen(port, name, fn)`, `M.unlisten(port, name)`: `fn(data)` gets every message of the port, the raw bytes norns delivers to `vports[port].event`;
+- `M.out(port) -> vport | nil`: the port's vport (`midi.vports[port]`), to send through (`:note_on`, `:cc`, ...);
+- `M.device(port) -> name | nil`: the name of the device on the port (the vport's name while it holds a device);
+- `M.on_change(name, fn)`: `fn(port, device_name | nil)` when a device arrives at or leaves a port;
+- `M.claim(port, name) -> boolean`, `M.release(port, name)`, `M.owner(port) -> name | nil`, `M.on_claim(name, fn)`: `fn(port, owner | nil)`;
+- start step 88 (`START_ORDER.io_ports`, before `midi` 90) and cleanup step 152 (`CLEANUP_ORDER.io_ports`, after `midi_handler` 150);
+- the invariant `midi ports`.
+
+## How it works
+
+- State is one local table: `listeners[port]` (an ordered set: `names` in first-registered order, `fns[name]`), `dispatchers[port]` (made once per port and kept, so the invariant can compare), `owners[port]`, `seen[port]` (the device object last seen on the port), the contained calls' `errors`, the `on_change` and `on_claim` sets, and `hot_plug` (the kept handlers and whether the module's own are installed).
+- **Hot-plug.** norns puts a device on its vport (`Midi.update_devices`) before calling `midi.add`, and clears it only after `midi.remove` returns. The module's `midi.add` records the device as seen on `device.port`, tells `on_change(port, device.name)`, then calls the kept `midi.add`; its `midi.remove` forgets it, tells `on_change(port, nil)`, then calls the kept `midi.remove`. A device on no port (all sixteen named, or norns' virtual device) tells no listener; the kept handlers still run.
+- **Moves in the menu.** SYSTEM > DEVICES moves a device with `update_devices()` only, calling neither handler. The module's menu-close hook (`M.reconcile`, registered with `S.register_menu_close` at include time, so it runs before `lib/midi_in.lua`'s) compares each port's device with the one last seen: every port that lost its device tells `on_change(port, nil)`, then every port that gained one tells `on_change(port, name)`, in port order (a swap is both). A visit that moves nothing tells nothing. Before the start step it does nothing.
+- **Claims** call `request_redraw()` (SETUP's `midi` row, and IO's sections later).
+- **Cleanup** (step 152, after `lib/midi_in.lua` has unlistened at 150): the kept handlers back, every `event` that is still one of the dispatchers cleared, and the listeners forgotten, so the invariant holds after cleanup. Owners and the `on_change` and `on_claim` sets stay: their modules release in their own cleanup steps, all before 150.
+
+## Tests
+
+`test/unit/io_ports_test.lua`: the listeners' order and containment, a message on another port, the invariant, `on_change` for an arrival, a departure and a menu move, the handlers found installed (put in through `load_strata({before_init = ...})`, which runs after the script is loaded and before `init()`), the claims, `out`. `test/unit/midi_in_test.lua` ("MIDI in leaves a claimed port alone"), `test/unit/pages_setup_test.lua` (the `midi` row's owner) and `test/unit/structure_test.lua` (the steps, and only this module setting the handlers) cover the rest.

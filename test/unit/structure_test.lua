@@ -628,7 +628,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "midi handler",
-  "voices off", "grids dark", "arc dark" }
+  "midi ports", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
   local context = load_strata()  -- init's start-up clock still waits to start voice 2
@@ -733,6 +733,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(context.polls.polls.recordState, "stop", "record poll")
   for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do watch_method(context.polls.polls[name], "stop", "input meter") end
   watch_field(S.midi_device, "event", "midi handler")
+  watch_field(midi, "add", "midi ports")  -- lib/io/ports.lua puts back the hot-plug handlers it found
   local real_voice_off = engine.voiceOff
   engine.voiceOff = function(...) observe("voices off"); return real_voice_off(...) end
   -- a redraw clears the LEDs too: only a clear outside one counts
@@ -808,6 +809,7 @@ local function start_steps()
     { "arc", { "arc connected" } },
     { "grids", { "file read grids.data", "grid connected", "print grid 1 connected: 16x16", "grid connected",
       "grid redrawn" } },
+    { "io ports", {} },
     { "midi", { "midi connected" } },
     { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn",
       "redraw requested" } },
@@ -3114,6 +3116,65 @@ test("only lib/input_level.lua names the input polls", function()
     end
   end
   assert_equal(table.concat(offenders, " "), "", "a norns poll has one callback")
+end)
+
+-- The lines of a Lua source that set midi.add, midi.remove or a MIDI vport's
+-- event: on midi.connect(...) or midi.vports[...] itself, or on a name that
+-- source assigns one of them to. Comments are skipped
+local function midi_handler_writes(text)
+  local holders, writes = {}, {}
+  local function assigned(code, start)
+    return code:sub(start):match("^%s*=%s*[^=]") ~= nil
+  end
+  local function code_lines()
+    local lines = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = { line = line, code = line:gsub("%-%-.*$", "") .. " " } end
+    return lines
+  end
+  local lines = code_lines()
+  for _, entry in ipairs(lines) do
+    for name in entry.code:gmatch("([%w_%.]+)%s*=%s*midi%.connect%s*%(") do holders[name] = true end
+    for name in entry.code:gmatch("([%w_%.]+)%s*=%s*midi%.vports%s*%[") do holders[name] = true end
+  end
+  for _, entry in ipairs(lines) do
+    local code, found = entry.code, false
+    for _, pattern in ipairs({ "midi%.add()", "midi%.remove()", "midi%.connect%s*%b()%s*%.event()",
+      "midi%.vports%s*%b[]%s*%.event()" }) do
+      for after in code:gmatch(pattern) do
+        if assigned(code, after) then found = true end
+      end
+    end
+    for name in pairs(holders) do
+      local start = 1
+      while true do
+        local first, last = code:find(name .. ".event", start, true)
+        if not first then break end
+        local before = first > 1 and code:sub(first - 1, first - 1) or ""
+        if not before:match("[%w_%.]") and assigned(code, last + 1) then found = true end
+        start = last + 1
+      end
+    end
+    if found then writes[#writes + 1] = entry.line end
+  end
+  return writes
+end
+
+test("only lib/io/ports.lua sets midi.add, midi.remove or a MIDI vport's event", function()
+  -- the finder itself
+  local caught = table.concat({ "midi.add = f", "midi.remove=function() end", "midi.connect(2).event = f",
+    "midi.vports[port].event = nil", "S.midi_device = midi.connect(port)", "S.midi_device.event = midi_event",
+    "local vport = midi.vports[3]", "vport.event = f" }, "\n")
+  assert_equal(#midi_handler_writes(caught), 6, "each kind of write is found")
+  local allowed = table.concat({ "if midi.add == f then end", "-- midi.add = f", "local dev = midi.connect(1)",
+    "dev:note_on(60, 100, 1)", "S.metro.event = f", "x = midi.vports[1].event" }, "\n")
+  assert_equal(table.concat(midi_handler_writes(allowed), " | "), "", "reads, comments and other events are not")
+  local offenders = {}
+  for _, source in ipairs(read_lua_sources()) do
+    if source.path ~= "lib/io/ports.lua" then
+      for _, line in ipairs(midi_handler_writes(source.text)) do offenders[#offenders + 1] = source.path .. ": " .. line end
+    end
+  end
+  assert_equal(table.concat(offenders, "\n"), "", "one module owns the MIDI ports")
 end)
 
 end

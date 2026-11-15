@@ -1662,4 +1662,27 @@ test("a 3.4 PSET's channel mode and note off keep their behavior", function()
   assert_true(not S.voices[4].active, "release stops it")
 end)
 
+
+-- A port another name claims (a controller, a remote grid: lib/io/ports.lua)
+-- is not played: the claim releases its notes as a port change does
+test("MIDI in leaves a claimed port alone", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("midi_note_off", 2)
+  context.midi.plug(1, "keys")
+  note_on(context, 3, 60)
+  assert_true(S.voices[3].active and next(S.midi_state.held[3]) ~= nil, "a key holds voice 3")
+  assert_equal(S.lib.io_ports.claim(1, "e16"), true, "the port is claimed")
+  for i = 1, local_value("NUM_VOICES") do
+    assert_equal(next(S.midi_state.held[i]), nil, "no key held on voice " .. i)
+  end
+  assert_true(not S.voices[3].active, "in release mode its voice stops, as at a port change")
+  context.clear_engine_calls()
+  note_on(context, 1, 62)
+  assert_equal(#context.engine_calls, 0, "a note on the claimed port plays nothing")
+  S.lib.io_ports.release(1, "e16")
+  note_on(context, 1, 62)
+  assert_equal(#context.calls_named("retrigger"), 1, "released: a note plays again")
+end)
+
 end

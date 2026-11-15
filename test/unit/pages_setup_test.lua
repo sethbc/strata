@@ -861,4 +861,18 @@ test("K3 on mpe & zones opens the editor, and K2 closes it", function()
   assert_equal(S.setup_cursor, cursor, "on the row it opened from")
 end)
 
+
+test("SETUP's midi row names a claimed port's owner", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.midi.plug(1, "keys")
+  show_page("SETUP"); next_frame(context)
+  assert_true(screen_shows(context, "midi 1: keys"), "the device's name")
+  S.lib.io_ports.claim(1, "e16"); next_frame(context)
+  assert_true(screen_shows(context, "midi 1: (e16)"), "the owner, in parentheses")
+  assert_screen_layout(context, "SETUP with a claimed MIDI port")
+  S.lib.io_ports.release(1, "e16"); next_frame(context)
+  assert_true(screen_shows(context, "midi 1: keys"), "released: the device's name again")
+end)
+
 end

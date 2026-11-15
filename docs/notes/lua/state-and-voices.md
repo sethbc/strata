@@ -64,6 +64,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 65 | set and start the `recordState` poll (`record_poll`) | `lib/record.lua` |
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
 | 80 | read the grid rotations (`grids.data`), then connect the grids (`grid_init`) | `lib/grid/core.lua` |
+| 88 | keep the `midi.add` and `midi.remove` found installed and install the MIDI ports' own, which tell the ports' `on_change` listeners and then call the kept ones, and note each port's device (3.6) | `lib/io/ports.lua` |
 | 90 | listen for MIDI (`midi_init`), then repair norns' MIDI map: a map on one of 3.3's own LFO ids moves to its 3.4 param or goes, and no other map is touched (`S.lib.midi_in.repair_midi_map`, #602) | `lib/midi_in.lua` |
 | 100 | add the registered scene fields to `S.SCENE_GLOBAL_PARAMS`, then load scenes.data (`load_scenes_from_disk`, sets `S.scenes_loaded`) | `lib/scenes.lua` |
 | 105 | load the macros' targets from data/strata/macros.data (`START_ORDER.macros_load`; a missing file loads them empty, one it cannot use is set aside, an unknown target id is kept with a console line), then redraw the screen and grids (3.4) | `lib/macros.lua` |
@@ -141,7 +142,8 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 132 | stop the `recordState` poll and forget the takes | `lib/record.lua` |
 | 135 | stop the `amp_in_l` and `amp_in_r` input level polls and clear their callbacks (3.4: the polls moved from the BUFFER page, `input_meter` keeps its order) | `lib/input_level.lua` |
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
-| 150 | detach the MIDI handler, before the voices go off, and set `midi.add`/`midi.remove` to no-ops | `lib/midi_in.lua` |
+| 150 | detach the MIDI handler (its `S.lib.io_ports` listener), before the voices go off, and clear the note tap | `lib/midi_in.lua` |
+| 152 | put back the `midi.add` and `midi.remove` the start step found, clear every vport `event` the ports set and forget their listeners (3.6) | `lib/io/ports.lua` |
 | 160 | `engine.voiceOff` for every running voice, each followed by the voice-stop hooks (3.5) (it reaches no handler on norns: the engine is already freed, above) | `lib/engine_sync.lua` |
 | 170 | clear every grid vport's key handler, put its grid back to rotation 0 and leave it dark, set `grid.add`/`grid.remove` to no-ops | `lib/grid/core.lua` |
 | 180 | clear the arc vport's handlers, leave the arc dark, set `arc.add`/`arc.remove` to no-ops | `lib/arc/core.lua` |
@@ -214,6 +216,7 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `scene transition` | `lib/scenes.lua` | `S.scene_transition_active == (S.SCENE_TRANSITION.next_step_due ~= nil)`, `S.SCENE_TRANSITION.target` and `.step` are set exactly while the flag is true, and `S.scene_transition_clock` is nil whenever the flag is false |
   | `scene sequencer` | `lib/scenes.lua` | `S.scene_sequencer_recall_due` is true only while the sequencer is on, and `S.scene_sequencer_enabled == (S.scene_sequencer_clock ~= nil)` with that clock's coroutine not dead (#329) |
   | `pattern clock` | `lib/sequencer.lua` | `S.pattern_playing == (S.pattern_clock ~= nil)` |
+  | `midi ports` | `lib/io/ports.lua` | a MIDI vport's `event` is the ports' dispatcher exactly while the port has a listener |
   | `midi notes` | `lib/midi_in.lua` | a note is held on a voice (`S.midi_state.held`) exactly while some channel's note on maps it there (`note_voice`), and every `started` entry is a voice index set to true |
   | `scan holds` | `lib/positions.lua` | a voice's scan is held exactly while it has a holder |
   | `strip store` | `lib/positions.lua` | a port holds store one way only: its one store key (`store_down`) on a layout that selects a grid voice, a key per voice (`store`) on the others |
