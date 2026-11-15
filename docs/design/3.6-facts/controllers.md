@@ -139,7 +139,7 @@ Repository: https://github.com/jaggednz/midigrid (README is only a pointer to th
 ## Not verified
 
 1. E16: whether incoming CC (same CC and channel) moves an encoder's value or LED ring ("MIDI feedback"). Only a forum quote of release notes says FW 0.5.6 added "Midi feedback"; E16-MAN 1.0.1a documents MIDI Learn and no feedback.
-2. E16: exact 14-bit CC pairing (MSB CC n, LSB CC n+32) and exact NRPN message format.
+2. E16: exact 14-bit CC pairing (MSB CC n, LSB CC n+32) and exact NRPN message format. (Half settled: the pairing is in `checks.md` §2, each CC set by the user, typically 0-31 and 32-63; the NRPN format and the order of the two messages stay open.)
 3. E16: USB device name and the three virtual port names as seen by a Linux host.
 4. E16: whether it sends MIDI clock (it follows an external clock for its looper only).
 5. E16: any i2c (none documented).
