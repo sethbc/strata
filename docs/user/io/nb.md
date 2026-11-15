@@ -15,7 +15,7 @@ A voice mod is a norns mod: install it from maiden (or copy it to `~/dust/code/`
 | nb (one a voice, `v<i>_out_nb` in PARAMETERS > out nb) | `none`, then each player's name | `none` | the player the voice's steps and played notes go to |
 
 - A step plays the player at the step's pitches, rounded to whole notes, with the step's velocity; it ends at the step's gate. A note you play into the voice plays it until you release the note.
-- Stopping the voice, a PSET load and leaving Strata stop every chosen player's notes.
+- Stopping a voice tells its own player to stop all its notes. When two voices share a player, that also cuts the other voice's notes on it. A PSET load and leaving Strata tell every chosen player to stop.
 - The choice is saved with a PSET by the player's name, so a PSET still picks the same player when you install another mod. A PSET that names a player that is not installed shows `none` and keeps the name: install the mod again and the next load picks it.
 - Two voices can choose the same player. A player is switched on when the first voice chooses it and off when the last one leaves it.
 - The players' own settings are in PARAMETERS, under `nb players`.
