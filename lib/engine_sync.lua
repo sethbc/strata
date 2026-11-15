@@ -113,13 +113,22 @@ return function(S)
   -- The master density's sender (below): one grainDensity per running voice
   local send_master_density_to_engine
 
+  -- Ids whose sender is not the engine's (the tape's softcut senders, #703):
+  -- still called, with the offset value, but they count no engine message,
+  -- never wait for the budget and take no round-robin slot
+  local not_engine = {}
+  function M.mark_not_engine(param_id)
+    assert(type(param_id) == "string" and param_id ~= "", "mark_not_engine: an id is a non-empty string")
+    not_engine[param_id] = true
+  end
+
   -- How many engine messages a send of the id makes now (what the budget
   -- counts): 0 for an id with no sender (#646) and for a stopped voice's
   -- param, whose gated sender sends nothing; one per running voice for the
   -- master density (#645); else 1
   local function engine_messages(param_id)
     local sender = S.engine_senders[param_id]
-    if sender == nil then return 0 end
+    if sender == nil or not_engine[param_id] then return 0 end
     local gate = voice_gates[param_id]
     if gate ~= nil and sender == gate.sender then return S.voices[gate.voice].active and 1 or 0 end
     if sender == send_master_density_to_engine then
@@ -163,6 +172,8 @@ return function(S)
     local messages = engine_messages(param_id)
     if messages == 0 then
       S.engine_param_values[param_id] = value
+      local sender = not_engine[param_id] and S.engine_senders[param_id]
+      if sender and not already_sent then sender(value) end
       return
     end
     budget.sent = budget.sent + messages

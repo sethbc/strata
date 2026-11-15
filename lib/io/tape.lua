@@ -154,6 +154,7 @@ return function(S)
     tapeloop_wear = send_wear}
   for _, id in ipairs(TAPE.macro_targets) do
     S.engine_senders[id] = while_on(SENDERS[id])
+    S.lib.engine_sync.mark_not_engine(id)  -- softcut, not the engine: no budget message, no round-robin slot (#703)
     S.register_macro_target(id, TAPE.macro_labels[id])
   end
 

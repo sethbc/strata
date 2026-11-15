@@ -985,6 +985,32 @@ test("a param with no engine sender counts nothing and never waits (#646)", func
   assert_true(not sync.reaches_engine(id), "the round robin gives it no slot")
 end)
 
+-- #703: a sender that is not the engine's (the tape's softcut senders) is
+-- still delivered with its offset value, but counts no engine message,
+-- never waits and takes no round-robin slot
+test("a sender that is not the engine's is delivered, counts nothing and takes no slot (#703)", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  local got = {}
+  S.engine_senders.not_engine_probe = function(value) got[#got + 1] = value end
+  sync.mark_not_engine("not_engine_probe")
+  mid_window(context)
+  sync.deferrable(function()
+    for index = 1, S.constants.ENGINE_BUDGET.messages_per_window do send_param_to_engine("not_engine_probe", index) end
+  end)
+  assert_equal(#got, 150, "every send was delivered, none waited")
+  assert_equal(got[150], 150, "with its value")
+  assert_equal(sync.budget_state().sent, 0, "none counted")
+  assert_equal(sync.budget_state().pending, 0)
+  assert_true(not sync.reaches_engine("not_engine_probe"), "the round robin gives it no slot")
+  context.clear_engine_calls()
+  sync.deferrable(function() send_param_to_engine("reverb_mix", 0.3) end)
+  assert_equal(sync.budget_state().pending, 0, "an engine send after them is not deferred")
+  assert_equal(sync.budget_state().sent, 1)
+  assert_true(#context.engine_calls > 0, "and reached the engine")
+  assert_equal(sync.expected_value("not_engine_probe"), 150, "its value is recorded")
+end)
+
 -- #649 (ruling 93): the budget's exception. A discrete switch (a recall's,
 -- a transition's end, a morph crossing) goes at once, whole, in recall
 -- order, uncounted, even inside deferrable with the window full; a
