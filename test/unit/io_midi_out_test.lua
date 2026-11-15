@@ -191,7 +191,9 @@ test("a note that already sounds is retriggered: an off, then its on", function(
   target.note_off(2, "m7740")
   assert_equal(sent(device), "note_off 60 2", "the count was 1: the last's end sends the off")
   -- the same on an MPE member channel (members 1, so the ids share channel 2)
+  params:set("v2_out_port", 0)  -- its channel 2 would be inside the zone
   mpe_voice(1, 3, 1); settled(context)
+  assert_equal(target.routed(1), true, "voice 1's zone on port 3")
   clear(device)
   target.note_on(1, "s1", 62, 1, step_info())
   assert_equal(sent(device), "pitchbend 8192 2|note_on 62 127 2", "alone on its member channel")
@@ -218,6 +220,7 @@ test("a step repeating under a held played note leaves as many offs as ons", fun
     if record.name == "targets" then output = record end
   end
   assert_true(output ~= nil, "the targets step output")
+  params:set("midi_note_off", option("midi_note_off", "release"))  -- the key's lift ends the played note
   mpe_voice(1, 2, 1); settled(context)  -- one member channel: every note shares channel 2
   clear(device)
   context.midi.send(1, {type = "note_on", note = 36, vel = 100, ch = 1})  -- held: voice 1's played note
