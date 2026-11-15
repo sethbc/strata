@@ -20,7 +20,7 @@ All eight are saved with a PSET; none is in a scene.
 
 ## How notes play
 
-- Each note is one `play_note` with its pitch in volts and its level. Note 60 is 0 V, one volt an octave, clamped to -5 to 5 V. Just-Type calls 0 V C3, so note 60 sounds there as the note it names.
+- Each note is one `play_note` with its pitch in volts and its level. Strata sends note 60 as 0 V, one volt an octave, clamped to -5 to 5 V. Just-Type calls 0 V C3.
 - Just Friends has six voices: a note takes a free one, and when all six sound it steals its oldest. A note's end sends nothing, so Just Friends shapes the note's length itself.
 
 ## Good to know
