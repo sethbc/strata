@@ -96,7 +96,7 @@ test("the section has no params and no target", function()
 end)
 
 test("without the ii module the device does nothing and the page draws", function()
-  -- the real ii module taken away before init (ruling 6)
+  -- the real ii module taken away before init (build ruling 6)
   local context = load_strata({before_init = function() local_value("S").lib.io_ii = nil end})
   finish_startup(context)
   local S = local_value("S")
@@ -109,7 +109,7 @@ test("without the ii module the device does nothing and the page draws", functio
 end)
 
 test("a command the queue dropped is not shown as sent, and the next press sends the same value", function()
-  -- ruling 13: while the bus leads and send returns false the row and its next value stay
+  -- build ruling 13: while the bus leads and send returns false the row and its next value stay
   local _, S, log, state = started()
   state.accept = false
   press(S, "play")
@@ -158,12 +158,12 @@ end)
 
 -- The layout states reach the leading look as a player does: through the
 -- real leads() (the rig's ii_bus and a crow), the ii section's rig row and
--- K3 (ruling 12). The double's leads() answers from that real state.
+-- K3 (build ruling 12). The double's leads() answers from that real state.
 local function started_real_bus(with_ii)
   local log = {}
   local context = load_strata({before_init = function()
     local S = local_value("S")
-    -- without it the real ii module is taken away before init (ruling 6)
+    -- without it the real ii module is taken away before init (build ruling 6)
     if not with_ii then S.lib.io_ii = nil; return end
     S.lib.io_ii = {
       leads = function() return S.lib.io_rig.get("ii_bus") == "strata" and S.lib.io_crow.present() end,

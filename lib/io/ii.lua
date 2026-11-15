@@ -81,7 +81,7 @@ return function(S)
     return {line = line_for(device, command, ...), off = off, pair = pair, key = pair .. "\n" .. first}
   end
 
-  -- Per line while Strata leads (ruling 24), only for the (device,
+  -- Per line while Strata leads (build ruling 24), only for the (device,
   -- command) pairs that have had an off this lead (state.pairs): high
   -- (true: a send of it reached crow since its last off; false: its off
   -- did, and nothing raised it since; nil: unknown, it may have gone high
@@ -138,7 +138,7 @@ return function(S)
   end
 
   -- An off (a gate low or a note's release) is queued exactly when its
-  -- line owes one (ruling 24): the pair's first off this lead (the pair is
+  -- line owes one (build ruling 24): the pair's first off this lead (the pair is
   -- learned then), or a line that is high, unknown, or has a send waiting.
   -- An owed off joins the end of the queue whatever its length (it never
   -- displaces a line and is never dropped), unless the newest waiting
@@ -384,7 +384,7 @@ return function(S)
   -- Params: the devices' (PSET-only, group strata_out_ii)
   ---------------------------------------------------------------------------
 
-  -- Each device's add_params, contained (ruling 15), and the group kept
+  -- Each device's add_params, contained (build ruling 15), and the group kept
   -- whole: a device that added fewer params than its param_count (it
   -- raised, or miscounted) has the rest filled with hidden separators
   -- <device>_unused_<n>, so the next device's params stay in the group; one
@@ -422,7 +422,7 @@ return function(S)
   -- IO's ii section
   ---------------------------------------------------------------------------
 
-  -- The bus row turned as a user turns it (ruling 26): the cursor put on
+  -- The bus row turned as a user turns it (plan ruling 26): the cursor put on
   -- the row by S.lib.pages_io.go_to_row, E3 to value; raises when the page
   -- cannot get there
   local function turn_bus(value)

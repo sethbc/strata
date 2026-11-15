@@ -44,7 +44,7 @@ end
 local function started(without_double)
   local state = {calls = {}, leading = true}
   -- without the double the real ii module is taken away before init, so
-  -- the ii group adds nothing and the device's params never exist (ruling 6)
+  -- the ii group adds nothing and the device's params never exist (build ruling 6)
   local context = load_strata({before_init = function()
     if without_double then local_value("S").lib.io_ii = nil else install_ii(state) end
   end})
@@ -269,7 +269,7 @@ test("without the ii module the device does nothing and the page draws", functio
   device.ready(); device.release()
 end)
 
--- Ruling 10: an output is one line that plays one note at a time, whatever voices feed it
+-- Build ruling 10: an output is one line that plays one note at a time, whatever voices feed it
 test("two voices on one output in pitch mode: the newest sounds, the trigger is the line's", function()
   local _, S, state = started()
   local target = target_of(S)

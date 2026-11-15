@@ -266,7 +266,7 @@ return function(S)
     end
   end
 
-  -- The port Strata's MIDI input listens to (ruling 17)
+  -- The port Strata's MIDI input listens to (plan ruling 17)
   local function input_port()
     local port = param_value("midi_device")
     return port and util.round(port) or nil
@@ -334,7 +334,7 @@ return function(S)
     send(config.port, "note_on", note, level, channel)
   end
 
-  -- The step's expression (ruling B): each played MPE note's bend, pressure
+  -- The step's expression (build ruling 9): each played MPE note's bend, pressure
   -- and slide as raw has them now, each sent when its outgoing value is not
   -- the one the note last sent, at most express_per_step a step, from the
   -- note the last step stopped at
@@ -427,7 +427,7 @@ return function(S)
   end
 
   -- The routes settle at a step when a route param changed since the last
-  -- settle (ruling E; settle is below, with the params)
+  -- settle (build ruling 25; settle is below, with the params)
   local settle
   S.lib.lfos.on_step(function()
     if state.stopped then return end
@@ -443,7 +443,7 @@ return function(S)
   -- lib/midi_in.lua's program change (0 to NUM_SCENES - 1, wanted by
   -- midi_pc_in and midi_pc_channel) on the port it listens to: the scene
   -- recalled as a scene key does, and its program change not sent back to
-  -- that port (ruling D): the port's one guard, asked[port] = scene, set
+  -- that port (build ruling 20): the port's one guard, asked[port] = scene, set
   -- before the recall is asked for (with quantize off it lands inside that
   -- call); a refused one (an empty scene) puts the port's earlier guard
   -- back, so the guard is set only for a recall that was asked for; a newer
@@ -543,7 +543,7 @@ return function(S)
     return config.port .. " ch " .. config.channel
   end
 
-  -- Routes settle (ruling E). A route param's action (a voice's port,
+  -- Routes settle (build ruling 25). A route param's action (a voice's port,
   -- channel, mode or members, and the bend range) only notes the change:
   -- it refuses nothing, flashes nothing and sends nothing. settle compares
   -- the params with the settled routes (state.config, which every note,
@@ -580,7 +580,7 @@ return function(S)
     return routes
   end
 
-  -- An illegal set from a read (ruling C): the voices in index order, one
+  -- An illegal set from a read (build ruling 19): the voices in index order, one
   -- that conflicts with those placed before it turned off (port 0), its
   -- other values kept
   local function placed_in_order(routes)
@@ -644,8 +644,8 @@ return function(S)
   -- An illegal set at a step (a change by hand, or by anything outside a
   -- read): the route params noted since the last settle go back to their
   -- settled values, silently, with the refusal's flash, and no route
-  -- changes (a bend range noted beside them stands). From a read: ruling
-  -- C's placing, with one flash
+  -- changes (a bend range noted beside them stands). From a read: build ruling
+  -- 19's placing, with one flash
   settle = function(from_read)
     if state.stopped or not params.lookup[vid(1, "port")] then return end
     local routes = param_routes()
@@ -776,7 +776,7 @@ return function(S)
   end
 
   -- An MPE voice and a plain voice on port 2, a slot and program change
-  -- out, settled at one step (ruling E) so the rows show them
+  -- out, settled at one step (build ruling 25) so the rows show them
   local function a_setting(context)
     params:set(vid(1, "port"), 2)
     params:set(vid(2, "port"), 2); params:set(vid(2, "channel"), 16)

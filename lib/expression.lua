@@ -288,7 +288,7 @@ return function(S)
     return {bend = record.bend, pressure = record.pressure, slide = record.slide}
   end
 
-  -- 3.6 (2a's ruling A): a played note's first values, kept from its note
+  -- 3.6 (build ruling 8): a played note's first values, kept from its note
   -- on (the MIDI package's, before S.lib.notes.play, whose started hooks
   -- reach the targets) until its first update makes its record: raw's bend
   -- (through bend_value), pressure and slide (each clamped as update

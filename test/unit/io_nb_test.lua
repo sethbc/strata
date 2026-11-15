@@ -351,7 +351,7 @@ test("a voice's stop, cleanup and a PSET load stop the players that can be stopp
 end)
 
 test("a PSET keeps a player by name through a changed list", function()
-  -- duty 8 (ruling 24: the keyed module keeps the name)
+  -- duty 8 (plan ruling 24: the keyed module keeps the name)
   local context = started({ { "alpha" } })
   choose(2, "alpha")
   local path = write_pset(context, "alpha")

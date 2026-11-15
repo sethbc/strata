@@ -993,7 +993,7 @@ test("the voice-stop and freeze-change registries take functions only", function
   assert_equal(#script.registry.freeze_change, freezes + 1, "a freeze-change hook after init")
 end)
 
--- 3.6's registries (design §0.1, rulings 4, 8 and 9): each open, read at
+-- 3.6's registries (design §0.1, plan rulings 4, 8 and 9): each open, read at
 -- each use
 test("the 3.6 registries take what their records allow", function()
   local S = fresh_state()
@@ -1082,7 +1082,7 @@ test("the 3.6 registries take what their records allow", function()
   assert_equal(script.registry.ii_devices[#script.registry.ii_devices].name, "late", "an ii device after init")
 end)
 
--- 3.6's IO sections (design §11, ruling 7): a named record with a rows
+-- 3.6's IO sections (design §11, plan ruling 7): a named record with a rows
 -- function, read at each use, so the registry stays open
 test("register_io_section takes a named record with a rows function", function()
   local S = fresh_state()

@@ -59,7 +59,7 @@ local function step(context, S, count)
   for _ = 1, count or 1 do context.clock.advance_until(S.lfo_clock) end
 end
 
--- One step: the routes settle (ruling E)
+-- One step: the routes settle (build ruling 25)
 local function settled(context) step(context, local_value("S")) end
 
 local function step_info() return {source = "step"} end
@@ -1386,7 +1386,7 @@ test("a second program change in replaces the first's guard", function()
 end)
 
 ---------------------------------------------------------------------------
--- Review round 2: routes settle (ruling E), the guard kept on a refusal
+-- Review round 2: routes settle (build ruling 25), the guard kept on a refusal
 ---------------------------------------------------------------------------
 
 -- Counts route_changed per voice and the refusal's flashes

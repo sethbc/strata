@@ -570,7 +570,7 @@ test("a mute or solo redraws the grid", function()
   assert_true(calls >= 2, "grid_redraw ran for each (" .. calls .. ")")
 end)
 
--- 3.6 (design §0.1, ruling 16): the silence hooks, for the targets' offs
+-- 3.6 (design §0.1, plan ruling 16): the silence hooks, for the targets' offs
 test("a mute or a solo tells the silence hooks each voice whose answer changed", function()
   local context = load_strata()
   local S = run_voices_1_to_4(context)

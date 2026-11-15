@@ -508,7 +508,7 @@ return function()
     table.insert(M.registry.freeze_change, fn)
   end
 
-  -- 3.6's registries (design §0.1, rulings 4, 8 and 9), read at each use,
+  -- 3.6's registries (design §0.1, plan rulings 4, 8 and 9), read at each use,
   -- so they stay open
   local NOTE_HOOK_FIELDS = {name = true, started = true, ended = true, moved = true, expressed = true}
   local NOTE_TARGET_FIELDS = {name = true, routed = true, note_on = true, note_off = true, express = true,
@@ -543,7 +543,7 @@ return function()
   -- A note target (lib/io/targets.lua reads them, design §3): {name, routed
   -- = fn, note_on = fn, note_off = fn, express, stop_all, rows, status,
   -- layout_states = {{name, setup = fn(context)}, ...}}; the last five
-  -- optional (rows and status: IO's voice section, ruling 9; layout_states:
+  -- optional (rows and status: IO's voice section, plan ruling 9; layout_states:
   -- the voice section's layout states the page lists for the target)
   function M.register_note_target(record)
     local kind = "register_note_target"
@@ -555,7 +555,7 @@ return function()
     table.insert(M.registry.note_targets, record)
   end
 
-  -- An ii device (lib/io/ii.lua reads them, ruling 8): {name, ready = fn,
+  -- An ii device (lib/io/ii.lua reads them, plan ruling 8): {name, ready = fn,
   -- release = fn, param_count = the params add_params adds (a finite whole
   -- number, 0 by default), add_params = fn}; every field but name
   -- optional, and a param_count above 0 needs add_params. The registry
@@ -576,7 +576,7 @@ return function()
   end
 
   -- A macro target (lib/macros.lua's catalog lists each after the matrix
-  -- depths, ruling 4): a control param id and its label; never a macro
+  -- depths, plan ruling 4): a control param id and its label; never a macro
   function M.register_macro_target(id, label)
     local kind = "register_macro_target"
     require_arg(type(id) == "string" and id ~= "", kind, "an id is a non-empty string")

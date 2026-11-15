@@ -606,7 +606,7 @@ test("raw gives a held note's bend, pressure and slide", function()
   assert_equal(expression.raw(1, "midi", 7740), nil, "forgotten")
 end)
 
--- 3.6 (ruling A of 2a): a played note's first values, readable by the
+-- 3.6 (build ruling 8): a played note's first values, readable by the
 -- targets from its note on, before the note's first update
 test("first_touch's values are raw's until the first update, whose record holds the same", function()
   local context = load_strata()

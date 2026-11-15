@@ -93,7 +93,7 @@ return function(S)
   -- 3.6's silence hooks (S.registry.silence_change, read at each call): the
   -- answer of silenced(voice) the module last told them, per voice (false
   -- at start). Kept apart from sent_mute, which a voice's sync also writes
-  -- (ruling 16). Each hook runs contained, with (voice_idx, silenced), for
+  -- (plan ruling 16). Each hook runs contained, with (voice_idx, silenced), for
   -- each voice whose answer changed, in voice order
   local told_silenced = {}
   local silence_errors = {}

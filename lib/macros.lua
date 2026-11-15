@@ -113,7 +113,7 @@ return function(S)
       local id = "matrix_" .. k .. "_depth"
       if is_control(id) then add(id, "R" .. k .. " depth") end
     end
-    -- 3.6's registered targets (S.register_macro_target, ruling 4), in
+    -- 3.6's registered targets (S.register_macro_target, plan ruling 4), in
     -- registration order, each whose param exists and is a control
     for _, target in ipairs(S.registry.macro_targets) do
       if is_control(target.id) then add(target.id, target.label) end

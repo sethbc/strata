@@ -1,7 +1,7 @@
 -- lib/io/txo.lua
 -- The TELEXo as a note target over the ii bus (S.lib.io_txo, 3.6 design
 -- 6.3, docs/notes/lua/io/txo.md): an output is one line that plays one note
--- at a time, whatever voices feed it (ruling 10), in pitch mode (the
+-- at a time, whatever voices feed it (build ruling 10), in pitch mode (the
 -- output's cv is the pitch, its trigger the gate) or envelope mode (the cv
 -- is the level, the output's envelope the gate). Every message goes through
 -- S.lib.io_ii (another module of this release); where it or the params are
@@ -248,7 +248,7 @@ return function(S)
         {label = TXO.labels.decay, kind = "param", param_id = "txo_decay", format = TXO.labels.ms},
       }
     end,
-    -- The voice section's looks with this target's rows (ruling 11: the IO
+    -- The voice section's looks with this target's rows (build ruling 11: the IO
     -- page lists them with that section's; they do nothing where the
     -- params were never added)
     layout_states = {

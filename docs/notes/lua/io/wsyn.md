@@ -5,7 +5,7 @@
 - **A note is one `("wsyn", "play_note", volts, velocity * wsyn_level)`**: volts are `S.lib.io_targets.volts(pitch)` clamped to -5..5 (`WSYN.volts_limit`); a note off sends nothing (W/ shapes and ends its own notes in AR mode).
 - **`ready` is `ar_mode` 1 then `voices` 4**, in that order; the device has no `release`.
 - **A route's change ends the voice's target notes**: `v<i>_out_wsyn`'s action calls `S.lib.io_targets.route_changed(voice)`.
-- **The toggles are binary** (ruling 25), shown as a `param` row with `binary = {[0] = "off", [1] = "on"}`; the eight params (seven toggles and `wsyn_level`, 0 to 10 V, default 5) are PSET-only.
+- **The toggles are binary** (plan ruling 25), shown as a `param` row with `binary = {[0] = "off", [1] = "on"}`; the eight params (seven toggles and `wsyn_level`, 0 to 10 V, default 5) are PSET-only.
 
 ## Owns
 
