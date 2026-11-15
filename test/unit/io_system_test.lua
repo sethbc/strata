@@ -1307,8 +1307,13 @@ test("under off and teletype no action anywhere produces an ii command", functio
     pattern_clock_stop()
     assert_true(not S.lib.io_ii.leads(), bus .. ": Strata does not lead")
     assert_equal(table.concat(ii_lines_from(context, first), " | "), "", bus .. ": no ii line")
-    assert_true(rig.ii.calls > 0, bus .. ": something asked the ii module to send")
-    rig.ii.calls = 0
+    -- every ii target (Just Friends, W/, the ER-301, the TELEXo) is routed
+    -- only while Strata leads, so nothing even asks the module to send;
+    -- the control: the minute played the voices those routes name
+    assert_equal(rig.ii.calls, 0, bus .. ": nothing asked the ii module to send")
+    assert_true(#rig.hits > 0 and params:get("v1_out_er301") > 0 and params:get("v1_out_txo") > 0,
+      bus .. ": the voices routed to the ii devices played")
+    rig.hits = {}
   end
 end)
 

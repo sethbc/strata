@@ -174,7 +174,7 @@ return function(S)
 
   S.register_note_target({name = "txo",
     routed = function(voice)
-      return valid_voice(voice) and bus() ~= nil and output_of(voice) > 0
+      return valid_voice(voice) and leading() and output_of(voice) > 0
     end,
     note_on = function(voice, id, pitch, velocity)
       if not valid_voice(voice) or not bus() or type(pitch) ~= "number" then return end
