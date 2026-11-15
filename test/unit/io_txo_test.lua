@@ -374,6 +374,22 @@ test("an envelope note whose tr raises on an empty output lowers the envelope ga
     "a later pitch note leaves no envelope gate to lower")
 end)
 
+test("an envelope note whose cv or env send raises repairs nothing that did not reach the device", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_txo", 5); params:set("v1_out_txo_cv", ENVELOPE)
+  state.calls = {}; state.attempts = 0; state.fail_at = {[1] = true}
+  assert_true(not pcall(target.note_on, 1, "s1", 60, 0.5))
+  assert_calls(state, {}, "the cv raised: nothing reached the device, no env off")
+  state.attempts = 0; state.fail_at = {[2] = true}
+  assert_true(not pcall(target.note_on, 1, "s1", 60, 0.5))
+  assert_calls(state, {{"send", "txo", "cv", 5, 2.5}}, "the env send raised: env 1 never went, so no env off")
+  state.fail_at = nil
+  target.note_on(1, "s2", 60, 1); target.note_off(1, "s2")
+  assert_calls(state, {{"send", "txo", "cv", 5, 5}, {"send", "txo", "env", 5, 1}, {"send", "txo", "tr", 5, 1},
+    {"send_off", "txo", "tr", 5, 0}, {"send_off", "txo", "env", 5, 0}}, "the line is clean after both")
+end)
+
 test("a pitch note whose tr raises on a sounding line sends the earlier note's cv again", function()
   local _, S, state = started()
   local target = target_of(S)

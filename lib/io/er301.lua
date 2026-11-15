@@ -89,21 +89,18 @@ return function(S)
       lines[port] = notes
       -- the core records a target for a note only when this returned, so a
       -- send that raises must leave the line as it was
-      local sent_trigger = false
       local ok, err = pcall(function()
         send_pitch(port, pitch)
         bus().send("er301", "tr", port, 1)
-        sent_trigger = true
       end)
       if not ok then
         table.remove(notes)
         local empty = #notes == 0
         if empty then lines[port] = nil end
-        -- best effort, each send protected (the first error is the one
-        -- raised again): the newest left gets its cv back, and a trigger
-        -- raised on a line that held nothing is lowered
+        -- best effort, protected (the first error is the one raised again):
+        -- the newest left gets its cv back. No trigger repair exists: the
+        -- trigger is sent last, and one whose own send raised was not sent
         if not empty then pcall(send_pitch, port, notes[#notes].pitch) end
-        if empty and sent_trigger then pcall(bus().send_off, "er301", "tr", port, 0) end
         error(err, 0)
       end
     end,

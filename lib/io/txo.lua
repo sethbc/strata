@@ -183,28 +183,28 @@ return function(S)
       table.insert(line.notes, note)
       -- the core records a target for a note only when this returned, so a
       -- send that raises must leave the line as it was
-      local sent_trigger = false
+      local sent_env = false
       local ok, err = pcall(function()
         bus().send("txo", "cv", output, level_of(note))
         if note.envelope then
           bus().send("txo", "env", output, 1)
+          sent_env = true
           line.env_high = true
         end
         bus().send("txo", "tr", output, 1)
-        sent_trigger = true
       end)
       if not ok then
         table.remove(line.notes)
         line.env_high = was_high
         if created then lines[output] = nil end
         -- best effort, each send protected (the first error is the one
-        -- raised again): the newest left gets its cv back, an envelope
-        -- gate this note raised is lowered, and a trigger raised on a line
-        -- that held nothing is lowered
+        -- raised again), repairing only what reached the device: the newest
+        -- left gets its cv back, and an envelope gate this note's env 1
+        -- raised is lowered. No trigger repair exists: the trigger is sent
+        -- last, and one whose own send raised was not sent
         local newest = line.notes[#line.notes]
         if newest then pcall(function() bus().send("txo", "cv", output, level_of(newest)) end) end
-        if note.envelope and not was_high then pcall(bus().send_off, "txo", "env", output, 0) end
-        if created and sent_trigger then pcall(bus().send_off, "txo", "tr", output, 0) end
+        if sent_env and not was_high then pcall(bus().send_off, "txo", "env", output, 0) end
         error(err, 0)
       end
     end,
