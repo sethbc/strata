@@ -198,6 +198,26 @@ test("a macro's modulation reaches the loop through all four targets", function(
   end
 end)
 
+test("the tape's senders count no engine message and take no round-robin slot (#703)", function()
+  local context, S = started()
+  local sync = S.lib.engine_sync
+  local ids = S.lib.io_tape.TAPE.macro_targets
+  for _, id in ipairs(ids) do assert_true(not sync.reaches_engine(id), id .. " reaches no engine") end
+  params:set("tapeloop", 1)
+  sync.deferrable(function()
+    for index = 1, 150 do send_param_to_engine("tapeloop_level", index / 200) end
+  end)
+  assert_equal(sync.budget_state().sent, 0, "150 tape sends count nothing")
+  sync.deferrable(function() send_param_to_engine("reverb_mix", 0.3) end)
+  assert_equal(sync.budget_state().pending, 0, "an engine send after them is undeferred")
+  for v = 1, 2 do assert_near(value(context, "level", v), 0.75, 1e-9, "the last tape send reached softcut") end
+  params:set("tapeloop", 0)
+  clear_calls(context)
+  sync.deferrable(function() send_param_to_engine("tapeloop_level", 0.3) end)
+  assert_equal(#context.softcut.calls, 0, "with the tape off nothing is called")
+  assert_equal(sync.budget_state().sent, 1, "and (from the reverb send above) nothing more is counted")
+end)
+
 test("no tape param is in a scene", function()
   local _, S = started()
   local function snapshot()
