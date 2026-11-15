@@ -19,6 +19,7 @@ local function install_ii(state)
   local function recorder(kind, only_leading)
     return function(...)
       if only_leading and not state.leading then return end
+      if state.fail_next then state.fail_next = nil; error("send failed", 0) end
       state.calls[#state.calls + 1] = {kind, ...}
     end
   end
@@ -206,6 +207,66 @@ test("without the ii module the device does nothing and the page draws", functio
   S.lib.notes.play(1, played(7740, 64))
   S.lib.notes.release(1, "midi", 7740)
   target.note_on(1, "s1", 60, 1); target.note_off(1, "s1"); target.stop_all()
+end)
+
+-- Ruling 10: a port is one line that plays one note at a time, whatever voices feed it
+test("two voices on one port share it: the trigger stays high until the line's last note ends", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_er301", 12); params:set("v2_out_er301", 12)
+  state.calls = {}
+  target.note_on(1, "s1", 72, 1)
+  target.note_on(2, "s1", 84, 1)
+  assert_calls(state, {{"send", "er301", "cv", 12, 1}, {"send", "er301", "tr", 12, 1},
+    {"send", "er301", "cv", 12, 2}, {"send", "er301", "tr", 12, 1}}, "both notes")
+  target.note_off(1, "s1")
+  assert_calls(state, {}, "the older note, of the first voice's last: the trigger stays high")
+  target.note_off(2, "s1")
+  assert_calls(state, {{"send_off", "er301", "tr", 12, 0}}, "the trigger goes low once, at the line's last note")
+  target.note_off(2, "s1")
+  assert_calls(state, {}, "and never again")
+end)
+
+test("the pitch falls back across voices with no new trigger", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_er301", 12); params:set("v2_out_er301", 12)
+  target.note_on(1, "s1", 72, 1); target.note_on(2, "s1", 84, 1); state.calls = {}
+  target.note_off(2, "s1")
+  assert_calls(state, {{"send", "er301", "cv", 12, 1}}, "the first voice's note again")
+  target.note_off(1, "s1")
+  assert_calls(state, {{"send_off", "er301", "tr", 12, 0}}, "its end")
+end)
+
+test("a note stays on the port it started on when its voice's port changes", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_er301", 12); params:set("v2_out_er301", 13)
+  target.note_on(1, "s1", 72, 1); target.note_on(2, "s1", 72, 1); state.calls = {}
+  params:set("v1_out_er301", 13)  -- v1's own note is not ended here: only the core ends notes
+  target.note_on(1, "s2", 60, 1)
+  assert_calls(state, {{"send", "er301", "cv", 13, 0}, {"send", "er301", "tr", 13, 1}}, "a new note: the new port")
+  target.note_off(1, "s1")
+  assert_calls(state, {{"send_off", "er301", "tr", 12, 0}}, "the old note lowers the port it raised")
+end)
+
+-- The core records a target for a note only when its note_on returned, so
+-- a note_on that raised gets no off: it must leave the line as it was
+test("a note_on whose send raises leaves the line as it was", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_er301", 12)
+  state.fail_next = true
+  assert_true(not pcall(target.note_on, 1, "s1", 72, 1), "the error goes on to the core")
+  target.note_off(1, "s1")
+  assert_calls(state, {}, "an off for the note the line does not hold does nothing")
+  target.note_on(1, "s1", 72, 1); state.calls = {}
+  state.fail_next = true
+  assert_true(not pcall(target.note_on, 1, "s2", 84, 1), "a second note, raising")
+  target.note_off(1, "s2")
+  assert_calls(state, {}, "nothing for it")
+  target.note_off(1, "s1")
+  assert_calls(state, {{"send_off", "er301", "tr", 12, 0}}, "the first note alone holds the trigger, lowered once")
 end)
 
 test("IO's voice section shows the er-301 row for the selected voice", function()

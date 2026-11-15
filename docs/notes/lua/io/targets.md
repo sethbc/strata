@@ -24,6 +24,7 @@
 - `note_on(voice, id, pitch, velocity, info)`: `pitch` a fractional MIDI note, `velocity` 0 to 1, `info` `{source = "step"}` or `{source = "midi", owner = "midi", key}`. `S.lib.io_targets.volts(pitch)` is `(pitch - 60) / 12`, the one conversion for every target that takes volts; each target clamps to its device's range.
 - `note_off(voice, id)`; `express(voice, id)` (optional: a played note's expression changed; read it with `S.lib.expression.raw(voice, info.owner, info.key)`); `stop_all()` (optional: at cleanup, after every off).
 - `rows(voice)` and `status(voice)` (optional): the rows the target adds to IO's `voice` section for the selected voice, and a mark for its title row.
+- `layout_states` (optional): a list of `{name, setup = fn(context)}`, checked as an IO section's, for the looks of the target's rows. The IO page lists them as the `voice` section's, after its own (`docs/notes/lua/pages/io.md`); a target never edits another module's record.
 
 ## How it works
 

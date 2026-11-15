@@ -1,7 +1,8 @@
 -- lib/io/er301.lua
 -- The ER-301 as a note target over the ii bus (S.lib.io_er301, 3.6 design
--- 6.3, docs/notes/lua/io/er301.md): a voice plays one port, the newest
--- note's pitch as the port's cv, the trigger high while any note sounds.
+-- 6.3, docs/notes/lua/io/er301.md): a port is one line that plays one note
+-- at a time, whatever voices feed it (ruling 10): the newest note's pitch
+-- is the port's cv, the trigger high while any note of the line sounds.
 -- Every message goes through S.lib.io_ii (another module of this release);
 -- where it or the params are absent the device does nothing.
 
@@ -18,11 +19,10 @@ return function(S)
   }
   M.ER301 = ER301
 
-  -- Per voice: the notes that sound (oldest first, {id, pitch}) and the
-  -- port whose trigger is high (nil when low). The port is kept from the
-  -- note on, so an off after a route change lowers the port it raised.
-  local state = {notes = {}, high = {}}
-  for voice = 1, NUM_VOICES do state.notes[voice] = {} end
+  -- lines[port] = the notes sounding on the port, oldest first, each
+  -- {voice, id, pitch}. A note stays on the port it started on until it
+  -- ends, whatever its voice's param says by then.
+  local lines = {}
 
   local function param_id(voice) return "v" .. voice .. "_out_er301" end
 
@@ -34,25 +34,44 @@ return function(S)
   local function bus() return S.lib.io_ii end
 
   local function valid_voice(voice)
-    return type(voice) == "number" and state.notes[voice] ~= nil
+    return type(voice) == "number" and voice >= 1 and voice <= NUM_VOICES and voice == math.floor(voice)
   end
 
   local function clamp_volts(volts)
     return math.max(ER301.volts.min, math.min(ER301.volts.max, volts))
   end
 
-  local function forget(notes, id)
-    for index, note in ipairs(notes) do
-      if note.id == id then
-        table.remove(notes, index)
-        return index
+  local function send_pitch(port, pitch)
+    bus().send("er301", "cv", port, clamp_volts(S.lib.io_targets.volts(pitch)))
+  end
+
+  -- The line and index of voice's note id, or nil
+  local function find(voice, id)
+    for port, notes in pairs(lines) do
+      for index, note in ipairs(notes) do
+        if note.voice == voice and note.id == id then return port, index end
       end
     end
     return nil
   end
 
-  local function send_pitch(port, pitch)
-    bus().send("er301", "cv", port, clamp_volts(S.lib.io_targets.volts(pitch)))
+  -- Take a note off its line: the line's pitch goes to the newest left,
+  -- its trigger low when it was the last. No-op for a note not held.
+  local function release(voice, id)
+    local port, index = find(voice, id)
+    if not port then return end
+    local notes = lines[port]
+    table.remove(notes, index)
+    if not bus() then
+      if #notes == 0 then lines[port] = nil end
+      return
+    end
+    if #notes == 0 then
+      lines[port] = nil
+      bus().send_off("er301", "tr", port, 0)
+    elseif index == #notes + 1 then
+      send_pitch(port, notes[#notes].pitch)
+    end
   end
 
   S.register_note_target({name = "er301",
@@ -61,37 +80,36 @@ return function(S)
     end,
     note_on = function(voice, id, pitch)
       if not valid_voice(voice) or not bus() or type(pitch) ~= "number" then return end
-      local port = state.high[voice] or port_of(voice)
+      local port = port_of(voice)
       if port <= 0 then return end
-      local notes = state.notes[voice]
-      forget(notes, id)
-      table.insert(notes, {id = id, pitch = pitch})
-      state.high[voice] = port
-      send_pitch(port, pitch)
-      bus().send("er301", "tr", port, 1)
+      release(voice, id)
+      local notes = lines[port] or {}
+      local note = {voice = voice, id = id, pitch = pitch}
+      table.insert(notes, note)
+      lines[port] = notes
+      -- the core records a target for a note only when this returned, so a
+      -- send that raises must leave the line as it was
+      local ok, err = pcall(function()
+        send_pitch(port, pitch)
+        bus().send("er301", "tr", port, 1)
+      end)
+      if not ok then
+        table.remove(notes)
+        if #notes == 0 then lines[port] = nil end
+        error(err, 0)
+      end
     end,
     note_off = function(voice, id)
       if not valid_voice(voice) then return end
-      local notes = state.notes[voice]
-      local count = #notes
-      local index = forget(notes, id)
-      if not index then return end
-      local port = state.high[voice]
-      if not (port and bus()) then return end
-      if #notes == 0 then
-        state.high[voice] = nil
-        bus().send_off("er301", "tr", port, 0)
-      elseif index == count then
-        send_pitch(port, notes[#notes].pitch)
-      end
+      release(voice, id)
     end,
     stop_all = function()
-      for voice = 1, NUM_VOICES do
-        state.notes[voice] = {}
-        local port = state.high[voice]
-        state.high[voice] = nil
-        if port and bus() then bus().send_off("er301", "tr", port, 0) end
-      end
+      local ports = {}
+      for port in pairs(lines) do ports[#ports + 1] = port end
+      table.sort(ports)
+      lines = {}
+      if not bus() then return end
+      for _, port in ipairs(ports) do bus().send_off("er301", "tr", port, 0) end
     end,
     rows = function(voice)
       if not (valid_voice(voice) and params.lookup and params.lookup[param_id(voice)]) then return {} end

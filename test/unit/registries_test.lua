@@ -1029,6 +1029,18 @@ test("the 3.6 registries take what their records allow", function()
   assert_equal(S.registry.note_targets[1].name, "t", "a target is kept")
   assert_true(refused(S.register_note_target, target()), "a second t")
   assert_equal(#S.registry.note_targets, 1, "nothing refused was kept")
+  -- layout_states: the IO section's form ({name = string, setup = fn})
+  assert_true(refused(S.register_note_target, target({ name = "l1", layout_states = 1 })), "a list")
+  assert_true(refused(S.register_note_target, target({ name = "l2", layout_states = { { name = "x" } } })),
+    "a state needs a setup")
+  assert_true(refused(S.register_note_target, target({ name = "l3", layout_states = { { setup = fn } } })),
+    "a state needs a name")
+  assert_true(refused(S.register_note_target, target({ name = "l4", layout_states = { { name = 1, setup = fn } } })),
+    "a name is a string")
+  local states = { { name = "look", setup = fn } }
+  S.register_note_target(target({ name = "lay", layout_states = states }))
+  assert_equal(S.registry.note_targets[2].layout_states, states, "the registry's record holds the states")
+  assert_equal(#S.registry.note_targets, 2, "nothing refused was kept")
   -- ii devices: param_count whole, at least 0, more than 0 only with add_params
   S.register_ii_device({ name = "jf", param_count = 8, add_params = fn })
   assert_true(refused(S.register_ii_device, { name = "jf" }), "a second jf")

@@ -21,6 +21,7 @@ local function install_ii(state)
   local function recorder(kind, only_leading)
     return function(...)
       if only_leading and not state.leading then return end
+      if state.fail_next then state.fail_next = nil; error("send failed", 0) end
       state.calls[#state.calls + 1] = {kind, ...}
     end
   end
@@ -260,6 +261,131 @@ test("without the ii module the device does nothing and the page draws", functio
   target.note_on(1, "s1", 60, 1); target.note_off(1, "s1"); target.stop_all()
   local device = device_of(S)
   device.ready(); device.release()
+end)
+
+-- Ruling 10: an output is one line that plays one note at a time, whatever voices feed it
+test("two voices on one output in pitch mode share it", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_txo", 5); params:set("v2_out_txo", 5)
+  state.calls = {}
+  target.note_on(1, "s1", 72, 1); target.note_on(2, "s1", 84, 1)
+  assert_calls(state, {{"send", "txo", "cv", 5, 1}, {"send", "txo", "tr", 5, 1},
+    {"send", "txo", "cv", 5, 2}, {"send", "txo", "tr", 5, 1}}, "both notes")
+  target.note_off(2, "s1")
+  assert_calls(state, {{"send", "txo", "cv", 5, 1}}, "the pitch falls back to the first voice's note, no trigger")
+  target.note_on(2, "s2", 84, 1); state.calls = {}
+  target.note_off(1, "s1")
+  assert_calls(state, {}, "the first voice's last note ends while the other sounds: the trigger stays high")
+  target.note_off(2, "s2")
+  assert_calls(state, {{"send_off", "txo", "tr", 5, 0}}, "low once, at the line's last note")
+end)
+
+test("two envelope voices on one output: its envelope goes off only when the last leaves", function()
+  local _, S, state = started()
+  local device = device_of(S)
+  params:set("v1_out_txo", 5); params:set("v1_out_txo_cv", ENVELOPE)
+  state.calls = {}
+  params:set("v2_out_txo", 5); params:set("v2_out_txo_cv", ENVELOPE)
+  state.calls = {}
+  device.ready()
+  assert_calls(state, setup_calls(5, 10, 500), "ready: the shared output once")
+  params:set("v1_out_txo_cv", 1)
+  assert_calls(state, {}, "one voice leaves envelope mode: the other still needs it")
+  params:set("v2_out_txo_cv", 1)
+  assert_calls(state, {{"send", "txo", "env_act", 5, 0}}, "the last leaves: off, exactly once")
+  params:set("v1_out_txo_cv", ENVELOPE)
+  assert_calls(state, setup_calls(5, 10, 500), "set up again")
+  params:set("v1_out_txo", 6)
+  local expected = {{"send", "txo", "env_act", 5, 0}}
+  for _, call in ipairs(setup_calls(6, 10, 500)) do expected[#expected + 1] = call end
+  assert_calls(state, expected, "the output left by the only envelope voice")
+end)
+
+test("a pitch voice and an envelope voice on one output: each note's cv is its own mode's", function()
+  local _, S, state = started()
+  local target, device = target_of(S), device_of(S)
+  params:set("v1_out_txo", 5)
+  params:set("v2_out_txo", 5); params:set("v2_out_txo_cv", ENVELOPE)
+  state.calls = {}
+  device.ready()
+  assert_calls(state, setup_calls(5, 10, 500), "the envelope is active for the envelope voice")
+  target.note_on(2, "s1", 60, 0.5)
+  assert_calls(state, {{"send", "txo", "cv", 5, 2.5}, {"send", "txo", "env", 5, 1}, {"send", "txo", "tr", 5, 1}})
+  target.note_on(1, "s1", 72, 1)
+  assert_calls(state, {{"send", "txo", "cv", 5, 1}, {"send", "txo", "tr", 5, 1}}, "the pitch note: its pitch, no env")
+  target.note_off(1, "s1")
+  assert_calls(state, {{"send", "txo", "cv", 5, 2.5}}, "back to the envelope note's level")
+  target.note_off(2, "s1")
+  assert_calls(state, {{"send_off", "txo", "tr", 5, 0}, {"send_off", "txo", "env", 5, 0}}, "the last: both low")
+  target.note_on(2, "s2", 60, 1); target.note_on(1, "s2", 72, 1); state.calls = {}
+  target.note_off(1, "s2"); target.note_off(2, "s2")
+  assert_calls(state, {{"send", "txo", "cv", 5, 5}, {"send_off", "txo", "tr", 5, 0}, {"send_off", "txo", "env", 5, 0}},
+    "an envelope note that ended earlier leaves its gate to the last end, a pitch note")
+end)
+
+test("ready and release with a shared output send its lines once", function()
+  local _, S, state = started()
+  local device = device_of(S)
+  for voice = 1, 2 do params:set("v" .. voice .. "_out_txo", 5); params:set("v" .. voice .. "_out_txo_cv", ENVELOPE) end
+  params:set("v3_out_txo", 6); params:set("v3_out_txo_cv", ENVELOPE)
+  state.calls = {}
+  device.ready()
+  local expected = setup_calls(5, 10, 500)
+  for _, call in ipairs(setup_calls(6, 10, 500)) do expected[#expected + 1] = call end
+  assert_calls(state, expected, "ready")
+  device.release()
+  assert_calls(state, {{"send_direct", "txo", "env_act", 5, 0}, {"send_direct", "txo", "env_act", 6, 0}}, "release")
+end)
+
+test("a note_on whose send raises leaves the line as it was", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_txo", 5)
+  state.fail_next = true
+  assert_true(not pcall(target.note_on, 1, "s1", 72, 1), "the error goes on to the core")
+  target.note_off(1, "s1")
+  assert_calls(state, {}, "an off for a note the line does not hold does nothing")
+  target.note_on(1, "s1", 72, 1); state.calls = {}
+  state.fail_next = true
+  assert_true(not pcall(target.note_on, 1, "s2", 84, 1), "a second note, raising")
+  target.note_off(1, "s2")
+  assert_calls(state, {}, "nothing for it")
+  target.note_off(1, "s1")
+  assert_calls(state, {{"send_off", "txo", "tr", 5, 0}}, "the first note alone held the trigger")
+end)
+
+-- 3.6's target layout states: the target's own record carries them
+test("the two TELEXo layout states are listed and each draws its look", function()
+  local context, S = started()
+  local states = S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states
+  local function state_named(name)
+    for _, state in ipairs(states) do if state.name == name then return state end end
+  end
+  local on = state_named("voice: txo on an output")
+  local open = state_named("voice: txo detail list open")
+  assert_true(on ~= nil and open ~= nil, "both are listed")
+  h.show_page("IO")
+  on.setup(context); redraw()
+  assert_true(h.screen_shows(context, "out 3  envelope"), "the row's text")
+  h.assert_screen_layout(context, "txo on an output")
+  open.setup(context); redraw()
+  assert_true(h.screen_shows(context, "output") and h.screen_shows(context, "mode"), "the detail list's fields")
+  h.assert_screen_layout(context, "txo detail list open")
+end)
+
+test("without the ii module the layout states are listed and do nothing", function()
+  local context, S = started(true)
+  local states = S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states
+  local found = 0
+  for _, state in ipairs(states) do
+    if state.name == "voice: txo on an output" or state.name == "voice: txo detail list open" then
+      found = found + 1
+      h.show_page("IO")
+      state.setup(context); redraw()
+    end
+  end
+  assert_equal(found, 2, "both listed")
 end)
 
 test("IO's voice section: a detail row for the output and mode, and a row each for the times", function()

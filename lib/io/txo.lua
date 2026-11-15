@@ -1,11 +1,11 @@
 -- lib/io/txo.lua
 -- The TELEXo as a note target over the ii bus (S.lib.io_txo, 3.6 design
--- 6.3, docs/notes/lua/io/txo.md): a voice plays one of the 32 outputs, the
--- newest note at a time, in pitch mode (the output's cv is the pitch, its
--- trigger the gate) or envelope mode (the cv is the level, the output's
--- envelope the gate). Every message goes through S.lib.io_ii (another
--- module of this release); where it or the params are absent the device
--- does nothing.
+-- 6.3, docs/notes/lua/io/txo.md): an output is one line that plays one note
+-- at a time, whatever voices feed it (ruling 10), in pitch mode (the
+-- output's cv is the pitch, its trigger the gate) or envelope mode (the cv
+-- is the level, the output's envelope the gate). Every message goes through
+-- S.lib.io_ii (another module of this release); where it or the params are
+-- absent the device does nothing.
 
 return function(S)
   local M = {}
@@ -26,12 +26,13 @@ return function(S)
   }
   M.TXO = TXO
 
-  -- Per voice: the notes that sound (oldest first), the output whose
-  -- trigger is high and its mode (kept from the first note on, so an off
-  -- after a route change lowers what it raised), and the output whose
-  -- envelope is set up on the module
-  local state = {notes = {}, high = {}, active = {}}
-  for voice = 1, NUM_VOICES do state.notes[voice] = {} end
+  -- lines[output] = {notes = the notes sounding on it, oldest first, each
+  -- {voice, id, pitch, velocity, envelope}; env_high = its envelope's gate
+  -- was raised}. A note stays on the output and in the mode it started in
+  -- until it ends, whatever its voice's params say by then.
+  local lines = {}
+  -- active[output] = true: the output's envelope is set up on the module
+  local active = {}
 
   local function out_id(voice) return "v" .. voice .. "_out_txo" end
   local function mode_id(voice) return "v" .. voice .. "_out_txo_cv" end
@@ -56,31 +57,29 @@ return function(S)
   end
 
   local function valid_voice(voice)
-    return type(voice) == "number" and state.notes[voice] ~= nil
+    return type(voice) == "number" and voice >= 1 and voice <= NUM_VOICES and voice == math.floor(voice)
   end
 
   local function clamp_volts(volts)
     return math.max(TXO.volts.min, math.min(TXO.volts.max, volts))
   end
 
-  local function forget(notes, id)
-    for index, note in ipairs(notes) do
-      if note.id == id then
-        table.remove(notes, index)
-        return index
-      end
-    end
-    return nil
-  end
-
-  -- What the output's cv says for a note
-  local function level_of(high, note)
-    if high.envelope then return note.velocity * TXO.level_volts end
+  -- What the output's cv says for a note, in the mode it started in
+  local function level_of(note)
+    if note.envelope then return note.velocity * TXO.level_volts end
     return clamp_volts(S.lib.io_targets.volts(note.pitch))
   end
 
+  local function sorted_outputs(map)
+    local list = {}
+    for output in pairs(map) do list[#list + 1] = output end
+    table.sort(list)
+    return list
+  end
+
   ---------------------------------------------------------------------------
-  -- The envelope's setup
+  -- The envelope's setup: an output's envelope is active while some voice
+  -- routed to it is in envelope mode
   ---------------------------------------------------------------------------
 
   local function envelope_output(voice)
@@ -89,23 +88,41 @@ return function(S)
     return nil
   end
 
-  -- Take a voice's envelope to what its params say: the output it left
-  -- gets its envelope off, an envelope output gets the three setup lines
-  local function sync_voice(voice)
-    if not leading() then return end
-    local before, now = state.active[voice], envelope_output(voice)
-    if before and before ~= now then bus().send("txo", "env_act", before, 0) end
-    if now then
-      bus().send("txo", "env_act", now, 1)
-      bus().send("txo", "env_att", now, params:get("txo_attack"))
-      bus().send("txo", "env_dec", now, params:get("txo_decay"))
+  local function wanted()
+    local want = {}
+    if not has_params() then return want end
+    for voice = 1, NUM_VOICES do
+      local output = envelope_output(voice)
+      if output then want[output] = true end
     end
-    state.active[voice] = now
+    return want
   end
 
-  local function sync_all()
-    if not has_params() then return end
-    for voice = 1, NUM_VOICES do sync_voice(voice) end
+  local function set_up(output)
+    bus().send("txo", "env_act", output, 1)
+    bus().send("txo", "env_att", output, params:get("txo_attack"))
+    bus().send("txo", "env_dec", output, params:get("txo_decay"))
+    active[output] = true
+  end
+
+  -- Take the module to what the params say: an output no voice needs any
+  -- more gets env_act 0 (once), and the outputs named (one voice's, or all
+  -- of them) the three setup lines
+  local function sync(only_voice)
+    if not leading() then return end
+    local want = wanted()
+    for _, output in ipairs(sorted_outputs(active)) do
+      if not want[output] then
+        bus().send("txo", "env_act", output, 0)
+        active[output] = nil
+      end
+    end
+    if only_voice then
+      local output = envelope_output(only_voice)
+      if output then set_up(output) end
+    else
+      for _, output in ipairs(sorted_outputs(want)) do set_up(output) end
+    end
   end
 
   local function route_changed(voice)
@@ -117,52 +134,79 @@ return function(S)
   -- The note target
   ---------------------------------------------------------------------------
 
+  local function find(voice, id)
+    for output, line in pairs(lines) do
+      for index, note in ipairs(line.notes) do
+        if note.voice == voice and note.id == id then return output, index end
+      end
+    end
+    return nil
+  end
+
+  local function lower(output, line)
+    bus().send_off("txo", "tr", output, 0)
+    if line.env_high then bus().send_off("txo", "env", output, 0) end
+  end
+
+  -- Take a note off its line: the line's cv goes to the newest left (as
+  -- that note's own mode says), the trigger (and the envelope's gate) low
+  -- when it was the last. No-op for a note not held.
+  local function release(voice, id)
+    local output, index = find(voice, id)
+    if not output then return end
+    local line = lines[output]
+    table.remove(line.notes, index)
+    if #line.notes == 0 then lines[output] = nil end
+    if not bus() then return end
+    if #line.notes == 0 then
+      lower(output, line)
+    elseif index == #line.notes + 1 then
+      bus().send("txo", "cv", output, level_of(line.notes[#line.notes]))
+    end
+  end
+
   S.register_note_target({name = "txo",
     routed = function(voice)
       return valid_voice(voice) and bus() ~= nil and output_of(voice) > 0
     end,
     note_on = function(voice, id, pitch, velocity)
       if not valid_voice(voice) or not bus() or type(pitch) ~= "number" then return end
-      local high = state.high[voice]
-      if not high then
-        local output = output_of(voice)
-        if output <= 0 then return end
-        high = {output = output, envelope = envelope_of(voice)}
+      local output = output_of(voice)
+      if output <= 0 then return end
+      release(voice, id)
+      local note = {voice = voice, id = id, pitch = pitch, envelope = envelope_of(voice),
+        velocity = type(velocity) == "number" and velocity or 1}
+      local line = lines[output]
+      local created = line == nil
+      if created then line = {notes = {}, env_high = false}; lines[output] = line end
+      local was_high = line.env_high
+      table.insert(line.notes, note)
+      -- the core records a target for a note only when this returned, so a
+      -- send that raises must leave the line as it was
+      local ok, err = pcall(function()
+        bus().send("txo", "cv", output, level_of(note))
+        if note.envelope then
+          bus().send("txo", "env", output, 1)
+          line.env_high = true
+        end
+        bus().send("txo", "tr", output, 1)
+      end)
+      if not ok then
+        table.remove(line.notes)
+        line.env_high = was_high
+        if created then lines[output] = nil end
+        error(err, 0)
       end
-      local notes = state.notes[voice]
-      forget(notes, id)
-      local note = {id = id, pitch = pitch, velocity = type(velocity) == "number" and velocity or 1}
-      table.insert(notes, note)
-      state.high[voice] = high
-      bus().send("txo", "cv", high.output, level_of(high, note))
-      if high.envelope then bus().send("txo", "env", high.output, 1) end
-      bus().send("txo", "tr", high.output, 1)
     end,
     note_off = function(voice, id)
       if not valid_voice(voice) then return end
-      local notes = state.notes[voice]
-      local count = #notes
-      local index = forget(notes, id)
-      local high = state.high[voice]
-      if not (index and high and bus()) then return end
-      if #notes == 0 then
-        state.high[voice] = nil
-        bus().send_off("txo", "tr", high.output, 0)
-        if high.envelope then bus().send_off("txo", "env", high.output, 0) end
-      elseif index == count then
-        bus().send("txo", "cv", high.output, level_of(high, notes[#notes]))
-      end
+      release(voice, id)
     end,
     stop_all = function()
-      for voice = 1, NUM_VOICES do
-        state.notes[voice] = {}
-        local high = state.high[voice]
-        state.high[voice] = nil
-        if high and bus() then
-          bus().send_off("txo", "tr", high.output, 0)
-          if high.envelope then bus().send_off("txo", "env", high.output, 0) end
-        end
-      end
+      local held = lines
+      lines = {}
+      if not bus() then return end
+      for _, output in ipairs(sorted_outputs(held)) do lower(output, held[output]) end
     end,
     rows = function(voice)
       if not (valid_voice(voice) and has_params()) then return {} end
@@ -179,22 +223,48 @@ return function(S)
         {label = TXO.labels.decay, kind = "param", param_id = "txo_decay", format = TXO.labels.ms},
       }
     end,
+    -- The voice section's looks with this target's rows (ruling 11: the IO
+    -- page lists them with that section's; they do nothing where the
+    -- params were never added)
+    layout_states = {
+      {name = "txo on an output", setup = function()
+        if not has_params() then return end
+        params:set(out_id(1), 3)
+        params:set(mode_id(1), TXO.envelope_mode)
+      end},
+      {name = "txo detail list open", setup = function()
+        if not has_params() then return end
+        params:set(out_id(1), 3)
+        S.lib.pages_io.show_section("voice")
+        for index, row in ipairs(S.lib.pages_io.rows()) do
+          if row.section == "voice" and row.label == TXO.labels.row then
+            local moves = 0
+            for at = S.io_cursor + 1, index do
+              if S.lib.pages_io.rows()[at].selectable ~= false then moves = moves + 1 end
+            end
+            enc(2, moves)
+            key(3, 1); key(3, 0)
+            return
+          end
+        end
+        error("txo layout: the IO page has no txo row", 0)
+      end},
+    },
   })
 
-  -- ready: the bus is led now, so every envelope voice is set up again;
+  -- ready: the bus is led now, so every envelope output is set up again;
   -- release: the bus is left, so each envelope that was set up is turned
-  -- off (sent direct, since the bus no longer leads)
+  -- off (sent direct, since the bus no longer leads), each output once
   S.register_ii_device({name = "txo", param_count = TXO.param_count,
     ready = function()
-      for voice = 1, NUM_VOICES do state.active[voice] = nil end
-      sync_all()
+      active = {}
+      sync()
     end,
     release = function()
-      for voice = 1, NUM_VOICES do
-        local output = state.active[voice]
-        state.active[voice] = nil
-        if output and bus() then bus().send_direct("txo", "env_act", output, 0) end
-      end
+      local outputs = sorted_outputs(active)
+      active = {}
+      if not bus() then return end
+      for _, output in ipairs(outputs) do bus().send_direct("txo", "env_act", output, 0) end
     end,
     add_params = function() M.add_params() end})
 
@@ -206,7 +276,7 @@ return function(S)
     for voice = 1, NUM_VOICES do
       local function changed()
         route_changed(voice)
-        sync_voice(voice)
+        sync(voice)
       end
       params:add{type = "number", id = out_id(voice), name = "v" .. voice .. " txo output",
         min = TXO.outputs.min, max = TXO.outputs.max, default = 0,
@@ -221,51 +291,8 @@ return function(S)
       params:add{type = "number", id = "txo_" .. field, name = "txo " .. field,
         min = TXO[field].min, max = TXO[field].max, default = TXO[field].default,
         formatter = function(param) return string.format(TXO.labels.ms, param:get()) end,
-        action = sync_all}
+        action = function() sync() end}
     end
-  end
-
-  ---------------------------------------------------------------------------
-  -- Layout states: the voice section is the targets module's, which has no
-  -- way for a target to add states, so this one adds its own (read when
-  -- the IO page's start step builds its list)
-  ---------------------------------------------------------------------------
-
-  local function voice_section()
-    for _, record in ipairs(S.registry.io_sections or {}) do
-      if record.name == "voice" then return record end
-    end
-  end
-
-  local function open_detail()
-    S.lib.pages_io.show_section("voice")
-    for index, row in ipairs(S.lib.pages_io.rows()) do
-      if row.section == "voice" and row.label == TXO.labels.row then
-        local moves = 0
-        for at = S.io_cursor + 1, index do
-          if S.lib.pages_io.rows()[at].selectable ~= false then moves = moves + 1 end
-        end
-        enc(2, moves)
-        key(3, 1); key(3, 0)
-        return
-      end
-    end
-    error("txo layout: the IO page has no txo row", 0)
-  end
-
-  local section = voice_section()
-  if section then
-    section.layout_states = section.layout_states or {}
-    table.insert(section.layout_states, {name = "txo on an output", setup = function()
-      if not has_params() then return end
-      params:set(out_id(1), 3)
-      params:set(mode_id(1), TXO.envelope_mode)
-    end})
-    table.insert(section.layout_states, {name = "txo detail list open", setup = function()
-      if not has_params() then return end
-      params:set(out_id(1), 3)
-      open_detail()
-    end})
   end
 
   return M

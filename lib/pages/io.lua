@@ -513,16 +513,27 @@ return function(S)
   -- registered by a module included after this one counts too)
   S.register_start(S.constants.START_ORDER.io_layout_states, function()
     for index = #layout_states, own_layout_states + 1, -1 do layout_states[index] = nil end
-    for _, section in ipairs(ordered_sections()) do
-      local name = section.name
-      table.insert(layout_states, {name = name .. " at the top", setup = function() M.show_section(name) end})
-      for _, state in ipairs(section.layout_states or {}) do
+    local function add_states(name, states)
+      for _, state in ipairs(states or {}) do
         table.insert(layout_states, {name = name .. ": " .. state.name, setup = function(context)
           M.show_section(name)
           state.setup(context)
         end})
       end
     end
+    -- the registered targets' states are the voice section's, after its own
+    -- (or last, with no voice section)
+    local function add_target_states()
+      for _, target in ipairs(S.registry.note_targets) do add_states("voice", target.layout_states) end
+    end
+    local voice_listed = false
+    for _, section in ipairs(ordered_sections()) do
+      local name = section.name
+      table.insert(layout_states, {name = name .. " at the top", setup = function() M.show_section(name) end})
+      add_states(name, section.layout_states)
+      if name == "voice" then add_target_states(); voice_listed = true end
+    end
+    if not voice_listed then add_target_states() end
   end)
 
   return M
