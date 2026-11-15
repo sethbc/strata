@@ -8,5 +8,6 @@ The decisions taken during development, one file per release line. Each was take
 - [3.3](3.3.md): buffers as instruments and the review fixes, with 3.3.1 (the fix release) and 3.3.2 (page randomize).
 - [3.4](3.4.md): modulation and sequencing. Its rulings are numbered; code comments cite them by number.
 - [3.5](3.5.md): polyphony and MPE. Its fifty-nine rulings keep the build's numbers, which code comments cite.
+- [3.6](3.6.md): integration. Its rulings come in two series that keep their numbers: the plan's thirty-three, cited as plan ruling N, and the build's forty-two, cited as build ruling N.
 
 A new release adds its file here, `docs/decisions/<release>.md`, and its line above. A fix release's decisions go in its release line's file.
