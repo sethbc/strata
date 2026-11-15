@@ -42,7 +42,7 @@ What a routed voice plays on its targets:
 - **its pattern steps**: each step plays the step's pitches (the chord's notes, or the voice's own pitch, moved by the step's pitch lock) at the step's level, and each note ends just before the step's gate does (30 ms early, or half the note for a very short one), so a gate or trigger input sees a low before the next step raises it; a ratchet's next hit ends the note before it plays again
 - **its played notes**: each MIDI note you play on the voice, held for as long as you hold it (or latch it), with its bend, pressure and slide where the target takes them
 
-A note always ends on the instruments it started on, even if you change a route while it sounds. Every note a voice sounds ends when you stop the voice, change one of its routes, stop the patterns (their step notes), load a PSET or leave the script. A muted voice, or one silenced by another's solo, plays nothing on its targets, and its notes end as it falls silent.
+A note always ends on the instruments it started on, even if you change a route while it sounds. Every note a voice sounds ends when you stop the voice, change one of its routes, stop the patterns (their step notes), load a PSET that changes its routes, or leave the script (a PSET that leaves them as they are lets the notes end as they would). A muted voice, or one silenced by another's solo, plays nothing on its targets, and its notes end as it falls silent.
 
 Pitch to volts: a target that takes volts plays MIDI note 60 (middle C) at 0 V, one volt an octave, so note 72 is 1 V and note 48 is -1 V; each clamps to its device's range.
 
