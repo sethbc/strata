@@ -132,15 +132,6 @@ return function(S)
     each_chosen(function(player, key) call_own(player, key, "stop_all") end)
   end
 
-  -- Why a PSET could not give a name back as it is (docs/notes/lua/io/keyed.md)
-  local function unkeepable(name)
-    if type(name) ~= "string" or name == "" then return "not a non-empty string" end
-    if name:find("\n", 1, true) or name:find("\r", 1, true) then return "a newline" end
-    if name:match("^%s") or name:match("%s$") then return "a surrounding space" end
-    if tonumber(name) ~= nil or name == "inf" or name == "-inf" then return "reads as a number" end
-    return nil
-  end
-
   -- The entries of note_players, sorted by name (duty 1: read at init)
   local function entries()
     local names = {}
@@ -153,12 +144,13 @@ return function(S)
   end
 
   -- The keys: none, then the players' names, sorted, without nb's own MIDI
-  -- players (duty 2) and without a name a PSET cannot keep (one line each)
+  -- players (duty 2) and without a name a PSET cannot keep (one line each,
+  -- with the keyed module's own reason: one check, so add never raises here)
   local function listed(names)
     local keys = {NB.none}
     state.players = {}
     for _, name in ipairs(names) do
-      local why = unkeepable(name)
+      local why = S.lib.io_keyed.refuses(name)
       if name == NB.none then why = "the name Strata gives no player" end
       if name:sub(1, #NB.midi_prefix) == NB.midi_prefix then
         why = nil

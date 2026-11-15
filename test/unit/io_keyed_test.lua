@@ -133,6 +133,19 @@ test("add refuses a key a PSET cannot hold", function()
   end
 end)
 
+test("refuses names why a PSET could not keep a key, and nil for one it can", function()
+  -- the one check add uses; a caller with names it does not choose (the nb selector) filters with it
+  local _, S = started()
+  local refuses = S.lib.io_keyed.refuses
+  for _, key in ipairs({"off", "crow 1/2", "lfo:3 (x)"}) do assert_equal(refuses(key), nil, key) end
+  local cases = {{"64", "reads as a number"}, {"inf", "reads as a number"}, {"two\nlines", "a newline"},
+    {" lead", "a surrounding space"}, {"trail ", "a surrounding space"}, {"", "not a non-empty string"},
+    {64, "not a non-empty string"}}
+  for _, case in ipairs(cases) do
+    assert_equal(refuses(case[1]), case[2], "the reason for " .. string.format("%q", tostring(case[1])))
+  end
+end)
+
 test("a key with an inner space and punctuation survives a PSET", function()
   local context, S = started()
   S.lib.io_keyed.add("probe_pick", "probe pick", {"off", "crow 1/2", "lfo:3 (x)"}, {"off", "C", "L"}, function() end)
