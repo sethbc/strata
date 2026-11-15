@@ -214,6 +214,8 @@ return function(S)
     if type(path) ~= "string" then return end
     if type(args) ~= "table" then args = {} end
     if type(from) == "table" and type(from[1]) == "string" then
+      -- IO's osc title shows the sender, and the page does not animate
+      if from[1] ~= state.sender then request_redraw() end
       state.sender = from[1]
       sync()
     end
