@@ -235,8 +235,12 @@ peakProbe = Synth(\strataCheckPeak, [\in, privateBus, \out, peakBus], probeGroup
 loadSlot = { arg seconds, low = 0, high = 1;
     var validFrames;
     writeTestFile.(path, sampleRate, (seconds * sampleRate).round.asInteger, [0, 0]);
-    command.(\loadBuffer, slot, path, 0); 0.3.wait; server.sync;
+    // the slot's frames are 0 from the command until the load's peaks file is
+    // in place (applyLoad): wait for that, never for a time. A count read too
+    // early is 0, and the fills below would then cover the region too (#706)
+    command.(\loadBuffer, slot, path, 0); h.waitFor({ engine.bufferFrames[slot] > 0 }, 5); server.sync;
     validFrames = engine.bufferFrames[slot];
+    if (validFrames < 1) { check.(false, "loops: the % s file's load ended within 5 s".format(seconds)) };
     [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer;
         var first = (low * validFrames).round.asInteger, last = (high * validFrames).round.asInteger;
         if (first > 0) { buffer.fill(0, first, 1) };
