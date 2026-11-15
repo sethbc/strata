@@ -168,9 +168,9 @@ return function(S)
         {label = "record", kind = "param", param_id = "tapeloop_rec", binary = {[0] = "off", [1] = "on"}},
         {label = "length", kind = "param", param_id = "tapeloop_length", format = "%.2f s"},
         {label = "speed", kind = "param", param_id = "tapeloop_rate", format = "%.2fx"},
-        {label = "feedback", kind = "param", param_id = "tapeloop_feedback", format = "%.2f"},
-        {label = "wear", kind = "param", param_id = "tapeloop_wear", format = "%.2f"},
-        {label = "level", kind = "param", param_id = "tapeloop_level", format = "%.2f"},
+        {label = "feedback", kind = "param", param_id = "tapeloop_feedback"},
+        {label = "wear", kind = "param", param_id = "tapeloop_wear"},
+        {label = "level", kind = "param", param_id = "tapeloop_level"},
       }
     end,
     layout_states = {

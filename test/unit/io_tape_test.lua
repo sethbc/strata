@@ -111,6 +111,51 @@ test("turning the tape on sets two voices up as one stereo loop", function()
   end
 end)
 
+test("turning the tape on makes voice 1's calls in the brief's order, then voice 2's, the mixer last", function()
+  -- checks.md §8 (the order matters: fc_mod before fc; enable last)
+  local context = started()
+  local mixer = {}
+  for _, name in ipairs({ "level_eng_cut", "level_adc_cut", "level_tape_cut" }) do
+    local real = audio[name]
+    audio[name] = function(level) mixer[#mixer + 1] = { name, #context.softcut.calls }; return real(level) end
+  end
+  params:set("tapeloop", 1)
+  local voice_names = { "buffer", "pan", "loop", "loop_start", "loop_end", "fade_time", "position",
+    "rate_slew_time", "rate", "level", "level_input_cut", "pre_level", "level_cut_cut", "rec_level",
+    "pre_filter_fc_mod", "pre_filter_fc", "pre_filter_rq", "pre_filter_lp", "pre_filter_dry",
+    "post_filter_dry", "rec", "play", "enable" }
+  local sequence = {}
+  for _, call in ipairs(context.softcut.calls) do sequence[#sequence + 1] = call[1] .. ":" .. tostring(call[2]) end
+  local expected = {}
+  for voice = 1, 2 do
+    for _, name in ipairs(voice_names) do expected[#expected + 1] = name .. ":" .. voice end
+  end
+  assert_equal(table.concat(sequence, " "), table.concat(expected, " "), "voice 1's calls, then voice 2's")
+  assert_equal(#mixer, 3, "three mixer calls")
+  local total = #context.softcut.calls
+  assert_equal(mixer[1][1], "level_eng_cut"); assert_equal(mixer[2][1], "level_adc_cut")
+  assert_equal(mixer[3][1], "level_tape_cut")
+  for _, call in ipairs(mixer) do assert_equal(call[2], total, call[1] .. " comes after every softcut call") end
+end)
+
+test("a 3.5 PSET read while the tape is on turns it off and puts the mixer back", function()
+  local context = started()
+  local path = context.data_dir .. "tape35on.pset"
+  params:write(path)
+  local file = io.open(path, "r"); local text = file:read("a"); file:close()
+  local kept = {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    if not line:find("tapeloop", 1, true) then kept[#kept + 1] = line end
+  end
+  file = io.open(path, "w"); file:write(table.concat(kept, "\n")); file:close()
+  params:set("tapeloop", 1)
+  assert_equal(context.audio.levels.eng_cut, 1, "the loop is on")
+  params:read(path)
+  assert_equal(params:get("tapeloop"), 0, "the PSET has no line, so the tape goes to its default, off")
+  for v = 1, 2 do assert_equal(value(context, "enable", v), 0, "voice " .. v .. " disabled") end
+  assert_near(context.audio.levels.eng_cut, util.dbamp(params:get("cut_input_eng")), 1e-9, "the mixer is back")
+end)
+
 test("each param reaches both voices while the tape is on", function()
   local context = started()
   params:set("tapeloop", 1)
@@ -218,6 +263,39 @@ test("the tape's senders count no engine message and take no round-robin slot (#
   assert_equal(sync.budget_state().sent, 1, "and (from the reverb send above) nothing more is counted")
 end)
 
+test("cleanup with the tape never on touches neither softcut nor the mixer", function()
+  local context = started()
+  cleanup()
+  assert_equal(#context.softcut.calls, 0, "softcut")
+  assert_equal(context.audio.levels.eng_cut, nil, "the engine level")
+  assert_equal(context.audio.levels.adc_cut, nil, "the adc level")
+  assert_equal(context.audio.levels.tape_cut, nil, "the tape level")
+end)
+
+test("IO's tape section has the seven rows, the binary two reading off and on, the rest as the menu shows them", function()
+  local _, S = started()
+  local rows = {}
+  for _, row in ipairs(S.lib.pages_io.rows()) do
+    if row.section == "tape" and row.kind == "param" then rows[#rows + 1] = row end
+  end
+  assert_equal(#rows, 7, "seven param rows")
+  local ids = {}
+  for index, row in ipairs(rows) do ids[index] = row.param_id end
+  assert_equal(table.concat(ids, " "), table.concat(TAPE_PARAMS, " "), "in the params' order")
+  assert_equal(rows[1].shown, "off"); assert_equal(rows[2].shown, "on")
+  params:set("tapeloop", 1); params:set("tapeloop_rec", 0)
+  rows = {}
+  for _, row in ipairs(S.lib.pages_io.rows()) do
+    if row.section == "tape" and row.kind == "param" then rows[#rows + 1] = row end
+  end
+  assert_equal(rows[1].shown, "on"); assert_equal(rows[2].shown, "off")
+  -- item 6: feedback, wear and level read as the PARAMS menu shows them
+  for _, index in ipairs({ 5, 6, 7 }) do
+    assert_equal(rows[index].shown, params:string(rows[index].param_id), rows[index].param_id .. " as the menu shows it")
+  end
+  assert_equal(rows[7].shown, "70 %")
+end)
+
 test("no tape param is in a scene", function()
   local _, S = started()
   local function snapshot()
@@ -251,6 +329,8 @@ test("a 3.5 PSET loads with the tape off", function()
   params:set("tapeloop_length", 9)
   params:read(path)
   assert_equal(params:get("tapeloop"), 0, "the tape is off")
+  -- params_setup.lua (#628): a Strata param the PSET has no line for goes to its default, not the session's value
+  assert_equal(params:get("tapeloop_length"), 4, "the tape params with no line go to their defaults")
   assert_equal(#context.softcut.calls, 0, "softcut is untouched")
   assert_equal(context.audio.levels.eng_cut, nil)
 end)

@@ -127,7 +127,7 @@ end
 
 -- The arc: after every page file, since each page's rings set only the arc
 -- fields (arc_delta, arc_redraw, arc_alt_delta, arc_alt_redraw) on its
--- page record (SETUP has none, nor IO yet)
+-- page record (SETUP has none)
 S.lib.arc_core = include("lib/arc/core")(S)
 S.lib.arc_main = include("lib/arc/main")(S)
 S.lib.arc_voice = include("lib/arc/voice")(S)
