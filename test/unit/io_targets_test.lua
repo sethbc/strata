@@ -2,8 +2,9 @@
 -- The targets core (lib/io/targets.lua, S.lib.io_targets, 3.6 design §3):
 -- a voice's pattern steps and played notes to the registered note targets,
 -- the offs (one list, checked each LFO step), every way a note ends, mutes,
--- a target that raises, and IO's voice section. No real target exists here:
--- each test registers recording targets of its own.
+-- a target that raises, and IO's voice section. Each test registers
+-- recording targets of its own beside the real ones (or after taking
+-- those out, where a test needs its own alone).
 -- Run alone: lua test/run.lua io_targets
 
 return function(h)
@@ -548,6 +549,30 @@ test("the voice section shows the selected voice's rows in the targets' order", 
   assert_equal(voice_rows()[1].status, nil, "no status for voice 2")
   show_page("IO"); redraw()
   assert_screen_layout(context, "IO voice section")
+end)
+
+-- The real targets stay registered: their rows come ahead of the probe's
+test("the voice section's probe state ends with the probe's rows on screen beside the real targets'", function()
+  local context, S = started()
+  local real = #S.registry.note_targets
+  assert_true(real > 0, "real targets are registered")
+  local state
+  for _, entry in ipairs(S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states) do
+    if entry.name == "voice: a target's rows" then state = entry end
+  end
+  assert_true(state ~= nil, "the state is listed")
+  show_page("IO")
+  state.setup(context); redraw()
+  assert_equal(#S.registry.note_targets, real + 1, "the probe joins the real targets, none taken out")
+  assert_true(h.screen_shows(context, "layout probe") and h.screen_shows(context, "v1"), "the probe's action row")
+  assert_true(h.screen_shows(context, "a target's rows"), "the probe's status row")
+  assert_screen_layout(context, "IO voice section probe state")
+  -- a probe whose row is gone: the state raises naming the row
+  for _, record in ipairs(S.registry.note_targets) do
+    if record.name == "layout probe" then record.rows = function() return {} end end
+  end
+  local ok, problem = pcall(state.setup, context)
+  assert_true(not ok and tostring(problem):find("layout probe row", 1, true) ~= nil, tostring(problem))
 end)
 
 end
