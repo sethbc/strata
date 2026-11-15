@@ -27,6 +27,7 @@ On IO, rings 1 to 4 are level, speed, feedback and wear.
 ## Good to know
 
 - While the tape is on, softcut takes norns' engine output, which is Strata's output after its limiter, and nothing else: the inputs and norns' own tape playback are set to zero in softcut's input mixer. Turning the tape off, or leaving Strata, puts them back to your system levels.
+- While the loop is on, changing norns' own softcut input levels (PARAMETERS > LEVELS: the engine, input and tape levels into softcut) changes what goes into the loop. Turning the loop off puts norns' settings back.
 - The loop plays beside Strata's output, so Strata and the loop both running hot can clip norns' output. `level` is the control.
 - Softcut belongs to the script that is running: a script change ends the loop and its contents are lost.
 - Its voices are softcut's 1 and 2, panned left and right. A script of yours that also uses them would collide.
