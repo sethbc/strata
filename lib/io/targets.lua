@@ -298,24 +298,45 @@ return function(S)
     return #marks > 0 and table.concat(marks, " ") or nil
   end
 
-  -- The layout target its "a target's rows" state registers (once a script)
+  -- The layout target its "a target's rows" state registers (once a script),
+  -- after the real targets' rows: the state then reaches its row as a
+  -- player does (the section shown, the row found by its id, E2 over the
+  -- selectable rows to it) and raises when it is not there
   local LAYOUT_TARGET = "layout probe"
   local function layout_target()
-    if target_named(LAYOUT_TARGET) then return end
-    S.register_note_target({name = LAYOUT_TARGET, routed = function() return false end,
-      note_on = function() end, note_off = function() end,
-      rows = function(voice)
-        return {{label = "layout probe", kind = "action", hint = "probe", run = function() end, id = "probe",
-          text = function() return "v" .. voice end},
-          {kind = "status", text = "a target's rows"}}
-      end,
-      status = function() return "[!]" end})
+    if not target_named(LAYOUT_TARGET) then
+      S.register_note_target({name = LAYOUT_TARGET, routed = function() return false end,
+        note_on = function() end, note_off = function() end,
+        rows = function(voice)
+          return {{label = "layout probe", kind = "action", hint = "probe", run = function() end, id = "probe",
+            text = function() return "v" .. voice end},
+            {kind = "status", text = "a target's rows"}}
+        end,
+        status = function() return "[!]" end})
+    end
+    S.lib.pages_io.show_section("voice")
+    local rows = S.lib.pages_io.rows()
+    local target
+    for index, row in ipairs(rows) do
+      if row.section == "voice" and row.id == "probe" then target = index end
+    end
+    if not target then error("targets layout: the IO page has no layout probe row in the voice section", 2) end
+    local from = S.io_cursor
+    local moves = 0
+    for index = math.min(from, target), math.max(from, target) do
+      if rows[index].selectable ~= false and index ~= from then moves = moves + 1 end
+    end
+    enc(2, target >= from and moves or -moves)
+    local row = S.lib.pages_io.rows()[S.io_cursor]
+    if not (row and row.section == "voice" and row.id == "probe") then
+      error("targets layout: E2 did not reach the layout probe row", 2)
+    end
   end
 
   S.register_io_section({name = "voice",
     title = function() return "voice " .. tostring(S.selected_voice) end,
     rows = section_rows, status = section_status,
-    layout_states = {{name = "no targets", setup = function() end},
+    layout_states = {{name = "nothing routed", setup = function() end},
       {name = "a target's rows", setup = layout_target}}})
 
   -- The start step: the step output, after voices (registered as the
