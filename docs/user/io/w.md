@@ -2,7 +2,7 @@
 
 Whimsical Raps' W/ over the ii bus: W/ synth plays a voice's notes, and W/ tape's transport runs from the [IO page](../pages/io.md). Back to [Screen Controls](../controls.md).
 
-Both need the ii bus to be Strata's (the ii bus setting on IO) and a crow connected. With the bus off, or led by a Teletype, Strata sends W/ nothing.
+Both need the ii bus to be Strata's (the `bus leader` row of IO's `ii` section set to `strata leads`) and a crow connected. With the bus off, or led by a Teletype, Strata sends W/ nothing.
 
 A W/ runs one engine at a time (Tape, Delay or Synth) and you switch engines from its panel. Each engine has its own ii address. Strata cannot tell which engine is running, and it is not known whether W/ ignores commands for an engine it is not running, so run Synth for the synth rows and Tape for the tape rows.
 

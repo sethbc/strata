@@ -22,7 +22,7 @@
 `S.register_note_target({name, routed, note_on, note_off, express, stop_all, rows, status})`, the first four required:
 - `routed(voice)`: true when the voice plays the target now. The target's route params call `S.lib.io_targets.route_changed(voice)` from their actions.
 - `note_on(voice, id, pitch, velocity, info)`: `pitch` a fractional MIDI note, `velocity` 0 to 1, `info` `{source = "step"}` or `{source = "midi", owner = "midi", key}`. `S.lib.io_targets.volts(pitch)` is `(pitch - 60) / 12`, the one conversion for every target that takes volts; each target clamps to its device's range.
-- `note_off(voice, id)`; `express(voice, id)` (optional: a played note's expression changed; read it with `S.lib.expression.raw(voice, info.owner, info.key)`); `stop_all()` (optional: at cleanup, after every off).
+- `note_off(voice, id)`; `express(voice, id)` (optional: called when the voice's own mapped expression values changed (the note hook `expressed` fires from `lib/expression.lua`'s `hand_over`, so a bend, pressure or slide the voice maps to nothing never calls it); read the raw values with `S.lib.expression.raw(voice, info.owner, info.key)`. A target that must send a played note's later raw values whatever the voice maps, as MIDI out does, reads `raw` in its own step instead and has no `express`); `stop_all()` (optional: at cleanup, after every off).
 - `rows(voice)` and `status(voice)` (optional): the rows the target adds to IO's `voice` section for the selected voice, and a mark for its title row.
 - `layout_states` (optional): a list of `{name, setup = fn(context)}`, checked as an IO section's, for the looks of the target's rows. The IO page lists them as the `voice` section's, after its own (`docs/notes/lua/pages/io.md`); a target never edits another module's record.
 
@@ -30,7 +30,7 @@
 
 - `sounding[voice][id] = {pitch, targets = {name, ...}, off_beat}`; `offs` is the list of pending offs, each naming the record it ends. `sounding(voice)` returns a copy.
 - **Steps**: `available(voice)` is true when the voice is not silenced and some target's `routed(voice)` is. `play(event)` starts, for each `k, pitch` of `event.pitches`, the note `"s" .. k` on every routed target with `event.velocity` and its off at `event.beat + event.gate_beats`. `stop` clears the failures and ends every voice's `s` notes.
-- **Played notes**: the hook's `started` and `moved` start `"m" .. key` (a sounding one ended first, so a move is an off then an on at the new pitch); `ended` ends it; `expressed` calls `express(voice, id)` on the note's targets that have one.
+- **Played notes**: the hook's `started` and `moved` start `"m" .. key` (a sounding one ended first, so a move is an off then an on at the new pitch); `ended` ends it; `expressed` (a voice's mapped values changed) calls `express(voice, id)` on the note's targets that have one.
 - **`end_target(name)`**: that target's off for every sounding note that names it, its name dropped from them (a note left on no target is forgotten).
 - **`stop_all()`**: every note ended (each voice, in id order), then each registered target's `stop_all`.
 - **Order of targets**: `TARGETS.order` (`midi`, `crow`, `jf`, `wsyn`, `er301`, `txo`, `nb`), then any other name in registration order: the order of note ons and of IO's rows.

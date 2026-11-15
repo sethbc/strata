@@ -45,3 +45,4 @@ PARAMS > MAP also acts on a CC if you mapped it. A controller whose CC is mapped
 
 - OXI E16 User Manual 1.0.1a (relative types, the scripting API of chapter 6).
 - The 16n firmware's README and its SysEx and wiki pages (CC 32 to 47, channel 1, 14-bit mode with the low byte on CC + 32).
+- Unverified on the device until the 4.0 hardware check.

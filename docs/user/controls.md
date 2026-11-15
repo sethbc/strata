@@ -15,9 +15,9 @@ The screen has ten pages, in this order (each page's own controls are on its pag
 7. [BUFFER](pages/buffer.md) - voice sources and the eight sample buffers. ALT+E2 moves the field cursor, ALT+K2 clears the buffer, ALT+K3 saves it
 8. [SCENES](pages/scenes.md) - the sixteen scenes in two banks, their names and the scene sequencer. ALT+K3 saves the current sound into the slot, ALT+K2 names it
 9. [SETUP](pages/setup.md) - connected devices, MIDI input, saving scenes. No ALT actions of its own
-10. [IO](pages/io.md) - the rest of the rig: MIDI out, crow, ii, controllers, remote grids and arcs, OSC and the tape loop, each in its own section (empty until 3.6's sections arrive), and the rig settings. ALT+E2 selects the voice
+10. [IO](pages/io.md) - the rest of the rig: MIDI out, crow, ii, controllers, remote grids and arcs, OSC and the tape loop, each in its own section, and the rig settings ([supported devices](io/devices.md)). ALT+E2 selects the voice
 
-E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see [Monome Arc](arc.md)); its rings are off only on SETUP and IO.
+E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see [Monome Arc](arc.md)); its rings are off only on SETUP (IO's rings are the tape loop's).
 
 ## E1
 

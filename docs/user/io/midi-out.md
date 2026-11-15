@@ -12,7 +12,7 @@ On IO, the `voice` section shows the selected voice's `midi` row (ALT+E2 selects
 - **port**: `off`, or the MIDI port 1 to 16 the voice plays (the ports SYSTEM > DEVICES lists)
 - **channel**: 1 to 16 (voice n starts on channel n), in plain mode
 - **mode**: `plain` or `mpe`
-- **members**: 1 to 15, the member channels of an MPE voice
+- **members**: 1 to 15 (15 by default), the member channels of an MPE voice
 
 The row reads `off`, `port 2  ch 3` or `port 2  mpe 15`.
 
@@ -26,7 +26,7 @@ An MPE voice takes its port's lower zone: channel 1 is the master and channels 2
 
 A note takes the member channel freed longest ago; when every channel has a note, it shares the one with the fewest, and with it that channel's bend: a new note's first values stand there. A value another note changes after the new note starts goes out at the next step, but one it changed just before waits until a played note on the channel ends. When a played note on it ends, the played notes still on it send their own values again. A note struck again on its channel while it sounds there is sent as a note off and a new note on, as in plain mode. A note you play carries its own bend, pressure and slide (CC 74): the values your controller sent go just before the note on, and later changes follow, whatever the voice's own pressure and slide targets are (those only decide what Strata's sound does with them). Strata sends at most 24 such messages each 1/48 s, the newest values, every note in turn. A step note has no expression: on a channel of its own it gets a centered bend before its note on; on a channel it shares, it takes the bend the channel has.
 
-Only one voice can be MPE on a port, and a plain voice on that port needs a channel outside the zone. A change to a voice's route takes effect a moment after you make it (within 1/48 s), and changes made together in that moment are judged together. One that would break the rule goes back a moment after the turn, with the message `port has an mpe voice`, and nothing is sent. Plain and MPE voices can share a port on different channels (an MPE voice with 7 members leaves channels 9 to 16 free). A PSET brings every route back as it was saved. Only a file that breaks the rule (one edited by hand) is changed: its voices are taken in order, and a voice that clashes with a lower-numbered one comes back off, with the same message.
+Only one voice can be MPE on a port, and a plain voice on that port needs a channel outside the zone. A change to a voice's route (its port, channel, mode or members) takes effect a moment after you make it (within 1/48 s), and changes made in that same moment are judged together. If the set would break the rule, every route setting changed in that moment goes back to what it was, a moment after the turn, with the message `port has an mpe voice`, and nothing is sent: a refused change takes its neighbors, even legal ones, back with it. A bend range changed in the same moment stands. Turn one route setting at a time and the refusal takes back only that one. Plain and MPE voices can share a port on different channels (an MPE voice with 7 members leaves channels 9 to 16 free). A PSET brings every route back as it was saved. Only a file that breaks the rule (one edited by hand) is changed: its voices are taken in order, and a voice that clashes with a lower-numbered one comes back off, with the same message.
 
 ### When the synth comes back
 
@@ -47,3 +47,7 @@ Both start off; the five rows are at the end of IO's `midi` section:
 - **pc out**: each scene recall sends program change scene - 1 on **pc out port** and **pc out channel**. A recall a program change asked for is not sent back to the port it came from, even when it waits for the beat or bar and other scenes are recalled meanwhile. If that waiting recall never happens (another scene key replaced it), the next recall of its scene sends nothing to that port, once.
 
 The section's title line shows `[--]` while a port some setting sends on has no device.
+
+## Sources
+
+The MIDI 1.0 specification, the MPE specification (RP-053) and norns' `lua/core/midi.lua`. Unverified on the device until the 4.0 hardware check.
