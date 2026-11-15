@@ -230,6 +230,25 @@ test("grid keys and LEDs use the protocol's numbers", function()
   assert_equal(#device.sent, before + 2, "and nothing for a cell off the grid")
 end)
 
+-- grid_key also checks the size, so the spy replaces it: the bound must
+-- hold where the message is decoded
+test("a key beyond the attached grid's size is ignored where it is decoded", function()
+  local context, S = started()
+  remote_grid(context, S, 3, 16, 8)
+  local keys = {}
+  grid_key = function(port, x, y, z) table.insert(keys, port .. "," .. x .. "," .. y .. "," .. z) end
+  context.midi.send(3, { type = "note_on", note = 0, vel = 127, ch = 2 })  -- index 128: (1, 9)
+  context.midi.send(3, { type = "note_on", note = 127, vel = 127, ch = 1 })  -- index 127: (16, 8)
+  assert_equal(table.concat(keys, " "), "5,16,8,1", "(1, 9) is ignored; (16, 8) reaches grid_key")
+  context.midi.plug(4, "iii grid")
+  set_rig(S, "remote_grid_port", 4)
+  hello(context, 4, 8, 16, 1)
+  keys = {}
+  context.midi.send(4, { type = "note_on", note = 8, vel = 127, ch = 1 })  -- index 8: (9, 1)
+  context.midi.send(4, { type = "note_on", note = 7, vel = 127, ch = 1 })  -- index 7: (8, 1)
+  assert_equal(table.concat(keys, " "), "5,8,1,1", "on an 8 by 16 grid (9, 1) is ignored; (8, 1) reaches grid_key")
+end)
+
 test("an arc's turns, key and LEDs use the protocol's numbers", function()
   local context, S = started()
   local turns, keys = {}, {}
@@ -379,6 +398,41 @@ test("a device that leaves is detached and one that returns is asked again", fun
   assert_equal(S.lib.io_ports.owner(6), "remote grid", "taken once it is free")
 end)
 
+test("a device leaving a port another owner holds shows [--], not in use", function()
+  local context, S = started()
+  S.lib.io_ports.claim(6, "someone")
+  context.midi.plug(6, "iii grid")
+  set_rig(S, "remote_grid_port", 6)
+  assert_equal(S.lib.io_remote.status("grid"), "in use", "held by another owner")
+  context.midi.unplug(6)
+  assert_equal(S.lib.io_remote.status("grid"), "[--]", "no device on the port: [--], whoever holds it")
+  assert_equal(S.lib.io_ports.owner(6), "someone", "the holder keeps it")
+  local again = context.midi.plug(6, "iii grid")
+  assert_equal(S.lib.io_remote.status("grid"), "in use", "a device back on the held port: in use again")
+  assert_equal(#again.sent, 0, "and nothing sent to it")
+end)
+
+-- The module's own release (as one kind's device leaves) tells its own
+-- claim hook the port is free: the other kind, waiting on the same port,
+-- must not claim the device that is leaving
+test("a device leaving one kind's port is not claimed by the other kind waiting on it", function()
+  local context, S = started()
+  context.midi.plug(6, "iii arc")
+  set_rig(S, "remote_arc_port", 6)
+  set_rig(S, "remote_grid_port", 6)
+  assert_equal(S.lib.io_ports.owner(6), "remote arc", "the arc holds the port")
+  assert_equal(S.lib.io_remote.status("grid"), "in use", "the grid waits")
+  context.midi.unplug(6)
+  assert_equal(S.lib.io_ports.owner(6), nil, "nobody claims the port its device left")
+  assert_equal(midi.vports[6].event, nil, "nor listens to it")
+  assert_equal(S.lib.io_remote.status("grid"), "[--]")
+  assert_equal(S.lib.io_remote.status("arc"), "[--]")
+  -- the device back: the grid's turn first (the order the kinds connect in)
+  context.midi.plug(6, "iii arc")
+  assert_equal(S.lib.io_ports.owner(6), "remote grid", "a returning device is claimed again")
+  assert_equal(S.lib.io_remote.status("arc"), "in use")
+end)
+
 test("a monome arc takes over from a remote one and hands back", function()
   local context, S = started()
   local turns = {}
@@ -483,6 +537,36 @@ test("the start step attaches what the rig names", function()
   assert_equal(S.lib.io_ports.owner(3), "remote grid")
 end)
 
+-- Each layout state reaches its look as a player does: the page's own
+-- rows (E2 to the row, E3 on it) and devices plugged through the context
+test("the section's layout states reach their looks through the IO page", function()
+  local looks = {
+    ["every setting off"] = { grid = nil, midigrid = nil },
+    ["a port set with no device"] = { grid = "[--]" },
+    ["a grid attached"] = { grid = "16x8" },
+    ["a hello of another version"] = { grid = "version 2?" },
+    ["a midigrid attached"] = { midigrid = "16x8" },
+  }
+  local count = 0
+  local _, S = started()
+  local states = {}
+  for index, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states) do
+    local name = state.name:match("^remote: (.*)$")
+    if name then states[#states + 1] = { index = index, name = name } end
+  end
+  for _, entry in ipairs(states) do
+    local context, script = started()
+    h.show_page("IO")
+    script.registry.pages[script.constants.UI_PAGES.index.IO].layout_states[entry.index].setup(context)
+    local look = looks[entry.name]
+    assert_true(look ~= nil, "a look for " .. entry.name)
+    assert_equal(script.lib.io_remote.status("grid"), look.grid, entry.name .. ": the grid's status")
+    assert_equal(script.lib.io_remote.status("midigrid"), look.midigrid, entry.name .. ": midigrid's status")
+    count = count + 1
+  end
+  assert_equal(count, 5, "five layout states")
+end)
+
 test("cleanup ends the clock, clears each device and releases everything", function()
   local context, S = started()
   local grid_device = remote_grid(context, S, 3)
@@ -523,6 +607,9 @@ test("the scripts and the module agree end to end", function()
   S.grids[5]:led(5, 7, 11); S.grids[5]:refresh()
   for _ = 1, 4 do tick(context, S) end
   assert_equal(grid_device.leds[7][5], 11, "a cell Strata lights is lit after the frame end")
+  S.grids[5]:led(5, 7, 0); S.grids[5]:refresh()
+  for _ = 1, 4 do tick(context, S) end
+  assert_equal(grid_device.leds[7][5], 0, "and dark once Strata sets it to 0")
   -- the arc script: a turn of 100 is two messages, 63 and 37
   local turns, presses = {}, {}
   arc_delta = function(n, d) table.insert(turns, n .. "," .. d) end
@@ -545,6 +632,9 @@ test("the scripts and the module agree end to end", function()
   S.arc_device:led(2, 5, 13); S.arc_device:refresh()
   for _ = 1, 4 do tick(context, S) end
   assert_equal(arc_device.leds[2][5], 13, "an LED Strata lights is lit after the frame end")
+  S.arc_device:led(2, 5, 0); S.arc_device:refresh()
+  for _ = 1, 4 do tick(context, S) end
+  assert_equal(arc_device.leds[2][5], 0, "and dark once Strata sets it to 0")
   -- CC 4 sets every LED
   set_rig(S, "remote_arc_port", 0)
   for led = 1, 64 do assert_equal(arc_device.leds[2][led], 0, "detached: every LED 0") end

@@ -52,7 +52,7 @@ return function(S)
   local KINDS = {"grid", "arc"}
   local midigrid = {device = nil}
   local draw = {clock = nil}
-  local state = {started = false, errors = {}}
+  local state = {started = false, errors = {}, leaving = nil}  -- leaving: the port whose departure is being handled
 
   local function contained(key, label, fn, ...)
     return S.lib.ui_frame.contained_call(state.errors, key, label, fn, ...)
@@ -278,8 +278,9 @@ return function(S)
     local key = record.virtual and record.virtual.key
     if not key or (msg.ch ~= 1 and msg.ch ~= 2) then return end
     local index = (msg.ch - 1) * PROTOCOL.per_channel + msg.note
-    local z = (msg.type == "note_on" and msg.vel > 0) and 1 or 0
-    key(index % PROTOCOL.stride + 1, math.floor(index / PROTOCOL.stride) + 1, z)
+    local x, y = index % PROTOCOL.stride + 1, math.floor(index / PROTOCOL.stride) + 1
+    if x > record.virtual.cols or y > record.virtual.rows then return end  -- beyond the grid's size
+    key(x, y, (msg.type == "note_on" and msg.vel > 0) and 1 or 0)
   end
 
   local function on_arc_input(record, msg)
@@ -318,7 +319,9 @@ return function(S)
     if not state.started or record.claimed_port then return end
     local port = rig.get(record.key)
     record.in_use = false
-    if port == 0 or S.lib.io_ports.device(port) == nil then return end
+    -- a port whose device is leaving (norns clears the vport only after the
+    -- departure's hooks) holds no device
+    if port == 0 or port == state.leaving or S.lib.io_ports.device(port) == nil then return end
     if not S.lib.io_ports.claim(port, record.owner) then
       record.in_use = true
       return
@@ -431,17 +434,26 @@ return function(S)
 
   -- A device arriving at a set port is connected; the claimed port's device
   -- leaving disconnects it
+  -- While a departure is handled the port is state.leaving, so the claim
+  -- hook below, run by this module's own release, never connects the other
+  -- kind to the device that is leaving; a kind waiting on the port (in use)
+  -- has no device to wait for any more
   S.lib.io_ports.on_change("remote", function(port, name)
     if not state.started then return end
+    if name == nil then state.leaving = port end
     for _, kind in ipairs(KINDS) do
       local record = records[kind]
       if name == nil and record.claimed_port == port then
         disconnect(record, true)
         request_redraw()
+      elseif name == nil and record.in_use and rig.get(record.key) == port then
+        record.in_use = false
+        request_redraw()
       elseif name ~= nil and record.claimed_port == nil and rig.get(record.key) == port then
         connect(record)
       end
     end
+    state.leaving = nil
   end)
 
   -- A port another owner held, freed: taken when the rig names it
@@ -454,12 +466,12 @@ return function(S)
   end)
 
   -- IO's remote section
+  -- the rig rows, first in the section, in this order
+  local RIG_ROWS = {{key = "remote_grid_port", label = "grid port"}, {key = "remote_arc_port", label = "arc port"},
+    {key = "midi_grid", label = "midi grid"}}
   local function section_rows()
-    local rows = {
-      {kind = "rig", label = "grid port", key = "remote_grid_port"},
-      {kind = "rig", label = "arc port", key = "remote_arc_port"},
-      {kind = "rig", label = "midi grid", key = "midi_grid"},
-    }
+    local rows = {}
+    for index, rig_row in ipairs(RIG_ROWS) do rows[index] = {kind = "rig", label = rig_row.label, key = rig_row.key} end
     for _, kind in ipairs({"grid", "arc", "midigrid"}) do
       local status = M.status(kind)
       if status then rows[#rows + 1] = {kind = "status", id = kind .. " status", text = kind .. ": " .. status} end
@@ -478,14 +490,15 @@ return function(S)
 
   -- Layout states: the rig set through IO's own rows (E3 on the row, as a
   -- player does; only the IO page changes a rig setting)
+  -- (show_section puts the cursor on the section's first row, the grid
+  -- port; E2 moves down to the key's row among RIG_ROWS)
   local function set_through_page(key, steps)
-    local pages_io = S.lib.pages_io
-    pages_io.show_section("remote")
-    for index, row in ipairs(pages_io.rows()) do
-      if row.kind == "rig" and row.key == key then S.io_cursor = index end
+    S.lib.pages_io.show_section("remote")
+    for position, rig_row in ipairs(RIG_ROWS) do
+      if rig_row.key == key and position > 1 then enc(2, position - 1) end
     end
     enc(3, steps)
-    pages_io.show_section("remote")
+    S.lib.pages_io.show_section("remote")
   end
 
   local function greet(context, port, cols, rows, version)
