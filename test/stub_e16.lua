@@ -5,7 +5,8 @@
 -- the E16's globals as its environment: controller (the script sets
 -- controller.onSysex), leds (update, reset), slots (update), page
 -- (setTitle), midi (sendCC, sendSysex) and var, plus its own copies of
--- math, string and table. All indexes count from 1, as the E16's do.
+-- math, string and table, and no other base function (the manual does not
+-- say which the E16 has, so a script may not lean on them). All indexes count from 1, as the E16's do.
 -- device.sysex(bytes) calls controller.onSysex with a table of the bytes,
 -- 0xF0 first and 0xF7 last, as the firmware does. Records: leds[index] =
 -- {value, color} as last set (nil after reset), slots[index] (the text),
@@ -32,7 +33,6 @@ return function()
 
   local environment = {
     math = copy_library(math), string = copy_library(string), table = copy_library(table),
-    pairs = pairs, ipairs = ipairs, type = type, tostring = tostring, tonumber = tonumber,
     controller = {}, var = {},
     leds = {
       update = function(index, value, color)

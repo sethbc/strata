@@ -10,7 +10,9 @@
 --   03  1 to 15 characters: the page title
 -- The E16's indexes count from 1 (E16 manual 1.0.1a, sections 6.8 to 6.11),
 -- so the script adds 1 to a frame's index. A frame with another header, the
--- wrong length or another command does nothing.
+-- wrong length or another command does nothing. It uses only string.char
+-- and the E16's own globals (no table.concat, type or pairs), so it asks
+-- little of the E16's Lua.
 
 local HEADER = {0xF0, 0x7D, 0x53, 0x54}
 local END = 0xF7
@@ -33,19 +35,19 @@ local function well_formed(bytes)
   end
   for index = COMMAND_AT, count - 1 do
     local byte = bytes[index]
-    if type(byte) ~= "number" or byte < 0 or byte > 127 then return false end
+    if byte == nil or byte < 0 or byte > 127 then return false end
   end
   return true
 end
 
 local function text_of(bytes, first, last)
-  local characters = {}
-  for index = first, last do characters[#characters + 1] = string.char(bytes[index]) end
-  return table.concat(characters)
+  local text = ""
+  for index = first, last do text = text .. string.char(bytes[index]) end
+  return text
 end
 
 function controller.onSysex(bytes)
-  if type(bytes) ~= "table" or not well_formed(bytes) then return end
+  if bytes == nil or not well_formed(bytes) then return end
   local command = bytes[COMMAND_AT]
   if command == RING_COMMAND then
     if #bytes ~= RING_FRAME_LENGTH then return end
