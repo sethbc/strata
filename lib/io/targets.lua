@@ -23,7 +23,11 @@ return function(S)
     -- (its off goes at once); less is a tick's jitter (a late MIDI or crow
     -- tick pulls the beat back a few ms). The sequencer's SEQ.wake_tolerance
     -- (lib/sequencer.lua, included after this module; a test keeps them equal)
-    jump_tolerance = 1 / 32}
+    jump_tolerance = 1 / 32,
+    -- seconds: a step note ends this long before its gate's end (at most
+    -- half the note's length early), about one and a half 48 Hz steps, so a
+    -- gate target shows a low before the next step raises it
+    step_gap_seconds = 0.03}
   M.TARGETS = TARGETS
 
   -- sounding[voice][id] = {pitch, targets = {name, ...}, off_beat}; offs:
@@ -151,13 +155,16 @@ return function(S)
     return false
   end
 
-  -- The step output: each pitch of the hit a note "s<k>", its off at the gate
+  -- The step output: each pitch of the hit a note "s<k>", its off at the
+  -- gate less TARGETS.step_gap_seconds (at most half the gate early)
   local function play_step(event)
     local voice = event.voice
     if not valid_voice(voice) then return end
+    local gate = event.gate_beats
+    local early = math.min(TARGETS.step_gap_seconds / clock.get_beat_sec(), gate / 2)
     for k, pitch in ipairs(event.pitches or {}) do
       start_note(voice, TARGETS.step_prefix .. k, pitch, event.velocity, {source = "step"},
-        event.beat + event.gate_beats, event.beat)
+        event.beat + gate - early, event.beat)
     end
   end
 

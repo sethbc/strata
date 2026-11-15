@@ -217,7 +217,8 @@ local function started(options)
   -- so a note off can be checked against its note's time
   S.register_step_output({name = "system probe", play = function(event)
     rig.hits[#rig.hits + 1] = {t = util.time(),
-      now_beat = clock.get_beats(), tempo = clock.get_tempo(), voice = event.voice,
+      now_beat = clock.get_beats(), tempo = clock.get_tempo(), gap = S.lib.io_targets.TARGETS.step_gap_seconds,
+      voice = event.voice,
       beat = event.beat, gate_beats = event.gate_beats, pitches = event.pitches}
   end})
   rig.crow = watch_crow(S, context)
@@ -631,8 +632,14 @@ local function voice_on(port, channel)
   end
 end
 
--- A hit's note end, in seconds: its beat plus its gate, at the tempo
-local function hit_end(hit) return hit.t + (hit.beat + hit.gate_beats - hit.now_beat) * 60 / hit.tempo end
+-- A hit's note end, in seconds: its beat plus its gate, at the tempo, less
+-- the targets core's step gap (hit.gap, TARGETS.step_gap_seconds, at most
+-- half the gate: lib/io/targets.lua ends every step note that early)
+local function hit_end(hit)
+  local seconds_per_beat = 60 / hit.tempo
+  local early = math.min(hit.gap, hit.gate_beats * seconds_per_beat / 2)
+  return hit.t + (hit.beat + hit.gate_beats - hit.now_beat) * seconds_per_beat - early
+end
 
 local function time_key(voice, t) return voice .. "@" .. string.format("%.6f", t) end
 
