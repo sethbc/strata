@@ -12,7 +12,7 @@
 -- event_arc_key (one argument) and event_midi. Records: sent (each
 -- {b1, b2, b3}, what the script sent as USB MIDI), leds (as last
 -- refreshed: leds[y][x] on a grid, leds[ring][x] on an arc, levels 0-15),
--- refreshes, metros (by id; an id is never reused). device.fire_metro(id)
+-- refreshes, metros (by id). device.fire_metro(id)
 -- calls a running metro's callback with the number of its firing.
 -- midi_out takes a table of bytes, sent three at a time as midi_tx_many
 -- does; a message table raises "not modeled". m.free(m.id) and
@@ -25,6 +25,21 @@
 -- message the script sends reaches the device's current port as incoming
 -- data (the stub reads the device's port at each message, so a reassign
 -- moves it, and an unplug ends it).
+-- midi_to_msg, grid_led_get, grid_intensity, arc_intensity, arc_res, clamp,
+-- round, linlin and wrap are there too; the facts file gives the first
+-- two's behavior in part and the rest as names with arguments, so
+-- grid_led_get reads the level last set (queued or refreshed), the
+-- intensities and arc_res (kept per ring in device.arc_resolution, default
+-- 1) are recorded in device.calls, and the helpers have norns' util
+-- meanings (wrap is inclusive) and are recorded too. m.free_all() is on a
+-- metro object as well as on metro; iii allows 15 metros at once and a
+-- sixteenth metro.init returns nil; a freed id is handed out again (the
+-- lowest free one). The script's libraries are built from Lua 5.3's names
+-- (see LIBRARY_NAMES); string methods called on a string value
+-- ("x"):upper() use the host's string library, not the script's copy, and
+-- getmetatable of a string raises "not modeled". The version option is read
+-- by its leading v<major>.<minor>.<patch>, so v1.1.0b1 is 1.1.0; below
+-- 1.1.0 the event_* callbacks are never called.
 -- Defaults of lib.lua: channel 1, note 66, velocity 100, cc 1, value 100.
 -- Chosen here, as the sources leave them open or give a choice: a grid is
 -- 16 x 16 and an arc has 4 rings of 64 (a test passes cols and rows for a
@@ -34,19 +49,56 @@
 local KEPT_GLOBALS = { "pairs", "ipairs", "next", "select", "type", "tostring",
   "tonumber", "print", "pcall", "error", "assert", "setmetatable", "getmetatable", "rawget", "rawset" }
 
--- a script gets its own copy of each library, so it cannot change the
--- host's; iii runs Lua 5.3 or later, which has table.unpack and no global
--- unpack (LuaJIT, which runs the tests too, has the global only)
-local function copy_library(library)
+-- a script gets its own copy of each library, built from the names Lua 5.3
+-- has (never from the host's whole table, which under LuaJIT also holds
+-- table.getn, math.pow and the like), so it cannot change the host's
+-- either. iii runs Lua 5.3 or later: table.unpack, no global unpack.
+-- Names the host lacks (LuaJIT has no string.pack, string.unpack,
+-- string.packsize, math.type, math.tointeger, math.ult, math.maxinteger or
+-- math.mininteger) are absent here too; table.pack and table.move are
+-- supplied
+local LIBRARY_NAMES = {
+  table = { "concat", "insert", "move", "pack", "remove", "sort", "unpack" },
+  string = { "byte", "char", "dump", "find", "format", "gmatch", "gsub", "len", "lower", "match", "pack",
+    "packsize", "rep", "reverse", "sub", "unpack", "upper" },
+  math = { "abs", "acos", "asin", "atan", "ceil", "cos", "deg", "exp", "floor", "fmod", "huge", "log", "max",
+    "maxinteger", "min", "mininteger", "modf", "pi", "rad", "random", "randomseed", "sin", "sqrt", "tan",
+    "tointeger", "type", "ult" },
+}
+
+local function copy_library(library, names)
   local copy = {}
-  for key, value in pairs(library) do copy[key] = value end
+  for _, name in ipairs(names) do copy[name] = library[name] end
   return copy
 end
 
--- "v1.1.2" -> 1, 1, 2
+local function table_pack(...)
+  local packed = { ... }
+  packed.n = select("#", ...)
+  return packed
+end
+
+-- Lua 5.3's table.move
+local function table_move(source, first, last, target, destination)
+  destination = destination or source
+  if last >= first then
+    if target > last or target <= first or destination ~= source then
+      for offset = 0, last - first do destination[target + offset] = source[first + offset] end
+    else
+      for offset = last - first, 0, -1 do destination[target + offset] = source[first + offset] end
+    end
+  end
+  return destination
+end
+
+local MAX_METROS = 15
+
+-- the leading "v1.1.2" of a tag such as "v1.1.2" or "v1.1.0b1" -> a number
 local function parse_version(text)
-  local major, minor, patch = tostring(text):match("^v?(%d+)%.(%d+)%.(%d+)$")
-  if not major then error("stub_iii: version must look like v1.1.2, not " .. tostring(text), 3) end
+  local major, minor, patch = tostring(text):match("^v(%d+)%.(%d+)%.(%d+)")
+  if not major then
+    error("stub_iii: version must start with v<major>.<minor>.<patch> (v1.1.2, v1.1.0b1), not " .. tostring(text), 3)
+  end
   return tonumber(major) * 1000000 + tonumber(minor) * 1000 + tonumber(patch)
 end
 
@@ -62,7 +114,9 @@ return function(options)
   local device = { kind = kind, sent = {}, refreshes = 0, metros = {}, time = 0 }
   local env
   local connection
-  local next_metro_id = 0
+  device.calls = {}
+  device.arc_resolution = {}
+  local function record(name, ...) table.insert(device.calls, { name, ... }) end
 
   local function blank_leds()
     local leds = {}
@@ -135,14 +189,55 @@ return function(options)
       for index = 1, #data, 3 do midi_tx(data[index], data[index + 1], data[index + 2]) end
     end,
     get_time = function() return device.time end,
+    -- midi_to_msg: the note_off rule for velocity 0 and the sysex table are
+    -- the facts file's; the other fields follow norns' midi.to_msg
+    midi_to_msg = function(data)
+      local status = math.floor(data[1] / 16) * 16
+      local channel = data[1] - status + 1
+      if status == 0x90 then
+        return { type = data[3] > 0 and "note_on" or "note_off", note = data[2], vel = data[3], ch = channel }
+      elseif status == 0x80 then return { type = "note_off", note = data[2], vel = data[3], ch = channel }
+      elseif status == 0xb0 then return { type = "cc", cc = data[2], val = data[3], ch = channel }
+      elseif status == 0xe0 then return { type = "pitchbend", val = data[2] + data[3] * 128, ch = channel }
+      elseif data[1] == 0xf0 then return { type = "sysex", raw = data }
+      end
+      return { type = "other", raw = data }
+    end,
+    -- the level last set, queued or refreshed
+    grid_led_get = function(x, y) return pending[y] and pending[y][x] or 0 end,
+    -- named in the facts file with arguments only: recorded in device.calls
+    grid_intensity = function(b) record("grid_intensity", b) end,
+    arc_intensity = function(b) record("arc_intensity", b) end,
+    arc_res = function(n, div) record("arc_res", n, div); device.arc_resolution[n] = div end,
+    -- helpers named in the facts file: the usual meanings (norns' util.clamp,
+    -- util.round, util.linlin, util.wrap), recorded in device.calls
+    clamp = function(n, low, high) record("clamp", n, low, high); return math.min(math.max(n, low), high) end,
+    round = function(n, quantum)
+      record("round", n, quantum)
+      quantum = quantum or 1
+      return math.floor(n / quantum + 0.5) * quantum
+    end,
+    linlin = function(n, slo, shi, dlo, dhi)
+      record("linlin", n, slo, shi, dlo, dhi)
+      return dlo + (n - slo) * (dhi - dlo) / (shi - slo)
+    end,
+    wrap = function(n, low, high)
+      record("wrap", n, low, high)
+      return low + (n - low) % (high - low + 1)
+    end,
     metro = {
       init = function(callback, time, count)
-        next_metro_id = next_metro_id + 1
-        local metro = { callback = callback, time = time, count = count, id = next_metro_id, fired = 0 }
+        local id
+        for candidate = 1, MAX_METROS do
+          if not device.metros[candidate] then id = candidate; break end
+        end
+        if not id then return nil end
+        local metro = { callback = callback, time = time, count = count, id = id, fired = 0 }
         function metro.start(self, new_time) if new_time then self.time = new_time end; self.running = true end
         function metro.stop(self) self.running = false end
         -- m.free(m.id), as the docs call it
         metro.free = function(id) device.metros[id] = nil end
+        metro.free_all = function() device.metros = {} end
         device.metros[metro.id] = metro
         return metro
       end,
@@ -150,8 +245,17 @@ return function(options)
     },
   }
   for _, name in ipairs(KEPT_GLOBALS) do env[name] = _G[name] end
-  env.math, env.string, env.table = copy_library(math), copy_library(string), copy_library(table)
+  env.math = copy_library(math, LIBRARY_NAMES.math)
+  env.string = copy_library(string, LIBRARY_NAMES.string)
+  env.table = copy_library(table, LIBRARY_NAMES.table)
   env.table.unpack = env.table.unpack or rawget(_G, "unpack")
+  env.table.pack = env.table.pack or table_pack
+  env.table.move = env.table.move or table_move
+  -- a string's metatable is the host's string library: not modeled
+  env.getmetatable = function(value)
+    if type(value) == "string" then error("getmetatable of a string is not modeled by the iii stub", 2) end
+    return getmetatable(value)
+  end
   -- device_version() is new in 1.1.0 and returns the firmware's date tag;
   -- iii_version, iii's own version, exists from 1.1.1
   local version = parse_version(options.version or "v1.1.2")
@@ -187,7 +291,10 @@ return function(options)
     return env
   end
 
+  -- event_grid, event_arc, event_arc_key and event_midi are new in iii 1.1.0
+  local has_events = version >= parse_version("v1.1.0")
   local function call(name, ...)
+    if not has_events then return end
     local handler = env[name]
     if handler then return handler(...) end
   end
