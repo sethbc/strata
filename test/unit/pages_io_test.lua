@@ -283,6 +283,30 @@ test("a target's layout states join the voice section's and run", function()
   assert_equal(ran[#ran], "bare", "and run")
 end)
 
+-- Two layout states of one name would write one render over the other:
+-- the start step refuses the repeat, naming both owners
+test("a target's layout state that repeats a section's name is refused at init", function()
+  local function register(state_name)
+    return function()
+      local script = local_value("S")
+      without_registered_sections(script)
+      script.register_io_section({ name = "voice", title = "voice", rows = function() return {} end,
+        layout_states = { { name = "look", setup = function() end } } })
+      script.register_note_target({ name = "probe", routed = function() return false end,
+        note_on = function() end, note_off = function() end,
+        layout_states = { { name = state_name, setup = function() end } } })
+    end
+  end
+  local ok, message = pcall(load_strata, { before_init = register("look") })
+  assert_true(not ok, "a repeated name is refused")
+  assert_true(tostring(message):find("section voice", 1, true) and tostring(message):find("target probe", 1, true),
+    "naming both owners: " .. tostring(message))
+  assert_true(tostring(message):find("voice: look", 1, true), "and the name: " .. tostring(message))
+  local fine = load_strata({ before_init = register("other look") })
+  finish_startup(fine)
+  assert_equal(#local_value("S").registry.pages[10].layout_states, 4, "distinct names pass")
+end)
+
 -- A row that comes or goes above the cursor (a device plugged in, in a later
 -- package) must not move E3 onto another row: the cursor follows its row
 test("the cursor stays on its row when rows above it come and go", function()

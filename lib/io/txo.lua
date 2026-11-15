@@ -151,7 +151,7 @@ return function(S)
   -- Take a note off its line: the line's cv goes to the newest left (as
   -- that note's own mode says), the trigger (and the envelope's gate) low
   -- when it was the last. No-op for a note not held.
-  local function release(voice, id)
+  local function end_note(voice, id)
     local output, index = find(voice, id)
     if not output then return end
     local line = lines[output]
@@ -173,7 +173,7 @@ return function(S)
       if not valid_voice(voice) or not bus() or type(pitch) ~= "number" then return end
       local output = output_of(voice)
       if output <= 0 then return end
-      release(voice, id)
+      end_note(voice, id)
       local note = {voice = voice, id = id, pitch = pitch, envelope = envelope_of(voice),
         velocity = type(velocity) == "number" and velocity or 1}
       local line = lines[output]
@@ -183,6 +183,7 @@ return function(S)
       table.insert(line.notes, note)
       -- the core records a target for a note only when this returned, so a
       -- send that raises must leave the line as it was
+      local sent_trigger = false
       local ok, err = pcall(function()
         bus().send("txo", "cv", output, level_of(note))
         if note.envelope then
@@ -190,17 +191,26 @@ return function(S)
           line.env_high = true
         end
         bus().send("txo", "tr", output, 1)
+        sent_trigger = true
       end)
       if not ok then
         table.remove(line.notes)
         line.env_high = was_high
         if created then lines[output] = nil end
+        -- best effort, each send protected (the first error is the one
+        -- raised again): the newest left gets its cv back, an envelope
+        -- gate this note raised is lowered, and a trigger raised on a line
+        -- that held nothing is lowered
+        local newest = line.notes[#line.notes]
+        if newest then pcall(function() bus().send("txo", "cv", output, level_of(newest)) end) end
+        if note.envelope and not was_high then pcall(bus().send_off, "txo", "env", output, 0) end
+        if created and sent_trigger then pcall(bus().send_off, "txo", "tr", output, 0) end
         error(err, 0)
       end
     end,
     note_off = function(voice, id)
       if not valid_voice(voice) then return end
-      release(voice, id)
+      end_note(voice, id)
     end,
     stop_all = function()
       local held = lines
