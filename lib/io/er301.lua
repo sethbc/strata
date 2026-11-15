@@ -57,7 +57,7 @@ return function(S)
 
   -- Take a note off its line: the line's pitch goes to the newest left,
   -- its trigger low when it was the last. No-op for a note not held.
-  local function release(voice, id)
+  local function end_note(voice, id)
     local port, index = find(voice, id)
     if not port then return end
     local notes = lines[port]
@@ -82,26 +82,34 @@ return function(S)
       if not valid_voice(voice) or not bus() or type(pitch) ~= "number" then return end
       local port = port_of(voice)
       if port <= 0 then return end
-      release(voice, id)
+      end_note(voice, id)
       local notes = lines[port] or {}
       local note = {voice = voice, id = id, pitch = pitch}
       table.insert(notes, note)
       lines[port] = notes
       -- the core records a target for a note only when this returned, so a
       -- send that raises must leave the line as it was
+      local sent_trigger = false
       local ok, err = pcall(function()
         send_pitch(port, pitch)
         bus().send("er301", "tr", port, 1)
+        sent_trigger = true
       end)
       if not ok then
         table.remove(notes)
-        if #notes == 0 then lines[port] = nil end
+        local empty = #notes == 0
+        if empty then lines[port] = nil end
+        -- best effort, each send protected (the first error is the one
+        -- raised again): the newest left gets its cv back, and a trigger
+        -- raised on a line that held nothing is lowered
+        if not empty then pcall(send_pitch, port, notes[#notes].pitch) end
+        if empty and sent_trigger then pcall(bus().send_off, "er301", "tr", port, 0) end
         error(err, 0)
       end
     end,
     note_off = function(voice, id)
       if not valid_voice(voice) then return end
-      release(voice, id)
+      end_note(voice, id)
     end,
     stop_all = function()
       local ports = {}

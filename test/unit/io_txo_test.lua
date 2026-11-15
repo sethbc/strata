@@ -21,7 +21,9 @@ local function install_ii(state)
   local function recorder(kind, only_leading)
     return function(...)
       if only_leading and not state.leading then return end
+      state.attempts = (state.attempts or 0) + 1
       if state.fail_next then state.fail_next = nil; error("send failed", 0) end
+      if state.fail_at and state.fail_at[state.attempts] then error("send failed #" .. state.attempts, 0) end
       state.calls[#state.calls + 1] = {kind, ...}
     end
   end
@@ -264,7 +266,7 @@ test("without the ii module the device does nothing and the page draws", functio
 end)
 
 -- Ruling 10: an output is one line that plays one note at a time, whatever voices feed it
-test("two voices on one output in pitch mode share it", function()
+test("two voices on one output in pitch mode: the newest sounds, the trigger is the line's", function()
   local _, S, state = started()
   local target = target_of(S)
   params:set("v1_out_txo", 5); params:set("v2_out_txo", 5)
@@ -276,7 +278,7 @@ test("two voices on one output in pitch mode share it", function()
   assert_calls(state, {{"send", "txo", "cv", 5, 1}}, "the pitch falls back to the first voice's note, no trigger")
   target.note_on(2, "s2", 84, 1); state.calls = {}
   target.note_off(1, "s1")
-  assert_calls(state, {}, "the first voice's last note ends while the other sounds: the trigger stays high")
+  assert_calls(state, {}, "the older note (voice 1's) ends while voice 2's newer one sounds: the trigger stays high")
   target.note_off(2, "s2")
   assert_calls(state, {{"send_off", "txo", "tr", 5, 0}}, "low once, at the line's last note")
 end)
@@ -349,10 +351,66 @@ test("a note_on whose send raises leaves the line as it was", function()
   target.note_on(1, "s1", 72, 1); state.calls = {}
   state.fail_next = true
   assert_true(not pcall(target.note_on, 1, "s2", 84, 1), "a second note, raising")
+  assert_calls(state, {{"send", "txo", "cv", 5, 1}}, "the earlier note's cv is sent again")
   target.note_off(1, "s2")
-  assert_calls(state, {}, "nothing for it")
+  assert_calls(state, {}, "nothing for the failed note")
   target.note_off(1, "s1")
   assert_calls(state, {{"send_off", "txo", "tr", 5, 0}}, "the first note alone held the trigger")
+end)
+
+-- A note_on that raises partway puts the device back too, best effort
+test("an envelope note whose tr raises on an empty output lowers the envelope gate it raised", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_txo", 5); params:set("v1_out_txo_cv", ENVELOPE)
+  state.calls = {}; state.attempts = 0; state.fail_at = {[3] = true}
+  assert_true(not pcall(target.note_on, 1, "s1", 60, 0.5))
+  assert_calls(state, {{"send", "txo", "cv", 5, 2.5}, {"send", "txo", "env", 5, 1}, {"send_off", "txo", "env", 5, 0}},
+    "the envelope gate is lowered")
+  params:set("v1_out_txo_cv", 1)
+  state.calls = {}
+  target.note_on(1, "s2", 60, 1); target.note_off(1, "s2")
+  assert_calls(state, {{"send", "txo", "cv", 5, 0}, {"send", "txo", "tr", 5, 1}, {"send_off", "txo", "tr", 5, 0}},
+    "a later pitch note leaves no envelope gate to lower")
+end)
+
+test("a pitch note whose tr raises on a sounding line sends the earlier note's cv again", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_txo", 5)
+  target.note_on(1, "s1", 72, 1); state.calls = {}
+  state.attempts = 0; state.fail_at = {[2] = true}
+  assert_true(not pcall(target.note_on, 1, "s2", 84, 1))
+  assert_calls(state, {{"send", "txo", "cv", 5, 2}, {"send", "txo", "cv", 5, 1}}, "put right")
+  target.note_off(1, "s1")
+  assert_calls(state, {{"send_off", "txo", "tr", 5, 0}}, "the line holds only the first note")
+end)
+
+test("a failed envelope note on a sounding pitch line puts back the cv and the gate", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_txo", 5)
+  params:set("v2_out_txo", 5); params:set("v2_out_txo_cv", ENVELOPE)
+  target.note_on(1, "s1", 72, 1); state.calls = {}
+  state.attempts = 0; state.fail_at = {[3] = true}
+  assert_true(not pcall(target.note_on, 2, "s1", 60, 1))
+  assert_calls(state, {{"send", "txo", "cv", 5, 5}, {"send", "txo", "env", 5, 1}, {"send", "txo", "cv", 5, 1},
+    {"send_off", "txo", "env", 5, 0}}, "the pitch note's cv again, the envelope gate lowered")
+end)
+
+test("a repair's own send raising is swallowed: the first error surfaces, the line is as before", function()
+  local _, S, state = started()
+  local target = target_of(S)
+  params:set("v1_out_txo", 5)
+  target.note_on(1, "s1", 72, 1); state.calls = {}
+  state.attempts = 0; state.fail_at = {[2] = true, [3] = true}
+  local ok, message = pcall(target.note_on, 1, "s2", 84, 1)
+  assert_true(not ok and tostring(message):find("#2", 1, true), "the first error: " .. tostring(message))
+  state.calls = {}
+  target.note_off(1, "s2")
+  assert_calls(state, {}, "an off for the failed note does nothing")
+  target.note_off(1, "s1")
+  assert_calls(state, {{"send_off", "txo", "tr", 5, 0}}, "the first note alone")
 end)
 
 -- 3.6's target layout states: the target's own record carries them
