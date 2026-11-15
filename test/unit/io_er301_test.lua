@@ -395,4 +395,15 @@ test("two full-length steps on a port: the trigger's low goes out before the nex
     "the low lasts at least the gap less one 48 Hz step: " .. shown)
 end)
 
+
+test("the ER-301 is routed only while Strata leads the bus, as Just Friends and W/ are", function()
+  local _, S, state = started()
+  params:set("v2_out_er301", 3)
+  assert_equal(target_of(S).routed(2), true, "leading: routed")
+  state.leading = false
+  assert_equal(target_of(S).routed(2), false, "not leading: not routed, so the core records nothing on it")
+  state.leading = true
+  assert_equal(target_of(S).routed(2), true, "leading again")
+end)
+
 end
