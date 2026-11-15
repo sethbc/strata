@@ -33,8 +33,13 @@ local SYSTEM = {
   -- each voice); the fifteen MPE notes' values moving every fourth LFO step
   -- (12 Hz each: 45 values at a time, still more than MIDI out's 24 a
   -- step); every third LFO step is 16 Hz, at least one redraw of the
-  -- remote grid each 15 Hz frame
-  step_every = 2, mpe_every = 4, frame_every = 3,
+  -- remote grid each 15 Hz frame, and the faders and the watched params
+  -- moved as often (an E16 encoder turned at half that)
+  density = {step_every = 2, mpe_every = 4, frame_every = 3, move_every = 3},
+  -- the bus test's minutes, which count ii lines and no bound: one step in
+  -- four, the MPE values every eighth LFO step, the grid redrawn and the
+  -- faders and params moved every twelfth (4 Hz)
+  light = {step_every = 4, mpe_every = 8, frame_every = 12, move_every = 12},
   tick_tolerance = h.stubs.MATRON_TICK_SECONDS,
 }
 
@@ -137,11 +142,11 @@ end
 -- Patterns with chords of eight and ratchets of four on all seven voices:
 -- every second step set (SYSTEM.step_every), the 1/8 division (four hits
 -- fit in a step at 300 BPM)
-local function busy_patterns(S)
+local function busy_patterns(S, density)
   for voice = 1, S.constants.NUM_VOICES do
     params:set("v" .. voice .. "_seq_division", SYSTEM.division)
     for step = 1, S.constants.PATTERN_LENGTH do
-      local on = (step - 1) % SYSTEM.step_every == 0
+      local on = (step - 1) % density.step_every == 0
       S.patterns[voice][step] = on and SYSTEM.level or 0
       if on then
         S.lib.sequencer.set_step_attr(voice, step, "notes", SYSTEM.chord)
@@ -153,9 +158,9 @@ end
 
 -- The hits a minute of busy_patterns plays: each voice's set steps (one in
 -- step_every of its 1/8 steps, 10 a second at 300 BPM) times the ratchet
-local function expected_hits(S)
+local function expected_hits(S, density)
   local steps_per_second = SYSTEM.tempo / 60 * 2
-  return S.constants.NUM_VOICES * steps_per_second / SYSTEM.step_every * SYSTEM.ratchet * SYSTEM.minute
+  return S.constants.NUM_VOICES * steps_per_second / density.step_every * SYSTEM.ratchet * SYSTEM.minute
 end
 
 -- Two scenes to recall in turn
@@ -177,7 +182,8 @@ local function started(options)
   end})
   finish_startup(context)
   local S = local_value("S")
-  local rig = {context = context, S = S, players = made, devices = {}, hits = {}, print = print}
+  local rig = {context = context, S = S, players = made, devices = {}, hits = {}, print = print,
+    density = options.density or SYSTEM.density}
   -- a step output of the test's own, after the real ones: it only records
   -- each hit (its time, the beat now, the event's beat, gate and pitches),
   -- so a note off can be checked against its note's time
@@ -193,7 +199,7 @@ local function started(options)
   context.crow.plug()
   params:set("clock_tempo", SYSTEM.tempo)
   run_all_voices(S)
-  busy_patterns(S)
+  busy_patterns(S, rig.density)
   two_scenes(S)
   return rig
 end
@@ -302,7 +308,7 @@ end
 local function watch_ii(S)
   local ii = S.lib.io_ii
   local seen = {accepted_full = 0, off_lines = {}, off_line_count = 0, most = 0, most_allowed = math.huge,
-    sends = 0, offs = 0}
+    sends = 0, offs = 0, calls = 0}
   local send, send_off = ii.send, ii.send_off
   local function note_waiting()
     local waiting = ii.queued()
@@ -313,6 +319,7 @@ local function watch_ii(S)
   seen.note_waiting = note_waiting
   ii.send = function(device, command, ...)
     local waiting = ii.queued()
+    seen.calls = seen.calls + 1
     local accepted = send(device, command, ...)
     if accepted then seen.sends = seen.sends + 1 end
     if accepted and waiting >= ii.II.queue_max then seen.accepted_full = seen.accepted_full + 1 end
@@ -326,6 +333,7 @@ local function watch_ii(S)
       seen.off_line_count = seen.off_line_count + 1
     end
     seen.offs = seen.offs + 1
+    seen.calls = seen.calls + 1
     local queued = send_off(device, command, first, ...)
     note_waiting()
     return queued
@@ -336,14 +344,15 @@ end
 -- Everything on: the routes, the MPE input, the surfaces, then the bus
 -- given to Strata (its devices made ready), and one step for MIDI out's
 -- routes to settle (ruling 29)
-local function everything_on(rig)
+local function everything_on(rig, bus)
   local context, S = rig.context, rig.S
   set_routes(S)
   mpe_input(S)
   surfaces(rig)
   rig.ii = watch_ii(S)
-  set_rig(S, "ii_bus", "strata")
-  assert_true(S.lib.io_ii.leads(), "Strata leads the ii bus")
+  bus = bus or "strata"
+  if bus ~= S.lib.io_rig.get("ii_bus") then set_rig(S, "ii_bus", bus) end
+  assert_equal(S.lib.io_ii.leads(), bus == "strata", "Strata leads the ii bus only under strata")
   context.clock.advance_until(S.lfo_clock)
   for voice = 1, S.constants.NUM_VOICES do
     local midi_route = ROUTES.midi[voice]
@@ -379,7 +388,7 @@ local function everything_moves(rig)
     assert_equal(S.lib.notes.held(voice), voice == 1 and 8 or 7, "voice " .. voice .. " holds its played notes")
   end
   return function(n)
-    if rig.mpe_held and n % SYSTEM.mpe_every == 0 then
+    if rig.mpe_held and n % rig.density.mpe_every == 0 then
       for k, played in ipairs(MPE_NOTES) do
         local phase = n * 0.37 + k
         context.midi.send(ROUTES.midi_in, {type = "pitchbend", val = 8192 + math.floor(3000 * math.sin(phase)),
@@ -390,22 +399,20 @@ local function everything_moves(rig)
           ch = played.channel})
       end
     end
-    if n % 3 == 0 then
+    if n % rig.density.move_every == 0 then
       for m = 1, S.constants.NUM_MACROS do
         local value = (n + m * 8) % 254
         if value > 127 then value = 254 - value end
         context.midi.send(SYSTEM.faders_port, {type = "cc", cc = 32 + m - 1, val = value, ch = 1})
       end
       for index, id in ipairs(moved) do
-        local spec = params:lookup_param(id)
-        params:set_raw(id, 0.25 + 0.5 * ((n / 3 + index) % 10) / 10)
-        assert_true(spec ~= nil, id)
+        params:set_raw(id, 0.25 + 0.5 * ((math.floor(n / rig.density.move_every) + index) % 10) / 10)
       end
     end
-    if n % 6 == 0 then
+    if n % (2 * rig.density.move_every) == 0 then
       context.midi.send(SYSTEM.e16_port, {type = "cc", cc = 102 + math.floor(n / 6) % 16, val = 1, ch = 16})
     end
-    if n % SYSTEM.frame_every == 0 then grid_redraw() end
+    if n % rig.density.frame_every == 0 then grid_redraw() end
   end
 end
 
@@ -589,7 +596,7 @@ test("with every default a minute of playing sends nothing anywhere", function()
   pattern_clock_stop()
   assert_true(S.pattern_playing == false, "the patterns stopped")
   -- the minute played: 7 voices x 10 steps a second x 4 hits, for 60 s
-  assert_true(#rig.hits >= 0.9 * expected_hits(rig.S), "hits played: " .. #rig.hits)
+  assert_true(#rig.hits >= 0.9 * expected_hits(rig.S, rig.density), "hits played: " .. #rig.hits)
   for _, port in ipairs(SYSTEM.midi_ports) do
     assert_equal(#rig.devices[port].sent, 0, "MIDI port " .. port .. " was sent nothing")
   end
@@ -613,7 +620,7 @@ test("with everything on, a minute holds every bound", function()
   played.everything_on = rig
   local S = rig.S
   pattern_clock_stop()
-  assert_true(#rig.hits >= 0.9 * expected_hits(rig.S), "hits played: " .. #rig.hits)
+  assert_true(#rig.hits >= 0.9 * expected_hits(rig.S, rig.density), "hits played: " .. #rig.hits)
 
   -- ii (docs/notes/lua/io/ii.md): at most 4 lines a step, every one from
   -- the step; no send accepted while 48 or more lines waited; never more
@@ -802,6 +809,152 @@ test("after that minute everything stops with no note left", function()
   if reused then
     local broken = h.check_invariants()
     assert_equal(#broken, 0, "invariants after cleanup: " .. table.concat(broken, "; "))
+  end
+end)
+
+-- The ii lines crow got from index first on, in order
+local function ii_lines_from(context, first)
+  local lines = {}
+  for index = first, #context.crow.sent do
+    local line = context.crow.sent[index]
+    if starts_with(line, "ii.") then lines[#lines + 1] = line end
+  end
+  return lines
+end
+
+-- Steps the LFO clock until the ii queue is empty (at most limit steps)
+local function drain_ii(context, S, limit)
+  for _ = 1, limit or 100 do
+    if S.lib.io_ii.queued() == 0 then return end
+    context.clock.advance_until(S.lfo_clock)
+  end
+  error("the ii queue did not drain", 2)
+end
+
+test("each ii device's lines are crow's, end to end", function()
+  -- docs/design/3.6-facts/crow-ii.md section 2: each device's descriptor's
+  -- command names and argument order, a line ii.<device>.<command>(<args>);
+  -- the note goes in through the targets core's step output, as a step's
+  -- hit does, and out through the real ii queue to the crow stub
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  context.crow.plug()
+  params:set("v1_out_jf", 1)
+  params:set("v1_out_wsyn", 1)
+  params:set("v1_out_er301", 12)
+  params:set("v1_out_txo", 5)
+  params:set("jf_level", 5)
+  params:set("wsyn_level", 5)
+  local first = #context.crow.sent + 1
+  set_rig(S, "ii_bus", "strata")
+  drain_ii(context, S)
+  assert_equal(table.concat(ii_lines_from(context, first), " | "),
+    "ii.jf.mode(1) | ii.wsyn.ar_mode(1) | ii.wsyn.voices(4)", "the leader's start")
+  local output
+  for _, record in ipairs(S.registry.step_outputs) do
+    if record.name == "targets" then output = record end
+  end
+  assert_true(output ~= nil, "the targets core's step output")
+  first = #context.crow.sent + 1
+  output.play({voice = 1, step = 1, hit = 1, hits = 1, first = true, level = 7.5, velocity = 0.5, pitches = {72},
+    beat = clock.get_beats(), gate_beats = 0.25})
+  drain_ii(context, S)
+  assert_equal(table.concat(ii_lines_from(context, first), " | "),
+    "ii.jf.play_note(1, 2.5) | ii.wsyn.play_note(1, 2.5) | ii.er301.cv(12, 1) | ii.er301.tr(12, 1)"
+    .. " | ii.txo.cv(5, 1) | ii.txo.tr(5, 1)", "one note of pitch 72 at velocity 0.5 to each")
+end)
+
+-- Every row of the IO page stepped as a player steps it, from the first
+-- section's first row to the last with E2: a param or rig row E3 up and
+-- back down, an action K3, a detail K3 then each of its fields up and back
+-- down, K2 to close. The bus row alone is left as it is (the test is of
+-- what each bus setting lets through). Returns the rows visited
+local function step_every_row(S)
+  S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.IO)
+  S.lib.pages_io.show_section("voice")
+  local visited = 0
+  for _ = 1, 1000 do
+    local row = S.lib.pages_io.rows()[S.io_cursor]
+    if row.kind == "rig" and row.key == "ii_bus" then
+      -- left alone
+    elseif row.kind == "param" or row.kind == "rig" then
+      enc(3, 1); enc(3, -1)
+    elseif row.kind == "action" then
+      h.tap(3)
+    elseif row.kind == "detail" then
+      h.tap(3)
+      for _ = 1, #row.fields do
+        enc(3, 1); enc(3, -1); enc(2, 1)
+      end
+      h.tap(2)
+    end
+    visited = visited + 1
+    local before = S.io_cursor
+    enc(2, 1)
+    if S.io_cursor == before then return visited end
+  end
+  error("the IO page's rows never ended", 2)
+end
+
+-- Every action of S.lib.io_actions run, and each through the doors that
+-- reach them: Teletype's three calls, crow's trigger input and OSC's
+-- addresses. A toggle runs twice, so the rig ends as it was
+local function run_every_action(context, S)
+  local actions = S.lib.io_actions
+  actions.recall_scene(1)
+  actions.next_scene()
+  for _ = 1, 2 do
+    actions.run_voice(1, 2)
+    actions.freeze(1, 2)
+    actions.mute(1, 2)
+    actions.patterns(2)
+  end
+  actions.retrigger(1, 1)
+  actions.macro(1, 0.5)
+  actions.record()
+  context.crow.fire("strata_tt1", 1)
+  for _ = 1, 2 do
+    context.crow.fire("strata_tt2", 1, 2)
+    for _, k in ipairs({2, 3, 5}) do context.crow.fire("strata_tt3", k, 1, 2) end
+  end
+  context.crow.fire("strata_tt3", 1, 1, 100)
+  context.crow.fire("strata_tt3", 4, 1, 8000)
+  context.crow.fire("strata_change", 1, 1)
+  context.osc.receive("/strata/scene", {1})
+  for _ = 1, 2 do
+    context.osc.receive("/strata/voice/1/run", {2})
+    context.osc.receive("/strata/patterns", {2})
+  end
+  context.osc.receive("/strata/voice/1/retrigger", {1})
+end
+
+test("under off and teletype no action anywhere produces an ii command", function()
+  -- design §14 focus 5 (docs/notes/lua/io/ii.md): under off and teletype no
+  -- line starting ii. reaches crow but Teletype's three handlers
+  local rig = started({density = SYSTEM.light})
+  local context, S = rig.context, rig.S
+  everything_on(rig, "off")
+  rig.each_step = everything_moves(rig)
+  local handlers = "ii.self.call1 = function(a) tell('strata_tt1', a) end"
+    .. " | ii.self.call2 = function(a, b) tell('strata_tt2', a, b) end"
+    .. " | ii.self.call3 = function(a, b, c) tell('strata_tt3', a, b, c) end"
+  for _, bus in ipairs({"off", "teletype"}) do
+    local first = #context.crow.sent + 1
+    if bus == "teletype" then
+      set_rig(S, "ii_bus", "teletype")
+      assert_equal(table.concat(ii_lines_from(context, first), " | "), handlers, "the handlers, as the bus turns")
+      first = #context.crow.sent + 1
+    end
+    play_minute(rig)
+    assert_true(step_every_row(S) > 50, "every IO row was stepped")
+    run_every_action(context, S)
+    context.clock.run_for(1)
+    pattern_clock_stop()
+    assert_true(not S.lib.io_ii.leads(), bus .. ": Strata does not lead")
+    assert_equal(table.concat(ii_lines_from(context, first), " | "), "", bus .. ": no ii line")
+    assert_true(rig.ii.calls > 0, bus .. ": something asked the ii module to send")
+    rig.ii.calls = 0
   end
 end)
 
