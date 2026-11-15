@@ -96,8 +96,11 @@ var checkSourceGrains = { arg voice, slot;
     [[server.sampleRate, 0.25, 0.2, 1], [22050, 0.25, 0.2, 2], [96000, 0.25, 0.2, 1], [server.sampleRate, 0.05, 0.2, 1]].do({ arg grainCase;
         var validFrames;
         writeTestFile.(path, grainCase[0], (grainCase[0] * grainCase[1]).round.asInteger, [0, 0]);
-        command.(\loadBuffer, slot, path, 0); 0.3.wait; server.sync;
+        // wait for the load itself, never for a time: the frames are 0 until its
+        // peaks file is in place, and a fill from 0 would cover the region (#706)
+        command.(\loadBuffer, slot, path, 0); h.waitFor({ engine.bufferFrames[slot] > 0 }, 5); server.sync;
         validFrames = engine.bufferFrames[slot];
+        if (validFrames < 1) { check.(false, "grains: the % s file's load ended within 5 s".format(grainCase[1])) };
         [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer; buffer.fill(validFrames, buffer.numFrames - validFrames, 1) });
         command.(\setGrainParam, voice, \grainSize, grainCase[2]);
         command.(\setGrainParam, voice, \bufRate, grainCase[3]);
