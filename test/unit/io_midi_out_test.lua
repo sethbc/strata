@@ -625,4 +625,259 @@ test("cleanup drops the express queue and nothing is sent after it", function()
   assert_equal(sent(device), "", "after cleanup nothing")
 end)
 
+---------------------------------------------------------------------------
+-- Review fixes (findings 1, 2, 5, 6)
+---------------------------------------------------------------------------
+
+-- A recording target routed for voice 1, beside midi
+local function probe_target(S)
+  local probe = {ons = 0, offs = 0}
+  S.register_note_target({name = "probe", routed = function(voice) return voice == 1 end,
+    note_on = function() probe.ons = probe.ons + 1 end, note_off = function() probe.offs = probe.offs + 1 end})
+  return probe
+end
+
+-- Per port, channel and note: ons minus offs among devices' sent messages
+local function assert_balanced(devices, why)
+  for port, device in pairs(devices) do
+    local open = {}
+    for _, text in ipairs(lines(device)) do
+      local kind, note, channel = text:match("^(note_%a+) (%d+) .-(%d+)$")
+      if kind then
+        local slot = channel .. " " .. note
+        open[slot] = (open[slot] or 0) + (kind == "note_on" and 1 or -1)
+      end
+    end
+    for slot, count in pairs(open) do assert_equal(count, 0, why .. ": port " .. port .. " channel and note " .. slot) end
+  end
+end
+
+local function route_of(voice)
+  local id = function(field) return "v" .. voice .. "_out_" .. field end
+  return params:get(id("port")) .. " " .. params:get(id("channel")) .. " " .. params:string(id("mode")) .. " "
+    .. params:get(id("members"))
+end
+
+local REFUSED = "port has an mpe voice"
+
+-- The file's route lines (v<i>_out_...) in the opposite order, each other line where it was
+local function reverse_route_lines(path)
+  local file = io.open(path, "r")
+  local text = file:read("*a")
+  file:close()
+  local all, routes, slots = {}, {}, {}
+  for line in text:gmatch("[^\n]+") do
+    all[#all + 1] = line
+    if line:match('^"v%d_out_') then routes[#routes + 1] = line; slots[#slots + 1] = #all end
+  end
+  for index, slot in ipairs(slots) do all[slot] = routes[#routes - index + 1] end
+  file = io.open(path, "w")
+  file:write(table.concat(all, "\n") .. "\n")
+  file:close()
+end
+
+local function edit_file(path, fn)
+  local file = io.open(path, "r")
+  local text = file:read("*a")
+  file:close()
+  file = io.open(path, "w")
+  file:write(fn(text))
+  file:close()
+end
+
+test("a route change ends the voice's notes only when the route changes", function()
+  local context, S = started()
+  context.midi.plug(2, "synth")
+  local probe = probe_target(S)
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 1})
+  assert_equal(probe.ons, 1, "the probe plays voice 1's note")
+  params:set("v1_out_channel", 5)
+  params:set("v1_out_members", 3)
+  params:set("v1_out_mode", MPE_INDEX); params:set("v1_out_mode", 1)
+  assert_equal(probe.offs, 0, "port 0: no route changed, no note ended")
+  params:set("v1_out_port", 2)
+  assert_equal(probe.offs, 1, "the port: the route changed once")
+  context.midi.send(1, {type = "note_on", note = 62, vel = 100, ch = 1})
+  local offs = probe.offs
+  params:set("v1_out_members", 9)
+  assert_equal(probe.offs, offs, "members on a plain voice: no route change")
+  params:set("v1_out_channel", 6)
+  assert_true(probe.offs > offs, "a plain voice's channel: a route change")
+  offs = probe.offs
+  params:set("v1_out_channel", 12); params:set("v1_out_mode", MPE_INDEX)
+  offs = probe.offs
+  params:set("v1_out_channel", 13)
+  assert_equal(probe.offs, offs, "an MPE voice's channel: no route change")
+end)
+
+test("a voice's port changed while its notes sound ends them where they went", function()
+  local context, S = started()
+  local devices = {[2] = context.midi.plug(2, "a"), [3] = context.midi.plug(3, "b")}
+  -- plain
+  params:set("v1_out_port", 2)
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 1})
+  context.midi.send(1, {type = "note_on", note = 64, vel = 100, ch = 1})
+  clear(devices[3])
+  params:set("v1_out_port", 3)
+  assert_balanced(devices, "plain")
+  assert_equal(sent(devices[3]), "", "nothing on the new port yet")
+  context.midi.send(1, {type = "note_on", note = 67, vel = 100, ch = 1})
+  assert_equal(sent(devices[3]), "note_on 67 100 1", "a note after the change goes to the new port")
+  -- MPE
+  params:set("v1_out_port", 0)
+  clear(devices[2]); clear(devices[3])
+  mpe_voice(1, 2, 3)
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 1})
+  local on = lines(devices[2])[#lines(devices[2])]
+  local channel = on:match("^note_on 60 100 (%d+)$")
+  assert_true(channel ~= nil, sent(devices[2]))
+  clear(devices[2]); clear(devices[3])
+  params:set("v1_out_port", 3)
+  assert_equal(sent(devices[2]), "note_off 60 " .. channel .. "|" .. TAKEDOWN, "the off where it went, then the takedown")
+  assert_equal(sent(devices[3]), (SETUP_15_48:gsub("cc 6 15 1", "cc 6 3 1")), "the new port's setup")
+  clear(devices[3])
+  context.midi.send(1, {type = "note_on", note = 62, vel = 100, ch = 1})
+  assert_true(sent(devices[3]):match("note_on 62 100 %d+$") ~= nil, "on the new port: " .. sent(devices[3]))
+end)
+
+test("a PSET with the brief's allowed zone reads back exactly, in either line order", function()
+  for _, reversed in ipairs({false, true}) do
+    local context, S = started()
+    mpe_voice(1, 2, 7)
+    params:set("v2_out_channel", 12); params:set("v2_out_port", 2)
+    local before = {route_of(1), route_of(2)}
+    local path = h.data_root .. "midi_out_zone_" .. tostring(reversed) .. ".pset"
+    params:write(path)
+    if reversed then reverse_route_lines(path) end
+    context, S = started()
+    params:read(path)
+    local why = reversed and "reversed" or "in order"
+    assert_equal(route_of(1), before[1], why)
+    assert_equal(route_of(2), before[2], why)
+    assert_true(S.lib.ui_flash.text("header") ~= REFUSED, why .. ": no flash")
+  end
+end)
+
+test("a PSET that swaps two MPE voices' ports reads back swapped, in either line order", function()
+  for _, reversed in ipairs({false, true}) do
+    local context, S = started()
+    local devices = {[2] = context.midi.plug(2, "a"), [3] = context.midi.plug(3, "b")}
+    mpe_voice(1, 3); mpe_voice(2, 2)
+    local path = h.data_root .. "midi_out_swap_" .. tostring(reversed) .. ".pset"
+    params:write(path)
+    if reversed then reverse_route_lines(path) end
+    context, S = started()
+    devices = {[2] = context.midi.plug(2, "a"), [3] = context.midi.plug(3, "b")}
+    mpe_voice(1, 2); mpe_voice(2, 3)
+    clear(devices[2]); clear(devices[3])
+    params:read(path)
+    local why = reversed and "reversed" or "in order"
+    assert_equal(route_of(1), "3 1 mpe 15", why)
+    assert_equal(route_of(2), "2 2 mpe 15", why)
+    assert_true(S.lib.ui_flash.text("header") ~= REFUSED, why .. ": no flash")
+    for port = 2, 3 do
+      local text = sent(devices[port])
+      assert_true(text:sub(-#SETUP_15_48) == SETUP_15_48, why .. ": port " .. port .. " ends set up: " .. text)
+    end
+  end
+end)
+
+test("a PSET with two MPE voices on one port keeps the lower voice and turns the other off", function()
+  local context, S = started()
+  mpe_voice(1, 2); mpe_voice(2, 3)
+  local path = h.data_root .. "midi_out_illegal.pset"
+  params:write(path)
+  edit_file(path, function(text) return (text:gsub('"v2_out_port": 3', '"v2_out_port": 2')) end)
+  context, S = started()
+  params:read(path)
+  assert_equal(route_of(1), "2 1 mpe 15", "voice 1 keeps port 2")
+  assert_equal(params:get("v2_out_port"), 0, "voice 2 is off")
+  assert_equal(S.lib.ui_flash.text("header"), REFUSED, "the flash")
+end)
+
+test("a 3.5 PSET with no MIDI out lines turns every route off and sends nothing", function()
+  local context, S = started()
+  local path = h.data_root .. "midi_out_3_5.pset"
+  params:write(path)
+  edit_file(path, function(text)
+    local kept = {}
+    for line in text:gmatch("[^\n]+") do
+      if not (line:match('^"v%d_out_') or line:match('^"cc_out') or line:match('^"midi_out_') or line:match('^"midi_pc')) then
+        kept[#kept + 1] = line
+      end
+    end
+    return table.concat(kept, "\n") .. "\n"
+  end)
+  context, S = started()
+  local devices = {[2] = context.midi.plug(2, "a"), [3] = context.midi.plug(3, "b")}
+  params:set("v1_out_port", 2); params:set("v2_out_port", 3); params:set("v2_out_channel", 9)
+  clear(devices[2]); clear(devices[3])
+  params:read(path)
+  for voice = 1, S.constants.NUM_VOICES do assert_equal(params:get("v" .. voice .. "_out_port"), 0, "voice " .. voice) end
+  assert_equal(params:get("v2_out_channel"), 2, "a missing line is at its default")
+  assert_equal(sent(devices[2]) .. sent(devices[3]), "", "nothing sent")
+end)
+
+test("a PSET read while notes sound leaves as many offs as ons on every port and channel", function()
+  local context, S = started()
+  params:set("v1_out_port", 3); params:set("v1_out_channel", 4)
+  local path = h.data_root .. "midi_out_playing.pset"
+  params:write(path)
+  context, S = started()
+  local devices = {[2] = context.midi.plug(2, "a"), [3] = context.midi.plug(3, "b")}
+  mpe_voice(1, 2, 3)
+  for _, note in ipairs({60, 64, 67}) do context.midi.send(1, {type = "note_on", note = note, vel = 90, ch = 1}) end
+  assert_true(#lines(devices[2]) > 9, "the notes went: " .. sent(devices[2]))
+  params:read(path)
+  assert_equal(route_of(1), "3 4 plain 15")
+  assert_balanced(devices, "a PSET read while playing")
+end)
+
+test("a quantized program change in is not echoed when it lands, whatever is recalled meanwhile", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "keys")
+  params:set("scene_transition_time", 0)
+  capture_scene(5); capture_scene(6)
+  params:set("midi_device", 2); params:set("midi_pc_in", 1)
+  params:set("midi_pc_out", 1); params:set("midi_pc_out_port", 2)
+  params:set("quantize_actions", 3)  -- bar
+  context.midi.send(2, {type = "program_change", val = 4, ch = 1})  -- scene 5, at the bar
+  recall_scene(6, 0)  -- from the norns meanwhile
+  assert_equal(sent(device), "program_change 5 1", "the norns' recall sends its own")
+  clear(device)
+  context.clock.run_for(2.5)
+  assert_equal(S.current_scene, 5, "the program change's recall landed")
+  assert_equal(sent(device), "", "and was not echoed")
+end)
+
+test("an empty scene's program change in leaves no guard", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "keys")
+  params:set("scene_transition_time", 0)
+  params:set("midi_device", 2); params:set("midi_pc_in", 1)
+  params:set("midi_pc_out", 1); params:set("midi_pc_out_port", 2)
+  context.midi.send(2, {type = "program_change", val = 6, ch = 1})  -- scene 7, empty
+  capture_scene(7)
+  recall_scene(7, 0)
+  assert_equal(sent(device), "program_change 6 1", "the next recall of scene 7 sends")
+end)
+
+test("a second program change in replaces the first's guard", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "keys")
+  params:set("scene_transition_time", 0)
+  capture_scene(5); capture_scene(6)
+  params:set("midi_device", 2); params:set("midi_pc_in", 1)
+  params:set("midi_pc_out", 1); params:set("midi_pc_out_port", 2)
+  params:set("quantize_actions", 3)
+  context.midi.send(2, {type = "program_change", val = 4, ch = 1})  -- scene 5
+  context.midi.send(2, {type = "program_change", val = 5, ch = 1})  -- scene 6 replaces it
+  recall_scene(5, 0)
+  assert_equal(sent(device), "program_change 4 1", "scene 5's guard was replaced: its recall sends")
+  clear(device)
+  context.clock.run_for(2.5)
+  assert_equal(S.current_scene, 6)
+  assert_equal(sent(device), "", "scene 6's landing is not echoed")
+end)
+
 end
