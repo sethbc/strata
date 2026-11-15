@@ -186,9 +186,9 @@ test("ready and a changed setting set the envelope up; release and a left output
   device.ready()
   assert_calls(state, setup_calls(5, 10, 500), "ready")
   params:set("txo_decay", 800)
-  assert_calls(state, setup_calls(5, 10, 800), "a new decay")
+  assert_calls(state, {{"send", "txo", "env_dec", 5, 800}}, "a new decay: only its command")
   params:set("txo_attack", 20)
-  assert_calls(state, setup_calls(5, 20, 800), "a new attack")
+  assert_calls(state, {{"send", "txo", "env_att", 5, 20}}, "a new attack: only its command")
   params:set("v1_out_txo", 6)
   local expected = {{"send", "txo", "env_act", 5, 0}}
   for _, call in ipairs(setup_calls(6, 20, 800)) do expected[#expected + 1] = call end
@@ -562,6 +562,25 @@ test("the TELEXo is routed only while Strata leads the bus, as Just Friends and 
   assert_equal(target_of(S).routed(2), false, "not leading: not routed, so the core records nothing on it")
   state.leading = true
   assert_equal(target_of(S).routed(2), true, "leading again")
+end)
+
+
+test("one detent of txo attack or decay sends only that command, once per active output", function()
+  local _, S, state = started()
+  for voice, output in ipairs({5, 6, 6, 9}) do
+    params:set("v" .. voice .. "_out_txo", output); params:set("v" .. voice .. "_out_txo_cv", ENVELOPE)
+  end
+  device_of(S).ready()
+  state.calls = {}
+  params:delta("txo_attack", 1)
+  assert_calls(state, {{"send", "txo", "env_att", 5, 11}, {"send", "txo", "env_att", 6, 11},
+    {"send", "txo", "env_att", 9, 11}}, "three active outputs: three lines")
+  params:delta("txo_decay", -1)
+  assert_calls(state, {{"send", "txo", "env_dec", 5, 499}, {"send", "txo", "env_dec", 6, 499},
+    {"send", "txo", "env_dec", 9, 499}}, "the decay's alone")
+  state.leading = false
+  params:delta("txo_decay", -1)
+  assert_calls(state, {}, "not leading: nothing")
 end)
 
 end
