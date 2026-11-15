@@ -364,4 +364,35 @@ test("a gate high when crow leaves is lowered when crow returns", function()
   assert_equal(last_line(context, "ii.er301.tr(3, "), "ii.er301.tr(3, 0)", "the trigger lowered on the return")
 end)
 
+
+test("two full-length steps on a port: the trigger's low goes out before the next step raises it", function()
+  -- seq gate off (the default): a step's gate is the whole step, so the targets core ends it
+  -- TARGETS.step_gap_seconds early and the SC.TR unit sees a low (crow-ii.md §2, ER-301)
+  local context, S = started()
+  params:set("v3_out_er301", 3)
+  for voice = 1, S.constants.NUM_VOICES do
+    for step = 1, S.constants.PATTERN_LENGTH do S.patterns[voice][step] = 0 end
+  end
+  S.patterns[3][1], S.patterns[3][2] = 15, 15
+  local times = {}
+  for _, kind in ipairs({"send", "send_off"}) do
+    local real = S.lib.io_ii[kind]
+    S.lib.io_ii[kind] = function(device, command, port, value)
+      if command == "tr" then times[#times + 1] = {value = value, t = util.time()} end
+      return real(device, command, port, value)
+    end
+  end
+  pattern_clock_start()
+  context.clock.run_for(0.2)  -- both steps have started (0.125 s each at 120 BPM)
+  pattern_clock_stop()
+  local shown = {}
+  for _, entry in ipairs(times) do shown[#shown + 1] = string.format("tr %d at %.4f", entry.value, entry.t) end
+  shown = table.concat(shown, "; ")
+  assert_true(#times >= 3, "high, low, high: " .. shown)
+  assert_equal(times[1].value, 1, shown); assert_equal(times[2].value, 0, shown); assert_equal(times[3].value, 1, shown)
+  local gap = S.lib.io_targets.TARGETS.step_gap_seconds
+  assert_true(times[3].t - times[2].t >= gap - 1 / 48 - 1e-6,
+    "the low lasts at least the gap less one 48 Hz step: " .. shown)
+end)
+
 end

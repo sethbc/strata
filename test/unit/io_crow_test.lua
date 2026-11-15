@@ -336,6 +336,37 @@ test("a gate output moved off a sounding voice goes low (through the real target
   end
 end)
 
+test("two full-length steps on a gate output: the low goes out before the next step's high", function()
+  -- seq gate off (the default): a step's gate is the whole step, so the targets core ends it
+  -- TARGETS.step_gap_seconds early and the jack shows a low an envelope can see
+  local context, S = started()
+  context.crow.plug()
+  params:set("crow_out2_source", option("crow_out2_source", "v3 gate"))
+  for voice = 1, S.constants.NUM_VOICES do
+    for step = 1, S.constants.PATTERN_LENGTH do S.patterns[voice][step] = 0 end
+  end
+  S.patterns[3][1], S.patterns[3][2] = 15, 15
+  local times, send = {}, norns.crow.send
+  norns.crow.send = function(line)
+    send(line)
+    if line:find("output[2].volts", 1, true) == 1 then times[#times + 1] = {line = line, t = util.time()} end
+  end
+  pattern_clock_start()
+  context.clock.run_for(0.2)  -- both steps have started (0.125 s each at 120 BPM)
+  pattern_clock_stop()
+  norns.crow.send = send
+  local shown = {}
+  for _, entry in ipairs(times) do shown[#shown + 1] = string.format("%s at %.4f", entry.line, entry.t) end
+  shown = table.concat(shown, "; ")
+  assert_true(#times >= 3, "high, low, high: " .. shown)
+  assert_equal(times[1].line, "output[2].volts = 5", shown)
+  assert_equal(times[2].line, "output[2].volts = 0", shown)
+  assert_equal(times[3].line, "output[2].volts = 5", shown)
+  local gap = S.lib.io_targets.TARGETS.step_gap_seconds
+  assert_true(times[3].t - times[2].t >= gap - 1 / 48 - 1e-6,
+    "the low lasts at least the gap less one 48 Hz step: " .. shown)
+end)
+
 test("a clock output pulses once per division with one line a pulse", function()
   -- crow-ii.md §1 How norns' clock relates to crow: action = pulse, then output[n]() per pulse
   local context, S, crow_io = started()

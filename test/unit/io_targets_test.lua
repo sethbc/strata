@@ -117,17 +117,51 @@ test("a plain step plays the routed targets at the voice's pitch and ends at its
   assert_equal(ons[1].args[5].source, "step")
   assert_equal(count_ids(ons[1].args[5]), 1, "info is {source = 'step'}")
   local on_beat = ons[1].beat
-  assert_near(targets.sounding(1).s1.off_beat, on_beat + 0.25, 1e-6, "the off at the gate: a 1/16 is 0.25 beat")
-  context.clock.run_for(STEP_SECONDS - 0.03)
-  assert_equal(#calls_of(a, "off"), 0, "no off before the gate ends")
+  -- the off at the gate less the step gap: a 1/16 is 0.25 beat, the gap 0.03 s
+  local gap = targets.TARGETS.step_gap_seconds
+  local ends = 0.25 - gap / clock.get_beat_sec()
+  assert_near(targets.sounding(1).s1.off_beat, on_beat + ends, 1e-6, "the off at the gate, the gap early")
+  context.clock.run_for(STEP_SECONDS - gap - 0.03)
+  assert_equal(#calls_of(a, "off"), 0, "no off before the note's end")
   context.clock.run_for(0.08)
   pattern_clock_stop()
   local offs = calls_of(a, "off")
   assert_equal(#offs, 1, "one off")
   assert_equal(offs[1].args[2], "s1")
-  assert_true(offs[1].beat >= on_beat + 0.25 - 1e-9 and offs[1].beat <= on_beat + 0.25 + LFO_STEP_BEATS + 0.01,
-    "within one 48 Hz step of the gate's end: " .. offs[1].beat - on_beat)
+  assert_true(offs[1].beat >= on_beat + ends - 1e-9 and offs[1].beat <= on_beat + ends + LFO_STEP_BEATS + 0.01,
+    "within one 48 Hz step of the note's end: " .. offs[1].beat - on_beat)
   assert_equal(#b.calls, 0, "b, not routed, got nothing")
+end)
+
+-- A step note's end in beats: its gate less the step gap, at most half the gate early
+local function step_end(targets, beat, gate_beats)
+  return beat + gate_beats - math.min(targets.TARGETS.step_gap_seconds / clock.get_beat_sec(), gate_beats / 2)
+end
+
+-- The registered step output of the targets core
+local function targets_output(S)
+  for _, output in ipairs(S.registry.step_outputs) do
+    if output.name == "targets" then return output end
+  end
+end
+
+test("a step note ends step_gap_seconds before its gate, at most half its length early; a played note is untouched", function()
+  -- so a gate target sees a low before the next step raises it (seq gate off: a gate is exactly a step)
+  local context, S, targets = started()
+  local a = recording_target(S, "a")
+  a.routes[1] = true
+  local gap = targets.TARGETS.step_gap_seconds
+  assert_equal(gap, 0.03)
+  local gap_beats = gap / clock.get_beat_sec()
+  local beat = clock.get_beats()
+  local output = targets_output(S)
+  output.play({ voice = 1, pitches = { 60 }, velocity = 1, beat = beat, gate_beats = 0.25 })
+  assert_near(targets.sounding(1).s1.off_beat, beat + 0.25 - gap_beats, 1e-9, "a full 1/16: the gap early")
+  local short = gap_beats * 1.5  -- shorter than twice the gap
+  output.play({ voice = 1, pitches = { 62 }, velocity = 1, beat = beat, gate_beats = short })
+  assert_near(targets.sounding(1).s1.off_beat, beat + short / 2, 1e-9, "a short note: half its length early")
+  S.lib.notes.play(1, played(7740, 64))
+  assert_equal(targets.sounding(1).m7740.off_beat, nil, "a played note keeps no off beat")
 end)
 
 test("a step's chord plays one note per pitch", function()
@@ -358,11 +392,12 @@ test("a beat that jumps back ends every pending off at once", function()
   -- a note started after the jump keeps its own gate
   local beat = clock.get_beats()
   play_hit(S, 1, 62, beat, 0.5)
+  local ends = step_end(targets, beat, 0.5)
   context.clock.run_for(0.2)  -- 0.4 beat
   assert_equal(#calls_of(a, "off"), 1, "not before its gate")
   context.clock.run_for(0.1)
   assert_equal(#calls_of(a, "off"), 2, "at its gate")
-  assert_true(calls_of(a, "off")[2].beat >= beat + 0.5 - 1e-9, "not early")
+  assert_true(calls_of(a, "off")[2].beat >= ends - 1e-9, "not early")
   assert_balanced(a, "a")
 end)
 
@@ -379,6 +414,9 @@ test("a tick's pull-back of the beat is not a jump", function()
   context.clock.set_beat(10)
   local beat = clock.get_beats()
   play_hit(S, 1, 60, beat, 0.5)
+  -- its end as the core read the tempo at the hit (matron reports a new
+  -- tempo a tick late, as the stub's clock does)
+  local ends = step_end(targets, beat, 0.5)
   context.clock.set_beat(beat - 0.01)
   context.clock.run_for(1 / 48 + 0.005)
   assert_true(clock.get_beats() < beat, "the step read the beat before the note's start")
@@ -387,7 +425,7 @@ test("a tick's pull-back of the beat is not a jump", function()
   assert_equal(#calls_of(a, "off"), 0, "not before its gate")
   context.clock.run_for(0.4)
   assert_equal(#calls_of(a, "off"), 1, "its full gate, then the off")
-  assert_true(calls_of(a, "off")[1].beat >= beat + 0.5 - 1e-9, "not early")
+  assert_true(calls_of(a, "off")[1].beat >= ends - 1e-9, "not early")
   -- just over the tolerance: a jump
   context.clock.set_beat(20)
   beat = clock.get_beats()
