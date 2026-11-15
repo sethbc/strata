@@ -22,7 +22,7 @@
 | `/strata/watch <param id>` | adds a param that exists to the watch list |
 | `/strata/hello` | marks every watched value and the three states due |
 
-Every message with a `from` host sets the last sender (feedback goes to `{host, osc_port}`). Feedback, from a 15 Hz clock: `/param/<id> <value>` for each watched param whose value differs from the last sent, `/strata/scene <n>`, `/strata/voice/<n>/running <0 or 1>` and `/strata/patterns <0 or 1>` when they change.
+Every message with a `from` host sets the last sender (feedback goes to `{host, osc_port}`); a sender that differs from the last asks for a redraw (`request_redraw()`), since IO's `osc` title shows it and the page does not animate. Feedback, from a 15 Hz clock: `/param/<id> <value>` for each watched param whose value differs from the last sent, `/strata/scene <n>`, `/strata/voice/<n>/running <0 or 1>` and `/strata/patterns <0 or 1>` when they change.
 
 IO's `osc` section: rig rows `osc_feedback` and `osc_port`; its status is the sender's host or `no sender`. Its layout states are `no sender` and `with a sender` (the rig setting cannot be set from the module, so a state shows the setting as it is).
 

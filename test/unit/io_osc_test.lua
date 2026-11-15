@@ -333,6 +333,20 @@ test("IO's osc section shows the rig rows and the sender", function()
   assert_equal(#record.layout_states, 2, "feedback off with no sender; on with a sender")
 end)
 
+test("a new sender is drawn on the next frame while IO shows the osc section", function()
+  -- IO does not animate: the title's sender changes only by a redraw request
+  local context, S = started()
+  h.show_page("IO")
+  S.lib.pages_io.show_section("osc")
+  h.assert_drawn_on_next_frame(context, nil, "a new sender's hello", function()
+    context.osc.receive("/strata/hello", {}, SENDER)
+  end)
+  assert_true(h.screen_shows(context, "10.0.0.7"), "the title shows the sender")
+  h.assert_drawn_on_next_frame(context, nil, "another sender", function()
+    context.osc.receive("/strata/hello", {}, {"10.0.0.8", 51000})
+  end)
+end)
+
 test("every address in the layout description is a param or one of Strata's addresses", function()
   -- checks.md §5: the description is a Lua table the generator reads; design §10.1's table
   local _, S = started()
