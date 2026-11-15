@@ -365,6 +365,38 @@ test("a beat that jumps back ends every pending off at once", function()
   assert_balanced(a, "a")
 end)
 
+-- On a MIDI or crow clock a late tick pulls the beat back a few ms: under
+-- the sequencer's own tolerance that is jitter, not a jump
+test("a tick's pull-back of the beat is not a jump", function()
+  local context, S, targets = started()
+  local a = recording_target(S, "a")
+  a.routes[1] = true
+  assert_equal(targets.TARGETS.jump_tolerance, S.lib.sequencer.SEQ.wake_tolerance, "the sequencer's tolerance")
+  -- 20 BPM: a beat is 3 s and an LFO step 1/144 beat, so the next step
+  -- reads the beat still behind the note's start
+  params:set("clock_tempo", 20)
+  context.clock.set_beat(10)
+  local beat = clock.get_beats()
+  play_hit(S, 1, 60, beat, 0.5)
+  context.clock.set_beat(beat - 0.01)
+  context.clock.run_for(1 / 48 + 0.005)
+  assert_true(clock.get_beats() < beat, "the step read the beat before the note's start")
+  assert_equal(#calls_of(a, "off"), 0, "a pull-back of 0.01 beat leaves the note")
+  context.clock.run_for(1.2)  -- the beat about 0.4 beat on, under the gate's end
+  assert_equal(#calls_of(a, "off"), 0, "not before its gate")
+  context.clock.run_for(0.4)
+  assert_equal(#calls_of(a, "off"), 1, "its full gate, then the off")
+  assert_true(calls_of(a, "off")[1].beat >= beat + 0.5 - 1e-9, "not early")
+  -- just over the tolerance: a jump
+  context.clock.set_beat(20)
+  beat = clock.get_beats()
+  play_hit(S, 1, 60, beat, 0.5)
+  context.clock.set_beat(beat - targets.TARGETS.jump_tolerance - 0.01)
+  context.clock.run_for(1 / 48 + 0.005)
+  assert_equal(#calls_of(a, "off"), 2, "a pull-back just over the tolerance ends it within one step")
+  assert_balanced(a, "a")
+end)
+
 test("a target that failed still gets the off of every note it started", function()
   local context, S, targets = started()
   local a, b = recording_target(S, "a"), recording_target(S, "b")
