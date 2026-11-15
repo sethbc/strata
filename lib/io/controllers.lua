@@ -86,11 +86,10 @@ return function(S)
     return bytes
   end
 
-  -- The id of macro m's first target, "" without one (a cheap read: the
-  -- label is built only when this changes)
+  -- The id of macro m's first target, "" without one (the label is built
+  -- only when this changes)
   local function first_target_id(m)
-    local macro = S.macros[m]
-    for _, row in ipairs(macro and macro.targets or {}) do
+    for _, row in ipairs(S.lib.macros.targets(m) or {}) do
       if row.id ~= "" then return row.id end
     end
     return ""
@@ -450,19 +449,37 @@ return function(S)
   local LAYOUT = {e16_port = 2, faders_port = 3, fader_cc = 64, picked_up = {1, 2, 3, 4, 7, 8, 16},
     map_channel = 16, map_cc = 102}
 
-  local function turn_rig_row(key, value)
-    enc(2, -#SETTINGS)  -- the first row
-    for _ = 1, #SETTINGS do
-      local row = S.lib.pages_io.rows()[S.io_cursor]
-      if row and row.key == key then break end
-      enc(2, 1)
+  -- Turn the controllers section's rig row `key` to value with E2 and E3
+  -- on IO's page, which must be shown: the section is shown first, the row
+  -- is found by its key among the page's rows (other sections' rows may
+  -- come before it), E2 moves over the selectable rows between the cursor
+  -- and it, and the cursor is checked to be on it before E3 turns. A key
+  -- the section has no row for raises, naming it
+  function M.turn_rig_row(key, value)
+    S.lib.pages_io.show_section("controllers")
+    local rows = S.lib.pages_io.rows()
+    local target
+    for index, row in ipairs(rows) do
+      if row.section == "controllers" and row.key == key then target = index end
+    end
+    if not target then error("controllers layout: the IO page has no controllers row for rig key " .. tostring(key), 2) end
+    local from = S.io_cursor
+    local first, last = math.min(from, target), math.max(from, target)
+    local moves = 0
+    for index = first, last do
+      if rows[index].selectable ~= false and index ~= from then moves = moves + 1 end
+    end
+    enc(2, target >= from and moves or -moves)
+    local row = S.lib.pages_io.rows()[S.io_cursor]
+    if not (row and row.section == "controllers" and row.key == key) then
+      error("controllers layout: E2 did not reach the row for rig key " .. key, 2)
     end
     enc(3, value - setting(key))
   end
 
   local function layout_ports(e16_port, faders_port)
-    turn_rig_row("e16_port", e16_port)
-    turn_rig_row("faders_port", faders_port)
+    M.turn_rig_row("e16_port", e16_port)
+    M.turn_rig_row("faders_port", faders_port)
   end
 
   local function layout_devices(context, present)
