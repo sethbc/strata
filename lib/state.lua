@@ -512,7 +512,7 @@ return function()
   -- so they stay open
   local NOTE_HOOK_FIELDS = {name = true, started = true, ended = true, moved = true, expressed = true}
   local NOTE_TARGET_FIELDS = {name = true, routed = true, note_on = true, note_off = true, express = true,
-    stop_all = true, rows = true, status = true}
+    stop_all = true, rows = true, status = true, layout_states = true}
   local II_DEVICE_FIELDS = {name = true, ready = true, release = true, param_count = true, add_params = true}
 
   -- A note hook (lib/notes.lua runs each, contained): {name, started, ended,
@@ -541,12 +541,17 @@ return function()
   end
 
   -- A note target (lib/io/targets.lua reads them, design §3): {name, routed
-  -- = fn, note_on = fn, note_off = fn, express, stop_all, rows, status};
-  -- the last four optional (rows and status: IO's voice section, ruling 9)
+  -- = fn, note_on = fn, note_off = fn, express, stop_all, rows, status,
+  -- layout_states = {{name, setup = fn(context)}, ...}}; the last five
+  -- optional (rows and status: IO's voice section, ruling 9; layout_states:
+  -- the voice section's layout states the page lists for the target)
   function M.register_note_target(record)
     local kind = "register_note_target"
     local where = require_named(record, "note_targets", kind, "name", NOTE_TARGET_FIELDS)
     require_functions(record, where, {"routed", "note_on", "note_off"}, {"express", "stop_all", "rows", "status"})
+    require_arg(all_entries(record.layout_states, function(_, state)
+      return type(state) == "table" and type(state.name) == "string" and type(state.setup) == "function"
+    end), where, "layout_states lists {name, setup = fn}")
     table.insert(M.registry.note_targets, record)
   end
 

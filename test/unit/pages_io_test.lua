@@ -12,9 +12,11 @@ local show_page, assert_screen_layout, screen_shows, hint_text = h.show_page, h.
 local tap, next_frame = h.tap, h.next_frame
 
 -- The shell's tests register their own sections: the targets core's voice
--- section (lib/io/targets.lua, 3.6's 1a) is taken out first
+-- section (lib/io/targets.lua, 3.6's 1a) is taken out first, and the
+-- registered targets, whose layout states the page lists with the voice section's
 local function without_registered_sections(S)
   for index = #S.registry.io_sections, 1, -1 do S.registry.io_sections[index] = nil end
+  for index = #S.registry.note_targets, 1, -1 do S.registry.note_targets[index] = nil end
 end
 
 local function loaded()
@@ -235,6 +237,50 @@ test("show_section puts its section at the top; the layout states cover each sec
   states[3].setup(load_context)
   assert_equal(ran, 1, "the section's own setup ran")
   assert_equal(local_value("S").lib.pages_io.rows()[local_value("S").io_cursor].label, "x", "after show_section")
+end)
+
+-- A target's layout states (register_note_target's layout_states) are the
+-- voice section's: listed after its own, run after show_section("voice");
+-- with no voice section registered they are listed and run as given
+test("a target's layout states join the voice section's and run", function()
+  local ran = {}
+  local load_context = load_strata({ before_init = function()
+    local script = local_value("S")
+    without_registered_sections(script)
+    script.register_io_section({ name = "voice", title = "voice", rows = function()
+      return { { label = "x", kind = "param", param_id = "mutation_rate" } }
+    end, layout_states = { { name = "own", setup = function() ran[#ran + 1] = "own" end } } })
+    script.register_io_section({ name = "osc", title = "osc", rows = function() return {} end })
+    script.register_note_target({ name = "probe", routed = function() return false end,
+      note_on = function() end, note_off = function() end,
+      layout_states = { { name = "look", setup = function() ran[#ran + 1] = "look" end } } })
+  end })
+  finish_startup(load_context)
+  local S = local_value("S")
+  local states = S.registry.pages[10].layout_states
+  local names = {}
+  for index, state in ipairs(states) do names[index] = state.name end
+  assert_equal(table.concat(names, "|"),
+    "ALT held|voice at the top|voice: own|voice: look|osc at the top", "the target's after the section's own")
+  show_page("IO")
+  states[4].setup(load_context)
+  assert_equal(ran[#ran], "look", "the target's setup ran")
+  assert_equal(S.lib.pages_io.rows()[S.io_cursor].label, "x", "after show_section")
+
+  -- no voice section: still listed, run as given
+  local bare = load_strata({ before_init = function()
+    local script = local_value("S")
+    without_registered_sections(script)
+    script.register_note_target({ name = "probe", routed = function() return false end,
+      note_on = function() end, note_off = function() end,
+      layout_states = { { name = "look", setup = function() ran[#ran + 1] = "bare" end } } })
+  end })
+  finish_startup(bare)
+  local bare_states = local_value("S").registry.pages[10].layout_states
+  assert_equal(bare_states[#bare_states].name, "voice: look", "listed without a voice section")
+  show_page("IO")
+  bare_states[#bare_states].setup(bare)
+  assert_equal(ran[#ran], "bare", "and run")
 end)
 
 -- A row that comes or goes above the cursor (a device plugged in, in a later

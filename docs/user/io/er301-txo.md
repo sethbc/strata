@@ -2,7 +2,7 @@
 
 Two Eurorack modules a voice can play over the ii bus. Part of the [IO page](../pages/io.md): their rows are in its `voice` section, under the selected voice. Back to [Screen Controls](../controls.md).
 
-Both start off, and both send only while Strata leads the ii bus (the `ii bus` setting on IO, with crow as the bridge). Each plays one note at a time, the newest: when it ends while others still sound, the pitch goes to the newest left with no new trigger, and the gate goes low when the last one ends. This is unverified on the device until the 4.0 hardware check.
+Two voices on one port or output share it: the newest note of either sounds. Both start off, and both send only while Strata leads the ii bus (the `ii bus` setting on IO, with crow as the bridge). Each plays one note at a time, the newest: when it ends while others still sound, the pitch goes to the newest left with no new trigger, and the gate goes low when the last one ends. This is unverified on the device until the 4.0 hardware check.
 
 ## ER-301
 
