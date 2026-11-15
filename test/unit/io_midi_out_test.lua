@@ -941,6 +941,65 @@ test("a synth moved while a note goes to its old port mid-menu still gets all no
   assert_equal(sent(a), "cc 123 0 6", "nothing more for a")
 end)
 
+-- Per note on a device: its ons less its offs (#709: 0 for a balanced device)
+local function open_notes(device)
+  local open = {}
+  for _, entry in ipairs(lines(device)) do
+    local kind, note, rest = entry:match("^(note_%a+) (%d+) (.*)$")
+    if kind then
+      local channel = rest:match("(%d+)$")
+      local key = note .. " ch " .. channel
+      open[key] = (open[key] or 0) + (kind == "note_on" and 1 or -1)
+    end
+  end
+  return open
+end
+
+-- Synth a on port 2 holding note 60 on channel 6, the menu opened, a moved
+-- to port 3 and, when b_takes_port, synth b (port 4) moved to port 2
+local function a_moving(b_takes_port)
+  local context, S = started()
+  local a = context.midi.plug(2, "synth a")
+  local b = context.midi.plug(4, "synth b")
+  local target = midi_target(S)
+  params:set("v1_out_channel", 6)
+  params:set("v1_out_port", 2); settled(context)
+  target.note_on(1, "s1", 60, 1, step_info())
+  clear(a); clear(b)
+  _menu.set_mode(true)
+  context.midi.reassign(2, 3)
+  if b_takes_port then context.midi.reassign(4, 2) end
+  return context, S, target, a, b
+end
+
+test("a moved synth whose note ends while the menu is open gets all notes off at its new port", function()
+  local context, S, target, a, b = a_moving(false)
+  target.note_off(1, "s1")  -- its off mid-menu: port 2 has no device now
+  _menu.set_mode(false)
+  assert_equal(sent(a), "cc 123 0 6", "a gets all notes off on the note's channel at port 3")
+  assert_equal(sent(b), "", "b, not moved, gets nothing")
+end)
+
+test("a moved synth's mid-menu off never reaches the device that took its port", function()
+  local context, S, target, a, b = a_moving(true)
+  target.note_off(1, "s1")
+  assert_equal(sent(b), "", "b, now on port 2, gets no off for a's note")
+  _menu.set_mode(false)
+  assert_equal(sent(a), "cc 123 0 6", "a gets all notes off at port 3")
+  assert_equal(sent(b), "", "b gets nothing for a's note")
+end)
+
+test("a same-pitch note to the old port mid-menu, then a's note ending: b gets its own on and off, a its all notes off", function()
+  local context, S, target, a, b = a_moving(true)
+  target.note_on(1, "s2", 60, 1, step_info())  -- to port 2, synth b's now: no retrigger off for a's note
+  target.note_off(1, "s1")                      -- a's note ends mid-menu
+  target.note_off(1, "s2")
+  _menu.set_mode(false)
+  assert_equal(sent(b), "note_on 60 127 6|note_off 60 6", "b gets exactly the on and the off of its own note")
+  assert_equal(sent(a), "cc 123 0 6", "a gets all notes off at port 3")
+  for key, count in pairs(open_notes(b)) do assert_equal(count, 0, "b's " .. key .. ": as many offs as ons (#709)") end
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")
