@@ -606,4 +606,88 @@ test("raw gives a held note's bend, pressure and slide", function()
   assert_equal(expression.raw(1, "midi", 7740), nil, "forgotten")
 end)
 
+-- 3.6 (ruling A of 2a): a played note's first values, readable by the
+-- targets from its note on, before the note's first update
+test("first_touch's values are raw's until the first update, whose record holds the same", function()
+  local context = load_strata()
+  local S = started(context)
+  local expression = S.lib.expression
+  context.clear_engine_calls()
+  expression.first_touch(1, "midi", 7740, { bend = 1.5, pressure = 0.4, slide = 0.7 })
+  assert_equal(#context.engine_calls, 0, "it sends nothing")
+  local raw = expression.raw(1, "midi", 7740)
+  assert_equal(raw.bend, 1.5); assert_equal(raw.pressure, 0.4); assert_equal(raw.slide, 0.7)
+  raw.pressure = 0
+  assert_equal(expression.raw(1, "midi", 7740).pressure, 0.4, "a copy")
+  assert_equal(expression.raw(1, "midi", 7741), nil, "another key")
+  assert_equal(expression.raw(2, "midi", 7740), nil, "another voice")
+  play(1, 7740, 60)
+  update(1, 7740, { bend = 1.5, pressure = 0.4, slide = 0.7 })
+  raw = expression.raw(1, "midi", 7740)
+  assert_equal(raw.bend, 1.5); assert_equal(raw.pressure, 0.4); assert_equal(raw.slide, 0.7)
+  -- the update took the pending values: once the record goes, nothing is left
+  S.lib.notes.release(1, "midi", 7740)
+  lfo_step(context, 2)
+  assert_equal(expression.raw(1, "midi", 7740), nil, "no pending values after the update")
+end)
+
+test("forget, and a note that got no slot, leave nothing pending", function()
+  local context = load_strata()
+  local S = started(context)
+  local expression = S.lib.expression
+  expression.first_touch(1, "midi", 7740, { bend = 1.2, pressure = 0.3 })
+  expression.forget(1, "midi", 7740)
+  assert_equal(expression.raw(1, "midi", 7740), nil, "forgotten")
+  local real_play = S.lib.notes.play
+  S.lib.notes.play = function() return nil end
+  midi_note_on(1, 60, 100, 2, { bend = 1.2, pressure = 0.3, slide = 0.1 })
+  S.lib.notes.play = real_play
+  assert_equal(expression.raw(1, "midi", 2 * 128 + 60), nil, "no slot: nothing pending")
+end)
+
+test("first_touch keeps only finite values, clamped as update clamps them", function()
+  local context = load_strata()
+  local S = started(context)
+  local expression = S.lib.expression
+  expression.first_touch(1, "midi", 1, { bend = 0 / 0, pressure = math.huge, slide = 0.5 })
+  local raw = expression.raw(1, "midi", 1)
+  assert_equal(raw.bend, 1, "a bend that is not finite is 1")
+  assert_equal(raw.pressure, nil, "a pressure that is not finite is not kept")
+  assert_equal(raw.slide, 0.5)
+  expression.first_touch(1, "midi", 2, { bend = 100, pressure = 1.5, slide = -0.2 })
+  raw = expression.raw(1, "midi", 2)
+  assert_equal(raw.bend, 16, "the allocator's bend range"); assert_equal(raw.pressure, 1); assert_equal(raw.slide, 0)
+  expression.first_touch(1, "midi", 3, { bend = 1, slide = 0 / 0 })
+  assert_equal(expression.raw(1, "midi", 3).slide, nil, "a slide that is not finite is not kept")
+end)
+
+test("first_touch on a bad voice does nothing", function()
+  local context = load_strata()
+  local S = started(context)
+  local expression = S.lib.expression
+  expression.first_touch(9, "midi", 1, { bend = 1.5 })
+  expression.first_touch(0, "midi", 1, { bend = 1.5 })
+  expression.first_touch(1.5, "midi", 1, { bend = 1.5 })
+  assert_equal(expression.raw(9, "midi", 1), nil)
+  for voice = 1, S.constants.NUM_VOICES do assert_equal(expression.raw(voice, "midi", 1), nil, "voice " .. voice) end
+  expression.first_touch(1, "midi", 1, "not a table")
+  assert_equal(expression.raw(1, "midi", 1), nil, "a raw that is not a table: nothing")
+end)
+
+-- The MIDI package's note on: the targets read the note's first values from its note on
+test("a played note's first values are readable as its note starts", function()
+  local context = load_strata()
+  local S = started(context)
+  local seen
+  S.register_note_hook({ name = "probe", started = function(voice, _, note)
+    seen = S.lib.expression.raw(voice, note.owner, note.key)
+  end })
+  params:set("midi_channel_mode", 3)  -- mpe selected
+  context.midi.send(1, { type = "channel_pressure", val = 127, ch = 2 })
+  context.midi.send(1, { type = "cc", cc = 74, val = 127, ch = 2 })
+  context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 2 })
+  assert_true(seen ~= nil, "raw at the note's start")
+  assert_equal(seen.pressure, 1); assert_equal(seen.slide, 1)
+end)
+
 end
