@@ -2,7 +2,7 @@
 
 Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](../../README.md).
 
-After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **matrix**, **input**, **gestures**, **out midi**, **crow**, **tape**, **sequencer**, **buffers**, **record**, **positions**, **midi** and **zones** groups, then the **scale** section, then one section per voice. Grouped by topic:
+After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **matrix**, **input**, **gestures**, **out midi**, **crow**, **out ii**, **out nb**, **tape**, **sequencer**, **buffers**, **record**, **positions**, **midi** and **zones** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
 PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that tells a PSET saved now from one saved before 3.3. An older PSET loads as it sounded: the Pulse voice's res, which ran the other way before 3.3, is turned around as it loads (see [Per-Voice Sections](#per-voice-sections)), until you save it again. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
@@ -56,6 +56,10 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 
 ## crow (group)
 - In 1 and in 2: mode (off, cv, trigger; off), range (-5..5, 0..5, 0..10 V; -5..5), action (retrigger, next scene, freeze, record, patterns; retrigger) and voice (sel, the selected voice, or 1-7; sel). Out 1 to out 4: source (off, a modulation source, a voice's pitch or gate, or clock; off), range (0..5, 0..10, -5..5 V; 0..5) and div (1/16 to 4 beats; 1). See [crow](io/crow.md)
+- A PSET stores them; scenes do not
+
+## out nb (group)
+- V1 nb to v7 nb (none, or a player an installed nb voice mod offers; none): the player each voice's steps and played notes go to, kept by name. See [nb voices](io/nb.md)
 - A PSET stores them; scenes do not
 
 ## Sequencer (group)
