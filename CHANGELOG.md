@@ -1,5 +1,114 @@
 # Strata Changelog
 
+## Version 3.6.0 - 2026-11-15
+
+Integration: a tenth page, IO, for the rest of the rig; a voice's pattern steps and played notes also playing MIDI out (plain or MPE), Just Friends, W/ synth, an ER-301 port, a TELEXo output and an nb voice; crow's two inputs as modulation sources or triggers and its four outputs following a modulation source, a voice's pitch or gate, or the clock; the ii bus led by Strata through crow, or by a Teletype whose three calls reach scenes, voices, macros and the patterns; W/ tape's transport; eight CC out slots and program change in and out for scenes; an OXI E16 and a box of sixteen faders on the sixteen macros; a monome grid or arc in iii mode, and a MIDI grid through the midigrid mod, as one more of Strata's grids or its arc; OSC addresses, feedback and two TouchOSC layouts; and a stereo tape loop of Strata's output on softcut. **Nothing in 3.6 has run on a device:** each integration is built from its device's documents and sources (`docs/design/3.6-facts/`, and the sources each user page names) and is unverified until the 4.0 hardware check (#6). **Everything is off by default:** a fresh Strata sends nothing to any of them, a rig without them sounds and plays as 3.5 did, and scenes, PSETs and PARAMS > MAP mappings from 3.5 load. The engine gains no command; norns needs one restart after updating.
+
+### Upgrade Notes
+
+- **Restart norns after updating** (SYSTEM > RESTART): ten engine files changed (their calls that hand a function on now go through `areaCall`, #680 and #689, under Fixes), which SuperCollider compiles only at a restart. No engine file was added, renamed or deleted since 3.5.
+- **A tenth page, IO, after SETUP:** E1 turns from MAIN to IO, and the header shows ten page dots. The arc's four rings on IO are the tape loop's.
+- **A new data file,** `io.data` in `~/dust/data/strata/`: the rig settings (who leads the ii bus, the controllers' and remote devices' ports, OSC's feedback and port), kept on the norns, never in a PSET or a scene, and changed only on IO. One that cannot be read at start is kept as `io.data.bak`, and every setting starts at its default.
+- **Five new groups in PARAMETERS,** `out midi`, `crow`, `out ii`, `out nb` and `tape`, all saved with a PSET and none in a scene. A 3.5 PSET loads with every one of them off; one read while the tape loop runs stops the loop.
+- **SETUP's `midi` row shows a port's owner** (`midi 1: (e16)`, `(faders)`, `(remote grid)`, `(midigrid)`) when a controller, a remote device or a MIDI grid holds the MIDI input's port: Strata then plays no notes from that port. The MIDI input itself never holds a port.
+
+### The IO Page
+
+- **One list of sections,** in this order: the selected voice's routes (`voice`), `midi out`, `crow`, `ii`, `w/ tape`, `controllers`, `remote`, `osc` and `tape`. Each title line shows what needs attention (`[--]` while a section's device is not connected, `map clash`, a dropped count); rows are values, actions (K3), status lines and detail lists (K3 opens one: E2 moves, E3 changes, K2 closes). E2 moves through the rows, K2 jumps to the next section, ALT+E2 selects the voice, and a section that cannot draw itself shows `error` while the others carry on.
+- **The rig settings** are IO rows kept in `io.data` (Upgrade Notes); no PSET, scene, controller, OSC message or Teletype script changes them. A write that fails keeps the old value and flashes `setting not saved`.
+- **A page of supported devices** (`docs/user/io/devices.md`): a setup for the OXI ONE as Strata's sequencer and the Disting NT as a MIDI target, and a table of every device Strata reaches, its page and the document it was built from; each device has its own user page under docs/user/io/.
+
+### Targets: a Voice's Notes on Other Instruments
+
+- **A routed voice plays its pattern steps** (the step's pitches, its chord's or the voice's own, moved by the step's pitch lock, at the step's level) **and its played notes** (held as long as the key, or latched, with their bend, pressure and slide where the target takes them) on every target it is routed to. Pitch to volts is MIDI note 60 at 0 V, one volt an octave, clamped to each device's range.
+- **A note always ends on the instruments it started on,** whatever changes meanwhile. A voice's stop, a change of one of its routes, a PSET that changes its routes, a mute (or another voice's solo) and leaving the script end every note it sounds; stopping the patterns ends their step notes.
+- **A step note ends just before its gate does,** 30 ms early (or half a very short note), so a gate or trigger input sees a low before the next step raises it and consecutive steps retrigger.
+- **The `voice` section** shows the selected voice's routes: `midi` (a detail list), `jf` and `jf level`, `w/ syn` and `w/ level`, `er-301`, `txo` (a detail list), `txo attack` and `txo decay`, and `nb`.
+- **Just Friends** (`jf` per voice, `jf level` 0-10 V): a voice's notes as notes in volts at a level. Strata sends `mode 1` when it starts leading the bus and `mode 0` when it stops, so Just Friends' SPEED switch must be at sound.
+- **W/ synth** (`w/ syn` per voice, one `w/ level`): one note a note, four voices in AR mode, set up when Strata starts leading the bus.
+- **The ER-301 and the TELEXo:** a voice plays an ER-301 port (its pitch as `SC.CV`, its gate as `SC.TR`, ports 1 to 100) or a TELEXo output (1 to 32: as a pitch and trigger, or as a level through the output's envelope, with its `txo attack` and `txo decay`, a turn of which sends only that setting). A port or an output plays one note at a time, the newest, whatever voices feed it, and its gate goes low when the last one ends. Both play only while Strata leads the ii bus.
+- **nb voices:** each voice can play one player an installed nb voice mod offers (`nb`, chosen on IO and saved with a PSET by the player's name, so another mod installed later does not change the pick), at the step's pitches rounded to whole notes. Strata is an nb host of its own; a voice's stop, a PSET load and leaving Strata stop the players. While any voice has an nb player the line `nb mods send on their own` shows under the row, and the `voice` title's `[!]` marks it.
+
+### MIDI Out
+
+- **A voice's notes to a MIDI synth,** on a port (1 to 16) and channel, plain or MPE (in the port's lower zone, 1 to 15 members, each played note on a member channel with its own bend, pressure and slide, the member channels' bend range 1-96 semitones, default 48). Strata sends the zone's configuration when the mode turns on, the route changes and the synth is plugged in. A note struck again while it sounds goes out as a note off and a new note on, so every port and channel gets as many note offs as note ons. On a full zone, where notes share a member channel, a step note leaves a played note's bend alone, and when a played note there ends the notes still on it send their own values again. A played note is not sent back to the MIDI input's own port.
+- **Routes are judged together:** a change to a voice's route takes effect within 1/48 s, and a set of changes that would put two MPE voices on one port, or a plain voice inside an MPE zone, goes back with the message `port has an mpe voice`. A PSET's routes land as saved; only a file that breaks the rule is changed, its voices taken in order.
+- **A synth unplugged or moved to another port** in SYSTEM > DEVICES while its notes sound gets all notes off (CC 123) on those channels where it is now, then its MPE zone again; the device that takes its old port gets nothing of this.
+- **A port a remote grid, a remote arc or `midi grid` holds gets nothing,** since those devices read notes as their lights, and the port rows show its owner beside its number (`3 (remote grid)`); a controller's port is still sent to as set.
+- **Eight CC out slots,** each sending a modulation source (any MOD lists) as a CC on a port and channel; a PSET keeps a slot's source by its name.
+- **Program change for scenes,** both off by default: in, a program change 0 to 15 recalls scene 1 to 16 (quantized as a scene key is) on the MIDI input's port and a channel or `any`; out, each scene recall sends its program change on a port and channel, never back to the port a recall's program change came from.
+
+### crow
+
+- **Two inputs:** each a modulation source (`CR1` and `CR2` in MOD's `crow` section, over -5..5, 0..5 or 0..10 V) or a trigger whose rise runs an action on a voice: retrigger, next scene, freeze, record or the patterns. A retrigger, from crow, OSC or a Teletype, opens a gated voice's own gate length, as a played note does.
+- **Four outputs:** each follows a modulation source (smoothed over 20 ms), a voice's pitch (its newest note) or gate (5 V while it sounds; choosing a gate sets the jack at once), or the clock (a 10 ms pulse every 1/16 to 4 beats), over 0..5, 0..10 or -5..5 V. A PSET keeps an output's source by its name.
+- **crow plugged in (again)** is reset, as norns does, and set up from the settings; jacks norns' own crow clock uses are left to it. Strata sends crow at most 32 lines a tenth of a second, notes, gates and clock pulses always at once.
+
+### The ii Bus and Teletype
+
+- **Who leads the bus** (IO's `bus leader`, a rig setting): `off` (the default: Strata sends and answers nothing), `strata leads` (crow leads whenever Strata sends, so Just Friends, W/, the ER-301 and the TELEXo play) or `teletype leads` (Strata sends no ii message and takes the Teletype's calls). The user page warns against `strata leads` with a Teletype on the bus.
+- **A queue for the bus:** at most four ii messages each 1/48 s, in order; with 48 waiting a new note's message is dropped and counted on the `ii` title. A note's end is never dropped and never pushes another out.
+- **Leaving the lead** sends at most fifteen lines at once, inside crow's own sixteen: up to fourteen offs, then the devices' own release lines. A gate left high then, or high when crow's cable came out, is lowered the next time Strata leads the bus; at a script's end it stays high until that port next plays.
+- **Teletype's calls,** with `teletype leads` and crow connected: `CROW.C1 n` recalls scene n; `CROW.C2 v x` stops, starts or toggles voice v; `CROW.C3` retriggers, freezes or mutes a voice, sets one of the sixteen macros (0 to 16383) or plays the patterns. A call out of range prints one line and does nothing; `CROW.C4` and the queries do nothing.
+- **W/ tape's transport:** six rows on IO's `w/ tape` section (record, play, reverse, loop start, loop end, loop), each press sending one command while Strata leads the bus.
+
+### Controllers
+
+- **An OXI E16 and a box of sixteen faders** (a 16n, a 16nx, a Faderpunk) on IO's `controllers` section move the sixteen macros, whatever bank MOD shows. The E16's encoders are relative turns (`rel1` or `rel2`), one detent a step, a hand edit to macro learn, the recorders and MOD; a fader moves its macro once it is picked up (sixteen marks show which), and 14-bit faders take their low byte on CC + 32 (`faders hires`), moving across each step of the high byte without a jump.
+- **Feedback to the E16:** each macro's value as its CC and, with `extras/e16/strata.lua` loaded into the E16, the rings, labels (each macro's first target) and the title `STRATA`. The echo of a CC Strata just sent (the E16's Thru) is taken once and ignored.
+- **`map clash`** on the title when PARAMS > MAP maps a CC a controller here uses; `port taken` when another part of Strata holds its port.
+
+### Remote Grids and Arcs
+
+- **A monome grid or arc in iii mode** (2022 grids on, the 2025 arc, iii 1.1.0 or later), running `iii/strata_grid.lua` or `iii/strata_arc.lua`, works on IO's `remote` section as one more of Strata's grids (the layout of its size, on a port of its own besides norns' four) or as the arc Strata follows (a monome arc plugged into norns is followed first). A grid's LEDs go thirty times a second, at most 96 changes each; an older iii shows a fixed pattern.
+- **A MIDI grid through the midigrid mod** (a Launchpad and others), with `midi grid` on, attaches as one more grid; while it is attached its device's MIDI port is its own, so its pads play no voice through the MIDI input and MIDI out sends nothing there.
+- The section shows each device's state (`16x8`, `4 rings`, `[--]`, `no hello`, `in use`, ...); **rescan** asks each device again, and connects the midigrid only while none is attached.
+
+### OSC
+
+- **Six addresses** besides norns' own `/param/<id>`: `/strata/scene`, `/strata/voice/<n>/run`, `/strata/voice/<n>/retrigger`, `/strata/patterns`, `/strata/watch` and `/strata/hello`.
+- **Feedback** (IO's `osc` section, off by default): the watched params (the macros and each voice's mute and level to start), the scene, the voices' running states and the patterns, to the last sender's host at a port (9000 by default), up to 15 times a second; a value that has just come from the app is not sent back.
+- **Two TouchOSC layouts,** `extras/touchosc/strata-tablet.tosc` and `strata-phone.tosc` (made by `tools/touchosc/generate.py`, never opened in TouchOSC).
+
+### The Tape Loop
+
+- **A stereo loop of Strata's output on softcut,** off by default, on IO's `tape` section and in PARAMETERS > tape: record, length (0.25-60 s), speed (-2 to 2), feedback, wear (the pass darkened from 12000 Hz down to 800 Hz) and level. While it runs, softcut takes only Strata's output (the input and norns' tape are left out of the loop, a PSET read included); turning it off, or leaving Strata, puts norns' levels back.
+- Level, speed, feedback and wear are macro targets and the arc's four rings on IO.
+
+### Fixes
+
+- **With the midigrid mod active,** each of Strata's four grid ports is norns' own again and a grid plugged in later is seen (#700); with the nbout mod active, a MIDI device plugged in later is seen too.
+- **MIDI hot-plug handlers a mod installed before Strata** keep running while Strata runs and are put back when it stops, where Strata replaced them. A device moved to another port in SYSTEM > DEVICES prints the `midi connected` and `midi disconnected` lines of a plug and an unplug, once the menu closes.
+- **A controller's master pitch bend range** survives a change of the note off setting or the channel mode, a panic and a zone change; only a new MPE configuration, a port change or a device change puts it back to 2 semitones (#688).
+- **Development: the long-lived-frame guard follows calls and scans every function in the engine** (#680, #689). The structure test decides that an engine method hands a function on through any chain of the engine's own calls (a tail call included), sees calls written without parentheses, knows `getn`, `unixCmd` and `addDependant`, and checks every function literal of the engine's methods (an `onFree`, `fork`, `makeBundle`, `do`, reply or stored function, a partial application), leaving out the blocks sclang inlines. The 26 calls it found (in the `setGrainSource`, `setScatter` and `noteOn` commands, the `freeze` and `freezeMode` grain handlers, and the scatter, source switch, freeze, notes, buffer load, recording, file and peaks code) now go through `areaCall`; they were safe before, and no sound or behavior changes.
+- **Development: the 3.13 Docker runner's summary** counts and names every run and shard whose log holds the collector's count-error lines as a collector failure, whatever else the log shows and even when the check passed (#687).
+- **Development: the engine check's `loops` and `grains` areas** wait on a load's count and fail by name, where they waited a fixed 0.3 s after `loadBuffer` and could fill a slot whose length was still 0 (#706, which stays open for the other fixed waits).
+
+### Deviations from the 3.6 design
+
+The design's lines are marked where the build differs (*amended 2026-11-15, as built*); the rulings are in `docs/decisions/3.6.md`, in two series, plan ruling N and build ruling N.
+- **The interfaces grew where the merged code needed them:** ii devices register (`S.register_ii_device`, plan ruling 8), a port has one owner (`claim`, `release`, `owner`, plan ruling 11), the shared actions are one module (plan ruling 12), a target carries its IO rows, its mark and its layout states (plan ruling 9, build ruling 11), W/ tape has a section of its own (plan ruling 10), and an option whose list can change is saved by key (plan ruling 24), so `strata_out_midi` holds 74 params and `strata_crow` 24.
+- **What the fact checks settled from source rules over the design** (plan ruling 22): Strata does an nb host's duties itself, iii is 1.1.0 or later exactly when `device_version` exists, norns' own grid and MIDI modules are read under a mod, and the tape's cutoff tops out at 12000 Hz, with its feedback divided by softcut's write gain.
+- **The tape's ids start with `tapeloop`** (plan ruling 2), since norns has a built-in `tape_level`.
+- **MIDI out's routes settle** at the next 48 Hz step and are judged as a set (build rulings 19 and 25), a played note's first values are kept from before its note on (build ruling 8), and a note struck again while it sounds is retriggered, where the plan sent one off for several ons (build ruling 35).
+- **The ii queue owes an off per line** (build rulings 24 and 26), the bus row reads `strata leads` and `teletype leads` (build ruling 16), a gate Strata could not lower is owed to the next lead, and a leave sends at most fourteen offs and fifteen lines (build ruling 47); the ER-301 and the TELEXo are routed only while Strata leads.
+- **A step note ends 0.03 s before its gate's end** (build ruling 46); a moved MIDI device gets its all notes off where it arrives; MIDI out sends nothing to a port a remote holds (build ruling 48); a midigrid grid claims its Launchpad's port (build ruling 49).
+- **§14's "nothing is starved" does not hold above the bus's rate** (build ruling 36, #710): under sustained overload the lowest-numbered voices keep the bus.
+
+### Internals and Development
+
+- **No engine command changes;** the engine's only changes are #680's and #689's calls through `areaCall` (above).
+- **The script's hooks** (3.6's Wave 0): note hooks (`S.register_note_hook`, each note's start, end, move and expression), scene-recalled and silence-change hooks, note targets (`S.register_note_target`), ii devices (`S.register_ii_device`), macro targets (`S.register_macro_target`) and IO sections (`S.register_io_section`); a held note's raw bend, pressure and slide (`S.lib.expression.raw`, `first_touch`), absolute pitches on every step event (`event.pitches`), virtual grids and an arc (`S.lib.grid_core.attach_virtual`, `S.lib.arc_core.follow_virtual`), and the senders that are not the engine's (`S.lib.engine_sync.mark_not_engine`, #703).
+- **New modules** under lib/io/: `rig` (the rig settings), `ports` (one owner for the MIDI ports, their listeners and hot-plug, and a port names no device while its device is being removed; nothing else reads norns' MIDI globals), `actions` (the actions crow, OSC and Teletype share), `keyed` (options saved by key), `targets` (the targets core), `midi_out`, `crow`, `ii`, `jf`, `wsyn`, `wtape`, `er301`, `txo`, `nb`, `controllers`, `remote`, `osc` and `tape`; the IO page (`lib/pages/io.lua`, with `S.lib.pages_io.go_to_row` for its layout states, #707) and its arc page (`lib/arc/io.lua`). Outside the script: `extras/e16/strata.lua`, `iii/strata_grid.lua` and `iii/strata_arc.lua`, and the TouchOSC layouts with their generator.
+- **Development: the stubs** gain crow, OSC, softcut and the mixer's softcut levels, nb's players, and iii devices (`test/stub_iii.lua`), each mirroring the source it was built from (`docs/notes/test-harness/stubs.md`).
+- **Development: tests.** A whole-system test runs every 3.6 module at once against the device stubs: every default sends nothing, and everything on holds each bound for a simulated minute (crow's lines, the ii queue, MIDI out's note offs per port and channel, the step gap's timing), then stops with no note left. Each device module has its own test file, and the IO page's layout states are rendered with the other pages'.
+- **Development: the docs.** `docs/design/3.6-design.md` is the design, built from the facts under docs/design/3.6-facts/ (each with its source; `checks.md` settles eight from source code), and was built by an implementation plan in four waves, removed at the release. Each 3.6 module has its notes under docs/notes/lua/io/. AGENTS.md made room for 3.6 by moving the polls' formulas and the engine notes' one-line contents to the notes that held them (#696). The superpowers skills are the process: AGENTS.md names the skill for every step, `docs/workflow.md` says who invokes each and when, a worker's report lists the skills it invoked, and a docs test keeps them in agreement.
+- `lua test/run.lua` / `luajit test/run.lua` grew from 1933 to 2393 tests.
+
+### Decisions
+
+The full list, with what each costs if wrong, is in `docs/decisions/3.6.md`: the design's twenty-one decisions and the plan's thirty-three and the build's fifty-one rulings, by the names code comments cite.
+
 ## Version 3.5.0 - 2026-11-13
 
 Polyphony and MPE: every voice plays chords of up to eight notes, its own note and extra notes from a pool the seven voices share, a synth voice's extra notes as synths of its own kind and a buffer or input voice's as grain streams of their own, each at its own pitch, bend, level and expression; MIDI chords with latch and release, poly and channel aftertouch, and MPE in two modes, every note to the selected voice or split zones with a learn, each note with its own pitch bend, pressure and slide; pressure and slide mapped per voice to a target with a depth, and offered as modulation sources; sequencer chords, edited on SEQ and the step editor; attack and release times per voice; a frozen synth voice played as chords of its frozen sound. Underneath, the engine gains a notes area with four new commands. Scenes, PSETs and PARAMS > MAP mappings from 3.4 load, and a voice nothing plays chords on sounds as before, but for what Sound Changes lists (a keyboard's aftertouch now swells its notes); what does sound or play differently is under Sound Changes and Upgrade Notes. norns needs one restart after updating.
