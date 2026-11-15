@@ -171,6 +171,86 @@ test("the queue sends 4 a step in order and drops the newest past 48", function(
   assert_equal(ii_section(S).status(), "12 dropped")
 end)
 
+-- Run steps until the queue is empty: every line sent, in order
+local function drain(step, ii)
+  local sent = {}
+  while ii.queued() > 0 do
+    for _, line in ipairs(step()) do sent[#sent + 1] = line end
+  end
+  return sent
+end
+
+test("a full queue takes an off in place of the newest waiting line that is not an off", function()
+  -- ruling 21: an ER-301 or TELEXo trigger low that a full queue dropped would leave the gate high
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  local expected = {}
+  for k = 1, 48 do
+    ii.send("er301", "cv", k, 1)
+    if k < 48 then expected[#expected + 1] = "ii.er301.cv(" .. k .. ", 1)" end
+  end
+  assert_equal(ii.send_off("er301", "tr", 99, 0), true, "the off is taken")
+  expected[#expected + 1] = "ii.er301.tr(99, 0)"
+  assert_equal(ii.queued(), 48)
+  assert_equal(ii.dropped(), 1, "the displaced line is counted")
+  assert_equal(ii.send("er301", "cv", 50, 1), false, "a send at 48 is still dropped")
+  assert_equal(ii.dropped(), 2)
+  assert_equal(table.concat(drain(step, ii), "|"), table.concat(expected, "|"),
+    "the 47 left, in the order queued, then the off")
+end)
+
+test("an off whose own on is the line it would displace takes both out", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  for k = 1, 46 do ii.send("txo", "cv", k, 1) end
+  ii.send("txo", "cv", 5, 2)
+  ii.send("txo", "tr", 5, 1)  -- the newest waiting non-off: the note's own on
+  assert_equal(ii.queued(), 48)
+  assert_equal(ii.send_off("txo", "tr", 5, 0), false, "nothing is owed: the device never got the on")
+  assert_equal(ii.queued(), 47)
+  assert_equal(ii.dropped(), 1, "the pair counted once")
+  local sent = drain(step, ii)
+  assert_equal(#sent, 47)
+  for _, line in ipairs(sent) do
+    assert_true(line:find("ii.txo.tr(5", 1, true) == nil, "nothing of that note's trigger: " .. line)
+  end
+  assert_equal(sent[47], "ii.txo.cv(5, 2)", "the rest in the order queued")
+end)
+
+test("with offs newest in a full queue the newest non-off is the one displaced", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  local expected = {}
+  for k = 1, 44 do
+    ii.send("er301", "cv", k, 1)
+    if k < 44 then expected[#expected + 1] = "ii.er301.cv(" .. k .. ", 1)" end
+  end
+  for k = 1, 4 do
+    ii.send_off("er301", "tr", k, 0)
+    expected[#expected + 1] = "ii.er301.tr(" .. k .. ", 0)"
+  end
+  assert_equal(ii.send_off("er301", "tr", 60, 0), true)
+  expected[#expected + 1] = "ii.er301.tr(60, 0)"
+  assert_equal(ii.dropped(), 1)
+  assert_equal(table.concat(drain(step, ii), "|"), table.concat(expected, "|"), "cv 44 displaced, the order kept")
+end)
+
+test("an off joins a queue of 48 offs", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  for k = 1, 48 do ii.send_off("er301", "tr", k, 0) end
+  assert_equal(ii.send_off("er301", "tr", 49, 0), true)
+  assert_equal(ii.queued(), 49, "49 for a moment")
+  assert_equal(ii.dropped(), 0)
+  local sent = drain(step, ii)
+  assert_equal(#sent, 49)
+  for k = 1, 49 do assert_equal(sent[k], "ii.er301.tr(" .. k .. ", 0)") end
+end)
+
 test("devices are made ready when Strata starts to lead and released when it stops", function()
   -- crow-ii.md §4: Just Friends was unstable when it got notes before jf.mode(1) (crow issue #220),
   -- so a device's ready comes as the lead starts; §1: crow's reset at each connect leaves the bus's
