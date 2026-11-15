@@ -219,6 +219,9 @@ test("an on dropped at a full queue owes no off, unless its line is high", funct
   local context, S, ii = started()
   local step = stepper(context, S)
   lead(context, S)
+  -- the pair tracked and port 7 known low: its first off went out while Strata watched it
+  assert_equal(ii.send_off("er301", "tr", 7, 0), true, "the pair's first off is sent regardless")
+  drain(step, ii)
   fill(ii, 48)
   assert_equal(ii.send("er301", "tr", 7, 1), false, "dropped")
   assert_equal(ii.dropped(), 1)
@@ -308,8 +311,12 @@ test("the lines' state is cleared with the lead", function()
   context.crow.clear()
   set_bus(S, "off")
   assert_equal(context.crow.sent[1], "ii.probe.tr(3, 0)", "its off in the leaving sequence")
+  assert_equal(ii.lines_kept(), 0, "no line state after the lead")
   set_bus(S, "strata")
-  assert_equal(ii.send_off("probe", "tr", 3, 0), false, "not owed after a new lead")
+  assert_equal(ii.lines_kept(), 0, "none at the new lead")
+  assert_equal(ii.send_off("probe", "tr", 3, 0), true, "the pair is learned again: its first off is sent")
+  drain(step, ii)
+  assert_equal(ii.send_off("probe", "tr", 3, 0), false, "then the line is known low")
   assert_equal(ii.queued(), 0)
 end)
 
@@ -318,6 +325,10 @@ test("a TELEXo envelope note through a full queue gets the offs of the ons it se
   local context, S, ii = started()
   local step = stepper(context, S)
   lead(context, S)
+  -- an earlier note on output 5, whole: both pairs tracked, both lines known low
+  for _, command in ipairs({ "env", "tr" }) do ii.send("txo", command, 5, 1) end
+  for _, command in ipairs({ "tr", "env" }) do ii.send_off("txo", command, 5, 0) end
+  drain(step, ii)
   local expected = fill(ii, 46)
   assert_true(ii.send("txo", "cv", 5, 2.5)); expected[#expected + 1] = "ii.txo.cv(5, 2.5)"
   assert_true(ii.send("txo", "env", 5, 1)); expected[#expected + 1] = "ii.txo.env(5, 1)"
@@ -326,6 +337,59 @@ test("a TELEXo envelope note through a full queue gets the offs of the ons it se
   assert_equal(ii.send_off("txo", "env", 5, 0), true, "the envelope's is")
   expected[#expected + 1] = "ii.txo.env(5, 0)"
   assert_equal(table.concat(queue_lines(step, ii), "|"), table.concat(expected, "|"))
+end)
+
+-- Ruling 24's addition: state is kept only for the (device, command) pairs
+-- that have had an off this lead; a line of such a pair with no state is unknown
+-- (it may have gone high before the pair was learned) and owes its first off
+
+test("lines that never take an off leave no state", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  for k = 1, 1000 do
+    ii.send("jf", "play_note", -5 + k / 100, 5)
+    if ii.queued() >= 40 then drain(step, ii) end
+  end
+  drain(step, ii)
+  assert_equal(ii.lines_kept(), 0)
+end)
+
+test("a pair's first off is sent with no send before it, and the line is then known", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  assert_equal(ii.send_off("er301", "tr", 9, 0), true, "the first off of (er301, tr)")
+  assert_equal(table.concat(drain(step, ii), "|"), "ii.er301.tr(9, 0)")
+  assert_equal(ii.send_off("er301", "tr", 9, 0), false, "nothing raised it since: not owed")
+  assert_equal(ii.queued(), 0)
+  assert_equal(ii.lines_kept(), 1, "one line kept")
+end)
+
+test("a pair learned while two of its sends wait counts them", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  ii.send("er301", "tr", 4, 1)
+  ii.send("er301", "tr", 5, 1)
+  assert_equal(ii.lines_kept(), 0, "not tracked yet")
+  assert_equal(ii.send_off("er301", "tr", 4, 0), true)
+  assert_equal(ii.send_off("er301", "tr", 5, 0), true, "owed: its send waits")
+  assert_equal(table.concat(drain(step, ii), "|"), "ii.er301.tr(4, 1)|ii.er301.tr(5, 1)|ii.er301.tr(4, 0)|ii.er301.tr(5, 0)",
+    "each off after its own send")
+end)
+
+test("lines raised before their pair is learned still get their offs", function()
+  -- two voices on ports 1 and 2: both triggers reach the ER-301 before either note ends
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  ii.send("er301", "tr", 1, 1)
+  ii.send("er301", "tr", 2, 1)
+  drain(step, ii)
+  assert_equal(ii.send_off("er301", "tr", 1, 0), true, "the pair's first off")
+  assert_equal(ii.send_off("er301", "tr", 2, 0), true, "port 2 is unknown, so owed")
+  assert_equal(table.concat(drain(step, ii), "|"), "ii.er301.tr(1, 0)|ii.er301.tr(2, 0)", "both gates lowered")
 end)
 
 test("devices are made ready when Strata starts to lead and released when it stops", function()
