@@ -157,20 +157,197 @@ test("a plain voice sends its notes on its port and channel", function()
   target.note_off(2, "s2")
 end)
 
-test("two ids on one note send one off, at the last", function()
+---------------------------------------------------------------------------
+-- As many offs as ons (#709): per port, channel and note, the ids sounding
+-- there are counted. An id starting where the count is 0 sends its on; at 1
+-- or more, an off, then its on (a retrigger). An id ending where the count
+-- is 1 sends the off; at 2 or more, nothing
+---------------------------------------------------------------------------
+
+-- Note ons and offs of one note on one channel among device's sent messages
+local function ons_and_offs(device, note, channel)
+  local ons, offs = 0, 0
+  for _, text in ipairs(lines(device)) do
+    if text:match("^note_on " .. note .. " %d+ " .. channel .. "$") then ons = ons + 1 end
+    if text == "note_off " .. note .. " " .. channel then offs = offs + 1 end
+  end
+  return ons, offs
+end
+
+test("a note that already sounds is retriggered: an off, then its on", function()
   local context, S = started()
   local device = context.midi.plug(3, "synth")
   local target = midi_target(S)
   params:set("v2_out_port", 3); settled(context)
   clear(device)
-  target.note_on(2, "s1", 60, 1, step_info())
+  target.note_on(2, "s1", 60, 0.5, step_info())
+  assert_equal(sent(device), "note_on 60 64 2", "the count was 0: the on alone")
+  clear(device)
   target.note_on(2, "m7740", 60, 1, played_info(7740))
-  assert_equal(sent(device), "note_on 60 127 2|note_on 60 127 2", "two note ons")
+  assert_equal(sent(device), "note_off 60 2|note_on 60 127 2", "the count was 1: an off, then the new id's on")
   clear(device)
   target.note_off(2, "s1")
-  assert_equal(sent(device), "", "the first's end sends nothing")
+  assert_equal(sent(device), "", "the count was 2: the first's end sends nothing")
   target.note_off(2, "m7740")
-  assert_equal(sent(device), "note_off 60 2", "the second's sends the off")
+  assert_equal(sent(device), "note_off 60 2", "the count was 1: the last's end sends the off")
+  -- the same on an MPE member channel (members 1, so the ids share channel 2)
+  mpe_voice(1, 3, 1); settled(context)
+  clear(device)
+  target.note_on(1, "s1", 62, 1, step_info())
+  assert_equal(sent(device), "pitchbend 8192 2|note_on 62 127 2", "alone on its member channel")
+  clear(device)
+  target.note_on(1, "s2", 62, 0.5, step_info())
+  assert_equal(sent(device), "note_off 62 2|note_on 62 64 2", "a retrigger on the shared member channel")
+  clear(device)
+  target.note_on(1, "m40", 62, 1, played_info(40))
+  local list = lines(device)
+  assert_equal(list[1], "note_off 62 2", "the retrigger's off before the played note's first values: " .. sent(device))
+  assert_equal(list[#list], "note_on 62 127 2", sent(device))
+  clear(device)
+  target.note_off(1, "s1"); target.note_off(1, "m40")
+  assert_equal(sent(device), "", "two ids still held it, then one")
+  target.note_off(1, "s2")
+  assert_equal(sent(device), "note_off 62 2", "the last")
+end)
+
+test("a step repeating under a held played note leaves as many offs as ons", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "mpe synth")
+  local output
+  for _, record in ipairs(S.registry.step_outputs) do
+    if record.name == "targets" then output = record end
+  end
+  assert_true(output ~= nil, "the targets step output")
+  mpe_voice(1, 2, 1); settled(context)  -- one member channel: every note shares channel 2
+  clear(device)
+  context.midi.send(1, {type = "note_on", note = 36, vel = 100, ch = 1})  -- held: voice 1's played note
+  assert_equal(select(1, ons_and_offs(device, 36, 2)), 1, "the played note went: " .. sent(device))
+  for hit = 1, 10 do
+    output.play({voice = 1, pitches = {36}, velocity = 0.8, beat = clock.get_beats(), gate_beats = 0.05})
+    local ons, offs = ons_and_offs(device, 36, 2)
+    assert_equal(ons, offs + 1, "hit " .. hit .. ": " .. ons .. " ons, " .. offs .. " offs")
+    for _ = 1, 6 do step(context, S) end  -- the step's gate ends
+    ons, offs = ons_and_offs(device, 36, 2)
+    assert_equal(ons, offs + 1, "after hit " .. hit .. "'s gate: " .. ons .. " ons, " .. offs .. " offs")
+  end
+  context.midi.send(1, {type = "note_off", note = 36, vel = 0, ch = 1})
+  output.stop()
+  local ons, offs = ons_and_offs(device, 36, 2)
+  assert_equal(ons, 11, "the played note and ten hits")
+  assert_equal(offs, ons, "nothing sounds: as many offs as ons")
+end)
+
+test("three ids on one note, ended in every order, send one off each time a new one starts and one at the last", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "synth")
+  local target = midi_target(S)
+  params:set("v2_out_port", 3); settled(context)
+  local ids = {"s1", "s2", "m9"}
+  local orders = {{1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1}}
+  for _, order in ipairs(orders) do
+    local why = "ended " .. table.concat(order, " ")
+    clear(device)
+    target.note_on(2, "s1", 60, 1, step_info())
+    target.note_on(2, "s2", 60, 1, step_info())
+    target.note_on(2, "m9", 60, 1, played_info(9))
+    assert_equal(sent(device), "note_on 60 127 2|note_off 60 2|note_on 60 127 2|note_off 60 2|note_on 60 127 2",
+      why .. ": three ons, a retrigger off before the second and the third")
+    clear(device)
+    target.note_off(2, ids[order[1]])
+    target.note_off(2, ids[order[2]])
+    assert_equal(sent(device), "", why .. ": no off while an id still holds the note")
+    target.note_off(2, ids[order[3]])
+    assert_equal(sent(device), "note_off 60 2", why .. ": the off at the last")
+  end
+end)
+
+test("an off for an id that never started sends nothing", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "synth")
+  local target = midi_target(S)
+  params:set("v2_out_port", 3); settled(context)
+  clear(device)
+  target.note_off(2, "s9")
+  target.note_off(2, "m12")
+  assert_equal(sent(device), "", "nothing sounds: nothing")
+  target.note_on(2, "s1", 60, 1, step_info())
+  clear(device)
+  target.note_off(2, "s2")
+  assert_equal(sent(device), "", "another id on the note that sounds: nothing")
+  target.note_off(2, "s1")
+  assert_equal(sent(device), "note_off 60 2", "the id that started still gets its off")
+  clear(device)
+  target.note_off(2, "s1")
+  assert_equal(sent(device), "", "and only once")
+end)
+
+test("a step note alone on its member channel gets its centered bend; one sharing a channel gets none", function()
+  local function last_bend(device, channel)
+    local value
+    for _, text in ipairs(lines(device)) do
+      local found = text:match("^pitchbend (%d+) " .. channel .. "$")
+      if found then value = tonumber(found) end
+    end
+    return value
+  end
+  for _, members in ipairs({2, 1}) do
+    local context, S = started()
+    local device = context.midi.plug(2, "mpe synth")
+    local target = midi_target(S)
+    params:set("midi_channel_mode", 3)  -- MPE input: voice 1
+    mpe_voice(1, 2, members); settled(context)
+    clear(device)
+    context.midi.send(1, {type = "pitchbend", val = 9000, ch = 2})
+    context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 2})
+    local played = lines(device)
+    assert_equal(played[1], "pitchbend 9000 2", "members " .. members .. ": the played note's bend on 2: " .. sent(device))
+    assert_equal(played[#played], "note_on 60 100 2", "members " .. members .. ": its on, on 2")
+    clear(device)
+    target.note_on(1, "s1", 64, 1, step_info())
+    if members == 2 then
+      assert_equal(sent(device), "pitchbend 8192 3|note_on 64 127 3", "a channel of its own: its centered bend")
+    else
+      assert_equal(sent(device), "note_on 64 127 2", "sharing channel 2: no bend")
+      clear(device)
+      target.note_on(1, "s2", 60, 1, step_info())
+      assert_equal(sent(device), "note_off 60 2|note_on 60 127 2", "the played note's own note: a retrigger, no bend")
+      target.note_off(1, "s2")
+    end
+    step(context, S, 2)
+    clear(device)
+    target.note_off(1, "s1")
+    assert_equal(last_bend(device, 2), nil, "nothing more bent channel 2")
+    step(context, S, 2)
+    assert_equal(sent(device):match("pitchbend %d+ 2") , nil, "no bend sent again on channel 2: " .. sent(device))
+  end
+end)
+
+test("routes that the params hold at start are settled at start", function()
+  -- with defaults: nothing sent, at start or after
+  local device
+  local context, S = load_strata({before_init = function(ctx) device = ctx.midi.plug(2, "mpe synth") end})
+  S = local_value("S")
+  assert_equal(midi_target(S).routed(1), false)
+  assert_equal(sent(device), "", "defaults: nothing at start")
+  finish_startup(context)
+  assert_equal(sent(device), "", "defaults: nothing after startup")
+  -- params that hold voice 1 on port 2 in mpe as the load adds them
+  context = load_strata({before_init = function(ctx)
+    device = ctx.midi.plug(2, "mpe synth")
+    local real_add = params.add
+    params.add = function(self, args)
+      if args.id == "v1_out_port" then args.default = 2 end
+      if args.id == "v1_out_mode" then args.default = MPE_INDEX end
+      return real_add(self, args)
+    end
+  end})
+  S = local_value("S")
+  assert_equal(params:get("v1_out_port"), 2); assert_equal(params:string("v1_out_mode"), "mpe")
+  assert_equal(midi_target(S).routed(1), true, "routed before any step, no route param touched")
+  assert_equal(midi_target(S).rows(1)[1].text(), "port 2  mpe 15")
+  assert_equal(sent(device), SETUP_15_48, "the zone's one setup")
+  step(context, S, 3)
+  assert_equal(sent(device), SETUP_15_48, "and only one")
 end)
 
 test("a played note is not sent to the port it arrived on", function()
