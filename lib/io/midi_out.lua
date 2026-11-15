@@ -354,6 +354,18 @@ return function(S)
           {label = "mode", kind = "param", param_id = vid(voice, "mode")},
           {label = "members", kind = "param", param_id = vid(voice, "members")}}}}
     end,
+    -- The voice section's look with this row's list open (the IO page lists
+    -- it with that section's): voice 1 on port 2's synth, the row reached
+    -- as a player does (S.lib.pages_io.go_to_row raises when it cannot)
+    layout_states = {
+      {name = "midi detail list open", setup = function(context)
+        context.midi.plug(2, "synth")
+        params:set(vid(1, "port"), 2); params:set(vid(1, "channel"), 3)
+        context.clock.advance_until(S.lfo_clock)
+        S.lib.pages_io.go_to_row("midi", "voice", {id = "midi"})
+        key(3, 1); key(3, 0)
+      end},
+    },
   })
 
   ---------------------------------------------------------------------------
