@@ -125,6 +125,19 @@ test("a command the queue dropped is not shown as sent, and the next press sends
   press(S, "play")
   assert_equal(line(log[4]), "send,wtape,play,0", "and the alternation")
   assert_equal(row(S, "play").shown, "off")
+  -- a non-alternating row: a dropped press leaves its text, before and after a command
+  state.accept = false
+  press(S, "reverse")
+  assert_equal(row(S, "reverse").shown, "-", "reverse stays - before any command")
+  assert_equal(S.lib.ui_flash.text("hints"), "ii queue full")
+  S.lib.ui_flash.start("hints", nil)
+  state.accept = true
+  press(S, "reverse")
+  assert_equal(row(S, "reverse").shown, "sent")
+  state.accept = false
+  press(S, "reverse")
+  assert_equal(row(S, "reverse").shown, "sent", "and sent after one")
+  assert_equal(S.lib.ui_flash.text("hints"), "ii queue full")
 end)
 
 test("the bus leaving and returning mid-sequence", function()
@@ -203,6 +216,19 @@ test("the leading states end with the bus leading and show what a player's press
     .. "send,wtape,loop_start|send,wtape,loop_end|send,wtape,loop_active,1")
   assert_equal(row(S, "record").shown, "on"); assert_equal(row(S, "play").shown, "on")
   assert_equal(row(S, "reverse").shown, "sent"); assert_equal(row(S, "loop").shown, "on")
+end)
+
+test("the leading states turn the bus setting from wherever it stands", function()
+  -- the test may set the rig; the module never does. The value is read, never the row's text
+  for _, from in ipairs({"off", "strata", "teletype"}) do
+    for _, name in ipairs({"leading before any command", "leading after commands"}) do
+      local context, S = started_real_bus(true)
+      S.lib.io_rig.set("ii_bus", from)
+      state_named(S, name).setup(context)
+      assert_equal(S.lib.io_rig.get("ii_bus"), "strata", name .. " from " .. from)
+      assert_true(S.lib.io_ii.leads(), name .. " from " .. from .. ": the bus leads")
+    end
+  end
 end)
 
 test("without the ii module each layout state draws and sends nothing", function()

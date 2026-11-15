@@ -112,9 +112,18 @@ return function(S)
     if not S.lib.io_ii or not has_row(WTAPE.bus_section, is_bus) then return false end
     context.crow.plug()
     move_to(WTAPE.bus_section, is_bus, "row for rig key " .. WTAPE.bus_key)
-    for _ = 1, 3 do
-      if S.lib.io_rig.get(WTAPE.bus_key) == WTAPE.bus_value then break end
-      enc(3, 1)
+    -- one detent at a time toward the value, by the spec's own order, and
+    -- no more turns than the spec has values
+    local choices = S.lib.io_rig.RIG.specs[WTAPE.bus_key].values
+    local function place(value)
+      for index, choice in ipairs(choices) do
+        if choice == value then return index end
+      end
+    end
+    for _ = 1, #choices do
+      local from, goal = place(S.lib.io_rig.get(WTAPE.bus_key)), place(WTAPE.bus_value)
+      if not goal or from == goal then break end
+      enc(3, (from or 1) < goal and 1 or -1)
     end
     if not leading() then error("wtape layout: the bus does not lead after turning " .. WTAPE.bus_key, 2) end
     return true
