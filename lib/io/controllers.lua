@@ -450,30 +450,11 @@ return function(S)
     map_channel = 16, map_cc = 102}
 
   -- Turn the controllers section's rig row `key` to value with E2 and E3
-  -- on IO's page, which must be shown: the section is shown first, the row
-  -- is found by its key among the page's rows (other sections' rows may
-  -- come before it), E2 moves over the selectable rows between the cursor
-  -- and it, and the cursor is checked to be on it before E3 turns. A key
-  -- the section has no row for raises, naming it
+  -- on IO's page, which must be shown: S.lib.pages_io.go_to_row puts the
+  -- cursor on the row (raising, naming the key, when the section has none),
+  -- then E3 turns
   function M.turn_rig_row(key, value)
-    S.lib.pages_io.show_section("controllers")
-    local rows = S.lib.pages_io.rows()
-    local target
-    for index, row in ipairs(rows) do
-      if row.section == "controllers" and row.key == key then target = index end
-    end
-    if not target then error("controllers layout: the IO page has no controllers row for rig key " .. tostring(key), 2) end
-    local from = S.io_cursor
-    local first, last = math.min(from, target), math.max(from, target)
-    local moves = 0
-    for index = first, last do
-      if rows[index].selectable ~= false and index ~= from then moves = moves + 1 end
-    end
-    enc(2, target >= from and moves or -moves)
-    local row = S.lib.pages_io.rows()[S.io_cursor]
-    if not (row and row.section == "controllers" and row.key == key) then
-      error("controllers layout: E2 did not reach the row for rig key " .. key, 2)
-    end
+    S.lib.pages_io.go_to_row("controllers", "controllers", {key = key})
     enc(3, value - setting(key))
   end
 

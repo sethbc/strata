@@ -490,6 +490,49 @@ return function(S)
     return true
   end
 
+  -- The one way a layout state reaches a row, as a player does (#707):
+  -- section shown, the first of its rows with match's identity (exactly
+  -- one of param_id, key or id), E2 over the selectable rows between the
+  -- cursor and it, the cursor checked to be on it. Returns the row; turns
+  -- nothing and presses nothing (E3 or K3 on it is the caller's). Raises,
+  -- naming who: no such section or row (the cursor where it was), or a
+  -- cursor that did not land
+  local REACH_FIELDS = {"param_id", "key", "id"}
+  function M.go_to_row(who, section, match)
+    local field
+    for _, name in ipairs(REACH_FIELDS) do
+      if type(match) == "table" and match[name] ~= nil then
+        if field then field = false break end
+        field = name
+      end
+    end
+    if not field then error(tostring(who) .. " layout: a match names one of param_id, key or id", 0) end
+    local identity = field .. " " .. tostring(match[field])
+    local function find(rows)
+      for index, row in ipairs(rows) do
+        if row.section == section and row.kind ~= "title" and row[field] == match[field] then return index end
+      end
+    end
+    if not find(M.rows()) then error(tostring(who) .. " layout: no row " .. identity .. " in " .. tostring(section), 0) end
+    M.show_section(section)
+    local rows = M.rows()
+    local target = find(rows)
+    local from = S.io_cursor
+    local moves = 0
+    if target then
+      for index = math.min(from, target), math.max(from, target) do
+        if rows[index].selectable and index ~= from then moves = moves + 1 end
+      end
+      enc(2, target >= from and moves or -moves)
+    end
+    rows = M.rows()
+    local row = rows[S.io_cursor]
+    if not target or S.io_cursor ~= find(rows) then
+      error(tostring(who) .. " layout: the cursor did not reach " .. identity, 0)
+    end
+    return row
+  end
+
   -- The page's record, at IO's place in UI_PAGES (the tenth: appended, so
   -- no other page's index moved). No arc fields yet (lib/arc/io.lua, the
   -- tape's rings, comes later); its layout states are its own (ALT's hint

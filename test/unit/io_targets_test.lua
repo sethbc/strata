@@ -576,7 +576,7 @@ test("the voice section's probe state ends with the probe's rows on screen besid
   end
   local ok, problem = pcall(state.setup, context)
   assert_true(not ok and tostring(problem):find("^targets layout: ") ~= nil
-    and tostring(problem):find("layout probe row", 1, true) ~= nil, tostring(problem))
+    and tostring(problem):find("row id probe", 1, true) ~= nil, tostring(problem))
 end)
 
 -- The title's status mark is a look of its own (nb's target gives one)

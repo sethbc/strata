@@ -481,14 +481,11 @@ return function(S)
   end
 
   -- Layout states: the rig set through IO's own rows (E3 on the row, as a
-  -- player does; only the IO page changes a rig setting)
-  -- (show_section puts the cursor on the section's first row, the grid
-  -- port; E2 moves down to the key's row among RIG_ROWS)
+  -- player does; only the IO page changes a rig setting): the cursor put
+  -- on the key's row by S.lib.pages_io.go_to_row, E3 turns it, and the
+  -- section is shown again at its top
   local function set_through_page(key, steps)
-    S.lib.pages_io.show_section("remote")
-    for position, rig_row in ipairs(RIG_ROWS) do
-      if rig_row.key == key and position > 1 then enc(2, position - 1) end
-    end
+    S.lib.pages_io.go_to_row("remote", "remote", {key = key})
     enc(3, steps)
     S.lib.pages_io.show_section("remote")
   end
