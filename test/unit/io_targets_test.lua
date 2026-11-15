@@ -564,15 +564,36 @@ test("the voice section's probe state ends with the probe's rows on screen besid
   show_page("IO")
   state.setup(context); redraw()
   assert_equal(#S.registry.note_targets, real + 1, "the probe joins the real targets, none taken out")
-  assert_true(h.screen_shows(context, "layout probe") and h.screen_shows(context, "v1"), "the probe's action row")
+  local cursor_row = S.lib.pages_io.rows()[S.io_cursor]
+  assert_true(cursor_row.section == "voice" and cursor_row.id == "probe", "the cursor is on the probe's row")
+  assert_true(h.screen_shows(context, "layout probe") and h.screen_shows(context, cursor_row.shown),
+    "the probe's action row, its label and its text " .. tostring(cursor_row.shown))
   assert_true(h.screen_shows(context, "a target's rows"), "the probe's status row")
   assert_screen_layout(context, "IO voice section probe state")
-  -- a probe whose row is gone: the state raises naming the row
+  -- a probe whose row is gone: the state raises, the message naming the module and the row
   for _, record in ipairs(S.registry.note_targets) do
     if record.name == "layout probe" then record.rows = function() return {} end end
   end
   local ok, problem = pcall(state.setup, context)
-  assert_true(not ok and tostring(problem):find("layout probe row", 1, true) ~= nil, tostring(problem))
+  assert_true(not ok and tostring(problem):find("^targets layout: ") ~= nil
+    and tostring(problem):find("layout probe row", 1, true) ~= nil, tostring(problem))
+end)
+
+-- The title's status mark is a look of its own (nb's target gives one)
+test("the voice section's status state shows the title with the probe's mark", function()
+  local context, S = started()
+  local names = {}
+  for _, entry in ipairs(S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states) do
+    names[entry.name] = entry
+  end
+  assert_true(names["voice: nothing routed"] == nil, "no state repeats the section at the top")
+  local state = names["voice: a target's status"]
+  assert_true(state ~= nil, "the state is listed")
+  show_page("IO")
+  state.setup(context); redraw()
+  assert_true(h.screen_shows(context, "voice " .. S.selected_voice), "the title row")
+  assert_true(h.screen_shows(context, "[!]"), "the probe's mark on it")
+  assert_screen_layout(context, "IO voice section status state")
 end)
 
 end
