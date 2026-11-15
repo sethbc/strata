@@ -66,3 +66,4 @@ Each device or connection IO reaches has its own page, listed here as it arrives
 - [Remote grids and arcs](../io/remote.md): a grid or arc in iii mode, and a MIDI grid through the midigrid mod
 - [OSC and TouchOSC](../io/osc.md): scenes, voices and the patterns from an OSC app, feedback, two TouchOSC layouts
 - [The tape loop](../io/tape.md): a stereo loop of Strata's output on softcut, the `tape` section
+- [Just Friends](../io/jf.md): a voice's notes to Just Friends over the ii bus
