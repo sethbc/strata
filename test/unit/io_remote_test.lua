@@ -529,14 +529,19 @@ test("a grid from the midigrid mod attaches at its own port, and norns' own grid
   assert_equal(type(first.rotation), "function", "a missing rotation is given one")
   assert_equal(S.lib.io_remote.status("midigrid"), "16x8")
   returned = midigrid_object(16, 8)
+  -- checks.md §7: every connect that finds a device wraps midi.add again
   S.lib.io_remote.rescan()
-  assert_equal(connects, 2, "a rescan: exactly one more grid.connect")
+  S.lib.io_remote.rescan()
+  assert_equal(connects, 1, "two rescans with one attached: no further grid.connect")
+  assert_equal(S.grids[6], first, "the first still attached")
+  set_rig(S, "midi_grid", "off"); set_rig(S, "midi_grid", "on")
+  assert_equal(connects, 2, "midi grid off and on: exactly one more grid.connect")
   assert_equal(first.key, nil, "the old object detached first")
   assert_equal(S.grids[6], returned, "and the new one attached")
   -- norns' own grid: nothing at port 6
   context.grid.plug(1, 16, 16)
   returned = grid.vports[1]
-  S.lib.io_remote.rescan()
+  set_rig(S, "midi_grid", "off"); set_rig(S, "midi_grid", "on")
   assert_equal(S.grids[6], nil, "norns' own vport is never attached at port 6")
   assert_equal(S.lib.io_remote.status("midigrid"), "[--]")
   -- a table without the functions is refused
@@ -552,6 +557,41 @@ test("a grid from the midigrid mod attaches at its own port, and norns' own grid
   assert_equal(S.grids[6], nil, "midi grid off detaches it")
   assert_equal(attached.key, nil, "and clears its key")
   assert_equal(connects, 5, "and calls no grid.connect")
+end)
+
+test("a Launchpad through midigrid plays no voice while attached, and plays again after detach", function()
+  -- checks.md §7: midigrid sets the Launchpad's device-level event (vgrid.lua:107), and norns
+  -- still calls the port's vport event after it (midi.lua:461-475), so the MIDI input would
+  -- hear every pad
+  local context, S = started()
+  local launchpad = context.midi.plug(1, "Launchpad X")  -- port 1: midi_device's default
+  local real_connect = grid.connect
+  grid.connect = function(...)
+    if select("#", ...) > 0 then return real_connect(...) end
+    launchpad.event = function() end  -- what midigrid does to the device it takes
+    return midigrid_object(16, 8)
+  end
+  local started_notes = 0
+  S.register_note_hook({name = "probe", started = function(_, _, note)
+    if note.owner == "midi" then started_notes = started_notes + 1 end
+  end})
+  local function pad(note)
+    context.midi.send(1, {type = "note_on", note = note, vel = 100, ch = 1})
+    context.midi.send(1, {type = "note_off", note = note, vel = 0, ch = 1})
+  end
+  pad(36)
+  assert_equal(started_notes, 1, "before midigrid: the port's notes play voice 1")
+  set_rig(S, "midi_grid", "on")
+  assert_true(S.grids[6] ~= nil, "midigrid attached")
+  assert_equal(S.lib.io_ports.owner(1), "midigrid", "the Launchpad's port claimed as midigrid")
+  assert_true(S.lib.io_remote.holds(1), "and held: MIDI out sends nothing there")
+  assert_equal(S.lib.io_ports.owner(2), nil, "no other port")
+  pad(37)
+  assert_equal(started_notes, 1, "a pad plays no voice while attached")
+  set_rig(S, "midi_grid", "off")
+  assert_equal(S.lib.io_ports.owner(1), nil, "released at detach")
+  pad(38)
+  assert_equal(started_notes, 2, "the port's notes play again")
 end)
 
 test("the start step attaches what the rig names", function()
