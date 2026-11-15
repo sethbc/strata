@@ -694,4 +694,35 @@ test("go_to_row turns nothing and presses nothing", function()
   assert_equal(S.lib.ui_modal.top(), nil, "and nothing opened")
 end)
 
+
+-- The page's hint row is cut to the screen when it is too long (draw_hints),
+-- so a row's hint word that does not fit loses its end: in every layout
+-- state, on every row E2 reaches from where it leaves the cursor, the
+-- hints, with ALT up and down, fit as they are (ui_header.hint_fits)
+test("no layout state's hint row is cut by the page", function()
+  local first = load_strata(); finish_startup(first)
+  local count = #local_value("S").registry.pages[10].layout_states
+  assert_true(count > 20, "the registered sections' states: " .. count)
+  local cut = {}
+  for index = 1, count do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    show_page("IO")
+    local state = S.registry.pages[10].layout_states[index]
+    state.setup(context)
+    for _ = 1, 200 do
+      for _, alt in ipairs({false, true}) do
+        local text = S.registry.pages[10].hints(alt)
+        if type(text) == "string" and not S.lib.ui_header.hint_fits(text) then
+          cut[#cut + 1] = tostring(state.name) .. (alt and " (ALT)" or "") .. ": " .. text
+        end
+      end
+      local before = S.io_cursor
+      enc(2, 1)
+      if S.io_cursor == before then break end
+    end
+  end
+  assert_equal(#cut, 0, "hint rows cut: " .. table.concat(cut, "; "))
+end)
+
 end

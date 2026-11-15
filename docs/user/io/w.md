@@ -23,6 +23,8 @@ The `w/ tape` section has six rows. Each press sends one command and the row sho
 | loop end | loop end at the current time | sent |
 | loop | loop on, then off | on, off |
 
+K3 presses the row; the hint row names it, as `K3:start` and `K3:end` for the two loop points.
+
 While the bus is not Strata's a press sends nothing, flashes `ii bus is not strata's`, and the section shows `[--]`. A row changes only when its command was queued: if the bus's queue is full the press flashes `ii queue full`, the row keeps what it showed, and pressing again sends the same command.
 
 ## Good to know

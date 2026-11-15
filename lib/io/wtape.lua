@@ -21,13 +21,14 @@ return function(S)
     bus_section = "ii",
     bus_key = "ii_bus",
     bus_value = "strata",
-    -- one per row: a toggle sends command with 1 then 0, a push sends it bare
+    -- one per row: a toggle sends command with 1 then 0, a push sends it
+    -- bare; hint: K3's word on the hint row where the label is too long
     rows = {
       {label = "record", command = "record", toggle = true},
       {label = "play", command = "play", toggle = true},
       {label = "reverse", command = "reverse"},
-      {label = "loop start", command = "loop_start"},
-      {label = "loop end", command = "loop_end"},
+      {label = "loop start", command = "loop_start", hint = "start"},
+      {label = "loop end", command = "loop_end", hint = "end"},
       {label = "loop", command = "loop_active", toggle = true},
     },
   }
@@ -125,7 +126,7 @@ return function(S)
     rows = function()
       local rows = {}
       for _, spec in ipairs(WTAPE.rows) do
-        rows[#rows + 1] = {label = spec.label, id = spec.label, kind = "action", hint = spec.label,
+        rows[#rows + 1] = {label = spec.label, id = spec.label, kind = "action", hint = spec.hint or spec.label,
           run = function() press(spec) end,
           text = function() return shown[spec.label] or WTAPE.unsent end}
       end

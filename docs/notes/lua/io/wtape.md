@@ -5,7 +5,7 @@
 - **The bus must lead**: while `S.lib.io_ii.leads()` is false, or the ii module is absent, a press sends nothing, changes no row text and flashes `ii bus is not strata's`; the section's status is `[--]`.
 - **A row changes only when `send` returned true** (ruling 13): while the bus leads and `send` returns false (its queue is full and the line was dropped), the row's text and an alternating row's next value stay as they were, the flash is `ii queue full`, and the next press sends the same value again.
 - **Rows show what was last queued**, `-` before any command (`on` and `off` for a toggle, `sent` for the others): Strata cannot read W/'s state, so a row can disagree with the module.
-- **Rows have fixed labels** (`record`, `play`, `reverse`, `loop start`, `loop end`, `loop`): the live value is in each row's `text`.
+- **Rows have fixed labels** (`record`, `play`, `reverse`, `loop start`, `loop end`, `loop`): the live value is in each row's `text`. Each row's hint is its label, but the two loop points' are `start` and `end` (`WTAPE.rows[k].hint`), so the hint row is never cut (`test/unit/pages_io_test.lua` checks every layout state's rows).
 
 ## Owns
 
