@@ -23,6 +23,18 @@ return function(S)
     if not silent then record.action(index and key or record.keys[1]) end
   end
 
+  -- Why a PSET could not give key back as it was, or nil: norns' params:read
+  -- (lua/core/paramset.lua) reads a text param's value as the line's text
+  -- after "id: " (leading spaces dropped, a newline ends it) and turns inf
+  -- and -inf into numbers, and the key is matched as a string
+  local function unkeepable(key)
+    if type(key) ~= "string" or key == "" then return "not a non-empty string" end
+    if key:find("\n", 1, true) or key:find("\r", 1, true) then return "a newline" end
+    if key:match("^%s") or key:match("%s$") then return "a surrounding space" end
+    if tonumber(key) ~= nil or key == "inf" or key == "-inf" then return "reads as a number" end
+    return nil
+  end
+
   -- Add the option id (labels, one per key in order; the first key the
   -- default) and the hidden text param id .. "_key": two params, so a
   -- group's count allows for both. Choosing an option stores its key, then
@@ -34,6 +46,13 @@ return function(S)
     assert(type(id) == "string", "S.lib.io_keyed.add: an id")
     assert(type(keys) == "table" and #keys > 0 and #labels == #keys, "S.lib.io_keyed.add: one label per key")
     assert(type(action) == "function", "S.lib.io_keyed.add: an action")
+    for _, key in ipairs(keys) do
+      local why = unkeepable(key)
+      if why then
+        error("S.lib.io_keyed.add " .. id .. ": a PSET cannot keep the key " .. string.format("%q", tostring(key))
+          .. " (" .. why .. ")", 2)
+      end
+    end
     local record = {keys = keys, index = {}, action = action}
     for index, key in ipairs(keys) do record.index[key] = index end
     if records[id] == nil then order[#order + 1] = id end
