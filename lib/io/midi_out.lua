@@ -32,10 +32,10 @@ return function(S)
   -- the notes on a channel; member_times[port][channel] = {released,
   -- assigned}; expressing: the played MPE notes the step reads, cursor the
   -- next to read; cc_last[k]: slot k's last value; left_with[port]: the
-  -- channels with notes as the port's device left; asked: the recall a
-  -- program change in asked for, {port, scene}
+  -- channels with notes as the port's device left; asked[port]: the scene
+  -- a program change in on that port asked for, until its recall lands
   local state = {config = {}, notes = {}, counts = {}, use = {}, member_times = {}, expressing = {}, cursor = 1,
-    cc_last = {}, left_with = {}, asked = nil, tick = 0, stopped = false, bend_range = MIDI_OUT.bend_range.default}
+    cc_last = {}, left_with = {}, asked = {}, tick = 0, stopped = false, bend_range = MIDI_OUT.bend_range.default}
   for voice = 1, NUM_VOICES do
     state.config[voice] = {port = 0, channel = voice, mode = 1, members = MIDI_OUT.max_members}
     state.notes[voice] = {}
@@ -349,21 +349,34 @@ return function(S)
   -- lib/midi_in.lua's program change (0 to NUM_SCENES - 1, wanted by
   -- midi_pc_in and midi_pc_channel) on the port it listens to: the scene
   -- recalled as a scene key does, and its program change not sent back to
-  -- that port
+  -- that port (ruling D): the port's one guard, asked[port] = scene, set
+  -- before the recall is asked for (with quantize off it lands inside that
+  -- call) and dropped when it is refused; a newer program change on the
+  -- port replaces it
   function M.program_change_in(port, value)
     if state.stopped or type(value) ~= "number" or value % 1 ~= 0 then return false end
-    state.asked = {port = port, scene = value + 1}
-    local recalled = S.lib.io_actions.recall_scene(value + 1)
-    if not recalled then state.asked = nil end
+    local scene = value + 1
+    state.asked[port] = scene
+    local recalled = S.lib.io_actions.recall_scene(scene)
+    if not recalled and state.asked[port] == scene then state.asked[port] = nil end
     return recalled
   end
 
+  -- A recall consumes every guard for its own scene, and sends nothing on
+  -- a port one of them names; a recall of another scene sends its program
+  -- change and leaves the guards alone, so the recall one waits for still
+  -- does not echo when it lands
   S.register_scene_recalled(function(scene)
-    local asked = state.asked
-    state.asked = nil
+    local guarded = {}
+    for port, asked in pairs(state.asked) do
+      if asked == scene then
+        guarded[port] = true
+        state.asked[port] = nil
+      end
+    end
     if state.stopped or param_value("midi_pc_out") ~= 1 then return end
     local port = params:get("midi_pc_out_port")
-    if asked and asked.scene == scene and asked.port == port then return end
+    if guarded[port] then return end
     send(port, "program_change", scene - 1, params:get("midi_pc_out_channel"))
   end)
 
@@ -403,9 +416,19 @@ return function(S)
   -- Params (PSET-only, group strata_out_midi)
   ---------------------------------------------------------------------------
 
+  -- What a voice's notes go to (the review's finding 2): off, or the port
+  -- with its channel (plain) or its zone's members (MPE). A param change
+  -- that leaves it alone (a channel while the port is 0, members on a plain
+  -- voice) ends no note on any target
+  local function route_text(config)
+    if config.port == 0 then return "off" end
+    if is_mpe(config) then return config.port .. " mpe " .. config.members end
+    return config.port .. " ch " .. config.channel
+  end
+
   -- A voice's route param changed: refused (put back silently, with the
-  -- flash) when it would break a zone; otherwise its notes end, then the
-  -- zone follows
+  -- flash) when it would break a zone; otherwise, when its route changed,
+  -- its notes end, then the zone follows
   local function voice_changed(voice, field, value)
     local old = state.config[voice]
     local new = {port = old.port, channel = old.channel, mode = old.mode, members = old.members}
@@ -419,10 +442,101 @@ return function(S)
       return
     end
     state.config[voice] = new
-    S.lib.io_targets.route_changed(voice)
+    if route_text(old) ~= route_text(new) then S.lib.io_targets.route_changed(voice) end
     zone_changed(old, new)
     request_redraw()
   end
+
+  -- A PSET's routes, judged together (ruling C). norns' read sets the
+  -- route params one at a time in file order, and each action judges its
+  -- param against the others' old values, so a legal file could be refused
+  -- part way (a plain channel still at its default inside a zone, two MPE
+  -- voices swapping ports). After the read this hook takes the route values
+  -- the file holds for every voice (a param the file has no line for at its
+  -- default, as the read's migration left it, #628) and judges them as a
+  -- whole: legal, every voice ends on the file's values; not, the voices are
+  -- placed in index order and one that conflicts with those placed before
+  -- it is turned off (port 0), with one flash
+  local ROUTE_FIELDS = {"port", "channel", "mode", "members"}
+
+  local function file_routes(text)
+    local routes = {}
+    for voice = 1, NUM_VOICES do
+      routes[voice] = {}
+      for _, field in ipairs(ROUTE_FIELDS) do
+        local id = vid(voice, field)
+        local saved = tonumber(text:match('"' .. (id:gsub("%p", "%%%0")) .. '"%s*:%s*([^\n]*)'))
+        local value = saved and util.round(saved) or params:lookup_param(id).default
+        params:set(id, value, true)  -- kept to the param's range
+        routes[voice][field] = params:get(id)
+      end
+    end
+    return routes
+  end
+
+  local function legal_routes(routes)
+    if not conflict(routes) then return routes, false end
+    local placed = {}
+    for voice = 1, NUM_VOICES do
+      local route = routes[voice]
+      placed[voice] = {port = 0, channel = route.channel, mode = route.mode, members = route.members}
+    end
+    for voice = 1, NUM_VOICES do
+      local off = placed[voice]
+      placed[voice] = routes[voice]
+      if conflict(placed) then placed[voice] = off end
+    end
+    return placed, true
+  end
+
+  -- Every voice onto its judged route: the notes of each voice whose route
+  -- changed end (once), then the zones that went are taken down and those
+  -- that came or moved set up (takedowns first, so a swap of ports ends set
+  -- up on both)
+  local function apply_routes(routes)
+    local old = {}
+    for voice = 1, NUM_VOICES do
+      old[voice] = state.config[voice]
+      local route = routes[voice]
+      state.config[voice] = {port = route.port, channel = route.channel, mode = route.mode, members = route.members}
+    end
+    for voice = 1, NUM_VOICES do
+      if route_text(old[voice]) ~= route_text(state.config[voice]) then S.lib.io_targets.route_changed(voice) end
+    end
+    for voice = 1, NUM_VOICES do
+      local before, now = old[voice], state.config[voice]
+      if is_mpe(before) and (not is_mpe(now) or before.port ~= now.port) then takedown(before.port) end
+    end
+    for voice = 1, NUM_VOICES do
+      local before, now = old[voice], state.config[voice]
+      if is_mpe(now) and (not is_mpe(before) or before.port ~= now.port or before.members ~= now.members) then
+        setup(now.port, now.members)
+      end
+    end
+    request_redraw()
+  end
+
+  -- A silent read sets the params to the judged routes silently and
+  -- applies nothing, as norns' silent read runs no action: the module plays
+  -- its old routes until a route param next changes
+  S.register_pset_hook({name = "io_midi_out", read = function(_, _, pset_path, silent)
+    if state.stopped or not params.lookup[vid(1, "port")] then return end
+    local file = io.open(pset_path, "r")
+    if not file then return end
+    local text = file:read("*a")
+    file:close()
+    local routes, refused = legal_routes(file_routes(text))
+    for voice = 1, NUM_VOICES do
+      for _, field in ipairs(ROUTE_FIELDS) do params:set(vid(voice, field), routes[voice][field], true) end
+    end
+    if silent then return end
+    apply_routes(routes)
+    if refused then
+      S.lib.ui_flash.start("header", MIDI_OUT.refused)
+    elseif S.lib.ui_flash.text("header") == MIDI_OUT.refused then
+      S.lib.ui_flash.start("header", nil)  -- a refusal the read's own order caused, put right
+    end
+  end})
 
   local function port_text(param)
     local port = param:get()
@@ -577,7 +691,7 @@ return function(S)
     state.stopped = true
     state.expressing = {}
     state.cursor = 1
-    state.asked = nil
+    state.asked = {}
   end
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_midi_out, function() M.stop() end)
