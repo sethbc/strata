@@ -908,9 +908,8 @@ return function(S)
   -- would find a turned 128 as an 8x16; the port's setting stays in
   -- grids.data) and leave it dark, and hand hot-plug back (no-ops, on norns'
   -- own module, #700; norns' grid.cleanup() restores its own at a script
-  -- change). norns' SLEEP runs
-  -- only cleanup() before the system shuts down, so a key or a grid plugged
-  -- meanwhile reaches nothing (#468)
+  -- change). norns' SLEEP runs only cleanup() before the system shuts down,
+  -- so a key or a grid plugged meanwhile reaches nothing (#468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()
     for port = 1, S.MAX_GRID_PORTS do forget_port(port) end
     for _, port in pairs(GRID_PORTS) do forget_port(port) end

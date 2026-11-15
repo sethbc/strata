@@ -235,8 +235,9 @@ return function(S)
   -- leads to ours, still holding the kept handler), is left as it is and
   -- nothing more is kept
   S.register_start(S.constants.START_ORDER.io_ports, function()
-    for port = 1, PORTS.count do state.seen[port] = midi.vports[port].device end
     local hot_plug, module = state.hot_plug, norns_midi()
+    local vports = module.vports
+    for port = 1, PORTS.count do state.seen[port] = vports[port].device end
     if module.add ~= device_added and not hot_plug.wrapped_add then
       hot_plug.kept_add, module.add = module.add, device_added
     end
