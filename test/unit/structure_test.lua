@@ -812,7 +812,7 @@ local function start_steps()
     { "grids", { "file read grids.data", "print grid 1 connected: 16x16", "grid redrawn" } },
     { "io rig", { "file read io.data" } },
     { "io ports", {} },
-    { "midi", { "midi connected" } },
+    { "midi", {} },
     { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn",
       "redraw requested" } },
     { "macros load", { "file read macros.data", "redraw requested", "grid redrawn" } },
@@ -3226,6 +3226,62 @@ test("only lib/io/ports.lua sets midi.add, midi.remove or a MIDI vport's event",
     end
   end
   assert_equal(table.concat(offenders, "\n"), "", "one module owns the MIDI ports")
+end)
+
+-- #700: a mod may put a facade in the global midi (nbout's vports is a
+-- fresh copy with a seventeenth entry of its own), so outside
+-- lib/io/ports.lua no module reads the MIDI ports through the global: it
+-- asks S.lib.io_ports (PORTS.count, out, device). midi_port_reads(text)
+-- lists the lines of a Lua source that name midi.vports, midi.devices or
+-- midi.connect, as a field (`.`, `:`) or a `midi["..."]` key; comments,
+-- strings and fields named midi (`x.midi.vports`) are skipped, and the
+-- global given another name is the rule above's
+local MIDI_PORT_FIELDS = { vports = true, devices = true, connect = true }
+local function midi_port_reads(text)
+  local code = sync_check.sanitize_lua(text)
+  local breaks = {}
+  -- the global midi: not a field (x.midi), a key of its own is read below
+  local function global_at(first)
+    return code:sub(1, first - 1):match("(%S)%s*$") ~= "."
+  end
+  for first, name in code:gmatch("%f[%w_]()midi%s*[%.:]%s*([%w_]+)") do
+    if MIDI_PORT_FIELDS[name] and global_at(first) then breaks[#breaks + 1] = first end
+  end
+  for first, key_first, key_last in code:gmatch("%f[%w_]()midi%s*%[%s*()[\"']_*[\"']()%s*%]") do
+    if MIDI_PORT_FIELDS[text:sub(key_first + 1, key_last - 2)] and global_at(first) then breaks[#breaks + 1] = first end
+  end
+  table.sort(breaks)
+  local lines, seen = {}, {}
+  for _, position in ipairs(breaks) do
+    local line_start = (code:sub(1, position - 1):match(".*()\n") or 0) + 1
+    local line_end = (text:find("\n", position, true) or (#text + 1)) - 1
+    if not seen[line_start] then
+      seen[line_start] = true
+      lines[#lines + 1] = text:sub(line_start, line_end)
+    end
+  end
+  return lines
+end
+
+test("only lib/io/ports.lua reads norns' MIDI ports (#700)", function()
+  local caught = { "local v = midi.vports[1]", "n = #midi.vports", "S.midi_device = midi.connect(port)",
+    "for _, d in pairs(midi.devices) do end", "midi . vports [2]:cc(1, 2, 3)", "midi:connect(1)",
+    'local v = midi["vports"]', "midi['connect'](1)", 'midi [ "devices" ]', "f(midi.vports)" }
+  for _, sample in ipairs(caught) do
+    assert_true(#midi_port_reads(sample) >= 1, "a read found in: " .. sample)
+  end
+  local allowed = table.concat({ "local msg = midi.to_msg(data)", "local bytes = midi.to_data(msg)",
+    "S.midi_device = S.lib.io_ports.out(port)", "-- midi.vports[1]", 'print("midi.connect(1)")',
+    "x.midi.vports[1] = 1", "context.midi.connect(1)", "S.midi_devices = 1", "local midi_vports = 2",
+    "max = S.lib.io_ports.PORTS.count", 'if midi["to_msg"] then end' }, "\n")
+  assert_equal(table.concat(midi_port_reads(allowed), " | "), "", "the pure functions, comments, strings and fields")
+  local offenders = {}
+  for _, source in ipairs(read_lua_sources()) do
+    if source.path ~= "lib/io/ports.lua" then
+      for _, line in ipairs(midi_port_reads(source.text)) do offenders[#offenders + 1] = source.path .. ": " .. line end
+    end
+  end
+  assert_equal(table.concat(offenders, "\n"), "", "the ports are read through S.lib.io_ports")
 end)
 
 -- 3.6 (design §2.3): a rig setting changes only from a row of the IO page,

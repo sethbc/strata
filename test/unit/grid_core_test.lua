@@ -1585,13 +1585,17 @@ end)
 -- __newindex, and its own connect ignores the port. norns' startup loaded the
 -- real module (grid = require 'core/grid'), so package.loaded holds it. Each
 -- test here puts the facade in place before the script loads and runs its
--- body through under_grid_facade, which puts package.loaded and the global
--- grid back as it found them, whatever the body does (the MIDI ports' tests
--- have the same pair, under_midi_facade and midi_facade)
+-- body through under_grid_facade, which, whatever the body does, puts
+-- package.loaded back as it found it and the global grid back to the real
+-- module a facade wrapped (as the mod does at shutdown), so the checks run
+-- after the test see this load's grids (the MIDI ports' tests have the same
+-- pair, under_midi_facade and midi_facade)
+local grid_facade_reals = setmetatable({}, {__mode = "k"})  -- facade -> the module it wraps
 local function under_grid_facade(body)
-  local kept_loaded, kept_global = package.loaded["core/grid"], rawget(_G, "grid")
+  local kept_loaded = package.loaded["core/grid"]
   local ran, problem = pcall(body)
-  package.loaded["core/grid"], _G.grid = kept_loaded, kept_global
+  local global = rawget(_G, "grid")
+  package.loaded["core/grid"], _G.grid = kept_loaded, grid_facade_reals[global] or global
   if not ran then error(problem, 0) end
 end
 
@@ -1614,6 +1618,7 @@ local function grid_facade(plugged)
       facade.connects = facade.connects + 1
       return real.vports[1]
     end)
+    grid_facade_reals[fake] = real
     package.loaded["core/grid"] = real
     _G.grid = fake
     facade.fake = fake

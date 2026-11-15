@@ -135,13 +135,17 @@ end)
 -- norns' real module; it has no __newindex. norns' startup loaded the real
 -- module (midi = require 'core/midi'), so package.loaded holds it, and its
 -- hot-plug calls the real module's add and remove only. Each test here runs
--- its body through under_midi_facade, which puts package.loaded and the
--- global midi back as it found them, whatever the body does (the grid
--- core's tests have the same pair, under_grid_facade and grid_facade)
+-- its body through under_midi_facade, which, whatever the body does, puts
+-- package.loaded back as it found it and the global midi back to the real
+-- module a facade wrapped (as nbout's cleanup does), so the checks run after
+-- the test see this load's ports (the grid core's tests have the same pair,
+-- under_grid_facade and grid_facade)
+local midi_facade_reals = setmetatable({}, {__mode = "k"})  -- facade -> the module it wraps
 local function under_midi_facade(body)
-  local kept_loaded, kept_global = package.loaded["core/midi"], rawget(_G, "midi")
+  local kept_loaded = package.loaded["core/midi"]
   local ran, problem = pcall(body)
-  package.loaded["core/midi"], _G.midi = kept_loaded, kept_global
+  local global = rawget(_G, "midi")
+  package.loaded["core/midi"], _G.midi = kept_loaded, midi_facade_reals[global] or global
   if not ran then error(problem, 0) end
 end
 
@@ -150,9 +154,15 @@ end
 -- facade.fake is the facade, facade.found_add and found_remove the real
 -- module's handlers when it went in. As nbout's, its vports is a fresh copy
 -- at each read, with a seventeenth entry of its own (a device named "nb");
--- facade.reads counts each key read through it by lib/io/ports.lua
+-- facade.reads counts each key read through it by lib/io/ports.lua, and
+-- facade.port_reads each read of vports, devices or connect by any of the
+-- script's files (strata.lua, lib/), as "<file> <key>"
+local MIDI_PORT_KEYS = {vports = true, devices = true, connect = true}
+local function script_file(source)
+  return source:match("/lib/.+%.lua$") or source:match("/strata%.lua$")
+end
 local function midi_facade()
-  local facade = {reads = {}}
+  local facade = {reads = {}, port_reads = {}}
   local function before_init(context)
     local real = context.midi
     facade.found_add, facade.found_remove = real.add, real.remove
@@ -161,6 +171,8 @@ local function midi_facade()
       if caller:sub(-#"lib/io/ports.lua") == "lib/io/ports.lua" then
         facade.reads[key] = (facade.reads[key] or 0) + 1
       end
+      local file = script_file(caller)
+      if file and MIDI_PORT_KEYS[key] then facade.port_reads[#facade.port_reads + 1] = file .. " " .. key end
       if key == "vports" then
         local copy = {}
         for _, vport in ipairs(real.vports) do copy[#copy + 1] = vport end
@@ -169,6 +181,7 @@ local function midi_facade()
       end
       return real[key]
     end})
+    midi_facade_reals[facade.fake] = real
     package.loaded["core/midi"] = real
     _G.midi = facade.fake
   end
@@ -227,6 +240,44 @@ test("under nbout's facade the ports read norns' own vports only, and never its 
     cleanup()
     for _, change in ipairs(changes) do assert_true(not change:match("^17 "), "port 17 is never reported") end
     assert_equal(facade.read_keys(), "", "the ports read nothing through the facade")
+  end)
+end)
+
+-- #700: outside the ports module nothing reads the ports through the
+-- global, so under nbout's facade the midi device param stops at norns'
+-- sixteen, a MAP echo reaches the real vport, and the facade's ports are
+-- never read
+test("under nbout's facade the midi device param stops at norns' 16th port", function()
+  under_midi_facade(function()
+    local facade, before_init = midi_facade()
+    local context = load_strata({ before_init = before_init })
+    h.finish_startup(context)
+    local _, maximum = param_range("midi_device")
+    assert_equal(maximum, 16, "norns' own ports, never the facade's count")
+    params:set("midi_device", 17)
+    assert_equal(params:get("midi_device"), 16, "no seventeenth port")
+    context.clear_engine_calls()
+    context.midi.send(16, { type = "note_on", note = 69, vel = 100, ch = 1 })
+    assert_equal(#context.calls_named("retrigger"), 1, "a device on port 16 plays")
+    assert_equal(table.concat(facade.port_reads, ", "), "", "no file read the facade's ports")
+  end)
+end)
+
+test("under nbout's facade a MAP echo reaches the mapped port's own vport", function()
+  under_midi_facade(function()
+    local facade, before_init = midi_facade()
+    local context = load_strata({ before_init = before_init })
+    h.finish_startup(context)
+    local controller = context.midi.plug(3, "faders")
+    norns.pmap.data.mutation_enabled = { dev = 3, ch = 1, cc = 44, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+      echo = true, value = 0 }
+    set_binary_param("mutation_enabled", 1)
+    local sent = controller.sent[#controller.sent]
+    assert_equal(sent and table.concat(sent, " "), "176 44 127", "the CC goes to port 3's device")
+    norns.pmap.data.mutation_enabled.dev = 9
+    set_binary_param("mutation_enabled", 0)
+    assert_equal(#controller.sent, 1, "a map to a port with no device sends nothing to it")
+    assert_equal(table.concat(facade.port_reads, ", "), "", "no file read the facade's ports")
   end)
 end)
 
