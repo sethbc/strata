@@ -742,35 +742,48 @@ test("after that minute everything stops with no note left", function()
   assert_equal(S.lib.io_ii.queued(), 0, "the ii queue drained by steps")
   cleanup()
 
-  -- No MIDI note left on, on any port and channel. MIDI out counts the ids
-  -- on one port, channel and note and sends their off once, when the last
-  -- ends (docs/notes/lua/io/midi_out.md), so where two ids met on a note (a
-  -- step note given the member channel of a held played note of the same
-  -- pitch, once every member channel is busy) a channel holds more ons than
-  -- offs: each note on that finds its note already on is a repeat, and a
-  -- channel's ons are its offs plus its repeats
+  -- Every MIDI note on has its note off (design §3.4, §14): on every port
+  -- and channel as many offs as ons, and no note left on. Every unequal
+  -- channel is listed in one failure
+  local unbalanced = {}
   for _, port in ipairs(SYSTEM.midi_ports) do
-    local on, ons, offs, repeats = {}, {}, {}, {}
+    local on, ons, offs, per_note = {}, {}, {}, {}
     for _, bytes in ipairs(rig.devices[port].sent) do
       local msg = message(bytes)
       local key = msg.ch and msg.note and (msg.ch * 128 + msg.note)
-      if msg.type == "note_on" then
-        if on[key] then repeats[msg.ch] = (repeats[msg.ch] or 0) + 1 end
-        on[key] = true
-        ons[msg.ch] = (ons[msg.ch] or 0) + 1
-      elseif msg.type == "note_off" then
-        on[key] = nil
-        offs[msg.ch] = (offs[msg.ch] or 0) + 1
+      if msg.type == "note_on" or msg.type == "note_off" then
+        local counts = per_note[key] or {on = 0, off = 0}
+        per_note[key] = counts
+        if msg.type == "note_on" then
+          on[key] = true
+          ons[msg.ch] = (ons[msg.ch] or 0) + 1
+          counts.on = counts.on + 1
+        else
+          on[key] = nil
+          offs[msg.ch] = (offs[msg.ch] or 0) + 1
+          counts.off = counts.off + 1
+        end
       end
     end
     for key in pairs(on) do
       error("port " .. port .. " channel " .. math.floor(key / 128) .. " note " .. key % 128 .. " is left on")
     end
     for channel = 1, 16 do
-      assert_equal((offs[channel] or 0) + (repeats[channel] or 0), ons[channel] or 0, "port " .. port .. " channel "
-        .. channel .. ": ons == offs + repeats")
+      local unequal = {}
+      for note = 0, 127 do
+        local counts = per_note[channel * 128 + note]
+        if counts and counts.on ~= counts.off then
+          unequal[#unequal + 1] = "note " .. note .. ": " .. counts.on .. " ons, " .. counts.off .. " offs"
+        end
+      end
+      if (offs[channel] or 0) ~= (ons[channel] or 0) then
+        unbalanced[#unbalanced + 1] = "port " .. port .. " channel " .. channel .. ": " .. (ons[channel] or 0)
+          .. " ons, " .. (offs[channel] or 0) .. " offs (" .. table.concat(unequal, "; ") .. ")"
+      end
     end
   end
+  assert_equal(#unbalanced, 0, "every port and channel has as many note offs as ons: "
+    .. table.concat(unbalanced, " | "))
   for name, player in pairs(rig.players) do
     local counts = {}
     for _, call in ipairs(player.calls) do counts[call[1]] = (counts[call[1]] or 0) + 1 end
