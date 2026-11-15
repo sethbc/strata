@@ -196,6 +196,8 @@ return function(S)
     state.notes[voice][id] = nil
     remove_expressing(record)
     local counts = table_at(state.counts, record.port, record.channel)
+    -- the last id on the note sends its off; one ending while another
+    -- holds the note sends nothing (every start there sent an off first)
     counts[record.note] = (counts[record.note] or 1) - 1
     if counts[record.note] <= 0 then
       counts[record.note] = nil
@@ -228,25 +230,33 @@ return function(S)
     local mpe = is_mpe(config)
     local channel = mpe and allocate(config.port, config.members) or config.channel
     local record = {voice = voice, port = config.port, channel = channel, note = note, mpe = mpe, sent = {}}
+    local counts = table_at(state.counts, config.port, channel)
+    local use = table_at(state.use, config.port)
+    -- the note already sounds there (#709): a retrigger, its off before
+    -- anything else this id sends on the channel
+    if (counts[note] or 0) > 0 then send(config.port, "note_off", note, 0, channel) end
     if mpe then
-      -- a played note's first values, then its note on; a step note's centered bend
+      -- a played note's first values, then its note on; a step note's
+      -- centered bend only on a channel no other id holds (on a shared one
+      -- it takes the channel as it is)
       local raw
-      if info.source == MIDI_OUT.played_source then
+      local played = info.source == MIDI_OUT.played_source
+      if played then
         record.owner, record.key = info.owner, info.key
         raw = S.lib.expression.raw(voice, info.owner, info.key)
         table.insert(state.expressing, record)
       end
-      for _, field in ipairs(MIDI_OUT.fields) do
-        local value = encoded(field, raw or {})
-        if value ~= nil then
-          send_field(record, field, value)
-          record.sent[field] = value
+      if played or (use[channel] or 0) == 0 then
+        for _, field in ipairs(MIDI_OUT.fields) do
+          local value = encoded(field, raw or {})
+          if value ~= nil then
+            send_field(record, field, value)
+            record.sent[field] = value
+          end
         end
       end
     end
-    local counts = table_at(state.counts, config.port, channel)
     counts[note] = (counts[note] or 0) + 1
-    local use = table_at(state.use, config.port)
     use[channel] = (use[channel] or 0) + 1
     state.notes[voice][id] = record
     send(config.port, "note_on", note, level, channel)
@@ -433,9 +443,10 @@ return function(S)
   -- it refuses nothing, flashes nothing and sends nothing. settle compares
   -- the params with the settled routes (state.config, which every note,
   -- routed, the rows and the zones read) and applies the difference once.
-  -- It runs from the PSET read hook (a read is one synchronous call, so
-  -- every route line of the file is judged together, whatever their order)
-  -- and from the LFO step after a change made outside a read
+  -- It runs once at the end of add_params (the routes at start), from the
+  -- PSET read hook (a read is one synchronous call, so every route line of
+  -- the file is judged together, whatever their order) and from the LFO
+  -- step after a change made outside a read
   local ROUTE_FIELDS = {"port", "channel", "mode", "members"}
   local BEND_RANGE_ID = "midi_out_bend_range"
   local route_param = {}  -- param id -> {voice, field}
@@ -502,8 +513,10 @@ return function(S)
       new[voice] = {port = route.port, channel = route.channel, mode = route.mode, members = route.members}
     end
     local before, after = zones_of(state.config), zones_of(new)
+    local changed = false
     for voice = 1, NUM_VOICES do
       if route_text(state.config[voice]) ~= route_text(new[voice]) then S.lib.io_targets.route_changed(voice) end
+      for _, field in ipairs(ROUTE_FIELDS) do changed = changed or state.config[voice][field] ~= new[voice][field] end
     end
     local bend_changed = bend_range ~= state.bend_range
     state.bend_range = bend_range
@@ -518,7 +531,9 @@ return function(S)
       end
     end
     state.config = new
-    request_redraw()
+    -- the rows show the settled routes: a redraw only when they changed (the
+    -- settle at start, inside init's params, changes nothing by default)
+    if changed or bend_changed then request_redraw() end
   end
 
   -- An illegal set at a step (a change by hand, or by anything outside a
@@ -606,6 +621,11 @@ return function(S)
       default = 1}
     params:add{type = "number", id = "midi_pc_out_channel", name = "program change out channel", min = 1,
       max = MIDI_OUT.channels, default = 1}
+    -- The routes at start (#709): settled from the params as they stand now,
+    -- judged as a read's are, so state.config never holds values of its own.
+    -- Init adds the params before any start step and nothing sets them
+    -- before the first, and a later change is noted and settles at a step
+    settle(true)
   end
 
   ---------------------------------------------------------------------------
