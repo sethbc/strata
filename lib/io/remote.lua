@@ -52,7 +52,7 @@ return function(S)
   local KINDS = {"grid", "arc"}
   local midigrid = {device = nil}
   local draw = {clock = nil}
-  local state = {started = false, errors = {}, leaving = nil}  -- leaving: the port whose departure is being handled
+  local state = {started = false, errors = {}}
 
   local function contained(key, label, fn, ...)
     return S.lib.ui_frame.contained_call(state.errors, key, label, fn, ...)
@@ -319,9 +319,7 @@ return function(S)
     if not state.started or record.claimed_port then return end
     local port = rig.get(record.key)
     record.in_use = false
-    -- a port whose device is leaving (norns clears the vport only after the
-    -- departure's hooks) holds no device
-    if port == 0 or port == state.leaving or S.lib.io_ports.device(port) == nil then return end
+    if port == 0 or S.lib.io_ports.device(port) == nil then return end
     if not S.lib.io_ports.claim(port, record.owner) then
       record.in_use = true
       return
@@ -434,13 +432,8 @@ return function(S)
 
   -- A device arriving at a set port is connected; the claimed port's device
   -- leaving disconnects it
-  -- While a departure is handled the port is state.leaving, so the claim
-  -- hook below, run by this module's own release, never connects the other
-  -- kind to the device that is leaving; a kind waiting on the port (in use)
-  -- has no device to wait for any more
   S.lib.io_ports.on_change("remote", function(port, name)
     if not state.started then return end
-    if name == nil then state.leaving = port end
     for _, kind in ipairs(KINDS) do
       local record = records[kind]
       if name == nil and record.claimed_port == port then
@@ -453,7 +446,6 @@ return function(S)
         connect(record)
       end
     end
-    state.leaving = nil
   end)
 
   -- A port another owner held, freed: taken when the rig names it
