@@ -281,6 +281,7 @@ local CLEANUP_ORDER = {
   input_meter = 135,        -- lib/input_level.lua: the input level polls
   ui_flash = 140,           -- lib/ui/flash.lua: the header's and hint row's flash clocks
   io_targets = 142,         -- lib/io/targets.lua: every target note ended at once (3.6)
+  io_midi_out = 143,        -- lib/io/midi_out.lua: the express queue dropped, nothing more sent (3.6)
   io_crow = 145,            -- lib/io/crow.lua: outputs to 0 V, inputs off, its clocks ended, the hot-plug handlers idle (3.6)
   io_controllers = 146,     -- lib/io/controllers.lua: the echo clock ended, the ports released (3.6)
   io_remote = 147,          -- lib/io/remote.lua: the draw clock, the remote devices cleared, detached and released (3.6)

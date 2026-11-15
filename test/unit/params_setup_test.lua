@@ -1012,10 +1012,10 @@ test("a 3.6 group record adds its group only for a loaded module", function()
   local tape_module = S.lib.io_tape
   S.lib.io_tape = nil
   local before = #params.params
-  local loaded = S.lib.io_crow
-  S.lib.io_crow = nil  -- loaded on this branch: set aside, as on a branch without it
+  local loaded, loaded_midi_out = S.lib.io_crow, S.lib.io_midi_out
+  S.lib.io_crow, S.lib.io_midi_out = nil, nil  -- loaded on this branch: set aside, as on a branch without them
   for _, name in ipairs({ "out midi", "crow", "out ii", "out nb", "tape" }) do record_named(name).add() end
-  S.lib.io_crow = loaded
+  S.lib.io_crow, S.lib.io_midi_out = loaded, loaded_midi_out
   assert_equal(#params.params, before, "no module, no params")
   S.lib.io_tape = tape_module
   -- with its module loaded, a record calls its add_params once

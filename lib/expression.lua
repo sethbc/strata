@@ -172,9 +172,18 @@ return function(S)
   -- (m, the matrix's fast extras), density (the extra offset, param
   -- units) and marked_density (the offset at the last send's mark)
   local wide_held = {}
+  -- Per voice, owner and key, a played note's first values (first_touch)
+  -- until its first update makes its record: {bend, pressure, slide}
+  local pending = {}
   for voice = 1, NUM_VOICES do
     records[voice] = {}
     wide_held[voice] = {}
+    pending[voice] = {}
+  end
+
+  local function clear_pending(voice, owner, key)
+    local by_owner = pending[voice][owner]
+    if by_owner then by_owner[key] = nil end
   end
 
   local function find_record(voice, owner, key)
@@ -225,6 +234,7 @@ return function(S)
     -- a new record starts from what the allocator holds for the note, so
     -- the first update sends exactly when it differs from that
     local record = find_record(voice, owner, key) or new_record(voice, slot, owner, key)
+    clear_pending(voice, owner, key)  -- the record now holds what first_touch kept
     if record.latched then return false end
     if finite(raw.bend) then record.bend = bend_value(raw.bend) end
     if finite(raw.pressure) then
@@ -264,20 +274,42 @@ return function(S)
 
   -- 3.6 (design §0.1): a copy of what a note's controllers last sent,
   -- {bend (a ratio), pressure (0-1, nil before the first), slide (0-1
-  -- absolute, nil before the first)}; nil for a note this module holds no
-  -- record of (none yet, forgotten, or a bad voice). Read by the targets
+  -- absolute, nil before the first)}: the record's, or before the note's
+  -- first update its first_touch values; nil for a note this module holds
+  -- neither of (none yet, forgotten, or a bad voice). Read by the targets
   function M.raw(voice, owner, key)
     if not valid_voice(voice) then return nil end
     local record = find_record(voice, owner, key)
-    if not record then return nil end
+    if not record then
+      local first = pending[voice][owner] and pending[voice][owner][key]
+      if not first then return nil end
+      return {bend = first.bend, pressure = first.pressure, slide = first.slide}
+    end
     return {bend = record.bend, pressure = record.pressure, slide = record.slide}
+  end
+
+  -- 3.6 (2a's ruling A): a played note's first values, kept from its note
+  -- on (the MIDI package's, before S.lib.notes.play, whose started hooks
+  -- reach the targets) until its first update makes its record: raw's bend
+  -- (through bend_value), pressure and slide (each clamped as update
+  -- clamps them, kept only when finite). It touches no record, calls
+  -- nothing in S.lib.notes and sends nothing
+  function M.first_touch(voice, owner, key, raw)
+    if not valid_voice(voice) or type(raw) ~= "table" then return end
+    local first = {bend = bend_value(raw.bend)}
+    if finite(raw.pressure) then first.pressure = util.clamp(raw.pressure, 0, 1) end
+    if finite(raw.slide) then first.slide = util.clamp(raw.slide, 0, 1) end
+    pending[voice][owner] = pending[voice][owner] or {}
+    pending[voice][owner][key] = first
   end
 
   -- A new touch of a note the allocator may still hold (the MIDI package's
   -- note on, before its update): what this module kept of the old touch
-  -- (latch, highest pressure, slide reference) is forgotten
+  -- (latch, highest pressure, slide reference) is forgotten, and any first
+  -- values first_touch kept for it
   function M.forget(voice, owner, key)
     if not valid_voice(voice) then return end
+    clear_pending(voice, owner, key)
     local _, index = find_record(voice, owner, key)
     if index then table.remove(records[voice], index) end
   end
