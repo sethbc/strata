@@ -148,23 +148,36 @@ end
 -- The facade over context.midi, as the global midi and with the stub module
 -- in package.loaded, set up as nbout's pre-init hook does (before_init):
 -- facade.fake is the facade, facade.found_add and found_remove the real
--- module's handlers when it went in
+-- module's handlers when it went in. As nbout's, its vports is a fresh copy
+-- at each read, with a seventeenth entry of its own (a device named "nb");
+-- facade.reads counts each key read through it by lib/io/ports.lua
 local function midi_facade()
-  local facade = {}
+  local facade = {reads = {}}
   local function before_init(context)
     local real = context.midi
     facade.found_add, facade.found_remove = real.add, real.remove
     facade.fake = setmetatable({}, {__index = function(_, key)
+      local caller = debug.getinfo(2, "S").source
+      if caller:sub(-#"lib/io/ports.lua") == "lib/io/ports.lua" then
+        facade.reads[key] = (facade.reads[key] or 0) + 1
+      end
       if key == "vports" then
         local copy = {}
         for _, vport in ipairs(real.vports) do copy[#copy + 1] = vport end
-        copy[#copy + 1] = {name = "nb", connected = true}
+        copy[#copy + 1] = {name = "nb", connected = true, device = {name = "nb", port = #copy + 1}}
         return copy
       end
       return real[key]
     end})
     package.loaded["core/midi"] = real
     _G.midi = facade.fake
+  end
+  -- the keys read through the facade by the ports, as "key count" sorted
+  function facade.read_keys()
+    local keys = {}
+    for key, count in pairs(facade.reads) do keys[#keys + 1] = tostring(key) .. " " .. count end
+    table.sort(keys)
+    return table.concat(keys, ", ")
   end
   return facade, before_init
 end
@@ -186,6 +199,34 @@ test("under nbout's facade over midi, hot-plug still reaches the ports and clean
     assert_equal(context.midi.add, facade.found_add, "cleanup puts the found add back on norns' module")
     assert_equal(context.midi.remove, facade.found_remove, "and the found remove")
     assert_equal(next(facade.fake), nil, "the facade's own fields were never written")
+  end)
+end)
+
+test("under nbout's facade the ports read norns' own vports only, and never its seventeenth", function()
+  under_midi_facade(function()
+    local facade, before_init = midi_facade()
+    local context = load_strata({ before_init = before_init })
+    local S = local_value("S")
+    local ports = S.lib.io_ports
+    local changes = {}
+    ports.on_change("test", function(port, name) changes[#changes + 1] = port .. " " .. tostring(name) end)
+    context.midi.plug(3, "box")
+    changes = {}
+    _menu.set_mode(true); context.midi.reassign(3, 5); _menu.set_mode(false)
+    assert_equal(table.concat(changes, ", "), "3 nil, 5 box", "a move in the menu: the departure, then the arrival")
+    assert_equal(ports.out(5), context.midi.vports[5], "out gives norns' own vport")
+    assert_equal(ports.device(5), "box", "device names the device on it")
+    assert_equal(ports.device(3), nil, "and none on the port it left")
+    assert_equal(ports.out(17), nil, "no seventeenth port to send through")
+    assert_equal(ports.device(17), nil, "nor a device on it")
+    assert_equal(ports.listen(17, "a", function() end), nil, "nor one to listen to")
+    ports.listen(5, "a", function() end)
+    assert_equal(ports_invariant(S), nil, "the invariant holds")
+    ports.unlisten(5, "a")
+    ports.listen(6, "b", function() end)
+    cleanup()
+    for _, change in ipairs(changes) do assert_true(not change:match("^17 "), "port 17 is never reported") end
+    assert_equal(facade.read_keys(), "", "the ports read nothing through the facade")
   end)
 end)
 

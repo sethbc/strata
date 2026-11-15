@@ -34,6 +34,21 @@ return function(S)
       entered_add = false, entered_remove = false},
   }
 
+  -- norns' own MIDI module: the one its startup loaded (midi = require
+  -- 'core/midi'), whatever a mod put in the global midi since. The nbout
+  -- mod's facade there (from each script's pre-init hook to its cleanup)
+  -- has no __newindex, so a handler assigned to it is never called by
+  -- norns' hot-plug (#700). The global where norns' module is not found (the
+  -- test stubs). The hot-plug handlers are installed and put back on it,
+  -- and every vport is read from it: the facade's vports is a fresh copy at
+  -- each read, with an entry of its own after norns' sixteen. Each function
+  -- reads the vports once, never per port
+  local function norns_midi()
+    local loaded = package.loaded["core/midi"]
+    if type(loaded) == "table" and type(loaded.vports) == "table" then return loaded end
+    return midi
+  end
+
   local function valid_port(port)
     return type(port) == "number" and port % 1 == 0 and port >= 1 and port <= PORTS.count
   end
@@ -89,7 +104,7 @@ return function(S)
     if not valid_port(port) then return nil end
     state.listeners[port] = state.listeners[port] or new_set()
     set_entry(state.listeners[port], name, fn)
-    midi.vports[port].event = dispatcher(port)
+    norns_midi().vports[port].event = dispatcher(port)
     return true
   end
 
@@ -100,19 +115,20 @@ return function(S)
     remove_entry(set, name)
     if #set.names > 0 then return end
     state.listeners[port] = nil
-    if midi.vports[port].event == state.dispatchers[port] then midi.vports[port].event = nil end
+    local vport = norns_midi().vports[port]
+    if vport.event == state.dispatchers[port] then vport.event = nil end
   end
 
   -- The port's vport, to send through, or nil
   function M.out(port)
     if not valid_port(port) then return nil end
-    return midi.vports[port]
+    return norns_midi().vports[port]
   end
 
   -- The name of the device on the port, or nil
   function M.device(port)
     if not valid_port(port) then return nil end
-    local vport = midi.vports[port]
+    local vport = norns_midi().vports[port]
     if vport.device == nil then return nil end
     return vport.name
   end
@@ -179,7 +195,7 @@ return function(S)
   local function added(device)
     local port = device and device.port
     if state.hot_plug.installed and valid_port(port) then
-      state.seen[port] = midi.vports[port].device or device
+      state.seen[port] = norns_midi().vports[port].device or device
       run_set(state.changes, "midi change hook", port, device.name)
     end
     if state.hot_plug.kept_add then state.hot_plug.kept_add(device) end
@@ -203,9 +219,9 @@ return function(S)
   -- arrival, departures first. A visit that moves nothing tells nothing
   function M.reconcile()
     if not state.hot_plug.installed then return end
-    local left, arrived = {}, {}
+    local left, arrived, vports = {}, {}, norns_midi().vports
     for port = 1, PORTS.count do
-      local current = midi.vports[port].device
+      local current = vports[port].device
       if current ~= state.seen[port] then
         if state.seen[port] ~= nil then left[#left + 1] = port end
         if current ~= nil then arrived[#arrived + 1] = port end
@@ -213,22 +229,10 @@ return function(S)
       end
     end
     for _, port in ipairs(left) do run_set(state.changes, "midi change hook", port, nil) end
-    for _, port in ipairs(arrived) do run_set(state.changes, "midi change hook", port, M.device(port)) end
+    for _, port in ipairs(arrived) do run_set(state.changes, "midi change hook", port, vports[port].name) end
   end
 
   S.register_menu_close(function() M.reconcile() end)
-
-  -- norns' own MIDI module: the one its startup loaded (midi = require
-  -- 'core/midi'), whatever a mod put in the global midi since. The nbout
-  -- mod's facade there (from each script's pre-init hook to its cleanup)
-  -- has no __newindex, so a handler assigned to it is never called by
-  -- norns' hot-plug (#700). The global where norns' module is not found (the
-  -- test stubs). The hot-plug handlers are installed and put back on it
-  local function norns_midi()
-    local loaded = package.loaded["core/midi"]
-    if type(loaded) == "table" and type(loaded.vports) == "table" then return loaded end
-    return midi
-  end
 
   -- Installing again (init run twice) never chains ours to themselves:
   -- ours installed already, or a wrapper a cleanup left over ours (which
@@ -263,17 +267,19 @@ return function(S)
     else
       hot_plug.wrapped_remove = true
     end
+    local vports = module.vports
     for port, fn in pairs(state.dispatchers) do
-      if midi.vports[port].event == fn then midi.vports[port].event = nil end
+      if vports[port].event == fn then vports[port].event = nil end
     end
     state.listeners = {}
   end)
 
   -- A vport's event is the dispatcher exactly while the port has listeners
   S.register_invariant("midi ports", function()
+    local vports = norns_midi().vports
     for port = 1, PORTS.count do
       local listening = state.listeners[port] ~= nil
-      local dispatching = state.dispatchers[port] ~= nil and midi.vports[port].event == state.dispatchers[port]
+      local dispatching = state.dispatchers[port] ~= nil and vports[port].event == state.dispatchers[port]
       if listening ~= dispatching then
         return "port " .. port .. (listening and " has listeners but its event is not the dispatcher"
           or " has no listener but its event is the dispatcher")
