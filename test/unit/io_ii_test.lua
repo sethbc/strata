@@ -95,6 +95,9 @@ local function ii_section(S)
 end
 
 test("under off and teletype Strata sends no ii command", function()
+  -- crow-ii.md §4: monome calls crow and Teletype both leading "not currently supported", and
+  -- "multiple leaders sending messages can lead to i2c not working until you power cycle"; §3: Teletype is leader only, and crow forwards CROW.C1 to C3 to
+  -- norns through ii.self.call1 to call3, which these handlers set
   local device, record = recording_device("probe")
   local context, S, ii = started({ record })
   context.crow.plug()
@@ -148,6 +151,8 @@ test("send builds crow's text for the descriptor's command", function()
 end)
 
 test("the queue sends 4 a step in order and drops the newest past 48", function()
+  -- crow-ii.md §2: crow's own leader queue holds 16 and drops what comes when it is full, so Strata
+  -- spreads its messages over the steps itself
   local context, S, ii = started()
   local step = stepper(context, S)
   lead(context, S)
@@ -167,6 +172,9 @@ test("the queue sends 4 a step in order and drops the newest past 48", function(
 end)
 
 test("devices are made ready when Strata starts to lead and released when it stops", function()
+  -- crow-ii.md §4: Just Friends was unstable when it got notes before jf.mode(1) (crow issue #220),
+  -- so a device's ready comes as the lead starts; §1: crow's reset at each connect leaves the bus's
+  -- devices as they were, but a crow that left can send nothing, so its return makes them ready again
   local device, record
   device, record = recording_device("probe", { release = function()
     device.releases = device.releases + 1
@@ -193,6 +201,9 @@ test("devices are made ready when Strata starts to lead and released when it sto
 end)
 
 test("leaving the bus sends the waiting offs at once, at most 14, and drops the rest", function()
+  -- crow-ii.md §2: crow's leader queue holds 16 messages and drops the next when full, so the offs
+  -- sent at once stay under it with the release's line; §4: crow leads only while it has a command
+  -- to send, so the offs go before the bus is given up
   local device, record
   device, record = recording_device("probe", { release = function()
     device.releases = device.releases + 1
@@ -343,6 +354,96 @@ test("the group is the devices' params, and absent with none", function()
   assert_equal(params.lookup["probe_b2"], first + 5, "then b's")
   load_strata({ before_init = function() only_devices(local_value("S"), { { name = "c" } }) end })
   assert_equal(params.lookup["strata_out_ii"], nil, "no group when the count is 0")
+end)
+
+-- The lines printed so far that contain text
+local function printed_with(context, text)
+  local lines = {}
+  for _, line in ipairs(context.printed) do
+    if line:find(text, 1, true) then lines[#lines + 1] = line end
+  end
+  return lines
+end
+
+test("a device whose add_params raises leaves the group whole and the next device's params added", function()
+  local context = load_strata({ before_init = function()
+    only_devices(local_value("S"), {
+      { name = "a", param_count = 3, add_params = function()
+        params:add_number("probe_a1", "probe a1", 0, 1, 0)
+        error("a's second param")
+      end },
+      { name = "b", param_count = 2, add_params = function()
+        for k = 1, 2 do params:add_number("probe_b" .. k, "probe b" .. k, 0, 1, 0) end
+      end } })
+  end })
+  finish_startup(context)
+  h.claim_script_errors(context, 1, "strata: ii device a add_params failed: ", "a's second param")
+  assert_equal(params:lookup_param("strata_out_ii").n, 5, "the group keeps the summed count")
+  local first = params.lookup["strata_out_ii"]
+  assert_equal(params.lookup["probe_a1"], first + 1)
+  for n = 1, 2 do
+    local id = "a_unused_" .. n
+    assert_equal(params.lookup[id], first + 1 + n, id .. " fills a's place")
+    assert_true(params:lookup_param(id).hidden, id .. " is hidden")
+  end
+  assert_equal(params.lookup["probe_b1"], first + 4, "b's params follow, all there")
+  assert_equal(params.lookup["probe_b2"], first + 5)
+  local lines = printed_with(context, "ii device a added")
+  assert_equal(#lines, 1, "one line names the device and the two counts")
+  assert_equal(lines[1], "strata: ii device a added 1 of its 3 params: 2 hidden in their place")
+end)
+
+test("a device that adds more params than it declares prints its line", function()
+  local context = load_strata({ before_init = function()
+    only_devices(local_value("S"), {
+      -- two separators past its count: the stub refuses any other param after a full group, as a
+      -- wrong count would put it outside the group on norns' menu
+      { name = "big", param_count = 2, add_params = function()
+        for k = 1, 2 do params:add_number("probe_big" .. k, "probe big" .. k, 0, 1, 0) end
+        for k = 3, 4 do params:add_separator("probe_big" .. k, "probe big" .. k) end
+      end } })
+  end })
+  finish_startup(context)
+  assert_equal(params:lookup_param("strata_out_ii").n, 2)
+  local lines = printed_with(context, "ii device big added")
+  assert_equal(#lines, 1)
+  assert_equal(lines[1], "strata: ii device big added 4 params, more than its 2: the out ii group ends before the last 2")
+end)
+
+test("the bus row reads off, strata leads and teletype leads as it is turned on the page", function()
+  local context, S = started()
+  h.show_page("IO")
+  assert_true(S.lib.pages_io.show_section("ii"))
+  local function shown()
+    local row = S.lib.pages_io.rows()[S.io_cursor]
+    assert_equal(row.key, "ii_bus", "the cursor is on the bus row")
+    return row.shown
+  end
+  assert_equal(shown(), "off")
+  enc(3, 1); assert_equal(shown(), "strata leads")
+  enc(3, 1); assert_equal(shown(), "teletype leads")
+  enc(3, -2); assert_equal(shown(), "off")
+end)
+
+test("a second crow setup while Strata leads makes no device ready again", function()
+  -- norns keeps one crow: a second one plugged in calls norns.crow.add again with no remove (crow-ii.md §1)
+  local device, record = recording_device("probe")
+  local context, S, ii = started({ record })
+  lead(context, S)
+  ii.send("probe", "on", 1)
+  context.crow.plug()
+  assert_true(ii.leads())
+  assert_equal(device.readies, 1, "ready once")
+  assert_equal(ii.queued(), 1, "the queue kept")
+end)
+
+test("the section's status is redrawn when the crow leaves while IO shows it", function()
+  local context, S = started()
+  context.crow.plug()
+  h.show_page("IO")
+  S.lib.pages_io.show_section("ii")
+  h.assert_drawn_on_next_frame(context, nil, "the crow leaving", function() context.crow.unplug() end)
+  assert_true(h.screen_shows(context, "[--]"), "the title shows [--]")
 end)
 
 test("IO's ii section: the bus leader row and its status", function()

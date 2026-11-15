@@ -6,6 +6,7 @@
 - **Listeners are contained**: each `on_change` function runs through `S.lib.ui_frame.contained_call`, so one that raises prints one `strata: io rig listener <key> failed:` line (once per distinct message) and the next listener still runs. A set to the value already held tells nobody.
 - **A file it cannot use is set aside, never written over unread**: unreadable text, another version, a `values` that is not a table, or a known key holding a value outside its spec moves the file to its first free backup name (`set_aside(path, ".bak")`: `io.data.bak`, `.bak.2` ... `.bak.9`) with one console line (`strata: io.data not used (<why>): the rig settings are the defaults; kept as io.data.bak`, or `; not moved: <why>` when every backup name is taken, after which the next change writes over it), and every setting takes its default. A missing file gives the defaults with no line.
 - **The `rig` invariant**: every key of `RIG.order` holds a value of its spec, and no other key is held.
+- **Labels are display only**: a choice's spec may carry `labels = {<value> = <text>}`, which only `text(key)` reads (`ii_bus`: `strata leads`, `teletype leads`; `off` has none). `get`, `on_change`, `io.data` and every value keep the value itself, so no reader compares a label.
 
 ## Owns
 
@@ -39,7 +40,7 @@ The design's text counts fifteen keys; its table, and this module, hold these fo
 - `get(key) -> value`.
 - `set(key, value) -> boolean`: validated, written (`{version = 1, values = {...}}`, every key), then held and told; see Must not break.
 - `step(key, d, fine) -> boolean`: the value `d` detents away, a choice by `d` places, a number by `d` times `step` (`fine_step` with `fine`, which IO passes for ALT+E3), clamped to the ends; `set` when it differs. True at an end (nothing to write); false for an unknown key or a failed write.
-- `text(key) -> string`: what IO's row shows: a choice as it is, a number in digits, a port at 0 as `off`.
+- `text(key) -> string`: what IO's row shows: a choice as it is, or its label when its spec has one, a number in digits, a port at 0 as `off`.
 - `on_change(key, fn)`: `fn(value, previous)` after each change; raises for an unknown key or a non-function.
 
 ## Start and cleanup

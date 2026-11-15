@@ -21,7 +21,7 @@ return function(S)
 
   local SPEC = {
     bus_key = "ii_bus",
-    group = {id = "strata_out_ii", name = "out ii"},
+    group = {id = "strata_out_ii", name = "out ii"}, unused_name = "unused",
     absent = "[--]", dropped = " dropped", row_label = "bus leader",
     -- Teletype's CROW.C1 to C3 (crow-ii.md §3): each a crow-side function
     -- that tells norns one fixed event; never call4, never a query
@@ -107,8 +107,11 @@ return function(S)
     end
   end
 
-  -- Strata leads: the flag set, then each device made ready
+  -- Strata leads: the flag set, then each device made ready. Once only: a
+  -- second crow plugged in calls norns.crow.add again with no remove, and
+  -- its setup leaves the lead and the queue as they are
   local function take_lead()
+    if state.leading then return end
     state.leading = true
     call_devices("ready")
     request_redraw()
@@ -218,14 +221,38 @@ return function(S)
   -- Params: the devices' (PSET-only, group strata_out_ii)
   ---------------------------------------------------------------------------
 
+  -- Each device's add_params, contained (ruling 15), and the group kept
+  -- whole: a device that added fewer params than its param_count (it
+  -- raised, or miscounted) has the rest filled with hidden separators
+  -- <device>_unused_<n>, so the next device's params stay in the group; one
+  -- that added more cannot be mended. Either prints one line
+  local function add_device_params(record)
+    local before = #params.params
+    if record.add_params then
+      S.lib.ui_frame.contained_call(state.errors, record.name .. " add_params", "ii device " .. record.name
+        .. " add_params", record.add_params)
+    end
+    local added, declared = #params.params - before, record.param_count
+    if added < declared then
+      for n = 1, declared - added do
+        local id = record.name .. "_unused_" .. n
+        params:add_separator(id, SPEC.unused_name)
+        params:hide(id)
+      end
+      print("strata: ii device " .. record.name .. " added " .. added .. " of its " .. declared .. " params: "
+        .. (declared - added) .. " hidden in their place")
+    elseif added > declared then
+      print("strata: ii device " .. record.name .. " added " .. added .. " params, more than its " .. declared
+        .. ": the out ii group ends before the last " .. (added - declared))
+    end
+  end
+
   function M.add_params()
     local count = 0
     for _, record in ipairs(devices()) do count = count + record.param_count end
     if count == 0 then return end
     params:add_group(SPEC.group.id, SPEC.group.name, count)
-    for _, record in ipairs(devices()) do
-      if record.add_params then record.add_params() end
-    end
+    for _, record in ipairs(devices()) do add_device_params(record) end
   end
 
   ---------------------------------------------------------------------------

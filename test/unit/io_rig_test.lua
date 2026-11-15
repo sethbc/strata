@@ -123,6 +123,20 @@ test("step moves a setting through its values and stops at the ends", function()
   assert_equal(rig.get("e16_port"), 16, "unchanged")
 end)
 
+test("text shows a value's label where its spec has one, and the value is unchanged", function()
+  local context = load_strata(); finish_startup(context)
+  local rig = local_value("S").lib.io_rig
+  assert_equal(rig.text("ii_bus"), "off", "off has no label")
+  rig.set("ii_bus", "strata")
+  assert_equal(rig.text("ii_bus"), "strata leads"); assert_equal(rig.get("ii_bus"), "strata", "get is the value")
+  rig.set("ii_bus", "teletype")
+  assert_equal(rig.text("ii_bus"), "teletype leads"); assert_equal(rig.get("ii_bus"), "teletype")
+  assert_equal(local_value("S").lib.data_files.read(rig_path(context)).values.ii_bus, "teletype", "io.data keeps the value")
+  rig.set("e16_encoding", "rel2")
+  assert_equal(rig.text("e16_encoding"), "rel2", "a spec without labels shows its value")
+  assert_equal(rig.text("nope"), "nil", "an unknown key as before")
+end)
+
 test("io.data is read at start and written at cleanup", function()
   local values = {}
   for key, value in pairs(DEFAULTS) do values[key] = value end
