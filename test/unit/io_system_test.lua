@@ -47,6 +47,10 @@ local SYSTEM = {
   -- last 48 s, the fifteen MPE keys released and struck again every 96
   -- LFO steps (2 s)
   flood_seconds = 48, restrike_steps = 96,
+  -- offs the MIDI check must time against an end in each part (the
+  -- minute times 36 and about 54000: a floor well under each, so a part
+  -- whose check went silent would fail)
+  timed_offs = {light = 20, flood = 20000},
   stretch = {tempo = 120, settle_seconds = 1},
 }
 
@@ -651,19 +655,44 @@ local function retriggers(log, index, msg)
   return false
 end
 
--- Each MIDI note off that ends step notes later than one LFO step after
--- the latest of their ends, as text (a note that a played key holds too,
--- or whose on matched no hit, has no end to keep). Ids on one port,
--- channel and note are counted (docs/notes/lua/io/midi_out.md): a note's
--- last off goes when the last id holding it ends, so the end kept is the
--- latest of its holders', and none when any holder has none. A note on
--- for a note already on (main's MIDI out) or a note off followed at once
--- by a note on for it (a retrigger, #709's MIDI out) adds a holder to the
--- note's record and is no end; only the off that ends the record is timed
-local function late_midi_offs(rig)
-  local late, checked = {}, 0
+-- The MIDI notes' timing, read from each synth port's log. A note (a port,
+-- channel and note number) is on from its note on to the off that ends it,
+-- and its record keeps when it is due to end: the latest end of the ids
+-- holding it (a step note's end is its hit's beat plus its gate), and no
+-- end at all once any holder has none (a played key, or a note on that
+-- matched no hit). MIDI out counts the ids on a note
+-- (docs/notes/lua/io/midi_out.md): a start at count 0 sends a note on; a
+-- start at count 1 or more sends a note off and then a note on (#709's
+-- retrigger; main's module sends the note on alone); an end at count 1
+-- sends the note off; an end at count 2 or more sends nothing. So while a
+-- note is on, some holder is meant to hold it, and once its record's end
+-- has passed no holder is left and its last off is owed. Three rules:
+-- 1. every off is timed, a retrigger's (an off followed at once by a note
+--    on for the same note) and a final one alike: it is on time when the
+--    note's record has no end or the off comes no later than one LFO step
+--    (and a matron tick) after it. A retrigger's off comes while a later
+--    holder still holds the note, so the record's end, the latest of its
+--    holders', has not passed (a held key: a 25 ms step note under it ends
+--    unseen, the next step note's retrigger finds a record with no end);
+--    a retrigger keeps the record and its note on adds its holder;
+-- 2. a note on alone for a note already on (main's count up) is late when
+--    the note's record has passed its end by more than a step: its off was
+--    owed and never came;
+-- 3. an off for a note that is not on fails (the fixed module never sends
+--    one).
+-- Returns the problems (text) and how many offs were timed against an end
+-- in the minute's two parts ({light, flood}, by the time they came)
+local function midi_timing(rig)
+  local problems, timed = {}, {light = 0, flood = 0}
   local index = hits_at(rig)
   local allowed = SYSTEM.step + SYSTEM.tick_tolerance + 1e-6
+  local function part(t)
+    if rig.stretch and t >= rig.stretch.start and t <= rig.stretch.stop then return "light" end
+    if rig.flood_start and t >= rig.flood_start then return "flood" end
+  end
+  local function problem(port, msg, t, what)
+    problems[#problems + 1] = string.format("port %d ch %d note %d at %.4f: %s", port, msg.ch, msg.note, t, what)
+  end
   for _, port in ipairs(SYSTEM.midi_ports) do
     local open = {}
     local log = rig.devices[port].log
@@ -681,23 +710,34 @@ local function late_midi_offs(rig)
           if hit.notes[msg.note] then due = hit_end(hit) end
         end
         local record = open[key]
-        if not record then open[key] = {due = due}
-        elseif record.due and due then record.due = math.max(record.due, due)
-        else record.due = false end
-      elseif is_status(msg, "note_off") and not retriggers(log, position, msg) then
-        local record = open[key]
-        open[key] = nil
-        if record and record.due then
-          checked = checked + 1
-          if entry.t > record.due + allowed then
-            late[#late + 1] = string.format("port %d ch %d note %d: off at %.4f, due %.4f", port, msg.ch, msg.note,
-              entry.t, record.due)
+        if not record then
+          open[key] = {due = due}
+        else
+          -- rule 2, for a note on alone (a retrigger's off was timed itself)
+          if not record.retriggered and record.due and entry.t > record.due + allowed then
+            problem(port, msg, entry.t, string.format("a note on over a note past its end %.4f", record.due))
           end
+          record.retriggered = nil
+          if record.due and due then record.due = math.max(record.due, due) else record.due = false end
+        end
+      elseif is_status(msg, "note_off") then
+        local record = open[key]
+        if not record then
+          problem(port, msg, entry.t, "an off for a note that is not on")  -- rule 3
+        else
+          if record.due then  -- rule 1
+            local which = part(entry.t)
+            if which then timed[which] = timed[which] + 1 end
+            if entry.t > record.due + allowed then
+              problem(port, msg, entry.t, string.format("an off late for its end %.4f", record.due))
+            end
+          end
+          if retriggers(log, position, msg) then record.retriggered = true else open[key] = nil end
         end
       end
     end
   end
-  return late, checked
+  return problems, timed
 end
 
 -- Each low of crow's gate output (voice 3's) later than one LFO step after
@@ -972,10 +1012,14 @@ test("with everything on, a minute holds every bound", function()
   assert_equal(most_rings, 1, "ring frames were sent")
 
   -- note offs (docs/notes/lua/io/targets.md): checked each 48 Hz step, so
-  -- every MIDI and crow note off comes within one step of its time
-  local late, offs_checked = late_midi_offs(rig)
-  assert_equal(#late, 0, "MIDI note offs within a step of their time: " .. first_lines(late))
-  assert_true(offs_checked > 1000, "step notes' offs were matched to their ends: " .. offs_checked)
+  -- every MIDI note off, a retrigger's too, comes within one step of its
+  -- note's end (midi_timing's three rules), and crow's gate goes low
+  -- within a step of the end of voice 3's latest hit
+  local timing, timed = midi_timing(rig)
+  assert_equal(#timing, 0, "MIDI note offs within a step of their time: " .. first_lines(timing))
+  assert_true(timed.light >= SYSTEM.timed_offs.light and timed.flood >= SYSTEM.timed_offs.flood,
+    "offs timed against their ends in each part: " .. timed.light .. " under the bus's rate, " .. timed.flood
+    .. " in the flood")
   local late_gates, lows_checked = late_crow_gates(rig)
   assert_equal(#late_gates, 0, "crow's gate low within a step of its time: " .. first_lines(late_gates))
   assert_true(lows_checked > 100, "crow's gate lows were checked: " .. lows_checked)
