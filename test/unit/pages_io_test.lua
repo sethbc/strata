@@ -412,6 +412,33 @@ test("E3 and K3 on a row that has gone only move the cursor", function()
   assert_screen_layout(context, "IO after the cursor's row went")
 end)
 
+test("ALT+E3 on a rig row that has gone only moves the cursor", function()
+  local context, S = loaded()
+  local gone = false
+  S.register_io_section({ name = "remote", title = "remote", rows = function()
+    local rows = { { label = "grid port", kind = "rig", key = "remote_grid_port" } }
+    if not gone then rows[#rows + 1] = { label = "arc port", kind = "rig", key = "remote_arc_port" } end
+    return rows
+  end })
+  show_page("IO")
+  enc(2, 1); redraw()
+  assert_equal(current_row(S).key, "remote_arc_port")
+  local rig = S.lib.io_rig
+  gone = true
+  local asked = 0
+  local real_request = request_redraw
+  request_redraw = function() asked = asked + 1; return real_request() end
+  key(1, 1); enc(3, 1); key(1, 0)
+  request_redraw = real_request
+  assert_equal(current_row(S).key, "remote_grid_port", "the cursor on the row in its place")
+  assert_equal(rig.get("remote_grid_port"), 0, "ALT+E3 stepped nothing")
+  assert_true(asked > 0, "a redraw is asked for")
+  redraw()
+  key(1, 1); enc(3, 1); key(1, 0)
+  assert_equal(rig.get("remote_grid_port"), 1, "after the draw ALT+E3 steps it")
+  assert_screen_layout(context, "IO after a rig row went")
+end)
+
 test("leaving IO ends a pinned view", function()
   local context, S = loaded()
   plain_section(S, "voice", 8)
