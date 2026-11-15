@@ -66,14 +66,23 @@ return function(S)
 
   local function is_mpe(config) return config.port > 0 and config.mode == MIDI_OUT.mpe_mode end
 
-  -- One message on port, through its vport: nothing after cleanup or on port 0
+  -- A port a remote grid, a remote arc or midigrid holds speaks the remote's
+  -- own protocol (notes on channels 1 and 2 set LEDs): MIDI out treats it
+  -- as absent for everything it sends. A controller's port is sent to as set
+  local function remote_holds(port)
+    local remote = S.lib.io_remote
+    return remote ~= nil and remote.holds ~= nil and remote.holds(port) == true
+  end
+
+  -- One message on port, through its vport: nothing after cleanup, on port
+  -- 0 or on a port a remote holds
   local function send(port, method, ...)
-    if state.stopped or not port or port < 1 then return end
+    if state.stopped or not port or port < 1 or remote_holds(port) then return end
     local vport = S.lib.io_ports.out(port)
     if vport then vport[method](vport, ...) end
   end
 
-  local function present(port) return S.lib.io_ports.device(port) ~= nil end
+  local function present(port) return S.lib.io_ports.device(port) ~= nil and not remote_holds(port) end
 
   local function table_at(root, ...)
     local node = root
@@ -635,9 +644,13 @@ return function(S)
   -- its routes settle here all the same
   S.register_pset_hook({name = "io_midi_out", read = function() settle(true) end})
 
+  -- A port's number, with its owner beside it while one holds it (as
+  -- SETUP's midi row shows it)
   local function port_text(param)
     local port = param:get()
-    return port == 0 and "off" or tostring(port)
+    if port == 0 then return "off" end
+    local owner = S.lib.io_ports.owner(port)
+    return owner and (port .. " (" .. owner .. ")") or tostring(port)
   end
 
   local function slot_changed(k) return function() state.cc_last[k] = nil end end
@@ -670,7 +683,7 @@ return function(S)
         request_redraw()
       end)
       params:add{type = "number", id = slot_id(k, "port"), name = name .. "port", min = 1, max = port_count, default = 1,
-        action = slot_changed(k)}
+        formatter = port_text, action = slot_changed(k)}
       params:add{type = "number", id = slot_id(k, "channel"), name = name .. "channel", min = 1,
         max = MIDI_OUT.channels, default = 1, action = slot_changed(k)}
       params:add{type = "number", id = slot_id(k, "number"), name = name .. "number", min = 0,
@@ -682,7 +695,7 @@ return function(S)
     params:add{type = "option", id = "midi_pc_channel", name = "program change channel", options = channels, default = 1}
     params:add{type = "binary", behavior = "toggle", id = "midi_pc_out", name = "program change out", default = 0}
     params:add{type = "number", id = "midi_pc_out_port", name = "program change out port", min = 1, max = port_count,
-      default = 1}
+      default = 1, formatter = port_text}
     params:add{type = "number", id = "midi_pc_out_channel", name = "program change out channel", min = 1,
       max = MIDI_OUT.channels, default = 1}
     -- The routes at start (#709): settled from the params as they stand now,

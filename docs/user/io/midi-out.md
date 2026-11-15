@@ -9,7 +9,7 @@ Built from the MIDI 1.0 specification and its MPE specification (MIDI Polyphonic
 ## A voice's route
 
 On IO, the `voice` section shows the selected voice's `midi` row (ALT+E2 selects the voice); K3 opens its settings. The same settings are in PARAMETERS > out midi, saved with a PSET, never with a scene:
-- **port**: `off`, or the MIDI port 1 to 16 the voice plays (the ports SYSTEM > DEVICES lists)
+- **port**: `off`, or the MIDI port 1 to 16 the voice plays (the ports SYSTEM > DEVICES lists). A port something else holds shows its owner beside the number, as SETUP's `midi` row does (`3 (remote grid)`): Strata sends nothing to a port a remote grid, a remote arc or `midi grid` holds, since those devices read notes as their lights, and sends there again once it is let go. A controller's port (`(e16)`, `(faders)`) is still sent to as set
 - **channel**: 1 to 16 (voice n starts on channel n), in plain mode
 - **mode**: `plain` or `mpe`
 - **members**: 1 to 15 (15 by default), the member channels of an MPE voice

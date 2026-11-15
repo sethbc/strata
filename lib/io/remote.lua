@@ -205,6 +205,15 @@ return function(S)
 
   function M.clock_id() return draw.clock end
 
+  -- Whether this module holds the port (a remote grid's or arc's, or one
+  -- midigrid's device is on): MIDI out sends nothing there
+  function M.holds(port)
+    for _, kind in ipairs(KINDS) do
+      if records[kind].claimed_port == port then return true end
+    end
+    return midigrid.ports ~= nil and midigrid.ports[port] == true
+  end
+
   -- The virtual device goes (its grid detached or its arc unfollowed);
   -- clear sends CC 4 = 0 to the device first
   local function detach(record, clear)
