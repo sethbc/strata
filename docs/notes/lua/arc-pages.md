@@ -23,8 +23,8 @@
 
 ## Owns
 
-- `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/mod.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua` (`S.lib.arc_main`, ...): each page's rings. `strata.lua` includes them after every page file. SETUP has no arc file (no ring fields on its record).
-- `ARC_MAIN_ALT_KEYS` and `ARC_MAIN_LEVELS` (`lib/arc/main.lua`), `ARC_VOICE` (`lib/arc/voice.lua`), `ARC_SEQ` (`lib/arc/seq.lua`), `ARC_FX_RINGS` (`lib/arc/fx.lua`), `ARC_LFO` (`lib/arc/lfo.lua`), `ARC_MOD` (`lib/arc/mod.lua`), `ARC_BUFFER_RINGS` (`lib/arc/buffer.lua`), `ARC_SCENES` (`lib/arc/scenes.lua`).
+- `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/mod.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua`, `lib/arc/io.lua` (`S.lib.arc_main`, ...): each page's rings. `strata.lua` includes them after every page file. SETUP has no arc file (no ring fields on its record).
+- `ARC_MAIN_ALT_KEYS` and `ARC_MAIN_LEVELS` (`lib/arc/main.lua`), `ARC_VOICE` (`lib/arc/voice.lua`), `ARC_SEQ` (`lib/arc/seq.lua`), `ARC_FX_RINGS` (`lib/arc/fx.lua`), `ARC_LFO` (`lib/arc/lfo.lua`), `ARC_MOD` (`lib/arc/mod.lua`), `ARC_BUFFER_RINGS` (`lib/arc/buffer.lua`), `ARC_SCENES` (`lib/arc/scenes.lua`), `ARC_IO_RINGS` (`lib/arc/io.lua`).
 - Unit tests: `test/unit/arc_pages_test.lua`. The dispatch, fills, carried ticks and button are `lib/arc/core.lua`'s (`docs/notes/lua/arc-core.md`).
 
 ## Rings per page
@@ -60,6 +60,10 @@ SEQ's step editor (`editor_delta`/`editor_redraw`, `ARC_SEQ.editor_rings`, `ARC_
 FX (`ARC_FX_RINGS`, `{param_id}` per ring):
 - ring 1 `filter_freq`, ring 2 `filter_res`, ring 3 `delay_time`, ring 4 `delay_mix`;
 - each drawn at level 12 to `param_fraction(param_id)` of a turn, so the exp params (filter freq, delay time) follow their controlspec warp.
+
+IO (`ARC_IO_RINGS`, `{param_id}` per ring; 3.6):
+- ring 1 `tapeloop_level`, ring 2 `tapeloop_rate`, ring 3 `tapeloop_feedback`, ring 4 `tapeloop_wear`, through `arc_sweep_param`;
+- each drawn at level 12 (`ARC_IO_LEVEL`) to `param_fraction(param_id)`. The tape's senders ignore a ring turn while the tape is off (the param still moves).
 
 LFO:
 - Rings 1-3 (`ARC_LFO.depth_rings`): the depths (`strata_lfo<n>_depth`) of the LFO page's window of three, `S.lib.lfos.window(S.selected_lfo)` + ring - 1 (LFOs 1-3 with LFO 1 or 2 selected, 4-6 with 5 or 6), in whole percents. `arc_whole_steps("lfo:<ring>", ...)` accumulates `ARC_LFO.ticks_per_percent` = 10 ticks per percent per ring, keeping the remainder, so the one-percent control never holds a fraction.

@@ -119,7 +119,7 @@ test("page files never set arc fields and arc files set nothing else", function(
     end
   end
   assert_equal(page_files, 10, "ten page files")
-  assert_equal(arc_files, 8, "eight page ring files (SETUP has none, nor IO yet)")
+  assert_equal(arc_files, 9, "nine page ring files (SETUP has none)")
 end)
 
 -- Each record field's value, per page index (a shallow copy)
@@ -173,7 +173,7 @@ test("as they load, page files set no arc field and each arc file sets only its 
   end })
   assert_equal(table.concat(problems, "\n"), "", "record fields set by the wrong file")
   assert_equal(loaded.pages, 10, "ten page files loaded")
-  assert_equal(loaded.arcs, 8, "eight page ring files loaded")
+  assert_equal(loaded.arcs, 9, "nine page ring files loaded")
 end)
 
 test("strata.lua includes every page file, then every arc file", function()
@@ -189,7 +189,7 @@ test("strata.lua includes every page file, then every arc file", function()
   load_strata()
   for _, name in ipairs(local_value("UI_PAGES")) do
     assert_true(includes["lib/pages/" .. name:lower()], "lib/pages/" .. name:lower() .. " is included")
-    if name ~= "SETUP" and name ~= "IO" then  -- IO's rings come with 3.6's tape (lib/arc/io.lua)
+    if name ~= "SETUP" then
       assert_true(includes["lib/arc/" .. name:lower()], "lib/arc/" .. name:lower() .. " is included")
     end
   end

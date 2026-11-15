@@ -1008,13 +1008,16 @@ test("a 3.6 group record adds its group only for a loaded module", function()
       if record.name == name then return record end
     end
   end
-  -- with its module absent, a record's add does nothing
+  -- with its module absent, a record's add does nothing (the tape module is loaded here: take it out)
+  local tape_module = S.lib.io_tape
+  S.lib.io_tape = nil
   local before = #params.params
   local loaded = S.lib.io_crow
   S.lib.io_crow = nil  -- loaded on this branch: set aside, as on a branch without it
   for _, name in ipairs({ "out midi", "crow", "out ii", "out nb", "tape" }) do record_named(name).add() end
   S.lib.io_crow = loaded
   assert_equal(#params.params, before, "no module, no params")
+  S.lib.io_tape = tape_module
   -- with its module loaded, a record calls its add_params once
   local modules = { ["out midi"] = "io_midi_out", crow = "io_crow", ["out ii"] = "io_ii", ["out nb"] = "io_nb",
     tape = "io_tape" }

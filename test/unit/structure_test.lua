@@ -628,7 +628,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "targets ended",
-  "crow lines", "remote", "osc event", "midi handler",
+  "crow lines", "remote", "osc event", "tape off", "midi handler",
   "midi ports", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
@@ -742,6 +742,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(context.polls.polls.recordState, "stop", "record poll")
   for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do watch_method(context.polls.polls[name], "stop", "input meter") end
   watch_field(osc, "event", "osc event")  -- lib/io/osc.lua clears the OSC handler (feedback clock canceled first)
+  watch_method(S.lib.io_tape, "stop", "tape off")  -- lib/io/tape.lua: its voices off, the mixer back (only while on)
   watch_field(S.midi_device, "event", "midi handler")
   watch_method(crow, "send", "crow lines")  -- lib/io/crow.lua: outputs to 0 V, inputs off
   watch_field(midi, "add", "midi ports")  -- lib/io/ports.lua puts back the hot-plug handlers it found
@@ -826,6 +827,7 @@ local function start_steps()
     { "io crow", {} },
     { "io remote", {} },
     { "io osc", {} },
+    { "io tape", {} },
     { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn",
       "redraw requested" } },
     { "macros load", { "file read macros.data", "redraw requested", "grid redrawn" } },

@@ -71,6 +71,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 92 | set `norns.crow.add` (crow's reset, then the settings' lines and the `on_setup` hooks) and `norns.crow.remove` (what waits dropped, the output clocks ended, the `on_gone` hooks) directly, install the crow events, and with a crow already there send its setup (`START_ORDER.io_crow`, 3.6) | `lib/io/crow.lua` |
 | 95 | claim each port the rig names for a remote grid or arc that holds a device, listen to it and ask it for its hello; with `midi_grid` on, attach what `grid.connect()` returns when it is a MIDI grid (`START_ORDER.io_remote`, 3.6) | `lib/io/remote.lua` |
 | 96 | set `osc.event` (the OSC addresses of `S.lib.io_osc`) and start the feedback clock if feedback is on and a sender is known (`START_ORDER.io_osc`, 3.6) | `lib/io/osc.lua` |
+| 97 | start the tape loop when `tapeloop` is already on (`START_ORDER.io_tape`; with its default, nothing) (3.6) | `lib/io/tape.lua` |
 | 100 | add the registered scene fields to `S.SCENE_GLOBAL_PARAMS`, then load scenes.data (`load_scenes_from_disk`, sets `S.scenes_loaded`) | `lib/scenes.lua` |
 | 105 | load the macros' targets from data/strata/macros.data (`START_ORDER.macros_load`; a missing file loads them empty, one it cannot use is set aside, an unknown target id is kept with a console line), then redraw the screen and grids (3.4) | `lib/macros.lua` |
 | 107 | load the gesture recorders, stopped, from data/strata/gestures.data (`START_ORDER.gestures_load`; a missing file loads them empty, one it cannot use is set aside), then redraw the screen and grids (3.4) | `lib/gestures.lua` |
@@ -153,6 +154,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 145 | end crow's flush clock and output clocks and drop what waits; when some crow param is not `off`, send `output[n].volts = 0` for the four outputs and `input[n].mode('none')` for the two inputs (a jack norns' clock owns excepted); set `norns.crow.add` and `remove` to functions that do nothing (#468) (`CLEANUP_ORDER.io_crow`, 3.6) | `lib/io/crow.lua` |
 | 147 | cancel the remote devices' draw clock, send each remote grid and arc CC 4 = 0, detach them, stop listening, release their ports, and detach the midigrid (left dark) (`CLEANUP_ORDER.io_remote`, 3.6) | `lib/io/remote.lua` |
 | 148 | cancel the OSC feedback clock, forget the sender and set `osc.event` to nil (`CLEANUP_ORDER.io_osc`, 3.6) | `lib/io/osc.lua` |
+| 149 | stop the tape loop (`CLEANUP_ORDER.io_tape`: both softcut voices disabled and the mixer's three cut levels put back; nothing when the tape was never on) (3.6) | `lib/io/tape.lua` |
 | 150 | detach the MIDI handler (its `S.lib.io_ports` listener), before the voices go off, and clear the note tap | `lib/midi_in.lua` |
 | 152 | put back the `midi.add` and `midi.remove` the start step found, clear every vport `event` the ports set and forget their listeners (3.6) | `lib/io/ports.lua` |
 | 160 | `engine.voiceOff` for every running voice, each followed by the voice-stop hooks (3.5) (it reaches no handler on norns: the engine is already freed, above) | `lib/engine_sync.lua` |

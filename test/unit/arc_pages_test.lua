@@ -18,7 +18,7 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
   -- SCENES three (ring 1 at its first slot lights an LED, not a segment);
   -- SEQ's rings 1, 2 and 4 at their first position likewise; BUFFER's scan
   -- ring (bipolar, at 0) lights one LED without a segment; MOD's four macros
-  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 1, FX = 4, LFO = 4, MOD = 4, BUFFER = 3, SCENES = 3, SETUP = 0, IO = 0 }
+  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 1, FX = 4, LFO = 4, MOD = 4, BUFFER = 3, SCENES = 3, SETUP = 0, IO = 4 }
   for page = 1, #PAGE_TITLES do
     show_page(page); arc_redraw()
     local drawn = 0
@@ -150,6 +150,25 @@ test("every continuous arc ring sweeps its param's range in a full turn, followi
   -- LFO ring 4 in free mode (the selected LFO's rate); its depth rings and
   -- clocked division keep their whole steps (the arc LFO page test)
   sweep("LFO", 4, "strata_lfo1_rate", "LFO ring 4, free rate")
+end)
+
+test("IO's rings sweep the tape's level, speed, feedback and wear", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  show_page("IO")
+  local ids = { "tapeloop_level", "tapeloop_rate", "tapeloop_feedback", "tapeloop_wear" }
+  local ticks = local_value("UI_PAGES").ARC_TICKS_PER_SWEEP
+  params:set("tapeloop_rate", -2)
+  for _ = 1, ticks + local_value("DETENT").arc_ticks do context.arc.turn(1, 2, 1) end  -- the range crosses 0: a detent holds there
+  assert_near(params:get("tapeloop_rate"), 2, 1e-6, "1024 ticks on ring 2 take the speed from -2 to 2")
+  for ring, id in ipairs(ids) do
+    local spec = params:lookup_param(id).controlspec
+    params:set(id, spec:map(0.25))
+    context.arc.turn(1, ring, 100)
+    assert_true(params:get(id) > spec:map(0.25), "ring " .. ring .. " raises " .. id)
+    next_frame(context)
+    assert_near(device.segments[ring].to, spec:unmap(params:get(id)) * math.pi * 2, 1e-9, "ring " .. ring .. " shows " .. id)
+  end
 end)
 
 test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", function()

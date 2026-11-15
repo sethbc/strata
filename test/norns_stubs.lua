@@ -743,6 +743,11 @@ local function make_util()
   util.stub_now = 0
   function util.time() return util.stub_now + 0.0 end
   function util.clamp(n, min, max) return math.min(max, math.max(n, min)) end
+  -- lib/util.lua's dbamp: below -80 dB is silence
+  function util.dbamp(db)
+    if db < -80 then db = -math.huge end
+    return 10 ^ (db * 0.05)
+  end
   function util.linlin(slo, shi, dlo, dhi, f)
     if f <= slo then return dlo
     elseif f >= shi then return dhi

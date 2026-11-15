@@ -54,7 +54,7 @@ Pitch to volts: a target that takes volts plays MIDI note 60 (middle C) at 0 V, 
 - **K3** - Run the row's action, or open its detail list; when the row is out of view, bring it back instead
 - **ALT+E2** - Select the voice, as on MAIN: the `voice` section shows the selected voice's routes
 
-The arc's rings are off on IO for now.
+The arc's four rings on IO are the tape loop's level, speed, feedback and wear (see [the tape loop](../io/tape.md)).
 
 ## Devices and connections
 
@@ -62,3 +62,4 @@ Each device or connection IO reaches has its own page, listed here as it arrives
 - [crow](../io/crow.md): its inputs as modulation or triggers, its outputs for modulation, a voice's pitch or gate, and the clock
 - [Remote grids and arcs](../io/remote.md): a grid or arc in iii mode, and a MIDI grid through the midigrid mod
 - [OSC and TouchOSC](../io/osc.md): scenes, voices and the patterns from an OSC app, feedback, two TouchOSC layouts
+- [The tape loop](../io/tape.md): a stereo loop of Strata's output on softcut, the `tape` section

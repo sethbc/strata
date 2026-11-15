@@ -88,6 +88,7 @@ S.lib.io_keyed = include("lib/io/keyed")(S)
 S.lib.io_crow = include("lib/io/crow")(S)
 S.lib.io_remote = include("lib/io/remote")(S)
 S.lib.io_osc = include("lib/io/osc")(S)
+S.lib.io_tape = include("lib/io/tape")(S)
 S.lib.params_setup = include("lib/params_setup")(S)
 S.lib.ui_params = include("lib/ui/params")(S)
 S.lib.ui_voice_rows = include("lib/ui/voice_rows")(S)
@@ -136,6 +137,7 @@ S.lib.arc_lfo = include("lib/arc/lfo")(S)
 S.lib.arc_mod = include("lib/arc/mod")(S)
 S.lib.arc_buffer = include("lib/arc/buffer")(S)
 S.lib.arc_scenes = include("lib/arc/scenes")(S)
+S.lib.arc_io = include("lib/arc/io")(S)
 
 -- The grid: the core first, then the faders and one file per layout, each
 -- registering its {key, redraw} record in S.registry.grid_layouts
