@@ -176,7 +176,7 @@ return function(S)
     for index, row in ipairs(rows) do
       if row.section == "voice" and row.id == TXO.labels.row then target = index end
     end
-    if not target then error("txo layout: the IO page has no txo row in the voice section", 3) end
+    if not target then error("txo layout: the IO page has no txo row in the voice section", 0) end
     local from = S.io_cursor
     local moves = 0
     for index = math.min(from, target), math.max(from, target) do
@@ -185,7 +185,7 @@ return function(S)
     enc(2, target >= from and moves or -moves)
     local row = S.lib.pages_io.rows()[S.io_cursor]
     if not (row and row.section == "voice" and row.id == TXO.labels.row) then
-      error("txo layout: E2 did not reach the txo row", 3)
+      error("txo layout: E2 did not reach the txo row", 0)
     end
   end
 

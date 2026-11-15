@@ -469,7 +469,8 @@ test("each TELEXo layout state raises naming the row when the voice section lack
       if state.name == name then
         local ok, problem = pcall(state.setup, context)
         assert_true(not ok, name .. " raises")
-        assert_true(tostring(problem):find("txo row", 1, true) ~= nil, name .. ": " .. tostring(problem))
+        assert_true(tostring(problem):find("^txo layout: ") ~= nil and tostring(problem):find("txo row", 1, true) ~= nil,
+          name .. ": the message names the module and the row: " .. tostring(problem))
       end
     end
   end
