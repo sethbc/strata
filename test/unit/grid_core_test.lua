@@ -1584,12 +1584,14 @@ end)
 -- metatable sends missing keys to norns' real module and it has no
 -- __newindex, and its own connect ignores the port. norns' startup loaded the
 -- real module (grid = require 'core/grid'), so package.loaded holds it. Each
--- test here puts the facade in place before the script loads and
--- package.loaded back as it found it, whatever the test does
+-- test here puts the facade in place before the script loads and runs its
+-- body through under_grid_facade, which puts package.loaded and the global
+-- grid back as it found them, whatever the body does (the MIDI ports' tests
+-- have the same pair, under_midi_facade and midi_facade)
 local function under_grid_facade(body)
-  local kept = package.loaded["core/grid"]
+  local kept_loaded, kept_global = package.loaded["core/grid"], rawget(_G, "grid")
   local ran, problem = pcall(body)
-  package.loaded["core/grid"] = kept
+  package.loaded["core/grid"], _G.grid = kept_loaded, kept_global
   if not ran then error(problem, 0) end
 end
 

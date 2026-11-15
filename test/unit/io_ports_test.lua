@@ -134,26 +134,45 @@ end)
 -- vports as a fresh copy with one more entry, and everything else from
 -- norns' real module; it has no __newindex. norns' startup loaded the real
 -- module (midi = require 'core/midi'), so package.loaded holds it, and its
--- hot-plug calls the real module's add and remove only
+-- hot-plug calls the real module's add and remove only. Each test here runs
+-- its body through under_midi_facade, which puts package.loaded and the
+-- global midi back as it found them, whatever the body does (the grid
+-- core's tests have the same pair, under_grid_facade and grid_facade)
+local function under_midi_facade(body)
+  local kept_loaded, kept_global = package.loaded["core/midi"], rawget(_G, "midi")
+  local ran, problem = pcall(body)
+  package.loaded["core/midi"], _G.midi = kept_loaded, kept_global
+  if not ran then error(problem, 0) end
+end
+
+-- The facade over context.midi, as the global midi and with the stub module
+-- in package.loaded, set up as nbout's pre-init hook does (before_init):
+-- facade.fake is the facade, facade.found_add and found_remove the real
+-- module's handlers when it went in
+local function midi_facade()
+  local facade = {}
+  local function before_init(context)
+    local real = context.midi
+    facade.found_add, facade.found_remove = real.add, real.remove
+    facade.fake = setmetatable({}, {__index = function(_, key)
+      if key == "vports" then
+        local copy = {}
+        for _, vport in ipairs(real.vports) do copy[#copy + 1] = vport end
+        copy[#copy + 1] = {name = "nb", connected = true}
+        return copy
+      end
+      return real[key]
+    end})
+    package.loaded["core/midi"] = real
+    _G.midi = facade.fake
+  end
+  return facade, before_init
+end
+
 test("under nbout's facade over midi, hot-plug still reaches the ports and cleanup puts back the found handlers", function()
-  local kept = package.loaded["core/midi"]
-  local ran, problem = pcall(function()
-    local fake, found_add, found_remove
-    local context = load_strata({ before_init = function(context)
-      local real = context.midi
-      found_add, found_remove = real.add, real.remove
-      package.loaded["core/midi"] = real
-      fake = setmetatable({}, {__index = function(_, key)
-        if key == "vports" then
-          local copy = {}
-          for _, vport in ipairs(real.vports) do copy[#copy + 1] = vport end
-          copy[#copy + 1] = {name = "nb", connected = true}
-          return copy
-        end
-        return real[key]
-      end})
-      _G.midi = fake
-    end })
+  under_midi_facade(function()
+    local facade, before_init = midi_facade()
+    local context = load_strata({ before_init = before_init })
     local ports = local_value("S").lib.io_ports
     local changes = {}
     ports.on_change("test", function(port, name) changes[#changes + 1] = port .. " " .. tostring(name) end)
@@ -164,12 +183,10 @@ test("under nbout's facade over midi, hot-plug still reaches the ports and clean
     ports.listen(2, "a", function() end)
     assert_true(context.midi.vports[2].event ~= nil, "a listener's event is on norns' own vport")
     cleanup()
-    assert_equal(context.midi.add, found_add, "cleanup puts the found add back on norns' module")
-    assert_equal(context.midi.remove, found_remove, "and the found remove")
-    assert_equal(next(fake), nil, "the facade's own fields were never written")
+    assert_equal(context.midi.add, facade.found_add, "cleanup puts the found add back on norns' module")
+    assert_equal(context.midi.remove, facade.found_remove, "and the found remove")
+    assert_equal(next(facade.fake), nil, "the facade's own fields were never written")
   end)
-  package.loaded["core/midi"] = kept
-  if not ran then error(problem, 0) end
 end)
 
 test("a claimed port has one owner", function()
