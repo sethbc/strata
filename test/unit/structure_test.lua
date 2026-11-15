@@ -3238,9 +3238,10 @@ end)
 -- right-hand side of `local <name> = <chain>.io_rig` (or <chain>["io_rig"]),
 -- and each later use of such a <name> that is not followed by one of the
 -- four; a string holding exactly io_rig anywhere but a short-quoted index
--- ([[io_rig]] included) is one too. Three spellings name something else
--- and pass: an order (START_ORDER.io_rig), a number keyed io_rig (the
--- order's own line in lib/constants.lua) and strata.lua's include
+-- ([[io_rig]] included) is one too. Two spellings name something else and
+-- pass: a number keyed io_rig (the order's own line in lib/constants.lua;
+-- its one reader, START_ORDER.io_rig, is in lib/io/rig.lua) and
+-- strata.lua's include
 local RIG_READS = { "get%s*%(", "text%s*%(", "on_change%s*%(", "RIG%f[^%w_]" }
 local function rig_misuses(text)
   local code = h.sync_check.sanitize_lua(text)
@@ -3290,8 +3291,6 @@ local function rig_misuses(text)
     elseif dotted and alias and statement_ends then
       -- (ii) local <name> = <chain>.io_rig
       aliases[#aliases + 1] = { name = alias, from = finish }
-    elseif chain:match("%f[%w_]START_ORDER%.io_rig$") then
-      -- the order, not the module
     elseif not dotted and code:find("^%s*=%s*%d", finish) then
       -- io_rig = 85: the order's own line
     elseif chain == "S.lib.io_rig" and line_before == "" and code:find("^%s*=%s*include%s*%(", finish) then
@@ -3337,6 +3336,8 @@ test("the rig guard catches every way to reach set or step, and only those", fun
     'local rig = S.lib.io_rig\nf(1, rig)',
     'local rig = S.lib.io_rig\nreturn rig',
     'return S.lib.io_rig',
+    'local START_ORDER = S.lib\nSTART_ORDER.io_rig.set("ii_bus", "off")',
+    'x.START_ORDER.io_rig.step("e16_port", 1)',
   }
   local missed = {}
   for _, sample in ipairs(caught) do
@@ -3352,7 +3353,6 @@ test("the rig guard catches every way to reach set or step, and only those", fun
     'S.lib["io_rig"].get("ii_bus")',
     '-- S.lib.io_rig.set("ii_bus", "strata") in a comment',
     'print("S.lib.io_rig.set(")',
-    'S.register_start(S.constants.START_ORDER.io_rig, f)',
     'S.lib.io_rig = include("lib/io/rig")(S)',
     'local io_rig_save = S.constants.CLEANUP_ORDER.io_rig_save',
   }

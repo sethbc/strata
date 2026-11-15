@@ -25,7 +25,7 @@
 
 ## Rows
 
-Each row a section returns is `{label, kind, ...}`, with an optional `id` (a string or a number) naming the row where its `param_id` or `key` does not (an action, a status, a detail), so the cursor keeps to it when rows come and go:
+Each row a section returns is `{label, kind, ...}`, with an optional `id` (a string or a number) naming the row where its `param_id` or `key` does not (an action, a status, a detail), so the cursor keeps to it when rows come and go. A row with no `param_id`, `key` or `id` is known by its label, so its label must not change from one rebuild to the next: a live value belongs in its `text`, or the row carries an `id` (a row whose label changes loses the cursor's anchor at each rebuild, and E3 and K3 then never act on it):
 - `param`: `param_id`, optional `binary = {[0] = text, [1] = text}` and `format` (a `string.format` pattern); otherwise the param's own string. E3 through `enc_param_delta(3, id, d)`, or `set_binary_param(id, d > 0 and 1 or 0)` for a `binary` row or a binary param.
 - `rig`: `key`, a rig setting; shows `S.lib.io_rig.text(key)`. E3 calls `step(key, d)`, ALT+E3 `step(key, d, true)`; false flashes `setting not saved`.
 - `action`: `run`, `hint` (the K3 hint's word), optional `text` (a function: what was last done, shown at the right). K3 runs it; E3 does nothing.
