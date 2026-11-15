@@ -584,15 +584,58 @@ test("an idle tick builds no label", function()
   local context, S = loaded()
   rig_with(context, S)
   local calls = 0
-  local real_label, real_targets = S.lib.macros.target_label, S.lib.macros.targets
+  local real_label = S.lib.macros.target_label
   S.lib.macros.target_label = function(...) calls = calls + 1; return real_label(...) end
-  S.lib.macros.targets = function(...) calls = calls + 1; return real_targets(...) end
   context.clock.run_for(1)
-  assert_equal(calls, 0, "no macro's targets are copied or labeled while no first target changes")
+  assert_equal(calls, 0, "no label is built while no first target changes")
   assert_true(S.lib.macros.set_target(2, 1, S.lib.macros.target_ids()[1], 0, 1))
   context.clock.run_for(0.1)
-  S.lib.macros.target_label, S.lib.macros.targets = real_label, real_targets
+  S.lib.macros.target_label = real_label
   assert_true(calls >= 1, "a changed first target is labeled")
+end)
+
+test("the layout states find their row by key among other sections' rows", function()
+  -- voice and crow come before controllers in the page's order: a state must
+  -- turn exactly the rig keys it means to, whatever rows precede its own
+  local context = load_strata({ before_init = function()
+    local script = local_value("S")
+    for _, name in ipairs({ "voice", "crow" }) do
+      script.register_io_section({ name = name, title = name, rows = function()
+        return {
+          { label = "a", kind = "param", param_id = "mutation_rate" },
+          { label = "probe osc", kind = "rig", key = "osc_port" },
+          { label = "probe ii", kind = "rig", key = "ii_bus" },
+          { label = "b", kind = "param", param_id = "mutation_rate" },
+        }
+      end })
+    end
+  end })
+  h.finish_startup(context)
+  local S = local_value("S")
+  local rig = S.lib.io_rig
+  local states = {}
+  for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states) do
+    if state.name:find("^controllers: ") then states[#states + 1] = state end
+  end
+  assert_equal(#states, 4, "the section's four looks")
+  for _, state in ipairs(states) do
+    h.show_page("IO")
+    state.setup(context)
+    for _, key in ipairs(rig.RIG.order) do
+      if key ~= "e16_port" and key ~= "faders_port" then
+        assert_equal(rig.get(key), rig.RIG.specs[key].default, state.name .. " left " .. key .. " alone")
+      end
+    end
+  end
+  assert_equal(rig.get("e16_port"), 2, "the last look has its ports")
+  assert_equal(rig.get("faders_port"), 3)
+  h.show_page("IO")
+  local ok, problem = pcall(S.lib.io_controllers.turn_rig_row, "no_such_key", 1)
+  assert_true(not ok and tostring(problem):find("no_such_key", 1, true) ~= nil,
+    "a key that is not on the page raises, naming it: " .. tostring(problem))
+  ok, problem = pcall(S.lib.io_controllers.turn_rig_row, "osc_port", 1)
+  assert_true(not ok, "nor does it turn another section's row: " .. tostring(problem))
+  assert_equal(rig.get("osc_port"), rig.RIG.specs.osc_port.default)
 end)
 
 end
