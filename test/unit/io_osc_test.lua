@@ -6,7 +6,7 @@
 -- No device or app is used. Run alone: lua test/run.lua io_osc
 
 return function(h)
-local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
+local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 
 local SENDER = {"10.0.0.7", 51000}
@@ -168,7 +168,94 @@ test("feedback sends at most 32 a tick, newest values, none lost", function()
   assert_equal(#context.osc.sent, changed, "all of them arrive, none twice")
   local freq = sent_path(context, "/param/v1_freq")
   assert_equal(#freq, 1, "one changed twice sends once")
-  assert_true(freq[1].args[1] == params:get("v1_freq"), "its newest value " .. tostring(freq[1].args[1]))
+  -- the freq param's exponential spec stores 310 as 309.99999999999994: near, and not the first value, 300
+  assert_near(freq[1].args[1], 310, 1e-6, "its newest value")
+end)
+
+test("forty watched params changing every tick: none starves, none past 32, each value current", function()
+  local context, S = feeding()
+  local ids = {}
+  -- the changing ones: not the mutes (a binary flipping back before it is sent is rightly not sent)
+  for _, id in ipairs(S.lib.io_osc.OSC.watch) do if not id:find("_mute$") then ids[#ids + 1] = id end end
+  for _, extra in ipairs({"v1_freq", "v2_freq", "v3_freq", "v4_freq", "v5_freq", "v6_freq", "v7_freq",
+      "v1_pan", "v2_pan", "v3_pan", "reverb_size", "delay_mix", "delay_time", "drift_amount", "filter_freq",
+      "delay_feedback", "mutation_rate"}) do
+    ids[#ids + 1] = extra
+    context.osc.receive("/strata/watch", {extra}, SENDER)
+  end
+  assert_equal(#ids, 40)
+  -- each message, stamped with the clock's time, and whether it carried the value current when it was sent
+  local stamps, stale = {}, {}
+  local real_send = osc.send
+  osc.send = function(to, path, args)
+    local id = path:match("^/param/(.+)$")
+    if id then
+      stamps[#stamps + 1] = {id = id, time = util.time()}
+      if args[1] ~= params:get(id) then stale[#stale + 1] = id end
+    end
+    return real_send(to, path, args)
+  end
+  local changes = {}  -- round -> the clock time every param changed at
+  for round = 1, 10 do
+    for _, id in ipairs(ids) do
+      params:set_raw(id, 0.05 + 0.09 * round)  -- never the same twice: a value back at the last sent is rightly not sent
+    end
+    changes[round] = util.time()
+    context.clock.run_for(1 / 15)
+  end
+  context.clock.run_for(0.5)
+  osc.send = real_send
+  assert_equal(#stale, 0, "every message carries the value current when it is sent: " .. table.concat(stale, ","))
+  local per_tick = {}
+  for _, stamp in ipairs(stamps) do per_tick[stamp.time] = (per_tick[stamp.time] or 0) + 1 end
+  for time, count in pairs(per_tick) do assert_true(count <= 32, count .. " sent at " .. time) end
+  for round = 1, 10 do
+    for _, id in ipairs(ids) do
+      local served = false
+      for _, stamp in ipairs(stamps) do
+        if stamp.id == id and stamp.time > changes[round] and stamp.time <= changes[round] + 2 / 15 + 1e-6 then
+          served = true
+        end
+      end
+      if not served then local seen = {} for _, st in ipairs(stamps) do if st.id == id then seen[#seen + 1] = string.format("%.4f", st.time) end end error(id .. " round " .. round .. " at " .. string.format("%.4f", changes[round]) .. " sent at " .. table.concat(seen, ",")) end
+    end
+  end
+end)
+
+test("a sender cannot grow the arrival record with ids that are not watched", function()
+  local context, S = started()
+  for index = 1, 500 do context.osc.receive("/param/nothing_" .. index, {0.5}, SENDER) end
+  assert_equal(S.lib.io_osc.tracked(), 0, "unwatched ids are not recorded")
+  context.osc.receive("/param/macro_1", {0.5}, SENDER)
+  assert_equal(S.lib.io_osc.tracked(), 1, "a watched id is")
+end)
+
+test("a handler that raises or a malformed sender never escapes osc.event, and /param still runs", function()
+  local context, S = started()
+  -- a malformed or missing from: no error, no line, the sender not taken
+  for _, from in ipairs({false, "10.0.0.7", {}, {5}, {{}}}) do
+    local lines = printed(function() context.osc.receive("/param/macro_1", {0.25}, from) end)
+    assert_equal(#lines, 0, "no line for a malformed from")
+    assert_equal(params:get("macro_1"), 0.25, "norns' handling ran")
+    params:set("macro_1", 0)
+  end
+  osc.event("/strata/hello", {})  -- no from at all
+  assert_equal(S.lib.io_osc.running(), false)
+  -- a handler that raises: one line, nothing escapes, norns' /param handling runs after it
+  local real_get = S.lib.io_rig.get
+  S.lib.io_rig.get = function() error("probe failure") end
+  local lines = printed(function() context.osc.receive("/param/macro_2", {0.6}, SENDER) end)
+  S.lib.io_rig.get = real_get
+  assert_equal(#lines, 1, "one line: " .. table.concat(lines, " | "))
+  assert_true(lines[1]:find("osc event failed", 1, true) ~= nil and lines[1]:find("probe failure", 1, true) ~= nil,
+    "it names the failure")
+  assert_equal(params:get("macro_2"), 0.6, "the built-in /param handling still ran")
+  -- an action that raises
+  local real_recall = S.lib.io_actions.recall_scene
+  S.lib.io_actions.recall_scene = function() error("action failure") end
+  lines = printed(function() context.osc.receive("/strata/scene", {3}, SENDER) end)
+  S.lib.io_actions.recall_scene = real_recall
+  assert_equal(#lines, 1)
 end)
 
 test("watch adds a param and hello sends everything watched", function()

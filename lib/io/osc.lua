@@ -32,6 +32,8 @@ return function(S)
     scene = nil,        -- the scene last sent
     running = {},       -- voice -> 0 or 1 last sent
     patterns = nil,     -- 0 or 1 last sent
+    ticks = 0,          -- ticks run
+    since = {},         -- id -> the tick it was first seen differing from last_sent
     clock = nil,        -- the feedback clock
     errors = {},        -- contained_call's last message per part
   }
@@ -92,17 +94,34 @@ return function(S)
       state.patterns = pattern_state()
       send("/strata/patterns", state.patterns)
     end
+    -- The params that differ from what the sender has, the longest-waiting
+    -- first (the tick it was first seen differing, then the list's order), so
+    -- a param that changes every tick cannot shut out the ones after it. Each
+    -- goes with its value now
+    state.ticks = state.ticks + 1
     local now_time = util.time()
-    for _, id in ipairs(state.watching) do
-      if budget <= 0 then break end
+    local due = {}
+    for index, id in ipairs(state.watching) do
       local arrived = state.arrived[id]
       if not (arrived and now_time - arrived < OSC.echo_seconds) then
-        local value = params:get(id)
-        if value ~= state.last_sent[id] then
-          state.last_sent[id] = value
-          send("/param/" .. id, value)
+        if params:get(id) ~= state.last_sent[id] then
+          state.since[id] = state.since[id] or state.ticks
+          due[#due + 1] = {id = id, since = state.since[id], index = index}
+        else
+          state.since[id] = nil
         end
       end
+    end
+    table.sort(due, function(a, b)
+      if a.since ~= b.since then return a.since < b.since end
+      return a.index < b.index
+    end)
+    for _, entry in ipairs(due) do
+      if budget <= 0 then break end
+      local value = params:get(entry.id)
+      state.last_sent[entry.id] = value
+      state.since[entry.id] = nil
+      send("/param/" .. entry.id, value)
     end
   end
 
@@ -130,6 +149,13 @@ return function(S)
   end
 
   function M.running() return state.clock ~= nil end
+
+  -- How many ids have an arrival time recorded (the tests' bound check)
+  function M.tracked()
+    local count = 0
+    for _ in pairs(state.arrived) do count = count + 1 end
+    return count
+  end
 
   rig.on_change("osc_feedback", function() sync() end)
 
@@ -193,8 +219,11 @@ return function(S)
     end
     local id = path:match("^/param/([^/]+)$")
     if id then
-      state.arrived[id] = util.time()
-      if state.is_watched[id] and type(args[1]) == "number" then state.last_sent[id] = args[1] end
+      -- only a watched id is recorded: a sender cannot grow these tables
+      if state.is_watched[id] then
+        state.arrived[id] = util.time()
+        if type(args[1]) == "number" then state.last_sent[id] = args[1] end
+      end
     elseif path == "/strata" or path:sub(1, 8) == "/strata/" then
       strata(path, args)
     end
