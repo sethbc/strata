@@ -93,6 +93,33 @@ test("retrigger accents a running voice and never starts a stopped one", functio
   assert_equal(#context.engine_calls, 0, "a bad velocity sends nothing")
 end)
 
+test("retrigger on a running gated voice opens the voice's own gate length, not a step's (#639)", function()
+  -- sequencer_test's #639 case, through the shared retrigger crow, OSC and Teletype call
+  local context, S, actions = started()
+  params:set("v1_seq_gate", 2)
+  S.patterns[1][1] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "gate", 2)
+  pattern_clock_start()
+  pattern_clock_stop()
+  if not S.voices[1].active then toggle_voice(1) end
+  local function order()
+    local list = {}
+    for _, call in ipairs(context.engine_calls) do
+      if call.args[1] == 0 and call.name == "retrigger" then list[#list + 1] = "retrigger" end
+      if call.args[1] == 0 and call.name == "setGrainParam" and call.args[2] == "gateSeconds" then
+        list[#list + 1] = string.format("gateSeconds %.4f", call.args[3])
+      end
+    end
+    return table.concat(list, ", ")
+  end
+  context.clear_engine_calls()
+  assert_equal(actions.retrigger(1, 1), true)
+  assert_equal(order(), "gateSeconds 0.0625, retrigger", "the voice's own half step, then the accent")
+  context.clear_engine_calls()
+  actions.retrigger(1, 1)
+  assert_equal(order(), "retrigger", "a second accent sends no gate length: it has not changed")
+end)
+
 test("freeze and mute set, clear and toggle their params", function()
   local context, S, actions = started()
   assert_equal(actions.freeze(2, 1), true); assert_equal(params:get("v2_freeze"), 1)
