@@ -915,6 +915,32 @@ test("a synth moved to another port while its notes sound gets all notes off the
   assert_equal(sent(a), "cc 123 0 6", "nothing more for a")
 end)
 
+test("a synth moved while a note goes to its old port mid-menu still gets all notes off", function()
+  -- the re-review's probe: the vports change at the menu's K3, the move is told as it closes,
+  -- and the patterns play meanwhile
+  local context, S = started()
+  local a = context.midi.plug(2, "synth a")
+  local b = context.midi.plug(4, "synth b")
+  local target = midi_target(S)
+  params:set("v1_out_channel", 6)
+  params:set("v1_out_port", 2); settled(context)
+  target.note_on(1, "s1", 60, 1, step_info())
+  clear(a); clear(b)
+  _menu.set_mode(true)
+  context.midi.reassign(2, 3)
+  context.midi.reassign(4, 2)
+  target.note_on(1, "s2", 64, 1, step_info())  -- a step to port 2 while the menu is open: synth b's now
+  assert_equal(sent(b), "note_on 64 127 6", "b got the mid-menu note")
+  _menu.set_mode(false)
+  assert_equal(sent(a), "cc 123 0 6", "a gets all notes off on its note's channel at port 3")
+  assert_equal(sent(b), "note_on 64 127 6", "b gets no CC 123 for a's note")
+  target.note_off(1, "s1")
+  assert_equal(sent(b), "note_on 64 127 6", "and no off for a's note")
+  target.note_off(1, "s2")
+  assert_equal(sent(b), "note_on 64 127 6|note_off 64 6", "b's own note gets its off")
+  assert_equal(sent(a), "cc 123 0 6", "nothing more for a")
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")

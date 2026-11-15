@@ -29,19 +29,18 @@ return function(S)
   -- MIDI_OUT.modes), members}, which only settle changes; noted: the route
   -- params (and the bend range) changed since the last settle, dirty while
   -- any is; notes[voice][id]: what a note sent {voice,
-  -- port, channel, note, mpe, owner, key, sent = {bend, pressure, slide}};
+  -- port, device, channel, note, mpe, owner, key, sent = {bend, pressure,
+  -- slide}} (device: the name of the device the port held as the note on
+  -- went, the one that got it);
   -- counts[port][channel][note]: the ids sounding there; use[port][channel]:
   -- the notes on a channel; member_times[port][channel] = {released,
   -- assigned}; expressing: the played MPE notes the step reads, cursor the
-  -- next to read; cc_last[k]: slot k's last value; names[port]: the name
-  -- of the device last seen on the port (learned at its arrival and at each
-  -- note on: a move in SYSTEM > DEVICES has changed the vport before its
-  -- departure is told); left_with[key]: the channels with notes as a device
-  -- left, by its name (or "port <n>" when the name was never learned);
-  -- asked[port]: the scene a program change in on that port asked for,
-  -- until its recall lands
+  -- next to read; cc_last[k]: slot k's last value; left_with[key]: the
+  -- channels with notes as a device left, by the name S.lib.io_ports hands
+  -- the departure (or "port <n>" without one); asked[port]: the scene a
+  -- program change in on that port asked for, until its recall lands
   local state = {config = {}, notes = {}, counts = {}, use = {}, member_times = {}, expressing = {}, cursor = 1,
-    cc_last = {}, left_with = {}, names = {}, asked = {}, tick = 0, stopped = false, bend_range = MIDI_OUT.bend_range.default,
+    cc_last = {}, left_with = {}, asked = {}, tick = 0, stopped = false, bend_range = MIDI_OUT.bend_range.default,
     noted = {}, dirty = false}
   for voice = 1, NUM_VOICES do
     state.config[voice] = {port = 0, channel = voice, mode = 1, members = MIDI_OUT.max_members}
@@ -248,13 +247,13 @@ return function(S)
     if config.port == 0 then return end
     if info.source == MIDI_OUT.played_source and config.port == input_port() then return end
     end_note(voice, id)
-    state.names[config.port] = S.lib.io_ports.device(config.port) or state.names[config.port]
     local note = util.clamp(round(pitch), 0, MIDI_OUT.notes - 1)
     local level = util.clamp(math.max(1, round((finite(velocity) and velocity or 1) * MIDI_OUT.value_max)), 1,
       MIDI_OUT.value_max)
     local mpe = is_mpe(config)
     local channel = mpe and allocate(config.port, config.members) or config.channel
-    local record = {voice = voice, port = config.port, channel = channel, note = note, mpe = mpe, sent = {}}
+    local record = {voice = voice, port = config.port, device = S.lib.io_ports.device(config.port),
+      channel = channel, note = note, mpe = mpe, sent = {}}
     local counts = table_at(state.counts, config.port, channel)
     local use = table_at(state.use, config.port)
     -- the note already sounds there (#709): a retrigger, its off before
@@ -448,51 +447,56 @@ return function(S)
   -- A device leaving and returning
   ---------------------------------------------------------------------------
 
-  local function channels_with_notes(port, set)
-    for channel, count in pairs(state.use[port] or {}) do
-      if count > 0 then set[channel] = true end
-    end
-    return set
+  -- Take a departed note out of its port's counts and channel use
+  local function uncount(record)
+    local counts = table_at(state.counts, record.port, record.channel)
+    counts[record.note] = (counts[record.note] or 1) - 1
+    if counts[record.note] <= 0 then counts[record.note] = nil end
+    local use = table_at(state.use, record.port)
+    use[record.channel] = (use[record.channel] or 1) - 1
+    if use[record.channel] <= 0 then use[record.channel] = nil end
   end
 
-  local function left_key_for(port) return state.names[port] or ("port " .. port) end
-
-  -- A device leaving a port: the channels it had notes on kept by its name,
-  -- and the port's notes dropped (their counts gone, each record marked
-  -- departed, so its end sends nothing to whatever takes the port next)
-  local function departed(port)
-    local key = left_key_for(port)
-    state.left_with[key] = channels_with_notes(port, state.left_with[key] or {})
-    if next(state.left_with[key]) == nil then state.left_with[key] = nil end
-    state.names[port] = nil
+  -- A device leaving a port (departed_name: the one S.lib.io_ports last saw
+  -- there). Its notes are the port's notes that the device now on the port
+  -- did not get (a move in SYSTEM > DEVICES changes the vports before it is
+  -- told, so a note sent meanwhile went to the device that came; during an
+  -- unplug the port names none): each is marked departed and uncounted, so
+  -- its end sends nothing to whatever takes the port next, and their
+  -- channels are kept by the departed name, for its arrival elsewhere
+  local function departed(port, departed_name)
+    local key = departed_name or ("port " .. port)
+    local now = S.lib.io_ports.device(port)
+    local channels = state.left_with[key] or {}
     for voice = 1, NUM_VOICES do
       for _, record in pairs(state.notes[voice]) do
-        if record.port == port and not record.departed then
+        if record.port == port and not record.departed and (now == nil or record.device ~= now) then
           record.departed = true
           remove_expressing(record)
+          uncount(record)
+          channels[record.channel] = true
         end
       end
     end
-    state.counts[port], state.use[port] = nil, nil
+    state.left_with[key] = next(channels) ~= nil and channels or nil
   end
 
   -- A device arriving: all notes off where it is now on the channels it
-  -- left with (by its name, wherever it was), or what a port whose
-  -- device's name was never learned left
+  -- left with (by its name, wherever it was), or what a departure that
+  -- named no device left on this port
   local function arrived_channels(port, name)
     local channels = {}
     for _, key in ipairs({name, "port " .. port}) do
       for channel in pairs(state.left_with[key] or {}) do channels[channel] = true end
       state.left_with[key] = nil
     end
-    state.names[port] = name
     return channels
   end
 
-  S.lib.io_ports.on_change("io_midi_out", function(port, name)
+  S.lib.io_ports.on_change("io_midi_out", function(port, name, departed_name)
     if state.stopped then return end
     if name == nil then
-      departed(port)
+      departed(port, departed_name)
     else
       local channels = arrived_channels(port, name)
       for channel = 1, MIDI_OUT.channels do

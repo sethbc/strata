@@ -151,7 +151,10 @@ return function(S)
     return device ~= nil and type(device.event) == "function"
   end
 
-  -- fn(port, device_name | nil) when a device arrives at or leaves a port
+  -- fn(port, device_name | nil, departed_name | nil) when a device arrives
+  -- at or leaves a port: an arrival names the device now there; a departure
+  -- passes nil, then the name of the device that left (the one last seen on
+  -- the port: a move in SYSTEM > DEVICES has changed the vport already)
   function M.on_change(name, fn)
     require_name("on_change", name)
     require_fn("on_change", fn)
@@ -225,8 +228,9 @@ return function(S)
     if marked then state.leaving[port] = true end
     local ran, problem = pcall(function()
       if marked then
+        local departed = (state.seen[port] or device).name
         state.seen[port] = nil
-        run_set(state.changes, "midi change hook", port, nil)
+        run_set(state.changes, "midi change hook", port, nil, departed)
       end
       if state.hot_plug.kept_remove then state.hot_plug.kept_remove(device) end
     end)
@@ -247,12 +251,12 @@ return function(S)
     for port = 1, PORTS.count do
       local current = vports[port].device
       if current ~= state.seen[port] then
-        if state.seen[port] ~= nil then left[#left + 1] = port end
+        if state.seen[port] ~= nil then left[#left + 1] = {port = port, name = state.seen[port].name} end
         if current ~= nil then arrived[#arrived + 1] = port end
         state.seen[port] = current
       end
     end
-    for _, port in ipairs(left) do run_set(state.changes, "midi change hook", port, nil) end
+    for _, entry in ipairs(left) do run_set(state.changes, "midi change hook", entry.port, nil, entry.name) end
     for _, port in ipairs(arrived) do run_set(state.changes, "midi change hook", port, vports[port].name) end
   end
 
