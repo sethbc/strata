@@ -628,7 +628,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "targets ended",
-  "crow lines", "midi handler",
+  "crow lines", "remote", "midi handler",
   "midi ports", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
@@ -664,6 +664,10 @@ test("cleanup runs every registered step in today's order", function()
   S.lib.midi_in.set_note_tap = function() end  -- the MIDI module's note tap (3.5's 2b): a stand-in
   S.lib.ui_zones.open(); S.lib.ui_zones.learn(1)  -- the zones editor's learn timeout clock runs
   context.crow.plug(); params:set("crow_in2_mode", 2)  -- a crow with a jack set: its cleanup sends lines
+  -- a remote grid on port 2 (3.6's 1d): its hello attaches it and its draw clock runs
+  S.lib.io_rig.set("remote_grid_port", 2)
+  context.midi.plug(2, "iii grid")
+  for cc, value in ipairs({ 16, 8, 1 }) do context.midi.send(2, { type = "cc", cc = cc - 1, val = value, ch = 1 }) end
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -699,6 +703,7 @@ test("cleanup runs every registered step in today's order", function()
     { "gesture recorders", S.gestures[2].clock }, { "quantized actions", S.lib.quantize.actions.scene.clock },
     { "zones learn", S.zones_learn_clock },
     { "matrix learn", S.matrix_learn_clock },
+    { "remote", S.lib.io_remote.clock_id() },
     { "lfos", S.lfo_clock } }
   for voice_idx = 1, S.constants.NUM_VOICES do table.insert(clocks, { "pattern clock", S.pattern_clocks[voice_idx] }) end
   local clock_steps = {}
@@ -818,6 +823,7 @@ local function start_steps()
     { "io ports", {} },
     { "midi", {} },
     { "io crow", {} },
+    { "io remote", {} },
     { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn",
       "redraw requested" } },
     { "macros load", { "file read macros.data", "redraw requested", "grid redrawn" } },

@@ -1,0 +1,47 @@
+## Must not break
+
+- **The protocol's numbers are version 1's** (design §9.1, `PROTOCOL` and `REMOTE.version`), on the device's own MIDI port, and both ends hold them: `lib/io/remote.lua` and the two device scripts `iii/strata_grid.lua` and `iii/strata_arc.lua`. `test/unit/io_remote_test.lua` pins every number; a change to one is a new version, made on all three files and the tests at once.
+- **Ports and listeners only through `S.lib.io_ports`**: `claim` (as `remote grid` or `remote arc`), `listen`, `unlisten`, `release`, `out`, `device`, `on_change` and `on_claim`; nothing is ever set on a vport. A port is released while it is still recorded as claimed, so the module's own claim hook does not take it straight back.
+- **The rig settings are read only** (`get`, `on_change`): `remote_grid_port`, `remote_arc_port`, `midi_grid`. The section's layout states change them through the IO page's own E3, as a player does.
+- **A virtual device attaches only through Wave 0's doors**: `S.lib.grid_core.attach_virtual(GRID_PORTS.remote, ...)` or `(GRID_PORTS.midigrid, ...)` and `detach_virtual`, `S.lib.arc_core.follow_virtual` and `unfollow_virtual`.
+- **Attached exactly while a good hello is held** (the `remote` invariant): a hello of version 1 whose size is one of `REMOTE.sizes` (a grid) or 0 by 4 (an arc) attaches; any other detaches and attaches nothing. The device leaving, its port set to 0 or another port, or cleanup detaches.
+- **The draw clock runs exactly while a remote grid or arc is attached**, and is canceled at cleanup. It sends at most `REMOTE.leds_per_tick` (96) LED messages a tick per device, only the cells whose level differs from the last one sent, then one frame end; a tick with no difference sends nothing.
+- **midigrid's `grid.connect()` is called through the global, with no argument, once** at the start step (with `midi_grid` on), once when `midi_grid` turns on and once per `rescan`, the old object detached first: under the mod every call loads a fresh copy of its library (`docs/design/3.6-facts/checks.md` §7). What it returns is attached at `GRID_PORTS.midigrid` only when it is none of `grid.vports[1]` to `[S.MAX_GRID_PORTS]`. This module never touches `lib/grid/core.lua`'s own ports.
+- **The device scripts use only iii's functions** and run on Lua 5.3 and LuaJIT alike (`math.floor`, never `//` or a bitwise operator), since `test/stub_iii.lua` runs them under both. Each takes iii as 1.1.0 or later exactly when `type(device_version) == "function"` (`checks.md` §4: what it returns is the firmware's date tag, not iii's version).
+
+## Owns
+
+- `lib/io/remote.lua` (`S.lib.io_remote`), included between `lib/io/actions.lua` and `lib/params_setup.lua`; `iii/strata_grid.lua` and `iii/strata_arc.lua` (never loaded by norns).
+- IO's `remote` section; the start step `io_remote` (95) and the cleanup step `io_remote` (147); the `remote` invariant.
+- Its unit tests: `test/unit/io_remote_test.lua`. User page: `docs/user/io/remote.md`.
+
+## The protocol, version 1
+
+| Direction | Message | Meaning |
+|---|---|---|
+| in | CC 0, 1, 2 on channel 1 | hello: columns, rows, version (an arc: 0, 4) |
+| out | CC 2 = 0 on channel 1 | send the hello |
+| in | note on or off, channel 1 or 2 | grid key: `index = (channel - 1) * 128 + note`, `x = index % 16 + 1`, `y = index // 16 + 1`; velocity 127 down, 0 or a note off up |
+| out | note on, channel `index // 128 + 1`, note `index % 128` | grid LED at `index = (y - 1) * 16 + (x - 1)`; velocity the level 0 to 15 |
+| in | CC 16 to 19 on channel 3 | arc ring 1 to 4 turned by `value - 64` (64 itself is ignored) |
+| in | note 0 on channel 3 | the arc's key (`arc_key(1, z)`) |
+| out | note on, channel `3 + index // 128`, note `index % 128` | arc LED at `index = (ring - 1) * 64 + (led - 1)` |
+| out | CC 3 = 0 on channel 1 | frame end |
+| out | CC 4 = level on channel 1 | every LED to a level (the device shows it at once) |
+
+A grid's index uses a stride of 16 whatever its width, so an 8-column grid's cells are not contiguous. The hello completes at its CC 2: the CC 0 and CC 1 before it give the size; a CC 2 with neither before it does nothing.
+
+## How it works
+
+- **Per kind** (`grid`, `arc`) a record: the port it claimed (`claimed_port`), whether another owner holds the rig's port (`in_use`), the hello's parts, the problem a refused hello left, the virtual device, and its frame buffers (`frame`, the levels at the last `refresh`; `shown`, what the device was last sent; `cells`, its indices in order; `cursor`, where the next tick starts).
+- **Connecting** (the start step, a rig change, a device arriving on the set port, the port's other owner releasing it): with a device on the port, claim it, listen, send CC 2 = 0. **Disconnecting** (a rig change, the device leaving, cleanup): detach (with CC 4 = 0 unless the device has left), unlisten, release.
+- **Attaching** a grid makes a frame buffer of its size and calls `attach_virtual`, whose redraw draws the layout into it; an arc's is `follow_virtual`, which follows it while no monome arc is connected (a monome arc takes over and hands back, `docs/notes/lua/arc-core.md`). Both first send CC 4 = 0 and set what was sent to 0. The same device greeting again at the same size keeps its object and is sent everything again.
+- **A virtual grid**: `led(x, y, level, rel)` and `all(level, rel)` write the buffer (levels clamped to 0..15, a cell off the grid ignored), `refresh` copies it to the frame, `rotation` and `intensity` do nothing. **A virtual arc**: `led(ring, n, level, rel)`, `all`, `segment(ring, from, to, level, rel)` with norns' `Arc:segment` arithmetic (`~/src/norns/lua/core/arc.lua`: angles modulo 2 pi, each LED `round(overlap / width * level)`, all 64 set), `refresh`. Each carries `remote = "grid"` or `"arc"`, which the invariant reads.
+- **The draw clock** (`clock_id()`) sleeps `1 / REMOTE.draw_hz` and sends, per attached device, contained, the differing cells from `cursor` on, wrapping, at most 96, then CC 3 = 0; `cursor` moves past the last one sent, so a frame that keeps changing starves no cell. A full 256-cell redraw lands in three ticks (96, 96, 64).
+- **midigrid**: `grid.connect()` (contained); accepted when it is a table that is none of norns' grid vports, with whole-number `cols` and `rows` and functions `led`, `all` and `refresh`; a missing `rotation` is given one that does nothing. `attach_virtual` also needs its `device` field, which midigrid's object has whenever it found a device (`checks.md` §7). The old object is detached and left dark (`all(0)`, `refresh`) before each new call and when `midi_grid` turns off.
+- `M.rescan()` (IO's action): each remote kind with a claimed port is asked for its hello again, one with a set port connects, and with `midi_grid` on midigrid connects again.
+- `M.status(kind)` for `grid`, `arc` and `midigrid`: nil while its setting is off; else `in use`, `[--]` (no device), `no hello`, the problem (`version <n>?`, `size <c>x<r>?`), or what is attached (`16x8`, `4 rings`; midigrid's size).
+
+## IO's section
+
+Rows: the rig rows `grid port` (`remote_grid_port`), `arc port` (`remote_arc_port`) and `midi grid` (`midi_grid`), then a status row per setting that is on (`grid: 16x8`, `arc: [--]`, `midigrid: [--]`, each with its own `id`), then the action `rescan`. The title's status is `[--]` while any set port or `midi_grid` has no device. Layout states: every setting off; a port set with no device; a grid attached; a hello of another version; a midigrid attached (a stand-in object returned by the stub's `grid.connect()`).

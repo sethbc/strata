@@ -60,3 +60,4 @@ The arc's rings are off on IO for now.
 
 Each device or connection IO reaches has its own page, listed here as it arrives:
 - [crow](../io/crow.md): its inputs as modulation or triggers, its outputs for modulation, a voice's pitch or gate, and the clock
+- [Remote grids and arcs](../io/remote.md): a grid or arc in iii mode, and a MIDI grid through the midigrid mod
