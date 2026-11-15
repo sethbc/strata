@@ -325,6 +325,124 @@ test("a step note alone on its member channel gets its centered bend; one sharin
   end
 end)
 
+---------------------------------------------------------------------------
+-- A shared MPE channel (members run out): while notes share it the newest
+-- value written there stands; when a played note on it ends, each played
+-- note still on it sends its current values once, at the next step
+---------------------------------------------------------------------------
+
+-- The pitchbend values sent on channel among device's sent messages
+local function bends(device, channel)
+  local list = {}
+  for _, text in ipairs(lines(device)) do
+    local value = text:match("^pitchbend (%d+) " .. channel .. "$")
+    if value then list[#list + 1] = value end
+  end
+  return table.concat(list, " ")
+end
+
+-- A started Strata with voice 1 MPE on port 2 with one member channel, MPE input
+local function one_member(members)
+  local context, S = started()
+  local device = context.midi.plug(2, "mpe synth")
+  params:set("midi_channel_mode", 3)  -- MPE input: voice 1, release on a key's lift
+  mpe_voice(1, 2, members or 1); settled(context)
+  clear(device)
+  return context, S, device
+end
+
+local function press(context, channel, note, bend)
+  context.midi.send(1, {type = "pitchbend", val = bend, ch = channel})
+  context.midi.send(1, {type = "note_on", note = note, vel = 100, ch = channel})
+end
+
+local function lift(context, channel, note)
+  context.midi.send(1, {type = "note_off", note = note, vel = 0, ch = channel})
+end
+
+test("a played note ending on a shared channel puts back the bend of the one still on it, once", function()
+  local context, S, device = one_member()
+  press(context, 2, 60, 9000)
+  press(context, 3, 64, 7000)
+  assert_equal(bends(device, 2), "9000 7000", "both on channel 2; the second's first values put it at 7000")
+  clear(device)
+  step(context, S, 4)
+  assert_equal(bends(device, 2), "", "while both sound, no bend: they share the newest")
+  lift(context, 3, 64)
+  assert_equal(sent(device), "note_off 64 2", "the second's off, nothing else yet")
+  clear(device)
+  step(context, S)
+  assert_equal(bends(device, 2), "9000", "the next step: the one still on it, once")
+  clear(device)
+  step(context, S, 4)
+  assert_equal(sent(device), "", "and nothing after")
+  lift(context, 2, 60)
+end)
+
+test("with three played notes on a shared channel, the middle one ending puts back each other's bend once", function()
+  local context, S, device = one_member()
+  press(context, 2, 60, 9000)
+  press(context, 3, 64, 7000)
+  press(context, 4, 67, 8000)
+  assert_equal(bends(device, 2), "9000 7000 8000")
+  clear(device)
+  step(context, S, 2)
+  assert_equal(bends(device, 2), "", "no resending against each other")
+  lift(context, 3, 64)
+  clear(device)
+  step(context, S)
+  local after = {}
+  for value in bends(device, 2):gmatch("%d+") do after[#after + 1] = value end
+  table.sort(after)
+  assert_equal(table.concat(after, " "), "8000 9000", "each note still on it once: " .. sent(device))
+  clear(device)
+  step(context, S, 4)
+  assert_equal(sent(device), "", "no resending after that")
+  lift(context, 2, 60); lift(context, 4, 67)
+end)
+
+test("a step note ending on a shared channel puts nothing back: it sent nothing there", function()
+  local context, S, device = one_member()
+  local target = midi_target(S)
+  press(context, 2, 60, 9000)
+  clear(device)
+  target.note_on(1, "s1", 64, 1, step_info())
+  assert_equal(sent(device), "note_on 64 127 2", "no bend on the shared channel")
+  clear(device)
+  target.note_off(1, "s1")
+  step(context, S, 3)
+  assert_equal(sent(device), "note_off 64 2", "its off, and no value put back")
+  lift(context, 2, 60)
+end)
+
+test("the values put back on a shared channel keep to 24 messages a step", function()
+  local context, S, device = one_member()
+  local target = midi_target(S)
+  local real_raw = S.lib.expression.raw
+  S.lib.expression.raw = function(voice, owner, key)
+    if voice == 1 and owner == "midi" and type(key) == "number" and key <= 15 then
+      return {bend = 2 ^ (key / 120), pressure = key / 20, slide = key / 30}
+    end
+    return real_raw(voice, owner, key)
+  end
+  for key = 1, 15 do target.note_on(1, "m" .. key, 40 + key, 1, played_info(key)) end
+  step(context, S)
+  clear(device)
+  target.note_off(1, "m15")
+  clear(device)
+  step(context, S)
+  local first = #lines(device)
+  assert_equal(first, 24, "the first step: 24 of the 14 notes' 42 values")
+  clear(device)
+  step(context, S)
+  assert_equal(#lines(device), 18, "the next: the other 18")
+  clear(device)
+  step(context, S, 3)
+  assert_equal(sent(device), "", "then nothing")
+  for key = 1, 14 do target.note_off(1, "m" .. key) end
+  S.lib.expression.raw = real_raw
+end)
+
 test("routes that the params hold at start are settled at start", function()
   -- with defaults: nothing sent, at start or after
   local device
