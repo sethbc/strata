@@ -622,14 +622,24 @@ return function(S)
   -- grid to the port's rotation. Handlers live on the vport only: norns
   -- fires both device.key and vports[port].key, so also setting them on the
   -- device would run grid_key twice per press.
-  -- Ports 1..S.MAX_GRID_PORTS take norns' own vports only (3.6): what
-  -- grid.connect(port) returns is the port's grid only when it is
-  -- grid.vports[port], so a mod that replaces grid.connect (midigrid) never
-  -- puts a device there (its grid attaches as a virtual one). nil otherwise
+  -- norns' own grid module: the one its startup loaded (grid = require
+  -- 'core/grid'), whatever a mod put in the global grid since. The midigrid
+  -- mod's facade there has its own connect, which ignores the port, and no
+  -- __newindex, so a handler assigned to it is never called by norns'
+  -- hot-plug (#700). The global where norns' module is not found (the test
+  -- stubs)
+  local function norns_grid()
+    local loaded = package.loaded["core/grid"]
+    if type(loaded) == "table" and type(loaded.vports) == "table" then return loaded end
+    return grid
+  end
+
+  -- Ports 1..S.MAX_GRID_PORTS take norns' own vports only (3.6, #700): the
+  -- vport is read from norns' module, never through a grid.connect(port),
+  -- so a mod's connect (midigrid's) never runs for them and its grid
+  -- attaches as a virtual one. nil for a port norns has no vport for
   local function norns_vport(port)
-    local grid_port = grid.connect(port)
-    if grid_port ~= nil and grid_port == grid.vports[port] then return grid_port end
-    return nil
+    return norns_grid().vports[port]
   end
 
   local function attach_grid(port)
@@ -699,8 +709,9 @@ return function(S)
 
   -- Hot-plug. norns passes the raw device here; store its port's vport (as
   -- grid_init does) rather than the device, which has no .device field.
-  -- A grid plugged in starts with no held keys, on page 1.
-  function grid.add(device)
+  -- A grid plugged in starts with no held keys, on page 1. Both handlers
+  -- go on norns' own module (norns_grid), which its hot-plug calls
+  local function grid_added(device)
     local port = device.port
     if not port or norns_vport(port) == nil then return end  -- device not assigned to a grid port
     forget_port(port)
@@ -710,7 +721,7 @@ return function(S)
     request_redraw()  -- SETUP lists the connected grids
   end
 
-  function grid.remove(device)
+  local function grid_removed(device)
     local port = device.port
     if not port then return end
     if S.grids[port] then
@@ -725,14 +736,16 @@ return function(S)
     print("grid " .. port .. " disconnected")
   end
 
+  norns_grid().add, norns_grid().remove = grid_added, grid_removed
+
   -- SYSTEM > DEVICES moves a grid to another port through norns'
   -- update_devices() alone (lua/core/menu/devices.lua): no grid.add, no
   -- grid.remove. Run as the norns menu closes: a vport holding a device that
   -- is not attached, or another device than the one attached, is forgotten
   -- and attached, as grid.add does; an attached port whose vport is empty is
-  -- detached and forgotten, as grid.remove does. A port whose grid.connect
-  -- is no norns vport (norns_vport) is left as it is; a virtual grid's port
-  -- is never looked at
+  -- detached and forgotten, as grid.remove does. A port norns has no vport
+  -- for (norns_vport) is left as it is; a virtual grid's port is never
+  -- looked at
   function M.reconcile_ports()
     for port = 1, S.MAX_GRID_PORTS do
       local grid_port = norns_vport(port)
@@ -893,8 +906,9 @@ return function(S)
   -- the held keys, clear every vport's key handler, put its grid back to
   -- rotation 0 (norns' grid.cleanup() keeps a rotation, so the next script
   -- would find a turned 128 as an 8x16; the port's setting stays in
-  -- grids.data) and leave it dark, and hand hot-plug back (no-ops; norns'
-  -- grid.cleanup() restores its own at a script change). norns' SLEEP runs
+  -- grids.data) and leave it dark, and hand hot-plug back (no-ops, on norns'
+  -- own module, #700; norns' grid.cleanup() restores its own at a script
+  -- change). norns' SLEEP runs
   -- only cleanup() before the system shuts down, so a key or a grid plugged
   -- meanwhile reaches nothing (#468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()
@@ -906,8 +920,8 @@ return function(S)
       grid_port:all(0)
       grid_port:refresh()
     end
-    grid.add = function() end
-    grid.remove = function() end
+    norns_grid().add = function() end
+    norns_grid().remove = function() end
   end)
 
   -- Only a held key is consumed or waits for a hold; a port has an attached

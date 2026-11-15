@@ -129,6 +129,49 @@ test("the hot-plug handlers found installed still run, after the listeners, and 
   assert_equal(midi.vports[5].event, nil, "and clears every event it set")
 end)
 
+-- #700: the nbout mod puts a facade in the global midi in each script's
+-- pre-init hook (nbout lib/mod.lua:86-139): its metatable's __index gives
+-- vports as a fresh copy with one more entry, and everything else from
+-- norns' real module; it has no __newindex. norns' startup loaded the real
+-- module (midi = require 'core/midi'), so package.loaded holds it, and its
+-- hot-plug calls the real module's add and remove only
+test("under nbout's facade over midi, hot-plug still reaches the ports and cleanup puts back the found handlers", function()
+  local kept = package.loaded["core/midi"]
+  local ran, problem = pcall(function()
+    local fake, found_add, found_remove
+    local context = load_strata({ before_init = function(context)
+      local real = context.midi
+      found_add, found_remove = real.add, real.remove
+      package.loaded["core/midi"] = real
+      fake = setmetatable({}, {__index = function(_, key)
+        if key == "vports" then
+          local copy = {}
+          for _, vport in ipairs(real.vports) do copy[#copy + 1] = vport end
+          copy[#copy + 1] = {name = "nb", connected = true}
+          return copy
+        end
+        return real[key]
+      end})
+      _G.midi = fake
+    end })
+    local ports = local_value("S").lib.io_ports
+    local changes = {}
+    ports.on_change("test", function(port, name) changes[#changes + 1] = port .. " " .. tostring(name) end)
+    context.midi.plug(3, "box")
+    assert_equal(table.concat(changes, ", "), "3 box", "an arrival reaches the listeners")
+    context.midi.unplug(3)
+    assert_equal(table.concat(changes, ", "), "3 box, 3 nil", "and a departure")
+    ports.listen(2, "a", function() end)
+    assert_true(context.midi.vports[2].event ~= nil, "a listener's event is on norns' own vport")
+    cleanup()
+    assert_equal(context.midi.add, found_add, "cleanup puts the found add back on norns' module")
+    assert_equal(context.midi.remove, found_remove, "and the found remove")
+    assert_equal(next(fake), nil, "the facade's own fields were never written")
+  end)
+  package.loaded["core/midi"] = kept
+  if not ran then error(problem, 0) end
+end)
+
 test("a claimed port has one owner", function()
   load_strata()
   local ports = local_value("S").lib.io_ports

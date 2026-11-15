@@ -1579,4 +1579,112 @@ test("ports 1 to 4 take norns' own vports only", function()
   assert_equal(foreign.key, nil, "the foreign table got no handler")
 end)
 
+-- #700: the midigrid mod puts a facade in the global grid at system startup,
+-- before any script loads (docs/design/3.6-facts/checks.md §7): its
+-- metatable sends missing keys to norns' real module and it has no
+-- __newindex, and its own connect ignores the port. norns' startup loaded the
+-- real module (grid = require 'core/grid'), so package.loaded holds it. Each
+-- test here puts the facade in place before the script loads and
+-- package.loaded back as it found it, whatever the test does
+local function under_grid_facade(body)
+  local kept = package.loaded["core/grid"]
+  local ran, problem = pcall(body)
+  package.loaded["core/grid"] = kept
+  if not ran then error(problem, 0) end
+end
+
+-- The facade over context.grid, as the global grid and with the stub module
+-- in package.loaded: connects counts its connect's calls, keys lists its own
+-- fields (as "a,b"), plug(port, cols, rows) plugs a grid before init
+local function grid_facade(plugged)
+  local facade = {connects = 0}
+  local function before_load(context)
+    local real = context.grid
+    local fake = setmetatable({}, {__index = real})
+    rawset(fake, "connect", function()
+      facade.connects = facade.connects + 1
+      return real.vports[1]
+    end)
+    package.loaded["core/grid"] = real
+    _G.grid = fake
+    facade.fake = fake
+    for _, plug in ipairs(plugged or {}) do real.plug(plug[1], plug[2], plug[3]) end
+  end
+  function facade.keys()
+    local names = {}
+    for name in pairs(facade.fake) do names[#names + 1] = name end
+    table.sort(names)
+    return table.concat(names, ",")
+  end
+  return facade, before_load
+end
+
+test("under a facade over grid, each of the four ports gets norns' own vport", function()
+  under_grid_facade(function()
+    local facade, before_load = grid_facade({ {1, 16, 16}, {3, 16, 8} })
+    local context = load_strata({ before_load = before_load })
+    finish_startup(context)
+    local S = local_value("S")
+    assert_equal(S.grids[1], context.grid.vports[1], "port 1 is norns' vport 1")
+    assert_equal(S.grids[3], context.grid.vports[3], "port 3 is norns' vport 3")
+    assert_equal(S.grids[2], nil, "port 2 holds nothing")
+    assert_equal(S.grids[4], nil, "nor does port 4")
+    assert_equal(S.grids[3].cols .. "x" .. S.grids[3].rows, "16x8", "port 3 keeps its own size")
+    context.grid.press(3, 2, 2, 1)
+    assert_true(grid_core().held(3, 2, 2) ~= nil, "a key on port 3 reaches port 3")
+    assert_equal(grid_core().held(1, 2, 2), nil, "and not port 1")
+    context.grid.press(3, 2, 2, 0)
+    assert_equal(facade.connects, 0, "the facade's connect was never called")
+  end)
+end)
+
+test("under a facade a grid plugged in later still reaches Strata", function()
+  under_grid_facade(function()
+    local facade, before_load = grid_facade()
+    local context = load_strata({ before_load = before_load })
+    finish_startup(context)
+    local S = local_value("S")
+    context.grid.plug(2, 16, 8)
+    assert_equal(S.grids[2], context.grid.vports[2], "a grid plugged at port 2 is attached there")
+    context.grid.unplug(2)
+    assert_equal(S.grids[2], nil, "and unplugged, forgotten")
+    context.grid.plug(1, 16, 8)
+    _menu.set_mode(true)
+    context.grid.reassign(1, 4)
+    _menu.set_mode(false)
+    assert_equal(S.grids[1], nil, "a grid moved in the menu leaves port 1")
+    assert_equal(S.grids[4], context.grid.vports[4], "and is found on port 4 at menu close")
+    assert_equal(facade.connects, 0, "the facade's connect was never called")
+  end)
+end)
+
+test("cleanup leaves norns' real module with handlers that do nothing", function()
+  under_grid_facade(function()
+    local facade, before_load = grid_facade()
+    local context = load_strata({ before_load = before_load })
+    finish_startup(context)
+    local S = local_value("S")
+    cleanup()
+    context.grid.plug(2, 16, 16)
+    assert_equal(S.grids[2], nil, "a grid plugged after cleanup is not attached")
+    assert_equal(context.grid.vports[2].key, nil, "and gets no handler")
+    context.grid.unplug(2)
+    assert_equal(facade.keys(), "connect", "the facade's own fields were never written")
+  end)
+end)
+
+-- norns without the mod: the global is the module package.loaded holds
+test("without a facade the module norns loaded is the global, and hot-plug reaches it", function()
+  under_grid_facade(function()
+    local context = load_strata({ before_load = function(context) package.loaded["core/grid"] = context.grid end })
+    finish_startup(context)
+    local S = local_value("S")
+    context.grid.plug(2, 16, 8)
+    assert_equal(S.grids[2], grid.vports[2], "a grid plugged at port 2 is attached")
+    cleanup()
+    context.grid.plug(3, 16, 8)
+    assert_equal(S.grids[3], nil, "after cleanup, nothing is")
+  end)
+end)
+
 end
