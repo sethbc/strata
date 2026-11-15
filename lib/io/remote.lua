@@ -32,7 +32,8 @@ return function(S)
     arc_key_note = 0, key_down = 127, max_level = 15}
   M.PROTOCOL = PROTOCOL
 
-  local TEXTS = {missing = "[--]", waiting = "no hello", in_use = "in use", arc_attached = "4 rings"}
+  local TEXTS = {missing = "[--]", waiting = "no hello", in_use = "in use", arc_attached = "4 rings",
+    arc_behind = "4 rings (waiting)"}
 
   -- Per kind: its rig key, the name it claims its port as, its status
   -- label, the first LED channel; claimed_port (the port it claimed and
@@ -452,7 +453,9 @@ return function(S)
     if record.in_use then return TEXTS.in_use end
     if record.claimed_port == nil then return TEXTS.missing end
     if record.virtual then
-      return record.kind == "grid" and (record.virtual.cols .. "x" .. record.virtual.rows) or TEXTS.arc_attached
+      if record.kind == "grid" then return record.virtual.cols .. "x" .. record.virtual.rows end
+      -- a monome arc plugged into norns is followed instead until it goes
+      return S.arc_device == record.virtual and TEXTS.arc_attached or TEXTS.arc_behind
     end
     return record.problem or TEXTS.waiting
   end
@@ -553,6 +556,12 @@ return function(S)
         context.midi.plug(LAYOUT_PORT, "iii grid")
         set_through_page("remote_grid_port", LAYOUT_PORT)
         greet(context, LAYOUT_PORT, 16, 8, REMOTE.version + 1)
+      end},
+      {name = "a remote arc behind a monome arc", setup = function(context)
+        context.midi.plug(LAYOUT_PORT, "iii arc")
+        set_through_page("remote_arc_port", LAYOUT_PORT)
+        greet(context, LAYOUT_PORT, 0, REMOTE.arc_rings, REMOTE.version)
+        context.arc.plug(1)
       end},
       {name = "a midigrid attached", setup = function(context)
         local object = {cols = 16, rows = 8, device = {name = "midigrid"}}
