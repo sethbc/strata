@@ -202,9 +202,41 @@ return function(S)
     end
   end
 
+  -- A note whose device left the port: marked departed, out of the
+  -- expression list and the port's counts and channel use, so no off or
+  -- value of it goes to whatever holds the port now, and its channel owed
+  -- an all notes off where key (the device's name) next arrives
+  local function set_aside(record, key)
+    record.departed = true
+    remove_expressing(record)
+    local counts = table_at(state.counts, record.port, record.channel)
+    counts[record.note] = (counts[record.note] or 1) - 1
+    if counts[record.note] <= 0 then counts[record.note] = nil end
+    local use = table_at(state.use, record.port)
+    use[record.channel] = (use[record.channel] or 1) - 1
+    if use[record.channel] <= 0 then use[record.channel] = nil end
+    table_at(state.left_with, key)[record.channel] = true
+  end
+
+  -- The notes on port that went to a device the port no longer holds (a
+  -- move in SYSTEM > DEVICES changes the vports at once, but is told only
+  -- as the menu closes): set aside before a note on the port ends or
+  -- starts, so an off due mid-menu never reaches the device that came
+  local function settle_moved(port)
+    local now = S.lib.io_ports.device(port)
+    for voice = 1, NUM_VOICES do
+      for _, record in pairs(state.notes[voice]) do
+        if record.port == port and not record.departed and record.device ~= nil and record.device ~= now then
+          set_aside(record, record.device)
+        end
+      end
+    end
+  end
+
   local function end_note(voice, id)
     local record = state.notes[voice][id]
     if not record then return end
+    settle_moved(record.port)
     state.notes[voice][id] = nil
     remove_expressing(record)
     -- its device left the port, which dropped its counts: nothing to send
@@ -247,6 +279,7 @@ return function(S)
     if config.port == 0 then return end
     if info.source == MIDI_OUT.played_source and config.port == input_port() then return end
     end_note(voice, id)
+    settle_moved(config.port)
     local note = util.clamp(round(pitch), 0, MIDI_OUT.notes - 1)
     local level = util.clamp(math.max(1, round((finite(velocity) and velocity or 1) * MIDI_OUT.value_max)), 1,
       MIDI_OUT.value_max)
@@ -447,38 +480,21 @@ return function(S)
   -- A device leaving and returning
   ---------------------------------------------------------------------------
 
-  -- Take a departed note out of its port's counts and channel use
-  local function uncount(record)
-    local counts = table_at(state.counts, record.port, record.channel)
-    counts[record.note] = (counts[record.note] or 1) - 1
-    if counts[record.note] <= 0 then counts[record.note] = nil end
-    local use = table_at(state.use, record.port)
-    use[record.channel] = (use[record.channel] or 1) - 1
-    if use[record.channel] <= 0 then use[record.channel] = nil end
-  end
-
   -- A device leaving a port (departed_name: the one S.lib.io_ports last saw
   -- there). Its notes are the port's notes that the device now on the port
   -- did not get (a move in SYSTEM > DEVICES changes the vports before it is
   -- told, so a note sent meanwhile went to the device that came; during an
-  -- unplug the port names none): each is marked departed and uncounted, so
-  -- its end sends nothing to whatever takes the port next, and their
-  -- channels are kept by the departed name, for its arrival elsewhere
+  -- unplug the port names none): each is set aside (above), owed to the
+  -- device that got it, or to departed_name for a note that names none
   local function departed(port, departed_name)
-    local key = departed_name or ("port " .. port)
     local now = S.lib.io_ports.device(port)
-    local channels = state.left_with[key] or {}
     for voice = 1, NUM_VOICES do
       for _, record in pairs(state.notes[voice]) do
         if record.port == port and not record.departed and (now == nil or record.device ~= now) then
-          record.departed = true
-          remove_expressing(record)
-          uncount(record)
-          channels[record.channel] = true
+          set_aside(record, record.device or departed_name or ("port " .. port))
         end
       end
     end
-    state.left_with[key] = next(channels) ~= nil and channels or nil
   end
 
   -- A device arriving: all notes off where it is now on the channels it
