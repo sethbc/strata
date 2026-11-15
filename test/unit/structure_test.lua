@@ -621,7 +621,7 @@ end)
 -- before the voices go off, MIDI is detached before the voices go off, and
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros saved", "gestures saved",
-  "matrix saved",
+  "matrix saved", "rig saved",
   "buffer paths saved",
   "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "gesture recorders",
   "quantized actions", "scene sequencer", "scene transition",
@@ -706,7 +706,8 @@ test("cleanup runs every registered step in today's order", function()
   end
   local param_steps = { mutation_enabled = "mutation metro", scene_sequencer_enabled = "scene sequencer" }
   local file_steps = { ["scenes.data"] = "scenes saved", ["buffers.data"] = "buffer paths saved",
-    ["gestures.data"] = "gestures saved", ["macros.data"] = "macros saved", ["matrix.data"] = "matrix saved" }
+    ["gestures.data"] = "gestures saved", ["macros.data"] = "macros saved", ["matrix.data"] = "matrix saved",
+    ["io.data"] = "rig saved" }
 
   watch_field(clock, "tempo_change_handler", "tempo handler")
   watch_field(_menu, "set_mode", "menu watch")
@@ -796,6 +797,7 @@ local function start_steps()
     { "started", {} },
     { "voice list", { "voice list built" } },
     { "voice layout states", {} },
+    { "io layout states", {} },
     { "E1 settings", { "encoder 1 accel false", "encoder 1 sens 4" } },
     { "menu watch", { "menu watched" } },
     { "drift metro", { "metro created", "drift metro started" } },
@@ -809,6 +811,7 @@ local function start_steps()
     { "arc", { "arc connected" } },
     { "grids", { "file read grids.data", "grid connected", "print grid 1 connected: 16x16", "grid connected",
       "grid redrawn" } },
+    { "io rig", { "file read io.data" } },
     { "io ports", {} },
     { "midi", { "midi connected" } },
     { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn",
@@ -3224,6 +3227,23 @@ test("only lib/io/ports.lua sets midi.add, midi.remove or a MIDI vport's event",
     end
   end
   assert_equal(table.concat(offenders, "\n"), "", "one module owns the MIDI ports")
+end)
+
+-- 3.6 (design §2.3): a rig setting changes only from a row of the IO page,
+-- never from a PSET, a scene, a controller, OSC or a Teletype call
+test("only the IO page changes a rig setting", function()
+  local allowed = { ["lib/pages/io.lua"] = true, ["lib/io/rig.lua"] = true }
+  local seen = 0
+  for _, source in ipairs(h.read_lua_sources()) do
+    if source.path == "strata.lua" or source.path:match("^lib/") then
+      seen = seen + 1
+      for _, call in ipairs({ "io_rig.set(", "io_rig.step(" }) do
+        assert_true(allowed[source.path] or not source.text:find(call, 1, true),
+          source.path .. " calls " .. call .. ": only the IO page changes a rig setting")
+      end
+    end
+  end
+  assert_true(seen > 50, "the script's sources were read (" .. seen .. ")")
 end)
 
 end

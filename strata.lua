@@ -22,6 +22,8 @@
 -- SCENES: E2 slot, K2 fade,
 --   K3 recall, ALT+K3 save
 -- SETUP: E2 field, E3 value
+-- IO: E2 row, E3 value,
+--   K2 next section, K3 act
 --
 -- MIDI: notes play voices 1-7 on
 -- channels 1-7 (or the selected voice)
@@ -54,6 +56,7 @@ S.lib.record = include("lib/record")(S)
 S.lib.lfos = include("lib/lfos")(S)
 S.lib.mutation = include("lib/mutation")(S)
 S.lib.scenes = include("lib/scenes")(S)
+S.lib.io_rig = include("lib/io/rig")(S)
 S.lib.io_ports = include("lib/io/ports")(S)
 S.lib.midi_in = include("lib/midi_in")(S)
 S.lib.history = include("lib/history")(S)
@@ -107,6 +110,7 @@ S.lib.pages_mod = include("lib/pages/mod")(S)
 S.lib.pages_buffer = include("lib/pages/buffer")(S)
 S.lib.pages_scenes = include("lib/pages/scenes")(S)
 S.lib.pages_setup = include("lib/pages/setup")(S)
+S.lib.pages_io = include("lib/pages/io")(S)
 for index, name in ipairs(UI_PAGES) do
   local record = S.registry.pages[index]
   assert(record and record.name == name, "no page record for " .. name)
@@ -117,7 +121,7 @@ end
 
 -- The arc: after every page file, since each page's rings set only the arc
 -- fields (arc_delta, arc_redraw, arc_alt_delta, arc_alt_redraw) on its
--- page record (SETUP has none)
+-- page record (SETUP has none, nor IO yet)
 S.lib.arc_core = include("lib/arc/core")(S)
 S.lib.arc_main = include("lib/arc/main")(S)
 S.lib.arc_voice = include("lib/arc/voice")(S)

@@ -18,7 +18,7 @@ test("arc rings follow the page; MAIN mapping unchanged", function()
   -- SCENES three (ring 1 at its first slot lights an LED, not a segment);
   -- SEQ's rings 1, 2 and 4 at their first position likewise; BUFFER's scan
   -- ring (bipolar, at 0) lights one LED without a segment; MOD's four macros
-  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 1, FX = 4, LFO = 4, MOD = 4, BUFFER = 3, SCENES = 3, SETUP = 0 }
+  local expected_rings = { MAIN = 4, VOICE = 4, SEQ = 1, FX = 4, LFO = 4, MOD = 4, BUFFER = 3, SCENES = 3, SETUP = 0, IO = 0 }
   for page = 1, #PAGE_TITLES do
     show_page(page); arc_redraw()
     local drawn = 0

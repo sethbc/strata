@@ -4,7 +4,7 @@ The screen pages, and what the encoders and keys do on every page. Back to the [
 
 ## Screen Pages
 
-The screen has nine pages, in this order (each page's own controls are on its page):
+The screen has ten pages, in this order (each page's own controls are on its page):
 
 1. [MAIN](pages/main.md) - the voice list and the selected voice's main parameter. ALT+K2 randomizes the voice when you let go of K2 (again within 5 s to undo), ALT+K3 locks it
 2. [VOICE](pages/voice.md) - every parameter of the selected voice, in six sections (seven for a buffer voice). ALT+K2 randomizes the section under the cursor when you let go of K2 (again within 5 s to undo; held half a second, it resets the row to its default), ALT+K3 locks the voice
@@ -15,18 +15,19 @@ The screen has nine pages, in this order (each page's own controls are on its pa
 7. [BUFFER](pages/buffer.md) - voice sources and the eight sample buffers. ALT+E2 moves the field cursor, ALT+K2 clears the buffer, ALT+K3 saves it
 8. [SCENES](pages/scenes.md) - the sixteen scenes in two banks, their names and the scene sequencer. ALT+K3 saves the current sound into the slot, ALT+K2 names it
 9. [SETUP](pages/setup.md) - connected devices, MIDI input, saving scenes. No ALT actions of its own
+10. [IO](pages/io.md) - the rest of the rig: MIDI out, crow, ii, controllers, remote grids and arcs, OSC and the tape loop, each in its own section (empty until 3.6's sections arrive), and the rig settings. ALT+E2 selects the voice
 
-E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see [Monome Arc](arc.md)); its rings are off only on SETUP.
+E2, E3, K2 and K3 do something different on each page. The arc follows the page too (see [Monome Arc](arc.md)); its rings are off only on SETUP and IO.
 
 ## E1
 
-- **E1** - Select the page (turn left toward MAIN, right toward SETUP; one page per short turn, without acceleration, stopping at MAIN and SETUP)
+- **E1** - Select the page (turn left toward MAIN, right toward IO; one page per short turn, without acceleration, stopping at MAIN and IO)
 
 Master density is no longer on E1: adjust it on the first row of the FX page, with arc ring 1 on the MAIN page, or in PARAMETERS.
 
 ## The Header and the Hint Row
 
-Every page shows at the top the page name, nine small dots for the pages (the current one bright), `[M]` while mutations run, a small play triangle while the patterns play, `REC` while a buffer records (`ARM` while one only waits for a beat, a bar or a level to start), and the `S1`-`S16` scene indicator (brighter while the scene sequencer runs). The scene shows once one has been recalled, not when one is saved. SEQ shows the tempo (`120 bpm`) at all times in place of `[M]` and `REC`/`ARM`. The header no longer shows master density. A changed value can take the dots' and indicators' place in the header for 1.5 s.
+Every page shows at the top the page name, ten small dots for the pages (the current one bright), `[M]` while mutations run, a small play triangle while the patterns play, `REC` while a buffer records (`ARM` while one only waits for a beat, a bar or a level to start), and the `S1`-`S16` scene indicator (brighter while the scene sequencer runs). The scene shows once one has been recalled, not when one is saved. SEQ shows the tempo (`120 bpm`) at all times in place of `[M]` and `REC`/`ARM`. The header no longer shows master density. A changed value can take the dots' and indicators' place in the header for 1.5 s.
 
 The bottom row shows the page's key hints. A short message (a saved buffer, a failed load, ...) can take it for 1.5 s, on the page that raised it.
 

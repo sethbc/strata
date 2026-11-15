@@ -73,8 +73,8 @@ SOURCE_OPTIONS[SOURCE_INPUT] = "input"
 
 -- The screen pages in E1 order. Each lib/pages/<page>.lua registers its
 -- record at S.registry.pages[UI_PAGES.index.<PAGE>]
-local UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "MOD", "BUFFER", "SCENES", "SETUP"}
-local NUM_UI_PAGES = #UI_PAGES  -- Screen pages, selected with E1 (9)
+local UI_PAGES = {"MAIN", "VOICE", "SEQ", "FX", "LFO", "MOD", "BUFFER", "SCENES", "SETUP", "IO"}
+local NUM_UI_PAGES = #UI_PAGES  -- Screen pages, selected with E1 (10; 3.6 appends IO, so no index moves)
 UI_PAGES.index = {}  -- page name -> its index (UI_PAGES.index.FX == 4)
 for index, name in ipairs(UI_PAGES) do UI_PAGES.index[name] = index end
 -- Arc pages follow the screen pages. Every continuous arc ring sweeps its
@@ -89,7 +89,7 @@ UI_PAGES.ARC_PORTS = 4  -- norns has four arc vports
 UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 
 -- The header every page shares (lib/ui/header.lua, y 8): one 2x2 px page
--- dot per page (nine) from dots_x, dot_spacing apart (the current page's at
+-- dot per page (ten) from dots_x, dot_spacing apart (the current page's at
 -- current_dot_level, the rest at dot_level), [M] at mutation_x, the play
 -- mark (a filled 3x5 triangle, top row play_y) at play_x, REC at rec_x and
 -- the scene right-aligned at scene_right. A page's header_status text
@@ -99,8 +99,9 @@ UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 -- so it ends before a right-aligned S16. (The 3.1 design's x 80/94/100 put
 -- REC over S8 under the layout test's width estimate; these keep the same
 -- order and spacing and fit. 3.4 moves the dots 4 px left, so a ninth
--- clears status_play_x.)
-local HEADER = {dots_x = 36, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
+-- clears status_play_x; 3.6 moves them 4 px further for a tenth, IO, at x
+-- 68-69, clear of status_play_x 73.)
+local HEADER = {dots_x = 32, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
   dot_y = 4, mutation_x = 76, play_x = 90, play_y = 3, rec_x = 96, scene_right = 127, status_x = 79,
   status_play_x = 73, flash_x = 40, flash_width = 74, flash_seconds = 1.5}
 
@@ -187,6 +188,7 @@ local START_ORDER = {
   started = 5,           -- lib/ui/frame.lua: S.started (redraw, key and enc act from here on)
   voice_list = 10,       -- lib/pages/main.lua: MAIN's voice list
   voice_layout_states = 15,  -- lib/pages/voice.lua: the registered voice params' layout states
+  io_layout_states = 16,  -- lib/pages/io.lua: a layout state per registered IO section (3.6)
   e1_settings = 20,      -- strata.lua: E1 steps pages (no acceleration)
   menu_watch = 30,       -- lib/ui/menu_watch.lua: forget held keys as the menu opens
   drift_metro = 40,      -- lib/mutation.lua: created and started
@@ -196,6 +198,7 @@ local START_ORDER = {
   record_poll = 65,      -- lib/record.lua: the recordState poll
   arc = 70,              -- lib/arc/core.lua
   grids = 80,            -- lib/grid/core.lua
+  io_rig = 85,           -- lib/io/rig.lua: the rig settings, io.data (3.6)
   io_ports = 88,         -- lib/io/ports.lua: the MIDI hot-plug handlers (3.6)
   midi = 90,             -- lib/midi_in.lua (and the MIDI map's repair)
   scenes_load = 100,     -- lib/scenes.lua: the registered scene fields, then scenes.data (sets S.scenes_loaded)
@@ -244,6 +247,7 @@ local CLEANUP_ORDER = {
   macros_save = 32,         -- lib/macros.lua: macros.data (3.4)
   gestures_save = 34,       -- lib/gestures.lua: gestures.data (3.4)
   matrix_save = 36,         -- lib/matrix.lua: matrix.data (3.4)
+  io_rig_save = 38,         -- lib/io/rig.lua: io.data, the rig settings (3.6)
   buffer_paths_save = 40,   -- lib/buffers.lua: buffers.data
   startup_clock = 50,       -- strata.lua: init's start-up clock
   frame_clock = 60,         -- lib/ui/frame.lua

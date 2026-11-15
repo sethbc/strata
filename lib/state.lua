@@ -26,6 +26,7 @@ return function()
   -- a module that registers can be included before or after its reader
   M.registry = {
     pages = {},         -- one record per screen page
+    io_sections = {},   -- 3.6: IO's sections {name, title, rows, status, layout_states} (register_io_section)
     params = {},        -- param-adding functions, run by init in order
     start = {},         -- {order, fn} records, run by init() by order
     cleanup = {},       -- {order, fn} records, run by cleanup() by order
@@ -444,6 +445,26 @@ return function()
     local where = require_named(record, "step_outputs", kind, "name", STEP_OUTPUT_FIELDS)
     require_functions(record, where, {"play"}, {"stop", "available"})
     table.insert(M.registry.step_outputs, record)
+  end
+
+  local IO_SECTION_FIELDS = {name = true, title = true, rows = true, status = true, layout_states = true}
+
+  -- A section of the IO page (3.6, lib/pages/io.lua reads them at each use,
+  -- design §11): {name, title = a string or fn() -> string, rows = fn() ->
+  -- {row, ...}, status = fn() -> string | nil, layout_states = {{name,
+  -- setup = fn(context)}, ...}}; status and layout_states optional. The
+  -- page shows them in its IO_PAGE.sections order, any other name after
+  -- those in registration order
+  function M.register_io_section(record)
+    local kind = "register_io_section"
+    local where = require_named(record, "io_sections", kind, "name", IO_SECTION_FIELDS)
+    require_arg(type(record.title) == "string" or type(record.title) == "function", where,
+      "a title is a string or a function")
+    require_functions(record, where, {"rows"}, {"status"})
+    require_arg(all_entries(record.layout_states, function(_, state)
+      return type(state) == "table" and type(state.name) == "string" and type(state.setup) == "function"
+    end), where, "layout_states lists {name, setup = fn}")
+    table.insert(M.registry.io_sections, record)
   end
 
   -- A modulation source (lib/mod_sources.lua reads them, design §10.1):
