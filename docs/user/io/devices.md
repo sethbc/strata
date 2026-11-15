@@ -58,10 +58,10 @@ The Expert Sleepers disting NT is a class-compliant USB MIDI device (it is not a
 | 16n, 16nx, ATOV Faderpunk, other boxes of sixteen faders | Controllers: sixteen faders on the macros, with pickup | [Controllers](controllers.md) | 16n firmware 2.1.0's README and SysEx specification (CC 32 to 47, channel 1, 14-bit mode); the 16nx firmware; Faderpunk's source at github.com/ATOVproject/faderpunk | Unverified until 4.0 |
 | monome crow | The crow section: inputs, outputs, clock out; the bridge for every ii device | [crow](crow.md) | crow firmware v4.0.5 and its reference; norns' `lua/core/crow.lua` | Unverified until 4.0 |
 | Teletype | The ii bus: `CROW.C1` to `CROW.C3` | [The ii bus and Teletype](ii.md) | Teletype v5.0.0; monome's ii page | Unverified until 4.0 |
-| Mannequins Just Friends | ii, through crow | [Just Friends](jf.md) | Just-Type (Just Friends' ii commands); crow v4.0.5's `lua/ii/jf.lua` | Unverified until 4.0 |
-| W/ synth and W/ tape | ii, through crow | [W/](w.md) | the W/ wiki (github.com/whimsicalraps/wslash); crow v4.0.5's `lua/ii/wsyn.lua` and `wtape.lua` | Unverified until 4.0 |
-| ER-301 | ii, through crow | [ER-301 and TELEXo](er301-txo.md) | crow v4.0.5's ii descriptor for the ER-301; Teletype's notes on the ER-301 | Unverified until 4.0 |
-| TELEXo | ii, through crow | [ER-301 and TELEXo](er301-txo.md) | crow v4.0.5's ii descriptor for the TELEXo; the TELEX README | Unverified until 4.0 |
+| Mannequins Just Friends | ii, through crow | [Just Friends](jf.md) | Just-Type, Just Friends' ii commands (undated: the fact file records no version); crow v4.0.5's `lua/ii/jf.lua` | Unverified until 4.0 |
+| W/ synth and W/ tape | ii, through crow | [W/](w.md) | the W/ wiki (github.com/whimsicalraps/wslash; undated, no version recorded); crow v4.0.5's `lua/ii/wsyn.lua` and `wtape.lua` | Unverified until 4.0 |
+| ER-301 | ii, through crow | [ER-301 and TELEXo](er301-txo.md) | crow v4.0.5's `lua/ii/er301.lua`; Teletype v5.0.0's documents on the ER-301 (`SC.CV`, `SC.TR`) | Unverified until 4.0 |
+| TELEXo | ii, through crow | [ER-301 and TELEXo](er301-txo.md) | crow v4.0.5's `lua/ii/txo.lua`; the TELEX README (github.com/bpcmusic/telex; undated, no version recorded) | Unverified until 4.0 |
 | nb voice mods (nb_crow, nb_jf, nb_ex, nb_drumcrow and others) | nb players, one a voice | [nb voices](nb.md) | nb at commit `400e0b38` (2024-06-15) and the voice mods named in `docs/design/3.6-facts/checks.md` | Unverified until 4.0 |
 | monome grid zero, grid one, 2022 grid and the 2025 arc, in iii mode | Remote grids and arcs, over MIDI | [Remote grids and arcs](remote.md) | iii v1.1.2 and its device repositories | Unverified until 4.0 |
 | Launchpads, APC mini, Push and others | A MIDI grid through the midigrid mod | [Remote grids and arcs](remote.md) | midigrid, branch `master` at commit `beb75e82` (2026-10-19) | Unverified until 4.0 |
