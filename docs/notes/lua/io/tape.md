@@ -5,7 +5,7 @@
 - **Order on**: the calls of `start` in the order of its code (buffer, pan, loop, loop start and end, fade, position, rate slew, rate, level, input, pre level, feedback, rec level, filter, rec, play, enable), then the mixer. A test pins it.
 - **Two voices, 1 and 2**, and no other softcut voice is named. A voice's buffer is its own number.
 - **Off and cleanup put the mixer back from norns' own params** (`cut_input_eng`, `cut_input_adc`, `cut_input_tape`, through `util.dbamp`), never from a remembered value.
-- **The four macro targets send through `S.engine_senders`** (`send_param_to_engine`), so an LFO, a matrix routing or a macro on them reaches softcut with its offsets; those senders call softcut and no engine command, and the value they get is the offset one. `start` reads the same four from `engine_param_value` so a running modulation holds across an on.
+- **The four macro targets send through `S.engine_senders`** (`send_param_to_engine`), so an LFO, a matrix routing or a macro on them reaches softcut with its offsets; the four ids are one list, `TAPE.macro_targets` (senders, macro targets, and `lfos_test.lua`'s skip list, since those senders call softcut and no engine command; `io_tape_test.lua` checks all four send the offset value); and the value they get is the offset one. `start` reads the same four from `engine_param_value` so a running modulation holds across an on.
 - **Params are PSET-only**: none is a scene field, an LFO destination, a fader-page param or in `param_order`; only the four are macro targets. The ids are `tapeloop...`, never `tape_level` (norns owns that one).
 
 ## Owns

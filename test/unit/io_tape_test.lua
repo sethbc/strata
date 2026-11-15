@@ -164,17 +164,38 @@ test("the tape's four are macro targets and nothing else of it is", function()
   end
 end)
 
-test("a macro's modulation reaches the loop", function()
-  -- the path an LFO or a matrix routing on a macro moves its targets through
+test("a macro's modulation reaches the loop through all four targets", function()
+  -- the path an LFO or a matrix routing on a macro moves its targets through:
+  -- an extra offset, then send_param_to_engine; their senders reach softcut
+  -- and no engine command, so lfos_test.lua skips them (TAPE.macro_targets)
   local context, S = started()
-  params:set("tapeloop", 1)
-  S.lib.engine_sync.set_extra_offset("macro", "tapeloop_level", -0.2)
-  send_param_to_engine("tapeloop_level", 0.7)
-  for v = 1, 2 do assert_near(value(context, "level", v), 0.5, 1e-9) end
-  params:set("tapeloop", 0)
-  clear_calls(context)
-  send_param_to_engine("tapeloop_level", 0.7)
-  assert_equal(#context.softcut.calls, 0, "with the tape off nothing is sent")
+  local wear_cutoff = 12000 * (800 / 12000) ^ 0.5
+  local cases = {
+    tapeloop_level = {base = 0.7, offset = -0.2, call = "level", expected = 0.5, voices = false},
+    tapeloop_rate = {base = 1, offset = -0.5, call = "rate", expected = 0.5, voices = false},
+    tapeloop_feedback = {base = 0.5, offset = 0.2, call = "level_cut_cut", expected = 0.7 / 1.2, voices = true},
+    tapeloop_wear = {base = 0.2, offset = 0.3, call = "pre_filter_fc", expected = wear_cutoff, voices = false},
+  }
+  for _, id in ipairs(S.lib.io_tape.TAPE.macro_targets) do
+    assert_true(cases[id] ~= nil, id .. " has a case here")
+  end
+  for id, case in pairs(cases) do
+    params:set("tapeloop", 1)
+    clear_calls(context)
+    S.lib.engine_sync.set_extra_offset("macro", id, case.offset)
+    send_param_to_engine(id, case.base)
+    for v = 1, 2 do
+      local got = case.voices and value(context, case.call, v, v) or value(context, case.call, v)
+      assert_near(got, case.expected, 1e-6, id .. " reaches " .. case.call .. " of voice " .. v .. " with the offset value")
+    end
+    S.lib.engine_sync.set_extra_offset("macro", id, nil)
+    params:set("tapeloop", 0)
+    clear_calls(context)
+    S.lib.engine_sync.set_extra_offset("macro", id, case.offset)
+    send_param_to_engine(id, case.base)
+    S.lib.engine_sync.set_extra_offset("macro", id, nil)
+    assert_equal(#context.softcut.calls, 0, id .. ": with the tape off nothing is sent")
+  end
 end)
 
 test("no tape param is in a scene", function()
