@@ -522,18 +522,23 @@ return function(S)
   end
 
   -- An illegal set at a step (a change by hand, or by anything outside a
-  -- read): the params noted since the last settle go back to their settled
-  -- values, silently, with the refusal's flash, and nothing is sent. From a
-  -- read: ruling C's placing, with one flash
+  -- read): the route params noted since the last settle go back to their
+  -- settled values, silently, with the refusal's flash, and no route
+  -- changes (a bend range noted beside them stands). From a read: ruling
+  -- C's placing, with one flash
   settle = function(from_read)
     if state.stopped or not params.lookup[vid(1, "port")] then return end
     local routes = param_routes()
     local refused = conflict(routes) ~= nil
     if refused and not from_read then
-      for id in pairs(state.noted) do params:set(id, settled_value(id), true) end
+      -- the route params go back; a bend range noted beside them cannot
+      -- conflict, so it stands and is applied (each zone's one setup)
+      for id in pairs(state.noted) do
+        if route_param[id] then params:set(id, settled_value(id), true) end
+      end
       state.noted, state.dirty = {}, false
       S.lib.ui_flash.start("header", MIDI_OUT.refused)
-      request_redraw()
+      apply(param_routes(), params:get(BEND_RANGE_ID))
       return
     end
     if refused then
