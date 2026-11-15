@@ -2,7 +2,7 @@
 
 The rest of the rig: what Strata sends to other instruments and what it takes from controllers, in one list of sections. Back to [Screen Controls](../controls.md).
 
-IO is the tenth page, after SETUP. Each part of the rig adds a section to it: the selected voice's routes (`voice`), MIDI out (`midi`), crow, the ii bus (`ii`), W/ tape (`wtape`), controllers, remote grids and arcs (`remote`), OSC and the tape loop (`tape`), in that order. Until those parts arrive the page shows `no sections`. Everything on it starts off: a fresh Strata sends nothing to any of them.
+IO is the tenth page, after SETUP. Each part of the rig has a section on it, in this order: the selected voice's routes (`voice`), MIDI out (titled `midi out`), `crow`, the ii bus (`ii`), W/ tape (titled `w/ tape`), `controllers`, remote grids and arcs (`remote`), `osc` and the tape loop (`tape`). Everything on it starts off: a fresh Strata sends nothing to any of them. A table of every supported device, with the page for each, is on [Supported devices](../io/devices.md).
 
 Each section starts with a title line: its name at the left and, at the right, what it needs you to know, such as `[--]` when its device is not connected. Under the title are its rows. The list scrolls (a thin bar at the right edge shows where you are). A row is one of:
 - **a value** - a setting saved with a PSET, or a rig setting (below); E3 changes it, and the value shows at the right
@@ -18,8 +18,8 @@ Some rows are rig settings: they describe how your rig is wired, not a sound, so
 
 | Setting | Values | Default | What it is |
 |---|---|---|---|
-| ii bus | off, strata, teletype | off | who leads the ii bus: nobody, Strata (through crow), or a Teletype. Strata sends ii messages only while it leads |
-| e16 port | off, 1-16 | off | the MIDI port an E16 is on |
+| bus leader (`ii` section) | off, strata leads, teletype leads | off | who leads the ii bus: nobody, Strata (through crow), or a Teletype. Strata sends ii messages only while it leads |
+| e16 port (`controllers` section) | off, 1-16 | off | the MIDI port an E16 is on |
 | e16 channel | 1-16 | 16 | the E16's channel |
 | e16 cc | 0-104 | 102 | the first of the E16's sixteen CCs |
 | e16 encoding | rel1, rel2 | rel1 | how its encoders send a turn: 1 and 127, or 63 and 65 |
@@ -27,16 +27,16 @@ Some rows are rig settings: they describe how your rig is wired, not a sound, so
 | faders channel | 1-16 | 1 | its channel |
 | faders cc | 0-80 | 32 | the first of its sixteen CCs |
 | faders hires | off, on | off | 14-bit faders, the low 7 bits on each CC + 32 |
-| remote grid port, remote arc port | off, 1-16 | off | the MIDI port a grid or an arc in iii mode is on |
-| midi grid | off, on | off | a MIDI grid through the midigrid mod |
-| osc feedback | off, on | off | whether Strata sends its values back to an OSC controller |
-| osc port | 1-65535 | 9000 | the port that feedback goes to (E3 moves 10 at a time, ALT+E3 one) |
+| grid port, arc port (`remote` section) | off, 1-16 | off | the MIDI port a grid or an arc in iii mode is on |
+| midi grid (`remote` section) | off, on | off | a MIDI grid through the midigrid mod |
+| feedback (`osc` section) | off, on | off | whether Strata sends its values back to an OSC controller |
+| port (`osc` section) | 1-65535 | 9000 | the port that feedback goes to (E3 moves 10 at a time, ALT+E3 one) |
 
-Each setting takes effect once the part of the rig that reads it arrives with its section.
+The e16 and faders rows (and their channel, cc, encoding and hires rows) are all in the `controllers` section.
 
 ## Voice routes
 
-The `voice` section comes first. Its title names the selected voice (`voice 3`); ALT+E2 selects another. Under it, each external instrument Strata can play (MIDI out, crow, Just Friends, W/, ER-301, TELEXo, nb voices, each arriving in its own part of 3.6) adds its routes for that voice, and a mark at the right of the title tells you when one needs attention. Until one arrives the section is its title alone.
+The `voice` section comes first. Its title names the selected voice (`voice 3`); ALT+E2 selects another. Under it, each external instrument a voice can play adds its routes for that voice: `midi` (a detail list: port, channel, mode, members), `jf` and `jf level`, `w/ syn` and `w/ level`, `er-301`, `txo` (a detail list), `txo attack` and `txo decay`, and `nb`, in that order (a line `nb mods send on their own` follows `nb` while any voice has an nb player). crow's outputs follow a voice's pitch or gate from the `crow` section, so crow adds no row here. A mark at the right of the title tells you when a route needs attention (`[!]`, see [nb voices](../io/nb.md)).
 
 What a routed voice plays on its targets:
 - **its pattern steps**: each step plays the step's pitches (the chord's notes, or the voice's own pitch, moved by the step's pitch lock) at the step's level, and each note ends when the step's gate does; a ratchet's next hit ends the note before it plays again
@@ -58,7 +58,8 @@ The arc's four rings on IO are the tape loop's level, speed, feedback and wear (
 
 ## Devices and connections
 
-Each device or connection IO reaches has its own page, listed here as it arrives:
+Each device or connection IO reaches has its own page:
+- [Supported devices](../io/devices.md): the OXI One and the Disting NT, and one table of every device, how Strata reaches it and what it was built from
 - [MIDI out](../io/midi-out.md): a voice's notes to a MIDI synth, plain or MPE, eight CC out slots, program change in and out
 - [crow](../io/crow.md): its inputs as modulation or triggers, its outputs for modulation, a voice's pitch or gate, and the clock
 - [The ii bus and Teletype](../io/ii.md): who leads the ii bus, and Teletype's three calls to scenes, voices, macros and the patterns
