@@ -248,6 +248,9 @@ return function(S)
       if state.high == nil then return end
     else
       state.high = value
+      -- a new high byte resets the low (MIDI 1.0's 14-bit rule), once a low
+      -- byte has been seen: a 7-bit box never sends one
+      if state.low ~= nil then state.low = 0 end
     end
     fader_moved(m, fader_value(state))
   end

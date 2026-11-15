@@ -327,6 +327,20 @@ test("hires uses the low byte once one has come, and a 7-bit box still reaches b
   assert_near(params:get("macro_1"), 64 / 127, 1e-9, "hires off: 7 bits again")
 end)
 
+test("a 14-bit fader's new high byte resets the low byte once one has been seen", function()
+  -- MIDI 1.0's 14-bit controllers: a new MSB resets the LSB, which then follows it
+  local context, S = loaded()
+  local rig = rig_with(context, S, {e16 = false, faders = true})
+  assert_true(rig.set("faders_hires", "on"))
+  params:set("macro_1", (64 * 128 + 127) / 16383)
+  cc(context, FADERS_PORT, 32, 64); cc(context, FADERS_PORT, 64, 127)
+  assert_true(S.lib.io_controllers.pickup(1), "picked up at 64, 127")
+  cc(context, FADERS_PORT, 32, 65)  -- the boundary crossed upward
+  assert_near(params:get("macro_1"), 65 * 128 / 16383, 1e-9, "the high byte with the low reset: 65, 0, not 65, 127")
+  cc(context, FADERS_PORT, 64, 3)
+  assert_near(params:get("macro_1"), (65 * 128 + 3) / 16383, 1e-9, "then the low byte")
+end)
+
 test("a port a controller holds has one owner, and a port change moves the claim", function()
   local context, S = loaded()
   local rig = S.lib.io_rig
