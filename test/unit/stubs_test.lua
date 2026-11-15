@@ -2369,4 +2369,23 @@ test("an nb player is a plain table with exactly the methods the test names", fu
   assert_true(note_players.jf == custom and note_players.emp == default, "both are in note_players")
 end)
 
+test("an nb player can inherit methods through a metatable, as another host leaves them (#698)", function()
+  local context = load_strata({ before_load = function(early)
+    early.nb.add_player("midi: box 1", {"note_on"}, {"count_up", "stop_all"})
+  end })
+  local player = note_players["midi: box 1"]
+  assert_true(player ~= nil, "a player added before the script loads is in note_players")
+  assert_true(player.count_up ~= nil, "an inherited method answers")
+  assert_equal(rawget(player, "count_up"), nil, "but is no raw field")
+  assert_true(rawget(player, "note_on") ~= nil, "a method the mod wrote is a raw field")
+  assert_equal(getmetatable(player) ~= nil, true, "the player has a metatable")
+  player:count_up(1)
+  player:stop_all()
+  player:note_on(60)
+  assert_equal(player.calls[1][1] .. player.calls[1][2] .. player.calls[2][1] .. player.calls[3][1],
+    "count_up1stop_allnote_on", "inherited methods record into calls too")
+  assert_equal(getmetatable(context.nb.add_player("plain", {"note_on"})), nil, "no inherited list, no metatable")
+  assert_equal(player.name, nil, "still no name")
+end)
+
 end
