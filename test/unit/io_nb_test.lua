@@ -590,10 +590,14 @@ test("the nb params stay out of scenes, LFOs, macros, fader pages, randomize, mu
     assert_true(S.voices[voice].active and not S.frozen[voice], "voice " .. voice .. " runs, unlocked")
   end
   choose(1, "alpha"); choose(4, "alpha")
-  -- each effect's positive control: a synth param or the grain pitch of the voice moved. None can
-  -- fail by chance: the run is seeded, and every draw below is a continuous random step (a uniform
-  -- value in the param's range, a mutation delta of (r1 + r2) / 2 - 0.5 at probability 1, the
-  -- drift's (r - 0.5) * step), which lands on exactly the old value with probability 0, many times over
+  -- each effect's positive control: a param of the voice moved. What makes each hold (the seed does
+  -- not: pairs() order over a voice's params changes which draw each param gets):
+  -- the randomize: twenty randomizes, each drawing many continuous params uniformly over their range,
+  -- so not one of them moving cannot happen; the mutation: at probability 1 every synth param but amp
+  -- and pan moves each step by a continuous delta, twenty steps, on a param mostly not at a range edge;
+  -- the drift: the grain pitch starts mid-range at 1 (its base with it), where a step of at most 0.002
+  -- a tick never meets the 0.25 and 4 clamps, and the check is "moved at some tick of fifty" (a tick's
+  -- step is 0 only when its draw is exactly 0.5)
   local function snapshot(voice)
     local copy = {}
     for key, value in pairs(S.voices[voice].params) do copy[key] = value end
@@ -616,10 +620,16 @@ test("the nb params stay out of scenes, LFOs, macros, fader pages, randomize, mu
   for _ = 1, 20 do gentle_mutate() end
   assert_true(moved(before_mutation[1], 1), "the mutation moved voice 1")
   assert_true(moved(before_mutation[2], 4), "the mutation moved voice 4")
-  local pitches = { S.voices[1].grain.pitch, S.voices[4].grain.pitch }
-  for _ = 1, 50 do drift_update() end
-  assert_true(S.voices[1].grain.pitch ~= pitches[1], "the drift moved voice 1's grain pitch")
-  assert_true(S.voices[4].grain.pitch ~= pitches[2], "the drift moved voice 4's grain pitch")
+  local drifted = {}
+  for _, voice in ipairs({ 1, 4 }) do params:set("v" .. voice .. "_grain_pitch", 1) end
+  for _ = 1, 50 do
+    drift_update()
+    for _, voice in ipairs({ 1, 4 }) do
+      if S.voices[voice].grain.pitch ~= 1 then drifted[voice] = true end
+    end
+  end
+  assert_true(drifted[1], "the drift moved voice 1's grain pitch at some tick")
+  assert_true(drifted[4], "the drift moved voice 4's grain pitch at some tick")
   assert_equal(S.lib.io_keyed.key("v1_out_nb"), "alpha", "voice 1 keeps its player")
   assert_equal(S.lib.io_keyed.key("v4_out_nb"), "alpha", "voice 4 too")
   assert_equal(nb_player_refcounts.alpha, 2, "counted as before")
