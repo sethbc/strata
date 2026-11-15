@@ -1685,4 +1685,47 @@ test("MIDI in leaves a claimed port alone", function()
   assert_equal(#context.calls_named("retrigger"), 1, "released: a note plays again")
 end)
 
+
+-- Another module listening on MIDI's port after it (lib/io/ports.lua runs a
+-- port's listeners in the order their names first came): a plug or a menu
+-- move on another port re-attaches nothing, so MIDI stays first
+test("a plug or a menu move on another port keeps MIDI first among its port's listeners", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.midi.plug(1, "keys")
+  local retriggers_seen = {}
+  S.lib.io_ports.listen(1, "other", function() retriggers_seen[#retriggers_seen + 1] = #context.calls_named("retrigger") end)
+  local function midi_ran_first()
+    context.clear_engine_calls()
+    retriggers_seen = {}
+    note_on(context, 1, 60)
+    note_off(context, 1, 60)
+    return retriggers_seen[1] == 1
+  end
+  assert_true(midi_ran_first(), "MIDI runs before the listener registered after it")
+  context.midi.plug(3, "pads")
+  assert_true(midi_ran_first(), "a plug on another port keeps it first")
+  _menu.set_mode(true); context.midi.reassign(3, 4); _menu.set_mode(false)
+  assert_true(midi_ran_first(), "and so does a menu move on another port")
+end)
+
+-- The midi_device param moved onto a port another name claims plays
+-- nothing there; the claim's release makes MIDI listen
+test("the MIDI port moved onto a claimed port listens to nothing until the claim is released", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.midi.plug(2, "keys")
+  assert_equal(S.lib.io_ports.claim(2, "e16"), true, "port 2 is claimed")
+  params:set("midi_device", 2)
+  assert_equal(midi.vports[2].event, nil, "nothing listens to the claimed port")
+  assert_equal(midi.vports[1].event, nil, "nor to the port MIDI left")
+  context.clear_engine_calls()
+  note_on(context, 1, 60, 100, 2)
+  assert_equal(#context.engine_calls, 0, "a note on the claimed port plays nothing")
+  S.lib.io_ports.release(2, "e16")
+  assert_equal(type(midi.vports[2].event), "function", "released: MIDI listens")
+  note_on(context, 1, 62, 100, 2)
+  assert_equal(#context.calls_named("retrigger"), 1, "and the port plays")
+end)
+
 end

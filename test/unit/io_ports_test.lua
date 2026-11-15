@@ -158,4 +158,28 @@ test("out gives the port's vport and nil outside 1 to 16", function()
   assert_equal(ports.out(1.5), nil, "no fractional port")
 end)
 
+
+test("a hot-plug handler that wrapped the module's still reaches the found one after cleanup", function()
+  local calls = {}
+  local found_add = function(device) calls[#calls + 1] = "found add " .. device.name end
+  local found_remove = function(device) calls[#calls + 1] = "found remove " .. device.name end
+  local context = load_strata({ before_init = function()
+    midi.add, midi.remove = found_add, found_remove
+  end })
+  local ports = local_value("S").lib.io_ports
+  ports.on_change("test", function(port, name) calls[#calls + 1] = "change " .. port .. " " .. tostring(name) end)
+  -- a mod wraps the module's handlers after init
+  local ours_add, ours_remove = midi.add, midi.remove
+  local wrapper_add = function(device) calls[#calls + 1] = "wrapper add"; ours_add(device) end
+  local wrapper_remove = function(device) calls[#calls + 1] = "wrapper remove"; ours_remove(device) end
+  midi.add, midi.remove = wrapper_add, wrapper_remove
+  cleanup()
+  assert_equal(midi.add, wrapper_add, "cleanup leaves the wrapper installed")
+  assert_equal(midi.remove, wrapper_remove, "both wrappers")
+  context.midi.plug(4, "x")
+  context.midi.unplug(4)
+  assert_equal(table.concat(calls, ", "), "wrapper add, found add x, wrapper remove, found remove x",
+    "the chain reaches the found handlers, and no listener runs after cleanup")
+end)
+
 end

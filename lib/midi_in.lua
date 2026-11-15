@@ -83,16 +83,18 @@ return function(S)
   end
 
   -- A port another name claims (a controller, a remote grid) is not
-  -- listened to: its notes are never played
+  -- listened to: its notes are never played. The listening changes only
+  -- when the port or its claim does, so "midi_in" keeps its place among
+  -- the port's listeners through a plug or a menu move elsewhere
   function attach_midi(port)
     port = vport_index(port)
-    if listening_port then S.lib.io_ports.unlisten(listening_port, "midi_in") end
-    listening_port = nil
-    S.midi_device = midi.connect(port)
-    if S.lib.io_ports.owner(port) == nil then
-      S.lib.io_ports.listen(port, "midi_in", midi_event)
-      listening_port = port
+    local wanted = S.lib.io_ports.owner(port) == nil and port or nil
+    if wanted ~= listening_port then
+      if listening_port then S.lib.io_ports.unlisten(listening_port, "midi_in") end
+      if wanted then S.lib.io_ports.listen(wanted, "midi_in", midi_event) end
+      listening_port = wanted
     end
+    S.midi_device = midi.connect(port)
     attached_device = S.midi_device.device
   end
 

@@ -54,7 +54,7 @@ Group `strata_midi`, 6 params (the last three are MPE's, `docs/notes/lua/mpe.md`
 ## Device lifecycle
 
 - `midi_init()` (from its start step, `START_ORDER.midi`, after the grids) calls `attach_midi(params:get("midi_device"))`.
-- `attach_midi` rounds its port to a vport index (1..`#midi.vports`), so a fraction (a PSET written before the param stepped whole numbers, #534) still names a port, unlistens the old port and sets `S.midi_device = midi.connect(port)`, then listens to it (`S.lib.io_ports.listen(port, "midi_in", midi_event)`) unless another name owns it. The unplug handler compares the device's port with the same rounded index.
+- `attach_midi` rounds its port to a vport index (1..`#midi.vports`), so a fraction (a PSET written before the param stepped whole numbers, #534) still names a port, sets `S.midi_device = midi.connect(port)` and listens to it (`S.lib.io_ports.listen(port, "midi_in", midi_event)`, unlistening the old port) unless another name owns it. The listening changes only when the port or its claim does, so `"midi_in"` keeps its place among the port's listeners through a plug or a menu move on another port. The unplug handler compares the device's port with the same rounded index.
 - The handler lives on the vport only: norns fires both `device.event` and `vports[port].event`, as for grids and arc.
 - A device's arrival at a port (`on_change(port, name)`: norns' `midi.add`, or a move seen as the menu closes) re-attaches, resets the master bend ranges when it is the selected port (#688), requests a redraw (SETUP) and prints.
 - A departure (`on_change(port, nil)`) resets the input and the ranges if it was the selected port, requests a redraw and prints the name last heard for the port.
