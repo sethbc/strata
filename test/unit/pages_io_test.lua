@@ -11,8 +11,15 @@ local show_page, assert_screen_layout, screen_shows, hint_text = h.show_page, h.
   h.screen_shows, h.hint_text
 local tap, next_frame = h.tap, h.next_frame
 
+-- The shell's tests register their own sections: the targets core's voice
+-- section (lib/io/targets.lua, 3.6's 1a) is taken out first
+local function without_registered_sections(S)
+  for index = #S.registry.io_sections, 1, -1 do S.registry.io_sections[index] = nil end
+end
+
 local function loaded()
   local context = load_strata(); finish_startup(context)
+  without_registered_sections(local_value("S"))
   return context, local_value("S")
 end
 
@@ -213,6 +220,7 @@ test("show_section puts its section at the top; the layout states cover each sec
   local ran = 0
   local load_context = load_strata({ before_init = function()
     local script = local_value("S")
+    without_registered_sections(script)
     script.register_io_section({ name = "midi", title = "midi", rows = function()
       return { { label = "x", kind = "param", param_id = "mutation_rate" } }
     end, layout_states = { { name = "probe", setup = function() ran = ran + 1 end } } })
@@ -299,6 +307,7 @@ test("show_section puts a section of status rows only at the top", function()
   -- the layout state draws it too
   local load_context = load_strata({ before_init = function()
     local script = local_value("S")
+    without_registered_sections(script)
     script.register_io_section({ name = "crow", title = "crow", rows = function()
       return { { kind = "status", text = "no crow connected" } }
     end })

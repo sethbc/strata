@@ -603,7 +603,9 @@ test("a mute or a solo tells the silence hooks each voice whose answer changed",
   params:set("v1_mute", 1)
   assert_equal(take(), "1+", "the first hook still ran")
   assert_true(S.lib.voice_mix.silenced(1), "and the mute went")
-  h.claim_script_errors(context, 1, "strata: silence change hook 2 failed: ", "silence hook down")
+  -- its index: after the module's own hooks (lib/io/targets.lua's, 3.6) and this test's
+  h.claim_script_errors(context, 1, "strata: silence change hook " .. #S.registry.silence_change .. " failed: ",
+    "silence hook down")
 end)
 
 end

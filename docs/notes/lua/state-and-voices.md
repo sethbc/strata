@@ -80,6 +80,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 140 | start the peaks read loop (`S.lib.waveforms.read_clock`, one tick per frame) | `lib/waveforms.lua` |
 | 150 | start the playhead clock (`start_clock`) | `lib/playheads.lua` |
 | 160 | follow an external clock's transport: install `clock.transport.start` and `stop`, which act only when `clock_source` is not internal, keeping the handlers found (#530) | `lib/sequencer.lua` |
+| 161 | register the `targets` step output (`START_ORDER.io_targets`), so it plays after `voices`, which the sequencer registers as it loads (3.6) | `lib/io/targets.lua` |
 
 Every order in `START_ORDER` has its step: `test/unit/structure_test.lua` checks one order per step and one registered step per order.
 
@@ -145,6 +146,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 132 | stop the `recordState` poll and forget the takes | `lib/record.lua` |
 | 135 | stop the `amp_in_l` and `amp_in_r` input level polls and clear their callbacks (3.4: the polls moved from the BUFFER page, `input_meter` keeps its order) | `lib/input_level.lua` |
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
+| 142 | end every target note at once (`S.lib.io_targets.stop_all`: each sounding note's off to the targets its on went to, then each target's `stop_all`), before the MIDI handlers go; the LFO clock has stopped, so no off waits for a step (`CLEANUP_ORDER.io_targets`, 3.6) | `lib/io/targets.lua` |
 | 150 | detach the MIDI handler (its `S.lib.io_ports` listener), before the voices go off, and clear the note tap | `lib/midi_in.lua` |
 | 152 | put back the `midi.add` and `midi.remove` the start step found, clear every vport `event` the ports set and forget their listeners (3.6) | `lib/io/ports.lua` |
 | 160 | `engine.voiceOff` for every running voice, each followed by the voice-stop hooks (3.5) (it reaches no handler on norns: the engine is already freed, above) | `lib/engine_sync.lua` |
@@ -245,4 +247,5 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   | `step editor` | `lib/pages/seq.lua` | the step editor is open exactly while its owner is the modal one (`S.lib.ui_modal.top()`) (3.4) |
   | `notes` | `lib/notes.lua` | the note pool is a whole number in 0..`NOTE_POOL.max`, the extra notes held never exceed it, and a stopped voice holds none (3.5) |
   | `rig` | `lib/io/rig.lua` | every rig setting holds a value of its spec (`RIG.specs`), and no other key is held (3.6) |
+  | `targets` | `lib/io/targets.lua` | every sounding target note names only registered targets (at least one), and no voice's id has two pending offs or an off for a note no longer sounding (3.6) |
 - **Registering a cleanup step**: `S.register_cleanup(S.constants.CLEANUP_ORDER.<step>, fn)` in the module that starts the resource, and one line in `CLEANUP_ORDER` (`lib/constants.lua`) at a free order at its place in the sequence (orders are spaced by 10; two steps never share one). `cleanup()` itself is never edited.
