@@ -398,6 +398,34 @@ test("a device that leaves is detached and one that returns is asked again", fun
   assert_equal(S.lib.io_ports.owner(6), "remote grid", "taken once it is free")
 end)
 
+test("MIDI out sends nothing to the port a remote grid holds, and sends again once the port is let go", function()
+  -- the iii script reads notes on channels 1 and 2 as LED sets (iii/strata_grid.lua's event_midi)
+  local context, S = started()
+  local device = remote_grid(context, S, 3)
+  assert_equal(S.lib.io_ports.owner(3), "remote grid")
+  assert_true(S.lib.io_remote.holds(3), "the remote holds port 3")
+  params:set("v1_out_port", 3)
+  context.clock.advance_until(S.lfo_clock)  -- the route settles
+  local target
+  for _, record in ipairs(S.registry.note_targets) do
+    if record.name == "midi" then target = record end
+  end
+  local before = #device.sent
+  target.note_on(1, "s1", 60, 1, {source = "step"})
+  target.note_off(1, "s1")
+  for index = before + 1, #device.sent do
+    local status = device.sent[index][1] - device.sent[index][1] % 16
+    assert_true(status ~= 0x90 and status ~= 0x80, "no note to the remote grid's port: " .. text_of(device.sent[index]))
+  end
+  assert_equal(params:string("v1_out_port"), "3 (remote grid)", "the port row shows its owner")
+  set_rig(S, "remote_grid_port", 0)  -- the remote lets the port go
+  assert_true(not S.lib.io_remote.holds(3))
+  before = #device.sent
+  target.note_on(1, "s1", 60, 1, {source = "step"})
+  assert_true(has(device.sent, note_bytes(60, 127, 1), before + 1), "sent again once the port is free")
+  assert_equal(params:string("v1_out_port"), "3")
+end)
+
 test("a device leaving a port another owner holds shows [--], not in use", function()
   local context, S = started()
   S.lib.io_ports.claim(6, "someone")
