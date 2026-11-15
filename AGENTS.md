@@ -97,7 +97,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/notes.lua` | `notes` | `docs/notes/lua/notes.md` | notes_test.lua |
 | `lib/mpe.lua` | `mpe` | `docs/notes/lua/mpe.md` | mpe_test.lua |
 | `lib/expression.lua` | `expression` | `docs/notes/lua/expression.md` | expression_test.lua |
-| `lib/io/<name>.lua`: `ports`, `rig`, `actions`, `keyed`, `targets`, `midi_out`, `crow`, `ii`, `jf`, `wsyn`, `wtape`, `er301`, `txo`, `nb`, `controllers`, `remote`, `osc`, `tape` | `io_<name>` (`io_ports`, ...) | `docs/notes/lua/io/<name>.md` | io_<name>_test.lua |
+| `lib/io/<name>.lua`: `rig`, `ports` (before `lib/midi_in.lua`), `actions`, `keyed`, `targets`, `midi_out`, `crow`, `ii`, `jf`, `wsyn`, `wtape`, `er301`, `txo`, `nb`, `controllers`, `remote`, `osc`, `tape` | `io_<name>` | `docs/notes/lua/io/<name>.md` | io_<name>_test.lua |
 | `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
 | `lib/ui/params.lua`, `lib/ui/header.lua`, `lib/ui/flash.lua`, `lib/ui/text.lua`, `lib/ui/keys.lua`, `lib/ui/menu_watch.lua` | `ui_params`, `ui_header`, `ui_flash`, `ui_text`, `ui_keys`, `ui_menu_watch` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_header_test.lua, ui_pages_test.lua |
 | `lib/ui/field_list.lua` | `ui_field_list` | `docs/notes/lua/ui-core.md` | ui_field_list_test.lua |
@@ -248,7 +248,7 @@ The Lua side's, across modules:
 - **Step locks and notes are base overrides** (`S.lib.engine_sync.set_base_override`), never `params:set`; they end at the voice's next step without them, a stop, `replace_pattern` or a shorter length. `docs/notes/lua/sequencer.md`
 - **Strata follows the transport and never leads it**: `clock.transport` start and stop move the patterns only while `seq_follow_transport` is on; nothing calls the clock's own start or stop; a clock tests the beat its `clock.sync` returned, never the live beat. `docs/notes/lua/sequencer.md`
 - **Notes** are played, released and expressed only through `S.lib.notes`, which alone calls `noteOn`, `noteOff`, `noteExpression` and `setNotePool`; its flush sends at most 16 `noteExpression` a step, counted (`count_sends`), never deferred. `docs/notes/lua/notes.md`
-- **Targets**: a voice's external notes start, end and are expressed only through `S.lib.io_targets`; an off goes to exactly the targets its on went to, and a voice's stop, a route change, a mute, the patterns' stop and cleanup end every note. Every ii message goes through `S.lib.io_ii`, which sends none unless the rig says Strata leads the bus. `docs/notes/lua/io/targets.md`, `docs/notes/lua/io/ii.md`
+- **Targets**: a voice's external notes start, end and are expressed only through `S.lib.io_targets`; an off goes to exactly the targets its on went to, and a voice's stop, a route change, a mute and cleanup end every note, the patterns' stop its step notes. Every ii message goes through `S.lib.io_ii`, which sends none unless Strata leads the bus. `docs/notes/lua/io/targets.md`, `docs/notes/lua/io/ii.md`
 
 ## Working in parallel
 
