@@ -422,6 +422,7 @@ test("a reconnect sends exactly the current settings' lines", function()
   context.crow.plug()
   params:set("crow_in1_mode", option("crow_in1_mode", "cv"))
   params:set("crow_out2_source", option("crow_out2_source", "lfo1"))
+  params:set("crow_out3_source", option("crow_out3_source", "v5 gate"))  -- voice 5 sounds nothing
   params:set("crow_out4_source", option("crow_out4_source", "clock"))
   context.crow.unplug()
   assert_equal(crow_io.clocks().outputs[4], nil, "no clock while crow is gone")
@@ -430,8 +431,10 @@ test("a reconnect sends exactly the current settings' lines", function()
   local sent = context.crow.sent
   assert_equal(sent[1], "crow.reset()", "the reset first")
   local first = table.concat(sent, "|")
-  assert_equal(#sent, 5, "reset, input 1's two lines, output 2's slew, output 4's action: " .. first)
-  for _, line in ipairs({"input[1].mode('stream', 0.02)", "output[2].slew = 0.02", "output[4].action = pulse(0.01, 5)"}) do
+  assert_equal(#sent, 7, "reset, input 1's two lines, output 2's slew, output 3's slew and level, output 4's action: "
+    .. first)
+  for _, line in ipairs({"input[1].mode('stream', 0.02)", "output[2].slew = 0.02", "output[3].slew = 0",
+    "output[3].volts = 0", "output[4].action = pulse(0.01, 5)"}) do
     assert_equal(count_lines(context, line), 1, line .. " once")
   end
   local clock_id = crow_io.clocks().outputs[4]
