@@ -196,7 +196,7 @@ test("strata.lua includes every page file, then every arc file", function()
 end)
 
 -- #419: with ALT held, no page's hint names a key whose ALT press does nothing.
--- Covers all nine pages: a page with no alt_key (FX, SETUP) names no K2 or K3;
+-- Covers all ten pages: a page with no alt_key (FX, SETUP, IO) names no K2 or K3;
 -- every other page that names K3 changes some state when ALT+K3 is pressed at
 -- that cursor (BUFFER's ALT keys act on release, so only the first part applies)
 test("with ALT held no page's hint names a key that does nothing (#419)", function()

@@ -88,8 +88,8 @@ return function(S)
   -- Set key to value: refused (false) for an unknown key or a value outside
   -- its spec; otherwise io.data is written first, and only when that
   -- worked does the value change and its listeners hear it (value,
-  -- previous), each contained; true. The same value again writes nothing
-  -- new and tells nobody
+  -- previous), each contained; true. The same value again still goes through
+  -- the write (data_files.write leaves identical bytes on disk alone) and tells nobody
   function M.set(key, value)
     if not valid(key, value) then return false end
     local next_values = copy(values)

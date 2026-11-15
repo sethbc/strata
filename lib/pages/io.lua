@@ -39,7 +39,12 @@ return function(S)
   M.IO_PAGE = IO_PAGE
 
   S.io_cursor = 1         -- a row index into M.rows(), always a selectable row when there is one
-  local view = {tail = 0}  -- rows the view is scrolled past the cursor's (field_list.move_scroll)
+  -- tail: rows the view is scrolled past the cursor's (field_list.move_scroll);
+  -- pinned: the section whose title show_section put at the top of the
+  -- view, until E2 or K2 moves; anchor: which row the cursor is on (its
+  -- section, label and their count so far, row_ids) and index the place it
+  -- was put at, so the cursor follows its row when rows come or go above it
+  local view = {tail = 0, pinned = nil, anchor = nil, index = 1}
   local section_errors = {}  -- contained_call's last message per section part
   local detail = {rows = nil, cursor = 1, owner = nil}  -- the open detail list
 
@@ -136,12 +141,76 @@ return function(S)
     return rows
   end
 
-  -- The row under the cursor, or nil (no selectable row)
+  -- Each row's identity: its section, its label and how many rows of that
+  -- section and label came before it, so a row keeps its identity when
+  -- others come or go around it
+  local function row_ids(rows)
+    local seen, ids = {}, {}
+    for index, row in ipairs(rows) do
+      local base = tostring(row.section) .. "\n" .. tostring(row.label)
+      seen[base] = (seen[base] or 0) + 1
+      ids[index] = base .. "\n" .. seen[base]
+    end
+    return ids
+  end
+
+  -- The cursor on rows[index] (the nearest selectable row at or before it),
+  -- remembering which row that is
+  local function place(rows, index)
+    S.io_cursor = field_list.clamp(rows, index)
+    view.index, view.anchor = S.io_cursor, row_ids(rows)[S.io_cursor]
+  end
+
+  -- After the rows are rebuilt (every use): the cursor back on the row it
+  -- was on, wherever that row is now; when it is gone, the nearest
+  -- selectable row at or before its old place. A cursor set from outside
+  -- (S.io_cursor not where place put it) is taken where it is
+  local function follow(rows)
+    if S.io_cursor ~= view.index or view.anchor == nil then
+      place(rows, S.io_cursor)
+      return
+    end
+    for index, id in ipairs(row_ids(rows)) do
+      if id == view.anchor and rows[index].selectable then
+        place(rows, index)
+        return
+      end
+    end
+    place(rows, view.index)
+  end
+
+  -- The row under the cursor once it has followed its row, or nil (no
+  -- selectable row)
   local function cursor_row(rows)
-    S.io_cursor = field_list.clamp(rows, S.io_cursor)
+    follow(rows)
     local row = rows[S.io_cursor]
     if row and row.selectable then return row end
     return nil
+  end
+
+  -- The pinned section's title row, or nil (none, or it no longer shows)
+  local function pinned_title(rows)
+    if not view.pinned then return nil end
+    for index, row in ipairs(rows) do
+      if row.kind == "title" and row.section == view.pinned then return index end
+    end
+    view.pinned = nil
+    return nil
+  end
+
+  -- Whether the cursor's row is out of view: scrolled past it (tail), or a
+  -- pinned section shown at the top without it. E3 and K3 then only bring
+  -- it back, as SETUP's scrolled view does
+  local function hidden(rows)
+    if view.tail > 0 then return true end
+    local title = pinned_title(rows)
+    if not title then return false end
+    local first = field_list.first_visible(rows, title + 1, IO_PAGE.visible, 0)
+    return S.io_cursor < first or S.io_cursor >= first + IO_PAGE.visible
+  end
+
+  local function unhide()
+    view.tail, view.pinned = 0, nil
   end
 
   local function flash_not_saved()
@@ -212,6 +281,18 @@ return function(S)
       return
     end
     cursor_row(rows)
+    local title = pinned_title(rows)
+    if title then
+      -- the view from the pinned title: field_list.draw shows the row after
+      -- the title as if it held the cursor (so the title is the row above,
+      -- at the top), and the real cursor's row is the one lit
+      local cursor_entry = rows[S.io_cursor]
+      field_list.draw(rows, title + 1, {visible = IO_PAGE.visible, first_y = IO_PAGE.first_y,
+        spacing = IO_PAGE.spacing, value_right = IO_PAGE.value_right, tail = 0}, function(row, y, _, value_right)
+        draw_row(row, y, row == cursor_entry and row.selectable, value_right)
+      end)
+      return
+    end
     draw_list(rows, S.io_cursor, view.tail)
   end
 
@@ -276,13 +357,16 @@ return function(S)
 
   local function io_enc(n, d)
     local rows = M.rows()
+    local row = cursor_row(rows)
     if n == 2 then
-      S.io_cursor, view.tail = field_list.move_scroll(rows, S.io_cursor, view.tail, d, IO_PAGE.visible)
-    elseif n == 3 and view.tail > 0 then
-      view.tail = 0  -- E3 brings the cursor's row back before it edits (as SETUP)
-    elseif n == 3 then
-      local row = cursor_row(rows)
-      if row then edit(row, d, false) end
+      view.pinned = nil
+      local cursor
+      cursor, view.tail = field_list.move_scroll(rows, S.io_cursor, view.tail, d, IO_PAGE.visible)
+      place(rows, cursor)
+    elseif n == 3 and hidden(rows) then
+      unhide()  -- E3 brings the cursor's row back before it edits (as SETUP)
+    elseif n == 3 and row then
+      edit(row, d, false)
     end
   end
 
@@ -294,9 +378,10 @@ return function(S)
       S.lib.ui_keys.select_voice_by(d)
       return true
     end
-    if n == 3 and view.tail == 0 then
-      local row = cursor_row(M.rows())
-      if row and row.kind == "rig" then
+    if n == 3 then
+      local rows = M.rows()
+      local row = cursor_row(rows)
+      if row and row.kind == "rig" and not hidden(rows) then
         edit(row, d, true)
         return true
       end
@@ -309,7 +394,10 @@ return function(S)
     local row = cursor_row(rows)
     if n == 2 then
       local index = next_section_row(rows, S.io_cursor)
-      if index then S.io_cursor, view.tail = index, 0 end
+      unhide()
+      if index then place(rows, index) end
+    elseif n == 3 and hidden(rows) then
+      unhide()  -- K3 acts only on a row in view
     elseif n == 3 and row and row.kind == "action" then
       contained(row.section .. " action", "io section " .. row.section .. " action", row.run)
     elseif n == 3 and row and row.kind == "detail" then
@@ -323,37 +411,54 @@ return function(S)
     local rows = M.rows()
     local row = cursor_row(rows)
     if alt_held then
-      local fine = row and view.tail == 0 and (row.kind == "rig"
+      local fine = row and not hidden(rows) and (row.kind == "rig"
         or (row.kind == "param" and params:lookup_param(row.param_id).t == params.tCONTROL))
       return fine and "E2:voice E3:fine" or "E2:voice"
     end
     if #rows == 0 then return "E1:page" end
-    if view.tail > 0 then return "E2:row E3:back" end
     if not row then return "E2:row" end
+    if hidden(rows) then return "E2:row E3:back" end
     if row.kind == "action" then return "E2:row K2:section K3:" .. row.hint end
     if row.kind == "detail" then return "E2:row K2:section K3:open" end
     return "E2:row E3:value K2:section"
   end
 
-  -- The cursor on section name's first selectable row, its title at the top
-  -- of the list (or as near it as the list's end allows); false when no
-  -- such section shows or it has no selectable row
+  -- Section name's title at the top of the view (or as near it as the
+  -- list's end allows), whether or not the section has a selectable row
+  -- (one without its device may show only status rows): the cursor on its
+  -- first selectable row; with none, on the nearest selectable row before
+  -- it, else the first after it, else where it is. true when the section
+  -- is registered (it then always shows its title row), false otherwise
   function M.show_section(name)
     local rows = M.rows()
+    local title
     for index, row in ipairs(rows) do
       if row.kind == "title" and row.section == name then
-        for field_index = index + 1, #rows do
-          local field = rows[field_index]
-          if field.section ~= name then break end
-          if field.selectable then
-            S.io_cursor, view.tail = field_index, 0
-            return true
-          end
-        end
-        return false
+        title = index
+        break
       end
     end
-    return false
+    if not title then return false end
+    follow(rows)
+    local target
+    for index = title + 1, #rows do
+      if rows[index].section ~= name then break end
+      if rows[index].selectable then
+        target = index
+        break
+      end
+    end
+    for index = title - 1, 1, -1 do
+      if target then break end
+      if rows[index].selectable then target = index end
+    end
+    for index = title + 1, #rows do
+      if target then break end
+      if rows[index].selectable then target = index end
+    end
+    if target then place(rows, target) end
+    view.tail, view.pinned = 0, name
+    return true
   end
 
   -- The page's record, at IO's place in UI_PAGES (the tenth: appended, so

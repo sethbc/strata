@@ -39,7 +39,7 @@ Each setting takes effect once the part of the rig that reads it arrives with it
 - **E2** - Move to the next or previous row; past the last one, scroll over the lines below it
 - **E3** - Change the row's value (with K1 held, ALT+E3, finely); on a scrolled view, scroll back to the row instead
 - **K2** - Jump to the next section's first row (from the last section, back to the first)
-- **K3** - Run the row's action, or open its detail list
+- **K3** - Run the row's action, or open its detail list; when the row is out of view, bring it back instead
 - **ALT+E2** - Select the voice, as on MAIN: the `voice` section shows the selected voice's routes
 
 The arc's rings are off on IO for now.

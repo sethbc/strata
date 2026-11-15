@@ -3230,17 +3230,132 @@ test("only lib/io/ports.lua sets midi.add, midi.remove or a MIDI vport's event",
 end)
 
 -- 3.6 (design §2.3): a rig setting changes only from a row of the IO page,
--- never from a PSET, a scene, a controller, OSC or a Teletype call
+-- never from a PSET, a scene, a controller, OSC or a Teletype call. So
+-- outside lib/pages/io.lua and lib/io/rig.lua every reach of the module
+-- reads: rig_misuses(text) lists each place in a Lua source (comments and
+-- strings blanked) where the module (`<x>.io_rig`, `<x>["io_rig"]`, or a
+-- name it was given with `local name = <x>.io_rig`, wherever that name is
+-- used later) is followed by anything but .get(, .text(, .on_change( or
+-- .RIG; a string "io_rig" anywhere else; and an order named io_rig
+-- (START_ORDER.io_rig) or the include in strata.lua are not uses
+local RIG_READS = { "get%s*%(", "text%s*%(", "on_change%s*%(", "RIG%f[^%w_]" }
+local function rig_misuses(text)
+  local code = h.sync_check.sanitize_lua(text)
+  local found = {}
+  local function add(position, what)
+    local _, newlines = code:sub(1, position):gsub("\n", "")
+    found[#found + 1] = "line " .. (newlines + 1) .. ": " .. what
+  end
+  local function reads(after)
+    for _, read in ipairs(RIG_READS) do
+      if code:find("^%s*%.%s*" .. read, after) then return true end
+    end
+    return false
+  end
+  -- a real string "io_rig" (the blanked code keeps its quote there; a
+  -- comment's is blank, another string's an underscore): as an index
+  -- (["io_rig"]) it becomes .io_rig, padded to the same length, anything
+  -- else is a misuse
+  for start, quote, finish in text:gmatch("()([\"'])io_rig%2()") do
+    if code:sub(start, start) == quote then
+      local open = code:sub(1, start - 1):match("()%[%s*$")
+      local close = code:match("^%s*%]()", finish)
+      if open and close then
+        code = code:sub(1, open - 1) .. ".io_rig" .. string.rep(" ", close - open - 7) .. code:sub(close)
+      else
+        add(start, 'a string "io_rig"')
+      end
+    end
+  end
+  local aliases = {}
+  for dot, finish in code:gmatch("()%.%s*io_rig%f[^%w_]()") do
+    local chain_start = dot
+    while chain_start > 1 and code:sub(chain_start - 1, chain_start - 1):match("[%w_%.]") do
+      chain_start = chain_start - 1
+    end
+    local chain = code:sub(chain_start, finish - 1)
+    local line_before = code:sub(1, chain_start - 1):match("[^\n]*$")
+    local alias = line_before:match("^%s*local%s+([%a_][%w_]*)%s*=%s*$")
+      or line_before:match("^%s*([%a_][%w_]*)%s*=%s*$")
+    local statement_ends = code:find("^[ \t]*\n", finish) or code:find("^[ \t]*;", finish)
+      or code:find("^%s*$", finish)
+    if chain:match("ORDER%.io_rig$") then
+      -- START_ORDER.io_rig: an order, not the module
+    elseif reads(finish) then
+      -- a read
+    elseif chain == "S.lib.io_rig" and code:find("^%s*=%s*include%s*%(", finish) then
+      -- strata.lua's include
+    elseif alias and statement_ends then
+      aliases[#aliases + 1] = {name = alias, at = chain_start}
+    else
+      add(dot, chain .. " used other than to read")
+    end
+  end
+  -- each later use of a name the module was given must read too
+  for _, alias in ipairs(aliases) do
+    for start, finish in code:gmatch("()%f[%w_]" .. alias.name .. "%f[^%w_]()") do
+      local declaration = code:find("^%s*=", finish) and start < alias.at
+        and not code:sub(start, alias.at):find("\n")
+      local field = code:sub(1, start - 1):find("[%.:]%s*$")
+      if not declaration and not field and not reads(finish) then
+        add(start, alias.name .. " (the rig module) used other than to read")
+      end
+    end
+  end
+  return found
+end
+
+test("the rig guard catches every way to reach set or step, and only those", function()
+  local caught = {
+    'S.lib.io_rig.set("ii_bus", "strata")',
+    'S.lib.io_rig.step("e16_port", 1)',
+    'S.lib.io_rig .set ("ii_bus", "off")',
+    'S.lib.io_rig\n  .step("osc_port", 1)',
+    'S.lib["io_rig"].set("ii_bus", "off")',
+    "S.lib[ 'io_rig' ].step(\"osc_port\", 1)",
+    'local rig = S.lib.io_rig\nrig.set("ii_bus", "off")',
+    'local rig = S.lib.io_rig\nlocal function f() rig.step("e16_port", 1) end',
+    'local rig = S.lib.io_rig\nother(rig)',
+    'local rig = S.lib.io_rig\nlocal again = rig\nagain.set("ii_bus", "off")',
+    'local set = S.lib.io_rig.set\nset("ii_bus", "off")',
+    'other(S.lib.io_rig)',
+    'local rig = rawget(S.lib, "io_rig")',
+    'local a, rig = 1, S.lib.io_rig',
+  }
+  local missed = {}
+  for _, sample in ipairs(caught) do
+    if #rig_misuses(sample) == 0 then missed[#missed + 1] = sample end
+  end
+  assert_equal(table.concat(missed, " | "), "", "every sample caught")
+  local allowed = {
+    'local bus = S.lib.io_rig.get("ii_bus")',
+    'if S.lib.io_rig.get ("e16_port") > 0 then end',
+    'local rig = S.lib.io_rig\nlocal port = rig.get("e16_port")\nrig.on_change("e16_port", f)\nlocal t = rig.text("ii_bus")',
+    'local rig = S.lib.io_rig  -- the rig settings\nlocal function f() return rig.get("ii_bus") end',
+    'for _, key in ipairs(S.lib.io_rig.RIG.order) do end',
+    'S.lib["io_rig"].get("ii_bus")',
+    '-- S.lib.io_rig.set("ii_bus", "strata") in a comment',
+    'print("S.lib.io_rig.set(")',
+    'S.register_start(S.constants.START_ORDER.io_rig, f)',
+    'S.lib.io_rig = include("lib/io/rig")(S)',
+    'local io_rig_save = S.constants.CLEANUP_ORDER.io_rig_save',
+  }
+  local refused = {}
+  for _, sample in ipairs(allowed) do
+    local found = rig_misuses(sample)
+    if #found > 0 then refused[#refused + 1] = sample .. " (" .. table.concat(found, "; ") .. ")" end
+  end
+  assert_equal(table.concat(refused, " | "), "", "every allowed sample passes")
+end)
+
 test("only the IO page changes a rig setting", function()
   local allowed = { ["lib/pages/io.lua"] = true, ["lib/io/rig.lua"] = true }
   local seen = 0
   for _, source in ipairs(h.read_lua_sources()) do
-    if source.path == "strata.lua" or source.path:match("^lib/") then
+    if (source.path == "strata.lua" or source.path:match("^lib/")) and not allowed[source.path] then
       seen = seen + 1
-      for _, call in ipairs({ "io_rig.set(", "io_rig.step(" }) do
-        assert_true(allowed[source.path] or not source.text:find(call, 1, true),
-          source.path .. " calls " .. call .. ": only the IO page changes a rig setting")
-      end
+      assert_equal(table.concat(rig_misuses(source.text), "; "), "",
+        source.path .. ": only the IO page changes a rig setting (read it with get, text, on_change or RIG)")
     end
   end
   assert_true(seen > 50, "the script's sources were read (" .. seen .. ")")

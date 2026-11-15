@@ -229,4 +229,89 @@ test("show_section puts its section at the top; the layout states cover each sec
   assert_equal(local_value("S").lib.pages_io.rows()[local_value("S").io_cursor].label, "x", "after show_section")
 end)
 
+-- A row that comes or goes above the cursor (a device plugged in, in a later
+-- package) must not move E3 onto another row: the cursor follows its row
+test("the cursor stays on its row when rows above it come and go", function()
+  local context, S = loaded()
+  local plugged = false
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    local rows = {}
+    if plugged then rows[#rows + 1] = { label = "new", kind = "param", param_id = "mutation_amount" } end
+    rows[#rows + 1] = { label = "rate", kind = "param", param_id = "mutation_rate" }
+    rows[#rows + 1] = { label = "prob", kind = "param", param_id = "mutation_probability" }
+    rows[#rows + 1] = { label = "port", kind = "rig", key = "e16_port" }
+    return rows
+  end })
+  show_page("IO")
+  enc(2, 1); redraw()
+  assert_equal(current_row(S).label, "prob")
+  local rate, prob, amount = params:get("mutation_rate"), params:get("mutation_probability"),
+    params:get("mutation_amount")
+  plugged = true
+  redraw()
+  enc(3, 1)
+  assert_true(params:get("mutation_probability") > prob, "E3 still edits prob")
+  assert_equal(params:get("mutation_rate"), rate, "not the row now at its old place")
+  assert_equal(params:get("mutation_amount"), amount, "nor the new row")
+  assert_equal(current_row(S).label, "prob", "S.io_cursor follows the row")
+  assert_screen_layout(context, "IO after a row came above the cursor")
+  -- the row gone: the nearest selectable row at or before its old place
+  plugged = false
+  enc(2, 1); assert_equal(current_row(S).label, "port")
+  S.register_io_section({ name = "zzz", title = "zzz", rows = function() return {} end })
+  local real_rows = S.registry.io_sections[1].rows
+  S.registry.io_sections[1].rows = function()
+    local rows = real_rows()
+    table.remove(rows)  -- port goes
+    return rows
+  end
+  redraw()
+  assert_equal(current_row(S).label, "prob", "the nearest row before it")
+end)
+
+-- design §11: each section at the top with and without its device, and a
+-- section without its device may show only status rows
+test("show_section puts a section of status rows only at the top", function()
+  local context, S = loaded()
+  plain_section(S, "voice", 8)
+  S.register_io_section({ name = "crow", title = "crow", status = function() return "[--]" end, rows = function()
+    return { { kind = "status", text = "no crow connected" }, { kind = "status", text = "plug one in" } }
+  end })
+  plain_section(S, "tape", 6)
+  show_page("IO")
+  enc(2, 3)
+  assert_equal(S.lib.pages_io.show_section("crow"), true, "a registered section")
+  assert_equal(current_row(S).label, "voice 8", "the cursor on the nearest selectable row, before it")
+  redraw()
+  assert_equal(text_entry(context, "crow").y, S.lib.pages_io.IO_PAGE.first_y, "its title at the top of the list")
+  assert_screen_layout(context, "IO crow without its device at the top")
+  -- the cursor's row is out of view: E3 brings it back and edits nothing
+  assert_equal(hint_text(context), "E2:row E3:back")
+  local rate = params:get("mutation_rate")
+  enc(3, 1); redraw()
+  assert_equal(params:get("mutation_rate"), rate, "E3 edits nothing")
+  assert_true(screen_shows(context, "voice 8"), "the cursor's row is back in view")
+  enc(3, 1)
+  assert_true(params:get("mutation_rate") > rate, "the next E3 edits it")
+  -- a section first in the list: the nearest selectable row is after it
+  S.lib.pages_io.show_section("voice")
+  assert_equal(S.lib.pages_io.show_section("crow"), true)
+  -- the layout state draws it too
+  local load_context = load_strata({ before_init = function()
+    local script = local_value("S")
+    script.register_io_section({ name = "crow", title = "crow", rows = function()
+      return { { kind = "status", text = "no crow connected" } }
+    end })
+  end })
+  finish_startup(load_context)
+  show_page("IO")
+  local state = local_value("S").registry.pages[10].layout_states[2]
+  assert_equal(state.name, "crow at the top")
+  state.setup(load_context)
+  redraw()
+  assert_equal(load_context.screen.texts[2].text, "crow", "alone on the page, at the top")
+  assert_screen_layout(load_context, "IO a status-only section alone")
+  enc(2, 1); enc(3, 1); tap(2); tap(3)  -- nothing to move to or edit
+end)
+
 end
