@@ -28,6 +28,13 @@ local SYSTEM = {
   division = 5,             -- v<i>_seq_division: 1/8, 0.1 s at 300 BPM, room for 4 ratchet hits of 25 ms
   ratchet = 4, chord = {0, 1, 2, 3, 4, 5, 6, 7},  -- chords of 8
   level = 12,
+  -- The density, cut to keep the file's run time (never a bound): every
+  -- second pattern step set (a chord of eight in four hits every 0.2 s on
+  -- each voice); the fifteen MPE notes' values moving every fourth LFO step
+  -- (12 Hz each: 45 values at a time, still more than MIDI out's 24 a
+  -- step); every third LFO step is 16 Hz, at least one redraw of the
+  -- remote grid each 15 Hz frame
+  step_every = 2, mpe_every = 4, frame_every = 3,
   tick_tolerance = h.stubs.MATRON_TICK_SECONDS,
 }
 
@@ -80,6 +87,12 @@ local function watch_osc(context)
   return log
 end
 
+-- A logged MIDI send's message, parsed once
+local function message_of(entry)
+  if not entry.msg then entry.msg = midi.to_msg(entry.bytes) end
+  return entry.msg
+end
+
 local function message(bytes) return midi.to_msg(bytes) end
 
 -- Groups a log's entries by time (one clock tick sends at one time):
@@ -122,12 +135,13 @@ local function run_all_voices(S)
 end
 
 -- Patterns with chords of eight and ratchets of four on all seven voices:
--- every step set, the 1/8 division (four hits fit in a step at 300 BPM)
-local function busy_patterns(S, steps)
+-- every second step set (SYSTEM.step_every), the 1/8 division (four hits
+-- fit in a step at 300 BPM)
+local function busy_patterns(S)
   for voice = 1, S.constants.NUM_VOICES do
     params:set("v" .. voice .. "_seq_division", SYSTEM.division)
     for step = 1, S.constants.PATTERN_LENGTH do
-      local on = step <= (steps or S.constants.PATTERN_LENGTH)
+      local on = (step - 1) % SYSTEM.step_every == 0
       S.patterns[voice][step] = on and SYSTEM.level or 0
       if on then
         S.lib.sequencer.set_step_attr(voice, step, "notes", SYSTEM.chord)
@@ -135,6 +149,13 @@ local function busy_patterns(S, steps)
       end
     end
   end
+end
+
+-- The hits a minute of busy_patterns plays: each voice's set steps (one in
+-- step_every of its 1/8 steps, 10 a second at 300 BPM) times the ratchet
+local function expected_hits(S)
+  local steps_per_second = SYSTEM.tempo / 60 * 2
+  return S.constants.NUM_VOICES * steps_per_second / SYSTEM.step_every * SYSTEM.ratchet * SYSTEM.minute
 end
 
 -- Two scenes to recall in turn
@@ -156,7 +177,7 @@ local function started(options)
   end})
   finish_startup(context)
   local S = local_value("S")
-  local rig = {context = context, S = S, players = made, devices = {}, hits = {}}
+  local rig = {context = context, S = S, players = made, devices = {}, hits = {}, print = print}
   -- a step output of the test's own, after the real ones: it only records
   -- each hit (its time, the beat now, the event's beat, gate and pitches),
   -- so a note off can be checked against its note's time
@@ -172,7 +193,7 @@ local function started(options)
   context.crow.plug()
   params:set("clock_tempo", SYSTEM.tempo)
   run_all_voices(S)
-  busy_patterns(S, options.steps)
+  busy_patterns(S)
   two_scenes(S)
   return rig
 end
@@ -358,7 +379,7 @@ local function everything_moves(rig)
     assert_equal(S.lib.notes.held(voice), voice == 1 and 8 or 7, "voice " .. voice .. " holds its played notes")
   end
   return function(n)
-    if rig.mpe_held then
+    if rig.mpe_held and n % SYSTEM.mpe_every == 0 then
       for k, played in ipairs(MPE_NOTES) do
         local phase = n * 0.37 + k
         context.midi.send(ROUTES.midi_in, {type = "pitchbend", val = 8192 + math.floor(3000 * math.sin(phase)),
@@ -384,7 +405,7 @@ local function everything_moves(rig)
     if n % 6 == 0 then
       context.midi.send(SYSTEM.e16_port, {type = "cc", cc = 102 + math.floor(n / 6) % 16, val = 1, ch = 16})
     end
-    grid_redraw()
+    if n % SYSTEM.frame_every == 0 then grid_redraw() end
   end
 end
 
@@ -439,6 +460,18 @@ local function minute_with_everything_on()
   return rig
 end
 
+-- The minute with everything on is played once for the two tests that
+-- read it (the bounds during it, the stop after it): the first leaves its
+-- rig here and the second takes it, or plays the minute itself when run
+-- without the first (or after it failed before the minute ended)
+local played = {}
+
+local function take_played_minute()
+  local rig = played.everything_on
+  played.everything_on = nil
+  return rig
+end
+
 ---------------------------------------------------------------------------
 -- Reading the records
 ---------------------------------------------------------------------------
@@ -485,15 +518,17 @@ local function late_midi_offs(rig)
   for _, port in ipairs(SYSTEM.midi_ports) do
     local open = {}
     for _, entry in ipairs(rig.devices[port].log) do
-      local msg = message(entry.bytes)
+      local msg = message_of(entry)
       local key = msg.ch and msg.note and (msg.ch * 128 + msg.note)
       if is_status(msg, "note_on") then
         local hit = index[time_key(voice_on(port, msg.ch) or 0, entry.t)]
         local due = false  -- no end to keep
         if hit then
-          for _, pitch in ipairs(hit.pitches) do
-            if util.clamp(math.floor(pitch + 0.5), 0, 127) == msg.note then due = hit_end(hit) end
+          if not hit.notes then
+            hit.notes = {}
+            for _, pitch in ipairs(hit.pitches) do hit.notes[util.clamp(math.floor(pitch + 0.5), 0, 127)] = true end
           end
+          if hit.notes[msg.note] then due = hit_end(hit) end
         end
         local record = open[key]
         if not record then open[key] = {due = due}
@@ -554,7 +589,7 @@ test("with every default a minute of playing sends nothing anywhere", function()
   pattern_clock_stop()
   assert_true(S.pattern_playing == false, "the patterns stopped")
   -- the minute played: 7 voices x 10 steps a second x 4 hits, for 60 s
-  assert_true(#rig.hits >= 0.9 * 7 * 10 * SYSTEM.ratchet * SYSTEM.minute, "hits played: " .. #rig.hits)
+  assert_true(#rig.hits >= 0.9 * expected_hits(rig.S), "hits played: " .. #rig.hits)
   for _, port in ipairs(SYSTEM.midi_ports) do
     assert_equal(#rig.devices[port].sent, 0, "MIDI port " .. port .. " was sent nothing")
   end
@@ -575,9 +610,10 @@ test("with everything on, a minute holds every bound", function()
   -- design §1's bounds as each module's notes file states them (plan
   -- ruling 29), counted per LFO step, tick or window from the stubs' records
   local rig = minute_with_everything_on()
+  played.everything_on = rig
   local S = rig.S
   pattern_clock_stop()
-  assert_true(#rig.hits >= 0.9 * 7 * 10 * SYSTEM.ratchet * SYSTEM.minute, "hits played: " .. #rig.hits)
+  assert_true(#rig.hits >= 0.9 * expected_hits(rig.S), "hits played: " .. #rig.hits)
 
   -- ii (docs/notes/lua/io/ii.md): at most 4 lines a step, every one from
   -- the step; no send accepted while 48 or more lines waited; never more
@@ -620,14 +656,14 @@ test("with everything on, a minute holds every bound", function()
   local MIDI_OUT = S.lib.io_midi_out.MIDI_OUT
   local expression = per_time(joined(rig.devices[1].log, rig.devices[2].log), function(entry)
     if not entry.lfo then return false end
-    local msg = message(entry.bytes)
+    local msg = message_of(entry)
     return msg.type == "pitchbend" or msg.type == "channel_pressure" or (msg.type == "cc" and msg.cc == 74)
   end)
   local most_expression = largest(expression)
   assert_true(most_expression <= MIDI_OUT.express_per_step, "at most 24 expression a step, got " .. most_expression)
   assert_equal(most_expression, MIDI_OUT.express_per_step, "fifteen moving notes fill a step's 24")
   local cc_out = per_time(rig.devices[ROUTES.cc_port].log, function(entry)
-    local msg = message(entry.bytes)
+    local msg = message_of(entry)
     return entry.lfo and msg.type == "cc" and msg.ch == ROUTES.cc_channel
   end)
   local most_cc = largest(cc_out)
@@ -636,7 +672,7 @@ test("with everything on, a minute holds every bound", function()
 
   -- the remote grid (docs/notes/lua/io/remote.md): at most 96 LED
   -- messages a 1/30 s tick
-  local leds = per_time(rig.grid.log, function(entry) return message(entry.bytes).type == "note_on" end)
+  local leds = per_time(rig.grid.log, function(entry) return message_of(entry).type == "note_on" end)
   local most_leds = largest(leds)
   assert_true(most_leds <= S.lib.io_remote.REMOTE.leds_per_tick, "at most 96 LED messages a tick, got " .. most_leds)
   assert_true(most_leds > 0, "the remote grid was drawn")
@@ -649,7 +685,7 @@ test("with everything on, a minute holds every bound", function()
   -- the E16's echo (docs/notes/lua/io/controllers.md): at most 16 CCs and
   -- one ring frame a 1/15 s tick
   local CONTROLLERS = S.lib.io_controllers.CONTROLLERS
-  local echo = per_time(rig.e16.log, function(entry) return message(entry.bytes).type == "cc" end)
+  local echo = per_time(rig.e16.log, function(entry) return message_of(entry).type == "cc" end)
   local most_echo = largest(echo)
   assert_true(most_echo <= CONTROLLERS.echo_per_tick, "at most 16 echo CCs a tick, got " .. most_echo)
   assert_true(most_echo > 0, "the macros were echoed")
@@ -675,11 +711,16 @@ test("after that minute everything stops with no note left", function()
   -- (seven voices on an ER-301 and a TELEXo), so the queue is drained by
   -- steps before cleanup(); nothing more of the leaving sequence is held
   -- than its notes file promises
-  local rig = minute_with_everything_on()
+  local rig = take_played_minute()
+  local reused = rig ~= nil
+  -- the runner put its own print back after the last test: the script's
+  -- lines go to the quiet install's again, which also records its errors
+  if reused then print = rig.print end
+  rig = rig or minute_with_everything_on()
   local context, S = rig.context, rig.S
   pattern_clock_stop()
-  for _, played in ipairs(MPE_NOTES) do
-    context.midi.send(ROUTES.midi_in, {type = "note_off", note = played.note, vel = 0, ch = played.channel})
+  for _, key in ipairs(MPE_NOTES) do
+    context.midi.send(ROUTES.midi_in, {type = "note_off", note = key.note, vel = 0, ch = key.channel})
   end
   rig.mpe_held = false
   for _ = 1, 200 do
@@ -755,6 +796,12 @@ test("after that minute everything stops with no note left", function()
   end
   for voice = 1, S.constants.NUM_VOICES do
     assert_equal(next(S.lib.io_targets.sounding(voice)), nil, "voice " .. voice .. " sounds no target note")
+  end
+  -- the harness checks the invariants of a test that loaded the script;
+  -- this one, reading the minute the bounds test loaded, checks them itself
+  if reused then
+    local broken = h.check_invariants()
+    assert_equal(#broken, 0, "invariants after cleanup: " .. table.concat(broken, "; "))
   end
 end)
 
