@@ -926,7 +926,8 @@ local tFILE, tTRIGGER, tGROUP, tTEXT, tBINARY = codes.file, codes.trigger, codes
 -- clock_midi_out_1..16), so a script param with one of these ids collides
 -- as it would on norns. Their actions do nothing, except clock_tempo's,
 -- which sets the internal clock's tempo and calls
--- clock.tempo_change_handler like norns'. clock.add_params' three clocks
+-- clock.tempo_change_handler like norns', and the three cut_input_*'s,
+-- which set their softcut mixer level like norns'. clock.add_params' three clocks
 -- (crow out, MIDI clock out, external tempo) are not started: they touch no
 -- script state, and clock.advance() would mostly step them.
 local function add_system_params(paramset, controlspec)
@@ -964,6 +965,12 @@ local function add_system_params(paramset, controlspec)
   paramset:add_group("SOFTCUT", 3)
   db("cut_input_adc", "input adc", 18, 0); db("cut_input_eng", "input engine", 18, 0)
   db("cut_input_tape", "input tape", 18, -math.huge)
+  -- lua/core/audio.lua's three actions (norns.state.mix left out): a PSET
+  -- read that changes one sets that mixer level, as on norns
+  for _, entry in ipairs({{"cut_input_adc", "level_adc_cut"}, {"cut_input_eng", "level_eng_cut"},
+    {"cut_input_tape", "level_tape_cut"}}) do
+    paramset:set_action(entry[1], function(x) audio[entry[2]](util.dbamp(x)) end)
+  end
 
   paramset:add_group("CLOCK", 29)
   paramset:add_option("clock_source", "source", {"internal", "midi", "link", "crow"}, 1)

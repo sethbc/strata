@@ -179,6 +179,17 @@ return function(S)
     },
   })
 
+  -- norns' cut_input_* params are in every PSET and their actions set the
+  -- mixer: after a read that leaves the tape running, the loop's three
+  -- levels are set again (a read that turned it off has put norns' back)
+  local function hold_mixer()
+    if not engaged then return end
+    audio.level_eng_cut(1)
+    audio.level_adc_cut(0)
+    audio.level_tape_cut(0)
+  end
+  S.register_pset_hook({name = "io_tape", read = function() hold_mixer() end})
+
   -- init's start step: a tape already on (a restored param) is started;
   -- with the default, nothing
   S.register_start(S.constants.START_ORDER.io_tape, function()
