@@ -6,8 +6,8 @@
 -- message unless it leads: the rig says strata and a crow is there. Each
 -- message is a line of text, ii.<device>.<command>(<args>), sent through
 -- S.lib.io_crow; a bounded queue spreads them over the LFO clock's steps
--- (II.sends_per_step a step, II.queue_max waiting, the newest past it
--- dropped and counted, never an off: an off takes the newest non-off's place). Leaving the lead ends every device's notes, sends
+-- (II.sends_per_step a step, II.queue_max waiting, a send past it dropped
+-- and counted; an off is queued exactly when its line owes one, never dropped). Leaving the lead ends every device's notes, sends
 -- the waiting offs at once (II.cleanup_sends at most), releases each device
 -- and only then clears the flag. The devices register with
 -- S.register_ii_device; their params form the group strata_out_ii.
@@ -36,8 +36,9 @@ return function(S)
 
   -- leading: the flag send reads (set while the rig says strata with a
   -- crow there, cleared only at the end of the leaving sequence); queue:
-  -- the lines waiting, each {line, off}
-  local state = {started = false, stopped = false, leading = false, queue = {}, dropped = 0, errors = {}}
+  -- the entries waiting, each {line, off, key}; lines: each line's state
+  -- while Strata leads ({high, waiting}, by key)
+  local state = {started = false, stopped = false, leading = false, queue = {}, lines = {}, dropped = 0, errors = {}}
 
   local function bus() return S.lib.io_rig.get(SPEC.bus_key) end
   local function present() return S.lib.io_crow.present() end
@@ -60,15 +61,30 @@ return function(S)
     request_redraw()
   end
 
-  -- A queued line: its text, and what matches an off with its on (the
-  -- device, the command and the first argument, the port or output)
+  -- A queued entry: its text, whether it is an off, and its line's key
+  -- (the device, the command and the first argument, the port or output:
+  -- ii.er301.tr(3, 1) and ii.er301.tr(3, 0) are one line)
   local function entry_for(off, device, command, ...)
     local first = select("#", ...) > 0 and S.lib.io_crow.number((...)) or ""
-    return {line = line_for(device, command, ...), off = off, device = device, command = command, first = first}
+    return {line = line_for(device, command, ...), off = off, key = device .. "\n" .. command .. "\n" .. first}
   end
 
+  -- Per line while Strata leads (ruling 24): high (a send for it reached
+  -- crow and no off since) and waiting (its sends in the queue)
+  local function line_state(key)
+    local line = state.lines[key]
+    if not line then
+      line = {high = false, waiting = 0}
+      state.lines[key] = line
+    end
+    return line
+  end
+
+  local function forget_lines() state.lines = {} end
+
   -- The line joins the queue (true), or with queue_max waiting is dropped
-  -- and counted (false); false and nothing unless Strata leads
+  -- and counted (false); false and nothing unless Strata leads. A line
+  -- queued here is never taken out again while Strata leads
   function M.send(device, command, ...)
     if not state.leading then return false end
     local entry = entry_for(false, device, command, ...)
@@ -77,31 +93,29 @@ return function(S)
       return false
     end
     table.insert(state.queue, entry)
+    local line = line_state(entry.key)
+    line.waiting = line.waiting + 1
     return true
   end
 
-  -- An off (a gate low or a note's release) is never the line a full queue
-  -- drops (ruling 21): with queue_max waiting it takes the place of the
-  -- newest waiting line that is not an off (dropped and counted) and goes
-  -- to the end, after every line that waited, its own on included. When
-  -- the line it displaces is its own on (same device, command and first
-  -- argument), the device never gets either: both go, counted once, and
-  -- false. With only offs waiting it joins anyway. Otherwise true while
-  -- Strata leads; false and nothing unless it does
+  -- An off (a gate low or a note's release) is queued exactly when its
+  -- line owes one (ruling 24): the line is high on the device or a send
+  -- for it waits. An owed off joins the end of the queue whatever its
+  -- length (it never displaces a line and is never dropped), unless the
+  -- newest waiting entry of its line is already an off: then nothing is
+  -- added; true either way. An off not owed (its on was dropped at a full
+  -- queue) adds nothing, is not counted, false. False and nothing unless
+  -- Strata leads
   function M.send_off(device, command, ...)
     if not state.leading then return false end
     local entry = entry_for(true, device, command, ...)
-    if #state.queue >= II.queue_max then
-      for index = #state.queue, 1, -1 do
-        local waiting = state.queue[index]
-        if not waiting.off then
-          table.remove(state.queue, index)
-          count_drop()
-          if waiting.device == entry.device and waiting.command == entry.command and waiting.first == entry.first then
-            return false
-          end
-          break
-        end
+    local line = state.lines[entry.key]
+    if not (line and (line.high or line.waiting > 0)) then return false end
+    for index = #state.queue, 1, -1 do
+      local waiting = state.queue[index]
+      if waiting.key == entry.key then
+        if waiting.off then return true end
+        break
       end
     end
     table.insert(state.queue, entry)
@@ -114,11 +128,20 @@ return function(S)
     return S.lib.io_crow.send_now(line_for(device, command, ...))
   end
 
-  -- The first sends_per_step waiting, in order, from the LFO clock's step
+  -- The first sends_per_step waiting, in order, from the LFO clock's step;
+  -- each sent entry moves its line's state (a send raises it, an off lowers it)
   S.lib.lfos.on_step(function()
     if not state.leading then return end
     for _ = 1, math.min(II.sends_per_step, #state.queue) do
-      S.lib.io_crow.send_now(table.remove(state.queue, 1).line)
+      local entry = table.remove(state.queue, 1)
+      S.lib.io_crow.send_now(entry.line)
+      local line = line_state(entry.key)
+      if entry.off then
+        line.high = false
+      else
+        line.high, line.waiting = true, line.waiting - 1
+      end
+      if not line.high and line.waiting == 0 then state.lines[entry.key] = nil end
     end
   end)
 
@@ -173,12 +196,14 @@ return function(S)
     call_devices("release")
     state.leading = false
     state.queue = {}
+    forget_lines()
     request_redraw()
   end
 
   -- The crow left: nothing to send it through
   local function crow_gone()
     state.queue = {}
+    forget_lines()
     state.leading = false
   end
 

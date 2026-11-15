@@ -180,75 +180,152 @@ local function drain(step, ii)
   return sent
 end
 
-test("a full queue takes an off in place of the newest waiting line that is not an off", function()
-  -- ruling 21: an ER-301 or TELEXo trigger low that a full queue dropped would leave the gate high
+-- What the queue holds, in order (the lines send and send_off queued)
+local function queue_lines(step, ii) return drain(step, ii) end
+
+-- n lines on device "other", each a line of its own (no off is ever owed for them)
+local function fill(ii, n, from)
+  local lines = {}
+  for k = from or 1, (from or 1) + n - 1 do
+    assert_true(ii.send("other", "cv", k, 1), "line " .. k .. " queued")
+    lines[#lines + 1] = "ii.other.cv(" .. k .. ", 1)"
+  end
+  return lines
+end
+
+-- Ruling 24: the queue sends an off exactly when its line owes one (the line is
+-- high on the device, or a send for it waits); an off is never dropped and never
+-- displaces a line; a send at 48 waiting is the only loss, and its off is then not owed
+
+test("an off for a line that is still high is queued past a full queue", function()
+  -- the re-review's trace: s1's tr(12, 1) reached the ER-301; s2's cv and tr wait in a full queue
   local context, S, ii = started()
   local step = stepper(context, S)
   lead(context, S)
-  local expected = {}
-  for k = 1, 48 do
-    ii.send("er301", "cv", k, 1)
-    if k < 48 then expected[#expected + 1] = "ii.er301.cv(" .. k .. ", 1)" end
-  end
-  assert_equal(ii.send_off("er301", "tr", 99, 0), true, "the off is taken")
-  expected[#expected + 1] = "ii.er301.tr(99, 0)"
+  ii.send("er301", "tr", 12, 1)
+  drain(step, ii)
+  local expected = fill(ii, 46)
+  ii.send("er301", "cv", 12, 2); expected[#expected + 1] = "ii.er301.cv(12, 2)"
+  ii.send("er301", "tr", 12, 1); expected[#expected + 1] = "ii.er301.tr(12, 1)"
   assert_equal(ii.queued(), 48)
-  assert_equal(ii.dropped(), 1, "the displaced line is counted")
-  assert_equal(ii.send("er301", "cv", 50, 1), false, "a send at 48 is still dropped")
-  assert_equal(ii.dropped(), 2)
-  assert_equal(table.concat(drain(step, ii), "|"), table.concat(expected, "|"),
-    "the 47 left, in the order queued, then the off")
+  assert_equal(ii.send_off("er301", "tr", 12, 0), true)
+  expected[#expected + 1] = "ii.er301.tr(12, 0)"
+  assert_equal(ii.queued(), 49)
+  assert_equal(ii.dropped(), 0, "nothing dropped")
+  assert_equal(table.concat(queue_lines(step, ii), "|"), table.concat(expected, "|"), "every line in order, the off last")
 end)
 
-test("an off whose own on is the line it would displace takes both out", function()
+test("an on dropped at a full queue owes no off, unless its line is high", function()
   local context, S, ii = started()
   local step = stepper(context, S)
   lead(context, S)
-  for k = 1, 46 do ii.send("txo", "cv", k, 1) end
-  ii.send("txo", "cv", 5, 2)
-  ii.send("txo", "tr", 5, 1)  -- the newest waiting non-off: the note's own on
-  assert_equal(ii.queued(), 48)
-  assert_equal(ii.send_off("txo", "tr", 5, 0), false, "nothing is owed: the device never got the on")
-  assert_equal(ii.queued(), 47)
-  assert_equal(ii.dropped(), 1, "the pair counted once")
-  local sent = drain(step, ii)
-  assert_equal(#sent, 47)
-  for _, line in ipairs(sent) do
-    assert_true(line:find("ii.txo.tr(5", 1, true) == nil, "nothing of that note's trigger: " .. line)
-  end
-  assert_equal(sent[47], "ii.txo.cv(5, 2)", "the rest in the order queued")
+  fill(ii, 48)
+  assert_equal(ii.send("er301", "tr", 7, 1), false, "dropped")
+  assert_equal(ii.dropped(), 1)
+  assert_equal(ii.send_off("er301", "tr", 7, 0), false, "no off is owed")
+  assert_equal(ii.queued(), 48, "nothing added")
+  assert_equal(ii.dropped(), 1, "and not counted")
+  drain(step, ii)
+  ii.send("er301", "tr", 7, 1)
+  drain(step, ii)  -- port 7 is high
+  fill(ii, 48)
+  assert_equal(ii.send("er301", "tr", 7, 1), false, "a second on dropped")
+  assert_equal(ii.send_off("er301", "tr", 7, 0), true, "the earlier on is still owed its off")
+  assert_equal(ii.queued(), 49)
+  local sent = queue_lines(step, ii)
+  assert_equal(sent[#sent], "ii.er301.tr(7, 0)")
 end)
 
-test("with offs newest in a full queue the newest non-off is the one displaced", function()
+test("an off is never queued twice in a row for one line", function()
   local context, S, ii = started()
   local step = stepper(context, S)
   lead(context, S)
+  ii.send("er301", "tr", 3, 1)
+  drain(step, ii)
+  assert_equal(ii.send_off("er301", "tr", 3, 0), true)
+  assert_equal(ii.send_off("er301", "tr", 3, 0), true, "owed, and already waiting")
+  assert_equal(ii.queued(), 1, "one entry")
+  ii.send("er301", "tr", 3, 1)
+  assert_equal(ii.send_off("er301", "tr", 3, 0), true)
+  assert_equal(table.concat(queue_lines(step, ii), "|"), "ii.er301.tr(3, 0)|ii.er301.tr(3, 1)|ii.er301.tr(3, 0)",
+    "off, on, off")
+end)
+
+test("offs go past the bound and a send at 48 waiting is still dropped", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  for k = 1, 10 do ii.send("er301", "tr", k, 1) end
+  drain(step, ii)  -- ten ports high
   local expected = {}
-  for k = 1, 44 do
-    ii.send("er301", "cv", k, 1)
-    if k < 44 then expected[#expected + 1] = "ii.er301.cv(" .. k .. ", 1)" end
+  for k = 1, 10 do
+    ii.send("er301", "tr", k, 1); expected[#expected + 1] = "ii.er301.tr(" .. k .. ", 1)"
   end
-  for k = 1, 4 do
-    ii.send_off("er301", "tr", k, 0)
+  for _, line in ipairs(fill(ii, 38)) do expected[#expected + 1] = line end
+  assert_equal(ii.queued(), 48)
+  for k = 1, 10 do
+    assert_equal(ii.send_off("er301", "tr", k, 0), true)
     expected[#expected + 1] = "ii.er301.tr(" .. k .. ", 0)"
   end
-  assert_equal(ii.send_off("er301", "tr", 60, 0), true)
-  expected[#expected + 1] = "ii.er301.tr(60, 0)"
+  assert_equal(ii.queued(), 58)
+  assert_equal(ii.dropped(), 0)
+  assert_equal(ii.send("other", "cv", 99, 1), false, "a send past the bound")
   assert_equal(ii.dropped(), 1)
-  assert_equal(table.concat(drain(step, ii), "|"), table.concat(expected, "|"), "cv 44 displaced, the order kept")
+  assert_equal(ii.queued(), 58)
+  assert_equal(table.concat(queue_lines(step, ii), "|"), table.concat(expected, "|"),
+    "every line send answered true for, in order, then the offs")
 end)
 
-test("an off joins a queue of 48 offs", function()
+test("a line send answered true for is always sent while Strata leads", function()
   local context, S, ii = started()
   local step = stepper(context, S)
   lead(context, S)
-  for k = 1, 48 do ii.send_off("er301", "tr", k, 0) end
-  assert_equal(ii.send_off("er301", "tr", 49, 0), true)
-  assert_equal(ii.queued(), 49, "49 for a moment")
-  assert_equal(ii.dropped(), 0)
-  local sent = drain(step, ii)
-  assert_equal(#sent, 49)
-  for k = 1, 49 do assert_equal(sent[k], "ii.er301.tr(" .. k .. ", 0)") end
+  local accepted = {}
+  for k = 1, 20 do ii.send("er301", "tr", k, 1) end
+  drain(step, ii)
+  for k = 1, 60 do
+    local line = "ii.wtape.loop(" .. k .. ")"
+    if ii.send("wtape", "loop", k) then accepted[#accepted + 1] = line end
+    if k % 3 == 0 then ii.send_off("er301", "tr", k % 20 + 1, 0) end
+  end
+  local sent, seen = queue_lines(step, ii), {}
+  for _, line in ipairs(sent) do seen[line] = true end
+  assert_true(#accepted > 0 and #accepted < 60, "some sends were refused at the bound")
+  for _, line in ipairs(accepted) do assert_true(seen[line], line .. " was sent") end
+end)
+
+test("the lines' state is cleared with the lead", function()
+  local _, record = recording_device("probe")
+  local context, S, ii = started({ record })
+  local step = stepper(context, S)
+  S.register_note_target({ name = "probe",
+    routed = function(voice) return voice == 1 end,
+    note_on = function() S.lib.io_ii.send("probe", "tr", 3, 1) end,
+    note_off = function() S.lib.io_ii.send_off("probe", "tr", 3, 0) end })
+  lead(context, S)
+  S.lib.notes.play(1, { owner = "midi", key = 60, pitch = 60, velocity = 0.5, park = true, set_own = function() end })
+  drain(step, ii)
+  context.crow.clear()
+  set_bus(S, "off")
+  assert_equal(context.crow.sent[1], "ii.probe.tr(3, 0)", "its off in the leaving sequence")
+  set_bus(S, "strata")
+  assert_equal(ii.send_off("probe", "tr", 3, 0), false, "not owed after a new lead")
+  assert_equal(ii.queued(), 0)
+end)
+
+test("a TELEXo envelope note through a full queue gets the offs of the ons it sent", function()
+  -- the 2e brief: on cv(n, v), env(n, 1), tr(n, 1); offs tr(n, 0), env(n, 0)
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  local expected = fill(ii, 46)
+  assert_true(ii.send("txo", "cv", 5, 2.5)); expected[#expected + 1] = "ii.txo.cv(5, 2.5)"
+  assert_true(ii.send("txo", "env", 5, 1)); expected[#expected + 1] = "ii.txo.env(5, 1)"
+  assert_equal(ii.send("txo", "tr", 5, 1), false, "the trigger's on dropped")
+  assert_equal(ii.send_off("txo", "tr", 5, 0), false, "so its off is not owed")
+  assert_equal(ii.send_off("txo", "env", 5, 0), true, "the envelope's is")
+  expected[#expected + 1] = "ii.txo.env(5, 0)"
+  assert_equal(table.concat(queue_lines(step, ii), "|"), table.concat(expected, "|"))
 end)
 
 test("devices are made ready when Strata starts to lead and released when it stops", function()
@@ -291,14 +368,19 @@ test("leaving the bus sends the waiting offs at once, at most 14, and drops the 
     local_value("S").lib.io_ii.send_direct("probe", "mode", 0)
   end })
   local context, S, ii = started({ record })
+  local step = stepper(context, S)
   lead(context, S)
+  for k = 1, 30 do
+    if k % 3 ~= 0 then ii.send("probe", "tr", k, 1) end
+  end
+  drain(step, ii)  -- twenty lines high, each owed an off
   local offs = {}
   for k = 1, 30 do
     if k % 3 == 0 then
       ii.send("probe", "on", k)
     else
-      ii.send_off("probe", "off", k)
-      offs[#offs + 1] = "ii.probe.off(" .. k .. ")"
+      ii.send_off("probe", "tr", k, 0)
+      offs[#offs + 1] = "ii.probe.tr(" .. k .. ", 0)"
     end
   end
   assert_equal(#offs, 20)
