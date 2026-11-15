@@ -2125,7 +2125,13 @@ test("the OSC stub runs the script's handler, then norns' /param handling", func
   assert_equal(table.concat(order, "|"), "/param/osc_test_param 10.0.0.2:57121|param 2", "handler first, then the param")
   assert_equal(context.params:get("osc_test_param"), 2)
   local lines = captured_prints(function() context.osc.receive("/param/nope", {1}) end)
-  assert_true(#lines >= 1, "an unknown id prints")
+  assert_equal(#lines, 1, "an unknown id prints once")
+  assert_true(lines[1]:find("osc event error: ", 1, true) and lines[1]:find("invalid paramset index: nope", 1, true),
+    "the printed text names the error: " .. tostring(lines[1]))
+  osc.event = function() error("script handler failed") end
+  local ok, err = pcall(context.osc.receive, "/x", {})
+  assert_true(not ok and tostring(err):find("script handler failed", 1, true), "a script handler's error reaches the test")
+  osc.event = nil
   osc.send({"10.0.0.2", 9000}, "/x", {1})
   assert_equal(context.osc.sent[1].to[2], 9000, "send is recorded")
   assert_equal(context.osc.sent[1].path, "/x")
@@ -2159,7 +2165,7 @@ end)
 
 test("the nb stub's players record their calls", function()
   local context = load_strata()
-  local player = context.nb.add_player("emp")
+  local player = context.nb.add_player("emp", {"note_on", "note_off", "modulate_note", "describe"})
   assert_true(note_players.emp == player, "the player is in note_players")
   player:note_on(60, 0.5)
   player:note_off(60)
@@ -2197,14 +2203,170 @@ test("the iii stub runs a device script against iii's functions", function()
   assert_equal(device.refreshes, 2)
 end)
 
-test("every global the stubs add is one the structure test knows", function()
+test("every global the stubs add is defined for a script that reads it", function()
+  -- the structure test's list is every key of _G after an install, so a global
+  -- the install sets is known to it; a script chunk reads each here
+  local context = load_strata({ source = "probe = { crow ~= nil, osc ~= nil, softcut ~= nil, note_players ~= nil,"
+    .. " quote ~= nil, norns_crow = norns.crow ~= nil, levels = audio.level_eng_cut ~= nil }" })
+  local probe = rawget(_G, "probe")
+  _G.probe = nil
+  assert_true(probe, "the script chunk ran")
+  for key, defined in pairs(probe) do assert_true(defined, tostring(key) .. " is defined for a script") end
+  assert_equal(rawget(_G, "nb_player_refcounts"), nil, "nb_player_refcounts is nil until a host makes it")
+  _G.nb_player_refcounts = { stale = 1 }
   load_strata()
-  for _, name in ipairs({"crow", "osc", "softcut", "note_players"}) do
-    assert_true(rawget(_G, name) ~= nil, name .. " is a stub global")
+  assert_equal(rawget(_G, "nb_player_refcounts"), nil, "and does not survive the next install, as norns' fresh globals")
+end)
+
+test("the crow stub models neither crow.public nor norns.crow.public, and reading them raises", function()
+  load_strata()
+  local ok, err = pcall(function() return crow.public end)
+  assert_true(not ok and tostring(err):find("not modeled", 1, true), "crow.public raises: " .. tostring(err))
+  ok, err = pcall(function() crow.public.x = 1 end)
+  assert_true(not ok and tostring(err):find("not modeled", 1, true), "crow.public.x never goes through the proxy")
+  ok, err = pcall(function() return norns.crow.public end)
+  assert_true(not ok and tostring(err):find("not modeled", 1, true), "norns.crow.public raises")
+  assert_equal(norns.crow.dev, nil, "other unset fields still read nil")
+  assert_equal(quote(1, "a"), '1,"a"', "the global quote is core/crow/quote.lua's")
+  assert_equal(quote.key("k"), '["k"]')
+end)
+
+test("the iii stub's script has its own libraries and no unpack, as iii runs Lua 5.3", function()
+  load_strata()
+  local path = data_root .. "iii_env_script.lua"
+  local file = assert(io.open(path, "w")); file:write("-- nothing\n"); file:close()
+  local device = require("stub_iii")({kind = "grid"})
+  local env = device.run(path)
+  assert_equal(env.unpack, nil, "no global unpack")
+  assert_true(env.table ~= table and env.string ~= string and env.math ~= math, "its own copies")
+  assert_true(type(env.table.unpack) == "function", "table.unpack exists")
+  env.table.marker, env.math.marker, env.string.marker = 1, 1, 1
+  assert_equal(table.marker, nil, "the host's table is untouched")
+  assert_equal(math.marker, nil, "the host's math is untouched")
+  assert_equal(string.marker, nil, "the host's string is untouched")
+end)
+
+test("the iii stub's midi_out sends raw bytes three at a time and models no message table", function()
+  load_strata()
+  local path = data_root .. "iii_out_script.lua"
+  local file = assert(io.open(path, "w"))
+  file:write("function event_midi(b1) if b1 == 1 then midi_out({144, 60, 100, 128, 60}) else midi_out({type = 'note_on'}) end end\n")
+  file:close()
+  local device = require("stub_iii")({kind = "grid"})
+  device.run(path)
+  device.midi_in(1)
+  assert_equal(#device.sent, 2, "two calls of three bytes")
+  assert_equal(table.concat(device.sent[1], ","), "144,60,100")
+  assert_equal(device.sent[2][1] .. "," .. device.sent[2][2], "128,60")
+  assert_equal(device.sent[2][3], nil, "the last call gets nil arguments")
+  local ok, err = pcall(device.midi_in, 2)
+  assert_true(not ok and tostring(err):find("not modeled", 1, true), "a message table raises: " .. tostring(err))
+end)
+
+test("the iii stub's metros free by id, never reuse an id, and fire on a helper", function()
+  load_strata()
+  local path = data_root .. "iii_metro_script.lua"
+  local file = assert(io.open(path, "w"))
+  file:write("fired = 0\nfunction event_midi(b1)\n  if b1 == 1 then m = metro.init(function(n) fired = fired + 1; last = n end, 0.5)\n"
+    .. "    m:start() ; id = m.id\n  elseif b1 == 2 then m.free(m.id)\n  elseif b1 == 3 then metro.free_all() end\nend\n")
+  file:close()
+  local device = require("stub_iii")({kind = "grid"})
+  local env = device.run(path)
+  device.midi_in(1)
+  local first = env.id
+  device.fire_metro(first)
+  assert_equal(env.fired, 1, "the callback ran")
+  assert_equal(env.last, 1, "with the firing's number")
+  device.midi_in(2)
+  assert_true(not pcall(device.fire_metro, first), "a freed metro does not fire")
+  device.midi_in(1)
+  assert_true(env.id ~= first, "an id is never handed out twice")
+  device.midi_in(3)
+  assert_true(not pcall(device.fire_metro, env.id), "free_all frees every metro")
+  assert_true(not pcall(device.fire_metro, 999), "an unknown id raises")
+end)
+
+test("the iii stub's connection follows the MIDI device's port and ends when it unplugs", function()
+  local context = load_strata()
+  local path = data_root .. "iii_conn_script.lua"
+  local file = assert(io.open(path, "w"))
+  file:write("function event_grid(x, y, z) midi_note_on(60, 100, 1) end\nfunction event_midi(b1, b2, b3) got = b2 end\n")
+  file:close()
+  local device = require("stub_iii")({kind = "grid"})
+  local env = device.run(path)
+  device.connect(context, 3)
+  local heard = {}
+  for port = 3, 5 do
+    context.midi.vports[port].event = function() table.insert(heard, port) end
   end
-  assert_true(norns.crow ~= nil and norns.state ~= nil, "norns.crow joins norns")
-  local structure = io.open(test_dir .. "/unit/structure_test.lua"):read("*a")
-  assert_true(structure:find("stub_global_names", 1, true), "the structure test takes its list from the install")
+  context.midi.reassign(3, 5)
+  device.press(1, 1, 1)
+  assert_equal(table.concat(heard, ","), "5", "the script's message reaches the port the device is on now")
+  context.midi.vports[5]:note_on(70, 100, 1)
+  assert_equal(env.got, 70, "and Strata's message on the new port reaches the script")
+  context.midi.unplug(5)
+  heard = {}
+  device.press(1, 1, 1)
+  assert_equal(#heard, 0, "after an unplug the script's messages go nowhere")
+  assert_equal(#device.sent, 2, "but are still recorded")
+end)
+
+test("the iii stub's version options set device_version and iii_version as the facts give them", function()
+  load_strata()
+  local path = data_root .. "iii_version_script.lua"
+  local file = assert(io.open(path, "w")); file:write("-- nothing\n"); file:close()
+  local env = require("stub_iii")({kind = "grid"}).run(path)
+  assert_equal(env.device_version(), "v260324", "the firmware date tag")
+  assert_equal(env.iii_version, "v1.1.2", "iii's own version")
+  env = require("stub_iii")({kind = "arc", version = "v1.1.0"}).run(path)
+  assert_equal(type(env.device_version), "function", "device_version is new in 1.1.0")
+  assert_equal(env.iii_version, nil, "iii_version is present from 1.1.1")
+  env = require("stub_iii")({kind = "grid", version = "v1.0.0"}).run(path)
+  assert_true(type(env.device_version) ~= "function", "absent before 1.1.0")
+  assert_equal(env.iii_version, nil)
+  env = require("stub_iii")({kind = "grid", firmware = "v240324"}).run(path)
+  assert_equal(env.device_version(), "v240324", "a firmware tag can be chosen")
+end)
+
+test("the softcut stub keeps callbacks to fire and refuses defaults and params", function()
+  local context = load_strata()
+  local got = {}
+  softcut.event_phase(function(voice, phase) table.insert(got, "phase " .. voice .. " " .. phase) end)
+  softcut.event_position(function(voice, pos) table.insert(got, "position " .. voice .. " " .. pos) end)
+  softcut.event_render(function(ch, start, step, data) table.insert(got, "render " .. ch .. " " .. #data) end)
+  context.softcut.fire("event_phase", 1, 0.5)
+  context.softcut.fire("event_position", 2, 3)
+  context.softcut.fire("event_render", 1, 0, 1, {1, 2})
+  assert_equal(table.concat(got, "|"), "phase 1 0.5|position 2 3|render 1 2")
+  assert_true(not pcall(context.softcut.fire, "event_phase_none"), "firing a name with no callback raises")
+  for _, name in ipairs({"defaults", "params"}) do
+    local ok, err = pcall(softcut[name])
+    assert_true(not ok and tostring(err):find("not modeled", 1, true), "softcut." .. name .. " raises: " .. tostring(err))
+  end
+  softcut.reset()
+  assert_true(not pcall(context.softcut.fire, "event_phase"), "reset clears the phase callback, as softcut.reset does")
+end)
+
+test("an nb player is a plain table with exactly the methods the test names", function()
+  local context = load_strata()
+  local default = context.nb.add_player("emp")
+  local function method_names(player)
+    local names = {}
+    for key, value in pairs(player) do if type(value) == "function" then table.insert(names, key) end end
+    table.sort(names)
+    return table.concat(names, ",")
+  end
+  assert_equal(method_names(default), "add_params,note_off,note_on", "the default methods")
+  assert_equal(default.count_up, nil, "no count_up")
+  assert_equal(default.stop_all, nil, "no stop_all")
+  assert_equal(default.name, nil, "the host sets the name")
+  assert_equal(getmetatable(default), nil, "no metatable")
+  local custom = context.nb.add_player("jf", {"note_on", "stop_all", "delayed_active"})
+  assert_equal(method_names(custom), "delayed_active,note_on,stop_all", "exactly the named methods")
+  custom:stop_all()
+  custom:delayed_active()
+  assert_equal(custom.calls[1][1] .. custom.calls[2][1], "stop_alldelayed_active")
+  assert_true(note_players.jf == custom and note_players.emp == default, "both are in note_players")
 end)
 
 end

@@ -6,7 +6,11 @@
 -- context.softcut.value(name, ...) returns the argument after the leading
 -- ones given, from the last call of that name whose leading arguments
 -- match (softcut.rate(1, 0.5): value("rate", 1) == 0.5), nil before any.
--- softcut.reset() clears the calls, as the real reset clears the voices.
+-- softcut.reset() clears the calls and the phase callback, as the real reset
+-- clears the voices and that callback. event_phase, event_position and
+-- event_render keep their callback: context.softcut.fire(name, ...) calls
+-- it (and raises when none is set). defaults() and params() raise "not
+-- modeled".
 -- softcut.VOICE_COUNT is 6 and BUFFER_SIZE 16777216 / 48000. The audio
 -- level functions (audio.level_eng_cut, level_cut, ...) live in
 -- norns_stubs.lua's audio table and record context.audio.levels.
@@ -23,8 +27,8 @@ local FUNCTIONS = {
   "phase_quant", "phase_offset", "poll_start_phase", "poll_stop_phase", "enable",
   "buffer_clear", "buffer_clear_channel", "buffer_clear_region", "buffer_clear_region_channel",
   "buffer_copy_mono", "buffer_copy_stereo", "buffer_read_mono", "buffer_read_stereo",
-  "buffer_write_mono", "buffer_write_stereo", "event_phase", "render_buffer", "event_render",
-  "query_position", "event_position", "defaults", "params",
+  "buffer_write_mono", "buffer_write_stereo", "render_buffer",
+  "query_position",
 }
 
 return function()
@@ -39,8 +43,32 @@ return function()
     end
   end
 
+  -- the callbacks a script registers (softcut.lua :372, :385, :395), kept
+  -- for context.softcut.fire(name, ...)
+  helpers.callbacks = {}
+  for _, name in ipairs({ "event_phase", "event_position", "event_render" }) do
+    softcut[name] = function(callback)
+      table.insert(helpers.calls, { name, callback })
+      helpers.callbacks[name] = callback
+    end
+  end
+
+  function helpers.fire(name, ...)
+    local callback = helpers.callbacks[name]
+    if not callback then error("softcut stub: no callback is set with softcut." .. tostring(name), 2) end
+    return callback(...)
+  end
+
+  -- SC.defaults and SC.params (softcut.lua :417, :479) set a script's voices
+  -- and add its params; the stub models neither
+  for _, name in ipairs({ "defaults", "params" }) do
+    softcut[name] = function() error("softcut." .. name .. " is not modeled by the softcut stub", 2) end
+  end
+
+  -- SC.reset (softcut.lua :405) calls _norns.cut_reset and clears the phase callback
   function softcut.reset()
     for index = #helpers.calls, 1, -1 do helpers.calls[index] = nil end
+    helpers.callbacks.event_phase = nil
   end
 
   setmetatable(softcut, { __index = function(_, name)
