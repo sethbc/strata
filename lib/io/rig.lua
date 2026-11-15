@@ -14,7 +14,7 @@ return function(S)
   -- the docs list them, and each key's spec: a choice ({values, default})
   -- or a whole number in min..max ({min, max, default}, step the detent's
   -- size, 1 when absent; fine_step its size with ALT+E3), off_at the value
-  -- shown as "off"
+  -- shown as "off", labels a choice's display texts (text() only)
   local RIG = {
     file = "io.data",
     version = 1,
@@ -22,7 +22,8 @@ return function(S)
     order = {"ii_bus", "e16_port", "e16_channel", "e16_cc", "e16_encoding", "faders_port", "faders_channel",
       "faders_cc", "faders_hires", "remote_grid_port", "remote_arc_port", "midi_grid", "osc_feedback", "osc_port"},
     specs = {
-      ii_bus = {values = {"off", "strata", "teletype"}, default = "off"},
+      ii_bus = {values = {"off", "strata", "teletype"}, default = "off",
+        labels = {strata = "strata leads", teletype = "teletype leads"}},
       e16_port = {min = 0, max = 16, default = 0, off_at = 0},
       e16_channel = {min = 1, max = 16, default = 16},
       e16_cc = {min = 0, max = 104, default = 102},       -- the first of the E16's 16 CCs
@@ -127,11 +128,12 @@ return function(S)
     return M.set(key, stepped)
   end
 
-  -- What a row shows for key: a choice as it is, a number in digits, a
-  -- port at off_at as "off"
+  -- What a row shows for key: a choice as it is (or its label, when the
+  -- spec gives one: display only), a number in digits, a port at off_at as "off"
   function M.text(key)
     local spec, value = RIG.specs[key], values[key]
     if spec and spec.off_at ~= nil and value == spec.off_at then return "off" end
+    if spec and spec.labels and spec.labels[value] then return spec.labels[value] end
     return tostring(value)
   end
 
