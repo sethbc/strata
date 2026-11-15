@@ -13,6 +13,7 @@
 `lib/io/keyed.lua` (`S.lib.io_keyed`, 3.6), included directly before `lib/io/crow.lua`, its first user:
 - `M.add(id, name, keys, labels, action)`: the option `id` (one label per key, in order; the first key the default) and the hidden text param `id .. "_key"`; `action(key)` after each choice and each key set.
 - `M.key(id) -> key`.
+- `M.refuses(key) -> nil | reason`: the one check `add` makes, public: nil for a key a PSET can keep, else the reason `add`'s error gives (`not a non-empty string`, `a newline`, `a surrounding space`, `reads as a number`). The nb selector leaves out a player whose name it refuses (`docs/notes/lua/io/nb.md`).
 - The PSET hook `io_keyed` (`S.register_pset_hook`, its `read`).
 
-Users: crow's `crow_out<n>_source` (`docs/notes/lua/io/crow.md`). MIDI out's CC slots and the nb selector are meant to use it too (design §7's remedy for nb's selector). Tests: `test/unit/io_keyed_test.lua`.
+Users: crow's `crow_out<n>_source` (`docs/notes/lua/io/crow.md`) and the nb selector's `v<i>_out_nb` (`docs/notes/lua/io/nb.md`; design §7's remedy for nb's selector). MIDI out's CC slots are meant to use it too. Tests: `test/unit/io_keyed_test.lua`.

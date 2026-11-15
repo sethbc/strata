@@ -142,6 +142,26 @@ test("the list is the mods' players, sorted, without another host's midi players
   end
 end)
 
+test("a name is left out by the keyed module's own check, with its reason", function()
+  -- one check (S.lib.io_keyed.refuses), so the list never holds a key add would raise on
+  local context = load_strata({
+    before_load = function(c) c.nb.add_player("alpha"); c.nb.add_player("zeta") end,
+    before_init = function()
+      local keyed = local_value("S").lib.io_keyed
+      local real = keyed.refuses
+      keyed.refuses = function(key)
+        if key == "zeta" then return "probe reason" end
+        return real(key)
+      end
+    end })
+  assert_equal(options("v1_out_nb"), "none alpha")
+  local lines = 0
+  for _, line in ipairs(context.printed) do
+    if line == 'strata: nb player "zeta" left out: probe reason' then lines = lines + 1 end
+  end
+  assert_equal(lines, 1, "one line with the keyed module's reason")
+end)
+
 test("with defaults a player gets add_params once and nothing else", function()
   -- duty 7: every entry's own add_params, in name order (midi: included), then the hidden sentinel
   local order = {}

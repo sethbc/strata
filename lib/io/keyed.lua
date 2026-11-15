@@ -4,7 +4,7 @@
 -- holding the chosen key. A PSET keeps the key, never the option's index,
 -- so a list that gains an entry (a modulation source a later release
 -- registers) never moves a saved choice onto another. crow's output
--- sources use it; MIDI out's CC slots and the nb selector are meant to.
+-- sources and the nb selector use it; MIDI out's CC slots are meant to.
 -- Notes: docs/notes/lua/io/keyed.md
 
 return function(S)
@@ -27,7 +27,9 @@ return function(S)
   -- (lua/core/paramset.lua) reads a text param's value as the line's text
   -- after "id: " (leading spaces dropped, a newline ends it) and turns inf
   -- and -inf into numbers, and the key is matched as a string
-  local function unkeepable(key)
+  -- (M.refuses: add's one check, public so a caller whose list holds names
+  -- it does not choose can leave such a name out instead of raising)
+  function M.refuses(key)
     if type(key) ~= "string" or key == "" then return "not a non-empty string" end
     if key:find("\n", 1, true) or key:find("\r", 1, true) then return "a newline" end
     if key:match("^%s") or key:match("%s$") then return "a surrounding space" end
@@ -47,7 +49,7 @@ return function(S)
     assert(type(keys) == "table" and #keys > 0 and #labels == #keys, "S.lib.io_keyed.add: one label per key")
     assert(type(action) == "function", "S.lib.io_keyed.add: an action")
     for _, key in ipairs(keys) do
-      local why = unkeepable(key)
+      local why = M.refuses(key)
       if why then
         error("S.lib.io_keyed.add " .. id .. ": a PSET cannot keep the key " .. string.format("%q", tostring(key))
           .. " (" .. why .. ")", 2)
