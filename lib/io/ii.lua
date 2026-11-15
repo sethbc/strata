@@ -89,15 +89,13 @@ return function(S)
 
   local function forget_lines() state.lines, state.pairs = {}, {} end
 
-  -- Learn a pair at its first off: its sends already waiting are counted now
+  -- Learn a pair at its first off. Its lines start unknown, and that is
+  -- enough: every send of the pair queued before this off is ahead of
+  -- every off of the pair, so a line is known low (an off of it drained)
+  -- only once those sends have drained; until then it is unknown or has
+  -- sends counted after learning, and either way its off is owed
   local function learn_pair(pair)
     state.pairs[pair] = true
-    for _, waiting in ipairs(state.queue) do
-      if waiting.pair == pair and not waiting.off then
-        local line = line_state(waiting.key)
-        line.waiting = line.waiting + 1
-      end
-    end
   end
 
   -- For tests: how many lines the module keeps state for
@@ -174,6 +172,7 @@ return function(S)
         if entry.off then
           line.high = false
         else
+          -- a send queued before its pair was learned was never counted
           line.high, line.waiting = true, math.max(0, line.waiting - 1)
         end
       end
