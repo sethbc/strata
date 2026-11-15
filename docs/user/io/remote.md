@@ -30,7 +30,7 @@ They are on IO's `remote` section and are rig settings (kept in `io.data`, never
 Once a port is set and the device is there, Strata asks it to say hello, and it attaches as soon as it answers: a grid plays the layout of its size (a 16 by 8 grid the [128 horizontal](../grid/128h.md) layout, a 16 by 16 the [256](../grid/256.md), an 8 by 16 the [128 vertical](../grid/128v.md), an 8 by 8 the [64](../grid/64.md); a hello of any other size is refused), on a port of its own besides norns' four grid ports, with its own page; the arc becomes the arc Strata follows. The iii grids the documents describe are 16 by 16 and 16 by 8. While a monome arc is plugged into norns, that arc is followed instead, and the remote arc takes over again when it is unplugged. The port is the remote device's alone while its device is there: Strata's MIDI input, the controllers and MIDI out leave it (a voice's MIDI out route to that port sends nothing, since the device reads notes as its lights).
 
 The section shows a line per device that is set, `grid: ...`, `arc: ...` and `midigrid: ...`, ending in:
-- `16x8`, `16x16` (a grid's size) or `4 rings` (the arc): attached
+- `16x8`, `16x16` (a grid's size) or `4 rings` (the arc): attached; `4 rings (waiting)` while a monome arc plugged into norns is followed instead
 - `[--]`: no device on that port (the section's title shows `[--]` too)
 - `no hello`: a device is there but has not answered (another device, or the script is not running or is on an older iii)
 - `version 2?` (with the number it sent): the script speaks another version of the protocol; use the scripts from the same Strata

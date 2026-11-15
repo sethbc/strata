@@ -487,10 +487,14 @@ test("a monome arc takes over from a remote one and hands back", function()
   assert_equal(virtual.remote, "arc", "the remote arc is followed")
   context.arc.plug(1)
   assert_equal(S.arc_device, arc.vports[1], "a monome arc takes over")
+  assert_equal(S.lib.io_remote.status("arc"), "4 rings (waiting)", "the status says the remote arc waits")
+  local line = "arc: " .. S.lib.io_remote.status("arc")
+  assert_true(screen.text_extents(line) <= 120, "the status line fits the page: " .. screen.text_extents(line))
   context.midi.send(4, { type = "cc", cc = 16, val = 65, ch = 3 })
   assert_equal(#turns, 0, "the remote arc's turns reach nothing meanwhile")
   context.arc.unplug(1)
   assert_equal(S.arc_device, virtual, "and hands back")
+  assert_equal(S.lib.io_remote.status("arc"), "4 rings", "followed again")
   context.midi.send(4, { type = "cc", cc = 16, val = 65, ch = 3 })
   assert_equal(table.concat(turns, " "), "1,1", "its turns reach arc_delta again")
   assert_equal(remote_invariant(S), nil, "the invariant holds")
@@ -630,6 +634,7 @@ test("the section's layout states reach their looks through the IO page", functi
     ["a port set with no device"] = { grid = "[--]" },
     ["a grid attached"] = { grid = "16x8" },
     ["a hello of another version"] = { grid = "version 2?" },
+    ["a remote arc behind a monome arc"] = { arc = "4 rings (waiting)" },
     ["a midigrid attached"] = { midigrid = "16x8" },
   }
   local count = 0
@@ -647,9 +652,10 @@ test("the section's layout states reach their looks through the IO page", functi
     assert_true(look ~= nil, "a look for " .. entry.name)
     assert_equal(script.lib.io_remote.status("grid"), look.grid, entry.name .. ": the grid's status")
     assert_equal(script.lib.io_remote.status("midigrid"), look.midigrid, entry.name .. ": midigrid's status")
+    assert_equal(script.lib.io_remote.status("arc"), look.arc, entry.name .. ": the arc's status")
     count = count + 1
   end
-  assert_equal(count, 5, "five layout states")
+  assert_equal(count, 6, "six layout states")
 end)
 
 test("cleanup ends the clock, clears each device and releases everything", function()
