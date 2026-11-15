@@ -195,6 +195,15 @@ return function(S)
     if not record then return end
     state.notes[voice][id] = nil
     remove_expressing(record)
+    -- a played note leaving a shared member channel: the played notes still
+    -- on it forget what they last sent, so the step sends their values once
+    -- and the channel goes back to what they hold (a step note sent nothing
+    -- on a shared channel, so its end puts nothing back)
+    if record.owner ~= nil then
+      for _, other in ipairs(state.expressing) do
+        if other.port == record.port and other.channel == record.channel then other.sent = {} end
+      end
+    end
     local counts = table_at(state.counts, record.port, record.channel)
     -- the last id on the note sends its off; one ending while another
     -- holds the note sends nothing (every start there sent an off first)
