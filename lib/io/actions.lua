@@ -79,6 +79,9 @@ return function(S)
       return ignored("retrigger", "velocity is not a number")
     end
     if not S.voices[v].active then return false end
+    -- a retrigger outside the patterns opens the voice's own gate length,
+    -- not the last step's (#639), as lib/midi_in.lua does
+    S.lib.sequencer.note_gate(v)
     engine.retrigger(v - 1, math.max(0, math.min(1, velocity)))
     return true
   end
