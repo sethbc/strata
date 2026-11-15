@@ -1,6 +1,6 @@
 # Strata roadmap
 
-The order and scope of the releases from 3.1 to 3.8 and 4.0. 3.1 to 3.5 have shipped (Shipped, below); **3.6, integration, is next.** `docs/status.md` has the open items.
+The order and scope of the releases from 3.1 to 3.8 and 4.0. 3.1 to 3.6 have shipped (Shipped, below); **3.7, rhythm, is next.** `docs/status.md` has the open items.
 
 Date: 2026-11-07
 Status: brainstorm, reviewed 2026-11-07; cross-release decisions added 2026-11-08 (see "Cross-release decisions (2026-11-08)"). Added 2026-11-11, at the maintainer's request: releases 3.7 (rhythm) and 3.8 (sound), with fourteen features from a review of four hardware granular instruments, and in 3.6 the iii scripts and program change. It sets the order and scope of the releases after 3.0.2. It is not a build plan: each release gets its own design document (like `docs/design/3.0-design.md`) and an implementation plan before any code is written.
@@ -79,7 +79,7 @@ The code and documents are restructured for agent-driven development, and every 
 
 ---
 
-## Shipped: 3.1 to 3.5
+## Shipped: 3.1 to 3.6
 
 | Release | Theme | Design | Shipped |
 |---|---|---|---|
@@ -88,57 +88,11 @@ The code and documents are restructured for agent-driven development, and every 
 | 3.3 | Buffers as instruments | `docs/design/3.3-design.md` | 3.3.0, 2026-11-11 |
 | 3.4 | Modulation and sequencing | `docs/design/3.4-design.md` | 3.4.0, 2026-11-12 |
 | 3.5 | Polyphony and MPE | `docs/design/3.5-design.md` | 3.5.0, 2026-11-13 |
+| 3.6 | Integration | `docs/design/3.6-design.md` | 3.6.0, 2026-11-15 |
 
-Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13): each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table.
+Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13, 3.6's on 2026-11-15): each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table.
 
 ---
-
-## 3.6: Integration
-
-### crow
-
-- **Inputs:** two CV inputs as modulation sources (LFO-style destinations with depth) or as triggers (retrigger a voice, advance the scene sequencer, freeze, record). Each registers as a 3.4 modulation source, so 3.4's modulation matrix routes it to any destination with a depth, with no matrix change.
-- **Outputs:** four outputs, each assignable to an LFO, a voice envelope follower, pattern gates of a voice, the clock, or a macro. LFOs and macros are read through the 3.4 modulation source registry; pattern gates come from a step output.
-- A CROW section on SETUP or its own page.
-
-### ii devices (through crow)
-
-crow, Just Friends, W/, ER-301, TELEXo, Teletype and the Disting NT are all in scope.
-
-- **Just Friends:** pattern steps and MIDI notes also play JF voices (synthesis mode), polyphony mapped to JF's six voices. JF's geode mode can follow the pattern clock. The pattern side is one 3.4 step output; its events carry the step's whole chord.
-- **W/:** synth mode played like JF (another step output), and tape mode as an external loop recorder (record and play controlled from Strata's scenes and keys).
-- **ER-301:** pattern triggers and CV (`SC.TR`/`SC.CV` ports), for example to fire ER-301 sample players in step with Strata.
-- **TELEXo:** gates, CVs and envelopes per voice (`TO.TR`, `TO.CV`, `TO.ENV`), for example one TXo output per Strata voice following its level or its pattern.
-- **Disting NT:** notes and parameter changes over i2c (if its i2c follower support covers what Strata needs, otherwise over USB MIDI, which norns can also drive).
-- **Teletype:** the other direction. Teletype addresses crow as an ii follower (`CROW.*` ops), and crow can pass those messages on to norns, so Teletype scripts could recall scenes, start voices, freeze or retrigger in Strata.
-- **Faderpunk and Faderbank** (added 2026-11-11, #555; Controllers, below): where a fader controller offers i2c (which of them does, and how, is to be checked in the 3.6 design), its faders can reach Strata over this bus, through crow, as well as over USB MIDI. How it shares the bus with crow and Teletype is part of the bus-leadership question below.
-
-**ii bus leadership** is the main open question for the 3.6 design. Strata's ii output needs crow to lead the bus, and Teletype normally leads it too. Two leaders on one bus can collide. Options: Strata leads and Teletype only talks to crow; Teletype leads and Strata's ii output goes through Teletype; or a setting that picks one. The design must test the chosen arrangement on a case with crow, Teletype and the ii followers above.
-
-### MIDI out
-
-- Pattern steps and their notes (3.4, chords from 3.5) as MIDI notes on a chosen port and channel per voice: one 3.4 step output, with its own note-off clock.
-- LFOs and macros as CC out, read through the 3.4 modulation source registry.
-- **Program change recalls a scene** (added 2026-11-11): an incoming program change 1-16 recalls that scene, through 3.4's quantized actions, on the MIDI input Strata already listens to. A setting turns it off, and the 3.6 design decides whether Strata also sends one when a scene is recalled.
-- Transport following moved to 3.4 (decided 2026-11-08, cross-release decision 6): patterns already start and stop with norns' clock transport. 3.6 adds only MIDI out; whether Strata should also lead the transport (its play key starting the clock) is open (3.4's Question 26 recommends follow only).
-
-### Controllers
-
-- **OXI E16:** a built-in layout for its 16 encoders, used as a second arc, and mapping one to one onto 3.4's 16 macros (cross-release decision 7), its rings reading each macro's modulation source: the encoders follow the screen page, and the LED rings show each value if the E16 accepts ring feedback over MIDI (to be checked in the 3.6 design; otherwise it sends only). Encoders send relative changes if the E16 supports that, so values never jump.
-- **Faderpunk and Faderbank (including the Faderbank 16nx)** (added 2026-11-11, #555): fader controllers. Like the E16's encoders, their faders map one to one onto 3.4's 16 macros (cross-release decision 7), as many as a device has (its fader count is to be checked in the 3.6 design); following the screen page instead, as the grid's fader pages do, is an alternative the 3.6 design decides. Each connects over USB MIDI, and over i2c through crow where the device offers it (ii devices, above, and its bus-leadership question). Feedback: whatever the device can show, to be checked in the 3.6 design. Without one, Strata degrades gracefully, as it does without a grid, an arc or a MIDI device. Anything else about the devices is to be checked in the 3.6 design.
-- **OXI One:** as a sequencer driving Strata over MIDI. Its tracks map to the channel-per-voice mode (one track per voice), its polyphonic tracks to 3.5's note allocation, its CCs through PARAMS > MAP or a preset mapping, and its clock through norns' MIDI clock. Strata's own MIDI out (above) can also feed the OXI One.
-- **midigrid:** the Launchpad (and other MIDI grids) as a grid through the midigrid library. A Launchpad is 8×8 (plus side buttons), so it gets the 64 layout from 3.1, using the side buttons for the page and step-half controls where present.
-- **iii scripts for the grid and the arc** (added 2026-11-11): grids from 2022 on and the 2025 arc can run monome's iii (https://monome.org/docs/iii), Lua scripts on the device itself. A device in iii mode is a USB MIDI device to norns, not a grid or an arc, so Strata's layouts and rings never reach it. 3.6 ships Strata's own iii scripts, one for the grid and one for the arc, so a device kept in iii mode still plays Strata.
-  - They live in the repository apart from the norns script: they are uploaded to the device with monome's `diii` and never loaded by norns.
-  - Each script draws its own LEDs and talks to Strata over USB MIDI: keys and ring turns go to Strata, and Strata's state comes back for the LEDs through MIDI out (above).
-  - The 3.6 design decides: the messages in both directions; whether the scripts mirror today's grid pages and arc rings or are simpler surfaces of their own; which grid sizes iii runs on and how each maps; how Strata recognizes the device (a controller layout picked on SETUP, as for the E16); how the scripts are tested off the device (iii's functions stubbed, as norns' are); and how they keep up with iii, which is short of version 1.0 and may still change.
-  - A grid or arc in monome's usual mode keeps working as it does today.
-- **TouchOSC / OSC:** an OSC address for every param, and a published layout.
-
-### Other
-
-- **nb:** pattern steps can play an nb voice (another script's voice mod), for layering Strata's sequencer with other synths. It is one 3.4 step output. Strata as an nb voice itself is out of scope (its engine can't share).
-- **softcut layer:** an optional softcut tape loop of Strata's output with degradation (oooooo style). It runs on norns' separate softcut DSP, at no scsynth cost.
 
 ## 3.7: Rhythm
 
