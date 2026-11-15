@@ -156,6 +156,28 @@ test("a 3.5 PSET read while the tape is on turns it off and puts the mixer back"
   assert_near(context.audio.levels.eng_cut, util.dbamp(params:get("cut_input_eng")), 1e-9, "the mixer is back")
 end)
 
+test("a PSET read while the tape runs leaves norns' input and tape out of the loop", function()
+  -- norns' cut_input_* params are in a PSET (lua/core/audio.lua:875-897, saved), and their
+  -- actions set the mixer: one that differs puts the input back into the loop unless re-applied
+  local context = started()
+  params:set("tapeloop", 1)
+  params:set("cut_input_adc", -6); params:set("cut_input_tape", -3)
+  local path = context.data_dir .. "tape_on_other_levels.pset"
+  params:write(path)
+  params:set("tapeloop", 0)
+  params:set("cut_input_adc", 0); params:set("cut_input_tape", -math.huge)
+  params:set("tapeloop", 1)
+  assert_equal(context.audio.levels.adc_cut, 0, "the loop holds no input")
+  params:read(path)
+  assert_equal(params:get("tapeloop"), 1, "the tape still runs")
+  assert_near(params:get("cut_input_adc"), -6, 1e-9, "norns' own param read from the PSET")
+  assert_equal(context.audio.levels.adc_cut, 0, "the input stays out of the loop")
+  assert_equal(context.audio.levels.tape_cut, 0, "and the tape")
+  assert_equal(context.audio.levels.eng_cut, 1, "Strata's output at full")
+  params:set("tapeloop", 0)
+  assert_near(context.audio.levels.adc_cut, util.dbamp(-6), 1e-9, "off: norns' level, as the PSET set it")
+end)
+
 test("each param reaches both voices while the tape is on", function()
   local context = started()
   params:set("tapeloop", 1)
