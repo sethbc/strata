@@ -3248,6 +3248,8 @@ function stubs.install(options)
   _G.osc = context.osc.osc
   _G.softcut = context.softcut.softcut
   _G.note_players = {}
+  _G.nb_player_refcounts = nil  -- a host (nb's player.lua) creates it; norns' fresh globals never keep it
+  _G.quote = context.crow.quote  -- core/crow.lua's global
   _G._menu = context.menu
   -- norns.platform: matron's board number (lua/core/norns.lua; 2 CM3, 3 Pi
   -- 3, 4 Pi 4, 5 CM4, 6 CM4S); 0, unknown, as off a norns. A test sets it

@@ -5,6 +5,8 @@
 -- registers an event key and sends norns' forwarding stub), and norns.crow
 -- (dev, add, remove, receive, events, send, connected). norns writes
 -- string.format and utf8.char; the stub uses string.char so LuaJIT runs it.
+-- crow.public and norns.crow.public are not modeled (reading raises); the
+-- global quote is core/crow/quote.lua's, as norns defines it.
 -- Test helpers (the table require("stub_crow")() returns as `helpers`):
 -- plug(), unplug(), fire(event, ...), clear(), and the records sent (lines
 -- kept only while plugged, as norns.crow.send drops them otherwise),
@@ -35,10 +37,17 @@ end
 
 setmetatable(quote_module, { __call = function(_, ...) return quote_module.quote(...) end })
 
+-- norns' crow.public and norns.crow.public (core/crow/public.lua, the
+-- public-parameter protocol) are not ported: reading either raises, so a
+-- script cannot send text through the proxy by accident
+local NOT_MODELED = "crow.public is not modeled by the crow stub (test/stub_crow.lua)"
+
 return function()
   local quote = quote_module
   local helpers = { sent = {}, function_assignments = 0, resets = 0 }
-  local norns_crow = {}
+  local norns_crow = setmetatable({}, { __index = function(_, ix)
+    if ix == "public" then error(NOT_MODELED, 2) end
+  end })
   local crow = {}
 
   -- core/crow.lua's norns.crow
@@ -131,7 +140,10 @@ return function()
   }
 
   crow.__newindex = function(_, ix, val) norns_crow.send(ix .. "=" .. quote(val)) end
-  crow.__index = function(_, ix) return setmetatable({ str = ix }, crow_sub) end
+  crow.__index = function(_, ix)
+    if ix == "public" then error(NOT_MODELED, 2) end
+    return setmetatable({ str = ix }, crow_sub)
+  end
   crow.__call = function(_, ...) norns_crow.send(...) end
   setmetatable(crow, crow)
 
@@ -161,6 +173,6 @@ return function()
     for index = #helpers.sent, 1, -1 do helpers.sent[index] = nil end
   end
 
-  helpers.crow, helpers.norns_crow = crow, norns_crow
+  helpers.crow, helpers.norns_crow, helpers.quote = crow, norns_crow, quote
   return helpers
 end
