@@ -702,7 +702,7 @@ return function(S)
       id = "midi_device",
       name = "midi device",
       min = 1,
-      max = #midi.vports,  -- every norns port (#333)
+      max = S.lib.io_ports.PORTS.count,  -- every norns port (#333), never a mod's facade's count (#700)
       default = 1,
       action = function(x)
         attach_midi(x)

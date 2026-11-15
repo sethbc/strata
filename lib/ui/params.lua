@@ -42,9 +42,8 @@ return function(S)
     local map = norns and norns.pmap and norns.pmap.data[param_id]
     if map == nil then return end
     map.value = util.round(util.linlin(map.out_lo, map.out_hi, map.in_lo, map.in_hi, params:get(param_id)))
-    if map.echo then
-      midi.vports[map.dev]:cc(map.cc, map.value, map.ch)
-    end
+    local vport = map.echo and S.lib.io_ports.out(map.dev)
+    if vport then vport:cc(map.cc, map.value, map.ch) end
   end
 
   -- A param's default value: a control param's controlspec default (a spec

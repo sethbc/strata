@@ -15,7 +15,25 @@
 return function(S)
   local M = {}
 
-  local PORTS = {count = 16}  -- norns' MIDI vports
+  -- norns' own MIDI module: the one its startup loaded (midi = require
+  -- 'core/midi'), whatever a mod put in the global midi since. The nbout
+  -- mod's facade there (from each script's pre-init hook to its cleanup)
+  -- has no __newindex, so a handler assigned to it is never called by
+  -- norns' hot-plug (#700). The global where norns' module is not found (the
+  -- test stubs). The hot-plug handlers are installed and put back on it,
+  -- and every vport is read from it: the facade's vports is a fresh copy at
+  -- each read, with an entry of its own after norns' sixteen. Each function
+  -- reads the vports once, never per port
+  local function norns_midi()
+    local loaded = package.loaded["core/midi"]
+    if type(loaded) == "table" and type(loaded.vports) == "table" then return loaded end
+    return midi
+  end
+
+  -- count: how many MIDI ports norns has (its own vports, 16), never a
+  -- facade's count. Every other module reads the ports through this one:
+  -- PORTS.count, out(port) and device(port)
+  local PORTS = {count = #norns_midi().vports}
   M.PORTS = PORTS
 
   -- An ordered set of named functions: names in the order first registered
@@ -33,21 +51,6 @@ return function(S)
     hot_plug = {kept_add = nil, kept_remove = nil, installed = false, wrapped_add = false, wrapped_remove = false,
       entered_add = false, entered_remove = false},
   }
-
-  -- norns' own MIDI module: the one its startup loaded (midi = require
-  -- 'core/midi'), whatever a mod put in the global midi since. The nbout
-  -- mod's facade there (from each script's pre-init hook to its cleanup)
-  -- has no __newindex, so a handler assigned to it is never called by
-  -- norns' hot-plug (#700). The global where norns' module is not found (the
-  -- test stubs). The hot-plug handlers are installed and put back on it,
-  -- and every vport is read from it: the facade's vports is a fresh copy at
-  -- each read, with an entry of its own after norns' sixteen. Each function
-  -- reads the vports once, never per port
-  local function norns_midi()
-    local loaded = package.loaded["core/midi"]
-    if type(loaded) == "table" and type(loaded.vports) == "table" then return loaded end
-    return midi
-  end
 
   local function valid_port(port)
     return type(port) == "number" and port % 1 == 0 and port >= 1 and port <= PORTS.count

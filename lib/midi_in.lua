@@ -36,7 +36,7 @@ return function(S)
     pressure_max = 127,       -- a pressure (poly or channel) / 127
   }
   local MIDI = M.MIDI
-  S.midi_device = nil     -- the MIDI vport (midi.connect) Strata listens to
+  S.midi_device = nil     -- the MIDI vport (S.lib.io_ports.out) Strata listens to
   S.midi_state = {
     bend = {},                -- per voice: current pitchbend ratio (transient; never a param or in scenes)
     held = {},                -- per voice: set of the keys down on it (channel * 128 + note)
@@ -79,7 +79,7 @@ return function(S)
   -- fraction (a PSET written before the midi_device param stepped whole
   -- numbers, #534) still names a port
   local function vport_index(port)
-    return util.clamp(util.round(port), 1, #midi.vports)
+    return util.clamp(util.round(port), 1, S.lib.io_ports.PORTS.count)
   end
 
   -- A port another name claims (a controller, a remote grid) is not
@@ -94,7 +94,7 @@ return function(S)
       if wanted then S.lib.io_ports.listen(wanted, "midi_in", midi_event) end
       listening_port = wanted
     end
-    S.midi_device = midi.connect(port)
+    S.midi_device = S.lib.io_ports.out(port)
     attached_device = S.midi_device.device
   end
 
@@ -583,7 +583,7 @@ return function(S)
     S.register_grain_restart(function(voice_idx)
       if not S.voices[voice_idx].active then S.midi_state.started[voice_idx] = nil end
     end)
-    for port = 1, #midi.vports do port_names[port] = S.lib.io_ports.device(port) end
+    for port = 1, S.lib.io_ports.PORTS.count do port_names[port] = S.lib.io_ports.device(port) end
     S.lib.io_ports.on_change("midi_in", port_changed)
     S.lib.io_ports.on_claim("midi_in", port_claimed)
     midi_init()
