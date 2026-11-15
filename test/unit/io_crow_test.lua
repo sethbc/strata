@@ -299,6 +299,43 @@ test("a voice's pitch and gate outputs follow its target notes", function()
   assert_equal(table.concat(told, " "), "3 5", "the voice it left and the voice it joined")
 end)
 
+-- A played note through the allocator, so the real targets core keeps it
+local function played(key, pitch)
+  return {owner = "midi", key = key, pitch = pitch, velocity = 0.5, park = true, set_own = function() end}
+end
+
+local function last_line_for(context, jack)
+  for index = #context.crow.sent, 1, -1 do
+    local line = context.crow.sent[index]
+    if line:find(jack, 1, true) == 1 then return line end
+  end
+  return nil
+end
+
+test("a gate output moved off a sounding voice goes low (through the real targets core)", function()
+  -- crow-ii.md §1 Outputs: output[n].volts; the targets core ends the voice it left (lib/io/targets.lua)
+  local context, S = started()
+  context.crow.plug()
+  params:set("crow_out2_source", option("crow_out2_source", "v3 gate"))
+  S.lib.notes.play(3, played(7701, 60))
+  assert_equal(last_line_for(context, "output[2].volts"), "output[2].volts = 5", "voice 3's note raised the gate")
+  assert_true(S.lib.io_targets.sounding(3).m7701 ~= nil, "the core keeps the note")
+  params:set("crow_out2_source", option("crow_out2_source", "v4 gate"))
+  assert_equal(last_line_for(context, "output[2].volts"), "output[2].volts = 0", "moved to a silent voice: 0 V")
+  assert_equal(S.lib.io_targets.sounding(3).m7701, nil, "the core ended voice 3's note")
+  S.lib.notes.release(3, "midi", 7701)
+
+  -- from a modulation or a pitch source to a gate with no note: 0 V
+  for _, from in ipairs({"lfo1", "v5 pitch"}) do
+    params:set("crow_out3_source", option("crow_out3_source", from))
+    S.lib.notes.play(5, played(7702, 96))  -- v5 pitch: 3 V on the jack
+    context.crow.clear()
+    params:set("crow_out3_source", option("crow_out3_source", "v6 gate"))
+    assert_equal(last_line_for(context, "output[3].volts"), "output[3].volts = 0", "from " .. from .. ": 0 V")
+    S.lib.notes.release(5, "midi", 7702)
+  end
+end)
+
 test("a clock output pulses once per division with one line a pulse", function()
   -- crow-ii.md §1 How norns' clock relates to crow: action = pulse, then output[n]() per pulse
   local context, S, crow_io = started()

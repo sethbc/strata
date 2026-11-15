@@ -233,7 +233,8 @@ return function(S)
   end
 
   -- Output n's lines for its source; off sends 0 V, only for a jack Strata
-  -- set up since crow's last reset
+  -- set up since crow's last reset. A gate always sends its level (0 V
+  -- with no note), so a jack moved off a sounding voice never stays high
   local function output_lines(n)
     if norns_output(n) then return {} end
     local source, jack = source_of(n), "output[" .. n .. "]"
@@ -242,9 +243,10 @@ return function(S)
     elseif source.kind == "pitch" or source.kind == "gate" then
       local lines = {jack .. ".slew = 0"}
       local notes = state.notes[source.voice]
-      if #notes > 0 then
-        local volts = source.kind == "pitch" and pitch_volts(n, notes[#notes].pitch) or CROW.gate_volts
-        lines[2] = volts_line(n, volts)
+      if source.kind == "gate" then
+        lines[2] = volts_line(n, #notes > 0 and CROW.gate_volts or 0)
+      elseif #notes > 0 then
+        lines[2] = volts_line(n, pitch_volts(n, notes[#notes].pitch))
       end
       return lines
     elseif source.kind == "clock" then
