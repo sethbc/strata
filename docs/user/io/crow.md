@@ -31,6 +31,8 @@ Each output has a **source**, a **range** (`0..5`, `0..10` or `-5..5` V) and a *
 - **v1 gate** to **v7 gate** - 5 V while the voice has a note sounding, 0 V when the last one ends
 - **clock** - a 10 ms pulse of 5 V every **div** beats (`1/16` to `4`, default `1`) of norns' clock
 
+A PSET keeps each output's source by its name, so a later release that adds modulation sources still loads it on the same source; a source a PSET names that this Strata does not have leaves the output off until one that has it loads the PSET.
+
 A voice's pitch and gate come from its steps and the notes you play on it, one note at a time: when the newest note ends and others still sound, the pitch goes back to the newest of them.
 
 ## norns' own crow clock
