@@ -467,6 +467,7 @@ test("each TELEXo layout state raises naming the row when the voice section lack
   for _, name in ipairs({"voice: txo on an output", "voice: txo detail list open"}) do
     for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states) do
       if state.name == name then
+        h.show_page("IO")  -- a layout state runs with its page shown
         local ok, problem = pcall(state.setup, context)
         assert_true(not ok, name .. " raises")
         assert_true(tostring(problem):find("^txo layout: ") ~= nil and tostring(problem):find("row id txo", 1, true) ~= nil,

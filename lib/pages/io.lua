@@ -496,9 +496,23 @@ return function(S)
   -- cursor and it, the cursor checked to be on it. Returns the row; turns
   -- nothing and presses nothing (E3 or K3 on it is the caller's). Raises,
   -- naming who: no such section or row (the cursor where it was), or a
-  -- cursor that did not land
+  -- cursor that did not land. Its preconditions, checked before it shows
+  -- or turns anything (each a raise naming what is in the way): IO is the
+  -- page shown (S.ui_page), no list is open over it (S.lib.ui_modal.top():
+  -- E2 would go to the list; a caller that wants it closed closes it, this
+  -- never does), ALT is not held (S.alt_held: E2 would select the voice)
   local REACH_FIELDS = {"param_id", "key", "id"}
+  local function in_the_way()
+    if S.ui_page ~= UI_PAGES.index.IO then return "the IO page is not shown" end
+    local owner = S.lib.ui_modal.top()
+    if owner == detail_owner then return "a detail list is open" end
+    if owner then return "a list is open over the page" end
+    if S.alt_held then return "ALT is held" end
+    return nil
+  end
   function M.go_to_row(who, section, match)
+    local blocked = in_the_way()
+    if blocked then error(tostring(who) .. " layout: " .. blocked, 0) end
     local field
     for _, name in ipairs(REACH_FIELDS) do
       if type(match) == "table" and match[name] ~= nil then
