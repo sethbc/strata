@@ -24,7 +24,7 @@ return function(S)
 
   -- The jacks, the params' options and the texts
   local SPEC = {
-    inputs = 2, outputs = 4, param_count = 20,
+    inputs = 2, outputs = 4, param_count = 24,  -- an output's source is two params (S.lib.io_keyed)
     modes = {"off", "cv", "trigger"},
     input_ranges = {"-5..5", "0..5", "0..10"},
     output_ranges = {"0..5", "0..10", "-5..5"},
@@ -43,10 +43,13 @@ return function(S)
     return {tonumber(low), tonumber(high)}
   end
 
-  -- what each output source option is ({kind, key, voice}), built at add_params
-  local state = {started = false, stopped = false, source_names = {}, source_kinds = {},
+  -- source_keys and source_labels: the output sources' keys and labels;
+  -- source_by_key: what each is ({kind, key, voice}), built at add_params.
+  -- set_up: the jacks Strata has sent a setting since crow's last reset
+  -- (only those get an off line)
+  local state = {started = false, stopped = false, source_keys = {}, source_labels = {}, source_by_key = {},
     input_volts = {}, input_ranges = {}, last_volts = {}, notes = {}, clocks = {}, applied_source = {},
-    owners = {input = false, output = 0}, errors = {}}
+    owners = {input = false, output = 0}, errors = {}, set_up = {input = {}, output = {}}}
   for voice = 1, NUM_VOICES do state.notes[voice] = {} end
   local budget = {window = -math.huge, sent = 0, pending = {}, order = {}, clock = nil}
   local hooks = {events = {}, event_order = {}, setup = {}, gone = {}}
@@ -131,9 +134,9 @@ return function(S)
   end
 
   -- With a crow: count the line in the window and send it (true); without
-  -- one, false
+  -- one, or after the cleanup step, false
   function M.send_now(line)
-    if not M.present() then return false end
+    if state.stopped or not M.present() then return false end
     enter_window(current_window())
     deliver(line)
     return true
@@ -143,7 +146,7 @@ return function(S)
   -- (true), otherwise it waits as key's line, the newest winning, in the
   -- order the keys first waited, for the next window (false)
   function M.send_value(key, line)
-    if not M.present() then return false end
+    if state.stopped or not M.present() then return false end
     enter_window(current_window())
     if budget.sent < CROW.lines_per_window then
       drop_pending(key)
@@ -190,8 +193,10 @@ return function(S)
   local function input_mode(n) return SPEC.modes[param_value(in_id(n, "mode")) or 1] end
 
   local OFF = {kind = "off"}
+  -- Output n's source, by the key its param keeps (a key the list lacks is off)
   local function source_of(n)
-    return state.source_kinds[param_value(out_id(n, "source")) or 1] or OFF
+    if not params.lookup[out_id(n, "source")] then return OFF end
+    return state.source_by_key[S.lib.io_keyed.key(out_id(n, "source"))] or OFF
   end
 
   local function output_range(n)
@@ -209,26 +214,27 @@ return function(S)
     return clamp_to_range(n, (pitch - SPEC.zero_volt_note) / SPEC.notes_per_volt)
   end
 
-  -- Input n's lines: its handler and its mode call; off is mode none
-  -- (left out of a setup, which follows crow.reset)
-  local function input_lines(n, for_setup)
+  -- Input n's lines: its handler and its mode call; off is mode none, only
+  -- for a jack Strata set up since crow's last reset
+  local function input_lines(n)
     if norns_input(n) then return {} end
     local mode, jack = input_mode(n), "input[" .. n .. "]"
     if mode == "cv" then
       return {jack .. ".stream = function(v) tell('strata_in', " .. n .. ", v) end",
         jack .. ".mode('stream', " .. number(CROW.stream_seconds) .. ")"}
     elseif mode == "trigger" then
-      return {jack .. ".change = function(s) tell('strata_change', " .. n .. ", s) end",
+      return {jack .. ".change = function(s) tell('strata_change', " .. n .. ", s and 1 or 0) end",
         jack .. ".mode('change', " .. number(CROW.change_volts) .. ", " .. number(CROW.change_hysteresis)
           .. ", 'rising')"}
-    elseif not for_setup then
+    elseif state.set_up.input[n] then
       return {jack .. ".mode('none')"}
     end
     return {}
   end
 
-  -- Output n's lines for its source; off sends 0 V (left out of a setup)
-  local function output_lines(n, for_setup)
+  -- Output n's lines for its source; off sends 0 V, only for a jack Strata
+  -- set up since crow's last reset
+  local function output_lines(n)
     if norns_output(n) then return {} end
     local source, jack = source_of(n), "output[" .. n .. "]"
     if source.kind == "mod" then
@@ -243,7 +249,7 @@ return function(S)
       return lines
     elseif source.kind == "clock" then
       return {jack .. ".action = pulse(" .. number(CROW.pulse_seconds) .. ", " .. number(CROW.pulse_volts) .. ")"}
-    elseif not for_setup then
+    elseif state.set_up.output[n] then
       return {volts_line(n, 0)}
     end
     return {}
@@ -272,28 +278,35 @@ return function(S)
     return state.started and not state.stopped and M.present()
   end
 
-  -- Send input n's lines again (a param's action, or the setup)
-  local function apply_input(n, for_setup)
+  -- Send lines for a jack, noting whether it is now set up (a setting) or
+  -- not (its off line)
+  local function send_jack(kind, n, lines, setting)
+    for _, line in ipairs(lines) do M.send_now(line) end
+    if #lines > 0 then state.set_up[kind][n] = setting end
+  end
+
+  -- Send input n's lines again (its mode or range changed, or the setup)
+  local function apply_input(n)
     if input_mode(n) ~= "cv" then state.input_volts[n] = nil end
     local range = parse_range(SPEC.input_ranges[param_value(in_id(n, "range")) or 1])
     state.input_ranges[n][1], state.input_ranges[n][2] = range[1], range[2]
     if not active() then return end
-    for _, line in ipairs(input_lines(n, for_setup)) do M.send_now(line) end
+    send_jack("input", n, input_lines(n), input_mode(n) ~= "off")
   end
 
   -- Send output n's lines again and restart its clock
-  local function apply_output(n, for_setup)
+  local function apply_output(n)
     stop_output_clock(n)
     state.last_volts[n] = nil
     if not active() then return end
-    for _, line in ipairs(output_lines(n, for_setup)) do M.send_now(line) end
+    send_jack("output", n, output_lines(n), source_of(n).kind ~= "off")
     if source_of(n).kind == "clock" and not norns_output(n) then start_output_clock(n) end
   end
 
   -- Every line the current settings need (after crow.reset, so an off jack sends none)
   function M.setup()
-    for n = 1, SPEC.inputs do apply_input(n, true) end
-    for n = 1, SPEC.outputs do apply_output(n, true) end
+    for n = 1, SPEC.inputs do apply_input(n) end
+    for n = 1, SPEC.outputs do apply_output(n) end
   end
 
   -- norns' clock taking or giving back a jack (seen at each step): a jack
@@ -302,14 +315,14 @@ return function(S)
     local input = norns_input(1)
     if input ~= state.owners.input then
       state.owners.input = input
-      if not input then apply_input(1, false) end
+      if not input then apply_input(1) end
     end
     local output = owned_output()
     if output ~= state.owners.output then
       local previous = state.owners.output
       state.owners.output = output
       if output > 0 then stop_output_clock(output) end
-      if previous > 0 then apply_output(previous, false) end
+      if previous > 0 then apply_output(previous) end
     end
   end
 
@@ -376,6 +389,7 @@ return function(S)
       enter_window(current_window())
       budget.sent = budget.sent + 1
       crow.reset()
+      state.set_up = {input = {}, output = {}}
     end
     remember_owners()
     set_up()
@@ -482,7 +496,7 @@ return function(S)
   S.register_note_target({name = "crow",
     routed = function(voice)
       for n = 1, SPEC.outputs do
-        if source_of(n).voice == voice then return true end
+        if source_of(n).voice == voice and not norns_output(n) then return true end
       end
       return false
     end,
@@ -532,11 +546,13 @@ return function(S)
   ---------------------------------------------------------------------------
 
   local function build_sources()
-    state.source_names, state.source_kinds = {"off"}, {OFF}
-    local function add(name, kind)
-      state.source_names[#state.source_names + 1] = name
-      state.source_kinds[#state.source_kinds + 1] = kind
+    state.source_keys, state.source_labels, state.source_by_key = {}, {}, {}
+    local function add(key, kind)
+      state.source_keys[#state.source_keys + 1] = key
+      state.source_labels[#state.source_labels + 1] = key
+      state.source_by_key[key] = kind
     end
+    add("off", OFF)
     for _, record in ipairs(S.lib.mod_sources.registered()) do add(record.key, {kind = "mod", key = record.key}) end
     for voice = 1, NUM_VOICES do add("v" .. voice .. " pitch", {kind = "pitch", voice = voice}) end
     for voice = 1, NUM_VOICES do add("v" .. voice .. " gate", {kind = "gate", voice = voice}) end
@@ -547,7 +563,7 @@ return function(S)
   -- voice's notes (lib/io/targets.lua, when it is loaded)
   local function routes_changed(n, previous)
     local voices = {}
-    local before, now = state.source_kinds[previous or 1], source_of(n)
+    local before, now = state.source_by_key[previous or "off"], source_of(n)
     if before and before.voice then voices[before.voice] = true end
     if now.voice then voices[now.voice] = true end
     local targets = S.lib.io_targets
@@ -561,7 +577,7 @@ return function(S)
     build_sources()
     params:add_group("strata_crow", "crow", SPEC.param_count)
     for n = 1, SPEC.inputs do
-      local function changed() apply_input(n, false) end
+      local function changed() apply_input(n) end
       local name = "in " .. n .. " "
       params:add_option(in_id(n, "mode"), name .. "mode", SPEC.modes, 1)
       params:add_option(in_id(n, "range"), name .. "range", SPEC.input_ranges, 1)
@@ -571,20 +587,21 @@ return function(S)
           local voice = param:get()
           return voice == 0 and SPEC.selected_voice or tostring(voice)
         end}
-      for _, field in ipairs({"mode", "range", "action", "voice"}) do params:set_action(in_id(n, field), changed) end
+      -- the action and the voice are read at each rise: no line
+      for _, field in ipairs({"mode", "range"}) do params:set_action(in_id(n, field), changed) end
     end
     for n = 1, SPEC.outputs do
-      local function changed() apply_output(n, false) end
+      local function changed() apply_output(n) end
       local name = "out " .. n .. " "
-      params:add_option(out_id(n, "source"), name .. "source", state.source_names, 1)
-      params:add_option(out_id(n, "range"), name .. "range", SPEC.output_ranges, 1)
-      params:add_option(out_id(n, "div"), name .. "div", SPEC.divisions, SPEC.division_default)
-      params:set_action(out_id(n, "source"), function(value)
+      -- kept by key, so a source registered by a later release never moves a saved choice
+      S.lib.io_keyed.add(out_id(n, "source"), name .. "source", state.source_keys, state.source_labels, function(key)
         local previous = state.applied_source[n]
-        state.applied_source[n] = value
-        apply_output(n, false)
+        state.applied_source[n] = key
+        apply_output(n)
         routes_changed(n, previous)
       end)
+      params:add_option(out_id(n, "range"), name .. "range", SPEC.output_ranges, 1)
+      params:add_option(out_id(n, "div"), name .. "div", SPEC.divisions, SPEC.division_default)
       params:set_action(out_id(n, "range"), changed)
       params:set_action(out_id(n, "div"), changed)
     end
@@ -687,7 +704,7 @@ return function(S)
   -- reset it)
   S.register_start(S.constants.START_ORDER.io_crow, function()
     state.started = true
-    for n = 1, SPEC.outputs do state.applied_source[n] = param_value(out_id(n, "source")) end
+    for n = 1, SPEC.outputs do state.applied_source[n] = S.lib.io_keyed.key(out_id(n, "source")) end
     remember_owners()
     norns.crow.add = function() crow_added() end
     norns.crow.remove = function() crow_removed() end
@@ -700,7 +717,7 @@ return function(S)
       if (param_value(in_id(n, "mode")) or 1) ~= 1 then return true end
     end
     for n = 1, SPEC.outputs do
-      if (param_value(out_id(n, "source")) or 1) ~= 1 then return true end
+      if source_of(n).kind ~= "off" then return true end
     end
     return false
   end
