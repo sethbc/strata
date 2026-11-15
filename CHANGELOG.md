@@ -107,7 +107,7 @@ The design's lines are marked where the build differs (*amended 2026-11-15, as b
 
 ### Decisions
 
-The full list, with what each costs if wrong, is in `docs/decisions/3.6.md`: the design's twenty-one decisions, the plan's thirty-three rulings and the build's fifty-one, by the names code comments cite.
+The full list, with what each costs if wrong, is in `docs/decisions/3.6.md`: the design's twenty-one decisions, the plan's thirty-three rulings and the build's fifty-two, by the names code comments cite.
 
 ## Version 3.5.0 - 2026-11-13
 
