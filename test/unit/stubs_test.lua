@@ -2263,7 +2263,7 @@ test("the iii stub's midi_out sends raw bytes three at a time and models no mess
   assert_true(not ok and tostring(err):find("not modeled", 1, true), "a message table raises: " .. tostring(err))
 end)
 
-test("the iii stub's metros free by id, never reuse an id, and fire on a helper", function()
+test("the iii stub's metros free by id, share no live id, hold 15 and fire on a helper", function()
   load_strata()
   local path = data_root .. "iii_metro_script.lua"
   local file = assert(io.open(path, "w"))
@@ -2280,9 +2280,19 @@ test("the iii stub's metros free by id, never reuse an id, and fire on a helper"
   device.midi_in(2)
   assert_true(not pcall(device.fire_metro, first), "a freed metro does not fire")
   device.midi_in(1)
-  assert_true(env.id ~= first, "an id is never handed out twice")
+  assert_equal(env.id, first, "a freed id may be handed out again")
+  local live = {}
+  for index = 1, 14 do live[index] = device.run(path).metro.init(function() end, 1) end
+  local seen = {}
+  for _, metro in ipairs(live) do assert_true(not seen[metro.id], "no live id is shared"); seen[metro.id] = true end
+  assert_true(not seen[env.id], "nor with the first")
+  assert_equal(env.metro.init(function() end, 1), nil, "a sixteenth metro is refused (iii allows 15)")
   device.midi_in(3)
   assert_true(not pcall(device.fire_metro, env.id), "free_all frees every metro")
+  assert_true(env.metro.init(function() end, 1) ~= nil, "and room is back")
+  local object = env.metro.init(function() end, 1)
+  object.free_all()
+  assert_true(not pcall(device.fire_metro, object.id), "m.free_all() on the object frees them too")
   assert_true(not pcall(device.fire_metro, 999), "an unknown id raises")
 end)
 
@@ -2344,7 +2354,9 @@ test("the softcut stub keeps callbacks to fire and refuses defaults and params",
     assert_true(not ok and tostring(err):find("not modeled", 1, true), "softcut." .. name .. " raises: " .. tostring(err))
   end
   softcut.reset()
-  assert_true(not pcall(context.softcut.fire, "event_phase"), "reset clears the phase callback, as softcut.reset does")
+  context.softcut.fire("event_phase", 1, 0.5)
+  assert_equal(#got, 3, "after a reset the phase callback is norns' do-nothing, so firing it does nothing")
+  assert_true(not pcall(context.softcut.fire, "event_position_none"), "a name that was never set raises")
 end)
 
 test("an nb player is a plain table with exactly the methods the test names", function()
@@ -2386,6 +2398,73 @@ test("an nb player can inherit methods through a metatable, as another host leav
     "count_up1stop_allnote_on", "inherited methods record into calls too")
   assert_equal(getmetatable(context.nb.add_player("plain", {"note_on"})), nil, "no inherited list, no metatable")
   assert_equal(player.name, nil, "still no name")
+end)
+
+test("the iii stub's libraries hold only the names Lua 5.3 has, under either interpreter", function()
+  load_strata()
+  local path = data_root .. "iii_libs_script.lua"
+  local file = assert(io.open(path, "w")); file:write("-- nothing\n"); file:close()
+  local env = require("stub_iii")({kind = "grid"}).run(path)
+  for _, name in ipairs({"getn", "foreach", "foreachi", "maxn", "setn"}) do
+    assert_equal(env.table[name], nil, "table." .. name .. " is not Lua 5.3's")
+  end
+  for _, name in ipairs({"pow", "ldexp", "frexp", "cosh", "sinh", "tanh", "log10", "atan2"}) do
+    assert_equal(env.math[name], nil, "math." .. name .. " is not Lua 5.3's")
+  end
+  for _, name in ipairs({"gfind"}) do assert_equal(env.string[name], nil, "string." .. name) end
+  assert_equal(env.table.concat({1, 2}, ","), "1,2")
+  assert_equal(env.table.pack(1, nil, 3).n, 3, "table.pack exists, as in 5.3")
+  assert_equal(env.table.concat(env.table.move({1, 2, 3}, 1, 3, 2, {}), ",", 2, 4), "1,2,3", "table.move exists")
+  assert_equal(env.math.floor(1.5), 1)
+  assert_equal(env.string.upper("x"), "X")
+  assert_true(not pcall(env.getmetatable, ""), "getmetatable of a string is not modeled")
+  assert_equal(env.getmetatable(setmetatable({}, {__index = 1})).__index, 1, "other tables still work")
+end)
+
+test("the iii stub reads the leading v<major>.<minor>.<patch> of a version and refuses any other form", function()
+  load_strata()
+  local path = data_root .. "iii_beta_script.lua"
+  local file = assert(io.open(path, "w")); file:write("-- nothing\n"); file:close()
+  local env = require("stub_iii")({kind = "grid", version = "v1.1.0b1"}).run(path)
+  assert_equal(type(env.device_version), "function", "a beta of 1.1.0 has device_version")
+  assert_equal(env.iii_version, nil, "and no iii_version")
+  env = require("stub_iii")({kind = "grid", version = "v1.1.1b3"}).run(path)
+  assert_equal(env.iii_version, "v1.1.1b3", "iii_version keeps the tag as given")
+  for _, bad in ipairs({"1.1.2", "v1.1", "latest", ""}) do
+    local ok, err = pcall(require("stub_iii"), {kind = "grid", version = bad})
+    assert_true(not ok and tostring(err):find("v<major>.<minor>.<patch>", 1, true), "version " .. bad .. " raises: " .. tostring(err))
+  end
+end)
+
+test("the iii stub has the rest of iii's functions, and below 1.1.0 calls no event callback", function()
+  load_strata()
+  local path = data_root .. "iii_funcs_script.lua"
+  local file = assert(io.open(path, "w"))
+  file:write("function event_grid() hit = 'grid' end\nfunction event_arc() hit = 'arc' end\n"
+    .. "function event_arc_key() hit = 'key' end\nfunction event_midi() hit = 'midi' end\n")
+  file:close()
+  local device = require("stub_iii")({kind = "grid", cols = 16, rows = 8})
+  local env = device.run(path)
+  local msg = env.midi_to_msg({0x91, 60, 100})
+  assert_equal(msg.type .. msg.note .. msg.vel .. msg.ch, "note_on601002", "a note on")
+  assert_equal(env.midi_to_msg({0x90, 60, 0}).type, "note_off", "velocity 0 is a note off")
+  assert_equal(env.midi_to_msg({0xb0, 7, 9}).type, "cc")
+  assert_equal(env.midi_to_msg({0xf0, 1, 2}).type, "sysex", "sysex")
+  env.grid_led(2, 1, 9)
+  assert_equal(env.grid_led_get(2, 1), 9, "grid_led_get reads the level set (queued)")
+  env.grid_intensity(5)
+  assert_equal(device.calls[#device.calls][1] .. device.calls[#device.calls][2], "grid_intensity5", "recorded")
+  env.arc_intensity(3)
+  env.arc_res(2, 4)
+  assert_equal(device.arc_resolution[2], 4, "arc_res is kept per ring")
+  assert_equal(env.clamp(5, 0, 3), 3)
+  assert_equal(env.round(2.5), 3)
+  assert_equal(env.linlin(5, 0, 10, 0, 100), 50)
+  assert_equal(env.wrap(5, 0, 3), 1, "wrap is inclusive, as norns util.wrap")
+  local old = require("stub_iii")({kind = "arc", version = "v1.0.0"})
+  local old_env = old.run(path)
+  old.press(1, 1, 1); old.turn(1, 1); old.arc_press(1); old.midi_in(1, 2, 3)
+  assert_equal(old_env.hit, nil, "no event callback runs below 1.1.0")
 end)
 
 end

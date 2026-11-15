@@ -6,8 +6,8 @@
 -- context.softcut.value(name, ...) returns the argument after the leading
 -- ones given, from the last call of that name whose leading arguments
 -- match (softcut.rate(1, 0.5): value("rate", 1) == 0.5), nil before any.
--- softcut.reset() clears the calls and the phase callback, as the real reset
--- clears the voices and that callback. event_phase, event_position and
+-- softcut.reset() clears the calls and puts norns' do-nothing back as the phase
+-- callback (so firing it then does nothing). event_phase, event_position and
 -- event_render keep their callback: context.softcut.fire(name, ...) calls
 -- it (and raises when none is set). defaults() and params() raise "not
 -- modeled".
@@ -45,7 +45,9 @@ return function()
 
   -- the callbacks a script registers (softcut.lua :372, :385, :395), kept
   -- for context.softcut.fire(name, ...)
-  helpers.callbacks = {}
+  -- the phase callback starts as norns' do-nothing, which a script's load
+  -- (script.reset -> softcut.reset) leaves there
+  helpers.callbacks = { event_phase = function() end }
   for _, name in ipairs({ "event_phase", "event_position", "event_render" }) do
     softcut[name] = function(callback)
       table.insert(helpers.calls, { name, callback })
@@ -68,7 +70,7 @@ return function()
   -- SC.reset (softcut.lua :405) calls _norns.cut_reset and clears the phase callback
   function softcut.reset()
     for index = #helpers.calls, 1, -1 do helpers.calls[index] = nil end
-    helpers.callbacks.event_phase = nil
+    helpers.callbacks.event_phase = function() end
   end
 
   setmetatable(softcut, { __index = function(_, name)
