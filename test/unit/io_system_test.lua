@@ -17,7 +17,7 @@ return function(h)
 local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 
--- The rig and the minute (the brief's values). MIDI devices sit at ports 1
+-- The rig and the minute (the 3.6 plan's Task 3a). MIDI devices sit at ports 1
 -- to 4 (the MPE voices' synths on 1 and 2), the E16 at 5, the fader box at
 -- 6 and the remote grid at 7
 local SYSTEM = {
@@ -100,8 +100,9 @@ end
 
 local function message(bytes) return midi.to_msg(bytes) end
 
--- Groups a log's entries by time (one clock tick sends at one time):
--- time -> count of those that pass keep(entry)
+-- Groups a log's entries by time (a clock's tick sends at one time, and
+-- each kind counted here has one clock sending it): time -> count of those
+-- that pass keep(entry)
 local function per_time(log, keep)
   local counts = {}
   for _, entry in ipairs(log) do
@@ -307,8 +308,7 @@ end
 -- waited, and the most lines ever waiting beside the lines with an off
 local function watch_ii(S)
   local ii = S.lib.io_ii
-  local seen = {accepted_full = 0, off_lines = {}, off_line_count = 0, most = 0, most_allowed = math.huge,
-    sends = 0, offs = 0, calls = 0}
+  local seen = {accepted_full = 0, off_lines = {}, off_line_count = 0, most = 0, sends = 0, offs = 0, calls = 0}
   local send, send_off = ii.send, ii.send_off
   local function note_waiting()
     local waiting = ii.queued()
@@ -355,17 +355,15 @@ local function everything_on(rig, bus)
   assert_equal(S.lib.io_ii.leads(), bus == "strata", "Strata leads the ii bus only under strata")
   context.clock.advance_until(S.lfo_clock)
   for voice = 1, S.constants.NUM_VOICES do
-    local midi_route = ROUTES.midi[voice]
-    assert_true(S.lib.io_targets ~= nil and params:get("v" .. voice .. "_out_port") == midi_route.port,
-      "voice " .. voice .. "'s MIDI route stands")
+    assert_equal(params:get("v" .. voice .. "_out_port"), ROUTES.midi[voice].port,
+      "voice " .. voice .. "'s MIDI route stands after the settle")
   end
   assert_true(S.lib.io_tape.is_on(), "the tape runs")
 end
 
--- What each step of the minute plays with everything on: the fifteen MPE
--- notes (struck at the first step, then every value of each moving each
--- step), the faders swept and an E16 encoder turned, the watched params
--- moved, and the remote grid redrawn
+-- The fifteen MPE notes struck, then what each step of the minute plays
+-- with everything on: the notes' values moved, the faders swept and an
+-- E16 encoder turned, the watched params moved, the remote grid redrawn
 local function everything_moves(rig)
   local context, S = rig.context, rig.S
   local watched = {}
@@ -429,7 +427,7 @@ local function play_minute(rig, seconds)
   local scene_steps = math.floor(SYSTEM.scene_seconds / SYSTEM.step + 0.5)
   pattern_clock_start()
   for n = 1, steps do
-    if n % scene_steps == 0 then S.lib.io_actions.recall_scene(n / scene_steps % 2 + 1) end
+    if n % scene_steps == 0 then S.lib.io_actions.recall_scene(math.floor(n / scene_steps) % 2 + 1) end
     if rig.each_step then rig.each_step(n, util.time()) end
     context.clock.run_for(SYSTEM.step)
   end
@@ -462,7 +460,6 @@ local function minute_with_everything_on()
     each_step(n, t)
     rig.ii.note_waiting()
   end
-  rig.minute_start = util.time()
   play_minute(rig)
   return rig
 end
@@ -519,7 +516,7 @@ end
 -- channel and note are counted and their off goes once, when the last
 -- ends (docs/notes/lua/io/midi_out.md), so the end kept is the latest
 local function late_midi_offs(rig)
-  local late = {}
+  local late, checked = {}, 0
   local index = hits_at(rig)
   local allowed = SYSTEM.step + SYSTEM.tick_tolerance + 1e-6
   for _, port in ipairs(SYSTEM.midi_ports) do
@@ -544,20 +541,23 @@ local function late_midi_offs(rig)
       elseif is_status(msg, "note_off") then
         local record = open[key]
         open[key] = nil
-        if record and record.due and entry.t > record.due + allowed then
-          late[#late + 1] = string.format("port %d ch %d note %d: off at %.4f, due %.4f", port, msg.ch, msg.note,
-            entry.t, record.due)
+        if record and record.due then
+          checked = checked + 1
+          if entry.t > record.due + allowed then
+            late[#late + 1] = string.format("port %d ch %d note %d: off at %.4f, due %.4f", port, msg.ch, msg.note,
+              entry.t, record.due)
+          end
         end
       end
     end
   end
-  return late
+  return late, checked
 end
 
 -- Each low of crow's gate output (voice 3's) later than one LFO step after
--- the end of the voice's latest hit before it
+-- the end of the voice's latest hit before it, and how many lows were checked
 local function late_crow_gates(rig)
-  local late = {}
+  local late, checked = {}, 0
   local hits = {}
   for _, hit in ipairs(rig.hits) do
     if hit.voice == 3 then hits[#hits + 1] = hit end
@@ -570,11 +570,14 @@ local function late_crow_gates(rig)
       latest = hits[next_hit]
       next_hit = next_hit + 1
     end
-    if entry.line == "output[2].volts = 0" and latest and entry.t > hit_end(latest) + allowed then
-      late[#late + 1] = string.format("gate low at %.4f, due %.4f", entry.t, hit_end(latest))
+    if entry.line == "output[2].volts = 0" and latest then
+      checked = checked + 1
+      if entry.t > hit_end(latest) + allowed then
+        late[#late + 1] = string.format("gate low at %.4f, due %.4f", entry.t, hit_end(latest))
+      end
     end
   end
-  return late
+  return late, checked
 end
 
 local function first_lines(list, count)
@@ -595,7 +598,7 @@ test("with every default a minute of playing sends nothing anywhere", function()
   play_minute(rig)
   pattern_clock_stop()
   assert_true(S.pattern_playing == false, "the patterns stopped")
-  -- the minute played: 7 voices x 10 steps a second x 4 hits, for 60 s
+  -- the minute played: the hits of every set step of seven voices
   assert_true(#rig.hits >= 0.9 * expected_hits(rig.S, rig.density), "hits played: " .. #rig.hits)
   for _, port in ipairs(SYSTEM.midi_ports) do
     assert_equal(#rig.devices[port].sent, 0, "MIDI port " .. port .. " was sent nothing")
@@ -705,10 +708,12 @@ test("with everything on, a minute holds every bound", function()
 
   -- note offs (docs/notes/lua/io/targets.md): checked each 48 Hz step, so
   -- every MIDI and crow note off comes within one step of its time
-  local late = late_midi_offs(rig)
+  local late, offs_checked = late_midi_offs(rig)
   assert_equal(#late, 0, "MIDI note offs within a step of their time: " .. first_lines(late))
-  local late_gates = late_crow_gates(rig)
+  assert_true(offs_checked > 1000, "step notes' offs were matched to their ends: " .. offs_checked)
+  local late_gates, lows_checked = late_crow_gates(rig)
   assert_equal(#late_gates, 0, "crow's gate low within a step of its time: " .. first_lines(late_gates))
+  assert_true(lows_checked > 100, "crow's gate lows were checked: " .. lows_checked)
 end)
 
 test("after that minute everything stops with no note left", function()
