@@ -23,17 +23,21 @@ A wrong address, a missing or wrong argument or a voice that is not 1 to 7 print
 
 ## Feedback
 
-Set **osc feedback** to `on` in the IO page's `osc` section. Strata sends values back to the host of the last message it received, at **osc port** (9000 by default), up to 15 times a second:
+Set **feedback** to `on` in the IO page's `osc` section. Strata sends values back to the host of the last message it received (feedback starts when one has arrived), at the section's **port** (9000 by default), up to 15 times a second and at most 32 messages each time:
 - `/param/<id> <value>` for each watched param when it changes. The list starts as the sixteen macros and each voice's mute and level; `/strata/watch` adds more.
 - `/strata/scene <n>`, `/strata/voice/<n>/running <0 or 1>` and `/strata/patterns <0 or 1>` when they change.
 
-A value that has just arrived from the app is not sent back to it. Send `/strata/hello` when the app starts so it shows everything. The section's title shows the sender's host, or `no sender` until a message has arrived.
+A value that has just arrived from the app is not sent back to it. Send `/strata/hello` when the app starts so it shows everything (it works while feedback is on). The section's title shows the sender's host, or `no sender` until a message has arrived.
 
 ## TouchOSC
 
 TouchOSC has no default ports, so type them in. In its connections, make a UDP connection with:
 - **Host**: norns' address (its IP address or `norns.local`)
 - **Send port**: 10111
-- **Receive port**: the same number as osc port on the IO page (9000 by default)
+- **Receive port**: the same number as `port` in the IO page's `osc` section (9000 by default)
 
 Two layouts are in `extras/touchosc/` in the Strata folder: `strata-tablet.tosc` and `strata-phone.tosc`. Each has three pages: the sixteen macros, the seven voices (run, mute and level) and the sixteen scenes with the patterns' toggle. They are made by `tools/touchosc/generate.py` from `tools/touchosc/layout.lua` (see `tools/touchosc/README.md`), in a file format Hexler does not document.
+
+## Sources
+
+Norns' `lua/core/osc.lua`, TouchOSC's manual and the tosclib library's file format. Unverified on the device until the 4.0 hardware check; the two layouts have never been opened in TouchOSC.

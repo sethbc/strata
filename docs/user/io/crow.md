@@ -42,3 +42,7 @@ norns can take crow for its clock (PARAMETERS > CLOCK: source `crow` uses input 
 ## Limits
 
 Strata sends crow at most 32 lines each tenth of a second. Notes, gates, triggers and clock pulses always go at once; when an output's followed value has to wait, its newest value goes in the next tenth of a second.
+
+## Sources
+
+crow's firmware v4.0.5 and its reference, and norns' `lua/core/crow.lua`. Unverified on the device until the 4.0 hardware check.

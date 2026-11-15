@@ -31,3 +31,7 @@ With `teletype leads` and crow connected, Strata gives crow three handlers, agai
 | `CROW.C3 5 0 x` | The patterns: x 0 stops them, 1 plays them, 2 toggles |
 
 A call with a number out of range does nothing and prints one line in maiden. `CROW.C4` does nothing, and so do the queries (`CROW.Q0` to `CROW.Q3`): answering a query from norns can crash crow. Turning the setting away from `teletype leads` gives crow its own handlers back.
+
+## Sources
+
+crow's firmware v4.0.5 (`lua/ii/` and `lua/ii.lua`), Teletype v5.0.0's `CROW.*` ops and monome's ii page. Unverified on the device until the 4.0 hardware check.

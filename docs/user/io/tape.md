@@ -6,7 +6,7 @@ It is off by default: with `tape` off Strata sends nothing to softcut and leaves
 
 ## The settings
 
-All seven are saved with a PSET; none is in a scene.
+All seven are saved with a PSET (the **tape** group in PARAMETERS: `tape loop`, `tape record`, `tape length`, `tape speed`, `tape feedback`, `tape wear` and `tape level`); none is in a scene.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|

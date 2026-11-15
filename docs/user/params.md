@@ -66,6 +66,10 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 - V1 nb to v7 nb (none, or a player an installed nb voice mod offers; none): the player each voice's steps and played notes go to, kept by name. See [nb voices](io/nb.md)
 - A PSET stores them; scenes do not
 
+## tape (group)
+- The tape loop's seven settings: tape loop (off, on; off), tape record (off, on; on), tape length (0.25-60 s; 4), tape speed (-2 to 2, negative plays backward; 1), tape feedback (0-100 %; 50), tape wear (0-100 %; 20) and tape level (0-100 %; 70). Level, speed, feedback and wear are also macro targets. See [The tape loop](io/tape.md)
+- A PSET stores them; scenes do not
+
 ## Sequencer (group)
 The quantizer for actions, the pattern chain, the division reset and following the clock's transport ([Sequencer](sequencer.md)). PSETs store them; scenes do not.
 - Quantize actions (off, beat, bar; default off): with beat or bar, these wait for the next beat or bar of the norns clock, and the header says so (`v1 jump at bar`, `v1 bm 2 at bar`, `S3 at beat`, `v2 frz at bar`, `play at bar`): a grid's position and bookmark keys, BUFFER's bookmark field (`bm`), a scene recall (the SCENES page's K2, K3 and arc button, and every grid's scene keys) and the start of the patterns (a stop never waits). A grid's keys for a voice's audio freeze wait too. A second press of a scene, bookmark or position key before then replaces the first; a second press of a freeze key or of the play key takes its waiting action back, so nothing happens, and a transport start or stop drops a waiting start of the patterns. Off acts at once. A step's bookmark lock never waits. Saved in PSETs, not in scenes

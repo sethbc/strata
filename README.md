@@ -73,6 +73,7 @@ After installing, restart norns from its own menu: SYSTEM > RESTART. Strata's en
 - [MIDI Input](docs/user/midi.md) - playing voices from MIDI and mapping CCs
 - [Monome Grid](docs/user/grid.md) - grid sizes (one layout file each under docs/user/grid/), holds and step levels (since 3.4 a step key toggles its step when you let go, not when you press, and a step held 0.3 s opens the step editor), and the pattern sequencer
 - [Monome Arc](docs/user/arc.md) - arc rings, button and LED feedback
+- [IO and Supported Devices](docs/user/pages/io.md) - the IO page: MIDI out, crow, the ii bus, controllers, remote grids and arcs, OSC and the tape loop, with [a page for each device](docs/user/io/devices.md)
 - [Parameters Reference](docs/user/params.md) - everything in the PARAMETERS menu
 - [Usage Tips](docs/user/tips.md) - workflows and starting points
 - [Technical Details](docs/user/technical.md) - architecture, signal flow and the development checks

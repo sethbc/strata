@@ -18,7 +18,7 @@
 - `M.present()` (`norns.crow.dev ~= nil`), `M.number(value)`, `M.send_now(line)`, `M.send_value(key, line)`, `M.setup()`.
 - `M.on_event(name, fn)`: `fn(...)` for each `^^name(...)` line, set in `norns.crow.events` at once and again after each add; the same name again replaces it. `M.on_setup(name, fn)`, `M.on_gone(name, fn)`: run after each add's setup (and at the start with a crow there), and when crow goes. The ii bus module installs Teletype's handlers through these.
 - For tests: `M.budget_state() -> {sent, pending}` and `M.clocks() -> {flush, outputs = {[n] = id}}`.
-- The group `strata_crow` (20 params, PSET-only, `add_params()`, called by `lib/params_setup.lua`'s record), the modulation sources `crow1` and `crow2`, the note target `crow`, IO's `crow` section, the start step `io_crow` (92) and the cleanup step `io_crow` (145).
+- The group `strata_crow` (24 params, PSET-only, `add_params()`, called by `lib/params_setup.lua`'s record), the modulation sources `crow1` and `crow2`, the note target `crow`, IO's `crow` section, the start step `io_crow` (92) and the cleanup step `io_crow` (145).
 - Tests: `test/unit/io_crow_test.lua`.
 
 ## Params

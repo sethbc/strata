@@ -2,7 +2,7 @@
 
 Using a monome arc for hands-on control with LED feedback. Back to the [README](../../README.md).
 
-Strata supports the monome arc controller for hands-on parameter control with visual LED feedback. Strata follows one arc, on whichever arc port it is assigned to (SYSTEM > DEVICES > ARC). An arc moved to another port there is followed once you close the menu. If a second arc is plugged in while one is connected, it is ignored; unplugging the connected arc moves Strata to the other one.
+Strata supports the monome arc controller for hands-on parameter control with visual LED feedback. Strata follows one arc, on whichever arc port it is assigned to (SYSTEM > DEVICES > ARC). An arc moved to another port there is followed once you close the menu. If a second arc is plugged in while one is connected, it is ignored; unplugging the connected arc moves Strata to the other one. A 2025 arc in iii mode is another way to connect one, over a MIDI port set on IO's `remote` section ([Remote grids and arcs](io/remote.md)); while a monome arc is plugged into norns, that one is followed instead.
 
 ## Arc Encoders
 
