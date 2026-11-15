@@ -20,7 +20,7 @@
 
   | What happens on the channel | What the other played notes on that channel do |
   |---|---|
-  | A played note's first values go out there (before its note on) | each is taken as having sent its current values: its `sent` is set, field by field, to what `encoded` gives for its raw values now (a field it has no value for is left as it is), so a resend pending for it is canceled and the step sends nothing for it until a value of its changes; the channel carries the new note's values |
+  | A played note's first values go out there (before its note on) | each is taken as having sent its current values: its `sent` is set, field by field, to what `encoded` gives for its raw values now (a field it has no value for is left as it is), so a resend pending for it is canceled and the step sends nothing for it until a value of its changes after this start (one it changed just before, not yet sent, is taken as sent too and waits until a played note on the channel ends); the channel carries the new note's values |
   | A note sends a later value there from the expression step | nothing: they share the newest value, and two notes with different values never resend against each other |
   | A played note on the channel ends, and other played notes remain on it | each forgets what it last sent (`sent = {}`), so the step sends its current values once, within the 24 a step and in the round's order: the channel goes back to what the notes still on it hold |
   | The last note on the channel ends, or a step note ends | nothing |
