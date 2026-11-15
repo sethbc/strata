@@ -21,6 +21,7 @@ return function(S)
     level_volts = 5,                          -- an envelope's full level, at velocity 1
     attack = {min = 1, max = 10000, default = 10},    -- ms
     decay = {min = 1, max = 10000, default = 500},    -- ms
+    time_commands = {attack = "env_att", decay = "env_dec"},
     labels = {off = "off", out = "out %d  %s", row = "txo", attack = "txo attack", decay = "txo decay",
       output = "output", mode = "mode", ms = "%d ms"},
   }
@@ -123,6 +124,13 @@ return function(S)
     else
       for _, output in ipairs(sorted_outputs(want)) do set_up(output) end
     end
+  end
+
+  -- A time changed: only its command, once per output whose envelope is
+  -- set up (a turn of the knob sends a line an output a detent, not three)
+  local function send_time(command, value)
+    if not leading() then return end
+    for _, output in ipairs(sorted_outputs(active)) do bus().send("txo", command, output, value) end
   end
 
   local function route_changed(voice)
@@ -298,7 +306,7 @@ return function(S)
       params:add{type = "number", id = "txo_" .. field, name = "txo " .. field,
         min = TXO[field].min, max = TXO[field].max, default = TXO[field].default,
         formatter = function(param) return string.format(TXO.labels.ms, param:get()) end,
-        action = function() sync() end}
+        action = function(value) send_time(TXO.time_commands[field], value) end}
     end
   end
 
