@@ -41,6 +41,12 @@ local SYSTEM = {
   -- faders and params moved every twelfth (4 Hz)
   light = {step_every = 4, mpe_every = 8, frame_every = 12, move_every = 12},
   tick_tolerance = h.stubs.MATRON_TICK_SECONDS,
+  -- the minute with everything on: about 10 s under the ii bus's rate at
+  -- 120 BPM (and a second's settle each side), then the flood for its
+  -- last 48 s, the fifteen MPE keys released and struck again every 96
+  -- LFO steps (2 s)
+  flood_seconds = 48, restrike_steps = 96,
+  stretch = {tempo = 120, settle_seconds = 1},
 }
 
 local GRID_SCRIPT = h.repo_root .. "/iii/strata_grid.lua"
@@ -57,25 +63,38 @@ local function in_lfo_step(S)
   return S.lfo_clock ~= nil and running ~= nil and running == clock.threads[S.lfo_clock]
 end
 
--- A plugged MIDI device's sends, each {bytes, t, lfo}, kept in device.log
+-- True outside every clock's coroutine: the test's own calls (a played
+-- note sent in, a param set), never a pattern's step (Lua 5.3 names the
+-- main thread, LuaJIT gives nil there)
+local function in_main_thread()
+  local running, is_main = coroutine.running()
+  return running == nil or is_main == true
+end
+
+-- A plugged MIDI device's sends, each {bytes, t, lfo, main}, kept in device.log
 local function watch_midi(S, device)
   device.log = {}
   local send = device.send
   device.send = function(self, data)
     send(self, data)
-    self.log[#self.log + 1] = {bytes = self.sent[#self.sent], t = util.time(), lfo = in_lfo_step(S)}
+    self.log[#self.log + 1] = {bytes = self.sent[#self.sent], t = util.time(), lfo = in_lfo_step(S),
+      main = in_main_thread()}
   end
   return device
 end
 
--- crow's lines, each {line, t, lfo}, kept in the returned list
+-- crow's lines, each {line, t, lfo}, kept in the returned list; each line
+-- crow got is also handed to log.heard(line) when one is set
 local function watch_crow(S, context)
   local log = {}
   local send = norns.crow.send
   norns.crow.send = function(line)
     local before = #context.crow.sent
     send(line)
-    if #context.crow.sent > before then log[#log + 1] = {line = line, t = util.time(), lfo = in_lfo_step(S)} end
+    if #context.crow.sent > before then
+      log[#log + 1] = {line = line, t = util.time(), lfo = in_lfo_step(S)}
+      if log.heard then log.heard(line) end
+    end
   end
   return log
 end
@@ -157,11 +176,12 @@ local function busy_patterns(S, density)
   end
 end
 
--- The hits a minute of busy_patterns plays: each voice's set steps (one in
--- step_every of its 1/8 steps, 10 a second at 300 BPM) times the ratchet
-local function expected_hits(S, density)
+-- The hits busy_patterns plays in seconds (a minute when not given): each
+-- voice's set steps (one in step_every of its 1/8 steps, 10 a second at
+-- 300 BPM) times the ratchet
+local function expected_hits(S, density, seconds)
   local steps_per_second = SYSTEM.tempo / 60 * 2
-  return S.constants.NUM_VOICES * steps_per_second / density.step_every * SYSTEM.ratchet * SYSTEM.minute
+  return S.constants.NUM_VOICES * steps_per_second / density.step_every * SYSTEM.ratchet * (seconds or SYSTEM.minute)
 end
 
 -- Two scenes to recall in turn
@@ -189,7 +209,8 @@ local function started(options)
   -- each hit (its time, the beat now, the event's beat, gate and pitches),
   -- so a note off can be checked against its note's time
   S.register_step_output({name = "system probe", play = function(event)
-    rig.hits[#rig.hits + 1] = {t = util.time(), now_beat = clock.get_beats(), voice = event.voice,
+    rig.hits[#rig.hits + 1] = {t = util.time(),
+      now_beat = clock.get_beats(), tempo = clock.get_tempo(), voice = event.voice,
       beat = event.beat, gate_beats = event.gate_beats, pitches = event.pitches}
   end})
   rig.crow = watch_crow(S, context)
@@ -216,14 +237,14 @@ end
 
 -- Each voice's routes with everything on. MIDI: voices 1 and 2 MPE on
 -- ports 1 and 2 (their synths), the rest plain, each on a channel of its
--- own, on ports 3 and 4; the ER-301 ports and the TELEXo outputs are
--- shared (voices on one port play one line), voices 1, 3, 5 and 7 on the
--- TELEXo's envelope; the nb players alternate
+-- own, on ports 3 and 4; an ER-301 port and a TELEXo output of its own
+-- each (so each voice's lines can be seen high and low), voices 1, 3, 5
+-- and 7 on the TELEXo's envelope; the nb players alternate
 local ROUTES = {
   midi = {{port = 1, mpe = true}, {port = 2, mpe = true}, {port = 3, channel = 3}, {port = 3, channel = 4},
     {port = 4, channel = 5}, {port = 4, channel = 6}, {port = 4, channel = 7}},
-  er301 = {1, 2, 3, 1, 2, 3, 1},
-  txo = {1, 2, 1, 2, 1, 2, 1}, txo_envelope = {true, false, true, false, true, false, true},
+  er301 = {1, 2, 3, 4, 5, 6, 7},
+  txo = {1, 2, 3, 4, 5, 6, 7}, txo_envelope = {true, false, true, false, true, false, true},
   nb = {"alpha", "beta", "alpha", "beta", "alpha", "beta", "alpha"},
   crow = {"v3 pitch", "v3 gate", "lfo3", "lfo4"},
   cc_port = 3, cc_channel = 16, cc_first = 20,
@@ -302,21 +323,49 @@ local function surfaces(rig)
   assert_true(S.lib.io_osc.running(), "OSC feedback runs")
 end
 
+-- A line's key as crow's lines name it: "er301.tr(3)"
+local function line_key(S, device, command, first)
+  return device .. "." .. command .. "(" .. S.lib.io_crow.number(first) .. ")"
+end
+
 -- The ii queue watched as it is used: every send and send_off still goes
 -- to the real module (the test only reads what it answers and how many
--- lines wait), and each call notes a send accepted while 48 or more lines
--- waited, and the most lines ever waiting beside the lines with an off
-local function watch_ii(S)
+-- lines wait). Each send accepted while 48 or more lines waited is noted.
+-- The offs owed are kept exactly: one joins when send_off returns true and
+-- the queue grew by it, and one is paid when crow gets that line's low, so
+-- the offs owed are the offs waiting; after every call and at every LFO
+-- step (a step hook of the test's, after the ii module's) the lines
+-- waiting are checked against 48 plus the offs owed then
+local function watch_ii(rig)
+  local S = rig.S
   local ii = S.lib.io_ii
-  local seen = {accepted_full = 0, off_lines = {}, off_line_count = 0, most = 0, sends = 0, offs = 0, calls = 0}
+  local seen = {accepted_full = 0, most = 0, sends = 0, offs = 0, calls = 0, owed = {}, owed_count = 0,
+    most_owed = 0, offs_joined = 0}
   local send, send_off = ii.send, ii.send_off
   local function note_waiting()
     local waiting = ii.queued()
     if waiting > seen.most then seen.most = waiting end
-    local allowed = ii.II.queue_max + seen.off_line_count
-    if waiting > allowed then seen.over = (seen.over or 0) + 1 end
+    if seen.owed_count > seen.most_owed then seen.most_owed = seen.owed_count end
+    if waiting > ii.II.queue_max + seen.owed_count then
+      seen.over = seen.over or string.format("%d waiting, %d offs owed, at %.4f", waiting, seen.owed_count,
+        util.time())
+    end
   end
   seen.note_waiting = note_waiting
+  seen.trace = {}  -- {t, waiting} at each step of the minute's second part
+  S.lib.lfos.on_step(function()
+    note_waiting()
+    if rig.stretch and not rig.stretch.stop then seen.trace[#seen.trace + 1] = {t = util.time(), waiting = ii.queued()} end
+  end)
+  rig.crow.heard = function(line)
+    local device, command, first, value = line:match("^ii%.(%w+)%.([%w_]+)%(([^,]+), (.-)%)$")
+    if not device or value ~= "0" then return end
+    local key = device .. "." .. command .. "(" .. first .. ")"
+    if (seen.owed[key] or 0) > 0 then
+      seen.owed[key] = seen.owed[key] - 1
+      seen.owed_count = seen.owed_count - 1
+    end
+  end
   ii.send = function(device, command, ...)
     local waiting = ii.queued()
     seen.calls = seen.calls + 1
@@ -327,16 +376,18 @@ local function watch_ii(S)
     return accepted
   end
   ii.send_off = function(device, command, first, ...)
-    local key = device .. " " .. command .. " " .. tostring(first)
-    if not seen.off_lines[key] then
-      seen.off_lines[key] = true
-      seen.off_line_count = seen.off_line_count + 1
-    end
     seen.offs = seen.offs + 1
     seen.calls = seen.calls + 1
-    local queued = send_off(device, command, first, ...)
+    local before = ii.queued()
+    local owed = send_off(device, command, first, ...)
+    if owed and ii.queued() == before + 1 then
+      local key = line_key(S, device, command, first)
+      seen.owed[key] = (seen.owed[key] or 0) + 1
+      seen.owed_count = seen.owed_count + 1
+      seen.offs_joined = seen.offs_joined + 1
+    end
     note_waiting()
-    return queued
+    return owed
   end
   return seen
 end
@@ -349,7 +400,7 @@ local function everything_on(rig, bus)
   set_routes(S)
   mpe_input(S)
   surfaces(rig)
-  rig.ii = watch_ii(S)
+  rig.ii = watch_ii(rig)
   bus = bus or "strata"
   if bus ~= S.lib.io_rig.get("ii_bus") then set_rig(S, "ii_bus", bus) end
   assert_equal(S.lib.io_ii.leads(), bus == "strata", "Strata leads the ii bus only under strata")
@@ -361,9 +412,9 @@ local function everything_on(rig, bus)
   assert_true(S.lib.io_tape.is_on(), "the tape runs")
 end
 
--- The fifteen MPE notes struck, then what each step of the minute plays
--- with everything on: the notes' values moved, the faders swept and an
--- E16 encoder turned, the watched params moved, the remote grid redrawn
+-- What each step of the minute plays with everything on: the held MPE
+-- notes' values moved, the faders swept and an E16 encoder turned, the
+-- watched params moved, the remote grid redrawn
 local function everything_moves(rig)
   local context, S = rig.context, rig.S
   local watched = {}
@@ -374,17 +425,6 @@ local function everything_moves(rig)
     for _, suffix in ipairs(ROUTES.watch_extra) do moved[#moved + 1] = "v" .. voice .. suffix end
   end
   assert_equal(#watched + #moved, 16 + 28, "44 watched params moved")
-  -- the fifteen are struck before the patterns start: a step's chord never
-  -- steals (docs/notes/lua/sequencer.md), and a chord note younger than
-  -- NOTES.cut_seconds cannot be stolen either, so notes struck in the
-  -- instant the patterns start would find each voice's extra slots taken
-  for _, played in ipairs(MPE_NOTES) do
-    context.midi.send(ROUTES.midi_in, {type = "note_on", note = played.note, vel = 100, ch = played.channel})
-  end
-  rig.mpe_held = true
-  for voice = 1, 2 do
-    assert_equal(S.lib.notes.held(voice), voice == 1 and 8 or 7, "voice " .. voice .. " holds its played notes")
-  end
   return function(n)
     if rig.mpe_held and n % rig.density.mpe_every == 0 then
       for k, played in ipairs(MPE_NOTES) do
@@ -410,7 +450,15 @@ local function everything_moves(rig)
     if n % (2 * rig.density.move_every) == 0 then
       context.midi.send(SYSTEM.e16_port, {type = "cc", cc = 102 + math.floor(n / 6) % 16, val = 1, ch = 16})
     end
-    if n % rig.density.frame_every == 0 then grid_redraw() end
+    -- a full redraw each frame: the remote grid alternates between its
+    -- second and third pages, which differ in well over a draw tick's 96
+    -- cells (the remote clock sends only the cells that changed, so a
+    -- frame that changed little would not load its bound)
+    if n % rig.density.frame_every == 0 then
+      local remote = S.constants.GRID_PORTS.remote
+      S.lib.grid_core.set_page(remote, S.lib.grid_core.page(remote) == 2 and 3 or 2)
+      grid_redraw()
+    end
   end
 end
 
@@ -450,17 +498,93 @@ local function plain_chords(rig, port)
   end
 end
 
--- The script loaded with everything on, then the minute played
+local function release_mpe_keys(rig)
+  for _, key in ipairs(MPE_NOTES) do
+    rig.context.midi.send(ROUTES.midi_in, {type = "note_off", note = key.note, vel = 0, ch = key.channel})
+  end
+  rig.mpe_held = false
+end
+
+local function strike_mpe_keys(rig)
+  for _, key in ipairs(MPE_NOTES) do
+    rig.context.midi.send(ROUTES.midi_in, {type = "note_on", note = key.note, vel = 100, ch = key.channel})
+  end
+  rig.mpe_held = true
+end
+
+-- The fifteen struck before the patterns start: a step's chord never
+-- steals (docs/notes/lua/sequencer.md), and a chord note younger than
+-- NOTES.cut_seconds cannot be stolen either, so notes struck in the
+-- instant the patterns start would find each voice's extra slots taken
+local function strike_before_patterns(rig)
+  strike_mpe_keys(rig)
+  for voice = 1, 2 do
+    assert_equal(rig.S.lib.notes.held(voice), voice == 1 and 8 or 7, "voice " .. voice .. " holds its played notes")
+  end
+end
+
+-- The minute's first part, at a load the ii bus can carry: 120 BPM, each
+-- voice a single note (no chord, no ratchet) on steps v and v + 8 of its
+-- 1/8 steps, so the seven take turns, one note every 0.25 s in all (about
+-- 40 lines a second, under the bus's 192), no key held; the scenes
+-- captured with these patterns (a recall puts its patterns back); a
+-- second for the leader's start lines to drain and the tempo to settle
+local function under_the_bus_rate(rig)
+  local context, S = rig.context, rig.S
+  params:set("clock_tempo", SYSTEM.stretch.tempo)
+  for voice = 1, S.constants.NUM_VOICES do
+    for step = 1, S.constants.PATTERN_LENGTH do
+      S.lib.sequencer.set_step_attr(voice, step, "notes", nil)
+      S.lib.sequencer.set_step_attr(voice, step, "ratchet", nil)
+      S.patterns[voice][step] = (step == voice or step == voice + 8) and SYSTEM.level or 0
+    end
+  end
+  two_scenes(S)
+  context.clock.run_for(SYSTEM.stretch.settle_seconds)
+  assert_equal(S.lib.io_ii.queued(), 0, "the ii queue is empty before the first part")
+  rig.stretch = {start = util.time(), dropped = S.lib.io_ii.dropped()}
+end
+
+-- The minute's second part, the flood (design §14 focus 4): the first
+-- part's patterns stopped, 300 BPM, chords of 8 and ratchets of 4 again,
+-- the scenes captured with them, the tempo settled, then the fifteen MPE
+-- notes struck before the patterns start
+local function the_flood(rig)
+  local context, S = rig.context, rig.S
+  pattern_clock_stop()
+  rig.stretch.stop = util.time()
+  rig.stretch.dropped_after = S.lib.io_ii.dropped()
+  params:set("clock_tempo", SYSTEM.tempo)
+  busy_patterns(S, rig.density)
+  two_scenes(S)
+  context.clock.run_for(SYSTEM.stretch.settle_seconds)
+  strike_before_patterns(rig)
+end
+
+-- The script loaded with everything on, then the minute played: first the
+-- part under the bus's rate, then the flood to the minute's end, the
+-- fifteen MPE notes released and struck again every two seconds (so lines
+-- go low and offs are owed while the queue is full), so the minute ends,
+-- and cleanup comes, with the queue full
 local function minute_with_everything_on()
   local rig = started()
   everything_on(rig)
-  rig.each_step = everything_moves(rig)
-  local each_step = rig.each_step
+  local moves = everything_moves(rig)
+  local again = SYSTEM.restrike_steps
   rig.each_step = function(n, t)
-    each_step(n, t)
-    rig.ii.note_waiting()
+    if rig.flooding then
+      if n % again == 0 then release_mpe_keys(rig)
+      elseif n % again == 1 then strike_mpe_keys(rig) end
+    end
+    moves(n, t)
   end
-  play_minute(rig)
+  rig.minute_start = util.time()
+  under_the_bus_rate(rig)
+  play_minute(rig, SYSTEM.minute - SYSTEM.flood_seconds - 2 * SYSTEM.stretch.settle_seconds)
+  the_flood(rig)
+  rig.flooding = true
+  rig.flood_start = util.time()
+  play_minute(rig, SYSTEM.minute - (util.time() - rig.minute_start))
   return rig
 end
 
@@ -499,7 +623,7 @@ local function voice_on(port, channel)
 end
 
 -- A hit's note end, in seconds: its beat plus its gate, at the tempo
-local function hit_end(hit) return hit.t + (hit.beat + hit.gate_beats - hit.now_beat) * 60 / SYSTEM.tempo end
+local function hit_end(hit) return hit.t + (hit.beat + hit.gate_beats - hit.now_beat) * 60 / hit.tempo end
 
 local function time_key(voice, t) return voice .. "@" .. string.format("%.6f", t) end
 
@@ -527,7 +651,7 @@ local function late_midi_offs(rig)
       if is_status(msg, "note_on") then
         local hit = index[time_key(voice_on(port, msg.ch) or 0, entry.t)]
         local due = false  -- no end to keep
-        if hit then
+        if hit and not entry.main then
           if not hit.notes then
             hit.notes = {}
             for _, pitch in ipairs(hit.pitches) do hit.notes[util.clamp(math.floor(pitch + 0.5), 0, 127)] = true end
@@ -586,6 +710,70 @@ local function first_lines(list, count)
   return table.concat(shown, "; ")
 end
 
+-- What the minute's second part (under the ii bus's rate) got wrong, as
+-- text: each voice's ER-301 port and TELEXo output must be seen high and
+-- then low; Just Friends and W/ must play notes of every voice (a line
+-- belongs to the latest hit before it: the voices take turns, one note at
+-- a time); nothing may be dropped; and between each two hits the queue
+-- must have been empty at some step
+local function under_the_rate_problems(rig)
+  local S = rig.S
+  local stretch = rig.stretch
+  local problems = {}
+  local hits = {}
+  for _, hit in ipairs(rig.hits) do
+    if hit.t >= stretch.start and hit.t <= stretch.stop then hits[#hits + 1] = hit end
+  end
+  if #hits < 2 * S.constants.NUM_VOICES then problems[#problems + 1] = #hits .. " hits only" end
+  local high, low, players = {}, {}, {jf = {}, wsyn = {}}
+  local next_hit, latest = 1, nil
+  for _, entry in ipairs(rig.crow) do
+    if entry.t >= stretch.start and entry.t <= stretch.stop then
+      while hits[next_hit] and hits[next_hit].t <= entry.t do
+        latest = hits[next_hit]
+        next_hit = next_hit + 1
+      end
+      local device, command, args = entry.line:match("^ii%.(%w+)%.([%w_]+)%((.-)%)$")
+      if device == "er301" or device == "txo" then
+        local first, value = args:match("^([^,]+), (.+)$")
+        local key = device .. "." .. command .. "(" .. tostring(first) .. ")"
+        if command == "tr" and value == "1" then high[key] = true end
+        if command == "tr" and value == "0" and high[key] then low[key] = true end
+      elseif command == "play_note" and players[device] and latest then
+        players[device][latest.voice] = true
+      end
+    end
+  end
+  for voice = 1, S.constants.NUM_VOICES do
+    for _, key in ipairs({"er301.tr(" .. ROUTES.er301[voice] .. ")", "txo.tr(" .. ROUTES.txo[voice] .. ")"}) do
+      if not (high[key] and low[key]) then
+        problems[#problems + 1] = "voice " .. voice .. "'s " .. key .. (high[key] and " never went low" or
+          " never went high")
+      end
+    end
+    for name, voices in pairs(players) do
+      if not voices[voice] then problems[#problems + 1] = name .. " got no note of voice " .. voice end
+    end
+  end
+  if stretch.dropped_after ~= stretch.dropped then
+    problems[#problems + 1] = (stretch.dropped_after - stretch.dropped) .. " lines dropped"
+  end
+  for index = 1, #hits - 1 do
+    local emptied = false
+    for _, reading in ipairs(rig.ii.trace) do
+      if reading.t > hits[index].t and reading.t <= hits[index + 1].t and reading.waiting == 0 then
+        emptied = true
+        break
+      end
+    end
+    if not emptied then
+      problems[#problems + 1] = string.format("the queue never emptied between the hits at %.3f and %.3f",
+        hits[index].t, hits[index + 1].t)
+    end
+  end
+  return problems
+end
+
 ---------------------------------------------------------------------------
 -- The tests
 ---------------------------------------------------------------------------
@@ -595,7 +783,17 @@ test("with every default a minute of playing sends nothing anywhere", function()
   local rig = started()
   local context, S = rig.context, rig.S
   rig.each_step = plain_chords(rig, 1)
+  -- a note hook of the test's own counts the played notes each voice's
+  -- allocator started (it only counts)
+  local played_notes = {}
+  S.register_note_hook({name = "system probe", started = function(voice, _, note)
+    if note.owner == "midi" then played_notes[voice] = (played_notes[voice] or 0) + 1 end
+  end})
   play_minute(rig)
+  for voice = 1, 3 do
+    assert_true((played_notes[voice] or 0) >= 100, "the played chords reached voice " .. voice .. ": "
+      .. tostring(played_notes[voice]))
+  end
   pattern_clock_stop()
   assert_true(S.pattern_playing == false, "the patterns stopped")
   -- the minute played: the hits of every set step of seven voices
@@ -623,11 +821,11 @@ test("with everything on, a minute holds every bound", function()
   played.everything_on = rig
   local S = rig.S
   pattern_clock_stop()
-  assert_true(#rig.hits >= 0.9 * expected_hits(rig.S, rig.density), "hits played: " .. #rig.hits)
+  assert_true(#rig.hits >= 0.9 * expected_hits(rig.S, rig.density, SYSTEM.flood_seconds), "hits played: " .. #rig.hits)
 
   -- ii (docs/notes/lua/io/ii.md): at most 4 lines a step, every one from
-  -- the step; no send accepted while 48 or more lines waited; never more
-  -- waiting than 48 plus one off a line
+  -- the step; no send accepted while 48 or more lines waited; at every
+  -- step and call, never more waiting than 48 plus the offs owed then
   local II = S.lib.io_ii.II
   local ii_lines, ii_outside = {}, {}
   for _, entry in ipairs(rig.crow) do
@@ -641,9 +839,19 @@ test("with everything on, a minute holds every bound", function()
   assert_equal(most_ii, II.sends_per_step, "the queue was busy: some step sent 4")
   assert_equal(#ii_outside, 0, "every ii line from the LFO step: " .. first_lines(ii_outside))
   assert_equal(rig.ii.accepted_full, 0, "no send accepted while 48 or more lines waited")
-  assert_equal(rig.ii.over, nil, "never more than 48 plus one off a line waiting (most " .. rig.ii.most
-    .. ", off lines " .. rig.ii.off_line_count .. ")")
+  assert_equal(rig.ii.over, nil, "never more waiting than 48 plus the offs owed (most waiting " .. rig.ii.most
+    .. ", most owed " .. rig.ii.most_owed .. ")")
   assert_true(rig.ii.most >= II.queue_max and S.lib.io_ii.dropped() > 0, "the queue filled and dropped")
+  assert_true(rig.ii.offs_joined > 100 and rig.ii.most_owed >= 4, "offs joined the queue while it was busy ("
+    .. rig.ii.offs_joined .. " joined, at most " .. rig.ii.most_owed .. " owed at once)")
+  assert_true(rig.ii.most > II.queue_max, "offs waited beyond the 48: " .. rig.ii.most)
+
+  -- the minute's second part, under the bus's rate: every voice's ER-301
+  -- port and TELEXo output seen high and then low, Just Friends and W/
+  -- playing every voice's notes, nothing dropped, and the queue empty
+  -- again between each two notes
+  local problems = under_the_rate_problems(rig)
+  assert_equal(#problems, 0, "under the bus's rate: " .. first_lines(problems, 10))
 
   -- crow (docs/notes/lua/io/crow.md): no followed value (outputs 3 and 4,
   -- on LFOs) sent in a 0.1 s window that already had 32 lines
@@ -678,14 +886,49 @@ test("with everything on, a minute holds every bound", function()
   end)
   local most_cc = largest(cc_out)
   assert_true(most_cc <= MIDI_OUT.cc_per_step, "at most 8 CC out a step, got " .. most_cc)
-  assert_true(most_cc > 0, "the CC slots sent")
+  assert_equal(most_cc, MIDI_OUT.cc_per_step, "the eight slots filled a step")
+  -- expression sent outside the step is a note's first values: each such
+  -- message comes just before a note on on its channel, at the same time
+  -- (only more of the note's first values, or an off ending the note it
+  -- replaces, between them)
+  local stray = {}
+  for _, port in ipairs({1, 2}) do
+    local log = rig.devices[port].log
+    for index, entry in ipairs(log) do
+      local msg = message_of(entry)
+      local expressive = msg.type == "pitchbend" or msg.type == "channel_pressure" or (msg.type == "cc" and msg.cc == 74)
+      if expressive and not entry.lfo then
+        local starts_note = false
+        for later = index + 1, #log do
+          local next_entry = log[later]
+          if next_entry.t ~= entry.t then break end
+          local next_msg = message_of(next_entry)
+          if next_msg.ch == msg.ch then
+            if next_msg.type == "note_on" then starts_note = true; break end
+            local first_value = next_msg.type == "pitchbend" or next_msg.type == "channel_pressure"
+              or (next_msg.type == "cc" and next_msg.cc == 74) or next_msg.type == "note_off"
+            if not first_value then break end
+          end
+        end
+        if not starts_note then
+          stray[#stray + 1] = string.format("port %d ch %d %s at %.4f", port, msg.ch, msg.type, entry.t)
+        end
+      end
+    end
+  end
+  assert_equal(#stray, 0, "expression outside the step only before a note on: " .. first_lines(stray))
 
   -- the remote grid (docs/notes/lua/io/remote.md): at most 96 LED
   -- messages a 1/30 s tick
-  local leds = per_time(rig.grid.log, function(entry) return message_of(entry).type == "note_on" end)
+  -- an LED message is a note on (status 0x90, channel 1 or 2) whatever its
+  -- level: one at level 0 reads back as a note off (midi.to_msg), so the
+  -- status byte is counted
+  local leds = per_time(rig.grid.log, function(entry)
+    return entry.bytes[1] == 0x90 or entry.bytes[1] == 0x91
+  end)
   local most_leds = largest(leds)
   assert_true(most_leds <= S.lib.io_remote.REMOTE.leds_per_tick, "at most 96 LED messages a tick, got " .. most_leds)
-  assert_true(most_leds > 0, "the remote grid was drawn")
+  assert_equal(most_leds, S.lib.io_remote.REMOTE.leds_per_tick, "a redraw filled a tick")
 
   -- OSC (docs/notes/lua/io/osc.md): at most 32 messages a 1/15 s tick
   local most_osc = largest(per_time(rig.osc, function() return true end))
@@ -698,7 +941,7 @@ test("with everything on, a minute holds every bound", function()
   local echo = per_time(rig.e16.log, function(entry) return message_of(entry).type == "cc" end)
   local most_echo = largest(echo)
   assert_true(most_echo <= CONTROLLERS.echo_per_tick, "at most 16 echo CCs a tick, got " .. most_echo)
-  assert_true(most_echo > 0, "the macros were echoed")
+  assert_equal(most_echo, CONTROLLERS.echo_per_tick, "the sixteen macros' echo filled a tick")
   local rings = per_time(rig.e16.log, function(entry)
     return entry.bytes[1] == 0xf0 and entry.bytes[5] == 0x01
   end)
@@ -718,11 +961,7 @@ end)
 
 test("after that minute everything stops with no note left", function()
   -- Review Focus 1 for everything at once: the patterns stopped, the keys
-  -- released, then cleanup(). The ii module's leaving sequence sends at
-  -- most II.cleanup_sends (14) waiting offs, and this rig can owe more
-  -- (seven voices on an ER-301 and a TELEXo), so the queue is drained by
-  -- steps before cleanup(); nothing more of the leaving sequence is held
-  -- than its notes file promises
+  -- released, then cleanup() at once, whatever the ii queue holds
   local rig = take_played_minute()
   local reused = rig ~= nil
   -- the runner put its own print back after the last test: the script's
@@ -731,20 +970,14 @@ test("after that minute everything stops with no note left", function()
   rig = rig or minute_with_everything_on()
   local context, S = rig.context, rig.S
   pattern_clock_stop()
-  for _, key in ipairs(MPE_NOTES) do
-    context.midi.send(ROUTES.midi_in, {type = "note_off", note = key.note, vel = 0, ch = key.channel})
-  end
-  rig.mpe_held = false
-  for _ = 1, 200 do
-    if S.lib.io_ii.queued() == 0 then break end
-    context.clock.advance_until(S.lfo_clock)
-  end
-  assert_equal(S.lib.io_ii.queued(), 0, "the ii queue drained by steps")
+  release_mpe_keys(rig)
+  rig.waiting_at_cleanup = S.lib.io_ii.queued()
   cleanup()
 
   -- Every MIDI note on has its note off (design §3.4, §14): on every port
-  -- and channel as many offs as ons, and no note left on. Every unequal
-  -- channel is listed in one failure
+  -- and channel as many offs as ons (held to at the test's end, so every
+  -- other check runs first), and no note left on. Every unequal channel
+  -- is listed in one failure
   local unbalanced = {}
   for _, port in ipairs(SYSTEM.midi_ports) do
     local on, ons, offs, per_note = {}, {}, {}, {}
@@ -782,8 +1015,6 @@ test("after that minute everything stops with no note left", function()
       end
     end
   end
-  assert_equal(#unbalanced, 0, "every port and channel has as many note offs as ons: "
-    .. table.concat(unbalanced, " | "))
   for name, player in pairs(rig.players) do
     local counts = {}
     for _, call in ipairs(player.calls) do counts[call[1]] = (counts[call[1]] or 0) + 1 end
@@ -805,22 +1036,32 @@ test("after that minute everything stops with no note left", function()
       if value == "1" then raised[key] = true end
     end
   end
-  local count = 0
+  local left_high = {}
   for key in pairs(raised) do
-    count = count + 1
-    assert_equal(last[key], "0", "ii line " .. key .. " ends low")
+    if last[key] ~= "0" then left_high[#left_high + 1] = key .. " ends at " .. tostring(last[key]) end
   end
-  -- each kind of gate line went high at least once (in this flood voice 1's
-  -- chord alone fills the queue at each hit, so the lines of the ports and
-  -- outputs only later voices play may never be raised: the queue drops
-  -- the newest, docs/notes/lua/io/ii.md)
-  local kinds = {}
-  for key in pairs(raised) do kinds[key:match("^([%w_]+%.[%w_]+)%(")] = true end
-  for _, kind in ipairs({"er301.tr", "txo.tr", "txo.env"}) do
-    assert_true(kinds[kind], kind .. " went high on some line (" .. count .. " lines high)")
-  end
+  table.sort(left_high)
+  assert_equal(#left_high, 0, "every ii gate line crow got high ends low (" .. rig.waiting_at_cleanup
+    .. " lines waited at cleanup): " .. table.concat(left_high, ", "))
+  -- every voice's lines were raised (the minute's first part plays each
+  -- voice), so the check above covered them all
   for voice = 1, S.constants.NUM_VOICES do
-    assert_equal(next(S.lib.io_targets.sounding(voice)), nil, "voice " .. voice .. " sounds no target note")
+    local lines = {"er301.tr(" .. ROUTES.er301[voice] .. ")", "txo.tr(" .. ROUTES.txo[voice] .. ")"}
+    if ROUTES.txo_envelope[voice] then lines[#lines + 1] = "txo.env(" .. ROUTES.txo[voice] .. ")" end
+    for _, key in ipairs(lines) do assert_true(raised[key], key .. " went high (voice " .. voice .. ")") end
+  end
+  -- crow's own gate output (voice 3's, output 2) ends low too
+  local gate_last
+  for _, line in ipairs(context.crow.sent) do
+    if starts_with(line, "output[2].volts = ") then gate_last = line end
+  end
+  assert_equal(gate_last, "output[2].volts = 0", "crow's gate output ends low")
+  -- the targets core holds no sounding note: every id it still holds is named
+  for voice = 1, S.constants.NUM_VOICES do
+    local ids = {}
+    for id in pairs(S.lib.io_targets.sounding(voice)) do ids[#ids + 1] = tostring(id) end
+    table.sort(ids)
+    assert_equal(#ids, 0, "voice " .. voice .. " sounds target notes: " .. table.concat(ids, " "))
   end
   -- the harness checks the invariants of a test that loaded the script;
   -- this one, reading the minute the bounds test loaded, checks them itself
@@ -828,6 +1069,8 @@ test("after that minute everything stops with no note left", function()
     local broken = h.check_invariants()
     assert_equal(#broken, 0, "invariants after cleanup: " .. table.concat(broken, "; "))
   end
+  assert_equal(#unbalanced, 0, "every port and channel has as many note offs as ons: "
+    .. table.concat(unbalanced, " | "))
 end)
 
 -- The ii lines crow got from index first on, in order
@@ -954,6 +1197,7 @@ test("under off and teletype no action anywhere produces an ii command", functio
   local context, S = rig.context, rig.S
   everything_on(rig, "off")
   rig.each_step = everything_moves(rig)
+  strike_before_patterns(rig)
   local handlers = "ii.self.call1 = function(a) tell('strata_tt1', a) end"
     .. " | ii.self.call2 = function(a, b) tell('strata_tt2', a, b) end"
     .. " | ii.self.call3 = function(a, b, c) tell('strata_tt3', a, b, c) end"
