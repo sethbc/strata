@@ -1597,12 +1597,19 @@ end
 
 -- The facade over context.grid, as the global grid and with the stub module
 -- in package.loaded: connects counts its connect's calls, keys lists its own
--- fields (as "a,b"), plug(port, cols, rows) plugs a grid before init
+-- fields (as "a,b"), read_keys the keys lib/grid/core.lua read through it
+-- (as "key count"), plug(port, cols, rows) plugs a grid before init
 local function grid_facade(plugged)
-  local facade = {connects = 0}
+  local facade = {connects = 0, reads = {}}
   local function before_load(context)
     local real = context.grid
-    local fake = setmetatable({}, {__index = real})
+    local fake = setmetatable({}, {__index = function(_, key)
+      local caller = debug.getinfo(2, "S").source
+      if caller:sub(-#"lib/grid/core.lua") == "lib/grid/core.lua" then
+        facade.reads[key] = (facade.reads[key] or 0) + 1
+      end
+      return real[key]
+    end})
     rawset(fake, "connect", function()
       facade.connects = facade.connects + 1
       return real.vports[1]
@@ -1617,6 +1624,12 @@ local function grid_facade(plugged)
     for name in pairs(facade.fake) do names[#names + 1] = name end
     table.sort(names)
     return table.concat(names, ",")
+  end
+  function facade.read_keys()
+    local keys = {}
+    for key, count in pairs(facade.reads) do keys[#keys + 1] = tostring(key) .. " " .. count end
+    table.sort(keys)
+    return table.concat(keys, ", ")
   end
   return facade, before_load
 end
@@ -1672,6 +1685,29 @@ test("cleanup leaves norns' real module with handlers that do nothing", function
     assert_equal(context.grid.vports[2].key, nil, "and gets no handler")
     context.grid.unplug(2)
     assert_equal(facade.keys(), "connect", "the facade's own fields were never written")
+  end)
+end)
+
+-- The core reads norns' own module (vports, devices) for every port, as the
+-- grids attach, redraw, take keys, move in the menu, unplug and clean up
+test("under a facade the grid core reads nothing through the global grid", function()
+  under_grid_facade(function()
+    local facade, before_load = grid_facade({ {1, 16, 16} })
+    local context = load_strata({ before_load = before_load })
+    finish_startup(context)
+    local S = local_value("S")
+    context.grid.plug(2, 16, 8)
+    tap(context, 1, 3, 1)
+    grid_redraw()
+    assert_true(grid_core().layout_of(2) ~= nil, "port 2 has its layout")
+    _menu.set_mode(true)
+    context.grid.reassign(2, 4)
+    _menu.set_mode(false)
+    assert_equal(S.grids[4], context.grid.vports[4], "the moved grid is on port 4")
+    grid_core().set_rotation(4, 1)
+    context.grid.unplug(4)
+    cleanup()
+    assert_equal(facade.read_keys(), "", "the core read nothing through the facade")
   end)
 end)
 
