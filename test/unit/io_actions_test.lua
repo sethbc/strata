@@ -67,6 +67,7 @@ test("run_voice stops, starts and toggles, and 0 is the selected voice", functio
   assert_equal(actions.run_voice(0, 2), true); assert_true(S.voices[4].active, "0 toggles the selected voice")
   refused(function() return actions.run_voice(8, 1) end, "run_voice")
   refused(function() return actions.run_voice(3, 3) end, "run_voice")
+  refused(function() return actions.run_voice(2.5, 1) end, "run_voice")
 end)
 
 test("retrigger accents a running voice and never starts a stopped one", function()
@@ -86,6 +87,10 @@ test("retrigger accents a running voice and never starts a stopped one", functio
   assert_equal(result, false); assert_equal(#lines, 0, "no line for a stopped voice")
   assert_equal(#context.engine_calls, 0)
   refused(function() return actions.retrigger(9, 1) end, "retrigger")
+  context.clear_engine_calls()
+  refused(function() return actions.retrigger(2, "loud") end, "retrigger")
+  refused(function() return actions.retrigger(2, 0 / 0) end, "retrigger")
+  assert_equal(#context.engine_calls, 0, "a bad velocity sends nothing")
 end)
 
 test("freeze and mute set, clear and toggle their params", function()
@@ -106,6 +111,9 @@ test("macro sets a macro's param and clamps", function()
   assert_equal(actions.macro(4, 1.5), true); assert_equal(params:get("macro_4"), 1)
   refused(function() return actions.macro(17, 0.5) end, "macro")
   refused(function() return actions.macro(0, 0.5) end, "macro")
+  params:set("macro_4", 0.6)
+  refused(function() return actions.macro(4, "high") end, "macro")
+  assert_equal(params:get("macro_4"), 0.6, "a bad value leaves the param")
 end)
 
 test("patterns stops, plays and toggles", function()

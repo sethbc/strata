@@ -1,8 +1,8 @@
 ## Must not break
 
 - An action never creates a node for a voice's own note: `retrigger` calls `engine.retrigger(voice - 1, velocity)` on a running voice only and does nothing for a stopped one; starting a voice goes through `toggle_voice` (`S.lib.engine_sync.start_voice`).
-- A scene recall goes through the quantizer's `"scene"` action (`S.lib.quantize.schedule`) with the scene transition time, as a scene key does, never `recall_scene` directly.
-- Freeze and mute go through `set_binary_param`, a macro through `params:set("macro_<m>", ...)`; the module sets no other param and calls no engine command but `retrigger`.
+- A scene recall goes through the quantizer's `"scene"` action (`S.lib.quantize.schedule`) with the scene transition time, as a scene key does; `recall_scene` is called only inside the scheduled function, never outside it.
+- Freeze and mute go through `set_binary_param`, a macro through `params:set("macro_<m>", ...)`; the module sets no other param, and it sends no engine command of its own but `engine.retrigger` (`toggle_voice`, `record_buffer` and `set_binary_param` reach the engine on their own).
 - Every action returns true when it acted; an out-of-range argument does nothing, returns false and prints one line, `strata: <action> ignored: <why>`. A retrigger of a stopped voice returns false with no line.
 - The module registers no start step, cleanup step, param or invariant, and calls the later globals (`toggle_voice`, `recall_scene`, `set_binary_param`, `record_buffer`, `pattern_clock_start`, `pattern_clock_stop`) only inside its functions.
 
