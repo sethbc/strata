@@ -47,10 +47,12 @@ local SYSTEM = {
   -- last 48 s, the fifteen MPE keys released and struck again every 96
   -- LFO steps (2 s)
   flood_seconds = 48, restrike_steps = 96,
-  -- offs the MIDI check must time against an end in each part (the
-  -- minute times 36 and about 54000: a floor well under each, so a part
-  -- whose check went silent would fail)
-  timed_offs = {light = 20, flood = 20000},
+  -- offs the MIDI check must time against an end, in each part and on
+  -- each synth port, so a part or a port whose check went silent fails:
+  -- under the bus's rate the minute times 36 (ports 1 to 4: 6, 5, 10, 15),
+  -- held to 20 in all and 2 a port; in the flood 7684, 7688, 15376 and
+  -- 23064, held to about 40% of each
+  timed_offs = {light = 20, light_port = 2, flood = {3000, 3000, 6000, 9000}},
   stretch = {tempo = 120, settle_seconds = 1},
 }
 
@@ -668,9 +670,11 @@ end
 -- note is on, some holder is meant to hold it, and once its record's end
 -- has passed no holder is left and its last off is owed. Three rules:
 -- 1. every off is timed, a retrigger's (an off followed at once by a note
---    on for the same note) and a final one alike: it is on time when the
---    note's record has no end or the off comes no later than one LFO step
---    (and a matron tick) after it. A retrigger's off comes while a later
+--    on for the same note) and a final one alike: it fails when the
+--    note's record has an end and the off comes later than one LFO step
+--    (and a matron tick) after it. An off before the end is not judged: a
+--    stop (the patterns', a voice's, a route's change) rightly cuts a note
+--    short, and telling those apart would model the module in the test. A retrigger's off comes while a later
 --    holder still holds the note, so the record's end, the latest of its
 --    holders', has not passed (a held key: a 25 ms step note under it ends
 --    unseen, the next step note's retrigger finds a record with no end);
@@ -683,7 +687,7 @@ end
 -- Returns the problems (text) and how many offs were timed against an end
 -- in the minute's two parts ({light, flood}, by the time they came)
 local function midi_timing(rig)
-  local problems, timed = {}, {light = 0, flood = 0}
+  local problems, timed = {}, {light = {total = 0}, flood = {total = 0}}
   local index = hits_at(rig)
   local allowed = SYSTEM.step + SYSTEM.tick_tolerance + 1e-6
   local function part(t)
@@ -727,7 +731,10 @@ local function midi_timing(rig)
         else
           if record.due then  -- rule 1
             local which = part(entry.t)
-            if which then timed[which] = timed[which] + 1 end
+            if which then
+              timed[which].total = timed[which].total + 1
+              timed[which][port] = (timed[which][port] or 0) + 1
+            end
             if entry.t > record.due + allowed then
               problem(port, msg, entry.t, string.format("an off late for its end %.4f", record.due))
             end
@@ -1012,14 +1019,23 @@ test("with everything on, a minute holds every bound", function()
   assert_equal(most_rings, 1, "ring frames were sent")
 
   -- note offs (docs/notes/lua/io/targets.md): checked each 48 Hz step, so
-  -- every MIDI note off, a retrigger's too, comes within one step of its
-  -- note's end (midi_timing's three rules), and crow's gate goes low
-  -- within a step of the end of voice 3's latest hit
+  -- no MIDI note off, a retrigger's included, comes later than one step
+  -- after its note's end (midi_timing's three rules), and crow's gate goes
+  -- low no later than a step after the end of voice 3's latest hit. An off
+  -- before its note's end is not judged: a stop (the patterns', a voice's,
+  -- a route's change) rightly cuts a note short, and telling those apart
+  -- would be a second model of the module inside the test
   local timing, timed = midi_timing(rig)
-  assert_equal(#timing, 0, "MIDI note offs within a step of their time: " .. first_lines(timing))
-  assert_true(timed.light >= SYSTEM.timed_offs.light and timed.flood >= SYSTEM.timed_offs.flood,
-    "offs timed against their ends in each part: " .. timed.light .. " under the bus's rate, " .. timed.flood
-    .. " in the flood")
+  assert_equal(#timing, 0, "no MIDI note off later than a step after its end: " .. first_lines(timing))
+  assert_true(timed.light.total >= SYSTEM.timed_offs.light,
+    "offs timed against their ends under the bus's rate: " .. timed.light.total)
+  for _, port in ipairs(SYSTEM.midi_ports) do
+    local light, flood = timed.light[port] or 0, timed.flood[port] or 0
+    assert_true(light >= SYSTEM.timed_offs.light_port, "offs timed against their ends under the bus's rate on port "
+      .. port .. ": " .. light)
+    assert_true(flood >= SYSTEM.timed_offs.flood[port], "offs timed against their ends in the flood on port "
+      .. port .. ": " .. flood)
+  end
   local late_gates, lows_checked = late_crow_gates(rig)
   assert_equal(#late_gates, 0, "crow's gate low within a step of its time: " .. first_lines(late_gates))
   assert_true(lows_checked > 100, "crow's gate lows were checked: " .. lows_checked)
