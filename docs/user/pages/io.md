@@ -60,6 +60,7 @@ The arc's four rings on IO are the tape loop's level, speed, feedback and wear (
 
 Each device or connection IO reaches has its own page, listed here as it arrives:
 - [crow](../io/crow.md): its inputs as modulation or triggers, its outputs for modulation, a voice's pitch or gate, and the clock
+- [Controllers](../io/controllers.md): an OXI E16 and a box of sixteen faders on the sixteen macros
 - [Remote grids and arcs](../io/remote.md): a grid or arc in iii mode, and a MIDI grid through the midigrid mod
 - [OSC and TouchOSC](../io/osc.md): scenes, voices and the patterns from an OSC app, feedback, two TouchOSC layouts
 - [The tape loop](../io/tape.md): a stereo loop of Strata's output on softcut, the `tape` section
