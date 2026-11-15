@@ -367,6 +367,17 @@ return function(S)
     end
   end
 
+  -- 3.6: a program change recalls a scene only with midi_pc_in on (MIDI
+  -- out's param, lib/io/midi_out.lua), for program 0 to NUM_SCENES - 1, on
+  -- midi_pc_channel's channel (its first option: any)
+  local function program_change_wanted(msg)
+    if not (S.lib.io_midi_out and params.lookup.midi_pc_in) or params:get("midi_pc_in") ~= 1 then return false end
+    local value = msg.val
+    if type(value) ~= "number" or value % 1 ~= 0 or value < 0 or value >= S.constants.NUM_SCENES then return false end
+    local wanted = params:get("midi_pc_channel")
+    return wanted == 1 or msg.ch == wanted - 1
+  end
+
   function midi_event(data)
     local msg = midi.to_msg(data)
     if msg.type == "note_on" and msg.vel > 0 then
@@ -375,6 +386,9 @@ return function(S)
       note_off(msg.ch, msg.note)
     elseif msg.type == "cc" and M.PANIC_CCS[msg.cc] then
       release_held_notes(true)
+    elseif msg.type == "program_change" and program_change_wanted(msg) then
+      -- 3.6: a scene recall, in every channel mode (MIDI out notes the port)
+      S.lib.io_midi_out.program_change_in(listening_port, msg.val)
     elseif S.lib.mpe.active() then
       -- MPE's bend, pressure, slide and RPNs: each changed channel's notes
       -- take its values
@@ -422,6 +436,8 @@ return function(S)
     local key = key_of(channel or 1, note)
     -- a new touch: what the expression module kept of a latched key's goes (ruling 30)
     S.lib.expression.forget(voice_idx, MIDI.owner, key)
+    -- the note's first values, for the targets its start reaches (3.6: before play's started hooks)
+    S.lib.expression.first_touch(voice_idx, MIDI.owner, key, raw)
     S.lib.sequencer.note_gate(voice_idx)
     local was_stopped = not S.voices[voice_idx].active
     local slot = S.lib.notes.play(voice_idx, {owner = MIDI.owner, key = key,
@@ -433,6 +449,8 @@ return function(S)
     if slot == 1 then S.lib.sequencer.own_note_taken(voice_idx) end
     if slot then
       S.lib.expression.update(voice_idx, MIDI.owner, key, {bend = raw.bend, pressure = raw.pressure, slide = raw.slide})
+    else
+      S.lib.expression.forget(voice_idx, MIDI.owner, key)  -- no note: nothing left pending
     end
   end
 
