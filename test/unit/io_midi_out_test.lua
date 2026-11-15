@@ -687,27 +687,35 @@ end
 
 test("a route change ends the voice's notes only when the route changes", function()
   local context, S = started()
-  context.midi.plug(2, "synth")
+  local device = context.midi.plug(2, "synth")
   local probe = probe_target(S)
-  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 1})
+  local function play(note) context.midi.send(1, {type = "note_on", note = note, vel = 100, ch = 1}) end
+  local function set(id, value) params:set(id, value); step(context, S) end
+  play(60)
   assert_equal(probe.ons, 1, "the probe plays voice 1's note")
-  params:set("v1_out_channel", 5)
-  params:set("v1_out_members", 3)
-  params:set("v1_out_mode", MPE_INDEX); params:set("v1_out_mode", 1)
+  set("v1_out_channel", 5); set("v1_out_members", 3); set("v1_out_mode", MPE_INDEX); set("v1_out_mode", 1)
   assert_equal(probe.offs, 0, "port 0: no route changed, no note ended")
-  params:set("v1_out_port", 2)
+  set("v1_out_port", 2)
   assert_equal(probe.offs, 1, "the port: the route changed once")
-  context.midi.send(1, {type = "note_on", note = 62, vel = 100, ch = 1})
-  local offs = probe.offs
-  params:set("v1_out_members", 9)
-  assert_equal(probe.offs, offs, "members on a plain voice: no route change")
-  params:set("v1_out_channel", 6)
-  assert_true(probe.offs > offs, "a plain voice's channel: a route change")
-  offs = probe.offs
-  params:set("v1_out_channel", 12); params:set("v1_out_mode", MPE_INDEX)
-  offs = probe.offs
-  params:set("v1_out_channel", 13)
-  assert_equal(probe.offs, offs, "an MPE voice's channel: no route change")
+  play(62)
+  set("v1_out_members", 9)
+  assert_equal(probe.offs, 1, "members on a plain voice: no route change")
+  set("v1_out_channel", 6)
+  assert_equal(probe.offs, 2, "a plain voice's channel: a route change")
+  play(64)
+  params:set("v1_out_channel", 12); set("v1_out_mode", MPE_INDEX)
+  assert_equal(probe.offs, 3, "plain to MPE: a route change")
+  clear(device)
+  play(65)
+  local channel = sent(device):match("note_on 65 100 (%d+)$")
+  assert_true(channel ~= nil, sent(device))
+  set("v1_out_channel", 13)
+  assert_equal(probe.offs, 3, "an MPE voice's channel, with a note held: no route change")
+  clear(device)
+  set("v1_out_members", 4)
+  assert_equal(probe.offs, 4, "an MPE voice's members: its notes end once")
+  assert_equal(sent(device), "note_off 65 " .. channel .. "|" .. SETUP_15_48:gsub("cc 6 15 1", "cc 6 4 1"),
+    "the off where the note went, then one new setup")
 end)
 
 test("a voice's port changed while its notes sound ends them where they went", function()
@@ -878,6 +886,178 @@ test("a second program change in replaces the first's guard", function()
   context.clock.run_for(2.5)
   assert_equal(S.current_scene, 6)
   assert_equal(sent(device), "", "scene 6's landing is not echoed")
+end)
+
+---------------------------------------------------------------------------
+-- Review round 2: routes settle (ruling E), the guard kept on a refusal
+---------------------------------------------------------------------------
+
+-- Counts route_changed per voice and the refusal's flashes
+local function watch(S)
+  local seen = {routes = {}, flashes = 0}
+  local real_route_changed = S.lib.io_targets.route_changed
+  S.lib.io_targets.route_changed = function(voice)
+    seen.routes[voice] = (seen.routes[voice] or 0) + 1
+    return real_route_changed(voice)
+  end
+  local real_start = S.lib.ui_flash.start
+  S.lib.ui_flash.start = function(slot, text, ...)
+    if text == REFUSED then seen.flashes = seen.flashes + 1 end
+    return real_start(slot, text, ...)
+  end
+  return seen
+end
+
+-- A PSET written from the routes setup() makes in a fresh Strata
+local function pset_of(name, setup)
+  local context, S = started()
+  setup(context, S)
+  step(context, S)
+  local path = h.data_root .. name .. ".pset"
+  params:write(path)
+  return path
+end
+
+local SETUP_7 = SETUP_15_48:gsub("cc 6 15 1", "cc 6 7 1")
+
+test("a fresh read of the brief's zone: one route change a voice, one setup with members 7", function()
+  local path = pset_of("midi_out_trace1", function()
+    mpe_voice(1, 2, 7)
+    params:set("v2_out_channel", 12); params:set("v2_out_port", 2)
+  end)
+  local context, S = started()
+  local device = context.midi.plug(2, "synth")
+  clear(device)
+  local seen = watch(S)
+  params:read(path)
+  assert_equal(seen.routes[1], 1, "voice 1's route changed once")
+  assert_equal(seen.routes[2], 1, "voice 2's route changed once")
+  for voice = 3, S.constants.NUM_VOICES do assert_equal(seen.routes[voice], nil, "voice " .. voice) end
+  assert_equal(sent(device), SETUP_7, "exactly one setup, with members 7")
+  assert_equal(seen.flashes, 0)
+end)
+
+test("a read over another legal zone: the old port's one takedown, the new port's one setup", function()
+  local path = pset_of("midi_out_trace2", function() mpe_voice(1, 2, 7) end)
+  local context, S = started()
+  local devices = {[2] = context.midi.plug(2, "a"), [3] = context.midi.plug(3, "b")}
+  mpe_voice(1, 3, 7)
+  step(context, S)
+  clear(devices[2]); clear(devices[3])
+  params:read(path)
+  assert_equal(sent(devices[3]), TAKEDOWN, "the old port: one takedown")
+  assert_equal(sent(devices[2]), SETUP_7, "the new port: one setup")
+end)
+
+test("a plain route read while an MPE zone sounds on another port sends the plain port no zone message", function()
+  local path = pset_of("midi_out_trace3", function()
+    params:set("v1_out_port", 3); params:set("v1_out_channel", 4)
+  end)
+  local context, S = started()
+  local devices = {[2] = context.midi.plug(2, "a"), [3] = context.midi.plug(3, "b")}
+  mpe_voice(1, 2, 7)
+  step(context, S)
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 1})
+  clear(devices[2]); clear(devices[3])
+  params:read(path)
+  assert_equal(sent(devices[3]), "", "the plain port: nothing")
+  local list = lines(devices[2])
+  assert_true(#list >= 3 and table.concat(list, "|"):sub(-#TAKEDOWN) == TAKEDOWN, "port 2: the off, then the takedown: "
+    .. sent(devices[2]))
+  assert_balanced(devices, "the read")
+end)
+
+test("a hand change settles at the next step, not before", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "synth")
+  local target = midi_target(S)
+  params:set("v1_out_mode", MPE_INDEX)
+  params:set("v1_out_port", 2)
+  assert_equal(sent(device), "", "nothing yet")
+  assert_equal(target.routed(1), false, "not routed yet")
+  step(context, S)
+  assert_equal(sent(device), SETUP_15_48, "the setup at the step")
+  assert_equal(target.routed(1), true)
+end)
+
+test("two hand changes within a step are judged together", function()
+  local context, S = started()
+  context.midi.plug(2, "synth")
+  mpe_voice(1, 2, 7)
+  step(context, S)
+  local seen = watch(S)
+  params:set("v2_out_port", 2)       -- alone: channel 2 is inside the zone
+  params:set("v2_out_channel", 12)   -- together: outside it
+  step(context, S)
+  assert_equal(params:get("v2_out_port"), 2); assert_equal(params:get("v2_out_channel"), 12)
+  assert_equal(seen.flashes, 0, "no refusal")
+  assert_equal(midi_target(S).rows(2)[1].text(), "port 2  ch 12")
+end)
+
+test("a refused hand change is put back with one flash and nothing sent", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "synth")
+  mpe_voice(1, 2, 7)
+  step(context, S)
+  clear(device)
+  local seen = watch(S)
+  params:set("v2_out_mode", MPE_INDEX)
+  params:set("v2_out_port", 2)
+  step(context, S)
+  assert_equal(params:get("v2_out_port"), 0, "the port put back")
+  assert_equal(params:string("v2_out_mode"), "plain", "the mode put back")
+  assert_equal(seen.flashes, 1, "one flash")
+  assert_equal(sent(device), "", "nothing sent")
+  assert_equal(seen.routes[2], nil, "no route changed")
+  step(context, S, 3)
+  assert_equal(seen.flashes, 1, "still one flash")
+end)
+
+test("an illegal PSET with its lines reversed keeps the lower voice, with one flash", function()
+  local path = pset_of("midi_out_illegal_reversed", function() mpe_voice(1, 2); mpe_voice(2, 3) end)
+  edit_file(path, function(text) return (text:gsub('"v2_out_port": 3', '"v2_out_port": 2')) end)
+  reverse_route_lines(path)
+  local context, S = started()
+  local seen = watch(S)
+  params:read(path)
+  assert_equal(route_of(1), "2 1 mpe 15", "voice 1 keeps port 2")
+  assert_equal(params:get("v2_out_port"), 0, "voice 2 is off")
+  assert_equal(seen.flashes, 1, "one flash")
+end)
+
+test("a swap of two MPE voices' ports read while a note sounds on each", function()
+  local path = pset_of("midi_out_swap_playing", function() mpe_voice(1, 3); mpe_voice(2, 2) end)
+  local context, S = started()
+  local devices = {[2] = context.midi.plug(2, "a"), [3] = context.midi.plug(3, "b")}
+  mpe_voice(1, 2); mpe_voice(2, 3)
+  step(context, S)
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 1})  -- voice 1, on port 2
+  context.midi.send(1, {type = "note_on", note = 62, vel = 100, ch = 2})  -- voice 2, on port 3
+  local function member(device, note)
+    return sent(device):match("note_on " .. note .. " 100 (%d+)")
+  end
+  local channel1, channel2 = member(devices[2], 60), member(devices[3], 62)
+  assert_true(channel1 ~= nil and channel2 ~= nil, sent(devices[2]) .. " / " .. sent(devices[3]))
+  clear(devices[2]); clear(devices[3])
+  params:read(path)
+  assert_equal(sent(devices[2]), "note_off 60 " .. channel1 .. "|" .. TAKEDOWN .. "|" .. SETUP_15_48, "port 2")
+  assert_equal(sent(devices[3]), "note_off 62 " .. channel2 .. "|" .. TAKEDOWN .. "|" .. SETUP_15_48, "port 3")
+  assert_equal(route_of(1), "3 1 mpe 15"); assert_equal(route_of(2), "2 2 mpe 15")
+end)
+
+test("a program change for an empty scene keeps the guard of the one waiting", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "keys")
+  params:set("scene_transition_time", 0)
+  capture_scene(5)
+  params:set("midi_device", 2); params:set("midi_pc_in", 1)
+  params:set("midi_pc_out", 1); params:set("midi_pc_out_port", 2)
+  params:set("quantize_actions", 3)
+  context.midi.send(2, {type = "program_change", val = 4, ch = 1})  -- scene 5, at the bar
+  context.midi.send(2, {type = "program_change", val = 6, ch = 1})  -- scene 7, empty
+  context.clock.run_for(2.5)
+  assert_equal(S.current_scene, 5)
+  assert_equal(sent(device), "", "scene 5's landing is not echoed")
 end)
 
 end
