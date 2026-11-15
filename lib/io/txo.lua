@@ -165,6 +165,30 @@ return function(S)
     end
   end
 
+  -- The layout states reach the TELEXo's row as a player does: the voice
+  -- section shown, the row found by its id within it, E2 over the
+  -- selectable rows to it; a raise naming the row when it is not there or
+  -- the cursor did not land on it
+  local function move_to_row()
+    S.lib.pages_io.show_section("voice")
+    local rows = S.lib.pages_io.rows()
+    local target
+    for index, row in ipairs(rows) do
+      if row.section == "voice" and row.id == TXO.labels.row then target = index end
+    end
+    if not target then error("txo layout: the IO page has no txo row in the voice section", 3) end
+    local from = S.io_cursor
+    local moves = 0
+    for index = math.min(from, target), math.max(from, target) do
+      if rows[index].selectable ~= false and index ~= from then moves = moves + 1 end
+    end
+    enc(2, target >= from and moves or -moves)
+    local row = S.lib.pages_io.rows()[S.io_cursor]
+    if not (row and row.section == "voice" and row.id == TXO.labels.row) then
+      error("txo layout: E2 did not reach the txo row", 3)
+    end
+  end
+
   S.register_note_target({name = "txo",
     routed = function(voice)
       return valid_voice(voice) and bus() ~= nil and output_of(voice) > 0
@@ -241,23 +265,13 @@ return function(S)
         if not has_params() then return end
         params:set(out_id(1), 3)
         params:set(mode_id(1), TXO.envelope_mode)
+        move_to_row()
       end},
       {name = "txo detail list open", setup = function()
         if not has_params() then return end
         params:set(out_id(1), 3)
-        S.lib.pages_io.show_section("voice")
-        for index, row in ipairs(S.lib.pages_io.rows()) do
-          if row.section == "voice" and row.label == TXO.labels.row then
-            local moves = 0
-            for at = S.io_cursor + 1, index do
-              if S.lib.pages_io.rows()[at].selectable ~= false then moves = moves + 1 end
-            end
-            enc(2, moves)
-            key(3, 1); key(3, 0)
-            return
-          end
-        end
-        error("txo layout: the IO page has no txo row", 0)
+        move_to_row()
+        key(3, 1); key(3, 0)
       end},
     },
   })
