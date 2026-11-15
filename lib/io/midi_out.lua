@@ -35,8 +35,7 @@ return function(S)
   -- channels with notes as the port's device left; asked: the recall a
   -- program change in asked for, {port, scene}
   local state = {config = {}, notes = {}, counts = {}, use = {}, member_times = {}, expressing = {}, cursor = 1,
-    cc_last = {}, left_with = {}, asked = nil, tick = 0, stopped = false, bend_range = MIDI_OUT.bend_range.default,
-    source_keys = {"off"}}
+    cc_last = {}, left_with = {}, asked = nil, tick = 0, stopped = false, bend_range = MIDI_OUT.bend_range.default}
   for voice = 1, NUM_VOICES do
     state.config[voice] = {port = 0, channel = voice, mode = 1, members = MIDI_OUT.max_members}
     state.notes[voice] = {}
@@ -404,8 +403,6 @@ return function(S)
   -- Params (PSET-only, group strata_out_midi)
   ---------------------------------------------------------------------------
 
-  local FIELD_NAMES = {port = "port", channel = "channel", mode = "mode", members = "members"}
-
   -- A voice's route param changed: refused (put back silently, with the
   -- flash) when it would break a zone; otherwise its notes end, then the
   -- zone follows
@@ -437,19 +434,18 @@ return function(S)
   function M.add_params()
     local keys = {"off"}
     for _, record in ipairs(S.lib.mod_sources.registered()) do keys[#keys + 1] = record.key end
-    state.source_keys = keys
     local port_count = S.lib.io_ports.PORTS.count
     params:add_group("strata_out_midi", "out midi", MIDI_OUT.param_count)
     for voice = 1, NUM_VOICES do
       local name = "v" .. voice .. " out "
       local function changed(field) return function(value) voice_changed(voice, field, value) end end
-      params:add{type = "number", id = vid(voice, "port"), name = name .. FIELD_NAMES.port, min = 0, max = port_count,
+      params:add{type = "number", id = vid(voice, "port"), name = name .. "port", min = 0, max = port_count,
         default = 0, formatter = port_text, action = changed("port")}
-      params:add{type = "number", id = vid(voice, "channel"), name = name .. FIELD_NAMES.channel, min = 1,
+      params:add{type = "number", id = vid(voice, "channel"), name = name .. "channel", min = 1,
         max = MIDI_OUT.channels, default = voice, action = changed("channel")}
-      params:add{type = "option", id = vid(voice, "mode"), name = name .. FIELD_NAMES.mode, options = MIDI_OUT.modes,
+      params:add{type = "option", id = vid(voice, "mode"), name = name .. "mode", options = MIDI_OUT.modes,
         default = 1, action = changed("mode")}
-      params:add{type = "number", id = vid(voice, "members"), name = name .. FIELD_NAMES.members, min = 1,
+      params:add{type = "number", id = vid(voice, "members"), name = name .. "members", min = 1,
         max = MIDI_OUT.max_members, default = MIDI_OUT.max_members, action = changed("members")}
     end
     params:add{type = "number", id = "midi_out_bend_range", name = "out bend range", min = MIDI_OUT.bend_range.min,
