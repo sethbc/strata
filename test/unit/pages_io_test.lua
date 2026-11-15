@@ -314,4 +314,117 @@ test("show_section puts a section of status rows only at the top", function()
   enc(2, 1); enc(3, 1); tap(2); tap(3)  -- nothing to move to or edit
 end)
 
+-- A row is known by its own identity where it has one (its param_id, its
+-- rig key, or an id), so a row of the same label coming above the cursor
+-- does not move it
+test("rows of the same label keep the cursor on its own row", function()
+  local context, S = loaded()
+  local plugged = false
+  local ran = {}
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    local rows = {}
+    if plugged then
+      rows[#rows + 1] = { label = "level", kind = "param", param_id = "mutation_amount" }
+      rows[#rows + 1] = { label = "go", kind = "action", hint = "run", id = "go new", run = function() ran.new = true end }
+    end
+    rows[#rows + 1] = { label = "level", kind = "param", param_id = "mutation_rate" }
+    rows[#rows + 1] = { label = "level", kind = "param", param_id = "mutation_probability" }
+    rows[#rows + 1] = { label = "go", kind = "action", hint = "run", id = "go old", run = function() ran.old = true end }
+    return rows
+  end })
+  show_page("IO")
+  enc(2, 1); redraw()
+  assert_equal(current_row(S).param_id, "mutation_probability")
+  local rate, prob, amount = params:get("mutation_rate"), params:get("mutation_probability"),
+    params:get("mutation_amount")
+  plugged = true
+  redraw()
+  enc(3, 1)
+  assert_true(params:get("mutation_probability") > prob, "E3 still edits the same param")
+  assert_equal(params:get("mutation_rate"), rate, "not the row of the same label now at its place")
+  assert_equal(params:get("mutation_amount"), amount, "nor the new one")
+  -- an action with an id
+  plugged = false
+  enc(2, 1); redraw()
+  assert_equal(current_row(S).id, "go old")
+  plugged = true
+  redraw(); tap(3)
+  assert_true(ran.old and not ran.new, "K3 runs the action the cursor was on")
+  -- an id is a string or a number
+  S.register_io_section({ name = "zzz", title = "zzz", rows = function()
+    return { { label = "x", kind = "action", hint = "run", run = function() end, id = {} } }
+  end })
+  redraw()
+  local rows = S.lib.pages_io.rows()
+  assert_equal(rows[#rows].section, "zzz"); assert_equal(rows[#rows].status, "error", "a table id: the section errs")
+  h.claim_script_errors(context, 1, "strata: io section zzz rows ", "an id is a string or a number")
+end)
+
+-- When the cursor's row is gone and E3 or K3 comes before the next draw, it
+-- only puts the cursor on the row in its place, which was never shown lit
+test("E3 and K3 on a row that has gone only move the cursor", function()
+  local context, S = loaded()
+  local gone = nil  -- the label of the row taken away
+  local runs = 0
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    local rows = {}
+    for _, row in ipairs({
+      { label = "rate", kind = "param", param_id = "mutation_rate" },
+      { label = "prob", kind = "param", param_id = "mutation_probability" },
+      { label = "amount", kind = "param", param_id = "mutation_amount" },
+      { label = "act", kind = "action", hint = "run", run = function() runs = runs + 1 end },
+      { label = "act 2", kind = "action", hint = "run", run = function() end },
+    }) do
+      if row.label ~= gone then rows[#rows + 1] = row end
+    end
+    return rows
+  end })
+  show_page("IO")
+  enc(2, 1); redraw()
+  assert_equal(current_row(S).label, "prob")
+  local amount = params:get("mutation_amount")
+  gone = "prob"
+  local asked = 0
+  local real_request = request_redraw
+  request_redraw = function() asked = asked + 1; return real_request() end
+  enc(3, 1)
+  request_redraw = real_request
+  assert_equal(current_row(S).label, "amount", "the cursor on the row in its place")
+  assert_equal(params:get("mutation_amount"), amount, "E3 edited nothing")
+  assert_true(asked > 0, "a redraw is asked for")
+  enc(3, 1)
+  assert_equal(params:get("mutation_amount"), amount, "nor a second E3 before that draw")
+  redraw()
+  enc(3, 1)
+  assert_true(params:get("mutation_amount") > amount, "the next E3, on the row now shown, edits it")
+  -- K3 the same: the cursor's row goes, the action in its place does not run
+  gone = nil
+  redraw(); enc(2, 2); redraw()
+  assert_equal(current_row(S).label, "act 2")
+  gone = "act 2"
+  tap(3)
+  assert_equal(runs, 0, "K3 ran nothing")
+  assert_equal(current_row(S).label, "act", "the cursor on the row in its place")
+  redraw()
+  tap(3)
+  assert_equal(runs, 1, "the next K3, on the row now shown, runs it")
+  redraw()
+  assert_screen_layout(context, "IO after the cursor's row went")
+end)
+
+test("leaving IO ends a pinned view", function()
+  local context, S = loaded()
+  plain_section(S, "voice", 8)
+  S.register_io_section({ name = "crow", title = "crow", rows = function()
+    return { { kind = "status", text = "no crow connected" } }
+  end })
+  plain_section(S, "tape", 6)
+  show_page("IO")
+  S.lib.pages_io.show_section("crow"); redraw()
+  assert_equal(hint_text(context), "E2:row E3:back")
+  show_page("SETUP"); show_page("IO")
+  assert_equal(hint_text(context), "E2:row E3:value K2:section", "the view is back on the cursor's row")
+  assert_true(screen_shows(context, current_row(S).label), "which shows")
+end)
+
 end

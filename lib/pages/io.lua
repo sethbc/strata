@@ -44,7 +44,9 @@ return function(S)
   -- view, until E2 or K2 moves; anchor: which row the cursor is on (its
   -- section, label and their count so far, row_ids) and index the place it
   -- was put at, so the cursor follows its row when rows come or go above it
-  local view = {tail = 0, pinned = nil, anchor = nil, index = 1}
+  -- unseen: the cursor fell to another row (its own went) that no draw has
+  -- shown lit yet
+  local view = {tail = 0, pinned = nil, anchor = nil, index = 1, unseen = false}
   local section_errors = {}  -- contained_call's last message per section part
   local detail = {rows = nil, cursor = 1, owner = nil}  -- the open detail list
 
@@ -98,6 +100,9 @@ return function(S)
     end
     if row.kind == "param" and not params.lookup[row.param_id] then error("no param " .. row.param_id, 0) end
     if row.kind == "rig" and not S.lib.io_rig.RIG.specs[row.key] then error("no rig setting " .. row.key, 0) end
+    if row.id ~= nil and type(row.id) ~= "string" and type(row.id) ~= "number" then
+      error("an id is a string or a number", 0)
+    end
     local entry = {}
     for field, value in pairs(row) do entry[field] = value end
     entry.section = section_name
@@ -141,13 +146,19 @@ return function(S)
     return rows
   end
 
-  -- Each row's identity: its section, its label and how many rows of that
-  -- section and label came before it, so a row keeps its identity when
-  -- others come or go around it
+  -- Each row's identity, so a row keeps it when others come or go around
+  -- it: its section and its own name where it has one (a param row's
+  -- param_id, a rig row's key, else an id the section gave it), else its
+  -- label; then how many rows of that section and name came before it
   local function row_ids(rows)
     local seen, ids = {}, {}
     for index, row in ipairs(rows) do
-      local base = tostring(row.section) .. "\n" .. tostring(row.label)
+      local own = row.kind == "title" and "title"
+        or (row.kind == "param" and row.param_id and ("param " .. row.param_id))
+        or (row.kind == "rig" and row.key and ("rig " .. row.key))
+        or (row.id ~= nil and ("id " .. tostring(row.id)))
+        or ("label " .. tostring(row.label))
+      local base = tostring(row.section) .. "\n" .. own
       seen[base] = (seen[base] or 0) + 1
       ids[index] = base .. "\n" .. seen[base]
     end
@@ -163,29 +174,39 @@ return function(S)
 
   -- After the rows are rebuilt (every use): the cursor back on the row it
   -- was on, wherever that row is now; when it is gone, the nearest
-  -- selectable row at or before its old place. A cursor set from outside
+  -- selectable row at or before its old place, and true (lost: that row
+  -- has never been shown under the cursor). A cursor set from outside
   -- (S.io_cursor not where place put it) is taken where it is
   local function follow(rows)
     if S.io_cursor ~= view.index or view.anchor == nil then
       place(rows, S.io_cursor)
-      return
+      return false
     end
     for index, id in ipairs(row_ids(rows)) do
       if id == view.anchor and rows[index].selectable then
         place(rows, index)
-        return
+        return false
       end
     end
     place(rows, view.index)
+    return rows[S.io_cursor] ~= nil and rows[S.io_cursor].selectable == true
   end
 
   -- The row under the cursor once it has followed its row, or nil (no
-  -- selectable row)
+  -- selectable row); and whether its own row had gone (follow)
   local function cursor_row(rows)
-    follow(rows)
+    if follow(rows) then view.unseen = true end
     local row = rows[S.io_cursor]
     if row and row.selectable then return row end
     return nil
+  end
+
+  -- E3 and K3 on a row the cursor fell to (its own row gone) that no draw
+  -- has shown under the cursor yet: they only ask for that draw
+  local function unseen()
+    if not view.unseen then return false end
+    request_redraw()
+    return true
   end
 
   -- The pinned section's title row, or nil (none, or it no longer shows)
@@ -281,6 +302,7 @@ return function(S)
       return
     end
     cursor_row(rows)
+    view.unseen = false  -- this draw shows the cursor's row
     local title = pinned_title(rows)
     if title then
       -- the view from the pinned title: field_list.draw shows the row after
@@ -363,6 +385,9 @@ return function(S)
       local cursor
       cursor, view.tail = field_list.move_scroll(rows, S.io_cursor, view.tail, d, IO_PAGE.visible)
       place(rows, cursor)
+      view.unseen = false
+    elseif n == 3 and unseen() then
+      return
     elseif n == 3 and hidden(rows) then
       unhide()  -- E3 brings the cursor's row back before it edits (as SETUP)
     elseif n == 3 and row then
@@ -381,6 +406,7 @@ return function(S)
     if n == 3 then
       local rows = M.rows()
       local row = cursor_row(rows)
+      if unseen() then return true end
       if row and row.kind == "rig" and not hidden(rows) then
         edit(row, d, true)
         return true
@@ -396,6 +422,9 @@ return function(S)
       local index = next_section_row(rows, S.io_cursor)
       unhide()
       if index then place(rows, index) end
+      view.unseen = false
+    elseif n == 3 and unseen() then
+      return
     elseif n == 3 and hidden(rows) then
       unhide()  -- K3 acts only on a row in view
     elseif n == 3 and row and row.kind == "action" then
@@ -457,7 +486,7 @@ return function(S)
       if rows[index].selectable then target = index end
     end
     if target then place(rows, target) end
-    view.tail, view.pinned = 0, name
+    view.tail, view.pinned, view.unseen = 0, name, false
     return true
   end
 
@@ -470,7 +499,13 @@ return function(S)
   }
   local own_layout_states = #layout_states
   S.registry.pages[UI_PAGES.index.IO] = {name = "IO", draw = redraw_io, hints = io_hints, enc = io_enc,
-    alt_enc = io_alt_enc, key = io_key, leave = close_detail, layout_states = layout_states}
+    alt_enc = io_alt_enc, key = io_key, layout_states = layout_states,
+    -- leaving closes a detail list and ends a pinned view, so the next
+    -- visit opens on the cursor's row
+    leave = function()
+      close_detail()
+      view.pinned = nil
+    end}
 
   -- init's start step: after the page's own, per registered section, in the page's order, a
   -- state with it at the top of the list, then each of its own states run
