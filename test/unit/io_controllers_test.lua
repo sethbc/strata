@@ -596,9 +596,14 @@ end)
 
 test("the layout states find their row by key among other sections' rows", function()
   -- voice and crow come before controllers in the page's order: a state must
-  -- turn exactly the rig keys it means to, whatever rows precede its own
+  -- turn exactly the rig keys it means to, whatever rows precede its own.
+  -- The probes stand in for the real voice and crow sections, taken out first
   local context = load_strata({ before_init = function()
     local script = local_value("S")
+    local sections = script.registry.io_sections
+    for index = #sections, 1, -1 do
+      if sections[index].name == "voice" or sections[index].name == "crow" then table.remove(sections, index) end
+    end
     for _, name in ipairs({ "voice", "crow" }) do
       script.register_io_section({ name = name, title = name, rows = function()
         return {
