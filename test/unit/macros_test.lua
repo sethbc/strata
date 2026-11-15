@@ -148,7 +148,7 @@ test("target ids leave out macros, morph and discrete params", function()
   assert_equal(ids[104], "strata_lfo1_depth")
   assert_equal(ids[114], "strata_lfo6_depth")
   for k = 1, 16 do assert_equal(listed["matrix_" .. k .. "_depth"], 114 + k, "then routing " .. k .. "'s depth") end
-  assert_equal(#ids, 130, "and nothing after them")
+  assert_equal(#ids, 130 + #S.registry.macro_targets, "and nothing after them but the registered targets")
   -- set_target takes only these ids
   assert_equal(macros.set_target(1, 1, "macro_2", 0, 1), false, "a macro is no target")
   assert_equal(macros.set_target(1, 1, "morph", 0, 1), false, "nor the morph")
@@ -1050,11 +1050,11 @@ test("a registered macro target follows the matrix depths", function()
   params:add{ type = "control", id = "x_level", name = "x level", controlspec = controlspec.new(0, 1, "lin", 0, 0.5) }
   params:add{ type = "option", id = "z_mode", name = "z mode", options = { "a", "b" } }
   local before = macros.target_ids()
-  assert_equal(before[#before], "matrix_16_depth", "read before the registration")
+  assert_equal(before[130], "matrix_16_depth", "read before the registration (3.6's own targets follow it)")
   S.register_macro_target("x_level", "x level")
   local ids = macros.target_ids()
   assert_equal(#ids, #before + 1, "one more")
-  assert_equal(ids[#ids], "x_level", "after the matrix depths")
+  assert_equal(ids[#ids], "x_level", "after the matrix depths and the modules' own targets")
   assert_equal(macros.target_label("x_level"), "x level", "with its label")
   S.register_macro_target("y_level", "y level")  -- no such param
   S.register_macro_target("z_mode", "z mode")    -- an option param

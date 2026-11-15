@@ -48,6 +48,13 @@ On the **FX** page:
 - **Ring 3** - Delay time
 - **Ring 4** - Delay mix
 
+On the **IO** page (the tape loop, [IO](pages/io.md)):
+
+- **Ring 1** - Tape level
+- **Ring 2** - Tape speed (-2 to 2; a full turn is the whole range)
+- **Ring 3** - Tape feedback
+- **Ring 4** - Tape wear
+
 On the **LFO** page:
 
 - **Rings 1-3** - Depth of the three LFOs the page shows: LFOs 1-3 while LFO 1 or 2 is selected, up to LFOs 4-6 while 5 or 6 is (10 ticks per percent; bright while the LFO runs; part-turns are forgotten when the page shows another three)
@@ -116,7 +123,7 @@ The button runs the page's main action, on the pages that give it one (each page
 - **MOD** - on a routing (or in one), turn it on or off; on a macro or the bank row, show the next bank; on a recorder, press it (record, play, stop); anywhere else, turn scatter on or off
 - **BUFFER** - record into the slot under the cursor, or stop
 - **SCENES** - recall the slot under the cursor at once
-- **FX** and **SETUP** - nothing
+- **FX**, **SETUP** and **IO** - nothing
 
 ## LED Feedback
 
@@ -125,6 +132,7 @@ The button runs the page's main action, on the pages that give it one (each page
 - VOICE: the cursor row's ring at 15, the others at 12
 - SEQ: step and level rings at 15, tempo and voice rings at 12; the step editor's at 15 while set, 4 while off
 - FX: level 12; frequency and delay time follow their exponential curve
+- IO: level 12
 - LFO: depth rings bright (15) while the LFO runs, dim (4) when off; ring 4 at 12
 - MOD: level 12; a routing's depth ring dim (4) while the routing is off or misses its source or destination
 - BUFFER: rings bright (15) for a buffer-sourced voice, dim (4) otherwise; the ALT record feedback ring always at 12

@@ -107,7 +107,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/ui/zones.lua` | `ui_zones` | `docs/notes/lua/ui-core.md` (The zones editor) | ui_zones_test.lua |
 | `lib/pages/<page>.lua`: `main`, `voice`, `seq`, `fx`, `lfo`, `mod`, `buffer`, `scenes`, `setup`, `io` | `pages_<page>` (`pages_main`, ...) | `docs/notes/lua/pages/<page>.md` (`docs/notes/lua/pages/main.md`, ...) | pages_<page>_test.lua (pages_main_test.lua, ...) |
 | `lib/arc/core.lua` | `arc_core` | `docs/notes/lua/arc-core.md` | arc_core_test.lua |
-| `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/mod.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua` | `arc_main`, `arc_voice`, `arc_seq`, `arc_fx`, `arc_lfo`, `arc_mod`, `arc_buffer`, `arc_scenes` | `docs/notes/lua/arc-pages.md` | arc_pages_test.lua |
+| `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/mod.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua`, `lib/arc/io.lua` | `arc_main`, `arc_voice`, `arc_seq`, `arc_fx`, `arc_lfo`, `arc_mod`, `arc_buffer`, `arc_scenes`, `arc_io` | `docs/notes/lua/arc-pages.md` | arc_pages_test.lua |
 | `lib/grid/core.lua`, `lib/grid/faders.lua` | `grid_core`, `grid_faders` | `docs/notes/lua/grid-core.md` | grid_core_test.lua (the faders through grid_layout_256_test.lua) |
 | `lib/grid/layout_<size>.lua`: `256`, `128h`, `128v`, `64` | `grid_layout_<size>` (`grid_layout_256`, ...) | `docs/notes/lua/grid/layout_<size>.md` (`docs/notes/lua/grid/layout_256.md`, ...) | grid_layout_<size>_test.lua (grid_layout_256_test.lua, ...) |
 | `lib/sequencer.lua` | `sequencer` | `docs/notes/lua/sequencer.md` | sequencer_test.lua |
