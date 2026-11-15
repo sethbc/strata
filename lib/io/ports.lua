@@ -1,6 +1,7 @@
 -- lib/io/ports.lua
 -- The MIDI ports (3.6 design §0.2), S.lib.io_ports: the one module that
--- sets midi.add, midi.remove and a MIDI vport's event. Each of norns' 16
+-- sets midi.add, midi.remove (on norns' own module, whatever a mod put in
+-- the global midi) and a MIDI vport's event. Each of norns' 16
 -- ports takes any number of listeners (listen, unlisten), called in the
 -- order their names were first registered, each contained; out(port) is a
 -- port's vport for sending, device(port) its device's name; on_change tells
@@ -217,18 +218,30 @@ return function(S)
 
   S.register_menu_close(function() M.reconcile() end)
 
+  -- norns' own MIDI module: the one its startup loaded (midi = require
+  -- 'core/midi'), whatever a mod put in the global midi since. The nbout
+  -- mod's facade there (from each script's pre-init hook to its cleanup)
+  -- has no __newindex, so a handler assigned to it is never called by
+  -- norns' hot-plug (#700). The global where norns' module is not found (the
+  -- test stubs). The hot-plug handlers are installed and put back on it
+  local function norns_midi()
+    local loaded = package.loaded["core/midi"]
+    if type(loaded) == "table" and type(loaded.vports) == "table" then return loaded end
+    return midi
+  end
+
   -- Installing again (init run twice) never chains ours to themselves:
   -- ours installed already, or a wrapper a cleanup left over ours (which
   -- leads to ours, still holding the kept handler), is left as it is and
   -- nothing more is kept
   S.register_start(S.constants.START_ORDER.io_ports, function()
     for port = 1, PORTS.count do state.seen[port] = midi.vports[port].device end
-    local hot_plug = state.hot_plug
-    if midi.add ~= device_added and not hot_plug.wrapped_add then
-      hot_plug.kept_add, midi.add = midi.add, device_added
+    local hot_plug, module = state.hot_plug, norns_midi()
+    if module.add ~= device_added and not hot_plug.wrapped_add then
+      hot_plug.kept_add, module.add = module.add, device_added
     end
-    if midi.remove ~= device_removed and not hot_plug.wrapped_remove then
-      hot_plug.kept_remove, midi.remove = midi.remove, device_removed
+    if module.remove ~= device_removed and not hot_plug.wrapped_remove then
+      hot_plug.kept_remove, module.remove = module.remove, device_removed
     end
     hot_plug.installed = true
   end)
@@ -237,15 +250,15 @@ return function(S)
   -- and its listeners forgotten. A handler something wrapped ours with since
   -- stays installed, and ours, still in its chain, then only calls the kept one
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_ports, function()
-    local hot_plug = state.hot_plug
+    local hot_plug, module = state.hot_plug, norns_midi()
     hot_plug.installed = false
-    if midi.add == device_added then
-      midi.add, hot_plug.kept_add, hot_plug.wrapped_add = hot_plug.kept_add, nil, false
+    if module.add == device_added then
+      module.add, hot_plug.kept_add, hot_plug.wrapped_add = hot_plug.kept_add, nil, false
     else
       hot_plug.wrapped_add = true
     end
-    if midi.remove == device_removed then
-      midi.remove, hot_plug.kept_remove, hot_plug.wrapped_remove = hot_plug.kept_remove, nil, false
+    if module.remove == device_removed then
+      module.remove, hot_plug.kept_remove, hot_plug.wrapped_remove = hot_plug.kept_remove, nil, false
     else
       hot_plug.wrapped_remove = true
     end
