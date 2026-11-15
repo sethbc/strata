@@ -38,8 +38,10 @@ end
 
 local function started(with_double)
   local state = {leads = true, calls = {}}
+  -- without the double the real ii module is taken away before init, so
+  -- the ii group adds nothing and the device's params never exist (ruling 6)
   local context = load_strata({before_init = function()
-    if with_double then local_value("S").lib.io_ii = make_double(state) end
+    local_value("S").lib.io_ii = with_double and make_double(state) or nil
   end})
   finish_startup(context)
   local S = local_value("S")

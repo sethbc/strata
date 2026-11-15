@@ -41,7 +41,11 @@ end
 
 local function started(without_double)
   local state = {calls = {}, leading = true}
-  local context = load_strata(without_double and {} or {before_init = function() install_ii(state) end})
+  -- without the double the real ii module is taken away before init, so
+  -- the ii group adds nothing and the device's params never exist (ruling 6)
+  local context = load_strata({before_init = function()
+    if without_double then local_value("S").lib.io_ii = nil else install_ii(state) end
+  end})
   finish_startup(context)
   return context, local_value("S"), state
 end

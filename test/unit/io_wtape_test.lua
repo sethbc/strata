@@ -96,7 +96,9 @@ test("the section has no params and no target", function()
 end)
 
 test("without the ii module the device does nothing and the page draws", function()
-  local context = load_strata(); finish_startup(context)
+  -- the real ii module taken away before init (ruling 6)
+  local context = load_strata({before_init = function() local_value("S").lib.io_ii = nil end})
+  finish_startup(context)
   local S = local_value("S")
   assert_equal(S.lib.io_ii, nil)
   press(S, "record")
@@ -161,7 +163,8 @@ local function started_real_bus(with_ii)
   local log = {}
   local context = load_strata({before_init = function()
     local S = local_value("S")
-    if not with_ii then return end
+    -- without it the real ii module is taken away before init (ruling 6)
+    if not with_ii then S.lib.io_ii = nil; return end
     S.lib.io_ii = {
       leads = function() return S.lib.io_rig.get("ii_bus") == "strata" and S.lib.io_crow.present() end,
       send = function(...) log[#log + 1] = {"send", ...}; return S.lib.io_ii.leads() end,
