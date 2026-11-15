@@ -1547,6 +1547,7 @@ test("a virtual grid attaches above the four ports and plays its layout", functi
   assert_equal(device.key, nil, "its key handler cleared")
   assert_true(not core.hold_pending(5, 2, 3), "its hold canceled")
   assert_equal(core.held(5, 2, 3), nil, "its key forgotten")
+  assert_equal(S.grid_held[5], nil, "and its held keys' table gone, as a port never attached has none")
   context.clock.run_for(1)
   assert_true(not S.scenes[2].populated, "no scene saved")
   -- refused: a norns port, a device without its fields, a port no constant names

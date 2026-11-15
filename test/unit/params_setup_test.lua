@@ -940,7 +940,7 @@ test("the menu records for 3.4's groups follow lfos in order, each adding its mo
   local menu = table.concat(names, " ")
   -- (3.6's five records, between gestures and seq, have their own test)
   assert_true(menu:find("lfos macros morph scatter matrix input gestures out midi crow out ii out nb tape seq buffers",
-    1, true) ~= nil, "the seven records follow lfos: " .. menu)
+    1, true) ~= nil, "3.4's seven records follow lfos, with 3.6's five between gestures and seq: " .. menu)
   -- each a group and its params: the macros' sixteen, morph's six (the XY
   -- morph's three with the two-scene morph's three),
   -- scatter's eight, the matrix's 32, the input's one, the gestures' eight

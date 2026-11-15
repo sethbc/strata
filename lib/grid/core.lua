@@ -801,6 +801,7 @@ return function(S)
     attached_devices[port] = nil
     GRID_ROTATION.sizes[port] = nil
     forget_port(port)
+    S.grid_held[port] = nil  -- as a port never attached has none
   end
 
   -- While grid_key handles a key, grid_redraw() calls from its actions (a

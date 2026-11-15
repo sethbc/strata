@@ -1037,9 +1037,17 @@ test("the 3.6 registries take what their records allow", function()
   assert_true(refused(S.register_ii_device, { name = "c", param_count = 8 }), "a count without add_params")
   assert_true(refused(S.register_ii_device, { name = "d", ready = 1 }), "ready is a function")
   assert_true(refused(S.register_ii_device, { name = "e", reset = fn }), "an unknown field")
-  S.register_ii_device({ name = "plain", ready = fn, release = fn })
+  assert_true(refused(S.register_ii_device, { name = "f", param_count = math.huge, add_params = fn }), "an infinite count")
+  assert_true(refused(S.register_ii_device, { name = "g", param_count = 0 / 0, add_params = fn }), "a NaN count")
+  local plain = { name = "plain", ready = fn, release = fn }
+  S.register_ii_device(plain)
   assert_equal(#S.registry.ii_devices, 2, "nothing refused was kept")
-  assert_equal(S.registry.ii_devices[2].param_count, 0, "param_count defaults to 0")
+  assert_equal(S.registry.ii_devices[2].param_count, 0, "param_count defaults to 0 in the registry")
+  assert_equal(S.registry.ii_devices[2].ready, fn, "with the record's functions")
+  assert_equal(plain.param_count, nil, "the caller's table is left as it was given")
+  local fields = 0
+  for _ in pairs(plain) do fields = fields + 1 end
+  assert_equal(fields, 3, "no field added to it")
   -- macro targets: two non-empty strings, never a macro
   S.register_macro_target("tapeloop_level", "tape level")
   assert_equal(S.registry.macro_targets[1].id, "tapeloop_level")

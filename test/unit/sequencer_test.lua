@@ -3124,13 +3124,81 @@ test("every hit's event carries its absolute pitches", function()
   assert_list_near(hits[2].pitches, {57, 61, 64}, 1e-9, "a chord")
   assert_list_near(hits[3].pitches, {57, 61, 64}, 1e-9, "each ratchet hit carries them")
   assert_true(hits[2].pitches ~= hits[3].pitches, "a copy per event")
-  -- a synth voice's pitch lock is its grain pitch, not its note
-  assert_list_near(hits[4].pitches, {57, 61, 64}, 1e-9, "a synth voice's chord under a pitch lock")
-  assert_list_near(hits[5].pitches, {57}, 1e-9, "and its own pitch")
+  -- a synth voice's pitch lock of 2 (its grain pitch stands at 1): an octave up
+  assert_list_near(hits[4].pitches, {69, 73, 76}, 1e-9, "a synth voice's chord under a pitch lock")
+  assert_list_near(hits[5].pitches, {69}, 1e-9, "and its own pitch")
   assert_list_near(voice_events(events, 2)[1].pitches, {72}, 1e-9, "a buffer voice at rate 2")
   local input = voice_events(events, 3)
   assert_list_near(input[1].pitches, {60}, 1e-9, "an input voice at grain pitch 1")
   assert_list_near(input[2].pitches, {48, 51}, 1e-9, "an input voice's pitch lock moves its note")
+end)
+
+-- The review's ruling: on a synth or buffer voice a step's pitch lock (on
+-- v<i>_grain_pitch, a ratio) moves every pitch by its distance from the
+-- standing grain pitch, 12 x log2(lock / stored) semitones
+local function locked_pitches(setup_voice, standing, lock_semitones, notes)
+  local context, S = buffer_voice_setup()
+  setup_voice(S)
+  params:set("v1_grain_pitch", 2 ^ (standing / 12))
+  S.patterns[1][1] = 15
+  if lock_semitones then S.lib.sequencer.set_step_attr(1, 1, "pitch", 2 ^ (lock_semitones / 12)) end
+  if notes then S.lib.sequencer.set_step_attr(1, 1, "notes", notes) end
+  local events = record_output(S, "probe")
+  context.clear_engine_calls()
+  pattern_clock_start()
+  pattern_clock_stop()
+  return voice_events(events, 1)[1].pitches, context
+end
+
+local function synth_at_220(S)
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  params:set("v1_freq", 220)
+end
+
+local function buffer_at_rate_2(S)
+  params:set("v1_buf_rate", 2)
+end
+
+test("a pitch lock moves a synth or buffer voice's pitches by its distance from the standing grain pitch", function()
+  assert_list_near(locked_pitches(synth_at_220, 0, 7), {64}, 1e-9, "a plain step locked 7 up")
+  assert_list_near(locked_pitches(synth_at_220, 3, 7), {61}, 1e-9, "from a standing grain pitch of 3: 4 up")
+  assert_list_near(locked_pitches(synth_at_220, 3, nil), {57}, 1e-9, "unlocked: the standing pitch is not added")
+  assert_list_near(locked_pitches(synth_at_220, 0, 7, {0, 4, 7}), {64, 68, 71}, 1e-9, "a chord moves whole")
+  assert_list_near(locked_pitches(synth_at_220, 0, nil, {0, 4, 7}), {57, 61, 64}, 1e-9, "an unlocked chord")
+  assert_list_near(locked_pitches(buffer_at_rate_2, 0, 7), {79}, 1e-9, "a buffer voice locked 7 up")
+  assert_list_near(locked_pitches(buffer_at_rate_2, 3, 7, {0, 3}), {76, 79}, 1e-9, "its chord, from grain pitch 3")
+end)
+
+-- What the voices output sent for a locked chord step on a synth voice and
+-- a locked plain step on a buffer voice before the ruling (recorded from
+-- the code before step_pitches took the lock): the ruling moves only the
+-- events' pitches
+test("a locked step's engine calls are as before the pitch lock reached the pitches", function()
+  local function sent(context)
+    local texts = {}
+    for _, call in ipairs(context.engine_calls) do
+      local args = {}
+      for index, value in ipairs(call.args) do
+        args[index] = type(value) == "number" and string.format("%.4f", value) or tostring(value)
+      end
+      texts[#texts + 1] = call.name .. "(" .. table.concat(args, ",") .. ")"
+    end
+    return table.concat(texts, " ")
+  end
+  local _, synth = locked_pitches(synth_at_220, 3, 7, {0, 4, 7})
+  assert_equal(sent(synth), table.concat({
+    "setGrainParam(0.0000,pitchShift,1.4983)", "setVoiceParam(0.0000,freq,220.0000)",
+    "setGrainParam(0.0000,scaleNote,57.0000)", "retrigger(0.0000,1.0000)",
+    "noteExpression(0.0000,1.0000,1.0000,1.0000,0.0000,0.0000,0.0000)",
+    "noteOn(0.0000,1.0000,61.0000,277.1826,1.0595,1.0000)",
+    "noteExpression(0.0000,2.0000,1.0000,1.0000,0.0000,0.0000,0.0000)",
+    "noteOn(0.0000,2.0000,64.0000,329.6276,1.2599,1.0000)",
+    "noteOff(0.0000,1.0000,0.0000)", "noteOff(0.0000,2.0000,0.0000)", "setVoiceParam(0.0000,freq,220.0000)",
+    "setGrainParam(0.0000,scaleNote,57.0000)", "setGrainParam(0.0000,pitchShift,1.1892)",
+  }, " "), "a synth voice's locked chord: the lock's grain pitch, the chord at its own notes")
+  local _, buffer = locked_pitches(buffer_at_rate_2, 0, 7)
+  assert_equal(sent(buffer), "setGrainParam(0.0000,pitchShift,1.4983) retrigger(0.0000,1.0000) "
+    .. "setGrainParam(0.0000,pitchShift,1.0000)", "a buffer voice's locked step")
 end)
 
 test("an output cannot change what another output or the next hit gets", function()
