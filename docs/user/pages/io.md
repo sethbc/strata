@@ -59,3 +59,4 @@ The arc's rings are off on IO for now.
 ## Devices and connections
 
 Each device or connection IO reaches has its own page, listed here as it arrives:
+- [crow](../io/crow.md): its inputs as modulation or triggers, its outputs for modulation, a voice's pitch or gate, and the clock

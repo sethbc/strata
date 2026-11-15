@@ -527,11 +527,11 @@ test("the routing view offers every source, whatever bank is shown", function()
   assert_equal(matrix.routing(2).source, "macro8", "M9 steps down to M8")
   enc(3, 2)
   assert_equal(matrix.routing(2).source, "macro10", "and up to M10")
-  -- arc ring 2 draws M9 at its own place: 15 of 43 steps (none, 6 LFOs,
-  -- 16 macros, 4 recorders, the input, 16 expression sources)
+  -- arc ring 2 draws M9 at its own place: 15 of 45 steps (none, 6 LFOs,
+  -- 16 macros, 4 recorders, the input, 16 expression sources, crow's 2 inputs)
   local device = context.arc.plug(1)
   matrix.set_routing(2, "macro9", "reverb_mix"); arc_redraw()
-  assert_near(device.segments[2].to, 15 / 43 * math.pi * 2, 1e-9, "ring 2 at M9's place")
+  assert_near(device.segments[2].to, 15 / 45 * math.pi * 2, 1e-9, "ring 2 at M9's place")
   -- an unknown key shows as stored and steps away from none, as before
   matrix.set_routing(2, "later_source", "reverb_mix"); redraw()
   assert_equal(row_text(context, 24, 0), "source  later_source")

@@ -627,7 +627,8 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "quantized actions", "scene sequencer", "scene transition",
   "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
-  "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "targets ended", "midi handler",
+  "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "targets ended",
+  "crow lines", "midi handler",
   "midi ports", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
@@ -662,6 +663,7 @@ test("cleanup runs every registered step in today's order", function()
   S.lib.matrix.learn(1)  -- matrix learn's timeout clock runs
   S.lib.midi_in.set_note_tap = function() end  -- the MIDI module's note tap (3.5's 2b): a stand-in
   S.lib.ui_zones.open(); S.lib.ui_zones.learn(1)  -- the zones editor's learn timeout clock runs
+  context.crow.plug(); params:set("crow_in2_mode", 2)  -- a crow with a jack set: its cleanup sends lines
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -735,6 +737,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(context.polls.polls.recordState, "stop", "record poll")
   for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do watch_method(context.polls.polls[name], "stop", "input meter") end
   watch_field(S.midi_device, "event", "midi handler")
+  watch_method(crow, "send", "crow lines")  -- lib/io/crow.lua: outputs to 0 V, inputs off
   watch_field(midi, "add", "midi ports")  -- lib/io/ports.lua puts back the hot-plug handlers it found
   local real_voice_off = engine.voiceOff
   engine.voiceOff = function(...) observe("voices off"); return real_voice_off(...) end
@@ -814,6 +817,7 @@ local function start_steps()
     { "io rig", { "file read io.data" } },
     { "io ports", {} },
     { "midi", {} },
+    { "io crow", {} },
     { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn",
       "redraw requested" } },
     { "macros load", { "file read macros.data", "redraw requested", "grid redrawn" } },
