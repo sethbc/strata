@@ -1070,4 +1070,34 @@ test("the 3.6 registries take what their records allow", function()
   assert_equal(script.registry.ii_devices[#script.registry.ii_devices].name, "late", "an ii device after init")
 end)
 
+-- 3.6's IO sections (design §11, ruling 7): a named record with a rows
+-- function, read at each use, so the registry stays open
+test("register_io_section takes a named record with a rows function", function()
+  local S = fresh_state()
+  local rows = function() return {} end
+  S.register_io_section({ name = "probe", title = "probe", rows = rows })
+  assert_equal(#S.registry.io_sections, 1, "a section is kept")
+  assert_equal(S.registry.io_sections[1].rows, rows)
+  S.register_io_section({ name = "probe2", title = function() return "p2" end, rows = rows,
+    status = function() return nil end, layout_states = { { name = "s", setup = function() end } } })
+  assert_true(refused(S.register_io_section, { name = "p3", title = "p3" }), "no rows")
+  assert_true(refused(S.register_io_section, { name = "p3", title = "p3", rows = {} }), "rows is a function")
+  assert_true(refused(S.register_io_section, { name = "probe", title = "x", rows = rows }), "a second name")
+  assert_true(refused(S.register_io_section, { title = "x", rows = rows }), "a name")
+  assert_true(refused(S.register_io_section, { name = "p4", rows = rows }), "a title")
+  assert_true(refused(S.register_io_section, { name = "p5", title = 5, rows = rows }), "a title is a string or function")
+  assert_true(refused(S.register_io_section, { name = "p6", title = "x", rows = rows, status = "x" }), "status is a function")
+  assert_true(refused(S.register_io_section, { name = "p7", title = "x", rows = rows, layout_states = { { name = 1 } } }),
+    "layout_states lists {name, setup}")
+  local ok, err = pcall(S.register_io_section, { name = "p8", title = "x", rows = rows, shade = 1 })
+  assert_true(not ok and tostring(err):find("shade", 1, true) ~= nil, "an unknown field, named: " .. tostring(err))
+  assert_equal(#S.registry.io_sections, 2, "nothing refused was kept")
+  -- open after init
+  load_strata()
+  local script = local_value("S")
+  local count = #script.registry.io_sections
+  script.register_io_section({ name = "late", title = "late", rows = rows })
+  assert_equal(#script.registry.io_sections, count + 1, "a section after init")
+end)
+
 end

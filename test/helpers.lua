@@ -634,7 +634,7 @@ local function text_span(entry)
 end
 
 -- The screen pages in E1 order (S.constants.UI_PAGES)
-local PAGE_TITLES = { "MAIN", "VOICE", "SEQ", "FX", "LFO", "MOD", "BUFFER", "SCENES", "SETUP" }
+local PAGE_TITLES = { "MAIN", "VOICE", "SEQ", "FX", "LFO", "MOD", "BUFFER", "SCENES", "SETUP", "IO" }
 
 local HINT_ROW_Y = 62
 
@@ -678,9 +678,9 @@ local function hint_text(context)
   end
 end
 
--- The header's page dots (lib/ui/header.lua): one 2x2 rect per page (nine
--- since 3.4) from x 36, 4 px apart
-local HEADER_DOTS_X, HEADER_DOT_SPACING, HEADER_DOT_SIZE = 36, 4, 2
+-- The header's page dots (lib/ui/header.lua): one 2x2 rect per page (ten
+-- since 3.6) from x 32, 4 px apart
+local HEADER_DOTS_X, HEADER_DOT_SPACING, HEADER_DOT_SIZE = 32, 4, 2
 
 local HEADER_FLASH_X = 40
 

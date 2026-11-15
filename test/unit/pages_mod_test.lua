@@ -114,12 +114,12 @@ local function param_snapshot()
   return table.concat(parts, ";")
 end
 
-test("MOD is the sixth page and the header shows nine dots", function()
+test("MOD is the sixth page and the header shows ten dots", function()
   local context, S = loaded()
   local C = S.constants
-  assert_equal(table.concat(C.UI_PAGES, " "), "MAIN VOICE SEQ FX LFO MOD BUFFER SCENES SETUP")
+  assert_equal(table.concat(C.UI_PAGES, " "), "MAIN VOICE SEQ FX LFO MOD BUFFER SCENES SETUP IO")
   assert_equal(C.UI_PAGES.index.MOD, 6, "MOD after LFO")
-  assert_equal(C.NUM_UI_PAGES, 9)
+  assert_equal(C.NUM_UI_PAGES, 10)
   assert_equal(S.registry.pages[C.UI_PAGES.index.MOD].name, "MOD")
   redraw()
   assert_equal(context.screen.texts[1].text, "MOD", "the title at 0,8")
@@ -128,9 +128,9 @@ test("MOD is the sixth page and the header shows nine dots", function()
     if rect.y + rect.h <= 9 and rect.w == 2 and rect.h == 2 then dots[#dots + 1] = rect end
   end
   table.sort(dots, function(a, b) return a.x < b.x end)
-  assert_equal(#dots, 9, "nine page dots")
-  assert_equal(dots[1].x, 36, "from x 36")
-  assert_equal(dots[9].x, 68, "4 px apart, the last at x 68")
+  assert_equal(#dots, 10, "ten page dots")
+  assert_equal(dots[1].x, 32, "from x 32")
+  assert_equal(dots[10].x, 68, "4 px apart, the last at x 68")
   assert_equal(dots[6].level, 15, "the sixth bright")
   assert_screen_layout(context, "MOD as loaded")
 end)
