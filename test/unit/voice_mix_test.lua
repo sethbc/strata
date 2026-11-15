@@ -570,4 +570,40 @@ test("a mute or solo redraws the grid", function()
   assert_true(calls >= 2, "grid_redraw ran for each (" .. calls .. ")")
 end)
 
+-- 3.6 (design §0.1, ruling 16): the silence hooks, for the targets' offs
+test("a mute or a solo tells the silence hooks each voice whose answer changed", function()
+  local context = load_strata()
+  local S = run_voices_1_to_4(context)
+  local heard = {}
+  S.register_silence_change(function(voice_idx, silenced)
+    table.insert(heard, voice_idx .. (silenced and "+" or "-"))
+  end)
+  local function take() local text = table.concat(heard, " "); for i = #heard, 1, -1 do heard[i] = nil end; return text end
+  params:set("v2_mute", 1)
+  assert_equal(take(), "2+", "the muted voice only")
+  params:set("v2_mute", 1)
+  assert_equal(take(), "", "the same value again: nothing")
+  params:set("v2_mute", 0)
+  assert_equal(take(), "2-", "unmuted")
+  params:set("v3_solo", 1)
+  assert_equal(take(), "1+ 2+ 4+ 5+ 6+ 7+", "a solo: the six others, never the soloed voice")
+  params:set("v3_solo", 0)
+  assert_equal(take(), "1- 2- 4- 5- 6- 7-", "the solo's end")
+  -- a voice's sync sends voiceMute too, and tells nothing new
+  toggle_voice(5); toggle_voice(5)
+  assert_equal(take(), "", "a start and a stop change no answer")
+  -- a scene recall that mutes a stopped voice
+  params:set("v6_mute", 1); capture_scene(1); params:set("v6_mute", 0)
+  take()
+  recall_scene(1, 0)
+  assert_true(not S.voices[6].active, "voice 6 is stopped")
+  assert_equal(take(), "6+", "the recall's mute")
+  -- a hook that raises is contained
+  S.register_silence_change(function() error("silence hook down") end)
+  params:set("v1_mute", 1)
+  assert_equal(take(), "1+", "the first hook still ran")
+  assert_true(S.lib.voice_mix.silenced(1), "and the mute went")
+  h.claim_script_errors(context, 1, "strata: silence change hook 2 failed: ", "silence hook down")
+end)
+
 end

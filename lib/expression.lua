@@ -262,6 +262,17 @@ return function(S)
     return true
   end
 
+  -- 3.6 (design §0.1): a copy of what a note's controllers last sent,
+  -- {bend (a ratio), pressure (0-1, nil before the first), slide (0-1
+  -- absolute, nil before the first)}; nil for a note this module holds no
+  -- record of (none yet, forgotten, or a bad voice). Read by the targets
+  function M.raw(voice, owner, key)
+    if not valid_voice(voice) then return nil end
+    local record = find_record(voice, owner, key)
+    if not record then return nil end
+    return {bend = record.bend, pressure = record.pressure, slide = record.slide}
+  end
+
   -- A new touch of a note the allocator may still hold (the MIDI package's
   -- note on, before its update): what this module kept of the old touch
   -- (latch, highest pressure, slide reference) is forgotten

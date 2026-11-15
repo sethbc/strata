@@ -113,17 +113,25 @@ return function(S)
       local id = "matrix_" .. k .. "_depth"
       if is_control(id) then add(id, "R" .. k .. " depth") end
     end
-    catalog = {count = #params.params, ids = ids, known = known, labels = labels}
+    -- 3.6's registered targets (S.register_macro_target, ruling 4), in
+    -- registration order, each whose param exists and is a control
+    for _, target in ipairs(S.registry.macro_targets) do
+      if is_control(target.id) then add(target.id, target.label) end
+    end
+    catalog = {count = #params.params, registered = #S.registry.macro_targets, ids = ids, known = known,
+      labels = labels}
   end
 
+  -- Built again when a param was added or a target registered since
   local function current_catalog()
-    if catalog.count ~= #params.params then build_catalog() end
+    if catalog.count ~= #params.params or catalog.registered ~= #S.registry.macro_targets then build_catalog() end
     return catalog
   end
 
   -- Every target id (design §4.2): every LFO destination but none and the
   -- macros (a voice's main entry as v<i>_main), then each LFO's rate and
-  -- depth, then each matrix routing's depth, only those whose params exist
+  -- depth, then each matrix routing's depth, then each registered target
+  -- (3.6), only those whose params exist
   function M.target_ids()
     local ids = {}
     for index, id in ipairs(current_catalog().ids) do ids[index] = id end

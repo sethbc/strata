@@ -1043,4 +1043,25 @@ test("the 16 macros register as destinations and sources", function()
   assert_equal(macros.targets(0), nil); assert_equal(macros.targets(17), nil)
   assert_equal(#macros.bank_macros(5), 0, "no bank 5")
 end)
+
+-- 3.6 (ruling 4): a module's own control params, registered as targets
+test("a registered macro target follows the matrix depths", function()
+  local context, S, macros = loaded()
+  params:add{ type = "control", id = "x_level", name = "x level", controlspec = controlspec.new(0, 1, "lin", 0, 0.5) }
+  params:add{ type = "option", id = "z_mode", name = "z mode", options = { "a", "b" } }
+  local before = macros.target_ids()
+  assert_equal(before[#before], "matrix_16_depth", "read before the registration")
+  S.register_macro_target("x_level", "x level")
+  local ids = macros.target_ids()
+  assert_equal(#ids, #before + 1, "one more")
+  assert_equal(ids[#ids], "x_level", "after the matrix depths")
+  assert_equal(macros.target_label("x_level"), "x level", "with its label")
+  S.register_macro_target("y_level", "y level")  -- no such param
+  S.register_macro_target("z_mode", "z mode")    -- an option param
+  ids = macros.target_ids()
+  assert_equal(ids[#ids], "x_level", "a target without a control param is left out")
+  assert_equal(macros.set_target(1, 1, "x_level", 0.2, 0.4), true, "a row takes it")
+  params:set("macro_1", 0.5); settle(context)
+  assert_near(params:get("x_level"), 0.3, 1e-9, "and the macro moves it")
+end)
 end

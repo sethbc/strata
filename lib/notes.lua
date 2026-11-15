@@ -151,18 +151,39 @@ return function(S)
       expression = copy_expression(played.expression), due = false}
   end
 
-  -- A note leaves its slot: the flush skips it, and a held one's slot ended now
-  local function forget(record, now)
+  -- 3.6's note hooks (S.registry.note_hooks, read at each call): each
+  -- hook's field function, contained, with (voice, slot, note = a fresh
+  -- {owner, key, pitch, velocity}). started once a record is in its slot,
+  -- moved for a held note re-pitched in place, ended when a held note
+  -- leaves its slot or parks (a parked note already ended), expressed when
+  -- a note becomes due for the flush: one ended per started
+  local hook_errors = {}
+  local function run_note_hooks(field, record)
+    for _, hook in ipairs(S.registry.note_hooks) do
+      if hook[field] then
+        S.lib.ui_frame.contained_call(hook_errors, hook.name .. " " .. field, "note hook " .. hook.name .. " " .. field,
+          hook[field], record.voice, record.slot,
+          {owner = record.owner, key = record.key, pitch = record.pitch, velocity = record.velocity})
+      end
+    end
+  end
+
+  -- A note leaves its slot: the flush skips it, and a held one's slot ended
+  -- now (and the hooks hear it ended, unless moved: its next record carries on)
+  local function forget(record, now, moved)
     slots[record.voice][record.slot] = nil
     record.due = false
-    if record.held then ended[record.voice][record.slot] = now end
+    local was_held = record.held
+    if was_held then ended[record.voice][record.slot] = now end
     record.held = false
+    if was_held and not moved then run_note_hooks("ended", record) end
   end
 
   local function mark_due(record)
     if flush.stopped or record.due then return end
     record.due = true
     table.insert(flush.queue, record)
+    run_note_hooks("expressed", record)
   end
 
   -- The oldest held extra note that accepts(record) and started at least
@@ -334,11 +355,14 @@ return function(S)
     local previous = slots[voice][1]
     local was_parked = previous ~= nil and previous.parked
     local held_before = M.held(voice)
+    -- the same owner and key held: the hooks hear a move, not an end and a start
+    local moved = previous ~= nil and previous.held and previous.owner == played.owner and previous.key == played.key
     note.set_own(played.pitch)
-    if previous then forget(previous, now) end
+    if previous then forget(previous, now, moved) end
     if not note.quiet and not S.voices[voice].active then toggle_voice(voice) end
     local record = new_record(voice, 1, played, now)
     slots[voice][1] = record
+    run_note_hooks(moved and "moved" or "started", record)
     local messages = 0
     if not same_expression(record.expression, sent[voice][1]) then
       if note.quiet then
@@ -363,6 +387,7 @@ return function(S)
   local function start_extra(voice, slot, played, now)
     local record = new_record(voice, slot, played, now)
     slots[voice][slot] = record
+    run_note_hooks("started", record)
     send_expression(voice, slot, record.expression)
     send_note_on(voice, slot, record)
     count(2)
@@ -408,6 +433,7 @@ return function(S)
       end
       send_note_on(voice, slot, record)
       count(messages)
+      run_note_hooks("moved", record)
       return slot
     end
     -- 2. slot 1 free: nothing held, the own note parked, or the voice
@@ -476,6 +502,7 @@ return function(S)
       engine.noteOff(voice - 1, 0, 0)
       count(1)
       record.held, record.parked, record.due = false, true, false
+      run_note_hooks("ended", record)  -- a parked note that plays again is a new start
     else
       forget(record, util.time())
     end

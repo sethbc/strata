@@ -3176,4 +3176,33 @@ test("a format 6 file loads, and its first save writes format 7 and keeps it as 
   assert_equal(S.scene_file.version, nil, "the file is the current format now")
 end)
 
+-- 3.6 (design §0.1): the scene-recalled hook, for the targets' program changes
+test("the recalled hook runs once per recall", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  capture_freq_scenes()
+  local heard = {}
+  S.register_scene_recalled(function(scene_num) table.insert(heard, scene_num) end)
+  local function take() local text = table.concat(heard, " "); for i = #heard, 1, -1 do heard[i] = nil end; return text end
+  recall_scene(3, 0)
+  assert_equal(take(), "3", "an instant recall")
+  recall_scene(1, 2)
+  assert_equal(take(), "1", "a fade, at its first step")
+  context.clock.run_for(2.5, 0.001)
+  assert_equal(local_value("current_scene"), 1, "the fade landed")
+  assert_equal(take(), "", "none at its landing")
+  recall_scene(10, 0)
+  assert_equal(take(), "", "an empty scene")
+  params:set_action("v1_freq", function() error("apply failed") end)
+  assert_true(not pcall(recall_scene, 2, 0), "the recall's apply raises")
+  assert_equal(take(), "", "a failed recall")
+  assert_true(not pcall(recall_scene, 3, 4), "the fade's first step raises")
+  context.clock.take_errors()
+  assert_true(not local_value("scene_transition_active"), "the fade ended")
+  assert_equal(take(), "", "a fade whose first step failed")
+  params:set_action("v1_freq", function() end)
+  run_scene_sequencer(context, 0, 4, 1)
+  assert_equal(take(), "1", "the scene sequencer's advance")
+end)
+
 end

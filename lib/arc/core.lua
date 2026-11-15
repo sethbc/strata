@@ -120,17 +120,43 @@ return function(S)
   -- Arc handlers live on the vport only (as for grids): norns fires both
   -- device.delta/key and vports[port].delta/key, so setting them on the device
   -- as well would run every turn twice.
-  local function attach_arc(port)
-    if S.arc_device and S.arc_device ~= arc.connect(port) then
-      -- following another vport now: the old one (e.g. the empty port-1
-      -- fallback from init) must not keep handlers for a later arc
+  local function follow_device(device)
+    if S.arc_device and S.arc_device ~= device then
+      -- following another device now: the old one (e.g. the empty port-1
+      -- fallback from init, or a virtual arc) must not keep handlers
       S.arc_device.delta = nil
       S.arc_device.key = nil
     end
-    S.arc_device = arc.connect(port)
+    S.arc_device = device
     S.arc_device.delta = arc_delta
     S.arc_device.key = arc_key
     S.arc_connected = S.arc_device.device ~= nil
+  end
+
+  local function attach_arc(port) follow_device(arc.connect(port)) end
+
+  -- 3.6 (design §0.1): an arc that is no norns device (a remote arc): a
+  -- table with a truthy device field and the methods all, refresh, segment
+  -- and led. It is S.arc_device only while no monome arc is connected: a
+  -- monome arc that arrives takes over, and one that leaves hands back
+  local virtual = {device = nil}
+
+  local function is_virtual_arc(device)
+    if type(device) ~= "table" or not device.device then return false end
+    for _, method in ipairs({"all", "refresh", "segment", "led"}) do
+      if type(device[method]) ~= "function" then return false end
+    end
+    return true
+  end
+
+  local function following_virtual() return virtual.device ~= nil and S.arc_device == virtual.device end
+
+  -- No monome arc to follow: the virtual arc when there is one (true),
+  -- else nothing changes (false)
+  local function fall_back_to_virtual()
+    if virtual.device == nil then return false end
+    follow_device(virtual.device)
+    return true
   end
 
   -- The first arc vport (in port order) holding a device, other than
@@ -149,14 +175,18 @@ return function(S)
   -- is connected, and removing the connected arc moves to the first other
   -- vport holding one, or disconnects.
   function arc_init()
-    attach_arc(first_arc_port() or UI_PAGES.ARC_PORT)  -- the first frame draws its rings
+    local port = first_arc_port()
+    if port or not fall_back_to_virtual() then
+      attach_arc(port or UI_PAGES.ARC_PORT)  -- the first frame draws its rings
+    end
   end
 
   function arc.add(device)
     local port = device.port
     -- an arc norns gave no vport is on no vport at all: never followed
     if port == nil or port < 1 or port > UI_PAGES.ARC_PORTS then return end
-    if S.arc_connected and S.arc_device ~= arc.connect(port) then return end  -- already following another arc
+    -- already following another monome arc (a virtual one gives way)
+    if S.arc_connected and S.arc_device ~= arc.connect(port) and not following_virtual() then return end
     attach_arc(port)
     request_redraw()  -- its rings, and SETUP shows the arc state
     print("arc connected")
@@ -171,6 +201,8 @@ return function(S)
     if next_port then
       attach_arc(next_port)
       print("arc disconnected; following the arc on port " .. next_port)
+    elseif fall_back_to_virtual() then
+      print("arc disconnected; following the virtual arc")
     else
       S.arc_connected = false
       print("arc disconnected")
@@ -182,13 +214,18 @@ return function(S)
   -- update_devices() alone (lua/core/menu/devices.lua): no arc.add, no
   -- arc.remove. Run as the norns menu closes: when the followed vport holds
   -- no device, follow the first vport holding one, or disconnect; when it
-  -- holds one, it is connected
+  -- holds one, it is connected. A virtual arc followed gives way to a vport
+  -- that holds a device, and is followed in place of an emptied one
   function M.reconcile()
-    if S.arc_device == nil or S.arc_device.device == nil then
+    if S.arc_device == nil or S.arc_device.device == nil or following_virtual() then
       local port = first_arc_port()
       if port then
         attach_arc(port)
         print("arc connected on port " .. port)
+      elseif following_virtual() then
+        S.arc_connected = true
+      elseif fall_back_to_virtual() then
+        print("arc disconnected; following the virtual arc")
       elseif S.arc_connected then
         S.arc_connected = false
         print("arc disconnected")
@@ -200,6 +237,32 @@ return function(S)
   end
 
   S.register_menu_close(function() M.reconcile() end)
+
+  -- Follow device as the virtual arc (a remote arc, 3.6): at once while no
+  -- monome arc is connected, else once none is. A new one replaces the old.
+  -- false for a device without its fields
+  function M.follow_virtual(device)
+    if not is_virtual_arc(device) then return false end
+    local old = virtual.device
+    virtual.device = device
+    if old and old ~= device and S.arc_device == old then
+      follow_device(device)
+    elseif not S.arc_connected then
+      follow_device(device)
+    end
+    request_redraw()  -- its rings, and SETUP's arc state
+    return true
+  end
+
+  -- The virtual arc goes: when it was followed, its handlers are cleared and
+  -- Strata follows the first vport holding an arc, else port 1's, unconnected
+  function M.unfollow_virtual()
+    local device = virtual.device
+    virtual.device = nil
+    if device == nil or S.arc_device ~= device then return end
+    attach_arc(first_arc_port() or UI_PAGES.ARC_PORT)
+    request_redraw()
+  end
 
   -- The current page's ring handler: alt_field (arc_alt_delta,
   -- arc_alt_redraw) while ALT is held and the page has it, else plain_field;

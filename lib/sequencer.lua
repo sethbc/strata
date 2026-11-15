@@ -512,15 +512,13 @@ return function(S)
     end
   end
 
-  -- A step's first hit on a voice: the locks, the bookmark and the note, as
-  -- base overrides; the previous played step's overrides this one lacks
-  -- end, and its chord's notes this one lacks are released (by key: a note
-  -- it keeps is played again in place). The first note plays here, where
-  -- 3.4 set its override: the voice's own (slot 1) as that override, or,
-  -- while another owner holds slot 1, only an extra note in free room
-  -- (ruling 35), with no note override
-  local function apply_step(voice_idx, event)
-    local locks = event.locks or {}
+  -- A step's inputs (3.6): its locks (a table, never nil), the values they
+  -- want (param id -> value) and their ids, and its chord (step_chord, nil
+  -- without notes). Worked out once per step, at its begin, so the hits'
+  -- pitches and what the voices output plays come from the one chord
+  local stepping = {}  -- per voice: the inputs of the step being begun, until its first hit's apply_step
+  local function step_inputs(voice_idx, locks, semitones)
+    locks = locks or {}
     local wanted, lock_ids = {}, {}  -- param id -> value: the locks, then the note
     for _, key in ipairs(SEQ.lock_keys) do
       if SEQ.lock_params[key] and locks[key] ~= nil then
@@ -529,7 +527,38 @@ return function(S)
         lock_ids[#lock_ids + 1] = param_id
       end
     end
-    local chord = step_chord(voice_idx, event.semitones, wanted)
+    return {locks = locks, wanted = wanted, lock_ids = lock_ids, chord = step_chord(voice_idx, semitones, wanted)}
+  end
+
+  -- A step's absolute pitches (fractional MIDI notes): its chord's, else
+  -- the voice's own pitch, both after the step's lock on the note's param
+  -- (an input voice's pitch lock); a fresh list
+  local function step_pitches(voice_idx, inputs)
+    local pitches, chord = {}, inputs.chord
+    if chord then
+      for k = 1, chord.count do
+        if chord.pitches[k] ~= nil then pitches[#pitches + 1] = chord.pitches[k] end
+      end
+    else
+      local note_id = note_param(voice_idx)
+      pitches[1] = value_note(voice_idx, inputs.wanted[note_id] or params:get(note_id))
+    end
+    return pitches
+  end
+
+  -- A step's first hit on a voice: the locks, the bookmark and the note, as
+  -- base overrides; the previous played step's overrides this one lacks
+  -- end, and its chord's notes this one lacks are released (by key: a note
+  -- it keeps is played again in place). The first note plays here, where
+  -- 3.4 set its override: the voice's own (slot 1) as that override, or,
+  -- while another owner holds slot 1, only an extra note in free room
+  -- (ruling 35), with no note override
+  local function apply_step(voice_idx, event)
+    -- the step's locks, wanted values and chord, worked out once at the
+    -- step's begin (begin_voice_step: its events' pitches come from them)
+    local step = stepping[voice_idx] or step_inputs(voice_idx, event.locks, event.semitones)
+    stepping[voice_idx] = nil
+    local locks, wanted, lock_ids, chord = step.locks, step.wanted, step.lock_ids, step.chord
     local note_id = chord and chord.note_id
     local lock_value = note_id and wanted[note_id]  -- an input voice's pitch lock, the note's own param
     if note_id then wanted[note_id] = chord.values[1] end
@@ -693,24 +722,32 @@ return function(S)
     return semitones
   end
 
+  -- A step's locks as a fresh table (a subset of SEQ.lock_keys), nil when none is set
+  local function step_locks(attrs)
+    local locks
+    for _, key in ipairs(SEQ.lock_keys) do
+      if attrs[key] ~= nil then
+        locks = locks or {}
+        locks[key] = attrs[key]
+      end
+    end
+    return locks
+  end
+
   -- A hit's event (design 8.10's fields); semitones: the step's
-  -- (step_semitones)
-  local function hit_event(voice_idx, step, hit, hits, level, semitones)
+  -- (step_semitones); pitches (3.6): the step's (step_pitches), a copy per event
+  local function hit_event(voice_idx, step, hit, hits, level, semitones, pitches)
     local attrs = S.pattern_steps[voice_idx][step] or {}
     local division = division_beats(voice_idx)
     local event = {voice = voice_idx, step = step, hit = hit, hits = hits, first = hit == 1, level = level,
-      velocity = level / MAX_STEP_LEVEL, beat = clock.get_beats(), gate_beats = division / hits}
+      velocity = level / MAX_STEP_LEVEL, beat = clock.get_beats(), gate_beats = division / hits,
+      pitches = copy_list(pitches)}
     if gated(voice_idx) then
       local steps = attrs.gate or extras(voice_idx).seq_gate_length or SEQ.gate_length_default
       event.gate_beats = steps * division / hits
     end
     if attrs.notes then event.notes, event.semitones = copy_list(attrs.notes), copy_list(semitones or {}) end
-    for _, key in ipairs(SEQ.lock_keys) do
-      if attrs[key] ~= nil then
-        event.locks = event.locks or {}
-        event.locks[key] = attrs[key]
-      end
-    end
+    event.locks = step_locks(attrs)
     return event
   end
 
@@ -1016,7 +1053,7 @@ return function(S)
     local step = take_position(voice_idx)
     S.pattern_sounding_steps[voice_idx] = step
     local level = S.patterns[voice_idx][step]
-    local hits, spacing, semitones = 0, 0, nil
+    local hits, spacing, semitones, pitches = 0, 0, nil, nil
     local attrs = S.pattern_steps[voice_idx][step] or {}
     local prob = attrs.prob or SEQ.max_prob
     if level > 0 and prob > 0 and (prob >= SEQ.max_prob or math.random() * SEQ.max_prob < prob) then
@@ -1026,16 +1063,22 @@ return function(S)
       local step_seconds = step_beats * S.lib.params_setup.beat_seconds_now()
       hits = math.min(attrs.ratchet or 1, math.max(1, math.floor(step_seconds / SEQ.min_ratchet_seconds + 1e-9)))
       spacing, semitones = step_beats / hits, step_semitones(voice_idx, attrs)
+      -- the chord the voices output plays and the pitches every hit carries, from one reckoning
+      local inputs = step_inputs(voice_idx, step_locks(attrs), semitones)
+      pitches = step_pitches(voice_idx, inputs)
+      stepping[voice_idx] = inputs
       local was_active = S.voices[voice_idx].active
-      play_outputs(hit_event(voice_idx, step, 1, hits, level, semitones))
+      play_outputs(hit_event(voice_idx, step, 1, hits, level, semitones, pitches))
+      stepping[voice_idx] = nil
       if S.voices[voice_idx].active and not was_active then play.started = true end
     end
     finish_beat(state.beat)
-    return {step = step, level = level, hits = hits, spacing = spacing, beat = state.beat, semitones = semitones}
+    return {step = step, level = level, hits = hits, spacing = spacing, beat = state.beat, semitones = semitones,
+      pitches = pitches}
   end
 
   local function play_voice_hit(voice_idx, plan, hit)
-    play_outputs(hit_event(voice_idx, plan.step, hit, plan.hits, plan.level, plan.semitones))
+    play_outputs(hit_event(voice_idx, plan.step, hit, plan.hits, plan.level, plan.semitones, plan.pitches))
   end
 
   -- The transport's 16th: a link due, a division reset's bar (every voice

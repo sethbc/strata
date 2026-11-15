@@ -1,6 +1,7 @@
 ## Must not break
 
 - Handlers live on the vport only (`arc.connect(port)`), never on the raw device passed to `arc.add`.
+- **A virtual arc (3.6's 0a)** is followed only while no monome arc is connected: `S.lib.arc_core.follow_virtual(device)` (a table with a truthy `device` field and the methods `all`, `refresh`, `segment` and `led`; false for anything else) makes it `S.arc_device` at once when none is connected and otherwise keeps it waiting; a monome arc that arrives (`arc.add`, or `reconcile` as the menu closes) takes over, and the followed one leaving (`arc.remove`, or an emptied vport at `reconcile`) hands back to it when no other vport holds an arc. `unfollow_virtual()` forgets it and, when it was followed, follows the first vport holding an arc, else port 1's, unconnected. Following another device always clears the old one's `delta` and `key` (`follow_device`), and the `"arc connection"` invariant holds throughout.
 - Strata follows one arc: on the vport of the device (`device.port`; at init the first vport holding a device). A device with no port (norns found no vport for it) is on no vport at all: `arc.add` and `arc.remove` return at once for it, so it is never followed and never taken for port 1's (#437). While one is connected, `arc.add` of another arc is ignored and `arc.remove` disconnects only the connected one.
 - `S.arc_connected` is exactly whether the followed vport holds a device (the `"arc connection"` invariant). An arc moved in SYSTEM > DEVICES gets no `arc.add` or `arc.remove` (norns calls `update_devices()` only), so `S.lib.arc_core.reconcile()` runs as the norns menu closes (#256).
 - Every ring is filled through `arc_ring_fill` from `param_fraction`, or through `arc_ring_fill_bipolar` (which reads `param_fraction` itself) for a range through 0, never from a hardcoded range and never with a bare `segment` (a full turn would light nothing). `arc_ring_fill_param` picks between them. A ring that shows a whole-step position (SEQ's step, level and voice rings, SCENES' cursor ring) is filled through `arc_ring_fill_position`, which lights LED 1 at the first position, so it never looks like a ring that is off (#510); a swept ring at its minimum still lights nothing.
@@ -21,7 +22,7 @@
   - all global but `attach_arc` and `page_ring_handler`, locals of the constructor (`arc.add`/`arc.remove` are fields of norns' `arc` table);
   - cleanup step 180: the followed vport's `delta` and `key` cleared, the arc left dark, and `arc.add`/`arc.remove` set to no-ops (norns' SLEEP runs only `cleanup()`, #468);
   - the invariant `"arc connection"`: `S.arc_connected == (S.arc_device ~= nil and S.arc_device.device ~= nil)`.
-- Unit tests: `test/unit/arc_core_test.lua` (fills, carried ticks, ALT rings, the button, a portless device, the one followed arc, an arc moved in SYSTEM > DEVICES, drawing while the menu is open). Each page's rings are in `docs/notes/lua/arc-pages.md`.
+- Unit tests: `test/unit/arc_core_test.lua` (fills, carried ticks, ALT rings, the button, a portless device, the one followed arc, an arc moved in SYSTEM > DEVICES, drawing while the menu is open, a virtual arc). Each page's rings are in `docs/notes/lua/arc-pages.md`.
 
 ## Device lifecycle
 
@@ -52,6 +53,7 @@ The invariant `"arc connection"` holds outside the norns menu: `S.arc_connected`
 | The followed arc unplugged: follow another, or none | `arc.remove` |
 | The menu closes after SYSTEM > DEVICES moved the arc | `S.lib.arc_core.reconcile` |
 | Attach a vport (any of the above) | `attach_arc` |
+| Follow or forget a virtual arc (3.6) | `follow_virtual`, `unfollow_virtual`; `follow_device` for any device |
 
 ## Dispatch
 

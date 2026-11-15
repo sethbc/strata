@@ -582,4 +582,28 @@ test("the four rows join VOICE's notes section, and position shows for a buffer 
   assert_true(record.randomize.slide_depth ~= nil, "both depths are drawn")
 end)
 
+-- 3.6 (design §0.1): what a note's controllers sent, for the targets
+test("raw gives a held note's bend, pressure and slide", function()
+  local context = load_strata()
+  local S = started(context)
+  local expression = S.lib.expression
+  play(1, 7740, 60)
+  assert_equal(expression.raw(1, "midi", 7740), nil, "no update yet: no record")
+  update(1, 7740, { bend = 1.5 })
+  local raw = expression.raw(1, "midi", 7740)
+  assert_equal(raw.bend, 1.5); assert_equal(raw.pressure, nil, "no pressure yet"); assert_equal(raw.slide, nil, "nor slide")
+  update(1, 7740, { pressure = 0.4, slide = 0.7 })
+  raw = expression.raw(1, "midi", 7740)
+  assert_equal(raw.bend, 1.5); assert_equal(raw.pressure, 0.4)
+  assert_equal(raw.slide, 0.7, "the slide is absolute, not from its reference")
+  raw.bend, raw.pressure = 9, 0
+  assert_equal(expression.raw(1, "midi", 7740).bend, 1.5, "a copy")
+  assert_equal(expression.raw(1, "midi", 7740).pressure, 0.4, "a copy")
+  assert_equal(expression.raw(1, "midi", 7741), nil, "an unknown key")
+  assert_equal(expression.raw(2, "midi", 7740), nil, "another voice")
+  assert_equal(expression.raw(9, "midi", 7740), nil, "no voice 9")
+  expression.forget(1, "midi", 7740)
+  assert_equal(expression.raw(1, "midi", 7740), nil, "forgotten")
+end)
+
 end

@@ -1507,4 +1507,75 @@ test("a grid moved in SYSTEM > DEVICES cancels the old port's pending holds", fu
   assert_true(not scenes[2].populated, "no scene saved")
 end)
 
+-- 3.6 (design §0.1): a grid that is no norns device (a remote grid, the
+-- midigrid mod's), on a port above norns' four
+local function virtual_grid(cols, rows)
+  local device = { cols = cols, rows = rows, device = true, leds = {}, refreshes = 0, rotations = {} }
+  function device:led(x, y, level) self.leds[x .. "," .. y] = level end
+  function device:all(level) self.leds = {}; self.cleared = level end
+  function device:refresh() self.refreshes = self.refreshes + 1 end
+  function device:rotation(r) table.insert(self.rotations, r) end
+  return device
+end
+
+test("a virtual grid attaches above the four ports and plays its layout", function()
+  local context = load_strata(); finish_startup(context)
+  local S, core = local_value("S"), grid_core()
+  local ports = S.constants.GRID_PORTS
+  assert_equal(ports.remote, 5); assert_equal(ports.midigrid, 6)
+  local device = virtual_grid(16, 16)
+  assert_equal(core.attach_virtual(ports.remote, device), true, "attached")
+  assert_equal(S.grids[5], device, "as port 5")
+  assert_true(device.refreshes >= 1, "drawn at once")
+  device.refreshes = 0
+  grid_redraw()
+  assert_equal(device.refreshes, 1, "a redraw refreshes it once")
+  assert_true(next(device.leds) ~= nil, "and draws its layout")
+  device.key(1, 1, 1); device.key(1, 1, 0)
+  assert_equal(S.patterns[1][1], 15, "a key reaches the 256 layout: step 1 of voice 1")
+  core.set_page(5, 2)
+  assert_equal(core.page(5), 2, "a page of its own")
+  core.reconcile_ports()
+  assert_equal(S.grids[5], device, "reconcile_ports leaves it")
+  -- a held key and its hold go with it
+  core.set_page(5, 3)
+  device.key(2, 3, 1)
+  assert_true(core.hold_pending(5, 2, 3), "a scene save is pending")
+  assert_equal(#h.check_invariants(), 0, "every invariant holds while attached")
+  core.detach_virtual(5)
+  assert_equal(S.grids[5], nil, "detached")
+  assert_equal(device.key, nil, "its key handler cleared")
+  assert_true(not core.hold_pending(5, 2, 3), "its hold canceled")
+  assert_equal(core.held(5, 2, 3), nil, "its key forgotten")
+  context.clock.run_for(1)
+  assert_true(not S.scenes[2].populated, "no scene saved")
+  -- refused: a norns port, a device without its fields, a port no constant names
+  assert_equal(core.attach_virtual(3, virtual_grid(16, 16)), false, "port 3 is norns'")
+  assert_equal(core.attach_virtual(5, {}), false, "an empty table")
+  assert_equal(core.attach_virtual(7, virtual_grid(16, 16)), false, "port 7")
+  local fractional = virtual_grid(16, 16); fractional.cols = 15.5
+  assert_equal(core.attach_virtual(6, fractional), false, "whole cols and rows")
+  local no_refresh = virtual_grid(16, 16); no_refresh.refresh = nil
+  assert_equal(core.attach_virtual(6, no_refresh), false, "every function")
+  assert_equal(S.grids[6], nil, "nothing attached")
+  -- attached again, cleanup leaves it dark at rotation 0
+  core.attach_virtual(6, device)
+  cleanup()
+  assert_equal(device.key, nil, "cleanup clears its handler")
+  assert_equal(device.rotations[#device.rotations], 0, "and turns it back")
+end)
+
+test("ports 1 to 4 take norns' own vports only", function()
+  local foreign = virtual_grid(16, 16)
+  local context = load_strata({ before_init = function()
+    grid.connect = function() return foreign end
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  assert_equal(next(S.grids), nil, "grid_init attached nothing")
+  grid_core().reconcile_ports()
+  assert_equal(next(S.grids), nil, "nor did reconcile_ports")
+  assert_equal(foreign.key, nil, "the foreign table got no handler")
+end)
+
 end

@@ -1222,4 +1222,152 @@ test("a recall cuts a voice's held extra notes only when it ends a frozen synth 
   chord_through("buffer", 1, 1, 1.0)
 end)
 
+-------------------------------------------------------------------------------
+-- 3.6's note hooks (design §0.1, package 0a)
+-------------------------------------------------------------------------------
+
+-- Register a note hook "log" that records each call as
+-- "<kind> <voice> <slot> <owner> <key> <pitch> <velocity>"; returns the log
+-- and a function counting one kind
+local function hook_log(S, name)
+  local log = {}
+  local function entry(kind)
+    return function(voice, slot, played)
+      table.insert(log, string.format("%s %d %d %s %s %g %g", kind, voice, slot, played.owner, tostring(played.key),
+        played.pitch, played.velocity))
+    end
+  end
+  S.register_note_hook({ name = name or "log", started = entry("started"), ended = entry("ended"),
+    moved = entry("moved"), expressed = entry("expressed") })
+  local function count(kind)
+    local n = 0
+    for _, line in ipairs(log) do
+      if line:find("^" .. kind .. " ") then n = n + 1 end
+    end
+    return n
+  end
+  return log, count
+end
+
+test("a note's start, move, end and expression reach the note hooks", function()
+  local context = load_strata()
+  local S = started(context)
+  local log = hook_log(S)
+  play(context, 1, 7740, 60)
+  assert_equal(table.concat(log, "; "), "started 1 1 midi 7740 60 0.5", "the own note started")
+  log[1] = nil
+  play(context, 1, 7740, 62, { velocity = 0.25 })
+  assert_equal(table.concat(log, "; "), "moved 1 1 midi 7740 62 0.25", "re-pitched in place: moved alone")
+  log[1] = nil
+  play(context, 1, 7741, 64); play(context, 1, 7741, 65)
+  assert_equal(table.concat(log, "; "), "started 1 2 midi 7741 64 0.5; moved 1 2 midi 7741 65 0.5",
+    "an extra note started, then moved")
+  for index = #log, 1, -1 do log[index] = nil end
+  S.lib.notes.set_expression(1, 1, { bend = 1.5 })
+  S.lib.notes.set_expression(1, 1, { bend = 1.25 })
+  assert_equal(table.concat(log, "; "), "expressed 1 1 midi 7740 62 0.25", "expressed once until the flush")
+  lfo_step(context)
+  S.lib.notes.set_expression(1, 1, { bend = 1 })
+  assert_equal(#log, 2, "after the flush, expressed again")
+  for index = #log, 1, -1 do log[index] = nil end
+  S.lib.notes.release(1, "midi", 7741)
+  S.lib.notes.release(1, "midi", 7740)
+  assert_equal(table.concat(log, "; "), "ended 1 2 midi 7741 65 0.5; ended 1 1 midi 7740 62 0.25", "each ended once")
+  S.lib.notes.release(1, "midi", 7740)
+  assert_equal(#log, 2, "a second release ends nothing")
+end)
+
+test("a stolen, parked, cut and forgotten note ends for the hooks", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  notes.set_pool(2)
+  local log = hook_log(S)
+  local function take() local text = table.concat(log, "; "); for i = #log, 1, -1 do log[i] = nil end; return text end
+  -- a steal: the victim ends before the new note starts
+  play(context, 1, 1, 60); play(context, 1, 2, 64)
+  later(context, 0.01)
+  play(context, 2, 1, 60); play(context, 2, 2, 64)
+  later(context, 0.1)
+  take()
+  play(context, 2, 3, 67)
+  assert_equal(take(), "ended 1 2 midi 2 64 0.5; started 2 3 midi 3 67 0.5", "the victim ends first")
+  -- an own note parked by its release under held extras ends; its next play starts
+  notes.release(2, "midi", 1)
+  assert_equal(take(), "ended 2 1 midi 1 60 0.5", "parked: ended")
+  play(context, 2, 9, 62)
+  assert_equal(take(), "started 2 1 midi 9 62 0.5", "the parked slot plays again: started")
+  notes.release(2, "midi", 9)
+  assert_equal(take(), "ended 2 1 midi 9 62 0.5", "parked again")
+  -- a voice stop: each held note ends, the parked one not a second time
+  toggle_voice(2)
+  assert_equal(take(), "ended 2 2 midi 2 64 0.5; ended 2 3 midi 3 67 0.5", "the stop ends the held extras only")
+  -- a freeze: each extra ends
+  params:set("v1_freq", 220)
+  later(context, 0.1)
+  local slot = play(context, 1, 4, 67)
+  take()
+  params:set("v1_freeze", 1)
+  assert_equal(take(), "ended 1 " .. slot .. " midi 4 67 0.5", "the freeze cuts the extra")
+  params:set("v1_freeze", 0)
+  -- a smaller pool: each note it drops ends
+  local fifth = play(context, 1, 5, 69)
+  later(context, 0.01)
+  local sixth = play(context, 1, 6, 71)
+  take()
+  notes.set_pool(0)
+  assert_equal(take(), "ended 1 " .. sixth .. " midi 6 71 0.5; ended 1 " .. fifth .. " midi 5 69 0.5",
+    "the newest dropped first")
+end)
+
+test("starts and ends balance after every path", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  local _, count = hook_log(S)
+  notes.set_pool(3)
+  -- moves, parks, steals, a cap's steal in place, a freeze, a smaller pool,
+  -- forget_owner and forget, across two owners
+  play(context, 1, 1, 60); play(context, 1, 1, 61); play(context, 1, 2, 64); play(context, 1, 3, 67, { owner = "seq" })
+  later(context, 0.1)
+  play(context, 2, 1, 60); play(context, 2, 2, 62); play(context, 2, 3, 64)
+  notes.release(1, "midi", 1)
+  later(context, 0.1)
+  play(context, 1, 4, 65)
+  params:set("v2_note_cap", 2)
+  later(context, 0.1)
+  play(context, 2, 5, 66); play(context, 2, 6, 67)
+  notes.forget_owner(1, "seq")
+  notes.forget(2, "midi", 1)
+  params:set("v1_freq", 220); params:set("v1_freeze", 1); params:set("v1_freeze", 0)
+  play(context, 1, 7, 70); play(context, 1, 8, 72)
+  notes.set_pool(1)
+  play(context, 3, 1, 60, { quiet = true }); toggle_voice(3); play(context, 3, 2, 62)
+  for voice = 1, S.constants.NUM_VOICES do
+    if S.voices[voice].active then toggle_voice(voice) end
+  end
+  assert_true(count("started") > 8, "the paths started " .. count("started") .. " notes")
+  assert_equal(count("ended"), count("started"), "every start has its end")
+end)
+
+test("a hook that raises is contained and the note still plays", function()
+  local context = load_strata()
+  local S = started(context)
+  S.register_note_hook({ name = "raises", started = function() error("boom") end })
+  local log = hook_log(S, "after")
+  local printed = #context.printed
+  play(context, 1, 1, 60)
+  context.clear_engine_calls()
+  play(context, 1, 2, 64); play(context, 1, 3, 67)
+  assert_equal(#context.calls_named("noteOn"), 2, "the noteOns went")
+  assert_equal(#log, 3, "the other hook ran each time")
+  local lines = {}
+  for index = printed + 1, #context.printed do
+    if context.printed[index]:find("note hook raises started", 1, true) then table.insert(lines, context.printed[index]) end
+  end
+  assert_equal(#lines, 1, "one console line for the same error")
+  h.claim_script_errors(context, 1, "strata: note hook raises started failed: ", "boom")
+  assert_equal(S.lib.notes.held(1), 3, "every note is held")
+end)
+
 end

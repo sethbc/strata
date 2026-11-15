@@ -938,8 +938,9 @@ test("the menu records for 3.4's groups follow lfos in order, each adding its mo
   local names = {}
   for _, record in ipairs(S.registry.params) do names[#names + 1] = record.name end
   local menu = table.concat(names, " ")
-  assert_true(menu:find("lfos macros morph scatter matrix input gestures seq buffers", 1, true) ~= nil,
-    "the seven records follow lfos: " .. menu)
+  -- (3.6's five records, between gestures and seq, have their own test)
+  assert_true(menu:find("lfos macros morph scatter matrix input gestures out midi crow out ii out nb tape seq buffers",
+    1, true) ~= nil, "the seven records follow lfos: " .. menu)
   -- each a group and its params: the macros' sixteen, morph's six (the XY
   -- morph's three with the two-scene morph's three),
   -- scatter's eight, the matrix's 32, the input's one, the gestures' eight
@@ -990,6 +991,43 @@ test("buffer rate is exact (step 0) and its turns, display and range are as with
   local before = params:get("v1_buf_rate")
   arc_sweep_param("v1_buf_rate", 1)
   assert_true(params:get("v1_buf_rate") > before, "an arc tick raises it")
+end)
+
+-- 3.6 (design §0.1, §13): the five groups' records, each adding its group
+-- only when its module is loaded
+test("a 3.6 group record adds its group only for a loaded module", function()
+  load_strata()
+  local S = local_value("S")
+  local names = {}
+  for _, record in ipairs(S.registry.params) do names[#names + 1] = record.name end
+  local menu = table.concat(names, "|")
+  assert_true(menu:find("|gestures|out midi|crow|out ii|out nb|tape|seq|", 1, true) ~= nil,
+    "the five records follow gestures, in order: " .. menu)
+  local function record_named(name)
+    for _, record in ipairs(S.registry.params) do
+      if record.name == name then return record end
+    end
+  end
+  -- with its module absent, a record's add does nothing
+  local before = #params.params
+  for _, name in ipairs({ "out midi", "crow", "out ii", "out nb", "tape" }) do record_named(name).add() end
+  assert_equal(#params.params, before, "no module, no params")
+  -- with its module loaded, a record calls its add_params once
+  local modules = { ["out midi"] = "io_midi_out", crow = "io_crow", ["out ii"] = "io_ii", ["out nb"] = "io_nb",
+    tape = "io_tape" }
+  for name, module in pairs(modules) do
+    local ran = 0
+    S.lib[module] = { add_params = function() ran = ran + 1 end }
+    record_named(name).add()
+    S.lib[module] = nil
+    assert_equal(ran, 1, name .. " calls S.lib." .. module .. ".add_params")
+  end
+  -- and at init
+  local calls = 0
+  load_strata({ before_init = function()
+    local_value("S").lib.io_tape = { add_params = function() calls = calls + 1 end }
+  end })
+  assert_equal(calls, 1, "S.lib.io_tape's add_params ran once, at init")
 end)
 
 end
