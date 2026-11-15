@@ -491,7 +491,7 @@ test("devices are made ready when Strata starts to lead and released when it sto
   assert_equal(device.releases, 2, "cleanup while leading releases")
 end)
 
-test("leaving the bus sends the waiting offs at once, at most 14, and drops the rest", function()
+test("leaving the bus sends the waiting offs at once, at most 14, and owes the rest", function()
   -- crow-ii.md §2: crow's leader queue holds 16 messages and drops the next when full, so the offs
   -- sent at once stay under it with the release's line; §4: crow leads only while it has a command
   -- to send, so the offs go before the bus is given up
@@ -531,6 +531,98 @@ test("leaving the bus sends the waiting offs at once, at most 14, and drops the 
   context.crow.clear()
   context.clock.run_for(1)
   assert_equal(#context.crow.sent, 0, "nothing more on later steps")
+end)
+
+-- The last line crow got for each line key of the given lines ("ii.<device>.<command>(<first>, ")
+local function last_of_line(context, prefix)
+  local last
+  for _, line in ipairs(context.crow.sent) do
+    if line:find(prefix, 1, true) == 1 then last = line end
+  end
+  return last
+end
+
+test("leaving the bus sends at most 15 lines at once; the offs past 14 are owed and the next lead lowers them", function()
+  -- design §3.4: "inside crow's 16" (crow-ii.md §2: crow's leader queue holds 16 and drops the next);
+  -- a TELEXo-like device owes two offs a note (tr and env) and releases one line an output, and a
+  -- second gate device owes one; a Just Friends-like device's one release line is registered first
+  local function releaser(name, lines)
+    return {name = name, release = function()
+      local ii = local_value("S").lib.io_ii
+      for _, args in ipairs(lines) do ii.send_direct(name, (table.unpack or unpack)(args)) end
+    end}
+  end
+  local envelopes = {}
+  for n = 1, 7 do envelopes[n] = {"env_act", n, 0} end
+  local context, S, ii = started({releaser("jfish", {{"mode", 0}}), releaser("tx", envelopes), {name = "gt"}})
+  local step = stepper(context, S)
+  assert_equal(ii.II.leave_lines, 15, "the leaving sequence's total, named")
+  lead(context, S)
+  local raised = {}
+  for n = 1, 7 do
+    for _, line in ipairs({{"tx", "tr"}, {"tx", "env"}, {"gt", "tr"}}) do
+      ii.send(line[1], line[2], n, 1)
+      raised[#raised + 1] = "ii." .. line[1] .. "." .. line[2] .. "(" .. n .. ", "
+    end
+  end
+  drain(step, ii)  -- 21 lines high
+  for n = 1, 7 do
+    ii.send_off("tx", "tr", n, 0); ii.send_off("tx", "env", n, 0); ii.send_off("gt", "tr", n, 0)
+  end
+  assert_equal(ii.queued(), 21, "21 offs wait")
+  context.crow.clear()
+  set_bus(S, "off")
+  local at_once = context.crow.sent
+  assert_equal(#at_once, 15, "fourteen offs and one release line: " .. table.concat(at_once, "|"))
+  assert_equal(at_once[15], "ii.jfish.mode(0)", "the first release line fits; the TELEXo-like ones are dropped")
+  for index = 1, 14 do assert_true(at_once[index]:find("ii.tx.env_act", 1, true) == nil, "no env_act at " .. index) end
+  assert_equal(ii.owed(), 7, "the seven offs past the fourteenth are owed")
+  context.clock.run_for(1)
+  assert_equal(#at_once, 15, "nothing more while nobody leads")
+  set_bus(S, "strata")
+  drain(step, ii)
+  assert_equal(ii.owed(), 0, "the store is emptied")
+  for _, prefix in ipairs(raised) do
+    assert_equal(last_of_line(context, prefix), prefix .. "0)", "every raised line ends low: " .. prefix)
+  end
+end)
+
+test("a line high when crow leaves, its note ending while crow is away, is lowered after ready when crow returns", function()
+  -- crow-ii.md §1: a crow that leaves can send nothing; its return under strata makes the devices ready
+  local device = {name = "probe", ready = function() local_value("S").lib.io_ii.send("probe", "setup", 1) end}
+  local context, S, ii = started({device})
+  local step = stepper(context, S)
+  S.register_note_target({name = "probe",
+    routed = function(voice) return voice == 1 end,
+    note_on = function() S.lib.io_ii.send("probe", "tr", 3, 1) end,
+    note_off = function() S.lib.io_ii.send_off("probe", "tr", 3, 0) end})
+  lead(context, S)
+  drain(step, ii)
+  S.lib.notes.play(1, {owner = "midi", key = 60, pitch = 60, velocity = 0.5, park = true, set_own = function() end})
+  assert_equal(table.concat(drain(step, ii), "|"), "ii.probe.tr(3, 1)", "the gate went high")
+  context.crow.unplug()
+  S.lib.notes.release(1, "midi", 60)  -- its off while crow is away: nothing to send it through
+  assert_equal(ii.owed(), 1, "the off is owed")
+  context.crow.clear()
+  context.crow.plug()
+  assert_equal(context.crow.sent[1], "crow.reset()")
+  assert_equal(table.concat(drain(step, ii), "|"), "ii.probe.setup(1)|ii.probe.tr(3, 0)", "ready's line, then the low")
+  assert_equal(ii.owed(), 0)
+
+  -- an off waiting in the queue when crow leaves is owed too
+  ii.send("probe", "tr", 4, 1); drain(step, ii)
+  ii.send_off("probe", "tr", 4, 0)
+  context.crow.unplug()
+  assert_equal(ii.owed(), 1, "the waiting off is owed")
+  context.crow.clear(); context.crow.plug()
+  assert_equal(table.concat(drain(step, ii), "|"), "ii.probe.setup(1)|ii.probe.tr(4, 0)")
+
+  -- a line known low whose send waited when crow left (it never reached the device) owes nothing
+  ii.send_off("probe", "tr", 5, 0); drain(step, ii)  -- port 5 known low
+  ii.send("probe", "tr", 5, 1)
+  context.crow.unplug()
+  ii.send_off("probe", "tr", 5, 0)
+  assert_equal(ii.owed(), 0, "a line still low owes no off")
 end)
 
 test("a note sounding when the bus leaves gets its low before the bus is given up", function()

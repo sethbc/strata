@@ -327,4 +327,41 @@ test("IO's voice section shows the er-301 row for the selected voice", function(
   assert_equal(row().shown, "port 12")
 end)
 
+
+-- With the real ii module (not the double): a crow plugged in, Strata
+-- leading the bus as the rig's row would set it
+local function leading_real()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.crow.plug()
+  assert_true(S.lib.io_rig.set("ii_bus", "strata"), "the rig takes ii_bus strata")
+  assert_true(S.lib.io_ii.leads(), "Strata leads")
+  return context, S
+end
+
+local function last_line(context, prefix)
+  local last
+  for _, line in ipairs(context.crow.sent) do
+    if line:find(prefix, 1, true) == 1 then last = line end
+  end
+  return last
+end
+
+test("a gate high when crow leaves is lowered when crow returns", function()
+  -- crow-ii.md §2 (ER-301): tr(port, 1) raises the trigger, tr(port, 0) lowers it; a crow that
+  -- leaves can send nothing, so the low is owed to the next lead (lib/io/ii.lua)
+  local context, S = leading_real()
+  params:set("v1_out_er301", 3)
+  S.lib.notes.play(1, played(7750, 60))
+  context.clock.run_for(0.2)
+  assert_equal(last_line(context, "ii.er301.tr(3, "), "ii.er301.tr(3, 1)", "the trigger went high")
+  context.crow.unplug()
+  S.lib.notes.release(1, "midi", 7750)  -- the note ends while crow is away
+  context.crow.clear()
+  context.crow.plug()
+  context.clock.run_for(0.2)
+  assert_equal(context.crow.sent[1], "crow.reset()", "crow's reset first")
+  assert_equal(last_line(context, "ii.er301.tr(3, "), "ii.er301.tr(3, 0)", "the trigger lowered on the return")
+end)
+
 end

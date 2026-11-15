@@ -509,4 +509,48 @@ test("IO's voice section: a detail row for the output and mode, and a row each f
   assert_equal(row_named(S, "txo decay").shown, "500 ms")
 end)
 
+
+-- With the real ii module (not the double): a crow plugged in, Strata
+-- leading the bus as the rig's row would set it
+local function leading_real()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.crow.plug()
+  assert_true(S.lib.io_rig.set("ii_bus", "strata"), "the rig takes ii_bus strata")
+  assert_true(S.lib.io_ii.leads(), "Strata leads")
+  return context, S
+end
+
+local function last_line(context, prefix)
+  local last
+  for _, line in ipairs(context.crow.sent) do
+    if line:find(prefix, 1, true) == 1 then last = line end
+  end
+  return last
+end
+
+test("a gate high when crow leaves is lowered when crow returns", function()
+  -- crow-ii.md §2 (TELEXo): tr(n, 1) and env(n, 1) raise, tr(n, 0) and env(n, 0) lower; a crow
+  -- that leaves can send nothing, so the lows are owed to the next lead (lib/io/ii.lua)
+  local context, S = leading_real()
+  params:set("v1_out_txo", 4); params:set("v1_out_txo_cv", ENVELOPE)
+  S.lib.notes.play(1, played(7750, 60))
+  context.clock.run_for(0.2)
+  assert_equal(last_line(context, "ii.txo.tr(4, "), "ii.txo.tr(4, 1)", "the trigger went high")
+  assert_equal(last_line(context, "ii.txo.env(4, "), "ii.txo.env(4, 1)", "the envelope's gate went high")
+  context.crow.unplug()
+  S.lib.notes.release(1, "midi", 7750)  -- the note ends while crow is away
+  context.crow.clear()
+  context.crow.plug()
+  context.clock.run_for(0.2)
+  assert_equal(context.crow.sent[1], "crow.reset()", "crow's reset first")
+  assert_equal(last_line(context, "ii.txo.tr(4, "), "ii.txo.tr(4, 0)", "the trigger lowered on the return")
+  assert_equal(last_line(context, "ii.txo.env(4, "), "ii.txo.env(4, 0)", "the envelope's gate lowered")
+  local env_act
+  for index, line in ipairs(context.crow.sent) do
+    if line == "ii.txo.env_act(4, 1)" then env_act = index end
+  end
+  assert_true(env_act ~= nil, "ready set the envelope up again")
+end)
+
 end

@@ -7,16 +7,21 @@
 -- message is a line of text, ii.<device>.<command>(<args>), sent through
 -- S.lib.io_crow; a bounded queue spreads them over the LFO clock's steps
 -- (II.sends_per_step a step, II.queue_max waiting, a send past it dropped
--- and counted; an off is queued exactly when its line owes one, never dropped). Leaving the lead ends every device's notes, sends
--- the waiting offs at once (II.cleanup_sends at most), releases each device
--- and only then clears the flag. The devices register with
+-- and counted; an off is queued exactly when its line owes one, never
+-- dropped). Leaving the lead ends every device's notes, sends the waiting
+-- offs at once (II.cleanup_sends at most, the rest owed), releases each
+-- device (II.leave_lines in all at once) and only then clears the flag. An
+-- off that cannot go (past the fourteenth, or crow gone) is owed, and the
+-- next lead queues it after the devices' ready. The devices register with
 -- S.register_ii_device; their params form the group strata_out_ii.
 -- Notes: docs/notes/lua/io/ii.md
 
 return function(S)
   local M = {}
 
-  local II = {sends_per_step = 4, queue_max = 48, cleanup_sends = 14}
+  -- leave_lines: everything the leaving sequence sends at once, its offs
+  -- and the releases' lines (design §3.4: inside crow's 16)
+  local II = {sends_per_step = 4, queue_max = 48, cleanup_sends = 14, leave_lines = 15}
   M.II = II
 
   local SPEC = {
@@ -38,9 +43,12 @@ return function(S)
   -- crow there, cleared only at the end of the leaving sequence); queue:
   -- the entries waiting, each {line, off, pair, key}; pairs: the (device,
   -- command) pairs that have had an off this lead; lines: their lines'
-  -- state ({high, waiting}, by key)
+  -- state ({high, waiting}, by key); owed: the offs the next lead queues
+  -- first after the devices' ready ({order = {entry, ...}, by_key}); owing:
+  -- crow left while Strata led, so an off that comes before the next lead
+  -- is owed; leave_room: the lines the leaving sequence may still send
   local state = {started = false, stopped = false, leading = false, queue = {}, lines = {}, pairs = {}, dropped = 0,
-    errors = {}}
+    errors = {}, owed = {order = {}, by_key = {}}, owing = false, leave_room = nil}
 
   local function bus() return S.lib.io_rig.get(SPEC.bus_key) end
   local function present() return S.lib.io_crow.present() end
@@ -49,6 +57,7 @@ return function(S)
   function M.leads() return state.leading end
   function M.queued() return #state.queue end
   function M.dropped() return state.dropped end
+  function M.owed() return #state.owed.order end
 
   -- ii.<device>.<command>(<args>), each argument as crow's lines write numbers
   local function line_for(device, command, ...)
@@ -136,31 +145,61 @@ return function(S)
   -- entry of its line is already an off: then nothing is added; true
   -- either way. An off for a line known low (its on was dropped at a full
   -- queue) adds nothing, is not counted, false. False and nothing unless
-  -- Strata leads
-  function M.send_off(device, command, ...)
-    if not state.leading then return false end
-    local entry = entry_for(true, device, command, ...)
-    if state.pairs[entry.pair] then
-      local line = state.lines[entry.key]
-      if line and line.high == false and line.waiting == 0 then return false end
-    else
-      learn_pair(entry.pair)
-    end
+  -- Strata leads. While crow is away after a lead (owing), an off for a
+  -- line not known low is kept as owed instead (false)
+  local function known_low(entry)
+    if not state.pairs[entry.pair] then return false end
+    local line = state.lines[entry.key]
+    return line ~= nil and line.high == false and line.waiting == 0
+  end
+
+  -- An off the next lead owes, once per line (the first kept: an off's text
+  -- is its line's)
+  local function owe(entry)
+    if state.owed.by_key[entry.key] then return end
+    state.owed.by_key[entry.key] = entry
+    table.insert(state.owed.order, entry)
+  end
+
+  -- An owed off joins the end of the queue (the pair learned at its first),
+  -- unless the newest waiting entry of its line is already an off
+  local function queue_off(entry)
+    if not state.pairs[entry.pair] then learn_pair(entry.pair) end
     for index = #state.queue, 1, -1 do
       local waiting = state.queue[index]
       if waiting.key == entry.key then
-        if waiting.off then return true end
+        if waiting.off then return end
         break
       end
     end
     table.insert(state.queue, entry)
+  end
+
+  function M.send_off(device, command, ...)
+    if not state.leading then
+      if state.owing and not state.stopped then
+        local entry = entry_for(true, device, command, ...)
+        if not known_low(entry) then owe(entry) end
+      end
+      return false
+    end
+    local entry = entry_for(true, device, command, ...)
+    if known_low(entry) then return false end
+    queue_off(entry)
     return true
   end
 
-  -- At once, never queued (a device's release): false unless Strata leads
+  -- At once, never queued (a device's release): false unless Strata leads;
+  -- in the leaving sequence, only while its total is under II.leave_lines
+  -- (false and dropped past it)
   function M.send_direct(device, command, ...)
     if not state.leading then return false end
-    return S.lib.io_crow.send_now(line_for(device, command, ...))
+    local line = line_for(device, command, ...)
+    if state.leave_room then
+      if state.leave_room <= 0 then return false end
+      state.leave_room = state.leave_room - 1
+    end
+    return S.lib.io_crow.send_now(line)
   end
 
   -- The first sends_per_step waiting, in order, from the LFO clock's step;
@@ -178,9 +217,11 @@ return function(S)
           line.high = false
         else
           -- a pair's waiting sends are counted when it is learned and every
-          -- later one as it joins, so the count is exact: a short one is a bug
+          -- later one as it joins, so the count is exact: a short one is a
+          -- bug (the line is marked high first: its send has gone)
+          line.high = true
           assert(line.waiting > 0, "S.lib.io_ii: a sent line's count of waiting sends is short")
-          line.high, line.waiting = true, line.waiting - 1
+          line.waiting = line.waiting - 1
         end
       end
     end
@@ -206,20 +247,28 @@ return function(S)
     end
   end
 
-  -- Strata leads: the flag set, then each device made ready. Once only: a
-  -- second crow plugged in calls norns.crow.add again with no remove, and
-  -- its setup leaves the lead and the queue as they are
+  -- Strata leads: the flag set, a new lead knowing nothing of the lines,
+  -- then each device made ready, then the owed offs queued (never refused
+  -- or dropped) and the store emptied. Once only: a second crow plugged in
+  -- calls norns.crow.add again with no remove, and its setup leaves the
+  -- lead and the queue as they are
   local function take_lead()
     if state.leading then return end
     state.leading = true
+    forget_lines()
     call_devices("ready")
+    local owed = state.owed.order
+    state.owed, state.owing = {order = {}, by_key = {}}, false
+    for _, entry in ipairs(owed) do queue_off(entry) end
     request_redraw()
   end
 
   -- The leaving sequence, with the flag still set: each device's notes
   -- ended (their offs join the queue), the queue's offs sent at once in
-  -- order (cleanup_sends at most, the rest dropped), each device released,
-  -- then the flag cleared and anything a release queued dropped
+  -- order (cleanup_sends at most, the rest owed to the next lead), each
+  -- device released (its lines sent while the sequence's total stays at
+  -- most leave_lines, the rest dropped), then the flag cleared and
+  -- anything a release queued dropped
   local function give_up_lead()
     if not state.leading then return end
     local targets = S.lib.io_targets
@@ -229,23 +278,36 @@ return function(S)
     local waiting, sent = state.queue, 0
     state.queue = {}
     for _, entry in ipairs(waiting) do
-      if entry.off and sent < II.cleanup_sends then
-        S.lib.io_crow.send_now(entry.line)
-        sent = sent + 1
+      if entry.off then
+        if sent < II.cleanup_sends then
+          S.lib.io_crow.send_now(entry.line)
+          sent = sent + 1
+        else
+          owe(entry)
+        end
       end
     end
+    state.leave_room = II.leave_lines - sent
     call_devices("release")
+    state.leave_room = nil
     state.leading = false
     state.queue = {}
     forget_lines()
     request_redraw()
   end
 
-  -- The crow left: nothing to send it through
+  -- The crow left while Strata led: nothing to send it through. The
+  -- waiting offs are owed; the waiting sends never reached the device, so
+  -- each line keeps only what crow got (high, low or unknown), and an off
+  -- that comes before the next lead is owed unless its line is known low
   local function crow_gone()
+    if not state.leading then return end
+    for _, entry in ipairs(state.queue) do
+      if entry.off then owe(entry) end
+    end
     state.queue = {}
-    forget_lines()
-    state.leading = false
+    for _, line in pairs(state.lines) do line.waiting = 0 end
+    state.leading, state.owing = false, true
   end
 
   local function send_handlers()
