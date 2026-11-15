@@ -17,7 +17,7 @@ local unit_files, load_unit_files = h.unit_files, h.load_unit_files
 local function stub_state_source(extra_registry)
   return "return function() return { marker = 2, registry = { pages = {}, params = {}, start = {}, cleanup = {},"
     .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
-    .. " lfo_destinations = {}, fx_params = {}, menu_close = {}, " .. extra_registry .. " }, lib = {}, register_start = function() end,"
+    .. " lfo_destinations = {}, fx_params = {}, menu_close = {}, mod_sources = {}, " .. extra_registry .. " }, lib = {}, register_start = function() end,"
     .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
     .. " register_lfo_destination = function() end, register_param_filter = function() end,"
     .. " register_source_change = function() end, register_scene_field = function() end,"
@@ -31,9 +31,9 @@ local function stub_state_source(extra_registry)
     .. " register_step_output = function() end, register_mod_source = function() end,"
     -- 3.5's
     .. " register_voice_stop = function() end, register_freeze_change = function() end,"
-    -- 3.6's (lib/io/targets.lua calls these as it loads)
+    -- 3.6's (lib/io/targets.lua and lib/io/crow.lua call these as they load)
     .. " register_note_hook = function() end, register_silence_change = function() end,"
-    .. " register_io_section = function() end } end"
+    .. " register_note_target = function() end, register_io_section = function() end } end"
 end
 
 test("each load gets its own data directory, even after the same random seed (#50)", function()
@@ -2085,6 +2085,7 @@ end)
 
 test("the crow stub counts function assignments and resets", function()
   local context = load_strata()
+  norns.crow.init(); context.crow.resets = 0  -- as a script clear leaves it: lib/io/crow.lua's handlers and events set aside
   crow.input[1].stream = function() end
   assert_equal(context.crow.function_assignments, 1, "counted unplugged")
   assert_equal(#context.crow.sent, 0, "and nothing sent")
@@ -2105,6 +2106,7 @@ end)
 
 test("a fired crow event reaches the script's handler, and an unassigned one prints", function()
   local context = load_strata()
+  norns.crow.init(); context.crow.resets = 0  -- as a script clear leaves it: lib/io/crow.lua's handlers and events set aside
   context.crow.plug()
   local got
   crow.input[1].stream = function(...) got = {...} end
