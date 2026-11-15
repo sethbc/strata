@@ -17,7 +17,8 @@ local unit_files, load_unit_files = h.unit_files, h.load_unit_files
 local function stub_state_source(extra_registry)
   return "return function() return { marker = 2, registry = { pages = {}, params = {}, start = {}, cleanup = {},"
     .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
-    .. " lfo_destinations = {}, fx_params = {}, menu_close = {}, mod_sources = {}, " .. extra_registry .. " }, lib = {}, register_start = function() end,"
+    .. " lfo_destinations = {}, fx_params = {}, menu_close = {}, mod_sources = {},"
+    .. " ii_devices = {}, " .. extra_registry .. " }, lib = {}, register_start = function() end,"  -- ii_devices: lib/io/ii.lua's add_params at init
     .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
     .. " register_lfo_destination = function() end, register_param_filter = function() end,"
     .. " register_source_change = function() end, register_scene_field = function() end,"
