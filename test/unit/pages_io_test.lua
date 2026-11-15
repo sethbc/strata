@@ -533,4 +533,104 @@ test("leaving IO ends a pinned view", function()
   assert_true(screen_shows(context, current_row(S).label), "which shows")
 end)
 
+-- go_to_row (#707): three sections; the middle one has a param row, a
+-- status row (not selectable), a rig row, an action row and a second rig
+-- row of the first's key; the others have rows of identities the middle
+-- one also has (a param) or lacks (a rig key)
+local function reach_sections(S)
+  local runs = { count = 0 }
+  S.register_io_section({ name = "top", title = "top", rows = function()
+    return {
+      { label = "top rate", kind = "param", param_id = "mutation_rate" },
+      { label = "top faders", kind = "rig", key = "faders_port" },
+    }
+  end })
+  S.register_io_section({ name = "middle", title = "middle", rows = function()
+    return {
+      { label = "rate", kind = "param", param_id = "mutation_rate" },
+      { kind = "status", text = "a note" },
+      { label = "e16 a", kind = "rig", key = "e16_port" },
+      { label = "act", kind = "action", hint = "act", id = "act", run = function() runs.count = runs.count + 1 end },
+      { label = "e16 b", kind = "rig", key = "e16_port" },
+    }
+  end })
+  plain_section(S, "bottom", 4)
+  return runs
+end
+
+test("go_to_row puts the cursor on a row found by its identity", function()
+  local _, S = loaded()
+  reach_sections(S)
+  show_page("IO")
+  local io = S.lib.pages_io
+  assert_equal(current_row(S).label, "top rate", "the page starts at its top")
+  local row = io.go_to_row("probe", "middle", { key = "e16_port" })
+  assert_equal(row.label, "e16 a", "the row returned, the first of the two of that key")
+  assert_equal(current_row(S).label, "e16 a", "the cursor on it, past the status row")
+  assert_equal(current_row(S).section, "middle")
+  -- from the last row of the last section, back up
+  io.show_section("bottom"); enc(2, 10)
+  assert_equal(current_row(S).label, "bottom 4", "on the page's last row")
+  row = io.go_to_row("probe", "middle", { key = "e16_port" })
+  assert_equal(row.label, "e16 a", "the first of the two, not the nearer second")
+  assert_equal(current_row(S).label, "e16 a")
+  -- each identity: a param (one another section also has), an id
+  io.show_section("bottom"); enc(2, 10)
+  row = io.go_to_row("probe", "middle", { param_id = "mutation_rate" })
+  assert_equal(row.label, "rate", "the middle section's param row, not the top's")
+  assert_equal(current_row(S).label, "rate")
+  row = io.go_to_row("probe", "middle", { id = "act" })
+  assert_equal(row.label, "act", "a row found by its id")
+  assert_equal(current_row(S).label, "act")
+  -- the cursor already on the row
+  row = io.go_to_row("probe", "middle", { id = "act" })
+  assert_equal(current_row(S).label, "act", "stays")
+end)
+
+test("go_to_row raises, naming who asked and what was missing", function()
+  local _, S = loaded()
+  reach_sections(S)
+  show_page("IO")
+  local io, rig = S.lib.pages_io, S.lib.io_rig
+  enc(2, 1)
+  local cursor, rate = S.io_cursor, params:get("mutation_rate")
+  local function raises(section, match, expected)
+    local ok, problem = pcall(io.go_to_row, "probe", section, match)
+    assert_true(not ok, expected .. " raises")
+    assert_equal(tostring(problem), expected)
+    assert_equal(S.io_cursor, cursor, expected .. ": the cursor where it was")
+  end
+  raises("nowhere", { key = "e16_port" }, "probe layout: no row key e16_port in nowhere")
+  raises("middle", { id = "gone" }, "probe layout: no row id gone in middle")
+  raises("middle", { key = "faders_port" }, "probe layout: no row key faders_port in middle")
+  assert_equal(rig.get("e16_port"), rig.RIG.specs.e16_port.default, "no rig setting changed")
+  assert_equal(rig.get("faders_port"), rig.RIG.specs.faders_port.default)
+  assert_equal(params:get("mutation_rate"), rate, "no param changed")
+  -- a match naming no identity, or two
+  assert_true(not pcall(io.go_to_row, "probe", "middle", {}), "a match with no identity raises")
+  assert_true(not pcall(io.go_to_row, "probe", "middle", { key = "e16_port", id = "act" }), "nor two")
+  -- an E2 that does not land
+  local real_enc = enc
+  enc = function() end
+  local ok, problem = pcall(io.go_to_row, "probe", "middle", { id = "act" })
+  enc = real_enc
+  assert_true(not ok, "a cursor that did not reach raises")
+  assert_equal(tostring(problem), "probe layout: the cursor did not reach id act")
+end)
+
+test("go_to_row turns nothing and presses nothing", function()
+  local _, S = loaded()
+  local runs = reach_sections(S)
+  show_page("IO")
+  local io, rig = S.lib.pages_io, S.lib.io_rig
+  local rate = params:get("mutation_rate")
+  io.go_to_row("probe", "middle", { key = "e16_port" })
+  assert_equal(rig.get("e16_port"), rig.RIG.specs.e16_port.default, "the rig row's setting kept")
+  io.go_to_row("probe", "middle", { param_id = "mutation_rate" })
+  assert_equal(params:get("mutation_rate"), rate, "the param row's param kept")
+  io.go_to_row("probe", "middle", { id = "act" })
+  assert_equal(runs.count, 0, "no K3 action ran")
+  assert_equal(S.lib.ui_modal.top(), nil, "and nothing opened")
+end)
+
 end
