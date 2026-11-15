@@ -5,8 +5,8 @@
 - **Nothing by default**: with `osc_feedback` off, or no sender known, no clock runs and nothing is sent. The feedback clock (one `clock.run`) exists only while feedback is on and a sender is known (`M.running()`); it is canceled before a replacement starts, when feedback goes off and at cleanup.
 - **Rig settings are read only**: `S.lib.io_rig.get` and `on_change`, never `set` or `step` (a structure test).
 - **Every message is contained** (`S.lib.ui_frame.contained_call`): one that raises prints once and does not reach norns' event. A wrong address, argument or voice prints one line, `strata: osc <path> ignored: <why>`, and does nothing; the actions print their own line for a range they refuse. The module calls no engine command itself, only `S.lib.io_actions`.
-- **A tick sends at most `OSC.sends_per_tick` (32) messages**: the scene, the voices' `running` and the patterns first (at most nine), then watched params in list order, each with its value now; the rest wait for the next tick.
-- **A value that arrived is not echoed**: a `/param/<id>` sets that id's `last_sent` to the arrived value and its `arrived` time, and the tick skips an id that arrived within `OSC.echo_seconds` (0.25).
+- **A tick sends at most `OSC.sends_per_tick` (32) messages**: the scene, the voices' `running` and the patterns first (at most nine), then the params that differ from what the sender has, the longest-waiting first (the tick each was first seen differing, then the watch list's order; `state.since`), each with its value now; the rest wait for the next tick. A param that changes every tick therefore cannot shut out later ones: each is sent by the second tick after its change (a test with forty params changing for ten ticks).
+- **A value that arrived is not echoed**: a `/param/<id>` for a watched id sets its `last_sent` to the arrived value and its `arrived` time, and the tick skips an id that arrived within `OSC.echo_seconds` (0.25). An id that is not watched is recorded nowhere, so a sender cannot grow the tables (`M.tracked()` counts the arrivals).
 - **Baseline**: starting the clock records every watched value and the three states as already known, so only changes are sent; `/strata/hello` clears those records, so the next tick sends everything watched (a scene is sent only once `S.current_scene` is set).
 
 ## What it owns
@@ -26,6 +26,6 @@ Every message with a `from` host sets the last sender (feedback goes to `{host, 
 
 IO's `osc` section: rig rows `osc_feedback` and `osc_port`; its status is the sender's host or `no sender`. Its layout states are `no sender` and `with a sender` (the rig setting cannot be set from the module, so a state shows the setting as it is).
 
-`tools/touchosc/layout.lua` is the layouts' description and `tools/touchosc/generate.py` writes `extras/touchosc/strata-tablet.tosc` and `strata-phone.tosc` from it (`tools/touchosc/README.md`); the `.tosc` format is unofficial and unverified in TouchOSC.
+`tools/touchosc/layout.lua` is the layouts' description and `tools/touchosc/generate.py` writes `extras/touchosc/strata-tablet.tosc` and `strata-phone.tosc` from it, the same bytes every run (node IDs are uuid5 of their paths), and `generate.py --check` exits non-zero when a committed file differs (`tools/touchosc/README.md`); the `.tosc` format is unofficial and unverified in TouchOSC.
 
 Tests: `test/unit/io_osc_test.lua`.

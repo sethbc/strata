@@ -131,8 +131,16 @@ def osc_message(messages, path, argument, send, receive, trigger="ANY"):
         partial(arguments, "CONSTANT", argument[1], argument[2])
 
 
-def node(parent, kind, name, frame, color, interactive=True):
-    element = ET.SubElement(parent, "node", {"ID": str(uuid.uuid4()), "type": kind})
+# A fixed namespace: a node's ID is the uuid5 of its path in the layout, so a run changes nothing
+NAMESPACE = uuid.UUID("5d0c7e1e-3a54-4c53-9a3b-7b1f6f0f2a10")
+
+
+def node_id(path):
+    return str(uuid.uuid5(NAMESPACE, path))
+
+
+def node(parent, kind, name, frame, color, path, interactive=True):
+    element = ET.SubElement(parent, "node", {"ID": node_id(path), "type": kind})
     props = ET.SubElement(element, "properties")
     prop(props, "s", "name", name)
     prop(props, "r", "frame", frame)
@@ -147,8 +155,8 @@ def node(parent, kind, name, frame, color, interactive=True):
     return element, props, values, messages
 
 
-def label(parent, text, frame):
-    element, props, values, _ = node(parent, "LABEL", "label " + text, frame, COLORS["label"], interactive=False)
+def label(parent, text, frame, path):
+    element, props, values, _ = node(parent, "LABEL", "label " + text, frame, COLORS["label"], path + "/label", interactive=False)
     props.find("property[key='background']/value").text = "0"
     props.find("property[key='outline']/value").text = "0"
     prop(props, "i", "textSize", 14)
@@ -159,11 +167,11 @@ def label(parent, text, frame):
     return holder
 
 
-def control(parent, spec, cell_w, cell_h, count):
+def control(parent, spec, cell_w, cell_h, count, path):
     frame = (spec["x"] * cell_w, spec["y"] * cell_h, spec["w"] * cell_w, spec["h"] * cell_h)
     kind = spec["kind"]
     tosc_type = "FADER" if kind == "fader" else "BUTTON"
-    element, props, values, messages = node(parent, tosc_type, spec["label"], frame, COLORS[kind])
+    element, props, values, messages = node(parent, tosc_type, spec["label"], frame, COLORS[kind], path)
     if tosc_type == "FADER":
         prop(props, "i", "response", 0)
         prop(props, "b", "bar", True)
@@ -187,43 +195,68 @@ def control(parent, spec, cell_w, cell_h, count):
             osc_message(messages, listen, ("VALUE", "INTEGER", 0, 1), False, True)
         else:
             messages.findall("osc")[0].find("receive").text = "1"
-    label(parent, spec["label"], (frame[0], frame[1], frame[2], min(frame[3], 24.0)))
+    label(parent, spec["label"], (frame[0], frame[1], frame[2], min(frame[3], 24.0)), path)
     count[0] += 2
 
 
 def build(layout):
     width, height = layout["width"], layout["height"]
+    name = layout["name"]
     root = ET.Element("lexml", {"version": "3"})
-    top, props, values, messages = node(root, "GROUP", layout["name"], (0.0, 0.0, width, height), COLORS["background"])
+    top, props, values, messages = node(root, "GROUP", name, (0.0, 0.0, width, height), COLORS["background"], name)
     children = ET.SubElement(top, "children")
-    pager, pager_props, _, _ = node(children, "PAGER", "pages", (0.0, 0.0, width, height), COLORS["background"])
+    pager, pager_props, _, _ = node(children, "PAGER", "pages", (0.0, 0.0, width, height), COLORS["background"],
+                                    name + "/pages")
     prop(pager_props, "b", "tabbar", True)
     prop(pager_props, "i", "tabbarSize", 40)
     page_children = ET.SubElement(pager, "children")
     count = [2]
     for page in layout["pages"]:
+        page_path = name + "/" + page["title"]
         group, group_props, _, _ = node(page_children, "GROUP", page["title"], (0.0, 0.0, width, height),
-                                         COLORS["background"])
+                                         COLORS["background"], page_path)
         prop(group_props, "s", "tabLabel", page["title"])
         inner = ET.SubElement(group, "children")
         count[0] += 1
         usable_h = height - 40.0
         cell_w, cell_h = width / page["columns"], usable_h / page["rows"]
         for spec in page["controls"]:
-            control(inner, spec, cell_w, cell_h, count)
+            control(inner, spec, cell_w, cell_h, count, page_path + "/" + spec["label"])
     return root, count[0]
 
 
+def render(layout):
+    """The file's bytes and its node count: the same bytes every run (ids are uuid5 of a node's path)."""
+    root, nodes = build(layout)
+    raw = ET.tostring(root, encoding="UTF-8")
+    return zlib.compress(raw, 9), len(raw), nodes
+
+
 def main():
+    check = "--check" in sys.argv[1:]
+    unknown = [argument for argument in sys.argv[1:] if argument != "--check"]
+    if unknown:
+        sys.exit("usage: generate.py [--check]")
     data = read_layout()
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    differs = []
+    if not check:
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
     for key in ("tablet", "phone"):
-        root, controls = build(data[key])
-        raw = ET.tostring(root, encoding="UTF-8")
+        compressed, raw_size, nodes = render(data[key])
         path = OUT_DIR / (data[key]["name"] + ".tosc")
-        path.write_bytes(zlib.compress(raw))
-        print("%s: %d bytes written, %d bytes decompressed, %d nodes (%d controls and as many labels)" % (path.relative_to(ROOT), path.stat().st_size,
-                                                                           len(raw), controls, (controls - 2 - len(data[key]["pages"])) // 2))
+        controls = (nodes - 2 - len(data[key]["pages"])) // 2
+        if check:
+            if not path.exists() or path.read_bytes() != compressed:
+                differs.append(str(path.relative_to(ROOT)))
+            continue
+        path.write_bytes(compressed)
+        print("%s: %d bytes written, %d bytes decompressed, %d nodes (%d controls and as many labels)" % (
+            path.relative_to(ROOT), len(compressed), raw_size, nodes, controls))
+    if check:
+        if differs:
+            sys.exit("generate.py --check: differs from layout.lua: " + ", ".join(differs)
+                     + " (run python3 tools/touchosc/generate.py)")
+        print("generate.py --check: both files match layout.lua")
 
 
 if __name__ == "__main__":

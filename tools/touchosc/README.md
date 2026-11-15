@@ -8,7 +8,13 @@ From the repository root:
 
     python3 tools/touchosc/generate.py
 
-It needs Python 3 (standard library only, no packages) and `lua` or `luajit` on the PATH, which reads `layout.lua`. It is run on demand, never by the tests, and prints each file's size, decompressed size and node count. Run it again after changing `layout.lua` and commit both files. (A new run changes the files' bytes, because every control gets a fresh random ID.)
+It needs Python 3 (standard library only, no packages) and `lua` or `luajit` on the PATH, which reads `layout.lua`. It is run on demand, never by the tests, and prints each file's size, decompressed size and node count. Run it again after changing `layout.lua` and commit both files. The output is the same bytes every run: a node's ID is a uuid5 of its path in the layout (layout name, page, control), and the compression level is fixed.
+
+To check that the committed files match `layout.lua` without writing anything:
+
+    python3 tools/touchosc/generate.py --check
+
+It regenerates both files in memory and exits non-zero, naming the file, when one differs.
 
 ## What is verified
 
