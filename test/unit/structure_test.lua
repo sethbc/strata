@@ -628,7 +628,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "targets ended",
-  "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler",
+  "midi out", "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler",
   "midi ports", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
@@ -734,6 +734,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(S.lib.positions, "hold_scan", "scan holds")
   watch_method(S.lib.notes, "stop_flush", "notes flush")
   watch_method(S.lib.io_targets, "stop_all", "targets ended")
+  watch_method(S.lib.io_midi_out, "stop", "midi out")  -- lib/io/midi_out.lua: the express queue dropped
   local real_set = params.set
   params.set = function(self, id, ...)
     if param_steps[id] then observe(param_steps[id]) end

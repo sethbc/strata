@@ -1728,4 +1728,30 @@ test("the MIDI port moved onto a claimed port listens to nothing until the claim
   assert_equal(#context.calls_named("retrigger"), 1, "and the port plays")
 end)
 
+-- 3.6 (MIDI out's program change in): with midi_pc_in on, a program
+-- change 0-15 on midi_pc_channel (or any) goes to S.lib.io_midi_out before
+-- the MPE branch; any other, or with it off, is ignored as before
+test("a program change reaches MIDI out only with midi_pc_in on, in every channel mode", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local heard = {}
+  S.lib.io_midi_out.program_change_in = function(port, value) heard[#heard + 1] = port .. ":" .. value end
+  local function program(value, channel) context.midi.send(1, { type = "program_change", val = value, ch = channel }) end
+  context.clear_engine_calls()
+  program(3, 1)
+  assert_equal(#heard, 0, "off: nothing")
+  params:set("midi_pc_in", 1)
+  program(3, 1); program(16, 1); program(15, 9)
+  assert_equal(table.concat(heard, " "), "1:3 1:15", "0 to 15 on any channel, with the port")
+  params:set("midi_pc_channel", 3)  -- options any, 1..16: channel 2
+  heard = {}
+  program(4, 1); program(5, 2)
+  assert_equal(table.concat(heard, " "), "1:5", "only channel 2's")
+  params:set("midi_channel_mode", 3)
+  heard = {}
+  program(6, 2)
+  assert_equal(table.concat(heard, " "), "1:6", "in an MPE mode too")
+  assert_equal(call_names(context, { retrigger = true, noteOn = true }), "", "no note played")
+end)
+
 end
