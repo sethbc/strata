@@ -63,6 +63,36 @@ end
 
 local ALL = { "note_on", "note_off", "stop_all", "active", "inactive", "add_params" }
 
+-- Another nb host choosing and leaving a player, as nb's player base counts
+-- (checks.md §1, duty 5: a nil entry means not chosen; it activates on nil
+-- and removes the entry at 0): the test's own lines, no nb code
+local function other_host_chooses(name)
+  if nb_player_refcounts[name] == nil then
+    nb_player_refcounts[name] = 1
+    return true  -- it would call active
+  end
+  nb_player_refcounts[name] = nb_player_refcounts[name] + 1
+  return false
+end
+
+local function other_host_leaves(name)
+  if nb_player_refcounts[name] == nil then return false end
+  nb_player_refcounts[name] = nb_player_refcounts[name] - 1
+  if nb_player_refcounts[name] == 0 then
+    nb_player_refcounts[name] = nil
+    return true  -- it would call inactive
+  end
+  return false
+end
+
+-- A player whose method raises (a raw field, as a mod writes it); its calls still recorded
+local function raising(player, method)
+  player[method] = function(_, ...)
+    table.insert(player.calls, { method, ... })
+    error("probe " .. method .. " broke")
+  end
+end
+
 test("with no voice mod the list is none and nothing is called", function()
   -- duty 1: nil or empty note_players gives the list none
   for _, before in ipairs({ function() _G.note_players = nil end, function() end }) do
@@ -176,7 +206,7 @@ test("choosing a player names it, counts it and activates it once", function()
   choose(2, "none")
   assert_equal(count(alpha, "inactive"), 0, "still chosen by voice 3")
   params:set("v3_out_nb", 1)
-  assert_equal(nb_player_refcounts.alpha, 0)
+  assert_equal(nb_player_refcounts.alpha, nil, "removed at 0, as nb's count_down does")
   assert_equal(count(alpha, "inactive"), 1, "its own inactive once")
 end)
 
@@ -338,12 +368,12 @@ test("a PSET read moving a voice between players counts each once", function()
   assert_equal(nb_player_refcounts.alpha, 1, "the same player again: no second count")
   assert_equal(count(alpha, "active"), 2, "and no second active")
   params:read(with_zeta)
-  assert_equal(nb_player_refcounts.alpha, 0)
+  assert_equal(nb_player_refcounts.alpha, nil)
   assert_equal(nb_player_refcounts.zeta, 1)
   assert_equal(count(alpha, "inactive"), 2, "alpha left")
   assert_equal(count(zeta, "active"), 2, "zeta chosen")
   params:read(with_none)
-  assert_equal(nb_player_refcounts.zeta, 0)
+  assert_equal(nb_player_refcounts.zeta, nil)
   assert_equal(count(zeta, "inactive"), 2, "zeta left")
   params:read(with_none)
   assert_equal(count(zeta, "inactive"), 2, "none again: nothing")
@@ -402,6 +432,145 @@ test("a player's own crow or ii lines never count as Strata's", function()
   for _, line in ipairs(context.crow.sent) do
     assert_true(line:sub(1, 3) ~= "ii.", "no ii line from Strata: " .. line)
   end
+end)
+
+test("a player Strata leaves is activated again by another host's choice", function()
+  -- duty 5 against nb's count_up: the entry goes, so the other host sees nil and activates
+  local _, _, players = started({ { "alpha", ALL } })
+  choose(2, "alpha"); choose(2, "none")
+  assert_equal(nb_player_refcounts.alpha, nil, "no entry left")
+  assert_true(other_host_chooses("alpha"), "the other host activates it")
+  assert_equal(nb_player_refcounts.alpha, 1)
+  -- Strata choosing it now neither activates it again nor, on leaving, deactivates it
+  choose(3, "alpha")
+  assert_equal(nb_player_refcounts.alpha, 2)
+  assert_equal(count(players.alpha, "active"), 1, "Strata's own activation only")
+  choose(3, "none")
+  assert_equal(nb_player_refcounts.alpha, 1, "the other host's count kept")
+  assert_equal(count(players.alpha, "inactive"), 1, "Strata's own deactivation only")
+  assert_true(other_host_leaves("alpha"), "the other host's leave ends it")
+end)
+
+test("a player another host holds is neither activated nor deactivated by Strata", function()
+  local _, _, players = started({ { "beta", ALL } }, function() _G.nb_player_refcounts = { beta = 1 } end)
+  choose(2, "beta")
+  assert_equal(nb_player_refcounts.beta, 2)
+  choose(2, "none")
+  assert_equal(nb_player_refcounts.beta, 1, "left at 1")
+  assert_equal(count(players.beta, "active"), 0, "no active")
+  assert_equal(count(players.beta, "inactive"), 0, "no inactive")
+end)
+
+test("a player whose add_params raises leaves init and the other players whole", function()
+  local context = load_strata({ before_load = function(c)
+    raising(c.nb.add_player("alpha"), "add_params")
+    c.nb.add_player("zeta")
+  end })
+  finish_startup(context)
+  h.claim_script_errors(context, 1, "strata: nb player alpha add_params failed: ", "probe add_params broke")
+  local S = local_value("S")
+  assert_equal(count(note_players.zeta, "add_params"), 1, "the next player's add_params ran")
+  assert_true(params.lookup["nb_sentinel_param"] ~= nil, "the sentinel added")
+  assert_true(params.lookup["tapeloop"] ~= nil, "the groups after it added")
+  assert_equal(options("v1_out_nb"), "none alpha zeta", "both listed")
+  choose(1, "alpha")
+  assert_equal(nb_player_refcounts.alpha, 1)
+  assert_true(nb_target(S).routed(1))
+end)
+
+test("a player whose note_on, active or stop_all raises acts as if the call returned", function()
+  local context, S, players = started({ { "alpha", ALL }, { "zeta", ALL } })
+  raising(players.alpha, "active")
+  choose(2, "alpha")
+  h.claim_script_errors(context, 1, "strata: nb player alpha active failed: ", "probe active broke")
+  assert_equal(nb_player_refcounts.alpha, 1, "counted")
+  assert_equal(S.lib.io_keyed.key("v2_out_nb"), "alpha", "chosen")
+  choose(3, "zeta")
+  assert_equal(count(players.zeta, "active"), 1, "the next player activated")
+  raising(players.alpha, "note_on")
+  local target = nb_target(S)
+  target.note_on(2, "s1", 60, 0.5, { source = "step" })
+  h.claim_script_errors(context, 1, "strata: nb player alpha note_on failed: ", "probe note_on broke")
+  target.note_on(3, "s1", 64, 0.5, { source = "step" })
+  assert_equal(count(players.zeta, "note_on"), 1, "the other voice's player plays")
+  target.note_off(2, "s1")
+  assert_equal(calls_named(players.alpha, "note_off")[1][2], 60, "the off still reaches the player")
+  raising(players.alpha, "stop_all")
+  cleanup()
+  h.claim_script_errors(context, 1, "strata: nb player alpha stop_all failed: ", "probe stop_all broke")
+  assert_equal(count(players.zeta, "stop_all"), 1, "the other player still stopped")
+  assert_equal(nb_player_refcounts.alpha, 1, "counts untouched")
+  assert_equal(nb_player_refcounts.zeta, 1)
+end)
+
+test("the keyed module's PSET hook runs before this module's, so a read ends on the players it chose", function()
+  -- register_pset_hook appends, the hooks run in registration order, and lib/io/keyed.lua is included first
+  local context, S, players = started({ { "alpha", ALL }, { "zeta", ALL } })
+  local order = {}
+  for index, hook in ipairs(S.registry.pset_hooks) do order[hook.name] = index end
+  assert_true(order.io_keyed < order.io_nb, "io_keyed's hook first")
+  local alpha, zeta = players.alpha, players.zeta
+  choose(2, "zeta")
+  local with_zeta = write_pset(context, "order_zeta")
+  choose(2, "alpha")
+  params:read(with_zeta)
+  assert_equal(S.lib.io_keyed.key("v2_out_nb"), "zeta", "the new player chosen")
+  assert_equal(nb_player_refcounts.zeta, 1, "counted once")
+  assert_equal(count(zeta, "active"), 2, "activated once by the read")
+  assert_equal(count(alpha, "inactive"), 1, "the old one released once")
+  assert_equal(count(zeta, "stop_all"), 1, "stop_all reaches the player chosen after the read")
+  assert_equal(count(alpha, "stop_all"), 0, "not the one it left")
+  -- a PSET saved before the param (no key line): the keyed hook puts the voice on none, then this hook runs
+  local file = io.open(with_zeta, "r")
+  local text = file:read("*a")
+  file:close()
+  local older = context.data_dir .. "order_older.pset"
+  file = io.open(older, "w")
+  file:write((text:gsub('"v2_out_nb_key"[^\n]*\n', "")))
+  file:close()
+  params:read(older)
+  assert_equal(S.lib.io_keyed.key("v2_out_nb"), "none", "the keyed hook chose none")
+  assert_equal(nb_player_refcounts.zeta, nil, "released")
+  assert_equal(count(zeta, "stop_all"), 1, "no stop_all for a player no voice has after the read")
+end)
+
+test("the nb params stay out of scenes, LFOs, macros, fader pages, randomize, mutation and drift", function()
+  -- the plan's Params constraint: PSET-only
+  local _, S = started({ { "alpha" } })
+  local ids = {}
+  for voice = 1, S.constants.NUM_VOICES do
+    ids["v" .. voice .. "_out_nb"] = true
+    ids["v" .. voice .. "_out_nb_key"] = true
+  end
+  capture_scene(1)
+  local function walk(value, path)
+    if type(value) ~= "table" then return end
+    for key, inner in pairs(value) do
+      assert_true(not ids[key], "a scene holds " .. tostring(key) .. " at " .. path)
+      walk(inner, path .. "." .. tostring(key))
+    end
+  end
+  walk(S.scenes[1], "scene 1")
+  for _, destination in ipairs(S.LFO_DESTINATIONS) do
+    local id = destination.resolve()
+    assert_true(not ids[id or ""], "an LFO destination " .. tostring(id))
+  end
+  for _, id in ipairs(S.lib.macros.target_ids()) do assert_true(not ids[id], "a macro target " .. id) end
+  for _, record in ipairs(S.registry.macro_targets) do assert_true(not ids[record.id], "registered " .. record.id) end
+  for _, source in ipairs({ 1, 2, 10 }) do  -- synth, buffer 1, input
+    params:set("v1_source", source)
+    for _, id in ipairs(fader_param_ids(1)) do assert_true(not ids[id], "a fader param " .. id .. " (" .. source .. ")") end
+  end
+  params:set("v1_source", 1)
+  choose(1, "alpha"); choose(4, "alpha")
+  math.randomseed(11)
+  for _ = 1, 20 do randomize_voice(1) end
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  for _ = 1, 20 do gentle_mutate() end
+  for _ = 1, 50 do drift_update() end
+  assert_equal(S.lib.io_keyed.key("v1_out_nb"), "alpha", "voice 1 keeps its player")
+  assert_equal(S.lib.io_keyed.key("v4_out_nb"), "alpha", "voice 4 too")
+  assert_equal(nb_player_refcounts.alpha, 2, "counted as before")
 end)
 
 end

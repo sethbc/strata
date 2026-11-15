@@ -84,7 +84,9 @@ return function(S)
     local counts = refcounts()
     state.uses[key] = math.max((state.uses[key] or 0) - 1, 0)
     local after = math.max((counts[key] or 0) - 1, state.uses[key])
-    counts[key] = after
+    -- removed at 0, as nb's own host does: another host activates a player
+    -- only when its entry is nil
+    counts[key] = after > 0 and after or nil
     if after == 0 then deactivate(player, key) end
   end
 
