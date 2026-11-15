@@ -139,15 +139,34 @@ test("its eight params are PSET-only and its rows show on the voice section", fu
   local ids = {"jf_level"}
   for voice = 1, S.constants.NUM_VOICES do ids[#ids + 1] = "v" .. voice .. "_out_jf" end
   assert_equal(#ids, 8)
-  local in_order = {}
-  for _, voice_params in pairs(S.param_order or {}) do
-    if type(voice_params) == "table" then
-      for _, id in ipairs(voice_params) do in_order[id] = true end
+  for _, id in ipairs(ids) do assert_true(params.lookup[id] ~= nil, id .. " exists") end
+  local function is_ours(id) return type(id) == "string" and id:find("^v%d_out_jf$") ~= nil or id == "jf_level" end
+  -- not a scene field: captured with the params moved off their defaults, whatever the nesting
+  for voice = 1, S.constants.NUM_VOICES do params:set("v" .. voice .. "_out_jf", 1) end
+  params:set("jf_level", 9)
+  capture_scene(1)
+  local function search(tbl, path, seen)
+    if seen[tbl] then return end
+    seen[tbl] = true
+    for key, value in pairs(tbl) do
+      assert_true(not is_ours(key), "no scene field " .. path .. "." .. tostring(key))
+      if type(value) == "table" then search(value, path .. "." .. tostring(key), seen) end
     end
   end
-  for _, id in ipairs(ids) do
-    assert_true(params.lookup[id] ~= nil, id .. " exists")
-    assert_true(not in_order[id], id .. " is in no param_order")
+  search(S.scenes[1], "scene", {})
+  -- not an LFO destination, a macro target or on a fader page
+  for index, destination in ipairs(S.LFO_DESTINATIONS) do
+    assert_true(not is_ours(destination.resolve()), "no LFO destination " .. index)
+  end
+  for _, id in ipairs(S.lib.macros.target_ids()) do assert_true(not is_ours(id), "no macro target " .. id) end
+  for _, target in ipairs(S.registry.macro_targets) do assert_true(not is_ours(target.id), "no registered macro target") end
+  local fader_ids = fader_param_ids
+  for voice = 1, S.constants.NUM_VOICES do
+    for _, id in ipairs(fader_ids(voice)) do assert_true(not is_ours(id), "no fader on voice " .. voice .. ": " .. id) end
+    -- not drawn by a randomize (MAIN's voice spec; the mutations draw from the same lists)
+    for _, draw in ipairs(S.lib.mutation.voice_spec(voice).draws) do
+      assert_true(not is_ours(draw.id), "no randomize draw " .. draw.id)
+    end
   end
   assert_equal(params:lookup_param("v1_out_jf").t, params.tBINARY, "a binary toggle")
   local target = target_of(S)
