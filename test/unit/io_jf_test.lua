@@ -160,13 +160,36 @@ test("its eight params are PSET-only and its rows show on the voice section", fu
   end
   for _, id in ipairs(S.lib.macros.target_ids()) do assert_true(not is_ours(id), "no macro target " .. id) end
   for _, target in ipairs(S.registry.macro_targets) do assert_true(not is_ours(target.id), "no registered macro target") end
-  local fader_ids = fader_param_ids
-  for voice = 1, S.constants.NUM_VOICES do
-    for _, id in ipairs(fader_ids(voice)) do assert_true(not is_ours(id), "no fader on voice " .. voice .. ": " .. id) end
-    -- not drawn by a randomize (MAIN's voice spec; the mutations draw from the same lists)
-    for _, draw in ipairs(S.lib.mutation.voice_spec(voice).draws) do
-      assert_true(not is_ours(draw.id), "no randomize draw " .. draw.id)
+  -- Per source kind (a voice on its synth, on buffer slot 1 and on the input), the lists the
+  -- fader pages and MAIN's randomize (voice_spec) build are read. The mutation and the drift
+  -- keep no list a test can read (mutate_voices builds its own, drift_update names grain_pitch
+  -- and buf_pos), so they and the randomize's entry points are checked by their effect: with the
+  -- eight params moved off their defaults, a run over every voice leaves each one as set.
+  local held = {}
+  for _, id in ipairs(ids) do held[id] = params:get(id) end
+  local function assert_held(where)
+    for _, id in ipairs(ids) do assert_equal(params:get(id), held[id], id .. " after " .. where) end
+  end
+  for voice = 1, S.constants.NUM_VOICES do S.voices[voice].active = true end
+  params:set("mutation_probability", 1)
+  params:set("mutation_amount", 1)
+  for _, source in ipairs({1, 2, 10}) do  -- synth, buffer slot 1, input
+    for voice = 1, S.constants.NUM_VOICES do params:set("v" .. voice .. "_source", source) end
+    for voice = 1, S.constants.NUM_VOICES do
+      for _, id in ipairs(fader_param_ids(voice)) do
+        assert_true(not is_ours(id), "no fader on voice " .. voice .. ", source " .. source .. ": " .. id)
+      end
+      for _, draw in ipairs(S.lib.mutation.voice_spec(voice).draws) do
+        assert_true(not is_ours(draw.id), "no randomize draw " .. draw.id .. ", source " .. source)
+      end
+      randomize_voice(voice)
+      S.lib.mutation.randomize(S.lib.mutation.voice_spec(voice))
     end
+    assert_held("a randomize of every voice, source " .. source)
+    for _ = 1, 5 do gentle_mutate() end
+    assert_held("a mutation of every voice, source " .. source)
+    for _ = 1, 20 do drift_update() end
+    assert_held("a drift of every voice, source " .. source)
   end
   assert_equal(params:lookup_param("v1_out_jf").t, params.tBINARY, "a binary toggle")
   local target = target_of(S)
