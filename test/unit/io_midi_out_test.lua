@@ -976,6 +976,22 @@ test("IO shows a voice's route and the midi section", function()
   assert_true(S.lib.pages_io.show_section("midi"))
 end)
 
+test("the voice section's midi detail list open is a layout state, reached through the page", function()
+  local context, S = started()
+  local state
+  for _, entry in ipairs(S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states) do
+    if entry.name == "voice: midi detail list open" then state = entry end
+  end
+  assert_true(state ~= nil, "the state is listed with the voice section's")
+  h.show_page("IO")
+  state.setup(context); redraw()
+  for _, field in ipairs({"port", "channel", "mode", "members"}) do
+    assert_true(h.screen_shows(context, field), "the detail list shows " .. field)
+  end
+  assert_true(h.screen_shows(context, "2"), "the voice's port")
+  h.assert_screen_layout(context, "voice: midi detail list open")
+end)
+
 test("no MIDI out param is in a scene, a macro's targets or a randomize", function()
   local _, S = started()
   local ids = midi_out_ids(S)
