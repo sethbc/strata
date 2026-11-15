@@ -182,13 +182,58 @@ test("its eight params are PSET-only and its rows show on the voice section", fu
       for _, draw in ipairs(S.lib.mutation.voice_spec(voice).draws) do
         assert_true(not is_ours(draw.id), "no randomize draw " .. draw.id .. ", source " .. source)
       end
+      -- Positive control: grain_size and grain_pitch are drawn by the randomize on every source
+      -- (voice_spec's last two draws), into 0.05-0.35 and 0.5-2.5. Starting grain_pitch at 3.5,
+      -- outside that range, makes "changed" certain, not a matter of the draw
+      params:set("v" .. voice .. "_grain_pitch", 3.5)
       randomize_voice(voice)
+      assert_true(params:get("v" .. voice .. "_grain_pitch") ~= 3.5, "the randomize drew voice " .. voice
+        .. "'s grain pitch, source " .. source)
+      params:set("v" .. voice .. "_grain_pitch", 3.5)
       S.lib.mutation.randomize(S.lib.mutation.voice_spec(voice))
+      assert_true(params:get("v" .. voice .. "_grain_pitch") ~= 3.5, "the spec's randomize drew voice " .. voice
+        .. "'s grain pitch, source " .. source)
     end
     assert_held("a randomize of every voice, source " .. source)
-    for _ = 1, 5 do gentle_mutate() end
+    -- Positive control: mutate_voices draws grain_size on every source (chance 0.5 x probability 1
+    -- a step, by up to 0.2 of the range at amount 1). The walk is clamped to 0.01-0.5 and a step
+    -- can land back on the start, so the control is that the size differed from its start at some
+    -- step (not at the end). From the middle of the range, over 40 steps, the chance of no draw is
+    -- 0.5^40 and a draw that leaves the value unchanged has probability 0 (a clamp at the start
+    -- of 0.5, the range's top, ended one run there: the start is 0.25). Every voice is active and
+    -- none is locked
+    local starts, moved = {}, {}
+    for voice = 1, S.constants.NUM_VOICES do
+      params:set("v" .. voice .. "_grain_size", 0.25)
+      starts[voice] = params:get("v" .. voice .. "_grain_size")
+    end
+    for _ = 1, 40 do
+      gentle_mutate()
+      for voice = 1, S.constants.NUM_VOICES do
+        if params:get("v" .. voice .. "_grain_size") ~= starts[voice] then moved[voice] = true end
+      end
+    end
+    for voice = 1, S.constants.NUM_VOICES do
+      assert_true(moved[voice], "the mutation moved voice " .. voice .. "'s grain size, source " .. source)
+    end
     assert_held("a mutation of every voice, source " .. source)
-    for _ = 1, 20 do drift_update() end
+    -- Positive control: drift_update steps every active voice's grain pitch by a continuous random
+    -- amount a call, from a start (1) far from its 0.25-4 clamps; as with the mutation, the control
+    -- is that the pitch differed from its start at some call of the 20
+    local pitches, drifted = {}, {}
+    for voice = 1, S.constants.NUM_VOICES do
+      params:set("v" .. voice .. "_grain_pitch", 1)
+      pitches[voice] = params:get("v" .. voice .. "_grain_pitch")
+    end
+    for _ = 1, 20 do
+      drift_update()
+      for voice = 1, S.constants.NUM_VOICES do
+        if params:get("v" .. voice .. "_grain_pitch") ~= pitches[voice] then drifted[voice] = true end
+      end
+    end
+    for voice = 1, S.constants.NUM_VOICES do
+      assert_true(drifted[voice], "the drift moved voice " .. voice .. "'s grain pitch, source " .. source)
+    end
     assert_held("a drift of every voice, source " .. source)
   end
   assert_equal(params:lookup_param("v1_out_jf").t, params.tBINARY, "a binary toggle")
