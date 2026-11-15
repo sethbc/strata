@@ -182,4 +182,35 @@ test("a hot-plug handler that wrapped the module's still reaches the found one a
     "the chain reaches the found handlers, and no listener runs after cleanup")
 end)
 
+
+-- The start step run again in the same instance, after a cleanup that left
+-- a wrapper installed over the module's handlers: it never keeps a chain
+-- that leads back to the module, so a plug runs each handler once
+test("the start step run again after a wrapped cleanup never chains the module to itself", function()
+  local calls = {}
+  local found_add = function(device) calls[#calls + 1] = "found add " .. device.name end
+  local found_remove = function(device) calls[#calls + 1] = "found remove " .. device.name end
+  local context = load_strata({ before_init = function()
+    midi.add, midi.remove = found_add, found_remove
+  end })
+  local S = local_value("S")
+  S.lib.io_ports.on_change("test", function(port, name) calls[#calls + 1] = "change " .. port .. " " .. tostring(name) end)
+  local ours_add, ours_remove = midi.add, midi.remove
+  midi.add = function(device) calls[#calls + 1] = "wrapper add"; ours_add(device) end
+  midi.remove = function(device) calls[#calls + 1] = "wrapper remove"; ours_remove(device) end
+  cleanup()
+  local start_step
+  for _, record in ipairs(S.registry.start) do
+    if record.order == S.constants.START_ORDER.io_ports then start_step = record.fn end
+  end
+  assert_true(start_step ~= nil, "the ports' start step is registered")
+  start_step()
+  local plugged = pcall(context.midi.plug, 4, "x")
+  assert_true(plugged, "a plug returns")
+  local unplugged = pcall(context.midi.unplug, 4)
+  assert_true(unplugged, "an unplug returns")
+  assert_equal(table.concat(calls, ", "),
+    "wrapper add, change 4 x, found add x, wrapper remove, change 4 nil, found remove x", "each handler once")
+end)
+
 end

@@ -3118,77 +3118,109 @@ test("only lib/input_level.lua names the input polls", function()
   assert_equal(table.concat(offenders, " "), "", "a norns poll has one callback")
 end)
 
--- The lines of a Lua source that set midi.add or midi.remove (midi["add"]
--- too) or a MIDI vport's event: on midi.connect(...) or midi.vports[...]
--- itself, on S.midi_device, or on a name that source assigns a vport to (from
--- midi.connect, midi.vports[...] or an out(...) call such as S.lib.io_ports.out)
--- or loops over midi.vports with. Comments are skipped
-local function midi_handler_writes(text)
-  local holders, writes = { ["S.midi_device"] = true }, {}
-  local function assigned(code, start)
-    return code:sub(start):match("^%s*=%s*[^=]") ~= nil
-  end
-  local function code_lines()
-    local lines = {}
-    for line in (text .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = { line = line, code = line:gsub("%-%-.*$", "") .. " " } end
-    return lines
-  end
-  local lines = code_lines()
-  for _, entry in ipairs(lines) do
-    for name in entry.code:gmatch("([%w_%.]+)%s*=%s*midi%.connect%s*%(") do holders[name] = true end
-    for name in entry.code:gmatch("([%w_%.]+)%s*=%s*midi%.vports%s*%[") do holders[name] = true end
-    for name in entry.code:gmatch("([%w_%.]+)%s*=%s*[%w_%.]*%.out%s*%(") do holders[name] = true end
-    for name in entry.code:gmatch("for%s+[%w_]+%s*,%s*([%w_]+)%s+in%s+i?pairs%s*%(%s*midi%.vports%s*%)") do
-      holders[name] = true
+-- The holders whose `event` field a module other than lib/io/ports.lua may
+-- set, each by its file and the exact expression before `.event`: none is a
+-- MIDI vport. A new one needs its line here, and why
+local EVENT_HOLDERS = {
+  ["lib/mutation.lua S.drift_metro"] = "the drift metro (metro.init), not a MIDI vport",
+  ["lib/mutation.lua S.mutation_metro"] = "the mutation metro (metro.init), not a MIDI vport",
+  ["lib/gestures.lua pattern.metro"] = "a gesture recorder's metro (norns' pattern_time), not a MIDI vport",
+}
+
+-- The lines of a Lua source (at path) that break the MIDI ports' rule, which
+-- is strict the other way round: (a) every assignment to a field named
+-- event (`.event =`, `["event"] =`) unless its holder is in EVENT_HOLDERS;
+-- (b) every assignment to midi.add or midi.remove, and every assignment
+-- through midi[...]; (c) the global midi used as anything but `midi.<name>`,
+-- `midi:<name>` or a `midi[...]` read (`local m = midi`, `f(midi)`,
+-- `rawset(midi, ...)`). Comments and strings are skipped (the sanitized copy
+-- keeps every position, so a bracket's key is read from the source)
+local function midi_handler_writes(text, path)
+  path = path or "lib/sample.lua"
+  local code = sync_check.sanitize_lua(text)
+  local breaks = {}
+  local function assigned(start) return code:sub(start):match("^%s*=%s*[^=]") ~= nil end
+  local function note(position) breaks[#breaks + 1] = position end
+  -- (a) `.event =`: its holder, the names and dots right before it
+  for first, after in code:gmatch("()%.%s*event%f[^%w_]()") do
+    if assigned(after) then
+      local before = code:sub(1, first - 1):match("[^\n]*$")  -- on its own line
+      local holder = before:match("([%w_][%w_%.]*)%s*$")
+      local ahead = holder and before:sub(1, #before - #before:match("[%w_][%w_%.]*%s*$")):match("(%S)%s*$")
+      local plain = holder and not (ahead and ahead:match("[%)%]:%.]"))
+      if not (plain and EVENT_HOLDERS[path .. " " .. holder]) then note(first) end
     end
   end
-  for _, entry in ipairs(lines) do
-    local code, found = entry.code, false
-    for _, pattern in ipairs({ "midi%.add()", "midi%.remove()", "midi%.connect%s*%b()%s*%.event()",
-      "midi%.vports%s*%b[]%s*%.event()", "midi%s*%[%s*[\"']add[\"']%s*%]()",
-      "midi%s*%[%s*[\"']remove[\"']%s*%]()" }) do
-      for after in code:gmatch(pattern) do
-        if assigned(code, after) then found = true end
-      end
-    end
-    for name in pairs(holders) do
-      local start = 1
-      while true do
-        local first, last = code:find(name .. ".event", start, true)
-        if not first then break end
-        local before = first > 1 and code:sub(first - 1, first - 1) or ""
-        if not before:match("[%w_%.]") and assigned(code, last + 1) then found = true end
-        start = last + 1
-      end
-    end
-    if found then writes[#writes + 1] = entry.line end
+  -- (a) `["event"] =`, and (b) any `midi[...] =`
+  for first, key_first, key_last, after in code:gmatch("()%[%s*()[\"']_*[\"']()%s*%]()") do
+    local key = text:sub(key_first + 1, key_last - 2)
+    if assigned(after) and key == "event" then note(first) end
   end
-  return writes
+  for first, after in code:gmatch("%f[%w_]()midi%s*%b[]()") do
+    if assigned(after) then note(first) end
+  end
+  -- (b) midi.add and midi.remove
+  for first, after in code:gmatch("%f[%w_]()midi%s*%.%s*add%f[^%w_]()") do
+    if assigned(after) then note(first) end
+  end
+  for first, after in code:gmatch("%f[%w_]()midi%s*%.%s*remove%f[^%w_]()") do
+    if assigned(after) then note(first) end
+  end
+  -- (c) the global midi as a value: not a field (x.midi) or a table
+  -- constructor's key ({midi = 1}, after `{` or `,`), followed by anything
+  -- but `.`, `:` or `[`
+  for first, after in code:gmatch("%f[%w_]()midi%f[^%w_]()") do
+    local ahead = code:sub(1, first - 1):match("(%S)%s*$")
+    local next_char = code:sub(after):match("^%s*(%S)")
+    local key = (ahead == "{" or ahead == ",") and assigned(after)
+    if ahead ~= "." and ahead ~= ":" and not key and not (next_char == "." or next_char == ":" or next_char == "[") then
+      note(first)
+    end
+  end
+  -- each position's line, once
+  table.sort(breaks)
+  local lines, seen = {}, {}
+  for _, position in ipairs(breaks) do
+    local line_start = (code:sub(1, position - 1):match(".*()\n") or 0) + 1
+    local line_end = (text:find("\n", position, true) or (#text + 1)) - 1
+    if not seen[line_start] then
+      seen[line_start] = true
+      lines[#lines + 1] = text:sub(line_start, line_end)
+    end
+  end
+  return lines
 end
 
 test("only lib/io/ports.lua sets midi.add, midi.remove or a MIDI vport's event", function()
-  -- the finder itself
-  -- each sample sets one handler, on its last line
+  -- the finder itself: each sample breaks the rule at least once
   local caught = { "midi.add = f", "midi.remove=function() end", "midi.connect(2).event = f",
     "midi.vports[port].event = nil", "S.midi_device = midi.connect(port)\nS.midi_device.event = midi_event",
     "local vport = midi.vports[3]\nvport.event = f", "S.midi_device.event = f",
     "local v = S.lib.io_ports.out(p)\nv.event = f", "for _, vport in pairs(midi.vports) do vport.event = nil end",
     "for port, each in ipairs(midi.vports) do\n  each.event = nil", 'midi["add"] = f', "midi['remove'] = f",
-    'midi [ "add" ] = f' }
+    'midi [ "add" ] = f', "S.lib.io_ports.out(p).event = f", "local dev = S.midi_device\ndev.event = f",
+    "local vp = midi.vports\nvp[1].event = nil", "local m = midi\nm.add = f", "x = midi", "rawset(midi, 'add', f)",
+    "local ports = {midi}", 'v["event"] = f', "S.drift_metro.event = f", "x.y.S.drift_metro.event = f",
+    "f().S.drift_metro.event = f", "midi = {}", "end\nmidi = f" }
   for _, sample in ipairs(caught) do
-    local writes = midi_handler_writes(sample)
-    assert_equal(#writes, 1, "one write found in: " .. sample)
-    assert_equal(writes[1], sample:match("[^\n]*$"), "on its last line: " .. sample)
+    assert_true(#midi_handler_writes(sample) >= 1, "a break found in: " .. sample)
   end
+  assert_equal(midi_handler_writes("local m = midi\nm.add = f")[1], "local m = midi", "the alias is the break")
   local allowed = table.concat({ "if midi.add == f then end", "-- midi.add = f", "local dev = midi.connect(1)",
-    "dev:note_on(60, 100, 1)", "S.metro.event = f", "x = midi.vports[1].event", 'if midi["add"] == f then end',
-    "local v = S.lib.io_ports.out(p)", "v:note_on(60, 100, 1)", "for _, vport in pairs(midi.vports) do n = n + 1 end" },
-    "\n")
-  assert_equal(table.concat(midi_handler_writes(allowed), " | "), "", "reads, comments and other events are not")
+    "dev:note_on(60, 100, 1)", "x = midi.vports[1].event", 'if midi["add"] == f then end',
+    "local v = S.lib.io_ports.out(p)", "v:note_on(60, 100, 1)", "for _, vport in pairs(midi.vports) do n = n + 1 end",
+    'print("midi connected: " .. name)', "S.lib.midi_in.reconcile()", "local midi_device = 1",
+    "max = #midi.vports", "if x.event == f then end", "S.drift_metro.event = drift_update", "t = {midi = 90,",
+    "  seq = true, midi = true}", "S.drift_metro = metro.init()", "S.drift_metro:start()",
+    "S.drift_metro.event = drift_update" }, "\n")
+  assert_equal(table.concat(midi_handler_writes(allowed, "lib/mutation.lua"), " | "), "",
+    "reads, comments, strings, fields named midi and the listed holders are not")
   local offenders = {}
   for _, source in ipairs(read_lua_sources()) do
     if source.path ~= "lib/io/ports.lua" then
-      for _, line in ipairs(midi_handler_writes(source.text)) do offenders[#offenders + 1] = source.path .. ": " .. line end
+      for _, line in ipairs(midi_handler_writes(source.text, source.path)) do
+        offenders[#offenders + 1] = source.path .. ": " .. line
+      end
     end
   end
   assert_equal(table.concat(offenders, "\n"), "", "one module owns the MIDI ports")
