@@ -7,7 +7,7 @@
 -- message is a line of text, ii.<device>.<command>(<args>), sent through
 -- S.lib.io_crow; a bounded queue spreads them over the LFO clock's steps
 -- (II.sends_per_step a step, II.queue_max waiting, the newest past it
--- dropped and counted). Leaving the lead ends every device's notes, sends
+-- dropped and counted, never an off: an off takes the newest non-off's place). Leaving the lead ends every device's notes, sends
 -- the waiting offs at once (II.cleanup_sends at most), releases each device
 -- and only then clears the flag. The devices register with
 -- S.register_ii_device; their params form the group strata_out_ii.
@@ -55,23 +55,58 @@ return function(S)
     return "ii." .. device .. "." .. command .. "(" .. table.concat(args, ", ") .. ")"
   end
 
+  local function count_drop()
+    state.dropped = state.dropped + 1
+    request_redraw()
+  end
+
+  -- A queued line: its text, and what matches an off with its on (the
+  -- device, the command and the first argument, the port or output)
+  local function entry_for(off, device, command, ...)
+    local first = select("#", ...) > 0 and S.lib.io_crow.number((...)) or ""
+    return {line = line_for(device, command, ...), off = off, device = device, command = command, first = first}
+  end
+
   -- The line joins the queue (true), or with queue_max waiting is dropped
   -- and counted (false); false and nothing unless Strata leads
-  local function enqueue(off, device, command, ...)
+  function M.send(device, command, ...)
     if not state.leading then return false end
-    local line = line_for(device, command, ...)
+    local entry = entry_for(false, device, command, ...)
     if #state.queue >= II.queue_max then
-      state.dropped = state.dropped + 1
-      request_redraw()
+      count_drop()
       return false
     end
-    table.insert(state.queue, {line = line, off = off})
+    table.insert(state.queue, entry)
     return true
   end
 
-  function M.send(device, command, ...) return enqueue(false, device, command, ...) end
-  -- An off: a gate low or a note's release, sent first when the lead ends
-  function M.send_off(device, command, ...) return enqueue(true, device, command, ...) end
+  -- An off (a gate low or a note's release) is never the line a full queue
+  -- drops (ruling 21): with queue_max waiting it takes the place of the
+  -- newest waiting line that is not an off (dropped and counted) and goes
+  -- to the end, after every line that waited, its own on included. When
+  -- the line it displaces is its own on (same device, command and first
+  -- argument), the device never gets either: both go, counted once, and
+  -- false. With only offs waiting it joins anyway. Otherwise true while
+  -- Strata leads; false and nothing unless it does
+  function M.send_off(device, command, ...)
+    if not state.leading then return false end
+    local entry = entry_for(true, device, command, ...)
+    if #state.queue >= II.queue_max then
+      for index = #state.queue, 1, -1 do
+        local waiting = state.queue[index]
+        if not waiting.off then
+          table.remove(state.queue, index)
+          count_drop()
+          if waiting.device == entry.device and waiting.command == entry.command and waiting.first == entry.first then
+            return false
+          end
+          break
+        end
+      end
+    end
+    table.insert(state.queue, entry)
+    return true
+  end
 
   -- At once, never queued (a device's release): false unless Strata leads
   function M.send_direct(device, command, ...)
