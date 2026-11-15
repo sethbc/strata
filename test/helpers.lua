@@ -688,7 +688,7 @@ local HEADER_FLASH_X = 40
 local DESCENDER_CLEARANCE = 7
 
 -- Check the drawn screen: everything inside 128x64, no two strings overlap on
--- a row, the page title at 0,8, then either the nine page dots (at least
+-- a row, the page title at 0,8, then either the ten page dots (at least
 -- 4 px after the title) or, while a header flash shows, its text at 40,8
 -- and no dots; no header rect (dot, play mark) under a header string; and a
 -- hint row at y 62.

@@ -1,6 +1,6 @@
 -- test/unit/io_rig_test.lua
 -- The rig settings (lib/io/rig.lua, S.lib.io_rig, 3.6 design §2.3): the
--- fifteen keys and their defaults, set's validation and write-first rule,
+-- fourteen keys and their defaults, set's validation and write-first rule,
 -- step's ends, io.data read at start (set aside when it cannot be used) and
 -- written at cleanup, and that a PSET load or a scene recall leaves them be.
 -- Run alone: lua test/run.lua io_rig

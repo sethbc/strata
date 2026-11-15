@@ -1,6 +1,6 @@
 ## Must not break
 
-- **Only a row of the IO page changes a rig setting** (design §2.3): `S.lib.io_rig.set(` and `step(` appear in no file of `lib/` or `strata.lua` but `lib/pages/io.lua` and `lib/io/rig.lua` (a structure test, `only the IO page changes a rig setting`). A PSET load, a scene recall, a controller, OSC and a Teletype call never change one, so the ii bus's leader (`ii_bus`) and the ports a controller or remote device holds stay where the player put them. Other modules read them with `get` and hear changes through `on_change`.
+- **Only a row of the IO page changes a rig setting** (design §2.3): outside `lib/pages/io.lua` and `lib/io/rig.lua`, every reach of the module in `lib/` and `strata.lua` reads: `S.lib.io_rig`, `S.lib["io_rig"]` or a local it was assigned to (`local rig = S.lib.io_rig`, wherever `rig` is used later) is always followed by `.get(`, `.text(`, `.on_change(` or `.RIG`, never `.set(` or `.step(`, never called through another alias (`local set = S.lib.io_rig.set`) and never passed on; a string `"io_rig"` other than that index is refused too (structure tests `the rig guard catches every way to reach set or step, and only those`, with its caught and allowed samples, and `only the IO page changes a rig setting`). `START_ORDER.io_rig` and `strata.lua`'s include are not uses. What it cannot see: a key built at run time (`S.lib["io_" .. "rig"]`). A PSET load, a scene recall, a controller, OSC and a Teletype call never change one, so the ii bus's leader (`ii_bus`) and the ports a controller or remote device holds stay where the player put them. Other modules read them with `get` and hear changes through `on_change`.
 - **The rig settings are never params, scene fields or PSET data**: they live only in `io.data` (data/strata/), written through `S.lib.data_files.write` and read through `S.lib.data_files.read`, never `tab.save` or `tab.load`.
 - **`set` writes first** (as `S.lib.notes.set_pool` and `S.lib.grid_core.set_rotation` do): the whole table goes to `io.data`, and only when that write worked does the value change and do its listeners hear it. A write that fails returns false and changes nothing; IO's row then flashes `setting not saved`. A value outside its key's spec, or an unknown key, is refused (false) with nothing written.
 - **Listeners are contained**: each `on_change` function runs through `S.lib.ui_frame.contained_call`, so one that raises prints one `strata: io rig listener <key> failed:` line (once per distinct message) and the next listener still runs. A set to the value already held tells nobody.
@@ -10,7 +10,7 @@
 ## Owns
 
 - `lib/io/rig.lua` (`S.lib.io_rig`), included directly before `lib/midi_in.lua`.
-- Its unit tests: `test/unit/io_rig_test.lua`; the structure test above is in `test/unit/structure_test.lua`.
+- Its unit tests: `test/unit/io_rig_test.lua`; the structure tests above are in `test/unit/structure_test.lua`.
 
 ## The settings
 
