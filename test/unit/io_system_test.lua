@@ -222,6 +222,15 @@ local function started(options)
       beat = event.beat, gate_beats = event.gate_beats, pitches = event.pitches}
   end})
   rig.crow = watch_crow(S, context)
+  -- each followed value crow's budget made wait, with the window's count
+  -- then (the positive control of "no followed value in a full window")
+  rig.crow_deferred = {}
+  local send_value = S.lib.io_crow.send_value
+  S.lib.io_crow.send_value = function(key, line)
+    local sent = send_value(key, line)
+    if not sent then rig.crow_deferred[#rig.crow_deferred + 1] = S.lib.io_crow.budget_state().sent end
+    return sent
+  end
   rig.osc = watch_osc(context)
   for _, port in ipairs(SYSTEM.midi_ports) do
     rig.devices[port] = watch_midi(S, context.midi.plug(port, "synth " .. port))
@@ -282,6 +291,7 @@ local function set_routes(S)
     params:set(prefix .. "nb_key", ROUTES.nb[voice])
   end
   for n, key in ipairs(ROUTES.crow) do params:set("crow_out" .. n .. "_source_key", key) end
+  params:set("crow_in1_mode", option_index("crow_in1_mode", "cv"))
   for k = 1, 8 do
     params:set("cc_out" .. k .. "_source_key", "lfo" .. ((k - 1) % S.constants.NUM_LFOS + 1))
     params:set("cc_out" .. k .. "_port", ROUTES.cc_port)
@@ -434,6 +444,9 @@ local function everything_moves(rig)
   end
   assert_equal(#watched + #moved, 16 + 28, "44 watched params moved")
   return function(n)
+    -- crow's input 1 in cv mode streams a value every LFO step (crow-ii.md
+    -- §1: input[n].stream calls back every 0.02 s)
+    context.crow.fire("strata_in", 1, 5 * math.sin(n * 0.05))
     if rig.mpe_held and n % rig.density.mpe_every == 0 then
       for k, played in ipairs(MPE_NOTES) do
         local phase = n * 0.37 + k
@@ -944,6 +957,14 @@ test("with everything on, a minute holds every bound", function()
   end
   assert_true(followed > 0, "the outputs followed their LFOs")
   assert_equal(#crowded, 0, "no followed value in a full window: " .. first_lines(crowded))
+  -- the control: followed values came while a window was full, and each
+  -- one that waited found its window's count at the limit or past it
+  -- (notes and gates always go, so a window can hold more than 32)
+  assert_true(#rig.crow_deferred > 0, "a followed value came while its window was full")
+  assert_equal(#S.lib.mod_sources.list("crow"), 1, "crow's input 1 streamed in cv mode, a modulation source")
+  for index, count in ipairs(rig.crow_deferred) do
+    assert_true(count >= CROW.lines_per_window, "deferred value " .. index .. "'s window held " .. count .. " lines")
+  end
 
   -- MIDI out (docs/notes/lua/io/midi_out.md): at most 24 MPE expression
   -- messages a step over both MPE ports, and 8 CC out
@@ -1111,9 +1132,8 @@ test("after that minute everything stops with no note left", function()
     local counts = {}
     for _, call in ipairs(player.calls) do counts[call[1]] = (counts[call[1]] or 0) + 1 end
     assert_true((counts.note_on or 0) > 0, "nb player " .. name .. " played")
-    assert_true((counts.note_on or 0) == (counts.note_off or 0) or (counts.stop_all or 0) > 0,
-      "nb player " .. name .. ": " .. (counts.note_on or 0) .. " ons, " .. (counts.note_off or 0)
-      .. " offs, stop_all " .. (counts.stop_all or 0))
+    assert_equal(counts.note_on or 0, counts.note_off or 0,
+      "nb player " .. name .. ": as many offs as ons (stop_all " .. (counts.stop_all or 0) .. ")")
   end
   -- every gate line crow got high ends low: the last line crow got for its
   -- device, command and first argument is its low (an off may lower a line
