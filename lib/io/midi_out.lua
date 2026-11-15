@@ -791,7 +791,8 @@ return function(S)
     end,
     status = function()
       for port in pairs(ports_in_use()) do
-        if not present(port) then return MIDI_OUT.absent end
+        -- [--] means no device, so a port a remote holds is not one
+        if S.lib.io_ports.device(port) == nil then return MIDI_OUT.absent end
       end
       return nil
     end,

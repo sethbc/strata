@@ -426,6 +426,22 @@ test("MIDI out sends nothing to the port a remote grid holds, and sends again on
   assert_equal(params:string("v1_out_port"), "3")
 end)
 
+test("MIDI out's section shows no [--] for a port a remote holds: its device is there", function()
+  -- the user page's [--] means no device on a port MIDI out sends on
+  local context, S = started()
+  remote_grid(context, S, 3)
+  params:set("v1_out_port", 3)
+  context.clock.advance_until(S.lfo_clock)  -- the route settles
+  local section
+  for _, record in ipairs(S.registry.io_sections) do
+    if record.name == "midi" then section = record end
+  end
+  assert_true(S.lib.io_remote.holds(3), "the remote holds port 3")
+  assert_equal(section.status(), nil, "the device is there: no [--]")
+  context.midi.unplug(3)
+  assert_equal(section.status(), "[--]", "with no device: [--]")
+end)
+
 test("a device leaving a port another owner holds shows [--], not in use", function()
   local context, S = started()
   S.lib.io_ports.claim(6, "someone")
