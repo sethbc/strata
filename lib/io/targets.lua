@@ -18,7 +18,12 @@ return function(S)
   -- here follows them, in registration order), and the volts convention:
   -- MIDI note 60 is 0 V, 12 notes a volt
   local TARGETS = {order = {"midi", "crow", "jf", "wsyn", "er301", "txo", "nb"}, zero_volt_note = 60,
-    notes_per_volt = 12, step_prefix = "s", played_prefix = "m", played_owner = "midi"}
+    notes_per_volt = 12, step_prefix = "s", played_prefix = "m", played_owner = "midi",
+    -- beats: the beat read this far before a note's start is a jump back
+    -- (its off goes at once); less is a tick's jitter (a late MIDI or crow
+    -- tick pulls the beat back a few ms). The sequencer's SEQ.wake_tolerance
+    -- (lib/sequencer.lua, included after this module; a test keeps them equal)
+    jump_tolerance = 1 / 32}
   M.TARGETS = TARGETS
 
   -- sounding[voice][id] = {pitch, targets = {name, ...}, off_beat}; offs:
@@ -191,15 +196,16 @@ return function(S)
     end})
 
   -- The offs that are due, from the LFO clock's step: at their beat, or at
-  -- once when the beat is now before the note's own start (a followed
-  -- transport start, a reset or a new clock source put it back, with no
+  -- once when the beat is now before the note's own start by more than
+  -- TARGETS.jump_tolerance (a followed transport start, a reset or a new
+  -- clock source put it back, not a tick's jitter, with no
   -- stop of the outputs: the off would wait until the beat climbed back)
   S.lib.lfos.on_step(function()
     if #offs == 0 then return end
     local now = clock.get_beats()
     local due = {}
     for _, off in ipairs(offs) do
-      if off.beat <= now or off.start > now then due[#due + 1] = off end
+      if off.beat <= now or off.start > now + TARGETS.jump_tolerance then due[#due + 1] = off end
     end
     for _, off in ipairs(due) do
       if sounding[off.voice][off.id] == off.note then end_note(off.voice, off.id) end
