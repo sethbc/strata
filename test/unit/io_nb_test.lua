@@ -582,15 +582,67 @@ test("the nb params stay out of scenes, LFOs, macros, fader pages, randomize, mu
     for _, id in ipairs(fader_param_ids(1)) do assert_true(not ids[id], "a fader param " .. id .. " (" .. source .. ")") end
   end
   params:set("v1_source", 1)
+  -- the voices checked run and are unlocked, whatever start-up left: mutation and drift touch only
+  -- active, unlocked voices (lib/mutation.lua), and randomize skips a locked one
+  for _, voice in ipairs({ 1, 4 }) do
+    if not S.voices[voice].active then toggle_voice(voice) end
+    if S.frozen[voice] then toggle_lock(voice) end
+    assert_true(S.voices[voice].active and not S.frozen[voice], "voice " .. voice .. " runs, unlocked")
+  end
   choose(1, "alpha"); choose(4, "alpha")
+  -- each effect's positive control: a synth param or the grain pitch of the voice moved. None can
+  -- fail by chance: the run is seeded, and every draw below is a continuous random step (a uniform
+  -- value in the param's range, a mutation delta of (r1 + r2) / 2 - 0.5 at probability 1, the
+  -- drift's (r - 0.5) * step), which lands on exactly the old value with probability 0, many times over
+  local function snapshot(voice)
+    local copy = {}
+    for key, value in pairs(S.voices[voice].params) do copy[key] = value end
+    copy.grain_pitch = S.voices[voice].grain.pitch
+    return copy
+  end
+  local function moved(before, voice)
+    local now = snapshot(voice)
+    for key, value in pairs(before) do
+      if now[key] ~= value then return true end
+    end
+    return false
+  end
   math.randomseed(11)
+  local before = snapshot(1)
   for _ = 1, 20 do randomize_voice(1) end
+  assert_true(moved(before, 1), "MAIN's randomize moved voice 1")
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  local before_mutation = { snapshot(1), snapshot(4) }
   for _ = 1, 20 do gentle_mutate() end
+  assert_true(moved(before_mutation[1], 1), "the mutation moved voice 1")
+  assert_true(moved(before_mutation[2], 4), "the mutation moved voice 4")
+  local pitches = { S.voices[1].grain.pitch, S.voices[4].grain.pitch }
   for _ = 1, 50 do drift_update() end
+  assert_true(S.voices[1].grain.pitch ~= pitches[1], "the drift moved voice 1's grain pitch")
+  assert_true(S.voices[4].grain.pitch ~= pitches[2], "the drift moved voice 4's grain pitch")
   assert_equal(S.lib.io_keyed.key("v1_out_nb"), "alpha", "voice 1 keeps its player")
   assert_equal(S.lib.io_keyed.key("v4_out_nb"), "alpha", "voice 4 too")
   assert_equal(nb_player_refcounts.alpha, 2, "counted as before")
+end)
+
+test("two Strata voices on a player another host holds neither activate nor deactivate it", function()
+  -- the other host's count of 1 (it chose the player first), then voices 2 and 3, leaving in each order
+  for _, leaving in ipairs({ { 2, 3 }, { 3, 2 } }) do
+    local _, _, players = started({ { "beta", ALL } }, function() _G.nb_player_refcounts = {} end)
+    assert_true(other_host_chooses("beta"), "the other host activates it")
+    choose(2, "beta")
+    assert_equal(nb_player_refcounts.beta, 2)
+    choose(3, "beta")
+    assert_equal(nb_player_refcounts.beta, 3)
+    choose(leaving[1], "none")
+    assert_equal(nb_player_refcounts.beta, 2, "voice " .. leaving[1] .. " left first")
+    choose(leaving[2], "none")
+    assert_equal(nb_player_refcounts.beta, 1, "then voice " .. leaving[2])
+    assert_equal(count(players.beta, "active"), 0, "no active from Strata")
+    assert_equal(count(players.beta, "inactive"), 0, "no inactive from Strata")
+    assert_true(other_host_leaves("beta"), "the other host's own leave ends it")
+    assert_equal(nb_player_refcounts.beta, nil)
+  end
 end)
 
 end
