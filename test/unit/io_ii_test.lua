@@ -413,7 +413,7 @@ test("a pair's first off is sent with no send before it, and the line is then kn
 end)
 
 test("a pair learned while two of its sends wait gives each its off after its own send", function()
-  -- the lines start unknown when the pair is learned (lib/io/ii.lua, learn_pair): both offs owed
+  -- both offs owed (each line has a send waiting), each sent after its own send
   local context, S, ii = started()
   local step = stepper(context, S)
   lead(context, S)
@@ -424,6 +424,29 @@ test("a pair learned while two of its sends wait gives each its off after its ow
   assert_equal(ii.send_off("er301", "tr", 5, 0), true, "owed: its send waits")
   assert_equal(table.concat(drain(step, ii), "|"), "ii.er301.tr(4, 1)|ii.er301.tr(5, 1)|ii.er301.tr(4, 0)|ii.er301.tr(5, 0)",
     "each off after its own send")
+end)
+
+test("an on sent before its pair is learned does not use up a later on's count", function()
+  -- the round-5 re-review's sequence: note 1's on before the pair is learned, note 2's after it
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  ii.send("er301", "tr", 4, 1)                                   -- note 1 on, the pair not learned
+  assert_equal(ii.send_off("er301", "tr", 4, 0), true)          -- note 1 off: the pair learned
+  ii.send("other", "cv", 1, 1); ii.send("other", "cv", 2, 1)    -- two fillers
+  ii.send("er301", "tr", 4, 1)                                   -- note 2 on, counted
+  local sent = step()                                            -- note 1 on, its off, the fillers
+  assert_equal(#sent, 4)
+  assert_equal(ii.queued(), 1, "note 2's on still waits")
+  assert_equal(ii.send_off("er301", "tr", 4, 0), true, "note 2's off is owed")
+  assert_equal(ii.queued(), 2, "and queued")
+  for _, line in ipairs(drain(step, ii)) do sent[#sent + 1] = line end
+  local port = {}
+  for _, line in ipairs(sent) do
+    if line:find("ii.er301.tr(4,", 1, true) then port[#port + 1] = line end
+  end
+  assert_equal(table.concat(port, "|"), "ii.er301.tr(4, 1)|ii.er301.tr(4, 0)|ii.er301.tr(4, 1)|ii.er301.tr(4, 0)",
+    "port 4 raised twice and lowered twice, last lowered")
 end)
 
 test("lines raised before their pair is learned still get their offs", function()
