@@ -159,7 +159,7 @@ return function(S)
   -- (all 16 named, or norns' virtual one) tells no listener
   local function device_added(device)
     local port = device and device.port
-    if valid_port(port) then
+    if state.hot_plug.installed and valid_port(port) then
       state.seen[port] = midi.vports[port].device or device
       run_set(state.changes, "midi change hook", port, device.name)
     end
@@ -168,7 +168,7 @@ return function(S)
 
   local function device_removed(device)
     local port = device and device.port
-    if valid_port(port) then
+    if state.hot_plug.installed and valid_port(port) then
       state.seen[port] = nil
       run_set(state.changes, "midi change hook", port, nil)
     end
@@ -205,14 +205,14 @@ return function(S)
     hot_plug.installed = true
   end)
 
-  -- The hot-plug handlers found back (unless something replaced ours since),
-  -- every event this module set cleared and its listeners forgotten
+  -- The hot-plug handlers found back, every event this module set cleared
+  -- and its listeners forgotten. A handler something wrapped ours with since
+  -- stays installed, and ours, still in its chain, then only calls the kept one
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_ports, function()
     local hot_plug = state.hot_plug
     hot_plug.installed = false
-    if midi.add == device_added then midi.add = hot_plug.kept_add end
-    if midi.remove == device_removed then midi.remove = hot_plug.kept_remove end
-    hot_plug.kept_add, hot_plug.kept_remove = nil, nil
+    if midi.add == device_added then midi.add, hot_plug.kept_add = hot_plug.kept_add, nil end
+    if midi.remove == device_removed then midi.remove, hot_plug.kept_remove = hot_plug.kept_remove, nil end
     for port, fn in pairs(state.dispatchers) do
       if midi.vports[port].event == fn then midi.vports[port].event = nil end
     end
