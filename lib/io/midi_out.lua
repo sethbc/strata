@@ -264,6 +264,21 @@ return function(S)
           end
         end
       end
+      -- a played note's first values stand on a shared channel: the other
+      -- played notes there are taken as having sent their current values
+      -- (a resend pending since a note on it ended is canceled; a later
+      -- change of theirs still goes)
+      if played then
+        for _, other in ipairs(state.expressing) do
+          if other ~= record and other.port == record.port and other.channel == channel then
+            local now = S.lib.expression.raw(other.voice, other.owner, other.key)
+            for _, field in ipairs(now and MIDI_OUT.fields or {}) do
+              local value = encoded(field, now)
+              if value ~= nil then other.sent[field] = value end
+            end
+          end
+        end
+      end
     end
     counts[note] = (counts[note] or 0) + 1
     use[channel] = (use[channel] or 0) + 1
