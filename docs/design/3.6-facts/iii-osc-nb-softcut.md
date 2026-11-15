@@ -98,18 +98,18 @@ Source note: norns facts are read directly from `~/src/norns` (NORNS = that path
 - License of `sixolet/nb`: the GitHub API reports `license: null` (none declared); last push 2024-06-19; default branch `main`. https://api.github.com/repos/sixolet/nb . The mods' licenses were not shown.
 
 ## Not verified
-1. USB MIDI device name an iii device presents.
-2. LED level range (0-15?) for `grid_led` / `arc_led` on the current code page.
+1. ~~USB MIDI device name an iii device presents.~~ Settled in `checks.md` §4.
+2. ~~LED level range (0-15?) for `grid_led` / `arc_led` on the current code page.~~ Settled in `checks.md` §4.
 3. Whether iii can receive or send complete sysex (and any length limit); only 3-byte chunks are visible in source.
 4. Lua version number in iii; heap size; script size and count limits.
 5. Metro pool size (docs say 15, a lib.lua summary said 12).
 6. Any documented MIDI messages-per-second limit; whether the USB link is full speed (inferred).
-7. `event_arc_key` signature (docs print `(n,d)`; changelog says `(z)`).
+7. ~~`event_arc_key` signature (docs print `(n,d)`; changelog says `(z)`).~~ Settled in `checks.md` §4.
 8. Any existing iii "remote grid over MIDI" script; forum thread llllllll.co/t/iii/74311 (403).
-9. Which grid editions/sizes (64/128/256) are iii-capable beyond "2022 and later, zero and one" (the editions page gives zero 16x16, one 8x16, 2022 size not stated).
+9. ~~Which grid editions/sizes (64/128/256) are iii-capable beyond "2022 and later, zero and one" (the editions page gives zero 16x16, one 8x16, 2022 size not stated).~~ Settled in `checks.md` §4.
 10. TouchOSC `.tosc` schema from Hexler itself; scripting API `onReceiveOSC`/`sendOSC` formats.
 11. Whether norns can send to a broadcast address (no code or doc found either way).
-12. The exact Lua `include` line for nb in the README.
+12. ~~The exact Lua `include` line for nb in the README.~~ Settled in `checks.md` §1.
 13. `stop_all` as a `describe()` field; mods' behavior at script cleanup; mods' licenses; `nb_crow` ii/w-syn support; existence of Emplaitress, w/syn, nb_midi mods.
 14. Whether a script that sets system softcut mixer levels (`audio.level_eng_cut`) has them restored when the next script loads (not checked in `script.lua`/`startup.lua`).
 
