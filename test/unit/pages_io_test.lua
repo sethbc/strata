@@ -607,8 +607,14 @@ test("go_to_row raises, naming who asked and what was missing", function()
   assert_equal(rig.get("faders_port"), rig.RIG.specs.faders_port.default)
   assert_equal(params:get("mutation_rate"), rate, "no param changed")
   -- a match naming no identity, or two
-  assert_true(not pcall(io.go_to_row, "probe", "middle", {}), "a match with no identity raises")
-  assert_true(not pcall(io.go_to_row, "probe", "middle", { key = "e16_port", id = "act" }), "nor two")
+  local malformed = "probe layout: a match names one of param_id, key or id"
+  local ok_none, none = pcall(io.go_to_row, "probe", "middle", {})
+  assert_true(not ok_none, "a match with no identity raises")
+  assert_equal(tostring(none), malformed)
+  local ok_two, two = pcall(io.go_to_row, "probe", "middle", { key = "e16_port", id = "act" })
+  assert_true(not ok_two, "nor two")
+  assert_equal(tostring(two), malformed)
+  assert_equal(S.io_cursor, cursor, "a malformed match moves nothing")
   -- an E2 that does not land
   local real_enc = enc
   enc = function() end
@@ -616,6 +622,53 @@ test("go_to_row raises, naming who asked and what was missing", function()
   enc = real_enc
   assert_true(not ok, "a cursor that did not reach raises")
   assert_equal(tostring(problem), "probe layout: the cursor did not reach id act")
+end)
+
+-- What is in the way: another page shown, a detail list open over IO, ALT
+-- held. Each raises before anything moves: the cursor, the selected
+-- voice, the params and the rig settings as they were
+test("go_to_row refuses to move when the page, a list or ALT is in the way", function()
+  local _, S = loaded()
+  S.register_io_section({ name = "top", title = "top", rows = function()
+    return {
+      { label = "cc 1", kind = "detail", text = function() return "ch 3" end, fields = {
+        { label = "port", kind = "rig", key = "faders_port" } } },
+      { label = "rate", kind = "param", param_id = "mutation_rate" },
+    }
+  end })
+  S.register_io_section({ name = "middle", title = "middle", rows = function()
+    return { { label = "e16", kind = "rig", key = "e16_port" } }
+  end })
+  local io, rig = S.lib.pages_io, S.lib.io_rig
+  local function unchanged(what, cursor, voice, rate)
+    assert_equal(S.io_cursor, cursor, what .. ": the cursor where it was")
+    assert_equal(S.selected_voice, voice, what .. ": the selected voice kept")
+    assert_equal(params:get("mutation_rate"), rate, what .. ": the param kept")
+    assert_equal(rig.get("e16_port"), rig.RIG.specs.e16_port.default, what .. ": the rig settings kept")
+    assert_equal(rig.get("faders_port"), rig.RIG.specs.faders_port.default)
+  end
+  local function refused(what, expected)
+    local cursor, voice, rate = S.io_cursor, S.selected_voice, params:get("mutation_rate")
+    local ok, problem = pcall(io.go_to_row, "probe", "middle", { key = "e16_port" })
+    assert_true(not ok, what .. " raises")
+    assert_equal(tostring(problem), expected)
+    unchanged(what, cursor, voice, rate)
+  end
+  show_page("SETUP")
+  refused("another page", "probe layout: the IO page is not shown")
+  show_page("IO")
+  tap(3)
+  assert_true(S.lib.ui_modal.top() ~= nil, "the detail list is open")
+  refused("a detail list", "probe layout: a detail list is open")
+  assert_true(S.lib.ui_modal.top() ~= nil, "and it stays open")
+  tap(2)
+  assert_equal(S.lib.ui_modal.top(), nil, "closed by its own K2")
+  key(1, 1)
+  assert_true(S.alt_held, "ALT held")
+  refused("ALT", "probe layout: ALT is held")
+  key(1, 0)
+  local row = io.go_to_row("probe", "middle", { key = "e16_port" })
+  assert_equal(row.label, "e16", "with nothing in the way it reaches the row")
 end)
 
 test("go_to_row turns nothing and presses nothing", function()
