@@ -327,7 +327,75 @@ test("cleanup ends every note at once, with no step of the clock", function()
     assert_equal(#calls_of(target, "stop_all"), 1, target.name .. "'s stop_all")
     assert_equal(target.calls[#target.calls].kind, "stop_all", "after every off")
   end
-  assert_equal(S.lfo_clock, nil, "the LFO clock had stopped: nothing waited for a step")
+  local count = #a.calls + #b.calls
+  context.clock.run_for(0.5)  -- the clock after cleanup sends nothing more
+  assert_equal(#a.calls + #b.calls, count, "every off was there as cleanup returned; nothing came later")
+end)
+
+-- The step output's own play, as the sequencer hands it a hit
+local function play_hit(S, voice, pitch, beat, gate_beats)
+  for _, output in ipairs(S.registry.step_outputs) do
+    if output.name == "targets" then
+      output.play({ voice = voice, pitches = { pitch }, velocity = 1, beat = beat, gate_beats = gate_beats })
+    end
+  end
+end
+
+-- A followed transport start, a reset or a new clock source can put the
+-- beat back without the outputs' stop
+test("a beat that jumps back ends every pending off at once", function()
+  local context, S, targets = started()
+  local a = recording_target(S, "a")
+  a.routes[1] = true
+  context.clock.set_beat(100)
+  play_hit(S, 1, 60, clock.get_beats(), 2)
+  assert_true(targets.sounding(1).s1 ~= nil, "the step note sounds, its off pending")
+  context.clock.set_beat(0.5)
+  context.clock.run_for(1 / 48 + 0.005)
+  assert_equal(#calls_of(a, "off"), 1, "the off arrives within one LFO step")
+  assert_equal(targets.sounding(1).s1, nil)
+  -- a note started after the jump keeps its own gate
+  local beat = clock.get_beats()
+  play_hit(S, 1, 62, beat, 0.5)
+  context.clock.run_for(0.2)  -- 0.4 beat
+  assert_equal(#calls_of(a, "off"), 1, "not before its gate")
+  context.clock.run_for(0.1)
+  assert_equal(#calls_of(a, "off"), 2, "at its gate")
+  assert_true(calls_of(a, "off")[2].beat >= beat + 0.5 - 1e-9, "not early")
+  assert_balanced(a, "a")
+end)
+
+test("a target that failed still gets the off of every note it started", function()
+  local context, S, targets = started()
+  local a, b = recording_target(S, "a"), recording_target(S, "b")
+  local record_a = S.registry.note_targets[#S.registry.note_targets - 1]
+  a.routes[1], b.routes[1] = true, true
+  S.lib.notes.play(1, played(7740, 64))  -- a holds it
+  local logged_on = record_a.note_on
+  local attempts = 0
+  record_a.note_on = function(...)
+    attempts = attempts + 1
+    error("probe on")
+  end
+  S.lib.notes.play(1, played(7741, 67))
+  h.claim_script_errors(context, 1, "strata: target a failed: ", "probe on")
+  S.lib.notes.release(1, "midi", 7740)
+  local offs = calls_of(a, "off")
+  assert_equal(#offs, 1, "the first note's off still reaches a, once")
+  assert_equal(offs[1].args[2], "m7740")
+  S.lib.notes.play(1, played(7742, 69))
+  assert_equal(attempts, 1, "no further note_on reaches a")
+  -- a note_off that raises is contained, and the other targets' offs go on
+  record_a.note_on = logged_on
+  targets.route_changed(1)  -- the failure lifted; b's notes end
+  S.lib.notes.play(1, played(7743, 70))
+  assert_equal(calls_of(a, "on")[#calls_of(a, "on")].args[2], "m7743", "a plays again after a route change")
+  record_a.note_off = function() error("probe off") end
+  S.lib.notes.release(1, "midi", 7743)
+  h.claim_script_errors(context, 1, "strata: target a failed: ", "probe off")
+  assert_equal(balance(b).m7743, 0, "b's off still went")
+  assert_equal(targets.sounding(1).m7743, nil)
+  assert_balanced(b, "b")
 end)
 
 test("a target that raises prints once and is skipped until the patterns stop or a route changes", function()

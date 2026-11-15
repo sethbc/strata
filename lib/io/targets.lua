@@ -61,9 +61,12 @@ return function(S)
 
   -- One call of a target's field, contained: a target that raises prints
   -- once ("strata: target <name> failed: ...") and is skipped until
-  -- clear_failures. Returns whether it ran and what it returned
+  -- clear_failures for starting and expressing notes (routed, note_on,
+  -- express); a note_off always goes, so a note it started never hangs.
+  -- Returns whether it ran and what it returned
+  local ALWAYS = {note_off = true}
   local function call_target(target, field, ...)
-    if failed[target.name] or not target[field] then return false end
+    if (failed[target.name] and not ALWAYS[field]) or not target[field] then return false end
     local result
     local ran = S.lib.ui_frame.contained_call(errors, target.name, "target " .. target.name, function(...)
       result = target[field](...)
@@ -89,7 +92,7 @@ return function(S)
   end
 
   -- End voice's note id: its pending off dropped, its off sent to the
-  -- targets its on went to (each still registered and not skipped)
+  -- targets its on went to (each still registered, failed or not)
   local function end_note(voice, id)
     local record = sounding[voice][id]
     if not record then return end
@@ -118,8 +121,8 @@ return function(S)
   -- Start voice's note id at pitch: a sounding id ended first; a silenced
   -- voice starts nothing; every routed target gets note_on, and the note
   -- keeps the names of those that took it, with its off due at off_beat
-  -- (nil: a played note, ended by its hook)
-  local function start_note(voice, id, pitch, velocity, info, off_beat)
+  -- (nil: a played note, ended by its hook) and start_beat the hit's beat
+  local function start_note(voice, id, pitch, velocity, info, off_beat, start_beat)
     end_note(voice, id)
     if S.lib.voice_mix.silenced(voice) then return end
     local names = {}
@@ -131,7 +134,7 @@ return function(S)
     if #names == 0 then return end
     local record = {pitch = pitch, targets = names, off_beat = off_beat}
     sounding[voice][id] = record
-    if off_beat then offs[#offs + 1] = {voice = voice, id = id, beat = off_beat, note = record} end
+    if off_beat then offs[#offs + 1] = {voice = voice, id = id, beat = off_beat, start = start_beat, note = record} end
   end
 
   -- Whether some target is routed for voice and voice is not silenced
@@ -149,7 +152,7 @@ return function(S)
     if not valid_voice(voice) then return end
     for k, pitch in ipairs(event.pitches or {}) do
       start_note(voice, TARGETS.step_prefix .. k, pitch, event.velocity, {source = "step"},
-        event.beat + event.gate_beats)
+        event.beat + event.gate_beats, event.beat)
     end
   end
 
@@ -187,13 +190,16 @@ return function(S)
       end
     end})
 
-  -- The offs that are due, from the LFO clock's step
+  -- The offs that are due, from the LFO clock's step: at their beat, or at
+  -- once when the beat is now before the note's own start (a followed
+  -- transport start, a reset or a new clock source put it back, with no
+  -- stop of the outputs: the off would wait until the beat climbed back)
   S.lib.lfos.on_step(function()
     if #offs == 0 then return end
     local now = clock.get_beats()
     local due = {}
     for _, off in ipairs(offs) do
-      if off.beat <= now then due[#due + 1] = off end
+      if off.beat <= now or off.start > now then due[#due + 1] = off end
     end
     for _, off in ipairs(due) do
       if sounding[off.voice][off.id] == off.note then end_note(off.voice, off.id) end
@@ -293,7 +299,8 @@ return function(S)
     S.register_note_target({name = LAYOUT_TARGET, routed = function() return false end,
       note_on = function() end, note_off = function() end,
       rows = function(voice)
-        return {{label = "route", kind = "param", param_id = "v" .. voice .. "_mute", binary = {[0] = "off", [1] = "on"}},
+        return {{label = "layout probe", kind = "action", hint = "probe", run = function() end, id = "probe",
+          text = function() return "v" .. voice end},
           {kind = "status", text = "a target's rows"}}
       end,
       status = function() return "[!]" end})
