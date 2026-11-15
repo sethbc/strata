@@ -958,4 +958,267 @@ test("under off and teletype no action anywhere produces an ii command", functio
   end
 end)
 
+---------------------------------------------------------------------------
+-- 3.6's params
+---------------------------------------------------------------------------
+
+-- The five groups every 3.6 param is in (the plan's Params constraint)
+local GROUPS = {"strata_out_midi", "strata_crow", "strata_out_ii", "strata_out_nb", "strata_tape"}
+
+-- Every param of the five groups, found from each group's span in the
+-- paramset (the n params after it), hidden ones included; a separator (a
+-- device's hidden filler in the ii group) holds no value and is left out
+local function io_params()
+  local list = {}
+  for _, group in ipairs(GROUPS) do
+    local index = params.lookup[group]
+    assert_true(index ~= nil, "the group " .. group .. " exists")
+    for position = index + 1, index + params.params[index].n do
+      local param = params.params[position]
+      if param.t ~= params.tSEPARATOR then list[#list + 1] = param end
+    end
+  end
+  return list
+end
+
+local function io_id_set()
+  local set = {}
+  for _, param in ipairs(io_params()) do set[param.id] = true end
+  return set
+end
+
+local function io_values()
+  local values = {}
+  for _, param in ipairs(io_params()) do values[param.id] = params:get(param.id) end
+  return values
+end
+
+-- Which voices each target plays now, as text ("midi 1 2 3 | crow 3 | ...")
+local function routes_now(S)
+  local parts = {}
+  for _, target in ipairs(S.registry.note_targets) do
+    local voices = {}
+    for voice = 1, S.constants.NUM_VOICES do
+      if target.routed(voice) then voices[#voices + 1] = voice end
+    end
+    parts[#parts + 1] = target.name .. " " .. table.concat(voices, " ")
+  end
+  return table.concat(parts, " | ")
+end
+
+local function no_routes(S)
+  local parts = {}
+  for _, target in ipairs(S.registry.note_targets) do parts[#parts + 1] = target.name .. " " end
+  return table.concat(parts, " | ")
+end
+
+-- A light start for the param tests: two nb players, a crow, Strata
+-- leading the bus (so the ii devices' routes count)
+local function started_light()
+  local context = load_strata({before_load = function(context)
+    context.nb.add_player("alpha")
+    context.nb.add_player("beta", {"note_on", "note_off", "stop_all", "add_params"})
+  end})
+  finish_startup(context)
+  local S = local_value("S")
+  context.crow.plug()
+  set_rig(S, "ii_bus", "strata")
+  return context, S
+end
+
+local function file_lines(path)
+  local lines = {}
+  for line in io.lines(path) do lines[#lines + 1] = line end
+  return lines
+end
+
+test("a PSET with everything on loads back to the same routes, and a 3.5 PSET to everything off", function()
+  local context, S = started_light()
+  set_routes(S)
+  params:set("midi_out_bend_range", 24)
+  params:set("midi_pc_in", 1)
+  params:set("midi_pc_out", 1)
+  context.clock.advance_until(S.lfo_clock)  -- MIDI out's routes settle (ruling 29)
+  local on_values, on_routes = io_values(), routes_now(S)
+  assert_true(on_routes ~= no_routes(S), "routes are on: " .. on_routes)
+  local path = h.data_root .. "io_system_everything_on.pset"
+  params:write(path)
+
+  -- a fresh load reads it back
+  context, S = started_light()
+  local defaults = io_values()
+  assert_equal(routes_now(S), no_routes(S), "a fresh load routes nothing")
+  params:read(path)
+  for id, value in pairs(on_values) do assert_equal(params:get(id), value, id .. " read back") end
+  assert_equal(routes_now(S), on_routes, "the same routes")
+  assert_true(S.lib.io_tape.is_on(), "the tape runs again")
+
+  -- the same PSET without any 3.6 param's line, as 3.5 wrote it
+  local ids = io_id_set()
+  local kept = {}
+  for _, line in ipairs(file_lines(path)) do
+    local id = line:match('^"(.-)":')
+    if not (id and ids[id]) then kept[#kept + 1] = line end
+  end
+  assert_true(#kept < #file_lines(path), "the 3.6 lines left out")
+  local old_path = h.data_root .. "io_system_3_5.pset"
+  local file = assert(io.open(old_path, "w"))
+  file:write(table.concat(kept, "\n") .. "\n")
+  file:close()
+  params:read(old_path)
+  for id, value in pairs(defaults) do assert_equal(params:get(id), value, id .. " back to its default") end
+  assert_equal(routes_now(S), no_routes(S), "a 3.5 PSET routes nothing")
+  assert_true(not S.lib.io_tape.is_on(), "the tape is off")
+end)
+
+-- A param moved off where it stands by one detent of its kind: a binary
+-- flipped, an option to the next, a number up one (down at its top), a
+-- control 0.37 along its range. A text param is a keyed option's key,
+-- which its option's move sets
+local function move_off(param)
+  local id = param.id
+  if param.t == params.tBINARY then
+    params:set(id, 1 - params:get(id))
+  elseif param.t == params.tOPTION then
+    params:set(id, params:get(id) % param.count + 1)
+  elseif param.t == params.tNUMBER then
+    local value = params:get(id)
+    params:set(id, value < param.max and value + 1 or value - 1)
+  elseif param.t == params.tCONTROL then
+    params:set_raw(id, param.raw < 0.5 and param.raw + 0.37 or param.raw - 0.37)
+  end
+end
+
+local SOURCES = {synth = 1, buffer = 2, input = 10}  -- v<i>_source: the synth, buffer slot 1, the input
+
+test("no 3.6 param is a scene field, an LFO destination, a fader or a draw of a randomize, a mutation or a drift",
+  function()
+  -- the plan's Params constraint, for the five groups at once (two of their
+  -- packages check their own: test/unit/io_jf_test.lua, io_nb_test.lua)
+  local context, S = started_light()
+  local NUM_VOICES = S.constants.NUM_VOICES
+  local defaults = io_values()
+  local list = io_params()
+  for _, param in ipairs(list) do move_off(param) end
+  -- MIDI out settles its routes as a whole and refuses two MPE voices on a
+  -- port (docs/notes/lua/io/midi_out.md): each voice on a port of its own
+  for voice = 1, NUM_VOICES do params:set("v" .. voice .. "_out_port", 7 + voice) end
+  context.clock.advance_until(S.lfo_clock)
+  local held = io_values()
+  for id, value in pairs(held) do
+    assert_true(value ~= defaults[id], id .. " moved off its default " .. tostring(defaults[id]))
+  end
+  local ids = io_id_set()
+
+  -- not in a captured scene, at any depth
+  capture_scene(1)
+  local seen = {}
+  local function walk(value, path)
+    if type(value) ~= "table" or seen[value] then return end
+    seen[value] = true
+    for key, inner in pairs(value) do
+      assert_true(not ids[key], "scene 1 holds " .. tostring(key) .. " at " .. path)
+      assert_true(not (type(inner) == "string" and ids[inner]), "scene 1 names " .. tostring(inner) .. " at " .. path)
+      walk(inner, path .. "." .. tostring(key))
+    end
+  end
+  walk(S.scenes[1], "scene")
+  -- not an LFO destination, each resolved
+  for index, destination in ipairs(S.LFO_DESTINATIONS) do
+    local id = destination.resolve()
+    assert_true(not ids[id or ""], "LFO destination " .. index .. " is " .. tostring(id))
+  end
+  -- not on a fader page, the voice on its synth, a buffer slot and the input
+  for name, source in pairs(SOURCES) do
+    for voice = 1, NUM_VOICES do
+      params:set("v" .. voice .. "_source", source)
+      for _, id in ipairs(fader_param_ids(voice)) do
+        assert_true(not ids[id], "voice " .. voice .. " (" .. name .. ") has the fader " .. id)
+      end
+    end
+  end
+  -- of them only the tape's four are macro targets
+  local tape_four = {}
+  for _, id in ipairs(S.lib.io_tape.TAPE.macro_targets) do tape_four[id] = true end
+  local function only_tape_four(found, where)
+    local count = 0
+    for id in pairs(found) do
+      assert_true(tape_four[id], id .. " is " .. where)
+      count = count + 1
+    end
+    assert_equal(count, 4, "the tape's four are " .. where)
+  end
+  local catalog, registered = {}, {}
+  for _, id in ipairs(S.lib.macros.target_ids()) do
+    if ids[id] then catalog[id] = true end
+  end
+  for _, record in ipairs(S.registry.macro_targets) do
+    if ids[record.id] then registered[record.id] = true end
+  end
+  only_tape_four(catalog, "a macro target")
+  only_tape_four(registered, "a registered macro target")
+
+  -- by effect, on every voice (running and unlocked) and each source kind:
+  -- MAIN's randomize, a mutation at probability and amount 1 and a drift
+  -- leave every one of them where it was set. Each effect's positive
+  -- control (ruling 31) starts a param it draws mid-range and records that
+  -- it differed at some step, never only at the end, and leans on no seed
+  -- (the mutation walks pairs() over a voice's params)
+  run_all_voices(S)
+  for voice = 1, NUM_VOICES do
+    assert_true(S.voices[voice].active and not S.frozen[voice], "voice " .. voice .. " runs, unlocked")
+  end
+  params:set("mutation_probability", 1)
+  params:set("mutation_amount", 1)
+  local function assert_held(where)
+    for id, value in pairs(held) do assert_equal(params:get(id), value, id .. " after " .. where) end
+  end
+  local function moved_at_some_step(id_of, start, steps, effect)
+    local moved = {}
+    for voice = 1, NUM_VOICES do params:set(id_of(voice), start) end
+    local starts = {}
+    for voice = 1, NUM_VOICES do starts[voice] = params:get(id_of(voice)) end
+    for _ = 1, steps do
+      effect()
+      for voice = 1, NUM_VOICES do
+        if params:get(id_of(voice)) ~= starts[voice] then moved[voice] = true end
+      end
+    end
+    return moved
+  end
+  local function pitch_id(voice) return "v" .. voice .. "_grain_pitch" end
+  local function size_id(voice) return "v" .. voice .. "_grain_size" end
+  for name, source in pairs(SOURCES) do
+    for voice = 1, NUM_VOICES do params:set("v" .. voice .. "_source", source) end
+    -- the randomize draws the grain pitch on every source, over 0.5 to 2.5
+    -- (lib/mutation.lua's voice_spec): from 1.5, five randomizes of each
+    -- voice by both of MAIN's doors
+    local randomized = moved_at_some_step(pitch_id, 1.5, 5, function()
+      for voice = 1, NUM_VOICES do
+        randomize_voice(voice)
+        S.lib.mutation.randomize(S.lib.mutation.voice_spec(voice))
+      end
+    end)
+    for voice = 1, NUM_VOICES do
+      assert_true(randomized[voice], "the randomize drew voice " .. voice .. "'s grain pitch (" .. name .. ")")
+    end
+    assert_held("MAIN's randomize of every voice (" .. name .. ")")
+    -- the mutation draws the grain size on every source, a step of at most
+    -- 0.2 at amount 1, about half the steps (io_jf_test.lua works out the
+    -- odds): from 0.25, the middle of its 0.01 to 0.5, forty steps
+    local mutated = moved_at_some_step(size_id, 0.25, 40, gentle_mutate)
+    for voice = 1, NUM_VOICES do
+      assert_true(mutated[voice], "the mutation moved voice " .. voice .. "'s grain size (" .. name .. ")")
+    end
+    assert_held("a mutation of every voice (" .. name .. ")")
+    -- the drift walks every running voice's grain pitch: from 1, far from
+    -- its 0.25 and 4 clamps, twenty ticks
+    local drifted = moved_at_some_step(pitch_id, 1, 20, drift_update)
+    for voice = 1, NUM_VOICES do
+      assert_true(drifted[voice], "the drift moved voice " .. voice .. "'s grain pitch (" .. name .. ")")
+    end
+    assert_held("a drift of every voice (" .. name .. ")")
+  end
+end)
+
 end
