@@ -531,17 +531,29 @@ return function(S)
   end
 
   -- A step's absolute pitches (fractional MIDI notes): its chord's, else
-  -- the voice's own pitch, both after the step's lock on the note's param
-  -- (an input voice's pitch lock); a fresh list
+  -- the voice's own pitch, both after the step's pitch lock. On an input
+  -- voice the lock is on the note's own param, so it is in the chord's base
+  -- already; on a synth or buffer voice it is on v<i>_grain_pitch (a rate
+  -- ratio), and every pitch moves by the lock's distance from the standing
+  -- grain pitch, 12 x log2(lock / stored) semitones (the standing grain
+  -- pitch itself is not added: unlocked, nothing moves). A fresh list
   local function step_pitches(voice_idx, inputs)
     local pitches, chord = {}, inputs.chord
+    local note_id = note_param(voice_idx)
     if chord then
       for k = 1, chord.count do
         if chord.pitches[k] ~= nil then pitches[#pitches + 1] = chord.pitches[k] end
       end
     else
-      local note_id = note_param(voice_idx)
       pitches[1] = value_note(voice_idx, inputs.wanted[note_id] or params:get(note_id))
+    end
+    local pitch_id = voice_param(voice_idx, SEQ.lock_params.pitch)
+    local lock = inputs.wanted[pitch_id]
+    if pitch_id ~= note_id and lock ~= nil then
+      local shift = SEQ.semitones * log2(lock / params:get(pitch_id))
+      if finite(shift) then
+        for index, pitch in ipairs(pitches) do pitches[index] = pitch + shift end
+      end
     end
     return pitches
   end

@@ -1064,4 +1064,5 @@ test("a registered macro target follows the matrix depths", function()
   params:set("macro_1", 0.5); settle(context)
   assert_near(params:get("x_level"), 0.3, 1e-9, "and the macro moves it")
 end)
+
 end

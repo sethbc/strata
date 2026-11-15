@@ -530,18 +530,23 @@ return function()
   end
 
   -- An ii device (lib/io/ii.lua reads them, ruling 8): {name, ready = fn,
-  -- release = fn, param_count = the params add_params adds (a whole number,
-  -- 0 by default), add_params = fn}; every field but name optional, and a
-  -- param_count above 0 needs add_params
+  -- release = fn, param_count = the params add_params adds (a finite whole
+  -- number, 0 by default), add_params = fn}; every field but name
+  -- optional, and a param_count above 0 needs add_params. The registry
+  -- keeps a copy with param_count filled in; the caller's table is left as
+  -- it was given
   function M.register_ii_device(record)
     local kind = "register_ii_device"
     local where = require_named(record, "ii_devices", kind, "name", II_DEVICE_FIELDS)
     require_functions(record, where, {}, {"ready", "release", "add_params"})
-    if record.param_count == nil then record.param_count = 0 end
-    require_arg(is_whole(record.param_count, 0), where, "param_count is a whole number, at least 0")
-    require_arg(record.param_count == 0 or record.add_params ~= nil, where,
-      "a param_count above 0 needs add_params")
-    table.insert(M.registry.ii_devices, record)
+    local count = record.param_count
+    if count == nil then count = 0 end
+    require_arg(is_whole(count, 0) and count < math.huge, where, "param_count is a finite whole number, at least 0")
+    require_arg(count == 0 or record.add_params ~= nil, where, "a param_count above 0 needs add_params")
+    local stored = {}
+    for field, value in pairs(record) do stored[field] = value end
+    stored.param_count = count
+    table.insert(M.registry.ii_devices, stored)
   end
 
   -- A macro target (lib/macros.lua's catalog lists each after the matrix
