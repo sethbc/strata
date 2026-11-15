@@ -2036,4 +2036,175 @@ test("stub musicutil.note_num_to_name is norns' lib/musicutil.lua", function()
   assert_equal(musicutil.note_num_to_name(1, true), "C#-2", "the widest name")
 end)
 
+-- 3.6's stubs (Task 0d): crow, OSC, softcut, nb and iii
+local function captured_prints(action)
+  local lines, real = {}, _G.print
+  _G.print = function(...)
+    local parts = {}
+    for index = 1, select("#", ...) do parts[index] = tostring((select(index, ...))) end
+    table.insert(lines, table.concat(parts, "\t"))
+  end
+  local ok, err = pcall(action)
+  _G.print = real
+  assert_true(ok, tostring(err))
+  return lines
+end
+
+-- norns:lua/core/crow.lua:198-223 builds each line with core/crow/quote.lua:
+-- a key is "[%g]" for a number and "[%q]" for a string (the first link of a
+-- chain is bare), a number "%.6g", a string "%q", arguments joined by ","
+test("the crow stub sends what norns' proxy sends, only while a crow is there", function()
+  local context = load_strata()
+  context.crow.clear()
+  crow.send("x = 1")
+  assert_equal(#context.crow.sent, 0, "nothing is recorded with no crow plugged")
+  context.crow.plug()
+  assert_true(norns.crow.connected(), "plug sets norns.crow.dev")
+  context.crow.clear()
+  crow.send("x = 1")
+  crow("x = 1")
+  crow.output[1].volts = 3
+  crow.ii.jf.play_note(0.5, 5)
+  crow.input[1].mode("stream", 0.02)
+  crow.state = {7}
+  crow.ii.jf.run_mode(1 / 3, true)
+  crow.output[2]()
+  assert_equal(table.concat(context.crow.sent, "\n"), table.concat({
+    "x = 1", "x = 1", 'output[1]["volts"]=3', 'ii["jf"]["play_note"](0.5,5)',
+    'input[1]["mode"]("stream",0.02)', 'state={[1]=7}', 'ii["jf"]["run_mode"](0.333333,true)',
+    "output[2]()" }, "\n"), "the proxy's lines")
+  context.crow.clear()
+  crow.reset()
+  assert_equal(context.crow.sent[1], "crow.reset()", "crow.reset sends its line")
+  context.crow.unplug()
+  assert_true(not norns.crow.connected(), "unplug clears norns.crow.dev")
+end)
+
+test("the crow stub counts function assignments and resets", function()
+  local context = load_strata()
+  crow.input[1].stream = function() end
+  assert_equal(context.crow.function_assignments, 1, "counted unplugged")
+  assert_equal(#context.crow.sent, 0, "and nothing sent")
+  context.crow.plug()
+  assert_equal(context.crow.resets, 1, "the default add resets crow")
+  context.crow.clear()
+  crow.input[2].stream = function() end
+  assert_equal(context.crow.function_assignments, 2)
+  -- norns' seven static events come first, so the first function is H, the second I
+  assert_equal(context.crow.sent[1], 'input[2]["stream"]=function(...)_c.tell("I",quote(...))end',
+    "norns' forwarding stub names the next event key")
+  local added = {}
+  norns.crow.add = function(id, name, dev) table.insert(added, id .. name .. dev) end
+  context.crow.plug()
+  assert_equal(#added, 1, "a script's own add runs in place of the default")
+  assert_equal(context.crow.resets, 1, "and the default's reset does not")
+end)
+
+test("a fired crow event reaches the script's handler, and an unassigned one prints", function()
+  local context = load_strata()
+  context.crow.plug()
+  local got
+  crow.input[1].stream = function(...) got = {...} end
+  context.crow.fire("H", 1.5, 2)
+  assert_equal(got and (got[1] .. "," .. got[2]), "1.5,2", "the handler's arguments")
+  local lines = captured_prints(function() context.crow.fire("Z", 1, "a") end)
+  assert_equal(lines[1], 'unused event: ^^Z(1,"a")', "norns' unused event line")
+  lines = captured_prints(function() context.crow.fire("version", "v4") end)
+  assert_equal(lines[1], "crow version: v4", "a static event")
+end)
+
+test("the OSC stub runs the script's handler, then norns' /param handling", function()
+  local context = load_strata()
+  local order = {}
+  context.params:add_number("osc_test_param", "osc test", 0, 10, 0)
+  context.params:set_action("osc_test_param", function(value) table.insert(order, "param " .. value) end)
+  osc.event = function(path, args, from)
+    table.insert(order, path .. " " .. from[1] .. ":" .. from[2])
+  end
+  context.osc.receive("/param/osc_test_param", {2})
+  assert_equal(table.concat(order, "|"), "/param/osc_test_param 10.0.0.2:57121|param 2", "handler first, then the param")
+  assert_equal(context.params:get("osc_test_param"), 2)
+  local lines = captured_prints(function() context.osc.receive("/param/nope", {1}) end)
+  assert_true(#lines >= 1, "an unknown id prints")
+  osc.send({"10.0.0.2", 9000}, "/x", {1})
+  assert_equal(context.osc.sent[1].to[2], 9000, "send is recorded")
+  assert_equal(context.osc.sent[1].path, "/x")
+  assert_equal(context.osc.sent[1].args[1], 1)
+end)
+
+test("the softcut stub records calls by name and refuses a name softcut lacks", function()
+  local context = load_strata()
+  assert_equal(softcut.VOICE_COUNT, 6)
+  assert_equal(softcut.BUFFER_SIZE, 16777216 / 48000)
+  assert_equal(context.softcut.value("rate", 1), nil, "nil before any call")
+  softcut.rate(1, 0.5)
+  softcut.rate(1, 0.75)
+  softcut.rate(2, 2)
+  softcut.level_input_cut(1, 2, 0.25)
+  assert_equal(context.softcut.value("rate", 1), 0.75, "the last value for voice 1")
+  assert_equal(context.softcut.value("rate", 2), 2)
+  assert_equal(context.softcut.value("level_input_cut", 1, 2), 0.25, "two leading arguments")
+  assert_equal(context.softcut.calls[1][1], "rate")
+  assert_true(not pcall(function() softcut.no_such(1) end), "a name softcut lacks raises")
+  assert_equal(softcut.filter_fc ~= nil, true, "an alias is a function")
+  context.audio.api.level_eng_cut(1)
+  assert_equal(context.audio.levels.eng_cut, 1)
+  audio.level_cut(0.5)
+  assert_equal(context.audio.levels.cut, 0.5)
+  assert_equal(audio.file_info("/nope"), 0, "file_info still works")
+  softcut.reset()
+  assert_equal(#context.softcut.calls, 0, "reset empties the calls")
+  assert_equal(context.softcut.value("rate", 1), nil, "and the values")
+end)
+
+test("the nb stub's players record their calls", function()
+  local context = load_strata()
+  local player = context.nb.add_player("emp")
+  assert_true(note_players.emp == player, "the player is in note_players")
+  player:note_on(60, 0.5)
+  player:note_off(60)
+  player:modulate_note(60, "pressure", 0.5)
+  assert_equal(player.calls[1][1] .. player.calls[1][2] .. player.calls[1][3], "note_on600.5")
+  assert_equal(#player.calls, 3)
+  assert_equal(player.calls[3][3], "pressure")
+  assert_equal(player:describe().name, "emp", "describe names the player")
+end)
+
+test("the iii stub runs a device script against iii's functions", function()
+  local context = load_strata()
+  local path = data_root .. "iii_stub_script.lua"
+  local file = assert(io.open(path, "w"))
+  file:write("function event_grid(x, y, z) midi_note_on(x * 16 + y, z * 100, 1) end\n"
+    .. "function event_midi(b1, b2, b3) grid_led(2, 1, b3 % 16); grid_refresh() end\n"
+    .. "function event_arc(n, d) midi_cc(n, d, 2) end\n")
+  file:close()
+  local device = require("stub_iii")({kind = "grid", cols = 16, rows = 8})
+  device.run(path)
+  device.press(2, 1, 1)
+  assert_equal(table.concat(device.sent[1], ","), "144,33,100", "a note on, the status byte first")
+  device.midi_in(0x90, 5, 7)
+  assert_equal(device.leds[1][2], 7, "the LED as last refreshed, [y][x]")
+  assert_equal(device.refreshes, 1)
+  device.turn(3, 5)
+  assert_equal(table.concat(device.sent[2], ","), "177,3,5", "an arc turn")
+  device.connect(context, 3)
+  local heard = {}
+  context.midi.vports[3].event = function(data) table.insert(heard, table.concat(data, ",")) end
+  device.press(1, 1, 1)
+  assert_equal(heard[1], "144,17,100", "what the script sends is the port's incoming message")
+  context.midi.vports[3]:note_on(60, 100, 1)
+  assert_equal(device.leds[1][2], 4, "a message Strata sends reaches event_midi (100 % 16)")
+  assert_equal(device.refreshes, 2)
+end)
+
+test("every global the stubs add is one the structure test knows", function()
+  load_strata()
+  for _, name in ipairs({"crow", "osc", "softcut", "note_players"}) do
+    assert_true(rawget(_G, name) ~= nil, name .. " is a stub global")
+  end
+  assert_true(norns.crow ~= nil and norns.state ~= nil, "norns.crow joins norns")
+  local structure = io.open(test_dir .. "/unit/structure_test.lua"):read("*a")
+  assert_true(structure:find("stub_global_names", 1, true), "the structure test takes its list from the install")
+end)
+
 end

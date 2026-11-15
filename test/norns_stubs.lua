@@ -25,6 +25,11 @@
 --   * midi (stub_midi.lua), textentry (stub_textentry.lua), poll, fileselect and
 --     musicutil follow core/midi.lua, lib/textentry.lua, core/poll.lua,
 --     lib/fileselect.lua and lib/musicutil.lua
+--   * crow (stub_crow.lua), osc (stub_osc.lua), softcut (stub_softcut.lua),
+--     nb's note_players (stub_nb.lua) and the iii device (stub_iii.lua, made
+--     by a test) follow core/crow.lua and core/crow/quote.lua, core/osc.lua,
+--     core/softcut.lua and audio.lua's cut levels, nb's lib/player.lua and
+--     monome's iii script API
 --   * clock follows lua/core/clock.lua over matron's scheduler
 --     (clock_scheduler.cc): clock.run resumes the coroutine at once (an
 --     error there reaches the caller); sleep and sync yield to the
@@ -3140,7 +3145,12 @@ function stubs.install(options)
   -- (matron's snd_file_inspect: 0, 0, 0 for a file libsndfile cannot open).
   -- A test lists the files it knows: context.audio.files[path] = {channels,
   -- frames, rate}; any other path reads as unopenable
-  context.audio = { files = {} }
+  context.audio = { files = {}, levels = {} }
+  -- 3.6's stubs: crow (norns.crow joins norns below), OSC, softcut and nb
+  context.crow = require("stub_crow")()
+  context.osc = require("stub_osc")()
+  context.softcut = require("stub_softcut")()
+  context.nb = require("stub_nb")()
   -- context.audio.register(path, {channels, frames, rate}) lists a file the
   -- test has no bytes for
   function context.audio.register(path, info)
@@ -3183,6 +3193,13 @@ function stubs.install(options)
       if channels then return channels, frames, rate end
       return 0, 0, 0
     end,
+    -- lua/core/audio.lua's softcut and cut levels (:187-189, :352-372): the
+    -- last value of each is context.audio.levels.<name>
+    level_cut = function(value) context.audio.levels.cut = value end,
+    level_adc_cut = function(value) context.audio.levels.adc_cut = value end,
+    level_eng_cut = function(value) context.audio.levels.eng_cut = value end,
+    level_tape_cut = function(value) context.audio.levels.tape_cut = value end,
+    level_cut_rev = function(value) context.audio.levels.cut_rev = value end,
   }
   context.encoders = make_encoders()
   function context.menu.rebuild_params() context.menu.rebuilds = context.menu.rebuilds + 1 end
@@ -3227,6 +3244,10 @@ function stubs.install(options)
   _G.fileselect = nil  -- lib/fileselect.lua is a module (package.preload below)
   _G.poll = context.polls
   _G.audio = context.audio.api
+  _G.crow = context.crow.crow
+  _G.osc = context.osc.osc
+  _G.softcut = context.softcut.softcut
+  _G.note_players = {}
   _G._menu = context.menu
   -- norns.platform: matron's board number (lua/core/norns.lua; 2 CM3, 3 Pi
   -- 3, 4 Pi 4, 5 CM4, 6 CM4S); 0, unknown, as off a norns. A test sets it
@@ -3245,7 +3266,7 @@ function stubs.install(options)
     -- lua/core/pmap.lua (make_pmap), cleared as Script.clear does: empty
     -- until a test maps a param or reads the file
     pmap = make_pmap(util), menu_midi_event = make_menu_midi_event(util),
-    enc = context.encoders.api, encoders = { callback = nil },
+    enc = context.encoders.api, encoders = { callback = nil }, crow = context.crow.norns_crow,
     -- lua/core/menu.lua: norns.menu.status() returns _menu.mode, and
     -- norns.menu.init() (used by fileselect) calls _menu.set_mode(_menu.mode)
     menu = { status = function() return context.menu.mode end,
