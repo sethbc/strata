@@ -891,6 +891,30 @@ test("a MIDI output that returns gets all notes off on the channels it had notes
   assert_equal(sent(device), SETUP_15_48:gsub("cc 6 15 1", "cc 6 3 1"), "no notes when it left: the setup only")
 end)
 
+test("a synth moved to another port while its notes sound gets all notes off there; the one taking its port gets nothing", function()
+  -- SYSTEM > DEVICES moves a device with update_devices() only, told as the menu closes
+  -- (lib/io/ports.lua's reconcile): every departure, then every arrival
+  local context, S = started()
+  local a = context.midi.plug(2, "synth a")
+  local b = context.midi.plug(4, "synth b")
+  local target = midi_target(S)
+  params:set("v1_out_channel", 6)
+  params:set("v1_out_port", 2); settled(context)
+  target.note_on(1, "s1", 60, 1, step_info())
+  assert_equal(sent(a), "note_on 60 127 6", "a plays the note")
+  clear(a); clear(b)
+  _menu.set_mode(true)
+  context.midi.reassign(2, 3)  -- synth a to port 3
+  context.midi.reassign(4, 2)  -- synth b to port 2
+  _menu.set_mode(false)
+  assert_equal(S.lib.io_ports.device(3), "synth a"); assert_equal(S.lib.io_ports.device(2), "synth b")
+  assert_equal(sent(a), "cc 123 0 6", "a gets all notes off on the note's channel at port 3")
+  assert_equal(sent(b), "", "b, now on port 2, gets nothing")
+  target.note_off(1, "s1")
+  assert_equal(sent(b), "", "and no off for a note it never got")
+  assert_equal(sent(a), "cc 123 0 6", "nothing more for a")
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")

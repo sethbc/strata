@@ -30,7 +30,7 @@ Only one voice can be MPE on a port, and a plain voice on that port needs a chan
 
 ### When the synth comes back
 
-If a port's device is unplugged and plugged in again, Strata sends all notes off (CC 123) on each channel it had notes on, then sets an MPE voice's zone up again.
+If a port's device is unplugged and plugged in again, or moved to another port in SYSTEM > DEVICES, Strata sends it all notes off (CC 123) on each channel it had notes on, on the port it is now on, then sets an MPE voice's zone up again. A device that takes the old port gets none of this, and no note off for a note it never had.
 
 ## CC out
 
