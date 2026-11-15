@@ -39,7 +39,7 @@ end
 local function started(with_double)
   local state = {leads = true, calls = {}}
   -- without the double the real ii module is taken away before init, so
-  -- the ii group adds nothing and the device's params never exist (ruling 6)
+  -- the ii group adds nothing and the device's params never exist (build ruling 6)
   local context = load_strata({before_init = function()
     local_value("S").lib.io_ii = with_double and make_double(state) or nil
   end})
@@ -256,7 +256,7 @@ test("its eight params are PSET-only and its rows show on the voice section", fu
 end)
 
 test("without the ii module the device does nothing and the page draws", function()
-  -- ruling 6: on a branch with no S.lib.io_ii the params were never added
+  -- build ruling 6: on a branch with no S.lib.io_ii the params were never added
   local _, S = started(false)
   assert_equal(S.lib.io_ii, nil, "no ii module")
   local target = target_of(S)

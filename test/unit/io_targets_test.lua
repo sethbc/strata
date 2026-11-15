@@ -556,7 +556,7 @@ end)
 test("the voice section shows the selected voice's rows in the targets' order", function()
   local context, S, targets = started()
   -- the probes below stand alone: every registered target goes first (two
-  -- take real targets' names, ruling 26; the rest would add their rows)
+  -- take real targets' names, plan ruling 26; the rest would add their rows)
   for index = #S.registry.note_targets, 1, -1 do table.remove(S.registry.note_targets, index) end
   local function voice_rows()
     local rows = {}

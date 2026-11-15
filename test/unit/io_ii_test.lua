@@ -193,7 +193,7 @@ local function fill(ii, n, from)
   return lines
 end
 
--- Ruling 24: the queue sends an off exactly when its line owes one (the line is
+-- Build ruling 24: the queue sends an off exactly when its line owes one (the line is
 -- high on the device, or a send for it waits); an off is never dropped and never
 -- displaces a line; a send at 48 waiting is the only loss, and its off is then not owed
 
@@ -385,7 +385,7 @@ test("a TELEXo envelope note through a full queue gets the offs of the ons it se
   assert_equal(table.concat(queue_lines(step, ii), "|"), table.concat(expected, "|"))
 end)
 
--- Ruling 24's addition: state is kept only for the (device, command) pairs
+-- Build ruling 24's addition: state is kept only for the (device, command) pairs
 -- that have had an off this lead; a line of such a pair with no state is unknown
 -- (it may have gone high before the pair was learned) and owes its first off
 

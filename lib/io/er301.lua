@@ -1,7 +1,7 @@
 -- lib/io/er301.lua
 -- The ER-301 as a note target over the ii bus (S.lib.io_er301, 3.6 design
 -- 6.3, docs/notes/lua/io/er301.md): a port is one line that plays one note
--- at a time, whatever voices feed it (ruling 10): the newest note's pitch
+-- at a time, whatever voices feed it (build ruling 10): the newest note's pitch
 -- is the port's cv, the trigger high while any note of the line sounds.
 -- Every message goes through S.lib.io_ii (another module of this release);
 -- where it or the params are absent the device does nothing.

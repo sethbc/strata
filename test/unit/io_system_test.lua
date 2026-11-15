@@ -412,7 +412,7 @@ end
 
 -- Everything on: the routes, the MPE input, the surfaces, then the bus
 -- given to Strata (its devices made ready), and one step for MIDI out's
--- routes to settle (ruling 29)
+-- routes to settle (plan ruling 29)
 local function everything_on(rig, bus)
   local context, S = rig.context, rig.S
   set_routes(S)
@@ -1417,7 +1417,7 @@ test("a PSET with everything on loads back to the same routes, and a 3.5 PSET to
   params:set("midi_out_bend_range", 24)
   params:set("midi_pc_in", 1)
   params:set("midi_pc_out", 1)
-  context.clock.advance_until(S.lfo_clock)  -- MIDI out's routes settle (ruling 29)
+  context.clock.advance_until(S.lfo_clock)  -- MIDI out's routes settle (plan ruling 29)
   local on_values, on_routes = io_values(), routes_now(S)
   assert_true(on_routes ~= no_routes(S), "routes are on: " .. on_routes)
   local path = h.data_root .. "io_system_everything_on.pset"
@@ -1540,7 +1540,7 @@ test("no 3.6 param is a scene field, an LFO destination, a fader or a draw of a 
   -- by effect, on every voice (running and unlocked) and each source kind:
   -- MAIN's randomize, a mutation at probability and amount 1 and a drift
   -- leave every one of them where it was set. Each effect's positive
-  -- control (ruling 31) starts a param it draws mid-range and records that
+  -- control (plan ruling 31) starts a param it draws mid-range and records that
   -- it differed at some step, never only at the end, and leans on no seed
   -- (the mutation walks pairs() over a voice's params)
   run_all_voices(S)

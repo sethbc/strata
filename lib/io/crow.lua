@@ -66,7 +66,7 @@ return function(S)
   function M.present() return norns.crow.dev ~= nil end
 
   -- A number as a line writes it: at most four decimals, no trailing zeros
-  -- or point, never -0 (ruling 20); anything not finite is 0
+  -- or point, never -0 (plan ruling 20); anything not finite is 0
   function M.number(value)
     if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then return "0" end
     local text = string.format("%.4f", value)

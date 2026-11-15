@@ -134,7 +134,7 @@ end)
 
 test("without the ii module the device does nothing and the page draws", function()
   -- the real ii module taken away before init: the ii group adds nothing,
-  -- so the device's params never exist (ruling 6)
+  -- so the device's params never exist (build ruling 6)
   local context = load_strata({before_init = function() local_value("S").lib.io_ii = nil end})
   finish_startup(context)
   local S = local_value("S")
