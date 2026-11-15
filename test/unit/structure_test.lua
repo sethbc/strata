@@ -628,7 +628,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
   "buffer start reload", "buffer polls and timers", "record poll", "input meter", "flashes", "targets ended",
-  "crow lines", "remote", "midi handler",
+  "crow lines", "remote", "osc event", "midi handler",
   "midi ports", "voices off", "grids dark", "arc dark" }
 
 test("cleanup runs every registered step in today's order", function()
@@ -741,6 +741,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(S.buffer_polls.load_failed, "stop", "buffer polls and timers")
   watch_method(context.polls.polls.recordState, "stop", "record poll")
   for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do watch_method(context.polls.polls[name], "stop", "input meter") end
+  watch_field(osc, "event", "osc event")  -- lib/io/osc.lua clears the OSC handler (feedback clock canceled first)
   watch_field(S.midi_device, "event", "midi handler")
   watch_method(crow, "send", "crow lines")  -- lib/io/crow.lua: outputs to 0 V, inputs off
   watch_field(midi, "add", "midi ports")  -- lib/io/ports.lua puts back the hot-plug handlers it found
@@ -824,6 +825,7 @@ local function start_steps()
     { "midi", {} },
     { "io crow", {} },
     { "io remote", {} },
+    { "io osc", {} },
     { "scenes load", { "file read scenes.data", "print scenes loaded from scenes.data", "grid redrawn",
       "redraw requested" } },
     { "macros load", { "file read macros.data", "redraw requested", "grid redrawn" } },
@@ -3139,6 +3141,7 @@ local EVENT_HOLDERS = {
   ["lib/mutation.lua S.drift_metro"] = "the drift metro (metro.init), not a MIDI vport",
   ["lib/mutation.lua S.mutation_metro"] = "the mutation metro (metro.init), not a MIDI vport",
   ["lib/gestures.lua pattern.metro"] = "a gesture recorder's metro (norns' pattern_time), not a MIDI vport",
+  ["lib/io/osc.lua osc"] = "norns' OSC module (osc.event), not a MIDI vport",
 }
 
 -- The lines of a Lua source (at path) that break the MIDI ports' rule, which
