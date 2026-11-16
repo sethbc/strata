@@ -99,7 +99,7 @@ K2:back E2:row E3:edit
 
 - **E2** - Select the setting
 - **E3** - Change it (**ALT+E3** in finer steps, where the setting has them)
-- **K3** - On a setting that has an action, do it (the hint names it: `K2:back K3:reset E3:edit`)
+- **K3** - On a setting that has an action, do it (the hint names it: `K2:back K3:new E3:edit` on a random sequence's `new` row)
 - **K2** - Back to the list, on the source's row
 
 A source whose row already has a K3 of its own (an LFO's goes to the LFO page) keeps it.
