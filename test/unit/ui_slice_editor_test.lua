@@ -495,12 +495,13 @@ end)
 test("the amount's bounds are the file settings' own (S.lib.samples.SAMPLES)", function()
   local _, S, _, editor = loaded()
   local SAMPLES = S.lib.samples.SAMPLES
-  local count_min, sensitivity_max = SAMPLES.count_min, SAMPLES.sensitivity_max
-  SAMPLES.count_min, SAMPLES.sensitivity_max = 3, 90
-  local low = editor.amount_range({ mode = 2 })
+  local count_min, count_max, sensitivity_max = SAMPLES.count_min, SAMPLES.count_max, SAMPLES.sensitivity_max
+  SAMPLES.count_min, SAMPLES.count_max, SAMPLES.sensitivity_max = 3, 40, 90
+  local low, top = editor.amount_range({ mode = 2 })
   local _, high = editor.amount_range({ mode = 3 })
-  SAMPLES.count_min, SAMPLES.sensitivity_max = count_min, sensitivity_max
+  SAMPLES.count_min, SAMPLES.count_max, SAMPLES.sensitivity_max = count_min, count_max, sensitivity_max
   assert_equal(low, 3, "the count's lowest is SAMPLES.count_min")
+  assert_equal(top, 40, "the count's top is SAMPLES.count_max, the bound samples.set checks")
   assert_equal(high, 90, "the sensitivity's top is SAMPLES.sensitivity_max")
   assert_equal(editor.EDITOR.count_min, nil, "no copy in the editor's tunables")
   assert_equal(editor.EDITOR.sensitivity_max, nil)

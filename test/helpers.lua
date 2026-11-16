@@ -445,8 +445,10 @@ end
 -- (sounding[key]) until its key's note_off, or, while `pass` is a number
 -- (one shot with a moving scan), until the test ends it; binds holds each
 -- on_bind listener. options.editor adds the slice editor's doubles
--- (slice_editor_doubles, above)
+-- (slice_editor_doubles, above), whose count reads the markers: with it
+-- `counts` must be nil (it would be ignored)
 local function slice_doubles(S, counts, options)
+  assert(not (options and options.editor) or counts == nil, "slice_doubles: the editor's count reads markers, not counts")
   local doubles = {counts = counts or {}, takes = {}, plays = {}, offs = {}, sounding = {}, pass = nil, binds = {}}
   local slices = S.lib.slices
   function slices.count(slot) return doubles.counts[slot] or 0 end
