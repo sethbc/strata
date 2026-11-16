@@ -156,7 +156,7 @@ test("ALT+E2 moves the field cursor and E3 edits that field", function()
   redraw()
   assert_equal(field_named(context, "lvl").value, string.format("%.2f", params:get("record_level")))
   with_alt(function() enc(2, 20) end)
-  assert_equal(cursor.field, 11, "the field cursor stops at field 11")
+  assert_equal(cursor.field, 12, "the field cursor stops at field 12, the slices")
   with_alt(function() enc(2, -20) end)
   assert_equal(cursor.field, 1, "and at field 1")
   assert_equal(params:get("v4_source"), 3, "the source was left alone meanwhile")
@@ -215,30 +215,27 @@ test("K2 released loads into the cursor slot", function()
   context.fileselect.close()
 end)
 
-test("ALT+K2 clear never opens the file browser", function()
+test("ALT+K2's random file never opens the file browser", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  local buffers = local_value("buffers")
+  local S = local_value("S")
+  local randoms = {}
+  S.lib.files.random_into = function(slot) table.insert(randoms, slot); return true end
   enc(2, 1)   -- slot 2
-  load_buffer(2, "/tmp/keep.wav"); load_buffer(1, "/tmp/other.wav")
-  context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 4)); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
   context.clear_engine_calls(); context.fileselect.last = nil
   -- K1 down, K2 down, K1 up, K2 up
   key(1, 1); key(2, 1); key(1, 0); key(2, 0)
-  local clears = context.calls_named("clearBuffer")
-  assert_equal(#clears, 1, "ALT+K2 clears")
-  assert_equal(clears[1].args[1], 1, "the cursor slot (engine slot 1)")
-  assert_equal(buffers[2].name, "empty", "slot 2 is empty")
-  assert_true(buffers[1].loaded, "slot 1 is left alone")
+  assert_equal(table.concat(randoms, " "), "2", "ALT+K2 loads a random file into the cursor slot")
+  assert_equal(#context.calls_named("clearBuffer"), 0, "and clears nothing")
   assert_equal(context.fileselect.last, nil, "the ALT press's release opened no file browser")
   assert_true(not local_value("BUFFER_PAGE").file_selector_open, "and the page still shows")
-  -- K2 down, K1 up and down meanwhile: still one clear, no browser
+  -- K2 down, K1 up and down meanwhile: still no browser
   key(1, 1); key(2, 1); key(2, 0); key(1, 0)
-  assert_equal(#context.calls_named("clearBuffer"), 2, "a second ALT+K2 clears again")
+  assert_equal(table.concat(randoms, " "), "2 2", "a second ALT+K2 loads again")
   assert_equal(context.fileselect.last, nil, "and opens nothing")
   -- a plain K2 still opens it on release
   tap(2); assert_true(context.fileselect.last ~= nil, "a plain K2 opens the browser")
   context.fileselect.close()
-  assert_equal(#context.calls_named("clearBuffer"), 2, "and clears nothing")
+  assert_equal(#randoms, 2, "and loads no random file")
 end)
 
 test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashes", function()
@@ -265,7 +262,7 @@ test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashe
   context.set_time(101.6); redraw()
   assert_equal(hint_text(context), "saved buf 3", "still shown before 1.5 s")
   context.set_time(101.7); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "the normal hint after 1.5 s")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "the normal hint after 1.5 s")
   -- an empty slot: nothing saved, the hint says so
   enc(2, 1)   -- slot 4, empty
   context.clear_engine_calls()
@@ -583,23 +580,23 @@ end)
 test("BUFFER hints", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   enc(2, 2)
-  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "a slot that is not recording")
+  redraw(); assert_equal(hint_text(context), "K2:ld/clr K3:rec", "a slot that is not recording")
   record_buffer(3); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:stop", "the cursor slot records")
+  assert_equal(hint_text(context), "K2:ld/clr K3:stop", "the cursor slot records")
   enc(2, 1); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "another slot's recording is not the cursor's")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "another slot's recording is not the cursor's")
   enc(2, -1)
   record_buffer(3); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:...", "the take waits for the engine")
+  assert_equal(hint_text(context), "K2:ld/clr K3:...", "the take waits for the engine")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:clr/fill K3:sv/trim", "with ALT")
+  assert_equal(hint_text(context), "K2:rnd/fill K3:sv/trim", "with ALT")
   assert_screen_layout(context, "BUFFER with ALT")
   key(1, 0); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:...")
+  assert_equal(hint_text(context), "K2:ld/clr K3:...")
   -- the same whatever the selected voice's source
   for _, source in ipairs({ 1, 4, 10 }) do
     params:set("v1_source", source); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 0, 3)); redraw()
-    assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "source " .. source)
+    assert_equal(hint_text(context), "K2:ld/clr K3:rec", "source " .. source)
   end
 end)
 
@@ -985,7 +982,7 @@ test("BUFFER lists its layout states", function()
   local names = {}
   for _, state in ipairs(record.layout_states) do names[state.name] = true end
   for _, name in ipairs({ "slot 1", "slot 8", "field source", "field rec", "field dur", "field lvl", "field fb",
-    "field loop", "field thr", "field sync", "field bm", "field start", "field fric", "long names", "every slot recording",
+    "field loop", "field thr", "field sync", "field bm", "field start", "field fric", "field slices", "long names", "every slot recording",
     "saving flash", "saving loop flash", "saved flash", "saved loop flash", "save failed flash", "busy flash", "empty flash",
     "load failed flash", "random file flash", "filled flash", "no files flash", "meter peak",
     "armed", "take recording", "take finishing", "dub recording", "loop recording", "len 16b max",
@@ -1258,7 +1255,7 @@ test("BUFFER's fields scroll four at a time and edit their params", function()
   with_alt(function() for _ = 1, 6 do enc(2, 1) end end)
   assert_equal(cursor.field, 11, "the cursor on fric")
   redraw()
-  assert_equal(field_labels(context), "sync bm start fric", "the last page")
+  assert_equal(field_labels(context), "bm start fric slices", "the last page")
   assert_equal(field_named(context, "fric").value, "100%")
   enc(3, -1); assert_near(params:get("scrub_friction"), 99, 1e-9, "E3 sets the friction")
   assert_screen_layout(context, "BUFFER on fric")
@@ -1563,57 +1560,64 @@ test("every start value keeps the start label whole", function()
   assert_true(ok, tostring(problem))
 end)
 
-test("K2 released before 0.5 s opens the file selector, after 0.5 s loads a random file", function()
+test("ALT+K2 loads a random file, held it fills the empty slots; K2 held clears; a quick K2 opens the selector", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local S = local_value("S")
   assert_equal(local_value("BUFFER_PAGE").hold_seconds, 0.5)
-  local randoms = {}
+  local randoms, fills = {}, 0
   S.lib.files.random_into = function(slot) table.insert(randoms, slot); return true end
-  enc(2, 2)
-  context.fileselect.last = nil
+  S.lib.files.fill_empty = function() fills = fills + 1; return 0 end
+  enc(2, 2)   -- slot 3
+  load_buffer(3, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 4))
+  context.clear_engine_calls(); context.fileselect.last = nil
+  -- a quick K2: the file selector
   context.set_time(100); key(2, 1); context.set_time(100.3); key(2, 0)
   assert_true(context.fileselect.last ~= nil, "a short K2 opens the file selector")
-  assert_equal(#randoms, 0)
-  context.fileselect.close(); context.fileselect.last = nil
-  context.set_time(101); key(2, 1); context.set_time(101.6); key(2, 0)
-  assert_equal(context.fileselect.last, nil, "a held K2 opens nothing")
-  assert_equal(table.concat(randoms, " "), "3", "and loads a random file into the cursor slot")
-end)
-
-test("ALT+K2 clears on release before 0.5 s and fills the empty slots after it", function()
-  local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  local S = local_value("S")
-  local fills = 0
-  S.lib.files.fill_empty = function() fills = fills + 1; return 0 end
-  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
-  context.clear_engine_calls()
-  context.set_time(100); key(1, 1); key(2, 1)
-  assert_equal(#context.calls_named("clearBuffer"), 0, "nothing at the press")
-  context.set_time(100.2); key(2, 0); key(1, 0)
-  local clears = context.calls_named("clearBuffer")
-  assert_equal(#clears, 1, "a short ALT+K2 clears"); assert_equal(clears[1].args[1], 0)
-  assert_equal(fills, 0)
-  context.clear_engine_calls()
-  context.set_time(101); key(1, 1); key(2, 1); context.set_time(101.7); key(2, 0); key(1, 0)
-  assert_equal(fills, 1, "a held ALT+K2 fills the empty slots")
   assert_equal(#context.calls_named("clearBuffer"), 0, "and clears nothing")
+  context.fileselect.close(); context.fileselect.last = nil
+  -- K2 held: the slot cleared
+  context.set_time(101); key(2, 1)
+  assert_equal(#context.calls_named("clearBuffer"), 0, "nothing at the press")
+  context.set_time(101.6); key(2, 0)
+  assert_equal(context.fileselect.last, nil, "a held K2 opens nothing")
+  local clears = context.calls_named("clearBuffer")
+  assert_equal(#clears, 1, "a held K2 clears"); assert_equal(clears[1].args[1], 2, "the cursor slot (engine slot 2)")
+  assert_equal(#randoms, 0, "and loads no random file")
+  -- a quick ALT+K2: a random file
+  context.clear_engine_calls()
+  context.set_time(102); key(1, 1); key(2, 1)
+  assert_equal(#randoms, 0, "nothing at the press")
+  context.set_time(102.2); key(2, 0); key(1, 0)
+  assert_equal(table.concat(randoms, " "), "3", "a short ALT+K2 loads a random file into the cursor slot")
+  assert_equal(fills, 0)
+  -- ALT+K2 held: every empty slot filled
+  context.set_time(103); key(1, 1); key(2, 1); context.set_time(103.7); key(2, 0); key(1, 0)
+  assert_equal(fills, 1, "a held ALT+K2 fills the empty slots")
+  assert_equal(#randoms, 1, "and loads no random file into the cursor slot")
+  assert_equal(#context.calls_named("clearBuffer"), 0, "no ALT+K2 clears")
+  assert_equal(context.fileselect.last, nil, "nor opens the selector")
 end)
 
-test("ALT+K2 held from BUFFER to another page and back clears nothing", function()
+test("ALT+K2 held from BUFFER to another page and back loads nothing", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local S = local_value("S")
-  local fills = 0
+  local fills, randoms = 0, 0
   S.lib.files.fill_empty = function() fills = fills + 1; return 0 end
-  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
-  context.clear_engine_calls()
+  S.lib.files.random_into = function() randoms = randoms + 1; return true end
   context.set_time(100); key(1, 1); key(2, 1)
   show_page("SCENES"); show_page("BUFFER")
   context.set_time(100.2); key(2, 0); key(1, 0)
-  assert_equal(#context.calls_named("clearBuffer"), 0, "a short ALT+K2 after the round trip clears nothing")
+  assert_equal(randoms, 0, "a short ALT+K2 after the round trip loads nothing")
   context.set_time(101); key(1, 1); key(2, 1)
   show_page("SCENES"); show_page("BUFFER")
   context.set_time(101.7); key(2, 0); key(1, 0)
   assert_equal(fills, 0, "a held ALT+K2 after the round trip fills nothing")
+  -- K2 held across a round trip clears nothing
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
+  context.clear_engine_calls()
+  context.set_time(102); key(2, 1); show_page("SCENES"); show_page("BUFFER")
+  context.set_time(102.7); key(2, 0)
+  assert_equal(#context.calls_named("clearBuffer"), 0, "a held K2 after the round trip clears nothing")
 end)
 
 test("ALT+K3 saves the slot on release before 0.5 s and its loop region after it", function()
@@ -1647,39 +1651,39 @@ end)
 test("ALT+K2 keeps its release when K1 comes up first", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local S = local_value("S")
-  local fills = 0
+  local fills, randoms = 0, {}
   S.lib.files.fill_empty = function() fills = fills + 1; return 0 end
+  S.lib.files.random_into = function(slot) table.insert(randoms, slot); return true end
   context.clear_engine_calls(); context.fileselect.last = nil
   context.set_time(100); key(1, 1); key(2, 1); key(1, 0); context.set_time(100.2); key(2, 0)
-  assert_equal(#context.calls_named("clearBuffer"), 1, "a short ALT+K2 clears")
-  assert_equal(context.calls_named("clearBuffer")[1].args[1], 0)
+  assert_equal(table.concat(randoms, " "), "1", "a short ALT+K2 loads a random file")
+  assert_equal(#context.calls_named("clearBuffer"), 0, "and clears nothing")
   assert_equal(context.fileselect.last, nil, "no file selector")
-  context.clear_engine_calls()
   context.set_time(101); key(1, 1); key(2, 1); key(1, 0); context.set_time(101.7); key(2, 0)
   assert_equal(fills, 1, "a held ALT+K2 fills")
-  assert_equal(#context.calls_named("clearBuffer"), 0)
+  assert_equal(#randoms, 1)
   assert_equal(context.fileselect.last, nil, "still no file selector")
 end)
 
 test("K3 records, stops and cancels while armed; the hint follows", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:rec")
+  redraw(); assert_equal(hint_text(context), "K2:ld/clr K3:rec")
   params:set("record_threshold", 2)   -- waits for -48 dB: armed
   context.clear_engine_calls(); tap(3)
   assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records")
   assert_equal(local_value("S").lib.record.state(1).phase, "armed")
-  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:stop", "stop while armed")
+  redraw(); assert_equal(hint_text(context), "K2:ld/clr K3:stop", "stop while armed")
   tap(3)
   assert_equal(#context.calls_named("stopRecord"), 1, "K3 again cancels the armed recording")
   assert_equal(context.calls_named("stopRecord")[1].args[1], 0)
-  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:...", "while the take finishes")
+  redraw(); assert_equal(hint_text(context), "K2:ld/clr K3:...", "while the take finishes")
   context.polls.fire("recordState", (1 * 4 + 3) * 8 + 0)   -- canceled
-  redraw(); assert_equal(hint_text(context), "K2:ld/rnd K3:rec")
+  redraw(); assert_equal(hint_text(context), "K2:ld/clr K3:rec")
   params:set("record_threshold", 1)
   tap(3); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:stop", "stop while recording")
+  assert_equal(hint_text(context), "K2:ld/clr K3:stop", "stop while recording")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:clr/fill K3:sv/trim", "with ALT held")
+  assert_equal(hint_text(context), "K2:rnd/fill K3:sv/trim", "with ALT held")
   key(1, 0)
 end)
 
@@ -1909,20 +1913,20 @@ test("the hint row names what a held key's release will do, and changes at 0.5 s
     assert_screen_layout(context, "BUFFER hold hint " .. expected)
   end
   context.set_time(100); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "nothing down")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "nothing down")
   assert_true(not record.animates(), "nothing moves, nothing is down")
   key(2, 1); redraw()
   row("K2 up: load", "K2 down short")
   assert_true(record.animates(), "the page animates while K2 is down")
   context.set_time(100.6); next_frame(context)
-  row("K2 up: random", "K2 down 0.5 s")
+  row("K2 up: clear", "K2 down 0.5 s")
   key(2, 0); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "K2 up: the page's own hints")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "K2 up: the page's own hints")
   assert_true(not record.animates(), "and it stops animating")
   -- ALT+K2
   context.set_time(110)
   key(1, 1); key(2, 1); redraw()
-  row("K2 up: clear", "ALT+K2 short")
+  row("K2 up: random", "ALT+K2 short")
   context.set_time(110.6); next_frame(context)
   row("K2 up: fill", "ALT+K2 held")
   key(2, 0); key(1, 0)
@@ -1948,10 +1952,10 @@ test("the menu opening ends the hold hint", function()
   key(2, 1); redraw()
   assert_equal(hint_text(context), "K2 up: load")
   _menu.set_mode(true); _menu.set_mode(false); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "the menu took the key")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "the menu took the key")
   assert_true(not record.animates(), "nothing moves on the slot")
   key(2, 1); show_page("SCENES"); show_page("BUFFER"); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "a page change took the key")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "a page change took the key")
   assert_true(not record.animates())
 end)
 
@@ -1964,7 +1968,7 @@ test("a hints flash covers the hold hint, which returns when the flash ends", fu
   buffer_page_flash("buf 1 empty"); redraw()
   assert_equal(hint_text(context), "buf 1 empty", "the flash covers the hold hint")
   context.set_time(101.6); redraw()
-  assert_equal(hint_text(context), "K2 up: random", "the hold hint returns, now past 0.5 s, once the flash ends")
+  assert_equal(hint_text(context), "K2 up: clear", "the hold hint returns, now past 0.5 s, once the flash ends")
   key(2, 0)
   -- holding a key never suppresses a flash
   key(2, 1); buffer_page_flash("buf 2 busy"); redraw()
@@ -1978,11 +1982,11 @@ test("the ALT hold hints last until the key comes up, even after K1", function()
   S.lib.files.fill_empty = function() return true end
   context.set_time(100)
   key(1, 1); key(2, 1); key(1, 0); redraw()
-  assert_equal(hint_text(context), "K2 up: clear", "ALT+K2 with K1 up first")
+  assert_equal(hint_text(context), "K2 up: random", "ALT+K2 with K1 up first")
   context.set_time(100.6); next_frame(context)
   assert_equal(hint_text(context), "K2 up: fill")
   key(2, 0); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "back to the page's hints")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "back to the page's hints")
   context.set_time(110)
   key(1, 1); key(3, 1); key(1, 0); redraw()
   assert_equal(hint_text(context), "K3 up: save", "ALT+K3 with K1 up first")
@@ -1990,7 +1994,7 @@ test("the ALT hold hints last until the key comes up, even after K1", function()
   assert_equal(hint_text(context), "K3 up: save loop")
   key(3, 0)
   context.set_time(113); redraw()  -- the save's flash (the slot is empty) has ended
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec")
 end)
 
 test("a key released on another page, and K2 opening the file selector, leave the page's own hints", function()
@@ -1999,13 +2003,13 @@ test("a key released on another page, and K2 opening the file selector, leave th
   local record = S.registry.pages[local_value("UI_PAGES").index.BUFFER]
   context.set_time(100)
   key(2, 1); show_page("SCENES"); key(2, 0); show_page("BUFFER"); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "released on another page")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "released on another page")
   assert_true(not record.animates(), "nothing animates for the key")
   assert_equal(context.fileselect.last, nil, "and no selector opened")
   key(2, 1); key(2, 0)
   assert_true(context.fileselect.last ~= nil, "a short K2 release opens the selector")
   context.fileselect.close(); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:rec", "after the selector closes")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "after the selector closes")
   assert_true(not record.animates(), "and nothing animates for the key")
 end)
 
@@ -2013,8 +2017,83 @@ test("plain K3 shows no hold hint", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   context.set_time(100)
   key(3, 1); redraw()
-  assert_equal(hint_text(context), "K2:ld/rnd K3:stop", "the page's own hints, K3 now stops the take")
+  assert_equal(hint_text(context), "K2:ld/clr K3:stop", "the page's own hints, K3 now stops the take")
   key(3, 0)
+end)
+
+-- Doubles of what the slices field and the marks read (packages 2b and
+-- 2d): a slot's markers, the settings' mode and the frames (its seconds at
+-- 48 kHz), plugged before init
+local function slice_doubles(fake)
+  return function()
+    local S = local_value("S")
+    local function seconds(slot) return S.buffers[slot] and S.buffers[slot].seconds or 0 end
+    S.lib.slices = {
+      SLICES = { max = 64 },
+      count = function(slot) return fake.markers[slot] and #fake.markers[slot] or 0 end,
+      markers = function(slot) return fake.markers[slot] end,
+    }
+    S.lib.samples = {
+      SAMPLES = { tempo_min = 20, tempo_max = 300, modes = { "off", "equal", "transients" } },
+      settings = function(slot)
+        if seconds(slot) <= 0 then return nil end
+        return { mode = fake.modes[slot] or 1 }
+      end,
+      on_bind = function() end,
+    }
+    S.lib.waveforms.frames = function(slot) return seconds(slot) > 0 and seconds(slot) * 48000 or nil end
+  end
+end
+
+test("BUFFER's slices field shows the mode and the count, -- for an empty slot", function()
+  local fake = { markers = {}, modes = {} }
+  local context = load_strata({ before_init = slice_doubles(fake) }); finish_startup(context); show_page("BUFFER")
+  to_field(12)
+  redraw()
+  assert_equal(field_named(context, "slices").value, "--", "an empty slot")
+  assert_true(field_named(context, "slices").cursor)
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 2))
+  redraw(); assert_equal(field_named(context, "slices").value, "off", "audio, no slices")
+  fake.modes[1], fake.markers[1] = 2, { 0, 1, 2, 3 }
+  redraw(); assert_equal(field_named(context, "slices").value, "eq 4")
+  fake.modes[1] = 3
+  fake.markers[1] = {}
+  for k = 1, 64 do fake.markers[1][k] = (k - 1) * 1000 end
+  redraw(); assert_equal(field_named(context, "slices").value, "tran 64")
+  assert_screen_layout(context, "BUFFER's slices field at its widest")
+  assert_equal(hint_text(context), "K2:ld/clr K3:edit", "K3 edits on the slices field")
+end)
+
+test("BUFFER's waveform marks slice starts", function()
+  local fake = { markers = {}, modes = {} }
+  local context = load_strata({ before_init = slice_doubles(fake) }); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local page = local_value("BUFFER_PAGE")
+  local folder = S.lib.scenes.scene_data_dir
+  util.make_dir(folder)
+  local values = {}
+  for index = 1, S.constants.WAVEFORM_POINTS do values[index] = "0.500" end
+  local file = assert(io.open(folder .. "buf1.peaks", "w"))
+  file:write("strata-peaks 1\nslot 1\nframes 96000\nrate 48000\ngeneration 1\npeaks " .. table.concat(values, " ") .. "\n")
+  file:close()
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 2))
+  context.clock.run_for(0.2)
+  local function marks()
+    redraw()
+    local xs = {}
+    for _, rect in ipairs(context.screen.rects) do
+      if rect.y == 10 and rect.h == 1 and rect.w == 1 then table.insert(xs, rect.x) end
+    end
+    table.sort(xs)
+    return table.concat(xs, " ")
+  end
+  assert_equal(marks(), "", "no slices: no marks")
+  fake.modes[1], fake.markers[1] = 2, { 0, 24000, 48000, 72000 }
+  assert_equal(marks(), "60 76 92 108", "a pixel at y 10 over each column holding a start")
+  fake.markers[1] = { 0, 100, 24000 }
+  assert_equal(marks(), "60 76", "two starts in one column: one pixel")
+  S.buffer_page.slot = 2
+  assert_equal(marks(), "", "the slot shown's starts only")
 end)
 
 

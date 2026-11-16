@@ -17,6 +17,7 @@ The UI core's notes, one file per part:
 - [detents-and-fine](ui/detents-and-fine.md): `delta_with_detent`, `enc_param_delta`, fine adjustment and center detents.
 - [redraws](ui/redraws.md): `request_redraw()`, the frame clock, draw errors and who asks for a redraw.
 - [layout-and-renders](ui/layout-and-renders.md): the layout tests and the page renders.
+- [slice-editor](ui/slice-editor.md): the slice editor (3.7), BUFFER's modal view of a buffer's slices and its file's settings.
 
 ## Owns
 
@@ -31,6 +32,7 @@ The UI core's notes, one file per part:
 - `lib/ui/detent.lua` (`S.lib.ui_detent`): `delta_with_detent`, `enc_param_delta` (global); `as_turn` and `run_touch_hooks` (fields); the holds at 0 (local). See `docs/notes/lua/ui/detents-and-fine.md`.
 - `lib/ui/modal.lua` (`S.lib.ui_modal`, 3.4): the modal screen owner's stack, `push`, `pop`, `top` (fields), and the `modal owner` invariant. See `docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner.
 - `lib/ui/zones.lua` (`S.lib.ui_zones`, 3.5): the MPE and zones editor (below): `open`, `close`, `is_open`, `learn`, `cancel_learn`, `learning`, `note`, `ZONES_EDITOR` (fields), `S.zones_learn_clock`, the header notice `learn v<i> low|high`, cleanup step 117 and the `zones editor` invariant. Its unit tests: `test/unit/ui_zones_test.lua`.
+- `lib/ui/slice_editor.lua` (`S.lib.ui_slice_editor`, 3.7): the slice editor (`docs/notes/lua/ui/slice-editor.md`).
 - `lib/ui/menu_watch.lua` (`S.lib.ui_menu_watch`): the `_menu.set_mode` wrapper (`watch_menu_opening`, `unwatch_menu_opening`, `forget_keys_held_through_menu`; cleanup step 20).
 - `lib/ui/voice_rows.lua` (`S.lib.ui_voice_rows`): `voice_page_rows`, `voice_page_group` (global); `first_field_row`, `GROUP_SIZE` (fields).
 - `lib/ui/cursors.lua` (`S.lib.ui_cursors`): `S.cursors` and the row cursors' anchors; `move`, `sync`, `place`, `clamp_all` (fields).
