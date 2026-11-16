@@ -126,7 +126,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 - **`S`** (`lib/state.lua`) is built fresh on every load. State more than one module uses is a field of `S` under its plain name; state one module uses stays local to it. `S.constants` is `lib/constants.lua`.
 - **Includes**: only `strata.lua` calls `include`, once per module, always as `include("lib/<path>")`, never `"strata/lib/..."` (a test checks).
 - **A module** is a constructor, `return function(S) local M = {} ... return M end`, ending with exactly `  return M` and `end`; its table is `S.lib.<name>`, or `S.lib.<dir>_<basename>` in a subfolder. Functions that were global stay global, in their module (`MODULE_HOMES`).
-- **Registries** (`S.registry`) are read at init or at each use, never at include time: eight close at init, the other 23 stay open, and each `S.register_*` function checks its argument and refuses a duplicate name. The list, record shapes and which close: `docs/notes/lua/state-and-voices.md` (Modules and `S`).
+- **Registries** (`S.registry`) are read at init or at each use, never at include time: eight close at init, the other 24 stay open, and each `S.register_*` function checks its argument and refuses a duplicate name. The list, record shapes and which close: `docs/notes/lua/state-and-voices.md` (Modules and `S`).
 - **`S.performance`** is the tier the engine runs (`lib/performance.lua` reads the engine's `performance_active.data`). Every tier-dependent spec reads it; the setting itself (`performance.data`) is SETUP's, never a param.
 - Tests reach script state with `local_value(name)` and `find_upvalue(name)`: a field of `S`, then of `S.constants`, then an upvalue of a global function.
 

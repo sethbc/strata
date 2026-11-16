@@ -8,8 +8,9 @@
 -- delay_time, so a synced delay ignores delay_time and its modulation;
 -- M.playing() and M.label() for FX, the arc and the 256's fader; and the
 -- LFO clock's step hook that resends the time when the tempo moves it
--- (through the round robin and the send budget). M.resend() marks the
--- sender due (a recall's held send), M.sent(time) notes a send's time.
+-- (through the round robin and the send budget). M.hold() holds a send
+-- made while a scene applies, which the scene-applied hook sends once as
+-- apply_entries ends; M.sent(time) notes a send's time.
 
 return function(S)
   local M = {}
@@ -89,8 +90,22 @@ return function(S)
   local function send_due() S.lib.engine_sync.send_engine_value(SEND_KEY, M.time()) end
 
   -- Mark the delay's sender due: the next LFO step sends setDelay once, with
-  -- every value as it is then (a scene's held send: lib/engine_sync.lua)
+  -- every value as it is then (the step hook's resend)
   function M.resend() S.lib.lfos.mark_due(SEND_KEY, send_due) end
+
+  -- A send made while a scene applies (lib/engine_sync.lua's sender) is
+  -- held; as apply_entries ends (an instant recall, a fade's landing, morph's
+  -- discrete entries) the hook sends setDelay once with every value the
+  -- scene set, through send_engine_value: a recall's at once, never
+  -- deferred; a morph's inside morph's deferrable, so it waits as every
+  -- morph write does when the window is full
+  local held = false
+  function M.hold() held = true end
+  S.register_scene_applied({name = "delay sync", fn = function()
+    if not held then return end
+    held = false
+    send_due()
+  end})
 
   -- Every LFO step: a time that moved by more than threshold of itself from
   -- the one last sent (a tempo change under sync) is sent in this step

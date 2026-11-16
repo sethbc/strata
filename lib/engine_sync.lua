@@ -523,12 +523,12 @@ return function(S)
   -- The delay's one sender (3.7): its time is S.lib.delay_sync's (the
   -- division at the tempo while synced, else delay_time), its fourth value
   -- the ping-pong amount. While a scene applies (S.scene_recall_in_progress)
-  -- it only marks itself due: the scene's other delay settings are not all
-  -- in place yet, so the next LFO step sends it once with every one of
-  -- them, never a mix of old and new
+  -- it only holds the send: the scene's other delay settings are not all in
+  -- place yet, so S.lib.delay_sync's scene-applied hook sends it once with
+  -- every one of them as apply_entries ends, never a mix of old and new
   local function send_delay_to_engine()
     if S.scene_recall_in_progress then
-      S.lib.delay_sync.resend()
+      S.lib.delay_sync.hold()
       return
     end
     local time = S.lib.delay_sync.time()

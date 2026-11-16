@@ -1150,6 +1150,32 @@ test("register_voice_hit checks its record and refuses a duplicate", function()
   assert_equal(#script.registry.voice_hit, count + 1, "a hook after init")
 end)
 
+-- 3.7's scene_applied (1d's review): a named record with an fn, run once by
+-- every apply_entries after its flag clears, read at each use, so it stays
+-- open
+test("register_scene_applied checks its record and refuses a duplicate", function()
+  local S = fresh_state()
+  local function fn() end
+  S.register_scene_applied({ name = "probe", fn = fn })
+  assert_equal(#S.registry.scene_applied, 1, "a hook is kept")
+  assert_equal(S.registry.scene_applied[1].fn, fn, "with its function")
+  assert_true(refused(S.register_scene_applied, { name = "probe", fn = fn }), "a second probe")
+  assert_true(refused(S.register_scene_applied, { fn = fn }), "a hook needs a name")
+  assert_true(refused(S.register_scene_applied, { name = "", fn = fn }), "a name is not empty")
+  assert_true(refused(S.register_scene_applied, { name = "p2" }), "a hook needs fn")
+  assert_true(refused(S.register_scene_applied, { name = "p3", fn = 1 }), "fn is a function")
+  assert_true(refused(S.register_scene_applied, fn), "a record is a table")
+  local ok, err = pcall(S.register_scene_applied, { name = "p4", fn = fn, hit = fn })
+  assert_true(not ok and tostring(err):find("hit", 1, true) ~= nil, "an unknown field, named: " .. tostring(err))
+  assert_equal(#S.registry.scene_applied, 1, "nothing refused was kept")
+  -- open after init
+  load_strata()
+  local script = local_value("S")
+  local count = #script.registry.scene_applied
+  script.register_scene_applied({ name = "late", fn = fn })
+  assert_equal(#script.registry.scene_applied, count + 1, "a hook after init")
+end)
+
 -- 3.7's settings rows for a modulation source (design §0.4): fields is a
 -- list of {label, value, enc, fine_enc, press}, or a function returning one
 test("a modulation source's fields are checked", function()

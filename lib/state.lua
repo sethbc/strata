@@ -60,6 +60,7 @@ return function()
     macro_targets = {},     -- {id, label}: control params the macros offer after the matrix depths
     -- 3.7's (design §0.2), read at each use
     voice_hit = {},         -- {name, hit = fn(voice_idx, info)}, told once per hit by lib/engine_sync.lua
+    scene_applied = {},     -- {name, fn = fn()}, run once by every apply_entries after its flag clears (lib/scenes.lua)
   }
 
   -- The registries init reads once (voice_params, scene_fields,
@@ -620,6 +621,18 @@ return function()
     local where = require_named(record, "voice_hit", kind, "name", VOICE_HIT_FIELDS)
     require_functions(record, where, {"hit"})
     table.insert(M.registry.voice_hit, record)
+  end
+
+  -- 3.7's scene_applied (1d's review), read at each use, so it stays open:
+  -- {name, fn = fn()}. lib/scenes.lua's apply_entries runs each once, right
+  -- after it clears S.scene_recall_in_progress (an instant recall, a fade's
+  -- landing, morph's discrete entries), contained, even after an error
+  local SCENE_APPLIED_FIELDS = {name = true, fn = true}
+  function M.register_scene_applied(record)
+    local kind = "register_scene_applied"
+    local where = require_named(record, "scene_applied", kind, "name", SCENE_APPLIED_FIELDS)
+    require_functions(record, where, {"fn"})
+    table.insert(M.registry.scene_applied, record)
   end
 
   -- A macro target (lib/macros.lua's catalog lists each after the matrix

@@ -36,7 +36,9 @@ local function stub_state_source(extra_registry)
     .. " register_note_hook = function() end, register_silence_change = function() end,"
     .. " register_scene_recalled = function() end,"
     .. " register_note_target = function() end, register_macro_target = function() end,"
-    .. " register_io_section = function() end, register_ii_device = function() end } end"
+    .. " register_io_section = function() end, register_ii_device = function() end,"
+    -- 3.7's (lib/delay_sync.lua calls it as it loads)
+    .. " register_scene_applied = function() end } end"
 end
 
 test("each load gets its own data directory, even after the same random seed (#50)", function()
