@@ -47,7 +47,11 @@ return function(S)
   local SEQ_PAGE = {rows_y = 13, row_spacing = 6, label_x = 0, text_offset = 5, cells_x = 10,
     cell_spacing = 6, cell_size = 4, state_right = 127, empty_level = 1, playing_outline_level = 4,
     playing_boost = 4, cursor_level = 15, label_level = 4, selected_label_level = 15,
-    dot_offset = 1, dot_level = 1, gate_mark = "G", gate_right = 121}
+    dot_offset = 1, dot_level = 1, gate_mark = "G", gate_right = 121,
+    -- 3.7 (ruling 9): "fill" on the selected voice's row, between its cells
+    -- and the G, while fill is on (S.lib.conditions.fill): lowercase, 10 px
+    -- from x 106, clear of step 16's cursor (to 104) and the G (from 116)
+    fill_mark = "fill", fill_x = 106, fill_level = 15}
 
   -- The edit view (design 8.6): "v<voice> step <n>" at 0,line_y and a strip
   -- of the voice's steps (cells strip_cell px, strip_spacing apart from
@@ -62,10 +66,12 @@ return function(S)
   -- The edit view's rows, in order (design 8.6, 8.12, 8.13): a section
   -- label, or a field with the row key its cursor remembers and what it
   -- edits: a voice param (voice_param, the id after "v<i>_"), a global
-  -- param (param_id; binary for the chain's on/off), a step attribute
-  -- (attr: the key of S.lib.sequencer.step_attr) or the step's level;
-  -- format: how a param's value reads. bookmark shows only while the
-  -- voice has a set bookmark (S.lib.bookmarks.is_set)
+  -- param (param_id; binary for the chain's on/off and fill's latch, which
+  -- K3 also toggles: fill), a step attribute (attr: the key of
+  -- S.lib.sequencer.step_attr) or the step's level; format: how a param's
+  -- value reads. bookmark shows only while the voice has a set bookmark
+  -- (S.lib.bookmarks.is_set). 3.7: direction, misstep, fill, cond and the
+  -- chain's three chances
   local EDIT_ROWS = {
     {section = "voice"},
     {row = "length", label = "length", voice_param = "seq_length", format = "%d"},
@@ -74,6 +80,9 @@ return function(S)
     {row = "gate", label = "gate", voice_param = "seq_gate"},
     {row = "gate_length", label = "gate len", voice_param = "seq_gate_length", format = "%.2f st"},
     {row = "gate_release", label = "gate rel", voice_param = "seq_gate_release", format = "%.2f s"},
+    {row = "direction", label = "direction", voice_param = "seq_direction"},
+    {row = "misstep", label = "misstep", voice_param = "seq_misstep", format = "%d%%"},
+    {row = "fill", label = "fill", param_id = "seq_fill", binary = true, fill = true},
     {row = "euclid", label = "euclid"},
     {row = "clear", label = "clear"},
     {section = "step"},
@@ -81,6 +90,7 @@ return function(S)
     {row = "prob", label = "prob", attr = "prob"},
     {row = "ratchet", label = "ratchet", attr = "ratchet"},
     {row = "step_gate", label = "gate", attr = "gate"},
+    {row = "cond", label = "cond", attr = "cond"},
     {row = "note", label = "note", attr = "notes", chord = true},
     {row = "pos", label = "pos", attr = "pos"},
     {row = "pitch", label = "pitch", attr = "pitch"},
@@ -91,6 +101,9 @@ return function(S)
     {row = "chain_from", label = "from", param_id = "seq_chain_from", format = "%d"},
     {row = "chain_scenes", label = "scenes", param_id = "seq_chain_scenes", format = "%d"},
     {row = "chain_bars", label = "bars", param_id = "seq_chain_bars", format = "%d"},
+    {row = "chain_next", label = "next", param_id = "seq_chain_next", format = "%d%%"},
+    {row = "chain_previous", label = "prev", param_id = "seq_chain_previous", format = "%d%%"},
+    {row = "chain_random", label = "random", param_id = "seq_chain_random", format = "%d%%"},
     {row = "quantize", label = "quantize", param_id = "quantize_actions"},
   }
 
@@ -189,6 +202,11 @@ return function(S)
       end
       screen.move(SEQ_PAGE.state_right, y + SEQ_PAGE.text_offset)
       screen.text_right(S.voices[voice_idx].active and "+" or "-")
+      if selected and S.lib.conditions.fill() then
+        screen.level(SEQ_PAGE.fill_level)
+        screen.move(SEQ_PAGE.fill_x, y + SEQ_PAGE.text_offset)
+        screen.text(SEQ_PAGE.fill_mark)
+      end
     end
 
     -- the cursor: a 6x6 outline around the selected voice's step
@@ -322,7 +340,7 @@ return function(S)
   local replacing = false
 
   -- Turn voice's step's key by d whole steps ("level", "prob", "ratchet",
-  -- "notes", "bookmark"), or a continuous lock ("pos", "pitch", "size",
+  -- "notes", "bookmark", "cond"), or a continuous lock ("pos", "pitch", "size",
   -- "gate") by d detents of its param's quantum (opts.fine: a tenth of it)
   -- or, with opts.raw, by that much of its range (the arc). Locks and notes
   -- from off start at the stored value or 0 (turned_lock, turned_optional);
@@ -353,6 +371,15 @@ return function(S)
     elseif key == "bookmark" then
       if not M.has_bookmarks(voice_idx) then return false end
       seq.set_step_attr(voice_idx, step, key, turned_optional(before, 0, 1, NUM_BOOKMARKS, d))
+    elseif key == "cond" then
+      -- 3.7 (design §5.3): off, then S.lib.conditions.values in order (79 stops)
+      local values = S.lib.conditions.values
+      local index = 0
+      for position, value in ipairs(values) do
+        if value == before then index = position end
+      end
+      index = util.clamp(index + d, 0, #values)
+      seq.set_step_attr(voice_idx, step, key, values[index])
     elseif lock_param_name(key) then
       local raw_delta = opts.raw
       if raw_delta == nil then
@@ -456,6 +483,10 @@ return function(S)
   -- A row's value as drawn ("" for the clear row)
   local function row_text(voice_idx, step, row)
     local spec = row.spec
+    if spec.fill and params:get(row.param_id) ~= 1 then
+      -- the latch off: held while a key holds fill (ruling 9)
+      return S.lib.conditions.fill() and "held" or "off"
+    end
     if spec.binary then return params:get(row.param_id) == 1 and "on" or "off" end
     if row.param_id then
       if spec.format == "%d" or spec.format == "%d%%" then
@@ -479,6 +510,7 @@ return function(S)
     if value == nil then return "off" end
     if spec.attr == "notes" then return (value > 0 and "+" or "") .. whole_text(value) end
     if spec.attr == "bookmark" then return whole_text(value) end
+    if spec.attr == "cond" then return value end
     return string.format(ATTR_FORMATS[spec.attr], value)
   end
 
@@ -582,11 +614,16 @@ return function(S)
     end
   end
 
-  -- K3: the step on or off; on the clear row, the pattern cleared
+  -- K3: the step on or off; on the clear row, the pattern cleared; on the
+  -- fill row, fill's latch toggled (3.7)
   local function edit_k3(view)
     local voice_idx, step = view_place(view)
     local rows, cursor = sync_view(view)
-    if rows[cursor].spec.row == "clear" then
+    local row = rows[cursor]
+    if row.spec.fill then
+      set_binary_param(row.param_id, params:get(row.param_id) == 1 and 0 or 1)
+      return
+    elseif row.spec.row == "clear" then
       run_replacement(view, function() clear_pattern(voice_idx) end)
     else
       toggle_pattern_step(voice_idx, step)
@@ -649,6 +686,7 @@ return function(S)
     local rows, cursor = sync_view(view)
     local row = rows[cursor]
     if row.spec.row == "clear" then return "K2:back K3:clr" end
+    if row.spec.fill then return "K2:back K3:fill" end
     return "K2:back K3:step E3:" .. row.label
   end
 
@@ -930,7 +968,11 @@ return function(S)
     set("seq_swing", SEQ.swing[2])
     set("seq_gate_length", SEQ.gate_steps[2])
     set("seq_gate_release", SEQ.gate_release[2])
+    set("seq_direction", SEQ.ping_pong)  -- "ping-pong"
+    set("seq_misstep", SEQ.max_misstep)
     seq.euclid(voice_idx, PATTERN_LENGTH, PATTERN_LENGTH - 1)
+    seq.set_step_attr(voice_idx, step, "cond", "!first")
+    S.lib.conditions.hold_fill("layout", true)  -- the fill row's "held"
     seq.set_step_attr(voice_idx, step, "prob", SEQ.max_prob)
     seq.set_step_attr(voice_idx, step, "ratchet", SEQ.max_ratchet)
     seq.set_step_attr(voice_idx, step, "gate", SEQ.gate_steps[2])
@@ -941,6 +983,7 @@ return function(S)
     params:set("seq_chain_from", S.constants.NUM_SCENES)
     params:set("seq_chain_scenes", S.constants.NUM_SCENES)
     params:set("seq_chain_bars", SEQ.max_chain_bars)
+    for _, move in ipairs({"next", "previous", "random"}) do params:set("seq_chain_" .. move, SEQ.max_chance) end
     params:set("quantize_actions", 2)    -- beat
   end
 
@@ -1010,6 +1053,17 @@ return function(S)
       show_cursor(NUM_VOICES, PATTERN_LENGTH)()
       pattern_toggle()
       context.clock.run_for(1.3)
+    end},
+    -- 3.7: FILL on the selected voice's row, a gated one, its G beside it
+    {name = "fill on, gated, playing", setup = function(context)
+      for voice_idx = 1, NUM_VOICES do
+        params:set(voice_param_id(voice_idx, "seq_gate"), S.lib.sequencer.SEQ.gate_on)
+        for step = 1, PATTERN_LENGTH do S.patterns[voice_idx][step] = (voice_idx + step) % 3 == 0 and 9 or 0 end
+      end
+      show_cursor(4, PATTERN_LENGTH)()
+      params:set("seq_fill", 1)
+      pattern_toggle()
+      context.clock.run_for(0.4)
     end},
     -- the pattern view's widest ALT hint: K2:edit K3:clr E3:bpm
     {name = "pattern view, ALT+K2 held: K2:edit", setup = function(context)

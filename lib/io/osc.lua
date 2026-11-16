@@ -189,6 +189,9 @@ return function(S)
     elseif path == "/strata/patterns" then
       local value = number_arg(path, args)
       if value then S.lib.io_actions.patterns(value) end
+    elseif path == "/strata/fill" then
+      local value = number_arg(path, args)
+      if value then S.lib.io_actions.fill(value) end
     elseif path == "/strata/watch" then
       watch(path, args)
     elseif path == "/strata/hello" then

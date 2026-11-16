@@ -3239,4 +3239,355 @@ test("an output cannot change what another output or the next hit gets", functio
   assert_equal(table.concat(seen, " "), "0 3 1", "the emptied hit's own; the next hits' are whole")
 end)
 
+-- 3.7 (design §5.1, §5.4, §5.5): trig conditions, directions, misstep and
+-- the chain's chance. A 1/16 step is 0.125 s at the stub's 120 BPM
+
+-- Voice 1 alone set: its length and every one of its steps 1..length at 15
+local function voice_1_only(S, length)
+  for voice_idx = 1, 7 do
+    for step = 1, 16 do S.patterns[voice_idx][step] = 0 end
+  end
+  for step = 1, length do S.patterns[1][step] = 15 end
+  params:set("v1_seq_length", length)
+end
+
+-- The steps a voice's first hits played, as a string
+local function played_steps(events, voice_idx)
+  local steps = {}
+  for _, event in ipairs(voice_events(events, voice_idx or 1, true)) do steps[#steps + 1] = event.step end
+  return table.concat(steps, " ")
+end
+
+-- Run steps 1/16 steps from now (the first plays at once at a start)
+local function run_steps(context, steps) context.clock.run_for(steps * 0.125 - 0.01) end
+
+-- math.random replaced by one that counts its calls (each call's entry is
+-- what fn returns, or true) and returns real draws; returns the calls and
+-- a function that puts the real one back
+local function counting_random(fn)
+  local real, calls = math.random, {}
+  math.random = function(...)
+    calls[#calls + 1] = fn and fn() or true
+    return real(...)
+  end
+  return calls, function() math.random = real end
+end
+
+test("a step with a condition plays only when it holds, and its probability is drawn only then", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  voice_1_only(S, 4)
+  for step = 2, 4 do S.patterns[1][step] = 0 end
+  seq.set_step_attr(1, 1, "cond", "1:2")
+  seq.set_step_attr(1, 1, "prob", 50)
+  local events = record_output(S, "probe")
+  math.randomseed(1)
+  local calls, restore = counting_random(function() return S.lib.conditions.pass(1) end)
+  pattern_clock_start()
+  run_steps(context, 32)  -- 8 passes of 4 steps
+  pattern_clock_stop()
+  restore()
+  assert_equal(#calls, 4, "one draw on each odd pass")
+  for _, pass in ipairs(calls) do assert_equal(pass % 2, 1, "drawn on pass " .. pass .. ": an odd one") end
+  assert_true(#voice_events(events, 1, true) <= 4, "it plays only on odd passes")
+  seq.set_step_attr(1, 1, "prob", nil)
+  clear_list(events)
+  pattern_clock_start(); run_steps(context, 32); pattern_clock_stop()
+  assert_equal(#voice_events(events, 1, true), 4, "1:2 at 100%: passes 1, 3, 5 and 7")
+end)
+
+test("pre and nei follow the last conditioned step, played or not", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  voice_1_only(S, 2)
+  for step = 1, 2 do S.patterns[2][step] = 15 end
+  params:set("v2_seq_length", 2)
+  seq.set_step_attr(1, 1, "cond", "first")  -- plays on pass 1 only
+  seq.set_step_attr(1, 2, "cond", "pre")    -- after it: plays only when step 1 played
+  seq.set_step_attr(2, 2, "cond", "nei")    -- voice 1's latest outcome (on this beat step 1's and 2's agree)
+  local events = record_output(S, "probe")
+  pattern_clock_start(); run_steps(context, 8)
+  assert_equal(S.lib.conditions.outcome(1), false, "voice 1's last outcome: a miss")
+  pattern_clock_stop()
+  assert_equal(S.lib.conditions.outcome(1), nil, "a stop forgets it")
+  assert_equal(played_steps(events, 1), "1 2", "pass 1: first, then pre; later passes neither")
+  assert_equal(played_steps(events, 2), "1 2 1 1 1", "voice 2's nei step plays on pass 1 only")
+  -- prob 0 is a conditioned step that never plays: its miss is the outcome
+  seq.set_step_attr(1, 1, "cond", nil); seq.set_step_attr(1, 1, "prob", 0)
+  seq.set_step_attr(1, 2, "cond", "!pre")
+  clear_list(events)
+  pattern_clock_start(); run_steps(context, 4); pattern_clock_stop()
+  assert_equal(played_steps(events, 1), "2 2", "!pre after a miss plays")
+end)
+
+test("no draw is made at forward with no misstep and no condition", function()
+  local context, S = setup()
+  for step = 1, 16 do S.patterns[1][step] = 15 end
+  local calls, restore = counting_random()
+  pattern_clock_start(); run_steps(context, 64); pattern_clock_stop()
+  restore()
+  assert_equal(#calls, 0, "64 steps of a plain pattern draw nothing")
+end)
+
+local DIRECTION = {forward = 1, reverse = 2, ["ping-pong"] = 3, random = 4}
+
+test("each direction's order over a length of 4", function()
+  local context, S = setup()
+  voice_1_only(S, 4)
+  local events = record_output(S, "probe")
+  local function order(direction, steps)
+    params:set("v1_seq_direction", DIRECTION[direction])
+    clear_list(events)
+    pattern_clock_start(); run_steps(context, steps); pattern_clock_stop()
+    return played_steps(events)
+  end
+  assert_equal(params:string("v1_seq_direction"), "forward", "the default")
+  assert_equal(order("forward", 5), "1 2 3 4 1")
+  assert_equal(order("reverse", 5), "4 3 2 1 4")
+  assert_equal(order("ping-pong", 8), "1 2 3 4 3 2 1 2")
+  math.randomseed(1)
+  local expected = {}
+  for index = 1, 8 do expected[index] = math.random(4) end
+  math.randomseed(1)
+  assert_equal(order("random", 8), table.concat(expected, " "), "random: seed 1's eight draws of 1..4")
+  voice_1_only(S, 1)
+  for direction in pairs(DIRECTION) do
+    assert_equal(order(direction, 4), "1 1 1 1", direction .. " with a length of 1 plays 1")
+  end
+end)
+
+-- The steps taken (1 at the start) at which voice 1 played step, as a string
+local function taken_at(events, started_at, step)
+  local taken = {}
+  for _, event in ipairs(voice_events(events, 1, true)) do
+    if event.step == step then taken[#taken + 1] = math.floor((event.time - started_at) / 0.125 + 0.5) + 1 end
+  end
+  return table.concat(taken, " ")
+end
+
+test("a pass ends after the length in three directions and at each end in ping-pong", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  voice_1_only(S, 4)
+  seq.set_step_attr(1, 1, "cond", "1:2")
+  local events = record_output(S, "probe")
+  local function run(direction)
+    params:set("v1_seq_direction", DIRECTION[direction])
+    clear_list(events)
+    local started_at = util.time()
+    pattern_clock_start(); run_steps(context, 20); pattern_clock_stop()
+    return started_at
+  end
+  local started_at = run("forward")
+  assert_equal(taken_at(events, started_at, 1), "1 9 17", "forward: passes 1, 3 and 5")
+  started_at = run("reverse")
+  assert_equal(taken_at(events, started_at, 1), "4 12 20", "reverse: step 1 ends passes 1, 3 and 5")
+  -- ping-pong: passes end at steps taken 4, 7, 10, 13, 16, 19; step 1 is
+  -- taken at 1 (pass 1), 7 (2), 13 (4), 19 (6), step 4 at 4 (1), 10 (3), 16 (5)
+  seq.set_step_attr(1, 4, "cond", "1:2")
+  started_at = run("ping-pong")
+  assert_equal(taken_at(events, started_at, 1), "1", "ping-pong: step 1 only on pass 1, the odd one")
+  assert_equal(taken_at(events, started_at, 4), "4 10 16", "step 4 on passes 1, 3 and 5")
+end)
+
+test("a misstep moves one step either way with its chance", function()
+  local context, S = setup()
+  voice_1_only(S, 4)
+  params:set("v1_seq_misstep", 100)
+  local events = record_output(S, "probe")
+  math.randomseed(1)
+  pattern_clock_start(); run_steps(context, 24); pattern_clock_stop()
+  local steps = voice_events(events, 1, true)
+  assert_equal(#steps, 24)
+  assert_equal(steps[1].step, 1, "the first step is the direction's")
+  local ups, downs = 0, 0
+  for index = 2, #steps do
+    local move = (steps[index].step - steps[index - 1].step) % 4
+    assert_true(move == 1 or move == 3, "step " .. index .. " is the last one +1 or -1 (wrapping)")
+    if move == 1 then ups = ups + 1 else downs = downs + 1 end
+  end
+  assert_true(ups > 0 and downs > 0, "both ways")
+  -- at 0 no draw is made
+  params:set("v1_seq_misstep", 0)
+  local calls, restore = counting_random()
+  pattern_clock_start(); run_steps(context, 8); pattern_clock_stop()
+  restore()
+  assert_equal(#calls, 0, "misstep 0 draws nothing")
+end)
+
+-- Voice 1 alone, length 4, in direction, a condition on every step, started
+-- at once after a seed. Returns the context, S and the time of the start
+local function skip_setup(direction)
+  local context, S = setup()
+  voice_1_only(S, 4)
+  params:set("v1_seq_direction", DIRECTION[direction])
+  for step = 1, 4 do S.lib.sequencer.set_step_attr(1, step, "cond", "1:2") end
+  math.randomseed(3)
+  local started_at = util.time()
+  pattern_clock_start()
+  return context, S, started_at
+end
+
+test("skipped ticks advance the order and the pass count and test nothing", function()
+  for _, direction in ipairs({"reverse", "random"}) do
+    local context, S, started_at = skip_setup(direction)
+    context.clock.run_for(0.6)
+    local tests, records = 0, 0
+    local conditions = S.lib.conditions
+    local real_test, real_record = conditions.test, conditions.record
+    conditions.test = function(...) tests = tests + 1; return real_test(...) end
+    conditions.record = function(...) records = records + 1; return real_record(...) end
+    local delivered_at
+    context.clock.advance_until(S.pattern_clocks[1], function()
+      context.set_time(util.time() + 1.0)  -- two beats late
+      delivered_at = util.time()
+    end)
+    conditions.test, conditions.record = real_test, real_record
+    assert_equal(tests, 1, direction .. ": the woken step is tested, the skipped ones are not")
+    assert_equal(records, 1, direction .. ": and only it records")
+    local held = {step = S.lib.sequencer.sounding_step(1), pass = conditions.pass(1)}
+    pattern_clock_stop()
+    -- the same run, uninterrupted, at the same moment
+    local other, other_S = skip_setup(direction)
+    other.clock.run_for(delivered_at - started_at + 0.01)
+    assert_equal(held.step, other_S.lib.sequencer.sounding_step(1), direction .. ": the position")
+    assert_equal(held.pass, other_S.lib.conditions.pass(1), direction .. ": the pass")
+    pattern_clock_stop()
+  end
+end)
+
+test("a start, a restart and a division reset put a voice back on pass 1; a chain link does not", function()
+  local context, S = setup()
+  local conditions = S.lib.conditions
+  voice_1_only(S, 4)
+  pattern_clock_start(); run_steps(context, 9)
+  assert_equal(conditions.pass(1), 3, "nine steps of four: pass 3")
+  pattern_clock_start()
+  assert_equal(conditions.pass(1), 1, "a start")
+  run_steps(context, 9)
+  S.lib.sequencer.restart_voice(1, clock.get_beats())
+  assert_equal(conditions.pass(1), 1, "a restart")
+  run_steps(context, 5)
+  assert_equal(conditions.pass(1), 2, "five steps after it: pass 2")
+  params:set("seq_division_reset", 1)  -- the bar: 2 s after the start, 0.27 s from now
+  context.clock.run_for(0.25)
+  assert_equal(conditions.pass(1), 2, "before the bar")
+  context.clock.run_for(0.05)
+  assert_equal(conditions.pass(1), 1, "the division reset's bar puts it back on pass 1")
+  pattern_clock_stop()
+  assert_equal(conditions.pass(1), 1, "a stop too")
+  -- a chain link keeps the pass
+  capture_scene(1); capture_scene(2)
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 2)
+  params:set("seq_chain_bars", 1)
+  pattern_clock_start()
+  context.clock.run_for(2.0 - 0.01)
+  assert_equal(conditions.pass(1), 4, "a bar: four passes of four")
+  context.clock.run_for(0.02)
+  assert_equal(conditions.pass(1), 5, "the link at the bar keeps counting")
+  pattern_clock_stop()
+end)
+
+test("a scene with a condition outside the 78 is refused", function()
+  local _, S = setup()
+  local seq = S.lib.sequencer
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "cond", "3:5")
+  assert_equal(seq.step_attr(1, 1, "cond"), "3:5")
+  seq.set_step_attr(1, 1, "cond", "6:5")
+  assert_equal(seq.step_attr(1, 1, "cond"), "3:5", "set_step_attr refuses one outside the 78")
+  capture_scene(1)
+  assert_true(validate_scene(S.scenes[1]), "a captured condition validates")
+  local stored = S.scenes[1].data.steps[1][1]
+  for _, bad in ipairs({"9:9", "1:1", "!0:2", "last", 3, {}}) do
+    stored.cond = bad
+    assert_true(not validate_scene(S.scenes[1]), "rejected: " .. tostring(bad))
+  end
+  stored.cond = "!nei"
+  assert_true(validate_scene(S.scenes[1]), "a named one validates")
+end)
+
+test("a chain link carries direction and misstep, and picks by the three chances", function()
+  local context, S = setup()
+  local chance = S.lib.chance
+  for scene = 1, 3 do
+    voice_1_only(S, 4)
+    S.patterns[1][1] = scene  -- each scene's mark: step 1's level
+    params:set("v1_seq_direction", scene == 2 and DIRECTION.reverse or DIRECTION.forward)
+    params:set("v1_seq_misstep", scene == 2 and 30 or 0)
+    capture_scene(scene)
+  end
+  S.patterns[1][1] = 9
+  params:set("v1_seq_direction", DIRECTION.forward); params:set("v1_seq_misstep", 0)
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 3)
+  params:set("seq_chain_bars", 1)
+  assert_equal(params:get("seq_chain_next"), 100, "next 100 by default")
+  assert_equal(params:get("seq_chain_previous"), 0)
+  assert_equal(params:get("seq_chain_random"), 0)
+  -- every pick runs with a math.random that raises
+  local real_pick, picks = chance.pick, {}
+  chance.pick = function(current, slots, chances, random)
+    local real_random = math.random
+    math.random = function() error("a draw was made") end
+    local ran, slot, move = pcall(real_pick, current, slots, chances, random)
+    math.random = real_random
+    if not ran then error(slot, 0) end
+    picks[#picks + 1] = {slots = table.concat(slots, " "), chances = table.concat(chances, " ")}
+    return slot, move
+  end
+  -- step 1's level now, then after each of bars bars
+  local function marks(bars)
+    local seen = {S.patterns[1][1]}
+    for _ = 1, bars do
+      context.clock.run_for(2.0)
+      seen[#seen + 1] = S.patterns[1][1]
+    end
+    return table.concat(seen, " ")
+  end
+  pattern_clock_start(); context.clock.run_for(0.01)
+  assert_equal(marks(1), "1 2", "100, 0, 0: in order")
+  assert_equal(params:get("v1_seq_direction"), DIRECTION.reverse, "the link carries the direction")
+  assert_equal(params:get("v1_seq_misstep"), 30, "and the misstep")
+  assert_equal(marks(2), "2 3 1", "then on, past the range's last")
+  assert_equal(picks[1].slots, "1 2 3", "the populated slots of the range, in order")
+  assert_equal(picks[1].chances, "100 0 0")
+  pattern_clock_stop()
+  params:set("seq_chain_next", 0); params:set("seq_chain_previous", 100)
+  pattern_clock_start(); context.clock.run_for(0.01)
+  assert_equal(marks(2), "3 2 1", "0, 100, 0: backward, from the last")
+  params:set("seq_chain_previous", 0)
+  local replaced = 0
+  local real_replace = S.lib.sequencer.replace_pattern
+  S.lib.sequencer.replace_pattern = function(...) replaced = replaced + 1; return real_replace(...) end
+  assert_equal(marks(2), "1 1 1", "0, 0, 0: the same scene stays")
+  S.lib.sequencer.replace_pattern = real_replace
+  assert_equal(replaced, 0, "and nothing is replaced")
+  pattern_clock_stop()
+  chance.pick = real_pick
+end)
+
+test("a 3.6 pattern plays the same steps as before", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  local levels = {15, 0, 9, 0, 12, 6, 0, 3, 15, 0, 0, 8, 0, 11, 0, 5}
+  for step = 1, 16 do S.patterns[1][step] = levels[step] end
+  seq.set_step_attr(1, 5, "prob", 50)
+  math.randomseed(1)
+  -- as 3.6 plays it: forward, the 50% step drawn once a pass
+  local expected = {}
+  for _ = 1, 4 do
+    for step = 1, 16 do
+      local level = levels[step]
+      if level > 0 and (step ~= 5 or math.random() * 100 < 50) then expected[#expected + 1] = level / 15 end
+    end
+  end
+  math.randomseed(1)
+  pattern_clock_start(); run_steps(context, 64)
+  assert_true(S.lib.conditions.outcome(1) ~= nil, "the prob step is a conditioned one")
+  pattern_clock_stop()
+  local sent = {}
+  for _, call in ipairs(retriggers_of(context, 0)) do sent[#sent + 1] = call.args[2] end
+  assert_list_near(sent, expected, 1e-9, "voice 1's retriggers over 64 steps")
+end)
+
 end

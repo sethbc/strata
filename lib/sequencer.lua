@@ -45,9 +45,19 @@ return function(S)
     gate_release_default = 0.1,
     gate_seconds = {0.005, 120},     -- what gateSeconds may carry
     swing = {50, 75},                -- percent: 50 straight
-    group_params = 6,                -- strata_seq's own (the quantizer adds PARAM_COUNT)
+    group_params = 10,               -- strata_seq's own (the quantizer adds PARAM_COUNT)
     max_chain_bars = 16,
     chain_defaults = {from = 1, scenes = 2, bars = 4},
+    -- 3.7 (design §5.4): the chain's chances in percent, next, previous and
+    -- random (S.lib.chance.pick); at the defaults it plays in order
+    chain_chances = {next = 100, previous = 0, random = 0},
+    max_chance = 100,
+    chain_keys = {"seq_length", "seq_division", "seq_direction", "seq_misstep"},  -- what a link carries per voice
+    -- 3.7 (design §5.5): v<i>_seq_direction's options (forward the default)
+    -- and v<i>_seq_misstep's top, in percent
+    directions = {"forward", "reverse", "ping-pong", "random"},
+    forward = 1, reverse = 2, ping_pong = 3, random = 4,
+    max_misstep = 100,
     transport_beats = 1 / 4,         -- the transport counts 16ths
     bar_beats = 4,
     past_length_level = 1,           -- a set step past the voice's length, on the grids
@@ -93,7 +103,9 @@ return function(S)
   end
 
   -- The playing state (local; read through the functions below): per voice
-  -- {anchor, tick, beat, due, position, pass_length} and the transport's
+  -- {anchor, tick, beat, due} and its position (3.7: last, the step taken
+  -- last, nil at a start; taken, the steps taken in the pass; pass_length;
+  -- heading, ping-pong's way, 1 or -1: start_position) and the transport's
   -- {anchor, tick, beat, due, played_at (the time of its last 16th)}, each
   -- with its wait's {last_sync, generation, sync_time, sync_beat,
   -- sync_beat_seconds, stale}. A
@@ -136,6 +148,9 @@ return function(S)
 
   local function valid_voice(voice_idx) return whole_between(voice_idx, 1, NUM_VOICES) end
 
+  -- A number param in percent, as the menu shows it
+  local function percent(param) return string.format("%d%%", param:get()) end
+
   local function near(a, b) return math.abs(a - b) <= SEQ.beat_tolerance end
 
   local function voice_param(voice_idx, key) return "v" .. voice_idx .. "_" .. key end
@@ -149,6 +164,10 @@ return function(S)
   end
 
   local function gated(voice_idx) return extras(voice_idx).seq_gate == SEQ.gate_on end
+
+  local function direction(voice_idx) return extras(voice_idx).seq_direction or SEQ.forward end
+
+  local function misstep(voice_idx) return extras(voice_idx).seq_misstep or 0 end
 
   local function sorted_keys(set)
     local keys = {}
@@ -193,6 +212,7 @@ return function(S)
     size = function(value, voice_idx) return in_lock_range(voice_idx, "size", value) end,
     bookmark = function(value) return whole_between(value, 1, NUM_BOOKMARKS) end,
     gate = function(value) return number_between(value, SEQ.gate_steps[1], SEQ.gate_steps[2]) end,
+    cond = S.lib.conditions.valid,  -- 3.7 (design §5.3): one of the 78 conditions
   }
 
   local function valid_place(voice_idx, step)
@@ -995,22 +1015,24 @@ return function(S)
     return slots
   end
 
-  -- The populated scene after current in the chain's slots (wrapping, from
-  -- seq_chain_from when current is none of them), or nil
+  -- The scene the chain links next from current, and the move (3.7, design
+  -- §5.4): S.lib.chance.pick over the populated, valid slots of the
+  -- chain's range in order, by seq_chain_next, seq_chain_previous and
+  -- seq_chain_random (a current that is none of them counts as before the
+  -- first). nil with no such slot
   local function next_chain_scene(current)
-    local slots, first = chain_slots(), 1
-    for index, slot in ipairs(slots) do
-      if slot == current then first = index + 1 end
+    local slots = {}
+    for _, slot in ipairs(chain_slots()) do
+      if S.scenes[slot] and S.scenes[slot].populated and validate_scene(S.scenes[slot]) then
+        slots[#slots + 1] = slot
+      end
     end
-    for offset = 0, #slots - 1 do
-      local slot = slots[(first - 1 + offset) % #slots + 1]
-      if S.scenes[slot] and S.scenes[slot].populated and validate_scene(S.scenes[slot]) then return slot end
-    end
-    return nil
+    return S.lib.chance.pick(current, slots,
+      {params:get("seq_chain_next"), params:get("seq_chain_previous"), params:get("seq_chain_random")})
   end
 
-  -- A link: the scene's patterns, steps block and each voice's length and
-  -- division, and nothing else; every override ends
+  -- A link: the scene's patterns, steps block and each voice's length,
+  -- division, direction and misstep, and nothing else; every override ends
   local function load_chain_scene(slot)
     local data = S.scenes[slot].data
     chain.current = slot
@@ -1019,15 +1041,16 @@ return function(S)
     set_all_steps(data.steps or {})
     for voice_idx = 1, NUM_VOICES do
       local scene_extras = data.voices[voice_idx].extras or {}
-      for _, key in ipairs({"seq_length", "seq_division"}) do
+      for _, key in ipairs(SEQ.chain_keys) do
         if scene_extras[key] then params:set(voice_param(voice_idx, key), scene_extras[key]) end
       end
     end
   end
 
+  -- Every move but a repeat links its slot, the one playing too (ruling 36)
   local function chain_link()
-    local slot = next_chain_scene(chain.current)
-    if slot then load_chain_scene(slot) end
+    local slot, move = next_chain_scene(chain.current)
+    if slot and move ~= "repeat" then load_chain_scene(slot) end
   end
 
   -- Whatever falls on a beat before its steps: a chain link due then (the
@@ -1041,29 +1064,86 @@ return function(S)
 
   -- A voice's step ------------------------------------------------------
 
-  -- The voice's step at its tick, and its position moved on: the position
-  -- wraps at the pass's length (a length change applies at once while the
-  -- position is inside it, at the wrap otherwise)
+  -- The voice's position starts (a pattern start, a restart, a division
+  -- reset's bar, a stop): no step taken, pass 1 with no outcome
+  local function start_position(voice_idx, state)
+    state.last, state.taken, state.heading, state.pass_length = nil, 0, 1, voice_length(voice_idx)
+    S.lib.conditions.start(voice_idx)
+  end
+
+  -- Ping-pong's move after last (3.7, design §5.5): up to the length, then
+  -- down to 1, no end played twice; turning at an end ends the pass. A
+  -- length of 1 stays on 1, each step a pass. Returns the step and whether
+  -- the pass ended
+  local function ping_pong_step(state, last, length)
+    if length <= 1 then return 1, true end
+    local turned = (state.heading > 0 and last >= length) or (state.heading < 0 and last <= 1)
+    if turned then state.heading = -state.heading end
+    return util.clamp(last + state.heading, 1, length), turned
+  end
+
+  -- The voice's step at its tick, and its position moved on by its
+  -- direction (3.7, design §5.5). The first step after a start is the
+  -- direction's first (forward 1, reverse the length, ping-pong 1, random
+  -- a draw). A pass is pass_length steps taken in forward, reverse and
+  -- random (a length change applies at once while fewer steps than it have
+  -- been taken, at the pass's end otherwise: forward is 3.6's wrap) and
+  -- ends at each turn in ping-pong. At a pass's end the pass count moves
+  -- (S.lib.conditions.next_pass), forward starts again at 1 and reverse at
+  -- the length, and the overrides end when no set step is left. A misstep
+  -- (seq_misstep percent, one draw made only above 0) moves one step up or
+  -- down (a second draw), wrapping, instead of the direction's move.
+  -- Forward with misstep 0 draws nothing
   local function take_position(voice_idx)
     local state = play.voices[voice_idx]
     local length = voice_length(voice_idx)
-    if length ~= state.pass_length and state.position <= length then state.pass_length = length end
-    if state.position > state.pass_length then
-      state.position, state.pass_length = 1, length
-      -- the wrap: with no set step left inside its length, no step of the
-      -- voice will end its overrides or chord (its only set step was turned off)
+    local way, last = direction(voice_idx), state.last
+    local step, pass_ended = nil, false
+    if last == nil then
+      if way == SEQ.random then
+        step = math.random(length)
+      else
+        step = way == SEQ.reverse and length or 1
+      end
+    else
+      if way ~= SEQ.ping_pong then
+        if length ~= state.pass_length and state.taken < length then state.pass_length = length end
+        if state.taken >= state.pass_length then
+          pass_ended, state.taken, state.pass_length = true, 0, length
+        end
+      end
+      local chance = misstep(voice_idx)
+      if chance > 0 and math.random() * SEQ.max_misstep < chance then
+        step = (last - 1 + (math.random() < 0.5 and -1 or 1)) % length + 1
+      elseif way == SEQ.forward then
+        step = (pass_ended or last + 1 > state.pass_length) and 1 or last + 1
+      elseif way == SEQ.reverse then
+        step = (pass_ended or last - 1 < 1) and state.pass_length or last - 1
+      elseif way == SEQ.ping_pong then
+        step, pass_ended = ping_pong_step(state, last, length)
+        if pass_ended then state.taken, state.pass_length = 0, length end
+      else
+        step = math.random(length)
+      end
+    end
+    if pass_ended then
+      S.lib.conditions.next_pass(voice_idx)
+      -- the pass's end: with no set step left inside its length, no step of
+      -- the voice will end its overrides or chord (its only set step was turned off)
       if (overrides[voice_idx] or chords[voice_idx]) and not M.has_set_step(voice_idx) then
         end_overrides(voice_idx)
       end
     end
-    local step = state.position
-    state.position = step + 1
+    state.last, state.taken = step, state.taken + 1
     return step
   end
 
-  -- The voice's step at its tick (take_position): a set step draws its
-  -- probability once and plays its first hit; returns the hits still to
-  -- play and their spacing
+  -- The voice's step at its tick (take_position): a set step with a
+  -- condition or a probability under 100 is conditioned (3.7, design
+  -- §5.1): its condition is tested first (S.lib.conditions.test), its
+  -- probability drawn once only if it holds, and its outcome recorded
+  -- (S.lib.conditions.record); a step that plays plays its first hit.
+  -- Returns the hits still to play and their spacing
   local function begin_voice_step(voice_idx)
     local state = play.voices[voice_idx]
     at_beat(state.beat)
@@ -1073,7 +1153,13 @@ return function(S)
     local hits, spacing, semitones, pitches = 0, 0, nil, nil
     local attrs = S.pattern_steps[voice_idx][step] or {}
     local prob = attrs.prob or SEQ.max_prob
-    if level > 0 and prob > 0 and (prob >= SEQ.max_prob or math.random() * SEQ.max_prob < prob) then
+    local plays = false
+    if level > 0 then
+      plays = (attrs.cond == nil or S.lib.conditions.test(voice_idx, attrs.cond)) and prob > 0
+        and (prob >= SEQ.max_prob or math.random() * SEQ.max_prob < prob)
+      if attrs.cond ~= nil or prob < SEQ.max_prob then S.lib.conditions.record(voice_idx, plays) end
+    end
+    if plays then
       -- the step's own length (a swung pair's), which the 20 ms rule reads
       local division, swing = division_beats(voice_idx), swing_beats(voice_idx)
       local step_beats = division + (state.tick % 2 == 0 and swing or -swing)
@@ -1138,7 +1224,7 @@ return function(S)
     local reset = play.reset_beat
     if reset and near(beat, reset) and state.anchor < reset - SEQ.beat_tolerance then
       state.anchor, k = reset, 0
-      state.position, state.pass_length = 1, voice_length(voice_idx)
+      start_position(voice_idx, state)
     end
     state.tick, state.beat = k, beat
   end
@@ -1172,7 +1258,7 @@ return function(S)
   local function voice_clock(voice_idx, beat)
     local state = play.voices[voice_idx]
     state.anchor, state.tick, state.beat, state.due = beat, 0, beat, nil
-    state.position, state.pass_length = 1, voice_length(voice_idx)
+    start_position(voice_idx, state)
     state.last_sync, state.generation, state.stale = clock.get_beats(), play.generation, false
     local function forget() S.pattern_clocks[voice_idx] = nil end
     local function begin() return begin_voice_step(voice_idx) end
@@ -1242,7 +1328,8 @@ return function(S)
       local running = S.pattern_clocks[voice_idx]
       S.pattern_clocks[voice_idx], S.pattern_sounding_steps[voice_idx] = nil, nil
       if running then end_clock(running, play.voices[voice_idx], all_posted) end
-      play.voices[voice_idx] = {anchor = 0, tick = 0, beat = 0, position = 1, pass_length = PATTERN_LENGTH}
+      play.voices[voice_idx] = {anchor = 0, tick = 0, beat = 0}
+      start_position(voice_idx, play.voices[voice_idx])
     end
     local running = S.pattern_clock
     S.pattern_clock = nil
@@ -1409,12 +1496,24 @@ return function(S)
       default = SEQ.chain_defaults.scenes}
     params:add{type = "number", id = "seq_chain_bars", name = "chain bars", min = 1, max = SEQ.max_chain_bars,
       default = SEQ.chain_defaults.bars}
+    -- 3.7 (design §5.4): the chain's next scene by three chances
+    for _, move in ipairs({"next", "previous", "random"}) do
+      params:add{type = "number", id = "seq_chain_" .. move, name = "chain " .. move, min = 0, max = SEQ.max_chance,
+        default = SEQ.chain_chances[move], formatter = percent}
+    end
     S.lib.quantize.add_params()
     params:add{type = "trigger", id = "seq_division_reset", name = "division reset", action = function()
       if S.pattern_playing then play.reset_beat = next_bar_beat() end
     end}
     params:add{type = "binary", id = "seq_follow_transport", name = "follow transport", behavior = "toggle",
       default = 1}
+    -- 3.7 (design §5.2, rulings 10 and 11): fill's latch, never saved on
+    params:add{type = "binary", id = "seq_fill", name = "fill", behavior = "toggle", default = 0,
+      action = function()
+        grid_redraw()
+        request_redraw()
+      end}
+    params:set_save("seq_fill", false)
   end
 
   -- The per-voice seq params (design 8.1, 8.12, 8.13): a registered record
@@ -1423,7 +1522,7 @@ return function(S)
   local record
   record = {
     name = "seq",
-    count = 6,
+    count = 8,
     add = function(voice_idx)
       local add = S.lib.params_setup.add_voice_extra
       add(voice_idx, record, "seq_length", {type = "number", name = "seq length", min = 1, max = PATTERN_LENGTH,
@@ -1445,6 +1544,11 @@ return function(S)
           "s")})
       add(voice_idx, record, "seq_swing", {type = "number", name = "seq swing", min = SEQ.swing[1], max = SEQ.swing[2],
         default = SEQ.swing[1]})
+      -- 3.7 (design §5.5)
+      add(voice_idx, record, "seq_direction", {type = "option", name = "seq direction", options = SEQ.directions,
+        default = SEQ.forward})
+      add(voice_idx, record, "seq_misstep", {type = "number", name = "seq misstep", min = 0, max = SEQ.max_misstep,
+        default = 0, formatter = percent})
     end,
     grain_keys = {seq_gate = {name = "seqGate", value = function(option) return option - 1 end},
       seq_gate_release = "gateRelease"},
@@ -1454,9 +1558,11 @@ return function(S)
       if gated(voice_idx) then send_gate_seconds(voice_idx, M.gate_seconds(voice_idx)) end
     end,
     scene_defaults = {seq_length = PATTERN_LENGTH, seq_division = SEQ.default_division, seq_gate = 1,
-      seq_gate_length = SEQ.gate_length_default, seq_gate_release = SEQ.gate_release_default, seq_swing = SEQ.swing[1]},
+      seq_gate_length = SEQ.gate_length_default, seq_gate_release = SEQ.gate_release_default, seq_swing = SEQ.swing[1],
+      seq_direction = SEQ.forward, seq_misstep = 0},
     discrete = {seq_length = {1, PATTERN_LENGTH}, seq_division = {1, #SEQ.division_names},
-      seq_gate = {1, #SEQ.gate_options}, seq_swing = {SEQ.swing[1], SEQ.swing[2]}},
+      seq_gate = {1, #SEQ.gate_options}, seq_swing = {SEQ.swing[1], SEQ.swing[2]},
+      seq_direction = {1, #SEQ.directions}, seq_misstep = {0, SEQ.max_misstep}},
     scene_ranges = {seq_gate_length = {SEQ.gate_steps[1], SEQ.gate_steps[2]},
       seq_gate_release = {SEQ.gate_release[1], SEQ.gate_release[2]}},
     fader = false,

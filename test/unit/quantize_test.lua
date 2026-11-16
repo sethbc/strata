@@ -264,7 +264,7 @@ end
 
 local function index_of(id) return params.lookup[id] end
 
-test("quantize_actions is one option, the fifth of the seven params in the sequencer's strata_seq", function()
+test("quantize_actions is one option, the eighth of the eleven params in the sequencer's strata_seq", function()
   load_strata()
   local quantize = local_value("S").lib.quantize
   assert_equal(quantize.PARAM_COUNT, 1, "one param")
@@ -274,8 +274,9 @@ test("quantize_actions is one option, the fifth of the seven params in the seque
   assert_equal(param.default, OFF)
   local group, ids = group_ids(index_of("strata_seq"))
   assert_equal(group.t, params.tGROUP, "strata_seq is a group")
-  assert_equal(table.concat(ids, " "), "seq_chain seq_chain_from seq_chain_scenes seq_chain_bars quantize_actions "
-    .. "seq_division_reset seq_follow_transport", "the sequencer's seven, quantize_actions fifth")
+  assert_equal(table.concat(ids, " "), "seq_chain seq_chain_from seq_chain_scenes seq_chain_bars seq_chain_next "
+    .. "seq_chain_previous seq_chain_random quantize_actions seq_division_reset seq_follow_transport seq_fill",
+    "the sequencer's eleven (3.7: the chain's chances and fill), quantize_actions eighth")
 end)
 
 end

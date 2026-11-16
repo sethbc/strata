@@ -1,6 +1,6 @@
 # SEQ
 
-All seven patterns, the sequencer's transport and the tempo, so patterns can be made without a grid, and an edit view for each voice's length, division, swing and gate and for what each step holds (see [Sequencer](../sequencer.md)). Back to [Screen Controls](../controls.md).
+All seven patterns, the sequencer's transport and the tempo, so patterns can be made without a grid, and an edit view for each voice's length, division, swing, gate and direction, for fill and for what each step holds (see [Sequencer](../sequencer.md)). Back to [Screen Controls](../controls.md).
 
 ## The patterns
 
@@ -13,7 +13,7 @@ All seven patterns, the sequencer's transport and the tempo, so patterns can be 
 - **ALT+K2** - Randomize the selected voice's pattern (about half the steps on, at levels 8-15) when you let go of K2. Press it again within 5 seconds to bring the old pattern back; editing any of that voice's steps ends the undo. Hold K2 past half a second and let go to open the edit view on the step under the cursor (the hint says `K2:edit`)
 - **ALT+K3** - Clear the selected voice's pattern
 
-Each voice has a row: its number on the left (bright for the selected voice), sixteen cells and `+` (running) or `-` (stopped) on the right. A set step is a filled cell as bright as its level; an empty step is a dim outline, so even a level-1 step reads as set. The steps past a voice's length are small dots: the voice does not play them until its length grows. A `G` before the `+` or `-` marks a gated voice (one heard only while a step's gate is open). The cursor is a bright square around the selected step. While the patterns play, each row's playing step is drawn brighter: every voice plays at its own length and division, so the rows' playing steps differ. The header shows the play mark beside the tempo (`▶ 120 bpm`) while they play. The tempo is always in the header on this page, whether or not the patterns play; it takes the place of `[M]` and `REC`/`ARM`, which other pages show there.
+Each voice has a row: its number on the left (bright for the selected voice), sixteen cells and `+` (running) or `-` (stopped) on the right. A set step is a filled cell as bright as its level; an empty step is a dim outline, so even a level-1 step reads as set. The steps past a voice's length are small dots: the voice does not play them until its length grows. A `G` before the `+` or `-` marks a gated voice (one heard only while a step's gate is open). While fill is on (see [Sequencer](../sequencer.md), Fill), `FILL` shows at the end of the selected voice's row, before its `G`. The cursor is a bright square around the selected step. While the patterns play, each row's playing step is drawn brighter: every voice plays at its own length and division, so the rows' playing steps differ. The header shows the play mark beside the tempo (`▶ 120 bpm`) while they play. The tempo is always in the header on this page, whether or not the patterns play; it takes the place of `[M]` and `REC`/`ARM`, which other pages show there.
 
 A step on a stopped voice starts it; on a running voice it accents it (the step's level is the accent's velocity). Edits show on a connected grid at once. The arc's button plays and stops the patterns; the arc's SEQ rings are in [Monome Arc](../arc.md).
 
@@ -23,16 +23,16 @@ The patterns step on norns' clock (PARAMETERS > CLOCK), so with the clock's sour
 
 ALT+K2 held opens it on the selected voice and the step under the cursor. The line under the header shows them (`v3 step 5`) and the voice's sixteen steps, the one being edited outlined. Below it, a list in three sections:
 
-- **voice** - `length` (1-16 steps), `division` (`1/32` to `1 bar`), `swing` (50-75 %), `gate` (off or on), `gate len` (the gate's length in steps, `0.50 st`), `gate rel` (its release, `0.10 s`), `euclid` (a Euclidean fill: `5/12 +2` is 5 hits over the voice's 12 steps, turned by 2) and `clear` (K3 clears the pattern)
-- **step** (named after the step: `step 5`) - `level` (0-15), `prob` (the chance it plays, `80%`), `ratchet` (hits, `x2`), `gate` (the step's own gate length, `2.00 st`, or `off` for the voice's), `note` (a scale degree from the voice's pitch, `+3`, or `off`), then `note 2` to `note 8`, one row for each further note of the step's chord, and `add note` while the step has one to seven notes, the step locks `pos` (`0.42`), `pitch` (`1.50x`) and `size` (`0.12 s`), each `off` until set, and `bookmark` (`2` or `off`; only for a buffer voice whose buffer holds audio)
-- **chain** - `chain` (off or on), `from`, `scenes` and `bars`, and `quantize` (quantized actions: off, beat or bar), the settings every voice shares
+- **voice** - `length` (1-16 steps), `division` (`1/32` to `1 bar`), `swing` (50-75 %), `gate` (off or on), `gate len` (the gate's length in steps, `0.50 st`), `gate rel` (its release, `0.10 s`), `direction` (`forward`, `reverse`, `ping-pong` or `random`), `misstep` (the chance of a step up or down instead, `20%`), `fill` (`off`, `on` while latched, `held` while a grid key holds it; K3 latches it), `euclid` (a Euclidean fill: `5/12 +2` is 5 hits over the voice's 12 steps, turned by 2) and `clear` (K3 clears the pattern)
+- **step** (named after the step: `step 5`) - `level` (0-15), `prob` (the chance it plays, `80%`), `ratchet` (hits, `x2`), `gate` (the step's own gate length, `2.00 st`, or `off` for the voice's), `cond` (its condition: `off`, then `1:2`, `!1:2`, `2:2`, `!2:2` ... `!8:8`, then `first`, `!first`, `pre`, `!pre`, `nei`, `!nei`, `fill`, `!fill`), `note` (a scale degree from the voice's pitch, `+3`, or `off`), then `note 2` to `note 8`, one row for each further note of the step's chord, and `add note` while the step has one to seven notes, the step locks `pos` (`0.42`), `pitch` (`1.50x`) and `size` (`0.12 s`), each `off` until set, and `bookmark` (`2` or `off`; only for a buffer voice whose buffer holds audio)
+- **chain** - `chain` (off or on), `from`, `scenes` and `bars`, the three chances of the next scene, `next` (`100%`), `prev` and `random` (`0%`), and `quantize` (quantized actions: off, beat or bar), the settings every voice shares
 
 - **E2** - Move through the list
 - **E3** - Change the value. A step lock, note or bookmark that is `off` starts from the voice's own value (a lock) or 0 (a note) and steps from there: one detent up from `off` on `pos` with the voice at 0.30 locks it to 0.31. Turning below the start of its range sets it `off` again. `euclid` sets the hits; `prob` at 100 % and `ratchet` at `x1` are a plain step
 - **ALT+E2** - Move to another step of the voice
 - **ALT+E3** - Fine adjustment (a tenth of a detent) on the continuous rows; on `euclid` the rotation
 - **K2** - Back to the patterns
-- **K3** - Turn the step on (at 15) or off; on the `clear` row, clear the voice's pattern
+- **K3** - Turn the step on (at 15) or off; on the `clear` row, clear the voice's pattern; on the `fill` row, latch fill on or off (the hint says `K3:fill`)
 - **ALT+K2** - A quick press randomizes the voice's pattern (or undoes it), as on the patterns. Held past half a second, letting go resets the row under the cursor: a lock, note, gate or bookmark of the step to `off`, `prob` to 100 %, `ratchet` to one hit, the level to 0, a setting to its default (the hint says `K2:reset`). On `euclid` and `clear`, which have nothing to reset, the hint says `K2:cancel` and letting go does nothing
 - **ALT+K3** - Clear the voice's pattern
 

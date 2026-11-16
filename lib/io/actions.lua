@@ -121,6 +121,15 @@ return function(S)
     return true
   end
 
+  -- 3.7 (ruling 10): fill's latch, seq_fill (a key's hold is the grids';
+  -- crow's triggers act on a rise only, so they toggle it)
+  function M.fill(mode)
+    local want = wanted(mode, params:get("seq_fill") == 1)
+    if want == nil then return ignored("fill", "mode " .. tostring(mode) .. " is not 0, 1 or 2") end
+    set_binary_param("seq_fill", want and 1 or 0)
+    return true
+  end
+
   -- What BUFFER's K3 does on the page's slot
   function M.record()
     record_buffer(S.buffer_page.slot)

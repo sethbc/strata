@@ -62,7 +62,7 @@ PSETs (PARAMETERS > PSET) save every one of them. A PSET loads every setting it 
 - Per voice: out port (off or 1-16; off), out channel (1-16; the voice's number), out mode (plain, mpe; plain) and out members (1-15; 15). Out bend range (1-96 semitones; 48). CC 1 to CC 8: source (off or a modulation source; off), port (1-16; 1), channel (1-16; 1) and number (0-127; the slot's). Program change in (off), its channel (any or 1-16; any), program change out (off), its port (1) and channel (1). See [MIDI out](io/midi-out.md)
 
 ## crow (group)
-- In 1 and in 2: mode (off, cv, trigger; off), range (-5..5, 0..5, 0..10 V; -5..5), action (retrigger, next scene, freeze, record, patterns; retrigger) and voice (sel, the selected voice, or 1-7; sel). Out 1 to out 4: source (off, a modulation source, a voice's pitch or gate, or clock; off), range (0..5, 0..10, -5..5 V; 0..5) and div (1/16 to 4 beats; 1). See [crow](io/crow.md)
+- In 1 and in 2: mode (off, cv, trigger; off), range (-5..5, 0..5, 0..10 V; -5..5), action (retrigger, next scene, freeze, record, patterns, fill; retrigger) and voice (sel, the selected voice, or 1-7; sel). Out 1 to out 4: source (off, a modulation source, a voice's pitch or gate, or clock; off), range (0..5, 0..10, -5..5 V; 0..5) and div (1/16 to 4 beats; 1). See [crow](io/crow.md)
 - A PSET stores them; scenes do not
 
 ## out ii (group)
@@ -78,11 +78,13 @@ PSETs (PARAMETERS > PSET) save every one of them. A PSET loads every setting it 
 - A PSET stores them; scenes do not
 
 ## Sequencer (group)
-The quantizer for actions, the pattern chain, the division reset and following the clock's transport ([Sequencer](sequencer.md)). PSETs store them; scenes do not.
+The quantizer for actions, the pattern chain, the division reset, following the clock's transport and fill ([Sequencer](sequencer.md)). PSETs store them (but fill); scenes do not.
 - Quantize actions (off, beat, bar; default off): with beat or bar, these wait for the next beat or bar of the norns clock, and the header says so (`v1 jump at bar`, `v1 bm 2 at bar`, `S3 at beat`, `v2 frz at bar`, `play at bar`): a grid's position and bookmark keys, BUFFER's bookmark field (`bm`), a scene recall (the SCENES page's K2, K3 and arc button, and every grid's scene keys) and the start of the patterns (a stop never waits). A grid's keys for a voice's audio freeze wait too. A second press of a scene, bookmark or position key before then replaces the first; a second press of a freeze key or of the play key takes its waiting action back, so nothing happens, and a transport start or stop drops a waiting start of the patterns. Off acts at once. A step's bookmark lock never waits. Saved in PSETs, not in scenes
-- Chain (off/on, default off), chain from (scene 1-16, default 1), chain scenes (1-16, default 2) and chain bars (1-16, default 4): while the patterns play, every chain-bars bars the next saved scene of the range gives its patterns, their step attributes and each voice's sequence length and division, and nothing else
+- Chain (off/on, default off), chain from (scene 1-16, default 1), chain scenes (1-16, default 2) and chain bars (1-16, default 4): while the patterns play, every chain-bars bars a saved scene of the range gives its patterns, their step attributes and each voice's sequence length, division, direction and misstep, and nothing else
+- Chain next (0-100 %, default 100), chain previous (default 0) and chain random (default 0): the chances that the next link is the next saved scene of the range, the one before, or any other; what is left over keeps the scene for another round
 - Division reset (trigger): every voice back to step 1 at the next bar
 - Follow transport (off/on, default on): a MIDI clock or Link start and stop start and stop the patterns (SETUP's `transport` row)
+- Fill (off/on, default off): fill's latch, which a MIDI controller can map ([Fill](sequencer.md#fill)). Never saved: it is off at every start, and a PSET load leaves it as it is
 
 ## Buffers (group)
 - Record duration (0.5 s to the buffer length: 16 s, or up to 300 s on the high tier; default 8) and record level (0-2, default 1)
@@ -190,6 +192,8 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | seq gate length | 0.05-16 st | 0.5 | In steps |
 | seq gate release | 0.005-4 s | 0.1 | |
 | seq swing | 50-75 | 50 | Percent: 50 is straight |
+| seq direction | forward, reverse, ping-pong, random | forward | The order the voice takes its steps |
+| seq misstep | 0-100% | 0 | The chance of a step up or down instead of the direction's |
 | note cap | 1-8 | 8 | How many notes the voice plays at once: its own and up to seven more from the note pool all voices share. 1 plays one note at a time. Kept in PSETs, never in scenes ([VOICE](pages/voice.md)) |
 | attack | 0.005-30 s | by voice: 4, 5, 3, 8, 2, 0.01, 3 | The time a synth voice takes to fade in; each voice starts at its own, as before 3.5. A buffer or input voice's notes, and a frozen synth voice's, keep their grain fades (0.1 s in, 2 s out). Kept in scenes ([VOICE](pages/voice.md)) |
 | release | 0.01-30 s | by voice: 8, 10, 6, 12, 4, 2, 5 | The time a synth voice's note takes to fade out when it ends while the voice runs; a voice's stop fades in at most about 2 s whatever it is set to. As `attack`, a synth voice's only. Kept in scenes ([VOICE](pages/voice.md)) |

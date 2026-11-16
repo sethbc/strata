@@ -750,8 +750,9 @@ test("SEQ's layout states count a full chord as the sequencer's most notes", fun
   for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states) do
     if state.name:find("edit view eight notes rows", 1, true) then seen = seen + 1 end
   end
-  -- 4 section labels + 9 voice + 5 step + 8 notes + 3 locks + 5 chain rows, five to a window
-  local rows = 4 + 8 + 4 + S.lib.sequencer.SEQ.max_step_notes + 3 + 5
+  -- 3 section labels + 11 voice + 5 step + 8 notes + 3 locks + 8 chain rows
+  -- (3.7: direction, misstep, fill, cond, next, prev, random), five to a window
+  local rows = 3 + 11 + 5 + S.lib.sequencer.SEQ.max_step_notes + 3 + 8
   assert_equal(seen, math.ceil(rows / 5), "a window for every row of an eight-note step")
 end)
 
@@ -929,8 +930,9 @@ test("the bookmark row shows only when the voice has a set bookmark", function()
   assert_true(not synth:find("bookmark", 1, true), "a synth voice has no bookmark row: " .. synth)
   S.buffers[1].seconds = 8
   params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
-  assert_equal(row_labels(context), "length division swing gate gate len gate rel euclid clear level prob ratchet "
-    .. "gate note pos pitch size bookmark chain from scenes bars quantize", "every row, in order")
+  assert_equal(row_labels(context), "length division swing gate gate len gate rel direction misstep fill euclid "
+    .. "clear level prob ratchet gate cond note pos pitch size bookmark chain from scenes bars next prev random "
+    .. "quantize", "every row, in order")
   S.buffers[1].seconds = 0
   assert_true(not row_labels(context):find("bookmark", 1, true), "an empty slot has none")
 end)
@@ -957,9 +959,77 @@ test("every edit view row lays out with the cursor on it, on voices 1 and 7, wit
         assert_screen_layout(context, where .. ", ALT")
         key(1, 0); context.screen.clear(); redraw()
       end)
-      assert_equal(rows, bookmarks and 22 or 21, "every row visited")
+      assert_equal(rows, bookmarks and 29 or 28, "every row visited")
     end
   end
+end)
+
+-- 3.7 (design §5.1-§5.5, ruling 9): the voice's direction, misstep and
+-- fill, a step's condition, the chain's three chances, and "fill" on the
+-- pattern view
+test("the edit view has direction, misstep, fill, cond and the chain's three chances", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  S.cursors.seq_step = 3
+  open_edit_view(context)
+  local labels = row_labels(context)
+  assert_true(labels:find("gate rel direction misstep fill euclid", 1, true) ~= nil, "the voice section: " .. labels)
+  assert_true(labels:find("ratchet gate cond note", 1, true) ~= nil, "the step section")
+  assert_true(labels:find("bars next prev random quantize", 1, true) ~= nil, "the chain section")
+  assert_equal(go_to(context, "direction"), "forward")
+  enc(3, 1); assert_equal(params:get("v1_seq_direction"), 2); assert_equal(shown(context), "reverse")
+  enc(3, 1); assert_equal(shown(context), "ping-pong")
+  assert_equal(go_to(context, "misstep"), "0%")
+  enc(3, 30); assert_equal(params:get("v1_seq_misstep"), 30); assert_equal(shown(context), "30%")
+  assert_equal(go_to(context, "fill"), "off")
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:back K3:fill", "K3 latches fill here")
+  tap(3)
+  assert_equal(params:get("seq_fill"), 1, "K3 on fill latches seq_fill")
+  assert_equal(S.patterns[1][3], 0, "and toggles no step")
+  assert_equal(shown(context), "on")
+  tap(3); assert_equal(params:get("seq_fill"), 0, "and again lets it go")
+  S.lib.conditions.hold_fill("grid:1", true)
+  assert_equal(shown(context), "held", "a key's hold shows")
+  S.lib.conditions.hold_fill("grid:1", false)
+  assert_equal(go_to(context, "cond"), "off")
+  enc(3, 1); assert_equal(seq.step_attr(1, 3, "cond"), "1:2"); assert_equal(shown(context), "1:2")
+  enc(3, 1); assert_equal(shown(context), "!1:2")
+  enc(3, 1); assert_equal(shown(context), "2:2")
+  enc(3, -3); assert_equal(seq.step_attr(1, 3, "cond"), nil, "off first"); assert_equal(shown(context), "off")
+  enc(3, -1); assert_equal(shown(context), "off", "nothing below off")
+  enc(3, 200); assert_equal(shown(context), "!fill", "the last of 79 stops")
+  enc(3, -8); assert_equal(shown(context), "!8:8")
+  alt_k2_hold(context)
+  assert_equal(seq.step_attr(1, 3, "cond"), nil, "ALT+K2 held resets the condition")
+  assert_equal(go_to(context, "next"), "100%")
+  enc(3, -40); assert_equal(params:get("seq_chain_next"), 60); assert_equal(shown(context), "60%")
+  assert_equal(go_to(context, "prev"), "0%")
+  enc(3, 25); assert_equal(params:get("seq_chain_previous"), 25)
+  assert_equal(go_to(context, "random"), "0%")
+  enc(3, 5); assert_equal(params:get("seq_chain_random"), 5)
+  assert_screen_layout(context, "SEQ's edit view on the chain's chances")
+  -- the pattern view shows "fill" on the selected voice's row while fill is on
+  tap(2)
+  local function fill_mark()
+    context.screen.clear(); redraw()
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == "fill" and entry.x ~= 3 then return entry end
+    end
+  end
+  assert_equal(fill_mark(), nil, "no mark while fill is off")
+  params:set("seq_fill", 1)
+  local mark = fill_mark()
+  assert_true(mark ~= nil, "the mark while the latch is on")
+  assert_equal(mark.x, 106, "at x 106")
+  assert_equal(mark.y, row_y(S.selected_voice) + 5, "on the selected voice's row line")
+  params:set("seq_fill", 0)
+  S.lib.conditions.hold_fill("grid:2", true)
+  assert_true(fill_mark() ~= nil, "and while a key holds it")
+  params:set("v1_seq_gate", 2); assert_true(fill_mark() ~= nil)
+  assert_screen_layout(context, "SEQ with fill beside a gated voice's G")
+  S.lib.conditions.hold_fill("grid:2", false)
+  assert_equal(fill_mark(), nil)
 end)
 
 test("the gate rows edit the voice's gate, its length and release, and a step's own length", function()
