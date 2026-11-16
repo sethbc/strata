@@ -386,6 +386,31 @@ var waitFor = { arg condition, timeout = 3;
     condition.value
 };
 
+// Wait (inside the check routine) until a load into a slot is in place on
+// target (h.engine unless given), never for a time (#706): its check
+// passed, its reads ended and its peaks file is written, when the engine
+// gives the slot the file's frames (applyLoad, writeSlotPeaks). load is the
+// load's number (the slot's newest unless given: a later load the engine
+// rejects is counted too, but never takes effect). From the command until
+// then the count is 0 (a long file's from its check's end), and
+// loadsSuperseded reaches the load's number only once it takes effect, so
+// an earlier load's frames never pass for it. Then a sync, so the lengths
+// the engine sent the slot's grain synths are on the server. A load not in
+// place within timeout (one that failed, or was superseded) fails the
+// check, its line beginning with area. Returns whether it was.
+var awaitLoad = { arg slot, target, timeout = 5, area = "check", load;
+    var inPlace;
+    target = target ? engine;
+    load = load ? target.bufferLoads[slot];
+    inPlace = waitFor.({ (target.loadsSuperseded(slot) >= load) and: { target.bufferFrames[slot] > 0 } }, timeout);
+    server.sync;
+    if (inPlace.not) {
+        check.(false, "%: slot %'s load % is in place within % s (% frames; loads superseded %)".format(
+            area, slot, load, timeout, target.bufferFrames[slot], target.loadsSuperseded(slot)));
+    };
+    inPlace
+};
+
 // true when some UGen of the SynthDef reads the named control (it is not
 // declared and left unused)
 var controlFeedsAUGen = { arg defName, controlName;
@@ -907,6 +932,10 @@ runChecks = {
             formatOf: { arg self, name; formatOf.(name) },
             awaitReply: { arg self, condition, timeout = 5; awaitReply.(condition, timeout) },
             waitFor: { arg self, condition, timeout = 3; waitFor.(condition, timeout) },
+            // a load into a slot (its newest unless load names one) in
+            // place on target (h.engine unless given), or a FAIL line
+            // naming the area (#706); then a sync
+            awaitLoad: { arg self, slot, target, timeout = 5, load; awaitLoad.(slot, target, timeout, running, load) },
             synthNames: { arg self, group; synthNames.(group) },
             synthTree: { arg self, group; synthNodes.(group) },
             voiceSynths: { arg self, voice; voiceTrio.(voice) },
