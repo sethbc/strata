@@ -131,6 +131,17 @@ return function(S)
     S.lib.ui_detent.run_touch_hooks(param_id, "grid")
   end
 
+  -- 3.7 (ruling 34): the param one of the 256's FX faders sets and shows:
+  -- its own, but the delay's time fader picks the division while the delay
+  -- is synced (S.lib.delay_sync), its twelve values along the sixteen
+  -- columns as an option fader's, as FX's time row and arc ring 3 do
+  local FX_SYNCED_FADERS = {delay_time = "delay_division"}
+  function M.fx_fader_id(param_id)
+    local synced = FX_SYNCED_FADERS[param_id]
+    if synced and S.lib.delay_sync.playing() then return synced end
+    return param_id
+  end
+
   -- Column x on one of the parameter page's faders
   function set_fader_param(voice_idx, fader_index, x)
     local param_id = fader_param_ids(voice_idx)[fader_index]

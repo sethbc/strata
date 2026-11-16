@@ -355,7 +355,7 @@ return function(S)
       elseif y == GRID_LAYOUT.buffer_clear_row then
         grid_core.clear_key(x)
       elseif fx_param_id then
-        set_param_from_column(fx_param_id, x)
+        set_param_from_column(S.lib.grid_faders.fx_fader_id(fx_param_id), x)
       elseif source_voice >= 1 and source_voice <= NUM_VOICES then
         if x == LAYOUT_256.freeze_column then
           S.lib.freeze.toggle_quantized(source_voice)  -- at the next beat or bar under quantize_actions
@@ -504,7 +504,8 @@ return function(S)
       -- sources on rows 9-15, rows 8 and 16 as on page 1
       grid_redraw_256_buffers(grid_device)
       for index, param_id in ipairs(GRID_LAYOUT.fx_fader_ids) do
-        grid_redraw_fader_row(grid_device, GRID_LAYOUT.fx_first_row + index - 1, param_id)
+        local shown = S.lib.grid_faders.fx_fader_id(param_id)  -- the delay's division while synced
+        grid_redraw_fader_row(grid_device, GRID_LAYOUT.fx_first_row + index - 1, shown)
       end
       grid_redraw_256_sources(grid_device)
       grid_redraw_256_transport(port, grid_device)

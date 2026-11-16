@@ -1,0 +1,141 @@
+-- lib/delay_sync.lua
+-- The delay on the beat (3.7 design §6, decision 9; S.lib.delay_sync):
+-- three params in the strata_fx group (delay_sync, delay_division,
+-- delay_pingpong, through S.register_fx_params) and their scene fields;
+-- M.time(), the time the delay's one engine sender (lib/engine_sync.lua)
+-- plays: while synced the division at the tempo, halved until it is at most
+-- DELAY.max_seconds (the engine's line), else the engine value of
+-- delay_time, so a synced delay ignores delay_time and its modulation;
+-- M.playing() and M.label() for FX, the arc and the 256's fader; and the
+-- LFO clock's step hook that resends the time when the tempo moves it
+-- (through the round robin and the send budget). M.resend() marks the
+-- sender due (a recall's held send), M.sent(time) notes a send's time.
+
+return function(S)
+  local M = {}
+  local DIVISIONS = S.constants.DIVISIONS
+
+  -- max_seconds: the engine's delay line (\strataDelay's DelayC and its clip
+  -- on time; a docs test compares them); default_division: 1/8D (an index of
+  -- DIVISIONS.names); threshold: how far the synced time moves (a fraction
+  -- of itself) from the time last sent before the step hook resends it
+  M.DELAY = {max_seconds = 2.7, default_division = 7, threshold = 0.005}
+
+  -- The send budget's id for the step hook's and a recall's sends: it holds
+  -- a space, so no param id can be it. Its engine sender is the delay's
+  local SEND_KEY = "delay sync"
+  -- A halved length no division has, in seconds
+  local SECONDS_FORMAT = "%.2f s"
+
+  local function synced() return params:get("delay_sync") == 1 end
+
+  -- While synced: the seconds the division plays at the tempo, halved until
+  -- they fit, the division and the halvings; nil for a tempo that gives no
+  -- finite length (an external clock reporting 0)
+  local function synced_time()
+    local division = params:get("delay_division")
+    local beats = DIVISIONS.beats[division]
+    local seconds = beats and beats * S.lib.params_setup.beat_seconds_now()
+    if seconds == nil or seconds ~= seconds or seconds <= 0 or seconds == math.huge then return nil end
+    local halvings = 0
+    while seconds > M.DELAY.max_seconds do
+      seconds = seconds / 2
+      halvings = halvings + 1
+    end
+    return seconds, division, halvings
+  end
+
+  -- The time (s) the delay plays: the synced division's, or delay_time as
+  -- the engine has it (its LFO and matrix offsets included)
+  function M.time()
+    local seconds = synced() and synced_time()
+    if seconds then return seconds end
+    return engine_param_value("delay_time")
+  end
+
+  -- {division = index into DIVISIONS, halvings = n} while synced, else nil
+  function M.playing()
+    if not synced() then return nil end
+    local seconds, division, halvings = synced_time()
+    if not seconds then return nil end
+    return {division = division, halvings = halvings}
+  end
+
+  local function division_named(beats)
+    for index, each in ipairs(DIVISIONS.beats) do
+      if math.abs(each - beats) < 1e-9 then return DIVISIONS.names[index] end
+    end
+  end
+
+  -- What FX's time row shows while synced: the division ("1/8D"), or while
+  -- halved the division and what plays ("1 bar>1/2": the division whose
+  -- beats equal the halved length, or its seconds when none does); nil
+  -- while not synced
+  function M.label()
+    local playing = M.playing()
+    if not playing then return nil end
+    local name = DIVISIONS.names[playing.division]
+    if playing.halvings == 0 then return name end
+    local halved = division_named(DIVISIONS.beats[playing.division] / 2 ^ playing.halvings)
+    return name .. ">" .. (halved or string.format(SECONDS_FORMAT, M.time()))
+  end
+
+  -- The time the delay's sender last sent (nil: none yet, so the engine
+  -- plays its default, delay_time's)
+  local last_sent
+  function M.sent(time) last_sent = time end
+
+  S.engine_senders[SEND_KEY] = function() S.engine_senders.delay_time() end
+  local function send_due() S.lib.engine_sync.send_engine_value(SEND_KEY, M.time()) end
+
+  -- Mark the delay's sender due: the next LFO step sends setDelay once, with
+  -- every value as it is then (a scene's held send: lib/engine_sync.lua)
+  function M.resend() S.lib.lfos.mark_due(SEND_KEY, send_due) end
+
+  -- Every LFO step: a time that moved by more than threshold of itself from
+  -- the one last sent (a tempo change under sync) is sent in this step
+  S.lib.lfos.on_step(function()
+    local time = M.time()
+    local sent = last_sent or param_default("delay_time")
+    if math.abs(time - sent) > M.DELAY.threshold * time then M.resend() end
+  end)
+
+  -- sync and the division change what FX's time row, arc ring 3 and the
+  -- 256's delay fader show
+  local function shown_changed()
+    if S.lib.grid_core.any_fx_faders() and not S.scene_transition_active then grid_redraw() end
+    request_redraw()
+  end
+
+  S.register_fx_params({
+    name = "delay sync",
+    count = 3,
+    add = function()
+      params:add{type = "binary", id = "delay_sync", name = "delay sync", behavior = "toggle", default = 0,
+        action = function(x)
+          send_param_to_engine("delay_sync", x)
+          shown_changed()
+        end}
+      params:add{type = "option", id = "delay_division", name = "delay division", options = DIVISIONS.names,
+        default = M.DELAY.default_division,
+        action = function(x)
+          send_param_to_engine("delay_division", x)
+          shown_changed()
+        end}
+      params:add{type = "control", id = "delay_pingpong", name = "delay ping-pong",
+        controlspec = controlspec.new(0, 1, "lin", 0.01, 0),
+        action = function(x) send_param_to_engine("delay_pingpong", x) end}
+      for _, param_id in ipairs({"delay_sync", "delay_division", "delay_pingpong"}) do
+        S.engine_senders[param_id] = function() S.engine_senders.delay_time() end
+      end
+    end,
+  })
+
+  -- Scenes: sync and the division switch at a fade's end, ping-pong
+  -- crossfades
+  S.register_scene_field({id = "delay_sync", default = 0, discrete = true})
+  S.register_scene_field({id = "delay_division", default = M.DELAY.default_division, discrete = true})
+  S.register_scene_field({id = "delay_pingpong", default = 0})
+
+  return M
+end

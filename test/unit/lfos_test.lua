@@ -837,7 +837,8 @@ end)
 
 -- The engine calls 3.6 (main at de4949e6, the destination set by its index)
 -- made for each destination: LFO 1 a square held at its top, rate 0.003 Hz,
--- depth 50 %, turned on and stepped three times (numbers to 4 places)
+-- depth 50 %, turned on and stepped three times (numbers to 4 places);
+-- setDelay's fourth value, 3.7's ping-pong at its default 0, appended
 local SOUND_BEFORE_3_7 = {
   v3_filter_freq = "setFastLfo 0.0000 2.0000 3.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
   v1_grain_pitch = "setFastLfo 0.0000 0.0000 0.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
@@ -845,7 +846,7 @@ local SOUND_BEFORE_3_7 = {
   v6_grain_size = "setFastLfo 0.0000 5.0000 2.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
   v7_amp = "setFastLfo 0.0000 6.0000 4.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
   reverb_mix = "setReverb 0.5500 0.8000 0.5000",
-  delay_feedback = "setDelay 0.3750 0.6375 0.0000",
+  delay_feedback = "setDelay 0.3750 0.6375 0.0000 0.0000",
   v1_main = "setVoiceParam 0.0000 freq 555.0000",
   v2_history = "setGrainParam 1.0000 history 4.0000",
   v1_reverb_send = "setGrainParam 0.0000 reverbSend 1.0000",
@@ -1285,7 +1286,7 @@ test("offset_for and m_for", function()
   load_strata()
   local lfos = local_value("S").lib.lfos
   assert_near(lfos.offset_for("reverb_mix", 0.5), 0.25, 1e-12)
-  assert_near(lfos.offset_for("delay_time", -1), -0.995, 1e-12, "half of 0.01-2 s")
+  assert_near(lfos.offset_for("delay_time", -1), -1.345, 1e-12, "half of 0.01-2.7 s")
   assert_near(lfos.m_for("v1_grain_pitch", 1, 1.9375), 0.5, 1e-12)
   assert_near(lfos.m_for("v2_buf_pos", 0.2, 0.45), 0.5, 1e-12)
   assert_near(lfos.m_for("v3_grain_size", 0.1, 0.0755), -0.1, 1e-12)

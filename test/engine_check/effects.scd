@@ -27,7 +27,7 @@ var checkFilterCrossfade, checkEffectsGuard, checkEffectSendsReported, checkRout
 var checkBypassFrees, checkBypassMemory, checkBypassToggling, checkMixThroughZero, checkSetWhileBypassed;
 var checkReverbBypass, checkFdn, chainTail, delayNodes, floodFit, smallProbeKB, probeKB;
 var checkFreshDefaults, checkFilterTypes, checkCutoffStep, checkFilterAsBefore, checkMasterSteady, checkLiftStartsSmoothly;
-var checkBypassFreeTiming;
+var checkBypassFreeTiming, echoPeaks, checkPingPong, checkPingPongKept, checkLongDelay;
 var sentBy, setsControl, broadcasts;
 var floodCount = 640;
 
@@ -148,6 +148,22 @@ SynthDef(\strataCheckDecayTimes, { arg inA, inB, out, blocks = 1;
             RunningMax.kr((energy < (peak * 10.pow(-3.5))) * (peak > 0)), peak]
     }).flat);
     Line.kr(0, 0, blocks * ControlDur.ir, doneAction: 2);
+}).add;
+// A one-sample impulse on the left channel only (the right silent)
+SynthDef(\strataCheckLeftImpulse, { arg out;
+    Out.ar(out, [Impulse.ar(0), DC.ar(0)]);
+    Line.kr(0, 0, 0.01, doneAction: 2);
+}).add;
+// Each side's largest absolute sample of a stereo bus in three windows of
+// time from the node's start ([start, end] s each), on out as six values
+// (window 1 left, right, window 2 left, ...); it frees itself at seconds
+SynthDef(\strataCheckEchoPeaks, { arg in, out, windows = #[0, 0, 0, 0, 0, 0], seconds = 1;
+    var sig = In.ar(in, 2), elapsed = Sweep.ar(0, 1);
+    Out.kr(out, 3.collect({ arg index;
+        var inside = (elapsed >= windows[index * 2]) * (elapsed < windows[(index * 2) + 1]);
+        sig.collect({ arg channel; A2K.kr(RunningMax.ar(channel.abs * inside)) })
+    }).flat);
+    Line.kr(0, 0, seconds, doneAction: 2);
 }).add;
 // A 25 Hz sine at 0.4 on out, and on freqOut a cutoff of 20 Hz for its
 // first 2 s, then 20 kHz (timed on the server, from the synth's start)
@@ -357,7 +373,7 @@ readStep = { arg bus;
 // equal the Lua param defaults" pins the SynthDefs' defaults to the
 // params'; this pins what the nodes start with.) Each master filter at
 // 5000 Hz, res 0.5, lowpass, mix 0; the delay at 0.375 s, feedback 0.4, mix
-// 0; the reverb at mix 0.3, size 0.8, damp 0.5; the drift at 0.01; fxMix
+// 0, pingPong 0; the reverb at mix 0.3, size 0.8, damp 0.5; the drift at 0.01; fxMix
 // broadcasting 0 and 0.3; neither effect bypassed (the bypass params' 0);
 // the scale chromatic from C (what the scale and root params' defaults
 // send: setScale(0, 4095)).
@@ -369,7 +385,7 @@ checkFreshDefaults = {
     server.sync;
     values = (
         filters: [\filter, \filterDelay, \filterReverb].collect({ arg key; read.(key, [\freq, \res, \filterType, \mix]) }),
-        delay: read.(\delay, [\time, \feedback, \mix]), reverb: read.(\reverb, [\mix, \size, \damp]),
+        delay: read.(\delay, [\time, \feedback, \mix, \pingPong]), reverb: read.(\reverb, [\mix, \size, \damp]),
         drift: read.(\master, [\drift]), fxMix: readBus.(fresh.mixBus(\fxMix)),
         bypassed: [\delay, \reverb].collect({ arg key; fresh.areaState[\effects][\bypassed][key] }),
         scale: fresh.scaleRootAndMask
@@ -379,9 +395,10 @@ checkFreshDefaults = {
     check.(values[\filters].every({ arg each; near.(each, [5000, 0.5, 0, 0]) }),
         "effects: a fresh engine's three master filters start at 5000 Hz, res 0.5, lowpass and mix 0, the Lua defaults (got %)".format(
             values[\filters]));
-    check.(near.(values[\delay], [0.375, 0.4, 0]) and: { near.(values[\reverb], [0.3, 0.8, 0.5]) } and: { near.(values[\drift], [0.01]) }
-        and: { near.(values[\fxMix], [0, 0.3]) },
-        "effects: a fresh engine's delay starts at 0.375 s, feedback 0.4 and dry, its reverb at mix 0.3, size 0.8, damp 0.5, its drift at 0.01 and fxMix at 0 and 0.3, the Lua defaults (delay %, reverb %, drift %, fxMix %)".format(
+    check.(near.(values[\delay], [0.375, 0.4, 0, 0])
+        and: { SynthDescLib.global.at(\strataDelay).controls.any({ arg control; control.name == \pingPong }) }
+        and: { near.(values[\reverb], [0.3, 0.8, 0.5]) } and: { near.(values[\drift], [0.01]) } and: { near.(values[\fxMix], [0, 0.3]) },
+        "effects: a fresh engine's delay starts at 0.375 s, feedback 0.4, dry and pingPong 0, its reverb at mix 0.3, size 0.8, damp 0.5, its drift at 0.01 and fxMix at 0 and 0.3, the Lua defaults (delay %, reverb %, drift %, fxMix %)".format(
             values[\delay], values[\reverb], values[\drift], values[\fxMix]));
     check.((values[\bypassed] == [false, false]) and: { values[\scale] == [0, 4095] },
         "effects: a fresh engine has neither effect bypassed and plays the chromatic scale from C, the Lua defaults (bypassed %, scale %)".format(
@@ -427,7 +444,7 @@ checkRouting = {
 // on, 50 ms of inf and NaN on the bus leave the master output free of bad
 // values once they have passed. A probe on the bus itself sees the burst.
 checkEffectsGuard = {
-    command.(\setDelay, 0.25, 0.5, 0.5);
+    command.(\setDelay, 0.25, 0.5, 0.5, 0);
     command.(\setReverb, 0.5, 0.8, 0.5);
     [[\dry, engine.mainBus], [\delaySend, mixBus.(\delaySend)], [\reverbSend, mixBus.(\reverbSend)]].do({ arg pair;
         var badBus = Bus.control(server, 1), busBadBus = Bus.control(server, 1), probe, busProbe, bad, busBad;
@@ -460,7 +477,7 @@ checkEffectSendsReported = {
     var captured, filterTargets;
     server.sync; freed.free; server.sync;
     engine.synths[\filter] = freed;
-    captured = [{ command.(\setFilter, 5000.0, 0.5, 0, 0.0) }, { command.(\setDelay, 0.375, 0.4, 0.0) },
+    captured = [{ command.(\setFilter, 5000.0, 0.5, 0, 0.0) }, { command.(\setDelay, 0.375, 0.4, 0.0, 0) },
         { command.(\setReverb, 0.3, 0.8, 0.5) }, { command.(\setMasterDrift, 0.01) }, { command.(\setVoiceParam, 0, \amp, 0.2) }
     ].collect({ arg send; server.makeBundle(false, send) });
     engine.synths[\filter] = filter;
@@ -490,7 +507,7 @@ checkChain30 = { arg label, fx, sweep;
     var energyBus = Bus.control(server, 2);
     var group30 = Group.after(context.xg), compareGroup, copies, source, comparator, energies, ratio, elapsed = 0;
     command.(\setFilter, *fx.copyRange(0, 3));
-    command.(\setDelay, *fx.copyRange(4, 6));
+    command.(\setDelay, *(fx.copyRange(4, 6) ++ [0]));
     command.(\setReverb, *fx.copyRange(7, 9));
     command.(\setBypass, 0, 1); command.(\setBypass, 1, 1);
     0.2.wait; server.sync;
@@ -516,7 +533,7 @@ checkChain30 = { arg label, fx, sweep;
     while { elapsed < 1.5 } {
         if (sweep.notNil) {
             server.makeBundle(nil, {
-                command.(\setDelay, fx[4], fx[5], sweep.(elapsed));
+                command.(\setDelay, fx[4], fx[5], sweep.(elapsed), 0);
                 copies[1].set(\mix, sweep.(elapsed));
             });
         };
@@ -550,7 +567,7 @@ checkDrySends = {
             Peak.ar(x.abs.sum, t_reset)
         ]));
     }).add;
-    command.(\setDelay, 0.375, 0.4, 0.8);
+    command.(\setDelay, 0.375, 0.4, 0.8, 0);
     command.(\setReverb, 0.9, 0.8, 0.5);
     server.sync; 0.2.wait;
     // [delay send, reverb send, dry gain, delay send gain, reverb send gain]
@@ -585,7 +602,7 @@ checkMasterSteady = {
         "effects: the master's shifter has no time dispersion and a window of at most 0.02 s (window %, time dispersion %)".format(
             shifter !? { shifter.inputs[1] }, shifter !? { shifter.inputs[4] }));
     command.(\setFilter, 5000.0, 0.5, 0, 0.0);
-    command.(\setDelay, 0.375, 0.4, 0.0);
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
     command.(\setReverb, 0.0, 0.8, 0.5);
     server.sync;
     tone = Synth(\strataCheckSine, [\out, engine.mainBus, \freq, 1000], engine.processGroup, \addToTail);
@@ -635,7 +652,7 @@ broadcasts = { arg messages, delayMix, reverbMix;
 // in its place from the kept controls when lifted
 checkBypassFrees = {
     var before, after, broadcast, lifted, messages;
-    command.(\setDelay, 0.3, 0.45, 0.6);
+    command.(\setDelay, 0.3, 0.45, 0.6, 0);
     server.sync; 0.1.wait;
     before = engine.synths[\delay];
     messages = sentBy.(\setBypass, 0, 1);
@@ -686,8 +703,8 @@ checkLiftStartsSmoothly = { arg effect;
     var resetBoth, readBoth, steady, lifted;
     command.(\setFilter, 5000.0, 0.5, 0, 0.0);
     command.(\setMasterDrift, 0.0);
-    if (effect == 0) { command.(\setReverb, 0.0, 0.8, 0.5); command.(\setDelay, 0.05, 0.4, 0.5) } {
-        command.(\setDelay, 0.375, 0.4, 0.0); command.(\setReverb, 0.5, 0.8, 0.5) };
+    if (effect == 0) { command.(\setReverb, 0.0, 0.8, 0.5); command.(\setDelay, 0.05, 0.4, 0.5, 0) } {
+        command.(\setDelay, 0.375, 0.4, 0.0, 0); command.(\setReverb, 0.5, 0.8, 0.5) };
     server.sync;
     tone = Synth(\strataCheckSine, [\out, mixBus.([\delaySend, \reverbSend][effect]), \freq, 100], engine.processGroup, \addToTail);
     stepProbe = Synth(\strataCheckStep, [\in, [engine.delayBus, engine.reverbBus][effect], \out, stepBus],
@@ -716,7 +733,7 @@ checkLiftStartsSmoothly = { arg effect;
     stepBus.free; outStepBus.free;
     command.(\setMasterDrift, 0.01);
     command.(\setReverb, 0.3, 0.8, 0.5);
-    command.(\setDelay, 0.375, 0.4, 0.0);
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
     server.sync;
 };
 
@@ -739,7 +756,7 @@ checkBypassFreeTiming = {
     command.(\setFilter, 5000.0, 0.5, 0, 0.0);
     command.(\setMasterDrift, 0.0);
     command.(\setReverb, 0.0, 0.8, 0.5);
-    command.(\setDelay, 0.05, 0.4, 0.5);
+    command.(\setDelay, 0.05, 0.4, 0.5, 0);
     server.sync;
     tone = Synth(\strataCheckSine, [\out, mixBus.(\delaySend), \freq, 100], engine.processGroup, \addToTail);
     stepProbe = Synth(\strataCheckStep, [\in, engine.delayBus, \out, stepBus], engine.synths[\master], \addAfter);
@@ -768,21 +785,100 @@ checkBypassFreeTiming = {
     tone.free; stepProbe.free; server.sync; stepBus.free;
     command.(\setMasterDrift, 0.01);
     command.(\setReverb, 0.3, 0.8, 0.5);
-    command.(\setDelay, 0.375, 0.4, 0.0);
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
     server.sync;
 };
 
-// Freeing the delay gives its DelayC lines (1 MB) back to the pool
+// A node of the engine's own \strataDelay on buses of its own (the
+// engine's delay untouched), fed a one-sample impulse on the left in the
+// same bundle as \strataCheckEchoPeaks, which reads the node's return in
+// three windows (in server time, so a busy machine changes nothing; its
+// /n_end ends the wait): the six peaks (window 1 left, right, ...).
+// controls: the delay's (mix 1 unless given)
+echoPeaks = { arg controls, windows;
+    var group = Group.after(context.xg), inBus = Bus.audio(server, 2), outBus = Bus.audio(server, 2);
+    var resultBus = Bus.control(server, 6), condition = Condition(false), seconds = windows.last + 0.05, values;
+    resultBus.setAll(0);
+    server.sync;
+    server.makeBundle(nil, {
+        var analysis;
+        Synth(\strataCheckLeftImpulse, [\out, inBus], group, \addToTail);
+        Synth(\strataDelay, [\in, inBus, \out, outBus, \mix, 1] ++ controls, group, \addToTail);
+        analysis = Synth(\strataCheckEchoPeaks, [\in, outBus, \out, resultBus, \windows, windows, \seconds, seconds],
+            group, \addToTail);
+        OSCFunc({ condition.test = true; condition.signal }, '/n_end', server.addr, argTemplate: [analysis.nodeID]).oneShot;
+    });
+    awaitReply.(condition, seconds * 10);
+    values = readBus.(resultBus);
+    group.free; server.sync;
+    [inBus, outBus, resultBus].do(_.free);
+    values
+};
+
+// At pingPong 1 the input is summed into the left line and each line feeds
+// the other, so an impulse on the left comes back left after the time,
+// then right, then left; at 0 (today's graph) it stays on the left. Time
+// 0.1 s, feedback 0.9: the peaks around 0.1, 0.2 and 0.3 s (the feedback
+// loop adds a block a pass), each on its side with the other under -60 dB
+checkPingPong = {
+    var windows = [0.09, 0.11, 0.19, 0.21, 0.29, 0.31];
+    var alternate = echoPeaks.([\time, 0.1, \feedback, 0.9, \pingPong, 1], windows);
+    var plain = echoPeaks.([\time, 0.1, \feedback, 0.9, \pingPong, 0], windows);
+    var sides = { arg peaks, wanted; (peaks.size == 6) and: { wanted.every({ arg side, index;
+        var on = peaks[(index * 2) + side], off = peaks[(index * 2) + (1 - side)];
+        (on > 0.5) and: { off < (on * 0.001) } }) } };
+    check.(sides.(alternate, [0, 1, 0]),
+        "effects: at pingPong 1 an impulse on the left repeats left, then right, then left (peaks L, R at 0.1, 0.2, 0.3 s: %)".format(
+            alternate.collect({ arg value; value.round(0.0001) })));
+    check.(sides.(plain, [0, 0, 0]),
+        "effects: at pingPong 0 an impulse on the left repeats on the left alone, as before (peaks L, R at 0.1, 0.2, 0.3 s: %)".format(
+            plain.collect({ arg value; value.round(0.0001) })));
+};
+
+// pingPong is kept with the other three: a bypass lifted re-creates the
+// node with it, and one sent while bypassed comes back at the lift
+checkPingPongKept = {
+    var lifted, again;
+    command.(\setDelay, 0.3, 0.45, 0.6, 0.7);
+    server.sync;
+    command.(\setBypass, 0, 1);
+    0.2.wait; server.sync;
+    command.(\setBypass, 0, 0);
+    server.sync;
+    lifted = engine.synths[\delay] !? { arg synth; getControl.(synth, \pingPong) };
+    command.(\setBypass, 0, 1);
+    0.2.wait; server.sync;
+    command.(\setDelay, 0.3, 0.45, 0.6, 0.35);
+    server.sync;
+    command.(\setBypass, 0, 0);
+    server.sync;
+    again = engine.synths[\delay] !? { arg synth; getControl.(synth, \pingPong) };
+    check.(lifted.notNil and: { lifted.equalWithPrecision(0.7) } and: { again.notNil } and: { again.equalWithPrecision(0.35) },
+        "effects: pingPong is kept through a bypass and its lift (lifted %, set while bypassed then lifted %)".format(lifted, again));
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
+    server.sync;
+};
+
+// The delay line holds 2.7 s: an impulse comes back at 2.7 s and nowhere
+// else (a 2 s line would return it at 2 s): whether it did, and the peaks
+// before, at and after 2.7 s
+checkLongDelay = {
+    var peaks = echoPeaks.([\time, 2.7, \feedback, 0], [0, 2.68, 2.69, 2.71, 2.72, 2.9]);
+    [(peaks.size == 6) and: { peaks[2] > 0.5 } and: { [0, 1, 3, 4, 5].every({ arg index; peaks[index] < 0.0005 }) }, peaks]
+};
+
+// Freeing the delay gives its DelayC lines (1 MB) back to the pool: a
+// 2.7 s line costs what a 2 s one did (both round up to 2^17 samples)
 checkBypassMemory = {
-    var running, bypassed, freedKB;
+    var running, bypassed, freedKB, long = checkLongDelay.value;
     running = floodFit.value;
     command.(\setBypass, 0, 1);
     0.2.wait; server.sync;
     bypassed = floodFit.value;
     freedKB = (bypassed - running) * probeKB;
-    check.(freedKB > 900,
-        "effects: a bypassed delay returns its 1 MB to the pool (about % KB more free; a probe % KB)".format(
-            freedKB.round(1), probeKB.round(0.1)));
+    check.(long[0] and: { freedKB.inclusivelyBetween(900, 1100) },
+        "effects: a time of 2.7 s is reached, and a bypassed delay still returns about 1 MB (about % KB more free; a probe % KB; peaks L, R before, at and after 2.7 s %)".format(
+            freedKB.round(1), probeKB.round(0.1), long[1].collect({ arg value; value.round(0.0001) })));
     command.(\setBypass, 0, 0);
     server.sync; 0.1.wait;
 };
@@ -830,7 +926,7 @@ checkMixThroughZero = {
     var node = engine.synths[\delay], zeroBroadcast;
     50.do({ arg index;
         var mix = (0.4 * sin(index * 0.5)).max(0);
-        command.(\setDelay, 0.3, 0.45, mix);
+        command.(\setDelay, 0.3, 0.45, mix, 0);
         if (index == 7) { server.sync; zeroBroadcast = readBus.(mixBus.(\fxMix))[0] };
         0.02.wait;
     });
@@ -845,12 +941,12 @@ checkMixThroughZero = {
 checkSetWhileBypassed = {
     var fading = engine.synths[\delay], broadcast, lifted, messages;
     command.(\setBypass, 0, 1);
-    messages = sentBy.(\setDelay, 0.2, 0.3, 0.7);
+    messages = sentBy.(\setDelay, 0.2, 0.3, 0.7, 0);
     check.(setsControl.(messages, fading, \mix, 0) and: { setsControl.(messages, fading, \time, 0.2) }
         and: { broadcasts.(messages, 0, engine.liveMix(\reverb)) },
         "effects: setDelay during the bypass fade sets the time and keeps the mix and its broadcast at 0 (sent %)".format(messages));
     0.2.wait; server.sync;
-    command.(\setDelay, 0.5, 0.6, 0.8);
+    command.(\setDelay, 0.5, 0.6, 0.8, 0);
     server.sync;
     broadcast = readBus.(mixBus.(\fxMix));
     check.(engine.synths[\delay].isNil and: { delayNodes.value == 0 } and: { broadcast[0] == 0 },
@@ -999,6 +1095,7 @@ checkChain30.("defaults", [5000.0, 0.5, 0, 0.0, 0.375, 0.4, 0.0, 0.3, 0.8, 0.5],
 checkChain30.("filter on, delay mix swept by an LFO", [1200.0, 0.4, 0, 0.6, 0.21, 0.5, 0.5, 0.45, 0.7, 0.3],
     { arg seconds; 0.5 + (0.4 * sin(2pi * 0.7 * seconds)) });
 checkDrySends.value;
+checkPingPong.value;
 
 h.startAllVoices;
 checkRouting.value;
@@ -1006,7 +1103,7 @@ checkRouting.value;
 // Back to the defaults after checkChain30 and checkDrySends (the defaults
 // themselves are checkFreshDefaults'): the mixes reach fxMix
 command.(\setFilter, 5000.0, 0.5, 0, 0.0);
-command.(\setDelay, 0.375, 0.4, 0.0);
+command.(\setDelay, 0.375, 0.4, 0.0, 0);
 command.(\setReverb, 0.3, 0.8, 0.5);
 server.sync;
 check.(readBus.(mixBus.(\fxMix)).round(0.0001) == [0.0, 0.3], "effects: setDelay and setReverb broadcast their mixes on fxMix (0 and 0.3)");
@@ -1018,12 +1115,14 @@ check.([\filter, \filterDelay, \filterReverb].every({ arg key;
     (getControl.(synth, \filterType) == 1) and: { getControl.(synth, \freq) == 800.0 }
         and: { getControl.(synth, \res).equalWithPrecision(0.2) } and: { getControl.(synth, \mix) == 1.0 }
 }), "effects: setFilter sets all three master filters");
-command.(\setDelay, 0.25, 0.5, 0.5);
+command.(\setDelay, 0.25, 0.5, 0.5, 0.25);
 server.sync;
 check.(getControl.(engine.synths[\delay], \time) == 0.25, "setDelay sets time");
 check.(getControl.(engine.synths[\delay], \feedback) == 0.5, "setDelay sets feedback");
 check.(getControl.(engine.synths[\delay], \mix) == 0.5, "setDelay sets mix");
+check.(getControl.(engine.synths[\delay], \pingPong) == 0.25, "setDelay sets pingPong");
 check.(readBus.(mixBus.(\fxMix))[0] == 0.5, "setDelay broadcasts the mix");
+command.(\setDelay, 0.25, 0.5, 0.5, 0);
 
 checkFilterTypes.value;
 checkFilterCrossfade.([[\strataFilter, "filter type changes crossfade"],
@@ -1042,6 +1141,7 @@ checkBypassMemory.value;
 checkBypassToggling.value;
 checkMixThroughZero.value;
 checkSetWhileBypassed.value;
+checkPingPongKept.value;
 checkReverbBypass.value;
 checkLiftStartsSmoothly.(1);
 checkFdn.value;
@@ -1049,7 +1149,7 @@ checkFdn.value;
 // back to the Lua defaults for the areas that follow, nothing bypassed
 command.(\setBypass, 0, 0); command.(\setBypass, 1, 0);
 command.(\setFilter, 5000.0, 0.5, 0, 0.0);
-command.(\setDelay, 0.375, 0.4, 0.0);
+command.(\setDelay, 0.375, 0.4, 0.0, 0);
 command.(\setReverb, 0.3, 0.8, 0.5);
 command.(\setMasterDrift, 0.01);
 server.sync;
