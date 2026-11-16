@@ -82,7 +82,7 @@ BUFFER (`ARC_BUFFER_RINGS` and `ARC_BUFFER_ALT_RINGS`, `{voice_key | param_id}` 
 - rings adjust the voice's params whatever its source, drawn at 15 for a buffer-sourced voice, 4 otherwise; ALT ring 4 (a global param) always 12. Record duration and level are on the screen only. The friction ring (ALT ring 3, a global param) follows the voice's level (15 or 4) by design (3.3 design §11); only ALT ring 4 is always 12.
 
 SCENES (`arc_scenes_delta`/`arc_scenes_redraw`, `ARC_SCENES`):
-- Ring 1: the scene cursor over E2's 20 stops (slots 1..`NUM_SCENES`, 1-16 in both banks, then the four `SCENES_FIELDS`), `S.lib.pages_scenes.move_cursor(S.cursors.scene + steps)`, `ARC_SCENES.ticks_per_stop` (10) ticks a stop under `"scenes:1"`, so a turn from slot 8 to 9 shows bank 2. `move_cursor` disarms the overwrite confirmation and clears its prompt, as E2 does (`docs/notes/lua/pages/scenes.md`).
+- Ring 1: the scene cursor over E2's 23 stops (slots 1..`NUM_SCENES`, 1-16 in both banks, then the seven `SCENES_FIELDS`), `S.lib.pages_scenes.move_cursor(S.cursors.scene + steps)`, `ARC_SCENES.ticks_per_stop` (10) ticks a stop under `"scenes:1"`, so a turn from slot 8 to 9 shows bank 2. `move_cursor` disarms the overwrite confirmation and clears its prompt, as E2 does (`docs/notes/lua/pages/scenes.md`).
 - Ring 2: `scene_transition_time` through `arc_sweep_param`.
 - The button is the page's `arc_button` (`lib/pages/scenes.lua`): an instant recall of the cursor's slot through `S.lib.quantize.schedule("scene", ...)`, as K3.
 - Ring 3 (3.4, design §9.4): `morph` through `arc_sweep_param`. Ring 4: `morph_b`, `ARC_SCENES.ticks_per_scene` (20) ticks a scene under `"scenes:4"`, `delta_with_detent("morph_b", steps, {source = "arc"})`. Both drawn through `arc_ring_fill_param`.

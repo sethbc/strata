@@ -434,6 +434,21 @@ return function(S)
       end
     }
 
+    -- The sequencer's chances for its next scene (3.7, design §5.4): next,
+    -- previous and random in percent, what is left a repeat. Read at each
+    -- draw (lib/scenes.lua); PSET settings, never scene fields
+    for _, chance in ipairs({{"next", 100}, {"previous", 0}, {"random", 0}}) do
+      params:add{
+        type = "number",
+        id = "scene_chance_" .. chance[1],
+        name = "chance " .. chance[1],
+        min = 0,
+        max = 100,
+        default = chance[2],
+        formatter = function(param) return param:get() .. "%" end,
+      }
+    end
+
     params:add{
       type = "trigger",
       id = "save_scenes",

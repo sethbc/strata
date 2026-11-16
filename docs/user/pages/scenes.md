@@ -2,11 +2,11 @@
 
 The sixteen scenes, their names and the scene sequencer on the screen. Back to [Screen Controls](../controls.md).
 
-The sixteen scene slots are in two banks of eight: scenes 1-8 and scenes 9-16. The page shows one bank at a time, in two columns (1-4 and 5-8, or 9-12 and 13-16): the bank of the slot under the cursor, and while the cursor is on a field, the bank it showed last. Each slot has its number, a small box that is filled when the slot holds a scene, and its name, if you gave it one (a long name is cut to fit). The current scene is bright (while a crossfade goes to it, it blinks until the crossfade lands) and a `>` before the name marks the scene the sequencer is on while it runs. Below the slots are four fields in a 2x2 block: the transition time (`fade`), the sequencer on or off (`seq`), the sequence length (`len`, up to 16) and the scene duration (`dur`).
+The sixteen scene slots are in two banks of eight: scenes 1-8 and scenes 9-16. The page shows one bank at a time, in two columns (1-4 and 5-8, or 9-12 and 13-16): the bank of the slot under the cursor, and while the cursor is on a field, the bank it showed last. Each slot has its number, a small box that is filled when the slot holds a scene, and its name, if you gave it one (a long name is cut to fit). The current scene is bright (while a crossfade goes to it, it blinks until the crossfade lands) and a `>` before the name marks the scene the sequencer is on while it runs. Below the slots are seven fields in rows of two, two rows at a time: the transition time (`fade`), the sequencer on or off (`seq`), the sequence length (`len`, up to 16), the scene duration (`dur`), and the sequencer's chances for its next scene, `next`, `prev` and `rand` in percent ([Scenes](../scenes.md)). The rows scroll as the cursor moves down through the fields, and a thin bar at the right edge shows where you are among them. Before 3.7 the four fields stood still in a block of two by two.
 
 | Control | Action |
 |---------|--------|
-| E2 | Move through the slots 1-16, then the four fields |
+| E2 | Move through the slots 1-16, then the seven fields |
 | ALT+E2 | On a slot, jump to the same place in the other bank (slot 3 to slot 11, and back); where there is no slot eight away (right from slot 13, left from slot 3) it does nothing. On a field it moves one step, as E2 |
 | E3 | On a slot: change the transition time. On a field: change that field (on `seq`, right turns it on and left turns it off). ALT+E3 adjusts finely |
 | K2 | Recall the slot with the transition time (a fade) |

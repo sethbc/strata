@@ -2,12 +2,14 @@
 -- The SCENES page: one bank of eight of the sixteen scene slots in two
 -- columns (the number, a box that is filled when the slot holds a scene,
 -- the slot's name; the current scene bright, a mark at the scene
--- sequencer's position) and the four sequencer fields as a 2x2 block below
--- them. The bank shown is the cursor's slot's (on a field, the last one
--- shown). E2 runs the cursor (S.cursors.scene) through the slots and then
--- the fields, ALT+E2 jumps a bank, E3 edits (a slot: the transition time),
--- K2 recalls with the transition, K3 recalls at once (both, and the arc
--- button, through S.lib.quantize), ALT+K2's release names the slot (norns'
+-- sequencer's position) and the seven sequencer fields below them in rows
+-- of two, two rows in view, scrolled by row with the cursor (3.7 adds the
+-- chances next, prev and rand). The bank shown is the cursor's slot's (on
+-- a field, the last one shown). E2 runs the cursor (S.cursors.scene)
+-- through the slots and then the fields, ALT+E2 jumps a bank, E3 edits (a
+-- slot: the transition time), K2 recalls with the transition, K3 recalls
+-- at once (both, and the arc button, through S.lib.quantize), ALT+K2's
+-- release names the slot (norns'
 -- textentry), ALT+K3 saves (a populated slot asks for a second ALT+K3
 -- within 2 s: the hint row shows the page's own prompt meanwhile, and the
 -- page animates until it lapses).
@@ -35,9 +37,18 @@ return function(S)
     name_width = 42,             -- the name is cut to this
     mark_width = 5,              -- the sequencer mark before the name (">" and a space)
     cursor_width = 18,           -- the cursor box, from the column edge, around number and box
-    fields_y = {48, 55},         -- the 2x2 block's text baselines
+    fields_y = {48, 55},         -- the field rows' text baselines (two rows in view)
+    fields_per_row = 2,          -- a field row's fields, one per column
     arm_seconds = 2,             -- the second ALT+K3 must come within this
   }
+
+  -- The field rows: SCENES_FIELDS' stops, fields_per_row a row
+  local field_rows = {}
+  for index = 1, #SCENES_FIELDS do
+    local row = math.ceil(index / SCENES_PAGE.fields_per_row)
+    field_rows[row] = field_rows[row] or {}
+    table.insert(field_rows[row], index)
+  end
 
   -- The overwrite confirmation (the slot it was asked for and when it
   -- lapses), the bank shown last (a field shows it) and the slot the name
@@ -70,6 +81,9 @@ return function(S)
     return SCENES_PAGE.column_x[column], SCENES_PAGE.first_row_y + row * SCENES_PAGE.row_spacing
   end
 
+  -- The sequencer's three chances (3.7): each field's label
+  local CHANCE_LABELS = {scene_chance_next = "next", scene_chance_previous = "prev", scene_chance_random = "rand"}
+
   local function field_text(field_id)
     if field_id == "scene_transition_time" then
       return string.format("fade %.1fs", params:get(field_id))
@@ -77,6 +91,8 @@ return function(S)
       return params:get(field_id) == 1 and "seq on" or "seq off"
     elseif field_id == "scene_sequence_length" then
       return "len " .. params:get(field_id)
+    elseif CHANCE_LABELS[field_id] then
+      return CHANCE_LABELS[field_id] .. " " .. params:get(field_id) .. "%"
     end
     return string.format("dur %.0fs", params:get(field_id))
   end
@@ -153,19 +169,31 @@ return function(S)
     end
   end
 
+  -- The field rows in view below the slots, scrolled by row with the cursor
+  -- (one row above it kept; on a slot, the first rows), then field_list's
+  -- scroll marker at x 127 beside them
+  local function draw_fields(cursor)
+    local list = S.lib.ui_field_list
+    local visible = #SCENES_PAGE.fields_y
+    local cursor_row = cursor > NUM_SCENES and math.ceil((cursor - NUM_SCENES) / SCENES_PAGE.fields_per_row) or 1
+    local first = list.first_visible(field_rows, cursor_row, visible)
+    for offset = 0, math.min(visible, #field_rows - first + 1) - 1 do
+      for column, index in ipairs(field_rows[first + offset]) do
+        screen.level(cursor == NUM_SCENES + index and 15 or 4)
+        screen.move(SCENES_PAGE.column_x[column], SCENES_PAGE.fields_y[offset + 1])
+        screen.text(field_text(SCENES_FIELDS[index]))
+      end
+    end
+    list.draw_marker(first, visible, #field_rows, SCENES_PAGE.fields_y[1] - 6, SCENES_PAGE.fields_y[visible] + 1)
+  end
+
   local function redraw_scenes()
     local cursor = S.cursors.scene
     local first = (shown_bank() - 1) * SCENE_BANK_SIZE
     for index = 1, SCENE_BANK_SIZE do
       draw_slot(first + index, index, cursor)
     end
-    for index, field_id in ipairs(SCENES_FIELDS) do
-      local column = (index - 1) % 2 + 1
-      local row = math.ceil(index / 2)
-      screen.level(cursor == NUM_SCENES + index and 15 or 4)
-      screen.move(SCENES_PAGE.column_x[column], SCENES_PAGE.fields_y[row])
-      screen.text(field_text(field_id))
-    end
+    draw_fields(cursor)
   end
 
   -- A slot's hint names only the keys that act: an empty slot's recall does

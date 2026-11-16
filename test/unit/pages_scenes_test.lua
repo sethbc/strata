@@ -95,8 +95,8 @@ test("E2 runs through the slots then the fields; E3 edits", function()
   enc(3, 2)
   assert_true(params:get("scene_transition_time") > before, "E3 on a slot edits the transition time")
   enc(2, 15); assert_equal(S.cursors.scene, 17, "stop 17 is the first field")
-  enc(2, 100); assert_equal(S.cursors.scene, 20, "E2 stops at the last field")
-  enc(2, -1)  -- 19: sequence length
+  enc(2, 100); assert_equal(S.cursors.scene, 23, "E2 stops at the last field")
+  enc(2, -4)  -- 19: sequence length
   local length = params:get("scene_sequence_length")
   enc(3, -1); assert_equal(params:get("scene_sequence_length"), length - 1, "field 19 is the sequence length")
   enc(2, -1)  -- 18: sequencer on/off
@@ -106,6 +106,69 @@ test("E2 runs through the slots then the fields; E3 edits", function()
   local duration = params:get("scene_duration")
   enc(3, 1); assert_true(params:get("scene_duration") > duration, "field 20 is the scene duration")
   redraw(); assert_screen_layout(context, "SCENES on a field")
+  -- 21-23: the three chances, a percent a detent
+  for stop, id in pairs({ [21] = "scene_chance_next", [22] = "scene_chance_previous", [23] = "scene_chance_random" }) do
+    S.lib.pages_scenes.move_cursor(stop)
+    local lowered = math.max(params:get(id) - 1, 0)
+    enc(3, -1); assert_equal(params:get(id), lowered, "field " .. stop .. " is " .. id)
+    enc(3, 1); assert_equal(params:get(id), lowered + 1, "E3 right raises " .. id)
+  end
+end)
+
+-- 3.7 (design §5.4): the seven fields are rows of two under the slots, two
+-- rows in view, scrolled by row with the cursor (one row above it kept),
+-- with field_list's scroll marker at x 127
+
+-- The field texts at the block's two baselines, "left, right / left, right"
+local function field_rows(context)
+  local rows = {}
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y > 44 and entry.y < 60 then
+      rows[entry.y] = rows[entry.y] or {}
+      table.insert(rows[entry.y], entry.text)
+    end
+  end
+  local shown = {}
+  for _, y in ipairs({ 48, 55 }) do shown[#shown + 1] = table.concat(rows[y] or {}, ", ") end
+  return table.concat(shown, " / ")
+end
+
+local function scroll_marker(context)
+  for _, line in ipairs(context.screen.lines) do
+    if line.x1 == 127 and line.x2 == 127 then return line end
+  end
+end
+
+test("the fields scroll by row and each lays out with the cursor on it", function()
+  local context, S = started_on_scenes()
+  params:set("scene_chance_previous", 25); params:set("scene_chance_random", 5)
+  local top, middle = "fade 2.0s, seq off / len 4, dur 16s", "len 4, dur 16s / next 100%, prev 25%"
+  local expected = { [1] = top, [17] = top, [18] = top, [19] = top, [20] = top, [21] = middle, [22] = middle,
+    [23] = "next 100%, prev 25% / rand 5%" }
+  local bright = { [17] = "fade 2.0s", [18] = "seq off", [19] = "len 4", [20] = "dur 16s", [21] = "next 100%",
+    [22] = "prev 25%", [23] = "rand 5%" }
+  local marker_top = {}
+  for _, stop in ipairs({ 1, 17, 18, 19, 20, 21, 22, 23 }) do
+    local where = "stop " .. stop .. ": "
+    S.lib.pages_scenes.move_cursor(stop)
+    redraw()
+    assert_equal(field_rows(context), expected[stop], where .. "the rows in view")
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.y > 44 and entry.y < 60 then
+        assert_equal(entry.level, entry.text == bright[stop] and 15 or 4, where .. entry.text .. "'s level")
+      end
+    end
+    local marker = scroll_marker(context)
+    assert_true(marker, where .. "the scroll marker shows")
+    local y1, y2 = math.min(marker.y1, marker.y2), math.max(marker.y1, marker.y2)
+    assert_true(y1 >= 42 and y2 <= 56, where .. "the marker beside the fields, " .. y1 .. "-" .. y2)
+    marker_top[stop] = y1
+    assert_screen_layout(context, "SCENES with the cursor on stop " .. stop)
+  end
+  assert_equal(marker_top[17], 42, "at the top on the first rows")
+  assert_true(marker_top[21] > marker_top[20], "the marker moves down as the rows scroll")
+  assert_true(marker_top[23] > marker_top[21], "and further on the last row")
+  assert_equal(hint_text(context), "E2:move E3:edit", "a chance field's hint")
 end)
 
 test("K2 recalls with the transition and K3 instantly", function()
@@ -387,11 +450,11 @@ local function drawn_slot_numbers(context)
   return table.concat(numbers, " ")
 end
 
-test("the cursor stops at 16 slots and four fields, and ALT+E2 jumps a bank", function()
+test("the cursor stops at 16 slots and seven fields, and ALT+E2 jumps a bank", function()
   local context, S = started_on_scenes()
   enc(2, 15); assert_equal(S.cursors.scene, 16, "E2 reaches slot 16")
   enc(2, 1); assert_equal(S.cursors.scene, 17, "then the first field")
-  enc(2, 100); assert_equal(S.cursors.scene, 20, "and stops at the fourth field")
+  enc(2, 100); assert_equal(S.cursors.scene, 23, "and stops at the seventh field")
   S.lib.pages_scenes.move_cursor(3)
   key(1, 1)
   enc(2, 1); assert_equal(S.cursors.scene, 11, "ALT+E2 right: slot 3 to slot 11, the same place in bank 2")

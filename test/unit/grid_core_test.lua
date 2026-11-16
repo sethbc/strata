@@ -1179,6 +1179,24 @@ test("scene_recall_level from the sequencer's start: the slot it recalls first (
   params:set("scene_sequencer_enabled", 0)
 end)
 
+-- 3.7 (design §5.4): the next light is the slot the sequencer drew, which
+-- previous at 100 makes the one before the scene playing
+test("scene_recall_level lights the scene the sequencer drew next", function()
+  local context = load_strata(); finish_startup(context)
+  local core = grid_core()
+  capture_scene(1); capture_scene(2); capture_scene(3)
+  params:set("scene_sequence_length", 3)
+  params:set("scene_chance_next", 0); params:set("scene_chance_previous", 100)
+  params:set("scene_transition_time", 0); params:set("scene_duration", 4)
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1, 0.001)
+  assert_equal(recall_levels(core, 4), "15 8 10 2", "scene 1 playing, scene 3 (previous, wrapped) next")
+  context.clock.run_for(4, 0.001)
+  assert_equal(recall_levels(core, 4), "8 10 15 2", "scene 3 playing, scene 2 next")
+  params:set("scene_sequencer_enabled", 0)
+  assert_equal(recall_levels(core, 4), "8 8 15 2", "a stopped sequencer lights no next scene")
+end)
+
 -- #254: a 2 s fade has 20 steps of 0.1 s; the first runs inside the recall
 test("scene_recall_level blinks the scene a fade goes to; the fade keys are 6 saved, 2 empty (#254)", function()
   local context = load_strata(); finish_startup(context)

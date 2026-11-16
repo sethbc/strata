@@ -125,6 +125,7 @@ Split zones for the mpe split mode. Each voice has a zone (off, lower or upper; 
 - Scene transition time (0-30 seconds)
 - Scene duration (4-120 seconds; a scene plays at least as long as its transition)
 - Scene sequence length (1-16 scenes)
+- Chance next, chance previous and chance random (0-100% each; defaults 100%, 0% and 0%): how the sequencer picks the scene after the one it recalls, the rest a repeat ([Automatic Scene Sequencing](scenes.md)). Saved in PSETs, not in scenes
 - Save scenes to disk (manual trigger; each scene save already writes the file, [Saved scenes on disk](scenes.md#saved-scenes-on-disk))
 - Load scenes from disk (manual trigger; while a scene saved in this session is not on disk, the first trigger only prints a line in the console and a second within 2 seconds loads. A damaged or incompatible file is reported in the console, the current scenes are kept, and the file is moved to the first free of `scenes.data.bak`, `scenes.data.bak.2` ... `scenes.data.bak.9`, so it is never overwritten and an earlier copy is never replaced)
 - Scene files saved by Strata 3.5 or later load: settings they do not contain start at their defaults. A scenes file from before 3.5, or a `buffers.data` from before 3.3, is not converted: it is set aside as a backup (`scenes.data.bak`, `buffers.data.bak`) with one line in the console, and the script starts without it. A PSET loads every setting it holds as it is; a setting it does not hold starts at its default

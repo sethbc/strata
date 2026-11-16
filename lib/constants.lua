@@ -108,9 +108,11 @@ local HEADER = {dots_x = 32, dot_spacing = 4, dot_size = 2, dot_level = 3, curre
   status_play_x = 73, flash_x = 40, flash_width = 74, flash_seconds = 1.5}
 
 -- The params the SCENES page lists after the sixteen slots: its cursor's
--- stops NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (17-20;
--- lib/ui/cursors.lua)
-local SCENES_FIELDS = {"scene_transition_time", "scene_sequencer_enabled", "scene_sequence_length", "scene_duration"}
+-- stops NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (17-23;
+-- lib/ui/cursors.lua), drawn in rows of two (3.7 adds the sequencer's three
+-- chances)
+local SCENES_FIELDS = {"scene_transition_time", "scene_sequencer_enabled", "scene_sequence_length", "scene_duration",
+  "scene_chance_next", "scene_chance_previous", "scene_chance_random"}
 
 -- voices[i].grain keys holding an option index rather than a continuous
 -- value, mapped to their option count: smooth transitions switch them at the
