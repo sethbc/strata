@@ -28,7 +28,7 @@
 |---|---|
 | `\fastModBus` | control bus of `numVoices × fastModNoteSlots × numFastDestinations` channels (35), zeroed at alloc |
 | `\silentFastModBus` | control bus of `numFastDestinations` channels (5), zeroed at alloc and never written: `fastModIn`'s default |
-| `\fastModGroup` | a group made in `start` with `Group.before(voiceGroup)`, at the head of `context.xg`: the offset node at its head, then the LFO and scatter nodes; freed in `stop` |
+| `\fastModGroup` | a group made in `start` with `Group.before(voiceGroup)`, at the head of `context.xg`: the offset node at its head, then the LFO and scatter nodes and the envelopes area's `\strataEnvelope` nodes (`docs/notes/engine/envelopes.md`); freed in `stop` |
 | `\lfos` | one place per engine LFO (`numFastLfos`, 6): nil, or an Event of its node (`\synth`), `\shape`, `\channel`, `\controls` (`out`, `rate`, `depth`, `offset`) `\running` (false once released), `\released` (true from a stop until the place gets a fresh node: a re-gate never clears it) and `\anchor` (`[phase, time, rate]`: the phase its node started at or was synced to at `Main.elapsedTime` time, moving at rate Hz; set at a node's start, a sync and every set, read by a restart: `fastLfoPhaseNow`) |
 | `\scatter` | scatter's place: nil, or an Event of its node, `\rate`, `\gains` and `\running` |
 | `\nodeChannels` | each LFO node → the channel it writes, until it ends |

@@ -3296,6 +3296,46 @@ test("the workflow reads only, keeps no credentials and pins by full commit (#49
   assert_true(ref ~= nil and #ref == 40 and ref:match("^%x+$") ~= nil, "NORNS_REF is a full 40-character commit: " .. tostring(ref))
 end)
 
+-- The workflow's table of area times (its comment, "Area times on ...:"
+-- then "<area> <seconds>, ..."): the sum of every time listed, and the sum
+-- the comment states ("<n> s in all"), nil without one
+local function workflow_area_times(workflow)
+  local after = workflow:match("Area times on [^\n]*\n(.*)")
+  if not after then return nil end
+  local lines = {}
+  -- the table's comment lines (their "#" dropped), to the one with its sum
+  for line in after:gmatch("([^\n]*)\n?") do
+    local text = line:match("^%s*#%s?(.*)$")
+    if not text then break end
+    lines[#lines + 1] = text
+    if text:find(":") then break end
+  end
+  local joined = table.concat(lines, " ")
+  local times = joined:match("^(.-):") or joined
+  local total = 0
+  for seconds in times:gmatch("%a+ (%d+)") do total = total + tonumber(seconds) end
+  return total, tonumber(joined:match(":%s*(%d+) s in all"))
+end
+
+test("the workflow's area times are summed on every line of the table (#731)", function()
+  local table_of = function(lines)
+    return "  # Area times on SuperCollider 3.13 at 3.5.0 (s, the mean of four full runs; 3.14.1's are within 1 s):\n"
+      .. table.concat(lines, "\n") .. "\n  # The slowest shard is lifecycle.\n"
+  end
+  local total, stated = workflow_area_times(table_of({ "  # lifecycle 100, record 50,", "  # memory 20, buffers 10,",
+    "  # structure 4, performance 3: 187 s in all (one run)." }))
+  assert_equal(total, 187, "a time on the third line is summed")
+  assert_equal(stated, 187, "the stated sum is read")
+  total = workflow_area_times(table_of({ "  # lifecycle 100,", "  # record 50,", "  # memory 20,", "  # buffers 10,",
+    "  # structure 4, performance 3: 187 s in all." }))
+  assert_equal(total, 187, "a table of six lines is summed to its last")
+  total = workflow_area_times(table_of({ "  # lifecycle 100, record 50: 150 s in all (the 3.14.1 run took 2 s more)." }))
+  assert_equal(total, 150, "a one-line table is summed, and nothing after its stated sum")
+  local real_total, real_stated = workflow_area_times(read_repo_text(".github/workflows/test.yml"))
+  assert_true(real_stated ~= nil, "the workflow's table states its sum (<n> s in all)")
+  assert_equal(real_total, real_stated, "the workflow's area times sum to the sum it states")
+end)
+
 -- #491: the docs say what the runner runs, in its order, and how long a
 -- full run takes (the workflow's own area times)
 test("the engine notes give the runner's area order and the full run's time (#491)", function()
@@ -3308,10 +3348,7 @@ test("the engine notes give the runner's area order and the full run's time (#49
   local names = {}
   for name in listed:gsub("then the on%-demand ", ""):gmatch("%a+") do names[#names + 1] = name end
   assert_equal(table.concat(names, " "), table.concat(order, " "), "structure.md's areaOrder sentence, in the runner's order")
-  local times = read_repo_text(".github/workflows/test.yml"):match("Area times on [^\n]*:([^\n]*\n[^\n]*\n[^\n]*)")
-  times = times:match("^(.-):") or times
-  local total = 0
-  for seconds in times:gmatch("%a+ (%d+)") do total = total + tonumber(seconds) end
+  local total = workflow_area_times(read_repo_text(".github/workflows/test.yml")) or 0
   assert_true(total > 500, "the workflow's area times sum (" .. total .. " s)")
   local minutes = math.floor(total / 60 + 0.5)
   for _, path in ipairs({ "AGENTS.md", "docs/checks.md", "docs/notes/test-harness/engine-check-runner.md",

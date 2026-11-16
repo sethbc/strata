@@ -19,7 +19,7 @@ Design 3.7 §7: each voice has an envelope (attack, decay to a sustain level, a 
 
 | Key | What |
 |---|---|
-| `\routes` | one place per route (`numEnvRoutes`, 16): nil, or an Event of its node (`\synth`), `\source` (the voice whose hits fire it), `\channel`, `\controls` (`out`, `depth`, `attack`, `decay`, `sustain`, `release`, `curve`, `loop`), `\running` (false once released) and `\released` (true from a stop until the place gets a fresh node) |
+| `\routes` | one place per route (`numEnvRoutes`, 16): nil, or an Event of its node (`\synth`), `\source` (the voice whose hits fire it), `\channel`, `\controls` (`out`, `depth`, `attack`, `decay`, `sustain`, `release`, `curve`, `loop`) and `\running` (false from a stop: the node is releasing, and its end forgets the place) |
 | `\nodeChannels` | each envelope node → the channel it writes, until it ends |
 | `\received` | per command, the arguments it last took (the continuous ones clipped), for the engine check |
 | `\stopped` | true until `start`, and from `stop`: commands and hits do nothing, and no node's end restarts or zeroes anything |
@@ -39,8 +39,8 @@ The hooks: `allocState` (`allocEnvelopes`), `addDefs` (`addEnvelopeDefs`), `addC
 ### The commands and the lifecycle
 
 - `setFastEnv`: a route with no place gets one and a node (`startFastEnv`: `Synth(\strataEnvelope, controls, fastModGroup, \addToTail)`, watched through `areaCall(\watchFastEnv, ...)`, whose `onFree` calls `fastEnvEnded`). A route with a place keeps its node: its source, channel and controls are replaced and one `sendToSynth` carries `gate 1` and every control, with a `/c_fill` of the old channel when the route moved and no other envelope node writes it. A set never fires the envelope (only a hit or loop does), and a releasing node it re-gates keeps its level.
-- `stopFastEnv`: a running route's node gets `gate 0` (20 ms) and the route is marked released; no-op otherwise. Its end (`fastEnvEnded`) forgets the place and zeroes the channel unless another envelope node writes it.
-- `fastEnvEnded`, a node's end: still its place's and running (its release ended as a set re-gated it) → a new node from the place's controls; its place's and released → the place is forgotten; then its channel is zeroed unless another envelope node writes it.
+- `stopFastEnv`: a running route's node gets `gate 0` (20 ms) and its place is marked not running; no-op otherwise. Its end (`fastEnvEnded`) forgets the place and zeroes the channel unless another envelope node writes it.
+- `fastEnvEnded`, a node's end: still its place's and running (its release ended as a set re-gated it) → a new node from the place's controls; its place's and not running (released) → the place is forgotten; then its channel is zeroed unless another envelope node writes it.
 
 ### Hits
 

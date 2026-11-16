@@ -222,17 +222,28 @@ checkHits = {
 
 // The shape (design §7.1) on a gated voice with gateSeconds 0.2: attack
 // 0.05 s to 1, decay 0.05 s to the sustain 0.5, held for the hold
-// (gateSeconds), released over 0.05 s
+// (gateSeconds), released over 0.05 s. The peak is read at 0.048 s: the
+// attack lasts 37 control blocks (0.0493 s), and one block into the
+// decay (curve -4) it has already fallen to about 0.95. A curve -4 attack
+// is near 1 well before its end, so a linear one (curve 0, 0.1 s) pins
+// the timing: a quarter, half and three quarters of the way, within 0.03
+// (3 ms)
 checkShape = {
-    var values, expected = [1, 0.5, 0.5, 0];
+    var times = [0.048, 0.12, 0.28, 0.4], expected = [1, 0.5, 0.5, 0], values;
+    var linearTimes = [0.025, 0.05, 0.075], linearExpected = [0.25, 0.5, 0.75], linear;
     gateVoice.(4, 1, 0.2);
     setEnv.(0, 4, 4, 1);
     server.sync; 0.05.wait;
-    values = sampleHit.(4, 1, [0.048, 0.12, 0.28, 0.4]);
+    values = sampleHit.(4, 1, times);
+    resetEnvelopes.value;
+    setEnv.(0, 4, 4, 1, attack: 0.1, curve: 0.0);
+    server.sync; 0.05.wait;
+    linear = sampleHit.(4, 1, linearTimes);
     check.((values.size == 4) and: { [values, expected].flop.keep(3).every({ arg pair; (pair[0] - pair[1]).abs < 0.05 }) }
-        and: { values[3].abs < 1e-3 },
-        "envelopes: the shape: attack 0.05, decay 0.05, sustain 0.5, release 0.05, depth 1, a gated voice with gateSeconds 0.2: the channel reads 1 (within 0.05) at 0.05 s, 0.5 at 0.12 s and at 0.28 s, and 0 by 0.4 s (got %)".format(
-            values.round(0.001)));
+        and: { values[3].abs < 1e-3 }
+        and: { (linear.size == 3) and: { [linear, linearExpected].flop.every({ arg pair; (pair[0] - pair[1]).abs < 0.03 }) } },
+        "envelopes: the shape: attack 0.05, decay 0.05, sustain 0.5, release 0.05, depth 1, a gated voice with gateSeconds 0.2: the channel reads 1 (within 0.05) at % s (the attack's last block), 0.5 at % s and at % s, and 0 by % s (got %); a linear attack of 0.1 s reads % (within 0.03) at % s (got %)".format(
+            times[0], times[1], times[2], times[3], values.round(0.001), linearExpected, linearTimes, linear.round(0.001)));
     restoreVoices.value;
     resetEnvelopes.value;
 };
@@ -241,18 +252,18 @@ checkShape = {
 // release follows the decay at once. Voice 6 has never had a seqGate (nil
 // until Lua sends one), and one with seqGate 0 sent is the same
 checkUngated = {
-    var never = engine.grainControls[6][\seqGate].isNil, values, sent;
+    var never = engine.grainControls[6][\seqGate].isNil, times = [0.048, 0.12, 0.2], values, sent;
     command.(\setGrainParam, 6, \gateSeconds, 0.3);
     setEnv.(0, 6, 6, 2);
     server.sync; 0.05.wait;
-    values = sampleHit.(6, 2, [0.048, 0.12, 0.2]);
+    values = sampleHit.(6, 2, times);
     gateVoice.(6, 0, 0.3);
     server.sync;
-    sent = sampleHit.(6, 2, [0.048, 0.12, 0.2]);
+    sent = sampleHit.(6, 2, times);
     check.(never and: { [values, sent].every({ arg each; (each.size == 3) and: { (each[0] - 1).abs < 0.05 } and: { each[1] < 0.3 }
         and: { each[2].abs < 1e-3 } }) },
-        "envelopes: an ungated voice's hold is 0 (the release follows the decay at once; gateSeconds 0.3, no seqGate yet: %; at 0.05, 0.12 and 0.2 s: % with no seqGate, % with seqGate 0)".format(
-            never, values.round(0.001), sent.round(0.001)));
+        "envelopes: an ungated voice's hold is 0 (the release follows the decay at once; gateSeconds 0.3, no seqGate yet: %; at % s: % with no seqGate, % with seqGate 0)".format(
+            never, times, values.round(0.001), sent.round(0.001)));
     restoreVoices.value;
     resetEnvelopes.value;
 };
@@ -260,14 +271,14 @@ checkUngated = {
 // Sustain 0 is an attack and a decay, whatever the hold: a gated voice with
 // gateSeconds 0.3 reads 0 from the decay's end, through what would be its hold
 checkSustainZero = {
-    var values;
+    var times = [0.048, 0.12, 0.2, 0.35], values;
     gateVoice.(4, 1, 0.3);
     setEnv.(0, 4, 4, 3, sustain: 0.0);
     server.sync; 0.05.wait;
-    values = sampleHit.(4, 3, [0.048, 0.12, 0.2, 0.35]);
+    values = sampleHit.(4, 3, times);
     check.((values.size == 4) and: { (values[0] - 1).abs < 0.05 } and: { values.drop(1).every({ arg value; value.abs < 1e-3 }) },
-        "envelopes: sustain 0 is attack and decay whatever the hold (gateSeconds 0.3; at 0.05, 0.12, 0.2 and 0.35 s: %)".format(
-            values.round(0.001)));
+        "envelopes: sustain 0 is attack and decay whatever the hold (gateSeconds 0.3; at % s: %)".format(
+            times, values.round(0.001)));
     restoreVoices.value;
     resetEnvelopes.value;
 };
