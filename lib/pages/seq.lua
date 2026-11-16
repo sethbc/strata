@@ -1054,13 +1054,13 @@ return function(S)
       pattern_toggle()
       context.clock.run_for(1.3)
     end},
-    -- 3.7: FILL on the selected voice's row, a gated one, its G beside it
+    -- 3.7: the fill mark on voice 7's row (the last), gated, its G beside it
     {name = "fill on, gated, playing", setup = function(context)
       for voice_idx = 1, NUM_VOICES do
         params:set(voice_param_id(voice_idx, "seq_gate"), S.lib.sequencer.SEQ.gate_on)
         for step = 1, PATTERN_LENGTH do S.patterns[voice_idx][step] = (voice_idx + step) % 3 == 0 and 9 or 0 end
       end
-      show_cursor(4, PATTERN_LENGTH)()
+      show_cursor(NUM_VOICES, PATTERN_LENGTH)()
       params:set("seq_fill", 1)
       pattern_toggle()
       context.clock.run_for(0.4)

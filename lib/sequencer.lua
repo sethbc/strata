@@ -1015,20 +1015,46 @@ return function(S)
     return slots
   end
 
-  -- The scene the chain links next from current, and the move (3.7, design
-  -- §5.4): S.lib.chance.pick over the populated, valid slots of the
-  -- chain's range in order, by seq_chain_next, seq_chain_previous and
-  -- seq_chain_random (a current that is none of them counts as before the
-  -- first). nil with no such slot
-  local function next_chain_scene(current)
-    local slots = {}
-    for _, slot in ipairs(chain_slots()) do
-      if S.scenes[slot] and S.scenes[slot].populated and validate_scene(S.scenes[slot]) then
-        slots[#slots + 1] = slot
-      end
+  local function populated(slot) return S.scenes[slot] ~= nil and S.scenes[slot].populated == true end
+
+  -- The first slot of slots from index first, walking by step (1 or -1)
+  -- and wrapping, at most once around, that is populated and valid and
+  -- not refused (a slot already found invalid); nil with none. Only
+  -- populated slots are validated
+  local function linkable_from(slots, first, step, refused)
+    for offset = 0, #slots - 1 do
+      local slot = slots[(first - 1 + offset * step) % #slots + 1]
+      if slot ~= refused and populated(slot) and validate_scene(S.scenes[slot]) then return slot end
     end
-    return S.lib.chance.pick(current, slots,
+    return nil
+  end
+
+  -- The scene the chain links next from current, and the move (3.7, design
+  -- §5.4). With no current scene (a start, the chain switched on) the
+  -- range's first populated, valid scene, with no draw. Otherwise
+  -- S.lib.chance.pick by seq_chain_next, seq_chain_previous and
+  -- seq_chain_random over the range's populated slots in order, the
+  -- playing one kept at its place even once it is cleared (as 3.6 went on
+  -- from there). Only the picked slot is validated (a cheap populated test
+  -- picks the list): an invalid one goes on to the next valid slot the
+  -- move's way (previous backward, the others forward), with no second
+  -- draw. nil with none
+  local function next_chain_scene(current)
+    local range, slots = chain_slots(), {}
+    if current == nil then return linkable_from(range, 1, 1), "next" end
+    for _, slot in ipairs(range) do
+      if slot == current or populated(slot) then slots[#slots + 1] = slot end
+    end
+    local slot, move = S.lib.chance.pick(current, slots,
       {params:get("seq_chain_next"), params:get("seq_chain_previous"), params:get("seq_chain_random")})
+    if slot == nil or move == "repeat" or (populated(slot) and validate_scene(S.scenes[slot])) then
+      return slot, move
+    end
+    local index = 1
+    for position, value in ipairs(slots) do
+      if value == slot then index = position end
+    end
+    return linkable_from(slots, index, move == "previous" and -1 or 1, slot), move
   end
 
   -- A link: the scene's patterns, steps block and each voice's length,

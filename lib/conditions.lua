@@ -104,18 +104,28 @@ return function(S)
     if not M.fill() then fill_changed() end
   end
 
-  -- Whether any holder still holds (one whose check denies it is dropped)
+  -- Whether any holder still holds (a read drops nothing: it may run in a
+  -- page's draw)
   local function held()
-    local any = false
+    for _, still in pairs(holders) do
+      if still == true or still() then return true end
+    end
+    return false
+  end
+
+  -- Each LFO step (48 Hz, never inside a draw): a holder whose check now
+  -- denies it is dropped, and the grids and the screen redraw (an
+  -- unplugged grid's hold ends with no key event of its own)
+  S.lib.lfos.on_step(function()
+    local dropped = false
     for holder, still in pairs(holders) do
-      if still == true or still() then
-        any = true
-      else
+      if still ~= true and not still() then
         holders[holder] = nil
+        dropped = true
       end
     end
-    return any
-  end
+    if dropped then fill_changed() end
+  end)
 
   -- Fill is on: the latch (seq_fill 1) or any holder
   function M.fill()

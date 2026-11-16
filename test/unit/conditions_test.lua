@@ -101,8 +101,26 @@ test("fill is the latch or any holder", function()
   assert_true(c.fill(), "a holder that still holds")
   holds = false
   assert_true(not c.fill(), "a holder whose check fails no longer holds")
+end)
+
+test("a hold whose check fails is dropped at the next LFO step, which redraws the grids and the screen", function()
+  local c, S, context = conditions()
+  local holds = true
+  c.hold_fill("grid:4", true, function() return holds end)
+  local real_grid, real_request = grid_redraw, request_redraw
+  local grids, screens = 0, 0
+  grid_redraw = function(...) grids = grids + 1; return real_grid(...) end
+  request_redraw = function(...) screens = screens + 1; return real_request(...) end
+  context.clock.advance_until(S.lfo_clock)
+  assert_equal(grids + screens, 0, "a hold that stands redraws nothing")
+  holds = false
+  assert_true(not c.fill(), "a read sees it gone at once")
+  context.clock.advance_until(S.lfo_clock)
+  grid_redraw, request_redraw = real_grid, real_request
+  assert_equal(grids, 1, "the step that drops it redraws the grids")
+  assert_equal(screens, 1, "and asks for the screen")
   holds = true
-  assert_true(not c.fill(), "and is gone")
+  assert_true(not c.fill(), "and it is gone")
 end)
 
 test("seq_fill is never saved and starts off", function()

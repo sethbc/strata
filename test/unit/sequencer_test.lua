@@ -3554,19 +3554,250 @@ test("a chain link carries direction and misstep, and picks by the three chances
   pattern_clock_stop()
   params:set("seq_chain_next", 0); params:set("seq_chain_previous", 100)
   pattern_clock_start(); context.clock.run_for(0.01)
-  assert_equal(marks(2), "3 2 1", "0, 100, 0: backward, from the last")
+  assert_equal(marks(2), "1 3 2", "0, 100, 0: a start loads the first, then backward")
   params:set("seq_chain_previous", 0)
   local replaced = 0
   local real_replace = S.lib.sequencer.replace_pattern
   S.lib.sequencer.replace_pattern = function(...) replaced = replaced + 1; return real_replace(...) end
-  assert_equal(marks(2), "1 1 1", "0, 0, 0: the same scene stays")
+  assert_equal(marks(2), "2 2 2", "0, 0, 0: the same scene stays")
   S.lib.sequencer.replace_pattern = real_replace
   assert_equal(replaced, 0, "and nothing is replaced")
   pattern_clock_stop()
   chance.pick = real_pick
 end)
 
+-- Scenes 1-4 of a chain over 1-4 (each scene's mark: voice 1's step 1 at
+-- the scene's number), playing, the chain at 1 bar; returns step 1's level
+-- now, then after each of bars bars
+local function chain_of_four(context, S, chances)
+  for scene = 1, 4 do
+    voice_1_only(S, 4)
+    S.patterns[1][1] = scene
+    capture_scene(scene)
+  end
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 4)
+  params:set("seq_chain_bars", 1)
+  params:set("seq_chain_next", chances[1]); params:set("seq_chain_previous", chances[2])
+  params:set("seq_chain_random", chances[3])
+  return function(bars)
+    local seen = {S.patterns[1][1]}
+    for _ = 1, bars do
+      context.clock.run_for(2.0)
+      seen[#seen + 1] = S.patterns[1][1]
+    end
+    return table.concat(seen, " ")
+  end
+end
+
+-- Run the chain to scene 3 (in order), then clear scene 3 while it plays
+local function at_cleared_three(context, S)
+  local real = {params:get("seq_chain_next"), params:get("seq_chain_previous"), params:get("seq_chain_random")}
+  params:set("seq_chain_next", 100); params:set("seq_chain_previous", 0); params:set("seq_chain_random", 0)
+  pattern_clock_start(); context.clock.run_for(4.01)  -- scenes 1, 2, 3
+  assert_equal(S.patterns[1][1], 3, "the chain plays scene 3")
+  S.scenes[3].populated = false
+  params:set("seq_chain_next", real[1]); params:set("seq_chain_previous", real[2])
+  params:set("seq_chain_random", real[3])
+end
+
+test("the chain goes on from a cleared scene's place in its range, as 3.6 did", function()
+  local context, S = setup()
+  local marks = chain_of_four(context, S, {100, 0, 0})
+  at_cleared_three(context, S)
+  assert_equal(marks(2), "3 4 1", "the defaults: on to 4, as 3.6 went, then 1")
+  pattern_clock_stop()
+  -- previous at 100: the populated scene before 3's place
+  context, S = setup()
+  marks = chain_of_four(context, S, {0, 100, 0})
+  at_cleared_three(context, S)
+  assert_equal(marks(4), "3 2 1 4 2", "previous: 2, 1, around to 4, then 2, past the empty 3")
+  pattern_clock_stop()
+  -- random at 100: any other slot of the range, never the empty 3
+  context, S = setup()
+  marks = chain_of_four(context, S, {0, 0, 100})
+  at_cleared_three(context, S)
+  local real_random = math.random
+  local draws = 0
+  math.random = function() draws = draws + 1; return 0.5 end  -- the middle of {1, 2, 4}: 2
+  local seen = marks(1)
+  math.random = real_random
+  assert_equal(seen, "3 2", "random: one draw among the others, 1, 2 and 4")
+  assert_equal(draws, 1, "one draw, none for the move at 100")
+  -- with 4 cleared too, the one draw is among the saved others alone: 1
+  S.scenes[4].populated = false
+  draws = 0
+  math.random = function() draws = draws + 1; return 0.99 end  -- the last of {1}
+  seen = marks(1)
+  math.random = real_random
+  assert_equal(seen, "2 1", "4 and 3 empty: random links 1")
+  assert_equal(draws, 1, "with one draw")
+  pattern_clock_stop()
+end)
+
+test("random picks among the range's saved scenes, empty slots aside", function()
+  -- a range of 8 with 1, 5 and 8 saved (marks 1, 5, 8), playing 1: random's
+  -- one draw is among 5 and 8, never an empty slot walked on from
+  local context, S = setup()
+  for scene = 1, 8 do
+    voice_1_only(S, 4)
+    S.patterns[1][1] = scene
+    capture_scene(scene)
+    if scene ~= 1 and scene ~= 5 and scene ~= 8 then S.scenes[scene].populated = false end
+  end
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 8)
+  params:set("seq_chain_bars", 1)
+  params:set("seq_chain_next", 0); params:set("seq_chain_previous", 0); params:set("seq_chain_random", 100)
+  pattern_clock_start(); context.clock.run_for(0.01)
+  assert_equal(S.patterns[1][1], 1, "the start loads scene 1")
+  local real_random, draws = math.random, 0
+  math.random = function() draws = draws + 1; return 0.5 end  -- the second of {5, 8}
+  context.clock.run_for(2.0)
+  math.random = real_random
+  assert_equal(S.patterns[1][1], 8, "the draw's half lands on 8, the second saved scene")
+  assert_equal(draws, 1, "one draw")
+  pattern_clock_stop()
+end)
+
+test("a start links the range's first scene; the chances apply from the next link", function()
+  -- scene 1 empty: the range's first populated scene is 2
+  for _, case in ipairs({{{0, 100, 0}, "2 4 3"}, {{0, 0, 0}, "2 2 2"}, {{100, 0, 0}, "2 3 4"}}) do
+    local context, S = setup()
+    local marks = chain_of_four(context, S, case[1])
+    S.scenes[1].populated = false
+    S.patterns[1][1] = 9
+    pattern_clock_start(); context.clock.run_for(0.01)
+    assert_equal(marks(2), case[2], table.concat(case[1], ", ") .. ": the start at 2, then the chances")
+    pattern_clock_stop()
+  end
+end)
+
+test("a link validates only the scene it links", function()
+  local context, S = setup()
+  for scene = 1, 16 do
+    voice_1_only(S, 4)
+    S.patterns[1][1] = scene % 15 + 1
+    capture_scene(scene)
+  end
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 16)
+  params:set("seq_chain_bars", 1)
+  local real_validate, validations = validate_scene, 0
+  validate_scene = function(...) validations = validations + 1; return real_validate(...) end
+  pattern_clock_start()
+  local at_start = validations
+  context.clock.run_for(2.01)
+  local at_link = validations - at_start
+  validate_scene = real_validate
+  pattern_clock_stop()
+  assert_equal(at_start, 1, "the start validates the one scene it loads")
+  assert_equal(at_link, 1, "a link over a full range of 16 validates one")
+  -- an invalid pick moves on to the next populated slot, validating it
+  pattern_clock_start()
+  S.scenes[2].data.steps[1][1] = {cond = "9:9"}
+  validations = 0
+  validate_scene = function(...) validations = validations + 1; return real_validate(...) end
+  context.clock.run_for(2.01)
+  validate_scene = real_validate
+  assert_equal(S.patterns[1][1], 4, "scene 2 is invalid: scene 3 (its mark 4) links")
+  assert_equal(validations, 2, "two validations: 2, then 3")
+  pattern_clock_stop()
+end)
+
+test("previous past an invalid scene goes on backward, with one validation each", function()
+  local context, S = setup()
+  local marks = chain_of_four(context, S, {100, 0, 0})
+  pattern_clock_start(); context.clock.run_for(4.01)  -- scenes 1, 2, 3
+  assert_equal(S.patterns[1][1], 3, "the chain plays scene 3")
+  params:set("seq_chain_next", 0); params:set("seq_chain_previous", 100)
+  S.scenes[2].data.steps[1][1] = {cond = "9:9"}
+  local real_validate, validations = validate_scene, 0
+  validate_scene = function(...) validations = validations + 1; return real_validate(...) end
+  local seen = marks(1)
+  validate_scene = real_validate
+  assert_equal(seen, "3 1", "2 is invalid: previous goes on to 1")
+  assert_equal(validations, 2, "2, then 1")
+  pattern_clock_stop()
+end)
+
+-- 3.6's engine calls for 32 steps of voice 1 (forward, misstep 0, no
+-- condition): a ratchet, a pitch and size lock, a three-note chord and a
+-- position lock, recorded by running the same steps on main at 51ff1514
+local CALLS_36 = {
+  "retrigger(0, 1)", "retrigger(0, 1)", "setGrainParam(0, pitchShift, 1.5)", "setGrainParam(0, grainSize, 0.2)",
+  "retrigger(0, 0.6)", "setGrainParam(0, pitchShift, 1)", "setGrainParam(0, grainSize, 0.1)",
+  "setVoiceParam(0, freq, 100)", "setGrainParam(0, scaleNote, 43.35)", "retrigger(0, 0.8)",
+  "noteExpression(0, 1, 1, 1, 0, 0, 0)", "noteOn(0, 1, 45.35, 112.2462, 0.429, 0.8)",
+  "noteExpression(0, 2, 1, 1, 0, 0, 0)", "noteOn(0, 2, 47.35, 125.9921, 0.4816, 0.8)", "noteOff(0, 1, 0)",
+  "noteOff(0, 2, 0)", "setVoiceParam(0, freq, 100)", "setGrainParam(0, scaleNote, 43.35)", "retrigger(0, 0.4)",
+  "setGrainParam(0, bufPos, 0.3)", "retrigger(0, 1)", "setGrainParam(0, bufPos, 0)", "retrigger(0, 1)",
+  "retrigger(0, 1)", "setGrainParam(0, pitchShift, 1.5)", "setGrainParam(0, grainSize, 0.2)", "retrigger(0, 0.6)",
+  "setGrainParam(0, pitchShift, 1)", "setGrainParam(0, grainSize, 0.1)", "setVoiceParam(0, freq, 100)",
+  "setGrainParam(0, scaleNote, 43.35)", "retrigger(0, 0.8)", "noteExpression(0, 3, 1, 1, 0, 0, 0)",
+  "noteOn(0, 3, 45.35, 112.2462, 0.429, 0.8)", "noteExpression(0, 4, 1, 1, 0, 0, 0)",
+  "noteOn(0, 4, 47.35, 125.9921, 0.4816, 0.8)", "noteOff(0, 3, 0)", "noteOff(0, 4, 0)",
+  "setVoiceParam(0, freq, 100)", "setGrainParam(0, scaleNote, 43.35)", "retrigger(0, 0.4)",
+  "setGrainParam(0, bufPos, 0.3)", "retrigger(0, 1)", "setGrainParam(0, bufPos, 0)",
+}
+
 test("a 3.6 pattern plays the same steps as before", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  local levels = {15, 0, 9, 0, 12, 0, 0, 6, 0, 0, 15, 0, 0, 0, 0, 0}
+  for step = 1, 16 do S.patterns[1][step] = levels[step] end
+  seq.set_step_attr(1, 1, "ratchet", 2)
+  seq.set_step_attr(1, 3, "pitch", 1.5)
+  seq.set_step_attr(1, 3, "size", 0.2)
+  seq.set_step_attr(1, 5, "notes", {0, 2, 4})
+  seq.set_step_attr(1, 11, "pos", 0.3)
+  math.randomseed(1)
+  context.clear_engine_calls()
+  pattern_clock_start(); run_steps(context, 32); pattern_clock_stop()
+  assert_equal(table.concat(call_texts(context), "\n"), table.concat(CALLS_36, "\n"), "every engine call, in order")
+end)
+
+test("a step skipped by its condition leaves the last played step's lock and note", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  voice_1_only(S, 3)
+  seq.set_step_attr(1, 1, "pitch", 1.5)
+  seq.set_step_attr(1, 1, "notes", {2})
+  seq.set_step_attr(1, 2, "cond", "!first")  -- skipped on pass 1
+  local function locked() return engine_param_value("v1_grain_pitch") end
+  local function noted() return S.lib.notes.find(1, "seq", 1) ~= nil end
+  pattern_clock_start()
+  context.clock.run_for(0.125 + 0.01)  -- step 2, skipped
+  assert_near(locked(), 1.5, 1e-9, "the skipped step leaves step 1's lock")
+  assert_true(noted(), "and its note")
+  context.clock.run_for(0.125)  -- step 3 plays, with neither
+  assert_near(locked(), params:get("v1_grain_pitch"), 1e-9, "the next played step ends the lock")
+  assert_true(not noted(), "and the note")
+  pattern_clock_stop()
+end)
+
+test("a length change in reverse and in ping-pong", function()
+  local context, S = setup()
+  local events = record_output(S, "probe")
+  local function run(direction, length, before, new_length, after)
+    voice_1_only(S, length)
+    params:set("v1_seq_direction", DIRECTION[direction])
+    clear_list(events)
+    pattern_clock_start(); run_steps(context, before)
+    for step = 1, 16 do S.patterns[1][step] = 15 end
+    params:set("v1_seq_length", new_length)
+    context.clock.run_for(after * 0.125)
+    pattern_clock_stop()
+    return played_steps(events)
+  end
+  assert_equal(run("reverse", 8, 3, 4, 6), "8 7 6 5 4 3 2 1 4",
+    "reverse: a shorter length fits the three steps taken: a pass of 4 ends at 5, then 4 down")
+  assert_equal(run("reverse", 8, 5, 4, 8), "8 7 6 5 4 3 2 1 4 3 2 1 4",
+    "reverse: one that does not fit waits for the pass's end")
+  assert_equal(run("reverse", 4, 2, 8, 8), "4 3 2 1 8 7 6 5 8 7",
+    "reverse: a longer one lengthens the pass at once: past 1 it goes on from the new length to 5, then starts at 8")
+  assert_equal(run("ping-pong", 4, 3, 2, 5), "1 2 3 2 1 2 1 2", "ping-pong: past the new end it turns at once")
+  assert_equal(run("ping-pong", 2, 3, 4, 5), "1 2 1 2 3 4 3 2", "ping-pong: a longer one goes on up to it")
+end)
+
+test("a probability step's draws keep 3.6's order", function()
   local context, S = setup()
   local seq = S.lib.sequencer
   local levels = {15, 0, 9, 0, 12, 6, 0, 3, 15, 0, 0, 8, 0, 11, 0, 5}
