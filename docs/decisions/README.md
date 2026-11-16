@@ -9,5 +9,6 @@ The decisions taken during development, one file per release line. Each was take
 - [3.4](3.4.md): modulation and sequencing. Its rulings are numbered; code comments cite them by number.
 - [3.5](3.5.md): polyphony and MPE. Its fifty-nine rulings keep the build's numbers, which code comments cite.
 - [3.6](3.6.md): integration. Its rulings come in two series that keep their numbers: the plan's thirty-three, cited as plan ruling N, and the build's fifty-two, cited as build ruling N.
+- [3.7](3.7.md): rhythm (slices, scan modes, a file's settings, trig conditions, the delay on the beat, envelopes, random sequences).
 
 A new release adds its file here, `docs/decisions/<release>.md`, and its line above. A fix release's decisions go in its release line's file.

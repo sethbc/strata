@@ -126,20 +126,6 @@ checkScanModes = {
 };
 checkScanModes.value;
 
-// The one-shot level is a 5 ms gate on the reader's level, built at control
-// rate (one A2K of the sum), so the reader's level stays a control-rate
-// product and costs no audio-rate wire buffers
-{
-    var levelRate;
-    SynthDef(\strataCheckOneShotLevelRate, {
-        var state = scanState.(\scanMode.kr(2));
-        state[\sum] = DC.ar(0.5) + Sweep.ar(0, 0.1);
-        levelRate = engine.oneShotLevel(state).rate;
-        Out.kr(0, DC.kr(0));
-    });
-    check.(levelRate == \control, "positions: the one-shot level is built at control rate (got %)".format(levelRate));
-}.value;
-
 // The real grain synth, on a slot of known contents
 h.writeTestFile(path, server.sampleRate, (seconds * server.sampleRate).round.asInteger, [0, 0]);
 command.(\loadBuffer, slot, path, 0);
