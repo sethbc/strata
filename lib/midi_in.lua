@@ -279,17 +279,28 @@ return function(S)
   -- pressure it reached. 3.7: a voice that takes slice notes releases
   -- through S.lib.slices.note_off, and its last key leaves it running while
   -- a one-shot slice plays to its end (a key never cuts one short)
+  -- 3.7: per voice, a release-mode stop its last key's lift held back while
+  -- a note of it played to its end (end_key). Only that sets it; a key down,
+  -- the voice's stop and its start clear it, so a restarted voice is never
+  -- stopped by it. The LFO step below does the stop once no note of the
+  -- voice plays to its end, whichever owner's ended last
+  local stop_pending = {}
+
   local function end_key(voice_idx, key)
     S.midi_state.held[voice_idx][key] = nil
+    local last = next(S.midi_state.held[voice_idx]) == nil and S.voices[voice_idx].active
     if M.note_off_mode() ~= "release" then
       S.lib.expression.latch(voice_idx, MIDI.owner, key)
-    elseif next(S.midi_state.held[voice_idx]) == nil and S.voices[voice_idx].active
-        and not S.lib.notes.plays_to_end(voice_idx) then
+    elseif last and not S.lib.notes.plays_to_end(voice_idx) then
       midi_note_off_for(voice_idx)
-    elseif S.lib.slices.takes_notes(voice_idx) then
-      S.lib.slices.note_off(voice_idx, MIDI.owner, key)
     else
-      S.lib.notes.release(voice_idx, MIDI.owner, key)
+      -- the last key, held back by a note playing to its end: stop later
+      if last then stop_pending[voice_idx] = true end
+      if S.lib.slices.takes_notes(voice_idx) then
+        S.lib.slices.note_off(voice_idx, MIDI.owner, key)
+      else
+        S.lib.notes.release(voice_idx, MIDI.owner, key)
+      end
     end
   end
 
@@ -315,25 +326,26 @@ return function(S)
     end
   end
 
-  -- 3.7: in release mode a voice whose keys are all up stops once the last
-  -- of its notes that played to its end has ended (end_key left it
-  -- running): a MIDI note's end marks the voice (a hook sends nothing), and
-  -- the next LFO step stops it when it still runs with no key down and no
-  -- note playing to its end
-  local stop_due = {}
-  S.register_note_hook({name = "midi release", ended = function(voice_idx, _, ended_note)
-    if ended_note.owner == MIDI.owner then stop_due[voice_idx] = true end
-  end})
+  -- 3.7: a held-back release-mode stop (stop_pending) is done at the first
+  -- LFO step where no note of the voice plays to its end any more, while it
+  -- still runs in release mode with no key down; anything else drops it.
+  -- The voice's stop and start drop it too, so a voice restarted within a
+  -- step of its last key's stop is never stopped again
   S.lib.lfos.on_step(function()
-    if next(stop_due) == nil then return end
-    local due = stop_due
-    stop_due = {}
-    for voice_idx in pairs(due) do
-      if S.voices[voice_idx].active and next(S.midi_state.held[voice_idx]) == nil
-          and not S.lib.notes.plays_to_end(voice_idx) then
+    if next(stop_pending) == nil then return end
+    for voice_idx in pairs(stop_pending) do
+      if not (S.voices[voice_idx].active and M.note_off_mode() == "release"
+          and next(S.midi_state.held[voice_idx]) == nil) then
+        stop_pending[voice_idx] = nil
+      elseif not S.lib.notes.plays_to_end(voice_idx) then
+        stop_pending[voice_idx] = nil
         midi_note_off_for(voice_idx)
       end
     end
+  end)
+  S.register_voice_stop(function(voice_idx) stop_pending[voice_idx] = nil end)
+  S.register_grain_restart(function(voice_idx)
+    if not S.voices[voice_idx].active then stop_pending[voice_idx] = nil end  -- a start
   end)
 
   -- Whether a note is no slice of a voice that takes slice notes: it does
@@ -380,6 +392,7 @@ return function(S)
     for _, voice_idx in ipairs(targets) do
       if next(S.midi_state.held[voice_idx]) == nil then S.lib.notes.release_owner(voice_idx, MIDI.owner) end
       S.midi_state.held[voice_idx][key] = true
+      stop_pending[voice_idx] = nil  -- a key down: its own lift decides again
       midi_note_on(voice_idx, note, velocity, channel, raw)
     end
   end

@@ -1725,6 +1725,64 @@ test("a one-shot slice's key lift in release mode leaves it playing to its end",
   assert_equal(S.lib.notes.held(1), 0, "latch: the played-out slice holds nothing")
 end)
 
+-- 2b's second review, NB1: release mode's stop at the last key never hits a
+-- voice something restarts within a step; only a stop a note playing to its
+-- end held back is done later, whichever owner's note ends last
+test("a release-mode voice restarted right after its last key stopped it keeps running", function()
+  for _, restart in ipairs({ "K3", "pattern step" }) do
+    for _, kind in ipairs({ "synth", "slice" }) do
+      local context, S
+      if kind == "slice" then context, S = sliced_voice(2) else context = load_strata(); finish_startup(context); S = local_value("S") end
+      params:set("midi_note_off", 2)
+      if restart == "pattern step" then S.patterns[1][1] = 15 end
+      press(context, 1, kind == "slice" and 36 or 60)
+      local where = kind .. ", " .. restart
+      assert_true(not S.voices[1].active, where .. ": the last key stopped the voice")
+      if restart == "K3" then
+        show_page("MAIN"); S.lib.ui_keys.select_voice_by(1 - S.selected_voice)
+        S.lib.pages_main.start_stop_selected_voice()
+      else
+        pattern_clock_start()
+      end
+      assert_true(S.voices[1].active, where .. ": restarted")
+      lfo_step(context, 2)
+      assert_true(S.voices[1].active, where .. ": still running two LFO steps later")
+      if restart == "pattern step" then pattern_clock_stop() end
+    end
+  end
+end)
+
+test("a release-mode voice held back by another owner's one-shot slice stops when the last ends", function()
+  local context, S = sliced_voice(3)
+  local scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return fraction * 2 end  -- a quarter: 0.5 s
+  params:set("midi_note_off", 2)
+  note_on(context, 1, 36)
+  context.clock.run_for(0.3)
+  assert_equal(S.lib.slices.play(1, 2, { owner = "grid", key = 102, velocity = 0.5 }), 2, "a grid key's slice, later")
+  note_off(context, 1, 36)
+  assert_true(S.voices[1].active, "held back: both play to their ends")
+  context.clock.run_for(0.25)
+  assert_true(S.lib.notes.find(1, "midi", key_of(1, 36)) == nil, "MIDI's slice played out")
+  assert_true(S.voices[1].active, "the grid's slice still plays")
+  context.clock.run_for(0.3)
+  assert_true(not S.voices[1].active, "stopped once the grid's slice ended too")
+  -- a key down meanwhile cancels the deferred stop
+  context, S = sliced_voice(2)
+  scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return fraction * 2 end
+  params:set("midi_note_off", 2)
+  note_on(context, 1, 36); note_off(context, 1, 36)
+  note_on(context, 1, 37)
+  context.clock.run_for(1)
+  assert_true(S.voices[1].active, "a key down: the voice runs while it is held")
+  note_off(context, 1, 37)
+  context.clock.run_for(1)
+  assert_true(not S.voices[1].active, "its lift, then its slice's end, stop it")
+end)
+
 -- 2b's review, the controller's ruling: the note hooks' heard hears every
 -- MIDI note a voice receives, a note outside its slices included, and starts nothing
 test("the heard note hook hears every note a voice receives, outside its slices too", function()
