@@ -275,7 +275,8 @@ var checkRollbackPolls = {
 // start (voiceOn on a stopped voice, a releasing one included), a retrigger
 // (of a valid voice, running or not) and an extra note that sounds
 // (extraNoteOn, where it opens the step gate: a start or a re-strike), each
-// once per area, in ascending order, with the voice and the kind. A running
+// once per area, in ascending order, with the voice and the kind, a start
+// once the voice runs (after voiceOn's bundle). A running
 // voice's voiceOn, a refused extra note (the pool full, the voice stopped)
 // and an invalid voice tell nothing. Two check-only areas between the rings
 // (70) and the scale (80), at orders no other check uses, are put into
@@ -283,8 +284,10 @@ var checkRollbackPolls = {
 // areas have no hook: the checks above and every other area play as before)
 var checkVoiceHit = {
     var voice = 3, calls = List.new, areas = engine.instVarAt(\areas), failed = List.new;
-    var hook = { arg order; { arg hitVoice, kind; calls.add([order, hitVoice, kind]) } };
-    var both = { arg kind; [[76, voice, kind], [77, voice, kind]] };
+    // each call records whether the voice runs as the hook hears it: true at
+    // \start proves the hit comes after voiceOn's bundle (gateVoice)
+    var hook = { arg order; { arg hitVoice, kind; calls.add([order, hitVoice, kind, engine.voiceRunning(hitVoice)]) } };
+    var both = { arg kind, running = true; [[76, voice, kind, running], [77, voice, kind, running]] };
     var expect = { arg what, expected; var got = calls.asArray; calls.clear; if (got != expected) { failed.add([what, got]) } };
     engine.instVarPut(\areas, areas.select({ arg area; area[\order] < 76 })
         ++ [(name: \checkHitFirst, order: 76, voiceHit: hook.(76)), (name: \checkHitSecond, order: 77, voiceHit: hook.(77))]
@@ -308,7 +311,7 @@ var checkVoiceHit = {
         command.(\noteOn, voice, 2, 67.0, 392.0, 1.5, 0.8);
         expect.(\noteVoiceStopped, []);
         command.(\retrigger, voice, 0.8);
-        expect.(\retriggerStopped, both.(\retrigger));
+        expect.(\retriggerStopped, both.(\retrigger, false));
         command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
         expect.(\startReleasing, both.(\start));
         command.(\voiceOn, 99, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
