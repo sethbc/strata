@@ -80,7 +80,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 108 | load the matrix's routings from data/strata/matrix.data (`START_ORDER.matrix_load`; a missing file loads them empty, one it cannot use is set aside, an unknown source key or destination id is kept with a console line), then redraw the screen (3.4) | `lib/matrix.lua` |
 | 109 | read the note pool from data/strata/notes.data (`START_ORDER.notes_load`; a missing file leaves the tier's default, one it cannot use too, with a console line), send it (`setNotePool`) and join the expression flush to the LFO clock's step hooks (3.5) | `lib/notes.lua` |
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
-| 111 | load the random sequences' values from data/strata/sequences.data (`START_ORDER.sequences_load`; with no file it can use, every value is drawn, one it cannot use is set aside), then redraw the screen (3.7) | `lib/random_sequences.lua` |
+| 111 | load the random sequences' values from data/strata/sequences.data (`START_ORDER.sequences_load`; with no file it can use, every value is drawn and the timed write started, one it cannot use is set aside), then redraw the screen (3.7) | `lib/random_sequences.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 125 | check every global LFO destination's param, then start the LFO clock (`S.lfo_clock`, 48 Hz, 3.4) | `lib/lfos.lua` |
 | 130 | start the frame clock (`start_frame_clock`) | `lib/ui/frame.lua` |

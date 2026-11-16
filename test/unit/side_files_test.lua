@@ -169,6 +169,9 @@ test("side files: the live file is loaded at the start, then written once per bu
   local context, S = loaded()
   local files, state = probe(S)
   local path = context.data_dir .. "strata/probe.data"
+  -- a first start writes the random sequences' draw (3.7) into the live
+  -- folder: take it away, so the probe's timed write has to make it
+  h.remove_tree(context.data_dir .. "strata/")
   assert_true(not util.file_exists(context.data_dir .. "strata/"), "a fresh data folder: the live folder is made")
   local count = counting_writes(S, path)
   local ok, problem = pcall(function()
