@@ -303,8 +303,8 @@
             cutoff = cutoff * LFNoise1.kr(0.2).range(0.5, 2);
             // res rises with resonance, as the voice filter's and the master
             // filter's do (#314): 0.1 (flat) to 1 (sharpest) plays the
-            // filter's rq from 1 down to 0.1, rq = 1.1 - res (Lua's
-            // PULSE_RES.mirror, which mirrors older scenes and PSETs: the
+            // filter's rq from 1 down to 0.1, rq = 1.1 - res (the 1.1 is
+            // Lua's PULSE_RES.mirror, which a test compares: the
             // default 0.8 is rq 0.3, 3.2's default). The clip keeps a stray value
             // from reaching the filter as an rq of 0 or less
             sig = RLPF.ar(sig, cutoff.clip(100, 8000), 1.1 - res.clip(0.1, 1));

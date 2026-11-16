@@ -126,8 +126,8 @@
         }).add;
     }
 
-    // The rate of a buffer grain synth's position scan (valid-region
-    // lengths per second): stopped while frozen
+    // The rate of a buffer grain synth's position scan (loop lengths per
+    // second): stopped while frozen
     scanRate { arg bufScan, freeze;
         ^bufScan * (1 - freeze)
     }

@@ -132,9 +132,9 @@
         }).add;
 
         // Granular processor for a buffer slot (bufnumL/R). bufPos (0-1) and
-        // the scan are fractions of the valid region (bufFrames), so a short
-        // sample uses the whole position range; bufScan moves the position
-        // in valid-region lengths per second and wraps. No grain reads past
+        // the scan are fractions of the voice's loop (by default the valid
+        // region, bufFrames, so a short sample uses the whole range); bufScan
+        // moves the position in loop lengths per second and wraps. No grain reads past
         // the valid region (slotGrainPos and the duration cap in
         // slotGrainReader). bufRateScale is the content's sample rate over
         // the server's (what BufRateScale.kr would report), tracked by the

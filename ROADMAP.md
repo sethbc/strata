@@ -108,7 +108,7 @@ Added 2026-11-11, at the maintainer's request. It makes rhythmic material playab
 
 ### Buffers that follow the tempo
 
-- A scan measured in beats or in seconds. Today `bufScan` moves in lengths of the valid region per second, so a 300 s slot scans 300 s a second at scan 1 (the candidate `docs/status.md` has carried since 3.3); loop regions are the answer until this ships.
+- A scan measured in beats or in seconds. Today `bufScan` moves in loop lengths per second, so a voice whose loop is a whole 300 s slot scans 300 s a second at scan 1 (the candidate `docs/status.md` has carried since 3.3); loop regions are the answer until this ships.
 - A slot can carry a tempo (set by hand, or from its length as a count of bars), so its loop region, its slices and its scan line up with the clock, and a loop recorded at one tempo follows a tempo change by its grain rate or by its scan, the design choosing which.
 
 ### Trig conditions
