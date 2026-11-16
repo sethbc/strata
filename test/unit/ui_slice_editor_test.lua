@@ -4,7 +4,7 @@
 -- picks, nudges, adds and deletes a file's markers and edits the file's
 -- mode, amount, tempo, bars, key and normalize. The slices and the file's
 -- settings are S.lib.slices' and S.lib.samples' (packages 2b and 2d): the
--- tests give them doubles with the functions the editor consumes
+-- tests set doubles of the functions the editor consumes (h.slice_doubles)
 -- Run alone: lua test/run.lua ui_slice_editor
 
 return function(h)
@@ -12,108 +12,12 @@ local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
 local load_strata, local_value, next_frame, finish_startup = h.load_strata, h.local_value, h.next_frame, h.finish_startup
 local show_page, assert_screen_layout, hint_text, tap = h.show_page, h.assert_screen_layout, h.hint_text, h.tap
 
--- Doubles of S.lib.slices, S.lib.samples and S.lib.waveforms.frames (and
--- rate), plugged before init. A slot with audio (S.buffers[slot].seconds
--- above 0) has a settings record, made at its first read; its frames are
--- its seconds at 48 kHz. fake.log lists the calls the editor made
-local function plug_doubles(fake)
-  return function()
-    local S = local_value("S")
-    fake.store, fake.markers, fake.analyzing, fake.playing, fake.listeners = {}, {}, {}, {}, {}
-    fake.log, fake.made = {}, 0
-    local function seconds(slot) return S.buffers[slot] and S.buffers[slot].seconds or 0 end
-    local function frames(slot) return seconds(slot) > 0 and math.floor(seconds(slot) * 48000 + 0.5) or nil end
-    local function settings(slot)
-      if seconds(slot) <= 0 then return nil end
-      fake.store[slot] = fake.store[slot]
-        or { mode = 1, count = 8, sensitivity = 50, normalize = false, edited = false }
-      return fake.store[slot]
-    end
-    local function log(text) table.insert(fake.log, text) end
-    local function copy(list)
-      if not list then return nil end
-      local out = {}
-      for index, value in ipairs(list) do out[index] = value end
-      return out
-    end
-    local function edited(slot) settings(slot).edited = true end
-    S.lib.slices = {
-      SLICES = { max = 64 },
-      count = function(slot) return fake.markers[slot] and #fake.markers[slot] or 0 end,
-      markers = function(slot) return copy(fake.markers[slot]) end,
-      region = function() return nil end,
-      add_marker = function(slot, frame)
-        log("add " .. slot .. " " .. frame)
-        local list = fake.markers[slot] or { 0 }
-        if #list >= 64 then return false end
-        table.insert(list, frame); table.sort(list)
-        fake.markers[slot] = list
-        edited(slot)
-        return true
-      end,
-      delete_marker = function(slot, index)
-        log("delete " .. slot .. " " .. index)
-        if index <= 1 then return false end
-        table.remove(fake.markers[slot], index)
-        edited(slot)
-        return true
-      end,
-      nudge_marker = function(slot, index, by)
-        log("nudge " .. slot .. " " .. index .. " " .. by)
-        fake.markers[slot][index] = fake.markers[slot][index] + by
-        edited(slot)
-        return true
-      end,
-      make = function(slot)
-        fake.made = fake.made + 1
-        local record = settings(slot)
-        record.edited = false
-        if record.mode == 2 then
-          local list, total = {}, frames(slot)
-          for k = 1, record.count do list[k] = math.floor((k - 1) * total / record.count) end
-          fake.markers[slot] = list
-        elseif record.mode == 3 then
-          fake.analyzing[slot] = true
-        else
-          fake.markers[slot] = nil
-        end
-      end,
-      analyzing = function(slot) return fake.analyzing[slot] == true end,
-      playing = function(voice) return fake.playing[voice] or {} end,
-    }
-    S.lib.samples = {
-      SAMPLES = { tempo_min = 20, tempo_max = 300, modes = { "off", "equal", "transients" } },
-      settings = settings,
-      set = function(slot, field, value)
-        log("set " .. slot .. " " .. field .. " " .. tostring(value))
-        settings(slot)[field] = value
-      end,
-      bars = function(slot)
-        local tempo = settings(slot).tempo
-        return tempo and seconds(slot) * tempo / 240 or nil
-      end,
-      set_bars = function(slot, bars)
-        local tempo = bars * 240 / seconds(slot)
-        if tempo < 20 or tempo > 300 then return false end
-        settings(slot).tempo = tempo
-        return true
-      end,
-      -- fake.gain, else min(16, 1 / the largest peak), as 2d works it out
-      gain = function(slot)
-        local record = settings(slot)
-        if not (record and record.normalize) then return 1 end
-        if fake.gain then return fake.gain end
-        local peak = 0
-        for _, value in ipairs(S.lib.waveforms.peaks(slot) or {}) do peak = math.max(peak, value) end
-        return (peak > 0 and peak < 1) and math.min(16, 1 / peak) or 1
-      end,
-      on_bind = function(fn) table.insert(fake.listeners, fn) end,
-    }
-    S.lib.waveforms.frames = frames
-    S.lib.waveforms.rate = function(slot) return frames(slot) and 48000 or nil end
-    -- the store's bind and unbind, as 2d's tell its listeners
-    function fake.bind(slot) for _, fn in ipairs(fake.listeners) do fn(slot) end end
-  end
+-- The editor's doubles (h.slice_doubles' editor ones: the slot's
+-- markers, settings, frames and rate, and a log of the edits made), set as
+-- fields of the real S.lib.slices, S.lib.samples and S.lib.waveforms after
+-- startup
+local function plug_doubles()
+  return h.slice_doubles(local_value("S"), nil, { editor = true })
 end
 
 -- A slot holding `seconds` of audio, as the engine reports it
@@ -126,9 +30,9 @@ end
 -- A started script with the doubles, BUFFER shown, slot 1 holding 2 s
 -- (96000 frames) cut at {0, 12000, 24000, 48000} in equal mode
 local function loaded()
-  local fake = {}
-  local context = load_strata({ before_init = plug_doubles(fake) })
+  local context = load_strata()
   finish_startup(context)
+  local fake = plug_doubles()
   local S = local_value("S")
   show_page("BUFFER")
   with_audio(context, 1, 2)
@@ -493,7 +397,7 @@ test("the editor draws the waveform at 2 px, its markers above it and the playin
 end)
 
 test("the editor lays out in each mode, with 1, 12 and 64 markers, and with each row picked", function()
-  load_strata({ before_init = plug_doubles({}) })
+  load_strata()
   local S = local_value("S")
   local BUFFER = S.constants.UI_PAGES.index.BUFFER
   local states = {}
@@ -508,8 +412,9 @@ test("the editor lays out in each mode, with 1, 12 and 64 markers, and with each
   for _, name in ipairs(wanted) do assert_true(listed[name], "a layout state " .. name) end
   for _, entry in ipairs(states) do
     for _, alt in ipairs({ false, true }) do
-      local context = load_strata({ before_init = plug_doubles({}) })
+      local context = load_strata()
       finish_startup(context)
+      plug_doubles()
       show_page("BUFFER")
       local state = local_value("S").registry.pages[BUFFER].layout_states[entry.index]
       state.setup(context)

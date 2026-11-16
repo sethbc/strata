@@ -2021,42 +2021,29 @@ test("plain K3 shows no hold hint", function()
   key(3, 0)
 end)
 
--- Doubles of what the slices field and the marks read (packages 2b and
--- 2d): a slot's markers, the settings' mode and the frames (its seconds at
--- 48 kHz), plugged before init
-local function slice_doubles(fake)
-  return function()
-    local S = local_value("S")
-    local function seconds(slot) return S.buffers[slot] and S.buffers[slot].seconds or 0 end
-    S.lib.slices = {
-      SLICES = { max = 64 },
-      count = function(slot) return fake.markers[slot] and #fake.markers[slot] or 0 end,
-      markers = function(slot) return fake.markers[slot] end,
-    }
-    S.lib.samples = {
-      SAMPLES = { tempo_min = 20, tempo_max = 300, modes = { "off", "equal", "transients" } },
-      settings = function(slot)
-        if seconds(slot) <= 0 then return nil end
-        return { mode = fake.modes[slot] or 1 }
-      end,
-      on_bind = function() end,
-    }
-    S.lib.waveforms.frames = function(slot) return seconds(slot) > 0 and seconds(slot) * 48000 or nil end
-  end
+-- A started script on BUFFER with the doubles of what the slices field
+-- and the marks read (h.slice_doubles' editor ones: a slot's markers, its
+-- settings' mode and the frames, its seconds at 48 kHz), set as fields of
+-- the real modules
+local function with_slice_doubles()
+  local context = load_strata(); finish_startup(context)
+  local fake = h.slice_doubles(local_value("S"), nil, { editor = true })
+  show_page("BUFFER")
+  return context, fake
 end
 
 test("BUFFER's slices field shows the mode and the count, -- for an empty slot", function()
-  local fake = { markers = {}, modes = {} }
-  local context = load_strata({ before_init = slice_doubles(fake) }); finish_startup(context); show_page("BUFFER")
+  local context, fake = with_slice_doubles()
+  local S = local_value("S")
   to_field(12)
   redraw()
   assert_equal(field_named(context, "slices").value, "--", "an empty slot")
   assert_true(field_named(context, "slices").cursor)
   load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 2))
   redraw(); assert_equal(field_named(context, "slices").value, "off", "audio, no slices")
-  fake.modes[1], fake.markers[1] = 2, { 0, 1, 2, 3 }
+  S.lib.samples.settings(1).mode, fake.markers[1] = 2, { 0, 1, 2, 3 }
   redraw(); assert_equal(field_named(context, "slices").value, "eq 4")
-  fake.modes[1] = 3
+  S.lib.samples.settings(1).mode = 3
   fake.markers[1] = {}
   for k = 1, 64 do fake.markers[1][k] = (k - 1) * 1000 end
   redraw(); assert_equal(field_named(context, "slices").value, "tr 64")
@@ -2066,8 +2053,7 @@ test("BUFFER's slices field shows the mode and the count, -- for an empty slot",
 end)
 
 test("BUFFER's waveform marks slice starts", function()
-  local fake = { markers = {}, modes = {} }
-  local context = load_strata({ before_init = slice_doubles(fake) }); finish_startup(context); show_page("BUFFER")
+  local context, fake = with_slice_doubles()
   local S = local_value("S")
   local page = local_value("BUFFER_PAGE")
   local folder = S.lib.scenes.scene_data_dir
@@ -2089,7 +2075,7 @@ test("BUFFER's waveform marks slice starts", function()
     return table.concat(xs, " ")
   end
   assert_equal(marks(), "", "no slices: no marks")
-  fake.modes[1], fake.markers[1] = 2, { 0, 24000, 48000, 72000 }
+  S.lib.samples.settings(1).mode, fake.markers[1] = 2, { 0, 24000, 48000, 72000 }
   assert_equal(marks(), "60 76 92 108", "a pixel at y 10 over each column holding a start")
   fake.markers[1] = { 0, 100, 24000 }
   assert_equal(marks(), "60 76", "two starts in one column: one pixel")

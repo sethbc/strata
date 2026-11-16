@@ -1649,39 +1649,21 @@ test("MOD's settings view: ring 1 the row, ring 2 the value, rings 3 and 4 dark"
 end)
 
 -- The slice editor's rings (lib/arc/buffer.lua). Its slices and the
--- file's settings are packages 2b's and 2d's: doubles with the functions
--- the editor reads, plugged before init; slot 1 holds 2 s (96000 frames)
--- in four equal slices at 120 BPM
+-- file's settings are packages 2b's and 2d's: doubles of the functions the
+-- editor reads (h.slice_doubles' editor ones), set as fields of the real
+-- modules after startup; slot 1 holds 2 s (96000 frames) in four equal
+-- slices at 120 BPM
 test("with the editor open the four rings pick, nudge, turn the amount and the tempo", function()
-  local fake = { markers = { 0, 12000, 24000, 48000 }, nudges = {}, made = 0,
-    settings = { mode = 2, count = 4, sensitivity = 50, tempo = 120, normalize = false, edited = false } }
-  local context = load_strata({ before_init = function()
-    local S = local_value("S")
-    local function audio(slot) return slot == 1 and (S.buffers[1].seconds or 0) > 0 end
-    S.lib.slices = {
-      SLICES = { max = 64 },
-      count = function(slot) return audio(slot) and #fake.markers or 0 end,
-      markers = function(slot) return audio(slot) and fake.markers or nil end,
-      nudge_marker = function(_, index, by) table.insert(fake.nudges, index .. " " .. by) end,
-      make = function() fake.made = fake.made + 1 end,
-      analyzing = function() return false end,
-      playing = function() return {} end,
-    }
-    S.lib.samples = {
-      SAMPLES = { tempo_min = 20, tempo_max = 300, modes = { "off", "equal", "transients" } },
-      settings = function(slot) return audio(slot) and fake.settings or nil end,
-      set = function(_, field, value) fake.settings[field] = value end,
-      gain = function() return 1 end,
-      on_bind = function() end,
-    }
-    S.lib.waveforms.frames = function(slot) return audio(slot) and 96000 or nil end
-    S.lib.waveforms.rate = function(slot) return audio(slot) and 48000 or nil end
-  end })
+  local context = load_strata()
   finish_startup(context)
+  local fake = h.slice_doubles(local_value("S"), nil, { editor = true })
   local device = context.arc.plug(1)
   local S = local_value("S")
   show_page("BUFFER")
   load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 2))
+  fake.markers[1] = { 0, 12000, 24000, 48000 }
+  local settings = S.lib.samples.settings(1)
+  settings.mode, settings.count, settings.tempo = 2, 4, 120
   local editor = S.lib.ui_slice_editor
   assert_true(editor.open(1))
   local position = params:get("v1_buf_pos")
@@ -1693,21 +1675,23 @@ test("with the editor open the four rings pick, nudge, turn the amount and the t
   assert_equal(params:get("v1_buf_pos"), position, "BUFFER's ring 1 is not reached")
   -- ring 2 nudges it, a millisecond a tick, with ALT a tenth
   context.arc.turn(1, 2, 1)
-  assert_equal(fake.nudges[#fake.nudges], "2 48")
+  assert_equal(fake.log[#fake.log], "nudge 1 2 48")
   key(1, 1); context.arc.turn(1, 2, -1); key(1, 0)
-  assert_equal(fake.nudges[#fake.nudges], "2 -5", "with ALT 4.8 frames, rounded")
+  assert_equal(fake.log[#fake.log], "nudge 1 2 -5", "with ALT 4.8 frames, rounded")
   -- ring 3 turns the amount (count 2-64 in a turn), then makes the slices
   context.arc.turn(1, 3, 17)
-  assert_equal(fake.settings.count, 5, "17 ticks: one count of 62 in 1024 ticks")
+  assert_equal(settings.count, 5, "17 ticks: one count of 62 in 1024 ticks")
   assert_equal(fake.made, 1, "the slices made again")
   -- ring 4 the tempo, 20-300 in a turn, in 0.1 steps
   context.arc.turn(1, 4, 11)
-  assert_near(fake.settings.tempo, 123, 1e-9, "11 ticks: 30 steps of 0.1")
+  assert_near(settings.tempo, 123, 1e-9, "11 ticks: 30 steps of 0.1")
   -- the rings
   arc_redraw()
   local turn = math.pi * 2
-  assert_near(device.segments[1].to, 1 / 3 * turn, 1e-9, "ring 1: marker 2 of 4")
-  assert_near(device.segments[2].to, 12000 / 96000 * turn, 1e-6, "ring 2: the marker's place in the slot")
+  -- (count 5 made five equal slices: markers 0, 19200, ...)
+  assert_equal(table.concat(fake.markers[1], " "), "0 19200 38400 57600 76800")
+  assert_near(device.segments[1].to, 1 / 4 * turn, 1e-9, "ring 1: marker 2 of 5")
+  assert_near(device.segments[2].to, 19200 / 96000 * turn, 1e-6, "ring 2: the marker's place in the slot")
   assert_near(device.segments[3].to, 3 / 62 * turn, 1e-9, "ring 3: count 5 of 2-64")
   assert_near(device.segments[4].to, 103 / 280 * turn, 1e-9, "ring 4: 123 BPM of 20-300")
   -- closed: BUFFER's rings again

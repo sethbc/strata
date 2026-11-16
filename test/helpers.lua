@@ -338,6 +338,102 @@ local function shown_step_editor()
   return editor.voice .. " " .. editor.step .. " " .. editor.port
 end
 
+-- The slice editor's (lib/ui/slice_editor.lua, design §3.7) on top: a
+-- slot with audio (S.buffers[slot].seconds above 0) has a settings record
+-- (doubles.store[slot], made at its first read: off, count 8, sensitivity
+-- 50); its frames are its seconds at 48 kHz; its slices are
+-- doubles.markers[slot] (count reads them); doubles.analyzing[slot] and
+-- doubles.playing[voice] are what analyzing and playing report (playing
+-- adds the sounding keys'); doubles.gain, when set, is a normalized slot's
+-- gain; doubles.log lists the edits made, doubles.made the makes, and
+-- doubles.bind(slot) tells the on_bind listeners, as 2d's store does
+local function slice_editor_doubles(S, doubles)
+  doubles.store, doubles.markers, doubles.analyzing, doubles.playing = {}, {}, {}, {}
+  doubles.log, doubles.made = {}, 0
+  local slices, samples, waveforms = S.lib.slices, S.lib.samples, S.lib.waveforms
+  local function seconds(slot) return S.buffers[slot] and S.buffers[slot].seconds or 0 end
+  local function frames(slot) return seconds(slot) > 0 and math.floor(seconds(slot) * 48000 + 0.5) or nil end
+  local function log(text) table.insert(doubles.log, text) end
+  local function copy(list)
+    if not list then return nil end
+    local out = {}
+    for index, value in ipairs(list) do out[index] = value end
+    return out
+  end
+  function samples.settings(slot)
+    if seconds(slot) <= 0 then return nil end
+    doubles.store[slot] = doubles.store[slot]
+      or {mode = 1, count = 8, sensitivity = 50, normalize = false, edited = false}
+    return doubles.store[slot]
+  end
+  local function edited(slot) samples.settings(slot).edited = true end
+  function slices.count(slot) return doubles.markers[slot] and #doubles.markers[slot] or 0 end
+  function slices.markers(slot) return copy(doubles.markers[slot]) end
+  function slices.add_marker(slot, frame)
+    log("add " .. slot .. " " .. frame)
+    local list = doubles.markers[slot] or {0}
+    if #list >= slices.SLICES.max then return false end
+    table.insert(list, frame); table.sort(list)
+    doubles.markers[slot] = list
+    edited(slot)
+    return true
+  end
+  function slices.delete_marker(slot, index)
+    log("delete " .. slot .. " " .. index)
+    if index <= 1 then return false end
+    table.remove(doubles.markers[slot], index)
+    edited(slot)
+    return true
+  end
+  function slices.nudge_marker(slot, index, by)
+    log("nudge " .. slot .. " " .. index .. " " .. by)
+    doubles.markers[slot][index] = doubles.markers[slot][index] + by
+    edited(slot)
+    return true
+  end
+  function slices.make(slot)
+    doubles.made = doubles.made + 1
+    local record = samples.settings(slot)
+    record.edited = false
+    if record.mode == 2 then
+      local list, total = {}, frames(slot)
+      for k = 1, record.count do list[k] = math.floor((k - 1) * total / record.count) end
+      doubles.markers[slot] = list
+    elseif record.mode == 3 then
+      doubles.analyzing[slot] = true
+    else
+      doubles.markers[slot] = nil
+    end
+  end
+  function slices.analyzing(slot) return doubles.analyzing[slot] == true end
+  function samples.set(slot, field, value)
+    log("set " .. slot .. " " .. field .. " " .. tostring(value))
+    samples.settings(slot)[field] = value
+  end
+  function samples.bars(slot)
+    local tempo = samples.settings(slot).tempo
+    return tempo and seconds(slot) * tempo / 240 or nil
+  end
+  function samples.set_bars(slot, bars)
+    local tempo = bars * 240 / seconds(slot)
+    if tempo < samples.SAMPLES.tempo_min or tempo > samples.SAMPLES.tempo_max then return false end
+    samples.settings(slot).tempo = tempo
+    return true
+  end
+  -- doubles.gain, else min(16, 1 / the largest peak), as 2d works it out
+  function samples.gain(slot)
+    local record = samples.settings(slot)
+    if not (record and record.normalize) then return 1 end
+    if doubles.gain then return doubles.gain end
+    local peak = 0
+    for _, value in ipairs(waveforms.peaks(slot) or {}) do peak = math.max(peak, value) end
+    return (peak > 0 and peak < 1) and math.min(samples.SAMPLES.max_gain, 1 / peak) or 1
+  end
+  waveforms.frames = frames
+  function waveforms.rate(slot) return frames(slot) and 48000 or nil end
+  function doubles.bind(slot) for _, fn in ipairs(doubles.binds) do fn(slot) end end
+end
+
 -- 3.7's slice rows (lib/positions.lua, design §10): doubles for the three
 -- modules the rows consume, with exactly the functions they use, set as
 -- fields of each module's table after startup (so they replace the real
@@ -348,11 +444,11 @@ end
 -- {voice, n, note}, offs {voice, owner, key}; a played slice sounds
 -- (sounding[key]) until its key's note_off, or, while `pass` is a number
 -- (one shot with a moving scan), until the test ends it; binds holds each
--- on_bind listener
-local function slice_doubles(S, counts)
+-- on_bind listener. options.editor adds the slice editor's doubles
+-- (slice_editor_doubles, above)
+local function slice_doubles(S, counts, options)
   local doubles = {counts = counts or {}, takes = {}, plays = {}, offs = {}, sounding = {}, pass = nil, binds = {}}
-  local slices = S.lib.slices or {}
-  S.lib.slices = slices
+  local slices = S.lib.slices
   function slices.count(slot) return doubles.counts[slot] or 0 end
   function slices.takes_notes(voice_idx)
     return doubles.takes[voice_idx] == true and voice_uses_buffer(voice_idx) and slices.count(voice_buffer_slot(voice_idx)) > 0
@@ -372,15 +468,15 @@ local function slice_doubles(S, counts)
     for _, sounding in pairs(doubles.sounding) do
       if sounding.voice == voice_idx then list[#list + 1] = sounding.n end
     end
+    if doubles.playing and doubles.playing[voice_idx] then
+      for _, n in ipairs(doubles.playing[voice_idx]) do list[#list + 1] = n end
+    end
     table.sort(list)
     return list
   end
-  local scan = S.lib.scan or {}
-  S.lib.scan = scan
-  function scan.pass_seconds(_, fraction) return doubles.pass and fraction * doubles.pass or nil end
-  local samples = S.lib.samples or {}
-  S.lib.samples = samples
-  function samples.on_bind(fn) table.insert(doubles.binds, fn) end
+  function S.lib.scan.pass_seconds(_, fraction) return doubles.pass and fraction * doubles.pass or nil end
+  function S.lib.samples.on_bind(fn) table.insert(doubles.binds, fn) end
+  if options and options.editor then slice_editor_doubles(S, doubles) end
   return doubles
 end
 
