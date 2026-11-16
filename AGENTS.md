@@ -139,7 +139,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 | `engine.voiceOff(voice)` | `"i"` | Stop a voice (release envelope) |
 | `engine.retrigger(voice, velocity)` | `"if"` | Accent a running voice at velocity 0-1 (Karplus re-plucks; one grain in triggered mode). Creates no nodes |
 | `engine.setVoiceParam(voice, param, value)` | `"isf"` | Set a synthesis param, or `bend` (MIDI pitchbend ratio) |
-| `engine.setGrainParam(voice, param, value)` | `"isf"` | Set a grain param (`envShape` index, `grainMode` 0 continuous / 1 triggered, `bufPos`, `freeze` 0/1, `freezeMode` 0 hold / 1 spectral, `t_scanReset` not stored, `scrubRate` and `scanHold` transient, ...) |
+| `engine.setGrainParam(voice, param, value)` | `"isf"` | Set a grain param (`envShape` index, `grainMode` 0 continuous / 1 triggered, `bufPos`, `freeze` 0/1, `freezeMode` 0 hold / 1 spectral, `t_scanReset` not stored, `scrubRate` and `scanHold` transient, `scanMode` 0 wrap / 1 bounce / 2 one shot, `regionStart` and `regionLength` 0-1, `followRate` 0.25-4, handler-only `rootNote`, ...) |
 | `engine.setMasterDrift(amount)` | `"f"` | Global tape drift |
 | `engine.setReverb(mix, size, damp)` | `"fff"` | Reverb mix 0-1, size, damping. `FreeVerb2` on standard, the FDN on high. Kept while bypassed |
 | `engine.setFilter(freq, res, type, mix)` | `"ffif"` | Master filter, on all three of its instances (dry, delay send, reverb send): 20-20000 Hz, res 0-1, type 0 LP / 1 HP / 2 BP, mix 0 = bypass |
@@ -165,8 +165,11 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 | `engine.noteOff(voice, slot, cut)` | `"iii"` | End voice 0-6's slot 0-7: cut 0 releases, 1 cuts (50 ms) |
 | `engine.noteExpression(voice, slot, bend, amp, position, size, main)` | `"iifffff"` | Voice 0-6's slot 0-7 expression: bend ratio 0.0625-16, amp 0-2, position, size and main -1..1 half ranges. Creates no node |
 | `engine.setNotePool(size)` | `"i"` | The extra notes all voices share, 0-16 (`notePoolMax`) |
+| `engine.noteRegion(voice, slot, start, length)` | `"iiff"` | Voice 0-6's extra slot 1-7: start and length 0-1 of the valid region (length 0 = the loop) |
+| `engine.syncScan(voice, phase)` | `"if"` | Voice 0-6's own scan phase, 0-2 passes |
+| `engine.setSlotGain(slot, gain)` | `"if"` | Slot 0-7's gain, 0-16 |
 
-**3.4's five fast-modulation and 3.5's four note commands** (the last nine rows; `docs/notes/engine/modulation.md`, `docs/notes/engine/notes.md`): each ignores an out-of-range index or a non-finite continuous argument with one console line, and clips its continuous arguments to the ranges above.
+**3.4's five fast-modulation, 3.5's four note and 3.7's three commands** (the last twelve rows; `docs/notes/engine/modulation.md`, `docs/notes/engine/notes.md`, `docs/notes/engine/positions.md`): each ignores an out-of-range index or a non-finite continuous argument with one console line, and clips its continuous arguments to the ranges above.
 
 **Polls** (engine → Lua) pack each report into one float, and Lua matches each report to the command it names: `docs/notes/engine/buffers.md` (Polls, The polls' encodings), `docs/notes/engine/record.md`, `docs/notes/lua/buffers.md` and `docs/notes/lua/record.md`.
 
@@ -184,7 +187,7 @@ The engine's (under docs/notes/engine/):
 - **`openedGate(gate)`** wraps every ASR gate; never `gate.max(...)`. `docs/notes/engine/lifecycle.md`
 - **Silent bus**: unrouted mod slots read `silentBus`, never control bus 0. `docs/notes/engine/voices.md`
 - **Limiter before the tanh saturator** in `\strataMaster`, never after it. `docs/notes/engine/effects.md`
-- **One grain path**: every grain synth is a `GrainBuf` pair built by `grainBody`, pitch is the grain rate, and it writes only its source kind's path (`voicePathBus`); no grain SynthDef has a delay line (`PitchShift`, `DelayC`), filter, send, mirror or voice-level amp, and its only gain is the note's: `noteAmp` and the note's accent. `docs/notes/engine/grains.md`
+- **One grain path**: every grain synth is a `GrainBuf` pair built by `grainBody`, pitch is the grain rate, and it writes only its source kind's path (`voicePathBus`); no grain SynthDef has a delay line (`PitchShift`, `DelayC`), filter, send, mirror or voice-level amp, and its only gains are the note's (`noteAmp` and its accent) and the slot's (`slotGain`). `docs/notes/engine/grains.md`
 - **Buffer and input sources have no voice synth**: their grain synth writes the voice's other path, which the stage mirrors to `granBuses[i]` so crossmod keeps working; the synth path never mirrors, and the synth-source grain synth keeps `pan` and `rateLevel` at 0. `docs/notes/engine/grains.md`, `docs/notes/engine/mix.md`
 - **One persistent stage per voice** (`\strataVoiceMix`, `effectKeys`, never re-gated), at the tail of its mix group, just before the voice's mod synth; in `processGroup`, synth-source grain synths sit at the head, buffer and input grain synths at the head of their voice's mix group. The level comes after the voice filter, on the other path only; inputs and filter outputs go through `zeroBadValues`. `docs/notes/engine/mix.md`
 - **Ring writers** run at the tail of `voiceGroup`, are persistent `effectKeys` and zero bad input; a ring grain reads behind the write head and never past the ring. `docs/notes/engine/rings.md`
@@ -271,7 +274,7 @@ How to run each check, what it needs and how CI runs them: `docs/checks.md`. How
 
 **Off-device checks** (run from the repo root before committing; CI runs all three):
 - `lua test/run.lua` and `luajit test/run.lua`: the behavior tests against norns stubs, one file per module under test/unit/; `lua test/run.lua <filter>` runs the files whose name contains `<filter>`. Run your module's file while you work and the whole suite before pushing. The run includes the sync check, the docs checks, the changelog fragment check and the module safety nets (`docs/notes/test-harness/run-and-helpers.md`); the engine stub rejects any `engine.*` call the engine source would not take (`docs/notes/test-harness/engine-stub-and-sync.md`).
-- `lua test/sync_check.lua`: every `engine.<name>(...)` call has a matching `addCommand`, and every command is used but those in its `PENDING_COMMANDS` (none today). Call engine commands only as `engine.<name>(...)`, never through another use of `engine`.
+- `lua test/sync_check.lua`: every `engine.<name>(...)` call has a matching `addCommand`, and every command is used but those in its `PENDING_COMMANDS` (3.7's, until their callers land). Call engine commands only as `engine.<name>(...)`, never through another use of `engine`.
 - `test/run_engine_check.sh [path/to/norns]`: compiles the engine against norns `sc/core` and runs the area files `test/engine_check/<area>.scd` on a silent scsynth. `STRATA_ENGINE_CHECK_AREAS=memory` runs only the areas it names: work on an area with its own run, and run all areas before pushing (CI's shards: about 19 minutes of areas, 20 in all). Give each worktree's runs their own `$STRATA_SC_PORT` (default 57110; avoid 57120 and the few above it). A new area adds its file, its name in `areaOrder` and its notes file.
 - `test/run_engine_check_313.sh [-n runs] [-j parallel] [-o log_dir] [-1] [-l] [-c] [path/to/norns]`: the engine check on SuperCollider 3.13 (norns' and CI's version) in Docker, as CI's shards (read from `.github/workflows/test.yml`); `-1` runs it in one sclang, `-l` prints the shards, `-c` classifies a log folder again (`docs/notes/test-harness/engine-check-runner.md`).
 - Page renders, on demand (`lua test/render_pages.lua <dir>`, then `python3 test/render_pages.py <dir> --font ~/src/norns/resources/norns.ttf`): look at them after a layout change (`docs/notes/lua/ui/layout-and-renders.md`).

@@ -1073,4 +1073,60 @@ checkLongSlots.value;
             values.collect(decode)));
     command.(\clearBuffer, slot); server.sync;
 }.value;
+
+// 3.7's slot gain (design §4.4): setSlotGain keeps a gain per slot (1 at
+// alloc), sends it to every live reader of the slot at once and to a reader
+// started later (slotLengthPairs); a load and a clear set it back to 1 with
+// the same send; the command clips the gain to 0-16, records it and ignores a
+// bad slot or a non-finite gain with one line
+{
+    var slot = 4, voice = 5, gains = engine.areaState[\buffers][\gains], grain = { engine.synths[engine.grainKey(voice)] };
+    var modulation = engine.areaState[\modulation], previous = modulation[\postIgnored], lines = List.new;
+    var atAlloc = gains.copy, live, started, loaded, cleared, received, ignored;
+    command.(\loadBuffer, slot, stereoPath, 0); h.awaitLoad(slot);
+    command.(\setGrainSource, voice, slot + 1);
+    command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
+    server.sync;
+    command.(\setSlotGain, slot, 2.5);
+    server.sync;
+    live = [gains[slot], getControl.(grain.value, \slotGain)];
+    command.(\setGrainSource, voice, 0);
+    command.(\setGrainSource, voice, slot + 1);
+    server.sync;
+    started = getControl.(grain.value, \slotGain);
+    check.((atAlloc == (1 ! engine.numBuffers)) and: { live[0] == 2.5 } and: { live[1].equalWithPrecision(2.5, 1e-6) }
+        and: { started.equalWithPrecision(2.5, 1e-6) },
+        "buffers: setSlotGain reaches a live reader and the reader a later start makes (at alloc %; kept and live %; a later start %)".format(
+            atAlloc, live, started));
+    command.(\loadBuffer, slot, stereoPath, 0);
+    loaded = [gains[slot]];
+    server.sync;
+    loaded = loaded ++ [getControl.(grain.value, \slotGain)];
+    h.awaitLoad(slot);
+    command.(\setSlotGain, slot, 3.0);
+    command.(\clearBuffer, slot);
+    server.sync;
+    cleared = [gains[slot], getControl.(grain.value, \slotGain)];
+    check.((loaded[0] == 1) and: { loaded[1] == 1 } and: { cleared[0] == 1 } and: { cleared[1] == 1 },
+        "buffers: a load and a clear set the slot's gain to 1 (load: kept and live %; clear %)".format(loaded, cleared));
+    command.(\setSlotGain, slot, 17.0);
+    received = [engine.areaState[\buffers][\received][\setSlotGain].copy, gains[slot]];
+    command.(\setSlotGain, slot, -1.0);
+    received = received ++ [gains[slot]];
+    modulation[\postIgnored] = { arg line; lines.add(line) };
+    {
+        [[\setSlotGain, 8, 1.0], [\setSlotGain, -1, 1.0], [\setSlotGain, slot, 0.0 / 0.0], [\setSlotGain, slot, inf]].do({ arg call;
+            command.(*call) });
+    }.protect({ modulation[\postIgnored] = previous });
+    ignored = (lines.size == 4) and: { lines.every({ arg line; line.beginsWith("strata: setSlotGain ignored: ") }) }
+        and: { engine.areaState[\buffers][\received][\setSlotGain] == [slot, 0.0] } and: { gains[slot] == 0 };
+    check.((received[0] == [slot, 16.0]) and: { received[1] == 16 } and: { received[2] == 0 } and: { ignored },
+        "buffers: setSlotGain clips its gain to 0-16, records it, and ignores a bad slot or gain with one line each (received %; lines %)".format(
+            received, lines.asArray));
+    command.(\setSlotGain, slot, 1.0);
+    command.(\voiceOff, voice);
+    h.stopAllVoices;
+    command.(\setGrainSource, voice, 0);
+    server.sync;
+}.value;
 }

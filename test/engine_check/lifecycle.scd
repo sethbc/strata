@@ -705,7 +705,8 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
     probe = Synth.before(engine.synths[engine.voiceMixKey(voice)], \strataCheckRegateScan,
         [\in, engine.voicePathBus(voice, 1).index, \peaks, posBus.index]);
     server.sync;
-    [\posSpread, 0, \panSpread, 0, \panJitter, 0, \bufPos, 0, \loopStart, 0, \loopLength, 1, \scrubRate, 0, \scanHold, 0, \bufScan, 0.5].pairsDo({ arg name, value;
+    // (3.7: the scan is a speed, ruling 29: 1 crosses the 2 s slot in 2 s, as 3.6's 0.5 loops a second did)
+    [\posSpread, 0, \panSpread, 0, \panJitter, 0, \bufPos, 0, \loopStart, 0, \loopLength, 1, \scrubRate, 0, \scanHold, 0, \bufScan, 1].pairsDo({ arg name, value;
         command.(\setGrainParam, voice, name, value)
     });
     command.(\setGrainSource, voice, slot + 1);

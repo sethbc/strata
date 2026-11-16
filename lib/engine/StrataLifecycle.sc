@@ -96,12 +96,13 @@
         ^[\bufnumL, buffersL[slot].bufnum, \bufnumR, buffersR[slot].bufnum] ++ this.slotLengthPairs(slot)
     }
 
-    // A slot's valid length and record head bus as strataGrainBuf controls,
-    // with its rate scale only when it holds audio: a slot that empties
-    // (clear, record) must not retune the grains still fading out (hasAudio's lag)
+    // A slot's valid length, record head bus and gain (3.7: the buffers
+    // area's slotGain) as strataGrainBuf controls, with its rate scale only
+    // when it holds audio: a slot that empties (clear, record) must not
+    // retune the grains still fading out (hasAudio's lag)
     slotLengthPairs { arg index;
         var frames = bufferFrames[index];
-        var head = [\recHeadBus, this.slotHeadBus(index).index];
+        var head = [\recHeadBus, this.slotHeadBus(index).index, \slotGain, this.slotGain(index)];
         ^(if (frames > 0) { [\bufFrames, frames, \bufRateScale, this.bufferRateScale(index)] } { [\bufFrames, 0] }) ++ head
     }
 

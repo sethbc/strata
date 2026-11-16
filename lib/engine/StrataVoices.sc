@@ -305,14 +305,17 @@
     // per-note controls, which the notes area sets on one note's synth
     // (noteGate, noteBend, noteAmp, noteMain, notePos, noteSize, noteRate
     // and the note's accent, t_accent), and the stage's t_gate (an extra
-    // note's gate trigger, ruling 54); with them the crossmod commands'
+    // note's gate trigger, ruling 54), and 3.7's slot gain (slotGain, a
+    // slot's: setSlotGain) and the scan's sync (t_scanSync, scanSyncPhase:
+    // syncScan); with them the crossmod commands'
     // (modSlotControls). The envelope times (attackTime, releaseTime) are
     // ordinary voice params. The Lua engine stub reads these lists and
     // rejects the same names.
     engineOwnedControls {
         ^#[\out, \gate, \kill, \t_trig, \velocity, \bufnumL, \bufnumR, \bufFrames, \bufRateScale, \recHeadBus,
             \bufL, \bufR, \phaseBus, \ringLevel, \rateLevel, \envBuf, \fastModIn,
-            \noteGate, \noteBend, \noteAmp, \noteMain, \notePos, \noteSize, \noteRate, \t_accent, \t_gate]
+            \noteGate, \noteBend, \noteAmp, \noteMain, \notePos, \noteSize, \noteRate, \t_accent, \t_gate,
+            \slotGain, \t_scanSync, \scanSyncPhase]
     }
 
     // The crossmod commands' controls, one of each per slot: modBus1,

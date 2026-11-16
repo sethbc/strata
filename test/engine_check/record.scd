@@ -1605,6 +1605,41 @@ test.("record: a command sent during a peaks refresh is handled within 2 ms", {
             latePings, latenesses.maxItem !? { arg value; (value * 1000).round(0.01) }, lateGaps, refreshGaps.size, (longestGap * 1000).round(0.01), refreshes));
 });
 
+// 3.7's slot gain (design §4.4): every kind of recording sets its slot's
+// gain back to 1 at its command (recordSlot's common reset), before any
+// delay, threshold or fade, and a live reader of the slot gets it at once:
+// a replace take, an overdub (feedback), a loop recording, a delayed and an
+// armed take
+{
+    var slot = 3, voice = 4, gains = engine.areaState[\buffers][\gains], results = List.new;
+    var path = h.tempDir +/+ "record-gain.wav";
+    // audio at the server's rate, so an overdub and a loop recording are playable
+    h.writeTestFile(path, sampleRate, (sampleRate * 0.5).round.asInteger, [0.1, 0.1]);
+    h.command(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
+    h.command(\setGrainSource, voice, slot + 1);
+    h.command(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
+    server.sync;
+    [[\replace, 0, 0, 0, 0], [\overdub, 0.5, 0, 0, 0], [\loop, 0, 1, 0, 0], [\delayed, 0, 0, 0, 0.3], [\armed, 0, 0, 0.5, 0]].do({ arg kind;
+        var kept, live;
+        h.command(\setSlotGain, slot, 4.0);
+        server.sync;
+        record.(slot, 0.2, 1.0, kind[1], 0, kind[3], kind[2], kind[4]);
+        kept = gains[slot];
+        server.sync;
+        live = engine.synths[engine.grainKey(voice)] !? { arg synth; h.getControl(synth, \slotGain) };
+        results.add([kind[0], kept, live]);
+        h.command(\stopRecord, slot);
+        waitDone.(slot, 2);
+    });
+    check.(results.every({ arg each; (each[1] == 1) and: { each[2] == 1 } }),
+        "record: every kind of recording sets the slot's gain to 1 at its command ([kind, kept, live]: %)".format(results.asArray));
+    h.command(\voiceOff, voice);
+    h.stopAllVoices;
+    h.command(\setGrainSource, voice, 0);
+    reset.(slot);
+    File.delete(path);
+}.value;
+
 guardBus.free;
 engine.recordStatePoll.stop;
 engine.takeWriteFailedPoll.stop;

@@ -27,19 +27,22 @@
     noteRateRootNote { ^60 }
 
     // The rate Lua's note_values gives a buffer or input voice's note
-    // (ruling 53): 2 ^ ((note - noteRateRootNote) / 12), clipped as noteOn
-    // clips a rate. A ring-stream note's kept rate is against the freeze
-    // reference instead, which only Lua holds, so a note that leaves the
-    // stream takes this from its kept note (ruling 46's note put to use)
-    absoluteNoteRate { arg note;
-        ^(2 ** ((note - this.noteRateRootNote) / 12)).clip(0.25, 4)
+    // (ruling 53): 2 ^ ((note - the voice's root note) / 12), clipped as
+    // noteOn clips a rate. The root note is the voice's rootNote grain param
+    // (3.7, design §4.3: the note a slot's file plays at rate 1), kept in
+    // areaState[\notes][\rootNotes], noteRateRootNote until Lua sends one. A
+    // ring-stream note's kept rate is against the freeze reference instead,
+    // which only Lua holds, so a note that leaves the stream takes this from
+    // its kept note (ruling 46's note put to use)
+    absoluteNoteRate { arg note, voice;
+        ^(2 ** ((note - areaState[\notes][\rootNotes][voice]) / 12)).clip(0.25, 4)
     }
 
     // A ring-stream note leaving the stream (restartNotes, notesUnfrozen):
     // its kept rate becomes its note's (absoluteNoteRate), so a later
     // restart on a buffer or the input plays its pitch there (#682)
-    leaveStream { arg record;
-        if (record[\kind] == \stream) { record[\rate] = this.absoluteNoteRate(record[\note]) };
+    leaveStream { arg voice, record;
+        if (record[\kind] == \stream) { record[\rate] = this.absoluteNoteRate(record[\note], voice) };
     }
 
     // The notes area (order 170): the last in alloc's order, the first in
@@ -49,7 +52,15 @@
             order: 170,
             allocState: { this.areaCall(\allocNoteState) },
             addCommands: { this.areaCall(\addNoteCommands) },
-            stop: { this.areaCall(\stopNotes) }
+            stop: { this.areaCall(\stopNotes) },
+            // 3.7's rootNote (design §4.3): handled here, kept per voice and
+            // sent to no synth (absoluteNoteRate reads it)
+            grainParamHandlers: (
+                rootNote: { arg voice, value;
+                    areaState[\notes][\rootNotes][voice] = value;
+                    true
+                }
+            )
         )
     }
 
@@ -58,11 +69,13 @@
     // slot 0's its kept expression and parked flag, each extra slot's
     // emptyNoteRecord), order (a counter: each started note and each cut
     // takes the next number, so the oldest is the lowest) and received (what
-    // each command last took, for the engine check)
+    // each command last took, for the engine check), and 3.7's rootNotes
+    // (per voice the note that plays rate 1: noteRateRootNote at alloc)
     allocNoteState {
         var state = areaState[\notes];
         state[\pool] = 0;
         state[\order] = 0;
+        state[\rootNotes] = Array.fill(numVoices, { this.noteRateRootNote });
         state[\slots] = numVoices.collect({ this.noteSlots.collect({ arg slot; this.emptyNoteRecord(slot) }) });
         state[\received] = IdentityDictionary.new;
     }
@@ -76,11 +89,13 @@
     // its state (\empty, \live, \releasing), its synth (live or releasing),
     // its cutting synth (in its kill fade), its kind (\voice, \buffer,
     // \input, \stream: what its synth is), its last noteOn's note, freq, rate and velocity, its
-    // kept expression, and the order it started at and its cutting synth's
+    // kept expression, 3.7's region ([start, length], noteRegion's; [0, 0]
+    // none, the voice's loop), and the order it started at and its cutting
+    // synth's
     emptyNoteRecord { arg slot;
         if (slot == 0) { ^(expression: this.neutralNoteExpression, parked: false, rate: 1) };
         ^(state: \empty, synth: nil, cutting: nil, kind: nil, note: 60, freq: 440, rate: 1, velocity: 1,
-            expression: this.neutralNoteExpression, order: 0, cutOrder: 0)
+            expression: this.neutralNoteExpression, region: [0, 0], order: 0, cutOrder: 0)
     }
 
     noteRecord { arg voice, slot; ^areaState[\notes][\slots][voice][slot] }
@@ -165,6 +180,13 @@
         ^pairs ++ [\notePos, expression[\position], \noteSize, expression[\size]]
     }
 
+    // 3.7: a grain note's region as its synth's controls (a voice synth note
+    // has none)
+    noteRegionPairs { arg record;
+        if (this.grainNoteKinds.includes(record[\kind]).not) { ^[] };
+        ^[\regionStart, record[\region][0], \regionLength, record[\region][1]]
+    }
+
     // The controls only one voice synth note takes, never a voice-wide
     // send's (design 3.5 §3.2): its freq, its velocity and accent, its note
     // controls
@@ -186,9 +208,11 @@
     // The controls only one note's synth takes, never a voice-wide send's
     // (design 3.5 §3.2): the note controls, its velocity and accent, and the
     // control that is its pitch: a buffer note's bufRate and scaleNote, an
-    // input note's pitchShift
+    // input note's pitchShift; 3.7's region (regionStart, regionLength: the
+    // own note's from setGrainParam, an extra note's from noteRegion)
     perNoteGrainControls { arg voice;
-        var names = [\noteGate, \noteBend, \noteAmp, \notePos, \noteSize, \noteRate, \velocity, \t_accent];
+        var names = [\noteGate, \noteBend, \noteAmp, \notePos, \noteSize, \noteRate, \velocity, \t_accent,
+            \regionStart, \regionLength];
         if (grainSource[voice] == this.inputSource) { ^names ++ [\pitchShift] };
         if (grainSource[voice].inclusivelyBetween(1, numBuffers)) { ^names ++ [\bufRate, \scaleNote] };
         ^names
@@ -209,8 +233,8 @@
 
     // Start the slot's note (its record holds the noteOn's values): its
     // synth, watched as a note's (watchNoteSynth), with the voice's controls,
-    // then the note's pitch, accent, park open and expression, last so they
-    // win. A synth voice's note is a voice synth of the voice's def at the
+    // then the note's pitch, accent, park open, expression and region (3.7),
+    // last so they win. A synth voice's note is a voice synth of the voice's def at the
     // head of voiceGroup writing the voice's bus, from voiceControls (as
     // startVoiceSynth); a buffer or input voice's a grain synth for the
     // voice's source at the head of its mix group (startGrainSynth, from
@@ -226,7 +250,7 @@
         record[\kind] = kind;
         notePairs = this.notePitchPairs(voice, record)
             ++ (if (silent) { [\velocity, record[\velocity]] } { this.noteAccentPairs(record) }) ++ [\noteGate, 1]
-            ++ this.noteExpressionPairs(kind, record[\expression]);
+            ++ this.noteExpressionPairs(kind, record[\expression]) ++ this.noteRegionPairs(record);
         if (kind == \voice) {
             defName = voiceSynthDefs[voice];
             ^this.watchNoteSynth(voice, slot, Synth(defName,
@@ -359,7 +383,10 @@
     // one line. A note that sounds then opens the voice's step gate
     // (openStepGate, ruling 54), as retrigger does for the own note, and is
     // a hit the areas hear (voiceHit \note, 3.7); the engine's own restarts
-    // (startNote from restartNotes, notesUnfrozen) open and tell nothing
+    // (startNote from restartNotes, notesUnfrozen) open and tell nothing.
+    // 3.7: on a one-shot voice (oneShotVoice, the positions area's) a live
+    // buffer note's noteOn restarts its scan too (t_scanReset, in the same
+    // message)
     extraNoteOn { arg voice, slot, note, freq, rate, velocity;
         var record = this.noteRecord(voice, slot);
         this.forgetFailedNoteStarts(record);
@@ -372,7 +399,8 @@
         record[\velocity] = velocity;
         switch (record[\state])
         { \live } {
-            this.sendToSynth(record[\synth].setMsg(*(this.notePitchPairs(voice, record) ++ this.noteAccentPairs(record))));
+            this.sendToSynth(record[\synth].setMsg(*(this.notePitchPairs(voice, record) ++ this.noteAccentPairs(record)
+                ++ (if ((record[\kind] == \buffer) and: { this.oneShotVoice(voice) }) { [\t_scanReset, 1] } { [] }))));
         }
         { \releasing } {
             this.cutNote(voice, slot);
@@ -401,6 +429,17 @@
         this.forgetFailedNoteStarts(record);
         if (record[\synth].isNil) { ^this };
         if (cut == 1) { this.cutNote(voice, slot) } { this.releaseNote(voice, slot) };
+    }
+
+    // noteRegion on an extra slot (3.7, design §3.4): kept for the slot (a
+    // later noteOn starts in it) and set on its grain synth, live or
+    // releasing, with a restart of its scan (t_scanReset) in one message
+    extraNoteRegion { arg voice, slot, start, length;
+        var record = this.noteRecord(voice, slot);
+        record[\region] = [start, length];
+        if (record[\synth].notNil and: { this.grainNoteKinds.includes(record[\kind]) }) {
+            this.sendToSynth(record[\synth].setMsg(*(this.noteRegionPairs(record) ++ [\t_scanReset, 1])));
+        };
     }
 
     // noteExpression on an extra slot: kept for the slot (a later noteOn
@@ -485,7 +524,7 @@
             var record = this.noteRecord(voice, slot), wasLive = record[\state] == \live, order = record[\order];
             if ((record[\kind] == \stream) and: { record[\synth].notNil }) {
                 this.cutNote(voice, slot);
-                this.leaveStream(record);
+                this.leaveStream(voice, record);
                 if (wasLive) { this.areaCall(\startNote, voice, slot, order, true) };
             };
         });
@@ -550,7 +589,7 @@
             var record = this.noteRecord(voice, slot), wasLive = record[\state] == \live, order = record[\order];
             if (record[\synth].notNil) {
                 this.cutNote(voice, slot);
-                this.leaveStream(record);
+                this.leaveStream(voice, record);
                 if (wasLive) { this.areaCall(\startNote, voice, slot, order, true) };
             };
         });
@@ -577,7 +616,7 @@
         areaState[\notes][\received][command] = values;
     }
 
-    // The four commands (design 3.5 §3.1). Each checks its indices, then
+    // The four commands (design 3.5 §3.1), and 3.7's noteRegion. Each checks its indices, then
     // every continuous argument's finiteness, as 3.4's five fast-modulation
     // commands do and through the same checks (fastModIndicesValid and
     // fastModValuesFinite, StrataModulation.sc: a bad one of either is
@@ -625,6 +664,21 @@
                 this.receiveNote(\noteExpression, [voice, slot, bend, amp, position, size, main]);
                 expression = (bend: bend, amp: amp, position: position, size: size, main: main);
                 if (slot > 0) { this.extraNoteExpression(voice, slot, expression) } { this.ownNoteExpression(voice, expression) };
+            };
+        });
+
+        // An extra slot's region (3.7, design §3.4; ruling 1: the own note's
+        // is setGrainParam's regionStart and regionLength, so slot 0 is
+        // refused with one line): start and length fractions of the valid
+        // region, 0-1, a length of 0 the voice's loop again
+        this.addCommand(\noteRegion, "iiff", { arg msg;
+            var voice = msg[1], slot = msg[2], start, length;
+            if (this.fastModIndicesValid(\noteRegion, [[\voice, voice, lastVoice], [\slot, slot, lastSlot]])
+                and: { (slot > 0) or: { this.postFastModIgnored(\noteRegion, "slot 0 is the own note: its region is setGrainParam's"); false } }
+                and: { this.fastModValuesFinite(\noteRegion, [[\start, msg[3]], [\length, msg[4]]]) }) {
+                start = msg[3].clip(0, 1); length = msg[4].clip(0, 1);
+                this.receiveNote(\noteRegion, [voice, slot, start, length]);
+                this.extraNoteRegion(voice, slot, start, length);
             };
         });
 
