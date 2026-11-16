@@ -814,12 +814,17 @@ return function(S)
   end
 
   -- A setting the engine needs at once (an option or binary param: their
-  -- actions may call the engine)
+  -- actions may call the engine). While a scene applies (a recall, a fade's
+  -- end, morph's discrete entries: S.scene_recall_in_progress) it is only
+  -- marked: the scene's other settings of the LFO (its destination, rate,
+  -- depth, ...) are not all in place yet, so the next step sends the LFO
+  -- once with every one of them, never a mix of old and new (0e's review)
   local function settings_changed(n, sync)
     if not is_on(n) then return end
-    evaluate(n)
     if sync then state[n].sync_due = true end
     state[n].edited = true
+    if S.scene_recall_in_progress then return end
+    evaluate(n)
     reconcile_engine(n)
   end
 
