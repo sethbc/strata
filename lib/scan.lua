@@ -39,9 +39,12 @@ return function(S)
   local function param_id(voice_idx, key) return "v" .. voice_idx .. "_" .. key end
 
   -- The send keys of a voice's follow rate and bar sync: each holds a
-  -- space, so no param id can be one. Their engine senders are below
-  local function rate_key(voice_idx) return "follow rate " .. voice_idx end
-  local function sync_key(voice_idx) return "scan sync " .. voice_idx end
+  -- space, so no param id can be one, and starts "v<i>_", so a voice's
+  -- sync and start drop a value of theirs still waiting for the budget
+  -- (lib/engine_sync.lua's forget_sent_voice_values). Their engine senders
+  -- are below
+  local function rate_key(voice_idx) return "v" .. voice_idx .. "_follow rate" end
+  local function sync_key(voice_idx) return "v" .. voice_idx .. "_scan sync" end
 
   local function finite_positive(value)
     return type(value) == "number" and value == value and value > 0 and value < math.huge
@@ -166,11 +169,22 @@ return function(S)
     end
   end
 
-  -- Every LFO step: each voice's ratio and rate, then the bar sync
+  -- Every LFO step: each voice's ratio and rate, inside deferrable (a
+  -- moved ratio's scan, like the rate, waits for the budget when the
+  -- window is full: design §2.4, "marked due"), then the bar sync
   S.lib.lfos.on_step(function()
-    for voice_idx = 1, NUM_VOICES do settle(voice_idx, false) end
+    S.lib.engine_sync.deferrable(function()
+      for voice_idx = 1, NUM_VOICES do settle(voice_idx, false) end
+    end)
     bar_sync()
   end)
+
+  -- A voice whose source changes (a user's switch, running or stopped; a
+  -- running voice's grain restart, a scene's switch included) settles at
+  -- once: one that leaves its buffer stops following before its sync sends
+  -- the scan, and none starts with an old factor
+  S.register_source_change(function(voice_idx) settle(voice_idx, true) end)
+  S.register_grain_restart(function(voice_idx) settle(voice_idx, true) end)
 
   -- The senders, each sending only while its voice runs
   for voice_idx = 1, NUM_VOICES do

@@ -158,13 +158,77 @@ test("turning follow off puts the factor and the rate back at once", function()
   assert_equal(S.lib.engine_sync.engine_factor("v1_buf_scan"), 1, "the factor goes at once")
   assert_near(last_grain(context, 0, "bufScan"), 1, 1e-9, "the scan is resent")
   assert_equal(last_grain(context, 0, "followRate"), 1, "the rate at once")
-  -- a voice that leaves its buffer stops following too
+end)
+
+test("a voice that leaves its buffer stops following at once, running or stopped", function()
+  local context, S, tempos = loaded()
+  tempos[1] = 120
+  tempos[2] = 120
+  params:set("clock_tempo", 90)
+  params:set("v1_buf_scan", 1)
   params:set("v1_follow", FOLLOW.repitch)
   lfo_step(context)
   assert_near(S.lib.engine_sync.engine_factor("v1_buf_scan"), 0.75, 1e-9)
-  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  context.clear_engine_calls()
+  params:set("v1_source", S.constants.SOURCE_SYNTH)  -- no step between the switch and the checks
+  assert_equal(S.lib.engine_sync.engine_factor("v1_buf_scan"), 1, "a synth voice has no factor, at once")
+  assert_equal(last_grain(context, 0, "followRate"), 1, "and its rate is 1")
+  for _, value in ipairs(grain_values(context, 0, "bufScan")) do
+    assert_near(value, 1, 1e-9, "no scan with the old factor reaches the engine")
+  end
+  -- a stopped voice's switch too, so its next start carries no old factor
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 2)
   lfo_step(context)
-  assert_equal(S.lib.engine_sync.engine_factor("v1_buf_scan"), 1, "a synth voice has no factor")
+  assert_near(S.lib.engine_sync.engine_factor("v1_buf_scan"), 0.75, 1e-9, "following on buffer 2")
+  toggle_voice(1)
+  assert_true(not S.voices[1].active)
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  assert_equal(S.lib.engine_sync.engine_factor("v1_buf_scan"), 1, "a stopped voice's switch, at once")
+end)
+
+-- The budget's window (math.floor(util.time() / window_seconds)): run the
+-- clocks to the middle of the next one, then spend it all on reverb sends
+-- outside deferrable, so a deferrable send in it waits
+local function full_window(context, S)
+  local window = S.constants.ENGINE_BUDGET.window_seconds
+  local next_start = (math.floor(util.time() / window) + 1) * window
+  context.clock.run_for(next_start + window / 2 - util.time())
+  for _ = 1, S.constants.ENGINE_BUDGET.messages_per_window do send_param_to_engine("reverb_mix", 0.25) end
+end
+
+test("a tempo move under a full budget waits for the next window", function()
+  local context, S, tempos = loaded()
+  tempos[1] = 120
+  params:set("v1_buf_scan", 1)
+  params:set("v1_follow", FOLLOW.stretch)
+  lfo_step(context)
+  full_window(context, S)
+  context.clear_engine_calls()
+  params:set("clock_tempo", 90)
+  lfo_step(context)
+  assert_equal(#grain_values(context, 0, "bufScan"), 0, "the scan waits with the window full")
+  assert_true(S.lib.engine_sync.budget_state().pending >= 1, "its value waits")
+  assert_near(S.lib.engine_sync.engine_factor("v1_buf_scan"), 0.75, 1e-9, "the factor is set")
+  context.clock.run_for(S.constants.ENGINE_BUDGET.window_seconds)
+  assert_near(last_grain(context, 0, "bufScan"), 0.75, 1e-9, "and goes in the next window")
+end)
+
+test("a sync waiting for the budget is dropped when the voice restarts", function()
+  local context, S, tempos = loaded()
+  tempos[1] = 120
+  params:set("v1_buf_scan", 1)
+  params:set("v1_follow", FOLLOW.stretch)
+  lfo_step(context)
+  full_window(context, S)
+  context.clear_engine_calls()
+  context.clock.set_beat(clock.get_beats() + S.lib.scan.FOLLOW.bar_beats)  -- the next step is a new bar
+  lfo_step(context)
+  assert_equal(#context.calls_named("syncScan"), 0, "the sync waits with the window full")
+  assert_true(S.lib.engine_sync.budget_state().pending >= 1, "its value waits")
+  toggle_voice(1); toggle_voice(1)
+  context.clear_engine_calls()
+  context.clock.run_for(S.constants.ENGINE_BUDGET.window_seconds)
+  assert_equal(#context.calls_named("syncScan"), 0, "the restart dropped it: no stale phase lands")
 end)
 
 test("a following voice is synced once a bar, and not while held, gliding, frozen, stopped or in one shot", function()
