@@ -802,13 +802,21 @@ checkPoolShrink = {
 // meanwhile, so no kill fade ends on its own for sclang): after each command
 // at most two cutting note synths, the oldest freed at once; on the server,
 // with a live note started on slot 1 after each round, exactly two in their
-// kill fade (kill 1) beside one live (gate 1, kill 0): the bound reached
+// kill fade (kill 1) beside one live (gate 1, kill 0): the bound reached.
+// Each round and its read run with the voice's mix group paused (/n_run 0,
+// the check's own message): the engine's starts, cuts and frees reach the
+// server as sent, but no kill fade advances, so the read sees every cutting
+// synth the engine left however long the sync and the query take. Unpaused,
+// a read that came more than 50 ms after the last cut found them ended
+// (#714). The group runs again before the next round's cut.
 checkCuttingBound = {
-    var voice = 1, worst = 0, worstServer = 0, own, rounds = List.new;
+    var voice = 1, worst = 0, worstServer = 0, own, rounds = List.new, group;
     startBufferVoice.(voice);
     command.(\setNotePool, 2);
     own = ownGrain.(voice);
+    group = engine.voiceMixGroup(voice);
     3.do({
+        server.sendMsg('/n_run', group.nodeID, 0);
         (1 .. 7).do({ arg slot;
             playNote.(voice, slot, 1.0);
             worst = max(worst, cuttingCount.value);
@@ -822,6 +830,7 @@ checkCuttingBound = {
                 [counts[0] + ((node[\controls][\kill] > 0).binaryValue),
                     counts[1] + (((node[\controls][\gate] > 0) and: { node[\controls][\kill] == 0 }).binaryValue)] }));
         worstServer = max(worstServer, rounds.last[0]);
+        server.sendMsg('/n_run', group.nodeID, 1);
         command.(\noteOff, voice, 1, 1);
         0.1.wait;
     });

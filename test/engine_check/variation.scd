@@ -202,7 +202,7 @@ timecode.free;
 // stereo.wav holds 0.5 left and -0.25 right: at zero pan jitter the left
 // buffer's grains play left only and the right's right only, as in 3.1, so
 // the channels keep their 6 dB difference
-command.(\loadBuffer, 0, h.stereoPath, 0); 0.3.wait; server.sync;
+command.(\loadBuffer, 0, h.stereoPath, 0); h.awaitLoad(0);
 command.(\setGrainSource, 1, 1);
 command.(\voiceOn, 1, 100.0, 0.5, 0.0, 0.1, 10.0, 1.0);
 server.sync;
@@ -219,8 +219,8 @@ check.((levels[1] > 0.01) and: { (ratioDb - 2.ampdb).abs < 0.5 },
 // right channel, but never past the center (their pans stay in -1..0)
 leftPath = h.tempDir +/+ "variation-left.wav";
 h.writeTestFile(leftPath, 22050, 11025, [0.5, 0.0]);
-command.(\loadBuffer, 0, leftPath, 0); 0.3.wait; server.sync;
-0.3.wait;
+command.(\loadBuffer, 0, leftPath, 0); h.awaitLoad(0);
+0.3.wait;   // the voice's grains of the new file, past its hasAudio fade-in
 levels = h.measure(peakProbe, peakBus, 1.0);
 check.((levels[0] > 0.01) and: { levels[1] < (levels[0] * 0.01) },
     "variation: zero pan jitter keeps a left-only buffer left (peaks %)".format(levels.round(0.0001)));
@@ -246,7 +246,7 @@ rampFile = SoundFile.new.headerFormat_("WAV").sampleFormat_("float").numChannels
 rampFile.openWrite(rampPath);
 rampFile.writeData(h.stereoOf(h.rampSignal(rampFrames) / rampFrames, h.repeating(rampFrames, [1.0])));
 rampFile.close;
-command.(\loadBuffer, 0, rampPath, 0); 0.3.wait; server.sync;
+command.(\loadBuffer, 0, rampPath, 0); h.awaitLoad(0);
 startTimecodeVoice.(1, 1, 0.1, 5.0, 1.0);
 [[\bufPos, 0.3], [\bufScan, 0.0], [\scaleNote, 60.0], [\bufRate, 2 ** (4 / 12)], [\pitchJitter, 12.0], [\quantize, 1.0]]
     .do({ arg pair; command.(\setGrainParam, 1, *pair) });

@@ -52,7 +52,7 @@ var checkSourceGrains = { arg voice, slot;
         sin(2pi * 440 * frame / server.sampleRate) * 0.5 }), 0, frames);
         h.stereoOf(sine, sine) }.value);
     file.close;
-    command.(\loadBuffer, slot, path, 0); 0.3.wait; server.sync;
+    command.(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
     tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.voiceGroup, \addToHead);
     probe = Synth(\strataCheckChannelPeaks, [\in, privateBus, \out, peakBus], group);
 
@@ -98,9 +98,8 @@ var checkSourceGrains = { arg voice, slot;
         writeTestFile.(path, grainCase[0], (grainCase[0] * grainCase[1]).round.asInteger, [0, 0]);
         // wait for the load itself, never for a time: the frames are 0 until its
         // peaks file is in place, and a fill from 0 would cover the region (#706)
-        command.(\loadBuffer, slot, path, 0); h.waitFor({ engine.bufferFrames[slot] > 0 }, 5); server.sync;
+        command.(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
         validFrames = engine.bufferFrames[slot];
-        if (validFrames < 1) { check.(false, "grains: the % s file's load ended within 5 s".format(grainCase[1])) };
         [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer; buffer.fill(validFrames, buffer.numFrames - validFrames, 1) });
         command.(\setGrainParam, voice, \grainSize, grainCase[2]);
         command.(\setGrainParam, voice, \bufRate, grainCase[3]);
@@ -506,7 +505,7 @@ checkSourceGrains.(1, 2);
     var rectEnv = Buffer.loadCollection(server, Array.fill(1024, 1.0)), group = Group.after(engine.processGroup);
     var probe, one, many;
     writeTestFile.(path, server.sampleRate, (2 * server.sampleRate).asInteger, [1.0, 1.0]);
-    command.(\loadBuffer, slot, path, 0); 0.3.wait; server.sync;
+    command.(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
     command.(\setGrainSource, voice, slot + 1); server.sync;
     [[\grainMode, 1], [\grainSize, 0.5], [\posSpread, 0], [\panSpread, 0], [\panJitter, 0], [\sizeJitter, 0], [\bufRate, 1]]
         .do({ arg pair; command.(\setGrainParam, voice, *pair) });

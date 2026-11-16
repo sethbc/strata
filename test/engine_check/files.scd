@@ -48,7 +48,7 @@ var checkLoudSave = {
     file.openWrite(loudPath);
     file.writeData(h.repeating(2 * 1000, [1.5, -1.7]));
     file.close;
-    command.(\loadBuffer, 6, loudPath, 0); 0.5.wait; server.sync;
+    command.(\loadBuffer, 6, loudPath, 0); h.awaitLoad(6);
     check.(((bufferSample.(engine.buffersL[6], 10) - 1.5).abs < 0.001)
         and: { (bufferSample.(engine.buffersR[6], 10) + 1.7).abs < 0.001 }, "a slot holds samples beyond ±1 unclipped");
     savePath = scratchRoot +/+ "saved/loud.wav";
@@ -237,7 +237,7 @@ var checkShortWrite = { arg stereoPath;
     var dir = scratchRoot +/+ "short-write", savePath = dir +/+ "kept.wav", file, kept, count;
     File.mkdir(dir);
     File.copy(stereoPath, savePath);
-    command.(\loadBuffer, 6, stereoPath, 0); 0.5.wait; server.sync;
+    command.(\loadBuffer, 6, stereoPath, 0); h.awaitLoad(6);
     engine.bufferFrames[6] = engine.buffersL[6].numFrames + 100;
     count = saveResults.value.size;
     command.(\saveBuffer, 6, savePath, 0, 1);
@@ -312,7 +312,7 @@ checkDecodeShortfall.(stereoPath, longPath);
 
 // Slot 5 (index 4) holds the stereo file the saves below write
 before = synthNames.(context.xg).size;
-command.(\loadBuffer, 4, stereoPath, 0); 0.5.wait; server.sync;
+command.(\loadBuffer, 4, stereoPath, 0); h.awaitLoad(4);
 
 // saveBuffer writes the valid region as a stereo 16-bit WAV
 savePath = scratchRoot +/+ "saved/take-buf5.wav";
@@ -337,7 +337,7 @@ if (file.notNil) {
 };
 checkLoudSave.value;
 // Two writes to one path back to back: the newer one wins, the file is never mixed
-command.(\loadBuffer, 7, longPath, 0); 0.5.wait; server.sync;     // 16 s at 22050 Hz: a long interleave
+command.(\loadBuffer, 7, longPath, 0); h.awaitLoad(7);     // 16 s at 22050 Hz: a long interleave
 savePath = scratchRoot +/+ "race/same.wav";
 engine.writeChunkWait = 0.02;          // the long interleave now takes about 0.9 s
 reports = saveResults.value.size;
@@ -387,7 +387,7 @@ file.openWrite(longWritePath);
 h.writePeriodicSeconds(file, rampPeriod, 16, server.sampleRate.asInteger);
 file.close;
 info = pollMessages.size;   // slot 8 reported 16 s before (at 22.05 kHz): only later reports count
-command.(\loadBuffer, 7, longWritePath, 0); 1.0.wait; server.sync;
+command.(\loadBuffer, 7, longWritePath, 0); h.awaitLoad(7);
 check.(engine.bufferFrames[7] == frames, "a 16 s file at the server rate fills slot 8");
 // (its load number's thousands, #578: ((loads % 7) * 9 + 7) * 1000, then 16 s)
 lengthValue = ((((engine.bufferLoads[7] % 7) * 9) + 7) * 1000) + 16;
@@ -564,7 +564,7 @@ checkLongSave.value;
 {
     var slot = 3, saves = 10, gapLimit = 0.003, lateLimit = 3, dir = scratchRoot +/+ "rename-hold";
     var gaps = List.new(saves), late, sorted;
-    command.(\loadBuffer, slot, stereoPath, 0); 0.5.wait; server.sync;
+    command.(\loadBuffer, slot, stereoPath, 0); h.awaitLoad(slot);
     File.mkdir(dir);
     saves.do({ arg n;
         var path = dir +/+ "save%.wav".format(n), last = Main.elapsedTime, gap, ticker, count = saveResults.value.size;

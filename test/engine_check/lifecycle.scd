@@ -595,7 +595,7 @@ check.((synthNames.(context.xg).size == before) and: { after[0].isNil } and: { a
 // The slot changes while the voice releases: the re-gated grain synth
 // takes its new length and rate (M1). Slot 4 holds a 0.1 s take at the server rate.
 command.(\voiceOff, 6); server.sync;
-command.(\loadBuffer, 3, stereoPath, 0); 0.3.wait; server.sync;    // 11025 frames at 22050 Hz
+command.(\loadBuffer, 3, stereoPath, 0); h.awaitLoad(3);    // 11025 frames at 22050 Hz
 command.(\voiceOn, 6, 100.0, 0.25, 0.0, 0.3, 10.0, 1.0); server.sync;
 after = voiceTrio.(6);
 check.((after[1] === oldTrio[1]) and: { getControl.(after[1], \bufFrames) == 11025 }

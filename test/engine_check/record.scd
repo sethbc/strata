@@ -782,7 +782,8 @@ test.("record: a load sent during a synced take's wait drops its preparation", {
     record.(4, 0.3, 1.0, 0, 0, 0, 0, 0.6);
     0.1.wait;
     h.command(\loadBuffer, 4, h.monoPath, 0);
-    0.8.wait; server.sync;
+    // past the dropped take's start (0.5 s from here), then the load itself
+    0.8.wait; h.awaitLoad(4);
     nodes = h.synthNames(context.xg);
     check.((engine.bufferFrames[4] == 4410) and: { engine.recordSynths[4].isNil } and: { nodes.includes(\strataRecord).not },
         "record: a load sent during a synced take's wait drops its preparation (% frames, record synths: %)".format(engine.bufferFrames[4], nodes.includes(\strataRecord)));
@@ -1333,7 +1334,7 @@ test.("record: a load, clear or recording during the stop fade frees it at once 
     var slot = 1, results = List.new;
     [
         ["clear", { h.command(\clearBuffer, slot) }, 0],
-        ["load", { h.command(\loadBuffer, slot, h.monoPath, 0) }, 4410],
+        ["load", { h.command(\loadBuffer, slot, h.monoPath, 0) }, 4410, { h.awaitLoad(slot) }],
         ["recording", { record.(slot, 0.1) }, (0.1 * sampleRate).round.asInteger]
     ].do({ arg case;
         var name = case[0], act = case[1], frames = case[2], running;
@@ -1343,7 +1344,10 @@ test.("record: a load, clear or recording during the stop fade frees it at once 
         act.value;
         server.sync;
         running = h.synthNames(context.xg).count({ arg each; each == \strataRecord });
+        // (the dropped take's late steps have come by then; the load is
+        // waited for itself)
         0.5.wait; server.sync;
+        case[3].value;
         results.add([name, running, engine.bufferFrames[slot], frames]);
         h.waitFor({ engine.recordSynths[slot].isNil }, 2);
         reset.(slot);
