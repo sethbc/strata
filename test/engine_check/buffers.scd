@@ -247,7 +247,9 @@ var checkVanishedFileLoad = { arg stereoPath, monoPath;
     before = loadFailures.value.size;
     command.(\loadBuffer, 2, path, 0); File.delete(path);
     command.(\loadBuffer, 2, monoPath, 0);
-    h.awaitLoad(2);
+    // the load itself, then a window in which no report of the vanished
+    // file may arrive (an absence keeps a fixed wait)
+    h.awaitLoad(2); 0.5.wait; server.sync;
     check.(engine.bufferFrames[2] == 4410 and: { loadFailures.value.size == before },
         "a load inside the fade wait wins over a vanished file's load (% frames, % reports)".format(
             engine.bufferFrames[2], loadFailures.value.size - before));
@@ -293,7 +295,10 @@ var checkReleasingGrainFades = { arg stereoPath, monoPath;
     command.(\loadBuffer, 2, monoPath, 0); 0.1.wait; server.sync;
     check.((getControl.(grain, \bufFrames) == 0) and: { holds.(0.5) },
         "a load in a voiceOff release fades the releasing grain synth at once and reads the file only after the fade");
-    h.awaitLoad(2);
+    // the load itself, then a window in which the releasing grain synth
+    // must not take its length (an absence keeps a fixed wait; the 2 s
+    // release outlasts both)
+    h.awaitLoad(2); 0.5.wait; server.sync;
     check.((engine.bufferFrames[2] == 4410) and: { holds.(0.4) } and: { grain.isPlaying } and: { getControl.(grain, \bufFrames) == 0 },
         "the releasing grain synth never takes the loaded take (its tail would replay it)");
     restart.value;

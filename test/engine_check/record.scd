@@ -29,8 +29,9 @@ var record = { arg slot, duration, level = 1.0, feedback = 0, source = 0, thresh
 };
 var isRecording = { arg slot; engine.recordSynths[slot].notNil };
 // the record synth has freed and the take has ended (its peaks file, which
-// is written asynchronously, then its length) or been canceled
-var waitDone = { arg slot, limit = 5; h.waitFor({ isRecording.(slot).not and: { state[\takes][slot].isNil } }, limit) };
+// is written asynchronously, then its length) or been canceled: h.awaitTake,
+// which fails the check by area and slot when it has not within limit (#718)
+var waitDone = { arg slot, limit = 5; h.awaitTake(slot, nil, limit) };
 var reset = { arg slot; h.command(\clearBuffer, slot); server.sync };
 // states of the slot's reports since `start` (an index into the poll's values)
 var reportsFor = { arg slot, start = 0;
@@ -829,26 +830,29 @@ test.("record: a delay shorter than the preparation starts the take when it is d
 // ---- playable recordings ---------------------------------------------------
 test.("record: a playable recording keeps the slot playing and sets its length to max(V, D) at its start", {
     var path = writeLevelFile.("value.wav", 0.5, 0.3), v = (0.5 * sampleRate).round.asInteger;
-    var d = (1.0 * sampleRate).round.asInteger, atCommand, atStart, atGrain, source;
+    var seconds = 4.0, d = (seconds * sampleRate).round.asInteger, atCommand, atStart, atGrain, runningAtGrain, source;
     h.command(\loadBuffer, 4, path, 0);
     h.waitFor({ engine.bufferFrames[4] == v });
     startVoiceOn.(1, 4);
     source = Synth(\strataCheckLevelSource, [\out, engine.inputBus, \level, 0.5], inputSynth, \addBefore);
     server.sync;
-    record.(4, 1.0, 1.0, 0.5);
+    record.(4, seconds, 1.0, 0.5);
     atCommand = engine.bufferFrames[4];
     settle.(0.2);
     atStart = engine.bufferFrames[4];
-    // (the voice gets the length once the new length's peaks file is in
-    // place, writeRecordPeaks: waited for, never a time, #718)
-    h.waitFor({ voiceBufFrames.(1) == d }, 5);
+    // The voice gets the length once the new length's peaks file is in
+    // place (writeRecordPeaks): waited for, never a time (#718), at most
+    // 3 s of the 4 s take, and read while the take still runs, so a length
+    // that reached the voice only at the take's end fails
+    h.waitFor({ voiceBufFrames.(1) == d }, seconds - 1);
     atGrain = voiceBufFrames.(1);
+    runningAtGrain = isRecording.(4) and: { state[\takes][4].notNil };
     h.command(\stopRecord, 4);
-    waitDone.(4);
+    h.awaitTake(4);
     source.free; server.sync;
-    check.((atCommand == v) and: { atStart == d } and: { atGrain == d } and: { engine.bufferFrames[4] == d },
-        "record: a playable recording keeps the slot playing and sets its length to max(V, D) at its start (at the command %, at the start %, voice %, at the end %)".format(
-            atCommand, atStart, atGrain, engine.bufferFrames[4]));
+    check.((atCommand == v) and: { atStart == d } and: { atGrain == d } and: { runningAtGrain } and: { engine.bufferFrames[4] == d },
+        "record: a playable recording keeps the slot playing and sets its length to max(V, D) at its start (at the command %, at the start %, voice % while recording %, at the end %)".format(
+            atCommand, atStart, atGrain, runningAtGrain, engine.bufferFrames[4]));
 });
 test.("record: the length never shrinks", {
     var path = writeLevelFile.("eight.wav", 8, 0.3), v = (8 * sampleRate).round.asInteger, atStart;
