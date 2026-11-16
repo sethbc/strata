@@ -1390,12 +1390,23 @@ test("a scenes file of 16 scenes, each with 16 full macros, 16 routings and attr
     matrix.set_routing(k, "macro" .. (17 - k), destinations[k])
     params:set("matrix_" .. k .. "_depth", -100 + k)
   end
-  -- every attribute the sequencer stores (design §8.1, §8.12, §9.2), on
-  -- every step of every voice, eight notes each, through its own setter
+  -- every attribute the sequencer stores (design §8.1, §8.12, §9.2; 3.7's
+  -- slice and cond, design §5.3: the largest slice and the longest of the
+  -- 78 conditions, single values that add bytes and no table), on every
+  -- step of every voice, eight notes each, through its own setter
   local sequencer = S.lib.sequencer
   local notes = { -14, -9, -5, -2, 0, 3, 7, 14 }
   local attrs = { prob = 37, ratchet = 4, pos = 0.123456789, pitch = 1.23456789, size = 0.123456789, bookmark = 4,
-    gate = 7.123456789 }
+    gate = 7.123456789, slice = S.lib.slices.SLICES.max }
+  local longest_cond = ""
+  for _, value in ipairs(S.lib.conditions.values) do
+    if #value > #longest_cond then longest_cond = value end
+  end
+  assert_equal(longest_cond, "!first", "the longest condition")
+  for voice = 1, NUM_VOICES do
+    for step = 1, PATTERN_LENGTH do sequencer.set_step_attr(voice, step, "cond", longest_cond) end
+  end
+  assert_equal(sequencer.step_attr(NUM_VOICES, PATTERN_LENGTH, "cond"), longest_cond, "the sequencer stored cond")
   for voice = 1, NUM_VOICES do
     for step = 1, PATTERN_LENGTH do
       sequencer.set_step_attr(voice, step, "notes", notes)
@@ -1423,6 +1434,8 @@ test("a scenes file of 16 scenes, each with 16 full macros, 16 routings and attr
     local last = scene.data.steps[NUM_VOICES][PATTERN_LENGTH]
     assert_equal(last.notes[8], 14, "scene " .. slot .. " holds its steps' notes")
     assert_near(last.gate, 7.123456789, 1e-9, "and their gates")
+    assert_equal(last.slice, next_S.lib.slices.SLICES.max, "and their slices")
+    assert_equal(last.cond, "!first", "and their conditions")
   end
   for k = 1, 16 do next_matrix.set_routing(k, "", "") end
   recall_scene(16, 0)
