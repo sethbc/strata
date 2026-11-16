@@ -957,12 +957,114 @@ test("an instant recall whose division differs sends the LFO once, with the scen
   assert_one_send(sets, lfos, 3, 0, "sine", "division")
 end)
 
-test("an instant recall that changes destination, shape, rate and depth sends no mix of old and new", function()
+-- 0e's review, round 3: every engine call of the LFOs (setFastLfo,
+-- stopFastLfo, syncFastLfo) and of a Lua destination's command, in order,
+-- in two windows: the recall itself, and the next LFO step
+local WINDOW_CALLS = { setFastLfo = true, stopFastLfo = true, syncFastLfo = true, setReverb = true }
+
+local function window_calls(context)
+  local calls = {}
+  for _, call in ipairs(context.engine_calls) do
+    if WINDOW_CALLS[call.name] then calls[#calls + 1] = call end
+  end
+  return calls
+end
+
+local function names_of(calls)
+  local names = {}
+  for index, call in ipairs(calls) do
+    names[index] = call.name .. (call.name == "setReverb" and "" or " " .. tostring(call.args[1]))
+  end
+  return table.concat(names, ", ")
+end
+
+-- current and scene set LFO 2's settings and state (on: whether it runs);
+-- scene 1 is captured from scene; returns the calls at the recall and at
+-- the next step
+local function recall_windows(context, current, current_on, scene, scene_on)
+  params:set(lfo_id(2), 0)
+  scene(); params:set(lfo_id(2), scene_on and 1 or 0); capture_scene(1)
+  params:set(lfo_id(2), 0)
+  current(); params:set(lfo_id(2), current_on and 1 or 0); lfo_step(context)
+  context.clear_engine_calls()
+  recall_scene(1, 0)
+  local at_recall = window_calls(context)
+  context.clear_engine_calls()
+  lfo_step(context)
+  return at_recall, window_calls(context)
+end
+
+-- setFastLfo's seven arguments, each asserted
+local function assert_fast_lfo(call, voice, destination, shape, rate, depth, offset, what)
+  assert_equal(call.name, "setFastLfo", what)
+  assert_equal(call.args[1], 1, what .. ": LFO 2")
+  assert_equal(call.args[2], voice - 1, what .. ": voice")
+  assert_equal(call.args[3], destination, what .. ": destination")
+  assert_equal(call.args[4], option_index(lfo_id(2, "shape"), shape) - 1, what .. ": shape")
+  assert_near(call.args[5], rate, 1e-9, what .. ": rate")
+  assert_near(call.args[6], depth, 1e-9, what .. ": depth")
+  assert_near(call.args[7], offset, 1e-9, what .. ": offset")
+end
+
+-- the settings above plus an offset
+local function with_offset(settings, offset)
+  return function()
+    settings()
+    params:set(lfo_id(2, "offset"), offset)
+  end
+end
+
+test("a recall that changes every LFO setting sends nothing at once, then one setFastLfo and its sync", function()
   local context = load_strata(); finish_startup(context)
-  local sets, _, lfos = recall_window(context, lfo_settings("v3 pitch", "sine", 1, 25),
-    lfo_settings("v6 size", "drunk", 7, 80))
-  assert_one_send(sets, lfos, 6, 2, "drunk", "everything")
-  assert_near(sets[1].args[5], 7, 1e-9, "7 Hz"); assert_near(sets[1].args[6], 0.8, 1e-9, "80 %")
+  local lfos = local_value("S").lib.lfos
+  local at_recall, at_step = recall_windows(context,
+    with_offset(lfo_settings("v3 pitch", "sine", 1, 25), 0), true,
+    with_offset(lfo_settings("v6 size", "drunk", 7, 80, "clocked", "1"), 30), true)
+  assert_equal(names_of(at_recall), "", "nothing reaches the engine at the recall")
+  assert_equal(names_of(at_step), "setFastLfo 1, syncFastLfo 1", "the next step: one send and its sync")
+  -- clocked at division 1 (a period of 4 beats) at 120 BPM: 0.5 Hz
+  assert_fast_lfo(at_step[1], 6, 2, "drunk", 0.5, 0.8, 0.6, "the scene's settings")
+  assert_near(at_step[2].args[2], lfos.phase(2), 1e-3, "synced to the LFO's phase")
+end)
+
+test("a recall that turns an LFO on sends it once at the recall, with the scene's settings", function()
+  local context = load_strata(); finish_startup(context)
+  local lfos = local_value("S").lib.lfos
+  local at_recall, at_step = recall_windows(context,
+    with_offset(lfo_settings("v3 pitch", "sine", 1, 25), 0), false,
+    with_offset(lfo_settings("v5 pitch", "tri", 5, 60), -20), true)
+  assert_equal(names_of(at_recall), "setFastLfo 1, syncFastLfo 1", "turned on at the recall: one send and its sync")
+  assert_fast_lfo(at_recall[1], 5, 0, "tri", 5, 0.6, -0.4, "the scene's settings")
+  assert_near(at_recall[2].args[2], 0, 1e-9, "a free LFO starts at its phase param, 0")
+  assert_true(lfos.is_on(2), "it runs")
+  assert_equal(names_of(at_step), "", "and nothing at the next step")
+end)
+
+test("a recall that turns an LFO off sends its stop alone", function()
+  local context = load_strata(); finish_startup(context)
+  local at_recall, at_step = recall_windows(context,
+    with_offset(lfo_settings("v3 pitch", "sine", 1, 25), 0), true,
+    with_offset(lfo_settings("v5 pitch", "tri", 5, 60), 30), false)
+  assert_equal(names_of(at_recall), "stopFastLfo 1", "the stop alone, at the recall")
+  assert_equal(names_of(at_step), "", "and nothing at the next step")
+end)
+
+test("a recall from an engine destination to a Lua one stops the node at the step, then the Lua sends", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("reverb_mix", 0.3)
+  local held = function(label, depth)
+    return function()
+      lfo_settings(label, "square", 0.003, depth)()
+      params:set(lfo_id(2, "phase"), 0)
+    end
+  end
+  local at_recall, at_step = recall_windows(context, held("v3 pitch", 25), true, held("rev mix", 60), true)
+  assert_equal(names_of(at_recall), "", "nothing at the recall")
+  assert_equal(names_of(at_step), "stopFastLfo 1, setReverb", "the stop, then rev mix moves")
+  -- a square held at its top: 0.3 + 0.6 x half the range (0.5)
+  assert_near(at_step[2].args[1], 0.6, 1e-9, "rev mix at the scene's depth")
+  assert_near(at_step[2].args[2], params:get("reverb_size"), 1e-9, "with the stored size")
+  assert_near(at_step[2].args[3], params:get("reverb_damp"), 1e-9, "and damping")
 end)
 
 test("an instant recall from a Lua destination to an engine one gives the old back and starts the new once", function()
