@@ -128,31 +128,160 @@ end)
 -- 3.7 (design decision 21): a data file is loaded from its format floor
 -- (SCENE_FORMAT_FLOOR, BUFFER_FORMAT_FLOOR) to the build's version, and set
 -- aside otherwise; no code converts a particular older version. The scan
--- finds, in the code of every Lua file under lib/ (comments and strings
--- left out), a version (a name ending in "version") compared with a number
--- literal, on either side of <, <=, >, >=, == or ~=, and the names the old
--- conversions keyed on. A comparison with a named floor or with the build's
--- own version constant is allowed
+-- reads the code of every Lua file under lib/ (comments and strings left
+-- out) and finds each comparison (<, <=, >, >=, == or ~=) one of whose
+-- operands is a file's version while the other is a number literal or a
+-- name that is neither a floor (ending in _FLOOR) nor a build version
+-- (ending in _DATA_VERSION, or a version itself); and the names the old
+-- conversions keyed on. An operand is the primary expression next to the
+-- operator: a name chain, a number, or a parenthesized or called one. A
+-- file's version is a name chain inside the operand whose last part is
+-- `version` or ends in `_version` and which does not start with a constant
+-- table (`NOTES.version`, `PROTOCOL.cc.version` are the build's own)
 local VERSION_COMPARISONS = { ["<"] = true, ["<="] = true, [">"] = true, [">="] = true, ["=="] = true, ["~="] = true }
+local CHAIN_CHARS = "[%w_%.:]"
+
+-- The index of the bracket matching the one at index (step 1 forward from
+-- an opening one, -1 back from a closing one), or nil
+local function matching_bracket(text, index, step)
+  local open, close = "(", ")"
+  if text:sub(index, index) == "[" or text:sub(index, index) == "]" then open, close = "[", "]" end
+  if step < 0 then open, close = close, open end
+  local depth = 0
+  while index >= 1 and index <= #text do
+    local char = text:sub(index, index)
+    if char == open then depth = depth + 1 elseif char == close then depth = depth - 1 end
+    if depth == 0 then return index end
+    index = index + step
+  end
+  return nil
+end
+
+-- The operand left of position `before` (exclusive) and right of `after`
+local function left_operand(text, before)
+  local index = before - 1
+  while index >= 1 and text:sub(index, index):match("%s") do index = index - 1 end
+  local finish = index
+  while index >= 1 do
+    local char = text:sub(index, index)
+    if char == ")" or char == "]" then
+      index = (matching_bracket(text, index, -1) or 1) - 1
+    elseif char:match(CHAIN_CHARS) then
+      index = index - 1
+    else
+      break
+    end
+  end
+  return text:sub(index + 1, finish)
+end
+
+local function right_operand(text, after)
+  local index = after
+  while index <= #text and text:sub(index, index):match("%s") do index = index + 1 end
+  local start = index
+  if text:sub(index, index) == "-" then index = index + 1 end
+  while index <= #text do
+    local char = text:sub(index, index)
+    if char == "(" or char == "[" then
+      index = (matching_bracket(text, index, 1) or #text) + 1
+    elseif char:match(CHAIN_CHARS) then
+      index = index + 1
+    elseif char == '"' or char == "'" then
+      local close = text:find(char, index + 1, true)
+      index = (close or #text) + 1
+      break
+    else
+      break
+    end
+  end
+  return text:sub(start, index - 1)
+end
+
+-- Whether a name chain is a version, and whether it is a file's
+local function is_version_chain(chain)
+  local last = chain:match("([%w_]+)$") or ""
+  return last == "version" or last:match("_version$") ~= nil
+end
+local function is_constant_chain(chain) return chain:match("^[%u_][%u%d_]*[%.:]") ~= nil end
+
+local function holds_file_version(operand)
+  for chain in operand:gmatch("[%a_][%w_%.:]*") do
+    if is_version_chain(chain) and not is_constant_chain(chain) then return true end
+  end
+  return false
+end
+
+-- Whether an operand may stand beside a file's version: anything but a
+-- number literal or a bare name that is no floor, no build version and no
+-- version (nil, true and false are allowed; so are strings and calls)
+local function allowed_beside_version(operand)
+  if operand:match("^%-?%.?%d") then return false end
+  if not operand:match("^[%a_][%w_%.:]*$") then return true end
+  if operand == "nil" or operand == "true" or operand == "false" then return true end
+  return operand:match("_FLOOR$") ~= nil or operand:match("_DATA_VERSION$") ~= nil or is_version_chain(operand)
+end
+
 local function old_version_uses(sources)
   local found = {}
   for _, source in ipairs(sources) do
     if source.path:match("^lib/") then
       local sanitized = sync_check.sanitize_lua(source.text)
-      for start, name, stop in sanitized:gmatch("()%f[%w_]([%w_]*version)%f[^%w_]()") do
-        local line = source.path .. ":" .. select(2, sanitized:sub(1, start - 1):gsub("\n", "")) + 1
-        local after = sanitized:match("^%s*([<>=~]=?)%s*%-?%d", stop)
-        local before = sanitized:sub(math.max(1, start - 200), start - 1):match("%f[%w_%.]%d[%w%.]*%s*([<>=~]=?)%s*$")
-        if VERSION_COMPARISONS[after] or VERSION_COMPARISONS[before] then
-          table.insert(found, line .. " " .. name .. " compared with a number")
+      local function line_of(position)
+        return source.path .. ":" .. select(2, sanitized:sub(1, position - 1):gsub("\n", "")) + 1
+      end
+      for start, operator, stop in sanitized:gmatch("()([<>=~]=?)()") do
+        if VERSION_COMPARISONS[operator] then
+          local left, right = left_operand(sanitized, start), right_operand(sanitized, stop)
+          if (holds_file_version(left) and not allowed_beside_version(right))
+            or (holds_file_version(right) and not allowed_beside_version(left)) then
+            table.insert(found, line_of(start) .. " " .. left .. " " .. operator .. " " .. right)
+          end
         end
-        if name == "from_version" or name == "before_version" then table.insert(found, line .. " " .. name) end
+      end
+      for start, name in sanitized:gmatch("()%f[%w_]([%w_]*version)%f[^%w_]") do
+        if name == "from_version" or name == "before_version" then table.insert(found, line_of(start) .. " " .. name) end
       end
     end
   end
   table.sort(found)
   return found
 end
+
+-- The scan's matcher, one line of code at a time: caught (true) or allowed
+-- (false). A file's version is caught beside a number literal or a name
+-- that is no floor (`_FLOOR`) and no build version (`_DATA_VERSION`, or
+-- another version), on either side, bare or wrapped in parentheses or a
+-- call; a name that only ends in "version" is no version
+local VERSION_SCAN_CASES = {
+  { "if version < 7 then end", true },
+  { "if 5 > version then end", true },
+  { "if version == 6 then end", true },
+  { "if version ~= 7 then end", true },
+  { "if loaded.version<7 then end", true },
+  { "if 7 == loaded.version then end", true },
+  { "if (loaded.version or 0) < 7 then end", true },
+  { "if tonumber(loaded.version) < 7 then end", true },
+  { "if version < OLD_FORMAT then end", true },
+  { "if version < SCENE_FORMAT_FLOOR then end", false },
+  { "if version > BUFFER_DATA_VERSION then end", false },
+  { "if inversion > 0 then end", false },
+  { "if conversion == 1 then end", false },
+  { "if value.version == NOTES.version and loaded.version ~= spec.version then end", false },
+  { 'if version == nil or type(version) == "number" then end', false },
+  { "if msg.cc <= PROTOCOL.cc.version then end", false },
+  { "local t = {version = 7}", false },
+}
+
+test("the scan for old versions catches a version on either side and allows only a floor", function()
+  local wrong = {}
+  for _, case in ipairs(VERSION_SCAN_CASES) do
+    local found = old_version_uses({ { path = "lib/x.lua", text = case[1] } })
+    if (#found > 0) ~= case[2] then
+      table.insert(wrong, (case[2] and "not caught: " or "not allowed: ") .. case[1])
+    end
+  end
+  assert_equal(table.concat(wrong, " | "), "", "every case as the table says")
+end)
 
 test("no Lua file compares a file's version with a number below its floor", function()
   -- the scanner itself
@@ -164,12 +293,11 @@ test("no Lua file compares a file's version with a number below its floor", func
     "local r = {before_version = 6}",
     '-- version < 3 in a comment; "from_version" in a string',
     "if version < SCENE_FORMAT_FLOOR or version > SCENE_DATA_VERSION then end",
-    "local t = {version = 7}; if value.version == NOTES.version and x2 >= version then end",
+    "local t = {version = 7}; if value.version == NOTES.version then end",
   }, "\n") }, { path = "strata.lua", text = "if version < 2 then end" } })
-  assert_equal(table.concat(found, "; "), table.concat({ "lib/x.lua:1 version compared with a number",
-    "lib/x.lua:2 file_version compared with a number", "lib/x.lua:3 version compared with a number",
-    "lib/x.lua:3 version compared with a number", "lib/x.lua:3 version compared with a number",
-    "lib/x.lua:4 from_version", "lib/x.lua:5 before_version" }, "; "),
+  assert_equal(table.concat(found, "; "), table.concat({ "lib/x.lua:1 loaded.version < 5",
+    "lib/x.lua:2 5 > file_version", "lib/x.lua:3 data.version == 6", "lib/x.lua:3 version >= 3",
+    "lib/x.lua:3 version ~= 2", "lib/x.lua:4 from_version", "lib/x.lua:5 before_version" }, "; "),
     "each literal comparison under lib/ is found, either way round; comments, strings, named floors and"
       .. " versions, an assignment and other files are not")
   found = old_version_uses(read_lua_sources())
