@@ -555,6 +555,11 @@ end
     if destination.label == "v7 late" then late = destination end
   end
   assert_true(late ~= nil and late.group == "voice 7", "the LFO destination exists, in its voice's group")
+  local voice7
+  for _, group in ipairs(S.lib.lfos.destination_groups()) do
+    if group.name == "voice 7" then voice7 = group end
+  end
+  assert_equal(S.LFO_DESTINATIONS[voice7.last].label, "v7 late", "and comes last in it")
   assert_true((row_outline(1) .. " "):find("mix:v1_late:control ", 1, true), "the VOICE row exists")
   capture_scene(1)
   assert_equal(S.scenes[1].data.late_level, 0.25, "the scene field is captured")

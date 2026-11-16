@@ -104,6 +104,8 @@ return function(S)
       {"size", "grain_size"}, {"dens", "grain_density"}, {"pitch", "grain_pitch"}, {"spread", "grain_spread"},
       {"pos", "buf_pos"}, {"rate", "buf_rate"}, {"scan", "buf_scan"}
     },
+    -- the macros' param ids; a group field on the global registration
+    -- (lib/state.lua) is to replace this match, #729
     macro_param = "^macro_%d+$",
   }
 
@@ -927,8 +929,10 @@ return function(S)
 
   -- The LFOs' scene fields, which lib/scenes.lua appends to
   -- S.SCENE_GLOBAL_PARAMS after its built-in globals (the same records, in
-  -- this order). Per LFO, in recall order: its settings, the destination,
-  -- then the state, so an LFO starts with its settings in place. Rate,
+  -- this order). Per LFO, in recall order: its settings, then the state,
+  -- so an LFO starts with its settings in place; the destination is a
+  -- scene block (below), set silently before them and brought in by the
+  -- next step with them all (3.7). Rate,
   -- depth and offset crossfade (lfo = n: the LFO they belong to), except
   -- toward a scene that stops the running LFO (M.transition_stops): its
   -- depth fades to stop_target (0) and the others hold (#408); the rest
@@ -959,18 +963,32 @@ return function(S)
   -- strata_lfo<n>_dest_key: a scene block (a global field holds a number),
   -- which switches at a transition's end. A scene without it (one saved
   -- before 3.7, which kept an index under strata_lfo<n>_dest) gets none; a
-  -- key this build lacks is kept and reads as none, with one console line
-  -- (the param's action). Blocks apply before the globals, so a recall sets
-  -- the destination before the LFO's settings and state
+  -- key this build lacks is kept and reads as none, with one console line.
+  -- Blocks apply before the globals, so the block sets the key and its
+  -- option silently, with no action: the LFO's settings and state follow,
+  -- and the next step brings the destination in with all of them (a
+  -- changed destination gives the old one back and the new one its first
+  -- send, as after a silent PSET read), never the new destination with the
+  -- old rate and depth (0e's review)
   for n = 1, NUM_LFOS do
-    local key_id = param_id(n, "dest_key")
+    local key_id, dest_id = param_id(n, "dest_key"), param_id(n, "dest")
     S.register_scene_block({
       key = key_id,
       discrete = true,
       default = function() return "none" end,
       capture = function() return params:get(key_id) end,
       validate = function(value) return type(value) == "string" and S.lib.io_keyed.refuses(value) == nil end,
-      apply = function(value) params:set(key_id, value) end,
+      apply = function(value)
+        local index
+        for position, destination in ipairs(S.LFO_DESTINATIONS) do
+          if destination.key == value then index = position end
+        end
+        if not index then
+          print("strata: LFO " .. n .. "'s destination " .. value .. " is not in this version: none")
+        end
+        params:set(key_id, value, true)
+        params:set(dest_id, index or 1, true)
+      end,
     })
   end
 
