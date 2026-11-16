@@ -1436,9 +1436,10 @@ local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "f
 -- methods that keep a closure and are called from a function (a SynthDef
 -- function, an onFree, a fork, a scheduled function, a makeBundle
 -- function, a command function): never called but through areaCall. Each
--- is defined and called through areaCall at least once. The last six are
--- the commands' (loadBuffer, clearBuffer, saveBuffer, recordBuffer,
--- stopRecord, setBypass)
+-- is defined and called through areaCall at least once. The third line's
+-- six are the commands' (loadBuffer, clearBuffer, saveBuffer, recordBuffer,
+-- stopRecord, setBypass); the last three are the onsets pass's
+-- (analyzeBuffer's analyzeSlot, its fork's runOnsetPass and writeOnsetsFile)
 local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "inputHeadFrame", "gateVoice",
   "voiceSynthFreed", "prepareTake", "startFastLfo", "watchFastLfo", "watchFastEnv",
   "loadSlot", "clearSlot", "saveSlot", "recordSlot", "stopRecordSlot", "setEffectBypass",
