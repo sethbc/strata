@@ -1,15 +1,17 @@
 -- lib/pages/buffer.lua
--- The BUFFER page (3.3): eleven fields on the left (the selected voice's
+-- The BUFFER page (3.3): twelve fields on the left (the selected voice's
 -- source and the record settings, a bookmark, a long file's start, the
--- scrub friction), four at a time, over an input meter; on the right the
--- cursor slot's waveform with its voices' playheads, the record head and
--- the selected voice's bookmarks, over three of the eight slot rows
--- (S.BUFFER_PAGE for the layout and the file selector, S.buffer_page for
--- the cursors). E2 picks a slot, ALT+E2 a field, E3 edits the field; K3
--- records into the cursor slot (or stops); K2 and ALT+K2/ALT+K3 act on
--- release, by how long they were held (hold_seconds): K2 opens the file
--- selector or loads a random file, ALT+K2 clears or fills the empty slots,
--- ALT+K3 saves the slot or its loop region. The input meter reads
+-- scrub friction, the slot's slices), four at a time, over an input meter;
+-- on the right the cursor slot's waveform with its slice starts, its
+-- voices' playheads, the record head and the selected voice's bookmarks,
+-- over three of the eight slot rows (S.BUFFER_PAGE for the layout and the
+-- file selector, S.buffer_page for the cursors). E2 picks a slot, ALT+E2 a
+-- field, E3 edits the field; K3 records into the cursor slot (or stops),
+-- or on the slices field opens the slice editor (lib/ui/slice_editor.lua);
+-- K2 and ALT+K2/ALT+K3 act on release, by how long they were held
+-- (hold_seconds): K2 opens the file selector or clears the slot, ALT+K2
+-- loads a random file or fills the empty slots, ALT+K3 saves the slot or
+-- its loop region. The input meter reads
 -- S.lib.input_level (which owns the polls). Registers its
 -- S.registry.pages record; INPUT_METER, input_meter_segments and the meter state are
 -- fields of this module's table (S.lib.pages_buffer). The functions that
@@ -67,11 +69,12 @@ return function(S)
     wave_bottom = 27,
     wave_center_y = 19,
     wave_half_height = 8,
+    slice_mark_y = 10,      -- one pixel above the waveform (the divider's top is at x 56)
     spread_y = 28,
     bookmark_y = 29,        -- y 29-30: y 31 stays clear above the slot rows' glyphs
     bookmark_height = 2,
     levels = {divider = 1, wave_inside = 8, wave_outside = 3, wave_unread = 6, wave_empty = 1,
-      head = 15, other_head = 11, spread = 4, record_head = 12, bookmark = 6, recalled = 15},
+      head = 15, other_head = 11, spread = 4, record_head = 12, bookmark = 6, recalled = 15, slice_mark = 6},
     row_first_y = 37,
     row_spacing = 7,        -- three rows at y 37-51, clear of the hint row at y 62
     visible_rows = 3,
@@ -292,6 +295,11 @@ return function(S)
     {name = "start", label = "start", enc = start_enc, value = start_text},
     {name = "fric", label = "fric", param_id = function() return "scrub_friction" end,
       value = function() return percent_text(params:get("scrub_friction")) end},
+    -- 3.7: the cursor slot's slices (S.lib.ui_slice_editor.slot_text); E3
+    -- does nothing, K3 opens the slice editor
+    {name = "slices", label = "slices", enc = function() end,
+      active = function() return S.lib.ui_slice_editor.slot_text(cursor_slot()) ~= S.lib.ui_slice_editor.EDITOR.none_text end,
+      value = function() return S.lib.ui_slice_editor.slot_text(cursor_slot()) end},
   }
 
   local function cursor_field()
@@ -515,6 +523,21 @@ return function(S)
     screen.stroke()
   end
 
+  -- 3.7: a pixel on slice_mark_y over each column that holds a slice start
+  -- of the slot (S.lib.ui_slice_editor.starts), one per column
+  local function draw_slice_marks(slot)
+    local starts = S.lib.ui_slice_editor.starts(slot)
+    if not starts then return end
+    screen.level(LEVELS.slice_mark)
+    local last
+    for _, fraction in ipairs(starts) do
+      local x = wave_x_of(fraction)
+      if x ~= last then screen.rect(x, PAGE.slice_mark_y, 1, 1) end
+      last = x
+    end
+    screen.fill()
+  end
+
   -- One running voice's head: a line over the waveform at its playhead,
   -- its spread on spread_y
   local function draw_head(voice_idx, level)
@@ -665,6 +688,7 @@ return function(S)
     draw_fields()
     draw_input_meter()
     draw_waveform(slot)
+    draw_slice_marks(slot)
     draw_heads(slot)
     -- the slots, scrolled to keep one row above the cursor
     S.lib.ui_field_list.draw(slot_list_rows, slot, {
@@ -686,8 +710,8 @@ return function(S)
   -- a page change, the norns menu and the file selector clear) and the page
   -- noted its press. Plain K3 records at the press and has no hold
   local HOLD_HINTS = {
-    plain = {[2] = {"K2 up: load", "K2 up: random"}},
-    alt = {[2] = {"K2 up: clear", "K2 up: fill"}, [3] = {"K3 up: save", "K3 up: save loop"}},
+    plain = {[2] = {"K2 up: load", "K2 up: clear"}},
+    alt = {[2] = {"K2 up: random", "K2 up: fill"}, [3] = {"K3 up: save", "K3 up: save loop"}},
   }
   local function held_hint()
     for n = 2, 3 do
@@ -701,15 +725,17 @@ return function(S)
   -- The hint row's keys (redraw() draws the "hints" flash instead while
   -- one shows): while K2, ALT+K2 or ALT+K3 is down, what its release will
   -- do, changing at hold_seconds (the frame clock redraws: animates); else
-  -- "stop" while the cursor slot records or is armed, "..." while its take
-  -- that ended waits for the engine (K3 does nothing then)
+  -- "edit" on the slices field, "stop" while the cursor slot records or is
+  -- armed, "..." while its take that ended waits for the engine (K3 does
+  -- nothing then)
   local function buffer_hints(alt_held)
     local texts, at = held_hint()
     if texts then return util.time() - at >= PAGE.hold_seconds and texts[2] or texts[1] end
-    if alt_held then return "K2:clr/fill K3:sv/trim" end
+    if alt_held then return "K2:rnd/fill K3:sv/trim" end
+    if cursor_field().name == "slices" then return "K2:ld/clr K3:edit" end
     local buffer = S.buffers[cursor_slot()]
     local record_hint = buffer.finishing and "..." or (buffer.recording and "stop" or "rec")
-    return "K2:ld/rnd K3:" .. record_hint
+    return "K2:ld/clr K3:" .. record_hint
   end
 
   -- E2 picks a slot, E3 edits the field under the field cursor
@@ -740,11 +766,18 @@ return function(S)
     record_buffer(cursor_slot())
   end
 
+  -- K3 on the slices field opens the slice editor for the cursor slot
+  -- (design 3.7 §3.7, decision 14); a slot with no audio says so
+  local function open_slice_editor()
+    local slot = cursor_slot()
+    if not S.lib.ui_slice_editor.open(slot) then buffer_page_flash("buf " .. slot .. " empty") end
+  end
+
   local function buffer_key(n)
     if n == 2 then
       pressed_at[2] = util.time()
     elseif n == 3 then
-      record_cursor_slot()
+      if cursor_field().name == "slices" then open_slice_editor() else record_cursor_slot() end
     end
   end
 
@@ -775,24 +808,26 @@ return function(S)
     pressed_at[n] = util.time()
   end
 
-  -- ALT+K2 released: clear the cursor slot, or held, fill every empty slot;
-  -- ALT+K3 released: save the cursor slot, or held, its loop region
+  -- ALT+K2 released: a random file into the cursor slot, or held, fill
+  -- every empty slot (3.7, plan ruling 31: as ALT+K2 randomizes on the
+  -- other pages); ALT+K3 released: save the cursor slot, or held, its loop
+  -- region
   local function buffer_alt_key_release(n)
     local long = held_long(n)
     if n == 2 then
-      if long then S.lib.files.fill_empty() else clear_buffer(cursor_slot()) end
+      if long then S.lib.files.fill_empty() else S.lib.files.random_into(cursor_slot()) end
     elseif n == 3 then
       save_cursor_slot(long)
     end
   end
 
-  -- K2 released: held, a random file into the cursor slot; else open the
-  -- file selector for it
+  -- K2 released: held, clear the cursor slot; else open the file selector
+  -- for it
   local function buffer_key_release(n)
     if n ~= 2 then return end
     local slot = cursor_slot()
     if held_long(2) then
-      S.lib.files.random_into(slot)
+      clear_buffer(slot)
       return
     end
     -- the selector takes every key while open, so keys held now are released
@@ -917,24 +952,52 @@ return function(S)
     return (S.buffers[slot].saves_sent * 2 + (failed and 1 or 0)) * NUM_BUFFERS + slot - 1
   end
 
-  -- Slot 1 loaded with 12 s whose peaks rise and fall, as the engine writes
-  -- them (the page's waveform reads them on a later frame tick)
-  function LAYOUT.slot_with_peaks(context)
+  -- Slot 1 loaded with `seconds` (default 12) whose peaks rise and fall, as
+  -- the engine writes them, scaled by `scale` (default 1) (the page's
+  -- waveform reads them on a later frame tick)
+  function LAYOUT.slot_with_peaks(context, seconds, scale)
+    seconds, scale = seconds or 12, scale or 1
     load_buffer(1, "/tmp/" .. LAYOUT.long_names[7])
     local values = {}
     for index = 1, S.constants.WAVEFORM_POINTS do
-      values[index] = string.format("%.3f", 0.5 + 0.45 * math.sin(index / 3) * math.sin(index / 17))
+      values[index] = string.format("%.3f", scale * (0.5 + 0.45 * math.sin(index / 3) * math.sin(index / 17)))
     end
     local folder = S.lib.scenes.scene_data_dir
     util.make_dir(folder)
     local file = io.open(folder .. "buf1.peaks", "w")
     if file then
-      file:write("strata-peaks 1\nslot 1\nframes " .. (12 * 48000) .. "\nrate 48000\ngeneration 1\npeaks "
+      file:write("strata-peaks 1\nslot 1\nframes " .. (seconds * 48000) .. "\nrate 48000\ngeneration 1\npeaks "
         .. table.concat(values, " ") .. "\n")
       file:close()
     end
-    LAYOUT.report(context, 1, 12)
+    LAYOUT.report(context, 1, seconds)
     context.clock.run_for(0.2)
+  end
+
+  -- The slice editor open on slot 1 (the peaks above), its file's settings
+  -- set from `options` ({mode, count, sensitivity, tempo, key, normalize},
+  -- the slices made when mode is given), then the editor's marker
+  -- (pick_marker from the first) or row picked, then options.after(editor).
+  -- Options: seconds, scale (the peaks'), high (the 300 s tier), closed
+  -- (BUFFER alone, its field cursor on slices). Nothing without the slices
+  -- and the file's settings (S.lib.ui_slice_editor.ready)
+  function LAYOUT.slice_editor(context, options)
+    local editor = S.lib.ui_slice_editor
+    if options.high then LAYOUT.as_300_s_tier() end
+    if not editor.ready() then return end
+    LAYOUT.slot_with_peaks(context, options.seconds, options.scale)
+    for _, field in ipairs({"mode", "count", "sensitivity", "tempo", "key", "normalize"}) do
+      if options[field] ~= nil then S.lib.samples.set(1, field, options[field]) end
+    end
+    if options.mode then S.lib.slices.make(1) end
+    if options.closed then
+      S.buffer_page.field = #BUFFER_FIELDS
+      return
+    end
+    editor.open(1)
+    if options.marker then editor.pick_marker(options.marker) end
+    if options.row then editor.pick_row(options.row) end
+    if options.after then options.after(editor) end
   end
 
   -- A file longer than a slot loaded into slot 1, its start at `start`,
@@ -961,7 +1024,12 @@ return function(S)
     bm = function() params:set("v1_source", 2); S.lib.positions.recall_bookmark(1, 4) end,
     start = function() end,
     fric = function() params:set("scrub_friction", 99.5) end,
+    slices = function() end,   -- an empty slot: "--" (the slice editor's states show the rest)
   }
+
+  -- The slice editor's widest values: transients at 100%, 299.9 BPM, C#-2
+  -- and normalized peaks at 0.06 (+24.1dB)
+  LAYOUT.widest_slices = {mode = 3, sensitivity = 100, tempo = 299.9, key = 1, normalize = true, scale = 0.06}
 
   local BUFFER_INDEX = UI_PAGES.index.BUFFER
   local layout_states = {
@@ -1061,6 +1129,33 @@ return function(S)
       params:set("record_duration", 240)
     end},
   }
+  -- the slice editor (3.7): 1, 12 and 64 markers, analyzing, its flashes,
+  -- and each row picked at the widest values
+  local SLICE_EDITOR_STATES = {
+    {"1 marker", {}},
+    {"12 markers", {mode = 2, count = 12, marker = 12}},
+    {"64 markers (high, 300 s)", {high = true, seconds = 300, mode = 2, count = 64, tempo = 299.9, marker = 64}},
+    {"analyzing", {mode = 3, sensitivity = 100}},
+    {"full flash", {mode = 2, count = 64, after = function(editor) editor.add() end}},
+    {"edits dropped flash", {mode = 2, count = 4, after = function(editor)
+      editor.add(); editor.pick_row("amount"); editor.turn_row("amount", 1)
+    end}},
+  }
+  for _, row in ipairs(S.lib.ui_slice_editor.EDITOR.rows) do
+    local options = {row = row}
+    for name, value in pairs(LAYOUT.widest_slices) do options[name] = value end
+    table.insert(SLICE_EDITOR_STATES, {"row " .. row, options})
+  end
+  -- (first in the list: the 300 s states keep their order at its end)
+  for index, state in ipairs(SLICE_EDITOR_STATES) do
+    table.insert(layout_states, index, {name = "slice editor " .. state[1], setup = function(context)
+      LAYOUT.slice_editor(context, state[2])
+    end})
+  end
+  -- BUFFER's own slice marks over 12 equal slices, its field at tran 12's width
+  table.insert(layout_states, {name = "slice marks", setup = function(context)
+    LAYOUT.slice_editor(context, {mode = 2, count = 12, closed = true})
+  end})
   for index, field in ipairs(BUFFER_FIELDS) do
     table.insert(layout_states, {name = "field " .. field.name, setup = function()
       S.buffer_page.field = index

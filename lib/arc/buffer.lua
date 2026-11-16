@@ -77,6 +77,50 @@ return function(S)
     if voice then S.lib.positions.hold_scan(voice, false, "arc") end
   end)
 
+  -- The slice editor's rings (3.7, design §3.7), while it is open: ring 1
+  -- picks a marker (marker_ticks a step), ring 2 nudges it a nudge a tick
+  -- (with ALT a fine one), ring 3 turns the amount and ring 4 the tempo,
+  -- each sweeping its range in a turn in whole steps (arc_whole_steps)
+  local ARC_SLICE_EDITOR = {marker_ticks = 20, level = 15}
+
+  local function slice_editor_delta(n, delta)
+    local editor = S.lib.ui_slice_editor
+    local state = editor.state()
+    if not state then return end
+    local sweep = S.constants.UI_PAGES.ARC_TICKS_PER_SWEEP
+    if n == 1 then
+      local steps = arc_whole_steps("slice_editor:1", delta, ARC_SLICE_EDITOR.marker_ticks)
+      if steps ~= 0 then editor.pick_marker(steps) end
+    elseif n == 2 then
+      editor.nudge(delta, S.alt_held)
+    elseif n == 3 then
+      local low, high = editor.amount_range()
+      local steps = arc_whole_steps("slice_editor:3", delta, sweep / (high - low))
+      if steps ~= 0 then editor.turn_row("amount", steps) end
+    elseif n == 4 then
+      local low, high, step = editor.tempo_range()
+      local steps = arc_whole_steps("slice_editor:4", delta, sweep * step / (high - low))
+      if steps ~= 0 then editor.turn_row("tempo", steps) end
+    end
+  end
+
+  -- Ring 1 the marker's place among the markers, ring 2 its place in the
+  -- slot, ring 3 the amount in its range, ring 4 the tempo (dark with none)
+  local function slice_editor_redraw(arc_port)
+    local rings = S.lib.ui_slice_editor.ring_fractions()
+    if not rings then return end
+    local level = ARC_SLICE_EDITOR.level
+    arc_ring_fill_position(arc_port, 1, rings.marker, level)
+    arc_ring_fill(arc_port, 2, rings.position, level)
+    arc_ring_fill(arc_port, 3, rings.amount, level)
+    if rings.tempo then arc_ring_fill(arc_port, 4, rings.tempo, level) end
+  end
+
+  local slice_editor_owner = S.lib.ui_slice_editor.owner
+  assert(slice_editor_owner, "lib/arc/buffer.lua: no slice editor owner on S.lib.ui_slice_editor")
+  slice_editor_owner.arc_delta = slice_editor_delta
+  slice_editor_owner.arc_redraw = slice_editor_redraw
+
   -- BUFFER's record (lib/pages/buffer.lua) gains its rings: arc_delta and
   -- arc_redraw in lib/arc/core.lua dispatch through S.registry.pages[S.ui_page]
   local record = S.registry.pages[S.constants.UI_PAGES.index.BUFFER]

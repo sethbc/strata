@@ -6,7 +6,7 @@ Strata supports the monome arc controller for hands-on parameter control with vi
 
 ## Arc Encoders
 
-The rings control the current screen page. They keep working while the norns menu is open (as the grid does): turning one still changes its parameter, and the rings show changes made in PARAMETERS to what they control. Every ring that sets a value sweeps its parameter's whole range in a full turn (1024 ticks, one revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). A ring whose range runs through 0 (pan, crossmod amounts) fills from the top: clockwise for a value above 0, counter-clockwise below it, and only a dim top LED at exactly 0, where it also holds for a moment as you turn through it. The exceptions to the full-turn sweep step whole values: the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per division), the VOICE page's choice, number and on/off rows (20 ticks per step), the SEQ rings (10 ticks per step, per level and per BPM; 20 per voice), the step editor's probability (about 10 ticks per percent) and ALT rings (20 ticks per step), the SCENES cursor ring (10 ticks per slot or field) and its morph B ring (20 ticks per scene), and on MOD the morph B ring, a routing's source, destination and number and a macro's target row (20 ticks per step). Part-turns toward the next step are kept for the next turn of that ring, and forgotten when you change page. The arc has no fine mode.
+The rings control the current screen page. They keep working while the norns menu is open (as the grid does): turning one still changes its parameter, and the rings show changes made in PARAMETERS to what they control. Every ring that sets a value sweeps its parameter's whole range in a full turn (1024 ticks, one revolution), following the parameter's curve (frequency, delay time and buffer rate are exponential, so each half of the sweep covers as much of the curve). A ring whose range runs through 0 (pan, crossmod amounts) fills from the top: clockwise for a value above 0, counter-clockwise below it, and only a dim top LED at exactly 0, where it also holds for a moment as you turn through it. The exceptions to the full-turn sweep step whole values: the LFO page's depth rings (10 ticks per percent) and clocked rate (20 ticks per division), the VOICE page's choice, number and on/off rows (20 ticks per step), the SEQ rings (10 ticks per step, per level and per BPM; 20 per voice), the step editor's probability (about 10 ticks per percent) and ALT rings (20 ticks per step), the SCENES cursor ring (10 ticks per slot or field) and its morph B ring (20 ticks per scene), and on MOD the morph B ring, a routing's source, destination and number and a macro's target row (20 ticks per step), and the slice editor's slice, count, sensitivity and tempo rings. Part-turns toward the next step are kept for the next turn of that ring, and forgotten when you change page. The arc has no fine mode.
 
 On the **MAIN** page:
 
@@ -110,6 +110,13 @@ With **ALT** (K1) held:
 
 The rings adjust the voice's buffer parameters whatever its source (ready for when it switches to a buffer), but are drawn dim unless the source is a buffer. Record duration and level are set on the screen.
 
+While the **slice editor** is open (K3 on BUFFER's `slices` field; see the [BUFFER page](pages/buffer.md#the-slice-editor)), the rings edit the slices instead, with or without ALT:
+
+- **Ring 1** - Pick a slice (20 ticks per slice)
+- **Ring 2** - Move the selected slice's start, 1 ms a tick (with ALT 0.1 ms); it shows where the start lies in the buffer
+- **Ring 3** - The slice count (in equal mode) or the sensitivity (in transients mode), its range in a full turn; it cuts the slices again, as E3 does
+- **Ring 4** - The file's tempo, 20-300 BPM in a full turn in 0.1 steps (dark while the file has none)
+
 On the **SCENES** page:
 
 - **Ring 1** - Scene cursor, over the same 23 stops as E2: the sixteen slots (turning past slot 8 shows the second bank), then the seven fields below them (10 ticks per stop). Moving it cancels a pending overwrite question, as E2 does
@@ -127,7 +134,7 @@ The button runs the page's main action, on the pages that give it one (each page
 - **SEQ** - play or stop the patterns (nothing while a step editor is open)
 - **LFO** - turn the selected LFO on or off
 - **MOD** - on a routing (or in one), turn it on or off; on a macro or the bank row, show the next bank; on a recorder, press it (record, play, stop); anywhere else, turn scatter on or off
-- **BUFFER** - record into the slot under the cursor, or stop
+- **BUFFER** - record into the slot under the cursor, or stop (on any field, the `slices` field too; nothing while the slice editor is open)
 - **SCENES** - recall the slot under the cursor at once
 - **FX**, **SETUP** and **IO** - nothing
 
@@ -141,5 +148,5 @@ The button runs the page's main action, on the pages that give it one (each page
 - IO: level 12
 - LFO: depth rings bright (15) while the LFO runs, dim (4) when off; ring 4 at 12
 - MOD: level 12; a routing's depth ring dim (4) while the routing is off or misses its source or destination
-- BUFFER: rings bright (15) for a buffer-sourced voice, dim (4) otherwise; the ALT record feedback ring always at 12
+- BUFFER: rings bright (15) for a buffer-sourced voice, dim (4) otherwise; the ALT record feedback ring always at 12. The slice editor's rings at 15
 - SCENES: level 12
