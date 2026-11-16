@@ -130,17 +130,12 @@ return function(S)
   end
   M.strip_y = strip_y
 
-  -- The destination groups' first indices into S.LFO_DESTINATIONS: each
-  -- index whose group (lib/lfos.lua: none, the globals, each voice's
-  -- built-in ones, each per-voice registration's v1-v7, then every global
-  -- registration as one group, #511, #580) differs from the one before it
+  -- The destination groups' first indices into S.LFO_DESTINATIONS: none
+  -- (1), then each group's first (lib/lfos.lua's destination_groups: the
+  -- globals, each voice's destinations together, the macros; 3.7)
   function lfo_dest_group_starts()
-    local starts = {}
-    local previous
-    for index, destination in ipairs(S.LFO_DESTINATIONS) do
-      if destination.group ~= previous then table.insert(starts, index) end
-      previous = destination.group
-    end
+    local starts = {1}
+    for _, group in ipairs(lfos().destination_groups()) do table.insert(starts, group.first) end
     return starts
   end
 
@@ -357,9 +352,8 @@ return function(S)
     end
   end
 
-  -- ALT+E3 on the destination jumps a group per detent (none, global,
-  -- v1 ... v7, then each registered destination, then the registered
-  -- globals); on a percent it keeps whole steps (a fine step of a whole
+  -- ALT+E3 on the destination jumps a group per detent (none, the
+  -- globals, voice 1 ... voice 7, the macros); on a percent it keeps whole steps (a fine step of a whole
   -- percent would round back); anything else goes on to lfo_enc
   local function lfo_alt_enc(n, d)
     if n ~= 3 then return false end

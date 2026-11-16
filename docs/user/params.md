@@ -23,7 +23,7 @@ PSETs (PARAMETERS > PSET) save every one of them. A PSET loads every setting it 
 - Delay bypass and reverb bypass (off by default): switch the effect off completely, freeing its CPU and memory, and keep its mix (see [Bypass](effects.md#bypass)). PSETs store them; scenes do not
 
 ## LFOs
-- **LFO 1** ... **LFO 6** (a group each) - on (off by default), destination (none), shape (sine, tri, square, up, down, s&h, smooth, drunk; sine), mode (free or clocked; free), rate (0.003-50 Hz, default 0.25 Hz, a 4 s cycle), clocked rate (1/16 to 1024 bars of four beats; 4), depth (0-100 %, default 25 %, so an LFO is audible as soon as it is turned on; scenes recall the depth they stored), offset (-100 to 100 %, 0), phase (0-100 %, 0), rate mod and depth mod (none, or a lower-numbered LFO: LFO 3 offers L1 and L2) and their amounts (-100 to 100 %, 0). See [Modulation](modulation.md#global-lfos)
+- **LFO 1** ... **LFO 6** (a group each) - on (off by default), destination (none; listed by voice, and saved as the destination itself, not its place in the list), shape (sine, tri, square, up, down, s&h, smooth, drunk; sine), mode (free or clocked; free), rate (0.003-50 Hz, default 0.25 Hz, a 4 s cycle), clocked rate (1/16 to 1024 bars of four beats; 4), depth (0-100 %, default 25 %, so an LFO is audible as soon as it is turned on; scenes recall the depth they stored), offset (-100 to 100 %, 0), phase (0-100 %, 0), rate mod and depth mod (none, or a lower-numbered LFO: LFO 3 offers L1 and L2) and their amounts (-100 to 100 %, 0). See [Modulation](modulation.md#global-lfos)
 - An LFO always swings up to half the destination's range either side of the value you set, at 100 % depth
 
 ## Macros (group)

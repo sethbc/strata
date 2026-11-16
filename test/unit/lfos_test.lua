@@ -646,27 +646,234 @@ test("engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step
   assert_near(calls[1].args[6], 0.55, 1e-9, "with its depth")
 end)
 
-test("the destination list keeps its indices", function()
-  load_strata({ before_init = function()
-    local_value("S").register_lfo_global_destination("probe", "delay_time")
-  end })
+-- 3.7 (decision 24): the list by voice, each destination stored by its key
+local GLOBAL_LABELS = { "density", "drift", "filt freq", "filt res", "filt mix", "dly time", "dly fdbk", "dly mix",
+  "rev mix", "rev size", "rev damp" }
+local VOICE_SUFFIXES = { "main", "size", "dens", "pitch", "spread", "pos", "rate", "scan", "hist", "vfilt", "dsend",
+  "rsend", "amp" }
+
+test("the destinations are none, the globals, each voice's together, then the macros", function()
+  load_strata()
+  local S = local_value("S")
   local destinations = local_value("LFO_DESTINATIONS")
-  local expected = { [1] = "none", [2] = "density", [68] = "v7 scan", [69] = "v1 hist", [76] = "v1 vfilt",
-    [83] = "v1 dsend", [90] = "v1 rsend", [97] = "v1 amp", [103] = "v7 amp", [104] = "macro 1", [119] = "macro 16",
-    [120] = "probe" }
-  for index, label in pairs(expected) do assert_equal(destinations[index].label, label, "destination " .. index) end
-  assert_equal(#destinations, 120)
-  assert_equal(destinations[97].resolve(), "v1_amp")
-  assert_equal(destinations[120].resolve(), "delay_time")
-  assert_equal(params:lookup_param(lfo_id(6, "dest")).count, 120, "every LFO offers them")
+  local expected = { "none" }
+  for _, label in ipairs(GLOBAL_LABELS) do expected[#expected + 1] = label end
+  for voice_idx = 1, 7 do
+    for _, suffix in ipairs(VOICE_SUFFIXES) do expected[#expected + 1] = "v" .. voice_idx .. " " .. suffix end
+  end
+  for m = 1, 16 do expected[#expected + 1] = "macro " .. m end
+  local labels = {}
+  for index, destination in ipairs(destinations) do labels[index] = destination.label end
+  assert_equal(table.concat(labels, ","), table.concat(expected, ","), "the whole list, in order")
+  assert_equal(#destinations, 119, "1 + 11 + 7 x 13 + 16: today's destinations, each once")
+  assert_equal(table.concat(params:lookup_param(lfo_id(6, "dest")).options, ","), table.concat(expected, ","),
+    "every LFO offers them in that order")
+  -- each entry's key: none, the param it moves, v<i>_main for a voice's main
+  local keys = {}
+  for index, destination in ipairs(destinations) do
+    keys[index] = destination.key
+    assert_equal(destination.key, destination.resolve() and destination.label:match("main$") == nil
+      and destination.resolve() or destination.key, destination.label .. "'s key is the param it moves")
+  end
+  assert_equal(keys[1], "none"); assert_equal(keys[2], "master_density")
+  assert_equal(destinations[13].key, "v1_main"); assert_equal(destinations[22].key, "v1_filter_freq")
+  -- the groups ALT+E3 jumps by: indices into the list
+  local groups = {}
+  for _, group in ipairs(S.lib.lfos.destination_groups()) do
+    groups[#groups + 1] = group.name .. " " .. group.first .. "-" .. group.last
+  end
+  assert_equal(table.concat(groups, ", "), "global 2-12, voice 1 13-25, voice 2 26-38, voice 3 39-51, "
+    .. "voice 4 52-64, voice 5 65-77, voice 6 78-90, voice 7 91-103, macros 104-119")
+  -- every destination of voice 3 lies between voice 2's last and voice 4's first
+  for index, destination in ipairs(destinations) do
+    if destination.label:match("^v3 ") then assert_true(index >= 39 and index <= 51, destination.label .. " in voice 3") end
+  end
   -- every destination is a control param whose label (with ~ when it
   -- runs in the engine) fits the page's right column
-  for index, destination in ipairs(destinations) do
+  for _, destination in ipairs(destinations) do
     local resolved = destination.resolve()
     if resolved then assert_true(params:lookup_param(resolved).controlspec, resolved .. " is a control param") end
     local label = destination.label .. (destination.fast and "~" or "")
     assert_true(stubs.text_width(label) <= 49, label .. " fits its column")
   end
+end)
+
+-- A PSET of the script as it is, its lines matching `drop` removed and
+-- `lines` added (a hand-made older or foreign PSET)
+local function pset_with(context, name, drop, lines)
+  local path = context.data_dir .. name .. ".pset"
+  util.make_dir(context.data_dir)
+  params:write(path)
+  local file = io.open(path, "r")
+  local text = file:read("*a")
+  file:close()
+  local kept = {}
+  for line in text:gmatch("[^\n]+") do
+    if not (drop and line:find(drop)) then kept[#kept + 1] = line end
+  end
+  for _, line in ipairs(lines or {}) do kept[#kept + 1] = line end
+  file = io.open(path, "w")
+  file:write(table.concat(kept, "\n") .. "\n")
+  file:close()
+  return path
+end
+
+local function read_text(path)
+  local file = io.open(path, "r")
+  local text = file:read("*a")
+  file:close()
+  return text
+end
+
+test("a destination is stored by key in a PSET and in a scene", function()
+  local context = load_strata(); finish_startup(context)
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "keyed.pset"
+  params:set(lfo_id(2, "dest"), destination_index("v3 vfilt"))
+  assert_equal(params:get(lfo_id(2, "dest_key")), "v3_filter_freq", "the option keeps its key")
+  params:write(path)
+  local text = read_text(path)
+  assert_true(text:find('"strata_lfo2_dest_key": v3_filter_freq\n', 1, true), "the PSET line holds the key")
+  assert_true(not text:find('"strata_lfo2_dest":', 1, true), "and no index")
+  params:set(lfo_id(2, "dest"), 1)
+  params:read(path)
+  assert_equal(params:get(lfo_id(2, "dest")), destination_index("v3 vfilt"), "the PSET loads back to it")
+  assert_equal(lfo_destination_id(2), "v3_filter_freq")
+  -- the scene field holds the key, and a recall puts it back
+  capture_scene(1)
+  local data = local_value("scenes")[1].data
+  assert_equal(data.strata_lfo2_dest_key, "v3_filter_freq", "the scene field holds the key")
+  assert_equal(data.strata_lfo2_dest, nil, "and no index")
+  params:set(lfo_id(2, "dest"), 1)
+  recall_scene(1, 0)
+  assert_equal(params:get(lfo_id(2, "dest")), destination_index("v3 vfilt"), "the scene recalls it")
+  assert_equal(lfo_destination_id(2), "v3_filter_freq")
+end)
+
+test("a key the build does not know reads as none", function()
+  local context = load_strata(); finish_startup(context)
+  -- a PSET whose key this build lacks
+  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  local path = pset_with(context, "unknown", '^"strata_lfo2_dest', { '"strata_lfo2_dest_key": v3_wobble' })
+  params:set(lfo_id(2, "dest"), destination_index("rev mix"))
+  context.printed = {}
+  params:read(path)
+  assert_equal(params:get(lfo_id(2, "dest")), 1, "none")
+  assert_equal(lfo_destination_id(2), nil)
+  local lines = 0
+  for _, line in ipairs(context.printed) do
+    if line:find("v3_wobble", 1, true) then lines = lines + 1 end
+  end
+  assert_equal(lines, 1, "one console line names the key")
+  -- a scene whose key this build lacks
+  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  capture_scene(1)
+  local scene = local_value("scenes")[1]
+  scene.data.strata_lfo2_dest_key = "v9_nothing"
+  assert_true(validate_scene(scene), "a key is any string: the scene stays valid")
+  context.printed = {}
+  recall_scene(1, 0)
+  assert_equal(params:get(lfo_id(2, "dest")), 1, "none")
+  lines = 0
+  for _, line in ipairs(context.printed) do
+    if line:find("v9_nothing", 1, true) then lines = lines + 1 end
+  end
+  assert_equal(lines, 1, "one console line names the key")
+  for _, bad in ipairs({ 14, true, "" }) do
+    local broken = deep_copy(scene)
+    broken.data.strata_lfo2_dest_key = bad
+    assert_true(not validate_scene(broken), tostring(bad) .. " is no key")
+  end
+  -- an index from an older release (a PSET line or a scene field) reads as none
+  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  path = pset_with(context, "older", '^"strata_lfo2_dest', { '"strata_lfo2_dest": 14' })
+  params:set(lfo_id(2, "dest"), destination_index("rev mix"))
+  params:read(path)
+  assert_equal(params:get(lfo_id(2, "dest")), 1, "an older PSET's index reads as none")
+  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  capture_scene(2)
+  local older = local_value("scenes")[2]
+  older.data.strata_lfo2_dest_key = nil
+  older.data.strata_lfo2_dest = 14
+  fill_scene(older)
+  assert_true(validate_scene(older), "an older scene stays valid")
+  recall_scene(2, 0)
+  assert_equal(params:get(lfo_id(2, "dest")), 1, "an older scene's index reads as none")
+end)
+
+test("a destination registered after init's list joins its voice's group", function()
+  load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_lfo_destination("probe", "freq")
+    S.register_lfo_global_destination("gprobe", "mutation_amount")
+  end })
+  local S = local_value("S")
+  local destinations = local_value("LFO_DESTINATIONS")
+  for voice_idx = 1, 7 do
+    local amp, probe = destination_index("v" .. voice_idx .. " amp"), destination_index("v" .. voice_idx .. " probe")
+    assert_equal(probe, amp + 1, "v" .. voice_idx .. " probe follows the voice's other registered ones")
+    assert_equal(destinations[probe].group, "voice " .. voice_idx)
+    assert_equal(destinations[probe].key, "v" .. voice_idx .. "_freq")
+    if voice_idx < 7 then assert_equal(destinations[probe + 1].label, "v" .. (voice_idx + 1) .. " main") end
+  end
+  local gprobe = destination_index("gprobe")
+  assert_equal(gprobe, destination_index("rev damp") + 1, "a registered global joins the globals")
+  assert_equal(destinations[gprobe].group, "global")
+  assert_equal(destinations[#destinations].label, "macro 16", "the macros still end the list")
+  local groups = {}
+  for _, group in ipairs(S.lib.lfos.destination_groups()) do groups[#groups + 1] = group.name .. " " .. group.first .. "-" .. group.last end
+  assert_equal(table.concat(groups, ", "), "global 2-13, voice 1 14-27, voice 2 28-41, voice 3 42-55, "
+    .. "voice 4 56-69, voice 5 70-83, voice 6 84-97, voice 7 98-111, macros 112-127")
+  -- a key is stored, so two destinations never share one
+  local ok, problem = pcall(load_strata, { before_init = function()
+    local_value("S").register_lfo_destination("again", "grain_size")
+  end })
+  assert_true(not ok and tostring(problem):find("register_lfo_destination: v1 again's param v1_grain_size is already "
+    .. "a destination", 1, true), "a second destination of one param is refused: " .. tostring(problem))
+  load_strata()
+end)
+
+test("an LFO's sound is unchanged: the same destination gives the same engine calls", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("reverb_mix", 0.3)
+  -- each destination set by its key: the engine calls 3.6 made for it
+  local function engine_calls(n, key)
+    context.clear_engine_calls()
+    params:set(lfo_id(n, "dest_key"), key)
+    params:set(lfo_id(n, "depth"), 50)
+    params:set(lfo_id(n), 1)
+    lfo_step(context)
+    local calls = {}
+    for _, call in ipairs(context.engine_calls) do calls[#calls + 1] = call end
+    params:set(lfo_id(n), 0)
+    return calls
+  end
+  for key, want in pairs({ v3_filter_freq = { 2, 3 }, v1_grain_pitch = { 0, 0 }, v5_buf_pos = { 4, 1 },
+    v6_grain_size = { 5, 2 }, v7_amp = { 6, 4 } }) do
+    local sets = {}
+    for _, call in ipairs(engine_calls(1, key)) do
+      if call.name == "setFastLfo" then sets[#sets + 1] = call end
+    end
+    assert_true(#sets >= 1, key .. " runs in the engine")
+    assert_equal(sets[1].args[1], 0, key .. ": LFO 1")
+    assert_equal(sets[1].args[2], want[1], key .. ": its voice")
+    assert_equal(sets[1].args[3], want[2], key .. ": its fast destination")
+    assert_near(sets[1].args[6], 0.5, 1e-9, key .. ": its depth")
+  end
+  -- a Lua one: the stored value plus its offset, through its own command
+  local reverbs = {}
+  for _, call in ipairs(engine_calls(2, "reverb_mix")) do
+    if call.name == "setReverb" then reverbs[#reverbs + 1] = call end
+  end
+  assert_true(#reverbs >= 1, "rev mix runs in Lua and sends setReverb")
+  assert_equal(local_value("S").lib.lfos.is_engine_run(2), false)
+  -- a voice's main follows its source, in Lua
+  params:set(lfo_id(3, "dest_key"), "v1_main")
+  assert_equal(lfo_destination_id(3), "v1_freq", "a synth voice's main is its freq")
+  assert_equal(local_value("S").lib.lfos.destination(3).label, "v1 main", "destination(n) is the entry, as before")
+  -- a macro, as a direct destination
+  params:set(lfo_id(4, "dest_key"), "macro_1")
+  assert_equal(lfo_destination_id(4), "macro_1")
 end)
 
 test("a global destination's param is a control param, checked once every param exists", function()
@@ -1243,15 +1450,16 @@ test("the LFO scene fields: per LFO in recall order, the state last, with the ra
   load_strata()
   local S = local_value("S")
   local fields = S.lib.lfos.SCENE_FIELDS
+  -- the destination is a scene block of its key (3.7), not a field
   local per_lfo = { "shape", "mode", "division", "rate", "depth", "offset", "phase", "rate_mod", "rate_mod_amt",
-    "depth_mod", "depth_mod_amt", "dest" }
-  assert_equal(#fields, 6 * (#per_lfo + 1), "13 fields per LFO")
+    "depth_mod", "depth_mod_amt" }
+  assert_equal(#fields, 6 * (#per_lfo + 1), "12 fields per LFO")
   local continuous = { rate = true, depth = true, offset = true }
   local ranges = { rate = { 0.003, 50 }, depth = { 0, 100 }, offset = { -100, 100 }, phase = { 0, 100 },
     rate_mod_amt = { -100, 100 }, depth_mod_amt = { -100, 100 } }
   for n = 1, 6 do
     for index, field in ipairs(per_lfo) do
-      local record = fields[(n - 1) * 13 + index]
+      local record = fields[(n - 1) * 12 + index]
       assert_equal(record.id, lfo_id(n, field), "LFO " .. n .. " field " .. index)
       assert_equal(record.continuous, continuous[field] == true, record.id .. " continuous")
       assert_equal(record.lfo, continuous[field] and n or nil, record.id .. " belongs to its LFO")
@@ -1260,7 +1468,7 @@ test("the LFO scene fields: per LFO in recall order, the state last, with the ra
       assert_equal(record.range and record.range[1], ranges[field] and ranges[field][1], record.id .. " range min")
       assert_equal(record.range and record.range[2], ranges[field] and ranges[field][2], record.id .. " range max")
     end
-    local state = fields[n * 13]
+    local state = fields[n * 12]
     assert_equal(state.id, lfo_id(n), "the state last")
     assert_equal(state.continuous, false); assert_equal(state.default, 0)
     assert_equal(state.range[1], 0); assert_equal(state.range[2], 1)

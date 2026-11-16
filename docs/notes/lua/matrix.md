@@ -32,7 +32,7 @@ Elsewhere: the MOD page and its rings (package 2a) draw and edit the routings th
 
 ## Destinations
 
-`destination_ids()`, in this order, only ids whose params exist now (the list is rebuilt when params are added): every LFO destination (`S.LFO_DESTINATIONS`) but `none` and the global `macro <m>` entries, by param id, a voice's `main` as `v<i>_main`: the 67 built-in ones (11 globals, then per voice its main entry and seven grain and buffer params), then the registered ones (`hist`, `vfilt`, `dsend`, `rsend`, `amp` per voice), 102 in all. Any later `register_lfo_destination` becomes a matrix destination too. `v<i>_main` resolves through `main_param_id(i)` at each step, so it follows the voice's source: a synth voice's main param runs in Lua, a buffer voice's `buf_pos` on the fast path.
+`destination_ids()`, in this order, only ids whose params exist now (the list is rebuilt when params are added): every LFO destination (`S.LFO_DESTINATIONS`) but `none` and the global `macro <m>` entries, by param id, a voice's `main` as `v<i>_main`, in the LFO list's order (3.7, by voice; `docs/notes/lua/lfos.md`, Destinations): the 11 globals, then per voice its 13 together (its main entry, seven grain and buffer params, then the registered `hist`, `vfilt`, `dsend`, `rsend`, `amp`), 102 in all. The routing view's picker and its ALT jump (each entry's `group`: the globals, a voice) follow that order. Any later `register_lfo_destination` becomes a matrix destination too, inside its voice's run. `v<i>_main` resolves through `main_param_id(i)` at each step, so it follows the voice's source: a synth voice's main param runs in Lua, a buffer voice's `buf_pos` on the fast path.
 
 ## The step
 

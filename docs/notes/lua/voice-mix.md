@@ -2,7 +2,7 @@
 
 - 3.1's chain by default: every `v<i>_delay_send` and `v<i>_reverb_send` defaults to 1 and every `v<i>_filter_mix` to 0, and the bypass params to off.
 - The voice params reach the engine only through their registered grain keys (`setGrainParam`, while the voice runs) and the voice sync; never `engine.*` from an action. `filter_type` goes as its option minus 1 (`filterType` 0-2).
-- `filter_type` is a discrete scene field (it switches at a transition's end); the other five crossfade. The cutoff and the two sends are LFO destinations (`v<i> vfilt`, `v<i> dsend`, `v<i> rsend`), registered after every built-in destination and after history, so saved destination indices keep their meaning.
+- `filter_type` is a discrete scene field (it switches at a transition's end); the other five crossfade. The cutoff and the two sends are LFO destinations (`v<i> vfilt`, `v<i> dsend`, `v<i> rsend`), each in its voice's group after history (3.7: the list is by voice, and an LFO keeps its destination by key).
 - The bypass is explicit: only `delay_bypass` and `reverb_bypass` send `engine.setBypass`. A mix of 0 (E3, PARAMS, an LFO, a scene fade, a MIDI CC) never sets a bypass, and a bypass never changes a mix.
 - PSETs store the bypass params (they are params); scenes never capture or recall them. MAIN's randomize, mutation and the 256 fader pages never touch any param of this module (`fader = false`). A quick ALT+K2 on VOICE's filter & sends section is the one exception (#557): the record's `randomize` draws `filter_type` (a uniform option), `filter_freq` (100-8000 Hz, even in octaves), `filter_res` (0-0.7, below self-oscillation) and `delay_send` and `reverb_send` (0-0.6 each); `filter_mix` is kept (0 would leave the filter out), and so are the bypass params.
 

@@ -1,9 +1,10 @@
 -- lib/lfos.lua
 -- The six global LFOs, Strata's own (3.4; norns' lib/lfo.lua is no longer
 -- used): their params (add_lfo_params, which lib/params_setup.lua's lfos
--- record calls: a group strata_lfo_<n> of 13 per LFO), their destinations
--- (S.LFO_DESTINATIONS: the built-in ones, then, from init, the registered
--- ones, S.registry.lfo_destinations), and the one clock that steps them
+-- record calls: a group strata_lfo_<n> of 14 per LFO), their destinations
+-- (S.LFO_DESTINATIONS, by voice: from init a registered one,
+-- S.registry.lfo_destinations, joins its voice's group; each is kept by
+-- key through S.lib.io_keyed), and the one clock that steps them
 -- (S.lfo_clock, 48 Hz, from the start step lfo_clock to the cleanup step
 -- lfos). An LFO on one of the five fast destinations (a voice's grain
 -- pitch, position, size, filter cutoff and level) runs in the engine
@@ -12,9 +13,9 @@
 -- send_engine_value, at most LFO.sends_per_step sends a step in one round
 -- robin (mark_due) that the matrix shares (on_step). LFO n's rate and
 -- depth can follow a lower-numbered LFO's shape value. Registers the LFOs
--- as modulation sources lfo1..lfo6, a scene migration and a PSET hook that
--- import 3.3's lfo_* settings, the clock's start and cleanup steps and the
--- "lfo clock" invariant. S.selected_lfo is the LFO the LFO page and arc
+-- as modulation sources lfo1..lfo6, a scene block per LFO for its
+-- destination's key, the clock's start and cleanup steps and the "lfo
+-- clock" invariant. S.selected_lfo is the LFO the LFO page and arc
 -- work on. The functions that were global stay global (lfo_destination_id,
 -- restore_lfo_destination, add_lfo_params); the rest are fields of this
 -- module's table (S.lib.lfos).
@@ -37,7 +38,7 @@ return function(S)
   local LFO = {
     step_hz = 48, sends_per_step = 12, lua_max_hz = 10, engine_max_hz = 50,
     send_threshold = 1 / 1000, engine_rate_threshold = 0.005,
-    min_hz = 0.003, bar_beats = 4, beats_per_division = 4, drunk_step = 0.2, group_size = 13,
+    min_hz = 0.003, bar_beats = 4, beats_per_division = 4, drunk_step = 0.2, group_size = 14,
     defaults = {rate = 0.25, depth = 25, division = 13},
     shapes = {"sine", "tri", "square", "up", "down", "s&h", "smooth", "drunk"},
     random_shapes = {["s&h"] = true, smooth = true, drunk = true},
@@ -74,84 +75,120 @@ return function(S)
     return voice, destination
   end
 
-  -- LFO destinations in strata_lfo<n>_dest option order: {label, resolve,
-  -- group, fast}, where resolve returns the param id to modulate (nil for
-  -- none), group names the group ALT+E3 jumps by, and fast is {voice,
-  -- destination} for an entry that runs in the engine. A voice's "main"
-  -- resolves on every step, so it follows the voice's source, and always
-  -- runs in Lua (it can resolve to any param)
+  -- LFO destinations in strata_lfo<n>_dest option order (3.7, design
+  -- decision 24): {label, key, resolve, group, fast}, where key is what a
+  -- PSET and a scene keep (the param id it moves, v<i>_main for a voice's
+  -- main entry, none), resolve returns the param id to modulate (nil for
+  -- none), group names the group ALT+E3 jumps by (none, global, voice <i>,
+  -- macros), and fast is {voice, destination} for an entry that runs in the
+  -- engine. A voice's "main" resolves on every step, so it follows the
+  -- voice's source, and always runs in Lua (it can resolve to any param)
   local function fixed_destination(label, id, group)
     local voice, destination = M.fast_destination(id)
-    return {label = label, resolve = function() return id end, group = group,
+    return {label = label, key = id, resolve = function() return id end, group = group,
       fast = voice and {voice = voice, destination = destination} or nil}
   end
 
-  S.LFO_DESTINATIONS = {
-    {label = "none", resolve = function() return nil end, group = "none"},
-    fixed_destination("density", "master_density", "global"),
-    fixed_destination("drift", "drift_amount", "global"),
-    fixed_destination("filt freq", "filter_freq", "global"),
-    fixed_destination("filt res", "filter_res", "global"),
-    fixed_destination("filt mix", "filter_mix", "global"),
-    fixed_destination("dly time", "delay_time", "global"),
-    fixed_destination("dly fdbk", "delay_feedback", "global"),
-    fixed_destination("dly mix", "delay_mix", "global"),
-    fixed_destination("rev mix", "reverb_mix", "global"),
-    fixed_destination("rev size", "reverb_size", "global"),
-    fixed_destination("rev damp", "reverb_damp", "global")
+  -- The built-in destinations: the globals ({label, param id}) and, per
+  -- voice after "v<i> main", {label suffix, param id suffix}. A registered
+  -- global destination whose param is a macro's (macro_param) joins the
+  -- macros' group, which ends the list; any other joins the globals
+  local BUILT_IN_DESTINATIONS = {
+    globals = {
+      {"density", "master_density"}, {"drift", "drift_amount"}, {"filt freq", "filter_freq"},
+      {"filt res", "filter_res"}, {"filt mix", "filter_mix"}, {"dly time", "delay_time"},
+      {"dly fdbk", "delay_feedback"}, {"dly mix", "delay_mix"}, {"rev mix", "reverb_mix"},
+      {"rev size", "reverb_size"}, {"rev damp", "reverb_damp"}
+    },
+    voice = {
+      {"size", "grain_size"}, {"dens", "grain_density"}, {"pitch", "grain_pitch"}, {"spread", "grain_spread"},
+      {"pos", "buf_pos"}, {"rate", "buf_rate"}, {"scan", "buf_scan"}
+    },
+    macro_param = "^macro_%d+$",
   }
 
-  -- per voice, after "v<i> main": {label suffix, param id suffix}
-  local VOICE_LFO_DESTINATIONS = {
-    {"size", "grain_size"}, {"dens", "grain_density"}, {"pitch", "grain_pitch"}, {"spread", "grain_spread"},
-    {"pos", "buf_pos"}, {"rate", "buf_rate"}, {"scan", "buf_scan"}
-  }
-
-  for i = 1, NUM_VOICES do
-    table.insert(S.LFO_DESTINATIONS, {label = "v" .. i .. " main", resolve = function() return main_param_id(i) end,
-      group = "v" .. i})
-    for _, entry in ipairs(VOICE_LFO_DESTINATIONS) do
-      table.insert(S.LFO_DESTINATIONS, fixed_destination("v" .. i .. " " .. entry[1], "v" .. i .. "_" .. entry[2], "v" .. i))
-    end
-  end
-
-  -- The built-in destinations end here. Their indices are stored in PSETs
-  -- and scenes (strata_lfo<n>_dest), so they never move: the registered
-  -- destinations follow them, by registration and then voice, so a later
-  -- registration only appends
-  local BUILT_IN_LFO_DESTINATIONS = #S.LFO_DESTINATIONS
-  M.BUILT_IN_DESTINATIONS = BUILT_IN_LFO_DESTINATIONS
-
-  -- At init (add_lfo_params): the registered destinations after the
-  -- built-in ones, and the option labels of the whole list. A per-voice
-  -- record ({label, suffix}) adds v1 <label> ... v7 <label>, a group of its
-  -- own; a global one ({label, param_id, global = true}) adds one
-  -- destination, <label>, and the global ones are one group (#580)
-  local function lfo_destination_labels()
-    for index = #S.LFO_DESTINATIONS, BUILT_IN_LFO_DESTINATIONS + 1, -1 do S.LFO_DESTINATIONS[index] = nil end
-    local labels, taken = {}, {}
-    for index, destination in ipairs(S.LFO_DESTINATIONS) do
-      labels[index] = destination.label
-      taken[destination.label] = true
-    end
-    -- kind: the register function the record came from, which a taken label names
-    local function add(kind, label, id, group)
+  -- Build S.LFO_DESTINATIONS in place from the built-in destinations and
+  -- `registered` (S.registry.lfo_destinations at init, none at include
+  -- time): none; the globals, built-in then registered; per voice its main
+  -- entry, its built-in ones, then each per-voice record's in registration
+  -- order; then the macros. Returns the option labels. A label that repeats
+  -- one, or a second destination of one param (a key is stored, so it
+  -- names one entry), is an error naming the register function
+  local function build_destinations(registered)
+    local parts = {{}}   -- the globals, voice 1 .. voice NUM_VOICES, the macros
+    for i = 1, NUM_VOICES do parts[i + 1] = {} end
+    local macros = {}
+    parts[NUM_VOICES + 2] = macros
+    local taken, keys = {none = true}, {none = true}
+    -- kind: the register function the record came from, which an error names
+    local function add(part, kind, label, id, group, entry)
       if taken[label] then error(kind .. ": the label " .. label .. " is taken", 0) end
-      taken[label] = true
-      table.insert(S.LFO_DESTINATIONS, fixed_destination(label, id, group))
-      table.insert(labels, label)
+      if keys[id] then error(kind .. ": " .. label .. "'s param " .. id .. " is already a destination", 0) end
+      taken[label], keys[id] = true, true
+      table.insert(part, entry or fixed_destination(label, id, group))
     end
-    for record_index, entry in ipairs(S.registry.lfo_destinations) do
-      if entry.global then
-        add("register_lfo_global_destination", entry.label, entry.param_id, "registered globals")
-      else
-        for i = 1, NUM_VOICES do
-          add("register_lfo_destination", "v" .. i .. " " .. entry.label, "v" .. i .. "_" .. entry.suffix,
-            "registered " .. record_index)
-        end
+    for _, entry in ipairs(BUILT_IN_DESTINATIONS.globals) do add(parts[1], "built-in", entry[1], entry[2], "global") end
+    for i = 1, NUM_VOICES do
+      local group, prefix = "voice " .. i, "v" .. i
+      add(parts[i + 1], "built-in", prefix .. " main", prefix .. "_main", group,
+        {label = prefix .. " main", key = prefix .. "_main", resolve = function() return main_param_id(i) end,
+          group = group})
+      for _, entry in ipairs(BUILT_IN_DESTINATIONS.voice) do
+        add(parts[i + 1], "built-in", prefix .. " " .. entry[1], prefix .. "_" .. entry[2], group)
       end
     end
+    for _, entry in ipairs(registered) do
+      if not entry.global then
+        for i = 1, NUM_VOICES do
+          add(parts[i + 1], "register_lfo_destination", "v" .. i .. " " .. entry.label, "v" .. i .. "_" .. entry.suffix,
+            "voice " .. i)
+        end
+      elseif tostring(entry.param_id):match(BUILT_IN_DESTINATIONS.macro_param) then
+        add(macros, "register_lfo_global_destination", entry.label, entry.param_id, "macros")
+      else
+        add(parts[1], "register_lfo_global_destination", entry.label, entry.param_id, "global")
+      end
+    end
+    local list = S.LFO_DESTINATIONS
+    for index = #list, 1, -1 do list[index] = nil end
+    table.insert(list, {label = "none", key = "none", resolve = function() return nil end, group = "none"})
+    for _, part in ipairs(parts) do
+      for _, destination in ipairs(part) do table.insert(list, destination) end
+    end
+    local labels = {}
+    for index, destination in ipairs(list) do labels[index] = destination.label end
     return labels
+  end
+
+  -- At include time the built-in ones (the registered ones are read at
+  -- init, add_lfo_params), in a table that keeps its identity
+  S.LFO_DESTINATIONS = {}
+  build_destinations({})
+
+  -- The groups ALT+E3 jumps by, in order, none aside: {name, first, last},
+  -- indices into S.LFO_DESTINATIONS (global, voice 1 .. voice 7, macros)
+  function M.destination_groups()
+    local groups = {}
+    for index, destination in ipairs(S.LFO_DESTINATIONS) do
+      local last = groups[#groups]
+      if destination.group == "none" then
+        -- none is a destination of its own, in no group
+      elseif last and last.name == destination.group then
+        last.last = index
+      else
+        table.insert(groups, {name = destination.group, first = index, last = index})
+      end
+    end
+    return groups
+  end
+
+  -- At init (add_lfo_params): the whole list with the registered
+  -- destinations, its option labels and its keys
+  local function lfo_destination_labels()
+    local labels = build_destinations(S.registry.lfo_destinations)
+    local keys = {}
+    for index, destination in ipairs(S.LFO_DESTINATIONS) do keys[index] = destination.key end
+    return labels, keys
   end
 
   -- Each global destination's param exists only once every params record
@@ -817,20 +854,26 @@ return function(S)
     return options
   end
 
-  -- LFO n's 13 params, in a group of its own (groups cannot nest): on,
-  -- destination, shape, mode, rate, division, depth, offset, phase, and the
-  -- rate and depth inputs with their amounts. The shape, rate, division and
+  -- LFO n's 14 params, in a group of its own (groups cannot nest): on,
+  -- destination (with its hidden key), shape, mode, rate, division, depth,
+  -- offset, phase, and the rate and depth inputs with their amounts. The shape, rate, division and
   -- phase actions call note_param_edit (the LFO page's randomize sets them,
   -- #557)
-  local function add_lfo_group(n, destination_labels)
+  local function add_lfo_group(n, destination_labels, destination_keys)
     params:add_group("strata_lfo_" .. n, "LFO " .. n, LFO.group_size)
     params:add{type = "binary", behavior = "toggle", id = param_id(n), name = "on", default = 0,
       action = function(x) turned(n, x == 1) end}
-    params:add{type = "option", id = param_id(n, "dest"), name = "destination", options = destination_labels, default = 1,
-      action = function()
-        restore_lfo_destination(n)
-        settings_changed(n, false)
-      end}
+    -- the destination, kept by key (S.lib.io_keyed: the option and its
+    -- hidden text strata_lfo<n>_dest_key); a key this build lacks reads as
+    -- none, with one console line
+    S.lib.io_keyed.add(param_id(n, "dest"), "destination", destination_keys, destination_labels, function(key)
+      local stored = params:get(param_id(n, "dest_key"))
+      if stored ~= key then
+        print("strata: LFO " .. n .. "'s destination " .. tostring(stored) .. " is not in this version: none")
+      end
+      restore_lfo_destination(n)
+      settings_changed(n, false)
+    end)
     params:add{type = "option", id = param_id(n, "shape"), name = "shape", options = LFO.shapes, default = 1,
       action = function()
         note_param_edit(param_id(n, "shape"))
@@ -874,8 +917,8 @@ return function(S)
 
   -- PARAMS: one group per LFO (lib/params_setup.lua's lfos record)
   function add_lfo_params()
-    local destination_labels = lfo_destination_labels()
-    for n = 1, NUM_LFOS do add_lfo_group(n, destination_labels) end
+    local destination_labels, destination_keys = lfo_destination_labels()
+    for n = 1, NUM_LFOS do add_lfo_group(n, destination_labels, destination_keys) end
   end
 
   ---------------------------------------------------------------------------
@@ -908,10 +951,28 @@ return function(S)
     field("rate_mod_amt", {continuous = false, default = 0, range = {-100, 100}})
     field("depth_mod", {continuous = false, default = 1})
     field("depth_mod_amt", {continuous = false, default = 0, range = {-100, 100}})
-    field("dest", {continuous = false, default = 1})
     table.insert(SCENE_FIELDS, {id = param_id(n), continuous = false, default = 0, range = {0, 1}})
   end
   M.SCENE_FIELDS = SCENE_FIELDS
+
+  -- Each LFO's destination in a scene is its key (3.7), the field
+  -- strata_lfo<n>_dest_key: a scene block (a global field holds a number),
+  -- which switches at a transition's end. A scene without it (one saved
+  -- before 3.7, which kept an index under strata_lfo<n>_dest) gets none; a
+  -- key this build lacks is kept and reads as none, with one console line
+  -- (the param's action). Blocks apply before the globals, so a recall sets
+  -- the destination before the LFO's settings and state
+  for n = 1, NUM_LFOS do
+    local key_id = param_id(n, "dest_key")
+    S.register_scene_block({
+      key = key_id,
+      discrete = true,
+      default = function() return "none" end,
+      capture = function() return params:get(key_id) end,
+      validate = function(value) return type(value) == "string" and S.lib.io_keyed.refuses(value) == nil end,
+      apply = function(value) params:set(key_id, value) end,
+    })
+  end
 
   -- Whether a smooth transition to scene_data stops LFO n: it runs now and
   -- is off in the scene (lib/scenes.lua's scene_transition_targets)
