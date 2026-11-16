@@ -1429,7 +1429,7 @@ end
 -- a method whose frame outlives its call is called through areaCall (a
 -- method frame, which clears its own caller): every area hook, strataAreas,
 -- and every call of a method in AREA_CALL_METHODS (docs/notes/engine/structure.md).
-local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "free" }
+local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "free", "voiceHit" }
 -- methods that keep a closure and are called from a function (a SynthDef
 -- function, an onFree, a fork, a scheduled function, a makeBundle
 -- function, a command function): never called but through areaCall. Each
@@ -1535,6 +1535,11 @@ test("an area hook, strataAreas and a method that keeps a closure are called thr
   assert_true(probe[2] and probe[2]:match("^probe%.sc:7: strataAreaProbe's free hook calls areaCall without a method's symbol"),
     "an areaCall must name the method: " .. tostring(probe[2]))
   assert_true(probe[3] and probe[3]:match("^probe%.sc:9: this%.ringGrainReader is called directly"), "and a kept closure's method: " .. tostring(probe[3]))
+  -- 3.7's voiceHit hook (design §0.2) is a hook like the others
+  local hit = direct_calls("probe.sc", "+ Engine_Strata {\n    strataAreaProbe {\n        ^(order: 1,\n"
+    .. "            voiceHit: { arg voice, kind; this.fireProbe(voice) })\n    }\n}\n")
+  assert_true(#hit == 1 and hit[1]:match("^probe%.sc:4: strataAreaProbe's voiceHit hook calls this%.fireProbe directly"),
+    "a voiceHit hook's direct call is found: " .. table.concat(hit, "; "))
 
   local found, hooks, files = {}, 0, engine_files()
   for index = 2, #files do

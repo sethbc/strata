@@ -43,7 +43,7 @@ A worker's report lists the skills it invoked, and a review fails a package miss
 The project is written in two languages that must stay in sync:
 1. **`strata.lua` and its `lib/*.lua` modules** (the norns script): UI, params, encoders/keys, grid, arc, MIDI and LFOs. They control the engine through `engine.*` commands.
 2. **`lib/Engine_Strata.sc` and its `lib/engine/Strata*.sc` class extensions** (the SuperCollider engine): all synthesis and audio processing. It exposes commands with `this.addCommand()`. `lib/Engine_Strata.sc` holds only the class, every variable, `*new` and a generic `alloc` and `free`; all other code is in `lib/engine/` (the module table lists the files).
-   - The engine is built from **areas** (`strataArea<Name>` methods returning hooks and an `order`; state in `areaState[\<name>]`): `free` runs every `stop` before any `free`, so a node never goes in `free`, a bus or buffer never in `stop`. Details: `docs/notes/engine/structure.md` (Areas).
+   - The engine is built from **areas** (`strataArea<Name>` methods returning hooks, `voiceHit` among them, and an `order`; state in `areaState[\<name>]`): `free` runs every `stop` before any `free`, so a node never goes in `free`, a bus or buffer never in `stop`. Details: `docs/notes/engine/structure.md` (Areas).
    - Engine files are named `Strata*.sc` and extension files add methods only, never variables. Renaming or deleting an engine file needs a norns restart note in the changelog fragment.
 
 ```

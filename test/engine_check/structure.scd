@@ -271,6 +271,58 @@ var checkRollbackPolls = {
             names, declaredPolls.value.asArray));
 };
 
+// 3.7's voiceHit (design §0.2): an area's optional hook hears a voice's
+// start (voiceOn on a stopped voice, a releasing one included), a retrigger
+// (of a valid voice, running or not) and an extra note that sounds
+// (extraNoteOn, where it opens the step gate: a start or a re-strike), each
+// once per area, in ascending order, with the voice and the kind. A running
+// voice's voiceOn, a refused extra note (the pool full, the voice stopped)
+// and an invalid voice tell nothing. Two check-only areas between the rings
+// (70) and the scale (80), at orders no other check uses, are put into
+// h.engine's areas for the time and record their calls (h.engine's own
+// areas have no hook: the checks above and every other area play as before)
+var checkVoiceHit = {
+    var voice = 3, calls = List.new, areas = engine.instVarAt(\areas), failed = List.new;
+    var hook = { arg order; { arg hitVoice, kind; calls.add([order, hitVoice, kind]) } };
+    var both = { arg kind; [[76, voice, kind], [77, voice, kind]] };
+    var expect = { arg what, expected; var got = calls.asArray; calls.clear; if (got != expected) { failed.add([what, got]) } };
+    engine.instVarPut(\areas, areas.select({ arg area; area[\order] < 76 })
+        ++ [(name: \checkHitFirst, order: 76, voiceHit: hook.(76)), (name: \checkHitSecond, order: 77, voiceHit: hook.(77))]
+        ++ areas.select({ arg area; area[\order] > 77 }));
+    protect {
+        command.(\setNotePool, 1);
+        command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
+        expect.(\startStopped, both.(\start));
+        command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
+        expect.(\startRunning, []);
+        command.(\retrigger, voice, 0.8);
+        expect.(\retrigger, both.(\retrigger));
+        command.(\noteOn, voice, 1, 64.0, 329.63, 1.26, 0.8);
+        expect.(\noteStart, both.(\note));
+        command.(\noteOn, voice, 1, 65.0, 349.23, 1.33, 0.8);
+        expect.(\noteRestrike, both.(\note));
+        command.(\noteOn, voice, 2, 67.0, 392.0, 1.5, 0.8);
+        expect.(\notePoolFull, []);
+        command.(\voiceOff, voice);
+        expect.(\voiceOff, []);
+        command.(\noteOn, voice, 2, 67.0, 392.0, 1.5, 0.8);
+        expect.(\noteVoiceStopped, []);
+        command.(\retrigger, voice, 0.8);
+        expect.(\retriggerStopped, both.(\retrigger));
+        command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
+        expect.(\startReleasing, both.(\start));
+        command.(\voiceOn, 99, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
+        command.(\retrigger, 99, 0.8);
+        expect.(\invalidVoice, []);
+    } {
+        engine.instVarPut(\areas, areas);
+        command.(\setNotePool, 0);
+    };
+    h.stopAllVoices;
+    check.(failed.isEmpty,
+        "structure: voiceHit runs every area's hook in order with the voice and the kind (wrong: %)".format(failed.asArray));
+};
+
 // SynthDefs
 allDefs.do({ arg name;
     check.(SynthDescLib.global.at(name).notNil, "SynthDef % built".format(name));
@@ -454,6 +506,7 @@ check.((other.areaState[\record][\headBuses] ++ other.areaState[\record][\voiceT
 check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other) == [0, 0, 0] },
     "structure: engineLeft counts what an engine holds (running %, freed %)".format(engineLeft.(engine), engineLeft.(other)));
 
+checkVoiceHit.value;
 checkFreeContained.value;
 checkAllocRolledBack.value;
 checkRollbackPolls.value;
