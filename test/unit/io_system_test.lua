@@ -54,6 +54,8 @@ local SYSTEM = {
   -- 23064, held to about 40% of each
   timed_offs = {light = 20, light_port = 2, flood = {3000, 3000, 6000, 9000}},
   stretch = {tempo = 120, settle_seconds = 1},
+  -- the flood shares the ii bus (#710, the second ruling's measure)
+  flood_share = {first_seconds = 2, most_over_least = 3},
 }
 
 local GRID_SCRIPT = h.repo_root .. "/iii/strata_grid.lua"
@@ -863,6 +865,53 @@ local function under_the_rate_problems(rig)
   return problems
 end
 
+-- What the flood got wrong in sharing the ii bus (#710), as text. A line is
+-- what lib/io/ii.lua takes turns by: a gate's (device, command, first
+-- argument), and any other command's (device, command); its sends are its
+-- lines crow got from the flood's start, its offs (a gate's low) not counted.
+-- Each voice's ER-301 port and TELEXo output must first go high within
+-- first_seconds; per device, the most-sent line at most most_over_least
+-- times the least-sent
+local GATE_COMMANDS = {tr = true, env = true}
+local function flood_share_problems(rig)
+  local problems, first_high, sent = {}, {}, {}
+  for _, entry in ipairs(rig.crow) do
+    if entry.t >= rig.flood_start then
+      local device, command, args = entry.line:match("^ii%.(%w+)%.([%w_]+)%((.-)%)$")
+      if device then
+        local first, value = args:match("^([^,]+), (.+)$")
+        local gate = GATE_COMMANDS[command] and first ~= nil
+        local line = gate and (device .. "." .. command .. "(" .. first .. ")") or (device .. "." .. command)
+        if not (gate and value == "0") then
+          sent[device] = sent[device] or {}
+          sent[device][line] = (sent[device][line] or 0) + 1
+        end
+        if command == "tr" and value == "1" and not first_high[line] then first_high[line] = entry.t - rig.flood_start end
+      end
+    end
+  end
+  for voice = 1, rig.S.constants.NUM_VOICES do
+    for _, line in ipairs({"er301.tr(" .. ROUTES.er301[voice] .. ")", "txo.tr(" .. ROUTES.txo[voice] .. ")"}) do
+      local at = first_high[line]
+      if not at or at > SYSTEM.flood_share.first_seconds then
+        problems[#problems + 1] = "voice " .. voice .. "'s " .. line .. " first high "
+          .. (at and string.format("%.3f s", at) or "never") .. " into the flood"
+      end
+    end
+  end
+  for device, lines in pairs(sent) do
+    local most, least, most_line, least_line = 0, math.huge, nil, nil
+    for line, count in pairs(lines) do
+      if count > most then most, most_line = count, line end
+      if count < least then least, least_line = count, line end
+    end
+    if most > SYSTEM.flood_share.most_over_least * least then
+      problems[#problems + 1] = string.format("%s: %s sent %d times, %s %d", device, most_line, most, least_line, least)
+    end
+  end
+  return problems
+end
+
 ---------------------------------------------------------------------------
 -- The tests
 ---------------------------------------------------------------------------
@@ -934,6 +983,12 @@ test("with everything on, a minute holds every bound", function()
   assert_true(rig.ii.offs_joined > 100 and rig.ii.most_owed >= 4, "offs joined the queue while it was busy ("
     .. rig.ii.offs_joined .. " joined, at most " .. rig.ii.most_owed .. " owed at once)")
   assert_true(rig.ii.most > II.queue_max, "offs waited beyond the 48: " .. rig.ii.most)
+  -- the flood shares the bus (#710): every voice's ER-301 port and TELEXo
+  -- output goes high within SYSTEM.flood_share.first_seconds of the flood's
+  -- start, and on each device no line is sent more than
+  -- SYSTEM.flood_share.most_over_least times as often as its least-served
+  local share_problems = flood_share_problems(rig)
+  assert_equal(#share_problems, 0, "the flood shares the ii bus: " .. first_lines(share_problems, 10))
 
   -- the minute's second part, under the bus's rate: every voice's ER-301
   -- port and TELEXo output seen high and then low, Just Friends and W/
@@ -1082,9 +1137,11 @@ test("after that minute everything stops with no note left", function()
   pattern_clock_stop()
   release_mpe_keys(rig)
   rig.waiting_at_cleanup = S.lib.io_ii.queued()
-  -- the case this test is for: cleanup with the ii queue full
-  assert_true(rig.waiting_at_cleanup >= S.lib.io_ii.II.queue_max, "the ii queue is full at cleanup: "
-    .. rig.waiting_at_cleanup .. " lines wait")
+  -- the case this test is for: cleanup under overload, with more offs
+  -- waiting than the leaving sequence sends at once (the queue no longer
+  -- fills under a sustained flood: each line holds its share, #710)
+  assert_true(rig.ii.owed_count > S.lib.io_ii.II.cleanup_sends, "more offs wait at cleanup than are sent at once: "
+    .. rig.ii.owed_count .. " offs of " .. rig.waiting_at_cleanup .. " lines")
   cleanup()
 
   -- Every MIDI note on has its note off (design §3.4, §14): on every port

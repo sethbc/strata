@@ -193,6 +193,161 @@ local function fill(ii, n, from)
   return lines
 end
 
+-- #710 (the second ruling): under sustained overload the lines take turns. A line
+-- is what an off lowers (device, command, first argument) once its pair has had an
+-- off, else its device and command; from a refusal until the queue next empties a
+-- line holds at most its share of the queue, and room is held for the lines that
+-- were refused and served less recently than the one asking
+
+test("below 48 waiting, lines are sent in the order queued and none is refused", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  ii.send_off("er301", "tr", 1, 0)  -- the pair learned: each port its own line
+  local expected = {"ii.er301.tr(1, 0)"}
+  for round = 1, 3 do
+    for port = 1, 7 do
+      assert_true(ii.send("er301", "tr", port, 1), "round " .. round .. " port " .. port .. " queued")
+      expected[#expected + 1] = "ii.er301.tr(" .. port .. ", 1)"
+    end
+    for k = 1, 8 do
+      assert_true(ii.send("jf", "play_note", round + k / 10, 5))
+      expected[#expected + 1] = "ii.jf.play_note(" .. S.lib.io_crow.number(round + k / 10) .. ", 5)"
+    end
+  end
+  assert_equal(ii.queued(), 46)
+  assert_equal(table.concat(drain(step, ii), "|"), table.concat(expected, "|"), "every line, in the order queued")
+  assert_equal(ii.dropped(), 0, "none refused")
+  for k = 1, 40 do assert_true(ii.send("jf", "play_note", k, 5), "one line may take the room while the queue keeps up") end
+end)
+
+-- The queue pressed: the pair (gt, tr) learned (port 9 known low), port 1's on
+-- queued, 47 notes of one line behind it, then port 2's on refused at the full
+-- queue; one step sends port 1's on and three notes; ports 3 to 5 queued: one
+-- place left. Lines asked: gt.tr(1) to (5) and jf.play_note, so a share of 4
+local function pressed_with_one_place(context, S, ii, step)
+  lead(context, S)
+  ii.send_off("gt", "tr", 9, 0)
+  drain(step, ii)
+  assert_true(ii.send("gt", "tr", 1, 1))
+  for k = 1, 47 do assert_true(ii.send("jf", "play_note", k, 5)) end
+  assert_equal(ii.send("gt", "tr", 2, 1), false, "port 2 refused at the full queue")
+  assert_equal(step()[1], "ii.gt.tr(1, 1)", "port 1 served")
+  for port = 3, 5 do assert_true(ii.send("gt", "tr", port, 1), "port " .. port .. " queued") end
+  assert_equal(ii.queued(), 47, "one place left")
+end
+
+test("a line served least recently is admitted before one served just now", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  pressed_with_one_place(context, S, ii, step)
+  local dropped = ii.dropped()
+  assert_equal(ii.send("gt", "tr", 1, 1), false, "port 1, served just now, does not take the place port 2 waits for")
+  assert_equal(ii.dropped(), dropped + 1, "and is counted")
+  assert_equal(ii.send("gt", "tr", 2, 1), true, "port 2, never served, takes it")
+  assert_equal(ii.queued(), 48)
+end)
+
+test("a refused on owes no off and displaces nothing", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  pressed_with_one_place(context, S, ii, step)
+  local waiting = ii.queued()
+  assert_equal(ii.send("gt", "tr", 9, 1), false, "port 9 (known low) refused: port 2 was refused first")
+  assert_equal(ii.queued(), waiting, "nothing taken out, nothing added")
+  assert_equal(ii.send_off("gt", "tr", 9, 0), false, "its off is not owed")
+  local sent = drain(step, ii)
+  assert_equal(#sent, waiting, "every line admitted is sent")
+  assert_equal(sent[#sent], "ii.gt.tr(5, 1)", "in the order queued")
+  for _, line in ipairs(sent) do assert_true(line:find("ii.gt.tr(9,", 1, true) == nil, "nothing of port 9: " .. line) end
+end)
+
+test("under overload a line holds at most its share of the queue", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  pressed_with_one_place(context, S, ii, step)
+  drain(step, ii)  -- the queue empties: the press ends
+  for k = 1, 48 do assert_true(ii.send("jf", "play_note", k, 5), "unpressed, one line may fill the queue") end
+  assert_equal(ii.send("jf", "play_note", 49, 5), false, "the 49th refused: pressed again")
+  for _ = 1, 10 do step() end  -- 8 notes still wait: still pressed
+  -- lines asked within the last second: jf.play_note and gt.tr(1) to (5): 48 / (2 * 6) = 4
+  for port = 1, 5 do assert_true(ii.send("gt", "tr", port, 1), "port " .. port .. " queued") end
+  local dropped = ii.dropped()
+  local queued = 0
+  for _ = 1, 10 do
+    if ii.send("gt", "tr", 3, 1) then queued = queued + 1 end
+  end
+  assert_equal(queued, 3, "port 3 holds its share, 4, and no more")
+  assert_equal(ii.dropped(), dropped + 7, "the dropped count counts each refused line")
+  assert_equal(ii.queued(), 8 + 5 + 3, "with room left in the queue")
+  assert_equal(ii.send("gt", "tr", 1, 1), true, "another line still gets in")
+end)
+
+test("the dropped count counts each refused line, and IO's section shows it", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  pressed_with_one_place(context, S, ii, step)
+  assert_equal(ii.dropped(), 1, "port 2's")
+  ii.send("gt", "tr", 1, 1)
+  ii.send("gt", "tr", 9, 1)
+  assert_equal(ii.dropped(), 3, "two more refused")
+  assert_equal(ii_section(S).status(), "3 dropped")
+end)
+
+-- The issue's flood, at the bus: seven voices, chords of eight, four hits in
+-- each 0.2 s (every second 1/8 step at 300 BPM with ratchets of four; a hit
+-- each 25 ms, here one each LFO step for four steps in ten), each note to an
+-- ER-301 port and a TELEXo output of its voice's own (the odd voices on the
+-- envelope), Just Friends and W/ (as lib/io/er301.lua, txo.lua, jf.lua and
+-- wsyn.lua send them); each hit's offs come before its ons
+local FLOOD = {voices = 7, chord = 8, hits_of = 4, steps_of = 10}
+
+local function flood_hit(ii, voice, playing)
+  if playing[voice] then
+    ii.send_off("er301", "tr", voice, 0); ii.send_off("txo", "tr", voice, 0)
+    if voice % 2 == 1 then ii.send_off("txo", "env", voice, 0) end
+  end
+  for k = 1, FLOOD.chord do
+    local volts = (voice * FLOOD.chord + k) / 12 - 3
+    ii.send("er301", "cv", voice, volts); ii.send("er301", "tr", voice, 1)
+    ii.send("txo", "cv", voice, volts)
+    if voice % 2 == 1 then ii.send("txo", "env", voice, 1) end
+    ii.send("txo", "tr", voice, 1)
+    ii.send("jf", "play_note", volts, 5); ii.send("wsyn", "play_note", volts, 5)
+  end
+  playing[voice] = true
+end
+
+test("under the flood every voice's port is sent within 34 steps", function()
+  -- N from the arithmetic, 4 lines a step: the first hit's 48 lines fill the queue
+  -- (12 steps to send); then 22 lines take turns (7 + 1 on the ER-301, 7 + 4 + 1 on
+  -- the TELEXo, Just Friends, W/), each with a share of 1 (48 / 44), each gate's on
+  -- followed by its off: 18 * 2 + 4 = 40 lines a round, 10 steps; two rounds at most
+  -- for a port to be reached: 12 + 2 * 11 = 34
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  local playing, first_high, steps = {}, {}, 0
+  for n = 0, 4 * 48 - 1 do
+    if n % FLOOD.steps_of < FLOOD.hits_of then
+      for voice = 1, FLOOD.voices do flood_hit(ii, voice, playing) end
+    end
+    steps = steps + 1
+    for _, line in ipairs(step()) do
+      local port = line:match("^ii%.%w+%.tr%((%d+), 1%)$")
+      local device = line:match("^ii%.(%w+)%.")
+      if port and not first_high[device .. port] then first_high[device .. port] = steps end
+    end
+  end
+  for voice = 1, FLOOD.voices do
+    for _, device in ipairs({"er301", "txo"}) do
+      local at = first_high[device .. voice]
+      assert_true(at ~= nil and at <= 34, device .. " port " .. voice .. " first high at step " .. tostring(at))
+    end
+  end
+  assert_true(ii.dropped() > 0, "the queue was overloaded")
+end)
+
 -- Build ruling 24: the queue sends an off exactly when its line owes one (the line is
 -- high on the device, or a send for it waits); an off is never dropped and never
 -- displaces a line; a send at 48 waiting is the only loss, and its off is then not owed
