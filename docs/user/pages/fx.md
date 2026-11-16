@@ -13,7 +13,7 @@ A scrolling list of the effects settings under dim section labels (master, filte
 
 **The delay on the beat.** With `sync` on, the delay's time follows the tempo: the `time` row shows a division of the beat instead of seconds (1/32, 1/16T, 1/16, 1/16D, 1/8T, 1/8, 1/8D, 1/4T, 1/4, 1/4D, 1/2 or 1 bar; 1/8D at first), and E3 on it picks the division. The delay holds at most 2.7 seconds, so a division that does not fit at the tempo plays at half its length, or a quarter, and so on until it fits: the row then shows the division and what plays, such as `1 bar>1/2` (one bar at 60 BPM plays a half note) or, when no division matches, the seconds. The delay time you set in seconds is kept, and comes back when `sync` is off; while synced, an LFO or a modulation routing on the delay time changes nothing you hear. E3 on the `sync` row turns it on (turn right) and off (turn left).
 
-**Ping-pong.** At 0 the delay's repeats stay on their own side. Turned up, the repeats alternate between left and right: at 100% everything comes back first on the left, then the right, then the left again.
+**Ping-pong.** At 0 the delay's repeats stay on their own side. Turned up, the repeats alternate between left and right: at 100% everything comes back first on the left, then the right, then the left again. Both input sides go into the left repeat, so a sound in the center comes back louder on the left the first time.
 
 K3 is the delay's bypass on all five delay rows, `sync` and `ping` included.
 

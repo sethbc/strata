@@ -546,6 +546,7 @@ return function(S)
   -- traceback. opts.only = "discrete" (the blocks and discrete entries) or
   -- "continuous" applies only those; any other only raises before anything
   -- is applied. Redraws are the caller's
+  local applied_errors = {}  -- the scene-applied hooks' last printed message, by name
   function M.apply_entries(entries, opts)
     local only = opts and opts.only
     if only ~= nil and only ~= "discrete" and only ~= "continuous" then
@@ -581,6 +582,10 @@ return function(S)
       end
     end, with_traceback)
     S.scene_recall_in_progress = false
+    -- the scene-applied hooks (S.registry.scene_applied), each contained
+    for _, record in ipairs(S.registry.scene_applied) do
+      S.lib.ui_frame.contained_call(applied_errors, record.name, "scene applied hook " .. record.name, record.fn)
+    end
 
     -- even after an error: a running voice whose source switched gets its sync
     -- (of whatever was applied), so the engine never lags the Lua state; then

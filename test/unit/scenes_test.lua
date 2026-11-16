@@ -2873,6 +2873,44 @@ test("the recalled hook runs once per recall", function()
   assert_equal(take(), "1", "the scene sequencer's advance")
 end)
 
+-- 3.7 (1d's review): the scene-applied hooks, for the delay's one send
+test("the scene-applied hooks run once per apply_entries, after its flag clears, each contained", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  capture_freq_scenes()
+  local runs, flags, later = 0, {}, 0
+  S.register_scene_applied({ name = "probe", fn = function()
+    runs = runs + 1; table.insert(flags, tostring(S.scene_recall_in_progress))
+  end })
+  S.register_scene_applied({ name = "raises", fn = function() error("hook failed") end })
+  S.register_scene_applied({ name = "after", fn = function() later = later + 1 end })
+  recall_scene(3, 0)
+  assert_equal(runs, 1, "an instant recall: once")
+  assert_equal(flags[1], "false", "after the flag is clear")
+  assert_equal(later, 1, "a hook that raises leaves the next one running")
+  assert_equal(printed_count(context, "scene applied hook"), 1, "its error is printed once")
+  recall_scene(3, 0)
+  assert_equal(printed_count(context, "scene applied hook"), 1, "and not again for the same message")
+  runs, later = 0, 0
+  recall_scene(1, 2)
+  context.clock.run_for(2.5, 0.001)
+  assert_equal(local_value("current_scene"), 1, "the fade landed")
+  assert_equal(runs, 1, "a fade: once, at its landing")
+  runs = 0
+  S.lib.scenes.apply_entries({}, { only = "discrete" })
+  assert_equal(runs, 1, "a morph's discrete apply: once")
+  runs = 0
+  params:set_action("v1_freq", function() error("apply failed") end)
+  assert_true(not pcall(recall_scene, 2, 0), "the recall's apply raises")
+  assert_equal(runs, 1, "a failed apply still runs them, once")
+  assert_equal(S.scene_recall_in_progress, false)
+  params:set_action("v1_freq", function() end)
+  assert_equal(later, 3, "the hook after the raising one ran each time")
+  local claimed = context.take_script_errors()  -- the printed failure this test raises (#473)
+  assert_equal(#claimed, 1, "one failure printed")
+  assert_true(claimed[1]:find("scene applied hook raises failed: ", 1, true) ~= nil, "the hook's error: " .. claimed[1])
+end)
+
 -- 3.7 (design decision 21): the format floor. A scenes file from
 -- SCENE_FORMAT_FLOOR (7, 3.5's) to SCENE_DATA_VERSION loads, its missing
 -- fields filled from the defaults (fill_scene); an older one is set aside
