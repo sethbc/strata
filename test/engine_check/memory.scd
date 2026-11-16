@@ -32,8 +32,9 @@ var awaitReply = { arg condition, timeout = 5; h.awaitReply(condition, timeout) 
 var grainDefs = h.grainDefs;
 var floodCount = 640;   // more small probes than the whole pool holds
 var reserveBus = Bus.control(server, 1);
-// 3.4's modulation nodes at each probe of the worst cases, both tiers:
-// [tier, case, [engine LFO nodes, scatter nodes, offset nodes]]
+// 3.4's modulation nodes and 3.7's envelope nodes at each probe of the
+// worst cases, both tiers: [tier, case, [engine LFO nodes, scatter nodes,
+// offset nodes, envelope nodes]]
 var modulationRunning = List.new;
 // 3.5's pool cases' figures, both tiers: [tier, case, free KB]
 var poolFigures = List.new;
@@ -210,19 +211,20 @@ var checkRecordSizes = {
 // largest reading (6.7, 42.1 and 11.0 KB; one def can read a step higher
 // from one run to the next), so a def that grows by more than about two
 // steps fails here, where only the worst cases' floors guarded it before
-// (docs/notes/engine/memory.md)
-var modulationLimitsKB = (lfo: 9, strataScatter: 45, strataFastOffsets: 13.5);
+// (docs/notes/engine/memory.md). 3.7's envelope node (\strataEnvelope, the
+// envelopes area's) is measured beside them, under 9 KB
+var modulationLimitsKB = (lfo: 9, strataScatter: 45, strataFastOffsets: 13.5, strataEnvelope: 9);
 var checkModulationSizes = {
     var group = Group.after(engine.processGroup), controlBus = Bus.control(server, 40);
     var shapes = [\Sine, \Tri, \Square, \Up, \Down, \Sah, \Smooth, \Drunk];
-    var defNames = shapes.collect({ arg name; ("strataFastLfo" ++ name).asSymbol }) ++ [\strataScatter, \strataFastOffsets];
+    var defNames = shapes.collect({ arg name; ("strataFastLfo" ++ name).asSymbol }) ++ [\strataScatter, \strataFastOffsets, \strataEnvelope];
     var limitOf = { arg name; modulationLimitsKB[name] ? modulationLimitsKB[\lfo] };
     var missing = defNames.select({ arg name; SynthDescLib.global.at(name).isNil });
     var sizes = if (missing.notEmpty) { [] } {
         defNames.collect({ arg name;
             sizeOf.({ arg index;
                 Synth(name, [\out, controlBus.index + (if (name == \strataFastOffsets or: { name == \strataScatter }) { 0 } { index }),
-                    \rate, 10, \depth, 0.5], group)
+                    \rate, 10, \depth, 0.5, \loop, 1], group)
             })
         })
     };
@@ -233,6 +235,9 @@ var checkModulationSizes = {
         "memory: the modulation area's nodes take % of the pool, each under its kind's limit (an engine LFO % KB, scatter % KB, the offset node % KB; by allocation probes; missing defs %; UGens: %)".format(
             [defNames, sizes.round(0.1)].flop.collect({ arg pair; "% % KB".format(*pair) }).join(", "),
             modulationLimitsKB[\lfo], modulationLimitsKB[\strataScatter], modulationLimitsKB[\strataFastOffsets], missing, ugens.join(", ")));
+    check.((sizes.size == defNames.size) and: { sizes.last > 0 } and: { sizes.last < modulationLimitsKB[\strataEnvelope] },
+        "memory: an envelope node takes under % KB of the pool (strataEnvelope % KB, by allocation probes)".format(
+            modulationLimitsKB[\strataEnvelope], sizes.last !? { arg size; size.round(0.1) }));
     group.free; controlBus.free;
 };
 
@@ -354,19 +359,24 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     var recordingProbes = 12, recordingsStarted;
     // six engine LFOs on six voices (smooth and drunk, the shapes with the
     // most UGens, at 20 Hz) and scatter on every voice and destination,
-    // running through every scenario (3.4: design §3.6, §13)
+    // running through every scenario (3.4: design §3.6, §13), and 3.7's
+    // sixteen envelope routes (numEnvRoutes, every one looping, so each
+    // node runs its whole graph)
     var startModulation = {
         6.do({ arg lfo; command.(\setFastLfo, lfo, lfo, lfo % 5, [7, 6][lfo % 2], 20.0, 0.5, 0.0) });
         command.(\setScatter, 1.0, 1.0, 31, 127);
+        target.numEnvRoutes.do({ arg route;
+            command.(\setFastEnv, route, route % 7, route % 7, route % 5, 0.5, 0.01, 0.05, 0.5, 0.05, -4.0, 1) });
     };
     var stopModulation = {
         6.do({ arg lfo; command.(\stopFastLfo, lfo) });
         command.(\setScatter, 0.0, 1.0, 31, 127);
+        target.numEnvRoutes.do({ arg route; command.(\stopFastEnv, route) });
     };
     var modulationNodes = {
         var names = target.areaState[\modulation][\fastModGroup] !? { arg group; h.synthNames(group) } ? [];
         [names.count({ arg name; name.asString.beginsWith("strataFastLfo") }), names.count(_ == \strataScatter),
-            names.count(_ == \strataFastOffsets)]
+            names.count(_ == \strataFastOffsets), names.count(_ == \strataEnvelope)]
     };
     // the eight recordings, one per source kind: input, pre-master,
     // post-master, voices 1-5 (recordBuffer's source: 0, 1, 2, 3-7)
@@ -776,9 +786,9 @@ check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
 checkGuardResumes.value;
 checkMemoryWorstCase.(engine, 12, "3 MB");
 checkHighWorstCase.value;
-check.((modulationRunning.size == 20) and: { modulationRunning.every({ arg each; each[2] == [6, 1, 1] }) },
-    "memory: six engine LFOs and scatter on every voice and destination run through every worst case on both tiers (% probes; cases without them: %)".format(
-        modulationRunning.size, modulationRunning.reject({ arg each; each[2] == [6, 1, 1] }).collect({ arg each; [each[0], each[2]] })));
+check.((modulationRunning.size == 20) and: { modulationRunning.every({ arg each; each[2] == [6, 1, 1, 16] }) },
+    "memory: six engine LFOs, scatter on every voice and destination and sixteen envelope routes run through every worst case on both tiers (% probes; cases without them: %)".format(
+        modulationRunning.size, modulationRunning.reject({ arg each; each[2] == [6, 1, 1, 16] }).collect({ arg each; [each[0], each[2]] })));
 check.((recordingFits.size == 2) and: { recordingFits.every({ arg each; each[1] }) },
     "memory: 3 MB free on both tiers with eight recordings running (%)".format(
         recordingFits.collect({ arg each; "% about % KB free".format(each[0], each[2]) }).join(", ")));

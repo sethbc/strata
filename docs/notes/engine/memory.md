@@ -192,3 +192,34 @@ Package 1a added to `\strataGrainBuf` the scan modes (a second phase, a `Sweep`,
 | eight recordings, high | 3990 | 3930 | 3990 | 3930 | 3072 |
 
 The cost follows the count of `\strataGrainBuf` at each case: about 60-70 KB at the seven of synth -> buffer -> synth, about 180-200 KB at the 21 of all-buffer and about 470-490 KB at the 53 of the all-buffer pool case (9.3 KB each). A control-rate one-shot level was tried in 1a's review and reverted: audio-rate wires are the server's shared wire buffers, allocated once per World (`SC_World.cpp`, `SC_Graph.cpp`), not a synth's pool memory, so it saved nothing, and its `A2K` (one unit a synth) left every pool case about 20 KB lower. The tightest case is still high synth -> buffer -> synth: 3920 KB free, 336 KB above its floor (about 224 counting the spectral writers' late allocations, 7 × 16), which 1c's envelope nodes (16 at most, 4-7 KB each, design §1) fit in. The tightest pool case, high synth -> buffer -> synth with sixteen Karplus-first voice notes, leaves 1870 KB, 590 above its floor. If a floor fails where Wave 1 meets, design §1's order of cuts applies (the envelope nodes' cap first, then the grain synth's sync controls).
+
+## 3.7: envelope nodes (package 1c)
+
+The envelopes area's node, `\strataEnvelope` (`docs/notes/engine/envelopes.md`), is one per route, sixteen at most (`numEnvRoutes`), at the tail of `fastModGroup`: control rate, no delay line or table. The memory check measures it beside the modulation area's nodes (`memory: an envelope node takes under 9 KB of the pool`; twenty nodes, by allocation probes) and runs sixteen looping routes (`setFastEnv(route, route % 7, route % 7, route % 5, 0.5, 0.01, 0.05, 0.5, 0.05, -4, 1)`) through every worst case and both pool cases on both tiers, beside the six engine LFOs and scatter (`fastModGroup` counted at every probe: 6 LFO, 1 scatter, 1 offset and 16 envelope nodes, `[6, 1, 1, 16]`). Measured on the package's branch (`main` at 51ff1514 with 1c alone; with 1a's changes the batch measures them where Wave 1's packages meet, ruling 37), the memory area alone, before the change and after it, KB free (the probes' resolution is 10 KB):
+
+| Case | 3.14.1 before | 3.14.1 after | 3.13 before | 3.13 after |
+|---|---|---|---|---|
+| `\strataEnvelope` node | | 6.7 | | 6.7 |
+| idle, standard | 6580 | 6580 | 6580 | 6580 |
+| standard: spaced, restarted | 4840 | 4740 | 4840 | 4740 |
+| standard: burst | 4850 | 4740 | 4840 | 4740 |
+| standard: recalls A -> B -> A -> C | 4820 | 4720 | 4820 | 4720 |
+| standard: synth -> buffer -> synth | 4650 | 4550 | 4670 | 4550 |
+| standard: all-buffer | 4900 | 4800 | 4900 | 4800 |
+| standard: spaced, one recording | 4800 | 4700 | 4800 | 4700 |
+| standard: all-buffer, one recording | 4870 | 4770 | 4870 | 4770 |
+| standard: eight recordings | 4650 | 4530 | 4650 | 4550 |
+| standard: all-buffer, pool full | 2540 | 2440 | 2540 | 2440 |
+| standard: synth -> buffer -> synth, pool full | 2740 | 2620 | 2740 | 2640 |
+| high: spaced, restarted | 4170 | 4070 | 4190 | 4070 |
+| high: burst | 4170 | 4070 | 4190 | 4070 |
+| high: recalls A -> B -> A -> C | 4690 | 4610 | 4710 | 4590 |
+| high: synth -> buffer -> synth | 3980 | 3880 | 3980 | 3880 |
+| high: all-buffer | 4780 | 4690 | 4790 | 4670 |
+| high: spaced, one recording | 4150 | 4050 | 4150 | 4050 |
+| high: all-buffer, one recording | 4760 | 4660 | 4760 | 4660 |
+| high: eight recordings | 3990 | 3890 | 3990 | 3890 |
+| high: all-buffer, pool full | 2420 | 2340 | 2440 | 2340 |
+| high: synth -> buffer -> synth, pool full | 2070 | 1970 | 2070 | 1970 |
+
+The sixteen nodes take 80-120 KB at every case (sixteen times 6.7 KB is 107), and every floor holds: the tightest, high synth -> buffer -> synth, is 3880 KB free, 296 above its 3584 (about 180-200 counting the spectral writers' late allocations, 284-304 before); the high synth -> buffer -> synth pool case 1970, 690 above 1280; the eight recordings 3890 on high, 818 above 3072. (3.13: one run of the memory area in its own container, first in it as in CI's shard; 3.14.1: the memory area alone.)

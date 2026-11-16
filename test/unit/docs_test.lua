@@ -1007,7 +1007,7 @@ end
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
   "effects", "mix", "performance", "rings", "freeze", "variation", "loops", "record", "waveform", "positions", "modulation",
-  "notes", "onsets", "soak" }
+  "envelopes", "notes", "onsets", "soak" }
 
 -- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them
 -- (its onDemandAreas: the soak, #131), as a set
@@ -2102,6 +2102,14 @@ test("the engine's numFastLfos equals NUM_LFOS", function()
   load_strata()
   assert_equal(engine_spec.num_fast_lfos, 6, "numFastLfos (StrataModulation.sc)")
   assert_equal(engine_spec.num_fast_lfos, local_value("NUM_LFOS"), "numFastLfos = NUM_LFOS")
+end)
+
+-- 3.7's envelopes (design §7.3): one engine route per matrix slot
+-- (setFastEnv's route 0..MATRIX_SLOTS - 1)
+test("the engine's numEnvRoutes equals MATRIX_SLOTS", function()
+  load_strata()
+  assert_equal(engine_spec.num_env_routes, 16, "numEnvRoutes (StrataEnvelopes.sc)")
+  assert_equal(engine_spec.num_env_routes, local_value("MATRIX_SLOTS"), "numEnvRoutes = MATRIX_SLOTS")
 end)
 
 -- 3.4's fast modulation (design §3.3): an offset m moves pitch, position
