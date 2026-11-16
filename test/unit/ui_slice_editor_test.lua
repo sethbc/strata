@@ -329,6 +329,35 @@ test("a MIDI note sets the key while its row is picked, and at no other time", f
   assert_equal(settings.key, 62, "closed again: nothing")
 end)
 
+-- Design §3.7 (the controller's ruling on 2b's review): on the key row a
+-- MIDI note sets the key even on a voice that takes slice notes, where a
+-- note outside the slices plays nothing (the note hooks' heard)
+test("on the key row a note outside a slicing voice's slices still sets the key", function()
+  local context, S, fake, editor = loaded()
+  local settings = S.lib.samples.settings(1)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)   -- voice 1 reads slot 1
+  fake.takes[1] = true
+  assert_true(S.lib.slices.takes_notes(1), "voice 1 takes slice notes (4 slices: notes 36-39)")
+  local function note(number)
+    context.midi.send(1, { type = "note_on", note = number, vel = 100, ch = 1 })
+    context.midi.send(1, { type = "note_off", note = number, vel = 0, ch = 1 })
+    for _ = 1, 2 do context.clock.advance_until(S.lfo_clock) end
+  end
+  editor.open(1)
+  note(57)
+  assert_equal(settings.key, nil, "the markers view: nothing")
+  pick_row(editor, "key")
+  context.clear_engine_calls()
+  note(57)
+  assert_equal(settings.key, 57, "a note outside the slices sets the key")
+  assert_equal(#context.calls_named("retrigger"), 0, "and plays nothing")
+  note(37)
+  assert_equal(settings.key, 37, "a slice's note sets it too")
+  pick_row(editor, "tempo")
+  note(60)
+  assert_equal(settings.key, 37, "another row: nothing")
+end)
+
 test("the editor shows analyzing until the candidates arrive", function()
   local context, _, fake, editor = loaded()
   editor.open(1)
@@ -441,6 +470,40 @@ test("the slot emptied under the editor closes it", function()
   assert_true(not editor.is_open(), "its slot emptied: closed")
   assert_equal(S.lib.ui_modal.top(), nil, "and off the stack")
   assert_true(not editor.open(1), "and it does not open on an empty slot")
+end)
+
+
+-- The Wave 2 landing: the editor reads S.lib.slices and S.lib.samples at
+-- each use and never checks they are there, so a missing module fails
+-- loudly instead of showing an empty slot
+test("without the slices or the file's settings the editor fails loudly", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  with_audio(context, 1, 2)
+  local samples, slices = S.lib.samples, S.lib.slices
+  S.lib.samples = nil
+  local ok, err = pcall(S.lib.ui_slice_editor.slot_text, 1)
+  assert_true(not ok and tostring(err):find("samples", 1, true) ~= nil, "no S.lib.samples: an error: " .. tostring(err))
+  S.lib.samples = samples
+  assert_true(samples.set(1, "mode", 2), "equal parts: the field counts the slices")
+  S.lib.slices = nil
+  ok, err = pcall(S.lib.ui_slice_editor.slot_text, 1)
+  assert_true(not ok and tostring(err):find("slices", 1, true) ~= nil, "no S.lib.slices: an error: " .. tostring(err))
+  S.lib.slices = slices
+end)
+
+test("the amount's bounds are the file settings' own (S.lib.samples.SAMPLES)", function()
+  local _, S, _, editor = loaded()
+  local SAMPLES = S.lib.samples.SAMPLES
+  local count_min, sensitivity_max = SAMPLES.count_min, SAMPLES.sensitivity_max
+  SAMPLES.count_min, SAMPLES.sensitivity_max = 3, 90
+  local low = editor.amount_range({ mode = 2 })
+  local _, high = editor.amount_range({ mode = 3 })
+  SAMPLES.count_min, SAMPLES.sensitivity_max = count_min, sensitivity_max
+  assert_equal(low, 3, "the count's lowest is SAMPLES.count_min")
+  assert_equal(high, 90, "the sensitivity's top is SAMPLES.sensitivity_max")
+  assert_equal(editor.EDITOR.count_min, nil, "no copy in the editor's tunables")
+  assert_equal(editor.EDITOR.sensitivity_max, nil)
 end)
 
 end

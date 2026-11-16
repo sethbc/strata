@@ -21,7 +21,6 @@ local function loaded(seconds)
   local tempos = {}
   local context = load_strata({before_init = function()
     local S = local_value("S")
-    S.lib.samples = S.lib.samples or {}
     S.lib.samples.tempo = function(slot) return tempos[slot] end
   end})
   finish_startup(context)
@@ -378,4 +377,19 @@ test("the scan rows show while the voice reads a buffer", function()
   params:set("v1_source", S.constants.SOURCE_INPUT)
   assert_equal(ids(1).v1_follow, nil, "an input voice has none")
 end)
+
+-- The Wave 2 landing: follow reads the file's tempo from S.lib.samples at
+-- each use and never checks it is there: without it follow fails loudly
+test("without the file's settings follow fails loudly", function()
+  local _, S, tempos = loaded()
+  tempos[1] = 120
+  params:set("v1_follow", FOLLOW.stretch)
+  assert_true(S.lib.scan.following(1), "voice 1 follows its file's tempo")
+  local tempo = S.lib.samples.tempo
+  S.lib.samples.tempo = nil
+  local ok, err = pcall(S.lib.scan.following, 1)
+  S.lib.samples.tempo = tempo
+  assert_true(not ok and tostring(err):find("tempo", 1, true) ~= nil, "no S.lib.samples.tempo: an error: " .. tostring(err))
+end)
+
 end

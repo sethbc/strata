@@ -42,11 +42,10 @@ return function(S)
 
   local function param_id(voice_idx, key) return "v" .. voice_idx .. "_" .. key end
 
-  -- The own note's region (package 2b's S.lib.notes.own_region: a copy
-  -- of the positional {start, length}, or nil) as start, length; nil for none
+  -- The own note's region (S.lib.notes.own_region: a copy of the
+  -- positional {start, length}, or nil) as start, length; nil for none
   local function own_region(voice_idx)
-    local reader = S.lib.notes.own_region
-    local region = reader and reader(voice_idx)
+    local region = S.lib.notes.own_region(voice_idx)
     if type(region) ~= "table" then return nil end
     local start, length = region[1], region[2]
     if type(start) ~= "number" or type(length) ~= "number" or length <= 0 then return nil end

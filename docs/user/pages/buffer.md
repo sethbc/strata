@@ -57,7 +57,7 @@ On the fields:
   - `count` or `sens`: changing it cuts the slices again. Starts you added, moved or deleted by hand are then dropped, and the hint row says `edits dropped`. In `off` the count is kept for when you pick `equal`.
   - `tempo`: the file's tempo, 20-300 BPM in 0.1 steps; from `--` (none) the first turn up sets the clock's tempo, and turning below 20 clears it.
   - `bars`: how many 4-beat bars the buffer holds at the file's tempo; turning it sets the tempo that makes it exactly 1/4, 1/2, 1, 2, 4, 8, 16 or 32 bars (a count whose tempo would fall outside 20-300 BPM is passed over).
-  - `key`: the note the file is in (`--` unset, then C-2 to G8, as norns names notes: 60 is C3); from `--` the first turn up sets C3. While this field is picked, a note played on a MIDI controller sets it.
+  - `key`: the note the file is in (`--` unset, then C-2 to G8, as norns names notes: 60 is C3); from `--` the first turn up sets C3. While this field is picked, a note played on a MIDI controller sets it, any note, even one outside the slices of a voice that plays them.
   - `norm`: `off`, or on, showing the gain the buffer plays at (`+6.0dB`).
 - **E2** - Back to the slices
 - **K2** - Close the editor

@@ -357,17 +357,16 @@ return function(S)
   -- The slice rows (3.7, design §10) ------------------------------------
 
   -- Whether a voice's position row shows slices: it reads a buffer, its
-  -- `slices` option is not off and its slot has slices (S.lib.slices,
-  -- which is nil only before 3.7's slices module is in)
+  -- `slices` option is not off and its slot has slices (S.lib.slices)
   function M.slice_row(voice_idx)
-    return valid_voice(voice_idx) and S.lib.slices ~= nil and S.lib.slices.takes_notes(voice_idx) == true
+    return valid_voice(voice_idx) and S.lib.slices.takes_notes(voice_idx) == true
   end
 
   -- The count of slices the slot a voice reads holds (0 for none)
   local function slot_slices(voice_idx)
     local slot = buffer_voice(voice_idx) and voice_buffer_slot(voice_idx)
-    if not slot or S.lib.slices == nil then return 0 end
-    return S.lib.slices.count(slot) or 0
+    if not slot then return 0 end
+    return S.lib.slices.count(slot)
   end
 
   local function first_slice(bank) return (bank - 1) * SLICE_ROW.bank_size + 1 end
@@ -407,7 +406,7 @@ return function(S)
   -- The listener goes in at the first pick of a bank (no pick exists to
   -- forget before one), once
   local function hear_binds()
-    if binds_heard or S.lib.samples == nil then return end
+    if binds_heard then return end
     binds_heard = true
     S.lib.samples.on_bind(forget_unreached_banks)
   end
@@ -415,7 +414,7 @@ return function(S)
   -- Whether a voice is in one shot with a moving scan, where a slice plays
   -- to its end whatever its key does (S.lib.scan.pass_seconds is a number)
   local function plays_to_end(voice_idx)
-    return S.lib.scan ~= nil and type(S.lib.scan.pass_seconds(voice_idx, 1)) == "number"
+    return type(S.lib.scan.pass_seconds(voice_idx, 1)) == "number"
   end
 
   local function slice_note_key(port, n) return port * SLICE_ROW.port_key + n end
@@ -731,7 +730,7 @@ return function(S)
   -- (the port's; with no port, any port's, and bank 1)
   local function slice_context(voice_idx, port)
     local playing, held = {}, {}
-    for _, n in ipairs(S.lib.slices.playing(voice_idx) or {}) do playing[n] = true end
+    for _, n in ipairs(S.lib.slices.playing(voice_idx)) do playing[n] = true end
     for record_port, record in pairs(records) do
       if port == nil or record_port == port then
         for _, entry in pairs(record.slices[voice_idx] or {}) do held[entry.n] = true end

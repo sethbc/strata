@@ -3916,8 +3916,7 @@ end)
 
 test("on an overlap voice each step's slice takes a slot of its own and rings past the next step", function()
   local context, S = sliced_setup(3)
-  local scan = S.lib.scan or {}
-  S.lib.scan = scan
+  local scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return fraction * 8 end  -- a quarter: 2 s
   local seq, notes = S.lib.sequencer, S.lib.notes
   for _, step in ipairs({1, 3, 5}) do S.patterns[1][step] = 15 end
@@ -3939,8 +3938,7 @@ test("on an overlap voice each step's slice takes a slot of its own and rings pa
   pattern_clock_stop()
   -- the pool at 2: step 5's slice cuts step 1's and takes its slot
   context, S = sliced_setup(3)
-  scan = S.lib.scan or {}
-  S.lib.scan = scan
+  scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return fraction * 8 end
   seq, notes = S.lib.sequencer, S.lib.notes
   notes.set_pool(2)
@@ -4010,6 +4008,30 @@ test("the same slice on consecutive steps sends its region at each, a chord's th
   pattern_clock_stop()
 end)
 
+-- The Wave 2 landing: on a one-shot voice the step's retrigger restarts the
+-- engine's scan and the playhead (positionsHit, the voice_hit hook), so a
+-- step that hits the same slice again restarts each once, not twice
+test("in one shot the same slice on consecutive steps restarts the scan and the playhead once a step", function()
+  local context, S = sliced_setup(2)
+  params:set("v1_scan_mode", 3)  -- one shot
+  params:set("v1_buf_scan", 0.5)
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "slice", 2); S.lib.sequencer.set_step_attr(1, 2, "slice", 2)
+  local resets = 0
+  local real_reset = S.lib.playheads.reset
+  S.lib.playheads.reset = function(voice) if voice == 1 then resets = resets + 1 end; return real_reset(voice) end
+  pattern_clock_start()
+  assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0.25) setGrainParam(0, regionLength, 0.25)",
+    "the first step sends its slice")
+  context.clear_engine_calls(); resets = 0
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_equal(region_texts(context, 0), "", "the same slice again: no region sent")
+  assert_equal(#context.calls_named("retrigger"), 1, "the step's retrigger restarts the scan")
+  assert_equal(resets, 1, "and the playhead, once")
+  S.lib.playheads.reset = real_reset
+  pattern_clock_stop()
+end)
+
 -- 2b's second review, NB2: a one-voice step's slice is playing while it
 -- sounds (no slot-1 record holds it), and not once played out
 test("playing names a one-voice step's slice while it sounds", function()
@@ -4022,8 +4044,7 @@ test("playing names a one-voice step's slice while it sounds", function()
   assert_equal(table.concat(S.lib.slices.playing(1), ","), "", "the stop ended it")
   -- one shot: played out after its pass
   context, S = sliced_setup(2)
-  local scan = S.lib.scan or {}
-  S.lib.scan = scan
+  local scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return fraction * 2 end  -- a quarter: 0.5 s
   S.patterns[1][1] = 15
   S.lib.sequencer.set_step_attr(1, 1, "slice", 3)

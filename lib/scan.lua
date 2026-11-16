@@ -58,11 +58,10 @@ return function(S)
 
   local function follow_of(voice_idx) return params:get(param_id(voice_idx, SCAN.follow_key)) end
 
-  -- The file tempo of the slot a voice reads (package 2d's
-  -- S.lib.samples.tempo), nil for none
+  -- The file tempo of the slot a voice reads (S.lib.samples.tempo), nil
+  -- for none
   local function file_tempo(voice_idx)
-    local samples = S.lib.samples
-    local tempo = samples and samples.tempo and samples.tempo(voice_buffer_slot(voice_idx))
+    local tempo = S.lib.samples.tempo(voice_buffer_slot(voice_idx))
     if finite_positive(tempo) then return tempo end
     return nil
   end

@@ -1534,4 +1534,17 @@ test("an own note held to its end ends at its time", function()
   assert_equal(#ended, 1, "and once only")
 end)
 
+
+-- The Wave 2 landing: a one-shot pass is read from S.lib.scan at each use,
+-- never checked to be there, so a missing scan module fails loudly
+test("without the scan a one-shot pass fails loudly", function()
+  load_strata()
+  local S = local_value("S")
+  local scan = S.lib.scan
+  S.lib.scan = nil
+  local ok, err = pcall(S.lib.notes.pass_seconds, 1, 0.5)
+  S.lib.scan = scan
+  assert_true(not ok and tostring(err):find("scan", 1, true) ~= nil, "no S.lib.scan: an error: " .. tostring(err))
+end)
+
 end

@@ -979,12 +979,10 @@ return function(S)
   -- the slices made when mode is given), then the editor's marker
   -- (pick_marker from the first) or row picked, then options.after(editor).
   -- Options: seconds, scale (the peaks'), high (the 300 s tier), closed
-  -- (BUFFER alone, its field cursor on slices). Nothing without the slices
-  -- and the file's settings (S.lib.ui_slice_editor.ready)
+  -- (BUFFER alone, its field cursor on slices)
   function LAYOUT.slice_editor(context, options)
     local editor = S.lib.ui_slice_editor
     if options.high then LAYOUT.as_300_s_tier() end
-    if not editor.ready() then return end
     LAYOUT.slot_with_peaks(context, options.seconds, options.scale)
     for _, field in ipairs({"mode", "count", "sensitivity", "tempo", "key", "normalize"}) do
       if options[field] ~= nil then S.lib.samples.set(1, field, options[field]) end
