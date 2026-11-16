@@ -8,14 +8,16 @@
 -- S.lib.io_crow; a bounded queue spreads them over the LFO clock's steps
 -- (II.sends_per_step a step, II.queue_max waiting, a send past it dropped
 -- and counted; an off is queued exactly when its line owes one, never
--- dropped). Under sustained overload the lines take turns (#710): from a
--- refusal until the queue next empties, a line holds at most its share of
--- the queue, and room is held for lines served less recently, nothing
--- admitted ever displaced. Leaving the lead ends every device's notes,
--- sends the waiting offs at once (II.cleanup_sends at most, the rest
--- owed), releases each device (II.leave_lines in all at once) and only
--- then clears the flag. An off that cannot go (past the fourteenth, or crow gone) is owed, and the
--- next lead queues it after the devices' ready. The devices register with
+-- dropped). Under sustained overload the lines (a device's port, or a
+-- device's command) take turns (#710): from a refusal until the queue next
+-- empties, a line's first send in a step decides for one note of it, that
+-- note admitted whole only within its share and with room for a note for
+-- each line served less recently; nothing admitted is ever displaced.
+-- Leaving the lead ends every device's notes, sends the waiting offs at
+-- once (II.cleanup_sends at most, the rest owed), releases each device
+-- (II.leave_lines in all at once) and only then clears the flag. An off
+-- that cannot go (past the fourteenth, or crow gone) is owed, and the next
+-- lead queues it after the devices' ready. The devices register with
 -- S.register_ii_device; their params form the group strata_out_ii.
 -- Notes: docs/notes/lua/io/ii.md
 
@@ -25,9 +27,11 @@ return function(S)
   -- leave_lines: everything the leaving sequence sends at once, its offs
   -- and the releases' lines (design §3.4: inside crow's 16); asked_steps:
   -- how long a line counts as asking after its latest send (a second of
-  -- LFO steps), share_factor: the share's divisor per asking line (#710)
+  -- LFO steps), share_factor: the share's divisor per asking line,
+  -- note_lines: the most lines a note sends (a TELEXo envelope note's cv,
+  -- env and tr), the room a pressed decision asks for each note (#710)
   local II = {sends_per_step = 4, queue_max = 48, cleanup_sends = 14, leave_lines = 15, asked_steps = 48,
-    share_factor = 2}
+    share_factor = 2, note_lines = 3}
   M.II = II
 
   local SPEC = {
@@ -48,7 +52,8 @@ return function(S)
   -- leading: the flag send reads (set while the rig says strata with a
   -- crow there, cleared only at the end of the leaving sequence); queue:
   -- the entries waiting, each {line, off, pair, key, turn}; pairs: the
-  -- (device, command) pairs that have had an off this lead; lines: their
+  -- (device, command) pairs that have had an off this lead, and
+  -- port_devices the devices they name; lines: their
   -- lines' state ({high, waiting}, by key); owed: the offs the next lead
   -- queues first after the devices' ready ({order = {entry, ...}, by_key});
   -- owing: crow left while Strata led, so an off that comes before the next
@@ -60,7 +65,7 @@ return function(S)
   -- until the queue next empties
   local state = {started = false, stopped = false, leading = false, queue = {}, lines = {}, pairs = {}, dropped = 0,
     errors = {}, owed = {order = {}, by_key = {}}, owing = false, leave_room = nil,
-    step = 0, turns = {}, asking = 0, wanting = {}, refusals = 0, pressed = false}
+    port_devices = {}, step = 0, turns = {}, asking = 0, wanting = {}, refusals = 0, pressed = false}
 
   local function bus() return S.lib.io_rig.get(SPEC.bus_key) end
   local function present() return S.lib.io_crow.present() end
@@ -86,11 +91,13 @@ return function(S)
 
   -- A queued entry: its text, whether it is an off, and its line's key
   -- (the device, the command and the first argument, the port or output:
-  -- ii.er301.tr(3, 1) and ii.er301.tr(3, 0) are one line)
+  -- ii.er301.tr(3, 1) and ii.er301.tr(3, 0) are one line), with its device,
+  -- command and first argument ("" with none) for its turn
   local function entry_for(off, device, command, ...)
     local first = select("#", ...) > 0 and S.lib.io_crow.number((...)) or ""
     local pair = device .. "\n" .. command
-    return {line = line_for(device, command, ...), off = off, pair = pair, key = pair .. "\n" .. first}
+    return {line = line_for(device, command, ...), off = off, pair = pair, key = pair .. "\n" .. first,
+      device = device, command = command, first = first}
   end
 
   -- Per line while Strata leads (build ruling 24), only for the (device,
@@ -108,14 +115,17 @@ return function(S)
     return line
   end
 
-  local function forget_lines() state.lines, state.pairs = {}, {} end
+  local function forget_lines() state.lines, state.pairs, state.port_devices = {}, {}, {} end
 
   -- Learn a pair at its first off: its sends already waiting are counted
   -- now. An early send left uncounted would, as it drains, use up the
   -- count of a later send of its line, which would then read as low with
-  -- nothing waiting while that send still waits
-  local function learn_pair(pair)
+  -- nothing waiting while that send still waits. Its device is then known
+  -- to address ports (#710's turns)
+  local function learn_pair(entry)
+    local pair = entry.pair
     state.pairs[pair] = true
+    state.port_devices[entry.device] = true
     for _, waiting in ipairs(state.queue) do
       if waiting.pair == pair and not waiting.off then
         local line = line_state(waiting.key)
@@ -135,18 +145,23 @@ return function(S)
   -- Turns (#710): under sustained overload the lines take turns
   ---------------------------------------------------------------------------
 
-  -- A send's turn is its line: what an off lowers (its key) once its pair
-  -- has had an off this lead, else its device and command (its pair), so a
-  -- command with no off of its own (play_note, cv) takes one turn for all
-  -- its first arguments. Each turn: waiting (its sends in the queue), served
-  -- (the step its latest send went to crow, nil never), asked (the step of
-  -- its latest send), asking (counted in state.asking) and wanting (the
-  -- refusal that put it in state.wanting, nil when not there)
+  -- A send's turn is its line: its device and the port it addresses (its
+  -- first argument) once the device has had an off this lead, so a port's
+  -- cv, tr, env and settings share one turn; else its device and command
+  -- (its pair), so play_note takes one turn for all its pitches. The two
+  -- kinds of id cannot meet: a port's has an empty command. Each turn:
+  -- waiting (its sends in the queue), served (the step its latest send went
+  -- to crow, nil never), asked (the step of its latest send), asking
+  -- (counted in state.asking), wanting (the refusal that put it in
+  -- state.wanting, nil when not there), and the step's decision: decided
+  -- (the step), admitted (true or false) and commands (those admitted in it)
   local function turn_for(entry)
-    local id = state.pairs[entry.pair] and entry.key or entry.pair
+    local id = entry.pair
+    if state.port_devices[entry.device] and entry.first ~= "" then id = entry.device .. "\n\n" .. entry.first end
     local turn = state.turns[id]
     if not turn then
-      turn = {id = id, waiting = 0, served = nil, asked = nil, asking = false, wanting = nil}
+      turn = {id = id, waiting = 0, served = nil, asked = nil, asking = false, wanting = nil,
+        decided = nil, admitted = false, commands = {}}
       state.turns[id] = turn
     end
     return turn
@@ -180,11 +195,12 @@ return function(S)
     return b.served ~= nil and a.served < b.served
   end
 
-  -- A send is admitted while fewer than queue_max wait; while the queue is
-  -- pressed, only up to its line's share, and only when the room left after
-  -- it keeps a place for each wanting line with nothing waiting that was
-  -- served less recently than it
-  local function admits(turn)
+  -- A line's first send in a step decides: admitted while fewer than
+  -- queue_max wait; while the queue is pressed, only with fewer than its
+  -- share of lines waiting, and with room for a note (II.note_lines) for it
+  -- and for each wanting line with nothing waiting that was served less
+  -- recently than it
+  local function decides(turn)
     if #state.queue >= II.queue_max then return false end
     if not state.pressed then return true end
     if turn.waiting >= share() then return false end
@@ -192,7 +208,19 @@ return function(S)
     for other in pairs(state.wanting) do
       if other ~= turn and other.waiting == 0 and served_before(other, turn) then held = held + 1 end
     end
-    return II.queue_max - #state.queue > held
+    return II.queue_max - #state.queue >= (held + 1) * II.note_lines
+  end
+
+  -- The line's later sends in the step follow its decision, within the
+  -- bound; while pressed, one note of it: each command once, so a chord's
+  -- later notes to the port are refused whole (their cv and their tr)
+  local function admits(turn, command)
+    if turn.decided ~= state.step then
+      turn.decided, turn.admitted, turn.commands = state.step, decides(turn), {}
+      return turn.admitted
+    end
+    if not turn.admitted or #state.queue >= II.queue_max then return false end
+    return not (state.pressed and turn.commands[command])
   end
 
   local function refuse(turn)
@@ -228,8 +256,8 @@ return function(S)
   end
 
   -- The line joins the queue (true), or is refused, dropped and counted
-  -- (false): with queue_max waiting, or while the queue is pressed past its
-  -- line's share or into a place held for a line served less recently;
+  -- (false): with queue_max waiting, or by its line's decision for the
+  -- step, or while pressed as a later note of the line in the step;
   -- false and nothing unless Strata leads. A line queued here is never
   -- taken out again while Strata leads
   function M.send(device, command, ...)
@@ -237,10 +265,11 @@ return function(S)
     local entry = entry_for(false, device, command, ...)
     local turn = turn_for(entry)
     ask(turn)
-    if not admits(turn) then
+    if not admits(turn, command) then
       refuse(turn)
       return false
     end
+    turn.commands[command] = true
     entry.turn = turn
     turn.waiting = turn.waiting + 1
     table.insert(state.queue, entry)
@@ -278,7 +307,7 @@ return function(S)
   -- An owed off joins the end of the queue (the pair learned at its first),
   -- unless the newest waiting entry of its line is already an off
   local function queue_off(entry)
-    if not state.pairs[entry.pair] then learn_pair(entry.pair) end
+    if not state.pairs[entry.pair] then learn_pair(entry) end
     for index = #state.queue, 1, -1 do
       local waiting = state.queue[index]
       if waiting.key == entry.key then
