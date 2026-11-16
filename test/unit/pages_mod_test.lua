@@ -756,6 +756,52 @@ end)
 
 -- Review 0b, Important 2: hints match the keys, so a row whose K3 opens
 -- the settings names it, with or without a row of its own
+-- Review 0b fix 1, Minor 1: the K3:edit prefix never pushes a source's own
+-- hint off the 128 px row: the page drops its last parts until it fits,
+-- and every source registered today fits with and without the prefix
+test("a source's list hint fits the hint row beside K3:edit", function()
+  local context, S = loaded()
+  local record = S.registry.pages[S.constants.UI_PAGES.index.MOD]
+  -- every source the script registers: its own hint fits with the prefix too
+  for _, source in ipairs(S.registry.mod_sources) do
+    if source.row and source.row.hints then
+      local own = source.row.hints(false) or ""
+      assert_true(h.text_width(own) <= 128, source.key .. "'s hint fits: " .. own)
+      assert_true(h.text_width("K3:edit " .. own) <= 128, source.key .. "'s hint fits beside K3:edit: " .. own)
+    end
+  end
+  local long = "E3:depth K2:something E2:another ALT:more parts here"
+  S.register_mod_source({ key = "wordy", name = "WRD", section = "probes", range = { 0, 1 },
+    value = function() return 0 end, fields = { { label = "a", value = function() return "1" end } },
+    row = { enc = function() end, hints = function() return long end } })
+  place(S, "source:wordy")
+  local hint = record.hints(false)
+  assert_true(h.text_width(hint) <= 128, "the hint fits 128 px: " .. hint .. " (" .. h.text_width(hint) .. " px)")
+  assert_equal(hint:sub(1, 8), "K3:edit ", "K3:edit comes first")
+  assert_true(long:find(hint:sub(9), 1, true) == 1 and hint:sub(-1) ~= " ", "whole parts from the start: " .. hint)
+  assert_equal(hint, "K3:edit E3:depth K2:something", "the last parts dropped")
+end)
+
+-- Review 0b fix 1, Minor 3: a fields function that returns no row opens
+-- nothing, and its row names no K3
+test("a source whose fields function returns no row has no settings", function()
+  local context, S = loaded()
+  local rows = {}
+  S.register_mod_source({ key = "empty", name = "EMP", section = "probes", range = { 0, 1 },
+    value = function() return 0 end, fields = function() return rows end })
+  assert_true(not S.lib.pages_mod.open_settings("empty"), "open_settings: false")
+  assert_equal(S.mod_page.view, "list", "the view stays the list")
+  place(S, "source:empty")
+  assert_equal(hint_text(context), "", "no K3 part")
+  tap(3)
+  assert_equal(S.mod_page.view, "list", "K3 opens nothing")
+  rows[1] = { label = "a", value = function() return "1" end }
+  redraw()
+  assert_equal(hint_text(context), "K3:edit", "a row returned: K3 opens it")
+  tap(3)
+  assert_equal(S.mod_page.view, "settings")
+end)
+
 test("a source's row names K3 when K3 opens its settings", function()
   local context, S = loaded()
   probe_settings(S, {})
