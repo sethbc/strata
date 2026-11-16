@@ -173,8 +173,36 @@ test("K3 adds a marker at the playhead, and ALT+K3 deletes the selected one", fu
   redraw()
   assert_equal(hint_text(context), "K2:back K3:add E3:nudge")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "E2 rows E3 fine K3 delete")
+  assert_equal(hint_text(context), "K3:delete E2:rows E3:fine")
   key(1, 0)
+end)
+
+-- #736: one style in every view, the other modal editors' (SEQ's step
+-- editor, the zones editor: "K2:back K3:step E3:level"), each hint whole on
+-- the 128 px hint row in norns' font, naming the keys its view takes
+test("every view's hint is in the colon style and fits the hint row", function()
+  local context, S, _, editor = loaded()
+  editor.open(1)
+  local function hint_with(alt)
+    if alt then key(1, 1) end
+    redraw()
+    local text = hint_text(context)
+    if alt then key(1, 0) end
+    return text
+  end
+  local function check(text, wanted)
+    assert_equal(text, wanted)
+    for word in text:gmatch("%S+") do
+      assert_true(word:match("^[KE][23]:%l+$") ~= nil, "'" .. word .. "' of '" .. text .. "' is <key>:<action>")
+    end
+    assert_true(h.text_width(text) <= 128, "'" .. text .. "' is " .. h.text_width(text) .. " px, over the hint row")
+    assert_true(S.lib.ui_header.hint_fits(text), "'" .. text .. "' shows whole")
+  end
+  check(hint_with(false), "K2:back K3:add E3:nudge")
+  check(hint_with(true), "K3:delete E2:rows E3:fine")
+  pick_row(editor, "tempo")
+  check(hint_with(false), "K2:back E2:slices E3:edit")
+  check(hint_with(true), "E2:row E3:edit")
 end)
 
 test("an add at 64 markers flashes and adds nothing", function()

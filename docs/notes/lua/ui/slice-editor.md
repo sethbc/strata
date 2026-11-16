@@ -8,7 +8,7 @@
 - The MIDI key: the note hook (`S.register_note_hook`, `slice editor`, its `heard`: every MIDI note a voice receives, before the slice filter, so a note outside a slicing voice's slices too, design §3.7) only notes the note's number while the editor is open on the `key` row; the next 48 Hz step (`S.lib.lfos.on_step`) sets it through `S.lib.samples.set`, so a hook sends nothing. A close forgets a noted key.
 - The slot emptied under the editor closes it: its listener on `S.lib.samples.on_bind` (registered once, at the first open, behind `binds_heard`) closes the editor when its slot's bind leaves no settings record.
 - The modules it reads (`S.lib.slices`, `S.lib.samples`, `S.lib.waveforms`) are read at each use and never checked to be there: a missing module or function fails loudly. The amount's bounds are the file settings' (`S.lib.samples.SAMPLES.count_min`, `count_max` and `sensitivity_max`, the bounds `S.lib.samples.set` checks): no copies.
-- The hint row fits 128 px: `K2:back K3:add E3:nudge` (the other modal editors' style; E2's pick shows as the bright `slice i/n`), with ALT `E2 rows E3 fine K3 delete`; rows `E2 slices E3 edit K2 back`, with ALT `E2 rows E3 edit`. A "hints" flash (BUFFER's, `buffer_page_flash`) shows in their place.
+- The hints are one style in every view, the other modal editors' (`<key>:<action>`, K2 and K3 first; #736), each whole on the 128 px hint row in norns.ttf: markers `K2:back K3:add E3:nudge` (102 px; E2's pick shows as the bright `slice i/n`, and `E2:slice` would make it 135), with ALT `K3:delete E2:rows E3:fine` (104); rows `K2:back E2:slices E3:edit` (100), with ALT `E2:row E3:edit` (57). A "hints" flash (BUFFER's, `buffer_page_flash`) shows in their place.
 
 ## Owns
 

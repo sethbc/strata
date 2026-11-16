@@ -1011,19 +1011,19 @@ test("the edit view has direction, misstep, fill, cond and the chain's three cha
   assert_equal(go_to(context, "random"), "0%")
   enc(3, 5); assert_equal(params:get("seq_chain_random"), 5)
   assert_screen_layout(context, "SEQ's edit view on the chain's chances")
-  -- the pattern view shows "fill" on the selected voice's row while fill is on
+  -- the pattern view shows F on the selected voice's row while fill is on
   tap(2)
   local function fill_mark()
     context.screen.clear(); redraw()
     for _, entry in ipairs(context.screen.texts) do
-      if entry.text == "fill" and entry.x ~= 3 then return entry end
+      if entry.text == "F" then return entry end
     end
   end
   assert_equal(fill_mark(), nil, "no mark while fill is off")
   params:set("seq_fill", 1)
   local mark = fill_mark()
   assert_true(mark ~= nil, "the mark while the latch is on")
-  assert_equal(mark.x, 106, "at x 106")
+  assert_equal(mark.x, 108, "at x 108")
   assert_equal(mark.y, row_y(S.selected_voice) + 5, "on the selected voice's row line")
   params:set("seq_fill", 0)
   S.lib.conditions.hold_fill("grid:2", true)
@@ -1032,6 +1032,46 @@ test("the edit view has direction, misstep, fill, cond and the chain's three cha
   assert_screen_layout(context, "SEQ with fill beside a gated voice's G")
   S.lib.conditions.hold_fill("grid:2", false)
   assert_equal(fill_mark(), nil)
+end)
+
+-- #735: the fill mark keeps at least a space's width (norns' font) from a
+-- gated voice's G, or from the + or - of an ungated one, and a blank
+-- column from step 16's cursor (to x 104), on the first and the last row.
+-- The layout tests catch an overlap, not marks that touch ("fillG")
+test("the fill mark keeps a space from the G (or + and -) and a column from step 16's cursor", function()
+  local context, S = started_on_seq()
+  local PATTERN_LENGTH, NUM_VOICES = S.constants.PATTERN_LENGTH, S.constants.NUM_VOICES
+  local space = h.text_width(" ")
+  local cursor_end = cell_x(PATTERN_LENGTH) - 1 + CELL_SIZE + 2   -- the 6x6 outline's first free column
+  local function span(entry)
+    local width = h.text_width(entry.text)
+    if entry.align == "right" then return entry.x - width, entry.x end
+    return entry.x, entry.x + width
+  end
+  S.cursors.seq_step = PATTERN_LENGTH
+  S.lib.conditions.hold_fill("grid:1", true)
+  for _, voice_idx in ipairs({1, NUM_VOICES}) do
+    S.selected_voice = voice_idx
+    for _, gate in ipairs({1, 2}) do
+      params:set("v" .. voice_idx .. "_seq_gate", gate)
+      context.screen.clear(); redraw()
+      -- the row's marks right of its cells, left to right
+      local marks = {}
+      for _, entry in ipairs(context.screen.texts) do
+        if entry.y == row_y(voice_idx) + 5 and entry.x > cursor_end then table.insert(marks, entry) end
+      end
+      table.sort(marks, function(a, b) return span(a) < span(b) end)
+      assert_equal(#marks, gate == 2 and 3 or 2, "voice " .. voice_idx .. ": the fill mark, the G when gated, + or -")
+      local mark_left, mark_right = span(marks[1])
+      local next_left = span(marks[2])
+      local what = "voice " .. voice_idx .. (gate == 2 and " gated" or " ungated") .. ": '" .. marks[1].text .. "' (x "
+        .. mark_left .. "-" .. mark_right .. ") and '" .. marks[2].text .. "' (from x " .. next_left .. ")"
+      assert_true(mark_left >= cursor_end + 1, what .. " leaves a blank column after the cursor (to x " .. cursor_end - 1 .. ")")
+      assert_true(next_left - mark_right >= space, what .. " are a space (" .. space .. " px) apart")
+      assert_screen_layout(context, "SEQ with fill on voice " .. voice_idx .. (gate == 2 and " gated" or ""))
+    end
+  end
+  S.lib.conditions.hold_fill("grid:1", false)
 end)
 
 test("the gate rows edit the voice's gate, its length and release, and a step's own length", function()
