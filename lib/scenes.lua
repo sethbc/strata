@@ -1033,7 +1033,7 @@ return function(S)
     -- one or a version that is no whole number
     local version = loaded.version
     if not is_integer_between(version, SCENE_FORMAT_FLOOR, SCENE_DATA_VERSION) then
-      if version == nil or (is_number(version) and not (version >= SCENE_FORMAT_FLOOR)) then
+      if version == nil or (is_number(version) and version < SCENE_FORMAT_FLOOR) then
         print("error: scenes file has " .. (version and ("version " .. version) or "no version") .. ", older than format "
           .. SCENE_FORMAT_FLOOR .. ", the oldest this version loads: it is set aside, not converted")
       else

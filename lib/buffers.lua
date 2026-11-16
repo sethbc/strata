@@ -977,9 +977,9 @@ return function(S)
     -- whole, never converted, and so is a newer one or one with no path list
     local version = loaded.version
     local known = type(version) == "number" and version == math.floor(version)
-      and version >= BUFFER_FORMAT_FLOOR and BUFFER_DATA_VERSION >= version
+      and version >= BUFFER_FORMAT_FLOOR and version <= BUFFER_DATA_VERSION
     if not known or type(loaded.paths) ~= "table" then
-      if type(version) == "number" and not (version >= BUFFER_FORMAT_FLOOR) then
+      if type(version) == "number" and version < BUFFER_FORMAT_FLOOR then
         print("error: buffers file has version " .. version .. ", older than version " .. BUFFER_FORMAT_FLOOR
           .. ", the oldest this version loads: it is set aside, not converted")
       else

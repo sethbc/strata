@@ -11,7 +11,7 @@
 
 ## Owns
 
-`lib/expression.lua` (`S.lib.expression`, 3.5 package 2c, design §6; `raw` 3.6's 0a, `first_touch` 3.6's 2a), included after `lib/input_level.lua` and `lib/mpe.lua`, with its table `EXPRESSION` (`M.EXPRESSION`): `targets` (the option list above), `mappings` (pressure's and slide's param keys, the controller value each reads, their names and defaults: `press_target` `amp`, `press_depth` 100, `slide_target` `main`, `slide_depth` 50), `depth_range` (-100..100), `gain_range` (0-2), `offset_range` (-1..1), `section` (`notes`, VOICE's, before `variation`), `extra_key` (`"expression"`), `wide_params` (`cutoff` `filter_freq`, `size` `grain_size`, `density` `grain_density`), `sources` (the section `notes` and the names) and `scene_format` (7).
+`lib/expression.lua` (`S.lib.expression`, 3.5 package 2c, design §6; `raw` 3.6's 0a, `first_touch` 3.6's 2a), included after `lib/input_level.lua` and `lib/mpe.lua`, with its table `EXPRESSION` (`M.EXPRESSION`): `targets` (the option list above), `mappings` (pressure's and slide's param keys, the controller value each reads, their names and defaults: `press_target` `amp`, `press_depth` 100, `slide_target` `main`, `slide_depth` 50), `depth_range` (-100..100), `gain_range` (0-2), `offset_range` (-1..1), `section` (`notes`, VOICE's, before `variation`), `extra_key` (`"expression"`), `wide_params` (`cutoff` `filter_freq`, `size` `grain_size`, `density` `grain_density`) and `sources` (the section `notes` and the names).
 
 ### The params (design §6.1)
 

@@ -212,8 +212,9 @@ return function(S)
   -- and the screen follow, and honors silent.
   -- 0. Every param of Strata's records that norns saves and the file has no
   --    line for goes to its default (#628): a PSET saved before the param
-  --    existed loads its default, never the session's value. norns writes a line for every saved param, so a
-  --    PSET saved now is untouched. Before the PSET hooks.
+  --    existed loads its default, never the session's value. norns writes
+  --    a line for every saved param, so a PSET saved now is untouched.
+  --    Before the PSET hooks.
   -- 1. Every number param pset.number_params lists is rounded to its step,
   --    a whole number (#554): one saved holding a fraction (norns' PARAMS
   --    menu turned a number param by d / 20 with K3 held) loads whole.
