@@ -157,7 +157,7 @@ return function(S)
     for row = 1, #LAYOUT_64.position_rows do
       for x = 1, width do
         local cell = (row - 1) * width + x
-        grid_device:led(x, LAYOUT_64.position_rows[row], S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells))
+        grid_device:led(x, LAYOUT_64.position_rows[row], S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells, port))
       end
     end
     for x = 1, width do

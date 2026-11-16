@@ -486,7 +486,7 @@ return function(S)
       -- 8 + v, rows 8 and 16 as on pages 1-4
       for voice_idx = 1, NUM_VOICES do
         for cell = 1, PAGES.position_cells do
-          grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells))
+          grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells, port))
         end
         local y = LAYOUT_256.strip_first_row + voice_idx - 1
         for x, key in pairs(LAYOUT_256.strip_key_columns) do

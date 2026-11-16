@@ -24,6 +24,11 @@ return function(S)
     -- each for waiting_ticks of the playhead clock's ticks (no steady level
     -- stands clear of 6, 10 and 15 on a varibright grid)
     waiting_high = 15, waiting_low = 2, waiting_ticks = 4, waiting_phases = 2,
+    -- 3.7's slice rows (design §10): a slice that exists, its key held, the
+    -- slice playing, none; the strip's bank keys: the bank shown, one that
+    -- holds slices, one that holds none
+    slice = 9, slice_held = 11, slice_playing = 15, slice_none = 0,
+    bank_shown = 15, bank_filled = 4, bank_empty = 0,
   }
   local LEVELS = M.LEVELS
   -- a position a rounding away from a cell's fraction still counts as inside
@@ -32,6 +37,11 @@ return function(S)
   local STRIP_KEYS = {"store", "hold", "whole"}
   -- the position row's cells on the page-5 grids (the change signature)
   local DISPLAY_CELLS = S.constants.GRID_PAGES.position_cells
+  -- 3.7's slice rows (design §10, decision 13): a bank is a row's
+  -- bank_size cells (slices 1-16, 17-32, ...), the strip's NUM_BOOKMARKS
+  -- keys pick it, a grid key's note key is port x port_key + slice (plan
+  -- ruling 17), and binds_heard says whether the bind listener is in
+  local SLICE_ROW = {bank_size = DISPLAY_CELLS, port_key = 100, binds_heard = false}
 
   -- per voice: the scan hold, its holders (a set: "grid:<port>", "arc",
   -- "caller"; held exactly while it is not empty), the glide's rate (as
@@ -328,16 +338,120 @@ return function(S)
   -- forgets it): {held = {voice, cell, cells, page} (the position key held),
   -- hold = {[voice] = page}, store = {[voice] = page} (the 256's store keys,
   -- one per voice), store_down = page (the one store key of a layout that
-  -- selects a grid voice; nil while up), pressed = {[voice] = key}}.
+  -- selects a grid voice; nil while up), pressed = {[voice] = key},
+  -- bank = {[voice] = the slice bank shown, nil for 1}, slices = {[voice] =
+  -- {[cell] = the slice key held: {n, page, token, released}}}}.
   -- `records` names each record this module made, to find it again when
   -- the port's state is gone
   local records = {}
 
   local function record_of(port)
     local state = S.lib.grid_core.port_state(port)
-    if not state.positions then state.positions = {hold = {}, store = {}, pressed = {}} end
+    if not state.positions then state.positions = {hold = {}, store = {}, pressed = {}, bank = {}, slices = {}} end
     records[port] = state.positions
     return state.positions
+  end
+
+  -- The slice rows (3.7, design §10) ------------------------------------
+
+  -- Whether a voice's position row shows slices: it reads a buffer, its
+  -- `slices` option is not off and its slot has slices (S.lib.slices,
+  -- which is nil only before 3.7's slices module is in)
+  function M.slice_row(voice_idx)
+    return valid_voice(voice_idx) and S.lib.slices ~= nil and S.lib.slices.takes_notes(voice_idx) == true
+  end
+
+  -- The count of slices the slot a voice reads holds (0 for none)
+  local function slot_slices(voice_idx)
+    local slot = buffer_voice(voice_idx) and voice_buffer_slot(voice_idx)
+    if not slot or S.lib.slices == nil then return 0 end
+    return S.lib.slices.count(slot) or 0
+  end
+
+  local function first_slice(bank) return (bank - 1) * SLICE_ROW.bank_size + 1 end
+
+  local function bank_holds_slices(voice_idx, bank) return slot_slices(voice_idx) >= first_slice(bank) end
+
+  -- The bank a port shows for a voice: its pick, or 1 when it has none or
+  -- the slot's slices no longer reach the pick's first
+  function M.bank(port, voice_idx)
+    local record = records[port]
+    local bank = valid_voice(voice_idx) and record and record.bank[voice_idx] or 1
+    if not bank_holds_slices(voice_idx, bank) then return 1 end
+    return bank
+  end
+
+  -- A bind or unbind of a slot (S.lib.samples.on_bind): each pick of a
+  -- voice reading it that its slices no longer reach goes back to 1. Only
+  -- state changes: a listener never sends and never yields
+  local function forget_unreached_banks(slot)
+    for _, record in pairs(records) do
+      for voice_idx, bank in pairs(record.bank) do
+        if voice_buffer_slot(voice_idx) == slot and not bank_holds_slices(voice_idx, bank) then record.bank[voice_idx] = nil end
+      end
+    end
+  end
+
+  -- The listener goes in at the first pick of a bank (no pick exists to
+  -- forget before one), once
+  local function hear_binds()
+    if SLICE_ROW.binds_heard or S.lib.samples == nil then return end
+    SLICE_ROW.binds_heard = true
+    S.lib.samples.on_bind(forget_unreached_banks)
+  end
+
+  -- Whether a voice is in one shot with a moving scan, where a slice plays
+  -- to its end whatever its key does (S.lib.scan.pass_seconds is a number)
+  local function plays_to_end(voice_idx)
+    return S.lib.scan ~= nil and type(S.lib.scan.pass_seconds(voice_idx, 1)) == "number"
+  end
+
+  local function slice_note_key(port, n) return port * SLICE_ROW.port_key + n end
+
+  -- A slice key's press: its slice plays at once, or at the beat or bar
+  -- (the position key's quantized action, so a press replaces a waiting
+  -- jump or slice of the voice). A cell with no slice does nothing
+  local function press_slice_key(port, voice_idx, cell)
+    local n = first_slice(M.bank(port, voice_idx)) + cell - 1
+    if n > slot_slices(voice_idx) then return end
+    local entry = {n = n, page = S.lib.grid_core.page(port)}
+    local note_key = slice_note_key(port, n)
+    local _, token = S.lib.quantize.schedule("position" .. voice_idx, function()
+      S.lib.slices.play(voice_idx, n, {owner = "grid", key = note_key, velocity = 1})
+      -- released while it waited, and the release did not take it back
+      if entry.released then S.lib.slices.note_off(voice_idx, "grid", note_key) end
+    end, "v" .. voice_idx .. " sl " .. n)
+    entry.token = token
+    local held = record_of(port).slices
+    held[voice_idx] = held[voice_idx] or {}
+    held[voice_idx][cell] = entry
+  end
+
+  -- A slice key ends (its release, its grid's page change or removal): a
+  -- play that still waits is taken back, but in one shot with a moving
+  -- scan, where a tap plays at the beat; a play that ran gets its note off
+  local function end_slice_key(port, voice_idx, entry)
+    local action = "position" .. voice_idx
+    if entry.token and S.lib.quantize.waiting(action, entry.token) then
+      if plays_to_end(voice_idx) then
+        entry.released = true
+      else
+        S.lib.quantize.cancel(action)
+      end
+      return
+    end
+    S.lib.slices.note_off(voice_idx, "grid", slice_note_key(port, entry.n))
+  end
+
+  -- The release of a slice key the port holds for a voice's cell: true
+  -- when there was one
+  local function release_slice_key(port, record, voice_idx, cell)
+    local held = record.slices[voice_idx]
+    local entry = held and held[cell]
+    if not entry then return false end
+    held[cell] = nil
+    end_slice_key(port, voice_idx, entry)
+    return true
   end
 
   -- End what a port's record holds that is stale: everything when its grid
@@ -364,6 +478,15 @@ return function(S)
       record.pressed = {}
     end
     if record.held and (gone or record.held.page ~= page) then record.held = nil end
+    -- a slice key whose release can no longer come ends now
+    for voice_idx, held in pairs(record.slices) do
+      for cell, entry in pairs(held) do
+        if gone or entry.page ~= page then
+          held[cell] = nil
+          end_slice_key(port, voice_idx, entry)
+        end
+      end
+    end
     if gone then records[port] = nil end
   end
 
@@ -400,19 +523,26 @@ return function(S)
   -- A key of a row of `cells` cells (design 3.3 section 5.2): a press jumps
   -- to its cell's start; with another key of the row held, it sets the loop
   -- from the lower cell's start to the higher cell's end. Only buffer voices
-  -- respond; a release only ends the hold
+  -- respond; a release only ends the hold. On a voice whose row shows
+  -- slices (M.slice_row) a key plays its slice of the port's bank instead,
+  -- and its release ends it
   function M.grid_key(port, voice_idx, cell, cells, z)
     if not valid_voice(voice_idx) or type(cells) ~= "number" or cells < 1 or cells % 1 ~= 0 then return end
     if type(cell) ~= "number" or cell < 1 or cell > cells or cell % 1 ~= 0 then return end
     if records[port] then end_stale_port(port, records[port]) end
     if z == 0 then
       local record = records[port]
+      if record and release_slice_key(port, record, voice_idx, cell) then return end
       local held = record and record.held
       if held and held.voice == voice_idx and held.cells == cells and held.cell == cell then record.held = nil end
       return
     end
     if not buffer_voice(voice_idx) then return end
     if selects_grid_voice(port) then select_grid_voice(voice_idx) end
+    if cells == SLICE_ROW.bank_size and M.slice_row(voice_idx) then
+      press_slice_key(port, voice_idx, cell)
+      return
+    end
     local record = record_of(port)
     local held = record.held
     if held and held.voice == voice_idx and held.cells == cells and held.cell ~= cell then
@@ -433,6 +563,15 @@ return function(S)
     -- a press on a voice that reads no buffer records nothing (its keys are
     -- dark and do nothing); releases always end what they ended before
     if z == 1 and not buffer_voice(voice_idx) then return end
+    -- while the voice's row shows slices, keys 1-4 pick the port's bank
+    -- (one that holds none is not picked), store held or not
+    if z == 1 and valid_bookmark(key) and M.slice_row(voice_idx) then
+      if bank_holds_slices(voice_idx, key) then
+        record_of(port).bank[voice_idx] = key
+        hear_binds()
+      end
+      return
+    end
     if valid_bookmark(key) then
       if z == 1 then
         local record = record_of(port)
@@ -554,11 +693,35 @@ return function(S)
     return LEVELS.outside + round(peak * LEVELS.outside_range)
   end
 
+  -- What a slice row needs, once for all its cells: the port's bank's
+  -- first slice, the count, the slices playing and the slice keys held
+  -- (the port's; with no port, any port's, and bank 1)
+  local function slice_context(voice_idx, port)
+    local playing, held = {}, {}
+    for _, n in ipairs(S.lib.slices.playing(voice_idx) or {}) do playing[n] = true end
+    for record_port, record in pairs(records) do
+      if port == nil or record_port == port then
+        for _, entry in pairs(record.slices[voice_idx] or {}) do held[entry.n] = true end
+      end
+    end
+    return {first = first_slice(M.bank(port, voice_idx)), count = slot_slices(voice_idx), playing = playing, held = held}
+  end
+
+  local function slice_level(context, cell)
+    local n = context.first + cell - 1
+    if n > context.count then return LEVELS.slice_none end
+    if context.playing[n] then return LEVELS.slice_playing end
+    if context.held[n] then return LEVELS.slice_held end
+    return LEVELS.slice
+  end
+
   -- The LED level of cell `cell` of a voice's row of `cells` cells (0 for a
-  -- voice that is not a buffer voice, or whose slot is empty)
-  function M.grid_level(voice_idx, cell, cells)
+  -- voice that is not a buffer voice, or whose slot is empty); a slice
+  -- row's at the port's bank
+  function M.grid_level(voice_idx, cell, cells, port)
     if not valid_voice(voice_idx) or type(cells) ~= "number" or cells < 1 or cells % 1 ~= 0 then return 0 end
     if type(cell) ~= "number" or cell < 1 or cell > cells or cell % 1 ~= 0 then return 0 end
+    if cells == SLICE_ROW.bank_size and M.slice_row(voice_idx) then return slice_level(slice_context(voice_idx, port), cell) end
     local context = row_context(voice_idx, cells)
     return context and cell_level(context, cell) or 0
   end
@@ -569,6 +732,10 @@ return function(S)
   function M.strip_level(voice_idx, key, port)
     -- no key of a voice that reads no buffer does anything: all dark (#445)
     if not buffer_voice(voice_idx) then return 0 end
+    if valid_bookmark(key) and M.slice_row(voice_idx) then
+      if M.bank(port, voice_idx) == key then return LEVELS.bank_shown end
+      return bank_holds_slices(voice_idx, key) and LEVELS.bank_filled or LEVELS.bank_empty
+    end
     if valid_bookmark(key) then
       if any_record(function(record) return storing(record, voice_idx) and record.pressed[voice_idx] == key end, port) then
         return LEVELS.stored
@@ -592,13 +759,31 @@ return function(S)
 
   -- Everything a page-5 grid shows, as one string: it changes when any LED
   -- level does (the playhead clock redraws then), and with a bookmark's
-  -- value, which a recall or a scene fade moves
+  -- value, which a recall or a scene fade moves. A slice row's levels and
+  -- bank keys differ by port: they go in for no port and for each port
+  -- this module has a record of (a port with none shows what no port does)
+  local function add_slice_levels(parts, voice_idx)
+    local ports = {}
+    for port in pairs(records) do ports[#ports + 1] = port end
+    table.sort(ports)
+    for index = 0, #ports do
+      local port = ports[index]  -- nil first
+      local context = slice_context(voice_idx, port)
+      for cell = 1, DISPLAY_CELLS do parts[#parts + 1] = slice_level(context, cell) end
+      for n = 1, NUM_BOOKMARKS do parts[#parts + 1] = M.strip_level(voice_idx, n, port) end
+    end
+  end
+
   function M.display_signature()
     local parts = {}
     for voice_idx = 1, NUM_VOICES do
-      local context = row_context(voice_idx, DISPLAY_CELLS)
-      for cell = 1, DISPLAY_CELLS do
-        parts[#parts + 1] = context and cell_level(context, cell) or 0
+      if M.slice_row(voice_idx) then
+        add_slice_levels(parts, voice_idx)
+      else
+        local context = row_context(voice_idx, DISPLAY_CELLS)
+        for cell = 1, DISPLAY_CELLS do
+          parts[#parts + 1] = context and cell_level(context, cell) or 0
+        end
       end
       for n = 1, NUM_BOOKMARKS do
         parts[#parts + 1] = M.strip_level(voice_idx, n)

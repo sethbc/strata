@@ -262,7 +262,7 @@ return function(S)
     for voice_idx = 1, NUM_VOICES do
       local floor = voice_idx == S.grid_voice_select and 1 or 0
       for cell = 1, PAGES.position_cells do
-        local level = S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells)
+        local level = S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells, port)
         grid_device:led(voice_idx, cell, math.min(15, level + floor))
       end
     end
