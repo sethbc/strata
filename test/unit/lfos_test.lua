@@ -886,6 +886,107 @@ test("an LFO's sound is unchanged: the same destination gives the same engine ca
   assert_equal(lfo_destination_id(4), "macro_1")
 end)
 
+-- 0e's re-review: while a scene applies an LFO's settings none of them
+-- reaches the engine; the next step sends the LFO once with all of them in
+-- place. `current` and `scene` set LFO 2's settings (the scene's are
+-- captured into scene 1), then an instant recall and one step: every
+-- engine call of LFO 2 in that window is checked
+local function recall_window(context, current, scene)
+  local S = local_value("S")
+  params:set(lfo_id(2), 0)
+  scene(); params:set(lfo_id(2), 1); capture_scene(1)
+  params:set(lfo_id(2), 0)
+  current(); params:set(lfo_id(2), 1); lfo_step(context)
+  context.clear_engine_calls()
+  recall_scene(1, 0)
+  lfo_step(context)
+  local sets, others = {}, {}
+  for _, call in ipairs(context.engine_calls) do
+    if call.name == "setFastLfo" and call.args[1] == 1 then
+      sets[#sets + 1] = call
+    elseif (call.name == "stopFastLfo" or call.name == "syncFastLfo") and call.args[1] == 1 then
+      others[#others + 1] = call
+    end
+  end
+  return sets, others, S.lib.lfos
+end
+
+local function lfo_settings(dest_label, shape, rate, depth, mode, division)
+  return function()
+    params:set(lfo_id(2, "dest"), destination_index(dest_label))
+    params:set(lfo_id(2, "shape"), option_index(lfo_id(2, "shape"), shape))
+    params:set(lfo_id(2, "mode"), option_index(lfo_id(2, "mode"), mode or "free"))
+    params:set(lfo_id(2, "division"), option_index(lfo_id(2, "division"), division or "4"))
+    params:set(lfo_id(2, "rate"), rate)
+    params:set(lfo_id(2, "depth"), depth)
+  end
+end
+
+-- The one send the window may hold: the scene's voice, destination, shape,
+-- rate (what the LFO plays at its mode now) and depth together
+local function assert_one_send(sets, lfos, voice, destination, shape, what)
+  assert_equal(#sets, 1, what .. ": one setFastLfo, with everything in place")
+  local args = sets[1].args
+  assert_equal(args[2], voice - 1, what .. ": the scene's voice")
+  assert_equal(args[3], destination, what .. ": the scene's destination")
+  assert_equal(args[4], option_index(lfo_id(2, "shape"), shape) - 1, what .. ": the scene's shape")
+  assert_near(args[5], lfos.effective_rate(2), 1e-9, what .. ": the scene's rate")
+  assert_near(args[6], lfos.effective_depth(2) / 100, 1e-9, what .. ": the scene's depth")
+end
+
+test("an instant recall whose shape differs sends the LFO once, with the scene's settings", function()
+  local context = load_strata(); finish_startup(context)
+  local sets, _, lfos = recall_window(context, lfo_settings("v3 pitch", "sine", 1, 25),
+    lfo_settings("v5 pitch", "tri", 5, 60))
+  assert_one_send(sets, lfos, 5, 0, "tri", "shape")
+  assert_near(sets[1].args[5], 5, 1e-9, "5 Hz"); assert_near(sets[1].args[6], 0.6, 1e-9, "60 %")
+end)
+
+test("an instant recall whose mode differs sends the LFO once, with the scene's settings", function()
+  local context = load_strata(); finish_startup(context)
+  local sets, _, lfos = recall_window(context, lfo_settings("v3 pitch", "sine", 1, 25),
+    lfo_settings("v5 pitch", "sine", 1, 60, "clocked", "1"))
+  assert_one_send(sets, lfos, 5, 0, "sine", "mode")
+  assert_true(lfos.is_clocked(2), "clocked")
+end)
+
+test("an instant recall whose division differs sends the LFO once, with the scene's settings", function()
+  local context = load_strata(); finish_startup(context)
+  local sets, _, lfos = recall_window(context, lfo_settings("v3 pitch", "sine", 1, 25, "clocked", "4"),
+    lfo_settings("v3 pitch", "sine", 1, 60, "clocked", "1/4"))
+  assert_one_send(sets, lfos, 3, 0, "sine", "division")
+end)
+
+test("an instant recall that changes destination, shape, rate and depth sends no mix of old and new", function()
+  local context = load_strata(); finish_startup(context)
+  local sets, _, lfos = recall_window(context, lfo_settings("v3 pitch", "sine", 1, 25),
+    lfo_settings("v6 size", "drunk", 7, 80))
+  assert_one_send(sets, lfos, 6, 2, "drunk", "everything")
+  assert_near(sets[1].args[5], 7, 1e-9, "7 Hz"); assert_near(sets[1].args[6], 0.8, 1e-9, "80 %")
+end)
+
+test("an instant recall from a Lua destination to an engine one gives the old back and starts the new once", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("reverb_mix", 0.3)
+  local sets, _, lfos = recall_window(context, lfo_settings("rev mix", "sine", 1, 25),
+    lfo_settings("v5 pitch", "tri", 5, 60))
+  assert_one_send(sets, lfos, 5, 0, "tri", "Lua to engine")
+  local reverbs = context.calls_named("setReverb")
+  assert_true(#reverbs >= 1, "rev mix given back")
+  assert_near(reverbs[#reverbs].args[1], 0.3, 1e-9, "to its stored value")
+end)
+
+test("a plain turn of the shape, mode or division reaches the engine at once", function()
+  local context = load_strata(); finish_startup(context)
+  lfo_settings("v3 pitch", "sine", 1, 25)(); params:set(lfo_id(2), 1); lfo_step(context)
+  for field, value in pairs({ shape = option_index(lfo_id(2, "shape"), "tri"),
+    mode = option_index(lfo_id(2, "mode"), "clocked"), division = option_index(lfo_id(2, "division"), "1") }) do
+    context.clear_engine_calls()
+    params:set(lfo_id(2, field), value)
+    assert_equal(#calls_with(context, "setFastLfo", 1), 1, field .. ": sent at once, outside a recall")
+  end
+end)
+
 -- 0e's review: the destination is a scene block, which applies before the
 -- LFO's settings, so it is set silently and the next step brings it in
 -- with every setting in place
