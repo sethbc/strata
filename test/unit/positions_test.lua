@@ -1099,4 +1099,295 @@ test("a position key and a bookmark key wait for the bar; a step's bookmark lock
   assert_near(params:get("v1_buf_pos"), 0.1, 1e-9, "so is jump")
 end)
 
+-- 3.7 (design §10, decision 13): a slice row. Doubles stand in for the
+-- three modules 2e consumes, with exactly the functions it uses, set as
+-- fields of each module's table (so they replace the real ones too):
+-- S.lib.slices (2b: takes_notes, count, play, note_off, playing), S.lib.scan
+-- (2a: pass_seconds) and S.lib.samples (2d: on_bind). Voice v takes notes
+-- while takes[v] is set and it reads a buffer whose slot has slices; a
+-- played slice sounds until its key's note_off, or, while `pass` is a
+-- number (one shot with a moving scan), until the test ends it
+local function slice_doubles(S, counts)
+  local doubles = {counts = counts or {}, takes = {}, plays = {}, offs = {}, sounding = {}, pass = nil, binds = {}}
+  local slices = S.lib.slices or {}
+  S.lib.slices = slices
+  function slices.count(slot) return doubles.counts[slot] or 0 end
+  function slices.takes_notes(voice_idx)
+    return doubles.takes[voice_idx] == true and voice_uses_buffer(voice_idx) and slices.count(voice_buffer_slot(voice_idx)) > 0
+  end
+  function slices.play(voice_idx, n, note)
+    table.insert(doubles.plays, {voice = voice_idx, n = n, note = note})
+    if n > slices.count(voice_buffer_slot(voice_idx)) then return false end
+    doubles.sounding[note.key] = {voice = voice_idx, n = n}
+    return 1
+  end
+  function slices.note_off(voice_idx, owner, key)
+    table.insert(doubles.offs, {voice = voice_idx, owner = owner, key = key})
+    if doubles.pass == nil then doubles.sounding[key] = nil end
+  end
+  function slices.playing(voice_idx)
+    local list = {}
+    for _, sounding in pairs(doubles.sounding) do
+      if sounding.voice == voice_idx then list[#list + 1] = sounding.n end
+    end
+    table.sort(list)
+    return list
+  end
+  local scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return doubles.pass and fraction * doubles.pass or nil end
+  local samples = S.lib.samples or {}
+  S.lib.samples = samples
+  function samples.on_bind(fn) table.insert(doubles.binds, fn) end
+  return doubles
+end
+
+-- Buffer voices 1-3 on slot 1, which holds `count` slices; voice 1 plays them
+local function slice_voices(count)
+  local context, S = buffer_voices()
+  local doubles = slice_doubles(S, {[1] = count or 20})
+  doubles.takes[1] = true
+  return context, S, doubles
+end
+
+local function row_levels(positions, voice_idx, port)
+  local levels = {}
+  for cell = 1, 16 do levels[cell] = positions.grid_level(voice_idx, cell, 16, port) end
+  return table.concat(levels, " ")
+end
+
+local function bank_levels(positions, voice_idx, port)
+  local levels = {}
+  for n = 1, 4 do levels[n] = positions.strip_level(voice_idx, n, port) end
+  return table.concat(levels, " ")
+end
+
+local function press(positions, port, voice_idx, cell)
+  positions.grid_key(port, voice_idx, cell, 16, 1)
+end
+local function release(positions, port, voice_idx, cell)
+  positions.grid_key(port, voice_idx, cell, 16, 0)
+end
+
+test("a voice that plays slices shows 16 slice keys and its strip's bookmark keys as banks", function()
+  local _, S = slice_voices(20)
+  local positions = S.lib.positions
+  assert_equal(positions.slice_row(1), true, "voice 1 plays slices")
+  assert_equal(positions.slice_row(2), false, "voice 2 does not")
+  assert_equal(positions.bank(1, 1), 1, "bank 1 by default")
+  assert_equal(row_levels(positions, 1, 1), "9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9", "bank 1: slices 1-16")
+  assert_equal(bank_levels(positions, 1, 1), "15 4 0 0", "bank 1 shown, bank 2 holds slices")
+  positions.strip_key(1, 1, 2, 1); positions.strip_key(1, 1, 2, 0)
+  assert_equal(positions.bank(1, 1), 2)
+  assert_equal(S.lib.grid_core.port_state(1).positions.bank[1], 2, "kept in the port's state")
+  assert_equal(row_levels(positions, 1, 1), "9 9 9 9 0 0 0 0 0 0 0 0 0 0 0 0", "bank 2: slices 17-20")
+  assert_equal(bank_levels(positions, 1, 1), "4 15 0 0")
+  positions.strip_key(1, 1, 3, 1); positions.strip_key(1, 1, 3, 0)
+  assert_equal(positions.bank(1, 1), 2, "a bank with no slices is not picked")
+  assert_equal(positions.last_recalled(1), nil, "the bank keys recall no bookmark")
+  -- store held: the keys still pick banks, and store nothing
+  local bookmark_1 = params:get("v1_bookmark_1")
+  positions.strip_key(1, 1, "store", 1)
+  assert_equal(positions.strip_level(1, "store", 1), 15, "store as before")
+  positions.strip_key(1, 1, 1, 1); positions.strip_key(1, 1, 1, 0)
+  positions.strip_key(1, 1, "store", 0)
+  assert_equal(positions.bank(1, 1), 1, "bank 1 again")
+  assert_equal(params:get("v1_bookmark_1"), bookmark_1, "and no bookmark stored")
+  assert_equal(positions.strip_level(1, "hold", 1), 4, "hold as before")
+  assert_equal(positions.strip_level(1, "whole", 1), 15, "whole as before")
+end)
+
+test("a press plays its slice and the release ends it", function()
+  local context, S, doubles = slice_voices(30)
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, 2, 1); positions.strip_key(1, 1, 2, 0)
+  context.clear_engine_calls()
+  press(positions, 1, 1, 5)
+  assert_equal(#doubles.plays, 1, "one play")
+  local play = doubles.plays[1]
+  assert_equal(play.voice, 1); assert_equal(play.n, 21, "bank 2, cell 5: (2 - 1) x 16 + 5")
+  assert_equal(play.note.owner, "grid"); assert_equal(play.note.key, 1 * 100 + 21); assert_equal(play.note.velocity, 1)
+  assert_equal(#doubles.offs, 0, "nothing ends yet")
+  release(positions, 1, 1, 5)
+  assert_equal(#doubles.offs, 1, "the release ends it")
+  assert_equal(doubles.offs[1].voice, 1); assert_equal(doubles.offs[1].owner, "grid"); assert_equal(doubles.offs[1].key, 121)
+  assert_equal(#grain_calls(context, "t_scanReset"), 0, "no jump")
+  assert_near(params:get("v1_buf_pos"), 0, 1e-9, "buf_pos unchanged")
+  -- a cell past the count does nothing
+  press(positions, 1, 1, 15); release(positions, 1, 1, 15)
+  assert_equal(#doubles.plays, 1, "slice 31 of 30: no play")
+  assert_equal(#doubles.offs, 1, "and no off")
+  assert_equal(#grain_calls(context, "t_scanReset"), 0, "and no jump")
+end)
+
+test("a playing slice is brightest and a held key next", function()
+  local _, S, doubles = slice_voices(20)
+  local positions = S.lib.positions
+  press(positions, 1, 1, 4)
+  assert_equal(positions.grid_level(1, 4, 16, 1), 15, "playing")
+  doubles.sounding[104] = nil  -- its note ended, the key is still down
+  assert_equal(positions.grid_level(1, 4, 16, 1), 11, "held")
+  assert_equal(positions.grid_level(1, 4, 16, 2), 9, "another grid does not hold it")
+  assert_equal(positions.grid_level(1, 4, 16), 11, "with no port: any grid's key")
+  doubles.sounding.other = {voice = 1, n = 7}
+  assert_equal(positions.grid_level(1, 7, 16, 1), 15, "a slice another note plays")
+  assert_equal(positions.grid_level(1, 7, 16, 2), 15, "on every grid")
+  release(positions, 1, 1, 4)
+  assert_equal(positions.grid_level(1, 4, 16, 1), 9, "released")
+  assert_equal(positions.grid_level(1, 3, 16, 1), 9, "a slice that exists")
+end)
+
+local function run_to_beat(context, beat)
+  context.clock.run_for((beat - clock.get_beats()) * clock.get_beat_sec())
+end
+
+test("a slice key waits for the beat or bar when the quantizer says so", function()
+  local context, S, doubles = slice_voices(20)
+  local positions = S.lib.positions
+  params:set("quantize_actions", 3)  -- bar
+  run_to_beat(context, 1.5)
+  press(positions, 1, 1, 2)
+  assert_equal(#doubles.plays, 0, "the slice waits")
+  assert_true(S.lib.quantize.waiting("position1"), "under the position key")
+  assert_equal(S.lib.ui_flash.text("header"), "v1 sl 2 at bar")
+  assert_equal(positions.grid_level(1, 2, 16, 1), 11, "held while it waits")
+  run_to_beat(context, 4.02)
+  assert_equal(#doubles.plays, 1, "it plays at the bar")
+  assert_equal(doubles.plays[1].n, 2)
+  release(positions, 1, 1, 2)
+  assert_equal(#doubles.offs, 1, "the release after it ends it")
+  params:set("quantize_actions", 2)  -- beat
+  press(positions, 1, 1, 3)
+  assert_equal(#doubles.plays, 1, "the beat waits too")
+  run_to_beat(context, 5.02)
+  assert_equal(#doubles.plays, 2)
+  release(positions, 1, 1, 3)
+end)
+
+test("a key released before its quantized play takes it back in wrap, and lets it play in one shot", function()
+  local context, S, doubles = slice_voices(20)
+  local positions = S.lib.positions
+  params:set("quantize_actions", 3)  -- bar
+  run_to_beat(context, 1.5)
+  press(positions, 1, 1, 2); release(positions, 1, 1, 2)
+  assert_true(not S.lib.quantize.waiting("position1"), "taken back")
+  run_to_beat(context, 4.02)
+  assert_equal(#doubles.plays, 0, "nothing plays at the bar")
+  assert_equal(#doubles.offs, 0, "and nothing is ended")
+  assert_equal(positions.grid_level(1, 2, 16, 1), 9, "nor held")
+  doubles.pass = 2  -- one shot, a moving scan: a tap plays at the beat
+  run_to_beat(context, 5.5)
+  press(positions, 1, 1, 3); release(positions, 1, 1, 3)
+  assert_true(S.lib.quantize.waiting("position1"), "still waits")
+  run_to_beat(context, 8.02)
+  assert_equal(#doubles.plays, 1, "and plays at the bar")
+  assert_equal(doubles.plays[1].n, 3)
+  assert_equal(#doubles.offs, 1, "its note off follows the play (a one-shot slice note plays on to its end)")
+  assert_equal(doubles.offs[1].key, 103)
+end)
+
+test("two grids hold their own banks", function()
+  local _, S, doubles = slice_voices(20)
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, 2, 1); positions.strip_key(1, 1, 2, 0)
+  assert_equal(positions.bank(1, 1), 2, "grid 1 shows bank 2")
+  assert_equal(positions.bank(2, 1), 1, "grid 2 still bank 1")
+  assert_equal(positions.grid_level(1, 5, 16, 1), 0, "grid 1's cell 5: slice 21 of 20")
+  assert_equal(positions.grid_level(1, 5, 16, 2), 9, "grid 2's: slice 5")
+  assert_equal(bank_levels(positions, 1, 1), "4 15 0 0")
+  assert_equal(bank_levels(positions, 1, 2), "15 4 0 0")
+  press(positions, 2, 1, 5)
+  assert_equal(doubles.plays[1].n, 5, "grid 2 plays from its own bank")
+  assert_equal(doubles.plays[1].note.key, 205, "its key is the port's")
+  press(positions, 1, 1, 1)
+  assert_equal(doubles.plays[2].n, 17)
+  assert_equal(doubles.plays[2].note.key, 117)
+  release(positions, 2, 1, 5); release(positions, 1, 1, 1)
+  assert_equal(doubles.offs[1].key, 205); assert_equal(doubles.offs[2].key, 117)
+end)
+
+test("a voice with slices off keeps its position cells and bookmarks", function()
+  local context, S, doubles = slice_voices(20)
+  local positions = S.lib.positions
+  doubles.takes[1] = false
+  half_peaks(S)
+  assert_equal(positions.slice_row(1), false)
+  assert_equal(positions.grid_level(1, 1, 16, 1), 15, "the playhead, as before")
+  assert_equal(positions.grid_level(1, 5, 16, 1), 6, "a position cell, as before")
+  press(positions, 1, 1, 5); release(positions, 1, 1, 5)
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-9, "a press jumps")
+  positions.strip_key(1, 1, 3, 1); positions.strip_key(1, 1, 3, 0)
+  assert_equal(positions.last_recalled(1), 3, "a strip key recalls its bookmark")
+  assert_equal(positions.strip_level(1, 3, 1), 10, "lit as the last recalled")
+  assert_equal(#doubles.plays, 0, "no slice played")
+  -- the option on, the slot with no slices: positions too
+  doubles.takes[1] = true
+  doubles.counts[1] = 0
+  assert_equal(positions.slice_row(1), false, "no slices: a position row")
+  context.clear_engine_calls()
+  press(positions, 1, 1, 9); release(positions, 1, 1, 9)
+  assert_near(params:get("v1_buf_pos"), 0.5, 1e-9, "a press jumps")
+  assert_equal(#doubles.plays, 0)
+end)
+
+test("the bank returns to 1 when the slot's slices no longer reach it", function()
+  local _, S, doubles = slice_voices(40)
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, 3, 1); positions.strip_key(1, 1, 3, 0)
+  assert_equal(positions.bank(1, 1), 3, "bank 3: slices 33-40")
+  doubles.counts[1] = 20
+  assert_equal(positions.bank(1, 1), 1, "slices 1-20: bank 3 is empty, bank 1 shows")
+  assert_equal(bank_levels(positions, 1, 1), "15 4 0 0")
+  assert_equal(#doubles.binds, 1, "one listener for the binds")
+  for _, listener in ipairs(doubles.binds) do listener(1) end
+  doubles.counts[1] = 40
+  assert_equal(positions.bank(1, 1), 1, "the bind put it back to 1")
+  positions.strip_key(1, 1, 2, 1); positions.strip_key(1, 1, 2, 0)
+  for _, listener in ipairs(doubles.binds) do listener(2) end
+  assert_equal(positions.bank(1, 1), 2, "a bind of another slot leaves it")
+  for _, listener in ipairs(doubles.binds) do listener(1) end
+  assert_equal(positions.bank(1, 1), 2, "and so does a bind whose slices still reach it")
+  assert_equal(#doubles.binds, 1, "still one listener")
+end)
+
+test("the slice rows repaint from the playhead clock when a slice starts or ends", function()
+  local context, S, doubles = slice_voices(20)
+  local device = context.grid.plug(1, 16, 16)
+  S.lib.grid_core.set_page(1, 5)
+  grid_redraw()
+  assert_equal(device:get_led(3, 1), 9, "slice 3 exists")
+  local before = S.lib.positions.display_signature()
+  doubles.sounding.other = {voice = 1, n = 3}
+  assert_true(S.lib.positions.display_signature() ~= before, "the signature sees a slice start")
+  context.clock.run_for(0.2)
+  assert_equal(device:get_led(3, 1), 15, "the clock repainted it playing")
+  doubles.sounding.other = nil
+  context.clock.run_for(0.2)
+  assert_equal(device:get_led(3, 1), 9, "and ended")
+  S.lib.positions.strip_key(1, 1, 2, 1); S.lib.positions.strip_key(1, 1, 2, 0)
+  context.clock.run_for(0.2)
+  assert_equal(device:get_led(5, 1), 0, "a bank change shows")
+  assert_equal(device:get_led(2, 9), 15, "and its key")
+end)
+
+test("a held slice key ends when its grid shows another page or leaves", function()
+  local context, S, doubles = slice_voices(20)
+  context.grid.plug(1, 16, 16)
+  S.lib.grid_core.set_page(1, 5)
+  local positions = S.lib.positions
+  press(positions, 1, 1, 2)
+  S.lib.grid_core.set_page(1, 1)
+  positions.end_stale_holds()
+  assert_equal(#doubles.offs, 1, "the page change ends it")
+  assert_equal(doubles.offs[1].key, 102)
+  release(positions, 1, 1, 2)
+  assert_equal(#doubles.offs, 1, "and its late release ends nothing more")
+  S.lib.grid_core.set_page(1, 5)
+  press(positions, 1, 1, 3)
+  context.grid.unplug(1)
+  positions.end_stale_holds()
+  assert_equal(#doubles.offs, 2, "an unplug ends it")
+  assert_equal(doubles.offs[2].key, 103)
+end)
+
 end

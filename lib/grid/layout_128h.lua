@@ -337,10 +337,10 @@ return function(S)
   end
 
   -- Page 5: voice v's positions on row v
-  local function redraw_position_page(grid_device)
+  local function redraw_position_page(port, grid_device)
     for voice_idx = 1, NUM_VOICES do
       for cell = 1, PAGES.position_cells do
-        grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells))
+        grid_device:led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, PAGES.position_cells, port))
       end
     end
   end
@@ -379,7 +379,7 @@ return function(S)
       redraw_source_page(grid_device)
       redraw_strip(port, grid_device)
     elseif page == PAGES.positions then
-      redraw_position_page(grid_device)
+      redraw_position_page(port, grid_device)
     else
       -- Patterns (rows 1-NUM_VOICES)
       for voice_idx = 1, NUM_VOICES do
