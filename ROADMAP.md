@@ -146,6 +146,14 @@ The six items below were added on 2026-11-11 from a review of four hardware gran
 - Two kinds of modulation source for 3.4's registry and matrix: an **envelope** (attack and decay, or ADSR, with a curve and an optional loop) fired by a voice's steps and MIDI notes, and a **random sequence** of N values that repeats and can drift, a pattern where 3.4's sample-and-hold is new at every cycle.
 - They register like every 3.4 source, so MOD lists them unchanged. An envelope on a fast destination must run in the engine, as an LFO there does, as a persistent node a step re-triggers: a step never creates one.
 
+## Between 3.7 and 3.8: three small revisions
+
+Decided 2026-11-16, from a review of what compatibility had cost (`docs/design/3.7-facts/revisit.md`); each is a package of its own, built with no other work open.
+
+- **`frozen` becomes `locked`** in the code and the scene field. The lock has been "lock" on screen since 3.1 and `frozen` underneath, beside the audio freeze; 3.8 adds a delay freeze.
+- **The 256's fader pages take newer params.** They stop at 3.1's today: the voice filter, the sends, the loop, the jitters, attack and release have no fader. A param record asks for one.
+- **MIDI note off has two modes**, latch and release, with one default, in place of three (the third, `auto`, depended on the MIDI mode).
+
 ## 3.8: Sound
 
 Added 2026-11-11, at the maintainer's request. It widens what a voice can be. It gets its own design before code, and that design starts from the real-time memory left after 3.5.
@@ -161,6 +169,11 @@ Added 2026-11-11, at the maintainer's request. It widens what a voice can be. It
 - Scales other than twelve equal steps: a tuning loaded from a Scala file or picked from a built-in list, applied wherever Strata turns a note into a frequency or a rate: 3.2's scale quantize, 3.4's step notes, MIDI notes and 3.5's note allocation and MPE.
 - **A scale editor** (added 2026-11-11, from the hardware review): toggle each of the twelve pitch classes to make a scale of your own, beside the built-in list. The engine's `setScale` already takes any 12-bit set, so this is a screen and a stored mask.
 - The design decides: one tuning for the script or one per voice; how a tuning meets the engine's quantize (`setScale` sends a 12-bit mask today); where its file lives and how PSETs and scenes name it.
+
+### The pan wander, and the sends (added 2026-11-16)
+
+- **The pan wander becomes a param.** Every grain synth pans its output with a slow random wander of half the stereo width, kept in 3.2 for old scenes and shown on no screen. A per-voice depth beside pan jitter, on VOICE and in scenes, defaulting to today's width.
+- **Plain sends are reopened at this release's design.** The sends keep 3.0's crossfade mix because a plain send and return would have made old scenes louder; with shimmer and the delay freeze on the table, the design weighs the conventional mixer again (`docs/design/3.7-facts/revisit.md`, 11).
 
 ### Shimmer
 
@@ -202,6 +215,7 @@ Added 2026-11-08. After 3.8 ships (3.6, until 3.7 and 3.8 were added on 2026-11-
 - **Stricter than 3.0.2.** 3.0.2 followed this pattern (issues #10-#27, then #46-#52, one pull request each, all fixed), but grouped its findings by area into checklist issues and accepted three small ones without a fix (the "Known and accepted, no action" list in `docs/status.md`). pre-4.0 files one issue per finding and accepts none; the items on that list today are among its findings.
 - **Releases.** The fixes ship as a pre-4.0 release (or several), so they can be tried on hardware (the checks still open on #6 included) before 4.0. 4.0 is then the reviewed code: no new features unless its own design adds them.
 - **Why 4.0.** It marks the end of the 3.x feature line: everything this roadmap planned is in and has been reviewed as a whole.
+- **Two questions kept for this review** (added 2026-11-16): the 256's layout reworked as a whole, with a grid in hand (it grew by filling holes), and whether an LFO's own destination should become a matrix routing (`docs/design/3.7-facts/revisit.md`, 12 and 13).
 - **Factory presets** (added 2026-11-11, at the maintainer's request). 4.0 ships content, so a new player hears what Strata can do in the first minute: a set of scenes, the PSET they belong to (with 3.4's side files for macros, routings and recorders) and a few short, freely licensed samples for the buffers.
   - They never touch a player's own data: they load only when asked (a SETUP action), or once on a first run that finds no scenes file, and a player's scenes, PSETs and buffers are never overwritten.
   - The code that installs and loads them is built before the review starts, so the review covers it; the sounds themselves are made and tuned by ear on a norns, on both tiers, up to the release.
