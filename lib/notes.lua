@@ -81,15 +81,11 @@ return function(S)
     return a[1] == b[1] and a[2] == b[2]
   end
 
-  local function clear_regions_sent(voice)
-    regions_sent[voice] = {}
-    for slot = 2, NOTE_SLOTS do regions_sent[voice][slot] = copy_region(NO_REGION) end
-  end
-
   for voice = 1, NUM_VOICES do
-    slots[voice], ended[voice], sent[voice] = {}, {}, {}
+    slots[voice], ended[voice], sent[voice], regions_sent[voice] = {}, {}, {}, {}
     for slot = 1, NOTE_SLOTS do sent[voice][slot] = copy_expression(NOTES.neutral) end
-    clear_regions_sent(voice)
+    -- the engine's alloc: every slot's region 0, 0
+    for slot = 2, NOTE_SLOTS do regions_sent[voice][slot] = copy_region(NO_REGION) end
   end
 
   local function notes_path() return _path.data .. "strata/" .. NOTES.file end
@@ -165,7 +161,8 @@ return function(S)
 
   -- The seconds a one-shot buffer voice takes to pass fraction of its
   -- slot's valid region (S.lib.scan, package 2a), or nil (no one shot, a
-  -- scan of 0, or no scan module)
+  -- scan of 0, or no scan module). The one guard of it: lib/slices.lua
+  -- reads it through M.pass_seconds
   local function pass_seconds(voice, fraction)
     local scan = S.lib.scan
     if not (scan and scan.pass_seconds) then return nil end
@@ -173,6 +170,7 @@ return function(S)
     if finite(seconds) and seconds > 0 then return seconds end
     return nil
   end
+  M.pass_seconds = pass_seconds
 
   -- When an extra note ends by itself (util.time()), or nil: the note's own
   -- to_end, else on a one-shot buffer voice its pass over its region or
@@ -394,14 +392,16 @@ return function(S)
   end
 
   -- Set the own note's region ({start, length} fractions of the slot's
-  -- valid region, or nil): stored, and while the voice runs sent when it
-  -- changes (setGrainParam regionStart, then regionLength: 0 and 0 for nil),
-  -- since the engine restarts the own scan at every regionLength, with the
-  -- playhead's restart. A stopped voice's start sends it (the slices
-  -- record's sync). false for a bad voice or region
-  function M.set_own_region(voice, region)
+  -- valid region, or nil): stored, and while the voice runs sent
+  -- (setGrainParam regionStart, then regionLength: 0 and 0 for nil), with
+  -- the playhead's restart, since the engine restarts the own scan at every
+  -- regionLength. A hit (hit true: a slice played, a step's slice) always
+  -- sends, so a re-hit of the same slice restarts its scan in every mode;
+  -- anything else sends only a change. A stopped voice's start sends it
+  -- (the slices record's sync). false for a bad voice or region
+  function M.set_own_region(voice, region, hit)
     if not whole_in(voice, 1, NUM_VOICES) or (region ~= nil and not valid_region(region)) then return false end
-    if same_region(own_regions[voice], region) then return true end
+    if not hit and same_region(own_regions[voice], region) then return true end
     own_regions[voice] = copy_region(region)
     if S.voices[voice].active then
       local wanted = region or NO_REGION
@@ -454,11 +454,13 @@ return function(S)
     note.set_own(played.pitch)
     -- 3.7: the note's region before its start or its hit, so the start's
     -- sync carries it and the first grain plays it
-    if played.region then M.set_own_region(voice, played.region) end
+    if played.region then M.set_own_region(voice, played.region, true) end
     if previous then forget(previous, now, moved) end
     -- the retrigger below always follows this start: the two are one hit
     if not note.quiet and not S.voices[voice].active then toggle_voice(voice, {retrigger_follows = true}) end
     local record = new_record(voice, 1, played, now)
+    -- 3.7: an own note with to_end (a one-shot slice) ends at its time too
+    record.ends_at = played.to_end and now + played.to_end or nil
     slots[voice][1] = record
     run_note_hooks(moved and "moved" or "started", record)
     local messages = 0
@@ -767,19 +769,29 @@ return function(S)
     return copy_expression(record.expression)
   end
 
-  -- The flush (an LFO step hook): the due notes in the order first marked,
-  -- at most NOTES.sends_per_step, each once with its newest values; a note
-  -- that ended meanwhile sends nothing, and the rest wait for the next step
-  -- 3.7: the extra notes whose time is up (to_end) are released
+  -- 3.7: the notes whose time is up (to_end) end: an extra note is released
+  -- (noteOff), the own note's record goes with nothing sent (a one-shot
+  -- slice is silent past its end), so every note started ends once
   local function end_due_notes()
     local now = util.time()
     for voice = 1, NUM_VOICES do
-      for slot = 2, NOTE_SLOTS do
+      for slot = 1, NOTE_SLOTS do
         local record = slots[voice][slot]
-        if record and record.held and record.ends_at and now >= record.ends_at then release_slot(voice, slot) end
+        if record and record.held and record.ends_at and now >= record.ends_at then
+          if slot > 1 then
+            release_slot(voice, slot)
+          else
+            forget(record, now)
+            held_changed()
+          end
+        end
       end
     end
   end
+
+  -- The flush (an LFO step hook): the due notes in the order first marked,
+  -- at most NOTES.sends_per_step, each once with its newest values; a note
+  -- that ended meanwhile sends nothing, and the rest wait for the next step
 
   local function flush_step()
     if flush.stopped then return end
@@ -942,9 +954,10 @@ return function(S)
     M.release_all(voice)
     sent[voice][1] = copy_expression(NOTES.neutral)
     references[voice] = nil  -- a stopped voice keeps no freeze reference
-    -- 3.7: no own region, and the engine's notes hold none after the stop
+    -- 3.7: no own region. The extra slots' regions are the engine's still
+    -- (it keeps them across a stop; only alloc and the area's stop clear
+    -- them), so regions_sent keeps them too
     own_regions[voice] = nil
-    clear_regions_sent(voice)
   end)
 
   -- A voice that becomes a frozen synth voice: its extra notes cut

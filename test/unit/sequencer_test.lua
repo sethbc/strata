@@ -3987,6 +3987,49 @@ test("the region ends with the step's overrides", function()
   assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0) setGrainParam(0, regionLength, 0)")
 end)
 
+-- 2b's review, Minor 1 (the controller's ruling): each step's slice is a
+-- hit, so the same slice on the next step restarts its scan
+test("the same slice on consecutive steps sends its region at each, a chord's through its own note once", function()
+  local context, S = sliced_setup(2)
+  params:set("v1_buf_scan", 0.5)
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "slice", 2); S.lib.sequencer.set_step_attr(1, 2, "slice", 2)
+  S.lib.sequencer.set_step_attr(1, 2, "notes", {0})
+  pattern_clock_start()
+  assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0.25) setGrainParam(0, regionLength, 0.25)")
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0.25) setGrainParam(0, regionLength, 0.25)",
+    "sent again, once, at the chord step")
+  S.patterns[1][3] = 15
+  S.lib.sequencer.set_step_attr(1, 3, "slice", 2)
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0.25) setGrainParam(0, regionLength, 0.25)",
+    "and again at a plain step")
+  pattern_clock_stop()
+end)
+
+-- 2b's review, Minor 2: as the chord's first note, a step's region gives way
+-- to another owner's held own note
+test("a step's slice on a one voice leaves the own region of a held MIDI slice alone", function()
+  local context, S = sliced_setup(2)
+  local key = held_key(1, 36)
+  S.midi_state.held[1][key] = true
+  S.midi_state.note_voice[1] = {[36] = {1}}
+  assert_equal(S.lib.slices.play(1, 1, {owner = "midi", key = key, velocity = 0.5, park = true}), 1, "MIDI's slice 1")
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "slice", 3)
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_equal(region_texts(context, 0), "", "the step sends no region")
+  assert_equal(S.lib.notes.own_region(1)[1], 0, "slice 1's stays")
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_equal(S.lib.notes.own_region(1)[1], 0, "and the next plain step leaves it")
+  pattern_clock_stop()
+  assert_equal(S.lib.notes.own_region(1)[1], 0, "and the stop")
+end)
+
 test("a step naming a slice that does not exist plays as a plain step", function()
   local context, S = sliced_setup(2)
   S.patterns[1][1] = 15

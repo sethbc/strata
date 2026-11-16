@@ -645,20 +645,26 @@ return function(S)
     -- has it. On a voice set to one, or off, it is the own note's region
     -- (before the start or the retrigger: no node), shared by the chord;
     -- on an overlap voice it plays in a slot of its own after them
-    -- (voices_play). A played step without one ends the last one's region
+    -- (voices_play). A played step without one ends the last one's region.
+    -- As the chord's first note, the region gives way while another owner
+    -- holds slot 1 (a MIDI key down). Each step's slice is a hit: it is sent
+    -- even when it is the same, so its scan restarts (the chord's own note
+    -- sends it through play_own, as a hit too)
     local region = event.slice and S.lib.slices.voice_region(voice_idx, event.slice)
     local overlap = region and S.lib.slices.option(voice_idx) == "overlap"
+    local others = (note_id or (region and not overlap)) and other_owns_slot_1(voice_idx)
+    if others and not overlap then region = nil end
     release_step_slices(voice_idx)
     step_slices[voice_idx] = overlap and event.slice or nil
     if region and not overlap then
-      S.lib.notes.set_own_region(voice_idx, region)
+      if not chord then S.lib.notes.set_own_region(voice_idx, region, true) end
       step_regions[voice_idx] = region
     else
       end_step_region(voice_idx)
     end
     if chord then chord.region = not overlap and region or nil end
     chords[voice_idx] = chord
-    local own = note_id and not other_owns_slot_1(voice_idx)
+    local own = note_id and not others
     if own then leave_extra_slot(voice_idx) end
     if note_id then
       chord.lock_value = lock_value

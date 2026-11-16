@@ -29,7 +29,7 @@ return function(S)
   local SLICES = {max = 64, min_seconds = 0.01, first_note = 36, bank_size = 16,
     options = {"off", "one", "overlap"}, magic = "strata-onsets 1",
     key = "slices", section = "synth", off = 1, one = 2, overlap = 3, equal = 2, transients = 3,
-    sensitivity_max = 100, length_tolerance = 0.01, poll = "bufferOnsets",
+    sensitivity_max = 100, threshold_margin = 1e-9, length_tolerance = 0.01, poll = "bufferOnsets",
     default_rate = S.constants.NORNS_SAMPLE_RATE}
   M.SLICES = SLICES
 
@@ -161,10 +161,12 @@ return function(S)
   end
 
   -- The candidates' markers at the slot's sensitivity: 0 and every
-  -- candidate whose strength is at least 1 - sensitivity / 100
+  -- candidate whose strength is at least 1 - sensitivity / 100 (within
+  -- SLICES.threshold_margin: a strength printed at the threshold is taken,
+  -- whatever the subtraction's rounding)
   local function transient_markers(slot, record)
     local held = candidates[slot]
-    local threshold = 1 - record.sensitivity / SLICES.sensitivity_max
+    local threshold = 1 - record.sensitivity / SLICES.sensitivity_max - SLICES.threshold_margin
     local list = {0}
     for index, frame in ipairs(held.frames) do
       if held.strengths[index] >= threshold then list[#list + 1] = frame end
@@ -295,7 +297,9 @@ return function(S)
   end
 
   -- One clock reads the reports' files, from its first wake on (never in
-  -- the poll's callback); it ends when none waits
+  -- the poll's callback); it ends when none waits. Each read is contained,
+  -- so one that raises prints once and never leaves the clock recorded
+  local read_errors = {}
   local function start_reader()
     if reader.clock then return end
     reader.clock = clock.run(function()
@@ -305,7 +309,7 @@ return function(S)
         if not slot then break end
         local count = due_reads[slot]
         due_reads[slot] = nil
-        read_onsets(slot, count)
+        S.lib.ui_frame.contained_call(read_errors, slot, "onsets read", read_onsets, slot, count)
       end
       reader.clock = nil
     end)
@@ -411,9 +415,7 @@ return function(S)
   function M.play(voice, n, note)
     local region = M.voice_region(voice, n)
     if not region or type(note) ~= "table" then return false end
-    local scan = S.lib.scan
-    local to_end = scan and scan.pass_seconds and scan.pass_seconds(voice, region[2]) or nil
-    if not (finite(to_end) and to_end > 0) then to_end = nil end
+    local to_end = S.lib.notes.pass_seconds(voice, region[2])
     local slot = S.lib.notes.play(voice, {owner = note.owner, key = note.key, pitch = S.lib.notes.own_pitch(voice),
       velocity = note.velocity, set_own = play_nothing, park = note.park, quiet = note.quiet,
       extra_only = note.extra_only, expression = note.expression, steals = note.steals, region = region,
@@ -426,8 +428,9 @@ return function(S)
     return S.lib.notes.release(voice, owner, key)
   end
 
-  -- The slice numbers the voice's notes hold now, ascending (the own
-  -- note's region while the voice runs included)
+  -- The slice numbers the voice's notes hold now, ascending: its held
+  -- extra notes' regions and, while slot 1's note is held (not parked, not
+  -- played out), the own region
   function M.playing(voice)
     local list = {}
     if not valid_voice(voice) or not voice_uses_buffer(voice) then return list end
@@ -443,9 +446,8 @@ return function(S)
       end
     end
     for _, used in ipairs(S.lib.notes.slots(voice)) do
-      if used.held and used.slot > 1 then add(used.region) end
+      if used.held then add(used.slot > 1 and used.region or S.lib.notes.own_region(voice)) end
     end
-    if S.voices[voice].active then add(S.lib.notes.own_region(voice)) end
     table.sort(list)
     return list
   end

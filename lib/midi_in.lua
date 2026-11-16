@@ -301,6 +301,41 @@ return function(S)
     return note - S.lib.slices.SLICES.first_note + 1
   end
 
+  -- 3.7: the note hooks' heard (S.registry.note_hooks, read at each note),
+  -- each contained, for every MIDI note a voice receives, before the slice
+  -- filter: (voice, note number, velocity 0-1). It starts nothing and never
+  -- reaches the targets (the slice editor's key row hears every note)
+  local heard_errors = {}
+  local function hear(voice_idx, note, velocity)
+    for _, hook in ipairs(S.registry.note_hooks) do
+      if hook.heard then
+        S.lib.ui_frame.contained_call(heard_errors, hook.name, "note hook " .. hook.name .. " heard", hook.heard,
+          voice_idx, note, velocity / MIDI.velocity_max)
+      end
+    end
+  end
+
+  -- 3.7: in release mode a voice whose keys are all up stops once the last
+  -- of its notes that played to its end has ended (end_key left it
+  -- running): a MIDI note's end marks the voice (a hook sends nothing), and
+  -- the next LFO step stops it when it still runs with no key down and no
+  -- note playing to its end
+  local stop_due = {}
+  S.register_note_hook({name = "midi release", ended = function(voice_idx, _, ended_note)
+    if ended_note.owner == MIDI.owner then stop_due[voice_idx] = true end
+  end})
+  S.lib.lfos.on_step(function()
+    if next(stop_due) == nil then return end
+    local due = stop_due
+    stop_due = {}
+    for voice_idx in pairs(due) do
+      if S.voices[voice_idx].active and next(S.midi_state.held[voice_idx]) == nil
+          and not S.lib.notes.plays_to_end(voice_idx) then
+        midi_note_off_for(voice_idx)
+      end
+    end
+  end)
+
   -- Whether a note is no slice of a voice that takes slice notes: it does
   -- nothing there (no key held, nothing released)
   local function ignored(voice_idx, note)
@@ -332,6 +367,7 @@ return function(S)
     local key = key_of(channel, note)
     local targets = {}
     for _, voice_idx in ipairs(note_targets(channel, note)) do
+      hear(voice_idx, note, velocity)
       if not ignored(voice_idx, note) then targets[#targets + 1] = voice_idx end
     end
     local channel_notes = S.midi_state.note_voice[channel] or {}
