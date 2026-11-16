@@ -199,8 +199,11 @@ return function(S)
     end
   end
 
-  -- selects_grid_voice: one strip, for the grid voice (S.lib.positions)
-  S.registry.grid_layouts["64"] = {key = grid_key_64, redraw = grid_redraw_64, selects_grid_voice = true}
+  -- selects_grid_voice: one strip, for the grid voice; rows_show_grid_voice:
+  -- the position rows are the grid voice's, at a key's press and release
+  -- (S.lib.positions)
+  S.registry.grid_layouts["64"] = {key = grid_key_64, redraw = grid_redraw_64, selects_grid_voice = true,
+    rows_show_grid_voice = true}
 
   return M
 end

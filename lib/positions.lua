@@ -40,8 +40,10 @@ return function(S)
   -- 3.7's slice rows (design §10, decision 13): a bank is a row's
   -- bank_size cells (slices 1-16, 17-32, ...), the strip's NUM_BOOKMARKS
   -- keys pick it, a grid key's note key is port x port_key + slice (plan
-  -- ruling 17), and binds_heard says whether the bind listener is in
-  local SLICE_ROW = {bank_size = DISPLAY_CELLS, port_key = 100, binds_heard = false}
+  -- ruling 17)
+  local SLICE_ROW = {bank_size = DISPLAY_CELLS, port_key = 100}
+  -- whether the slice rows' bind listener is in (hear_binds)
+  local binds_heard = false
 
   -- per voice: the scan hold, its holders (a set: "grid:<port>", "arc",
   -- "caller"; held exactly while it is not empty), the glide's rate (as
@@ -381,6 +383,16 @@ return function(S)
     return bank
   end
 
+  -- The bank a key reads (a slice key's press, a bank key's): a pick the
+  -- slices no longer reach is forgotten here, so it never comes back when
+  -- they reach again (markers deleted and added back with no bind)
+  local function read_bank(port, voice_idx)
+    local bank = M.bank(port, voice_idx)
+    local record = records[port]
+    if record and record.bank[voice_idx] ~= nil and record.bank[voice_idx] ~= bank then record.bank[voice_idx] = nil end
+    return bank
+  end
+
   -- A bind or unbind of a slot (S.lib.samples.on_bind): each pick of a
   -- voice reading it that its slices no longer reach goes back to 1. Only
   -- state changes: a listener never sends and never yields
@@ -395,8 +407,8 @@ return function(S)
   -- The listener goes in at the first pick of a bank (no pick exists to
   -- forget before one), once
   local function hear_binds()
-    if SLICE_ROW.binds_heard or S.lib.samples == nil then return end
-    SLICE_ROW.binds_heard = true
+    if binds_heard or S.lib.samples == nil then return end
+    binds_heard = true
     S.lib.samples.on_bind(forget_unreached_banks)
   end
 
@@ -412,7 +424,7 @@ return function(S)
   -- (the position key's quantized action, so a press replaces a waiting
   -- jump or slice of the voice). A cell with no slice does nothing
   local function press_slice_key(port, voice_idx, cell)
-    local n = first_slice(M.bank(port, voice_idx)) + cell - 1
+    local n = first_slice(read_bank(port, voice_idx)) + cell - 1
     if n > slot_slices(voice_idx) then return end
     local entry = {n = n, page = S.lib.grid_core.page(port)}
     local note_key = slice_note_key(port, n)
@@ -444,9 +456,20 @@ return function(S)
   end
 
   -- The release of a slice key the port holds for a voice's cell: true
-  -- when there was one
-  local function release_slice_key(port, record, voice_idx, cell)
+  -- when there was one. On a layout whose rows show the grid voice
+  -- (any_voice: the 64) the release names the grid voice as it is now,
+  -- which may have changed since the press: it ends the key of that cell
+  -- for whichever voice it was pressed for, as a strip key's release does
+  -- (#221). There one physical key is one cell, so at most one voice holds
+  -- it; on the 128h and 128v two rows or columns can hold the same cell,
+  -- and each release names its own voice
+  local function release_slice_key(port, record, voice_idx, cell, any_voice)
     local held = record.slices[voice_idx]
+    if not (held and held[cell]) and any_voice then
+      for held_voice, voice_held in pairs(record.slices) do
+        if voice_held[cell] then voice_idx, held = held_voice, voice_held end
+      end
+    end
     local entry = held and held[cell]
     if not entry then return false end
     held[cell] = nil
@@ -513,6 +536,15 @@ return function(S)
     return layout ~= nil and layout.selects_grid_voice == true
   end
 
+  -- Whether the layout's position keys name the grid voice, at their press
+  -- and their release (its record's rows_show_grid_voice: the 64, whose
+  -- rows 1-2 are the grid voice's); the other layouts' rows and columns are
+  -- each one voice's
+  local function rows_show_grid_voice(port)
+    local layout = S.lib.grid_core.layout_of(port)
+    return layout ~= nil and layout.rows_show_grid_voice == true
+  end
+
   -- Whether a port's store is down for a voice: its one store key on a
   -- layout that selects a grid voice (store follows the grid voice), the
   -- voice's own key on the 256
@@ -532,7 +564,7 @@ return function(S)
     if records[port] then end_stale_port(port, records[port]) end
     if z == 0 then
       local record = records[port]
-      if record and release_slice_key(port, record, voice_idx, cell) then return end
+      if record and release_slice_key(port, record, voice_idx, cell, rows_show_grid_voice(port)) then return end
       local held = record and record.held
       if held and held.voice == voice_idx and held.cells == cells and held.cell == cell then record.held = nil end
       return
@@ -566,6 +598,7 @@ return function(S)
     -- while the voice's row shows slices, keys 1-4 pick the port's bank
     -- (one that holds none is not picked), store held or not
     if z == 1 and valid_bookmark(key) and M.slice_row(voice_idx) then
+      read_bank(port, voice_idx)
       if bank_holds_slices(voice_idx, key) then
         record_of(port).bank[voice_idx] = key
         hear_binds()

@@ -845,32 +845,12 @@ test("128v: a step key held into the scenes page is no recorder key at its relea
   S.lib.gestures.clear(2)
 end)
 
--- 3.7 (design §10): a slice row. A double for S.lib.slices (2b), with the
--- functions lib/positions.lua uses, set as fields of the module's table:
--- `voice` takes notes and its slot holds `count` slices
+-- 3.7 (design §10): a slice row, on the doubles test/helpers.lua shares
+-- (h.slice_doubles): `voice` takes notes and its slot holds `count` slices
 local function slice_double(S, voice, count)
-  local double = {plays = {}, offs = {}, sounding = {}}
-  local slices = S.lib.slices or {}
-  S.lib.slices = slices
-  function slices.count(slot) return slot == voice_buffer_slot(voice) and count or 0 end
-  function slices.takes_notes(voice_idx) return voice_idx == voice and voice_uses_buffer(voice_idx) end
-  function slices.play(voice_idx, n, note)
-    table.insert(double.plays, {voice = voice_idx, n = n, key = note.key})
-    double.sounding[note.key] = n
-    return 1
-  end
-  function slices.note_off(_, _, key)
-    table.insert(double.offs, key)
-    double.sounding[key] = nil
-  end
-  function slices.playing(voice_idx)
-    local list = {}
-    if voice_idx == voice then
-      for _, n in pairs(double.sounding) do list[#list + 1] = n end
-    end
-    return list
-  end
-  return double
+  local doubles = h.slice_doubles(S, {[voice_buffer_slot(voice)] = count})
+  doubles.takes[voice] = true
+  return doubles
 end
 
 test("128v: the position page shows and plays a slice row", function()
@@ -884,10 +864,10 @@ test("128v: the position page shows and plays a slice row", function()
   for cell = 1, 16 do assert_equal(device:get_led(2, cell), 9, "slice " .. cell) end
   context.grid.press(1, 2, 5, 1)
   assert_equal(S.grid_voice_select, 2, "the press selects the grid voice")
-  assert_equal(double.plays[1].n, 5); assert_equal(double.plays[1].key, 105)
+  assert_equal(double.plays[1].n, 5); assert_equal(double.plays[1].note.key, 105)
   assert_equal(device:get_led(2, 5), 15, "playing")
   context.grid.press(1, 2, 5, 0)
-  assert_equal(double.offs[1], 105, "the release ends it")
+  assert_equal(double.offs[1].key, 105, "the release ends it")
   assert_equal(device:get_led(2, 5), 10, "a slice, the grid voice's column one up")
   assert_equal(device:get_led(8, 10), 15, "bank 1 shown")
   assert_equal(device:get_led(8, 11), 4, "bank 2 holds slices")
