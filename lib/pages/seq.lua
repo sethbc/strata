@@ -71,7 +71,7 @@ return function(S)
   -- S.lib.sequencer.step_attr) or the step's level; format: how a param's
   -- value reads. bookmark shows only while the voice has a set bookmark
   -- (S.lib.bookmarks.is_set). 3.7: direction, misstep, fill, cond and the
-  -- chain's three chances
+  -- chain's three chances, and slice, shown while the voice reads a buffer
   local EDIT_ROWS = {
     {section = "voice"},
     {row = "length", label = "length", voice_param = "seq_length", format = "%d"},
@@ -91,6 +91,7 @@ return function(S)
     {row = "ratchet", label = "ratchet", attr = "ratchet"},
     {row = "step_gate", label = "gate", attr = "gate"},
     {row = "cond", label = "cond", attr = "cond"},
+    {row = "slice", label = "slice", attr = "slice"},
     {row = "note", label = "note", attr = "notes", chord = true},
     {row = "pos", label = "pos", attr = "pos"},
     {row = "pitch", label = "pitch", attr = "pitch"},
@@ -340,7 +341,7 @@ return function(S)
   local replacing = false
 
   -- Turn voice's step's key by d whole steps ("level", "prob", "ratchet",
-  -- "notes", "bookmark", "cond"), or a continuous lock ("pos", "pitch", "size",
+  -- "notes", "bookmark", "cond", "slice"), or a continuous lock ("pos", "pitch", "size",
   -- "gate") by d detents of its param's quantum (opts.fine: a tenth of it)
   -- or, with opts.raw, by that much of its range (the arc). Locks and notes
   -- from off start at the stored value or 0 (turned_lock, turned_optional);
@@ -380,6 +381,10 @@ return function(S)
       end
       index = util.clamp(index + d, 0, #values)
       seq.set_step_attr(voice_idx, step, key, values[index])
+    elseif key == "slice" then
+      -- 3.7 (design §5.3): a buffer voice's, off, then 1 to SLICES.max
+      if not voice_uses_buffer(voice_idx) then return false end
+      seq.set_step_attr(voice_idx, step, key, turned_optional(before, 0, 1, S.lib.slices.SLICES.max, d))
     elseif lock_param_name(key) then
       local raw_delta = opts.raw
       if raw_delta == nil then
@@ -415,7 +420,7 @@ return function(S)
         if count >= 1 and count < S.lib.sequencer.SEQ.max_step_notes then
           rows[#rows + 1] = {label = NOTE_ADD_SPEC.label, section = section, spec = NOTE_ADD_SPEC}
         end
-      elseif spec.row ~= "bookmark" or bookmarks then
+      elseif (spec.row ~= "bookmark" or bookmarks) and (spec.row ~= "slice" or voice_uses_buffer(voice_idx)) then
         local param_id = spec.param_id or (spec.voice_param and voice_param_id(voice_idx, spec.voice_param))
         rows[#rows + 1] = {label = spec.label, section = section, param_id = param_id, spec = spec}
       end
@@ -509,7 +514,7 @@ return function(S)
     if spec.attr == "ratchet" then return "x" .. whole_text(value or 1) end
     if value == nil then return "off" end
     if spec.attr == "notes" then return (value > 0 and "+" or "") .. whole_text(value) end
-    if spec.attr == "bookmark" then return whole_text(value) end
+    if spec.attr == "bookmark" or spec.attr == "slice" then return whole_text(value) end
     if spec.attr == "cond" then return value end
     return string.format(ATTR_FORMATS[spec.attr], value)
   end
@@ -972,6 +977,7 @@ return function(S)
     set("seq_misstep", SEQ.max_misstep)
     seq.euclid(voice_idx, PATTERN_LENGTH, PATTERN_LENGTH - 1)
     seq.set_step_attr(voice_idx, step, "cond", "!first")
+    if voice_uses_buffer(voice_idx) then seq.set_step_attr(voice_idx, step, "slice", S.lib.slices.SLICES.max) end
     S.lib.conditions.hold_fill("layout", true)  -- the fill row's "held"
     seq.set_step_attr(voice_idx, step, "prob", SEQ.max_prob)
     seq.set_step_attr(voice_idx, step, "ratchet", SEQ.max_ratchet)
@@ -1007,9 +1013,10 @@ return function(S)
 
   -- How many windows of SEQ_EDIT.visible rows the edit view's rows fill when
   -- the chord has note_rows rows (its notes and the add row): a layout state
-  -- for each, so every row is drawn
+  -- for each, so every row is drawn. bookmarks: a buffer voice with set
+  -- bookmarks, whose bookmark and slice rows show (a synth voice has neither)
   local function edit_windows(note_rows, bookmarks)
-    local total = #EDIT_ROWS - 1 + note_rows - (bookmarks and 0 or 1)
+    local total = #EDIT_ROWS - 1 + note_rows - (bookmarks and 0 or 2)
     return math.ceil(total / SEQ_EDIT.visible)
   end
 
@@ -1101,7 +1108,7 @@ return function(S)
     end},
   }
   -- the edit view with eight notes, every window of its rows
-  for window = 1, edit_windows(M.WIDEST_CHORD_ROWS, false) do
+  for window = 1, edit_windows(M.WIDEST_CHORD_ROWS, true) do  -- widest_values: a buffer voice
     table.insert(layout_states, {
       name = "edit view eight notes rows " .. window,
       setup = function()

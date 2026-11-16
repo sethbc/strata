@@ -101,6 +101,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/notes.lua` | `notes` | `docs/notes/lua/notes.md` | notes_test.lua |
 | `lib/mpe.lua` | `mpe` | `docs/notes/lua/mpe.md` | mpe_test.lua |
 | `lib/expression.lua` | `expression` | `docs/notes/lua/expression.md` | expression_test.lua |
+| `lib/slices.lua` | `slices` | `docs/notes/lua/slices.md` | slices_test.lua |
 | `lib/io/<name>.lua`: `rig`, `ports` (before `lib/midi_in.lua`), `actions`, `keyed`, `targets`, `midi_out`, `crow`, `ii`, `jf`, `wsyn`, `wtape`, `er301`, `txo`, `nb`, `controllers`, `remote`, `osc`, `tape` | `io_<name>` | `docs/notes/lua/io/<name>.md` | io_<name>_test.lua |
 | `lib/delay_sync.lua` | `delay_sync` | `docs/notes/lua/delay-sync.md` | delay_sync_test.lua |
 | `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
@@ -258,7 +259,8 @@ The Lua side's, across modules:
 - **The sequencer plays only through step outputs** (`S.register_step_output`): each hit goes to every output, each call in a coroutine of its own (one that raises or yields is skipped), and an output's `play` never yields. The `voices` output is the exception: its error stops the patterns and is raised again. Steps never create a node for the voice's own note: a stopped voice is started with `start_voice` at a step's first hit, a running one gets `retrigger`; a chord's further notes are extra notes through `S.lib.notes`. `docs/notes/lua/sequencer.md`
 - **Step locks and notes are base overrides** (`S.lib.engine_sync.set_base_override`), never `params:set`; they end at the voice's next played step without them, a stop, `replace_pattern` or a shorter length. `docs/notes/lua/sequencer.md`
 - **Strata follows the transport and never leads it**: `clock.transport` start and stop move the patterns only while `seq_follow_transport` is on; nothing calls the clock's own start or stop; a clock tests the beat its `clock.sync` returned, never the live beat. `docs/notes/lua/sequencer.md`
-- **Notes** are played, released and expressed only through `S.lib.notes`, which alone calls `noteOn`, `noteOff`, `noteExpression` and `setNotePool`; its flush sends at most 16 `noteExpression` a step, counted (`count_sends`), never deferred. `docs/notes/lua/notes.md`
+- **Notes** are played, released and expressed only through `S.lib.notes`, which alone calls `noteOn`, `noteOff`, `noteExpression`, `noteRegion` and `setNotePool`; its flush sends at most 16 `noteExpression` a step, counted (`count_sends`), never deferred. `docs/notes/lua/notes.md`
+- **Slices**: a slice is played only through `S.lib.slices.play`; a one-voice step sets the own region through `S.lib.notes.set_own_region`; a missing slice plays nothing. `docs/notes/lua/slices.md`
 - **Targets**: a voice's external notes start, end and are expressed only through `S.lib.io_targets`; an off goes to exactly the targets its on went to, and a voice's stop, a route change, a mute and cleanup end every note, the patterns' stop its step notes. Every ii message goes through `S.lib.io_ii`, which sends none unless Strata leads the bus. `docs/notes/lua/io/targets.md`, `docs/notes/lua/io/ii.md`
 
 ## Working in parallel

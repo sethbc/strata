@@ -79,6 +79,7 @@ return function(S)
     flt_epsilon = 2 ^ -23,           -- matron's FLT_EPSILON (clock_scheduler_next_clock_beat)
     loop_tolerance = 1e-6,           -- as lib/positions.lua's jump: inside the loop
     note_owner = "seq",              -- a chord's notes in S.lib.notes (design §4)
+    slice_key_prefix = "slice",      -- 3.7: an overlap voice's step slice's key, "slice<step>"
   }
   M.SEQ = SEQ
 
@@ -135,6 +136,10 @@ return function(S)
   local play = {voices = {}, transport = {}, failed = {}, started = false, reset_beat = nil, offset = 0,
     generation = 0, retired = {}}
   local overrides, last_played, gate_sent, chords = {}, {}, {}, {}
+  -- 3.7 (design §3.5, ruling 32): per voice, the own region its last played
+  -- step set (a voice set to one, or off), and the slice its step's first
+  -- hit plays on an overlap voice once the voice has started and retriggered
+  local step_regions, step_slices = {}, {}
   -- the chain: the scene loaded last and the beat of the next link
   local chain = {current = nil, next_beat = nil}
 
@@ -213,6 +218,8 @@ return function(S)
     bookmark = function(value) return whole_between(value, 1, NUM_BOOKMARKS) end,
     gate = function(value) return number_between(value, SEQ.gate_steps[1], SEQ.gate_steps[2]) end,
     cond = S.lib.conditions.valid,  -- 3.7 (design §5.3): one of the 78 conditions
+    -- 3.7 (design §5.3): a slice of the voice's slot, 1 to SLICES.max
+    slice = function(value) return whole_between(value, 1, S.lib.slices.SLICES.max) end,
   }
 
   local function valid_place(voice_idx, step)
@@ -331,9 +338,36 @@ return function(S)
     S.lib.notes.release_owner(voice_idx, SEQ.note_owner)
   end
 
+  -- 3.7: the own region the voice's last played step set ends (unless
+  -- another note has set its own since)
+  local function end_step_region(voice_idx)
+    local region = step_regions[voice_idx]
+    step_regions[voice_idx] = nil
+    local own = region and S.lib.notes.own_region(voice_idx)
+    if own and own[1] == region[1] and own[2] == region[2] then S.lib.notes.set_own_region(voice_idx, nil) end
+  end
+
+  -- 3.7: whether a note is a step's slice on an overlap voice (its key
+  -- "slice<step>")
+  local function step_slice_note(owner, key)
+    local prefix = SEQ.slice_key_prefix
+    return owner == SEQ.note_owner and type(key) == "string" and key:sub(1, #prefix) == prefix
+  end
+
+  -- 3.7: the voice's step slices that do not play to their end (wrap,
+  -- bounce, a scan of 0) are released; one-shot ones ring on (their time
+  -- ends them, S.lib.notes)
+  local function release_step_slices(voice_idx)
+    for _, used in ipairs(S.lib.notes.slots(voice_idx)) do
+      if used.held and step_slice_note(used.owner, used.key) then S.lib.notes.release(voice_idx, used.owner, used.key) end
+    end
+  end
+
   -- End every override a voice's step set, and its chord: each param goes
   -- back to its stored value at once
   local function end_overrides(voice_idx)
+    end_step_region(voice_idx)
+    release_step_slices(voice_idx)
     end_chord(voice_idx)
     local held = overrides[voice_idx]
     overrides[voice_idx], last_played[voice_idx] = nil, nil
@@ -483,7 +517,7 @@ return function(S)
   -- step's overrides
   local function chord_note(voice_idx, chord, k, velocity, own)
     return {owner = SEQ.note_owner, key = k, pitch = chord.pitches[k], velocity = velocity, park = false,
-      quiet = own, extra_only = not own,
+      quiet = own, extra_only = not own, region = chord.region,  -- 3.7: the step's slice, on every note
       set_own = function()
         if chord.values[k] == nil then return end
         set_override(voice_idx, chord.note_id, chord.values[k])
@@ -607,6 +641,22 @@ return function(S)
     if n and S.lib.bookmarks.is_set(voice_idx, n) and bookmark_in_loop(voice_idx, n) then
       S.lib.bookmarks.recall(voice_idx, n)
     end
+    -- 3.7 (design §3.5, ruling 32): the step's slice, when the voice's slot
+    -- has it. On a voice set to one, or off, it is the own note's region
+    -- (before the start or the retrigger: no node), shared by the chord;
+    -- on an overlap voice it plays in a slot of its own after them
+    -- (voices_play). A played step without one ends the last one's region
+    local region = event.slice and S.lib.slices.voice_region(voice_idx, event.slice)
+    local overlap = region and S.lib.slices.option(voice_idx) == "overlap"
+    release_step_slices(voice_idx)
+    step_slices[voice_idx] = overlap and event.slice or nil
+    if region and not overlap then
+      S.lib.notes.set_own_region(voice_idx, region)
+      step_regions[voice_idx] = region
+    else
+      end_step_region(voice_idx)
+    end
+    if chord then chord.region = not overlap and region or nil end
     chords[voice_idx] = chord
     local own = note_id and not other_owns_slot_1(voice_idx)
     if own then leave_extra_slot(voice_idx) end
@@ -670,6 +720,16 @@ return function(S)
       S.lib.engine_sync.retrigger(voice_idx, event.velocity, "step", gate_seconds)
     end
     play_chord(voice_idx, event)
+    -- 3.7: an overlap voice's step slice, in a slot of its own (with no
+    -- room, the voice's oldest step slice is cut and its slot taken; never
+    -- another owner's), ringing past the next step
+    local slice = event.first and step_slices[voice_idx]
+    if slice then
+      step_slices[voice_idx] = nil
+      S.lib.slices.play(voice_idx, slice, {owner = SEQ.note_owner,
+        key = SEQ.slice_key_prefix .. event.step, velocity = event.velocity, park = false,
+        extra_only = true, steals = step_slice_note})
+    end
   end
 
   -- Its stop ends every voice's chord: at a pattern stop the overrides'
@@ -785,6 +845,7 @@ return function(S)
     end
     if attrs.notes then event.notes, event.semitones = copy_list(attrs.notes), copy_list(semitones or {}) end
     event.locks = step_locks(attrs)
+    event.slice = attrs.slice  -- 3.7: the step's slice (design §5.3)
     return event
   end
 

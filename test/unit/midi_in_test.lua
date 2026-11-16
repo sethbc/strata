@@ -1631,4 +1631,87 @@ test("a program change reaches MIDI out only with midi_pc_in on, in every channe
   assert_equal(call_names(context, { retrigger = true, noteOn = true }), "", "no note played")
 end)
 
+-------------------------------------------------------------------------------
+-- 3.7's slices (design §3.5, package 2b): a voice that takes slice notes
+-------------------------------------------------------------------------------
+
+-- Voice 1 (running) reading buffer 1: 2 s (96000 frames, its peaks read)
+-- cut in 4 equal slices, v1_slices at option (1 off, 2 one, 3 overlap)
+local function sliced_voice(option)
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  load_buffer(1, context.audio_dir .. "loop.wav")
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, S.buffers[1].loads_sent, 2))
+  local folder = S.lib.scenes.scene_data_dir
+  util.make_dir(folder)
+  local file = io.open(folder .. "buf1.peaks", "w")
+  file:write("strata-peaks 1\nslot 1\nframes 96000\nrate 48000\ngeneration 1\npeaks " .. string.rep("0.500 ", 64) .. "\n")
+  file:close()
+  context.clock.run_for(2 / local_value("UI_PAGES").FRAMES_PER_SECOND + 0.001)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  S.lib.samples.set(1, "mode", 2); S.lib.samples.set(1, "count", 4)
+  S.lib.slices.make(1)
+  assert_equal(S.lib.slices.count(1), 4, "four slices")
+  params:set("v1_slices", option)
+  context.clear_engine_calls()
+  return context, S
+end
+
+test("note 36 plays slice 1 at the voice's own pitch, and a note outside the slices does nothing", function()
+  local context, S = sliced_voice(3)
+  params:set("midi_note_off", 2)  -- release mode (a change of mode releases every note)
+  context.clear_engine_calls()
+  note_on(context, 1, 36)
+  assert_equal(call_names(context, { setGrainParam = true, retrigger = true, noteOn = true }),
+    "setGrainParam, setGrainParam, retrigger", "slice 1 on the own note: its region, then the hit")
+  assert_near(params:get("v1_buf_rate"), 1, 1e-12, "the pitch stays the voice's own")
+  assert_equal(S.lib.notes.find(1, "midi", key_of(1, 36)), 1)
+  context.clear_engine_calls()
+  note_on(context, 1, 38)  -- slice 3, held over slice 1: an extra slot
+  local regions, ons = context.calls_named("noteRegion"), context.calls_named("noteOn")
+  assert_equal(#regions, 1); assert_equal(#ons, 1)
+  assert_near(regions[1].args[3], 0.5, 1e-12, "slice 3's start"); assert_near(regions[1].args[4], 0.25, 1e-12)
+  assert_near(ons[1].args[5], 1, 1e-12, "at rate 1, the voice's own, never 38's")
+  context.clear_engine_calls()
+  for _, number in ipairs({ 35, 40, 72 }) do note_on(context, 1, number); note_off(context, 1, number) end
+  assert_equal(#context.engine_calls, 0, "a note outside slices 1-4 does nothing")
+  assert_equal(S.midi_state.held[1][key_of(1, 40)], nil, "and holds no key")
+  assert_equal(S.lib.notes.held(1), 2, "the two slices sound on")
+  -- a slice's key lift releases it, the voice's last one stops the voice
+  context.clear_engine_calls()
+  note_off(context, 1, 38)
+  assert_equal(call_names(context, { noteOff = true }), "noteOff", "slice 3 released")
+  note_off(context, 1, 36)
+  assert_true(not S.voices[1].active, "the last key stopped the voice, as for any note")
+end)
+
+test("a one-shot slice's key lift in release mode leaves it playing to its end", function()
+  local context, S = sliced_voice(3)
+  local scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return fraction * 2 end
+  params:set("midi_note_off", 2)
+  note_on(context, 1, 36); note_on(context, 1, 37)
+  context.clear_engine_calls()
+  note_off(context, 1, 37); note_off(context, 1, 36)
+  assert_equal(#context.engine_calls, 0, "nothing sent")
+  assert_true(S.voices[1].active, "the voice plays on")
+  context.clock.run_for(0.5 + 2 / 48)
+  assert_equal(call_names(context, { noteOff = true }), "noteOff", "slice 2 released at its end")
+end)
+
+test("with slices off a buffer voice's MIDI notes are 3.6's", function()
+  local context, S = sliced_voice(1)
+  assert_true(not S.lib.slices.takes_notes(1))
+  note_on(context, 1, 72)
+  assert_near(params:get("v1_buf_rate"), 2, 1e-9, "72 plays rate 2")
+  assert_equal(#context.calls_named("noteRegion"), 0)
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    assert_true(not call.args[2]:find("^region"), "no region sent: " .. call.args[2])
+  end
+  note_on(context, 1, 40)
+  assert_equal(#context.calls_named("noteOn"), 1, "a second note: an extra note, pitched")
+  assert_near(context.calls_named("noteOn")[1].args[5], 2 ^ (-20 / 12), 1e-9)
+end)
+
 end

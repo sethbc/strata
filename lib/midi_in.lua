@@ -276,16 +276,36 @@ return function(S)
   -- note (the own note parks under others), and the voice's last key stops
   -- the voice instead, whose stop ends its notes (no release or unpark
   -- before the voiceOff); latch keeps the note sounding at the highest
-  -- pressure it reached
+  -- pressure it reached. 3.7: a voice that takes slice notes releases
+  -- through S.lib.slices.note_off, and its last key leaves it running while
+  -- a one-shot slice plays to its end (a key never cuts one short)
   local function end_key(voice_idx, key)
     S.midi_state.held[voice_idx][key] = nil
     if M.note_off_mode() ~= "release" then
       S.lib.expression.latch(voice_idx, MIDI.owner, key)
-    elseif next(S.midi_state.held[voice_idx]) == nil and S.voices[voice_idx].active then
+    elseif next(S.midi_state.held[voice_idx]) == nil and S.voices[voice_idx].active
+        and not S.lib.notes.plays_to_end(voice_idx) then
       midi_note_off_for(voice_idx)
+    elseif S.lib.slices.takes_notes(voice_idx) then
+      S.lib.slices.note_off(voice_idx, MIDI.owner, key)
     else
       S.lib.notes.release(voice_idx, MIDI.owner, key)
     end
+  end
+
+  -- 3.7 (design §3.5): the slice a note plays on a voice that takes slice
+  -- notes (S.lib.slices.takes_notes: note first_note + n - 1 is slice n), or
+  -- nil on any other voice
+  local function slice_number(voice_idx, note)
+    if not S.lib.slices.takes_notes(voice_idx) then return nil end
+    return note - S.lib.slices.SLICES.first_note + 1
+  end
+
+  -- Whether a note is no slice of a voice that takes slice notes: it does
+  -- nothing there (no key held, nothing released)
+  local function ignored(voice_idx, note)
+    local n = slice_number(voice_idx, note)
+    return n ~= nil and S.lib.slices.voice_region(voice_idx, n) == nil
   end
 
   -- The note tap, read once: true when it took the note. It may set another
@@ -310,7 +330,10 @@ return function(S)
   local function note_on(channel, note, velocity)
     if not valid_note(channel, note) or tapped(note) then return end
     local key = key_of(channel, note)
-    local targets = note_targets(channel, note)
+    local targets = {}
+    for _, voice_idx in ipairs(note_targets(channel, note)) do
+      if not ignored(voice_idx, note) then targets[#targets + 1] = voice_idx end
+    end
     local channel_notes = S.midi_state.note_voice[channel] or {}
     for _, voice_idx in ipairs(channel_notes[note] or {}) do
       if not contains(targets, voice_idx) then end_key(voice_idx, key) end
@@ -441,10 +464,18 @@ return function(S)
     S.lib.expression.first_touch(voice_idx, MIDI.owner, key, raw)
     S.lib.sequencer.note_gate(voice_idx)
     local was_stopped = not S.voices[voice_idx].active
-    local slot = S.lib.notes.play(voice_idx, {owner = MIDI.owner, key = key,
-      pitch = S.lib.variation.midi_note(voice_idx, note), velocity = velocity / MIDI.velocity_max, park = true,
-      set_own = own_setters[voice_idx],
-      expression = S.lib.expression.note_values(voice_idx, {bend = raw.bend, pressure = raw.pressure, slide = 0})})
+    local expression = S.lib.expression.note_values(voice_idx, {bend = raw.bend, pressure = raw.pressure, slide = 0})
+    local slot
+    local n = slice_number(voice_idx, note)
+    if n then
+      -- 3.7: slice n at the voice's own pitch (a note outside the slices plays nothing)
+      slot = S.lib.slices.play(voice_idx, n, {owner = MIDI.owner, key = key, velocity = velocity / MIDI.velocity_max,
+        park = true, expression = expression})
+    else
+      slot = S.lib.notes.play(voice_idx, {owner = MIDI.owner, key = key,
+        pitch = S.lib.variation.midi_note(voice_idx, note), velocity = velocity / MIDI.velocity_max, park = true,
+        set_own = own_setters[voice_idx], expression = expression})
+    end
     if was_stopped and S.voices[voice_idx].active then S.midi_state.started[voice_idx] = true end
     -- the own note, perhaps taken from a step's: its note override ends now
     if slot == 1 then S.lib.sequencer.own_note_taken(voice_idx) end

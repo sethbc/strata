@@ -750,9 +750,10 @@ test("SEQ's layout states count a full chord as the sequencer's most notes", fun
   for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states) do
     if state.name:find("edit view eight notes rows", 1, true) then seen = seen + 1 end
   end
-  -- 3 section labels + 11 voice + 5 step + 8 notes + 3 locks + 8 chain rows
-  -- (3.7: direction, misstep, fill, cond, next, prev, random), five to a window
-  local rows = 3 + 11 + 5 + S.lib.sequencer.SEQ.max_step_notes + 3 + 8
+  -- 3 section labels + 11 voice + 6 step + 8 notes + 3 locks + bookmark + 8
+  -- chain rows (3.7: direction, misstep, fill, cond, slice, next, prev,
+  -- random), five to a window: the states' step is a buffer voice's
+  local rows = 3 + 11 + 6 + S.lib.sequencer.SEQ.max_step_notes + 3 + 1 + 8
   assert_equal(seen, math.ceil(rows / 5), "a window for every row of an eight-note step")
 end)
 
@@ -931,10 +932,11 @@ test("the bookmark row shows only when the voice has a set bookmark", function()
   S.buffers[1].seconds = 8
   params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
   assert_equal(row_labels(context), "length division swing gate gate len gate rel direction misstep fill euclid "
-    .. "clear level prob ratchet gate cond note pos pitch size bookmark chain from scenes bars next prev random "
-    .. "quantize", "every row, in order")
+    .. "clear level prob ratchet gate cond slice note pos pitch size bookmark chain from scenes bars next prev random "
+    .. "quantize", "every row, in order (3.7: slice after cond, on a buffer voice)")
   S.buffers[1].seconds = 0
   assert_true(not row_labels(context):find("bookmark", 1, true), "an empty slot has none")
+  assert_true(row_labels(context):find("cond slice note", 1, true) ~= nil, "a buffer voice keeps its slice row")
 end)
 
 -- Each row's hint names its label, so every row is checked with the cursor
@@ -959,7 +961,7 @@ test("every edit view row lays out with the cursor on it, on voices 1 and 7, wit
         assert_screen_layout(context, where .. ", ALT")
         key(1, 0); context.screen.clear(); redraw()
       end)
-      assert_equal(rows, bookmarks and 29 or 28, "every row visited")
+      assert_equal(rows, bookmarks and 30 or 28, "every row visited (a buffer voice's bookmark and slice rows)")
     end
   end
 end)
@@ -1291,6 +1293,30 @@ test("step_editor_replacing is true exactly while the editor's own action replac
   assert_equal(pages_seq.step_editor_replacing(), false, "back to false after a raise")
   pages_seq.close_step_editor(1)
   assert_equal(pages_seq.step_editor_replacing(), false, "and with no editor")
+end)
+
+-- 3.7 (design §5.3, package 2b): a step's slice, shown while the voice reads a buffer
+test("the slice row follows cond on a buffer voice and turns off, then 1 to 64", function()
+  local context, S = started_on_seq()
+  local seq, pages_seq = S.lib.sequencer, S.lib.pages_seq
+  open_edit_view(context)
+  assert_true(not row_labels(context):find("slice", 1, true), "a synth voice has no slice row")
+  assert_true(not pages_seq.turn_step(1, 3, "slice", 1), "nor a slice to turn")
+  assert_equal(seq.step_attr(1, 3, "slice"), nil)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  S.cursors.seq_step = 3
+  assert_equal(go_to(context, "slice"), "off")
+  enc(3, 1); assert_equal(seq.step_attr(1, 3, "slice"), 1); assert_equal(shown(context), "1")
+  enc(3, 100); assert_equal(seq.step_attr(1, 3, "slice"), 64, "it stops at 64"); assert_equal(shown(context), "64")
+  enc(3, -100); assert_equal(seq.step_attr(1, 3, "slice"), 1, "1 first")
+  enc(3, -1); assert_equal(seq.step_attr(1, 3, "slice"), nil, "then off"); assert_equal(shown(context), "off")
+  enc(3, 5)
+  alt_k2_hold(context)
+  assert_equal(seq.step_attr(1, 3, "slice"), nil, "ALT+K2 held resets it")
+  for _, bad in ipairs({0, 65, 2.5, "3"}) do
+    seq.set_step_attr(1, 3, "slice", bad)
+    assert_equal(seq.step_attr(1, 3, "slice"), nil, "refused: " .. tostring(bad))
+  end
 end)
 
 end

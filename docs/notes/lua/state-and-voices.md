@@ -63,6 +63,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 60 | set and start the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` polls (`S.buffer_polls`) | `lib/buffers.lua` |
 | 61 | read the files' settings from data/strata/samples.data (`START_ORDER.samples_load`, before the buffers' restore; a missing file gives none, one it cannot use is set aside as `samples.data.bak` with a console line and gives none) (3.7) | `lib/samples.lua` |
 | 62 | set and start the input level polls `amp_in_l` and `amp_in_r` (`START_ORDER.input_level`; a poll a norns lacks is skipped) (3.4) | `lib/input_level.lua` |
+| 64 | set and start the `bufferOnsets` poll, the transients pass's report (`START_ORDER.slices_poll`) (3.7) | `lib/slices.lua` |
 | 65 | set and start the `recordState` poll (`record_poll`) | `lib/record.lua` |
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
 | 80 | read the grid rotations (`grids.data`), then connect the grids (`grid_init`) | `lib/grid/core.lua` |
@@ -153,6 +154,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 127 | cancel the send budget's flush clock (`S.engine_budget_clock`) and drop the values waiting for it (3.4; the engine is already freed, #461) | `lib/engine_sync.lua` |
 | 128 | cancel each slot's pending start reload of a long file | `lib/buffers.lua` |
 | 130 | stop the buffer polls and the recording timers (the engine finishes or frees any recording itself) | `lib/buffers.lua` |
+| 131 | stop the `bufferOnsets` poll and cancel the clock that reads the onsets files (`CLEANUP_ORDER.slices_poll`) (3.7) | `lib/slices.lua` |
 | 132 | stop the `recordState` poll and forget the takes | `lib/record.lua` |
 | 135 | stop the `amp_in_l` and `amp_in_r` input level polls and clear their callbacks (3.4: the polls moved from the BUFFER page, `input_meter` keeps its order) | `lib/input_level.lua` |
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
