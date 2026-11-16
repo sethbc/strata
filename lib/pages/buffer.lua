@@ -992,6 +992,7 @@ return function(S)
     if options.mode then S.lib.slices.make(1) end
     if options.closed then
       S.buffer_page.field = #BUFFER_FIELDS
+      if options.after then options.after(editor) end
       return
     end
     editor.open(1)
@@ -1152,9 +1153,18 @@ return function(S)
       LAYOUT.slice_editor(context, state[2])
     end})
   end
-  -- BUFFER's own slice marks over 12 equal slices, its field at tran 12's width
+  -- BUFFER's own slice marks over 12 equal slices, its field at eq 12
   table.insert(layout_states, {name = "slice marks", setup = function(context)
     LAYOUT.slice_editor(context, {mode = 2, count = 12, closed = true})
+  end})
+  -- and the field's widest values: 64 slices made, then shown as transients
+  -- (no analysis), and as equal parts
+  table.insert(layout_states, {name = "slices tr 64", setup = function(context)
+    LAYOUT.slice_editor(context, {mode = 2, count = 64, closed = true,
+      after = function() S.lib.samples.set(1, "mode", 3) end})
+  end})
+  table.insert(layout_states, {name = "slices eq 64", setup = function(context)
+    LAYOUT.slice_editor(context, {mode = 2, count = 64, closed = true})
   end})
   for index, field in ipairs(BUFFER_FIELDS) do
     table.insert(layout_states, {name = "field " .. field.name, setup = function()
