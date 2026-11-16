@@ -129,18 +129,24 @@ end)
 -- (SCENE_FORMAT_FLOOR, BUFFER_FORMAT_FLOOR) to the build's version, and set
 -- aside otherwise; no code converts a particular older version. The scan
 -- finds, in the code of every Lua file under lib/ (comments and strings
--- left out), a version compared with less than, and the names the old
--- conversions keyed on
+-- left out), a version (a name ending in "version") compared with a number
+-- literal, on either side of <, <=, >, >=, == or ~=, and the names the old
+-- conversions keyed on. A comparison with a named floor or with the build's
+-- own version constant is allowed
+local VERSION_COMPARISONS = { ["<"] = true, ["<="] = true, [">"] = true, [">="] = true, ["=="] = true, ["~="] = true }
 local function old_version_uses(sources)
   local found = {}
   for _, source in ipairs(sources) do
     if source.path:match("^lib/") then
       local sanitized = sync_check.sanitize_lua(source.text)
-      for _, pattern in ipairs({ "version%s*<", "from_version", "before_version" }) do
-        for start in sanitized:gmatch("()" .. pattern) do
-          local line = select(2, sanitized:sub(1, start - 1):gsub("\n", "")) + 1
-          table.insert(found, source.path .. ":" .. line .. " " .. pattern)
+      for start, name, stop in sanitized:gmatch("()%f[%w_]([%w_]*version)%f[^%w_]()") do
+        local line = source.path .. ":" .. select(2, sanitized:sub(1, start - 1):gsub("\n", "")) + 1
+        local after = sanitized:match("^%s*([<>=~]=?)%s*%-?%d", stop)
+        local before = sanitized:sub(math.max(1, start - 200), start - 1):match("%f[%w_%.]%d[%w%.]*%s*([<>=~]=?)%s*$")
+        if VERSION_COMPARISONS[after] or VERSION_COMPARISONS[before] then
+          table.insert(found, line .. " " .. name .. " compared with a number")
         end
+        if name == "from_version" or name == "before_version" then table.insert(found, line .. " " .. name) end
       end
     end
   end
@@ -152,14 +158,20 @@ test("no Lua file compares a file's version with a number below its floor", func
   -- the scanner itself
   local found = old_version_uses({ { path = "lib/x.lua", text = table.concat({
     "if loaded.version < 5 then end",
+    "if 5 > file_version then end",
+    "if data.version == 6 or version ~= 2 or version >= 3 then end",
     "local function f(scene, from_version) end",
     "local r = {before_version = 6}",
     '-- version < 3 in a comment; "from_version" in a string',
-    "if is_integer_between(loaded.version, FLOOR, VERSION) then end",
+    "if version < SCENE_FORMAT_FLOOR or version > SCENE_DATA_VERSION then end",
+    "local t = {version = 7}; if value.version == NOTES.version and x2 >= version then end",
   }, "\n") }, { path = "strata.lua", text = "if version < 2 then end" } })
-  assert_equal(table.concat(found, "; "),
-    "lib/x.lua:1 version%s*<; lib/x.lua:2 from_version; lib/x.lua:3 before_version",
-    "each use under lib/ is found; comments, strings, a range check and other files are not")
+  assert_equal(table.concat(found, "; "), table.concat({ "lib/x.lua:1 version compared with a number",
+    "lib/x.lua:2 file_version compared with a number", "lib/x.lua:3 version compared with a number",
+    "lib/x.lua:3 version compared with a number", "lib/x.lua:3 version compared with a number",
+    "lib/x.lua:4 from_version", "lib/x.lua:5 before_version" }, "; "),
+    "each literal comparison under lib/ is found, either way round; comments, strings, named floors and"
+      .. " versions, an assignment and other files are not")
   found = old_version_uses(read_lua_sources())
   assert_equal(#found, 0, table.concat(found, "; "))
 end)

@@ -86,6 +86,7 @@ test("validate_scene_data rejects malformed scenes and accepts captured ones", f
   rejects(function(data) data.voices[7] = nil end, "missing voice")
   rejects(function(data) data.voices[2].crossmod.slot2 = nil end, "missing crossmod slot")
   rejects(function(data) data.voices[2].crossmod.slot1.source = 9 end, "out-of-range mod source")
+  rejects(function(data) data.voices[2].crossmod.slot1.source = 2.5 end, "fractional mod source")
   -- recall would send engine.setModSpeed with nil
   rejects(function(data) data.voices[4].crossmod.speed = nil end, "missing mod speed")
   rejects(function(data) data.voices[4].crossmod.speed = "fast" end, "non-numeric mod speed")
@@ -139,7 +140,11 @@ test("scene files: round trip, version check, missing slots, erroring file", fun
   context = load_strata({ data_subdir = "roundtrip" })
   scenes = local_value("scenes")
   assert_true(scenes[2].populated, "scene 2 loaded")
-  for slot = 3, 8 do assert_true(scenes[slot] and scenes[slot].populated == false, "filled slot " .. slot) end
+  assert_equal(#scenes, local_value("NUM_SCENES"), "every slot exists")
+  for slot = 3, local_value("NUM_SCENES") do
+    assert_true(scenes[slot] and scenes[slot].populated == false, "filled slot " .. slot)
+    assert_equal(scenes[slot].name, "", "filled slot " .. slot .. " has no name")
+  end
   recall_scene(2, 0)
   grid_redraw()
 end)
@@ -2941,14 +2946,18 @@ test("no copy of an older format is kept at a save", function()
   context = load_strata({ data_subdir = "floor_no_copy" })
   S = local_value("S")
   assert_true(S.scenes[1].populated, "the file loads")
-  S.scene_file.version = 6  -- what a save before 3.7 kept a .v<n> copy for
   capture_scene(2)
   assert_true(save_scenes_to_disk(), "saved")
-  for number = 1, 9 do
-    local name = "scenes.data.v6" .. (number > 1 and ("." .. number) or "")
-    assert_true(not util.file_exists(dir .. name), "no " .. name)
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, S.constants.SCENE_DATA_VERSION, "written")
+  cleanup()
+  -- the folder holds scenes.data and no copy of it under any .v<n> name
+  local listing = assert(io.popen("ls -a '" .. dir .. "'"))
+  local copies = {}
+  for name in listing:lines() do
+    if name:find("^scenes%.data%.v") then table.insert(copies, name) end
   end
-  assert_true(not util.file_exists(dir .. "scenes.data.v7"), "no scenes.data.v7")
+  listing:close()
+  assert_equal(table.concat(copies, ", "), "", "no scenes.data.v* file")
 end)
 
 test("a record's scene defaults may depend on the voice", function()
