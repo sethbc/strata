@@ -9,12 +9,28 @@ return function(h)
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 
--- Voice 1 (running) on slot 1, holding 16 s
-local function buffer_voice()
-  local context = load_strata()
+-- Voice 1 (running) on slot 1, holding seconds (default 16). doubles
+-- (optional): regions[v] = {start, length}, the own note's region
+-- (S.lib.notes.own_region, package 2b), and tempos[slot], a file's tempo
+-- (S.lib.samples.tempo, 2d), installed before init (plan-common.md, Doubles)
+local function buffer_voice(seconds, doubles)
+  local context = load_strata({before_init = function()
+    if not doubles then return end
+    local S = local_value("S")
+    if doubles.regions then
+      S.lib.notes.own_region = function(voice_idx)
+        local region = doubles.regions[voice_idx]
+        return region and {region[1], region[2]}
+      end
+    end
+    if doubles.tempos then
+      S.lib.samples = S.lib.samples or {}
+      S.lib.samples.tempo = function(slot) return doubles.tempos[slot] end
+    end
+  end})
   finish_startup(context)
   local S = local_value("S")
-  S.buffers[1].seconds = 16
+  S.buffers[1].seconds = seconds or 16
   params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
   return context, S
 end
@@ -22,28 +38,28 @@ end
 test("a scanning buffer voice's playhead integrates its scan", function()
   local context, S = buffer_voice()
   params:set("v1_buf_pos", 0.25)
-  params:set("v1_buf_scan", 0.1)
-  context.clock.run_for(2)
-  assert_near(S.lib.playheads.position(1), 0.45, 1e-6, "0.25 + 2 s of 0.1 a second")
-  context.clock.run_for(8)
+  params:set("v1_buf_scan", 1.6)  -- a speed: over the whole 16 s slot, 0.1 of it a second
+  context.clock.run_for(2.5)
+  assert_near(S.lib.playheads.position(1), 0.5, 1e-6, "0.25 + 2.5 s of 0.1 a second")
+  context.clock.run_for(7.5)
   assert_near(S.lib.playheads.position(1), 0.25 + 0.1 * 10 - 1, 1e-6, "wrapped at 1 (here 0.25)")
-  -- inside a loop it stays inside it
+  -- inside a loop it stays inside it, crossing the 8 s loop at 0.2 of it a second
   params:set("v1_loop_length", 0.5)
   params:set("v1_loop_start", 0.25)
   S.lib.playheads.reset(1)
   params:set("v1_buf_pos", 0)
-  context.clock.run_for(5)
+  context.clock.run_for(4)
   local position = S.lib.playheads.position(1)
   assert_true(position >= 0.25 and position < 0.75, "inside the loop, got " .. position)
-  assert_near(position, 0.25 + 0.5 * ((0.1 * 5) % 1), 1e-6, "loop_start + phase x loop_length")
+  assert_near(position, 0.25 + 0.5 * ((0.2 * 4) % 1), 1e-6, "loop_start + phase x loop_length")
 end)
 
 test("the playhead follows an LFO-moved scan, freeze, the scan hold and the glide", function()
   local context, S = buffer_voice()
   params:set("v1_buf_pos", 0)
-  params:set("v1_buf_scan", 0.1)
+  params:set("v1_buf_scan", 1.6)
   S.lib.playheads.reset(1)
-  S.engine_param_values.v1_buf_scan = 0.2  -- an LFO raised the scan the engine has
+  S.engine_param_values.v1_buf_scan = 3.2  -- an LFO raised the scan the engine has (0.2 of the slot a second)
   context.clock.run_for(2)
   assert_near(S.lib.playheads.position(1), 0.4, 1e-6, "the sent scan counts")
   S.engine_param_values.v1_buf_scan = nil
@@ -73,7 +89,7 @@ end)
 test("the playhead resets on voiceOn, a source switch and a jump", function()
   local context, S = buffer_voice()
   params:set("v1_buf_pos", 0.25)
-  params:set("v1_buf_scan", 0.1)
+  params:set("v1_buf_scan", 1.6)
   context.clock.run_for(2)
   assert_near(S.lib.playheads.position(1), 0.45, 1e-6)
   toggle_voice(1); toggle_voice(1)
@@ -118,6 +134,139 @@ test("column is the playhead's cell among n", function()
   assert_equal(S.lib.playheads.column(1, 8), 5)
   params:set("v1_buf_pos", 0.99)
   assert_equal(S.lib.playheads.column(1, 16), 16, "the last cell")
+end)
+
+-- scan_mode's option indices (lib/scan.lua)
+local MODE = {wrap = 1, bounce = 2, one_shot = 3}
+
+test("the playhead crosses an 8 s slot's whole region in 8 s at scan 1", function()
+  local context, S = buffer_voice(8)
+  params:set("v1_buf_pos", 0)
+  params:set("v1_buf_scan", 1)
+  S.lib.playheads.reset(1)
+  context.clock.run_for(4)
+  assert_near(S.lib.playheads.position(1), 0.5, 1e-6, "halfway in 4 s")
+  context.clock.run_for(3)
+  assert_near(S.lib.playheads.position(1), 7 / 8, 1e-6, "7/8 in 7 s")
+  context.clock.run_for(1.5)
+  assert_near(S.lib.playheads.position(1), 0.5 / 8, 1e-6, "round again after 8 s")
+  -- a scan of 2 crosses a quarter loop (2 s of audio) in 1 s
+  params:set("v1_loop_length", 0.25)
+  params:set("v1_buf_scan", 2)
+  S.lib.playheads.reset(1)
+  context.clock.run_for(0.5)
+  assert_near(S.lib.playheads.position(1), 0.125, 1e-6, "half the loop in 0.5 s")
+  assert_near(S.lib.playheads.phase(1), 0.5, 1e-6, "the phase is the loop's fraction")
+end)
+
+test("bounce turns the playhead round at both edges", function()
+  local context, S = buffer_voice(8)
+  params:set("v1_buf_pos", 0)
+  params:set("v1_buf_scan", 1)
+  params:set("v1_scan_mode", MODE.bounce)
+  context.clock.run_for(6)
+  assert_near(S.lib.playheads.position(1), 0.75, 1e-6, "forward for 6 s")
+  context.clock.run_for(4)
+  assert_near(S.lib.playheads.position(1), 0.75, 1e-6, "turned round at the end: back to 0.75 at 10 s")
+  assert_near(S.lib.playheads.phase(1), 1.25, 1e-6, "the phase runs over two passes")
+  context.clock.run_for(4)
+  assert_near(S.lib.playheads.position(1), 0.25, 1e-6, "0.25 at 14 s")
+  context.clock.run_for(3)
+  assert_near(S.lib.playheads.position(1), 0.125, 1e-6, "turned round at the start: 0.125 at 17 s")
+  assert_near(S.lib.playheads.phase(1), 0.125, 1e-6, "the phase wraps at 2")
+  -- backward from the start it turns round at once
+  params:set("v1_buf_scan", -1)
+  S.lib.playheads.reset(1)
+  context.clock.run_for(2)
+  assert_near(S.lib.playheads.position(1), 0.25, 1e-6, "backward from 0 comes back up")
+  assert_true(not S.lib.playheads.finished(1), "a bounce never finishes")
+end)
+
+test("a one shot stops at the edge and restarts at the voice's next hit", function()
+  local context, S = buffer_voice(8)
+  params:set("v1_buf_pos", 0.5)
+  params:set("v1_buf_scan", 1)
+  params:set("v1_scan_mode", MODE.one_shot)
+  context.clock.run_for(2)
+  assert_near(S.lib.playheads.position(1), 0.75, 1e-6, "forward for 2 s")
+  assert_true(not S.lib.playheads.finished(1), "still playing")
+  context.clock.run_for(3)
+  assert_near(S.lib.playheads.position(1), 1, 1e-6, "held at the end")
+  assert_true(S.lib.playheads.finished(1), "played out past 1")
+  S.lib.engine_sync.retrigger(1, 1, "step")
+  assert_near(S.lib.playheads.position(1), 0.5, 1e-6, "the hit restarts it")
+  assert_true(not S.lib.playheads.finished(1), "playing again")
+  -- backward it stops at the start
+  params:set("v1_buf_scan", -1)
+  S.lib.playheads.reset(1)
+  context.clock.run_for(5)
+  assert_near(S.lib.playheads.position(1), 0, 1e-6, "held at the start")
+  assert_true(S.lib.playheads.finished(1), "played out below 0")
+  -- exactly 1 still sounds (strictly past 1 is silent)
+  params:set("v1_buf_pos", 1)
+  params:set("v1_buf_scan", 0)
+  S.lib.playheads.reset(1)
+  assert_true(not S.lib.playheads.finished(1), "buf_pos 1 with the scan at 0 still sounds")
+  -- a wrapping voice's hit restarts nothing
+  params:set("v1_scan_mode", MODE.wrap)
+  params:set("v1_buf_pos", 0)
+  params:set("v1_buf_scan", 1)
+  context.clock.run_for(2)
+  local before = S.lib.playheads.position(1)
+  S.lib.engine_sync.retrigger(1, 1, "step")
+  assert_near(S.lib.playheads.position(1), before, 1e-6, "a wrap hit leaves the scan")
+  assert_true(not S.lib.playheads.finished(1), "a wrap never finishes")
+end)
+
+test("the playhead moves inside the own region while one is set", function()
+  local regions = {}
+  local context, S = buffer_voice(8, {regions = regions})
+  params:set("v1_buf_pos", 0)
+  params:set("v1_buf_scan", 1)
+  regions[1] = {0.5, 0.25}  -- 2 s of the 8 s slot
+  S.lib.playheads.reset(1)
+  context.clock.run_for(1)
+  assert_near(S.lib.playheads.position(1), 0.5 + 0.5 * 0.25, 1e-6, "half the 2 s region in 1 s")
+  context.clock.run_for(1.5)
+  assert_near(S.lib.playheads.position(1), 0.5 + 0.25 * 0.25, 1e-6, "round the region again")
+  regions[1] = nil
+  S.lib.playheads.reset(1)
+  context.clock.run_for(2)
+  assert_near(S.lib.playheads.position(1), 0.25, 1e-6, "with none, the loop (the whole slot)")
+end)
+
+test("buf_pos 1 is the region's last start (#726)", function()
+  local _, S = buffer_voice(8)
+  params:set("v1_loop_length", 0.5)
+  params:set("v1_loop_start", 0.25)
+  params:set("v1_buf_scan", 0)
+  params:set("v1_buf_pos", 1)
+  S.lib.playheads.reset(1)
+  assert_near(S.lib.playheads.position(1), 0.75, 1e-5, "wrap: the loop's last start, not its first")
+  assert_true(S.lib.playheads.position(1) <= 0.75, "never past the loop")
+  params:set("v1_scan_mode", MODE.bounce)
+  assert_near(S.lib.playheads.position(1), 0.75, 1e-5, "bounce: the last start")
+  params:set("v1_scan_mode", MODE.one_shot)
+  assert_near(S.lib.playheads.position(1), 0.75, 1e-5, "one shot: the last start")
+end)
+
+test("a following voice's playhead advances in beats", function()
+  local tempos = {[1] = 120}
+  local context, S = buffer_voice(8, {tempos = tempos})
+  params:set("v1_buf_pos", 0)
+  params:set("v1_buf_scan", 1)
+  params:set("v1_follow", 2)  -- stretch, at ratio 1 (the clock at 120)
+  S.lib.playheads.reset(1)
+  context.clock.run_for(1)
+  assert_near(S.lib.playheads.position(1), 0.125, 1e-6, "two beats of the 16-beat slot in 1 s")
+  -- the beat jumps two beats ahead: the playhead goes with it
+  context.clock.set_beat(clock.get_beats() + 2)
+  assert_near(S.lib.playheads.position(1), 0.25, 1e-6, "two more beats")
+  -- a voice that does not follow keeps to the time
+  params:set("v1_follow", 1)
+  S.lib.playheads.reset(1)
+  context.clock.set_beat(clock.get_beats() + 2)
+  assert_near(S.lib.playheads.position(1), 0, 1e-6, "no time passed")
 end)
 
 -- The "recording" report's state as lib/record.lua gives it
@@ -219,7 +368,7 @@ end)
 test("a running playhead changing column redraws a page-5 grid once per column", function()
   local context, S = buffer_voice()
   params:set("v1_buf_pos", 0)
-  params:set("v1_buf_scan", 0.0625)  -- one cell of 16 a second
+  params:set("v1_buf_scan", 1)  -- a speed: over the 16 s slot, one cell of 16 a second
   S.lib.playheads.reset(1)
   local device = page_five_grid(context)
   local before = device.refresh_count
