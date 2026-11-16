@@ -36,7 +36,7 @@ return function(S)
     -- checks it holds no more; test/unit/data_files_test.lua checks
     -- max_tables keeps at least four times it. Raise it with a release that
     -- adds scene tables, and max_tables with it
-    largest_scenes_tables = 7394,
+    largest_scenes_tables = 7474,
     backups = 9,  -- the backup names: <file><suffix>, then <file><suffix>.2 ... .9
   }
   M.DATA_FILES = DATA_FILES

@@ -80,6 +80,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 108 | load the matrix's routings from data/strata/matrix.data (`START_ORDER.matrix_load`; a missing file loads them empty, one it cannot use is set aside, an unknown source key or destination id is kept with a console line), then redraw the screen (3.4) | `lib/matrix.lua` |
 | 109 | read the note pool from data/strata/notes.data (`START_ORDER.notes_load`; a missing file leaves the tier's default, one it cannot use too, with a console line), send it (`setNotePool`) and join the expression flush to the LFO clock's step hooks (3.5) | `lib/notes.lua` |
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
+| 111 | load the random sequences' values from data/strata/sequences.data (`START_ORDER.sequences_load`; with no file it can use, every value is drawn, one it cannot use is set aside), then redraw the screen (3.7) | `lib/random_sequences.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 125 | check every global LFO destination's param, then start the LFO clock (`S.lfo_clock`, 48 Hz, 3.4) | `lib/lfos.lua` |
 | 130 | start the frame clock (`start_frame_clock`) | `lib/ui/frame.lua` |
@@ -123,6 +124,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 20 | give the norns menu its own `_menu.set_mode` back (`unwatch_menu_opening`), before anything that can fail | `lib/ui/menu_watch.lua` |
 | 30 | save the scenes (skipped, with a message, if `load_scenes_from_disk` never ran in this session, `S.scenes_loaded`, or if scenes.data failed to load and could not be moved aside) | `lib/scenes.lua` |
 | 32 | save the macros' targets to data/strata/macros.data at once, canceling the write that waits (`S.macro_save_clock`) (`CLEANUP_ORDER.macros_save`; skipped if their start step never ran) (3.4) | `lib/macros.lua` |
+| 33 | save the random sequences' values to data/strata/sequences.data at once, canceling the write that waits (`S.sequences_save_clock`) (`CLEANUP_ORDER.sequences_save`; skipped if their start step never ran; drift's draws are saved here) (3.7) | `lib/random_sequences.lua` |
 | 34 | save the gesture recorders to data/strata/gestures.data at once, canceling the write that waits (`S.gesture_save_clock`) (`CLEANUP_ORDER.gestures_save`; skipped if their start step never ran; a recording is saved as if it stopped then) (3.4) | `lib/gestures.lua` |
 | 36 | save the matrix's routings to data/strata/matrix.data at once, canceling the write that waits (`S.matrix_save_clock`) (`CLEANUP_ORDER.matrix_save`; skipped if its start step never ran) (3.4) | `lib/matrix.lua` |
 | 38 | write the rig settings to data/strata/io.data once more (`CLEANUP_ORDER.io_rig_save`; skipped if its start step never ran) (3.6) | `lib/io/rig.lua` |

@@ -625,7 +625,7 @@ return function(S)
   -- module's add_params, read at init, so a module included after this one
   -- has its table by then
   for _, group in ipairs({{"macros", "macros"}, {"morph", "morph"}, {"scatter", "scatter"}, {"matrix", "matrix"},
-      {"input", "input_level"}, {"gestures", "gestures"}}) do
+      {"input", "input_level"}, {"gestures", "gestures"}, {"rseq", "random_sequences"}}) do
     local module_name = group[2]
     register_params(group[1], function() S.lib[module_name].add_params() end)
   end

@@ -862,8 +862,8 @@ test("the menu records for 3.4's groups follow lfos in order, each adding its mo
   for _, record in ipairs(S.registry.params) do names[#names + 1] = record.name end
   local menu = table.concat(names, " ")
   -- (3.6's five records, between gestures and seq, have their own test)
-  assert_true(menu:find("lfos macros morph scatter matrix input gestures out midi crow out ii out nb tape seq buffers",
-    1, true) ~= nil, "3.4's seven records follow lfos, with 3.6's five between gestures and seq: " .. menu)
+  assert_true(menu:find("lfos macros morph scatter matrix input gestures rseq out midi crow out ii out nb tape seq buffers",
+    1, true) ~= nil, "3.4's seven records follow lfos, then 3.7's rseq, with 3.6's five before seq: " .. menu)
   -- each a group and its params: the macros' sixteen, morph's six (the XY
   -- morph's three with the two-scene morph's three),
   -- scatter's eight, the matrix's 32, the input's one, the gestures' eight
@@ -924,8 +924,8 @@ test("a 3.6 group record adds its group only for a loaded module", function()
   local names = {}
   for _, record in ipairs(S.registry.params) do names[#names + 1] = record.name end
   local menu = table.concat(names, "|")
-  assert_true(menu:find("|gestures|out midi|crow|out ii|out nb|tape|seq|", 1, true) ~= nil,
-    "the five records follow gestures, in order: " .. menu)
+  assert_true(menu:find("|gestures|rseq|out midi|crow|out ii|out nb|tape|seq|", 1, true) ~= nil,
+    "the five records follow gestures and 3.7's rseq, in order: " .. menu)
   local function record_named(name)
     for _, record in ipairs(S.registry.params) do
       if record.name == name then return record end

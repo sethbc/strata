@@ -816,7 +816,8 @@ end)
 -- are saved before anything stops, the LFOs give their destinations back
 -- before the voices go off, MIDI is detached before the voices go off, and
 -- the controllers go dark last
-local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros saved", "gestures saved",
+local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros saved", "sequences saved",
+  "gestures saved",
   "matrix saved", "rig saved",
   "buffer paths saved",
   "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "gesture recorders",
@@ -912,7 +913,7 @@ test("cleanup runs every registered step in today's order", function()
   local param_steps = { mutation_enabled = "mutation metro", scene_sequencer_enabled = "scene sequencer" }
   local file_steps = { ["scenes.data"] = "scenes saved", ["buffers.data"] = "buffer paths saved",
     ["gestures.data"] = "gestures saved", ["macros.data"] = "macros saved", ["matrix.data"] = "matrix saved",
-    ["io.data"] = "rig saved" }
+    ["io.data"] = "rig saved", ["sequences.data"] = "sequences saved" }
 
   watch_field(clock, "tempo_change_handler", "tempo handler")
   watch_field(_menu, "set_mode", "menu watch")
@@ -1038,6 +1039,7 @@ local function start_steps()
     { "notes load", { "file read notes.data", "engine.setNotePool" } },
     { "buffers load", { "file read buffers.data", "engine.loadBuffer", "redraw requested", "grid redrawn",
       "print 1 buffers reloading from buffers.data" } },
+    { "sequences load", { "file read sequences.data", "redraw requested" } },
     { "startup clock", voice_sync },
     { "lfo clock", { "clock started" } },
     { "frame clock", { "clock started" } },

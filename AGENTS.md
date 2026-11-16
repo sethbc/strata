@@ -94,6 +94,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/morph.lua` | `morph` | `docs/notes/lua/morph.md` | morph_test.lua |
 | `lib/gestures.lua` | `gestures` | `docs/notes/lua/gestures.md` | gestures_test.lua |
 | `lib/input_level.lua` | `input_level` | `docs/notes/lua/input-level.md` | input_level_test.lua |
+| `lib/random_sequences.lua` | `random_sequences` | `docs/notes/lua/random-sequences.md` | random_sequences_test.lua |
 | `lib/matrix.lua` | `matrix` | `docs/notes/lua/matrix.md` | matrix_test.lua |
 | `lib/notes.lua` | `notes` | `docs/notes/lua/notes.md` | notes_test.lua |
 | `lib/mpe.lua` | `mpe` | `docs/notes/lua/mpe.md` | mpe_test.lua |
@@ -230,7 +231,7 @@ The engine's (under docs/notes/engine/):
 The Lua side's, across modules:
 - **Param → engine**: a control param's action calls `send_param_to_engine(id, value)` with an `S.engine_senders[id]` entry, never `engine.*`; a command carrying several params reads the others with `engine_param_value(id)`; LFOs never `params:set` their destination. `docs/notes/lua/engine-sync.md`, `docs/notes/lua/lfos.md`
 - **Scenes**: a new captured field needs `validate_scene` coverage and a migration default; discrete keys switch at the end of a transition, never crossfade; a recall sends one full sync per running voice whose source changed. `docs/notes/lua/scenes.md`
-- **Data files** (`scenes.data`, `buffers.data`, `macros.data`, `matrix.data`, `gestures.data`, `grids.data`, `notes.data`, `io.data`) are written only through `S.lib.data_files.write` and read only through `S.lib.data_files.read`, never `tab.save` or `tab.load`; a backup never replaces an earlier one. `docs/notes/lua/data-files.md`, `docs/notes/lua/scenes.md`, `docs/notes/lua/buffers.md`
+- **Data files** (`scenes.data`, `buffers.data`, `macros.data`, `matrix.data`, `gestures.data`, `sequences.data`, `grids.data`, `notes.data`, `io.data`) are written only through `S.lib.data_files.write` and read only through `S.lib.data_files.read`, never `tab.save` or `tab.load`; a backup never replaces an earlier one. `docs/notes/lua/data-files.md`, `docs/notes/lua/scenes.md`, `docs/notes/lua/buffers.md`
 - **Source tests**: `voice_uses_synth(i)` / `voice_uses_buffer(i)`, never `not voice_uses_synth` (that includes input). `docs/notes/lua/state-and-voices.md`
 - **Grid, arc and MIDI handlers live on the vport only**, never on the raw device passed to `grid.add`. `docs/notes/lua/grid-core.md`, `docs/notes/lua/arc-core.md`, `docs/notes/lua/midi.md`, `docs/notes/lua/io/ports.md`
 - **MIDI ports**: only `lib/io/ports.lua` sets `midi.add`, `midi.remove` or a MIDI vport's `event`; a module listens, sends and hears of devices through `S.lib.io_ports`, and a claimed port has one owner. crow is spoken to in text through `S.lib.io_crow` (`send_now`, `send_value`), and no function is assigned through the `crow` proxy. `docs/notes/lua/io/ports.md`, `docs/notes/lua/io/crow.md`
