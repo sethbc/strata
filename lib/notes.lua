@@ -714,10 +714,11 @@ return function(S)
     sync = function(voice)
       if S.voices[voice].active then send_envelope(voice) end
     end,
-    -- voice 1's values: a scene older than version 7 gets each voice's own
-    -- from the migration below, but a current-version scene lacking the
-    -- key for a voice (a hand-edited file) gets these for every voice
-    scene_defaults = {attack = NOTES.envelope[1][1], release = NOTES.envelope[1][2]},
+    -- each voice's own times (a function of the voice): a scene without
+    -- them gets the voice's defaults (fill_scene)
+    scene_defaults = function(voice)
+      return {attack = NOTES.envelope[voice][1], release = NOTES.envelope[voice][2]}
+    end,
     scene_ranges = {attack = NOTES.envelope_ranges.attack, release = NOTES.envelope_ranges.release},
     voice_rows = {section = NOTES.cap.section, rows = {NOTES.cap.key, "attack", "release"}, before = NOTES.cap.before},
     layout_states = cap_layout_states,
@@ -728,24 +729,6 @@ return function(S)
   -- After voiceOn (which resets them), every start and every source change
   -- of a running voice sends both times
   S.register_grain_restart(send_envelope)
-
-  -- A scene older than 3.5 recalls each voice's own default times (the
-  -- record's scene_defaults are voice 1's). Fills only what is missing
-  S.register_scene_migration({name = "notes envelope", before_version = 7, migrate = function(scene)
-    local voices = type(scene.data) == "table" and scene.data.voices
-    if type(voices) ~= "table" then return end
-    for voice = 1, NUM_VOICES do
-      local voice_data = voices[voice]
-      if type(voice_data) == "table" then
-        if voice_data.extras == nil then voice_data.extras = {} end
-        if type(voice_data.extras) == "table" then
-          for index, key in ipairs(NOTES.envelope_keys) do
-            if voice_data.extras[key] == nil then voice_data.extras[key] = NOTES.envelope[voice][index] end
-          end
-        end
-      end
-    end
-  end})
 
   -- The start step: read notes.data (parsed, never run). A version
   -- NOTES.version file whose pool is a whole number in 0..NOTE_POOL.max

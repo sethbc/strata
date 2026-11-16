@@ -1055,7 +1055,7 @@ test("they reach the engine as attackTime and releaseTime, at a turn and at a st
   assert_near(synced.attackTime, 0.05, 1e-9, "a sync sends the attack"); assert_near(synced.releaseTime, 3, 1e-9)
 end)
 
-test("a 3.4 scene recalls each voice's default times", function()
+test("a scene without the times recalls each voice's default times", function()
   local context = load_strata()
   local S = started(context)
   params:set("v1_attack", 9)
@@ -1066,14 +1066,14 @@ test("a 3.4 scene recalls each voice's default times", function()
     scene.data.voices[voice].extras.attack = nil
     scene.data.voices[voice].extras.release = nil
   end
-  migrate_scene(scene, 6)
+  fill_scene(scene)
   local envelope = S.lib.notes.NOTES.envelope
   for voice = 1, S.constants.NUM_VOICES do
     assert_equal(scene.data.voices[voice].extras.attack, envelope[voice][1], "voice " .. voice .. " attack")
     assert_equal(scene.data.voices[voice].extras.release, envelope[voice][2], "voice " .. voice .. " release")
   end
   scene.data.voices[1].extras.attack = 2
-  migrate_scene(scene, 6)
+  fill_scene(scene)
   assert_equal(scene.data.voices[1].extras.attack, 2, "a stored value is kept (idempotent)")
 end)
 

@@ -362,7 +362,7 @@ test("bookmarks default to the quarters, are scene fields that crossfade and mig
   for voice_idx = 1, S.constants.NUM_VOICES do
     for n = 1, 4 do S.scenes[3].data.voices[voice_idx].extras["bookmark_" .. n] = nil end
   end
-  migrate_scene(S.scenes[3], 3)
+  fill_scene(S.scenes[3])
   assert_true(validate_scene(S.scenes[3]), "the migrated scene validates")
   recall_scene(3, 0)
   for n, expected in ipairs({0, 0.25, 0.5, 0.75}) do

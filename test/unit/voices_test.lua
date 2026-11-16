@@ -86,10 +86,9 @@ test("the pulse voice starts at res 0.8, the sound of 3.2's default (#314)", fun
   assert_true(sent ~= nil and math.abs(sent - 0.8) < 1e-6, "a start sends res 0.8 (sent: " .. tostring(sent) .. ")")
 end)
 
--- #314: the mirror that keeps older scenes and PSETs sounding the same
--- (PULSE_RES.mirror - res, lib/scenes.lua and lib/params_setup.lua) must be
--- the one \strataPulse plays (rq = <mirror> - res.clip(min, max)), over the
--- param's range: if either side changes alone, saved sounds move. Read from
+-- #314: the mirror the res plays through (PULSE_RES.mirror, lib/constants.lua)
+-- must be the one \strataPulse plays (rq = <mirror> - res.clip(min, max)), over
+-- the param's range: if either side changes alone, saved sounds move. Read from
 -- the engine source with its comments stripped, as the FX defaults' check is
 test("the pulse res mirror is the engine's: \\strataPulse plays rq = PULSE_RES.mirror - res (#314)", function()
   load_strata()

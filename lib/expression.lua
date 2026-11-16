@@ -25,8 +25,8 @@ return function(S)
   -- scenes and PSETs, so it never changes), the two mappings (their param
   -- keys, the controller value each reads and the defaults), the depth's
   -- range, the gain and offset clips, VOICE's section, the extra-offset
-  -- key, the voice-wide targets' param suffixes, the sources' names and
-  -- section and the scene format the migration fills
+  -- key, the voice-wide targets' param suffixes and the sources' names and
+  -- section
   local EXPRESSION = {
     targets = {"off", "amp", "level", "main", "size", "density", "position", "cutoff"},
     mappings = {
@@ -42,7 +42,6 @@ return function(S)
     extra_key = "expression",
     wide_params = {cutoff = "filter_freq", size = "grain_size", density = "grain_density"},
     sources = {section = "notes", pressure = "PRES", slide = "SLID", voice_pressure = "PR", voice_slide = "SL"},
-    scene_format = 7,
   }
   M.EXPRESSION = EXPRESSION
 
@@ -522,24 +521,6 @@ return function(S)
   }
   S.register_voice_params(record)
   for _, mapping in ipairs(EXPRESSION.mappings) do S.register_param_filter(mapping.target_key, step_over_position) end
-
-  -- A scene older than format 7 (3.4's) gets the four defaults, so it
-  -- recalls the sound it was saved with; only what is missing is filled
-  S.register_scene_migration({name = "expression", before_version = EXPRESSION.scene_format, migrate = function(scene)
-    local voices = type(scene.data) == "table" and scene.data.voices
-    if type(voices) ~= "table" then return end
-    for voice = 1, NUM_VOICES do
-      local data = voices[voice]
-      if type(data) == "table" then
-        if data.extras == nil then data.extras = {} end
-        if type(data.extras) == "table" then
-          for key, default in pairs(scene_defaults) do
-            if data.extras[key] == nil then data.extras[key] = default end
-          end
-        end
-      end
-    end
-  end})
 
   return M
 end

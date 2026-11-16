@@ -43,7 +43,6 @@ return function()
     invariants = {},    -- {name, fn} records, checked by the test harness after every unit test
     -- 3.4's (design §0.1, §8.10, §10.1)
     scene_blocks = {},      -- top-level scene blocks {key, default, capture, validate, apply, discrete, through_zero}
-    scene_migrations = {},  -- {name, before_version, migrate = fn(scene)}, run on older loaded scenes
     pset_hooks = {},        -- {name, write, read, delete}, run by the PSET actions (lib/params_setup.lua)
     param_touch = {},       -- fn(param_id, source), run after an encoder, arc or grid edit of a param
     lock_change = {},       -- fn(voice_idx, locked), run after a voice's lock flips
@@ -63,13 +62,13 @@ return function()
 
   -- The registries init reads once (voice_params, scene_fields,
   -- lfo_destinations, fx_params, start, menu_close, scene_blocks,
-  -- scene_migrations, pset_hooks) are closed when init begins to read them
+  -- pset_hooks) are closed when init begins to read them
   -- (close_registries, called by the first params record, "performance"): a
   -- registration after that is never used, so its register function raises,
   -- naming the registry (#384). The others are read at each use and stay open
   local closed = {}
   local INIT_READ = {"voice_params", "scene_fields", "lfo_destinations", "fx_params", "start", "menu_close",
-    "scene_blocks", "scene_migrations", "pset_hooks"}
+    "scene_blocks", "pset_hooks"}
 
   function M.close_registries()
     for _, name in ipairs(INIT_READ) do closed[name] = true end
@@ -157,6 +156,16 @@ return function()
       and type(value.name) == "string" and (value.value == nil or type(value.value) == "function")))
   end
 
+  -- A voice-param record's scene defaults for voice voice_idx: its
+  -- scene_defaults table, the table its scene_defaults function gives for
+  -- the voice, or {} when it has none
+  function M.voice_scene_defaults(record, voice_idx)
+    local defaults = record.scene_defaults
+    if type(defaults) == "function" then return defaults(voice_idx) end
+    if defaults == nil then return {} end
+    return defaults
+  end
+
   -- A module's per-voice params (3.2: freeze, variation, loops, history,
   -- the voice filter and sends). The record's fields:
   --   name: unique; count: the params add adds per voice (checked at init);
@@ -166,8 +175,10 @@ return function()
   --   sync: optional fn(voice_idx), the voice sync's sends after grain_keys;
   --     a start runs it before voiceOn, so it sends grain params only
   --     (setGrainParam): voiceOn resets the voice-level ones (#325);
-  --   scene_defaults: {key = default} (each its param's default): the keys
-  --     scenes capture into voices[i].extras and migration fills;
+  --   scene_defaults: {key = default} (each its param's default), or a
+  --     function of the voice that gives that table (defaults that differ
+  --     by voice): the keys scenes capture into voices[i].extras and
+  --     fill_scene fills;
   --   discrete: {key = {min, max}} (whole values): set at a transition's
   --     end, after the source; every other scene key crossfades;
   --   scene_ranges: {key = {min, max}} for a continuous scene key:
@@ -194,20 +205,29 @@ return function()
     require_arg(all_entries(record.grain_keys, is_grain_key), where,
       "grain_keys maps a key to an engine name or {name, value = fn}")
     require_arg(record.sync == nil or type(record.sync) == "function", where, "sync is a function")
-    require_arg(all_entries(record.scene_defaults, function(key, value)
-      return type(key) == "string" and type(value) == "number"
-    end), where, "scene_defaults maps a key to a number")
-    require_arg(all_entries(record.discrete, function(key, range)
-      local default = record.scene_defaults and record.scene_defaults[key]
-      return type(range) == "table" and is_whole(range[1], -math.huge) and is_whole(range[2], range[1])
-        and is_whole(default, range[1]) and default <= range[2]
-    end), where, "discrete maps a scene key to a whole {min, max} that holds its default")
-    require_arg(all_entries(record.scene_ranges, function(key, range)
-      local default = record.scene_defaults and record.scene_defaults[key]
-      return type(range) == "table" and type(range[1]) == "number" and type(range[2]) == "number"
-        and range[1] <= range[2] and not (record.discrete and record.discrete[key])
-        and type(default) == "number" and default >= range[1] and default <= range[2]
-    end), where, "scene_ranges maps a continuous scene key to a {min, max} that holds its default")
+    -- scene_defaults is a table, or a function of the voice that gives one
+    -- (3.7): each voice's table is checked, and all hold the same keys
+    local per_voice = type(record.scene_defaults) == "function"
+    local voice_count = per_voice and M.constants.NUM_VOICES or 1
+    local first = M.voice_scene_defaults(record, 1)
+    for voice_idx = 1, voice_count do
+      local defaults = M.voice_scene_defaults(record, voice_idx)
+      require_arg(type(defaults) == "table" and all_entries(defaults, function(key, value)
+        return type(key) == "string" and type(value) == "number" and first[key] ~= nil
+      end) and all_entries(first, function(key) return defaults[key] ~= nil end), where,
+        "scene_defaults maps a key to a number (a function: for every voice, the same keys)")
+      require_arg(all_entries(record.discrete, function(key, range)
+        local default = defaults[key]
+        return type(range) == "table" and is_whole(range[1], -math.huge) and is_whole(range[2], range[1])
+          and is_whole(default, range[1]) and default <= range[2]
+      end), where, "discrete maps a scene key to a whole {min, max} that holds its default")
+      require_arg(all_entries(record.scene_ranges, function(key, range)
+        local default = defaults[key]
+        return type(range) == "table" and type(range[1]) == "number" and type(range[2]) == "number"
+          and range[1] <= range[2] and not (record.discrete and record.discrete[key])
+          and type(default) == "number" and default >= range[1] and default <= range[2]
+      end), where, "scene_ranges maps a continuous scene key to a {min, max} that holds its default")
+    end
     local rows = record.voice_rows
     require_arg(rows == nil or (type(rows) == "table" and type(rows.section) == "string"
       and type(rows.rows) == "table" and (rows.when == nil or type(rows.when) == "function")
@@ -332,8 +352,8 @@ return function()
   -- 3.4's registries (design §0.1, §8.10, §10.1). Each register function
   -- checks its argument (a field outside the record's set too, #385) and
   -- refuses a second record of the same name or key; the error points at the
-  -- registering module's line. scene_blocks, scene_migrations and pset_hooks
-  -- close at init (INIT_READ); the rest are read at each use
+  -- registering module's line. scene_blocks and pset_hooks close at init
+  -- (INIT_READ); the rest are read at each use
 
   -- A named record's register function's common checks: a table, its name
   -- field a non-empty string no record of registry has, only known fields.
@@ -363,7 +383,6 @@ return function()
 
   local SCENE_BLOCK_FIELDS = {key = true, default = true, capture = true, validate = true, apply = true,
     discrete = true, through_zero = true}
-  local SCENE_MIGRATION_FIELDS = {name = true, before_version = true, migrate = true}
   local PSET_HOOK_FIELDS = {name = true, write = true, read = true, delete = true}
   local STEP_OUTPUT_FIELDS = {name = true, play = true, stop = true, available = true}
   local MOD_SOURCE_FIELDS = {key = true, name = true, section = true, value = true, range = true, describe = true,
@@ -383,18 +402,6 @@ return function()
     require_functions(record, where, {"default", "capture", "validate", "apply"}, {"through_zero"})
     require_arg(record.discrete == true, where, "discrete is true: a block switches at a transition's end")
     table.insert(M.registry.scene_blocks, record)
-  end
-
-  -- A scene migration (lib/scenes.lua, 0b): {name, before_version = a whole
-  -- format number, migrate = fn(scene)}: run on every loaded scene older
-  -- than before_version, by before_version then registration
-  function M.register_scene_migration(record)
-    local kind = "register_scene_migration"
-    require_open("scene_migrations", kind)
-    local where = require_named(record, "scene_migrations", kind, "name", SCENE_MIGRATION_FIELDS)
-    require_arg(is_whole(record.before_version, 1), where, "before_version is a whole format number")
-    require_functions(record, where, {"migrate"})
-    table.insert(M.registry.scene_migrations, record)
   end
 
   -- A PSET hook (lib/params_setup.lua runs it): {name, write = fn(path_base,

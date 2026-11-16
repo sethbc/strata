@@ -27,6 +27,7 @@ return function(S)
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local NUM_VOICES = S.constants.NUM_VOICES
   local BUFFER_DATA_VERSION = S.constants.BUFFER_DATA_VERSION
+  local BUFFER_FORMAT_FLOOR = S.constants.BUFFER_FORMAT_FLOOR
 
   -- Sample buffers. The engine holds the audio; Lua tracks what each slot
   -- holds for the screen and scenes. path is the loaded file, or the scratch
@@ -874,14 +875,13 @@ return function(S)
   -- then does not overwrite buffers.data with the empty paths (#72)
   S.buffers_loaded = false
   -- What is known of buffers.data in this session (as S.scene_file, for
-  -- SETUP's status rows): version, the format of the file as read when
-  -- older than BUFFER_DATA_VERSION (nil once a save has replaced it);
-  -- problem, nil, "unreadable" or "not saved"; backup, the name an
-  -- unreadable file was kept under (nil: still in place); text, the bytes
+  -- SETUP's status rows): problem, nil, "unreadable" or "not saved";
+  -- backup, the name an unreadable file was kept under (nil: still in
+  -- place); text, the bytes
   -- last written or found unchanged, which remember compares with, so a
   -- report that changes no path or start costs no file read; save_clock, the
   -- clock of the one pending deferred write (nil when none)
-  S.buffer_file = {version = nil, problem = nil, backup = nil, text = nil, save_clock = nil}
+  S.buffer_file = {problem = nil, backup = nil, text = nil, save_clock = nil}
 
   -- What buffers.data holds: per slot the loaded file or scratch take (a
   -- remembered file that was missing on start is kept: it may be on a drive
@@ -897,8 +897,7 @@ return function(S)
 
   -- Write the paths: true and "written" or "unchanged", or false and why
   -- (the file is then as it was, whole). As the scenes' save: a checked
-  -- .part renamed over buffers.data (S.lib.data_files.write, #301), and a
-  -- file of an older format first kept as buffers.data.v<n> (#467)
+  -- .part renamed over buffers.data (S.lib.data_files.write, #301)
   function save_buffers_to_disk()
     local data_files = S.lib.data_files
     if util.file_exists(S.lib.scenes.scene_data_dir) == false then
@@ -906,12 +905,7 @@ return function(S)
     end
     local state = S.buffer_file
     local value = remembered_buffers()
-    local saved, detail = true, nil
-    if state.version then
-      saved, detail = data_files.keep_copy(buffer_data_file(), ".v" .. state.version)
-      if detail == "copied" then print("buffers file of format " .. state.version .. " kept as " .. saved) end
-    end
-    if saved then saved, detail = data_files.write(buffer_data_file(), value) end
+    local saved, detail = data_files.write(buffer_data_file(), value)
     if not saved then
       state.problem = "not saved"
       print("error: buffer paths not saved to " .. buffer_data_file() .. " (" .. tostring(detail)
@@ -924,7 +918,7 @@ return function(S)
       state.problem = nil
       request_redraw()
     end
-    state.version, state.text = nil, data_files.encode(value)
+    state.text = data_files.encode(value)
     S.buffer_autosave_blocked = false
     if detail == "written" then print("buffer paths saved to " .. buffer_data_file()) end
     return true, detail
@@ -966,7 +960,7 @@ return function(S)
   local function restore_buffers_from_file()
     S.buffers_restored = 0
     S.buffer_autosave_blocked = false
-    S.buffer_file.version, S.buffer_file.problem, S.buffer_file.backup = nil, nil, nil
+    S.buffer_file.problem, S.buffer_file.backup = nil, nil
     -- the file is parsed, never run as Lua (lib/data_files.lua, #464)
     local loaded, problem, detail = S.lib.data_files.read(buffer_data_file())
     if loaded == nil and problem == "missing" then
@@ -978,16 +972,23 @@ return function(S)
       preserve_unloadable_buffer_file()
       return
     end
-    -- version 1 (3.2) has no starts: every start is 0
-    if (loaded.version ~= BUFFER_DATA_VERSION and loaded.version ~= 1) or type(loaded.paths) ~= "table" then
-      print("error: buffers file has version " .. tostring(loaded.version) ..
-        " or no path list, expected version " .. BUFFER_DATA_VERSION)
+    -- Versions BUFFER_FORMAT_FLOOR to BUFFER_DATA_VERSION load (a start
+    -- that is missing is 0); an older one (version 1, 3.2's) is set aside
+    -- whole, never converted, and so is a newer one or one with no path list
+    local version = loaded.version
+    local known = type(version) == "number" and version == math.floor(version)
+      and version >= BUFFER_FORMAT_FLOOR and BUFFER_DATA_VERSION >= version
+    if not known or type(loaded.paths) ~= "table" then
+      if type(version) == "number" and not (version >= BUFFER_FORMAT_FLOOR) then
+        print("error: buffers file has version " .. version .. ", older than version " .. BUFFER_FORMAT_FLOOR
+          .. ", the oldest this version loads: it is set aside, not converted")
+      else
+        print("error: buffers file has version " .. tostring(version) ..
+          " or no path list, expected version " .. BUFFER_FORMAT_FLOOR .. " to " .. BUFFER_DATA_VERSION)
+      end
       preserve_unloadable_buffer_file()
       return
     end
-
-    -- the first save keeps a version 1 file as buffers.data.v1 first (#467)
-    if loaded.version < BUFFER_DATA_VERSION then S.buffer_file.version = loaded.version end
     local reloading = 0
     for slot = 1, NUM_BUFFERS do
       local path = loaded.paths[slot]

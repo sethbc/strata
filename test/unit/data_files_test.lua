@@ -361,7 +361,7 @@ test("write goes to a .part file and replaces the file only when every step work
   assert_equal(saved, false, "an unwritable folder says so"); assert_equal(type(detail), "string")
 end)
 
-test("a backup never replaces an earlier one; a copy is kept once per content", function()
+test("a backup never replaces an earlier one", function()
   local context = load_strata()
   local data_files = local_value("S").lib.data_files
   assert_equal(data_files.DATA_FILES.backups, 9, "<file>.bak, then .bak.2 to .bak.9")
@@ -370,31 +370,13 @@ test("a backup never replaces an earlier one; a copy is kept once per content", 
   assert_true(not util.file_exists(path), "set aside: moved, not copied")
   write_text(path, "second"); assert_equal(data_files.set_aside(path, ".bak"), path .. ".bak.2")
   assert_equal(file_text(path .. ".bak"), "first"); assert_equal(file_text(path .. ".bak.2"), "second")
-  -- a copy: the file stays; the same bytes are copied once
-  write_text(path, "third")
-  local kept, how = data_files.keep_copy(path, ".v3")
-  assert_equal(kept, path .. ".v3"); assert_equal(how, "copied")
-  kept, how = data_files.keep_copy(path, ".v3")
-  assert_equal(kept, path .. ".v3", "the same bytes are not copied twice")
-  assert_equal(how, "found", "and keep_copy says it found them")
-  write_text(path, "fourth")
-  assert_equal(data_files.keep_copy(path, ".v3"), path .. ".v3.2", "other bytes get the next name")
-  assert_equal(file_text(path), "fourth"); assert_equal(file_text(path .. ".v3"), "third")
-  assert_equal(file_text(path .. ".v3.2"), "fourth")
-  assert_equal(data_files.keep_copy(context.data_dir .. "none.data", ".v3"), true, "no file: nothing to keep")
-  -- every name taken: nothing moves, nothing is copied
+  -- every name taken: nothing moves
   for number = 3, 9 do write_text(path .. ".bak." .. number, "x") end
   write_text(path, "fifth")
   local moved, problem = data_files.set_aside(path, ".bak")
   assert_equal(moved, nil); assert_equal(type(problem), "string"); assert_equal(file_text(path), "fifth")
-  -- every copy name taken: copies of the format are kept already, so the
-  -- caller may write (true, "full"), and nothing is copied or replaced
-  for number = 3, 9 do write_text(path .. ".v3." .. number, "x") end
-  kept, how = data_files.keep_copy(path, ".v3")
-  assert_equal(kept, true, "every copy name taken: the caller may write"); assert_equal(how, "full")
   for number = 1, 9 do
     assert_true(file_text(path .. ".bak" .. (number > 1 and ("." .. number) or "")) ~= "fifth", "no backup was replaced")
-    assert_true(file_text(path .. ".v3" .. (number > 1 and ("." .. number) or "")) ~= "fifth", "no copy was replaced")
   end
   assert_equal(file_text(path), "fifth", "the file itself is untouched")
 end)

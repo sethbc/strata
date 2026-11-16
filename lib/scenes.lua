@@ -3,14 +3,13 @@
 -- with the player's name: bank_of, name, set_name) and the loaded one
 -- (S.current_scene), capture and recall (instant, or a smooth transition
 -- on S.scene_transition_clock), the scene sequencer
--- (S.scene_sequencer_clock), migration of older scene formats, validation,
--- and scenes.data on disk (written through lib/data_files.lua at every
--- scene save and at exit, read at start and on request; S.scene_file), with
--- the registered voice params (voices[i].extras), scene fields
--- (S.registry.scene_fields), scene blocks (S.registry.scene_blocks),
--- migrations (S.registry.scene_migrations) and lock hooks
--- (S.registry.lock_change). A recall is the list scene_entries builds,
--- applied by apply_entries (both fields of S.lib.scenes, which morph uses
+-- (S.scene_sequencer_clock), the fill of a loaded scene's missing fields
+-- (fill_scene), validation, and scenes.data on disk (written through
+-- lib/data_files.lua at every scene save and at exit, read at start and on
+-- request; S.scene_file), with the registered voice params
+-- (voices[i].extras), scene fields (S.registry.scene_fields), scene blocks
+-- (S.registry.scene_blocks) and lock hooks (S.registry.lock_change). A
+-- recall is the list scene_entries builds, applied by apply_entries (both fields of S.lib.scenes, which morph uses
 -- too). The functions stay global. The tables tests and
 -- other code read (S.SCENE_GLOBAL_PARAMS, S.VOICE_SCENE_DEFAULTS,
 -- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION) and the scene state live on S;
@@ -26,6 +25,7 @@ return function(S)
   local NUM_SCENES = S.constants.NUM_SCENES
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
   local SCENE_DATA_VERSION = S.constants.SCENE_DATA_VERSION
+  local SCENE_FORMAT_FLOOR = S.constants.SCENE_FORMAT_FLOOR
   local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
   local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
   local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
@@ -81,7 +81,7 @@ return function(S)
 
   -- Global params stored in every scene, in recall order. Continuous ones are
   -- crossfaded by smooth transitions; the others switch when the fade ends.
-  -- default is the param's default, which migrate_scene gives scenes written
+  -- default is the param's default, which fill_scene gives scenes written
   -- before the param existed (tempo's param default follows clock_tempo; every
   -- scene file has always stored tempo).
   S.SCENE_GLOBAL_PARAMS = {
@@ -114,7 +114,7 @@ return function(S)
     table.insert(S.SCENE_GLOBAL_PARAMS, field)
   end
 
-  -- Per-voice scene fields added after format 1, filled by migrate_scene in
+  -- Per-voice scene fields added after format 1, filled by fill_scene in
   -- scenes that lack them: {path = keys inside data.voices[i], default = value}.
   -- A field is only filled when its parent table exists (a scene missing the
   -- parent is left for validate_scene to reject). Each default must equal the
@@ -130,11 +130,13 @@ return function(S)
 
   -- The registered voice params' scene keys (S.registry.voice_params'
   -- scene_defaults and discrete): key -> {default, range = {min, max} for a
-  -- discrete key, nil for one that crossfades}. Read at use, after init
-  local function registered_voice_scene_keys()
+  -- discrete key, nil for one that crossfades}, each default voice
+  -- voice_idx's (voice 1's when none is given: every voice has the same
+  -- keys, S.voice_scene_defaults). Read at use, after init
+  local function registered_voice_scene_keys(voice_idx)
     local keys = {}
     for _, record in ipairs(S.registry.voice_params) do
-      for key, default in pairs(record.scene_defaults or {}) do
+      for key, default in pairs(S.voice_scene_defaults(record, voice_idx or 1)) do
         keys[key] = {default = default, range = record.discrete and record.discrete[key],
           limits = record.scene_ranges and record.scene_ranges[key]}
       end
@@ -258,103 +260,29 @@ return function(S)
     end
   end
 
-  -- The first scene format saved by a script whose number params step whole
-  -- (3.3, #534): 3.2's could hold a fraction, so a scene of an older format
-  -- may too
-  M.WHOLE_NUMBERS_FORMAT = 5
-
-  -- The first scene format whose slot names are the player's (3.4): 3.3
-  -- and older named every slot "scene <i>", so only in a file older than
-  -- this does a slot's own old default read as no name
-  M.NAMES_FORMAT = 6
-
   -- A slot name as validate_scene allows it: a string of at most
   -- SCENE_NAME_MAX printable ASCII characters ("" for none)
   local function is_scene_name(value)
     return type(value) == "string" and #value <= S.constants.SCENE_NAME_MAX and not value:find("[^\32-\126]")
   end
 
-  -- A loaded slot's name (format 6): a slot written with none gets "",
-  -- and in a file older than M.NAMES_FORMAT a slot's own old default
-  -- ("scene <i>" in slot i) reads as none; another slot's default stays (a
-  -- name the player could have given). Anything else is left for
-  -- validate_scene
-  local function migrate_slot_name(scene, slot, from_version)
-    if type(scene) ~= "table" then return end
-    if scene.name == nil then scene.name = "" end
-    if from_version < M.NAMES_FORMAT and scene.name == "scene " .. slot then scene.name = "" end
-  end
-
-  -- Round, in a scene older than M.WHOLE_NUMBERS_FORMAT, every number
-  -- validate_scene wants whole (#554 does the same for a PSET's number
-  -- params): the option and registered discrete globals, and per voice the
-  -- source, the discrete grain keys, the crossmod sources, the discrete
-  -- extras and the pattern steps. A value that is not a number is left for
-  -- validate_scene to reject
-  local function round_whole_fields(data, extras)
-    local function round(parent, key)
-      if type(parent) == "table" and is_number(parent[key]) and parent[key] ~= math.floor(parent[key]) then
-        parent[key] = util.round(parent[key])
-      end
-    end
-    for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
-      local param = params.lookup[global.id] and params:lookup_param(global.id)
-      if param and (param.options or (global.registered and not global.continuous)) then round(data, global.id) end
-    end
-    for i = 1, NUM_VOICES do
-      local voice_data = data.voices[i]
-      if type(voice_data) == "table" then
-        round(voice_data, "source")
-        for key in pairs(DISCRETE_GRAIN_KEYS) do round(voice_data.grain, key) end
-        for slot = 1, NUM_MOD_SLOTS do
-          round(type(voice_data.crossmod) == "table" and voice_data.crossmod["slot" .. slot], "source")
-        end
-        for key, entry in pairs(extras) do
-          if entry.range then round(voice_data.extras, key) end
-        end
-      end
-      for step = 1, PATTERN_LENGTH do round(type(data.patterns) == "table" and data.patterns[i], step) end
-    end
-  end
-
-  -- The registered migrations (S.registry.scene_migrations: {name,
-  -- before_version, migrate = fn(scene)}) a scene of from_version needs:
-  -- those whose before_version is above it, by before_version, then in
-  -- registration order
-  local function due_migrations(from_version)
-    local due = {}
-    for index, record in ipairs(S.registry.scene_migrations) do
-      if record.before_version > from_version then table.insert(due, {record = record, index = index}) end
-    end
-    table.sort(due, function(a, b)
-      if a.record.before_version ~= b.record.before_version then
-        return a.record.before_version < b.record.before_version
-      end
-      return a.index < b.index
-    end)
-    return due
-  end
-
-  -- Bring a loaded scene up to the current format. First the registered
-  -- migrations it needs (due_migrations) convert what they find in an old
-  -- form; then every field it lacks is filled with its default: globals
-  -- (SCENE_GLOBAL_PARAMS), top-level blocks (SCENE_BLOCK_DEFAULTS, then
-  -- each registered block's default()) and per-voice fields
-  -- (VOICE_SCENE_DEFAULTS).
-  -- Filling only adds what is missing, so it runs for every file version;
-  -- from_version is there for changes that must convert a particular format
-  -- (a scene older than format 5 gets its Pulse res mirrored, #314, and the
-  -- numbers validate_scene wants whole rounded, round_whole_fields).
+  -- Fill a loaded scene's missing fields with their defaults (3.7: the one
+  -- rule for every file from SCENE_FORMAT_FLOOR up; no code is keyed on a
+  -- file's version). A slot without a name gets none (""); a populated
+  -- scene gets every field it lacks: globals (SCENE_GLOBAL_PARAMS),
+  -- top-level blocks (SCENE_BLOCK_DEFAULTS, then each registered block's
+  -- default()), per-voice fields (VOICE_SCENE_DEFAULTS) and each registered
+  -- voice param's default for that voice (S.voice_scene_defaults).
+  -- Filling only adds what is missing, so it can run twice.
   -- Then each registered voice-param record's normalize_scene(extras), if it
   -- has one, brings values a hand edit may have left inconsistent back to
   -- what the params allow (a loop past the slot's end), so a recall ends
   -- where the params would. Malformed scenes are left alone for
   -- validate_scene to reject.
-  function migrate_scene(scene, from_version)
+  function fill_scene(scene)
+    if type(scene) == "table" and scene.name == nil then scene.name = "" end
     if type(scene) ~= "table" or scene.populated ~= true or type(scene.data) ~= "table" then return end
-    for _, due in ipairs(due_migrations(from_version)) do due.record.migrate(scene) end
     local data = scene.data
-    if type(data) ~= "table" then return end
 
     for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
       fill_scene_default(data, {global.id}, global.default)
@@ -368,16 +296,15 @@ return function(S)
     end
 
     if type(data.voices) ~= "table" then return end
-    local extras = registered_voice_scene_keys()
     for i = 1, NUM_VOICES do
       if type(data.voices[i]) == "table" then
         for _, field in ipairs(S.VOICE_SCENE_DEFAULTS) do
           fill_scene_default(data.voices[i], field.path, field.default)
         end
-        -- format 3 (3.2): the registered voice params' table, and every
-        -- registered voice param's default
+        -- the registered voice params' table, and every registered voice
+        -- param's default for this voice
         fill_scene_default(data.voices[i], {"extras"}, {})
-        for key, entry in pairs(extras) do
+        for key, entry in pairs(registered_voice_scene_keys(i)) do
           fill_scene_default(data.voices[i], {"extras", key}, entry.default)
         end
         if type(data.voices[i].extras) == "table" then
@@ -385,17 +312,8 @@ return function(S)
             if record.normalize_scene then record.normalize_scene(data.voices[i].extras) end
           end
         end
-        -- format 5 (3.3): the Pulse voice's res rises with resonance; a
-        -- scene of an older format holds the filter's rq, mirrored here so
-        -- it sounds the same (#314). Keyed on the voice having a res param
-        local voice_params = data.voices[i].params
-        if from_version < S.constants.PULSE_RES.scene_format and S.voices[i].params.res ~= nil
-          and type(voice_params) == "table" and is_number(voice_params.res) then
-          voice_params.res = S.constants.PULSE_RES.mirror - voice_params.res
-        end
       end
     end
-    if from_version < M.WHOLE_NUMBERS_FORMAT then round_whole_fields(data, extras) end
   end
 
   function capture_scene(scene_num)
@@ -1027,14 +945,12 @@ return function(S)
   -- the empty in-memory scenes never replace the saved ones (#72)
   S.scenes_loaded = false
   -- What is known of scenes.data in this session (SETUP's status rows, the
-  -- load prompt): version, the format of the file as read when older than
-  -- SCENE_DATA_VERSION (nil once a save has replaced it, or when none was
-  -- read); problem, nil, "unreadable" (the file could not be loaded) or
+  -- load prompt): problem, nil, "unreadable" (the file could not be loaded) or
   -- "not saved" (the last write failed); backup, the name an unreadable
   -- file was kept under (nil: still in place); unsaved, true while a scene
   -- captured in this session is not in the file (a write failed, or was
   -- blocked)
-  S.scene_file = {version = nil, problem = nil, backup = nil, unsaved = false}
+  S.scene_file = {problem = nil, backup = nil, unsaved = false}
   -- The load a player asks for (request_load): while a scene is unsaved, the
   -- first request arms until armed_until, confirm_seconds long, and a second
   -- inside it loads. start_flash_seconds: how long the start's hint row names
@@ -1045,23 +961,14 @@ return function(S)
   -- Write the scenes: true and "written" or "unchanged" (the file already
   -- held these bytes, so nothing was written), or false and why (the file
   -- is then as it was, whole). The text goes to a checked .part file
-  -- renamed over scenes.data (S.lib.data_files.write, #301); a file of an
-  -- older format is first kept as scenes.data.v<n> (#467), and a failure to
-  -- keep it fails the save
+  -- renamed over scenes.data (S.lib.data_files.write, #301)
   function save_scenes_to_disk()
     local data_files = S.lib.data_files
     if util.file_exists(scene_data_dir) == false then
       util.make_dir(scene_data_dir)
     end
     local state = S.scene_file
-    local saved, detail = true, nil
-    if state.version then
-      saved, detail = data_files.keep_copy(scene_data_file, ".v" .. state.version)
-      if detail == "copied" then print("scenes file of format " .. state.version .. " kept as " .. saved) end
-    end
-    if saved then
-      saved, detail = data_files.write(scene_data_file, {version = SCENE_DATA_VERSION, scenes = S.scenes})
-    end
+    local saved, detail = data_files.write(scene_data_file, {version = SCENE_DATA_VERSION, scenes = S.scenes})
     if not saved then
       state.problem, state.unsaved = "not saved", true
       print("error: scenes not saved to " .. scene_data_file .. " (" .. tostring(detail) .. "); the file is as it was")
@@ -1073,7 +980,7 @@ return function(S)
     if state.problem == "not saved" or (state.problem == "unreadable" and not state.backup) then
       state.problem = nil
     end
-    state.version, state.unsaved = nil, false
+    state.unsaved = false
     S.scene_autosave_blocked = false
     if detail == "written" then print("scenes saved to " .. scene_data_file) end
     request_redraw()
@@ -1120,30 +1027,26 @@ return function(S)
       return preserve_unloadable_scene_file()
     end
 
-    local scene_table, file_version
-    if loaded.version ~= nil then
-      -- Versions 1 to SCENE_DATA_VERSION load (the older ones are migrated
-      -- below); any other version is rejected
-      if not is_integer_between(loaded.version, 1, SCENE_DATA_VERSION) then
+    -- Formats SCENE_FORMAT_FLOOR to SCENE_DATA_VERSION load; an older file
+    -- (a version below the floor, or none: before 2.1 the file was the bare
+    -- scenes array) is set aside whole, never converted, and so is a newer
+    -- one or a version that is no whole number
+    local version = loaded.version
+    if not is_integer_between(version, SCENE_FORMAT_FLOOR, SCENE_DATA_VERSION) then
+      if version == nil or (is_number(version) and not (version >= SCENE_FORMAT_FLOOR)) then
+        print("error: scenes file has " .. (version and ("version " .. version) or "no version") .. ", older than format "
+          .. SCENE_FORMAT_FLOOR .. ", the oldest this version loads: it is set aside, not converted")
+      else
         print("error: scenes file has version " .. tostring(loaded.version) ..
-          ", expected 1 to " .. SCENE_DATA_VERSION)
-        return preserve_unloadable_scene_file()
+          ", expected " .. SCENE_FORMAT_FLOOR .. " to " .. SCENE_DATA_VERSION)
       end
-      file_version = loaded.version
-      scene_table = loaded.scenes
-    else
-      -- Files written before 2.1 hold the bare scenes array (format version 1)
-      file_version = 1
-      scene_table = loaded
+      return preserve_unloadable_scene_file()
     end
+    local scene_table = loaded.scenes
 
-    -- Fill fields added since the file's format (a file older than format
-    -- 6 holds eight slots: 9-16 load empty), then validate the result
+    -- Fill every field the file lacks, then validate the result
     if type(scene_table) == "table" then
-      for i = 1, NUM_SCENES do
-        migrate_slot_name(scene_table[i], i, file_version)
-        migrate_scene(scene_table[i], file_version)
-      end
+      for i = 1, NUM_SCENES do fill_scene(scene_table[i]) end
     end
 
     if not validate_scene_data(scene_table) then
@@ -1170,11 +1073,7 @@ return function(S)
     S.scenes = loaded_scenes
     for i = 1, NUM_SCENES do raise_revision(i) end  -- every slot holds the file's data now
     S.scene_autosave_blocked = false
-    S.scene_file.version = file_version < SCENE_DATA_VERSION and file_version or nil
     S.scene_file.problem, S.scene_file.backup, S.scene_file.unsaved = nil, nil, false
-    if file_version < SCENE_DATA_VERSION then
-      print("migrated scenes file from version " .. file_version)
-    end
     print("scenes loaded from " .. scene_data_file)
 
     -- Update grid display if grids are connected

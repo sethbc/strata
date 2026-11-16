@@ -261,7 +261,7 @@ test("loops are continuous scene fields that crossfade", function()
     S.scenes[3].data.voices[voice_idx].extras.loop_start = nil
     S.scenes[3].data.voices[voice_idx].extras.loop_length = nil
   end
-  migrate_scene(S.scenes[3], 2)
+  fill_scene(S.scenes[3])
   assert_true(validate_scene(S.scenes[3]), "the migrated scene validates")
   recall_scene(3, 0)
   start, length = loop_of(2)
