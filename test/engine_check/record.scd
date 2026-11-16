@@ -841,9 +841,11 @@ test.("record: a playable recording keeps the slot playing and sets its length t
     settle.(0.2);
     atStart = engine.bufferFrames[4];
     // The voice gets the length once the new length's peaks file is in
-    // place (writeRecordPeaks): waited for, never a time (#718), at most
-    // 3 s of the 4 s take, and read while the take still runs, so a length
-    // that reached the voice only at the take's end fails
+    // place (writeRecordPeaks): waited for, never a time (#718). The wait's
+    // bound counts only its 0.05 s sleeps (3 s of them), not the server
+    // round trip each read takes, so it can run past the 4 s take; what
+    // catches a length that reached the voice only at the take's end is
+    // the "still recording" assertion, read with the voice's length
     h.waitFor({ voiceBufFrames.(1) == d }, seconds - 1);
     atGrain = voiceBufFrames.(1);
     runningAtGrain = isRecording.(4) and: { state[\takes][4].notNil };

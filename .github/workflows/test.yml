@@ -75,13 +75,13 @@ jobs:
   # <name>: <seconds> s"); every area is in exactly one shard
   # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
   # Area times on SuperCollider 3.13 at 3.5.0 (s, the mean of four full runs in Docker; 3.14.1's are within 1 s):
-  # lifecycle 114, record 113, memory 95, buffers 89, modulation 89, effects 87, notes 79, voices 75,
+  # lifecycle 114, record 113, memory 95, buffers 89, modulation 89, effects 87, notes 85, voices 75,
   # rings 69, mix 69, freeze 63, loops 54, variation 52, grains 38, files 29, waveform 23, positions 8,
-  # structure 4, performance 3: 1154 s in all (buffers since #706's and #718's fixes, the mean of three
-  # runs at 3.7, where it lost its fixed waits after a load and after a recording). The slowest
-  # shard is lifecycle, files, positions and notes, about 231 s of areas (236 s with its sclang's
-  # start in the slowest of the four runs), far under each shard's 570 s; the other six take
-  # 136-167 s. In those four runs every shard passed.
+  # structure 4, performance 3: 1159 s in all (buffers and notes are the means of three runs at 3.7,
+  # where buffers had lost its fixed waits after a load and after a recording, #706 and #718). The
+  # slowest shard is lifecycle, files, positions and notes, about 236 s of areas (239 s with its
+  # sclang's start in the slowest of those three runs), far under each shard's 570 s; the other six
+  # take 136-167 s. In those runs every shard passed.
   # memory runs first in its shard (areaOrder), so CI's memory figures are the area's alone.
   # Since #652 the areas no longer depend on each other's order, so the grouping is a
   # choice for the times alone; files and structure share no shard only because this
