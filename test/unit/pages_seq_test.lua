@@ -1011,12 +1011,12 @@ test("the edit view has direction, misstep, fill, cond and the chain's three cha
   assert_equal(go_to(context, "random"), "0%")
   enc(3, 5); assert_equal(params:get("seq_chain_random"), 5)
   assert_screen_layout(context, "SEQ's edit view on the chain's chances")
-  -- the pattern view shows F on the selected voice's row while fill is on
+  -- the pattern view shows f on the selected voice's row while fill is on
   tap(2)
   local function fill_mark()
     context.screen.clear(); redraw()
     for _, entry in ipairs(context.screen.texts) do
-      if entry.text == "F" then return entry end
+      if entry.text == "f" then return entry end
     end
   end
   assert_equal(fill_mark(), nil, "no mark while fill is off")
