@@ -184,10 +184,8 @@ return function(S)
     -- 3.7: the slot's settings are what it holds now (a replace take's
     -- start with none: it recorded over the slot's own; a synced one with
     -- the clock's tempo at its start)
-    if is_take then S.lib.samples.drop_own(slot) end
+    if is_take then S.lib.samples.start_take(slot, S.lib.record.synced_tempo(slot)) end
     S.lib.samples.bind(slot)
-    local tempo = is_take and S.lib.record.synced_tempo(slot) or nil
-    if tempo then S.lib.samples.set(slot, "tempo", tempo) end
   end
 
   -- Settle a take or load awaiting the engine (confirm_since set) from the
@@ -1220,7 +1218,6 @@ return function(S)
     buffer.awaiting_zero = false
     if not playable then
       buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
-      S.lib.samples.unbind(slot)  -- 3.7: the take's settings come with its end
     else
       buffer.start = buffer.sent_start  -- the reload that would have made a new start true is canceled
     end

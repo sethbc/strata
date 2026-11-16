@@ -202,6 +202,18 @@ return function(S)
     if bound[slot] == OWN then S.lib.buffers.remember() else schedule_save() end
   end
 
+  -- The slots bound to the slot's record: every slot holding the same file
+  -- from the same start (a take's record is its slot's alone)
+  local function sharing(slot)
+    local slots = {}
+    for other = 1, NUM_BUFFERS do
+      if bound[other] ~= nil and bound[other] == bound[slot] and (bound[slot] ~= OWN or other == slot) then
+        slots[#slots + 1] = other
+      end
+    end
+    return slots
+  end
+
   -- The running voices reading the slot get scaleNote and rootNote again
   local function resend(slot)
     for voice_idx = 1, NUM_VOICES do
@@ -271,20 +283,39 @@ return function(S)
     resend(slot)
   end
 
-  -- A clear or a replace take's end: the slot's own record goes
+  -- A clear, or a take that settled with no audio: the slot's own record goes
   function M.drop_own(slot)
     if valid_slot(slot) then own[slot] = nil end
   end
 
+  -- A take's tempo (a synced one's: the clock's at its start) into the
+  -- slot's own record, before its bind, so the listeners see it; a tempo
+  -- outside tempo_min..tempo_max is none
+  local function take_tempo(slot, tempo)
+    if tempo == nil or not CHECKS.tempo(tempo) then return end
+    own[slot] = own[slot] or default_record()
+    own[slot].tempo = tempo
+  end
+
+  -- A replace take settled with audio (lib/buffers.lua's
+  -- confirm_buffer_audio): it recorded over the slot, so its record starts
+  -- fresh, with the take's tempo. The caller binds next
+  function M.start_take(slot, tempo)
+    if not valid_slot(slot) then return end
+    own[slot] = nil
+    take_tempo(slot, tempo)
+  end
+
   -- A playable recording ended (lib/record.lua): the slot holds a take now,
   -- which starts as a copy of the file's record it was recorded over (a
-  -- take dubbed keeps its own; an empty slot's take has none). The file's
-  -- own record is untouched. The caller binds next
-  function M.take_from_file(slot)
+  -- take dubbed keeps its own; an empty slot's take has none), with the
+  -- take's tempo. The file's own record is untouched. The caller binds next
+  function M.take_from_file(slot, tempo)
     if not valid_slot(slot) then return end
     local was = bound[slot]
     if was ~= nil and was ~= OWN then own[slot] = copy_record(was.settings)
     elseif was == nil then own[slot] = nil end
+    take_tempo(slot, tempo)
   end
 
   -- A copy of the slot's record for a save, or nil when it holds only
@@ -335,15 +366,19 @@ return function(S)
 
   -- Set a field of the slot's record: false when the slot has none or the
   -- value fails its check (nothing changes), else true. The record's file
-  -- is written soon; a key resends scaleNote and rootNote, normalize the gain
+  -- is written soon; a key resends scaleNote and rootNote, normalize the
+  -- gain, for every slot bound to the record (one file in two slots is one
+  -- record)
   function M.set(slot, field, value)
     local record = M.settings(slot)
     if not record or not CHECKS[field] or not CHECKS[field](value) then return false end
     if type(value) ~= "table" and record[field] == value then return true end
     record[field] = copy_value(value)
     changed(slot)
-    if field == "key" then resend(slot) end
-    if field == "normalize" then M.send_gain(slot) end
+    for _, other in ipairs(sharing(slot)) do
+      if field == "key" then resend(other) end
+      if field == "normalize" then M.send_gain(other) end
+    end
     request_redraw()
     return true
   end
@@ -439,6 +474,7 @@ return function(S)
         .. (backup and ("kept as " .. backup:match("[^/]*$")) or ("not moved: " .. tostring(failure))))
       return
     end
+    local damaged = 0
     for _, stored in ipairs(value.files) do
       local record = type(stored) == "table" and record_from(stored.settings) or nil
       if record and type(stored.path) == "string" and finite(stored.start) and stored.start >= 0
@@ -446,7 +482,13 @@ return function(S)
         and #entries < SAMPLES.max_files then
         entries[#entries + 1] = {path = stored.path, start = stored.start, used = stored.used, settings = record}
         use_count = math.max(use_count, stored.used)
+      else
+        damaged = damaged + 1
       end
+    end
+    if damaged > 0 then
+      print("strata: " .. SAMPLES.file .. ": " .. damaged .. " " .. (damaged == 1 and "entry" or "entries")
+        .. " damaged, repeated or past " .. SAMPLES.max_files .. ": left out (the next write drops them)")
     end
     store.text = S.lib.data_files.encode(stored_value())
   end)

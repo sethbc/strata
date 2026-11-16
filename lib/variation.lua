@@ -105,7 +105,7 @@ return function(S)
       if reference then return reference end
       return freq_to_note(freq or S.voices[voice_idx].params.freq)
     end
-    return (S.lib.samples and S.lib.samples.scale_reference(voice_idx)) or M.root() + V.reference_octave
+    return S.lib.samples.scale_reference(voice_idx) or M.root() + V.reference_octave
   end
 
   -- Send scaleNote to a running voice (freq: the value about to be stored)

@@ -2,7 +2,7 @@
 
 Since 3.7 Strata remembers a few things about each audio file you load into a buffer: its **tempo**, its **key**, whether it is **normalized**, and how it is sliced. They follow the file, not the slot: load the same file into any slot, in this session or a later one, and its settings come back with it. Nothing is ever written beside your audio files; Strata keeps them in its own data folder (`data/strata/samples.data`).
 
-A file loaded from a start point other than its beginning (BUFFER's `start` field) is other audio, so it has settings of its own: `drone.wav` from 0 s and from 12 s are remembered apart.
+A file loaded from a start point other than its beginning (BUFFER's `start` field) is other audio, so it has settings of its own: `drone.wav` from 0 s and from 12 s are remembered apart. Settings are found by the file's path, so a file you rename or move loses them (load it again and set them again).
 
 A file with every setting at its default is not remembered at all, and Strata keeps the 256 files loaded most recently; past that, the one loaded longest ago is forgotten.
 
@@ -24,4 +24,4 @@ A take (a recording into a slot) has no file of its own until you save it, so it
 
 ## Files Strata could not read
 
-If `samples.data` cannot be read (damaged, or from another version of Strata), it is renamed `samples.data.bak`, the console says so once, and every file loads with no settings. Strata 3.6 cannot read the `buffers.data` that 3.7 writes, and sets it aside: going back to 3.6 starts with empty slots.
+If `samples.data` cannot be read (damaged, or from another version of Strata), it is kept as `samples.data.bak` (or `.bak.2`, ... when an earlier backup is there), the console says so once, and every file loads with no settings. Strata 3.6 cannot read the `buffers.data` that 3.7 writes, and sets it aside: going back to 3.6 starts with empty slots.
