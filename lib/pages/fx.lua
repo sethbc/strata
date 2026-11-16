@@ -3,8 +3,12 @@
 -- (S.FX_PAGE, the selected row S.fx_row), E2 row, E3 adjust, K3 on the
 -- effect under the cursor: the delay's and reverb's bypass (their
 -- delay_bypass and reverb_bypass params, lib/voice_mix.lua), the filter's
--- mix toggle. A bypassed effect's section row shows "byp". Registers its
--- S.registry.pages record. redraw_fx stays global.
+-- mix toggle. A bypassed effect's section row shows "byp". The delay's
+-- rows (3.7) are time, fdbk, mix, sync and ping: while the delay is synced
+-- (S.lib.delay_sync) its time row shows the division that plays and E3
+-- turns delay_division; E3 turns sync on and off; K3 stays the bypass on
+-- every delay row. Registers its S.registry.pages record. redraw_fx stays
+-- global.
 
 return function(S)
   local M = {}
@@ -15,12 +19,19 @@ return function(S)
     return string.format("%d%%", util.round(value * 100))
   end
 
+  local function on_off(value)
+    return value == 1 and "on" or "off"
+  end
+
   -- FX page: a scrolling list of the effects params under section labels
   -- (rows with selectable = false take no cursor stop). `format` is a
   -- string.format pattern or a function of the value, or nil to show the
   -- param's own string (the filter type's name); `effect` names the effect
   -- K3 acts on ("filter", "delay", "reverb"); master rows have none. A
-  -- section row's `bypass` names the effect whose bypass it shows.
+  -- section row's `bypass` names the effect whose bypass it shows. A row's
+  -- `binary` makes E3 turn it on (up) and off (down); `synced` names the
+  -- param the row turns while the delay plays a division, the row then
+  -- showing S.lib.delay_sync.label().
   S.FX_PAGE = {
     rows = {
       {label = "master", selectable = false},
@@ -32,9 +43,11 @@ return function(S)
       {label = "res", param_id = "filter_res", format = "%.2f", effect = "filter"},
       {label = "mix", param_id = "filter_mix", format = percent, effect = "filter"},
       {label = "delay", selectable = false, bypass = "delay"},
-      {label = "time", param_id = "delay_time", format = "%.3f s", effect = "delay"},
+      {label = "time", param_id = "delay_time", format = "%.3f s", effect = "delay", synced = "delay_division"},
       {label = "fdbk", param_id = "delay_feedback", format = percent, effect = "delay"},
       {label = "mix", param_id = "delay_mix", format = percent, effect = "delay"},
+      {label = "sync", param_id = "delay_sync", format = on_off, effect = "delay", binary = true},
+      {label = "ping", param_id = "delay_pingpong", format = percent, effect = "delay"},
       {label = "reverb", selectable = false, bypass = "reverb"},
       {label = "mix", param_id = "reverb_mix", format = percent, effect = "reverb"},
       {label = "size", param_id = "reverb_size", format = "%.2f", effect = "reverb"},
@@ -59,6 +72,13 @@ return function(S)
     error("FX_PAGE has no row for " .. tostring(param_id))
   end
 
+  -- The param a row shows and E3 turns: its synced one while the delay
+  -- plays a division
+  local function row_param_id(row)
+    if row.synced and S.lib.delay_sync.playing() then return row.synced end
+    return row.param_id
+  end
+
   local function draw_fx_row(row, y, selected, value_right)
     if not row.param_id then
       screen.level(S.FX_PAGE.section_level)
@@ -73,7 +93,9 @@ return function(S)
     end
     local raw = params:get(row.param_id)
     local value
-    if type(row.format) == "function" then
+    if row_param_id(row) ~= row.param_id then
+      value = S.lib.delay_sync.label()
+    elseif type(row.format) == "function" then
       value = row.format(raw)
     elseif row.format then
       value = string.format(row.format, raw)
@@ -113,7 +135,7 @@ return function(S)
   local function fx_hints(alt_held)
     local record = S.registry.pages[UI_PAGES.index.FX]
     if alt_held then
-      local param_id = cursor_row().param_id
+      local param_id = cursor_row().param_id and row_param_id(cursor_row())
       local fine = (param_id and params:lookup_param(param_id).controlspec) and " E3:fine" or ""
       return S.lib.ui_alt.k2_hint(record) .. fine
     end
@@ -127,7 +149,14 @@ return function(S)
     if n == 2 then
       S.fx_row = FL.move(S.FX_PAGE.rows, S.fx_row, d)
     elseif n == 3 then
-      enc_param_delta(n, cursor_row().param_id, d)
+      local row = cursor_row()
+      if row.binary then
+        -- on with a turn up, off with a turn down (a toggle's delta would
+        -- flip it either way)
+        set_binary_param(row.param_id, d > 0 and 1 or 0)
+      else
+        enc_param_delta(n, row_param_id(row), d)
+      end
     end
   end
 
@@ -204,9 +233,21 @@ return function(S)
       {name = "filter freq", setup = function()
         params:set("filter_freq", 20000); S.fx_row = row_of("filter_freq")
       end},
-      -- both section rows in view (the cursor on delay time), each with byp
+      -- both bypassed: the delay's section row with byp in view (the cursor
+      -- on delay time), then the reverb's (on reverb mix); the delay's five
+      -- rows keep the two out of one view
       {name = "delay and reverb bypassed", setup = function()
         params:set("delay_bypass", 1); params:set("reverb_bypass", 1); params:set("delay_mix", 1)
+        S.fx_row = row_of("delay_time")
+      end},
+      {name = "reverb bypassed in view", setup = function()
+        params:set("delay_bypass", 1); params:set("reverb_bypass", 1); params:set("reverb_mix", 1)
+        S.fx_row = row_of("reverb_mix")
+      end},
+      -- the time row's widest label: 1 bar at 30 BPM, halved twice
+      {name = "delay synced and halved", setup = function()
+        params:set("delay_sync", 1); params:set("delay_division", #S.constants.DIVISIONS.names)
+        params:set("clock_tempo", 30)
         S.fx_row = row_of("delay_time")
       end},
       -- ALT's widest hint, on a row that turns finely: K2:cancel E3:fine

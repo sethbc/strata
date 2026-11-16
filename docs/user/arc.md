@@ -137,7 +137,7 @@ The button runs the page's main action, on the pages that give it one (each page
 - MAIN: bright rings (level 15/12) for a running voice, dim (4/3) for a stopped one; ring 1 (density) always bright. The ALT rings at 12 for a running voice, 3 for a stopped one
 - VOICE: the cursor row's ring at 15, the others at 12
 - SEQ: step and level rings at 15, tempo and voice rings at 12; the step editor's at 15 while set, 4 while off
-- FX: level 12; frequency and delay time follow their exponential curve
+- FX: level 12; frequency and delay time follow their exponential curve. While the delay is synced to the tempo, ring 3 picks its division instead (20 ticks per division) and shows the division's place
 - IO: level 12
 - LFO: depth rings bright (15) while the LFO runs, dim (4) when off; ring 4 at 12
 - MOD: level 12; a routing's depth ring dim (4) while the routing is off or misses its source or destination

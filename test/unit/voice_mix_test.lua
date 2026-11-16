@@ -166,8 +166,10 @@ test("the bypass params are stored in PSETs and never in scenes", function()
     if param.id == "strata_fx" then group_index = index end
   end
   last_index = group_index + params:get("strata_fx")
-  assert_equal(params.params[last_index - 1].id, "delay_bypass", "delay bypass in the fx group")
-  assert_equal(params.params[last_index].id, "reverb_bypass", "reverb bypass last in the fx group")
+  -- the first registered record (records included later, 3.7's delay sync, follow it)
+  local bypass_index = params.lookup["delay_bypass"]
+  assert_true(bypass_index > group_index and bypass_index < last_index, "delay bypass in the fx group")
+  assert_equal(params.params[bypass_index + 1].id, "reverb_bypass", "reverb bypass after it in the fx group")
   -- a PSET keeps them
   local pset_path = context.data_dir .. "bypass.pset"
   params:set("delay_bypass", 1)

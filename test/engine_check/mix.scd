@@ -587,7 +587,7 @@ if (hasStage.not) {
     checkGroupOrder.value;
 
     // Steady states: lowpass 1 kHz res 0.9, sends 0.6 and 0.3, delay and reverb mixes 0.5 and 0.4
-    command.(\setDelay, 0.25, 0.4, 0.5);
+    command.(\setDelay, 0.25, 0.4, 0.5, 0);
     command.(\setReverb, 0.4, 0.8, 0.5);
     server.sync; 0.2.wait;
     {
@@ -621,7 +621,7 @@ if (hasStage.not) {
 
     // Bypassed: the filter mix back to 0 (and the delay and reverb at their
     // defaults, their mixes broadcast), the lags settled
-    command.(\setDelay, 0.375, 0.4, 0.0);
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
     command.(\setReverb, 0.3, 0.8, 0.5);
     server.sync; 1.0.wait;
     {
@@ -673,7 +673,7 @@ if (hasStage.not) {
     checkBadStage.value;
 
     tone.free;
-    command.(\setDelay, 0.375, 0.4, 0.0);
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
     command.(\setReverb, 0.3, 0.8, 0.5);
     [\filterType, 0, \filterFreq, 5000, \filterRes, 0.5, \filterMix, 0, \delaySend, 1, \reverbSend, 1].pairsDo({ arg name, value;
         command.(\setGrainParam, voice, name, value) });

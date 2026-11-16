@@ -520,9 +520,21 @@ return function(S)
       engine_param_value("filter_type") - 1, engine_param_value("filter_mix"))
   end
 
+  -- The delay's one sender (3.7): its time is S.lib.delay_sync's (the
+  -- division at the tempo while synced, else delay_time), its fourth value
+  -- the ping-pong amount. While a scene applies (S.scene_recall_in_progress)
+  -- it only marks itself due: the scene's other delay settings are not all
+  -- in place yet, so the next LFO step sends it once with every one of
+  -- them, never a mix of old and new
   local function send_delay_to_engine()
-    engine.setDelay(engine_param_value("delay_time"), engine_param_value("delay_feedback"),
-      engine_param_value("delay_mix"))
+    if S.scene_recall_in_progress then
+      S.lib.delay_sync.resend()
+      return
+    end
+    local time = S.lib.delay_sync.time()
+    engine.setDelay(time, engine_param_value("delay_feedback"), engine_param_value("delay_mix"),
+      engine_param_value("delay_pingpong"))
+    S.lib.delay_sync.sent(time)
   end
 
   local function send_reverb_to_engine()

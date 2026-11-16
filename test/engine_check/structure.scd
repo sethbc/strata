@@ -335,7 +335,7 @@ allDefs.do({ arg name;
 check.(formatOf.(\voiceOn) == "iffffff", "voiceOn signature is iffffff (C1)");
 check.(formatOf.(\retrigger) == "if", "retrigger signature is if (voice, velocity)");
 check.(formatOf.(\setFilter) == "ffif", "setFilter signature is ffif");
-check.(formatOf.(\setDelay) == "fff", "setDelay signature is fff");
+check.(formatOf.(\setDelay) == "ffff", "setDelay signature is ffff");
 check.(formatOf.(\setGrainSource) == "ii", "setGrainSource ii");
 check.(formatOf.(\loadBuffer) == "isf" and: { formatOf.(\recordBuffer) == "ifffififf" }
     and: { formatOf.(\clearBuffer) == "i" } and: { formatOf.(\saveBuffer) == "isff" }

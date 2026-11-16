@@ -48,8 +48,8 @@ test("FX page rows stay apart and inside 128x64 at every row and value", functio
   for _, row in ipairs(all_rows) do
     if row.selectable ~= false then rows[#rows + 1] = row end
   end
-  assert_equal(#rows, 12, "density, drift, 4 filter, 3 delay, 3 reverb rows")
-  assert_equal(#all_rows, 16, "plus four section labels")
+  assert_equal(#rows, 14, "density, drift, 4 filter, 5 delay, 3 reverb rows")
+  assert_equal(#all_rows, 18, "plus four section labels")
   local function screen_has(text)
     for _, entry in ipairs(context.screen.texts) do
       if entry.text == text then return true end
@@ -102,8 +102,10 @@ test("FX section labels take no cursor stop", function()
     assert_true(entry ~= nil, name .. " label drawn")
     assert_equal(entry.level, 2, name .. " label at level 2")
   end
-  S.fx_row = row_index("delay_time"); context.screen.clear(); redraw()
-  for _, name in ipairs({ "delay", "reverb" }) do
+  -- the delay's five rows put the reverb's label out of view from delay time
+  for _, each in ipairs({ { "delay", "delay_time" }, { "reverb", "reverb_mix" } }) do
+    local name = each[1]
+    S.fx_row = row_index(each[2]); context.screen.clear(); redraw()
     local entry = text_with_level(context, name)
     assert_true(entry ~= nil, name .. " label drawn")
     assert_equal(entry.level, 2, name .. " label at level 2")
@@ -171,7 +173,7 @@ end)
 test("a bypassed row shows byp and keeps its mix", function()
   local context = load_strata(); show_page("FX")
   local S = local_value("S")
-  S.fx_row = row_index("delay_time")  -- the view shows the delay and reverb labels
+  S.fx_row = row_index("delay_time")  -- the view shows the delay's label
   local function byp_entries()
     local found = {}
     for _, entry in ipairs(context.screen.texts) do
@@ -193,11 +195,13 @@ test("a bypassed row shows byp and keeps its mix", function()
   assert_equal(found[1].y, label_y("delay"), "on the delay's section row")
   assert_equal(found[1].level, 4, "at level 4")
   assert_true(h.screen_shows(context, "45%"), "the delay mix still shows its value")
+  -- the delay's five rows (3.7) keep the reverb's label out of this view
   params:set("reverb_bypass", 1)
+  S.fx_row = row_index("reverb_mix")
   context.screen.clear(); redraw()
   found = byp_entries()
-  assert_equal(#found, 2, "both rows show byp")
-  assert_equal(found[2].y, label_y("reverb"), "the second on the reverb's section row")
+  assert_equal(#found, 1, "the reverb row shows byp")
+  assert_equal(found[1].y, label_y("reverb"), "on the reverb's section row")
   assert_screen_layout(context, "FX delay and reverb bypassed")
   -- a mix of 0 is not a bypass
   params:set("delay_bypass", 0); params:set("reverb_bypass", 0); params:set("delay_mix", 0)
@@ -239,17 +243,21 @@ test("FX layout states include the delay and reverb bypassed", function()
   local context = load_strata(); show_page("FX")
   local S = local_value("S")
   local record = S.registry.pages[S.constants.UI_PAGES.index.FX]
-  local state
-  for _, each in ipairs(record.layout_states) do
-    if each.name == "delay and reverb bypassed" then state = each end
+  -- each section's byp in view: the delay's five rows (3.7) keep the two
+  -- section rows out of one view
+  for _, name in ipairs({ "delay and reverb bypassed", "reverb bypassed in view" }) do
+    local state
+    for _, each in ipairs(record.layout_states) do
+      if each.name == name then state = each end
+    end
+    assert_true(state ~= nil, "the FX record has the state " .. name)
+    state.setup(context)
+    context.screen.clear(); redraw()
+    local count = 0
+    for _, entry in ipairs(context.screen.texts) do if entry.text == "byp" then count = count + 1 end end
+    assert_equal(count, 1, name .. ": byp on the section row in view")
+    assert_screen_layout(context, "FX " .. state.name)
   end
-  assert_true(state ~= nil, "the FX record has the state")
-  state.setup(context)
-  context.screen.clear(); redraw()
-  local count = 0
-  for _, entry in ipairs(context.screen.texts) do if entry.text == "byp" then count = count + 1 end end
-  assert_equal(count, 2, "byp on both rows")
-  assert_screen_layout(context, "FX " .. state.name)
 end)
 
 test("FX layout states find their rows by param id, wherever the rows sit (#114)", function()
@@ -544,6 +552,83 @@ test("K2's release hint stays after K1 comes up first (#557)", function()
   assert_equal(shown(context), "K2:cancel", "held past the hold time: letting go cancels")
   key(2, 0)
   assert_equal(shown(context), plain, "K2 up: the plain hints")
+end)
+
+-- 3.7 (design §6, rulings 15 and 34): the delay's rows time, fdbk, mix,
+-- sync and ping; while synced the time row shows and turns the division
+test("the delay's time row shows and edits the division while synced; K3 is still the bypass", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  local S = local_value("S")
+  local labels = {}
+  for index = row_index("delay_time"), row_index("delay_time") + 4 do labels[#labels + 1] = S.FX_PAGE.rows[index].label end
+  assert_equal(table.concat(labels, " "), "time fdbk mix sync ping", "the delay section's rows")
+  assert_equal(S.FX_PAGE.rows[row_index("delay_pingpong")].effect, "delay")
+  -- sync: E3 turns it on and off
+  select_fx_row("delay_sync")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "off"), "sync shows off")
+  enc(3, 1); assert_equal(params:get("delay_sync"), 1, "E3 up turns sync on")
+  enc(3, 1); assert_equal(params:get("delay_sync"), 1, "and a further turn up keeps it on")
+  enc(3, -1); assert_equal(params:get("delay_sync"), 0, "E3 down turns it off")
+  enc(3, 1)
+  assert_equal(shown(context), "K3:delay bypass", "K3 on the sync row is the delay's bypass")
+  key(3, 1); key(3, 0)
+  assert_equal(params:get("delay_bypass"), 1, "K3 on the sync row bypasses the delay")
+  assert_equal(params:get("delay_sync"), 1, "and leaves sync")
+  key(3, 1); key(3, 0)
+  assert_equal(params:get("delay_bypass"), 0)
+  -- time: the division while synced
+  select_fx_row("delay_time")
+  local time = params:get("delay_time")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "1/8D"), "the time row shows the division")
+  enc(3, 1)
+  assert_equal(params:get("delay_division"), 8, "E3 on the time row turns the division")
+  assert_near(params:get("delay_time"), time, 1e-9, "and leaves delay_time")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "1/4T"), "the new division shows")
+  key(1, 1)
+  assert_equal(shown(context), "K2:rand", "ALT offers no fine turn for a division")
+  key(1, 0)
+  key(3, 1); key(3, 0)
+  assert_equal(params:get("delay_bypass"), 1, "K3 on the time row is still the bypass")
+  key(3, 1); key(3, 0)
+  -- halved: the division and what plays
+  params:set("delay_division", 12); params:set("clock_tempo", 60)
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "1 bar>1/2"), "a halved division shows what plays")
+  -- sync off: the time row is delay_time again
+  params:set("delay_sync", 0)
+  enc(3, 1)
+  assert_true(params:get("delay_time") > time, "unsynced, E3 turns delay_time")
+  assert_equal(params:get("delay_division"), 12, "and leaves the division")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, string.format("%.3f s", params:get("delay_time"))), "the time in seconds")
+  -- ping: a percent
+  params:set("delay_pingpong", 0.37)
+  select_fx_row("delay_pingpong")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "37%"), "ping-pong in percent")
+  enc(3, 1)
+  assert_near(params:get("delay_pingpong"), 0.38, 1e-6, "E3 turns ping-pong")
+end)
+
+test("FX lays out with the delay synced and halved", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  local S = local_value("S")
+  local record = S.registry.pages[S.constants.UI_PAGES.index.FX]
+  local state
+  for _, each in ipairs(record.layout_states) do
+    if each.name == "delay synced and halved" then state = each end
+  end
+  assert_true(state ~= nil, "the FX record has the state")
+  state.setup(context)
+  assert_equal(S.FX_PAGE.rows[S.fx_row].param_id, "delay_time", "the cursor on the time row")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "1 bar>1/4"), "the widest label shows")
+  assert_screen_layout(context, "FX " .. state.name)
 end)
 
 end

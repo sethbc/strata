@@ -307,7 +307,7 @@ test.("record: a voice source records its grain output, through a source switch"
 test.("record: pre-master equals masterSum, with the delay and reverb bypassed and not", {
     var sumBus = Bus.audio(server, 2), diffBus = Bus.control(server, 2), sum, probe, diff = Array.newClear(2);
     var label = "record: pre-master equals masterSum, with the delay and reverb bypassed and not";
-    h.command(\setDelay, 0.05, 0.3, 0.5);
+    h.command(\setDelay, 0.05, 0.3, 0.5, 0);
     h.command(\setReverb, 0.5, 0.5, 0.5);
     h.command(\voiceOn, 2, 220.0, 0.5, 0.0, 0.1, 20.0, 1.0);
     settle.(0.2);
@@ -324,7 +324,7 @@ test.("record: pre-master equals masterSum, with the delay and reverb bypassed a
     probe.free; sum.free; server.sync; sumBus.free; diffBus.free;
     check.(state[\preMasterBus].notNil and: { diff.every({ arg each; (each[0] < 1e-5) and: { each[1] > 0.001 } }) },
         "% (differences %)".format(label, diff.collect(_.round(1e-6))));
-    h.command(\setDelay, 0.01, 0, 0);
+    h.command(\setDelay, 0.01, 0, 0, 0);
     h.command(\setReverb, 0, 0.5, 0.5);
 });
 test.("record: post-master equals the master's output", {

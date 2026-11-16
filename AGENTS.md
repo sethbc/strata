@@ -99,6 +99,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/mpe.lua` | `mpe` | `docs/notes/lua/mpe.md` | mpe_test.lua |
 | `lib/expression.lua` | `expression` | `docs/notes/lua/expression.md` | expression_test.lua |
 | `lib/io/<name>.lua`: `rig`, `ports` (before `lib/midi_in.lua`), `actions`, `keyed`, `targets`, `midi_out`, `crow`, `ii`, `jf`, `wsyn`, `wtape`, `er301`, `txo`, `nb`, `controllers`, `remote`, `osc`, `tape` | `io_<name>` | `docs/notes/lua/io/<name>.md` | io_<name>_test.lua |
+| `lib/delay_sync.lua` | `delay_sync` | `docs/notes/lua/delay-sync.md` | delay_sync_test.lua |
 | `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
 | `lib/ui/params.lua`, `lib/ui/header.lua`, `lib/ui/flash.lua`, `lib/ui/text.lua`, `lib/ui/keys.lua`, `lib/ui/menu_watch.lua` | `ui_params`, `ui_header`, `ui_flash`, `ui_text`, `ui_keys`, `ui_menu_watch` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_header_test.lua, ui_pages_test.lua |
 | `lib/ui/field_list.lua` | `ui_field_list` | `docs/notes/lua/ui-core.md` | ui_field_list_test.lua |
@@ -143,7 +144,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 | `engine.setMasterDrift(amount)` | `"f"` | Global tape drift |
 | `engine.setReverb(mix, size, damp)` | `"fff"` | Reverb mix 0-1, size, damping. `FreeVerb2` on standard, the FDN on high. Kept while bypassed |
 | `engine.setFilter(freq, res, type, mix)` | `"ffif"` | Master filter, on all three of its instances (dry, delay send, reverb send): 20-20000 Hz, res 0-1, type 0 LP / 1 HP / 2 BP, mix 0 = bypass |
-| `engine.setDelay(time, feedback, mix)` | `"fff"` | Master delay: 0.01-2 s, feedback 0-0.95, mix 0-1 (0 = dry, the node keeps running). Kept while bypassed |
+| `engine.setDelay(time, feedback, mix, pingPong)` | `"ffff"` | Master delay: 0.01-2.7 s, feedback 0-0.95, mix 0-1 (0 = dry, the node keeps running), pingPong 0-1. Kept while bypassed |
 | `engine.setBypass(effect, bypassed)` | `"ii"` | Effect 0 delay / 1 reverb (others ignored), bypassed 0 or 1: frees the node after its fade and re-creates it in its place when lifted. Only this frees an effect |
 | `engine.setModSource(voice, slot, sourceVoice)` | `"iii"` | Crossmod source for slot 1-3 (-1 = none → `silentBus`, 0-6 = voice). The three crossmod commands ignore any other slot |
 | `engine.setModAmpAmt(voice, slot, amount)` | `"iif"` | Crossmod amplitude depth (-2 to 2) |

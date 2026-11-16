@@ -144,14 +144,25 @@
                 filterType.round.clip(0, 2), mix.lag(0.05).clip(0, 1)));
         }).add;
 
-        // Stereo delay with feedback (LocalIn/LocalOut around DelayC, max 2 s),
-        // on the filtered delay send (through liftFade: fadeIn 1 on a node a
-        // bypass lift creates; the feedback path is not faded). It returns
-        // the delayed signal only, at its mix (lagged as fxMixBus's readers:
-        // m_d D). The time lag avoids zipper noise when the time changes.
+        // Stereo delay with feedback (LocalIn/LocalOut around DelayC, max
+        // 2.7 s: two lines of 2^17 samples at 48 kHz, 1 MB, the size a 2 s
+        // line already took), on the filtered delay send (through liftFade:
+        // fadeIn 1 on a node a bypass lift creates; the feedback path is not
+        // faded). It returns the delayed signal only, at its mix (lagged as
+        // fxMixBus's readers: m_d D). The time lag avoids zipper noise when
+        // the time changes. pingPong (0-1, lagged 50 ms) crossfades the
+        // lines' inputs linearly: at 0 each line takes its own channel and
+        // its own feedback (3.6's graph, exactly); at 1 the left line takes
+        // both channels and the right line's feedback, the right line only
+        // the left's, so the repeats alternate sides.
         SynthDef(\strataDelay, {
-            arg in, out, time=0.375, feedback=0.4, mix=0, fadeIn=0;
-            var delayed = DelayC.ar((In.ar(in, 2) * this.liftFade(fadeIn)) + LocalIn.ar(2), 2, time.lag(0.1).clip(0.01, 2));
+            arg in, out, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0;
+            var input = In.ar(in, 2) * this.liftFade(fadeIn), returned = LocalIn.ar(2);
+            var cross = pingPong.clip(0, 1).lag(0.05), keep = 1 - cross;
+            var delayed = DelayC.ar([
+                input[0] + (input[1] * cross) + (returned[0] * keep) + (returned[1] * cross),
+                (input[1] * keep) + (returned[1] * keep) + (returned[0] * cross)
+            ], 2.7, time.lag(0.1).clip(0.01, 2.7));
             LocalOut.ar(delayed * feedback.clip(0, 0.95));
             Out.ar(out, delayed * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
@@ -263,12 +274,12 @@
             });
         });
 
-        // msg: time (s), feedback, mix. Kept for a bypassed delay's next
-        // node; while bypassed the mix sent and broadcast stays 0
-        this.addCommand(\setDelay, "fff", { arg msg;
-            this.keepEffectControls(\delay, (time: msg[1], feedback: msg[2], mix: msg[3]));
+        // msg: time (s), feedback, mix, pingPong. Kept for a bypassed
+        // delay's next node; while bypassed the mix sent and broadcast stays 0
+        this.addCommand(\setDelay, "ffff", { arg msg;
+            this.keepEffectControls(\delay, (time: msg[1], feedback: msg[2], mix: msg[3], pingPong: msg[4]));
             context.server.makeBundle(nil, {
-                this.setSynth(\delay, \time, msg[1], \feedback, msg[2], \mix, msg[3] * this.effectLive(\delay));
+                this.setSynth(\delay, \time, msg[1], \feedback, msg[2], \mix, msg[3] * this.effectLive(\delay), \pingPong, msg[4]);
                 this.broadcastFxMix;
             });
         });
@@ -355,7 +366,7 @@
         var controls = areaState[\effects][\controls][\delay];
         synths[\delay] = Synth(\strataDelay, [\in, this.mixBus(\delaySendPost), \out, delayBus,
             \time, controls[\time], \feedback, controls[\feedback], \mix, mix ? controls[\mix],
-            \fadeIn, fadeIn], target, addAction);
+            \pingPong, controls[\pingPong], \fadeIn, fadeIn], target, addAction);
     }
 
     // The reverb node for the tier (high: the FDN), on the filtered reverb
@@ -384,7 +395,7 @@
         var state = areaState[\effects];
         // the kept controls start at the SynthDefs' defaults (the Lua params'
         // defaults: the script never bangs its params)
-        state[\controls][\delay] = this.effectDefaults(\strataDelay, [\time, \feedback, \mix]);
+        state[\controls][\delay] = this.effectDefaults(\strataDelay, [\time, \feedback, \mix, \pingPong]);
         state[\controls][\reverb] = this.effectDefaults(\strataReverb, [\mix, \size, \damp]);
         this.broadcastFxMix;
 
