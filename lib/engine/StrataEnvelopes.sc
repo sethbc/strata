@@ -84,10 +84,9 @@
     }
 
     // A route's node from its place (its controls), at the tail of
-    // fastModGroup, watched until it ends; a fresh node: not released
+    // fastModGroup, watched until it ends
     startFastEnv { arg route, place;
         var synth = Synth(\strataEnvelope, place[\controls], areaState[\modulation][\fastModGroup], \addToTail);
-        place[\released] = false;
         ^this.areaCall(\watchFastEnv, route, synth, place[\channel])
     }
 
@@ -102,7 +101,8 @@
 
     // A route's node ended. Still its place's and running: its release ended
     // just as setFastEnv re-gated it, so it starts again (a route is never
-    // left without its node). Its place's, released: the route has none now.
+    // left without its node). Its place's, not running (stopFastEnv
+    // released it): the route has none now.
     // Either way, or for a node no longer its route's, its channel goes to 0
     // unless another envelope node writes it now
     fastEnvEnded { arg route, synth;
@@ -150,7 +150,6 @@
         var place = areaState[\envelopes][\routes][route];
         if (place.notNil and: { place[\running] }) {
             place[\running] = false;
-            place[\released] = true;
             this.sendToSynth(place[\synth].setMsg(\gate, 0));
         };
     }
