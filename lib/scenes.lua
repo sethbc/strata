@@ -842,27 +842,45 @@ return function(S)
   -- S.scene_sequencer_next ("repeat" recalls nothing), nil without one
   local SEQUENCER_DRAW = {move = nil}
 
+  -- Whether the sequencer can play `slot` in a sequence `length` long:
+  -- inside it and holding a scene
+  local function slot_plays(slot, length)
+    return slot ~= nil and slot >= 1 and slot <= length and S.scenes[slot] ~= nil and S.scenes[slot].populated
+  end
+
   -- Draw the slot after the position from the populated slots of 1..length,
-  -- in order, by the three chances, and keep it with its move
+  -- in order, by the three chances, and keep it with its move. When the
+  -- position itself cannot play (past a shortened sequence, or emptied) no
+  -- pick is made, since a repeat of it could not play: 3.6's advance stands
+  -- in, the first slot holding a scene after the position (past the length,
+  -- from 1), a "next" move, with no random draw (1f's review)
   local function draw_next_scene(length)
+    local position = S.scene_sequencer_position
+    if not slot_plays(position, length) then
+      local from = position + 1
+      if from > length then from = 1 end
+      local slot = first_scene_from(from, length)
+      S.scene_sequencer_next, SEQUENCER_DRAW.move = slot, slot and "next" or nil
+      return
+    end
     local slots = {}
     for slot = 1, length do
-      if S.scenes[slot] and S.scenes[slot].populated then slots[#slots + 1] = slot end
+      if slot_plays(slot, length) then slots[#slots + 1] = slot end
     end
     local chances = {params:get("scene_chance_next"), params:get("scene_chance_previous"),
       params:get("scene_chance_random")}
-    S.scene_sequencer_next, SEQUENCER_DRAW.move = S.lib.chance.pick(S.scene_sequencer_position, slots, chances)
+    S.scene_sequencer_next, SEQUENCER_DRAW.move = S.lib.chance.pick(position, slots, chances)
   end
 
-  -- The kept slot while it can still play: inside the length and holding a
-  -- scene. A length or chance changed since the draw draws nothing; a kept
-  -- slot that can no longer play is drawn again, once (never inside a
-  -- recall's apply), so the grids light the slot the pass will recall. nil
-  -- without a kept slot
+  -- The kept slot while it can still play. A length or chance changed since
+  -- the draw draws nothing; a kept slot that can no longer play is drawn
+  -- again, once (never inside a recall's apply), so the grids light the
+  -- slot the pass will recall. Every slot draw_next_scene keeps can play,
+  -- so the next ask finds it kept and draws nothing. nil without a kept slot
   local function kept_next_scene(length)
     local kept = S.scene_sequencer_next
     if kept == nil then return nil end
-    if kept <= length and S.scenes[kept] and S.scenes[kept].populated then return kept end
+    if slot_plays(kept, length) then return kept end
     if S.scene_recall_in_progress then return nil end
     draw_next_scene(length)
     return S.scene_sequencer_next
