@@ -180,9 +180,10 @@ test("loop rows show in a buffer voice's section only", function()
     for slot = 1, S.constants.NUM_BUFFERS do
       params:set(prefix .. "_source", S.constants.SOURCE_SYNTH + slot)
       local outline = row_ids(voice_idx)
-      -- (3.7: then the slices option's row, lib/slices.lua)
+      -- (3.7: then the scan rows, lib/scan.lua, and the slices option's
+      -- row, lib/slices.lua, in their modules' include order)
       local expected = string.format("synth synth:%s_buf_pos synth:%s_buf_rate synth:%s_buf_scan "
-        .. "synth:%s_loop_start synth:%s_loop_length synth:%s_slices synth:%s_scan_mode synth:%s_follow grain ",  -- then 3.7's scan rows
+        .. "synth:%s_loop_start synth:%s_loop_length synth:%s_scan_mode synth:%s_follow synth:%s_slices grain ",
         prefix, prefix, prefix, prefix, prefix, prefix, prefix,
         prefix)
       assert_true(outline:find(expected, 1, true) == 1,
