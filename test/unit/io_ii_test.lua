@@ -193,15 +193,17 @@ local function fill(ii, n, from)
   return lines
 end
 
--- #710 (the controller's rulings 2 to 4): under sustained overload the lines
+-- #710 (the controller's rulings 2 to 5): under sustained overload the lines
 -- take turns. A line is a device and the port it addresses (its first
 -- argument) for a device whose commands address ports (the ER-301 and the
 -- TELEXo), else its device and command. From a refusal until the queue next
 -- empties, a line's first send in a step decides for its sends in that step,
--- one note's worth (open until its first admitted trigger, tr); it is
--- admitted only with fewer than its share of lines waiting and room for a
--- note (II.note_lines) for itself and for each line refused and served less
--- recently
+-- one note's worth: a port's note closes at its first admitted trigger (tr),
+-- a device-and-command line (play_note) at its first admitted send, and a
+-- note after an earlier send of its line (a re-pitch or a setting) needs
+-- room for a whole note or is refused whole. The decision admits only with
+-- fewer than its share of lines waiting and room for a note (II.note_lines)
+-- for itself and for each line refused and served less recently
 
 test("below 48 waiting, lines are sent in the order queued and none is refused", function()
   local context, S, ii = started()
