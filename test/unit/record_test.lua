@@ -781,4 +781,39 @@ test("recordBuffer carries the send time modulo 1000 (#565)", function()
   assert_equal(recording_calls(context)[1].args[9], 999.75, "a synced take's too")
 end)
 
+-- 3.7 (design §4.1): a replace take's start unbinds its slot and its end
+-- binds a fresh record; an overdub's end binds a take that starts as a
+-- copy of the file's record; a synced take keeps the clock's tempo at its
+-- start
+test("a take's binds: a replace take starts fresh, an overdub copies its file's record", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local told = {}
+  S.lib.samples.on_bind(function(slot) told[#told + 1] = slot end)
+  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 4))
+  S.lib.samples.set(3, "tempo", 120)
+  -- an overdub
+  params:set("record_feedback", 50)
+  record_buffer(3)
+  assert_equal(S.lib.samples.tempo(3), 120, "the file's record while the dub records")
+  context.polls.fire("recordState", record_state_value(1, 1, 3))
+  context.polls.fire("recordState", record_state_value(1, 2, 3))
+  assert_equal(table.concat(told, " "), "3 3", "the load's bind, the dub's end's")
+  assert_equal(S.buffers[3].path, scratch_take_path(3))
+  assert_equal(S.lib.samples.tempo(3), 120, "the take's copy")
+  S.lib.samples.set(3, "tempo", 90)
+  -- a replace take, synced
+  params:set("record_feedback", 0); params:set("record_sync", 2); params:set("clock_tempo", 110)
+  context.clock.run_for(1)
+  record_buffer(3)
+  assert_equal(#told, 3, "its start unbinds")
+  assert_equal(S.lib.samples.settings(3), nil, "no record while it records")
+  context.polls.fire("recordState", record_state_value(2, 1, 3))
+  wake_buffer_clock(context, 3)
+  context.polls.fire("recordState", record_state_value(2, 2, 3))
+  context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 2))
+  assert_equal(#told, 4, "its end binds")
+  assert_near(S.lib.samples.tempo(3), 110, 1e-9, "the clock's tempo, not the take before's 90")
+end)
+
 end

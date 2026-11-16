@@ -77,6 +77,25 @@ test("MIDI notes set pitch per source, start or retrigger the voice with velocit
   assert_near(params:get("v1_freq"), 220, 0.01)
 end)
 
+-- 3.7 (design §4.3): a buffer voice's note counts from its slot's file's
+-- key (S.lib.samples.rate_root); unset, from 60; an input voice from 60
+test("a buffer voice's MIDI note plays rate 1 at its file's key", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  load_buffer(1, "/tmp/keyed.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
+  params:set("v1_source", 2)
+  press(context, 1, 72)  -- each note pressed and let go: the next replaces it (latch)
+  assert_near(params:get("v1_buf_rate"), 2, 1e-9, "no key: 72 is rate 2")
+  assert_true(S.lib.samples.set(1, "key", 57))
+  press(context, 1, 69)
+  assert_near(params:get("v1_buf_rate"), 2, 1e-9, "key 57: 69 is rate 2")
+  press(context, 1, 57)
+  assert_near(params:get("v1_buf_rate"), 1, 1e-9, "key 57: 57 is rate 1")
+  params:set("v2_source", S.constants.SOURCE_INPUT)
+  context.midi.send(1, { type = "note_on", note = 72, vel = 100, ch = 2 })
+  assert_near(params:get("v2_grain_pitch"), 2, 1e-9, "an input voice: 72 is rate 2")
+end)
+
 test("MIDI note details: start order, exact pitch, clamping, ignored channels", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")

@@ -16,7 +16,7 @@
 
 ## Owns
 
-`lib/notes.lua` (`S.lib.notes`, 3.5, packages 0a and 1b, design §2, §6.4), included after `lib/matrix.lua`, with its table `NOTES` (`M.NOTES`): `file` (`"notes.data"`), `version` (1), `cut_seconds` (0.05), `sends_per_step` (16), `rate_root_note` (60: the note at rate 1), `rate_range` (`{0.25, 4}`), `note_range` (`{0, 127}`), `a4` (note 69 at 440 Hz: a frequency's note), `owners` (`midi`, `seq`), `expression_keys` (`bend`, `amp`, `position`, `size`, `main`: `noteExpression`'s order), `neutral` (`{1, 1, 0, 0, 0}`), `expression_ranges` (bend 0.0625-16, amp 0-2, the rest -1..1: the engine's clips) and `cap` (the note cap's key, name and VOICE section), `envelope` (each voice's default `{attack, release}`), `envelope_ranges`, `envelope_keys` and `envelope_engine` (the engine's control names).
+`lib/notes.lua` (`S.lib.notes`, 3.5, packages 0a and 1b, design §2, §6.4), included after `lib/matrix.lua`, with its table `NOTES` (`M.NOTES`): `file` (`"notes.data"`), `version` (1), `cut_seconds` (0.05), `sends_per_step` (16), `rate_root_note` (60: the note at rate 1; 3.7: `note_values` and `own_pitch` read `S.lib.samples.rate_root(voice)`, a buffer voice's file's key when set), `rate_range` (`{0.25, 4}`), `note_range` (`{0, 127}`), `a4` (note 69 at 440 Hz: a frequency's note), `owners` (`midi`, `seq`), `expression_keys` (`bend`, `amp`, `position`, `size`, `main`: `noteExpression`'s order), `neutral` (`{1, 1, 0, 0, 0}`), `expression_ranges` (bend 0.0625-16, amp 0-2, the rest -1..1: the engine's clips) and `cap` (the note cap's key, name and VOICE section), `envelope` (each voice's default `{attack, release}`), `envelope_ranges`, `envelope_keys` and `envelope_engine` (the engine's control names).
 
 ### The model
 

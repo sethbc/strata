@@ -17,6 +17,9 @@ return function(S)
   S.buffer_record_clocks = {}
   -- per slot, while a take records: what S.lib.record.state reports
   local takes = {}
+  -- per slot: the clock's tempo at the start of its newest recording made
+  -- with record_sync on (3.7: the take's tempo once it ends), else nil
+  local synced_tempos = {}
 
   -- Cancel the slot's recording timer, finishing fallback or check notice, if any
   function M.cancel_timer(slot)
@@ -182,6 +185,8 @@ return function(S)
       -- however long the command waits for a busy sclang (#565)
       engine.recordBuffer(slot - 1, seconds, params:get("record_level"), feedback, params:get("record_source") - 1,
         threshold, loop and 1 or 0, delay, util.time() % 1000)
+      synced_tempos[slot] = params:get("record_sync") > 1
+        and S.lib.samples.SAMPLES.seconds_per_minute / S.lib.params_setup.beat_seconds_now() or nil
       buffer.records_sent = buffer.records_sent + 1
       local armed = delay > 0 or threshold > 0
       takes[slot] = {number = buffer.records_sent, kind = playable and "playable" or "take",
@@ -206,6 +211,15 @@ return function(S)
       end
     end
     S.lib.buffers.display_changed()
+  end
+
+  -- The clock's tempo at the start of the slot's newest recording when it
+  -- was made with record_sync on, once: the take that settles takes it
+  -- (lib/buffers.lua's confirm_buffer_audio, the "ended" report above)
+  function M.synced_tempo(slot)
+    local tempo = synced_tempos[slot]
+    synced_tempos[slot] = nil
+    return tempo
   end
 
   -- What the slot is recording: nil when idle, else
@@ -286,6 +300,12 @@ return function(S)
         buffer.loaded = buffer.seconds > 0
         set_buffer_file_param(slot, _path.audio)
         S.lib.waveforms.stale(slot)
+        -- 3.7: a take now, its settings a copy of the file's it was
+        -- recorded over (a synced one's tempo the clock's at its start)
+        S.lib.samples.take_from_file(slot)
+        S.lib.samples.bind(slot)
+        local tempo = M.synced_tempo(slot)
+        if tempo then S.lib.samples.set(slot, "tempo", tempo) end
       else
         if not buffer.finishing then
           M.cancel_timer(slot)
@@ -326,6 +346,7 @@ return function(S)
   S.register_cleanup(S.constants.CLEANUP_ORDER.record, function()
     if record_poll then record_poll:stop() end
     takes = {}
+    synced_tempos = {}
   end)
 
   -- The tests reach finish_buffer_take (and BUFFER_SETTLE, its upvalue) here

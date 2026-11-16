@@ -216,7 +216,6 @@ end
 sync_check.PENDING_COMMANDS = {
   "noteRegion",
   "syncScan",
-  "setSlotGain",
   "analyzeBuffer",
   "setFastEnv",
   "stopFastEnv",

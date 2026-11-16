@@ -1,0 +1,475 @@
+-- test/unit/samples_test.lua
+-- A file's settings (3.7, design §4, decision 10): lib/samples.lua's store
+-- (samples.data, a take's record in buffers.data), the binds, the key's
+-- pitch, the normalize gain and the tempo
+-- Run alone: lua test/run.lua samples
+
+return function(h)
+local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
+local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
+local wake_buffer_clock, write_text, file_text = h.wake_buffer_clock, h.write_text, h.file_text
+
+local function samples() return local_value("S").lib.samples end
+
+-- The engine's bufferState report of the slot's newest load, holding seconds
+local function report(context, slot, seconds)
+  local S = local_value("S")
+  context.polls.fire("bufferState", context.polls.buffer_state_value(slot, S.buffers[slot].loads_sent, seconds))
+end
+
+-- Load path into the slot (from start) and let it take effect with seconds of
+-- audio: over audio, the engine reports the load's 0 s first
+local function settle_load(context, slot, path, seconds, start)
+  local S = local_value("S")
+  load_buffer(slot, path, start)
+  if S.buffers[slot].awaiting_zero then report(context, slot, 0) end
+  report(context, slot, seconds)
+  assert_equal(S.lib.buffers.status(slot), "loaded", "slot " .. slot .. " holds " .. path)
+end
+
+-- A replace take of the slot, recorded and reported with seconds of audio
+local function settle_take(context, slot, seconds)
+  params:set("record_feedback", 0); params:set("record_loop", 1)
+  params:set("record_duration", seconds)
+  record_buffer(slot)
+  wake_buffer_clock(context, slot)
+  report(context, slot, seconds)
+  assert_equal(local_value("S").buffers[slot].name, "take " .. slot)
+end
+
+local function record_state_value(number, state, slot) return ((number * 4) + state) * 8 + (slot - 1) end
+
+-- An overdub of the slot that records and ends
+local function overdub(context, slot)
+  local S = local_value("S")
+  params:set("record_feedback", 50)
+  record_buffer(slot)
+  local number = S.buffers[slot].records_sent
+  context.polls.fire("recordState", record_state_value(number, 1, slot))
+  context.polls.fire("recordState", record_state_value(number, 2, slot))
+  params:set("record_feedback", 0)
+end
+
+-- Write the slot's peaks file as the engine does (frames at 48 kHz)
+local function write_peaks(slot, seconds, largest)
+  local folder = local_value("S").lib.scenes.scene_data_dir
+  util.make_dir(folder)
+  local parts = {}
+  for index = 1, 64 do parts[index] = string.format("%.3f", index == 10 and largest or largest / 2) end
+  write_text(folder .. "buf" .. slot .. ".peaks", string.format("strata-peaks 1\nslot %d\nframes %d\nrate 48000\n"
+    .. "generation 1\npeaks %s\n", slot, math.floor(seconds * 48000), table.concat(parts, " ")))
+end
+
+local function tick(context, ticks)
+  context.clock.run_for((ticks or 2) / local_value("UI_PAGES").FRAMES_PER_SECOND + 0.001)
+end
+
+local function gains(context)
+  local list = {}
+  for _, call in ipairs(context.calls_named("setSlotGain")) do list[#list + 1] = call.args end
+  return list
+end
+
+-- The grain param name's values sent to engine voice since the last clear
+local function grain_values(context, engine_voice, name)
+  local list = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[1] == engine_voice and call.args[2] == name then list[#list + 1] = call.args[3] end
+  end
+  return list
+end
+
+local function samples_file(context)
+  return context.tab.load(context.data_dir .. "strata/samples.data")
+end
+
+test("a file's settings come back when it is loaded into another slot", function()
+  local context = load_strata(); finish_startup(context)
+  local file = context.audio_dir .. "a.wav"
+  settle_load(context, 1, file, 8)
+  assert_true(samples().set(1, "tempo", 120)); assert_true(samples().set(1, "key", 57))
+  assert_true(samples().set(1, "markers", { 0, 24000 }))
+  clear_buffer(1)
+  assert_equal(samples().settings(1), nil, "a cleared slot has no record")
+  settle_load(context, 5, file, 8)
+  local record = samples().settings(5)
+  assert_equal(record.tempo, 120); assert_equal(record.key, 57)
+  assert_equal(#record.markers, 2); assert_equal(record.markers[1], 0); assert_equal(record.markers[2], 24000)
+  context.clock.run_for(0.11)  -- the write waits 0.1 s
+  local saved = samples_file(context)
+  assert_equal(saved.version, 1); assert_equal(#saved.files, 1)
+  assert_equal(saved.files[1].path, file); assert_equal(saved.files[1].start, 0)
+  assert_equal(saved.files[1].settings.tempo, 120)
+  -- and in the next session
+  cleanup()
+  local again = load_strata({ data_subdir = context.data_dir:match("([^/]+)/$") }); finish_startup(again)
+  settle_load(again, 2, file, 8)
+  assert_equal(samples().settings(2).key, 57, "remembered across sessions")
+end)
+
+test("a start point is part of the key", function()
+  local context = load_strata(); finish_startup(context)
+  local file = context.audio_dir .. "long.wav"
+  context.audio.register(file, { channels = 2, frames = 48000 * 60, rate = 48000 })
+  settle_load(context, 1, file, 16)
+  samples().set(1, "tempo", 120)
+  settle_load(context, 2, file, 16, 2)
+  assert_equal(samples().settings(2).tempo, nil, "from 2 s: another record")
+  samples().set(2, "tempo", 90)
+  clear_buffer(1); settle_load(context, 1, file, 16)
+  assert_equal(samples().tempo(1), 120, "from 0 s: its own")
+  assert_equal(samples().tempo(2), 90)
+end)
+
+test("a take's settings stay with its slot until it is cleared or recorded over", function()
+  local subdir = "samples-take-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  settle_take(context, 2, 4)
+  assert_true(samples().set(2, "tempo", 100))
+  settle_load(context, 3, context.audio_dir .. "other.wav", 4)
+  clear_buffer(3)
+  assert_equal(samples().tempo(2), 100, "other slots' loads and clears leave it")
+  util.make_dir(context.audio_dir .. "strata/scratch/")
+  io.open(scratch_take_path(2), "w"):close()  -- the engine wrote the take
+  cleanup()
+  local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.settings[2].tempo, 100, "kept in buffers.data")
+  assert_equal(saved.settings[1], false, "a slot without a take's record")
+  local samples_saved = samples_file(context)
+  assert_equal(#samples_saved.files, 0, "a take is not a file's entry")
+  -- restored with its take
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  report(context, 2, 4)
+  assert_equal(samples().tempo(2), 100, "the restored take's record")
+  -- recorded over by a replace take: dropped
+  settle_take(context, 2, 3)
+  assert_equal(samples().tempo(2), nil, "a replace take starts with no settings")
+  samples().set(2, "tempo", 80)
+  clear_buffer(2)
+  settle_take(context, 2, 3)
+  assert_equal(samples().tempo(2), nil, "a clear drops it")
+end)
+
+test("an overdub of a file makes a take that starts with the file's settings and leaves the file's alone",
+    function()
+  local context = load_strata(); finish_startup(context)
+  local file = context.audio_dir .. "a.wav"
+  settle_load(context, 1, file, 8)
+  samples().set(1, "tempo", 120); samples().set(1, "key", 57)
+  overdub(context, 1)
+  local S = local_value("S")
+  assert_equal(S.buffers[1].path, scratch_take_path(1), "the slot holds a take")
+  assert_equal(samples().tempo(1), 120, "a copy of the file's")
+  assert_equal(samples().settings(1).key, 57)
+  samples().set(1, "key", 62)
+  settle_load(context, 4, file, 8)
+  assert_equal(samples().settings(4).key, 57, "the file's own is untouched")
+  assert_equal(samples().settings(1).key, 62)
+  -- an overdub of a take keeps the take's record
+  overdub(context, 1)
+  assert_equal(samples().settings(1).key, 62, "a take dubbed keeps its own")
+end)
+
+test("a whole save copies the settings to the saved file; a loop save does not", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  settle_take(context, 2, 4)
+  samples().set(2, "tempo", 100); samples().set(2, "key", 50)
+  local function save_result(slot, failed)
+    local number = S.buffers[slot].saves_sent
+    -- the engine wrote the file (so the next save's name is another)
+    if not failed then io.open(S.buffers[slot].pending_saves[1].path, "w"):close() end
+    context.polls.fire("bufferSaveResult", ((number * 2) + (failed and 1 or 0)) * 8 + slot - 1)
+  end
+  assert_true(save_buffer(2))
+  local whole = S.buffers[2].pending_saves[1].path
+  samples().set(2, "key", 52)  -- after the send: the save holds the audio as it was sent
+  save_result(2, false)
+  assert_true(save_buffer_loop(2))
+  local loop = S.buffers[2].pending_saves[1].path
+  save_result(2, false)
+  assert_true(save_buffer(2))
+  local failed = S.buffers[2].pending_saves[1].path
+  save_result(2, true)
+  settle_load(context, 3, whole, 4)
+  assert_equal(samples().tempo(3), 100, "a whole save's file has the take's settings")
+  assert_equal(samples().settings(3).key, 50, "as they were when it was sent")
+  settle_load(context, 4, loop, 2)
+  assert_equal(samples().tempo(4), nil, "a loop save copies nothing")
+  settle_load(context, 5, failed, 4)
+  assert_equal(samples().tempo(5), nil, "a failed save copies nothing")
+end)
+
+test("past 256 files the least recently loaded is dropped", function()
+  local context = load_strata(); finish_startup(context)
+  local max = samples().SAMPLES.max_files
+  assert_equal(max, 256)
+  for n = 1, max + 1 do
+    settle_load(context, 1, context.audio_dir .. "f" .. n .. ".wav", 4)
+    samples().set(1, "tempo", 60 + n % 200)
+  end
+  context.clock.run_for(0.11)
+  assert_equal(#samples_file(context).files, max, "the file holds 256")
+  settle_load(context, 2, context.audio_dir .. "f2.wav", 4)
+  assert_equal(samples().tempo(2), 62, "the second is kept")
+  settle_load(context, 3, context.audio_dir .. "f1.wav", 4)
+  assert_equal(samples().tempo(3), nil, "the first, least recently loaded, is gone")
+end)
+
+test("an unreadable samples.data is set aside and the slots still load", function()
+  for _, case in ipairs({ { name = "text", text = "{ not lua" },
+      { name = "another version", text = h.tabutil_text({ version = 9, files = {} }) },
+      { name = "not a list", text = h.tabutil_text({ version = 1, files = "x" }) } }) do
+    local subdir = "samples-unreadable-" .. math.random(1, 1e9)
+    local dir = h.data_root .. subdir .. "/strata/"
+    os.execute("mkdir -p '" .. dir .. "'")
+    write_text(dir .. "samples.data", case.text)
+    local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+    assert_equal(file_text(dir .. "samples.data.bak"), case.text, case.name .. ": set aside whole")
+    local said = 0
+    for _, line in ipairs(context.printed) do if line:find("samples.data", 1, true) then said = said + 1 end end
+    assert_equal(said, 1, case.name .. ": one console line")
+    settle_load(context, 1, context.audio_dir .. "a.wav", 4)
+    assert_equal(samples().tempo(1), nil, case.name .. ": no settings")
+    assert_true(samples().set(1, "tempo", 99), case.name .. ": the store works")
+    context.clock.run_for(0.11)
+    assert_equal(samples_file(context).files[1].settings.tempo, 99, case.name .. ": a new file")
+  end
+end)
+
+test("a record at its defaults is not written", function()
+  local context = load_strata(); finish_startup(context)
+  settle_load(context, 1, context.audio_dir .. "a.wav", 4)
+  samples().set(1, "tempo", 120)
+  context.clock.run_for(0.11)
+  assert_equal(#samples_file(context).files, 1)
+  samples().set(1, "tempo", nil)
+  context.clock.run_for(0.11)
+  assert_equal(#samples_file(context).files, 0, "back at its defaults: no entry")
+  settle_take(context, 2, 2)
+  samples().set(2, "normalize", true); samples().set(2, "normalize", false)
+  context.clock.run_for(0.11)
+  local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
+  assert_equal(saved.settings[2], false, "a take's record at its defaults")
+  -- refused values change nothing
+  assert_equal(samples().set(1, "tempo", 19), false); assert_equal(samples().set(1, "tempo", 301), false)
+  assert_equal(samples().set(1, "key", 57.5), false); assert_equal(samples().set(1, "key", 128), false)
+  assert_equal(samples().set(1, "markers", { 10, 20 }), false, "the first marker is 0")
+  assert_equal(samples().set(1, "markers", { 0, 20, 10 }), false, "ascending")
+  assert_equal(samples().set(1, "mode", 4), false); assert_equal(samples().set(1, "count", 1), false)
+  assert_equal(samples().set(1, "sensitivity", 101), false); assert_equal(samples().set(1, "normalize", 1), false)
+  assert_equal(samples().set(1, "colour", 1), false, "an unknown field")
+  assert_equal(samples().set(6, "tempo", 120), false, "a slot with no audio")
+  assert_equal(samples().settings(1).tempo, nil)
+  local record = samples().settings(1)
+  assert_equal(record.normalize, false); assert_equal(record.mode, 1); assert_equal(record.count, 8)
+  assert_equal(record.sensitivity, 50); assert_equal(record.edited, false); assert_equal(record.markers, nil)
+end)
+
+test("a bind clears nothing by itself and tells its listeners; a clear unbinds", function()
+  local context = load_strata(); finish_startup(context)
+  local told = {}
+  samples().on_bind(function(slot) told[#told + 1] = slot end)
+  samples().on_bind(function() error("a listener that fails") end)
+  local file = context.audio_dir .. "a.wav"
+  settle_load(context, 3, file, 4)
+  assert_equal(table.concat(told, " "), "3", "the load's bind")
+  samples().set(3, "tempo", 110)
+  samples().bind(3)
+  assert_equal(samples().tempo(3), 110, "a bind keeps the record")
+  clear_buffer(3)
+  assert_equal(table.concat(told, " "), "3 3 3", "and the clear's unbind")
+  assert_equal(samples().settings(3), nil)
+  -- a failed load's undo binds what it puts back
+  settle_load(context, 3, file, 4)
+  load_buffer(3, context.audio_dir .. "missing.wav")
+  context.polls.fire("bufferLoadFailed", ((local_value("S").buffers[3].loads_sent * 2) * 8) + 2)
+  assert_equal(local_value("S").buffers[3].path, file)
+  assert_equal(samples().tempo(3), 110, "the undo's bind")
+  assert_equal(told[#told], 3)
+  assert_equal(#context.take_script_errors(), 1, "the failing listener is printed once")
+end)
+
+-- A buffer voice reading slot 1, running
+local function buffer_voice(context, voice_idx, slot)
+  local S = local_value("S")
+  params:set("v" .. voice_idx .. "_source", S.constants.SOURCE_SYNTH + (slot or 1))
+  if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
+end
+
+local function note_on(context, note)
+  context.midi.send(1, { type = "note_on", note = note, vel = 100, ch = 1 })
+end
+
+test("an unset key is 3.6's pitch: note 60 at rate 1 and the scale's root + 60 as the reference", function()
+  local context = load_strata(); finish_startup(context)
+  settle_load(context, 1, context.audio_dir .. "a.wav", 8)
+  params:set("midi_channel_mode", 2)  -- omni: the selected voice
+  local S = local_value("S")
+  S.lib.ui_keys.select_voice_by(1 - S.selected_voice)
+  context.clear_engine_calls()
+  buffer_voice(context, 1)
+  assert_equal(samples().rate_root(1), 60); assert_equal(samples().scale_reference(1), nil)
+  local roots = grain_values(context, 0, "rootNote")
+  assert_true(#roots >= 1, "a voice sync sends rootNote"); assert_equal(roots[#roots], 60)
+  local scale_notes = grain_values(context, 0, "scaleNote")
+  assert_equal(scale_notes[#scale_notes], 60, "the root C + 60")
+  note_on(context, 72)
+  assert_near(params:get("v1_buf_rate"), 2, 1e-9, "note 72: rate 2")
+  assert_near(S.lib.notes.note_values(1, 67).rate, 2 ^ (7 / 12), 1e-9, "an extra note's rate")
+  assert_equal(#context.calls_named("setSlotGain"), 0, "no gain")
+end)
+
+test("a key of 57 makes note 57 rate 1 and the quantize reference", function()
+  local context = load_strata(); finish_startup(context)
+  settle_load(context, 1, context.audio_dir .. "a.wav", 8)
+  local S = local_value("S")
+  params:set("midi_channel_mode", 2)
+  S.lib.ui_keys.select_voice_by(1 - S.selected_voice)
+  samples().set(1, "key", 57)
+  context.clear_engine_calls()
+  buffer_voice(context, 1)
+  assert_equal(samples().rate_root(1), 57); assert_equal(samples().scale_reference(1), 57)
+  local roots = grain_values(context, 0, "rootNote")
+  assert_equal(roots[#roots], 57, "the sync's rootNote")
+  local scale_notes = grain_values(context, 0, "scaleNote")
+  assert_equal(scale_notes[#scale_notes], 57, "the quantize reference")
+  note_on(context, 69)
+  assert_near(params:get("v1_buf_rate"), 2, 1e-9, "note 69: rate 2")
+  assert_near(S.lib.notes.note_values(1, 57).rate, 1, 1e-9, "note 57: rate 1")
+  -- a step's degrees count from 57 + 12 log2(rate)
+  params:set("scale", 2)  -- a scale on: degrees are its tones
+  assert_near(S.lib.sequencer.degree_semitones(1, 0), 0, 1e-9)
+  local degree = S.lib.sequencer.degree_semitones(1, 1)
+  local expected = nil
+  local mask, root = S.lib.variation.scale_mask(), S.lib.variation.root()
+  for tone = 70, 82 do
+    if math.floor(mask / 2 ^ ((tone - root) % 12)) % 2 == 1 then expected = tone - 69; break end
+  end
+  assert_near(degree, expected, 1e-9, "the tone above 69 (rate 2 over 57)")
+  -- an input voice is untouched
+  params:set("v2_source", S.constants.SOURCE_INPUT)
+  assert_equal(samples().rate_root(2), 60); assert_equal(samples().scale_reference(2), nil)
+end)
+
+test("setting the key, and a bind, resend scaleNote and rootNote to running voices of the slot", function()
+  local context = load_strata(); finish_startup(context)
+  settle_load(context, 1, context.audio_dir .. "a.wav", 8)
+  settle_load(context, 2, context.audio_dir .. "b.wav", 8)
+  buffer_voice(context, 1, 1); buffer_voice(context, 2, 1); buffer_voice(context, 3, 2)
+  context.clear_engine_calls()
+  samples().set(1, "key", 64)
+  for engine_voice = 0, 1 do
+    assert_equal(grain_values(context, engine_voice, "rootNote")[1], 64, "voice " .. engine_voice + 1)
+    assert_equal(grain_values(context, engine_voice, "scaleNote")[1], 64)
+  end
+  assert_equal(#grain_values(context, 2, "rootNote"), 0, "a voice of another slot")
+  -- a bind of a file with no key: back to 60 and the root's reference
+  context.clear_engine_calls()
+  settle_load(context, 1, context.audio_dir .. "c.wav", 8)
+  assert_equal(grain_values(context, 0, "rootNote")[1], 60)
+  assert_equal(grain_values(context, 1, "scaleNote")[1], 60)
+  assert_equal(#grain_values(context, 2, "scaleNote"), 0)
+  -- a stopped voice gets nothing until its start
+  toggle_voice(2)
+  context.clear_engine_calls()
+  settle_load(context, 1, context.audio_dir .. "a.wav", 8)
+  assert_equal(#grain_values(context, 1, "rootNote"), 0, "voice 2 is stopped")
+  assert_equal(grain_values(context, 0, "rootNote")[1], 64)
+  -- a source change moves a running voice's rootNote
+  context.clear_engine_calls()
+  params:set("v1_source", local_value("S").constants.SOURCE_SYNTH + 2)
+  local roots = grain_values(context, 0, "rootNote")
+  assert_equal(roots[#roots], 60, "slot 2 has no key")
+end)
+
+test("normalize sends the gain when the slot's peaks are read, never at a bind", function()
+  local context = load_strata(); finish_startup(context)
+  local file = context.audio_dir .. "a.wav"
+  settle_load(context, 1, file, 8)
+  write_peaks(1, 8, 0.25); tick(context)
+  assert_equal(#gains(context), 0, "normalize off: nothing")
+  assert_equal(samples().gain(1), 1)
+  samples().set(1, "normalize", true)
+  local sent = gains(context)
+  assert_equal(#sent, 1); assert_equal(sent[1][1], 0); assert_near(sent[1][2], 4, 1e-9, "peak 0.25: gain 4")
+  assert_near(samples().gain(1), 4, 1e-9)
+  -- a reload of the same file: the engine's gain is 1 again until its peaks are read
+  context.clear_engine_calls()
+  settle_load(context, 1, file, 8)
+  assert_equal(#gains(context), 0, "a bind sends none")
+  tick(context)
+  sent = gains(context)
+  assert_equal(#sent, 1, "sent again after its peaks are read"); assert_near(sent[1][2], 4, 1e-9)
+  for _, case in ipairs({ { peak = 0.01, gain = 16 }, { peak = 1, gain = 1 }, { peak = 0, gain = 1 } }) do
+    context.clear_engine_calls()
+    write_peaks(1, 8, case.peak); local_value("S").lib.waveforms.stale(1); tick(context)
+    sent = gains(context)
+    assert_equal(#sent, 1); assert_near(sent[1][2], case.gain, 1e-9, "peak " .. case.peak)
+  end
+  context.clear_engine_calls()
+  samples().set(1, "normalize", false)
+  sent = gains(context)
+  assert_equal(#sent, 1); assert_near(sent[1][2], 1, 1e-9, "normalize off: 1")
+  -- while the slot records, the engine's 1 stands; its end's peaks send it
+  samples().set(1, "normalize", true)
+  write_peaks(1, 8, 0.5)
+  context.clear_engine_calls()
+  params:set("record_feedback", 50)
+  record_buffer(1)
+  local number = local_value("S").buffers[1].records_sent
+  context.polls.fire("recordState", record_state_value(number, 1, 1))
+  local_value("S").lib.waveforms.stale(1); tick(context)
+  assert_equal(#gains(context), 0, "a dub is heard at its own level")
+  context.polls.fire("recordState", record_state_value(number, 2, 1))
+  tick(context)
+  sent = gains(context)
+  assert_equal(#sent, 1, "the take's peaks"); assert_near(sent[1][2], 2, 1e-9)
+end)
+
+test("bars and tempo set each other", function()
+  local context = load_strata(); finish_startup(context)
+  settle_load(context, 1, context.audio_dir .. "a.wav", 8)
+  assert_equal(samples().bars(1), nil, "no tempo: no bars")
+  samples().set(1, "tempo", 120)
+  assert_near(samples().bars(1), 4, 1e-9, "8 s at 120: 4 bars")
+  assert_true(samples().set_bars(1, 2))
+  assert_near(samples().tempo(1), 60, 1e-9, "2 bars: 60 BPM")
+  assert_equal(samples().set_bars(1, 16), false, "480 BPM is refused")
+  assert_equal(samples().set_bars(1, 32), false, "960 BPM is refused")
+  assert_equal(samples().set_bars(1, 0.25), false, "7.5 BPM is refused")
+  assert_near(samples().tempo(1), 60, 1e-9, "unchanged")
+  assert_equal(samples().bars(2), nil, "an empty slot")
+end)
+
+test("a synced take takes the clock's tempo", function()
+  local context = load_strata(); finish_startup(context)
+  params:set("clock_tempo", 100); context.clock.run_for(1)
+  params:set("record_sync", 2); params:set("record_beats", 4)
+  record_buffer(2)
+  local S = local_value("S")
+  local number = S.buffers[2].records_sent
+  context.polls.fire("recordState", record_state_value(number, 1, 2))
+  params:set("clock_tempo", 130)  -- a change after its start counts for nothing
+  wake_buffer_clock(context, 2)
+  context.polls.fire("recordState", record_state_value(number, 2, 2))
+  report(context, 2, 2.4)
+  assert_equal(S.buffers[2].name, "take 2")
+  assert_near(samples().tempo(2), 100, 1e-9, "the clock's tempo at its start")
+  -- a synced overdub of a file: the take's, never the file's
+  settle_load(context, 3, context.audio_dir .. "a.wav", 8)
+  params:set("clock_tempo", 90)
+  params:set("record_feedback", 50)
+  record_buffer(3)
+  number = S.buffers[3].records_sent
+  context.polls.fire("recordState", record_state_value(number, 1, 3))
+  context.polls.fire("recordState", record_state_value(number, 2, 3))
+  assert_near(samples().tempo(3), 90, 1e-9, "the dub's take")
+  settle_load(context, 4, context.audio_dir .. "a.wav", 8)
+  assert_equal(samples().tempo(4), nil, "the file has none")
+  -- sync off: no tempo
+  params:set("record_sync", 1); params:set("record_feedback", 0)
+  settle_take(context, 5, 2)
+  assert_equal(samples().tempo(5), nil)
+end)
+end

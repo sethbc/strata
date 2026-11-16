@@ -358,11 +358,11 @@ return function(S)
 
   -- A value of the param a note transposes (note_param) as a (fractional)
   -- note: a synth voice's freq; a buffer or input voice's rate (buf_rate,
-  -- grain_pitch) as the note a MIDI note plays at that rate (rate 1: MIDI's
-  -- rate_root_note)
+  -- grain_pitch) as the note a MIDI note plays at that rate (rate 1 at
+  -- S.lib.samples.rate_root: a buffer voice's file's key, else 60)
   local function value_note(voice_idx, value)
     if voice_uses_synth(voice_idx) then return SEQ.a4_note + SEQ.semitones * log2(value / SEQ.a4_freq) end
-    return S.lib.midi_in.MIDI.rate_root_note + SEQ.semitones * log2(value)
+    return S.lib.samples.rate_root(voice_idx) + SEQ.semitones * log2(value)
   end
 
   -- The voice's own pitch as a (fractional) note: its note param's stored value's

@@ -294,14 +294,15 @@ return function(S)
 
   -- What the engine plays for pitch (a MIDI note number, fractional
   -- allowed) on voice: {note = pitch clamped to 0-127, freq = its frequency
-  -- clamped to the voice's freq range, rate = 2 ^ ((pitch - 60) / 12), or
+  -- clamped to the voice's freq range, rate = 2 ^ ((pitch - root) / 12), the
+  -- root S.lib.samples.rate_root (60, or a buffer voice's file's key), or
   -- from the freeze reference on a frozen synth voice, clamped to the
   -- engine's 0.25-4}; nil for a voice outside 1..NUM_VOICES or a pitch that
   -- is not a finite number. The one place a pitch becomes what the engine plays
   function M.note_values(voice, pitch)
     if not whole_in(voice, 1, NUM_VOICES) or not finite(pitch) then return nil end
     local min_freq, max_freq = param_range("v" .. voice .. "_freq")
-    local root = M.freeze_reference(voice) or NOTES.rate_root_note
+    local root = M.freeze_reference(voice) or S.lib.samples.rate_root(voice)
     return {
       note = util.clamp(pitch, NOTES.note_range[1], NOTES.note_range[2]),
       freq = util.clamp(musicutil.note_num_to_freq(pitch), min_freq, max_freq),
@@ -311,13 +312,13 @@ return function(S)
 
   -- The voice's own pitch now, as a fractional MIDI note: a synth voice's
   -- freq, a buffer voice's rate, an input voice's grain pitch (rate 1 at
-  -- NOTES.rate_root_note), each as the engine plays it (a step's override
+  -- S.lib.samples.rate_root: a buffer voice's file's key, else 60), each as the engine plays it (a step's override
   -- included)
   local function own_pitch(voice)
     if voice_uses_synth(voice) then return freq_note(voice) end
     local key = voice_uses_buffer(voice) and "buf_rate" or "grain_pitch"
     local rate = S.lib.engine_sync.engine_base_value("v" .. voice .. "_" .. key)
-    return NOTES.rate_root_note + 12 * math.log(rate) / math.log(2)
+    return S.lib.samples.rate_root(voice) + 12 * math.log(rate) / math.log(2)
   end
 
   -- Ruling 39: a running voice with no held note never keeps its own note

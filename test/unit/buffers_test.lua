@@ -654,7 +654,7 @@ test("buffers.data format, restored scratch takes and the SETUP count", function
   io.open(scratch_take_path(5), "w"):close()
   cleanup()
   local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
-  assert_equal(saved.version, 2, "format version")
+  assert_equal(saved.version, 3, "format version")
   for slot = 1, 8 do
     local expected = ({ [3] = loaded_file, [5] = scratch_take_path(5) })[slot] or ""
     assert_equal(saved.paths[slot], expected, "slot " .. slot .. " path")
@@ -2034,7 +2034,7 @@ test("save_buffer_loop falls back to the lowest voice on the slot, then the whol
   assert_equal(#context.calls_named("saveBuffer"), 0)
 end)
 
-test("buffers.data saves version 2 with starts; a start that is damaged or not finite loads 0", function()
+test("buffers.data saves version 3 with starts; a start that is damaged or not finite loads 0", function()
   local subdir = "data-v2-" .. math.random(1, 1e9)
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)
   util.make_dir(context.audio_dir)
@@ -2045,7 +2045,7 @@ test("buffers.data saves version 2 with starts; a start that is damaged or not f
   local_value("S").lib.buffers.set_start(1, 12.0)
   cleanup()
   local saved = context.tab.load(context.data_dir .. "strata/buffers.data")
-  assert_equal(saved.version, 2); assert_equal(saved.paths[1], path)
+  assert_equal(saved.version, 3); assert_equal(saved.paths[1], path)
   assert_near(saved.starts[1], 12.0, 1e-9)
   for slot = 2, 8 do assert_equal(saved.starts[slot], 0, "slot " .. slot .. " start") end
   context = load_strata({ data_subdir = subdir })
@@ -2155,7 +2155,7 @@ test("a buffer's file is remembered when it loads, not only at exit; reports tha
   context.clock.run_for(0.11)   -- the write follows the change by 0.1 s (#566)
   local remembered = S.lib.data_files.read(path)
   assert_true(remembered ~= nil, "buffers.data is written at the load")
-  assert_equal(remembered.version, 2); assert_equal(remembered.paths[2], "/tmp/drone.wav")
+  assert_equal(remembered.version, 3); assert_equal(remembered.paths[2], "/tmp/drone.wav")
   -- reports that settle the load, a new length, the periodic repeats: no write
   local restore, opened = watch_writes("buffers.data")
   state_report(context, 2, 1, 4); state_report(context, 2, 1, 4)
@@ -2454,6 +2454,81 @@ test("cleanup with a pending write saves once and leaves no clock (#566)", funct
   context.clock.run_for(1)
   assert_equal(writes.n, 1, "no write after cleanup")
   writes.restore()
+end)
+
+-- 3.7 (design §4.1, ruling 30): buffers.data is version 3, with a take's
+-- settings per slot; a version 2 file loads with none
+local function settle_take(context, slot, seconds)
+  local S = local_value("S")
+  params:set("record_feedback", 0); params:set("record_duration", seconds)
+  record_buffer(slot); wake_buffer_clock(context, slot)
+  state_report(context, slot, S.buffers[slot].loads_sent, seconds)
+  assert_equal(S.buffers[slot].name, "take " .. slot)
+end
+
+test("a version 2 buffers.data loads with no settings", function()
+  local subdir = "buffers-v2-settings-" .. math.random(1, 1e9)
+  local dir = data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  local audio = data_root .. subdir .. "/audio/strata/scratch/"
+  os.execute("mkdir -p '" .. audio .. "'")
+  local take = audio .. "buf2.wav"
+  io.open(take, "w"):close()
+  -- a settings table in a version 2 file is not read: version 2 had none
+  write_text(dir .. "buffers.data", tabutil_text({ version = 2, paths = { "", take }, starts = { 0, 0 },
+    settings = { false, { tempo = 100 } } }))
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  assert_equal(context.calls_named("loadBuffer")[1].args[2], take, "the take reloads")
+  state_report(context, 2, 1, 4)
+  assert_equal(S.lib.samples.tempo(2), nil, "no settings")
+  assert_true(not util.file_exists(dir .. "buffers.data.v2"), "no copy is kept")
+  S.lib.samples.set(2, "tempo", 90)
+  cleanup()
+  local saved = context.tab.load(dir .. "buffers.data")
+  assert_equal(saved.version, 3, "written as version 3")
+  assert_equal(saved.settings[2].tempo, 90)
+end)
+
+test("buffers.data is version 3 with a take's settings", function()
+  local subdir = "buffers-v3-settings-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  settle_take(context, 2, 4); settle_take(context, 4, 2)
+  S.lib.samples.set(2, "tempo", 100); S.lib.samples.set(2, "key", 57)
+  S.lib.samples.set(2, "markers", { 0, 9600, 48000 }); S.lib.samples.set(2, "frames", 192000)
+  S.lib.samples.set(2, "rate", 48000)
+  load_buffer(1, "/tmp/file.wav"); state_report(context, 1, 1, 3)
+  S.lib.samples.set(1, "tempo", 120)  -- a file's: samples.data, not buffers.data
+  util.make_dir(context.audio_dir .. "strata/scratch/")
+  for _, slot in ipairs({ 2, 4 }) do io.open(scratch_take_path(slot), "w"):close() end
+  context.clock.run_for(0.11)
+  local path = context.data_dir .. "strata/buffers.data"
+  local saved = context.tab.load(path)
+  assert_equal(saved.version, 3)
+  assert_equal(saved.settings[2].tempo, 100); assert_equal(saved.settings[2].key, 57)
+  assert_equal(#saved.settings[2].markers, 3); assert_equal(saved.settings[2].markers[2], 9600)
+  assert_equal(saved.settings[1], false, "a file's settings are not the slot's")
+  assert_equal(saved.settings[4], false, "a take at its defaults")
+  for slot = 5, 8 do assert_equal(saved.settings[slot], false, "slot " .. slot) end
+  cleanup()
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  S = local_value("S")
+  state_report(context, 2, 1, 4); state_report(context, 4, 1, 2)
+  assert_equal(S.lib.samples.tempo(2), 100, "restored with its take")
+  assert_equal(S.lib.samples.settings(2).markers[3], 48000)
+  assert_equal(S.lib.samples.settings(2).frames, 192000)
+  -- a damaged record loads with no settings, and the paths still load
+  local text = tabutil_text({ version = 3, paths = { "", scratch_take_path(2) }, starts = { 0, 0 },
+    settings = { false, { tempo = 1000, key = "x" } } })
+  cleanup()
+  write_text(path, text)
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  S = local_value("S")
+  assert_equal(#context.calls_named("loadBuffer"), 1, "the take reloads")
+  state_report(context, 2, 1, 4)
+  assert_equal(S.lib.samples.tempo(2), nil, "a damaged record is dropped")
+  assert_true(not util.file_exists(path .. ".bak"), "the file is not set aside")
 end)
 
 end

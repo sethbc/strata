@@ -818,7 +818,7 @@ end)
 -- the controllers go dark last
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros saved", "sequences saved",
   "gestures saved",
-  "matrix saved", "rig saved",
+  "matrix saved", "samples saved", "rig saved",
   "buffer paths saved",
   "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "gesture recorders",
   "quantized actions", "scene sequencer", "scene transition",
@@ -914,7 +914,7 @@ test("cleanup runs every registered step in today's order", function()
   local param_steps = { mutation_enabled = "mutation metro", scene_sequencer_enabled = "scene sequencer" }
   local file_steps = { ["scenes.data"] = "scenes saved", ["buffers.data"] = "buffer paths saved",
     ["gestures.data"] = "gestures saved", ["macros.data"] = "macros saved", ["matrix.data"] = "matrix saved",
-    ["io.data"] = "rig saved", ["sequences.data"] = "sequences saved" }
+    ["io.data"] = "rig saved", ["sequences.data"] = "sequences saved", ["samples.data"] = "samples saved" }
 
   watch_field(clock, "tempo_change_handler", "tempo handler")
   watch_field(_menu, "set_mode", "menu watch")
@@ -1018,6 +1018,7 @@ local function start_steps()
     { "buffer polls", { "poll set bufferState", "poll started bufferState", "poll set bufferLoadFailed",
       "poll started bufferLoadFailed", "poll set bufferSaveResult", "poll started bufferSaveResult",
       "poll set takeWriteFailed", "poll started takeWriteFailed" } },
+    { "samples load", { "file read samples.data" } },
     { "input level polls", { "poll set amp_in_l", "poll started amp_in_l", "poll set amp_in_r",
       "poll started amp_in_r" } },
     { "record poll", { "poll set recordState", "poll started recordState" } },

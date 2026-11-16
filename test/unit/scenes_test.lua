@@ -1113,7 +1113,7 @@ test("scene recall: one full sync per voice whose source changed, after its para
       -- (lib/variation.lua's)
       if record.name == "variation" then
         for index = 1, local_value("S").lib.variation.VARIATION.max_intervals do registered["interval" .. index] = true end
-        registered.intervalCount, registered.scaleNote = true, true
+        registered.intervalCount, registered.scaleNote, registered.rootNote = true, true, true  -- (3.7: rootNote)
       end
     end
     for index = first_call, #context.engine_calls do
