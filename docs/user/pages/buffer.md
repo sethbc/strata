@@ -62,6 +62,6 @@ On the fields:
 - **E2** - Back to the slices
 - **K2** - Close the editor
 
-The hint row reads `K2:back K3:add E3:nudge` (with ALT `E2 rows E3 fine K3 delete`), and on the fields `E2 slices E3 edit K2 back` (with ALT `E2 rows E3 edit`).
+The hint row reads `K2:back K3:add E3:nudge` (with ALT `K3:delete E2:rows E3:fine`), and on the fields `K2:back E2:slices E3:edit` (with ALT `E2:row E3:edit`).
 
 The arc's rings on this page, and in the slice editor, are described in [Arc](../arc.md). Buffers, recording, saving and restoring are described in [Audio Sources and Buffers](../sources-and-buffers.md).

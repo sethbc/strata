@@ -48,10 +48,11 @@ return function(S)
     cell_spacing = 6, cell_size = 4, state_right = 127, empty_level = 1, playing_outline_level = 4,
     playing_boost = 4, cursor_level = 15, label_level = 4, selected_label_level = 15,
     dot_offset = 1, dot_level = 1, gate_mark = "G", gate_right = 121,
-    -- 3.7 (ruling 9): "fill" on the selected voice's row, between its cells
-    -- and the G, while fill is on (S.lib.conditions.fill): lowercase, 10 px
-    -- from x 106, clear of step 16's cursor (to 104) and the G (from 116)
-    fill_mark = "fill", fill_x = 106, fill_level = 15}
+    -- 3.7 (ruling 9): F on the selected voice's row, between its cells and
+    -- the G, while fill is on (S.lib.conditions.fill): 4 px from x 108,
+    -- three blank columns after step 16's cursor (to 104) and a space (4 px)
+    -- before the G (from 116; #735: "fill" would touch it)
+    fill_mark = "F", fill_x = 108, fill_level = 15}
 
   -- The edit view (design 8.6): "v<voice> step <n>" at 0,line_y and a strip
   -- of the voice's steps (cells strip_cell px, strip_spacing apart from
@@ -1071,6 +1072,12 @@ return function(S)
       params:set("seq_fill", 1)
       pattern_toggle()
       context.clock.run_for(0.4)
+    end},
+    -- #735: fill held by a key on voice 1's row (ungated), the cursor on
+    -- step 16, the mark between the cursor and the +
+    {name = "fill held, ungated", setup = function()
+      show_cursor(1, PATTERN_LENGTH)()
+      S.lib.conditions.hold_fill("layout", true)
     end},
     -- the pattern view's widest ALT hint: K2:edit K3:clr E3:bpm
     {name = "pattern view, ALT+K2 held: K2:edit", setup = function(context)
