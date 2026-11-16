@@ -328,7 +328,7 @@ return function(S)
   -- node in the engine plays it, design 3.7 §7.3) is left out
   local function read_routing(k)
     local id, depth = playing(k)
-    if not id or S.lib.envelopes.owns(k) then return end
+    if not id or S.lib.envelopes.owns(k, id) then return end
     local m = depth / 100 * S.lib.mod_sources.normalized(S.matrix[k].source)
     if m ~= 0 and finite(m) then
       local into = S.lib.lfos.fast_destination(id) and scratch.fast_sums or scratch.lua_sums

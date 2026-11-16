@@ -46,16 +46,22 @@ return function(S)
     return type(k) == "number" and k % 1 == 0 and k >= 1 and k <= ENVELOPES.routes
   end
 
-  -- Voice v's settings now, {attack, decay, sustain, release, curve, loop}
+  -- Voice v's settings now, {attack, decay, sustain, release, curve, loop},
+  -- in one table per voice filled again at each call (read at once, never
+  -- kept: the 48 Hz step and MOD's draws make none)
+  local settings_of = {}
+  for voice_idx = 1, NUM_VOICES do settings_of[voice_idx] = {} end
+  local function setting(extras, key)
+    local value = extras[key]
+    if value == nil then return ENV.defaults[key] end
+    return value
+  end
   local function settings(voice_idx)
-    local extras = S.voices[voice_idx].extras
-    local function get(key)
-      local value = extras[key]
-      if value == nil then return ENV.defaults[key] end
-      return value
-    end
-    return {attack = get("env_attack"), decay = get("env_decay"), sustain = get("env_sustain"),
-      release = get("env_release"), curve = get("env_curve"), loop = get("env_loop") == ENV.loop_on}
+    local extras, set = S.voices[voice_idx].extras, settings_of[voice_idx]
+    set.attack, set.decay = setting(extras, "env_attack"), setting(extras, "env_decay")
+    set.sustain, set.release = setting(extras, "env_sustain"), setting(extras, "env_release")
+    set.curve, set.loop = setting(extras, "env_curve"), setting(extras, "env_loop") == ENV.loop_on
+    return set
   end
 
   ---------------------------------------------------------------------------
@@ -134,13 +140,29 @@ return function(S)
     return set.attack + set.decay + (held and (math.max(hit.hold, 0) + set.release) or 0)
   end
 
-  -- Loop turned on: an envelope that is not running (no hit, or its last
-  -- one has ended) starts at once from 0, as the engine's does; a running
-  -- one runs on and then loops
-  local function loop_on(voice_idx)
-    local hit = hits[voice_idx]
-    if hit and util.time() - hit.time < run_time(settings(voice_idx), hit) then return end
-    hits[voice_idx] = {time = util.time(), from = 0, hold = 0}
+  -- Whether each voice's loop is on, as its param's action last set it
+  local looping = {}
+
+  -- The loop turned on or off (the env_loop action; a set to the value it
+  -- has changes nothing). On: an envelope that is not running (no hit, or
+  -- its last one has ended) starts at once from 0, as the engine's does; a
+  -- running one runs on and then loops. Off: a looping envelope finishes
+  -- the cycle it is in, as the engine's does (EnvGen runs its segments to
+  -- their end), so its hit moves to that cycle's start, from 0 with the
+  -- same hold; in its first cycle the hit itself runs on
+  local function loop_changed(voice_idx, on)
+    local was = looping[voice_idx] == true
+    looping[voice_idx] = on
+    if on == was then return end
+    local hit, now = hits[voice_idx], util.time()
+    local total = hit and run_time(settings(voice_idx), hit)
+    if on then
+      if hit and now - hit.time < total then return end
+      hits[voice_idx] = {time = now, from = 0, hold = 0}
+    elseif hit and total > 0 and now - hit.time >= total then
+      local cycles = math.floor((now - hit.time) / total)
+      hits[voice_idx] = {time = hit.time + cycles * total, from = 0, hold = hit.hold}
+    end
   end
 
   ---------------------------------------------------------------------------
@@ -155,7 +177,10 @@ return function(S)
   end
 
   -- What route k carries while its routing is the envelopes' (playing,
-  -- from env<v>, to a fast destination), else nil
+  -- from env<v>, to a fast destination), filled into the route's own
+  -- table (one per route, made once: a step builds none), else nil
+  local wants = {}
+  for k = 1, ENVELOPES.routes do wants[k] = {} end
   local function route_want(k)
     local voice_from = source_voice(k)
     if not voice_from then return nil end
@@ -163,16 +188,21 @@ return function(S)
     if not id then return nil end
     local voice_idx, destination = S.lib.lfos.fast_destination(id)
     if not voice_idx then return nil end
-    local set = settings(voice_from)
-    return {source = voice_from, voice = voice_idx, destination = destination, depth = depth / 100,
-      attack = set.attack, decay = set.decay, sustain = set.sustain, release = set.release, curve = set.curve,
-      loop = set.loop and 1 or 0}
+    local set, want = settings(voice_from), wants[k]
+    want.source, want.voice, want.destination, want.depth = voice_from, voice_idx, destination, depth / 100
+    want.attack, want.decay, want.sustain, want.release = set.attack, set.decay, set.sustain, set.release
+    want.curve, want.loop = set.curve, set.loop and 1 or 0
+    return want
   end
 
   -- Whether matrix routing k is the engine's: a playing routing from an
-  -- envelope to a fast destination
-  function M.owns(k)
-    return is_route(k) and route_want(k) ~= nil
+  -- envelope to a fast destination. id, when given, is the destination
+  -- S.lib.matrix.playing(k) resolved for it (the matrix's step passes it,
+  -- so the routing is resolved once); without it the routing is resolved
+  function M.owns(k, id)
+    if not is_route(k) or not source_voice(k) then return false end
+    if id == nil then id = S.lib.matrix.playing(k) end
+    return id ~= nil and S.lib.lfos.fast_destination(id) ~= nil
   end
 
   local ROUTE_FIELDS = {"source", "voice", "destination", "depth", "attack", "decay", "sustain", "release", "curve",
@@ -183,6 +213,14 @@ return function(S)
       if want[field] ~= had[field] then return false end
     end
     return true
+  end
+
+  -- The table handed to the budget is a copy: the route's own is filled
+  -- again at the next step, and the budget's answer must keep what was sent
+  local function copy(want)
+    local handed = {}
+    for _, field in ipairs(ROUTE_FIELDS) do handed[field] = want[field] end
+    return handed
   end
 
   -- Each route is one deferrable id of the send budget (no param id holds
@@ -208,7 +246,7 @@ return function(S)
       local want, had = route_want(k), expected(k)
       if want == nil and not had then return end
       if want ~= nil and same(want, had) then return end
-      S.lib.engine_sync.send_engine_value(key, want or false)
+      S.lib.engine_sync.send_engine_value(key, want and copy(want) or false)
     end
   end
 
@@ -242,9 +280,14 @@ return function(S)
   -- Params
   ---------------------------------------------------------------------------
 
+  -- A time in whole ms, as it is shown below a second (the exp map stores
+  -- 0.05 as 0.04999...: compared unrounded, a time shown as 50ms could be
+  -- marked as under 50 ms)
+  local function shown_ms(seconds) return math.floor(seconds * 1000 + 0.5) end
+
   -- A time as MOD and the menu show it: 5ms, 200ms, 1.5s, 10s
   local function time_text(seconds)
-    if seconds < ENV.ms_below then return string.format("%dms", math.floor(seconds * 1000 + 0.5)) end
+    if seconds < ENV.ms_below then return string.format("%dms", shown_ms(seconds)) end
     return (string.format("%.1f", seconds):gsub("%.0$", "")) .. "s"
   end
 
@@ -276,7 +319,7 @@ return function(S)
       for _, key in ipairs(ENV.keys) do
         local param = params_by_key[key]
         param.action = function(value)
-          if key == "env_loop" and value == ENV.loop_on then loop_on(voice_idx) end
+          if key == "env_loop" then loop_changed(voice_idx, value == ENV.loop_on) end
           changed()
         end
         add(voice_idx, record, key, param)
@@ -309,7 +352,8 @@ return function(S)
 
   local function describe(voice_idx)
     local set = settings(voice_idx)
-    local fast = set.attack < ENVELOPES.approximate_under or set.decay < ENVELOPES.approximate_under
+    local under = shown_ms(ENVELOPES.approximate_under)
+    local fast = shown_ms(set.attack) < under or shown_ms(set.decay) < under
     local mark_text = (fast and routed_to_lua(voice_idx)) and "~" or ""
     return mark_text .. time_text(set.attack) .. " " .. time_text(set.decay)
   end

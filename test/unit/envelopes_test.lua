@@ -160,10 +160,17 @@ test("each voice's envelope follows its own hits", function()
   context.set_time(300.05)
   assert_near(envelopes.value(3), 0.5, 1e-9, "a step fires voice 3's")
   for _, v in ipairs({1, 2, 4, 5, 6, 7}) do assert_equal(envelopes.value(v), 0, "not voice " .. v .. "'s") end
-  -- a MIDI note on voice 4
-  sync.retrigger(4, 1, "note")
+  -- a MIDI note on voice 4 (its channel, 4), through lib/midi_in.lua
+  assert_true(not S.voices[4].active, "voice 4 is stopped: the note starts it")
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 4})
+  assert_true(S.voices[4].active, "the note started voice 4")
   context.set_time(300.1)
   assert_near(envelopes.value(4), 0.5, 1e-9, "a note fires voice 4's")
+  context.midi.send(1, {type = "note_off", note = 60, vel = 0, ch = 4})
+  context.set_time(300.13)
+  context.midi.send(1, {type = "note_on", note = 62, vel = 100, ch = 4})
+  context.set_time(300.18)
+  assert_near(envelopes.value(4), 0.9, 1e-9, "a second note restarts it from the 0.8 it had reached (0.08 s in)")
   -- a start of voice 5
   if S.voices[5].active then toggle_voice(5) end
   context.set_time(301)
@@ -360,8 +367,19 @@ test("fast envelopes to Lua destinations are marked approximate", function()
   assert_equal(describe(), "100ms 200ms", "slow enough")
   params:set("v2_env_decay", 0.01)
   assert_equal(describe(), "~100ms 10ms", "a fast decay")
-  params:set("v2_env_decay", 0.06)
-  assert_equal(describe(), "100ms 60ms", "60 ms is slow enough")
+  -- the boundary, as the time is shown (whole ms): 50 ms is not under 50
+  -- ms, 49 ms is; a time shown as 50ms is never marked
+  for _, decay in ipairs({0.05, 0.0499, 0.0501}) do
+    params:set("v2_env_decay", decay)
+    assert_equal(describe(), "100ms 50ms", decay .. " s shows 50ms, unmarked")
+  end
+  params:set("v2_env_decay", 0.049)
+  assert_equal(describe(), "~100ms 49ms", "49 ms is under 50 ms")
+  params:set("v2_env_attack", 0.05); params:set("v2_env_decay", 0.2)
+  assert_equal(describe(), "50ms 200ms", "the attack at 50 ms, unmarked")
+  params:set("v2_env_attack", 0.049)
+  assert_equal(describe(), "~49ms 200ms", "the attack at 49 ms, marked")
+  params:set("v2_env_attack", 0.1)
   params:set("v2_env_decay", 0.01)
   set_binary_param("matrix_2", 0)
   assert_equal(describe(), "100ms 10ms", "a routing that is off")
@@ -417,6 +435,59 @@ test("the six params are scene fields that default in a 3.6 scene", function()
   local bad = h.deep_copy(S.scenes[2])
   bad.data.voices[1].extras.env_attack = 20
   assert_true(not validate_scene(bad), "an attack of 20 s is refused")
+end)
+
+
+test("turning loop off finishes the cycle it is in, as the engine does", function()
+  local context, S, envelopes = loaded()
+  local shape = envelopes.shape
+  local ad = {attack = 0.1, decay = 0.1, sustain = 0, release = 0.1, curve = 0, loop = false}
+  set_envelope(3, 0.1, 0.1, 0, 0.1, 0, false)
+  context.set_time(400)
+  S.lib.engine_sync.retrigger(3, 1, "step")
+  params:set("v3_env_loop", 2)
+  -- the third cycle (0.4 to 0.6 s), 0.05 s into its attack
+  context.set_time(400.45)
+  assert_near(envelopes.value(3), shape(ad, 0.05, 0, 0), 1e-9, "the third cycle's attack")
+  params:set("v3_env_loop", 1)
+  assert_near(envelopes.value(3), shape(ad, 0.05, 0, 0), 1e-9, "loop off: the cycle runs on")
+  context.set_time(400.55)
+  assert_near(envelopes.value(3), shape(ad, 0.15, 0, 0), 1e-9, "its decay")
+  context.set_time(400.65)
+  assert_equal(envelopes.value(3), 0, "it ends and does not start again")
+  context.set_time(401)
+  assert_equal(envelopes.value(3), 0)
+  -- loop off in the first cycle: the hit itself runs on
+  params:set("v3_env_loop", 2)
+  context.set_time(402)
+  S.lib.engine_sync.retrigger(3, 1, "step")
+  context.set_time(402.05)
+  params:set("v3_env_loop", 1)
+  context.set_time(402.15)
+  assert_near(envelopes.value(3), shape(ad, 0.15, 0, 0), 1e-9, "the first cycle runs on")
+  -- loop off on an envelope that was not looping changes nothing: an ended one stays ended
+  context.set_time(410)
+  params:set("v3_env_loop", 1)
+  assert_equal(envelopes.value(3), 0, "an ended envelope stays at 0")
+end)
+
+test("a step resolves each envelope routing once and owns needs no second resolution", function()
+  local context, S, envelopes = loaded()
+  route(S, 3, "env2", "v5_filter_freq", 50)
+  route(S, 4, "env3", "reverb_mix", 50)
+  lfo_step(context, 2)
+  local matrix = S.lib.matrix
+  local real_playing, calls = matrix.playing, 0
+  matrix.playing = function(k) calls = calls + 1; return real_playing(k) end
+  lfo_step(context)
+  matrix.playing = real_playing
+  assert_equal(calls, 2, "one resolution per envelope routing a step")
+  -- owns with the resolved id reads no routing again
+  matrix.playing = function() error("owns resolved the routing again") end
+  assert_true(envelopes.owns(3, "v5_filter_freq"), "routing 3 with its id")
+  assert_true(not envelopes.owns(4, "reverb_mix"), "a Lua destination is the matrix's")
+  matrix.playing = real_playing
+  assert_true(envelopes.owns(3), "and without the id")
 end)
 
 end
