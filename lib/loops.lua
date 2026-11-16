@@ -103,7 +103,7 @@ return function(S)
 
   -- A scene's loop pair as the params would leave it (a hand-edited file
   -- may hold any pair): the start at most max_start, the length at most
-  -- 1 - start. migrate_scene runs it on every loaded scene, so a recall,
+  -- 1 - start. fill_scene runs it on every loaded scene, so a recall,
   -- whose length is not clamped while it sets the fields, still ends inside
   -- the slot. Anything but two numbers is left for validate_scene
   local function normalize_scene(extras)

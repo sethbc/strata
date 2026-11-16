@@ -567,7 +567,7 @@ end
   assert_equal(S.scenes[1].data.voices[1].extras.late, 0, "and the voice param")
 end)
 
-test("a version 2 scene migrates to 7 with every registered default", function()
+test("a scene without the registered fields loads with every registered default", function()
   local function register(S)
     S.register_voice_params(probe_record())
     S.register_fx_params({ name = "probe fx", count = 1, add = function()
@@ -585,29 +585,28 @@ test("a version 2 scene migrates to 7 with every registered default", function()
   local scene = deep_copy(S.scenes[2])
   assert_near(scene.data.voices[2].extras.probe, 0.6, 1e-9, "captured")
   assert_near(scene.data.probe_level, 0.9, 1e-9, "the scene field captured")
-  -- as 3.1 wrote it: no extras, no registered globals
+  -- no extras, no registered globals
   for voice_idx = 1, 7 do scene.data.voices[voice_idx].extras = nil end
   scene.data.probe_level = nil
   os.execute("mkdir -p '" .. context.data_dir .. "strata'")
-  tab.save({ version = 2, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
+  tab.save({ version = S.constants.SCENE_DATA_VERSION, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
   context = load_with(register, { data_subdir = "v2_to_v3" })
   S = local_value("S")
-  assert_true(S.scenes[2].populated, "the v2 file loads")
+  assert_true(S.scenes[2].populated, "the file loads")
   for voice_idx = 1, 7 do
     local extras = S.scenes[2].data.voices[voice_idx].extras
     assert_equal(extras.probe, 0, "voice " .. voice_idx .. " probe default")
     assert_equal(extras.probe_switch, 0, "voice " .. voice_idx .. " probe_switch default")
   end
   assert_equal(S.scenes[2].data.probe_level, 0.5, "the scene field default")
-  assert_true(table.concat(context.printed, "\n"):find("migrated scenes file from version 2"), "reported")
   params:set("v2_probe", 0.6)
   recall_scene(2, 0)
   assert_equal(params:get("v2_probe"), 0, "the recall applies the default")
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
   assert_equal(saved.version, 7, "saved as version 7")
-  -- with nothing registered, a v2 scene still gains an empty extras table
-  tab.save({ version = 2, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
+  -- with nothing registered, a scene without extras still gains an empty table
+  tab.save({ version = 7, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
   context = load_strata({ data_subdir = "v2_to_v3" })
   assert_equal(type(local_value("S").scenes[2].data.voices[1].extras), "table", "extras created")
 end)
@@ -708,14 +707,12 @@ test("every registered scene default equals its param's default", function()
   load_strata()
   local S = local_value("S")
   for _, record in ipairs(S.registry.voice_params) do
-    for key, default in pairs(record.scene_defaults or {}) do
-      for voice_idx = 1, S.constants.NUM_VOICES do
+    -- a record's defaults may differ by voice (lib/notes.lua's envelope
+    -- times are each voice's own)
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      for key, default in pairs(S.voice_scene_defaults(record, voice_idx)) do
         local param_id = "v" .. voice_idx .. "_" .. key
-        -- the envelope times default to each voice's own (lib/notes.lua's
-        -- scene default is voice 1's, its migration fills the rest)
-        local envelope = record.name == "notes" and (key == "attack" or key == "release")
-          and S.lib.notes.NOTES.envelope[voice_idx][key == "attack" and 1 or 2]
-        assert_equal(param_default(param_id), envelope or default, record.name .. ": " .. param_id)
+        assert_equal(param_default(param_id), default, record.name .. ": " .. param_id)
       end
     end
   end
@@ -881,14 +878,6 @@ test("each 3.4 register function checks its argument and refuses a duplicate", f
   assert_true(refused(S.register_scene_block, scene_block({ key = "b2", through_zero = 1 })), "through_zero is a function")
   names_field(S.register_scene_block, scene_block({ key = "b2", captur = function() end }), "captur")
   S.register_scene_block(scene_block({ key = "b3", through_zero = function() return {} end }))
-  -- scene migrations, by name
-  S.register_scene_migration({ name = "probe", before_version = 6, migrate = function() end })
-  assert_true(refused(S.register_scene_migration, { name = "probe", before_version = 6, migrate = function() end }),
-    "a second probe migration")
-  assert_true(refused(S.register_scene_migration, { before_version = 6, migrate = function() end }), "a name")
-  assert_true(refused(S.register_scene_migration, { name = "m2", before_version = 5.5, migrate = function() end }),
-    "a whole version")
-  names_field(S.register_scene_migration, { name = "m3", before_version = 6, migrate = function() end, after = 1 }, "after")
   -- PSET hooks, by name; each function optional
   S.register_pset_hook({ name = "probe" })
   S.register_pset_hook({ name = "probe2", write = function() end, read = function() end, delete = function() end })
@@ -936,7 +925,7 @@ test("each 3.4 register function checks its argument and refuses a duplicate", f
   assert_equal(#S.registry.lfo_destinations, 2, "nothing refused was added")
 end)
 
-test("scene blocks, scene migrations and PSET hooks close at init; the hooks read at use stay open", function()
+test("scene blocks and PSET hooks close at init; the hooks read at use stay open", function()
   load_strata()
   local S = local_value("S")
   local function names(fn, record, registry)
@@ -944,7 +933,6 @@ test("scene blocks, scene migrations and PSET hooks close at init; the hooks rea
     assert_true(not ok and tostring(err):find(registry, 1, true) ~= nil, "names " .. registry .. ": " .. tostring(err))
   end
   names(S.register_scene_block, scene_block(), "scene_blocks")
-  names(S.register_scene_migration, { name = "late", before_version = 6, migrate = function() end }, "scene_migrations")
   names(S.register_pset_hook, { name = "late" }, "pset_hooks")
   names(function(label) S.register_lfo_global_destination(label, "late") end, "late", "lfo_destinations")
   local touch, lock, outputs, sources = #S.registry.param_touch, #S.registry.lock_change, #S.registry.step_outputs,
@@ -957,6 +945,21 @@ test("scene blocks, scene migrations and PSET hooks close at init; the hooks rea
   assert_equal(#S.registry.lock_change, lock + 1, "a lock hook after init")
   assert_equal(#S.registry.step_outputs, outputs + 1, "a step output after init")
   assert_equal(#S.registry.mod_sources, sources + 1, "a mod source after init")
+end)
+
+-- 3.7 (design decision 21): no conversion is keyed on a scenes format, so
+-- no module registers one
+test("there is no scene_migrations registry", function()
+  load_strata()
+  local S = local_value("S")
+  assert_equal(S.registry.scene_migrations, nil, "no registry")
+  assert_equal(S.register_scene_migration, nil, "no register function")
+  local fresh = include("lib/state")()
+  assert_equal(fresh.registry.scene_migrations, nil, "a fresh S has none either")
+  fresh.close_registries()  -- closes what init reads, and names no scene_migrations
+  for _, source in ipairs(read_lua_sources()) do
+    assert_true(not source.text:find("scene_migration", 1, true), source.path .. " names no scene migration")
+  end
 end)
 
 test("a scene field's set function is kept on its record", function()

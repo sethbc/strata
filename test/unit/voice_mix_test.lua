@@ -505,7 +505,7 @@ test("scenes store mutes and never solos", function()
   -- a scene saved before 3.4 has no mute: every voice plays
   local old = S.scenes[1].data.voices[2].extras
   old.mute = nil
-  migrate_scene(S.scenes[1], local_value("SCENE_DATA_VERSION"))
+  fill_scene(S.scenes[1])
   assert_equal(S.scenes[1].data.voices[2].extras.mute, 0, "the migration default is unmuted")
   assert_true(validate_scene(S.scenes[1]))
 end)

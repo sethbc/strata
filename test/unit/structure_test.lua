@@ -125,6 +125,45 @@ test("no data file is written in place: strata.lua and lib/ never use tab.save (
   assert_equal(#found, 0, table.concat(found, "; "))
 end)
 
+-- 3.7 (design decision 21): a data file is loaded from its format floor
+-- (SCENE_FORMAT_FLOOR, BUFFER_FORMAT_FLOOR) to the build's version, and set
+-- aside otherwise; no code converts a particular older version. The scan
+-- finds, in the code of every Lua file under lib/ (comments and strings
+-- left out), a version compared with less than, and the names the old
+-- conversions keyed on
+local function old_version_uses(sources)
+  local found = {}
+  for _, source in ipairs(sources) do
+    if source.path:match("^lib/") then
+      local sanitized = sync_check.sanitize_lua(source.text)
+      for _, pattern in ipairs({ "version%s*<", "from_version", "before_version" }) do
+        for start in sanitized:gmatch("()" .. pattern) do
+          local line = select(2, sanitized:sub(1, start - 1):gsub("\n", "")) + 1
+          table.insert(found, source.path .. ":" .. line .. " " .. pattern)
+        end
+      end
+    end
+  end
+  table.sort(found)
+  return found
+end
+
+test("no Lua file compares a file's version with a number below its floor", function()
+  -- the scanner itself
+  local found = old_version_uses({ { path = "lib/x.lua", text = table.concat({
+    "if loaded.version < 5 then end",
+    "local function f(scene, from_version) end",
+    "local r = {before_version = 6}",
+    '-- version < 3 in a comment; "from_version" in a string',
+    "if is_integer_between(loaded.version, FLOOR, VERSION) then end",
+  }, "\n") }, { path = "strata.lua", text = "if version < 2 then end" } })
+  assert_equal(table.concat(found, "; "),
+    "lib/x.lua:1 version%s*<; lib/x.lua:2 from_version; lib/x.lua:3 before_version",
+    "each use under lib/ is found; comments, strings, a range check and other files are not")
+  found = old_version_uses(read_lua_sources())
+  assert_equal(#found, 0, table.concat(found, "; "))
+end)
+
 test("S is init's upvalue and holds the registries", function()
   load_strata()
   local upvalue
@@ -215,7 +254,7 @@ local MODULE_HOMES = {
   ["lib/lfos.lua"] = { "lfo_destination_id", "restore_lfo_destination", "add_lfo_params" },
   ["lib/mutation.lua"] = { "randomize_voice", "gentle_mutate", "drift_update", "mean_reverting_step",
     "set_drifted_param", "mutated_value", "clear_undo", "undo_available", "undo_randomize", "note_param_edit" },
-  ["lib/scenes.lua"] = { "capture_scene", "recall_scene", "recall_scene_instant", "migrate_scene",
+  ["lib/scenes.lua"] = { "capture_scene", "recall_scene", "recall_scene_instant", "fill_scene",
     "validate_scene", "validate_scene_data", "save_scenes_to_disk", "load_scenes_from_disk",
     "scene_sequencer_start", "scene_sequencer_stop", "cancel_scene_transition", "with_traceback",
     "scene_transition_targets", "wait_for_scene_transition" },

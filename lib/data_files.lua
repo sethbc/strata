@@ -15,7 +15,6 @@
 --                        or nil, "unreadable" and why
 --   read_text(path)      a file's bytes, or nil
 --   set_aside(path, s)   rename path to its first free backup name
---   keep_copy(path, s)   copy path to its first free backup name
 -- See docs/notes/lua/data-files.md.
 
 return function(S)
@@ -377,33 +376,6 @@ return function(S)
     local moved, problem = os.rename(path, backup)
     if not moved then return nil, tostring(problem) end
     return backup
-  end
-
-  -- Keep a copy of path under its first free backup name (written to a
-  -- .part and renamed, so a copy is whole or absent): that name and
-  -- "copied"; the name of a backup that already holds the same bytes and
-  -- "found" (nothing is copied again); true when path has no file (nothing
-  -- to keep); true and "full" when every name is taken: copies of that
-  -- format are kept already, so the caller writes anyway rather than
-  -- refusing every save (the console says why); or nil and why. path
-  -- itself is never touched (#467)
-  function M.keep_copy(path, suffix)
-    if not util.file_exists(path) then return true end
-    local text = read_text(path)
-    if not text then return nil, "cannot be read" end
-    for number = 1, DATA_FILES.backups do
-      local candidate = backup_name(path, suffix, number)
-      if read_text(candidate) == text then return candidate, "found" end
-    end
-    local backup = free_backup_name(path, suffix)
-    if not backup then
-      print(string.format("%s: every %s copy name is taken (%d copies of that format are kept), so it is written"
-        .. " over without another copy", path, suffix, DATA_FILES.backups))
-      return true, "full"
-    end
-    local done, problem = replace_file(backup, text)
-    if not done then return nil, problem end
-    return backup, "copied"
   end
 
   return M

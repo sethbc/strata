@@ -1516,7 +1516,7 @@ test("scenes switch the gate at a transition's end and crossfade its length and 
     end
   end
   old.data.steps = nil
-  migrate_scene(old, 5)  -- 3.3's format
+  fill_scene(old)  -- a scene without them
   assert_true(validate_scene(old), "it loads")
   local extras = old.data.voices[1].extras
   assert_equal(extras.seq_gate, 1, "gate off"); assert_near(extras.seq_gate_length, 0.5, 1e-9, "0.5")

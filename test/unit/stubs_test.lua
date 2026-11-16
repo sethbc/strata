@@ -26,7 +26,7 @@ local function stub_state_source(extra_registry)
     .. " register_menu_close = function() end, close_registries = function() end,"
     .. " register_invariant = function() end,"
     -- 3.4's (lib/state.lua): the register functions a module calls as it loads
-    .. " register_scene_block = function() end, register_scene_migration = function() end,"
+    .. " register_scene_block = function() end,"
     .. " register_pset_hook = function() end, register_param_touch = function() end,"
     .. " register_lock_change = function() end, register_lfo_global_destination = function() end,"
     .. " register_step_output = function() end, register_mod_source = function() end,"

@@ -486,49 +486,6 @@ test("the sources report the largest pressure and slide, overall and per voice",
   assert_equal(source_keys("notes"), "pressure,slide,pressure2,slide2")
 end)
 
-test("a 3.4 scene loads with the four defaults", function()
-  local subdir = "expression_format6"
-  local context = load_strata({ data_subdir = subdir })
-  local S = local_value("S")
-  capture_scene(1)
-  local scene = h.deep_copy(S.scenes[1])
-  local keys = { "press_target", "press_depth", "slide_target", "slide_depth" }
-  for voice = 1, S.constants.NUM_VOICES do
-    for _, key in ipairs(keys) do scene.data.voices[voice].extras[key] = nil end
-  end
-  -- the migration alone fills what is missing and keeps what is there
-  local migration
-  for _, record in ipairs(S.registry.scene_migrations) do
-    if record.name == "expression" then migration = record end
-  end
-  assert_true(migration ~= nil and migration.before_version == 7, "a migration for files older than format 7")
-  local partial = h.deep_copy(scene)
-  partial.data.voices[3].extras.press_depth = -30
-  migration.migrate(partial); migration.migrate(partial)
-  assert_equal(partial.data.voices[1].extras.press_target, 2, "amp")
-  assert_equal(partial.data.voices[1].extras.press_depth, 100)
-  assert_equal(partial.data.voices[1].extras.slide_target, 4, "main")
-  assert_equal(partial.data.voices[1].extras.slide_depth, 50)
-  assert_equal(partial.data.voices[3].extras.press_depth, -30, "a value there stays")
-  os.execute("mkdir -p '" .. context.data_dir .. "strata'")
-  assert_true(S.lib.data_files.write(context.data_dir .. "strata/scenes.data", { version = 6, scenes = { scene } }),
-    "a format 6 file written")
-  load_strata({ data_subdir = subdir })
-  S = local_value("S")
-  assert_equal(S.scene_file.version, 6, "read as an older format")
-  for voice = 1, S.constants.NUM_VOICES do
-    local extras = S.scenes[1].data.voices[voice].extras
-    assert_equal(extras.press_target, 2); assert_equal(extras.press_depth, 100)
-    assert_equal(extras.slide_target, 4); assert_equal(extras.slide_depth, 50)
-  end
-  params:set("v1_press_depth", -30); set_target(1, "slide", "cutoff")
-  recall_scene(1, 0)
-  assert_equal(params:get("v1_press_depth"), 100, "the recall plays the defaults")
-  assert_equal(params:get("v1_slide_target"), 4)
-  assert_true(save_scenes_to_disk(), "saved")
-  assert_equal(S.lib.data_files.read(context.data_dir .. "strata/scenes.data").version, 7, "as format 7")
-end)
-
 test("the four rows join VOICE's notes section, and position shows for a buffer voice only", function()
   local context = load_strata()
   local S = started(context)

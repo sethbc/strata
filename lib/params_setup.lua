@@ -174,12 +174,6 @@ return function(S)
     end}
   end
 
-  -- Whether a PSET file's text has a line for param id (as norns writes
-  -- it, `"id": value`), and that line's value
-  local function pset_line(text, id)
-    return text:match('"' .. id .. '"%s*:%s*([^\n]*)')
-  end
-
   -- The ids a PSET file's text has a line for, found as norns' params:read
   -- finds them (lua/core/paramset.lua): a line not starting "--" whose
   -- first quoted string is followed by a colon, unquoted
@@ -218,26 +212,18 @@ return function(S)
   -- and the screen follow, and honors silent.
   -- 0. Every param of Strata's records that norns saves and the file has no
   --    line for goes to its default (#628): a PSET saved before the param
-  --    existed (3.3's has none of 3.4's) plays as it did, never with the
-  --    session's value. norns writes a line for every saved param, so a
-  --    PSET saved now is untouched. Before the PSET hooks, which set what
-  --    they convert (the LFOs' import of 3.3's LFOs) after it.
-  -- 1. A PSET saved before format PULSE_RES.pset_format (one without a
-  --    strata_pset_format line is format 1, saved before 3.3) holds the
-  --    Pulse voice's res as the filter's rq: a res the file sets is
-  --    mirrored (#314), from the value the read set, so a PSET read twice is
-  --    never mirrored twice. Keyed on the voice having a res param, not on
-  --    voice 5.
-  -- 2. strata_pset_format goes back to PSET_FORMAT (the read set the file's,
-  --    or left it), so the PSET saved next is today's format.
-  -- 3. Every number param pset.number_params lists is rounded to its step,
+  --    existed loads its default, never the session's value. norns writes a line for every saved param, so a
+  --    PSET saved now is untouched. Before the PSET hooks.
+  -- 1. Every number param pset.number_params lists is rounded to its step,
   --    a whole number (#554): one saved holding a fraction (norns' PARAMS
   --    menu turned a number param by d / 20 with K3 held) loads whole.
+  -- Nothing is keyed on when a PSET was saved (3.7): a line for an id that
+  -- is no param (3.3 to 3.6's strata_pset_format) is skipped by norns'
+  -- read, and nothing is converted.
   function M.migrate_read_pset(filename, silent)
     local file = io.open(filename, "r")
     local text = file and file:read("*a")
     if file then file:close() end
-    local format = text and (tonumber(pset_line(text, "strata_pset_format")) or 1)
     if text then
       local named, defaulted = pset.named_ids(text), 0
       for _, id in ipairs(pset.record_params) do
@@ -251,16 +237,6 @@ return function(S)
         print("pset: " .. defaulted .. " params it has no line for (saved before they existed) set to their defaults")
       end
     end
-    if format and format < S.constants.PULSE_RES.pset_format then
-      for voice_idx = 1, NUM_VOICES do
-        local id = "v" .. voice_idx .. "_res"
-        if S.voices[voice_idx].params.res ~= nil and pset_line(text, id) then
-          params:set(id, S.constants.PULSE_RES.mirror - params:get(id), silent)
-          print("pset from before 3.3: voice " .. voice_idx .. "'s res mirrored, so it sounds the same")
-        end
-      end
-    end
-    params:set("strata_pset_format", S.constants.PSET_FORMAT, true)
     for _, id in ipairs(pset.number_params) do
       local value = params:get(id)
       if value ~= math.floor(value) then params:set(id, util.round(value), silent) end
@@ -320,13 +296,8 @@ return function(S)
   register_params("master", function()
     params:add_separator("strata")
 
-    -- The PSET format (#314): saved with every PSET, shown nowhere. A PSET
-    -- without it was saved before 3.3; the read hook converts what changed
-    -- meaning since (M.migrate_read_pset), then the PSET hooks run
+    -- A PSET read runs M.migrate_read_pset, then the PSET hooks
     -- (pset.install_actions)
-    params:add{type = "number", id = "strata_pset_format", name = "pset format",
-      min = 1, max = S.constants.PSET_FORMAT, default = S.constants.PSET_FORMAT}
-    params:hide("strata_pset_format")
     pset.install_actions()
 
     -- Master controls
@@ -890,7 +861,7 @@ return function(S)
         error(string.format("voice params %s: add%s added %d params, but its count is %d", record.name,
           record.add_first and " and add_first" or "", added, record.count), 0)
       end
-      for _, keys in ipairs({record.grain_keys or {}, record.scene_defaults or {}}) do
+      for _, keys in ipairs({record.grain_keys or {}, S.voice_scene_defaults(record, voice_idx)}) do
         for key in pairs(keys) do
           if not extra_keys[record.name][key] then
             error("voice params " .. record.name .. ": " .. key .. " is not a param its add added", 0)

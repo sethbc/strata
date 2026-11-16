@@ -4,7 +4,7 @@ Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](
 
 After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **matrix**, **input**, **gestures**, **out midi**, **crow**, **out ii**, **out nb**, **tape**, **sequencer**, **buffers**, **record**, **positions**, **midi** and **zones** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
-PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that tells a PSET saved now from one saved before 3.3. An older PSET loads as it sounded: the Pulse voice's res, which ran the other way before 3.3, is turned around as it loads (see [Per-Voice Sections](#per-voice-sections)), until you save it again. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
+PSETs (PARAMETERS > PSET) save every one of them. A PSET loads every setting it holds as it is, and a setting it does not hold (one added since it was saved) at its default. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
 ## Master
 - Master density
@@ -24,7 +24,7 @@ PSETs (PARAMETERS > PSET) save every one of them, and a hidden format line that 
 
 ## LFOs
 - **LFO 1** ... **LFO 6** (a group each) - on (off by default), destination (none), shape (sine, tri, square, up, down, s&h, smooth, drunk; sine), mode (free or clocked; free), rate (0.003-50 Hz, default 0.25 Hz, a 4 s cycle), clocked rate (1/16 to 1024 bars of four beats; 4), depth (0-100 %, default 25 %, so an LFO is audible as soon as it is turned on; scenes recall the depth they stored), offset (-100 to 100 %, 0), phase (0-100 %, 0), rate mod and depth mod (none, or a lower-numbered LFO: LFO 3 offers L1 and L2) and their amounts (-100 to 100 %, 0). See [Modulation](modulation.md#global-lfos)
-- An LFO always swings up to half the destination's range either side of the value you set, at 100 % depth. norns' own LFO library is no longer used, so its min, max, baseline and reset parameters are gone; a PSET saved with 3.3 loads its LFO settings into the new parameters (the console prints `imported 3.3 LFO settings`), with LFOs 4-6 off and every setting 3.3 did not have at its default, so it plays as it did
+- An LFO always swings up to half the destination's range either side of the value you set, at 100 % depth
 
 ## Macros (group)
 - Macro 1-16 (0-100 %, default 0): each moves up to eight targets at once, each between two ends of its own (where the macro's 0 % and 100 % put it; a first end above the second turns it around), along the target's own scale (a frequency in octaves). A target is any setting an LFO can move, or an LFO's rate or depth, or a matrix routing's depth, never another macro or the morph. See [Modulation](modulation.md#macros)
@@ -124,7 +124,7 @@ Split zones for the mpe split mode. Each voice has a zone (off, lower or upper; 
 - Scene sequence length (1-16 scenes)
 - Save scenes to disk (manual trigger; each scene save already writes the file, [Saved scenes on disk](scenes.md#saved-scenes-on-disk))
 - Load scenes from disk (manual trigger; while a scene saved in this session is not on disk, the first trigger only prints a line in the console and a second within 2 seconds loads. A damaged or incompatible file is reported in the console, the current scenes are kept, and the file is moved to the first free of `scenes.data.bak`, `scenes.data.bak.2` ... `scenes.data.bak.9`, so it is never overwritten and an earlier copy is never replaced)
-- Scene files from earlier versions of Strata still load: settings they do not contain (filter, delay, grain envelope and mode, sources and buffer settings, LFOs) start at their defaults (LFOs off, every voice on its synth), the Pulse voice's res is turned around so it sounds the same (it ran the other way before 3.3), and the console prints `migrated scenes file from version 1`. The next save writes the new format and first keeps the original file as `scenes.data.v<n>` (`scenes.data.v1` here), once; `buffers.data` from 3.2 is kept as `buffers.data.v1` the same way
+- Scene files saved by Strata 3.5 or later load: settings they do not contain start at their defaults. A scenes file from before 3.5, or a `buffers.data` from before 3.3, is not converted: it is set aside as a backup (`scenes.data.bak`, `buffers.data.bak`) with one line in the console, and the script starts without it. A PSET loads every setting it holds as it is; a setting it does not hold starts at its default
 
 Scenes capture the FX settings too; smooth transitions crossfade every FX value except the filter type, which switches at the end.
 

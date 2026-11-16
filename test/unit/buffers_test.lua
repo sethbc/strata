@@ -935,7 +935,7 @@ test("a buffers file that fails to load does not stop init and survives cleanup"
     { name = "wrong version", content = tabutil_text({ version = 99, paths = {} }) },
     { name = "raises on load", content = 'error("corrupt buffers file")' },
     { name = "not a table", content = "return 42" },
-    { name = "paths not a table", content = tabutil_text({ version = 1, paths = "x" }) },
+    { name = "paths not a table", content = tabutil_text({ version = 2, paths = "x" }) },
   }
   for index, bad in ipairs(bad_files) do
     local subdir = "buf_survive_" .. index
@@ -979,7 +979,7 @@ end)
 -- cleanup overwrite buffers.data with the empty in-memory paths
 test("cleanup leaves buffers.data alone when init never loaded it (#72)", function()
   local saved_path = "/saved/by/an/earlier/session.wav"
-  local sentinel = tabutil_text({ version = 1, paths = { saved_path } })
+  local sentinel = tabutil_text({ version = 2, paths = { saved_path } })
   local started
   local function write_sentinel(context)
     started = context
@@ -2034,7 +2034,7 @@ test("save_buffer_loop falls back to the lowest voice on the slot, then the whol
   assert_equal(#context.calls_named("saveBuffer"), 0)
 end)
 
-test("buffers.data saves version 2 with starts and loads version 1 with starts 0", function()
+test("buffers.data saves version 2 with starts; a start that is damaged or not finite loads 0", function()
   local subdir = "data-v2-" .. math.random(1, 1e9)
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)
   util.make_dir(context.audio_dir)
@@ -2051,13 +2051,12 @@ test("buffers.data saves version 2 with starts and loads version 1 with starts 0
   context = load_strata({ data_subdir = subdir })
   local loads = context.calls_named("loadBuffer")
   assert_equal(#loads, 1); assert_equal(loads[1].args[2], path); assert_near(loads[1].args[3], 12.0, 1e-9)
-  -- a version 1 file loads with every start 0
+  -- a version 2 file without a starts list, or with a damaged one, loads with starts 0
   local file = assert(io.open(context.data_dir .. "strata/buffers.data", "w"))
-  file:write(tabutil_text({ version = 1, paths = { path } })); file:close()
+  file:write(tabutil_text({ version = 2, paths = { path } })); file:close()
   context = load_strata({ data_subdir = subdir })
   loads = context.calls_named("loadBuffer")
-  assert_equal(#loads, 1); assert_equal(loads[1].args[3], 0, "no start in version 1")
-  -- a version 2 file with a damaged starts list loads with starts 0
+  assert_equal(#loads, 1); assert_equal(loads[1].args[3], 0, "no starts: 0")
   file = assert(io.open(context.data_dir .. "strata/buffers.data", "w"))
   file:write(tabutil_text({ version = 2, paths = { path }, starts = { "x" } })); file:close()
   context = load_strata({ data_subdir = subdir })
@@ -2184,6 +2183,47 @@ test("a buffer's file is remembered when it loads, not only at exit; reports tha
   assert_equal(#data_writes(opened), 0, "an unchanged buffers.data is not rewritten at exit")
 end)
 
+-- 3.7 (design decision 21): buffers.data's floor is version 2 (3.3's);
+-- an older file is set aside to its first free backup name, never converted
+test("a version 1 buffers.data is set aside; a version 2 loads", function()
+  local S
+  local audio = data_root .. "buffers-floor-audio/"
+  os.execute("mkdir -p '" .. audio .. "'")
+  local path = audio .. "drone.wav"
+  io.open(path, "w"):close()
+  for _, case in ipairs({ { version = 1, loads = false }, { version = 2, loads = true } }) do
+    local subdir = "buffers-floor-" .. case.version .. "-" .. math.random(1, 1e9)
+    local dir = data_root .. subdir .. "/strata/"
+    os.execute("mkdir -p '" .. dir .. "'")
+    local text = tabutil_text({ version = case.version, paths = { path }, starts = { 0 } })
+    write_text(dir .. "buffers.data", text)
+    local context = load_strata({ data_subdir = subdir, before_load = function(started)
+      started.audio.register(path, { channels = 2, frames = 48000 * 4, rate = 48000 })
+    end })
+    S = local_value("S")
+    local said = 0
+    for _, line in ipairs(context.printed) do
+      if line:find("older than version 2", 1, true) then said = said + 1 end
+    end
+    if case.loads then
+      assert_equal(#context.calls_named("loadBuffer"), 1, "version 2: the slot reloads")
+      assert_true(not util.file_exists(dir .. "buffers.data.bak"), "version 2: nothing is set aside")
+      assert_equal(said, 0, "version 2: nothing said of a floor")
+    else
+      assert_equal(#context.calls_named("loadBuffer"), 0, "version 1: nothing loads")
+      assert_true(not util.file_exists(dir .. "buffers.data"), "version 1: the file is moved")
+      assert_equal(file_text(dir .. "buffers.data.bak"), text, "version 1: whole, as buffers.data.bak")
+      assert_equal(S.buffer_file.problem, "unreadable", "version 1: SETUP names it")
+      assert_equal(said, 1, "version 1: one console line names the floor")
+      for number = 1, 9 do
+        assert_true(not util.file_exists(dir .. "buffers.data.v1" .. (number > 1 and ("." .. number) or "")),
+          "no .v1 copy")
+      end
+    end
+  end
+  assert_equal(S.constants.BUFFER_FORMAT_FLOOR, 2, "the floor is version 2")
+end)
+
 test("a buffers write that fails keeps the old file and says so; the next change that writes clears it (#301)",
     function()
   local subdir = "buffers-write-fails-" .. math.random(1, 1e9)
@@ -2222,26 +2262,6 @@ test("a buffers write that fails keeps the old file and says so; the next change
   local saved = S.lib.data_files.read(path)
   assert_equal(saved.paths[4], "/tmp/four.wav", "the change the failed write missed went with the next")
   assert_equal(saved.paths[5], "/tmp/five.wav")
-end)
-
-test("a version 1 buffers.data is kept as buffers.data.v1 when it is first replaced (#467)", function()
-  local subdir = "buffers-v1-" .. math.random(1, 1e9)
-  local dir = data_root .. subdir .. "/strata/"
-  os.execute("mkdir -p '" .. dir .. "'")
-  local original = tabutil_text({ version = 1, paths = { "", "", "", "", "", "", "", "" } })
-  write_text(dir .. "buffers.data", original)
-  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
-  assert_true(not util.file_exists(dir .. "buffers.data.v1"), "nothing is copied until the file is replaced")
-  load_buffer(1, "/tmp/drone.wav")
-  context.clock.run_for(0.11)
-  assert_equal(file_text(dir .. "buffers.data.v1"), original, "the older file's bytes are kept")
-  local S = local_value("S")
-  assert_equal(S.lib.data_files.read(dir .. "buffers.data").version, 2, "the file is this format now")
-  load_buffer(2, "/tmp/pad.wav")
-  cleanup()
-  load_strata({ data_subdir = subdir }); load_buffer(3, "/tmp/other.wav"); cleanup()
-  assert_true(not util.file_exists(dir .. "buffers.data.v1.2"), "no second copy")
-  assert_equal(file_text(dir .. "buffers.data.v1"), original)
 end)
 
 test("an unreadable buffers.data is named on the hint row at start and kept under its own name (#463, #466)",

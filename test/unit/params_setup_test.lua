@@ -57,7 +57,7 @@ test("grain envelope param: options, default, scenes, never mutated or randomize
   capture_scene(3)
   local scene = local_value("scenes")[3]
   for voice_idx = 1, 7 do scene.data.voices[voice_idx].grain.env = nil end
-  migrate_scene(scene, 2)
+  fill_scene(scene)
   assert_equal(scene.data.voices[2].grain.env, 1, "missing env migrates to hann")
   assert_true(validate_scene(scene), "migrated scene validates")
   scene.data.voices[2].grain.env = 2.5
@@ -113,7 +113,7 @@ test("grain mode param: options, default, sync, scenes, never mutated, randomize
   recall_scene(1, 0); assert_equal(params:get("v1_grain_mode"), 2, "scene recall restores the mode")
   local scene = local_value("scenes")[1]
   for voice_idx = 1, 7 do scene.data.voices[voice_idx].grain.mode = nil end
-  migrate_scene(scene, 2)
+  fill_scene(scene)
   assert_equal(scene.data.voices[1].grain.mode, 1, "missing mode migrates to continuous")
   assert_true(validate_scene(scene), "migrated scene validates")
   scene.data.voices[1].grain.mode = 3
@@ -617,88 +617,34 @@ test("the 256 grid's tempo keys flash the tempo the clock runs, under an externa
   assert_equal(flash.text("header"), "tempo 122", "internal: the tempo it landed on (the clock reports it once it ticks)")
 end)
 
--- The res setVoiceParam(4, "res", value) values sent to the Pulse voice
-local function pulse_res_sent(context)
-  local sent = {}
-  for _, call in ipairs(context.calls_named("setVoiceParam")) do
-    if call.args[1] == 4 and call.args[2] == "res" then sent[#sent + 1] = call.args[3] end
-  end
-  return sent
-end
-
--- #314: the Pulse voice's res rises with resonance since 3.3 (the engine
--- plays rq = 1.1 - res). A PSET saved before holds the filter's rq and has
--- no strata_pset_format line (format 1): the read hook mirrors its res once
--- the read is done, every time it is read, until it is saved again. A PSET
--- saved now carries the line and reads back as written
-test("a PSET from before 3.3 loads the pulse voice's res mirrored; one saved now loads as it is (#314)", function()
-  local context = load_strata({ data_subdir = "pset_pulse_res" }); finish_startup(context)
+-- 3.7 (design decision 21): no PSET format. A PSET is read as it is: a
+-- line for an id that is no param (strata_pset_format, which 3.3 to 3.6
+-- saved) is skipped by norns' read, and nothing is converted by it
+test("a PSET has no strata_pset_format, and one that holds the line still loads", function()
+  local context = load_strata({ data_subdir = "pset_no_format" }); finish_startup(context)
   local S = local_value("S")
   os.execute("mkdir -p '" .. context.data_dir .. "'")
-  assert_equal(params:visible("strata_pset_format"), false, "the format param is hidden")
-  assert_equal(params:get("strata_pset_format"), 2, "at today's format")
+  assert_equal(params.lookup["strata_pset_format"], nil, "no format param")
+  assert_equal(S.constants.PSET_FORMAT, nil, "no PSET_FORMAT")
   if not S.voices[5].active then toggle_voice(5) end
-  -- a PSET saved now carries its format and reads back as written
-  local new_path = context.data_dir .. "new.pset"
+  local path = context.data_dir .. "now.pset"
   params:set("v5_res", 0.3)
-  params:write(new_path, "new")
-  local text = h.file_text(new_path)
-  assert_true(text:find('"strata_pset_format": 2\n', 1, true) ~= nil, "the PSET holds its format")
-  params:set("v5_res", 0.6)
-  params:read(new_path)
-  assert_near(params:get("v5_res"), 0.3, 1e-9, "a PSET saved now reads back as written")
-  -- the same PSET without the format line is one saved before: its res held the rq
-  local old_path = context.data_dir .. "old.pset"
-  local old_text = text:gsub('"strata_pset_format": [^\n]*\n', "")
-  assert_true(not old_text:find("strata_pset_format", 1, true), "the old PSET has no format line")
-  h.write_text(old_path, old_text)
-  params:set("v5_res", 0.6)
-  context.clear_engine_calls()
-  local function mirror_lines()
-    local count = 0
-    for _, line in ipairs(context.printed) do
-      if line:find("res mirrored", 1, true) then count = count + 1 end
-    end
-    return count
+  params:write(path, "now")
+  local text = h.file_text(path)
+  assert_true(not text:find("strata_pset_format", 1, true), "a PSET saved now has no format line")
+  -- a PSET of 3.3 to 3.6 holds the line (2), one hand-edited may say 1:
+  -- either reads as written, never mirrored
+  for _, format in ipairs({ 2, 1 }) do
+    local old_path = context.data_dir .. "format" .. format .. ".pset"
+    h.write_text(old_path, text .. '"strata_pset_format": ' .. format .. "\n")
+    params:set("v5_res", 0.6); params:set("reverb_mix", 0.9)
+    params:read(old_path)
+    assert_near(params:get("v5_res"), 0.3, 1e-9, "format line " .. format .. ": the res as written")
+    assert_near(params:get("reverb_mix"), 0.3, 1e-9, "format line " .. format .. ": every other param as written")
   end
-  assert_equal(mirror_lines(), 0, "nothing said before an old PSET is read")
-  params:read(old_path)
-  assert_near(params:get("v5_res"), 0.8, 1e-9, "an old PSET's res 0.3 loads as 0.8")
-  assert_equal(mirror_lines(), 1, "the console says the res was mirrored")
-  assert_near(S.voices[5].params.res, 0.8, 1e-9, "and the voices table follows")
-  local sent = pulse_res_sent(context)
-  assert_true(#sent > 0 and math.abs(sent[#sent] - 0.8) < 1e-6,
-    "the engine plays the mirrored value last (sent: " .. table.concat(sent, ", ") .. ")")
-  -- read again: mirrored from the file's value, never twice
-  params:read(old_path)
-  assert_near(params:get("v5_res"), 0.8, 1e-9, "a second read gives the same value")
-  -- a silent read is mirrored too, silently
-  params:set("v5_res", 0.5)
-  context.clear_engine_calls()
-  params:read(old_path, true)
-  assert_near(params:get("v5_res"), 0.8, 1e-9, "a silent read is mirrored too")
-  assert_equal(#pulse_res_sent(context), 0, "and sends nothing")
-  -- a hand-edited format 1 line is a PSET from before too
-  h.write_text(old_path, old_text .. '"strata_pset_format": 1\n')
-  params:read(old_path)
-  assert_near(params:get("v5_res"), 0.8, 1e-9, "a format 1 PSET is mirrored")
-  -- an old PSET that does not set the res loads its default (#628), never
-  -- mirrored (1.1 - 0.8 would be 0.3)
-  local no_res_path = context.data_dir .. "no_res.pset"
-  h.write_text(no_res_path, (old_text:gsub('"v5_res": [^\n]*\n', "")))
-  params:set("v5_res", 0.5)
-  local said = mirror_lines()
-  params:read(no_res_path)
-  assert_near(params:get("v5_res"), 0.8, 1e-9, "a res the file does not set loads its default, not mirrored")
-  assert_equal(mirror_lines(), said, "and the console says nothing of a mirror")
-  params:read(old_path)
-  -- saved again, it is a PSET of today's format: never mirrored back
-  assert_equal(params:get("strata_pset_format"), 2, "an old PSET leaves the format param at today's format")
-  local resaved = context.data_dir .. "resaved.pset"
-  params:write(resaved, "resaved")
-  params:set("v5_res", 0.5)
-  params:read(resaved)
-  assert_near(params:get("v5_res"), 0.8, 1e-9, "the PSET saved again reads back as written")
+  for _, line in ipairs(context.printed) do
+    assert_true(not line:find("mirrored", 1, true), "nothing is mirrored: " .. line)
+  end
 end)
 
 -- #554: a PSET saved while a number param held a fraction (norns' PARAMS
@@ -775,58 +721,38 @@ test("a PSET read while a voice runs sends its crossmod source and custom interv
   assert_equal(params:get("v1_custom_interval_1"), -3)
 end)
 
--- #628: a PSET saved by 3.3 has no line for any param 3.4 added. pset_3_3
--- turns a PSET written now into the one 3.3 wrote for the same session: it
--- drops the lines of 3.4's params (ONLY_3_4, and every strata_lfo param but
--- LFO 1-3's destination) and adds 3.3's LFO library lines at v3.3.2's
--- defaults, with LFO 1 on at depth 40. The ids it leaves are exactly those
--- of a PSET written by v3.3.2's own code (494 lines, checked when this test
--- was written)
-local ONLY_3_4 = { "^gesture_%d+_quantize$", "^input_follow_gain$", "^macro_%d+$", "^matrix_%d+$", "^matrix_%d+_depth$",
+-- #628: a PSET saved before a param existed has no line for it, and the
+-- param loads its default, never the session's value. without_lines turns a
+-- PSET written now into one without the lines of the params MISSING names
+-- (3.4's, which a 3.3 PSET lacked)
+local MISSING = { "^gesture_%d+_quantize$", "^input_follow_gain$", "^macro_%d+$", "^matrix_%d+$", "^matrix_%d+_depth$",
   "^morph$", "^morph_a$", "^morph_b$", "^quantize_actions$", "^scatter", "^seq_", "^strata_gestures$", "^strata_input$",
   "^strata_lfo_%d+$", "^strata_macros$", "^strata_matrix$", "^strata_morph$", "^strata_scatter$", "^strata_seq$",
   "^v%d+_mute$", "^v%d+_solo$", "^v%d+_seq_" }
 
-local function saved_by_3_3(id)
-  for _, pattern in ipairs(ONLY_3_4) do if id:match(pattern) then return false end end
-  local lfo, rest = id:match("^strata_lfo(%d+)(.*)$")
-  if lfo then return rest == "_dest" and tonumber(lfo) <= 3 end
-  return true
-end
-
-local function pset_3_3(text)
+local function without_lines(text)
   local lines, dropped = {}, {}
   for line in text:gmatch("[^\n]*\n") do
     local id = line:match('^"(.-)"')
-    if id and not saved_by_3_3(id) then
-      for index, pattern in ipairs(ONLY_3_4) do if id:match(pattern) then dropped[index] = true end end
-    else
-      lines[#lines + 1] = line
+    local missing = false
+    for index, pattern in ipairs(MISSING) do
+      if id and id:match(pattern) then dropped[index], missing = true, true end
     end
+    if not missing then lines[#lines + 1] = line end
   end
-  for index, pattern in ipairs(ONLY_3_4) do assert_true(dropped[index], pattern .. " names a param of this session") end
-  lines[#lines + 1] = '"strata_lfos": 3\n'
-  for n = 1, 3 do
-    local on, depth = n == 1 and 2 or 1, n == 1 and 40 or 25
-    for _, entry in ipairs({ { "lfo_group_", 15 }, { "lfo_", on }, { "lfo_shape_", 1 }, { "lfo_depth_", depth },
-        { "lfo_phase_", 0 }, { "lfo_offset_", 0 }, { "lfo_scaled_", "" }, { "lfo_raw_", "" }, { "lfo_min_", "-1.0" },
-        { "lfo_max_", "1.0" }, { "lfo_baseline_", 2 }, { "lfo_mode_", 2 }, { "lfo_clocked_", 13 }, { "lfo_free_", "4.0" },
-        { "lfo_reset_target_", 1 } }) do
-      lines[#lines + 1] = '"' .. entry[1] .. n .. '": ' .. entry[2] .. "\n"
-    end
-  end
+  for index, pattern in ipairs(MISSING) do assert_true(dropped[index], pattern .. " names a param of this session") end
   return table.concat(lines)
 end
 
--- The reviewer's session: 3.4 params a 3.3 PSET cannot hold, away from their
--- defaults, with voices 1-4 running
+-- The reviewer's session: params the shorter PSET has no line for, away
+-- from their defaults, with voices 1-4 running
 local SESSION_3_4 = { v2_mute = 1, v3_solo = 1, scatter = 1, scatter_depth = 50, v1_seq_gate = 2, v1_seq_swing = 66,
   morph = 0.5, macro_1 = 0.7 }
 local DEFAULTS_3_4 = { v2_mute = 0, v3_solo = 0, scatter = 0, scatter_depth = 10, v1_seq_gate = 1, v1_seq_swing = 50,
   morph = 0, macro_1 = 0 }
 
-test("a PSET saved by 3.3 sets every param it cannot hold to its default; one saved now loads as written (#628)", function()
-  local context = load_strata({ data_subdir = "pset_3_3" }); finish_startup(context)
+test("a PSET line that is missing still means the default (#628)", function()
+  local context = load_strata({ data_subdir = "pset_missing_lines" }); finish_startup(context)
   local S = local_value("S")
   os.execute("mkdir -p '" .. context.data_dir .. "'")
   for voice_idx = 1, 4 do
@@ -834,7 +760,7 @@ test("a PSET saved by 3.3 sets every param it cannot hold to its default; one sa
   end
   local new_path, old_path = context.data_dir .. "new.pset", context.data_dir .. "old.pset"
   params:write(new_path, "new")
-  h.write_text(old_path, pset_3_3(h.file_text(new_path)))
+  h.write_text(old_path, without_lines(h.file_text(new_path)))
   local function set_session() for id, value in pairs(SESSION_3_4) do params:set(id, value) end end
   set_session()
   assert_true(S.lib.voice_mix.silenced(1) and S.lib.voice_mix.silenced(2) and S.lib.voice_mix.silenced(4))
@@ -847,10 +773,6 @@ test("a PSET saved by 3.3 sets every param it cannot hold to its default; one sa
     if call.args[2] == "voiceMute" then muted[call.args[1] + 1] = call.args[3] end
   end
   for _, voice_idx in ipairs({ 1, 2, 4 }) do assert_equal(muted[voice_idx], 0, "voice " .. voice_idx .. " unmuted") end
-  -- the LFOs' own hook still imports 3.3's LFO 1, after the defaults
-  assert_equal(params:get("strata_lfo1"), 1, "LFO 1 imported on")
-  assert_equal(params:get("strata_lfo1_depth"), 40, "at the PSET's depth")
-  assert_equal(params:get("strata_pset_format"), 2, "the format param at today's format")
   -- a silent read sets them silently
   set_session()
   context.clear_engine_calls()
