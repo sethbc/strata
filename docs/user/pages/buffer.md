@@ -53,7 +53,7 @@ The editor opens on the slices:
 On the fields:
 - **ALT+E2** - Pick a field: `mode`, `count`/`sens`, `tempo`, `bars`, `key`, `norm`
 - **E3** - Change it:
-  - `mode`: `off`, `equal` (`count` equal slices) or `transients` (a slice at each transient whose strength reaches the sensitivity: `sens`, 0-100%, 100% takes every one). Changing it cuts the slices again.
+  - `mode`: `off`, `equal` (`count` equal slices) or `transients` (a slice at each transient whose strength reaches the sensitivity: `sens`, 0-100%, 100% takes every one). Changing it cuts the slices again: starts you added, moved or deleted by hand are then dropped, and the hint row says `edits dropped`.
   - `count` or `sens`: changing it cuts the slices again. Starts you added, moved or deleted by hand are then dropped, and the hint row says `edits dropped`. In `off` the count is kept for when you pick `equal`.
   - `tempo`: the file's tempo, 20-300 BPM in 0.1 steps; from `--` (none) the first turn up sets the clock's tempo, and turning below 20 clears it.
   - `bars`: how many 4-beat bars the buffer holds at the file's tempo; turning it sets the tempo that makes it exactly 1/4, 1/2, 1, 2, 4, 8, 16 or 32 bars (a count whose tempo would fall outside 20-300 BPM is passed over).
