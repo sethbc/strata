@@ -1687,8 +1687,7 @@ end)
 
 test("a one-shot slice's key lift in release mode leaves it playing to its end", function()
   local context, S = sliced_voice(3)
-  local scan = S.lib.scan or {}
-  S.lib.scan = scan
+  local scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return fraction * 2 end
   params:set("midi_note_off", 2)
   note_on(context, 1, 36); note_on(context, 1, 37)
@@ -1705,8 +1704,7 @@ test("a one-shot slice's key lift in release mode leaves it playing to its end",
   assert_equal(S.lib.notes.held(1), 0, "nothing held")
   -- option one: the same
   context, S = sliced_voice(2)
-  scan = S.lib.scan or {}
-  S.lib.scan = scan
+  scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return fraction * 2 end
   params:set("midi_note_off", 2)
   note_on(context, 1, 36); note_off(context, 1, 36)
@@ -1716,8 +1714,7 @@ test("a one-shot slice's key lift in release mode leaves it playing to its end",
   assert_equal(S.lib.notes.held(1), 0)
   -- latch mode: the voice runs on, its slice's record gone
   context, S = sliced_voice(2)
-  scan = S.lib.scan or {}
-  S.lib.scan = scan
+  scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return fraction * 2 end
   note_on(context, 1, 36); note_off(context, 1, 36)
   context.clock.run_for(5)
@@ -1754,8 +1751,7 @@ end)
 
 test("a release-mode voice held back by another owner's one-shot slice stops when the last ends", function()
   local context, S = sliced_voice(3)
-  local scan = S.lib.scan or {}
-  S.lib.scan = scan
+  local scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return fraction * 2 end  -- a quarter: 0.5 s
   params:set("midi_note_off", 2)
   note_on(context, 1, 36)
@@ -1770,8 +1766,7 @@ test("a release-mode voice held back by another owner's one-shot slice stops whe
   assert_true(not S.voices[1].active, "stopped once the grid's slice ended too")
   -- a key down meanwhile cancels the deferred stop
   context, S = sliced_voice(2)
-  scan = S.lib.scan or {}
-  S.lib.scan = scan
+  scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return fraction * 2 end
   params:set("midi_note_off", 2)
   note_on(context, 1, 36); note_off(context, 1, 36)

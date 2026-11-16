@@ -1373,4 +1373,32 @@ test("a held slice key ends when its grid shows another page or leaves", functio
   assert_equal(doubles.offs[2].key, 103)
 end)
 
+
+-- The Wave 2 landing: the slice rows read S.lib.slices, S.lib.samples and
+-- S.lib.scan at each use and never check they are there, so a missing
+-- module fails loudly instead of showing a plain row
+test("without the slices, the file's settings or the scan the slice rows fail loudly", function()
+  local context, S, doubles = slice_voices(40)
+  local positions = S.lib.positions
+  local slices, samples, scan = S.lib.slices, S.lib.samples, S.lib.scan
+  S.lib.slices = nil
+  local ok, err = pcall(positions.slice_row, 1)
+  assert_true(not ok and tostring(err):find("slices", 1, true) ~= nil, "no S.lib.slices: an error: " .. tostring(err))
+  S.lib.slices = slices
+  -- the first bank pick hears the binds
+  S.lib.samples = nil
+  ok, err = pcall(positions.strip_key, 1, 1, 2, 1)
+  assert_true(not ok and tostring(err):find("samples", 1, true) ~= nil, "no S.lib.samples: an error: " .. tostring(err))
+  S.lib.samples = samples
+  -- a slice key released while its quantized play waits asks the scan
+  params:set("quantize_actions", 3)  -- bar
+  run_to_beat(context, 1.5)
+  press(positions, 1, 1, 3)
+  S.lib.scan = nil
+  ok, err = pcall(release, positions, 1, 1, 3)
+  assert_true(not ok and tostring(err):find("scan", 1, true) ~= nil, "no S.lib.scan: an error: " .. tostring(err))
+  S.lib.scan = scan
+  assert_equal(#doubles.plays, 0)
+end)
+
 end

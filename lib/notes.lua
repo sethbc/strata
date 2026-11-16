@@ -160,13 +160,10 @@ return function(S)
   end
 
   -- The seconds a one-shot buffer voice takes to pass fraction of its
-  -- slot's valid region (S.lib.scan, package 2a), or nil (no one shot, a
-  -- scan of 0, or no scan module). The one guard of it: lib/slices.lua
-  -- reads it through M.pass_seconds
+  -- slot's valid region (S.lib.scan), or nil (no one shot, or a scan of
+  -- 0); lib/slices.lua reads it through M.pass_seconds
   local function pass_seconds(voice, fraction)
-    local scan = S.lib.scan
-    if not (scan and scan.pass_seconds) then return nil end
-    local seconds = scan.pass_seconds(voice, fraction)
+    local seconds = S.lib.scan.pass_seconds(voice, fraction)
     if finite(seconds) and seconds > 0 then return seconds end
     return nil
   end
@@ -395,20 +392,25 @@ return function(S)
   -- valid region, or nil): stored, and while the voice runs sent
   -- (setGrainParam regionStart, then regionLength: 0 and 0 for nil), with
   -- the playhead's restart, since the engine restarts the own scan at every
-  -- regionLength. A hit (hit true: a slice played, a step's slice) always
-  -- sends, so a re-hit of the same slice restarts its scan in every mode;
-  -- anything else sends only a change. A stopped voice's start sends it
-  -- (the slices record's sync). false for a bad voice or region
+  -- regionLength. A hit (hit true: a slice played, a step's slice) sends
+  -- even the same region, so a re-hit of the same slice restarts its scan,
+  -- in wrap and bounce; anything else sends only a change. On a one-shot
+  -- voice the retrigger that follows every hit restarts the engine's scan
+  -- and the playhead (positionsHit, lib/playheads.lua's voice_hit hook), so
+  -- a hit there sends only a change and leaves the playhead to the hook:
+  -- one restart a hit in every mode. A stopped voice's start sends it (the
+  -- slices record's sync). false for a bad voice or region
   function M.set_own_region(voice, region, hit)
     if not whole_in(voice, 1, NUM_VOICES) or (region ~= nil and not valid_region(region)) then return false end
-    if not hit and same_region(own_regions[voice], region) then return true end
+    local one_shot_hit = hit and S.lib.scan.mode(voice) == S.lib.scan.MODE.one_shot
+    if (not hit or one_shot_hit) and same_region(own_regions[voice], region) then return true end
     own_regions[voice] = copy_region(region)
     if S.voices[voice].active then
       local wanted = region or NO_REGION
       engine.setGrainParam(voice - 1, "regionStart", wanted[1])
       engine.setGrainParam(voice - 1, "regionLength", wanted[2])
       count(2)
-      S.lib.playheads.reset(voice)
+      if not one_shot_hit then S.lib.playheads.reset(voice) end
     end
     return true
   end

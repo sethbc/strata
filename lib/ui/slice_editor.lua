@@ -9,13 +9,13 @@
 -- middle), ALT+K3 deletes it, ALT+E2 goes to the rows. Rows view: ALT+E2
 -- picks a row (mode, amount, tempo, bars, key, norm), E3 edits it, E2
 -- goes back to the markers. K2 closes. On the key row a MIDI note sets the
--- key. The slices are S.lib.slices', the file's settings S.lib.samples'
--- (read at each use: a build without them shows no slices and opens no
--- editor). lib/arc/buffer.lua sets the owner's ring fields; BUFFER's field
--- and waveform marks read slot_text and starts. Fields of this module's
--- table: EDITOR, open, close, is_open, state, ready, pick_marker,
--- pick_row, nudge, add, delete, turn_row, amount_range, ring_fractions,
--- slot_text, starts, owner. See docs/notes/lua/ui/slice-editor.md.
+-- key (the note hooks' heard). The slices are S.lib.slices', the file's
+-- settings S.lib.samples' (read at each use). lib/arc/buffer.lua sets the
+-- owner's ring fields; BUFFER's field and waveform marks read slot_text
+-- and starts. Fields of this module's table: EDITOR, open, close, is_open,
+-- state, pick_marker, pick_row, nudge, add, delete, turn_row,
+-- amount_range, ring_fractions, slot_text, starts, owner. See
+-- docs/notes/lua/ui/slice-editor.md.
 
 return function(S)
   local M = {}
@@ -25,8 +25,9 @@ return function(S)
 
   -- The editor's tunables and layout. A nudge in seconds (E3, ALT+E3 and
   -- arc ring 2 a tick); the rows in their order; the bars the bars row
-  -- steps over; the tempo row's step; the amount's ranges besides the
-  -- slices' maximum; the short mode names BUFFER's field shows. layout: the
+  -- steps over; the tempo row's step (the amount's range is the file
+  -- settings', S.lib.samples.SAMPLES, up to the slices' maximum); the
+  -- short mode names BUFFER's field shows. layout: the
   -- title at title_y; the marker ticks tick_height px from tick_y, the
   -- playing slice's span on span_y; the waveform's points point_width px
   -- wide around wave_center (wave_half px each way at a peak of 1, inside
@@ -42,8 +43,6 @@ return function(S)
     bars = {0.25, 0.5, 1, 2, 4, 8, 16, 32},
     bar_texts = {[0.25] = "1/4", [0.5] = "1/2"},
     tempo_step = 0.1,
-    count_min = 2,
-    sensitivity_max = 100,
     short_modes = {off = "off", equal = "eq", transients = "tr"},   -- "tr 64" leaves BUFFER's "slices" label whole
     none_text = "--",
     layout = {title_y = 16, title_right = 127, tick_y = 18, tick_height = 3, span_y = 20,
@@ -75,18 +74,13 @@ return function(S)
   local editor = {open = false, slot = nil, marker = 1, view = "markers", row = 1}
   -- the note a MIDI note on the key row set, until the next clock step sets it
   local pending_key = nil
-  -- the S.lib.samples its bind listener is registered with
-  local bound_to = nil
+  -- whether its bind listener is registered
+  local binds_heard = false
   local owner
 
   ---------------------------------------------------------------------------
   -- What the slot holds (S.lib.slices, S.lib.samples, S.lib.waveforms)
   ---------------------------------------------------------------------------
-
-  -- Whether the modules the editor reads are there
-  function M.ready()
-    return S.lib.slices ~= nil and S.lib.samples ~= nil and S.lib.waveforms.frames ~= nil
-  end
 
   local function valid_slot(slot)
     return type(slot) == "number" and slot >= 1 and slot <= S.constants.NUM_BUFFERS and slot % 1 == 0
@@ -94,24 +88,23 @@ return function(S)
 
   -- The settings record of what the slot holds, nil for no audio
   local function settings(slot)
-    if not M.ready() or not valid_slot(slot) then return nil end
+    if not valid_slot(slot) then return nil end
     return S.lib.samples.settings(slot)
   end
 
   -- The slot's markers, {0} when it has none
   local function markers(slot)
-    local list = M.ready() and valid_slot(slot) and S.lib.slices.markers(slot)
+    local list = valid_slot(slot) and S.lib.slices.markers(slot)
     if type(list) ~= "table" or #list == 0 then return {0} end
     return list
   end
 
   local function frames(slot)
-    return M.ready() and valid_slot(slot) and S.lib.waveforms.frames(slot) or nil
+    return valid_slot(slot) and S.lib.waveforms.frames(slot) or nil
   end
 
   local function rate(slot)
-    local waveforms = S.lib.waveforms
-    return waveforms.rate and waveforms.rate(slot) or S.constants.NORNS_SAMPLE_RATE
+    return S.lib.waveforms.rate(slot) or S.constants.NORNS_SAMPLE_RATE
   end
 
   local function mode_name(record)
@@ -146,13 +139,11 @@ return function(S)
   ---------------------------------------------------------------------------
 
   -- The slot emptied under the editor closes it (S.lib.samples' bind
-  -- listeners hear every bind and unbind); registered once with the store
-  -- the first open finds
+  -- listeners hear every bind and unbind); registered once, at the first open
   local function listen_for_binds()
-    local samples = S.lib.samples
-    if bound_to == samples then return end
-    bound_to = samples
-    samples.on_bind(function(slot)
+    if binds_heard then return end
+    binds_heard = true
+    S.lib.samples.on_bind(function(slot)
       if editor.open and slot == editor.slot and not settings(slot) then M.close() end
     end)
   end
@@ -261,11 +252,12 @@ return function(S)
   end
 
   -- The amount's range for the record's mode: the sensitivity's in
-  -- transients, else the count's
+  -- transients, else the count's (the file settings' bounds)
   function M.amount_range(record)
     record = record or settings(editor.slot)
-    if record and mode_name(record) == "transients" then return 0, EDITOR.sensitivity_max end
-    return EDITOR.count_min, S.lib.slices.SLICES.max
+    local SAMPLES = S.lib.samples.SAMPLES
+    if record and mode_name(record) == "transients" then return 0, SAMPLES.sensitivity_max end
+    return SAMPLES.count_min, S.lib.slices.SLICES.max
   end
 
   -- A change that makes the slices again (the mode, the amount): a record
@@ -447,7 +439,7 @@ return function(S)
     screen.level(LEVELS.span)
     for voice = 1, NUM_VOICES do
       if voice_buffer_slot(voice) == slot then
-        for _, n in ipairs(S.lib.slices.playing(voice) or {}) do
+        for _, n in ipairs(S.lib.slices.playing(voice)) do
           if list[n] then
             screen.move(x_of(list[n] / total), L.span_y)
             screen.line(math.max(x_of((list[n + 1] or total) / total) - 1, x_of(list[n] / total)), L.span_y)
@@ -578,7 +570,7 @@ return function(S)
   -- an analysis runs (its report changes the slice line)
   local function animates()
     if not editor.open then return false end
-    return S.lib.playheads.moving(editor.slot) or (M.ready() and S.lib.slices.analyzing(editor.slot) == true)
+    return S.lib.playheads.moving(editor.slot) or S.lib.slices.analyzing(editor.slot)
   end
 
   -- Where the four arc rings stand (lib/arc/buffer.lua): the selected
@@ -610,13 +602,13 @@ return function(S)
   owner = {draw = draw, hints = hints, enc = enc, key = key, animates = animates}
   M.owner = owner
 
-  -- While the key row is picked, a MIDI note's start sets the key to its
-  -- number (its key modulo 128); the hook only notes it, and the next clock
-  -- step sets it (a hook sends nothing)
-  S.register_note_hook({name = "slice editor", started = function(_, _, note)
+  -- While the key row is picked, a MIDI note sets the key to its number:
+  -- every note a voice receives (the note hooks' heard, lib/midi_in.lua),
+  -- a note outside a slicing voice's slices too (design §3.7). The hook
+  -- only notes it, and the next clock step sets it (a hook sends nothing)
+  S.register_note_hook({name = "slice editor", heard = function(_, note)
     if not editor.open or editor.view ~= "rows" or EDITOR.rows[editor.row] ~= "key" then return end
-    if note.owner ~= S.lib.midi_in.MIDI.owner or type(note.key) ~= "number" then return end
-    pending_key = math.floor(note.key) % 128
+    pending_key = note
   end})
   S.lib.lfos.on_step(function()
     if pending_key == nil then return end

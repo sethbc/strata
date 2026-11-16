@@ -52,8 +52,7 @@ end
 -- full is a number (one shot with a moving scan), else nil (wrap)
 local function scan_double(S, full)
   local double = {full = full}
-  local scan = S.lib.scan or {}
-  S.lib.scan = scan
+  local scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return double.full and fraction * double.full or nil end
   return double
 end
@@ -366,6 +365,43 @@ test("one: every slice note takes the own note and creates no node", function()
   S.lib.notes.set_own_region(1, {0.75, 0.25})
   assert_equal(#context.engine_calls, 0, "not a hit, unchanged: nothing")
   S.lib.playheads.reset = real_reset
+end)
+
+-- The Wave 2 landing: a slice hit restarts the engine's scan once and the
+-- playhead once, in every scan mode. The engine restarts the own scan at
+-- every regionLength (a region sent) and, on a one-shot voice, at every
+-- retrigger (positionsHit), which every hit sends; the playhead resets at
+-- each (set_own_region, the voice_hit hook)
+test("a slice hit restarts the scan once and the playhead once, in every mode", function()
+  for mode, name in ipairs({"wrap", "bounce", "one shot"}) do
+    local context, S = sliced(2, 4, 2)
+    params:set("v1_scan_mode", mode)
+    params:set("v1_buf_scan", 0.5)
+    local resets = 0
+    local real_reset = S.lib.playheads.reset
+    S.lib.playheads.reset = function(voice) if voice == 1 then resets = resets + 1 end; return real_reset(voice) end
+    local function restarts()
+      local count = 0
+      for _, call in ipairs(context.calls_named("setGrainParam")) do
+        if call.args[2] == "regionLength" or call.args[2] == "t_scanReset" then count = count + 1 end
+      end
+      if name == "one shot" then count = count + #context.calls_named("retrigger") end
+      return count
+    end
+    S.lib.slices.play(1, 3, note(1))
+    context.clear_engine_calls(); resets = 0
+    S.lib.slices.play(1, 3, note(2))
+    assert_equal(restarts(), 1, name .. ": a re-hit of the same slice restarts the engine's scan once")
+    assert_equal(resets, 1, name .. ": and the playhead once")
+    assert_equal(#context.calls_named("retrigger"), 1, name .. ": the hit")
+    assert_equal(list_text(S.lib.notes.own_region(1)), "{0.5, 0.25}", name .. ": on its slice")
+    context.clear_engine_calls(); resets = 0
+    S.lib.slices.play(1, 4, note(3))
+    assert_equal(resets, 1, name .. ": another slice restarts the playhead once")
+    assert_equal(call_texts(context, {setGrainParam = true}),
+      "setGrainParam(0, regionStart, 0.75) setGrainParam(0, regionLength, 0.25)", name .. ": its region sent")
+    S.lib.playheads.reset = real_reset
+  end
 end)
 
 test("overlap: each note takes a slot with its own region", function()

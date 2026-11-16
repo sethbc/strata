@@ -24,7 +24,6 @@ local function buffer_voice(seconds, doubles)
       end
     end
     if doubles.tempos then
-      S.lib.samples = S.lib.samples or {}
       S.lib.samples.tempo = function(slot) return doubles.tempos[slot] end
     end
   end})
@@ -623,6 +622,20 @@ test("with quantize actions off nothing ever shows as waiting (#593)", function(
       assert_true(level ~= LEVELS.waiting_high and level ~= LEVELS.waiting_low, "key " .. n .. " at " .. level)
     end
   end
+end)
+
+
+-- The Wave 2 landing: the playhead reads the own note's region from
+-- S.lib.notes.own_region at each use and never checks it is there: without
+-- it the playhead fails loudly instead of reading the loop
+test("without the own note's region the playhead fails loudly", function()
+  local _, S = buffer_voice()
+  assert_true(S.lib.playheads.position(1) ~= nil, "voice 1 runs on slot 1")
+  local own_region = S.lib.notes.own_region
+  S.lib.notes.own_region = nil
+  local ok, err = pcall(S.lib.playheads.position, 1)
+  S.lib.notes.own_region = own_region
+  assert_true(not ok and tostring(err):find("own_region", 1, true) ~= nil, "no own_region: an error: " .. tostring(err))
 end)
 
 end
