@@ -668,6 +668,8 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     end,
     setGrainSource = function(args) return voice(args) or range("source", args[2], 0, spec.input_source) end,
     clearBuffer = slot, stopRecord = slot,
+    -- 3.7's transients pass: slot 0-7 (the engine ignores another, with one line)
+    analyzeBuffer = slot,
     -- start: seconds into the file (the engine clips it to the file)
     loadBuffer = function(args) return slot(args) or at_least("start", args[3], 0) end,
     -- start and length: fractions of the slot's valid region

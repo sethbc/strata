@@ -76,12 +76,12 @@ jobs:
   # (test/unit/docs_test.lua checks it). Rebalance when an area grows.
   # Area times on SuperCollider 3.13 at 3.5.0 (s, the mean of four full runs in Docker; 3.14.1's are within 1 s):
   # lifecycle 114, record 113, memory 95, buffers 89, modulation 89, effects 87, notes 85, voices 75,
-  # rings 69, mix 69, freeze 63, loops 54, variation 52, grains 38, files 29, waveform 23, positions 8,
-  # structure 4, performance 3: 1159 s in all (buffers and notes are the means of three runs at 3.7,
+  # rings 69, mix 69, freeze 63, loops 54, variation 52, grains 38, files 29, waveform 23, positions 8, onsets 5,
+  # structure 4, performance 3: 1164 s in all (onsets is one run at 3.7; buffers and notes the means of three runs at 3.7,
   # where buffers had lost its fixed waits after a load and after a recording, #706 and #718). The
   # slowest shard is lifecycle, files, positions and notes, about 236 s of areas (239 s with its
   # sclang's start in the slowest of those three runs), far under each shard's 570 s; the other six
-  # take 136-167 s. In those runs every shard passed.
+  # take 141-167 s. In those runs every shard passed.
   # memory runs first in its shard (areaOrder), so CI's memory figures are the area's alone.
   # Since #652 the areas no longer depend on each other's order, so the grouping is a
   # choice for the times alone; files and structure share no shard only because this
@@ -108,7 +108,7 @@ jobs:
           - mix,variation,grains,structure,performance
           - modulation,freeze
           - memory,rings
-          - record,waveform
+          - record,waveform,onsets
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
       # the norns commit the engine is compiled against (sc/core classes), in full:
@@ -170,9 +170,9 @@ jobs:
 
       # A port that already has a server must fail the run at once, naming the
       # port, and must leave that server running (#471). These two steps run
-      # on one shard only, record and waveform's (well under its timeout).
+      # on one shard only, record, waveform and onsets' (well under its timeout).
       - name: Engine check refuses a port that already has a server
-        if: matrix.areas == 'record,waveform'
+        if: matrix.areas == 'record,waveform,onsets'
         run: |
           scsynth -u 57391 > "$RUNNER_TEMP/scsynth-other.log" 2>&1 &
           other=$!
@@ -190,7 +190,7 @@ jobs:
       # A server that cannot boot (the port held by a socket that never
       # answers) must fail the run within seconds, naming the cause (#472)
       - name: Engine check fails at once when scsynth cannot boot
-        if: matrix.areas == 'record,waveform'
+        if: matrix.areas == 'record,waveform,onsets'
         run: |
           python3 -c 'import socket, time; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", 57392)); time.sleep(120)' &
           holder=$!

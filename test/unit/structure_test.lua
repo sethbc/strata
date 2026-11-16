@@ -1287,7 +1287,7 @@ end)
 -- The engine areas and their orders (the 3.2 design, §0)
 local ENGINE_AREAS = { performance = 10, voices = 20, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70,
   scale = 80, variation = 90, loop = 100, freeze = 110, mix = 120, record = 130, waveform = 140, positions = 150,
-  modulation = 160, notes = 170 }
+  modulation = 160, notes = 170, onsets = 180 }
 
 test("every engine file is named Strata*.sc and defines each strataArea method once", function()
   local files, areas, orders = engine_files(), {}, {}
@@ -2187,6 +2187,49 @@ test("the engine's sample paths run no sclang function per sample (#131)", funct
   local loops = per_sample_loops((condition or "") .. (loop or ""))
   assert_equal(#loops, 0, "interleaveFiles' chunk loop runs no function per sample (found " .. table.concat(loops, ", ") .. ")")
   assert_true((loop or ""):find("this%.interleaveChunk%(") ~= nil, "each chunk goes through interleaveChunk")
+end)
+
+-- 3.7's onsets pass (#131): the chunk loop reads each file into a fresh
+-- array and works out each hop's energy with C primitives only, so every
+-- method of StrataOnsets.sc it calls holds no per-sample iteration, no
+-- maxItem or minItem (a function per sample) and no stale read
+test("the onsets pass runs no sclang function per sample (#131)", function()
+  local text
+  for _, file in ipairs(engine_files()) do
+    if file.path:match("StrataOnsets%.sc$") then text = file.text end
+  end
+  assert_true(text ~= nil, "the engine sources hold StrataOnsets.sc")
+  local pass = sc_method_body(text or "", "onsetStrengths") or ""
+  local condition, loop = pass:match("while%s*(%b{})%s*(%b{})")
+  assert_true(loop ~= nil, "onsetStrengths reads its chunks in a while loop")
+  local chunk_loop = (condition or "") .. (loop or "")
+  assert_true(chunk_loop:find("this%.freshReadArray%(") ~= nil, "each chunk is read into a fresh array")
+  assert_true(chunk_loop:find("this%.yieldToCommands%(") ~= nil, "the loop waits through yieldToCommands")
+  local function findings(code, name)
+    local found = per_sample_loops(code)
+    for _, pattern in ipairs({ "maxItem", "minItem" }) do
+      if code:find(pattern) then found[#found + 1] = pattern end
+    end
+    for _, target in ipairs(stale_reads(code)) do found[#found + 1] = "stale readData " .. target end
+    assert_equal(#found, 0, name .. " runs no function per sample (found " .. table.concat(found, ", ") .. ")")
+  end
+  findings(chunk_loop, "onsetStrengths' chunk loop")
+  -- every method of the file the loop calls, and every one those call
+  local queue, seen, scanned = { chunk_loop }, {}, 0
+  while #queue > 0 do
+    local code = table.remove(queue)
+    for called in code:gmatch("this%.([%a_][%w_]*)") do
+      local body = not seen[called] and sc_method_body(text, called)
+      if body then
+        seen[called] = true
+        scanned = scanned + 1
+        findings(body, called)
+        queue[#queue + 1] = body
+      end
+    end
+  end
+  assert_true(seen.hopEnergies, "the loop works out each hop's energy in hopEnergies (scanned " .. scanned .. ")")
+  assert_true(seen.onsetChunkStrengths, "... and each hop's strength in onsetChunkStrengths")
 end)
 
 -- The engine check's constant test files (#207): writeConstantFrames builds
