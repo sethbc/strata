@@ -357,9 +357,9 @@
     // tail is cut and a new synth starts; an empty slot starts one. A
     // stopped voice takes no extra note (Lua never sends one): ignored with
     // one line. A note that sounds then opens the voice's step gate
-    // (openStepGate, ruling 54), as retrigger does for the own note; the
-    // engine's own restarts (startNote from restartNotes, notesUnfrozen)
-    // open nothing
+    // (openStepGate, ruling 54), as retrigger does for the own note, and is
+    // a hit the areas hear (voiceHit \note, 3.7); the engine's own restarts
+    // (startNote from restartNotes, notesUnfrozen) open and tell nothing
     extraNoteOn { arg voice, slot, note, freq, rate, velocity;
         var record = this.noteRecord(voice, slot);
         this.forgetFailedNoteStarts(record);
@@ -379,7 +379,10 @@
             this.startNote(voice, slot);
         }
         { this.startNote(voice, slot) };
-        if (record[\state] == \live) { this.openStepGate(voice) };
+        if (record[\state] == \live) {
+            this.openStepGate(voice);
+            this.voiceHit(voice, \note);  // (3.7: the areas hear the hit)
+        };
     }
 
     // Ruling 54 (#683): the voice's step gate opens for an extra note's

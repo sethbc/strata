@@ -1,8 +1,9 @@
 // StrataVoices.sc
 // The voices area: the voices' buses, groups and state, the voice commands
 // (voiceOn, retrigger, voiceOff, setVoiceParam, setGrainParam,
-// setGrainSource and the crossmod commands), setVoiceControl and
-// envBufnumFor. See docs/notes/engine/voices.md.
+// setGrainSource and the crossmod commands), setVoiceControl,
+// envBufnumFor and voiceHit (the areas' hook for a voice's hits). See
+// docs/notes/engine/voices.md.
 
 + Engine_Strata {
     // The voices area (order 20)
@@ -77,9 +78,12 @@
     addVoiceCommands {
         // Commands for voice control
         this.addCommand(\voiceOn, "iffffff", { arg msg;
-            var voice = msg[1].asInteger;
+            var voice = msg[1].asInteger, stopped;
 
             if (this.validVoice(voice)) {
+                // a start of a stopped (or releasing) voice is a hit, told
+                // to the areas once the bundle is sent (voiceHit, below)
+                stopped = this.voiceRunning(voice).not;
                 // All 3 mod slots start on the silent bus (no modulation) and
                 // bend at 1. The Lua script sends the voice-level values (the
                 // synthesis params, crossmod routing and amounts, mod speed,
@@ -113,6 +117,7 @@
                     // frame, and a function's frame is freed as it returns, #211)
                     this.areaCall(\gateVoice, voice);
                 });
+                if (stopped) { this.voiceHit(voice, \start) };
             };
         });
 
@@ -131,6 +136,7 @@
                 this.setSynth(this.voiceKey(voice), \velocity, velocity, \t_trig, 1);
                 this.setGrainSynths(voice, \t_trig, 1);
                 if (this.voiceRunning(voice)) { this.setSynth(this.voiceMixKey(voice), \velocity, velocity, \t_trig, 1) };
+                this.voiceHit(voice, \retrigger);
             };
         });
 
@@ -215,6 +221,27 @@
                 this.setSynth(this.modKey(voice), \speed, msg[2]);
             };
         });
+    }
+
+    // A hit on a voice (3.7, design §0.2): kind is \start (voiceOn on a
+    // stopped or releasing voice, after its bundle), \retrigger (retrigger
+    // of a valid voice, after its sends) or \note (an extra note that sounds:
+    // extraNoteOn, where it opens the step gate). Every area with the
+    // optional voiceHit hook, a function of voice and kind, hears it, in
+    // ascending order (areas is sorted). A hook that reaches a method which
+    // hands a function on calls it through areaCall, as every hook does. The
+    // loop is an inlined while, so this method holds no closure literal: its
+    // frame has no heap context and clears its own caller as it returns, as
+    // areaCall's does (#211): a hook's caller is this live method frame.
+    // (areas is nil after a rolled-back alloc)
+    voiceHit { arg voice, kind;
+        var index = 0, hook;
+        if (areas.isNil) { ^this };
+        while { index < areas.size } {
+            hook = areas[index][\voiceHit];
+            if (hook.notNil) { hook.value(voice, kind) };
+            index = index + 1;
+        };
     }
 
     // The voices' synths (the effects area has stopped its own), then their
