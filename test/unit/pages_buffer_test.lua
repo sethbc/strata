@@ -2059,7 +2059,8 @@ test("BUFFER's slices field shows the mode and the count, -- for an empty slot",
   fake.modes[1] = 3
   fake.markers[1] = {}
   for k = 1, 64 do fake.markers[1][k] = (k - 1) * 1000 end
-  redraw(); assert_equal(field_named(context, "slices").value, "tran 64")
+  redraw(); assert_equal(field_named(context, "slices").value, "tr 64")
+  assert_equal(field_named(context, "slices").label, "slices", "the label whole beside its widest value")
   assert_screen_layout(context, "BUFFER's slices field at its widest")
   assert_equal(hint_text(context), "K2:ld/clr K3:edit", "K3 edits on the slices field")
 end)

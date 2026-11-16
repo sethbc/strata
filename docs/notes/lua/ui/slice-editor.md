@@ -8,7 +8,7 @@
 - The MIDI key: the note hook (`S.register_note_hook`, `slice editor`) only notes a MIDI note's number (`key % 128`, owner `S.lib.midi_in.MIDI.owner`) while the editor is open on the `key` row; the next 48 Hz step (`S.lib.lfos.on_step`) sets it through `S.lib.samples.set`, so a hook sends nothing. A close forgets a noted key.
 - The slot emptied under the editor closes it: its listener on `S.lib.samples.on_bind` (registered once per store, at the first open) closes the editor when its slot's bind leaves no settings record.
 - The modules it reads are read at each use. Without them (`M.ready()` false: no `S.lib.slices`, `S.lib.samples` or `S.lib.waveforms.frames`) BUFFER's field shows `--`, the waveform has no marks, `open` refuses and the layout states draw BUFFER as it is.
-- The hint row fits 128 px: `E2 slice E3 nudge K3 add` (K2's back is named in the rows view), with ALT `E2 rows E3 fine K3 delete`; rows `E2 slices E3 edit K2 back`, with ALT `E2 rows E3 edit`. A "hints" flash (BUFFER's, `buffer_page_flash`) shows in their place.
+- The hint row fits 128 px: `K2:back K3:add E3:nudge` (the other modal editors' style; E2's pick shows as the bright `slice i/n`), with ALT `E2 rows E3 fine K3 delete`; rows `E2 slices E3 edit K2 back`, with ALT `E2 rows E3 edit`. A "hints" flash (BUFFER's, `buffer_page_flash`) shows in their place.
 
 ## Owns
 
@@ -23,7 +23,7 @@
   - `amount`: `sensitivity` 0-100 in `transients`, else `count` 2-`SLICES.max`, then `make` (not in `off`).
   - `tempo`: 0.1 a detent, at most `tempo_max`; below `tempo_min` it clears (nil); from nil a turn up sets the clock's tempo (`clock.get_tempo()`, rounded to 0.1, clamped), a turn down does nothing.
   - `bars`: each detent tries the counts of `EDITOR.bars` (1/4 to 32) beyond the current one in its direction through `set_bars`, taking the first whose tempo it accepts; none: it stops.
-  - `key`: unset, then 0-127 (`musicutil.note_num_to_name(key, true)`: norns' names, 60 is `C3`, so C-2 to G8, as the zones editor's).
+  - `key`: unset, then 0-127; from unset a turn up starts at `S.lib.notes.NOTES.rate_root_note` (60), a turn down does nothing (`musicutil.note_num_to_name(key, true)`: norns' names, 60 is `C3`, so C-2 to G8, as the zones editor's).
   - `norm`: up on, down off; on shows `S.lib.samples.gain(slot)` as `%+.1fdB`.
 - K2 (press, no ALT) closes. `animates()` while `S.lib.playheads.moving(slot)` or the slot is `analyzing`.
 
@@ -39,4 +39,4 @@
 
 ## BUFFER's slices field and marks
 
-`slot_text(slot)`: `--` (no audio), `off`, else `EDITOR.short_modes[mode]` and `S.lib.slices.count(slot)` (`eq 12`, `tran 64`). `starts(slot)`: the markers over the slot's frames, nil with fewer than two; BUFFER draws one pixel per column on y 10 (`docs/notes/lua/pages/buffer.md`).
+`slot_text(slot)`: `--` (no audio), `off`, else `EDITOR.short_modes[mode]` and `S.lib.slices.count(slot)` (`eq 12`, `tr 64`: `tran 64` would cut BUFFER's `slices` label). `starts(slot)`: the markers over the slot's frames, nil with fewer than two; BUFFER draws one pixel per column on y 10 (`docs/notes/lua/pages/buffer.md`).

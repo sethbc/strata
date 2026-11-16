@@ -14,7 +14,7 @@ Where the eight sample buffers are recorded, filled, cleared and saved, where a 
 - `bm`: the bookmark the selected voice last jumped to and its position (`2 0.25`), or `-` before it has jumped to one. E3 steps through bookmarks 1-4 and jumps the voice to each one it lands on (from `-`, the first step either way is bookmark 1; turning past 1 or 4 does nothing); ALT+E3 jumps the voice back to the bookmark shown, after its grains have moved on. With quantize actions on beat or bar ([Parameters](../params.md#sequencer-group)) the jump waits for the next beat or bar (the header shows `v1 bm 2 at bar`), and E3 steps on from the bookmark that waits. Dim when the voice is not playing a buffer. A bookmark is set on the VOICE page (see [VOICE](voice.md)) or with a grid's store key.
 - `start`: for a file longer than a buffer, how far into the file the buffer starts; `-` when the file fits. A file above 48 kHz fills a buffer with fewer of its seconds (8 of 16 at 96 kHz), so its start reaches its last 8 s. It shows hundredths below 10 s (`9.05s`), tenths from 10 s (`12.1s`), whole seconds from 100 s (`123s`), minutes and seconds from 1000 s (`20:34`), then whole minutes (`123m`) and hours (`17h`) for very long files. ALT+E3 moves it by the last digit shown, E3 by that or a tenth of a second, whichever is more; the file reloads from there a moment after you stop turning.
 - `fric`: the arc scrub's friction: 100% stops where you let go; lower lets a fling glide on and slow down.
-- `slices`: how the buffer's file is cut into slices: `off`, `eq 12` (equal parts) or `tran 12` (at its transients), with the number of slices; `--` for an empty buffer. E3 does nothing here: K3 opens the slice editor (below).
+- `slices`: how the buffer's file is cut into slices: `off`, `eq 12` (equal parts) or `tr 12` (at its transients), with the number of slices; `--` for an empty buffer. E3 does nothing here: K3 opens the slice editor (below).
 
 The fields are also in PARAMETERS: `rec`, `fb`, `loop`, `thr`, `sync` and `len` (the record beats) in the **record** group, `dur` and `lvl` in the **buffers** group, `fric` in **positions**, the voice's source in its granular section and its bookmarks in its extras. `start` is no parameter: it is remembered with the buffer's file (see [Audio Sources and Buffers](../sources-and-buffers.md#files)). Below the fields, `in` is a meter of the live input: eight segments, about 6 dB each from -48 dB, showing the louder of the two channels; the highest segment reached stays lit for 1 s. The meter shows the live level at each visit (it never stops listening: the same level can drive a modulation source on any page).
 
@@ -57,11 +57,11 @@ On the fields:
   - `count` or `sens`: changing it cuts the slices again. Starts you added, moved or deleted by hand are then dropped, and the hint row says `edits dropped`. In `off` the count is kept for when you pick `equal`.
   - `tempo`: the file's tempo, 20-300 BPM in 0.1 steps; from `--` (none) the first turn up sets the clock's tempo, and turning below 20 clears it.
   - `bars`: how many 4-beat bars the buffer holds at the file's tempo; turning it sets the tempo that makes it exactly 1/4, 1/2, 1, 2, 4, 8, 16 or 32 bars (a count whose tempo would fall outside 20-300 BPM is passed over).
-  - `key`: the note the file is in (`--` unset, then C-2 to G8, as norns names notes: 60 is C3). While this field is picked, a note played on a MIDI controller sets it.
+  - `key`: the note the file is in (`--` unset, then C-2 to G8, as norns names notes: 60 is C3); from `--` the first turn up sets C3. While this field is picked, a note played on a MIDI controller sets it.
   - `norm`: `off`, or on, showing the gain the buffer plays at (`+6.0dB`).
 - **E2** - Back to the slices
 - **K2** - Close the editor
 
-The hint row reads `E2 slice E3 nudge K3 add` (with ALT `E2 rows E3 fine K3 delete`), and on the fields `E2 slices E3 edit K2 back` (with ALT `E2 rows E3 edit`).
+The hint row reads `K2:back K3:add E3:nudge` (with ALT `E2 rows E3 fine K3 delete`), and on the fields `E2 slices E3 edit K2 back` (with ALT `E2 rows E3 edit`).
 
 The arc's rings on this page, and in the slice editor, are described in [Arc](../arc.md). Buffers, recording, saving and restoring are described in [Audio Sources and Buffers](../sources-and-buffers.md).

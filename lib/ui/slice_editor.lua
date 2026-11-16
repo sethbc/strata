@@ -44,7 +44,7 @@ return function(S)
     tempo_step = 0.1,
     count_min = 2,
     sensitivity_max = 100,
-    short_modes = {off = "off", equal = "eq", transients = "tran"},
+    short_modes = {off = "off", equal = "eq", transients = "tr"},   -- "tr 64" leaves BUFFER's "slices" label whole
     none_text = "--",
     layout = {title_y = 16, title_right = 127, tick_y = 18, tick_height = 3, span_y = 20,
       wave_top = 22, wave_bottom = 32, wave_center = 27, wave_half = 5, point_width = 2, screen_width = 128,
@@ -335,9 +335,17 @@ return function(S)
     end,
     tempo = turn_tempo,
     bars = function(slot, _, d) turn_bars(slot, d) end,
+    -- from unset a turn up starts at the note that plays rate 1 (as the
+    -- tempo row starts at the clock's), a turn down does nothing
     key = function(slot, record, d)
-      local key = util.clamp((record.key or -1) + d, -1, 127)
-      if key < 0 then key = nil end
+      local key
+      if record.key == nil then
+        if d <= 0 then return end
+        key = S.lib.notes.NOTES.rate_root_note
+      else
+        key = util.clamp(record.key + d, -1, 127)
+        if key < 0 then key = nil end
+      end
       if key ~= record.key then S.lib.samples.set(slot, "key", key) end
     end,
     norm = function(slot, record, d)
@@ -525,7 +533,7 @@ return function(S)
     local shown = S.lib.ui_flash.text("hints")
     if shown then return shown end
     if editor.view == "rows" then return alt_held and "E2 rows E3 edit" or "E2 slices E3 edit K2 back" end
-    return alt_held and "E2 rows E3 fine K3 delete" or "E2 slice E3 nudge K3 add"
+    return alt_held and "E2 rows E3 fine K3 delete" or "K2:back K3:add E3:nudge"
   end
 
   ---------------------------------------------------------------------------
@@ -624,7 +632,7 @@ return function(S)
   -- BUFFER's slices field and waveform marks
   ---------------------------------------------------------------------------
 
-  -- "off", "eq 12" or "tran 12" (the slot's count), "--" for no audio
+  -- "off", "eq 12" or "tr 12" (the slot's count), "--" for no audio
   function M.slot_text(slot)
     local record = settings(slot)
     if not record then return EDITOR.none_text end
