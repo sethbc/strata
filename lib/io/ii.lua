@@ -47,13 +47,18 @@ return function(S)
     },
     reset_events = "ii.reset_events(ii.self)",  -- what crow.reset() runs for ii.self (crow-ii.md §1)
     velocity_max = 127, macro_max = 16383,
+    -- #710's turns: the devices whose every command with an argument takes
+    -- the port it addresses first (crow-ii.md §2: the ER-301's tr, cv and
+    -- the rest; the TELEXo's tr, cv, env and the rest; their global
+    -- commands take none), so a port is one line from the start; and the
+    -- command that starts a note on them (each sends a note's tr last)
+    port_devices = {er301 = true, txo = true}, note_trigger = "tr",
   }
 
   -- leading: the flag send reads (set while the rig says strata with a
   -- crow there, cleared only at the end of the leaving sequence); queue:
   -- the entries waiting, each {line, off, pair, key, turn}; pairs: the
-  -- (device, command) pairs that have had an off this lead, and
-  -- port_devices the devices they name; lines: their
+  -- (device, command) pairs that have had an off this lead; lines: their
   -- lines' state ({high, waiting}, by key); owed: the offs the next lead
   -- queues first after the devices' ready ({order = {entry, ...}, by_key});
   -- owing: crow left while Strata led, so an off that comes before the next
@@ -65,7 +70,7 @@ return function(S)
   -- until the queue next empties
   local state = {started = false, stopped = false, leading = false, queue = {}, lines = {}, pairs = {}, dropped = 0,
     errors = {}, owed = {order = {}, by_key = {}}, owing = false, leave_room = nil,
-    port_devices = {}, step = 0, turns = {}, asking = 0, wanting = {}, refusals = 0, pressed = false}
+    step = 0, turns = {}, asking = 0, wanting = {}, refusals = 0, pressed = false}
 
   local function bus() return S.lib.io_rig.get(SPEC.bus_key) end
   local function present() return S.lib.io_crow.present() end
@@ -75,6 +80,12 @@ return function(S)
   function M.queued() return #state.queue end
   function M.dropped() return state.dropped end
   function M.owed() return #state.owed.order end
+  -- For tests: the owed offs' lines, in order
+  function M.owed_lines()
+    local lines = {}
+    for index, entry in ipairs(state.owed.order) do lines[index] = entry.line end
+    return lines
+  end
 
   -- ii.<device>.<command>(<args>), each argument as crow's lines write numbers
   local function line_for(device, command, ...)
@@ -115,17 +126,15 @@ return function(S)
     return line
   end
 
-  local function forget_lines() state.lines, state.pairs, state.port_devices = {}, {}, {} end
+  local function forget_lines() state.lines, state.pairs = {}, {} end
 
   -- Learn a pair at its first off: its sends already waiting are counted
   -- now. An early send left uncounted would, as it drains, use up the
   -- count of a later send of its line, which would then read as low with
-  -- nothing waiting while that send still waits. Its device is then known
-  -- to address ports (#710's turns)
+  -- nothing waiting while that send still waits
   local function learn_pair(entry)
     local pair = entry.pair
     state.pairs[pair] = true
-    state.port_devices[entry.device] = true
     for _, waiting in ipairs(state.queue) do
       if waiting.pair == pair and not waiting.off then
         local line = line_state(waiting.key)
@@ -146,7 +155,8 @@ return function(S)
   ---------------------------------------------------------------------------
 
   -- A send's turn is its line: its device and the port it addresses (its
-  -- first argument) once the device has had an off this lead, so a port's
+  -- first argument) for a device whose commands address ports
+  -- (SPEC.port_devices), so a port's
   -- cv, tr, env and settings share one turn; else its device and command
   -- (its pair), so play_note takes one turn for all its pitches. The two
   -- kinds of id cannot meet: a port's has an empty command. Each turn:
@@ -154,14 +164,15 @@ return function(S)
   -- to crow, nil never), asked (the step of its latest send), asking
   -- (counted in state.asking), wanting (the refusal that put it in
   -- state.wanting, nil when not there), and the step's decision: decided
-  -- (the step), admitted (true or false) and commands (those admitted in it)
+  -- (the step), admitted (true or false), closed (its note's trigger
+  -- admitted) and commands (those admitted in it)
   local function turn_for(entry)
     local id = entry.pair
-    if state.port_devices[entry.device] and entry.first ~= "" then id = entry.device .. "\n\n" .. entry.first end
+    if SPEC.port_devices[entry.device] and entry.first ~= "" then id = entry.device .. "\n\n" .. entry.first end
     local turn = state.turns[id]
     if not turn then
       turn = {id = id, waiting = 0, served = nil, asked = nil, asking = false, wanting = nil,
-        decided = nil, admitted = false, commands = {}}
+        decided = nil, admitted = false, closed = false, commands = {}}
       state.turns[id] = turn
     end
     return turn
@@ -212,15 +223,26 @@ return function(S)
   end
 
   -- The line's later sends in the step follow its decision, within the
-  -- bound; while pressed, one note of it: each command once, so a chord's
-  -- later notes to the port are refused whole (their cv and their tr)
+  -- bound. While pressed the decision covers one note of the line: the
+  -- note stays open until the line's first admitted trigger (a re-pitch
+  -- before it closes nothing), and after it the line's later notes in the
+  -- step are refused whole (their cv and their tr). A send repeating a
+  -- command already admitted in the step starts a new note (a re-pitch's cv,
+  -- then the note's): with room for less than a note (II.note_lines) it and
+  -- the rest of the line in the step are refused
   local function admits(turn, command)
     if turn.decided ~= state.step then
-      turn.decided, turn.admitted, turn.commands = state.step, decides(turn), {}
+      turn.decided, turn.admitted, turn.closed, turn.commands = state.step, decides(turn), false, {}
       return turn.admitted
     end
     if not turn.admitted or #state.queue >= II.queue_max then return false end
-    return not (state.pressed and turn.commands[command])
+    if not state.pressed then return true end
+    if turn.closed then return false end
+    if turn.commands[command] and II.queue_max - #state.queue < II.note_lines then
+      turn.admitted = false
+      return false
+    end
+    return true
   end
 
   local function refuse(turn)
@@ -270,6 +292,7 @@ return function(S)
       return false
     end
     turn.commands[command] = true
+    if command == SPEC.note_trigger then turn.closed = true end
     entry.turn = turn
     turn.waiting = turn.waiting + 1
     table.insert(state.queue, entry)

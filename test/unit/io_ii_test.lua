@@ -193,14 +193,15 @@ local function fill(ii, n, from)
   return lines
 end
 
--- #710 (the controller's rulings 2 and 3, variant C): under sustained overload
--- the lines take turns. A line is a device and the port it addresses (its first
--- argument) once the device has had an off this lead, else its device and
--- command. From a refusal until the queue next empties, a line's first send in
--- a step decides for its sends in that step, one note's worth (each command
--- once); it is admitted only with fewer than its share of lines waiting and
--- room for a note (II.note_lines) for itself and for each line refused and
--- served less recently
+-- #710 (the controller's rulings 2 to 4): under sustained overload the lines
+-- take turns. A line is a device and the port it addresses (its first
+-- argument) for a device whose commands address ports (the ER-301 and the
+-- TELEXo), else its device and command. From a refusal until the queue next
+-- empties, a line's first send in a step decides for its sends in that step,
+-- one note's worth (open until its first admitted trigger, tr); it is
+-- admitted only with fewer than its share of lines waiting and room for a
+-- note (II.note_lines) for itself and for each line refused and served less
+-- recently
 
 test("below 48 waiting, lines are sent in the order queued and none is refused", function()
   local context, S, ii = started()
@@ -230,27 +231,27 @@ test("below 48 waiting, lines are sent in the order queued and none is refused",
   end
 end)
 
--- The queue pressed: (gt, tr) has had an off, so gt addresses ports (port 9
+-- The queue pressed: er301 addresses ports (SPEC.port_devices) (port 9
 -- known low); port 1's on queued, 47 notes of one line behind it, then port 2's
 -- on refused at the full queue; one step sends port 1's on and three notes:
 -- room for four lines, a note (II.note_lines) but not two
 local function pressed_with_room_for_one_note(context, S, ii, step)
   lead(context, S)
-  ii.send_off("gt", "tr", 9, 0)
+  ii.send_off("er301", "tr", 9, 0)
   drain(step, ii)
-  assert_true(ii.send("gt", "tr", 1, 1))
+  assert_true(ii.send("er301", "tr", 1, 1))
   for k = 1, 47 do assert_true(ii.send("jf", "play_note", k, 5)) end
-  assert_equal(ii.send("gt", "tr", 2, 1), false, "port 2 refused at the full queue")
-  assert_equal(step()[1], "ii.gt.tr(1, 1)", "port 1 served")
+  assert_equal(ii.send("er301", "tr", 2, 1), false, "port 2 refused at the full queue")
+  assert_equal(step()[1], "ii.er301.tr(1, 1)", "port 1 served")
   assert_equal(ii.queued(), 44, "room for four lines")
   assert_true(4 >= ii.II.note_lines and 4 < 2 * ii.II.note_lines, "room for one note, not two")
 end
 
 -- A queue pressed with 24 notes of one line waiting and room for 24 lines
--- (one line asking: a share of 48 / 2 = 24); gt addresses ports
+-- (one line asking: a share of 48 / 2 = 24); er301 addresses ports
 local function pressed_with_room(context, S, ii, step)
   lead(context, S)
-  ii.send_off("gt", "tr", 9, 0)
+  ii.send_off("er301", "tr", 9, 0)
   drain(step, ii)
   for k = 1, 48 do assert_true(ii.send("jf", "play_note", k, 5), "unpressed, one line may fill the queue") end
   assert_equal(ii.send("jf", "play_note", 49, 5), false, "the 49th refused: pressed")
@@ -263,10 +264,10 @@ test("a line served least recently is admitted before one served just now", func
   local step = stepper(context, S)
   pressed_with_room_for_one_note(context, S, ii, step)
   local dropped = ii.dropped()
-  assert_equal(ii.send("gt", "tr", 1, 1), false,
+  assert_equal(ii.send("er301", "tr", 1, 1), false,
     "port 1, served just now, does not take the note's room port 2 waits for")
   assert_equal(ii.dropped(), dropped + 1, "and is counted")
-  assert_equal(ii.send("gt", "tr", 2, 1), true, "port 2, never served, takes it")
+  assert_equal(ii.send("er301", "tr", 2, 1), true, "port 2, never served, takes it")
   assert_equal(ii.queued(), 45)
 end)
 
@@ -275,14 +276,14 @@ test("a refused on owes no off and displaces nothing", function()
   local step = stepper(context, S)
   pressed_with_room_for_one_note(context, S, ii, step)
   local waiting = ii.queued()
-  assert_equal(ii.send("gt", "tr", 9, 1), false, "port 9 (known low) refused: port 2 was refused first")
+  assert_equal(ii.send("er301", "tr", 9, 1), false, "port 9 (known low) refused: port 2 was refused first")
   assert_equal(ii.queued(), waiting, "nothing taken out, nothing added")
-  assert_equal(ii.send_off("gt", "tr", 9, 0), false, "its off is not owed")
+  assert_equal(ii.send_off("er301", "tr", 9, 0), false, "its off is not owed")
   local sent = drain(step, ii)
   assert_equal(#sent, waiting, "every line admitted is sent")
   assert_equal(sent[#sent], "ii.jf.play_note(47, 5)", "in the order queued")
   for _, line in ipairs(sent) do
-    assert_true(line:find("ii.gt.tr(9,", 1, true) == nil, "nothing of port 9: " .. line)
+    assert_true(line:find("ii.er301.tr(9,", 1, true) == nil, "nothing of port 9: " .. line)
   end
 end)
 
@@ -293,7 +294,7 @@ test("under overload a line holds at most its share of the queue", function()
   local dropped = ii.dropped()
   assert_equal(ii.send("jf", "play_note", 50, 5), false, "the line holds its share, 24, with room for 24 more")
   assert_equal(ii.dropped(), dropped + 1, "and the refusal is counted")
-  assert_equal(ii.send("gt", "tr", 1, 1), true, "another line still gets in")
+  assert_equal(ii.send("er301", "tr", 1, 1), true, "another line still gets in")
   step()
   -- two lines asking: a share of 48 / (2 * 2) = 12, and 20 notes wait
   assert_equal(ii.send("jf", "play_note", 51, 5), false, "still past its share")
@@ -305,12 +306,12 @@ test("the dropped count counts each refused line, and IO's section shows it", fu
   local step = stepper(context, S)
   pressed_with_room_for_one_note(context, S, ii, step)
   assert_equal(ii.dropped(), 1, "port 2's")
-  ii.send("gt", "tr", 1, 1)
-  ii.send("gt", "tr", 9, 1)
+  ii.send("er301", "tr", 1, 1)
+  ii.send("er301", "tr", 9, 1)
   assert_equal(ii.dropped(), 3, "two more refused")
   assert_equal(ii_section(S).status(), "3 dropped")
   -- a refused note counts each of its lines
-  ii.send("gt", "cv", 1, 2); ii.send("gt", "tr", 1, 1)
+  ii.send("er301", "cv", 1, 2); ii.send("er301", "tr", 1, 1)
   assert_equal(ii.dropped(), 5, "a note's pitch and trigger, two lines")
 end)
 
@@ -318,29 +319,29 @@ test("a note's pitch and trigger are admitted or refused together", function()
   local context, S, ii = started()
   local step = stepper(context, S)
   lead(context, S)
-  ii.send_off("gt", "tr", 9, 0)
+  ii.send_off("er301", "tr", 9, 0)
   drain(step, ii)
-  for port = 10, 30 do assert_true(ii.send("gt", "tr", port, 1)) end
+  for port = 10, 30 do assert_true(ii.send("er301", "tr", port, 1)) end
   for k = 1, 27 do assert_true(ii.send("jf", "play_note", k, 5)) end
   assert_equal(ii.send("jf", "play_note", 28, 5), false, "pressed")
   for _ = 1, 3 do step() end
   -- 22 lines asking (21 ports, jf): a share of max(1, 48 / 44) = 1; room for 12
   assert_equal(ii.queued(), 36)
-  assert_equal(ii.send("gt", "cv", 4, 2.5), true, "port 4's pitch admitted")
-  assert_equal(ii.send("gt", "tr", 4, 1), true, "and its trigger with it, in the same step, past the share of 1")
+  assert_equal(ii.send("er301", "cv", 4, 2.5), true, "port 4's pitch admitted")
+  assert_equal(ii.send("er301", "tr", 4, 1), true, "and its trigger with it, in the same step, past the share of 1")
   step()
-  assert_equal(ii.send("gt", "cv", 4, 3), false, "a step later port 4's note still waits: its pitch refused")
-  assert_equal(ii.send("gt", "tr", 4, 1), false, "and its trigger with it")
+  assert_equal(ii.send("er301", "cv", 4, 3), false, "a step later port 4's note still waits: its pitch refused")
+  assert_equal(ii.send("er301", "tr", 4, 1), false, "and its trigger with it")
   -- two steps apart, two decisions
-  assert_equal(ii.send("gt", "cv", 5, 1), true, "port 5's pitch admitted")
+  assert_equal(ii.send("er301", "cv", 5, 1), true, "port 5's pitch admitted")
   step()
-  assert_equal(ii.send("gt", "tr", 5, 1), false,
+  assert_equal(ii.send("er301", "tr", 5, 1), false,
     "a step later its trigger decides alone: refused while the pitch waits")
   local port_4 = {}
   for _, line in ipairs(drain(step, ii)) do
-    if line:find("ii.gt.", 1, true) and line:find("(4,", 1, true) then port_4[#port_4 + 1] = line end
+    if line:find("ii.er301.", 1, true) and line:find("(4,", 1, true) then port_4[#port_4 + 1] = line end
   end
-  assert_equal(table.concat(port_4, "|"), "ii.gt.cv(4, 2.5)|ii.gt.tr(4, 1)", "port 4: one whole note")
+  assert_equal(table.concat(port_4, "|"), "ii.er301.cv(4, 2.5)|ii.er301.tr(4, 1)", "port 4: one whole note")
 end)
 
 test("under a pressed queue a chord to one port sends one whole note a step", function()
@@ -350,8 +351,8 @@ test("under a pressed queue a chord to one port sends one whole note a step", fu
   local function chord(first_pitch)
     local admitted = {}
     for k = 0, 2 do
-      admitted[#admitted + 1] = tostring(ii.send("gt", "cv", 6, first_pitch + k))
-      admitted[#admitted + 1] = tostring(ii.send("gt", "tr", 6, 1))
+      admitted[#admitted + 1] = tostring(ii.send("er301", "cv", 6, first_pitch + k))
+      admitted[#admitted + 1] = tostring(ii.send("er301", "tr", 6, 1))
     end
     return table.concat(admitted, " ")
   end
@@ -364,8 +365,55 @@ test("under a pressed queue a chord to one port sends one whole note a step", fu
   for _, line in ipairs(drain(step, ii)) do
     if line:find("(6,", 1, true) then port_6[#port_6 + 1] = line end
   end
-  assert_equal(table.concat(port_6, "|"), "ii.gt.cv(6, 1)|ii.gt.tr(6, 1)|ii.gt.cv(6, 4)|ii.gt.tr(6, 1)",
+  assert_equal(table.concat(port_6, "|"), "ii.er301.cv(6, 1)|ii.er301.tr(6, 1)|ii.er301.cv(6, 4)|ii.er301.tr(6, 1)",
     "each pitch with its trigger, one note a step")
+end)
+
+-- A queue pressed with room for three lines, one note (II.note_lines): 48 notes
+-- of one line, the 49th refused, a step sending four, then one W/ note
+local function pressed_with_room_of_three(context, S, ii, step)
+  lead(context, S)
+  for k = 1, 48 do assert_true(ii.send("jf", "play_note", k, 5)) end
+  assert_equal(ii.send("jf", "play_note", 49, 5), false, "pressed")
+  step()
+  assert_true(ii.send("wsyn", "play_note", 1, 5))
+  assert_equal(ii.queued(), 45, "room for three lines")
+  assert_equal(ii.II.note_lines, 3)
+end
+
+test("a re-pitch before a new note in one step does not take the note's pitch", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  pressed_with_room(context, S, ii, step)
+  -- a held chord's newest note ends (its port re-pitched), and a new note starts there in the same step
+  local admitted = {ii.send("er301", "cv", 6, 1), ii.send("er301", "cv", 6, 2), ii.send("er301", "tr", 6, 1)}
+  assert_equal(table.concat({tostring(admitted[1]), tostring(admitted[2]), tostring(admitted[3])}, " "),
+    "true true true", "the re-pitch, then the note's pitch and trigger")
+  local port_6 = {}
+  for _, line in ipairs(drain(step, ii)) do
+    if line:find("(6,", 1, true) then port_6[#port_6 + 1] = line end
+  end
+  assert_equal(table.concat(port_6, "|"), "ii.er301.cv(6, 1)|ii.er301.cv(6, 2)|ii.er301.tr(6, 1)", "in that order")
+
+  -- with room for the re-pitch but not for a whole note after it, the note is refused whole
+  context, S, ii = started()
+  step = stepper(context, S)
+  pressed_with_room_of_three(context, S, ii, step)
+  assert_equal(ii.send("er301", "cv", 5, 1), true, "the re-pitch")
+  assert_equal(ii.send("er301", "cv", 5, 2), false, "no room for the note: its pitch refused")
+  assert_equal(ii.send("er301", "tr", 5, 1), false, "and its trigger with it")
+end)
+
+test("a device's first note under a pressed queue is admitted or refused whole", function()
+  -- the ER-301 has had no off this lead: its cv and tr are still one line
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  pressed_with_room_of_three(context, S, ii, step)
+  assert_equal(ii.send("er301", "cv", 1, 2), true, "the first note's pitch, with room for a note")
+  assert_equal(ii.send("er301", "tr", 1, 1), true, "and its trigger with it")
+  assert_equal(ii.queued(), 47)
+  assert_equal(ii.send("er301", "cv", 2, 2), false, "another port's first note, with no room for a note: refused")
+  assert_equal(ii.send("er301", "tr", 2, 1), false, "whole")
 end)
 
 -- The issue's flood, at the bus: seven voices, chords of eight, four hits in

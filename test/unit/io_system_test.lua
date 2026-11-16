@@ -1209,7 +1209,8 @@ test("after that minute everything stops with no note left", function()
   -- than it sends at once, a line whose off is past the fourteenth is owed,
   -- and at a script's end stays high. Under the flood every voice's gates are
   -- high (#710), more lines than the fourteen, so a line left high must have
-  -- had its off waiting, and the sequence must have sent all fourteen
+  -- had its off waiting, the sequence must have sent all fourteen, and the
+  -- line's own off must be among those it owed
   local last, raised = {}, {}
   for _, line in ipairs(context.crow.sent) do
     local device, command, args = line:match("^ii%.(%w+)%.([%w_]+)%((.-)%)$")
@@ -1220,11 +1221,17 @@ test("after that minute everything stops with no note left", function()
       if value == "1" then raised[key] = true end
     end
   end
+  -- the offs the leaving sequence owed (past its fourteen), by their lines
+  local owed_line = {}
+  for _, line in ipairs(S.lib.io_ii.owed_lines()) do
+    local device, command, first = line:match("^ii%.(%w+)%.([%w_]+)%(([^,]+), 0%)$")
+    if device then owed_line[device .. "." .. command .. "(" .. first .. ")"] = true end
+  end
   local left_high, past_the_fourteen = {}, 0
   local full_sequence = lows_at_cleanup == S.lib.io_ii.II.cleanup_sends
   for key in pairs(raised) do
     if last[key] ~= "0" then
-      if full_sequence and off_waiting[key] then
+      if full_sequence and off_waiting[key] and owed_line[key] then
         past_the_fourteen = past_the_fourteen + 1
       else
         left_high[#left_high + 1] = key .. " ends at " .. tostring(last[key])
@@ -1235,7 +1242,6 @@ test("after that minute everything stops with no note left", function()
   assert_equal(#left_high, 0, "every ii gate line crow got high ends low but the offs past the fourteenth ("
     .. rig.waiting_at_cleanup .. " lines waited at cleanup, " .. lows_at_cleanup .. " lows sent at once, "
     .. past_the_fourteen .. " owed): " .. table.concat(left_high, ", "))
-  assert_true(past_the_fourteen <= S.lib.io_ii.owed(), "the lines left high are among the offs owed")
   -- every voice's lines were raised (the minute's first part plays each
   -- voice), so the check above covered them all
   for voice = 1, S.constants.NUM_VOICES do
