@@ -16,6 +16,7 @@ Strata adds six addresses for what is not a param:
 | `/strata/voice/<n>/run <0, 1 or 2>` | Stops, starts or toggles voice n (1 to 7) |
 | `/strata/voice/<n>/retrigger <velocity>` | Accents a running voice, velocity 0 to 1 |
 | `/strata/patterns <0, 1 or 2>` | Stops, starts or toggles the patterns |
+| `/strata/fill <0, 1 or 2>` | Turns fill's latch off, on or over ([Fill](../sequencer.md#fill)) |
 | `/strata/watch <param id>` | Adds a param to the feedback list |
 | `/strata/hello` | Sends every watched value and the states now |
 

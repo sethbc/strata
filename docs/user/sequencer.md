@@ -1,6 +1,6 @@
 # Sequencer
 
-The pattern sequencer: each voice's own length, division and swing, what a step can hold (probability, ratchets, step locks, notes, a gate), Euclidean fill, chaining scenes' patterns and following the clock's transport. Back to the [README](../../README.md).
+The pattern sequencer: each voice's own length, division, swing and direction, what a step can hold (a condition, probability, ratchets, step locks, notes, a gate), fill, Euclidean fill, chaining scenes' patterns and following the clock's transport. Back to the [README](../../README.md).
 
 The patterns themselves are 16 steps per voice, each off or at a level of 1-15 (its accent's strength). They are edited on the [SEQ page](pages/seq.md) and the [grid](grid.md). K2 on SEQ, the grids' play keys and the arc's button start and stop them.
 
@@ -11,12 +11,16 @@ Every voice steps through its pattern on its own clock (PARAMETERS > the voice's
 - **seq division** (1/32, 1/16t, 1/16, 1/8t, 1/8, 1/4, 1/2 or 1 bar per step; default 1/16): how long each of the voice's steps is. Voices at different divisions and lengths drift against each other and meet again, polyrhythms from one start
 - **seq swing** (50-75 %, default 50): every second step the voice plays comes late, by (swing - 50) / 50 of a step: 50 is straight, 66 is close to a triplet feel, 75 puts the step three quarters of the way through its pair. Each voice swings its own division, and swing never drifts against the clock
 
-Each row of the grid shows its own voice's playing step. All the voices start together, on step 1, when the patterns start. **Division reset** (PARAMETERS > sequencer) puts every voice back at step 1 at the next bar, so voices that have drifted apart line up again.
+- **seq direction** (forward, reverse, ping-pong, random; default forward): the order the voice takes its steps. Forward goes 1 up to the length and starts again at 1; reverse from the length down to 1 and starts again at the length; ping-pong up to the length and back down to 1 without playing either end twice (1 2 3 4 3 2 1 2 ...); random picks any step of the length each time
+- **seq misstep** (0-100 %, default 0): the chance that, at each step, the voice moves one step up or down (either way, at random, wrapping around at the ends) instead of where its direction would take it
+
+A **pass** is one run through the voice's length: its length in steps taken (forward, reverse, random), or from one end to the other (ping-pong, where each end ends a pass). A length change that does not fit the pass played so far waits for its end. Each row of the grid shows its own voice's playing step. All the voices start together when the patterns start, each at its direction's first step (step 1, or its length in reverse). **Division reset** (PARAMETERS > sequencer) puts every voice back at step 1 at the next bar, so voices that have drifted apart line up again.
 
 ## What a step holds
 
 A set step plays its voice at its level: a running voice gets an accent (Karplus re-plucks its string, a voice in triggered grain mode fires one grain), a stopped one is started. Beyond its level, a step can hold:
-- **probability** (0-100 %, 100 when not set): the chance the step plays each time around, drawn once for the whole step
+- **a condition** (below; none when not set): the step plays only when it holds
+- **probability** (0-100 %, 100 when not set): the chance the step plays each time around, drawn once for the whole step (only when its condition holds)
 - **ratchets** (1-4 hits): the step plays that many times, evenly spaced through it. Hits are never closer than 20 ms apart: at fast tempos and short divisions a step plays fewer of them
 - **step locks** (position, pitch, size): the voice plays that buffer position, grain pitch or grain size for this step only, and goes back to its own value at the next step that plays without the lock. The voice's own setting never changes. Turning the param by hand (an encoder, the arc or a grid fader) while a step lock holds it ends the lock at once. Every step lock also ends when the patterns stop, the voice's pattern is cleared or replaced (a scene recall, the chain), the voice's length is shortened past the step that set it, or, once the step is turned off with no other step of the voice set, when the voice comes around to its step 1 again. Step locks have nothing to do with a voice's lock (`[L]`)
 - **a note** (a scale degree, -14 to 14): the step plays the voice that many tones of the global scale above (or below) its own pitch, for this step only: a synth voice's freq, a buffer voice's rate, an input voice's grain pitch (on top of the step's pitch lock when it has one). Degree 0 is the voice's own pitch. While the scale is off every semitone counts, so degree 3 is three semitones up. A buffer or input voice's pitch is the note a MIDI note plays at its rate (rate 1 is middle C)
@@ -25,6 +29,21 @@ A set step plays its voice at its level: a running voice gets an accent (Karplus
 - **a gate** (0.05-16 steps): this step's gate length, for a gated voice (below)
 
 Scenes keep every step's attributes with the patterns, and recall them as they recall the patterns.
+
+## Conditions
+
+A step's **condition** (`cond` on SEQ) decides, each time the voice reaches it, whether it plays. Each has its opposite, written with a `!`, which plays exactly when the condition does not:
+- **A:B** (B from 2 to 8, A from 1 to B): the step plays on the A-th of every B passes: `1:2` on passes 1, 3, 5 ..., `2:2` on 2, 4, 6 ..., `3:4` on 3, 7, 11 .... `!A:B` plays on all the others
+- **first**: only on the voice's first pass since the patterns started
+- **pre**: only when the voice's last conditioned step played (a conditioned step is a set step with a condition or a probability under 100 %; whether it played is its outcome). Before any conditioned step, `pre` does not play and `!pre` does
+- **nei**: only when the last conditioned step of the voice above played (voice 1's neighbor is voice 7). Voices run on their own clocks: on a beat they share, the voice above counts only if its step came first. A pattern start plays the voices in order, so there the voice above comes first; a single voice restarted (a division reset's bar) can fall behind it
+- **fill**: only while fill is on (below)
+
+The condition is checked first and the probability drawn only if it holds. The passes count from 1 when the patterns start, at a division reset's bar and when a voice restarts; a scene recall and a chain link keep counting. A step the patterns skip when the norns falls behind checks nothing.
+
+## Fill
+
+**Fill** turns on the steps marked `fill` and turns off those marked `!fill`, for as long as it is on. It is on while it is latched (SEQ's `fill` row, K3 there; PARAMETERS > sequencer > fill, which a MIDI controller can map; the `fill` action of crow and OSC) or while a grid key holds it (the 256's row 8 column 9, the 128h's row 8 column 4, on every page: on at the press, off at the release). A key's release ends only its own hold: a latched fill stays on until it is turned off. A held key also lets go when its grid is unplugged or turned to another page. SEQ shows `FILL` beside the selected voice's row while fill is on. Fill always starts off: no PSET or scene turns it on.
 
 If a step fails to play one of Strata's own voices (a bug), the patterns stop, show stopped, and the error appears in maiden. Other things a step plays through (MIDI out and other integrations, in later versions) never stop the patterns: one that fails is named in maiden once and left out until the patterns start again.
 
@@ -38,7 +57,7 @@ A Euclidean fill spreads a number of hits as evenly as possible over the voice's
 
 ## Chaining
 
-**Chain** (PARAMETERS > sequencer) plays a run of scenes' patterns one after the other: while the patterns play, every **chain bars** bars (1-16, default 4) the next saved scene of **chain from** (default 1) to chain from + **chain scenes** - 1 (default 2) gives its patterns, its step attributes and each voice's length and division, going back to the first after the last and skipping empty slots. Nothing else of the scene is applied: the sound, the sources and which voices run stay as they are. Starting the patterns with the chain on loads the first scene of the range at once; switching the chain on while they play waits for the next bar. PSETs store the chain settings; scenes do not.
+**Chain** (PARAMETERS > sequencer) plays a run of scenes' patterns one after the other: while the patterns play, every **chain bars** bars (1-16, default 4) a saved scene of **chain from** (default 1) to chain from + **chain scenes** - 1 (default 2) gives its patterns, its step attributes and each voice's length, division, direction and misstep (empty slots are never picked). Which scene comes next is drawn from three chances: **chain next** (0-100 %, default 100), the next saved scene of the range (after the last, the first); **chain previous** (default 0), the one before it (before the first, the last); and **chain random** (default 0), any other saved scene of the range. What the three leave over (100 less their sum; a sum over 100 is scaled down to 100) keeps the scene playing for another round of bars, linking nothing. At the defaults the chain plays in order. Nothing else of the scene is applied: the sound, the sources and which voices run stay as they are. Starting the patterns with the chain on loads the first scene of the range at once; switching the chain on while they play waits for the next bar. PSETs store the chain settings; scenes do not.
 
 ## Following the clock's transport
 

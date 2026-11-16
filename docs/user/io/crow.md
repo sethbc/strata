@@ -21,6 +21,7 @@ Each input has a **mode**:
   - **freeze** - turns the voice's freeze on or off
   - **record** - starts or stops recording on BUFFER's slot, as BUFFER's K3 does
   - **patterns** - starts or stops the patterns
+  - **fill** - turns fill on or off ([Fill](../sequencer.md#fill)); a trigger toggles it, it cannot hold it
 
 ## Outputs
 

@@ -374,4 +374,7 @@ return {
     names = {"1/32", "1/16T", "1/16", "1/16D", "1/8T", "1/8", "1/8D", "1/4T", "1/4", "1/4D", "1/2", "1 bar"},
     beats = {1/8, 1/6, 1/4, 3/8, 1/3, 1/2, 3/4, 2/3, 1, 3/2, 2, 4},
   },
+  -- 3.7 (design §5.1): trig conditions (lib/conditions.lua): A:B for B up to
+  -- max_b, then the named ones, each followed by its opposite
+  CONDITIONS = {max_b = 8, names = {"first", "!first", "pre", "!pre", "nei", "!nei", "fill", "!fill"}},
 }

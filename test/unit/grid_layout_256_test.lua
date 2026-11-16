@@ -505,6 +505,66 @@ test("play/stop columns 1-4 on row 8 all light with the state (256)", function()
   end
 end)
 
+-- 3.7 (design §5.2, ruling 10): the fill key
+test("row 8, column 9 holds fill while it is down", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local conditions = S.lib.conditions
+  local device = context.grid.plug(1, 16, 16)
+  for page = 1, 5 do
+    S.lib.grid_core.set_page(1, page); grid_redraw()
+    assert_equal(device:get_led(9, 8), 4, "page " .. page .. ": 4 while fill is off")
+    context.grid.press(1, 9, 8, 1)
+    assert_true(conditions.fill(), "page " .. page .. ": on at the press")
+    assert_equal(device:get_led(9, 8), 15, "lit 15 while held")
+    assert_equal(params:get("seq_fill"), 0, "the hold is no latch")
+    context.grid.press(1, 9, 8, 0)
+    assert_true(not conditions.fill(), "off at the release")
+    assert_equal(device:get_led(9, 8), 4)
+  end
+  params:set("seq_fill", 1)
+  assert_equal(device:get_led(9, 8), 15, "the latch lights it")
+  context.grid.press(1, 9, 8, 1); context.grid.press(1, 9, 8, 0)
+  assert_true(conditions.fill(), "a key's release leaves the latch")
+  params:set("seq_fill", 0)
+  assert_equal(device:get_led(9, 8), 4)
+  -- two grids hold it each on their own
+  local other = context.grid.plug(2, 16, 16)
+  context.grid.press(1, 9, 8, 1); context.grid.press(2, 9, 8, 1)
+  context.grid.press(1, 9, 8, 0)
+  assert_true(conditions.fill(), "one grid's release leaves the other's hold")
+  assert_equal(other:get_led(9, 8), 15)
+  context.grid.press(2, 9, 8, 0)
+  assert_true(not conditions.fill())
+end)
+
+test("fill ends when its grid is removed or shows another page", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local conditions = S.lib.conditions
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 9, 8, 1)
+  assert_true(conditions.fill())
+  context.grid.press(1, 14, 8, 1); context.grid.press(1, 14, 8, 0)  -- page 2
+  assert_true(not conditions.fill(), "a page change ends the port's hold")
+  context.grid.press(1, 9, 8, 0)
+  assert_true(not conditions.fill(), "its release changes nothing")
+  context.grid.press(1, 9, 8, 1)
+  assert_true(conditions.fill(), "a new press holds again")
+  context.grid.unplug(1)
+  assert_true(not conditions.fill(), "the grid's removal ends its hold")
+  -- the 128h's too
+  context.grid.plug(3, 16, 8)
+  context.grid.press(3, 4, 8, 1)
+  assert_true(conditions.fill(), "the 128h's column 4")
+  context.grid.press(3, 6, 8, 1); context.grid.press(3, 6, 8, 0)  -- page 2
+  assert_true(not conditions.fill(), "a page change ends it")
+  context.grid.press(3, 4, 8, 0)
+  context.grid.press(3, 4, 8, 1)
+  context.grid.unplug(3)
+  assert_true(not conditions.fill(), "and the grid's removal")
+end)
+
 
 -- 3.1: copy/paste on row 16, tempo key feedback, the scene page's
 -- sequencer position and the lock keys
@@ -731,7 +791,7 @@ test("256 page 3: rows 8 and 16 work and light as on the other pages (#442)", fu
   tap(context, 15, 8)  -- page 3
   -- row 8: play/stop 4, tempo 4, the page keys (the positions key among
   -- them); row 16: locks 2, the freeze key 4, the clipboard keys 2
-  assert_equal(row_levels(device, 8), "4 4 4 4 4 4 4 4 0 0 0 2 2 2 15 2", "row 8 on page 3")
+  assert_equal(row_levels(device, 8), "4 4 4 4 4 4 4 4 4 0 0 2 2 2 15 2", "row 8 on page 3 (3.7: column 9 the fill key)")
   assert_equal(row_levels(device, 16), "2 2 2 2 2 2 2 4 2 2 2 2 2 2 2 2", "row 16 on page 3")
   tap(context, 1, 8)
   assert_true(S.pattern_playing, "(1,8) plays")

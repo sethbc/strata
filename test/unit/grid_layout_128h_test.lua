@@ -85,21 +85,40 @@ test("grid_redraw draws the 128h layout (I2), on a hot-plugged grid too (I3)", f
   assert_true(lit, "128h layout drew something")
 end)
 
-test("play/stop columns 1-4 on row 8 all light with the state (16x8)", function()
-  local context = load_strata()
+-- 3.7 (design decision 16): row 8's column 4 holds fill, columns 1-3 play
+test("on the 128h row 8's column 4 holds fill and columns 1 to 3 play", function()
+  local context = load_strata(); finish_startup(context)
+  local conditions = local_value("S").lib.conditions
   local device = context.grid.plug(1, 16, 8)
-  for x = 1, 4 do
+  for x = 1, 3 do
     assert_equal(device:get_led(x, 8), 4, "8 rows: play column " .. x .. " dim when stopped")
   end
-  context.grid.press(1, 4, 8, 1)  -- column 4 starts the pattern
-  assert_true(local_value("pattern_playing"), "column 4 plays")
-  for x = 1, 4 do
+  assert_equal(device:get_led(4, 8), 4, "the fill key at 4 while fill is off")
+  tap(context, 1, 3, 8)  -- column 3 starts the pattern
+  assert_true(local_value("pattern_playing"), "column 3 plays")
+  for x = 1, 3 do
     assert_equal(device:get_led(x, 8), 15, "8 rows: play column " .. x .. " lit while playing")
   end
-  context.grid.press(1, 3, 8, 1)  -- column 3 stops it
-  for x = 1, 4 do
+  assert_equal(device:get_led(4, 8), 4, "the fill key is no play key")
+  context.grid.press(1, 4, 8, 1)
+  assert_true(local_value("pattern_playing"), "column 4 leaves the patterns playing")
+  assert_true(conditions.fill(), "and holds fill")
+  assert_equal(device:get_led(4, 8), 15, "lit 15 while fill is on")
+  context.grid.press(1, 4, 8, 0)
+  assert_true(not conditions.fill(), "its release ends the hold")
+  assert_equal(device:get_led(4, 8), 4)
+  for page = 2, 5 do
+    grid_core().set_page(1, page)
+    context.grid.press(1, 4, 8, 1)
+    assert_true(conditions.fill(), "page " .. page .. ": it holds fill")
+    context.grid.press(1, 4, 8, 0)
+  end
+  grid_core().set_page(1, 1)
+  tap(context, 1, 1, 8)  -- column 1 stops it
+  for x = 1, 3 do
     assert_equal(device:get_led(x, 8), 4, "8 rows: play column " .. x .. " dim after stop")
   end
+  assert_equal(grid_core().page(1), 1, "column 4 never changes the page")
 end)
 
 test("128h row 8 columns 5-8 pick pages 1-4 and light the shown one", function()

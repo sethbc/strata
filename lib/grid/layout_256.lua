@@ -43,6 +43,11 @@ return function(S)
     freeze_hold_level = 15, -- column 8 of row 16 while held
     freeze_key_level = 4,   -- and while not
     positions_key_column = 12,  -- row 8: page 5 (a page key, as columns 13-16 are pages 1-4)
+    -- 3.7 (design §5.2, ruling 10): row 8's fill key, every page, held as
+    -- "grid:<port>"; lit while fill is on (S.lib.conditions.fill)
+    fill_column = 9,
+    fill_on_level = 15,
+    fill_off_level = 4,
     strip_first_row = 9,    -- page 5: voice v's bookmark strip is on row 8 + v
     strip_key_columns = {[1] = 1, [2] = 2, [3] = 3, [4] = 4, [6] = "store", [7] = "hold", [8] = "whole"},
     -- row 15 (pages 1 and 2): columns 1-7 clear voices 1-7's patterns,
@@ -274,8 +279,27 @@ return function(S)
     return pending and LAYOUT_256.pattern_pending_level or LAYOUT_256.pattern_key_level
   end
 
+  -- Row 8's fill key (3.7, ruling 10): held, it holds fill as
+  -- "grid:<port>", on at the press and off at the release. The hold stands
+  -- only while the key is held in its role (grid_core.press_as), so it ends
+  -- when the port shows another page or its grid is removed
+  local function fill_key(port, x, y, z)
+    local holder = "grid:" .. port
+    if z == 1 then
+      grid_core.press_as(port, x, y, "fill")
+      S.lib.conditions.hold_fill(holder, true, function() return grid_core.pressed_as(port, x, y, "fill") end)
+    else
+      S.lib.conditions.hold_fill(holder, false)
+    end
+  end
+
   -- 16x16 grid layout
   function grid_key_256(port, x, y, z)
+    if y == 8 and x == LAYOUT_256.fill_column then
+      -- presses and releases, on every page
+      fill_key(port, x, y, z)
+      return
+    end
     local page = grid_core.page(port)
     if page == PAGES.positions and y ~= 8 and y ~= 16 then
       -- Page 5: positions on rows 1-7, each voice's strip on row 8 + v
@@ -580,7 +604,7 @@ return function(S)
       page == PAGES.positions and levels.page_shown or levels.page_other)
   end
 
-  -- 256 row 8: pattern controls, tempo and page indicators
+  -- 256 row 8: pattern controls, tempo, fill (column 9) and page indicators
   function grid_redraw_256_transport(port, grid_device)
     -- columns 1-4 all act as play/stop
     for x = 1, 4 do
@@ -592,6 +616,10 @@ return function(S)
       local held = grid_core.held(port, x, 8) ~= nil
       grid_device:led(x, 8, held and LAYOUT_256.tempo_held_level or LAYOUT_256.tempo_level)
     end
+
+    -- The fill key: lit while fill is on, whoever holds or latched it
+    grid_device:led(LAYOUT_256.fill_column, 8,
+      S.lib.conditions.fill() and LAYOUT_256.fill_on_level or LAYOUT_256.fill_off_level)
 
     grid_redraw_256_page_row(port, grid_device)
   end

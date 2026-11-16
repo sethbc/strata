@@ -28,7 +28,7 @@ return function(S)
     modes = {"off", "cv", "trigger"},
     input_ranges = {"-5..5", "0..5", "0..10"},
     output_ranges = {"0..5", "0..10", "-5..5"},
-    actions = {"retrigger", "next scene", "freeze", "record", "patterns"},
+    actions = {"retrigger", "next scene", "freeze", "record", "patterns", "fill"},
     divisions = {"1/16", "1/8", "1/4", "1/2", "1", "2", "4"},
     division_beats = {1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2, 4},
     division_default = 5,
@@ -418,6 +418,7 @@ return function(S)
     function(voice) S.lib.io_actions.freeze(voice, 2) end,
     function() S.lib.io_actions.record() end,
     function() S.lib.io_actions.patterns(2) end,
+    function() S.lib.io_actions.fill(2) end,
   }
 
   local function valid_input(n)

@@ -18,7 +18,12 @@ return function(S)
   -- Where things sit on the 16x8 (columns and rows, 1-based)
   local LAYOUT_128H = {
     control_row = 8,          -- row 8, every page
-    play_last_column = 4,     -- columns 1-4 play/stop
+    play_last_column = 3,     -- columns 1-3 play/stop
+    -- 3.7 (design decision 16, ruling 10): column 4 holds fill as
+    -- "grid:<port>", lit while fill is on (S.lib.conditions.fill)
+    fill_column = 4,
+    fill_on_level = 15,
+    fill_off_level = 4,
     page_first_column = 5,    -- columns 5-8 pages 1-4
     num_pages = 4,
     voice_first_column = 9,   -- columns 9-15 voice on/off
@@ -190,8 +195,27 @@ return function(S)
     end
   end
 
+  -- Row 8's fill key (3.7, ruling 10): held, it holds fill as
+  -- "grid:<port>", on at the press and off at the release. The hold stands
+  -- only while the key is held in its role (grid_core.press_as), so it ends
+  -- when the port shows another page or its grid is removed
+  local function fill_key(port, x, y, z)
+    local holder = "grid:" .. port
+    if z == 1 then
+      grid_core.press_as(port, x, y, "fill")
+      S.lib.conditions.hold_fill(holder, true, function() return grid_core.pressed_as(port, x, y, "fill") end)
+    else
+      S.lib.conditions.hold_fill(holder, false)
+    end
+  end
+
   -- 16x8 grid layout (128 buttons horizontal)
   function grid_key_128h(port, x, y, z)
+    if y == LAYOUT_128H.control_row and x == LAYOUT_128H.fill_column then
+      -- presses and releases, on every page
+      fill_key(port, x, y, z)
+      return
+    end
     local page = grid_core.page(port)
     -- A release reaches only the positions (the position keys and the
     -- strip's hold and store keys end on it) and page 3's recorders, which
@@ -321,7 +345,7 @@ return function(S)
     end
   end
 
-  -- Row 8: play/stop, the page keys, the voices' on/off keys (the core's
+  -- Row 8: play/stop, fill, the page keys, the voices' on/off keys (the core's
   -- levels; the sources key at position_page_level on page 5) and the
   -- voice cycle key
   local function redraw_control_row(page, grid_device)
@@ -330,6 +354,8 @@ return function(S)
     for x = 1, LAYOUT_128H.play_last_column do
       grid_device:led(x, y, grid_core.play_level())
     end
+    grid_device:led(LAYOUT_128H.fill_column, y,
+      S.lib.conditions.fill() and LAYOUT_128H.fill_on_level or LAYOUT_128H.fill_off_level)
     for i = 1, LAYOUT_128H.num_pages do
       local level = i == page and levels.page_shown or levels.page_other
       if i == PAGES.sources and page == PAGES.positions then

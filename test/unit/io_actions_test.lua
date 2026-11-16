@@ -153,6 +153,41 @@ test("patterns stops, plays and toggles", function()
   refused(function() return actions.patterns(3) end, "patterns")
 end)
 
+-- The index of name among the option param id's options
+local function option(id, name)
+  for index, value in ipairs(params:lookup_param(id).options) do
+    if value == name then return index end
+  end
+  error(id .. " has no option " .. name)
+end
+
+-- 3.7 (ruling 10): fill's latch, from the actions crow's and OSC's lists name
+test("the fill action sets, clears and toggles the latch", function()
+  local context, S, actions = started()
+  assert_equal(actions.fill(1), true); assert_equal(params:get("seq_fill"), 1)
+  assert_true(S.lib.conditions.fill(), "fill is on")
+  assert_equal(actions.fill(2), true); assert_equal(params:get("seq_fill"), 0, "toggled off")
+  assert_equal(actions.fill(2), true); assert_equal(params:get("seq_fill"), 1, "and on")
+  assert_equal(actions.fill(0), true); assert_equal(params:get("seq_fill"), 0)
+  assert_true(not S.lib.conditions.fill())
+  refused(function() return actions.fill(3) end, "fill")
+  -- crow's trigger input: a toggle at each rise
+  context.crow.plug()
+  params:set("crow_in1_mode", option("crow_in1_mode", "trigger"))
+  params:set("crow_in1_action", option("crow_in1_action", "fill"))
+  context.crow.fire("strata_change", 1, 1)
+  assert_equal(params:get("seq_fill"), 1, "a crow rise toggles fill")
+  context.crow.fire("strata_change", 1, 0)
+  assert_equal(params:get("seq_fill"), 1, "a fall does nothing")
+  context.crow.fire("strata_change", 1, 1)
+  assert_equal(params:get("seq_fill"), 0)
+  -- OSC's /strata/fill <0, 1 or 2>
+  context.osc.receive("/strata/fill", {1}, {"10.0.0.7", 9000})
+  assert_equal(params:get("seq_fill"), 1, "/strata/fill 1")
+  context.osc.receive("/strata/fill", {2}, {"10.0.0.7", 9000})
+  assert_equal(params:get("seq_fill"), 0, "/strata/fill 2 toggles")
+end)
+
 test("record does what BUFFER's key does on the page's slot", function()
   local context, S, actions = started()
   S.buffer_page.slot = 3

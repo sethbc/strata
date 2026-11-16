@@ -30,7 +30,7 @@ Every default is the first option, but `div`'s (`1`). An input's mode and range,
 |---|---|
 | `crow_in<n>_mode` (n 1, 2) | `off`, `cv`, `trigger` |
 | `crow_in<n>_range` | `-5..5`, `0..5`, `0..10` |
-| `crow_in<n>_action` | `retrigger`, `next scene`, `freeze`, `record`, `patterns` |
+| `crow_in<n>_action` | `retrigger`, `next scene`, `freeze`, `record`, `patterns`, `fill` |
 | `crow_in<n>_voice` | 0 (the selected voice, `sel`) to 7 |
 | `crow_out<n>_source` (n 1 to 4), kept by key in `crow_out<n>_source_key` | `off`; each modulation source's key registered by init (`S.lib.mod_sources.registered()` when the params are added); `v1 pitch` to `v7 pitch`; `v1 gate` to `v7 gate`; `clock` |
 | `crow_out<n>_range` | `0..5`, `0..10`, `-5..5` |
@@ -55,7 +55,7 @@ The crow-side text of a handler is the module's; its event name and the `mode(..
 ## Inputs
 
 - `cv`: `strata_in(n, volts)` keeps the volts; the source `crow<n>` (name `CR<n>`, section `crow`, visible while the mode is `cv`) reads them over the range param's volts (its `range` table is updated in place). Before a value, or with the mode left, it reads as no modulation.
-- `trigger`: `strata_change(n, 1)` runs the action through `S.lib.io_actions`: `retrigger(voice, 1)`, `next_scene()`, `freeze(voice, 2)`, `record()`, `patterns(2)`; voice 0 is the selected voice, which the actions module resolves. A fall does nothing.
+- `trigger`: `strata_change(n, 1)` runs the action through `S.lib.io_actions`: `retrigger(voice, 1)`, `next_scene()`, `freeze(voice, 2)`, `record()`, `patterns(2)`, `fill(2)` (3.7: a rise toggles fill's latch; a trigger cannot hold it); voice 0 is the selected voice, which the actions module resolves. A fall does nothing.
 
 ## The target `crow`
 

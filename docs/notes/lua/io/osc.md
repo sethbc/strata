@@ -19,6 +19,7 @@
 | `/strata/voice/<n>/run <0, 1 or 2>` | `io_actions.run_voice(n, mode)` (voice 1 to 7) |
 | `/strata/voice/<n>/retrigger <velocity>` | `io_actions.retrigger(n, velocity)` |
 | `/strata/patterns <0, 1 or 2>` | `io_actions.patterns(mode)` |
+| `/strata/fill <0, 1 or 2>` | `io_actions.fill(mode)` (3.7: fill's latch) |
 | `/strata/watch <param id>` | adds a param that exists to the watch list |
 | `/strata/hello` | marks every watched value and the three states due |
 
