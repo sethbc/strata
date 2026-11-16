@@ -9,7 +9,11 @@
 -- hook, at most NOTES.sends_per_step a step), the per-voice note cap
 -- (v<i>_note_cap, a registered voice param, PSET only), the voice-stop and
 -- freeze-change hooks, the cleanup step notes and the invariant "notes".
--- See docs/notes/lua/notes.md.
+-- 3.7 (design §3.4, §3.5): a note's region (the own note's, sent as the
+-- regionStart and regionLength grain params; an extra slot's, noteRegion),
+-- a note that plays to its end (to_end, hold_to_end), own_only, the grid's
+-- owner and a steal of the caller's own kind (steals). See
+-- docs/notes/lua/notes.md.
 
 return function(S)
   local M = {}
@@ -27,7 +31,7 @@ return function(S)
   -- the note cap's param and VOICE section
   local NOTES = {file = "notes.data", version = 1, cut_seconds = 0.05, sends_per_step = 16,
     rate_root_note = 60, rate_range = {0.25, 4}, note_range = {0, 127}, a4 = {note = 69, freq = 440},
-    owners = {midi = true, seq = true},
+    owners = {midi = true, seq = true, grid = true},  -- 3.7: a grid's slice keys (key port * 100 + slice)
     step_owner = "seq",  -- the sequencer's owner (SEQ.note_owner): its chord's extra notes are no hit of their own
     expression_keys = {"bend", "amp", "position", "size", "main"},
     neutral = {bend = 1, amp = 1, position = 0, size = 0, main = 0},
@@ -49,6 +53,11 @@ return function(S)
   -- the engine keeps for the slot; references[v] a frozen synth voice's
   -- freeze reference; lowered[v] while its cap was lowered under a used slot
   local slots, ended, sent, references, lowered = {}, {}, {}, {}, {}
+  -- 3.7: own_regions[v] the own note's region ({start, length}, nil: the
+  -- loop's); regions_sent[v][s] the region the engine keeps for extra slot s
+  -- ({0, 0} until a noteRegion, and again after the voice's stop)
+  local own_regions, regions_sent = {}, {}
+  local NO_REGION = {0, 0}
   -- The flush: the notes due, in the order first marked
   local flush = {queue = {}, stopped = false, hooked = false}
 
@@ -66,9 +75,21 @@ return function(S)
     return copy
   end
 
+  local function copy_region(region) return region and {region[1], region[2]} end
+  local function same_region(a, b)
+    a, b = a or NO_REGION, b or NO_REGION
+    return a[1] == b[1] and a[2] == b[2]
+  end
+
+  local function clear_regions_sent(voice)
+    regions_sent[voice] = {}
+    for slot = 2, NOTE_SLOTS do regions_sent[voice][slot] = copy_region(NO_REGION) end
+  end
+
   for voice = 1, NUM_VOICES do
     slots[voice], ended[voice], sent[voice] = {}, {}, {}
     for slot = 1, NOTE_SLOTS do sent[voice][slot] = copy_expression(NOTES.neutral) end
+    clear_regions_sent(voice)
   end
 
   local function notes_path() return _path.data .. "strata/" .. NOTES.file end
@@ -132,6 +153,38 @@ return function(S)
     engine.noteOn(voice - 1, slot - 1, values.note, values.freq, values.rate, record.velocity)
   end
 
+  -- 3.7: an extra slot's region before its noteOn, when the note has one or
+  -- the slot's last was not 0, 0 (then 0, 0): the number of messages sent
+  local function send_slot_region(voice, slot, region)
+    if same_region(region, regions_sent[voice][slot]) then return 0 end
+    local wanted = region or NO_REGION
+    engine.noteRegion(voice - 1, slot - 1, wanted[1], wanted[2])
+    regions_sent[voice][slot] = copy_region(wanted)
+    return 1
+  end
+
+  -- The seconds a one-shot buffer voice takes to pass fraction of its
+  -- slot's valid region (S.lib.scan, package 2a), or nil (no one shot, a
+  -- scan of 0, or no scan module)
+  local function pass_seconds(voice, fraction)
+    local scan = S.lib.scan
+    if not (scan and scan.pass_seconds) then return nil end
+    local seconds = scan.pass_seconds(voice, fraction)
+    if finite(seconds) and seconds > 0 then return seconds end
+    return nil
+  end
+
+  -- When an extra note ends by itself (util.time()), or nil: the note's own
+  -- to_end, else on a one-shot buffer voice its pass over its region or
+  -- over the voice's loop
+  local function ends_at(voice, played, now)
+    local seconds = played.to_end
+    if seconds == nil and voice_uses_buffer(voice) then
+      seconds = pass_seconds(voice, played.region and played.region[2] or params:get("v" .. voice .. "_loop_length"))
+    end
+    return seconds and now + seconds or nil
+  end
+
   -- The count MAIN shows changed
   local function held_changed()
     update_voice_list()
@@ -149,7 +202,8 @@ return function(S)
   local function new_record(voice, slot, played, now)
     return {voice = voice, slot = slot, owner = played.owner, key = played.key, pitch = played.pitch,
       velocity = played.velocity, park = played.park, quiet = played.quiet, held = true, parked = false, started = now,
-      expression = copy_expression(played.expression), due = false}
+      expression = copy_expression(played.expression), due = false, region = copy_region(played.region),
+      hold_to_end = played.hold_to_end}
   end
 
   -- 3.6's note hooks (S.registry.note_hooks, read at each call): each
@@ -260,7 +314,8 @@ return function(S)
       local record = slots[voice][slot]
       if record then
         table.insert(list, {slot = slot, owner = record.owner, key = record.key, pitch = record.pitch,
-          held = record.held, parked = record.parked})
+          held = record.held, parked = record.parked, region = copy_region(record.region),
+          hold_to_end = record.hold_to_end})
       end
     end
     return list
@@ -321,6 +376,43 @@ return function(S)
     return S.lib.samples.rate_root(voice) + 12 * math.log(rate) / math.log(2)
   end
 
+  -- The voice's own pitch now, as a fractional MIDI note (a slice note's, 3.7)
+  function M.own_pitch(voice)
+    if not whole_in(voice, 1, NUM_VOICES) then return nil end
+    return own_pitch(voice)
+  end
+
+  local function valid_region(region)
+    return type(region) == "table" and finite(region[1]) and finite(region[2]) and region[1] >= 0 and region[1] < 1
+      and region[2] > 0 and region[2] <= 1
+  end
+
+  -- 3.7 (design §3.4): the own note's region, a copy, or nil (the loop's)
+  function M.own_region(voice)
+    if not whole_in(voice, 1, NUM_VOICES) then return nil end
+    return copy_region(own_regions[voice])
+  end
+
+  -- Set the own note's region ({start, length} fractions of the slot's
+  -- valid region, or nil): stored, and while the voice runs sent when it
+  -- changes (setGrainParam regionStart, then regionLength: 0 and 0 for nil),
+  -- since the engine restarts the own scan at every regionLength, with the
+  -- playhead's restart. A stopped voice's start sends it (the slices
+  -- record's sync). false for a bad voice or region
+  function M.set_own_region(voice, region)
+    if not whole_in(voice, 1, NUM_VOICES) or (region ~= nil and not valid_region(region)) then return false end
+    if same_region(own_regions[voice], region) then return true end
+    own_regions[voice] = copy_region(region)
+    if S.voices[voice].active then
+      local wanted = region or NO_REGION
+      engine.setGrainParam(voice - 1, "regionStart", wanted[1])
+      engine.setGrainParam(voice - 1, "regionLength", wanted[2])
+      count(2)
+      S.lib.playheads.reset(voice)
+    end
+    return true
+  end
+
   -- Ruling 39: a running voice with no held note never keeps its own note
   -- parked. When a release, a steal or a freeze's cuts end a voice's last
   -- held note under its parked own note, the own note returns at once,
@@ -360,6 +452,9 @@ return function(S)
     -- the same owner and key held: the hooks hear a move, not an end and a start
     local moved = previous ~= nil and previous.held and previous.owner == played.owner and previous.key == played.key
     note.set_own(played.pitch)
+    -- 3.7: the note's region before its start or its hit, so the start's
+    -- sync carries it and the first grain plays it
+    if played.region then M.set_own_region(voice, played.region) end
     if previous then forget(previous, now, moved) end
     -- the retrigger below always follows this start: the two are one hit
     if not note.quiet and not S.voices[voice].active then toggle_voice(voice, {retrigger_follows = true}) end
@@ -390,14 +485,18 @@ return function(S)
   -- it is a step's chord's, whose step is the one hit
   local function start_extra(voice, slot, played, now)
     local record = new_record(voice, slot, played, now)
+    record.ends_at = ends_at(voice, played, now)
     slots[voice][slot] = record
     run_note_hooks("started", record)
     send_expression(voice, slot, record.expression)
+    local messages = 2 + send_slot_region(voice, slot, record.region)
     send_note_on(voice, slot, record)
-    count(2)
+    count(messages)
     if played.owner ~= NOTES.step_owner then S.lib.engine_sync.extra_note_hit(voice, slot, record.velocity) end
     return slot
   end
+
+  local release_slot  -- below: play's own_only lets the same key's extra note go first
 
   local function valid_note(note)
     -- a key equals itself (never nil or NaN), or the note could never be found again
@@ -407,6 +506,12 @@ return function(S)
       and (note.park == nil or type(note.park) == "boolean") and (note.quiet == nil or type(note.quiet) == "boolean")
       and (note.extra_only == nil or type(note.extra_only) == "boolean")
       and (note.expression == nil or type(note.expression) == "table")
+      -- 3.7's (design §3.5)
+      and (note.region == nil or valid_region(note.region))
+      and (note.to_end == nil or (finite(note.to_end) and note.to_end > 0))
+      and (note.hold_to_end == nil or type(note.hold_to_end) == "boolean")
+      and (note.own_only == nil or type(note.own_only) == "boolean")
+      and (note.steals == nil or type(note.steals) == "function")
   end
 
   -- Play note = {owner, key, pitch, velocity, set_own, park, quiet,
@@ -414,7 +519,15 @@ return function(S)
   -- when refused. extra_only (default false) true: only branch 1 (its own
   -- held slot again) or 3 (a free extra slot with room in the pool); never
   -- slot 1 otherwise, never a steal: refused, sending and recording nothing
-  -- (ruling 32: a chord's further notes take only free room)
+  -- (ruling 32: a chord's further notes take only free room). 3.7's
+  -- fields: region {start, length} (fractions 0-1 of the slot's valid
+  -- region, a length above 0: the own note's through set_own_region, an
+  -- extra slot's by noteRegion before its noteOn); to_end seconds (an extra
+  -- note ends by itself then, at the flush's step; on a one-shot buffer
+  -- voice a note without one takes its pass, S.lib.scan); hold_to_end (its
+  -- key's release leaves it: M.release returns false); own_only (always the
+  -- own note); steals(owner, key) (an extra_only note that finds no room
+  -- cuts the voice's oldest extra note it answers true for and takes its slot)
   function M.play(voice, note)
     if not whole_in(voice, 1, NUM_VOICES) or not valid_note(note) then return nil end
     -- a running frozen synth voice's reference, before set_own can move the
@@ -423,19 +536,27 @@ return function(S)
     local now = util.time()
     local played = {owner = note.owner, key = note.key, pitch = note.pitch, park = note.park == true,
       quiet = note.quiet == true, velocity = util.clamp(note.velocity, 0, 1),
-      expression = merged_expression(NOTES.neutral, note.expression)}
+      expression = merged_expression(NOTES.neutral, note.expression),
+      region = copy_region(note.region), to_end = note.to_end, hold_to_end = note.hold_to_end == true}
     -- 1. the same owner and key held: that slot again, re-pitched and accented
     local slot = M.find(voice, note.owner, note.key)
+    if note.own_only then
+      -- 3.7: the own note always (the same key held in an extra slot goes first)
+      if slot and slot > 1 then release_slot(voice, slot) end
+      return play_own(voice, note, played, now)
+    end
     if slot == 1 then return play_own(voice, note, played, now) end
     if slot then
       local record = slots[voice][slot]
       record.pitch, record.velocity, record.park = played.pitch, played.velocity, played.park
       record.expression, record.due = played.expression, false
+      record.region, record.hold_to_end, record.ends_at = played.region, played.hold_to_end, ends_at(voice, played, now)
       local messages = 1
       if not same_expression(played.expression, sent[voice][slot]) then
         send_expression(voice, slot, played.expression)
         messages = 2
       end
+      messages = messages + send_slot_region(voice, slot, record.region)
       send_note_on(voice, slot, record)
       count(messages)
       run_note_hooks("moved", record)
@@ -451,7 +572,20 @@ return function(S)
     local own = slots[voice][1]
     if note.extra_only then
       -- 3 alone: a free extra slot under the cap, room in the pool, a running voice
-      local free = S.voices[voice].active and free_slot(voice, note_cap(voice))
+      local active = S.voices[voice].active
+      local free = active and free_slot(voice, note_cap(voice))
+      if active and note.steals and (not free or M.pool_used() >= M.pool()) then
+        -- 3.7: no room, so the voice's oldest note of the caller's kind is cut and its slot taken
+        local victim = oldest(function(record)
+          return record.voice == voice and record.slot <= note_cap(voice) and note.steals(record.owner, record.key) == true
+        end, now)
+        if victim then
+          engine.noteOff(voice - 1, victim.slot - 1, 1)
+          count(1)
+          forget(victim, now)
+          free = victim.slot
+        end
+      end
       if not free or M.pool_used() >= M.pool() then return nil end
       start_extra(voice, free, played, now)
       held_changed()
@@ -497,7 +631,7 @@ return function(S)
   -- note returns, ruling 39); the own note parks (noteOff on slot 0) when it
   -- asked to and another note is held, and otherwise sends nothing. true
   -- when a note ended
-  local function release_slot(voice, slot)
+  function release_slot(voice, slot)
     local record = slots[voice][slot]
     if slot > 1 then
       local now = util.time()
@@ -517,11 +651,37 @@ return function(S)
     held_changed()
   end
 
+  -- A note held to its end (3.7's hold_to_end) is left alone: false
   function M.release(voice, owner, key)
     local slot = M.find(voice, owner, key)
-    if not slot then return false end
+    if not slot or slots[voice][slot].hold_to_end then return false end
     release_slot(voice, slot)
     return true
+  end
+
+  -- 3.7: whether a held note of voice plays to its end (hold_to_end)
+  function M.plays_to_end(voice)
+    if not whole_in(voice, 1, NUM_VOICES) then return false end
+    for slot = 1, NOTE_SLOTS do
+      local record = slots[voice][slot]
+      if record and record.held and record.hold_to_end then return true end
+    end
+    return false
+  end
+
+  -- 3.7: a voice's notes with a region end (a bind of the slot it reads,
+  -- lib/slices.lua): each extra note with one is released, and the own
+  -- region cleared (sent to a running voice)
+  local function end_extra_regions(voice)
+    for slot = 2, NOTE_SLOTS do
+      local record = slots[voice][slot]
+      if record and record.region then release_slot(voice, slot) end
+    end
+  end
+  function M.end_regions(voice)
+    if not whole_in(voice, 1, NUM_VOICES) then return end
+    end_extra_regions(voice)
+    M.set_own_region(voice, nil)
   end
 
   -- Every held note of owner on voice, the extra ones first, then the own
@@ -610,8 +770,20 @@ return function(S)
   -- The flush (an LFO step hook): the due notes in the order first marked,
   -- at most NOTES.sends_per_step, each once with its newest values; a note
   -- that ended meanwhile sends nothing, and the rest wait for the next step
+  -- 3.7: the extra notes whose time is up (to_end) are released
+  local function end_due_notes()
+    local now = util.time()
+    for voice = 1, NUM_VOICES do
+      for slot = 2, NOTE_SLOTS do
+        local record = slots[voice][slot]
+        if record and record.held and record.ends_at and now >= record.ends_at then release_slot(voice, slot) end
+      end
+    end
+  end
+
   local function flush_step()
     if flush.stopped then return end
+    end_due_notes()
     local waiting, messages = {}, 0
     for _, record in ipairs(flush.queue) do
       if record.due and record.held and slots[record.voice][record.slot] == record then
@@ -770,6 +942,9 @@ return function(S)
     M.release_all(voice)
     sent[voice][1] = copy_expression(NOTES.neutral)
     references[voice] = nil  -- a stopped voice keeps no freeze reference
+    -- 3.7: no own region, and the engine's notes hold none after the stop
+    own_regions[voice] = nil
+    clear_regions_sent(voice)
   end)
 
   -- A voice that becomes a frozen synth voice: its extra notes cut
@@ -807,6 +982,12 @@ return function(S)
   -- voice's switch runs no hook, and a stopped voice keeps no reference
   S.register_grain_restart(function(voice)
     refresh_reference(voice, true)
+    -- 3.7: a running voice's source switch: its regions were the old
+    -- slot's (the sync that follows sends the own region's clear)
+    if S.voices[voice].active then
+      own_regions[voice] = nil
+      end_extra_regions(voice)
+    end
     local record = slots[voice][1]
     if not S.voices[voice].active and record and record.held and frozen_synth(voice) then
       send_note_on(voice, 1, record)

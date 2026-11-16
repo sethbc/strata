@@ -201,5 +201,6 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | press depth | -100 to 100% | 100 | How far: at 100% full pressure doubles the note's level on amp (+6 dB), so a keyboard's aftertouch swells its notes; `press target` off, or a depth of 0, turns that off |
 | slide target | off, amp, level, main, size, density, position, cutoff | main | What a note's slide moves, from where its touch began |
 | slide depth | -100 to 100% | 50 | |
+| slices | off, one, overlap | off | Buffer voices: whether MIDI notes and a grid's row play the slot's slices, one at a time on the voice's own note or each in a note of its own; a step's slice plays as overlap gives, else as one ([Slices](slices.md)) |
 
 None of the extras (history to slide depth) is changed by MAIN's randomize or the mutations, or is on the grid's fader pages; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).

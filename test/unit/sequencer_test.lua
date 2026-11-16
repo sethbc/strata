@@ -3846,4 +3846,164 @@ test("a probability step's draws keep 3.6's order", function()
   assert_list_near(sent, expected, 1e-9, "voice 1's retriggers over 64 steps")
 end)
 
+-------------------------------------------------------------------------------
+-- 3.7's slices on steps (design §3.5, §5.3, ruling 32; package 2b)
+-------------------------------------------------------------------------------
+
+-- Voice 1 (running) reading buffer 1: 2 s (96000 frames, its peaks read) cut
+-- in count equal slices (default 4), v1_slices at option (1 off, 2 one, 3
+-- overlap); a 120 BPM clock, so a 1/16 step is 0.125 s
+local function sliced_setup(option, count)
+  local context, S = setup()
+  load_buffer(1, context.audio_dir .. "loop.wav")
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, S.buffers[1].loads_sent, 2))
+  local folder = S.lib.scenes.scene_data_dir
+  util.make_dir(folder)
+  local file = io.open(folder .. "buf1.peaks", "w")
+  file:write("strata-peaks 1\nslot 1\nframes 96000\nrate 48000\ngeneration 1\npeaks " .. string.rep("0.500 ", 64) .. "\n")
+  file:close()
+  context.clock.run_for(2 / local_value("UI_PAGES").FRAMES_PER_SECOND + 0.001)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  S.lib.samples.set(1, "mode", 2); S.lib.samples.set(1, "count", count or 4)
+  S.lib.slices.make(1)
+  params:set("v1_slices", option)
+  context.clear_engine_calls()
+  return context, S
+end
+
+local function region_texts(context, engine_voice)
+  local texts = {}
+  for _, call in ipairs(context.engine_calls) do
+    if (call.name == "setGrainParam" and call.args[1] == engine_voice and call.args[2]:find("^region"))
+        or (call.name == "noteRegion" and call.args[1] == engine_voice) then
+      table.insert(texts, call_text(call))
+    end
+  end
+  return table.concat(texts, " ")
+end
+
+test("on a one voice a step's slice sets the own region for its hit, creates no node, and a chord shares it", function()
+  for _, option in ipairs({2, 1}) do  -- one, then off: a step plays a slice as one does
+    local context, S = sliced_setup(option)
+    local seq = S.lib.sequencer
+    S.patterns[1][1] = 15; S.patterns[1][2] = 15
+    seq.set_step_attr(1, 1, "slice", 3)
+    pattern_clock_start()
+    local texts = call_texts(context)
+    local region = first_call(context, "setGrainParam", 0)
+    assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0.5) setGrainParam(0, regionLength, 0.25)",
+      "option " .. option .. ": slice 3 on the own note")
+    assert_true(region < first_call(context, "retrigger", 0), "before the hit")
+    assert_equal(#note_calls(context, "noteOn", 0), 0, "no node: " .. table.concat(texts, " "))
+    -- step 2 has no slice: the region ends
+    context.clear_engine_calls()
+    context.clock.advance_until(S.pattern_clocks[1])
+    assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0) setGrainParam(0, regionLength, 0)",
+      "a played step without a slice ends it")
+    pattern_clock_stop()
+  end
+  -- a chord's further notes take the same region
+  local context, S = sliced_setup(2)
+  S.patterns[1][1] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "slice", 2)
+  S.lib.sequencer.set_step_attr(1, 1, "notes", {0, 4})
+  pattern_clock_start()
+  assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0.25) setGrainParam(0, regionLength, 0.25) "
+    .. "noteRegion(0, 1, 0.25, 0.25)", "the own note's, then the extra note's, before its noteOn")
+  assert_true(first_call(context, "noteRegion", 0) < first_call(context, "noteOn", 0))
+  pattern_clock_stop()
+end)
+
+test("on an overlap voice each step's slice takes a slot of its own and rings past the next step", function()
+  local context, S = sliced_setup(3)
+  local scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return fraction * 8 end  -- a quarter: 2 s
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  for _, step in ipairs({1, 3, 5}) do S.patterns[1][step] = 15 end
+  S.patterns[1][6] = 15
+  seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 3, "slice", 2); seq.set_step_attr(1, 5, "slice", 3)
+  pattern_clock_start()
+  for _ = 2, 6 do context.clock.advance_until(S.pattern_clocks[1]) end
+  for _, step in ipairs({1, 3, 5}) do
+    assert_true(notes.find(1, "seq", "slice" .. step) ~= nil, "step " .. step .. "'s slice still held at step 6")
+    assert_true((notes.find(1, "seq", "slice" .. step) or 1) > 1, "in an extra slot")
+  end
+  local order = {}
+  for _, call in ipairs(context.engine_calls) do
+    if (call.name == "noteRegion" or call.name == "noteOn") and call.args[1] == 0 then table.insert(order, call.name) end
+  end
+  assert_equal(table.concat(order, " "), "noteRegion noteOn noteRegion noteOn noteRegion noteOn",
+    "each noteRegion before its noteOn")
+  assert_equal(region_texts(context, 0):find("setGrainParam", 1, true), nil, "the own note keeps the voice's loop")
+  pattern_clock_stop()
+  -- the pool at 2: step 5's slice cuts step 1's and takes its slot
+  context, S = sliced_setup(3)
+  scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return fraction * 8 end
+  seq, notes = S.lib.sequencer, S.lib.notes
+  notes.set_pool(2)
+  for _, step in ipairs({1, 3, 5}) do S.patterns[1][step] = 15 end
+  seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 3, "slice", 2); seq.set_step_attr(1, 5, "slice", 3)
+  pattern_clock_start()
+  context.clock.advance_until(S.pattern_clocks[1]); context.clock.advance_until(S.pattern_clocks[1])
+  local first_slot = notes.find(1, "seq", "slice1")
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1]); context.clock.advance_until(S.pattern_clocks[1])
+  assert_equal(notes.find(1, "seq", "slice1"), nil, "step 1's slice cut")
+  assert_equal(notes.find(1, "seq", "slice5"), first_slot, "step 5's in its slot")
+  local texts = {}
+  for _, call in ipairs(context.engine_calls) do
+    if (call.name == "noteOff" or call.name == "noteRegion") and call.args[1] == 0 then table.insert(texts, call_text(call)) end
+  end
+  assert_equal(table.concat(texts, " "), "noteOff(0, " .. (first_slot - 1) .. ", 1) noteRegion(0, " .. (first_slot - 1)
+    .. ", 0.5, 0.25)", "cut, then the slot's new region")
+  pattern_clock_stop()
+  -- a MIDI note's slot is never taken
+  context, S = sliced_setup(3)
+  seq, notes = S.lib.sequencer, S.lib.notes
+  notes.set_pool(1)
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "slice", 2)
+  midi_note(S, 1, 60); midi_note(S, 1, 64)
+  assert_equal(notes.pool_used(), 1, "MIDI holds the pool's one extra note")
+  context.set_time(util.time() + 1)
+  pattern_clock_start()
+  assert_equal(notes.find(1, "seq", "slice1"), nil, "no room: the step's slice is refused")
+  assert_true(notes.find(1, "midi", held_key(1, 64)) ~= nil, "MIDI's note plays on")
+  pattern_clock_stop()
+end)
+
+test("the region ends with the step's overrides", function()
+  local context, S = sliced_setup(2)
+  S.patterns[1][1] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "slice", 2)
+  pattern_clock_start()
+  assert_equal(S.lib.notes.own_region(1)[1], 0.25, "slice 2's")
+  context.clear_engine_calls()
+  pattern_clock_stop()
+  assert_equal(S.lib.notes.own_region(1), nil, "the stop ends it")
+  assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0) setGrainParam(0, regionLength, 0)")
+end)
+
+test("a step naming a slice that does not exist plays as a plain step", function()
+  local context, S = sliced_setup(2)
+  S.patterns[1][1] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "slice", 40)
+  pattern_clock_start()
+  assert_equal(call_texts(context)[1], "retrigger(0, 1)", "a plain step's retrigger")
+  assert_equal(#context.engine_calls, 1, "and nothing else")
+  assert_equal(S.lib.notes.own_region(1), nil)
+  pattern_clock_stop()
+  -- on a synth voice too
+  context.clear_engine_calls()
+  S.patterns[2][1] = 15
+  S.lib.sequencer.set_step_attr(2, 1, "slice", 1)
+  pattern_clock_start()
+  assert_equal(#retriggers_of(context, 1), 1)
+  assert_equal(region_texts(context, 1), "", "no region")
+  pattern_clock_stop()
+end)
+
 end

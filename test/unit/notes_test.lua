@@ -264,7 +264,7 @@ test("a second note is an extra note: its expression, then its noteOn", function
   assert_equal(S.lib.notes.find(1, "midi", 3), 3); assert_equal(S.lib.notes.find(1, "seq", 3), nil, "another owner")
   -- a refused note plays nothing
   context.clear_engine_calls()
-  for _, bad in ipairs({ { owner = "grid" }, { pitch = 0 / 0 }, { set_own = 1 }, { velocity = "1" }, { key = 0 / 0 },
+  for _, bad in ipairs({ { owner = "keys" }, { pitch = 0 / 0 },  -- 3.7: "grid" is an owner now { set_own = 1 }, { velocity = "1" }, { key = 0 / 0 },
       { park = 1 }, { expression = 2 } }) do
     assert_equal(play(context, 1, 9, 60, bad), nil, "refused")
   end
@@ -1387,6 +1387,107 @@ test("a hook that raises is contained and the note still plays", function()
   assert_equal(#lines, 1, "one console line for the same error")
   h.claim_script_errors(context, 1, "strata: note hook raises started failed: ", "boom")
   assert_equal(S.lib.notes.held(1), 3, "every note is held")
+end)
+
+-------------------------------------------------------------------------------
+-- 3.7's regions, a note that plays to its end and the grid's owner (package 2b)
+-------------------------------------------------------------------------------
+
+test("an extra slot's region goes before its noteOn, and a slot that never had one sends nothing new", function()
+  local context = load_strata()
+  local S = started(context)
+  local only = { noteRegion = true, noteOn = true }
+  local function texts()
+    local list = {}
+    for _, call in ipairs(context.engine_calls) do if only[call.name] then list[#list + 1] = call_text(call) end end
+    return table.concat(list, " ")
+  end
+  params:set("v1_note_cap", 2)  -- one extra slot: each note below takes it
+  play(context, 1, 1, 60)
+  context.clear_engine_calls()
+  play(context, 1, 2, 64)
+  assert_equal(texts(), "noteOn(0, 1, 64, 329.6276, 1.2599, 0.5)", "no region, never one: nothing new")
+  S.lib.notes.release(1, "midi", 2)
+  context.clear_engine_calls()
+  play(context, 1, 3, 64, { region = { 0.25, 0.5 } })
+  assert_equal(texts(), "noteRegion(0, 1, 0.25, 0.5) noteOn(0, 1, 64, 329.6276, 1.2599, 0.5)", "its region first")
+  context.clear_engine_calls()
+  play(context, 1, 3, 65, { region = { 0.5, 0.25 } })
+  assert_equal(texts(), "noteRegion(0, 1, 0.5, 0.25) noteOn(0, 1, 65, 349.2282, 1.3348, 0.5)",
+    "re-pitched in place with another region: sent again")
+  S.lib.notes.release(1, "midi", 3)
+  context.clear_engine_calls()
+  play(context, 1, 4, 64)
+  assert_equal(texts(), "noteRegion(0, 1, 0, 0) noteOn(0, 1, 64, 329.6276, 1.2599, 0.5)", "the slot's region cleared")
+  assert_equal(play(context, 1, 5, 64, { region = { 0.5, 0 } }), nil, "a length of 0 is refused")
+  assert_equal(play(context, 1, 5, 64, { region = { -0.1, 0.5 } }), nil, "a start below 0")
+  assert_equal(play(context, 1, 5, 64, { to_end = 0 / 0 }), nil, "a to_end that is not finite")
+end)
+
+test("a note held to its end ignores its key's release and goes at its time", function()
+  local context = load_strata()
+  local S = started(context)
+  play(context, 1, 1, 60)
+  play(context, 1, 2, 64, { to_end = 0.5, hold_to_end = true })
+  play(context, 1, 3, 67, { to_end = 0.5 })
+  context.clear_engine_calls()
+  assert_equal(S.lib.notes.release(1, "midi", 2), false, "held to its end: the release leaves it")
+  assert_equal(#context.engine_calls, 0)
+  context.clock.run_for(0.4)
+  assert_equal(#context.calls_named("noteOff"), 0, "not yet")
+  context.clock.run_for(0.1 + 2 / 48)
+  local offs = {}
+  for _, call in ipairs(context.calls_named("noteOff")) do offs[#offs + 1] = call_text(call) end
+  assert_equal(table.concat(offs, " "), "noteOff(0, 1, 0) noteOff(0, 2, 0)", "both released by their time")
+  -- the timer alone: a key's release ends a note without hold_to_end sooner
+  play(context, 1, 4, 64, { to_end = 0.5 })
+  context.clear_engine_calls()
+  assert_true(S.lib.notes.release(1, "midi", 4), "released at once")
+  context.clock.run_for(1)
+  assert_equal(#context.calls_named("noteOff"), 1, "and once")
+end)
+
+test("own_only takes the own note, and the own region is sent only when it changes", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  assert_equal(notes.own_region(1), nil, "none at start")
+  play(context, 1, 1, 60)
+  play(context, 1, 2, 64)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 3, 60, { own_only = true, region = { 0.5, 0.25 } }), 1, "slot 1 though one is held")
+  assert_equal(call_text(context.engine_calls[2]), "setGrainParam(0, regionStart, 0.5)")
+  assert_equal(call_text(context.engine_calls[3]), "setGrainParam(0, regionLength, 0.25)")
+  local copy = notes.own_region(1)
+  copy[1] = 0.9
+  assert_equal(notes.own_region(1)[1], 0.5, "a copy")
+  context.clear_engine_calls()
+  notes.set_own_region(1, { 0.5, 0.25 })
+  assert_equal(#context.engine_calls, 0, "unchanged: nothing")
+  notes.set_own_region(1, nil)
+  assert_equal(call_text(context.engine_calls[2]), "setGrainParam(0, regionLength, 0)", "a clear")
+  -- a stopped voice keeps it for its start, which sends it
+  notes.set_own_region(3, { 0.25, 0.25 })
+  assert_equal(#context.calls_named("setGrainParam"), 2, "voice 3 is stopped: nothing sent")
+  assert_equal(notes.own_region(3)[1], 0.25)
+end)
+
+test("the grid owns notes of its own, and a steal of the owner's kind takes its slot", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  assert_equal(notes.NOTES.owners.grid, true)
+  assert_equal(play(context, 1, 101, 60, { owner = "grid" }), 1, "a grid key's note")
+  S.lib.notes.set_pool(1)
+  local function steals(owner, key) return owner == "seq" and type(key) == "string" end
+  assert_equal(play(context, 1, "slice1", 64, { owner = "seq", extra_only = true, steals = steals }), 2)
+  later(context, 0.1)
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, "slice3", 65, { owner = "seq", extra_only = true, steals = steals }), 2, "its slot")
+  assert_equal(call_text(context.calls_named("noteOff")[1]), "noteOff(0, 1, 1)", "the older one cut")
+  assert_equal(notes.find(1, "seq", "slice1"), nil)
+  assert_equal(play(context, 1, "x", 66, { owner = "seq", extra_only = true, steals = function() return false end }),
+    nil, "nothing it may steal: refused")
 end)
 
 end
