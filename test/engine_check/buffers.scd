@@ -190,7 +190,7 @@ var checkFilePitch = {
         "a 44.1 kHz file plays at its own pitch (a 1 kHz sine measures % Hz; readings %)".format(
             pitches[5].round(0.1), pitches.round(0.1)));
     tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.voiceGroup, \addToHead);
-    command.(\recordBuffer, 3, 1.0, 1.0, 0, 0, 0, 0, 0); 1.5.wait; server.sync;
+    command.(\recordBuffer, 3, 1.0, 1.0, 0, 0, 0, 0, 0); h.awaitTake(3);
     tone.free;
     pitches = readPitch.value;
     check.(engine.bufferFrames[3] > 0 and: { (pitches[5] - 440).abs < 5 },
@@ -305,7 +305,7 @@ var checkReleasingGrainFades = { arg stereoPath, monoPath;
     command.(\recordBuffer, 2, 0.2, 1.0, 0, 0, 0, 0, 0); 0.1.wait; server.sync;
     check.((getControl.(grain, \bufFrames) == 0) and: { synthNames.(context.xg).includes(\strataRecord).not } and: { holds.(0.4) },
         "a recording in a voiceOff release fades the releasing grain synth first and starts only after the fade");
-    1.0.wait; server.sync;
+    h.awaitTake(2);
     check.((engine.bufferFrames[2] == (0.2 * server.sampleRate).round.asInteger) and: { grain.isPlaying }
         and: { getControl.(grain, \bufFrames) == 0 }, "then records the take, which the releasing grain synth never takes");
     restart.value;
@@ -336,7 +336,7 @@ var checkFadeRates = { arg stereoPath;
     command.(\recordBuffer, 2, 0.2, 1.0, 0, 0, 0, 0, 0); 0.1.wait; server.sync;
     check.(rateScale.value.equalWithPrecision(fileScale),
         "a recording leaves the rate of the grains fading out until its take is in (bufRateScale %)".format(rateScale.value));
-    1.0.wait; server.sync;
+    h.awaitTake(2);
     check.((engine.bufferFrames[2] > 0) and: { rateScale.value == 1 },
         "the take's rate arrives with its length (bufRateScale %)".format(rateScale.value));
 };
@@ -371,7 +371,8 @@ var checkFadeWaitInterleavings = { arg longPath;
     command.(\recordBuffer, 2, 0.5, 1.0, 0, 0, 0, 0, 0);
     command.(\recordBuffer, 2, 0.4, 1.0, 0, 0, 0, 0, 0); 0.65.wait; server.sync;   // the later one runs from the fade's end (0.5 s) to 0.9 s
     running = recorders.value;
-    0.8.wait; server.sync;
+    h.awaitTake(2);
+    waitFor.({ File.exists(takePath) }, 5);   // its scratch take, written after it ends
     check.((running == 1) and: { engine.recordSynths[2].isNil } and: { engine.bufferFrames[2] == (0.4 * server.sampleRate).round.asInteger }
         and: { File.exists(takePath) },
         "of two recordings inside the fade wait the later one wins and only it runs (% running, % frames)".format(
@@ -440,7 +441,8 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
     check.(synthNames.(context.xg).includes(\strataRecord).not
         and: { (bufferSample.(engine.buffersL[2], 100) - 0.4).abs < 0.001 },
         "recordBuffer leaves the buffers and starts no recording until the fade is over");
-    1.0.wait; server.sync;
+    h.awaitTake(2);
+    waitFor.({ File.exists(engine.scratchDir +/+ "buf3.wav") }, 5);   // its scratch take, written after it ends
     check.(engine.recordSynths[2].isNil and: { engine.bufferFrames[2] == (0.2 * server.sampleRate).round.asInteger }
         and: { File.exists(engine.scratchDir +/+ "buf3.wav") }, "then recordBuffer records the take");
     // Every interleaving inside the wait: the later command wins
@@ -457,9 +459,10 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
         File.delete(engine.scratchDir +/+ "buf3.wav");
         case[1].value;
         // (every earlier command's late step has come and been dropped by
-        // then; a case ending on a load waits for that load itself)
+        // then; a case ending on a load or a recording waits for it itself)
         1.5.wait; server.sync;
         if (case[3].notNil and: { case[2] > 0 }) { h.awaitLoad(2) };
+        if (case[3].isNil) { h.awaitTake(2); waitFor.({ File.exists(engine.scratchDir +/+ "buf3.wav") }, 5) };
         check.(engine.bufferFrames[2] == case[2] and: { getControl.(engine.synths[\grain1], \bufFrames) == case[2] }
             and: { engine.recordSynths[2].isNil }
             and: { case[3].isNil or: { (bufferSample.(engine.buffersL[2], 100) - case[3]).abs < 0.001 } }
@@ -542,7 +545,7 @@ var checkLongSlotCommands = { arg other, path60;
         and: { waitFor.({ bufferStateSeen.(0, 60, other) }) };
     cmd.(\recordBuffer, 1, 20, 1.0, 0, 0, 0, 0, 0); 0.3.wait; server.sync;
     duration = other.recordSynths[1] !? { arg synth; getControl.(synth, \frames) / rate };
-    cmd.(\stopRecord, 1); 0.5.wait; server.sync;
+    cmd.(\stopRecord, 1); h.awaitTake(1, other);
     recorded = duration.notNil and: { (duration - 20).abs < 0.001 } and: { other.bufferFrames[1] > 0 };
     cmd.(\saveBuffer, 0, savePath, 0, 1);
     saved = waitFor.({ File.exists(savePath) }, 60);
@@ -583,7 +586,7 @@ var checkAsyncDecodeOrder = { arg other, path60, path20, damaged;
     cmd.(\loadBuffer, 3, path60, 0); cmd.(\clearBuffer, 3); settle.value;
     check.(other.bufferFrames[3] == 0 and: { bufferSample.(other.buffersL[3], 100) == 0 },
         "buffers: a long file's load loses to a clear sent during its check (% frames)".format(other.bufferFrames[3]));
-    cmd.(\loadBuffer, 3, path60, 0); cmd.(\recordBuffer, 3, 0.3, 1.0, 0, 0, 0, 0, 0); settle.value;
+    cmd.(\loadBuffer, 3, path60, 0); cmd.(\recordBuffer, 3, 0.3, 1.0, 0, 0, 0, 0, 0); settle.value; h.awaitTake(3, other);
     check.(other.bufferFrames[3] == (0.3 * rate).round.asInteger and: { other.recordSynths[3].isNil },
         "buffers: a recording sent during a long file's check wins (% frames)".format(other.bufferFrames[3]));
     // (settle lets a superseded check end; the winning load is waited for itself)
@@ -725,7 +728,7 @@ command.(\setGrainSource, 1, 3);            // voice 1 reads slot 3 (index 2)
 before = synthNames.(context.xg).size;
 command.(\recordBuffer, 2, 0.3, 1.0, 0, 0, 0, 0, 0); 0.15.wait; server.sync;   // starts after the fade and the zeroing syncs
 check.(synthNames.(context.xg).includes(\strataRecord), "recordBuffer runs a record synth");
-0.5.wait; server.sync;
+h.awaitTake(2);
 check.(engine.bufferFrames[2] == (0.3 * server.sampleRate).round.asInteger, "recordBuffer sets the valid length");
 check.(getControl.(engine.synths[\grain1], \bufFrames) == engine.bufferFrames[2],
     "a voice reading the slot gets the new valid length");
@@ -767,7 +770,7 @@ check.(synthNames.(context.xg).size == before and: { engine.bufferFrames[3] == 0
 command.(\recordBuffer, 3, 1.0, 1.0, 0, 0, 0, 0, 0); 0.15.wait; server.sync;   // a voice reads slot 4: after the fade
 check.(synthNames.(context.xg).includes(\strataRecord), "a 1 s recording is running before stopRecord");
 0.15.wait;
-command.(\stopRecord, 3); 0.3.wait; server.sync;
+command.(\stopRecord, 3); h.awaitTake(3);
 check.(synthNames.(context.xg).includes(\strataRecord).not and: { engine.recordSynths[3].isNil },
     "stopRecord stops the record synth");
 check.(synthNames.(context.xg).size == before, "stopRecord leaves no lasting nodes");
@@ -836,7 +839,7 @@ check.(getControl.(engine.synths[\grain6], \bufRateScale).equalWithPrecision(220
     and: { getControl.(engine.synths[\grain6], \bufFrames) == 11025 },
     "a voice reading a loaded slot plays it at the file's rate");
 checkFilePitch.value;
-command.(\recordBuffer, 3, 0.1, 1.0, 0, 0, 0, 0, 0); 0.4.wait; server.sync;
+command.(\recordBuffer, 3, 0.1, 1.0, 0, 0, 0, 0, 0); h.awaitTake(3);
 check.(getControl.(engine.synths[\grain6], \bufRateScale) == 1, "recording resets the slot to the server's rate");
 
 command.(\clearBuffer, 2); 0.2.wait; server.sync;   // after the fade (a voice reads the slot)
@@ -868,7 +871,7 @@ duringPeak = readPeak.value;               // 0.3-0.6 s into the 1 s take
 check.(engine.recordSynths[2].notNil and: { getControl.(engine.synths[\grain1], \bufFrames) == 0 },
     "the slot is still recording (bufFrames 0)");
 check.(duringPeak < 0.001, "a voice reading a slot being recorded is silent (peak %)".format(duringPeak));
-0.8.wait; server.sync;
+h.awaitTake(2);
 check.(engine.recordSynths[2].isNil and: { engine.bufferFrames[2] > 0 }, "the take has completed");
 afterPeak = readPeak.value;
 check.(afterPeak > 0.01, "after the take completes the voice plays it (peak %)".format(afterPeak));

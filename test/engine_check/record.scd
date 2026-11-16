@@ -278,7 +278,7 @@ record.(0, seconds);
 frames = (seconds * server.sampleRate).round.asInteger;
 check.((engine.bufferFrames[0] == 0) and: { engine.recordSynths[0].notNil },
     "record: recordBuffer takes nine arguments and records the input as a replace take (the slot reads empty)");
-h.waitFor({ engine.bufferFrames[0] == frames }, (seconds + 1));
+h.awaitTake(0, nil, seconds + 5);
 check.((engine.bufferFrames[0] == frames) and: { engine.recordSynths[0].isNil }
     and: { h.bufferSample(engine.buffersL[0], 500).abs > 0.001 },
     "record: recordBuffer takes nine arguments and records the input as a replace take (frames %, a sample %)".format(
@@ -516,7 +516,7 @@ test.("record: a synced take's delay runs from the command's send, not from when
     until = Main.elapsedTime + hold;
     while { Main.elapsedTime < until } { };
     0.05.wait;
-    waitDone.(4, delay + 1);
+    h.awaitTake(4, nil, delay + 5);
     server.sendBundle(nil, ['/n_free', id]);
     server.sync;
     value = h.bufferSample(engine.buffersL[4], frame);
@@ -536,7 +536,7 @@ test.("record: an idle engine's synced take starts delay after its send", {
     server.sendBundle(delay + (Main.elapsedTime - thisThread.seconds),
         ['/s_new', \strataCheckTimecode, id, 2, inputSynth.nodeID, \out, engine.inputBus.index]);
     0.05.wait;
-    waitDone.(4, delay + 1);
+    h.awaitTake(4, nil, delay + 5);
     server.sendBundle(nil, ['/n_free', id]);
     server.sync;
     value = h.bufferSample(engine.buffersL[4], frame);
@@ -839,6 +839,9 @@ test.("record: a playable recording keeps the slot playing and sets its length t
     atCommand = engine.bufferFrames[4];
     settle.(0.2);
     atStart = engine.bufferFrames[4];
+    // (the voice gets the length once the new length's peaks file is in
+    // place, writeRecordPeaks: waited for, never a time, #718)
+    h.waitFor({ voiceBufFrames.(1) == d }, 5);
     atGrain = voiceBufFrames.(1);
     h.command(\stopRecord, 4);
     waitDone.(4);
@@ -1335,7 +1338,7 @@ test.("record: a load, clear or recording during the stop fade frees it at once 
     [
         ["clear", { h.command(\clearBuffer, slot) }, 0],
         ["load", { h.command(\loadBuffer, slot, h.monoPath, 0) }, 4410, { h.awaitLoad(slot) }],
-        ["recording", { record.(slot, 0.1) }, (0.1 * sampleRate).round.asInteger]
+        ["recording", { record.(slot, 0.1) }, (0.1 * sampleRate).round.asInteger, { h.awaitTake(slot) }]
     ].do({ arg case;
         var name = case[0], act = case[1], frames = case[2], running;
         record.(slot, 0.8);
@@ -1344,8 +1347,8 @@ test.("record: a load, clear or recording during the stop fade frees it at once 
         act.value;
         server.sync;
         running = h.synthNames(context.xg).count({ arg each; each == \strataRecord });
-        // (the dropped take's late steps have come by then; the load is
-        // waited for itself)
+        // (the dropped take's late steps have come by then; the load or
+        // the new take is waited for itself)
         0.5.wait; server.sync;
         case[3].value;
         results.add([name, running, engine.bufferFrames[slot], frames]);

@@ -411,6 +411,29 @@ var awaitLoad = { arg slot, target, timeout = 5, area = "check", load;
     inPlace
 };
 
+// Wait (inside the check routine) until a slot's recording has ended on
+// target (h.engine unless given), never for a time (#718): no record synth
+// and no take left, which the engine clears only after a kept take's peaks
+// file is in place and its length set (endTake), or when the take is
+// canceled. A take's frames, like a load's, come only once its peaks file
+// is written, so a fixed wait past its length read 0 frames on a slow
+// runner. Then a sync, so the length the engine sent the slot's grain
+// synths is on the server. A recording still running or awaited after
+// timeout (counted from the call: give a long take its length on top)
+// fails the check, its line beginning with area. Returns whether it ended.
+var awaitTake = { arg slot, target, timeout = 5, area = "check";
+    var takes, ended;
+    target = target ? engine;
+    takes = target.areaState[\record][\takes];
+    ended = waitFor.({ target.recordSynths[slot].isNil and: { takes[slot].isNil } }, timeout);
+    server.sync;
+    if (ended.not) {
+        check.(false, "%: slot %'s recording ends within % s (% frames; record synth %, take %)".format(
+            area, slot, timeout, target.bufferFrames[slot], target.recordSynths[slot].notNil, takes[slot].notNil));
+    };
+    ended
+};
+
 // true when some UGen of the SynthDef reads the named control (it is not
 // declared and left unused)
 var controlFeedsAUGen = { arg defName, controlName;
@@ -936,6 +959,10 @@ runChecks = {
             // place on target (h.engine unless given), or a FAIL line
             // naming the area (#706); then a sync
             awaitLoad: { arg self, slot, target, timeout = 5, load; awaitLoad.(slot, target, timeout, running, load) },
+            // a slot's recording ended on target (h.engine unless given):
+            // kept with its length set, or canceled; or a FAIL line naming
+            // the area (#718); then a sync
+            awaitTake: { arg self, slot, target, timeout = 5; awaitTake.(slot, target, timeout, running) },
             synthNames: { arg self, group; synthNames.(group) },
             synthTree: { arg self, group; synthNodes.(group) },
             voiceSynths: { arg self, voice; voiceTrio.(voice) },
