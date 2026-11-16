@@ -626,4 +626,42 @@ test("64: a slice key's release ends its slice after the grid voice changed", fu
   assert_equal(double.offs[2].voice, 1); assert_equal(double.offs[2].key, 102)
 end)
 
+-- #733: the 64 sends a position key's release for the grid voice as it is
+-- then, so the release ends the port's held key under the voice that
+-- pressed it: no stale anchor stays lit at 11 or makes the next press a loop
+test("64: a position key's release ends its hold after the grid voice changed (#733)", function()
+  local context, S, device = positions_grid()
+  local held_level = 11
+  grid_core().set_page(1, 5)
+  S.grid_voice_select = 1
+  params:set("v1_loop_start", 0); params:set("v1_loop_length", 1)
+  local function check_no_hold(how)
+    tap(context, 1, 1, 2)  -- cell 9: a jump, not a loop (and the head leaves cell 5)
+    assert_near(params:get("v1_loop_length"), 1, 1e-9, how .. ": no loop was set")
+    assert_near(params:get("v1_buf_pos"), 0.5, 1e-9, how .. ": the press jumped to cell 9")
+    grid_redraw()
+    assert_true(S.lib.positions.grid_level(1, 5, 16, 1) ~= held_level, how .. ": cell 5 is not held")
+    assert_true(device:get_led(5, 1) ~= held_level, how .. ": cell 5 is not lit as held")
+  end
+
+  context.grid.press(1, 5, 1, 1)  -- voice 1's cell 5, held
+  tap(context, 1, 3, 7)            -- row 7: voice 3 becomes the grid voice
+  assert_equal(S.grid_voice_select, 3)
+  context.grid.press(1, 5, 1, 0)  -- the release names voice 3
+  tap(context, 1, 1, 7)            -- back to voice 1
+  assert_equal(S.grid_voice_select, 1)
+  check_no_hold("row 7")
+
+  -- another grid's position press changes the grid voice
+  context.grid.plug(2, 16, 8)
+  grid_core().set_page(2, 5)
+  context.grid.press(1, 5, 1, 1)
+  tap(context, 2, 1, 3)            -- the 128h's row 3: a position press for voice 3 selects it
+  assert_equal(S.grid_voice_select, 3)
+  context.grid.press(1, 5, 1, 0)
+  tap(context, 1, 1, 7)
+  assert_equal(S.grid_voice_select, 1)
+  check_no_hold("another grid")
+end)
+
 end

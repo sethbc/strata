@@ -563,9 +563,12 @@ return function(S)
     if records[port] then end_stale_port(port, records[port]) end
     if z == 0 then
       local record = records[port]
-      if record and release_slice_key(port, record, voice_idx, cell, rows_show_grid_voice(port)) then return end
+      local any_voice = rows_show_grid_voice(port)
+      if record and release_slice_key(port, record, voice_idx, cell, any_voice) then return end
+      -- the position key held likewise: on the 64 its release ends it under
+      -- the voice that pressed it, whatever the grid voice is now (#733)
       local held = record and record.held
-      if held and held.voice == voice_idx and held.cells == cells and held.cell == cell then record.held = nil end
+      if held and (held.voice == voice_idx or any_voice) and held.cells == cells and held.cell == cell then record.held = nil end
       return
     end
     if not buffer_voice(voice_idx) then return end

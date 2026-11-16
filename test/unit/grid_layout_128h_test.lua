@@ -1062,4 +1062,19 @@ test("128h: a release on one row never ends another row's slice in the same colu
   assert_equal(double.offs[1].voice, 2); assert_equal(double.offs[1].key, 105)
 end)
 
+-- #733 is the 64's alone: a row here is always its own voice's, so a release
+-- on one row never ends another row's held position key in the same column
+test("128h: a position release on one row keeps another row's held key in the same column (#733)", function()
+  local context, S = position_setup()
+  tap(context, 1, 8, 8); tap(context, 1, 8, 8)
+  params:set("v2_loop_start", 0); params:set("v2_loop_length", 1)
+  context.grid.press(1, 5, 1, 1)  -- voice 1's cell 5
+  context.grid.press(1, 5, 2, 1)  -- voice 2's cell 5: the port's held key
+  context.grid.press(1, 5, 1, 0)  -- voice 1's release
+  context.grid.press(1, 9, 2, 1)  -- voice 2's key is still down: a loop
+  assert_near(params:get("v2_loop_start"), 0.25, 1e-6, "loop start")
+  assert_near(params:get("v2_loop_length"), 0.3125, 1e-6, "loop length")
+  context.grid.press(1, 9, 2, 0); context.grid.press(1, 5, 2, 0)
+end)
+
 end
