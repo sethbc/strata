@@ -235,7 +235,7 @@ checkNoteRegion = {
 // (leaveStream): at rootNote 57 a frozen synth voice's chord switched to a
 // buffer plays note 57 at rate 1
 checkRootNote = {
-    var voice = 3, pitches = [52, 57, 64], slots = [1, 2, 3], reference = 45, rates, alloc;
+    var voice = 3, pitches = [52, 57, 64], slots = [1, 2, 3], reference = 45, rates, alloc, lines = List.new;
     alloc = state[\rootNotes].copy;
     command.(\setNotePool, 8);
     if (engine.bufferFrames[0] == 0) { command.(\loadBuffer, 0, h.stereoPath, 0); h.awaitLoad(0) };
@@ -251,6 +251,14 @@ checkRootNote = {
         and: { rates.every({ arg rate, index; near.(rate, 2 ** ((pitches[index] - 57) / 12)) }) },
         "notes: rootNote 57 makes a note restarted on a buffer play note 57 at rate 1 (at alloc %; the notes' bufRate %)".format(
             alloc, rates));
+    // a non-finite root note is ignored with one line, the kept one stays
+    withIgnoredLines.(lines, {
+        [nan, inf, inf.neg].do({ arg value; command.(\setGrainParam, voice, \rootNote, value) });
+    });
+    check.((lines.size == 3) and: { lines.every({ arg line; line.beginsWith("strata: setGrainParam ignored: ") }) }
+        and: { state[\rootNotes][voice] == 57 } and: { engine.grainControls[voice][\rootNote].isNil },
+        "notes: a non-finite rootNote is ignored with one line and the root note stays (lines %; kept %)".format(
+            lines.asArray, state[\rootNotes][voice]));
     command.(\setGrainParam, voice, \rootNote, 60.0);
     h.stopAllVoices;
 };
