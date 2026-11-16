@@ -579,7 +579,7 @@ test("a scene without the registered fields loads with every registered default"
   local context = load_with(register, { data_subdir = "v2_to_v3" })
   finish_startup(context)
   local S = local_value("S")
-  assert_equal(S.constants.SCENE_DATA_VERSION, 7)
+  assert_equal(S.constants.SCENE_DATA_VERSION, 8)
   params:set("v2_probe", 0.6); params:set("probe_level", 0.9)
   capture_scene(2)
   local scene = deep_copy(S.scenes[2])
@@ -604,7 +604,7 @@ test("a scene without the registered fields loads with every registered default"
   assert_equal(params:get("v2_probe"), 0, "the recall applies the default")
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
-  assert_equal(saved.version, 7, "saved as version 7")
+  assert_equal(saved.version, 8, "saved as version 8")
   -- with nothing registered, a scene without extras still gains an empty table
   tab.save({ version = 7, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
   context = load_strata({ data_subdir = "v2_to_v3" })
@@ -835,7 +835,18 @@ test("the 3.3 constants", function()
   assert_equal(constants.WAVEFORMS.refresh_seconds, 2)
   assert_equal(constants.PLAYHEADS.update_hz, 15)
   assert_equal(constants.NORNS_SAMPLE_RATE, 48000)
-  assert_equal(constants.SCENE_DATA_VERSION, 7)
+  assert_equal(constants.SCENE_DATA_VERSION, 8)
+end)
+
+test("the 3.7 tempo divisions: twelve names, each with its beats", function()
+  load_strata()
+  local divisions = local_value("S").constants.DIVISIONS
+  assert_equal(table.concat(divisions.names, " "), "1/32 1/16T 1/16 1/16D 1/8T 1/8 1/8D 1/4T 1/4 1/4D 1/2 1 bar")
+  local beats = { 1 / 8, 1 / 6, 1 / 4, 3 / 8, 1 / 3, 1 / 2, 3 / 4, 2 / 3, 1, 3 / 2, 2, 4 }
+  assert_equal(#divisions.beats, #divisions.names, "one length per name")
+  for index, value in ipairs(beats) do
+    assert_true(math.abs(divisions.beats[index] - value) < 1e-12, divisions.names[index] .. " is " .. value .. " beats")
+  end
 end)
 
 -- 3.4's registries (lib/state.lua, design §0.1): a fresh S from lib/state,
@@ -1113,6 +1124,59 @@ test("register_io_section takes a named record with a rows function", function()
   local count = #script.registry.io_sections
   script.register_io_section({ name = "late", title = "late", rows = rows })
   assert_equal(#script.registry.io_sections, count + 1, "a section after init")
+end)
+
+-- 3.7's voice_hit (design §0.2, plan ruling 12): a named record with a hit
+-- function, read at each use, so the registry stays open
+test("register_voice_hit checks its record and refuses a duplicate", function()
+  local S = fresh_state()
+  local function fn() end
+  S.register_voice_hit({ name = "probe", hit = fn })
+  assert_equal(#S.registry.voice_hit, 1, "a hook is kept")
+  assert_equal(S.registry.voice_hit[1].hit, fn, "with its function")
+  assert_true(refused(S.register_voice_hit, { name = "probe", hit = fn }), "a second probe")
+  assert_true(refused(S.register_voice_hit, { hit = fn }), "a hook needs a name")
+  assert_true(refused(S.register_voice_hit, { name = "", hit = fn }), "a name is not empty")
+  assert_true(refused(S.register_voice_hit, { name = "p2" }), "a hook needs hit")
+  assert_true(refused(S.register_voice_hit, { name = "p3", hit = 1 }), "hit is a function")
+  assert_true(refused(S.register_voice_hit, fn), "a record is a table")
+  local ok, err = pcall(S.register_voice_hit, { name = "p4", hit = fn, started = fn })
+  assert_true(not ok and tostring(err):find("started", 1, true) ~= nil, "an unknown field, named: " .. tostring(err))
+  assert_equal(#S.registry.voice_hit, 1, "nothing refused was kept")
+  -- open after init
+  load_strata()
+  local script = local_value("S")
+  local count = #script.registry.voice_hit
+  script.register_voice_hit({ name = "late", hit = fn })
+  assert_equal(#script.registry.voice_hit, count + 1, "a hook after init")
+end)
+
+-- 3.7's settings rows for a modulation source (design §0.4): fields is a
+-- list of {label, value, enc, fine_enc, press}, or a function returning one
+test("a modulation source's fields are checked", function()
+  local S = fresh_state()
+  local function fn() end
+  local function value() return "1" end
+  S.register_mod_source(mod_source({ key = "f1", fields = { { label = "rate", value = value },
+    { label = "12345678", value = value, enc = fn, fine_enc = fn, press = fn } } }))
+  assert_equal(#S.registry.mod_sources, 1, "a source with fields is kept")
+  S.register_mod_source(mod_source({ key = "f2", fields = function() return {} end }))
+  assert_equal(#S.registry.mod_sources, 2, "fields may be a function")
+  local function bad(fields) return refused(S.register_mod_source, mod_source({ key = "bad", fields = fields })) end
+  assert_true(bad({ { label = "123456789", value = value } }), "a label of 9 characters")
+  assert_true(bad({ { label = "", value = value } }), "an empty label")
+  assert_true(bad({ { label = 3, value = value } }), "a label is a string")
+  assert_true(bad({ { label = "rate", value = "1" } }), "a value that is not a function")
+  assert_true(bad({ { label = "rate" } }), "a field needs a value")
+  assert_true(bad({ { label = "rate", value = value, enc = 1 } }), "enc is a function")
+  assert_true(bad({ { label = "rate", value = value, fine_enc = 1 } }), "fine_enc is a function")
+  assert_true(bad({ { label = "rate", value = value, press = 1 } }), "press is a function")
+  assert_true(bad({ "rate" }), "a field is a table")
+  assert_true(bad("rate"), "fields is a list or a function")
+  local ok, err = pcall(S.register_mod_source, mod_source({ key = "bad", fields = { { label = "rate", value = value,
+    hint = fn } } }))
+  assert_true(not ok and tostring(err):find("hint", 1, true) ~= nil, "an unknown key, named: " .. tostring(err))
+  assert_equal(#S.registry.mod_sources, 2, "nothing refused was kept")
 end)
 
 end

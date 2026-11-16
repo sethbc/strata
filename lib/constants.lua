@@ -8,7 +8,7 @@
 local NUM_VOICES = 7
 local NUM_SCENES = 16  -- Scene slots, in two banks of SCENE_BANK_SIZE (3.4)
 local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 7  -- Scene file format version (written into scenes.data)
+local SCENE_DATA_VERSION = 8  -- Scene file format version (written into scenes.data; 8 since 3.7)
 -- The oldest format each data file loads (3.7, design decision 21): a file
 -- from its floor to the build's version loads, its missing fields filled
 -- from the defaults; an older one is set aside as a backup, never converted
@@ -364,4 +364,10 @@ return {
   -- messages_per_window sends per window_seconds; a deferrable send past it
   -- waits for the next window
   ENGINE_BUDGET = {messages_per_window = 150, window_seconds = 0.1},
+  -- 3.7 (design §0.6): the tempo divisions the delay and the random
+  -- sequences share, each name's length in beats (a beat a quarter note)
+  DIVISIONS = {
+    names = {"1/32", "1/16T", "1/16", "1/16D", "1/8T", "1/8", "1/8D", "1/4T", "1/4", "1/4D", "1/2", "1 bar"},
+    beats = {1/8, 1/6, 1/4, 3/8, 1/3, 1/2, 3/4, 2/3, 1, 3/2, 2, 4},
+  },
 }

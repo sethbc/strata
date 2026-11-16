@@ -2960,6 +2960,55 @@ test("no copy of an older format is kept at a save", function()
   assert_equal(table.concat(copies, ", "), "", "no scenes.data.v* file")
 end)
 
+-- The first path at which two values differ, or nil when they are equal
+-- (tables compared key by key, both ways; numbers to the precision a data
+-- file writes them in)
+local function first_difference(a, b, path)
+  path = path or "scene"
+  if type(a) ~= "table" or type(b) ~= "table" then
+    if a == b then return nil end
+    if type(a) == "number" and type(b) == "number" and math.abs(a - b) <= 1e-9 * math.max(1, math.abs(a)) then
+      return nil
+    end
+    return path .. ": " .. tostring(a) .. " ~= " .. tostring(b)
+  end
+  for key, value in pairs(a) do
+    local found = first_difference(value, b[key], path .. "." .. tostring(key))
+    if found then return found end
+  end
+  for key, value in pairs(b) do
+    if a[key] == nil then return path .. "." .. tostring(key) .. ": nil ~= " .. tostring(value) end
+  end
+  return nil
+end
+
+-- 3.7 (design §0.6, plan ruling 30): the version rises to 8 with no new
+-- field, so a version 7 file loads as it is and the next save writes 8
+test("a version 7 scenes file migrates to 8 with nothing changed", function()
+  local context = load_strata({ data_subdir = "seven_to_eight" })
+  local S = local_value("S")
+  assert_equal(S.constants.SCENE_DATA_VERSION, 8, "the build's format is 8")
+  assert_equal(S.constants.SCENE_FORMAT_FLOOR, 7, "the floor stays 7")
+  scramble_state(17); capture_scene(1)
+  scramble_state(23); capture_scene(5)
+  S.lib.scenes.set_name(5, "five")
+  local before = deep_copy(S.scenes)
+  local dir = context.data_dir .. "strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  assert_true(S.lib.data_files.write(dir .. "scenes.data", { version = 7, scenes = deep_copy(S.scenes) }), "written")
+  context = load_strata({ data_subdir = "seven_to_eight" })
+  S = local_value("S")
+  for slot = 1, S.constants.NUM_SCENES do
+    local difference = first_difference(before[slot], S.scenes[slot], "scene " .. slot)
+    assert_true(difference == nil, "every scene equals itself: " .. tostring(difference))
+  end
+  assert_true(S.scenes[1].populated and S.scenes[5].populated, "the saved scenes load")
+  assert_true(not util.file_exists(dir .. "scenes.data.bak"), "nothing is set aside")
+  assert_true(save_scenes_to_disk(), "saved")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 8, "the first save writes version 8")
+  cleanup()
+end)
+
 test("a record's scene defaults may depend on the voice", function()
   local function probe_default(voice) return voice / 10 end
   local context = load_strata({ data_subdir = "floor_voice_defaults", before_init = function()

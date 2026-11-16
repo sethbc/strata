@@ -28,6 +28,7 @@ return function(S)
   local NOTES = {file = "notes.data", version = 1, cut_seconds = 0.05, sends_per_step = 16,
     rate_root_note = 60, rate_range = {0.25, 4}, note_range = {0, 127}, a4 = {note = 69, freq = 440},
     owners = {midi = true, seq = true},
+    step_owner = "seq",  -- the sequencer's owner (SEQ.note_owner): its chord's extra notes are no hit of their own
     expression_keys = {"bend", "amp", "position", "size", "main"},
     neutral = {bend = 1, amp = 1, position = 0, size = 0, main = 0},
     expression_ranges = {bend = {0.0625, 16}, amp = {0, 2}, position = {-1, 1}, size = {-1, 1}, main = {-1, 1}},
@@ -359,7 +360,8 @@ return function(S)
     local moved = previous ~= nil and previous.held and previous.owner == played.owner and previous.key == played.key
     note.set_own(played.pitch)
     if previous then forget(previous, now, moved) end
-    if not note.quiet and not S.voices[voice].active then toggle_voice(voice) end
+    -- the retrigger below always follows this start: the two are one hit
+    if not note.quiet and not S.voices[voice].active then toggle_voice(voice, {retrigger_follows = true}) end
     local record = new_record(voice, 1, played, now)
     slots[voice][1] = record
     run_note_hooks(moved and "moved" or "started", record)
@@ -376,14 +378,15 @@ return function(S)
       send_note_on(voice, 1, record)
       messages = messages + 1
     end
-    if not note.quiet then engine.retrigger(voice - 1, record.velocity) end
+    if not note.quiet then S.lib.engine_sync.retrigger(voice, record.velocity, "note") end
     count(messages)
     if M.held(voice) ~= held_before then held_changed() end
     return 1
   end
 
   -- An extra note starts in slot (free, or stolen in place): its first
-  -- expression, then its noteOn
+  -- expression, then its noteOn; a hit (the voice_hit hooks, 3.7) unless
+  -- it is a step's chord's, whose step is the one hit
   local function start_extra(voice, slot, played, now)
     local record = new_record(voice, slot, played, now)
     slots[voice][slot] = record
@@ -391,6 +394,7 @@ return function(S)
     send_expression(voice, slot, record.expression)
     send_note_on(voice, slot, record)
     count(2)
+    if played.owner ~= NOTES.step_owner then S.lib.engine_sync.extra_note_hit(voice, slot, record.velocity) end
     return slot
   end
 

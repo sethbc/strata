@@ -82,4 +82,24 @@ K2:back K3:off E3:source
 - **ALT+K2** held half a second - Clear the routing
 - **K2** - Back to the list
 
+## A source's settings
+
+A modulation source can have settings of its own (3.7's envelopes and random sequences will). K3 on its row shows them, under the source's name, five at a time:
+
+```
+MOD     ·····•···
+ENV1
+attack                      10 ms
+release                    200 ms
+loop                          off
+K2:back E2:row E3:edit
+```
+
+- **E2** - Select the setting
+- **E3** - Change it (**ALT+E3** in finer steps, where the setting has them)
+- **K3** - On a setting that has an action, do it (the hint names it: `K2:back K3:reset E3:edit`)
+- **K2** - Back to the list, on the source's row
+
+A source whose row already has a K3 of its own (an LFO's goes to the LFO page) keeps it.
+
 How the macros, the morph, scatter, the recorders and the matrix work is in [Modulation](../modulation.md). The arc's MOD rings are in [Monome Arc](../arc.md).

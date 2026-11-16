@@ -1348,4 +1348,225 @@ test("count_sends enters direct sends in the budget's window", function()
   assert_equal(#context.calls_named("setFilter"), 1, "which goes in the next window")
 end)
 
+-- 3.7's seams (design §0.2, §0.3; plan rulings 12 and 13): one door for a
+-- voice's hit, and a factor on an engine value
+
+test("only S.lib.engine_sync.retrigger calls engine.retrigger", function()
+  local callers = {}
+  for _, source in ipairs(h.read_lua_sources()) do
+    if not source.path:match("^test/") then
+      local code = source.text:gsub("%-%-[^\n]*", "")
+      local _, count = code:gsub("engine%.retrigger%(", "")
+      if count > 0 then callers[#callers + 1] = source.path .. " x" .. count end
+    end
+  end
+  assert_equal(table.concat(callers, ", "), "lib/engine_sync.lua x1", "one call, in lib/engine_sync.lua")
+end)
+
+-- A script with a voice_hit hook that logs each hit (voice, then the info's
+-- fields) as text, registered after init (the registry is read at each use)
+local function hit_log()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local log = {}
+  S.register_voice_hit({ name = "probe", hit = function(voice_idx, info)
+    log[#log + 1] = string.format("%d %s %.3f slot %d%s", voice_idx, info.source, info.velocity, info.slot,
+      info.gate_seconds and string.format(" gate %.3f", info.gate_seconds) or "")
+  end })
+  return context, S, log
+end
+
+local function clear_log(log)
+  for index = #log, 1, -1 do log[index] = nil end
+end
+
+test("a hit tells the voice_hit hooks once", function()
+  local context, S, log = hit_log()
+  local sync = S.lib.engine_sync
+  assert_true(S.voices[2].active and not S.voices[3].active, "voice 2 runs, voice 3 is stopped")
+  context.clear_engine_calls()
+  sync.retrigger(2, 0.5, "step")
+  local retriggers = context.calls_named("retrigger")
+  assert_equal(#retriggers, 1, "one retrigger")
+  assert_equal(retriggers[1].args[1], 1); assert_near(retriggers[1].args[2], 0.5, 1e-9)
+  assert_equal(table.concat(log, "; "), "2 step 0.500 slot 1", "the hook: voice 2, its velocity, the source, slot 1")
+  clear_log(log)
+  sync.retrigger(2, 0.25, "step", 0.125)
+  assert_equal(table.concat(log, "; "), "2 step 0.250 slot 1 gate 0.125", "a gated step's gate length")
+  -- a start that no retrigger follows is a hit; a stop is none
+  local hits = {}
+  S.registry.voice_hit[#S.registry.voice_hit].hit = function(voice_idx, info)
+    hits[#hits + 1] = string.format("%d %s %.3f slot %d", voice_idx, info.source, info.velocity, info.slot)
+  end
+  context.clear_engine_calls()
+  toggle_voice(3)
+  assert_equal(table.concat(hits, "; "), "3 start 1.000 slot 1", "a start by hand: one hit, velocity 1")
+  assert_equal(#context.calls_named("retrigger"), 0, "and no retrigger")
+  sync.start_voice(3)
+  assert_equal(#hits, 1, "a start of a running voice takes no effect and tells nobody")
+  toggle_voice(3)
+  assert_equal(#hits, 1, "a stop is no hit")
+  toggle_voice(3, { retrigger_follows = true })
+  assert_true(S.voices[3].active, "the start took effect")
+  assert_equal(#hits, 1, "a start a retrigger follows tells nobody")
+  toggle_voice(3)
+  sync.start_voice(3, { retrigger_follows = true })
+  assert_equal(#hits, 1, "start_voice takes the same option")
+  toggle_voice(3)
+  sync.start_voice(3)
+  assert_equal(#hits, 2, "and without it tells the hooks")
+  -- the hook runs after the start's sends
+  toggle_voice(3)
+  local sent_before
+  S.registry.voice_hit[#S.registry.voice_hit].hit = function()
+    local calls = context.calls_named("setModSpeed")
+    sent_before = calls[#calls] ~= nil and calls[#calls].args[1] == 2 and S.voices[3].active
+  end
+  context.clear_engine_calls()
+  toggle_voice(3)
+  assert_true(sent_before, "the hook runs once the start's sends went and the voice runs")
+  -- an action's retrigger
+  hits = {}
+  S.registry.voice_hit[#S.registry.voice_hit].hit = function(voice_idx, info)
+    hits[#hits + 1] = voice_idx .. " " .. info.source
+  end
+  assert_true(S.lib.io_actions.retrigger(2, 0.5), "an action accents voice 2")
+  assert_equal(table.concat(hits, "; "), "2 action", "an action's hit")
+end)
+
+test("a MIDI note that starts a voice, a gated step's start and a chord step are each one hit", function()
+  local context, S, log = hit_log()
+  local function note_on(channel, note)
+    context.midi.send(1, { type = "note_on", note = note, vel = 127, ch = channel })
+  end
+  -- a MIDI note on a stopped voice: the start and its retrigger are one hit
+  assert_true(not S.voices[4].active, "voice 4 is stopped")
+  note_on(4, 61)
+  assert_true(S.voices[4].active, "the note started voice 4")
+  assert_equal(table.concat(log, "; "), "4 note 1.000 slot 1", "one hit, source note")
+  -- a second MIDI note taking an extra slot: one more
+  clear_log(log)
+  note_on(4, 64)
+  assert_equal(#context.calls_named("noteOn"), 1, "the second note is an extra note")
+  assert_equal(table.concat(log, "; "), "4 note 1.000 slot 2", "one more hit, in the extra slot")
+  -- a gated stopped voice's first step: its start and retrigger are one hit
+  clear_log(log)
+  params:set("v5_seq_gate", 2)
+  S.patterns[5][1] = 15
+  pattern_clock_start()
+  assert_true(S.voices[5].active, "the step started voice 5")
+  assert_equal(#log, 1, "one hit for a gated start: " .. table.concat(log, "; "))
+  assert_true(log[1]:find("^5 step 1%.000 slot 1 gate ") ~= nil, "source step, with its gate length: " .. log[1])
+  pattern_clock_stop()
+  S.patterns[5][1] = 0
+  -- an ungated stopped voice's first step: one hit, the start's
+  clear_log(log)
+  S.patterns[6][1] = 15
+  pattern_clock_start()
+  assert_true(S.voices[6].active, "the step started voice 6")
+  assert_equal(table.concat(log, "; "), "6 start 1.000 slot 1", "one hit, source start")
+  pattern_clock_stop()
+  S.patterns[6][1] = 0
+  -- a three-note chord step on a running voice: one hit
+  clear_log(log)
+  S.patterns[1][1] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "notes", { 0, 4, 7 })
+  context.clear_engine_calls()
+  pattern_clock_start()
+  local extras = 0
+  for _, call in ipairs(context.calls_named("noteOn")) do
+    if call.args[1] == 0 then extras = extras + 1 end
+  end
+  assert_equal(extras, 2, "the chord's two further notes played")
+  assert_equal(table.concat(log, "; "), "1 step 1.000 slot 1", "one hit for the step, none for its extra notes")
+  pattern_clock_stop()
+end)
+
+test("a hook that raises is contained and the others still run", function()
+  local context, S, log = hit_log()
+  S.register_voice_hit({ name = "boom", hit = function(voice_idx) error("hit hook boom " .. voice_idx) end })
+  local later = {}
+  S.register_voice_hit({ name = "later", hit = function(voice_idx) later[#later + 1] = voice_idx end })
+  context.clear_engine_calls()
+  S.lib.engine_sync.retrigger(1, 1, "step")
+  assert_equal(#context.calls_named("retrigger"), 1, "the retrigger went")
+  assert_equal(#log, 1, "the hook before ran")
+  assert_equal(table.concat(later, " "), "1", "the hook after ran")
+  h.claim_script_errors(context, 1, "strata: voice hit hook failed: ", "hit hook boom 1")
+  S.lib.engine_sync.retrigger(1, 1, "step")
+  assert_equal(table.concat(later, " "), "1 1")
+  assert_equal(#context.take_script_errors(), 0, "the same error is reported once")
+  toggle_voice(3)
+  assert_true(S.voices[3].active, "a start whose hook raises still runs")
+  assert_equal(table.concat(later, " "), "1 1 3")
+  h.claim_script_errors(context, 1, "strata: voice hit hook failed: ", "hit hook boom 3")
+end)
+
+test("a factor multiplies the engine's value after the offsets and the clamp", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  local id = "v1_buf_scan"  -- -2 to 2
+  params:set(id, 0.5)
+  assert_equal(sync.engine_factor(id), 1, "no factor: 1")
+  context.clear_engine_calls()
+  sync.set_engine_factor("follow", id, 1.5)
+  assert_near(last_grain_send(context, 1, "bufScan"), 0.75, 1e-9, "setting a factor resends the param with it")
+  assert_near(params:get(id), 0.5, 1e-9, "the stored value stays")
+  assert_near(sync.engine_factor(id), 1.5, 1e-9)
+  assert_near(engine_param_value(id), 0.75, 1e-9, "the engine's value carries it")
+  params:set(id, 0.4)
+  assert_near(last_grain_send(context, 1, "bufScan"), 0.6, 1e-9, "an edit's send carries it")
+  params:set(id, 0.5)
+  -- an extra offset of half the range: 0.5 + 2 clamps to 2, then the factor
+  sync.set_extra_offset("probe", id, 2)
+  send_param_to_engine(id, params:get(id))
+  assert_near(last_grain_send(context, 1, "bufScan"), 3, 1e-9, "the factor multiplies the clamped sum")
+  sync.set_extra_offset("probe", id, nil)
+  -- two keys multiply
+  sync.set_engine_factor("other", id, 2)
+  assert_near(sync.engine_factor(id), 3, 1e-9, "the product of every key's")
+  assert_near(last_grain_send(context, 1, "bufScan"), 1.5, 1e-9)
+  sync.clear_engine_factor("other", id)
+  assert_near(last_grain_send(context, 1, "bufScan"), 0.75, 1e-9, "clearing one key resends")
+  -- a factor of 1 clears it
+  sync.set_engine_factor("follow", id, 1)
+  assert_equal(sync.engine_factor(id), 1)
+  assert_near(last_grain_send(context, 1, "bufScan"), 0.5, 1e-9, "a factor of 1 sends the stored value")
+  sync.set_engine_factor("follow", id, 2)
+  sync.set_engine_factor("follow", id, nil)
+  assert_equal(sync.engine_factor(id), 1, "nil clears too")
+  assert_near(last_grain_send(context, 1, "bufScan"), 0.5, 1e-9)
+  context.clear_engine_calls()
+  sync.clear_engine_factor("follow", id)
+  assert_equal(#context.calls_named("setGrainParam"), 0, "clearing what is not set sends nothing")
+  for _, bad in ipairs({ 0, -1, 0 / 0, math.huge, "2" }) do
+    assert_true(not pcall(sync.set_engine_factor, "follow", id, bad), "a factor of " .. tostring(bad) .. " raises")
+  end
+  assert_equal(sync.engine_factor(id), 1, "nothing refused is kept")
+end)
+
+test("a start and a voice sync carry the factor", function()
+  local context, S = buffer_voice()
+  local sync = S.lib.engine_sync
+  params:set("v1_buf_scan", 0.5)
+  toggle_voice(1)
+  assert_true(not S.voices[1].active, "v1 stopped")
+  sync.set_engine_factor("follow", "v1_buf_scan", 1.5)
+  context.clear_engine_calls()
+  toggle_voice(1)
+  local scans = grain_sends(context, 1, "bufScan")
+  assert_equal(#scans, 1, "the start sends bufScan once")
+  assert_near(scans[1], 0.75, 1e-9, "with the factor")
+  local scan_at, on_at
+  for index, call in ipairs(context.engine_calls) do
+    if call.name == "setGrainParam" and call.args[2] == "bufScan" then scan_at = index end
+    if call.name == "voiceOn" then on_at = index end
+  end
+  assert_true(scan_at < on_at, "before voiceOn")
+  context.clear_engine_calls()
+  sync_voice_values_to_engine(1)
+  assert_near(last_grain_send(context, 1, "bufScan"), 0.75, 1e-9, "a sync ends with the factored value")
+  sync.clear_engine_factor("follow", "v1_buf_scan")
+end)
+
 end

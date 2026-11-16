@@ -82,7 +82,7 @@ return function(S)
     -- a retrigger outside the patterns opens the voice's own gate length,
     -- not the last step's (#639), as lib/midi_in.lua does
     S.lib.sequencer.note_gate(v)
-    engine.retrigger(v - 1, math.max(0, math.min(1, velocity)))
+    S.lib.engine_sync.retrigger(v, math.max(0, math.min(1, velocity)), "action")
     return true
   end
 

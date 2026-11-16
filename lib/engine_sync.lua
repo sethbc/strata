@@ -16,7 +16,11 @@
 -- (set_extra_offset) and the send budget (deferrable, budget_state;
 -- S.deferrable_write, S.engine_budget_clock). 3.5's: count_sends (direct
 -- sends counted in the budget's window) and the voice-stop hooks
--- (S.registry.voice_stop) after every voiceOff. Registers the cleanup step
+-- (S.registry.voice_stop) after every voiceOff. 3.7's: retrigger (the only
+-- caller of engine.retrigger), extra_note_hit and start_voice's options,
+-- which tell the voice_hit hooks once per hit, and the engine factors
+-- (set_engine_factor, clear_engine_factor, engine_factor), applied last in
+-- with_lfo_offsets. Registers the cleanup step
 -- that sends a voiceOff for every running voice (norns has freed the
 -- engine by then, so none arrives: the voices stopped with it) and the
 -- budget's.
@@ -63,11 +67,29 @@ return function(S)
   -- extra offsets, per param id {source_key = offset in the param's units}
   local base_overrides = {}
   local extra_offsets = {}
+  -- 3.7's (design §0.3): per param id, the factors on the value the engine
+  -- gets, {key = factor} (set_engine_factor)
+  local engine_factors = {}
+
+  -- The product of every key's factor on param_id, 1 with none
+  local function engine_factor(param_id)
+    local product = 1
+    for _, factor in pairs(engine_factors[param_id] or {}) do product = product * factor end
+    return product
+  end
+
+  -- value times the param's factors, value itself with none
+  local function factored(param_id, value)
+    if engine_factors[param_id] == nil then return value end
+    return value * engine_factor(param_id)
+  end
 
   -- value plus scaled * half the range of every LFO on param_id (LFOs on one
   -- destination add up) and every extra offset on it, clamped once to the
   -- range; value itself when nothing modulates it. A base override set on
-  -- the param takes value's place (a step lock holds the engine there)
+  -- the param takes value's place (a step lock holds the engine there).
+  -- The param's engine factors multiply the result last, after the clamp,
+  -- so a factor can take the engine past the param's range (3.7)
   local function with_lfo_offsets(param_id, value)
     local override = base_overrides[param_id]
     if override ~= nil then value = override end
@@ -89,8 +111,8 @@ return function(S)
       if not modulated then minval, maxval = param_range(param_id) end
       modulated = true
     end
-    if not modulated then return value end
-    return util.clamp(value + offset, minval, maxval)
+    if not modulated then return factored(param_id, value) end
+    return factored(param_id, util.clamp(value + offset, minval, maxval))
   end
 
   -- A voice param's engine sender (lib/params_setup.lua's synthesis, grain,
@@ -403,6 +425,37 @@ return function(S)
     extras[source_key] = offset
   end
 
+  -- An engine factor (3.7, design §0.3; tempo follow's on buf_scan): the
+  -- engine gets the value with its offsets, clamped, times the product of
+  -- every key's factor (with_lfo_offsets); the stored param never changes.
+  -- factor is a finite number above 0, else it raises; 1 or nil clears the
+  -- key's. Setting or clearing one resends the param, as a base override
+  -- does (send_base)
+  function M.clear_engine_factor(key, param_id)
+    local factors = engine_factors[param_id]
+    if factors == nil or factors[key] == nil then return end
+    factors[key] = nil
+    if next(factors) == nil then engine_factors[param_id] = nil end
+    send_base(param_id)
+  end
+
+  function M.set_engine_factor(key, param_id, factor)
+    if key == nil then error("set_engine_factor: a factor needs a key", 2) end
+    if factor == nil or factor == 1 then
+      M.clear_engine_factor(key, param_id)
+      return
+    end
+    if type(factor) ~= "number" or factor ~= factor or factor <= 0 or factor == math.huge then
+      error("set_engine_factor: " .. tostring(param_id) .. "'s factor is a finite number above 0, not "
+        .. tostring(factor), 2)
+    end
+    engine_factors[param_id] = engine_factors[param_id] or {}
+    engine_factors[param_id][key] = factor
+    send_base(param_id)
+  end
+
+  M.engine_factor = engine_factor
+
   -- sync_voice_values_to_engine sends a voice's stored values: forget what
   -- was sent for its params before, and every value of theirs still
   -- waiting for the budget (older than what the sync sends)
@@ -419,21 +472,24 @@ return function(S)
     end
   end
 
-  -- A start's value for a param (#632): while a base override or an extra
-  -- offset is held on it, the value with them (with_lfo_offsets), so the
-  -- start's first value is the one the engine should play; else the stored
-  -- value, as before 3.4. carried notes each modulated value sent, so the
-  -- start's resend only records it
+  -- A start's value for a param (#632): while a base override, an extra
+  -- offset or an engine factor is held on it, the value with them
+  -- (with_lfo_offsets), so the start's first value is the one the engine
+  -- should play; else the stored value, as before 3.4. carried notes each
+  -- modulated value sent, so the start's resend only records it
   local function start_value(carried, param_id, value)
-    if base_overrides[param_id] == nil and extra_offsets[param_id] == nil then return value end
+    if base_overrides[param_id] == nil and extra_offsets[param_id] == nil and engine_factors[param_id] == nil then
+      return value
+    end
     value = with_lfo_offsets(param_id, value)
     carried[param_id] = value
     return value
   end
 
   -- The end of a voice's sync and start: a sync's own sends carry the
-  -- stored values, so every param of the voice that holds a base override
-  -- or an extra offset is sent again with them (with_lfo_offsets), at once
+  -- stored values, so every param of the voice that holds a base override,
+  -- an extra offset or an engine factor is sent again with them
+  -- (with_lfo_offsets), at once
   -- (never deferred), in id order. A start's own sends already carried
   -- them (carried: start_value's), which are only recorded as sent, so
   -- nothing it sent before voiceOn follows it again. Sends nothing while
@@ -441,7 +497,7 @@ return function(S)
   local function resend_modulated_voice_params(voice_idx, carried)
     local prefix = "v" .. voice_idx .. "_"
     local ids, listed = {}, {}
-    for _, held in ipairs({base_overrides, extra_offsets}) do
+    for _, held in ipairs({base_overrides, extra_offsets, engine_factors}) do
       for param_id in pairs(held) do
         if param_id:sub(1, #prefix) == prefix and not listed[param_id] then
           listed[param_id] = true
@@ -532,7 +588,51 @@ return function(S)
     end
   end
 
-  function toggle_voice(voice_idx)
+  -- 3.7's hit (design §0.2, plan ruling 12): the voice_hit hooks
+  -- (S.registry.voice_hit, read at each use) are told once per hit, each
+  -- with its own copy of info = {velocity, source, slot, gate_seconds}, in
+  -- registration order and contained (contained_call: one that raises is
+  -- printed once per distinct message and the next still runs). A hit is a
+  -- retrigger (M.retrigger), a played extra note's start (M.extra_note_hit)
+  -- and a start no retrigger follows (M.start_voice)
+  local voice_hit_errors = {}
+  local function tell_voice_hit(voice_idx, velocity, source, slot, gate_seconds)
+    for _, hook in ipairs(S.registry.voice_hit) do
+      local info = {velocity = velocity, source = source, slot = slot, gate_seconds = gate_seconds}
+      S.lib.ui_frame.contained_call(voice_hit_errors, hook.name, "voice hit hook", hook.hit, voice_idx, info)
+    end
+  end
+
+  local HIT_SOURCES = {step = true, note = true, action = true}
+  local function valid_voice(voice_idx)
+    return type(voice_idx) == "number" and voice_idx % 1 == 0 and voice_idx >= 1 and voice_idx <= NUM_VOICES
+  end
+
+  -- The only caller of engine.retrigger: accent voice_idx at velocity (0-1)
+  -- and tell the hooks. source is "step", "note" or "action" (anything else
+  -- raises); gate_seconds is the hit's gate length where the caller knows
+  -- it (a gated voice's step), else nil. A voice outside 1..NUM_VOICES is
+  -- left alone
+  function M.retrigger(voice_idx, velocity, source, gate_seconds)
+    if not HIT_SOURCES[source] then
+      error("retrigger: a source is step, note or action, not " .. tostring(source), 2)
+    end
+    if not valid_voice(voice_idx) then return end
+    engine.retrigger(voice_idx - 1, velocity)
+    tell_voice_hit(voice_idx, velocity, source, 1, gate_seconds)
+  end
+
+  -- A played extra note's start in slot 2..NOTE_SLOTS (lib/notes.lua's
+  -- start_extra, unless the note is a step's chord's): a hit, source "note"
+  function M.extra_note_hit(voice_idx, slot, velocity)
+    if not valid_voice(voice_idx) then return end
+    if type(slot) ~= "number" or slot % 1 ~= 0 or slot < 2 or slot > S.constants.NOTE_SLOTS then return end
+    tell_voice_hit(voice_idx, velocity, "note", slot)
+  end
+
+  -- options.retrigger_follows (start_voice's): true where a retrigger
+  -- always follows the start, which is then that retrigger's one hit
+  function toggle_voice(voice_idx, options)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
     local voice = S.voices[voice_idx]
     
@@ -541,7 +641,7 @@ return function(S)
       voice.active = false
       run_voice_stop_hooks(voice_idx)
     else
-      M.start_voice(voice_idx)
+      M.start_voice(voice_idx, options)
     end
 
     update_voice_list()
@@ -670,9 +770,13 @@ return function(S)
   -- running (lib/midi_in.lua's relies on it). A send that raises before
   -- voiceOn has started nothing; once voiceOn is sent, a hook or a send
   -- that raises sends voiceOff and raises the error again, so the engine
-  -- and voice.active always agree (#382)
-  function M.start_voice(voice_idx)
-    if type(voice_idx) ~= "number" or voice_idx % 1 ~= 0 or voice_idx < 1 or voice_idx > NUM_VOICES then return end
+  -- and voice.active always agree (#382). A start that took effect is a
+  -- hit (3.7): after its sends it tells the voice_hit hooks (velocity 1,
+  -- source "start", slot 1), unless options.retrigger_follows is true (a
+  -- note that starts a stopped voice, a gated voice's first step: their
+  -- retrigger is the hit)
+  function M.start_voice(voice_idx, options)
+    if not valid_voice(voice_idx) then return end
     local voice = S.voices[voice_idx]
     if voice.active then return end
     local carried = {}  -- param id -> the modulated value the start sent (start_value)
@@ -702,6 +806,7 @@ return function(S)
     -- the overridden and offset params: recorded as sent (the start carried
     -- them), or sent last when a hook changed one meanwhile
     resend_modulated_voice_params(voice_idx, carried)
+    if not (options and options.retrigger_follows) then tell_voice_hit(voice_idx, 1, "start", 1) end
   end
 
   -- A voiceOff for every running voice (after MIDI is detached, so no note

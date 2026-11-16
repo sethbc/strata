@@ -3,7 +3,7 @@
 - Every modulation source registers itself with `S.register_mod_source(record)` (`lib/state.lua`), in its owning module, at include time or later; nothing lists the sources centrally. MOD and the matrix read them only through `S.lib.mod_sources`, at each use, never at include time.
 - `fraction(key)` and `normalized(key)` are the only places a source's value is mapped through its range: a reader that needs 0..1 or −1..1 calls them, never `value()` and `range` itself.
 - `normalized` never returns a value that is not finite: a source whose `value()` is NaN, ±inf or not a number reads 0 (no modulation), and so does an unknown key, so a bad source can never send one.
-- A source's `value`, `describe` and `visible` are cheap and never send or yield: MOD calls them up to 15 times a second per shown row.
+- A source's `value`, `describe` and `visible` are cheap and never send or yield: MOD calls them up to 15 times a second per shown row. So are its `fields` function and each field's `value` (3.7): MOD's settings view reads them at every draw.
 
 ## Owns
 
@@ -17,9 +17,10 @@
 
 ## The record
 
-`S.register_mod_source({key, name, section, value = fn() -> number, range = {min, max}, describe = fn() -> string, visible = fn() -> boolean, row = {enc = fn(d), fine_enc = fn(d), press = fn(), alt_press = fn(n), hints = fn(alt) -> string}})`:
+`S.register_mod_source({key, name, section, value = fn() -> number, range = {min, max}, describe = fn() -> string, visible = fn() -> boolean, row = {enc = fn(d), fine_enc = fn(d), press = fn(), alt_press = fn(n), hints = fn(alt) -> string}, fields})`:
 - `key`: unique (a second is refused); also the extra-offset key (`S.lib.engine_sync.set_extra_offset`) when the source moves Lua params.
 - `name`: MOD's row label, 1 to 4 characters. `section`: MOD's section; a new name is a new section.
 - `value`: the value now, in the source's own units, within `range`. `range[1] < range[2]`; `range[1] < 0` marks a bipolar source, drawn from the center.
 - `describe`, `visible` and `row` are optional, and so is each row function; a source without `row` is read-only on MOD. A field outside the set is refused (#385).
+- `fields` (3.7, package 0b, design §0.4), optional: the rows of the source's settings view on MOD (`docs/notes/lua/pages/mod.md`), a list of `{label, value = fn() -> string, enc = fn(d), fine_enc = fn(d), press = fn()}`, or a function returning one, read at each draw (so a source's rows can change). `label` is 1 to 8 characters and `value` a function; `enc`, `fine_enc` and `press` are optional functions; any other key is refused. A list is checked at registration; what a function returns is not, and MOD draws a label or value that is not a string as its text. K3 on the source's row opens the view unless the source has `row.press`, which keeps K3.
 - 3.4 registers `lfo1`..`lfo6` (section `lfos`, −1..1, 1b), `macro1`..`macro16` (`macros`, 0..1, visible in the shown bank, 1e), `gesture1`..`gesture4` (`gestures`, the loop's phase, 1f) and `input` (`audio`, 0..1, 1i). 3.5 registers `pressure`, `slide`, `pressure1`..`pressure7` and `slide1`..`slide7` (`notes`, 0..1, read-only, a voice's pair visible while it holds a note that has sent expression, 2c, `docs/notes/lua/expression.md`).

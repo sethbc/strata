@@ -635,14 +635,19 @@ return function(S)
     if event.first then
       apply_step(voice_idx, event)
       if not voice.active then
-        S.lib.engine_sync.start_voice(voice_idx)
+        -- a gated voice's start is followed by its retrigger: one hit
+        S.lib.engine_sync.start_voice(voice_idx, {retrigger_follows = gated(voice_idx)})
         started = true
       end
     end
     if not voice.active then return end
     if not started or gated(voice_idx) then
-      if gated(voice_idx) then send_gate_seconds(voice_idx, M.gate_seconds(voice_idx, event.step, event.hits)) end
-      engine.retrigger(voice_idx - 1, event.velocity)
+      local gate_seconds
+      if gated(voice_idx) then
+        gate_seconds = M.gate_seconds(voice_idx, event.step, event.hits)
+        send_gate_seconds(voice_idx, gate_seconds)
+      end
+      S.lib.engine_sync.retrigger(voice_idx, event.velocity, "step", gate_seconds)
     end
     play_chord(voice_idx, event)
   end
