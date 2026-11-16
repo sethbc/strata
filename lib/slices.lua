@@ -428,9 +428,10 @@ return function(S)
     return S.lib.notes.release(voice, owner, key)
   end
 
-  -- The slice numbers the voice's notes hold now, ascending: its held
-  -- extra notes' regions and, while slot 1's note is held (not parked, not
-  -- played out), the own region
+  -- The slice numbers sounding on the voice now, ascending: its held extra
+  -- notes' regions, and the own region while it plays from any owner (slot
+  -- 1's note held by MIDI or a grid, not parked or played out; or set by the
+  -- step playing, S.lib.sequencer.playing_region)
   function M.playing(voice)
     local list = {}
     if not valid_voice(voice) or not voice_uses_buffer(voice) then return list end
@@ -448,6 +449,8 @@ return function(S)
     for _, used in ipairs(S.lib.notes.slots(voice)) do
       if used.held then add(used.slot > 1 and used.region or S.lib.notes.own_region(voice)) end
     end
+    -- a one-voice step's slice, which no slot-1 record holds, while it sounds
+    add(S.lib.sequencer.playing_region(voice))
     table.sort(list)
     return list
   end

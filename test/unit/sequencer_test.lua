@@ -4010,6 +4010,31 @@ test("the same slice on consecutive steps sends its region at each, a chord's th
   pattern_clock_stop()
 end)
 
+-- 2b's second review, NB2: a one-voice step's slice is playing while it
+-- sounds (no slot-1 record holds it), and not once played out
+test("playing names a one-voice step's slice while it sounds", function()
+  local context, S = sliced_setup(2)
+  S.patterns[1][1] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "slice", 2)
+  pattern_clock_start()
+  assert_equal(table.concat(S.lib.slices.playing(1), ","), "2", "the step's slice")
+  pattern_clock_stop()
+  assert_equal(table.concat(S.lib.slices.playing(1), ","), "", "the stop ended it")
+  -- one shot: played out after its pass
+  context, S = sliced_setup(2)
+  local scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return fraction * 2 end  -- a quarter: 0.5 s
+  S.patterns[1][1] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "slice", 3)
+  params:set("v1_seq_length", 16)
+  pattern_clock_start()
+  assert_equal(table.concat(S.lib.slices.playing(1), ","), "3", "sounding")
+  context.clock.run_for(0.5 + 2 / 48)
+  assert_equal(table.concat(S.lib.slices.playing(1), ","), "", "played out")
+  pattern_clock_stop()
+end)
+
 -- 2b's review, Minor 2: as the chord's first note, a step's region gives way
 -- to another owner's held own note
 test("a step's slice on a one voice leaves the own region of a held MIDI slice alone", function()
