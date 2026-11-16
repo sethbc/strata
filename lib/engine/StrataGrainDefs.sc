@@ -95,6 +95,10 @@
     // velocity), and \strataGrainRing's noteRate (a frozen synth voice's
     // note's rate; 1 in \strataGrainBuf, whose note's pitch is its own
     // bufRate). The synth-source grain synth keeps every one at its default.
+    // 3.7's scan controls (scanMode, regionStart, regionLength, followRate,
+    // slotGain, t_scanSync, scanSyncPhase), each at its default 3.6's graph:
+    // \strataGrainBuf's reader takes them (slotGrainReader); the ring def
+    // declares and ignores them, as it does the loop's.
     addGrainDefs {
         // Granular processor for a ring: the voice's own (synth source) or
         // the input's (input source), each written by a strataRingWrite
@@ -112,7 +116,8 @@
             interval5=0, interval6=0, interval7=0, interval8=0,
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
             loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0,
-            noteGate=1, noteBend=1, noteAmp=1, notePos=0, noteSize=0, velocity=1, t_accent=0, noteRate=1;
+            noteGate=1, noteBend=1, noteAmp=1, notePos=0, noteSize=0, velocity=1, t_accent=0, noteRate=1,
+            scanMode=0, regionStart=0, regionLength=0, followRate=1, slotGain=1, t_scanSync=0, scanSyncPhase=0;
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index);
             var m = this.fastModRead(fastModIn);
@@ -133,8 +138,9 @@
 
         // Granular processor for a buffer slot (bufnumL/R). bufPos (0-1) and
         // the scan are fractions of the voice's loop (by default the valid
-        // region, bufFrames, so a short sample uses the whole range); bufScan
-        // moves the position in loop lengths per second and wraps. No grain reads past
+        // region, bufFrames, so a short sample uses the whole range) or, 3.7,
+        // of the note's region; bufScan is a speed (1: the audio's own) and
+        // wraps, bounces or holds by scanMode. No grain reads past
         // the valid region (slotGrainPos and the duration cap in
         // slotGrainReader). bufRateScale is the content's sample rate over
         // the server's (what BufRateScale.kr would report), tracked by the
@@ -153,10 +159,16 @@
             interval5=0, interval6=0, interval7=0, interval8=0,
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
             loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0,
-            noteGate=1, noteBend=1, noteAmp=1, notePos=0, noteSize=0, velocity=1, t_accent=0;
+            noteGate=1, noteBend=1, noteAmp=1, notePos=0, noteSize=0, velocity=1, t_accent=0,
+            scanMode=0, regionStart=0, regionLength=0, followRate=1, slotGain=1, t_scanSync=0, scanSyncPhase=0;
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index);
             var m = this.fastModRead(fastModIn);
+            // 3.7's scan controls (written on their own names: the Lua stub
+            // reads the clips as the limits)
+            var scan = (scanMode: scanMode, regionStart: regionStart, regionLength: regionLength,
+                followRate: followRate.clip(0.25, 4).lag(0.05), slotGain: slotGain.clip(0, 16).lag(0.05),
+                t_scanSync: t_scanSync, scanSyncPhase: scanSyncPhase);
             var controls = (
                 out: out, gate: gate, grainSize: grainSize, grainDensity: grainDensity, pitchShift: pitchShift,
                 posSpread: posSpread, panSpread: panSpread, envBuf: envBuf, grainMode: grainMode,
@@ -170,7 +182,7 @@
                 noteGate: noteGate, noteAmp: noteAmp, velocity: velocity, t_accent: t_accent
             );
             this.grainBody(controls, this.areaCall(\slotGrainReader, bufnumL, bufnumR, bufFrames, bufRateScale, this.fastModPosition(bufPos, m, notePos),
-                bufRate, bufScan, posSpread, freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus));
+                bufRate, bufScan, posSpread, freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus, scan));
         }).add;
     }
 
@@ -323,11 +335,23 @@
     // slot reads empty (bufFrames 0: cleared, reloading or recording, faded
     // out by the level) the last valid length is held, so the grains fading
     // out keep their size and place.
+    // 3.7 (design §2, §3.4, §4.4): scan, an Event of the def's scan
+    // controls (nil for a check-only reader: wrap, the loop, no follow rate,
+    // no gain, no sync), becomes the scan state (slotScanState): the scan's
+    // mode, its span (a note's region in the loop's place while
+    // regionLength > 0), the follow rate on the read rate (after the
+    // quantize: rate arrives quantized and bent) and the slot's gain on the
+    // level, beside the one-shot's (oneShotLevel). The scan is a speed for
+    // every slot reader: its phase crosses the span in the span's own length
+    // at a scan of 1 (slotScanSpeed).
     slotGrainReader { arg bufnumL, bufnumR, bufFrames, bufRateScale, bufPos, bufRate, bufScan, posSpread,
-        freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus;
+        freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus, scan;
         ^{ arg trig, rate, dur, mode;
+            var state = scan !? { this.slotScanState(scan, loopStart, loopLength) };
+            var span = if (state.isNil) { this.slotSpan(loopStart, loopLength) } { [state[\first], state[\last]] };
             var serverScale = BufRateScale.kr(bufnumL);
-            var slotRate = rate * bufRate * (bufRateScale / serverScale);
+            var unfollowed = rate * bufRate * (bufRateScale / serverScale);
+            var slotRate = if (state.isNil) { unfollowed } { unfollowed * state[\followRate] };
             var validFrames = Gate.kr(bufFrames, bufFrames > 0);
             // the rate in slot frames per output frame, signed: what the
             // loop's direction test and the head guard need (slotRate is
@@ -337,15 +361,21 @@
             var readRate = frameRate.abs.max(0.001);  // never 0: the duration divides by it
             var grainDur = dur.min((validFrames - grainEndMargin).max(0) / (readRate * SampleRate.ir));
             var grainFrames = grainDur * SampleRate.ir * readRate;
-            var scanPhase = this.slotScanPhase(bufScan, freeze, scrubRate, scanHold, t_scanReset);
+            var scanPhase = this.slotScanPhase(bufScan, freeze, scrubRate, scanHold, t_scanReset,
+                this.slotScanSpeed(bufRateScale, (span[1] - span[0]) * validFrames), state);
             var spreadDraw = TRand.ar(posSpread * -0.5, posSpread * 0.5, trig);
-            var start = this.slotGrainPos(trig, bufPos, scanPhase, spreadDraw, frameRate, grainFrames, validFrames,
-                loopStart, loopLength, recHeadBus);
+            var start, level;
+            // (bufPos + the phase, which the position and the one-shot level share)
+            if (state.notNil) { state[\sum] = bufPos + scanPhase };
+            start = this.slotGrainPos(trig, bufPos, scanPhase, spreadDraw, frameRate, grainFrames, validFrames,
+                loopStart, loopLength, recHeadBus, state);
+            // silent while the slot is empty or being recorded: every
+            // grain would read position 0 and loop the take's first grain
+            level = (bufFrames > 0).lag(0.05);
+            if (state.notNil) { level = level * state[\slotGain] * this.oneShotLevel(state) };
             (bufL: bufnumL, bufR: bufnumR, rate: slotRate, dur: grainDur,
                 pos: start * (validFrames / BufFrames.kr(bufnumL)),
-                // silent while the slot is empty or being recorded: every
-                // grain would read position 0 and loop the take's first grain
-                level: (bufFrames > 0).lag(0.05))
+                level: level)
         }
     }
 }

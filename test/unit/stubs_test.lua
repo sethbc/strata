@@ -1481,6 +1481,39 @@ test("the engine stub checks the four note commands", function()
   assert_equal(#context.engine_calls, calls + 8, "the eight calls in range are taken")
 end)
 
+-- 3.7's three engine commands (design §2.4, §3.4, §4.4): noteRegion takes an
+-- extra slot only (ruling 1), syncScan a voice, setSlotGain a slot; the
+-- continuous values are the engine's clips. And 3.7's grain params: scanMode
+-- an enumeration, rootNote a handler's key, the sync and the gain the engine's
+test("the engine stub checks 3.7's three commands and grain params", function()
+  local context = load_strata()
+  local nan = 0 / 0
+  assert_stub_refuses("slot 0 is outside 1..7", "noteRegion", 0, 0, 0.5, 0.25)
+  assert_stub_refuses("slot 8 is outside 1..7", "noteRegion", 0, 8, 0.5, 0.25)
+  assert_stub_refuses("voice 7 is outside 0..6", "noteRegion", 7, 1, 0.5, 0.25)
+  assert_stub_refuses("start 1.5 is outside 0..1", "noteRegion", 0, 1, 1.5, 0.25)
+  assert_stub_refuses("length -0.5 is outside 0..1", "noteRegion", 0, 1, 0.5, -0.5)
+  assert_stub_refuses("must be a finite number", "noteRegion", 0, 1, nan, 0.25)
+  assert_stub_refuses("voice 7 is outside 0..6", "syncScan", 7, 0.5)
+  assert_stub_refuses("phase 2.5 is outside 0..2", "syncScan", 0, 2.5)
+  assert_stub_refuses("slot 8 is outside 0..7", "setSlotGain", 8, 1)
+  assert_stub_refuses("gain 17 is outside 0..16", "setSlotGain", 0, 17)
+  assert_stub_refuses("scanMode 3 is outside 0..2", "setGrainParam", 0, "scanMode", 3)
+  assert_stub_refuses("a control the engine sets itself", "setGrainParam", 0, "slotGain", 2)
+  assert_stub_refuses("a control the engine sets itself", "setGrainParam", 0, "scanSyncPhase", 0.5)
+  local calls = #context.engine_calls
+  engine.noteRegion(6, 7, 1, 1)
+  engine.noteRegion(0, 1, 0, 0)
+  engine.syncScan(6, 2)
+  engine.syncScan(0, 0)
+  engine.setSlotGain(7, 16)
+  engine.setSlotGain(0, 0)
+  for _, param in ipairs({ "scanMode", "regionStart", "regionLength", "followRate", "rootNote" }) do
+    engine.setGrainParam(0, param, 1)
+  end
+  assert_equal(#context.engine_calls, calls + 11, "the eleven calls in range are taken")
+end)
+
 test("fastModIn is a control the engine sets itself", function()
   load_strata()
   assert_stub_refuses('"fastModIn" is a control the engine sets itself', "setGrainParam", 0, "fastModIn", 1)
@@ -1546,7 +1579,7 @@ test("the stub's MIDI map is norns' pmap, and the menu's CC handler sets a mappe
 end)
 
 -- test/sync_check.lua's PENDING_COMMANDS: a command the engine has before
--- the script calls it (empty since 3.4's five are called). The mechanism on
+-- the script calls it (3.7's until their callers land). The mechanism on
 -- a two-file fixture with an engine source of its own: the full sources'
 -- check is docs_test.lua's
 test("the sync check accepts a pending command that is not called and fails one that is", function()

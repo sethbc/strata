@@ -40,6 +40,11 @@
         bufferLoads = Array.fill(numBuffers, 0);
         // Per slot: the newest load number that can no longer take effect (loadsSuperseded)
         areaState[\buffers][\loadsSuperseded] = Array.fill(numBuffers, 0);
+        // Per slot: its gain (3.7, design §4.4: setSlotGain's, 0-16; 1 at
+        // alloc and whenever its audio is replaced: setSlotGainValue), and
+        // what setSlotGain last took, for the engine check
+        areaState[\buffers][\gains] = Array.fill(numBuffers, 1);
+        areaState[\buffers][\received] = IdentityDictionary.new;
         // Per slot: the seconds bufferChanged last sent, which the periodic
         // poll repeats with the slot's load number of that moment
         // (announcedBufferState)
@@ -74,6 +79,20 @@
 
         // recordBuffer and stopRecord are the record area's;
         // saveBuffer and its bufferSaveResult poll are the files area's
+
+        // A slot's gain (3.7, design §4.4): slot 0-7, gain 0-16. 3.5's
+        // command rules: a slot outside 0..numBuffers - 1 or a non-finite
+        // gain is ignored with one line (fastModIndicesValid,
+        // fastModValuesFinite), the gain clipped, what it took recorded
+        this.addCommand(\setSlotGain, "if", { arg msg;
+            var slot = msg[1], gain;
+            if (this.fastModIndicesValid(\setSlotGain, [[\slot, slot, numBuffers - 1]])
+                and: { this.fastModValuesFinite(\setSlotGain, [[\gain, msg[2]]]) }) {
+                gain = msg[2].clip(0, 16);
+                areaState[\buffers][\received][\setSlotGain] = [slot, gain];
+                this.setSlotGainValue(slot, gain);
+            };
+        });
 
         // Valid seconds per slot. matron only accepts single-float value
         // polls (/poll/value is typed "if"), so each message carries one
@@ -189,7 +208,7 @@
     // slot as it is then (gateVoice). The seconds sent are the slot's
     // announced ones from now on, which the periodic poll repeats.
     bufferChanged { arg index;
-        var live = numVoices.collect({ arg voice; [synths[this.grainKey(voice)]] ++ this.noteSynths(voice, \grain) }).flatten, seconds;
+        var live = this.slotLiveReaders(index), seconds;
         this.slotGrainSynths(index).do({ arg synth;
             if (live.includes(synth)) {
                 this.sendToSynth(synth.setMsg(*this.slotLengthPairs(index)));
@@ -201,6 +220,27 @@
         areaState[\buffers][\announced][index] = seconds;
         bufferStatePoll.update(this.bufferStateReport(index, seconds));
     }
+
+    // The live strataGrainBuf synths reading a slot: a voice's own grain
+    // synth and its live extra notes' (3.5: noteSynths) that read it, never
+    // one releasing, fading or cutting
+    slotLiveReaders { arg index;
+        var live = numVoices.collect({ arg voice; [synths[this.grainKey(voice)]] ++ this.noteSynths(voice, \grain) }).flatten;
+        ^this.slotGrainSynths(index).select({ arg synth; live.includes(synth) })
+    }
+
+    // A slot's gain (3.7): kept and sent to every live reader at once
+    // (lagged 50 ms there); a reader started later takes it with the slot's
+    // length (slotLengthPairs). The engine sets it to 1 itself wherever the
+    // slot's audio is replaced or recorded into (applyLoad, clearSlot,
+    // recordSlot), so new audio never plays at an old gain
+    setSlotGainValue { arg index, gain;
+        var readers = this.slotLiveReaders(index);
+        areaState[\buffers][\gains][index] = gain;
+        if (readers.notEmpty) { this.sendToSynth(*readers.collect({ arg synth; synth.setMsg(\slotGain, gain) })) };
+    }
+
+    slotGain { arg index; ^areaState[\buffers][\gains][index] }
 
     // The strataGrainBuf synths reading a slot that have not freed: a
     // running voice's, and those still releasing, fading or cutting
@@ -305,6 +345,8 @@
         // reads end is judged by what the slot holds, nothing (#374; with 0
         // frames slotLengthPairs sends no rate, so fading grains keep theirs)
         bufferSampleRates[index] = context.server.sampleRate;
+        // (3.7: the new audio plays at gain 1 until Lua sends its own)
+        this.setSlotGainValue(index, 1);
         this.bufferChanged(index);
         this.afterSlotFade(index, change, {
             buffersL[index].zero;
@@ -413,6 +455,7 @@
         bufferFrames[index] = 0;
         bufferSampleRates[index] = context.server.sampleRate;
         this.clearSlotPeaks(index);
+        this.setSlotGainValue(index, 1);  // (3.7)
         this.bufferChanged(index);
         this.afterSlotFade(index, change, {
             buffersL[index].zero;

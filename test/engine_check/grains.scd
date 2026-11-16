@@ -130,7 +130,8 @@ var checkSourceGrains = { arg voice, slot;
 // play pairs of real grain synths started in one bundle (every draw off, so
 // two synths of one def with the same controls play the same samples): one
 // with a note control, one with the base control it should equal
-var noteNeutral = (noteGate: 1, noteBend: 1, noteAmp: 1, notePos: 0, noteSize: 0, velocity: 1, t_accent: 0);
+var noteNeutral = (noteGate: 1, noteBend: 1, noteAmp: 1, notePos: 0, noteSize: 0, velocity: 1, t_accent: 0,
+    regionStart: 0, regionLength: 0);
 var noteSlot = 5, noteVoice = 0, notePath = scratchRoot +/+ "grains-note-noise.wav";
 var silentFastIn = { engine.areaState[\modulation][\silentFastModBus].index };
 // a ring grain synth's controls on a voice's ring (as its synth source's:
@@ -320,6 +321,30 @@ var checkNotePark = {
             silent, release, there, showPair.(after)));
     group.free; server.sync;
     [outA, outB, peaks, windows].do(_.free);
+};
+
+// 3.7's follow rate (design §2.4): followRate 2 doubles a buffer grain's
+// read rate after the quantize, as bufRate 2 does (a quantized pitch moves an
+// octave and stays on the scale); it is voice-wide, so every note takes it
+var checkFollowRate = {
+    var doubled = notePair.(\strataGrainBuf, { arg out; noteBufArgs.(out, [\followRate, 2, \pitchShift, 1.03, \quantize, 1]) },
+        { arg out; noteBufArgs.(out, [\bufRate, 2, \pitchShift, 1.03, \quantize, 1]) });
+    var unmoved = notePair.(\strataGrainBuf, { arg out; noteBufArgs.(out, [\followRate, 2, \pitchShift, 1.03, \quantize, 1]) },
+        { arg out; noteBufArgs.(out, [\pitchShift, 1.03, \quantize, 1]) });
+    var perNote = engine.perNoteGrainControls(noteVoice).includes(\followRate);
+    check.(pairMatches.(doubled) and: { pairMatches.(unmoved).not } and: { perNote.not },
+        "grains: followRate 2 doubles every note's read rate, after the quantize ([difference, level] against bufRate 2 %, against none %; per note %)".format(
+            showPair.(doubled), showPair.(unmoved), perNote));
+};
+
+// 3.7's slot gain (design §4.4): slotGain 2 doubles a buffer grain synth's
+// output (its twin times 2); the ring grain synth declares it and ignores it
+var checkSlotGain = {
+    var doubled = notePair.(\strataGrainBuf, { arg out; noteBufArgs.(out, [\slotGain, 2]) }, { arg out; noteBufArgs.(out) }, 2);
+    var ring = notePair.(\strataGrainRing, { arg out; noteRingArgs.(out, [\slotGain, 2]) }, { arg out; noteRingArgs.(out) });
+    check.(pairMatches.(doubled) and: { pairMatches.(ring) },
+        "grains: slotGain 2 doubles a buffer voice's output; the ring def ignores it ([difference, level]: buffer against twice its twin %, ring against its twin %)".format(
+            showPair.(doubled), showPair.(ring)));
 };
 
 // SynthDefs
@@ -549,6 +574,8 @@ checkNoteRate.value;
 checkNoteBendSynthSource.value;
 checkNoteAccent.value;
 checkNotePark.value;
+checkFollowRate.value;
+checkSlotGain.value;
 command.(\clearBuffer, noteSlot);
 File.delete(notePath);
 h.stopAllVoices;

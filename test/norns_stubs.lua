@@ -724,6 +724,14 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     noteOn = note_slot, noteExpression = note_slot,
     noteOff = function(args) return note_slot(args) or range("cut", args[3], 0, 1) end,
     setNotePool = function(args) return range("size", args[1], 0, spec.note_pool_max) end,
+    -- 3.7's (design §2.4, §3.4, §4.4), each index as the engine checks it:
+    -- noteRegion's extra slot 1..noteSlots-1 (the own note's region is
+    -- setGrainParam's, ruling 1), syncScan's voice, setSlotGain's slot. The
+    -- continuous arguments are the engine's clips (argument_limits: start,
+    -- length, phase, gain)
+    noteRegion = function(args) return voice(args) or range("slot", args[2], 1, spec.note_slots - 1) end,
+    syncScan = voice,
+    setSlotGain = slot,
   }
   for command, check in pairs(checks) do
     checks[command] = function(args) return check(args) or continuous(command, args) end

@@ -408,6 +408,11 @@
 
         this.stopRecording(index);
         change = this.slotChanged(index);
+        // 3.7: every recording, an overdub and a loop recording included,
+        // sets the slot's gain to 1 at its command, so a take is heard at its
+        // own level while it is made and Strata's own output recorded into a
+        // boosted slot never feeds back through the boost
+        this.setSlotGainValue(index, 1);
         // (a slot's rate describes its audio, so only a slot holding audio is
         // judged by it, #374: every step that empties a slot sets the
         // server's rate, but a load's last step takes the file's rate while

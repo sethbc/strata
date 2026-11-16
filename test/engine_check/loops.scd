@@ -52,6 +52,33 @@ SynthDef(\strataCheckLoopStarts, { arg out, t_reset = 0, validFrames = 48000, du
     ]));
 }).add;
 
+// 3.7's region and scan modes (StrataPositions.sc): slotGrainPos with the
+// scan state (slotScanState: the mode, the region in the loop's place while
+// regionLength > 0), its phase from slotScanPhase (in loops a second here:
+// a speed of 1), beside slotGrainPos without the state. Over the triggers
+// since t_reset: [lowest start, highest start, largest difference from the
+// stateless start (a fraction of the region), triggers]
+SynthDef(\strataCheckRegionStarts, { arg out, t_reset = 0, validFrames = 48000, durFrames = 4800, rate = 1,
+    bufPos = 0, bufScan = 0, posSpread = 0, loopStart = 0, loopLength = 1, scanMode = 0, regionStart = 0, regionLength = 0,
+    density = 500;
+    var trig = Impulse.ar(density), reset = T2A.ar(t_reset), on = trig > 0, head = engine.areaState[\record][\idleHead].index;
+    var state = engine.slotScanState((scanMode: scanMode, regionStart: regionStart, regionLength: regionLength, followRate: 1,
+        slotGain: 1, t_scanSync: DC.kr(0), scanSyncPhase: DC.kr(0)), loopStart, loopLength);
+    var scanPhase = engine.slotScanPhase(bufScan, 0, 0, 0, reset, 1, state);
+    var spreadDraw = TRand.ar(posSpread * -0.5, posSpread * 0.5, trig);
+    var pos = engine.slotGrainPos(trig, bufPos, scanPhase, spreadDraw, K2A.ar(rate), K2A.ar(durFrames), validFrames,
+        loopStart, loopLength, head, state);
+    var plain = engine.slotGrainPos(trig, bufPos, scanPhase, spreadDraw, K2A.ar(rate), K2A.ar(durFrames), validFrames,
+        loopStart, loopLength, head);
+    var start = pos * validFrames;
+    Out.kr(out, A2K.kr([
+        RunningMin.ar(Select.ar(on, [DC.ar(1e9), start]), reset),
+        RunningMax.ar(Select.ar(on, [DC.ar(-1e9), start]), reset),
+        RunningMax.ar((pos - plain).abs * on, reset),
+        PulseCount.ar(trig, reset)
+    ]));
+}).add;
+
 // slotGrainPos for grains that differ from the grain before: a ToggleFF on
 // the trigger picks [rate, durFrames] for one grain and [rateB, durFramesB]
 // for the next (what the variation area's per-grain draws do), over the
@@ -224,6 +251,42 @@ check.([[\loopStart, 0], [\loopLength, 1]].every({ arg pair;
     "loops: strataGrainBuf's loop defaults are the whole region");
 posSynth.free; server.sync; posBus.free;
 
+// 3.7: a note's region takes the loop's place while regionLength > 0, in
+// every scan mode, and regionLength 0 leaves the loop's starts as they were
+{
+    var bus = Bus.control(server, 4), synth = Synth(\strataCheckRegionStarts, [\out, bus], engine.processGroup, \addAfter);
+    var regionStarts = { arg settings, seconds = 0.5;
+        synth.set(*settings); server.sync;
+        synth.set(\t_reset, 1);
+        seconds.wait;
+        readBus.(bus)
+    };
+    var inside = List.new, plain = List.new;
+    server.sync;
+    [0, 1, 2].do({ arg mode;
+        [1, -1].do({ arg rate;
+            var readings = regionStarts.([\validFrames, sampleRate, \durFrames, 0.1 * sampleRate, \rate, rate, \bufPos, 0.2,
+                \bufScan, 0.37, \posSpread, 0.5, \loopStart, 0, \loopLength, 1, \scanMode, mode,
+                \regionStart, 0.5, \regionLength, 0.25], 1);
+            inside.add([mode, rate, readings]);
+        });
+    });
+    check.(inside.every({ arg each; (each[2][3] > 100) and: { inRange.(each[2], 0.5 * sampleRate, 0.75 * sampleRate) } }),
+        "loops: a region replaces the loop for its note (region 0.5/0.25, loop 0/1: [mode, rate, lowest and highest start of %] %)"
+            .format(sampleRate, inside.collect({ arg each; [each[0], each[1], each[2][0], each[2][1]] })));
+    [[0, 1, 0.2, 0.8], [0.3, 0.4, 0.9, -1.7]].do({ arg loop;
+        [1, -1].do({ arg rate;
+            plain.add(regionStarts.([\validFrames, sampleRate, \durFrames, 0.05 * sampleRate, \rate, rate, \bufPos, loop[2],
+                \bufScan, loop[3], \posSpread, 1, \loopStart, loop[0], \loopLength, loop[1], \scanMode, 0,
+                \regionStart, 0.6, \regionLength, 0]));
+        });
+    });
+    check.(plain.every({ arg readings; (readings[3] > 100) and: { readings[2] < 1e-6 } }),
+        "loops: regionLength 0 gives the loop's starts (largest difference from slotGrainPos without the controls: %)"
+            .format(plain.collect(_[2])));
+    synth.free; server.sync; bus.free;
+}.value;
+
 // Reads from a slot. The slot holds 0 in [low, high) of its valid region
 // and 1 everywhere else, past the region too (loadBuffer zeroes the rest;
 // the 1s are set by hand), so a grain is heard exactly when it reads
@@ -321,8 +384,45 @@ loadSlot.(1);
 server.sync;
 peak = playSlot.([]);
 check.(peak > 0.05, "loops: the grains with per-grain draws play (peak %)".format(peak));
+// 3.7: a note's region with the real def, in each scan mode (0 wrap, 1
+// bounce, 2 one shot, held still so its grains keep sounding), at rates 1
+// and 2 and reverse (reverseProb 1). Each case's slot holds 1 outside the
+// span under test: a region a grain fits in (0.5/0.25 of a 1 s slot) is
+// heard outside it on the side its grains read (before it forward, after it
+// reverse); one at an end (0/0.001, 0.999/0.001) or shorter than a grain (a
+// 0.05 s slot) starts its grains where they fit, so its span is the valid
+// region. [slot seconds, region start, region length, low and high forward,
+// low and high reverse]
+{
+    var heard = List.new, played = List.new;
+    var regions = [[1, 0, 0.001, 0, 1, 0, 1], [1, 0.999, 0.001, 0, 1, 0, 1], [1, 0.5, 0.25, 0.5, 1, 0, 0.75],
+        [0.05, 0.25, 0.5, 0, 1, 0, 1]];
+    regions.do({ arg region;
+        [[1, 0], [2, 0], [1, 1]].do({ arg rate;
+            loadSlot.(region[0], *(if (rate[1] == 1) { region.copyRange(5, 6) } { region.copyRange(3, 4) }));
+            [0, 1, 2].do({ arg mode;
+                peak = playSlot.([\reverseProb, rate[1], \sizeJitter, 0, \pitchJitter, 0, \loopStart, 0, \loopLength, 1,
+                    \bufRate, rate[0], \bufPos, 0.7, \bufScan, if (mode == 2) { 0 } { 0.9 }, \posSpread, 1, \scanMode, mode,
+                    \regionStart, region[1], \regionLength, region[2]]);
+                if (quietFor.(peak).not) { heard.add([region.copyRange(0, 2), rate, mode, peak]) };
+            });
+        });
+    });
+    check.(heard.isEmpty,
+        "loops: no grain of a region reads outside it or the valid region, in each scan mode, forward and reverse (heard: %)"
+            .format(heard.asArray));
+    // ... and those grains play: the middle region over a slot of 1s
+    loadSlot.(1);
+    [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer; buffer.fill(0, buffer.numFrames, 1) });
+    server.sync;
+    [0, 1, 2].do({ arg mode;
+        played.add(playSlot.([\reverseProb, 0, \bufRate, 1, \scanMode, mode, \bufScan, if (mode == 2) { 0 } { 0.9 },
+            \regionStart, 0.5, \regionLength, 0.25]));
+    });
+    check.(played.every({ arg each; each > 0.05 }), "loops: a region's grains play in each scan mode (peaks %)".format(played.asArray));
+}.value;
 [[\reverseProb, 0], [\sizeJitter, 0], [\pitchJitter, 0], [\loopStart, 0], [\loopLength, 1], [\bufRate, 1], [\bufPos, 0],
-    [\bufScan, 0], [\posSpread, 0.5]].do({ arg pair;
+    [\bufScan, 0], [\posSpread, 0.5], [\scanMode, 0], [\regionStart, 0], [\regionLength, 0]].do({ arg pair;
     command.(\setGrainParam, voice, *pair)
 });
 engine.synths[grainKey].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);

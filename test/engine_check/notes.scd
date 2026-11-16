@@ -25,6 +25,7 @@ var checkSourceSwitch, checkBufferLoad, checkInputFreeze;
 var checkFrozenNotes, checkSpectralNotes;
 var wireMessages, sentCount, startValue, checkParkThroughFreeze, checkSilentRestarts, checkOwnNoteOnAccent;
 var withheldNote, checkFailedStartRoom, checkFreedLeaveWatchers, checkRestartPitches, checkExtraNoteGate;
+var checkNoteRegion, checkRootNote;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -167,9 +168,91 @@ checkState = {
 };
 
 checkSignatures = {
-    var signatures = [[\noteOn, "iiffff"], [\noteOff, "iii"], [\noteExpression, "iifffff"], [\setNotePool, "i"]];
+    var signatures = [[\noteOn, "iiffff"], [\noteOff, "iii"], [\noteExpression, "iifffff"], [\setNotePool, "i"], [\noteRegion, "iiff"]];
     check.(signatures.every({ arg pair; h.formatOf(pair[0]) == pair[1] }),
-        "notes: the four commands exist with their signatures (got %)".format(signatures.collect({ arg pair; h.formatOf(pair[0]) })));
+        "notes: the five commands exist with their signatures (got %)".format(signatures.collect({ arg pair; h.formatOf(pair[0]) })));
+};
+
+// 3.7's noteRegion (design §3.4, ruling 1) on the running buffer voice 1: an
+// empty slot keeps its region (no node) and its next noteOn starts in it; on
+// a live slot the region and a scan restart (t_scanReset) reach that note's
+// synth alone; a bad command is ignored with one line. And a live slot's
+// noteOn restarts its note's scan on a one-shot voice (scanMode 2) only
+checkNoteRegion = {
+    var voice = 1, before = h.synthNames(h.context.xg).size, kept, started, synth, other, bundle, lines = List.new, received;
+    var restartOf = { arg mode;
+        var sent;
+        command.(\setGrainParam, voice, \scanMode, mode);
+        sent = server.makeBundle(false, { command.(\noteOn, voice, 4, 62.0, 220.0, 1.0, 1.0) });
+        server.sendBundle(nil, *sent);
+        server.sync;
+        [sentValue.(sent, synth, \t_scanReset), sentValue.(sent, ownGrain.(voice), \t_scanReset)]
+    };
+    var restarts;
+    command.(\noteRegion, voice, 4, 0.5, 0.25);
+    server.sync;
+    kept = (slotRecord.(voice, 4) !? { arg record; record[\region] }) == [0.5, 0.25] and: { h.synthNames(h.context.xg).size == before }
+        and: { slotState.(voice, 4) == \empty };
+    playNote.(voice, 4);
+    playNote.(voice, 5);
+    server.sync;
+    synth = slotSynth.(voice, 4);
+    other = slotSynth.(voice, 5);
+    started = synth.notNil and: { near.(controlOf.(synth, \regionStart), 0.5) } and: { near.(controlOf.(synth, \regionLength), 0.25) }
+        and: { controlOf.(other, \regionLength) == 0 };
+    check.(kept and: { started },
+        "notes: noteRegion is kept for an empty slot and a later noteOn starts in it (kept %, started %, the other note's %)".format(
+            kept, [controlOf.(synth, \regionStart), controlOf.(synth, \regionLength)], controlOf.(other, \regionLength)));
+    bundle = server.makeBundle(false, { command.(\noteRegion, voice, 4, 0.2, 0.1) });
+    server.sendBundle(nil, *bundle);
+    server.sync;
+    check.((sentValue.(bundle, synth, \t_scanReset) == 1) and: { near.(sentValue.(bundle, synth, \regionStart), 0.2) }
+        and: { near.(sentValue.(bundle, synth, \regionLength), 0.1) } and: { sentSets.(bundle, other).isEmpty }
+        and: { sentSets.(bundle, ownGrain.(voice)).isEmpty } and: { bundle.every({ arg msg; msg[0] != 9 }) },
+        "notes: noteRegion on a live slot restarts that note's scan and no other's (to the note %; to another note %, to the own note %)".format(
+            sentSets.(bundle, synth), sentSets.(bundle, other), sentSets.(bundle, ownGrain.(voice))));
+    command.(\noteRegion, voice, 4, 1.5, -0.5);
+    received = state[\received][\noteRegion];
+    withIgnoredLines.(lines, {
+        [[\noteRegion, voice, 0, 0.5, 0.25], [\noteRegion, voice, 8, 0.5, 0.25], [\noteRegion, voice, 4, nan, 0.25],
+            [\noteRegion, voice, 4, 0.5, inf], [\noteRegion, 7, 4, 0.5, 0.25]].do({ arg call; command.(*call) });
+    });
+    check.((lines.size == 5) and: { lines.every({ arg line; line.beginsWith("strata: noteRegion ignored: ") }) }
+        and: { received == [voice, 4, 1.0, 0.0] } and: { state[\received][\noteRegion] == received }
+        and: { slotRecord.(voice, 4)[\region] == [1.0, 0.0] } and: { slotRecord.(voice, 0)[\region].isNil },
+        "notes: noteRegion with slot 0, slot 8, a NaN start is ignored, one line each (lines %; received %; kept %)".format(
+            lines.asArray, received, slotRecord.(voice, 4)[\region]));
+    restarts = [restartOf.(2), restartOf.(0)];
+    check.((restarts[0][0] == 1) and: { restarts[0][1].isNil } and: { restarts[1][0].isNil },
+        "notes: a live extra slot's noteOn restarts its scan on a one-shot voice only (t_scanReset to the note and the own note, one shot %; wrap %)".format(
+            restarts[0], restarts[1]));
+    [4, 5].do({ arg slot; command.(\noteOff, voice, slot, 1); command.(\noteRegion, voice, slot, 0.0, 0.0) });
+    server.sync; 0.1.wait;
+};
+
+// 3.7's rootNote (design §4.3): the note that plays rate 1, per voice (60
+// at alloc), which a ring-stream note leaving the stream for a buffer reads
+// (leaveStream): at rootNote 57 a frozen synth voice's chord switched to a
+// buffer plays note 57 at rate 1
+checkRootNote = {
+    var voice = 3, pitches = [52, 57, 64], slots = [1, 2, 3], reference = 45, rates, alloc;
+    alloc = state[\rootNotes].copy;
+    command.(\setNotePool, 8);
+    if (engine.bufferFrames[0] == 0) { command.(\loadBuffer, 0, h.stereoPath, 0); h.awaitLoad(0) };
+    startSynthVoice.(voice);
+    command.(\setGrainParam, voice, \freeze, 1.0); server.sync;
+    pitches.do({ arg pitch, index;
+        playNote.(voice, slots[index], 2 ** ((pitch - reference) / 12), 1.0, pitch.midicps, pitch.asFloat) });
+    command.(\setGrainParam, voice, \rootNote, 57.0);
+    command.(\setGrainSource, voice, 1);
+    server.sync;
+    rates = slots.collect({ arg slot; controlOf.(slotSynth.(voice, slot), \bufRate) });
+    check.((alloc == (60 ! engine.numVoices)) and: { state[\rootNotes][voice] == 57 } and: { engine.grainControls[voice][\rootNote].isNil }
+        and: { rates.every({ arg rate, index; near.(rate, 2 ** ((pitches[index] - 57) / 12)) }) },
+        "notes: rootNote 57 makes a note restarted on a buffer play note 57 at rate 1 (at alloc %; the notes' bufRate %)".format(
+            alloc, rates));
+    command.(\setGrainParam, voice, \rootNote, 60.0);
+    h.stopAllVoices;
 };
 
 // Each command, with valid arguments, to a running voice with the pool
@@ -1481,6 +1564,7 @@ if (area.isNil or: { state.isNil }) {
     checkInputNote.value;
     checkGrainFanOut.value;
     checkExpression.value;
+    checkNoteRegion.value;
     checkFailedNoteStart.value;
     h.stopAllVoices;
     // synth-voice notes
@@ -1517,6 +1601,8 @@ if (area.isNil or: { state.isNil }) {
     checkRestartPitches.value;
     checkExtraNoteGate.value;
     h.stopAllVoices;
+    // 3.7's rootNote
+    checkRootNote.value;
     // failed starts
     checkFailedStartRoom.value;
     checkFreedLeaveWatchers.value;

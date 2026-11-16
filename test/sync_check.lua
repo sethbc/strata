@@ -208,13 +208,17 @@ function sync_check.sc_commands(sc_source)
 end
 
 -- Commands the engine has before the script calls them, so the check lets
--- them go uncalled while their engine side lands first. Empty today (3.5's
--- four note commands left it when S.lib.notes began calling them). A
+-- them go uncalled while their engine side lands first: 3.7's, until the
+-- Wave 2 package that first calls each removes its line (ruling 25: 2b
+-- noteRegion, 2a syncScan, 2d setSlotGain). A
 -- pending command a script file calls fails the check, as does
 -- a name the engine does not have, so the list never outlives its use. One
 -- name per line: a release whose engine lands a command before its caller
 -- adds it here, and the caller's change removes it.
 sync_check.PENDING_COMMANDS = {
+  "noteRegion",
+  "syncScan",
+  "setSlotGain",
 }
 
 -- lua_sources: { { path = "strata.lua" | "lib/...", text = source }, ... },

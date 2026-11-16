@@ -43,20 +43,39 @@
     // recHead (the slot's head bus, StrataRecord.sc): the record area's
     // guard (slotHeadGuard) sees the frame and its lowest and highest legal
     // starts, and has the last word on where the grain starts.
-    slotGrainPos { arg trig, bufPos, scanPhase, spreadDraw, rate, durFrames, validFrames, loopStart, loopLength, recHead;
+    // 3.7: state (slotScanState, StrataPositions.sc; nil for 3.6's starts)
+    // is the scan's mode and its span: a note's region in the loop's place
+    // while regionLength > 0 (slotSpan), cut to the legal starts as the loop
+    // is, and the position in it by the mode (slotScanPosition).
+    slotGrainPos { arg trig, bufPos, scanPhase, spreadDraw, rate, durFrames, validFrames, loopStart, loopLength, recHead, state;
         var reverse = rate < 0;
         var lowest = durFrames * reverse;
         var highest = (validFrames - grainEndMargin - (durFrames * (1 - reverse))).max(lowest);
-        var first = loopStart.clip(0, 1);
+        var span = if (state.isNil) { this.slotSpan(loopStart, loopLength) } { [state[\first], state[\last]] };
         // max and min, never clip: on a control-rate receiver clip is a
         // Clip.kr, which reads the audio-rate bounds once per block (the
         // grain before's)
-        var loopFirst = (first * validFrames).max(lowest).min(highest);
-        var loopLast = ((first + loopLength.clip(0, 1)).min(1) * validFrames).max(loopFirst).min(highest);
+        var loopFirst = (span[0] * validFrames).max(lowest).min(highest);
+        var loopLast = (span[1] * validFrames).max(loopFirst).min(highest);
         // bufPos 1 is the loop's last start, not its first: the position
         // stays just under 1, which the wrap maps to 0 (the scan and the
         // spread still wrap past it)
-        var frame = loopFirst + ((bufPos.min(this.lastLoopPosition) + scanPhase + spreadDraw).wrap(0, 1) * (loopLast - loopFirst));
+        var frame = loopFirst + (this.slotScanPosition(bufPos, scanPhase, spreadDraw, state) * (loopLast - loopFirst));
         ^this.slotHeadGuard(frame, lowest, highest, rate, durFrames, recHead) / validFrames.max(1)
+    }
+
+    // The span a buffer grain starts in, [first, last] fractions of the
+    // valid region: the loop (loopStart, loopLength) or, while regionLength
+    // > 0 (3.7: a note's region, design §3.4), the region (regionStart,
+    // regionLength), each clipped 0-1, the last at most 1. Without a region
+    // (nil) the loop's, as 3.6 computed it
+    slotSpan { arg loopStart, loopLength, regionStart, regionLength;
+        var first = loopStart.clip(0, 1), length = loopLength.clip(0, 1), inRegion;
+        if (regionLength.notNil) {
+            inRegion = regionLength > 0;
+            first = Select.kr(inRegion, [first, regionStart.clip(0, 1)]);
+            length = Select.kr(inRegion, [length, regionLength.clip(0, 1)]);
+        };
+        ^[first, (first + length).min(1)]
     }
 }
