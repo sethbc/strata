@@ -223,3 +223,32 @@ The envelopes area's node, `\strataEnvelope` (`docs/notes/engine/envelopes.md`),
 | high: synth -> buffer -> synth, pool full | 2070 | 1970 | 2070 | 1970 |
 
 The sixteen nodes take 80-120 KB at every case (sixteen times 6.7 KB is 107), and every floor holds: the tightest, high synth -> buffer -> synth, is 3880 KB free, 296 above its 3584 (about 180-200 counting the spectral writers' late allocations, 284-304 before); the high synth -> buffer -> synth pool case 1970, 690 above 1280; the eight recordings 3890 on high, 818 above 3072. (3.13: one run of the memory area in its own container, first in it as in CI's shard; 3.14.1: the memory area alone.)
+
+## 3.7: Wave 1 together (the landing's figures)
+
+Packages 1a and 1c each measured against `main` without the other; these are the figures with both, and with 1b's onsets pass and 1d's delay (neither adds a node a voice holds), measured on the batch's landing branch (the memory area first in its shard, as in CI: 3.14.1 at port 57790 and one 3.13 run in its own container). "Before" is `main` at 51ff1514 (3.14.1, from 1a's and 1c's tables). `\strataGrainBuf` is 82.6 KB and `\strataEnvelope` 6.7 KB on both versions.
+
+| Worst case (KB free) | before | 3.14.1 | 3.13 | floor |
+|---|---|---|---|---|
+| standard, switched 0.2 s apart and restarted | 4840 | 4650 | 4670 | 3072 |
+| standard, switched three times at once | 4840 | 4670 | 4670 | 3072 |
+| standard, recalled A -> B -> A -> C | 4820 | 4620 | 4620 | 3072 |
+| standard, synth -> buffer -> synth | 4650 | 4480 | 4480 | 3072 |
+| standard, all-buffer | 4900 | 4600 | 4600 | 3072 |
+| standard, restarted, one recording | 4800 | 4630 | 4630 | 3072 |
+| standard, all-buffer, one recording | 4870 | 4580 | 4580 | 3072 |
+| standard, all-buffer, pool full | 2540 | 1970 | 1970 | 1280 |
+| standard, synth -> buffer -> synth, pool full | 2740 | 2420 | 2420 | 1280 |
+| high, switched 0.2 s apart and restarted | 4170 | 4000 | 4000 | 3584 |
+| high, switched three times at once | 4170 | 4000 | 4000 | 3584 |
+| high, recalled A -> B -> A -> C | 4690 | 4520 | 4520 | 3584 |
+| high, synth -> buffer -> synth | 3980 | 3820 | 3820 | 3584 |
+| high, all-buffer | 4780 | 4470 | 4490 | 3584 |
+| high, restarted, one recording | 4150 | 3980 | 3980 | 3584 |
+| high, all-buffer, one recording | 4780 | 4460 | 4470 | 3584 |
+| high, all-buffer, pool full | 2440 | 1850 | 1850 | 1280 |
+| high, synth -> buffer -> synth, pool full | 2070 | 1750 | 1760 | 1280 |
+| eight recordings, standard | 4650 | 4470 | 4470 | 3072 |
+| eight recordings, high | 3990 | 3830 | 3830 | 3072 |
+
+Every floor holds. The tightest is high synth -> buffer -> synth, 3820 KB free, 236 above its 3584; counting the spectral writers' late allocations (about 100 KB, 1c's section) it is nearer 130 KB. The pool cases keep 470 KB or more above 1280 (high synth -> buffer -> synth, 1750). The two packages' costs add as measured alone: 1a's 9.3 KB on every `\strataGrainBuf` and 1c's sixteen nodes, about 107 KB. So a Wave 2 change that adds to a grain synth or a node a voice holds is measured again before it lands (the high synth -> buffer -> synth case first).
