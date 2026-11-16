@@ -22,7 +22,7 @@ position(v) = span start + fraction x span length, where fraction is
               or clipped to 0-1 (one shot)
 ```
 
-- `position(v)` integrates up to now (so it is exact between ticks at the current rate); the clock keeps an LFO-moved scan followed within a tick. The span is the own note's region while it has one (2b's `S.lib.notes.own_region(v)`: `{start, length}`, read as `[1]`, `[2]` or `.start`, `.length`; a module without it means none), else the loop; its length is cut at the slot's end, as the engine's `slotSpan` cuts it.
+- `position(v)` integrates up to now (so it is exact between ticks at the current rate); the clock keeps an LFO-moved scan followed within a tick. The span is the own note's region while it has one (2b's `S.lib.notes.own_region(v)`: the positional `{start, length}`, read as `[1]` and `[2]`; a module without it means none until 2b lands), else the loop; its length is cut at the slot's end, as the engine's `slotSpan` cuts it.
 - `phase(v)` (0-1 wrap, 0-2 bounce, one shot as it runs) and `finished(v)` (a one shot that has played out) are nil and false unless a buffer voice runs. The mode is `S.lib.scan.mode(v)`.
 - `spread(v)` is `v<i>_grain_spread x` the span's length for a running buffer voice. `cell_of(fraction, columns)` and `column(v, columns)` give a cell 1..columns (a rounding above a cell's edge still counts).
 - `record_head(slot)`: from the `S.lib.record.state(slot)` report (`kind` `"playable"`, `phase` `"recording"`, `started_at` at the "recording" report, `seconds` D, `loop`) and the valid length `max(S.buffers[slot].seconds, D)`: elapsed time wrapped over D in loop mode, stopped at D in a one-shot, as a fraction of the valid length.

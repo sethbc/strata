@@ -10,7 +10,7 @@
 - `randomize_section` stays cheap: the hint calls it on every draw while ALT is held, and VOICE animates while ALT+K2 is held (`animates` is `S.lib.ui_alt.k2_held`). It syncs the cursor once and builds one closure per drawn row; no param is set or read beyond the rows.
 - The arc button (`arc_button`) starts and stops the selected voice (`toggle_voice`, design §7), not K3's next-section jump, and never locks.
 - The ring-group marks are drawn only while `S.arc_connected`, beside exactly the rows `voice_page_group(rows, cursor)` returns (those in view).
-- Values come from the param itself (`params:string`, trailing spaces dropped), except mod sources (`<n> <list_name>` or `none`), and are cut with `fit_text` to the room after their label (at least `LAYOUT.value_gap` px), so no row overlaps for any voice, source or value. The layout tests draw every voice with every source and the cursor on the first and last row of each section (the record's `layout_states`), plus an arc-marked and a locked state.
+- Values come from the param itself (`params:string`, trailing spaces dropped), except mod sources (`<n> <list_name>` or `none`) and `buf_scan`, shown as a speed (`LAYOUT.speed_format`, `1.00x`; 3.7), and are cut with `fit_text` to the room after their label (at least `LAYOUT.value_gap` px), so no row overlaps for any voice, source or value. The layout tests draw every voice with every source and the cursor on the first and last row of each section (the record's `layout_states`), plus an arc-marked and a locked state.
 
 ## Owns
 
