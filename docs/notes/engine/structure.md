@@ -18,6 +18,8 @@ The engine check is a runner, `test/engine_check.scd`: it boots a silent scsynth
 | `check(condition, message)` | posts `ok` or `FAIL` and counts a failure |
 | `command(name, ...)`, `commandTo(engine, name, ...)` | runs an engine command as matron's OSC would (on `h.engine`, or on another engine) |
 | `awaitReply(condition, timeout)`, `waitFor(function, timeout)` | wait inside the check routine; a reply that never comes fails |
+| `awaitLoad(slot, target, timeout, load)` | waits until a load into the slot (its newest unless `load` names one) is in place on `h.engine` or `target`, then syncs; a load not in place within the timeout (5 s) fails (#706) |
+| `awaitTake(slot, target, timeout)` | waits until the slot's recording has ended (no record synth, no take: its length is set, or it was canceled) on `h.engine` or `target`, then syncs; one still running or awaited after the timeout (5 s) fails (#718) |
 | `synthNames(group)`, `synthTree(group)` | the synth def names under a node, or one Event (`id`, `def`, `controls`) per synth, from one `/g_queryTree` |
 | `voiceSynths(voice)` | the voice's [voice, grain, mod] synths as the engine tracks them |
 | `noteSynths(voice)` | the voice's live extra note synths (3.5, the notes area's `noteSynths`) |
