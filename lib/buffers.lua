@@ -181,6 +181,13 @@ return function(S)
     -- audio: read it (a load as long as the audio it replaced reports no
     -- new length, #401)
     S.lib.waveforms.stale(slot)
+    -- 3.7: the slot's settings are what it holds now (a replace take's
+    -- start with none: it recorded over the slot's own; a synced one with
+    -- the clock's tempo at its start)
+    if is_take then S.lib.samples.drop_own(slot) end
+    S.lib.samples.bind(slot)
+    local tempo = is_take and S.lib.record.synced_tempo(slot) or nil
+    if tempo then S.lib.samples.set(slot, "tempo", tempo) end
   end
 
   -- Settle a take or load awaiting the engine (confirm_since set) from the
@@ -208,7 +215,9 @@ return function(S)
       if is_take then
         buffer.name = "empty"
         buffer.path = nil
+        S.lib.samples.drop_own(slot)
       end
+      S.lib.samples.unbind(slot)
     end
   end
 
@@ -348,6 +357,13 @@ return function(S)
     -- disk), unless the state is a long load still being checked, which
     -- has none yet (#401)
     if state.checking_load ~= nil then S.lib.waveforms.forget(slot) else S.lib.waveforms.stale(slot) end
+    -- 3.7: settled audio binds what it is; an empty slot unbinds; a load
+    -- still awaiting the engine binds when it settles
+    if state.loaded and state.confirm_since == nil then
+      S.lib.samples.bind(slot)
+    elseif not state.loaded then
+      S.lib.samples.unbind(slot)
+    end
   end
 
   -- The notice for a load the engine is still checking (checking_load =
@@ -515,6 +531,8 @@ return function(S)
     buffer.checking_from, buffer.checking_load = nil, nil
     buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
     buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
+    S.lib.samples.drop_own(slot)  -- 3.7: a take's settings go with it
+    S.lib.samples.unbind(slot)
     buffer_display_changed()
   end
 
@@ -545,12 +563,14 @@ return function(S)
 
   -- Count a save of the slot, track it for its bufferSaveResult report and
   -- send it: the one place a saveBuffer leaves, so the two entry points
-  -- number their saves alike
+  -- number their saves alike. A whole save keeps a copy of the slot's
+  -- settings as they are at the send (3.7), for the saved file
   local function send_save(slot, path, start, length, loop)
     local buffer = S.buffers[slot]
     buffer.saves_sent = buffer.saves_sent + 1
     if #buffer.pending_saves >= BUFFER_SETTLE.tracked_saves then table.remove(buffer.pending_saves, 1) end
-    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path, loop = loop or nil})
+    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path, loop = loop or nil,
+      settings = (not loop) and S.lib.samples.snapshot(slot) or nil})
     engine.saveBuffer(slot - 1, path, start, length)
   end
 
@@ -661,6 +681,8 @@ return function(S)
       print("buffer " .. slot .. ": cannot save " .. save.path .. " (the engine wrote nothing; a file already there is kept)")
     else
       print("buffer " .. slot .. " saved to " .. save.path)
+      -- 3.7: a whole save's file has the settings the slot had at the send
+      if save.settings then S.lib.samples.store_file(save.path, save.settings) end
     end
     if save.number == buffer.saves_sent then
       buffer_page_flash(failed and ("buf " .. slot .. " save failed")
@@ -885,14 +907,16 @@ return function(S)
 
   -- What buffers.data holds: per slot the loaded file or scratch take (a
   -- remembered file that was missing on start is kept: it may be on a drive
-  -- that is mounted again later), "" for none, and the start
+  -- that is mounted again later), "" for none, the start, and (3.7) a
+  -- take's settings, or false
   local function remembered_buffers()
-    local paths, starts = {}, {}
+    local paths, starts, settings = {}, {}, {}
     for slot = 1, NUM_BUFFERS do
       paths[slot] = S.buffers[slot].path or S.buffers[slot].missing_path or ""
       starts[slot] = S.buffers[slot].start or 0
+      settings[slot] = S.lib.samples.stored_own(slot)
     end
-    return {version = BUFFER_DATA_VERSION, paths = paths, starts = starts}
+    return {version = BUFFER_DATA_VERSION, paths = paths, starts = starts, settings = settings}
   end
 
   -- Write the paths: true and "written" or "unchanged", or false and why
@@ -990,6 +1014,8 @@ return function(S)
       return
     end
     local reloading = 0
+    -- 3.7: version 3 keeps a take's settings per slot; the floor, version 2, has none
+    local settings = version > BUFFER_FORMAT_FLOOR and type(loaded.settings) == "table" and loaded.settings or {}
     for slot = 1, NUM_BUFFERS do
       local path = loaded.paths[slot]
       local start = type(loaded.starts) == "table" and tonumber(loaded.starts[slot]) or 0
@@ -1005,6 +1031,7 @@ return function(S)
           if file_seconds then
             start = util.clamp(start, 0, longest_start(file_seconds, sample_rate))
           end
+          if path == scratch_take_path(slot) then S.lib.samples.restore_own(slot, settings[slot]) end
           load_buffer(slot, path, start)
           S.buffers[slot].restoring = true
           reloading = reloading + 1
@@ -1175,6 +1202,8 @@ return function(S)
   M.buffer_state_changed = buffer_state_changed
   M.BUFFER_SETTLE = BUFFER_SETTLE
   M.display_changed = buffer_display_changed
+  -- (3.7) lib/samples.lua: a take's settings changed, for buffers.data
+  function M.remember() remember() end
   -- A recordBuffer was just sent for the slot (lib/record.lua's record_buffer
   -- calls it, before it sets buffer.recording, so it says the take's kind):
   -- the pending start reload is canceled either way. A replace take
@@ -1191,6 +1220,7 @@ return function(S)
     buffer.awaiting_zero = false
     if not playable then
       buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
+      S.lib.samples.unbind(slot)  -- 3.7: the take's settings come with its end
     else
       buffer.start = buffer.sent_start  -- the reload that would have made a new start true is canceled
     end

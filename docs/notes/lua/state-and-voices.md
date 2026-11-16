@@ -61,6 +61,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 40 | create and start the drift metro (`S.drift_metro`, 0.1 s, `drift_update`) | `lib/mutation.lua` |
 | 50 | create the mutation metro (`S.mutation_metro`, `mutation_rate`, `gentle_mutate`); the `mutation_enabled` param starts it | `lib/mutation.lua` |
 | 60 | set and start the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` polls (`S.buffer_polls`) | `lib/buffers.lua` |
+| 61 | read the files' settings from data/strata/samples.data (`START_ORDER.samples_load`, before the buffers' restore; a missing file gives none, one it cannot use is set aside as `samples.data.bak` with a console line and gives none) (3.7) | `lib/samples.lua` |
 | 62 | set and start the input level polls `amp_in_l` and `amp_in_r` (`START_ORDER.input_level`; a poll a norns lacks is skipped) (3.4) | `lib/input_level.lua` |
 | 65 | set and start the `recordState` poll (`record_poll`) | `lib/record.lua` |
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
@@ -127,6 +128,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 33 | save the random sequences' values to data/strata/sequences.data at once, canceling the write that waits (`S.sequences_save_clock`) (`CLEANUP_ORDER.sequences_save`; skipped if their start step never ran; drift's draws are saved here) (3.7) | `lib/random_sequences.lua` |
 | 34 | save the gesture recorders to data/strata/gestures.data at once, canceling the write that waits (`S.gesture_save_clock`) (`CLEANUP_ORDER.gestures_save`; skipped if their start step never ran; a recording is saved as if it stopped then) (3.4) | `lib/gestures.lua` |
 | 36 | save the matrix's routings to data/strata/matrix.data at once, canceling the write that waits (`S.matrix_save_clock`) (`CLEANUP_ORDER.matrix_save`; skipped if its start step never ran) (3.4) | `lib/matrix.lua` |
+| 37 | write the files' settings to data/strata/samples.data at once, canceling the write that waits (`CLEANUP_ORDER.samples_save`; skipped if its start step never ran, or if a file it could not use could not be moved aside) (3.7) | `lib/samples.lua` |
 | 38 | write the rig settings to data/strata/io.data once more (`CLEANUP_ORDER.io_rig_save`; skipped if its start step never ran) (3.6) | `lib/io/rig.lua` |
 | 40 | save the buffer paths (skipped the same way for buffers.data, with `S.buffers_loaded`) | `lib/buffers.lua` |
 | 50 | cancel init's start-up clock (`cancel_startup_clock`, while it waits to start voice 2) | `strata.lua` |

@@ -94,7 +94,9 @@ return function(S)
 
   -- The voice's reference note for grain quantize (scaleNote): a synth
   -- voice's freq (freq, or its stored freq) as a fractional MIDI note; for a
-  -- buffer or input voice, whose content's key is unknown, the root + 60.
+  -- buffer voice whose file's key is set (3.7), the key
+  -- (S.lib.samples.scale_reference); for any other buffer or input voice,
+  -- whose content's key is unknown, the root + 60.
   -- A frozen synth voice's is its freeze reference whatever freq is passed
   -- (3.5: S.lib.notes.freeze_reference), so no resend moves it
   function M.scale_note(voice_idx, freq)
@@ -103,13 +105,21 @@ return function(S)
       if reference then return reference end
       return freq_to_note(freq or S.voices[voice_idx].params.freq)
     end
-    return M.root() + V.reference_octave
+    return (S.lib.samples and S.lib.samples.scale_reference(voice_idx)) or M.root() + V.reference_octave
   end
 
   -- Send scaleNote to a running voice (freq: the value about to be stored)
   function M.send_scale_note(voice_idx, freq)
     if voice_idx < 1 or voice_idx > NUM_VOICES or not S.voices[voice_idx].active then return end
     engine.setGrainParam(voice_idx - 1, "scaleNote", M.scale_note(voice_idx, freq))
+  end
+
+  -- Send rootNote to a running voice: the note that plays rate 1 on it
+  -- (3.7: S.lib.samples.rate_root, its file's key or 60), for a note the
+  -- engine restarts on a buffer
+  function M.send_root_note(voice_idx)
+    if voice_idx < 1 or voice_idx > NUM_VOICES or not S.voices[voice_idx].active then return end
+    engine.setGrainParam(voice_idx - 1, "rootNote", S.lib.samples.rate_root(voice_idx))
   end
 
   -- The semitones of the voice's interval set (empty while it is off)
@@ -313,11 +323,13 @@ return function(S)
     },
     -- the voice sync (the voice may not be marked running yet): the
     -- interval set and the reference note, from the freq the engine plays (a
-    -- step's note, set before the start it makes, #632)
+    -- step's note, set before the start it makes, #632), and the root note
+    -- (3.7)
     sync = function(voice_idx)
       send_intervals_now(voice_idx)
       engine.setGrainParam(voice_idx - 1, "scaleNote",
         M.scale_note(voice_idx, S.lib.engine_sync.engine_base_value("v" .. voice_idx .. "_freq")))
+      engine.setGrainParam(voice_idx - 1, "rootNote", S.lib.samples.rate_root(voice_idx))
     end,
     scene_defaults = scene_defaults,
     discrete = discrete,

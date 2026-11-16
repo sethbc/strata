@@ -3099,6 +3099,31 @@ test("a MIDI note that takes the voice's own note from a step ends the step's no
   pattern_clock_stop()
 end)
 
+-- 3.7 (design §4.3): a buffer voice's pitch counts from its slot's file's
+-- key, in the degree arithmetic and in every hit's pitches
+test("a buffer voice's step pitches and degrees count from its file's key", function()
+  local context, S = buffer_voice_setup()  -- voice 1 reads buffer 1
+  local seq = S.lib.sequencer
+  load_buffer(1, "/tmp/keyed.wav")  -- over the 8 s the setup gave the slot: its 0 s, then its audio
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 0))
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
+  assert_true(S.lib.samples.set(1, "key", 57))
+  params:set("v1_buf_rate", 2)  -- 57 + 12 log2(2): note 69
+  params:set("scale", 2)        -- a scale on: degrees are its tones (C major)
+  -- 69 (A) is a tone of C major; the tone above it is 71 (B), below 67 (G)
+  assert_near(seq.degree_semitones(1, 1), 2, 1e-9, "a degree up from 69")
+  assert_near(seq.degree_semitones(1, -1), -2, 1e-9, "a degree down from 69")
+  S.patterns[1][1], S.patterns[1][2] = 15, 15
+  seq.set_step_attr(1, 2, "notes", {0, 2})  -- degrees: 69 and the tone two above it, 72
+  local events = record_output(S, "probe")
+  pattern_clock_start()
+  context.clock.run_for(0.25)
+  pattern_clock_stop()
+  local hits = voice_events(events, 1)
+  assert_list_near(hits[1].pitches, {69}, 1e-9, "a plain step: 57 at rate 2")
+  assert_list_near(hits[2].pitches, {69, 72}, 1e-9, "a chord from 69 (from 72 without the key: 72, 76)")
+end)
+
 -- 3.6 (design §0.1): every hit's absolute pitches, for the targets
 test("every hit's event carries its absolute pitches", function()
   local context, S = buffer_voice_setup()  -- voice 1 reads buffer 1

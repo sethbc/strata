@@ -34,7 +34,7 @@ MIDI notes, velocity, pitchbend and pressure play the voices (3.0 design §5, 3.
 ## State
 
 Grouped in tables:
-- `S.lib.midi_in.MIDI` holds the constants: `velocity_max` 127, `rate_root_note` 60 (a buffer or input voice's note at rate 1), `bend_center` 8192, `bend_semitones` 2, the option lists, `owner` (`"midi"`), `channels` 16, `notes_per_channel` 128 (a key is `channel * 128 + note`) and `pressure_max` 127.
+- `S.lib.midi_in.MIDI` holds the constants: `velocity_max` 127, `rate_root_note` 60 (a buffer or input voice's note at rate 1; 3.7: `own_setters` read `S.lib.samples.rate_root(voice)`, a buffer voice's file's key when set, and the constant stays equal to the engine's), `bend_center` 8192, `bend_semitones` 2, the option lists, `owner` (`"midi"`), `channels` 16, `notes_per_channel` 128 (a key is `channel * 128 + note`) and `pressure_max` 127.
 - `S.midi_device` is the vport Strata listens to.
 - `S.midi_state` holds:
   - `bend[voice]`: the plain modes' ratio, default 1 (transient: never a param, never in scenes);

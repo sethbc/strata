@@ -406,12 +406,13 @@ return function(S)
 
   -- Per voice, how a note pitches the voice's own note (the allocator's
   -- set_own): a synth voice's freq, a buffer voice's rate, an input voice's
-  -- grain pitch (note 60 at 1), each clamped to its param's range
+  -- grain pitch (rate 1 at S.lib.samples.rate_root: a buffer voice's file's
+  -- key, else 60), each clamped to its param's range
   local own_setters = {}
   for i = 1, NUM_VOICES do
     local prefix = "v" .. i .. "_"
     own_setters[i] = function(pitch)
-      local id, value = prefix .. "grain_pitch", 2 ^ ((pitch - MIDI.rate_root_note) / 12)
+      local id, value = prefix .. "grain_pitch", 2 ^ ((pitch - S.lib.samples.rate_root(i)) / 12)
       if voice_uses_synth(i) then
         id, value = prefix .. "freq", musicutil.note_num_to_freq(pitch)
       elseif voice_uses_buffer(i) then

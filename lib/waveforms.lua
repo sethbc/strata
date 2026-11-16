@@ -36,6 +36,11 @@ return function(S)
   local playable_due = {}
   -- the tick's error last printed (contained_call's key "tick"), nil after a good tick
   local tick_errors = {}
+  -- per slot: the frames and rate of the peaks file last read (3.7: the
+  -- audio's, for a slice's markers), nil with no valid file
+  local frames_of, rates = {}, {}
+  -- fn(slot) after every successful read (on_read), and their errors
+  local read_listeners, listener_errors = {}, {}
 
   -- lib/buffers.lua's one slot check (#402)
   local function valid_slot(slot)
@@ -46,8 +51,8 @@ return function(S)
     return S.lib.scenes.scene_data_dir .. "buf" .. slot .. ".peaks"
   end
 
-  -- Parse a peaks file's text for slot: its points, or nil when it is not
-  -- valid for the slot's reported seconds
+  -- Parse a peaks file's text for slot: its points, frames and rate, or nil
+  -- when it is not valid for the slot's reported seconds
   local function parse(slot, text)
     local lines = {}
     for line in text:gmatch("[^\r\n]+") do lines[#lines + 1] = line end
@@ -68,7 +73,7 @@ return function(S)
       values[#values + 1] = value
     end
     if #values ~= WAVEFORM_POINTS then return nil end
-    return values
+    return values, frames, rate
   end
 
   local function same_values(first, second)
@@ -79,20 +84,29 @@ return function(S)
     return true
   end
 
-  -- Read slot's peaks file now (the loop calls it; tests may too)
+  -- Read slot's peaks file now (the loop calls it; tests may too). A
+  -- successful read tells the on_read listeners, contained, once the points,
+  -- frames and rate are in place, the same values read again included (a
+  -- reload of the same file: its gain is the engine's 1 again until then)
   local function read(slot)
     if awaiting[slot] then return end
-    local values = nil
+    local values, frames, rate = nil, nil, nil
     if S.buffers[slot].seconds > 0 then
       local file = io.open(peaks_path(slot), "r")
       if file then
         local text = file:read("*a")
         file:close()
-        values = text and parse(slot, text) or nil
+        if text then values, frames, rate = parse(slot, text) end
       end
     end
-    if same_values(points[slot], values) then return end
-    points[slot] = values
+    local unchanged = same_values(points[slot], values)
+    points[slot], frames_of[slot], rates[slot] = values, frames, rate
+    if values then
+      for index, fn in ipairs(read_listeners) do
+        S.lib.ui_frame.contained_call(listener_errors, index, "peaks read listener " .. index, fn, slot)
+      end
+    end
+    if unchanged then return end
     request_redraw()
     if S.lib.grid_core.any_page(GRID_WAVEFORM_PAGE) then grid_redraw() end
   end
@@ -109,6 +123,7 @@ return function(S)
   -- Points of the slot's overview, gone at once (a redraw, and a page-5
   -- grid's), whatever happens next
   local function drop_points(slot)
+    frames_of[slot], rates[slot] = nil, nil
     if points[slot] == nil then return end
     points[slot] = nil
     request_redraw()
@@ -143,6 +158,22 @@ return function(S)
   function M.peaks(slot)
     if not valid_slot(slot) or S.buffers[slot].seconds <= 0 then return nil end
     return points[slot]
+  end
+
+  -- The frames and the rate of the slot's peaks file last read, or nil
+  function M.frames(slot)
+    if not valid_slot(slot) or S.buffers[slot].seconds <= 0 then return nil end
+    return frames_of[slot]
+  end
+  function M.rate(slot)
+    if not valid_slot(slot) or S.buffers[slot].seconds <= 0 then return nil end
+    return rates[slot]
+  end
+
+  -- fn(slot) after every successful read of a slot's peaks (3.7: lib/samples.lua's gain)
+  function M.on_read(fn)
+    assert(type(fn) == "function", "on_read: a listener is a function")
+    read_listeners[#read_listeners + 1] = fn
   end
 
   -- A slot's peaks in n bins, each the largest of the points it covers, or nil

@@ -410,6 +410,32 @@ test("scale and root are discrete scene globals that send setScale", function()
   assert_equal(calls[#calls].args[1], 5, "root F is 5")
 end)
 
+-- 3.7 (design §4.3): a buffer voice's reference is its file's key when
+-- set (S.lib.samples.scale_reference), and every voice sync sends rootNote
+-- (S.lib.samples.rate_root) beside scaleNote
+test("a buffer voice's scaleNote is its file's key, and every sync sends rootNote", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  load_buffer(1, "/tmp/keyed.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
+  context.clear_engine_calls()
+  params:set("v1_source", 2)  -- a running voice: a full sync
+  assert_near(last_grain(context, 0, "scaleNote"), 60, 1e-9, "no key: root C + 60")
+  assert_equal(last_grain(context, 0, "rootNote"), 60, "no key: 60")
+  S.lib.samples.set(1, "key", 57)
+  assert_near(S.lib.variation.scale_note(1), 57, 1e-9, "the key")
+  context.clear_engine_calls()
+  params:set("root", option_index("root", "D"))
+  assert_near(last_grain(context, 0, "scaleNote"), 57, 1e-9, "a root change leaves the key")
+  toggle_voice(1); context.clear_engine_calls(); toggle_voice(1)
+  assert_near(last_grain(context, 0, "scaleNote"), 57, 1e-9, "a start's sync")
+  assert_equal(last_grain(context, 0, "rootNote"), 57)
+  -- a synth voice's sync sends 60
+  context.clear_engine_calls()
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  assert_equal(last_grain(context, 0, "rootNote"), 60, "a synth voice")
+end)
+
 test("scaleNote follows a freq change, a root change, a quantize change and a source change", function()
   local context = load_strata()
   finish_startup(context)

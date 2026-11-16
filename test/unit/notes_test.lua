@@ -173,6 +173,25 @@ local function started(context)
   return S
 end
 
+-- 3.7 (design §4.3): a buffer voice's extra notes and its own note's return
+-- count from its slot's file's key
+test("an extra note on a buffer voice plays its rate from the file's key", function()
+  local context = load_strata()
+  local S = started(context)
+  load_buffer(1, "/tmp/keyed.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
+  params:set("v1_source", 2)
+  assert_near(S.lib.notes.note_values(1, 72).rate, 2, 1e-9, "no key: from 60")
+  S.lib.samples.set(1, "key", 57)
+  assert_near(S.lib.notes.note_values(1, 69).rate, 2, 1e-9, "key 57: 69 is rate 2")
+  assert_near(S.lib.notes.note_values(1, 45).rate, 0.5, 1e-9)
+  play(context, 1, 1, 57)  -- the own note: buf_rate 1 through set_own's caller
+  context.clear_engine_calls()
+  play(context, 1, 2, 64)
+  local on = context.calls_named("noteOn")
+  assert_equal(#on, 1, "an extra note")
+  assert_near(on[1].args[5], 2 ^ (7 / 12), 1e-9, "64 over key 57")
+end)
+
 test("the first note on a voice is its own note, with today's messages", function()
   local context = load_strata()
   local S = started(context)

@@ -412,4 +412,29 @@ test("cleanup stops the read loop", function()
   assert_equal(context.clock.pending_count(), 0, "no clock left")
 end)
 
+-- 3.7 (ruling 19): every successful read tells the listeners, a read of the
+-- same values included (a reload of the same file resets the engine's gain),
+-- and keeps the file's frames and rate
+test("every successful read tells its listeners and keeps the frames and rate", function()
+  local context = load_strata(); finish_startup(context)
+  local waveforms = local_value("S").lib.waveforms
+  local told = {}
+  waveforms.on_read(function(slot) told[#told + 1] = slot .. ":" .. tostring(waveforms.peaks(slot) ~= nil) end)
+  waveforms.on_read(function() error("a listener that fails") end)
+  write_peaks(1, ramp(64), { frames = 480000, rate = 48000 })
+  report(context, 1, 10)
+  tick(context, 2)
+  assert_equal(table.concat(told, " "), "1:true", "told once, with the points in place")
+  assert_equal(waveforms.frames(1), 480000); assert_equal(waveforms.rate(1), 48000)
+  waveforms.stale(1); tick(context, 2)
+  assert_equal(#told, 2, "the same values read again: told again")
+  -- a file that is not valid for the slot tells nothing and keeps nothing
+  write_peaks(1, ramp(64), { slot = 2 })
+  waveforms.stale(1); tick(context, 2)
+  assert_equal(#told, 2, "not told")
+  assert_equal(waveforms.frames(1), nil); assert_equal(waveforms.rate(1), nil)
+  assert_equal(waveforms.frames(9), nil, "not a slot")
+  assert_equal(#context.take_script_errors(), 1, "the failing listener is printed once, and the loop runs on")
+end)
+
 end
