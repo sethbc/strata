@@ -118,10 +118,13 @@ return function(S)
     return {seconds = math.min(fit * beat_seconds, slot_seconds), beats = fit, capped = true}
   end
 
-  -- A replace take's recording started (at its send, or at its "recording"
-  -- report when it was armed): the slot's audio is the take's from here, so
-  -- it is unbound, once (3.7); through an arm's wait the old audio plays on
-  -- with its settings
+  -- The engine stopped playing a replace take's slot's old audio, so the
+  -- slot is unbound, once (3.7: the binding names the audio that plays): at
+  -- the send for a take with no delay (the engine empties its slot at once,
+  -- a threshold's wait included), else at the slot's first 0 s report (the
+  -- engine empties a synced take's slot just before its start) or at its
+  -- "recording" report, whichever comes first. Through a synced take's arm
+  -- wait the old audio plays on with its settings
   local function take_started(slot, take)
     if take.kind ~= "take" or take.unbound then return end
     take.unbound = true
@@ -204,7 +207,7 @@ return function(S)
         seconds = seconds, loop = loop, previous = previous}
       S.lib.buffers.recording_started(slot, playable)
       buffer.recording = true
-      if not armed then take_started(slot, takes[slot]) end
+      if not playable and delay <= 0 then take_started(slot, takes[slot]) end
       buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
       buffer.restoring = false
       buffer.settled_empty = false
@@ -266,6 +269,8 @@ return function(S)
   function M.slot_reported(slot, seconds)
     local state = takes[slot]
     local buffer = S.buffers[slot]
+    -- a replace take's slot emptied: its old audio no longer plays
+    if state and state.kind == "take" and seconds <= 0 then take_started(slot, state) end
     if not (state and state.kind == "playable" and seconds > 0 and not buffer.loaded) then return false end
     buffer.loaded = true
     if buffer.path == nil then buffer.name = "take " .. slot end

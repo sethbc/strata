@@ -596,6 +596,78 @@ test("normalize sends the gain when the slot's peaks are read, never at a bind",
   assert_equal(#sent, 1, "a canceled dub: the gain again"); assert_near(sent[1][2], 2, 1e-9)
 end)
 
+-- The binding names the audio that plays (fix round 2's ruling): a replace
+-- take the engine empties at once (a threshold, no delay) unbinds at its
+-- send; a synced one when the engine empties the slot (its 0 s report) or
+-- at its start; a cancel after the slot was emptied leaves it unbound, so a
+-- later dub into the empty slot starts with no settings
+test("a replace take canceled after its slot was emptied leaves it unbound; a later dub has no settings", function()
+  for _, case in ipairs({ { name = "a threshold", threshold = 2, sync = 1 },
+      { name = "a synced take in its last 0.21 s", threshold = 1, sync = 2 },
+      -- its emptying unreported before the cancel: the cancel's 0 s report unbinds
+      { name = "a synced take whose emptying went unreported", threshold = 1, sync = 2, unreported = true } }) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    settle_load(context, 1, context.audio_dir .. "a.wav", 8)
+    buffer_voice(context, 1, 1)
+    samples().set(1, "key", 57); samples().set(1, "tempo", 133)
+    local told = 0
+    samples().on_bind(function(slot) if slot == 1 then told = told + 1 end end)
+    params:set("record_feedback", 0); params:set("record_threshold", case.threshold)
+    params:set("record_sync", case.sync)
+    context.clock.run_for(1)
+    context.clear_engine_calls()
+    record_buffer(1)
+    local number = S.buffers[1].records_sent
+    context.polls.fire("recordState", record_state_value(number, 0, 1))
+    if not case.unreported then
+      report(context, 1, 0)  -- the engine emptied the slot for the take
+      assert_equal(told, 1, case.name .. ": unbound once the old audio stops")
+      assert_equal(grain_values(context, 0, "rootNote")[1], 60, case.name .. ": the voice's rootNote back to 60")
+    end
+    record_buffer(1)       -- K3: canceled while armed
+    context.polls.fire("recordState", record_state_value(number, 3, 1))
+    report(context, 1, 0)
+    assert_equal(grain_values(context, 0, "rootNote")[1], 60, case.name .. ": rootNote 60 by the cancel's report")
+    assert_equal(S.lib.buffers.status(1), "empty", case.name .. ": the slot is empty")
+    assert_equal(told, 1, case.name .. ": told once")
+    -- a dub into the empty slot
+    params:set("record_feedback", 50); params:set("record_threshold", 1); params:set("record_sync", 1)
+    record_buffer(1)
+    number = S.buffers[1].records_sent
+    context.polls.fire("recordState", record_state_value(number, 1, 1))
+    report(context, 1, 4)
+    record_buffer(1)
+    context.polls.fire("recordState", record_state_value(number, 2, 1))
+    local record = samples().settings(1)
+    assert_true(record ~= nil, case.name .. ": the dub's take has a record")
+    assert_equal(record.key, nil, case.name .. ": not the old file's key")
+    assert_equal(record.tempo, nil, case.name .. ": nor its tempo")
+  end
+end)
+
+-- a canceled take that had never emptied its slot (a synced one before its
+-- preparation) puts the old audio back, still bound, with its settings
+test("a synced take canceled before its slot was emptied keeps the old file's settings", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  settle_load(context, 1, context.audio_dir .. "a.wav", 8)
+  samples().set(1, "key", 57)
+  local told = 0
+  samples().on_bind(function() told = told + 1 end)
+  params:set("record_feedback", 0); params:set("record_sync", 2)
+  record_buffer(1)
+  local number = S.buffers[1].records_sent
+  context.polls.fire("recordState", record_state_value(number, 0, 1))
+  assert_equal(samples().settings(1).key, 57, "through the arm wait")
+  record_buffer(1)
+  context.polls.fire("recordState", record_state_value(number, 3, 1))
+  report(context, 1, 8)  -- the old audio still in place
+  assert_equal(S.lib.buffers.status(1), "loaded")
+  assert_equal(samples().settings(1).key, 57, "the old file's settings")
+  assert_equal(told, 1, "the put-back's bind")
+end)
+
 test("bars and tempo set each other", function()
   local context = load_strata(); finish_startup(context)
   settle_load(context, 1, context.audio_dir .. "a.wav", 8)
