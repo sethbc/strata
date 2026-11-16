@@ -122,9 +122,10 @@ var checkArea = {
 
 // Eight clicks of rising level at 0.25 s steps: each found at the first
 // frame of its hop, the strongest (the last, loudest: each follows
-// silence, so its strength is its energy over the floor) 1, the others in
-// proportion, the list in frame order, the file in place before the
-// report, and no temporary file or .part left
+// silence, so its rise is its energy over half the floor) 1, the others
+// by their rise in level (log2 of that ratio, less 1), the list in frame
+// order, the file in place before the report, and no temporary file or
+// .part left
 var checkClicks = {
     var slot = 0, path = scratchRoot +/+ "onsets-clicks.wav", frames = (2.25 * rate).asInteger;
     var clicks = (1 .. 8).collect({ arg step; (step * 0.25 * rate).asInteger });
@@ -143,9 +144,9 @@ var checkClicks = {
     check.(fields.notNil and: { fields[\magic] == "strata-onsets 1" } and: { fields[\slot] == ["1"] }
         and: { fields[\frames] == [frames.asString] } and: { fields[\rate] == [rate.asString] },
         "onsets: the file names its format, slot, frames and rate (%)".format(fields));
-    // each strength: its energy over the floor's half, less 2, over the loudest's
+    // each strength: log2 of its energy over the floor's half, less 1, over the loudest's
     floor = engine.onsetFloor * 0.5;
-    expected = levels.collect({ arg level; ((2 * level.squared) / floor) - 2 });
+    expected = levels.collect({ arg level; ((2 * level.squared) / floor).log2 - 1 });
     expected = expected / expected.last;
     check.((strengths.size == found.size) and: { strengths.last == 1.0 } and: { strengths.every({ arg each; (each >= 0) and: { each <= 1 } }) }
         and: { (fields[\strengths] ? []).every({ arg text; (text.size == 5) and: { text[1] == $. } }) }
@@ -158,6 +159,68 @@ var checkClicks = {
             tempFilesOf.(engine, slot, run[\count]), partFilesOf.(engine, slot)));
     command.(\clearBuffer, slot); server.sync;
     File.delete(path);
+};
+
+// One hit after silence, then four hits inside a steady texture (a tone
+// whose every hop holds the same energy), each a known rise over the mean
+// of the four hops before it: 3, 9, 5 and 17 times, in that order in time.
+// A strength is the rise in level, log2 of that ratio less 1 (the 2x
+// threshold), over the strongest's: the hit after silence (its ratio over
+// half the floor, about 13000) is 1, and the four in the texture keep
+// three-decimal strengths that are distinct, non-zero and in the order of
+// their rises. Each click falls where the tone is 0, so its hop holds the
+// tone's energy and the click's alone.
+var checkTexture = {
+    var slot = 5, path = scratchRoot +/+ "onsets-texture.wav", start = 19 * hop, spacing = 4800;
+    var toneLevel = 0.02, period = Array.fill(64, { arg i; (i / 64 * 2pi).sin * toneLevel });
+    // a hop of the tone, both channels
+    var toneEnergy = 2 * hop * toneLevel.squared / 2;
+    var rises = [3, 9, 5, 17], frames = start + (spacing * (rises.size + 1));
+    var clicks = [start] ++ rises.collect({ arg rise, k; start + ((k + 1) * spacing) });
+    var levels = [0.9] ++ rises.collect({ arg rise; ((rise - 1) * toneEnergy / 2).sqrt });
+    var ratios = [(toneEnergy + (2 * 0.9.squared)) / (engine.onsetFloor * 0.5)] ++ rises;
+    var mono = Signal.newClear(frames), file, run, fields, found, texts, strengths, expected, inTexture;
+    mono.overWrite(h.periodic(period, 0, frames - start), start);
+    mono.putEach(clicks, levels);
+    file = SoundFile.new.headerFormat_("WAV").sampleFormat_("float").numChannels_(2).sampleRate_(rate);
+    file.openWrite(path); file.writeData(h.stereoOf(mono, mono)); file.close;
+    loadInto.(engine, slot, path);
+    run = analyze.(engine, slot);
+    fields = readOnsets.(onsetsFile.(engine, slot));
+    found = onsetFrames.(fields);
+    texts = fields !? { fields[\strengths] } ? [];
+    strengths = onsetStrengths.(fields);
+    expected = ratios.collect({ arg ratio; ratio.log2 - 1 });
+    expected = expected / expected[0];
+    inTexture = texts.drop(1);
+    check.((run[\failed] == false) and: { found == clicks.collect({ arg click; click div: hop * hop }) }
+        and: { strengths.size == 5 } and: { strengths[0] == 1.0 }
+        and: { inTexture.every({ arg text; text.asFloat > 0 }) } and: { inTexture.asSet.size == inTexture.size }
+        and: { (strengths.drop(1).order) == (rises.order) }
+        and: { strengths.every({ arg each, i; (each - expected[i]).abs < 0.0015 }) },
+        "onsets: a strength is the rise in level: a hit after silence and hits in a texture stay distinct, non-zero and in order (found %, strengths %, expected %)".format(
+            found, texts, expected.round(0.001)));
+    command.(\clearBuffer, slot); server.sync;
+    File.delete(path);
+};
+
+// Each hop's energy against a plain reference: noise, different on the
+// two channels, through hopEnergies (the two channels added, as the pass
+// adds them) and through each hop's own copyRange(...).squared.integral
+// (Signal's integral is one sum), over a whole chunk and over a chunk
+// longer than the hops asked for (cut to them)
+var checkEnergies = {
+    var size = engine.onsetChunkFrames, left = h.noise(size, 0.8), right = h.noise(size, 0.3);
+    var compare = { arg hops;
+        var energies = engine.hopEnergies(left, hops) + engine.hopEnergies(right, hops);
+        var reference = (0 .. hops - 1).collect({ arg i;
+            var first = i * hop, last = first + hop - 1;
+            left.copyRange(first, last).squared.integral + right.copyRange(first, last).squared.integral
+        });
+        (energies.size == hops) and: { reference.every({ arg each, i; ((energies[i] - each).abs / each) < 1e-5 }) }
+    };
+    check.(compare.(size div: hop) and: { compare.(40) } and: { left[0] != right[0] },
+        "onsets: each hop's energy is the sum of its frames' squares on both channels (noise, against copyRange and integral)");
 };
 
 // Silence and a steady tone (from the slot's first frame) have no onset:
@@ -372,6 +435,8 @@ body = {
         checkClicks.value;
         checkNone.value;
         checkKept.value;
+        checkTexture.value;
+        checkEnergies.value;
         checkInterrupted.value;
         checkRefused.value;
         checkLong.value;

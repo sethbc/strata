@@ -188,10 +188,12 @@
     // A chunk's hop strengths, and the last four hops' energies for the
     // next chunk. A hop is a candidate when its energy is above onsetFloor
     // and more than twice the mean of the four hops before it (carry holds
-    // the four before this chunk); its strength is that ratio less 2. The
-    // mean counts as at least half the floor, so a hop above the floor after
-    // silence is one, its strength in proportion to its energy. Signal
-    // arithmetic only.
+    // the four before this chunk). The mean counts as at least half the
+    // floor, so the divide after silence is finite and a hop above the
+    // floor there is a candidate. Its strength is the rise in level: log2
+    // of the ratio, less 1 (the 2x threshold), so a hit after silence
+    // (a ratio of 1e5 or more) and one inside a texture (a ratio of a few)
+    // stay on one scale once the strongest is 1. Signal arithmetic only.
     onsetChunkStrengths { arg energies, carry;
         var size = energies.size, around = Signal.newClear(size + 4), before, ratio;
         around.overWrite(carry, 0);
@@ -199,7 +201,7 @@
         before = around.copySeries(0, 1, size - 1) + around.copySeries(1, 2, size)
             + around.copySeries(2, 3, size + 1) + around.copySeries(3, 4, size + 2);
         ratio = energies.thresh(this.onsetFloor) / (before * 0.25).max(this.onsetFloor * 0.5);
-        ^[(ratio - 2).max(0).min(this.onsetStrengthCeiling), around.copySeries(size, size + 1, size + 3)]
+        ^[(ratio.log2 - 1).max(0).min(this.onsetStrengthCeiling), around.copySeries(size, size + 1, size + 3)]
     }
 
     // The strongest onsetCandidates at least gapHops hops apart: the

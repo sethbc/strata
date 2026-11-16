@@ -1438,7 +1438,8 @@ local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "f
 -- stopRecord, setBypass)
 local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "inputHeadFrame", "gateVoice",
   "voiceSynthFreed", "prepareTake", "startFastLfo", "watchFastLfo",
-  "loadSlot", "clearSlot", "saveSlot", "recordSlot", "stopRecordSlot", "setEffectBypass" }
+  "loadSlot", "clearSlot", "saveSlot", "recordSlot", "stopRecordSlot", "setEffectBypass",
+  "analyzeSlot", "runOnsetPass", "writeOnsetsFile" }
 -- the calls that hand a function to something that runs it later (the
 -- class library's and the engine's own): a method that makes one keeps its
 -- frame past its return
