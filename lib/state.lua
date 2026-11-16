@@ -328,7 +328,7 @@ return function()
 
   -- A per-voice LFO destination: "v<i> <label>" modulates v<i>_<suffix>.
   -- In the destination list each joins its voice's group (a global one,
-  -- register_lfo_global_destination, joins the globals)
+  -- register_lfo_global_destination, joins the group it names)
   function M.register_lfo_destination(label, suffix)
     local kind = "register_lfo_destination"
     require_open("lfo_destinations", kind)
@@ -441,14 +441,19 @@ return function()
 
   -- A global LFO destination (3.4): one destination, label modulating
   -- param_id, appended to the per-voice ones in registration order
-  -- ({label, param_id, global = true}); the labels share one namespace
-  function M.register_lfo_global_destination(label, param_id)
+  -- ({label, param_id, global = true, group}); the labels share one
+  -- namespace. group is the destination list's group it joins (#729):
+  -- "global" (the default) or "macros"; any other is refused
+  function M.register_lfo_global_destination(label, param_id, group)
     local kind = "register_lfo_global_destination"
     require_open("lfo_destinations", kind)
     require_arg(type(label) == "string" and label ~= "", kind, "a label is a string")
     require_arg(type(param_id) == "string" and param_id ~= "", kind .. " " .. label, "a param id is a string")
+    group = group == nil and "global" or group
+    require_arg(group == "global" or group == "macros", kind .. " " .. label,
+      "a group is global or macros, not " .. tostring(group))
     require_arg(not name_taken(M.registry.lfo_destinations, "label", label), kind, "a second label " .. label)
-    table.insert(M.registry.lfo_destinations, {label = label, param_id = param_id, global = true})
+    table.insert(M.registry.lfo_destinations, {label = label, param_id = param_id, global = true, group = group})
   end
 
   -- A pattern hit's output (lib/sequencer.lua, design §8.10): {name, play =

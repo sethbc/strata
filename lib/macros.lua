@@ -695,7 +695,7 @@ return function(S)
     -- the value, set silently by a recall, a transition and morph
     S.register_scene_field({id = macro_id(m), default = 0, set = function(value) M.set_silently(m, value) end})
     -- an LFO on macro m (design §4.4)
-    S.register_lfo_global_destination("macro " .. m, macro_id(m))
+    S.register_lfo_global_destination("macro " .. m, macro_id(m), "macros")
     -- the source (design §10.1), shown in its bank; MOD opens the target
     -- view itself on K3
     S.register_mod_source({
