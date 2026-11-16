@@ -247,14 +247,16 @@ local function pressed_with_room_for_one_note(context, S, ii, step)
   assert_true(4 >= ii.II.note_lines and 4 < 2 * ii.II.note_lines, "room for one note, not two")
 end
 
--- A queue pressed with 24 notes of one line waiting and room for 24 lines
--- (one line asking: a share of 48 / 2 = 24); er301 addresses ports
-local function pressed_with_room(context, S, ii, step)
+-- A queue pressed with 24 notes of one line waiting (the filler device's
+-- play_note, Just Friends unless named) and room for 24 lines (one line
+-- asking: a share of 48 / 2 = 24); er301 addresses ports
+local function pressed_with_room(context, S, ii, step, filler)
+  filler = filler or "jf"
   lead(context, S)
   ii.send_off("er301", "tr", 9, 0)
   drain(step, ii)
-  for k = 1, 48 do assert_true(ii.send("jf", "play_note", k, 5), "unpressed, one line may fill the queue") end
-  assert_equal(ii.send("jf", "play_note", 49, 5), false, "the 49th refused: pressed")
+  for k = 1, 48 do assert_true(ii.send(filler, "play_note", k, 5), "unpressed, one line may fill the queue") end
+  assert_equal(ii.send(filler, "play_note", 49, 5), false, "the 49th refused: pressed")
   for _ = 1, 6 do step() end
   assert_equal(ii.queued(), 24)
 end
@@ -414,6 +416,73 @@ test("a device's first note under a pressed queue is admitted or refused whole",
   assert_equal(ii.queued(), 47)
   assert_equal(ii.send("er301", "cv", 2, 2), false, "another port's first note, with no room for a note: refused")
   assert_equal(ii.send("er301", "tr", 2, 1), false, "whole")
+end)
+
+test("under a pressed queue a chord of play_note sends one note a step", function()
+  -- a device and command (the play_note kind) closes at its first admitted send in a step
+  for _, case in ipairs({{device = "jf", filler = "wsyn"}, {device = "wsyn", filler = "jf"}}) do
+    local context, S, ii = started()
+    local step = stepper(context, S)
+    pressed_with_room(context, S, ii, step, case.filler)
+    local function chord(first)
+      local admitted = {}
+      for k = 0, 3 do admitted[#admitted + 1] = tostring(ii.send(case.device, "play_note", first + k, 5)) end
+      return table.concat(admitted, " ")
+    end
+    assert_equal(chord(1), "true false false false", case.device .. ": the chord's first note, the rest refused")
+    step()
+    assert_equal(chord(5), "true false false false", case.device .. ": a step later, the next chord's first note")
+    local notes = {}
+    for _, line in ipairs(drain(step, ii)) do
+      if line:find("ii." .. case.device .. ".", 1, true) then notes[#notes + 1] = line end
+    end
+    assert_equal(table.concat(notes, "|"), "ii." .. case.device .. ".play_note(1, 5)|ii." .. case.device
+      .. ".play_note(5, 5)", case.device .. ": one note a step")
+  end
+end)
+
+test("a setting before a note in one step never splits the note", function()
+  -- the TELEXo's envelope time, then an envelope note on the same output
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  pressed_with_room_of_three(context, S, ii, step)
+  local function setting_then_note()
+    return table.concat({tostring(ii.send("txo", "env_att", 1, 20)), tostring(ii.send("txo", "cv", 1, 2)),
+      tostring(ii.send("txo", "env", 1, 1)), tostring(ii.send("txo", "tr", 1, 1))}, " ")
+  end
+  assert_equal(setting_then_note(), "true false false false", "room 3: the setting, then the note refused whole")
+  context, S, ii = started()
+  step = stepper(context, S)
+  pressed_with_room(context, S, ii, step)
+  assert_equal(setting_then_note(), "true true true true", "with room for the note: all of it")
+  local output_1 = {}
+  for _, line in ipairs(drain(step, ii)) do
+    if line:find("ii.txo.", 1, true) then output_1[#output_1 + 1] = line end
+  end
+  assert_equal(table.concat(output_1, "|"), "ii.txo.env_att(1, 20)|ii.txo.cv(1, 2)|ii.txo.env(1, 1)|ii.txo.tr(1, 1)",
+    "in order")
+end)
+
+test("after a note's trigger the line's later sends in the step are refused, its off excepted", function()
+  -- the re-review's probes, at a pressed queue with room
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  pressed_with_room(context, S, ii, step)
+  assert_equal(ii.send("er301", "cv", 1, 2), true, "a note's pitch")
+  assert_equal(ii.send("er301", "tr", 1, 1), true, "its trigger")
+  assert_equal(ii.send("er301", "cv", 1, 3), false, "a re-pitch after the trigger refused")
+  -- a trigger with no pitch, then a note
+  assert_equal(ii.send("er301", "tr", 2, 1), true, "a trigger alone")
+  assert_equal(ii.send("er301", "cv", 2, 2), false, "then a note's pitch refused")
+  assert_equal(ii.send("er301", "tr", 2, 1), false, "and its trigger")
+  -- a note, its off, then a note on one port
+  assert_equal(ii.send("er301", "cv", 3, 2), true)
+  assert_equal(ii.send("er301", "tr", 3, 1), true)
+  local waiting = ii.queued()
+  assert_equal(ii.send_off("er301", "tr", 3, 0), true, "the off is queued")
+  assert_equal(ii.queued(), waiting + 1)
+  assert_equal(ii.send("er301", "cv", 3, 4), false, "the second note's pitch refused")
+  assert_equal(ii.send("er301", "tr", 3, 1), false, "and its trigger")
 end)
 
 -- The issue's flood, at the bus: seven voices, chords of eight, four hits in

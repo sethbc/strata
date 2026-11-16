@@ -50,9 +50,11 @@ return function(S)
     -- #710's turns: the devices whose every command with an argument takes
     -- the port it addresses first (crow-ii.md §2: the ER-301's tr, cv and
     -- the rest; the TELEXo's tr, cv, env and the rest; their global
-    -- commands take none), so a port is one line from the start; and the
-    -- command that starts a note on them (each sends a note's tr last)
-    port_devices = {er301 = true, txo = true}, note_trigger = "tr",
+    -- commands take none), so a port is one line from the start (moving
+    -- this into a device's registration is #717); the command that starts
+    -- a note on them (each sends a note's tr last), and a note's first
+    -- send (its pitch)
+    port_devices = {er301 = true, txo = true}, note_trigger = "tr", note_pitch = "cv",
   }
 
   -- leading: the flag send reads (set while the rig says strata with a
@@ -164,15 +166,15 @@ return function(S)
   -- to crow, nil never), asked (the step of its latest send), asking
   -- (counted in state.asking), wanting (the refusal that put it in
   -- state.wanting, nil when not there), and the step's decision: decided
-  -- (the step), admitted (true or false), closed (its note's trigger
-  -- admitted) and commands (those admitted in it)
+  -- (the step), admitted (true or false) and closed (its note done: a
+  -- port's trigger, or a device-and-command line's first send, admitted)
   local function turn_for(entry)
     local id = entry.pair
     if SPEC.port_devices[entry.device] and entry.first ~= "" then id = entry.device .. "\n\n" .. entry.first end
     local turn = state.turns[id]
     if not turn then
       turn = {id = id, waiting = 0, served = nil, asked = nil, asking = false, wanting = nil,
-        decided = nil, admitted = false, closed = false, commands = {}}
+        decided = nil, admitted = false, closed = false}
       state.turns[id] = turn
     end
     return turn
@@ -223,22 +225,23 @@ return function(S)
   end
 
   -- The line's later sends in the step follow its decision, within the
-  -- bound. While pressed the decision covers one note of the line: the
-  -- note stays open until the line's first admitted trigger (a re-pitch
-  -- before it closes nothing), and after it the line's later notes in the
-  -- step are refused whole (their cv and their tr). A send repeating a
-  -- command already admitted in the step starts a new note (a re-pitch's cv,
-  -- then the note's): with room for less than a note (II.note_lines) it and
-  -- the rest of the line in the step are refused
+  -- bound. While pressed the decision covers one note of the line: a
+  -- port's note stays open until its first admitted trigger (a re-pitch or
+  -- a setting before it closes nothing), a device-and-command line (the
+  -- play_note kind) closes at its first admitted send, and after that the
+  -- line's later sends in the step are refused. A pitch after an earlier
+  -- send of the line in the step begins a note (after a re-pitch or a
+  -- setting): with room for less than a note (II.note_lines) it and the
+  -- rest of the line in the step are refused, so the note goes whole
   local function admits(turn, command)
     if turn.decided ~= state.step then
-      turn.decided, turn.admitted, turn.closed, turn.commands = state.step, decides(turn), false, {}
+      turn.decided, turn.admitted, turn.closed = state.step, decides(turn), false
       return turn.admitted
     end
     if not turn.admitted or #state.queue >= II.queue_max then return false end
     if not state.pressed then return true end
     if turn.closed then return false end
-    if turn.commands[command] and II.queue_max - #state.queue < II.note_lines then
+    if command == SPEC.note_pitch and II.queue_max - #state.queue < II.note_lines then
       turn.admitted = false
       return false
     end
@@ -291,8 +294,7 @@ return function(S)
       refuse(turn)
       return false
     end
-    turn.commands[command] = true
-    if command == SPEC.note_trigger then turn.closed = true end
+    if command == SPEC.note_trigger or turn.id == entry.pair then turn.closed = true end
     entry.turn = turn
     turn.waiting = turn.waiting + 1
     table.insert(state.queue, entry)
