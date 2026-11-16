@@ -51,6 +51,7 @@ return function(S)
     columns = {"target", "min", "max"},
     routing_rows = {"source", "dest", "depth", "on"},
     field_label_max = 8,  -- a settings row's label, as drawn and named in the hint (3.7)
+    hint_width = 128,     -- the hint row's width (lib/ui/header.lua's HINT_ROW_WIDTH), which K3:edit shares
     random = {depth = {0, 30}, rate = {0.02, 0.5}, matrix = {-50, 50}},
   }
   S.MOD_PAGE = MOD_PAGE
@@ -429,11 +430,17 @@ return function(S)
     return fields[state.settings_row], fields
   end
 
+  -- Whether a source has settings now: fields that give at least one row
+  local function has_settings(record)
+    return record ~= nil and record.fields ~= nil and #source_fields(record) > 0
+  end
+
   -- Open the settings of the source with key, on its first row: false
-  -- (nothing changed) for a source without fields or no source
+  -- (nothing changed) for no source, one without fields, or one whose
+  -- fields function returns no row now
   local function open_settings(key)
     local record = S.lib.mod_sources.get(key)
-    if not (record and record.fields) then return false end
+    if not has_settings(record) then return false end
     S.mod_page.settings, S.mod_page.settings_row = key, 1
     change_view("settings")
     return true
@@ -956,8 +963,15 @@ return function(S)
     if row.kind == "routing" then return "K3:edit E3:depth" end
     local actions = row.source.row
     local own = (actions and actions.hints) and (actions.hints(false) or "") or ""
-    -- K3 opens a source's settings when its row has no press of its own (3.7)
-    if row.source.fields and not (actions and actions.press) then
+    -- K3 opens a source's settings when its row has no press of its own
+    -- (3.7); the row's own hint then gives up its last parts until both fit
+    if has_settings(row.source) and not (actions and actions.press) then
+      local room = MOD_PAGE.hint_width - screen.text_extents("K3:edit ")
+      while own ~= "" and screen.text_extents(own) > room do
+        local shorter = own:match("^(.*%S)%s+%S+$")
+        if not shorter then own = S.lib.ui_text.fit_text(own, room) break end
+        own = shorter
+      end
       return own ~= "" and ("K3:edit " .. own) or "K3:edit"
     end
     return own
