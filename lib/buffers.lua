@@ -776,6 +776,9 @@ return function(S)
       if has_audio then
         apply_buffer_state(slot, kept)
         changed = true
+      elseif S.lib.samples.is_bound(slot) then
+        -- 3.7: the take had emptied the slot (no report of it said so)
+        S.lib.samples.unbind(slot)
       end
     end
     if buffer.recording and S.lib.record.slot_reported(slot, seconds) then changed = true end

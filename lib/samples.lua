@@ -274,6 +274,11 @@ return function(S)
     resend(slot)
   end
 
+  -- Whether the slot is bound (to its take's record or a file's)
+  function M.is_bound(slot)
+    return valid_slot(slot) and bound[slot] ~= nil
+  end
+
   -- The slot emptied (a clear, a replace take's start, a load that settled
   -- with no audio)
   function M.unbind(slot)
