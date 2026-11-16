@@ -7,7 +7,8 @@
 -- (S.lib.mod_sources), each drawn and edited through its record (name,
 -- describe(), row); the bank row, the morph and scatter rows and the
 -- matrix's routings R1-R16 are the page's own. K3 on a macro row opens its
--- target view, on a routing row the routing view; ALT+K3 there learns
+-- target view, on a routing row the routing view, on a source with fields
+-- (3.7) its settings view; ALT+K3 in the first two learns
 -- (S.lib.macros.learn, S.lib.matrix.learn), which waits across page
 -- changes with a notice in the header, canceled by K2 in the view, a new
 -- learn or its timeout. ALT+K2 on release randomizes the scatter or
@@ -19,7 +20,9 @@
 -- tests and the rings (lib/arc/mod.lua) read and move: place, view,
 -- section, cursor_routing, routing, macro, target_row, target_bounds,
 -- nudge_bound, move_target_row, step_source, step_dest, move_routing,
--- source_position, dest_position, routing_plays, carry_context.
+-- source_position, dest_position, routing_plays, carry_context, and 3.7's
+-- open_settings, settings_row, settings_count, move_settings_row,
+-- turn_setting.
 
 return function(S)
   local M = {}
@@ -34,7 +37,8 @@ return function(S)
   -- label), its value right-aligned at 124. A row that does not play (a
   -- routing off or incomplete) is dim. The two views: a title on y 16,
   -- rows from y 24, 7 px apart (five of the eight targets in view). The
-  -- target bounds step 1 % (ALT+E3 0.1 %). The randomize ranges (#557,
+  -- target bounds step 1 % (ALT+E3 0.1 %). The settings view (3.7) draws
+  -- as the routing view does, its title the source's name. The randomize ranges (#557,
   -- plan item 4): scatter's depth (whole percents) and rate (even in
   -- octaves), a complete routing's depth (whole percents)
   local MOD_PAGE = {
@@ -51,10 +55,11 @@ return function(S)
   S.MOD_PAGE = MOD_PAGE
 
   -- The cursor: the list row (an index and its id), the view ("list",
-  -- "targets" or "routing"; views counts every change of it), the target
-  -- view's macro, row and column, the routing view's routing and row
+  -- "targets", "routing" or 3.7's "settings"; views counts every change of
+  -- it), the target view's macro, row and column, the routing view's
+  -- routing and row, the settings view's source key and row
   S.mod_page = {row = nil, row_id = nil, view = "list", views = 0, macro = 1, target_row = 1, target_column = 1,
-    routing = 1, routing_row = 1}
+    routing = 1, routing_row = 1, settings = nil, settings_row = 1}
 
   local function page_record() return S.registry.pages[UI_PAGES.index.MOD] end
   local function depth_id(k) return "matrix_" .. k .. "_depth" end
@@ -403,13 +408,63 @@ return function(S)
     change_view("routing")
   end
 
+  -- The settings view (3.7, design §0.4): a source's fields, a list or
+  -- what its function returns at each read (nothing that is not a table)
+  local function source_fields(record)
+    local fields = record and record.fields
+    if type(fields) == "function" then fields = fields() end
+    if type(fields) ~= "table" then return {} end
+    return fields
+  end
+
+  local function settings_source() return S.lib.mod_sources.get(S.mod_page.settings) end
+
+  -- The cursor's field (nil with none) and the settings view's rows, the
+  -- cursor kept on a row
+  local function settings_field()
+    local state = S.mod_page
+    local fields = source_fields(settings_source())
+    state.settings_row = util.clamp(state.settings_row, 1, math.max(#fields, 1))
+    return fields[state.settings_row], fields
+  end
+
+  -- Open the settings of the source with key, on its first row: false
+  -- (nothing changed) for a source without fields or no source
+  local function open_settings(key)
+    local record = S.lib.mod_sources.get(key)
+    if not (record and record.fields) then return false end
+    S.mod_page.settings, S.mod_page.settings_row = key, 1
+    change_view("settings")
+    return true
+  end
+
+  -- E2 (and arc ring 1): another row; E3 (ring 2): the row's enc, its
+  -- fine_enc with ALT where it has one
+  local function move_settings_row(d)
+    local state = S.mod_page
+    local _, fields = settings_field()
+    state.settings_row = util.clamp(state.settings_row + d, 1, math.max(#fields, 1))
+  end
+
+  local function turn_setting(d)
+    local field = settings_field()
+    if not field then return end
+    local turn = (S.alt_held and field.fine_enc) or field.enc
+    if type(turn) == "function" then turn(d) end
+  end
+
   -- Back to the list (K2), learn canceled, the cursor on the row the view
   -- was opened from where it shows
   local function close_view()
     local state = S.mod_page
     S.lib.macros.cancel_learn()
     S.lib.matrix.cancel_learn()
-    local id = state.view == "targets" and ("source:macro" .. state.macro) or ("routing:" .. state.routing)
+    local id = "routing:" .. state.routing
+    if state.view == "targets" then
+      id = "source:macro" .. state.macro
+    elseif state.view == "settings" then
+      id = "source:" .. tostring(state.settings)
+    end
     change_view("list")
     M.place(id)
   end
@@ -428,6 +483,8 @@ return function(S)
         open_targets(m)
       elseif row.source.row and row.source.row.press then
         row.source.row.press()
+      elseif row.source.fields then
+        open_settings(row.source.key)
       end
     end
   end
@@ -515,6 +572,8 @@ return function(S)
       targets_enc(n, d)
     elseif view == "routing" then
       routing_enc(n, d)
+    elseif view == "settings" then
+      if n == 2 then move_settings_row(d) elseif n == 3 then turn_setting(d) end
     elseif n == 2 then
       local rows, index = list_cursor()
       set_cursor(rows, FL.move(rows, index, d))
@@ -538,6 +597,9 @@ return function(S)
         close_view()
       elseif n == 3 and state.view == "targets" then
         state.target_column = state.target_column % #MOD_PAGE.columns + 1
+      elseif n == 3 and state.view == "settings" then
+        local field = settings_field()
+        if field and type(field.press) == "function" then field.press() end
       elseif n == 3 then
         toggle(on_id(state.routing))
       end
@@ -560,6 +622,8 @@ return function(S)
         S.lib.macros.learn(state.macro, state.target_row)
       elseif state.view == "routing" then
         if MOD_PAGE.routing_rows[state.routing_row] == "dest" then S.lib.matrix.learn(state.routing) end
+      elseif state.view == "settings" then
+        return  -- nothing to learn or toggle in a source's settings
       else
         local row = cursor_row()
         if row.kind == "routing" then
@@ -602,6 +666,8 @@ return function(S)
     elseif state.view == "routing" then
       if not routing_holds(state.routing) then return nil end
       return function() S.lib.matrix.clear(state.routing) end
+    elseif state.view == "settings" then
+      return nil
     end
     local row = cursor_row()
     if row.kind == "routing" then
@@ -652,7 +718,7 @@ return function(S)
   local function mod_randomize_section()
     local view = S.mod_page.view
     if view == "routing" then return matrix_spec() end
-    if view == "targets" then return nil end
+    if view == "targets" or view == "settings" then return nil end
     local section = cursor_row().section
     if section == "scatter" then return SCATTER_SPEC end
     if section == "matrix" then return matrix_spec() end
@@ -827,12 +893,36 @@ return function(S)
       spacing = MOD_PAGE.view_spacing}, draw_routing_row)
   end
 
+  -- The settings view's rows: each field's label and value(), as the
+  -- routing view's rows draw (a function's list is unchecked: a label or
+  -- value that is not a string draws as its text)
+  local function draw_settings_row(field, y, selected, value_right)
+    local level = selected and L.selected or L.dim
+    local label = S.lib.ui_text.printable(tostring(field.label or ""))
+    draw_text(0, y, label, level)
+    local value = type(field.value) == "function" and field.value() or ""
+    local room = value_right - screen.text_extents(label) - MOD_PAGE.gap
+    value = S.lib.ui_text.fit_text(S.lib.ui_text.printable(tostring(value or "")), room)
+    if value ~= "" then draw_text(value_right, y, value, level, true) end
+  end
+
+  local function draw_settings()
+    local state = S.mod_page
+    local record = settings_source()
+    local _, fields = settings_field()
+    draw_text(0, MOD_PAGE.title_y, S.lib.ui_text.printable(record and record.name or ""), L.selected)
+    FL.draw(fields, state.settings_row, {visible = MOD_PAGE.visible_rows, first_y = MOD_PAGE.view_first_y,
+      spacing = MOD_PAGE.view_spacing}, draw_settings_row)
+  end
+
   local function redraw_mod()
     local view = S.mod_page.view
     if view == "targets" then
       draw_targets()
     elseif view == "routing" then
       draw_routing()
+    elseif view == "settings" then
+      draw_settings()
     else
       local rows, index = list_cursor()
       FL.draw(rows, index, {visible = MOD_PAGE.visible_rows, first_y = MOD_PAGE.first_row_y,
@@ -902,6 +992,16 @@ return function(S)
 
   local function view_hint(alt_held)
     local state = S.mod_page
+    if state.view == "settings" then
+      local field = settings_field()
+      if alt_held then return (field and type(field.fine_enc) == "function") and "E3:fine" or "" end
+      -- a row with a press names it, and E2:row gives way: with an 8-letter
+      -- label the four parts pass the hint row's 128 px
+      if field and type(field.press) == "function" then
+        return joined("K2:back", "K3:" .. S.lib.ui_text.printable(tostring(field.label)), "E3:edit")
+      end
+      return "K2:back E2:row E3:edit"
+    end
     if state.view == "targets" then
       local column = MOD_PAGE.columns[state.target_column]
       if alt_held then return joined(k2_part(), "K3:learn", column == "target" and "E3:group" or "E3:fine") end
@@ -934,6 +1034,8 @@ return function(S)
     for k = 1, NUM_GESTURES do
       if S.lib.gestures.state(k) == "recording" then return true end
     end
+    -- a source's settings (3.7) may show live values, as a later section's row
+    if S.mod_page.view == "settings" then return true end
     if S.mod_page.view ~= "list" then return false end
     local known = {}
     for _, name in ipairs(MOD_PAGE.sections) do known[name] = true end
@@ -974,8 +1076,24 @@ return function(S)
     local view = S.mod_page.view
     if view == "targets" then return "macros" end
     if view == "routing" then return "matrix" end
+    if view == "settings" then
+      local record = settings_source()
+      return record and record.section or nil
+    end
     return cursor_row().section
   end
+
+  -- 3.7's settings view (design §0.4): open it from code (the source's key;
+  -- false for a source without fields, the view left as it was; the page
+  -- shown is not changed), and what its rings read and move
+  M.open_settings = open_settings
+  function M.settings_row() return S.mod_page.settings_row end
+  function M.settings_count()
+    local _, fields = settings_field()
+    return #fields
+  end
+  M.move_settings_row = move_settings_row
+  M.turn_setting = turn_setting
 
   -- The routing under the list cursor, or nil
   function M.cursor_routing()
@@ -1221,6 +1339,26 @@ return function(S)
   table.insert(layout_states, view_state("R4 routing, unknown parts", function()
     S.lib.matrix.set_routing(4, "a_later_source_key", "v7_a_later_destination"); open_routing(4)
   end, 2))
+  -- 3.7: a later source's settings view, six rows at their widest (an
+  -- 8-letter label, a long value, a press), each row selected
+  local SETTINGS_PROBE_ROWS = 6
+  local function settings_probe()
+    if S.lib.mod_sources.get("layout settings") then return end
+    local fields = {}
+    for k = 1, SETTINGS_PROBE_ROWS do
+      fields[k] = {label = string.rep("W", 8), value = function() return string.rep("W", 30) end,
+        enc = function() end, press = function() end}
+    end
+    S.register_mod_source({key = "layout settings", name = "WWWW", section = "a section of a later release",
+      range = {0, 1}, value = function() return 0 end, fields = fields})
+  end
+  for row = 1, SETTINGS_PROBE_ROWS do
+    table.insert(layout_states, {name = "a later source's settings, row " .. row, setup = function()
+      settings_probe()
+      open_settings("layout settings")
+      S.mod_page.settings_row = row
+    end})
+  end
 
   -- The page's record, at MOD's place in UI_PAGES: enc, key and redraw in
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. Its arc fields

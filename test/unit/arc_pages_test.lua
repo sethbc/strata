@@ -1570,4 +1570,50 @@ test("the step editor's ALT ring 2 turns the note under the cursor", function()
   S.lib.pages_seq.close_step_editor(1)
 end)
 
+-- 3.7 (design §0.4, plan ruling 14): MOD's settings view on the arc
+test("MOD's settings view: ring 1 the row, ring 2 the value, rings 3 and 4 dark", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  local log = {}
+  local fields = {}
+  for k = 1, 3 do
+    fields[k] = { label = "f" .. k, value = function() return tostring(k) end,
+      enc = function(d) log[#log + 1] = "f" .. k .. " " .. d end }
+  end
+  S.register_mod_source({ key = "probe", name = "PRB", section = "probes", range = { 0, 1 },
+    value = function() return 0 end, fields = fields })
+  show_page("MOD")
+  assert_true(S.lib.pages_mod.open_settings("probe"))
+  local function lit(ring)
+    local count = 0
+    for x = 1, 64 do if device:get_led(ring, x) > 0 then count = count + 1 end end
+    return count
+  end
+  arc_redraw()
+  assert_true(lit(1) > 0, "ring 1 shows the row")
+  assert_equal(lit(3), 0, "ring 3 dark"); assert_equal(lit(4), 0, "ring 4 dark")
+  context.arc.turn(1, 1, 20)
+  assert_equal(S.mod_page.settings_row, 2, "ring 1: 20 ticks a row")
+  context.arc.turn(1, 1, 100)
+  assert_equal(S.mod_page.settings_row, 3, "the row stops at the last")
+  context.arc.turn(1, 2, 45)
+  assert_equal(table.concat(log, "; "), "f3 2", "ring 2: the row's enc, in whole steps")
+  context.arc.turn(1, 2, 15)
+  assert_equal(table.concat(log, "; "), "f3 2; f3 1", "the ticks carried")
+  context.arc.turn(1, 2, 15)                  -- 15 carried on f3
+  context.arc.turn(1, 1, -20)
+  assert_equal(S.mod_page.settings_row, 2)
+  context.arc.turn(1, 2, 5)
+  assert_equal(#log, 2, "another row forgets the carry")
+  context.arc.turn(1, 1, 20)
+  context.arc.turn(1, 3, 100); context.arc.turn(1, 4, 100)
+  assert_equal(#log, 2, "rings 3 and 4 do nothing")
+  assert_equal(S.mod_page.view, "settings")
+  key(1, 1); context.arc.turn(1, 2, 20); key(1, 0)
+  assert_equal(log[#log], "f3 1", "with ALT the view keeps its rings")
+  arc_redraw()
+  assert_equal(lit(3), 0); assert_equal(lit(4), 0)
+end)
+
 end

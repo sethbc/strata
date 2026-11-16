@@ -672,6 +672,142 @@ test("the morph section shows C, D and y", function()
   assert_screen_layout(context, "the morph section")
 end)
 
+-- 3.7's settings view (design §0.4, plan ruling 14): a source's fields, a
+-- field list a source opens with K3. probe_settings registers a source
+-- "probe" (PRB) whose fields alpha and beta log each call
+local function probe_settings(S, log, extra)
+  local values = { alpha = 1, beta = 2 }
+  local fields = {
+    { label = "alpha", value = function() return values.alpha .. " ms" end,
+      enc = function(d) log[#log + 1] = "alpha enc " .. d; values.alpha = values.alpha + d end },
+    { label = "beta", value = function() return "b" .. values.beta end,
+      enc = function(d) log[#log + 1] = "beta enc " .. d end,
+      fine_enc = function(d) log[#log + 1] = "beta fine " .. d end,
+      press = function() log[#log + 1] = "beta press" end },
+  }
+  local record = { key = "probe", name = "PRB", section = "probes", range = { 0, 1 },
+    value = function() return 0 end, fields = fields }
+  for field, value in pairs(extra or {}) do record[field] = value end
+  S.register_mod_source(record)
+end
+
+test("K3 on a source with fields opens its settings, and K2 goes back to its row", function()
+  local context, S = loaded()
+  local log = {}
+  probe_settings(S, log)
+  place(S, "source:probe")
+  tap(3); redraw()
+  assert_equal(S.mod_page.view, "settings", "the settings view")
+  assert_equal(S.mod_page.settings, "probe", "of the probe")
+  assert_equal(S.mod_page.settings_row, 1, "on its first row")
+  assert_equal(S.lib.pages_mod.view(), "settings")
+  assert_equal(row_text(context, 16, 0), "PRB", "the source's name as the title")
+  assert_equal(row_text(context, 24, 0), "alpha  1 ms", "the first row: its label and value")
+  assert_equal(row_text(context, 31, 0), "beta  b2", "the second, 7 px below")
+  assert_true(screen_shows(context, "alpha") and screen_shows(context, "beta"), "both labels")
+  assert_equal(hint_text(context), "K2:back E2:row E3:edit", "no press on alpha")
+  enc(3, 2); redraw()
+  assert_equal(table.concat(log, "; "), "alpha enc 2", "E3 the row's enc")
+  assert_equal(row_text(context, 24, 0), "alpha  3 ms", "its value read again at the draw")
+  key(1, 1); enc(3, -1); key(1, 0)
+  assert_equal(log[#log], "alpha enc -1", "ALT+E3 with no fine_enc: its enc")
+  tap(3)
+  assert_equal(#log, 2, "K3 on a row without press does nothing")
+  for index = #log, 1, -1 do log[index] = nil end
+  enc(2, 1); redraw()
+  assert_equal(S.mod_page.settings_row, 2, "E2 the row")
+  enc(3, 1)
+  assert_equal(table.concat(log, "; "), "beta enc 1", "E3 the second row's enc")
+  key(1, 1); enc(3, 1); key(1, 0)
+  assert_equal(log[#log], "beta fine 1", "ALT+E3 its fine_enc")
+  redraw()
+  assert_equal(hint_text(context), "K2:back K3:beta E3:edit", "a row with a press names it (E2:row gives way)")
+  tap(3)
+  assert_equal(log[#log], "beta press", "K3 its press")
+  enc(2, 5)
+  assert_equal(S.mod_page.settings_row, 2, "E2 stops at the last row")
+  redraw()
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == 31 and entry.text == "beta" then assert_equal(entry.level, 15, "the cursor's row bright") end
+    if entry.y == 24 and entry.text == "alpha" then assert_true(entry.level < 15, "the others dim") end
+  end
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "E3:fine", "with ALT: fine where the row has fine_enc")
+  key(1, 0)
+  -- ALT+K2 and ALT+K3 change nothing in the view
+  local before, calls = param_snapshot(), #log
+  key(1, 1); tap(3); key(1, 0)
+  alt_k2_quick()
+  assert_equal(param_snapshot(), before, "ALT+K3 and ALT+K2 do nothing")
+  assert_equal(#log, calls, "and call no field")
+  assert_equal(S.mod_page.view, "settings", "the view stays")
+  assert_screen_layout(context, "the settings view")
+  tap(2); redraw()
+  assert_equal(S.mod_page.view, "list", "K2 goes back")
+  assert_equal(cursor_label(context), "PRB", "to the source's row")
+  -- open_settings from code
+  S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.MAIN)
+  assert_true(S.lib.pages_mod.open_settings("probe"), "open_settings opens it")
+  assert_equal(S.mod_page.view, "settings"); assert_equal(S.mod_page.settings_row, 1)
+  assert_true(not S.lib.pages_mod.open_settings("lfo1"), "a source without fields has none")
+  assert_true(not S.lib.pages_mod.open_settings("no such source"), "nor an unknown key")
+  assert_equal(S.mod_page.settings, "probe", "the view stays as it was")
+end)
+
+test("a source with a press of its own keeps it", function()
+  local context, S = loaded()
+  local log = {}
+  probe_settings(S, log, { row = { press = function() log[#log + 1] = "row press" end } })
+  place(S, "source:probe")
+  tap(3)
+  assert_equal(S.mod_page.view, "list", "the row's press, not the settings")
+  assert_equal(table.concat(log, "; "), "row press")
+  -- an LFO row still goes to the LFO page
+  show_page("MOD")
+  place(S, "source:lfo2")
+  tap(3)
+  assert_equal(S.ui_page, S.constants.UI_PAGES.index.LFO, "the LFO page")
+  assert_true(context ~= nil)
+end)
+
+test("the settings view lays out with each row selected", function()
+  local context, S = loaded()
+  local record = S.registry.pages[S.constants.UI_PAGES.index.MOD]
+  local names = {}
+  for _, state in ipairs(record.layout_states) do
+    if state.name:find("settings", 1, true) then names[#names + 1] = state.name end
+  end
+  assert_true(#names >= 6, "a layout state per row of a six-row source: " .. table.concat(names, "; "))
+  -- six rows at their widest: an 8-letter label, a long value, each with a press
+  local fields = {}
+  for k = 1, 6 do
+    fields[k] = { label = string.rep("W", 8), value = function() return string.rep("W", 30) end,
+      enc = function() end, press = function() end }
+  end
+  S.register_mod_source({ key = "wide", name = "WWWW", section = "probes", range = { 0, 1 },
+    value = function() return 0 end, fields = fields })
+  for row = 1, #fields do
+    assert_true(S.lib.pages_mod.open_settings("wide"))
+    enc(2, row - 1)
+    redraw()
+    assert_equal(S.mod_page.settings_row, row)
+    assert_screen_layout(context, "the settings view, row " .. row)
+    assert_equal(hint_text(context), "K2:back K3:WWWWWWWW E3:edit", "the widest hint fits, row " .. row)
+  end
+  -- fields given by a function are read at each draw
+  local count = 1
+  S.register_mod_source({ key = "grows", name = "GRW", section = "probes", range = { 0, 1 },
+    value = function() return 0 end, fields = function()
+      local list = {}
+      for k = 1, count do list[k] = { label = "f" .. k, value = function() return tostring(k) end } end
+      return list
+    end })
+  assert_true(S.lib.pages_mod.open_settings("grows")); redraw()
+  assert_true(screen_shows(context, "f1") and not screen_shows(context, "f2"), "one row")
+  count = 2; context.screen.clear(); redraw()
+  assert_true(screen_shows(context, "f2"), "a row added shows at the next draw")
+end)
+
 test("the hint row names each row's keys", function()
   local context, S = loaded()
   local function hints_on(id, alt)

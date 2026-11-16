@@ -6,7 +6,10 @@
 -- depth, 3 its rate, 4 morph B in whole steps. In the target view: the
 -- cursor row's min and max (0-1 in a full turn), the macro, the row. In the
 -- routing view: the depth, then the source, the destination and the
--- routing in whole steps. The whole-step rings carry their ticks through
+-- routing in whole steps. In 3.7's settings view: ring 1 the row and ring 2
+-- the row's value, both in whole steps (the value through the page's
+-- turn_setting, the field's enc); only ring 1 is drawn, and rings 3 and 4
+-- do nothing. The whole-step rings carry their ticks through
 -- arc_whole_steps under "mod:<what>", and forget them when what they were
 -- turned on changes: the view (each opening of one), the section, the
 -- shown bank, the macro or the routing (S.lib.pages_mod.carry_context; a
@@ -91,12 +94,24 @@ return function(S)
     end
   end
 
+  local function settings_delta(n, delta)
+    local page = mod_page()
+    if n ~= 1 and n ~= 2 then return end
+    -- ring 2's carry belongs to the row it was turned on
+    local context = n == 1 and page.carry_context() or (page.carry_context() .. "|" .. page.settings_row())
+    local steps = carried_steps(n == 1 and "mod:settings_row" or "mod:setting", context, delta)
+    if steps == 0 then return end
+    if n == 1 then page.move_settings_row(steps) else page.turn_setting(steps) end
+  end
+
   local function arc_mod_delta(n, delta)
     local view = mod_page().view()
     if view == "targets" then
       targets_delta(n, delta)
     elseif view == "routing" then
       routing_delta(n, delta)
+    elseif view == "settings" then
+      settings_delta(n, delta)
     else
       local param_id = list_param(n)
       if param_id then arc_sweep_param(param_id, delta) end
@@ -130,6 +145,9 @@ return function(S)
       arc_ring_fill_position(arc_port, 2, page.source_position(), level)
       arc_ring_fill_position(arc_port, 3, page.dest_position(), level)
       arc_ring_fill_position(arc_port, 4, (page.routing() - 1) / (MATRIX_SLOTS - 1), level)
+    elseif view == "settings" then
+      -- the row; a field has no range to show, so ring 2 stays dark too
+      arc_ring_fill_position(arc_port, 1, (page.settings_row() - 1) / math.max(page.settings_count() - 1, 1), level)
     else
       for n = 1, 4 do
         local param_id, routing = list_param(n)

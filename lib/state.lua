@@ -35,7 +35,7 @@ return function()
     scene_fields = {},  -- global scene fields {id, default, discrete} (register_scene_field)
     source_change = {}, -- fn(voice_idx, source), run by each v<i>_source action before its sync, never in a scene recall
     param_filters = {}, -- per voice param key: fn(voice_idx, value, previous, turned) -> value
-    lfo_destinations = {},  -- per-voice LFO destinations {label, suffix}, after the built-in ones
+    lfo_destinations = {},  -- per-voice LFO destinations {label, suffix}, each in its voice's group
     fx_params = {},     -- fx group records {name, count, add}, after the group's own params
     grain_restart = {}, -- fn(voice_idx), run by lib/engine_sync.lua after a voiceOn and a running voice's source switch
     alt_release = {},   -- fn(), run when ALT goes from held to not held
@@ -58,6 +58,8 @@ return function()
     note_targets = {},      -- {name, routed, note_on, note_off, express, stop_all, rows, status}
     ii_devices = {},        -- {name, ready, release, param_count, add_params}
     macro_targets = {},     -- {id, label}: control params the macros offer after the matrix depths
+    -- 3.7's (design §0.2), read at each use
+    voice_hit = {},         -- {name, hit = fn(voice_idx, info)}, told once per hit by lib/engine_sync.lua
   }
 
   -- The registries init reads once (voice_params, scene_fields,
@@ -324,8 +326,8 @@ return function()
   end
 
   -- A per-voice LFO destination: "v<i> <label>" modulates v<i>_<suffix>.
-  -- They follow every built-in destination, by registration and then voice,
-  -- so saved destination indices keep their meaning
+  -- In the destination list each joins its voice's group (a global one,
+  -- register_lfo_global_destination, joins the globals)
   function M.register_lfo_destination(label, suffix)
     local kind = "register_lfo_destination"
     require_open("lfo_destinations", kind)
@@ -386,9 +388,13 @@ return function()
   local PSET_HOOK_FIELDS = {name = true, write = true, read = true, delete = true}
   local STEP_OUTPUT_FIELDS = {name = true, play = true, stop = true, available = true}
   local MOD_SOURCE_FIELDS = {key = true, name = true, section = true, value = true, range = true, describe = true,
-    visible = true, row = true}
+    visible = true, row = true, fields = true}
   local MOD_SOURCE_ROW_FIELDS = {enc = true, fine_enc = true, press = true, alt_press = true, hints = true}
   local MOD_SOURCE_NAME_MAX = 4  -- MOD's row label
+  -- 3.7 (design §0.4): a settings row of a source's fields, its label at
+  -- most MOD_SOURCE_FIELD_LABEL_MAX characters
+  local MOD_SOURCE_FIELD_FIELDS = {label = true, value = true, enc = true, fine_enc = true, press = true}
+  local MOD_SOURCE_FIELD_LABEL_MAX = 8
 
   -- A top-level scene block (lib/scenes.lua, 0b): {key, default = fn() ->
   -- value, capture = fn() -> value, validate = fn(value) -> ok, apply =
@@ -478,7 +484,26 @@ return function()
   -- {key, name (MOD's label, at most 4 characters), section, value = fn() ->
   -- number, range = {min, max} (min < max; min < 0 is bipolar), describe =
   -- fn() -> string, visible = fn() -> boolean, row = {enc, fine_enc, press,
-  -- alt_press, hints}}; describe, visible, row and each row function optional
+  -- alt_press, hints}, fields}; describe, visible, row and each row function
+  -- optional. fields (3.7, design §0.4), optional: the rows of the source's
+  -- settings view on MOD, a list of {label (1 to 8 characters), value = fn()
+  -- -> string, enc = fn(d), fine_enc = fn(d), press = fn()} (the last three
+  -- optional), or a function returning one, read at each draw (a list it
+  -- returns is not checked here)
+  local function require_settings_fields(fields, where)
+    require_arg(fields == nil or type(fields) == "table" or type(fields) == "function", where,
+      "fields is a list or a function")
+    if type(fields) ~= "table" then return end
+    for index, field in ipairs(fields) do
+      local at = where .. " field " .. index
+      require_arg(type(field) == "table", at, "a field is a table")
+      require_known_fields(field, MOD_SOURCE_FIELD_FIELDS, at)
+      require_arg(type(field.label) == "string" and field.label ~= "" and #field.label <= MOD_SOURCE_FIELD_LABEL_MAX,
+        at, "a label is 1 to " .. MOD_SOURCE_FIELD_LABEL_MAX .. " characters")
+      require_functions(field, at, {"value"}, {"enc", "fine_enc", "press"})
+    end
+  end
+
   function M.register_mod_source(record)
     local kind = "register_mod_source"
     local where = require_named(record, "mod_sources", kind, "key", MOD_SOURCE_FIELDS)
@@ -495,6 +520,7 @@ return function()
       require_known_fields(row, MOD_SOURCE_ROW_FIELDS, where .. " row")
       require_functions(row, where .. " row", {}, {"enc", "fine_enc", "press", "alt_press", "hints"})
     end
+    require_settings_fields(record.fields, where)
     table.insert(M.registry.mod_sources, record)
   end
 
@@ -580,6 +606,20 @@ return function()
     for field, value in pairs(record) do stored[field] = value end
     stored.param_count = count
     table.insert(M.registry.ii_devices, stored)
+  end
+
+  -- 3.7's voice_hit (design §0.2, plan ruling 12), read at each use, so it
+  -- stays open: {name, hit = fn(voice_idx, info)}, info = {velocity, source
+  -- ("step", "note", "action" or "start"), slot (1 the voice's own note, 2
+  -- to 8 an extra one), gate_seconds (a gated step's, else nil)}.
+  -- lib/engine_sync.lua tells each hook once per hit, contained; a hook
+  -- never sends and never yields
+  local VOICE_HIT_FIELDS = {name = true, hit = true}
+  function M.register_voice_hit(record)
+    local kind = "register_voice_hit"
+    local where = require_named(record, "voice_hit", kind, "name", VOICE_HIT_FIELDS)
+    require_functions(record, where, {"hit"})
+    table.insert(M.registry.voice_hit, record)
   end
 
   -- A macro target (lib/macros.lua's catalog lists each after the matrix
