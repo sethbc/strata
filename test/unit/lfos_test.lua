@@ -1145,6 +1145,78 @@ test("an instant recall's first send carries the scene's destination with its ra
   assert_equal(lfo_destination_id(2), "delay_mix", "at its end: the scene's")
 end)
 
+-- #729: the list on main before a registered global named its group (3.7's
+-- package 0e, by voice), each entry "label|key|group" in order: the keys
+-- PSETs and scenes store, so every one still names the same destination
+local DESTINATIONS_BEFORE_729 = {
+  "none|none|none", "density|master_density|global", "drift|drift_amount|global", "filt freq|filter_freq|global",
+  "filt res|filter_res|global", "filt mix|filter_mix|global", "dly time|delay_time|global",
+  "dly fdbk|delay_feedback|global", "dly mix|delay_mix|global", "rev mix|reverb_mix|global",
+  "rev size|reverb_size|global", "rev damp|reverb_damp|global", "v1 main|v1_main|voice 1",
+  "v1 size|v1_grain_size|voice 1", "v1 dens|v1_grain_density|voice 1", "v1 pitch|v1_grain_pitch|voice 1",
+  "v1 spread|v1_grain_spread|voice 1", "v1 pos|v1_buf_pos|voice 1", "v1 rate|v1_buf_rate|voice 1",
+  "v1 scan|v1_buf_scan|voice 1", "v1 hist|v1_history|voice 1", "v1 vfilt|v1_filter_freq|voice 1",
+  "v1 dsend|v1_delay_send|voice 1", "v1 rsend|v1_reverb_send|voice 1", "v1 amp|v1_amp|voice 1",
+  "v2 main|v2_main|voice 2", "v2 size|v2_grain_size|voice 2", "v2 dens|v2_grain_density|voice 2",
+  "v2 pitch|v2_grain_pitch|voice 2", "v2 spread|v2_grain_spread|voice 2", "v2 pos|v2_buf_pos|voice 2",
+  "v2 rate|v2_buf_rate|voice 2", "v2 scan|v2_buf_scan|voice 2", "v2 hist|v2_history|voice 2",
+  "v2 vfilt|v2_filter_freq|voice 2", "v2 dsend|v2_delay_send|voice 2", "v2 rsend|v2_reverb_send|voice 2",
+  "v2 amp|v2_amp|voice 2", "v3 main|v3_main|voice 3", "v3 size|v3_grain_size|voice 3",
+  "v3 dens|v3_grain_density|voice 3", "v3 pitch|v3_grain_pitch|voice 3", "v3 spread|v3_grain_spread|voice 3",
+  "v3 pos|v3_buf_pos|voice 3", "v3 rate|v3_buf_rate|voice 3", "v3 scan|v3_buf_scan|voice 3",
+  "v3 hist|v3_history|voice 3", "v3 vfilt|v3_filter_freq|voice 3", "v3 dsend|v3_delay_send|voice 3",
+  "v3 rsend|v3_reverb_send|voice 3", "v3 amp|v3_amp|voice 3", "v4 main|v4_main|voice 4",
+  "v4 size|v4_grain_size|voice 4", "v4 dens|v4_grain_density|voice 4", "v4 pitch|v4_grain_pitch|voice 4",
+  "v4 spread|v4_grain_spread|voice 4", "v4 pos|v4_buf_pos|voice 4", "v4 rate|v4_buf_rate|voice 4",
+  "v4 scan|v4_buf_scan|voice 4", "v4 hist|v4_history|voice 4", "v4 vfilt|v4_filter_freq|voice 4",
+  "v4 dsend|v4_delay_send|voice 4", "v4 rsend|v4_reverb_send|voice 4", "v4 amp|v4_amp|voice 4",
+  "v5 main|v5_main|voice 5", "v5 size|v5_grain_size|voice 5", "v5 dens|v5_grain_density|voice 5",
+  "v5 pitch|v5_grain_pitch|voice 5", "v5 spread|v5_grain_spread|voice 5", "v5 pos|v5_buf_pos|voice 5",
+  "v5 rate|v5_buf_rate|voice 5", "v5 scan|v5_buf_scan|voice 5", "v5 hist|v5_history|voice 5",
+  "v5 vfilt|v5_filter_freq|voice 5", "v5 dsend|v5_delay_send|voice 5", "v5 rsend|v5_reverb_send|voice 5",
+  "v5 amp|v5_amp|voice 5", "v6 main|v6_main|voice 6", "v6 size|v6_grain_size|voice 6",
+  "v6 dens|v6_grain_density|voice 6", "v6 pitch|v6_grain_pitch|voice 6", "v6 spread|v6_grain_spread|voice 6",
+  "v6 pos|v6_buf_pos|voice 6", "v6 rate|v6_buf_rate|voice 6", "v6 scan|v6_buf_scan|voice 6",
+  "v6 hist|v6_history|voice 6", "v6 vfilt|v6_filter_freq|voice 6", "v6 dsend|v6_delay_send|voice 6",
+  "v6 rsend|v6_reverb_send|voice 6", "v6 amp|v6_amp|voice 6", "v7 main|v7_main|voice 7",
+  "v7 size|v7_grain_size|voice 7", "v7 dens|v7_grain_density|voice 7", "v7 pitch|v7_grain_pitch|voice 7",
+  "v7 spread|v7_grain_spread|voice 7", "v7 pos|v7_buf_pos|voice 7", "v7 rate|v7_buf_rate|voice 7",
+  "v7 scan|v7_buf_scan|voice 7", "v7 hist|v7_history|voice 7", "v7 vfilt|v7_filter_freq|voice 7",
+  "v7 dsend|v7_delay_send|voice 7", "v7 rsend|v7_reverb_send|voice 7", "v7 amp|v7_amp|voice 7",
+  "macro 1|macro_1|macros", "macro 2|macro_2|macros", "macro 3|macro_3|macros", "macro 4|macro_4|macros",
+  "macro 5|macro_5|macros", "macro 6|macro_6|macros", "macro 7|macro_7|macros", "macro 8|macro_8|macros",
+  "macro 9|macro_9|macros", "macro 10|macro_10|macros", "macro 11|macro_11|macros", "macro 12|macro_12|macros",
+  "macro 13|macro_13|macros", "macro 14|macro_14|macros", "macro 15|macro_15|macros", "macro 16|macro_16|macros"
+}
+
+test("a registered global destination's group is its registration's; the list is unchanged (#729)", function()
+  load_strata()
+  local listed = {}
+  for index, destination in ipairs(local_value("LFO_DESTINATIONS")) do
+    listed[index] = destination.label .. "|" .. destination.key .. "|" .. destination.group
+  end
+  assert_equal(table.concat(listed, "\n"), table.concat(DESTINATIONS_BEFORE_729, "\n"),
+    "every destination in its place, with its key and group")
+  -- the group comes from the registration, never from the param's name
+  load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_lfo_global_destination("probe mac", "mutation_amount", "macros")
+    S.register_lfo_global_destination("probe glob", "mutation_probability", "global")
+  end })
+  local S = local_value("S")
+  local destinations = local_value("LFO_DESTINATIONS")
+  assert_equal(destinations[destination_index("probe mac")].group, "macros", "a global registered in the macros' group")
+  assert_equal(destinations[destination_index("probe glob")].group, "global")
+  assert_equal(destination_index("probe glob"), destination_index("rev damp") + 1, "it joins the globals")
+  local groups = S.lib.lfos.destination_groups()
+  local macros = groups[#groups]
+  assert_equal(macros.name, "macros", "the macros still end the list")
+  assert_true(destination_index("probe mac") >= macros.first and destination_index("probe mac") <= macros.last,
+    "probe mac lies in the macros' group")
+  assert_equal(macros.last - macros.first + 1, 17, "the 16 macros and the probe")
+  load_strata()
+end)
+
 test("a global destination's param is a control param, checked once every param exists", function()
   local ok, problem = pcall(load_strata, { before_init = function()
     local_value("S").register_lfo_global_destination("probe glob", "filter_type")

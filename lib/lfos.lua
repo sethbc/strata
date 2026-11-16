@@ -91,8 +91,8 @@ return function(S)
 
   -- The built-in destinations: the globals ({label, param id}) and, per
   -- voice after "v<i> main", {label suffix, param id suffix}. A registered
-  -- global destination whose param is a macro's (macro_param) joins the
-  -- macros' group, which ends the list; any other joins the globals
+  -- global destination joins the group its registration names (#729): the
+  -- macros', which ends the list, or the globals
   local BUILT_IN_DESTINATIONS = {
     globals = {
       {"density", "master_density"}, {"drift", "drift_amount"}, {"filt freq", "filter_freq"},
@@ -104,9 +104,6 @@ return function(S)
       {"size", "grain_size"}, {"dens", "grain_density"}, {"pitch", "grain_pitch"}, {"spread", "grain_spread"},
       {"pos", "buf_pos"}, {"rate", "buf_rate"}, {"scan", "buf_scan"}
     },
-    -- the macros' param ids; a group field on the global registration
-    -- (lib/state.lua) is to replace this match, #729
-    macro_param = "^macro_%d+$",
   }
 
   -- Build S.LFO_DESTINATIONS in place from the built-in destinations and
@@ -145,10 +142,9 @@ return function(S)
           add(parts[i + 1], "register_lfo_destination", "v" .. i .. " " .. entry.label, "v" .. i .. "_" .. entry.suffix,
             "voice " .. i)
         end
-      elseif tostring(entry.param_id):match(BUILT_IN_DESTINATIONS.macro_param) then
-        add(macros, "register_lfo_global_destination", entry.label, entry.param_id, "macros")
       else
-        add(parts[1], "register_lfo_global_destination", entry.label, entry.param_id, "global")
+        add(entry.group == "macros" and macros or parts[1], "register_lfo_global_destination", entry.label,
+          entry.param_id, entry.group)
       end
     end
     local list = S.LFO_DESTINATIONS

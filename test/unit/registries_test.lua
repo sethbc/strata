@@ -932,7 +932,17 @@ test("each 3.4 register function checks its argument and refuses a duplicate", f
   assert_true(refused(S.register_lfo_global_destination, "macro 1", "macro_2"), "a second macro 1")
   assert_true(refused(S.register_lfo_global_destination, "probe", "probe_2"), "a label a per-voice one has")
   assert_true(refused(S.register_lfo_global_destination, "macro 3", nil), "a param id is a string")
-  assert_equal(#S.registry.lfo_destinations, 2, "nothing refused was added")
+  -- its group (#729): the globals unless it names the macros'; any other is refused
+  assert_equal(destination.group, "global", "a global destination without a group joins the globals")
+  for _, group in ipairs({ "voice 1", "macro", "none", 3, true }) do
+    assert_true(refused(S.register_lfo_global_destination, "macro 3", "macro_3", group),
+      "an unknown group " .. tostring(group) .. " is refused")
+  end
+  S.register_lfo_global_destination("macro 2", "macro_2", "macros")
+  assert_equal(S.registry.lfo_destinations[3].group, "macros", "the macros' group is kept")
+  S.register_lfo_global_destination("probe 4", "probe_4", "global")
+  assert_equal(S.registry.lfo_destinations[4].group, "global")
+  assert_equal(#S.registry.lfo_destinations, 4, "nothing refused was added")
 end)
 
 test("scene blocks and PSET hooks close at init; the hooks read at use stay open", function()
