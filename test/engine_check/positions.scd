@@ -18,7 +18,7 @@ var path = h.tempDir +/+ "positions.wav";
 var saved = engine.grainControls[voice].copy;
 var compare, position, reading, slope, setGrain, hookReset, values, probe, moved, restarted, before, after, stepFrames, frames, grain;
 var levelBus, levelProbe, level, scanState, checkScanModes, checkOneShot, checkRetriggerRestart, checkSpeed, checkSyncScan;
-var checkRegionRestart, checkScanControls, withIgnoredLines, nodeCount;
+var checkRegionRestart, checkScanControls, withIgnoredLines, nodeCount, checkSyncScanEdges;
 
 // 3.7's scan state (StrataPositions.sc) for a check def: the mode, the loop
 // 0/1 as the span, no region, no sync unless given
@@ -42,16 +42,19 @@ SynthDef(\strataCheckScanCompare, { arg peaks, bufScan = 0.5, freeze = 0, scrubR
 // The hook's phase and position over a span of 1 s at the server's rate
 // (bufPos, no spread): [the position, the server time it last rose to the
 // top (0.9999) and to the bottom (0.0001), its highest, its lowest, the
-// phase, the one-shot level]
+// phase, the one-shot level, its lowest since the synth started]
 SynthDef(\strataCheckScanModes, { arg peaks, bufScan = 1, bufPos = 0, scanMode = 1, t_scanReset = 0;
     var state = scanState.(scanMode);
     var phase = engine.slotScanPhase(bufScan, 0, 0, 0, t_scanReset, engine.slotScanSpeed(1, SampleRate.ir), state);
-    var place, time = Sweep.ar(0, 1), level;
+    var place, time = Sweep.ar(0, 1), level, lowest, now;
     state[\sum] = bufPos + phase;
     place = engine.slotScanPosition(bufPos, phase, 0, state);
     level = engine.oneShotLevel(state);
+    // (at either rate: the lowest of every sample the level had)
+    lowest = if (level.rate == \audio) { A2K.kr(RunningMin.ar(level)) } { RunningMin.kr(level) };
+    now = if (level.rate == \audio) { A2K.kr(level) } { level };
     Out.kr(peaks, A2K.kr([place, Latch.ar(time, place >= 0.9999), Latch.ar(time, place <= 0.0001),
-        RunningMax.ar(place), RunningMin.ar(place), phase, level]));
+        RunningMax.ar(place), RunningMin.ar(place), phase]) ++ [now, lowest]);
 }).add;
 // The voice's level: the mean |right channel| (1 in the slot) over 10 ms
 SynthDef(\strataCheckScanLevel, { arg in, peaks;
@@ -91,8 +94,8 @@ checkScanModes = {
         result
     };
     var block = server.options.blockSize / server.sampleRate, bounce, held, back;
-    var edge, inside;
-    out.free; out = Bus.control(server, 7);
+    var edge, past, inside, opening;
+    out.free; out = Bus.control(server, 8);
     bounce = run.([\scanMode, 1, \bufScan, 1, \bufPos, 0], 2.5);
     check.(((bounce[1] - 1).abs <= block) and: { (bounce[2] - 2).abs <= block } and: { bounce[3] > 0.9999 }
         and: { bounce[4] < 1e-6 } and: { bounce[0].inclusivelyBetween(0.4, 0.6) },
@@ -103,15 +106,39 @@ checkScanModes = {
     check.((held[0] == 1) and: { held[5] > 1.4 } and: { back[0] == 0 } and: { back[5] < -1.4 },
         "positions: one shot holds its position at the edge, forward and backward (forward: position %, phase %; backward: %, %)"
             .format(held[0], held[5], back[0], back[5]));
-    // the level: 0 once bufPos + the phase is at or past 1, or below 0
+    // the level (design §2.1, §3.5): 1 at exactly 1 with the scan at 0
+    // (bufPos 1 is the span's last start and sounds), 0 once bufPos + the
+    // phase is past 1 forward or below 0 backward
     edge = run.([\scanMode, 2, \bufScan, 0, \bufPos, 1], 0.2);
+    past = run.([\scanMode, 2, \bufScan, 1, \bufPos, 1], 0.2);
     inside = run.([\scanMode, 2, \bufScan, 0, \bufPos, 0.5], 0.2);
-    check.((edge[6] < 1e-3) and: { inside[6] > 0.999 } and: { held[6] < 1e-3 } and: { back[6] < 1e-3 },
-        "positions: one shot is silent once bufPos + the phase is at or past 1, or below 0 (levels at 1 %, at 0.5 %, past 1 %, below 0 %)"
-            .format(edge[6], inside[6], held[6], back[6]));
+    check.((edge[6] > 0.999) and: { edge[7] > 0.999 } and: { past[6] < 1e-3 } and: { inside[6] > 0.999 }
+        and: { held[6] < 1e-3 } and: { back[6] < 1e-3 },
+        "positions: one shot sounds at exactly 1 with the scan at 0 and is silent past 1, or below 0 (levels at 1 % (lowest %), just past 1 %, at 0.5 %, at 1.5 %, at -0.5 %)"
+            .format(edge[6], edge[7], past[6], inside[6], held[6], back[6]));
+    // a backward one shot from bufPos 1 (a reverse slice) starts at the
+    // edge: its first grains play at full level, never faded in
+    opening = run.([\scanMode, 2, \bufScan, -1, \bufPos, 1], 0.1);
+    check.((opening[7] > 0.999) and: { opening[6] > 0.999 },
+        "positions: a backward one shot from bufPos 1 opens at full level, with no fade-in (lowest level since its start %, now %)"
+            .format(opening[7], opening[6]));
     out.free; out = Bus.control(server, 2);
 };
 checkScanModes.value;
+
+// The one-shot level is a 5 ms gate on the reader's level, built at control
+// rate (one A2K of the sum), so the reader's level stays a control-rate
+// product and costs no audio-rate wire buffers
+{
+    var levelRate;
+    SynthDef(\strataCheckOneShotLevelRate, {
+        var state = scanState.(\scanMode.kr(2));
+        state[\sum] = DC.ar(0.5) + Sweep.ar(0, 0.1);
+        levelRate = engine.oneShotLevel(state).rate;
+        Out.kr(0, DC.kr(0));
+    });
+    check.(levelRate == \control, "positions: the one-shot level is built at control rate (got %)".format(levelRate));
+}.value;
 
 // The real grain synth, on a slot of known contents
 h.writeTestFile(path, server.sampleRate, (seconds * server.sampleRate).round.asInteger, [0, 0]);
@@ -344,6 +371,36 @@ checkSyncScan = {
             .format(places.asArray, nodes, nodeCount.value, refused, received, lines.asArray));
 };
 
+// syncScan's other cases: one shot ignores it (its phase is the Sweep,
+// which only a restart moves); a voice whose own grain synth is a ring's
+// (\strataGrainRing, the synth source) and a stopped voice get no message
+// at all, though the command still records what it took
+checkSyncScanEdges = {
+    var held, ringVoice = 0, stoppedVoice = 6, ringBundle, stoppedBundle, ringDef, received = List.new;
+    setGrain.(\loopStart, 0, \loopLength, 1, \scanMode, 2, \bufPos, 0.2, \bufScan, 0);
+    command.(\setGrainParam, voice, \t_scanReset, 1);
+    0.1.wait;
+    command.(\syncScan, voice, 0.75);
+    0.08.wait;
+    held = position.value;
+    setGrain.(\scanMode, 0, \bufPos, 0);
+    command.(\setGrainSource, ringVoice, 0);
+    command.(\voiceOn, ringVoice, 200.0, 0.5, 0.0, 0.04, 200.0, 1.0);
+    server.sync;
+    ringDef = engine.synths[engine.grainKey(ringVoice)] !? { arg synth; synth.defName.asSymbol };
+    ringBundle = server.makeBundle(false, { command.(\syncScan, ringVoice, 0.5) });
+    received.add(engine.areaState[\positions][\received][\syncScan].copy);
+    stoppedBundle = server.makeBundle(false, { command.(\syncScan, stoppedVoice, 0.5) });
+    received.add(engine.areaState[\positions][\received][\syncScan].copy);
+    command.(\voiceOff, ringVoice);
+    server.sync;
+    check.(held.inclusivelyBetween(0.15, 0.28) and: { ringDef == \strataGrainRing } and: { ringBundle.isEmpty }
+        and: { engine.voiceRunning(stoppedVoice).not } and: { stoppedBundle.isEmpty }
+        and: { received.asArray == [[ringVoice, 0.5], [stoppedVoice, 0.5]] },
+        "positions: syncScan leaves a one-shot scan where it is and sends nothing to a ring voice or a stopped one (one shot at 0.2 after a sync to 0.75: %; the ring voice's grain def %, sent %; the stopped voice's sent %; received %)"
+            .format(held, ringDef, ringBundle, stoppedBundle, received.asArray));
+};
+
 // regionLength (with regionStart before it) restarts the own grain synth's
 // scan in the region's place; an extra note's region is its own, so it gets
 // neither the region nor the restart
@@ -403,6 +460,7 @@ checkOneShot.value;
 checkRetriggerRestart.value;
 checkSpeed.value;
 checkSyncScan.value;
+checkSyncScanEdges.value;
 checkRegionRestart.value;
 checkScanControls.value;
 

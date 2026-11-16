@@ -57,7 +57,12 @@
             // sent to no synth (absoluteNoteRate reads it)
             grainParamHandlers: (
                 rootNote: { arg voice, value;
-                    areaState[\notes][\rootNotes][voice] = value;
+                    // (a non-finite one is ignored with one line, 3.5's
+                    // rule: it would reach a note's rate through
+                    // absoluteNoteRate)
+                    if (this.fastModValuesFinite(\setGrainParam, [[\rootNote, value]])) {
+                        areaState[\notes][\rootNotes][voice] = value
+                    };
                     true
                 }
             )

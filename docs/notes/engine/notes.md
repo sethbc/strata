@@ -27,7 +27,7 @@ The last area in `alloc`'s order and the first in `free`'s. It has `allocState`,
 - `slots`: per voice an Array of `noteSlots` records (`emptyNoteRecord`). Slot 0, the own note: its kept `expression` (an Event of `bend`, `amp`, `position`, `size`, `main`), `parked`, and `rate` (a frozen synth voice's own grain synth's `noteRate`, 1 otherwise). Each extra slot: `state` (`\empty`, `\live` or `\releasing`), `synth` (live or releasing), `cutting` (its synth in the kill fade), `kind` (what its synth is: `\voice`, `\buffer`, `\input`, `\stream`), its last `noteOn`'s `note`, `freq`, `rate` and `velocity`, its kept `expression`, and `order` and `cutOrder` (when it started and when its cutting synth was cut).
 - `order`: a counter; every start and every cut takes the next number, so the oldest note (or cutting synth) has the lowest.
 - `received`: what each command last took (an IdentityDictionary, the command's name to its arguments, the continuous ones clipped), for the engine check, as the modulation area's `received`.
-- `rootNotes` (3.7): per voice the note that plays rate 1 (`noteRateRootNote` at alloc; the `rootNote` grain param's handler, this area's `grainParamHandlers`, sets it and returns true, so it is never stored in `grainControls` or sent to a synth).
+- `rootNotes` (3.7): per voice the note that plays rate 1 (`noteRateRootNote` at alloc; the `rootNote` grain param's handler, this area's `grainParamHandlers`, sets it and returns true, so it is never stored in `grainControls` or sent to a synth; a non-finite value is ignored with one line, `fastModValuesFinite`, and the kept root stays: `"notes: a non-finite rootNote is ignored with one line and the root note stays"`).
 
 ### The commands
 

@@ -143,11 +143,14 @@
     }
 
     // A one-shot grain synth's level (state[\sum] is bufPos + the phase): 0
-    // once the sum is at or past 1 (its end, forward) or below 0 (before its
-    // start, backward), lagged 5 ms, until a restart brings it back; 1 in the
-    // other modes
+    // once the sum is past 1 (its end, forward) or below 0 (before its start,
+    // backward), lagged 5 ms, until a restart brings it back; 1 in the other
+    // modes. At exactly 1 (the span's last start) it sounds (design §2.1,
+    // §3.5), so a backward one shot from 1 opens at full level. Built at
+    // control rate from one A2K of the sum: a 5 ms gate needs no audio-rate
+    // wires, and the reader's level stays a control-rate product
     oneShotLevel { arg state;
-        var sum = state[\sum];
-        ^(1 - (((sum >= 1) + (sum < 0)) * state[\oneShot])).lag(0.005)
+        var sum = A2K.kr(state[\sum]);
+        ^(1 - (((sum > 1) + (sum < 0)) * state[\oneShot])).lag(0.005)
     }
 }
