@@ -865,48 +865,48 @@ local function under_the_rate_problems(rig)
   return problems
 end
 
--- What the flood got wrong in sharing the ii bus (#710), as text. A line is
--- what lib/io/ii.lua takes turns by: a gate's (device, command, first
--- argument), and any other command's (device, command); its sends are its
--- lines crow got from the flood's start, its offs (a gate's low) not counted.
--- Each voice's ER-301 port and TELEXo output must first go high within
--- first_seconds; per device, the most-sent line at most most_over_least
--- times the least-sent
-local GATE_COMMANDS = {tr = true, env = true}
+-- What the flood got wrong in sharing the ii bus (#710), as text, from the
+-- lines crow got from the flood's start, counted in notes: a port's trigger
+-- ons (tr(port, 1)) and its pitch sends (cv(port, v)). Each voice's ER-301
+-- port and TELEXo output must first go high within first_seconds; on each
+-- device the most-served port's trigger ons at most most_over_least times
+-- the least-served's; and on every port pitch sends at least trigger ons
+-- less one (a note's pitch goes with its trigger)
 local function flood_share_problems(rig)
-  local problems, first_high, sent = {}, {}, {}
+  local problems, first_high, triggers, pitches = {}, {}, {}, {}
   for _, entry in ipairs(rig.crow) do
     if entry.t >= rig.flood_start then
-      local device, command, args = entry.line:match("^ii%.(%w+)%.([%w_]+)%((.-)%)$")
-      if device then
-        local first, value = args:match("^([^,]+), (.+)$")
-        local gate = GATE_COMMANDS[command] and first ~= nil
-        local line = gate and (device .. "." .. command .. "(" .. first .. ")") or (device .. "." .. command)
-        if not (gate and value == "0") then
-          sent[device] = sent[device] or {}
-          sent[device][line] = (sent[device][line] or 0) + 1
-        end
-        if command == "tr" and value == "1" and not first_high[line] then first_high[line] = entry.t - rig.flood_start end
+      local device, command, first, value = entry.line:match("^ii%.(%w+)%.([%w_]+)%(([^,]+), (.-)%)$")
+      local port = device and (device .. "(" .. first .. ")")
+      if command == "tr" and value == "1" then
+        triggers[port] = (triggers[port] or 0) + 1
+        first_high[port] = first_high[port] or entry.t - rig.flood_start
+      elseif command == "cv" then
+        pitches[port] = (pitches[port] or 0) + 1
       end
     end
   end
+  local ports = {er301 = {}, txo = {}}
   for voice = 1, rig.S.constants.NUM_VOICES do
-    for _, line in ipairs({"er301.tr(" .. ROUTES.er301[voice] .. ")", "txo.tr(" .. ROUTES.txo[voice] .. ")"}) do
-      local at = first_high[line]
-      if not at or at > SYSTEM.flood_share.first_seconds then
-        problems[#problems + 1] = "voice " .. voice .. "'s " .. line .. " first high "
-          .. (at and string.format("%.3f s", at) or "never") .. " into the flood"
-      end
-    end
+    for device, list in pairs(ports) do list[#list + 1] = device .. "(" .. ROUTES[device][voice] .. ")" end
   end
-  for device, lines in pairs(sent) do
-    local most, least, most_line, least_line = 0, math.huge, nil, nil
-    for line, count in pairs(lines) do
-      if count > most then most, most_line = count, line end
-      if count < least then least, least_line = count, line end
+  for device, list in pairs(ports) do
+    local most, least, most_port, least_port = 0, math.huge, nil, nil
+    for _, port in ipairs(list) do
+      local at, notes, pitched = first_high[port], triggers[port] or 0, pitches[port] or 0
+      if not at or at > SYSTEM.flood_share.first_seconds then
+        problems[#problems + 1] = port .. " first high " .. (at and string.format("%.3f s", at) or "never")
+          .. " into the flood"
+      end
+      if pitched < notes - 1 then
+        problems[#problems + 1] = port .. ": " .. pitched .. " pitch sends for " .. notes .. " trigger ons"
+      end
+      if notes > most then most, most_port = notes, port end
+      if notes < least then least, least_port = notes, port end
     end
     if most > SYSTEM.flood_share.most_over_least * least then
-      problems[#problems + 1] = string.format("%s: %s sent %d times, %s %d", device, most_line, most, least_line, least)
+      problems[#problems + 1] = string.format("%s: %s had %d trigger ons, %s %d", device, most_port, most,
+        least_port, least)
     end
   end
   return problems
@@ -983,10 +983,11 @@ test("with everything on, a minute holds every bound", function()
   assert_true(rig.ii.offs_joined > 100 and rig.ii.most_owed >= 4, "offs joined the queue while it was busy ("
     .. rig.ii.offs_joined .. " joined, at most " .. rig.ii.most_owed .. " owed at once)")
   assert_true(rig.ii.most > II.queue_max, "offs waited beyond the 48: " .. rig.ii.most)
-  -- the flood shares the bus (#710): every voice's ER-301 port and TELEXo
-  -- output goes high within SYSTEM.flood_share.first_seconds of the flood's
-  -- start, and on each device no line is sent more than
-  -- SYSTEM.flood_share.most_over_least times as often as its least-served
+  -- the flood shares the bus (#710), in notes: every voice's ER-301 port
+  -- and TELEXo output goes high within SYSTEM.flood_share.first_seconds of
+  -- the flood's start, on each device no port has more than
+  -- SYSTEM.flood_share.most_over_least times the least-served port's trigger
+  -- ons, and every port's pitch goes with its trigger
   local share_problems = flood_share_problems(rig)
   assert_equal(#share_problems, 0, "the flood shares the ii bus: " .. first_lines(share_problems, 10))
 
@@ -1142,7 +1143,16 @@ test("after that minute everything stops with no note left", function()
   -- fills under a sustained flood: each line holds its share, #710)
   assert_true(rig.ii.owed_count > S.lib.io_ii.II.cleanup_sends, "more offs wait at cleanup than are sent at once: "
     .. rig.ii.owed_count .. " offs of " .. rig.waiting_at_cleanup .. " lines")
+  -- the gate lines with an off waiting, and the gate lows the leaving
+  -- sequence sends at once (at most II.cleanup_sends)
+  local cleanup_from, off_waiting = #context.crow.sent, {}
+  for key, count in pairs(rig.ii.owed) do off_waiting[key] = count > 0 end
   cleanup()
+  local lows_at_cleanup = 0
+  for index = cleanup_from + 1, #context.crow.sent do
+    local command, value = context.crow.sent[index]:match("^ii%.%w+%.([%w_]+)%([^,]+, (.-)%)$")
+    if (command == "tr" or command == "env") and value == "0" then lows_at_cleanup = lows_at_cleanup + 1 end
+  end
 
   -- Every MIDI note on has its note off (design §3.4, §14): on every port
   -- and channel as many offs as ons (held to at the test's end, so every
@@ -1194,7 +1204,12 @@ test("after that minute everything stops with no note left", function()
   end
   -- every gate line crow got high ends low: the last line crow got for its
   -- device, command and first argument is its low (an off may lower a line
-  -- never raised, so lows are not matched to highs)
+  -- never raised, so lows are not matched to highs). The one exception is
+  -- the leaving sequence's limit (build ruling 47): with more offs waiting
+  -- than it sends at once, a line whose off is past the fourteenth is owed,
+  -- and at a script's end stays high. Under the flood every voice's gates are
+  -- high (#710), more lines than the fourteen, so a line left high must have
+  -- had its off waiting, and the sequence must have sent all fourteen
   local last, raised = {}, {}
   for _, line in ipairs(context.crow.sent) do
     local device, command, args = line:match("^ii%.(%w+)%.([%w_]+)%((.-)%)$")
@@ -1205,13 +1220,22 @@ test("after that minute everything stops with no note left", function()
       if value == "1" then raised[key] = true end
     end
   end
-  local left_high = {}
+  local left_high, past_the_fourteen = {}, 0
+  local full_sequence = lows_at_cleanup == S.lib.io_ii.II.cleanup_sends
   for key in pairs(raised) do
-    if last[key] ~= "0" then left_high[#left_high + 1] = key .. " ends at " .. tostring(last[key]) end
+    if last[key] ~= "0" then
+      if full_sequence and off_waiting[key] then
+        past_the_fourteen = past_the_fourteen + 1
+      else
+        left_high[#left_high + 1] = key .. " ends at " .. tostring(last[key])
+      end
+    end
   end
   table.sort(left_high)
-  assert_equal(#left_high, 0, "every ii gate line crow got high ends low (" .. rig.waiting_at_cleanup
-    .. " lines waited at cleanup): " .. table.concat(left_high, ", "))
+  assert_equal(#left_high, 0, "every ii gate line crow got high ends low but the offs past the fourteenth ("
+    .. rig.waiting_at_cleanup .. " lines waited at cleanup, " .. lows_at_cleanup .. " lows sent at once, "
+    .. past_the_fourteen .. " owed): " .. table.concat(left_high, ", "))
+  assert_true(past_the_fourteen <= S.lib.io_ii.owed(), "the lines left high are among the offs owed")
   -- every voice's lines were raised (the minute's first part plays each
   -- voice), so the check above covered them all
   for voice = 1, S.constants.NUM_VOICES do

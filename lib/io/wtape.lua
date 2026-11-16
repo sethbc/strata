@@ -15,7 +15,7 @@ return function(S)
     device = "wtape",
     section = "wtape",
     unled_text = "ii bus is not strata's",
-    full_text = "ii queue full",
+    full_text = "ii busy",
     unled_status = "[--]",
     unsent = "-",
     bus_section = "ii",

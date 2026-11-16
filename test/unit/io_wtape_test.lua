@@ -115,7 +115,7 @@ test("a command the queue dropped is not shown as sent, and the next press sends
   press(S, "play")
   assert_equal(#log, 1, "the line was offered")
   assert_equal(row(S, "play").shown, "-", "not shown as sent")
-  assert_equal(S.lib.ui_flash.text("hints"), "ii queue full")
+  assert_equal(S.lib.ui_flash.text("hints"), "ii busy")
   state.accept = true
   press(S, "play")
   assert_equal(line(log[2]), "send,wtape,play,1", "the same value again")
@@ -131,7 +131,7 @@ test("a command the queue dropped is not shown as sent, and the next press sends
   state.accept = false
   press(S, "reverse")
   assert_equal(row(S, "reverse").shown, "-", "reverse stays - before any command")
-  assert_equal(S.lib.ui_flash.text("hints"), "ii queue full")
+  assert_equal(S.lib.ui_flash.text("hints"), "ii busy")
   S.lib.ui_flash.start("hints", nil)
   state.accept = true
   press(S, "reverse")
@@ -139,7 +139,7 @@ test("a command the queue dropped is not shown as sent, and the next press sends
   state.accept = false
   press(S, "reverse")
   assert_equal(row(S, "reverse").shown, "sent", "and sent after one")
-  assert_equal(S.lib.ui_flash.text("hints"), "ii queue full")
+  assert_equal(S.lib.ui_flash.text("hints"), "ii busy")
 end)
 
 test("the bus leaving and returning mid-sequence", function()
