@@ -1431,4 +1431,35 @@ test("a scenes file of 16 scenes, each with 16 full macros, 16 routings and attr
   assert_equal(params:get("matrix_16_depth"), -84)
 end)
 
+
+test("the matrix leaves an envelope's fast routing out of its sum and keeps it in its block", function()
+  local context, S, matrix = loaded()
+  local probe = seeded(S, "probe", {-1, 1}, 1)
+  route(S, 1, "probe", "v5_filter_freq", 50)
+  route(S, 3, "env2", "v5_filter_freq", 50)
+  route(S, 4, "env2", "reverb_mix", 50)
+  assert_true(S.lib.envelopes.owns(3), "the envelopes own routing 3")
+  assert_true(not S.lib.envelopes.owns(1) and not S.lib.envelopes.owns(4), "and only it")
+  params:set("v2_env_sustain", 1)
+  S.lib.engine_sync.retrigger(2, 1, "step", 5)  -- a step that holds 5 s
+  context.set_time(util.time() + 1)
+  assert_near(S.lib.envelopes.value(2), 1, 1e-9, "the envelope holds at 1")
+  context.clear_engine_calls()
+  lfo_step(context, 3)
+  assert_near(matrix.offset("v5_filter_freq"), 0.5, 1e-9, "the fast sum is the probe's alone")
+  assert_near(last_fast(context, 4, 3), 0.5, 1e-9, "setFastOffset carries the probe's alone")
+  assert_true(matrix.offset("reverb_mix") ~= 0, "the Lua routing from the envelope still sums")
+  assert_true(matrix.affects(5), "routing 3 still moves voice 5")
+  assert_true(matrix.uses_source("env2"))
+  probe.value = 0
+  lfo_step(context, 3)
+  assert_near(last_fast(context, 4, 3), 0, 1e-9, "the probe at 0: nothing from the envelope")
+  -- its block, its depth and its on/off are unchanged
+  capture_scene(1)
+  local block = S.scenes[1].data.matrix
+  assert_equal(block[3].source, "env2"); assert_equal(block[3].dest, "v5_filter_freq")
+  assert_equal(matrix.routing(3).depth, 50)
+  assert_true(matrix.routing(3).on)
+end)
+
 end

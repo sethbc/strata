@@ -1,0 +1,37 @@
+## Must not break
+
+- **Only `S.lib.envelopes` calls `engine.setFastEnv` and `engine.stopFastEnv`** (plan's One door each), and only from the engine senders of its route keys, never from a hook, a param action or the step itself: every send goes through the LFOs' round robin (`S.lib.lfos.mark_due`) and the send budget (`S.lib.engine_sync.send_engine_value`, inside `deferrable`).
+- **A route is a matrix slot**: `ENVELOPES.routes` (16) equals `MATRIX_SLOTS` and the engine's `numEnvRoutes`; routing k's route is `k - 1`.
+- **The matrix leaves an owned routing out of its sum** (`docs/notes/lua/matrix.md`): a playing routing from `env<v>` to a fast destination plays only in its engine node, so a hit never reaches the fast channel twice. Everything else about the routing (its depth and on/off params, its scene block entry, its PSET and live files, `uses_source`, `affects`) is the matrix's as for any routing.
+- **What a route has is the budget's answer**: the engine has or will have `S.lib.engine_sync.expected_value("env route <k>")`: the settings table last handed on (waiting or delivered), `false` once a stop was handed on, nil before any send. A step marks the route due when its owned settings differ from it, or when it holds settings and the slot is no longer owned; the round robin's send reads the routing again when it runs and hands on nothing when it already matches. So a stop is sent once, a set once per change, and nothing at all while no envelope is routed to a fast destination (a test counts the calls).
+- **A hit never sends**: the `voice_hit` hook only records the voice's hit (its time, the level then and its hold), as a hook must (`docs/notes/lua/engine-sync.md`). The engine fires its routes from its own `voiceHit` (`docs/notes/engine/envelopes.md`).
+- **`shape` is the engine's shape**: `\strataEnvelope`'s segments (attack from the level at the hit to 1, decay to the sustain, the hold, release to 0, each `from + (to - from) × (1 - exp(curve × t / T)) / (1 - exp(curve))`, a line at curve 0), with sustain 0 holding and releasing in no time, and a loop that starts again from 0 with the same hold. A change to the def's shape changes this function in the same change.
+- **The six params are scene fields that default to the engine def's values** (`docs/notes/engine/envelopes.md`, `\strataEnvelope`'s arguments): a scene saved before them loads every envelope as 3.7 starts. They are never VOICE rows, faders, a randomize's or a mutation's (`fader = false`, no `voice_rows`, no `randomize`: plan ruling 35).
+
+## Owns
+
+`lib/envelopes.lua` (`S.lib.envelopes`, 3.7 package 2f, design §7, decision 4), included after `lib/random_sequences.lua` and before `lib/matrix.lua`:
+- `M.ENVELOPES` (`S.constants.ENVELOPES`): `routes` 16, `time_min` 0.001, `time_max` 10, `approximate_under` 0.05 s. The module's own names and defaults are its local `ENV` table.
+- The voice-param record `envelopes` (count 6, `fader = false`, no VOICE rows), per voice: `v<i>_env_attack`, `v<i>_env_decay`, `v<i>_env_release` (control 0.001-10 s, exp; defaults 0.005, 0.2, 0.2; shown `5ms`, `200ms`, `1.5s`, `10s`), `v<i>_env_sustain` (control 0-1, 0), `v<i>_env_curve` (control -8 to 8, -4) and `v<i>_env_loop` (option off, on; off). The five controls crossfade in scenes (`scene_ranges` refuses one outside its range); the loop is discrete, switched at a transition's end. Each action marks the voice's routes; turning the loop on starts an envelope that is not running.
+- `shape(settings, elapsed, hold, from)`: pure, `settings` `{attack, decay, sustain, release, curve, loop}`.
+- `value(voice)`: `shape` now, from the voice's last hit (0 before any hit, and for a voice outside 1..7).
+- `owns(k)`: whether matrix routing k is the engine's.
+- The sources `env1`..`env7` (section `envelopes`, names `EN1`..`EN7`, range 0-1, no `row`): `describe` is the attack and decay (`5ms 200ms`), with `~` in front while the envelope reaches a Lua destination through a playing routing and its attack or decay is under 0.05 s (MOD's row says the model is coarse there, as IO marks an engine LFO's model); `fields` lists six rows, `attack`, `decay`, `sustain`, `release`, `curve`, `loop`, each `params:string` and `enc_param_delta(3, id, d)`.
+- The `voice_hit` hook `envelopes`, an LFO step hook, and the engine senders of the 16 route keys `env route <k>`.
+- Its tests: `test/unit/envelopes_test.lua` (and the matrix's hand-off in `test/unit/matrix_test.lua`). Its user page: `docs/user/modulators.md` (Envelopes).
+
+## The model
+
+The hook keeps, per voice, the last hit: `util.time()`, the level `value` had at that moment (a new hit starts its attack from the level it is at, as `EnvGen` does) and the hold: `info.gate_seconds` when the hit carries it (a gated step's), else the voice's gate length (`S.lib.sequencer.gate_seconds`) when `seq_gate` is on, else 0. A hit is what `docs/notes/lua/engine-sync.md` (One hit) says: a start no retrigger follows, a retrigger (a step, a MIDI note, an action) and a played extra note's start; a chord step is one hit.
+
+The matrix reads `value` through the source (`S.lib.mod_sources.normalized`, unipolar) at each 48 Hz step for a Lua destination: exact for slow envelopes, coarse under about 50 ms (a step is about 21 ms, and the Lua path lags the value it sends). The model and the engine differ where `docs/notes/engine/envelopes.md` (Hits) says: a start its retrigger follows is one hit here and two there, chord notes are hits only there, and a start Lua rolls back fires the engine's routes only.
+
+Loop on with no hit (or once the last hit's envelope has ended): turning it on records a hit with no hold from 0, so the model runs from then, as the engine's node starts at once.
+
+## The routes
+
+Each step (the hooks run in registration order: the envelopes' before the matrix's) brings each slot's route to its routing:
+- **Owned** (`S.lib.matrix.playing(k)` gives a fast destination id, `S.lib.lfos.fast_destination`, and the source is `env<v>`): the route should carry `{source v, voice, destination, depth / 100, the source voice's attack, decay, sustain, release, curve, loop 0/1}`, sent as `engine.setFastEnv(k - 1, v - 1, voice - 1, destination, depth / 100, attack, decay, sustain, release, curve, loop)`. A new destination or source voice is a set, never a stop and a set: the engine moves the route's node.
+- **Not owned** (off, depth 0, cleared, a Lua destination, another source) while the route has settings: `engine.stopFastEnv(k - 1)`.
+
+The engine sender delivers the value it is handed, which the round robin's send works out when it runs: a value that waited in the budget is never older than the routing. A param change of voice v marks every route v fires (at most sixteen); the same step's compare finds them too.

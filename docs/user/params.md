@@ -188,6 +188,12 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | mute | off/on | off | Silences the voice without stopping it; scenes keep it ([Mute and solo](voices-and-grains.md#mute-and-solo)) |
 | solo | off/on | off | Silences every voice that is not soloed; scenes never keep it |
 | bookmark 1-4 | 0-1 | 0, 0.25, 0.5, 0.75 | Buffer voices: saved positions in the slot, set on VOICE or with a grid's store key, and recalled with BUFFER's `bm` field (E3) or a grid's bookmark keys. Kept in scenes (they fade like other values) and PSETs ([voices and grains](voices-and-grains.md#bookmarks)) |
+| env attack | 0.001-10 s | 0.005 | The voice's envelope, a modulation source fired by its hits ([Envelopes](modulators.md#envelopes)): the rise to 1 |
+| env decay | 0.001-10 s | 0.2 | The fall to the sustain |
+| env sustain | 0-1 | 0 | The level held for the hit's gate length; 0 makes it an attack and a decay |
+| env release | 0.001-10 s | 0.2 | The fall to 0 after the hold |
+| env curve | -8 to 8 | -4 | Bends the three slopes; 0 is straight. The times, the sustain and the curve fade in scenes |
+| env loop | off, on | off | On: the envelope starts again each time it ends. A scene switches it at the end of its fade |
 | seq length | 1-16 | 16 | The voice's pattern: how many steps it plays, how long each is, its gate and swing ([Sequencer](sequencer.md)) |
 | seq division | 1/32, 1/16t, 1/16, 1/8t, 1/8, 1/4, 1/2, 1 bar | 1/16 | |
 | seq gate | off, on | off | On: the voice is heard only while a step's gate is open |

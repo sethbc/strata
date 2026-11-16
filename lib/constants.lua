@@ -386,4 +386,8 @@ return {
   -- clamped to rate_min-rate_max (the engine's followRate clip); a
   -- following voice is synced once every bar_beats beats
   FOLLOW = {ratio_threshold = 0.005, rate_min = 0.25, rate_max = 4, bar_beats = 4},
+  -- 3.7 (design §1, §7): the envelopes (lib/envelopes.lua): engine routes
+  -- (one per matrix slot, MATRIX_SLOTS), the times' range in s, and the
+  -- attack or decay under which Lua's model is marked approximate
+  ENVELOPES = {routes = 16, time_min = 0.001, time_max = 10, approximate_under = 0.05},
 }
