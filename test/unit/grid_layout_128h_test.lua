@@ -1010,32 +1010,12 @@ test("128h: a step key held into page 3 is no recorder key at its release", func
   S.lib.gestures.clear(1)
 end)
 
--- 3.7 (design §10): a slice row. A double for S.lib.slices (2b), with the
--- functions lib/positions.lua uses, set as fields of the module's table:
--- `voice` takes notes and its slot holds `count` slices
+-- 3.7 (design §10): a slice row, on the doubles test/helpers.lua shares
+-- (h.slice_doubles): `voice` takes notes and its slot holds `count` slices
 local function slice_double(S, voice, count)
-  local double = {plays = {}, offs = {}, sounding = {}}
-  local slices = S.lib.slices or {}
-  S.lib.slices = slices
-  function slices.count(slot) return slot == voice_buffer_slot(voice) and count or 0 end
-  function slices.takes_notes(voice_idx) return voice_idx == voice and voice_uses_buffer(voice_idx) end
-  function slices.play(voice_idx, n, note)
-    table.insert(double.plays, {voice = voice_idx, n = n, key = note.key})
-    double.sounding[note.key] = n
-    return 1
-  end
-  function slices.note_off(_, _, key)
-    table.insert(double.offs, key)
-    double.sounding[key] = nil
-  end
-  function slices.playing(voice_idx)
-    local list = {}
-    if voice_idx == voice then
-      for _, n in pairs(double.sounding) do list[#list + 1] = n end
-    end
-    return list
-  end
-  return double
+  local doubles = h.slice_doubles(S, {[voice_buffer_slot(voice)] = count})
+  doubles.takes[voice] = true
+  return doubles
 end
 
 test("128h: the position page shows and plays a slice row", function()
@@ -1047,10 +1027,10 @@ test("128h: the position page shows and plays a slice row", function()
   for cell = 1, 16 do assert_equal(device:get_led(cell, 2), 9, "slice " .. cell) end
   context.grid.press(1, 5, 2, 1)
   assert_equal(S.grid_voice_select, 2, "the press selects the grid voice")
-  assert_equal(double.plays[1].n, 5); assert_equal(double.plays[1].key, 105)
+  assert_equal(double.plays[1].n, 5); assert_equal(double.plays[1].note.key, 105)
   assert_equal(device:get_led(5, 2), 15, "playing")
   context.grid.press(1, 5, 2, 0)
-  assert_equal(double.offs[1], 105, "the release ends it")
+  assert_equal(double.offs[1].key, 105, "the release ends it")
   tap(context, 1, 8, 8)
   assert_equal(grid_core().page(1), 4, "the strip's page")
   assert_equal(device:get_led(13, 5), 15, "bank 1 shown")
@@ -1064,6 +1044,22 @@ test("128h: the position page shows and plays a slice row", function()
   tap(context, 1, 4, 2)
   assert_equal(double.plays[2].n, 20)
   assert_near(params:get("v2_buf_pos"), 0, 1e-9, "no jump")
+end)
+
+-- 2e's review: a row here is always its own voice's, so a release ends only
+-- that row's key, even when another row holds a slice in the same column
+test("128h: a release on one row never ends another row's slice in the same column", function()
+  local context, S = position_setup()
+  local double = slice_double(S, 2, 20)
+  tap(context, 1, 8, 8); tap(context, 1, 8, 8)
+  context.grid.press(1, 5, 2, 1)  -- voice 2's slice 5
+  context.grid.press(1, 5, 3, 1)  -- voice 3's position: a jump, and voice 3 is the grid voice
+  assert_equal(S.grid_voice_select, 3)
+  context.grid.press(1, 5, 3, 0)
+  assert_equal(#double.offs, 0, "voice 2's key is still down")
+  context.grid.press(1, 5, 2, 0)
+  assert_equal(#double.offs, 1, "its own release ends it")
+  assert_equal(double.offs[1].voice, 2); assert_equal(double.offs[1].key, 105)
 end)
 
 end

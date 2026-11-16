@@ -71,7 +71,7 @@ A monome 128 reports 16x8 (norns' matron reads its rows and cols once, at connec
 - **8×16 (128 vertical)**: `grid_key_128v()` and `grid_redraw_128v()` (`docs/notes/lua/grid/layout_128v.md`).
 - **8×8 (64 buttons)**: `grid_key_64()` and `grid_redraw_64()`, the compact layout (`docs/notes/lua/grid/layout_64.md`).
 
-To add a layout: a `lib/grid/layout_<name>.lua` that sets `S.registry.grid_layouts["<name>"] = {key = ..., redraw = ...}` (plus `fx_faders_page = <page>` if a page shows the FX faders; only the 256 has one, page 4; `selects_grid_voice = true` if a position press selects the grid voice and the layout has one bookmark strip, for the grid voice: the 128h, 128v and 64, never the 256; and `shows_modulation = fn(port)`, true while the port shows macro faders or the morph: the 256, 128h and 128v), one `include` line in `strata.lua` and the size match in `grid_layout()`.
+To add a layout: a `lib/grid/layout_<name>.lua` that sets `S.registry.grid_layouts["<name>"] = {key = ..., redraw = ...}` (plus `fx_faders_page = <page>` if a page shows the FX faders; only the 256 has one, page 4; `selects_grid_voice = true` if a position press selects the grid voice and the layout has one bookmark strip, for the grid voice: the 128h, 128v and 64, never the 256; `rows_show_grid_voice = true` if its position keys name the grid voice at their press and release: the 64; and `shows_modulation = fn(port)`, true while the port shows macro faders or the morph: the 256, 128h and 128v), one `include` line in `strata.lua` and the size match in `grid_layout()`.
 
 Several grids:
 - Each grid shows and changes its own page; everything else (patterns, voice status, the fader page and voice) is shared.

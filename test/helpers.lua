@@ -338,6 +338,52 @@ local function shown_step_editor()
   return editor.voice .. " " .. editor.step .. " " .. editor.port
 end
 
+-- 3.7's slice rows (lib/positions.lua, design §10): doubles for the three
+-- modules the rows consume, with exactly the functions they use, set as
+-- fields of each module's table after startup (so they replace the real
+-- ones too, and the real modules' start steps run unharmed): S.lib.slices
+-- (takes_notes, count, play, note_off, playing), S.lib.scan (pass_seconds)
+-- and S.lib.samples (on_bind). Voice v takes notes while takes[v] is set
+-- and it reads a buffer whose slot holds counts[slot] slices; plays are
+-- {voice, n, note}, offs {voice, owner, key}; a played slice sounds
+-- (sounding[key]) until its key's note_off, or, while `pass` is a number
+-- (one shot with a moving scan), until the test ends it; binds holds each
+-- on_bind listener
+local function slice_doubles(S, counts)
+  local doubles = {counts = counts or {}, takes = {}, plays = {}, offs = {}, sounding = {}, pass = nil, binds = {}}
+  local slices = S.lib.slices or {}
+  S.lib.slices = slices
+  function slices.count(slot) return doubles.counts[slot] or 0 end
+  function slices.takes_notes(voice_idx)
+    return doubles.takes[voice_idx] == true and voice_uses_buffer(voice_idx) and slices.count(voice_buffer_slot(voice_idx)) > 0
+  end
+  function slices.play(voice_idx, n, note)
+    table.insert(doubles.plays, {voice = voice_idx, n = n, note = note})
+    if n > slices.count(voice_buffer_slot(voice_idx)) then return false end
+    doubles.sounding[note.key] = {voice = voice_idx, n = n}
+    return 1
+  end
+  function slices.note_off(voice_idx, owner, key)
+    table.insert(doubles.offs, {voice = voice_idx, owner = owner, key = key})
+    if doubles.pass == nil then doubles.sounding[key] = nil end
+  end
+  function slices.playing(voice_idx)
+    local list = {}
+    for _, sounding in pairs(doubles.sounding) do
+      if sounding.voice == voice_idx then list[#list + 1] = sounding.n end
+    end
+    table.sort(list)
+    return list
+  end
+  local scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return doubles.pass and fraction * doubles.pass or nil end
+  local samples = S.lib.samples or {}
+  S.lib.samples = samples
+  function samples.on_bind(fn) table.insert(doubles.binds, fn) end
+  return doubles
+end
+
 -- Deep copy of plain data tables
 local function deep_copy(value)
   if type(value) ~= "table" then return value end
@@ -880,6 +926,7 @@ return {
   wake = wake,
   wake_buffer_clock = wake_buffer_clock,
   shown_step_editor = shown_step_editor,
+  slice_doubles = slice_doubles,
   deep_copy = deep_copy,
   tabutil_text = tabutil_text,
   file_text = file_text,

@@ -1099,48 +1099,9 @@ test("a position key and a bookmark key wait for the bar; a step's bookmark lock
   assert_near(params:get("v1_buf_pos"), 0.1, 1e-9, "so is jump")
 end)
 
--- 3.7 (design §10, decision 13): a slice row. Doubles stand in for the
--- three modules 2e consumes, with exactly the functions it uses, set as
--- fields of each module's table (so they replace the real ones too):
--- S.lib.slices (2b: takes_notes, count, play, note_off, playing), S.lib.scan
--- (2a: pass_seconds) and S.lib.samples (2d: on_bind). Voice v takes notes
--- while takes[v] is set and it reads a buffer whose slot has slices; a
--- played slice sounds until its key's note_off, or, while `pass` is a
--- number (one shot with a moving scan), until the test ends it
-local function slice_doubles(S, counts)
-  local doubles = {counts = counts or {}, takes = {}, plays = {}, offs = {}, sounding = {}, pass = nil, binds = {}}
-  local slices = S.lib.slices or {}
-  S.lib.slices = slices
-  function slices.count(slot) return doubles.counts[slot] or 0 end
-  function slices.takes_notes(voice_idx)
-    return doubles.takes[voice_idx] == true and voice_uses_buffer(voice_idx) and slices.count(voice_buffer_slot(voice_idx)) > 0
-  end
-  function slices.play(voice_idx, n, note)
-    table.insert(doubles.plays, {voice = voice_idx, n = n, note = note})
-    if n > slices.count(voice_buffer_slot(voice_idx)) then return false end
-    doubles.sounding[note.key] = {voice = voice_idx, n = n}
-    return 1
-  end
-  function slices.note_off(voice_idx, owner, key)
-    table.insert(doubles.offs, {voice = voice_idx, owner = owner, key = key})
-    if doubles.pass == nil then doubles.sounding[key] = nil end
-  end
-  function slices.playing(voice_idx)
-    local list = {}
-    for _, sounding in pairs(doubles.sounding) do
-      if sounding.voice == voice_idx then list[#list + 1] = sounding.n end
-    end
-    table.sort(list)
-    return list
-  end
-  local scan = S.lib.scan or {}
-  S.lib.scan = scan
-  function scan.pass_seconds(_, fraction) return doubles.pass and fraction * doubles.pass or nil end
-  local samples = S.lib.samples or {}
-  S.lib.samples = samples
-  function samples.on_bind(fn) table.insert(doubles.binds, fn) end
-  return doubles
-end
+-- 3.7 (design §10, decision 13): a slice row, on the doubles of 2b, 2a and
+-- 2d that test/helpers.lua shares (h.slice_doubles)
+local slice_doubles = h.slice_doubles
 
 -- Buffer voices 1-3 on slot 1, which holds `count` slices; voice 1 plays them
 local function slice_voices(count)
@@ -1348,6 +1309,28 @@ test("the bank returns to 1 when the slot's slices no longer reach it", function
   for _, listener in ipairs(doubles.binds) do listener(1) end
   assert_equal(positions.bank(1, 1), 2, "and so does a bind whose slices still reach it")
   assert_equal(#doubles.binds, 1, "still one listener")
+end)
+
+-- 2e's review (the controller's ruling): with no bind, markers deleted
+-- below the bank and added back never bring the old pick back once a key
+-- has read it
+test("a pick the slices no longer reach is forgotten when a key reads it", function()
+  local _, S, doubles = slice_voices(40)
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, 3, 1); positions.strip_key(1, 1, 3, 0)
+  doubles.counts[1] = 20  -- markers deleted below bank 3
+  press(positions, 1, 1, 2)
+  assert_equal(doubles.plays[1].n, 2, "the press plays from bank 1")
+  release(positions, 1, 1, 2)
+  doubles.counts[1] = 40  -- added back
+  assert_equal(positions.bank(1, 1), 1, "the press forgot the pick")
+
+  positions.strip_key(1, 1, 3, 1); positions.strip_key(1, 1, 3, 0)
+  doubles.counts[1] = 20
+  positions.strip_key(1, 1, "hold", 1); positions.strip_key(1, 1, "hold", 0)
+  positions.strip_key(1, 1, 3, 1); positions.strip_key(1, 1, 3, 0)  -- an empty bank: not picked
+  doubles.counts[1] = 40
+  assert_equal(positions.bank(1, 1), 1, "a bank key's press forgot it too")
 end)
 
 test("the slice rows repaint from the playhead clock when a slice starts or ends", function()
