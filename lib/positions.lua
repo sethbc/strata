@@ -162,6 +162,15 @@ return function(S)
     S.lib.playheads.reset(voice_idx)
   end
 
+  -- Restart a running buffer voice's scan at 0 now, and the playhead with
+  -- it: t_scanReset and the playhead's reset (3.7: a scan mode change,
+  -- lib/scan.lua; the engine's mode change never restarts the scan itself)
+  function M.restart_scan(voice_idx)
+    if not buffer_voice(voice_idx) then return end
+    send_grain(voice_idx, "t_scanReset", 1)
+    S.lib.playheads.reset(voice_idx)
+  end
+
   -- Set a buffer voice's loop to [a, b] (fractions, a <= b): the start, then
   -- the length (the order the loop clamps need), then a jump to a
   function M.set_loop(voice_idx, a, b)

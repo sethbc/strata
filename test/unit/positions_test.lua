@@ -405,7 +405,7 @@ end)
 test("store_bookmark takes the playhead, or buf_pos mapped into the loop when stopped", function()
   local context, S = buffer_voices()
   local positions = S.lib.positions
-  params:set("v1_buf_pos", 0.25); params:set("v1_buf_scan", 0.1)
+  params:set("v1_buf_pos", 0.25); params:set("v1_buf_scan", 1.6)  -- a speed: 0.1 of the 16 s slot a second
   S.lib.playheads.reset(1)
   context.clock.run_for(2)
   local playhead = S.lib.playheads.position(1)

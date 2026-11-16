@@ -86,6 +86,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/samples.lua` | `samples` | `docs/notes/lua/samples.md` | samples_test.lua |
 | `lib/playheads.lua` | `playheads` | `docs/notes/lua/playheads.md` | playheads_test.lua |
 | `lib/positions.lua` | `positions` | `docs/notes/lua/positions.md` | positions_test.lua |
+| `lib/scan.lua` | `scan` | `docs/notes/lua/scan.md` | scan_test.lua |
 | `lib/bookmarks.lua` | `bookmarks` | `docs/notes/lua/bookmarks.md` | bookmarks_test.lua |
 | `lib/ui/modal.lua` | `ui_modal` | `docs/notes/lua/ui/pages-and-dispatch.md` | ui_modal_test.lua |
 | `lib/quantize.lua` | `quantize` | `docs/notes/lua/quantize.md` | quantize_test.lua |

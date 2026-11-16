@@ -154,7 +154,7 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | source | synth, buf 1-8, input | synth | What the voice's grains read ([Audio Sources and Buffers](sources-and-buffers.md)) |
 | buffer position | 0-1 | 0 | Where a buffer-sourced voice's grains read, in its loop |
 | buffer rate | 0.25-4 | 1 | How fast a buffer-sourced voice's grains read the buffer |
-| buffer scan | -2 to 2 | 0 | How fast the position moves through the loop, in loop lengths a second (backward below 0) |
+| buffer scan | -2 to 2 | 0 | How fast the position moves through the loop, as a speed: at 1 the audio's own rate, at 2 double, below 0 backward (VOICE shows it as `1.00x`). Before 3.7 it was loop lengths a second, so a scene or PSET saved then with a scan that is not 0 plays at another speed |
 | grain size | 0.01-0.5 s | by voice: 0.1, 0.15, 0.08, 0.2, 0.12, 0.08, 0.1 | |
 | grain density | 1-100 /s | by voice: 20, 15, 25, 10, 18, 22, 20 | Grains a second |
 | grain pitch | 0.25-4 x | 1 | The transposition ratio |
@@ -170,6 +170,8 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | freeze mode | hold (and spectral on the high tier) | hold | |
 | loop start | 0-1 | 0 | The part of the buffer a buffer-sourced voice plays ([Audio Sources and Buffers](sources-and-buffers.md)) |
 | loop length | 0.001-1 | 1 | |
+| scan mode | wrap, bounce, one shot | wrap | Buffer voices: at the loop's end the scan goes round again, turns back, or plays once and stays silent until the voice's next hit ([voices and grains](voices-and-grains.md#scan-modes-and-tempo-follow)) |
+| follow | off, stretch, repitch | off | Buffer voices on a file with a tempo: the scan follows the clock's tempo, keeping the pitch (stretch) or moving it with the speed (repitch) |
 | reverse | 0-100% | 0 | How each grain differs from the last, the reverse to custom rows ([Grain variation](voices-and-grains.md#grain-variation)) |
 | pitch jitter | 0-12 st | 0 | |
 | pan jitter | 0-1 | 0 | |

@@ -35,6 +35,7 @@ return function(S)
     value_right = 124,
     value_gap = 4,       -- the least room between a label and its value
     line_gap = 6,        -- between the voice and the section on their line
+    speed_format = "%.2fx",  -- buf_scan's value: a speed (3.7)
   }
   local LAYOUT = M.LAYOUT
 
@@ -91,11 +92,14 @@ return function(S)
   end
 
   -- A row's value: the param's own string (its unit included), trailing
-  -- spaces dropped; mod sources by voice name
+  -- spaces dropped; mod sources by voice name; a buffer voice's scan as a
+  -- speed (3.7: "1.00x", 1 the audio's own rate)
   local function value_text(row)
-    if param_key(row):match("^mod_source_%d+$") then
+    local key = param_key(row)
+    if key:match("^mod_source_%d+$") then
       return mod_source_text(params:get(row.param_id))
     end
+    if key == "buf_scan" then return string.format(LAYOUT.speed_format, params:get(row.param_id)) end
     -- a binary param's own string is its number (norns' Binary:string)
     if row.kind == "binary" then return params:get(row.param_id) == 1 and "on" or "off" end
     return (params:string(row.param_id):gsub("%s+$", ""))

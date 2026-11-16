@@ -1,11 +1,14 @@
 -- lib/playheads.lua
 -- Where each running buffer voice's grains start, estimated: the phase of
--- its scan is integrated from the scan rate the engine has (an LFO's
--- offset, freeze, the scan hold and the scrub glide count), and restarts at
--- 0 exactly where the engine's does (a grain restart, a jump). Also the
--- record head of a slot recording playably, and a 15 Hz clock that follows
--- all of it and redraws a grid that shows the position page when its LEDs
--- change. See docs/notes/lua/playheads.md.
+-- its scan is integrated from the scan the engine has (an LFO's offset,
+-- tempo follow's factor, freeze, the scan hold and the scrub glide count)
+-- as a speed over the span in play (the own note's region, else the
+-- loop), in the voice's scan mode (wrap, bounce, one shot), in beats for a
+-- voice that follows the tempo, and restarts at 0 exactly where the
+-- engine's does (a grain restart, a jump, a scan mode change, a one-shot
+-- voice's hit). Also the record head of a slot recording playably, and a
+-- 15 Hz clock that follows all of it and redraws a grid that shows the
+-- position page when its LEDs change. See docs/notes/lua/playheads.md.
 
 return function(S)
   local M = {}
@@ -13,8 +16,14 @@ return function(S)
   local PLAYHEADS = S.constants.PLAYHEADS
   -- the page the grids show positions on (design 3.3 section 9)
   local POSITION_PAGE = S.constants.GRID_PAGES.positions
+  -- The largest buf_pos the engine's wrap takes (its lastLoopPosition,
+  -- StrataLoop.sc): buf_pos 1 is the span's last start, not its first (#726)
+  local LAST_POSITION = 0.999999
+  -- scan_mode's option indices (lib/scan.lua)
+  local MODE = {wrap = 1, bounce = 2, one_shot = 3}
 
-  -- per voice: {phase = the scan's phase (0-1), at = the time it is true at}
+  -- per voice: {phase = the scan's phase (0-1 in wrap, 0-2 in bounce,
+  -- unbounded in one shot), at = the time it is true at, beat = the beat}
   local heads = {}
   local clock_id
   -- the page-5 grids' LED levels as of their last redraw (nil: none shown)
@@ -33,22 +42,63 @@ return function(S)
 
   local function param_id(voice_idx, key) return "v" .. voice_idx .. "_" .. key end
 
-  -- The scan's rate in loop fractions a second, as the engine has it
+  -- The own note's region (package 2b's S.lib.notes.own_region: a copy
+  -- {start, length}, or nil) as start, length; nil for none
+  local function own_region(voice_idx)
+    local reader = S.lib.notes.own_region
+    local region = reader and reader(voice_idx)
+    if type(region) ~= "table" then return nil end
+    local start, length = region[1] or region.start, region[2] or region.length
+    if type(start) ~= "number" or type(length) ~= "number" or length <= 0 then return nil end
+    return start, length
+  end
+
+  -- The span the voice's grains start in, as the engine has it (slotSpan,
+  -- StrataLoop.sc): the own note's region, else the loop; start and length
+  -- as fractions of the slot's valid region, the length cut at its end
+  local function span(voice_idx)
+    local start, length = own_region(voice_idx)
+    if not start then
+      start, length = params:get(param_id(voice_idx, "loop_start")), params:get(param_id(voice_idx, "loop_length"))
+    end
+    start = util.clamp(start, 0, 1)
+    return start, math.min(util.clamp(length, 0, 1), 1 - start)
+  end
+
+  -- The scan's rate in spans a second, as the engine has it: the scan is
+  -- a speed (1 crosses the span in its own length of audio), stopped by
+  -- freeze and the hold; the glide adds its rate in spans a second
   local function scan_effective(voice_idx)
     local scan = engine_param_value(param_id(voice_idx, "buf_scan"))
     local frozen = S.lib.freeze.is_frozen(voice_idx) and 1 or 0
     local held = S.lib.positions.scan_held(voice_idx) and 1 or 0
-    return scan * (1 - frozen) * (1 - held) + S.lib.positions.scrub_rate(voice_idx)
+    local slot = voice_buffer_slot(voice_idx)
+    local _, length = span(voice_idx)
+    local span_seconds = length * (S.buffers[slot] and S.buffers[slot].seconds or 0)
+    local speed = span_seconds > 0 and 1 / span_seconds or 0
+    return scan * speed * (1 - frozen) * (1 - held) + S.lib.positions.scrub_rate(voice_idx)
+  end
+
+  -- A phase kept in its mode's range: 0-1 in wrap, 0-2 in bounce (two
+  -- passes), unbounded in one shot (the engine's Sweep never wraps)
+  local function kept(voice_idx, phase)
+    local mode = S.lib.scan.mode(voice_idx)
+    if mode == MODE.bounce then return phase % 2 end
+    if mode == MODE.one_shot then return phase end
+    return phase % 1
   end
 
   -- Forget a voice's phase: its scan restarts at 0 now
   function M.reset(voice_idx)
     if not valid_voice(voice_idx) then return end
-    heads[voice_idx] = {phase = 0, at = util.time()}
+    heads[voice_idx] = {phase = 0, at = util.time(), beat = clock.get_beats()}
   end
 
-  -- Bring a voice's phase up to now at the rate it has now. The positions
-  -- module calls it before it changes the hold or the glide's rate
+  -- Bring a voice's phase up to now at the rate it has now: over the time
+  -- since, or for a voice that follows the tempo (S.lib.scan.following)
+  -- over the beats since at the beat's length now, so its estimate stays
+  -- on the beat (a beat that goes back counts none). The positions module
+  -- calls it before it changes the hold or the glide's rate
   function M.advance(voice_idx)
     if not valid_voice(voice_idx) then return end
     local head = heads[voice_idx]
@@ -56,29 +106,70 @@ return function(S)
       M.reset(voice_idx)
       return
     end
-    local now = util.time()
-    if running_buffer_voice(voice_idx) and now > head.at then
-      head.phase = (head.phase + scan_effective(voice_idx) * (now - head.at)) % 1
+    local now, beat = util.time(), clock.get_beats()
+    if running_buffer_voice(voice_idx) then
+      local seconds
+      if S.lib.scan.following(voice_idx) then
+        seconds = math.max(beat - head.beat, 0) * S.lib.params_setup.beat_seconds_now()
+      else
+        seconds = math.max(now - head.at, 0)
+      end
+      if seconds > 0 then head.phase = kept(voice_idx, head.phase + scan_effective(voice_idx) * seconds) end
     end
-    head.at = math.max(now, head.at)
+    head.at, head.beat = math.max(now, head.at), beat
   end
 
-  -- A voice's read position (0-1 of the slot's valid region), or nil unless
-  -- a buffer voice runs
+  -- buf_pos, the phase up to now in its mode's range, and the mode
+  local function scan_state(voice_idx)
+    M.advance(voice_idx)
+    local buf_pos = engine_param_value(param_id(voice_idx, "buf_pos"))
+    return buf_pos, kept(voice_idx, heads[voice_idx].phase), S.lib.scan.mode(voice_idx)
+  end
+
+  -- A voice's read position (0-1 of the slot's valid region), or nil
+  -- unless a buffer voice runs: the span's start + a fraction of its
+  -- length, as the engine's modes give it (slotScanPosition): in wrap
+  -- (buf_pos, at most its last start, + the phase) wrapped; in bounce the
+  -- sum folded; in one shot held at the edges
   function M.position(voice_idx)
     if not running_buffer_voice(voice_idx) then return nil end
-    M.advance(voice_idx)
-    local start = params:get(param_id(voice_idx, "loop_start"))
-    local length = params:get(param_id(voice_idx, "loop_length"))
-    local buf_pos = engine_param_value(param_id(voice_idx, "buf_pos"))
-    return start + ((buf_pos + heads[voice_idx].phase) % 1) * length
+    local buf_pos, phase, mode = scan_state(voice_idx)
+    local start, length = span(voice_idx)
+    local fraction
+    if mode == MODE.bounce then
+      fraction = (buf_pos + phase) % 2
+      if fraction > 1 then fraction = 2 - fraction end
+    elseif mode == MODE.one_shot then
+      fraction = util.clamp(buf_pos + phase, 0, 1)
+    else
+      fraction = (math.min(buf_pos, LAST_POSITION) + phase) % 1
+    end
+    return start + fraction * length
   end
 
-  -- The width grains are spread over (the position spread x the loop
+  -- The scan's phase as engine.syncScan takes it (0-1 in wrap, 0-2 in
+  -- bounce; in one shot as it runs), or nil unless a buffer voice runs
+  function M.phase(voice_idx)
+    if not running_buffer_voice(voice_idx) then return nil end
+    local _, phase = scan_state(voice_idx)
+    return phase
+  end
+
+  -- Whether a one-shot voice has played out: buf_pos + the phase strictly
+  -- past 1 or below 0, where the engine's level is 0 (exactly 1 sounds)
+  function M.finished(voice_idx)
+    if not running_buffer_voice(voice_idx) then return false end
+    local buf_pos, phase, mode = scan_state(voice_idx)
+    local sum = buf_pos + phase
+    return mode == MODE.one_shot and (sum > 1 or sum < 0)
+  end
+
+  -- The width grains are spread over (the position spread x the span's
   -- length), or nil unless a buffer voice runs
   function M.spread(voice_idx)
     if not running_buffer_voice(voice_idx) then return nil end
-    return params:get(param_id(voice_idx, "grain_spread")) * params:get(param_id(voice_idx, "loop_length"))
+    local _, length = span(voice_idx)
+    return params:get(param_id(voice_idx, "grain_spread")) * length
   end
 
   -- The cell (1..columns) of `columns` that a fraction is in
@@ -212,6 +303,11 @@ return function(S)
   -- Every grain restart (a voiceOn, a running voice's source switch)
   -- restarts the engine's scan at 0
   S.register_grain_restart(function(voice_idx) M.reset(voice_idx) end)
+  -- A hit on a one-shot voice's own note restarts its scan (the engine's
+  -- positionsHit, a retrigger's); sends nothing
+  S.register_voice_hit({name = "playheads", hit = function(voice_idx, info)
+    if info.slot == 1 and S.lib.scan.mode(voice_idx) == MODE.one_shot then M.reset(voice_idx) end
+  end})
   S.register_start(S.constants.START_ORDER.playheads, start_clock)
   S.register_cleanup(S.constants.CLEANUP_ORDER.playheads, stop_clock)
 

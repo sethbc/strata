@@ -381,4 +381,9 @@ return {
   -- 3.7 (design §5.1): trig conditions (lib/conditions.lua): A:B for B up to
   -- max_b, then the named ones, each followed by its opposite
   CONDITIONS = {max_b = 8, names = {"first", "!first", "pre", "!pre", "nei", "!nei", "fill", "!fill"}},
+  -- 3.7 (design §2.4): tempo follow (lib/scan.lua): a ratio that moved by
+  -- more than ratio_threshold of itself is sent; repitch's read rate is
+  -- clamped to rate_min-rate_max (the engine's followRate clip); a
+  -- following voice is synced once every bar_beats beats
+  FOLLOW = {ratio_threshold = 0.005, rate_min = 0.25, rate_max = 4, bar_beats = 4},
 }

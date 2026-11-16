@@ -182,7 +182,8 @@ test("loop rows show in a buffer voice's section only", function()
       local outline = row_ids(voice_idx)
       -- (3.7: then the slices option's row, lib/slices.lua)
       local expected = string.format("synth synth:%s_buf_pos synth:%s_buf_rate synth:%s_buf_scan "
-        .. "synth:%s_loop_start synth:%s_loop_length synth:%s_slices grain ", prefix, prefix, prefix, prefix, prefix,
+        .. "synth:%s_loop_start synth:%s_loop_length synth:%s_slices synth:%s_scan_mode synth:%s_follow grain ",  -- then 3.7's scan rows
+        prefix, prefix, prefix, prefix, prefix, prefix, prefix,
         prefix)
       assert_true(outline:find(expected, 1, true) == 1,
         prefix .. " on buffer " .. slot .. ": the loop rows end the synth section: " .. outline)
