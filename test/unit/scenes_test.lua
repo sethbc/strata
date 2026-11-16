@@ -2832,6 +2832,116 @@ test("a shortened sequence drops a kept slot past its end", function()
   params:set("scene_sequencer_enabled", 0)
 end)
 
+-- 1f's review: a pick made again when the playing scene is outside the
+-- sequence (or empty) is no pick: 3.6's advance stands in, with no draw
+
+-- Count math.random's calls while fn runs (the real one draws)
+local function counting_draws(fn)
+  local real_random, draws = math.random, 0
+  math.random = function(...) draws = draws + 1; return real_random(...) end
+  local ok, problem = pcall(fn, function() return draws end)
+  math.random = real_random
+  assert_true(ok, tostring(problem))
+end
+
+-- Ask for the next slot as often as a screen and a grid redraw do
+local function ask_often(S)
+  local slots = {}
+  for _ = 1, 5 do slots[#slots + 1] = S.lib.scenes.sequencer_next_slot() end
+  for slot = 1, S.constants.NUM_SCENES do S.lib.grid_core.scene_recall_level(slot) end
+  return slots
+end
+
+test("a repeat over a shortened sequence falls back to the next scene, and the mark follows what plays", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  chance_scenes({ 1, 2, 3, 4 }, 4, { 100, 0, 0 })
+  local recalls = run_scene_sequencer(context, 0, 4, 9)        -- scenes 1, 2, 3: 3 playing
+  assert_equal(recalls[#recalls].scene, 3, "scene 3 playing")
+  params:set("scene_chance_next", 0)                           -- 0, 0, 0 from the next draw
+  context.clock.run_for(4, 0.001)                              -- scene 4, then a repeat drawn
+  assert_equal(recalls[#recalls].scene, 4, "scene 4 playing")
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 4, "a repeat of scene 4 drawn")
+  params:set("scene_sequence_length", 2)                       -- scene 4 is past the end now
+  assert_equal(table.concat(ask_often(S), " "), "1 1 1 1 1", "3.6's advance: past the end wraps to scene 1")
+  context.clock.run_for(4, 0.001)
+  assert_equal(recalls[#recalls].scene, 1, "scene 1 is recalled, not held silently")
+  assert_equal(S.current_scene, 1)
+  assert_equal(S.scene_sequencer_position, 1, "the mark is on the scene playing")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+test("a pick made again draws at most once however often the grids ask", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  chance_scenes({ 1, 2, 3, 4 }, 4, { 100, 0, 0 })
+  local recalls = run_scene_sequencer(context, 0, 4, 1)        -- scene 1 playing, 2 picked
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 2)
+  params:set("scene_chance_next", 50)
+  math.randomseed(3)
+  counting_draws(function(draws)
+    S.scenes[2] = { name = "", populated = false, data = {} }  -- the picked slot empties
+    local asked = ask_often(S)
+    assert_equal(draws(), 1, "the pick is made again once, however often asked")
+    for index = 2, #asked do assert_equal(asked[index], asked[1], "the same slot every time") end
+    assert_true(asked[1] == 1 or asked[1] == 3, "next (3) or a repeat (1): " .. tostring(asked[1]))
+    context.clock.run_for(4, 0.001)
+    assert_equal(draws(), 2, "then the pass's own draw after its recall")
+    assert_equal(S.scene_sequencer_position, asked[1], "the pass went to the slot the grids showed")
+    if asked[1] == 3 then assert_equal(recalls[#recalls].scene, 3) else assert_equal(#recalls, 1, "a repeat recalls nothing") end
+  end)
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+test("at 50, 0, 0 a shortened sequence under the playing scene draws nothing and the next scene can play", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  chance_scenes({ 1, 2, 3, 4 }, 4, { 100, 0, 0 })
+  local recalls = run_scene_sequencer(context, 0, 4, 9)        -- scene 3 playing
+  assert_equal(recalls[#recalls].scene, 3)
+  params:set("scene_chance_next", 50)
+  counting_draws(function(draws)
+    params:set("scene_sequence_length", 2)                     -- scene 3 and its pick past the end
+    local asked = ask_often(S)
+    assert_equal(draws(), 0, "no draw: the playing scene is outside the sequence")
+    assert_equal(table.concat(asked, " "), "1 1 1 1 1", "3.6's advance, wrapped to 1")
+    context.clock.run_for(4, 0.001)
+    assert_equal(recalls[#recalls].scene, 1, "and scene 1 is recalled")
+  end)
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+test("a load that empties the playing and the picked slots goes on to the scene after the position, as 3.6", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  chance_scenes({ 1, 2, 3, 4 }, 4, { 100, 0, 0 })
+  local recalls = run_scene_sequencer(context, 0, 4, 5)        -- scenes 1, 2: 2 playing, 3 next
+  assert_equal(recalls[#recalls].scene, 2)
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 3)
+  for _, slot in ipairs({ 2, 3 }) do S.scenes[slot] = { name = "", populated = false, data = {} } end
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 4, "the first scene after the position, not scene 1")
+  context.clock.run_for(4, 0.001)
+  assert_equal(recalls[#recalls].scene, 4, "scene 4 is recalled")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+test("a scene saved into a skipped slot during the hold waits: the picked scene plays first", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  chance_scenes({ 1, 3 }, 3, { 100, 0, 0 })
+  local recalls = run_scene_sequencer(context, 0, 4, 1)        -- scene 1 playing, 3 picked past empty 2
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 3)
+  capture_scene(2)                                             -- 3.6 would play 2 next
+  assert_equal(S.lib.scenes.sequencer_next_slot(), 3, "the light keeps the picked scene")
+  context.clock.run_for(4, 0.001)
+  assert_equal(recalls[#recalls].scene, 3, "scene 3 plays, as the light showed")
+  context.clock.run_for(4, 0.001)
+  assert_equal(recalls[#recalls].scene, 1, "then 1, and 2 from the following pass")
+  context.clock.run_for(4, 0.001)
+  assert_equal(recalls[#recalls].scene, 2)
+  params:set("scene_sequencer_enabled", 0)
+end)
+
 test("no next slot is kept while the sequencer is off", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
