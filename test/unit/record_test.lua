@@ -822,4 +822,42 @@ test("a take's binds: a replace take starts fresh, an overdub copies its file's 
   assert_near(S.lib.samples.tempo(3), 110, 1e-9, "the clock's tempo, not the take before's 90")
 end)
 
+-- 3.7 (fix round 2's ruling): a synced replace take that is not canceled
+-- unbinds once, at the slot's 0 s report (the engine emptying it just
+-- before the start); its "recording" report then unbinds, resends and
+-- tells nothing again
+test("a synced take unbinds once: at its 0 s report, not again at its start", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  load_buffer(3, "/tmp/drone.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 4))
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 3)
+  if not S.voices[1].active then toggle_voice(1) end
+  S.lib.samples.set(3, "key", 57)
+  local told = 0
+  S.lib.samples.on_bind(function(slot) if slot == 3 then told = told + 1 end end)
+  local function root_notes()
+    local count = 0
+    for _, call in ipairs(context.calls_named("setGrainParam")) do
+      if call.args[1] == 0 and call.args[2] == "rootNote" then count = count + 1 end
+    end
+    return count
+  end
+  params:set("record_feedback", 0); params:set("record_sync", 2)
+  context.clock.run_for(1)
+  context.clear_engine_calls()
+  record_buffer(3)
+  local number = S.buffers[3].records_sent
+  context.polls.fire("recordState", record_state_value(number, 0, 3))
+  assert_equal(told, 0, "the arm wait: still bound")
+  assert_equal(S.lib.samples.settings(3).key, 57)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 0))  -- the engine emptied the slot
+  assert_equal(told, 1, "unbound at the 0 s report")
+  assert_equal(root_notes(), 1, "rootNote resent once")
+  assert_equal(S.lib.samples.is_bound(3), false)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 0))  -- the periodic repeat
+  context.polls.fire("recordState", record_state_value(number, 1, 3))  -- its start
+  assert_equal(told, 1, "the start tells nothing again")
+  assert_equal(root_notes(), 1, "nor resends")
+end)
+
 end

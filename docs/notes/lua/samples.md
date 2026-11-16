@@ -19,6 +19,7 @@
 
 **Functions**:
 - `settings(slot)`: the live record of what the slot holds (a default one made on first use), nil for a slot with no audio. `set(slot, field, value)`: checks, stores, schedules the write, then acts (`key`: resends `scaleNote` and `rootNote`; `normalize`: sends the gain) and requests a redraw; true when stored (or unchanged), false when refused.
+- `is_bound(slot)`: whether the slot is bound (to its take's record or a file's), for the unbind of a canceled take (`lib/buffers.lua`). It can be true while the slot reports 0 s (a load over audio awaiting its new audio, a slot the engine is emptying), so whether a slot has settings is `settings(slot)` (nil, or the record), never `is_bound`.
 - `on_bind(fn)`, `bind(slot)`, `unbind(slot)` (above). `bind` of a file raises its `used` to a counter's next value (the largest `used` read at start, plus one per bind), and the entries are pruned: an unbound entry at its defaults goes, and past `max_files` the unbound one with the lowest `used`.
 - `drop_own(slot)`, `start_take(slot, tempo)`, `take_from_file(slot, tempo)` (`lib/buffers.lua`, `lib/record.lua`); `snapshot(slot)` (a whole save's copy at its send, nil at defaults) and `store_file(path, record)` (the save's success: the path's entry at start 0 takes it); `stored_own(slot)` and `restore_own(slot, value)` (`buffers.data`'s write and restore; a damaged record is dropped with one console line).
 - `rate_root(voice)`, `scale_reference(voice)`.
