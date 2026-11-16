@@ -84,7 +84,7 @@ K2:back K3:off E3:source
 
 ## A source's settings
 
-A modulation source can have settings of its own (3.7's envelopes and random sequences will). K3 on its row shows them, under the source's name, five at a time:
+A modulation source can have settings of its own (3.7's envelopes and random sequences will): its row's hint then starts with `K3:edit`. K3 on its row shows them, under the source's name, five at a time:
 
 ```
 MOD     ·····•···

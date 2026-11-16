@@ -1482,6 +1482,39 @@ test("a MIDI note that starts a voice, a gated step's start and a chord step are
   pattern_clock_stop()
 end)
 
+-- Review 0b, Important 1: each MIDI note is a hit (design §0.2), a key
+-- played again while its note is held in an extra slot too, as the engine's
+-- extraNoteOn accents it; a step's chord replayed at a ratchet is the step's
+-- one hit per ratchet, never more
+test("a MIDI note played again on a key held in an extra slot is a hit; a ratchet's chord replay is not", function()
+  local context, S, log = hit_log()
+  local function note_on(channel, note)
+    context.midi.send(1, { type = "note_on", note = note, vel = 127, ch = channel })
+  end
+  note_on(4, 61); note_on(4, 64)
+  assert_equal(S.lib.notes.find(4, "midi", 4 * 128 + 64), 2, "64 is held in extra slot 2")
+  clear_log(log)
+  context.clear_engine_calls()
+  note_on(4, 64)
+  assert_equal(#context.calls_named("noteOn"), 1, "the replay accents the slot with a noteOn")
+  assert_equal(table.concat(log, "; "), "4 note 1.000 slot 2", "and is one hit, in its slot")
+  -- a ratchet replays the step's further notes in their extra slots
+  clear_log(log)
+  S.patterns[1][1] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "notes", { 0, 4, 7 })
+  S.lib.sequencer.set_step_attr(1, 1, "ratchet", 2)
+  context.clear_engine_calls()
+  pattern_clock_start()
+  context.clock.run_for(0.1)
+  pattern_clock_stop()
+  local replays = 0
+  for _, call in ipairs(context.calls_named("noteOn")) do
+    if call.args[1] == 0 then replays = replays + 1 end
+  end
+  assert_equal(replays, 4, "two further notes started, then replayed at the ratchet")
+  assert_equal(table.concat(log, "; "), "1 step 1.000 slot 1; 1 step 1.000 slot 1", "one hit per ratchet")
+end)
+
 test("a hook that raises is contained and the others still run", function()
   local context, S, log = hit_log()
   S.register_voice_hit({ name = "boom", hit = function(voice_idx) error("hit hook boom " .. voice_idx) end })

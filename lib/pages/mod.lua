@@ -50,6 +50,7 @@ return function(S)
     bound_step = 0.01, bound_fine_step = 0.001,
     columns = {"target", "min", "max"},
     routing_rows = {"source", "dest", "depth", "on"},
+    field_label_max = 8,  -- a settings row's label, as drawn and named in the hint (3.7)
     random = {depth = {0, 30}, rate = {0.02, 0.5}, matrix = {-50, 50}},
   }
   S.MOD_PAGE = MOD_PAGE
@@ -896,9 +897,15 @@ return function(S)
   -- The settings view's rows: each field's label and value(), as the
   -- routing view's rows draw (a function's list is unchecked: a label or
   -- value that is not a string draws as its text)
+  -- A field's label as drawn: printable, at most field_label_max characters
+  -- (a fields function's list is not checked at registration)
+  local function field_label(field)
+    return S.lib.ui_text.printable(tostring(field.label or "")):sub(1, MOD_PAGE.field_label_max)
+  end
+
   local function draw_settings_row(field, y, selected, value_right)
     local level = selected and L.selected or L.dim
-    local label = S.lib.ui_text.printable(tostring(field.label or ""))
+    local label = field_label(field)
     draw_text(0, y, label, level)
     local value = type(field.value) == "function" and field.value() or ""
     local room = value_right - screen.text_extents(label) - MOD_PAGE.gap
@@ -948,8 +955,12 @@ return function(S)
     if row.kind == "toggle" then return "K3:" .. (params:get(row.param_id) == 1 and "off" or "on") .. " E3:on/off" end
     if row.kind == "routing" then return "K3:edit E3:depth" end
     local actions = row.source.row
-    if actions and actions.hints then return actions.hints(false) or "" end
-    return ""
+    local own = (actions and actions.hints) and (actions.hints(false) or "") or ""
+    -- K3 opens a source's settings when its row has no press of its own (3.7)
+    if row.source.fields and not (actions and actions.press) then
+      return own ~= "" and ("K3:edit " .. own) or "K3:edit"
+    end
+    return own
   end
 
   -- The K2 part of the ALT hint (ruling 76): what ALT+K2 does under the
@@ -998,7 +1009,7 @@ return function(S)
       -- a row with a press names it, and E2:row gives way: with an 8-letter
       -- label the four parts pass the hint row's 128 px
       if field and type(field.press) == "function" then
-        return joined("K2:back", "K3:" .. S.lib.ui_text.printable(tostring(field.label)), "E3:edit")
+        return joined("K2:back", "K3:" .. field_label(field), "E3:edit")
       end
       return "K2:back E2:row E3:edit"
     end
@@ -1352,6 +1363,9 @@ return function(S)
     S.register_mod_source({key = "layout settings", name = "WWWW", section = "a section of a later release",
       range = {0, 1}, value = function() return 0 end, fields = fields})
   end
+  -- its row in the list, whose hint names K3:edit
+  table.insert(layout_states, state("a later source with settings, on its row", "source:layout settings",
+    settings_probe))
   for row = 1, SETTINGS_PROBE_ROWS do
     table.insert(layout_states, {name = "a later source's settings, row " .. row, setup = function()
       settings_probe()

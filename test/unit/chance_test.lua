@@ -76,9 +76,17 @@ test("each move is picked by one draw", function()
   assert_equal(slot, 4); assert_equal(move, "previous")
   slot = chance.pick(9, slots, { 0, 100, 0 }, raises)
   assert_equal(slot, 4, "a current not in slots: previous is the last")
-  -- the default random is math.random
-  slot, move = chance.pick(2, slots, { 0, 0, 0 })
-  assert_equal(slot, 2); assert_equal(move, "repeat", "all three 0: a repeat")
+  slot, move = chance.pick(2, slots, { 0, 0, 0 }, raises)
+  assert_equal(slot, 2); assert_equal(move, "repeat", "all three 0: a repeat, with no draw")
+  -- the default random is math.random: the draw is math.random's, read at the call
+  local real_random = math.random
+  local default_calls
+  math.random, default_calls = draws(0.85, 0.99)
+  local ok, picked, picked_move = pcall(chance.pick, 2, slots, chances)
+  math.random = real_random
+  assert_true(ok, "the pick ran: " .. tostring(picked))
+  assert_equal(picked, 4); assert_equal(picked_move, "random", "math.random's two draws picked the move and the slot")
+  assert_equal(default_calls(), 2, "both from math.random")
 end)
 
 test("chances past 100 are scaled, and one slot can only repeat", function()

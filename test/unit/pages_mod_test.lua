@@ -754,6 +754,27 @@ test("K3 on a source with fields opens its settings, and K2 goes back to its row
   assert_equal(S.mod_page.settings, "probe", "the view stays as it was")
 end)
 
+-- Review 0b, Important 2: hints match the keys, so a row whose K3 opens
+-- the settings names it, with or without a row of its own
+test("a source's row names K3 when K3 opens its settings", function()
+  local context, S = loaded()
+  probe_settings(S, {})
+  place(S, "source:probe")
+  assert_equal(hint_text(context), "K3:edit", "no row: K3 opens the settings")
+  S.register_mod_source({ key = "probe2", name = "PR2", section = "probes", range = { 0, 1 },
+    value = function() return 0 end, fields = { { label = "a", value = function() return "1" end } },
+    row = { enc = function() end, hints = function() return "E3:depth" end } })
+  place(S, "source:probe2")
+  assert_equal(hint_text(context), "K3:edit E3:depth", "before the row's own hint")
+  S.register_mod_source({ key = "probe3", name = "PR3", section = "probes", range = { 0, 1 },
+    value = function() return 0 end, fields = { { label = "a", value = function() return "1" end } },
+    row = { press = function() end, hints = function() return "K3:go" end } })
+  place(S, "source:probe3")
+  assert_equal(hint_text(context), "K3:go", "a row's own press keeps its hint")
+  place(S, "source:lfo1")
+  assert_equal(hint_text(context), "K3:lfo E3:depth", "a source without fields is unchanged")
+end)
+
 test("a source with a press of its own keeps it", function()
   local context, S = loaded()
   local log = {}
@@ -806,6 +827,21 @@ test("the settings view lays out with each row selected", function()
   assert_true(screen_shows(context, "f1") and not screen_shows(context, "f2"), "one row")
   count = 2; context.screen.clear(); redraw()
   assert_true(screen_shows(context, "f2"), "a row added shows at the next draw")
+  -- review 0b, Minor 2: a function's list is not checked at registration,
+  -- so a long label is cut to 8 characters in the row and the hint
+  S.register_mod_source({ key = "long", name = "LONG", section = "probes", range = { 0, 1 },
+    value = function() return 0 end, fields = function()
+      return { { label = string.rep("W", 30), value = function() return string.rep("W", 30) end,
+        press = function() end } }
+    end })
+  assert_true(S.lib.pages_mod.open_settings("long")); redraw()
+  assert_screen_layout(context, "the settings view, a 30-letter label from a function")
+  assert_equal(hint_text(context), "K2:back K3:WWWWWWWW E3:edit", "the hint names the label cut to 8")
+  local label
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == 24 and entry.x == 0 then label = entry.text end
+  end
+  assert_equal(label, string.rep("W", 8), "the row's label cut to 8")
 end)
 
 test("the hint row names each row's keys", function()

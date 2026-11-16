@@ -89,7 +89,7 @@ In a routing (K3 on a routing):
 In a source's settings (K3 on a source that has them):
 
 - **Ring 1** - The setting under the cursor (20 ticks per row)
-- **Ring 2** - Its value, one step per 20 ticks (a part-turn is forgotten when you move to another setting)
+- **Ring 2** - Its value, one step per 20 ticks (a part-turn is forgotten when you move to another setting); it stays dark, as a setting shows no range
 - **Rings 3 and 4** - Nothing; they stay dark
 
 Part-turns toward the next step are also forgotten when you open or close a view, move to another section, change the bank or show another routing.

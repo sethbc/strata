@@ -2962,12 +2962,15 @@ end)
 
 -- The first path at which two values differ, or nil when they are equal
 -- (tables compared key by key, both ways; numbers to the precision a data
--- file writes them in)
+-- file writes them in: S.lib.data_files.encode writes a number with
+-- tostring, 14 significant digits, as tab.save does, so a captured
+-- filter_freq of 4999.9999999999973 is written "5000.0" and reads back
+-- 5000, a relative difference under 5e-14)
 local function first_difference(a, b, path)
   path = path or "scene"
   if type(a) ~= "table" or type(b) ~= "table" then
     if a == b then return nil end
-    if type(a) == "number" and type(b) == "number" and math.abs(a - b) <= 1e-9 * math.max(1, math.abs(a)) then
+    if type(a) == "number" and type(b) == "number" and math.abs(a - b) <= 1e-13 * math.abs(a) then
       return nil
     end
     return path .. ": " .. tostring(a) .. " ~= " .. tostring(b)

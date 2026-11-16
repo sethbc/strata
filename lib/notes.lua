@@ -438,6 +438,9 @@ return function(S)
       send_note_on(voice, slot, record)
       count(messages)
       run_note_hooks("moved", record)
+      -- a hit (3.7), as the engine's accent of the slot is, unless it is a
+      -- step's chord replayed at a ratchet: that step's retrigger is its hit
+      if played.owner ~= NOTES.step_owner then S.lib.engine_sync.extra_note_hit(voice, slot, record.velocity) end
       return slot
     end
     -- 2. slot 1 free: nothing held, the own note parked, or the voice
