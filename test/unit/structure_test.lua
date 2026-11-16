@@ -197,12 +197,25 @@ local function right_operand(text, after)
   return text:sub(start, index - 1)
 end
 
--- Whether a name chain is a version, and whether it is a file's
+-- Whether a name chain is a version, and whether it starts with a
+-- constant table (two or more capitals: NOTES, RIG, GRID_ROTATION; never S
+-- or M, the state and module tables, where a file's version may be kept)
 local function is_version_chain(chain)
   local last = chain:match("([%w_]+)$") or ""
   return last == "version" or last:match("_version$") ~= nil
 end
-local function is_constant_chain(chain) return chain:match("^[%u_][%u%d_]*[%.:]") ~= nil end
+local function is_constant_chain(chain) return chain:match("^%u[%u%d_]+[%.:]") ~= nil end
+
+-- The text with each bracketed string key that names a version
+-- (`["version"]`, `['file_version']`) written as the same field, `.version`,
+-- padded with "_" in front so the length stays: the sanitizer blanks a
+-- string's text, and the field would be lost
+local function version_keys_as_fields(text)
+  return (text:gsub("(%[%s*([\"'])([%w_]*)%2%s*%])", function(whole, _, key)
+    if key == "version" or key:match("_version$") then return string.rep("_", #whole - #key - 1) .. "." .. key end
+    return nil
+  end))
+end
 
 local function holds_file_version(operand)
   for chain in operand:gmatch("[%a_][%w_%.:]*") do
@@ -225,7 +238,7 @@ local function old_version_uses(sources)
   local found = {}
   for _, source in ipairs(sources) do
     if source.path:match("^lib/") then
-      local sanitized = sync_check.sanitize_lua(source.text)
+      local sanitized = sync_check.sanitize_lua(version_keys_as_fields(source.text))
       local function line_of(position)
         return source.path .. ":" .. select(2, sanitized:sub(1, position - 1):gsub("\n", "")) + 1
       end
@@ -262,6 +275,10 @@ local VERSION_SCAN_CASES = {
   { "if (loaded.version or 0) < 7 then end", true },
   { "if tonumber(loaded.version) < 7 then end", true },
   { "if version < OLD_FORMAT then end", true },
+  { "if S.scene_file.version < 7 then end", true },
+  { "if S.file_version ~= 6 then end", true },
+  { "if M.loaded.version < 7 then end", true },
+  { 'if loaded["version"] < 7 then end', true },
   { "if version < SCENE_FORMAT_FLOOR then end", false },
   { "if version > BUFFER_DATA_VERSION then end", false },
   { "if inversion > 0 then end", false },
