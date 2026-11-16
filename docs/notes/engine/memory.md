@@ -158,7 +158,7 @@ Both tiers still keep the 1280 KB: high by about 106-126 KB (the estimate's 163)
 
 ## 3.7: the grain reader (package 1a)
 
-Package 1a added to `\strataGrainBuf` the scan modes (a second phase, a `Sweep`, and the bounce and one-shot positions), the speed, a note's region, the follow rate, the slot gain, the one-shot level and the sync: 42 UGens (206 to 248) and seven controls, which `\strataGrainRing` declares and ignores (157 UGens, unchanged). The design estimated 3-5 KB a synth (§1); it measured 9.3 KB on both versions, about 0.23 KB a UGen, inside the 88 KB limit with 5.4 KB to spare. Every floor still holds. Measured with the memory area alone, before (`main` at 51ff1514) and after (this package's branch), on SuperCollider 3.14.1 and on 3.13 (in Docker, as CI measures it). Ruling 37: the controller measures again where Wave 1's packages meet and writes the final figures; 1c appends its own lines here.
+Package 1a added to `\strataGrainBuf` the scan modes (a second phase, a `Sweep`, and the bounce and one-shot positions), the speed, a note's region, the follow rate, the slot gain, the one-shot level and the sync: 41 UGens (206 to 247) and seven controls, which `\strataGrainRing` declares and ignores (157 UGens, unchanged). The design estimated 3-5 KB a synth (§1); it measured 9.3 KB on both versions, about 0.23 KB a UGen, inside the 88 KB limit with 5.4 KB to spare. Every floor still holds. Measured with the memory area alone, before (`main` at 51ff1514) and after (this package's branch), on SuperCollider 3.14.1 and on 3.13 (in Docker, as CI measures it). Ruling 37: the controller measures again where Wave 1's packages meet and writes the final figures; 1c appends its own lines here.
 
 | Def (KB of the pool) | 3.14.1 before | 3.14.1 after | 3.13 before | 3.13 after | limit |
 |---|---|---|---|---|---|
@@ -174,21 +174,21 @@ Package 1a added to `\strataGrainBuf` the scan modes (a second phase, a `Sweep`,
 | standard, switched three times at once | 4840 | 4770 | 4850 | 4770 | 3072 |
 | standard, recalled A -> B -> A -> C | 4820 | 4720 | 4820 | 4720 | 3072 |
 | standard, synth -> buffer -> synth | 4650 | 4580 | 4670 | 4580 | 3072 |
-| standard, all-buffer | 4900 | 4700 | 4900 | 4700 | 3072 |
+| standard, all-buffer | 4900 | 4700 | 4900 | 4720 | 3072 |
 | standard, restarted, one recording | 4800 | 4740 | 4820 | 4740 | 3072 |
 | standard, all-buffer, one recording | 4870 | 4690 | 4870 | 4690 | 3072 |
-| standard, all-buffer, pool full | 2540 | 2050 | 2540 | 2050 | 1280 |
+| standard, all-buffer, pool full | 2540 | 2070 | 2540 | 2070 | 1280 |
 | standard, synth -> buffer -> synth, pool full | 2740 | 2520 | 2740 | 2520 | 1280 |
 | high, switched 0.2 s apart and restarted | 4170 | 4100 | 4190 | 4100 | 3584 |
-| high, switched three times at once | 4170 | 4100 | 4190 | 4120 | 3584 |
-| high, recalled A -> B -> A -> C | 4690 | 4620 | 4710 | 4610 | 3584 |
+| high, switched three times at once | 4170 | 4120 | 4190 | 4100 | 3584 |
+| high, recalled A -> B -> A -> C | 4690 | 4620 | 4710 | 4620 | 3584 |
 | high, synth -> buffer -> synth | 3980 | 3920 | 3980 | 3920 | 3584 |
-| high, all-buffer | 4780 | 4590 | 4790 | 4590 | 3584 |
+| high, all-buffer | 4780 | 4610 | 4790 | 4590 | 3584 |
 | high, restarted, one recording | 4150 | 4080 | 4150 | 4080 | 3584 |
 | high, all-buffer, one recording | 4780 | 4570 | 4760 | 4570 | 3584 |
-| high, all-buffer, pool full | 2440 | 1930 | 2440 | 1950 | 1280 |
-| high, synth -> buffer -> synth, pool full | 2070 | 1850 | 2070 | 1850 | 1280 |
-| eight recordings, standard | 4650 | 4570 | 4650 | 4580 | 3072 |
+| high, all-buffer, pool full | 2440 | 1950 | 2440 | 1970 | 1280 |
+| high, synth -> buffer -> synth, pool full | 2070 | 1870 | 2070 | 1870 | 1280 |
+| eight recordings, standard | 4650 | 4580 | 4650 | 4580 | 3072 |
 | eight recordings, high | 3990 | 3930 | 3990 | 3930 | 3072 |
 
-The cost follows the count of `\strataGrainBuf` at each case: about 60-70 KB at the seven of synth -> buffer -> synth, about 180-200 KB at the 21 of all-buffer and about 490-510 KB at the 53 of the all-buffer pool case (9.3 KB each). The one-shot level is built at control rate (one `A2K` of the sum; 1a's review): the saving is below the probes' step of about 0.85 KB a synth, so the size reads the same. The tightest case is still high synth -> buffer -> synth: 3920 KB free, 336 KB above its floor (about 224 counting the spectral writers' late allocations, 7 × 16), which 1c's envelope nodes (16 at most, 4-7 KB each, design §1) fit in. The tightest pool case, high synth -> buffer -> synth with sixteen Karplus-first voice notes, leaves 1850 KB, 570 above its floor. If a floor fails where Wave 1 meets, design §1's order of cuts applies (the envelope nodes' cap first, then the grain synth's sync controls).
+The cost follows the count of `\strataGrainBuf` at each case: about 60-70 KB at the seven of synth -> buffer -> synth, about 180-200 KB at the 21 of all-buffer and about 470-490 KB at the 53 of the all-buffer pool case (9.3 KB each). A control-rate one-shot level was tried in 1a's review and reverted: audio-rate wires are the server's shared wire buffers, allocated once per World (`SC_World.cpp`, `SC_Graph.cpp`), not a synth's pool memory, so it saved nothing, and its `A2K` (one unit a synth) left every pool case about 20 KB lower. The tightest case is still high synth -> buffer -> synth: 3920 KB free, 336 KB above its floor (about 224 counting the spectral writers' late allocations, 7 × 16), which 1c's envelope nodes (16 at most, 4-7 KB each, design §1) fit in. The tightest pool case, high synth -> buffer -> synth with sixteen Karplus-first voice notes, leaves 1870 KB, 590 above its floor. If a floor fails where Wave 1 meets, design §1's order of cuts applies (the envelope nodes' cap first, then the grain synth's sync controls).
