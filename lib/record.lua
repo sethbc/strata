@@ -118,6 +118,16 @@ return function(S)
     return {seconds = math.min(fit * beat_seconds, slot_seconds), beats = fit, capped = true}
   end
 
+  -- A replace take's recording started (at its send, or at its "recording"
+  -- report when it was armed): the slot's audio is the take's from here, so
+  -- it is unbound, once (3.7); through an arm's wait the old audio plays on
+  -- with its settings
+  local function take_started(slot, take)
+    if take.kind ~= "take" or take.unbound then return end
+    take.unbound = true
+    S.lib.samples.unbind(slot)
+  end
+
   -- Start the take timer: `seconds` later the take finishes
   local function start_take_timer(slot, seconds)
     M.cancel_timer(slot)
@@ -194,6 +204,7 @@ return function(S)
         seconds = seconds, loop = loop, previous = previous}
       S.lib.buffers.recording_started(slot, playable)
       buffer.recording = true
+      if not armed then take_started(slot, takes[slot]) end
       buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
       buffer.restoring = false
       buffer.settled_empty = false
@@ -285,6 +296,7 @@ return function(S)
     elseif state_code == STATE_RECORDING then
       take.phase = "recording"
       take.started_at = util.time()
+      take_started(slot, take)
       if take.kind == "take" and not S.buffer_record_clocks[slot] and not buffer.finishing then
         start_take_timer(slot, take.seconds)
       end
@@ -302,10 +314,8 @@ return function(S)
         S.lib.waveforms.stale(slot)
         -- 3.7: a take now, its settings a copy of the file's it was
         -- recorded over (a synced one's tempo the clock's at its start)
-        S.lib.samples.take_from_file(slot)
+        S.lib.samples.take_from_file(slot, M.synced_tempo(slot))
         S.lib.samples.bind(slot)
-        local tempo = M.synced_tempo(slot)
-        if tempo then S.lib.samples.set(slot, "tempo", tempo) end
       else
         if not buffer.finishing then
           M.cancel_timer(slot)
@@ -329,6 +339,11 @@ return function(S)
         buffer.name, buffer.path, buffer.loaded, buffer.seconds = "empty", nil, false, 0
         buffer.settled_empty = false
         buffer.kept_state = take.previous
+      else
+        -- a playable recording keeps the slot's audio, but the engine set
+        -- its gain to 1 at the command: its peaks are read again, and a
+        -- normalized slot's gain goes back (3.7, design §4.4)
+        S.lib.waveforms.stale(slot)
       end
     end
     S.lib.buffers.display_changed()
