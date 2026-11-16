@@ -142,7 +142,7 @@ test("target ids leave out macros, morph and discrete params", function()
   assert_equal(ids[1], "master_density", "the LFO destinations first, without none")
   assert_equal(ids[11], "reverb_damp")
   assert_equal(ids[12], "v1_main", "a voice's main entry")
-  assert_equal(listed["v3_grain_pitch"], 12 + 2 * 8 + 3, "v3 pitch")
+  assert_equal(listed["v3_grain_pitch"], 11 + 2 * 13 + 4, "v3 pitch (3.7: 13 destinations a voice)")
   assert_equal(ids[102], "v7_amp", "the registered destinations, to v7 amp")
   assert_equal(ids[103], "strata_lfo1_rate", "then the LFOs' rates and depths")
   assert_equal(ids[104], "strata_lfo1_depth")
@@ -1011,7 +1011,7 @@ test("the 16 macros register as destinations and sources", function()
     local entry = destinations[103 + m]
     assert_equal(entry.label, "macro " .. m, "destination " .. (103 + m))
     assert_equal(entry.resolve(), "macro_" .. m)
-    assert_equal(entry.group, "registered globals", "the global group")
+    assert_equal(entry.group, "macros", "the macros' group")
     assert_equal(entry.fast, nil, "run in Lua")
   end
   local sources = S.lib.mod_sources

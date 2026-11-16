@@ -321,82 +321,75 @@ test("a param filter changes the stored and shown value", function()
     "and sent")
 end)
 
--- 3.1's LFO destinations, in option order: their indices are stored in PSETs
--- and scenes, so they never move
-local function built_in_lfo_labels()
+-- The LFO destinations by voice (3.7, design decision 24): none, the
+-- globals, then per voice its built-in ones followed by `registered` (the
+-- per-voice labels registered, in registration order), then the macros
+local function lfo_labels(registered)
   local labels = { "none", "density", "drift", "filt freq", "filt res", "filt mix", "dly time", "dly fdbk",
     "dly mix", "rev mix", "rev size", "rev damp" }
   for voice_idx = 1, 7 do
     for _, suffix in ipairs({ "main", "size", "dens", "pitch", "spread", "pos", "rate", "scan" }) do
       table.insert(labels, "v" .. voice_idx .. " " .. suffix)
     end
+    for _, suffix in ipairs(registered) do table.insert(labels, "v" .. voice_idx .. " " .. suffix) end
   end
+  for m = 1, 16 do table.insert(labels, "macro " .. m) end
   return labels
 end
 
-test("built-in LFO destinations keep their indices", function()
-  local labels = built_in_lfo_labels()
+-- the script's own per-voice registrations (lib/history.lua's, lib/voice_mix.lua's)
+local OWN_PER_VOICE = { "hist", "vfilt", "dsend", "rsend", "amp" }
+
+local function list_labels(destinations)
+  local labels = {}
+  for index, destination in ipairs(destinations) do labels[index] = destination.label end
+  return labels
+end
+
+test("LFO destinations come by voice, and a registered one joins its voice", function()
   load_strata()
   local destinations = local_value("LFO_DESTINATIONS")
-  -- the script's own registrations (lib/history.lua's) follow 3.1's list:
-  -- seven per per-voice record, one per global (lib/macros.lua's)
-  local own = 0
-  for _, entry in ipairs(local_value("S").registry.lfo_destinations) do own = own + (entry.global and 1 or 7) end
-  assert_equal(#destinations, #labels + own, "3.1's list exactly, then the script's registered ones")
-  for index, label in ipairs(labels) do assert_equal(destinations[index].label, label, "index " .. index) end
-  -- two registered destinations go after every built-in one: by
-  -- registration, then voice
+  assert_equal(table.concat(list_labels(destinations), ","), table.concat(lfo_labels(OWN_PER_VOICE), ","),
+    "the built-in ones by voice, the script's registered ones in each voice, then the macros")
+  -- two registered destinations go at the end of each voice's group: by
+  -- registration
   load_with(function(S)
     S.register_voice_params(probe_record())
     S.register_lfo_destination("probe", "probe")
     S.register_lfo_destination("pswitch", "probe_switch")
   end)
   destinations = local_value("LFO_DESTINATIONS")
-  for index, label in ipairs(labels) do assert_equal(destinations[index].label, label, "still index " .. index) end
-  local option_labels = params:lookup_param("strata_lfo1_dest").options
-  for voice_idx = 1, 7 do
-    local first = #labels + own + voice_idx
-    local second = #labels + own + 7 + voice_idx
-    assert_equal(destinations[first].label, "v" .. voice_idx .. " probe")
-    assert_equal(destinations[first].resolve(), "v" .. voice_idx .. "_probe")
-    assert_equal(destinations[second].label, "v" .. voice_idx .. " pswitch")
-    assert_equal(destinations[second].resolve(), "v" .. voice_idx .. "_probe_switch")
-    assert_equal(option_labels[first], "v" .. voice_idx .. " probe", "the dest param's options follow")
+  local registered = {}
+  for _, suffix in ipairs(OWN_PER_VOICE) do registered[#registered + 1] = suffix end
+  registered[#registered + 1] = "probe"; registered[#registered + 1] = "pswitch"
+  local expected = lfo_labels(registered)
+  assert_equal(table.concat(list_labels(destinations), ","), table.concat(expected, ","), "inside each voice")
+  assert_equal(table.concat(params:lookup_param("strata_lfo1_dest").options, ","), table.concat(expected, ","),
+    "the dest param's options follow")
+  local probe = 0
+  for index, destination in ipairs(destinations) do
+    if destination.label == "v1 probe" then probe = index end
   end
-  assert_equal(#destinations, #labels + own + 14)
-  assert_equal(params:lookup_param("strata_lfo1_dest").count, #labels + own + 14)
+  assert_equal(destinations[probe].resolve(), "v1_probe")
+  assert_equal(destinations[probe + 1].resolve(), "v1_probe_switch")
   -- an LFO on a registered destination modulates it around its stored value
-  params:set("strata_lfo1_dest", #labels + own + 1)
+  params:set("strata_lfo1_dest", probe)
   assert_equal(lfo_destination_id(1), "v1_probe")
   -- a label already used by a built-in destination is refused at init
   local ok = pcall(load_with, function(S) S.register_lfo_destination("dens", "probe") end)
   assert_true(not ok, "a registered label never repeats a built-in one")
 end)
 
-test("the LFO page's ALT+E3 groups keep each voice and add the registered destinations", function()
+test("the LFO page's ALT+E3 groups keep each voice, its registered destinations inside it", function()
   local context = load_with(function(S)
     S.register_voice_params(probe_record())
     S.register_lfo_destination("probe", "probe")
   end)
   finish_startup(context)
   local S = local_value("S")
-  local built_in = #built_in_lfo_labels()
-  assert_equal(S.lib.lfos.BUILT_IN_DESTINATIONS, built_in)
-  -- each registered destination is a group from its v1 (#511): the script's own, then the probe
-  -- (the global ones, lib/macros.lua's, are one group of one each)
-  local registered_starts, next_index, globals_start = {}, built_in + 1, nil
-  for _, entry in ipairs(S.registry.lfo_destinations) do
-    if not entry.global then
-      table.insert(registered_starts, next_index)
-    elseif not globals_start then
-      globals_start = next_index
-      table.insert(registered_starts, next_index)
-    end
-    next_index = next_index + (entry.global and 1 or 7)
-  end
-  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 21 29 37 45 53 61 " .. table.concat(registered_starts, " "))
-  assert_equal(S.LFO_DESTINATIONS[registered_starts[#registered_starts]].label, "v1 probe")
-  -- ALT+E3 on the destination field: none, the globals, each v<i> main, then the registered group
+  -- 1 + 11 + 7 x 14 + 16: each voice's group holds 14 with the probe
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 13 27 41 55 69 83 97 111")
+  -- ALT+E3 on the destination field: none, the globals, each v<i> main, then the macros
   h.show_page("LFO")
   S.lfo_field = 1
   params:set("strata_lfo1_dest", 1)
@@ -407,12 +400,9 @@ test("the LFO page's ALT+E3 groups keep each voice and add the registered destin
     table.insert(landed, S.LFO_DESTINATIONS[params:get("strata_lfo1_dest")].label)
   end
   key(1, 0)
-  -- the registered groups start at the first registered destination (the
-  -- script's own, lib/history.lua's, before the test's probe), then the next
-  local first_registered = S.LFO_DESTINATIONS[built_in + 1].label
-  local second_registered = S.LFO_DESTINATIONS[built_in + 8].label
   assert_equal(table.concat(landed, ","),
-    "density,v1 main,v2 main,v3 main,v4 main,v5 main,v6 main,v7 main," .. first_registered .. "," .. second_registered)
+    "density,v1 main,v2 main,v3 main,v4 main,v5 main,v6 main,v7 main,macro 1,macro 1")
+  assert_equal(S.LFO_DESTINATIONS[110].label, "v7 probe", "the probe ends voice 7's group")
 end)
 
 test("registered fx params grow the fx group and follow its 11 params", function()
@@ -560,7 +550,11 @@ end
   local S = local_value("S")
   assert_equal(params:get("v1_late"), 0, "the voice param exists")
   assert_equal(params:get("late_level"), 0.25, "the fx param exists")
-  assert_equal(S.LFO_DESTINATIONS[#S.LFO_DESTINATIONS].label, "v7 late", "the LFO destination exists")
+  local late
+  for _, destination in ipairs(S.LFO_DESTINATIONS) do
+    if destination.label == "v7 late" then late = destination end
+  end
+  assert_true(late ~= nil and late.group == "voice 7", "the LFO destination exists, in its voice's group")
   assert_true((row_outline(1) .. " "):find("mix:v1_late:control ", 1, true), "the VOICE row exists")
   capture_scene(1)
   assert_equal(S.scenes[1].data.late_level, 0.25, "the scene field is captured")

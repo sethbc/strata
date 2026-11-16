@@ -95,18 +95,18 @@ test("the voice filter cutoff and both sends are LFO destinations", function()
   local context = load_strata()
   finish_startup(context)
   local S = local_value("S")
-  local built_in = S.lib.lfos.BUILT_IN_DESTINATIONS
   local labels = {}
-  for index = built_in + 1, #S.LFO_DESTINATIONS do labels[S.LFO_DESTINATIONS[index].label] = index end
+  for index, destination in ipairs(S.LFO_DESTINATIONS) do labels[destination.label] = index end
   for voice_idx = 1, S.constants.NUM_VOICES do
     for label, key in pairs({vfilt = "filter_freq", dsend = "delay_send", rsend = "reverb_send"}) do
       local index = labels["v" .. voice_idx .. " " .. label]
-      assert_true(index ~= nil and index > built_in, "v" .. voice_idx .. " " .. label .. " follows the built-ins")
+      assert_true(index ~= nil and index > labels["v" .. voice_idx .. " scan"],
+        "v" .. voice_idx .. " " .. label .. " follows the voice's built-ins (3.7: by voice)")
       assert_equal(S.LFO_DESTINATIONS[index].resolve(), "v" .. voice_idx .. "_" .. key)
-      assert_true(index > labels["v7 hist"], label .. " after history (registered first)")
+      assert_true(index > labels["v" .. voice_idx .. " hist"], label .. " after history (registered first)")
+      assert_equal(S.LFO_DESTINATIONS[index].group, "voice " .. voice_idx, label .. " in its voice's group")
     end
   end
-  assert_equal(S.LFO_DESTINATIONS[built_in].label, "v7 scan", "the last built-in stays where it was")
   -- an LFO on v1's reverb send modulates the engine value, never the param
   params:set("v1_reverb_send", 0.5)
   params:set("strata_lfo1_dest", labels["v1 rsend"])

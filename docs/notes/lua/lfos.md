@@ -15,7 +15,8 @@
 - **A modulation input reads a lower-numbered LFO only** (`strata_lfo<n>_rate_mod` and `_depth_mod` offer none, L1 .. L(n-1)), so the six evaluate in index order with no loop. A source that is off reads 0.
 - Every resolved destination is a control param, and every label, with `~` when it is fast, fits the LFO page's right column (49 px). A global destination's param (`S.register_lfo_global_destination`) is checked at the clock's start step, once every params record has run: one that is not a control param raises, naming its label.
 - `S.lfo_last_dest`/`S.lfo_scaled` are declared in `lib/engine_sync.lua`, included before `lib/lfos.lua`, because param actions read them; `with_lfo_offsets` sums them for `n = 1..NUM_LFOS`.
-- Destination indices are stored in PSETs and scenes (`strata_lfo<n>_dest`), so the 68 built-in destinations never move. Registered destinations (`S.registry.lfo_destinations`) go after all of them, in registration order: a per-voice record by voice 1-7, a global one as one destination, so a later registration only appends. 3.4's `v<i> amp` is registered from `lib/voice_mix.lua` after `rsend` (97-103), so the macros' global entries follow from 104. The list is built at init (`add_lfo_params`), never at include time.
+- **A destination is stored by its key, never its index** (3.7, design decision 24): `strata_lfo<n>_dest` is an `S.lib.io_keyed` option, so a PSET keeps the hidden `strata_lfo<n>_dest_key` and a scene the block of that name. A key is the param id the destination moves, `v<i>_main` for a voice's main entry or `none`, and no two entries share one (a second destination of one param is an error naming the register function). A key the list lacks reads as none, with one console line (`strata: LFO <n>'s destination <key> is not in this version: none`), and is kept, as `S.lib.io_keyed` keeps it. An index from before 3.7 (a PSET's `strata_lfo<n>_dest` line, a scene's `strata_lfo<n>_dest` field) is not converted: it reads as none.
+- **The list is ordered by voice**: none, the globals, each voice's destinations together, the macros. A registered per-voice destination (`S.registry.lfo_destinations`) joins its voice's group after the built-in ones, in registration order; a registered global one joins the globals, unless its param is a macro's (`macro_<m>`), which make the last group. Indices move whenever a destination is added, so nothing but the option itself may hold one. The full list is built at init (`add_lfo_params`); include time builds the built-in ones only, into the same table.
 - The LFOs' scene fields are `S.lib.lfos.SCENE_FIELDS`, which `lib/scenes.lua` appends to `S.SCENE_GLOBAL_PARAMS` after its built-in globals, the records themselves: a change to an LFO's scene fields is made here, never in `lib/scenes.lua`, and a new field needs its `default`. `S.lib.lfos.transition_stops(n, scene_data)` is what a fade asks of an LFO (#408).
 - **A param set without its action** (a silent PSET read) converges at the next step: an LFO found off, or at depth 0, lets its Lua destination go (`restore_lfo_destination`) and its engine LFO stop; a destination that changed gives the old one back; a running engine LFO's rate, depth or offset that moved is sent in the round robin (the step compares each with what the engine has: the rate past `LFO.engine_rate_threshold`, the depth and the offset past 1/1000), and a phase param other than the one the engine was last synced to (`phase_seen`) syncs it there (#634).
 - **A restart syncs**: the on action run on a running LFO (a bang, #251) restarts its phase at the phase param and syncs an engine LFO's node to it, without replacing the node.
@@ -27,7 +28,7 @@
 `lib/lfos.lua` (`S.lib.lfos`):
 - `S.LFO_DESTINATIONS`, `S.selected_lfo`, `S.lfo_clock`;
 - the globals `lfo_destination_id`, `restore_lfo_destination`, `add_lfo_params`;
-- the tunables `LFO` (`S.lib.lfos.LFO`) and `FAST_DESTINATIONS`; the readers `param_id(n, field)`, `fast_destination(param_id)`, `destination(n)`, `label(n)`, `is_on(n)`, `is_clocked(n)`, `is_engine_run(n)`, `engine_playing(n)` (on, on a fast destination, at a depth above 0: what MAIN's `~` reads, package 2a), `window(selected)`, `phase(n)`, `value(n)`, `has_stepped(n)`, `base_rate(n)`, `effective_rate(n)`, `effective_depth(n)`, `capped(n)`, `describe(n)`, `shape_u(shape, phase)`; `offset_for(param_id, m)`, `m_for(param_id, base, value)`; the queue `mark_due(key, send)` and `on_step(fn)`; `direct_destination(param_id)`; the engine senders `lfo<n> engine` and `lfo<n> sync`;
+- the tunables `LFO` (`S.lib.lfos.LFO`) and `FAST_DESTINATIONS`; the readers `param_id(n, field)`, `fast_destination(param_id)`, `destination(n)`, `destination_groups()`, `label(n)`, `is_on(n)`, `is_clocked(n)`, `is_engine_run(n)`, `engine_playing(n)` (on, on a fast destination, at a depth above 0: what MAIN's `~` reads, package 2a), `window(selected)`, `phase(n)`, `value(n)`, `has_stepped(n)`, `base_rate(n)`, `effective_rate(n)`, `effective_depth(n)`, `capped(n)`, `describe(n)`, `shape_u(shape, phase)`; `offset_for(param_id, m)`, `m_for(param_id, base, value)`; the queue `mark_due(key, send)` and `on_step(fn)`; `direct_destination(param_id)`; the engine senders `lfo<n> engine` and `lfo<n> sync`;
 - `SCENE_FIELDS` and `transition_stops`;
 - the modulation sources `lfo1`..`lfo6`;
 - the start step `lfo_clock`, the cleanup step `lfos` and the invariant `lfo clock`.
@@ -42,12 +43,13 @@ Six LFOs (`NUM_LFOS`, the engine's `numFastLfos`). They are not the per-voice dr
 
 ## Params
 
-`add_lfo_params()`, called from `init` after the FX group (the "lfos" `S.registry.params` record), builds the destination labels and adds one group per LFO, `strata_lfo_<n>` ("LFO n", `LFO.group_size` 13 params; groups cannot nest):
+`add_lfo_params()`, called from `init` after the FX group (the "lfos" `S.registry.params` record), builds the destination labels and adds one group per LFO, `strata_lfo_<n>` ("LFO n", `LFO.group_size` 14 params, the destination's hidden key included; groups cannot nest):
 
 | Param | Kind | Default |
 |---|---|---|
 | `strata_lfo<n>` | binary toggle (on) | 0 |
-| `strata_lfo<n>_dest` | option, the destination list | 1 (none) |
+| `strata_lfo<n>_dest` | option, the destination list (`S.lib.io_keyed`: not saved; its key is) | 1 (none) |
+| `strata_lfo<n>_dest_key` | hidden text, the destination's key | `none` |
 | `strata_lfo<n>_shape` | option: sine, tri, square, up, down, s&h, smooth, drunk | 1 |
 | `strata_lfo<n>_mode` | option: free, clocked | 1 |
 | `strata_lfo<n>_rate` | control 0.003-50 Hz, exp, step 0 | 0.25 |
@@ -62,13 +64,13 @@ The percents' quantum is one percent a detent. A division of value r is a period
 
 ## Destinations
 
-`S.LFO_DESTINATIONS` is the ordered `strata_lfo<n>_dest` option list of `{label, resolve, group, fast}`:
-- `none`, `density`, `drift`, `filt freq`, `filt res`, `filt mix`, `dly time`, `dly fdbk`, `dly mix`, `rev mix`, `rev size`, `rev damp`;
-- then per voice: `v<i> main` (`main_param_id(i)`, resolved on every step so it follows the voice's source), `v<i> size`, `dens`, `pitch`, `spread`, `pos`, `rate`, `scan`;
-- 12 + 8 per voice = 68 entries (`S.lib.lfos.BUILT_IN_DESTINATIONS`);
-- then, built at init by `add_lfo_params` (`lfo_destination_labels`), the registered ones, in registration order: for each `S.register_lfo_destination(label, suffix)`, `v1 <label>` ... `v7 <label>`; for each global record (`S.register_lfo_global_destination(label, param_id)`), one destination. A label that repeats one is an error naming the register function.
-- 3.4's list: 69-75 `v<i> hist`, 76-82 `vfilt`, 83-89 `dsend`, 90-96 `rsend`, 97-103 `amp`, then the globals (`macro 1` .. `macro 16`, 104-119, from package 1e).
-- `group` is what ALT+E3 jumps by (#511, #580): `none`, `global`, `v<i>`, `registered <k>` per per-voice record and `registered globals` for every global one.
+`S.LFO_DESTINATIONS` is the ordered `strata_lfo<n>_dest` option list of `{label, key, resolve, group, fast}`, by voice (3.7):
+- `none`;
+- the globals (group `global`): `density`, `drift`, `filt freq`, `filt res`, `filt mix`, `dly time`, `dly fdbk`, `dly mix`, `rev mix`, `rev size`, `rev damp`, then any registered global destination (`S.register_lfo_global_destination(label, param_id)`) that is no macro's;
+- per voice (group `voice <i>`): `v<i> main` (key `v<i>_main`, `main_param_id(i)`, resolved on every step so it follows the voice's source), `v<i> size`, `dens`, `pitch`, `spread`, `pos`, `rate`, `scan`, then each `S.register_lfo_destination(label, suffix)` record's `v<i> <label>` in registration order: today `hist` (`lib/history.lua`), `vfilt`, `dsend`, `rsend`, `amp` (`lib/voice_mix.lua`), 13 a voice;
+- the macros (group `macros`): `macro 1` .. `macro 16`, registered globals whose param is `macro_<m>`;
+- 3.7's list: 1 none, 2-12 the globals, voice i at 13 + 13 (i - 1) to 25 + 13 (i - 1), the macros 104-119. A label that repeats one is an error naming the register function.
+- `S.lib.lfos.destination_groups()` is `{{name, first, last}, ...}` in list order, none aside: `global`, `voice 1` .. `voice 7`, `macros`. ALT+E3 jumps by it (#511, #580; `docs/notes/lua/pages/lfo.md`), MOD's routing view by each entry's `group`, and the matrix's destinations (`S.lib.matrix.destination_ids()`) and the macros' targets follow the list's order.
 - `fast` (`{voice, destination}`) marks an entry whose fixed param is fast: `v<i> size`, `pitch`, `pos`, `vfilt` and `amp`. `is_engine_run(n)` is LFO n's entry having it, whether or not the LFO is on: a reader that means "moves the voice now" reads `engine_playing(n)` (on, `is_engine_run`, depth above 0: the same answer the engine sends follow), so MAIN's `~` (design §2.6, while the LFO is on; package 2a) is `engine_playing(n)` for an LFO on the selected voice.
 
 ## The clock and a step
@@ -94,12 +96,13 @@ Each step (`step_all`), every 1/48 s:
 
 ## Scenes
 
-- `SCENE_FIELDS` per LFO, in recall order: shape, mode, division, rate, depth, offset, phase, rate_mod, rate_mod_amt, depth_mod, depth_mod_amt, dest, then the state. Rate, depth and offset are continuous (`lfo = n`; the depth's `stop_target` 0); the rest switch at a transition's end. Every control field and the state carry `range` (the param's), which `validate_scene` checks; option fields are checked as option indices. Each default is its param's.
+- `SCENE_FIELDS` per LFO, in recall order: shape, mode, division, rate, depth, offset, phase, rate_mod, rate_mod_amt, depth_mod, depth_mod_amt, then the state. Rate, depth and offset are continuous (`lfo = n`; the depth's `stop_target` 0); the rest switch at a transition's end. Every control field and the state carry `range` (the param's), which `validate_scene` checks; option fields are checked as option indices. Each default is its param's.
+- The destination is a scene block per LFO (3.7), `strata_lfo<n>_dest_key` (`S.register_scene_block`, discrete: it switches at a transition's end): its key, captured from the hidden text param and applied by setting it (the param's action then runs, and a key this build lacks reads as none with its console line). `validate` takes a string `S.lib.io_keyed.refuses` passes; a scene without the block (saved before 3.7) gets `none`. Blocks apply before the globals, so a recall sets an LFO's destination before its settings and state.
 - `transition_stops(n, scene_data)`: LFO n runs now and the scene has it off.
 
 ## PSETs
 
-No PSET hook: a PSET's LFO lines are read as norns reads any param's. 3.7 deleted 3.3's LFO library import, from scenes and PSETs alike (design decision 21).
+No PSET hook of the module's own: a PSET's LFO lines are read as norns reads any param's, and the destination's key through `S.lib.io_keyed`'s hook (`docs/notes/lua/io/keyed.md`). 3.7 deleted 3.3's LFO library import, from scenes and PSETs alike (design decision 21).
 
 ## Sources
 

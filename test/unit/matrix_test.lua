@@ -1330,6 +1330,27 @@ test("matrix: its destinations are the LFO destinations but none and the macros,
   assert_equal(matrix.routing(0), nil, "no routing 0"); assert_equal(matrix.routing(17), nil)
 end)
 
+-- 3.7 (decision 24): the picker's order is the LFO list's, by voice
+test("the routing view's destinations come in the same order", function()
+  local _, S, matrix = loaded()
+  local ids = matrix.destination_ids()
+  local expected = {}
+  for _, destination in ipairs(S.LFO_DESTINATIONS) do
+    if destination.key ~= "none" and not destination.key:match("^macro_") then expected[#expected + 1] = destination.key end
+  end
+  assert_equal(table.concat(ids, ","), table.concat(expected, ","), "the LFO destinations' keys, in their order")
+  -- each voice's destinations together: voice 3's from its main to its amp
+  local voice3 = {}
+  for index = 1, #ids do
+    if ids[index]:match("^v3_") then voice3[#voice3 + 1] = index end
+  end
+  assert_equal(#voice3, 13, "13 destinations of voice 3")
+  assert_equal(voice3[#voice3] - voice3[1], 12, "one run, nothing between them")
+  assert_equal(ids[voice3[1]], "v3_main"); assert_equal(ids[voice3[#voice3]], "v3_amp")
+  assert_equal(ids[voice3[1] - 1], "v2_amp", "after voice 2's last")
+  assert_equal(ids[voice3[#voice3] + 1], "v4_main", "before voice 4's first")
+end)
+
 test("matrix: cleanup cancels learn and forgets its offsets, sending nothing", function()
   local context, S, matrix = loaded()
   params:set("macro_1", 1)

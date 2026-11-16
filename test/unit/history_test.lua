@@ -188,16 +188,16 @@ test("the history row lays out on VOICE", function()
   end
 end)
 
-test("history is an LFO destination after the built-ins", function()
+test("history is an LFO destination after its voice's built-ins", function()
   load_strata()
   local S = local_value("S")
-  local built_in = S.lib.lfos.BUILT_IN_DESTINATIONS
+  local index = {}
+  for position, destination in ipairs(S.LFO_DESTINATIONS) do index[destination.label] = position end
   for voice_idx = 1, S.constants.NUM_VOICES do
-    local destination = S.LFO_DESTINATIONS[built_in + voice_idx]
-    assert_equal(destination.label, "v" .. voice_idx .. " hist", "right after the built-ins, by voice")
+    local destination = S.LFO_DESTINATIONS[index["v" .. voice_idx .. " scan"] + 1]
+    assert_equal(destination.label, "v" .. voice_idx .. " hist", "right after the voice's built-ins (3.7: by voice)")
     assert_equal(destination.resolve(), "v" .. voice_idx .. "_history")
   end
-  assert_equal(S.LFO_DESTINATIONS[built_in].label, "v7 scan", "the last built-in stays where it was")
 end)
 
 test("randomize, mutation and the fader pages leave history alone", function()

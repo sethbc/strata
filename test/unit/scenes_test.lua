@@ -1340,21 +1340,23 @@ end)
 test("scenes capture and recall the LFOs", function()
   local context = load_strata({ data_subdir = "lfo_scenes" }); finish_startup(context)
   params:set("strata_lfo1_shape", 2); params:set("strata_lfo1_mode", 2); params:set("strata_lfo1_division", 5)
-  params:set("strata_lfo2_rate", 9); params:set("strata_lfo2_depth", 60); params:set("strata_lfo2_dest", 14)
+  params:set("strata_lfo2_rate", 9); params:set("strata_lfo2_depth", 60); params:set("strata_lfo2_dest_key", "v1_grain_size")
   params:set("strata_lfo2_phase", 30); params:set("strata_lfo2_rate_mod", 2); params:set("strata_lfo2_depth_mod_amt", -40)
   params:set("strata_lfo2", 1)
   capture_scene(1)
   local data = local_value("scenes")[1].data
   assert_equal(data.strata_lfo1_shape, 2); assert_equal(data.strata_lfo1_mode, 2); assert_equal(data.strata_lfo1_division, 5)
   assert_near(data.strata_lfo2_rate, 9, 1e-6); assert_equal(data.strata_lfo2_depth, 60)
-  assert_equal(data.strata_lfo2_dest, 14); assert_equal(data.strata_lfo2, 1)
+  assert_equal(data.strata_lfo2_dest_key, "v1_grain_size", "the destination by its key"); assert_equal(data.strata_lfo2, 1)
+  assert_equal(data.strata_lfo2_dest, nil, "never its index")
   assert_equal(data.strata_lfo2_phase, 30); assert_equal(data.strata_lfo2_rate_mod, 2)
   assert_equal(data.strata_lfo2_depth_mod_amt, -40)
-  params:set("strata_lfo2", 0); params:set("strata_lfo2_depth", 0); params:set("strata_lfo2_dest", 1)
+  params:set("strata_lfo2", 0); params:set("strata_lfo2_depth", 0); params:set("strata_lfo2_dest_key", "none")
   params:set("strata_lfo1_shape", 1); params:set("strata_lfo2_phase", 0); params:set("strata_lfo2_rate_mod", 1)
   recall_scene(1, 0)
   assert_equal(params:get("strata_lfo2"), 1); assert_equal(params:get("strata_lfo2_depth"), 60)
-  assert_equal(params:get("strata_lfo2_dest"), 14); assert_equal(params:string("strata_lfo1_shape"), "tri")
+  assert_equal(params:get("strata_lfo2_dest_key"), "v1_grain_size"); assert_equal(params:string("strata_lfo1_shape"), "tri")
+  assert_equal(params:string("strata_lfo2_dest"), "v1 size", "its option follows")
   assert_equal(params:get("strata_lfo2_phase"), 30); assert_equal(params:string("strata_lfo2_rate_mod"), "L1")
   assert_true(local_value("S").lib.lfos.is_on(2), "the recalled LFO runs")
   -- smooth transitions fade rate, depth and offset, switch the rest at the end
@@ -1365,16 +1367,22 @@ test("scenes capture and recall the LFOs", function()
       assert_equal(continuous["strata_lfo" .. n .. "_" .. field], true, field .. " crossfades")
     end
     for _, field in ipairs({ "shape", "mode", "division", "phase", "rate_mod", "rate_mod_amt", "depth_mod",
-      "depth_mod_amt", "dest" }) do
+      "depth_mod_amt" }) do
       assert_equal(continuous["strata_lfo" .. n .. "_" .. field], false, field .. " switches")
     end
+    assert_equal(continuous["strata_lfo" .. n .. "_dest"], nil, "the destination is no global field")
+    local block
+    for _, record in ipairs(local_value("S").registry.scene_blocks) do
+      if record.key == "strata_lfo" .. n .. "_dest_key" then block = record end
+    end
+    assert_true(block and block.discrete, "the destination's key switches at a transition's end")
     assert_equal(continuous["strata_lfo" .. n], false, "the state switches")
   end
-  -- invalid option values are rejected
-  local bad = deep_copy(local_value("scenes")[1]); bad.data.strata_lfo2_dest = 0.5
-  assert_true(not validate_scene(bad), "fractional destination rejected")
-  bad.data.strata_lfo2_dest = #local_value("LFO_DESTINATIONS") + 1
-  assert_true(not validate_scene(bad), "out-of-range destination rejected")
+  -- a destination that is no key is rejected
+  local bad = deep_copy(local_value("scenes")[1]); bad.data.strata_lfo2_dest_key = 0.5
+  assert_true(not validate_scene(bad), "a number is no key")
+  bad.data.strata_lfo2_dest_key = " v1_grain_size"
+  assert_true(not validate_scene(bad), "a key a PSET could not keep is rejected")
 end)
 
 -- #103: scenes store each LFO's offset. It sits before the state in

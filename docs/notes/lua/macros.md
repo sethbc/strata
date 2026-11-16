@@ -26,14 +26,14 @@
 - `S.macros[m].targets[k] = {id, min, max}` (`MACRO_TARGETS` 8 rows; `id` a param id, `v<i>_main`, or `""` for an empty row; `min` and `max` fractions 0-1 of the target's range along its warp, `min` above `max` inverting).
 - `target_ids()`, `target_label(id)`, `targets(m)` (a copy), `set_target(m, k, id, min, max)` (returns whether it set the row; the live file follows), `apply(m)` (now, for code), `set_silently(m, v)`, `learn(m, k)`, `learning()` (the macro and row, or nil), `cancel_learn()`, `bank()`, `set_bank(b)`, `bank_macros(b)`, `bank_has_targets(b)`.
 - `MACROS`, the module's one table of tunables and names (`apply_hz` 30, `learn_seconds` 10, `learn_wake_margin` 0.1, `save_delay` 0.1, `banks` 4, the files' version and suffixes, the never-target ids, the LFO skip patterns).
-- `S.macro_clock`, `S.macro_learn_clock`, `S.macro_save_clock`; the engine senders `macro_1` .. `macro_16`; the touch hook (learn); the scene fields `macro_<m>` and the scene block `macros`; the global LFO destinations `macro 1` .. `macro 16` (104-119, the group `registered globals`); the sources `macro1` .. `macro16`; the PSET hook `macros`; the start step `macros_load` (105), the cleanup steps `macros_save` (32) and `macros` (114); the invariants `macro apply` and `macro learn`.
+- `S.macro_clock`, `S.macro_learn_clock`, `S.macro_save_clock`; the engine senders `macro_1` .. `macro_16`; the touch hook (learn); the scene fields `macro_<m>` and the scene block `macros`; the global LFO destinations `macro 1` .. `macro 16` (104-119, the group `macros`, which ends the list); the sources `macro1` .. `macro16`; the PSET hook `macros`; the start step `macros_load` (105), the cleanup steps `macros_save` (32) and `macros` (114); the invariants `macro apply` and `macro learn`.
 
 Elsewhere: the MOD page and its rings (package 2a) draw and edit the macros through these functions, and open the target view themselves; the grids' bank keys and macro faders are package 2c's; `S.lib.matrix.set_fast_extra` is package 1h's.
 
 ## Targets
 
 `target_ids()`, in this order, only ids whose params exist now (the list is rebuilt when params are added or a target is registered):
-- every LFO destination (`S.LFO_DESTINATIONS`) but `none` and the global entries whose param is a macro: the built-in ones (a voice's `main` as `v<i>_main`), then the registered ones (`hist`, `vfilt`, `dsend`, `rsend`, `amp` per voice), 102 in all;
+- every LFO destination (`S.LFO_DESTINATIONS`) but `none` and the global entries whose param is a macro: in the list's order (3.7, by voice: the globals, then per voice its built-in ones, a voice's `main` as `v<i>_main`, and its registered `hist`, `vfilt`, `dsend`, `rsend`, `amp`), 102 in all;
 - each LFO's `strata_lfo<n>_rate` and `strata_lfo<n>_depth` (n 1-6);
 - each routing's `matrix_<k>_depth` (k 1-16, `lib/matrix.lua`);
 - 3.6's registered targets (`S.register_macro_target(id, label)`, `S.registry.macro_targets`, plan ruling 4: a module's own control params, such as the tape's), in registration order, each only while its param exists and is a control (an id with no param, or an option, is left out). The register function refuses a `macro_<n>` id, so no macro becomes a target this way.
