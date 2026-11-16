@@ -4,17 +4,19 @@
 -- clocks, a grid and the data folder, read through the engine calls the
 -- stub records. A fresh Strata sends what 3.6.0 sent but the values every
 -- voice sync now carries (the fixture test/fixtures/3.6.0-start-calls.lua);
--- 3.6's files load as saved and the ones below the floors are set aside; a
--- sliced loop plays under a reversed pattern with conditions and fill,
--- follow, an envelope, a random sequence and a chain; and every way out of
--- that state leaves nothing held. The test only observes: no double stands
+-- 3.6.0's own scenes file, PSET and side files (test/fixtures/3.6.0-files.lua)
+-- load as saved and the files below the floors are set aside; a sliced
+-- loop plays under a reversed pattern with conditions and fill, follow, an
+-- envelope, a random sequence and a chain; and every way out of that state
+-- leaves nothing held, in Lua's records and in the engine's notes (every
+-- noteOn paired with one end). The test only observes: no double stands
 -- in for a module, and a failure here is a finding in the module it names.
 -- Run alone: lua test/run.lua system_37
 
 return function(h)
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
-local write_text, file_text, tabutil_text, deep_copy = h.write_text, h.file_text, h.tabutil_text, h.deep_copy
+local write_text, file_text, tabutil_text = h.write_text, h.file_text, h.tabutil_text
 
 -- The values the tests use (the brief's, verbatim where it gives them)
 local SYSTEM = {
@@ -142,87 +144,99 @@ end)
 ---------------------------------------------------------------------------
 -- 2 and 3. Old files
 ---------------------------------------------------------------------------
+-- A scenes file, a PSET and its three side files as 3.6.0 wrote them
+-- (test/fixtures/3.6.0-files.lua, recorded from the tag; its header says how)
+local function files_3_6()
+  return dofile(h.repo_root .. "/test/fixtures/3.6.0-files.lua")
+end
 
--- What 3.7 added to the scenes and the PSETs, measured from the tag v3.6.0
--- (its params and a captured scene's keys against this build's): a 3.6
--- file is this build's with these taken out, and the LFO destinations as
--- 3.6 kept them (an index under strata_lfo<n>_dest, which 3.7 reads as
--- none: decision 24, docs/notes/lua/lfos.md), and a PSET with 3.6's
--- strata_pset_format line
-local ADDED = {
-  globals = {"delay_sync", "delay_division", "delay_pingpong"},
-  blocks = {"sequences"},
-  voice_extras = {"env_attack", "env_decay", "env_sustain", "env_release", "env_curve", "env_loop", "follow",
-    "scan_mode", "seq_direction", "seq_misstep", "slices"},
-  step_keys = {"slice", "cond"},
-  -- PSET lines: these ids, each voice's v<i>_<extra>, and rseq<n>_* for n 1..4
-  pset_ids = {"delay_sync", "delay_division", "delay_pingpong", "scene_chance_next", "scene_chance_previous",
-    "scene_chance_random", "seq_chain_next", "seq_chain_previous", "seq_chain_random", "strata_rseq"},
-  rseq_params = {"clock", "drift", "length", "new"},
-  lfo_dest_key = "^strata_lfo%d_dest_key$",
+local PSET_3_6 = {
+  base = "strata-05",                 -- PSET 5: the side files are strata-05.<key>.data
+  sides = {"macros", "matrix", "gestures"},
+  -- the 3.6 lines 3.7 has no param for, each with why
+  drops = {strata_pset_format = "3.7 writes no format line and reads one as nothing (0d)"},
+  -- an index of 3.6's destination list, which 3.7 reads as none (decision 24, docs/notes/lua/lfos.md)
+  lfo_dest = "^strata_lfo%d_dest$",
+  -- the state the recording set through 3.6.0's code (the fixture's header)
+  scan = 0.5, keyed = {cc_out1_source = "pressure", crow_out1_source = "pressure"},
+  macro = {id = "reverb_mix", min = 0.2, max = 0.8}, routing = {source = "macro1", dest = "v3_grain_pitch"},
 }
-
-local function in_list(list, value)
-  for _, entry in ipairs(list) do if entry == value then return true end end
-  return false
-end
-
--- Whether a PSET line's id is one 3.6 never wrote
-local function added_pset_id(id)
-  if in_list(ADDED.pset_ids, id) or id:match(ADDED.lfo_dest_key) then return true end
-  local extra = id:match("^v%d_(.+)$")
-  if extra and in_list(ADDED.voice_extras, extra) then return true end
-  local rseq = id:match("^rseq%d_(.+)$")
-  return rseq ~= nil and in_list(ADDED.rseq_params, rseq)
-end
-
--- A 3.6 scene from one this build captured: 3.7's fields out, the LFO
--- destinations as indices
-local function as_3_6_scene(scene, lfo_count)
-  local old = deep_copy(scene)
-  if not old.populated then return old end
-  for _, id in ipairs(ADDED.globals) do old.data[id] = nil end
-  for _, key in ipairs(ADDED.blocks) do old.data[key] = nil end
-  for n = 1, lfo_count do
-    old.data["strata_lfo" .. n .. "_dest_key"] = nil
-    old.data["strata_lfo" .. n .. "_dest"] = n + 1  -- an index of 3.6's list
-  end
-  for _, voice in pairs(old.data.voices or {}) do
-    for _, key in ipairs(ADDED.voice_extras) do voice.extras[key] = nil end
-  end
-  for _, steps in pairs(old.data.steps or {}) do
-    for _, step in pairs(steps) do
-      for _, key in ipairs(ADDED.step_keys) do step[key] = nil end
-    end
-  end
-  return old
-end
 
 -- The id: value lines of a PSET's text, in order
 local function pset_lines(text)
   local lines = {}
   for line in text:gmatch("[^\n]+") do
     local id, value = line:match('^"(.-)"%s*:%s*(.*)$')
-    if id then lines[#lines + 1] = {id = id, value = value, line = line} end
+    if id then lines[#lines + 1] = {id = id, value = value} end
   end
   return lines
 end
 
--- The first path at which two values differ (numbers to a data file's 14 digits), or nil
-local function first_difference(a, b, path)
-  if type(a) ~= "table" or type(b) ~= "table" then
-    if a == b then return nil end
-    if type(a) == "number" and type(b) == "number" and math.abs(a - b) <= 1e-12 * math.max(1, math.abs(a)) then
-      return nil
+-- A param's default: its controlspec's, else its own; nil for no param
+local function param_default(id)
+  if not params.lookup[id] then return nil end
+  local param = params:lookup_param(id)
+  if param.controlspec then return param.controlspec.default end
+  return param.default
+end
+
+local function same_value(a, b)
+  if a == b then return true end
+  return type(a) == "number" and type(b) == "number" and math.abs(a - b) <= 1e-9 * math.max(1, math.abs(a))
+end
+
+-- Every leaf of a 3.6 scene against the scene 3.7 loaded: the leaves that
+-- differ, and the leaves 3.7 holds that the file had not ({path, value, keys})
+local function scene_leaves(old, loaded)
+  local differences, added = {}, {}
+  local function walk_old(a, b, path)
+    if type(a) ~= "table" then
+      if path:match("^data%.strata_lfo%d_dest$") then return end  -- decision 24: read as none, below
+      if not same_value(a, b) then differences[#differences + 1] = path .. ": " .. tostring(a) .. " ~= " .. tostring(b) end
+      return
     end
-    return path .. ": " .. tostring(a) .. " ~= " .. tostring(b)
+    if type(b) ~= "table" then differences[#differences + 1] = path .. ": a table ~= " .. tostring(b); return end
+    for key, value in pairs(a) do walk_old(value, b[key], path .. "." .. tostring(key)) end
   end
-  for key, value in pairs(a) do
-    local found = first_difference(value, b[key], path .. "." .. tostring(key))
-    if found then return found end
+  local function walk_new(a, b, path, keys)
+    if type(b) ~= "table" then
+      if a == nil then added[#added + 1] = {path = path, value = b, keys = keys} end
+      return
+    end
+    for key, value in pairs(b) do
+      local inner = {}
+      for index, k in ipairs(keys) do inner[index] = k end
+      inner[#inner + 1] = key
+      local inner_old = nil  -- never `a and a[key] or nil`, which reads a saved false as nil
+      if type(a) == "table" then inner_old = a[key] end
+      walk_new(inner_old, value, path .. "." .. tostring(key), inner)
+    end
   end
-  for key, value in pairs(b) do
-    if a[key] == nil then return path .. "." .. tostring(key) .. ": nil ~= " .. tostring(value) end
+  walk_old(old, loaded, "")
+  walk_new(old, loaded, "", {})
+  for index, entry in ipairs(added) do entry.path = entry.path:sub(2); added[index] = entry end
+  for index, text in ipairs(differences) do differences[index] = text:sub(2) end
+  return differences, added
+end
+
+-- Why a leaf 3.7 added to a loaded 3.6 scene has its value: the default
+-- of the param it stores, the LFO destination's none, a sequence's 0.
+-- Returns nil when it is right, else what is wrong
+local function added_leaf_problem(entry)
+  local keys, value = entry.keys, entry.value
+  local expected
+  if keys[1] == "data" and #keys == 2 and type(keys[2]) == "string" and keys[2]:match("^strata_lfo%d_dest_key$") then
+    expected = "none"
+  elseif keys[1] == "data" and keys[2] == "sequences" then
+    expected = 0  -- the block's default: sixteen zeros a sequence
+  elseif keys[1] == "data" and keys[2] == "voices" and keys[4] == "extras" and #keys == 5 then
+    expected = param_default("v" .. keys[3] .. "_" .. keys[5])
+  elseif keys[1] == "data" and #keys == 2 then
+    expected = param_default(keys[2])
+  end
+  if expected == nil then return entry.path .. " is no field 3.7 fills from a default" end
+  if not same_value(expected, value) then
+    return entry.path .. " is " .. tostring(value) .. ", its default " .. tostring(expected)
   end
   return nil
 end
@@ -237,85 +251,79 @@ end
 
 test("a 3.6 scenes file, a 3.6 PSET and a version 2 buffers.data load with their values as saved", function()
   math.randomseed(SYSTEM.seed)
-  -- the session the files are written from: every voice scrambled (a non-zero scan
-  -- included), steps with attributes, two scenes
-  local context = load_strata(); finish_startup(context)
-  local S = local_value("S")
-  local NUM_VOICES, NUM_LFOS = S.constants.NUM_VOICES, S.constants.NUM_LFOS
-  h.scramble_state(SYSTEM.seed)
-  params:set("v1_buf_scan", 0.5)
-  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
-  S.patterns[2][3] = 9
-  S.lib.sequencer.set_step_attr(2, 3, "prob", 40)
-  S.lib.sequencer.set_step_attr(2, 3, "notes", {0, 7})
-  capture_scene(1)
-  h.scramble_state(SYSTEM.seed + 1)
-  capture_scene(4)
-  S.lib.scenes.set_name(4, "four")
-  local old_scenes = {}
-  for slot = 1, S.constants.NUM_SCENES do old_scenes[slot] = as_3_6_scene(S.scenes[slot], NUM_LFOS) end
-  for slot = 1, S.constants.NUM_SCENES do
-    for _, key in ipairs(ADDED.voice_extras) do
-      local voices = old_scenes[slot].populated and old_scenes[slot].data.voices
-      if voices then assert_equal(voices[1].extras[key], nil, "the 3.6 scene has no " .. key) end
-    end
-  end
-  local pset_text = {}
-  local saved_from = context.data_dir .. "strata-05.pset"
-  os.execute("mkdir -p '" .. context.data_dir .. "'")
-  params:set("v1_buf_scan", 0.5)  -- a non-zero scan in the PSET too
-  params:write(saved_from, "three six")
-  for _, entry in ipairs(pset_lines(file_text(saved_from))) do
-    if not added_pset_id(entry.id) then pset_text[#pset_text + 1] = entry.line end
-  end
-  for n = 1, NUM_LFOS do pset_text[#pset_text + 1] = '"strata_lfo' .. n .. '_dest": ' .. (n + 1) end
-  pset_text[#pset_text + 1] = '"strata_pset_format": 2'
-  local pset_body = "-- three six\n" .. table.concat(pset_text, "\n") .. "\n"
-  cleanup()
-
-  -- the 3.6 files, in a data folder of their own, with a 30 s file in slot 3 from 1.5 s
+  local files = files_3_6()
   local subdir, dir = fresh_dir("system37-old-files")
-  write_text(dir .. "scenes.data", tabutil_text({version = 7, scenes = old_scenes}))
-  local audio = h.data_root .. subdir .. "/audio/"
+  local root = h.data_root .. subdir .. "/"
+  write_text(dir .. "scenes.data", files["scenes.data"])
+  -- buffers.data as 3.6.0 writes it ({version, paths, starts}): a 30 s file in slot 3 from 1.5 s
+  local audio = root .. "audio/"
   os.execute("mkdir -p '" .. audio .. "'")
   local drone = audio .. "drone.wav"
   io.open(drone, "w"):close()
   write_text(dir .. "buffers.data", tabutil_text({version = 2, paths = {"", "", drone}, starts = {0, 0, 1.5}}))
-  local pset = h.data_root .. subdir .. "/strata-05.pset"
-  write_text(pset, pset_body)
-  context = load_strata({data_subdir = subdir, before_load = function(started)
+  local pset = root .. PSET_3_6.base .. ".pset"
+  local pset_text = files[PSET_3_6.base .. ".pset"]:gsub("@AUDIO@", audio)
+  write_text(pset, pset_text)
+  for _, key in ipairs(PSET_3_6.sides) do
+    local name = PSET_3_6.base .. "." .. key .. ".data"
+    write_text(root .. name, files[name])
+  end
+  local context = load_strata({data_subdir = subdir, before_load = function(started)
     started.audio.register(drone, {channels = 2, frames = 48000 * 30, rate = 48000})  -- longer than a slot
   end})
   finish_startup(context)
-  S = local_value("S")
-  -- the scenes, each as it was saved, the 3.7 fields at their defaults
+  local S = local_value("S")
+  local NUM_VOICES, NUM_LFOS = S.constants.NUM_VOICES, S.constants.NUM_LFOS
+  -- the scenes: every value the file holds as saved; every field 3.7 adds at its default
+  local reference = dir .. "scenes-3.6.data"
+  write_text(reference, files["scenes.data"])
+  local old = S.lib.data_files.read(reference)
+  assert_equal(old.version, 7, "3.6.0 writes format 7")
+  local populated = 0
   for slot = 1, S.constants.NUM_SCENES do
-    local loaded = S.scenes[slot]
-    local difference
-    if old_scenes[slot].populated then
-      local trimmed = as_3_6_scene(loaded, NUM_LFOS)
-      for n = 1, NUM_LFOS do trimmed.data["strata_lfo" .. n .. "_dest"] = old_scenes[slot].data["strata_lfo" .. n .. "_dest"] end
-      difference = first_difference(old_scenes[slot], trimmed, "scene " .. slot)
+    local saved, loaded = old.scenes[slot], S.scenes[slot]
+    if type(saved) == "table" and saved.populated then
+      populated = populated + 1
+      local differences, added = scene_leaves(saved, loaded)
+      assert_equal(table.concat(differences, "; "), "", "scene " .. slot .. ": every value as saved")
+      assert_true(#added >= NUM_VOICES * 11, "scene " .. slot .. ": the 3.7 fields filled (" .. #added .. ")")
+      for _, entry in ipairs(added) do
+        local problem = added_leaf_problem(entry)
+        assert_true(problem == nil, "scene " .. slot .. ": " .. tostring(problem))
+      end
+      for n = 1, NUM_LFOS do
+        assert_equal(loaded.data["strata_lfo" .. n .. "_dest_key"], "none", "scene " .. slot .. ", LFO " .. n .. ": none")
+      end
     else
-      difference = loaded.populated and ("scene " .. slot .. " loaded from nothing") or nil
+      assert_true(not loaded.populated, "scene " .. slot .. ": empty, as saved")
     end
-    assert_true(difference == nil, "every value as saved: " .. tostring(difference))
   end
-  assert_true(S.scenes[1].populated and S.scenes[4].populated, "the two scenes load")
+  assert_equal(populated, 2, "scenes 1 and 4")
   assert_equal(S.scenes[4].name, "four")
-  local one = S.scenes[1].data
-  assert_near(one.voices[1].grain.buf_scan or one.voices[1].params.buf_scan, 0.5, 1e-9, "a scan of 0.5, now a speed")
-  for voice = 1, NUM_VOICES do
-    local extras = one.voices[voice].extras
-    assert_equal(extras.scan_mode, 1, "voice " .. voice .. ": wrap"); assert_equal(extras.follow, 1, "follow off")
-    assert_equal(extras.slices, 1, "slices off"); assert_equal(extras.seq_direction, 1, "forward")
-    assert_equal(extras.seq_misstep, 0, "no misstep"); assert_equal(extras.env_loop, 1, "the envelope does not loop")
-  end
-  assert_equal(one.delay_sync, 0, "the delay unsynced"); assert_equal(one.delay_pingpong, 0, "no ping-pong")
-  for n = 1, NUM_LFOS do assert_equal(one["strata_lfo" .. n .. "_dest_key"], "none", "LFO " .. n .. ": none (decision 24)") end
-  assert_equal(one.steps[2][3].prob, 40, "a step's attribute as saved")
-  assert_equal(one.steps[2][3].slice, nil, "and no slice"); assert_equal(one.steps[2][3].cond, nil, "nor condition")
+  assert_near(S.scenes[1].data.voices[1].grain.buf_scan, PSET_3_6.scan, 1e-9, "a scan of 0.5, now a speed")
+  assert_equal(S.scenes[1].data.steps[2][3].prob, 40, "a step's attribute as saved")
   assert_true(not util.file_exists(dir .. "scenes.data.bak"), "nothing is set aside")
+  -- where the values land: an instant recall of each puts every saved global
+  -- in a param of this build and every voice's values in place
+  for _, slot in ipairs({1, 4}) do
+    recall_scene(slot, 0)
+    context.clock.run_for(0.1)
+    local globals = 0
+    for key, value in pairs(old.scenes[slot].data) do
+      if type(value) ~= "table" and not key:match(PSET_3_6.lfo_dest) then
+        assert_true(params.lookup[key] ~= nil, "scene " .. slot .. "'s field " .. key .. " is a param of this build")
+        local param = params:lookup_param(key)
+        local step = param.controlspec and param.controlspec.step or 0
+        assert_near(params:get(key), value, math.max(step, 1e-6 * math.max(1, math.abs(value))),
+          "scene " .. slot .. ": " .. key .. " recalled as saved")
+        globals = globals + 1
+      end
+    end
+    assert_true(globals > 50, "scene " .. slot .. ": " .. globals .. " globals recalled")
+    for voice = 1, NUM_VOICES do h.assert_voice_matches(voice, S.voices[voice], old.scenes[slot].data.voices[voice]) end
+    assert_near(params:get("v1_buf_scan"), old.scenes[slot].data.voices[1].grain.buf_scan, 1e-9,
+      "scene " .. slot .. ": voice 1's scan, now a speed")
+  end
   -- the buffers: slot 3 reloads its file from 1.5 s, with no settings
   local loads = context.calls_named("loadBuffer")
   assert_equal(#loads, 1, "one slot reloads")
@@ -328,29 +336,49 @@ test("a 3.6 scenes file, a 3.6 PSET and a version 2 buffers.data load with their
   assert_equal(settings.tempo, nil, "no tempo"); assert_equal(settings.key, nil, "no key")
   assert_equal(settings.normalize, false, "no normalize"); assert_equal(settings.mode, 1, "no slices")
   assert_true(not util.file_exists(dir .. "buffers.data.bak"), "nothing is set aside")
-  -- the PSET: every line it holds as written, every 3.7 param at its default
+  -- the PSET: every line as written, but those 3.7 names (drops, the LFO destinations)
   context.clear_engine_calls()
   params:read(pset)
   lfo_step(context, 3)
-  for _, entry in ipairs(pset_lines(pset_body)) do
-    local param = params.lookup[entry.id] and params:lookup_param(entry.id)
-    if param and entry.id ~= "strata_lfo1_dest" and not entry.id:match("^strata_lfo%d_dest$") then
+  local in_file, compared = {}, 0
+  for _, entry in ipairs(pset_lines(pset_text)) do
+    in_file[entry.id] = true
+    local id = entry.id
+    if id:match(PSET_3_6.lfo_dest) then
+      assert_equal(params:get(id), 1, id .. ": a 3.6 index reads as none")
+      assert_equal(params:get(id .. "_key"), "none", id .. "'s key: none")
+    elseif not params.lookup[id] then
+      assert_true(PSET_3_6.drops[id] ~= nil, id .. ": a 3.6 line with no param here, and none expected")
+    elseif params:lookup_param(id).t == params.tGROUP then
+      -- a group's line holds its size, no value
+    else
       local number = tonumber(entry.value)
-      if number and param.t ~= params.tTEXT then
-        assert_near(params:get(entry.id), number, 1e-9 * math.max(1, math.abs(number)), entry.id .. " as saved")
+      if number and params:lookup_param(id).t ~= params.tTEXT then
+        assert_near(params:get(id), number, 1e-9 * math.max(1, math.abs(number)), id .. " as saved")
       else
-        assert_equal(tostring(params:get(entry.id)), entry.value, entry.id .. " as saved")
+        assert_equal(tostring(params:get(id)), entry.value, id .. " as saved")
       end
+      compared = compared + 1
     end
   end
-  assert_near(params:get("v1_buf_scan"), 0.5, 1e-9, "the scan of 0.5, a speed")
+  assert_true(compared > 800, compared .. " of the PSET's values compared")
+  for id in pairs(PSET_3_6.drops) do assert_true(in_file[id], "the 3.6 PSET holds " .. id) end
+  assert_near(params:get("v1_buf_scan"), PSET_3_6.scan, 1e-9, "the scan of 0.5, a speed")
+  for id, text in pairs(PSET_3_6.keyed) do assert_equal(params:string(id), text, id .. " by its key") end
+  -- the side files
+  local routing = S.lib.matrix.routing(1)
+  assert_equal(routing.source, PSET_3_6.routing.source, "routing 1 from the matrix side file")
+  assert_equal(routing.dest, PSET_3_6.routing.dest)
+  local target = S.lib.macros.targets(1)[1]
+  assert_equal(target.id, PSET_3_6.macro.id, "macro 1's target from the macros side file")
+  assert_near(target.min, PSET_3_6.macro.min, 1e-9); assert_near(target.max, PSET_3_6.macro.max, 1e-9)
+  -- 3.7's params the file lacks: their defaults, all off
   for voice = 1, NUM_VOICES do
     for _, key in ipairs({"scan_mode", "follow", "slices", "seq_direction", "env_loop"}) do
       assert_equal(params:get("v" .. voice .. "_" .. key), 1, "voice " .. voice .. "'s " .. key .. " off")
     end
     assert_equal(params:get("v" .. voice .. "_seq_misstep"), 0)
   end
-  for n = 1, NUM_LFOS do assert_equal(params:get("strata_lfo" .. n .. "_dest_key"), "none", "LFO " .. n .. ": none") end
   assert_equal(params:get("delay_sync"), 0); assert_equal(params:get("delay_pingpong"), 0)
   for _, name in ipairs(NEW_COMMANDS) do assert_equal(#context.calls_named(name), 0, "the read sends no " .. name) end
   cleanup()
@@ -359,26 +387,22 @@ end)
 test("a scenes file older than format 7 and a version 1 buffers.data are set aside, never converted or overwritten",
     function()
   math.randomseed(SYSTEM.seed)
-  local context = load_strata(); finish_startup(context)
-  local S = local_value("S")
-  h.scramble_state(SYSTEM.seed)
-  capture_scene(2)
-  local scenes = as_3_6_scene(S.scenes[2], S.constants.NUM_LFOS)
-  cleanup()
   local subdir, dir = fresh_dir("system37-below-floors")
   local audio = h.data_root .. subdir .. "/audio/"
   os.execute("mkdir -p '" .. audio .. "'")
   local drone = audio .. "drone.wav"
   io.open(drone, "w"):close()
-  local scenes_text = tabutil_text({version = 6, scenes = {[2] = scenes}})
+  -- 3.6.0's scenes file, labeled format 6
+  local scenes_text, labeled = files_3_6()["scenes.data"]:gsub('%["version"%]=7,', '["version"]=6,')
+  assert_equal(labeled, 1, "the one version field")
   local buffers_text = tabutil_text({version = 1, paths = {drone}, starts = {0}})
   write_text(dir .. "scenes.data", scenes_text)
   write_text(dir .. "buffers.data", buffers_text)
-  context = load_strata({data_subdir = subdir, before_load = function(started)
+  local context = load_strata({data_subdir = subdir, before_load = function(started)
     started.audio.register(drone, {channels = 2, frames = 48000 * 4, rate = 48000})
   end})
   finish_startup(context)
-  S = local_value("S")
+  local S = local_value("S")
   for slot = 1, S.constants.NUM_SCENES do
     assert_true(not S.scenes[slot].populated, "scene " .. slot .. ": nothing converted")
   end
@@ -410,6 +434,47 @@ local function extra_slots(S)
   local count = 0
   for _, used in ipairs(S.lib.notes.slots(1)) do if used.slot > 1 then count = count + 1 end end
   return count
+end
+
+-- Every extra note the engine was told to start, followed through the
+-- calls as the notes area keeps its slots (docs/notes/engine/notes.md): a
+-- noteOn on an empty slot, or on a releasing one (whose tail the engine
+-- cuts first), starts a note; a noteOff ends a live note (cut 0 releases
+-- it, cut 1 cuts it); voiceOff releases every live extra note of its voice.
+-- Slot 0, the own note, only parks and is left out. Returns the notes still
+-- live (as "voice:slot") and the problems: a noteOn on a live slot (a
+-- second note where Lua started one) and a noteOff on a slot with no live
+-- note (a note ended twice, or one never started)
+local function engine_notes(context)
+  local live, problems = {}, {}
+  for index, call in ipairs(context.engine_calls) do
+    local voice, slot = call.args[1], call.args[2]
+    if (call.name == "noteOn" or call.name == "noteOff") and slot > 0 then
+      local key = voice .. ":" .. slot
+      if call.name == "noteOn" then
+        if live[key] then problems[#problems + 1] = "call " .. index .. ": noteOn on live slot " .. key end
+        live[key] = true
+      else
+        if not live[key] then problems[#problems + 1] = "call " .. index .. ": noteOff of slot " .. key .. " with no live note" end
+        live[key] = nil
+      end
+    elseif call.name == "voiceOff" then
+      for key in pairs(live) do
+        if key:match("^(%d+):") == tostring(voice) then live[key] = nil end
+      end
+    end
+  end
+  local open = {}
+  for key in pairs(live) do open[#open + 1] = key end
+  table.sort(open)
+  return open, problems
+end
+
+-- Every extra note the engine started was ended once, and none sounds on
+local function assert_notes_ended(context, where)
+  local open, problems = engine_notes(context)
+  assert_equal(table.concat(problems, "; "), "", where .. ": no note started twice or ended twice")
+  assert_equal(table.concat(open, " "), "", where .. ": no note left live in the engine")
 end
 
 local function calls_since(context, from, name)
@@ -451,7 +516,7 @@ local function sliced_loop()
     SYSTEM.slot_seconds * SYSTEM.rate, SYSTEM.rate, string.rep("0.500 ", 64)))
   context.clock.run_for(2 / local_value("UI_PAGES").FRAMES_PER_SECOND + 0.001)
   assert_equal(S.lib.buffers.status(1), "loaded", "slot 1 holds the loop")
-  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  params:set("v1_source", option_index("v1_source", "buf 1"))
   local modes = S.lib.samples.SAMPLES.modes
   local equal
   for index, name in ipairs(modes) do if name == "equal" then equal = index end end
@@ -571,12 +636,18 @@ test("a sliced loop under a pattern, follow, an envelope, a sequence and a chain
   -- each hit's calls: from the probe's count at the hit before to its own
   local from = started
   for index, event in ipairs(state.events) do
-    local window = {}
+    local window, region_at, note_ons, note_on_after = {}, nil, 0, false
     for at = from + 1, event.calls do
       local call = context.engine_calls[at]
-      if call.name == "noteRegion" and call.args[1] == 0 then window[#window + 1] = call end
+      if call.name == "noteRegion" and call.args[1] == 0 then window[#window + 1] = call; region_at = at end
+      if call.name == "noteOn" and call.args[1] == 0 then
+        note_ons = note_ons + 1
+        if region_at then note_on_after = true end
+      end
     end
     assert_equal(#window, 1, "hit " .. index .. " (step " .. event.step .. "): one noteRegion")
+    assert_equal(note_ons, 1, "hit " .. index .. ": one noteOn")
+    assert_true(note_on_after, "hit " .. index .. ": its noteOn after its noteRegion")
     assert_near(window[1].args[3], (event.step - 1) / SYSTEM.slices, 1e-9, "hit " .. index .. ": slice " .. event.step
       .. "'s start")
     assert_near(window[1].args[4], 1 / SYSTEM.slices, 1e-9, "and its length")
@@ -619,13 +690,14 @@ test("a sliced loop under a pattern, follow, an envelope, a sequence and a chain
   assert_equal(extra_slots(S), 0, "no extra slot held")
   assert_equal(S.lib.notes.own_region(1), nil, "the own region cleared")
   assert_equal(#S.lib.slices.playing(1), 0, "no slice sounds")
+  assert_notes_ended(context, "after the stops")
 end)
 
 -- The ways out (the brief's four), each on a fresh state playing for a bar
--- and a half with fill held by the 256's key
+-- and a half with fill held by the 256's key and by the latch (seq_fill)
 local WAYS_OUT = {
   {name = "a slot clear", run = function() clear_buffer(1) end},
-  {name = "a source switch", run = function(_, S) params:set("v1_source", S.constants.SOURCE_SYNTH) end},
+  {name = "a source switch", run = function() params:set("v1_source", option_index("v1_source", "synth")) end},
   {name = "a PSET load", ends_routing = true, run = function(_, _, state) params:read(state.defaults_pset) end},
   {name = "cleanup", cleanup = true, run = function() cleanup() end},
 }
@@ -636,8 +708,10 @@ test("every way out leaves nothing held", function()
     pattern_clock_start()
     context.clock.run_for(bar_seconds())
     press_fill(context, 1)
+    params:set("seq_fill", 1)
     context.clock.run_for(bar_seconds() / 2)
     assert_true(extra_slots(S) > 0, way.name .. ": slices sound in extra slots")
+    assert_true(#engine_notes(context) > 0, way.name .. ": and in the engine")
     assert_true(S.lib.conditions.fill(), way.name .. ": fill held")
     assert_equal(#context.calls_named("stopFastEnv"), 0, way.name .. ": the route plays")
     local before = #context.engine_calls
@@ -648,15 +722,24 @@ test("every way out leaves nothing held", function()
         assert_equal(context.engine_calls[index].name, "voiceOff", "cleanup sends only its voiceOffs")
       end
       assert_equal(extra_slots(S), 0, "cleanup: no slice note held")
-      assert_true(not S.lib.conditions.fill(), "cleanup: fill ends with its grid")
+      assert_notes_ended(context, "cleanup")
+      -- the key's hold ended with its grid, with no release: only the latch is left
+      assert_true(S.lib.conditions.fill(), "cleanup: the latch stays")
+      params:set("seq_fill", 0)
+      assert_true(not S.lib.conditions.fill(), "cleanup: the key holds no more")
     else
       lfo_step(context, 3)
       assert_equal(extra_slots(S), 0, way.name .. ": no slice note held")
       assert_equal(#S.lib.slices.playing(1), 0, way.name .. ": no slice sounds")
       assert_equal(S.lib.notes.own_region(1), nil, way.name .. ": no own region")
+      assert_notes_ended(context, way.name)
+      -- fill: the way out ends neither holder (rulings 10 and 11)
+      assert_true(S.lib.conditions.fill(), way.name .. ": fill still on")
+      assert_equal(params:get("seq_fill"), 1, way.name .. ": the latch survives")
       press_fill(context, 0)
-      assert_true(not S.lib.conditions.fill(), way.name .. ": fill off once its holder lets go")
-      assert_equal(params:get("seq_fill"), 0, way.name .. ": and no latch")
+      assert_true(S.lib.conditions.fill(), way.name .. ": the key let go, the latch holds")
+      params:set("seq_fill", 0)
+      assert_true(not S.lib.conditions.fill(), way.name .. ": off once both have let go")
       if not way.ends_routing then
         assert_equal(#calls_since(context, before, "stopFastEnv"), 0, way.name .. ": the routing plays on")
         S.lib.matrix.set_routing(SYSTEM.routings.envelope, "", "")
@@ -666,6 +749,7 @@ test("every way out leaves nothing held", function()
       assert_equal(#stops, 1, way.name .. ": one stopFastEnv at the routing's end")
       assert_equal(stops[1].args[1], SYSTEM.routings.envelope - 1, way.name .. ": route 0's")
       pattern_clock_stop()
+      assert_notes_ended(context, way.name .. ", the patterns stopped")
     end
   end
 end)
