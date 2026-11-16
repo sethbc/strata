@@ -1,0 +1,2 @@
+### Changed
+- **Development: the 3.7 plan.** No code changes. `docs/superpowers/plans/2026-11-15-3.7-plan.md` is the implementation plan for rhythm: nineteen tasks in four waves (seams; the engine and the sequencer side; slices, scan, a file's settings, the grids and envelopes on the new engine; the release), with twenty-eight rulings where the design meets the merged code. The code facts it was written from are three more files under docs/design/3.7-facts/.
