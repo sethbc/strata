@@ -68,10 +68,10 @@ After installing, restart norns from its own menu: SYSTEM > RESTART. Strata's en
 - [A File's Settings](docs/user/files.md) - each audio file's tempo, key, normalize and slices, remembered with the file
 - [Slices](docs/user/slices.md) - a buffer's slices, from equal parts or its transients, played by MIDI notes, a grid's row and the sequencer's steps
 - [Modulation](docs/user/modulation.md) - cross-modulation, mutations, the LFOs, the macros, the morph, scatter, the gesture recorders and the modulation matrix
-- [Modulators](docs/user/modulators.md) - the random sequences: four stepped modulation sources on a division of the tempo or a voice's hits
+- [Modulators](docs/user/modulators.md) - the random sequences (four stepped modulation sources on a division of the tempo or a voice's hits) and an envelope per voice, fired by its hits
 - [Global Controls and Effects](docs/user/effects.md) - master density, drift, filter, delay, reverb, tempo
 - [Scenes and Automation](docs/user/scenes.md) - scenes, the scene sequencer and composing with scenes
-- [Sequencer](docs/user/sequencer.md) - each voice's pattern length, division and swing, step probability, ratchets, step locks, notes and gates, Euclidean fill, chaining and following the clock's transport
+- [Sequencer](docs/user/sequencer.md) - each voice's pattern length, division, swing and direction, step conditions, probability, ratchets, step locks, notes, slices and gates, fill, Euclidean fill, chaining and following the clock's transport
 - [Screen Controls](docs/user/controls.md) - the ten screen pages (one file each under docs/user/pages/), E1, the header, ALT, fine adjustment and center detents
 - [MIDI Input](docs/user/midi.md) - playing voices from MIDI and mapping CCs
 - [Monome Grid](docs/user/grid.md) - grid sizes (one layout file each under docs/user/grid/), holds and step levels (since 3.4 a step key toggles its step when you let go, not when you press, and a step held 0.3 s opens the step editor), and the pattern sequencer

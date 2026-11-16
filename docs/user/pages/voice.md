@@ -2,10 +2,10 @@
 
 Every parameter of the selected voice. Back to [Screen Controls](../controls.md).
 
-The selected voice is the one picked on MAIN (or from the grid). The line under the header shows it as on MAIN's list (`3- fold [L]`: its number, `+` running or `-` stopped, its short name, `[L]` when locked) and, at the right, the section the cursor is in and its place among the voice's sections (`grain 2/6`).
+The selected voice is the one picked on MAIN (or from the grid). The line under the header shows it as on MAIN's list (`3- fold [L]`: its number, `+` running or `-` stopped, its short name, `[L]` when locked) and, at the right, the section the cursor is in and its place among the voice's sections (`grain 2/7`).
 
 Below it, five rows at a time, the voice's parameters in seven sections, each under a dim section name:
-- **synth** - the synth's own parameters (everything but level and pan). A buffer-sourced voice shows its buffer position, rate and scan here instead (the scan as a speed, `1.00x` at the audio's own rate), then its loop start and loop length (see [Audio Sources and Buffers](../sources-and-buffers.md)), then `scan mode` (`wrap`, `bounce`, `one shot`) and `follow` (`off`, `stretch`, `repitch`: see [Scan modes and tempo follow](../voices-and-grains.md#scan-modes-and-tempo-follow)); an input-sourced voice has no synth section and shows its input section instead
+- **synth** - the synth's own parameters (everything but level and pan). A buffer-sourced voice shows its buffer position, rate and scan here instead (the scan as a speed, `1.00x` at the audio's own rate), then its loop start and loop length (see [Audio Sources and Buffers](../sources-and-buffers.md)), then `scan mode` (`wrap`, `bounce`, `one shot`) and `follow` (`off`, `stretch`, `repitch`: see [Scan modes and tempo follow](../voices-and-grains.md#scan-modes-and-tempo-follow)), then `slices` (`off`, `one`, `overlap`: whether MIDI notes, a grid's row and steps play the buffer's slices, [Slices](../slices.md)); an input-sourced voice has no synth section and shows its input section instead
 - **input** - an input-sourced voice only: its history, how far back in the input it plays (0 s is now; up to 16 s, 60 s on the high performance setting)
 - **grain** - size, density, pitch, position spread, envelope, mode
 - **crossmod** - modulation speed, then for each of the three slots its source, amplitude amount and frequency amount. A source shows the voice's number and short name (`3 fold`), or `none`

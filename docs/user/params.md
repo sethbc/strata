@@ -144,7 +144,7 @@ Scenes capture each voice's source and buffer position, rate and scan, but **not
 - Scale (off, or any of norns' scales; default off) and root (C-B, default C), shared by every voice that quantizes ([voices and grains](voices-and-grains.md#scales))
 
 ## Per-Voice Sections
-Each voice has four parts in the menu, in this order: its heading (`voice 1: resonator`), with quantize, the voice's synthesis parameters, its amp and (all but the Sub) its pan; then `voice 1 granular`, `voice 1 cross-modulation` and `voice 1 extras`. The synthesis parameters are listed voice by voice in [Synthesis Parameters](voices-and-grains.md#synthesis-parameters). The Pulse voice's res (0.1-1, default 0.8) rises with resonance, as every other res does: up is a sharper, ringing peak at the cutoff, 0.1 is flat. Before 3.3 it ran the other way (0.1 was the sharpest); a scene or PSET saved then still sounds the same, and shows the mirrored number (0.3 shows as 0.8).
+Each voice has four parts in the menu, in this order: its heading (`voice 1: resonator`), with quantize, the voice's synthesis parameters, its amp and (all but the Sub) its pan; then `voice 1 granular`, `voice 1 cross-modulation` and `voice 1 extras`. The synthesis parameters are listed voice by voice in [Synthesis Parameters](voices-and-grains.md#synthesis-parameters). The Pulse voice's res (0.1-1, default 0.8) rises with resonance, as every other res does: up is a sharper, ringing peak at the cutoff, 0.1 is flat. Before 3.3 it ran the other way (0.1 was the sharpest); a PSET saved then loads its number as it is, so it plays another resonance (a scenes file that old is set aside).
 
 The rest of each voice's parameters, in menu order. A default "by voice" gives voices 1-7's in turn; a numbered parameter's defaults are its numbers' in turn.
 
@@ -170,8 +170,6 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | freeze mode | hold (and spectral on the high tier) | hold | |
 | loop start | 0-1 | 0 | The part of the buffer a buffer-sourced voice plays ([Audio Sources and Buffers](sources-and-buffers.md)) |
 | loop length | 0.001-1 | 1 | |
-| scan mode | wrap, bounce, one shot | wrap | Buffer voices: at the loop's end the scan goes round again, turns back, or plays once and stays silent until the voice's next hit ([voices and grains](voices-and-grains.md#scan-modes-and-tempo-follow)) |
-| follow | off, stretch, repitch | off | Buffer voices on a file with a tempo: the scan follows the clock's tempo, keeping the pitch (stretch) or moving it with the speed (repitch) |
 | reverse | 0-100% | 0 | How each grain differs from the last, the reverse to custom rows ([Grain variation](voices-and-grains.md#grain-variation)) |
 | pitch jitter | 0-12 st | 0 | |
 | pan jitter | 0-1 | 0 | |
@@ -188,20 +186,14 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | mute | off/on | off | Silences the voice without stopping it; scenes keep it ([Mute and solo](voices-and-grains.md#mute-and-solo)) |
 | solo | off/on | off | Silences every voice that is not soloed; scenes never keep it |
 | bookmark 1-4 | 0-1 | 0, 0.25, 0.5, 0.75 | Buffer voices: saved positions in the slot, set on VOICE or with a grid's store key, and recalled with BUFFER's `bm` field (E3) or a grid's bookmark keys. Kept in scenes (they fade like other values) and PSETs ([voices and grains](voices-and-grains.md#bookmarks)) |
+| scan mode | wrap, bounce, one shot | wrap | Buffer voices: at the loop's end the scan goes round again, turns back, or plays once and stays silent until the voice's next hit ([voices and grains](voices-and-grains.md#scan-modes-and-tempo-follow)) |
+| follow | off, stretch, repitch | off | Buffer voices on a file with a tempo: the scan follows the clock's tempo, keeping the pitch (stretch) or moving it with the speed (repitch) |
 | env attack | 0.001-10 s | 0.005 | The voice's envelope, a modulation source fired by its hits ([Envelopes](modulators.md#envelopes)): the rise to 1 |
 | env decay | 0.001-10 s | 0.2 | The fall to the sustain |
 | env sustain | 0-1 | 0 | The level held for the hit's gate length; 0 makes it an attack and a decay |
 | env release | 0.001-10 s | 0.2 | The fall to 0 after the hold |
 | env curve | -8 to 8 | -4 | Bends the three slopes; 0 is straight. The times, the sustain and the curve fade in scenes |
 | env loop | off, on | off | On: the envelope starts again each time it ends. A scene switches it at the end of its fade |
-| seq length | 1-16 | 16 | The voice's pattern: how many steps it plays, how long each is, its gate and swing ([Sequencer](sequencer.md)) |
-| seq division | 1/32, 1/16t, 1/16, 1/8t, 1/8, 1/4, 1/2, 1 bar | 1/16 | |
-| seq gate | off, on | off | On: the voice is heard only while a step's gate is open |
-| seq gate length | 0.05-16 st | 0.5 | In steps |
-| seq gate release | 0.005-4 s | 0.1 | |
-| seq swing | 50-75 | 50 | Percent: 50 is straight |
-| seq direction | forward, reverse, ping-pong, random | forward | The order the voice takes its steps |
-| seq misstep | 0-100% | 0 | The chance of a step up or down instead of the direction's |
 | note cap | 1-8 | 8 | How many notes the voice plays at once: its own and up to seven more from the note pool all voices share. 1 plays one note at a time. Kept in PSETs, never in scenes ([VOICE](pages/voice.md)) |
 | attack | 0.005-30 s | by voice: 4, 5, 3, 8, 2, 0.01, 3 | The time a synth voice takes to fade in; each voice starts at its own, as before 3.5. A buffer or input voice's notes, and a frozen synth voice's, keep their grain fades (0.1 s in, 2 s out). Kept in scenes ([VOICE](pages/voice.md)) |
 | release | 0.01-30 s | by voice: 8, 10, 6, 12, 4, 2, 5 | The time a synth voice's note takes to fade out when it ends while the voice runs; a voice's stop fades in at most about 2 s whatever it is set to. As `attack`, a synth voice's only. Kept in scenes ([VOICE](pages/voice.md)) |
@@ -210,5 +202,13 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | slide target | off, amp, level, main, size, density, position, cutoff | main | What a note's slide moves, from where its touch began |
 | slide depth | -100 to 100% | 50 | |
 | slices | off, one, overlap | off | Buffer voices: whether MIDI notes and a grid's row play the slot's slices, one at a time on the voice's own note or each in a note of its own; a step's slice plays as overlap gives, else as one ([Slices](slices.md)) |
+| seq length | 1-16 | 16 | The voice's pattern: how many steps it plays, how long each is, its gate and swing ([Sequencer](sequencer.md)) |
+| seq division | 1/32, 1/16t, 1/16, 1/8t, 1/8, 1/4, 1/2, 1 bar | 1/16 | |
+| seq gate | off, on | off | On: the voice is heard only while a step's gate is open |
+| seq gate length | 0.05-16 st | 0.5 | In steps |
+| seq gate release | 0.005-4 s | 0.1 | |
+| seq swing | 50-75 | 50 | Percent: 50 is straight |
+| seq direction | forward, reverse, ping-pong, random | forward | The order the voice takes its steps |
+| seq misstep | 0-100% | 0 | The chance of a step up or down instead of the direction's |
 
-None of the extras (history to slide depth) is changed by MAIN's randomize or the mutations, or is on the grid's fader pages; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).
+None of the extras (history to seq misstep) is changed by MAIN's randomize or the mutations, or is on the grid's fader pages; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).
