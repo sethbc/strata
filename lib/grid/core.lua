@@ -540,8 +540,9 @@ return function(S)
   end
 
   -- The layout record of the grid connected to a port ({key, redraw,
-  -- fx_faders_page?, selects_grid_voice?}), or nil (no grid, or a size with
-  -- no layout)
+  -- fx_faders_page?, selects_grid_voice?, rows_show_grid_voice?,
+  -- shows_modulation?}: docs/notes/lua/grid-core.md), or nil (no grid, or a
+  -- size with no layout)
   function M.layout_of(port)
     local grid_port = S.grids[port]
     return grid_port and S.registry.grid_layouts[grid_layout(grid_port)] or nil

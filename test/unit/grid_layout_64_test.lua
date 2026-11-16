@@ -598,7 +598,7 @@ end)
 -- a slice key's release must end the slice it played for the voice it was
 -- pressed for, after a grid voice change on this grid or another (#221)
 test("64: a slice key's release ends its slice after the grid voice changed", function()
-  local context, S, device = positions_grid()
+  local context, S = positions_grid()
   local double = slice_double(S, 1, 20)
   grid_core().set_page(1, 5)
   S.grid_voice_select = 1
@@ -615,7 +615,7 @@ test("64: a slice key's release ends its slice after the grid voice changed", fu
 
   -- another grid's position press changes the grid voice
   S.grid_voice_select = 1
-  local wide = context.grid.plug(2, 16, 8)
+  context.grid.plug(2, 16, 8)
   grid_core().set_page(2, 5)
   context.grid.press(1, 2, 1, 1)
   assert_equal(double.plays[2].n, 2)
@@ -624,7 +624,6 @@ test("64: a slice key's release ends its slice after the grid voice changed", fu
   context.grid.press(1, 2, 1, 0)
   assert_equal(#double.offs, 2, "the release ends it")
   assert_equal(double.offs[2].voice, 1); assert_equal(double.offs[2].key, 102)
-  assert_true(wide ~= nil and device ~= nil)
 end)
 
 end

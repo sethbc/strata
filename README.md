@@ -65,6 +65,7 @@ After installing, restart norns from its own menu: SYSTEM > RESTART. Strata's en
 
 - [Voices and Granular Processing](docs/user/voices-and-grains.md) - the seven voices and their parameters, grain controls and performance features
 - [Audio Sources and Buffers](docs/user/sources-and-buffers.md) - buffers, live input, recording, files, saving and restoring
+- [A File's Settings](docs/user/files.md) - each audio file's tempo, key, normalize and slices, remembered with the file
 - [Slices](docs/user/slices.md) - a buffer's slices, from equal parts or its transients, played by MIDI notes, a grid's row and the sequencer's steps
 - [Modulation](docs/user/modulation.md) - cross-modulation, mutations, the LFOs, the macros, the morph, scatter, the gesture recorders and the modulation matrix
 - [Modulators](docs/user/modulators.md) - the random sequences: four stepped modulation sources on a division of the tempo or a voice's hits
