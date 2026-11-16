@@ -253,6 +253,7 @@ end
 --                             any of < and >, or as a method `name { ^N }`)
 --   note_slots,               noteSlots { ^N }, notePoolMax { ^N }: 3.5's note
 --   note_pool_max             slots per voice and the pool's largest size
+--   num_env_routes            numEnvRoutes { ^N }: 3.7's envelope routes
 --   input_source              inputSource { ^numBuffers + N }
 --   synthdef_controls[def]    the SynthDef's `arg a, b=1, ...;` (or |...|) names
 --   synthdef_defaults[def]    its arguments' numeric defaults (b = 1)
@@ -430,6 +431,8 @@ function stubs.engine_spec_from_source(source)
     -- 3.5's notes (StrataNotes.sc)
     note_slots = engine_number(source, "noteSlots"),
     note_pool_max = engine_number(source, "notePoolMax"),
+    -- 3.7's envelopes (StrataEnvelopes.sc)
+    num_env_routes = engine_number(source, "numEnvRoutes"),
     synthdef_controls = {},
     synthdef_defaults = {},
     control_limits = {},
@@ -575,6 +578,7 @@ function stubs.engine_spec_problems(spec)
   need(spec.num_fast_lfo_shapes, "numFastLfoShapes { ^N }")
   need(spec.note_slots, "noteSlots { ^N }")
   need(spec.note_pool_max, "notePoolMax { ^N }")
+  need(spec.num_env_routes, "numEnvRoutes { ^N }")
   need(spec.input_source, "inputSource { ^numBuffers + N }")
   need(#spec.voice_synthdefs > 0, "voiceSynthDefs = [...]")
   need(next(spec.grain_params), "the grain SynthDefs (grainDefs: [predicate -> \\name, ...])")
@@ -734,6 +738,17 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     noteRegion = function(args) return voice(args) or range("slot", args[2], 1, spec.note_slots - 1) end,
     syncScan = voice,
     setSlotGain = slot,
+    -- 3.7's envelopes (design §7.3), each index as the engine checks it, an
+    -- out-of-range one ignored there: a route 0..numEnvRoutes-1 fired by a
+    -- source voice, on a voice's destination 0..numFastDestinations-1,
+    -- loop 0 or 1. The continuous arguments are the engine's clips
+    -- (argument_limits: depth, attack, decay, sustain, release, curve)
+    setFastEnv = function(args)
+      return range("route", args[1], 0, spec.num_env_routes - 1) or range("source", args[2], 0, last_voice)
+        or range("voice", args[3], 0, last_voice) or range("destination", args[4], 0, spec.num_fast_destinations - 1)
+        or range("loop", args[11], 0, 1)
+    end,
+    stopFastEnv = function(args) return range("route", args[1], 0, spec.num_env_routes - 1) end,
   }
   for command, check in pairs(checks) do
     checks[command] = function(args) return check(args) or continuous(command, args) end

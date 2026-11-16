@@ -218,6 +218,8 @@ sync_check.PENDING_COMMANDS = {
   "syncScan",
   "setSlotGain",
   "analyzeBuffer",
+  "setFastEnv",
+  "stopFastEnv",
 }
 
 -- lua_sources: { { path = "strata.lua" | "lib/...", text = source }, ... },

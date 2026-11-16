@@ -1287,7 +1287,7 @@ end)
 -- The engine areas and their orders (the 3.2 design, §0)
 local ENGINE_AREAS = { performance = 10, voices = 20, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70,
   scale = 80, variation = 90, loop = 100, freeze = 110, mix = 120, record = 130, waveform = 140, positions = 150,
-  modulation = 160, notes = 170, onsets = 180 }
+  modulation = 160, notes = 170, onsets = 180, envelopes = 190 }
 
 test("every engine file is named Strata*.sc and defines each strataArea method once", function()
   local files, areas, orders = engine_files(), {}, {}
@@ -1437,7 +1437,7 @@ local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "f
 -- the commands' (loadBuffer, clearBuffer, saveBuffer, recordBuffer,
 -- stopRecord, setBypass)
 local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "inputHeadFrame", "gateVoice",
-  "voiceSynthFreed", "prepareTake", "startFastLfo", "watchFastLfo",
+  "voiceSynthFreed", "prepareTake", "startFastLfo", "watchFastLfo", "watchFastEnv",
   "loadSlot", "clearSlot", "saveSlot", "recordSlot", "stopRecordSlot", "setEffectBypass",
   "analyzeSlot", "runOnsetPass", "writeOnsetsFile" }
 -- the calls that hand a function to something that runs it later (the
