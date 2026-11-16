@@ -672,8 +672,10 @@ test("the destinations are none, the globals, each voice's together, then the ma
   local keys = {}
   for index, destination in ipairs(destinations) do
     keys[index] = destination.key
-    assert_equal(destination.key, destination.resolve() and destination.label:match("main$") == nil
-      and destination.resolve() or destination.key, destination.label .. "'s key is the param it moves")
+    -- (none and a voice's main entry: below)
+    if destination.key ~= "none" and not destination.label:match(" main$") then
+      assert_equal(destination.key, destination.resolve(), destination.label .. "'s key is the param it moves")
+    end
   end
   assert_equal(keys[1], "none"); assert_equal(keys[2], "master_density")
   assert_equal(destinations[13].key, "v1_main"); assert_equal(destinations[22].key, "v1_filter_freq")
@@ -833,47 +835,110 @@ test("a destination registered after init's list joins its voice's group", funct
   load_strata()
 end)
 
+-- The engine calls 3.6 (main at de4949e6, the destination set by its index)
+-- made for each destination: LFO 1 a square held at its top, rate 0.003 Hz,
+-- depth 50 %, turned on and stepped three times (numbers to 4 places)
+local SOUND_BEFORE_3_7 = {
+  v3_filter_freq = "setFastLfo 0.0000 2.0000 3.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
+  v1_grain_pitch = "setFastLfo 0.0000 0.0000 0.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
+  v5_buf_pos = "setFastLfo 0.0000 4.0000 1.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
+  v6_grain_size = "setFastLfo 0.0000 5.0000 2.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
+  v7_amp = "setFastLfo 0.0000 6.0000 4.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
+  reverb_mix = "setReverb 0.5500 0.8000 0.5000",
+  delay_feedback = "setDelay 0.3750 0.6375 0.0000",
+  v1_main = "setVoiceParam 0.0000 freq 555.0000",
+  v2_history = "setGrainParam 1.0000 history 4.0000",
+  v1_reverb_send = "setGrainParam 0.0000 reverbSend 1.0000",
+}
+
 test("an LFO's sound is unchanged: the same destination gives the same engine calls", function()
   local context = load_strata(); finish_startup(context)
-  params:set("reverb_mix", 0.3)
-  -- each destination set by its key: the engine calls 3.6 made for it
-  local function engine_calls(n, key)
+  local S = local_value("S")
+  params:set("reverb_mix", 0.3); params:set("delay_feedback", 0.4); params:set("v1_freq", 60)
+  local keys = {}
+  for key in pairs(SOUND_BEFORE_3_7) do keys[#keys + 1] = key end
+  table.sort(keys)
+  for _, key in ipairs(keys) do
+    params:set(lfo_id(1, "dest_key"), key)
+    params:set(lfo_id(1, "shape"), 3)
+    params:set(lfo_id(1, "rate"), 0.003)
+    params:set(lfo_id(1, "phase"), 0)
+    params:set(lfo_id(1, "depth"), 50)
     context.clear_engine_calls()
-    params:set(lfo_id(n, "dest_key"), key)
-    params:set(lfo_id(n, "depth"), 50)
-    params:set(lfo_id(n), 1)
-    lfo_step(context)
-    local calls = {}
-    for _, call in ipairs(context.engine_calls) do calls[#calls + 1] = call end
-    params:set(lfo_id(n), 0)
-    return calls
-  end
-  for key, want in pairs({ v3_filter_freq = { 2, 3 }, v1_grain_pitch = { 0, 0 }, v5_buf_pos = { 4, 1 },
-    v6_grain_size = { 5, 2 }, v7_amp = { 6, 4 } }) do
-    local sets = {}
-    for _, call in ipairs(engine_calls(1, key)) do
-      if call.name == "setFastLfo" then sets[#sets + 1] = call end
+    params:set(lfo_id(1), 1)
+    lfo_step(context, 3)
+    local lines = {}
+    for _, call in ipairs(context.engine_calls) do
+      local args = {}
+      for index, arg in ipairs(call.args) do
+        args[index] = type(arg) == "number" and string.format("%.4f", arg) or tostring(arg)
+      end
+      lines[#lines + 1] = call.name .. " " .. table.concat(args, " ")
     end
-    assert_true(#sets >= 1, key .. " runs in the engine")
-    assert_equal(sets[1].args[1], 0, key .. ": LFO 1")
-    assert_equal(sets[1].args[2], want[1], key .. ": its voice")
-    assert_equal(sets[1].args[3], want[2], key .. ": its fast destination")
-    assert_near(sets[1].args[6], 0.5, 1e-9, key .. ": its depth")
+    assert_equal(table.concat(lines, "; "), SOUND_BEFORE_3_7[key], key .. ": the calls 3.6 made")
+    params:set(lfo_id(1), 0)
   end
-  -- a Lua one: the stored value plus its offset, through its own command
-  local reverbs = {}
-  for _, call in ipairs(engine_calls(2, "reverb_mix")) do
-    if call.name == "setReverb" then reverbs[#reverbs + 1] = call end
-  end
-  assert_true(#reverbs >= 1, "rev mix runs in Lua and sends setReverb")
-  assert_equal(local_value("S").lib.lfos.is_engine_run(2), false)
-  -- a voice's main follows its source, in Lua
+  -- a voice's main follows its source; a macro is a direct destination
   params:set(lfo_id(3, "dest_key"), "v1_main")
   assert_equal(lfo_destination_id(3), "v1_freq", "a synth voice's main is its freq")
-  assert_equal(local_value("S").lib.lfos.destination(3).label, "v1 main", "destination(n) is the entry, as before")
-  -- a macro, as a direct destination
+  assert_equal(S.lib.lfos.destination(3).label, "v1 main", "destination(n) is the entry, as before")
   params:set(lfo_id(4, "dest_key"), "macro_1")
   assert_equal(lfo_destination_id(4), "macro_1")
+end)
+
+-- 0e's review: the destination is a scene block, which applies before the
+-- LFO's settings, so it is set silently and the next step brings it in
+-- with every setting in place
+test("an instant recall's first send carries the scene's destination with its rate and depth", function()
+  local context = load_strata(); finish_startup(context)
+  local function setup(dest_label, rate, depth)
+    params:set(lfo_id(2, "dest"), destination_index(dest_label))
+    params:set(lfo_id(2, "rate"), rate)
+    params:set(lfo_id(2, "depth"), depth)
+    params:set(lfo_id(2), 1)
+  end
+  -- an engine destination
+  setup("v5 pitch", 5, 60); capture_scene(1)
+  setup("v3 pitch", 1, 25); lfo_step(context)
+  context.clear_engine_calls()
+  recall_scene(1, 0)
+  lfo_step(context)
+  local sets = calls_with(context, "setFastLfo", 1)
+  assert_true(#sets >= 1, "the recall moves the engine LFO")
+  for index, call in ipairs(sets) do
+    assert_equal(call.args[2], 4, "send " .. index .. ": voice 5")
+    assert_near(call.args[5], 5, 1e-9, "send " .. index .. ": the scene's rate")
+    assert_near(call.args[6], 0.6, 1e-9, "send " .. index .. ": the scene's depth")
+  end
+  assert_equal(lfo_destination_id(2), "v5_grain_pitch")
+  -- a Lua destination: the old one is given back, the new one first moves
+  -- with the scene's depth (a square held at its top: + 0.6 x half range)
+  params:set("reverb_mix", 0.3); params:set("delay_mix", 0.2)
+  params:set(lfo_id(2), 0)
+  hold_lfo(2, "dly mix", 60); capture_scene(2)
+  hold_lfo(2, "rev mix", 25); lfo_step(context)
+  context.clear_engine_calls()
+  recall_scene(2, 0)
+  lfo_step(context)
+  local reverbs, delays = context.calls_named("setReverb"), context.calls_named("setDelay")
+  assert_true(#reverbs >= 1, "rev mix is given back")
+  assert_near(reverbs[#reverbs].args[1], 0.3, 1e-9, "to its stored value")
+  assert_true(#delays >= 1, "dly mix moves")
+  assert_near(delays[1].args[3], 0.2 + 0.6 * 0.5, 1e-9, "its first send at the scene's depth")
+  -- from an engine destination to a Lua one: the step stops the engine LFO
+  hold_lfo(2, "v3 pitch", 25); lfo_step(context)
+  context.clear_engine_calls()
+  recall_scene(2, 0)
+  lfo_step(context)
+  assert_equal(#calls_with(context, "stopFastLfo", 1), 1, "the engine LFO stops")
+  assert_true(#context.calls_named("setDelay") >= 1, "and dly mix moves")
+  -- a fade switches the destination at its end, not before
+  hold_lfo(2, "rev mix", 25); lfo_step(context)
+  recall_scene(2, 1)
+  context.clock.run_for(0.5)
+  assert_equal(lfo_destination_id(2), "reverb_mix", "halfway through the fade: the old destination")
+  context.clock.run_for(1)
+  assert_equal(lfo_destination_id(2), "delay_mix", "at its end: the scene's")
 end)
 
 test("a global destination's param is a control param, checked once every param exists", function()
