@@ -1698,6 +1698,54 @@ test("a one-shot slice's key lift in release mode leaves it playing to its end",
   assert_true(S.voices[1].active, "the voice plays on")
   context.clock.run_for(0.5 + 2 / 48)
   assert_equal(call_names(context, { noteOff = true }), "noteOff", "slice 2 released at its end")
+  -- 2b's review, Important 1: the own slice ends at its time too, and the
+  -- voice whose keys are all up then stops, as release mode stops it
+  context.clock.run_for(5)
+  assert_true(not S.voices[1].active, "the voice stopped once its last slice ended")
+  assert_equal(S.lib.notes.held(1), 0, "nothing held")
+  -- option one: the same
+  context, S = sliced_voice(2)
+  scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return fraction * 2 end
+  params:set("midi_note_off", 2)
+  note_on(context, 1, 36); note_off(context, 1, 36)
+  assert_true(S.voices[1].active, "it plays to its end")
+  context.clock.run_for(5)
+  assert_true(not S.voices[1].active, "one: stopped 5 s after its key went up")
+  assert_equal(S.lib.notes.held(1), 0)
+  -- latch mode: the voice runs on, its slice's record gone
+  context, S = sliced_voice(2)
+  scan = S.lib.scan or {}
+  S.lib.scan = scan
+  function scan.pass_seconds(_, fraction) return fraction * 2 end
+  note_on(context, 1, 36); note_off(context, 1, 36)
+  context.clock.run_for(5)
+  assert_true(S.voices[1].active, "latch: the voice runs on")
+  assert_equal(S.lib.notes.held(1), 0, "latch: the played-out slice holds nothing")
+end)
+
+-- 2b's review, the controller's ruling: the note hooks' heard hears every
+-- MIDI note a voice receives, a note outside its slices included, and starts nothing
+test("the heard note hook hears every note a voice receives, outside its slices too", function()
+  local context, S = sliced_voice(3)
+  local heard = {}
+  S.register_note_hook({ name = "probe heard", heard = function(voice, note, velocity)
+    heard[#heard + 1] = string.format("%d:%d:%.3f", voice, note, velocity)
+  end })
+  note_on(context, 1, 36, 127)
+  note_on(context, 1, 72, 64)
+  note_off(context, 1, 72); note_off(context, 1, 36)
+  assert_equal(table.concat(heard, " "), "1:36:1.000 1:72:0.504", "both notes, the second outside the slices")
+  context.clear_engine_calls()
+  note_on(context, 1, 72, 64)
+  assert_equal(#context.engine_calls, 0, "the note outside the slices still plays nothing")
+  -- a hook that raises is contained: the note plays on
+  S.register_note_hook({ name = "probe raises", heard = function() error("boom") end })
+  note_on(context, 1, 37, 100)
+  h.claim_script_errors(context, 1, "strata: note hook probe raises heard failed: ", "boom")
+  assert_true(S.lib.notes.find(1, "midi", key_of(1, 37)) ~= nil, "slice 2 played")
+  assert_true(not pcall(S.register_note_hook, { name = "probe bad", heard = 1 }), "heard is a function")
 end)
 
 test("with slices off a buffer voice's MIDI notes are 3.6's", function()

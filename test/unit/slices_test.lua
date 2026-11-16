@@ -350,11 +350,21 @@ test("one: every slice note takes the own note and creates no node", function()
   assert_equal(S.lib.notes.held(1), 1, "one note")
   assert_equal(list_text(S.lib.slices.playing(1)), "{4}")
   assert_equal(list_text(S.lib.notes.own_region(1)), "{0.75, 0.25}")
-  -- the same slice again sends no region (the engine would restart the scan)
+  -- 2b's review, the controller's ruling: a hit of the same slice restarts
+  -- its region's scan in every mode (here wrap, the scan moving): the
+  -- region is sent again, the playhead restarts with it
+  params:set("v1_buf_scan", 0.5)
   context.clear_engine_calls()
+  resets = 0
   S.lib.slices.play(1, 4, note(3))
-  assert_equal(#context.calls_named("setGrainParam"), 0, "unchanged: not sent")
+  assert_equal(call_texts(context, {setGrainParam = true}),
+    "setGrainParam(0, regionStart, 0.75) setGrainParam(0, regionLength, 0.25)", "a re-hit restarts the scan")
+  assert_equal(resets, 1, "and the playhead")
   assert_equal(#context.calls_named("retrigger"), 1, "the hit")
+  -- a send that is no hit (the option's clear of nothing, a set to the same region) sends only a change
+  context.clear_engine_calls()
+  S.lib.notes.set_own_region(1, {0.75, 0.25})
+  assert_equal(#context.engine_calls, 0, "not a hit, unchanged: nothing")
   S.lib.playheads.reset = real_reset
 end)
 
@@ -398,9 +408,12 @@ test("a played-out one-shot note is released within two steps of its slice's end
   assert_equal(call_text(offs[1]), "noteOff(0, 1, 0)")
   assert_true(util.time() - start <= 0.5 + 2 / 48 + 0.01, "within two steps of 0.5 s")
   assert_equal(S.lib.notes.find(1, "midi", 2), nil, "its slot free")
+  assert_equal(S.lib.notes.held(1), 0, "the own slice ended at its time too")
   -- a chord's or a pitched note's extra note on a one-shot voice takes the pass over its loop
+  S.lib.notes.play(1, {owner = "midi", key = 6, pitch = 60, velocity = 0.5, set_own = function() end})
   context.clear_engine_calls()
   S.lib.notes.play(1, {owner = "midi", key = 7, pitch = 64, velocity = 0.5, set_own = function() end})
+  assert_true(S.lib.notes.find(1, "midi", 7) > 1, "an extra note")
   context.clock.run_for(2 + 2 / 48)
   assert_equal(#context.calls_named("noteOff"), 1, "released after the loop's pass, 2 s")
 end)
@@ -507,6 +520,47 @@ test("the slices option is off by default, a discrete scene field and a buffer v
   params:set("v1_slices", 3)
   assert_equal(params:string("v1_slices"), "overlap")
   assert_equal(S.lib.slices.SLICES.options[2], "one")
+end)
+
+-- 2b's review, Minor 3: a strength printed at the threshold is taken
+test("a strength exactly at the sensitivity's threshold is taken", function()
+  local context, S = sliced(2)
+  S.lib.samples.set(1, "sensitivity", 70)
+  S.lib.samples.set(1, "mode", 3)
+  S.lib.slices.make(1)
+  answer(context, 1, 1, onsets_text(1, 96000, {10000, 20000}, {"1.000", "0.300"}))
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0, 10000, 20000}", "0.300 at sensitivity 70")
+end)
+
+-- 2b's review, Minor 4: a read that raises is contained and never leaves the reader stuck
+test("a read that raises prints once and the next report is read", function()
+  local context, S = sliced(2)
+  S.lib.samples.set(1, "mode", 3)
+  S.lib.slices.make(1)
+  local real_settings = S.lib.samples.settings
+  S.lib.samples.settings = function() error("boom") end
+  answer(context, 1, 1, onsets_text(1, 96000, {10000}, {"1.000"}))
+  S.lib.samples.settings = real_settings
+  h.claim_script_errors(context, 1, "strata: onsets read failed: ", "boom")
+  S.lib.slices.analyze(1)
+  answer(context, 1, 2, onsets_text(1, 96000, {30000}, {"1.000"}))
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0, 30000}", "the next report was read")
+end)
+
+-- 2b's review, Minor 5: the own note's slice is playing only while its record is held
+test("playing names the own slice only while its note is held", function()
+  local context, S = sliced(2, 4, 3)
+  S.lib.slices.play(1, 1, note(1)); S.lib.slices.play(1, 2, note(2))
+  assert_equal(list_text(S.lib.slices.playing(1)), "{1, 2}")
+  S.lib.slices.note_off(1, "midi", 1)  -- wrap: the own note parks under slice 2
+  assert_equal(list_text(S.lib.slices.playing(1)), "{2}", "a parked own slice is not playing")
+  -- one shot: played out, the own slice is no longer playing
+  context, S = sliced(2, 4, 2)
+  scan_double(S, 2)
+  S.lib.slices.play(1, 3, note(1))
+  assert_equal(list_text(S.lib.slices.playing(1)), "{3}")
+  context.clock.run_for(0.5 + 2 / 48)
+  assert_equal(list_text(S.lib.slices.playing(1)), "{}", "played out")
 end)
 
 end

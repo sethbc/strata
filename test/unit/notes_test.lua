@@ -264,7 +264,8 @@ test("a second note is an extra note: its expression, then its noteOn", function
   assert_equal(S.lib.notes.find(1, "midi", 3), 3); assert_equal(S.lib.notes.find(1, "seq", 3), nil, "another owner")
   -- a refused note plays nothing
   context.clear_engine_calls()
-  for _, bad in ipairs({ { owner = "keys" }, { pitch = 0 / 0 },  -- 3.7: "grid" is an owner now { set_own = 1 }, { velocity = "1" }, { key = 0 / 0 },
+  -- (3.7: "grid" is an owner now, so the bad owner is "keys")
+  for _, bad in ipairs({ { owner = "keys" }, { pitch = 0 / 0 }, { set_own = 1 }, { velocity = "1" }, { key = 0 / 0 },
       { park = 1 }, { expression = 2 } }) do
     assert_equal(play(context, 1, 9, 60, bad), nil, "refused")
   end
@@ -1488,6 +1489,49 @@ test("the grid owns notes of its own, and a steal of the owner's kind takes its 
   assert_equal(notes.find(1, "seq", "slice1"), nil)
   assert_equal(play(context, 1, "x", 66, { owner = "seq", extra_only = true, steals = function() return false end }),
     nil, "nothing it may steal: refused")
+end)
+
+-- 2b's review, Important 2: the engine keeps a slot's region across a voice's
+-- stop (only alloc and the area's stop clear it), so Lua's record does too
+test("a slot's region outlives the voice's stop: the next plain note in it clears it first", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_note_cap", 2)
+  play(context, 1, 1, 60)
+  play(context, 1, 2, 64, { region = { 0.5, 0.25 } })
+  toggle_voice(1)
+  toggle_voice(1)
+  play(context, 1, 3, 60)
+  context.clear_engine_calls()
+  play(context, 1, 4, 64)
+  local texts = {}
+  for _, call in ipairs(context.engine_calls) do
+    if call.name == "noteRegion" or call.name == "noteOn" then texts[#texts + 1] = call_text(call) end
+  end
+  assert_equal(table.concat(texts, " "), "noteRegion(0, 1, 0, 0) noteOn(0, 1, 64, 329.6276, 1.2599, 0.5)",
+    "the slot's slice cleared before the plain note")
+end)
+
+-- 2b's review, Important 1: the own note held to its end ends at its time,
+-- as an extra note does (its record goes: nothing is held after it)
+test("an own note held to its end ends at its time", function()
+  local context = load_strata()
+  local S = started(context)
+  local ended = {}
+  S.register_note_hook({ name = "probe end", ended = function(voice, slot, note)
+    ended[#ended + 1] = voice .. ":" .. slot .. ":" .. tostring(note.key)
+  end })
+  play(context, 1, 1, 60, { to_end = 0.5, hold_to_end = true, region = { 0.25, 0.25 } })
+  assert_equal(S.lib.notes.release(1, "midi", 1), false, "its key's release leaves it")
+  assert_true(S.lib.notes.plays_to_end(1))
+  context.clock.run_for(0.4)
+  assert_equal(S.lib.notes.held(1), 1, "not yet")
+  context.clock.run_for(0.1 + 2 / 48)
+  assert_equal(S.lib.notes.held(1), 0, "its record went at its time")
+  assert_true(not S.lib.notes.plays_to_end(1))
+  assert_equal(table.concat(ended, " "), "1:1:1", "ended once")
+  context.clock.run_for(1)
+  assert_equal(#ended, 1, "and once only")
 end)
 
 end

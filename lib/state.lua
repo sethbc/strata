@@ -52,7 +52,7 @@ return function()
     voice_stop = {},        -- fn(voice_idx), run after every engine.voiceOff the script sends
     freeze_change = {},     -- fn(voice_idx, frozen), run by every v<i>_freeze action
     -- 3.6's (design §0.1), read at each use
-    note_hooks = {},        -- {name, started, ended, moved, expressed}, run by lib/notes.lua
+    note_hooks = {},        -- {name, started, ended, moved, expressed, heard}, run by lib/notes.lua (heard: lib/midi_in.lua)
     scene_recalled = {},    -- fn(scene_num), run once per scene recall (lib/scenes.lua)
     silence_change = {},    -- fn(voice_idx, silenced), run as a mute or solo changes silenced(voice)
     note_targets = {},      -- {name, routed, note_on, note_off, express, stop_all, rows, status}
@@ -544,7 +544,7 @@ return function()
 
   -- 3.6's registries (design §0.1, plan rulings 4, 8 and 9), read at each use,
   -- so they stay open
-  local NOTE_HOOK_FIELDS = {name = true, started = true, ended = true, moved = true, expressed = true}
+  local NOTE_HOOK_FIELDS = {name = true, started = true, ended = true, moved = true, expressed = true, heard = true}
   local NOTE_TARGET_FIELDS = {name = true, routed = true, note_on = true, note_off = true, express = true,
     stop_all = true, rows = true, status = true, layout_states = true}
   local II_DEVICE_FIELDS = {name = true, ready = true, release = true, param_count = true, add_params = true}
@@ -552,11 +552,14 @@ return function()
   -- A note hook (lib/notes.lua runs each, contained): {name, started, ended,
   -- moved, expressed}, each function optional, called with (voice_idx,
   -- slot, note = {owner, key, pitch, velocity}); a hook never yields and
-  -- never calls S.lib.notes.play
+  -- never calls S.lib.notes.play. 3.7's heard (lib/midi_in.lua runs it,
+  -- contained): fn(voice_idx, note, velocity) for every MIDI note a voice
+  -- receives (its number 0-127, velocity 0-1), a note that plays nothing
+  -- there included; it starts nothing and never reaches the targets
   function M.register_note_hook(record)
     local kind = "register_note_hook"
     local where = require_named(record, "note_hooks", kind, "name", NOTE_HOOK_FIELDS)
-    require_functions(record, where, {}, {"started", "ended", "moved", "expressed"})
+    require_functions(record, where, {}, {"started", "ended", "moved", "expressed", "heard"})
     table.insert(M.registry.note_hooks, record)
   end
 
