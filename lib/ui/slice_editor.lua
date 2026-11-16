@@ -523,12 +523,12 @@ return function(S)
 
   -- The "hints" flash while one shows (the editor's flashes are BUFFER's).
   -- The other modal editors' colon style (#736), each whole on the hint
-  -- row; the markers view's leaves E2's pick to the bright slice line
+  -- row and naming every key its view takes
   local function hints(alt_held)
     local shown = S.lib.ui_flash.text("hints")
     if shown then return shown end
     if editor.view == "rows" then return alt_held and "E2:row E3:edit" or "K2:back E2:slices E3:edit" end
-    return alt_held and "K3:delete E2:rows E3:fine" or "K2:back K3:add E3:nudge"
+    return alt_held and "K3:delete E2:rows E3:fine" or "K2:back K3:add E2:sel E3:move"
   end
 
   ---------------------------------------------------------------------------

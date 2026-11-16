@@ -48,11 +48,12 @@ return function(S)
     cell_spacing = 6, cell_size = 4, state_right = 127, empty_level = 1, playing_outline_level = 4,
     playing_boost = 4, cursor_level = 15, label_level = 4, selected_label_level = 15,
     dot_offset = 1, dot_level = 1, gate_mark = "G", gate_right = 121,
-    -- 3.7 (ruling 9): F on the selected voice's row, between its cells and
-    -- the G, while fill is on (S.lib.conditions.fill): 4 px from x 108,
-    -- three blank columns after step 16's cursor (to 104) and a space (4 px)
+    -- 3.7 (ruling 9): f on the selected voice's row, between its cells and
+    -- the G, while fill is on (S.lib.conditions.fill): lowercase as the fill
+    -- row (a capital reads as MAIN's [F], frozen), 4 px from x 108, three
+    -- blank columns after step 16's cursor (to 104) and a space (4 px)
     -- before the G (from 116; #735: "fill" would touch it)
-    fill_mark = "F", fill_x = 108, fill_level = 15}
+    fill_mark = "f", fill_x = 108, fill_level = 15}
 
   -- The edit view (design 8.6): "v<voice> step <n>" at 0,line_y and a strip
   -- of the voice's steps (cells strip_cell px, strip_spacing apart from
