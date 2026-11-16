@@ -1327,7 +1327,6 @@ test("a pick the slices no longer reach is forgotten when a key reads it", funct
 
   positions.strip_key(1, 1, 3, 1); positions.strip_key(1, 1, 3, 0)
   doubles.counts[1] = 20
-  positions.strip_key(1, 1, "hold", 1); positions.strip_key(1, 1, "hold", 0)
   positions.strip_key(1, 1, 3, 1); positions.strip_key(1, 1, 3, 0)  -- an empty bank: not picked
   doubles.counts[1] = 40
   assert_equal(positions.bank(1, 1), 1, "a bank key's press forgot it too")
