@@ -30,6 +30,7 @@ return function(S)
     default_length = 8,
     default_clock = 6,
     drift_max = 100,
+    params_per_sequence = 4,            -- length, drift, clock, new
     value_step = 0.01,
     fine_step = 0.001,
     live_file = "sequences.data",       -- in data/strata/
@@ -98,15 +99,23 @@ return function(S)
   -- Reading and editing
   ---------------------------------------------------------------------------
 
+  -- Sequence n's position, inside its length: a position past it (a length
+  -- set silently, as a PSET read with silent sets it, skips the length's
+  -- action) reads as 1, where that action would have put it
+  local function position_of(n)
+    local position = sequences[n].position
+    if position > length(n) then return 1 end
+    return position
+  end
+
   function M.value(n)
     if not valid(n) then return 0 end
-    local sequence = sequences[n]
-    return sequence.values[sequence.position] or 0
+    return sequences[n].values[position_of(n)] or 0
   end
 
   function M.position(n)
     if not valid(n) then return nil end
-    return sequences[n].position
+    return position_of(n)
   end
 
   function M.values(n)
@@ -143,7 +152,7 @@ return function(S)
   -- the position it left is drawn again
   local function step(n)
     local sequence = sequences[n]
-    local left = sequence.position
+    local left = position_of(n)
     sequence.position = left >= length(n) and 1 or left + 1
     local chance = drift(n)
     if chance > 0 and math.random() * RSEQ.drift_max < chance then sequence.values[left] = draw() end
@@ -183,7 +192,7 @@ return function(S)
   -- The group strata_rseq (design §8): per sequence its length, drift,
   -- clock and new
   function M.add_params()
-    params:add_group("strata_rseq", "random sequences", 4 * RSEQ.count)
+    params:add_group("strata_rseq", "random sequences", RSEQ.params_per_sequence * RSEQ.count)
     for n = 1, RSEQ.count do
       local name = "RS" .. n .. " "
       params:add_number(param_id(n, "length"), name .. "length", RSEQ.length_min, RSEQ.values, RSEQ.default_length)
@@ -269,7 +278,7 @@ return function(S)
   -- and the one beside each PSET, {version, sequences = {four lists}}. The
   -- start step's read with no usable file draws every value (the first
   -- start); a PSET with none loads the scenes' default, sixteen zeros each
-  local first_load = true
+  local first_load, drew = true, false
   local files = S.lib.side_files.new({
     name = "sequences", contents = "random sequences", version = RSEQ.data_version, key = "sequences",
     live_file = RSEQ.live_file, side_suffix = RSEQ.side_suffix, backup_suffix = RSEQ.backup_suffix,
@@ -283,6 +292,7 @@ return function(S)
         for n = 1, RSEQ.count do
           for index = 1, RSEQ.values do sequences[n].values[index] = draw() end
         end
+        drew = true
       else
         load_lists(zeros())
       end
@@ -297,8 +307,13 @@ return function(S)
   S.register_pset_hook(files.pset_hook(nil, function() save_live() end))
 
   -- The live file: loaded at init, saved as the values change and at
-  -- cleanup once it was read, missing or set aside
-  S.register_start(S.constants.START_ORDER.sequences_load, files.load_live)
+  -- cleanup once it was read, missing or set aside. A first start's draw
+  -- is saved one save_delay later (the live file may be written only once
+  -- load_live returns), so a norns switched off at the power keeps it
+  S.register_start(S.constants.START_ORDER.sequences_load, function()
+    files.load_live()
+    if drew then save_live() end
+  end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.sequences_save, files.save_now)
 
   ---------------------------------------------------------------------------
@@ -352,7 +367,7 @@ return function(S)
       range = {-1, 1},
       value = function() return M.value(n) end,
       describe = function()
-        return CLOCK_NAMES[clock_option(n)] .. " " .. sequences[n].position .. "/" .. length(n)
+        return CLOCK_NAMES[clock_option(n)] .. " " .. position_of(n) .. "/" .. length(n)
       end,
       fields = rows_for(n),
     })

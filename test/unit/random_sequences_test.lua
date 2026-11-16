@@ -395,4 +395,111 @@ test("the largest scenes file holds 7474 tables", function()
   assert_equal(S.lib.data_files.DATA_FILES.largest_scenes_tables, 7474)
 end)
 
+-- Review 1g, Important 1: a first start's drawn values reach the live file
+-- one save_delay later, so a norns switched off at the power keeps them
+test("a first start's drawn values are saved, and the next start reads them", function()
+  local context, S, sequences = loaded()
+  context.clock.run_for(sequences.RSEQ.save_delay + 0.05)
+  local live = context.data_dir .. "strata/sequences.data"
+  assert_true(util.file_exists(live), "the live file is written after one save_delay")
+  local drawn = {}
+  for n = 1, 4 do drawn[n] = sequences.values(n) end
+  local stored = S.lib.data_files.read(live)
+  for n = 1, 4 do
+    for index = 1, 16 do assert_near(stored.sequences[n][index], drawn[n][index], 1e-9, "the file holds the draw") end
+  end
+  -- no cleanup: the power is cut
+  local _, _, next_sequences = loaded({ data_subdir = data_dir_name(context) })
+  for n = 1, 4 do
+    local values = next_sequences.values(n)
+    for index = 1, 16 do
+      assert_near(values[index], drawn[n][index], 1e-9, "the next start reads rseq" .. n .. " v" .. index)
+    end
+  end
+end)
+
+-- Review 1g, Minor 4: the drift's chance, with the draws faked: drift %
+-- against random() x 100, a draw below it replacing the value left
+test("drift's chance decides with one draw against the drift", function()
+  local context, S, sequences = loaded()
+  params:set("rseq1_clock", clock_index(S, "voice 2"))
+  distinct(sequences, 1)
+  local real_random = math.random
+  local queue, draws = {}, 0
+  local function fake(...)
+    draws = draws + 1
+    local value = table.remove(queue, 1)
+    assert_true(value ~= nil, "an unexpected draw")
+    return value
+  end
+  local function hit_with(values)
+    queue, draws = values, 0
+    math.random = fake
+    local ok, problem = pcall(S.lib.engine_sync.retrigger, 2, 1, "step")
+    math.random = real_random
+    assert_true(ok, tostring(problem))
+  end
+  params:set("rseq1_drift", 50)
+  local left = sequences.position(1)
+  local before = sequences.values(1)
+  hit_with({ 0.49, 0.9 })   -- 49 < 50: replaced by 0.9 x 2 - 1
+  assert_equal(draws, 2, "the chance and the value")
+  assert_near(sequences.values(1)[left], 0.8, 1e-12, "0.49 at drift 50 replaces the value left")
+  left = sequences.position(1)
+  hit_with({ 0.51 })        -- 51: kept
+  assert_equal(draws, 1, "the chance alone")
+  assert_near(sequences.values(1)[left], before[left], 1e-12, "0.51 at drift 50 keeps it")
+  params:set("rseq1_drift", 100)
+  left = sequences.position(1)
+  hit_with({ 0.999, 0.25 }) -- drift 100 always replaces
+  assert_near(sequences.values(1)[left], -0.5, 1e-12, "drift 100 replaces even at the top of the draw")
+  params:set("rseq1_drift", 0)
+  left = sequences.position(1)
+  hit_with({})
+  assert_equal(draws, 0, "drift 0 makes no draw")
+  assert_near(sequences.values(1)[left], before[left], 1e-12, "and keeps the value")
+end)
+
+-- Review 1g, Minor 5: a silent length set (a PSET read with silent) skips
+-- the length's action; the position past the new length reads as 1
+test("a position past a length set silently reads and steps as from 1", function()
+  local context, S, sequences = loaded()
+  params:set("rseq1_clock", clock_index(S, "voice 2"))
+  params:set("rseq1_length", 16)
+  distinct(sequences, 1)
+  local values = sequences.values(1)
+  while sequences.position(1) ~= 12 do S.lib.engine_sync.retrigger(2, 1, "step") end
+  params:set("rseq1_length", 4, true)
+  assert_equal(sequences.position(1), 1, "the position is inside the length")
+  assert_near(sequences.value(1), values[1], 1e-12, "the value is v1, not v12")
+  assert_equal(S.lib.mod_sources.get("rseq1").describe(), "voice 2 1/4", "describe reads inside the length")
+  S.lib.engine_sync.retrigger(2, 1, "step")
+  assert_equal(sequences.position(1), 2, "the next step goes on from 1")
+end)
+
+-- Review 1g, item 7: the widest describe (voice 7 16/16) on MOD's list,
+-- and the settings view at length 16 on voice 7, pass the layout check
+test("the widest sequence fits MOD's list and its settings view", function()
+  local context, S, sequences = loaded()
+  params:set("rseq4_clock", clock_index(S, "voice 7"))
+  params:set("rseq4_length", 16)
+  params:set("rseq4_drift", 100)
+  for index = 1, 16 do sequences.set_value(4, index, -1) end
+  if not S.voices[7].active then toggle_voice(7) end
+  while sequences.position(4) ~= 16 do S.lib.engine_sync.retrigger(7, 1, "step") end
+  params:set("rseq4_drift", 0)
+  for index = 1, 16 do sequences.set_value(4, index, -1) end
+  assert_equal(S.lib.mod_sources.get("rseq4").describe(), "voice 7 16/16")
+  h.show_page("MOD")
+  S.lib.pages_mod.place("source:rseq4"); redraw()
+  assert_true(h.screen_shows(context, "voice 7 16/16"), "the row shows the widest describe whole")
+  h.assert_screen_layout(context, "RS4 at voice 7 16/16")
+  assert_true(S.lib.pages_mod.open_settings("rseq4"))
+  for row = 1, 20 do
+    redraw()
+    h.assert_screen_layout(context, "RS4's settings, row " .. row)
+    enc(2, 1)
+  end
+end)
+
 end

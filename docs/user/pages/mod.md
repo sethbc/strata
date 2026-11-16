@@ -12,7 +12,7 @@ macros
 K3:targets E3:value
 ```
 
-The page is a list under dim section names, five rows at a time, with a thin scroll marker at the right: **macros** (the `bank` row, then the shown bank's four macros), **morph** (`A`, `B`, `C`, `D`, `morph`, `y`), **scatter** (`on`, `depth`, `rate`, then `pitch`, `pos`, `size`, `cutoff`, `amp`), **gestures** (`G1`-`G4`), **lfos** (`L1`-`L6`), **matrix** (`R1`-`R16`), **audio** (`IN`, the input level), then **notes** (`PRES`, `SLID`, then `PR1`-`PR7` and `SL1`-`SL7` for the voices holding a note that has sent pressure or slide). A section added by a later release shows after these. The row under the cursor is bright.
+The page is a list under dim section names, five rows at a time, with a thin scroll marker at the right: **macros** (the `bank` row, then the shown bank's four macros), **morph** (`A`, `B`, `C`, `D`, `morph`, `y`), **scatter** (`on`, `depth`, `rate`, then `pitch`, `pos`, `size`, `cutoff`, `amp`), **gestures** (`G1`-`G4`), **lfos** (`L1`-`L6`), **matrix** (`R1`-`R16`), **audio** (`IN`, the input level), **sequences** (`RS1`-`RS4`, the [random sequences](../modulators.md#random-sequences): K3 opens a sequence's settings), then **notes** (`PRES`, `SLID`, then `PR1`-`PR7` and `SL1`-`SL7` for the voices holding a note that has sent pressure or slide). A section added by a later release shows after these. The row under the cursor is bright.
 
 What each row shows:
 - **bank** - the bank shown (`1  M1-M4`: bank 1 holds macros 1-4). The MOD page, its arc rings and the grids show the same bank
