@@ -26,8 +26,8 @@ return function(S)
   -- The editor's tunables and layout. A nudge in seconds (E3, ALT+E3 and
   -- arc ring 2 a tick); the rows in their order; the bars the bars row
   -- steps over; the tempo row's step (the amount's range is the file
-  -- settings', S.lib.samples.SAMPLES, up to the slices' maximum); the
-  -- short mode names BUFFER's field shows. layout: the
+  -- settings', S.lib.samples.SAMPLES); the short mode names BUFFER's
+  -- field shows. layout: the
   -- title at title_y; the marker ticks tick_height px from tick_y, the
   -- playing slice's span on span_y; the waveform's points point_width px
   -- wide around wave_center (wave_half px each way at a peak of 1, inside
@@ -252,12 +252,13 @@ return function(S)
   end
 
   -- The amount's range for the record's mode: the sensitivity's in
-  -- transients, else the count's (the file settings' bounds)
+  -- transients, else the count's (the file settings' bounds, which
+  -- S.lib.samples.set checks)
   function M.amount_range(record)
     record = record or settings(editor.slot)
     local SAMPLES = S.lib.samples.SAMPLES
     if record and mode_name(record) == "transients" then return 0, SAMPLES.sensitivity_max end
-    return SAMPLES.count_min, S.lib.slices.SLICES.max
+    return SAMPLES.count_min, SAMPLES.count_max
   end
 
   -- A change that makes the slices again (the mode, the amount): a record
