@@ -2,7 +2,7 @@
 
 Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](../../README.md).
 
-After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **matrix**, **input**, **gestures**, **out midi**, **crow**, **out ii**, **out nb**, **tape**, **sequencer**, **buffers**, **record**, **positions**, **midi** and **zones** groups, then the **scale** section, then one section per voice. Grouped by topic:
+After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **matrix**, **input**, **gestures**, **random sequences**, **out midi**, **crow**, **out ii**, **out nb**, **tape**, **sequencer**, **buffers**, **record**, **positions**, **midi** and **zones** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
 PSETs (PARAMETERS > PSET) save every one of them. A PSET loads every setting it holds as it is, and a setting it does not hold (one added since it was saved) at its default. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
@@ -53,6 +53,10 @@ PSETs (PARAMETERS > PSET) save every one of them. A PSET loads every setting it 
 - Gesture 1-4 quantize (free, beat, bar; default free): how gesture recorder 1-4 keeps time. Free plays the loop as you recorded it. Beat and bar round the loop's length to whole beats or bars of the norns clock when the recording stops (at least one), stretch its moves to fit, and start each pass on a beat or bar, so the loop stays with the tempo, Link and MIDI clock. Changing it on a recorded loop converts the loop the same way (back to seconds at the current tempo for free)
 - A recorder records your hand edits of continuous settings (encoders, arc rings, grid faders) as the values they reach, from the first edit to the stop; it never records options, switches, sources, scene recalls, LFOs, the drift, mutations or another recorder's playback. One records at a time, up to 1024 moves or 10 minutes. Its loops are saved with each PSET (in a file beside it, `<pset>.gestures.data`) and between sessions, and load stopped; scenes store only whether each one plays
 - A hand edit of a setting a loop plays holds until the loop's next move of that setting
+
+## Random sequences (group)
+- RS1-RS4 length (2-16, default 8), drift (0-100 %, default 0), clock (1/32 to 1 bar, or voice 1-7; default 1/8) and new (draws all sixteen values again). See [Random Sequences](modulators.md#random-sequences)
+- The sixteen values of each are not parameters: they are saved with each PSET (in a file beside it, `<pset>.sequences.data`), in scenes and between sessions, and edited on MOD
 
 ## out midi (group)
 - Per voice: out port (off or 1-16; off), out channel (1-16; the voice's number), out mode (plain, mpe; plain) and out members (1-15; 15). Out bend range (1-96 semitones; 48). CC 1 to CC 8: source (off or a modulation source; off), port (1-16; 1), channel (1-16; 1) and number (0-127; the slot's). Program change in (off), its channel (any or 1-16; any), program change out (off), its port (1) and channel (1). See [MIDI out](io/midi-out.md)

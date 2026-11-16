@@ -2283,6 +2283,7 @@ end
 -- captured from one state, then another state; returns the context, S and
 -- the captured scene data
 local function prepare_recall_run(run)
+  math.randomseed(run)  -- equal starting states: the random sequences draw their values at the first start
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local function set_active(voice, active)

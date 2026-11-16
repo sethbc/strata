@@ -466,7 +466,8 @@ test("the sources report the largest pressure and slide, overall and per voice",
   end
   assert_equal(table.concat(names, ","), "PRES,SLID,PR1,PR2,PR3,PR4,PR5,PR6,PR7,SL1,SL2,SL3,SL4,SL5,SL6,SL7")
   local sections = table.concat(sources.sections(), ",")
-  assert_true(sections:find("audio,notes", 1, true) ~= nil, "after the input's section: " .. sections)
+  assert_true(sections:find("audio,sequences,notes", 1, true) ~= nil,
+    "after the input's and the random sequences' sections: " .. sections)
   assert_equal(sources.normalized("pressure"), 0, "nothing held: 0")
   play(1, 1, 60); play(1, 2, 64)
   assert_equal(source_keys("notes"), "pressure,slide", "no expression sent yet")

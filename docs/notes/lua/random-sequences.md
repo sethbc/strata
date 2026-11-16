@@ -1,0 +1,40 @@
+## Must not break
+
+- **The sequences' step hook runs before the matrix's** (plan ruling 22): `S.lib.lfos.on_step` hooks run in registration order, so `lib/random_sequences.lua` is included before `lib/matrix.lua` and a routing reads the value a division's step played in that same LFO step. Moving the include after the matrix delays every division-clocked routing by one step (21 ms).
+- **A step never sends, yields or redraws**: the division hook and the `voice_hit` hook only move a position and, with drift, draw a value. MOD shows the sequences live because it animates while a section it does not list in `MOD_PAGE.sections` is in view, and in the settings view; the matrix carries a value to its destination. A hook that sent would break the hit's contract (`docs/notes/lua/engine-sync.md`) and the LFO step's budget.
+- **Drift at 0 draws nothing**: the chance's draw is made only above 0, so a sequence at drift 0 is a fixed, programmed loop and calls `math.random` at no step (a test counts the calls).
+- **A division steps once per change of its count**, whatever the gap: `floor(clock.get_beats() / beats)` read in the hook, compared with the count of its last step; a jump of several divisions (a late wake, a transport start's fall) is one step. The first reading on a clock (at start, after a clock change) only records the count, so a new clock never steps at once.
+- **The values are always sixteen finite numbers in -1..1 per sequence**: `set_value` clamps and refuses a value that is not finite, an index outside 1..16 or a sequence outside 1..4; a stored list (a scene block, a file) is refused whole unless it is exactly four lists of exactly sixteen such numbers at the keys 1..16. The scene block's `default` (sixteen zeros each) passes its own `validate`, so a scene without the block loads.
+- **The scene block is captured whole** (five tables a scene: the block and its four lists), so `DATA_FILES.largest_scenes_tables` is 7474 (`docs/notes/lua/data-files.md`); the largest-file test in `test/unit/matrix_test.lua` counts it. A change to the block's shape re-measures that figure.
+- **The values are the module's, never params**: the params are each sequence's length, drift, clock and `new`; scenes store the values (the `sequences` block, discrete), PSETs in their side file, sessions in the live file. No param, scene field or PSET line holds a position.
+
+## Owns
+
+`lib/random_sequences.lua` (`S.lib.random_sequences`, 3.7 package 1g, design §8, decision 7), included after `lib/input_level.lua` and before `lib/matrix.lua`:
+- `M.RSEQ`, the tunables: `count` 4, `values` 16, `length_min` 2, `default_length` 8, `default_clock` 6 (`1/8`), `drift_max` 100, `value_step` 0.01 and `fine_step` 0.001 (MOD's detents on a value), `live_file` `sequences.data`, `side_suffix` `.sequences.data`, `backup_suffix` `.bak`, `save_delay` 0.5 s, `data_version` 1.
+- `value(n)`: the value at sequence n's position (0 for an n outside 1..4). `position(n)`: 1..length. `values(n)`: a copy of the sixteen. `set_value(n, index, value)`: a hand edit, clamped to -1..1; returns whether it was set. `new(n)`: draws all sixteen.
+- `add_params()`: the group `strata_rseq`, `random sequences` (16 params), registered from `lib/params_setup.lua`'s 3.4 groups list as `{"rseq", "random_sequences"}`, after the gestures. Per sequence: `rseq<n>_length` (number 2-16, 8), `rseq<n>_drift` (number 0-100 %, 0), `rseq<n>_clock` (option: `S.constants.DIVISIONS.names`, then `voice 1` to `voice 7`; 6, `1/8`) and `rseq<n>_new` (trigger). The length's action brings a position past it back to 1; the clock's forgets the division's count.
+- The sources `rseq1`..`rseq4` (section `sequences`, names `RS1`..`RS4`, range -1..1, no `row`): `describe` is the clock's name and the position (`1/8 3/8`, `voice 2 5/8`); `fields` is a function, since the rows follow the length: `length`, `drift`, `clock` (each `enc_param_delta(3, id, d)`), `new` (its `press` draws all sixteen; its value is empty), then `v1` to `v<length>` (`%.3f`; `enc` 0.01 a detent, `fine_enc` 0.001, rounded to 0.001). Each sequence's twenty rows are built once and the list for a length is kept, so MOD's read at every draw builds nothing. A stored routing names a source by key (`S.matrix[k].source`, `"rseq1"`), so the registration's order moves no routing.
+- The `voice_hit` hook `random sequences` and an LFO step hook.
+- The scene block `sequences`, the side files (`S.lib.side_files.new`, key `sequences`), the PSET hook `sequences`, the start step `sequences_load` (111) and the cleanup step `sequences_save` (33).
+- Its tests: `test/unit/random_sequences_test.lua`. Its user page: `docs/user/modulators.md`.
+
+## A step
+
+The position moves to the next of 1..length (past the length, 1). Then, when drift is above 0, one draw decides with `drift` percent chance whether the value at the position it left is replaced by a new uniform draw in -1..1. So drift 100 renews every value as it is played, and a full pass at 100 leaves every played value changed while the values past the length are kept.
+
+- **On a division** (`rseq<n>_clock` 1-12): the LFO clock's step hook reads `clock.get_beats()` once for all four and steps a sequence whose `floor(beats / DIVISIONS.beats[clock])` differs from its last count.
+- **On a voice** (13-19): the `voice_hit` hook steps every sequence clocked by the hit's voice. A hit is what `docs/notes/lua/engine-sync.md` (One hit) says: a start no retrigger follows, a retrigger (a step, a MIDI note on the voice's own note, an action) and a played extra note's start; a step is one hit however many notes its chord has, and a step's chord notes are no hits. Lua's hits differ from the engine's (the same file lists where); a sequence follows Lua's.
+
+A shorter length plays the first values and keeps the others; a longer one plays them again.
+
+## Storage
+
+- **Scenes**: the block `sequences`, discrete (applied as a copy at a fade's end, and at morph's crossing), capturing the four lists whole. `default` is four lists of sixteen zeros, so a scene saved before 3.7 (format 7, or one without the block) recalls zeros. Its apply writes the values and the live file follows.
+- **The live file** `data/strata/sequences.data`, `{version = 1, sequences = {four lists}}`: read at the start step; with no file it can use (missing, or set aside) every value is drawn, the first start's values. Written `save_delay` s after a hand edit, a `new`, a scene's apply or a PSET load (one write per burst, `S.sequences_save_clock`), and at cleanup. Drift's draws start no write: at a fast clock with drift they would write every half second; cleanup's write holds them.
+- **The PSET side file** `<pset>.sequences.data`, the same layout: written with every PSET save, read after every PSET load (the live file follows), deleted with the PSET. A PSET without one, or with one set aside, loads sixteen zeros each, as a scene without the block does.
+- `validate` (`lists_problem`) is the scene block's and the files' one check: exactly four lists of exactly sixteen finite numbers in -1..1, at the keys 1..n.
+
+## Tests
+
+`test/unit/random_sequences_test.lua`: a division's steps and repeats over eight beats, a jump of several divisions stepping once, a new clock's first reading; a voice clock stepping at each of its voice's hits, once for a chord step and never for another voice's; drift 0 never drawing, drift 100 renewing every played value in a pass and keeping the rest, one or two draws at 50; `new` and a hand edit; a shorter length; the sources and every field's `enc`, `fine_enc` and `press`; the matrix reading a division's new value in the same LFO step; the PSET side file (and a PSET without one), the scene block (a copy) and the live file; the first start's draw and the params' defaults; a scene without the block and nine wrong shapes; the block's five tables and the 7474 figure. `test/unit/structure_test.lua` holds the start and cleanup steps' effects.
