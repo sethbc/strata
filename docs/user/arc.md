@@ -112,7 +112,7 @@ The rings adjust the voice's buffer parameters whatever its source (ready for wh
 
 On the **SCENES** page:
 
-- **Ring 1** - Scene cursor, over the same 20 stops as E2: the sixteen slots (turning past slot 8 shows the second bank), then the four fields below them (10 ticks per stop). Moving it cancels a pending overwrite question, as E2 does
+- **Ring 1** - Scene cursor, over the same 23 stops as E2: the sixteen slots (turning past slot 8 shows the second bank), then the seven fields below them (10 ticks per stop). Moving it cancels a pending overwrite question, as E2 does
 - **Ring 2** - Transition time
 - **Ring 3** - Morph position, between scenes A and B (see [Modulation](modulation.md#morph))
 - **Ring 4** - Morph scene B (20 ticks per scene)

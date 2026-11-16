@@ -42,6 +42,10 @@ return function(S)
   -- (or skips) the scene at its position: until then that position is the
   -- slot it recalls next (S.lib.scenes.sequencer_next_slot, #303)
   S.scene_sequencer_recall_due = false
+  -- The slot the sequencer recalls next (3.7, design §5.4): drawn once by
+  -- each pass right after its recall (S.lib.chance.pick), nil before the
+  -- first draw and always while the sequencer is off
+  S.scene_sequencer_next = nil
   S.scene_sequencer_clock = nil
   S.scene_transition_active = false
   -- true while recall_scene_instant sets params: the source action then leaves
@@ -834,6 +838,40 @@ return function(S)
     return nil
   end
 
+  -- The sequencer's draw (3.7, design §5.4). move: the move of the slot in
+  -- S.scene_sequencer_next ("repeat" recalls nothing), nil without one
+  local SEQUENCER_DRAW = {move = nil}
+
+  -- Draw the slot after the position from the populated slots of 1..length,
+  -- in order, by the three chances, and keep it with its move
+  local function draw_next_scene(length)
+    local slots = {}
+    for slot = 1, length do
+      if S.scenes[slot] and S.scenes[slot].populated then slots[#slots + 1] = slot end
+    end
+    local chances = {params:get("scene_chance_next"), params:get("scene_chance_previous"),
+      params:get("scene_chance_random")}
+    S.scene_sequencer_next, SEQUENCER_DRAW.move = S.lib.chance.pick(S.scene_sequencer_position, slots, chances)
+  end
+
+  -- The kept slot while it can still play: inside the length and holding a
+  -- scene. A length or chance changed since the draw draws nothing; a kept
+  -- slot that can no longer play is drawn again, once (never inside a
+  -- recall's apply), so the grids light the slot the pass will recall. nil
+  -- without a kept slot
+  local function kept_next_scene(length)
+    local kept = S.scene_sequencer_next
+    if kept == nil then return nil end
+    if kept <= length and S.scenes[kept] and S.scenes[kept].populated then return kept end
+    if S.scene_recall_in_progress then return nil end
+    draw_next_scene(length)
+    return S.scene_sequencer_next
+  end
+
+  local function forget_next_scene()
+    S.scene_sequencer_next, SEQUENCER_DRAW.move = nil, nil
+  end
+
   function scene_sequencer_start()
     if S.scene_sequencer_clock then
       clock.cancel(S.scene_sequencer_clock)
@@ -842,10 +880,11 @@ return function(S)
     S.scene_sequencer_enabled = true
     S.scene_sequencer_position = 1
     S.scene_sequencer_recall_due = true
+    forget_next_scene()
     grid_redraw()  -- the scene page shows the sequencer on
 
-    -- One pass of the sequencer: recall the scene at the position, hold it,
-    -- advance
+    -- One pass of the sequencer: recall the scene at the position (unless
+    -- its draw was a repeat), draw the next, hold, advance to the drawn slot
     local function pass()
       -- Defensive index guard: the position is always in range here (it
       -- starts at 1 and the advance below wraps with the current length)
@@ -860,12 +899,12 @@ return function(S)
       S.scene_sequencer_position = first_scene_from(S.scene_sequencer_position, length)
         or S.scene_sequencer_position
 
-      -- Recall the scene. From here the slot it recalls next is the one
-      -- after the position, so the recall's redraws (or the hold's) light
-      -- that one
+      -- Recall the scene, unless the draw that led here was a repeat: that
+      -- holds the scene playing for another duration and recalls nothing
       S.scene_sequencer_recall_due = false
       local transition_time = 0
-      if S.scenes[S.scene_sequencer_position].populated then
+      local repeated = SEQUENCER_DRAW.move == "repeat"
+      if not repeated and S.scenes[S.scene_sequencer_position].populated then
         transition_time = params:get("scene_transition_time")
         -- An error in a param action (in the first fade step or an instant
         -- recall) must not end this clock while the param shows the
@@ -878,10 +917,15 @@ return function(S)
         if not recalled then
           print("scene sequencer: scene " .. S.scene_sequencer_position .. " failed: " .. tostring(recall_error))
         end
-      else
+      elseif not repeated then
         print("scene sequencer: no scene in slots 1-" .. length .. "; holding slot " .. S.scene_sequencer_position)
-        grid_redraw()  -- the slot it recalls next moved on
       end
+
+      -- Draw the slot it recalls next, once, now the recall has returned,
+      -- and light it
+      draw_next_scene(length)
+      request_redraw()
+      grid_redraw()
 
       -- Hold the scene for its duration, and at least until its transition
       -- ends: the next recall would cancel the fade before it applies the
@@ -890,12 +934,20 @@ return function(S)
       clock.sleep(held)
       wait_for_scene_transition()
 
-      -- Advance, wrapping to scene 1 past the end of the sequence as it is
-      -- now (it may have been shortened during the wait)
-      S.scene_sequencer_position = S.scene_sequencer_position + 1
-      if S.scene_sequencer_position > params:get("scene_sequence_length") then
-        S.scene_sequencer_position = 1
+      -- Advance to the drawn slot, as the sequence is now: the kept one if
+      -- it can still play, else drawn again. With no scene in the sequence
+      -- the position moves on, wrapping to 1 past its end
+      local length_now = params:get("scene_sequence_length")
+      local next_slot = kept_next_scene(length_now)
+      if next_slot == nil then
+        draw_next_scene(length_now)
+        next_slot = S.scene_sequencer_next
       end
+      if next_slot == nil then
+        next_slot = S.scene_sequencer_position + 1
+        if next_slot > length_now then next_slot = 1 end
+      end
+      S.scene_sequencer_position = next_slot
       S.scene_sequencer_recall_due = true
 
       request_redraw()
@@ -918,6 +970,7 @@ return function(S)
         local passed, pass_error = xpcall(pass, with_traceback)
         if not passed then
           S.scene_sequencer_clock = nil
+          forget_next_scene()
           if params.lookup["scene_sequencer_enabled"] then set_binary_param("scene_sequencer_enabled", 0) end
           if S.scene_sequencer_enabled then scene_sequencer_stop() end
           error(pass_error, 0)
@@ -929,6 +982,7 @@ return function(S)
   function scene_sequencer_stop()
     S.scene_sequencer_enabled = false
     S.scene_sequencer_recall_due = false
+    forget_next_scene()
     if S.scene_sequencer_clock then
       clock.cancel(S.scene_sequencer_clock)
       S.scene_sequencer_clock = nil
@@ -1374,23 +1428,33 @@ return function(S)
   -- as it is now, as the advance does. Empty slots are skipped, as the loop
   -- skips them (#513): it is the first slot from there that holds a scene,
   -- or that slot itself when none of the sequence does. The grids' scene
-  -- pages light it at 10
+  -- pages light it at 10. 3.7: once a pass has drawn its next slot
+  -- (S.scene_sequencer_next), it is that slot, kept while it can still play
+  -- (kept_next_scene); the reckoning above stands before the first draw and
+  -- with no scene in the sequence
   function M.sequencer_next_slot()
     if not S.scene_sequencer_enabled then return nil end
     local length = params:get("scene_sequence_length")
+    if not S.scene_sequencer_recall_due then
+      local kept = kept_next_scene(length)
+      if kept ~= nil then return kept end
+    end
     local next_slot = S.scene_sequencer_position
     if not S.scene_sequencer_recall_due then next_slot = next_slot + 1 end
     if next_slot > length then next_slot = 1 end
     return first_scene_from(next_slot, length) or next_slot
   end
 
-  -- A recall is due only while the sequencer runs, and the sequencer runs
-  -- exactly while its clock lives (#329): an id is held, and norns'
-  -- clock.threads (which keeps a coroutine an error ended) does not show it
-  -- dead
+  -- A recall is due and a next slot kept (3.7) only while the sequencer
+  -- runs, and the sequencer runs exactly while its clock lives (#329): an
+  -- id is held, and norns' clock.threads (which keeps a coroutine an error
+  -- ended) does not show it dead
   S.register_invariant("scene sequencer", function()
     if S.scene_sequencer_recall_due and not S.scene_sequencer_enabled then
       return "scene_sequencer_recall_due is true but the sequencer is off"
+    end
+    if S.scene_sequencer_next ~= nil and not S.scene_sequencer_enabled then
+      return "scene_sequencer_next is " .. tostring(S.scene_sequencer_next) .. " but the sequencer is off"
     end
     if S.scene_sequencer_enabled ~= (S.scene_sequencer_clock ~= nil) then
       return "scene_sequencer_enabled is " .. tostring(S.scene_sequencer_enabled)

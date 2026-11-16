@@ -19,6 +19,8 @@
 - Every recall clears the randomize undo (`clear_undo`, `lib/mutation.lua`): `recall_scene` after validation, `recall_scene_instant` at its start.
 - Every recall cancels a running transition first. Every exit of a transition (end, cancel, error) goes through the one local `end_scene_transition(how)`, which clears `S.scene_transition_active`, `S.scene_transition_clock` and the `SCENE_TRANSITION` fields together (#253). A fade that does not land puts the previous scene back as current, never leaving its target current; a landing keeps the target current while `recall_scene_instant` applies it, so no redraw during the landing shows the previous scene, and puts the previous scene back only if that recall fails. Inside the transition's clock its id is forgotten, never canceled.
 - Every display of the current scene (the header's `S<n>`, SCENES' slot, the grids' recall keys) asks `S.lib.scenes.shows_current(slot)`, never compares with `S.current_scene` itself, so the scene a fade goes to blinks on all of them alike and is steady once it lands (#254). `SCENE_TRANSITION.step` is set before each step's redraws and cleared by `end_scene_transition` before a landing applies its scene.
+- **The next scene is drawn once** (3.7, design §5.4): each pass calls `S.lib.chance.pick(position, slots, chances)` exactly once, right after its recall has returned (never inside the apply, while `S.scene_recall_in_progress` is set), and keeps the slot in `S.scene_sequencer_next`. A kept slot is redrawn only when it can no longer play (past the length, or empty): a length or chance changed during the wait draws nothing. A `"repeat"` move recalls nothing; every other move recalls its slot, even the one playing (plan ruling 36). At 100, 0, 0 no random number is drawn, so 3.6's order holds. `S.scene_sequencer_next` is nil while the sequencer is off (the `scene sequencer` invariant).
+- The three chances (`scene_chance_next`, `scene_chance_previous`, `scene_chance_random`) are PSET settings, never scene fields.
 - The sequencer never cuts a transition short. It waits for the transition's end, bounded by `SCENE_TRANSITION.overrun_seconds` measured from the fade's progress, never from its start.
 - `load_scenes_from_disk` reads the file through `S.lib.data_files.read`, which parses it and never runs it as Lua (#464, `docs/notes/lua/data-files.md`); never `tab.load`. On any failure it keeps the current scenes and moves the file aside to its first free backup name (`.bak`, `.bak.2` ... `.bak.9`, never over an earlier backup, #466), or blocks the autosave (`S.scene_autosave_blocked`), so a bad file is never overwritten.
 - scenes.data is written only by `save_scenes_to_disk`, through `S.lib.data_files.write` (a checked `.part` renamed into place, nothing written when the file holds the same bytes, #301); never `tab.save`. A failed write leaves the file as it was and never prints `saved`; it sets `S.scene_file.problem = "not saved"` and `unsaved`.
@@ -37,14 +39,14 @@
 ## Owns
 
 `lib/scenes.lua` (`S.lib.scenes`) holds the whole scene system:
-- `S.scenes`, `S.current_scene`, and the sequencer and transition state on `S` (`S.scene_sequencer_clock`, `S.scene_sequencer_enabled`, `S.scene_sequencer_position`, `S.scene_sequencer_recall_due`, `S.scene_transition_clock`, `S.scene_transition_active`, `S.scene_recall_in_progress`, `S.scene_autosave_blocked`, `S.scenes_loaded`, `S.scene_file`);
+- `S.scenes`, `S.current_scene`, and the sequencer and transition state on `S` (`S.scene_sequencer_clock`, `S.scene_sequencer_enabled`, `S.scene_sequencer_position`, `S.scene_sequencer_recall_due`, `S.scene_sequencer_next`, `S.scene_transition_clock`, `S.scene_transition_active`, `S.scene_recall_in_progress`, `S.scene_autosave_blocked`, `S.scenes_loaded`, `S.scene_file`);
 - `S.lib.scenes.autosave()`, `S.lib.scenes.request_load()` and `S.lib.scenes.SCENE_LOAD` (Disk persistence, below);
 - `S.lib.scenes.scene_entries(scene_data)` and `S.lib.scenes.apply_entries(entries, opts)` (Entries, below) and `S.lib.scenes.revision(slot)`;
 - for morph (`docs/notes/lua/morph.md`): `S.lib.scenes.set_value(param_id, value)`, the local `set_scene_value` a recall, a fade step and `apply_entries` set each param through (a registered field's own `set`, else `set_scene_param`), which morph sets each continuous value through as a fade step does; and `S.lib.scenes.takeovers()` (3a, #584), the count of recalls and transitions started: `recall_scene` raises it once per recall that passes its checks (instant, or a fade at its start; not a fade's landing, an empty slot's recall or an invalid scene's), so morph tells a recall made after a move from one made before it, even a second recall of the scene current at the move;
 - the banks and names (3.4): `S.lib.scenes.bank_of(slot)` (1 for slots 1-8, 2 for 9-16, nil for a number that is no slot; a bank is only a view, design Question 15), `S.lib.scenes.name(slot)` (the slot's name, `""` for none and for a number that is no slot), `S.lib.scenes.label(slot)` (how a flash names a slot, design §9.3: `S3 dusk` for a named slot, `S3` for one with no name and `S` and the number for a number that is no slot, never an error; the save and empty-slot flashes use it, the quantizer's label stays `"S" .. slot` so `S16 at bar` always fits), and `S.lib.scenes.set_name(slot, text)` (What a scene holds, below);
 - `S.SCENE_GLOBAL_PARAMS`, `S.VOICE_SCENE_DEFAULTS`, `S.SCENE_BLOCK_DEFAULTS`, `S.SCENE_TRANSITION` (with a running fade's `next_step_due`, `target`, `previous` and `step`);
 - `S.lib.scenes.fading_to()` (the scene a running fade goes to, else nil) and `S.lib.scenes.shows_current(slot)` (whether the displays light the slot as the current scene);
-- `S.lib.scenes.sequencer_next_slot()` (#303): the slot the running sequencer recalls next, else nil. While `S.scene_sequencer_recall_due` (set by `scene_sequencer_start` and each advance, cleared by the loop just before it recalls the position, and by `scene_sequencer_stop`) the count starts at the position (1 past `scene_sequence_length`, as the loop's guard); otherwise at the position + 1, wrapped to 1 past the length as it is now, as the advance does. From there it is the first slot that holds a scene (empty slots are skipped, as the loop skips them, #513), or that slot itself when no slot of the sequence holds one. Through a hold the position is the scene playing (or, with no scene in the sequence, the empty slot it holds), so the grids' scene pages light this one at 10, never the position. The hold of an empty slot redraws the grids, so the light moves on there too. The "scene sequencer" invariant: no recall is due while the sequencer is off, and the sequencer is on exactly while its clock lives (#329);
+- `S.lib.scenes.sequencer_next_slot()` (#303): the slot the running sequencer recalls next, else nil. While `S.scene_sequencer_recall_due` (set by `scene_sequencer_start` and each advance, cleared by the loop just before it recalls the position, and by `scene_sequencer_stop`) the count starts at the position (1 past `scene_sequence_length`, as the loop's guard); otherwise at the position + 1, wrapped to 1 past the length as it is now, as the advance does. From there it is the first slot that holds a scene (empty slots are skipped, as the loop skips them, #513), or that slot itself when no slot of the sequence holds one. Through a hold the position is the scene playing (or, with no scene in the sequence, the empty slot it holds), so the grids' scene pages light this one at 10, never the position. 3.7: once a pass has drawn its next slot (after the recall, while no recall is due) it is `S.scene_sequencer_next`, kept while it can still play; a kept slot past the length or emptied is drawn again once, there and then, so the light shows the slot the pass will recall; the reckoning above stands before the first draw and with no scene in the sequence. Each draw redraws the screen and grids. The "scene sequencer" invariant: no recall is due and no next slot kept while the sequencer is off, and the sequencer is on exactly while its clock lives (#329);
 - capture, recall, transitions, the scene sequencer, the fill (`fill_scene`), validation and scenes.data;
 - the global `with_traceback` error handler;
 - `S.lib.scenes.scene_data_dir`, `S.lib.scenes.move_aside_unloadable_file` and `SCENE_LOAD.start_flash_seconds`, used by `lib/buffers.lua`;
@@ -224,13 +226,14 @@ function scene_sequencer_start()
       -- one pass, under xpcall (an error stops the sequencer through its param, #329)
       S.scene_sequencer_position = first_scene_from(S.scene_sequencer_position, length)
         or S.scene_sequencer_position  -- an empty slot is skipped at once (#513)
-      recall_scene(S.scene_sequencer_position, transition_time)
+      if SEQUENCER_DRAW.move ~= "repeat" then recall_scene(S.scene_sequencer_position, transition_time) end
+      draw_next_scene(length)  -- S.lib.chance.pick, once, into S.scene_sequencer_next
       local held = math.max(scene_duration, transition_time)
       clock.sleep(held)
       wait_for_scene_transition()
-      -- wrap with the length as it is now
-      S.scene_sequencer_position = S.scene_sequencer_position + 1
-      if S.scene_sequencer_position > params:get("scene_sequence_length") then S.scene_sequencer_position = 1 end
+      -- the kept slot if it can still play in the sequence as it is now, else
+      -- drawn again; with no scene in the sequence, the next slot, wrapped
+      S.scene_sequencer_position = kept_next_scene(length_now) or ...
     end
   end)
 end
@@ -257,8 +260,14 @@ Errors:
 - Errors in later fade steps are raised in the transition's clock, not the sequencer's.
 - An error anywhere else in a pass (a param read, `wait_for_scene_transition`, the advance's redraws) stops the sequencer through its param (#329): each pass runs under `xpcall` with `with_traceback`; on an error the clock sets `S.scene_sequencer_clock` to nil first (so the stop never cancels it from inside), sets `scene_sequencer_enabled` to 0 through `set_binary_param` (a mapped controller gets its CC), calls `scene_sequencer_stop()` if that left it on, and raises the error again. So the header, SCENES, the grids and the state agree that it stopped, and one switch starts it again.
 
+The next scene (3.7, design §5.4, decision 12):
+- The populated slots of 1..`scene_sequence_length`, in order, are the picker's list, the position its current slot, and `scene_chance_next`, `scene_chance_previous` and `scene_chance_random` (0-100, defaults 100, 0, 0, after the length in PARAMS) its chances (`docs/notes/lua/chance.md`). Next past the last populated slot is the first, previous before the first the last, random any other populated slot; what the three leave is a repeat.
+- The draw is made right after the recall (with no scene in the sequence, as its hold begins: `pick` returns nil for the empty list), and kept with its move in the local `SEQUENCER_DRAW`. The pass after a `"repeat"` recalls nothing and holds the scene for another `scene_duration` (no transition); every other move recalls its slot, the one playing too (one populated slot at 100, 0, 0 is `"next"` to itself, recalled again as in 3.6).
+- After the wait the position becomes the kept slot when it is still inside the length and holds a scene; otherwise the pick is made again over the sequence as it is now (`kept_next_scene`, which `sequencer_next_slot` calls too, so the grids light the slot that will play; it never draws while a recall applies). With no scene in the sequence the position moves on to the next slot, wrapped, as before 3.7.
+- Start, stop and the error stop forget the draw (`forget_next_scene`).
+
 Length and PSET loads:
-- The sequencer advances with the `scene_sequence_length` it reads after the wait, so a sequence shortened while a scene plays wraps to scene 1 (it never jumps to the new last scene).
+- The sequencer advances with the `scene_sequence_length` it reads after the wait, so a sequence shortened while a scene plays drops a kept slot past its end and draws again: at the defaults that wraps to the first scene (it never jumps to the new last scene). A lengthened one keeps the slot it drew.
 - Its clock does nothing until the next scheduler tick (`clock.sleep(0)`). norns' `params:read` (a PSET load from the PARAMS menu) sets params one by one in file order, and `scene_sequencer_enabled` comes before the transition time, duration, length, FX, LFO and voice params. Started inside the read, the sequencer would recall scene 1 with the old transition time and the PSET's later lines would then overwrite it. On the next tick the read has finished.
 - `scene_sequencer_start` and `pattern_clock_start` cancel their running clock before starting a new one (tests check that a restart leaves one clock).
 - The `scene_sequencer_enabled` param action starts and stops the sequencer. Cleanup step 100 stops it through that param, then `scene_sequencer_stop()`.
@@ -270,6 +279,7 @@ In the PARAMS menu (strata_scenes section):
 - `scene_transition_time` (0-30 s, default 2 s): crossfade duration for smooth transitions.
 - `scene_duration` (4-120 s, default 16 s): how long each scene plays before advancing.
 - `scene_sequence_length` (1-`NUM_SCENES`, 1-16, default 4): how many scenes to cycle through.
+- `scene_chance_next`, `scene_chance_previous`, `scene_chance_random` (numbers 0-100, shown as percents, defaults 100, 0, 0; 3.7): the chances for the sequencer's next scene (The next scene, above). PSET only, never in a scene.
 - Triggers "save scenes to disk" and "load scenes from disk".
 
 ## Disk persistence

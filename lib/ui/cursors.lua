@@ -1,9 +1,9 @@
 -- lib/ui/cursors.lua
 -- The cursors more than one page or ring set uses (S.lib.ui_cursors), kept
 -- on S.cursors: voice (a row index into voice_page_rows(S.selected_voice),
--- a field_list cursor), seq_step (1..PATTERN_LENGTH) and scene (the eight
+-- a field_list cursor), seq_step (1..PATTERN_LENGTH) and scene (the sixteen
 -- scene slots, then the SCENES_FIELDS params: 1..NUM_SCENES +
--- #SCENES_FIELDS). Rows can shrink under the voice cursor (a source change,
+-- #SCENES_FIELDS, 23). Rows can shrink under the voice cursor (a source change,
 -- another selected voice), so clamp_all runs at the start of every screen
 -- and arc redraw. A cursor over rows that change (voice) also keeps an
 -- anchor, the row it was deliberately put on (move, place), which sync
