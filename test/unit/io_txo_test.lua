@@ -553,6 +553,41 @@ test("a gate high when crow leaves is lowered when crow returns", function()
   assert_true(env_act ~= nil, "ready set the envelope up again")
 end)
 
+test("an envelope turned off while the bus is not led gets env_act 0 at the next ready (#752)", function()
+  -- the module still holds the envelope ready set up (a crow that leaves releases nothing), so
+  -- the next ready turns it off: crow-ii.md §2 (TELEXo), env_act(n, 0)
+  local _, S, state = started()
+  params:set("v1_out_txo", 5); params:set("v1_out_txo_cv", ENVELOPE)
+  state.calls = {}
+  device_of(S).ready()
+  assert_calls(state, setup_calls(5, 10, 500), "ready sets the envelope up")
+  state.leading = false
+  params:set("v1_out_txo_cv", 1)
+  assert_calls(state, {}, "not leading: nothing sent")
+  state.leading = true
+  device_of(S).ready()
+  assert_calls(state, {{"send", "txo", "env_act", 5, 0}}, "the next ready: the envelope off, and nothing else")
+end)
+
+test("a crow that leaves and returns turns off an envelope no longer wanted", function()
+  local context, S = leading_real()
+  params:set("v1_out_txo", 4); params:set("v1_out_txo_cv", ENVELOPE)
+  context.clock.run_for(0.2)
+  assert_equal(last_line(context, "ii.txo.env_act(4, "), "ii.txo.env_act(4, 1)", "the envelope set up")
+  context.crow.unplug()
+  params:set("v1_out_txo_cv", 1)  -- back to pitch while crow is away
+  context.crow.clear()
+  context.crow.plug()
+  context.clock.run_for(0.2)
+  local off, on = false, false
+  for _, line in ipairs(context.crow.sent) do
+    if line == "ii.txo.env_act(4, 0)" then off = true end
+    if line == "ii.txo.env_act(4, 1)" then on = true end
+  end
+  assert_true(off, "the return turns the envelope off: " .. table.concat(context.crow.sent, "|"))
+  assert_true(not on, "and does not set it up again")
+end)
+
 
 test("the TELEXo is routed only while Strata leads the bus, as Just Friends and W/ are", function()
   local _, S, state = started()
