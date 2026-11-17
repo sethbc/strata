@@ -1,6 +1,6 @@
 # Strata roadmap
 
-The order and scope of the releases from 3.1 to 3.8 and 4.0. 3.1 to 3.6 have shipped (Shipped, below); **3.7, rhythm, is next.** `docs/status.md` has the open items.
+The order and scope of the releases from 3.1 to 3.8 and 4.0. 3.1 to 3.7 have shipped (Shipped, below); **the three small revisions between 3.7 and 3.8, then 3.8, sound, are next.** `docs/status.md` has the open items.
 
 Date: 2026-11-07
 Status: brainstorm, reviewed 2026-11-07; cross-release decisions added 2026-11-08 (see "Cross-release decisions (2026-11-08)"). Added 2026-11-11, at the maintainer's request: releases 3.7 (rhythm) and 3.8 (sound), with fourteen features from a review of four hardware granular instruments, and in 3.6 the iii scripts and program change. It sets the order and scope of the releases after 3.0.2. It is not a build plan: each release gets its own design document (like `docs/design/3.0-design.md`) and an implementation plan before any code is written.
@@ -81,7 +81,7 @@ The code and documents are restructured for agent-driven development, and every 
 
 ---
 
-## Shipped: 3.1 to 3.6
+## Shipped: 3.1 to 3.7
 
 | Release | Theme | Design | Shipped |
 |---|---|---|---|
@@ -91,60 +91,11 @@ The code and documents are restructured for agent-driven development, and every 
 | 3.4 | Modulation and sequencing | `docs/design/3.4-design.md` | 3.4.0, 2026-11-12 |
 | 3.5 | Polyphony and MPE | `docs/design/3.5-design.md` | 3.5.0, 2026-11-13 |
 | 3.6 | Integration | `docs/design/3.6-design.md` | 3.6.0, 2026-11-15 |
+| 3.7 | Rhythm | `docs/design/3.7-design.md` | 3.7.0, 2026-11-16 |
 
-Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13, 3.6's on 2026-11-15): each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table.
+Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13, 3.6's on 2026-11-15, 3.7's on 2026-11-16): each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table.
 
 ---
-
-## 3.7: Rhythm
-
-Added 2026-11-11, at the maintainer's request. It makes rhythmic material playable: 3.3 made buffers instruments and 3.4 deepens the sequencer, and this joins the two. It gets its own design before code.
-
-### Slices
-
-- A buffer is cut into slices, by its transients or into equal parts, and a step, a grid key or a MIDI note plays slice N. Slices sit beside 3.3's four bookmarks per voice (a bookmark is a place the player chose; slices cover the whole buffer) and reuse its positions: a slice is a start and, with 3.4's gates, a length.
-- 3.4's step attributes gain a slice (as they have `pos` and `bookmark`), so a pattern can rearrange a loop.
-- The design decides: how transients are found (in sclang at load, inside #131's limits on allocation, or on the server); how many slices a slot holds; how they are stored (with the slot, in `buffers.data`) and drawn on BUFFER's waveform; how the position grids show them.
-
-### Buffers that follow the tempo
-
-- A scan measured in beats or in seconds. Today `bufScan` moves in loop lengths per second, so a voice whose loop is a whole 300 s slot scans 300 s a second at scan 1 (the candidate `docs/status.md` has carried since 3.3); loop regions are the answer until this ships.
-- A slot can carry a tempo (set by hand, or from its length as a count of bars), so its loop region, its slices and its scan line up with the clock, and a loop recorded at one tempo follows a tempo change by its grain rate or by its scan, the design choosing which.
-
-### Trig conditions
-
-- Elektron-style conditions on a step, beside 3.4's probability: play on the A-th of every B passes, only on the first pass, only when the previous step with a condition played or did not, and a fill condition held from a key. 3.4 lists them as a non-goal; they come once its probability and chaining have been lived with.
-- They are step attributes in 3.4's format (sparse, validated, in scenes and the chain), drawn and edited on SEQ's edit view and the step editor.
-
-The six items below were added on 2026-11-11 from a review of four hardware granular instruments (Tasty Chips' GR-1, GR-MEGA and GR-2, Torso's S-4), at the maintainer's request.
-
-### Scan modes
-
-- A voice's scan wraps today: at the end of its loop region it starts again. Two more modes: **bounce** (it turns round at each edge) and **one shot** (it stops at the edge until the next step, note or jump restarts it).
-- One option per voice beside `buf_scan`, and a change to the engine's scan phase; no real-time memory. The playheads follow the same rule (3.3's estimate mirrors the engine's scan).
-
-### A buffer's key and level
-
-- **Tuning:** a slot carries the note its sample is in (set by hand, or by playing the matching note), so step notes, MIDI notes and scale quantize treat it as that note. Today every buffer is taken to be at the root note at rate 1.
-- **Normalize:** a slot's level can be evened out from the peaks 3.3 already computes, as a gain at playback, never by rewriting the audio (3.3 left editing audio out, and that stands).
-- The design decides where the two live (with the slot, in `buffers.data`) and how BUFFER shows them.
-
-### Pattern directions
-
-- A voice's steps can play forward (today), in reverse, ping-pong or in random order, with an optional chance of a misstep (a drunk walk). One option per voice in 3.4's `seq` record; the chain and each voice's length keep their meaning.
-
-### Scene chains with chance
-
-- The scene sequencer plays its scenes in order today. A rule per sequence picks the next scene instead: the next, the previous, a walk either way or any at random, each with a chance, so a set of scenes becomes a generative form. 3.4's pattern chain can take the same rule.
-
-### A delay on the beat
-
-- The delay's time as a division of the tempo (it is in seconds today), following tempo changes as the clocked LFOs do, and a ping-pong mode that alternates its repeats left and right. The sync is Lua's; ping-pong is a change to the delay SynthDef, measured against its memory first.
-
-### Envelope and random-sequence modulators
-
-- Two kinds of modulation source for 3.4's registry and matrix: an **envelope** (attack and decay, or ADSR, with a curve and an optional loop) fired by a voice's steps and MIDI notes, and a **random sequence** of N values that repeats and can drift, a pattern where 3.4's sample-and-hold is new at every cycle.
-- They register like every 3.4 source, so MOD lists them unchanged. An envelope on a fast destination must run in the engine, as an LFO there does, as a persistent node a step re-triggers: a step never creates one.
 
 ## Between 3.7 and 3.8: three small revisions
 

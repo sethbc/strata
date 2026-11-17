@@ -6,7 +6,7 @@ This file gives coding agents guidance for working in this repository. It is an 
 
 ## Project Overview
 
-Strata is an ambient granular soundscape generator for monome norns (its features: README.md and the user pages under docs/user/). The current release is 3.6.0 (see CHANGELOG.md).
+Strata is an ambient granular soundscape generator for monome norns (its features: README.md and the user pages under docs/user/). The current release is 3.7.0 (see CHANGELOG.md).
 
 **Where things are documented:**
 - `docs/status.md`: **read first.** The open items (with GitHub issues) and the limits to plan around. Update it at the end of each piece of work.
