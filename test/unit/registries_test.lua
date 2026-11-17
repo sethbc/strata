@@ -365,8 +365,7 @@ test("LFO destinations come by voice, and a registered one joins its voice", fun
   registered[#registered + 1] = "probe"; registered[#registered + 1] = "pswitch"
   local expected = lfo_labels(registered)
   assert_equal(table.concat(list_labels(destinations), ","), table.concat(expected, ","), "inside each voice")
-  assert_equal(table.concat(params:lookup_param("strata_lfo1_dest").options, ","), table.concat(expected, ","),
-    "the dest param's options follow")
+  assert_equal(params.lookup.strata_lfo1_dest, nil, "an LFO's destination is its home routing, no param")
   local probe = 0
   for index, destination in ipairs(destinations) do
     if destination.label == "v1 probe" then probe = index end
@@ -374,7 +373,7 @@ test("LFO destinations come by voice, and a registered one joins its voice", fun
   assert_equal(destinations[probe].resolve(), "v1_probe")
   assert_equal(destinations[probe + 1].resolve(), "v1_probe_switch")
   -- an LFO on a registered destination modulates it around its stored value
-  params:set("strata_lfo1_dest", probe)
+  local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(probe))
   assert_equal(lfo_destination_id(1), "v1_probe")
   -- a label already used by a built-in destination is refused at init
   local ok = pcall(load_with, function(S) S.register_lfo_destination("dens", "probe") end)
@@ -393,12 +392,12 @@ test("the LFO page's ALT+E3 groups keep each voice, its registered destinations 
   -- ALT+E3 on the destination field: none, the globals, each v<i> main, then the macros
   h.show_page("LFO")
   S.lfo_field = 1
-  params:set("strata_lfo1_dest", 1)
+  S.lib.matrix.set_home(1, "")
   local landed = {}
   key(1, 1)
   for _ = 1, 10 do
     enc(3, 1)
-    table.insert(landed, S.LFO_DESTINATIONS[params:get("strata_lfo1_dest")].label)
+    table.insert(landed, S.lib.lfos.destination(1).label)
   end
   key(1, 0)
   assert_equal(table.concat(landed, ","),

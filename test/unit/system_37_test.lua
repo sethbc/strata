@@ -155,8 +155,10 @@ local PSET_3_6 = {
   sides = {"macros", "matrix", "gestures"},
   -- the 3.6 lines 3.7 has no param for, each with why
   drops = {strata_pset_format = "3.7 writes no format line and reads one as nothing (0d)"},
-  -- an index of 3.6's destination list, which 3.7 reads as none (decision 24, docs/notes/lua/lfos.md)
-  lfo_dest = "^strata_lfo%d_dest$",
+  -- an LFO's destination: since the groundwork before 3.8 its home routing
+  -- in the matrix, so the line names no param, and the version 1 matrix
+  -- side file holds no home: the LFO is aimed at nothing
+  lfo_dest = "^strata_lfo(%d)_dest$",
   -- the state the recording set through 3.6.0's code (the fixture's header)
   scan = 0.5, keyed = {cc_out1_source = "pressure", crow_out1_source = "pressure"},
   macro = {id = "reverb_mix", min = 0.2, max = 0.8}, routing = {source = "macro1", dest = "v3_grain_pitch"},
@@ -239,8 +241,8 @@ test("a 3.6 scenes file is set aside whole; a 3.6 PSET and a version 2 buffers.d
     in_file[entry.id] = true
     local id = entry.id
     if id:match(PSET_3_6.lfo_dest) then
-      assert_equal(params:get(id), 1, id .. ": a 3.6 index reads as none")
-      assert_equal(params:get(id .. "_key"), "none", id .. "'s key: none")
+      assert_equal(params.lookup[id], nil, id .. ": no param")
+      assert_equal(S.lib.matrix.home(tonumber(id:match(PSET_3_6.lfo_dest))), "", id .. ": the LFO is aimed at nothing")
     elseif not params.lookup[id] then
       assert_true(PSET_3_6.drops[id] ~= nil, id .. ": a 3.6 line with no param here, and none expected")
     elseif params:lookup_param(id).t == params.tGROUP then

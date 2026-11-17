@@ -7,11 +7,15 @@
 -- id (S.matrix[k] = {source, dest}, "" for none); its depth and on/off are
 -- params (matrix_<k>_depth, matrix_<k>: the group strata_matrix, which
 -- lib/params_setup.lua's matrix record adds through add_params), so CCs,
--- PSETs, scenes, morph and macros reach them. Like the LFOs, the matrix adds
--- offsets around the stored values and never sets a destination param: at
--- each LFO step (S.lib.lfos.on_step) a Lua destination's sum of
--- depth / 100 x normalized(source) becomes one extra offset (summed with
--- the LFOs' and clamped once in with_lfo_offsets), a fast destination's sum,
+-- PSETs, scenes, morph and macros reach them. Beside them, slots 17-22 are
+-- the LFOs' home routings (the groundwork before 3.8): LFO n's destination,
+-- source lfo<n>, its depth, offset and on/off the LFO's own params. Like the
+-- LFOs, the matrix adds offsets around the stored values and never sets a
+-- destination param: at each LFO step (S.lib.lfos.on_step) a Lua
+-- destination's sum of depth / 100 x normalized(source), and of each
+-- playing home's m the LFO does not own (S.lib.lfos.owns: a fast home is
+-- its engine node, a macro its own hand-over), becomes one extra offset
+-- (clamped once in with_lfo_offsets), a fast destination's sum,
 -- with the macros' fast extras (set_fast_extra), goes to the engine as
 -- setFastOffset, clamped to -2..2; each send through the LFOs' round robin
 -- (mark_due), so inside their cap and deferrable. The routings are stored
@@ -329,6 +333,7 @@ return function(S)
   -- (contained_call), and the labels its line names, made once
   local step_errors = {routings = {}, destinations = {}, routing_labels = {}, destination_labels = {}}
   for k = 1, MATRIX_SLOTS do step_errors.routing_labels[k] = "matrix routing " .. k end
+  for n = 1, HOMES do step_errors.routing_labels[home_slot(n)] = "matrix home " .. n end
 
   local function destination_label(id)
     local label = step_errors.destination_labels[id]
@@ -368,6 +373,20 @@ return function(S)
       local into = S.lib.lfos.fast_destination(id) and scratch.fast_sums or scratch.lua_sums
       into[id] = (into[id] or 0) + m
     end
+  end
+
+  -- LFO n's home routing's m (S.lib.lfos.home_m: the LFO's value x depth' /
+  -- 100 + its offset), added to the sum of the param its destination
+  -- resolves to while the LFO plays, unless the LFO owns it (its engine node
+  -- on a fast home, its own step on a macro): the rest is the matrix's,
+  -- Lua or fast (a buffer voice's main on its position, ruling 16)
+  local function read_home(n)
+    local m = S.lib.lfos.home_m(n)
+    if not m or m == 0 or not finite(m) then return end
+    local id = S.lib.lfos.destination(n).resolve()
+    if not id or S.lib.lfos.owns(n, id) then return end
+    local into = S.lib.lfos.fast_destination(id) and scratch.fast_sums or scratch.lua_sums
+    into[id] = (into[id] or 0) + m
   end
 
   -- A Lua destination's sum is its extra offset, sent when its value moved;
@@ -427,6 +446,10 @@ return function(S)
     local contained_call = S.lib.ui_frame.contained_call
     for k = 1, MATRIX_SLOTS do
       contained_call(step_errors.routings, k, step_errors.routing_labels[k], read_routing, k)
+    end
+    for n = 1, HOMES do
+      local k = home_slot(n)
+      contained_call(step_errors.routings, k, step_errors.routing_labels[k], read_home, n)
     end
     for id, extras in pairs(held.fast_extras) do
       for _, m in pairs(extras) do fast_sums[id] = (fast_sums[id] or 0) + m end
@@ -826,8 +849,9 @@ return function(S)
   S.register_cleanup(S.constants.CLEANUP_ORDER.matrix_save, files.save_now)
 
   -- Cleanup, before the LFOs' step: learn is canceled and the matrix's
-  -- offsets are forgotten. It sends nothing: norns has freed the engine by
-  -- then (#461), and the LFOs' step restores their own destinations
+  -- offsets (the LFOs' Lua homes' among them) are forgotten. It sends
+  -- nothing: norns has freed the engine by then (#461), and the LFOs' step
+  -- gives their direct destinations back
   S.register_cleanup(S.constants.CLEANUP_ORDER.matrix, function()
     M.cancel_learn()
     for id in pairs(learn_clock.retired) do clock.cancel(id) end

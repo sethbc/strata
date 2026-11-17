@@ -1,24 +1,25 @@
 -- lib/lfos.lua
 -- The six global LFOs, Strata's own (3.4; norns' lib/lfo.lua is no longer
 -- used): their params (add_lfo_params, which lib/params_setup.lua's lfos
--- record calls: a group strata_lfo_<n> of 14 per LFO), their destinations
--- (S.LFO_DESTINATIONS, by voice: from init a registered one,
--- S.registry.lfo_destinations, joins its voice's group; each is kept by
--- key through S.lib.io_keyed), and the one clock that steps them
--- (S.lfo_clock, 48 Hz, from the start step lfo_clock to the cleanup step
--- lfos). An LFO on one of the five fast destinations (a voice's grain
--- pitch, position, size, filter cutoff and level) runs in the engine
--- (setFastLfo, stopFastLfo, syncFastLfo); every other LFO runs here, sending
--- its destination's stored value plus its offset through
--- send_engine_value, at most LFO.sends_per_step sends a step in one round
--- robin (mark_due) that the matrix shares (on_step). LFO n's rate and
--- depth can follow a lower-numbered LFO's shape value. Registers the LFOs
--- as modulation sources lfo1..lfo6, a scene block per LFO for its
--- destination's key, the clock's start and cleanup steps and the "lfo
--- clock" invariant. S.selected_lfo is the LFO the LFO page and arc
--- work on. The functions that were global stay global (lfo_destination_id,
--- restore_lfo_destination, add_lfo_params); the rest are fields of this
--- module's table (S.lib.lfos).
+-- record calls: a group strata_lfo_<n> of 12 per LFO), the destination
+-- list (S.LFO_DESTINATIONS, by voice: from init a registered one,
+-- S.registry.lfo_destinations, joins its voice's group), and the one clock
+-- that steps them (S.lfo_clock, 48 Hz, from the start step lfo_clock to the
+-- cleanup step lfos). An LFO's destination is its home routing, the
+-- matrix's slot 16 + n (S.lib.matrix.home, the groundwork before 3.8): on
+-- one of the five fast destinations (a voice's grain pitch, position,
+-- size, filter cutoff and level) the LFO runs in the engine (setFastLfo,
+-- stopFastLfo, syncFastLfo); on a macro (a direct destination) it hands
+-- the macro over itself once a step; on any other the matrix sums it
+-- (home_m) with the R routings into one extra offset. Its sends and the
+-- matrix's go through one round robin (mark_due), at most
+-- LFO.sends_per_step a step (on_step). LFO n's rate and depth can follow a
+-- lower-numbered LFO's shape value. Registers the LFOs as modulation
+-- sources lfo1..lfo6, the clock's start and cleanup steps and the "lfo
+-- clock" invariant. S.selected_lfo is the LFO the LFO page and arc work
+-- on. The functions that were global stay global (lfo_destination_id,
+-- add_lfo_params); the rest are fields of this module's table
+-- (S.lib.lfos).
 
 return function(S)
   local M = {}
@@ -38,7 +39,7 @@ return function(S)
   local LFO = {
     step_hz = 48, sends_per_step = 12, lua_max_hz = 10, engine_max_hz = 50,
     send_threshold = 1 / 1000, engine_rate_threshold = 0.005,
-    min_hz = 0.003, bar_beats = 4, beats_per_division = 4, drunk_step = 0.2, group_size = 14,
+    min_hz = 0.003, bar_beats = 4, beats_per_division = 4, drunk_step = 0.2, group_size = 12,
     defaults = {rate = 0.25, depth = 25, division = 13},
     shapes = {"sine", "tri", "square", "up", "down", "s&h", "smooth", "drunk"},
     random_shapes = {["s&h"] = true, smooth = true, drunk = true},
@@ -75,14 +76,15 @@ return function(S)
     return voice, destination
   end
 
-  -- LFO destinations in strata_lfo<n>_dest option order (3.7, design
-  -- decision 24): {label, key, resolve, group, fast}, where key is what a
-  -- PSET and a scene keep (the param id it moves, v<i>_main for a voice's
-  -- main entry, none), resolve returns the param id to modulate (nil for
+  -- LFO destinations in the LFO page's order (3.7, design decision 24):
+  -- {label, key, resolve, group, fast}, where key is what a home routing
+  -- holds (the param id it moves, v<i>_main for a voice's main entry, none
+  -- as the home's ""), resolve returns the param id to modulate (nil for
   -- none), group names the group ALT+E3 jumps by (none, global, voice <i>,
   -- macros), and fast is {voice, destination} for an entry that runs in the
   -- engine. A voice's "main" resolves on every step, so it follows the
-  -- voice's source, and always runs in Lua (it can resolve to any param)
+  -- voice's source, and is never fast (it can resolve to any param: the
+  -- matrix sums it)
   local function fixed_destination(label, id, group)
     local voice, destination = M.fast_destination(id)
     return {label = label, key = id, resolve = function() return id end, group = group,
@@ -106,6 +108,10 @@ return function(S)
     },
   }
 
+  -- Each destination's index in S.LFO_DESTINATIONS by its key, rebuilt with
+  -- the list
+  local key_index = {}
+
   -- Build S.LFO_DESTINATIONS in place from the built-in destinations and
   -- `registered` (S.registry.lfo_destinations at init, none at include
   -- time): none; the globals, built-in then registered; per voice its main
@@ -114,6 +120,7 @@ return function(S)
   -- one, or a second destination of one param (a key is stored, so it
   -- names one entry), is an error naming the register function
   local function build_destinations(registered)
+    for key in pairs(key_index) do key_index[key] = nil end
     local parts = {{}}   -- the globals, voice 1 .. voice NUM_VOICES, the macros
     for i = 1, NUM_VOICES do parts[i + 1] = {} end
     local macros = {}
@@ -154,7 +161,10 @@ return function(S)
       for _, destination in ipairs(part) do table.insert(list, destination) end
     end
     local labels = {}
-    for index, destination in ipairs(list) do labels[index] = destination.label end
+    for index, destination in ipairs(list) do
+      labels[index] = destination.label
+      key_index[destination.key] = index
+    end
     return labels
   end
 
@@ -180,14 +190,6 @@ return function(S)
     return groups
   end
 
-  -- At init (add_lfo_params): the whole list with the registered
-  -- destinations, its option labels and its keys
-  local function lfo_destination_labels()
-    local labels = build_destinations(S.registry.lfo_destinations)
-    local keys = {}
-    for index, destination in ipairs(S.LFO_DESTINATIONS) do keys[index] = destination.key end
-    return labels, keys
-  end
 
   -- Each global destination's param exists only once every params record
   -- has run (the macros come after the LFOs): checked at the clock's start
@@ -203,9 +205,25 @@ return function(S)
     end
   end
 
+  -- The index in S.LFO_DESTINATIONS of LFO n's home routing's destination
+  -- (S.lib.matrix.home): 1 (none) for none or a key this build lacks, which
+  -- the home keeps and which does not play
+  function M.destination_index(n)
+    local key = S.lib.matrix.home(n)
+    return key and key_index[key] or 1
+  end
+
+  -- The home routing's destination id of entry index: "" for none, else
+  -- its key
+  function M.destination_id(index)
+    local destination = S.LFO_DESTINATIONS[index]
+    if not destination or destination.key == "none" then return "" end
+    return destination.key
+  end
+
   -- LFO n's destination entry, and the param id it modulates now (or nil)
   local function destination_of(n)
-    return S.LFO_DESTINATIONS[params:get(param_id(n, "dest"))]
+    return S.LFO_DESTINATIONS[M.destination_index(n)]
   end
   M.destination = destination_of
 
@@ -416,12 +434,12 @@ return function(S)
 
   -- Destinations whose engine sender reaches no engine (a macro's, which
   -- works out its targets' extras: lib/macros.lua) take no round-robin slot
-  -- and no budget message (#636): an LFO on one runs that sender itself
-  -- (S.engine_senders[id]), once a step after the six LFOs when the
+  -- and no budget message (#636): an LFO homed on one runs that sender
+  -- itself (S.engine_senders[id]), once a step after the six LFOs when the
   -- modulated value moved by send_threshold from the one it last handed
   -- over (last[id]), and at once at a restore. ids in registration order;
-  -- due[id] while a step's LFO moved it
-  local direct = {known = {}, ids = {}, last = {}, due = {}}
+  -- due[id] while a step's LFO moved it; held[n] the one LFO n holds
+  local direct = {known = {}, ids = {}, last = {}, due = {}, held = {}}
   local send_direct  -- (id, always): below, once destination_position is
 
   function M.direct_destination(param_id)
@@ -431,18 +449,33 @@ return function(S)
     table.insert(direct.ids, param_id)
   end
 
-  -- LFO n stops modulating its destination: the engine gets the stored value
-  -- back (plus any other LFO's offset on it). Always sends.
-  function restore_lfo_destination(n)
-    local id = S.lfo_last_dest[n]
+  -- LFO n lets the direct destination it holds go: its sender gets the
+  -- stored value back (plus any other LFO's offset on it), at once. A Lua
+  -- destination is given back by the matrix's next step
+  local function release_direct(n)
+    local id = direct.held[n]
     if not id then return end
-    S.lfo_last_dest[n] = nil
-    S.lfo_scaled[n] = nil
-    if direct.known[id] then
-      send_direct(id, true)
-    else
-      send_param_to_engine(id, params:get(id))
+    direct.held[n] = nil
+    send_direct(id, true)
+  end
+
+  -- Whether an LFO holds direct destination id now (an LFO on a macro)
+  function M.modulates(id)
+    for n = 1, NUM_LFOS do
+      if direct.held[n] == id then return true end
     end
+    return false
+  end
+
+  -- Whether LFO n's home routing to id is this module's to play: its home
+  -- is fast and resolves to id (its engine node), or id is a direct
+  -- destination (a macro, handed over in its step). Whatever its on/off
+  -- and depth, as S.lib.envelopes.owns is about kind
+  function M.owns(n, id)
+    if type(n) ~= "number" or n < 1 or n > NUM_LFOS or n % 1 ~= 0 or id == nil then return false end
+    if direct.known[id] then return true end
+    local destination = destination_of(n)
+    return destination.fast ~= nil and destination.resolve() == id
   end
 
   -- The offset of a Lua destination for m half ranges (the matrix's too)
@@ -490,14 +523,10 @@ return function(S)
     return unstepped:unmap(value)
   end
 
-  local function send_destination(id)
-    S.lib.engine_sync.send_engine_value(id, S.lib.engine_sync.with_lfo_offsets(id, params:get(id)))
-  end
-
   -- A direct destination's modulated value to its sender (always: a
   -- restore's, whatever it last handed over)
   send_direct = function(id, always)
-    local value = S.lib.engine_sync.with_lfo_offsets(id, params:get(id))
+    local value = M.direct_value(id)
     local last = direct.last[id]
     if not always and last ~= nil
       and math.abs(destination_position(id, value) - destination_position(id, last)) < LFO.send_threshold then
@@ -507,31 +536,44 @@ return function(S)
     S.engine_senders[id](value)
   end
 
-  -- A Lua-run LFO's step: its offset m (design §2.2) on its destination,
-  -- queued when the value moved by send_threshold since the last send (a
-  -- direct destination: handed over after the six LFOs)
-  local function step_lua(n)
+  -- LFO n's m on its home routing (design §2.2: value x depth' / 100 + 2 x
+  -- offset / 100, in half ranges) while it is on at a depth above 0, else
+  -- nil: what the matrix sums for a Lua home and a direct destination adds
+  function M.home_m(n)
+    if not is_on(n) or params:get(param_id(n, "depth")) <= 0 then return nil end
     local st = state[n]
-    local id = lfo_destination_id(n)
-    -- a "main" destination re-resolves to another param when the voice's
-    -- source changes: give the old one back first (and at depth 0: a silent
-    -- read sets the depth without its action's restore)
-    local depth = params:get(param_id(n, "depth"))
-    if id ~= S.lfo_last_dest[n] or depth == 0 then restore_lfo_destination(n) end
-    if not id or depth == 0 then return end
-    S.lfo_last_dest[n] = id
-    S.lfo_scaled[n] = st.value * st.depth / 100 + 2 * params:get(param_id(n, "offset")) / 100
-    if direct.known[id] then
-      direct.due[id] = true
-      return
+    return st.value * st.depth / 100 + 2 * params:get(param_id(n, "offset")) / 100
+  end
+
+  -- A direct destination's modulated value: its stored value plus the
+  -- offset of every LFO holding it, clamped once to its range (a macro
+  -- param has no override, extra or factor)
+  function M.direct_value(id)
+    local value, offset, modulated = params:get(id), 0, false
+    for n = 1, NUM_LFOS do
+      local m = direct.held[n] == id and M.home_m(n)
+      if m then
+        offset = offset + M.offset_for(id, m)
+        modulated = true
+      end
     end
-    local value = S.lib.engine_sync.with_lfo_offsets(id, params:get(id))
-    local last_sent = S.lib.engine_sync.expected_value(id)
-    if last_sent ~= nil and math.abs(destination_position(id, value) - destination_position(id, last_sent))
-      < LFO.send_threshold then
-      return
-    end
-    M.mark_due(id, function() send_destination(id) end)
+    if not modulated then return value end
+    return util.clamp(value + offset, param_range(id))
+  end
+
+  -- An LFO not run in the engine: on a direct destination it holds it and
+  -- marks it due (handed over after the six LFOs); a home that resolves
+  -- elsewhere, plays nothing (off, depth 0: a silent read sets the depth
+  -- without its action) or is the matrix's gives the held one back first
+  -- (a direct destination is a fixed entry: its key is its id, so nothing
+  -- is resolved here; a resolve that raises is the matrix's to contain)
+  local function step_direct(n)
+    local id = destination_of(n).key
+    local playing = M.home_m(n) ~= nil and direct.known[id]
+    if direct.held[n] and (not playing or direct.held[n] ~= id) then release_direct(n) end
+    if not playing then return end
+    direct.held[n] = id
+    direct.due[id] = true
   end
 
   ---------------------------------------------------------------------------
@@ -659,7 +701,7 @@ return function(S)
     local st = state[n]
     if not is_on(n) then
       st.value = 0
-      if S.lfo_last_dest[n] then restore_lfo_destination(n) end
+      release_direct(n)
       if st.engine then reconcile_engine(n) end
       return
     end
@@ -691,11 +733,11 @@ return function(S)
         if step.fell or (st.bar ~= nil and bar ~= st.bar) then st.sync_due = true end
         st.bar = bar
       end
-      if S.lfo_last_dest[n] then restore_lfo_destination(n) end
+      release_direct(n)
       reconcile_engine(n)
     else
       if st.engine then reconcile_engine(n) end
-      step_lua(n)
+      step_direct(n)
     end
   end
 
@@ -767,14 +809,15 @@ return function(S)
 
   -- Cleanup (step 120): the clock stops and nothing waits to be sent.
   -- norns has freed the engine by then (#461), and an engine LFO's node
-  -- with it, so nothing stops one; every Lua destination is restored as in
-  -- 3.3 (none of it arrives on the device)
+  -- with it, so nothing stops one; every direct destination is given back
+  -- (the matrix's cleanup step forgets the Lua ones' offsets; none of it
+  -- arrives on the device)
   S.register_cleanup(S.constants.CLEANUP_ORDER.lfos, function()
     stop_clock()
     queue.due = {}
     for n = 1, NUM_LFOS do
       state[n].engine = nil
-      restore_lfo_destination(n)
+      release_direct(n)
     end
   end)
 
@@ -784,8 +827,8 @@ return function(S)
 
   -- LFO n turned on: its phase starts at the phase param (a free LFO's
   -- position at 0), the random shapes draw afresh, and the engine starts it
-  -- on a fast destination; turned off: its destination gets its stored
-  -- value back
+  -- on a fast destination; turned off: a direct destination gets its stored
+  -- value back at once, a Lua one at the matrix's next step
   local function turned(n, on)
     local st = state[n]
     if on then
@@ -803,7 +846,7 @@ return function(S)
       st.bar = is_clocked(n) and math.floor(clock.get_beats() / LFO.bar_beats) or nil
       st.sync_due = true   -- a restart of a running engine LFO (a bang, #251) moves its phase too
     else
-      restore_lfo_destination(n)
+      release_direct(n)
       st.value, st.stepped = 0, false
     end
     reconcile_engine(n)
@@ -812,7 +855,7 @@ return function(S)
   -- A setting the engine needs at once (an option or binary param: their
   -- actions may call the engine). While a scene applies (a recall, a fade's
   -- end, morph's discrete entries: S.scene_recall_in_progress) it is only
-  -- marked: the scene's other settings of the LFO (its destination, rate,
+  -- marked: the scene's other settings of the LFO (its home routing, rate,
   -- depth, ...) are not all in place yet, so the next step sends the LFO
   -- once with every one of them, never a mix of old and new (0e's review)
   local function settings_changed(n, sync)
@@ -825,8 +868,11 @@ return function(S)
   end
 
   -- LFO n's home routing changed (S.lib.matrix.set_home, a load or an
-  -- apply of the matrix's block)
+  -- apply of the matrix's block): a direct destination it held is given
+  -- back at once, and the engine gets the LFO's settings (only marked while
+  -- a scene applies). A Lua destination is the matrix's from its next step
   function M.home_changed(n)
+    release_direct(n)
     settings_changed(n, false)
   end
 
@@ -863,26 +909,15 @@ return function(S)
     return options
   end
 
-  -- LFO n's 14 params, in a group of its own (groups cannot nest): on,
-  -- destination (with its hidden key), shape, mode, rate, division, depth,
-  -- offset, phase, and the rate and depth inputs with their amounts. The shape, rate, division and
-  -- phase actions call note_param_edit (the LFO page's randomize sets them,
-  -- #557)
-  local function add_lfo_group(n, destination_labels, destination_keys)
+  -- LFO n's 12 params, in a group of its own (groups cannot nest): on,
+  -- shape, mode, rate, division, depth, offset, phase, and the rate and
+  -- depth inputs with their amounts (its destination is its home routing,
+  -- the matrix's). The shape, rate, division and phase actions call
+  -- note_param_edit (the LFO page's randomize sets them, #557)
+  local function add_lfo_group(n)
     params:add_group("strata_lfo_" .. n, "LFO " .. n, LFO.group_size)
     params:add{type = "binary", behavior = "toggle", id = param_id(n), name = "on", default = 0,
       action = function(x) turned(n, x == 1) end}
-    -- the destination, kept by key (S.lib.io_keyed: the option and its
-    -- hidden text strata_lfo<n>_dest_key); a key this build lacks reads as
-    -- none, with one console line
-    S.lib.io_keyed.add(param_id(n, "dest"), "destination", destination_keys, destination_labels, function(key)
-      local stored = params:get(param_id(n, "dest_key"))
-      if stored ~= key then
-        print("strata: LFO " .. n .. "'s destination " .. tostring(stored) .. " is not in this version: none")
-      end
-      restore_lfo_destination(n)
-      settings_changed(n, false)
-    end)
     params:add{type = "option", id = param_id(n, "shape"), name = "shape", options = LFO.shapes, default = 1,
       action = function()
         note_param_edit(param_id(n, "shape"))
@@ -908,7 +943,7 @@ return function(S)
         settings_changed(n, is_clocked(n))
       end}
     add_percent(n, "depth", "depth", 0, 100, LFO.defaults.depth, function(depth)
-      if depth == 0 then restore_lfo_destination(n) end
+      if depth == 0 then release_direct(n) end
       edited(n, false)
     end)
     add_percent(n, "offset", "offset", -100, 100, 0, function() edited(n, false) end)
@@ -924,10 +959,12 @@ return function(S)
     add_percent(n, "depth_mod_amt", "depth mod amount", -100, 100, 0, function() edited(n, false) end)
   end
 
-  -- PARAMS: one group per LFO (lib/params_setup.lua's lfos record)
+  -- PARAMS: one group per LFO (lib/params_setup.lua's lfos record), after
+  -- the destination list is built whole, the registered destinations
+  -- included
   function add_lfo_params()
-    local destination_labels, destination_keys = lfo_destination_labels()
-    for n = 1, NUM_LFOS do add_lfo_group(n, destination_labels, destination_keys) end
+    build_destinations(S.registry.lfo_destinations)
+    for n = 1, NUM_LFOS do add_lfo_group(n) end
   end
 
   ---------------------------------------------------------------------------
@@ -937,9 +974,9 @@ return function(S)
   -- The LFOs' scene fields, which lib/scenes.lua appends to
   -- S.SCENE_GLOBAL_PARAMS after its built-in globals (the same records, in
   -- this order). Per LFO, in recall order: its settings, then the state,
-  -- so an LFO starts with its settings in place; the destination is a
-  -- scene block (below), set silently before them and brought in by the
-  -- next step with them all (3.7). Rate,
+  -- so an LFO starts with its settings in place; the destination is its
+  -- home routing, in the matrix's block, set before them and brought in by
+  -- the next step with them all. Rate,
   -- depth and offset crossfade (lfo = n: the LFO they belong to), except
   -- toward a scene that stops the running LFO (M.transition_stops): its
   -- depth fades to stop_target (0) and the others hold (#408); the rest
@@ -966,39 +1003,6 @@ return function(S)
   end
   M.SCENE_FIELDS = SCENE_FIELDS
 
-  -- Each LFO's destination in a scene is its key (3.7), the field
-  -- strata_lfo<n>_dest_key: a scene block (a global field holds a number),
-  -- which switches at a transition's end. A scene without it (one saved
-  -- before 3.7, which kept an index under strata_lfo<n>_dest) gets none; a
-  -- key this build lacks is kept and reads as none, with one console line.
-  -- Blocks apply before the globals, so the block sets the key and its
-  -- option silently, with no action: the LFO's settings and state follow,
-  -- and the next step brings the destination in with all of them (a
-  -- changed destination gives the old one back and the new one its first
-  -- send, as after a silent PSET read), never the new destination with the
-  -- old rate and depth (0e's review)
-  for n = 1, NUM_LFOS do
-    local key_id, dest_id = param_id(n, "dest_key"), param_id(n, "dest")
-    S.register_scene_block({
-      key = key_id,
-      discrete = true,
-      default = function() return "none" end,
-      capture = function() return params:get(key_id) end,
-      validate = function(value) return type(value) == "string" and S.lib.io_keyed.refuses(value) == nil end,
-      apply = function(value)
-        local index
-        for position, destination in ipairs(S.LFO_DESTINATIONS) do
-          if destination.key == value then index = position end
-        end
-        if not index then
-          print("strata: LFO " .. n .. "'s destination " .. value .. " is not in this version: none")
-        end
-        params:set(key_id, value, true)
-        params:set(dest_id, index or 1, true)
-      end,
-    })
-  end
-
   -- Whether a smooth transition to scene_data stops LFO n: it runs now and
   -- is off in the scene (lib/scenes.lua's scene_transition_targets)
   function M.transition_stops(n, scene_data)
@@ -1009,7 +1013,7 @@ return function(S)
   -- Modulation sources (design §10.1)
   ---------------------------------------------------------------------------
 
-  -- MOD's row text: the destination (~ in the engine), the depth and the
+  -- MOD's row text: the home routing's destination (~ in the engine), the depth and the
   -- LFOs its rate and depth follow (v3 pitch~ 25% <L2)
   function M.describe(n)
     local inputs = ""

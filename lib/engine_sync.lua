@@ -1,14 +1,13 @@
 -- lib/engine_sync.lua
 -- Param -> engine: send_param_to_engine and the engine senders
 -- (S.engine_senders), the values the engine last got (S.engine_param_values),
--- the LFO offsets they add (S.lfo_last_dest, S.lfo_scaled), and starting,
--- stopping, locking and syncing a voice (the registered voice params'
+-- and starting, stopping, locking and syncing a voice (the registered voice params'
 -- grain keys and syncs included). The functions that were global stay
 -- global, as does engine_param_value; engine_mod_source, with_lfo_offsets,
 -- send_engine_value and grain_key_message are fields of this module's table
 -- (S.lib.engine_sync) for the code that calls them: engine_mod_source and
 -- grain_key_message in lib/params_setup.lua, the other two in lib/lfos.lua
--- (the LFO clock); start_voice for the pattern clock (lib/sequencer.lua);
+-- and lib/matrix.lua (the LFO clock); start_voice for the pattern clock (lib/sequencer.lua);
 -- add_voice_sender for lib/params_setup.lua's voice params, whose sends
 -- to a stopped voice the send budget leaves uncounted (#642).
 -- 3.4's hooks are fields too: the base override (set_base_override,
@@ -29,7 +28,6 @@ return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
   local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
-  local NUM_LFOS = S.constants.NUM_LFOS
 
   -- Convert a Lua mod source (0 = none, 1..NUM_VOICES = voice number) to the
   -- engine's 0-indexed form (-1 = none, 0..NUM_VOICES-1 = voice index)
@@ -39,10 +37,11 @@ return function(S)
   end
 
   -- Param -> engine. A param action stores its value and calls
-  -- send_param_to_engine(id, value), which adds the offsets of any global LFO
-  -- modulating that param, so an edit (or the drift, a mutation, a scene fade)
-  -- never sends the plain value under a running LFO. The LFOs drive the
-  -- engine through the same path (send_engine_value). engine_senders[id]
+  -- send_param_to_engine(id, value), which adds the offsets modulating that
+  -- param (the matrix's, an LFO's home routing among them, and the macros'
+  -- LFO extras), so an edit (or the drift, a mutation, a scene fade) never
+  -- sends the plain value under a running LFO. The LFOs and the matrix drive
+  -- the engine through the same path (send_engine_value). engine_senders[id]
   -- holds the engine call for a param (gated on the voice running where the
   -- engine needs that). engine_param_values remembers the last value sent per
   -- param, so a command that carries several params (setFilter, setDelay,
@@ -51,8 +50,6 @@ return function(S)
   -- other.
   S.engine_senders = {}
   S.engine_param_values = {}
-  S.lfo_last_dest = {}   -- per LFO: param id it modulates now (nil = none)
-  S.lfo_scaled = {}      -- per LFO: its last scaled value (-depth..depth) at S.lfo_last_dest
 
   -- The value the engine last got for a param (its stored value until sent)
   function engine_param_value(param_id)
@@ -84,35 +81,22 @@ return function(S)
     return value * engine_factor(param_id)
   end
 
-  -- value plus scaled * half the range of every LFO on param_id (LFOs on one
-  -- destination add up) and every extra offset on it, clamped once to the
-  -- range; value itself when nothing modulates it. A base override set on
-  -- the param takes value's place (a step lock holds the engine there).
-  -- The param's engine factors multiply the result last, after the clamp,
-  -- so a factor can take the engine past the param's range (3.7)
+  -- value plus every extra offset on param_id (the matrix's, which sums the
+  -- LFOs' home routings with the R routings, and the macros' LFO extras),
+  -- clamped once to the range; value itself when nothing modulates it. A
+  -- base override set on the param takes value's place (a step lock holds
+  -- the engine there). The param's engine factors multiply the result
+  -- last, after the clamp, so a factor can take the engine past the
+  -- param's range (3.7). The name is 3.4's: the LFOs' offsets come through
+  -- the matrix since the groundwork before 3.8
   local function with_lfo_offsets(param_id, value)
     local override = base_overrides[param_id]
     if override ~= nil then value = override end
-    local offset, modulated = 0, false
-    for n = 1, NUM_LFOS do
-      if S.lfo_last_dest[n] == param_id then
-        offset = offset + S.lfo_scaled[n]
-        modulated = true
-      end
-    end
-    local minval, maxval
     local extras = extra_offsets[param_id]
-    if modulated then
-      minval, maxval = param_range(param_id)
-      offset = offset * 0.5 * (maxval - minval)
-    end
-    if extras then
-      for _, extra in pairs(extras) do offset = offset + extra end
-      if not modulated then minval, maxval = param_range(param_id) end
-      modulated = true
-    end
-    if not modulated then return factored(param_id, value) end
-    return factored(param_id, util.clamp(value + offset, minval, maxval))
+    if not extras then return factored(param_id, value) end
+    local offset = 0
+    for _, extra in pairs(extras) do offset = offset + extra end
+    return factored(param_id, util.clamp(value + offset, param_range(param_id)))
   end
 
   -- A voice param's engine sender (lib/params_setup.lua's synthesis, grain,
@@ -366,7 +350,7 @@ return function(S)
     end
   end)
 
-  -- A param's stored value, as modulated by the LFOs on it. Always sends.
+  -- A param's stored value, as modulated (with_lfo_offsets). Always sends.
   function send_param_to_engine(param_id, value)
     send_engine_value(param_id, with_lfo_offsets(param_id, value))
   end
@@ -407,7 +391,7 @@ return function(S)
   S.register_param_touch(function(param_id) M.clear_base_override(param_id) end)
 
   -- An extra offset on a Lua destination, in the param's units (nil
-  -- clears): summed with the LFOs' in with_lfo_offsets and clamped once
+  -- clears): summed with the others in with_lfo_offsets and clamped once
   -- with them. Sends nothing: the source sends the param when it moves
   function M.set_extra_offset(source_key, param_id, offset)
     local extras = extra_offsets[param_id]

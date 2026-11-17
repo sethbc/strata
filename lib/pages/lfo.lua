@@ -4,10 +4,12 @@
 -- destination, depth), and under the selected LFO's row a strip of its
 -- twelve fields (destination, shape, mode, rate, depth, offset, phase, rate
 -- mod, rate amt, depth mod, depth amt, on/off). E2 moves along the strip, E3
--- edits the field (ALT+E3 on the destination jumps a group, on the rate is
--- fine, on a percent keeps whole steps), K2/K3 select the LFO, ALT+K2 on
+-- edits the field (the destination is the LFO's home routing in the matrix,
+-- S.lib.matrix.edit_home; ALT+E3 on it jumps a group, on the rate is fine,
+-- on a percent keeps whole steps), K2/K3 select the LFO, ALT+K2 on
 -- release randomizes the selected LFO's shape, rate or division and phase
--- (again within 5 s to undo; held past the hold time, it resets the field),
+-- (again within 5 s to undo; held past the hold time, it resets the field,
+-- the destination to none),
 -- ALT+K3 and the arc button turn the LFO on and off. Registers its
 -- S.registry.pages record. The strip's cursor is S.lfo_field (an index into
 -- LFO_FIELDS). The functions that were global stay global, as do
@@ -84,10 +86,11 @@ return function(S)
   end
 
   -- The strip's fields, in order: label (the hint row's E3:<label>), the
-  -- param E3 edits for LFO n (nil: the on/off field), whether ALT+E3 keeps
-  -- whole steps (a percent), and the value the strip shows
+  -- param E3 edits for LFO n (none for the destination, the matrix's home
+  -- routing), whether ALT+E3 keeps whole steps (a percent), and the value
+  -- the strip shows
   local LFO_FIELDS = {
-    {label = "dest", param = function(n) return lfo_param(n, "dest") end, value = function(n) return lfos().label(n) end},
+    {label = "dest", value = function(n) return lfos().label(n) end},
     {label = "shape", param = function(n) return lfo_param(n, "shape") end,
       value = function(n) return params:string(lfo_param(n, "shape")) end},
     {label = "mode", param = function(n) return lfo_param(n, "mode") end,
@@ -153,6 +156,13 @@ return function(S)
       end
     end
     return index
+  end
+
+  -- Aim LFO n's home routing at entry index of S.LFO_DESTINATIONS (none at
+  -- 1), as the LFO page edits it
+  local function aim_home(n, index)
+    index = util.clamp(index, 1, #S.LFO_DESTINATIONS)
+    S.lib.matrix.edit_home(n, lfos().destination_id(index))
   end
 
   -- Turn LFO n on or off, as a controller mapped to it sees (#538)
@@ -346,6 +356,8 @@ return function(S)
       local lfo = S.selected_lfo
       if S.lfo_field == STATE_FIELD then
         set_lfo_running(lfo, d > 0)
+      elseif S.lfo_field == DEST_FIELD then
+        aim_home(lfo, lfos().destination_index(lfo) + d)
       else
         enc_param_delta(n, LFO_FIELDS[S.lfo_field].param(lfo), d)
       end
@@ -363,12 +375,11 @@ return function(S)
       return true
     end
     if S.lfo_field ~= DEST_FIELD then return false end
-    local dest_id = field.param(S.selected_lfo)
-    local index = params:get(dest_id)
+    local index = lfos().destination_index(S.selected_lfo)
     for _ = 1, math.abs(d) do
       index = lfo_dest_group_jump(index, d)
     end
-    params:set(dest_id, index)
+    aim_home(S.selected_lfo, index)
     return true
   end
 
@@ -416,8 +427,13 @@ return function(S)
   end
 
   -- ALT+K2 held ALT_HOLD_SECONDS resets the cursor's field to its default
+  -- (the destination to none)
   local function lfo_alt_hold()
     local lfo = S.selected_lfo
+    if S.lfo_field == DEST_FIELD then
+      S.lib.matrix.edit_home(lfo, "")
+      return
+    end
     local param_id = LFO_FIELDS[S.lfo_field].param(lfo)
     if S.lfo_field == STATE_FIELD then
       set_lfo_running(lfo, param_default(param_id) == 1)
@@ -447,15 +463,16 @@ return function(S)
       if option == name then return index end
     end
   end
-  local function destination_labeled(label)
-    for index, destination in ipairs(S.LFO_DESTINATIONS) do
-      if destination.label == label then return index end
+  -- LFO n's home routing aimed at the destination called label
+  local function aim_labeled(n, label)
+    for _, destination in ipairs(S.LFO_DESTINATIONS) do
+      if destination.label == label then S.lib.matrix.set_home(n, destination.key) end
     end
   end
   -- LFO n at its widest: the last destination, a wide shape, the widest
   -- percents, its mod sources (LFO 1 has none)
   local function widest(n)
-    params:set(lfo_param(n, "dest"), #S.LFO_DESTINATIONS)
+    aim_home(n, #S.LFO_DESTINATIONS)
     params:set(lfo_param(n, "shape"), option_named(lfo_param(n, "shape"), "smooth"))
     params:set(lfo_param(n, "rate"), 0.003)
     params:set(lfo_param(n, "depth"), 100)
@@ -478,33 +495,33 @@ return function(S)
     table.insert(layout_states, layout_state("window " .. first .. "-" .. (first + LFO_PAGE.window_rows - 1), selected,
       DEST_FIELD, function()
         for n = first, first + LFO_PAGE.window_rows - 1 do
-          params:set(lfo_param(n, "dest"), destination_labeled(n % 2 == 0 and "density" or "v7 pitch"))
+          aim_labeled(n, n % 2 == 0 and "density" or "v7 pitch")
           params:set(lfo_param(n), 1)
         end
       end))
   end
   table.insert(layout_states, layout_state("engine-run and modulated", 3, DEST_FIELD, function()
-    params:set(lfo_param(3, "dest"), destination_labeled("v7 pitch"))
+    aim_labeled(3, "v7 pitch")
     params:set(lfo_param(3, "rate_mod"), option_named(lfo_param(3, "rate_mod"), "L1"))
     params:set(lfo_param(3, "depth_mod"), option_named(lfo_param(3, "depth_mod"), "L2"))
     params:set(lfo_param(3, "depth"), 100)
     params:set(lfo_param(1), 1); params:set(lfo_param(3), 1)
   end))
   table.insert(layout_states, layout_state("rate max", 2, RATE_FIELD, function()
-    params:set(lfo_param(2, "dest"), destination_labeled("dly fdbk"))
+    aim_labeled(2, "dly fdbk")
     params:set(lfo_param(2, "rate"), 12.5)
     params:set(lfo_param(2), 1)
   end))
   table.insert(layout_states, layout_state("clocked", 5, RATE_FIELD, function()
     params:set(lfo_param(5, "mode"), option_named(lfo_param(5, "mode"), "clocked"))
     params:set(lfo_param(5, "division"), option_named(lfo_param(5, "division"), "1/16"))
-    params:set(lfo_param(5, "dest"), destination_labeled("rev damp"))
+    aim_labeled(5, "rev damp")
     params:set(lfo_param(5), 1)
   end))
   -- destinations whose labels have descenders over the state text (#422)
   for index, label in ipairs({"density", "v1 pos", "dly fdbk"}) do
     table.insert(layout_states, layout_state("descender " .. label, index, DEST_FIELD, function()
-      params:set(lfo_param(index, "dest"), destination_labeled(label))
+      aim_labeled(index, label)
       params:set(lfo_param(index), 1)
     end))
   end

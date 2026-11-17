@@ -474,7 +474,7 @@ test("scaleNote follows a freq change, a root change, a quantize change and a so
   end
   assert_true(dest ~= nil, "v1 main is an LFO destination")
   do
-    params:set("strata_lfo1_dest", dest)
+    local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(dest))
     params:set("strata_lfo1_shape", 3); params:set("strata_lfo1_rate", 10)   -- a 10 Hz square: up, down, up
     params:set("strata_lfo1_depth", 100); params:set("strata_lfo1", 1)
     context.clock.run_for(0.25)

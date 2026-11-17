@@ -109,7 +109,7 @@ test("the voice filter cutoff and both sends are LFO destinations", function()
   end
   -- an LFO on v1's reverb send modulates the engine value, never the param
   params:set("v1_reverb_send", 0.5)
-  params:set("strata_lfo1_dest", labels["v1 rsend"])
+  local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(labels["v1 rsend"]))
   params:set("strata_lfo1_shape", 3); params:set("strata_lfo1_rate", 0.003)   -- a square at its top
   params:set("strata_lfo1_depth", 100); params:set("strata_lfo1", 1)
   context.clear_engine_calls()

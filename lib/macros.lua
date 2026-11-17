@@ -248,13 +248,10 @@ return function(S)
     S.lib.lfos.direct_destination(macro_id(m))
   end
 
-  -- Whether an LFO modulates macro m now (its Lua destination is the macro)
+  -- Whether an LFO modulates macro m now (its home routing is the macro,
+  -- and it plays: S.lib.lfos.modulates)
   local function modulated(m)
-    local id = macro_id(m)
-    for n = 1, S.constants.NUM_LFOS do
-      if S.lfo_last_dest[n] == id then return true end
-    end
-    return false
+    return S.lib.lfos.modulates(macro_id(m))
   end
 
   -- Whether macro m's extras were worked out from what holds now: the
@@ -278,7 +275,7 @@ return function(S)
   S.lib.lfos.on_step(function()
     for m = 1, NUM_MACROS do
       if (modulated(m) or next(extras[m]) ~= nil) and not extras_current(m) then
-        lfo_moved(m, S.lib.engine_sync.with_lfo_offsets(macro_id(m), params:get(macro_id(m))))
+        lfo_moved(m, S.lib.lfos.direct_value(macro_id(m)))
       end
     end
   end)

@@ -814,7 +814,7 @@ test("MAIN marks a voice an engine LFO, scatter or a routing moves", function()
       if destination.label == label then return index end
     end
   end
-  params:set("strata_lfo1_dest", destination_labeled("v1 pitch"))
+  local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(destination_labeled("v1 pitch")))
   params:set("strata_lfo1_depth", 25)
   assert_true(not marked("an engine LFO that is off"), "off: no mark")
   params:set("strata_lfo1", 1)
@@ -822,7 +822,7 @@ test("MAIN marks a voice an engine LFO, scatter or a routing moves", function()
   select_voice(2)
   assert_true(not marked("voice 2"), "not another voice")
   select_voice(1)
-  params:set("strata_lfo1_dest", destination_labeled("v1 main"))
+  local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(destination_labeled("v1 main")))
   assert_true(not marked("an LFO in Lua"), "an LFO Lua runs is no engine modulation")
   params:set("strata_lfo1", 0)
   -- scatter, on an unlocked voice
@@ -852,8 +852,8 @@ test("MAIN's mark reads whether an LFO plays in the engine from the LFO module",
   local S = local_value("S")
   show_page("MAIN")
   select_voice(1)
-  for index, destination in ipairs(S.LFO_DESTINATIONS) do
-    if destination.label == "v1 pitch" then params:set("strata_lfo2_dest", index) end
+  for _, destination in ipairs(S.LFO_DESTINATIONS) do
+    if destination.label == "v1 pitch" then local_value("S").lib.matrix.set_home(2, destination.key) end
   end
   assert_equal(type(S.lib.lfos.engine_playing), "function", "the LFO module answers it")
   assert_true(not S.lib.lfos.engine_playing(2), "LFO 2 is off")
