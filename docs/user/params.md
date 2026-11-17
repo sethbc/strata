@@ -4,7 +4,7 @@ Everything in the norns PARAMETERS menu, grouped by topic. Back to the [README](
 
 After norns' own settings, the menu shows Strata's master settings, mutations and scenes first, then the **fx**, **LFO 1-6**, **macros**, **morph**, **scatter**, **matrix**, **input**, **gestures**, **random sequences**, **out midi**, **crow**, **out ii**, **out nb**, **tape**, **sequencer**, **buffers**, **record**, **positions**, **midi** and **zones** groups, then the **scale** section, then one section per voice. Grouped by topic:
 
-PSETs (PARAMETERS > PSET) save every one of them. A PSET loads every setting it holds as it is, and a setting it does not hold (one added since it was saved) at its default. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
+PSETs (PARAMETERS > PSET) save every one of them, and the sixteen scenes beside it (`<pset>.scenes.data`: [Saved scenes on disk](scenes.md#saved-scenes-on-disk)). A PSET loads every setting it holds as it is, and a setting it does not hold (one added since it was saved) at its default. Any PSET's whole-number settings (a modulation source, the sequence length, ...) load as whole numbers, even if a fraction was saved.
 
 ## Master
 - Master density

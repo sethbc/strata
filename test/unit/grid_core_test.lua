@@ -1457,6 +1457,23 @@ test("a grids.data that is not Strata's settings reads as rotation 0 and is neve
     local context = load_strata({ before_init = write_grids_data(case) })
     finish_startup(context)
     for port = 1, 4 do assert_equal(grid_core().rotation(port), 0, "case " .. index .. " port " .. port) end
+    -- a file that fails whole is set aside (the groundwork's ruling 35);
+    -- case 4, a version 1 file with bad entries, is used and stays
+    local path = context.data_dir .. "strata/grids.data"
+    local lines = {}
+    for _, line in ipairs(context.printed) do
+      if line:find("grids.data", 1, true) then lines[#lines + 1] = line end
+    end
+    if index == 4 then
+      assert_true(not util.file_exists(path .. ".bak"), "case 4 is not set aside")
+      assert_true(util.file_exists(path), "case 4 stays")
+    else
+      local text = type(case) == "string" and case or local_value("S").lib.data_files.encode(case)
+      assert_equal(h.file_text(path .. ".bak"), text, "case " .. index .. ": the bytes kept")
+      assert_equal(#lines, 1, "case " .. index .. ": one line")
+      assert_true(lines[1]:find(": every grid rotation is 0; kept as grids.data.bak", 1, true) ~= nil,
+        "case " .. index .. ": " .. tostring(lines[1]))
+    end
   end
   assert_equal(rawget(_G, "ran_grids_data"), nil, "the file was never run")
   -- a version 1 file's valid entries are kept, the others read as 0
@@ -1464,6 +1481,36 @@ test("a grids.data that is not Strata's settings reads as rotation 0 and is neve
   finish_startup(context)
   local core = grid_core()
   assert_equal(core.rotation(1) .. core.rotation(2) .. core.rotation(3) .. core.rotation(4), "3010")
+end)
+
+test("an unusable grids.data is set aside before a rotation writes a new one", function()
+  local function unusable(taken)
+    return function(c)
+      local path = c.data_dir .. "strata/grids.data"
+      os.execute("mkdir -p '" .. c.data_dir .. "strata'")
+      h.write_text(path, "return {")
+      if taken then
+        os.execute("mkdir -p '" .. path .. ".bak'")
+        for number = 2, 9 do os.execute("mkdir -p '" .. path .. ".bak." .. number .. "'") end
+      end
+    end
+  end
+  local context = load_strata({ before_init = unusable(false) }); finish_startup(context)
+  local path = context.data_dir .. "strata/grids.data"
+  assert_equal(grid_core().set_rotation(1, 1), true, "set")
+  assert_equal(local_value("S").lib.data_files.read(path).rotation[1], 1, "the new file holds it")
+  assert_equal(h.file_text(path .. ".bak"), "return {", "the old bytes kept")
+  -- every backup name taken: not moved, and the next write goes over it
+  context = load_strata({ before_init = unusable(true) }); finish_startup(context)
+  path = context.data_dir .. "strata/grids.data"
+  local lines = {}
+  for _, line in ipairs(context.printed) do
+    if line:find("grids.data", 1, true) then lines[#lines + 1] = line end
+  end
+  assert_equal(#lines, 1, "one line")
+  assert_true(lines[1]:find("; not moved: every backup name is taken", 1, true) ~= nil, lines[1])
+  assert_equal(grid_core().set_rotation(1, 2), true, "a rotation can still be set")
+  assert_equal(local_value("S").lib.data_files.read(path).rotation[1], 2, "written over the unusable file")
 end)
 
 test("a rotation that cannot be written is not set", function()

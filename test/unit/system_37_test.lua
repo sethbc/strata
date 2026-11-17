@@ -330,6 +330,126 @@ test("a scenes file older than format 9 and a version 1 buffers.data are set asi
   cleanup()
 end)
 
+-- The lines a read printed from index `from` on that hold "error", in any case
+local function error_lines(context, from)
+  local found = {}
+  for index = from, #context.printed do
+    if context.printed[index]:lower():find("error", 1, true) then found[#found + 1] = context.printed[index] end
+  end
+  return found
+end
+
+-- Each LFO's destination key as a 3.7 PSET holds it beside the option
+local KEYS_3_7 = {"v2_main", "reverb_mix", "none", "none", "none", "none"}
+
+-- The groundwork's Review Focus 1: a PSET 3.7 saved, loaded after the
+-- update. The 3.6 fixture's PSET as 3.7 writes it (midi_note_off 3, 3.7's
+-- release, and each LFO's destination line with its key line: twelve lines
+-- that name no param now), its version 1 matrix file, and no scenes file
+test("a 3.7 PSET and its side files load with no error line", function()
+  math.randomseed(SYSTEM.seed)
+  local files = files_3_6()
+  local subdir, dir = fresh_dir("system37-pset-3-7")
+  local root = h.data_root .. subdir .. "/"
+  local audio = root .. "audio/"
+  os.execute("mkdir -p '" .. audio .. "'")
+  local text, count = files[PSET_3_6.base .. ".pset"]:gsub("@AUDIO@", audio)
+  text, count = text:gsub('"midi_note_off": 1\n', '"midi_note_off": 3\n')
+  assert_equal(count, 1, "the note off line")
+  text, count = text:gsub('("strata_lfo(%d)_dest": [^\n]*\n)', function(line, n)
+    return line .. '"strata_lfo' .. n .. '_dest_key": ' .. KEYS_3_7[tonumber(n)] .. "\n"
+  end)
+  assert_equal(count, 6, "six destination lines, each given its key line")
+  local pset = root .. PSET_3_6.base .. ".pset"
+  write_text(pset, text)
+  for _, key in ipairs(PSET_3_6.sides) do
+    local name = PSET_3_6.base .. "." .. key .. ".data"
+    write_text(root .. name, files[name])
+  end
+  assert_true(files[PSET_3_6.base .. ".matrix.data"]:find('["version"]=1,', 1, true) ~= nil, "a version 1 matrix file")
+  local context = load_strata({data_subdir = subdir}); finish_startup(context)
+  local S = local_value("S")
+  h.scramble_state(SYSTEM.seed); S.lib.scenes.save(2)  -- live scenes no PSET holds
+  local scenes_before, live_text = S.lib.data_files.encode(S.scenes), file_text(dir .. "scenes.data")
+  local from = #context.printed + 1
+  params:read(pset)
+  lfo_step(context, 3)
+  local errors = error_lines(context, from)
+  assert_equal(#errors, 0, "no line holding error: " .. table.concat(errors, " | "))
+  for n = 1, S.constants.NUM_LFOS do assert_equal(S.lib.matrix.home(n), "", "LFO " .. n .. " aimed at nothing") end
+  assert_equal(S.lib.midi_in.note_off_mode(), "release", "3.7's release reads as release")
+  local routing = S.lib.matrix.routing(1)
+  assert_equal(routing.source, PSET_3_6.routing.source, "routing 1 holds")
+  assert_equal(routing.dest, PSET_3_6.routing.dest)
+  assert_equal(S.lib.data_files.encode(S.scenes), scenes_before, "the live scenes untouched")
+  assert_equal(file_text(dir .. "scenes.data"), live_text, "and the live file")
+  assert_true(not util.file_exists(dir .. "scenes.data.bak"), "no backup")
+  cleanup()
+end)
+
+-- The groundwork plan's ruling 2: this build's own files, recorded from it
+-- (test/fixtures/groundwork-files.lua; its header says how), load as saved
+test("this build's own files load: a format 9 scenes file, a PSET and its five side files", function()
+  math.randomseed(SYSTEM.seed)
+  local files = dofile(h.repo_root .. "/test/fixtures/groundwork-files.lua")
+  local subdir, dir = fresh_dir("system-groundwork-files")
+  local root = h.data_root .. subdir .. "/"
+  local audio = root .. "audio/"
+  os.execute("mkdir -p '" .. audio .. "'")
+  local base = root .. "strata-05"
+  write_text(dir .. "scenes.data", (files["scenes.data"]:gsub("@DATA@", root)))
+  local pset_text = files["strata-05.pset"]:gsub("@AUDIO@", audio)
+  write_text(base .. ".pset", pset_text)
+  local sides = {"macros", "matrix", "gestures", "sequences", "scenes"}
+  for _, key in ipairs(sides) do
+    write_text(base .. "." .. key .. ".data", files["strata-05." .. key .. ".data"])
+  end
+  local context = load_strata({data_subdir = subdir}); finish_startup(context)
+  local S = local_value("S")
+  -- the live scenes file: format 9, held by PSET 5
+  assert_equal(S.scene_file.problem, nil, "the scenes file loads")
+  assert_equal(S.scene_file.pset, base, "naming the PSET that holds its scenes")
+  assert_true(S.scenes[1].populated and S.scenes[4].populated, "scenes 1 and 4")
+  assert_equal(S.lib.scenes.name(4), "four", "with scene 4's name")
+  assert_equal(S.scenes[1].data.patterns[2][3], 9, "scene 1's voice 2 step 3 at level 9")
+  local scenes_before = S.lib.data_files.encode(S.scenes)
+  -- the PSET and its five side files
+  local from = #context.printed + 1
+  params:read(base .. ".pset")
+  lfo_step(context, 3)
+  local errors = error_lines(context, from)
+  assert_equal(#errors, 0, "no line holding error: " .. table.concat(errors, " | "))
+  local compared = 0
+  for _, entry in ipairs(pset_lines(pset_text)) do
+    local id = entry.id
+    assert_true(params.lookup[id] ~= nil, id .. ": every line names a param of this build")
+    if params:lookup_param(id).t ~= params.tGROUP then
+      local number = tonumber(entry.value)
+      if number and params:lookup_param(id).t ~= params.tTEXT then
+        assert_near(params:get(id), number, 1e-9 * math.max(1, math.abs(number)), id .. " as saved")
+      else
+        assert_equal(tostring(params:get(id)), entry.value, id .. " as saved")
+      end
+      compared = compared + 1
+    end
+  end
+  assert_true(compared > 800, compared .. " of the PSET's values compared")
+  assert_equal(S.scenes[1].data.voices[1].source, 2, "scene 1 holds voice 1 on buffer 1")
+  local routing = S.lib.matrix.routing(1)
+  assert_equal(routing.source, "macro1", "routing 1 from the matrix file"); assert_equal(routing.dest, "v3_grain_pitch")
+  assert_equal(S.lib.matrix.home(1), "v2_main", "LFO 1's home"); assert_equal(S.lib.matrix.home(2), "reverb_mix")
+  local target = S.lib.macros.targets(1)[1]
+  assert_equal(target.id, "reverb_mix", "macro 1's target from the macros file")
+  assert_near(target.min, 0.2, 1e-9); assert_near(target.max, 0.8, 1e-9)
+  assert_equal(S.lib.data_files.encode(S.scenes), scenes_before, "the PSET's scenes are the ones the live file held")
+  assert_equal(S.scene_file.pset, base, "still held by PSET 5")
+  assert_true(not util.file_exists(dir .. "scenes.data.bak"), "no backup: a PSET held the live scenes")
+  for _, key in ipairs(sides) do
+    assert_true(not util.file_exists(base .. "." .. key .. ".data.bak"), key .. ": nothing set aside")
+  end
+  cleanup()
+end)
+
 ---------------------------------------------------------------------------
 -- 4 and 5. A sliced loop with everything on
 ---------------------------------------------------------------------------

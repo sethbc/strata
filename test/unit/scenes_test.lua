@@ -3801,4 +3801,338 @@ test("a scene voice missing a key, or holding another voice's synth key, is refu
   refused(function(voices) voices[6].params = {} end, "a 3.7 field beside values")
 end)
 
+-------------------------------------------------------------------------------
+-- Scenes with the PSET (the groundwork before 3.8, design §6, rulings 34
+-- and 35): <pset>.scenes.data beside every PSET, the live file's pset field
+-------------------------------------------------------------------------------
+
+-- A data folder name no other test of this run uses: a count, never
+-- math.random (scramble_state seeds it, so a name drawn after it repeats)
+local pset_folders = 0
+local function fresh_name()
+  pset_folders = pset_folders + 1
+  return tostring(pset_folders)
+end
+
+-- A session of its own data folder (data_subdir), started
+local function pset_session(subdir)
+  local context = load_strata({ data_subdir = subdir or ("pset-scenes-" .. fresh_name()) })
+  finish_startup(context)
+  return context, local_value("S")
+end
+
+-- PSET n's path, its base (no .pset) and its scenes file
+local function pset_files(context, n)
+  local base = context.data_dir .. string.format("strata-%02d", n)
+  return base .. ".pset", base, base .. ".scenes.data"
+end
+
+local function live_scenes_path(context) return context.data_dir .. "strata/scenes.data" end
+
+local function lines_holding(context, text)
+  local found = {}
+  for _, line in ipairs(context.printed) do
+    if line:find(text, 1, true) then found[#found + 1] = line end
+  end
+  return found
+end
+
+test("a PSET save writes its sixteen scenes beside it, an empty set too", function()
+  local context, S = pset_session()
+  local pset, base, side = pset_files(context, 1)
+  params:write(pset)
+  local written = S.lib.data_files.read(side)
+  assert_equal(type(written), "table", "strata-01.scenes.data written")
+  assert_equal(written.version, S.constants.SCENE_DATA_VERSION, "format 9")
+  assert_equal(#written.scenes, S.constants.NUM_SCENES, "sixteen slots")
+  for slot = 1, S.constants.NUM_SCENES do assert_true(not written.scenes[slot].populated, "slot " .. slot .. " empty") end
+  assert_equal(S.lib.data_files.read(live_scenes_path(context)).pset, base, "the live file names the PSET")
+  assert_equal(S.scene_file.pset, base)
+  -- a capture clears the mark at its write; the next PSET's save holds it and sets it
+  scramble_state(4); S.lib.scenes.save(3)
+  assert_equal(S.scene_file.pset, nil, "a capture: no PSET holds these scenes")
+  assert_equal(S.lib.data_files.read(live_scenes_path(context)).pset, nil, "and the live file says so")
+  local pset_2, base_2, side_2 = pset_files(context, 2)
+  params:write(pset_2)
+  local second = S.lib.data_files.read(side_2)
+  assert_true(second.scenes[3].populated, "the PSET holds scene 3")
+  assert_equal(S.lib.data_files.encode(second.scenes), S.lib.data_files.encode(S.scenes), "exactly the live scenes")
+  assert_equal(S.lib.data_files.read(live_scenes_path(context)).pset, base_2, "the live file names PSET 2")
+  -- a name clears it too
+  S.lib.scenes.set_name(3, "dusk")
+  assert_equal(S.lib.data_files.read(live_scenes_path(context)).pset, nil, "a name: cleared before the write")
+end)
+
+test("a PSET load replaces the live scenes, rewrites the live file and recalls nothing", function()
+  for _, case in ipairs({ { current = 1, kept = true }, { current = 2, kept = false } }) do
+    local context, S = pset_session()
+    local pset_1, base_1, side_1 = pset_files(context, 1)
+    local pset_2 = pset_files(context, 2)
+    scramble_state(5); S.lib.scenes.save(1)
+    params:write(pset_1)
+    scramble_state(6); S.lib.scenes.save(2)
+    params:write(pset_2)
+    recall_scene(case.current, 0)
+    assert_equal(S.current_scene, case.current, "scene " .. case.current .. " current")
+    local takeovers = S.lib.scenes.takeovers()
+    local recalls = 0
+    local real_recall, real_instant = recall_scene, recall_scene_instant
+    recall_scene = function(...) recalls = recalls + 1; return real_recall(...) end
+    recall_scene_instant = function(...) recalls = recalls + 1; return real_instant(...) end
+    local revision = S.lib.scenes.revision(1)
+    params:read(pset_1)
+    recall_scene, recall_scene_instant = real_recall, real_instant
+    assert_equal(recalls, 0, "nothing recalled")
+    assert_equal(S.lib.scenes.takeovers(), takeovers, "no recall started")
+    assert_true(S.scenes[1].populated, "PSET 1's scene 1")
+    assert_true(not S.scenes[2].populated, "and no scene 2: it was captured after PSET 1")
+    assert_true(S.lib.scenes.revision(1) > revision, "every revision raised")
+    assert_true(S.lib.scenes.playable(1) and not S.lib.scenes.playable(2), "the cache follows the new scenes")
+    assert_equal(S.current_scene, case.kept and case.current or 0,
+      "the current scene kept only when its slot holds the same: " .. case.current)
+    local live = S.lib.data_files.read(live_scenes_path(context))
+    assert_equal(S.lib.data_files.encode(live.scenes), S.lib.data_files.encode(S.lib.data_files.read(side_1).scenes),
+      "the live file holds PSET 1's scenes")
+    assert_equal(live.pset, base_1, "and names PSET 1")
+    assert_true(not util.file_exists(live_scenes_path(context) .. ".bak"), "no backup: PSET 2 held the live scenes")
+  end
+end)
+
+test("a PSET load ends a running transition, and the sequencer and the chain go on over the new scenes", function()
+  -- PSET 1, made in a session of its own: scenes 3 and 4, the scene
+  -- sequencer on (saved so, not started) over 4 slots, the chain over slots 1-4
+  local _, S = pset_session()
+  local shared = data_root .. "pset-shared-" .. fresh_name() .. "/"
+  os.execute("mkdir -p '" .. shared .. "'")
+  local pset_1 = shared .. "strata-01.pset"
+  local function sequencer_settings()
+    params:set("scene_sequence_length", 4); params:set("scene_duration", 2); params:set("scene_transition_time", 4)
+    params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 4)
+    params:set("seq_chain_bars", 1)
+  end
+  -- each scene's voice 1 plays one step of its own: the step is the slot
+  local function mark(slot)
+    for step = 1, S.constants.PATTERN_LENGTH do S.patterns[1][step] = step == slot and 15 or 0 end
+  end
+  scramble_state(7); mark(3); S.lib.scenes.save(3)
+  scramble_state(8); mark(4); S.lib.scenes.save(4)
+  sequencer_settings()
+  params:set("scene_sequencer_enabled", 1, true)
+  params:write(pset_1)
+  -- the session the PSET is loaded in: scenes 1 and 2, a 4 s fade, the
+  -- scene sequencer and the chain running
+  local context
+  context, S = pset_session()
+  scramble_state(9); mark(1); S.lib.scenes.save(1)
+  scramble_state(10); mark(2); S.lib.scenes.save(2)
+  params:write((pset_files(context, 2)))  -- a PSET holds the live scenes: no backup at the load
+  sequencer_settings()
+  pattern_clock_start()
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1, 0.001)
+  assert_true(S.scene_transition_active, "a fade runs")
+  local recalls, links = {}, {}
+  local real_recall = recall_scene
+  recall_scene = function(slot, ...)
+    recalls[#recalls + 1] = slot
+    return real_recall(slot, ...)
+  end
+  -- every pattern voice 1 is given (the chain's links, and the recalls'),
+  -- by the step it plays
+  local sequencer = S.lib.sequencer
+  local real_replace = sequencer.replace_pattern
+  sequencer.replace_pattern = function(voice_idx, pattern, ...)
+    if voice_idx == 1 then
+      for step = 1, S.constants.PATTERN_LENGTH do
+        if pattern[step] > 0 then links[#links + 1] = step end
+      end
+    end
+    return real_replace(voice_idx, pattern, ...)
+  end
+  params:read(pset_1)
+  assert_true(not S.scene_transition_active, "the fade ended")
+  assert_true(S.scene_sequencer_enabled, "the scene sequencer still runs")
+  assert_equal(#recalls, 0, "the load recalls nothing")
+  local next_slot = S.lib.scenes.sequencer_next_slot()
+  assert_true(next_slot == 3 or next_slot == 4, "the sequencer's next slot is a new scene: " .. tostring(next_slot))
+  context.clock.run_for(12, 0.001)
+  recall_scene, sequencer.replace_pattern = real_recall, real_replace
+  assert_true(#recalls > 0, "the sequencer went on")
+  for index, slot in ipairs(recalls) do
+    assert_true(slot == 3 or slot == 4, "recall " .. index .. " from the new scenes: " .. tostring(slot))
+  end
+  assert_true(#links > #recalls, "the chain linked too: " .. #links .. " patterns for " .. #recalls .. " recalls")
+  for index, step in ipairs(links) do
+    assert_true(step == 3 or step == 4, "pattern " .. index .. " from the new scenes: step " .. step)
+  end
+  pattern_clock_stop()
+end)
+
+test("a PSET delete removes its scenes file and the live file's mark", function()
+  local context, S = pset_session()
+  local pset_1, base_1, side_1 = pset_files(context, 1)
+  local pset_2, _, side_2 = pset_files(context, 2)
+  params:write(pset_2)
+  params:write(pset_1)
+  assert_equal(S.scene_file.pset, base_1, "PSET 1 holds the live scenes")
+  params:delete(pset_2)
+  assert_true(not util.file_exists(side_2), "PSET 2's scenes file deleted")
+  assert_equal(S.scene_file.pset, base_1, "another PSET's delete keeps the mark")
+  params:delete(pset_1)
+  assert_true(not util.file_exists(side_1), "PSET 1's scenes file deleted")
+  assert_equal(S.scene_file.pset, nil, "the mark cleared")
+  assert_equal(S.lib.data_files.read(live_scenes_path(context)).pset, nil, "in the live file too")
+end)
+
+test("a PSET with no scenes file leaves the live scenes, with no backup and no line", function()
+  local context, S = pset_session()
+  local pset_1, _, side_1 = pset_files(context, 1)
+  scramble_state(11); S.lib.scenes.save(1)
+  params:write(pset_1)
+  os.remove(side_1)  -- a PSET saved before scenes traveled with it
+  scramble_state(12); S.lib.scenes.save(2)
+  local before = S.lib.data_files.encode(S.scenes)
+  local live_text = h.file_text(live_scenes_path(context))
+  local printed = #context.printed
+  params:read(pset_1)
+  assert_equal(S.lib.data_files.encode(S.scenes), before, "the live scenes stay")
+  assert_equal(h.file_text(live_scenes_path(context)), live_text, "the live file as it was")
+  assert_true(not util.file_exists(live_scenes_path(context) .. ".bak"), "no backup")
+  for index = printed + 1, #context.printed do
+    assert_true(not context.printed[index]:find("scenes", 1, true), "no scenes line: " .. context.printed[index])
+  end
+end)
+
+test("an unusable scenes file beside a PSET is set aside with one line and the live scenes stay", function()
+  for _, case in ipairs({ "text", "format 8" }) do
+    local context, S = pset_session()
+    local pset_1, _, side_1 = pset_files(context, 1)
+    scramble_state(13); S.lib.scenes.save(1)
+    params:write(pset_1)
+    local text = "return {"
+    if case == "format 8" then
+      local relabeled, count = h.file_text(side_1):gsub('%["version"%]=9,', '["version"]=8,')
+      assert_equal(count, 1, "the one version field")
+      text = relabeled
+    end
+    h.write_text(side_1, text)
+    scramble_state(14); S.lib.scenes.save(2)
+    local before = S.lib.data_files.encode(S.scenes)
+    local live_text = h.file_text(live_scenes_path(context))
+    params:read(pset_1)
+    assert_equal(h.file_text(side_1 .. ".bak"), text, case .. ": the side file set aside whole")
+    local lines = lines_holding(context, "error loading scenes file " .. side_1 .. ": ")
+    assert_equal(#lines, 1, case .. ": one line")
+    assert_true(lines[1]:find("; kept as " .. side_1 .. ".bak", 1, true) ~= nil, lines[1])
+    if case == "format 8" then
+      assert_true(lines[1]:find(": not a version 9 scenes file;", 1, true) ~= nil, "one version named: " .. lines[1])
+    end
+    assert_equal(S.lib.data_files.encode(S.scenes), before, case .. ": the live scenes stay")
+    assert_equal(h.file_text(live_scenes_path(context)), live_text, case .. ": the live file as it was")
+    assert_true(not util.file_exists(live_scenes_path(context) .. ".bak"), case .. ": no live backup")
+  end
+end)
+
+test("a load over unsaved scenes makes one backup first; over none, none", function()
+  local context, S = pset_session()
+  local pset_1, base_1 = pset_files(context, 1)
+  local live = live_scenes_path(context)
+  scramble_state(15); S.lib.scenes.save(1)
+  params:write(pset_1)
+  scramble_state(16); S.lib.scenes.save(2)  -- after the PSET's save: in no PSET
+  local unsaved_text = h.file_text(live)
+  params:read(pset_1)
+  assert_equal(h.file_text(live .. ".bak"), unsaved_text, "the scenes in no PSET kept as scenes.data.bak")
+  assert_equal(#lines_holding(context, "scenes in no PSET kept as " .. live .. ".bak"), 1, "one line names it")
+  assert_true(not S.scenes[2].populated, "then PSET 1's scenes")
+  assert_equal(S.scene_file.pset, base_1)
+  params:read(pset_1)
+  assert_true(not util.file_exists(live .. ".bak.2"), "a second load with no edit makes no backup")
+  assert_equal(#lines_holding(context, "scenes in no PSET kept as "), 1, "and no line")
+end)
+
+test("with no backup name free the live scenes stay", function()
+  for _, case in ipairs({ "every name taken", "the card refuses" }) do
+    local context, S = pset_session()
+    local pset_1, _, side_1 = pset_files(context, 1)
+    local live = live_scenes_path(context)
+    scramble_state(17); S.lib.scenes.save(1)
+    params:write(pset_1)
+    scramble_state(18); S.lib.scenes.save(2)
+    local why
+    if case == "every name taken" then
+      os.execute("mkdir -p '" .. live .. ".bak'")
+      for number = 2, 9 do os.execute("mkdir -p '" .. live .. ".bak." .. number .. "'") end
+      why = "every backup name is taken"
+    else
+      S.scenes[2].name = "later"  -- a change the load's write must carry, which fails
+      os.execute("mkdir -p '" .. live .. ".part/inside'")  -- the .part is a folder: the write fails
+    end
+    local before = S.lib.data_files.encode(S.scenes)
+    local live_text = h.file_text(live)
+    params:read(pset_1)
+    assert_equal(S.lib.data_files.encode(S.scenes), before, case .. ": the live scenes stay")
+    assert_equal(h.file_text(live), live_text, case .. ": the live file's bytes unchanged")
+    local lines = lines_holding(context, "scenes from " .. side_1
+      .. " not loaded: the scenes in no PSET could not be kept (")
+    assert_equal(#lines, 1, case .. ": one line")
+    assert_true(lines[1]:find("); the live scenes stay", 1, true) ~= nil, lines[1])
+    if why then assert_true(lines[1]:find("(" .. why .. ")", 1, true) ~= nil, lines[1]) end
+  end
+end)
+
+test("an edit from an earlier session still counts; a PSET save then a new session makes no backup", function()
+  local subdir = "pset-earlier-" .. fresh_name()
+  local context, S = pset_session(subdir)
+  local pset_1 = pset_files(context, 1)
+  scramble_state(19); S.lib.scenes.save(1)
+  params:write(pset_1)
+  scramble_state(20); S.lib.scenes.save(2)
+  cleanup()
+  context, S = pset_session(subdir)
+  assert_equal(S.scene_file.pset, nil, "read back: no PSET holds them")
+  params:read(pset_1)
+  assert_true(util.file_exists(live_scenes_path(context) .. ".bak"), "one backup")
+  assert_true(not util.file_exists(live_scenes_path(context) .. ".bak.2"), "only one")
+  -- conversely: a PSET save, then a new session
+  subdir = "pset-saved-" .. fresh_name()
+  context, S = pset_session(subdir)
+  local base_1
+  pset_1, base_1 = pset_files(context, 1)
+  scramble_state(21); S.lib.scenes.save(1)
+  params:write(pset_1)
+  cleanup()
+  context, S = pset_session(subdir)
+  assert_equal(S.scene_file.pset, base_1, "read back: PSET 1 holds them")
+  params:read(pset_1)
+  assert_true(not util.file_exists(live_scenes_path(context) .. ".bak"), "no backup")
+end)
+
+test("the live file's pset field is no scene", function()
+  local context, S = pset_session()
+  for slot = 1, S.constants.NUM_SCENES do scramble_state(slot); S.lib.scenes.save(slot) end
+  local scenes = S.lib.data_files.read(live_scenes_path(context)).scenes
+  local version = S.constants.SCENE_DATA_VERSION
+  for _, case in ipairs({ { pset = "x", reads = "x" }, { pset = 5, reads = nil } }) do
+    local subdir = "pset-field-" .. fresh_name()
+    local dir = data_root .. subdir .. "/strata/"
+    os.execute("mkdir -p '" .. dir .. "'")
+    assert_true(S.lib.data_files.write(dir .. "scenes.data", { version = version, scenes = scenes, pset = case.pset }))
+    local _, loaded = pset_session(subdir)
+    for slot = 1, loaded.constants.NUM_SCENES do
+      assert_true(loaded.scenes[slot].populated, "pset " .. tostring(case.pset) .. ": scene " .. slot .. " loads")
+    end
+    assert_equal(loaded.scene_file.problem, nil, "the file is fine")
+    assert_equal(loaded.scene_file.pset, case.reads, "pset " .. tostring(case.pset) .. " reads as " .. tostring(case.reads))
+  end
+end)
+
+test("the scenes' PSET hook runs before morph's", function()
+  local _, S = pset_session()
+  local index = {}
+  for position, hook in ipairs(S.registry.pset_hooks) do index[hook.name] = position end
+  assert_true(index.scenes ~= nil, "scenes registers a PSET hook")
+  assert_true(index.morph ~= nil and index.scenes < index.morph, "before morph's")
+end)
+
 end

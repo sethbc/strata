@@ -8,7 +8,8 @@
 -- validity cache), the fill of a loaded scene's missing fields
 -- (fill_scene), validation, and scenes.data on disk (written through
 -- lib/data_files.lua at every scene save and at exit, read at start and on
--- request; S.scene_file), with each voice's scene keys
+-- request; S.scene_file), each PSET's <pset>.scenes.data (through
+-- S.lib.side_files, with its PSET hook), with each voice's scene keys
 -- (S.lib.params_setup.voice_scene_keys), scene fields
 -- (S.registry.scene_fields), scene blocks (S.registry.scene_blocks) and
 -- lock hooks (S.registry.lock_change). A scene's voice is {active, source,
@@ -345,6 +346,7 @@ return function(S)
 
     S.scenes[scene_num].data = scene_data
     S.scenes[scene_num].populated = true
+    S.scene_file.pset = nil  -- no PSET holds these scenes now (before the write a save makes)
     checked[scene_num] = {data = scene_data, valid = validate_scene(S.scenes[scene_num]) == true}
     raise_revision(scene_num)
     print("captured scene " .. scene_num)
@@ -1026,8 +1028,12 @@ return function(S)
   -- "not saved" (the last write failed); backup, the name an unreadable or
   -- older file was kept under (nil: still in place); unsaved, true while a scene
   -- captured in this session is not in the file (a write failed, or was
-  -- blocked)
-  S.scene_file = {problem = nil, backup = nil, unsaved = false}
+  -- blocked); pset, the path without .pset of the PSET that holds exactly
+  -- these scenes (nil: none does), kept in the file's field pset: cleared
+  -- by a capture and a name, set by a PSET save and load, cleared when that
+  -- PSET is deleted, read back at a start (a value that is no string reads
+  -- as nil)
+  S.scene_file = {problem = nil, backup = nil, unsaved = false, pset = nil}
   -- The load a player asks for (request_load): while a scene is unsaved, the
   -- first request arms until armed_until, confirm_seconds long, and a second
   -- inside it loads. start_flash_seconds: how long the start's hint row names
@@ -1045,7 +1051,8 @@ return function(S)
       util.make_dir(scene_data_dir)
     end
     local state = S.scene_file
-    local saved, detail = data_files.write(scene_data_file, {version = SCENE_DATA_VERSION, scenes = S.scenes})
+    local saved, detail = data_files.write(scene_data_file,
+      {version = SCENE_DATA_VERSION, scenes = S.scenes, pset = state.pset})
     if not saved then
       state.problem, state.unsaved = "not saved", true
       print("error: scenes not saved to " .. scene_data_file .. " (" .. tostring(detail) .. "); the file is as it was")
@@ -1092,6 +1099,50 @@ return function(S)
     return problem
   end
 
+  -- Why a scenes table from a file cannot be taken, or nil: each slot is
+  -- filled (fill_scene), then the whole is validated (validate_scene_data).
+  -- The live file's read and the PSET's file's spec (its validate) use it
+  local function scenes_problem(scene_table)
+    if type(scene_table) == "table" then
+      for i = 1, NUM_SCENES do fill_scene(scene_table[i]) end
+    end
+    if not validate_scene_data(scene_table) then return "corrupted or incompatible" end
+    return nil
+  end
+
+  -- Take a scenes table that passed scenes_problem as the sixteen slots
+  -- (a gap is an empty scene), from the file `from` (named in the line): a
+  -- running transition ends, the current scene stays current only if the
+  -- table holds the same scene in its slot, every revision rises and the
+  -- validity cache holds the populated slots. The live file's read and a
+  -- PSET load use it
+  local function take_scenes(scene_table, from)
+    local loaded_scenes = {}
+    for i = 1, NUM_SCENES do
+      loaded_scenes[i] = scene_table[i] or empty_scene()
+    end
+    -- a running transition ends by applying its slot: after the load that
+    -- would be the file's data for the slot, or nothing if it is now empty
+    cancel_scene_transition()
+    -- the current scene stays current only if the file holds the same scene
+    -- in its slot (the text a write would give, so a scene saved and read
+    -- back is the same); otherwise what plays is no longer that slot (#518)
+    local current = S.current_scene
+    if is_integer_between(current, 1, NUM_SCENES) and type(S.scenes[current]) == "table"
+      and S.lib.data_files.encode(S.scenes[current]) ~= S.lib.data_files.encode(loaded_scenes[current]) then
+      S.current_scene = 0
+    end
+    S.scenes = loaded_scenes
+    for i = 1, NUM_SCENES do
+      raise_revision(i)  -- every slot holds the file's data now
+      -- scenes_problem passed every populated slot
+      checked[i] = loaded_scenes[i].populated and {data = loaded_scenes[i].data, valid = true} or nil
+    end
+    print("scenes loaded from " .. from)
+    -- Update grid display if grids are connected
+    grid_redraw()
+  end
+
   -- Load scenes from disk: "loaded", "missing" (no file), "unreadable" or
   -- "older" (a format below the floor).
   -- On any problem the current scenes (empty at startup) are kept, a
@@ -1126,46 +1177,18 @@ return function(S)
       print("error: scenes file has version " .. tostring(loaded.version) .. ", expected " .. formats)
       return preserve_unloadable_scene_file()
     end
-    local scene_table = loaded.scenes
-
     -- Fill every field the file lacks, then validate the result
-    if type(scene_table) == "table" then
-      for i = 1, NUM_SCENES do fill_scene(scene_table[i]) end
-    end
-
-    if not validate_scene_data(scene_table) then
+    if scenes_problem(loaded.scenes) then
       print("error: scene file corrupted or incompatible version")
       return preserve_unloadable_scene_file()
     end
 
-    -- Make sure every slot exists, filling gaps with empty scenes
-    local loaded_scenes = {}
-    for i = 1, NUM_SCENES do
-      loaded_scenes[i] = scene_table[i] or empty_scene()
-    end
-    -- a running transition ends by applying its slot: after the load that
-    -- would be the file's data for the slot, or nothing if it is now empty
-    cancel_scene_transition()
-    -- the current scene stays current only if the file holds the same scene
-    -- in its slot (the text a write would give, so a scene saved and read
-    -- back is the same); otherwise what plays is no longer that slot (#518)
-    local current = S.current_scene
-    if is_integer_between(current, 1, NUM_SCENES) and type(S.scenes[current]) == "table"
-      and S.lib.data_files.encode(S.scenes[current]) ~= S.lib.data_files.encode(loaded_scenes[current]) then
-      S.current_scene = 0
-    end
-    S.scenes = loaded_scenes
-    for i = 1, NUM_SCENES do
-      raise_revision(i)  -- every slot holds the file's data now
-      -- validate_scene_data passed every populated slot
-      checked[i] = loaded_scenes[i].populated and {data = loaded_scenes[i].data, valid = true} or nil
-    end
+    take_scenes(loaded.scenes, scene_data_file)
     S.scene_autosave_blocked = false
     S.scene_file.problem, S.scene_file.backup, S.scene_file.unsaved = nil, nil, false
-    print("scenes loaded from " .. scene_data_file)
-
-    -- Update grid display if grids are connected
-    grid_redraw()
+    -- the PSET that holds these scenes (the field is no scene; a value that
+    -- is no string reads as none)
+    S.scene_file.pset = type(loaded.pset) == "string" and loaded.pset or nil
     return "loaded"
   end
 
@@ -1335,6 +1358,77 @@ return function(S)
     return true
   end
 
+  -- Scenes with the PSET (the groundwork before 3.8, design §6, rulings 34
+  -- and 35): each PSET's sixteen scenes in <path_base>.scenes.data, through
+  -- S.lib.side_files (the live file keeps its own writer above). The spec's
+  -- floor is its version: exactly format 9 loads
+  local PSET_SCENES = {side_suffix = ".scenes.data", backup_suffix = ".bak"}
+
+  -- The live file written again when this session may (its pset field
+  -- changed); nothing while it may not, so the scenes' unsaved flag stays
+  local function rewrite_live_pset()
+    if S.scenes_loaded and not S.scene_autosave_blocked then save_scenes_to_disk() end
+  end
+
+  -- Before a PSET load replaces them: live scenes no PSET holds (pset nil)
+  -- that hold anything (a populated or named slot) are written to the live
+  -- file, which is then set aside as a backup (scenes.data.bak, ...). True
+  -- when nothing needed keeping or it was kept; else false and why
+  local function back_up_live()
+    if S.scene_file.pset ~= nil then return true end
+    local holds = false
+    for i = 1, NUM_SCENES do
+      if S.scenes[i].populated or S.scenes[i].name ~= "" then holds = true end
+    end
+    if not holds then return true end
+    local saved, detail = M.autosave()
+    if not saved then return false, tostring(detail or "the live scenes file is not written in this session") end
+    local backup, why = S.lib.data_files.set_aside(scene_data_file, PSET_SCENES.backup_suffix)
+    if not backup then return false, tostring(why) end
+    print("scenes in no PSET kept as " .. backup)
+    return true
+  end
+
+  -- The PSET's scenes (side_files' load): nil (no file, or an unusable one
+  -- the helper set aside) leaves the live scenes; else the live scenes are
+  -- kept first when they must be (back_up_live; when that fails one line,
+  -- and the live scenes stay), then taken as a disk load takes them, and
+  -- the live file is rewritten naming the PSET. Nothing is recalled: the
+  -- sound is the PSET's params
+  local function load_pset_scenes(scene_table, path)
+    if scene_table == nil then return end
+    local kept, why = back_up_live()
+    if not kept then
+      print("scenes from " .. path .. " not loaded: the scenes in no PSET could not be kept (" .. why
+        .. "); the live scenes stay")
+      return
+    end
+    take_scenes(scene_table, path)
+    S.scene_file.pset = path:sub(1, #path - #PSET_SCENES.side_suffix)
+    SCENE_LOAD.armed_until = 0
+    M.autosave()
+    request_redraw()
+  end
+
+  local pset_scene_files = S.lib.side_files.new({
+    name = "scenes", contents = "scenes", version = SCENE_DATA_VERSION, floor = SCENE_FORMAT_FLOOR,
+    key = "scenes", live_file = "scenes.data", side_suffix = PSET_SCENES.side_suffix,
+    backup_suffix = PSET_SCENES.backup_suffix,
+    capture = function() return S.scenes end, validate = scenes_problem, load = load_pset_scenes,
+  })
+  -- registered at include, so it runs before morph's hook (which forgets
+  -- its plan once the slots changed): a PSET save marks the live file as
+  -- held by it, the delete of that PSET clears the mark
+  S.register_pset_hook(pset_scene_files.pset_hook(nil, nil, function(written, path_base)
+    if not written then return end
+    S.scene_file.pset = path_base
+    rewrite_live_pset()
+  end, function(path_base)
+    if S.scene_file.pset ~= path_base then return end
+    S.scene_file.pset = nil
+    rewrite_live_pset()
+  end))
+
   -- init's start step: a start that fails in an earlier step never gets
   -- here, so S.scenes_loaded stays false and cleanup() does not save (#72)
   S.register_start(S.constants.START_ORDER.scenes_load, function()
@@ -1447,6 +1541,7 @@ return function(S)
     if name == S.scenes[slot].name then return true end
     S.scenes[slot].name = name
     raise_revision(slot)
+    S.scene_file.pset = nil  -- no PSET holds these scenes now
     M.autosave()
     request_redraw()
     return true

@@ -29,7 +29,7 @@ return function(S)
   -- frequency's note), the owners, a note's expression (its keys in
   -- noteExpression's order, the neutral values, the engine's ranges) and
   -- the note cap's param and VOICE section
-  local NOTES = {file = "notes.data", version = 1, cut_seconds = 0.05, sends_per_step = 16,
+  local NOTES = {file = "notes.data", version = 1, backup_suffix = ".bak", cut_seconds = 0.05, sends_per_step = 16,
     rate_root_note = 60, rate_range = {0.25, 4}, note_range = {0, 127}, a4 = {note = 69, freq = 440},
     owners = {midi = true, seq = true, grid = true},  -- 3.7: a grid's slice keys (key port * 100 + slice)
     step_owner = "seq",  -- the sequencer's owner (SEQ.note_owner): its chord's extra notes are no hit of their own
@@ -941,16 +941,21 @@ return function(S)
   -- NOTES.version file whose pool is a whole number in 0..NOTE_POOL.max
   -- sets the pool; no file leaves the tier's default, and so does anything
   -- else (text that does not parse, another version, a bad pool), with one
-  -- console line. Then the engine gets the pool, and the flush joins the
+  -- console line, and that file is set aside (notes.data.bak, ...) as
+  -- io.data is; one that cannot be set aside stays, and the next set_pool
+  -- writes over it. Then the engine gets the pool, and the flush joins the
   -- LFO clock's step hooks (after those registered at include time)
   S.register_start(S.constants.START_ORDER.notes_load, function()
     pool_setting = nil
-    local value, problem, why = S.lib.data_files.read(notes_path())
+    local path = notes_path()
+    local value, problem, why = S.lib.data_files.read(path)
     if type(value) == "table" and value.version == NOTES.version and whole_in(value.pool, 0, NOTE_POOL.max) then
       pool_setting = value.pool
     elseif value ~= nil or problem == "unreadable" then
+      local backup, failure = S.lib.data_files.set_aside(path, NOTES.backup_suffix)
       print("strata: " .. NOTES.file .. " not used (" .. tostring(why or "not a note pool setting")
-        .. "): the pool is the tier's default, " .. tier_default())
+        .. "): the pool is the tier's default, " .. tier_default() .. "; "
+        .. (backup and ("kept as " .. backup:match("[^/]*$")) or ("not moved: " .. tostring(failure))))
     end
     engine.setNotePool(M.pool())
     flush.stopped = false

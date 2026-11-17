@@ -582,7 +582,7 @@ return function(S)
   -- is the size ("16x8") an attached port's grid reported when it was last
   -- attached or turned: one that reports another, turned outside Strata,
   -- starts over (follow_size)
-  local GRID_ROTATION = {file = "grids.data", version = 1, last = 3, settings = {}, sizes = {}}
+  local GRID_ROTATION = {file = "grids.data", version = 1, last = 3, settings = {}, sizes = {}, backup_suffix = ".bak"}
 
   local function rotation_path() return _path.data .. "strata/" .. GRID_ROTATION.file end
 
@@ -597,17 +597,23 @@ return function(S)
 
   -- Read grids.data (parsed, never run: S.lib.data_files.read): each port's
   -- whole number 0-3 is its setting; anything else (no file, one that does
-  -- not parse, another version, a bad entry) reads as 0
+  -- not parse, another version, a bad entry) reads as 0. A file that fails
+  -- whole (it does not parse, another version, no rotation table) is set
+  -- aside (grids.data.bak, ...) with one line, as io.data is; one that
+  -- cannot be set aside stays, and the next set_rotation writes over it
   local function read_rotations()
     local settings = {}
-    local value, problem, why = S.lib.data_files.read(rotation_path())
+    local path = rotation_path()
+    local value, problem, why = S.lib.data_files.read(path)
     if type(value) == "table" and value.version == GRID_ROTATION.version and type(value.rotation) == "table" then
       for port = 1, S.MAX_GRID_PORTS do
         if whole_number_in(value.rotation[port], 0, GRID_ROTATION.last) then settings[port] = value.rotation[port] end
       end
     elseif value ~= nil or problem == "unreadable" then
+      local backup, failure = S.lib.data_files.set_aside(path, GRID_ROTATION.backup_suffix)
       print("strata: " .. GRID_ROTATION.file .. " not used (" .. tostring(why or "not grid settings")
-        .. "): every grid rotation is 0")
+        .. "): every grid rotation is 0; "
+        .. (backup and ("kept as " .. backup:match("[^/]*$")) or ("not moved: " .. tostring(failure))))
     end
     GRID_ROTATION.settings = settings
   end
