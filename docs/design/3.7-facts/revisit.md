@@ -8,7 +8,7 @@ Nothing here is a new feature; each alternative is one the documents name, or th
 
 ## How this was read
 
-Read in full: `docs/design/3.7-design.md`, the plan's Global Constraints, Review Focus and 28 rulings, `ROADMAP.md`, `docs/decisions/README.md`. Searched for compatibility reasoning and then read the hits in place: `docs/decisions/3.0.md` to `3.6.md`, the designs 3.0 to 3.6 and 3.3.2, `docs/history.md`, the notes and the user docs. Checked each candidate against the code (`lib/`, `lib/engine/`, `test/`). Paths are relative to the repository root; "the plan" is `.claude/worktrees/docs-3.7-plan/docs/superpowers/plans/2026-11-15-3.7-plan.md`.
+Read in full: `docs/design/3.7-design.md`, the plan's Global Constraints, Review Focus and 28 rulings, `ROADMAP.md`, `docs/decisions/README.md`. Searched for compatibility reasoning and then read the hits in place: `docs/decisions/3.0.md` to `3.6.md`, the designs 3.0 to 3.6 and 3.3.2, `docs/history.md`, the notes and the user docs. Checked each candidate against the code (`lib/`, `lib/engine/`, `test/`). Paths are relative to the repository root; "the plan" is `.claude/worktrees/docs-3.7-plan/docs/superpowers/plans/2026-11-15-3.7-plan.md` (a draft of the plan, removed at the 3.7.0 release; its rulings are in `docs/decisions/3.7.md`).
 
 Sizes are counts from `grep` and `wc`, rounded. Nothing was run.
 
