@@ -724,6 +724,19 @@ return function(S)
     end
   end
 
+  -- #744: an overlap voice's step slice that finds no extra slot (the pool
+  -- at 0 or full, or a ratchet's slice note gone) takes the own note with
+  -- its own slice, as on a voice set to one, before the retrigger; the
+  -- step's later hits are then the own note's
+  local function take_own_slice(voice_idx, n)
+    step_slices[voice_idx] = nil
+    local region = S.lib.slices.voice_region(voice_idx, n)
+    if not region then return end
+    S.lib.notes.set_own_region(voice_idx, region, true)
+    step_regions[voice_idx] = region
+    step_region_to_end[voice_idx] = S.lib.notes.pass_seconds(voice_idx, region[2]) ~= nil
+  end
+
   -- Strata's own voices: a stopped voice is started at the step's first
   -- hit (a gated one is then retriggered), a running one retriggered at
   -- each hit, a gated one's gate length sent first when it changed, then
@@ -762,7 +775,8 @@ return function(S)
     -- with no room the voice's oldest step slice is cut and its slot taken
     -- (never another owner's); it rings past the next step. A later hit (a
     -- ratchet) of a step whose hits are its slice's plays it again in its
-    -- slot; one whose note is gone (stolen) falls back to the retrigger
+    -- slot; one refused a slot, or whose note is gone (stolen), takes the
+    -- own note with its slice and retriggers it (#744)
     if slice and (event.first or on_slice) then
       local key = SEQ.slice_key_prefix .. event.step
       local slot = (event.first or S.lib.notes.find(voice_idx, SEQ.note_owner, key))
@@ -771,6 +785,7 @@ return function(S)
       if on_slice and slot then
         S.lib.engine_sync.extra_note_hit(voice_idx, slot, event.velocity, gate_seconds, "step")
       elseif on_slice then
+        take_own_slice(voice_idx, slice.slice)
         S.lib.engine_sync.retrigger(voice_idx, event.velocity, "step", gate_seconds)
       end
     end
