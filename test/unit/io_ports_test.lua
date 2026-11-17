@@ -83,28 +83,30 @@ test("the midi ports invariant names a port whose event and listeners disagree",
   assert_true(ports_invariant(S) ~= nil, "a listener with no event is reported")
 end)
 
-test("a departure's hooks are told the name of the device that left", function()
-  -- a move in SYSTEM > DEVICES changes the vports before the menu closes,
-  -- so the hooks cannot read the departing device's name from the port
+test("an on_change hook hears the port and the device's name, and nothing else", function()
+  -- #758: a departure once passed a third argument (the name of the device
+  -- that left), which no hook reads any more
   local context = load_strata()
   local ports = local_value("S").lib.io_ports
-  local changes = {}
-  ports.on_change("test", function(port, name, departed)
-    changes[#changes + 1] = port .. " " .. tostring(name) .. " " .. tostring(departed)
+  local heard = {}
+  ports.on_change("test", function(...)
+    local port, name = ...
+    heard[#heard + 1] = port .. " " .. tostring(name) .. " " .. select("#", ...)
   end)
   context.midi.plug(2, "synth a")
+  assert_equal(table.concat(heard, ", "), "2 synth a 2", "an arrival: two arguments")
+  heard = {}
+  context.midi.unplug(2)
+  assert_equal(table.concat(heard, ", "), "2 nil 2", "a departure: two arguments")
+  context.midi.plug(2, "synth a")
   context.midi.plug(4, "synth b")
-  changes = {}
+  heard = {}
   _menu.set_mode(true)
   context.midi.reassign(2, 3)
   context.midi.reassign(4, 2)
-  assert_equal(ports.device(2), "synth b", "the vports changed at once")
   _menu.set_mode(false)
-  assert_equal(table.concat(changes, ", "), "2 nil synth a, 4 nil synth b, 2 synth b nil, 3 synth a nil",
-    "each departure names the device that left; an arrival names none")
-  changes = {}
-  context.midi.unplug(3)
-  assert_equal(table.concat(changes, ", "), "3 nil synth a", "an unplug names it too")
+  assert_equal(table.concat(heard, ", "), "2 nil 2, 4 nil 2, 2 synth b 2, 3 synth a 2",
+    "a move in SYSTEM > DEVICES: departures first, then arrivals, each with two arguments")
 end)
 
 test("on_change tells of an arrival, a departure and a move made in the menu", function()
