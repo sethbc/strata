@@ -44,8 +44,8 @@ return function(S)
   -- Whether voice voice_idx is frozen (false for any other value)
   function M.is_frozen(voice_idx)
     if not valid_voice(voice_idx) then return false end
-    local extras = S.voices[voice_idx].values
-    return extras ~= nil and extras[M.FREEZE.key] == 1
+    local values = S.voices[voice_idx].values
+    return values ~= nil and values[M.FREEZE.key] == 1
   end
 
   -- Freeze or unfreeze voice voice_idx (ignored for any other value),

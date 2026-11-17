@@ -670,16 +670,15 @@ local function doc_paths_missing(text, doc_name)
   return missing, #paths
 end
 
--- Compare a voice's live state with a captured scene voice, allowing for
--- each param's controlspec quantization: every key of the scene voice's
--- values (a format 9 voice, {active, source, values}), a control's within
--- its step, any other exactly
+-- Compare a voice's live state with a captured scene voice: every key of
+-- the scene voice's values (a format 9 voice, {active, source, values}),
+-- exactly (a recall sets the captured value itself, so only float noise
+-- is allowed)
 local function assert_voice_matches(voice_idx, voice, captured)
   local prefix = "voice " .. voice_idx .. " "
   for key, value in pairs(captured.values) do
-    local param = params:lookup_param("v" .. voice_idx .. "_" .. key)
-    local tolerance = param.controlspec and param.controlspec.step + 0.011 or 1e-9
-    assert_near(voice.values[key], value, tolerance, prefix .. key)
+    assert_true(params.lookup["v" .. voice_idx .. "_" .. key] ~= nil, prefix .. key .. " is a param")
+    assert_near(voice.values[key], value, 1e-9, prefix .. key)
   end
   assert_equal(voice.source, captured.source, prefix .. "source")
   assert_equal(voice.active, captured.active, prefix .. "active")

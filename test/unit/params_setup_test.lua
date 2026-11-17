@@ -1018,18 +1018,23 @@ end
 -- The fixture's records as this build should have them: a copy of each,
 -- the allowed differences applied
 local function allowed_records(fixture, allowed)
-  local removed, changed = {}, {}
+  local removed, changed, listed = {}, {}, {}
   local known = {}
-  for _, record in ipairs(fixture) do known[record.id] = true end
+  for _, record in ipairs(fixture) do known[record.id] = record end
   for index, entry in ipairs(allowed) do
     local where = "allowed difference " .. index .. " (" .. tostring(entry.id) .. ")"
     if type(entry.why) ~= "string" or entry.why == "" then error(where .. " says no why", 2) end
-    if not known[entry.id] then error(where .. ": 3.7.0 has no such param", 2) end
+    local record = known[entry.id]
+    if not record then error(where .. ": 3.7.0 has no such param", 2) end
+    if listed[entry.id] then error(where .. ": a second entry for the param", 2) end
+    listed[entry.id] = true
     if entry.kind == "removed" then
       removed[entry.id] = true
     elseif entry.kind == "group_size" then
+      if record.t ~= params.tGROUP then error(where .. ": a group size for a param that is no group", 2) end
       changed[entry.id] = {field = "n", value = entry.n}
     elseif entry.kind == "options" then
+      if record.t ~= params.tOPTION then error(where .. ": options for a param that is no option", 2) end
       changed[entry.id] = {field = "options", value = entry.options}
     else
       error(where .. ": no kind " .. tostring(entry.kind), 2)
@@ -1120,6 +1125,13 @@ test("the fixture comparison honors each kind of allowed difference, and only th
   assert_true(not pcall(allowed_records, fixture, {{kind = "removed", id = "never", why = "a test"}}), "no such id")
   assert_true(not pcall(allowed_records, fixture, {{kind = "renamed", id = "kept", why = "a test"}}), "no such kind")
   assert_true(not pcall(allowed_records, fixture, {{kind = "removed", id = "gone"}}), "no why")
+  -- an entry's kind must fit its param's type, and one id has one entry
+  assert_true(not pcall(allowed_records, fixture, {{kind = "group_size", id = "mode", n = 2, why = "a test"}}),
+    "a group size on an option")
+  assert_true(not pcall(allowed_records, fixture, {{kind = "options", id = "lfo", options = {"a"}, why = "a test"}}),
+    "options on a group")
+  assert_true(not pcall(allowed_records, fixture, {entries[3], {kind = "removed", id = "mode", why = "a test"}}),
+    "two entries for one id")
 end)
 
 -- The groundwork before 3.8 (ruling 5): a voice's scene keys, each with

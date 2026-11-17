@@ -37,6 +37,8 @@ local function aim_index(n, index)
   assert_true(S.lib.matrix.set_home(n, S.lib.lfos.destination_id(index)), "LFO " .. n .. " aimed")
 end
 local function home_index(n) return local_value("S").lib.lfos.destination_index(n) end
+-- The param id LFO n's home resolves to now (nil: none)
+local function resolved(n) return local_value("S").lib.lfos.destination(n).resolve() end
 
 -- LFO n's home routing aimed at the destination labeled `label`
 local function aim(n, label) aim_index(n, destination_index(label)) end
@@ -768,7 +770,7 @@ test("a destination is stored by key in a PSET and in a scene", function()
   aim_index(2, 1)
   params:read(path)
   assert_equal(home_index(2), destination_index("v3 vfilt"), "the PSET loads back to it")
-  assert_equal(lfo_destination_id(2), "v3_filter_freq")
+  assert_equal(resolved(2), "v3_filter_freq")
   -- the scene's matrix block holds the key, and a recall puts it back
   capture_scene(1)
   local data = local_value("scenes")[1].data
@@ -778,7 +780,7 @@ test("a destination is stored by key in a PSET and in a scene", function()
   aim_index(2, 1)
   recall_scene(1, 0)
   assert_equal(home_index(2), destination_index("v3 vfilt"), "the scene recalls it")
-  assert_equal(lfo_destination_id(2), "v3_filter_freq")
+  assert_equal(resolved(2), "v3_filter_freq")
 end)
 
 -- The groundwork before 3.8 (ruling 19): a home this build has no
@@ -806,7 +808,7 @@ test("a key the build does not know reads as none", function()
   params:read(path)
   assert_equal(home_index(2), 1, "none")
   assert_equal(S.lib.matrix.home(2), "v3_wobble", "the key is kept")
-  assert_equal(lfo_destination_id(2), nil, "and plays nothing")
+  assert_equal(resolved(2), nil, "and plays nothing")
   assert_equal(lines_naming("v3_wobble"), 1, "one console line names the key")
   params:read(path)
   assert_equal(lines_naming("v3_wobble"), 2, "and one at each file load")
@@ -909,10 +911,10 @@ test("an LFO's sound is unchanged: the same destination gives the same engine ca
   end
   -- a voice's main follows its source; a macro is a direct destination
   S.lib.matrix.set_home(3, "v1_main")
-  assert_equal(lfo_destination_id(3), "v1_freq", "a synth voice's main is its freq")
+  assert_equal(resolved(3), "v1_freq", "a synth voice's main is its freq")
   assert_equal(S.lib.lfos.destination(3).label, "v1 main", "destination(n) is the entry, as before")
   S.lib.matrix.set_home(4, "macro_1")
-  assert_equal(lfo_destination_id(4), "macro_1")
+  assert_equal(resolved(4), "macro_1")
 end)
 
 -- 0e's re-review: while a scene applies an LFO's settings none of them
@@ -1143,7 +1145,7 @@ test("an instant recall's first send carries the scene's destination with its ra
     assert_near(call.args[5], 5, 1e-9, "send " .. index .. ": the scene's rate")
     assert_near(call.args[6], 0.6, 1e-9, "send " .. index .. ": the scene's depth")
   end
-  assert_equal(lfo_destination_id(2), "v5_grain_pitch")
+  assert_equal(resolved(2), "v5_grain_pitch")
   -- a Lua destination: the old one is given back, the new one first moves
   -- with the scene's depth (a square held at its top: + 0.6 x half range)
   params:set("reverb_mix", 0.3); params:set("delay_mix", 0.2)
@@ -1171,11 +1173,11 @@ test("an instant recall's first send carries the scene's destination with its ra
   hold_lfo(2, "rev mix", 25); lfo_step(context)
   recall_scene(2, 1)
   context.clock.run_for(0.4)
-  assert_equal(lfo_destination_id(2), "reverb_mix", "before the midpoint: the old destination")
+  assert_equal(resolved(2), "reverb_mix", "before the midpoint: the old destination")
   context.clock.run_for(0.2)
-  assert_equal(lfo_destination_id(2), "delay_mix", "past it: the scene's")
+  assert_equal(resolved(2), "delay_mix", "past it: the scene's")
   context.clock.run_for(1)
-  assert_equal(lfo_destination_id(2), "delay_mix", "at its end: the scene's")
+  assert_equal(resolved(2), "delay_mix", "at its end: the scene's")
 end)
 
 -- #729: the list on main before a registered global named its group (3.7's
@@ -1593,7 +1595,7 @@ test("param actions under a running LFO send the modulated value (drift, edits)"
   assert_near(context.calls_named("setFilter")[1].args[2], 0.3, 1e-9, "an unmodulated param sends its value")
 end)
 
-test("LFO steps skip sends below 1/1000 of the range; restores always send", function()
+test("LFO steps skip sends below 1/1000 of the range; a restore sends once", function()
   local context = load_strata(); finish_startup(context)
   params:set("filter_mix", 0.5); aim(1, "filt mix")
   params:set(lfo_id(1, "rate"), 1 / 300); params:set(lfo_id(1, "phase"), 75)   -- a 300 s sine from its trough

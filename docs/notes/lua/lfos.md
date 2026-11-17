@@ -29,7 +29,7 @@
 
 `lib/lfos.lua` (`S.lib.lfos`):
 - `S.LFO_DESTINATIONS`, `S.selected_lfo`, `S.lfo_clock`;
-- the globals `lfo_destination_id`, `add_lfo_params`;
+- the global `add_lfo_params`;
 - the tunables `LFO` (`S.lib.lfos.LFO`) and `FAST_DESTINATIONS`; the readers `param_id(n, field)`, `fast_destination(param_id)`, `destination(n)`, `destination_index(n)`, `destination_id(index)`, `destination_groups()`, `label(n)`, `is_on(n)`, `is_clocked(n)`, `is_engine_run(n)`, `engine_playing(n)` (on, on a fast destination, at a depth above 0: what MAIN's `~` reads, package 2a), `window(selected)`, `phase(n)`, `value(n)`, `has_stepped(n)`, `base_rate(n)`, `effective_rate(n)`, `effective_depth(n)`, `capped(n)`, `describe(n)`, `shape_u(shape, phase)`; `offset_for(param_id, m)`, `m_for(param_id, base, value)`; the queue `mark_due(key, send)` and `on_step(fn)`; `direct_destination(param_id)`, `modulates(id)`, `direct_value(id)`; the home routing's `owns(n, id)`, `home_m(n)` and `home_changed(n)` (`S.lib.matrix.set_home` and the matrix's loads call it: a direct destination is given back at once, and the engine gets the LFO's settings); the engine senders `lfo<n> engine` and `lfo<n> sync`;
 - `SCENE_FIELDS` and `transition_stops`;
 - the modulation sources `lfo1`..`lfo6`;

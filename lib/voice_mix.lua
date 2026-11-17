@@ -13,9 +13,10 @@
 -- the cutoff, res and mix and both sends (the record's fader group, rank
 -- 1: right after 3.7's faders), never the filter type, mute or solo;
 -- VOICE's ALT+K2 on its section draws all but the filter's mix (the
--- record's randomize, #557). 3.4 adds v<i>_mute and v<i>_solo (binary, default 0):
--- silenced(voice) is the answer, sent to the engine as the stage's voiceMute
--- (a scene stores the mute, never the solo). See docs/notes/lua/voice-mix.md.
+-- record's randomize, #557). 3.4 adds v<i>_mute and v<i>_solo (binary,
+-- default 0): silenced(voice) is the answer, sent to the engine as the
+-- stage's voiceMute (a scene stores the mute, never the solo). See
+-- docs/notes/lua/voice-mix.md.
 
 return function(S)
   local M = {}
@@ -66,8 +67,8 @@ return function(S)
   function M.soloed(voice)
     if type(voice) ~= "number" or voice < 1 or voice > S.constants.NUM_VOICES or voice % 1 ~= 0 then return false end
     local voice_state = S.voices[voice]
-    local extras = voice_state and voice_state.values
-    return extras ~= nil and extras.solo == 1 and not M.silenced(voice)
+    local values = voice_state and voice_state.values
+    return values ~= nil and values.solo == 1 and not M.silenced(voice)
   end
 
   -- What each voice's stage last got as voiceMute (1 or 0; nil, the

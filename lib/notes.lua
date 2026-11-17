@@ -118,8 +118,8 @@ return function(S)
   end
 
   local function note_cap(voice)
-    local extras = S.voices[voice].values
-    local cap = extras and extras[NOTES.cap.key]
+    local values = S.voices[voice].values
+    local cap = values and values[NOTES.cap.key]
     if whole_in(cap, 1, NOTE_SLOTS) then return cap end
     return NOTE_SLOTS
   end
@@ -890,9 +890,9 @@ return function(S)
   -- sync of a running voice through the record's sync, a turn through the
   -- sender (running voices only)
   local function send_envelope(voice)
-    local extras = S.voices[voice].values
+    local values = S.voices[voice].values
     for _, key in ipairs(NOTES.envelope_keys) do
-      engine.setVoiceParam(voice - 1, NOTES.envelope_engine[key], extras[key])
+      engine.setVoiceParam(voice - 1, NOTES.envelope_engine[key], values[key])
     end
   end
   local cap_record

@@ -13,7 +13,7 @@
 | Function | Does |
 |---|---|
 | `recall_scene(n)` | n 1 to 16 with a saved scene |
-| `next_scene()` | the next saved scene after `S.current_scene`, wrapping |
+| `next_scene()` | the next playable scene after `S.current_scene` (the stepper at 100, 0, 0: an empty or invalid slot is passed over), wrapping; with none, `no scene can play` |
 | `run_voice(voice, mode)` | mode 0 stops, 1 starts, 2 toggles; a voice already as asked is left alone |
 | `retrigger(voice, velocity)` | velocity clamped to 0..1 |
 | `freeze(voice, mode)`, `mute(voice, mode)` | mode 0 off, 1 on, 2 toggle |

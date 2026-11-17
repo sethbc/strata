@@ -123,8 +123,7 @@ test("randomize and mutation work in normalized space for exponential params", f
 end)
 
 -- The grain record's mutate groups (lib/voices.lua) are what mutates of
--- the grain and buffer keys (the groundwork before 3.8: they replace
--- DISCRETE_GRAIN_KEYS and BUFFER_MUTATION_KEYS)
+-- the grain and buffer keys
 local function grain_record()
   for _, record in ipairs(local_value("S").registry.voice_params) do
     if record.name == "grain" then return record end

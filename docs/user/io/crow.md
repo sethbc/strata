@@ -17,7 +17,7 @@ Each input has a **mode**:
 - **cv** - the input is a modulation source, `CR1` or `CR2` in MOD's `crow` section, over its **range** (`-5..5`, `0..5` or `0..10` V): route it in the matrix like any other source. crow reads it 50 times a second
 - **trigger** - each rise past 1 V runs the input's **action** on its **voice** (`sel` is the selected voice):
   - **retrigger** - accents the voice if it is running (it never starts a stopped one)
-  - **next scene** - recalls the next saved scene, quantized as a scene key is
+  - **next scene** - recalls the next saved scene, quantized as a scene key is; a damaged scene is passed over, and with no scene that can play nothing happens
   - **freeze** - turns the voice's freeze on or off
   - **record** - starts or stops recording on BUFFER's slot, as BUFFER's K3 does
   - **patterns** - starts or stops the patterns

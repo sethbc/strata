@@ -1116,13 +1116,14 @@ return function(S)
   -- table holds the same scene in its slot, every revision rises and the
   -- validity cache holds the populated slots. The live file's read and a
   -- PSET load use it
-  local function take_scenes(scene_table, from)
+  local function take_scenes(scene_table, from, silent)
     local loaded_scenes = {}
     for i = 1, NUM_SCENES do
       loaded_scenes[i] = scene_table[i] or empty_scene()
     end
-    -- a running transition ends by applying its slot: after the load that
-    -- would be the file's data for the slot, or nothing if it is now empty
+    -- a running transition is canceled where it is, applying nothing (the
+    -- scene it left is current again), so no step of it reads the new
+    -- scenes
     cancel_scene_transition()
     -- the current scene stays current only if the file holds the same scene
     -- in its slot (the text a write would give, so a scene saved and read
@@ -1138,7 +1139,7 @@ return function(S)
       -- scenes_problem passed every populated slot
       checked[i] = loaded_scenes[i].populated and {data = loaded_scenes[i].data, valid = true} or nil
     end
-    print("scenes loaded from " .. from)
+    if not silent then print("scenes loaded from " .. from) end
     -- Update grid display if grids are connected
     grid_redraw()
   end
@@ -1361,8 +1362,10 @@ return function(S)
   -- Scenes with the PSET (the groundwork before 3.8, design §6, rulings 34
   -- and 35): each PSET's sixteen scenes in <path_base>.scenes.data, through
   -- S.lib.side_files (the live file keeps its own writer above). The spec's
-  -- floor is its version: exactly format 9 loads
-  local PSET_SCENES = {side_suffix = ".scenes.data", backup_suffix = ".bak"}
+  -- floor is its version: exactly format 9 loads. refused: the hint row's
+  -- flash when a PSET's scenes cannot be taken (the live ones stay)
+  local PSET_SCENES = {side_suffix = ".scenes.data", backup_suffix = ".bak", refused = "pset scenes not loaded"}
+  M.PSET_SCENES = PSET_SCENES
 
   -- The live file written again when this session may (its pset field
   -- changed); nothing while it may not, so the scenes' unsaved flag stays
@@ -1410,8 +1413,9 @@ return function(S)
   -- kept first when they must be (back_up_live; when that fails one line,
   -- and the live scenes stay), then taken as a disk load takes them, and
   -- the live file is rewritten naming the PSET. Nothing is recalled: the
-  -- sound is the PSET's params
-  local function load_pset_scenes(scene_table, path)
+  -- sound is the PSET's params. A silent read (params:read's) prints no
+  -- scenes loaded line; a refusal's line and flash still show
+  local function load_pset_scenes(scene_table, path, silent)
     local path_base = path:sub(1, #path - #PSET_SCENES.side_suffix)
     if scene_table == nil then
       if S.scene_file.pset == path_base then
@@ -1424,9 +1428,10 @@ return function(S)
     if not kept then
       print("scenes from " .. path .. " not loaded: the scenes in no PSET could not be kept (" .. why
         .. "); the live scenes stay")
+      S.lib.ui_flash.start("hints", PSET_SCENES.refused, SCENE_LOAD.start_flash_seconds)
       return
     end
-    take_scenes(scene_table, path)
+    take_scenes(scene_table, path, silent)
     S.scene_file.pset = path_base
     SCENE_LOAD.armed_until = 0
     M.autosave()

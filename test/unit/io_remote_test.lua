@@ -625,18 +625,22 @@ test("a Launchpad midigrid holds keeps its claim when SYSTEM > DEVICES moves it 
     launchpad.event = function() end  -- what midigrid does to the device it takes
     return midigrid_object(16, 8)
   end
-  set_rig(S, "midi_grid", "on")
-  assert_equal(S.lib.io_ports.owner(1), "midigrid", "claimed at the attach")
-  _menu.set_mode(true)
-  context.midi.reassign(1, 4)
-  _menu.set_mode(false)
-  assert_equal(S.lib.io_ports.owner(4), "midigrid", "the new port claimed as midigrid")
-  assert_true(S.lib.io_remote.holds(4), "and held: MIDI out sends nothing there")
-  assert_equal(S.lib.io_ports.owner(1), nil, "the old port released")
-  assert_true(not S.lib.io_remote.holds(1), "and no longer held")
-  set_rig(S, "midi_grid", "off")
-  assert_equal(S.lib.io_ports.owner(4), nil, "released at detach")
+  -- grid.connect is restored whatever an assertion raises
+  local ok, problem = pcall(function()
+    set_rig(S, "midi_grid", "on")
+    assert_equal(S.lib.io_ports.owner(1), "midigrid", "claimed at the attach")
+    _menu.set_mode(true)
+    context.midi.reassign(1, 4)
+    _menu.set_mode(false)
+    assert_equal(S.lib.io_ports.owner(4), "midigrid", "the new port claimed as midigrid")
+    assert_true(S.lib.io_remote.holds(4), "and held: MIDI out sends nothing there")
+    assert_equal(S.lib.io_ports.owner(1), nil, "the old port released")
+    assert_true(not S.lib.io_remote.holds(1), "and no longer held")
+    set_rig(S, "midi_grid", "off")
+    assert_equal(S.lib.io_ports.owner(4), nil, "released at detach")
+  end)
   grid.connect = real_connect
+  if not ok then error(problem, 0) end
 end)
 
 test("a device that arrives with a device-level handler is claimed only while midigrid is attached", function()
@@ -652,16 +656,20 @@ test("a device that arrives with a device-level handler is claimed only while mi
     device.event = function() end
     return real_add(device)
   end
-  set_rig(S, "midi_grid", "on")
-  context.midi.plug(3, "Launchpad Mini")
-  assert_equal(S.lib.io_ports.owner(3), "midigrid", "an arrival while attached is claimed")
-  assert_true(S.lib.io_remote.holds(3), "and held")
-  set_rig(S, "midi_grid", "off")
-  assert_equal(S.lib.io_ports.owner(3), nil, "released at detach")
-  context.midi.plug(5, "Launchpad Mini")
-  assert_equal(S.lib.io_ports.owner(5), nil, "an arrival with midigrid off is not claimed")
+  -- midi.add and grid.connect are restored whatever an assertion raises
+  local ok, problem = pcall(function()
+    set_rig(S, "midi_grid", "on")
+    context.midi.plug(3, "Launchpad Mini")
+    assert_equal(S.lib.io_ports.owner(3), "midigrid", "an arrival while attached is claimed")
+    assert_true(S.lib.io_remote.holds(3), "and held")
+    set_rig(S, "midi_grid", "off")
+    assert_equal(S.lib.io_ports.owner(3), nil, "released at detach")
+    context.midi.plug(5, "Launchpad Mini")
+    assert_equal(S.lib.io_ports.owner(5), nil, "an arrival with midigrid off is not claimed")
+  end)
   midi.add = real_add
   grid.connect = real_connect
+  if not ok then error(problem, 0) end
 end)
 
 test("the start step attaches what the rig names", function()

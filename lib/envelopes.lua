@@ -51,16 +51,16 @@ return function(S)
   -- kept: the 48 Hz step and MOD's draws make none)
   local settings_of = {}
   for voice_idx = 1, NUM_VOICES do settings_of[voice_idx] = {} end
-  local function setting(extras, key)
-    local value = extras[key]
+  local function setting(values, key)
+    local value = values[key]
     if value == nil then return ENV.defaults[key] end
     return value
   end
   local function settings(voice_idx)
-    local extras, set = S.voices[voice_idx].values, settings_of[voice_idx]
-    set.attack, set.decay = setting(extras, "env_attack"), setting(extras, "env_decay")
-    set.sustain, set.release = setting(extras, "env_sustain"), setting(extras, "env_release")
-    set.curve, set.loop = setting(extras, "env_curve"), setting(extras, "env_loop") == ENV.loop_on
+    local values, set = S.voices[voice_idx].values, settings_of[voice_idx]
+    set.attack, set.decay = setting(values, "env_attack"), setting(values, "env_decay")
+    set.sustain, set.release = setting(values, "env_sustain"), setting(values, "env_release")
+    set.curve, set.loop = setting(values, "env_curve"), setting(values, "env_loop") == ENV.loop_on
     return set
   end
 

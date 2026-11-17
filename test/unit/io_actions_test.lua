@@ -48,7 +48,16 @@ end)
 
 test("next_scene steps over empty scenes and wraps", function()
   local context, S, actions = started()
-  refused(function() return actions.next_scene() end, "next_scene")
+  local function none_can_play(why)
+    local lines = printed(function() assert_equal(actions.next_scene(), false, why .. ": refused") end)
+    assert_equal(#lines, 1, why .. ": one line")
+    assert_true(lines[1]:find("next_scene ignored: no scene can play", 1, true) ~= nil, why .. ": " .. tostring(lines[1]))
+  end
+  none_can_play("no scene saved")
+  capture_scene(5)
+  S.scenes[5] = {populated = true, name = "", data = {}}  -- a damaged scene: saved, and cannot play
+  none_can_play("a saved scene that cannot play")
+  S.scenes[5] = {populated = false, name = "", data = {}}
   capture_scene(2); capture_scene(9)
   S.current_scene = 2
   assert_equal(actions.next_scene(), true); assert_equal(S.current_scene, 9)

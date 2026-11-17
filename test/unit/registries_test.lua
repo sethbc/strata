@@ -374,7 +374,7 @@ test("LFO destinations come by voice, and a registered one joins its voice", fun
   assert_equal(destinations[probe + 1].resolve(), "v1_probe_switch")
   -- an LFO on a registered destination modulates it around its stored value
   local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(probe))
-  assert_equal(lfo_destination_id(1), "v1_probe")
+  assert_equal(local_value("S").lib.lfos.destination(1).resolve(), "v1_probe")
   -- a label already used by a built-in destination is refused at init
   local ok = pcall(load_with, function(S) S.register_lfo_destination("dens", "probe") end)
   assert_true(not ok, "a registered label never repeats a built-in one")
