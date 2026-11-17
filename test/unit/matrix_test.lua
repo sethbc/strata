@@ -671,6 +671,79 @@ test("matrix: the step after a voice sync or a start leaves a Lua destination ro
   assert_near(params:get("v1_grain_spread"), stored, 1e-12, "the stored value stays")
 end)
 
+-- #760: a Lua destination whose routings still play but sum to exactly 0
+-- is sent once as the sum returns to 0, then only when its value moves
+-- from what the engine has or the engine forgets it
+local function setfilter_mixes(context)
+  local mixes = {}
+  for _, call in ipairs(context.calls_named("setFilter")) do table.insert(mixes, call.args[4]) end
+  return mixes
+end
+
+test("matrix: routings that cancel to exactly 0 send once, then nothing (#760)", function()
+  local context, S = loaded()
+  params:set("filter_mix", 0.5)
+  params:set("macro_1", 1)
+  route(S, 1, "macro1", "filter_mix", 100)
+  lfo_step(context)
+  assert_near(engine_value(S, "filter_mix"), 1, 1e-9, "+100 %: 0.5 + 0.5")
+  route(S, 2, "macro1", "filter_mix", -100)
+  context.clear_engine_calls(); lfo_step(context, 10)
+  local mixes = setfilter_mixes(context)
+  assert_equal(#mixes, 1, "the return to 0 is sent once in ten steps")
+  assert_near(mixes[1], 0.5, 1e-9, "with the stored value")
+  assert_near(S.engine_param_values.filter_mix, 0.5, 1e-9, "the mix the engine has is the stored value")
+  -- another layer moving the value is sent at the next step, once
+  S.lib.engine_sync.set_extra_offset("test", "filter_mix", 0.2)
+  context.clear_engine_calls(); lfo_step(context, 5)
+  mixes = setfilter_mixes(context)
+  assert_equal(#mixes, 1, "a move under the canceled routings is sent once")
+  assert_near(mixes[1], 0.7, 1e-9, "with the other layer's offset")
+  S.lib.engine_sync.set_extra_offset("test", "filter_mix", nil)
+end)
+
+test("matrix: an LFO's home and a routing that cancel to exactly 0 send once, then nothing (#760)", function()
+  local context, S = loaded()
+  params:set("filter_mix", 0.5)
+  params:set("macro_16", 1)
+  hold_lfo(S, 1, "filt mix", 100)              -- +0.5
+  lfo_step(context)
+  assert_near(engine_value(S, "filter_mix"), 1, 1e-9, "the home alone: 0.5 + 0.5")
+  route(S, 1, "macro16", "filter_mix", -100)   -- -0.5
+  context.clear_engine_calls(); lfo_step(context, 10)
+  local mixes = setfilter_mixes(context)
+  assert_equal(#mixes, 1, "the return to 0 is sent once in ten steps")
+  assert_near(mixes[1], 0.5, 1e-9, "with the stored value")
+  assert_near(S.engine_param_values.filter_mix, 0.5, 1e-9, "the mix the engine has is the stored value")
+end)
+
+test("matrix: a canceled destination is sent again when the engine forgot it (#760)", function()
+  local context, S = loaded()
+  params:set("filter_mix", 0.5)
+  params:set("macro_1", 1)
+  route(S, 1, "macro1", "filter_mix", 100)
+  route(S, 2, "macro1", "filter_mix", -100)
+  lfo_step(context, 3)
+  S.engine_param_values.filter_mix = nil       -- what the budget's owner recorded, forgotten
+  context.clear_engine_calls(); lfo_step(context, 5)
+  local mixes = setfilter_mixes(context)
+  assert_equal(#mixes, 1, "sent again once")
+  assert_near(mixes[1], 0.5, 1e-9, "with the stored value")
+  -- a voice param: a voice sync forgets what was sent for the voice
+  local stored = params:get("v1_grain_spread")
+  route(S, 3, "macro1", "v1_grain_spread", 40)
+  route(S, 4, "macro1", "v1_grain_spread", -40)
+  lfo_step(context, 3)
+  context.clear_engine_calls(); lfo_step(context, 5)
+  assert_equal(#grain_calls(context, 0, "posSpread"), 0, "canceled and held: nothing")
+  sync_voice_values_to_engine(1)               -- forgets what was sent for voice 1
+  assert_equal(S.engine_param_values.v1_grain_spread, nil, "the sync forgot the spread")
+  context.clear_engine_calls(); lfo_step(context, 5)
+  local spreads = grain_calls(context, 0, "posSpread")
+  assert_equal(#spreads, 1, "after the sync the next step sends again, once")
+  assert_near(spreads[1].args[3], stored, 1e-9, "the stored value")
+end)
+
 test("matrix: an idle step sends nothing and leaves no offset", function()
   local context, S, matrix = loaded()
   S.drift_metro:stop()
@@ -1653,10 +1726,11 @@ test("a home and an R routing on one param sum and clamp once", function()
   route(S, 1, "macro16", "filter_mix", -100)   -- -0.5
   hold_lfo(S, 1, "filt mix", 100)              -- +0.5
   context.clear_engine_calls(); lfo_step(context)
-  local calls = context.calls_named("setFilter")
-  assert_equal(#calls, 1, "one setFilter in the step")
-  assert_near(calls[1].args[4], 0.5, 1e-9, "the two cancel before the clamp: the stored value")
-  assert_near(engine_value(S, "filter_mix"), 0.5, 1e-9)
+  -- the two cancel before the clamp: the engine already plays the stored
+  -- value, so nothing is sent (#760)
+  assert_equal(#context.calls_named("setFilter"), 0, "no setFilter in the step")
+  assert_near(engine_value(S, "filter_mix"), 0.5, 1e-9, "the two cancel before the clamp: the stored value")
+  assert_near(S.engine_param_values.filter_mix, 0.5, 1e-9, "which the engine has")
   -- the R routing off: the home alone, clamped to the range
   params:set("matrix_1", 0)
   context.clear_engine_calls(); lfo_step(context)
