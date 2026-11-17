@@ -18,7 +18,7 @@ var path = h.tempDir +/+ "positions.wav";
 var saved = engine.grainControls[voice].copy;
 var compare, position, reading, slope, setGrain, hookReset, values, probe, moved, restarted, before, after, stepFrames, frames, grain;
 var levelBus, levelProbe, level, scanState, checkScanModes, checkOneShot, checkRetriggerRestart, checkSpeed, checkSyncScan;
-var checkRegionRestart, checkScanControls, withIgnoredLines, nodeCount, checkSyncScanEdges, checkOneShotAgrees;
+var checkRegionRestart, checkRegionHitOneRestart, checkScanControls, withIgnoredLines, nodeCount, checkSyncScanEdges, checkOneShotAgrees;
 
 // 3.7's scan state (StrataPositions.sc) for a check def: the mode, the loop
 // 0/1 as the span, no region, no sync unless given
@@ -436,6 +436,55 @@ checkRegionRestart = {
     setGrain.(\regionStart, 0, \regionLength, 0);
 };
 
+// A one-shot hit that changes the region (a slice: regionStart, regionLength,
+// then the retrigger) restarts the own grain synth's scan once, not twice
+// (#742): the hit skips its restart when regionLength's reached the same
+// synth less than a control block before. Counted over captured bundles,
+// each sent afterward: (a) the region and the hit in one bundle, 1; (b) the
+// hit alone, 1; (c) regionLength alone, 1; (d) regionLength, 0.05 s, the hit:
+// 1 and 1 (the window has passed); (e) wrap, a hit: 0. After (a) the grains
+// read just past the region's start
+checkRegionHitOneRestart = {
+    var resets = { arg bundle;
+        var node = engine.synths[grainKey] !? { arg synth; synth.nodeID };
+        bundle.count({ arg msg; node.notNil and: { msg[1] == node }
+            and: { msg.any({ arg item; item.asString == "t_scanReset" }) } })
+    };
+    var sent = { arg body;
+        var bundle = server.makeBundle(false, body);
+        server.sendBundle(nil, *bundle);
+        resets.(bundle)
+    };
+    var counts = List.new, own;
+    setGrain.(\loopStart, 0, \loopLength, 1, \scanMode, 2, \bufPos, 0, \bufScan, 1, \regionStart, 0, \regionLength, 0);
+    command.(\setGrainParam, voice, \t_scanReset, 1);
+    0.3.wait;
+    counts.add(sent.({
+        command.(\setGrainParam, voice, \regionStart, 0.5);
+        command.(\setGrainParam, voice, \regionLength, 0.25);
+        command.(\retrigger, voice, 1.0);
+    }));
+    // (0.1 s: the probe's 20 ms sums hold the 40 ms grains from before the
+    // change for about 60 ms)
+    0.1.wait;
+    own = position.value;
+    0.05.wait;
+    counts.add(sent.({ command.(\retrigger, voice, 1.0) }));
+    0.05.wait;
+    counts.add(sent.({ command.(\setGrainParam, voice, \regionLength, 0.25) }));
+    0.05.wait;
+    counts.add(sent.({ command.(\setGrainParam, voice, \regionLength, 0.25) }));
+    0.05.wait;
+    counts.add(sent.({ command.(\retrigger, voice, 1.0) }));
+    setGrain.(\scanMode, 0);
+    counts.add(sent.({ command.(\retrigger, voice, 1.0) }));
+    server.sync;
+    setGrain.(\regionStart, 0, \regionLength, 0, \bufScan, 0);
+    check.((counts.asArray == [1, 1, 1, 1, 1, 0]) and: { own.inclusivelyBetween(0.5, 0.58) },
+        "positions: a one-shot hit that changes the region restarts the scan once (counts %)"
+            .format("% for (a) to (e), the grains at % after (a)".format(counts.asArray, own)));
+};
+
 // Each 3.7 scan control reaches a UGen of the buffer grain synth, and both
 // grain defs declare it at the default that plays 3.6's graph: wrap, no
 // region, follow rate 1, gain 1, no sync
@@ -463,6 +512,7 @@ checkSpeed.value;
 checkSyncScan.value;
 checkSyncScanEdges.value;
 checkRegionRestart.value;
+checkRegionHitOneRestart.value;
 checkScanControls.value;
 
 probe.free; levelProbe.free; levelBus.free;
