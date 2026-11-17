@@ -186,6 +186,16 @@ return function(S)
 
   local function send_target(id) send_param_to_engine(id, params:get(id)) end
 
+  -- Mark a Lua target's send due in the round robin, unless it would not be
+  -- heard: a synced delay's time plays its division (S.lib.delay_sync,
+  -- included after this module, so read at each call), as the matrix skips
+  -- it (#741, #762). The extra offset is set either way, so turning sync
+  -- off sends the time as modulated then
+  local function mark_target(id)
+    if id == "delay_time" and S.lib.delay_sync.time_unheard() then return end
+    S.lib.lfos.mark_due(id, function() send_target(id) end)
+  end
+
   -- Clear row k's extra, its target sent again (a Lua one in the round
   -- robin, a fast one in the matrix's next step)
   local function clear_extra(m, k)
@@ -196,7 +206,7 @@ return function(S)
       set_fast_extra(m, held.id, nil)
     else
       S.lib.engine_sync.set_extra_offset(source_key(m), held.id, nil)
-      S.lib.lfos.mark_due(held.id, function() send_target(held.id) end)
+      mark_target(held.id)
     end
   end
 
@@ -233,7 +243,7 @@ return function(S)
         else
           extras[m][k] = {id = id, fast = false}
           S.lib.engine_sync.set_extra_offset(source_key(m), id, at_value - at_stored)
-          S.lib.lfos.mark_due(id, function() send_target(id) end)
+          mark_target(id)
         end
       end
     end
