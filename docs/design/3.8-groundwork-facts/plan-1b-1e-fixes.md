@@ -259,7 +259,7 @@ Needs 0a only. It is the only engine package (design §10). Rules it keeps:
 - Run with `STRATA_ENGINE_CHECK_AREAS=positions STRATA_SC_PORT=<own port> test/run_engine_check.sh` while working, and every area before landing.
 
 ### 4. Tests
-- **New `checkRegionHitOneRestart`, in positions.scd, on the existing buffer voice:** set `scanMode 2` and `bufScan 1` with `setGrain`. Count `t_scanReset` with a helper over a `server.makeBundle(false, {...})` that counts the messages whose `msg[1]` is the own grain synth's `nodeID` and that hold `t_scanReset` (compare with `item.asString == "t_scanReset"`, since a `setMsg` may carry symbols). Send each captured bundle afterwards (`server.sendBundle(nil, *bundle)`), as checkRegionRestart does at 426. Assert all five:
+- **New `checkRegionHitOneRestart`, in positions.scd, on the existing buffer voice:** set `scanMode 2` and `bufScan 1` with `setGrain`. Count `t_scanReset` with a helper over a `server.makeBundle(false, {...})` that counts the messages whose `msg[1]` is the own grain synth's `nodeID` and that hold `t_scanReset` (compare with `item.asString == "t_scanReset"`, since a `setMsg` may carry symbols). Send each captured bundle afterward (`server.sendBundle(nil, *bundle)`), as checkRegionRestart does at 426. Assert all five:
   - (a) `regionStart`, `regionLength` and `retrigger` in one bundle: exactly 1;
   - (b) `retrigger` alone: 1;
   - (c) `regionLength` alone: 1;
