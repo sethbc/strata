@@ -36,6 +36,7 @@
 - the tempo-follow handlers `follow_clock_tempo`, `install_tempo_change_handler`, `restore_tempo_change_handler`;
 - `S.lib.params_setup.beat_seconds_now()` (a beat's length, for timing) and `clock_tempo_now()` (the tempo to show), below;
 - the readers of the voice-param, fx-param, param-filter and source-change registries (below), and `S.lib.params_setup.add_voice_extra`;
+- `S.lib.params_setup.voice_engine_parts(voice_idx)` (the groundwork before 3.8): what a voice's start and sync send, as parts `{name, kept, voice_level}` in order `synth` (the synth keys, sorted), `grain` (the nine in their fixed order), `crossmod`, `bend`, then one per registered record (its `grain_keys` sorted, then its `sync`); `lib/engine_sync.lua` sends them (`docs/notes/lua/engine-sync.md`), so a later record field changes only this function;
 - `S.performance` (the tier's values, standard until `lib/performance.lua` fills it at init);
 - cleanup step 10: the tempo handler given back.
 

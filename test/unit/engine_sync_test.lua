@@ -1665,4 +1665,130 @@ test("a voice start sends 3.7.0's messages", function()
   end
 end)
 
+-- The groundwork before 3.8 (rulings 5 and 9): a start and a sync send from
+-- S.lib.params_setup.voice_engine_parts, the synth params in sorted order
+local BUILT_IN_PARTS = {"synth", "grain", "crossmod", "bend"}
+local GRAIN_PART = {"grainSize", "grainDensity", "pitchShift", "posSpread", "envShape", "grainMode", "bufPos",
+  "bufRate", "bufScan"}
+
+-- A call as "name" or "name:key" for setGrainParam and setVoiceParam
+local function call_tag(call)
+  if call.name == "setGrainParam" or call.name == "setVoiceParam" then return call.name .. ":" .. call.args[2] end
+  return call.name
+end
+
+test("voice_engine_parts names synth, grain, crossmod, bend, then the records", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice = 1, S.constants.NUM_VOICES do
+    local parts = S.lib.params_setup.voice_engine_parts(voice)
+    local names = {}
+    for index, part in ipairs(parts) do
+      names[index] = part.name
+      assert_equal(type(part.kept), "table", part.name .. ": kept is a list")
+      assert_equal(type(part.voice_level), "table", part.name .. ": voice_level is a list")
+      for _, list in ipairs({part.kept, part.voice_level}) do
+        for _, entry in ipairs(list) do
+          local kinds = (entry.grain and 1 or 0) + (entry.voice and 1 or 0) + (entry.send and 1 or 0)
+          assert_equal(kinds, 1, part.name .. " " .. tostring(entry.key) .. ": one of grain, voice, send")
+        end
+      end
+    end
+    local expected = {}
+    for index, name in ipairs(BUILT_IN_PARTS) do expected[index] = name end
+    for _, record in ipairs(S.registry.voice_params) do expected[#expected + 1] = record.name end
+    assert_equal(table.concat(names, ","), table.concat(expected, ","), "voice " .. voice .. "'s parts")
+    -- the synth part: the voice's synth keys, sorted, all voice-level
+    local synth_keys = {}
+    for _, key in ipairs(S.voices[voice].param_order) do synth_keys[#synth_keys + 1] = key end
+    table.sort(synth_keys)
+    local sent = {}
+    for index, entry in ipairs(parts[1].voice_level) do
+      sent[index] = entry.key
+      assert_equal(entry.voice, entry.key, "a synth key goes out under its own name")
+    end
+    assert_equal(table.concat(sent, ","), table.concat(synth_keys, ","), "voice " .. voice .. "'s synth keys sorted")
+    assert_equal(#parts[1].kept, 0, "nothing of the synth part is kept")
+    -- the grain part: the nine, kept, in their fixed order
+    local grain = {}
+    for index, entry in ipairs(parts[2].kept) do grain[index] = entry.grain end
+    assert_equal(table.concat(grain, ","), table.concat(GRAIN_PART, ","), "the grain part's nine in order")
+    assert_equal(#parts[2].voice_level, 0, "nothing of the grain part is voice-level")
+    -- crossmod: per slot its source and amounts, then the speed; none carried
+    local crossmod = {}
+    for index, entry in ipairs(parts[3].voice_level) do
+      crossmod[index] = entry.key
+      assert_equal(entry.carry, false, entry.key .. " carries no start value")
+    end
+    assert_equal(table.concat(crossmod, ","), "mod_source_1,mod_amp_amt_1,mod_freq_amt_1,mod_source_2,mod_amp_amt_2,"
+      .. "mod_freq_amt_2,mod_source_3,mod_amp_amt_3,mod_freq_amt_3,mod_speed", "crossmod's order")
+    -- bend: one keyless send
+    assert_equal(#parts[4].voice_level, 1, "bend is one send")
+    assert_equal(parts[4].voice_level[1].key, nil, "with no key")
+    assert_true(parts[4].voice_level[1].send ~= nil, "a send")
+  end
+end)
+
+test("the synth params go out sorted", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice = 1, S.constants.NUM_VOICES do
+    if S.voices[voice].active then toggle_voice(voice) end
+  end
+  context.clear_engine_calls()
+  toggle_voice(1)
+  local tags, voice_on = {}, nil
+  for index, call in ipairs(context.engine_calls) do
+    tags[index] = call_tag(call)
+    if call.name == "voiceOn" then voice_on = index end
+  end
+  local after = {}
+  for index = voice_on + 1, voice_on + 9 do after[#after + 1] = tags[index] end
+  assert_equal(table.concat(after, ","), "setVoiceParam:attackTime,setVoiceParam:releaseTime,setVoiceParam:amp,"
+    .. "setVoiceParam:freq,setVoiceParam:mod1,setVoiceParam:mod2,setVoiceParam:noise,setVoiceParam:pan,"
+    .. "setVoiceParam:rq", "voice 1 after the hooks' two")
+end)
+
+test("a sync sends voice_level before kept, per part", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  if not S.voices[1].active then toggle_voice(1) end
+  context.clear_engine_calls()
+  sync_voice_values_to_engine(1)
+  local tags = {}
+  for index, call in ipairs(context.engine_calls) do tags[index] = call_tag(call) end
+  local expected = {"setVoiceParam:amp", "setVoiceParam:freq", "setVoiceParam:mod1", "setVoiceParam:mod2",
+    "setVoiceParam:noise", "setVoiceParam:pan", "setVoiceParam:rq"}
+  for _, name in ipairs(GRAIN_PART) do expected[#expected + 1] = "setGrainParam:" .. name end
+  for _ = 1, S.constants.NUM_MOD_SLOTS do
+    for _, name in ipairs({"setModSource", "setModAmpAmt", "setModFreqAmt"}) do expected[#expected + 1] = name end
+  end
+  expected[#expected + 1] = "setModSpeed"
+  expected[#expected + 1] = "setVoiceParam:bend"
+  for index, tag in ipairs(expected) do assert_equal(tags[index], tag, "sync call " .. index) end
+  -- then each record's kept part, in registration order: its grain keys by key
+  local position = #expected
+  for _, record in ipairs(S.registry.voice_params) do
+    local keys = {}
+    for key in pairs(record.grain_keys or {}) do keys[#keys + 1] = key end
+    table.sort(keys)
+    for _, key in ipairs(keys) do
+      local grain_key = record.grain_keys[key]
+      local name = type(grain_key) == "table" and grain_key.name or grain_key
+      local found
+      for index = position + 1, #tags do
+        if tags[index] == "setGrainParam:" .. name then found = index; break end
+      end
+      assert_true(found ~= nil, record.name .. "'s " .. key .. " follows the built-in parts, in record order")
+      position = found
+    end
+  end
+end)
+
+test("engine_sync.lua reads no S.registry.voice_params", function()
+  local source = h.file_text(h.repo_root .. "/lib/engine_sync.lua")
+  assert_true(not source:find("registry.voice_params", 1, true), "no read of S.registry.voice_params")
+  assert_true(not source:find("registry%.voice_params"), "none at all")
+end)
+
 end
