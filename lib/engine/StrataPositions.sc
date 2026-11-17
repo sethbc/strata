@@ -16,7 +16,8 @@
     // and set on the own grain synth with a scan restart, in one message; a
     // per-note control, so a voice-wide send never reaches an extra note
     // (perNoteGrainControls). A retrigger restarts a one-shot voice's own
-    // scan (positionsHit).
+    // scan (positionsHit), unless regionLength's restart reached the same
+    // synth less than a control block before (regionResetJustSent, #742).
     strataAreaPositions {
         ^(
             order: 150,
@@ -30,6 +31,7 @@
                 regionLength: { arg voice, value;
                     grainControls[voice][\regionLength] = value;
                     this.setSynth(this.grainKey(voice), \regionLength, value, \t_scanReset, 1);
+                    areaState[\positions][\regionResets][voice] = [synths[this.grainKey(voice)], thisThread.seconds];
                     true
                 }
             ),
@@ -38,9 +40,11 @@
     }
 
     // areaState[\positions][\received]: what syncScan last took, for the
-    // engine check
+    // engine check; [\regionResets]: per voice, the own grain synth
+    // regionLength last restarted and when ([synth, seconds], #742)
     allocPositionState {
         areaState[\positions][\received] = IdentityDictionary.new;
+        areaState[\positions][\regionResets] = Array.newClear(numVoices);
     }
 
     // syncScan (design 3.7 §2.4): the voice's own scan phase, 0-2 in passes
@@ -70,11 +74,24 @@
 
     // A hit (voiceHit): a retrigger restarts a one-shot voice's own scan,
     // its own grain synth's alone (an extra note's restarts at its own
-    // noteOn: extraNoteOn)
+    // noteOn: extraNoteOn), unless regionLength has just restarted it: a
+    // slice's region and hit then restart the scan once, not twice (#742)
     positionsHit { arg voice, kind;
-        if ((kind == \retrigger) and: { this.oneShotVoice(voice) }) {
+        if ((kind == \retrigger) and: { this.oneShotVoice(voice) } and: { this.regionResetJustSent(voice).not }) {
             this.setSynth(this.grainKey(voice), \t_scanReset, 1);
         };
+    }
+
+    // True when regionLength's restart reached the voice's live own grain
+    // synth less than a control block ago (#742). Two sets of t_scanReset
+    // in the same or adjacent blocks already make one restart; two need a
+    // block of 0 between them. sclang cannot see the server's blocks, so the
+    // window is one block's time against thisThread.seconds (in a command
+    // handler, when sclang took the message)
+    regionResetJustSent { arg voice;
+        var last = areaState[\positions][\regionResets][voice], server = context.server;
+        ^last.notNil and: { last[0].notNil } and: { last[0] === synths[this.grainKey(voice)] }
+            and: { (thisThread.seconds - last[1]) < (server.options.blockSize / server.sampleRate) }
     }
 
     // Whether the voice's scan is a one shot: its kept scanMode rounded and
