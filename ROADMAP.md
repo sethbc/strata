@@ -110,7 +110,7 @@ Decided 2026-11-16, from a review of what compatibility had cost (`docs/design/3
 
 ## 3.8: Sound
 
-Added 2026-11-11, at the maintainer's request. It widens what a voice can be. It gets its own design before code, and that design starts from the real-time memory left after 3.5.
+Added 2026-11-11, at the maintainer's request. It widens what a voice can be. It gets its own design before code, and that design starts from the real-time memory left after 3.5. *2026-11-17:* its design is `docs/design/3.8-design.md`; where it differs from the sketches below, the design rules ("The roadmap against the facts" there says where and why).
 
 ### More voice types
 
