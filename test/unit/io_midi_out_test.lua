@@ -1036,6 +1036,27 @@ test("a note sent to the empty old port mid-menu, held until the menu closes, gi
   assert_equal(sent(b), "", "and no off for a note b never had")
 end)
 
+test("a played MPE note's expression never reaches the device that took its port", function()
+  local context, S = started()
+  local a = context.midi.plug(2, "synth a")
+  local b = context.midi.plug(4, "synth b")
+  params:set("midi_channel_mode", 3)  -- mpe selected: voice 1
+  mpe_voice(1, 2); settled(context)
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 2})  -- played: member channel 2 on a
+  step(context, S)
+  clear(a); clear(b)
+  _menu.set_mode(true)
+  context.midi.reassign(2, 3)  -- synth a to port 3
+  context.midi.reassign(4, 2)  -- synth b to port 2
+  clear(b)
+  context.midi.send(1, {type = "pitchbend", val = 9000, ch = 2})  -- a new bend for the played note
+  step(context, S)
+  assert_equal(sent(b), "", "b, now on port 2, gets no expression of a's note (#749)")
+  _menu.set_mode(false)
+  assert_equal(sent(b), SETUP_15_48, "b gets the zone's setup at port 2")
+  assert_equal(sent(a), "cc 123 0 2", "a gets its owed off at port 3")
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")
