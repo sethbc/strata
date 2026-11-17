@@ -389,8 +389,19 @@ return function(S)
     into[id] = (into[id] or 0) + m
   end
 
+  -- Whether a Lua destination's send would be heard: its value moved
+  -- (lua_moved), and it is not a synced delay's time, which plays its
+  -- division (#741)
+  local function heard_move(id)
+    return lua_moved(id) and not (id == "delay_time" and S.lib.delay_sync.time_unheard())
+  end
+
   -- A Lua destination's sum is its extra offset, sent when its value moved;
-  -- one whose sum returns to 0 gives its offset up and is sent once more
+  -- one whose sum returns to 0 gives its offset up and is sent once more.
+  -- Routings that still play but sum to exactly 0 (they cancel) hold no
+  -- offset, so after that one send the destination is sent again only when
+  -- its value moves from what the engine has or will have (another layer,
+  -- or a voice sync that forgot it), as any other is (#760)
   local function update_lua(id)
     local sync = S.lib.engine_sync
     local m = scratch.lua_sums[id] or 0
@@ -398,11 +409,12 @@ return function(S)
       local offset = S.lib.lfos.offset_for(id, m)
       sync.set_extra_offset(MATRIX.extra_key, id, offset)
       held.lua[id] = offset
-      if lua_moved(id) and not (id == "delay_time" and S.lib.delay_sync.time_unheard()) then mark_lua(id) end
+      if heard_move(id) then mark_lua(id) end
     else
+      local returning = held.lua[id] ~= nil
       sync.set_extra_offset(MATRIX.extra_key, id, nil)
       held.lua[id] = nil
-      mark_lua(id)
+      if returning or heard_move(id) then mark_lua(id) end
     end
   end
 
