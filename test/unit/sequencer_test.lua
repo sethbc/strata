@@ -3625,37 +3625,40 @@ local function at_cleared_three(context, S)
   params:set("seq_chain_random", real[3])
 end
 
-test("the chain goes on from a cleared scene's place in its range, as 3.6 did", function()
+-- Ruling 29: a cleared playing scene is no longer in the list, so the chain
+-- goes on to the next saved one in its range with no draw, as the scene
+-- sequencer does; the chances apply from there
+test("a cleared playing scene goes on to the next saved one with no draw", function()
   local context, S = setup()
   local marks = chain_of_four(context, S, {100, 0, 0})
   at_cleared_three(context, S)
-  assert_equal(marks(2), "3 4 1", "the defaults: on to 4, as 3.6 went, then 1")
+  assert_equal(marks(2), "3 4 1", "the defaults: on to 4, then 1")
   pattern_clock_stop()
-  -- previous at 100: the populated scene before 3's place
+  -- previous at 100: on to 4 first, then backward
   context, S = setup()
   marks = chain_of_four(context, S, {0, 100, 0})
   at_cleared_three(context, S)
-  assert_equal(marks(4), "3 2 1 4 2", "previous: 2, 1, around to 4, then 2, past the empty 3")
+  assert_equal(marks(4), "3 4 2 1 4", "previous: on to 4 with no draw, then 2, 1, around to 4, past the empty 3")
   pattern_clock_stop()
-  -- random at 100: any other slot of the range, never the empty 3
+  -- random at 100: on to 4, with no draw
   context, S = setup()
   marks = chain_of_four(context, S, {0, 0, 100})
   at_cleared_three(context, S)
   local real_random = math.random
   local draws = 0
-  math.random = function() draws = draws + 1; return 0.5 end  -- the middle of {1, 2, 4}: 2
+  math.random = function() draws = draws + 1; return 0.5 end
   local seen = marks(1)
   math.random = real_random
-  assert_equal(seen, "3 2", "random: one draw among the others, 1, 2 and 4")
-  assert_equal(draws, 1, "one draw, none for the move at 100")
-  -- with 4 cleared too, the one draw is among the saved others alone: 1
+  assert_equal(seen, "3 4", "random: on to 4")
+  assert_equal(draws, 0, "no draw from a cleared scene")
+  -- with 4 cleared too, on to 1, with no draw
   S.scenes[4].populated = false
   draws = 0
-  math.random = function() draws = draws + 1; return 0.99 end  -- the last of {1}
+  math.random = function() draws = draws + 1; return 0.99 end
   seen = marks(1)
   math.random = real_random
-  assert_equal(seen, "2 1", "4 and 3 empty: random links 1")
-  assert_equal(draws, 1, "with one draw")
+  assert_equal(seen, "4 1", "4 and 3 empty: on to 1")
+  assert_equal(draws, 0, "with no draw")
   pattern_clock_stop()
 end)
 
@@ -3696,7 +3699,7 @@ test("a start links the range's first scene; the chances apply from the next lin
   end
 end)
 
-test("a link validates only the scene it links", function()
+test("a link validates no scene it has checked before", function()
   local context, S = setup()
   for scene = 1, 16 do
     voice_1_only(S, 4)
@@ -3713,33 +3716,91 @@ test("a link validates only the scene it links", function()
   local at_link = validations - at_start
   validate_scene = real_validate
   pattern_clock_stop()
-  assert_equal(at_start, 1, "the start validates the one scene it loads")
-  assert_equal(at_link, 1, "a link over a full range of 16 validates one")
-  -- an invalid pick moves on to the next populated slot, validating it
+  assert_equal(at_start, 0, "the start validates nothing: each scene was checked at its capture")
+  assert_equal(at_link, 0, "nor does a link over a full range of 16")
+  -- a scene written into its slot from outside lib/scenes.lua (a fresh
+  -- table) is checked once, by the draw that first meets it, and left out
   pattern_clock_start()
+  S.scenes[2] = h.deep_copy(S.scenes[2])
   S.scenes[2].data.steps[1][1] = {cond = "9:9"}
   validations = 0
   validate_scene = function(...) validations = validations + 1; return real_validate(...) end
   context.clock.run_for(2.01)
   validate_scene = real_validate
   assert_equal(S.patterns[1][1], 4, "scene 2 is invalid: scene 3 (its mark 4) links")
-  assert_equal(validations, 2, "two validations: 2, then 3")
+  assert_equal(validations, 1, "one validation: the fresh table's")
   pattern_clock_stop()
 end)
 
-test("previous past an invalid scene goes on backward, with one validation each", function()
+test("previous past an invalid scene goes on backward, validating only a table it has not seen", function()
   local context, S = setup()
   local marks = chain_of_four(context, S, {100, 0, 0})
   pattern_clock_start(); context.clock.run_for(4.01)  -- scenes 1, 2, 3
   assert_equal(S.patterns[1][1], 3, "the chain plays scene 3")
   params:set("seq_chain_next", 0); params:set("seq_chain_previous", 100)
+  S.scenes[2] = h.deep_copy(S.scenes[2])
   S.scenes[2].data.steps[1][1] = {cond = "9:9"}
   local real_validate, validations = validate_scene, 0
   validate_scene = function(...) validations = validations + 1; return real_validate(...) end
   local seen = marks(1)
   validate_scene = real_validate
   assert_equal(seen, "3 1", "2 is invalid: previous goes on to 1")
-  assert_equal(validations, 2, "2, then 1")
+  assert_equal(validations, 1, "one validation: the fresh table's")
+  pattern_clock_stop()
+end)
+
+-- #738 (the groundwork's stepper): the chain draws among the range's
+-- playable slots, populated and valid, so a random move never lands on an
+-- invalid scene and never walks on from one. Scenes 1-4 (marks 1-4), 3
+-- invalid on a fresh table, random at 100, playing 2: the draw is among 1
+-- and 4
+local function chain_at_two_with_three_invalid(context, S)
+  local marks = chain_of_four(context, S, {100, 0, 0})
+  pattern_clock_start(); context.clock.run_for(2.01)  -- scenes 1, 2
+  assert_equal(S.patterns[1][1], 2, "the chain plays scene 2")
+  S.scenes[3] = h.deep_copy(S.scenes[3])
+  S.scenes[3].data.steps[1][1] = {cond = "9:9"}
+  params:set("seq_chain_next", 0); params:set("seq_chain_random", 100)
+  return marks
+end
+
+test("a chain move never lands on an invalid scene and never walks on from one (#738)", function()
+  local real_random = math.random
+  for _, case in ipairs({{0.5, "2 4", "the second half of {1, 4}"}, {0.0, "2 1", "the first"},
+      {0.4, "2 1", "below the half: 1, where a walk on from 3 linked 4"}}) do
+    local context, S = setup()
+    local marks = chain_at_two_with_three_invalid(context, S)
+    math.random = function() return case[1] end
+    local seen = marks(1)
+    math.random = real_random
+    assert_equal(seen, case[2], "random at " .. case[1] .. ": " .. case[3])
+    pattern_clock_stop()
+  end
+  -- over 50 seeded links (at seed 5 scenes 1 to 4 link 21, 16, 0 and 13
+  -- times), 3 never plays and 4 is not favored, where the walk on from 3
+  -- linked 4 about two times in three
+  local context, S = setup()
+  chain_at_two_with_three_invalid(context, S)
+  math.randomseed(5)
+  local counts = {0, 0, 0, 0}
+  for _ = 1, 50 do
+    context.clock.run_for(2.0)
+    counts[S.patterns[1][1]] = counts[S.patterns[1][1]] + 1
+  end
+  pattern_clock_stop()
+  assert_equal(counts[3], 0, "scene 3 never links")
+  assert_true(counts[4] < 1.5 * counts[1], "4 is not favored: " .. table.concat(counts, " "))
+  -- with only the playing scene playable, random keeps it: nothing is loaded again
+  context, S = setup()
+  local marks = chain_at_two_with_three_invalid(context, S)
+  params:set("seq_chain_scenes", 2); params:set("seq_chain_from", 2)
+  local replaced = 0
+  local real_replace = S.lib.sequencer.replace_pattern
+  S.lib.sequencer.replace_pattern = function(...) replaced = replaced + 1; return real_replace(...) end
+  local seen = marks(2)
+  S.lib.sequencer.replace_pattern = real_replace
+  assert_equal(seen, "2 2 2", "range 2-3 with 3 invalid: 2 stays")
+  assert_equal(replaced, 0, "and is never loaded again")
   pattern_clock_stop()
 end)
 

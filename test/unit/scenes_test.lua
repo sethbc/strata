@@ -2984,6 +2984,96 @@ test("no next slot is kept while the sequencer is off", function()
     "the invariant names a kept slot while it is off: " .. broken)
 end)
 
+-- The groundwork's stepper (design §5, ruling 27): S.lib.scenes.playable,
+-- playable_slots and next_slot, under the scene sequencer, the chain and the
+-- next-scene action. A scene made invalid is a fresh table written into its
+-- slot (only a table written outside lib/scenes.lua is checked again)
+
+-- Slot `slot`'s scene, captured, replaced by a fresh copy that fails
+-- validate_scene (a condition no step takes)
+local function make_invalid(S, slot)
+  S.scenes[slot] = deep_copy(S.scenes[slot])
+  S.scenes[slot].data.steps[1][1] = { cond = "9:9" }
+  assert_true(not validate_scene(S.scenes[slot]), "slot " .. slot .. "'s copy fails validate_scene")
+end
+
+test("playable_slots lists a range's populated valid slots, wrapping past 16", function()
+  load_strata()
+  local S = local_value("S")
+  for _, slot in ipairs({ 1, 2, 15, 16 }) do capture_scene(slot) end
+  make_invalid(S, 2)
+  local scenes = S.lib.scenes
+  local function listed(first, count) return table.concat(scenes.playable_slots(first, count), " ") end
+  assert_equal(listed(15, 4), "15 16 1", "15, 16, 1 and 2, the invalid 2 left out")
+  assert_equal(listed(1, 16), "1 15 16", "the whole range, in order")
+  assert_equal(listed(1, 20), "1 15 16", "a count of 20 counts 16")
+  assert_equal(listed(3, 12), "", "none in 3-14")
+  for _, bad in ipairs({ { 0, 4 }, { 17, 4 }, { 1.5, 4 }, { 1, 0 }, { 1, 2.5 }, { "1", 4 }, { 1, nil } }) do
+    assert_equal(listed(bad[1], bad[2]), "", tostring(bad[1]) .. ", " .. tostring(bad[2]) .. ": no list")
+  end
+  assert_true(scenes.playable(1) and scenes.playable(16), "a captured scene plays")
+  assert_true(not scenes.playable(2), "an invalid one does not")
+  assert_true(not scenes.playable(3), "nor an empty one")
+  assert_true(not scenes.playable(0) and not scenes.playable(17) and not scenes.playable(1.5), "nor a number that is no slot")
+end)
+
+test("next_slot: no slot is nil; a lone slot keeps the playing scene; a position not in the list goes on with no draw", function()
+  load_strata()
+  local S = local_value("S")
+  local scenes = S.lib.scenes
+  local function raising_random() error("next_slot drew a random number") end
+  local slot, move = scenes.next_slot(1, {}, { 100, 0, 0 })
+  assert_equal(slot, nil, "no slot"); assert_equal(move, nil, "and no move")
+  slot, move = scenes.next_slot(3, { 3 }, { 100, 0, 0 }, raising_random)
+  assert_equal(slot, 3, "a lone slot at 100, 0, 0: the playing scene"); assert_equal(move, "next", "applied again")
+  slot, move = scenes.next_slot(3, { 3 }, { 0, 0, 100 })
+  assert_equal(slot, 3, "random with no other slot keeps it"); assert_equal(move, "repeat", "held")
+  slot, move = scenes.next_slot(2, { 1, 4 }, { 0, 100, 0 }, raising_random)
+  assert_equal(slot, 4, "2 is not in the list: the first after it"); assert_equal(move, "next", "with no draw")
+  slot, move = scenes.next_slot(15, { 1, 4 }, { 0, 0, 100 }, raising_random)
+  assert_equal(slot, 1, "past the last, around to the first"); assert_equal(move, "next")
+  slot, move = scenes.next_slot(nil, { 13, 14, 1 }, { 0, 0, 100 }, raising_random)
+  assert_equal(slot, 13, "no position: the list's first"); assert_equal(move, "next")
+  -- the picker is looked up at each call
+  local real_pick, picked = S.lib.chance.pick, nil
+  S.lib.chance.pick = function(...) picked = { ... }; return 4, "previous" end
+  slot, move = scenes.next_slot(1, { 1, 4 }, { 0, 100, 0 })
+  S.lib.chance.pick = real_pick
+  assert_equal(slot, 4); assert_equal(move, "previous", "the picker's answer")
+  assert_equal(picked[1], 1, "the position"); assert_equal(table.concat(picked[2], " "), "1 4", "the slots")
+  assert_equal(table.concat(picked[3], " "), "0 100 0", "the chances")
+end)
+
+test("the scene sequencer never draws or recalls an invalid scene (#754)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  chance_scenes({ 1, 2, 3, 4 }, 4, { 0, 0, 100 })
+  make_invalid(S, 3)
+  math.randomseed(1)
+  local recalls = run_scene_sequencer(context, 0, 4, 1)
+  for pass = 1, 40 do
+    assert_true(S.lib.scenes.sequencer_next_slot() ~= 3, "pass " .. pass .. ": the invalid 3 is never next")
+    context.clock.run_for(4, 0.001)
+  end
+  for index, recall in ipairs(recalls) do
+    assert_true(recall.scene ~= 3, "recall " .. index .. " is not of scene 3")
+  end
+  assert_true(#recalls > 30, "the sequencer went on: " .. #recalls .. " recalls")
+  assert_true(not table.concat(context.printed, "\n"):find("invalid data", 1, true), "no invalid data line")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
+test("a sequence whose one playable slot is the playing scene keeps it", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  chance_scenes({ 1, 2 }, 2, { 100, 0, 0 })
+  make_invalid(S, 2)
+  local recalls = run_scene_sequencer(context, 0, 4, 9)
+  assert_equal(recalled_scenes(recalls), "1 1 1", "next to itself, applied again each pass")
+  assert_true(not table.concat(context.printed, "\n"):find("invalid data", 1, true), "scene 2 is never tried")
+  params:set("scene_sequencer_enabled", 0)
+end)
+
 test("revision rises on a capture and on a load", function()
   local context = load_strata({ data_subdir = "scene_revisions" })
   local S = local_value("S")

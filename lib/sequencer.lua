@@ -1110,55 +1110,18 @@ return function(S)
 
   -- The chain (design 8.8) -----------------------------------------------
 
-  -- The chain's slots: seq_chain_scenes of them from seq_chain_from
-  local function chain_slots()
-    local slots, from = {}, params:get("seq_chain_from")
-    for offset = 0, math.min(params:get("seq_chain_scenes"), NUM_SCENES) - 1 do
-      slots[#slots + 1] = (from - 1 + offset) % NUM_SCENES + 1
-    end
-    return slots
-  end
-
-  local function populated(slot) return S.scenes[slot] ~= nil and S.scenes[slot].populated == true end
-
-  -- The first slot of slots from index first, walking by step (1 or -1)
-  -- and wrapping, at most once around, that is populated and valid and
-  -- not refused (a slot already found invalid); nil with none. Only
-  -- populated slots are validated
-  local function linkable_from(slots, first, step, refused)
-    for offset = 0, #slots - 1 do
-      local slot = slots[(first - 1 + offset * step) % #slots + 1]
-      if slot ~= refused and populated(slot) and validate_scene(S.scenes[slot]) then return slot end
-    end
-    return nil
-  end
-
   -- The scene the chain links next from current, and the move (3.7, design
-  -- §5.4). With no current scene (a start, the chain switched on) the
-  -- range's first populated, valid scene, with no draw. Otherwise
-  -- S.lib.chance.pick by seq_chain_next, seq_chain_previous and
-  -- seq_chain_random over the range's populated slots in order, the
-  -- playing one kept at its place even once it is cleared (as 3.6 went on
-  -- from there). Only the picked slot is validated (a cheap populated test
-  -- picks the list): an invalid one goes on to the next valid slot the
-  -- move's way (previous backward, the others forward), with no second
-  -- draw. nil with none
+  -- §5.4; the groundwork's stepper): S.lib.scenes.next_slot over the
+  -- playable slots (populated and valid) of seq_chain_scenes from
+  -- seq_chain_from, by seq_chain_next, seq_chain_previous and
+  -- seq_chain_random. With no current scene (a start, the chain switched
+  -- on), or a current one cleared or made invalid since, the first playable
+  -- slot after it, with no draw (#738: an invalid scene is never drawn, so
+  -- no walk goes on from one). nil with none
   local function next_chain_scene(current)
-    local range, slots = chain_slots(), {}
-    if current == nil then return linkable_from(range, 1, 1), "next" end
-    for _, slot in ipairs(range) do
-      if slot == current or populated(slot) then slots[#slots + 1] = slot end
-    end
-    local slot, move = S.lib.chance.pick(current, slots,
+    local scenes = S.lib.scenes
+    return scenes.next_slot(current, scenes.playable_slots(params:get("seq_chain_from"), params:get("seq_chain_scenes")),
       {params:get("seq_chain_next"), params:get("seq_chain_previous"), params:get("seq_chain_random")})
-    if slot == nil or move == "repeat" or (populated(slot) and validate_scene(S.scenes[slot])) then
-      return slot, move
-    end
-    local index = 1
-    for position, value in ipairs(slots) do
-      if value == slot then index = position end
-    end
-    return linkable_from(slots, index, move == "previous" and -1 or 1, slot), move
   end
 
   -- A link: the scene's patterns, steps block and each voice's length,

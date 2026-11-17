@@ -74,6 +74,13 @@ return function(S)
   local function raise_revision(slot) revisions[slot] = (revisions[slot] or 0) + 1 end
   function M.revision(slot) return revisions[slot] or 0 end
 
+  -- The validity cache (the groundwork's ruling 27): per slot, the data
+  -- table last checked and whether it passed validate_scene,
+  -- {data = <table>, valid = <boolean>}. Set at a capture and a file load;
+  -- M.playable checks once a data table it has not seen (one written into
+  -- S.scenes outside this module: only tests do). Never written to the file
+  local checked = {}
+
   -- Recalls and transitions started (recall_scene, past its checks): morph
   -- compares S.lib.scenes.takeovers() between a move and its apply, so a
   -- recall after the move wins even when it recalls the scene already
@@ -336,6 +343,7 @@ return function(S)
 
     S.scenes[scene_num].data = scene_data
     S.scenes[scene_num].populated = true
+    checked[scene_num] = {data = scene_data, valid = validate_scene(S.scenes[scene_num]) == true}
     raise_revision(scene_num)
     print("captured scene " .. scene_num)
   end
@@ -772,15 +780,66 @@ return function(S)
     end
   end
 
-  -- The first slot from `from` (1..length) that holds a scene, going on
-  -- through the sequence and wrapping to 1 past its length; nil when none
-  -- of slots 1..length holds one
-  local function first_scene_from(from, length)
-    for offset = 0, length - 1 do
-      local slot = (from - 1 + offset) % length + 1
-      if S.scenes[slot] and S.scenes[slot].populated then return slot end
+  -- The stepper (the groundwork's design §5): one list of playable slots
+  -- and one draw of the next, under the scene sequencer, the pattern chain
+  -- (lib/sequencer.lua) and the next-scene action (lib/io/actions.lua)
+
+  -- Whether `slot` can play: a whole number in 1..NUM_SCENES holding a
+  -- scene that is populated and valid. Validity is the cache's (checked):
+  -- a data table it has not seen is checked once, here
+  function M.playable(slot)
+    if not is_integer_between(slot, 1, NUM_SCENES) then return false end
+    local scene = S.scenes[slot]
+    if type(scene) ~= "table" or scene.populated ~= true then return false end
+    local entry = checked[slot]
+    if entry == nil or entry.data ~= scene.data then
+      entry = {data = scene.data, valid = validate_scene(scene) == true}
+      checked[slot] = entry
     end
-    return nil
+    return entry.valid
+  end
+
+  -- The playable slots of first, first + 1, ..., count of them (at most
+  -- NUM_SCENES), wrapping past NUM_SCENES to 1, in that order; {} when
+  -- first is no slot or count no whole number of at least 1
+  function M.playable_slots(first, count)
+    local slots = {}
+    if not is_integer_between(first, 1, NUM_SCENES) or not is_integer_between(count, 1, math.huge) then
+      return slots
+    end
+    for offset = 0, math.min(count, NUM_SCENES) - 1 do
+      local slot = (first - 1 + offset) % NUM_SCENES + 1
+      if M.playable(slot) then slots[#slots + 1] = slot end
+    end
+    return slots
+  end
+
+  -- The first of slots after position in the cyclic order of the slots
+  -- (position itself, if listed, comes last); slots[1] for a nil position;
+  -- nil for an empty list
+  local function following(position, slots)
+    if position == nil then return slots[1] end
+    local best, best_distance = nil, nil
+    for _, slot in ipairs(slots) do
+      local distance = (slot - position - 1) % NUM_SCENES
+      if best_distance == nil or distance < best_distance then best, best_distance = slot, distance end
+    end
+    return best
+  end
+
+  -- The next slot from position over slots (an ordered list of playable
+  -- slots) by chances ({next, previous, random} in percent), and its move:
+  -- S.lib.chance.pick's, looked up at each call, when position is in the
+  -- list (a list of one gives the playing scene: "next" at 100, 0, 0, so
+  -- it is applied again, else "repeat"); with position nil or not in the
+  -- list (emptied, invalid, outside the range) no draw: the first slot
+  -- after it, "next". nil, nil for an empty list
+  function M.next_slot(position, slots, chances, random)
+    if type(slots) ~= "table" or #slots == 0 then return nil, nil end
+    for _, slot in ipairs(slots) do
+      if slot == position then return S.lib.chance.pick(position, slots, chances, random) end
+    end
+    return following(position, slots), "next"
   end
 
   -- The sequencer's draw (3.7, design §5.4). move: the move of the slot in
@@ -788,33 +847,22 @@ return function(S)
   local SEQUENCER_DRAW = {move = nil}
 
   -- Whether the sequencer can play `slot` in a sequence `length` long:
-  -- inside it and holding a scene
-  local function slot_plays(slot, length)
-    return slot ~= nil and slot >= 1 and slot <= length and S.scenes[slot] ~= nil and S.scenes[slot].populated
+  -- inside it and playable (#754)
+  local function plays(slot, length)
+    return is_integer_between(slot, 1, length) and M.playable(slot)
   end
 
-  -- Draw the slot after the position from the populated slots of 1..length,
-  -- in order, by the three chances, and keep it with its move. When the
-  -- position itself cannot play (past a shortened sequence, or emptied) no
-  -- pick is made, since a repeat of it could not play: 3.6's advance stands
-  -- in, the first slot holding a scene after the position (past the length,
+  -- Draw the slot after the position from the playable slots of
+  -- 1..length, in order, by the three chances, and keep it with its move.
+  -- When the position itself cannot play (past a shortened sequence,
+  -- emptied or invalid) next_slot makes no pick, since a repeat of it could
+  -- not play: the first playable slot after the position (past the length,
   -- from 1), a "next" move, with no random draw (1f's review)
   local function draw_next_scene(length)
-    local position = S.scene_sequencer_position
-    if not slot_plays(position, length) then
-      local from = position + 1
-      if from > length then from = 1 end
-      local slot = first_scene_from(from, length)
-      S.scene_sequencer_next, SEQUENCER_DRAW.move = slot, slot and "next" or nil
-      return
-    end
-    local slots = {}
-    for slot = 1, length do
-      if slot_plays(slot, length) then slots[#slots + 1] = slot end
-    end
     local chances = {params:get("scene_chance_next"), params:get("scene_chance_previous"),
       params:get("scene_chance_random")}
-    S.scene_sequencer_next, SEQUENCER_DRAW.move = S.lib.chance.pick(position, slots, chances)
+    S.scene_sequencer_next, SEQUENCER_DRAW.move = M.next_slot(S.scene_sequencer_position,
+      M.playable_slots(1, length), chances)
   end
 
   -- The kept slot while it can still play. A length or chance changed since
@@ -825,7 +873,7 @@ return function(S)
   local function kept_next_scene(length)
     local kept = S.scene_sequencer_next
     if kept == nil then return nil end
-    if slot_plays(kept, length) then return kept end
+    if plays(kept, length) then return kept end
     if S.scene_recall_in_progress then return nil end
     draw_next_scene(length)
     return S.scene_sequencer_next
@@ -856,18 +904,21 @@ return function(S)
         S.scene_sequencer_position = 1
       end
 
-      -- An empty slot is skipped at once (#513): the position moves on to
-      -- the next slot that holds a scene. With none in the sequence it
-      -- stays, and that empty slot is held for the duration like a scene
-      S.scene_sequencer_position = first_scene_from(S.scene_sequencer_position, length)
-        or S.scene_sequencer_position
+      -- An empty or invalid slot is skipped at once (#513, #754): the
+      -- position moves on to the next playable slot. With none in the
+      -- sequence it stays, and that slot is held for the duration like a
+      -- scene
+      if not plays(S.scene_sequencer_position, length) then
+        S.scene_sequencer_position = following(S.scene_sequencer_position, M.playable_slots(1, length))
+          or S.scene_sequencer_position
+      end
 
       -- Recall the scene, unless the draw that led here was a repeat: that
       -- holds the scene playing for another duration and recalls nothing
       S.scene_sequencer_recall_due = false
       local transition_time = 0
       local repeated = SEQUENCER_DRAW.move == "repeat"
-      if not repeated and S.scenes[S.scene_sequencer_position].populated then
+      if not repeated and plays(S.scene_sequencer_position, length) then
         transition_time = params:get("scene_transition_time")
         -- An error in a param action (in the first fade step or an instant
         -- recall) must not end this clock while the param shows the
@@ -881,7 +932,8 @@ return function(S)
           print("scene sequencer: scene " .. S.scene_sequencer_position .. " failed: " .. tostring(recall_error))
         end
       elseif not repeated then
-        print("scene sequencer: no scene in slots 1-" .. length .. "; holding slot " .. S.scene_sequencer_position)
+        print("scene sequencer: no playable scene in slots 1-" .. length .. "; holding slot "
+          .. S.scene_sequencer_position)
       end
 
       -- Draw the slot it recalls next, once, now the recall has returned,
@@ -1101,7 +1153,11 @@ return function(S)
       S.current_scene = 0
     end
     S.scenes = loaded_scenes
-    for i = 1, NUM_SCENES do raise_revision(i) end  -- every slot holds the file's data now
+    for i = 1, NUM_SCENES do
+      raise_revision(i)  -- every slot holds the file's data now
+      -- validate_scene_data passed every populated slot
+      checked[i] = loaded_scenes[i].populated and {data = loaded_scenes[i].data, valid = true} or nil
+    end
     S.scene_autosave_blocked = false
     S.scene_file.problem, S.scene_file.backup, S.scene_file.unsaved = nil, nil, false
     print("scenes loaded from " .. scene_data_file)
@@ -1418,24 +1474,27 @@ return function(S)
   -- its loop's guard reads it (1 past the sequence length). From then on,
   -- through the scene's hold, the position is the scene playing, and the
   -- count starts at the one after it, wrapped to 1 past the sequence length
-  -- as it is now, as the advance does. Empty slots are skipped, as the loop
-  -- skips them (#513): it is the first slot from there that holds a scene,
-  -- or that slot itself when none of the sequence does. The grids' scene
-  -- pages light it at 10. 3.7: once a pass has drawn its next slot
+  -- as it is now, as the advance does. Empty and invalid slots are skipped,
+  -- as the loop skips them (#513, #754): it is the first playable slot from
+  -- there, or that slot itself when none of the sequence plays. The grids'
+  -- scene pages light it at 10. 3.7: once a pass has drawn its next slot
   -- (S.scene_sequencer_next), it is that slot, kept while it can still play
   -- (kept_next_scene); the reckoning above stands before the first draw and
-  -- with no scene in the sequence
+  -- with no playable scene in the sequence
   function M.sequencer_next_slot()
     if not S.scene_sequencer_enabled then return nil end
     local length = params:get("scene_sequence_length")
-    if not S.scene_sequencer_recall_due then
+    local position, due = S.scene_sequencer_position, S.scene_sequencer_recall_due
+    if not due then
       local kept = kept_next_scene(length)
       if kept ~= nil then return kept end
     end
-    local next_slot = S.scene_sequencer_position
-    if not S.scene_sequencer_recall_due then next_slot = next_slot + 1 end
+    if due and plays(position, length) then return position end
+    local next_slot = following(position, M.playable_slots(1, length))
+    if next_slot ~= nil then return next_slot end
+    next_slot = due and position or position + 1
     if next_slot > length then next_slot = 1 end
-    return first_scene_from(next_slot, length) or next_slot
+    return next_slot
   end
 
   -- A recall is due and a next slot kept (3.7) only while the sequencer

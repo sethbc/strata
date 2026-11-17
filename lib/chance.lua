@@ -1,8 +1,9 @@
 -- lib/chance.lua
 -- The picker (3.7, design §0.5 and §5.4; S.lib.chance): one pure function,
 -- pick, the next of an ordered list of slots by three chances (next,
--- previous, random). The scene sequencer and the pattern chain both call
--- it. It reads and keeps no state, sends nothing and never yields.
+-- previous, random). Its one caller is the stepper, S.lib.scenes.next_slot,
+-- under the scene sequencer, the pattern chain and the next-scene action.
+-- It reads and keeps no state, sends nothing and never yields.
 
 return function(S)
   local M = {}
@@ -39,8 +40,8 @@ return function(S)
   end
 
   -- The next slot and the move's name ("next", "previous", "random" or
-  -- "repeat"). slots: an ordered list of slot numbers (the caller leaves
-  -- out empty and invalid ones); chances: {next, previous, random} in
+  -- "repeat"). slots: an ordered list of slot numbers (next_slot hands it
+  -- the playable ones); chances: {next, previous, random} in
   -- percent, each below 0 counted as 0, a sum above 100 scaled to 100;
   -- random: a function returning 0 to 1 (math.random by default). One draw
   -- r = random() * 100 picks next below next, previous below next +

@@ -52,13 +52,13 @@ return function(S)
     return true
   end
 
+  -- The playable scene after the current one, through the stepper at 100,
+  -- 0, 0 (no draw): an empty or invalid slot is passed over
   function M.next_scene()
-    local current = S.current_scene or 0
-    for step = 1, NUM_SCENES do
-      local n = (current - 1 + step) % NUM_SCENES + 1
-      if saved(n) then return M.recall_scene(n) end
-    end
-    return ignored("next_scene", "no scene is saved")
+    local scenes = S.lib.scenes
+    local n = scenes.next_slot(S.current_scene, scenes.playable_slots(1, NUM_SCENES), {100, 0, 0})
+    if n == nil then return ignored("next_scene", "no scene is saved") end
+    return M.recall_scene(n)
   end
 
   function M.run_voice(voice, mode)
