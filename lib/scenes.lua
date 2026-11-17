@@ -325,7 +325,7 @@ return function(S)
 
     local scene_data = {
       voices = {},
-      frozen = {},
+      locked = {},
       patterns = {}
     }
 
@@ -371,7 +371,7 @@ return function(S)
         }
       end
 
-      scene_data.frozen[i] = S.frozen[i]
+      scene_data.locked[i] = S.locked[i]
     end
 
     -- Capture patterns
@@ -482,7 +482,7 @@ return function(S)
       for _, key in ipairs(sorted_keys(voice_data.extras)) do
         add_param(not extra_keys[key].range, prefix .. key, voice_data.extras[key], i)
       end
-      add_voice_state("lock", i, scene_data.frozen[i])
+      add_voice_state("lock", i, scene_data.locked[i])
     end
     for i = 1, NUM_VOICES do add_voice_state("pattern", i, scene_data.patterns[i]) end
     return entries
@@ -518,8 +518,8 @@ return function(S)
         toggle_voice(voice_idx)
       end
     elseif entry.key == "lock" then
-      local was_locked = S.frozen[voice_idx]
-      S.frozen[voice_idx] = entry.value
+      local was_locked = S.locked[voice_idx]
+      S.locked[voice_idx] = entry.value
       if (not was_locked) ~= (not entry.value) then
         for _, hook in ipairs(S.registry.lock_change) do hook(voice_idx, entry.value) end
       end
@@ -1022,9 +1022,10 @@ return function(S)
   -- the empty in-memory scenes never replace the saved ones (#72)
   S.scenes_loaded = false
   -- What is known of scenes.data in this session (SETUP's status rows, the
-  -- load prompt): problem, nil, "unreadable" (the file could not be loaded) or
-  -- "not saved" (the last write failed); backup, the name an unreadable
-  -- file was kept under (nil: still in place); unsaved, true while a scene
+  -- load prompt): problem, nil, "unreadable" (the file could not be loaded),
+  -- "older" (its format is below SCENE_FORMAT_FLOOR: an older Strata's) or
+  -- "not saved" (the last write failed); backup, the name an unreadable or
+  -- older file was kept under (nil: still in place); unsaved, true while a scene
   -- captured in this session is not in the file (a write failed, or was
   -- blocked)
   S.scene_file = {problem = nil, backup = nil, unsaved = false}
@@ -1053,8 +1054,10 @@ return function(S)
       return false, detail
     end
     -- the file holds this session's scenes: a failed write, or an unreadable
-    -- file still in place (a save from SETUP or PARAMS replaced it), is over
-    if state.problem == "not saved" or (state.problem == "unreadable" and not state.backup) then
+    -- or older file still in place (a save from SETUP or PARAMS replaced
+    -- it), is over
+    local unloadable = state.problem == "unreadable" or state.problem == "older"
+    if state.problem == "not saved" or (unloadable and not state.backup) then
       state.problem = nil
     end
     state.unsaved = false
@@ -1081,14 +1084,17 @@ return function(S)
     return nil
   end
 
-  local function preserve_unloadable_scene_file()
+  -- problem: "unreadable", or "older" for a format below the floor
+  local function preserve_unloadable_scene_file(problem)
+    problem = problem or "unreadable"
     local backup = move_aside_unloadable_file(scene_data_file, "scenes")
     if not backup then S.scene_autosave_blocked = true end
-    S.scene_file.problem, S.scene_file.backup = "unreadable", backup
-    return "unreadable"
+    S.scene_file.problem, S.scene_file.backup = problem, backup
+    return problem
   end
 
-  -- Load scenes from disk: "loaded", "missing" (no file) or "unreadable".
+  -- Load scenes from disk: "loaded", "missing" (no file), "unreadable" or
+  -- "older" (a format below the floor).
   -- On any problem the current scenes (empty at startup) are kept, a
   -- message is printed and the file is preserved; a bad file never stops
   -- init.
@@ -1111,12 +1117,14 @@ return function(S)
     local version = loaded.version
     if not is_integer_between(version, SCENE_FORMAT_FLOOR, SCENE_DATA_VERSION) then
       if version == nil or (is_number(version) and version < SCENE_FORMAT_FLOOR) then
-        print("error: scenes file has " .. (version and ("version " .. version) or "no version") .. ", older than format "
+        print("error: scenes file has " .. (version and ("format " .. version) or "no version") .. ", older than format "
           .. SCENE_FORMAT_FLOOR .. ", the oldest this version loads: it is set aside, not converted")
-      else
-        print("error: scenes file has version " .. tostring(loaded.version) ..
-          ", expected " .. SCENE_FORMAT_FLOOR .. " to " .. SCENE_DATA_VERSION)
+        return preserve_unloadable_scene_file("older")
       end
+      -- a floor equal to the version names one format, never "9 to 9"
+      local formats = SCENE_FORMAT_FLOOR == SCENE_DATA_VERSION and ("format " .. SCENE_DATA_VERSION)
+        or ("formats " .. SCENE_FORMAT_FLOOR .. " to " .. SCENE_DATA_VERSION)
+      print("error: scenes file has version " .. tostring(loaded.version) .. ", expected " .. formats)
       return preserve_unloadable_scene_file()
     end
     local scene_table = loaded.scenes
@@ -1160,7 +1168,7 @@ return function(S)
 
   -- init's load (and the load_scenes trigger, through request_load): from
   -- here on the scenes are saved (at each scene save, and by cleanup()).
-  -- Returns "loaded", "missing" or "unreadable"
+  -- Returns "loaded", "missing", "unreadable" or "older"
   function load_scenes_from_disk()
     local outcome = read_scenes_file()
     S.scenes_loaded = true
@@ -1186,7 +1194,7 @@ return function(S)
   -- SCENE_LOAD.confirm_seconds loads. Otherwise it loads at once: the file
   -- then holds what memory holds (unless it was replaced from outside).
   -- Returns "confirm", or what load_scenes_from_disk returns ("loaded",
-  -- "missing", "unreadable"), looked up as it runs
+  -- "missing", "unreadable", "older"), looked up as it runs
   function M.request_load()
     if S.scene_file.unsaved and util.time() >= SCENE_LOAD.armed_until then
       SCENE_LOAD.armed_until = util.time() + SCENE_LOAD.confirm_seconds
@@ -1240,7 +1248,7 @@ return function(S)
     local extra_keys = registered_voice_scene_keys()
 
     if type(data.voices) ~= "table" or #data.voices ~= NUM_VOICES then return false end
-    if type(data.frozen) ~= "table" then return false end
+    if type(data.locked) ~= "table" then return false end
     if type(data.patterns) ~= "table" then return false end
 
     for i = 1, NUM_VOICES do
@@ -1277,7 +1285,7 @@ return function(S)
         if entry.limits and (value < entry.limits[1] or value > entry.limits[2]) then return false end
       end
 
-      if type(data.frozen[i]) ~= "boolean" then return false end
+      if type(data.locked[i]) ~= "boolean" then return false end
 
       local pattern = data.patterns[i]
       if type(pattern) ~= "table" then return false end
@@ -1308,10 +1316,11 @@ return function(S)
   S.register_start(S.constants.START_ORDER.scenes_load, function()
     add_registered_scene_fields()  -- before the file is read: it holds them
     -- Load saved scenes from disk
-    -- (a file that cannot be read is named on the hint row of whatever page
-    -- comes up; SETUP's status rows keep it)
-    if load_scenes_from_disk() == "unreadable" then
-      S.lib.ui_flash.start("hints", "scenes unreadable (SETUP)", SCENE_LOAD.start_flash_seconds)
+    -- (a file that cannot be read, or an older Strata's, is named on the
+    -- hint row of whatever page comes up; SETUP's status rows keep it)
+    local outcome = load_scenes_from_disk()
+    if outcome == "unreadable" or outcome == "older" then
+      S.lib.ui_flash.start("hints", "scenes " .. outcome .. " (SETUP)", SCENE_LOAD.start_flash_seconds)
     end
   end)
 

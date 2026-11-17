@@ -1088,10 +1088,13 @@ return function(S)
     -- Reload the buffers remembered on exit (after the scenes, which may use them)
     load_buffers_from_disk()
     -- a file that cannot be read is named on the hint row, as the scenes'
-    -- (one text for both: this flash replaces theirs)
+    -- (one text for both: this flash replaces theirs; a scenes file of an
+    -- older Strata is "older", in the same room)
     if S.buffer_file.problem == "unreadable" then
-      S.lib.ui_flash.start("hints", S.scene_file.problem == "unreadable" and "data files unreadable (SETUP)"
-        or "buffers unreadable (SETUP)", S.lib.scenes.SCENE_LOAD.start_flash_seconds)
+      local scenes_problem = S.scene_file.problem
+      local text = (scenes_problem == "unreadable" and "data files unreadable (SETUP)")
+        or (scenes_problem == "older" and "data files older/bad (SETUP)") or "buffers unreadable (SETUP)"
+      S.lib.ui_flash.start("hints", text, S.lib.scenes.SCENE_LOAD.start_flash_seconds)
     end
   end)
 

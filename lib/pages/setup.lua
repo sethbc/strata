@@ -29,14 +29,15 @@ return function(S)
     xrun_note = "may xrun",  -- the performance fields' and the note pool's warning
     -- the hint row's flash for each answer of S.lib.scenes.request_load
     load_texts = {loaded = "scenes loaded", missing = "no scenes file", unreadable = "scenes unreadable",
-      confirm = "K3 again: drop unsaved"},
+      older = "scenes older", confirm = "K3 again: drop unsaved"},
     -- the status rows for a data file with a problem (S.scene_file,
     -- S.buffer_file), after its label ("scenes", "buffers"): kept, a file
     -- that could not be read and was moved to the backup the note row names;
-    -- unreadable, one still in place, which is not saved over; not saved, a
-    -- write that failed
+    -- unreadable, one still in place, which is not saved over; older_kept
+    -- and older, the same for a scenes file of an older Strata (a format
+    -- below the floor); not saved, a write that failed
     file_texts = {kept = " unreadable, kept", unreadable = " file unreadable", ["not saved"] = " file not saved",
-      kept_note = "as ", in_place_note = "not saved over"},
+      older_kept = " older, kept", older = " file older", kept_note = "as ", in_place_note = "not saved over"},
     -- a grid port's rotation field (kind "rotation", #323): its setting
     -- (S.lib.grid_core.rotation, 0-3) shown in degrees; the fields, one per
     -- port, are made at the first look (grid core sets S.MAX_GRID_PORTS)
@@ -153,8 +154,10 @@ return function(S)
     local texts = SETUP_PAGE.file_texts
     for _, entry in ipairs({{"scenes", S.scene_file}, {"buffers", S.buffer_file}}) do
       local label, state = entry[1], entry[2]
-      if state.problem == "unreadable" then
-        table.insert(rows, {selectable = false, text = label .. (state.backup and texts.kept or texts.unreadable)})
+      if state.problem == "unreadable" or state.problem == "older" then
+        local older = state.problem == "older"
+        local kept, in_place = older and texts.older_kept or texts.kept, older and texts.older or texts.unreadable
+        table.insert(rows, {selectable = false, text = label .. (state.backup and kept or in_place)})
         table.insert(rows, note_row(state.backup and (texts.kept_note .. state.backup:match("[^/]*$"))
           or texts.in_place_note))
       elseif state.problem then
@@ -401,6 +404,10 @@ return function(S)
       {name = "data files unreadable", setup = function()
         S.scene_file.problem, S.scene_file.backup = "unreadable", "/x/scenes.data.bak.2"
         S.buffer_file.problem, S.buffer_file.backup = "unreadable", "/x/buffers.data.bak.9"
+        enc(2, 60)
+      end},
+      {name = "scenes file older", setup = function()
+        S.scene_file.problem, S.scene_file.backup = "older", "/x/scenes.data.bak.2"
         enc(2, 60)
       end},
       {name = "data files not saved", setup = function()

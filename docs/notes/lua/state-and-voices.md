@@ -22,7 +22,7 @@
   - The `__declared` key set the tests use: a key ever assigned into `S`, even to nil, is recorded there.
 - `lib/constants.lua`: `S.constants`, a plain table. The constants and fixed tables (`NUM_VOICES`, `UI_PAGES`, `MAIN_PARAMS`, `GRAIN_PARAM_IDS`, `START_ORDER`, `CLEANUP_ORDER`, ...).
 - `lib/voices.lua`: `S.lib.voices`, which has no fields.
-  - `S.voices`, `S.frozen`, `S.selected_voice`. There is no density field: the master density is the param `master_density` (read through `engine_param_value` or `params:get`).
+  - `S.voices`, `S.locked`, `S.selected_voice`. There is no density field: the master density is the param `master_density` (read through `engine_param_value` or `params:get`).
   - The global source tests `voice_uses_synth`, `voice_uses_buffer`, `voice_source_label`, `voice_buffer_slot`.
 
 ## Voice state

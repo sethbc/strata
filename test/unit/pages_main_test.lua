@@ -57,7 +57,7 @@ test("MAIN voice list entries read <n><+|-> <name> with [L]", function()
   -- the widest entry ends left of the divider
   for voice_idx = 1, 7 do
     if not local_value("voices")[voice_idx].active then toggle_voice(voice_idx) end
-    if not local_value("frozen")[voice_idx] then toggle_lock(voice_idx) end
+    if not local_value("locked")[voice_idx] then toggle_lock(voice_idx) end
   end
   entries = local_value("voice_list").entries
   assert_equal(entries[5], "5+ pulse [L]")
@@ -274,25 +274,25 @@ end)
 test("K3 starts and stops the selected voice", function()
   local context = load_strata(); finish_startup(context)
   show_page("MAIN")
-  local voices, frozen = local_value("voices"), local_value("frozen")
+  local voices, locked = local_value("voices"), local_value("locked")
   select_voice(3)
   assert_true(not voices[3].active, "voice 3 starts stopped")
   tap(3)
   assert_true(voices[3].active, "K3 starts it")
   tap(3)
   assert_true(not voices[3].active, "K3 stops it")
-  assert_true(not frozen[3], "K3 never locks")
+  assert_true(not locked[3], "K3 never locks")
   -- a locked voice starts and stops too
   toggle_lock(3)
   tap(3); assert_true(voices[3].active, "K3 starts a locked voice")
   tap(3); assert_true(not voices[3].active, "K3 stops a locked voice")
-  assert_true(frozen[3], "and leaves it locked")
+  assert_true(locked[3], "and leaves it locked")
 end)
 
 test("ALT+K3 locks and unlocks; ALT+K2 randomizes, then undoes within 5 s", function()
   local context = load_strata(); finish_startup(context)
   show_page("MAIN")
-  local frozen = local_value("frozen")
+  local locked = local_value("locked")
   local ids = { "v1_freq", "v1_grain_size", "v1_grain_pitch" }
   local before = {}
   for _, id in ipairs(ids) do before[id] = params:get(id) end
@@ -310,10 +310,10 @@ test("ALT+K3 locks and unlocks; ALT+K2 randomizes, then undoes within 5 s", func
   redraw()
   assert_equal(hint_text(context), "K2:rand K3:lock", "undo used")
   -- ALT+K3 locks, then unlocks
-  tap(3); assert_true(frozen[1], "ALT+K3 locks")
+  tap(3); assert_true(locked[1], "ALT+K3 locks")
   assert_true(local_value("voices")[1].active, "ALT+K3 never stops the voice")
   redraw(); assert_equal(hint_text(context), "K2:locked K3:unlock")
-  tap(3); assert_true(not frozen[1], "ALT+K3 unlocks")
+  tap(3); assert_true(not locked[1], "ALT+K3 unlocks")
   -- the undo window ends after 5 s
   tap(2)
   redraw(); assert_equal(hint_text(context), "K2:undo K3:lock")
@@ -325,9 +325,9 @@ test("ALT+K3 locks and unlocks; ALT+K2 randomizes, then undoes within 5 s", func
   -- the same actions through alt_action, which every ALT press goes through
   local MAIN = local_value("S").constants.UI_PAGES.index.MAIN
   assert_true(alt_action(MAIN, 3), "MAIN has ALT actions")
-  assert_true(frozen[1], "alt_action(MAIN, 3) locks")
+  assert_true(locked[1], "alt_action(MAIN, 3) locks")
   alt_action(MAIN, 3)
-  assert_true(not frozen[1], "and unlocks")
+  assert_true(not locked[1], "and unlocks")
 end)
 
 test("ALT+K2 does nothing to a locked voice", function()
@@ -520,10 +520,10 @@ test("the arc button starts and stops the voice on MAIN", function()
   local context = load_strata(); finish_startup(context)
   context.arc.plug(1)
   show_page("MAIN")
-  local voices, frozen = local_value("voices"), local_value("frozen")
+  local voices, locked = local_value("voices"), local_value("locked")
   context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
   assert_true(not voices[1].active, "the button stops the running voice 1")
-  assert_true(not frozen[1], "and never locks it")
+  assert_true(not locked[1], "and never locks it")
   context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
   assert_true(voices[1].active, "the button starts it again")
 end)
@@ -543,20 +543,20 @@ end)
 test("MAIN voice list fits its column for every voice, state and selection (#23)", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
-  local frozen = local_value("frozen")
-  local states = { { active = false, frozen = false }, { active = false, frozen = true },
-    { active = true, frozen = false }, { active = true, frozen = true } }
+  local locked = local_value("locked")
+  local states = { { active = false, locked = false }, { active = false, locked = true },
+    { active = true, locked = false }, { active = true, locked = true } }
   local entries_by_state = {}
   for state_idx, state in ipairs(states) do
     for voice_idx = 1, 7 do
       if voices[voice_idx].active ~= state.active then toggle_voice(voice_idx) end
-      if (frozen[voice_idx] or false) ~= state.frozen then toggle_lock(voice_idx) end
+      if (locked[voice_idx] or false) ~= state.locked then toggle_lock(voice_idx) end
     end
     for voice_idx = 1, 7 do
       select_voice(voice_idx)
       show_page("MAIN")
       local where = string.format("MAIN, voice %d, active %s, locked %s", voice_idx,
-        tostring(state.active), tostring(state.frozen))
+        tostring(state.active), tostring(state.locked))
       assert_screen_layout(context, where)
       local voice_list = local_value("voice_list")
       local rows_drawn, selected_entry = 0, nil
@@ -570,15 +570,15 @@ test("MAIN voice list fits its column for every voice, state and selection (#23)
     entries_by_state[state_idx] = local_value("voice_list").entries
   end
   for voice_idx = 1, 7 do
-    local stopped, stopped_frozen = entries_by_state[1][voice_idx], entries_by_state[2][voice_idx]
-    local running, running_frozen = entries_by_state[3][voice_idx], entries_by_state[4][voice_idx]
+    local stopped, stopped_locked = entries_by_state[1][voice_idx], entries_by_state[2][voice_idx]
+    local running, running_locked = entries_by_state[3][voice_idx], entries_by_state[4][voice_idx]
     assert_true(stopped ~= running, "running and stopped entries differ: " .. stopped)
     assert_true(not stopped:find("[L]", 1, true) and not running:find("[L]", 1, true), "[L] only when locked")
-    assert_true(stopped_frozen:find("[L]", 1, true) and running_frozen:find("[L]", 1, true),
-      "locked entries show [L]: " .. running_frozen)
+    assert_true(stopped_locked:find("[L]", 1, true) and running_locked:find("[L]", 1, true),
+      "locked entries show [L]: " .. running_locked)
     -- every entry is plain ASCII, so its width does not depend on how the
     -- norns font draws other glyphs
-    for _, entry in ipairs({ stopped, stopped_frozen, running, running_frozen }) do
+    for _, entry in ipairs({ stopped, stopped_locked, running, running_locked }) do
       assert_true(not entry:find("[\128-\255]"), "ASCII entry: " .. entry)
     end
   end
@@ -591,7 +591,7 @@ test("MAIN fields fit at their widest values for every voice and source", functi
       select_voice(voice_idx)
       params:set("v" .. voice_idx .. "_source", source)
       params:set("v" .. voice_idx .. "_grain_mode", 2)
-      if not local_value("frozen")[voice_idx] then toggle_lock(voice_idx) end
+      if not local_value("locked")[voice_idx] then toggle_lock(voice_idx) end
       for _, edge in ipairs({ "min", "max" }) do
         for _, id in ipairs(main_fields(voice_idx)) do
           local min_value, max_value = param_range(id)
@@ -673,7 +673,7 @@ test("MAIN layout holds for buffer- and input-sourced voices", function()
       params:set("v" .. voice_idx .. "_source", source)
       params:set("v" .. voice_idx .. "_buf_pos", 1)
       params:set("v" .. voice_idx .. "_grain_mode", 2)
-      if not local_value("frozen")[voice_idx] then toggle_lock(voice_idx) end
+      if not local_value("locked")[voice_idx] then toggle_lock(voice_idx) end
       show_page("MAIN")
       assert_screen_layout(context, "MAIN, voice " .. voice_idx .. " source " .. source)
     end
@@ -692,7 +692,7 @@ test("E1 selects pages; MAIN keeps its encoder and key mappings", function()
   local before = params:get(main_param_id(2)); enc(3, 1)
   assert_true(params:get(main_param_id(2)) ~= before, "E3 moves the main param on MAIN")
   key(3, 1); assert_true(not local_value("voices")[2].active, "K3 stops a running voice on MAIN")
-  assert_true(not local_value("frozen")[2], "K3 does not lock")
+  assert_true(not local_value("locked")[2], "K3 does not lock")
 end)
 
 test("MAIN K3 and the arc button reach the screen and arc on the next frame (#11)", function()
@@ -729,7 +729,7 @@ test("MAIN's layout states cover every voice locked, running, triggered and froz
   show_page("MAIN")
   S.registry.pages[S.constants.UI_PAGES.index.MAIN].layout_states[1].setup(context)
   for voice_idx = 1, 7 do
-    assert_true(S.voices[voice_idx].active and S.frozen[voice_idx], "voice " .. voice_idx .. " running and locked")
+    assert_true(S.voices[voice_idx].active and S.locked[voice_idx], "voice " .. voice_idx .. " running and locked")
     assert_equal(params:get("v" .. voice_idx .. "_grain_mode"), 2, "voice " .. voice_idx .. " triggered")
     assert_true(S.lib.freeze.is_frozen(voice_idx), "voice " .. voice_idx .. " frozen")
   end
@@ -902,7 +902,7 @@ test("the widest entries with a count end by x 60: every voice running, muted, l
   S.lib.notes.held = function() return S.constants.NOTE_SLOTS end
   for voice_idx = 1, S.constants.NUM_VOICES do
     if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
-    if not S.frozen[voice_idx] then toggle_lock(voice_idx) end
+    if not S.locked[voice_idx] then toggle_lock(voice_idx) end
     params:set("v" .. voice_idx .. "_mute", 1)
   end
   local entries = local_value("voice_list").entries

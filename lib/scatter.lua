@@ -50,7 +50,7 @@ return function(S)
   local function voice_mask()
     local mask, bit_value = 0, 1
     for voice_idx = 1, NUM_VOICES do
-      if not S.frozen[voice_idx] then mask = mask + bit_value end
+      if not S.locked[voice_idx] then mask = mask + bit_value end
       bit_value = bit_value * 2
     end
     return mask
@@ -71,7 +71,7 @@ return function(S)
     if type(voice_idx) ~= "number" or voice_idx % 1 ~= 0 or voice_idx < 1 or voice_idx > NUM_VOICES then
       return false
     end
-    return is_on() and params:get("scatter_depth") > 0 and destination_mask() > 0 and not S.frozen[voice_idx]
+    return is_on() and params:get("scatter_depth") > 0 and destination_mask() > 0 and not S.locked[voice_idx]
   end
 
   local function percent(param) return string.format("%d %%", math.floor(param:get() + 0.5)) end

@@ -16,7 +16,7 @@
 - A quick ALT+K2 undoes only where the undo was made: `undo_for(page, section, voice)` is true for the undo's own page, section and voice within `UNDO_SECONDS`, so a press on another page or section randomizes there (and replaces the undo).
 - A binary param a spec draws, and its restore, go through `set_binary_param`, so a controller mapped to it follows (#538).
 - `undo_writing` is set around the writes inside an `xpcall` (`write_as_undo`), so the flag always clears and an error is raised again with its traceback.
-- A draws spec of a locked voice (`S.frozen[spec.voice]`), or one with no draws, returns false before anything is drawn, stored or cleared. A locked voice can still be edited. A pattern spec randomizes a locked voice's pattern, as SEQ always has: the lock covers params, not patterns.
+- A draws spec of a locked voice (`S.locked[spec.voice]`), or one with no draws, returns false before anything is drawn, stored or cleared. A locked voice can still be edited. A pattern spec randomizes a locked voice's pattern, as SEQ always has: the lock covers params, not patterns.
 - Every `clear_undo` cancels `undo_clock`; the clock sets `undo_clock` to nil before it clears the undo, so it never cancels itself.
 
 ## Owns
@@ -62,7 +62,7 @@ function gentle_mutate()
   local amount = params:get("mutation_amount")
 
   for i = 1, NUM_VOICES do
-    if S.voices[i].active and not S.frozen[i] then
+    if S.voices[i].active and not S.locked[i] then
       -- synth source: each synthesis parameter
       for key, current_val in pairs(S.voices[i].params) do
         if key ~= "amp" and key ~= "pan" then
@@ -133,12 +133,12 @@ One randomize for every page and one undo for the whole script, for `UNDO_SECOND
 
 ## Drift and the other systems
 
-- **Drift**: mutations run alongside `drift_update()` (the per-voice drift, not the global LFOs). It gives each active, unfrozen voice a subtle mean-reverting grain pitch drift:
+- **Drift**: mutations run alongside `drift_update()` (the per-voice drift, not the global LFOs). It gives each active, unlocked voice a subtle mean-reverting grain pitch drift:
   - `mean_reverting_step(current, base, DRIFT_PITCH_STEP, DRIFT_PITCH_REVERSION)` = `current + ((math.random() - 0.5) * step - (current - base) * reversion)`;
   - step 0.004, reversion 0.01 per 100 ms tick; one `math.random()` per call.
   - `base` (`S.grain_pitch_base[i]`) is the last grain pitch set by anything other than the drift (user, mutation, scene). The param action tracks it through the `S.drift_writing` flag, which the drift sets around each write in `set_drifted_param` (an `xpcall` with `with_traceback`: an error in the param action clears the flag and is raised again with its traceback).
   - The `grain_pitch` controlspec has step 0, so these small steps are not quantized away.
   - Buffer-sourced voices also drift `buf_pos` with the same helper (`DRIFT_BUF_POS_STEP` 0.002, `DRIFT_BUF_POS_REVERSION` 0.01, center `S.buf_pos_base[i]`, `buf_pos` step 0).
-- **Lock** (stored as `frozen`): locked voices are stable. Neither the drift nor mutations affect them (buffer params included), and `randomize_voice` returns for a frozen voice.
+- **Lock** (`S.locked`, the scene field `locked`): locked voices are stable. Neither the drift nor mutations affect them (buffer params included), and `randomize_voice` returns for a locked voice.
 - **Cross-modulation**: mutations never touch the crossmod sources or amounts. The routing a voice has (set by hand or by a scene) keeps modulating the mutated params.
 - **UI feedback**: `[M]` appears in the header (x=76) while mutations are on.

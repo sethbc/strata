@@ -456,17 +456,17 @@ test("ALT+K2 held resets the field to its default; ALT+K3 locks", function()
   key(2, 1); context.clock.run_for(HELD_SECONDS); key(2, 0)
   assert_equal(params:get("v1_grain_env"), param_default("v1_grain_env"), "a locked voice's row resets")
   toggle_lock(1)
-  assert_true(not S.frozen[1], "voice 1 starts unlocked")
+  assert_true(not S.locked[1], "voice 1 starts unlocked")
   tap(3)
-  assert_true(S.frozen[1], "ALT+K3 locks the selected voice")
+  assert_true(S.locked[1], "ALT+K3 locks the selected voice")
   tap(3)
-  assert_true(not S.frozen[1], "and unlocks it")
+  assert_true(not S.locked[1], "and unlocks it")
   key(1, 0)
   -- the plain keys never reset or lock
   params:set("v1_grain_env", 3)
   tap(2); tap(3)
   assert_equal(params:get("v1_grain_env"), 3, "K2 does not reset")
-  assert_true(not S.frozen[1], "K3 does not lock")
+  assert_true(not S.locked[1], "K3 does not lock")
 end)
 
 test("the VOICE cursor clamps when the synth section disappears", function()
@@ -941,7 +941,7 @@ test("the arc button starts and stops the selected voice on VOICE", function()
   assert_true(S.voices[3].active, "the button starts it")
   context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
   assert_true(not S.voices[3].active, "and stops it")
-  assert_true(not S.frozen[3], "never locks")
+  assert_true(not S.locked[3], "never locks")
 end)
 
 test("VOICE's layout states cover every voice and source at each section's ends", function()
@@ -986,7 +986,7 @@ test("a locked voice keeps its whole lock tag in the filter & sends section, or 
   local S = local_value("S")
   for voice_idx = 1, S.constants.NUM_VOICES do
     S.selected_voice = voice_idx
-    if not S.frozen[voice_idx] then toggle_lock(voice_idx) end
+    if not S.locked[voice_idx] then toggle_lock(voice_idx) end
     put_cursor(S, "v" .. voice_idx .. "_filter_mix")
     redraw()
     local voice_text = texts_on_row(context, SECTION_Y)[1].text

@@ -8,11 +8,11 @@
 local NUM_VOICES = 7
 local NUM_SCENES = 16  -- Scene slots, in two banks of SCENE_BANK_SIZE (3.4)
 local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 8  -- Scene file format version (written into scenes.data; 8 since 3.7)
+local SCENE_DATA_VERSION = 9  -- Scene file format version (written into scenes.data; 9 since the work before 3.8)
 -- The oldest format each data file loads (3.7, design decision 21): a file
 -- from its floor to the build's version loads, its missing fields filled
 -- from the defaults; an older one is set aside as a backup, never converted
-local SCENE_FORMAT_FLOOR = 7   -- scenes.data: 3.5's format
+local SCENE_FORMAT_FLOOR = 9   -- scenes.data: files of 3.5-3.7 are set aside
 local BUFFER_FORMAT_FLOOR = 2  -- buffers.data: 3.3's version
 -- The Pulse voice's res rises with resonance (3.3, #314): the engine plays
 -- the filter's rq as mirror - res (StrataVoiceDefs.sc), so 0.1-1 maps onto

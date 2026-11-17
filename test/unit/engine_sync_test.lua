@@ -275,12 +275,12 @@ end)
 test("toggle_lock locks and unlocks a voice", function()
   local context = load_strata()
   finish_startup(context)
-  local frozen = local_value("frozen")
-  local before = frozen[3] and true or false
-  toggle_lock(3); assert_true(frozen[3] == not before)
-  toggle_lock(3); assert_true(frozen[3] == before)
+  local locked = local_value("locked")
+  local before = locked[3] and true or false
+  toggle_lock(3); assert_true(locked[3] == not before)
+  toggle_lock(3); assert_true(locked[3] == before)
   toggle_lock(99); toggle_lock(0)  -- ignored
-  assert_true(frozen[99] == nil and frozen[0] == nil, "out-of-range voices never grow the table")
+  assert_true(locked[99] == nil and locked[0] == nil, "out-of-range voices never grow the table")
   assert_true(toggle_freeze == nil, "toggle_freeze is gone")
 end)
 
@@ -302,24 +302,28 @@ test("no Lua file says freeze for the lock feature", function()
   end
 end)
 
-test("the lock keeps its lock names and the freeze module never touches S.frozen", function()
+-- The groundwork before 3.8 (design §1): the lock's state is S.locked and a
+-- scene's field locked; "frozen" names only the audio freeze (is_frozen,
+-- frozen_level, the freeze hook's argument)
+test("the lock is S.locked, and no Lua file names S.frozen or a scene field frozen", function()
   local found = {}
   for _, source in ipairs(h.read_lua_sources()) do
     if not source.path:match("^test/") then
       local code = source.text:gsub("%-%-[^\n]*", "")
       if code:find("function toggle_lock%(") then found.toggle_lock = true end
-      if code:find("S%.frozen%[") then found.state = true end
+      if code:find("S%.locked%[") then found.state = true end
+      assert_true(not code:find("S%.frozen"), source.path .. " names S.frozen")
+      assert_true(not code:find("%.frozen%f[^%w_]"), source.path .. " names a field frozen")
       if source.path == "lib/pages/main.lua" and code:find("%[L%]") then found.mark = true end
       if source.path == "lib/freeze.lua" then
         found.freeze_module = true
-        assert_true(not code:find("frozen%s*%["), "lib/freeze.lua never reads or writes S.frozen")
-        assert_true(not code:find("S%.frozen"), "lib/freeze.lua never names S.frozen")
+        assert_true(not code:find("S%.locked"), "lib/freeze.lua never names S.locked")
         assert_true(not code:find("toggle_lock"), "lib/freeze.lua never locks")
       end
     end
   end
   assert_true(found.toggle_lock, "toggle_lock is defined")
-  assert_true(found.state, "the lock's state is S.frozen")
+  assert_true(found.state, "the lock's state is S.locked")
   assert_true(found.mark, "MAIN shows the lock as [L]")
   assert_true(found.freeze_module, "lib/freeze.lua was scanned")
 end)

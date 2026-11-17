@@ -137,7 +137,7 @@ end)
 test("128h page 2: four faders, the page selector, voice select and lock", function()
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
-  local frozen = local_value("frozen")
+  local locked = local_value("locked")
   local device = context.grid.plug(1, 16, 8)
   tap(context, 1, 6, 8)  -- page 2
   local before = pattern_sum(patterns)
@@ -193,15 +193,15 @@ test("128h page 2: four faders, the page selector, voice select and lock", funct
 
   -- row 7, columns 1-7: lock (12 locked, 2 not)
   tap(context, 1, 3, 7)
-  assert_true(frozen[3], "row 7 column 3 locks voice 3")
+  assert_true(locked[3], "row 7 column 3 locks voice 3")
   for x = 1, 16 do
     local expected = x == 3 and 12 or (x <= 7 and 2 or 0)
     assert_equal(device:get_led(x, 7), expected, "row 7 column " .. x)
   end
   tap(context, 1, 3, 7)
-  assert_true(not frozen[3], "a second press unlocks")
+  assert_true(not locked[3], "a second press unlocks")
   tap(context, 1, 9, 7)
-  for i = 1, 7 do assert_true(not frozen[i], "row 7 column 9 locks nothing") end
+  for i = 1, 7 do assert_true(not locked[i], "row 7 column 9 locks nothing") end
   assert_equal(pattern_sum(patterns), before, "no page 2 key toggled a step")
 end)
 

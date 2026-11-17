@@ -24,11 +24,11 @@ test("grain pitch drift wanders subtly around the user-set pitch (C4)", function
   params:set("v1_grain_pitch", 0.5)
   for _ = 1, 2000 do drift_metro.event() end
   assert_near(params:get("v1_grain_pitch"), 0.5, 0.06, "walk re-centers on the new value")
-  -- frozen voices do not drift
+  -- locked voices do not drift
   toggle_lock(1)
-  local frozen_pitch = params:get("v1_grain_pitch")
+  local locked_pitch = params:get("v1_grain_pitch")
   for _ = 1, 100 do drift_metro.event() end
-  assert_equal(params:get("v1_grain_pitch"), frozen_pitch, "frozen voice pitch unchanged")
+  assert_equal(params:get("v1_grain_pitch"), locked_pitch, "locked voice pitch unchanged")
 end)
 
 -- drift_writing tells the param actions a write is the drift's: left set
@@ -78,12 +78,12 @@ test("randomize and mutate touch buffer params, never source", function()
   assert_true(mutated, "synth source mutates synth params again")
   for _ = 1, 20 do randomize_voice(1); gentle_mutate() end
   assert_equal(params:get("v1_source"), 1, "source never randomized or mutated")
-  -- freeze covers buffer params
+  -- the lock covers buffer params
   params:set("v1_source", 5); toggle_lock(1)
-  local frozen_state = deep_copy(local_value("voices")[1].grain)
+  local locked_state = deep_copy(local_value("voices")[1].grain)
   randomize_voice(1); gentle_mutate(); for _ = 1, 10 do drift_update() end
-  for key, value in pairs(frozen_state) do
-    assert_equal(local_value("voices")[1].grain[key], value, "frozen buffer voice keeps " .. key)
+  for key, value in pairs(locked_state) do
+    assert_equal(local_value("voices")[1].grain[key], value, "locked buffer voice keeps " .. key)
   end
 end)
 

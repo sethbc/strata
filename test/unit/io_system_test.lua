@@ -164,7 +164,7 @@ end
 local function run_all_voices(S)
   for voice = 1, S.constants.NUM_VOICES do
     if not S.voices[voice].active then toggle_voice(voice) end
-    if S.frozen[voice] then toggle_lock(voice) end
+    if S.locked[voice] then toggle_lock(voice) end
   end
 end
 
@@ -1632,7 +1632,7 @@ test("no 3.6 param is a scene field, an LFO destination, a fader or a draw of a 
   -- (the mutation walks pairs() over a voice's params)
   run_all_voices(S)
   for voice = 1, NUM_VOICES do
-    assert_true(S.voices[voice].active and not S.frozen[voice], "voice " .. voice .. " runs, unlocked")
+    assert_true(S.voices[voice].active and not S.locked[voice], "voice " .. voice .. " runs, unlocked")
   end
   params:set("mutation_probability", 1)
   params:set("mutation_amount", 1)

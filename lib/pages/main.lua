@@ -79,7 +79,7 @@ return function(S)
           status = "m"
         end
       end
-      local lock = S.frozen[i] and " [L]" or ""
+      local lock = S.locked[i] and " [L]" or ""
       local held = S.lib.notes.held(i)
       local count = held >= LAYOUT.count_from and (" " .. held) or ""
       items[i] = i .. status .. " " .. MAIN_PARAMS[S.voices[i].name].list_name .. lock .. count
@@ -170,7 +170,7 @@ return function(S)
     screen.level(LAYOUT.dim)
     screen.move(LAYOUT.left, LAYOUT.state_y)
     screen.text(v.active and "ON" or "OFF")
-    if S.frozen[voice_idx] then
+    if S.locked[voice_idx] then
       screen.level(LAYOUT.bright)
       screen.move(LAYOUT.lock_x, LAYOUT.state_y)
       screen.text("[L]")
@@ -224,7 +224,7 @@ return function(S)
   -- spec comes with "locked": nothing is randomized, but its undo still runs
   local function main_randomize_section()
     local voice_idx = S.selected_voice
-    return S.lib.mutation.voice_spec(voice_idx), S.frozen[voice_idx] and "locked" or nil
+    return S.lib.mutation.voice_spec(voice_idx), S.locked[voice_idx] and "locked" or nil
   end
 
   -- The hint row (redraw() draws it after the page): K2 and K3, or with ALT
@@ -235,7 +235,7 @@ return function(S)
     local voice_idx = S.selected_voice
     local record = S.registry.pages[UI_PAGES.index.MAIN]
     if alt_held then
-      return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (S.frozen[voice_idx] and "unlock" or "lock")
+      return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (S.locked[voice_idx] and "unlock" or "lock")
     end
     if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
     return "K2:field K3:" .. (S.voices[voice_idx].active and "stop" or "start")
@@ -302,7 +302,7 @@ return function(S)
       if source then params:set("v" .. selected .. "_source", source) end
       for i = 1, NUM_VOICES do
         if not S.voices[i].active then toggle_voice(i) end
-        if not S.frozen[i] then toggle_lock(i) end
+        if not S.locked[i] then toggle_lock(i) end
         params:set("v" .. i .. "_grain_mode", triggered)
         params:set("v" .. i .. "_freeze", 1)
       end
@@ -347,7 +347,7 @@ return function(S)
         S.lib.notes.held = function() return S.constants.NOTE_SLOTS end
         for i = 1, NUM_VOICES do
           if not S.voices[i].active then toggle_voice(i) end
-          if not S.frozen[i] then toggle_lock(i) end
+          if not S.locked[i] then toggle_lock(i) end
           params:set("v" .. i .. "_mute", 1)
         end
         S.lib.ui_keys.select_voice_by(5 - S.selected_voice)  -- pulse, the widest name
