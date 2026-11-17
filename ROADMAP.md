@@ -97,16 +97,9 @@ Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13, 
 
 ---
 
-## Between 3.7 and 3.8: revisions, fixes and three questions
+## Between 3.7 and 3.8: done
 
-Decided 2026-11-16, from a review of what compatibility had cost (`docs/design/3.7-facts/revisit.md`); each revision is a package of its own, built with no other work open. One plan holds them with the fixes below it (the maintainer, 2026-11-16).
-
-- **`frozen` becomes `locked`** in the code and the scene field. The lock has been "lock" on screen since 3.1 and `frozen` underneath, beside the audio freeze; 3.8 adds a delay freeze.
-- **The 256's fader pages take newer params.** They stop at 3.1's today: the voice filter, the sends, the loop, the jitters, attack and release have no fader. A param record asks for one.
-- **MIDI note off has two modes**, latch and release, with one default, in place of three (the third, `auto`, depended on the MIDI mode).
-- **The known findings are fixed** (added 2026-11-16): 3.7's follow-ups (#738-#744), and the seven 3.6 left for the review before 4.0, moved up (#747-#753: MIDI out's moved device, the ii bus's leader switch, the TELEXo after crow leaves, a late midigrid attach).
-- **Three questions kept for the pre-4.0 review are decided first** (moved up 2026-11-16), so 3.8's voice types and presets build on the answer: whether an LFO's own destination becomes a matrix routing (`revisit.md`, 12; its recommendation was to leave it), the pattern chain beside the scene sequencer, and the ten data files and `extras` beside the built-in voice params (`revisit.md`, "Looked at and set aside"). A short design of its own decides them; what it changes is built before 3.8's design.
-- **Decided 2026-11-16** (`docs/design/3.8-groundwork-design.md`): an LFO's own destination becomes a home routing of the matrix, one for each LFO beside R1-R16; the chain and the scene sequencer keep their front ends over one stepper; built-in and registered per-voice params fold into one value table with one registration path, in a new scene format; scenes travel with the PSET. The work is one plan with no release of its own, and 3.8's design starts while it is built.
+Done 2026-11-17, with no release of its own (its fragments ride to 3.8.0): the three revisions (`frozen` renamed `locked`, the 256's fader pages for newer params, MIDI note off as latch or release), the fixes of #738-#744 and #747-#754 with the findings filed during the build, and the three questions moved up from the pre-4.0 review, decided and built: an LFO's own destination is a home routing of the matrix, one stepper runs under the pattern chain and the scene sequencer, the per-voice values are one table with one registration path (scene format 9), and scenes travel with the PSET. The design is `docs/design/3.8-groundwork-design.md`; what was decided while it was built is in `docs/decisions/3.8.md`. This section goes with 3.8.0.
 
 ## 3.8: Sound
 
@@ -116,7 +109,7 @@ Added 2026-11-11, at the maintainer's request. It widens what a voice can be. It
 
 - Each of the seven voices has one fixed synth today (Resonator, FM, Folder, Sub, Pulse, Karplus, Ring). This release lets a voice choose its type, and adds types to choose from: a wavetable voice, an additive voice and a noise or texture voice are the candidates `docs/history.md` has listed since 1.0.
 - Seven voices stay seven (the non-goal above stands): this is a choice per voice, not more voices.
-- The design decides: which types; how a voice's params, its MAIN param, its scenes and its PSETs follow a type change (a scene made with one type recalled on another); what each new SynthDef costs in real-time memory against 3.5's notes per voice; whether old scenes need a migration (each voice's type defaults to today's).
+- The design decides: which types; how a voice's params, its MAIN param, its scenes and its PSETs follow a type change (a scene made with one type recalled on another); what each new SynthDef costs in real-time memory against 3.5's notes per voice; whether old scenes need a migration (each voice's type defaults to today's). It builds on the value table and the scene format the groundwork left (`docs/design/3.8-groundwork-design.md`): a voice type is a record's set of keys.
 
 ### Microtuning and a scale editor
 
@@ -209,7 +202,7 @@ Taken by the maintainer from what 3.5 (polyphony and MPE) and 3.6 (integration) 
 
 - K1 held as ALT, with ALT+E3 as fine adjustment.
 - Eight screen pages in 3.1 (VOICE, SEQ and SCENES added; SEQ chosen 2026-11-07). MOD arrives in 3.4.
-- Lock and freeze are separate controls; the scene field name `frozen` stays.
+- Lock and freeze are separate controls; the scene field name `frozen` stays (reversed: `locked` since scene format 9).
 - Randomize keeps one level of undo.
 - The performance setting is stored outside scenes and PSETs and applies at the next start.
 - Buffer waveforms go through a file, not a poll.
