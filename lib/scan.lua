@@ -184,6 +184,15 @@ return function(S)
   -- the scan, and none starts with an old factor
   S.register_source_change(function(voice_idx) settle(voice_idx, true) end)
   S.register_grain_restart(function(voice_idx) settle(voice_idx, true) end)
+  -- #739: a recall's source switch runs no source-change hook; a voice it
+  -- leaves stopped settles at once (it sends nothing: the factor is stored
+  -- for its next start). A running voice settles through its sync's grain
+  -- restart, one the recall starts through its voiceOn
+  S.register_scene_applied({name = "scan", fn = function()
+    for voice_idx = 1, NUM_VOICES do
+      if not S.voices[voice_idx].active then settle(voice_idx, true) end
+    end
+  end})
 
   -- The senders, each sending only while its voice runs
   for voice_idx = 1, NUM_VOICES do
