@@ -16,7 +16,7 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
 
   local MIDI_OUT = {express_per_step = 24, cc_per_step = 8, slots = 8, master_channel = 1, master_bend_range = 2,
-    slide_cc = 74, all_notes_off_cc = 123,
+    slide_cc = 74,
     -- RPNs (6: MPE configuration, 0: bend range), the 14-bit bend, 7-bit values
     rpn_msb_cc = 101, rpn_lsb_cc = 100, data_cc = 6, rpn_zone = 6, rpn_bend = 0,
     bend_center = 8192, bend_max = 16383, value_max = 127, notes = 128, channels = 16, max_members = 15,
@@ -35,9 +35,10 @@ return function(S)
   -- counts[port][channel][note]: the ids sounding there; use[port][channel]:
   -- the notes on a channel; member_times[port][channel] = {released,
   -- assigned}; expressing: the played MPE notes the step reads, cursor the
-  -- next to read; express_ports: the step's set of their ports; cc_last[k]: slot k's last value; left_with[key]: the
-  -- channels with notes as a device left, by the name S.lib.io_ports hands
-  -- the departure (or "port <n>" without one); asked[port]: the scene a
+  -- next to read; express_ports: the step's set of their ports; cc_last[k]:
+  -- slot k's last value; left_with[name][channel][note]: the notes a device
+  -- was sounding as it left, by the name of the device that got them, each
+  -- owed its own off where that device is next found; asked[port]: the scene a
   -- program change in on that port asked for, until its recall lands
   local state = {config = {}, notes = {}, counts = {}, use = {}, member_times = {}, expressing = {}, cursor = 1,
     express_ports = {}, cc_last = {}, left_with = {}, asked = {}, tick = 0, stopped = false,
@@ -204,9 +205,9 @@ return function(S)
 
   -- A note whose device left the port: marked departed, out of the
   -- expression list and the port's counts and channel use, so no off or
-  -- value of it goes to whatever holds the port now, and its channel owed
-  -- an all notes off where key (the device's name) next arrives. A note
-  -- that reached no device (key nil, #748) is owed to none
+  -- value of it goes to whatever holds the port now, and its own off owed
+  -- where key (the device's name) is next found (#750). A note that
+  -- reached no device (key nil, #748) is owed to none
   local function set_aside(record, key)
     record.departed = true
     remove_expressing(record)
@@ -216,7 +217,7 @@ return function(S)
     local use = table_at(state.use, record.port)
     use[record.channel] = (use[record.channel] or 1) - 1
     if use[record.channel] <= 0 then use[record.channel] = nil end
-    if key ~= nil then table_at(state.left_with, key)[record.channel] = true end
+    if key ~= nil then table_at(state.left_with, key, record.channel)[record.note] = true end
   end
 
   -- The notes on port that went to a device the port no longer holds (a
@@ -510,16 +511,30 @@ return function(S)
     end
   end
 
-  -- A device arriving: all notes off where it is now on the channels it
-  -- left with (by its name, wherever it was), or what a departure that
-  -- named no device left on this port
-  local function arrived_channels(port, name)
-    local channels = {}
-    for _, key in ipairs({name, "port " .. port}) do
-      for channel in pairs(state.left_with[key] or {}) do channels[channel] = true end
-      state.left_with[key] = nil
+  -- What a device named name is owed, {[channel] = {[note] = true}},
+  -- taken: the entry is cleared
+  local function arrived_notes(name)
+    local owed = state.left_with[name]
+    state.left_with[name] = nil
+    return owed
+  end
+
+  -- The owed notes of the device named name, paid where it is now (port): a
+  -- note_off for each, channels 1 to 16 and notes ascending, even for a
+  -- note that sounds there again now (the device had two ons, #709). No
+  -- CC 123 is sent (#750). True when anything was owed
+  local function pay_owed(port, name)
+    local owed = arrived_notes(name)
+    if not owed then return false end
+    for channel = 1, MIDI_OUT.channels do
+      local notes = owed[channel]
+      if notes then
+        for note = 0, MIDI_OUT.notes - 1 do
+          if notes[note] then send(port, "note_off", note, 0, channel) end
+        end
+      end
     end
-    return channels
+    return true
   end
 
   S.lib.io_ports.on_change("io_midi_out", function(port, name)
@@ -527,10 +542,7 @@ return function(S)
     if name == nil then
       departed(port)
     else
-      local channels = arrived_channels(port, name)
-      for channel = 1, MIDI_OUT.channels do
-        if channels[channel] then send(port, "cc", MIDI_OUT.all_notes_off_cc, 0, channel) end
-      end
+      pay_owed(port, name)
       for voice = 1, NUM_VOICES do
         local config = state.config[voice]
         if is_mpe(config) and config.port == port then setup(port, config.members) end
