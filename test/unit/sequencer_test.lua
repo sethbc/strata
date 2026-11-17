@@ -4006,8 +4006,7 @@ end)
 -- slice once its own has played out
 test("on an overlap voice the own note takes a step's slice first and later slices ring in slots of their own", function()
   local context, S = sliced_setup(3)
-  local scan = S.lib.scan
-  function scan.pass_seconds(_, fraction) return fraction * 1.6 end  -- a quarter: 0.4 s
+  params:set("v1_scan_mode", 3); params:set("v1_buf_scan", 1.25)  -- one shot: a quarter of 2 s in 0.4 s
   local seq, notes = S.lib.sequencer, S.lib.notes
   for _, step in ipairs({1, 3, 5}) do S.patterns[1][step] = 15 end
   seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 3, "slice", 2); seq.set_step_attr(1, 5, "slice", 3)
@@ -4036,8 +4035,7 @@ test("on an overlap voice the own note takes a step's slice first and later slic
   -- a ratchet of a step whose slice is in an extra slot hits that slice
   -- again in its slot, never the own note's
   context, S = sliced_setup(3)
-  scan = S.lib.scan
-  function scan.pass_seconds(_, fraction) return fraction * 8 end  -- 2 s
+  params:set("v1_scan_mode", 3); params:set("v1_buf_scan", 0.25)  -- one shot: each slice 2 s
   seq, notes = S.lib.sequencer, S.lib.notes
   S.patterns[1][1] = 15; S.patterns[1][2] = 15
   seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 2, "slice", 2); seq.set_step_attr(1, 2, "ratchet", 2)
@@ -4054,8 +4052,7 @@ test("on an overlap voice the own note takes a step's slice first and later slic
   -- the pool at 1: step 5's slice cuts step 3's, the oldest step slice in
   -- an extra slot, and takes its slot
   context, S = sliced_setup(3)
-  scan = S.lib.scan
-  function scan.pass_seconds(_, fraction) return fraction * 8 end
+  params:set("v1_scan_mode", 3); params:set("v1_buf_scan", 0.25)
   seq, notes = S.lib.sequencer, S.lib.notes
   notes.set_pool(1)
   for _, step in ipairs({1, 3, 5}) do S.patterns[1][step] = 15 end
@@ -4189,8 +4186,7 @@ test("playing names a one-voice step's slice while it sounds", function()
   assert_equal(table.concat(S.lib.slices.playing(1), ","), "", "the stop ended it")
   -- one shot: played out after its pass
   context, S = sliced_setup(2)
-  local scan = S.lib.scan
-  function scan.pass_seconds(_, fraction) return fraction * 2 end  -- a quarter: 0.5 s
+  params:set("v1_scan_mode", 3); params:set("v1_buf_scan", 1)  -- a quarter of 2 s: 0.5 s
   S.patterns[1][1] = 15
   S.lib.sequencer.set_step_attr(1, 1, "slice", 3)
   params:set("v1_seq_length", 16)
@@ -4198,6 +4194,27 @@ test("playing names a one-voice step's slice while it sounds", function()
   assert_equal(table.concat(S.lib.slices.playing(1), ","), "3", "sounding")
   context.clock.run_for(0.5 + 2 / 48)
   assert_equal(table.concat(S.lib.slices.playing(1), ","), "", "played out")
+  pattern_clock_stop()
+end)
+
+-- #740 (ruling 31): a one-shot step slice's region ends with the slice's own
+-- end (S.lib.playheads.finished), not a time counted from the step, so a
+-- restart of its scan names it again
+test("a one-shot step slice is named again after its scan restarts (#740)", function()
+  local context, S = sliced_setup(2)
+  params:set("v1_scan_mode", 3); params:set("v1_buf_scan", 1)  -- a quarter of 2 s: 0.5 s
+  S.patterns[1][1] = 15
+  S.lib.sequencer.set_step_attr(1, 1, "slice", 3)
+  params:set("v1_seq_length", 16)
+  local function playing() return table.concat(S.lib.slices.playing(1), ",") end
+  pattern_clock_start()
+  assert_equal(playing(), "3", "sounding")
+  context.clock.run_for(0.5 + 2 / 48)
+  assert_equal(playing(), "", "played out")
+  S.lib.positions.restart_scan(1)
+  assert_equal(playing(), "3", "its scan restarted: sounding again")
+  context.clock.run_for(0.5 + 2 / 48)
+  assert_equal(playing(), "", "and played out again")
   pattern_clock_stop()
 end)
 
