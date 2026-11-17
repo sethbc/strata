@@ -1000,6 +1000,42 @@ test("a same-pitch note to the old port mid-menu, then a's note ending: b gets i
   for key, count in pairs(open_notes(b)) do assert_equal(count, 0, "b's " .. key .. ": as many offs as ons (#709)") end
 end)
 
+-- Voice 1 on port 2 (synth a), channel 6, holding nothing; synth b on port
+-- 4; the menu opened and a moved to port 3, so port 2 is empty
+local function a_left_port_empty()
+  local context, S = started()
+  local a = context.midi.plug(2, "synth a")
+  local b = context.midi.plug(4, "synth b")
+  local target = midi_target(S)
+  params:set("v1_out_channel", 6)
+  params:set("v1_out_port", 2); settled(context)
+  _menu.set_mode(true)
+  context.midi.reassign(2, 3)
+  return context, S, target, a, b
+end
+
+test("a note sent to the empty old port mid-menu gives no off to the device moved in after it", function()
+  local context, S, target, a, b = a_left_port_empty()
+  target.note_on(1, "s1", 64, 1, step_info())  -- port 2 has no device: it reaches no one
+  context.midi.reassign(4, 2)                   -- synth b takes port 2
+  target.note_off(1, "s1")
+  assert_equal(sent(b), "", "b never had the note: no off at the off (#748)")
+  _menu.set_mode(false)
+  assert_equal(sent(a), "", "a never had it either: nothing owed")
+  assert_equal(sent(b), "", "and nothing for b at the close")
+end)
+
+test("a note sent to the empty old port mid-menu, held until the menu closes, gives no off to the device moved in after it", function()
+  local context, S, target, a, b = a_left_port_empty()
+  target.note_on(1, "s1", 64, 1, step_info())
+  context.midi.reassign(4, 2)
+  _menu.set_mode(false)
+  assert_equal(sent(a), "", "a never had the note: nothing owed at its arrival (#748)")
+  assert_equal(sent(b), "", "nor anything for b at the close")
+  target.note_off(1, "s1")
+  assert_equal(sent(b), "", "and no off for a note b never had")
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")
