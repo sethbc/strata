@@ -21,7 +21,7 @@ return function(S)
   local M = {}
 
   local DATA_FILES = {
-    max_bytes = 4 * 1024 * 1024,  -- a larger file is not read (16 full scenes are at most about 1.1 MB)
+    max_bytes = 4 * 1024 * 1024,  -- a larger file is not read (16 full scenes are about 1.15 MB)
     -- the most tables a file may hold: four times the cap before 3.4's
     -- review (8192) and 4.4 times the largest scenes file 3.4 writes, so a
     -- player's full file always loads and later releases' blocks have room
@@ -31,8 +31,8 @@ return function(S)
     max_tables = 32768,
     -- the tables of the largest scenes file this version writes: 16 full
     -- scenes (every step of every voice with every attribute, every macro
-    -- target, every matrix routing and every LFO home routing set; 788 KB to
-    -- about 1.1 MB as its numbers print short or long).
+    -- target, every matrix routing and every LFO home routing set; 1,152,011
+    -- bytes on Lua, 1,146,779 on LuaJIT, as matrix_test.lua writes it).
     -- test/unit/matrix_test.lua writes it and
     -- checks it holds no more; test/unit/data_files_test.lua checks
     -- max_tables keeps at least four times it. Raise it with a release that

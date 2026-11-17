@@ -145,7 +145,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 117 | end the zones editor's learn: cancel its timeout (`S.zones_learn_clock`) and every retired one, and clear the MIDI module's note tap (`CLEANUP_ORDER.zones_learn`, 3.5) | `lib/ui/zones.lua` |
 | 118 | cancel matrix learn's timeout (`S.matrix_learn_clock`) and forget the matrix's offsets (its extra offsets and fast sums), sending nothing; the matrix steps in the LFO clock and has no clock of its own (`CLEANUP_ORDER.matrix`, 3.4) | `lib/matrix.lua` |
 | 119 | end the note module's expression flush (`S.lib.notes.stop_flush`): nothing is due and its LFO step hook sends nothing after it (`CLEANUP_ORDER.notes`, 3.5) | `lib/notes.lua` |
-| 120 | cancel the LFO clock, release every engine-run LFO (`stopFastLfo`) and give every Lua-run LFO's destination its stored value back | `lib/lfos.lua` |
+| 120 | cancel the LFO clock, empty the round robin and give every direct destination (an LFO on a macro) back (`release_direct`); no `stopFastLfo` is sent (the engine is already freed) and the Lua homes' offsets are the matrix's (118) | `lib/lfos.lua` |
 | 122 | stop the playhead clock (`stop_clock`) | `lib/playheads.lua` |
 | 124 | cancel every voice's scrub glide and scan hold (`scrubRate` and `scanHold` back to 0) | `lib/positions.lua` |
 | 126 | stop the peaks read loop (`S.lib.waveforms.stop`) | `lib/waveforms.lua` |
