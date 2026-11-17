@@ -39,7 +39,7 @@ Page 5 (positions, the key at row 8 column 12, `LAYOUT_256.positions_key_column`
 ## Row 16: lock, freeze and copy/paste
 
 `grid_key_256_lock(port, x)`:
-- Columns 1-7: `toggle_lock(x)` (stored as `S.frozen`); LEDs 12 locked, 2 unlocked. While column 8 of row 16 is held on the port (`grid_core.held`), they are `S.lib.freeze.toggle_quantized(x)` instead (at the next beat or bar under `quantize_actions`), and their LEDs show the freeze (15 frozen, 3 not). Column 8 itself does nothing but hold; its LED is 15 while held, 4 otherwise. The grid redraws on every press and release, so the row flips back at once.
+- Columns 1-7: `toggle_lock(x)` (`S.locked`); LEDs 12 locked, 2 unlocked. While column 8 of row 16 is held on the port (`grid_core.held`), they are `S.lib.freeze.toggle_quantized(x)` instead (at the next beat or bar under `quantize_actions`), and their LEDs show the freeze (15 frozen, 3 not). Column 8 itself does nothing but hold; its LED is 15 while held, 4 otherwise. The grid redraws on every press and release, so the row flips back at once.
 - Columns 9-15 (voices 1-7), through the local `copy_paste_key(port, voice)`: with no clipboard, copy the voice's pattern (`clipboard = {voice = v, steps = <copy of S.patterns[v]>}`); with one, paste `clipboard.steps` onto the voice, unless it is the copied voice. The clipboard stays for more pastes.
 - Column 16: clear the clipboard.
 

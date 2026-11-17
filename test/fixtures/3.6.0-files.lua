@@ -25,6 +25,10 @@
 -- with params:write(<data>/strata-05.pset, "three six"), which writes the
 -- three side files. scenes.data is the data folder's strata/scenes.data
 -- after that, and the other four are the strata-05.* files.
+--
+-- Since scene format 9 (the work before 3.8) the scenes file, format 7, is
+-- below the floor: a build of this version sets it aside whole as
+-- scenes.data.bak and loads only the PSET and its side files.
 return {
   ["scenes.data"] = [==[
 return {

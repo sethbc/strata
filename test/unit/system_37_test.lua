@@ -172,75 +172,6 @@ local function pset_lines(text)
   return lines
 end
 
--- A param's default: its controlspec's, else its own; nil for no param
-local function param_default(id)
-  if not params.lookup[id] then return nil end
-  local param = params:lookup_param(id)
-  if param.controlspec then return param.controlspec.default end
-  return param.default
-end
-
-local function same_value(a, b)
-  if a == b then return true end
-  return type(a) == "number" and type(b) == "number" and math.abs(a - b) <= 1e-9 * math.max(1, math.abs(a))
-end
-
--- Every leaf of a 3.6 scene against the scene 3.7 loaded: the leaves that
--- differ, and the leaves 3.7 holds that the file had not ({path, value, keys})
-local function scene_leaves(old, loaded)
-  local differences, added = {}, {}
-  local function walk_old(a, b, path)
-    if type(a) ~= "table" then
-      if path:match("^data%.strata_lfo%d_dest$") then return end  -- decision 24: read as none, below
-      if not same_value(a, b) then differences[#differences + 1] = path .. ": " .. tostring(a) .. " ~= " .. tostring(b) end
-      return
-    end
-    if type(b) ~= "table" then differences[#differences + 1] = path .. ": a table ~= " .. tostring(b); return end
-    for key, value in pairs(a) do walk_old(value, b[key], path .. "." .. tostring(key)) end
-  end
-  local function walk_new(a, b, path, keys)
-    if type(b) ~= "table" then
-      if a == nil then added[#added + 1] = {path = path, value = b, keys = keys} end
-      return
-    end
-    for key, value in pairs(b) do
-      local inner = {}
-      for index, k in ipairs(keys) do inner[index] = k end
-      inner[#inner + 1] = key
-      local inner_old = nil  -- never `a and a[key] or nil`, which reads a saved false as nil
-      if type(a) == "table" then inner_old = a[key] end
-      walk_new(inner_old, value, path .. "." .. tostring(key), inner)
-    end
-  end
-  walk_old(old, loaded, "")
-  walk_new(old, loaded, "", {})
-  for index, entry in ipairs(added) do entry.path = entry.path:sub(2); added[index] = entry end
-  for index, text in ipairs(differences) do differences[index] = text:sub(2) end
-  return differences, added
-end
-
--- Why a leaf 3.7 added to a loaded 3.6 scene has its value: the default
--- of the param it stores, the LFO destination's none, a sequence's 0.
--- Returns nil when it is right, else what is wrong
-local function added_leaf_problem(entry)
-  local keys, value = entry.keys, entry.value
-  local expected
-  if keys[1] == "data" and #keys == 2 and type(keys[2]) == "string" and keys[2]:match("^strata_lfo%d_dest_key$") then
-    expected = "none"
-  elseif keys[1] == "data" and keys[2] == "sequences" then
-    expected = 0  -- the block's default: sixteen zeros a sequence
-  elseif keys[1] == "data" and keys[2] == "voices" and keys[4] == "extras" and #keys == 5 then
-    expected = param_default("v" .. keys[3] .. "_" .. keys[5])
-  elseif keys[1] == "data" and #keys == 2 then
-    expected = param_default(keys[2])
-  end
-  if expected == nil then return entry.path .. " is no field 3.7 fills from a default" end
-  if not same_value(expected, value) then
-    return entry.path .. " is " .. tostring(value) .. ", its default " .. tostring(expected)
-  end
-  return nil
-end
-
 -- A data folder of its own, under the harness's data root
 local function fresh_dir(name)
   local subdir = name .. "-" .. math.random(1, 1e9)
@@ -249,7 +180,11 @@ local function fresh_dir(name)
   return subdir, dir
 end
 
-test("a 3.6 scenes file, a 3.6 PSET and a version 2 buffers.data load with their values as saved", function()
+-- The groundwork before 3.8 raises the scenes floor to 9 (rulings 1-3): a
+-- 3.6 scenes file (format 7) is set aside whole; its PSET and buffers.data
+-- still load
+test("a 3.6 scenes file is set aside whole; a 3.6 PSET and a version 2 buffers.data load with their values as saved",
+    function()
   math.randomseed(SYSTEM.seed)
   local files = files_3_6()
   local subdir, dir = fresh_dir("system37-old-files")
@@ -273,56 +208,15 @@ test("a 3.6 scenes file, a 3.6 PSET and a version 2 buffers.data load with their
   end})
   finish_startup(context)
   local S = local_value("S")
-  local NUM_VOICES, NUM_LFOS = S.constants.NUM_VOICES, S.constants.NUM_LFOS
-  -- the scenes: every value the file holds as saved; every field 3.7 adds at its default
-  local reference = dir .. "scenes-3.6.data"
-  write_text(reference, files["scenes.data"])
-  local old = S.lib.data_files.read(reference)
-  assert_equal(old.version, 7, "3.6.0 writes format 7")
-  local populated = 0
+  local NUM_VOICES = S.constants.NUM_VOICES
+  -- the scenes: 3.6.0 writes format 7, below the floor, so the file is set
+  -- aside whole and reads as older; no slot is filled
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data.bak").version, 7, "3.6.0 writes format 7")
+  assert_equal(file_text(dir .. "scenes.data.bak"), files["scenes.data"], "the scenes file set aside whole")
+  assert_true(not util.file_exists(dir .. "scenes.data"), "and moved")
+  assert_equal(S.scene_file.problem, "older", "it reads as older")
   for slot = 1, S.constants.NUM_SCENES do
-    local saved, loaded = old.scenes[slot], S.scenes[slot]
-    if type(saved) == "table" and saved.populated then
-      populated = populated + 1
-      local differences, added = scene_leaves(saved, loaded)
-      assert_equal(table.concat(differences, "; "), "", "scene " .. slot .. ": every value as saved")
-      assert_true(#added >= NUM_VOICES * 11, "scene " .. slot .. ": the 3.7 fields filled (" .. #added .. ")")
-      for _, entry in ipairs(added) do
-        local problem = added_leaf_problem(entry)
-        assert_true(problem == nil, "scene " .. slot .. ": " .. tostring(problem))
-      end
-      for n = 1, NUM_LFOS do
-        assert_equal(loaded.data["strata_lfo" .. n .. "_dest_key"], "none", "scene " .. slot .. ", LFO " .. n .. ": none")
-      end
-    else
-      assert_true(not loaded.populated, "scene " .. slot .. ": empty, as saved")
-    end
-  end
-  assert_equal(populated, 2, "scenes 1 and 4")
-  assert_equal(S.scenes[4].name, "four")
-  assert_near(S.scenes[1].data.voices[1].grain.buf_scan, PSET_3_6.scan, 1e-9, "a scan of 0.5, now a speed")
-  assert_equal(S.scenes[1].data.steps[2][3].prob, 40, "a step's attribute as saved")
-  assert_true(not util.file_exists(dir .. "scenes.data.bak"), "nothing is set aside")
-  -- where the values land: an instant recall of each puts every saved global
-  -- in a param of this build and every voice's values in place
-  for _, slot in ipairs({1, 4}) do
-    recall_scene(slot, 0)
-    context.clock.run_for(0.1)
-    local globals = 0
-    for key, value in pairs(old.scenes[slot].data) do
-      if type(value) ~= "table" and not key:match(PSET_3_6.lfo_dest) then
-        assert_true(params.lookup[key] ~= nil, "scene " .. slot .. "'s field " .. key .. " is a param of this build")
-        local param = params:lookup_param(key)
-        local step = param.controlspec and param.controlspec.step or 0
-        assert_near(params:get(key), value, math.max(step, 1e-6 * math.max(1, math.abs(value))),
-          "scene " .. slot .. ": " .. key .. " recalled as saved")
-        globals = globals + 1
-      end
-    end
-    assert_true(globals > 50, "scene " .. slot .. ": " .. globals .. " globals recalled")
-    for voice = 1, NUM_VOICES do h.assert_voice_matches(voice, S.voices[voice], old.scenes[slot].data.voices[voice]) end
-    assert_near(params:get("v1_buf_scan"), old.scenes[slot].data.voices[1].grain.buf_scan, 1e-9,
-      "scene " .. slot .. ": voice 1's scan, now a speed")
+    assert_true(not S.scenes[slot].populated, "scene " .. slot .. ": nothing loaded")
   end
   -- the buffers: slot 3 reloads its file from 1.5 s, with no settings
   local loads = context.calls_named("loadBuffer")
@@ -384,7 +278,7 @@ test("a 3.6 scenes file, a 3.6 PSET and a version 2 buffers.data load with their
   cleanup()
 end)
 
-test("a scenes file older than format 7 and a version 1 buffers.data are set aside, never converted or overwritten",
+test("a scenes file older than format 9 and a version 1 buffers.data are set aside, never converted or overwritten",
     function()
   math.randomseed(SYSTEM.seed)
   local subdir, dir = fresh_dir("system37-below-floors")
@@ -392,11 +286,12 @@ test("a scenes file older than format 7 and a version 1 buffers.data are set asi
   os.execute("mkdir -p '" .. audio .. "'")
   local drone = audio .. "drone.wav"
   io.open(drone, "w"):close()
-  -- 3.6.0's scenes file, labeled format 6
-  local scenes_text, labeled = files_3_6()["scenes.data"]:gsub('%["version"%]=7,', '["version"]=6,')
+  -- 3.6.0's scenes file as it is (format 7), and labeled format 8 (3.7's)
+  local scenes_7 = files_3_6()["scenes.data"]
+  local scenes_8, labeled = scenes_7:gsub('%["version"%]=7,', '["version"]=8,')
   assert_equal(labeled, 1, "the one version field")
   local buffers_text = tabutil_text({version = 1, paths = {drone}, starts = {0}})
-  write_text(dir .. "scenes.data", scenes_text)
+  write_text(dir .. "scenes.data", scenes_7)
   write_text(dir .. "buffers.data", buffers_text)
   local context = load_strata({data_subdir = subdir, before_load = function(started)
     started.audio.register(drone, {channels = 2, frames = 48000 * 4, rate = 48000})
@@ -407,19 +302,30 @@ test("a scenes file older than format 7 and a version 1 buffers.data are set asi
     assert_true(not S.scenes[slot].populated, "scene " .. slot .. ": nothing converted")
   end
   assert_equal(#context.calls_named("loadBuffer"), 0, "no slot reloads")
-  assert_equal(file_text(dir .. "scenes.data.bak"), scenes_text, "the scenes file set aside whole")
+  assert_equal(file_text(dir .. "scenes.data.bak"), scenes_7, "the scenes file set aside whole")
   assert_equal(file_text(dir .. "buffers.data.bak"), buffers_text, "the buffers file set aside whole")
-  assert_equal(S.scene_file.problem, "unreadable"); assert_equal(S.buffer_file.problem, "unreadable")
+  assert_equal(S.scene_file.problem, "older"); assert_equal(S.buffer_file.problem, "unreadable")
   -- a session that saves both files writes beside the backups, which stay
   capture_scene(3)
   load_buffer(1, drone)
   context.clock.run_for(1)
   cleanup()
-  assert_equal(file_text(dir .. "scenes.data.bak"), scenes_text, "the scenes backup never overwritten")
+  assert_equal(file_text(dir .. "scenes.data.bak"), scenes_7, "the scenes backup never overwritten")
   assert_equal(file_text(dir .. "buffers.data.bak"), buffers_text, "the buffers backup never overwritten")
   assert_equal(context.tab.load(dir .. "scenes.data").version, S.constants.SCENE_DATA_VERSION, "scenes in the build's format")
   assert_equal(context.tab.load(dir .. "buffers.data").version, S.constants.BUFFER_DATA_VERSION,
     "buffers in the build's version")
+  -- 3.7's format 8 (the fixture relabeled) is set aside whole as well
+  local subdir_8, dir_8 = fresh_dir("system37-format-8")
+  write_text(dir_8 .. "scenes.data", scenes_8)
+  context = load_strata({data_subdir = subdir_8})
+  S = local_value("S")
+  assert_equal(file_text(dir_8 .. "scenes.data.bak"), scenes_8, "a format 8 file set aside whole")
+  assert_equal(S.scene_file.problem, "older", "and older")
+  for slot = 1, S.constants.NUM_SCENES do
+    assert_true(not S.scenes[slot].populated, "format 8, scene " .. slot .. ": nothing converted")
+  end
+  cleanup()
 end)
 
 ---------------------------------------------------------------------------

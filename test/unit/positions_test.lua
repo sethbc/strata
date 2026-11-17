@@ -339,14 +339,14 @@ test("a row's LED levels are built once while nothing in it changes, on a clock 
   assert_equal(positions.grid_level(1, 3, 16), 0, "an emptied slot goes dark")
 end)
 
-test("bookmarks default to the quarters, are scene fields that crossfade and migrate from version 3", function()
+test("bookmarks default to the quarters and are scene fields that crossfade", function()
   local context, S = buffer_voices()
   for voice_idx = 1, S.constants.NUM_VOICES do
     for n, expected in ipairs({0, 0.25, 0.5, 0.75}) do
       assert_near(params:get("v" .. voice_idx .. "_bookmark_" .. n), expected, 1e-9)
     end
   end
-  assert_equal(S.constants.SCENE_DATA_VERSION, 8)
+  assert_equal(S.constants.SCENE_DATA_VERSION, 9)
   params:set("v1_bookmark_2", 0.75)
   capture_scene(1)
   assert_near(S.scenes[1].data.voices[1].extras.bookmark_2, 0.75, 1e-9, "the scene captures it")

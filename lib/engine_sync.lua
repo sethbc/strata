@@ -667,8 +667,8 @@ return function(S)
   -- with the voice and its new state
   function toggle_lock(voice_idx)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
-    S.frozen[voice_idx] = not S.frozen[voice_idx]
-    for _, hook in ipairs(S.registry.lock_change) do hook(voice_idx, S.frozen[voice_idx]) end
+    S.locked[voice_idx] = not S.locked[voice_idx]
+    for _, hook in ipairs(S.registry.lock_change) do hook(voice_idx, S.locked[voice_idx]) end
     update_voice_list()
     request_redraw()
     grid_redraw()

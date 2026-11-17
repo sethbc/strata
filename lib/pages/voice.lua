@@ -126,7 +126,7 @@ return function(S)
     screen.text_right(section_text)
     local voice = S.voices[S.selected_voice]
     -- the name is cut to leave room for the lock tag, never the tag (#421)
-    local lock_tag = S.frozen[S.selected_voice] and " [L]" or ""
+    local lock_tag = S.locked[S.selected_voice] and " [L]" or ""
     local prefix = S.selected_voice .. (voice.active and "+" or "-") .. " "
     local room = LAYOUT.value_right - screen.text_extents(section_text) - LAYOUT.line_gap
     local name_room = room - screen.text_extents(prefix .. lock_tag)
@@ -228,7 +228,7 @@ return function(S)
     local undo_section = section
     if section == "synth" and voice_uses_buffer(voice_idx) then undo_section = "synth (buffer)" end
     return {page = UI_PAGES.index.VOICE, section = undo_section, voice = voice_idx, draws = draws},
-      S.frozen[voice_idx] and "locked" or nil
+      S.locked[voice_idx] and "locked" or nil
   end
 
   -- The hint row (redraw() draws it after the page): with ALT, ALT+K2's
@@ -238,7 +238,7 @@ return function(S)
   local function voice_hints(alt_held)
     local record = S.registry.pages[UI_PAGES.index.VOICE]
     if alt_held then
-      return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (S.frozen[S.selected_voice] and "unlock" or "lock")
+      return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (S.locked[S.selected_voice] and "unlock" or "lock")
     end
     if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
     return "K2:prev K3:next"

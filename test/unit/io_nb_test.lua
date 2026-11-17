@@ -586,8 +586,8 @@ test("the nb params stay out of scenes, LFOs, macros, fader pages, randomize, mu
   -- active, unlocked voices (lib/mutation.lua), and randomize skips a locked one
   for _, voice in ipairs({ 1, 4 }) do
     if not S.voices[voice].active then toggle_voice(voice) end
-    if S.frozen[voice] then toggle_lock(voice) end
-    assert_true(S.voices[voice].active and not S.frozen[voice], "voice " .. voice .. " runs, unlocked")
+    if S.locked[voice] then toggle_lock(voice) end
+    assert_true(S.voices[voice].active and not S.locked[voice], "voice " .. voice .. " runs, unlocked")
   end
   choose(1, "alpha"); choose(4, "alpha")
   -- each effect's positive control: a param of the voice moved. What makes each hold (the seed does

@@ -448,7 +448,7 @@ return function(S)
 
   function M.lock_level(voice_idx)
     if not whole_number_in(voice_idx, 1, NUM_VOICES) then return 0 end
-    return S.frozen[voice_idx] and LEVELS.locked or LEVELS.unlocked
+    return S.locked[voice_idx] and LEVELS.locked or LEVELS.unlocked
   end
 
   function M.play_level()

@@ -45,13 +45,13 @@ test("every encoder, key and arc control is safe on every page; the arc button a
     -- the button check covers only pages without arc_button (all but MAIN
     -- today): there it leaves voices and locks alone
     if not local_value("S").registry.pages[page].arc_button then
-      local frozen = deep_copy(local_value("frozen"))
+      local locked = deep_copy(local_value("locked"))
       local active = {}
       for voice_idx, voice in ipairs(local_value("voices")) do active[voice_idx] = voice.active end
       context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
       for voice_idx, voice in ipairs(local_value("voices")) do
         assert_equal(voice.active, active[voice_idx], "arc button leaves voices alone on " .. PAGE_TITLES[page])
-        assert_equal(local_value("frozen")[voice_idx], frozen[voice_idx], "arc button leaves lock alone on " .. PAGE_TITLES[page])
+        assert_equal(local_value("locked")[voice_idx], locked[voice_idx], "arc button leaves lock alone on " .. PAGE_TITLES[page])
       end
     end
   end
@@ -597,7 +597,7 @@ test("displayed changes from every source reach the screen and arc on the next f
   -- K3 on MAIN and the arc button: test/unit/pages_main_test.lua. toggle_lock's
   -- callers (keys, arc, grid) ask for redraws too: call it directly
   assert_drawn_on_next_frame(context, arc_hardware, "toggle_lock", function() toggle_lock(1) end)
-  assert_true(local_value("frozen")[1], "toggle_lock locked voice 1"); toggle_lock(1)
+  assert_true(local_value("locked")[1], "toggle_lock locked voice 1"); toggle_lock(1)
   assert_drawn_on_next_frame(context, arc_hardware, "grid voice button", function()
     context.grid.press(1, 13, 14, 1); context.grid.press(1, 13, 14, 0)
   end)

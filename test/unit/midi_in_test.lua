@@ -297,7 +297,7 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
   show_page("MAIN")
   context.midi.send(1, { type = "note_on", note = 62, vel = 100, ch = 2 })
   toggle_lock(2)
-  assert_true(voices[2].active and local_value("frozen")[2], "a lock keeps the held voice running")
+  assert_true(voices[2].active and local_value("locked")[2], "a lock keeps the held voice running")
   context.midi.send(1, { type = "note_off", note = 62, vel = 0, ch = 2 })
   assert_true(not voices[2].active, "lock: the note off stops the locked voice")
   assert_nothing_held(2, 2, 62, "lock")
@@ -314,12 +314,12 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
     stopper.stop()
     assert_true(not voices[voice_idx].active, stopper.name .. ": the voice stopped")
     context.clear_engine_calls()
-    local frozen = deep_copy(local_value("frozen"))
+    local locked = deep_copy(local_value("locked"))
     context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = voice_idx })
     assert_equal(#context.engine_calls, 0, stopper.name .. ": the note off sends nothing")
     for other = 1, 7 do
       assert_true(not voices[other].active, stopper.name .. ": voice " .. other .. " still off")
-      assert_equal(local_value("frozen")[other], frozen[other], stopper.name .. ": voice " .. other .. " freeze unchanged")
+      assert_equal(local_value("locked")[other], locked[other], stopper.name .. ": voice " .. other .. " lock unchanged")
     end
     assert_nothing_held(voice_idx, voice_idx, 60, stopper.name)
   end

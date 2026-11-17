@@ -194,7 +194,7 @@ test("every page's header, hints and text stay apart and inside 128x64 (M7)", fu
   for voice_idx = 1, 7 do
     set_selected(voice_idx)
     if not voices[voice_idx].active then toggle_voice(voice_idx) end
-    if not local_value("frozen")[voice_idx] then toggle_lock(voice_idx) end
+    if not local_value("locked")[voice_idx] then toggle_lock(voice_idx) end
     params:set("v" .. voice_idx .. "_grain_mode", 2)  -- MAIN shows [T]
     for page = 1, #PAGE_TITLES do
       show_page(page)

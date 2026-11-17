@@ -259,7 +259,7 @@ test("grid page 4 shows FX faders in rows 3-7 and keeps row 8/16", function()
     end
   end
   context.grid.press(1, 1, 8, 1); assert_true(local_value("pattern_playing"), "row 8 play on page 4")
-  context.grid.press(1, 1, 16, 1); assert_true(local_value("frozen")[1], "row 16 locks on page 4")
+  context.grid.press(1, 1, 16, 1); assert_true(local_value("locked")[1], "row 16 locks on page 4")
   assert_equal(device:get_led(1, 16), 12, "row 16 shows the lock on page 4")
   assert_equal(device:get_led(16, 8), 15, "row 8 shows page 4 selected")
   -- FX changes made elsewhere move the faders
@@ -401,7 +401,7 @@ test("grid page 4 buffer LEDs: row 1 state, row 2, source rows, and non-grid cha
   -- a second row-1 press stops early; row 8 and 16 keep their meaning
   context.grid.press(1, 4, 1, 1); context.grid.press(1, 4, 1, 1)
   assert_equal(#context.calls_named("stopRecord"), 1, "second press stops the recording")
-  context.grid.press(1, 3, 16, 1); assert_true(local_value("frozen")[3], "row 16 locks on page 4")
+  context.grid.press(1, 3, 16, 1); assert_true(local_value("locked")[3], "row 16 locks on page 4")
   context.grid.press(1, 1, 8, 1); assert_true(local_value("pattern_playing"), "row 8 transport on page 4")
   -- the FX faders are still on rows 3-7
   context.grid.press(1, 16, 7, 1); assert_near(params:get("delay_mix"), 1, 1e-6, "row 7 delay mix")
@@ -804,7 +804,7 @@ test("256 page 3: rows 8 and 16 work and light as on the other pages (#442)", fu
   assert_equal(device:get_led(8, 8), 15, "lit while held")
   context.grid.press(1, 8, 8, 0)
   tap(context, 1, 16)
-  assert_true(S.frozen[1], "(1,16) locks voice 1")
+  assert_true(S.locked[1], "(1,16) locks voice 1")
   assert_equal(device:get_led(1, 16), 12, "and lights at 12")
   context.grid.press(1, 8, 16, 1)  -- hold the freeze key
   tap(context, 2, 16)
@@ -872,21 +872,21 @@ end)
 test("row 16 columns 1-7 lock voices", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 16, 16)
-  local frozen = local_value("frozen")
+  local locked = local_value("locked")
   for voice_idx = 1, 7 do
     tap(context, voice_idx, 16)
-    assert_true(frozen[voice_idx], "column " .. voice_idx .. " locks voice " .. voice_idx)
+    assert_true(locked[voice_idx], "column " .. voice_idx .. " locks voice " .. voice_idx)
     assert_equal(device:get_led(voice_idx, 16), 12, "a locked voice lights at 12")
   end
   tap(context, 3, 16)
-  assert_true(not frozen[3], "a second press unlocks")
+  assert_true(not locked[3], "a second press unlocks")
   assert_equal(device:get_led(3, 16), 2)
   tap(context, 8, 16)
   assert_equal(S_table().lib.grid_core.port_state(1).clipboard, nil, "column 8 does nothing")
   assert_equal(device:get_led(8, 16), 4, "column 8 is the freeze key (not held: 4)")
   tap(context, 14, 8)  -- page 2
   tap(context, 3, 16)
-  assert_true(frozen[3], "page 2 locks too")
+  assert_true(locked[3], "page 2 locks too")
 end)
 
 -- A 256 on port 1, with voices 1 and 2 running
@@ -921,16 +921,16 @@ test("256 page 4 column 12 toggles freeze per voice with LED feedback", function
   assert_equal(device:get_led(12, 10), 15, "a param change redraws the grid")
   -- columns 11 and 13-16 stay dark, and nothing else changed
   for _, x in ipairs({11, 13, 14, 15, 16}) do assert_equal(device:get_led(x, 9), 0, "column " .. x .. " dark") end
-  assert_true(not local_value("frozen")[1], "freeze is not lock")
+  assert_true(not local_value("locked")[1], "freeze is not lock")
 end)
 
 test("256 page 1: holding row 16 column 8 turns row 16 columns 1-7 into freeze keys", function()
   local context, device = freeze_grid()
   local S = local_value("S")
-  local frozen = local_value("frozen")
+  local locked = local_value("locked")
   -- without the hold: lock
   grid_tap(context, 1, 16)
-  assert_true(frozen[1], "column 1 locks voice 1")
+  assert_true(locked[1], "column 1 locks voice 1")
   assert_equal(params:get("v1_freeze"), 0, "and does not freeze it")
   assert_equal(device:get_led(1, 16), 12, "row 16 shows the lock")
   grid_tap(context, 1, 16)
@@ -941,14 +941,14 @@ test("256 page 1: holding row 16 column 8 turns row 16 columns 1-7 into freeze k
   end
   grid_tap(context, 3, 16)
   assert_equal(params:get("v3_freeze"), 1, "column 3 freezes voice 3 while column 8 is held")
-  assert_true(not frozen[3], "and does not lock it")
+  assert_true(not locked[3], "and does not lock it")
   assert_equal(device:get_led(3, 16), 15, "frozen: 15")
   assert_true(device:get_led(8, 16) > 0, "column 8 lights while held")
   context.grid.press(1, 8, 16, 0)
   -- released: lock again, the lock LEDs back
   assert_equal(device:get_led(3, 16), 2, "row 16 shows the lock again")
   grid_tap(context, 3, 16)
-  assert_true(frozen[3], "column 3 locks once column 8 is released")
+  assert_true(locked[3], "column 3 locks once column 8 is released")
   assert_equal(params:get("v3_freeze"), 1, "the freeze stays")
   -- column 8 alone does nothing
   grid_tap(context, 8, 16)
@@ -1047,7 +1047,7 @@ test("256: rows 8 and 16 on page 5 keep their page 1 and 2 actions", function()
   assert_equal(params:get("tempo"), tempo + 1, "row 8 tempo keys")
   assert_equal(S.lib.grid_core.page(1), 5, "still page 5")
   grid_tap(context, 2, 16)
-  assert_true(S.frozen[2], "row 16 columns 1-7 lock")
+  assert_true(S.locked[2], "row 16 columns 1-7 lock")
   assert_equal(device:get_led(2, 16), 12, "and show it")
   grid_tap(context, 2, 16)
 end)

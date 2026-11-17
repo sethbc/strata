@@ -612,7 +612,7 @@ return function(S)
       -- 3. room in the pool; 4. else the oldest held extra note anywhere is
       -- cut, but a locked voice's for another voice
       if M.pool_used() >= M.pool() then
-        local victim = oldest(function(record) return record.voice == voice or not S.frozen[record.voice] end, now)
+        local victim = oldest(function(record) return record.voice == voice or not S.locked[record.voice] end, now)
         if victim then
           engine.noteOff(victim.voice - 1, victim.slot - 1, 1)
           count(1)

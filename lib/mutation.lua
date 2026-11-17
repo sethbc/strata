@@ -141,7 +141,7 @@ return function(S)
   function M.randomize(spec)
     check_spec(spec)
     if spec.pattern ~= nil then return randomize_pattern_spec(spec) end
-    if spec.voice ~= nil and S.frozen[spec.voice] then return false end
+    if spec.voice ~= nil and S.locked[spec.voice] then return false end
     if #spec.draws == 0 then return false end
     local values, ids = {}, {}
     for _, entry in ipairs(spec.draws) do
@@ -269,11 +269,11 @@ return function(S)
   end
 
   function drift_update()
-    -- Slow grain pitch drift for active, non-frozen voices: a small random
+    -- Slow grain pitch drift for active, unlocked voices: a small random
     -- step plus a pull back toward the last user/scene/mutation-set pitch, so
     -- the walk stays a subtle detune instead of wandering to the rails
     for i = 1, NUM_VOICES do
-      if S.voices[i].active and not S.frozen[i] then
+      if S.voices[i].active and not S.locked[i] then
         local pitch = mean_reverting_step(S.voices[i].grain.pitch, S.grain_pitch_base[i],
           DRIFT_PITCH_STEP, DRIFT_PITCH_REVERSION)
         set_drifted_param("v" .. i .. "_grain_pitch", util.clamp(pitch, 0.25, 4))
@@ -320,8 +320,8 @@ return function(S)
     local amount = params:get("mutation_amount")
 
     for i = 1, NUM_VOICES do
-      -- Only mutate active, non-frozen voices
-      if S.voices[i].active and not S.frozen[i] then
+      -- Only mutate active, unlocked voices
+      if S.voices[i].active and not S.locked[i] then
         local v = S.voices[i]
 
         if voice_uses_synth(i) then

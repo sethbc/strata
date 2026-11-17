@@ -1,12 +1,12 @@
 ## Must not break
 
 - A new captured field needs `validate_scene` coverage (and a `SCENE_GLOBAL_PARAMS` entry for a global param) and a default `fill_scene` fills (`SCENE_GLOBAL_PARAMS.default`, `S.VOICE_SCENE_DEFAULTS`, `S.SCENE_BLOCK_DEFAULTS` or a record's `scene_defaults`), or files written before it stop loading.
-- **The format floor** (3.7, design decision 21): a file of format `SCENE_FORMAT_FLOOR` (7, 3.5's) to `SCENE_DATA_VERSION` loads, every field it lacks filled from the defaults (`fill_scene`); a file below the floor (the bare array before 2.1 included) or above the build's version is set aside to its first free backup name with one console line, and never overwritten. No code is keyed on a file's version (a structure test finds, under `lib/`, a file's version compared, on either side and bare or wrapped, with a number literal or a name that is no floor (`_FLOOR`) and no build version (`_DATA_VERSION`), and the names `from_version` and `before_version`): a stored value whose meaning changes raises the floor with the version, never adds a conversion.
+- **The format floor** (3.7, design decision 21): a file of format `SCENE_FORMAT_FLOOR` (9, since the work before 3.8) to `SCENE_DATA_VERSION` loads, every field it lacks filled from the defaults (`fill_scene`); a file below the floor (the bare array before 2.1 included) or above the build's version is set aside to its first free backup name with one console line, and never overwritten. One below the floor reads as older (`S.scene_file.problem` `"older"`), never as unreadable. No code is keyed on a file's version (a structure test finds, under `lib/`, a file's version compared, on either side and bare or wrapped, with a number literal or a name that is no floor (`_FLOOR`) and no build version (`_DATA_VERSION`), and the names `from_version` and `before_version`): a stored value whose meaning changes raises the floor with the version, never adds a conversion.
 - Discrete keys (`DISCRETE_GRAIN_KEYS`, source, mod sources, lock and active states, tempo, filter type, mutation and LFO settings) switch at the end of a transition, never crossfade. Continuous params fade linearly from start values snapshotted once.
 - A fade toward a scene that stops a running LFO (`S.lib.lfos.transition_stops(n, scene_data)`: `strata_lfo<n>` on now, off in the scene) fades that LFO's depth to 0 and holds its rate and offset; the end sets the scene's exact values with the state (#408). The LFO entries of `S.SCENE_GLOBAL_PARAMS` are `lib/lfos.lua`'s `S.lib.lfos.SCENE_FIELDS` (the records themselves, appended after the built-in globals), carrying `lfo = n` and the depth's `stop_target = 0`; this file never lists the LFO fields itself.
 - A recall is one list: `recall_scene_instant` is `S.lib.scenes.apply_entries(S.lib.scenes.scene_entries(scene_data))`, and `scene_transition_targets` is the continuous entries of `scene_entries`. Their sends, in order, are 3.3.2's, plus what the lock hooks send for a lock the recall changes (scatter's `setScatter`, `docs/notes/lua/scatter.md`): a test compares both against verbatim copies of the merged functions, the recall's with the lock hooks added, for every voice state and source (`test/unit/scenes_test.lua`). A change to what a recall sets goes in `scene_entries` or `apply_entries`, never beside them, so morph (which applies the same lists) follows.
 - A recall, every fade step and `apply_entries` set each param through the local `set_scene_value`: a registered field's own `set` when its record has one (3.4: a macro sets itself silently), else the local `set_scene_param`: a binary param through `set_binary_param` (`lib/ui/params.lua`), so a controller mapped to it in PARAMS > MAP follows (norns' `Binary:set` sends no CC, #538), any other through `params:set`.
-- A recall's lock entries run every `S.registry.lock_change` hook, `fn(voice_idx, locked)`, for each voice whose lock it changes, after setting `S.frozen[voice_idx]`, as `toggle_lock` does (3.4's 0a); a voice whose lock stays runs none.
+- A recall's lock entries run every `S.registry.lock_change` hook, `fn(voice_idx, locked)`, for each voice whose lock it changes, after setting `S.locked[voice_idx]`, as `toggle_lock` does (3.4's 0a); a voice whose lock stays runs none.
 - Every `S.registry.scene_applied` hook (3.7, `S.register_scene_applied({name, fn})`) runs once per `apply_entries` call, contained, right after it clears `S.scene_recall_in_progress`, before the source syncs and before an error is raised again: an instant recall, a fade's landing and morph's discrete entries.
 - Every `S.registry.scene_recalled` hook (3.6's 0a, `S.register_scene_recalled`) runs once per recall, contained (`S.lib.ui_frame.contained_call`, `strata: scene recalled hook <n> failed: ` once per message), with `(scene_num)`: at an instant recall once its entries applied and the scene is current (in `recall_scene_instant`, after `S.current_scene` is set), or at a fade's first step once it ran; a fade's landing passes `recall_scene_instant` its fourth argument `landing = true` and tells nothing again. A refused recall (out of range, empty, invalid), an instant recall whose apply raises and a fade whose first step raises tell nothing; a fade that fails later (a step, or its landing) or is superseded has told already, at its first step, so a hook must never assume the scene landed. The scene sequencer's recalls go through `recall_scene` and tell the same way. The targets send their program changes from it.
 - A block's `through_zero` plays only in a fade (and morph): an instant recall, and a fade's end, apply the block's value through its `apply` and never ask it.
@@ -60,7 +60,7 @@ Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene pages are in `
 - **Revisions**: `S.lib.scenes.revision(slot)` is 0 until the slot's data first changes, then rises at each change: a capture of the slot, and any load from disk that replaces the scenes (every slot rises; a load that finds no file or an unreadable one changes none). A number that is no slot reads 0.
 - **Data**, a complete snapshot:
   - every voice parameter (synthesis, granular including the buffer params, cross-modulation) and each voice's source (not buffer contents);
-  - voice active and lock states (stored as `frozen`);
+  - voice active and lock states (stored as `locked`);
   - pattern data (all 7 voices × 16 steps);
   - global parameters: master density, tempo, filter, delay, reverb, drift, mutations, and each LFO's shape, mode, rate, depth, offset, destination and state;
   - format 3 (3.2): each voice's registered params (`data.voices[i].extras[key]`, the keys of every record's `scene_defaults`), the registered global fields (`S.registry.scene_fields`, stored like the other globals) and each LFO's offset (#103);
@@ -78,7 +78,7 @@ Patterns are `S.patterns` (`lib/sequencer.lua`). The grid's scene pages are in `
 function capture_scene(scene_num)
   -- Captures the complete current state:
   -- - all voice parameters (params, grain, crossmod)
-  -- - voice active/frozen states
+  -- - voice active/locked states
   -- - all pattern data
   -- - global parameters (density, tempo, reverb, mutations, etc.)
   S.scenes[scene_num].data = scene_data
@@ -125,7 +125,7 @@ end
 Voice activation:
 - checks whether a voice's state needs to change (on → off or off → on);
 - starts and stops voices with `toggle_voice()`;
-- restores lock states (stored as `frozen`) with the scene, running the `lock_change` hooks for each voice whose lock changed.
+- restores lock states (stored as `locked`) with the scene, running the `lock_change` hooks for each voice whose lock changed.
 
 Patterns:
 - restored after all parameter changes, each voice's through `S.lib.sequencer.replace_pattern` (which ends a step held on the grid, #242);
@@ -144,7 +144,7 @@ A voice's synth and grain params follow `pairs` over the scene's tables: one tab
 
 `S.lib.scenes.apply_entries(entries, opts)` applies a list (any subset of `scene_entries`' output, in its order) as a recall does:
 - `S.scene_recall_in_progress` is set for the whole list;
-- a param through `set_scene_value` (its field's `set`, else `set_scene_param`); a block through its record's `apply(value)`; a lock by setting `S.frozen[voice]`, then, when it changed, the `lock_change` hooks; a pattern through `S.lib.sequencer.replace_pattern`;
+- a param through `set_scene_value` (its field's `set`, else `set_scene_param`); a block through its record's `apply(value)`; a lock by setting `S.locked[voice]`, then, when it changed, the `lock_change` hooks; a pattern through `S.lib.sequencer.replace_pattern`;
 - a voice whose `active` entry stops it is stopped there (before its source and params); one it starts is started after its last entry in the list, its pattern aside (patterns follow every voice's entries), so `toggle_voice` syncs what was applied;
 - a `v<i>_source` entry that changes the source marks the voice; afterward each running voice so marked (and not started by the list) gets one `sync_voice_values_to_engine`;
 - an error in an action: the flag is cleared, the syncs run, and the error is raised again with its traceback (`with_traceback`), as below;
@@ -286,8 +286,8 @@ In the PARAMS menu (strata_scenes section):
 ## Disk persistence
 
 - **Location**: `~/dust/data/strata/scenes.data`.
-- **Format**: a Lua table in the layout norns' `tab.save` writes (written by `S.lib.data_files.encode`, each table's keys in a fixed order): `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 8, since 3.7: raised once for the release with no new field, so a version 7 file loads as it is and its first save writes 8; each 3.7 package adds its fields under 8).
-  - **Versions**: a file of format `SCENE_FORMAT_FLOOR` (7, 3.5's: 16 slots with the players' names, each voice's `extras` with 3.5's four expression keys) to `SCENE_DATA_VERSION` loads. A file below the floor (formats 1 to 6, and the bare scenes array written before 2.1, which has no version) is set aside to its first free backup name, never converted, with one console line that names the floor (`error: scenes file has version <n>, older than format 7, the oldest this version loads: it is set aside, not converted`); a version above the build's, or one that is no whole number, is set aside too (`error: scenes file has version <n>, expected 7 to 8`). 3.7 deleted every conversion by version (3.3's Pulse `res` mirror and whole-number rounding, 3.4's LFO import and slot names, 3.5's two fills).
+- **Format**: a Lua table in the layout norns' `tab.save` writes (written by `S.lib.data_files.encode`, each table's keys in a fixed order): `{version = SCENE_DATA_VERSION, scenes = {...}}` (version 9, since the work before 3.8: the lock's field `frozen` became `locked`, so the floor rose with it; each package of that work changes the format under 9, never raising it again).
+  - **Versions**: a file of format `SCENE_FORMAT_FLOOR` (9) to `SCENE_DATA_VERSION` loads. A file below the floor (formats 1 to 8, 3.5's 7 and 3.7's 8 among them, and the bare scenes array written before 2.1, which has no version) is set aside to its first free backup name, never converted, with one console line that names its format and the floor (`error: scenes file has format <n>, older than format 9, the oldest this version loads: it is set aside, not converted`), and reads as `"older"`; a version above the build's, or one that is no whole number, is set aside too, as `"unreadable"` (`error: scenes file has version <n>, expected format 9`, or `expected formats <floor> to <version>` once the two differ). 3.7 deleted every conversion by version (3.3's Pulse `res` mirror and whole-number rounding, 3.4's LFO import and slot names, 3.5's two fills).
   - When to bump `SCENE_DATA_VERSION`: once per release that adds scene fields, never per field. A field's default fills it in every file from the floor up, so a new field needs only its default. A stored value whose meaning changes raises `SCENE_FORMAT_FLOOR` to the new version with it (an older file is then set aside), never a conversion.
 - **The fill**: `load_scenes_from_disk()` runs `fill_scene(scene)` on every loaded slot before `validate_scene_data()`. It fills only what is missing, so it can run twice.
   - A slot with no `name` gets `""`; the rest is filled on a populated scene only.
@@ -299,15 +299,15 @@ In the PARAMS menu (strata_scenes section):
   - The registered global fields from their `default`, as entries of `SCENE_GLOBAL_PARAMS`.
   - Malformed scenes are left for validation to reject.
   - A later scene field adds its default to one of these tables. `S.VOICE_SCENE_DEFAULTS` holds the grain envelope and mode, `source` and the three buffer params. `S.SCENE_BLOCK_DEFAULTS` is empty: the LFO settings are globals in `SCENE_GLOBAL_PARAMS`, and a module's block brings its own `default` (Scene blocks, above).
-- **What is known of the file**: `S.scene_file = {problem, backup, unsaved}`. `problem` is nil, `"unreadable"` (the file could not be loaded) or `"not saved"` (the last write failed); `backup` is the name an unreadable file was kept under (nil while it is still in place); `unsaved` is true while a scene captured in this session may not be in the file (a failed or blocked write). SETUP lists a problem (`docs/notes/lua/pages/setup.md`).
-- **Robust loading**: `load_scenes_from_disk()` reads the file with `S.lib.data_files.read`, a parser of `tab.save`'s layout, so nothing in the file runs (#464). It returns `"loaded"`, `"missing"` or `"unreadable"`, and requests a redraw. A missing file prints `no saved scenes file found`; one that is not that layout (code, a truncated file) prints `error loading scenes file: <why>`, why naming the byte.
+- **What is known of the file**: `S.scene_file = {problem, backup, unsaved}`. `problem` is nil, `"unreadable"` (the file could not be loaded), `"older"` (a format below the floor: an older Strata's file) or `"not saved"` (the last write failed); `backup` is the name an unreadable or older file was kept under (nil while it is still in place); `unsaved` is true while a scene captured in this session may not be in the file (a failed or blocked write). SETUP lists a problem (`docs/notes/lua/pages/setup.md`).
+- **Robust loading**: `load_scenes_from_disk()` reads the file with `S.lib.data_files.read`, a parser of `tab.save`'s layout, so nothing in the file runs (#464). It returns `"loaded"`, `"missing"`, `"unreadable"` or `"older"`, and requests a redraw. A missing file prints `no saved scenes file found`; one that is not that layout (code, a truncated file) prints `error loading scenes file: <why>`, why naming the byte.
   - On any failure (unreadable, a version below the floor or unknown, invalid data after the fill) it prints a message and keeps the current scenes (empty at startup).
-  - It preserves the file: it is renamed to its first free backup name, `scenes.data.bak`, then `.bak.2` ... `.bak.9` (`S.lib.data_files.set_aside`; an earlier backup is never replaced, #466), and `S.scene_file` records `problem = "unreadable"` and the backup. If every name is taken or the rename fails, `S.scene_autosave_blocked` stops the scene saves' writes and `cleanup()`'s, and `backup` stays nil.
-  - Its start step flashes `scenes unreadable (SETUP)` on the hint row, on whatever page comes up, for `SCENE_LOAD.start_flash_seconds` (4 s) (#463). The line `-- Load saved scenes from disk` stays as it is: a test patches the script at it.
+  - It preserves the file: it is renamed to its first free backup name, `scenes.data.bak`, then `.bak.2` ... `.bak.9` (`S.lib.data_files.set_aside`; an earlier backup is never replaced, #466), and `S.scene_file` records `problem = "unreadable"` (`"older"` for a format below the floor) and the backup. If every name is taken or the rename fails, `S.scene_autosave_blocked` stops the scene saves' writes and `cleanup()`'s, and `backup` stays nil.
+  - Its start step flashes `scenes unreadable (SETUP)`, or `scenes older (SETUP)`, on the hint row, on whatever page comes up, for `SCENE_LOAD.start_flash_seconds` (4 s) (#463). The line `-- Load saved scenes from disk` stays as it is: a test patches the script at it.
   - On `"loaded"` it clears `problem`, `backup` and `unsaved`, keeps `S.current_scene` only if the slot's scene is unchanged (#518) and raises every slot's revision.
   - Missing slots in a valid file are filled with empty scenes, before the #518 comparison.
 - **Saving** (`save_scenes_to_disk()`, true and `"written"` or `"unchanged"`, or false and why): it makes the folder, then writes `{version = SCENE_DATA_VERSION, scenes = S.scenes}` through `S.lib.data_files.write`.
-  - Success: `unsaved` false, a `"not saved"` problem cleared (and an `"unreadable"` one with no backup: the write replaced the file still in place), `S.scene_autosave_blocked` false; `scenes saved to ...` printed only for `"written"`.
+  - Success: `unsaved` false, a `"not saved"` problem cleared (and an `"unreadable"` or `"older"` one with no backup: the write replaced the file still in place; one set aside stays, and the write is format 9), `S.scene_autosave_blocked` false; `scenes saved to ...` printed only for `"written"`.
   - Failure: `problem = "not saved"`, `unsaved` true, `error: scenes not saved to <file> (<why>); the file is as it was`, and the file as it was.
 - **Auto-save** (#327): every user's scene save writes the file, through `S.lib.scenes.autosave()`: nil (and `unsaved` set) when the scenes were never loaded in this session or `S.scene_autosave_blocked`, else `save_scenes_to_disk()`. `cleanup()` saves too (step 30), with the same two guards: only once `load_scenes_from_disk()` has run in this session (`S.scenes_loaded`, set when it returns), so a start that failed before init's loads (the engine did not load, an error earlier in `init`) never overwrites the saved file with the empty in-memory state (#72), and not while blocked. With nothing new the exit writes nothing (the bytes are the same). buffers.data has the same guards (`docs/notes/lua/buffers.md`).
 - **Auto-load**: its start step (`START_ORDER.scenes_load`) loads them at init, before the buffers.
@@ -334,7 +334,7 @@ Always validate scene data before using it, so a corrupted file cannot crash the
 -- a registered discrete global: an integer (0..1 for a binary, min..max for a number, 1..count for an option)
 -- a registered continuous global: inside its param's range (a control's controlspec min..max, a number's min..max)
 -- a registered block: record.validate(data[record.key]) is true
--- data.frozen: NUM_VOICES booleans
+-- data.locked: NUM_VOICES booleans
 -- data.patterns: NUM_VOICES x PATTERN_LENGTH integers 0..15
 ```
 
@@ -392,12 +392,12 @@ Composition workflow:
 2. Set the transition time (0 s for rhythmic changes, 5-10 s for ambient evolution).
 3. Set the scene duration for the pacing you want.
 4. Enable the sequencer for hands-free long-form composition.
-5. Mutations still evolve non-frozen voices during scenes.
+5. Mutations still evolve unlocked voices during scenes.
 
 ## With other systems
 
-- **Lock**: locked states (`frozen`) are captured and restored per scene.
+- **Lock**: the lock states (the field `locked`) are captured and restored per scene.
 - **Mutations**: mutation settings are per scene, so the sequencer can alternate between static and evolving scenes.
 - **Pattern sequencer**: pattern data is saved per scene, so scenes can switch rhythms.
 - **Cross-modulation**: routing is per scene, for evolving relationships between voices.
-- **Drift**: keeps running during scenes unless voices are frozen. The global LFOs keep running with the LFO settings the scene recalled.
+- **Drift**: keeps running during scenes unless voices are locked. The global LFOs keep running with the LFO settings the scene recalled.

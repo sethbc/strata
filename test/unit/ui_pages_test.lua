@@ -211,7 +211,7 @@ test("with ALT held no page's hint names a key that does nothing (#419)", functi
     for _, id in ipairs(ids) do parts[#parts + 1] = id .. "=" .. tostring(params:get(id)) end
     for slot = 1, S.constants.NUM_SCENES do parts[#parts + 1] = "scene" .. slot .. tostring(S.scenes[slot].populated) end
     for voice = 1, S.constants.NUM_VOICES do
-      parts[#parts + 1] = "lock" .. voice .. tostring(S.frozen[voice] or false)
+      parts[#parts + 1] = "lock" .. voice .. tostring(S.locked[voice] or false)
       parts[#parts + 1] = "on" .. voice .. tostring(S.voices[voice].active)
       for cell = 1, S.constants.PATTERN_LENGTH do
         parts[#parts + 1] = tostring(S.patterns[voice][cell])

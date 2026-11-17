@@ -42,22 +42,22 @@ end)
 test("128v: the faders page's column 7 locks and unlocks voices 1-7", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 8, 16)
-  local frozen = local_value("S").frozen
+  local locked = local_value("S").locked
   show_grid_page(context, 1, 2)
   -- column 7 rows 10-16: voices 1-7, lit 12 locked and 2 not
   tap(context, 1, 7, 12)
-  assert_true(frozen[3], "column 7 row 12 locks voice 3")
+  assert_true(locked[3], "column 7 row 12 locks voice 3")
   assert_equal(device:get_led(7, 12), 12, "a locked voice's key is lit 12")
   assert_equal(device:get_led(7, 10), 2, "an unlocked voice's key is lit 2")
   tap(context, 1, 7, 12)
-  assert_true(not frozen[3], "a second press unlocks")
+  assert_true(not locked[3], "a second press unlocks")
   assert_equal(device:get_led(7, 12), 2, "unlocked again, lit 2")
   -- rows 1-9 of column 7 stay dark and do nothing
   for y = 1, 9 do
     tap(context, 1, 7, y)
     assert_equal(device:get_led(7, y), 0, "column 7 row " .. y .. " stays dark")
   end
-  for i = 1, 7 do assert_true(not frozen[i], "rows 1-9 lock no voice") end
+  for i = 1, 7 do assert_true(not locked[i], "rows 1-9 lock no voice") end
   -- column 6 is inert: no lock, no fader param and no fader page changes
   local fader_ids = fader_param_ids(local_value("grid_voice_select"))
   local values_before, page_before = {}, local_value("param_page")
@@ -66,7 +66,7 @@ test("128v: the faders page's column 7 locks and unlocks voices 1-7", function()
     tap(context, 1, 6, y)
     assert_equal(device:get_led(6, y), 0, "column 6 row " .. y .. " stays dark")
   end
-  for i = 1, 7 do assert_true(not frozen[i], "column 6 locks no voice") end
+  for i = 1, 7 do assert_true(not locked[i], "column 6 locks no voice") end
   for i, id in ipairs(fader_ids) do
     assert_equal(params:get(id), values_before[i], "column 6 changed no fader param: " .. id)
   end
@@ -76,7 +76,7 @@ test("128v: the faders page's column 7 locks and unlocks voices 1-7", function()
   local step_before = local_value("S").patterns[7][12]
   tap(context, 1, 7, 12)
   assert_true(local_value("S").patterns[7][12] ~= step_before, "page 1 (7, 12) toggles step 12")
-  assert_true(not frozen[3], "page 1 locks nothing")
+  assert_true(not locked[3], "page 1 locks nothing")
 end)
 
 test("grid_redraw draws the 128v layout (I2), on a hot-plugged grid too (I3)", function()

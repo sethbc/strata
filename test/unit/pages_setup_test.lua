@@ -619,6 +619,51 @@ test("SETUP lists a data file it could not read or write, and where an unreadabl
   assert_true(not status_texts():find("not saved", 1, true), status_texts())
 end)
 
+-- The groundwork before 3.8 (ruling 3): a scenes file below the format
+-- floor (3.7's, the first start after the update) reads as older, not damaged
+test("SETUP's scenes row says older for a file below the floor", function()
+  local data_root = h.data_root
+  local subdir = "setup-older-" .. math.random(1, 1e9)
+  local dir = data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  write_text(dir .. "scenes.data", h.tabutil_text({ version = 8, scenes = {} }))
+  write_text(dir .. "buffers.data", "return {")
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  assert_equal(S.scene_file.problem, "older")
+  assert_true(status_texts():find("scenes older, kept|as scenes.data.bak|buffers unreadable, kept", 1, true) ~= nil,
+    status_texts())
+  assert_true(not status_texts():find("scenes unreadable", 1, true), "the scenes row never says unreadable")
+  show_page("SETUP"); enc(2, 60); redraw()
+  assert_true(screen_shows(context, "scenes older, kept"), "drawn at the end of the list")
+  assert_screen_layout(context, "SETUP scenes older")
+  -- one still in place (every backup name taken): older, not saved over
+  subdir = "setup-older-in-place-" .. math.random(1, 1e9)
+  dir = data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "scenes.data.bak'")
+  for number = 2, 9 do os.execute("mkdir -p '" .. dir .. "scenes.data.bak." .. number .. "'") end
+  write_text(dir .. "scenes.data", h.tabutil_text({ version = 8, scenes = {} }))
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  assert_true(status_texts():find("scenes file older|not saved over", 1, true) ~= nil, status_texts())
+  assert_true(not status_texts():find("unreadable", 1, true), status_texts())
+  -- SETUP's load of the older file says older too
+  show_page("SETUP"); cursor_on("load scenes"); tap(3)
+  assert_equal(local_value("S").lib.ui_flash.text("hints"), "scenes older")
+end)
+
+test("the start's flash names an older scenes file beside unreadable buffers", function()
+  local subdir = "setup-older-flash-" .. math.random(1, 1e9)
+  local dir = h.data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  write_text(dir .. "scenes.data", h.tabutil_text({ version = 8, scenes = {} }))
+  write_text(dir .. "buffers.data", "return {")
+  load_strata({ data_subdir = subdir })
+  local S = local_value("S")
+  local text = S.lib.ui_flash.text("hints")
+  assert_equal(text, "data files older/bad (SETUP)")
+  assert_true(S.lib.ui_header.hint_fits(text), "it fits the hint row")
+end)
+
 
 -- #323: a rotation per grid port (S.lib.grid_core.set_rotation), kept in
 -- grids.data; 90 or 270 stands a 128 upright as the 8x16
