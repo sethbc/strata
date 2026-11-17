@@ -144,9 +144,9 @@ test("the fields scroll by row and each lays out with the cursor on it", functio
   params:set("scene_chance_previous", 25); params:set("scene_chance_random", 5)
   local top, middle = "fade 2.0s, seq off / len 4, dur 16s", "len 4, dur 16s / next 100%, prev 25%"
   local expected = { [1] = top, [17] = top, [18] = top, [19] = top, [20] = top, [21] = middle, [22] = middle,
-    [23] = "next 100%, prev 25% / rand 5%" }
+    [23] = "next 100%, prev 25% / random 5%" }
   local bright = { [17] = "fade 2.0s", [18] = "seq off", [19] = "len 4", [20] = "dur 16s", [21] = "next 100%",
-    [22] = "prev 25%", [23] = "rand 5%" }
+    [22] = "prev 25%", [23] = "random 5%" }
   local marker_top = {}
   for _, stop in ipairs({ 1, 17, 18, 19, 20, 21, 22, 23 }) do
     local where = "stop " .. stop .. ": "

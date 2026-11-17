@@ -82,7 +82,7 @@ return function(S)
   end
 
   -- The sequencer's three chances (3.7): each field's label
-  local CHANCE_LABELS = {scene_chance_next = "next", scene_chance_previous = "prev", scene_chance_random = "rand"}
+  local CHANCE_LABELS = {scene_chance_next = "next", scene_chance_previous = "prev", scene_chance_random = "random"}
 
   local function field_text(field_id)
     if field_id == "scene_transition_time" then
