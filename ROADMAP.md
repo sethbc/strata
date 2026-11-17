@@ -106,6 +106,7 @@ Decided 2026-11-16, from a review of what compatibility had cost (`docs/design/3
 - **MIDI note off has two modes**, latch and release, with one default, in place of three (the third, `auto`, depended on the MIDI mode).
 - **The known findings are fixed** (added 2026-11-16): 3.7's follow-ups (#738-#744), and the seven 3.6 left for the review before 4.0, moved up (#747-#753: MIDI out's moved device, the ii bus's leader switch, the TELEXo after crow leaves, a late midigrid attach).
 - **Three questions kept for the pre-4.0 review are decided first** (moved up 2026-11-16), so 3.8's voice types and presets build on the answer: whether an LFO's own destination becomes a matrix routing (`revisit.md`, 12; its recommendation was to leave it), the pattern chain beside the scene sequencer, and the ten data files and `extras` beside the built-in voice params (`revisit.md`, "Looked at and set aside"). A short design of its own decides them; what it changes is built before 3.8's design.
+- **Decided 2026-11-16** (`docs/design/3.8-groundwork-design.md`): an LFO's own destination becomes a home routing of the matrix, one for each LFO beside R1-R16; the chain and the scene sequencer keep their front ends over one stepper; built-in and registered per-voice params fold into one value table with one registration path, in a new scene format; scenes travel with the PSET. The work is one plan with no release of its own, and 3.8's design starts while it is built.
 
 ## 3.8: Sound
 
