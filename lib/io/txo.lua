@@ -269,8 +269,10 @@ return function(S)
 
   -- ready: the bus is led now, so every envelope output is set up again;
   -- release: the bus is left, so each envelope that was set up is turned
-  -- off (sent direct, since the bus no longer leads), each output once
-  S.register_ii_device({name = "txo", param_count = TXO.param_count,
+  -- off (sent direct, since the bus no longer leads), each output once;
+  -- ports: every command with an argument takes the output first, so the
+  -- ii queue gives each output one turn (crow-ii.md §2, #717)
+  S.register_ii_device({name = "txo", ports = true, param_count = TXO.param_count,
     ready = function()
       active = {}
       sync()

@@ -1064,17 +1064,23 @@ test("the 3.6 registries take what their records allow", function()
   S.register_note_target(target({ name = "lay", layout_states = states }))
   assert_equal(S.registry.note_targets[2].layout_states, states, "the registry's record holds the states")
   assert_equal(#S.registry.note_targets, 2, "nothing refused was kept")
-  -- ii devices: param_count whole, at least 0, more than 0 only with add_params
-  S.register_ii_device({ name = "jf", param_count = 8, add_params = fn })
-  assert_true(refused(S.register_ii_device, { name = "jf" }), "a second jf")
-  assert_true(refused(S.register_ii_device, { name = "a", param_count = -1, add_params = fn }), "a count of -1")
-  assert_true(refused(S.register_ii_device, { name = "b", param_count = 1.5, add_params = fn }), "a count of 1.5")
-  assert_true(refused(S.register_ii_device, { name = "c", param_count = 8 }), "a count without add_params")
-  assert_true(refused(S.register_ii_device, { name = "d", ready = 1 }), "ready is a function")
-  assert_true(refused(S.register_ii_device, { name = "e", reset = fn }), "an unknown field")
-  assert_true(refused(S.register_ii_device, { name = "f", param_count = math.huge, add_params = fn }), "an infinite count")
-  assert_true(refused(S.register_ii_device, { name = "g", param_count = 0 / 0, add_params = fn }), "a NaN count")
-  local plain = { name = "plain", ready = fn, release = fn }
+  -- ii devices: ports true or false, param_count whole, at least 0, more than 0 only with add_params
+  S.register_ii_device({ name = "jf", ports = false, param_count = 8, add_params = fn })
+  assert_true(refused(S.register_ii_device, { name = "jf", ports = false }), "a second jf")
+  assert_true(refused(S.register_ii_device, { name = "p" }), "a device says whether its commands address ports (#717)")
+  assert_true(refused(S.register_ii_device, { name = "q", ports = 1 }), "ports is true or false")
+  assert_true(refused(S.register_ii_device, { name = "a", ports = false, param_count = -1, add_params = fn }),
+    "a count of -1")
+  assert_true(refused(S.register_ii_device, { name = "b", ports = false, param_count = 1.5, add_params = fn }),
+    "a count of 1.5")
+  assert_true(refused(S.register_ii_device, { name = "c", ports = false, param_count = 8 }), "a count without add_params")
+  assert_true(refused(S.register_ii_device, { name = "d", ports = false, ready = 1 }), "ready is a function")
+  assert_true(refused(S.register_ii_device, { name = "e", ports = false, reset = fn }), "an unknown field")
+  assert_true(refused(S.register_ii_device, { name = "f", ports = false, param_count = math.huge, add_params = fn }),
+    "an infinite count")
+  assert_true(refused(S.register_ii_device, { name = "g", ports = false, param_count = 0 / 0, add_params = fn }),
+    "a NaN count")
+  local plain = { name = "plain", ports = true, ready = fn, release = fn }
   S.register_ii_device(plain)
   assert_equal(#S.registry.ii_devices, 2, "nothing refused was kept")
   assert_equal(S.registry.ii_devices[2].param_count, 0, "param_count defaults to 0 in the registry")
@@ -1082,7 +1088,8 @@ test("the 3.6 registries take what their records allow", function()
   assert_equal(plain.param_count, nil, "the caller's table is left as it was given")
   local fields = 0
   for _ in pairs(plain) do fields = fields + 1 end
-  assert_equal(fields, 3, "no field added to it")
+  assert_equal(S.registry.ii_devices[2].ports, true, "and its ports")
+  assert_equal(fields, 4, "no field added to it")
   -- macro targets: two non-empty strings, never a macro
   S.register_macro_target("tapeloop_level", "tape level")
   assert_equal(S.registry.macro_targets[1].id, "tapeloop_level")
@@ -1098,7 +1105,7 @@ test("the 3.6 registries take what their records allow", function()
   script.register_note_hook({ name = "late" })
   script.register_scene_recalled(fn); script.register_silence_change(fn)
   script.register_note_target(target({ name = "late" }))
-  script.register_ii_device({ name = "late" })
+  script.register_ii_device({ name = "late", ports = false })
   script.register_macro_target("late_level", "late")
   assert_equal(script.registry.note_hooks[#script.registry.note_hooks].name, "late", "a note hook after init")
   assert_equal(script.registry.note_targets[#script.registry.note_targets].name, "late", "a target after init")

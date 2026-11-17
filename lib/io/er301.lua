@@ -123,8 +123,10 @@ return function(S)
   })
 
   -- No ready and no release: the device needs no setup, and its notes end
-  -- through the targets core before the bus is left.
-  S.register_ii_device({name = "er301", param_count = ER301.param_count,
+  -- through the targets core before the bus is left. ports: every command
+  -- with an argument takes the port first, so the ii queue gives each port
+  -- one turn (crow-ii.md §2, #717)
+  S.register_ii_device({name = "er301", ports = true, param_count = ER301.param_count,
     add_params = function() M.add_params() end})
 
   -- The seven params, PSET-only, in the ii group (the ii module adds it)
