@@ -4088,6 +4088,59 @@ test("on an overlap voice the own note takes a step's slice first and later slic
   pattern_clock_stop()
 end)
 
+-- #744: on an overlap voice, a step slice refused an extra slot while an
+-- earlier slice rings on the own note takes the own note with its own slice,
+-- as a voice set to one does, never restarting the ringing slice. Slices 1
+-- (step 1) and 2 (step 3) in one shot, each 2 s long
+local function refused_slice_setup(pool, ratchet)
+  local context, S = sliced_setup(3)
+  params:set("v1_scan_mode", 3); params:set("v1_buf_scan", 0.25)
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  S.patterns[1][1] = 15; S.patterns[1][3] = 15
+  seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 3, "slice", 2)
+  if ratchet then seq.set_step_attr(1, 3, "ratchet", ratchet) end
+  if pool == "full" then
+    notes.set_pool(1)
+    assert_true(S.voices[2].active, "voice 2 runs")
+    midi_note(S, 2, 60); midi_note(S, 2, 64)
+    assert_equal(notes.pool_used(), 1, "MIDI on voice 2 holds the pool's one extra note")
+  else
+    notes.set_pool(0)
+  end
+  pattern_clock_start()  -- step 1: slice 1 on the own note
+  assert_equal(notes.own_region(1)[1], 0, "step 1: slice 1 on the own note")
+  context.clock.advance_until(S.pattern_clocks[1])
+  context.clear_engine_calls()
+  return context, S
+end
+
+test("an overlap step slice refused a slot takes the own note with its own slice, at pool 0 and at a full pool (#744)", function()
+  for _, pool in ipairs({"0", "full"}) do
+    local context, S = refused_slice_setup(pool)
+    local where = "pool " .. pool .. ": "
+    context.clock.advance_until(S.pattern_clocks[1])  -- step 3, at 0.25 s: slice 1 still rings
+    assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, 0.25) setGrainParam(0, regionLength, 0.25)",
+      where .. "slice 2's region on the own note")
+    assert_equal(#retriggers_of(context, 0), 1, where .. "one retrigger")
+    assert_true(first_call(context, "setGrainParam", 0) < first_call(context, "retrigger", 0), where .. "after the region")
+    assert_equal(#note_calls(context, "noteOn", 0), 0, where .. "no node")
+    assert_equal(S.lib.notes.own_region(1)[1], 0.25, where .. "the own note plays slice 2")
+    assert_equal(table.concat(S.lib.slices.playing(1), ","), "2", where .. "slice 2 is the one playing")
+    pattern_clock_stop()
+  end
+  -- a ratchet's second hit retriggers the own note, slice 2, with no region sent again
+  local context, S = refused_slice_setup("0", 2)
+  context.clock.advance_until(S.pattern_clocks[1])  -- step 3's first hit
+  assert_equal(S.lib.notes.own_region(1)[1], 0.25, "the ratchet's first hit: slice 2 on the own note")
+  context.clear_engine_calls()
+  context.clock.run_for(0.0625 + 0.001)  -- its second hit
+  assert_equal(region_texts(context, 0), "", "the second hit sends no region")
+  assert_equal(#retriggers_of(context, 0), 1, "and retriggers the own note")
+  assert_equal(#note_calls(context, "noteOn", 0), 0, "no node")
+  assert_equal(table.concat(S.lib.slices.playing(1), ","), "2", "slice 2 plays on")
+  pattern_clock_stop()
+end)
+
 -- The final review's M-3: a stop leaves every one-shot step slice in an
 -- extra slot ringing to its end, whether or not the last played step had a
 -- chord (its chord's end releases the chord's notes only)
