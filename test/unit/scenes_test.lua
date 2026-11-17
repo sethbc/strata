@@ -4108,6 +4108,83 @@ test("an edit from an earlier session still counts; a PSET save then a new sessi
   assert_true(not util.file_exists(live_scenes_path(context) .. ".bak"), "no backup")
 end)
 
+-- #766: the mark is trusted only while the PSET it names still holds the
+-- live scenes (its scenes file there, encoding as S.scenes)
+test("a mark whose PSET lost its scenes file counts as no PSET: the next load backs the live scenes up (#766)", function()
+  local subdir = "pset-stale-" .. fresh_name()
+  local context, S = pset_session(subdir)
+  local pset_1, base_1, side_1 = pset_files(context, 1)
+  local pset_2 = pset_files(context, 2)
+  params:write(pset_2)  -- PSET 2: sixteen empty slots
+  scramble_state(22); S.lib.scenes.save(1)
+  params:write(pset_1)
+  assert_equal(S.scene_file.pset, base_1, "PSET 1 marked")
+  os.remove(side_1)  -- deleted in maiden, or the PSET copied without it
+  cleanup()
+  context, S = pset_session(subdir)
+  assert_equal(S.scene_file.pset, base_1, "the mark read back")
+  local live = live_scenes_path(context)
+  params:read(pset_2)
+  assert_true(util.file_exists(live .. ".bak"), "the live scenes kept as scenes.data.bak")
+  local backup = S.lib.data_files.read(live .. ".bak")
+  assert_true(type(backup) == "table" and backup.scenes[1].populated, "the backup holds scene 1")
+  assert_equal(backup.pset, nil, "and names no PSET")
+  assert_equal(#lines_holding(context, "scenes in no PSET kept as " .. live .. ".bak"), 1, "one line names it")
+  assert_true(not S.scenes[1].populated, "then PSET 2's scenes")
+end)
+
+test("loading the marked PSET with its scenes file missing or set aside clears the mark and keeps the live scenes (#766)", function()
+  for _, case in ipairs({ "missing", "unusable" }) do
+    local context, S = pset_session()
+    local pset_1, base_1, side_1 = pset_files(context, 1)
+    scramble_state(23); S.lib.scenes.save(1)
+    params:write(pset_1)
+    assert_equal(S.scene_file.pset, base_1, case .. ": PSET 1 marked")
+    if case == "missing" then os.remove(side_1) else h.write_text(side_1, "return {") end
+    local before = S.lib.data_files.encode(S.scenes)
+    params:read(pset_1)
+    assert_equal(S.scene_file.pset, nil, case .. ": the mark cleared")
+    assert_equal(S.lib.data_files.read(live_scenes_path(context)).pset, nil, case .. ": in the live file too")
+    assert_equal(S.lib.data_files.encode(S.scenes), before, case .. ": the live scenes stay")
+    assert_true(not util.file_exists(live_scenes_path(context) .. ".bak"), case .. ": no live backup")
+  end
+end)
+
+test("a mark whose PSET holds other scenes than the live ones counts as no PSET (#766)", function()
+  local context, S = pset_session()
+  local pset_1, base_1, side_1 = pset_files(context, 1)
+  local pset_2 = pset_files(context, 2)
+  params:write(pset_2)  -- PSET 2: sixteen empty slots
+  scramble_state(24); S.lib.scenes.save(1)
+  params:write(pset_1)
+  local older = h.file_text(side_1)  -- PSET 1 holding scene 1 alone
+  scramble_state(25); S.lib.scenes.save(2)
+  params:write(pset_1)
+  assert_equal(S.scene_file.pset, base_1, "PSET 1 marked, holding scenes 1 and 2")
+  h.write_text(side_1, older)  -- an older copy of PSET 1's scenes put back
+  local live = live_scenes_path(context)
+  params:read(pset_2)
+  local backup = S.lib.data_files.read(live .. ".bak")
+  assert_true(type(backup) == "table" and backup.scenes[2].populated, "the live scenes (scene 2 too) kept")
+  assert_true(not S.scenes[1].populated and not S.scenes[2].populated, "then PSET 2's scenes")
+end)
+
+test("a mark whose PSET still holds the live scenes is trusted across sessions: no backup (#766)", function()
+  local subdir = "pset-trusted-" .. fresh_name()
+  local context, S = pset_session(subdir)
+  local pset_1, base_1 = pset_files(context, 1)
+  local pset_2 = pset_files(context, 2)
+  params:write(pset_2)
+  scramble_state(26); S.lib.scenes.save(1)
+  params:write(pset_1)
+  cleanup()
+  context, S = pset_session(subdir)
+  assert_equal(S.scene_file.pset, base_1, "the mark read back")
+  params:read(pset_2)
+  assert_true(not util.file_exists(live_scenes_path(context) .. ".bak"), "no backup: PSET 1 holds the live scenes")
+  assert_true(not S.scenes[1].populated, "PSET 2's scenes")
+end)
+
 test("the live file's pset field is no scene", function()
   local context, S = pset_session()
   for slot = 1, S.constants.NUM_SCENES do scramble_state(slot); S.lib.scenes.save(slot) end
