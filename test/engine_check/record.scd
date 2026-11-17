@@ -1606,33 +1606,69 @@ test.("record: a command sent during a peaks refresh is handled within 2 ms", {
 });
 
 // 3.7's slot gain (design §4.4): every kind of recording sets its slot's
-// gain back to 1 at its command (recordSlot's common reset), before any
-// delay, threshold or fade, and a live reader of the slot gets it at once:
-// a replace take, an overdub (feedback), a loop recording, a delayed and an
-// armed take
+// gain back to 1 where its take is prepared (prepareTake), before its
+// record synth can write, and a live reader of the slot gets it at once: a
+// replace take, an overdub (feedback), a loop recording and an armed take
+// (its record synth is sent at once and writes a pre-roll from before its
+// crossing) at the command; a synced take only at its preparation, just
+// before its start, so a normalized slot keeps its gain through the wait
+// (the final review's engine Minor 2), and a synced take stopped before
+// then leaves the gain alone
 {
-    var slot = 3, voice = 4, gains = engine.areaState[\buffers][\gains], results = List.new;
+    var slot = 3, voice = 4, gains = engine.areaState[\buffers][\gains], results = List.new, synced = List.new;
     var path = h.tempDir +/+ "record-gain.wav";
+    var liveGain = { engine.synths[engine.grainKey(voice)] !? { arg synth; h.getControl(synth, \slotGain) } };
     // audio at the server's rate, so an overdub and a loop recording are playable
     h.writeTestFile(path, sampleRate, (sampleRate * 0.5).round.asInteger, [0.1, 0.1]);
     h.command(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
     h.command(\setGrainSource, voice, slot + 1);
     h.command(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 20.0, 1.0);
     server.sync;
-    [[\replace, 0, 0, 0, 0], [\overdub, 0.5, 0, 0, 0], [\loop, 0, 1, 0, 0], [\delayed, 0, 0, 0, 0.3], [\armed, 0, 0, 0.5, 0]].do({ arg kind;
+    [[\replace, 0, 0, 0, 0], [\overdub, 0.5, 0, 0, 0], [\loop, 0, 1, 0, 0], [\armed, 0, 0, 0.5, 0]].do({ arg kind;
         var kept, live;
         h.command(\setSlotGain, slot, 4.0);
         server.sync;
         record.(slot, 0.2, 1.0, kind[1], 0, kind[3], kind[2], kind[4]);
         kept = gains[slot];
         server.sync;
-        live = engine.synths[engine.grainKey(voice)] !? { arg synth; h.getControl(synth, \slotGain) };
+        live = liveGain.value;
         results.add([kind[0], kept, live]);
         h.command(\stopRecord, slot);
         waitDone.(slot, 2);
     });
     check.(results.every({ arg each; (each[1] == 1) and: { each[2] == 1 } }),
-        "record: every kind of recording sets the slot's gain to 1 at its command ([kind, kept, live]: %)".format(results.asArray));
+        "record: a recording with no delay sets the slot's gain to 1 at its command ([kind, kept, live]: %)".format(results.asArray));
+    // a synced overdub and a synced replace take, 1 s ahead: still 4 during
+    // the wait, 1 once prepared; then a synced take stopped in its wait
+    [[\overdub, 0.5], [\replace, 0]].do({ arg kind;
+        var waiting, waitingLive, prepared, preparedLive;
+        h.command(\setSlotGain, slot, 4.0);
+        server.sync;
+        record.(slot, 0.2, 1.0, kind[1], 0, 0, 0, 1.0);
+        0.4.wait;
+        server.sync;
+        waiting = gains[slot];
+        waitingLive = liveGain.value;
+        1.0.wait;
+        server.sync;
+        prepared = gains[slot];
+        preparedLive = liveGain.value;
+        synced.add([kind[0], waiting, waitingLive, prepared, preparedLive]);
+        h.command(\stopRecord, slot);
+        waitDone.(slot, 2);
+    });
+    h.command(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
+    h.command(\setSlotGain, slot, 4.0);
+    server.sync;
+    record.(slot, 0.2, 1.0, 0.5, 0, 0, 0, 1.0);
+    0.2.wait;
+    h.command(\stopRecord, slot);
+    1.2.wait;
+    server.sync;
+    synced.add([\stopped, gains[slot], liveGain.value]);
+    check.(synced[0 .. 1].every({ arg each; (each[1] == 4) and: { each[2] == 4 } and: { each[3] == 1 } and: { each[4] == 1 } })
+        and: { synced[2][1] == 4 } and: { synced[2][2] == 4 },
+        "record: a synced recording keeps the slot's gain through its wait and sets it to 1 at its preparation, and one stopped before then leaves it ([kind, waiting, live, prepared, live]: %)".format(synced.asArray));
     h.command(\voiceOff, voice);
     h.stopAllVoices;
     h.command(\setGrainSource, voice, 0);

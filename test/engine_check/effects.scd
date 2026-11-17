@@ -1122,6 +1122,27 @@ check.(getControl.(engine.synths[\delay], \feedback) == 0.5, "setDelay sets feed
 check.(getControl.(engine.synths[\delay], \mix) == 0.5, "setDelay sets mix");
 check.(getControl.(engine.synths[\delay], \pingPong) == 0.25, "setDelay sets pingPong");
 check.(readBus.(mixBus.(\fxMix))[0] == 0.5, "setDelay broadcasts the mix");
+// A non-finite argument leaves the delay as it was, with one line each (the
+// final review's engine Minor 3): a NaN in its lag or feedback loop would
+// stay in the node until a bypass re-created it
+{
+    var lines = List.new, modulation = engine.areaState[\modulation], previous = modulation[\postIgnored];
+    var controls = [\time, \feedback, \mix, \pingPong], kept = engine.areaState[\effects][\controls][\delay].copy, before, after;
+    var nan = 0.0 / 0.0;
+    before = controls.collect({ arg name; getControl.(engine.synths[\delay], name) });
+    modulation[\postIgnored] = { arg line; lines.add(line) };
+    {
+        [[nan, 0.5, 0.5, 0.25], [0.25, inf, 0.5, 0.25], [0.25, 0.5, nan, 0.25], [0.25, 0.5, 0.5, -inf]].do({ arg values;
+            command.(\setDelay, *values) });
+    }.protect({ modulation[\postIgnored] = previous });
+    server.sync;
+    after = controls.collect({ arg name; getControl.(engine.synths[\delay], name) });
+    check.((lines.size == 4) and: { lines.every({ arg line; line.beginsWith("strata: setDelay ignored: ") }) }
+        and: { after == before } and: { engine.areaState[\effects][\controls][\delay] == kept }
+        and: { readBus.(mixBus.(\fxMix))[0] == 0.5 },
+        "effects: setDelay with a non-finite argument is ignored, one line each (lines %; controls % then %)".format(
+            lines.asArray, before, after));
+}.value;
 command.(\setDelay, 0.25, 0.5, 0.5, 0);
 
 checkFilterTypes.value;

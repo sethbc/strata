@@ -408,11 +408,6 @@
 
         this.stopRecording(index);
         change = this.slotChanged(index);
-        // 3.7: every recording, an overdub and a loop recording included,
-        // sets the slot's gain to 1 at its command, so a take is heard at its
-        // own level while it is made and Strata's own output recorded into a
-        // boosted slot never feeds back through the boost
-        this.setSlotGainValue(index, 1);
         // (a slot's rate describes its audio, so only a slot holding audio is
         // judged by it, #374: every step that empties a slot sets the
         // server's rate, but a load's last step takes the file's rate while
@@ -448,8 +443,17 @@
     // take); both after the fade (afterSlotFade), then a sync, so the
     // zeroing never lands on the new take. Whatever needs no zeroing starts
     // at once.
+    // 3.7 (design §4.4): every recording, an overdub and a loop recording
+    // included, sets the slot's gain to 1 here, before its record synth can
+    // write, so a take is heard at its own level while it is made and
+    // Strata's own output recorded into a boosted slot never feeds back
+    // through the boost. A synced take so keeps the slot's gain through its
+    // wait, until just before its start (the final review's engine Minor 2);
+    // one armed by level is prepared at its command, since its record synth
+    // is sent then and writes a pre-roll from before the crossing
     prepareTake { arg index, take;
         var replace = take[\kind] == \replace, empty = bufferFrames[index] == 0;
+        this.setSlotGainValue(index, 1);
         if (replace) {
             bufferFrames[index] = 0;
             bufferSampleRates[index] = context.server.sampleRate;

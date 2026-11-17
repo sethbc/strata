@@ -226,6 +226,24 @@ checkNoteRegion = {
     check.((restarts[0][0] == 1) and: { restarts[0][1].isNil } and: { restarts[1][0].isNil },
         "notes: a live extra slot's noteOn restarts its scan on a one-shot voice only (t_scanReset to the note and the own note, one shot %; wrap %)".format(
             restarts[0], restarts[1]));
+    // A releasing note's tail stays where it was (the final review's engine
+    // Minor 1): the region is kept for the slot's next start, never sent to
+    // the releasing synth, which the next noteOn cuts anyway
+    command.(\noteOff, voice, 4, 0);
+    server.sync;
+    bundle = server.makeBundle(false, { command.(\noteRegion, voice, 4, 0.3, 0.1) });
+    server.sendBundle(nil, *bundle);
+    server.sync;
+    check.((slotState.(voice, 4) == \releasing) and: { sentSets.(bundle, synth).isEmpty }
+        and: { slotRecord.(voice, 4)[\region] == [0.3, 0.1] },
+        "notes: noteRegion on a releasing slot keeps the region and sends the releasing note nothing (state %; to the note %; kept %)".format(
+            slotState.(voice, 4), sentSets.(bundle, synth), slotRecord.(voice, 4)[\region]));
+    playNote.(voice, 4);
+    server.sync;
+    check.((slotSynth.(voice, 4) != synth) and: { near.(controlOf.(slotSynth.(voice, 4), \regionStart), 0.3) }
+        and: { near.(controlOf.(slotSynth.(voice, 4), \regionLength), 0.1) },
+        "notes: the noteOn after a releasing slot's noteRegion starts in the kept region (got %)".format(
+            [controlOf.(slotSynth.(voice, 4), \regionStart), controlOf.(slotSynth.(voice, 4), \regionLength)]));
     [4, 5].do({ arg slot; command.(\noteOff, voice, slot, 1); command.(\noteRegion, voice, slot, 0.0, 0.0) });
     server.sync; 0.1.wait;
 };

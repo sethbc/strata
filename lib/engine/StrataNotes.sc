@@ -437,12 +437,13 @@
     }
 
     // noteRegion on an extra slot (3.7, design §3.4): kept for the slot (a
-    // later noteOn starts in it) and set on its grain synth, live or
-    // releasing, with a restart of its scan (t_scanReset) in one message
+    // later noteOn starts in it) and set on its live grain synth, with a
+    // restart of its scan (t_scanReset) in one message. A releasing note's
+    // tail stays where it was (the noteOn that follows cuts it anyway)
     extraNoteRegion { arg voice, slot, start, length;
         var record = this.noteRecord(voice, slot);
         record[\region] = [start, length];
-        if (record[\synth].notNil and: { this.grainNoteKinds.includes(record[\kind]) }) {
+        if ((record[\state] == \live) and: { record[\synth].notNil } and: { this.grainNoteKinds.includes(record[\kind]) }) {
             this.sendToSynth(record[\synth].setMsg(*(this.noteRegionPairs(record) ++ [\t_scanReset, 1])));
         };
     }

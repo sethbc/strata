@@ -275,13 +275,20 @@
         });
 
         // msg: time (s), feedback, mix, pingPong. Kept for a bypassed
-        // delay's next node; while bypassed the mix sent and broadcast stays 0
+        // delay's next node; while bypassed the mix sent and broadcast stays 0.
+        // A non-finite argument is ignored with one line, as 3.4's commands
+        // ignore one (fastModValuesFinite): a NaN in the node's lag or
+        // feedback loop would stay there until a bypass re-created it
         this.addCommand(\setDelay, "ffff", { arg msg;
-            this.keepEffectControls(\delay, (time: msg[1], feedback: msg[2], mix: msg[3], pingPong: msg[4]));
-            context.server.makeBundle(nil, {
-                this.setSynth(\delay, \time, msg[1], \feedback, msg[2], \mix, msg[3] * this.effectLive(\delay), \pingPong, msg[4]);
-                this.broadcastFxMix;
-            });
+            if (this.fastModValuesFinite(\setDelay, [[\time, msg[1]], [\feedback, msg[2]], [\mix, msg[3]],
+                [\pingPong, msg[4]]])) {
+                this.keepEffectControls(\delay, (time: msg[1], feedback: msg[2], mix: msg[3], pingPong: msg[4]));
+                context.server.makeBundle(nil, {
+                    this.setSynth(\delay, \time, msg[1], \feedback, msg[2], \mix, msg[3] * this.effectLive(\delay),
+                        \pingPong, msg[4]);
+                    this.broadcastFxMix;
+                });
+            };
         });
 
         // msg: effect (0 delay, 1 reverb; others ignored), bypassed (0 or 1)
