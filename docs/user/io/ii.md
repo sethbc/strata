@@ -10,7 +10,7 @@ A bus has one leader: the device that starts each message. Two leaders talking a
 
 - **off** (the default) - Strata sends nothing on the bus and answers nothing. Use it when nothing of Strata's is on the bus, or when something else leads it.
 - **strata leads** - crow leads the bus whenever Strata sends, so the voices' ii targets (Just Friends, W/, ER-301, TELEXo, each on its own page) play. Without a crow, nothing is sent. Turning away from it first sends the lows of any notes still sounding, then puts the devices back as they were.
-- **teletype leads** - a Teletype leads the bus. Strata sends no ii message at all, and crow passes Teletype's three calls on to Strata (below).
+- **teletype leads** - a Teletype leads the bus. Strata sends no ii message at all, and crow passes Teletype's three calls on to Strata (below). Turned to straight from `strata leads`, crow gets Teletype's three handlers once the lines that give the bus up have gone, within a twelfth of a second.
 
 **What `strata leads` risks with a Teletype on the bus.** Teletype always leads: it has no way to follow. With both a Teletype and crow sending, the two can start messages at the same time, and monome documents that setup as "not currently supported": it can lock the bus or a module until you power the case off and on again. If a Teletype is on the bus, choose `teletype leads`.
 
