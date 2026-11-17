@@ -415,6 +415,78 @@ test("a tempo move under a synced, modulated delay still resends within a step (
   assert_equal(#delay_calls(context), sent, "and nothing after it")
 end)
 
+-- #762: the same delay (120 BPM, 1/8D, 0.375 s), synced unless `unsynced`,
+-- under LFO 1 (a sine at 5 Hz, depth 100) homed on macro 1, whose row 1
+-- targets delay_time and row 2 reverb_mix, both over their whole range.
+-- The macro stays at `stored` (default 0: the sine's lower half clamps to
+-- it, so the extras are cleared once a cycle and worked out again)
+local function under_macro_lfo(context, S, stored, unsynced)
+  params:set("clock_tempo", 120); params:set("delay_sync", unsynced and 0 or 1)
+  assert_true(S.lib.macros.set_target(1, 1, "delay_time", 0, 1), "macro 1's row 1: delay_time")
+  assert_true(S.lib.macros.set_target(1, 2, "reverb_mix", 0, 1), "macro 1's row 2: reverb_mix")
+  params:set("macro_1", stored or 0)
+  lfo_step(context, 2)
+  assert_true(S.lib.matrix.set_home(1, "macro_1"), "LFO 1's home is macro 1")
+  params:set("strata_lfo1_shape", 1); params:set("strata_lfo1_rate", 5)
+  params:set("strata_lfo1_depth", 100); params:set("strata_lfo1", 1)
+  lfo_step(context, 2)
+  context.clear_engine_calls()
+end
+
+for _, stored in ipairs({0, 0.5}) do
+  test("a synced delay under an LFO on a macro at " .. stored .. " that targets delay_time sends no setDelay (#762)",
+    function()
+      local context, S = loaded()
+      under_macro_lfo(context, S, stored)
+      local low, high = math.huge, -math.huge
+      for _ = 1, 48 do
+        lfo_step(context)
+        local mix = engine_param_value("reverb_mix")
+        low, high = math.min(low, mix), math.max(high, mix)
+      end
+      assert_equal(#delay_calls(context), 0, "no setDelay in 48 steps")
+      assert_true(high - low > 0.1, "the macro's other target still moves")
+      assert_true(#context.calls_named("setReverb") > 0, "and is sent")
+    end)
+end
+
+test("a feedback edit under a synced delay and a macro's LFO sends one setDelay with the synced time (#762)", function()
+  local context, S = loaded()
+  under_macro_lfo(context, S)
+  lfo_step(context, 5)
+  context.clear_engine_calls()
+  params:set("delay_feedback", 0.5)
+  assert_equal(#delay_calls(context), 1, "one setDelay")
+  assert_delay(last_delay(context), 0.375, 0.5, engine_param_value("delay_mix"), 0, "the edit")
+  lfo_step(context, 10)
+  assert_equal(#delay_calls(context), 1, "and none after it")
+end)
+
+test("sync off under a macro's LFO sends the modulated time at once (#762)", function()
+  local context, S = loaded()
+  under_macro_lfo(context, S, 0.5)
+  lfo_step(context, 7)
+  context.clear_engine_calls()
+  params:set("delay_sync", 0)
+  assert_equal(#delay_calls(context), 1, "one setDelay")
+  local modulated = engine_param_value("delay_time")
+  assert_true(math.abs(modulated - params:get("delay_time")) > 1e-6, "the macro's LFO moves delay_time")
+  assert_near(last_delay(context)[1], modulated, 1e-9, "the time as modulated now")
+  local first = last_delay(context)[1]
+  lfo_step(context, 3)
+  assert_true(#delay_calls(context) > 1, "the next steps send the moving time")
+  assert_true(math.abs(last_delay(context)[1] - first) > 1e-6, "and it moves")
+end)
+
+test("unsynced, a macro's LFO still sends delay_time every step (#762)", function()
+  local context, S = loaded()
+  under_macro_lfo(context, S, 0.5, true)
+  lfo_step(context, 12)
+  local calls = delay_calls(context)
+  assert_equal(#calls, 12, "one setDelay a step")
+  assert_true(math.abs(calls[1].args[1] - calls[#calls].args[1]) > 1e-6, "carrying the moving time")
+end)
+
 test("DELAY.max_seconds equals the engine's limit on setDelay's time", function()
   local _, _, delay_sync = loaded()
   local limit = h.engine_spec.argument_limits.setDelay[1]
