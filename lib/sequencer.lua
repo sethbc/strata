@@ -1183,13 +1183,14 @@ return function(S)
   -- Ping-pong's move after last (3.7, design §5.5): up to the pass's
   -- length, then down to 1, no end played twice; turning at an end ends
   -- the pass. A longer length, or a shorter one the leg up can still turn
-  -- at, applies at once; else the leg ends at its own top, or goes on down
-  -- to 1, and the new length applies at the turn, as reverse does (#743).
-  -- A length of 1 stays on 1, each step a pass. Returns the step and
-  -- whether the pass ended
+  -- at (the leg stands on it or below it), applies at once; else the leg
+  -- ends at its own top, or goes on down to 1, and the new length applies
+  -- at the turn, as reverse does (#743). The leg down turns at 1, which
+  -- every length holds. A length of 1 stays on 1, each step a pass.
+  -- Returns the step and whether the pass ended
   local function ping_pong_step(state, last, length)
     if length <= 1 then return 1, true end
-    if length > state.pass_length or (state.heading > 0 and last < length) then state.pass_length = length end
+    if length > state.pass_length or (state.heading > 0 and last <= length) then state.pass_length = length end
     local turned = (state.heading > 0 and last >= state.pass_length) or (state.heading < 0 and last <= 1)
     if turned then state.heading, state.pass_length = -state.heading, length end
     return util.clamp(last + state.heading, 1, state.pass_length), turned

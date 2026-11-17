@@ -3714,10 +3714,15 @@ test("a link validates no scene it has checked before", function()
   local at_start = validations
   context.clock.run_for(2.01)
   local at_link = validations - at_start
+  context.clock.run_for(2.0)
+  local at_second_link = validations - at_start - at_link
+  local mark = S.patterns[1][1]
   validate_scene = real_validate
   pattern_clock_stop()
+  assert_equal(mark, 4, "two links: scene 3 (its mark 4) plays")
   assert_equal(at_start, 0, "the start validates nothing: each scene was checked at its capture")
   assert_equal(at_link, 0, "nor does a link over a full range of 16")
+  assert_equal(at_second_link, 0, "nor a later link")
   -- a scene written into its slot from outside lib/scenes.lua (a fresh
   -- table) is checked once, by the draw that first meets it, and left out
   pattern_clock_start()
@@ -3726,9 +3731,12 @@ test("a link validates no scene it has checked before", function()
   validations = 0
   validate_scene = function(...) validations = validations + 1; return real_validate(...) end
   context.clock.run_for(2.01)
-  validate_scene = real_validate
   assert_equal(S.patterns[1][1], 4, "scene 2 is invalid: scene 3 (its mark 4) links")
   assert_equal(validations, 1, "one validation: the fresh table's")
+  context.clock.run_for(2.0)
+  validate_scene = real_validate
+  assert_equal(S.patterns[1][1], 5, "the next link: scene 4 (its mark 5)")
+  assert_equal(validations, 1, "the fresh table is not checked again")
   pattern_clock_stop()
 end)
 
@@ -3901,6 +3909,8 @@ test("a ping-pong pass finishes its leg before a shorter length (#743)", functio
     return played_steps(events)
   end
   assert_equal(run(8, 3, 4, 6), "1 2 3 4 3 2 1 2 3", "three steps up: the leg turns at 4")
+  assert_equal(run(8, 4, 4, 6), "1 2 3 4 3 2 1 2 3 4", "four steps up, standing on 4: the leg turns there")
+  assert_equal(run(4, 2, 2, 4), "1 2 1 2 1 2", "on 2, cut to 2: it turns there")
   assert_equal(run(8, 5, 4, 6), "1 2 3 4 5 6 7 8 4 3 2", "five steps up, past 4: the leg ends at 8, then down from 4")
   assert_equal(run(8, 9, 4, 6), "1 2 3 4 5 6 7 8 7 6 5 4 3 2 1", "three steps down: the leg goes on down to 1")
   assert_equal(run(8, 11, 4, 6), "1 2 3 4 5 6 7 8 7 6 5 4 3 2 1 2 3", "five steps down: the same")
@@ -4147,8 +4157,7 @@ end)
 test("a pattern stop leaves one-shot step slices ringing whatever the last step played", function()
   for _, last in ipairs({"a chord", "a plain step"}) do
     local context, S = sliced_setup(3)
-    local scan = S.lib.scan
-    function scan.pass_seconds(_, fraction) return fraction * 8 end  -- 2 s
+    params:set("v1_scan_mode", 3); params:set("v1_buf_scan", 0.25)  -- one shot: each slice 2 s
     local seq, notes = S.lib.sequencer, S.lib.notes
     for step = 1, 3 do S.patterns[1][step] = 15 end
     seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 2, "slice", 2)
