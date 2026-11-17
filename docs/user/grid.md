@@ -4,7 +4,7 @@ The supported grid sizes, the key gestures every layout shares, the pattern sequ
 
 Strata includes comprehensive grid integration for pattern sequencing and parameter manipulation. Supports multiple grids simultaneously and adapts layout based on grid size.
 
-The grid has no LFO controls (no layout has room for them); the LFOs live on the screen's LFO page, the arc's LFO page and in PARAMETERS.
+The grid has no LFO controls; the LFOs live on the screen's LFO page, the arc's LFO page and in PARAMETERS.
 
 ## Supported Grid Sizes
 
