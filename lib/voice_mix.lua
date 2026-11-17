@@ -9,9 +9,11 @@
 -- sends). Two fx params (S.register_fx_params), delay_bypass and
 -- reverb_bypass, free and re-create the effect's engine node
 -- (engine.setBypass); PSETs store them, scenes never do. MAIN's
--- randomize, mutation and the fader pages never touch any of them; VOICE's
--- ALT+K2 on its section draws all but the filter's mix (the record's
--- randomize, #557). 3.4 adds v<i>_mute and v<i>_solo (binary, default 0):
+-- randomize and mutation never touch any of them; the fader pages show
+-- the cutoff, res and mix and both sends (the record's fader group, rank
+-- 1: right after 3.7's faders), never the filter type, mute or solo;
+-- VOICE's ALT+K2 on its section draws all but the filter's mix (the
+-- record's randomize, #557). 3.4 adds v<i>_mute and v<i>_solo (binary, default 0):
 -- silenced(voice) is the answer, sent to the engine as the stage's voiceMute
 -- (a scene stores the mute, never the solo). See docs/notes/lua/voice-mix.md.
 

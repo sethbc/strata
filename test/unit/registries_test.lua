@@ -97,7 +97,7 @@ test("a registered voice param is added, stored, sent and synced", function()
   local before = 0
   for _, record in ipairs(S.registry.voice_params) do
     if record.name == "probe" then break end
-    if record.separator == nil then before = before + record.count end
+    if record.separator == nil then before = before + S.voice_param_count(record, 1) end
   end
   before = before - (position["v1_" .. S.voices[1].param_order[1]] - position["voice 1: " .. S.voices[1].name] - 1)
   assert_equal(position["v1_probe"], position["voice 1 extras"] + 1 + before, "the record's params follow it")
@@ -1304,6 +1304,14 @@ test("a record's fader, main_randomize and mutate groups are checked", function(
     S.register_voice_params(probe_record({ name = "good1", fader = { { keys = keys_of, when = keys_of, rank = 2 } },
       main_randomize = { { keys = { "probe" }, draw = draw } },
       mutate = { { keys = keys_of, chance = 0.5, scale = 0.2, warped = false } } }))
+    -- and no fader field at all (nil): a record of its own keys, since
+    -- probe_record's add always adds v<i>_probe (a second would collide)
+    local plain = { name = "good2", count = 1 }
+    function plain.add(voice_idx)
+      local_value("S").lib.params_setup.add_voice_param(voice_idx, plain, "probe_plain",
+        { type = "control", name = "probe plain", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+    end
+    S.register_voice_params(plain)
   end)
 end)
 
