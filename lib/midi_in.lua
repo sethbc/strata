@@ -2,8 +2,8 @@
 -- MIDI input (3.5, design §5): every note on plays one note per target
 -- voice through the allocator (S.lib.notes), in four channel modes (per
 -- voice, omni to selected, and MPE's mpe selected and mpe split through
--- S.lib.mpe), with the note off modes latch and release (auto: latch in
--- the plain modes, release in the MPE modes). Velocity, the plain modes'
+-- S.lib.mpe), with the note off modes latch and release, in every channel
+-- mode. Velocity, the plain modes'
 -- pitchbend per voice, poly aftertouch and channel pressure, and MPE's
 -- per-note bend, pressure and slide (S.lib.expression). It listens, and
 -- hears of devices and claims, through S.lib.io_ports (lib/io/ports.lua),
@@ -27,9 +27,9 @@ return function(S)
     bend_center = 8192,       -- 14-bit pitchbend value at rest
     bend_semitones = 2,       -- full wheel throw either way
     channel_mode_options = {"per voice", "omni to selected", "mpe selected", "mpe split"},
-    -- index 1 was 3.4's ignore (auto: latch in the plain modes), index 2
-    -- its voice off (release): no PSET changes meaning
-    note_off_options = {"auto", "release", "latch"},
+    -- index 1 is latch (3.7's auto loads as it), index 2 release; 3.7's
+    -- latch, index 3, clamps to release
+    note_off_options = {"latch", "release"},
     owner = "midi",           -- the allocator's owner of every MIDI note
     channels = 16,
     notes_per_channel = 128,  -- a note's key: channel * 128 + note
@@ -166,12 +166,9 @@ return function(S)
     return S.midi_device.name
   end
 
-  -- What a note off does now: "release" or "latch" (auto: release in the
-  -- MPE modes, latch in the plain ones)
+  -- What a note off does now: "release" or "latch", in every channel mode
   function M.note_off_mode()
-    local option = MIDI.note_off_options[params:get("midi_note_off")]
-    if option == "auto" then return S.lib.mpe.active() and "release" or "latch" end
-    return option
+    return MIDI.note_off_options[params:get("midi_note_off")]
   end
 
   -- The note tap (the zones editor's learn): while fn is set, every note on,

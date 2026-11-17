@@ -308,11 +308,13 @@ local function set_routes(S)
   params:set("tapeloop", 1)
 end
 
--- The played MPE notes' setup: the input on port 4 in mpe split, voices 1
--- and 2 in the lower zone, split at note 64, and a pool of 16
+-- The played MPE notes' setup: the input on port 4 in mpe split with note
+-- off release, voices 1 and 2 in the lower zone, split at note 64, and a
+-- pool of 16
 local function mpe_input(S)
   params:set("midi_device", ROUTES.midi_in)
   params:set("midi_channel_mode", S.lib.mpe.MPE.modes.split)
+  params:set("midi_note_off", option_index("midi_note_off", "release"))
   params:set("mpe_lower_members", 15)
   params:set("v1_zone", option_index("v1_zone", "lower"))
   params:set("v2_zone", option_index("v2_zone", "lower"))

@@ -151,7 +151,7 @@ end)
 
 test("note off mode and pitchbend", function()
   local context = load_strata(); finish_startup(context)
-  press(context, 1, 60); assert_true(local_value("voices")[1].active, "auto latches in per voice mode")
+  press(context, 1, 60); assert_true(local_value("voices")[1].active, "the default latches in per voice mode")
   params:set("midi_note_off", 2)
   -- a note off no note on played changes nothing (3.4's voice off stopped the channel's voice)
   note_off(context, 1, 62); assert_true(local_value("voices")[1].active, "a stray note off is ignored")
@@ -184,7 +184,7 @@ test("release mode: the voice stops when its last held note is released", functi
   context.midi.send(1, { type = "note_off", note = 48, vel = 0, ch = 1 })
   assert_true(not voices[1].active, "voice 1 stops on its note's release")
   assert_true(not voices[5].active, "the newly selected voice is untouched")
-  -- auto latches in a plain mode: voices keep running
+  -- latch, the default: voices keep running
   params:set("midi_note_off", 1)
   context.midi.send(1, { type = "note_on", note = 50, vel = 100, ch = 1 })
   context.midi.send(1, { type = "note_off", note = 50, vel = 0, ch = 1 })
@@ -485,7 +485,7 @@ test("latch: a panic CC stops a voice a released key started, never one started 
   for _, cc in ipairs({ 123, 120 }) do
     local context = load_strata(); finish_startup(context)
     local voices = local_value("voices")
-    assert_equal(params:get("midi_note_off"), 1, "auto: latch in per voice mode")
+    assert_equal(params:get("midi_note_off"), 1, "the default: latch")
     assert_true(not voices[3].active)
     context.midi.send(1, { type = "note_on", note = 60, vel = 100, ch = 3 })
     assert_true(voices[3].active, "the key starts voice 3")
@@ -900,28 +900,38 @@ test("release: each key's note ends with its key, the own note parks, the voice 
   assert_true(not voices[3].active)
 end)
 
-test("auto is latch in the plain modes and release in the MPE modes", function()
+test("midi_note_off offers latch and release, latch the default", function()
+  load_strata()
+  local S = local_value("S")
+  assert_equal(#S.lib.midi_in.MIDI.note_off_options, 2, "two options")
+  assert_equal(S.lib.midi_in.MIDI.note_off_options[1], "latch")
+  assert_equal(S.lib.midi_in.MIDI.note_off_options[2], "release")
+  local param = params:lookup_param("midi_note_off")
+  assert_equal(param.count, 2, "the param offers the two")
+  assert_equal(params:get("midi_note_off"), 1, "the default index")
+  assert_equal(params:string("midi_note_off"), "latch", "the default")
+end)
+
+test("the note off mode is the option in every channel mode", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local midi_in = S.lib.midi_in
-  assert_equal(params:string("midi_note_off"), "auto", "the default")
-  local wanted = { "latch", "latch", "release", "release" }
   for mode = 1, 4 do
     params:set("midi_channel_mode", mode)
-    assert_equal(midi_in.note_off_mode(), wanted[mode], "auto in mode " .. mode)
+    params:set("midi_note_off", 1); assert_equal(midi_in.note_off_mode(), "latch", "latch in mode " .. mode)
     params:set("midi_note_off", 2); assert_equal(midi_in.note_off_mode(), "release", "release in mode " .. mode)
-    params:set("midi_note_off", 3); assert_equal(midi_in.note_off_mode(), "latch", "latch in mode " .. mode)
-    params:set("midi_note_off", 1)
   end
-  -- mpe selected, auto: lifting the key ends the note and stops the voice
+  -- mpe selected, the default: lifting the key leaves the voice running
+  params:set("midi_note_off", 1)
   params:set("midi_channel_mode", 3)
   S.selected_voice = 1
   press(context, 2, 60)
-  assert_true(not S.voices[1].active, "release in mpe selected")
-  params:set("midi_channel_mode", 1)
-  press(context, 2, 60)
-  assert_true(S.voices[2].active, "latch in per voice")
-  assert_equal(S.lib.notes.held(2), 1, "its note sounds on")
+  assert_true(S.voices[1].active, "latch in mpe selected")
+  -- and release: lifting the key ends the note and stops the voice
+  S.lib.ui_keys.select_voice_by(1)
+  params:set("midi_note_off", 2)
+  press(context, 3, 62)
+  assert_true(not S.voices[2].active, "release in mpe selected")
 end)
 
 test("a note off goes to the voices its note on played", function()
@@ -1034,7 +1044,7 @@ test("mpe split: a note plays every voice whose zone and range hold it", functio
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local notes = S.lib.notes
-  params:set("midi_channel_mode", 4)
+  params:set("midi_channel_mode", 4); params:set("midi_note_off", 2)
   params:set("mpe_lower_members", 7); params:set("mpe_upper_members", 7)
   params:set("v3_zone", option_index("v3_zone", "lower"))
   params:set("v3_zone_low", 60); params:set("v3_zone_high", 72)
@@ -1050,7 +1060,7 @@ test("mpe split: a note plays every voice whose zone and range hold it", functio
   note_on(context, 1, 62)
   assert_equal(notes.held(1), 3, "the lower master plays the lower zone"); assert_equal(notes.held(3), 2)
   note_off(context, 1, 62)
-  note_off(context, 2, 64)   -- auto: release in the MPE modes
+  note_off(context, 2, 64)   -- release
   assert_true(not S.voices[3].active, "voice 3 stops with its last key")
   assert_true(S.voices[1].active, "voice 1 still holds a key"); assert_equal(notes.held(1), 1)
   -- a channel in neither zone plays nothing
@@ -1153,7 +1163,7 @@ test("a port change, an unplug, a mode change and a panic release every MIDI not
       local S = local_value("S")
       context.midi.plug(1, "keys")
       params:set("midi_channel_mode", mode)
-      params:set("midi_note_off", 3)    -- latch in every mode
+      params:set("midi_note_off", 1)    -- latch in every mode
       S.selected_voice = 1
       local mpe = mode >= 3
       if mpe then context.midi.send(1, { type = "channel_pressure", val = 64, ch = 2 }) end
@@ -1181,12 +1191,12 @@ test("a port change, an unplug, a mode change and a panic release every MIDI not
     return { owner = "seq", key = "chord", pitch = pitch, velocity = 0.5, set_own = function() end, extra_only = true }
   end
   local probes = {
-    { name = "mpe selected to per voice with the own note parked", run = function(context, S)
-      params:set("midi_channel_mode", 3); S.selected_voice = 1
-      note_on(context, 2, 60); note_on(context, 3, 64); note_off(context, 2, 60)   -- auto: release; the own note parks
+    { name = "mpe selected, release to latch with the own note parked", run = function(context, S)
+      params:set("midi_channel_mode", 3); S.selected_voice = 1; params:set("midi_note_off", 2)
+      note_on(context, 2, 60); note_on(context, 3, 64); note_off(context, 2, 60)   -- release; the own note parks
       assert_true(S.lib.notes.slots(1)[1].parked, "the own note parked")
       context.clear_engine_calls()
-      params:set("midi_channel_mode", 1)                                          -- the reset reads latch
+      params:set("midi_note_off", 1)                                              -- the reset reads latch
       assert_equal(call_names(context, { noteOff = true, noteOn = true, voiceOff = true }), "noteOff, noteOn",
         "the extra note ends, the voice's last: its own note returns")
       local back = context.calls_named("noteOn")[1].args
@@ -1198,7 +1208,7 @@ test("a port change, an unplug, a mode change and a panic release every MIDI not
       note_on(context, 1, 60); note_on(context, 1, 64)
       assert_equal(S.lib.notes.play(1, seq_note(67)), 3, "the sequencer's note in slot 3")
       note_off(context, 1, 60)                                                     -- parks under 64 and the sequencer's
-      params:set("midi_note_off", 3)                                               -- a reset under latch: 64 ends
+      params:set("midi_note_off", 1)                                               -- a reset under latch: 64 ends
       assert_true(S.lib.notes.slots(1)[1].parked, "still parked under the sequencer's note")
       context.clear_engine_calls()
       context.midi.unplug(1)
@@ -1263,7 +1273,7 @@ test("a note off change releases every MIDI note, as a channel mode change does"
   note_off(context, 1, 60)
   assert_true(S.lib.notes.slots(1)[1].parked, "the own note parked")
   context.clear_engine_calls()
-  params:set("midi_note_off", 3)
+  params:set("midi_note_off", 1)
   assert_nothing_parked(S, "release to latch")
   assert_true(S.voices[1].active, "release to latch: the voice sounds on")
   assert_equal(call_names(context, { noteOff = true, noteOn = true, voiceOff = true }), "noteOff, noteOff, noteOn",
@@ -1276,7 +1286,7 @@ test("a note off change releases every MIDI note, as a channel mode change does"
   -- latch to release, a chord held
   context = load_strata(); finish_startup(context)
   S = local_value("S")
-  params:set("midi_note_off", 3)
+  params:set("midi_note_off", 1)
   for _, note in ipairs({ 60, 64, 67 }) do note_on(context, 1, note) end
   params:set("midi_note_off", 2)
   assert_nothing_parked(S, "latch to release")
@@ -1284,7 +1294,7 @@ test("a note off change releases every MIDI note, as a channel mode change does"
   assert_equal(S.lib.notes.pool_used(), 0)
   -- latch to release, a chord latched with every key up: the extra notes
   -- go, the own note sounds on as latch left it
-  params:set("midi_note_off", 3)
+  params:set("midi_note_off", 1)
   for _, note in ipairs({ 60, 64, 67 }) do note_on(context, 2, note) end
   for _, note in ipairs({ 60, 64, 67 }) do note_off(context, 2, note) end
   assert_equal(S.lib.notes.held(2), 3)
@@ -1307,7 +1317,7 @@ test("the layout hook acts only in the MPE modes, and a second run sends nothing
   assert_true(S.midi_state.held[3][key_of(3, 60)], "the key stays down")
   -- mpe selected: the first change releases, the second finds nothing to send
   params:set("midi_channel_mode", 3); S.selected_voice = 1
-  params:set("midi_note_off", 3)
+  params:set("midi_note_off", 1)
   for index, note in ipairs({ 60, 64, 67 }) do note_on(context, index + 1, note) end
   for index, note in ipairs({ 60, 64, 67 }) do note_off(context, index + 1, note) end
   assert_equal(S.lib.notes.held(1), 3)
@@ -1409,7 +1419,7 @@ test("the menu's reconcile resets the master bend range only when the device cha
 end)
 
 test("RPN 6 with notes held releases them mid-handler and leaves the key state and the allocator agreeing", function()
-  for _, off_mode in ipairs({ 1, 3 }) do   -- auto (release in mpe selected), latch
+  for _, off_mode in ipairs({ 2, 1 }) do   -- release, latch
     local context = load_strata(); finish_startup(context)
     local S = local_value("S")
     params:set("midi_channel_mode", 3); S.selected_voice = 1
@@ -1425,7 +1435,7 @@ test("RPN 6 with notes held releases them mid-handler and leaves the key state a
     assert_equal(S.lib.notes.held(1), 0, name .. ": released"); assert_equal(S.lib.notes.pool_used(), 0, name)
     assert_equal(next(S.midi_state.held[1]), nil, name .. ": no key down"); assert_equal(next(S.midi_state.note_voice), nil)
     assert_nothing_parked(S, name)
-    assert_equal(S.voices[1].active, off_mode == 3, name .. ": release stops the voice its keys held, latch leaves it")
+    assert_equal(S.voices[1].active, off_mode == 1, name .. ": release stops the voice its keys held, latch leaves it")
     -- the old keys' lifts find nothing; a new key plays
     context.clear_engine_calls()
     for index, note in ipairs({ 60, 64, 67 }) do note_off(context, index + 1, note) end
@@ -1436,7 +1446,7 @@ test("RPN 6 with notes held releases them mid-handler and leaves the key state a
 end)
 
 test("note offs for a stopped voice's forgotten notes send nothing", function()
-  for _, off_mode in ipairs({ 2, 3 }) do   -- release, latch
+  for _, off_mode in ipairs({ 2, 1 }) do   -- release, latch
     local context = load_strata(); finish_startup(context)
     local S = local_value("S")
     params:set("midi_note_off", off_mode)
@@ -1522,23 +1532,34 @@ test("a note tap consumes the notes it takes, and their note offs", function()
   assert_equal(#second, 3, "after cleanup the tap is gone")
 end)
 
-test("a 3.4 PSET's channel mode and note off keep their behavior", function()
+test("an old PSET's note off: 1 loads latch, 2 release, 3 release", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  assert_equal(params:string("midi_note_off"), "auto")
-  params:set("midi_note_off", 2); assert_equal(params:string("midi_note_off"), "release")
-  params:set("midi_note_off", 3); assert_equal(params:string("midi_note_off"), "latch")
-  -- midi_channel_mode 2 is omni
+  local path = context.data_dir .. "note_off_old.pset"
+  params:write(path)
+  local file = io.open(path, "r"); local text = file:read("a"); file:close()
+  assert_true(text:find('"midi_note_off": 1', 1, true) ~= nil, "the PSET holds the note off's index")
+  local function read_with(index)
+    local written = text:gsub('"midi_note_off": %d+', '"midi_note_off": ' .. index)
+    local out = io.open(path, "w"); out:write(written); out:close()
+    params:read(path)
+    return params:string("midi_note_off")
+  end
+  params:set("midi_note_off", 2)
+  assert_equal(read_with(1), "latch", "3.7's auto, index 1, loads as latch")
+  assert_equal(read_with(2), "release", "release, index 2, stays release")
+  params:set("midi_note_off", 1)
+  assert_equal(read_with(3), "release", "3.7's latch, index 3, clamps to release")
+  -- midi_channel_mode 2 is omni: latch keeps the voice, release stops it
   params:set("midi_channel_mode", 2); S.selected_voice = 4
-  params:set("midi_note_off", 1)   -- 3.4's ignore: latch in a plain mode
+  params:set("midi_note_off", 1)
   press(context, 9, 60)
   assert_true(S.voices[4].active, "omni plays the selected voice")
   assert_equal(S.lib.notes.held(4), 1, "and the note sounds on")
-  params:set("midi_note_off", 2)   -- 3.4's voice off: release
+  params:set("midi_note_off", 2)
   press(context, 9, 62)
   assert_true(not S.voices[4].active, "release stops it")
 end)
-
 
 -- A port another name claims (a controller, a remote grid: lib/io/ports.lua)
 -- is not played: the claim releases its notes as a port change does
@@ -1754,7 +1775,7 @@ end)
 -- still playing to their ends, in every note-off mode: sequential pad taps
 -- ring over each other (decision 2, design §3.5)
 test("on an overlap one-shot voice sequential slice taps ring over each other in every note-off mode", function()
-  for mode = 1, 3 do
+  for mode = 1, 2 do
     local context, S = sliced_voice(3)
     local scan = S.lib.scan
     function scan.pass_seconds(_, fraction) return fraction * 2 end  -- a quarter: 0.5 s
