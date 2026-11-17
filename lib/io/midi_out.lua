@@ -205,7 +205,8 @@ return function(S)
   -- A note whose device left the port: marked departed, out of the
   -- expression list and the port's counts and channel use, so no off or
   -- value of it goes to whatever holds the port now, and its channel owed
-  -- an all notes off where key (the device's name) next arrives
+  -- an all notes off where key (the device's name) next arrives. A note
+  -- that reached no device (key nil, #748) is owed to none
   local function set_aside(record, key)
     record.departed = true
     remove_expressing(record)
@@ -215,18 +216,20 @@ return function(S)
     local use = table_at(state.use, record.port)
     use[record.channel] = (use[record.channel] or 1) - 1
     if use[record.channel] <= 0 then use[record.channel] = nil end
-    table_at(state.left_with, key)[record.channel] = true
+    if key ~= nil then table_at(state.left_with, key)[record.channel] = true end
   end
 
   -- The notes on port that went to a device the port no longer holds (a
   -- move in SYSTEM > DEVICES changes the vports at once, but is told only
   -- as the menu closes): set aside before a note on the port ends or
-  -- starts, so an off due mid-menu never reaches the device that came
+  -- starts, so an off due mid-menu never reaches the device that came. A
+  -- note sent while the port was empty names no device: once the port
+  -- holds one it is set aside too, owed to none (#748)
   local function settle_moved(port)
     local now = S.lib.io_ports.device(port)
     for voice = 1, NUM_VOICES do
       for _, record in pairs(state.notes[voice]) do
-        if record.port == port and not record.departed and record.device ~= nil and record.device ~= now then
+        if record.port == port and not record.departed and record.device ~= now then
           set_aside(record, record.device)
         end
       end
@@ -485,13 +488,14 @@ return function(S)
   -- did not get (a move in SYSTEM > DEVICES changes the vports before it is
   -- told, so a note sent meanwhile went to the device that came; during an
   -- unplug the port names none): each is set aside (above), owed to the
-  -- device that got it, or to departed_name for a note that names none
-  local function departed(port, departed_name)
+  -- device that got it; a note that names none reached no device and is
+  -- owed to none (#748)
+  local function departed(port)
     local now = S.lib.io_ports.device(port)
     for voice = 1, NUM_VOICES do
       for _, record in pairs(state.notes[voice]) do
         if record.port == port and not record.departed and (now == nil or record.device ~= now) then
-          set_aside(record, record.device or departed_name or ("port " .. port))
+          set_aside(record, record.device)
         end
       end
     end
@@ -509,10 +513,10 @@ return function(S)
     return channels
   end
 
-  S.lib.io_ports.on_change("io_midi_out", function(port, name, departed_name)
+  S.lib.io_ports.on_change("io_midi_out", function(port, name)
     if state.stopped then return end
     if name == nil then
-      departed(port, departed_name)
+      departed(port)
     else
       local channels = arrived_channels(port, name)
       for channel = 1, MIDI_OUT.channels do
