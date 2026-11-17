@@ -46,6 +46,16 @@ local function destination_index(label)
   error("no LFO destination " .. label)
 end
 
+-- LFO n's home routing (the matrix's slot 16 + n, the groundwork before
+-- 3.8) aimed at entry index of the destination list (1: none), and the
+-- entry it is aimed at now
+local function aim_index(n, index)
+  local S = local_value("S")
+  assert_true(S.lib.matrix.set_home(n, S.lib.lfos.destination_id(index)), "LFO " .. n .. " aimed")
+end
+local function home_index(n) return local_value("S").lib.lfos.destination_index(n) end
+local function aim(n, label) aim_index(n, destination_index(label)) end
+
 local function lfo_step(context, count)
   for _ = 1, count or 1 do context.clock.advance_until(local_value("S").lfo_clock) end
 end
@@ -164,12 +174,12 @@ test("ALT+E3 keeps a voice's registered destinations in its group, both ways (#5
   local context = load_strata(); finish_startup(context)
   show_page("LFO")
   local function alt_e3(d) with_alt(function() enc(3, d) end) end
-  local function label() return local_value("LFO_DESTINATIONS")[params:get(lfo_id(1, "dest"))].label end
-  params:set(lfo_id(1, "dest"), destination_index("v2 hist"))
+  local function label() return local_value("LFO_DESTINATIONS")[home_index(1)].label end
+  aim(1, "v2 hist")
   alt_e3(-1); assert_equal(label(), "v2 main", "inside a group: back to its start")
-  params:set(lfo_id(1, "dest"), destination_index("v1 amp"))
+  aim(1, "v1 amp")
   alt_e3(1); assert_equal(label(), "v2 main", "from v1's last registered one to voice 2")
-  params:set(lfo_id(1, "dest"), destination_index("v7 amp"))
+  aim(1, "v7 amp")
   alt_e3(-2); assert_equal(label(), "v6 main", "two groups back")
 end)
 
@@ -178,7 +188,7 @@ test("ALT+E3 on dest jumps to the next voice's first destination", function()
   local context = load_strata(); finish_startup(context)
   show_page("LFO")
   local function alt_e3(d) with_alt(function() enc(3, d) end) end
-  local function label() return local_value("LFO_DESTINATIONS")[params:get(lfo_id(1, "dest"))].label end
+  local function label() return local_value("LFO_DESTINATIONS")[home_index(1)].label end
   local landed = {}
   for _ = 1, 10 do
     alt_e3(1)
@@ -186,15 +196,15 @@ test("ALT+E3 on dest jumps to the next voice's first destination", function()
   end
   assert_equal(table.concat(landed, ", "), "density, v1 main, v2 main, v3 main, v4 main, v5 main, v6 main, v7 main, "
     .. "macro 1, macro 1", "none, the globals, each voice, the macros, then clamped")
-  params:set(lfo_id(1, "dest"), destination_index("v2 rsend"))
+  aim(1, "v2 rsend")
   alt_e3(1); assert_equal(label(), "v3 main", "from anywhere in voice 2 to voice 3's first")
-  params:set(lfo_id(1, "dest"), destination_index("v3 vfilt"))
+  aim(1, "v3 vfilt")
   alt_e3(-1); assert_equal(label(), "v3 main", "back to its voice's first")
   alt_e3(-1); assert_equal(label(), "v2 main", "then the voice before")
-  params:set(lfo_id(1, "dest"), destination_index("v7 amp"))
+  aim(1, "v7 amp")
   alt_e3(1); assert_equal(label(), "macro 1", "from the last voice to the macros")
   alt_e3(-1); assert_equal(label(), "v7 main")
-  params:set(lfo_id(1, "dest"), destination_index("v1 main"))
+  aim(1, "v1 main")
   alt_e3(-1); assert_equal(label(), "density", "voice 1 back to the globals")
   alt_e3(-1); assert_equal(label(), "none", "and to none")
   alt_e3(-1); assert_equal(label(), "none", "clamped")
@@ -208,8 +218,8 @@ test("E2 moves along the strip and E3 edits each field both ways", function()
   local context = load_strata(); finish_startup(context)
   show_page("LFO")
   assert_equal(local_value("lfo_field"), FIELD.dest, "the strip starts on the destination")
-  enc(3, 1); assert_equal(params:get(lfo_id(1, "dest")), 2)
-  enc(3, -1); enc(3, -1); assert_equal(params:get(lfo_id(1, "dest")), 1, "clamped at none, no wrap")
+  enc(3, 1); assert_equal(home_index(1), 2)
+  enc(3, -1); enc(3, -1); assert_equal(home_index(1), 1, "clamped at none, no wrap")
   enc(2, -1); assert_equal(local_value("lfo_field"), FIELD.dest, "E2 stops at the first field")
   strip_field("shape"); enc(3, 1); assert_equal(params:string(lfo_id(1, "shape")), "tri", "E3 on shape")
   enc(3, -1); assert_equal(params:string(lfo_id(1, "shape")), "sine")
@@ -251,7 +261,7 @@ end)
 
 test("the strip shows as many fields as fit and keeps the cursor's in view", function()
   local context = load_strata(); finish_startup(context)
-  params:set(lfo_id(1, "dest"), destination_index("filt freq"))
+  aim(1, "filt freq")
   show_page("LFO")
   local texts = strip_texts(context)
   assert_equal(texts[1].text, "filt freq", "the destination first")
@@ -291,18 +301,18 @@ test("the destination shows ~ in the engine, the rate max above 10 Hz in Lua and
     context.screen.clear(); redraw()
     return table.concat(lfo_row_drawing(context, n).texts, "|"):find(text, 1, true) ~= nil
   end
-  params:set(lfo_id(1, "dest"), destination_index("v3 pitch"))
+  aim(1, "v3 pitch")
   assert_true(row_has(1, "v3 pitch~"), "an engine-run destination's ~")
   assert_equal(bright_strip_text(context), "v3 pitch~", "in the strip too")
-  params:set(lfo_id(1, "dest"), destination_index("rev mix"))
+  aim(1, "rev mix")
   assert_true(row_has(1, "rev mix") and not row_has(1, "~"), "a Lua destination has none")
   params:set(lfo_id(1, "rate"), 20); params:set(lfo_id(1), 1); lfo_step(context)
   strip_field("rate")
   assert_equal(bright_strip_text(context), "20Hz max", "a Lua-run LFO above 10 Hz")
-  params:set(lfo_id(1, "dest"), destination_index("v3 pitch"))
+  aim(1, "v3 pitch")
   redraw(); assert_equal(bright_strip_text(context), "20Hz", "in the engine it plays at 20 Hz")
   params:set(lfo_id(1, "rate"), 8); redraw()
-  params:set(lfo_id(1, "dest"), destination_index("rev mix")); redraw()
+  aim(1, "rev mix"); redraw()
   assert_equal(bright_strip_text(context), "8Hz", "below 10 Hz no mark")
   -- a playing routing of the matrix from an LFO marks its depth
   local S = local_value("S")
@@ -319,12 +329,12 @@ test("ALT+E3 on the destination jumps a group; elsewhere it is fine on the rate 
   local context = load_strata(); finish_startup(context)
   show_page("LFO")
   local function alt_e3(d) with_alt(function() enc(3, d) end) end
-  alt_e3(1); assert_equal(params:get(lfo_id(1, "dest")), 2, "none to the first global")
-  alt_e3(1); assert_equal(params:get(lfo_id(1, "dest")), 13, "to v1 main")
-  alt_e3(1); assert_equal(params:get(lfo_id(1, "dest")), 26, "to v2 main")
-  params:set(lfo_id(1, "dest"), 15)
-  alt_e3(-1); assert_equal(params:get(lfo_id(1, "dest")), 13, "back to its group's start")
-  alt_e3(-1); assert_equal(params:get(lfo_id(1, "dest")), 2, "then the globals")
+  alt_e3(1); assert_equal(home_index(1), 2, "none to the first global")
+  alt_e3(1); assert_equal(home_index(1), 13, "to v1 main")
+  alt_e3(1); assert_equal(home_index(1), 26, "to v2 main")
+  aim_index(1, 15)
+  alt_e3(-1); assert_equal(home_index(1), 13, "back to its group's start")
+  alt_e3(-1); assert_equal(home_index(1), 2, "then the globals")
   strip_field("rate")
   params:set(lfo_id(1, "rate"), 1)
   local rate = params:get(lfo_id(1, "rate"))
@@ -361,7 +371,7 @@ end)
 test("ALT+K2 held resets the field; ALT+K3 and the arc button turn the LFO on and off", function()
   local context = load_strata(); finish_startup(context)
   show_page("LFO")
-  local resets = { { "depth", lfo_id(1, "depth"), 70, 25 }, { "dest", lfo_id(1, "dest"), 30, 1 },
+  local resets = { { "depth", lfo_id(1, "depth"), 70, 25 },
     { "rate", lfo_id(1, "rate"), 3, 0.25 }, { "offset", lfo_id(1, "offset"), -12, 0 },
     { "phase", lfo_id(1, "phase"), 40, 0 }, { "rate_amt", lfo_id(1, "rate_mod_amt"), 30, 0 } }
   for _, case in ipairs(resets) do
@@ -369,6 +379,9 @@ test("ALT+K2 held resets the field; ALT+K3 and the arc button turn the LFO on an
     with_alt(function() hold_k2(context) end)
     assert_near(params:get(case[2]), case[4], 1e-9, case[1] .. " back to its default")
   end
+  strip_field("dest"); aim_index(1, 30)
+  with_alt(function() hold_k2(context) end)
+  assert_equal(home_index(1), 1, "dest back to none")
   strip_field("state"); params:set(lfo_id(1), 1)
   with_alt(function() hold_k2(context) end)
   assert_equal(params:get(lfo_id(1)), 0, "on/off back to off")
@@ -430,7 +443,7 @@ end)
 test("LFO page rows: wave, dot at the LFO's phase and value, labels, a hollow dot for a free engine LFO", function()
   local context = load_strata(); finish_startup(context)
   local layout = pages_lfo().layout
-  params:set(lfo_id(1, "dest"), destination_index("filt freq")); params:set(lfo_id(1, "depth"), 50)
+  aim(1, "filt freq"); params:set(lfo_id(1, "depth"), 50)
   params:set(lfo_id(1, "shape"), option_index(lfo_id(1, "shape"), "up"))
   params:set(lfo_id(1, "rate"), 0.003); params:set(lfo_id(1, "phase"), 25); params:set(lfo_id(1), 1)
   lfo_step(context)
@@ -457,7 +470,7 @@ test("LFO page rows: wave, dot at the LFO's phase and value, labels, a hollow do
   assert_equal(#lfo_row_drawing(context, 2).rects, 0, "no dot for a stopped LFO")
   assert_true(table.concat(lfo_row_drawing(context, 2).texts, " "):find("off 25%", 1, true), "stopped LFO shows off")
   -- a free engine-run LFO's dot is an estimate: hollow; a clocked one's is exact
-  params:set(lfo_id(1, "dest"), destination_index("v2 size")); lfo_step(context); redraw()
+  aim(1, "v2 size"); lfo_step(context); redraw()
   local hollow = lfo_row_drawing(context, 1).rects[1]
   assert_true(hollow and hollow.filled == false, "a free engine-run LFO: a hollow dot")
   assert_equal(hollow.w, 3); assert_equal(hollow.h, 3)
@@ -471,7 +484,7 @@ test("LFO page rows: wave, dot at the LFO's phase and value, labels, a hollow do
     for shape = 1, 8 do
       for n = 1, 6 do params:set(lfo_id(n, "shape"), shape) end
       for _, dest in ipairs({ 1, 3, 12, 17, 68, 103 }) do
-        params:set(lfo_id(selected, "dest"), dest); params:set(lfo_id(selected, "depth"), 100); redraw()
+        aim_index(selected, dest); params:set(lfo_id(selected, "depth"), 100); redraw()
         assert_screen_layout(context, "LFO " .. selected .. " selected, shape " .. shape .. ", dest " .. dest)
         for _, line in ipairs(context.screen.lines) do
           assert_true(line.y1 >= BODY_TOP and line.y2 <= BODY_BOTTOM, "shape " .. shape .. " inside the body")
@@ -493,7 +506,7 @@ end)
 -- its first step, also when it is turned on again (#415)
 test("an LFO turned on again has no dot until its first step (#415)", function()
   local context = load_strata(); finish_startup(context)
-  params:set(lfo_id(1, "dest"), destination_index("filt freq")); params:set(lfo_id(1), 1)
+  aim(1, "filt freq"); params:set(lfo_id(1), 1)
   show_page("LFO")
   lfo_step(context); redraw()
   assert_equal(#lfo_row_drawing(context, 1).rects, 1, "a stepped LFO has its dot")
@@ -507,7 +520,7 @@ end)
 
 test("the dot's swing follows the depth; at depth 0 it sits on the middle line (#520)", function()
   local context = load_strata(); finish_startup(context)
-  params:set(lfo_id(1, "dest"), destination_index("filt freq")); params:set(lfo_id(1, "depth"), 100)
+  aim(1, "filt freq"); params:set(lfo_id(1, "depth"), 100)
   params:set(lfo_id(1, "shape"), option_index(lfo_id(1, "shape"), "square"))
   params:set(lfo_id(1, "rate"), 0.003); params:set(lfo_id(1), 1)
   show_page("LFO")
@@ -530,7 +543,7 @@ end)
 test("LFO rows keep a blank pixel row between each destination and the row above", function()
   local context = load_strata(); finish_startup(context)
   show_page("LFO")
-  for n = 1, 6 do params:set(lfo_id(n, "dest"), destination_index("density")) end
+  for n = 1, 6 do aim(n, "density") end
   local S = local_value("S")
   for n = 1, 6 do S.lib.matrix.set_routing(n, "lfo" .. n, "reverb_mix"); params:set("matrix_" .. n .. "_depth", 25) end
   local ok, problem = pcall(function()
@@ -585,11 +598,11 @@ end)
 
 -- #557: ALT+K2 randomizes the selected LFO's shape, rate or division and
 -- phase; held, it resets the field
-local KEPT = { "dest", "mode", "depth", "offset", "rate_mod", "rate_mod_amt", "depth_mod", "depth_mod_amt" }
+local KEPT = { "mode", "depth", "offset", "rate_mod", "rate_mod_amt", "depth_mod", "depth_mod_amt" }
 
 local function lfo_snapshot(n)
   local out = { [lfo_id(n)] = params:get(lfo_id(n)) }
-  for _, field in ipairs({ "dest", "mode", "depth", "offset", "rate_mod", "rate_mod_amt", "depth_mod", "depth_mod_amt",
+  for _, field in ipairs({ "mode", "depth", "offset", "rate_mod", "rate_mod_amt", "depth_mod", "depth_mod_amt",
     "shape", "rate", "division", "phase" }) do
     out[lfo_id(n, field)] = params:get(lfo_id(n, field))
   end
@@ -602,7 +615,7 @@ test("ALT+K2 randomizes the selected LFO's shape, rate or division and phase, an
     show_page("LFO")
     select_lfo(4)
     params:set(lfo_id(4, "mode"), option_index(lfo_id(4, "mode"), mode))
-    params:set(lfo_id(4, "dest"), 5); params:set(lfo_id(4, "depth"), 60); params:set(lfo_id(4, "offset"), 10)
+    aim_index(4, 5); params:set(lfo_id(4, "depth"), 60); params:set(lfo_id(4, "offset"), 10)
     params:set(lfo_id(4, "rate_mod"), 2); params:set(lfo_id(4, "rate_mod_amt"), 30)
     params:set(lfo_id(4, "depth_mod"), 3); params:set(lfo_id(4, "depth_mod_amt"), -20)
     params:set(lfo_id(4), 1)
@@ -633,6 +646,10 @@ test("ALT+K2 randomizes the selected LFO's shape, rate or division and phase, an
       end
       for _, field in ipairs(KEPT) do
         assert_equal(now[lfo_id(4, field)], before[lfo_id(4, field)], mode .. ": " .. field .. " kept")
+      end
+      assert_equal(home_index(4), 5, mode .. ": its destination (the home routing) kept")
+      for n = 1, 6 do
+        if n ~= 4 then assert_equal(home_index(n), 1, mode .. ": LFO " .. n .. "'s destination untouched") end
       end
       assert_equal(now[lfo_id(4)], 1, mode .. ": still running")
       for n, snapshot in pairs(others) do
@@ -697,6 +714,35 @@ test("K2's release hint stays after K1 comes up first (#557)", function()
   assert_equal(hint_text(context), "K2:reset", "held past the hold time: letting go resets")
   key(2, 0); context.screen.clear(); redraw()
   assert_equal(hint_text(context), plain, "K2 up: the plain hints")
+end)
+
+-- The groundwork before 3.8 (design §4): the dest row edits LFO n's home
+-- routing in the matrix (S.lib.matrix.edit_home), no param
+test("E3 on dest steps the home; ALT+E3 jumps a group; ALT+K2 held sets none", function()
+  local context = load_strata(); finish_startup(context)
+  local matrix = local_value("S").lib.matrix
+  show_page("LFO")
+  assert_equal(local_value("lfo_field"), FIELD.dest)
+  enc(3, 1)
+  assert_equal(matrix.home(1), "master_density", "E3: none to the first global")
+  assert_equal(lfos().label(1), "density")
+  enc(3, -1); assert_equal(matrix.home(1), "", "back to none")
+  enc(3, -1); assert_equal(matrix.home(1), "", "clamped at none")
+  with_alt(function() enc(3, 1) end); with_alt(function() enc(3, 1) end)
+  assert_equal(matrix.home(1), "v1_main", "ALT+E3 jumps to voice 1's group")
+  enc(3, 3)
+  assert_equal(matrix.home(1), "v1_grain_pitch", "E3 steps within it")
+  assert_equal(lfos().label(1), "v1 pitch~", "the ~ of an engine-run home")
+  with_alt(function() hold_k2(context) end)
+  assert_equal(matrix.home(1), "", "ALT+K2 held: none")
+  assert_equal(lfos().label(1), "none")
+  -- an unknown home shows none, is kept until the row is turned, and E3 steps from none
+  matrix.set_home(1, "future_dest")
+  redraw()
+  assert_equal(bright_strip_text(context), "none", "an unknown home shows none")
+  assert_equal(matrix.home(1), "future_dest", "kept")
+  enc(3, 1)
+  assert_equal(matrix.home(1), "master_density", "turned: from none")
 end)
 
 end

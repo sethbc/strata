@@ -25,9 +25,16 @@ local function settle(context) context.clock.run_for(0.05) end
 -- A stand-in for the matrix: the test's own set_fast_extra, or none. The
 -- pages drawn meanwhile read affects (MAIN's mark) and learning (MOD's
 -- learn notice in the header): it answers them as a matrix with no routing
+-- (it keeps the LFOs' home routings, which S.lib.lfos reads, as the matrix does)
 local function matrix_stand_in(set_fast_extra)
+  local homes = {}
   return { set_fast_extra = set_fast_extra, affects = function() return false end,
-    learning = function() return nil end }
+    learning = function() return nil end, home = function(n) return homes[n] or "" end,
+    set_home = function(n, id)
+      homes[n] = id
+      local_value("S").lib.lfos.home_changed(n)
+      return true
+    end }
 end
 
 -- The value the engine has for a param, LFO offsets and extras included
@@ -129,7 +136,7 @@ test("target ids leave out macros, morph and discrete params", function()
   end
   for m = 1, 16 do assert_equal(listed["macro_" .. m], nil, "no macro_" .. m) end
   for _, id in ipairs({ "morph", "morph_a", "morph_b" }) do assert_equal(listed[id], nil, "no " .. id) end
-  for _, id in ipairs({ "filter_type", "v1_source", "strata_lfo1", "strata_lfo1_dest", "scatter", "tempo" }) do
+  for _, id in ipairs({ "filter_type", "v1_source", "strata_lfo1", "scatter", "tempo" }) do
     assert_equal(listed[id], nil, "no discrete " .. id)
   end
   for _, id in ipairs(ids) do
@@ -321,7 +328,7 @@ test("an LFO on a macro moves the targets' engine values and no param", function
   for index, entry in ipairs(S.LFO_DESTINATIONS) do
     if entry.label == "macro 1" then destination = index end
   end
-  params:set(lfos.param_id(1, "dest"), destination)
+  local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(destination))
   params:set(lfos.param_id(1, "shape"), 3)
   params:set(lfos.param_id(1, "depth"), 100)
   params:set(lfos.param_id(1), 1)
@@ -380,8 +387,8 @@ test("an LFO on a macro with eight fast targets sends all eight every step, and 
   for k, id in ipairs(targets) do assert_true(macros.set_target(1, k, id, 0, 1), "row " .. k .. ": " .. id) end
   params:set("macro_1", 0.5); settle(context)
   -- LFO 1 up at 10 Hz, depth 50 %, on macro 1: the macro plays 0.25-0.75, a new value every step
-  for index, entry in ipairs(S.LFO_DESTINATIONS) do
-    if entry.label == "macro 1" then params:set(lfos.param_id(1, "dest"), index) end
+  for _, entry in ipairs(S.LFO_DESTINATIONS) do
+    if entry.label == "macro 1" then S.lib.matrix.set_home(1, entry.key) end
   end
   params:set(lfos.param_id(1, "shape"), 4)
   params:set(lfos.param_id(1, "rate"), 10); params:set(lfos.param_id(1, "depth"), 50)
@@ -440,8 +447,8 @@ end)
 -- at depth percent: the macro plays at its value + depth / 200, clamped to 1
 local function square_lfo_on_macro(S, m, depth)
   local lfos = S.lib.lfos
-  for index, entry in ipairs(S.LFO_DESTINATIONS) do
-    if entry.label == "macro " .. m then params:set(lfos.param_id(1, "dest"), index) end
+  for _, entry in ipairs(S.LFO_DESTINATIONS) do
+    if entry.label == "macro " .. m then S.lib.matrix.set_home(1, entry.key) end
   end
   params:set(lfos.param_id(1, "shape"), 3)
   params:set(lfos.param_id(1, "depth"), depth)

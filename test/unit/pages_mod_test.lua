@@ -166,7 +166,7 @@ test("the list draws each section's sources from their records, in section order
     "MOD_PAGE.sections, then the input level's and the expression's own sections")
   assert_equal(table.concat(S.MOD_PAGE.sections, " "), "macros morph scatter gestures lfos matrix")
   -- an LFO row is its record's describe: destination, depth, its inputs
-  params:set("strata_lfo2_dest", 1)
+  S.lib.matrix.set_home(2, "")
   S.lib.pages_mod.place("source:lfo2"); redraw()
   assert_equal(row_text(context, list_row(context, "L2").y, ROW_LABEL_X), "L2 " .. S.lib.lfos.describe(2))
 end)

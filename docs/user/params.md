@@ -26,7 +26,7 @@ PSETs (PARAMETERS > PSET) save every one of them. A PSET loads every setting it 
 - Delay ping-pong (0-1, default 0): at 1 the repeats alternate left and right. Scenes store the three: sync and division switch at the end of a transition, ping-pong crossfades
 
 ## LFOs
-- **LFO 1** ... **LFO 6** (a group each) - on (off by default), destination (none; listed by voice, and saved as the destination itself, not its place in the list), shape (sine, tri, square, up, down, s&h, smooth, drunk; sine), mode (free or clocked; free), rate (0.003-50 Hz, default 0.25 Hz, a 4 s cycle), clocked rate (1/16 to 1024 bars of four beats; 4), depth (0-100 %, default 25 %, so an LFO is audible as soon as it is turned on; scenes recall the depth they stored), offset (-100 to 100 %, 0), phase (0-100 %, 0), rate mod and depth mod (none, or a lower-numbered LFO: LFO 3 offers L1 and L2) and their amounts (-100 to 100 %, 0). See [Modulation](modulation.md#global-lfos)
+- **LFO 1** ... **LFO 6** (a group each) - on (off by default), shape (sine, tri, square, up, down, s&h, smooth, drunk; sine), mode (free or clocked; free), rate (0.003-50 Hz, default 0.25 Hz, a 4 s cycle), clocked rate (1/16 to 1024 bars of four beats; 4), depth (0-100 %, default 25 %, so an LFO is audible as soon as it is turned on; scenes recall the depth they stored), offset (-100 to 100 %, 0), phase (0-100 %, 0), rate mod and depth mod (none, or a lower-numbered LFO: LFO 3 offers L1 and L2) and their amounts (-100 to 100 %, 0). An LFO's destination is no menu parameter: it is set on the [LFO](pages/lfo.md) page and saved with the matrix's routings. See [Modulation](modulation.md#global-lfos)
 - An LFO always swings up to half the destination's range either side of the value you set, at 100 % depth
 
 ## Macros (group)
@@ -138,7 +138,7 @@ Split zones for the mpe split mode. Each voice has a zone (off, lower or upper; 
 
 Scenes capture the FX settings too; smooth transitions crossfade every FX value except the filter type, which switches at the end.
 
-Scenes capture each voice's source and buffer position, rate and scan, but **not the audio in the buffers**: a recalled scene plays whatever is in the buffer now. A voice's source switches at the end of a smooth transition; the buffer parameters crossfade. LFO depths, offsets and rates crossfade too (toward a scene that has a running LFO off, its depth fades to 0 and its offset and rate hold); the other LFO settings switch at the end.
+Scenes capture each voice's source and buffer position, rate and scan, but **not the audio in the buffers**: a recalled scene plays whatever is in the buffer now. A voice's source switches at the end of a smooth transition; the buffer parameters crossfade. LFO depths, offsets and rates crossfade too (toward a scene that has a running LFO off, its depth fades to 0 and its offset and rate hold); the other LFO settings switch at the end, except an LFO's destination: it switches at the middle of the transition, where its depth dips to 0.
 
 ## Scale
 - Scale (off, or any of norns' scales; default off) and root (C-B, default C), shared by every voice that quantizes ([voices and grains](voices-and-grains.md#scales))

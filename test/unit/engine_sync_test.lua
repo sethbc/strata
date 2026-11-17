@@ -411,11 +411,12 @@ test("a base override replaces the stored value under the LFO offsets", function
   params:set("v1_buf_pos", 0.5)
   assert_near(params:get("v1_buf_pos"), 0.5, 1e-9, "the stored value changes")
   assert_near(last_grain_send(context, 1, "bufPos"), 0.3, 1e-9, "the send carries the override")
-  -- an LFO on the param adds its offset to the override: 0.3 + 0.2 x half of 0-1
-  S.lfo_last_dest[1], S.lfo_scaled[1] = "v1_buf_pos", 0.2
+  -- an offset on the param (an LFO's through the matrix, since the
+  -- groundwork before 3.8) adds to the override: 0.3 + 0.2 x half of 0-1
+  sync.set_extra_offset("test", "v1_buf_pos", 0.1)
   send_param_to_engine("v1_buf_pos", params:get("v1_buf_pos"))
   assert_near(last_grain_send(context, 1, "bufPos"), 0.4, 1e-9, "the LFO's offset rides on the override")
-  S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
+  sync.set_extra_offset("test", "v1_buf_pos", nil)
   context.clear_engine_calls()
   sync.clear_base_override("v1_buf_pos")
   assert_near(last_grain_send(context, 1, "bufPos"), 0.5, 1e-9, "clearing sends the stored value")
@@ -453,11 +454,12 @@ test("extra offsets sum with the LFOs' and clamp once", function()
   assert_equal(#grain_sends(context, 1, "grainSize"), 1, "clearing an extra sends nothing")
   send_param_to_engine(id, 0.45)
   assert_near(last_grain_send(context, 1, "grainSize"), 0.5, 1e-9, "0.45 + 0.245 clamps to 0.5")
-  -- with an LFO at full negative depth (-1 x half of 0.49 = -0.245)
-  S.lfo_last_dest[1], S.lfo_scaled[1] = id, -1
+  -- with an LFO at full negative depth (-1 x half of 0.49 = -0.245), the
+  -- matrix's extra offset since the groundwork before 3.8
+  sync.set_extra_offset("test", id, -0.245)
   send_param_to_engine(id, 0.45)
   assert_near(last_grain_send(context, 1, "grainSize"), 0.45, 1e-9, "the extra and the LFO's offset clamp once")
-  S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
+  sync.set_extra_offset("test", id, nil)
   sync.set_extra_offset("a", id, nil)
   send_param_to_engine(id, 0.45)
   assert_near(last_grain_send(context, 1, "grainSize"), 0.45, 1e-9, "no extra left: the value itself")
@@ -764,7 +766,7 @@ test("a Lua-run LFO on a stopped voice's param spends no budget; on a running vo
     if option == "square" then square = index end
   end
   -- LFO 1 held at its top (value +1) on voice 2's density, at depth 50
-  params:set("strata_lfo1_dest", destination)
+  local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(destination))
   params:set("strata_lfo1_shape", square)
   params:set("strata_lfo1_rate", 0.003)
   params:set("strata_lfo1_phase", 0)
@@ -778,15 +780,22 @@ test("a Lua-run LFO on a stopped voice's param spends no budget; on a running vo
   assert_equal(#grain_sends(context, 2, "grainDensity"), 0, "and reaches no engine")
   -- 20 + 0.5 x half of 1-100
   assert_near(sync.expected_value("v2_grain_density"), 44.75, 1e-9, "the modulated value is recorded")
-  -- the start forgets what was recorded, so the next step sends again
+  -- the start carries the LFO's offset (the matrix's extra, the groundwork
+  -- before 3.8, ruling 18)
+  context.clear_engine_calls()
   toggle_voice(2)
+  local density = grain_sends(context, 2, "grainDensity")
+  assert_equal(#density, 1, "the start sends the density")
+  assert_near(density[1], 44.75 * params:get("master_density"), 1e-9, "with the LFO's offset")
+  -- the LFO at its bottom: the running voice's send counts one
+  params:set("strata_lfo1_phase", 50)
   context.clear_engine_calls()
   before = sync.budget_state().sent
   context.clock.advance_until(S.lfo_clock)
   assert_equal(sync.budget_state().sent, before + 1, "the running voice's LFO send counts one")
-  local density = grain_sends(context, 2, "grainDensity")
+  density = grain_sends(context, 2, "grainDensity")
   assert_equal(#density, 1, "and reaches the engine")
-  assert_near(density[1], 44.75 * params:get("master_density"), 1e-9)
+  assert_near(density[1], 1 * params:get("master_density"), 1e-9, "20 - 24.75, clamped to 1")
   params:set("strata_lfo1", 0)
 end)
 
@@ -895,7 +904,7 @@ test("an LFO on the master density at the budget's edge: seven running voices co
   for index, option in ipairs(params:lookup_param("strata_lfo1_shape").options) do
     if option == "square" then square = index end
   end
-  params:set("strata_lfo1_dest", destination)
+  local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(destination))
   params:set("strata_lfo1_shape", square)
   params:set("strata_lfo1_rate", 0.003)
   params:set("strata_lfo1_phase", 0)

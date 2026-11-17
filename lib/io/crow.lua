@@ -685,7 +685,7 @@ return function(S)
         plug(context)
         for index, destination in ipairs(S.LFO_DESTINATIONS) do
           if destination.fast then
-            params:set(S.lib.lfos.param_id(1, "dest"), index)
+            S.lib.matrix.set_home(1, destination.key)
             break
           end
         end

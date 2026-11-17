@@ -1005,6 +1005,13 @@ end
 --     option param keeps its place, with these options.
 -- An entry naming an id the fixture lacks, or of another kind, raises.
 local PARAM_FIXTURE_ALLOWED = {}
+-- 2b: an LFO's destination is its home routing in the matrix (design §4)
+for n = 1, 6 do
+  local why = "2b: LFO " .. n .. "'s destination is its home routing in the matrix (slot " .. (16 + n) .. ")"
+  table.insert(PARAM_FIXTURE_ALLOWED, {kind = "removed", id = "strata_lfo" .. n .. "_dest", why = why})
+  table.insert(PARAM_FIXTURE_ALLOWED, {kind = "removed", id = "strata_lfo" .. n .. "_dest_key", why = why})
+  table.insert(PARAM_FIXTURE_ALLOWED, {kind = "group_size", id = "strata_lfo_" .. n, n = 12, why = why})
+end
 
 -- The fixture's records as this build should have them: a copy of each,
 -- the allowed differences applied

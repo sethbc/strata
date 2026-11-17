@@ -582,8 +582,8 @@ test("the crow section shows presence, the jacks and an approximate mark", funct
     if destination.fast and not fast then fast = index end
     if not destination.fast and not slow then slow = index end
   end
-  params:set("strata_lfo1_dest", fast)
-  params:set("strata_lfo2_dest", slow)
+  local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(fast))
+  local_value("S").lib.matrix.set_home(2, local_value("S").lib.lfos.destination_id(slow))
   assert_true(S.lib.lfos.is_engine_run(1), "LFO 1 runs in the engine")
   params:set("crow_out1_source", option("crow_out1_source", "lfo1"))
   params:set("crow_out2_source", option("crow_out2_source", "lfo2"))

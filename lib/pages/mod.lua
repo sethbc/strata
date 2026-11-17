@@ -1264,7 +1264,7 @@ return function(S)
     local labels = {"v7 pitch", "v7 pos", "v7 size", "v7 vfilt", "v7 amp", "v7 pitch"}
     for n = 1, S.constants.NUM_LFOS do
       for index, destination in ipairs(S.LFO_DESTINATIONS) do
-        if destination.label == labels[n] then params:set(S.lib.lfos.param_id(n, "dest"), index) end
+        if destination.label == labels[n] then S.lib.matrix.set_home(n, destination.key) end
       end
       params:set(S.lib.lfos.param_id(n, "depth"), 100)
       if n > 1 then

@@ -28,6 +28,19 @@ local function destination_index(label)
   error("no LFO destination " .. label)
 end
 
+
+-- LFO n's home routing (the matrix's slot 16 + n, the groundwork before
+-- 3.8) aimed at entry index of the destination list (1: none), and the
+-- entry it is aimed at now
+local function aim_index(n, index)
+  local S = local_value("S")
+  assert_true(S.lib.matrix.set_home(n, S.lib.lfos.destination_id(index)), "LFO " .. n .. " aimed")
+end
+local function home_index(n) return local_value("S").lib.lfos.destination_index(n) end
+
+-- LFO n's home routing aimed at the destination labeled `label`
+local function aim(n, label) aim_index(n, destination_index(label)) end
+
 -- Run the clocks until the LFO clock has stepped `count` times (default 1)
 local function lfo_step(context, count)
   for _ = 1, count or 1 do context.clock.advance_until(local_value("S").lfo_clock) end
@@ -36,7 +49,7 @@ end
 -- LFO n on `label` with a square shape held at its top (value +1) or bottom
 -- (value -1): the slowest rate moves the phase 6.3e-5 a step
 local function hold_lfo(n, label, depth, low)
-  params:set(lfo_id(n, "dest"), destination_index(label))
+  aim(n, label)
   params:set(lfo_id(n, "shape"), option_index(lfo_id(n, "shape"), "square"))
   params:set(lfo_id(n, "rate"), 0.003)
   params:set(lfo_id(n, "phase"), low and 50 or 0)
@@ -141,7 +154,7 @@ end)
 test("a Lua-run LFO sends the stored value plus m times half the range", function()
   local context = load_strata(); finish_startup(context)
   params:set("reverb_mix", 0.3)
-  params:set(lfo_id(1, "dest"), destination_index("rev mix"))
+  aim(1, "rev mix")
   params:set(lfo_id(1, "rate"), 0.003); params:set(lfo_id(1, "phase"), 25)   -- sine at its top
   assert_equal(params:get(lfo_id(1, "depth")), 25, "the default depth")
   params:set(lfo_id(1), 1)
@@ -153,7 +166,7 @@ test("a Lua-run LFO sends the stored value plus m times half the range", functio
   context.clear_engine_calls(); lfo_step(context)
   assert_near(context.calls_named("setReverb")[1].args[1], 0.525, 1e-6, "offset 10: m = 0.25 + 0.2")
   assert_near(params:get("reverb_mix"), 0.3, 1e-9, "the param keeps its value")
-  assert_equal(local_value("lfo_last_dest")[1], "reverb_mix")
+  assert_near(local_value("S").lib.matrix.offset("reverb_mix"), 0.225, 1e-6, "the matrix sums its home: 0.45 x 0.5")
 end)
 
 test("a free LFO's phase follows the time and a clocked one's the beats", function()
@@ -213,7 +226,7 @@ test("at most 12 sends a step, round robin, and every due key within two steps",
   params:set("delay_time", 1); params:set("delay_mix", 0.5)   -- the swing stays inside every range
   local labels = { "rev mix", "rev size", "rev damp", "dly time", "dly fdbk", "dly mix" }
   for n, label in ipairs(labels) do
-    params:set(lfo_id(n, "dest"), destination_index(label))
+    aim(n, label)
     params:set(lfo_id(n, "shape"), option_index(lfo_id(n, "shape"), "up"))
     params:set(lfo_id(n, "rate"), 10); params:set(lfo_id(n, "depth"), 40)
     params:set(lfo_id(n), 1)
@@ -310,7 +323,7 @@ test("an LFO on a stopped voice leaves the running voice its 12; the voice's sta
   one_running_one_stopped(S)
   params:set("v2_grain_density", 20)
   -- LFO 1 rising at 1 Hz on voice 2's density, at depth 20: due every step
-  params:set(lfo_id(1, "dest"), destination_index("v2 dens"))
+  aim(1, "v2 dens")
   params:set(lfo_id(1, "shape"), option_index(lfo_id(1, "shape"), "up"))
   params:set(lfo_id(1, "rate"), 1); params:set(lfo_id(1, "depth"), 20)
   params:set(lfo_id(1), 1)
@@ -333,7 +346,9 @@ test("an LFO on a stopped voice leaves the running voice its 12; the voice's sta
   end
   local function densities() return calls_with(context, "setGrainParam", 1) end
   assert_equal(#densities(), 0, "nothing reached the stopped voice")
-  -- the start sends the stored density; the next step the modulated one, once
+  -- the start sends the density with the home's offset at the last step
+  -- (the matrix's extra offset: the groundwork before 3.8, ruling 18); the
+  -- next step the value the LFO has moved to, once
   toggle_voice(2)
   local sent = {}
   for _, call in ipairs(densities()) do
@@ -341,7 +356,7 @@ test("an LFO on a stopped voice leaves the running voice its 12; the voice's sta
   end
   local master = params:get("master_density")
   assert_equal(#sent, 1, "the start sends one density")
-  assert_near(sent[1], 20 * master, 1e-9, "the stored one")
+  assert_near(sent[1], (20 + 9.9 * lfos.value(1)) * master, 1e-9, "the modulated one")
   lfo_step(context)
   sent = {}
   for _, call in ipairs(densities()) do
@@ -355,7 +370,7 @@ end)
 test("a Lua-run LFO above 10 Hz plays at 10 Hz", function()
   local context = load_strata(); finish_startup(context)
   local lfos = local_value("S").lib.lfos
-  params:set(lfo_id(1, "dest"), destination_index("rev mix"))
+  aim(1, "rev mix")
   params:set(lfo_id(1, "rate"), 20); params:set(lfo_id(1), 1)
   lfo_step(context)
   assert_near(lfos.effective_rate(1), 10, 1e-9, "20 Hz in Lua plays at 10")
@@ -369,7 +384,7 @@ test("a Lua-run LFO above 10 Hz plays at 10 Hz", function()
   -- in the engine it keeps its rate
   params:set(lfo_id(1, "rate"), 20)
   context.clear_engine_calls()
-  params:set(lfo_id(1, "dest"), destination_index("v3 pitch"))
+  aim(1, "v3 pitch")
   local call = context.calls_named("setFastLfo")[1]
   assert_near(call.args[5], 20, 1e-9, "an engine LFO runs at 20 Hz")
   assert_true(not lfos.capped(1), "and is not capped")
@@ -378,7 +393,7 @@ end)
 test("an LFO on a fast destination runs in the engine", function()
   local context = load_strata(); finish_startup(context)
   local lfos = local_value("S").lib.lfos
-  params:set(lfo_id(1, "dest"), destination_index("v3 pitch"))
+  aim(1, "v3 pitch")
   params:set(lfo_id(1, "rate"), 0.25)
   assert_true(lfos.is_engine_run(1), "v3 pitch runs in the engine")
   context.clear_engine_calls()
@@ -397,21 +412,22 @@ test("an LFO on a fast destination runs in the engine", function()
     assert_true(call.args[2] ~= "pitchShift", "the engine moves the pitch, Lua sends none")
   end
   assert_equal(#context.calls_named("setFastLfo"), 0, "an engine LFO sends nothing per step")
-  assert_equal(local_value("lfo_last_dest")[1], nil, "no Lua offset")
+  assert_equal(local_value("S").lib.matrix.offset("v3_grain_pitch"), 0, "no offset from the matrix")
   context.clear_engine_calls()
-  params:set(lfo_id(1, "dest"), destination_index("v3 size"))
+  aim(1, "v3 size")
   assert_equal(#context.calls_named("setFastLfo"), 1, "another fast destination: one setFastLfo")
   assert_equal(context.calls_named("setFastLfo")[1].args[3], 2, "size")
   assert_equal(#context.calls_named("stopFastLfo"), 0, "no stop")
   context.clear_engine_calls()
   params:set("reverb_mix", 0.3)
-  params:set(lfo_id(1, "dest"), destination_index("rev mix"))
+  aim(1, "rev mix")
   assert_equal(#calls_with(context, "stopFastLfo", 0), 1, "a Lua destination stops the engine LFO")
   assert_true(not lfos.is_engine_run(1))
   lfo_step(context)
   assert_equal(#context.calls_named("setReverb"), 1, "and Lua's sends begin")
   context.clear_engine_calls()
   params:set(lfo_id(1), 0)
+  lfo_step(context)   -- the matrix's next step gives a Lua destination back (ruling 17)
   local restores = context.calls_named("setReverb")
   assert_equal(#restores, 1, "off: the stored value sent once")
   assert_near(restores[1].args[1], 0.3, 1e-9)
@@ -420,14 +436,14 @@ test("an LFO on a fast destination runs in the engine", function()
   -- every fast destination, the voice's amp and filter cutoff included
   for label, destination in pairs({ ["v1 pitch"] = 0, ["v2 pos"] = 1, ["v4 size"] = 2, ["v5 vfilt"] = 3, ["v7 amp"] = 4 }) do
     context.clear_engine_calls()
-    params:set(lfo_id(2, "dest"), destination_index(label)); params:set(lfo_id(2), 1)
+    aim(2, label); params:set(lfo_id(2), 1)
     local call = context.calls_named("setFastLfo")[1]
     assert_equal(call.args[2], tonumber(label:match("^v(%d)")) - 1, label .. ": its voice")
     assert_equal(call.args[3], destination, label .. ": its destination")
     params:set(lfo_id(2), 0)
   end
   -- depth 0 stops it, as it restores a Lua destination
-  params:set(lfo_id(1, "dest"), destination_index("v3 pitch")); params:set(lfo_id(1), 1)
+  aim(1, "v3 pitch"); params:set(lfo_id(1), 1)
   context.clear_engine_calls()
   params:set(lfo_id(1, "depth"), 0); lfo_step(context)
   assert_equal(#calls_with(context, "stopFastLfo", 0), 1, "depth 0 stops the engine LFO")
@@ -449,7 +465,7 @@ test("an engine LFO's modulated rate is resent past 0.5 % and its depth past 1/1
   -- LFO 1 rises slowly from -1 (up, 0.003 Hz): 1.25e-4 a step
   params:set(lfo_id(1, "shape"), option_index(lfo_id(1, "shape"), "up"))
   params:set(lfo_id(1, "rate"), 0.003); params:set(lfo_id(1), 1)
-  params:set(lfo_id(2, "dest"), destination_index("v2 pitch"))
+  aim(2, "v2 pitch")
   params:set(lfo_id(2, "rate"), 1)
   params:set(lfo_id(2, "rate_mod"), option_index(lfo_id(2, "rate_mod"), "L1"))
   params:set(lfo_id(2, "rate_mod_amt"), 100)
@@ -492,7 +508,7 @@ test("a clocked engine LFO resyncs once a bar and at once when the beat count fa
   context.set_time(util.time() + (math.ceil(beats / 4) * 4 + 0.5 - beats) * clock.get_beat_sec())
   params:set(lfo_id(1, "mode"), option_index(lfo_id(1, "mode"), "clocked"))
   params:set(lfo_id(1, "division"), option_index(lfo_id(1, "division"), "1"))
-  params:set(lfo_id(1, "dest"), destination_index("v3 pitch"))
+  aim(1, "v3 pitch")
   context.clear_engine_calls()
   params:set(lfo_id(1), 1)
   assert_equal(#calls_with(context, "syncFastLfo", 0), 1, "the start's sync")
@@ -514,7 +530,7 @@ test("a clocked engine LFO resyncs once a bar and at once when the beat count fa
   clock.get_beats = real_beats
   if not ok then error(problem, 0) end
   -- a free engine LFO is never resynced
-  params:set(lfo_id(2, "dest"), destination_index("v4 size")); params:set(lfo_id(2), 1)
+  aim(2, "v4 size"); params:set(lfo_id(2), 1)
   context.clear_engine_calls()
   context.clock.run_for(8 * clock.get_beat_sec())
   assert_equal(#calls_with(context, "syncFastLfo", 1), 0, "a free LFO: none after its start")
@@ -524,7 +540,7 @@ test("a tempo change resends a clocked engine LFO's rate", function()
   local context = load_strata(); finish_startup(context)
   params:set(lfo_id(1, "mode"), option_index(lfo_id(1, "mode"), "clocked"))
   params:set(lfo_id(1, "division"), option_index(lfo_id(1, "division"), "1"))   -- 4 beats
-  params:set(lfo_id(1, "dest"), destination_index("v3 pitch"))
+  aim(1, "v3 pitch")
   context.clear_engine_calls()
   params:set(lfo_id(1), 1)
   assert_near(context.calls_named("setFastLfo")[1].args[5], 0.5, 1e-9, "4 beats at 120 BPM: 0.5 Hz")
@@ -544,7 +560,7 @@ test("a tempo change resends every clocked engine LFO's rate in its step, ahead 
   for n, label in ipairs({ "v3 pitch", "v4 size", "v5 vfilt" }) do
     params:set(lfo_id(n, "mode"), option_index(lfo_id(n, "mode"), "clocked"))
     params:set(lfo_id(n, "division"), option_index(lfo_id(n, "division"), "1"))
-    params:set(lfo_id(n, "dest"), destination_index(label)); params:set(lfo_id(n), 1)
+    aim(n, label); params:set(lfo_id(n), 1)
   end
   -- 12 keys due every step: the round robin is full
   lfos.on_step(function()
@@ -570,7 +586,7 @@ test("engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step
   local lfos, macros = S.lib.lfos, S.lib.macros
   S.drift_metro:stop()  -- the drift's own sends are never deferred
   for n = 1, 6 do
-    params:set(lfo_id(n, "dest"), destination_index("v" .. n .. " pitch")); params:set(lfo_id(n), 1)
+    aim(n, "v" .. n .. " pitch"); params:set(lfo_id(n), 1)
     assert_true(macros.set_target(1, n, lfo_id(n, "depth"), 0, 1), "macro 1 row " .. n .. " on LFO " .. n .. "'s depth")
   end
   lfo_step(context)
@@ -666,8 +682,15 @@ test("the destinations are none, the globals, each voice's together, then the ma
   for index, destination in ipairs(destinations) do labels[index] = destination.label end
   assert_equal(table.concat(labels, ","), table.concat(expected, ","), "the whole list, in order")
   assert_equal(#destinations, 119, "1 + 11 + 7 x 13 + 16: today's destinations, each once")
-  assert_equal(table.concat(params:lookup_param(lfo_id(6, "dest")).options, ","), table.concat(expected, ","),
-    "every LFO offers them in that order")
+  -- an LFO's destination is its home routing (the groundwork before 3.8):
+  -- entry index's home id is its key ("" for none), and back
+  assert_equal(params.lookup[lfo_id(6, "dest")], nil, "no destination param")
+  for index, destination in ipairs(destinations) do
+    local id = S.lib.lfos.destination_id(index)
+    assert_equal(id, index == 1 and "" or destination.key, destination.label .. "'s home id")
+    aim_index(6, index)
+    assert_equal(home_index(6), index, destination.label .. " back from the home")
+  end
   -- each entry's key: none, the param it moves, v<i>_main for a voice's main
   local keys = {}
   for index, destination in ipairs(destinations) do
@@ -727,80 +750,84 @@ local function read_text(path)
   return text
 end
 
+-- The groundwork before 3.8: the key is LFO 2's home routing's, slot 18 of
+-- the matrix, in the PSET's matrix side file and the scene's matrix block
 test("a destination is stored by key in a PSET and in a scene", function()
   local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
   util.make_dir(context.data_dir)
   local path = context.data_dir .. "keyed.pset"
-  params:set(lfo_id(2, "dest"), destination_index("v3 vfilt"))
-  assert_equal(params:get(lfo_id(2, "dest_key")), "v3_filter_freq", "the option keeps its key")
+  aim(2, "v3 vfilt")
+  assert_equal(S.lib.matrix.home(2), "v3_filter_freq", "the home holds the key")
   params:write(path)
   local text = read_text(path)
-  assert_true(text:find('"strata_lfo2_dest_key": v3_filter_freq\n', 1, true), "the PSET line holds the key")
-  assert_true(not text:find('"strata_lfo2_dest":', 1, true), "and no index")
-  params:set(lfo_id(2, "dest"), 1)
+  assert_true(not text:find('"strata_lfo2_dest', 1, true), "the PSET has no destination line")
+  local side = S.lib.data_files.read(context.data_dir .. "keyed.matrix.data")
+  assert_equal(side.version, 2, "the matrix side file, version 2")
+  assert_equal(side.matrix[18].source, "lfo2"); assert_equal(side.matrix[18].dest, "v3_filter_freq", "slot 18")
+  aim_index(2, 1)
   params:read(path)
-  assert_equal(params:get(lfo_id(2, "dest")), destination_index("v3 vfilt"), "the PSET loads back to it")
+  assert_equal(home_index(2), destination_index("v3 vfilt"), "the PSET loads back to it")
   assert_equal(lfo_destination_id(2), "v3_filter_freq")
-  -- the scene field holds the key, and a recall puts it back
+  -- the scene's matrix block holds the key, and a recall puts it back
   capture_scene(1)
   local data = local_value("scenes")[1].data
-  assert_equal(data.strata_lfo2_dest_key, "v3_filter_freq", "the scene field holds the key")
+  assert_equal(data.matrix[18].dest, "v3_filter_freq", "the scene's matrix block holds the key")
+  assert_equal(data.strata_lfo2_dest_key, nil, "no block of its own")
   assert_equal(data.strata_lfo2_dest, nil, "and no index")
-  params:set(lfo_id(2, "dest"), 1)
+  aim_index(2, 1)
   recall_scene(1, 0)
-  assert_equal(params:get(lfo_id(2, "dest")), destination_index("v3 vfilt"), "the scene recalls it")
+  assert_equal(home_index(2), destination_index("v3 vfilt"), "the scene recalls it")
   assert_equal(lfo_destination_id(2), "v3_filter_freq")
 end)
 
+-- The groundwork before 3.8 (ruling 19): a home this build has no
+-- destination for is kept, reads as none, does not play, and is named on
+-- the console at each file load and once a session for a scene
 test("a key the build does not know reads as none", function()
   local context = load_strata(); finish_startup(context)
-  -- a PSET whose key this build lacks
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
-  local path = pset_with(context, "unknown", '^"strata_lfo2_dest', { '"strata_lfo2_dest_key": v3_wobble' })
-  params:set(lfo_id(2, "dest"), destination_index("rev mix"))
+  local S = local_value("S")
+  local function lines_naming(text)
+    local lines = 0
+    for _, line in ipairs(context.printed) do
+      if line:find(text, 1, true) then lines = lines + 1 end
+    end
+    return lines
+  end
+  -- a PSET whose matrix side file holds a key this build lacks
+  aim(2, "v3 pitch")
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "unknown.pset"
+  params:write(path)
+  assert_true(S.lib.data_files.write(context.data_dir .. "unknown.matrix.data",
+    { version = 2, matrix = { [18] = { source = "lfo2", dest = "v3_wobble" } } }))
+  aim(2, "rev mix")
   context.printed = {}
   params:read(path)
-  assert_equal(params:get(lfo_id(2, "dest")), 1, "none")
-  assert_equal(lfo_destination_id(2), nil)
-  local lines = 0
-  for _, line in ipairs(context.printed) do
-    if line:find("v3_wobble", 1, true) then lines = lines + 1 end
-  end
-  assert_equal(lines, 1, "one console line names the key")
+  assert_equal(home_index(2), 1, "none")
+  assert_equal(S.lib.matrix.home(2), "v3_wobble", "the key is kept")
+  assert_equal(lfo_destination_id(2), nil, "and plays nothing")
+  assert_equal(lines_naming("v3_wobble"), 1, "one console line names the key")
+  params:read(path)
+  assert_equal(lines_naming("v3_wobble"), 2, "and one at each file load")
   -- a scene whose key this build lacks
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  aim(2, "v3 pitch")
   capture_scene(1)
   local scene = local_value("scenes")[1]
-  scene.data.strata_lfo2_dest_key = "v9_nothing"
+  scene.data.matrix[18] = { source = "lfo2", dest = "v9_nothing" }
   assert_true(validate_scene(scene), "a key is any string: the scene stays valid")
   context.printed = {}
   recall_scene(1, 0)
-  assert_equal(params:get(lfo_id(2, "dest")), 1, "none")
-  lines = 0
-  for _, line in ipairs(context.printed) do
-    if line:find("v9_nothing", 1, true) then lines = lines + 1 end
-  end
-  assert_equal(lines, 1, "one console line names the key")
-  for _, bad in ipairs({ 14, true, "" }) do
+  assert_equal(home_index(2), 1, "none")
+  assert_equal(S.lib.matrix.home(2), "v9_nothing", "kept")
+  assert_equal(lines_naming("v9_nothing"), 1, "one console line names the key")
+  recall_scene(1, 0)
+  assert_equal(lines_naming("v9_nothing"), 1, "once a session")
+  for _, bad in ipairs({ 14, true }) do
     local broken = deep_copy(scene)
-    broken.data.strata_lfo2_dest_key = bad
+    broken.data.matrix[18] = { source = "lfo2", dest = bad }
     assert_true(not validate_scene(broken), tostring(bad) .. " is no key")
   end
-  -- an index from an older release (a PSET line or a scene field) reads as none
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
-  path = pset_with(context, "older", '^"strata_lfo2_dest', { '"strata_lfo2_dest": 14' })
-  params:set(lfo_id(2, "dest"), destination_index("rev mix"))
-  params:read(path)
-  assert_equal(params:get(lfo_id(2, "dest")), 1, "an older PSET's index reads as none")
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
-  capture_scene(2)
-  local older = local_value("scenes")[2]
-  older.data.strata_lfo2_dest_key = nil
-  older.data.strata_lfo2_dest = 14
-  fill_scene(older)
-  assert_true(validate_scene(older), "an older scene stays valid")
-  recall_scene(2, 0)
-  assert_equal(params:get(lfo_id(2, "dest")), 1, "an older scene's index reads as none")
 end)
 
 test("a destination registered after init's list joins its voice's group", function()
@@ -860,7 +887,7 @@ test("an LFO's sound is unchanged: the same destination gives the same engine ca
   for key in pairs(SOUND_BEFORE_3_7) do keys[#keys + 1] = key end
   table.sort(keys)
   for _, key in ipairs(keys) do
-    params:set(lfo_id(1, "dest_key"), key)
+    S.lib.matrix.set_home(1, key)
     params:set(lfo_id(1, "shape"), 3)
     params:set(lfo_id(1, "rate"), 0.003)
     params:set(lfo_id(1, "phase"), 0)
@@ -878,12 +905,13 @@ test("an LFO's sound is unchanged: the same destination gives the same engine ca
     end
     assert_equal(table.concat(lines, "; "), SOUND_BEFORE_3_7[key], key .. ": the calls 3.6 made")
     params:set(lfo_id(1), 0)
+    lfo_step(context)  -- a Lua destination is given back at the matrix's next step (ruling 17)
   end
   -- a voice's main follows its source; a macro is a direct destination
-  params:set(lfo_id(3, "dest_key"), "v1_main")
+  S.lib.matrix.set_home(3, "v1_main")
   assert_equal(lfo_destination_id(3), "v1_freq", "a synth voice's main is its freq")
   assert_equal(S.lib.lfos.destination(3).label, "v1 main", "destination(n) is the entry, as before")
-  params:set(lfo_id(4, "dest_key"), "macro_1")
+  S.lib.matrix.set_home(4, "macro_1")
   assert_equal(lfo_destination_id(4), "macro_1")
 end)
 
@@ -914,7 +942,7 @@ end
 
 local function lfo_settings(dest_label, shape, rate, depth, mode, division)
   return function()
-    params:set(lfo_id(2, "dest"), destination_index(dest_label))
+    aim(2, dest_label)
     params:set(lfo_id(2, "shape"), option_index(lfo_id(2, "shape"), shape))
     params:set(lfo_id(2, "mode"), option_index(lfo_id(2, "mode"), mode or "free"))
     params:set(lfo_id(2, "division"), option_index(lfo_id(2, "division"), division or "4"))
@@ -1090,13 +1118,14 @@ test("a plain turn of the shape, mode or division reaches the engine at once", f
   end
 end)
 
--- 0e's review: the destination is a scene block, which applies before the
--- LFO's settings, so it is set silently and the next step brings it in
--- with every setting in place
+-- 0e's review: the destination is a scene block (since the groundwork
+-- before 3.8 the matrix's, its home routing), which applies before the
+-- LFO's settings, and the next step brings it in with every setting in
+-- place
 test("an instant recall's first send carries the scene's destination with its rate and depth", function()
   local context = load_strata(); finish_startup(context)
   local function setup(dest_label, rate, depth)
-    params:set(lfo_id(2, "dest"), destination_index(dest_label))
+    aim(2, dest_label)
     params:set(lfo_id(2, "rate"), rate)
     params:set(lfo_id(2, "depth"), depth)
     params:set(lfo_id(2), 1)
@@ -1136,11 +1165,15 @@ test("an instant recall's first send carries the scene's destination with its ra
   lfo_step(context)
   assert_equal(#calls_with(context, "stopFastLfo", 1), 1, "the engine LFO stops")
   assert_true(#context.calls_named("setDelay") >= 1, "and dly mix moves")
-  -- a fade switches the destination at its end, not before
+  -- a fade ramps the depth through 0 and switches the destination at its
+  -- midpoint (the matrix's rule for a home routing, the groundwork before
+  -- 3.8; 3.7 switched it at the end)
   hold_lfo(2, "rev mix", 25); lfo_step(context)
   recall_scene(2, 1)
-  context.clock.run_for(0.5)
-  assert_equal(lfo_destination_id(2), "reverb_mix", "halfway through the fade: the old destination")
+  context.clock.run_for(0.4)
+  assert_equal(lfo_destination_id(2), "reverb_mix", "before the midpoint: the old destination")
+  context.clock.run_for(0.2)
+  assert_equal(lfo_destination_id(2), "delay_mix", "past it: the scene's")
   context.clock.run_for(1)
   assert_equal(lfo_destination_id(2), "delay_mix", "at its end: the scene's")
 end)
@@ -1255,7 +1288,7 @@ test("a silent PSET read that sets an on LFO's depth to 0 lets its destination g
   params:write(path)
   params:set(lfo_id(1, "depth"), 40)
   lfo_step(context)
-  assert_equal(local_value("lfo_last_dest")[1], "reverb_mix", "LFO 1 holds rev mix")
+  assert_true(local_value("S").lib.matrix.offset("reverb_mix") ~= 0, "LFO 1's home holds rev mix")
   context.clear_engine_calls()
   params:read(path, true)
   assert_equal(params:get(lfo_id(1, "depth")), 0, "depth 0, silently")
@@ -1265,7 +1298,7 @@ test("a silent PSET read that sets an on LFO's depth to 0 lets its destination g
   local restores = context.calls_named("setReverb")
   assert_equal(#restores, 1, "the next step restores rev mix")
   assert_near(restores[1].args[1], 0.3, 1e-9, "to its stored value")
-  assert_equal(local_value("lfo_last_dest")[1], nil, "LFO 1 holds nothing")
+  assert_equal(local_value("S").lib.matrix.offset("reverb_mix"), 0, "LFO 1's home holds nothing")
   context.clear_engine_calls()
   lfo_step(context, 5)
   assert_equal(#context.calls_named("setReverb"), 0, "and nothing is sent in the steps after it")
@@ -1275,7 +1308,7 @@ test("a silent PSET read that turns an engine-run LFO off stops it at the next s
   local context = load_strata(); finish_startup(context)
   util.make_dir(context.data_dir)
   local path = context.data_dir .. "off.pset"
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))   -- off: the PSET holds that
+  aim(2, "v3 pitch")   -- off: the PSET holds that
   params:write(path)
   params:set(lfo_id(2), 1)
   assert_equal(#context.calls_named("setFastLfo"), 1, "on: the engine LFO starts")
@@ -1299,7 +1332,7 @@ test("a silent PSET read reaches a running engine LFO's offset and phase at the 
   local lfos = local_value("S").lib.lfos
   util.make_dir(context.data_dir)
   local path = context.data_dir .. "offset.pset"
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  aim(2, "v3 pitch")
   params:set(lfo_id(2, "offset"), 30); params:set(lfo_id(2, "phase"), 40)
   params:set(lfo_id(2), 1)
   params:write(path)
@@ -1338,7 +1371,7 @@ test("the six LFOs register as sources lfo1..lfo6 with their shape value", funct
   lfo_step(context)
   assert_near(S.lib.mod_sources.get("lfo1").value(), -1, 1e-9, "the shape value, before the depth")
   assert_equal(S.lib.mod_sources.get("lfo1").describe(), "rev mix 25%")
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  aim(2, "v3 pitch")
   params:set(lfo_id(2, "depth_mod"), option_index(lfo_id(2, "depth_mod"), "L1"))
   assert_equal(S.lib.mod_sources.get("lfo2").describe(), "v3 pitch~ 25% <L1", "engine-run and modulated")
   params:set(lfo_id(3, "rate_mod"), option_index(lfo_id(3, "rate_mod"), "L2"))
@@ -1372,6 +1405,8 @@ test("offset_for and m_for", function()
   assert_equal(lfos.FAST_DESTINATIONS.amp, 4)
 end)
 
+-- The groundwork before 3.8 (ruling 17): the matrix gives a Lua home back
+-- at its next step, through the round robin, once
 test("a Lua-run LFO restores the stored value when turned off, at depth 0 and on a destination change", function()
   local context = load_strata(); finish_startup(context)
   params:set("delay_mix", 0.2)
@@ -1379,24 +1414,30 @@ test("a Lua-run LFO restores the stored value when turned off, at depth 0 and on
   context.clear_engine_calls(); lfo_step(context)
   assert_near(context.calls_named("setDelay")[1].args[3], 0.2 + 0.4 * 0.5, 1e-9, "modulated mix")
   context.clear_engine_calls(); params:set(lfo_id(1, "depth"), 0)
-  assert_near(context.calls_named("setDelay")[1].args[3], 0.2, 1e-9, "depth 0 restores")
+  assert_equal(#context.calls_named("setDelay"), 0, "depth 0: nothing at once")
+  lfo_step(context)
+  assert_near(context.calls_named("setDelay")[1].args[3], 0.2, 1e-9, "depth 0 restores at the next step")
   context.clear_engine_calls(); lfo_step(context)
   assert_equal(#context.engine_calls, 0, "a depth-0 LFO sends nothing")
   params:set(lfo_id(1, "depth"), 60); params:set(lfo_id(1, "phase"), 50)   -- value -1
   context.clear_engine_calls(); lfo_step(context)
   assert_near(context.calls_named("setDelay")[1].args[3], 0, 1e-9, "the modulated value clamps to the range")
-  context.clear_engine_calls(); params:set(lfo_id(1, "dest"), destination_index("rev mix"))
-  assert_near(context.calls_named("setDelay")[1].args[3], 0.2, 1e-9, "a destination change restores the old one")
+  context.clear_engine_calls(); aim(1, "rev mix")
+  assert_equal(#context.calls_named("setDelay"), 0, "a destination change: nothing at once")
+  lfo_step(context)
+  assert_near(context.calls_named("setDelay")[1].args[3], 0.2, 1e-9, "the next step restores the old one")
+  assert_near(context.calls_named("setReverb")[1].args[1], util.clamp(params:get("reverb_mix") - 0.3, 0, 1), 1e-9,
+    "and modulates the new one")
   context.clear_engine_calls(); lfo_step(context)
   assert_equal(#context.calls_named("setDelay"), 0, "the old destination is left alone")
-  assert_near(context.calls_named("setReverb")[1].args[1], util.clamp(params:get("reverb_mix") - 0.3, 0, 1), 1e-9,
-    "the new one is modulated")
-  context.clear_engine_calls(); params:set(lfo_id(1, "dest"), 1)   -- none
+  context.clear_engine_calls(); aim_index(1, 1)   -- none
+  lfo_step(context)
   assert_near(context.calls_named("setReverb")[1].args[1], params:get("reverb_mix"), 1e-9, "none restores")
   lfo_step(context, 3)
   assert_equal(#context.calls_named("setReverb"), 1, "and then sends nothing")
   hold_lfo(1, "dly mix", 40); lfo_step(context)
   context.clear_engine_calls(); params:set(lfo_id(1), 0)
+  lfo_step(context)
   assert_equal(#context.calls_named("setDelay"), 1, "off restores")
   assert_near(context.calls_named("setDelay")[1].args[3], 0.2, 1e-9)
 end)
@@ -1416,21 +1457,25 @@ test("a full-depth LFO clamps its destination to both ends of the range (#50)", 
   assert_near(params:get("delay_feedback"), 0, 1e-9, "param value untouched")
 end)
 
-test("a restore is sent even when the engine already holds the stored value", function()
+-- The groundwork before 3.8: a home whose m is exactly 0 adds nothing to the
+-- matrix's sum, so its end has nothing to give back (the engine already
+-- has the stored value)
+test("a home at m 0 holds no offset, and its end sends nothing", function()
   for _, ending in ipairs({ "off", "depth 0" }) do
     local context = load_strata(); finish_startup(context)
     params:set("filter_mix", 0.5)
     -- value +1 at depth 50 with an offset of -25: m = 0.5 - 0.5 = 0, so the
-    -- engine keeps the stored 0.5 while the LFO holds the destination
+    -- engine keeps the stored 0.5
     hold_lfo(1, "filt mix", 50); params:set(lfo_id(1, "offset"), -25)
     context.clear_engine_calls(); lfo_step(context, 3)
     assert_equal(#context.calls_named("setFilter"), 0, "nothing moved, nothing sent")
-    assert_equal(local_value("lfo_last_dest")[1], "filter_mix", "the LFO holds the destination")
+    assert_equal(local_value("S").lib.matrix.offset("filter_mix"), 0, "the matrix holds no offset")
     context.clear_engine_calls()
     if ending == "off" then params:set(lfo_id(1), 0) else params:set(lfo_id(1, "depth"), 0) end
-    local calls = context.calls_named("setFilter")
-    assert_equal(#calls, 1, ending .. ": the restore sends")
-    assert_near(calls[1].args[4], 0.5, 1e-9, ending .. ": the stored value")
+    lfo_step(context, 3)
+    assert_equal(#context.calls_named("setFilter"), 0, ending .. ": nothing to give back")
+    assert_near(local_value("S").engine_param_values.filter_mix or params:get("filter_mix"), 0.5, 1e-9,
+      ending .. ": the engine has the stored value")
   end
 end)
 
@@ -1440,7 +1485,7 @@ test("setting a running LFO on again restarts its phase, and an engine LFO's wit
   local context = load_strata(); finish_startup(context)
   local lfos = local_value("S").lib.lfos
   params:set(lfo_id(1, "rate"), 0.25); params:set(lfo_id(1, "phase"), 10); params:set(lfo_id(1), 1)
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch"))
+  aim(2, "v3 pitch")
   params:set(lfo_id(2, "rate"), 0.25); params:set(lfo_id(2), 1)
   context.clock.run_for(1)
   assert_near(lfos.phase(1), 0.35, 1e-6, "the phase has moved")
@@ -1454,16 +1499,23 @@ test("setting a running LFO on again restarts its phase, and an engine LFO's wit
   assert_equal(#context.calls_named("setFastLfo"), 0, "its node is kept")
 end)
 
+-- The groundwork before 3.8 (ruling 16): a buffer voice's main is its
+-- position, a fast param the matrix sends as setFastOffset
 test("main destination follows a voice's source and restores the old param", function()
   local context = load_strata(); finish_startup(context)
+  local matrix = local_value("S").lib.matrix
   hold_lfo(2, "v1 main", 100)
   lfo_step(context)
-  assert_equal(local_value("lfo_last_dest")[2], "v1_freq")
-  assert_true(not local_value("S").lib.lfos.is_engine_run(2), "v<i> main runs in Lua")
+  assert_true(matrix.offset("v1_freq") ~= 0, "a synth voice's main: its freq")
+  assert_true(not local_value("S").lib.lfos.is_engine_run(2), "v<i> main is never the LFO's engine node")
   params:set("v1_source", 2); context.clear_engine_calls(); lfo_step(context)
   local voice_calls = context.calls_named("setVoiceParam")
-  assert_equal(voice_calls[1].args[2], "freq"); assert_near(voice_calls[1].args[3], params:get("v1_freq"), 1e-9)
-  assert_equal(local_value("lfo_last_dest")[2], "v1_buf_pos", "a buffer voice's position, still in Lua")
+  assert_equal(voice_calls[#voice_calls].args[2], "freq")
+  assert_near(voice_calls[#voice_calls].args[3], params:get("v1_freq"), 1e-9, "the freq given back")
+  assert_equal(matrix.offset("v1_freq"), 0)
+  local fast = calls_with(context, "setFastOffset", 0)
+  assert_true(#fast >= 1 and fast[#fast].args[3] == 1, "a buffer voice's position, on the fast channel")
+  assert_near(fast[#fast].args[4], 1, 1e-9, "m 1")
 end)
 
 test("LFOs on params of one command, or on one param, do not undo each other", function()
@@ -1477,14 +1529,14 @@ test("LFOs on params of one command, or on one param, do not undo each other", f
   context.clear_engine_calls(); params:set("filter_res", 0.3)
   assert_near(context.calls_named("setFilter")[1].args[1], 1000 + 0.2 * 0.5 * 19980, 1e-6, "a res edit keeps the freq")
   -- two LFOs on one destination add up; turning one off leaves the other's offset
-  params:set(lfo_id(2, "dest"), destination_index("filt freq"))
+  aim(2, "filt freq")
   context.clear_engine_calls(); lfo_step(context)
   calls = context.calls_named("setFilter")
   assert_near(calls[#calls].args[1], 1000 + 0.4 * 0.5 * 19980, 1e-6, "offsets add")
-  context.clear_engine_calls(); params:set(lfo_id(2), 0)
+  context.clear_engine_calls(); params:set(lfo_id(2), 0); lfo_step(context)
   assert_near(context.calls_named("setFilter")[1].args[1], 1000 + 0.2 * 0.5 * 19980, 1e-6, "LFO 1 still applies")
   -- master density reaches every running voice's grain density
-  params:set(lfo_id(1, "dest"), destination_index("density")); params:set("master_density", 1)
+  aim(1, "density"); params:set("master_density", 1)
   context.clear_engine_calls(); lfo_step(context)
   local voices = local_value("voices")
   for _, density_call in ipairs(context.calls_named("setGrainParam")) do
@@ -1496,9 +1548,11 @@ test("LFOs on params of one command, or on one param, do not undo each other", f
   assert_near(params:get("master_density"), 1, 1e-9, "master density param untouched")
 end)
 
--- sync_voice_values_to_engine sends the stored density, so the modulated
--- value sent before the restart must be forgotten (#50)
-test("a restarted voice's grain density scales from its stored value until the next LFO step (#50)", function()
+-- A start carries the extra offsets held on the voice's params, an LFO's
+-- home among them since the groundwork before 3.8 (ruling 18; 3.7 sent
+-- the stored density until the next LFO step, #50): the master density's
+-- resend scales the modulated density, the one the engine plays
+test("a restarted voice's grain density scales from its modulated value (#50)", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   params:set("v1_grain_density", 20); params:set("master_density", 1)
@@ -1513,14 +1567,14 @@ test("a restarted voice's grain density scales from its stored value until the n
     if call.args[1] == 0 and call.args[2] == "grainDensity" then table.insert(density_calls, call) end
   end
   assert_equal(#density_calls, 1, "master density resends voice 1's grain density")
-  assert_near(density_calls[1].args[3], 20 * 1.5, 1e-6, "from the stored density, not the modulated one")
+  assert_near(density_calls[1].args[3], (20 + 0.5 * 49.5) * 1.5, 1e-6, "from the modulated density")
 end)
 
 test("param actions under a running LFO send the modulated value (drift, edits)", function()
   local context = load_strata(); finish_startup(context)
   params:set("v1_source", 2)
   params:set("v1_buf_pos", 0.4)
-  hold_lfo(1, "v1 main", 50)                  -- a buffer voice's main is its position, in Lua
+  hold_lfo(1, "v1 main", 50)                  -- a buffer voice's main is its position, on the fast path
   lfo_step(context)
   math.randomseed(5)
   context.clear_engine_calls(); drift_update()
@@ -1529,7 +1583,9 @@ test("param actions under a running LFO send the modulated value (drift, edits)"
     if call.args[1] == 0 and call.args[2] == "bufPos" then sent = call.args[3] end
   end
   assert_true(params:get("v1_buf_pos") ~= 0.4, "the drift moved the stored position")
-  assert_near(sent, params:get("v1_buf_pos") + 0.25, 1e-9, "drift sends the position with the LFO offset")
+  assert_near(sent, params:get("v1_buf_pos"), 1e-9, "drift sends the stored position")
+  assert_near(local_value("S").lib.matrix.offset("v1_buf_pos"), 0.5, 1e-9,
+    "the LFO's offset stays on its fast channel (ruling 16)")
   params:set("filter_freq", 1000); hold_lfo(2, "filt freq", 20); lfo_step(context)
   context.clear_engine_calls(); params:set("filter_freq", 2000)
   assert_near(context.calls_named("setFilter")[1].args[1], 2000 + 0.2 * 0.5 * 19980, 1e-6, "an edit keeps the offset")
@@ -1539,7 +1595,7 @@ end)
 
 test("LFO steps skip sends below 1/1000 of the range; restores always send", function()
   local context = load_strata(); finish_startup(context)
-  params:set("filter_mix", 0.5); params:set(lfo_id(1, "dest"), destination_index("filt mix"))
+  params:set("filter_mix", 0.5); aim(1, "filt mix")
   params:set(lfo_id(1, "rate"), 1 / 300); params:set(lfo_id(1, "phase"), 75)   -- a 300 s sine from its trough
   params:set(lfo_id(1, "depth"), 100); params:set(lfo_id(1), 1)
   context.clear_engine_calls()
@@ -1549,7 +1605,7 @@ test("LFO steps skip sends below 1/1000 of the range; restores always send", fun
   for index = 2, #calls do
     assert_true(math.abs(calls[index].args[4] - calls[index - 1].args[4]) >= 0.001 - 1e-12, "each send moves >= 1/1000")
   end
-  context.clear_engine_calls(); params:set(lfo_id(1), 0)
+  context.clear_engine_calls(); params:set(lfo_id(1), 0); lfo_step(context)
   calls = context.calls_named("setFilter")
   assert_equal(#calls, 1, "the restore sends"); assert_near(calls[1].args[4], 0.5, 1e-9, "the stored mix")
   -- a fast LFO sends on every step
@@ -1563,7 +1619,7 @@ end)
 -- range (v1_freq, 20-2000 Hz) a slow LFO sends steps even in octaves (#406)
 test("a slow LFO on an exponential destination sends steps of at most 10.8 cents (#406)", function()
   local context = load_strata(); finish_startup(context)
-  params:set("v1_freq", 60); params:set(lfo_id(1, "dest"), destination_index("v1 main"))
+  params:set("v1_freq", 60); aim(1, "v1 main")
   params:set(lfo_id(1, "rate"), 1 / 16); params:set(lfo_id(1, "phase"), 75)
   params:set(lfo_id(1, "depth"), 1); params:set(lfo_id(1), 1)
   context.clear_engine_calls()
@@ -1589,7 +1645,7 @@ test("an LFO step never changes its destination's controlspec (#406)", function(
   local spec = params:lookup_param("filter_mix").controlspec
   assert_near(spec.step, 0.01, 1e-12, "filter mix steps by 0.01")
   params:set("filter_mix", 0.5)
-  params:set(lfo_id(1, "dest"), destination_index("filt mix"))
+  aim(1, "filt mix")
   params:set(lfo_id(1, "shape"), option_index(lfo_id(1, "shape"), "up"))
   params:set(lfo_id(1, "rate"), 10); params:set(lfo_id(1, "depth"), 100); params:set(lfo_id(1), 1)
   spec.unmap = function() error("unmap boom") end
@@ -1602,7 +1658,9 @@ test("an LFO step never changes its destination's controlspec (#406)", function(
   if not ok then error(problem, 0) end
 end)
 
--- One LFO's failing step leaves the others and the clock running (#517)
+-- One LFO's failing step leaves the others and the clock running (#517);
+-- a Lua home's destination is resolved in the matrix's read of it since
+-- the groundwork before 3.8, which contains it the same way
 test("an error inside an LFO step is printed once and the LFOs keep stepping (#517)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
@@ -1617,7 +1675,7 @@ test("an error inside an LFO step is printed once and the LFOs keep stepping (#5
     context.clear_engine_calls(); lfo_step(context, 5)
     local count, traced = 0, false
     for _, line in ipairs(context.printed) do
-      if line:find("strata: LFO 1 step failed: ", 1, true) == 1 then
+      if line:find("strata: matrix home 1 failed: ", 1, true) == 1 then
         count = count + 1
         traced = traced or line:find("stack traceback", 1, true) ~= nil
       end
@@ -1631,7 +1689,7 @@ test("an error inside an LFO step is printed once and the LFOs keep stepping (#5
     local function reports()
       local printed = 0
       for _, line in ipairs(context.printed) do
-        if line:find("strata: LFO 1 step failed: ", 1, true) == 1 then printed = printed + 1 end
+        if line:find("strata: matrix home 1 failed: ", 1, true) == 1 then printed = printed + 1 end
       end
       return printed
     end
@@ -1644,7 +1702,7 @@ test("an error inside an LFO step is printed once and the LFOs keep stepping (#5
   end)
   destination.resolve = real_resolve
   if not ok then error(problem, 0) end
-  h.claim_script_errors(context, 3, "strata: LFO 1 step failed: ", "another lfo boom")
+  h.claim_script_errors(context, 3, "strata: matrix home 1 failed: ", "another lfo boom")
 end)
 
 -- norns frees the engine before cleanup() (#461): the step stops the clock;
@@ -1654,7 +1712,7 @@ test("cleanup stops the clock and sends no stopFastLfo", function()
   local S = local_value("S")
   assert_true(S.lfo_clock ~= nil, "the clock runs from the start step")
   params:set("filter_freq", 800); hold_lfo(1, "filt freq", 50)
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch")); params:set(lfo_id(2), 1)
+  aim(2, "v3 pitch"); params:set(lfo_id(2), 1)
   lfo_step(context)
   context.clear_engine_calls(); cleanup()
   assert_equal(S.lfo_clock, nil, "the clock is canceled")
@@ -1712,13 +1770,13 @@ test("every control param with a sender sends its LFO-offset value; one without 
       local sender = S.engine_senders[param.id]
       local value = other_value(param)
       if sender then
-        S.lfo_last_dest[1], S.lfo_scaled[1] = param.id, 0.2
+        local minval, maxval = param_range(param.id)
+        S.lib.engine_sync.set_extra_offset("test", param.id, 0.2 * 0.5 * (maxval - minval))
         context.clear_engine_calls()
         params:set(param.id, value)
         local got = signature(context.engine_calls)
-        local minval, maxval = param_range(param.id)
         local stored = params:get(param.id)
-        S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
+        S.lib.engine_sync.set_extra_offset("test", param.id, nil)
         context.clear_engine_calls()
         sender(math.max(minval, math.min(maxval, stored + 0.2 * 0.5 * (maxval - minval))))
         local expected = signature(context.engine_calls)
@@ -1734,14 +1792,13 @@ test("every control param with a sender sends its LFO-offset value; one without 
     end
   end
   assert_true(checked > 200, "many control params have senders: " .. checked)
-  S.lfo_last_dest[1], S.lfo_scaled[1] = nil, nil
 end)
 
 -- AGENTS.md: a control param's action never calls the engine; an engine
 -- LFO's control params reach it at the next step
 test("an engine-run LFO's rate, depth, offset, phase and amounts call no engine command in their sets", function()
   local context = load_strata(); finish_startup(context)
-  params:set(lfo_id(2, "dest"), destination_index("v3 pitch")); params:set(lfo_id(2), 1)
+  aim(2, "v3 pitch"); params:set(lfo_id(2), 1)
   params:set(lfo_id(2, "rate_mod"), 2); params:set(lfo_id(2, "depth_mod"), 2)
   lfo_step(context)
   local edits = { { "rate", 2, "rate", 2 }, { "depth", 60, "depth", 0.6 }, { "offset", 20, "offset", 0.4 },
@@ -1878,6 +1935,97 @@ test("a Lua-run LFO is compared with the value waiting in the send budget, not t
     assert_true(math.abs(call.args[1] - high) > 0.01, "the engine never gets the stale high value (" .. call.args[1] .. ")")
   end
   assert_near(S.engine_param_values.reverb_mix, low, 1e-9, "the engine ends on the value the LFO wants")
+end)
+
+---------------------------------------------------------------------------
+-- The home routing (the groundwork before 3.8, design §4): an LFO's
+-- destination is the matrix's slot 16 + n
+---------------------------------------------------------------------------
+
+test("the rate ceiling follows the home routing", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local lfos, matrix = S.lib.lfos, S.lib.matrix
+  params:set(lfo_id(1, "rate"), 30)
+  aim(1, "v1 pitch")
+  params:set(lfo_id(1), 1)
+  lfo_step(context)
+  assert_near(lfos.effective_rate(1), 30, 1e-9, "the engine plays it: 30 Hz")
+  assert_true(not lfos.capped(1))
+  assert_true(matrix.edit_home(1, "filter_mix"))
+  lfo_step(context)
+  assert_near(lfos.effective_rate(1), 10, 1e-9, "in Lua: 10 Hz")
+  assert_true(lfos.capped(1), "and capped")
+  assert_true(matrix.edit_home(1, ""))
+  lfo_step(context)
+  assert_near(lfos.effective_rate(1), 10, 1e-9, "none: 10 Hz")
+end)
+
+test("a 3.7 PSET's destination lines read as nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local path = context.data_dir .. "strata-09.pset"
+  params:write(path)
+  os.remove(context.data_dir .. "strata-09.matrix.data")   -- 3.7 wrote no homes
+  local file = assert(io.open(path, "a"))
+  file:write('"strata_lfo1_dest": 14\n"strata_lfo1_dest_key": v3_grain_pitch\n')
+  file:close()
+  S.lib.matrix.set_home(1, "reverb_mix")
+  local ok, problem = pcall(function() params:read(path) end)
+  assert_true(ok, "the read raises nothing: " .. tostring(problem))
+  assert_equal(S.lib.matrix.home(1), "", "LFO 1 is aimed at nothing")
+  assert_equal(params.lookup[lfo_id(1, "dest")], nil, "there is no destination param")
+  assert_equal(params.lookup[lfo_id(1, "dest_key")], nil, "nor its key")
+end)
+
+test("an LFO turned off gives its Lua destination back at the next step, once", function()
+  for _, ending in ipairs({ "off", "depth 0", "another destination" }) do
+    local context = load_strata(); finish_startup(context)
+    params:set("reverb_mix", 0.3)
+    hold_lfo(1, "rev mix", 40)
+    context.clear_engine_calls(); lfo_step(context)
+    assert_near(context.calls_named("setReverb")[1].args[1], 0.5, 1e-9, ending .. ": modulated, 0.3 + 0.4 x 0.5")
+    context.clear_engine_calls()
+    if ending == "off" then
+      params:set(lfo_id(1), 0)
+    elseif ending == "depth 0" then
+      params:set(lfo_id(1, "depth"), 0)
+    else
+      aim(1, "dly mix")
+    end
+    assert_equal(#context.calls_named("setReverb"), 0, ending .. ": nothing at once")
+    lfo_step(context)
+    local calls = context.calls_named("setReverb")
+    assert_equal(#calls, 1, ending .. ": the next step gives it back")
+    assert_near(calls[1].args[1], 0.3, 1e-9, ending .. ": the stored value")
+    lfo_step(context, 3)
+    assert_equal(#context.calls_named("setReverb"), 1, ending .. ": once")
+  end
+end)
+
+test("a voice start carries a Lua home's offset", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  one_running_one_stopped(S)
+  params:set("master_density", 1)
+  params:set("v2_grain_density", 20)
+  hold_lfo(1, "v2 dens", 20)                 -- +0.2 half ranges of 1-100: +9.9
+  lfo_step(context, 2)
+  context.clear_engine_calls()
+  toggle_voice(2)
+  local sent = {}
+  for _, call in ipairs(calls_with(context, "setGrainParam", 1)) do
+    if call.args[2] == "grainDensity" then sent[#sent + 1] = call.args[3] end
+  end
+  assert_equal(#sent, 1, "the start sends one density")
+  assert_near(sent[1], 29.9, 1e-9, "with the home's offset")
+  lfo_step(context, 2)
+  local after = 0
+  for _, call in ipairs(calls_with(context, "setGrainParam", 1)) do
+    if call.args[2] == "grainDensity" then after = after + 1 end
+  end
+  assert_equal(after, 1, "and the steps after it send nothing more")
+  assert_true(S.voices[2].active)
 end)
 
 end

@@ -408,7 +408,7 @@ local MODULE_HOMES = {
     "clear_buffer", "buffer_save_path", "save_buffer", "buffer_load_failed", "buffer_save_result",
     "save_buffers_to_disk", "load_buffers_from_disk", "save_buffer_loop" },
   ["lib/record.lua"] = { "record_buffer" },
-  ["lib/lfos.lua"] = { "lfo_destination_id", "restore_lfo_destination", "add_lfo_params" },
+  ["lib/lfos.lua"] = { "lfo_destination_id", "add_lfo_params" },
   ["lib/mutation.lua"] = { "randomize_voice", "gentle_mutate", "drift_update", "mean_reverting_step",
     "set_drifted_param", "mutated_value", "clear_undo", "undo_available", "undo_randomize", "note_param_edit" },
   ["lib/scenes.lua"] = { "capture_scene", "recall_scene", "recall_scene_instant", "fill_scene",

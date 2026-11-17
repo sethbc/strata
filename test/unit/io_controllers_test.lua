@@ -297,8 +297,8 @@ test("a change the fader did not make drops the pickup", function()
   cc(context, FADERS_PORT, 32, 25)
   assert_true(controllers.pickup(1), "picked up again near 0.2")
   local lfos = S.lib.lfos
-  for index, entry in ipairs(S.LFO_DESTINATIONS) do
-    if entry.label == "macro 1" then params:set(lfos.param_id(1, "dest"), index) end
+  for _, entry in ipairs(S.LFO_DESTINATIONS) do
+    if entry.label == "macro 1" then local_value("S").lib.matrix.set_home(1, entry.key) end
   end
   params:set(lfos.param_id(1, "shape"), 3)
   params:set(lfos.param_id(1, "depth"), 100)

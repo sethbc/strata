@@ -1378,23 +1378,26 @@ end)
 test("scenes capture and recall the LFOs", function()
   local context = load_strata({ data_subdir = "lfo_scenes" }); finish_startup(context)
   params:set("strata_lfo1_shape", 2); params:set("strata_lfo1_mode", 2); params:set("strata_lfo1_division", 5)
-  params:set("strata_lfo2_rate", 9); params:set("strata_lfo2_depth", 60); params:set("strata_lfo2_dest_key", "v1_grain_size")
+  local matrix = local_value("S").lib.matrix
+  params:set("strata_lfo2_rate", 9); params:set("strata_lfo2_depth", 60); matrix.set_home(2, "v1_grain_size")
   params:set("strata_lfo2_phase", 30); params:set("strata_lfo2_rate_mod", 2); params:set("strata_lfo2_depth_mod_amt", -40)
   params:set("strata_lfo2", 1)
   capture_scene(1)
   local data = local_value("scenes")[1].data
   assert_equal(data.strata_lfo1_shape, 2); assert_equal(data.strata_lfo1_mode, 2); assert_equal(data.strata_lfo1_division, 5)
   assert_near(data.strata_lfo2_rate, 9, 1e-6); assert_equal(data.strata_lfo2_depth, 60)
-  assert_equal(data.strata_lfo2_dest_key, "v1_grain_size", "the destination by its key"); assert_equal(data.strata_lfo2, 1)
+  -- the destination is LFO 2's home routing, in the matrix's block (the groundwork before 3.8)
+  assert_equal(data.matrix[18].dest, "v1_grain_size", "the destination by its key"); assert_equal(data.strata_lfo2, 1)
+  assert_equal(data.strata_lfo2_dest_key, nil, "no block of its own")
   assert_equal(data.strata_lfo2_dest, nil, "never its index")
   assert_equal(data.strata_lfo2_phase, 30); assert_equal(data.strata_lfo2_rate_mod, 2)
   assert_equal(data.strata_lfo2_depth_mod_amt, -40)
-  params:set("strata_lfo2", 0); params:set("strata_lfo2_depth", 0); params:set("strata_lfo2_dest_key", "none")
+  params:set("strata_lfo2", 0); params:set("strata_lfo2_depth", 0); matrix.set_home(2, "")
   params:set("strata_lfo1_shape", 1); params:set("strata_lfo2_phase", 0); params:set("strata_lfo2_rate_mod", 1)
   recall_scene(1, 0)
   assert_equal(params:get("strata_lfo2"), 1); assert_equal(params:get("strata_lfo2_depth"), 60)
-  assert_equal(params:get("strata_lfo2_dest_key"), "v1_grain_size"); assert_equal(params:string("strata_lfo1_shape"), "tri")
-  assert_equal(params:string("strata_lfo2_dest"), "v1 size", "its option follows")
+  assert_equal(matrix.home(2), "v1_grain_size"); assert_equal(params:string("strata_lfo1_shape"), "tri")
+  assert_equal(local_value("S").lib.lfos.label(2), "v1 size~", "the LFO reads it")
   assert_equal(params:get("strata_lfo2_phase"), 30); assert_equal(params:string("strata_lfo2_rate_mod"), "L1")
   assert_true(local_value("S").lib.lfos.is_on(2), "the recalled LFO runs")
   -- smooth transitions fade rate, depth and offset, switch the rest at the end
@@ -1409,18 +1412,14 @@ test("scenes capture and recall the LFOs", function()
       assert_equal(continuous["strata_lfo" .. n .. "_" .. field], false, field .. " switches")
     end
     assert_equal(continuous["strata_lfo" .. n .. "_dest"], nil, "the destination is no global field")
-    local block
     for _, record in ipairs(local_value("S").registry.scene_blocks) do
-      if record.key == "strata_lfo" .. n .. "_dest_key" then block = record end
+      assert_true(record.key ~= "strata_lfo" .. n .. "_dest_key", "nor a block of its own")
     end
-    assert_true(block and block.discrete, "the destination's key switches at a transition's end")
     assert_equal(continuous["strata_lfo" .. n], false, "the state switches")
   end
   -- a destination that is no key is rejected
-  local bad = deep_copy(local_value("scenes")[1]); bad.data.strata_lfo2_dest_key = 0.5
+  local bad = deep_copy(local_value("scenes")[1]); bad.data.matrix[18] = { source = "lfo2", dest = 0.5 }
   assert_true(not validate_scene(bad), "a number is no key")
-  bad.data.strata_lfo2_dest_key = " v1_grain_size"
-  assert_true(not validate_scene(bad), "a key a PSET could not keep is rejected")
 end)
 
 -- #103: scenes store each LFO's offset. It sits before the state in
