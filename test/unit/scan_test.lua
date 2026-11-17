@@ -348,13 +348,13 @@ test("the two options are discrete scene fields and default in a scene without t
   params:set("v1_scan_mode", MODE.one_shot)
   params:set("v1_follow", FOLLOW.repitch)
   capture_scene(1)
-  assert_equal(S.scenes[1].data.voices[1].extras.scan_mode, MODE.one_shot, "captured")
-  assert_equal(S.scenes[1].data.voices[1].extras.follow, FOLLOW.repitch, "captured")
+  assert_equal(S.scenes[1].data.voices[1].values.scan_mode, MODE.one_shot, "captured")
+  assert_equal(S.scenes[1].data.voices[1].values.follow, FOLLOW.repitch, "captured")
   local scene = S.scenes[1]
-  scene.data.voices[1].extras.scan_mode, scene.data.voices[1].extras.follow = nil, nil
+  scene.data.voices[1].values.scan_mode, scene.data.voices[1].values.follow = nil, nil
   fill_scene(scene)
-  assert_equal(scene.data.voices[1].extras.scan_mode, MODE.wrap, "filled with wrap")
-  assert_equal(scene.data.voices[1].extras.follow, FOLLOW.off, "filled with off")
+  assert_equal(scene.data.voices[1].values.scan_mode, MODE.wrap, "filled with wrap")
+  assert_equal(scene.data.voices[1].values.follow, FOLLOW.off, "filled with off")
   recall_scene_instant(1)
   assert_equal(params:get("v1_scan_mode"), MODE.wrap, "a recall applies them")
   assert_equal(params:get("v1_follow"), FOLLOW.off)

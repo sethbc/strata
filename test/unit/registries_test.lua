@@ -563,7 +563,7 @@ end
   assert_true((row_outline(1) .. " "):find("mix:v1_late:control ", 1, true), "the VOICE row exists")
   capture_scene(1)
   assert_equal(S.scenes[1].data.late_level, 0.25, "the scene field is captured")
-  assert_equal(S.scenes[1].data.voices[1].extras.late, 0, "and the voice param")
+  assert_equal(S.scenes[1].data.voices[1].values.late, 0, "and the voice param")
 end)
 
 test("a scene without the registered fields loads with every registered default", function()
@@ -582,10 +582,10 @@ test("a scene without the registered fields loads with every registered default"
   params:set("v2_probe", 0.6); params:set("probe_level", 0.9)
   capture_scene(2)
   local scene = deep_copy(S.scenes[2])
-  assert_near(scene.data.voices[2].extras.probe, 0.6, 1e-9, "captured")
+  assert_near(scene.data.voices[2].values.probe, 0.6, 1e-9, "captured")
   assert_near(scene.data.probe_level, 0.9, 1e-9, "the scene field captured")
-  -- no extras, no registered globals
-  for voice_idx = 1, 7 do scene.data.voices[voice_idx].extras = nil end
+  -- no registered voice keys, no registered globals
+  for voice_idx = 1, 7 do scene.data.voices[voice_idx].values.probe, scene.data.voices[voice_idx].values.probe_switch = nil, nil end
   scene.data.probe_level = nil
   os.execute("mkdir -p '" .. context.data_dir .. "strata'")
   tab.save({ version = S.constants.SCENE_DATA_VERSION, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
@@ -593,7 +593,7 @@ test("a scene without the registered fields loads with every registered default"
   S = local_value("S")
   assert_true(S.scenes[2].populated, "the file loads")
   for voice_idx = 1, 7 do
-    local extras = S.scenes[2].data.voices[voice_idx].extras
+    local extras = S.scenes[2].data.voices[voice_idx].values
     assert_equal(extras.probe, 0, "voice " .. voice_idx .. " probe default")
     assert_equal(extras.probe_switch, 0, "voice " .. voice_idx .. " probe_switch default")
   end
@@ -604,10 +604,11 @@ test("a scene without the registered fields loads with every registered default"
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
   assert_equal(saved.version, 9, "saved as version 9")
-  -- with nothing registered, a scene without extras still gains an empty table
+  -- with nothing registered, the same scene loads with the built-in keys alone
   tab.save({ version = S.constants.SCENE_FORMAT_FLOOR, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
   context = load_strata({ data_subdir = "v2_to_v3" })
-  assert_equal(type(local_value("S").scenes[2].data.voices[1].extras), "table", "extras created")
+  assert_true(local_value("S").scenes[2].populated, "it loads")
+  assert_equal(local_value("S").scenes[2].data.voices[1].values.probe, nil, "with no probe")
 end)
 
 test("scenes validate registered fields", function()
@@ -630,12 +631,12 @@ test("scenes validate registered fields", function()
     change(scene.data)
     assert_true(not validate_scene(scene), what)
   end
-  rejected(function(data) data.voices[1].extras.probe = "x" end, "an extra is a number")
-  rejected(function(data) data.voices[1].extras.probe = 0 / 0 end, "never NaN")
-  rejected(function(data) data.voices[1].extras.probe_switch = 2 end, "a discrete extra in its range")
-  rejected(function(data) data.voices[1].extras.probe_switch = 0.5 end, "a discrete extra is whole")
-  rejected(function(data) data.voices[1].extras.unknown = 1 end, "only registered keys")
-  rejected(function(data) data.voices[1].extras = 3 end, "extras is a table")
+  rejected(function(data) data.voices[1].values.probe = "x" end, "an extra is a number")
+  rejected(function(data) data.voices[1].values.probe = 0 / 0 end, "never NaN")
+  rejected(function(data) data.voices[1].values.probe_switch = 2 end, "a discrete extra in its range")
+  rejected(function(data) data.voices[1].values.probe_switch = 0.5 end, "a discrete extra is whole")
+  rejected(function(data) data.voices[1].values.unknown = 1 end, "only registered keys")
+  rejected(function(data) data.voices[1].values = 3 end, "values is a table")
   rejected(function(data) data.probe_level = "x" end, "a scene field is a number")
   rejected(function(data) data.probe_mode = 4 end, "an option field in its range")
   rejected(function(data) data.probe_mode = 1.5 end, "a discrete field is whole")
@@ -805,9 +806,9 @@ test("a record's scene_ranges reject an extra outside its range", function()
   capture_scene(2)
   local scene = deep_copy(local_value("scenes")[2])
   assert_true(validate_scene(scene), "a captured scene validates")
-  scene.data.voices[1].extras.probe = 1.5
+  scene.data.voices[1].values.probe = 1.5
   assert_true(not validate_scene(scene), "1.5 lies outside 0-1")
-  scene.data.voices[1].extras.probe = 0.75
+  scene.data.voices[1].values.probe = 0.75
   assert_true(validate_scene(scene), "0.75 lies inside it")
 
   local function refused(overrides)

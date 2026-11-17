@@ -150,7 +150,7 @@ test("recalling a scene that changes source with freeze 1 ends frozen on the new
   params:set("v1_source", S.constants.SOURCE_INPUT)
   params:set("v1_freeze", 1)
   capture_scene(1)
-  assert_equal(S.scenes[1].data.voices[1].extras.freeze, 1, "the scene captures freeze")
+  assert_equal(S.scenes[1].data.voices[1].values.freeze, 1, "the scene captures freeze")
   params:set("v1_source", S.constants.SOURCE_SYNTH)
   assert_equal(params:get("v1_freeze"), 0, "the switch unfroze it")
   params:set("v1_freeze", 1)  -- frozen on the synth now
@@ -206,7 +206,7 @@ test("spectral freeze mode recalled on standard freezes in hold", function()
   params:set("v1_freeze_mode", 2)
   params:set("v1_freeze", 1)
   capture_scene(1)
-  assert_equal(S.scenes[1].data.voices[1].extras.freeze_mode, 2, "captured as spectral")
+  assert_equal(S.scenes[1].data.voices[1].values.freeze_mode, 2, "captured as spectral")
   save_scenes_to_disk()
   -- loaded on standard
   h.write_performance_active({tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,

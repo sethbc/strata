@@ -1007,7 +1007,7 @@ test("the note cap is a row of VOICE's notes section and is not a scene field", 
   end
   params:set("v1_note_cap", 3)
   capture_scene(1)
-  local extras = S.scenes[1].data.voices[1].extras
+  local extras = S.scenes[1].data.voices[1].values
   assert_true(extras.freeze ~= nil, "a scene captures the extras")
   assert_equal(extras.note_cap, nil, "but not the note cap")
 end)
@@ -1080,21 +1080,21 @@ test("a scene without the times recalls each voice's default times", function()
   local S = started(context)
   params:set("v1_attack", 9)
   capture_scene(1)
-  assert_near(S.scenes[1].data.voices[1].extras.attack, 9, 1e-9, "a scene captures the attack")
+  assert_near(S.scenes[1].data.voices[1].values.attack, 9, 1e-9, "a scene captures the attack")
   local scene = {populated = true, data = S.scenes[1].data}
   for voice = 1, S.constants.NUM_VOICES do
-    scene.data.voices[voice].extras.attack = nil
-    scene.data.voices[voice].extras.release = nil
+    scene.data.voices[voice].values.attack = nil
+    scene.data.voices[voice].values.release = nil
   end
   fill_scene(scene)
   local envelope = S.lib.notes.NOTES.envelope
   for voice = 1, S.constants.NUM_VOICES do
-    assert_equal(scene.data.voices[voice].extras.attack, envelope[voice][1], "voice " .. voice .. " attack")
-    assert_equal(scene.data.voices[voice].extras.release, envelope[voice][2], "voice " .. voice .. " release")
+    assert_equal(scene.data.voices[voice].values.attack, envelope[voice][1], "voice " .. voice .. " attack")
+    assert_equal(scene.data.voices[voice].values.release, envelope[voice][2], "voice " .. voice .. " release")
   end
-  scene.data.voices[1].extras.attack = 2
+  scene.data.voices[1].values.attack = 2
   fill_scene(scene)
-  assert_equal(scene.data.voices[1].extras.attack, 2, "a stored value is kept (idempotent)")
+  assert_equal(scene.data.voices[1].values.attack, 2, "a stored value is kept (idempotent)")
 end)
 
 test("the engine's default times equal NOTES.envelope", function()

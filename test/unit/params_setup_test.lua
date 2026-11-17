@@ -38,33 +38,26 @@ test("grain envelope param: options, default, scenes, never mutated or randomize
   local names = {}
   for index = 1, 5 do params:set("v1_grain_env", index); names[index] = params:string("v1_grain_env") end
   assert_equal(table.concat(names, ","), "hann,sine,perc,linen,trap")
-  -- every per-voice scene default equals its param default
-  local found_env = false
-  for _, field in ipairs(local_value("VOICE_SCENE_DEFAULTS")) do
-    if field.path[1] == "grain" and field.path[2] == "env" then found_env = true end
-    if field.path[1] == "grain" then
-      local suffix = local_value("GRAIN_PARAM_IDS")[field.path[2]]
-      for voice_idx = 1, 7 do
-        local param = params:lookup_param("v" .. voice_idx .. "_" .. suffix)
-        local param_default = param.controlspec and param.controlspec.default or param.default
-        assert_equal(field.default, param_default, "voice " .. voice_idx .. " " .. suffix .. " scene default")
-      end
-    end
+  -- the scene key's default is its param's, and it is discrete
+  local S = local_value("S")
+  for voice_idx = 1, 7 do
+    local _, by_key = S.lib.params_setup.voice_scene_keys(voice_idx)
+    assert_equal(by_key.grain_env.default, 1, "voice " .. voice_idx .. " grain_env scene default: hann")
+    assert_equal(table.concat(by_key.grain_env.range, ","), "1,5", "five shapes")
   end
-  assert_true(found_env, "grain.env has a scene default")
-  -- scenes written before grain envelopes migrate to hann
+  -- a scene without the envelope is filled with hann
   params:set("v2_grain_env", 4)
   capture_scene(3)
   local scene = local_value("scenes")[3]
-  for voice_idx = 1, 7 do scene.data.voices[voice_idx].grain.env = nil end
+  for voice_idx = 1, 7 do scene.data.voices[voice_idx].values.grain_env = nil end
   fill_scene(scene)
-  assert_equal(scene.data.voices[2].grain.env, 1, "missing env migrates to hann")
+  assert_equal(scene.data.voices[2].values.grain_env, 1, "missing env migrates to hann")
   assert_true(validate_scene(scene), "migrated scene validates")
-  scene.data.voices[2].grain.env = 2.5
+  scene.data.voices[2].values.grain_env = 2.5
   assert_true(not validate_scene(scene), "a fractional envelope index is rejected")
-  scene.data.voices[2].grain.env = 0
+  scene.data.voices[2].values.grain_env = 0
   assert_true(not validate_scene(scene), "envelope index 0 is rejected")
-  scene.data.voices[2].grain.env = 1
+  scene.data.voices[2].values.grain_env = 1
   -- mutation and randomize leave the envelope alone
   for voice_idx = 1, 7 do
     if not local_value("voices")[voice_idx].active then toggle_voice(voice_idx) end
@@ -98,27 +91,22 @@ test("grain mode param: options, default, sync, scenes, never mutated, randomize
   toggle_voice(3)
   assert_equal(engine_state_for_voice(context.engine_calls, 2).grain.grainMode, 1, "start syncs grainMode")
   -- scenes: default, capture/recall, switched at the end of a transition
-  local found_mode = false
-  for _, field in ipairs(local_value("VOICE_SCENE_DEFAULTS")) do
-    if field.path[1] == "grain" and field.path[2] == "mode" then
-      found_mode = true
-      assert_equal(field.default, params:lookup_param("v1_grain_mode").default, "scene default = param default")
-    end
-  end
-  assert_true(found_mode, "grain.mode has a scene default")
+  local _, by_key = local_value("S").lib.params_setup.voice_scene_keys(1)
+  assert_equal(by_key.grain_mode.default, params:lookup_param("v1_grain_mode").default, "scene default = param default")
+  assert_equal(table.concat(by_key.grain_mode.range, ","), "1,2", "two modes")
   capture_scene(1); params:set("v1_grain_mode", 1)
   for _, target in ipairs(scene_transition_targets(local_value("scenes")[1].data)) do
     assert_true(not target.id:find("_grain_mode$"), target.id .. " is not crossfaded")
   end
   recall_scene(1, 0); assert_equal(params:get("v1_grain_mode"), 2, "scene recall restores the mode")
   local scene = local_value("scenes")[1]
-  for voice_idx = 1, 7 do scene.data.voices[voice_idx].grain.mode = nil end
+  for voice_idx = 1, 7 do scene.data.voices[voice_idx].values.grain_mode = nil end
   fill_scene(scene)
-  assert_equal(scene.data.voices[1].grain.mode, 1, "missing mode migrates to continuous")
+  assert_equal(scene.data.voices[1].values.grain_mode, 1, "missing mode migrates to continuous")
   assert_true(validate_scene(scene), "migrated scene validates")
-  scene.data.voices[1].grain.mode = 3
+  scene.data.voices[1].values.grain_mode = 3
   assert_true(not validate_scene(scene), "a mode index past the options is rejected")
-  scene.data.voices[1].grain.mode = 1.5
+  scene.data.voices[1].values.grain_mode = 1.5
   assert_true(not validate_scene(scene), "a fractional mode index is rejected")
   -- mutation and randomize leave the mode alone
   for voice_idx = 1, 7 do
@@ -338,17 +326,11 @@ test("source and buffer params: options, defaults, voices table, labels", functi
   params:set("v2_source", 9); assert_true(voice_uses_buffer(2)); assert_equal(voice_source_label(2), "buf 8")
   params:set("v2_source", 10); assert_true(not voice_uses_buffer(2), "input is not a buffer")
   assert_equal(voice_source_label(2), "input")
-  -- every per-voice scene default equals its param default
-  local found = {}
-  for _, field in ipairs(local_value("VOICE_SCENE_DEFAULTS")) do
-    local suffix = field.path[1] == "grain" and local_value("GRAIN_PARAM_IDS")[field.path[2]] or field.path[1]
-    found[suffix] = true
-    local param = params:lookup_param("v1_" .. suffix)
-    local param_default = param.controlspec and param.controlspec.default or param.default
-    assert_equal(field.default, param_default, suffix .. " scene default")
-  end
-  for _, suffix in ipairs({ "source", "buf_pos", "buf_rate", "buf_scan" }) do
-    assert_true(found[suffix], suffix .. " has a scene default")
+  -- the buffer params are scene keys with their params' defaults
+  local _, by_key = local_value("S").lib.params_setup.voice_scene_keys(1)
+  for key, default in pairs(expected) do
+    assert_true(by_key[key] ~= nil, key .. " is a scene key")
+    assert_equal(by_key[key].default, default, key .. " scene default")
   end
 end)
 
@@ -1028,6 +1010,35 @@ test("every param's id, type, name, default and spec is 3.7.0's, in order", func
     end
   end
   assert_equal(#actual, #expected, "as many params as 3.7.0")
+end)
+
+-- The groundwork before 3.8 (ruling 5): a voice's scene keys, each with
+-- its param's default
+test("every voice_scene_keys default equals its param's default", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice = 1, S.constants.NUM_VOICES do
+    local list, by_key = S.lib.params_setup.voice_scene_keys(voice)
+    assert_true(#list > 0, "voice " .. voice .. " has scene keys")
+    local seen = 0
+    for _, entry in ipairs(list) do
+      local id = "v" .. voice .. "_" .. entry.key
+      assert_equal(by_key[entry.key], entry, id .. ": by_key holds the list's entry")
+      local param = params:lookup_param(id)
+      local default = param.controlspec and param.controlspec.default or param.default
+      assert_equal(entry.default, default, id .. "'s scene default is its param's")
+      if entry.range then
+        assert_true(entry.range[1] <= default and default <= entry.range[2], id .. ": the default is in its range")
+      end
+      seen = seen + 1
+    end
+    local count = 0
+    for _ in pairs(by_key) do count = count + 1 end
+    assert_equal(count, seen, "voice " .. voice .. ": no key twice")
+    assert_equal(by_key.solo, nil, "solo is no scene key")
+    assert_equal(by_key.note_cap, nil, "note_cap is no scene key")
+  end
+  assert_true(not pcall(S.lib.params_setup.voice_scene_keys, 0), "no voice 0")
 end)
 
 end

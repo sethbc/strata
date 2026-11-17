@@ -403,7 +403,7 @@ test("the six params are scene fields that default in a 3.6 scene", function()
   capture_scene(1)
   set_envelope(1, 2, 3, 0.5, 4, 2, true)
   capture_scene(2)
-  local extras = S.scenes[2].data.voices[1].extras
+  local extras = S.scenes[2].data.voices[1].values
   assert_near(extras.env_attack, 2, 1e-9); assert_near(extras.env_decay, 3, 1e-9)
   assert_near(extras.env_sustain, 0.5, 1e-9); assert_near(extras.env_release, 4, 1e-9)
   assert_near(extras.env_curve, 2, 1e-9); assert_equal(extras.env_loop, 2)
@@ -422,18 +422,18 @@ test("the six params are scene fields that default in a 3.6 scene", function()
   local old = h.deep_copy(S.scenes[2])
   for _, voice in ipairs(old.data.voices) do
     for _, key in ipairs({"env_attack", "env_decay", "env_sustain", "env_release", "env_curve", "env_loop"}) do
-      voice.extras[key] = nil
+      voice.values[key] = nil
     end
   end
   fill_scene(old)
   assert_true(validate_scene(old), "it loads")
-  local filled = old.data.voices[3].extras
+  local filled = old.data.voices[3].values
   assert_near(filled.env_attack, 0.005, 1e-9); assert_near(filled.env_decay, 0.2, 1e-9)
   assert_near(filled.env_sustain, 0, 1e-9); assert_near(filled.env_release, 0.2, 1e-9)
   assert_near(filled.env_curve, -4, 1e-9); assert_equal(filled.env_loop, 1)
   -- a value outside its range refuses the scene
   local bad = h.deep_copy(S.scenes[2])
-  bad.data.voices[1].extras.env_attack = 20
+  bad.data.voices[1].values.env_attack = 20
   assert_true(not validate_scene(bad), "an attack of 20 s is refused")
 end)
 

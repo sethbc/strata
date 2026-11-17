@@ -1308,5 +1308,62 @@ return function(S)
     return parts
   end
 
+  -- A voice's scene keys (the groundwork before 3.8, ruling 5): list, the
+  -- entries {key, default, range, limits} in recall order, and by_key, the
+  -- same entries by key. The order (ruling 4): the voice's synth keys
+  -- sorted, the nine grain keys sorted, the ten crossmod keys sorted, then
+  -- the registered records' scene keys sorted, so a recall sets freq
+  -- before freeze and loop_length before loop_start. A built-in key's
+  -- default is its param's (param_default, read at the call, after init);
+  -- range {min, max} marks a discrete key (the grain envelope and mode, the
+  -- mod sources, a record's discrete keys), limits a record's scene_ranges.
+  -- solo and note_cap are no scene keys (their records give no
+  -- scene_defaults)
+  local SCENE_GRAIN_KEYS = {"buf_pos", "buf_rate", "buf_scan", "grain_density", "grain_env", "grain_mode",
+    "grain_pitch", "grain_size", "grain_spread"}
+  local SCENE_GRAIN_RANGES = {grain_env = {1, #GRAIN_ENV_OPTIONS}, grain_mode = {1, #GRAIN_MODE_OPTIONS}}
+  local SCENE_CROSSMOD_KEYS = {"mod_speed"}
+  for slot = 1, NUM_MOD_SLOTS do
+    for _, name in ipairs({"mod_source_", "mod_amp_amt_", "mod_freq_amt_"}) do
+      table.insert(SCENE_CROSSMOD_KEYS, name .. slot)
+    end
+  end
+  table.sort(SCENE_CROSSMOD_KEYS)
+  local MOD_SOURCE_RANGE = {0, NUM_VOICES}
+
+  function M.voice_scene_keys(voice_idx)
+    if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then
+      error("voice_scene_keys: voice " .. tostring(voice_idx) .. " is not 1.." .. NUM_VOICES, 2)
+    end
+    local prefix = "v" .. voice_idx .. "_"
+    local list, by_key = {}, {}
+    local function add(key, default, range, limits)
+      local entry = {key = key, default = default, range = range, limits = limits}
+      list[#list + 1] = entry
+      by_key[key] = entry
+    end
+    local synth = {}
+    for _, key in ipairs(S.voices[voice_idx].param_order) do synth[#synth + 1] = key end
+    table.sort(synth)
+    for _, key in ipairs(synth) do add(key, param_default(prefix .. key)) end
+    for _, key in ipairs(SCENE_GRAIN_KEYS) do add(key, param_default(prefix .. key), SCENE_GRAIN_RANGES[key]) end
+    for _, key in ipairs(SCENE_CROSSMOD_KEYS) do
+      add(key, param_default(prefix .. key), key:match("^mod_source_") and MOD_SOURCE_RANGE or nil)
+    end
+    local registered, records = {}, {}
+    for _, record in ipairs(S.registry.voice_params) do
+      for key, default in pairs(S.voice_scene_defaults(record, voice_idx)) do
+        registered[#registered + 1] = key
+        records[key] = {record = record, default = default}
+      end
+    end
+    table.sort(registered)
+    for _, key in ipairs(registered) do
+      local record, default = records[key].record, records[key].default
+      add(key, default, record.discrete and record.discrete[key], record.scene_ranges and record.scene_ranges[key])
+    end
+    return list, by_key
+  end
+
   return M
 end

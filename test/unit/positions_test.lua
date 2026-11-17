@@ -349,7 +349,7 @@ test("bookmarks default to the quarters and are scene fields that crossfade", fu
   assert_equal(S.constants.SCENE_DATA_VERSION, 9)
   params:set("v1_bookmark_2", 0.75)
   capture_scene(1)
-  assert_near(S.scenes[1].data.voices[1].extras.bookmark_2, 0.75, 1e-9, "the scene captures it")
+  assert_near(S.scenes[1].data.voices[1].values.bookmark_2, 0.75, 1e-9, "the scene captures it")
   params:set("v1_bookmark_2", 0.25)
   recall_scene(1, 1)
   context.clock.run_for(0.5)
@@ -360,7 +360,7 @@ test("bookmarks default to the quarters and are scene fields that crossfade", fu
 
   S.scenes[3] = h.deep_copy(S.scenes[1])
   for voice_idx = 1, S.constants.NUM_VOICES do
-    for n = 1, 4 do S.scenes[3].data.voices[voice_idx].extras["bookmark_" .. n] = nil end
+    for n = 1, 4 do S.scenes[3].data.voices[voice_idx].values["bookmark_" .. n] = nil end
   end
   fill_scene(S.scenes[3])
   assert_true(validate_scene(S.scenes[3]), "the migrated scene validates")
@@ -375,7 +375,7 @@ test("a scene with a bookmark outside 0-1 is rejected", function()
   capture_scene(1)
   local function with(value)
     local scene = h.deep_copy(S.scenes[1])
-    scene.data.voices[1].extras.bookmark_1 = value
+    scene.data.voices[1].values.bookmark_1 = value
     return validate_scene(scene)
   end
   assert_true(not with(1.5), "1.5 is out")

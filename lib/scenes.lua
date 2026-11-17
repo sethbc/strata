@@ -6,12 +6,15 @@
 -- (S.scene_sequencer_clock), the fill of a loaded scene's missing fields
 -- (fill_scene), validation, and scenes.data on disk (written through
 -- lib/data_files.lua at every scene save and at exit, read at start and on
--- request; S.scene_file), with the registered voice params
--- (voices[i].extras), scene fields (S.registry.scene_fields), scene blocks
--- (S.registry.scene_blocks) and lock hooks (S.registry.lock_change). A
--- recall is the list scene_entries builds, applied by apply_entries (both fields of S.lib.scenes, which morph uses
+-- request; S.scene_file), with each voice's scene keys
+-- (S.lib.params_setup.voice_scene_keys), scene fields
+-- (S.registry.scene_fields), scene blocks (S.registry.scene_blocks) and
+-- lock hooks (S.registry.lock_change). A scene's voice is {active, source,
+-- values} (format 9): capture_voice takes one and apply_voice applies one.
+-- A recall is the list scene_entries builds (per voice, voice_entries'),
+-- applied by apply_entries (all fields of S.lib.scenes, which morph uses
 -- too). The functions stay global. The tables tests and
--- other code read (S.SCENE_GLOBAL_PARAMS, S.VOICE_SCENE_DEFAULTS,
+-- other code read (S.SCENE_GLOBAL_PARAMS,
 -- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION) and the scene state live on S;
 -- scene_data_dir, move_aside_unloadable_file and SCENE_LOAD are fields of
 -- this module's table (S.lib.scenes) for lib/buffers.lua, and revision(slot)
@@ -26,12 +29,9 @@ return function(S)
   local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
   local SCENE_DATA_VERSION = S.constants.SCENE_DATA_VERSION
   local SCENE_FORMAT_FLOOR = S.constants.SCENE_FORMAT_FLOOR
-  local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
   local MAX_STEP_LEVEL = S.constants.MAX_STEP_LEVEL
   local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
-  local DISCRETE_GRAIN_KEYS = S.constants.DISCRETE_GRAIN_KEYS
-  local GRAIN_PARAM_IDS = S.constants.GRAIN_PARAM_IDS
 
   -- Scene system
   S.scenes = {}
@@ -118,42 +118,12 @@ return function(S)
     table.insert(S.SCENE_GLOBAL_PARAMS, field)
   end
 
-  -- Per-voice scene fields added after format 1, filled by fill_scene in
-  -- scenes that lack them: {path = keys inside data.voices[i], default = value}.
-  -- A field is only filled when its parent table exists (a scene missing the
-  -- parent is left for validate_scene to reject). Each default must equal the
-  -- param's default.
-  S.VOICE_SCENE_DEFAULTS = {
-    {path = {"grain", "env"}, default = 1},  -- hann
-    {path = {"grain", "mode"}, default = 1},  -- continuous
-    {path = {"source"}, default = SOURCE_SYNTH},
-    {path = {"grain", "buf_pos"}, default = 0},
-    {path = {"grain", "buf_rate"}, default = 1},
-    {path = {"grain", "buf_scan"}, default = 0}
-  }
-
-  -- The registered voice params' scene keys (S.registry.voice_params'
-  -- scene_defaults and discrete): key -> {default, range = {min, max} for a
-  -- discrete key, nil for one that crossfades}, each default voice
-  -- voice_idx's (voice 1's when none is given: every voice has the same
-  -- keys, S.voice_scene_defaults). Read at use, after init
-  local function registered_voice_scene_keys(voice_idx)
-    local keys = {}
-    for _, record in ipairs(S.registry.voice_params) do
-      for key, default in pairs(S.voice_scene_defaults(record, voice_idx or 1)) do
-        keys[key] = {default = default, range = record.discrete and record.discrete[key],
-          limits = record.scene_ranges and record.scene_ranges[key]}
-      end
-    end
-    return keys
-  end
-
-  -- A table's keys in order, so the extras are always set in one order
-  local function sorted_keys(entries)
-    local keys = {}
-    for key in pairs(entries) do table.insert(keys, key) end
-    table.sort(keys)
-    return keys
+  -- A voice's scene keys, read at use (after init): the list of {key,
+  -- default, range, limits} in recall order (S.lib.params_setup's
+  -- voice_scene_keys: the voice's built-in keys sorted, then its registered
+  -- keys sorted) and the same entries by key
+  local function voice_scene_keys(voice_idx)
+    return S.lib.params_setup.voice_scene_keys(voice_idx)
   end
 
   -- A registered field's own setter (its record's optional set =
@@ -270,18 +240,34 @@ return function(S)
     return type(value) == "string" and #value <= S.constants.SCENE_NAME_MAX and not value:find("[^\32-\126]")
   end
 
+  -- Fill a scene voice's missing fields (format 9: {active, source,
+  -- values}): the source (the synth), then, when values is a table, each of
+  -- the voice's scene keys it lacks with that key's default; then each
+  -- registered voice-param record's normalize_scene(values), if it has one,
+  -- brings values a hand edit may have left inconsistent back to what the
+  -- params allow (a loop past the slot's end), so a recall ends where the
+  -- params would. A voice that is no table, or values that are none, are
+  -- left for valid_voice_data to refuse
+  local function fill_voice(voice_idx, voice_data)
+    if type(voice_data) ~= "table" then return end
+    if voice_data.source == nil then voice_data.source = SOURCE_SYNTH end
+    local values = voice_data.values
+    if type(values) ~= "table" then return end
+    for _, entry in ipairs((voice_scene_keys(voice_idx))) do
+      if values[entry.key] == nil then values[entry.key] = entry.default end
+    end
+    for _, record in ipairs(S.registry.voice_params) do
+      if record.normalize_scene then record.normalize_scene(values) end
+    end
+  end
+
   -- Fill a loaded scene's missing fields with their defaults (3.7: the one
   -- rule for every file from SCENE_FORMAT_FLOOR up; no code is keyed on a
   -- file's version). A slot without a name gets none (""); a populated
   -- scene gets every field it lacks: globals (SCENE_GLOBAL_PARAMS),
   -- top-level blocks (SCENE_BLOCK_DEFAULTS, then each registered block's
-  -- default()), per-voice fields (VOICE_SCENE_DEFAULTS) and each registered
-  -- voice param's default for that voice (S.voice_scene_defaults).
-  -- Filling only adds what is missing, so it can run twice.
-  -- Then each registered voice-param record's normalize_scene(extras), if it
-  -- has one, brings values a hand edit may have left inconsistent back to
-  -- what the params allow (a loop past the slot's end), so a recall ends
-  -- where the params would. Malformed scenes are left alone for
+  -- default()) and each voice's (fill_voice). Filling only adds what is
+  -- missing, so it can run twice. Malformed scenes are left alone for
   -- validate_scene to reject.
   function fill_scene(scene)
     if type(scene) == "table" and scene.name == nil then scene.name = "" end
@@ -300,24 +286,20 @@ return function(S)
     end
 
     if type(data.voices) ~= "table" then return end
-    for i = 1, NUM_VOICES do
-      if type(data.voices[i]) == "table" then
-        for _, field in ipairs(S.VOICE_SCENE_DEFAULTS) do
-          fill_scene_default(data.voices[i], field.path, field.default)
-        end
-        -- the registered voice params' table, and every registered voice
-        -- param's default for this voice
-        fill_scene_default(data.voices[i], {"extras"}, {})
-        for key, entry in pairs(registered_voice_scene_keys(i)) do
-          fill_scene_default(data.voices[i], {"extras", key}, entry.default)
-        end
-        if type(data.voices[i].extras) == "table" then
-          for _, record in ipairs(S.registry.voice_params) do
-            if record.normalize_scene then record.normalize_scene(data.voices[i].extras) end
-          end
-        end
-      end
+    for i = 1, NUM_VOICES do fill_voice(i, data.voices[i]) end
+  end
+
+  -- A voice as a scene holds it (format 9): a fresh {active, source,
+  -- values}, values holding the voice's scene keys (voice_scene_keys) and
+  -- nothing else (no note_cap, no solo); nil for a number that is no voice.
+  -- The source's buffer contents are not captured
+  function M.capture_voice(voice_idx)
+    if not is_integer_between(voice_idx, 1, NUM_VOICES) then return nil end
+    local values = {}
+    for _, entry in ipairs((voice_scene_keys(voice_idx))) do
+      values[entry.key] = S.lib.voices.value(voice_idx, entry.key)
     end
+    return {active = S.voices[voice_idx].active, source = S.voices[voice_idx].source, values = values}
   end
 
   function capture_scene(scene_num)
@@ -339,38 +321,8 @@ return function(S)
     end
 
     -- Capture voice states
-    local extra_keys = registered_voice_scene_keys()
     for i = 1, NUM_VOICES do
-      scene_data.voices[i] = {
-        active = S.voices[i].active,
-        source = S.voices[i].source,  -- the buffer's contents are not captured
-        params = {},
-        grain = {},
-        crossmod = {},
-        extras = {}   -- the registered voice params' scene keys
-      }
-      for key in pairs(extra_keys) do
-        scene_data.voices[i].extras[key] = S.voices[i].extras[key]
-      end
-
-      -- Copy all parameters
-      for key, value in pairs(S.voices[i].params) do
-        scene_data.voices[i].params[key] = value
-      end
-      for key, value in pairs(S.voices[i].grain) do
-        scene_data.voices[i].grain[key] = value
-      end
-      -- Copy crossmod structure (including nested slots)
-      scene_data.voices[i].crossmod = {speed = S.voices[i].crossmod.speed}
-      for slot = 1, NUM_MOD_SLOTS do
-        local slot_state = S.voices[i].crossmod["slot" .. slot]
-        scene_data.voices[i].crossmod["slot" .. slot] = {
-          source = slot_state.source,
-          amp_amt = slot_state.amp_amt,
-          freq_amt = slot_state.freq_amt
-        }
-      end
-
+      scene_data.voices[i] = M.capture_voice(i)
       scene_data.locked[i] = S.locked[i]
     end
 
@@ -432,59 +384,52 @@ return function(S)
     end_scene_transition("canceled")
   end
 
+  -- A voice's entries of a recall (scene_entries, apply_entries), from a
+  -- scene voice that passed valid_voice_data: {kind = "discrete", key =
+  -- "active", voice, value}, its source (v<i>_source, discrete), then each
+  -- of its scene keys in recall order (voice_scene_keys: the built-in keys
+  -- sorted, then the registered keys sorted, so freq comes before freeze
+  -- and loop_length before loop_start), continuous but a key with a range
+  -- (the grain envelope and mode, the mod sources, a record's discrete
+  -- keys). Each param entry is {kind, id, value, voice}
+  function M.voice_entries(voice_idx, voice_data)
+    local prefix = "v" .. voice_idx .. "_"
+    local entries = {
+      {kind = "discrete", key = "active", voice = voice_idx, value = voice_data.active},
+      {kind = "discrete", id = prefix .. "source", value = voice_data.source, voice = voice_idx},
+    }
+    for _, entry in ipairs((voice_scene_keys(voice_idx))) do
+      table.insert(entries, {kind = entry.range and "discrete" or "continuous", id = prefix .. entry.key,
+        value = voice_data.values[entry.key], voice = voice_idx})
+    end
+    return entries
+  end
+
   -- The ordered list a recall applies (apply_entries), from scene_data
   -- (which passed validate_scene): every registered block in registration
   -- order; the globals in S.SCENE_GLOBAL_PARAMS order; then per voice its
-  -- active state, source, synth params, grain params, crossmod (per slot
-  -- its source and amounts, then the speed), registered extras in sorted
-  -- key order (#531) and lock; then the patterns. An entry is
+  -- entries (voice_entries) and its lock; then the patterns. An entry is
   -- {kind = "block", key, value}, {kind = "continuous", id, value} (a param
   -- a transition fades), {kind = "discrete", id, value} (a param set at a
   -- transition's end) or {kind = "discrete", key = "active" | "lock" |
   -- "pattern", voice, value}; a per-voice param's entry (continuous or
-  -- discrete) carries its voice too, a global's none. A voice's synth and
-  -- grain params are listed in pairs order: one table gives one order, so
-  -- two lists of one scene agree
+  -- discrete) carries its voice too, a global's none
   function M.scene_entries(scene_data)
     local entries = {}
-    local function add_param(continuous, param_id, value, voice_idx)
-      table.insert(entries, {kind = continuous and "continuous" or "discrete", id = param_id, value = value,
-        voice = voice_idx})
-    end
-    local function add_voice_state(key, voice_idx, value)
-      table.insert(entries, {kind = "discrete", key = key, voice = voice_idx, value = value})
-    end
     for _, record in ipairs(scene_blocks()) do
       table.insert(entries, {kind = "block", key = record.key, value = scene_data[record.key]})
     end
     for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
-      add_param(global.continuous, global.id, scene_data[global.id])
+      table.insert(entries, {kind = global.continuous and "continuous" or "discrete", id = global.id,
+        value = scene_data[global.id]})
     end
-    local extra_keys = registered_voice_scene_keys()
     for i = 1, NUM_VOICES do
-      local voice_data = scene_data.voices[i]
-      local prefix = "v" .. i .. "_"
-      add_voice_state("active", i, voice_data.active)
-      add_param(false, prefix .. "source", voice_data.source, i)
-      for key, value in pairs(voice_data.params) do add_param(true, prefix .. key, value, i) end
-      -- the discrete grain keys (envelope shape, grain mode) switch at the end
-      for key, value in pairs(voice_data.grain) do
-        add_param(not DISCRETE_GRAIN_KEYS[key], prefix .. GRAIN_PARAM_IDS[key], value, i)
-      end
-      for slot = 1, NUM_MOD_SLOTS do
-        local slot_data = voice_data.crossmod["slot" .. slot]
-        add_param(false, prefix .. "mod_source_" .. slot, slot_data.source, i)
-        add_param(true, prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt, i)
-        add_param(true, prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt, i)
-      end
-      add_param(true, prefix .. "mod_speed", voice_data.crossmod.speed, i)
-      -- a registered voice param's discrete keys switch at the end
-      for _, key in ipairs(sorted_keys(voice_data.extras)) do
-        add_param(not extra_keys[key].range, prefix .. key, voice_data.extras[key], i)
-      end
-      add_voice_state("lock", i, scene_data.locked[i])
+      for _, entry in ipairs(M.voice_entries(i, scene_data.voices[i])) do table.insert(entries, entry) end
+      table.insert(entries, {kind = "discrete", key = "lock", voice = i, value = scene_data.locked[i]})
     end
-    for i = 1, NUM_VOICES do add_voice_state("pattern", i, scene_data.patterns[i]) end
+    for i = 1, NUM_VOICES do
+      table.insert(entries, {kind = "discrete", key = "pattern", voice = i, value = scene_data.patterns[i]})
+    end
     return entries
   end
 
@@ -1204,6 +1149,60 @@ return function(S)
     return load_scenes_from_disk()
   end
 
+  -- A scene voice (format 9) as a recall can apply it: a table holding
+  -- exactly active (a boolean), source (a whole SOURCE_OPTIONS index) and
+  -- values, which holds exactly the voice's scene keys (voice_scene_keys:
+  -- another voice type's synth key, a key a later version adds and a
+  -- missing key are all refused), each a finite number, a key with a range
+  -- a whole number inside it and one with limits a number inside them
+  local VOICE_FIELDS = {active = true, source = true, values = true}
+  local function valid_voice_data(voice_idx, voice_data)
+    if type(voice_data) ~= "table" then return false end
+    for field in pairs(voice_data) do
+      if not VOICE_FIELDS[field] then return false end
+    end
+    if type(voice_data.active) ~= "boolean" then return false end
+    if not is_integer_between(voice_data.source, 1, #SOURCE_OPTIONS) then return false end
+    local values = voice_data.values
+    if type(values) ~= "table" then return false end
+    local list, by_key = voice_scene_keys(voice_idx)
+    for key, value in pairs(values) do
+      local entry = by_key[key]
+      if entry == nil or not is_number(value) then return false end
+      if entry.range and not is_integer_between(value, entry.range[1], entry.range[2]) then return false end
+      if entry.limits and (value < entry.limits[1] or value > entry.limits[2]) then return false end
+    end
+    for _, entry in ipairs(list) do
+      if values[entry.key] == nil then return false end
+    end
+    return true
+  end
+
+  -- Apply one voice's scene data (format 9, as capture_voice gives it) at
+  -- once, as a recall applies a voice: a copy of data is filled
+  -- (fill_voice) and checked (valid_voice_data), then its entries
+  -- (voice_entries) go through apply_entries with opts, so the voice stops
+  -- or starts by its active, its source goes first, and a running voice
+  -- whose source changes gets one sync. Leaves the voice's pattern and
+  -- lock, the globals, the blocks, S.current_scene and a running transition
+  -- alone; redraws are the caller's. A number that is no voice, or data
+  -- still invalid after the fill, applies nothing: one console line, and
+  -- false. True once applied
+  function M.apply_voice(voice_idx, data, opts)
+    if not is_integer_between(voice_idx, 1, NUM_VOICES) then
+      print("apply_voice: " .. tostring(voice_idx) .. " is no voice; nothing applied")
+      return false
+    end
+    local copy = copy_scene_default(data)
+    fill_voice(voice_idx, copy)
+    if not valid_voice_data(voice_idx, copy) then
+      print("apply_voice: voice " .. voice_idx .. "'s data is not a scene voice; nothing applied")
+      return false
+    end
+    M.apply_entries(M.voice_entries(voice_idx, copy), opts)
+    return true
+  end
+
   -- Check that one scene slot holds everything recall_scene_instant reads,
   -- and a name (every slot, empty or not)
   function validate_scene(scene)
@@ -1245,45 +1244,12 @@ return function(S)
     for _, record in ipairs(scene_blocks()) do
       if not record.validate(data[record.key]) then return false end
     end
-    local extra_keys = registered_voice_scene_keys()
-
     if type(data.voices) ~= "table" or #data.voices ~= NUM_VOICES then return false end
     if type(data.locked) ~= "table" then return false end
     if type(data.patterns) ~= "table" then return false end
 
     for i = 1, NUM_VOICES do
-      local voice_data = data.voices[i]
-      if type(voice_data) ~= "table" then return false end
-      if type(voice_data.active) ~= "boolean" then return false end
-      if not is_integer_between(voice_data.source, 1, #SOURCE_OPTIONS) then return false end
-      if type(voice_data.params) ~= "table" then return false end
-      if type(voice_data.grain) ~= "table" then return false end
-      if type(voice_data.crossmod) ~= "table" then return false end
-
-      for key, value in pairs(voice_data.params) do
-        if S.voices[i].params[key] == nil or not is_number(value) then return false end
-      end
-      for key, value in pairs(voice_data.grain) do
-        if GRAIN_PARAM_IDS[key] == nil or not is_number(value) then return false end
-        if DISCRETE_GRAIN_KEYS[key] and not is_integer_between(value, 1, DISCRETE_GRAIN_KEYS[key]) then
-          return false
-        end
-      end
-      for slot = 1, NUM_MOD_SLOTS do
-        local slot_data = voice_data.crossmod["slot" .. slot]
-        if type(slot_data) ~= "table" then return false end
-        if not is_integer_between(slot_data.source, 0, NUM_VOICES) then return false end
-        if not is_number(slot_data.amp_amt) or not is_number(slot_data.freq_amt) then return false end
-      end
-      if not is_number(voice_data.crossmod.speed) then return false end
-      -- the registered voice params: numbers, discrete ones whole and in range
-      if type(voice_data.extras) ~= "table" then return false end
-      for key, value in pairs(voice_data.extras) do
-        local entry = extra_keys[key]
-        if entry == nil or not is_number(value) then return false end
-        if entry.range and not is_integer_between(value, entry.range[1], entry.range[2]) then return false end
-        if entry.limits and (value < entry.limits[1] or value > entry.limits[2]) then return false end
-      end
+      if not valid_voice_data(i, data.voices[i]) then return false end
 
       if type(data.locked[i]) ~= "boolean" then return false end
 

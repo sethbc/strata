@@ -349,7 +349,7 @@ test("pitchbend: range, buffer voices, stopped voices, restarts and resets", fun
   -- bend is transient: not a param and not in scenes
   assert_equal(params.lookup["v2_bend"], nil, "no bend param")
   capture_scene(1)
-  assert_equal(local_value("scenes")[1].data.voices[2].params.bend, nil, "scenes do not capture bend")
+  assert_equal(local_value("scenes")[1].data.voices[2].values.bend, nil, "scenes do not capture bend")
   -- a stopped voice remembers the wheel and gets it when it starts
   context.clear_engine_calls()
   context.midi.send(1, { type = "pitchbend", val = 8192 - 4096, ch = 4 })
