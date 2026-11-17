@@ -126,7 +126,7 @@ test("voice filter and send fields round-trip through a scene; filter type switc
   params:set("v2_filter_type", 3); params:set("v2_filter_freq", 400); params:set("v2_filter_res", 0.9)
   params:set("v2_filter_mix", 1); params:set("v2_delay_send", 0); params:set("v2_reverb_send", 0.4)
   capture_scene(1)
-  local extras = S.scenes[1].data.voices[2].extras
+  local extras = S.scenes[1].data.voices[2].values
   assert_equal(extras.filter_type, 3, "the scene captures the type")
   assert_near(extras.filter_freq, 400, 1e-9); assert_near(extras.reverb_send, 0.4, 1e-9)
   assert_true(validate_scene(S.scenes[1]), "and validates")
@@ -492,7 +492,7 @@ test("scenes store mutes and never solos", function()
   local S = run_voices_1_to_4(context)
   params:set("v2_mute", 1); params:set("v3_solo", 1)
   capture_scene(1)
-  assert_equal(S.scenes[1].data.voices[2].extras.mute, 1, "the mute is captured")
+  assert_equal(S.scenes[1].data.voices[2].values.mute, 1, "the mute is captured")
   assert_true(not scene_holds(S.scenes[1].data, "solo"), "no solo in the scene")
   assert_true(validate_scene(S.scenes[1]))
   local record
@@ -505,10 +505,10 @@ test("scenes store mutes and never solos", function()
   assert_equal(params:get("v1_solo"), 1, "and leaves the solo")
   assert_equal(params:get("v3_solo"), 0)
   -- a scene saved before 3.4 has no mute: every voice plays
-  local old = S.scenes[1].data.voices[2].extras
+  local old = S.scenes[1].data.voices[2].values
   old.mute = nil
   fill_scene(S.scenes[1])
-  assert_equal(S.scenes[1].data.voices[2].extras.mute, 0, "the migration default is unmuted")
+  assert_equal(S.scenes[1].data.voices[2].values.mute, 0, "the migration default is unmuted")
   assert_true(validate_scene(S.scenes[1]))
 end)
 

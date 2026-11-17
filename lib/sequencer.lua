@@ -1170,9 +1170,9 @@ return function(S)
     for voice_idx = 1, NUM_VOICES do M.replace_pattern(voice_idx, data.patterns[voice_idx]) end
     set_all_steps(data.steps or {})
     for voice_idx = 1, NUM_VOICES do
-      local scene_extras = data.voices[voice_idx].extras or {}
+      local scene_values = data.voices[voice_idx].values or {}
       for _, key in ipairs(SEQ.chain_keys) do
-        if scene_extras[key] then params:set(voice_param(voice_idx, key), scene_extras[key]) end
+        if scene_values[key] then params:set(voice_param(voice_idx, key), scene_values[key]) end
       end
     end
   end

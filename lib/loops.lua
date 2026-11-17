@@ -106,12 +106,12 @@ return function(S)
   -- 1 - start. fill_scene runs it on every loaded scene, so a recall,
   -- whose length is not clamped while it sets the fields, still ends inside
   -- the slot. Anything but two numbers is left for validate_scene
-  local function normalize_scene(extras)
-    local start, length = extras[LOOP.start_key], extras[LOOP.length_key]
+  local function normalize_scene(values)
+    local start, length = values[LOOP.start_key], values[LOOP.length_key]
     if type(start) ~= "number" or type(length) ~= "number" or start ~= start or length ~= length then return end
     start = math.min(start, LOOP.max_start)
-    extras[LOOP.start_key] = start
-    if length > 1 - start + LOOP.tolerance then extras[LOOP.length_key] = 1 - start end
+    values[LOOP.start_key] = start
+    if length > 1 - start + LOOP.tolerance then values[LOOP.length_key] = 1 - start end
   end
 
   local record

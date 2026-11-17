@@ -1512,13 +1512,13 @@ test("scenes switch the gate at a transition's end and crossfade its length and 
   for _, voice in ipairs(old.data.voices) do
     for _, key in ipairs({"seq_length", "seq_division", "seq_gate", "seq_gate_length", "seq_gate_release",
         "seq_swing"}) do
-      voice.extras[key] = nil
+      voice.values[key] = nil
     end
   end
   old.data.steps = nil
   fill_scene(old)  -- a scene without them
   assert_true(validate_scene(old), "it loads")
-  local extras = old.data.voices[1].extras
+  local extras = old.data.voices[1].values
   assert_equal(extras.seq_gate, 1, "gate off"); assert_near(extras.seq_gate_length, 0.5, 1e-9, "0.5")
   assert_near(extras.seq_gate_release, 0.1, 1e-9, "0.1"); assert_equal(extras.seq_swing, 50, "straight")
   assert_equal(extras.seq_length, 16, "16 steps"); assert_equal(extras.seq_division, 3, "of 1/16")

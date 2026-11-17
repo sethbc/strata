@@ -217,8 +217,8 @@ test("loops are continuous scene fields that crossfade", function()
   params:set("v2_loop_length", 0.5)
   params:set("v2_loop_start", 0.5)
   capture_scene(1)
-  assert_near(S.scenes[1].data.voices[2].extras.loop_start, 0.5, 1e-9, "the scene captures the start")
-  assert_near(S.scenes[1].data.voices[2].extras.loop_length, 0.5, 1e-9, "and the length")
+  assert_near(S.scenes[1].data.voices[2].values.loop_start, 0.5, 1e-9, "the scene captures the start")
+  assert_near(S.scenes[1].data.voices[2].values.loop_length, 0.5, 1e-9, "and the length")
   local record
   for _, each in ipairs(S.registry.voice_params) do if each.name == "loops" then record = each end end
   assert_equal(record.scene_defaults.loop_start, 0, "migration fills a start of 0")
@@ -262,8 +262,8 @@ test("loops are continuous scene fields that crossfade", function()
   params:set("v2_loop_length", 0.25); params:set("v2_loop_start", 0.75)
   S.scenes[3] = h.deep_copy(S.scenes[1])
   for voice_idx = 1, S.constants.NUM_VOICES do
-    S.scenes[3].data.voices[voice_idx].extras.loop_start = nil
-    S.scenes[3].data.voices[voice_idx].extras.loop_length = nil
+    S.scenes[3].data.voices[voice_idx].values.loop_start = nil
+    S.scenes[3].data.voices[voice_idx].values.loop_length = nil
   end
   fill_scene(S.scenes[3])
   assert_true(validate_scene(S.scenes[3]), "the migrated scene validates")
@@ -281,18 +281,18 @@ test("a scene file's invalid loop pair is cut to fit when it loads", function()
   params:set("v2_source", 4)
   capture_scene(1)
   -- edited by hand: start 0.6 with length 0.9, and a start past 0.999
-  S.scenes[1].data.voices[2].extras.loop_start = 0.6
-  S.scenes[1].data.voices[2].extras.loop_length = 0.9
-  S.scenes[1].data.voices[3].extras.loop_start = 1
-  S.scenes[1].data.voices[3].extras.loop_length = 0.5
+  S.scenes[1].data.voices[2].values.loop_start = 0.6
+  S.scenes[1].data.voices[2].values.loop_length = 0.9
+  S.scenes[1].data.voices[3].values.loop_start = 1
+  S.scenes[1].data.voices[3].values.loop_length = 0.5
   save_scenes_to_disk()
   cleanup()
   context = load_strata({ data_subdir = subdir }); finish_startup(context)
   S = local_value("S")
-  local extras = S.scenes[1].data.voices[2].extras
+  local extras = S.scenes[1].data.voices[2].values
   assert_near(extras.loop_start, 0.6, 1e-9, "the start stays")
   assert_near(extras.loop_length, 0.4, 1e-9, "the length is cut to 1 - start")
-  extras = S.scenes[1].data.voices[3].extras
+  extras = S.scenes[1].data.voices[3].values
   assert_near(extras.loop_start, 0.999, 1e-9, "a start past 0.999 stops there")
   assert_near(extras.loop_length, 0.001, 1e-9, "with the length that is left")
   assert_true(validate_scene(S.scenes[1]), "the scene validates")
@@ -391,8 +391,8 @@ test("a recall sets the loop length before the start, whose action has the last 
   capture_scene(1)
   -- a pair with no room for its length, put in memory (a loaded scene's pair
   -- is cut on load, normalize_scene)
-  S.scenes[1].data.voices[2].extras.loop_start = 0.8
-  S.scenes[1].data.voices[2].extras.loop_length = 0.5
+  S.scenes[1].data.voices[2].values.loop_start = 0.8
+  S.scenes[1].data.voices[2].values.loop_length = 0.5
   context.clear_engine_calls()
   recall_scene(1, 0)
   local start, length = loop_of(2)

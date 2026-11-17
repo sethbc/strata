@@ -53,7 +53,7 @@ test("scene capture -> change -> recall restores every voice", function()
   assert_true(started, "recall started voice 3")
   for _, call in ipairs(context.calls_named("setModSource")) do
     if call.args[1] == 2 then
-      local source = captured.voices[3].crossmod["slot" .. call.args[2]].source
+      local source = captured.voices[3].values["mod_source_" .. call.args[2]]
       assert_equal(call.args[3], source == 0 and -1 or source - 1, "voice 3 mod source sent after recall")
     end
   end
@@ -82,14 +82,15 @@ test("validate_scene_data rejects malformed scenes and accepts captured ones", f
   rejects(function(data) data.tempo = nil end, "missing tempo")
   rejects(function(data) data.reverb_damp = {} end, "non-numeric reverb_damp")
   rejects(function(data) data.voices[7] = nil end, "missing voice")
-  rejects(function(data) data.voices[2].crossmod.slot2 = nil end, "missing crossmod slot")
-  rejects(function(data) data.voices[2].crossmod.slot1.source = 9 end, "out-of-range mod source")
-  rejects(function(data) data.voices[2].crossmod.slot1.source = 2.5 end, "fractional mod source")
+  rejects(function(data) data.voices[2].values = nil end, "missing values")
+  rejects(function(data) data.voices[2].values.mod_source_2 = nil end, "missing mod source")
+  rejects(function(data) data.voices[2].values.mod_source_1 = 9 end, "out-of-range mod source")
+  rejects(function(data) data.voices[2].values.mod_source_1 = 2.5 end, "fractional mod source")
   -- recall would send engine.setModSpeed with nil
-  rejects(function(data) data.voices[4].crossmod.speed = nil end, "missing mod speed")
-  rejects(function(data) data.voices[4].crossmod.speed = "fast" end, "non-numeric mod speed")
-  rejects(function(data) data.voices[1].params.bogus = 1 end, "unknown voice param")
-  rejects(function(data) data.voices[1].grain.size = "big" end, "non-numeric grain param")
+  rejects(function(data) data.voices[4].values.mod_speed = nil end, "missing mod speed")
+  rejects(function(data) data.voices[4].values.mod_speed = "fast" end, "non-numeric mod speed")
+  rejects(function(data) data.voices[1].values.bogus = 1 end, "unknown voice param")
+  rejects(function(data) data.voices[1].values.grain_size = "big" end, "non-numeric grain param")
   rejects(function(data, all) all[1].populated = "yes" end, "non-boolean populated")
   assert_true(not validate_scene_data("nope"), "should reject a non-table")
   assert_true(not validate_scene_data({ [3] = 7 }), "should reject a non-table slot")
@@ -132,7 +133,7 @@ test("scene files: round trip, version check, missing slots, erroring file", fun
   context = load_strata({ data_subdir = "roundtrip" })
   local scenes = local_value("scenes")
   assert_true(scenes[4].populated, "scene 4 reloaded from disk")
-  assert_near(scenes[4].data.voices[1].params.freq, saved.voices[1].params.freq, 1e-9, "scene 4 data")
+  assert_near(scenes[4].data.voices[1].values.freq, saved.voices[1].values.freq, 1e-9, "scene 4 data")
   for slot = 1, 8 do assert_true(scenes[slot] ~= nil, "slot " .. slot .. " exists") end
   local file_path = context.data_dir .. "strata/scenes.data"
 
@@ -241,7 +242,7 @@ test("a scenes.data value that is not a finite number is refused as an invalid v
     { name = "1e999", value = 54321.25, text = "1e999" },
   }
   for index, case in ipairs(cases) do
-    scenes[1].data.voices[1].params.freq = case.value
+    scenes[1].data.voices[1].values.freq = case.value
     local subdir = "nonfinite_" .. index
     local dir = data_root .. subdir .. "/strata/"
     os.execute("mkdir -p '" .. dir .. "'")
@@ -1306,20 +1307,29 @@ test("a smooth scene transition reaches the screen and arc on every step and at 
   assert_true(local_value("locked")[1], "and its lock")
 end)
 
-test("fill_scene fills table-driven voice defaults and tolerates malformed data", function()
+test("fill_scene fills a voice's missing keys with their defaults and tolerates malformed data", function()
   load_strata()
+  params:set("v2_grain_env", 3); params:set("v2_grain_mode", 2)
   capture_scene(1)
   local scene = deep_copy(local_value("scenes")[1])
-  local voice_defaults = local_value("VOICE_SCENE_DEFAULTS")
-  -- later formats add per-voice fields through VOICE_SCENE_DEFAULTS
-  table.insert(voice_defaults, { path = { "test_block", "field" }, default = 7 })
-  table.insert(voice_defaults, { path = { "grain", "test_field" }, default = 3 })
+  -- a missing key is filled with its default (the param's), present ones are kept
+  scene.data.voices[2].values.grain_env = nil
+  scene.data.voices[2].values.mod_speed = nil
+  scene.data.voices[3].values.freq = nil
+  scene.data.voices[5].values.reverb_send = nil
   fill_scene(scene)
-  table.remove(voice_defaults); table.remove(voice_defaults)
-  for voice_idx = 1, 7 do
-    assert_equal(scene.data.voices[voice_idx].grain.test_field, 3, "nested voice default filled")
-    assert_equal(scene.data.voices[voice_idx].test_block, nil, "missing parent tables are not invented")
-  end
+  assert_equal(scene.data.voices[2].values.grain_env, params:lookup_param("v2_grain_env").default, "grain_env filled")
+  assert_near(scene.data.voices[2].values.mod_speed, params:lookup_param("v2_mod_speed").controlspec.default, 1e-9,
+    "mod_speed filled")
+  assert_near(scene.data.voices[3].values.freq, params:lookup_param("v3_freq").controlspec.default, 1e-9, "freq filled")
+  assert_near(scene.data.voices[5].values.reverb_send, params:lookup_param("v5_reverb_send").controlspec.default, 1e-9,
+    "a registered key filled")
+  assert_equal(scene.data.voices[2].values.grain_mode, 2, "a present value is kept")
+  assert_true(validate_scene(scene), "the filled scene validates")
+  -- a voice without values is not invented one
+  scene.data.voices[4].values = nil
+  fill_scene(scene)
+  assert_equal(scene.data.voices[4].values, nil, "missing parent tables are not invented")
   scene.data.reverb_mix = nil
   fill_scene(scene)
   assert_near(scene.data.reverb_mix, 0.3, 1e-9, "missing global filled from its default")
@@ -1355,12 +1365,12 @@ test("transition skips discrete voice fields; scenes keep source and buffer para
   end
   for voice_idx = 1, 7 do
     scene.data.voices[voice_idx].source = nil
-    for _, key in ipairs({ "buf_pos", "buf_rate", "buf_scan" }) do scene.data.voices[voice_idx].grain[key] = nil end
+    for _, key in ipairs({ "buf_pos", "buf_rate", "buf_scan" }) do scene.data.voices[voice_idx].values[key] = nil end
   end
   fill_scene(scene)
   assert_equal(scene.data.voices[2].source, 1, "missing source migrates to synth")
-  assert_equal(scene.data.voices[2].grain.buf_rate, 1, "missing buf_rate migrates to 1")
-  assert_equal(scene.data.voices[2].grain.buf_pos, 0, "missing buf_pos migrates to 0")
+  assert_equal(scene.data.voices[2].values.buf_rate, 1, "missing buf_rate migrates to 1")
+  assert_equal(scene.data.voices[2].values.buf_pos, 0, "missing buf_pos migrates to 0")
   assert_true(validate_scene(scene), "migrated scene validates")
 end)
 
@@ -1559,7 +1569,7 @@ test("a saved scene is on disk before the script exits; an exit with nothing new
   S.lib.scenes.save(2)
   assert_equal(S.lib.ui_flash.text("header"), "saved S2")
   assert_true(util.file_exists(path), "written by the save, not by the exit")
-  local freq = S.scenes[2].data.voices[1].params.freq
+  local freq = S.scenes[2].data.voices[1].values.freq
   -- the same scene saved again: nothing is written
   local restore, opened = watch_writes("scenes.data")
   S.lib.scenes.save(2)
@@ -1570,7 +1580,7 @@ test("a saved scene is on disk before the script exits; an exit with nothing new
   context = load_strata({ data_subdir = "scene_on_disk" })
   S = local_value("S")
   assert_true(S.scenes[2].populated, "the scene survived without a clean exit")
-  assert_near(S.scenes[2].data.voices[1].params.freq, freq, 1e-6)
+  assert_near(S.scenes[2].data.voices[1].values.freq, freq, 1e-6)
   -- an exit with nothing new: nothing is written
   restore, opened = watch_writes("scenes.data")
   cleanup()
@@ -1921,11 +1931,11 @@ test("validate_scene rejects a non-boolean active, an unknown grain key and cros
   end
   rejects(function(data) data.voices[3].active = 1 end, "an active flag that is not a boolean")
   rejects(function(data) data.voices[3].active = nil end, "a missing active flag")
-  rejects(function(data) data.voices[2].grain.future_key = 0.5 end, "a grain key from a later version")
-  rejects(function(data) data.voices[5].crossmod.slot2.amp_amt = nil end, "a missing amp amount")
-  rejects(function(data) data.voices[5].crossmod.slot3.amp_amt = "deep" end, "an amp amount that is not a number")
-  rejects(function(data) data.voices[6].crossmod.slot1.freq_amt = nil end, "a missing freq amount")
-  rejects(function(data) data.voices[6].crossmod.slot2.freq_amt = 0 / 0 end, "a freq amount that is NaN")
+  rejects(function(data) data.voices[2].values.future_key = 0.5 end, "a grain key from a later version")
+  rejects(function(data) data.voices[5].values.mod_amp_amt_2 = nil end, "a missing amp amount")
+  rejects(function(data) data.voices[5].values.mod_amp_amt_3 = "deep" end, "an amp amount that is not a number")
+  rejects(function(data) data.voices[6].values.mod_freq_amt_1 = nil end, "a missing freq amount")
+  rejects(function(data) data.voices[6].values.mod_freq_amt_2 = 0 / 0 end, "a freq amount that is NaN")
 end)
 
 test("a fade holds tempo and the mutation settings until its end (#411)", function()
@@ -2088,25 +2098,46 @@ end)
 -- migrations, revisions and slot names
 ---------------------------------------------------------------------------
 
+-- A scene voice's keys in recall order since the groundwork before 3.8
+-- (ruling 4), written out here: the voice's synth keys sorted, the nine
+-- grain keys sorted, the ten crossmod keys sorted, then every other key of
+-- the voice's values (its registered keys) sorted
+local REFERENCE_GRAIN_KEYS = { "buf_pos", "buf_rate", "buf_scan", "grain_density", "grain_env", "grain_mode",
+  "grain_pitch", "grain_size", "grain_spread" }
+local REFERENCE_CROSSMOD_KEYS = { "mod_amp_amt_1", "mod_amp_amt_2", "mod_amp_amt_3", "mod_freq_amt_1", "mod_freq_amt_2",
+  "mod_freq_amt_3", "mod_source_1", "mod_source_2", "mod_source_3", "mod_speed" }
+local function reference_voice_keys(S, voice_idx, values)
+  local keys, built_in = {}, {}
+  local synth = {}
+  for _, key in ipairs(S.voices[voice_idx].param_order) do synth[#synth + 1] = key end
+  table.sort(synth)
+  for _, list in ipairs({ synth, REFERENCE_GRAIN_KEYS, REFERENCE_CROSSMOD_KEYS }) do
+    for _, key in ipairs(list) do keys[#keys + 1] = key; built_in[key] = true end
+  end
+  local registered = {}
+  for key in pairs(values) do
+    if not built_in[key] then registered[#registered + 1] = key end
+  end
+  table.sort(registered)
+  for _, key in ipairs(registered) do keys[#keys + 1] = key end
+  return keys
+end
+
 -- The merged recall_scene_instant (lib/scenes.lua at 3.3.2), from its flag
--- to its pattern restore, copied verbatim, with the two local helpers it
--- calls (set_scene_param, sorted_keys). Its clear_undo, current scene and
--- redraws send nothing to the engine and are left out
+-- to its pattern restore, copied verbatim but for the voice's values, with
+-- the local helper it calls (set_scene_param). Its clear_undo, current
+-- scene and redraws send nothing to the engine and are left out. The
+-- groundwork before 3.8 re-bases it on the format 9 voice (one values
+-- table), whose keys it sets in recall order (reference_voice_keys), where
+-- 3.3.2 set the synth and grain params in pairs order and crossmod per slot
 local function reference_recall(S, scene_data)
-  local NUM_VOICES, NUM_MOD_SLOTS = S.constants.NUM_VOICES, S.constants.NUM_MOD_SLOTS
-  local GRAIN_PARAM_IDS = S.constants.GRAIN_PARAM_IDS
+  local NUM_VOICES = S.constants.NUM_VOICES
   local function set_scene_param(param_id, value)
     if params:lookup_param(param_id).t == params.tBINARY then
       set_binary_param(param_id, value)
     else
       params:set(param_id, value)
     end
-  end
-  local function sorted_keys(entries)
-    local keys = {}
-    for key in pairs(entries) do table.insert(keys, key) end
-    table.sort(keys)
-    return keys
   end
 
   local source_changed = {}
@@ -2133,28 +2164,9 @@ local function reference_recall(S, scene_data)
       set_scene_param(prefix .. "source", voice_data.source)
       source_changed[i] = S.voices[i].source ~= previous_source
 
-      for key, value in pairs(voice_data.params) do
-        set_scene_param(prefix .. key, value)
-      end
-
-      for key, value in pairs(voice_data.grain) do
-        set_scene_param(prefix .. GRAIN_PARAM_IDS[key], value)
-      end
-
-      -- Restore crossmod slots
-      for slot = 1, NUM_MOD_SLOTS do
-        local slot_data = voice_data.crossmod["slot" .. slot]
-        set_scene_param(prefix .. "mod_source_" .. slot, slot_data.source)
-        set_scene_param(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-        set_scene_param(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
-      end
-      set_scene_param(prefix .. "mod_speed", voice_data.crossmod.speed)
-
-      -- The registered voice params, after the source (a discrete one,
-      -- such as freeze, only now: a transition crossfades the others), in
-      -- key order (#531)
-      for _, key in ipairs(sorted_keys(voice_data.extras)) do
-        set_scene_param(prefix .. key, voice_data.extras[key])
+      -- the voice's values, after the source, in recall order
+      for _, key in ipairs(reference_voice_keys(S, i, voice_data.values)) do
+        set_scene_param(prefix .. key, voice_data.values[key])
       end
 
       -- 3.4 (0b) adds the lock hooks to a recall: a lock that changes runs
@@ -2190,11 +2202,14 @@ local function reference_recall(S, scene_data)
 end
 
 -- The merged scene_transition_targets (lib/scenes.lua at 3.3.2), copied
--- verbatim, with the local helpers it calls (LFO_STATE,
--- registered_voice_scene_keys, sorted_keys)
+-- verbatim but for the voice's values (re-based as reference_recall is),
+-- with the local helpers it calls (LFO_STATE, registered_voice_scene_keys).
+-- The discrete built-in keys (the grain envelope and mode, the mod sources)
+-- are written out
+local REFERENCE_DISCRETE_KEYS = { grain_env = true, grain_mode = true, mod_source_1 = true, mod_source_2 = true,
+  mod_source_3 = true }
 local function reference_targets(S, scene_data)
-  local NUM_VOICES, NUM_MOD_SLOTS = S.constants.NUM_VOICES, S.constants.NUM_MOD_SLOTS
-  local GRAIN_PARAM_IDS, DISCRETE_GRAIN_KEYS = S.constants.GRAIN_PARAM_IDS, S.constants.DISCRETE_GRAIN_KEYS
+  local NUM_VOICES = S.constants.NUM_VOICES
   local LFO_STATE = {off = 0, on = 1}
   local function registered_voice_scene_keys()
     local keys = {}
@@ -2205,12 +2220,6 @@ local function reference_targets(S, scene_data)
           limits = record.scene_ranges and record.scene_ranges[key]}
       end
     end
-    return keys
-  end
-  local function sorted_keys(entries)
-    local keys = {}
-    for key in pairs(entries) do table.insert(keys, key) end
-    table.sort(keys)
     return keys
   end
 
@@ -2243,23 +2252,12 @@ local function reference_targets(S, scene_data)
   for i = 1, NUM_VOICES do
     local voice_data = scene_data.voices[i]
     local prefix = "v" .. i .. "_"
-    for key, target_value in pairs(voice_data.params) do
-      add_target(prefix .. key, target_value)
-    end
-    for key, target_value in pairs(voice_data.grain) do
-      if not DISCRETE_GRAIN_KEYS[key] then
-        add_target(prefix .. GRAIN_PARAM_IDS[key], target_value)
+    -- every key that crossfades (discrete ones switch at the end)
+    for _, key in ipairs(reference_voice_keys(S, i, voice_data.values)) do
+      local registered = extra_keys[key]
+      if not REFERENCE_DISCRETE_KEYS[key] and not (registered and registered.range) then
+        add_target(prefix .. key, voice_data.values[key])
       end
-    end
-    for slot = 1, NUM_MOD_SLOTS do
-      local slot_data = voice_data.crossmod["slot" .. slot]
-      add_target(prefix .. "mod_amp_amt_" .. slot, slot_data.amp_amt)
-      add_target(prefix .. "mod_freq_amt_" .. slot, slot_data.freq_amt)
-    end
-    add_target(prefix .. "mod_speed", voice_data.crossmod.speed)
-    -- the registered voice params that crossfade (discrete ones switch at the end)
-    for _, key in ipairs(sorted_keys(voice_data.extras)) do
-      if not extra_keys[key].range then add_target(prefix .. key, voice_data.extras[key]) end
     end
   end
 
@@ -3269,8 +3267,8 @@ test("a file at the floor loads, and a field it lacks is its default", function(
   capture_scene(4)
   local scene = deep_copy(S.scenes[4])
   scene.data.reverb_size = nil
-  scene.data.voices[2].extras.slide_depth = nil
-  scene.data.voices[3].grain.mode = nil
+  scene.data.voices[2].values.slide_depth = nil
+  scene.data.voices[3].values.grain_mode = nil
   scene.name = nil
   local dir = context.data_dir .. "strata/"
   os.execute("mkdir -p '" .. dir .. "'")
@@ -3281,8 +3279,8 @@ test("a file at the floor loads, and a field it lacks is its default", function(
   assert_true(S.scenes[4].populated, "the file at the floor loads")
   assert_near(S.scenes[4].data.reverb_size, params:lookup_param("reverb_size").controlspec.default, 1e-9,
     "a missing global is its default")
-  assert_equal(S.scenes[4].data.voices[2].extras.slide_depth, 50, "a missing registered voice key is its default")
-  assert_equal(S.scenes[4].data.voices[3].grain.mode, 1, "a missing voice field is its default")
+  assert_equal(S.scenes[4].data.voices[2].values.slide_depth, 50, "a missing registered voice key is its default")
+  assert_equal(S.scenes[4].data.voices[3].values.grain_mode, 1, "a missing voice field is its default")
   assert_equal(S.scenes[4].name, "", "a missing name is none")
   assert_true(not util.file_exists(dir .. "scenes.data.bak"), "nothing is set aside")
   assert_equal(printed_count(context, "older than format"), 0, "and nothing is said of a floor")
@@ -3460,15 +3458,15 @@ test("a record's scene defaults may depend on the voice", function()
   capture_scene(1)
   local scene = deep_copy(S.scenes[1])
   for voice = 1, S.constants.NUM_VOICES do
-    assert_near(scene.data.voices[voice].extras.probe_level, probe_default(voice), 1e-9, "voice " .. voice .. " captured")
-    scene.data.voices[voice].extras.probe_level = nil
-    scene.data.voices[voice].extras.attack = nil
-    scene.data.voices[voice].extras.release = nil
+    assert_near(scene.data.voices[voice].values.probe_level, probe_default(voice), 1e-9, "voice " .. voice .. " captured")
+    scene.data.voices[voice].values.probe_level = nil
+    scene.data.voices[voice].values.attack = nil
+    scene.data.voices[voice].values.release = nil
   end
   fill_scene(scene)
   local envelope = S.lib.notes.NOTES.envelope
   for voice = 1, S.constants.NUM_VOICES do
-    local extras = scene.data.voices[voice].extras
+    local extras = scene.data.voices[voice].values
     assert_near(extras.probe_level, probe_default(voice), 1e-9, "voice " .. voice .. ": its own probe default")
     -- a scene without the notes voice's attack and release gets each
     -- voice's own default, as 3.5's migration gave
@@ -3480,13 +3478,13 @@ test("a record's scene defaults may depend on the voice", function()
   local dir = context.data_dir .. "strata/"
   os.execute("mkdir -p '" .. dir .. "'")
   for voice = 1, S.constants.NUM_VOICES do
-    scene.data.voices[voice].extras.attack = nil; scene.data.voices[voice].extras.release = nil
+    scene.data.voices[voice].values.attack = nil; scene.data.voices[voice].values.release = nil
   end
   assert_true(S.lib.data_files.write(dir .. "scenes.data", { version = S.constants.SCENE_DATA_VERSION, scenes = { scene } }),
     "written")
   assert_equal(load_scenes_from_disk(), "loaded")
   for voice = 1, S.constants.NUM_VOICES do
-    assert_equal(S.scenes[1].data.voices[voice].extras.release, envelope[voice][2], "voice " .. voice .. " loads its release")
+    assert_equal(S.scenes[1].data.voices[voice].values.release, envelope[voice][2], "voice " .. voice .. " loads its release")
   end
   -- a function whose table for some voice holds a value that is no number
   -- is refused, as such a table is (a fresh S, whose registries are open)
@@ -3498,6 +3496,219 @@ test("a record's scene defaults may depend on the voice", function()
   fresh.register_voice_params({ name = "good voice defaults", count = 1, add = function() end,
     scene_defaults = function(voice) return { probe = voice } end })
   assert_equal(#fresh.registry.voice_params, 1, "a good one is kept")
+end)
+
+---------------------------------------------------------------------------
+-- The groundwork before 3.8 (design §3, rulings 4 to 8): a format 9 voice
+-- is {active, source, values}; capture_voice, apply_voice, voice_entries
+---------------------------------------------------------------------------
+
+-- A plain value as text with sorted keys, so two captures compare as text
+-- (numbers to nine digits: a set through an exp spec moves the last bits)
+local function encode(value)
+  if type(value) ~= "table" then
+    return type(value) == "number" and string.format("%.9g", value) or tostring(value)
+  end
+  local keys = {}
+  for key in pairs(value) do keys[#keys + 1] = key end
+  table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+  local parts = {}
+  for _, key in ipairs(keys) do parts[#parts + 1] = tostring(key) .. "=" .. encode(value[key]) end
+  return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local function key_set_text(keys)
+  local list = {}
+  for key in pairs(keys) do list[#list + 1] = key end
+  table.sort(list)
+  return table.concat(list, ",")
+end
+
+test("capture_voice holds exactly the scene keys", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice = 1, S.constants.NUM_VOICES do
+    local data = S.lib.scenes.capture_voice(voice)
+    assert_equal(type(data.active), "boolean", "voice " .. voice .. ": active")
+    assert_equal(data.source, S.voices[voice].source, "voice " .. voice .. ": source")
+    local _, by_key = S.lib.params_setup.voice_scene_keys(voice)
+    assert_equal(key_set_text(data.values), key_set_text(by_key), "voice " .. voice .. ": the scene keys")
+    for key, value in pairs(data.values) do
+      assert_equal(type(value), "number", "voice " .. voice .. " " .. key .. " is a number")
+    end
+    assert_equal(data.values.note_cap, nil, "no note_cap")
+    assert_equal(data.values.solo, nil, "no solo")
+    local fields = {}
+    for field in pairs(data) do fields[field] = true end
+    assert_equal(key_set_text(fields), "active,source,values", "voice " .. voice .. ": three fields")
+  end
+  assert_equal(S.lib.scenes.capture_voice(4).values.pan, nil, "voice 4 (sub) has no pan")
+  assert_true(S.lib.scenes.capture_voice(1).values.pan ~= nil, "voice 1 has one")
+  assert_equal(S.lib.scenes.capture_voice(0), nil, "no voice 0")
+  assert_equal(S.lib.scenes.capture_voice(S.constants.NUM_VOICES + 1), nil, "no voice past the last")
+  assert_equal(S.lib.scenes.capture_voice(1.5), nil, "no fractional voice")
+  -- capture_scene's voices are capture_voice's
+  capture_scene(1)
+  for voice = 1, S.constants.NUM_VOICES do
+    assert_equal(encode(S.scenes[1].data.voices[voice]), encode(S.lib.scenes.capture_voice(voice)),
+      "capture_scene's voice " .. voice)
+  end
+end)
+
+test("apply_voice round-trips a voice and leaves the other six, the patterns, the locks and the globals", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  scramble_state(17)
+  toggle_lock(5)
+  toggle_pattern_step(2, 3)
+  params:set("v3_source", 1)
+  local data = S.lib.scenes.capture_voice(3)
+  scramble_state(18)
+  params:set("v3_source", 4)
+  local before = {}
+  for voice = 1, S.constants.NUM_VOICES do before[voice] = encode(S.lib.scenes.capture_voice(voice)) end
+  local patterns, locked, current = encode(S.patterns), encode(S.locked), S.current_scene
+  local globals = {}
+  for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do globals[global.id] = params:get(global.id) end
+  local kept = encode(data)
+  assert_equal(S.lib.scenes.apply_voice(3, data), true, "applied")
+  assert_equal(encode(data), kept, "the data handed in is left alone")
+  assert_equal(encode(S.lib.scenes.capture_voice(3)), kept, "voice 3 is the data again")
+  for voice = 1, S.constants.NUM_VOICES do
+    if voice ~= 3 then
+      assert_equal(encode(S.lib.scenes.capture_voice(voice)), before[voice], "voice " .. voice .. " is unchanged")
+    end
+  end
+  assert_equal(encode(S.patterns), patterns, "the patterns are unchanged")
+  assert_equal(encode(S.locked), locked, "the locks are unchanged")
+  for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do
+    assert_equal(params:get(global.id), globals[global.id], global.id .. " is unchanged")
+  end
+  assert_equal(S.current_scene, current, "no scene becomes current")
+end)
+
+test("apply_voice refuses an unknown key and applies nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  if not S.voices[2].active then toggle_voice(2) end
+  params:set("v2_freq", 200)
+  local data = S.lib.scenes.capture_voice(2)
+  data.values.freq = 300
+  data.values.bogus = 1
+  context.clear_engine_calls()
+  local printed = #context.printed
+  assert_equal(S.lib.scenes.apply_voice(2, data), false, "refused")
+  assert_near(params:get("v2_freq"), 200, 1e-9, "nothing applied")
+  assert_equal(#context.engine_calls, 0, "nothing sent")
+  assert_equal(#context.printed - printed, 1, "one console line")
+  -- a bad index, and data that is no table, are refused too
+  assert_equal(S.lib.scenes.apply_voice(0, S.lib.scenes.capture_voice(1)), false, "no voice 0")
+  assert_equal(S.lib.scenes.apply_voice(2, "voice"), false, "no data")
+  assert_equal(#context.engine_calls, 0, "still nothing sent")
+end)
+
+test("apply_voice sends one sync on a source change, and starts an active voice after its keys", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  -- a running voice whose source the data changes: one sync
+  if not S.voices[2].active then toggle_voice(2) end
+  params:set("v2_source", 3)
+  local data = S.lib.scenes.capture_voice(2)
+  params:set("v2_source", 1)
+  local syncs = {}
+  local sync = sync_voice_values_to_engine
+  sync_voice_values_to_engine = function(voice)
+    syncs[#syncs + 1] = voice
+    return sync(voice)
+  end
+  local applied, apply_error = pcall(S.lib.scenes.apply_voice, 2, data)
+  sync_voice_values_to_engine = sync
+  assert_true(applied, tostring(apply_error))
+  assert_equal(table.concat(syncs, ","), "2", "one sync, of voice 2")
+  assert_equal(S.voices[2].source, 3, "the source is the data's")
+  -- a stopped voice the data has running: started after its keys
+  if S.voices[5].active then toggle_voice(5) end
+  toggle_voice(5)
+  params:set("v5_freq", 330)
+  data = S.lib.scenes.capture_voice(5)
+  toggle_voice(5)
+  params:set("v5_freq", 110)
+  context.clear_engine_calls()
+  assert_equal(S.lib.scenes.apply_voice(5, data), true, "applied")
+  assert_true(S.voices[5].active, "voice 5 runs")
+  local on = context.calls_named("voiceOn")
+  assert_equal(#on, 1, "one start")
+  assert_near(on[1].args[2], 330, 1e-6, "with the data's freq")
+end)
+
+test("a recall applies a voice's built-in keys sorted, then its registered keys sorted", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  capture_scene(1)
+  for voice = 1, S.constants.NUM_VOICES do
+    local voice_data = S.scenes[1].data.voices[voice]
+    local entries = S.lib.scenes.voice_entries(voice, voice_data)
+    assert_equal(entries[1].key, "active", "voice " .. voice .. ": active first")
+    assert_equal(entries[2].id, "v" .. voice .. "_source", "then the source")
+    local expected = reference_voice_keys(S, voice, voice_data.values)
+    assert_equal(#entries, #expected + 2, "voice " .. voice .. ": one entry a key")
+    local position = {}
+    for index, key in ipairs(expected) do
+      assert_equal(entries[index + 2].id, "v" .. voice .. "_" .. key, "voice " .. voice .. " entry " .. (index + 2))
+      assert_equal(entries[index + 2].voice, voice, "carries its voice")
+      position[key] = index
+    end
+    assert_true(position.freq < position.freeze, "freq before freeze")
+    assert_true(position.loop_length < position.loop_start, "loop_length before loop_start")
+  end
+  -- scene_entries: the blocks, the globals, then per voice its entries and its lock, then the patterns
+  local entries = S.lib.scenes.scene_entries(S.scenes[1].data)
+  local first_voice
+  for index, entry in ipairs(entries) do
+    if entry.key == "active" and entry.voice == 1 then first_voice = index; break end
+  end
+  local voice_one = S.lib.scenes.voice_entries(1, S.scenes[1].data.voices[1])
+  for offset, entry in ipairs(voice_one) do
+    assert_equal(entries[first_voice + offset - 1].id, entry.id, "scene_entries holds voice 1's entries")
+  end
+  assert_equal(entries[first_voice + #voice_one].key, "lock", "then voice 1's lock")
+  assert_equal(entries[#entries].key, "pattern", "the patterns last")
+end)
+
+test("a recall that freezes a running synth voice takes its reference from the scene's freq", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  if not S.voices[1].active then toggle_voice(1) end
+  params:set("v1_source", 1)
+  params:set("v1_freq", 440)
+  params:set("v1_freeze", 1)
+  capture_scene(1)
+  params:set("v1_freeze", 0)
+  params:set("v1_freq", 220)
+  recall_scene(1, 0)
+  assert_equal(params:get("v1_freeze"), 1, "the recall froze voice 1")
+  assert_near(S.lib.notes.freeze_reference(1), 69, 1e-9, "at the scene's A4, not the A3 it played")
+end)
+
+test("a scene voice missing a key, or holding another voice's synth key, is refused", function()
+  load_strata()
+  capture_scene(1)
+  local S = local_value("S")
+  local good = deep_copy(S.scenes[1])
+  assert_true(validate_scene(good), "a captured scene is valid")
+  local function refused(mutate, message)
+    local candidate = deep_copy(good)
+    mutate(candidate.data.voices)
+    assert_true(not validate_scene(candidate), message)
+  end
+  refused(function(voices) voices[1].values.rq = nil end, "voice 1 without its rq")
+  refused(function(voices) voices[3].values.loop_start = nil end, "voice 3 without a registered key")
+  refused(function(voices) voices[2].values.rq = 0.5 end, "voice 2 (fm) holding the resonator's rq")
+  refused(function(voices) voices[4].values.pan = 0 end, "voice 4 (sub) holding a pan")
+  refused(function(voices) voices[5].values.grain_env = 1.5 end, "a fractional envelope")
+  refused(function(voices) voices[5].values.grain_mode = 3 end, "a grain mode past the options")
+  refused(function(voices) voices[6].values.solo = 0 end, "a solo (no scene key)")
+  refused(function(voices) voices[6].params = {} end, "a 3.7 field beside values")
 end)
 
 end

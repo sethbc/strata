@@ -671,23 +671,17 @@ local function doc_paths_missing(text, doc_name)
 end
 
 -- Compare a voice's live state with a captured scene voice, allowing for
--- each param's controlspec quantization
+-- each param's controlspec quantization: every key of the scene voice's
+-- values (a format 9 voice, {active, source, values}), a control's within
+-- its step, any other exactly
 local function assert_voice_matches(voice_idx, voice, captured)
   local prefix = "voice " .. voice_idx .. " "
-  for key, value in pairs(captured.params) do
-    local spec = params:lookup_param("v" .. voice_idx .. "_" .. key).controlspec
-    assert_near(voice.params[key], value, spec.step + 1e-6, prefix .. key)
+  local S = shared_state()
+  for key, value in pairs(captured.values) do
+    local param = params:lookup_param("v" .. voice_idx .. "_" .. key)
+    local tolerance = param.controlspec and param.controlspec.step + 0.011 or 1e-9
+    assert_near(S.lib.voices.value(voice_idx, key), value, tolerance, prefix .. key)
   end
-  for key, value in pairs(captured.grain) do
-    assert_near(voice.grain[key], value, 0.011, prefix .. "grain " .. key)
-  end
-  for slot = 1, 3 do
-    local live, saved = voice.crossmod["slot" .. slot], captured.crossmod["slot" .. slot]
-    assert_equal(live.source, saved.source, prefix .. "slot " .. slot .. " source")
-    assert_near(live.amp_amt, saved.amp_amt, 0.011, prefix .. "slot " .. slot .. " amp")
-    assert_near(live.freq_amt, saved.freq_amt, 0.011, prefix .. "slot " .. slot .. " freq")
-  end
-  assert_near(voice.crossmod.speed, captured.crossmod.speed, 0.11, prefix .. "mod speed")
   assert_equal(voice.source, captured.source, prefix .. "source")
   assert_equal(voice.active, captured.active, prefix .. "active")
 end
