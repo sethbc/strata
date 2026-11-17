@@ -1669,6 +1669,16 @@ end)
 -- The groundwork before 3.8 (rulings 5 and 9): a start and a sync send from
 -- S.lib.params_setup.voice_engine_parts, the synth params in sorted order
 local BUILT_IN_PARTS = {"synth", "grain", "crossmod", "bend"}
+-- The voice-param records past the built-in ones (package 2a registers
+-- synth, grain and crossmod as records too: their parts are BUILT_IN_PARTS')
+local function module_records(S)
+  local built_in, records = {}, {}
+  for _, name in ipairs(BUILT_IN_PARTS) do built_in[name] = true end
+  for _, record in ipairs(S.registry.voice_params) do
+    if not built_in[record.name] then records[#records + 1] = record end
+  end
+  return records
+end
 local GRAIN_PART = {"grainSize", "grainDensity", "pitchShift", "posSpread", "envShape", "grainMode", "bufPos",
   "bufRate", "bufScan"}
 
@@ -1698,7 +1708,9 @@ test("voice_engine_parts names synth, grain, crossmod, bend, then the records", 
     local expected = {}
     for index, name in ipairs(BUILT_IN_PARTS) do expected[index] = name end
     -- (the first three records are the built-in synth, grain and crossmod: package 2a)
-    for index = 4, #S.registry.voice_params do expected[#expected + 1] = S.registry.voice_params[index].name end
+    -- the module records (the built-in synth, grain and crossmod records,
+    -- package 2a, are the parts listed above)
+    for _, record in ipairs(module_records(S)) do expected[#expected + 1] = record.name end
     assert_equal(table.concat(names, ","), table.concat(expected, ","), "voice " .. voice .. "'s parts")
     -- the synth part: the voice's synth keys, sorted, all voice-level
     local synth_keys = {}
@@ -1770,8 +1782,7 @@ test("a sync sends voice_level before kept, per part", function()
   for index, tag in ipairs(expected) do assert_equal(tags[index], tag, "sync call " .. index) end
   -- then each record's kept part, in registration order: its grain keys by key
   local position = #expected
-  for index = 4, #S.registry.voice_params do  -- after the built-in synth, grain and crossmod (package 2a)
-    local record = S.registry.voice_params[index]
+  for _, record in ipairs(module_records(S)) do
     local keys = {}
     for key in pairs(record.grain_keys or {}) do keys[#keys + 1] = key end
     table.sort(keys)

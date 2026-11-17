@@ -6,9 +6,10 @@
 -- A registered voice param record (S.register_voice_params): the loopStart
 -- and loopLength grain params, continuous scene fields, and two VOICE rows
 -- in a buffer voice's synth section. The start stops at 0.999 and the
--- length at 1 - start. MAIN's randomize, mutation and the fader pages never
--- touch them; VOICE's ALT+K2 on the synth section draws both (the record's
--- randomize, #557). See docs/notes/lua/loops.md.
+-- length at 1 - start. MAIN's randomize and mutation never touch them; a
+-- buffer voice's fader pages show both (the record's fader group, rank 2,
+-- when M.uses_buffer); VOICE's ALT+K2 on the synth section draws both (the
+-- record's randomize, #557). See docs/notes/lua/loops.md.
 
 return function(S)
   local M = {}
