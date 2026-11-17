@@ -377,12 +377,13 @@ test("a scene without the block gets sixteen zeros, and a block of the wrong sha
   refused(named, "a key that is no index")
 end)
 
-test("the largest scenes file holds 6802 tables", function()
+test("the largest scenes file holds 6898 tables", function()
   -- matrix_test.lua writes that file and counts its tables against the
   -- figure; here, the block's share: the block and its four lists, always
-  -- captured whole, five tables a scene, 80 in all, over a base of 6722
+  -- captured whole, five tables a scene, 80 in all, over a base of 6818
   -- (3.6's 7394 less the groundwork's 672: a format 9 voice is two tables,
-  -- itself and its values, where 3.7's was eight, 16 x 7 x 6)
+  -- itself and its values, where 3.7's was eight, 16 x 7 x 6; and its six
+  -- LFO home routings in the matrix block, 16 x 6)
   local context, S = loaded()
   capture_scene(1)
   local block = S.scenes[1].data.sequences
@@ -398,8 +399,8 @@ test("the largest scenes file holds 6802 tables", function()
     if type(value) == "table" then voice_tables = voice_tables + 1 end
   end
   assert_equal(voice_tables + 1, 2, "a voice is two tables: itself and its values")
-  assert_equal(S.lib.data_files.DATA_FILES.largest_scenes_tables, 6722 + 16 * tables)
-  assert_equal(S.lib.data_files.DATA_FILES.largest_scenes_tables, 6802)
+  assert_equal(S.lib.data_files.DATA_FILES.largest_scenes_tables, 6818 + 16 * tables)
+  assert_equal(S.lib.data_files.DATA_FILES.largest_scenes_tables, 6898)
 end)
 
 -- Review 1g, Important 1: a first start's drawn values reach the live file

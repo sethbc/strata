@@ -45,7 +45,8 @@ return function(S)
     learn_wake_margin = 0.1,  -- s before its wake a learn clock is still canceled (#626)
     save_delay = 0.1,
     max_text = 32,
-    data_version = 1,
+    data_version = 2,                   -- 2: the LFOs' home routings (the groundwork before 3.8)
+    data_floor = 1,                     -- a version 1 file loads with no home routing
     live_file = "matrix.data",          -- in data/strata/
     side_suffix = ".matrix.data",       -- after a PSET's path without .pset
     backup_suffix = ".bak",
@@ -60,15 +61,37 @@ return function(S)
     return type(k) == "number" and k % 1 == 0 and k >= 1 and k <= MATRIX_SLOTS
   end
 
+  -- The LFOs' home routings (the groundwork before 3.8, design §4): LFO n's
+  -- at slot MATRIX_SLOTS + n, ROUTINGS slots in all. A home's source is
+  -- lfo<n>, fixed; its depth, offset and on/off are the LFO's own params
+  local HOMES = S.constants.NUM_LFOS
+  local ROUTINGS = MATRIX_SLOTS + HOMES
+
+  local function is_slot(k)
+    return type(k) == "number" and k % 1 == 0 and k >= 1 and k <= ROUTINGS
+  end
+
+  local function is_lfo(n)
+    return type(n) == "number" and n % 1 == 0 and n >= 1 and n <= HOMES
+  end
+
+  local function home_slot(n) return MATRIX_SLOTS + n end
+  M.home_slot = home_slot
+
   local function finite(value)
     return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
   end
 
-  local function empty_routing() return {source = "", dest = ""} end
+  -- Slot k with nothing set: no source and destination, a home its lfo<n>
+  local function empty_routing(k)
+    if k and k > MATRIX_SLOTS then return {source = "lfo" .. (k - MATRIX_SLOTS), dest = ""} end
+    return {source = "", dest = ""}
+  end
 
-  -- Per routing, its source key and destination id ("" for none)
+  -- Per routing, its source key and destination id ("" for none); slots
+  -- MATRIX_SLOTS + 1 .. ROUTINGS the home routings
   S.matrix = {}
-  for k = 1, MATRIX_SLOTS do S.matrix[k] = empty_routing() end
+  for k = 1, ROUTINGS do S.matrix[k] = empty_routing(k) end
   S.matrix_learn_clock = nil  -- learn's timeout, while learn waits
 
   ---------------------------------------------------------------------------
@@ -127,6 +150,17 @@ return function(S)
 
   local function destination_known(id) return current_catalog().known[id] == true end
   local function source_known(key) return S.lib.mod_sources.get(key) ~= nil end
+
+  -- A home's destination: any S.LFO_DESTINATIONS key but none, the macros
+  -- included (MATRIX.never does not apply to a home)
+  local function home_known(id)
+    if id == "none" then return false end
+    for _, destination in ipairs(S.LFO_DESTINATIONS) do
+      if destination.key == id then return true end
+    end
+    return false
+  end
+  M.home_known = home_known
 
   -- The param a destination id modulates now: v<i>_main through
   -- main_param_id (it follows the voice's source), a known id itself; nil
@@ -374,7 +408,7 @@ return function(S)
   -- Nothing to do: no routing with both parts set, nothing held, no extra
   local function idle()
     if next(held.lua) or next(held.fast) or next(held.fast_extras) then return false end
-    for k = 1, MATRIX_SLOTS do
+    for k = 1, ROUTINGS do
       local routing = S.matrix[k]
       if routing.source ~= "" and routing.dest ~= "" then return false end
     end
@@ -442,12 +476,13 @@ return function(S)
   local function is_text(value) return type(value) == "string" and #value <= MATRIX.max_text end
 
   -- The routings as stored (scenes, PSETs, the live file): sparse, [k] =
-  -- {source, dest} for the routings with either part set
+  -- {source, dest} for the routings with either part set, a home routing
+  -- ({source = "lfo<n>", dest}) only when its destination is
   local function sparse()
     local block = {}
-    for k = 1, MATRIX_SLOTS do
+    for k = 1, ROUTINGS do
       local routing = S.matrix[k]
-      if routing.source ~= "" or routing.dest ~= "" then
+      if (k <= MATRIX_SLOTS and routing.source ~= "") or routing.dest ~= "" then
         block[k] = {source = routing.source, dest = routing.dest}
       end
     end
@@ -455,29 +490,47 @@ return function(S)
   end
 
   -- What is wrong with a stored block, or nil: a table keyed by routings
-  -- 1-16, each {source, dest}, strings of at most max_text characters. A
-  -- key or id this version lacks is not wrong (kept verbatim)
+  -- 1-16 and the homes 17-22, each {source, dest}, strings of at most
+  -- max_text characters, a home's source its LFO's (lfo<n>). A key or id
+  -- this version lacks is not wrong (kept verbatim)
   local function block_problem(block)
     if type(block) ~= "table" then return "no table of routings" end
     for k, entry in pairs(block) do
-      if not is_index(k) then return "no routing " .. tostring(k) end
+      if not is_slot(k) then return "no routing " .. tostring(k) end
       if type(entry) ~= "table" or not is_text(entry.source) or not is_text(entry.dest) then
         return "routing " .. k .. " is no {source, dest} of at most " .. MATRIX.max_text .. " characters"
+      end
+      if k > MATRIX_SLOTS and entry.source ~= empty_routing(k).source then
+        return "home routing " .. k .. "'s source is not " .. empty_routing(k).source
       end
     end
     return nil
   end
 
-  -- A stored block's routing k ({source, dest}, empty when it holds none)
+  -- A stored block's routing k ({source, dest}, empty when it holds none;
+  -- a home's source is always its LFO's)
   local function stored_routing(block, k)
     local entry = type(block) == "table" and block[k]
-    if type(entry) ~= "table" then return empty_routing() end
+    if type(entry) ~= "table" then return empty_routing(k) end
+    if k > MATRIX_SLOTS then return {source = empty_routing(k).source, dest = entry.dest or ""} end
     return {source = entry.source or "", dest = entry.dest or ""}
   end
 
-  -- Replace every routing from a stored block (nil: every routing empty)
+  -- Each LFO whose home routing a load or an apply changed is told
+  -- (S.lib.lfos.home_changed), after every routing is in place
+  local function tell_homes(before)
+    for n = 1, HOMES do
+      if S.matrix[home_slot(n)].dest ~= before[n] then S.lib.lfos.home_changed(n) end
+    end
+  end
+
+  -- Replace every routing and home from a stored block (nil: every one
+  -- empty)
   local function load_block(block)
-    for k = 1, MATRIX_SLOTS do S.matrix[k] = stored_routing(block, k) end
+    local before = {}
+    for n = 1, HOMES do before[n] = S.matrix[home_slot(n)].dest end
+    for k = 1, ROUTINGS do S.matrix[k] = stored_routing(block, k) end
+    tell_homes(before)
   end
 
   -- A console line for every part this version has no source or
@@ -496,13 +549,18 @@ return function(S)
         if scene_reported[seen] then return end
         scene_reported[seen] = true
       end
-      print("matrix: " .. path .. ": routing " .. k .. "'s " .. kind .. " " .. text
+      local whose = k > MATRIX_SLOTS and ("LFO " .. (k - MATRIX_SLOTS)) or ("routing " .. k)
+      print("matrix: " .. path .. ": " .. whose .. "'s " .. kind .. " " .. text
         .. " is unknown here; kept, and it does not play")
     end
     for k = 1, MATRIX_SLOTS do
       local routing = S.matrix[k]
       if routing.source ~= "" and not source_known(routing.source) then report(k, "source", routing.source) end
       if routing.dest ~= "" and not destination_known(routing.dest) then report(k, "destination", routing.dest) end
+    end
+    for n = 1, HOMES do
+      local dest = S.matrix[home_slot(n)].dest
+      if dest ~= "" and not home_known(dest) then report(home_slot(n), "destination", dest) end
     end
   end
 
@@ -515,7 +573,7 @@ return function(S)
   -- burst, carrying the newest routings, from S.matrix_save_clock; the
   -- cleanup step writes at once
   local files = S.lib.side_files.new({
-    name = "matrix", contents = "routings", version = MATRIX.data_version, key = "matrix",
+    name = "matrix", contents = "routings", version = MATRIX.data_version, floor = MATRIX.data_floor, key = "matrix",
     live_file = MATRIX.live_file, side_suffix = MATRIX.side_suffix, backup_suffix = MATRIX.backup_suffix,
     save_delay = MATRIX.save_delay, clock_field = "matrix_save_clock",
     capture = sparse,
@@ -540,6 +598,35 @@ return function(S)
     S.matrix[k] = {source = source_key, dest = dest_id}
     routings_changed()
     return true
+  end
+
+  -- LFO n's home routing's destination id ("" for none), nil for no LFO n
+  function M.home(n)
+    if not is_lfo(n) then return nil end
+    return S.matrix[home_slot(n)].dest
+  end
+
+  -- Set LFO n's home routing's destination ("" for none), as a recall, a
+  -- transition's midpoint, morph's crossing, a PSET load and an edit do: an
+  -- id this version lacks is kept as it is (it does not play). Saves the
+  -- live file, redraws and tells the LFO. Returns whether it was set
+  function M.set_home(n, dest_id)
+    if not (is_lfo(n) and is_text(dest_id)) then return false end
+    local k = home_slot(n)
+    local changed = S.matrix[k].dest ~= dest_id
+    S.matrix[k] = {source = empty_routing(k).source, dest = dest_id}
+    routings_changed()
+    if changed then S.lib.lfos.home_changed(n) end
+    return true
+  end
+
+  -- The LFO page's edit of LFO n's home: "", a known destination or the one
+  -- it holds (no 25 % rule: the LFO's depth is its own). Returns whether it
+  -- was set
+  function M.edit_home(n, dest_id)
+    if not is_lfo(n) or type(dest_id) ~= "string" then return false end
+    if not (dest_id == "" or dest_id == S.matrix[home_slot(n)].dest or home_known(dest_id)) then return false end
+    return M.set_home(n, dest_id)
   end
 
   -- MOD's edit of routing k (its routing view, its rings, learn): each part
@@ -709,6 +796,14 @@ return function(S)
         local a, b = stored_routing(from, k), stored_routing(to, k)
         if a.source ~= b.source or a.dest ~= b.dest then
           table.insert(ramps, {id = depth_id(k), switch = function() M.set_routing(k, b.source, b.dest) end})
+        end
+      end
+      -- a home ramps its LFO's depth (strata_lfo<n>_depth, a continuous
+      -- scene field)
+      for n = 1, HOMES do
+        local a, b = stored_routing(from, home_slot(n)), stored_routing(to, home_slot(n))
+        if a.dest ~= b.dest then
+          table.insert(ramps, {id = S.lib.lfos.param_id(n, "depth"), switch = function() M.set_home(n, b.dest) end})
         end
       end
       return ramps

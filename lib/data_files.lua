@@ -31,12 +31,13 @@ return function(S)
     max_tables = 32768,
     -- the tables of the largest scenes file this version writes: 16 full
     -- scenes (every step of every voice with every attribute, every macro
-    -- target and every matrix routing set; 788 KB to about 1.1 MB as its
-    -- numbers print short or long). test/unit/matrix_test.lua writes it and
+    -- target, every matrix routing and every LFO home routing set; 788 KB to
+    -- about 1.1 MB as its numbers print short or long).
+    -- test/unit/matrix_test.lua writes it and
     -- checks it holds no more; test/unit/data_files_test.lua checks
     -- max_tables keeps at least four times it. Raise it with a release that
     -- adds scene tables, and max_tables with it
-    largest_scenes_tables = 6802,
+    largest_scenes_tables = 6898,
     backups = 9,  -- the backup names: <file><suffix>, then <file><suffix>.2 ... .9
   }
   M.DATA_FILES = DATA_FILES

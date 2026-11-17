@@ -1082,7 +1082,7 @@ test("matrix: the PSET side file and matrix.data round-trip", function()
   local path = context.data_dir .. "strata-04.pset"
   params:write(path)
   local side = S.lib.data_files.read(context.data_dir .. "strata-04.matrix.data")
-  assert_equal(side.version, 1, "the side file's format")
+  assert_equal(side.version, 2, "the side file's format")
   assert_equal(entry_count(side.matrix), 3, "sparse")
   assert_equal(side.matrix[5].dest, "v3_main")
   clear_all(matrix)
@@ -1193,8 +1193,9 @@ end)
 test("matrix: an unreadable side file is set aside and the PSET still loads", function()
   local contents = {
     "return {\n  {1},\n",                                                            -- not a data file
-    { version = 2, matrix = {} },                                                     -- another version
-    { version = 1, matrix = { [17] = { source = "macro1", dest = "reverb_mix" } } },  -- no routing 17
+    { version = 3, matrix = {} },                                                     -- another version
+    { version = 1, matrix = { [23] = { source = "macro1", dest = "reverb_mix" } } },  -- no routing 23
+    { version = 2, matrix = { [17] = { source = "lfo2", dest = "reverb_mix" } } },    -- a home's source not lfo1
     { version = 1, matrix = { [1] = { source = 4, dest = "reverb_mix" } } },          -- a source that is no string
     { version = 1, matrix = { [1] = { source = "macro1", dest = string.rep("x", 33) } } },  -- longer than 32
     { version = 1, matrix = 7 },                                                      -- no table of routings
@@ -1371,7 +1372,9 @@ test("matrix: cleanup cancels learn and forgets its offsets, sending nothing", f
   assert_near(engine_value(S, "reverb_mix"), params:get("reverb_mix"), 1e-12, "the extra offset is gone")
 end)
 
-test("a scenes file of 16 scenes, each with 16 full macros, 16 routings and attributes on every step, loads", function()
+-- A scenes file of 16 scenes, each with 16 full macros, 16 routings, six
+-- home routings and attributes on every step, loads
+test("16 full scenes with six homes write 6898 tables", function()
   local context, S, matrix = loaded()
   local macros = S.lib.macros
   local NUM_VOICES, PATTERN_LENGTH = S.constants.NUM_VOICES, S.constants.PATTERN_LENGTH
@@ -1390,6 +1393,13 @@ test("a scenes file of 16 scenes, each with 16 full macros, 16 routings and attr
     matrix.set_routing(k, "macro" .. (17 - k), destinations[k])
     params:set("matrix_" .. k .. "_depth", -100 + k)
   end
+  -- each LFO's home routing on one of the longest destination keys
+  local keys = {}
+  for _, destination in ipairs(S.LFO_DESTINATIONS) do
+    if destination.key ~= "none" then keys[#keys + 1] = destination.key end
+  end
+  table.sort(keys, function(a, b) return #a > #b end)
+  for n = 1, S.constants.NUM_LFOS do assert_true(matrix.set_home(n, keys[n]), "home " .. n .. " is set") end
   -- every attribute the sequencer stores (design §8.1, §8.12, §9.2; 3.7's
   -- slice and cond, design §5.3: the largest slice and the longest of the
   -- 78 conditions, single values that add bytes and no table), on every
@@ -1425,12 +1435,13 @@ test("a scenes file of 16 scenes, each with 16 full macros, 16 routings and attr
     tables .. " tables fit the reader's bound of " .. S.lib.data_files.DATA_FILES.max_tables)
   local largest = S.lib.data_files.DATA_FILES.largest_scenes_tables  -- the cap keeps 4 times it (data_files_test.lua)
   assert_equal(tables, largest, "the largest scenes file the reader's cap is sized for holds exactly its figure")
+  assert_equal(largest, 6898, "the figure: 6802 and six home routings a scene")
   cleanup()
   local _, next_S, next_matrix = loaded({ data_subdir = data_dir_name(context) })
   for slot = 1, next_S.constants.NUM_SCENES do
     local scene = next_S.scenes[slot]
     assert_true(scene.populated and validate_scene(scene), "scene " .. slot .. " loaded and validates")
-    assert_equal(entry_count(scene.data.matrix), 16, "scene " .. slot .. " holds every routing")
+    assert_equal(entry_count(scene.data.matrix), 22, "scene " .. slot .. " holds every routing and home")
     local last = scene.data.steps[NUM_VOICES][PATTERN_LENGTH]
     assert_equal(last.notes[8], 14, "scene " .. slot .. " holds its steps' notes")
     assert_near(last.gate, 7.123456789, 1e-9, "and their gates")
@@ -1442,6 +1453,9 @@ test("a scenes file of 16 scenes, each with 16 full macros, 16 routings and attr
   assert_equal(next_matrix.routing(16).source, "macro1", "the last scene recalls the last routing")
   assert_equal(next_matrix.routing(16).dest, destinations[16])
   assert_equal(params:get("matrix_16_depth"), -84)
+  for n = 1, next_S.constants.NUM_LFOS do next_matrix.set_home(n, "") end
+  recall_scene(16, 0)
+  assert_equal(next_matrix.home(6), keys[6], "and the homes")
 end)
 
 
@@ -1473,6 +1487,102 @@ test("the matrix leaves an envelope's fast routing out of its sum and keeps it i
   assert_equal(block[3].source, "env2"); assert_equal(block[3].dest, "v5_filter_freq")
   assert_equal(matrix.routing(3).depth, 50)
   assert_true(matrix.routing(3).on)
+end)
+
+---------------------------------------------------------------------------
+-- Home routings (the groundwork before 3.8, design §4): slots 16 + n,
+-- source lfo<n>, destination the LFO's
+---------------------------------------------------------------------------
+
+test("the home routings: slots 17 to 22, source lfo<n>, destination none at first", function()
+  local _, S, matrix = loaded()
+  for n = 1, S.constants.NUM_LFOS do
+    assert_equal(matrix.home_slot(n), 16 + n, "LFO " .. n .. "'s slot")
+    assert_equal(S.matrix[16 + n].source, "lfo" .. n, "its source")
+    assert_equal(S.matrix[16 + n].dest, "", "no destination")
+    assert_equal(matrix.home(n), "", "home " .. n .. " is none")
+  end
+  assert_equal(matrix.home(0), nil, "no LFO 0"); assert_equal(matrix.home(7), nil, "no LFO 7")
+  assert_equal(matrix.routing(17), nil, "the R functions keep R1-R16")
+  assert_equal(matrix.set_routing(17, "lfo1", "reverb_mix"), false)
+  assert_equal(matrix.edit_routing(17, "lfo1", "reverb_mix"), false)
+  assert_equal(S.constants.MATRIX_SLOTS, 16, "MATRIX_SLOTS stays 16")
+end)
+
+test("edit_home refuses an unknown id; set_home keeps one, which does not play", function()
+  local context, S, matrix = loaded()
+  assert_equal(matrix.edit_home(1, "nonsense"), false, "an unknown id is refused")
+  assert_equal(matrix.edit_home(1, "none"), false, "none is no destination id")
+  assert_equal(matrix.home(1), "")
+  assert_equal(matrix.edit_home(1, "filter_mix"), true, "a known id")
+  assert_equal(matrix.home(1), "filter_mix")
+  assert_equal(matrix.edit_home(2, "macro_3"), true, "a macro too")
+  assert_equal(matrix.edit_home(3, "v2_main"), true, "a voice's main")
+  assert_equal(matrix.edit_home(1, ""), true, "none")
+  assert_equal(matrix.home(1), "")
+  assert_equal(matrix.edit_home(0, "filter_mix"), false, "no LFO 0")
+  assert_equal(matrix.set_home(1, "future_dest"), true, "set_home keeps an unknown id")
+  assert_equal(matrix.home(1), "future_dest")
+  assert_equal(matrix.edit_home(1, "future_dest"), true, "edit_home takes the one held")
+  assert_equal(matrix.set_home(1, string.rep("x", 33)), false, "longer than 32 characters")
+  assert_equal(matrix.set_home(1, 4), false, "no string")
+  assert_equal(matrix.set_home(7, "filter_mix"), false, "no LFO 7")
+  assert_equal(matrix.home(1), "future_dest", "kept")
+  -- saved like a routing: in the live file, sparse
+  context.clock.run_for(0.2)
+  local live = S.lib.data_files.read(context.data_dir .. "strata/matrix.data")
+  assert_equal(live.version, 2, "version 2")
+  assert_equal(live.matrix[17].source, "lfo1"); assert_equal(live.matrix[17].dest, "future_dest")
+  assert_equal(live.matrix[18].dest, "macro_3")
+  assert_equal(live.matrix[20], nil, "a home with no destination is not written")
+end)
+
+test("the block refuses a home whose source is not lfo<n>", function()
+  local _, S, matrix = loaded()
+  matrix.set_home(2, "reverb_mix")
+  capture_scene(1)
+  local block = S.scenes[1].data.matrix
+  assert_equal(block[18].source, "lfo2", "captured with its source")
+  assert_equal(block[18].dest, "reverb_mix")
+  assert_equal(block[17], nil, "sparse")
+  local record
+  for _, entry in ipairs(S.registry.scene_blocks) do
+    if entry.key == "matrix" then record = entry end
+  end
+  assert_true(record.validate(block), "a captured block validates")
+  assert_true(not record.validate({ [18] = { source = "lfo3", dest = "reverb_mix" } }), "LFO 3's source on LFO 2's home")
+  assert_true(not record.validate({ [17] = { source = "", dest = "reverb_mix" } }), "an empty source")
+  assert_true(not record.validate({ [23] = { source = "lfo1", dest = "reverb_mix" } }), "no slot 23")
+  assert_true(record.validate({ [17] = { source = "lfo1", dest = "future_dest" } }), "an unknown destination is kept")
+end)
+
+test("a version 1 matrix file loads with no home routing; a version 3 file is set aside", function()
+  local context, S, matrix = loaded()
+  -- a live file of version 1, as 3.7 wrote it
+  cleanup()
+  util.make_dir(context.data_dir .. "strata")
+  assert_true(S.lib.data_files.write(context.data_dir .. "strata/matrix.data",
+    { version = 1, matrix = { [1] = { source = "macro1", dest = "reverb_mix" } } }))
+  local next_context, next_S, next_matrix = loaded({ data_subdir = data_dir_name(context) })
+  assert_equal(next_matrix.routing(1).source, "macro1", "R1 loads from the live file")
+  for n = 1, next_S.constants.NUM_LFOS do assert_equal(next_matrix.home(n), "", "home " .. n .. " is none") end
+  -- a PSET's side file of version 1
+  next_matrix.set_home(2, "filter_mix")
+  local path = next_context.data_dir .. "strata-07.pset"
+  params:write(path)
+  local side = next_context.data_dir .. "strata-07.matrix.data"
+  assert_true(next_S.lib.data_files.write(side,
+    { version = 1, matrix = { [1] = { source = "macro2", dest = "delay_mix" } } }))
+  params:read(path)
+  assert_equal(next_matrix.routing(1).source, "macro2", "R1 from the side file")
+  assert_equal(next_matrix.home(2), "", "and no home routing")
+  -- a version 3 file is set aside with its line
+  assert_true(next_S.lib.data_files.write(side, { version = 3, matrix = {} }))
+  next_matrix.set_home(2, "filter_mix")
+  params:read(path)
+  assert_equal(next_matrix.home(2), "", "nothing loads")
+  assert_true(util.file_exists(side .. ".bak"), "set aside")
+  assert_true(printed_with(next_context, "not a version 1-2 matrix file") ~= nil, "its line names the versions")
 end)
 
 end
