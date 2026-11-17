@@ -381,6 +381,7 @@ return function(S)
   -- End every override a voice's step set, and its chord: each param goes
   -- back to its stored value at once
   local function end_overrides(voice_idx)
+    step_slices[voice_idx] = nil
     end_step_region(voice_idx)
     release_step_slices(voice_idx)
     end_chord(voice_idx)
@@ -658,28 +659,36 @@ return function(S)
     end
     -- 3.7 (design §3.5, ruling 32): the step's slice, when the voice's slot
     -- has it. On a voice set to one, or off, it is the own note's region
-    -- (before the start or the retrigger: no node), shared by the chord;
-    -- on an overlap voice it plays in a slot of its own after them
-    -- (voices_play). A played step without one ends the last one's region.
-    -- As the chord's first note, the region gives way while another owner
-    -- holds slot 1 (a MIDI key down). Each step's slice is a hit: it is sent
-    -- even when it is the same, so its scan restarts (the chord's own note
-    -- sends it through play_own, as a hit too)
+    -- (before the start or the retrigger: no node), shared by the chord. On
+    -- an overlap voice the own note comes first, as on one (decision 23,
+    -- the final review's I-2); the slice plays in a slot of its own after
+    -- them (voices_play) only while another owner holds slot 1 or, with no
+    -- chord, while an earlier step's slice still rings on the own note to
+    -- its end: then the step's hits are its slice's (rings), so that slice
+    -- is never restarted and the own note never plays the loop under it. A
+    -- played step without one ends the last one's region. As the chord's
+    -- first note, the region gives way while another owner holds slot 1 (a
+    -- MIDI key down). Each step's slice is a hit: it is sent even when it is
+    -- the same, so its scan restarts (the chord's own note sends it through
+    -- play_own, as a hit too)
     local region = event.slice and S.lib.slices.voice_region(voice_idx, event.slice)
     local overlap = region and S.lib.slices.option(voice_idx) == "overlap"
-    local others = (note_id or (region and not overlap)) and other_owns_slot_1(voice_idx)
-    if others and not overlap then region = nil end
+    local others = (note_id or region) and other_owns_slot_1(voice_idx)
+    local rings = overlap and not chord and not others and step_region_ends[voice_idx] ~= nil
+      and M.playing_region(voice_idx) ~= nil
+    local extra = overlap and (others or rings)
+    if others and not extra then region = nil end
     release_step_slices(voice_idx)
-    step_slices[voice_idx] = overlap and event.slice or nil
-    if region and not overlap then
+    step_slices[voice_idx] = extra and {slice = event.slice, step = event.step, rings = rings} or nil
+    if region and not extra then
       if not chord then S.lib.notes.set_own_region(voice_idx, region, true) end
       step_regions[voice_idx] = region
       local pass = S.lib.notes.pass_seconds(voice_idx, region[2])
       step_region_ends[voice_idx] = pass and util.time() + pass or nil
-    else
+    elseif not rings then
       end_step_region(voice_idx)
     end
-    if chord then chord.region = not overlap and region or nil end
+    if chord then chord.region = not extra and region or nil end
     chords[voice_idx] = chord
     local own = note_id and not others
     if own then leave_extra_slot(voice_idx) end
@@ -734,24 +743,35 @@ return function(S)
       end
     end
     if not voice.active then return end
+    -- 3.7: an overlap voice's step slice in a slot of its own (apply_step);
+    -- while the own note's slice rings (rings) every hit of the step is the
+    -- slice's, never a retrigger
+    local slice = step_slices[voice_idx]
+    if slice and slice.step ~= event.step then slice = nil end
+    local on_slice = slice and slice.rings
+    local gate_seconds
     if not started or gated(voice_idx) then
-      local gate_seconds
       if gated(voice_idx) then
         gate_seconds = M.gate_seconds(voice_idx, event.step, event.hits)
         send_gate_seconds(voice_idx, gate_seconds)
       end
-      S.lib.engine_sync.retrigger(voice_idx, event.velocity, "step", gate_seconds)
+      if not on_slice then S.lib.engine_sync.retrigger(voice_idx, event.velocity, "step", gate_seconds) end
     end
     play_chord(voice_idx, event)
-    -- 3.7: an overlap voice's step slice, in a slot of its own (with no
-    -- room, the voice's oldest step slice is cut and its slot taken; never
-    -- another owner's), ringing past the next step
-    local slice = event.first and step_slices[voice_idx]
-    if slice then
-      step_slices[voice_idx] = nil
-      S.lib.slices.play(voice_idx, slice, {owner = SEQ.note_owner,
-        key = SEQ.slice_key_prefix .. event.step, velocity = event.velocity, park = false,
-        extra_only = true, steals = step_slice_note})
+    -- with no room the voice's oldest step slice is cut and its slot taken
+    -- (never another owner's); it rings past the next step. A later hit (a
+    -- ratchet) of a step whose hits are its slice's plays it again in its
+    -- slot; one whose note is gone (stolen) falls back to the retrigger
+    if slice and (event.first or on_slice) then
+      local key = SEQ.slice_key_prefix .. event.step
+      local slot = (event.first or S.lib.notes.find(voice_idx, SEQ.note_owner, key))
+        and S.lib.slices.play(voice_idx, slice.slice, {owner = SEQ.note_owner, key = key, velocity = event.velocity,
+          park = false, extra_only = true, steals = step_slice_note})
+      if on_slice and slot then
+        S.lib.engine_sync.extra_note_hit(voice_idx, slot, event.velocity, gate_seconds, "step")
+      elseif on_slice then
+        S.lib.engine_sync.retrigger(voice_idx, event.velocity, "step", gate_seconds)
+      end
     end
   end
 

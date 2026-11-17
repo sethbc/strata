@@ -1547,4 +1547,19 @@ test("without the scan a one-shot pass fails loudly", function()
   assert_true(not ok and tostring(err):find("scan", 1, true) ~= nil, "no S.lib.scan: an error: " .. tostring(err))
 end)
 
+-- The final review's M-5 (design §3.4): S.lib.notes is the own region's one
+-- sender, a voice sync's send of it included: no other Lua file names its
+-- two grain params
+test("only lib/notes.lua sends the own region's grain params", function()
+  local found = {}
+  for _, source in ipairs(h.read_lua_sources()) do
+    if source.path ~= "lib/notes.lua" then
+      for _, name in ipairs({"regionStart", "regionLength"}) do
+        if source.text:find('"' .. name .. '"', 1, true) then found[#found + 1] = source.path .. " " .. name end
+      end
+    end
+  end
+  assert_equal(table.concat(found, "; "), "", "the own region's sends")
+end)
+
 end

@@ -621,7 +621,10 @@ test("a sliced loop under a pattern, follow, an envelope, a sequence and a chain
     "64 steps less step 3's four misses and step 5's six")
   -- the chain: a link a bar at 0, 0, 100, which over two scenes is always the other
   assert_equal(table.concat(state.moves, ", "), "random 2, random 1, random 2", "the chain's three links")
-  -- every hit's slice in a slot of its own: its noteRegion, the slice's, right before its noteOn
+  -- every hit's slice (design §3.5, decision 23, the final review's I-2):
+  -- on the own note (its region, then the retrigger, no node) while no
+  -- earlier step's slice rings there, else in a slot of its own (its
+  -- noteRegion, the slice's, right before its noteOn, and no retrigger)
   local last_note_call = {}
   for index = started + 1, #context.engine_calls do
     local call = context.engine_calls[index]
@@ -634,31 +637,48 @@ test("a sliced loop under a pattern, follow, an envelope, a sequence and a chain
     end
   end
   -- each hit's calls: from the probe's count at the hit before to its own
-  local from = started
+  -- (an own hit of the slice the own note already holds sends no region: a
+  -- one-shot hit of the same slice restarts it by the retrigger alone)
+  local from, on_own, in_slots, last_own = started, 0, 0, {}
   for index, event in ipairs(state.events) do
-    local window, region_at, note_ons, note_on_after = {}, nil, 0, false
+    local where = "hit " .. index .. " (step " .. event.step .. ")"
+    local window, own_region, region_at, note_ons, note_on_after, retriggers = {}, {}, nil, 0, false, 0
     for at = from + 1, event.calls do
       local call = context.engine_calls[at]
       if call.name == "noteRegion" and call.args[1] == 0 then window[#window + 1] = call; region_at = at end
+      if call.name == "setGrainParam" and call.args[1] == 0 and call.args[2]:find("^region") then
+        own_region[call.args[2]] = call.args[3]
+      end
+      if call.name == "retrigger" and call.args[1] == 0 then retriggers = retriggers + 1 end
       if call.name == "noteOn" and call.args[1] == 0 then
         note_ons = note_ons + 1
         if region_at then note_on_after = true end
       end
     end
-    assert_equal(#window, 1, "hit " .. index .. " (step " .. event.step .. "): one noteRegion")
-    assert_equal(note_ons, 1, "hit " .. index .. ": one noteOn")
-    assert_true(note_on_after, "hit " .. index .. ": its noteOn after its noteRegion")
-    assert_near(window[1].args[3], (event.step - 1) / SYSTEM.slices, 1e-9, "hit " .. index .. ": slice " .. event.step
-      .. "'s start")
-    assert_near(window[1].args[4], 1 / SYSTEM.slices, 1e-9, "and its length")
+    local start, length
+    if #window == 0 then
+      on_own = on_own + 1
+      assert_equal(note_ons, 0, where .. ": on the own note, no node")
+      assert_equal(retriggers, 1, where .. ": its retrigger")
+      start = own_region.regionStart or last_own.regionStart
+      length = own_region.regionLength or last_own.regionLength
+      last_own = {regionStart = start, regionLength = length}
+    else
+      in_slots = in_slots + 1
+      assert_equal(#window, 1, where .. ": one noteRegion")
+      assert_equal(note_ons, 1, where .. ": one noteOn")
+      assert_true(note_on_after, where .. ": its noteOn after its noteRegion")
+      assert_equal(retriggers, 0, where .. ": no retrigger, the own note's slice rings on")
+      start, length = window[1].args[3], window[1].args[4]
+    end
+    assert_near(start, (event.step - 1) / SYSTEM.slices, 1e-9, where .. ": slice " .. event.step .. "'s start")
+    assert_near(length, 1 / SYSTEM.slices, 1e-9, where .. ": and its length")
     from = event.calls
   end
+  assert_true(on_own > 1, "the own note takes a slice again once its last has played out (" .. on_own .. " hits)")
+  assert_true(in_slots > on_own, "the others ring in slots of their own (" .. in_slots .. " hits)")
+  assert_equal(on_own + in_slots, played, "every hit plays its slice")
   assert_equal(#calls_since(context, started, "voiceOn"), 0, "no hit starts a voice")
-  local own = {}
-  for _, call in ipairs(calls_since(context, started, "setGrainParam")) do
-    if call.args[1] == 0 and call.args[2]:find("^region") then own[#own + 1] = call end
-  end
-  assert_equal(#own, 0, "an overlap step leaves the own note's region alone")
   -- follow: the scan at 0.75 of itself, sent so
   assert_near(S.lib.engine_sync.engine_factor("v1_buf_scan"), SYSTEM.factor, 1e-9, "the scan's factor is 0.75")
   assert_near(engine_param_value("v1_buf_scan"), SYSTEM.factor, 1e-9, "and what the engine plays")
@@ -676,7 +696,7 @@ test("a sliced loop under a pattern, follow, an envelope, a sequence and a chain
     assert_true(not (call.args[1] == 0 and call.args[3] == 3 and call.args[4] ~= 0),
       "the envelope's cutoff never reaches the fast channel")
   end
-  assert_equal(#calls_since(context, started, "retrigger"), played, "one retrigger a hit")
+  assert_equal(#calls_since(context, started, "retrigger"), on_own, "one retrigger an own note's hit, none else")
   -- the sequence steps once a hit
   local length = params:get("rseq1_length")
   for index = 2, #state.events do
@@ -741,9 +761,13 @@ local function way_out(way, order)
   local before = #context.engine_calls
   way.run(context, S, state)
   if way.cleanup then
-    -- norns has freed the engine: step 160's voiceOffs are the only calls (docs/notes/lua/state-and-voices.md)
+    -- norns has freed the engine (docs/notes/lua/state-and-voices.md): step
+    -- 160's voiceOffs, and the patterns' stop ending the own note's step
+    -- region (its clear reaches no handler), are the only calls
     for index = before + 1, #context.engine_calls do
-      assert_equal(context.engine_calls[index].name, "voiceOff", "cleanup sends only its voiceOffs")
+      local call = context.engine_calls[index]
+      assert_true(call.name == "voiceOff" or (call.name == "setGrainParam" and call.args[2]:find("^region") ~= nil
+        and call.args[3] == 0), "cleanup sends only its voiceOffs and the own region's clear (got " .. call.name .. ")")
     end
     assert_equal(extra_slots(S), 0, "cleanup: no slice note held")
     assert_notes_ended(context, "cleanup")

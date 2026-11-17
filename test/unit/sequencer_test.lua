@@ -3914,42 +3914,75 @@ test("on a one voice a step's slice sets the own region for its hit, creates no 
   pattern_clock_stop()
 end)
 
-test("on an overlap voice each step's slice takes a slot of its own and rings past the next step", function()
+-- The final review's I-2 (design §3.5, decision 23): an overlap voice's step
+-- slice takes the own note first, as on one; while a step's slice still rings
+-- there to its end the next step's slice plays in a slot of its own, with no
+-- retrigger (the own note's slice is never restarted, and the own note never
+-- plays the voice's whole loop under a slice); the own note takes the next
+-- slice once its own has played out
+test("on an overlap voice the own note takes a step's slice first and later slices ring in slots of their own", function()
   local context, S = sliced_setup(3)
   local scan = S.lib.scan
-  function scan.pass_seconds(_, fraction) return fraction * 8 end  -- a quarter: 2 s
+  function scan.pass_seconds(_, fraction) return fraction * 1.6 end  -- a quarter: 0.4 s
   local seq, notes = S.lib.sequencer, S.lib.notes
   for _, step in ipairs({1, 3, 5}) do S.patterns[1][step] = 15 end
-  S.patterns[1][6] = 15
   seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 3, "slice", 2); seq.set_step_attr(1, 5, "slice", 3)
-  pattern_clock_start()
-  for _ = 2, 6 do context.clock.advance_until(S.pattern_clocks[1]) end
-  for _, step in ipairs({1, 3, 5}) do
-    assert_true(notes.find(1, "seq", "slice" .. step) ~= nil, "step " .. step .. "'s slice still held at step 6")
-    assert_true((notes.find(1, "seq", "slice" .. step) or 1) > 1, "in an extra slot")
+  local function on_own(where, start)
+    assert_equal(region_texts(context, 0), "setGrainParam(0, regionStart, " .. start .. ") setGrainParam(0, regionLength, 0.25)",
+      where .. ": the slice on the own note")
+    assert_true(first_call(context, "setGrainParam", 0) < first_call(context, "retrigger", 0), where .. ": before the hit")
+    assert_equal(#note_calls(context, "noteOn", 0), 0, where .. ": no node")
   end
-  local order = {}
-  for _, call in ipairs(context.engine_calls) do
-    if (call.name == "noteRegion" or call.name == "noteOn") and call.args[1] == 0 then table.insert(order, call.name) end
-  end
-  assert_equal(table.concat(order, " "), "noteRegion noteOn noteRegion noteOn noteRegion noteOn",
-    "each noteRegion before its noteOn")
-  assert_equal(region_texts(context, 0):find("setGrainParam", 1, true), nil, "the own note keeps the voice's loop")
+  pattern_clock_start()  -- step 1, at 0 s
+  on_own("step 1", 0)
+  context.clock.advance_until(S.pattern_clocks[1])
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])  -- step 3, at 0.25 s: slice 1 rings to 0.4 s
+  assert_equal(region_texts(context, 0), "noteRegion(0, 1, 0.25, 0.25)", "step 3: slice 2 in an extra slot, the own region kept")
+  assert_true(first_call(context, "noteRegion", 0) < first_call(context, "noteOn", 0), "its noteRegion before its noteOn")
+  assert_equal(first_call(context, "retrigger", 0), nil, "no retrigger: slice 1 is not restarted")
+  assert_equal(notes.own_region(1)[1], 0, "the own note still plays slice 1")
+  assert_equal(notes.find(1, "seq", "slice3"), 2, "step 3's slice in slot 2")
+  context.clock.advance_until(S.pattern_clocks[1])
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])  -- step 5, at 0.5 s: slice 1 has played out
+  on_own("step 5", 0.5)
+  assert_true(notes.find(1, "seq", "slice3") ~= nil, "step 3's slice rings on to 0.65 s")
   pattern_clock_stop()
-  -- the pool at 2: step 5's slice cuts step 1's and takes its slot
+  -- a ratchet of a step whose slice is in an extra slot hits that slice
+  -- again in its slot, never the own note's
+  context, S = sliced_setup(3)
+  scan = S.lib.scan
+  function scan.pass_seconds(_, fraction) return fraction * 8 end  -- 2 s
+  seq, notes = S.lib.sequencer, S.lib.notes
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 2, "slice", 2); seq.set_step_attr(1, 2, "ratchet", 2)
+  pattern_clock_start()
+  context.clear_engine_calls()
+  context.clock.run_for(0.125 + 0.0625 + 0.001)  -- step 2 and its second hit
+  local slot = notes.find(1, "seq", "slice2")
+  assert_true((slot or 1) > 1, "step 2's slice in an extra slot")
+  assert_equal(first_call(context, "retrigger", 0), nil, "neither hit retriggers the own note")
+  local ons = note_calls(context, "noteOn", 0)
+  assert_equal(#ons, 2, "two noteOns: the slice's start and its ratchet")
+  assert_equal(ons[2].args[2], slot - 1, "the ratchet in the slice's slot")
+  pattern_clock_stop()
+  -- the pool at 1: step 5's slice cuts step 3's, the oldest step slice in
+  -- an extra slot, and takes its slot
   context, S = sliced_setup(3)
   scan = S.lib.scan
   function scan.pass_seconds(_, fraction) return fraction * 8 end
   seq, notes = S.lib.sequencer, S.lib.notes
-  notes.set_pool(2)
+  notes.set_pool(1)
   for _, step in ipairs({1, 3, 5}) do S.patterns[1][step] = 15 end
   seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 3, "slice", 2); seq.set_step_attr(1, 5, "slice", 3)
   pattern_clock_start()
   context.clock.advance_until(S.pattern_clocks[1]); context.clock.advance_until(S.pattern_clocks[1])
-  local first_slot = notes.find(1, "seq", "slice1")
+  local first_slot = notes.find(1, "seq", "slice3")
+  assert_true((first_slot or 1) > 1, "step 3's slice in an extra slot")
   context.clear_engine_calls()
   context.clock.advance_until(S.pattern_clocks[1]); context.clock.advance_until(S.pattern_clocks[1])
-  assert_equal(notes.find(1, "seq", "slice1"), nil, "step 1's slice cut")
+  assert_equal(notes.find(1, "seq", "slice3"), nil, "step 3's slice cut")
   assert_equal(notes.find(1, "seq", "slice5"), first_slot, "step 5's in its slot")
   local texts = {}
   for _, call in ipairs(context.engine_calls) do
@@ -3957,6 +3990,7 @@ test("on an overlap voice each step's slice takes a slot of its own and rings pa
   end
   assert_equal(table.concat(texts, " "), "noteOff(0, " .. (first_slot - 1) .. ", 1) noteRegion(0, " .. (first_slot - 1)
     .. ", 0.5, 0.25)", "cut, then the slot's new region")
+  assert_equal(notes.own_region(1)[1], 0, "the own note's slice 1 untouched")
   pattern_clock_stop()
   -- a MIDI note's slot is never taken
   context, S = sliced_setup(3)
@@ -3971,6 +4005,33 @@ test("on an overlap voice each step's slice takes a slot of its own and rings pa
   assert_equal(notes.find(1, "seq", "slice1"), nil, "no room: the step's slice is refused")
   assert_true(notes.find(1, "midi", held_key(1, 64)) ~= nil, "MIDI's note plays on")
   pattern_clock_stop()
+end)
+
+-- The final review's M-3: a stop leaves every one-shot step slice in an
+-- extra slot ringing to its end, whether or not the last played step had a
+-- chord (its chord's end releases the chord's notes only)
+test("a pattern stop leaves one-shot step slices ringing whatever the last step played", function()
+  for _, last in ipairs({"a chord", "a plain step"}) do
+    local context, S = sliced_setup(3)
+    local scan = S.lib.scan
+    function scan.pass_seconds(_, fraction) return fraction * 8 end  -- 2 s
+    local seq, notes = S.lib.sequencer, S.lib.notes
+    for step = 1, 3 do S.patterns[1][step] = 15 end
+    seq.set_step_attr(1, 1, "slice", 1); seq.set_step_attr(1, 2, "slice", 2)
+    if last == "a chord" then seq.set_step_attr(1, 3, "notes", {0, 4}) end
+    pattern_clock_start()
+    context.clock.advance_until(S.pattern_clocks[1]); context.clock.advance_until(S.pattern_clocks[1])
+    local slot = notes.find(1, "seq", "slice2")
+    assert_true((slot or 1) > 1, last .. ": step 2's slice in an extra slot")
+    context.clear_engine_calls()
+    pattern_clock_stop()
+    assert_equal(notes.find(1, "seq", "slice2"), slot, last .. ": step 2's slice rings on after the stop")
+    for _, call in ipairs(note_calls(context, "noteOff", 0)) do
+      assert_true(call.args[2] ~= slot - 1, last .. ": its slot is not released")
+    end
+    context.clock.run_for(2.1)
+    assert_equal(notes.find(1, "seq", "slice2"), nil, last .. ": it ends at its time")
+  end
 end)
 
 test("the region ends with the step's overrides", function()

@@ -160,6 +160,21 @@ test("equal parts cut a slot into count slices", function()
   assert_equal(S.lib.samples.settings(1).edited, false)
 end)
 
+-- The final review's M-2: slices made and then set back to off leave the
+-- file's record at its defaults, so samples.data keeps no entry for it
+test("a file's slices set back to off leave no entry in samples.data", function()
+  local context, S = sliced(2, 8)
+  context.clock.run_for(0.11)
+  local path = context.data_dir .. "strata/samples.data"
+  assert_equal(#context.tab.load(path).files, 1, "the slices are kept")
+  assert_true(S.lib.samples.set(1, "mode", 1), "off")
+  S.lib.slices.make(1)
+  context.clock.run_for(0.11)
+  local record = S.lib.samples.settings(1)
+  assert_equal(record.markers, nil); assert_equal(record.frames, nil, "no frames"); assert_equal(record.rate, nil, "no rate")
+  assert_equal(#context.tab.load(path).files, 0, "back at its defaults: no entry")
+end)
+
 test("transients take the candidates at or above the sensitivity's threshold, and frame 0", function()
   local context, S = transients(50)
   assert_equal(list_text(S.lib.slices.markers(1)), "{0, 10000, 30000}", "sensitivity 50")
@@ -480,7 +495,13 @@ test("every way a slice note ends frees its slot", function()
       settle_load(context, 1, context.audio_dir .. "other.wav", 2)
       lfo_step(context, 2)
     end},
-    {"release_owner", function(_, S) S.lib.notes.release_owner(1, "midi") end},
+    -- the final review's I-1: release_owner (latch's next chord) leaves a
+    -- one-shot slice to its time, which ends it
+    {"release_owner, then its time", function(context, S)
+      S.lib.notes.release_owner(1, "midi")
+      assert_equal(S.lib.notes.find(1, "midi", 2), 2, "release_owner: the one-shot slice plays on")
+      context.clock.run_for(0.25 * 20 + 0.1)
+    end},
     {"cleanup", function() cleanup() end},
   }
   for _, case in ipairs(cases) do
@@ -597,6 +618,21 @@ test("playing names the own slice only while its note is held", function()
   assert_equal(list_text(S.lib.slices.playing(1)), "{3}")
   context.clock.run_for(0.5 + 2 / 48)
   assert_equal(list_text(S.lib.slices.playing(1)), "{}", "played out")
+end)
+
+-- The final review's M-1: playing runs once per grid cell, so it reads the
+-- slot's markers once, not once per slice (64 slices: 130 reads before)
+test("playing reads the slot's settings once, whatever the count", function()
+  local context, S = sliced(2, 64, 3)
+  assert_equal(S.lib.slices.count(1), 64, "64 slices")
+  S.lib.slices.play(1, 40, note(1)); S.lib.slices.play(1, 7, note(2))
+  local samples, reads = S.lib.samples, 0
+  local real = samples.settings
+  samples.settings = function(...) reads = reads + 1; return real(...) end
+  local playing = S.lib.slices.playing(1)
+  samples.settings = real
+  assert_equal(list_text(playing), "{7, 40}", "the two slices sounding")
+  assert_equal(reads, 1, "one read of the slot's settings")
 end)
 
 end

@@ -388,6 +388,17 @@ return function(S)
     return copy_region(own_regions[voice])
   end
 
+  -- Send the own region as it is (setGrainParam regionStart, then
+  -- regionLength: 0 and 0 for none): set_own_region's send, and every voice
+  -- sync's (the slices record's sync, before voiceOn at a start), so this
+  -- module is the own region's one sender (the final review's M-5)
+  function M.sync_own_region(voice)
+    if not whole_in(voice, 1, NUM_VOICES) then return end
+    local wanted = own_regions[voice] or NO_REGION
+    engine.setGrainParam(voice - 1, "regionStart", wanted[1])
+    engine.setGrainParam(voice - 1, "regionLength", wanted[2])
+  end
+
   -- Set the own note's region ({start, length} fractions of the slot's
   -- valid region, or nil): stored, and while the voice runs sent
   -- (setGrainParam regionStart, then regionLength: 0 and 0 for nil), with
@@ -399,16 +410,15 @@ return function(S)
   -- and the playhead (positionsHit, lib/playheads.lua's voice_hit hook), so
   -- a hit there sends only a change and leaves the playhead to the hook:
   -- one restart a hit in every mode. A stopped voice's start sends it (the
-  -- slices record's sync). false for a bad voice or region
+  -- slices record's sync, through M.sync_own_region). false for a bad voice
+  -- or region
   function M.set_own_region(voice, region, hit)
     if not whole_in(voice, 1, NUM_VOICES) or (region ~= nil and not valid_region(region)) then return false end
     local one_shot_hit = hit and S.lib.scan.mode(voice) == S.lib.scan.MODE.one_shot
     if (not hit or one_shot_hit) and same_region(own_regions[voice], region) then return true end
     own_regions[voice] = copy_region(region)
     if S.voices[voice].active then
-      local wanted = region or NO_REGION
-      engine.setGrainParam(voice - 1, "regionStart", wanted[1])
-      engine.setGrainParam(voice - 1, "regionLength", wanted[2])
+      M.sync_own_region(voice)
       count(2)
       if not one_shot_hit then S.lib.playheads.reset(voice) end
     end
@@ -689,7 +699,10 @@ return function(S)
   end
 
   -- Every held note of owner on voice, the extra ones first, then the own
-  -- note (which so parks only under another owner's)
+  -- note (which so parks only under another owner's). A note held to its
+  -- end (3.7's hold_to_end, a one-shot slice) is left alone, as M.release
+  -- leaves it: latch's next chord, or a step's chord ending, never cuts a
+  -- slice still playing to its end (the final review's I-1)
   function M.release_owner(voice, owner)
     if not whole_in(voice, 1, NUM_VOICES) then return end
     local order = {}
@@ -697,7 +710,7 @@ return function(S)
     table.insert(order, 1)
     for _, slot in ipairs(order) do
       local record = slots[voice][slot]
-      if record and record.held and record.owner == owner then release_slot(voice, slot) end
+      if record and record.held and record.owner == owner and not record.hold_to_end then release_slot(voice, slot) end
     end
   end
 

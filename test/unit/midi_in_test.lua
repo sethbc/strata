@@ -1749,6 +1749,33 @@ test("a release-mode voice restarted right after its last key stopped it keeps r
   end
 end)
 
+-- The final review's I-1: on an overlap voice in one shot, a new tap with no
+-- key down (latch's "the next chord replaces the last") leaves the slices
+-- still playing to their ends, in every note-off mode: sequential pad taps
+-- ring over each other (decision 2, design §3.5)
+test("on an overlap one-shot voice sequential slice taps ring over each other in every note-off mode", function()
+  for mode = 1, 3 do
+    local context, S = sliced_voice(3)
+    local scan = S.lib.scan
+    function scan.pass_seconds(_, fraction) return fraction * 2 end  -- a quarter: 0.5 s
+    params:set("midi_note_off", mode)
+    local where = "mode " .. mode
+    press(context, 1, 36)
+    context.clock.run_for(0.05)
+    context.clear_engine_calls()
+    press(context, 1, 37)
+    assert_equal(S.lib.notes.find(1, "midi", key_of(1, 36)), 1, where .. ": slice 1 rings on in the own note")
+    assert_true((S.lib.notes.find(1, "midi", key_of(1, 37)) or 1) > 1, where .. ": slice 2 in an extra slot")
+    assert_equal(#context.calls_named("noteOff"), 0, where .. ": nothing cut or released")
+    assert_equal(S.lib.notes.held(1), 2, where .. ": both held")
+    context.clock.run_for(0.5)
+    assert_equal(S.lib.notes.find(1, "midi", key_of(1, 36)), nil, where .. ": slice 1 ended at its time")
+    assert_true(S.lib.notes.find(1, "midi", key_of(1, 37)) ~= nil, where .. ": slice 2 still plays")
+    context.clock.run_for(0.1)
+    assert_equal(S.lib.notes.held(1), 0, where .. ": slice 2 ended at its time")
+  end
+end)
+
 test("a release-mode voice held back by another owner's one-shot slice stops when the last ends", function()
   local context, S = sliced_voice(3)
   local scan = S.lib.scan

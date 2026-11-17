@@ -191,7 +191,11 @@ return function(S)
       S.lib.samples.set(slot, "edited", false)
       return M.analyze(slot)
     end
+    -- off: no markers, and nothing of what they were made on, so a record
+    -- otherwise at its defaults leaves samples.data (the final review's M-2)
     S.lib.samples.set(slot, "markers", nil)
+    S.lib.samples.set(slot, "frames", nil)
+    S.lib.samples.set(slot, "rate", nil)
     S.lib.samples.set(slot, "edited", false)
     grid_redraw()
     return true
@@ -435,9 +439,11 @@ return function(S)
   function M.playing(voice)
     local list = {}
     if not valid_voice(voice) or not voice_uses_buffer(voice) then return list end
-    local slot = voice_buffer_slot(voice)
+    -- the markers read once (it runs once per grid cell: the final
+    -- review's M-1), each start as M.region gives it
+    local markers, frames = usable(voice_buffer_slot(voice))
     local starts = {}
-    for n = 1, M.count(slot) do starts[M.region(slot, n)[1]] = n end
+    for n, frame in ipairs(markers or {}) do starts[frame / frames] = n end
     local seen = {}
     local function add(region)
       local n = region and starts[region[1]]
@@ -449,7 +455,8 @@ return function(S)
     for _, used in ipairs(S.lib.notes.slots(voice)) do
       if used.held then add(used.slot > 1 and used.region or S.lib.notes.own_region(voice)) end
     end
-    -- a one-voice step's slice, which no slot-1 record holds, while it sounds
+    -- a step's slice on the own note (one, or overlap's first), which no
+    -- slot-1 record holds, while it sounds
     add(S.lib.sequencer.playing_region(voice))
     table.sort(list)
     return list
@@ -488,12 +495,9 @@ return function(S)
       })
     end,
     -- every voice sync sends the own region as it is (a clear for none),
-    -- before voiceOn at a start, so a step's first slice plays
-    sync = function(voice)
-      local region = S.lib.notes.own_region(voice) or {0, 0}
-      engine.setGrainParam(voice - 1, "regionStart", region[1])
-      engine.setGrainParam(voice - 1, "regionLength", region[2])
-    end,
+    -- before voiceOn at a start, so a step's first slice plays; S.lib.notes
+    -- sends it, the own region's one sender (design §3.4)
+    sync = function(voice) S.lib.notes.sync_own_region(voice) end,
     scene_defaults = {[SLICES.key] = SLICES.off},
     discrete = {[SLICES.key] = {1, #SLICES.options}},
     voice_rows = {section = SLICES.section, rows = {SLICES.key}, when = function(voice) return voice_uses_buffer(voice) end},
