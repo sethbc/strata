@@ -635,11 +635,13 @@ return function(S)
   end
 
   -- A played extra note's start in slot 2..NOTE_SLOTS (lib/notes.lua's
-  -- start_extra, unless the note is a step's chord's): a hit, source "note"
-  function M.extra_note_hit(voice_idx, slot, velocity)
+  -- start_extra, unless the note is a step's chord's): a hit, source "note".
+  -- 3.7: the sequencer's overlap step whose hit is its slice's in an extra
+  -- slot (the own note's slice ringing) passes source "step" and its gate length
+  function M.extra_note_hit(voice_idx, slot, velocity, gate_seconds, source)
     if not valid_voice(voice_idx) then return end
     if type(slot) ~= "number" or slot % 1 ~= 0 or slot < 2 or slot > S.constants.NOTE_SLOTS then return end
-    tell_voice_hit(voice_idx, velocity, "note", slot)
+    tell_voice_hit(voice_idx, velocity, HIT_SOURCES[source] and source or "note", slot, gate_seconds)
   end
 
   -- options.retrigger_follows (start_voice's): true where a retrigger
