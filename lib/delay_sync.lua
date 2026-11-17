@@ -136,12 +136,25 @@ return function(S)
     send_due()
   end})
 
+  -- Synced at a tempo that gives no length the delay plays delay_time with
+  -- its offsets, which the matrix and the macros mark due under delay_time's
+  -- own key (time_unheard is false there) before this hook runs: the
+  -- resend goes under that key too, so a step the modulation also marked
+  -- sends one setDelay (#770), and a step it did not (no modulation, the
+  -- step the tempo stops giving a length) still sends the time
+  local function send_time() S.lib.engine_sync.send_engine_value("delay_time", M.time()) end
+
   -- Every LFO step: a time that moved by more than threshold of itself from
   -- the one last sent (a tempo change under sync) is sent in this step
   S.lib.lfos.on_step(function()
     local time = M.time()
     local sent = last_sent or param_default("delay_time")
-    if math.abs(time - sent) > M.DELAY.threshold * time then M.resend() end
+    if math.abs(time - sent) <= M.DELAY.threshold * time then return end
+    if synced() and not synced_time() then
+      S.lib.lfos.mark_due("delay_time", send_time)
+    else
+      M.resend()
+    end
   end)
 
   -- sync and the division change what FX's time row, arc ring 3 and the
