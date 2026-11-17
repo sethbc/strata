@@ -174,6 +174,7 @@ test("3.5 end to end: a zone learn, an MPE chord on a buffer voice, a switch, a 
   -- the next note plays
   stage("the zone learn", function(name)
     params:set("midi_channel_mode", mpe.MPE.modes.split)
+    params:set("midi_note_off", 2)  -- release: an MPE player's setting
     params:set("v1_zone", 1)  -- off: only voice 3's learned range routes the lower zone
     params:set("v3_zone", 2)  -- lower
     show_page("SETUP")
@@ -204,7 +205,7 @@ test("3.5 end to end: a zone learn, an MPE chord on a buffer voice, a switch, a 
     context.clear_engine_calls()
     note_on(3, 50)
     assert_equal(#context.engine_calls, 0, name .. ": a note below the range plays no voice")
-    note_off(3, 50); note_off(2, 64)  -- release in the MPE modes: voice 3 stops with its last key
+    note_off(3, 50); note_off(2, 64)  -- release: voice 3 stops with its last key
     assert_equal(note_path(context), "voiceOff 2", name .. ": the last key stops voice 3")
     tap(2)  -- K2 closes the editor
     assert_true(not S.lib.ui_zones.is_open(), name .. ": the editor closed")
@@ -456,7 +457,7 @@ test("Lua's held notes agree with a model of the engine's slots over seeded rand
         context.midi.send(1, { type = "note_on", ch = channel, note = low + 1 + random(5), vel = 90 })
         context.midi.send(1, { type = "note_off", ch = channel, note = low, vel = 0 })
       end },
-      { 1, function() params:set("midi_note_off", random(3)) end, "never" },
+      { 1, function() params:set("midi_note_off", random(2)) end, "never" },
       { 1, function() if S.pattern_playing then pattern_clock_stop() else pattern_clock_start() end end },
       { 1, function() toggle_voice(random(3)) end, "never" },
       { 2, function() params:set("v" .. random(3) .. "_source", sources[random(3)]) end, "never" },

@@ -1004,7 +1004,9 @@ end
 --   {kind = "options", id = <id>, options = {<text>, ...}, why = <text>}: the
 --     option param keeps its place, with these options.
 -- An entry naming an id the fixture lacks, or of another kind, raises.
-local PARAM_FIXTURE_ALLOWED = {}
+local PARAM_FIXTURE_ALLOWED = {
+  {kind = "options", id = "midi_note_off", options = {"latch", "release"}, why = "note off is latch or release (design section 8)"},
+}
 -- 2b: an LFO's destination is its home routing in the matrix (design §4)
 for n = 1, 6 do
   local why = "2b: LFO " .. n .. "'s destination is its home routing in the matrix (slot " .. (16 + n) .. ")"

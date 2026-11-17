@@ -154,7 +154,7 @@ test("E3 edits a param row and steps a rig row; K3 runs an action and opens a de
   assert_true(screen_shows(context, "port") and screen_shows(context, "mode"), "its fields show")
   assert_screen_layout(context, "IO detail open")
   enc(3, 2); assert_equal(rig.get("faders_port"), 2, "E3 edits the field under its cursor")
-  enc(2, 1); enc(3, 1); assert_equal(params:get("midi_note_off"), 3, "the next field")
+  enc(2, 1); enc(3, -1); assert_equal(params:get("midi_note_off"), 1, "the next field")
   tap(2)
   assert_equal(S.lib.ui_modal.top(), nil, "K2 closes it")
   redraw()

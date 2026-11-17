@@ -344,7 +344,7 @@ end
 local function one_member(members)
   local context, S = started()
   local device = context.midi.plug(2, "mpe synth")
-  params:set("midi_channel_mode", 3)  -- MPE input: voice 1, release on a key's lift
+  params:set("midi_channel_mode", 3); params:set("midi_note_off", 2)  -- MPE input: voice 1, release on a key's lift
   mpe_voice(1, 2, members or 1); settled(context)
   clear(device)
   return context, S, device
