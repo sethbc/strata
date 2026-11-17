@@ -5,7 +5,8 @@
 -- M.time(), the time the delay's one engine sender (lib/engine_sync.lua)
 -- plays: while synced the division at the tempo, halved until it is at most
 -- DELAY.max_seconds (the engine's line), else the engine value of
--- delay_time, so a synced delay ignores delay_time and its modulation;
+-- delay_time (synced at a tempo that gives no length, delay_time with its
+-- offsets now), so a synced delay ignores delay_time and its modulation;
 -- M.playing() and M.label() for FX, the arc and the 256's fader; and the
 -- LFO clock's step hook that resends the time when the tempo moves it
 -- (through the round robin and the send budget). M.hold() holds a send
@@ -48,12 +49,16 @@ return function(S)
     return seconds, division, halvings
   end
 
-  -- The time (s) the delay plays: the synced division's, or delay_time as
-  -- the engine has it (its LFO and matrix offsets included)
+  -- The time (s) the delay plays: the synced division's; unsynced,
+  -- delay_time as the engine has it (its LFO and matrix offsets included);
+  -- synced at a tempo that gives no length, delay_time with its offsets as
+  -- they are now, since the modulation's sends were skipped while synced
+  -- and the value delivered may be stale (#768)
   function M.time()
-    local seconds = synced() and synced_time()
+    if not synced() then return engine_param_value("delay_time") end
+    local seconds = synced_time()
     if seconds then return seconds end
-    return engine_param_value("delay_time")
+    return S.lib.engine_sync.with_lfo_offsets("delay_time", params:get("delay_time"))
   end
 
   -- {division = index into DIVISIONS, halvings = n} while synced, else nil
@@ -95,16 +100,15 @@ return function(S)
   end
 
   -- Whether a send of delay_time would change nothing the engine plays
-  -- (#741): synced at a finite division, the time last sent is M.time()
-  -- within DELAY.threshold of itself (as close as the step hook lets it
-  -- stay: an external clock's tempo wavers every step) and the feedback,
-  -- mix and ping-pong the engine has are those that send carried. The
-  -- matrix marks delay_time due only while this is false, so a synced delay
-  -- under an LFO or a routing on delay_time sends nothing and takes no slot
-  -- of the round robin
+  -- (#741): synced at a finite division, after a first send, with the
+  -- feedback, mix and ping-pong the engine has those that send carried. A
+  -- synced time that moved is the step hook's to resend, so this holds
+  -- whatever the time last sent (#768: a tempo move sends once). The
+  -- matrix and the macros mark delay_time due only while this is false, so
+  -- a synced delay under an LFO or a routing on delay_time sends nothing
+  -- and takes no slot of the round robin
   function M.time_unheard()
-    local time = synced() and synced_time()
-    if not time or last_sent == nil or math.abs(time - last_sent) > M.DELAY.threshold * time then return false end
+    if not (synced() and synced_time()) or last_sent == nil then return false end
     for _, param_id in ipairs(OTHERS) do
       if last_others[param_id] ~= engine_param_value(param_id) then return false end
     end

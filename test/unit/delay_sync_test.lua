@@ -404,15 +404,20 @@ test("a tempo move under a synced, modulated delay still resends within a step (
   assert_equal(#delay_calls(context), 0, "nothing while the tempo holds")
   params:set("clock_tempo", 100)
   lfo_step(context)
-  -- the step hook's resend and the matrix's (which sees the time move
-  -- first) may both go in this step: each carries the new time
-  local sent = #delay_calls(context)
-  assert_true(sent >= 1, "the next step sends the new time")
-  for index, call in ipairs(delay_calls(context)) do
-    assert_near(call.args[1], 0.45, 1e-9, "send " .. index .. ": 100 BPM, 1/8D")
-  end
+  -- the step hook's resend alone: the matrix skips delay_time while the
+  -- delay is synced at a finite time (#768)
+  assert_equal(#delay_calls(context), 1, "the next step sends the new time once")
+  assert_near(last_delay(context)[1], 0.45, 1e-9, "100 BPM, 1/8D")
   lfo_step(context, 5)
-  assert_equal(#delay_calls(context), sent, "and nothing after it")
+  assert_equal(#delay_calls(context), 1, "and nothing after it")
+  -- a tempo ramp: one setDelay each step it moves the time
+  for step, tempo in ipairs({96, 92, 88, 84, 80, 76}) do
+    context.clear_engine_calls()
+    params:set("clock_tempo", tempo)
+    lfo_step(context)
+    assert_equal(#delay_calls(context), 1, "ramp step " .. step .. ": one setDelay")
+    assert_near(last_delay(context)[1], 0.75 * 60 / tempo, 1e-9, "ramp step " .. step .. ": " .. tempo .. " BPM")
+  end
 end)
 
 -- #762: the same delay (120 BPM, 1/8D, 0.375 s), synced unless `unsynced`,
@@ -485,6 +490,30 @@ test("unsynced, a macro's LFO still sends delay_time every step (#762)", functio
   local calls = delay_calls(context)
   assert_equal(#calls, 12, "one setDelay a step")
   assert_true(math.abs(calls[1].args[1] - calls[#calls].args[1]) > 1e-6, "carrying the moving time")
+end)
+
+-- #768: the review's probe. While synced the modulation's sends were
+-- skipped, so the delivered delay_time is stale; a tempo that then gives no
+-- length plays the param as modulated now, never that stale value
+test("a synced delay whose tempo gives no length plays delay_time as modulated now, not a stale value (#768)", function()
+  local context, S = loaded()
+  under_macro_lfo(context, S, 0.5, true)  -- unsynced: the LFO's delay_time is delivered every step
+  lfo_step(context, 7)
+  params:set("delay_sync", 1)
+  lfo_step(context, 2)
+  params:set("strata_lfo1", 0)  -- the LFO off: the macro's extra on delay_time clears, unsent while synced
+  lfo_step(context, 3)
+  local expected = S.lib.engine_sync.with_lfo_offsets("delay_time", params:get("delay_time"))
+  assert_true(math.abs(engine_param_value("delay_time") - expected) > 1e-3,
+    "the delivered delay_time is stale: " .. engine_param_value("delay_time") .. " for " .. expected)
+  context.clear_engine_calls()
+  params:set("clock_source", 2)  -- midi: the tempo is clock.get_tempo()'s
+  clock.tempo = 0
+  lfo_step(context, 2)
+  assert_true(#delay_calls(context) >= 1, "the time is sent")
+  assert_near(last_delay(context)[1], expected, 1e-9, "delay_time with its offsets as they are now")
+  assert_near(S.lib.delay_sync.time(), expected, 1e-9, "and M.time() says so")
+  clock.tempo = 120
 end)
 
 test("DELAY.max_seconds equals the engine's limit on setDelay's time", function()
