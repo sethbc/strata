@@ -55,6 +55,7 @@ return function(S)
   -- -> true) the MIDI ports claimed as MIDIGRID_OWNER while it is attached
   local MIDIGRID_OWNER = "midigrid"
   local midigrid = {device = nil, ports = {}}
+  S.lib.io_midi_out.held_by({records.grid.owner, records.arc.owner, MIDIGRID_OWNER})  -- its notes end at a claim, #769
   local draw = {clock = nil}
   local state = {started = false, errors = {}}
 

@@ -32,7 +32,9 @@ return function(S)
   -- port, device, channel, note, mpe, owner, key, sent = {bend, pressure,
   -- slide}, held} (device: the name of the device the port held as the
   -- note on went, the one that got it; held: a remote or midigrid held the
-  -- port then, so nothing was sent and nothing is owed, #767);
+  -- port then, so nothing was sent, nothing is owed and nothing of it is
+  -- ever sent, #767 and #769; a held note is in no count, channel use or
+  -- expression list);
   -- counts[port][channel][note]: the ids sounding there; use[port][channel]:
   -- the notes on a channel; member_times[port][channel] = {released,
   -- assigned}; expressing: the played MPE notes the step reads, cursor the
@@ -209,9 +211,10 @@ return function(S)
   -- value of it goes to whatever holds the port now, and its own off owed
   -- where key (the device's name) is next found (#750). A note that
   -- reached no device (key nil, #748), or went to a port a remote held
-  -- (held: it was never sent, #767), is owed to none
+  -- (held: it was never sent and was never counted, #767), is owed to none
   local function set_aside(record, key)
     record.departed = true
+    if record.held then return end
     remove_expressing(record)
     local counts = table_at(state.counts, record.port, record.channel)
     counts[record.note] = (counts[record.note] or 1) - 1
@@ -219,7 +222,7 @@ return function(S)
     local use = table_at(state.use, record.port)
     use[record.channel] = (use[record.channel] or 1) - 1
     if use[record.channel] <= 0 then use[record.channel] = nil end
-    if key ~= nil and not record.held then table_at(state.left_with, key, record.channel)[record.note] = true end
+    if key ~= nil then table_at(state.left_with, key, record.channel)[record.note] = true end
   end
 
   -- The notes on port that went to a device the port no longer holds (a
@@ -245,8 +248,9 @@ return function(S)
     settle_moved(record.port)
     state.notes[voice][id] = nil
     remove_expressing(record)
-    -- its device left the port, which dropped its counts: nothing to send
-    if record.departed then return end
+    -- its device left the port, which dropped its counts, or a remote held
+    -- the port as it started, so it was never sent (#769): nothing to send
+    if record.departed or record.held then return end
     -- a played note leaving a shared member channel: the played notes still
     -- on it forget what they last sent, so the step sends their values once
     -- and the channel goes back to what they hold (a step note sent nothing
@@ -290,9 +294,17 @@ return function(S)
     local level = util.clamp(math.max(1, round((finite(velocity) and velocity or 1) * MIDI_OUT.value_max)), 1,
       MIDI_OUT.value_max)
     local mpe = is_mpe(config)
+    -- a port a remote holds: the note is kept, so its end finds it, but
+    -- takes no channel, count or place in the expression list, and nothing
+    -- of it is sent, now or once the port is let go (#767, #769)
+    if remote_holds(config.port) then
+      state.notes[voice][id] = {voice = voice, port = config.port, device = S.lib.io_ports.device(config.port),
+        channel = config.channel, note = note, mpe = mpe, sent = {}, held = true}
+      return
+    end
     local channel = mpe and allocate(config.port, config.members) or config.channel
     local record = {voice = voice, port = config.port, device = S.lib.io_ports.device(config.port),
-      channel = channel, note = note, mpe = mpe, sent = {}, held = remote_holds(config.port)}
+      channel = channel, note = note, mpe = mpe, sent = {}}
     local counts = table_at(state.counts, config.port, channel)
     local use = table_at(state.use, config.port)
     -- the note already sounds there (#709): a retrigger, its off before
@@ -521,21 +533,27 @@ return function(S)
     return owed
   end
 
-  -- The owed notes of the device named name, paid where it is now (port): a
-  -- note_off for each, channels 1 to 16 and notes ascending, even for a
-  -- note that sounds there again now (the device had two ons, #709). No
-  -- CC 123 is sent (#750). True when anything was owed
-  local function pay_owed(port, name)
-    local owed = arrived_notes(name)
-    if not owed then return false end
+  -- A note_off on port for each of offs ({[channel] = {[note] = true}}),
+  -- channels 1 to 16 and notes ascending
+  local function send_offs(port, offs)
     for channel = 1, MIDI_OUT.channels do
-      local notes = owed[channel]
+      local notes = offs[channel]
       if notes then
         for note = 0, MIDI_OUT.notes - 1 do
           if notes[note] then send(port, "note_off", note, 0, channel) end
         end
       end
     end
+  end
+
+  -- The owed notes of the device named name, paid where it is now (port): a
+  -- note_off for each (send_offs), even for a note that sounds there again
+  -- now (the device had two ons, #709). No CC 123 is sent (#750). True
+  -- when anything was owed
+  local function pay_owed(port, name)
+    local owed = arrived_notes(name)
+    if not owed then return false end
+    send_offs(port, owed)
     return true
   end
 
@@ -571,6 +589,36 @@ return function(S)
   end
 
   S.register_menu_close(function() M.reconcile_owed() end)
+
+  -- The names a remote grid, a remote arc and midigrid claim their ports
+  -- as, given by lib/io/remote.lua (MIDI out keeps none of its own)
+  local holders = {}
+  function M.held_by(owners)
+    for _, owner in ipairs(owners) do holders[owner] = true end
+  end
+
+  -- A remote claiming port (#769): S.lib.io_ports' claim hooks run once
+  -- the owner is recorded but before the remote holds the port, so MIDI out
+  -- can still send there. The notes sounding on it are ended on the device
+  -- now: the port is settled (a note whose device moved is owed to it, as
+  -- ever), then each note the device there got is set aside, owed to none,
+  -- and its channel and note get one note_off (send_offs). Its end later
+  -- sends nothing, nor does the expression step. A controller's claim
+  -- leaves the port's notes alone
+  S.lib.io_ports.on_claim("io_midi_out", function(port, owner)
+    if state.stopped or owner == nil or not holders[owner] then return end
+    settle_moved(port)
+    local offs = {}
+    for voice = 1, NUM_VOICES do
+      for _, record in pairs(state.notes[voice]) do
+        if record.port == port and not record.departed and not record.held then
+          table_at(offs, record.channel)[record.note] = true
+          set_aside(record, nil)
+        end
+      end
+    end
+    send_offs(port, offs)
+  end)
 
   ---------------------------------------------------------------------------
   -- Params (PSET-only, group strata_out_midi)

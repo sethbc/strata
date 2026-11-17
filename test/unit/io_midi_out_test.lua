@@ -1218,6 +1218,157 @@ test("a note on a port a remote grid holds owes its device no off when it is plu
   end
 end)
 
+-- #769: a note started on a port a remote holds sends nothing, ever, even
+-- once the remote lets the port go; a note sounding on a port a remote
+-- then claims gets its off before the claim, and nothing after. No hello
+-- is answered, so the remote grid sends its device only its ask (CC 2)
+
+local ASK_HELLO = "cc 2 0 1"
+
+local function remote_grid_at(S, port)
+  assert_true(S.lib.io_rig.set("remote_grid_port", port), "remote grid on port " .. port)
+  assert_equal(S.lib.io_remote.holds(port), port > 0, "the remote holds the port exactly while set")
+end
+
+local function balanced(device, why)
+  for key, count in pairs(open_notes(device)) do assert_equal(count, 0, why .. ", " .. key .. " (#709)") end
+end
+
+-- midigrid's stand-in attached and taking launchpad's port while run(),
+-- with grid.connect put back after it, whatever it raises
+local function with_midigrid(S, launchpad, run)
+  local real_connect = grid.connect
+  grid.connect = function(...)
+    if select("#", ...) > 0 then return real_connect(...) end
+    launchpad.event = function() end  -- what midigrid does to the device it takes
+    return midigrid_object()
+  end
+  local ok, problem = pcall(function()
+    assert_true(S.lib.io_rig.set("midi_grid", "on"), "midi grid on")
+    run()
+  end)
+  grid.connect = real_connect
+  if not ok then error(problem, 0) end
+end
+
+test("a note started on a port midigrid holds sends nothing when midigrid lets the port go and the note ends (#769)", function()
+  under_midigrid(function(context, S, target, launchpad)
+    assert_true(S.lib.io_rig.set("midi_grid", "off"), "midi grid off")
+    assert_true(not S.lib.io_remote.holds(1), "the port is let go")
+    target.note_off(2, "s1")
+    assert_equal(sent(launchpad), "", "the Launchpad never got the note, so gets no off")
+  end)
+end)
+
+test("a note started on a port a remote grid holds sends nothing when the remote lets the port go and the note ends (#769)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "iii grid")
+  remote_grid_at(S, 3)
+  local target = midi_target(S)
+  params:set("v1_out_port", 3); settled(context)
+  clear(device)
+  target.note_on(1, "s1", 60, 1, step_info())
+  remote_grid_at(S, 0)
+  target.note_off(1, "s1")
+  assert_equal(sent(device), "", "the device never got the note, so gets no off")
+end)
+
+test("a held port's played notes, let go, send nothing at a voice's stop or a mute (#769)", function()
+  for _, ending in ipairs({"stop", "mute"}) do
+    local context, S = started()
+    local device = context.midi.plug(3, "iii grid")
+    remote_grid_at(S, 3)
+    params:set("v1_out_port", 3); settled(context)
+    clear(device)
+    for _, note in ipairs({60, 64, 67}) do context.midi.send(1, {type = "note_on", note = note, vel = 90, ch = 1}) end
+    remote_grid_at(S, 0)
+    if ending == "stop" then toggle_voice(1) else params:set("v1_mute", 1) end
+    step(context, S)
+    assert_equal(sent(device), "", "a " .. ending .. " sends no off for notes the device never got")
+  end
+end)
+
+test("a note sounding on a port a remote grid then claims gets its off before the claim, and nothing after (#769)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "iii grid")
+  local target = midi_target(S)
+  params:set("v1_out_port", 3); settled(context)
+  target.note_on(1, "s1", 60, 1, step_info())
+  target.note_on(1, "s2", 64, 1, step_info())
+  assert_equal(sent(device), "note_on 60 127 1|note_on 64 127 1")
+  clear(device)
+  remote_grid_at(S, 3)
+  assert_equal(sent(device), "note_off 60 1|note_off 64 1|" .. ASK_HELLO, "the offs go before the remote's ask")
+  clear(device)
+  target.note_off(1, "s1")
+  assert_equal(sent(device), "", "a note's end while the remote holds the port sends nothing")
+  remote_grid_at(S, 0)
+  target.note_off(1, "s2")
+  assert_equal(sent(device), "", "nor once the port is let go")
+end)
+
+test("a note sounding on a port midigrid then claims gets its off before the claim, and nothing after (#769)", function()
+  local context, S = started()
+  local launchpad = context.midi.plug(1, "Launchpad X")
+  local target = midi_target(S)
+  params:set("v2_out_port", 1); settled(context)
+  target.note_on(2, "s1", 60, 1, step_info())
+  with_midigrid(S, launchpad, function()
+    assert_true(S.lib.io_remote.holds(1), "midigrid holds port 1")
+    assert_equal(sent(launchpad), "note_on 60 127 2|note_off 60 2", "the off goes as midigrid takes the port")
+    target.note_off(2, "s1")
+    assert_true(S.lib.io_rig.set("midi_grid", "off"), "midi grid off")
+    target.note_on(2, "s2", 62, 1, step_info())
+    target.note_off(2, "s2")
+  end)
+  assert_equal(sent(launchpad), "note_on 60 127 2|note_off 60 2|note_on 62 127 2|note_off 62 2",
+    "nothing more for the first note; the port let go plays again")
+  balanced(launchpad, "the Launchpad")
+end)
+
+test("a played MPE note on a held port sends nothing, let go, at a new value or its end (#769)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "iii grid")
+  params:set("midi_channel_mode", 3)  -- mpe selected: voice 1
+  mpe_voice(1, 3); settled(context)
+  remote_grid_at(S, 3)
+  clear(device)
+  context.midi.send(1, {type = "pitchbend", val = 8533, ch = 2})
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 2})
+  step(context, S)
+  remote_grid_at(S, 0)
+  context.midi.send(1, {type = "pitchbend", val = 9000, ch = 2})
+  step(context, S)
+  context.midi.send(1, {type = "note_off", note = 60, vel = 0, ch = 2})
+  step(context, S)
+  assert_equal(sent(device), "", "the device never got the note: no value, no off")
+end)
+
+test("a played MPE note sounding on a port a remote grid claims gets its member channel's off, then nothing (#769)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "iii grid")
+  params:set("midi_channel_mode", 3)  -- mpe selected: voice 1
+  mpe_voice(1, 3); settled(context)
+  context.midi.send(1, {type = "pitchbend", val = 8533, ch = 2})
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 2})
+  step(context, S)
+  local list = lines(device)
+  local channel = list[#list]:match("^note_on 60 100 (%d+)$")
+  assert_true(channel ~= nil, sent(device))
+  clear(device)
+  remote_grid_at(S, 3)
+  assert_equal(sent(device), "note_off 60 " .. channel .. "|" .. ASK_HELLO, "the member channel's off, then the ask")
+  clear(device)
+  context.midi.send(1, {type = "pitchbend", val = 9000, ch = 2})
+  step(context, S)
+  remote_grid_at(S, 0)
+  context.midi.send(1, {type = "pitchbend", val = 9500, ch = 2})
+  step(context, S)
+  context.midi.send(1, {type = "note_off", note = 60, vel = 0, ch = 2})
+  step(context, S)
+  assert_equal(sent(device), "", "no later value and no second off, held or let go")
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")
