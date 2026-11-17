@@ -139,8 +139,9 @@ return function(S)
   -- 3.7 (design §3.5, ruling 32): per voice, the own region its last played
   -- step set (a voice set to one, or off), and the slice its step's first
   -- hit plays on an overlap voice once the voice has started and retriggered
-  -- (and when a one-shot step's region has played out: step_region_ends)
-  local step_regions, step_slices, step_region_ends = {}, {}, {}
+  -- (and whether that region plays to an end, in one shot, where
+  -- S.lib.playheads.finished ends it: step_region_to_end, #740)
+  local step_regions, step_slices, step_region_to_end = {}, {}, {}
   -- the chain: the scene loaded last and the beat of the next link
   local chain = {current = nil, next_beat = nil}
 
@@ -343,22 +344,23 @@ return function(S)
   -- another note has set its own since)
   local function end_step_region(voice_idx)
     local region = step_regions[voice_idx]
-    step_regions[voice_idx], step_region_ends[voice_idx] = nil, nil
+    step_regions[voice_idx], step_region_to_end[voice_idx] = nil, nil
     local own = region and S.lib.notes.own_region(voice_idx)
     if own and own[1] == region[1] and own[2] == region[2] then S.lib.notes.set_own_region(voice_idx, nil) end
   end
 
   -- 3.7 (2b's second review): the own region the voice's last played step
   -- set, a copy, while it sounds: still the own region, the voice running,
-  -- and in one shot not yet played out (its pass, from the step); else nil.
-  -- S.lib.slices.playing names it (no slot-1 record holds a step's slice)
+  -- and in one shot not yet played out (S.lib.playheads.finished: the
+  -- scan's own end, so a restart of the scan names it again, #740); else
+  -- nil. S.lib.slices.playing names it (no slot-1 record holds a step's
+  -- slice)
   function M.playing_region(voice_idx)
     local region = valid_voice(voice_idx) and step_regions[voice_idx]
     if not region or not S.voices[voice_idx].active then return nil end
     local own = S.lib.notes.own_region(voice_idx)
     if not (own and own[1] == region[1] and own[2] == region[2]) then return nil end
-    local ends = step_region_ends[voice_idx]
-    if ends and util.time() >= ends then return nil end
+    if step_region_to_end[voice_idx] and S.lib.playheads.finished(voice_idx) then return nil end
     return {region[1], region[2]}
   end
 
@@ -674,7 +676,7 @@ return function(S)
     local region = event.slice and S.lib.slices.voice_region(voice_idx, event.slice)
     local overlap = region and S.lib.slices.option(voice_idx) == "overlap"
     local others = (note_id or region) and other_owns_slot_1(voice_idx)
-    local rings = overlap and not chord and not others and step_region_ends[voice_idx] ~= nil
+    local rings = overlap and not chord and not others and step_region_to_end[voice_idx] == true
       and M.playing_region(voice_idx) ~= nil
     local extra = overlap and (others or rings)
     if others and not extra then region = nil end
@@ -683,8 +685,7 @@ return function(S)
     if region and not extra then
       if not chord then S.lib.notes.set_own_region(voice_idx, region, true) end
       step_regions[voice_idx] = region
-      local pass = S.lib.notes.pass_seconds(voice_idx, region[2])
-      step_region_ends[voice_idx] = pass and util.time() + pass or nil
+      step_region_to_end[voice_idx] = S.lib.notes.pass_seconds(voice_idx, region[2]) ~= nil
     elseif not rings then
       end_step_region(voice_idx)
     end
