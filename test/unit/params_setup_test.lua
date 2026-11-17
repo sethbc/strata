@@ -992,26 +992,125 @@ local function field_text(value)
   return type(value) == "string" and string.format("%q", value) or tostring(value)
 end
 
--- The groundwork before 3.8 (its Global Constraints): every surviving param
--- keeps its id, default, spec and place. A package that removes or changes
--- a param on purpose lists it in ALLOWED, with why (none yet)
+-- The differences from 3.7.0 the groundwork before 3.8 makes on purpose
+-- (its Global Constraints: every surviving param keeps its id, default, spec
+-- and place; the fixture stays 3.7.0's). The package that makes a
+-- difference adds its entry here, with why; an empty list leaves the
+-- comparison exactly as strict as the fixture. An entry is one of:
+--   {kind = "removed", id = <id>, why = <text>}: 3.7.0's param <id> is gone
+--     (every fixture record with that id is left out of the comparison);
+--   {kind = "group_size", id = <group id>, n = <count>, why = <text>}: the
+--     group keeps its place, with n params;
+--   {kind = "options", id = <id>, options = {<text>, ...}, why = <text>}: the
+--     option param keeps its place, with these options.
+-- An entry naming an id the fixture lacks, or of another kind, raises.
+local PARAM_FIXTURE_ALLOWED = {}
+
+-- The fixture's records as this build should have them: a copy of each,
+-- the allowed differences applied
+local function allowed_records(fixture, allowed)
+  local removed, changed = {}, {}
+  local known = {}
+  for _, record in ipairs(fixture) do known[record.id] = true end
+  for index, entry in ipairs(allowed) do
+    local where = "allowed difference " .. index .. " (" .. tostring(entry.id) .. ")"
+    if type(entry.why) ~= "string" or entry.why == "" then error(where .. " says no why", 2) end
+    if not known[entry.id] then error(where .. ": 3.7.0 has no such param", 2) end
+    if entry.kind == "removed" then
+      removed[entry.id] = true
+    elseif entry.kind == "group_size" then
+      changed[entry.id] = {field = "n", value = entry.n}
+    elseif entry.kind == "options" then
+      changed[entry.id] = {field = "options", value = entry.options}
+    else
+      error(where .. ": no kind " .. tostring(entry.kind), 2)
+    end
+  end
+  local records = {}
+  for _, record in ipairs(fixture) do
+    if not removed[record.id] then
+      local copy = {}
+      for field, value in pairs(record) do copy[field] = value end
+      local change = changed[record.id]
+      if change then copy[change.field] = change.value end
+      records[#records + 1] = copy
+    end
+  end
+  return records
+end
+
+-- The first difference between the expected records and this build's, as
+-- a line, or nil when every record and field agrees
+local function first_param_difference(expected, actual)
+  for index = 1, math.max(#expected, #actual) do
+    local want, got = expected[index], actual[index]
+    if want == nil or got == nil then
+      return "param " .. index .. ": 3.7.0 had " .. tostring(want and want.id) .. ", this build "
+        .. tostring(got and got.id)
+    end
+    for _, field in ipairs(PARAM_FIXTURE_FIELDS) do
+      if field_text(got[field]) ~= field_text(want[field]) then
+        return "param " .. index .. " (" .. want.id .. ")'s " .. field .. ": expected " .. field_text(want[field])
+          .. ", got " .. field_text(got[field])
+      end
+    end
+  end
+  return nil
+end
+
 test("every param's id, type, name, default and spec is 3.7.0's, in order", function()
   math.randomseed(37)
   local first
   local context = load_strata({before_load = function() first = #params.params + 1 end})
   finish_startup(context)
-  local expected = dofile(h.repo_root .. "/test/fixtures/3.7.0-params.lua")
+  local fixture = dofile(h.repo_root .. "/test/fixtures/3.7.0-params.lua")
   local actual = {}
   for index = first, #params.params do actual[#actual + 1] = fixture_record(params.params[index], context.audio_dir) end
-  for index = 1, math.max(#expected, #actual) do
-    local want, got = expected[index], actual[index]
-    assert_true(want ~= nil and got ~= nil, "param " .. index .. ": 3.7.0 had " .. tostring(want and want.id)
-      .. ", this build " .. tostring(got and got.id))
-    for _, field in ipairs(PARAM_FIXTURE_FIELDS) do
-      assert_equal(field_text(got[field]), field_text(want[field]), "param " .. index .. " (" .. want.id .. ")'s " .. field)
+  local difference = first_param_difference(allowed_records(fixture, PARAM_FIXTURE_ALLOWED), actual)
+  if difference then h.fail(difference) end
+end)
+
+test("the fixture comparison honors each kind of allowed difference, and only those", function()
+  local fixture = {
+    {id = "head", t = params.tSEPARATOR, name = "head"},
+    {id = "lfo", t = params.tGROUP, name = "lfo", n = 3},
+    {id = "mode", t = params.tOPTION, name = "mode", default = 1, options = {"a", "b", "c"}},
+    {id = "gone", t = params.tNUMBER, name = "gone", default = 0, min = 0, max = 4},
+    {id = "kept", t = params.tNUMBER, name = "kept", default = 1, min = 0, max = 4},
+  }
+  local build = {
+    {id = "head", t = params.tSEPARATOR, name = "head"},
+    {id = "lfo", t = params.tGROUP, name = "lfo", n = 2},
+    {id = "mode", t = params.tOPTION, name = "mode", default = 1, options = {"a", "b"}},
+    {id = "kept", t = params.tNUMBER, name = "kept", default = 1, min = 0, max = 4},
+  }
+  local entries = {
+    {kind = "removed", id = "gone", why = "a test"},
+    {kind = "group_size", id = "lfo", n = 2, why = "a test"},
+    {kind = "options", id = "mode", options = {"a", "b"}, why = "a test"},
+  }
+  assert_equal(first_param_difference(allowed_records(fixture, entries), build), nil, "every difference is allowed")
+  assert_equal(#fixture, 5, "the fixture itself is left alone")
+  assert_equal(fixture[2].n, 3, "its records too")
+  -- an empty list is the plain comparison
+  assert_equal(first_param_difference(allowed_records(fixture, {}), fixture), nil, "the fixture is itself")
+  assert_true(first_param_difference(allowed_records(fixture, {}), build) ~= nil, "unlisted, the build differs")
+  -- each difference with no entry still fails
+  for left_out = 1, #entries do
+    local others = {}
+    for index, entry in ipairs(entries) do
+      if index ~= left_out then others[#others + 1] = entry end
     end
+    assert_true(first_param_difference(allowed_records(fixture, others), build) ~= nil,
+      entries[left_out].kind .. " left out: the build differs")
   end
-  assert_equal(#actual, #expected, "as many params as 3.7.0")
+  -- an entry allows only what it says
+  local wrong_size = {entries[1], {kind = "group_size", id = "lfo", n = 4, why = "a test"}, entries[3]}
+  assert_true(first_param_difference(allowed_records(fixture, wrong_size), build) ~= nil, "another size fails")
+  -- an entry naming no 3.7.0 param, of no kind, or without why raises
+  assert_true(not pcall(allowed_records, fixture, {{kind = "removed", id = "never", why = "a test"}}), "no such id")
+  assert_true(not pcall(allowed_records, fixture, {{kind = "renamed", id = "kept", why = "a test"}}), "no such kind")
+  assert_true(not pcall(allowed_records, fixture, {{kind = "removed", id = "gone"}}), "no why")
 end)
 
 -- The groundwork before 3.8 (ruling 5): a voice's scene keys, each with

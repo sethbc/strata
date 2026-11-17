@@ -122,9 +122,14 @@ test("every voice holds its values in one table, by its param ids' keys", functi
       if key and key ~= "source" and not key:match("^out_") and not key:match("^zone") then
         listed[key] = true
         assert_true(v.values[key] ~= nil, param.id .. " has a value")
+        -- an exp control's get is map(unmap(x)), an ulp or two from the value
+        -- it was set to (the voices table's literal default, freq's 100, reads
+        -- back as 99.999999999999986): equal within 1e-9, anything else exactly
         local value = params:get(param.id)
         if type(value) == "number" then
           assert_near(v.values[key], value, 1e-9, param.id .. "'s value is its param's")
+        else
+          assert_equal(v.values[key], value, param.id .. "'s value is its param's")
         end
       end
     end

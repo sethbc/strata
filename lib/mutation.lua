@@ -193,8 +193,9 @@ return function(S)
   -- normalized range (so exp params, freq and cutoff, spread evenly across
   -- octaves); for a buffer source the buffer params (rate 0.5-2, even in
   -- octaves; gentle scan); for the input neither (they do nothing); then
-  -- grain size and pitch. The draws keep randomize_voice's order, so a
-  -- seeded randomize lands where it always did
+  -- grain size and pitch. The synth params are drawn in the voice's
+  -- param_order (ruling 9 of the groundwork before 3.8; pairs order
+  -- before), so the order is the same on every run and on both Luas
   function M.voice_spec(voice_idx)
     local prefix = "v" .. voice_idx .. "_"
     local draws = {}
