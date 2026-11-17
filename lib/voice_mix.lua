@@ -49,7 +49,7 @@ return function(S)
     if type(voice) ~= "number" or voice < 1 or voice > count or voice % 1 ~= 0 then return false end
     local function held(index, key)
       local voice_state = S.voices[index]
-      return voice_state ~= nil and voice_state.extras ~= nil and voice_state.extras[key] == 1
+      return voice_state ~= nil and voice_state.values ~= nil and voice_state.values[key] == 1
     end
     if held(voice, "mute") then return true end
     if held(voice, "solo") then return false end
@@ -64,7 +64,7 @@ return function(S)
   function M.soloed(voice)
     if type(voice) ~= "number" or voice < 1 or voice > S.constants.NUM_VOICES or voice % 1 ~= 0 then return false end
     local voice_state = S.voices[voice]
-    local extras = voice_state and voice_state.extras
+    local extras = voice_state and voice_state.values
     return extras ~= nil and extras.solo == 1 and not M.silenced(voice)
   end
 

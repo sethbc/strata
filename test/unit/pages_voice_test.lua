@@ -822,7 +822,7 @@ test("a Sub voice's mix section has no pan: K2:rand, and the press does nothing 
   local context, S = started_voice_page()
   local sub
   for voice_idx = 1, S.constants.NUM_VOICES do
-    if S.voices[voice_idx].params.pan == nil then sub = voice_idx end
+    if S.voices[voice_idx].values.pan == nil then sub = voice_idx end
   end
   assert_true(sub ~= nil, "a voice without pan (Sub)")
   S.selected_voice = sub

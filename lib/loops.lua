@@ -48,7 +48,7 @@ return function(S)
 
   -- The longest loop length the voice's start leaves room for
   function M.max_length(voice_idx)
-    local start = valid_voice(voice_idx) and S.voices[voice_idx].extras[LOOP.start_key] or 0
+    local start = valid_voice(voice_idx) and S.voices[voice_idx].values[LOOP.start_key] or 0
     return 1 - (start or 0)
   end
 

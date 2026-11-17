@@ -297,7 +297,7 @@ return function(S)
     if not is_integer_between(voice_idx, 1, NUM_VOICES) then return nil end
     local values = {}
     for _, entry in ipairs((voice_scene_keys(voice_idx))) do
-      values[entry.key] = S.lib.voices.value(voice_idx, entry.key)
+      values[entry.key] = S.voices[voice_idx].values[entry.key]
     end
     return {active = S.voices[voice_idx].active, source = S.voices[voice_idx].source, values = values}
   end

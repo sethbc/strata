@@ -21,7 +21,7 @@
   - `S.registry` (`pages`, `params`, `start`, `cleanup`, `grid_layouts`, `voice_params`, `scene_fields`, `source_change`, `param_filters`, `lfo_destinations`, `fx_params`, `grain_restart`, `alt_release`, `menu_close`, `invariants`, and 3.4's `scene_blocks`, `pset_hooks`, `param_touch`, `lock_change`, `step_outputs`, `mod_sources`, and 3.5's `voice_stop`, `freeze_change`, and 3.6's `note_hooks`, `scene_recalled`, `silence_change`, `note_targets`, `ii_devices`, `macro_targets`, `io_sections`, and 3.7's `voice_hit`, `scene_applied`), `S.register_start`, `S.register_cleanup`, `S.register_invariant`, `S.lib`.
   - The `__declared` key set the tests use: a key ever assigned into `S`, even to nil, is recorded there.
 - `lib/constants.lua`: `S.constants`, a plain table. The constants and fixed tables (`NUM_VOICES`, `UI_PAGES`, `MAIN_PARAMS`, `GRAIN_PARAM_IDS`, `START_ORDER`, `CLEANUP_ORDER`, ...).
-- `lib/voices.lua`: `S.lib.voices`, with `value(voice_idx, key)` (a voice's value by its param id's key, read from its four tables until they become one).
+- `lib/voices.lua`: `S.lib.voices`, with `is_synth_key(voice_idx, key)` (whether `key` is in the voice's `param_order`; a synth-key test is never `values[key] ~= nil`).
   - `S.voices`, `S.locked`, `S.selected_voice`. There is no density field: the master density is the param `master_density` (read through `engine_param_value` or `params:get`).
   - The global source tests `voice_uses_synth`, `voice_uses_buffer`, `voice_source_label`, `voice_buffer_slot`.
 

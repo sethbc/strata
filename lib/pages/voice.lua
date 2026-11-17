@@ -201,7 +201,7 @@ return function(S)
       if draw then return function() return draw(voice_idx) end end
     end
     local draw = VOICE_DRAWS[key]
-    if not draw and row.section == "synth" and S.voices[voice_idx].params[key] ~= nil then draw = synth_param_draw end
+    if not draw and row.section == "synth" and S.lib.voices.is_synth_key(voice_idx, key) then draw = synth_param_draw end
     if draw then return function() return draw(row.param_id) end end
   end
 

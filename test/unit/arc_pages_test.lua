@@ -677,7 +677,7 @@ test("MAIN's ALT pan ring is dark and ignored for Sub", function()
   local S = local_value("S")
   show_page("MAIN")
   S.selected_voice = 4
-  assert_true(S.voices[4].params.pan == nil, "Sub has no pan")
+  assert_true(S.voices[4].values.pan == nil, "Sub has no pan")
   key(1, 1)
   local before = {}
   for _, row in ipairs(voice_page_rows(4)) do

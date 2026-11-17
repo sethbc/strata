@@ -676,11 +676,10 @@ end
 -- its step, any other exactly
 local function assert_voice_matches(voice_idx, voice, captured)
   local prefix = "voice " .. voice_idx .. " "
-  local S = shared_state()
   for key, value in pairs(captured.values) do
     local param = params:lookup_param("v" .. voice_idx .. "_" .. key)
     local tolerance = param.controlspec and param.controlspec.step + 0.011 or 1e-9
-    assert_near(S.lib.voices.value(voice_idx, key), value, tolerance, prefix .. key)
+    assert_near(voice.values[key], value, tolerance, prefix .. key)
   end
   assert_equal(voice.source, captured.source, prefix .. "source")
   assert_equal(voice.active, captured.active, prefix .. "active")

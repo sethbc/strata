@@ -29,8 +29,8 @@ return function(S)
   S.buf_pos_base = {}                  -- last non-drift buffer position per voice
   S.drift_writing = false              -- true while drift_update sets params
   for i = 1, NUM_VOICES do
-    S.grain_pitch_base[i] = S.voices[i].grain.pitch
-    S.buf_pos_base[i] = S.voices[i].grain.buf_pos
+    S.grain_pitch_base[i] = S.voices[i].values.grain_pitch
+    S.buf_pos_base[i] = S.voices[i].values.buf_pos
   end
 
   -- Mutation system
@@ -200,7 +200,7 @@ return function(S)
     local draws = {}
     local function add(key, draw) draws[#draws + 1] = {id = prefix .. key, draw = draw} end
     if voice_uses_synth(voice_idx) then
-      for key in pairs(S.voices[voice_idx].params) do
+      for _, key in ipairs(S.voices[voice_idx].param_order) do
         if key ~= "amp" then  -- never the level
           add(key, function() return params:lookup_param(prefix .. key).controlspec:map(math.random()) end)
         end
@@ -274,13 +274,13 @@ return function(S)
     -- the walk stays a subtle detune instead of wandering to the rails
     for i = 1, NUM_VOICES do
       if S.voices[i].active and not S.locked[i] then
-        local pitch = mean_reverting_step(S.voices[i].grain.pitch, S.grain_pitch_base[i],
+        local pitch = mean_reverting_step(S.voices[i].values.grain_pitch, S.grain_pitch_base[i],
           DRIFT_PITCH_STEP, DRIFT_PITCH_REVERSION)
         set_drifted_param("v" .. i .. "_grain_pitch", util.clamp(pitch, 0.25, 4))
 
         -- Buffer sources also drift their position the same way
         if voice_uses_buffer(i) then
-          local position = mean_reverting_step(S.voices[i].grain.buf_pos, S.buf_pos_base[i],
+          local position = mean_reverting_step(S.voices[i].values.buf_pos, S.buf_pos_base[i],
             DRIFT_BUF_POS_STEP, DRIFT_BUF_POS_REVERSION)
           set_drifted_param("v" .. i .. "_buf_pos", util.clamp(position, 0, 1))
           -- MAIN and the BUFFER arc ring show the selected voice's position only
@@ -326,7 +326,8 @@ return function(S)
 
         if voice_uses_synth(i) then
           -- Iterate through synthesis parameters
-          for key, current_val in pairs(v.params) do
+          for _, key in ipairs(v.param_order) do
+            local current_val = v.values[key]
             -- Skip amplitude and pan to preserve stability
             if key ~= "amp" and key ~= "pan" then
               -- Check if this parameter should mutate
@@ -351,7 +352,7 @@ return function(S)
               local spec = params:lookup_param(param_id).controlspec
               -- delta across the normalized range, so exp buf_rate moves evenly
               local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
-              set_mutated_param(i, param_id, mutated_value(spec, v.grain[key], delta))
+              set_mutated_param(i, param_id, mutated_value(spec, v.values[key], delta))
             end
           end
         end
@@ -360,15 +361,15 @@ return function(S)
         -- fraction of it, and a delta scale, per key). The discrete ones
         -- (DISCRETE_GRAIN_KEYS: envelope shape, grain mode) never mutate.
         for _, mutation in ipairs({
-          {key = "size", param = "grain_size", chance = 0.5, scale = 0.2},
-          {key = "pitch", param = "grain_pitch", chance = 0.3, scale = 1.0},
-          {key = "spread", param = "grain_spread", chance = 0.2, scale = 0.3}
+          {param = "grain_size", chance = 0.5, scale = 0.2},
+          {param = "grain_pitch", chance = 0.3, scale = 1.0},
+          {param = "grain_spread", chance = 0.2, scale = 0.3}
         }) do
-          if not DISCRETE_GRAIN_KEYS[mutation.key] and math.random() < probability * mutation.chance then
+          if not DISCRETE_GRAIN_KEYS[mutation.param] and math.random() < probability * mutation.chance then
             local param_id = "v" .. i .. "_" .. mutation.param
             local spec = params:lookup_param(param_id).controlspec
             local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * mutation.scale
-            set_mutated_param(i, param_id, util.clamp(v.grain[mutation.key] + delta, spec.minval, spec.maxval))
+            set_mutated_param(i, param_id, util.clamp(v.values[mutation.param] + delta, spec.minval, spec.maxval))
           end
         end
       end

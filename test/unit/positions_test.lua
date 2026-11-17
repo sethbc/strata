@@ -399,7 +399,7 @@ test("bookmarks round-trip through a PSET in any order", function()
   for n, value in ipairs({0.1, 0.2, 0.3, 0.4}) do
     assert_near(params:get("v2_bookmark_" .. n), value, 1e-9, "bookmark " .. n)
   end
-  assert_near(S.voices[2].extras.bookmark_3, 0.3, 1e-9, "stored too")
+  assert_near(S.voices[2].values.bookmark_3, 0.3, 1e-9, "stored too")
 end)
 
 test("store_bookmark takes the playhead, or buf_pos mapped into the loop when stopped", function()

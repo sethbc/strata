@@ -17,11 +17,13 @@ test("every voice param has a menu param, ordered by param_order", function()
     for _, key in ipairs(voice.param_order) do
       listed[key] = true
       local param = params:lookup_param("v" .. voice_idx .. "_" .. key)
-      assert_near(param.controlspec.default, voice.params[key], 1e-9,
+      assert_near(param.controlspec.default, voice.values[key], 1e-9,
         "voice " .. voice_idx .. " " .. key .. " default comes from the voices table")
     end
-    for key in pairs(voice.params) do
-      assert_true(listed[key], "voice " .. voice_idx .. " param_order lists " .. key)
+    for key in pairs(voice.values) do
+      if pcall(get_param_spec, key) then  -- a synthesis param
+        assert_true(listed[key], "voice " .. voice_idx .. " param_order lists " .. key)
+      end
     end
   end
 end)
@@ -33,7 +35,7 @@ test("grain envelope param: options, default, scenes, never mutated or randomize
     assert_equal(param.t, params.tOPTION, "voice " .. voice_idx .. " grain_env is an option")
     assert_equal(param.count, 5, "five envelope shapes")
     assert_equal(params:get("v" .. voice_idx .. "_grain_env"), 1, "default hann")
-    assert_equal(local_value("voices")[voice_idx].grain.env, 1, "voices table holds the index")
+    assert_equal(local_value("voices")[voice_idx].values.grain_env, 1, "voices table holds the index")
   end
   local names = {}
   for index = 1, 5 do params:set("v1_grain_env", index); names[index] = params:string("v1_grain_env") end
@@ -80,7 +82,7 @@ test("grain mode param: options, default, sync, scenes, never mutated, randomize
     assert_equal(param.t, params.tOPTION, "voice " .. voice_idx .. " grain_mode is an option")
     assert_equal(param.count, 2, "two grain modes")
     assert_equal(params:get("v" .. voice_idx .. "_grain_mode"), 1, "default continuous")
-    assert_equal(voices[voice_idx].grain.mode, 1, "voices table holds the index")
+    assert_equal(voices[voice_idx].values.grain_mode, 1, "voices table holds the index")
   end
   params:set("v1_grain_mode", 1); assert_equal(params:string("v1_grain_mode"), "continuous")
   params:set("v1_grain_mode", 2); assert_equal(params:string("v1_grain_mode"), "triggered")
@@ -310,17 +312,16 @@ test("source and buffer params: options, defaults, voices table, labels", functi
     assert_equal(voices[voice_idx].source, 1, "voices table holds the source index")
     for key, default in pairs(expected) do
       assert_near(params:get(prefix .. key), default, 1e-9, prefix .. key .. " default")
-      assert_near(voices[voice_idx].grain[key], default, 1e-9, "voices[" .. voice_idx .. "].grain." .. key)
-      assert_equal(local_value("GRAIN_PARAM_IDS")[key], key, key .. " in GRAIN_PARAM_IDS")
+      assert_near(voices[voice_idx].values[key], default, 1e-9, "voices[" .. voice_idx .. "].values." .. key)
     end
   end
   assert_equal(param_range("v1_buf_pos"), 0); assert_equal(select(2, param_range("v1_buf_pos")), 1)
   assert_equal(param_range("v1_buf_rate"), 0.25); assert_equal(select(2, param_range("v1_buf_rate")), 4)
   assert_equal(param_range("v1_buf_scan"), -2); assert_equal(select(2, param_range("v1_buf_scan")), 2)
   assert_equal(params:lookup_param("v1_buf_rate").controlspec.warp_name, "exp", "buf rate is exponential")
-  params:set("v2_buf_rate", 2); assert_near(voices[2].grain.buf_rate, 2, 1e-9)
-  params:set("v2_buf_scan", -1); assert_near(voices[2].grain.buf_scan, -1, 1e-9)
-  params:set("v2_buf_pos", 0.123); assert_near(voices[2].grain.buf_pos, 0.123, 1e-9, "buf_pos is not quantized")
+  params:set("v2_buf_rate", 2); assert_near(voices[2].values.buf_rate, 2, 1e-9)
+  params:set("v2_buf_scan", -1); assert_near(voices[2].values.buf_scan, -1, 1e-9)
+  params:set("v2_buf_pos", 0.123); assert_near(voices[2].values.buf_pos, 0.123, 1e-9, "buf_pos is not quantized")
   assert_true(not voice_uses_buffer(2), "synth source is not a buffer")
   assert_equal(voice_source_label(2), "synth")
   params:set("v2_source", 9); assert_true(voice_uses_buffer(2)); assert_equal(voice_source_label(2), "buf 8")
@@ -553,15 +554,16 @@ test("each crossmod slot has its source, amp mod and freq mod params, sent to it
     assert_equal(table.concat(context.calls_named("setModSource")[1].args, " "), "1 " .. slot .. " 2")
     assert_equal(table.concat(context.calls_named("setModAmpAmt")[1].args, " "), "1 " .. slot .. " 1.25")
     assert_equal(table.concat(context.calls_named("setModFreqAmt")[1].args, " "), "1 " .. slot .. " -0.75")
-    local slot_state = voices[2].crossmod["slot" .. slot]
-    assert_equal(slot_state.source, 3); assert_equal(slot_state.amp_amt, 1.25); assert_equal(slot_state.freq_amt, -0.75)
+    local values = voices[2].values
+    assert_equal(values["mod_source_" .. slot], 3); assert_equal(values["mod_amp_amt_" .. slot], 1.25)
+    assert_equal(values["mod_freq_amt_" .. slot], -0.75)
   end
   -- a stopped voice's slot is stored, not sent
   assert_true(not voices[5].active, "voice 5 is stopped")
   context.clear_engine_calls()
   params:set("v5_mod_source_2", 4); params:set("v5_mod_amp_amt_2", 1); params:set("v5_mod_freq_amt_2", 1)
   assert_equal(#context.engine_calls, 0, "nothing sent for a stopped voice")
-  assert_equal(voices[5].crossmod.slot2.source, 4); assert_equal(voices[5].crossmod.slot2.amp_amt, 1)
+  assert_equal(voices[5].values.mod_source_2, 4); assert_equal(voices[5].values.mod_amp_amt_2, 1)
 end)
 
 test("a tempo change from an external clock redraws SEQ and the arc (#383)", function()
@@ -655,7 +657,7 @@ test("a PSET's fractional number params load whole (#554)", function()
   assert_equal(params:get("v1_mod_source_1"), 0, "mod source 0.05 loads as 0")
   assert_equal(params:get("scene_sequence_length"), 4, "sequence length 4.05 loads as 4")
   assert_equal(params:get("v1_custom_interval_1"), -3, "custom interval -2.6 loads as -3")
-  assert_equal(S.voices[1].crossmod.slot1.source, 0, "the voices table holds the whole source")
+  assert_equal(S.voices[1].values.mod_source_1, 0, "the voices table holds the whole source")
   assert_equal(params:get("link_quantum"), 4.5, "norns' own params are left alone")
   -- a silent read runs no action: the hook alone rounds them
   params:set("v1_mod_source_1", 2); params:set("scene_sequence_length", 2); params:set("v1_custom_interval_1", 5)
@@ -697,9 +699,9 @@ test("a PSET read while a voice runs sends its crossmod source and custom interv
   end
   assert_true(#intervals > 0, "the custom interval reaches the engine")
   for _, value in ipairs(intervals) do assert_equal(value, -3, "interval1 is sent whole") end
-  assert_equal(S.voices[1].crossmod.slot1.source, 0)
-  assert_equal(S.voices[1].crossmod.slot2.source, 3)
-  assert_equal(S.voices[1].extras.custom_interval_1, -3)
+  assert_equal(S.voices[1].values.mod_source_1, 0)
+  assert_equal(S.voices[1].values.mod_source_2, 3)
+  assert_equal(S.voices[1].values.custom_interval_1, -3)
   assert_equal(params:get("v1_mod_source_1"), 0, "and the params are whole once the read is done")
   assert_equal(params:get("v1_custom_interval_1"), -3)
 end)

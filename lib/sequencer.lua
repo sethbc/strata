@@ -161,19 +161,19 @@ return function(S)
 
   local function voice_param(voice_idx, key) return "v" .. voice_idx .. "_" .. key end
 
-  local function extras(voice_idx) return S.voices[voice_idx].extras or {} end
+  local function voice_values(voice_idx) return S.voices[voice_idx].values or {} end
 
-  local function voice_length(voice_idx) return extras(voice_idx).seq_length or PATTERN_LENGTH end
+  local function voice_length(voice_idx) return voice_values(voice_idx).seq_length or PATTERN_LENGTH end
 
   local function division_beats(voice_idx)
-    return SEQ.division_beats[extras(voice_idx).seq_division or SEQ.default_division]
+    return SEQ.division_beats[voice_values(voice_idx).seq_division or SEQ.default_division]
   end
 
-  local function gated(voice_idx) return extras(voice_idx).seq_gate == SEQ.gate_on end
+  local function gated(voice_idx) return voice_values(voice_idx).seq_gate == SEQ.gate_on end
 
-  local function direction(voice_idx) return extras(voice_idx).seq_direction or SEQ.forward end
+  local function direction(voice_idx) return voice_values(voice_idx).seq_direction or SEQ.forward end
 
-  local function misstep(voice_idx) return extras(voice_idx).seq_misstep or 0 end
+  local function misstep(voice_idx) return voice_values(voice_idx).seq_misstep or 0 end
 
   local function sorted_keys(set)
     local keys = {}
@@ -455,7 +455,7 @@ return function(S)
   -- steps x the voice's nominal step in seconds / hits, clamped
   function M.gate_seconds(voice_idx, step, hits)
     if not valid_voice(voice_idx) then return nil end
-    local steps = (step and M.step_attr(voice_idx, step, "gate")) or extras(voice_idx).seq_gate_length
+    local steps = (step and M.step_attr(voice_idx, step, "gate")) or voice_values(voice_idx).seq_gate_length
       or SEQ.gate_length_default
     local seconds = steps * division_beats(voice_idx) * S.lib.params_setup.beat_seconds_now() / (hits or 1)
     return util.clamp(seconds, SEQ.gate_seconds[1], SEQ.gate_seconds[2])
@@ -883,7 +883,7 @@ return function(S)
       velocity = level / MAX_STEP_LEVEL, beat = clock.get_beats(), gate_beats = division / hits,
       pitches = copy_list(pitches)}
     if gated(voice_idx) then
-      local steps = attrs.gate or extras(voice_idx).seq_gate_length or SEQ.gate_length_default
+      local steps = attrs.gate or voice_values(voice_idx).seq_gate_length or SEQ.gate_length_default
       event.gate_beats = steps * division / hits
     end
     if attrs.notes then event.notes, event.semitones = copy_list(attrs.notes), copy_list(semitones or {}) end
@@ -1061,7 +1061,7 @@ return function(S)
   -- The beat a voice's tick k falls on: anchor + k x division, every odd
   -- tick (the 2nd, 4th, ... step since the anchor) late by its swing
   local function swing_beats(voice_idx)
-    local swing = extras(voice_idx).seq_swing or SEQ.swing[1]
+    local swing = voice_values(voice_idx).seq_swing or SEQ.swing[1]
     return (swing - SEQ.swing[1]) / SEQ.swing[1] * division_beats(voice_idx)
   end
 

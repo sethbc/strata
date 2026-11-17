@@ -38,7 +38,7 @@ return function(S)
   local function main_alt_ring_param(n)
     local suffix = ARC_MAIN_ALT_KEYS[n]
     if suffix == nil then return nil end
-    if suffix == "pan" and S.voices[S.selected_voice].params.pan == nil then return nil end  -- Sub
+    if suffix == "pan" and not S.lib.voices.is_synth_key(S.selected_voice, "pan") then return nil end  -- Sub
     return voice_prefix() .. suffix
   end
 

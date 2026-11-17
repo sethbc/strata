@@ -31,30 +31,31 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
     local voice = voices[voice_idx]
     local sent = engine_state_for_voice(context.engine_calls, voice_idx - 1)
     assert_true(sent.voice_on ~= nil, "voiceOn sent for voice " .. voice_idx)
-    assert_equal(sent.voice_on[2], voice.params.freq, "voiceOn freq (number) for voice " .. voice_idx)
-    for key, value in pairs(voice.params) do
-      assert_equal(sent.voice[key], value, "voice " .. voice_idx .. " setVoiceParam " .. key)
+    assert_equal(sent.voice_on[2], voice.values.freq, "voiceOn freq (number) for voice " .. voice_idx)
+    for _, key in ipairs(voice.param_order) do
+      assert_equal(sent.voice[key], voice.values[key], "voice " .. voice_idx .. " setVoiceParam " .. key)
     end
-    assert_equal(sent.grain.grainSize, voice.grain.size, "voice " .. voice_idx .. " grainSize")
-    assert_near(sent.grain.grainDensity, voice.grain.density * 1.5, 1e-9, "voice " .. voice_idx .. " grainDensity")
-    assert_equal(sent.grain.pitchShift, voice.grain.pitch, "voice " .. voice_idx .. " pitchShift")
-    assert_equal(sent.grain.posSpread, voice.grain.spread, "voice " .. voice_idx .. " posSpread")
-    assert_equal(sent.grain.envShape, voice.grain.env - 1, "voice " .. voice_idx .. " envShape")
-    assert_equal(sent.grain.grainMode, voice.grain.mode - 1, "voice " .. voice_idx .. " grainMode")
-    assert_equal(sent.grain.bufPos, voice.grain.buf_pos, "voice " .. voice_idx .. " bufPos")
-    assert_equal(sent.grain.bufRate, voice.grain.buf_rate, "voice " .. voice_idx .. " bufRate")
-    assert_equal(sent.grain.bufScan, voice.grain.buf_scan, "voice " .. voice_idx .. " bufScan")
+    assert_equal(sent.grain.grainSize, voice.values.grain_size, "voice " .. voice_idx .. " grainSize")
+    assert_near(sent.grain.grainDensity, voice.values.grain_density * 1.5, 1e-9, "voice " .. voice_idx .. " grainDensity")
+    assert_equal(sent.grain.pitchShift, voice.values.grain_pitch, "voice " .. voice_idx .. " pitchShift")
+    assert_equal(sent.grain.posSpread, voice.values.grain_spread, "voice " .. voice_idx .. " posSpread")
+    assert_equal(sent.grain.envShape, voice.values.grain_env - 1, "voice " .. voice_idx .. " envShape")
+    assert_equal(sent.grain.grainMode, voice.values.grain_mode - 1, "voice " .. voice_idx .. " grainMode")
+    assert_equal(sent.grain.bufPos, voice.values.buf_pos, "voice " .. voice_idx .. " bufPos")
+    assert_equal(sent.grain.bufRate, voice.values.buf_rate, "voice " .. voice_idx .. " bufRate")
+    assert_equal(sent.grain.bufScan, voice.values.buf_scan, "voice " .. voice_idx .. " bufScan")
     -- the source goes first, before voiceOn and any other voice state (#325)
     assert_equal(context.engine_calls[1].name, "setGrainSource", "voice " .. voice_idx .. " source synced first")
     assert_equal(context.engine_calls[1].args[2], voice.source - 1, "voice " .. voice_idx .. " source")
     for slot = 1, 3 do
-      local slot_state = voice.crossmod["slot" .. slot]
+      local slot_state = {source = voice.values["mod_source_" .. slot], amp_amt = voice.values["mod_amp_amt_" .. slot],
+        freq_amt = voice.values["mod_freq_amt_" .. slot]}
       local expected_source = slot_state.source == 0 and -1 or slot_state.source - 1
       assert_equal(sent.source[slot], expected_source, "voice " .. voice_idx .. " slot " .. slot .. " source")
       assert_equal(sent.amp_amt[slot], slot_state.amp_amt, "voice " .. voice_idx .. " slot " .. slot .. " amp")
       assert_equal(sent.freq_amt[slot], slot_state.freq_amt, "voice " .. voice_idx .. " slot " .. slot .. " freq")
     end
-    assert_equal(sent.speed, voice.crossmod.speed, "voice " .. voice_idx .. " mod speed")
+    assert_equal(sent.speed, voice.values.mod_speed, "voice " .. voice_idx .. " mod speed")
   end
 end)
 

@@ -175,7 +175,7 @@ return function(S)
       screen.move(LAYOUT.lock_x, LAYOUT.state_y)
       screen.text("[L]")
     end
-    if GRAIN_MODE_OPTIONS[v.grain.mode] == "triggered" then
+    if GRAIN_MODE_OPTIONS[v.values.grain_mode] == "triggered" then
       screen.level(LAYOUT.trig_level)
       screen.move(LAYOUT.trig_x, LAYOUT.state_y)
       screen.text("[T]")

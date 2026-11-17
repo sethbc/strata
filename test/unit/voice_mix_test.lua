@@ -45,7 +45,7 @@ test("voice filter and send params default to 3.0's chain and reach the engine",
     for _, key in ipairs(KEYS) do
       local id = "v" .. voice_idx .. "_" .. key
       assert_near(params:get(id), defaults[key], 1e-9, id .. " default")
-      assert_near(S.voices[voice_idx].extras[key], defaults[key], 1e-9, id .. " stored in extras")
+      assert_near(S.voices[voice_idx].values[key], defaults[key], 1e-9, id .. " stored in values")
     end
     assert_equal(params:string("v" .. voice_idx .. "_filter_type"), "lowpass")
     local low, high = param_range("v" .. voice_idx .. "_filter_freq")

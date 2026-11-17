@@ -374,7 +374,7 @@ local function randomize_voice_draws(voice_idx, seed)
     drawn[prefix .. key] = spec:map(spec:unmap(value))
   end
   if voice_uses_synth(voice_idx) then
-    for key in pairs(local_value("voices")[voice_idx].params) do
+    for _, key in ipairs(local_value("voices")[voice_idx].param_order) do
       if key ~= "amp" then draw(key, params:lookup_param(prefix .. key).controlspec:map(math.random())) end
     end
   elseif voice_uses_buffer(voice_idx) then

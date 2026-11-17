@@ -89,7 +89,7 @@ return function(S)
   -- Whether voice voice_idx quantizes (v<i>_quantize on)
   function M.quantizes(voice_idx)
     local voice = S.voices[voice_idx]
-    return voice ~= nil and voice.extras ~= nil and voice.extras.quantize == 1
+    return voice ~= nil and voice.values ~= nil and voice.values.quantize == 1
   end
 
   -- The voice's reference note for grain quantize (scaleNote): a synth
@@ -103,7 +103,7 @@ return function(S)
     if voice_uses_synth(voice_idx) then
       local reference = S.lib.notes and S.lib.notes.freeze_reference(voice_idx)
       if reference then return reference end
-      return freq_to_note(freq or S.voices[voice_idx].params.freq)
+      return freq_to_note(freq or S.voices[voice_idx].values.freq)
     end
     return S.lib.samples.scale_reference(voice_idx) or M.root() + V.reference_octave
   end
@@ -124,7 +124,7 @@ return function(S)
 
   -- The semitones of the voice's interval set (empty while it is off)
   function M.interval_set(voice_idx)
-    local extras = S.voices[voice_idx].extras
+    local extras = S.voices[voice_idx].values
     local set = extras.intervals
     if set == V.set_index.octaves then return V.octaves end
     if set == V.set_index.fifths then return V.fifths end
@@ -225,7 +225,7 @@ return function(S)
   local function snap_freq(voice_idx)
     shadow[voice_idx], returned[voice_idx] = nil, nil
     local param_id = "v" .. voice_idx .. "_freq"
-    params:set(param_id, tone_freq(voice_idx, freq_to_note(S.voices[voice_idx].params.freq)))
+    params:set(param_id, tone_freq(voice_idx, freq_to_note(S.voices[voice_idx].values.freq)))
   end
 
   -- A note for a MIDI note on a quantized voice: the nearest scale tone
@@ -299,7 +299,7 @@ return function(S)
         add(voice_idx, record, "custom_interval_" .. index, {type = "number", name = "custom " .. index,
           min = -V.custom_range, max = V.custom_range, default = default, formatter = semitones_text,
           action = function()
-            if S.voices[voice_idx].extras.intervals == V.set_index.custom then M.send_intervals(voice_idx) end
+            if S.voices[voice_idx].values.intervals == V.set_index.custom then M.send_intervals(voice_idx) end
           end})
       end
     end,
@@ -338,7 +338,7 @@ return function(S)
       rows = rows,
       -- the custom intervals only for the custom set
       when = function(voice_idx, key)
-        return not key:match("^custom_interval_") or S.voices[voice_idx].extras.intervals == V.set_index.custom
+        return not key:match("^custom_interval_") or S.voices[voice_idx].values.intervals == V.set_index.custom
       end,
     },
     layout_states = layout_states,
@@ -381,7 +381,7 @@ return function(S)
         M.send_scale()
         snap_quantized_freqs()
         for voice_idx = 1, NUM_VOICES do
-          if S.voices[voice_idx].extras.intervals == V.set_index.chord then M.send_intervals(voice_idx) end
+          if S.voices[voice_idx].values.intervals == V.set_index.chord then M.send_intervals(voice_idx) end
         end
       end}
     params:add{type = "option", id = "root", name = "root", options = musicutil.NOTE_NAMES, default = 1,

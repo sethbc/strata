@@ -57,7 +57,7 @@ return function(S)
     return value
   end
   local function settings(voice_idx)
-    local extras, set = S.voices[voice_idx].extras, settings_of[voice_idx]
+    local extras, set = S.voices[voice_idx].values, settings_of[voice_idx]
     set.attack, set.decay = setting(extras, "env_attack"), setting(extras, "env_decay")
     set.sustain, set.release = setting(extras, "env_sustain"), setting(extras, "env_release")
     set.curve, set.loop = setting(extras, "env_curve"), setting(extras, "env_loop") == ENV.loop_on
@@ -121,7 +121,7 @@ return function(S)
   local function hold_for(voice_idx, info)
     if info and type(info.gate_seconds) == "number" then return info.gate_seconds end
     local sequencer = S.lib.sequencer
-    if S.voices[voice_idx].extras.seq_gate == sequencer.SEQ.gate_on then
+    if S.voices[voice_idx].values.seq_gate == sequencer.SEQ.gate_on then
       return sequencer.gate_seconds(voice_idx) or 0
     end
     return 0
