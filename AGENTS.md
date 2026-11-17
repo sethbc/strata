@@ -13,7 +13,7 @@ Strata is an ambient granular soundscape generator for monome norns (its feature
 - `ROADMAP.md`: the order and scope of the coming releases, and what has shipped. `docs/history.md`: each release in a paragraph, and how it was built. CHANGELOG.md: every change of every release.
 - docs/design/: one design per release (`docs/design/3.4-design.md`, ...), written before its code and history once it ships. `docs/design/3.0-design.md` is still the reference for behavior; where the code differs, CHANGELOG.md's 3.0 "Deviations from the design" and later entries say how.
 - docs/decisions/: the decisions taken during development, one file per release line, each with what it costs if wrong (`docs/decisions/README.md`). Add a release's decisions there.
-- docs/notes/lua/: the Lua notes, one file per module (the module table below names each). Each opens with "Must not break", then what the module owns and how it works.
+- docs/notes/lua/: the Lua notes, one file per module (the module table below says which). Each opens with "Must not break", then what the module owns and how it works.
 - docs/notes/engine/: the engine notes, one file per area of the engine check, each opening with "Must not break": `docs/notes/engine/structure.md`, `docs/notes/engine/voices.md`, `docs/notes/engine/grains.md`, `docs/notes/engine/lifecycle.md`, `docs/notes/engine/memory.md`, `docs/notes/engine/performance.md`, `docs/notes/engine/buffers.md`, `docs/notes/engine/files.md`, `docs/notes/engine/record.md`, `docs/notes/engine/waveform.md`, `docs/notes/engine/positions.md`, `docs/notes/engine/loops.md`, `docs/notes/engine/effects.md`, `docs/notes/engine/mix.md`, `docs/notes/engine/rings.md`, `docs/notes/engine/freeze.md`, `docs/notes/engine/variation.md`, `docs/notes/engine/modulation.md`, `docs/notes/engine/envelopes.md`, `docs/notes/engine/notes.md`, `docs/notes/engine/onsets.md`.
 - `docs/checks.md`: how to run every check, what each needs, and CI.
 - `docs/notes/test-harness.md`: how the test harness works (the stubs, the runner, the engine check's runner).
@@ -42,7 +42,7 @@ A worker's report lists the skills it invoked, and a review fails a package miss
 
 The project is written in two languages that must stay in sync:
 1. **`strata.lua` and its `lib/*.lua` modules** (the norns script): UI, params, encoders/keys, grid, arc, MIDI and LFOs. They control the engine through `engine.*` commands.
-2. **`lib/Engine_Strata.sc` and its `lib/engine/Strata*.sc` class extensions** (the SuperCollider engine): all synthesis and audio processing. It exposes commands with `this.addCommand()`. `lib/Engine_Strata.sc` holds only the class, every variable, `*new` and a generic `alloc` and `free`; all other code is in `lib/engine/` (the module table lists the files).
+2. **`lib/Engine_Strata.sc` and its `lib/engine/Strata*.sc` class extensions** (the SuperCollider engine): all synthesis and audio processing. It exposes commands with `this.addCommand()`. `lib/Engine_Strata.sc` holds only the class, every variable, `*new` and a generic `alloc` and `free`; all other code is in `lib/engine/`, a file for each area or set of defs.
    - The engine is built from **areas** (`strataArea<Name>` methods returning hooks, `voiceHit` among them, and an `order`; state in `areaState[\<name>]`): `free` runs every `stop` before any `free`, so a node never goes in `free`, a bus or buffer never in `stop`. Details: `docs/notes/engine/structure.md` (Areas).
    - Engine files are named `Strata*.sc` and extension files add methods only, never variables. Renaming or deleting an engine file needs a norns restart note in the changelog fragment.
 
@@ -57,7 +57,7 @@ Voice Bus → Mod Synth → Mod Bus → Other Voice Synths (cross-modulation, 3 
 
 ### Modules, notes and tests
 
-In include order. Unit test files are under test/unit/ (one per module).
+A top-level module `lib/<name>.lua` the table leaves out is `S.lib.<name>`, its notes `docs/notes/lua/<name>.md` (underscores as hyphens), its tests `test/unit/<name>_test.lua`. This holds for top-level modules only: a module in a subfolder of lib/ keeps a row of its own. Every module, in include order: `docs/notes/lua/state-and-voices.md` (The module table).
 
 | Module | S.lib name | Notes | Unit tests |
 |--------|--------------|-------|------------|
@@ -65,47 +65,10 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/state.lua`, `lib/constants.lua` | S itself, S.constants | `docs/notes/lua/state-and-voices.md` | structure_test.lua, registries_test.lua |
 | `lib/voices.lua` | `voices` | `docs/notes/lua/state-and-voices.md` | voices_test.lua |
 | `lib/ui/frame.lua` | `ui_frame` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_layout_test.lua |
-| `lib/engine_sync.lua` | `engine_sync` | `docs/notes/lua/engine-sync.md` | engine_sync_test.lua |
-| `lib/data_files.lua` | `data_files` | `docs/notes/lua/data-files.md` | data_files_test.lua |
-| `lib/chance.lua` | `chance` | `docs/notes/lua/chance.md` | chance_test.lua |
 | `lib/side_files.lua` | `side_files` | `docs/notes/lua/data-files.md` (Side files) | side_files_test.lua |
-| `lib/buffers.lua` | `buffers` | `docs/notes/lua/buffers.md` | buffers_test.lua |
-| `lib/record.lua` | `record` | `docs/notes/lua/record.md` | record_test.lua |
-| `lib/lfos.lua` | `lfos` | `docs/notes/lua/lfos.md` | lfos_test.lua |
-| `lib/mutation.lua` | `mutation` | `docs/notes/lua/mutation.md` | mutation_test.lua |
-| `lib/scenes.lua` | `scenes` | `docs/notes/lua/scenes.md` | scenes_test.lua |
 | `lib/midi_in.lua` | `midi_in` | `docs/notes/lua/midi.md` | midi_in_test.lua |
-| `lib/history.lua` | `history` | `docs/notes/lua/history.md` | history_test.lua |
-| `lib/freeze.lua` | `freeze` | `docs/notes/lua/freeze.md` | freeze_test.lua |
-| `lib/loops.lua` | `loops` | `docs/notes/lua/loops.md` | loops_test.lua |
-| `lib/variation.lua` | `variation` | `docs/notes/lua/variation.md` | variation_test.lua |
-| `lib/voice_mix.lua` | `voice_mix` | `docs/notes/lua/voice-mix.md` | voice_mix_test.lua |
-| `lib/performance.lua` | `performance` | `docs/notes/lua/performance.md` | performance_test.lua |
-| `lib/files.lua` | `files` | `docs/notes/lua/files.md` | files_test.lua |
-| `lib/waveforms.lua` | `waveforms` | `docs/notes/lua/waveforms.md` | waveforms_test.lua |
-| `lib/samples.lua` | `samples` | `docs/notes/lua/samples.md` | samples_test.lua |
-| `lib/playheads.lua` | `playheads` | `docs/notes/lua/playheads.md` | playheads_test.lua |
-| `lib/positions.lua` | `positions` | `docs/notes/lua/positions.md` | positions_test.lua |
-| `lib/scan.lua` | `scan` | `docs/notes/lua/scan.md` | scan_test.lua |
-| `lib/bookmarks.lua` | `bookmarks` | `docs/notes/lua/bookmarks.md` | bookmarks_test.lua |
 | `lib/ui/modal.lua` | `ui_modal` | `docs/notes/lua/ui/pages-and-dispatch.md` | ui_modal_test.lua |
-| `lib/quantize.lua` | `quantize` | `docs/notes/lua/quantize.md` | quantize_test.lua |
-| `lib/conditions.lua` | `conditions` | `docs/notes/lua/conditions.md` | conditions_test.lua |
-| `lib/mod_sources.lua` | `mod_sources` | `docs/notes/lua/mod-sources.md` | mod_sources_test.lua |
-| `lib/macros.lua` | `macros` | `docs/notes/lua/macros.md` | macros_test.lua |
-| `lib/scatter.lua` | `scatter` | `docs/notes/lua/scatter.md` | scatter_test.lua |
-| `lib/morph.lua` | `morph` | `docs/notes/lua/morph.md` | morph_test.lua |
-| `lib/gestures.lua` | `gestures` | `docs/notes/lua/gestures.md` | gestures_test.lua |
-| `lib/input_level.lua` | `input_level` | `docs/notes/lua/input-level.md` | input_level_test.lua |
-| `lib/random_sequences.lua` | `random_sequences` | `docs/notes/lua/random-sequences.md` | random_sequences_test.lua |
-| `lib/envelopes.lua` | `envelopes` | `docs/notes/lua/envelopes.md` | envelopes_test.lua |
-| `lib/matrix.lua` | `matrix` | `docs/notes/lua/matrix.md` | matrix_test.lua |
-| `lib/notes.lua` | `notes` | `docs/notes/lua/notes.md` | notes_test.lua |
-| `lib/mpe.lua` | `mpe` | `docs/notes/lua/mpe.md` | mpe_test.lua |
-| `lib/expression.lua` | `expression` | `docs/notes/lua/expression.md` | expression_test.lua |
-| `lib/slices.lua` | `slices` | `docs/notes/lua/slices.md` | slices_test.lua |
 | `lib/io/<name>.lua`: `rig`, `ports` (before `lib/midi_in.lua`), `actions`, `keyed`, `targets`, `midi_out`, `crow`, `ii`, `jf`, `wsyn`, `wtape`, `er301`, `txo`, `nb`, `controllers`, `remote`, `osc`, `tape` | `io_<name>` | `docs/notes/lua/io/<name>.md` | io_<name>_test.lua |
-| `lib/delay_sync.lua` | `delay_sync` | `docs/notes/lua/delay-sync.md` | delay_sync_test.lua |
 | `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
 | `lib/ui/params.lua`, `lib/ui/header.lua`, `lib/ui/flash.lua`, `lib/ui/text.lua`, `lib/ui/keys.lua`, `lib/ui/menu_watch.lua` | `ui_params`, `ui_header`, `ui_flash`, `ui_text`, `ui_keys`, `ui_menu_watch` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_header_test.lua, ui_pages_test.lua |
 | `lib/ui/field_list.lua` | `ui_field_list` | `docs/notes/lua/ui-core.md` | ui_field_list_test.lua |
@@ -119,8 +82,7 @@ In include order. Unit test files are under test/unit/ (one per module).
 | `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/mod.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua`, `lib/arc/io.lua` | `arc_main`, `arc_voice`, `arc_seq`, `arc_fx`, `arc_lfo`, `arc_mod`, `arc_buffer`, `arc_scenes`, `arc_io` | `docs/notes/lua/arc-pages.md` | arc_pages_test.lua |
 | `lib/grid/core.lua`, `lib/grid/faders.lua` | `grid_core`, `grid_faders` | `docs/notes/lua/grid-core.md` | grid_core_test.lua (the faders through grid_layout_256_test.lua) |
 | `lib/grid/layout_<size>.lua`: `256`, `128h`, `128v`, `64` | `grid_layout_<size>` (`grid_layout_256`, ...) | `docs/notes/lua/grid/layout_<size>.md` (`docs/notes/lua/grid/layout_256.md`, ...) | grid_layout_<size>_test.lua (grid_layout_256_test.lua, ...) |
-| `lib/sequencer.lua` | `sequencer` | `docs/notes/lua/sequencer.md` | sequencer_test.lua |
-| `lib/Engine_Strata.sc`, `lib/engine/Strata*.sc` (`StrataUtil.sc`, `StrataVoiceDefs.sc`, `StrataGrainDefs.sc`, `StrataVoices.sc`, `StrataLifecycle.sc`, `StrataBuffers.sc`, `StrataFiles.sc`, `StrataEffects.sc`, `StrataPerformance.sc`, `StrataRings.sc`, `StrataScale.sc`, `StrataVariation.sc`, `StrataLoop.sc`, `StrataFreeze.sc`, `StrataMix.sc`, `StrataRecord.sc`, `StrataWaveform.sc`, `StrataPositions.sc`, `StrataModulation.sc`, `StrataNotes.sc`, `StrataEnvelopes.sc`, `StrataOnsets.sc`) | | `docs/notes/engine/<area>.md`, one per check area | `test/engine_check.scd` (the engine check's runner) and `test/engine_check/<area>.scd` |
+| `lib/Engine_Strata.sc`, `lib/engine/Strata*.sc` (an area, or a set of defs, a file) | | `docs/notes/engine/<area>.md`, one per check area | `test/engine_check.scd` (the engine check's runner) and `test/engine_check/<area>.scd` |
 | the test harness (`test/norns_stubs.lua`, `test/sync_check.lua`, ...) | | `docs/notes/test-harness.md` | stubs_test.lua, docs_test.lua |
 | the page renders (`test/render_pages.lua`, `test/render_pages.py`, run on demand) | | `docs/notes/lua/ui/layout-and-renders.md` | ui_layout_test.lua (the JSON dump) |
 
@@ -139,7 +101,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 
 ### Lua ↔ SuperCollider Communication
 
-**IMPORTANT**: this table is the engine command interface. The tests require exactly one row per engine `addCommand`, with the same signature and argument count. Keep the row format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | `` and update the table in the same commit as the engine. No `engine.<name>(` mentioned in the maintained docs may name a command the engine no longer has. A row gives each argument's range and values; what the command does is in the area notes under docs/notes/engine/.
+**IMPORTANT**: this table is the engine command interface, exactly one row per `addCommand` (a test checks signature and argument count) in the format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | ``, changed in the engine's commit; no `engine.<name>(` in the maintained docs names a gone command. A row gives each argument's range and values; the area notes under docs/notes/engine/ say what it does.
 
 | Lua Command | SC Signature | Purpose |
 |-------------|--------------|---------|
@@ -186,7 +148,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 
 **Index conversion**: voices are 0-indexed in SC and 1-indexed in Lua, so always pass `voice_idx - 1`. Mod sources go through `engine_mod_source()` (Lua 0 = none / 1-7 → SC -1 / 0-6).
 
-**The `voices` table is the only source of values.** The engine holds no per-voice defaults. A start (`S.lib.engine_sync.start_voice`, from `toggle_voice` or a pattern step) sends `setGrainSource` and every grain value before `engine.voiceOn`, and the synth and crossmod values after it. Param actions reach the engine only while a voice is active. The `v<i>_source` action is the exception: it also reaches stopped voices.
+**The `voices` table is the only source of values.** The engine holds no per-voice defaults: a start (`S.lib.engine_sync.start_voice`) sends every value, and param actions reach the engine only while a voice is active, but `v<i>_source`'s. The order: `docs/notes/lua/engine-sync.md`.
 
 ### Invariants that are easy to break
 
@@ -224,7 +186,7 @@ The engine's (under docs/notes/engine/):
 - **Bypass is explicit**: only `setBypass` frees the delay or reverb and re-creates it in its place; a mix at 0 only silences; the master filters are never freed. `docs/notes/engine/effects.md`
 - **Sends reproduce 3.0's chain**: every mix reader lags 0.05 s, the bus and the nodes' mix controls move in one bundle, and a stage gets its send and mix buses through `stageControls` (`docs/notes/engine/mix.md`). `docs/notes/engine/effects.md`
 - **NaN guards**: the three `\strataFilter`s and `\strataMod` (input and output) replace bad values with `zeroBadValues`. `docs/notes/engine/effects.md`, `docs/notes/engine/voices.md`
-- **File writes** go to a `.part` file renamed into place, never the final path; `deleteStaleParts` deletes only old `.part` and temporary float files; a peaks write, a save or a scratch take renames through `renameIntoPlace` (the waveform area's mover, with its own fallback), never a `unixCmd` or `systemCmd` of its own. `docs/notes/engine/files.md`, `docs/notes/engine/waveform.md`
+- **File writes** go to a `.part` file renamed into place, never the final path; `deleteStaleParts` deletes only old `.part` and temporary float files; a peaks write, save or scratch take renames through `renameIntoPlace`, never its own `unixCmd` or `systemCmd`. `docs/notes/engine/files.md`, `docs/notes/engine/waveform.md`
 - **The peaks file is in place before the length is reported**: a load's `bufferChanged` runs as `writeSlotPeaks`' action, after the rename; a failed write still reports the length. `docs/notes/engine/waveform.md`
 - **The peak scan allocates nothing per sample**: bin-aligned chunks and `Signal`'s `peak`, never `maxItem` or `minItem` (a structure test enforces it). `docs/notes/engine/waveform.md`
 - **`\strataFilter`**: never compare a UGen with `==`; use `BinaryOpUGen('==', ...)`. `docs/notes/engine/effects.md`
@@ -259,7 +221,7 @@ The Lua side's, across modules:
 - **Macros**: a macro never targets a macro or the morph (`S.lib.macros.target_ids()` is the only list of targets); scenes, a transition and morph set a macro silently (`set_silently`); every apply's fan-out is one `deferrable`, from `S.macro_clock`; an LFO on a macro moves engine values, never a param. `docs/notes/lua/macros.md`
 - **The matrix adds offsets and never sets a destination param**: a Lua destination's routings sum into `set_extra_offset("matrix", id, sum)`; a fast one reaches the engine only as `send_engine_value("matrix fast <voice> <destination>", sum)`, never `setGrainParam` or a bare `setFastOffset`; every send goes through `S.lib.lfos.mark_due`; an owned routing (`S.lib.envelopes.owns`, `S.lib.lfos.owns`) is left out of the sum. `docs/notes/lua/matrix.md`, `docs/notes/lua/envelopes.md`
 - **Morph writes params and never recalls**: it never calls `recall_scene` or `recall_scene_instant`, starts a transition or clears the undo; values go through `S.lib.scenes.set_value` and `apply_entries(entries, {only = "discrete"})`, inside `deferrable`, from `S.morph_clock`; a later recall or fade wins. `docs/notes/lua/morph.md`
-- **The sequencer plays only through step outputs** (`S.register_step_output`): each hit goes to every output, each call in a coroutine of its own (one that raises or yields is skipped), and an output's `play` never yields. The `voices` output is the exception: its error stops the patterns and is raised again. Steps never create a node for the voice's own note: a stopped voice is started with `start_voice` at a step's first hit, a running one gets `retrigger`; a chord's further notes are extra notes through `S.lib.notes`. `docs/notes/lua/sequencer.md`
+- **The sequencer plays only through step outputs** (`S.register_step_output`): each hit reaches every output in its own coroutine, and `play` never yields (the `voices` output's error stops the patterns). No step creates a node for the voice's own note (`start_voice`, then `retrigger`); a chord's further notes go through `S.lib.notes`. `docs/notes/lua/sequencer.md`
 - **Step locks and notes are base overrides** (`S.lib.engine_sync.set_base_override`), never `params:set`; they end at the voice's next played step without them, a stop, `replace_pattern` or a shorter length. `docs/notes/lua/sequencer.md`
 - **Strata follows the transport and never leads it**: `clock.transport` start and stop move the patterns only while `seq_follow_transport` is on; nothing calls the clock's own start or stop; a clock tests the beat its `clock.sync` returned, never the live beat. `docs/notes/lua/sequencer.md`
 - **Notes** are played, released and expressed only through `S.lib.notes`, which alone calls `noteOn`, `noteOff`, `noteExpression`, `noteRegion` and `setNotePool`; its flush sends at most 16 `noteExpression` a step, counted (`count_sends`), never deferred. `docs/notes/lua/notes.md`
@@ -268,13 +230,13 @@ The Lua side's, across modules:
 
 ## Working in parallel
 
-Several pull requests are built at once, often by agents: a feature lives in files that only its work edits, apart from one-line registrations. How a session runs packages through agents (the controller, workers and reviewers, scratch folders, the ledger, briefs, reports, landing, a release's steps and cleanup) is in `docs/workflow.md`. The rules every change follows:
-- **Rebase, never merge main in**: `git fetch -q origin && git rebase origin/main`, then `git push --force-with-lease`; never `git merge origin/main`, never `gh pr update-branch` without `--rebase`. Pull requests merge with rebase (`gh pr merge --rebase`), so `main` stays linear. A plan's reviewed packages land in batches, one pull request per batch, so a worker rebases only when the controller asks (`docs/workflow.md`, Landing in batches).
-- **One worktree per pull request**, branched from an up-to-date `main`; never share a checkout between two pieces of work. Engine checks in different worktrees run on different `$STRATA_SC_PORT` ports.
-- **Own scratch folder and worktree, nothing else**: never write to, rename or delete another worker's folder, worktree, logs or containers. Remove only a worktree you created, with `git worktree remove`; leftovers are the controller's or the maintainer's to clean up. The controller's ledger is `.superpowers/sdd/<plan>/progress.md` in the main checkout, never in a worktree.
-- **Edit only the files your package owns** (a release's design lists them; for 3.1, §9 of `docs/design/3.1-design.md`), plus registration lines and the package's own notes file, unit test file and `docs/user/` page. Need a change in a file another package owns? Ask for it, or make it a separate pull request.
-- **Registering** is a few lines in the owning module, and the pointers name any other file: a page (`docs/notes/lua/ui/pages-and-dispatch.md`, Registering a page), a param group, per-voice params and the other shared spots (`docs/notes/lua/params.md`, Registering params), a start or cleanup step (`docs/notes/lua/state-and-voices.md`), a grid layout (`docs/notes/lua/grid-core.md`), an engine area (`docs/notes/engine/structure.md`, Areas). `init`, `cleanup()` and `lib/Engine_Strata.sc` are never edited.
-- **On a conflict in a registration line** (an include, a `UI_PAGES` entry, a `START_ORDER` or `CLEANUP_ORDER` entry, a `register_params` call, a module table row in this file): keep both lines, in the order the sequence needs, and rerun the checks. Two `START_ORDER` or `CLEANUP_ORDER` entries on the same number: give the later one a free number.
+Several pull requests are built at once, often by agents, each in files only its work edits but for one-line registrations; `docs/workflow.md` says how a session runs them. The rules every change follows:
+- **Rebase, never merge main in**: `git fetch -q origin && git rebase origin/main`, then `git push --force-with-lease`; never `git merge origin/main` or `gh pr update-branch` without `--rebase`. Pull requests merge with `gh pr merge --rebase`; a worker rebases only when the controller asks (`docs/workflow.md`, Landing in batches).
+- **One worktree per pull request**, from an up-to-date `main`, never shared; engine checks in different worktrees use different `$STRATA_SC_PORT` ports.
+- **Own scratch folder and worktree, nothing else**: never touch another worker's folder, worktree, logs or containers; remove only a worktree you created, with `git worktree remove`. The ledger stays in the main checkout (`docs/workflow.md`).
+- **Edit only the files your package owns** (its design or brief lists them), plus registration lines and its own notes file, unit test file and `docs/user/` page; ask for any other change, or make it a separate pull request.
+- **Registering** is a few lines in the owning module: a page (`docs/notes/lua/ui/pages-and-dispatch.md`), params (`docs/notes/lua/params.md`, Registering params), a start or cleanup step (`docs/notes/lua/state-and-voices.md`), a grid layout (`docs/notes/lua/grid-core.md`), an engine area (`docs/notes/engine/structure.md`, Areas). `init`, `cleanup()` and `lib/Engine_Strata.sc` are never edited.
+- **On a conflict in a registration line** (an include, a `UI_PAGES`, `START_ORDER` or `CLEANUP_ORDER` entry, a `register_params` call, a row or rule of this file): keep both, in the order the sequence needs, and rerun the checks; of two orders on one number, the later takes a free one.
 - **Shared files** (CHANGELOG.md, `docs/status.md`, this file, README.md, `ROADMAP.md`, `docs/history.md`): edit them only where your package needs to. A feature pull request never edits CHANGELOG.md.
 - **Changelog**: every pull request adds a changelog fragment `changes/<branch-name>.md`; see `changes/README.md`. The release pull request merges the fragments into CHANGELOG.md.
 
@@ -302,7 +264,7 @@ How to run each check, what it needs and how CI runs them: `docs/checks.md`. How
 
 ## Code Style Guidelines
 
-**Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals at the top of each module that uses them): `NUM_VOICES` (7), `NUM_SCENES` (16), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (9), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (10, `#UI_PAGES`), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `STANDARD_BUFFER_SECONDS` (16), `STANDARD_PERFORMANCE`, `BUFFER_DATA_VERSION` (3), `NUM_LFOS` (6), `NUM_BOOKMARKS` (4), `WAVEFORM_POINTS` (64), `RECORD_SOURCES`, `RECORD_SYNC`, `FILES`, `WAVEFORMS`, `PLAYHEADS`, `SCRUB` and `NORNS_SAMPLE_RATE` (48000), and 3.4's `NUM_MACROS` (16), `MACRO_BANK_SIZE` (4), `MACRO_TARGETS` (8), `MATRIX_SLOTS` (16), `NUM_GESTURES` (4), `SCENE_BANK_SIZE` (8), `SCENE_NAME_MAX` (12), `GRID_HOLD.step_edit_seconds` (0.3), `ENGINE_BUDGET` (`messages_per_window` 150, `window_seconds` 0.1: the deferrable sends' budget, `lib/engine_sync.lua`), `NUM_FAST_DESTINATIONS` (5) and `FAST_MOD_NOTE_SLOTS` (1), and 3.5's `NOTE_SLOTS` (8) and `NOTE_POOL` (`max` 16 and each tier's default). The engine mirrors several, and docs tests compare them (`docs/checks.md`, The Lua tests). The slot length is a tier value, not a constant: read `S.performance.buffer_seconds`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
+**Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals in each module using them), among them `NUM_VOICES` (7), `NUM_SCENES` (16), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (9), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (10, `#UI_PAGES`), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `NUM_LFOS` (6), `NOTE_SLOTS` (8) and `NORNS_SAMPLE_RATE` (48000); the others are listed in `docs/notes/lua/state-and-voices.md` (Owns). The engine mirrors several, and docs tests compare them (`docs/checks.md`, The Lua tests). The slot length is a tier value, not a constant: read `S.performance.buffer_seconds`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
 
 **Lua's 200-local limit applies to each function, checked by a test**: every file's main chunk and every module constructor keeps at least 30 locals free; group a feature's constants in one table (`LFO_PAGE`, ...) and split a module that runs short (`docs/notes/lua/state-and-voices.md`).
 

@@ -21,6 +21,7 @@
   - `S.registry` (`pages`, `params`, `start`, `cleanup`, `grid_layouts`, `voice_params`, `scene_fields`, `source_change`, `param_filters`, `lfo_destinations`, `fx_params`, `grain_restart`, `alt_release`, `menu_close`, `invariants`, and 3.4's `scene_blocks`, `pset_hooks`, `param_touch`, `lock_change`, `step_outputs`, `mod_sources`, and 3.5's `voice_stop`, `freeze_change`, and 3.6's `note_hooks`, `scene_recalled`, `silence_change`, `note_targets`, `ii_devices`, `macro_targets`, `io_sections`, and 3.7's `voice_hit`, `scene_applied`), `S.register_start`, `S.register_cleanup`, `S.register_invariant`, `S.lib`.
   - The `__declared` key set the tests use: a key ever assigned into `S`, even to nil, is recorded there.
 - `lib/constants.lua`: `S.constants`, a plain table. The constants and fixed tables (`NUM_VOICES`, `UI_PAGES`, `MAIN_PARAMS`, `GRAIN_ENV_OPTIONS`, `START_ORDER`, `CLEANUP_ORDER`, ...).
+  - Beside the eleven `AGENTS.md` quotes (Named constants): `STANDARD_BUFFER_SECONDS` (16), `STANDARD_PERFORMANCE`, `BUFFER_DATA_VERSION` (3), `NUM_BOOKMARKS` (4), `WAVEFORM_POINTS` (64), `RECORD_SOURCES`, `RECORD_SYNC`, `FILES`, `WAVEFORMS`, `PLAYHEADS` and `SCRUB`; 3.4's `NUM_MACROS` (16), `MACRO_BANK_SIZE` (4), `MACRO_TARGETS` (8), `MATRIX_SLOTS` (16), `NUM_GESTURES` (4), `SCENE_BANK_SIZE` (8), `SCENE_NAME_MAX` (12), `GRID_HOLD.step_edit_seconds` (0.3), `ENGINE_BUDGET` (`messages_per_window` 150, `window_seconds` 0.1: the deferrable sends' budget, `lib/engine_sync.lua`), `NUM_FAST_DESTINATIONS` (5) and `FAST_MOD_NOTE_SLOTS` (1); and 3.5's `NOTE_POOL` (`max` 16 and each tier's default).
 - `lib/voices.lua`: `S.lib.voices`, with `is_synth_key(voice_idx, key)` (whether `key` is in the voice's `param_order`; a synth-key test is never `values[key] ~= nil`).
   - `S.voices`, `S.locked`, `S.selected_voice`. There is no density field: the master density is the param `master_density` (read through `engine_param_value` or `params:get`).
   - The global source tests `voice_uses_synth`, `voice_uses_buffer`, `voice_source_label`, `voice_buffer_slot`.
@@ -229,6 +230,75 @@ The scene and pattern examples are in `docs/notes/lua/scenes.md` and `docs/notes
   `scene_blocks` and `pset_hooks` close at init (3.7 removed `scene_migrations`: no conversion is keyed on a scenes format, `docs/notes/lua/scenes.md`), as `voice_params`, `scene_fields`, `lfo_destinations`, `fx_params`, `start` and `menu_close` do (#384): eight in all (`INIT_READ`, `lib/state.lua`). The other 24 are never closed: `pages`, `params`, `cleanup`, `grid_layouts`, `source_change`, `param_filters`, `grain_restart`, `alt_release`, `invariants`, `param_touch`, `lock_change`, `step_outputs`, `mod_sources`, `voice_stop`, `freeze_change`, 3.6's seven (`note_hooks`, `scene_recalled`, `silence_change`, `note_targets`, `ii_devices`, `macro_targets`, `io_sections`) and 3.7's `voice_hit` and `scene_applied`, most read at each use. A voice-param record's optional `scene_ranges` (`{<key> = {min, max}}`, continuous keys only, holding the key's default) makes `validate_scene` reject a scene whose extra lies outside it; its `scene_defaults` may be a function of the voice that gives the table (3.7, each voice's table checked, all with the same keys), read through `S.voice_scene_defaults(record, voice_idx)`; its `count` and `voice_keys` may be functions of the voice too (the groundwork before 3.8, each voice's checked at registration), read through `S.voice_param_count(record, voice_idx)` and `S.voice_keys_of(record, voice_idx)`. Each has a register function on `S` (`S.register_voice_params`, ...) that checks its argument and refuses a duplicate name. The readers read them at init (inside a `register_params` add or later), never at include time, so a registering module's include order never matters. "Registering start and cleanup steps" below and `docs/notes/lua/params.md` (Registering params) say how to add to each.
 - **`S.performance`** (`{tier, buffer_seconds, max_grains, history_seconds, reason}`): the tier the engine runs, read from the engine's `performance_active.data` by `S.lib.performance.read_active` in the first params record (`"performance"`, before any param is added); a missing or invalid file gives a copy of `S.constants.STANDARD_PERFORMANCE`. Every tier-dependent spec reads it (`record_duration` goes to `S.performance.buffer_seconds`). The setting itself (`performance.data`) is SETUP's, never a param.
 - Tests reach script state with `local_value(name)` and `find_upvalue(name)`: a field of `S`, then of `S.constants`, then an upvalue of a global function.
+
+### The module table
+
+Every module, in include order (`strata.lua`'s includes), with its `S.lib` name, notes file and unit test files (under test/unit/, one per module). `AGENTS.md` lists only the rows that break the naming rule: a top-level module `lib/<name>.lua` is `S.lib.<name>`, with its notes in `docs/notes/lua/<name>.md` (underscores as hyphens) and its tests in `test/unit/<name>_test.lua`; a module in a subfolder of lib/ keeps a row there. A new module adds its row here, at its include place.
+
+| Module | S.lib name | Notes | Unit tests |
+|--------|--------------|-------|------------|
+| `strata.lua` (entry points) | | `docs/notes/lua/state-and-voices.md` | strata_test.lua, structure_test.lua |
+| `lib/state.lua`, `lib/constants.lua` | S itself, S.constants | `docs/notes/lua/state-and-voices.md` | structure_test.lua, registries_test.lua |
+| `lib/voices.lua` | `voices` | `docs/notes/lua/state-and-voices.md` | voices_test.lua |
+| `lib/ui/frame.lua` | `ui_frame` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_layout_test.lua |
+| `lib/engine_sync.lua` | `engine_sync` | `docs/notes/lua/engine-sync.md` | engine_sync_test.lua |
+| `lib/data_files.lua` | `data_files` | `docs/notes/lua/data-files.md` | data_files_test.lua |
+| `lib/chance.lua` | `chance` | `docs/notes/lua/chance.md` | chance_test.lua |
+| `lib/side_files.lua` | `side_files` | `docs/notes/lua/data-files.md` (Side files) | side_files_test.lua |
+| `lib/buffers.lua` | `buffers` | `docs/notes/lua/buffers.md` | buffers_test.lua |
+| `lib/record.lua` | `record` | `docs/notes/lua/record.md` | record_test.lua |
+| `lib/lfos.lua` | `lfos` | `docs/notes/lua/lfos.md` | lfos_test.lua |
+| `lib/mutation.lua` | `mutation` | `docs/notes/lua/mutation.md` | mutation_test.lua |
+| `lib/scenes.lua` | `scenes` | `docs/notes/lua/scenes.md` | scenes_test.lua |
+| `lib/midi_in.lua` | `midi_in` | `docs/notes/lua/midi.md` | midi_in_test.lua |
+| `lib/history.lua` | `history` | `docs/notes/lua/history.md` | history_test.lua |
+| `lib/freeze.lua` | `freeze` | `docs/notes/lua/freeze.md` | freeze_test.lua |
+| `lib/loops.lua` | `loops` | `docs/notes/lua/loops.md` | loops_test.lua |
+| `lib/variation.lua` | `variation` | `docs/notes/lua/variation.md` | variation_test.lua |
+| `lib/voice_mix.lua` | `voice_mix` | `docs/notes/lua/voice-mix.md` | voice_mix_test.lua |
+| `lib/performance.lua` | `performance` | `docs/notes/lua/performance.md` | performance_test.lua |
+| `lib/files.lua` | `files` | `docs/notes/lua/files.md` | files_test.lua |
+| `lib/waveforms.lua` | `waveforms` | `docs/notes/lua/waveforms.md` | waveforms_test.lua |
+| `lib/samples.lua` | `samples` | `docs/notes/lua/samples.md` | samples_test.lua |
+| `lib/playheads.lua` | `playheads` | `docs/notes/lua/playheads.md` | playheads_test.lua |
+| `lib/positions.lua` | `positions` | `docs/notes/lua/positions.md` | positions_test.lua |
+| `lib/scan.lua` | `scan` | `docs/notes/lua/scan.md` | scan_test.lua |
+| `lib/bookmarks.lua` | `bookmarks` | `docs/notes/lua/bookmarks.md` | bookmarks_test.lua |
+| `lib/ui/modal.lua` | `ui_modal` | `docs/notes/lua/ui/pages-and-dispatch.md` | ui_modal_test.lua |
+| `lib/quantize.lua` | `quantize` | `docs/notes/lua/quantize.md` | quantize_test.lua |
+| `lib/conditions.lua` | `conditions` | `docs/notes/lua/conditions.md` | conditions_test.lua |
+| `lib/mod_sources.lua` | `mod_sources` | `docs/notes/lua/mod-sources.md` | mod_sources_test.lua |
+| `lib/macros.lua` | `macros` | `docs/notes/lua/macros.md` | macros_test.lua |
+| `lib/scatter.lua` | `scatter` | `docs/notes/lua/scatter.md` | scatter_test.lua |
+| `lib/morph.lua` | `morph` | `docs/notes/lua/morph.md` | morph_test.lua |
+| `lib/gestures.lua` | `gestures` | `docs/notes/lua/gestures.md` | gestures_test.lua |
+| `lib/input_level.lua` | `input_level` | `docs/notes/lua/input-level.md` | input_level_test.lua |
+| `lib/random_sequences.lua` | `random_sequences` | `docs/notes/lua/random-sequences.md` | random_sequences_test.lua |
+| `lib/envelopes.lua` | `envelopes` | `docs/notes/lua/envelopes.md` | envelopes_test.lua |
+| `lib/matrix.lua` | `matrix` | `docs/notes/lua/matrix.md` | matrix_test.lua |
+| `lib/notes.lua` | `notes` | `docs/notes/lua/notes.md` | notes_test.lua |
+| `lib/mpe.lua` | `mpe` | `docs/notes/lua/mpe.md` | mpe_test.lua |
+| `lib/expression.lua` | `expression` | `docs/notes/lua/expression.md` | expression_test.lua |
+| `lib/slices.lua` | `slices` | `docs/notes/lua/slices.md` | slices_test.lua |
+| `lib/io/<name>.lua`: `rig`, `ports` (before `lib/midi_in.lua`), `actions`, `keyed`, `targets`, `midi_out`, `crow`, `ii`, `jf`, `wsyn`, `wtape`, `er301`, `txo`, `nb`, `controllers`, `remote`, `osc`, `tape` | `io_<name>` | `docs/notes/lua/io/<name>.md` | io_<name>_test.lua |
+| `lib/delay_sync.lua` | `delay_sync` | `docs/notes/lua/delay-sync.md` | delay_sync_test.lua |
+| `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
+| `lib/ui/params.lua`, `lib/ui/header.lua`, `lib/ui/flash.lua`, `lib/ui/text.lua`, `lib/ui/keys.lua`, `lib/ui/menu_watch.lua` | `ui_params`, `ui_header`, `ui_flash`, `ui_text`, `ui_keys`, `ui_menu_watch` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_header_test.lua, ui_pages_test.lua |
+| `lib/ui/field_list.lua` | `ui_field_list` | `docs/notes/lua/ui-core.md` | ui_field_list_test.lua |
+| `lib/ui/voice_rows.lua`, `lib/ui/cursors.lua` | `ui_voice_rows`, `ui_cursors` | `docs/notes/lua/ui-core.md` | ui_cursors_test.lua |
+| `lib/ui/alt.lua` | `ui_alt` | `docs/notes/lua/ui-core.md` | ui_alt_test.lua |
+| `lib/ui/detent.lua` | `ui_detent` | `docs/notes/lua/ui-core.md` | ui_detent_test.lua |
+| `lib/ui/zones.lua` | `ui_zones` | `docs/notes/lua/ui-core.md` (The zones editor) | ui_zones_test.lua |
+| `lib/ui/slice_editor.lua` | `ui_slice_editor` | `docs/notes/lua/ui/slice-editor.md` | ui_slice_editor_test.lua |
+| `lib/pages/<page>.lua`: `main`, `voice`, `seq`, `fx`, `lfo`, `mod`, `buffer`, `scenes`, `setup`, `io` | `pages_<page>` (`pages_main`, ...) | `docs/notes/lua/pages/<page>.md` (`docs/notes/lua/pages/main.md`, ...) | pages_<page>_test.lua (pages_main_test.lua, ...) |
+| `lib/arc/core.lua` | `arc_core` | `docs/notes/lua/arc-core.md` | arc_core_test.lua |
+| `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/mod.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua`, `lib/arc/io.lua` | `arc_main`, `arc_voice`, `arc_seq`, `arc_fx`, `arc_lfo`, `arc_mod`, `arc_buffer`, `arc_scenes`, `arc_io` | `docs/notes/lua/arc-pages.md` | arc_pages_test.lua |
+| `lib/grid/core.lua`, `lib/grid/faders.lua` | `grid_core`, `grid_faders` | `docs/notes/lua/grid-core.md` | grid_core_test.lua (the faders through grid_layout_256_test.lua) |
+| `lib/grid/layout_<size>.lua`: `256`, `128h`, `128v`, `64` | `grid_layout_<size>` (`grid_layout_256`, ...) | `docs/notes/lua/grid/layout_<size>.md` (`docs/notes/lua/grid/layout_256.md`, ...) | grid_layout_<size>_test.lua (grid_layout_256_test.lua, ...) |
+| `lib/sequencer.lua` | `sequencer` | `docs/notes/lua/sequencer.md` | sequencer_test.lua |
+| `lib/Engine_Strata.sc`, `lib/engine/Strata*.sc` (an area, or a set of defs, a file) | | `docs/notes/engine/<area>.md`, one per check area | `test/engine_check.scd` (the engine check's runner) and `test/engine_check/<area>.scd` |
+| the test harness (`test/norns_stubs.lua`, `test/sync_check.lua`, ...) | | `docs/notes/test-harness.md` | stubs_test.lua, docs_test.lua |
+| the page renders (`test/render_pages.lua`, `test/render_pages.py`, run on demand) | | `docs/notes/lua/ui/layout-and-renders.md` | ui_layout_test.lua (the JSON dump) |
 
 ## Registering start and cleanup steps
 
