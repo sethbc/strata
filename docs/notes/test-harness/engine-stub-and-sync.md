@@ -29,6 +29,7 @@ Param names:
 
 Keeping it current:
 - Every engine command needs an entry in the stub's `engine_argument_checks`.
+- Every `SynthDef(\name, {` in the engine source opens its function with an argument list (`arg ...;` or `|...|`): the stub reads each def's controls and defaults from it, and a def without one fails the stub's load (`SynthDef \name has no argument list the stub can read`), so every test fails (#777).
 - A control added to a SynthDef needs no stub change, and the voice, slot and source limits follow `numVoices` and `numBuffers` (a test parses a patched copy of the engine).
 
 Comments:
