@@ -1370,12 +1370,27 @@ return function(S)
     if S.scenes_loaded and not S.scene_autosave_blocked then save_scenes_to_disk() end
   end
 
-  -- Before a PSET load replaces them: live scenes no PSET holds (pset nil)
-  -- that hold anything (a populated or named slot) are written to the live
-  -- file, which is then set aside as a backup (scenes.data.bak, ...). True
-  -- when nothing needed keeping or it was kept; else false and why
+  -- Whether the PSET the mark names still holds the live scenes: its
+  -- scenes file is there, of this format, and its scenes encode as
+  -- S.scenes (the file deleted, copied without the PSET or saved over
+  -- elsewhere makes the mark stale, #766)
+  local function mark_holds_live()
+    local mark = S.scene_file.pset
+    if mark == nil then return false end
+    local held = S.lib.data_files.read(mark .. PSET_SCENES.side_suffix)
+    local data_files = S.lib.data_files
+    return type(held) == "table" and held.version == SCENE_DATA_VERSION and type(held.scenes) == "table"
+      and data_files.encode(held.scenes) == data_files.encode(S.scenes)
+  end
+
+  -- Before a PSET load replaces them: live scenes no PSET holds (no mark,
+  -- or a stale one, which is cleared) that hold anything (a populated or
+  -- named slot) are written to the live file, which is then set aside as a
+  -- backup (scenes.data.bak, ...). True when nothing needed keeping or it
+  -- was kept; else false and why
   local function back_up_live()
-    if S.scene_file.pset ~= nil then return true end
+    if mark_holds_live() then return true end
+    S.scene_file.pset = nil
     local holds = false
     for i = 1, NUM_SCENES do
       if S.scenes[i].populated or S.scenes[i].name ~= "" then holds = true end
@@ -1390,13 +1405,21 @@ return function(S)
   end
 
   -- The PSET's scenes (side_files' load): nil (no file, or an unusable one
-  -- the helper set aside) leaves the live scenes; else the live scenes are
+  -- the helper set aside) leaves the live scenes, and clears the mark when
+  -- it names this PSET (#766); else the live scenes are
   -- kept first when they must be (back_up_live; when that fails one line,
   -- and the live scenes stay), then taken as a disk load takes them, and
   -- the live file is rewritten naming the PSET. Nothing is recalled: the
   -- sound is the PSET's params
   local function load_pset_scenes(scene_table, path)
-    if scene_table == nil then return end
+    local path_base = path:sub(1, #path - #PSET_SCENES.side_suffix)
+    if scene_table == nil then
+      if S.scene_file.pset == path_base then
+        S.scene_file.pset = nil
+        rewrite_live_pset()
+      end
+      return
+    end
     local kept, why = back_up_live()
     if not kept then
       print("scenes from " .. path .. " not loaded: the scenes in no PSET could not be kept (" .. why
@@ -1404,7 +1427,7 @@ return function(S)
       return
     end
     take_scenes(scene_table, path)
-    S.scene_file.pset = path:sub(1, #path - #PSET_SCENES.side_suffix)
+    S.scene_file.pset = path_base
     SCENE_LOAD.armed_until = 0
     M.autosave()
     request_redraw()
