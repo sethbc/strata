@@ -266,4 +266,49 @@ test("side files: a spec is checked when it is made", function()
   assert_true(not pcall(files.save_live), "no timed write without a delay")
 end)
 
+-- A spec's optional floor (the groundwork before 3.8, design §4): a file
+-- from the floor to the version loads, and the line for one outside names
+-- the range
+test("a file from its floor to its version loads; one below or above is set aside", function()
+  for _, case in ipairs({ { version = 2, loads = true }, { version = 3, loads = true }, { version = 1 },
+      { version = 4 } }) do
+    local context, S = loaded()
+    local files, state = probe(S, { version = 3, floor = 2 })
+    local path = context.data_dir .. "floor" .. case.version .. ".probe.data"
+    assert_true(S.lib.data_files.write(path, { version = case.version, probes = { x = case.version } }))
+    assert_equal(files.read(path), true, "version " .. case.version .. ": may be written")
+    local lines = lines_with(context, "error loading probe file " .. path .. ": ")
+    if case.loads then
+      assert_equal(state.loads[1].data.x, case.version, "version " .. case.version .. " loads")
+      assert_equal(#lines, 0, "version " .. case.version .. ": no line")
+      assert_true(util.file_exists(path), "left in place")
+    else
+      assert_equal(state.loads[1].data, nil, "version " .. case.version .. ": nothing loads")
+      assert_equal(#lines, 1, "version " .. case.version .. ": one line")
+      assert_true(lines[1]:find(": not a version 2-3 probe file; kept as ", 1, true) ~= nil,
+        "the line names the range: " .. tostring(lines[1]))
+    end
+  end
+  -- a floor equal to the version names that one version
+  local context, S = loaded()
+  local files = probe(S, { version = 9, floor = 9 })
+  local path = context.data_dir .. "one.probe.data"
+  assert_true(S.lib.data_files.write(path, { version = 8, probes = {} }))
+  files.read(path)
+  local lines = lines_with(context, "error loading probe file " .. path .. ": ")
+  assert_true(#lines == 1 and lines[1]:find(": not a version 9 probe file; kept as ", 1, true) ~= nil,
+    "one version: " .. tostring(lines[1]))
+end)
+
+test("a floor above the version is refused", function()
+  local _, S = loaded()
+  local ok, problem = pcall(probe, S, { version = 2, floor = 3 })
+  assert_true(not ok, "refused")
+  assert_true(tostring(problem):find("side_files.new: a floor is a number no higher than the version", 1, true) ~= nil,
+    tostring(problem))
+  ok, problem = pcall(probe, S, { version = 2, floor = "1" })
+  assert_true(not ok, "a floor that is no number is refused too: " .. tostring(problem))
+  assert_true(pcall(probe, S, { version = 2, floor = 2 }), "a floor at the version is taken")
+end)
+
 end
