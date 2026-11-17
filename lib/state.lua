@@ -56,7 +56,7 @@ return function()
     scene_recalled = {},    -- fn(scene_num), run once per scene recall (lib/scenes.lua)
     silence_change = {},    -- fn(voice_idx, silenced), run as a mute or solo changes silenced(voice)
     note_targets = {},      -- {name, routed, note_on, note_off, express, stop_all, rows, status}
-    ii_devices = {},        -- {name, ready, release, param_count, add_params}
+    ii_devices = {},        -- {name, ports, ready, release, param_count, add_params}
     macro_targets = {},     -- {id, label}: control params the macros offer after the matrix depths
     -- 3.7's (design §0.2), read at each use
     voice_hit = {},         -- {name, hit = fn(voice_idx, info)}, told once per hit by lib/engine_sync.lua
@@ -552,7 +552,8 @@ return function()
   local NOTE_HOOK_FIELDS = {name = true, started = true, ended = true, moved = true, expressed = true, heard = true}
   local NOTE_TARGET_FIELDS = {name = true, routed = true, note_on = true, note_off = true, express = true,
     stop_all = true, rows = true, status = true, layout_states = true}
-  local II_DEVICE_FIELDS = {name = true, ready = true, release = true, param_count = true, add_params = true}
+  local II_DEVICE_FIELDS = {name = true, ports = true, ready = true, release = true, param_count = true,
+    add_params = true}
 
   -- A note hook (lib/notes.lua runs each, contained): {name, started, ended,
   -- moved, expressed}, each function optional, called with (voice_idx,
@@ -597,15 +598,18 @@ return function()
     table.insert(M.registry.note_targets, record)
   end
 
-  -- An ii device (lib/io/ii.lua reads them, plan ruling 8): {name, ready = fn,
-  -- release = fn, param_count = the params add_params adds (a finite whole
-  -- number, 0 by default), add_params = fn}; every field but name
-  -- optional, and a param_count above 0 needs add_params. The registry
-  -- keeps a copy with param_count filled in; the caller's table is left as
-  -- it was given
+  -- An ii device (lib/io/ii.lua reads them, plan ruling 8): {name, ports =
+  -- true or false (whether every command of it with an argument takes the
+  -- port it addresses first, as the ER-301's and the TELEXo's do: the
+  -- queue's turns, #710, #717), ready = fn, release = fn, param_count = the
+  -- params add_params adds (a finite whole number, 0 by default),
+  -- add_params = fn}; name and ports required, the rest optional, and a
+  -- param_count above 0 needs add_params. The registry keeps a copy with
+  -- param_count filled in; the caller's table is left as it was given
   function M.register_ii_device(record)
     local kind = "register_ii_device"
     local where = require_named(record, "ii_devices", kind, "name", II_DEVICE_FIELDS)
+    require_arg(type(record.ports) == "boolean", where, "ports is true or false: whether its commands address ports")
     require_functions(record, where, {}, {"ready", "release", "add_params"})
     local count = record.param_count
     if count == nil then count = 0 end

@@ -47,14 +47,11 @@ return function(S)
     },
     reset_events = "ii.reset_events(ii.self)",  -- what crow.reset() runs for ii.self (crow-ii.md §1)
     velocity_max = 127, macro_max = 16383,
-    -- #710's turns: the devices whose every command with an argument takes
-    -- the port it addresses first (crow-ii.md §2: the ER-301's tr, cv and
-    -- the rest; the TELEXo's tr, cv, env and the rest; their global
-    -- commands take none), so a port is one line from the start (moving
-    -- this into a device's registration is #717); the command that starts
-    -- a note on them (each sends a note's tr last), and a note's first
-    -- send (its pitch)
-    port_devices = {er301 = true, txo = true}, note_trigger = "tr", note_pitch = "cv",
+    -- #710's turns, on a device whose registration says its commands
+    -- address ports (ports, #717): the command that starts a note (each
+    -- such device sends a note's tr last), and a note's first send (its
+    -- pitch)
+    note_trigger = "tr", note_pitch = "cv",
   }
 
   -- leading: the flag send reads (set while the rig says strata with a
@@ -156,10 +153,21 @@ return function(S)
   -- Turns (#710): under sustained overload the lines take turns
   ---------------------------------------------------------------------------
 
+  -- True when the device's registration says its every command with an
+  -- argument takes the port it addresses first (its ports, #717: the
+  -- ER-301's and the TELEXo's, crow-ii.md §2); read at each use, and false
+  -- for a device not registered
+  local function addresses_ports(device)
+    for _, record in ipairs(S.registry.ii_devices) do
+      if record.name == device then return record.ports == true end
+    end
+    return false
+  end
+
   -- A send's turn is its line: its device and the port it addresses (its
   -- first argument) for a device whose commands address ports
-  -- (SPEC.port_devices), so a port's
-  -- cv, tr, env and settings share one turn; else its device and command
+  -- (addresses_ports), so a port's cv, tr, env and settings share one
+  -- turn; else its device and command
   -- (its pair), so play_note takes one turn for all its pitches. The two
   -- kinds of id cannot meet: a port's has an empty command. Each turn:
   -- waiting (its sends in the queue), served (the step its latest send went
@@ -170,7 +178,7 @@ return function(S)
   -- port's trigger, or a device-and-command line's first send, admitted)
   local function turn_for(entry)
     local id = entry.pair
-    if SPEC.port_devices[entry.device] and entry.first ~= "" then id = entry.device .. "\n\n" .. entry.first end
+    if entry.first ~= "" and addresses_ports(entry.device) then id = entry.device .. "\n\n" .. entry.first end
     local turn = state.turns[id]
     if not turn then
       turn = {id = id, waiting = 0, served = nil, asked = nil, asking = false, wanting = nil,
@@ -208,20 +216,25 @@ return function(S)
     return b.served ~= nil and a.served < b.served
   end
 
-  -- A line's first send in a step decides: admitted while fewer than
-  -- queue_max wait; while the queue is pressed, only with fewer than its
-  -- share of lines waiting, and with room for a note (II.note_lines) for it
-  -- and for each wanting line with nothing waiting that was served less
-  -- recently than it
-  local function decides(turn)
-    if #state.queue >= II.queue_max then return false end
-    if not state.pressed then return true end
-    if turn.waiting >= share() then return false end
+  -- The room a note of the line may take while pressed: room for a note
+  -- (II.note_lines) for it and for each wanting line with nothing waiting
+  -- that was served less recently than it
+  local function room_for_note(turn)
     local held = 0
     for other in pairs(state.wanting) do
       if other ~= turn and other.waiting == 0 and served_before(other, turn) then held = held + 1 end
     end
     return II.queue_max - #state.queue >= (held + 1) * II.note_lines
+  end
+
+  -- A line's first send in a step decides: admitted while fewer than
+  -- queue_max wait; while the queue is pressed, only with fewer than its
+  -- share of lines waiting, and with room for its note (room_for_note)
+  local function decides(turn)
+    if #state.queue >= II.queue_max then return false end
+    if not state.pressed then return true end
+    if turn.waiting >= share() then return false end
+    return room_for_note(turn)
   end
 
   -- The line's later sends in the step follow its decision, within the
@@ -231,8 +244,10 @@ return function(S)
   -- play_note kind) closes at its first admitted send, and after that the
   -- line's later sends in the step are refused. A pitch after an earlier
   -- send of the line in the step begins a note (after a re-pitch or a
-  -- setting): with room for less than a note (II.note_lines) it and the
-  -- rest of the line in the step are refused, so the note goes whole
+  -- setting): without the room the first decision asks for (room_for_note,
+  -- so the earlier send never takes the room held for a waiting line, #719)
+  -- it and the rest of the line in the step are refused, so the note goes
+  -- whole
   local function admits(turn, command)
     if turn.decided ~= state.step then
       turn.decided, turn.admitted, turn.closed = state.step, decides(turn), false
@@ -241,7 +256,7 @@ return function(S)
     if not turn.admitted or #state.queue >= II.queue_max then return false end
     if not state.pressed then return true end
     if turn.closed then return false end
-    if command == SPEC.note_pitch and II.queue_max - #state.queue < II.note_lines then
+    if command == SPEC.note_pitch and not room_for_note(turn) then
       turn.admitted = false
       return false
     end

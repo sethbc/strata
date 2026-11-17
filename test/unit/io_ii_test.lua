@@ -26,10 +26,19 @@ local function only_devices(S, list)
   for _, entry in ipairs(list) do S.register_ii_device(entry) end
 end
 
+-- The devices a test has unless it names its own: the two whose commands
+-- address ports, as lib/io/er301.lua and lib/io/txo.lua register them, with
+-- nothing else (#717: the queue reads ports from the registration); any
+-- other device a test sends to is unregistered, so its turns are its
+-- device and command
+local function port_devices()
+  return { { name = "er301", ports = true }, { name = "txo", ports = true } }
+end
+
 local function started(devices)
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  only_devices(S, devices or {})
+  only_devices(S, devices or port_devices())
   return context, S, S.lib.io_ii
 end
 
@@ -37,7 +46,7 @@ end
 -- device.releases); fields add to the record
 local function recording_device(name, fields)
   local device = { name = name, readies = 0, releases = 0 }
-  local record = { name = name,
+  local record = { name = name, ports = false,
     ready = function() device.readies = device.readies + 1 end,
     release = function() device.releases = device.releases + 1 end }
   for field, value in pairs(fields or {}) do record[field] = value end
@@ -233,7 +242,7 @@ test("below 48 waiting, lines are sent in the order queued and none is refused",
   end
 end)
 
--- The queue pressed: er301 addresses ports (SPEC.port_devices) (port 9
+-- The queue pressed: er301 addresses ports (its registration's ports) (port 9
 -- known low); port 1's on queued, 47 notes of one line behind it, then port 2's
 -- on refused at the full queue; one step sends port 1's on and three notes:
 -- room for four lines, a note (II.note_lines) but not two
@@ -385,6 +394,37 @@ local function pressed_with_room_of_three(context, S, ii, step)
   assert_equal(ii.II.note_lines, 3)
 end
 
+test("every registered ii device says whether its commands address ports", function()
+  -- #717: the knowledge is the device's own, in its registration; the queue reads it
+  load_strata()
+  local S = local_value("S")
+  local expected = { er301 = true, txo = true, jf = false, wsyn = false }
+  local seen = {}
+  for _, record in ipairs(S.registry.ii_devices) do
+    assert_equal(type(record.ports), "boolean", record.name .. " says whether its commands address ports")
+    seen[record.name] = true
+    if expected[record.name] ~= nil then
+      assert_equal(record.ports, expected[record.name], record.name .. "'s ports (crow-ii.md §2)")
+    end
+  end
+  for name in pairs(expected) do assert_true(seen[name], name .. " is registered") end
+end)
+
+test("a device's turns follow its registration: its ports, or its commands", function()
+  -- the same chord to two ports of one device in one pressed step: as a port device each port is
+  -- its own line, so both notes go; as a device of commands, cv and tr are each one line, closed
+  -- at their first admitted send, so the second port's note is refused whole
+  local function chord(ports)
+    local context, S, ii = started({ { name = "probe", ports = ports }, { name = "er301", ports = true } })
+    local step = stepper(context, S)
+    pressed_with_room(context, S, ii, step)
+    return table.concat({ tostring(ii.send("probe", "cv", 1, 2)), tostring(ii.send("probe", "tr", 1, 1)),
+      tostring(ii.send("probe", "cv", 2, 2)), tostring(ii.send("probe", "tr", 2, 1)) }, " ")
+  end
+  assert_equal(chord(true), "true true true true", "ports: one turn a port")
+  assert_equal(chord(false), "true true false false", "commands: one turn a command")
+end)
+
 test("a re-pitch before a new note in one step does not take the note's pitch", function()
   local context, S, ii = started()
   local step = stepper(context, S)
@@ -463,6 +503,40 @@ test("a setting before a note in one step never splits the note", function()
   end
   assert_equal(table.concat(output_1, "|"), "ii.txo.env_att(1, 20)|ii.txo.cv(1, 2)|ii.txo.env(1, 1)|ii.txo.tr(1, 1)",
     "in order")
+end)
+
+-- #719's probe: a queue pressed with room for six lines and one refused line
+-- waiting (the ER-301's port 2, never served): 48 notes of one line, port 2
+-- refused at the full queue, two steps sending eight, then two lines of
+-- other devices; room for its note and one more
+local function pressed_with_room_of_six_one_waiting(context, S, ii, step)
+  lead(context, S)
+  for k = 1, 48 do assert_true(ii.send("jf", "play_note", k, 5)) end
+  assert_equal(ii.send("er301", "tr", 2, 1), false, "port 2 refused at the full queue")
+  step(); step()
+  assert_true(ii.send("wsyn", "play_note", 1, 5))
+  assert_true(ii.send("wtape", "speed", 1))
+  assert_equal(ii.queued(), 42, "room for six lines: two notes")
+end
+
+test("a setting before a note in one step leaves a waiting line its room", function()
+  -- the later pitch asks for the same room as a line's first send: a note for it and for each
+  -- waiting line served less recently (#719)
+  local function then_port_2(sends)
+    local context, S, ii = started()
+    local step = stepper(context, S)
+    pressed_with_room_of_six_one_waiting(context, S, ii, step)
+    local admitted = {}
+    for _, args in ipairs(sends) do
+      admitted[#admitted + 1] = tostring(ii.send("txo", (table.unpack or unpack)(args)))
+    end
+    admitted[#admitted + 1] = "port 2 " .. tostring(ii.send("er301", "tr", 2, 1))
+    return table.concat(admitted, " ")
+  end
+  local note = { { "cv", 1, 2 }, { "env", 1, 1 }, { "tr", 1, 1 } }
+  assert_equal(then_port_2(note), "true true true port 2 true", "a TELEXo note alone leaves port 2 its room")
+  assert_equal(then_port_2({ { "env_att", 1, 20 }, note[1], note[2], note[3] }), "true false false false port 2 true",
+    "a setting first: the note refused whole, so port 2 keeps its room")
 end)
 
 test("after a note's trigger the line's later sends in the step are refused, its off excepted", function()
@@ -903,14 +977,14 @@ test("leaving the bus sends at most 15 lines at once; the offs past 14 are owed 
   -- a TELEXo-like device owes two offs a note (tr and env) and releases one line an output, and a
   -- second gate device owes one; a Just Friends-like device's one release line is registered first
   local function releaser(name, lines)
-    return {name = name, release = function()
+    return {name = name, ports = false, release = function()
       local ii = local_value("S").lib.io_ii
       for _, args in ipairs(lines) do ii.send_direct(name, (table.unpack or unpack)(args)) end
     end}
   end
   local envelopes = {}
   for n = 1, 7 do envelopes[n] = {"env_act", n, 0} end
-  local context, S, ii = started({releaser("jfish", {{"mode", 0}}), releaser("tx", envelopes), {name = "gt"}})
+  local context, S, ii = started({releaser("jfish", {{"mode", 0}}), releaser("tx", envelopes), {name = "gt", ports = false}})
   local step = stepper(context, S)
   assert_equal(ii.II.leave_lines, 15, "the leaving sequence's total, named")
   lead(context, S)
@@ -945,7 +1019,7 @@ end)
 
 test("a line high when crow leaves, its note ending while crow is away, is lowered after ready when crow returns", function()
   -- crow-ii.md §1: a crow that leaves can send nothing; its return under strata makes the devices ready
-  local device = {name = "probe", ready = function() local_value("S").lib.io_ii.send("probe", "setup", 1) end}
+  local device = {name = "probe", ports = false, ready = function() local_value("S").lib.io_ii.send("probe", "setup", 1) end}
   local context, S, ii = started({device})
   local step = stepper(context, S)
   S.register_note_target({name = "probe",
@@ -1089,14 +1163,14 @@ test("the group is the devices' params, and absent with none", function()
     end
   end
   load_strata({ before_init = function()
-    only_devices(local_value("S"), { { name = "a", param_count = 3, add_params = add("probe_a", 3) },
-      { name = "b", param_count = 2, add_params = add("probe_b", 2) } })
+    only_devices(local_value("S"), { { name = "a", ports = false, param_count = 3, add_params = add("probe_a", 3) },
+      { name = "b", ports = false, param_count = 2, add_params = add("probe_b", 2) } })
   end })
   assert_equal(params:lookup_param("strata_out_ii").n, 5)
   local first = params.lookup["strata_out_ii"]
   assert_equal(params.lookup["probe_a1"], first + 1, "a's params follow the group")
   assert_equal(params.lookup["probe_b2"], first + 5, "then b's")
-  load_strata({ before_init = function() only_devices(local_value("S"), { { name = "c" } }) end })
+  load_strata({ before_init = function() only_devices(local_value("S"), { { name = "c", ports = false } }) end })
   assert_equal(params.lookup["strata_out_ii"], nil, "no group when the count is 0")
 end)
 
@@ -1112,11 +1186,11 @@ end
 test("a device whose add_params raises leaves the group whole and the next device's params added", function()
   local context = load_strata({ before_init = function()
     only_devices(local_value("S"), {
-      { name = "a", param_count = 3, add_params = function()
+      { name = "a", ports = false, param_count = 3, add_params = function()
         params:add_number("probe_a1", "probe a1", 0, 1, 0)
         error("a's second param")
       end },
-      { name = "b", param_count = 2, add_params = function()
+      { name = "b", ports = false, param_count = 2, add_params = function()
         for k = 1, 2 do params:add_number("probe_b" .. k, "probe b" .. k, 0, 1, 0) end
       end } })
   end })
@@ -1142,7 +1216,7 @@ test("a device that adds more params than it declares prints its line", function
     only_devices(local_value("S"), {
       -- two separators past its count: the stub refuses any other param after a full group, as a
       -- wrong count would put it outside the group on norns' menu
-      { name = "big", param_count = 2, add_params = function()
+      { name = "big", ports = false, param_count = 2, add_params = function()
         for k = 1, 2 do params:add_number("probe_big" .. k, "probe big" .. k, 0, 1, 0) end
         for k = 3, 4 do params:add_separator("probe_big" .. k, "probe big" .. k) end
       end } })

@@ -9,7 +9,7 @@
 
 ## Owns
 
-- `lib/io/wsyn.lua` (`S.lib.io_wsyn`): `WSYN` (every tunable), `add_params()` (called by the ii bus module's group `strata_out_ii`), the ii device `wsyn` (`param_count` 8) and the note target `wsyn` (rows `w/ syn` and `w/ level` on IO's `voice` section).
+- `lib/io/wsyn.lua` (`S.lib.io_wsyn`): `WSYN` (every tunable), `add_params()` (called by the ii bus module's group `strata_out_ii`), the ii device `wsyn` (`param_count` 8; `ports = false`: `play_note`'s first argument is a pitch, so the ii queue gives `play_note` one turn) and the note target `wsyn` (rows `w/ syn` and `w/ level` on IO's `voice` section).
 - Tests: `test/unit/io_wsyn_test.lua`, with `S.lib.io_ii` a recording double.
 - User page: `docs/user/io/w.md`.
 

@@ -62,6 +62,7 @@ return function(S)
 
   S.register_ii_device({
     name = JF.device,
+    ports = false,  -- play_note's first argument is a pitch, not a channel (#717)
     param_count = JF.param_count,
     add_params = M.add_params,
     -- Just Friends must be told to leave its default mode before it takes notes

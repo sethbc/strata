@@ -53,6 +53,7 @@ return function(S)
 
   S.register_ii_device({
     name = WSYN.device,
+    ports = false,  -- play_note's first argument is a pitch, not a voice (#717)
     param_count = WSYN.param_count,
     add_params = M.add_params,
     ready = function()
