@@ -702,54 +702,79 @@ local WAYS_OUT = {
   {name = "cleanup", cleanup = true, run = function() cleanup() end},
 }
 
+-- The two orders fill's holders let go in after a way out. Each proves the
+-- holder that lets go second still held: the latch first, then fill still
+-- on is the key's alone; the key first, then it is the latch's. Cleanup ends
+-- the key with its grid, so it runs once
+local RELEASE_ORDERS = {"latch first", "key first"}
+
+-- Fill after a way out that ends neither holder (rulings 10 and 11), its
+-- two holders let go in order
+local function release_fill(context, S, where, order)
+  assert_true(S.lib.conditions.fill(), where .. ": fill still on")
+  assert_equal(params:get("seq_fill"), 1, where .. ": the latch survives")
+  if order == "latch first" then
+    params:set("seq_fill", 0)
+    assert_true(S.lib.conditions.fill(), where .. ": the latch let go, the key still holds")
+    press_fill(context, 0)
+  else
+    press_fill(context, 0)
+    assert_true(S.lib.conditions.fill(), where .. ": the key let go, the latch still holds")
+    params:set("seq_fill", 0)
+  end
+  assert_true(not S.lib.conditions.fill(), where .. ": off once both have let go")
+end
+
+-- One way out on a fresh state, fill's holders let go in order after it
+local function way_out(way, order)
+  local where = way.cleanup and way.name or (way.name .. ", " .. order)
+  local context, S, state = sliced_loop()
+  pattern_clock_start()
+  context.clock.run_for(bar_seconds())
+  press_fill(context, 1)
+  params:set("seq_fill", 1)
+  context.clock.run_for(bar_seconds() / 2)
+  assert_true(extra_slots(S) > 0, where .. ": slices sound in extra slots")
+  assert_true(#engine_notes(context) > 0, where .. ": and in the engine")
+  assert_true(S.lib.conditions.fill(), where .. ": fill held")
+  assert_equal(#context.calls_named("stopFastEnv"), 0, where .. ": the route plays")
+  local before = #context.engine_calls
+  way.run(context, S, state)
+  if way.cleanup then
+    -- norns has freed the engine: step 160's voiceOffs are the only calls (docs/notes/lua/state-and-voices.md)
+    for index = before + 1, #context.engine_calls do
+      assert_equal(context.engine_calls[index].name, "voiceOff", "cleanup sends only its voiceOffs")
+    end
+    assert_equal(extra_slots(S), 0, "cleanup: no slice note held")
+    assert_notes_ended(context, "cleanup")
+    -- the key's hold ended with its grid, with no release: only the latch is left
+    assert_true(S.lib.conditions.fill(), "cleanup: the latch stays")
+    params:set("seq_fill", 0)
+    assert_true(not S.lib.conditions.fill(), "cleanup: the key holds no more")
+    return
+  end
+  lfo_step(context, 3)
+  assert_equal(extra_slots(S), 0, where .. ": no slice note held")
+  assert_equal(#S.lib.slices.playing(1), 0, where .. ": no slice sounds")
+  assert_equal(S.lib.notes.own_region(1), nil, where .. ": no own region")
+  assert_notes_ended(context, where)
+  release_fill(context, S, where, order)
+  if not way.ends_routing then
+    assert_equal(#calls_since(context, before, "stopFastEnv"), 0, where .. ": the routing plays on")
+    S.lib.matrix.set_routing(SYSTEM.routings.envelope, "", "")
+  end
+  lfo_step(context, 6)
+  local stops = calls_since(context, before, "stopFastEnv")
+  assert_equal(#stops, 1, where .. ": one stopFastEnv at the routing's end")
+  assert_equal(stops[1].args[1], SYSTEM.routings.envelope - 1, where .. ": route 0's")
+  pattern_clock_stop()
+  assert_notes_ended(context, where .. ", the patterns stopped")
+end
+
 test("every way out leaves nothing held", function()
   for _, way in ipairs(WAYS_OUT) do
-    local context, S, state = sliced_loop()
-    pattern_clock_start()
-    context.clock.run_for(bar_seconds())
-    press_fill(context, 1)
-    params:set("seq_fill", 1)
-    context.clock.run_for(bar_seconds() / 2)
-    assert_true(extra_slots(S) > 0, way.name .. ": slices sound in extra slots")
-    assert_true(#engine_notes(context) > 0, way.name .. ": and in the engine")
-    assert_true(S.lib.conditions.fill(), way.name .. ": fill held")
-    assert_equal(#context.calls_named("stopFastEnv"), 0, way.name .. ": the route plays")
-    local before = #context.engine_calls
-    way.run(context, S, state)
-    if way.cleanup then
-      -- norns has freed the engine: step 160's voiceOffs are the only calls (docs/notes/lua/state-and-voices.md)
-      for index = before + 1, #context.engine_calls do
-        assert_equal(context.engine_calls[index].name, "voiceOff", "cleanup sends only its voiceOffs")
-      end
-      assert_equal(extra_slots(S), 0, "cleanup: no slice note held")
-      assert_notes_ended(context, "cleanup")
-      -- the key's hold ended with its grid, with no release: only the latch is left
-      assert_true(S.lib.conditions.fill(), "cleanup: the latch stays")
-      params:set("seq_fill", 0)
-      assert_true(not S.lib.conditions.fill(), "cleanup: the key holds no more")
-    else
-      lfo_step(context, 3)
-      assert_equal(extra_slots(S), 0, way.name .. ": no slice note held")
-      assert_equal(#S.lib.slices.playing(1), 0, way.name .. ": no slice sounds")
-      assert_equal(S.lib.notes.own_region(1), nil, way.name .. ": no own region")
-      assert_notes_ended(context, way.name)
-      -- fill: the way out ends neither holder (rulings 10 and 11)
-      assert_true(S.lib.conditions.fill(), way.name .. ": fill still on")
-      assert_equal(params:get("seq_fill"), 1, way.name .. ": the latch survives")
-      press_fill(context, 0)
-      assert_true(S.lib.conditions.fill(), way.name .. ": the key let go, the latch holds")
-      params:set("seq_fill", 0)
-      assert_true(not S.lib.conditions.fill(), way.name .. ": off once both have let go")
-      if not way.ends_routing then
-        assert_equal(#calls_since(context, before, "stopFastEnv"), 0, way.name .. ": the routing plays on")
-        S.lib.matrix.set_routing(SYSTEM.routings.envelope, "", "")
-      end
-      lfo_step(context, 6)
-      local stops = calls_since(context, before, "stopFastEnv")
-      assert_equal(#stops, 1, way.name .. ": one stopFastEnv at the routing's end")
-      assert_equal(stops[1].args[1], SYSTEM.routings.envelope - 1, way.name .. ": route 0's")
-      pattern_clock_stop()
-      assert_notes_ended(context, way.name .. ", the patterns stopped")
+    for index, order in ipairs(RELEASE_ORDERS) do
+      if index == 1 or not way.cleanup then way_out(way, order) end
     end
   end
 end)
