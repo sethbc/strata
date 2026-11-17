@@ -30,8 +30,9 @@ return function(S)
   -- params (and the bend range) changed since the last settle, dirty while
   -- any is; notes[voice][id]: what a note sent {voice,
   -- port, device, channel, note, mpe, owner, key, sent = {bend, pressure,
-  -- slide}} (device: the name of the device the port held as the note on
-  -- went, the one that got it);
+  -- slide}, held} (device: the name of the device the port held as the
+  -- note on went, the one that got it; held: a remote or midigrid held the
+  -- port then, so nothing was sent and nothing is owed, #767);
   -- counts[port][channel][note]: the ids sounding there; use[port][channel]:
   -- the notes on a channel; member_times[port][channel] = {released,
   -- assigned}; expressing: the played MPE notes the step reads, cursor the
@@ -207,7 +208,8 @@ return function(S)
   -- expression list and the port's counts and channel use, so no off or
   -- value of it goes to whatever holds the port now, and its own off owed
   -- where key (the device's name) is next found (#750). A note that
-  -- reached no device (key nil, #748) is owed to none
+  -- reached no device (key nil, #748), or went to a port a remote held
+  -- (held: it was never sent, #767), is owed to none
   local function set_aside(record, key)
     record.departed = true
     remove_expressing(record)
@@ -217,7 +219,7 @@ return function(S)
     local use = table_at(state.use, record.port)
     use[record.channel] = (use[record.channel] or 1) - 1
     if use[record.channel] <= 0 then use[record.channel] = nil end
-    if key ~= nil then table_at(state.left_with, key, record.channel)[record.note] = true end
+    if key ~= nil and not record.held then table_at(state.left_with, key, record.channel)[record.note] = true end
   end
 
   -- The notes on port that went to a device the port no longer holds (a
@@ -290,7 +292,7 @@ return function(S)
     local mpe = is_mpe(config)
     local channel = mpe and allocate(config.port, config.members) or config.channel
     local record = {voice = voice, port = config.port, device = S.lib.io_ports.device(config.port),
-      channel = channel, note = note, mpe = mpe, sent = {}}
+      channel = channel, note = note, mpe = mpe, sent = {}, held = remote_holds(config.port)}
     local counts = table_at(state.counts, config.port, channel)
     local use = table_at(state.use, config.port)
     -- the note already sounds there (#709): a retrigger, its off before
@@ -493,13 +495,13 @@ return function(S)
   -- A device leaving and returning
   ---------------------------------------------------------------------------
 
-  -- A device leaving a port (departed_name: the one S.lib.io_ports last saw
-  -- there). Its notes are the port's notes that the device now on the port
-  -- did not get (a move in SYSTEM > DEVICES changes the vports before it is
-  -- told, so a note sent meanwhile went to the device that came; during an
+  -- A device leaving a port (S.lib.io_ports' change hook with no name).
+  -- Its notes are the port's notes that the device now on the port did not
+  -- get (a move in SYSTEM > DEVICES changes the vports before it is told,
+  -- so a note sent meanwhile went to the device that came; during an
   -- unplug the port names none): each is set aside (above), owed to the
   -- device that got it; a note that names none reached no device and is
-  -- owed to none (#748)
+  -- owed to none (#748), nor one sent while a remote held the port (#767)
   local function departed(port)
     local now = S.lib.io_ports.device(port)
     for voice = 1, NUM_VOICES do

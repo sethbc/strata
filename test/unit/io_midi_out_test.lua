@@ -1124,6 +1124,100 @@ test("a synth moved away and back in one visit gets its owed off at the close", 
   assert_equal(sent(again), "", "nothing owed is left: a replug sends nothing")
 end)
 
+-- #767: a note started on a port a remote or midigrid holds was never sent,
+-- so it owes no off when its device leaves (a move or an unplug)
+
+-- A stand-in for the midigrid mod's object (test/unit/io_remote_test.lua's)
+local function midigrid_object()
+  local object = { cols = 16, rows = 8, device = { id = 999, name = "midigrid" }, leds = {}, refreshes = 0 }
+  function object:led(x, y, level) self.leds[x .. "," .. y] = level end
+  function object:all() self.leds = {} end
+  function object:refresh() self.refreshes = self.refreshes + 1 end
+  return object
+end
+
+-- A Launchpad on port 1 under midigrid, voice 2's notes routed to port 1
+-- and one step note started there; run(context, S, target, launchpad)
+-- then runs with grid.connect and midi.add restored after it, whatever it raises
+local function under_midigrid(run)
+  local context, S = started()
+  local launchpad = context.midi.plug(1, "Launchpad X")
+  local real_connect, real_add = grid.connect, midi.add
+  grid.connect = function(...)
+    if select("#", ...) > 0 then return real_connect(...) end
+    launchpad.event = function() end  -- what midigrid does to the device it takes
+    return midigrid_object()
+  end
+  -- a Launchpad plugged again gets midigrid's handler as it is added
+  midi.add = function(device)
+    if device.name == "Launchpad X" then device.event = function() end end
+    return real_add(device)
+  end
+  local ok, problem = pcall(function()
+    assert_true(S.lib.io_rig.set("midi_grid", "on"), "midi grid on")
+    assert_true(S.lib.io_remote.holds(1), "midigrid holds port 1")
+    local target = midi_target(S)
+    params:set("v2_out_port", 1); settled(context)
+    target.note_on(2, "s1", 60, 1, step_info())
+    assert_equal(sent(launchpad), "", "the held port's note reaches nothing")
+    run(context, S, target, launchpad)
+  end)
+  grid.connect, midi.add = real_connect, real_add
+  if not ok then error(problem, 0) end
+end
+
+local function no_notes(device, why)
+  for _, entry in ipairs(lines(device)) do
+    assert_true(not entry:find("^note_"), why .. ": " .. entry)
+  end
+  for key, count in pairs(open_notes(device)) do assert_equal(count, 0, why .. ", " .. key .. " (#709)") end
+end
+
+test("a note on a port midigrid holds owes its device no off when SYSTEM > DEVICES moves it (#767)", function()
+  under_midigrid(function(context, S, target, launchpad)
+    _menu.set_mode(true)
+    context.midi.reassign(1, 4)
+    _menu.set_mode(false)
+    assert_equal(S.lib.io_ports.owner(4), "midigrid", "claimed at port 4")
+    no_notes(launchpad, "the moved Launchpad gets no note")
+    target.note_off(2, "s1")
+    no_notes(launchpad, "nor at the note's end")
+  end)
+end)
+
+test("a note on a port midigrid holds owes its device no off when it is plugged in again (#767)", function()
+  under_midigrid(function(context, S, target, launchpad)
+    context.midi.unplug(1)
+    local again = context.midi.plug(4, "Launchpad X")
+    no_notes(again, "the Launchpad plugged in at port 4 gets no note")
+    context.midi.unplug(4)
+    again = context.midi.plug(1, "Launchpad X")
+    no_notes(again, "nor plugged in again at port 1")
+    target.note_off(2, "s1")
+    no_notes(again, "nor at the note's end")
+    no_notes(launchpad, "the first device object got none")
+  end)
+end)
+
+test("a note on a port a remote grid holds owes its device no off when it is plugged in again (#767)", function()
+  local context, S = started()
+  assert_true(S.lib.io_rig.set("remote_grid_port", 3), "remote grid on port 3")
+  context.midi.plug(3, "iii grid")
+  for cc, value in pairs({ [0] = 16, [1] = 8, [2] = 1 }) do
+    context.midi.send(3, { type = "cc", cc = cc, val = value, ch = 1 })
+  end
+  context.clock.run_for(0.2)
+  assert_true(S.lib.io_remote.holds(3), "the remote holds port 3")
+  local target = midi_target(S)
+  params:set("v1_out_port", 3); settled(context)
+  target.note_on(1, "s1", 60, 1, step_info())  -- channel 1: an LED message, were it sent
+  context.midi.unplug(3)
+  local again = context.midi.plug(3, "iii grid")
+  for _, entry in ipairs(lines(again)) do
+    assert_true(entry ~= "note_off 60 1", "no off for a note the grid never got: " .. entry)
+  end
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")
