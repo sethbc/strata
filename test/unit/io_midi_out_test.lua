@@ -1112,6 +1112,18 @@ test("an owed note that sounds again at the arrival port still gets its off", fu
   for key, count in pairs(open_notes(b)) do assert_equal(count, 0, "b's " .. key .. ": as many offs as ons (#709)") end
 end)
 
+test("a synth moved away and back in one visit gets its owed off at the close", function()
+  local context, S, target, a, b = a_moving(false)  -- a on port 3, port 2 empty
+  target.note_off(1, "s1")       -- its off mid-menu: owed to a
+  context.midi.reassign(3, 2)    -- a back on port 2: the visit moves nothing in the end
+  _menu.set_mode(false)
+  assert_equal(sent(a), "note_off 60 6", "a gets its owed note's off as the menu closes (#747)")
+  assert_equal(sent(b), "", "b, not moved, gets nothing")
+  context.midi.unplug(2)
+  local again = context.midi.plug(2, "synth a")
+  assert_equal(sent(again), "", "nothing owed is left: a replug sends nothing")
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")
