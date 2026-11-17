@@ -1,7 +1,8 @@
 -- lib/side_files.lua
 -- A module's two kinds of data file (S.lib.side_files, #648): its live file
 -- in data/strata/ and its file beside each PSET (<path_base><side_suffix>),
--- both {version = <version>, [<key>] = <data>}, through S.lib.data_files.
+-- both {version = <version>, [<key>] = <data>}, through S.lib.data_files;
+-- a spec's optional floor lets a file from floor to version load.
 -- The macros, the gestures and the matrix each make one with new(spec);
 -- what their data is, how it validates, what an unknown id in it means and
 -- the redraws stay theirs. new(spec) returns:
@@ -40,6 +41,10 @@ return function(S)
     if spec.save_delay and (type(spec.save_delay) ~= "number" or type(spec.clock_field) ~= "string") then
       error("side_files.new: a save_delay is a number of seconds with a clock_field naming its clock in S", 3)
     end
+    local floor_version = spec.floor
+    if floor_version ~= nil and (type(floor_version) ~= "number" or floor_version > spec.version) then
+      error("side_files.new: a floor is a number no higher than the version", 3)
+    end
   end
 
   -- A module's files, from its spec (lib/side_files.lua's header; the
@@ -52,6 +57,11 @@ return function(S)
     -- so no timed write starts after it
     local live = {path = LIVE_DIR .. spec.live_file, loaded = false, closed = false}
     if spec.save_delay then S[spec.clock_field] = nil end  -- the timed write's clock, while it waits
+    -- the versions a read takes: floor (the version without one) to
+    -- version, and how a refused file's line names them
+    local floor_version = spec.floor or spec.version
+    local versions = floor_version == spec.version and tostring(spec.version)
+      or (floor_version .. "-" .. spec.version)
 
     -- Write the data to path (none too, so a PSET saved over never keeps
     -- an older side file). Returns whether it was written
@@ -62,7 +72,8 @@ return function(S)
     end
 
     -- Load the data from path: a missing file loads nothing; one that
-    -- cannot be used (unreadable, another version, refused by validate) is
+    -- cannot be used (unreadable, a version outside floor..version, refused
+    -- by validate) is
     -- set aside (path .. backup_suffix, ...) with a console line, and
     -- nothing loads. Returns whether path may be written over: false only
     -- for a file that could not be used and could not be set aside
@@ -72,8 +83,9 @@ return function(S)
       if loaded == nil and problem ~= "missing" then
         why = tostring(detail)
       elseif loaded ~= nil then
-        if type(loaded) ~= "table" or loaded.version ~= spec.version then
-          why = "not a version " .. spec.version .. " " .. spec.name .. " file"
+        local version = type(loaded) == "table" and loaded.version
+        if type(version) ~= "number" or version < floor_version or version > spec.version then
+          why = "not a version " .. versions .. " " .. spec.name .. " file"
         else
           why = spec.validate(loaded[spec.key])
         end
