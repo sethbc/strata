@@ -3879,8 +3879,31 @@ test("a length change in reverse and in ping-pong", function()
     "reverse: one that does not fit waits for the pass's end")
   assert_equal(run("reverse", 4, 2, 8, 8), "4 3 2 1 8 7 6 5 8 7",
     "reverse: a longer one lengthens the pass at once: past 1 it goes on from the new length to 5, then starts at 8")
-  assert_equal(run("ping-pong", 4, 3, 2, 5), "1 2 3 2 1 2 1 2", "ping-pong: past the new end it turns at once")
+  assert_equal(run("ping-pong", 4, 3, 2, 5), "1 2 3 4 2 1 2 1",
+    "ping-pong: past the new end the leg ends at its own top (#743), then turns at the new length")
   assert_equal(run("ping-pong", 2, 3, 4, 5), "1 2 1 2 3 4 3 2", "ping-pong: a longer one goes on up to it")
+end)
+
+-- #743: a shorter length applies at once while the leg can still turn at
+-- it, else at the leg's turn, as reverse does (ruling 28): 8 to 4
+test("a ping-pong pass finishes its leg before a shorter length (#743)", function()
+  local context, S = setup()
+  local events = record_output(S, "probe")
+  local function run(length, before, new_length, after)
+    voice_1_only(S, length)
+    params:set("v1_seq_direction", DIRECTION["ping-pong"])
+    clear_list(events)
+    pattern_clock_start(); run_steps(context, before)
+    for step = 1, 16 do S.patterns[1][step] = 15 end
+    params:set("v1_seq_length", new_length)
+    context.clock.run_for(after * 0.125)
+    pattern_clock_stop()
+    return played_steps(events)
+  end
+  assert_equal(run(8, 3, 4, 6), "1 2 3 4 3 2 1 2 3", "three steps up: the leg turns at 4")
+  assert_equal(run(8, 5, 4, 6), "1 2 3 4 5 6 7 8 4 3 2", "five steps up, past 4: the leg ends at 8, then down from 4")
+  assert_equal(run(8, 9, 4, 6), "1 2 3 4 5 6 7 8 7 6 5 4 3 2 1", "three steps down: the leg goes on down to 1")
+  assert_equal(run(8, 11, 4, 6), "1 2 3 4 5 6 7 8 7 6 5 4 3 2 1 2 3", "five steps down: the same")
 end)
 
 test("a probability step's draws keep 3.6's order", function()
