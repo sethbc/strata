@@ -35,13 +35,13 @@ return function(S)
   -- counts[port][channel][note]: the ids sounding there; use[port][channel]:
   -- the notes on a channel; member_times[port][channel] = {released,
   -- assigned}; expressing: the played MPE notes the step reads, cursor the
-  -- next to read; cc_last[k]: slot k's last value; left_with[key]: the
+  -- next to read; express_ports: the step's set of their ports; cc_last[k]: slot k's last value; left_with[key]: the
   -- channels with notes as a device left, by the name S.lib.io_ports hands
   -- the departure (or "port <n>" without one); asked[port]: the scene a
   -- program change in on that port asked for, until its recall lands
   local state = {config = {}, notes = {}, counts = {}, use = {}, member_times = {}, expressing = {}, cursor = 1,
-    cc_last = {}, left_with = {}, asked = {}, tick = 0, stopped = false, bend_range = MIDI_OUT.bend_range.default,
-    noted = {}, dirty = false}
+    express_ports = {}, cc_last = {}, left_with = {}, asked = {}, tick = 0, stopped = false,
+    bend_range = MIDI_OUT.bend_range.default, noted = {}, dirty = false}
   for voice = 1, NUM_VOICES do
     state.config[voice] = {port = 0, channel = voice, mode = 1, members = MIDI_OUT.max_members}
     state.notes[voice] = {}
@@ -340,9 +340,18 @@ return function(S)
   -- The step's expression (build ruling 9): each played MPE note's bend, pressure
   -- and slide as raw has them now, each sent when its outgoing value is not
   -- the one the note last sent, at most express_per_step a step, from the
-  -- note the last step stopped at
+  -- note the last step stopped at. Each expressing note's port is settled
+  -- first, in port order (#749): a note whose device moved is set aside,
+  -- so its values never reach the device that took its port
   local function express_step()
     local list = state.expressing
+    if #list == 0 then return end
+    local ports = state.express_ports
+    for port in pairs(ports) do ports[port] = nil end
+    for _, record in ipairs(list) do ports[record.port] = true end
+    for port = 1, S.lib.io_ports.PORTS.count do
+      if ports[port] then settle_moved(port) end
+    end
     local count = #list
     if count == 0 then return end
     if state.cursor < 1 or state.cursor > count then state.cursor = 1 end
