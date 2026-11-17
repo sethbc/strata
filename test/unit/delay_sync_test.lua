@@ -27,6 +27,15 @@ end
 
 local function delay_calls(context) return context.calls_named("setDelay") end
 
+-- Run body, then put the clock's tempo back at the stubs' 120 BPM whether
+-- body passed or a failed assertion raised (the error is raised again), so
+-- a test that sets an external clock's tempo never leaves it behind
+local function restoring_tempo(body)
+  local ran, problem = pcall(body)
+  clock.tempo = 120
+  if not ran then error(problem, 0) end
+end
+
 local function last_delay(context)
   local calls = delay_calls(context)
   return calls[#calls] and calls[#calls].args
@@ -354,22 +363,24 @@ end
 -- DELAY.threshold of itself is one the step hook does not resend, so the
 -- modulation sends it neither
 test("a synced, modulated delay on an external clock wavering under 0.5% sends no setDelay (#741)", function()
-  local context, S = loaded()
-  synced_under_lfo(context, S)
-  params:set("clock_source", 2)  -- midi: the tempo is clock.get_tempo()'s
-  clock.tempo = 120
-  lfo_step(context, 2)
-  context.clear_engine_calls()
-  local wavers = {120.2, 119.8, 120.4, 119.7, 120.1, 119.9}
-  for step = 1, 48 do
-    clock.tempo = wavers[(step - 1) % #wavers + 1]
+  restoring_tempo(function()
+    local context, S = loaded()
+    synced_under_lfo(context, S)
+    params:set("clock_source", 2)  -- midi: the tempo is clock.get_tempo()'s
+    clock.tempo = 120
+    lfo_step(context, 2)
+    context.clear_engine_calls()
+    local wavers = {120.2, 119.8, 120.4, 119.7, 120.1, 119.9}
+    for step = 1, 48 do
+      clock.tempo = wavers[(step - 1) % #wavers + 1]
+      lfo_step(context)
+    end
+    assert_equal(#delay_calls(context), 0, "no setDelay in 48 steps")
+    clock.tempo = 126  -- 5%: the step hook resends
     lfo_step(context)
-  end
-  assert_equal(#delay_calls(context), 0, "no setDelay in 48 steps")
-  clock.tempo = 126  -- 5%: the step hook resends
-  lfo_step(context)
-  assert_true(#delay_calls(context) >= 1, "a tempo move past 0.5% sends")
-  assert_near(last_delay(context)[1], 0.75 * 60 / 126, 1e-9, "the new time")
+    assert_true(#delay_calls(context) >= 1, "a tempo move past 0.5% sends")
+    assert_near(last_delay(context)[1], 0.75 * 60 / 126, 1e-9, "the new time")
+  end)
 end)
 
 test("a feedback edit under a synced, modulated delay sends one setDelay with the synced time (#741)", function()
@@ -496,24 +507,102 @@ end)
 -- skipped, so the delivered delay_time is stale; a tempo that then gives no
 -- length plays the param as modulated now, never that stale value
 test("a synced delay whose tempo gives no length plays delay_time as modulated now, not a stale value (#768)", function()
-  local context, S = loaded()
-  under_macro_lfo(context, S, 0.5, true)  -- unsynced: the LFO's delay_time is delivered every step
-  lfo_step(context, 7)
-  params:set("delay_sync", 1)
-  lfo_step(context, 2)
-  params:set("strata_lfo1", 0)  -- the LFO off: the macro's extra on delay_time clears, unsent while synced
-  lfo_step(context, 3)
-  local expected = S.lib.engine_sync.with_lfo_offsets("delay_time", params:get("delay_time"))
-  assert_true(math.abs(engine_param_value("delay_time") - expected) > 1e-3,
-    "the delivered delay_time is stale: " .. engine_param_value("delay_time") .. " for " .. expected)
-  context.clear_engine_calls()
+  restoring_tempo(function()
+    local context, S = loaded()
+    under_macro_lfo(context, S, 0.5, true)  -- unsynced: the LFO's delay_time is delivered every step
+    lfo_step(context, 7)
+    params:set("delay_sync", 1)
+    lfo_step(context, 2)
+    params:set("strata_lfo1", 0)  -- the LFO off: the macro's extra on delay_time clears, unsent while synced
+    lfo_step(context, 3)
+    local expected = S.lib.engine_sync.with_lfo_offsets("delay_time", params:get("delay_time"))
+    assert_true(math.abs(engine_param_value("delay_time") - expected) > 1e-3,
+      "the delivered delay_time is stale: " .. engine_param_value("delay_time") .. " for " .. expected)
+    context.clear_engine_calls()
+    params:set("clock_source", 2)  -- midi: the tempo is clock.get_tempo()'s
+    clock.tempo = 0
+    lfo_step(context, 2)
+    assert_true(#delay_calls(context) >= 1, "the time is sent")
+    assert_near(last_delay(context)[1], expected, 1e-9, "delay_time with its offsets as they are now")
+    assert_near(S.lib.delay_sync.time(), expected, 1e-9, "and M.time() says so")
+  end)
+end)
+
+-- #770: a synced delay at a tempo with no length plays delay_time with its
+-- offsets, which the modulation sends (time_unheard is false there); the
+-- step hook's resend must not add a second setDelay in the same step.
+-- Steps the LFO clock eight times from a MIDI clock's tempo of 0 (the step
+-- it gives no length included), each step's setDelay count at most one;
+-- returns the counts
+local function steps_at_no_length(context, S)
   params:set("clock_source", 2)  -- midi: the tempo is clock.get_tempo()'s
   clock.tempo = 0
-  lfo_step(context, 2)
-  assert_true(#delay_calls(context) >= 1, "the time is sent")
-  assert_near(last_delay(context)[1], expected, 1e-9, "delay_time with its offsets as they are now")
-  assert_near(S.lib.delay_sync.time(), expected, 1e-9, "and M.time() says so")
-  clock.tempo = 120
+  local counts = {}
+  for step = 1, 8 do
+    local before = #delay_calls(context)
+    lfo_step(context)
+    counts[step] = #delay_calls(context) - before
+  end
+  local shown = table.concat(counts, " ")
+  for step, count in ipairs(counts) do
+    assert_true(count <= 1, "step " .. step .. ": at most one setDelay (" .. shown .. ")")
+  end
+  assert_true(#delay_calls(context) >= 1, "the time is sent (" .. shown .. ")")
+  local expected = S.lib.engine_sync.with_lfo_offsets("delay_time", params:get("delay_time"))
+  assert_near(S.lib.delay_sync.time(), expected, 1e-9, "M.time(): delay_time with its offsets")
+  return counts
+end
+
+test("a synced delay at a tempo with no length under an LFO on delay_time sends one setDelay a step (#770)", function()
+  restoring_tempo(function()
+    local context, S = loaded()
+    synced_under_lfo(context, S)
+    local counts = steps_at_no_length(context, S)
+    assert_equal(counts[#counts], 1, "the last step sends")
+    assert_near(last_delay(context)[1], S.lib.delay_sync.time(), 1e-9, "the param's time with its offset")
+    assert_true(math.abs(last_delay(context)[1] - params:get("delay_time")) > 1e-6, "the offset is in it")
+    -- back to a tempo with a length: its division once, then nothing
+    context.clear_engine_calls()
+    clock.tempo = 120
+    lfo_step(context)
+    assert_equal(#delay_calls(context), 1, "120 BPM: one setDelay")
+    assert_near(last_delay(context)[1], 0.375, 1e-9, "120 BPM, 1/8D")
+    lfo_step(context, 5)
+    assert_equal(#delay_calls(context), 1, "and nothing after it")
+  end)
+end)
+
+test("a synced delay at a tempo with no length under a macro's LFO on delay_time sends one setDelay a step (#770)",
+  function()
+    restoring_tempo(function()
+      local context, S = loaded()
+      under_macro_lfo(context, S, 0.5)
+      steps_at_no_length(context, S)
+      assert_near(last_delay(context)[1], S.lib.delay_sync.time(), 1e-9, "the param's time with its offsets")
+      assert_true(math.abs(last_delay(context)[1] - params:get("delay_time")) > 1e-6, "the macro's offset is in it")
+    end)
+  end)
+
+test("a synced delay sends once as the tempo stops giving a length and once as it gives one again (#770)", function()
+  restoring_tempo(function()
+    local context = loaded()
+    params:set("clock_tempo", 120); params:set("delay_sync", 1)
+    params:set("delay_time", 0.6)
+    params:set("clock_source", 2)  -- midi: the tempo is clock.get_tempo()'s
+    clock.tempo = 120
+    lfo_step(context, 2)
+    assert_near(last_delay(context)[1], 0.375, 1e-9, "synced at 120 BPM: 1/8D")
+    context.clear_engine_calls()
+    clock.tempo = 0
+    lfo_step(context, 6)
+    assert_equal(#delay_calls(context), 1, "tempo 0: one setDelay")
+    assert_near(last_delay(context)[1], 0.6, 1e-9, "tempo 0: delay_time")
+    context.clear_engine_calls()
+    clock.tempo = 120
+    lfo_step(context, 6)
+    assert_equal(#delay_calls(context), 1, "back to 120 BPM: one setDelay")
+    assert_near(last_delay(context)[1], 0.375, 1e-9, "back to 120 BPM: 1/8D")
+  end)
 end)
 
 test("DELAY.max_seconds equals the engine's limit on setDelay's time", function()
