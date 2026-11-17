@@ -77,9 +77,10 @@
         };
     }
 
-    // Whether the voice's scan is a one shot (its kept scanMode 2)
+    // Whether the voice's scan is a one shot: its kept scanMode rounded and
+    // clipped to 0-2, as the def reads it (slotScanState), is 2
     oneShotVoice { arg voice;
-        ^(grainControls[voice][\scanMode] ? 0).round == 2
+        ^(grainControls[voice][\scanMode] ? 0).round.clip(0, 2) == 2
     }
 
     // The scan's speed (3.7, ruling 29): the phase's rate for a scan of 1,

@@ -18,7 +18,7 @@ var path = h.tempDir +/+ "positions.wav";
 var saved = engine.grainControls[voice].copy;
 var compare, position, reading, slope, setGrain, hookReset, values, probe, moved, restarted, before, after, stepFrames, frames, grain;
 var levelBus, levelProbe, level, scanState, checkScanModes, checkOneShot, checkRetriggerRestart, checkSpeed, checkSyncScan;
-var checkRegionRestart, checkScanControls, withIgnoredLines, nodeCount, checkSyncScanEdges;
+var checkRegionRestart, checkScanControls, withIgnoredLines, nodeCount, checkSyncScanEdges, checkOneShotAgrees;
 
 // 3.7's scan state (StrataPositions.sc) for a check def: the mode, the loop
 // 0/1 as the span, no region, no sync unless given
@@ -301,6 +301,20 @@ checkRetriggerRestart = {
             .format(results[0][0], results[0][1], results[1][0], results[1][1]));
 };
 
+// The two one-shot tests agree on every kept scanMode (the final review's
+// engine Minor 4): the retrigger's restart (oneShotVoice) and the def's
+// one-shot reading (slotScanState) both round and clip it to 0-2, so a
+// value out of range plays and restarts as the mode it clips to
+checkOneShotAgrees = {
+    var results = [-1, 0, 1, 1.4, 1.6, 2, 2.6, 3, 7].collect({ arg mode;
+        command.(\setGrainParam, voice, \scanMode, mode);
+        [mode, engine.oneShotVoice(voice), engine.slotScanState((scanMode: mode), 0, 1)[\oneShot]]
+    });
+    command.(\setGrainParam, voice, \scanMode, 0);
+    check.(results.every({ arg each; each[1] == each[2] }),
+        "positions: the retrigger's one-shot test agrees with the def's for every scanMode ([mode, retrigger, def]: %)".format(results));
+};
+
 // A scan of 1 is the audio's own speed: over the 2 s loop and over a region of
 // 0.5 s (0.25/0.25) the grains move 0.5 of the slot a second, so each is
 // crossed in its own length
@@ -444,6 +458,7 @@ server.sync;
 0.2.wait;
 checkOneShot.value;
 checkRetriggerRestart.value;
+checkOneShotAgrees.value;
 checkSpeed.value;
 checkSyncScan.value;
 checkSyncScanEdges.value;
