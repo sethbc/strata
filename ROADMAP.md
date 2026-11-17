@@ -25,7 +25,7 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 6. 3.6: integration. crow, Just Friends and other ii (i2c) devices reached through crow, MIDI out, transport, OSC, dedicated controller layouts, and iii scripts for grids and arcs that run them.
 7. 3.7: rhythm (added 2026-11-11). Sample slices, buffers that follow the tempo and carry a key, scan modes, trig conditions, pattern directions, scene chains with chance, a synced delay, and envelope and random-sequence modulators.
 8. 3.8: sound (added 2026-11-11). More voice types, a deeper grain (a continuous window, grain probability, a grain arpeggiator, constant overlap), voices that grain each other, an input channel per voice, microtuning with a scale editor, shimmer, a delay freeze and per-voice sound presets.
-9. 4.0: a full code review of the whole project once 3.8 is out (a pre-4.0 release), then 4.0 with its fixes and a set of factory presets.
+9. 4.0: a full code review of the whole project once 3.8 is out (a pre-4.0 release), then 4.0 with its fixes, the hardware check (#6) and the factory presets' sounds.
 
 ## Non-goals
 
@@ -64,13 +64,13 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 | 3.7 | Rhythm: slices, tempo-aware buffers, scan modes, sequencer and scene-chain depth, modulators | Engine and Lua | Medium |
 | 3.8 | Sound: voice types, a deeper grain, voice-to-voice graining, microtuning, shimmer, voice presets | Engine and Lua | Medium to high |
 | pre-4.0 | Full code review of the whole project | Everything (review fixes only) | Low to medium |
-| 4.0 | Release of the reviewed code | Everything | Low |
+| 4.0 | Release of the reviewed code, checked on hardware, with factory sounds | Everything | Low |
 
 - 3.1 comes first. Every later release adds controls, and 3.1's page model is what gives them room. It needs no engine work.
 - 3.2's grain-engine rework comes before 3.3 and 3.5. Freeing memory per voice makes polyphony affordable, and the unified grain path gives buffer, input and synth voices the same features.
 - 3.3 comes before 3.4 (2026-11-08): 3.4 builds on 3.3's scene version, its bookmarks and its per-voice mix stage. The brainstorm's "3.4 can move ahead of 3.3" no longer holds.
 - 3.7 and 3.8 (added 2026-11-11) come after 3.6: slices and trig conditions build on 3.4's sequencer and 3.3's positions, and new voice types, microtuning and voice presets on 3.5's note allocation, so neither is designed before those have shipped. Each gets its own design first, like every release.
-- The full review comes last, after 3.8, when every planned feature is in, so it reviews the code 4.0 ships.
+- The full review comes last, after 3.8, when every planned feature is in, so it reviews the code 4.0 ships. Since 2026-11-16 it is the review alone: everything else once kept for it was moved up to before 3.8 or into 3.8 (the maintainer), and only what needs a norns in hand (#6, the factory sounds) waits for 4.0.
 
 ## Development approach (all releases)
 
@@ -97,13 +97,15 @@ Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13, 
 
 ---
 
-## Between 3.7 and 3.8: three small revisions
+## Between 3.7 and 3.8: revisions, fixes and three questions
 
-Decided 2026-11-16, from a review of what compatibility had cost (`docs/design/3.7-facts/revisit.md`); each is a package of its own, built with no other work open.
+Decided 2026-11-16, from a review of what compatibility had cost (`docs/design/3.7-facts/revisit.md`); each revision is a package of its own, built with no other work open. One plan holds them with the fixes below it (the maintainer, 2026-11-16).
 
 - **`frozen` becomes `locked`** in the code and the scene field. The lock has been "lock" on screen since 3.1 and `frozen` underneath, beside the audio freeze; 3.8 adds a delay freeze.
 - **The 256's fader pages take newer params.** They stop at 3.1's today: the voice filter, the sends, the loop, the jitters, attack and release have no fader. A param record asks for one.
 - **MIDI note off has two modes**, latch and release, with one default, in place of three (the third, `auto`, depended on the MIDI mode).
+- **The known findings are fixed** (added 2026-11-16): 3.7's follow-ups (#738-#744), and the seven 3.6 left for the review before 4.0, moved up (#747-#753: MIDI out's moved device, the ii bus's leader switch, the TELEXo after crow leaves, a late midigrid attach).
+- **Three questions kept for the pre-4.0 review are decided first** (moved up 2026-11-16), so 3.8's voice types and presets build on the answer: whether an LFO's own destination becomes a matrix routing (`revisit.md`, 12; its recommendation was to leave it), the pattern chain beside the scene sequencer, and the ten data files and `extras` beside the built-in voice params (`revisit.md`, "Looked at and set aside"). A short design of its own decides them; what it changes is built before 3.8's design.
 
 ## 3.8: Sound
 
@@ -154,6 +156,14 @@ The seven items below, and the scale editor above, were added on 2026-11-11 from
 
 - An input voice picks the left channel, the right channel or both, so two mono sources (a guitar and a microphone, say) feed different voices. Today every input voice reads the one stereo input ring; a channel choice is a control on the grain synth's read.
 
+### The 256 layout as a whole (moved up 2026-11-16)
+
+- The 16×16 layout grew by filling holes (`revisit.md`, 13): page 5's key apart from pages 1 to 4, the scene sequence's length on two rows, freeze behind a hold, four keys that play and stop, no reverb fader. 3.8's design places its new keys (delay freeze, voice presets, the voice type) in a layout reworked as a whole, once, and says what follows on the 128s and the 64. Kept for the pre-4.0 review until 2026-11-16.
+
+### Factory presets: the code (moved up 2026-11-16)
+
+- 3.8's last package builds the code that installs and loads 4.0's factory presets (the rules under pre-4.0 and 4.0 below), once the voice types exist; the sounds are made at 4.0.
+
 ### Delay freeze and clear
 
 - **Freeze** holds what is in the delay as a loop (its feedback at one and its input closed) until released, as a drone to play over; **clear** empties it at once. Both are controls on the delay SynthDef, with a key on FX and the grids. A reverb freeze is possible only in the high tier's reverb and is the design's to weigh.
@@ -166,10 +176,10 @@ Added 2026-11-08. After 3.8 ships (3.6, until 3.7 and 3.8 were added on 2026-11-
 - **Stricter than 3.0.2.** 3.0.2 followed this pattern (issues #10-#27, then #46-#52, one pull request each, all fixed), but grouped its findings by area into checklist issues and accepted three small ones without a fix (the "Known and accepted, no action" list in `docs/status.md`). pre-4.0 files one issue per finding and accepts none; the items on that list today are among its findings.
 - **Releases.** The fixes ship as a pre-4.0 release (or several), so they can be tried on hardware (the checks still open on #6 included) before 4.0. 4.0 is then the reviewed code: no new features unless its own design adds them.
 - **Why 4.0.** It marks the end of the 3.x feature line: everything this roadmap planned is in and has been reviewed as a whole.
-- **Two questions kept for this review** (added 2026-11-16): the 256's layout reworked as a whole, with a grid in hand (it grew by filling holes), and whether an LFO's own destination should become a matrix routing (`docs/design/3.7-facts/revisit.md`, 12 and 13).
+- **The review alone** (2026-11-16): what was kept for it moved up. The two questions added the same day (the 256's layout and an LFO's own destination as a routing) go to 3.8 and to the questions decided before 3.8, the known findings to the fixes before 3.8, and the factory presets' code to 3.8.
 - **Factory presets** (added 2026-11-11, at the maintainer's request). 4.0 ships content, so a new player hears what Strata can do in the first minute: a set of scenes, the PSET they belong to (with 3.4's side files for macros, routings and recorders) and a few short, freely licensed samples for the buffers.
   - They never touch a player's own data: they load only when asked (a SETUP action), or once on a first run that finds no scenes file, and a player's scenes, PSETs and buffers are never overwritten.
-  - The code that installs and loads them is built before the review starts, so the review covers it; the sounds themselves are made and tuned by ear on a norns, on both tiers, up to the release.
+  - The code that installs and loads them is built in 3.8 (its last package, moved up 2026-11-16), so the review covers it; the sounds themselves are made and tuned by ear on a norns, on both tiers, up to the release, beside the hardware check (#6).
   - 4.0's own design decides: how many scenes and which features each shows; where the files live in the repository and on the device; the samples' sources and licenses; how a later release adds to them or replaces them.
 
 ---
