@@ -503,9 +503,9 @@ return function(S)
     count = #rows,
     add = function(voice)
       for _, mapping in ipairs(EXPRESSION.mappings) do
-        S.lib.params_setup.add_voice_extra(voice, record, mapping.target_key, {type = "option",
+        S.lib.params_setup.add_voice_param(voice, record, mapping.target_key, {type = "option",
           name = mapping.name .. " target", options = EXPRESSION.targets, default = target_index[mapping.target]})
-        S.lib.params_setup.add_voice_extra(voice, record, mapping.depth_key, {type = "control",
+        S.lib.params_setup.add_voice_param(voice, record, mapping.depth_key, {type = "control",
           name = mapping.name .. " depth", formatter = depth_text,
           controlspec = controlspec.new(EXPRESSION.depth_range[1], EXPRESSION.depth_range[2], "lin", 1,
             mapping.depth, "%", 1 / (EXPRESSION.depth_range[2] - EXPRESSION.depth_range[1]))})

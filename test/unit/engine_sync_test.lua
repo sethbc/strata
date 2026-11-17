@@ -171,7 +171,7 @@ test("a start whose registered sync raises leaves the engine's voice stopped (#3
     record = {
       name = "failing_sync", count = 1, fader = false,
       add = function(voice_idx)
-        S.lib.params_setup.add_voice_extra(voice_idx, record, "failing_sync",
+        S.lib.params_setup.add_voice_param(voice_idx, record, "failing_sync",
           { type = "control", name = "failing sync", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
       end,
       sync = function(voice_idx)
@@ -1697,7 +1697,8 @@ test("voice_engine_parts names synth, grain, crossmod, bend, then the records", 
     end
     local expected = {}
     for index, name in ipairs(BUILT_IN_PARTS) do expected[index] = name end
-    for _, record in ipairs(S.registry.voice_params) do expected[#expected + 1] = record.name end
+    -- (the first three records are the built-in synth, grain and crossmod: package 2a)
+    for index = 4, #S.registry.voice_params do expected[#expected + 1] = S.registry.voice_params[index].name end
     assert_equal(table.concat(names, ","), table.concat(expected, ","), "voice " .. voice .. "'s parts")
     -- the synth part: the voice's synth keys, sorted, all voice-level
     local synth_keys = {}
@@ -1769,7 +1770,8 @@ test("a sync sends voice_level before kept, per part", function()
   for index, tag in ipairs(expected) do assert_equal(tags[index], tag, "sync call " .. index) end
   -- then each record's kept part, in registration order: its grain keys by key
   local position = #expected
-  for _, record in ipairs(S.registry.voice_params) do
+  for index = 4, #S.registry.voice_params do  -- after the built-in synth, grain and crossmod (package 2a)
+    local record = S.registry.voice_params[index]
     local keys = {}
     for key in pairs(record.grain_keys or {}) do keys[#keys + 1] = key end
     table.sort(keys)

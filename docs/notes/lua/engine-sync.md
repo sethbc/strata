@@ -33,7 +33,7 @@
 - `send_param_to_engine`, `send_engine_value`, `engine_param_value`, `with_lfo_offsets`;
 - the effects and master density senders (`send_filter_to_engine`, `send_delay_to_engine`, `send_reverb_to_engine`, `send_master_density_to_engine`), `engine_mod_source`;
 - the voice start and sync functions: `toggle_voice`, `toggle_lock`, `S.lib.engine_sync.start_voice(voice_idx)` (a stopped voice's start, without redraws; a voice outside 1..`NUM_VOICES` or one already running is left alone), `sync_voice_values_to_engine` (a running voice's sync, after its source), and the local `forget_sent_voice_values`, `send_part_entry` and `send_parts` (one loop over `S.lib.params_setup.voice_engine_parts`);
-- `S.lib.engine_sync.grain_key_message(grain_key, value)`: a registered record's grain key and a stored value as the `setGrainParam` name and value (also used by `add_voice_extra`'s senders);
+- `S.lib.engine_sync.grain_key_message(grain_key, value)`: a registered record's grain key and a stored value as the `setGrainParam` name and value (also used by `add_voice_param`'s senders, for grain and voice keys);
 - the shared state `S.engine_senders`, `S.engine_param_values`, and the LFO offsets `S.lfo_last_dest` and `S.lfo_scaled` (declared here, before `lib/lfos.lua` is included, because param actions read them);
 - cleanup step 160: `engine.voiceOff` for every running voice. norns frees the engine before it calls `cleanup()` (`Script.clear`), so on the device none of these arrives: the voices have already stopped with the engine, at once, without a release (#461; `docs/notes/lua/state-and-voices.md`, Cleanup). The unit tests' engine is never freed, so they see the calls.
 - `S.lib.engine_sync.add_voice_sender(voice_idx, param_id, send)`: installs a voice param's sender, gated on the voice running, and remembers the gate for the send budget (#642); `S.lib.engine_sync.reaches_engine(param_id)`, the budget's answer to whether a send of the id reaches the engine now, which the LFOs' round robin also asks before it gives a key a slot (#644, `docs/notes/lua/lfos.md`);
@@ -143,6 +143,6 @@ Voice sync and start:
 - What a start leaves: for its first milliseconds a synth voice plays its SynthDef defaults for the synth params `voiceOn` does not carry, and a buffer or input voice's first grain has no crossmod and bend 1, until the voice-level values arrive. Those are neutral values, not another run's.
 
 Adding a param that reaches the engine:
-- give it a sender in `S.engine_senders` and call `send_param_to_engine` from its action;
-- option and number params the LFOs cannot target (source, grain envelope/mode, mod sources) still call the engine from their action;
-- a new SynthDef argument the user controls also needs its default in the `voices` table, its place in the voice's `param_order`, its param in `add_voice_params()`, its spec in `get_param_spec()` and the control's exact, case-sensitive name; a grain param goes through `setGrainParam`.
+- give it a sender in `S.engine_senders` and call `send_param_to_engine` from its action (a per-voice param gets both from `add_voice_param`, through its record's `grain_keys` or `voice_keys`);
+- the source, an option no LFO targets and no value, still calls the engine from its action (`send_grain_source`); the grain envelope and mode and the mod sources send through `send_param_to_engine` since the groundwork before 3.8 (ruling 14: counted and deferrable, the same messages);
+- a new SynthDef argument the user controls also needs its default in the `voices` table, its place in the voice's `param_order` (the `synth` record adds and sends it), its spec in `get_param_spec()` and the control's exact, case-sensitive name; a grain param is a record's `grain_keys` entry, sent with `setGrainParam`.

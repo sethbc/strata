@@ -149,14 +149,80 @@ return function()
   end
 
   local VOICE_PARAM_FIELDS = {name = true, count = true, add = true, add_first = true, grain_keys = true,
-    sync = true, scene_defaults = true, discrete = true, scene_ranges = true, voice_rows = true,
-    layout_states = true, normalize_scene = true, fader = true, randomize = true}
+    voice_keys = true, send_order = true, separator = true, sync = true, scene_defaults = true, discrete = true,
+    scene_ranges = true, voice_rows = true, layout_states = true, normalize_scene = true, fader = true,
+    main_randomize = true, mutate = true, randomize = true}
   local SCENE_FIELD_FIELDS = {id = true, default = true, discrete = true, set = true}
   local FX_PARAM_FIELDS = {name = true, count = true, add = true}
 
+  -- A grain key: an engine name, or {name, value = fn, carry = false}
   local function is_grain_key(key, value)
     return type(key) == "string" and (type(value) == "string" or (type(value) == "table"
-      and type(value.name) == "string" and (value.value == nil or type(value.value) == "function")))
+      and type(value.name) == "string" and (value.value == nil or type(value.value) == "function")
+      and (value.carry == nil or value.carry == false)))
+  end
+
+  -- A voice key: an engine name, {name, value = fn, carry = false} (both
+  -- setVoiceParam) or {send = fn(voice_idx, value), carry = false}
+  local function is_voice_key(key, value)
+    if type(value) == "table" and value.name == nil then
+      return type(key) == "string" and type(value.send) == "function" and (value.carry == nil or value.carry == false)
+    end
+    return is_grain_key(key, value)
+  end
+
+  -- A record's fader, main_randomize or mutate groups: nil, or a list of
+  -- tables, each with keys (a list of key strings, or a function of the
+  -- voice that gives one) and an optional when = fn(voice_idx), and the
+  -- fields check(group) accepts
+  local function valid_groups(groups, check)
+    if groups == nil then return true end
+    if type(groups) ~= "table" then return false end
+    return all_entries(groups, function(_, group)
+      if type(group) ~= "table" or (group.when ~= nil and type(group.when) ~= "function") then return false end
+      local keys = group.keys
+      if type(keys) ~= "function" and not (type(keys) == "table"
+        and all_entries(keys, function(_, key) return type(key) == "string" end)) then return false end
+      return check(group)
+    end)
+  end
+  local function is_chance(value) return value == nil or (type(value) == "number" and value >= 0 and value <= 1) end
+  local function fader_group(group) return group.rank == nil or type(group.rank) == "number" end
+  local function randomize_group(group) return type(group.draw) == "function" end
+  local function mutate_group(group)
+    return is_chance(group.chance) and (group.scale == nil or type(group.scale) == "number")
+      and (group.warped == nil or type(group.warped) == "boolean")
+  end
+
+  -- A record's voice keys for voice voice_idx: its voice_keys table, the
+  -- table its voice_keys function gives for the voice, or {}
+  function M.voice_keys_of(record, voice_idx)
+    local keys = record.voice_keys
+    if type(keys) == "function" then return keys(voice_idx) end
+    return keys or {}
+  end
+
+  -- A record's count for voice voice_idx: its count, or what its count
+  -- function gives for the voice
+  function M.voice_param_count(record, voice_idx)
+    if type(record.count) == "function" then return record.count(voice_idx) end
+    return record.count
+  end
+
+  -- Whether send_order names each of a record's sent keys (its grain keys
+  -- and the voice's voice keys) exactly once
+  local function covers_sent_keys(order, grain_keys, voice_keys)
+    local listed, count = {}, 0
+    for _, key in ipairs(order) do
+      if type(key) ~= "string" or listed[key] or not ((grain_keys or {})[key] or voice_keys[key]) then return false end
+      listed[key], count = true, count + 1
+    end
+    for _, keys in ipairs({grain_keys or {}, voice_keys}) do
+      for key in pairs(keys) do
+        if not listed[key] then return false end
+      end
+    end
+    return count == #order
   end
 
   -- A voice-param record's scene defaults for voice voice_idx: its
@@ -170,18 +236,34 @@ return function()
   end
 
   -- A module's per-voice params (3.2: freeze, variation, loops, history,
-  -- the voice filter and sends). The record's fields:
-  --   name: unique; count: the params add adds per voice (checked at init);
-  --   add = fn(voice_idx): adds them with S.lib.params_setup.add_voice_extra;
-  --   grain_keys: {key = "<engine name>" | {name, value = fn(x)}}, sent with
-  --     setGrainParam by the param's sender and the voice sync;
+  -- the voice filter and sends; the groundwork before 3.8: the built-in
+  -- synth, grain and crossmod records, which lib/voices.lua registers
+  -- first). The record's fields:
+  --   name: unique; count: the params add adds per voice (checked at init),
+  --     or a function of the voice that gives it;
+  --   add = fn(voice_idx): adds them with S.lib.params_setup.add_voice_param;
+  --   grain_keys: {key = "<engine name>" | {name, value = fn(x), carry =
+  --     false}}, sent with setGrainParam by the param's sender and the voice
+  --     sync (a start sends them before voiceOn);
+  --   voice_keys: {key = "<engine name>" | {name, value = fn(x), carry =
+  --     false} | {send = fn(voice_idx, x), carry = false}}, or a function of
+  --     the voice that gives that table: sent with setVoiceParam (or the
+  --     entry's send) by the param's sender and the voice sync (a start
+  --     sends them after voiceOn). carry = false: a start sends the stored
+  --     value, never the param's override and offsets;
+  --   send_order: the order its grain and voice keys go out in, naming each
+  --     once (default: sorted);
+  --   separator: the menu separator its params sit under, the text after
+  --     "voice <i> " (false: none; nil: "extras"), added before a record
+  --     whose separator differs from the record's before it;
   --   sync: optional fn(voice_idx), the voice sync's sends after grain_keys;
   --     a start runs it before voiceOn, so it sends grain params only
   --     (setGrainParam): voiceOn resets the voice-level ones (#325);
   --   scene_defaults: {key = default} (each its param's default), or a
   --     function of the voice that gives that table (defaults that differ
   --     by voice): the keys scenes capture into voices[i].values and
-  --     fill_scene fills;
+  --     fill_scene fills (a built-in record has none: its scene keys are
+  --     every value it adds, S.lib.params_setup.voice_scene_keys);
   --   discrete: {key = {min, max}} (whole values): set at a transition's
   --     end, after the source; every other scene key crossfades;
   --   scene_ranges: {key = {min, max}} for a continuous scene key:
@@ -189,10 +271,17 @@ return function()
   --   voice_rows: {section, rows = {key, ...}, when = fn(voice_idx, key),
   --     before = <section>}: VOICE's rows (lib/ui/voice_rows.lua);
   --   layout_states: {{name, setup = fn(context)}}: VOICE's layout tests draw them;
-  --   fader: never true (registered params stay off the 256 fader pages);
+  --   fader: false or nil (none), or groups {keys = {key, ...} | fn(voice_idx),
+  --     when = fn(voice_idx), rank = number (default 0)}: the voice's
+  --     fader pages, by rank, then registration order (fader_param_ids); a
+  --     group's keys may be any key added for the voice;
+  --   main_randomize: groups {keys, when, draw = fn(voice_idx, key,
+  --     param_id) -> value}: what MAIN's randomize_voice draws;
+  --   mutate: groups {keys, when, chance (0-1, default 1), scale (default
+  --     1), warped (default true: the step moves in the normalized range;
+  --     false: delta x scale in the param's units)}: what gentle_mutate moves;
   --   randomize: {key = fn(voice_idx) -> value}: the keys a press of ALT+K2
-  --     on their VOICE section randomizes, each with its draw (#557); never
-  --     MAIN's randomize_voice, the mutations or the fader pages
+  --     on their VOICE section randomizes, each with its draw (#557)
   function M.register_voice_params(record)
     local kind = "register_voice_params"
     require_open("voice_params", kind)
@@ -202,14 +291,33 @@ return function()
       "a second record named " .. record.name)
     local where = kind .. " " .. record.name
     require_known_fields(record, VOICE_PARAM_FIELDS, where)
-    require_arg(is_whole(record.count, 1), where, "count is a whole number of params, at least 1")
+    require_arg(is_whole(record.count, 1) or type(record.count) == "function", where,
+      "count is a whole number of params, at least 1, or a function of the voice")
     require_arg(type(record.add) == "function", where, "add is a function")
     require_arg(record.add_first == nil or type(record.add_first) == "function", where, "add_first is a function")
     require_arg(all_entries(record.grain_keys, is_grain_key), where,
-      "grain_keys maps a key to an engine name or {name, value = fn}")
+      "grain_keys maps a key to an engine name or {name, value = fn, carry = false}")
+    require_arg(record.voice_keys == nil or type(record.voice_keys) == "table" or type(record.voice_keys) == "function",
+      where, "voice_keys is a table or a function of the voice")
+    require_arg(record.send_order == nil or type(record.send_order) == "table", where, "send_order is a list of keys")
+    require_arg(record.separator == nil or record.separator == false
+      or (type(record.separator) == "string" and record.separator ~= ""), where, "a separator is a string or false")
     require_arg(record.sync == nil or type(record.sync) == "function", where, "sync is a function")
+    -- count and voice_keys may be functions of the voice (the groundwork
+    -- before 3.8): each voice's is checked
+    for voice_idx = 1, M.constants.NUM_VOICES do
+      require_arg(is_whole(M.voice_param_count(record, voice_idx), 1), where,
+        "count is a whole number of params, at least 1, for voice " .. voice_idx)
+      local voice_keys = M.voice_keys_of(record, voice_idx)
+      require_arg(type(voice_keys) == "table" and all_entries(voice_keys, is_voice_key), where,
+        "voice_keys maps a key to an engine name, {name, value = fn, carry = false} or {send = fn, carry = false}")
+      require_arg(record.send_order == nil or covers_sent_keys(record.send_order, record.grain_keys, voice_keys),
+        where, "send_order names each of its grain and voice keys once")
+    end
     -- scene_defaults is a table, or a function of the voice that gives one
-    -- (3.7): each voice's table is checked, and all hold the same keys
+    -- (3.7): each voice's table is checked, and all hold the same keys. A
+    -- record without them (a built-in one) has its discrete keys' defaults
+    -- checked at init (S.lib.params_setup's add_voice_params)
     local per_voice = type(record.scene_defaults) == "function"
     local voice_count = per_voice and M.constants.NUM_VOICES or 1
     local first = M.voice_scene_defaults(record, 1)
@@ -221,8 +329,9 @@ return function()
         "scene_defaults maps a key to a number (a function: for every voice, the same keys)")
       require_arg(all_entries(record.discrete, function(key, range)
         local default = defaults[key]
-        return type(range) == "table" and is_whole(range[1], -math.huge) and is_whole(range[2], range[1])
-          and is_whole(default, range[1]) and default <= range[2]
+        local whole_range = type(range) == "table" and is_whole(range[1], -math.huge) and is_whole(range[2], range[1])
+        if record.scene_defaults == nil then return whole_range end
+        return whole_range and is_whole(default, range[1]) and default <= range[2]
       end), where, "discrete maps a scene key to a whole {min, max} that holds its default")
       require_arg(all_entries(record.scene_ranges, function(key, range)
         local default = defaults[key]
@@ -243,7 +352,12 @@ return function()
     end), where, "layout_states lists {name, setup = fn}")
     require_arg(record.normalize_scene == nil or type(record.normalize_scene) == "function", where,
       "normalize_scene is a function")
-    require_arg(record.fader ~= true, where, "registered params stay off the 256 fader pages (fader = false)")
+    require_arg(record.fader == false or valid_groups(record.fader, fader_group), where,
+      "fader is false or groups {keys = list | fn, when = fn, rank = number}")
+    require_arg(valid_groups(record.main_randomize, randomize_group), where,
+      "main_randomize is groups {keys = list | fn, when = fn, draw = fn}")
+    require_arg(valid_groups(record.mutate, mutate_group), where,
+      "mutate is groups {keys = list | fn, when = fn, chance = 0-1, scale = number, warped = boolean}")
     require_arg(all_entries(record.randomize, function(key, draw)
       return type(key) == "string" and type(draw) == "function"
     end), where, "randomize maps a key to a draw function")

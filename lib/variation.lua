@@ -282,7 +282,7 @@ return function(S)
     name = "variation",
     count = #rows,  -- one param per VOICE row
     add = function(voice_idx)
-      local add = S.lib.params_setup.add_voice_extra
+      local add = S.lib.params_setup.add_voice_param
       add(voice_idx, record, "reverse", {type = "control", name = "reverse",
         controlspec = controlspec.new(0, V.percent, "lin", 1, 0, "%")})
       add(voice_idx, record, "pitch_jitter", {type = "control", name = "pitch jitter",
@@ -306,7 +306,7 @@ return function(S)
     -- quantize ahead of the voice's freq, so a PSET (read in param order)
     -- sets it before the freq the filter snaps by it (#125)
     add_first = function(voice_idx)
-      S.lib.params_setup.add_voice_extra(voice_idx, record, "quantize", {type = "binary", name = "quantize",
+      S.lib.params_setup.add_voice_param(voice_idx, record, "quantize", {type = "binary", name = "quantize",
         behavior = "toggle", default = 0,
         action = function(x)
           if x == 1 and not S.scene_recall_in_progress then snap_freq(voice_idx) end
@@ -342,7 +342,7 @@ return function(S)
       end,
     },
     layout_states = layout_states,
-    fader = false,
+    fader = {{keys = {"pitch_jitter", "size_jitter", "pan_jitter"}, rank = 3}},
     -- VOICE's ALT+K2 on this section (#557): each draw uniform over a usable
     -- part of its range. The interval set, the custom intervals and
     -- quantize are kept: they set the pitch content, and the set adds or

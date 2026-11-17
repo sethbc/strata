@@ -247,7 +247,7 @@ The Lua side's, across modules:
 - **LFOs**: one 48 Hz clock (`S.lfo_clock`) steps the six in index order; one on a fast destination runs in the engine (`setFastLfo`, `stopFastLfo`, `syncFastLfo`), every other in Lua through `S.lib.lfos.mark_due` (at most 12 sends a step, each inside `deferrable`); a modulation input reads lower-numbered LFOs only. `docs/notes/lua/lfos.md`
 - **Selected voice**: after init, `S.selected_voice` changes only through `S.lib.ui_keys.select_voice_by`. `docs/notes/lua/midi.md`
 - **Filter restore mix**: `S.fx_last_mix.filter` changes only in `lib/params_setup.lua`, never in the FX page; the delay and reverb have none. `docs/notes/lua/pages/fx.md`
-- **Registered per-voice params** (freeze, variation, loops, history, voice mix, seq) default to 3.1's sound and never reach MAIN's randomize, mutations or the 256 fader pages (`fader = false`), but for their own section's page randomize; registered LFO destinations join their voice's group. `docs/notes/lua/params.md`
+- **Per-voice params** are `S.register_voice_params` records (the built-ins `synth`, `grain`, `crossmod` first), added with `add_voice_param`; a record names the keys MAIN's randomize, the mutations and the fader pages reach (`main_randomize`, `mutate`, `fader`); registered LFO destinations join their voice's group. `docs/notes/lua/params.md`
 - **Mute and solo**: a mute silences in the mix stage (`voiceMute`, sent as `S.lib.voice_mix.silenced(voice)`, never as a stored value) and never stops a voice; scenes store mutes and never solos. `docs/notes/lua/voice-mix.md`
 - **Loop pairs**: scenes set `loop_length` before `loop_start` (sorted key order), so the length's filter stands down during a recall or transition, the start's action cuts a length that does not fit, and a loaded pair goes through `normalize_scene`. `docs/notes/lua/loops.md`, `docs/notes/lua/scenes.md`
 - **Scale quantize**: one `freq` filter snaps a per-voice shadow note that only a turn moves (`S.lib.ui_detent.as_turn`); every other set snaps its own value; `scaleNote` is resent whenever it moves; a voice's `quantize` loads ahead of its `freq` (`add_first`). `docs/notes/lua/variation.md`
@@ -317,7 +317,7 @@ How to run each check, what it needs and how CI runs them: `docs/checks.md`. How
 ### CRITICAL: keep Lua and the engine in sync
 
 - A new or changed `addCommand` needs: matching `engine.*` calls (same count and types; SC type codes i/f/s), the table row above, and the engine stub picks it up from the SC source.
-- A new SynthDef argument the user controls needs: the `voices` table default, the voice's `param_order`, `add_voice_params()`, `get_param_spec()`, a sender in `S.engine_senders`, and the exact case-sensitive name. Grain params go through `setGrainParam`.
+- A new SynthDef argument the user controls needs its `voices` default, its `param_order` place, a `get_param_spec()` spec and the exact case-sensitive name; a grain param is a record's `grain_keys` entry.
 - Lua defaults are what the engine plays (`S.lib.engine_sync.start_voice` sends them at every start). SynthDef defaults for the filter and delay must equal the Lua param defaults, because the script never bangs its params.
 - New voice-level controls that a buffer or input grain synth also needs belong in `voiceControls` / `grainControls` and `controlNameSets` (see Audio Sources in `docs/notes/engine/grains.md`).
 

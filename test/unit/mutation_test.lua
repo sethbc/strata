@@ -122,7 +122,16 @@ test("randomize and mutation work in normalized space for exponential params", f
   assert_true(max_step > 0.05, "mutation actually moves freq (" .. max_step .. ")")
 end)
 
-test("gentle_mutate skips every grain key in DISCRETE_GRAIN_KEYS", function()
+-- The grain record's mutate groups (lib/voices.lua) are what mutates of
+-- the grain and buffer keys (the groundwork before 3.8: they replace
+-- DISCRETE_GRAIN_KEYS and BUFFER_MUTATION_KEYS)
+local function grain_record()
+  for _, record in ipairs(local_value("S").registry.voice_params) do
+    if record.name == "grain" then return record end
+  end
+end
+
+test("gentle_mutate touches only the grain keys the grain record's mutate groups name", function()
   local context = load_strata(); finish_startup(context)   -- voice 1 running
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
   params:set("v1_grain_env", 3); params:set("v1_grain_mode", 2)
@@ -130,11 +139,10 @@ test("gentle_mutate skips every grain key in DISCRETE_GRAIN_KEYS", function()
   for _ = 1, 50 do gentle_mutate() end
   assert_equal(params:get("v1_grain_env"), 3, "envelope shape never mutates")
   assert_equal(params:get("v1_grain_mode"), 2, "grain mode never mutates")
-  -- the guard is the table: any grain key marked discrete is left alone
-  local discrete = local_value("DISCRETE_GRAIN_KEYS")
-  for _, key in ipairs({ "grain_size", "grain_pitch", "grain_spread", "buf_pos", "buf_rate", "buf_scan" }) do
-    discrete[key] = 1
-  end
+  -- the groups are the guard: with none, no grain or buffer key mutates
+  local record = grain_record()
+  local groups = record.mutate
+  record.mutate = {}
   for _, source in ipairs({ 1, 2, 10 }) do   -- synth, buffer, input
     params:set("v1_source", source)
     local before = values_of(local_value("voices")[1], GRAIN_VALUE_KEYS)
@@ -143,6 +151,7 @@ test("gentle_mutate skips every grain key in DISCRETE_GRAIN_KEYS", function()
       assert_equal(local_value("voices")[1].values[key], value, "source " .. source .. ": grain " .. key .. " skipped")
     end
   end
+  record.mutate = groups
 end)
 
 test("buffer position drifts subtly and reverts to the user-set position", function()
@@ -333,15 +342,20 @@ test("a randomize of another voice, a recall or a mutation of the voice clears t
   -- a mutation step that changes only an unstored param of the voice clears it too
   params:set("v2_source", 10)                           -- input: grain params only
   randomize_voice(2)
-  local discrete = local_value("DISCRETE_GRAIN_KEYS")
-  discrete.grain_size = 1; discrete.grain_pitch = 1     -- only grain spread may mutate
+  local record = grain_record()
+  local groups = record.mutate
+  record.mutate = {}                                    -- only grain spread may mutate
+  for _, group in ipairs(groups) do
+    if group.keys[1] == "grain_spread" then record.mutate[1] = group end
+  end
+  assert_equal(#record.mutate, 1, "grain spread's own group")
   local spread = params:get("v2_grain_spread")
   for _ = 1, 200 do                                     -- spread mutates in a fifth of the steps
     gentle_mutate()
     if params:get("v2_grain_spread") ~= spread then break end
     assert_true(undo_available(2), "a step that changes nothing on the voice keeps the undo")
   end
-  discrete.grain_size = nil; discrete.grain_pitch = nil
+  record.mutate = groups
   assert_true(params:get("v2_grain_spread") ~= spread, "grain spread mutated")
   assert_equal(local_value("undo"), nil, "a mutation of grain spread on the voice clears it")
 end)
@@ -821,6 +835,108 @@ test("every drawn param of every page's randomize_section calls note_param_edit 
   for _, section in ipairs({ "synth", "synth (buffer)", "input", "grain", "crossmod", "mix", "variation",
     "filter & sends", "bookmarks" }) do
     assert_true(voice_sections[section], "VOICE's " .. section .. " section is checked")
+  end
+end)
+
+-- The groundwork before 3.8 (package 2a): MAIN's randomize and the
+-- mutations read the records' main_randomize and mutate groups, which hold
+-- 3.7's sets
+local function sorted_ids(ids)
+  local copy = {}
+  for index, id in ipairs(ids) do copy[index] = id end
+  table.sort(copy)
+  return table.concat(copy, ",")
+end
+local function with_prefix(voice, keys)
+  local ids = {}
+  for index, key in ipairs(keys) do ids[index] = "v" .. voice .. "_" .. key end
+  return ids
+end
+
+test("MAIN's randomize draws 3.7's sets on every voice and source", function()
+  load_strata()
+  local S = local_value("S")
+  local function drawn(voice)
+    local ids = {}
+    for index, entry in ipairs(S.lib.mutation.voice_spec(voice).draws) do ids[index] = entry.id end
+    return ids
+  end
+  for _, voice in ipairs({ 1, 4 }) do
+    -- synth: every synth key but amp, in param_order, then grain size and pitch
+    local synth = {}
+    for _, key in ipairs(S.voices[voice].param_order) do
+      if key ~= "amp" then synth[#synth + 1] = key end
+    end
+    synth[#synth + 1] = "grain_size"; synth[#synth + 1] = "grain_pitch"
+    params:set("v" .. voice .. "_source", 1)
+    assert_equal(table.concat(drawn(voice), ","), table.concat(with_prefix(voice, synth), ","), "voice " .. voice .. " synth")
+    params:set("v" .. voice .. "_source", 2)
+    assert_equal(table.concat(drawn(voice), ","),
+      table.concat(with_prefix(voice, { "buf_pos", "buf_rate", "buf_scan", "grain_size", "grain_pitch" }), ","),
+      "voice " .. voice .. " buffer, in order")
+    params:set("v" .. voice .. "_source", 10)
+    assert_equal(table.concat(drawn(voice), ","), table.concat(with_prefix(voice, { "grain_size", "grain_pitch" }), ","),
+      "voice " .. voice .. " input")
+  end
+  -- every voice and source: the draws land inside each param's range
+  math.randomseed(21)
+  for voice = 1, S.constants.NUM_VOICES do
+    for _, source in ipairs({ 1, 3, 10 }) do
+      params:set("v" .. voice .. "_source", source)
+      for _, entry in ipairs(S.lib.mutation.voice_spec(voice).draws) do
+        local minval, maxval = param_range(entry.id)
+        local value = entry.draw()
+        assert_true(value >= minval and value <= maxval, entry.id .. " draws inside its range")
+      end
+    end
+  end
+end)
+
+test("mutations reach 3.7's sets; amp, pan, env, mode and source are never touched", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice = 1, S.constants.NUM_VOICES do
+    if not S.voices[voice].active then toggle_voice(voice) end
+  end
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  local function mutated(voice)
+    local seen, ids = {}, {}
+    local set = params.set
+    params.set = function(self, id, ...)
+      if id:match("^v" .. voice .. "_") and not seen[id] then seen[id] = true; ids[#ids + 1] = id end
+      return set(self, id, ...)
+    end
+    local ok, problem = pcall(function() for _ = 1, 40 do gentle_mutate() end end)
+    params.set = set
+    assert_true(ok, tostring(problem))
+    return ids
+  end
+  math.randomseed(23)
+  for _, voice in ipairs({ 1, 4 }) do
+    local synth = {}
+    for _, key in ipairs(S.voices[voice].param_order) do
+      if key ~= "amp" and key ~= "pan" then synth[#synth + 1] = key end
+    end
+    for _, key in ipairs({ "grain_size", "grain_pitch", "grain_spread" }) do synth[#synth + 1] = key end
+    params:set("v" .. voice .. "_source", 1)
+    assert_equal(sorted_ids(mutated(voice)), sorted_ids(with_prefix(voice, synth)), "voice " .. voice .. " synth")
+    params:set("v" .. voice .. "_source", 2)
+    assert_equal(sorted_ids(mutated(voice)), sorted_ids(with_prefix(voice, { "buf_pos", "buf_rate", "buf_scan",
+      "grain_size", "grain_pitch", "grain_spread" })), "voice " .. voice .. " buffer")
+    params:set("v" .. voice .. "_source", 10)
+    assert_equal(sorted_ids(mutated(voice)), sorted_ids(with_prefix(voice, { "grain_size", "grain_pitch", "grain_spread" })),
+      "voice " .. voice .. " input")
+  end
+  -- never amp, pan, the envelope, the mode or the source, on any voice and source
+  for voice = 1, S.constants.NUM_VOICES do
+    for _, source in ipairs({ 1, 3, 10 }) do
+      params:set("v" .. voice .. "_source", source)
+      for _, id in ipairs(mutated(voice)) do
+        local key = id:match("^v%d+_(.+)$")
+        assert_true(key ~= "amp" and key ~= "pan" and key ~= "grain_env" and key ~= "grain_mode" and key ~= "source"
+          and not key:match("^mod_"), id .. " is never mutated")
+      end
+    end
   end
 end)
 

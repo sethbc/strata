@@ -218,7 +218,7 @@ return function(S)
     add = function(voice_idx)
       -- the engine's mode change never restarts its scan: the restart
       -- follows the mode (S.lib.positions, so the playhead restarts too)
-      S.lib.params_setup.add_voice_extra(voice_idx, record, SCAN.mode_key, {
+      S.lib.params_setup.add_voice_param(voice_idx, record, SCAN.mode_key, {
         type = "option",
         name = "scan mode",
         options = SCAN.modes,
@@ -226,7 +226,7 @@ return function(S)
         action = function() S.lib.positions.restart_scan(voice_idx) end,
       })
       -- a voice that stops following gets its factor and rate back at once
-      S.lib.params_setup.add_voice_extra(voice_idx, record, SCAN.follow_key, {
+      S.lib.params_setup.add_voice_param(voice_idx, record, SCAN.follow_key, {
         type = "option",
         name = "follow",
         options = SCAN.follows,

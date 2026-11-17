@@ -302,7 +302,7 @@ return function(S)
     name = "envelopes",
     count = #ENV.keys,
     add = function(voice_idx)
-      local add = S.lib.params_setup.add_voice_extra
+      local add = S.lib.params_setup.add_voice_param
       local function changed() mark_routes_of(voice_idx) end
       local params_by_key = {
         env_attack = time_param("env attack", ENV.defaults.env_attack),

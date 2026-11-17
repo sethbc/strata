@@ -900,7 +900,7 @@ return function(S)
     name = "notes",
     count = 1 + #NOTES.envelope_keys,
     add = function(voice)
-      S.lib.params_setup.add_voice_extra(voice, cap_record, NOTES.cap.key, {
+      S.lib.params_setup.add_voice_param(voice, cap_record, NOTES.cap.key, {
         type = "number", name = NOTES.cap.name, min = 1, max = NOTE_SLOTS, default = NOTE_SLOTS,
         -- a number param's own string is its number (norns' Number:string)
         formatter = function(param) return tostring(param:get()) end,
@@ -908,7 +908,7 @@ return function(S)
       })
       for index, key in ipairs(NOTES.envelope_keys) do
         local range = NOTES.envelope_ranges[key]
-        S.lib.params_setup.add_voice_extra(voice, cap_record, key, {
+        S.lib.params_setup.add_voice_param(voice, cap_record, key, {
           type = "control", name = key,
           controlspec = controlspec.new(range[1], range[2], "exp", 0, NOTES.envelope[voice][index], "s"),
         })
@@ -929,7 +929,7 @@ return function(S)
     scene_ranges = {attack = NOTES.envelope_ranges.attack, release = NOTES.envelope_ranges.release},
     voice_rows = {section = NOTES.cap.section, rows = {NOTES.cap.key, "attack", "release"}, before = NOTES.cap.before},
     layout_states = cap_layout_states,
-    fader = false,
+    fader = {{keys = {"attack", "release"}, rank = 4}},
   }
   S.register_voice_params(cap_record)
 

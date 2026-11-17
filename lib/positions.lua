@@ -881,7 +881,7 @@ return function(S)
     count = NUM_BOOKMARKS,
     add = function(voice_idx)
       for n, key in ipairs(bookmark_keys) do
-        S.lib.params_setup.add_voice_extra(voice_idx, record, key, {
+        S.lib.params_setup.add_voice_param(voice_idx, record, key, {
           type = "control",
           name = "bookmark " .. n,
           controlspec = controlspec.new(0, 1, "lin", 0, scene_defaults[key]),

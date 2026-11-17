@@ -50,7 +50,7 @@ return function(S)
     -- so the range is the running tier's: a value saved on a longer tier
     -- (a PSET or scene) clamps to it when set
     add = function(voice_idx)
-      S.lib.params_setup.add_voice_extra(voice_idx, record, M.HISTORY.key, {
+      S.lib.params_setup.add_voice_param(voice_idx, record, M.HISTORY.key, {
         type = "control",
         name = "history",
         controlspec = controlspec.new(0, M.max_seconds(), "lin", 0, 0, "s"),

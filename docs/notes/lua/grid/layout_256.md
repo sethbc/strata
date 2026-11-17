@@ -51,7 +51,7 @@ The local `pattern_key(port, x, y)`: a press arms `grid_core.on_hold(port, x, 15
 
 ## Parameter page (page 2)
 
-- Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` of `fader_param_ids(S.grid_voice_select)` on rows 9-12 (`GRID_LAYOUT.param_page_row`, `fader_rows`, `fader_first_row`; `fader_width` 16 columns). Row 13: fader pages, selected 15, available 4.
+- Fader page N (row 13, column N) shows entries `(N-1)*4+1 .. N*4` of `fader_param_ids(S.grid_voice_select)` on rows 9-12 (`GRID_LAYOUT.param_page_row`, `fader_rows`, `fader_first_row`; `fader_width` 16 columns). Row 13: fader pages, selected 15, available 4 (7 or 8 per voice since the groundwork before 3.8: 3.7's faders, then the voice filter and sends, a buffer voice's loop, the jitters, attack and release; `docs/notes/lua/grid-core.md`).
 - Each fader row is drawn by `grid_redraw_fader_row(grid_device, y, param_id)`; a press calls `set_fader_param()`.
 - Row 14 columns 1-7 select the voice (`select_grid_voice`).
 

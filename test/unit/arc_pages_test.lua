@@ -784,7 +784,7 @@ test("an arc ring on a binary VOICE row toggles it once per whole step", functio
       discrete = { probe_switch = { 0, 1 } }, voice_rows = { section = "mix", rows = { "probe_switch" } },
       fader = false }
     function record.add(voice_idx)
-      S.lib.params_setup.add_voice_extra(voice_idx, record, "probe_switch",
+      S.lib.params_setup.add_voice_param(voice_idx, record, "probe_switch",
         { type = "binary", name = "probe switch", behavior = "toggle", default = 0 })
     end
     S.register_voice_params(record)
@@ -827,7 +827,7 @@ test("an arc ring on a binary VOICE row echoes its value to a MIDI-mapped contro
       discrete = { probe_switch = { 0, 1 } }, voice_rows = { section = "mix", rows = { "probe_switch" } },
       fader = false }
     function record.add(voice_idx)
-      S.lib.params_setup.add_voice_extra(voice_idx, record, "probe_switch",
+      S.lib.params_setup.add_voice_param(voice_idx, record, "probe_switch",
         { type = "binary", name = "probe switch", behavior = "toggle", default = 0 })
     end
     S.register_voice_params(record)

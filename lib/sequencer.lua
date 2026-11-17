@@ -1654,7 +1654,7 @@ return function(S)
     name = "seq",
     count = 8,
     add = function(voice_idx)
-      local add = S.lib.params_setup.add_voice_extra
+      local add = S.lib.params_setup.add_voice_param
       add(voice_idx, record, "seq_length", {type = "number", name = "seq length", min = 1, max = PATTERN_LENGTH,
         default = PATTERN_LENGTH, action = function(length)
           -- the step that set the voice's overrides is past the new length:

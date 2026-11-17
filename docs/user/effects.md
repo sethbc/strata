@@ -19,7 +19,7 @@ Every voice has a "filter & sends" section on the VOICE page (and in PARAMS, aft
 
 With both sends at 100% the delay and reverb mixes work exactly as before on standard (a moving reverb mix now glides over 50 ms instead of stepping; the high setting uses a different reverb): the delay mix and the reverb mix crossfade the whole sound between dry and wet. A send scales that voice's part of the crossfade: a voice with its sends at 0 plays fully dry at its full level, however high the global mixes are, while the other voices keep their echoes and reverb. Two things follow from the delay feeding the reverb: a voice with reverb send 0 still has its echoes reverberated, and a voice with delay send 0 still hears the other voices' echoes in the reverb.
 
-The voice filter's cutoff and both sends are LFO destinations (`v1 vfilt`, `v1 dsend`, `v1 rsend`, ...). Scenes keep all six; the filter type switches at the end of a transition, the others fade. Randomize, mutations and the grid's fader pages leave them alone.
+The voice filter's cutoff and both sends are LFO destinations (`v1 vfilt`, `v1 dsend`, `v1 rsend`, ...). Scenes keep all six; the filter type switches at the end of a transition, the others fade. Randomize and mutations leave them alone; the grid's fader pages show the cutoff, resonance, mix and both sends ([16×16](grid/256.md)).
 
 ## Bypass
 
