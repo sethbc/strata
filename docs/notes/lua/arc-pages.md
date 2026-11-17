@@ -34,7 +34,7 @@ MAIN (`arc_main_delta`/`arc_main_redraw`, with ALT `arc_main_alt_delta`/`arc_mai
 - Ring 2: the selected voice's main parameter (`main_param_id`; `buf_pos` for a buffer-sourced voice, `grain_size` for an input-sourced one).
 - Ring 3: the selected voice's grain size; grain pitch for an input-sourced voice (neither `voice_uses_synth` nor `voice_uses_buffer`), whose ring 2 already is grain size. This is MAIN's third field for that voice.
 - Ring 4: the selected voice's grain density.
-- ALT (`ARC_MAIN_ALT_KEYS`): grain pitch, grain spread, level (`amp`), pan. Sub has no pan (`S.voices[i].params.pan == nil`): its ring 4 is dark and ignores turns.
+- ALT (`ARC_MAIN_ALT_KEYS`): grain pitch, grain spread, level (`amp`), pan. Sub has no pan (`S.lib.voices.is_synth_key(i, "pan")` is false): its ring 4 is dark and ignores turns.
 - Every ring, plain and ALT, sweeps through `arc_sweep_param` and draws through `arc_ring_fill_param` (pan bipolar).
 - The button is MAIN's `arc_button` (`start_stop_selected_voice`, set by `lib/pages/main.lua`: K3, start or stop the selected voice).
 

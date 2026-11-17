@@ -10,8 +10,8 @@
 
 One registered voice-param record (`S.register_voice_params`, `docs/notes/lua/params.md`), `loops`, with two params per voice:
 
-- `v<i>_loop_start`: a control, 0-1, linear, default 0, shown with three decimals. Stored in `S.voices[i].extras.loop_start`. Grain key `loopStart`.
-- `v<i>_loop_length`: a control, 0.001-1, exponential (short loops get fine steps), default 1, three decimals, five below 0.01 (one detent there moves it about 7%, which fewer decimals would hide). Stored in `extras.loop_length`. Grain key `loopLength`.
+- `v<i>_loop_start`: a control, 0-1, linear, default 0, shown with three decimals. Stored in `S.voices[i].values.loop_start`. Grain key `loopStart`.
+- `v<i>_loop_length`: a control, 0.001-1, exponential (short loops get fine steps), default 1, three decimals, five below 0.01 (one detent there moves it about 7%, which fewer decimals would hide). Stored in `values.loop_length`. Grain key `loopLength`.
 
 Both are fractions of the slot's valid region (whatever its length: 16 s on standard, up to `S.performance.buffer_seconds` on high, or a short take). The engine starts a buffer voice's grains inside the loop; `bufPos`, the scan and the spread move through it (`docs/notes/engine/loops.md`). The params do nothing on synth and input voices, but the voice sync sends them for every voice, so a switch to a buffer plays the loop at once.
 
@@ -22,7 +22,7 @@ The clamps (`M.LOOP`: `max_start` 0.999, `min_length` 0.001):
 
 So a start of 1 (a PSET, PARAMS, an encoder or arc ring at the top) gives 0.999 and a length of 0.001, and turning the length up there does nothing.
 
-Scenes: the record's `normalize_scene(extras)` applies the same two limits to a loaded scene's pair, from `fill_scene` (`docs/notes/lua/scenes.md`). A start past 0.999 becomes 0.999 and a length past `1 - start` becomes `1 - start` (with `M.LOOP.tolerance`); a pair that is not two numbers is left for `validate_scene` to reject.
+Scenes: the record's `normalize_scene(values)` applies the same two limits to a loaded scene's pair, from `fill_scene` (`docs/notes/lua/scenes.md`). A start past 0.999 becomes 0.999 and a length past `1 - start` becomes `1 - start` (with `M.LOOP.tolerance`); a pair that is not two numbers is left for `validate_scene` to reject.
 
 VOICE: the two rows end a buffer voice's `synth` section (after `buf_pos`, `buf_rate`, `buf_scan`), shown only while the voice reads a slot (`S.lib.loops.uses_buffer(i)`, `voice_uses_buffer`). `layout_states` put each voice on buffer 1 with a loop at the slot's end and the cursor on each row. The arc's VOICE rings reach them as any other row. Grid and arc gestures for loops are 3.3's.
 

@@ -9,9 +9,9 @@
 
 One registered voice-param record (`S.register_voice_params`, `docs/notes/lua/params.md`), `history`, with one param per voice:
 
-- `v<i>_history`: a control, 0 to `S.lib.history.max_seconds()` (`S.performance.history_seconds`) s, linear, default 0, unit `s`. Stored in `S.voices[i].extras.history`.
+- `v<i>_history`: a control, 0 to `S.lib.history.max_seconds()` (`S.performance.history_seconds`) s, linear, default 0, unit `s`. Stored in `S.voices[i].values.history`.
 - Grain key `history`: the param's sender calls `setGrainParam(i - 1, "history", value)` while the voice runs, and `sync_voice_values_to_engine` sends it (after the built-in values). The engine keeps it for every voice and sends it only to an input voice's grain synth (`docs/notes/engine/grains.md`), so a synth voice never reads its 4 s ring from the past.
-- Scene default 0, continuous: scenes capture it in `voices[i].extras`, migration fills 0, and a transition crossfades it.
+- Scene default 0, continuous: scenes capture it in `voices[i].values`, migration fills 0, and a transition crossfades it.
 - VOICE: a section `input` before `grain`, holding only the history row, shown only while the voice reads the input (`S.lib.history.uses_input(voice_idx)`, `voices[i].source == SOURCE_INPUT`).
 - LFO destination `v<i> hist` (`S.register_lfo_destination("hist", "history")`), the first registered destination in each voice's group, after its built-in ones (3.7: the list is by voice). The LFO modulates around the stored value and is clamped to the range.
 

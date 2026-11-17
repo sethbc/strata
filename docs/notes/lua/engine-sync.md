@@ -145,4 +145,4 @@ Voice sync and start:
 Adding a param that reaches the engine:
 - give it a sender in `S.engine_senders` and call `send_param_to_engine` from its action;
 - option and number params the LFOs cannot target (source, grain envelope/mode, mod sources) still call the engine from their action;
-- a new SynthDef argument the user controls also needs its default in the `voices` table, its place in the voice's `param_order`, its param in `add_voice_params()`, its spec in `get_param_spec()` and the control's exact, case-sensitive name; a grain param goes through `setGrainParam` and `GRAIN_PARAM_IDS`.
+- a new SynthDef argument the user controls also needs its default in the `voices` table, its place in the voice's `param_order`, its param in `add_voice_params()`, its spec in `get_param_spec()` and the control's exact, case-sensitive name; a grain param goes through `setGrainParam`.

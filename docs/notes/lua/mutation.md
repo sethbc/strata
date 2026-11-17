@@ -1,6 +1,6 @@
 ## Must not break
 
-- Never mutate `amp` or `pan`, the discrete grain keys (`DISCRETE_GRAIN_KEYS`: envelope shape and grain mode), the voice's `source`, or the crossmod sources and amounts. `randomize_voice` never touches `amp`.
+- Never mutate `amp` or `pan`, the discrete grain keys (`DISCRETE_GRAIN_KEYS`: `grain_env` and `grain_mode`, the envelope shape and grain mode), the voice's `source`, or the crossmod sources and amounts. `randomize_voice` never touches `amp`.
 - Every grain key `gentle_mutate` changes is guarded by `not DISCRETE_GRAIN_KEYS[key]`, checked before the `math.random()` draw, so the random sequence stays the same.
 - Frozen voices are left alone: no drift, no mutation, and `randomize_voice` returns for them (buffer params included). Stopped voices are too: the drift and mutations touch only running voices (`S.voices[i].active`).
 - A mutation step is a turn (#318): `set_mutated_param` sets the param inside `S.lib.ui_detent.as_turn`, so a quantized `freq` walks by scale tones however small each step is (as a set, a step under half a scale step would snap back to its tone; `docs/notes/lua/variation.md`).
@@ -64,7 +64,7 @@ function gentle_mutate()
   for i = 1, NUM_VOICES do
     if S.voices[i].active and not S.locked[i] then
       -- synth source: each synthesis parameter
-      for key, current_val in pairs(S.voices[i].params) do
+      for _, key in ipairs(S.voices[i].param_order) do
         if key ~= "amp" and key ~= "pan" then
           if math.random() < probability then
             -- Gaussian-like delta as a fraction of the normalized 0-1 range

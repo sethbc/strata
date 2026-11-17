@@ -317,7 +317,7 @@ How to run each check, what it needs and how CI runs them: `docs/checks.md`. How
 ### CRITICAL: keep Lua and the engine in sync
 
 - A new or changed `addCommand` needs: matching `engine.*` calls (same count and types; SC type codes i/f/s), the table row above, and the engine stub picks it up from the SC source.
-- A new SynthDef argument the user controls needs: the `voices` table default, the voice's `param_order`, `add_voice_params()`, `get_param_spec()`, a sender in `S.engine_senders`, and the exact case-sensitive name. Grain params go through `setGrainParam` and `GRAIN_PARAM_IDS`.
+- A new SynthDef argument the user controls needs: the `voices` table default, the voice's `param_order`, `add_voice_params()`, `get_param_spec()`, a sender in `S.engine_senders`, and the exact case-sensitive name. Grain params go through `setGrainParam`.
 - Lua defaults are what the engine plays (`S.lib.engine_sync.start_voice` sends them at every start). SynthDef defaults for the filter and delay must equal the Lua param defaults, because the script never bangs its params.
 - New voice-level controls that a buffer or input grain synth also needs belong in `voiceControls` / `grainControls` and `controlNameSets` (see Audio Sources in `docs/notes/engine/grains.md`).
 
