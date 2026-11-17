@@ -3,7 +3,8 @@
 -- which voices are locked (S.locked), the master density, the selected voice,
 -- and the global helpers that test a voice's grain source. strata.lua runs
 -- `S.lib.voices = include("lib/voices")(S)`; the constructor sets its S
--- fields itself, and its table (S.lib.voices) has no fields.
+-- fields itself, and its table (S.lib.voices) holds value(voice_idx, key),
+-- a voice's value by its param id's key.
 
 return function(S)
   local M = {}
@@ -256,6 +257,22 @@ return function(S)
   S.locked = {}
   for i = 1, NUM_VOICES do
     S.locked[i] = false
+  end
+
+  -- A voice's value by key (its param id without "v<i>_"), read from the
+  -- voice's params, grain, crossmod and extras tables; nil for a key the
+  -- voice has none of (voice 4's pan)
+  local GRAIN_FIELDS = {grain_size = "size", grain_density = "density", grain_pitch = "pitch",
+    grain_spread = "spread", grain_env = "env", grain_mode = "mode", buf_pos = "buf_pos", buf_rate = "buf_rate",
+    buf_scan = "buf_scan"}
+  function M.value(voice_idx, key)
+    local voice = S.voices[voice_idx]
+    if voice.params[key] ~= nil then return voice.params[key] end
+    if GRAIN_FIELDS[key] then return voice.grain[GRAIN_FIELDS[key]] end
+    if key == "mod_speed" then return voice.crossmod.speed end
+    local field, slot = key:match("^mod_(.+)_(%d)$")
+    if field and voice.crossmod["slot" .. slot] then return voice.crossmod["slot" .. slot][field] end
+    return voice.extras and voice.extras[key]
   end
 
   return M

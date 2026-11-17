@@ -1226,5 +1226,87 @@ return function(S)
     return spec:copy()
   end
 
+  -- A voice's engine parts (the groundwork before 3.8, ruling 5): what a
+  -- start and a sync send, which lib/engine_sync.lua sends. A part is
+  -- {name, kept = {entry, ...}, voice_level = {entry, ...}}: kept entries
+  -- are setGrainParam messages, which the engine keeps for a stopped voice
+  -- (a start sends them before voiceOn); voice_level entries are the
+  -- controls voiceOn resets (a start sends them after it). An entry has key
+  -- (the voice's value it sends; absent for a keyless send) and exactly one
+  -- of grain = engine name (setGrainParam), voice = engine name
+  -- (setVoiceParam) or send = fn(voice_idx, value); value = fn(x) converts
+  -- the value, and carry = false sends the stored value at a start, never
+  -- the param's override and offsets. The parts, in order: synth (the synth
+  -- keys, sorted), grain (the nine, in their fixed order), crossmod (per
+  -- slot its source and amounts, then the speed), bend, then one part per
+  -- registered voice-param record, in registration order (its grain keys
+  -- sorted, then its sync)
+  local function option_index(x) return x - 1 end
+  local GRAIN_PART = {
+    {key = "grain_size", grain = "grainSize"},
+    {key = "grain_density", grain = "grainDensity",
+      value = function(x) return x * engine_param_value("master_density") end},
+    {key = "grain_pitch", grain = "pitchShift"},
+    {key = "grain_spread", grain = "posSpread"},
+    {key = "grain_env", grain = "envShape", value = option_index, carry = false},
+    {key = "grain_mode", grain = "grainMode", value = option_index, carry = false},
+    {key = "buf_pos", grain = "bufPos"},
+    {key = "buf_rate", grain = "bufRate"},
+    {key = "buf_scan", grain = "bufScan"},
+  }
+  local CROSSMOD_PART = {}
+  for slot = 1, NUM_MOD_SLOTS do
+    table.insert(CROSSMOD_PART, {key = "mod_source_" .. slot, carry = false, send = function(voice_idx, x)
+      engine.setModSource(voice_idx - 1, slot, S.lib.engine_sync.engine_mod_source(x))
+    end})
+    table.insert(CROSSMOD_PART, {key = "mod_amp_amt_" .. slot, carry = false, send = function(voice_idx, x)
+      engine.setModAmpAmt(voice_idx - 1, slot, x)
+    end})
+    table.insert(CROSSMOD_PART, {key = "mod_freq_amt_" .. slot, carry = false, send = function(voice_idx, x)
+      engine.setModFreqAmt(voice_idx - 1, slot, x)
+    end})
+  end
+  table.insert(CROSSMOD_PART, {key = "mod_speed", carry = false, send = function(voice_idx, x)
+    engine.setModSpeed(voice_idx - 1, x)
+  end})
+  -- the MIDI pitchbend wheel's current position (voiceOn resets the engine's to 1)
+  local BEND_PART = {{send = function(voice_idx)
+    engine.setVoiceParam(voice_idx - 1, "bend", S.midi_state.bend[voice_idx])
+  end}}
+
+  function M.voice_engine_parts(voice_idx)
+    if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then
+      error("voice_engine_parts: voice " .. tostring(voice_idx) .. " is not 1.." .. NUM_VOICES, 2)
+    end
+    local synth_keys = {}
+    for _, key in ipairs(S.voices[voice_idx].param_order) do synth_keys[#synth_keys + 1] = key end
+    table.sort(synth_keys)
+    local synth = {}
+    for index, key in ipairs(synth_keys) do synth[index] = {key = key, voice = key} end
+    local parts = {
+      {name = "synth", kept = {}, voice_level = synth},
+      {name = "grain", kept = GRAIN_PART, voice_level = {}},
+      {name = "crossmod", kept = {}, voice_level = CROSSMOD_PART},
+      {name = "bend", kept = {}, voice_level = BEND_PART},
+    }
+    for _, record in ipairs(S.registry.voice_params) do
+      local keys = {}
+      for key in pairs(record.grain_keys or {}) do keys[#keys + 1] = key end
+      table.sort(keys)
+      local kept = {}
+      for _, key in ipairs(keys) do
+        local grain_key = record.grain_keys[key]
+        if type(grain_key) == "table" then
+          kept[#kept + 1] = {key = key, grain = grain_key.name, value = grain_key.value}
+        else
+          kept[#kept + 1] = {key = key, grain = grain_key}
+        end
+      end
+      if record.sync then kept[#kept + 1] = {send = function(index) record.sync(index) end} end
+      parts[#parts + 1] = {name = record.name, kept = kept, voice_level = {}}
+    end
+    return parts
+  end
+
   return M
 end
