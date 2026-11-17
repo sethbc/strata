@@ -297,6 +297,124 @@ test("a morph crossing that carries only delay_sync sends one setDelay with the 
   assert_equal(#delay_calls(context), 1, "no second send follows")
 end)
 
+-- #741: a synced delay at 120 BPM, 1/8D (0.375 s) under LFO 1, a sine at
+-- 5 Hz and depth 100, on delay_time: through its home routing, or (route)
+-- through matrix routing 1 at depth 100 with the LFO homeless. With
+-- probes, 12 round-robin keys are marked every step, standing in for other
+-- sends (lfos_test's probe_key: an engine sender that sends nothing, so
+-- each takes a slot; they fill the round robin, so they stay out of the
+-- tests that time a send to the step). Returns the count of probe sends
+local function synced_under_lfo(context, S, route, probing)
+  params:set("clock_tempo", 120); params:set("delay_sync", 1)
+  lfo_step(context)
+  if route then
+    assert_true(S.lib.matrix.set_home(1, ""), "LFO 1 has no home")
+    assert_true(S.lib.matrix.set_routing(1, "lfo1", "delay_time"), "routing 1: L1 to delay_time")
+    params:set("matrix_1_depth", 100)
+  else
+    assert_true(S.lib.matrix.set_home(1, "delay_time"), "LFO 1's home is delay_time")
+  end
+  params:set("strata_lfo1_shape", 1); params:set("strata_lfo1_rate", 5)
+  params:set("strata_lfo1_depth", 100); params:set("strata_lfo1", 1)
+  local probes = {count = 0}
+  local senders = S.engine_senders
+  S.lib.lfos.on_step(function()
+    for k = 1, probing and 12 or 0 do
+      local key = "probe " .. k
+      if senders[key] == nil then senders[key] = function() end end
+      S.lib.lfos.mark_due(key, function()
+        probes.count = probes.count + 1
+        S.lib.engine_sync.send_engine_value(key, 0)
+      end)
+    end
+  end)
+  lfo_step(context, 2)
+  context.clear_engine_calls()
+  probes.count = 0
+  return probes
+end
+
+for _, case in ipairs({{"a 5 Hz LFO on delay_time", false}, {"a routing from a 5 Hz LFO", true}}) do
+  test("a synced delay under " .. case[1] .. " sends no setDelay and takes no slot (#741)", function()
+    local context, S = loaded()
+    local probes = synced_under_lfo(context, S, case[2], true)
+    local low, high = math.huge, -math.huge
+    for _ = 1, 48 do
+      lfo_step(context)
+      local offset = S.lib.matrix.offset("delay_time")
+      low, high = math.min(low, offset), math.max(high, offset)
+    end
+    assert_true(high - low > 0.1, "the matrix moves delay_time's offset")
+    assert_equal(#delay_calls(context), 0, "no setDelay in 48 steps")
+    assert_equal(probes.count, 12 * 48, "every probe runs every step: delay_time takes no slot")
+  end)
+end
+
+-- An external clock's tempo wavers: a synced time that moves by less than
+-- DELAY.threshold of itself is one the step hook does not resend, so the
+-- modulation sends it neither
+test("a synced, modulated delay on an external clock wavering under 0.5% sends no setDelay (#741)", function()
+  local context, S = loaded()
+  synced_under_lfo(context, S)
+  params:set("clock_source", 2)  -- midi: the tempo is clock.get_tempo()'s
+  clock.tempo = 120
+  lfo_step(context, 2)
+  context.clear_engine_calls()
+  local wavers = {120.2, 119.8, 120.4, 119.7, 120.1, 119.9}
+  for step = 1, 48 do
+    clock.tempo = wavers[(step - 1) % #wavers + 1]
+    lfo_step(context)
+  end
+  assert_equal(#delay_calls(context), 0, "no setDelay in 48 steps")
+  clock.tempo = 126  -- 5%: the step hook resends
+  lfo_step(context)
+  assert_true(#delay_calls(context) >= 1, "a tempo move past 0.5% sends")
+  assert_near(last_delay(context)[1], 0.75 * 60 / 126, 1e-9, "the new time")
+end)
+
+test("a feedback edit under a synced, modulated delay sends one setDelay with the synced time (#741)", function()
+  local context, S = loaded()
+  synced_under_lfo(context, S)
+  lfo_step(context, 5)
+  params:set("delay_feedback", 0.5)
+  assert_equal(#delay_calls(context), 1, "one setDelay")
+  assert_delay(last_delay(context), 0.375, 0.5, engine_param_value("delay_mix"), 0, "the edit")
+  lfo_step(context, 10)
+  assert_equal(#delay_calls(context), 1, "and none after it")
+end)
+
+test("sync off under modulation sends the modulated time at once (#741)", function()
+  local context, S = loaded()
+  synced_under_lfo(context, S)
+  lfo_step(context, 7)
+  params:set("delay_sync", 0)
+  assert_equal(#delay_calls(context), 1, "one setDelay")
+  assert_near(last_delay(context)[1], S.lib.engine_sync.with_lfo_offsets("delay_time", params:get("delay_time")),
+    1e-9, "the time as modulated now")
+  local first = last_delay(context)[1]
+  lfo_step(context, 3)
+  assert_true(#delay_calls(context) > 1, "the next steps send the moving time")
+  assert_true(math.abs(last_delay(context)[1] - first) > 1e-6, "and it moves")
+end)
+
+test("a tempo move under a synced, modulated delay still resends within a step (#741)", function()
+  local context, S = loaded()
+  synced_under_lfo(context, S)
+  lfo_step(context, 3)
+  assert_equal(#delay_calls(context), 0, "nothing while the tempo holds")
+  params:set("clock_tempo", 100)
+  lfo_step(context)
+  -- the step hook's resend and the matrix's (which sees the time move
+  -- first) may both go in this step: each carries the new time
+  local sent = #delay_calls(context)
+  assert_true(sent >= 1, "the next step sends the new time")
+  for index, call in ipairs(delay_calls(context)) do
+    assert_near(call.args[1], 0.45, 1e-9, "send " .. index .. ": 100 BPM, 1/8D")
+  end
+  lfo_step(context, 5)
+  assert_equal(#delay_calls(context), sent, "and nothing after it")
+end)
+
 test("DELAY.max_seconds equals the engine's limit on setDelay's time", function()
   local _, _, delay_sync = loaded()
   local limit = h.engine_spec.argument_limits.setDelay[1]

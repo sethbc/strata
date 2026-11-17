@@ -398,7 +398,7 @@ return function(S)
       local offset = S.lib.lfos.offset_for(id, m)
       sync.set_extra_offset(MATRIX.extra_key, id, offset)
       held.lua[id] = offset
-      if lua_moved(id) then mark_lua(id) end
+      if lua_moved(id) and not (id == "delay_time" and S.lib.delay_sync.time_unheard()) then mark_lua(id) end
     else
       sync.set_extra_offset(MATRIX.extra_key, id, nil)
       held.lua[id] = nil
