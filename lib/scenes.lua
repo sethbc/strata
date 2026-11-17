@@ -3,7 +3,9 @@
 -- with the player's name: bank_of, name, set_name) and the loaded one
 -- (S.current_scene), capture and recall (instant, or a smooth transition
 -- on S.scene_transition_clock), the scene sequencer
--- (S.scene_sequencer_clock), the fill of a loaded scene's missing fields
+-- (S.scene_sequencer_clock), the stepper under it, the pattern chain and the
+-- next-scene action (playable, playable_slots and next_slot, over a local
+-- validity cache), the fill of a loaded scene's missing fields
 -- (fill_scene), validation, and scenes.data on disk (written through
 -- lib/data_files.lua at every scene save and at exit, read at start and on
 -- request; S.scene_file), with each voice's scene keys

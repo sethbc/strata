@@ -1,9 +1,9 @@
 ## Must not break
 
-- **`pick` is pure**: it reads and keeps no state, sends nothing, never yields and calls nothing but its `random` argument, so the scene sequencer and the pattern chain can both call it from any clock.
+- **`pick` is pure**: it reads and keeps no state, sends nothing, never yields and calls nothing but its `random` argument, so its one caller, the stepper (`S.lib.scenes.next_slot`, under the scene sequencer, the pattern chain and the next-scene action), can call it from any clock.
 - **One draw picks the move**: `r = random() * 100` against the three chances in their order (next, previous, random); a random move draws once more for its slot. **With one chance at 100 (100, 0, 0 above all) it makes no draw**: 3.6's play in order needs no random number, and a test passes a `random` that raises.
 - **A repeat is the move, never two equal slots** (plan ruling 36): `pick` returns the move's name with the slot, and only `"repeat"` means the caller recalls or links nothing. One populated slot at 100, 0, 0 is `"next"` to that same slot, which is recalled again, as 3.6 does.
-- The caller hands it only the slots that can play (it leaves out empty and invalid ones); `pick` never looks inside a slot.
+- `S.lib.scenes.next_slot` hands it only the playable slots (`S.lib.scenes.playable_slots`: populated and valid), and only when the current slot is one of them; `pick` never looks inside a slot.
 
 ## Owns
 
