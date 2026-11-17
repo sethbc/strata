@@ -45,7 +45,7 @@ Unplugging the device detaches it; plugging it back in asks again. A remote grid
 
 With the midigrid mod installed and on (SYSTEM > MODS), turn `midi grid` on. Strata asks the mod for its grid; when the mod has found a supported device (a Launchpad, an APC mini, a Push and others), that grid attaches as one more of Strata's grids and plays the layout of the mod's size (its default, 128, is 16 by 8: the 128 horizontal layout). With no supported device, or with the mod off, nothing attaches and the line shows `[--]`; plug the device in and press **rescan**. Turning `midi grid` off detaches it and leaves it dark.
 
-While the MIDI grid is attached, its device's MIDI port belongs to it: its pads play no voice through Strata's MIDI input (even on the `midi device` port), SETUP's `midi` row shows `(midigrid)`, and MIDI out sends nothing there. Turning `midi grid` off gives the port back.
+While the MIDI grid is attached, its device's MIDI port belongs to it, on whichever port SYSTEM > DEVICES moves it to: its pads play no voice through Strata's MIDI input (even on the `midi device` port), SETUP's `midi` row shows `(midigrid)`, and MIDI out sends nothing there. Turning `midi grid` off gives the port back.
 
 What a Launchpad keeps for itself: with one 8 by 8 device on a 128 or 256 layout, the mod uses the device's top row (its round buttons) to choose which 8 by 8 quarter of the grid it shows; those buttons never reach Strata. With two devices the mod gives each a quarter. Colors stand for the sixteen brightness levels, so they look different from a monome grid's.
 

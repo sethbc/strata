@@ -379,13 +379,15 @@ return function(S)
   -- port whose device has a device-level handler is claimed as midigrid
   -- while the object is attached, so the MIDI input leaves it alone (and
   -- MIDI out, through holds). A port another owner holds is left to it
-  local function claim_midigrid_ports()
-    for port = 1, S.lib.io_ports.PORTS.count do
-      if not midigrid.ports[port] and S.lib.io_ports.device_handled(port)
-        and S.lib.io_ports.claim(port, MIDIGRID_OWNER) then
-        midigrid.ports[port] = true
-      end
+  local function claim_midigrid_port(port)
+    if not midigrid.ports[port] and S.lib.io_ports.device_handled(port)
+      and S.lib.io_ports.claim(port, MIDIGRID_OWNER) then
+      midigrid.ports[port] = true
     end
+  end
+
+  local function claim_midigrid_ports()
+    for port = 1, S.lib.io_ports.PORTS.count do claim_midigrid_port(port) end
   end
 
   local function release_midigrid_port(port)
@@ -476,7 +478,9 @@ return function(S)
   end)
 
   -- A device arriving at a set port is connected; the claimed port's device
-  -- leaving disconnects it
+  -- leaving disconnects it. While midigrid is attached, an arriving device
+  -- (a hot-plug, or a move in SYSTEM > DEVICES, #753) is checked for its
+  -- claim after the remotes, so one the rig names there claims first
   S.lib.io_ports.on_change("remote", function(port, name)
     if not state.started then return end
     if name == nil then release_midigrid_port(port) end
@@ -492,6 +496,7 @@ return function(S)
         connect(record)
       end
     end
+    if name ~= nil and midigrid.device ~= nil then claim_midigrid_port(port) end
   end)
 
   -- A port another owner held, freed: taken when the rig names it
