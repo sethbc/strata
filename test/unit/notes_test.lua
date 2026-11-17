@@ -94,8 +94,36 @@ test("an unreadable or wrong-version notes.data gives the default and one line",
     local lines = notes_lines(context)
     assert_equal(#lines, 1, "case " .. index .. ": one line")
     assert_true(lines[1]:find("^strata: notes.data") ~= nil, "naming the file: " .. lines[1])
+    -- set aside, as every other data file is (the groundwork's ruling 35)
+    local text = type(case) == "string" and case or local_value("S").lib.data_files.encode(case)
+    assert_true(lines[1]:find(": the pool is the tier's default, 4; kept as notes.data.bak", 1, true) ~= nil,
+      "case " .. index .. ": " .. lines[1])
+    assert_equal(h.file_text(notes_path(context) .. ".bak"), text, "case " .. index .. ": the bytes kept")
+    assert_true(not util.file_exists(notes_path(context)), "case " .. index .. ": moved")
   end
   assert_equal(rawget(_G, "ran_notes_data"), nil, "the file was never run")
+end)
+
+test("an unusable notes.data is set aside before the pool writes a new one", function()
+  local context = load_strata({ before_init = with_notes_file("return {") }); finish_startup(context)
+  local S = local_value("S")
+  assert_equal(S.lib.notes.set_pool(3), true, "set")
+  assert_equal(S.lib.data_files.read(notes_path(context)).pool, 3, "the new file holds it")
+  assert_equal(h.file_text(notes_path(context) .. ".bak"), "return {", "the old bytes kept")
+  -- every backup name taken: not moved, one line says so, and the next write goes over it
+  context = load_strata({ before_init = function(c)
+    with_notes_file("return {")(c)
+    os.execute("mkdir -p '" .. notes_path(c) .. ".bak'")
+    for number = 2, 9 do os.execute("mkdir -p '" .. notes_path(c) .. ".bak." .. number .. "'") end
+  end })
+  finish_startup(context)
+  S = local_value("S")
+  local lines = notes_lines(context)
+  assert_equal(#lines, 1, "one line")
+  assert_true(lines[1]:find("; not moved: every backup name is taken", 1, true) ~= nil, lines[1])
+  assert_equal(h.file_text(notes_path(context)), "return {", "still in place")
+  assert_equal(S.lib.notes.set_pool(5), true, "the pool can still be set")
+  assert_equal(S.lib.data_files.read(notes_path(context)).pool, 5, "written over the unusable file")
 end)
 
 test("note_values gives a note, its frequency and its rate", function()

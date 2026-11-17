@@ -3,7 +3,9 @@
 -- in data/strata/ and its file beside each PSET (<path_base><side_suffix>),
 -- both {version = <version>, [<key>] = <data>}, through S.lib.data_files;
 -- a spec's optional floor lets a file from floor to version load.
--- The macros, the gestures and the matrix each make one with new(spec);
+-- The macros, the gestures, the matrix, the sequences and the scenes each
+-- make one with new(spec) (the scenes for their PSET file only: their live
+-- file keeps its own writer, lib/scenes.lua);
 -- what their data is, how it validates, what an unknown id in it means and
 -- the redraws stay theirs. new(spec) returns:
 --   read(path, silent)   load the file (nothing when missing; an unusable
@@ -15,7 +17,8 @@
 --   save_live()          the live file's timed write, one per burst
 --   save_now()           the cleanup step: the timed write canceled, the
 --                        live file written at once
---   pset_hook(before, after)  the record S.register_pset_hook takes
+--   pset_hook(before_read, after_read, after_write, after_delete)  the
+--                        record S.register_pset_hook takes
 -- See docs/notes/lua/data-files.md (Side files).
 
 return function(S)
@@ -84,7 +87,10 @@ return function(S)
         why = tostring(detail)
       elseif loaded ~= nil then
         local version = type(loaded) == "table" and loaded.version
-        if type(version) ~= "number" or version < floor_version or version > spec.version then
+        -- a whole number from the floor to the version (NaN, 2.5 and a
+        -- string are none)
+        if type(version) ~= "number" or version ~= math.floor(version) or not (version >= floor_version)
+          or not (version <= spec.version) then
           why = "not a version " .. versions .. " " .. spec.name .. " file"
         else
           why = spec.validate(loaded[spec.key])
@@ -146,19 +152,26 @@ return function(S)
       write_live()
     end
 
-    -- The PSET's side file: written with every PSET save (empty too),
-    -- read after every PSET load (before_read and after_read around the
-    -- read, each with the read's silent flag), deleted with the PSET
-    function files.pset_hook(before_read, after_read)
+    -- The PSET's side file: written with every PSET save (empty too; then
+    -- after_write(written, path_base)), read after every PSET load
+    -- (before_read and after_read around the read, each with the read's
+    -- silent flag), deleted with the PSET (then after_delete(path_base))
+    function files.pset_hook(before_read, after_read, after_write, after_delete)
       return {
         name = spec.name,
-        write = function(path_base) files.write(path_base .. spec.side_suffix) end,
+        write = function(path_base)
+          local written = files.write(path_base .. spec.side_suffix)
+          if after_write then after_write(written, path_base) end
+        end,
         read = function(path_base, _, _, silent)
           if before_read then before_read(silent) end
           files.read(path_base .. spec.side_suffix, silent)
           if after_read then after_read(silent) end
         end,
-        delete = function(path_base) os.remove(path_base .. spec.side_suffix) end,
+        delete = function(path_base)
+          os.remove(path_base .. spec.side_suffix)
+          if after_delete then after_delete(path_base) end
+        end,
       }
     end
 

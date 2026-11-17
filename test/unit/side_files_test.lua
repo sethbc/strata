@@ -231,21 +231,38 @@ test("side files: the PSET hook's write always writes, its read passes silent on
     load = function(data, path, silent) table.insert(order, "load " .. tostring(data and data.x) .. " " .. tostring(silent)) end,
   })
   local hook = files.pset_hook(function(silent) table.insert(order, "before " .. tostring(silent)) end,
-    function(silent) table.insert(order, "after " .. tostring(silent)) end)
+    function(silent) table.insert(order, "after " .. tostring(silent)) end,
+    function(written, path_base)
+      table.insert(order, "written " .. tostring(written) .. " " .. path_base:match("[^/]*$"))
+    end,
+    function(path_base)
+      table.insert(order, "deleted " .. path_base:match("[^/]*$") .. " " .. tostring(util.file_exists(path_base
+        .. ".probe.data")))
+    end)
   assert_equal(hook.name, "probe", "named as the files")
   local base = context.data_dir .. "strata-07"
   local side = base .. ".probe.data"
   hook.write(base, "07")
   assert_equal(next(S.lib.data_files.read(side).probes), nil, "empty data is written too")
+  assert_equal(table.concat(order, ", "), "written true strata-07", "after_write, after the write, with its outcome")
+  order = {}
   state.data = { x = 5 }
   hook.write(base, "07")
+  order = {}
   hook.read(base, "07", base .. ".pset", true)
   assert_equal(table.concat(order, ", "), "before true, load 5 true, after true", "in order, each with silent")
   order = {}
   hook.read(base, "07", base .. ".pset", false)
   assert_equal(table.concat(order, ", "), "before false, load 5 false, after false")
+  order = {}
   hook.delete(base, "07")
   assert_true(not util.file_exists(side), "deleted with its PSET")
+  assert_equal(table.concat(order, ", "), "deleted strata-07 false", "after_delete, once the file is removed")
+  -- a write that fails tells after_write so
+  order = {}
+  os.execute("mkdir -p '" .. side .. ".part/inside'")  -- the .part is a folder: the write fails
+  hook.write(base, "07")
+  assert_equal(table.concat(order, ", "), "written false strata-07", "a failed write")
   -- without before and after, a read only loads
   order = {}
   files.pset_hook().read(base, "07", base .. ".pset", nil)
@@ -298,6 +315,28 @@ test("a file from its floor to its version loads; one below or above is set asid
   local lines = lines_with(context, "error loading probe file " .. path .. ": ")
   assert_true(#lines == 1 and lines[1]:find(": not a version 9 probe file; kept as ", 1, true) ~= nil,
     "one version: " .. tostring(lines[1]))
+end)
+
+-- The version check keeps its strictness with a floor: a whole number
+-- from the floor to the version (2.5 and NaN are no version)
+test("a version that is no whole number is set aside, with or without a floor", function()
+  for _, spec_fields in ipairs({ { version = 3, floor = 2 }, { version = 3 } }) do
+    for _, case in ipairs({ { text = "2.5", value = 2.5 }, { text = "nan" }, { text = "3.0000001", value = 3.0000001 } }) do
+      local context, S = loaded()
+      local files, state = probe(S, spec_fields)
+      local path = context.data_dir .. "odd.probe.data"
+      write_text(path, "return {\n-- Table: {1}\n{\n   [\"probes\"]={2},\n   [\"version\"]=" .. case.text
+        .. ",\n},\n-- Table: {2}\n{\n},\n}")
+      local read_back = S.lib.data_files.read(path)
+      assert_equal(type(read_back), "table", case.text .. ": the file parses")
+      assert_equal(files.read(path), true, case.text .. ": set aside, so it may be written")
+      assert_equal(state.loads[1].data, nil, case.text .. ": nothing loads")
+      local versions = spec_fields.floor and "2-3" or "3"
+      local lines = lines_with(context, "error loading probe file " .. path .. ": not a version " .. versions
+        .. " probe file; kept as ")
+      assert_equal(#lines, 1, case.text .. " (floor " .. tostring(spec_fields.floor) .. "): one line")
+    end
+  end
 end)
 
 test("a floor above the version is refused", function()
