@@ -10,7 +10,9 @@
 -- LFO clock's step hook that resends the time when the tempo moves it
 -- (through the round robin and the send budget). M.hold() holds a send
 -- made while a scene applies, which the scene-applied hook sends once as
--- apply_entries ends; M.sent(time) notes a send's time.
+-- apply_entries ends; M.sent(time) notes a send's time, and
+-- M.time_unheard() says a delay_time send would change nothing the engine
+-- plays (the matrix skips it, #741).
 
 return function(S)
   local M = {}
@@ -82,9 +84,32 @@ return function(S)
   end
 
   -- The time the delay's sender last sent (nil: none yet, so the engine
-  -- plays its default, delay_time's)
+  -- plays its default, delay_time's), and the feedback, mix and ping-pong
+  -- that send carried (their engine values as it went)
   local last_sent
-  function M.sent(time) last_sent = time end
+  local OTHERS = {"delay_feedback", "delay_mix", "delay_pingpong"}
+  local last_others = {}
+  function M.sent(time)
+    last_sent = time
+    for _, param_id in ipairs(OTHERS) do last_others[param_id] = engine_param_value(param_id) end
+  end
+
+  -- Whether a send of delay_time would change nothing the engine plays
+  -- (#741): synced at a finite division, the time last sent is M.time()
+  -- within DELAY.threshold of itself (as close as the step hook lets it
+  -- stay: an external clock's tempo wavers every step) and the feedback,
+  -- mix and ping-pong the engine has are those that send carried. The
+  -- matrix marks delay_time due only while this is false, so a synced delay
+  -- under an LFO or a routing on delay_time sends nothing and takes no slot
+  -- of the round robin
+  function M.time_unheard()
+    local time = synced() and synced_time()
+    if not time or last_sent == nil or math.abs(time - last_sent) > M.DELAY.threshold * time then return false end
+    for _, param_id in ipairs(OTHERS) do
+      if last_others[param_id] ~= engine_param_value(param_id) then return false end
+    end
+    return true
+  end
 
   S.engine_senders[SEND_KEY] = function() S.engine_senders.delay_time() end
   local function send_due() S.lib.engine_sync.send_engine_value(SEND_KEY, M.time()) end
@@ -128,7 +153,14 @@ return function(S)
     add = function()
       params:add{type = "binary", id = "delay_sync", name = "delay sync", behavior = "toggle", default = 0,
         action = function(x)
-          send_param_to_engine("delay_sync", x)
+          -- turning sync off sends delay_time with its offsets as they are
+          -- now: a synced delay's modulation sends were skipped (#741), so
+          -- the value last delivered may be stale
+          if x == 1 then
+            send_param_to_engine("delay_sync", x)
+          else
+            send_param_to_engine("delay_time", params:get("delay_time"))
+          end
           shown_changed()
         end}
       params:add{type = "option", id = "delay_division", name = "delay division", options = DIVISIONS.names,
