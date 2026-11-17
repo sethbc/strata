@@ -20,7 +20,7 @@
 - `lib/state.lua`: `S` itself.
   - `S.registry` (`pages`, `params`, `start`, `cleanup`, `grid_layouts`, `voice_params`, `scene_fields`, `source_change`, `param_filters`, `lfo_destinations`, `fx_params`, `grain_restart`, `alt_release`, `menu_close`, `invariants`, and 3.4's `scene_blocks`, `pset_hooks`, `param_touch`, `lock_change`, `step_outputs`, `mod_sources`, and 3.5's `voice_stop`, `freeze_change`, and 3.6's `note_hooks`, `scene_recalled`, `silence_change`, `note_targets`, `ii_devices`, `macro_targets`, `io_sections`, and 3.7's `voice_hit`, `scene_applied`), `S.register_start`, `S.register_cleanup`, `S.register_invariant`, `S.lib`.
   - The `__declared` key set the tests use: a key ever assigned into `S`, even to nil, is recorded there.
-- `lib/constants.lua`: `S.constants`, a plain table. The constants and fixed tables (`NUM_VOICES`, `UI_PAGES`, `MAIN_PARAMS`, `GRAIN_PARAM_IDS`, `START_ORDER`, `CLEANUP_ORDER`, ...).
+- `lib/constants.lua`: `S.constants`, a plain table. The constants and fixed tables (`NUM_VOICES`, `UI_PAGES`, `MAIN_PARAMS`, `DISCRETE_GRAIN_KEYS`, `START_ORDER`, `CLEANUP_ORDER`, ...).
 - `lib/voices.lua`: `S.lib.voices`, with `is_synth_key(voice_idx, key)` (whether `key` is in the voice's `param_order`; a synth-key test is never `values[key] ~= nil`).
   - `S.voices`, `S.locked`, `S.selected_voice`. There is no density field: the master density is the param `master_density` (read through `engine_param_value` or `params:get`).
   - The global source tests `voice_uses_synth`, `voice_uses_buffer`, `voice_source_label`, `voice_buffer_slot`.
@@ -31,11 +31,8 @@ Each `S.voices[i]` holds:
 - `name`: the voice type.
 - `active`: whether it runs.
 - `source`: the grain source, a `SOURCE_OPTIONS` index. 1 = synth, 2..`NUM_BUFFERS` + 1 = buffer 1-8, `NUM_BUFFERS` + 2 = input (`SOURCE_SYNTH`, `SOURCE_INPUT`).
-- `param_order`: the `params` keys in order (PARAMS menu order and grid fader order; amp/pan last).
-- `params`: the synthesis params (per voice type). Their values are also the param defaults.
-- `grain`: size, density, pitch, spread, env (grain envelope option index), mode (grain mode option index), buf_pos, buf_rate, buf_scan.
-- `extras`: the values of every registered per-voice param (`add_voice_extra`, keyed by the param's key: freeze, variation, loops, history, the voice mix). Built fresh at init by `add_voice_params`; the voice sync, scenes (`capture_scene`, `validate_scene`) and VOICE read it, and randomize and mutations never do.
-- `crossmod`: `slot1`..`slot3` (`source`, `amp_amt`, `freq_amt`) and `speed`.
+- `param_order`: the voice's synth keys in order (PARAMS menu order and grid fader order; amp/pan last). Whether a key is one is `S.lib.voices.is_synth_key(i, key)`, never `values[key] ~= nil`.
+- `values`: every value of the voice, by key, its param id without `v<i>_` (the groundwork before 3.8; 3.7's four tables `params`, `grain`, `crossmod` and `extras` are gone): the synthesis params (`freq`, `amp`, ...; their values in `lib/voices.lua` are also the param defaults), the grain and buffer params (`grain_size`, `grain_density`, `grain_pitch`, `grain_spread`, `grain_env` and `grain_mode`, option indexes, `buf_pos`, `buf_rate`, `buf_scan`), crossmod (`mod_source_<n>`, `mod_amp_amt_<n>`, `mod_freq_amt_<n>` for each slot, `mod_speed`), and each registered per-voice param (`add_voice_extra` stores it: freeze, variation, loops, history, the voice mix, ...). The fourteen `out_*` and `zone*` params are not in it. A voice's start and sync (`S.lib.params_setup.voice_engine_parts`), scenes (`capture_voice`) and the pages read it.
 
 The engine mirrors this table:
 - param actions forward changes while a voice is active (through `send_param_to_engine`, see `docs/notes/lua/engine-sync.md`);

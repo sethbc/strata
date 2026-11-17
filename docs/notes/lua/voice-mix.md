@@ -24,7 +24,7 @@ One registered voice-param record (`S.register_voice_params`, `docs/notes/lua/pa
 | `v<i>_mute` | binary | 0 | none: `voiceMute` is the effective mute (`silenced`), sent by the record's `sync` and a sender of its own (to a stopped voice too) |
 | `v<i>_solo` | binary | 0, in no scene | none (as `mute`) |
 
-- Stored in `S.voices[i].extras`; scene defaults are the param defaults (3.1's chain), and `discrete = {filter_type = {1, 3}, mute = {0, 1}}` (`scene_defaults.mute` = 0; `solo` is in neither). VOICE shows `mute` and `solo` as binary rows after the sends.
+- Stored in `S.voices[i].values`; scene defaults are the param defaults (3.1's chain), and `discrete = {filter_type = {1, 3}, mute = {0, 1}}` (`scene_defaults.mute` = 0; `solo` is in neither). VOICE shows `mute` and `solo` as binary rows after the sends.
 - VOICE: the section `filter & sends`, after mix, on every source (`M.VOICE_MIX.section`). Its `layout_states` put each voice on each source (synth, buf 1, input) with the cursor on the section's first and last row, at bandpass and 20000 Hz.
 - LFO destinations (`S.register_lfo_destination`): `vfilt` (`filter_freq`), `dsend` (`delay_send`), `rsend` (`reverb_send`), then 3.4's `amp` (the voice's `amp`, 97-103; `vfilt` and `amp` run in the engine, `docs/notes/lua/lfos.md`). `lib/history.lua` is included first, so `v<i> hist` comes before them.
 

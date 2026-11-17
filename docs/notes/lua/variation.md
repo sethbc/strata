@@ -9,7 +9,7 @@
 
 ## lib/variation.lua (`S.lib.variation`)
 
-One registered voice-param record (`S.register_voice_params`, `docs/notes/lua/params.md`), `variation`, with twelve params per voice, stored in `S.voices[i].extras`:
+One registered voice-param record (`S.register_voice_params`, `docs/notes/lua/params.md`), `variation`, with twelve params per voice, stored in `S.voices[i].values`:
 
 | Param | Kind, range, default | Engine |
 |-------|----------------------|--------|
