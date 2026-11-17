@@ -961,4 +961,73 @@ test("a 3.6 group record adds its group only for a loaded module", function()
   assert_equal(calls, 1, "S.lib.io_tape's add_params ran once, at init")
 end)
 
+-- A param as test/fixtures/3.7.0-params.lua records it (its header): id,
+-- t and name; the default; a control's spec, an option's options, a
+-- number's range, a group's size; the string a formatted param shows at
+-- its default
+local PARAM_FIXTURE_FIELDS = {"id", "t", "name", "default", "min", "max", "warp", "step", "quantum", "units",
+  "options", "string", "n"}
+local function string_at_default(param, default)
+  local saved_raw, saved_value = param.raw, param.value
+  if param.t == params.tCONTROL then param.raw = param.controlspec:unmap(default) else param.value = default end
+  local text = params:string(param.id)
+  param.raw, param.value = saved_raw, saved_value
+  return text
+end
+local function fixture_record(param, audio_dir)
+  local record = {id = param.id, t = param.t, name = param.name}
+  if param.t == params.tCONTROL then
+    local spec = param.controlspec
+    record.default, record.min, record.max, record.warp = spec.default, spec.minval, spec.maxval, spec.warp_name
+    record.step, record.quantum, record.units = spec.step, spec.quantum, spec.units
+    if param.formatter and spec.default ~= nil then record.string = string_at_default(param, spec.default) end
+  elseif param.t == params.tNUMBER then
+    record.default, record.min, record.max = param.default, param.min, param.max
+    if param.formatter then record.string = string_at_default(param, param.default) end
+  elseif param.t == params.tOPTION then
+    record.default, record.options = param.default, param.options
+  elseif param.t == params.tBINARY then
+    record.default = param.default
+  elseif param.t == params.tFILE then
+    record.default = param.path
+    if record.default:sub(1, #audio_dir) == audio_dir then record.default = "@AUDIO@" .. record.default:sub(#audio_dir + 1) end
+  elseif param.t == params.tTEXT then
+    record.default = param.text
+  elseif param.t == params.tGROUP then
+    record.n = param.n
+  end
+  return record
+end
+local function field_text(value)
+  if type(value) == "table" then
+    local parts = {}
+    for index, item in ipairs(value) do parts[index] = field_text(item) end
+    return "{" .. table.concat(parts, ", ") .. "}"
+  end
+  if type(value) == "number" then return string.format("%.17g", value) end
+  return type(value) == "string" and string.format("%q", value) or tostring(value)
+end
+
+-- The groundwork before 3.8 (its Global Constraints): every surviving param
+-- keeps its id, default, spec and place. A package that removes or changes
+-- a param on purpose lists it in ALLOWED, with why (none yet)
+test("every param's id, type, name, default and spec is 3.7.0's, in order", function()
+  math.randomseed(37)
+  local first
+  local context = load_strata({before_load = function() first = #params.params + 1 end})
+  finish_startup(context)
+  local expected = dofile(h.repo_root .. "/test/fixtures/3.7.0-params.lua")
+  local actual = {}
+  for index = first, #params.params do actual[#actual + 1] = fixture_record(params.params[index], context.audio_dir) end
+  for index = 1, math.max(#expected, #actual) do
+    local want, got = expected[index], actual[index]
+    assert_true(want ~= nil and got ~= nil, "param " .. index .. ": 3.7.0 had " .. tostring(want and want.id)
+      .. ", this build " .. tostring(got and got.id))
+    for _, field in ipairs(PARAM_FIXTURE_FIELDS) do
+      assert_equal(field_text(got[field]), field_text(want[field]), "param " .. index .. " (" .. want.id .. ")'s " .. field)
+    end
+  end
+  assert_equal(#actual, #expected, "as many params as 3.7.0")
+end)
+
 end
