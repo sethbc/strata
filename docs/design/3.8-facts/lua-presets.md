@@ -234,7 +234,7 @@ Read-only survey of `main` at 59a0a0c1 (the groundwork has not landed: only 0a's
   - a 4a PSET load replaces the live scenes (backed up only when they are in no PSET);
   - a PSET's `buf<n>_file` lines replace the player's slots.
 - `docs/design/3.8-groundwork-design.md:167`, "A factory set is one PSET with its five side files and its samples": silent on `samples.data` (tempo, key and slices are keyed by path and start and are lost without an entry), on the start point (not in a PSET), on absolute paths, and on `.gitignore:2-4`, which ignores `*.pset` and `data/`.
-- `docs/superpowers/plans/2026-11-16-3.8-groundwork-plan.md:48` (ruling 6): it leaves a running fade to 3.8, but the fade's targets are private to `recall_scene`'s closure (`lib/scenes.lua:715-766`), so 3.8 can only cancel it, refuse, or edit `recall_scene`.
+- The groundwork's plan (removed; its rulings are in `docs/decisions/3.8.md`), ruling 6: it leaves a running fade to 3.8, but the fade's targets are private to `recall_scene`'s closure (`lib/scenes.lua:715-766`), so 3.8 can only cancel it, refuse, or edit `recall_scene`.
 - `docs/notes/lua/data-files.md` (Must not break, the side files' rules) and `lib/side_files.lua:5` name three side-file modules; there are four on `main` (sequences, `lib/random_sequences.lua:284`), and five after 4a.
 - No notes file says that Strata's data folder (`_path.data .. "strata/"`, `lib/scenes.lua:1014`) and norns' PSET folder (`norns.state.data`, `lua/core/script.lua:191`) differ when the script folder is not named `strata`. A factory set's live and side files would then land in two folders.
 - `docs/notes/lua/pages/voice.md` (Keys and encoders) lists every key VOICE uses but not that none is left for a preset or copy action.
