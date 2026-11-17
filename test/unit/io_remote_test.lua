@@ -614,6 +614,56 @@ test("a Launchpad through midigrid plays no voice while attached, and plays agai
   assert_equal(started_notes, 2, "the port's notes play again")
 end)
 
+test("a Launchpad midigrid holds keeps its claim when SYSTEM > DEVICES moves it (#753)", function()
+  -- the device object, and the event midigrid set on it, move with it; the departure releases
+  -- the old port, and the arrival claims the new one
+  local context, S = started()
+  local launchpad = context.midi.plug(1, "Launchpad X")
+  local real_connect = grid.connect
+  grid.connect = function(...)
+    if select("#", ...) > 0 then return real_connect(...) end
+    launchpad.event = function() end  -- what midigrid does to the device it takes
+    return midigrid_object(16, 8)
+  end
+  set_rig(S, "midi_grid", "on")
+  assert_equal(S.lib.io_ports.owner(1), "midigrid", "claimed at the attach")
+  _menu.set_mode(true)
+  context.midi.reassign(1, 4)
+  _menu.set_mode(false)
+  assert_equal(S.lib.io_ports.owner(4), "midigrid", "the new port claimed as midigrid")
+  assert_true(S.lib.io_remote.holds(4), "and held: MIDI out sends nothing there")
+  assert_equal(S.lib.io_ports.owner(1), nil, "the old port released")
+  assert_true(not S.lib.io_remote.holds(1), "and no longer held")
+  set_rig(S, "midi_grid", "off")
+  assert_equal(S.lib.io_ports.owner(4), nil, "released at detach")
+  grid.connect = real_connect
+end)
+
+test("a device that arrives with a device-level handler is claimed only while midigrid is attached", function()
+  local context, S = started()
+  local real_connect = grid.connect
+  grid.connect = function(...)
+    if select("#", ...) > 0 then return real_connect(...) end
+    return midigrid_object(16, 8)
+  end
+  -- a library that sets the device's handler at the add
+  local real_add = midi.add
+  midi.add = function(device)
+    device.event = function() end
+    return real_add(device)
+  end
+  set_rig(S, "midi_grid", "on")
+  context.midi.plug(3, "Launchpad Mini")
+  assert_equal(S.lib.io_ports.owner(3), "midigrid", "an arrival while attached is claimed")
+  assert_true(S.lib.io_remote.holds(3), "and held")
+  set_rig(S, "midi_grid", "off")
+  assert_equal(S.lib.io_ports.owner(3), nil, "released at detach")
+  context.midi.plug(5, "Launchpad Mini")
+  assert_equal(S.lib.io_ports.owner(5), nil, "an arrival with midigrid off is not claimed")
+  midi.add = real_add
+  grid.connect = real_connect
+end)
+
 test("the start step attaches what the rig names", function()
   local connects = 0
   local object = midigrid_object(16, 8)
