@@ -15,7 +15,8 @@
 -- each line served less recently; nothing admitted is ever displaced.
 -- Leaving the lead ends every device's notes, sends the waiting offs at
 -- once (II.cleanup_sends at most, the rest owed), releases each device
--- (II.leave_lines in all at once) and only then clears the flag. An off
+-- (II.leave_lines in all at once) and only then clears the flag; a turn
+-- to teletype sends Teletype's handlers once those lines have gone. An off
 -- that cannot go (past the fourteenth, or crow gone) is owed, and the next
 -- lead queues it after the devices' ready. The devices register with
 -- S.register_ii_device; their params form the group strata_out_ii.
@@ -66,10 +67,11 @@ return function(S)
   -- turns, each line's turn by its id; asking, how many turns asked within
   -- the last asked_steps; wanting, the turns refused since they were last
   -- served; refusals, the count that orders them; pressed, from a refusal
-  -- until the queue next empties
+  -- until the queue next empties. handlers_wait: nil, or the LFO steps
+  -- left before Teletype's handlers follow a leave (#751)
   local state = {started = false, stopped = false, leading = false, queue = {}, lines = {}, pairs = {}, dropped = 0,
     errors = {}, owed = {order = {}, by_key = {}}, owing = false, leave_room = nil,
-    step = 0, turns = {}, asking = 0, wanting = {}, refusals = 0, pressed = false}
+    step = 0, turns = {}, asking = 0, wanting = {}, refusals = 0, pressed = false, handlers_wait = nil}
 
   local function bus() return S.lib.io_rig.get(SPEC.bus_key) end
   local function present() return S.lib.io_crow.present() end
@@ -385,12 +387,25 @@ return function(S)
     return S.lib.io_crow.send_now(line)
   end
 
+  -- Teletype's three handlers, sent at once
+  local function send_handlers()
+    for _, line in ipairs(SPEC.handlers) do S.lib.io_crow.send_now(line) end
+  end
+
   -- The first sends_per_step waiting, in order, from the LFO clock's step;
   -- each sent entry of a learned pair moves its line's state (a send
   -- raises it, an off lowers it; a line known low is kept, so its next off
   -- is not owed unless something raises it); each sent send's turn served,
-  -- the press ended when the queue is empty, and the turns aged
+  -- the press ended when the queue is empty, and the turns aged. First,
+  -- under teletype, a wait for the handlers counted down (#751)
   S.lib.lfos.on_step(function()
+    if state.handlers_wait then
+      state.handlers_wait = state.handlers_wait - 1
+      if state.handlers_wait <= 0 then
+        state.handlers_wait = nil
+        if active() and present() and bus() == "teletype" then send_handlers() end
+      end
+    end
     if not state.leading then return end
     state.step = state.step + 1
     for _ = 1, math.min(II.sends_per_step, #state.queue) do
@@ -457,9 +472,10 @@ return function(S)
   -- order (cleanup_sends at most, the rest owed to the next lead), each
   -- device released (its lines sent while the sequence's total stays at
   -- most leave_lines, the rest dropped), then the flag cleared and
-  -- anything a release queued dropped
+  -- anything a release queued dropped. Returns the lines it sent at once
+  -- (0 when Strata does not lead)
   local function give_up_lead()
-    if not state.leading then return end
+    if not state.leading then return 0 end
     local targets = S.lib.io_targets
     if targets and targets.end_target then
       for _, record in ipairs(devices()) do targets.end_target(record.name) end
@@ -479,12 +495,14 @@ return function(S)
     end
     state.leave_room = II.leave_lines - sent
     call_devices("release")
+    local sent_in_all = II.leave_lines - state.leave_room
     state.leave_room = nil
     state.leading = false
     state.queue = {}
     forget_lines()
     forget_turns()
     request_redraw()
+    return sent_in_all
   end
 
   -- The crow left while Strata led: nothing to send it through. The
@@ -502,8 +520,12 @@ return function(S)
     state.leading, state.owing = false, true
   end
 
-  local function send_handlers()
-    for _, line in ipairs(SPEC.handlers) do S.lib.io_crow.send_now(line) end
+  -- After a leave that sent lines at once, the handlers wait the steps the
+  -- queue would take to send as many (#751: the leave and the handlers
+  -- together stay inside crow's 16); with none sent, they go at once
+  local function handlers_after(sent)
+    if sent <= 0 then send_handlers()
+    else state.handlers_wait = math.ceil(sent / II.sends_per_step) end
   end
 
   -- What the bus setting asks of a crow just set up (or there at the start)
@@ -511,18 +533,28 @@ return function(S)
     if not (active() and present()) then return end
     local leader = bus()
     if leader == "strata" then take_lead()
-    elseif leader == "teletype" then send_handlers() end
+    elseif leader == "teletype" then
+      state.handlers_wait = nil
+      send_handlers()
+    end
   end
 
   S.lib.io_crow.on_setup("ii", set_up)
   S.lib.io_crow.on_gone("ii", crow_gone)
 
+  -- A leader change cancels a wait for the handlers; a teletype left
+  -- while they waited never had them, so crow is not told to remove them
   S.lib.io_rig.on_change(SPEC.bus_key, function(value, previous)
     if not active() then return end
-    if previous == "strata" then give_up_lead() end
-    if previous == "teletype" and present() then S.lib.io_crow.send_now(SPEC.reset_events) end
+    local waiting = state.handlers_wait ~= nil
+    state.handlers_wait = nil
+    local sent = 0
+    if previous == "strata" then sent = give_up_lead() end
+    if previous == "teletype" and present() and not waiting then S.lib.io_crow.send_now(SPEC.reset_events) end
     if value == "strata" and present() then take_lead()
-    elseif value == "teletype" and present() then send_handlers() end
+    elseif value == "teletype" and present() then
+      if previous == "strata" then handlers_after(sent) else send_handlers() end
+    end
   end)
 
   ---------------------------------------------------------------------------
@@ -672,6 +704,7 @@ return function(S)
     give_up_lead()
     state.stopped = true
     state.queue = {}
+    state.handlers_wait = nil
   end
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_ii, function() M.stop() end)

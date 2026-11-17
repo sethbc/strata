@@ -1017,6 +1017,143 @@ test("leaving the bus sends at most 15 lines at once; the offs past 14 are owed 
   end
 end)
 
+-- Whether a list of lines holds one of Teletype's handlers, or the reset of them
+local function has_handler(lines)
+  for _, line in ipairs(lines) do
+    for _, handler in ipairs(HANDLERS) do
+      if line == handler then return true end
+    end
+  end
+  return false
+end
+
+local function has_line(lines, wanted)
+  for _, line in ipairs(lines) do
+    if line == wanted then return true end
+  end
+  return false
+end
+
+local function copy(lines)
+  local out = {}
+  for index, line in ipairs(lines) do out[index] = line end
+  return out
+end
+
+test("strata leads turned straight to teletype leads sends the handlers only once the leave's lines have gone (#751)", function()
+  -- design §3.4: "inside crow's 16" (crow-ii.md §2); the leave sends 15 lines at once, and the
+  -- queue's own rate (II.sends_per_step a step) says when they have gone: ceil(15 / 4) = 4 steps
+  local function releaser(name, lines)
+    return {name = name, ports = false, release = function()
+      local ii = local_value("S").lib.io_ii
+      for _, args in ipairs(lines) do ii.send_direct(name, (table.unpack or unpack)(args)) end
+    end}
+  end
+  local envelopes = {}
+  for n = 1, 7 do envelopes[n] = {"env_act", n, 0} end
+  local context, S, ii = started({releaser("jfish", {{"mode", 0}}), releaser("tx", envelopes), {name = "gt", ports = false}})
+  local step = stepper(context, S)
+  lead(context, S)
+  for n = 1, 7 do
+    ii.send("tx", "tr", n, 1); ii.send("tx", "env", n, 1); ii.send("gt", "tr", n, 1)
+  end
+  drain(step, ii)
+  for n = 1, 7 do
+    ii.send_off("tx", "tr", n, 0); ii.send_off("tx", "env", n, 0); ii.send_off("gt", "tr", n, 0)
+  end
+  assert_equal(ii.queued(), 21, "21 offs wait")
+  context.crow.clear()
+  set_bus(S, "teletype")
+  local at_once = copy(context.crow.sent)
+  assert_equal(#at_once, 15, "the leave's 15 lines at once: " .. table.concat(at_once, "|"))
+  assert_true(not has_handler(at_once), "no handler with the leave's lines")
+  for index = 1, 3 do
+    local lines = step()
+    assert_true(not has_handler(lines), "no handler at step " .. index .. ": " .. table.concat(lines, "|"))
+    assert_true(#lines <= 15, "at most 15 lines in an instant")
+  end
+  assert_equal(table.concat(step(), "|"), table.concat(HANDLERS, "|"), "the three handlers, in order, at the 4th step")
+  for _ = 1, 10 do assert_equal(#step(), 0, "nothing more on later steps") end
+
+  -- with nothing to leave, the handlers go at once
+  context, S, ii = started()
+  lead(context, S)
+  assert_equal(ii.queued(), 0)
+  context.crow.clear()
+  set_bus(S, "teletype")
+  assert_equal(table.concat(context.crow.sent, "|"), table.concat(HANDLERS, "|"), "nothing left: the three at once")
+end)
+
+test("a leader change while the handlers wait cancels them", function()
+  -- a device whose release sends 8 lines: the handlers wait ceil(8 / 4) = 2 steps
+  local function leaving_device()
+    local device, record = recording_device("probe", {release = function()
+      local ii = local_value("S").lib.io_ii
+      for n = 1, 8 do ii.send_direct("probe", "x", n, 0) end
+    end})
+    return device, record
+  end
+
+  -- to off: crow never got the handlers, so it is told nothing
+  local _, record = leaving_device()
+  local context, S = started({record})
+  local step = stepper(context, S)
+  lead(context, S)
+  set_bus(S, "teletype")
+  context.crow.clear()
+  set_bus(S, "off")
+  for index = 1, 10 do
+    local lines = step()
+    assert_true(not has_handler(lines), "off: no handler at step " .. index)
+  end
+  assert_true(not has_line(context.crow.sent, RESET_EVENTS), "off: no reset_events: " .. table.concat(context.crow.sent, "|"))
+  assert_true(not has_handler(context.crow.sent), "off: no handler")
+
+  -- back to strata: no reset_events, the lead taken again, no handler later
+  local device
+  device, record = leaving_device()
+  context, S = started({record})
+  step = stepper(context, S)
+  lead(context, S)
+  set_bus(S, "teletype")
+  context.crow.clear()
+  set_bus(S, "strata")
+  assert_true(S.lib.io_ii.leads(), "Strata leads again")
+  for _ = 1, 10 do step() end
+  assert_true(not has_line(context.crow.sent, RESET_EVENTS), "strata: no reset_events")
+  assert_true(not has_handler(context.crow.sent), "strata: no handler")
+  assert_equal(device.readies, 2, "one ready for each lead")
+
+  -- crow unplugged past the due step: nothing then; its return sends the handlers once
+  _, record = leaving_device()
+  context, S = started({record})
+  step = stepper(context, S)
+  lead(context, S)
+  set_bus(S, "teletype")
+  context.crow.unplug()
+  context.crow.clear()
+  for index = 1, 3 do assert_true(not has_handler(step()), "unplugged: no handler at step " .. index) end
+  context.crow.plug()
+  assert_equal(table.concat(context.crow.sent, "|"), "crow.reset()|" .. table.concat(HANDLERS, "|"),
+    "after crow's reset, the three")
+  context.crow.clear()
+  for _ = 1, 10 do step() end
+  assert_equal(#context.crow.sent, 0, "not again at a later step")
+
+  -- crow unplugged and back inside the wait: the setup's handlers, and none at the due step
+  _, record = leaving_device()
+  context, S = started({record})
+  step = stepper(context, S)
+  lead(context, S)
+  set_bus(S, "teletype")
+  context.crow.unplug()
+  context.crow.plug()
+  context.crow.clear()
+  for _ = 1, 10 do step() end
+  assert_true(not has_handler(context.crow.sent), "the setup's handlers stand; none at the due step: "
+    .. table.concat(context.crow.sent, "|"))
+end)
+
 test("a line high when crow leaves, its note ending while crow is away, is lowered after ready when crow returns", function()
   -- crow-ii.md §1: a crow that leaves can send nothing; its return under strata makes the devices ready
   local device = {name = "probe", ports = false, ready = function() local_value("S").lib.io_ii.send("probe", "setup", 1) end}
