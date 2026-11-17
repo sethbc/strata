@@ -1,6 +1,6 @@
 ### Changed
 - The SCENES page's third chance reads `random`, as SEQ's chain chance does (it read `rand`).
-- The scene sequencer, the pattern chain and the next-scene action (crow, OSC, Teletype) share one list of playable scenes and one draw of the next. A chain whose playing scene has been cleared goes on to the next saved scene with no draw, as the scene sequencer does.
+- The scene sequencer, the pattern chain and the next-scene action (crow, OSC, Teletype) share one list of playable scenes and one way of picking the next: the sequencer and the chain draw it from their chances, and the next-scene action steps to the next scene that can play. A chain whose playing scene has been cleared goes on to the next saved scene with no draw, as the scene sequencer does.
 
 ### Fixed
 - The pattern chain never picks a scene that fails its check, and a move past one no longer favors the slot after it or reloads the playing scene (#738).

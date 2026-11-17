@@ -413,7 +413,7 @@ checkRegionRestart = {
     command.(\setGrainParam, voice, \regionLength, 0.25);
     // (0.1 s: the probe's 20 ms sums hold the 40 ms grains from before the
     // change for about 60 ms; without the restart the grains would read
-    // about 0.65, past the region's first 0.08)
+    // about 0.65, past the region's start + 0.08)
     0.1.wait;
     own = position.value;
     setGrain.(\regionStart, 0, \regionLength, 0, \bufScan, 0);
