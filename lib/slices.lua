@@ -388,7 +388,7 @@ return function(S)
   -- Playing them (design §3.5)
   ---------------------------------------------------------------------------
 
-  local function option(voice) return S.voices[voice].extras[SLICES.key] or SLICES.off end
+  local function option(voice) return S.voices[voice].values[SLICES.key] or SLICES.off end
 
   -- The voice's option's name: "off", "one" or "overlap"
   function M.option(voice)

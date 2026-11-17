@@ -71,7 +71,7 @@ return function(S)
   -- A mapping's target name and depth (a fraction, -1..1) on voice: the
   -- stored params (their defaults before the params exist)
   local function mapping_of(voice, mapping)
-    local extras = S.voices[voice].extras or {}
+    local extras = S.voices[voice].values or {}
     local target = EXPRESSION.targets[extras[mapping.target_key] or target_index[mapping.target]] or "off"
     local depth = extras[mapping.depth_key] or mapping.depth
     return target, depth / EXPRESSION.depth_range[2]

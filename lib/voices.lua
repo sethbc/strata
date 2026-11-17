@@ -3,8 +3,9 @@
 -- which voices are locked (S.locked), the master density, the selected voice,
 -- and the global helpers that test a voice's grain source. strata.lua runs
 -- `S.lib.voices = include("lib/voices")(S)`; the constructor sets its S
--- fields itself, and its table (S.lib.voices) holds value(voice_idx, key),
--- a voice's value by its param id's key.
+-- fields itself, and its table (S.lib.voices) holds is_synth_key(voice_idx,
+-- key). A voice is {name, active, source, param_order, values}: values holds
+-- every value of the voice by key, its param id without "v<i>_".
 
 return function(S)
   local M = {}
@@ -21,31 +22,30 @@ return function(S)
       active = false,
       source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
       param_order = {"freq", "rq", "noise", "mod1", "mod2", "amp", "pan"},  -- display / grid order of params
-      params = {
+      -- every value of the voice, by key (its param id without v<i>_): the
+      -- synth params (param_order's keys), the grain and buffer params and
+      -- crossmod; lib/params_setup.lua adds each registered record's
+      values = {
         freq = 100,
         amp = 0.3,
         pan = 0,
         rq = 0.1,
         noise = 0.5,
         mod1 = 0.1,
-        mod2 = 0.15
-      },
-      grain = {
-        size = 0.1,
-        density = 20,
-        pitch = 1,
-        spread = 0.5,
-        env = 1,  -- GRAIN_ENV_OPTIONS index
-        mode = 1,  -- GRAIN_MODE_OPTIONS index
+        mod2 = 0.15,
+        grain_size = 0.1,
+        grain_density = 20,
+        grain_pitch = 1,
+        grain_spread = 0.5,
+        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
+        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
         buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
         buf_rate = 1,
-        buf_scan = 0
-      },
-      crossmod = {
-        slot1 = {source = 0, amp_amt = 0, freq_amt = 0},  -- 0 = none, 1-7 = voice number
-        slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-        speed = 10
+        buf_scan = 0,
+        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
+        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
+        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
+        mod_speed = 10
       }
     },
     {
@@ -53,30 +53,29 @@ return function(S)
       active = false,
       source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
       param_order = {"freq", "ratio", "index", "modFreq", "amp", "pan"},  -- display / grid order of params
-      params = {
+      -- every value of the voice, by key (its param id without v<i>_): the
+      -- synth params (param_order's keys), the grain and buffer params and
+      -- crossmod; lib/params_setup.lua adds each registered record's
+      values = {
         freq = 80,
         amp = 0.25,
         pan = 0,
         ratio = 1.5,
         index = 2,
-        modFreq = 0.05
-      },
-      grain = {
-        size = 0.15,
-        density = 15,
-        pitch = 1,
-        spread = 0.3,
-        env = 1,  -- GRAIN_ENV_OPTIONS index
-        mode = 1,  -- GRAIN_MODE_OPTIONS index
+        modFreq = 0.05,
+        grain_size = 0.15,
+        grain_density = 15,
+        grain_pitch = 1,
+        grain_spread = 0.3,
+        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
+        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
         buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
         buf_rate = 1,
-        buf_scan = 0
-      },
-      crossmod = {
-        slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-        speed = 10
+        buf_scan = 0,
+        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
+        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
+        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
+        mod_speed = 10
       }
     },
     {
@@ -84,29 +83,28 @@ return function(S)
       active = false,
       source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
       param_order = {"freq", "fold", "mod", "amp", "pan"},  -- display / grid order of params
-      params = {
+      -- every value of the voice, by key (its param id without v<i>_): the
+      -- synth params (param_order's keys), the grain and buffer params and
+      -- crossmod; lib/params_setup.lua adds each registered record's
+      values = {
         freq = 60,
         amp = 0.3,
         pan = 0,
         fold = 1,
-        mod = 0.2
-      },
-      grain = {
-        size = 0.08,
-        density = 25,
-        pitch = 1,
-        spread = 0.4,
-        env = 1,  -- GRAIN_ENV_OPTIONS index
-        mode = 1,  -- GRAIN_MODE_OPTIONS index
+        mod = 0.2,
+        grain_size = 0.08,
+        grain_density = 25,
+        grain_pitch = 1,
+        grain_spread = 0.4,
+        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
+        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
         buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
         buf_rate = 1,
-        buf_scan = 0
-      },
-      crossmod = {
-        slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-        speed = 10
+        buf_scan = 0,
+        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
+        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
+        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
+        mod_speed = 10
       }
     },
     {
@@ -114,27 +112,26 @@ return function(S)
       active = false,
       source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
       param_order = {"freq", "drift", "amp"},  -- display / grid order of params
-      params = {
+      -- every value of the voice, by key (its param id without v<i>_): the
+      -- synth params (param_order's keys), the grain and buffer params and
+      -- crossmod; lib/params_setup.lua adds each registered record's
+      values = {
         freq = 40,
         amp = 0.4,
-        drift = 0.02
-      },
-      grain = {
-        size = 0.2,
-        density = 10,
-        pitch = 1,
-        spread = 0.2,
-        env = 1,  -- GRAIN_ENV_OPTIONS index
-        mode = 1,  -- GRAIN_MODE_OPTIONS index
+        drift = 0.02,
+        grain_size = 0.2,
+        grain_density = 10,
+        grain_pitch = 1,
+        grain_spread = 0.2,
+        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
+        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
         buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
         buf_rate = 1,
-        buf_scan = 0
-      },
-      crossmod = {
-        slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-        speed = 10
+        buf_scan = 0,
+        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
+        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
+        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
+        mod_speed = 10
       }
     },
     {
@@ -142,30 +139,29 @@ return function(S)
       active = false,
       source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
       param_order = {"freq", "width", "cutoff", "res", "amp", "pan"},  -- display / grid order of params
-      params = {
+      -- every value of the voice, by key (its param id without v<i>_): the
+      -- synth params (param_order's keys), the grain and buffer params and
+      -- crossmod; lib/params_setup.lua adds each registered record's
+      values = {
         freq = 120,
         amp = 0.3,
         pan = 0,
         width = 0.5,
         cutoff = 2000,
-        res = 0.8  -- rises with resonance: 0.8 is the filter's rq 0.3, 3.2's default 0.3 (#314)
-      },
-      grain = {
-        size = 0.12,
-        density = 18,
-        pitch = 1,
-        spread = 0.35,
-        env = 1,  -- GRAIN_ENV_OPTIONS index
-        mode = 1,  -- GRAIN_MODE_OPTIONS index
+        res = 0.8,  -- rises with resonance: 0.8 is the filter's rq 0.3, 3.2's default 0.3 (#314)
+        grain_size = 0.12,
+        grain_density = 18,
+        grain_pitch = 1,
+        grain_spread = 0.35,
+        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
+        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
         buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
         buf_rate = 1,
-        buf_scan = 0
-      },
-      crossmod = {
-        slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-        speed = 10
+        buf_scan = 0,
+        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
+        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
+        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
+        mod_speed = 10
       }
     },
     {
@@ -173,30 +169,29 @@ return function(S)
       active = false,
       source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
       param_order = {"freq", "decay", "damping", "excite", "amp", "pan"},  -- display / grid order of params
-      params = {
+      -- every value of the voice, by key (its param id without v<i>_): the
+      -- synth params (param_order's keys), the grain and buffer params and
+      -- crossmod; lib/params_setup.lua adds each registered record's
+      values = {
         freq = 200,
         amp = 0.35,
         pan = 0,
         decay = 4,
         damping = 0.5,
-        excite = 0.3
-      },
-      grain = {
-        size = 0.08,
-        density = 22,
-        pitch = 1,
-        spread = 0.25,
-        env = 1,  -- GRAIN_ENV_OPTIONS index
-        mode = 1,  -- GRAIN_MODE_OPTIONS index
+        excite = 0.3,
+        grain_size = 0.08,
+        grain_density = 22,
+        grain_pitch = 1,
+        grain_spread = 0.25,
+        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
+        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
         buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
         buf_rate = 1,
-        buf_scan = 0
-      },
-      crossmod = {
-        slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-        speed = 10
+        buf_scan = 0,
+        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
+        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
+        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
+        mod_speed = 10
       }
     },
     {
@@ -204,30 +199,29 @@ return function(S)
       active = false,
       source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
       param_order = {"freq", "ratio", "mod", "brightness", "amp", "pan"},  -- display / grid order of params
-      params = {
+      -- every value of the voice, by key (its param id without v<i>_): the
+      -- synth params (param_order's keys), the grain and buffer params and
+      -- crossmod; lib/params_setup.lua adds each registered record's
+      values = {
         freq = 300,
         amp = 0.25,
         pan = 0,
         ratio = 1.618,
         mod = 0.2,
-        brightness = 0.5
-      },
-      grain = {
-        size = 0.1,
-        density = 20,
-        pitch = 1,
-        spread = 0.4,
-        env = 1,  -- GRAIN_ENV_OPTIONS index
-        mode = 1,  -- GRAIN_MODE_OPTIONS index
+        brightness = 0.5,
+        grain_size = 0.1,
+        grain_density = 20,
+        grain_pitch = 1,
+        grain_spread = 0.4,
+        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
+        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
         buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
         buf_rate = 1,
-        buf_scan = 0
-      },
-      crossmod = {
-        slot1 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot2 = {source = 0, amp_amt = 0, freq_amt = 0},
-        slot3 = {source = 0, amp_amt = 0, freq_amt = 0},
-        speed = 10
+        buf_scan = 0,
+        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
+        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
+        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
+        mod_speed = 10
       }
     }
   }
@@ -259,20 +253,17 @@ return function(S)
     S.locked[i] = false
   end
 
-  -- A voice's value by key (its param id without "v<i>_"), read from the
-  -- voice's params, grain, crossmod and extras tables; nil for a key the
-  -- voice has none of (voice 4's pan)
-  local GRAIN_FIELDS = {grain_size = "size", grain_density = "density", grain_pitch = "pitch",
-    grain_spread = "spread", grain_env = "env", grain_mode = "mode", buf_pos = "buf_pos", buf_rate = "buf_rate",
-    buf_scan = "buf_scan"}
-  function M.value(voice_idx, key)
-    local voice = S.voices[voice_idx]
-    if voice.params[key] ~= nil then return voice.params[key] end
-    if GRAIN_FIELDS[key] then return voice.grain[GRAIN_FIELDS[key]] end
-    if key == "mod_speed" then return voice.crossmod.speed end
-    local field, slot = key:match("^mod_(.+)_(%d)$")
-    if field and voice.crossmod["slot" .. slot] then return voice.crossmod["slot" .. slot][field] end
-    return voice.extras and voice.extras[key]
+  -- Whether key is one of voice voice_idx's synth params (its param_order;
+  -- false for a number that is no voice). A synth-key test goes through
+  -- it, never values[key] ~= nil: a voice's values hold every key of its
+  -- params, the grain, crossmod and registered ones too
+  function M.is_synth_key(voice_idx, key)
+    local voice = type(voice_idx) == "number" and S.voices[voice_idx]
+    if not voice then return false end
+    for _, synth_key in ipairs(voice.param_order) do
+      if synth_key == key then return true end
+    end
+    return false
   end
 
   return M

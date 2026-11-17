@@ -36,7 +36,8 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
   for _, entry in ipairs(context.screen.texts) do if entry.x == 127 and entry.y == 34 then value = entry.text end end
   assert_equal(value, string.format("%.2f s", params:get("v1_grain_size")), "MAIN shows grain size")
   -- randomize, mutate and drift leave the synth and buffer params alone
-  local synth_before = deep_copy(local_value("voices")[1].params)
+  local synth_before = {}
+  for _, key in ipairs(local_value("voices")[1].param_order) do synth_before[key] = local_value("voices")[1].values[key] end
   local buffer_before = {}
   for _, key in ipairs({ "buf_pos", "buf_rate", "buf_scan" }) do buffer_before[key] = params:get("v1_" .. key) end
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
@@ -49,7 +50,7 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
   end
   assert_true(grain_changed, "grain params still randomize and mutate")
   for key, val in pairs(synth_before) do
-    assert_equal(local_value("voices")[1].params[key], val, "input voice keeps synth " .. key)
+    assert_equal(local_value("voices")[1].values[key], val, "input voice keeps synth " .. key)
   end
   for key, val in pairs(buffer_before) do
     assert_equal(params:get("v1_" .. key), val, "input voice keeps " .. key)
@@ -74,7 +75,7 @@ test("the pulse voice starts at res 0.8, the sound of 3.2's default (#314)", fun
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
   assert_equal(voices[5].name, "pulse")
-  assert_near(voices[5].params.res, 0.8, 1e-9, "the voices table's default")
+  assert_near(voices[5].values.res, 0.8, 1e-9, "the voices table's default")
   assert_near(params:get("v5_res"), 0.8, 1e-9, "the param's default")
   if voices[5].active then toggle_voice(5) end
   context.clear_engine_calls()
@@ -102,6 +103,53 @@ test("the pulse res mirror is the engine's: \\strataPulse plays rq = PULSE_RES.m
   local spec = params:lookup_param("v5_res").controlspec
   assert_near(tonumber(low), spec.minval, 1e-9, "the engine clips res at the param's minimum")
   assert_near(tonumber(high), spec.maxval, 1e-9, "and at its maximum")
+end)
+
+-- The groundwork before 3.8 (design §2, ruling 8): one values table per
+-- voice, and synth membership through is_synth_key
+test("every voice holds its values in one table, by its param ids' keys", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice = 1, S.constants.NUM_VOICES do
+    local v = S.voices[voice]
+    for _, gone in ipairs({ "params", "grain", "crossmod", "extras" }) do
+      assert_equal(v[gone], nil, "voice " .. voice .. " has no " .. gone)
+    end
+    local prefix = "v" .. voice .. "_"
+    local listed = {}
+    for _, param in ipairs(params.params) do
+      local key = type(param.id) == "string" and param.id:sub(1, #prefix) == prefix and param.id:sub(#prefix + 1)
+      if key and key ~= "source" and not key:match("^out_") and not key:match("^zone") then
+        listed[key] = true
+        assert_true(v.values[key] ~= nil, param.id .. " has a value")
+        local value = params:get(param.id)
+        if type(value) == "number" then
+          assert_near(v.values[key], value, 1e-9, param.id .. "'s value is its param's")
+        end
+      end
+    end
+    for key in pairs(v.values) do assert_true(listed[key], "voice " .. voice .. "'s " .. key .. " is a param") end
+  end
+  params:set("v2_grain_size", 0.3); assert_near(S.voices[2].values.grain_size, 0.3, 1e-9, "a grain param")
+  params:set("v2_mod_source_2", 5); assert_equal(S.voices[2].values.mod_source_2, 5, "a mod source")
+  params:set("v2_mod_speed", 20); assert_near(S.voices[2].values.mod_speed, 20, 1e-9, "the mod speed")
+  params:set("v2_reverb_send", 0.4); assert_near(S.voices[2].values.reverb_send, 0.4, 1e-9, "a registered param")
+end)
+
+test("is_synth_key is a voice's param_order", function()
+  load_strata()
+  local S = local_value("S")
+  for voice = 1, S.constants.NUM_VOICES do
+    for _, key in ipairs(S.voices[voice].param_order) do
+      assert_true(S.lib.voices.is_synth_key(voice, key), "voice " .. voice .. ": " .. key)
+    end
+    for _, key in ipairs({ "grain_size", "mod_speed", "scan_mode", "follow", "slices", "loop_start", "source" }) do
+      assert_true(not S.lib.voices.is_synth_key(voice, key), "voice " .. voice .. ": " .. key .. " is no synth key")
+    end
+  end
+  assert_true(not S.lib.voices.is_synth_key(4, "pan"), "the sub has no pan")
+  assert_true(S.lib.voices.is_synth_key(5, "res") and not S.lib.voices.is_synth_key(1, "res"), "res is the pulse's")
+  assert_true(not S.lib.voices.is_synth_key(0, "freq") and not S.lib.voices.is_synth_key(8, "freq"), "no such voice")
 end)
 
 end

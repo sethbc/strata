@@ -2298,7 +2298,7 @@ test("a gated voice's event falls back to the default gate length", function()
   local events = record_output(S, "probe")
   params:set("v1_seq_gate", 2)
   S.patterns[1][1] = 15
-  S.voices[1].extras.seq_gate_length = nil
+  S.voices[1].values.seq_gate_length = nil
   pattern_clock_start(); pattern_clock_stop()
   assert_near(voice_events(events, 1)[1].gate_beats, 0.125, 1e-9, "0.5 steps of 1/16, the default")
 end)

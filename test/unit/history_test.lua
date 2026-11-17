@@ -37,7 +37,7 @@ test("v<i>_history ranges from 0 to the tier's history", function()
     assert_equal(high, 16, id .. " to the standard tier's 16 s")
     assert_equal(param_default(id), 0, id .. " defaults to 0")
     assert_equal(params:lookup_param(id).controlspec.units, "s", id .. " in seconds")
-    assert_equal(S.voices[voice_idx].extras.history, 0, "voice " .. voice_idx .. " stores it")
+    assert_equal(S.voices[voice_idx].values.history, 0, "voice " .. voice_idx .. " stores it")
   end
 end)
 
@@ -69,7 +69,7 @@ test("history reaches the engine as the history grain param only while running",
   context.clear_engine_calls()
   params:set("v3_history", 2)
   assert_equal(#sent_history(context), 0, "a stopped voice gets no message")
-  assert_near(S.voices[3].extras.history, 2, 1e-9, "but stores it")
+  assert_near(S.voices[3].values.history, 2, 1e-9, "but stores it")
   -- the sync sends it after the source when the voice starts
   context.clear_engine_calls()
   toggle_voice(3)

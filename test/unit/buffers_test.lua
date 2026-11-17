@@ -1909,8 +1909,8 @@ end)
 local function loop_voice(voice_idx, slot, start, length)
   local S = local_value("S")
   S.voices[voice_idx].source = S.constants.SOURCE_SYNTH + slot
-  S.voices[voice_idx].extras.loop_start = start
-  S.voices[voice_idx].extras.loop_length = length
+  S.voices[voice_idx].values.loop_start = start
+  S.voices[voice_idx].values.loop_length = length
 end
 
 test("the save param sends nothing while the slot records", function()

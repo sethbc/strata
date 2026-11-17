@@ -39,7 +39,7 @@ return function(S)
       table.insert(crossmod, "mod_freq_amt_" .. slot)
     end
     local mix = {"source", "amp"}
-    if voice.params.pan ~= nil then table.insert(mix, "pan") end  -- Sub has none
+    if S.lib.voices.is_synth_key(voice_idx, "pan") then table.insert(mix, "pan") end  -- Sub has none
     return {
       {name = "synth", keys = synth},
       {name = "grain", keys = GRAIN_KEYS},

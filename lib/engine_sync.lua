@@ -699,7 +699,7 @@ return function(S)
   local function send_part_entry(voice_idx, entry, carried)
     local value
     if entry.key ~= nil then
-      value = S.lib.voices.value(voice_idx, entry.key)
+      value = S.voices[voice_idx].values[entry.key]
       if entry.carry ~= false then value = part_value(carried, voice_idx, entry.key, value) end
       if entry.value then value = entry.value(value) end
     end
@@ -762,7 +762,7 @@ return function(S)
     if voice.active then return end
     local carried = {}  -- param id -> the modulated value the start sent (start_value)
     local function value(key, stored) return part_value(carried, voice_idx, key, stored) end
-    local function stored(key) return S.lib.voices.value(voice_idx, key) end
+    local function stored(key) return voice.values[key] end
     local parts = S.lib.params_setup.voice_engine_parts(voice_idx)
     forget_sent_voice_values(voice_idx)
     -- not running yet, so no restart hook runs here

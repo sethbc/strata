@@ -180,7 +180,7 @@ return function()
   --     (setGrainParam): voiceOn resets the voice-level ones (#325);
   --   scene_defaults: {key = default} (each its param's default), or a
   --     function of the voice that gives that table (defaults that differ
-  --     by voice): the keys scenes capture into voices[i].extras and
+  --     by voice): the keys scenes capture into voices[i].values and
   --     fill_scene fills;
   --   discrete: {key = {min, max}} (whole values): set at a transition's
   --     end, after the source; every other scene key crossfades;

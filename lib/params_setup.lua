@@ -798,7 +798,7 @@ return function(S)
   -- Add one param of a registered voice-param record (S.registry.voice_params)
   -- for voice voice_idx: param is a params:add table without an id; the id
   -- is v<i>_<key>. Its action runs the key's param filter, stores the value
-  -- in S.voices[i].extras[key], ends a randomize's undo, sends it through
+  -- in S.voices[i].values[key], ends a randomize's undo, sends it through
   -- send_param_to_engine and then runs param.action, if any. A key in
   -- record.grain_keys gets the engine sender: setGrainParam with its engine
   -- name (and value conversion), only while the voice runs. Called by the
@@ -822,16 +822,16 @@ return function(S)
     for field, value in pairs(param) do args[field] = value end
     args.id = param_id
     args.action = function(x)
-      local extras = S.voices[voice_idx].extras
+      local values = S.voices[voice_idx].values
       if args.type == "number" then x = pset.whole(param_id, x) end  -- (the custom intervals, #554)
-      x = filtered_value(voice_idx, key, param_id, x, extras[key])
-      extras[key] = x
+      x = filtered_value(voice_idx, key, param_id, x, values[key])
+      values[key] = x
       note_param_edit(param_id)  -- an edit ends a randomize's undo
       send_param_to_engine(param_id, x)
       if own_action then own_action(x) end
     end
     params:add(args)
-    S.voices[voice_idx].extras[key] = params:get(param_id)
+    S.voices[voice_idx].values[key] = params:get(param_id)
 
     local grain_key = record.grain_keys and record.grain_keys[key]
     if grain_key then
@@ -903,9 +903,6 @@ return function(S)
     local v = S.voices[voice_idx]
     local prefix = "v" .. voice_idx .. "_"
     local engine_voice = voice_idx - 1
-    -- the registered voice params' values (add_voice_extra), fresh each init
-    v.extras = {}
-
     local function add_sender(param_id, send) add_voice_sender(voice_idx, param_id, send) end
 
     params:add_separator("voice " .. voice_idx .. ": " .. v.name)
@@ -917,7 +914,7 @@ return function(S)
     -- Voice params (in param_order so the menu order is stable)
     for _, key in ipairs(v.param_order) do
       local spec = get_param_spec(key)
-      spec.default = v.params[key]  -- the voices table holds each voice's defaults
+      spec.default = v.values[key]  -- the voices table holds each voice's defaults
       local param_id = prefix .. key
       params:add{
         type = "control",
@@ -926,8 +923,8 @@ return function(S)
         controlspec = spec,
         formatter = VOICE_PARAM_FORMATS[key],
         action = function(x)
-          x = filtered_value(voice_idx, key, param_id, x, S.voices[voice_idx].params[key])
-          S.voices[voice_idx].params[key] = x
+          x = filtered_value(voice_idx, key, param_id, x, S.voices[voice_idx].values[key])
+          S.voices[voice_idx].values[key] = x
           note_param_edit(param_id)  -- randomize sets it: an edit ends its undo
           send_param_to_engine(param_id, x)
         end
@@ -974,9 +971,9 @@ return function(S)
       id = prefix .. "buf_pos",
       name = "buffer position",
       -- step 0: the drift moves in steps far smaller than 0.01
-      controlspec = controlspec.new(0, 1, "lin", 0, v.grain.buf_pos),
+      controlspec = controlspec.new(0, 1, "lin", 0, v.values.buf_pos),
       action = function(x)
-        S.voices[voice_idx].grain.buf_pos = x
+        S.voices[voice_idx].values.buf_pos = x
         if not S.drift_writing then
           S.buf_pos_base[voice_idx] = x
         end
@@ -995,9 +992,9 @@ return function(S)
       -- step 0 (#679): the own note of a MIDI or sequenced note plays the
       -- exact rate, as its chord's extra notes do; a turn's size is the
       -- quantum (0.01 of the range), never the step
-      controlspec = controlspec.new(0.25, 4, "exp", 0, v.grain.buf_rate),
+      controlspec = controlspec.new(0.25, 4, "exp", 0, v.values.buf_rate),
       action = function(x)
-        S.voices[voice_idx].grain.buf_rate = x
+        S.voices[voice_idx].values.buf_rate = x
         note_param_edit(prefix .. "buf_rate")
         send_param_to_engine(prefix .. "buf_rate", x)
       end
@@ -1010,9 +1007,9 @@ return function(S)
       type = "control",
       id = prefix .. "buf_scan",
       name = "buffer scan",
-      controlspec = controlspec.new(-2, 2, "lin", 0.01, v.grain.buf_scan),
+      controlspec = controlspec.new(-2, 2, "lin", 0.01, v.values.buf_scan),
       action = function(x)
-        S.voices[voice_idx].grain.buf_scan = x
+        S.voices[voice_idx].values.buf_scan = x
         note_param_edit(prefix .. "buf_scan")
         send_param_to_engine(prefix .. "buf_scan", x)
       end
@@ -1025,9 +1022,9 @@ return function(S)
       type = "control",
       id = prefix .. "grain_size",
       name = "grain size",
-      controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.grain.size, "s"),
+      controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.values.grain_size, "s"),
       action = function(x)
-        S.voices[voice_idx].grain.size = x
+        S.voices[voice_idx].values.grain_size = x
         note_param_edit(prefix .. "grain_size")
         send_param_to_engine(prefix .. "grain_size", x)
       end
@@ -1040,9 +1037,9 @@ return function(S)
       type = "control",
       id = prefix .. "grain_density",
       name = "grain density",
-      controlspec = controlspec.new(1, 100, "lin", 1, v.grain.density, "/s"),
+      controlspec = controlspec.new(1, 100, "lin", 1, v.values.grain_density, "/s"),
       action = function(x)
-        S.voices[voice_idx].grain.density = x
+        S.voices[voice_idx].values.grain_density = x
         note_param_edit(prefix .. "grain_density")  -- a page randomize sets it
         send_param_to_engine(prefix .. "grain_density", x)
       end
@@ -1056,9 +1053,9 @@ return function(S)
       id = prefix .. "grain_pitch",
       name = "grain pitch",
       -- step 0: the drift moves in steps far smaller than 0.01
-      controlspec = controlspec.new(0.25, 4, "lin", 0, v.grain.pitch, "x"),
+      controlspec = controlspec.new(0.25, 4, "lin", 0, v.values.grain_pitch, "x"),
       action = function(x)
-        S.voices[voice_idx].grain.pitch = x
+        S.voices[voice_idx].values.grain_pitch = x
         if not S.drift_writing then
           S.grain_pitch_base[voice_idx] = x
         end
@@ -1074,9 +1071,9 @@ return function(S)
       type = "control",
       id = prefix .. "grain_spread",
       name = "position spread",
-      controlspec = controlspec.new(0, 1, "lin", 0.01, v.grain.spread),
+      controlspec = controlspec.new(0, 1, "lin", 0.01, v.values.grain_spread),
       action = function(x)
-        S.voices[voice_idx].grain.spread = x
+        S.voices[voice_idx].values.grain_spread = x
         note_param_edit(prefix .. "grain_spread")
         send_param_to_engine(prefix .. "grain_spread", x)
       end
@@ -1090,9 +1087,9 @@ return function(S)
       id = prefix .. "grain_env",
       name = "grain envelope",
       options = GRAIN_ENV_OPTIONS,
-      default = v.grain.env,
+      default = v.values.grain_env,
       action = function(x)
-        S.voices[voice_idx].grain.env = x
+        S.voices[voice_idx].values.grain_env = x
         note_param_edit(prefix .. "grain_env")
         if S.voices[voice_idx].active then
           engine.setGrainParam(voice_idx - 1, "envShape", x - 1)
@@ -1105,9 +1102,9 @@ return function(S)
       id = prefix .. "grain_mode",
       name = "grain mode",
       options = GRAIN_MODE_OPTIONS,
-      default = v.grain.mode,
+      default = v.values.grain_mode,
       action = function(x)
-        S.voices[voice_idx].grain.mode = x
+        S.voices[voice_idx].values.grain_mode = x
         if S.voices[voice_idx].active then
           engine.setGrainParam(voice_idx - 1, "grainMode", x - 1)
         end
@@ -1116,15 +1113,13 @@ return function(S)
 
     -- Cross-modulation params: per slot (1..NUM_MOD_SLOTS) its source, amp
     -- mod and freq mod, in that order (the ids, names and menu order saved
-    -- PSETs hold), each writing voice.crossmod["slot" .. slot] (#392)
+    -- PSETs hold), each writing the voice's values (#392)
     params:add_separator("voice " .. voice_idx .. " cross-modulation")
     local function mod_source_text(param)
       if param:get() == 0 then return "none" end
       return "voice " .. param:get()
     end
     for slot = 1, NUM_MOD_SLOTS do
-      local slot_key = "slot" .. slot
-      local slot_state = v.crossmod[slot_key]
       local amp_id, freq_id = prefix .. "mod_amp_amt_" .. slot, prefix .. "mod_freq_amt_" .. slot
 
       params:add{
@@ -1133,11 +1128,11 @@ return function(S)
         name = "mod source " .. slot,
         min = 0,
         max = NUM_VOICES,
-        default = slot_state.source,
+        default = v.values["mod_source_" .. slot],
         formatter = mod_source_text,
         action = function(x)
           x = pset.whole(prefix .. "mod_source_" .. slot, x)  -- never a fraction to the engine (#554)
-          S.voices[voice_idx].crossmod[slot_key].source = x
+          S.voices[voice_idx].values["mod_source_" .. slot] = x
           if S.voices[voice_idx].active then
             engine.setModSource(voice_idx - 1, slot, S.lib.engine_sync.engine_mod_source(x))
           end
@@ -1148,9 +1143,9 @@ return function(S)
         type = "control",
         id = amp_id,
         name = "amp mod " .. slot,
-        controlspec = controlspec.new(-2, 2, "lin", 0.01, slot_state.amp_amt),
+        controlspec = controlspec.new(-2, 2, "lin", 0.01, v.values["mod_amp_amt_" .. slot]),
         action = function(x)
-          S.voices[voice_idx].crossmod[slot_key].amp_amt = x
+          S.voices[voice_idx].values["mod_amp_amt_" .. slot] = x
           note_param_edit(amp_id)  -- a page randomize sets it
           send_param_to_engine(amp_id, x)
         end
@@ -1161,9 +1156,9 @@ return function(S)
         type = "control",
         id = freq_id,
         name = "freq mod " .. slot,
-        controlspec = controlspec.new(-2, 2, "lin", 0.01, slot_state.freq_amt),
+        controlspec = controlspec.new(-2, 2, "lin", 0.01, v.values["mod_freq_amt_" .. slot]),
         action = function(x)
-          S.voices[voice_idx].crossmod[slot_key].freq_amt = x
+          S.voices[voice_idx].values["mod_freq_amt_" .. slot] = x
           note_param_edit(freq_id)
           send_param_to_engine(freq_id, x)
         end
@@ -1176,9 +1171,9 @@ return function(S)
       type = "control",
       id = prefix .. "mod_speed",
       name = "mod speed",
-      controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.crossmod.speed, "Hz"),
+      controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.values.mod_speed, "Hz"),
       action = function(x)
-        S.voices[voice_idx].crossmod.speed = x
+        S.voices[voice_idx].values.mod_speed = x
         note_param_edit(prefix .. "mod_speed")
         send_param_to_engine(prefix .. "mod_speed", x)
       end

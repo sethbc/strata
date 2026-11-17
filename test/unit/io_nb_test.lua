@@ -600,8 +600,8 @@ test("the nb params stay out of scenes, LFOs, macros, fader pages, randomize, mu
   -- step is 0 only when its draw is exactly 0.5)
   local function snapshot(voice)
     local copy = {}
-    for key, value in pairs(S.voices[voice].params) do copy[key] = value end
-    copy.grain_pitch = S.voices[voice].grain.pitch
+    for _, key in ipairs(S.voices[voice].param_order) do copy[key] = S.voices[voice].values[key] end
+    copy.grain_pitch = S.voices[voice].values.grain_pitch
     return copy
   end
   local function moved(before, voice)
@@ -625,7 +625,7 @@ test("the nb params stay out of scenes, LFOs, macros, fader pages, randomize, mu
   for _ = 1, 50 do
     drift_update()
     for _, voice in ipairs({ 1, 4 }) do
-      if S.voices[voice].grain.pitch ~= 1 then drifted[voice] = true end
+      if S.voices[voice].values.grain_pitch ~= 1 then drifted[voice] = true end
     end
   end
   assert_true(drifted[1], "the drift moved voice 1's grain pitch at some tick")

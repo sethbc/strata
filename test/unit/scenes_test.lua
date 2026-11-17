@@ -1092,25 +1092,26 @@ test("scene recall: one full sync per voice whose source changed, after its para
       if voice.active then
         local label = where .. ": voice " .. voice_idx .. " "
         local sent = engine_state_for_voice(context.engine_calls, voice_idx - 1)
-        for key, value in pairs(voice.params) do
-          assert_near(sent.voice[key], value, 1e-9, label .. key)
+        for _, key in ipairs(voice.param_order) do
+          assert_near(sent.voice[key], voice.values[key], 1e-9, label .. key)
         end
-        assert_near(sent.grain.grainSize, voice.grain.size, 1e-9, label .. "grainSize")
-        assert_near(sent.grain.grainDensity, voice.grain.density * master, 1e-9, label .. "grainDensity")
-        assert_near(sent.grain.pitchShift, voice.grain.pitch, 1e-9, label .. "pitchShift")
-        assert_near(sent.grain.posSpread, voice.grain.spread, 1e-9, label .. "posSpread")
-        assert_equal(sent.grain.envShape, voice.grain.env - 1, label .. "envShape")
-        assert_equal(sent.grain.grainMode, voice.grain.mode - 1, label .. "grainMode")
-        assert_near(sent.grain.bufPos, voice.grain.buf_pos, 1e-9, label .. "bufPos")
-        assert_near(sent.grain.bufRate, voice.grain.buf_rate, 1e-9, label .. "bufRate")
-        assert_near(sent.grain.bufScan, voice.grain.buf_scan, 1e-9, label .. "bufScan")
+        assert_near(sent.grain.grainSize, voice.values.grain_size, 1e-9, label .. "grainSize")
+        assert_near(sent.grain.grainDensity, voice.values.grain_density * master, 1e-9, label .. "grainDensity")
+        assert_near(sent.grain.pitchShift, voice.values.grain_pitch, 1e-9, label .. "pitchShift")
+        assert_near(sent.grain.posSpread, voice.values.grain_spread, 1e-9, label .. "posSpread")
+        assert_equal(sent.grain.envShape, voice.values.grain_env - 1, label .. "envShape")
+        assert_equal(sent.grain.grainMode, voice.values.grain_mode - 1, label .. "grainMode")
+        assert_near(sent.grain.bufPos, voice.values.buf_pos, 1e-9, label .. "bufPos")
+        assert_near(sent.grain.bufRate, voice.values.buf_rate, 1e-9, label .. "bufRate")
+        assert_near(sent.grain.bufScan, voice.values.buf_scan, 1e-9, label .. "bufScan")
         for slot = 1, 3 do
-          local slot_state = voice.crossmod["slot" .. slot]
+          local slot_state = {source = voice.values["mod_source_" .. slot],
+            amp_amt = voice.values["mod_amp_amt_" .. slot], freq_amt = voice.values["mod_freq_amt_" .. slot]}
           assert_equal(sent.source[slot], slot_state.source == 0 and -1 or slot_state.source - 1, label .. "mod source " .. slot)
           assert_near(sent.amp_amt[slot], slot_state.amp_amt, 1e-9, label .. "amp mod " .. slot)
           assert_near(sent.freq_amt[slot], slot_state.freq_amt, 1e-9, label .. "freq mod " .. slot)
         end
-        assert_near(sent.speed, voice.crossmod.speed, 1e-9, label .. "mod speed")
+        assert_near(sent.speed, voice.values.mod_speed, 1e-9, label .. "mod speed")
         local grain_sources = {}
         for _, call in ipairs(context.calls_named("setGrainSource")) do
           if call.args[1] == voice_idx - 1 then table.insert(grain_sources, call.args[2]) end

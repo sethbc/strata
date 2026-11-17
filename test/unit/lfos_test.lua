@@ -1490,7 +1490,7 @@ test("LFOs on params of one command, or on one param, do not undo each other", f
   for _, density_call in ipairs(context.calls_named("setGrainParam")) do
     local voice_idx = density_call.args[1] + 1
     assert_true(voices[voice_idx].active, "only running voices")
-    assert_near(density_call.args[3], voices[voice_idx].grain.density * (1 + 0.19), 1e-6, "modulated density")
+    assert_near(density_call.args[3], voices[voice_idx].values.grain_density * (1 + 0.19), 1e-6, "modulated density")
   end
   assert_true(#context.calls_named("setGrainParam") >= 1, "a running voice got its density")
   assert_near(params:get("master_density"), 1, 1e-9, "master density param untouched")
@@ -1504,7 +1504,7 @@ test("a restarted voice's grain density scales from its stored value until the n
   params:set("v1_grain_density", 20); params:set("master_density", 1)
   hold_lfo(1, "v1 dens", 50)
   lfo_step(context)
-  assert_equal(voices[1].grain.density, 20, "the stored density is untouched")
+  assert_equal(voices[1].values.grain_density, 20, "the stored density is untouched")
   toggle_voice(1); toggle_voice(1)
   context.clear_engine_calls()
   params:set("master_density", 1.5)

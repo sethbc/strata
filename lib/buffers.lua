@@ -624,7 +624,7 @@ return function(S)
       end
     end
     if not reader then return 0, 1 end
-    local extras = S.voices[reader].extras
+    local extras = S.voices[reader].values
     return extras[LOOP.start_key] or 0, extras[LOOP.length_key] or 1
   end
 

@@ -3,6 +3,13 @@
 -- Run alone: lua test/run.lua mutation
 
 return function(h)
+-- A voice's values of the given keys
+local function values_of(voice, keys)
+  local out = {}
+  for _, key in ipairs(keys) do out[key] = voice.values[key] end
+  return out
+end
+local GRAIN_VALUE_KEYS = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode", "buf_pos", "buf_rate", "buf_scan" }
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local deep_copy, show_page = h.deep_copy, h.show_page
@@ -55,7 +62,7 @@ end)
 test("randomize and mutate touch buffer params, never source", function()
   local context = load_strata(); finish_startup(context)
   params:set("v1_source", 2); local freq = params:get("v1_freq")
-  local synth_before = deep_copy(local_value("voices")[1].params)
+  local synth_before = values_of(local_value("voices")[1], local_value("voices")[1].param_order)
   math.randomseed(7); randomize_voice(1)
   assert_equal(params:get("v1_freq"), freq, "synth params untouched for a buffer voice")
   assert_true(params:get("v1_buf_rate") ~= 1 or params:get("v1_buf_pos") ~= 0, "buffer params randomized")
@@ -70,7 +77,7 @@ test("randomize and mutate touch buffer params, never source", function()
   assert_equal(params:get("v1_source"), 2)
   assert_true(params:get("v1_buf_pos") ~= pos_before, "mutation moves buf_pos")
   for key, value in pairs(synth_before) do
-    assert_equal(local_value("voices")[1].params[key], value, "mutation leaves synth " .. key .. " alone")
+    assert_equal(local_value("voices")[1].values[key], value, "mutation leaves synth " .. key .. " alone")
   end
   -- synth-sourced voices keep mutating synth params, never the source
   params:set("v1_source", 1); local mutated = false
@@ -80,10 +87,10 @@ test("randomize and mutate touch buffer params, never source", function()
   assert_equal(params:get("v1_source"), 1, "source never randomized or mutated")
   -- the lock covers buffer params
   params:set("v1_source", 5); toggle_lock(1)
-  local locked_state = deep_copy(local_value("voices")[1].grain)
+  local locked_state = values_of(local_value("voices")[1], GRAIN_VALUE_KEYS)
   randomize_voice(1); gentle_mutate(); for _ = 1, 10 do drift_update() end
   for key, value in pairs(locked_state) do
-    assert_equal(local_value("voices")[1].grain[key], value, "locked buffer voice keeps " .. key)
+    assert_equal(local_value("voices")[1].values[key], value, "locked buffer voice keeps " .. key)
   end
 end)
 
@@ -125,13 +132,15 @@ test("gentle_mutate skips every grain key in DISCRETE_GRAIN_KEYS", function()
   assert_equal(params:get("v1_grain_mode"), 2, "grain mode never mutates")
   -- the guard is the table: any grain key marked discrete is left alone
   local discrete = local_value("DISCRETE_GRAIN_KEYS")
-  for _, key in ipairs({ "size", "pitch", "spread", "buf_pos", "buf_rate", "buf_scan" }) do discrete[key] = 1 end
+  for _, key in ipairs({ "grain_size", "grain_pitch", "grain_spread", "buf_pos", "buf_rate", "buf_scan" }) do
+    discrete[key] = 1
+  end
   for _, source in ipairs({ 1, 2, 10 }) do   -- synth, buffer, input
     params:set("v1_source", source)
-    local before = deep_copy(local_value("voices")[1].grain)
+    local before = values_of(local_value("voices")[1], GRAIN_VALUE_KEYS)
     for _ = 1, 20 do gentle_mutate() end
     for key, value in pairs(before) do
-      assert_equal(local_value("voices")[1].grain[key], value, "source " .. source .. ": grain " .. key .. " skipped")
+      assert_equal(local_value("voices")[1].values[key], value, "source " .. source .. ": grain " .. key .. " skipped")
     end
   end
 end)
@@ -184,7 +193,7 @@ end)
 local function randomized_ids()
   local ids = {}
   if voice_uses_synth(1) then
-    for key in pairs(local_value("voices")[1].params) do
+    for _, key in ipairs(local_value("voices")[1].param_order) do
       if key ~= "amp" then ids[#ids + 1] = "v1_" .. key end
     end
   elseif voice_uses_buffer(1) then
@@ -325,14 +334,14 @@ test("a randomize of another voice, a recall or a mutation of the voice clears t
   params:set("v2_source", 10)                           -- input: grain params only
   randomize_voice(2)
   local discrete = local_value("DISCRETE_GRAIN_KEYS")
-  discrete.size = 1; discrete.pitch = 1                 -- only grain spread may mutate
+  discrete.grain_size = 1; discrete.grain_pitch = 1     -- only grain spread may mutate
   local spread = params:get("v2_grain_spread")
   for _ = 1, 200 do                                     -- spread mutates in a fifth of the steps
     gentle_mutate()
     if params:get("v2_grain_spread") ~= spread then break end
     assert_true(undo_available(2), "a step that changes nothing on the voice keeps the undo")
   end
-  discrete.size = nil; discrete.pitch = nil
+  discrete.grain_size = nil; discrete.grain_pitch = nil
   assert_true(params:get("v2_grain_spread") ~= spread, "grain spread mutated")
   assert_equal(local_value("undo"), nil, "a mutation of grain spread on the voice clears it")
 end)
@@ -464,25 +473,23 @@ test("mutations never move amp or pan, nor any value of a stopped voice (#410)",
   local stopped = {}
   for _, voice_idx in ipairs({ 3, 4 }) do stopped[voice_idx] = deep_copy(voices[voice_idx]) end
   local levels = {}
-  for voice_idx = 1, 2 do levels[voice_idx] = { amp = voices[voice_idx].params.amp, pan = voices[voice_idx].params.pan } end
+  for voice_idx = 1, 2 do levels[voice_idx] = { amp = voices[voice_idx].values.amp, pan = voices[voice_idx].values.pan } end
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
   math.randomseed(9)
   local moved = false
   for _ = 1, 50 do
-    local before = voices[1].params.freq
+    local before = voices[1].values.freq
     gentle_mutate()
-    if voices[1].params.freq ~= before then moved = true end
+    if voices[1].values.freq ~= before then moved = true end
   end
   assert_true(moved, "the running voices mutate")
   for voice_idx = 1, 2 do
-    assert_equal(voices[voice_idx].params.amp, levels[voice_idx].amp, "voice " .. voice_idx .. "'s amp never mutates")
-    assert_equal(voices[voice_idx].params.pan, levels[voice_idx].pan, "voice " .. voice_idx .. "'s pan never mutates")
+    assert_equal(voices[voice_idx].values.amp, levels[voice_idx].amp, "voice " .. voice_idx .. "'s amp never mutates")
+    assert_equal(voices[voice_idx].values.pan, levels[voice_idx].pan, "voice " .. voice_idx .. "'s pan never mutates")
   end
   for voice_idx, before in pairs(stopped) do
-    for _, part in ipairs({ "params", "grain" }) do
-      for key, value in pairs(before[part]) do
-        assert_equal(voices[voice_idx][part][key], value, "stopped voice " .. voice_idx .. "'s " .. part .. "." .. key)
-      end
+    for key, value in pairs(before.values) do
+      assert_equal(voices[voice_idx].values[key], value, "stopped voice " .. voice_idx .. "'s " .. key)
     end
   end
 end)
@@ -496,9 +503,9 @@ test("the drift leaves a stopped voice's grain pitch and buffer position (#410)"
   params:set("v1_grain_pitch", 1.5); params:set("v1_buf_pos", 0.5)
   math.randomseed(4)
   for _ = 1, 50 do drift_update() end
-  assert_equal(voices[3].grain.pitch, 1.5, "a stopped voice's grain pitch does not drift")
-  assert_equal(voices[3].grain.buf_pos, 0.5, "nor its buffer position")
-  assert_true(voices[1].grain.pitch ~= 1.5 and voices[1].grain.buf_pos ~= 0.5, "a running voice's do")
+  assert_equal(voices[3].values.grain_pitch, 1.5, "a stopped voice's grain pitch does not drift")
+  assert_equal(voices[3].values.buf_pos, 0.5, "nor its buffer position")
+  assert_true(voices[1].values.grain_pitch ~= 1.5 and voices[1].values.buf_pos ~= 0.5, "a running voice's do")
 end)
 
 test("a drift tick brings a param set elsewhere to the 256's fader page (#410)", function()

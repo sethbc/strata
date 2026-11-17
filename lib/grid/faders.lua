@@ -32,7 +32,7 @@ return function(S)
   -- that have it (sub has none). The engine pans buffer and input grains too.
   function voice_level_fader_keys(voice_idx)
     local keys = {"amp"}
-    if S.voices[voice_idx].params.pan ~= nil then table.insert(keys, "pan") end
+    if S.lib.voices.is_synth_key(voice_idx, "pan") then table.insert(keys, "pan") end
     return keys
   end
 

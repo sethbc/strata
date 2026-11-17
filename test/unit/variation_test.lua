@@ -83,7 +83,7 @@ test("variation params default to 3.1's sound and reach the engine", function()
     for key, default in pairs(VARIATION_DEFAULTS) do
       local id = "v" .. voice_idx .. "_" .. key
       assert_equal(params:get(id), default, id .. " defaults to " .. default)
-      assert_equal(S.voices[voice_idx].extras[key], default, "voice " .. voice_idx .. " stores " .. key)
+      assert_equal(S.voices[voice_idx].values[key], default, "voice " .. voice_idx .. " stores " .. key)
     end
   end
   assert_equal(params:lookup_param("v1_intervals").options[1], "off")
@@ -98,7 +98,7 @@ test("variation params default to 3.1's sound and reach the engine", function()
     assert_equal(last_grain(context, 2, name), value, name .. " " .. value .. " on start")
   end
   for index = 1, 8 do assert_equal(last_grain(context, 2, "interval" .. index), 0, "interval" .. index .. " 0") end
-  assert_near(last_grain(context, 2, "scaleNote"), note_of(S.voices[3].params.freq), 1e-9, "scaleNote is the freq's note")
+  assert_near(last_grain(context, 2, "scaleNote"), note_of(S.voices[3].values.freq), 1e-9, "scaleNote is the freq's note")
   -- the controls reach a running voice as fractions where the param is a percentage
   context.clear_engine_calls()
   params:set("v3_reverse", 50); params:set("v3_interval_prob", 25); params:set("v3_pitch_jitter", 7)
@@ -113,7 +113,7 @@ test("variation params default to 3.1's sound and reach the engine", function()
   context.clear_engine_calls()
   params:set("v5_reverse", 30)
   assert_equal(#context.calls_named("setGrainParam"), 0, "nothing for a stopped voice")
-  assert_equal(S.voices[5].extras.reverse, 30)
+  assert_equal(S.voices[5].values.reverse, 30)
 end)
 
 test("interval sets send their semitones and count", function()
@@ -194,7 +194,7 @@ test("a quantized freq moves by scale tones on slow encoder and arc turns", func
           case.name .. ": the tone nearest the travel (" .. string.format("%.3f", start + travel) .. ")")
         assert_true(math.abs(c_major_step(rounded) - c_major_step(previous_note)) <= 1,
           case.name .. ": never skips a tone in one turn (" .. previous_note .. " -> " .. rounded .. ")")
-        assert_near(local_value("S").voices[1].params.freq, freq, 1e-6, case.name .. ": stored as shown")
+        assert_near(local_value("S").voices[1].values.freq, freq, 1e-6, case.name .. ": stored as shown")
         if first_change == nil and rounded ~= 69 then first_change = math.abs(travel) end
         previous_note = rounded
       end
@@ -332,7 +332,7 @@ test("quantize snaps freq on all seven synth voices but never index, fold or the
     assert_near(params:get(prefix .. "freq"), 440, 1e-6, prefix .. "freq snaps when quantize turns on")
     params:set(prefix .. "freq", 290)
     assert_near(params:get(prefix .. "freq"), freq_of(62), 1e-6, prefix .. "freq 290 Hz snaps to D4")
-    assert_near(S.voices[voice_idx].params.freq, freq_of(62), 1e-6, "stored snapped")
+    assert_near(S.voices[voice_idx].values.freq, freq_of(62), 1e-6, "stored snapped")
     local main_key = S.constants.MAIN_PARAMS[S.voices[voice_idx].name].key
     for _, key in ipairs(S.voices[voice_idx].param_order) do
       if key ~= "freq" then
@@ -459,7 +459,7 @@ test("scaleNote follows a freq change, a root change, a quantize change and a so
   params:set("v1_quantize", 1)
   assert_true(#sent_grain(context, 0, "scaleNote") >= 1, "quantize on resends it")
   params:set("v1_source", 1)
-  assert_near(last_grain(context, 0, "scaleNote"), note_of(S.voices[1].params.freq), 1e-9, "back on the synth")
+  assert_near(last_grain(context, 0, "scaleNote"), note_of(S.voices[1].values.freq), 1e-9, "back on the synth")
   -- the root change reaches every running voice
   toggle_voice(5)
   context.clear_engine_calls()
@@ -509,7 +509,7 @@ test("variation fields round-trip through a scene", function()
     for key, value in pairs(values) do
       local id = "v" .. voice_idx .. "_" .. key
       assert_near(params:get(id), value, 1e-9, id .. " recalled")
-      assert_near(S.voices[voice_idx].extras[key], value, 1e-9, id .. " stored")
+      assert_near(S.voices[voice_idx].values[key], value, 1e-9, id .. " stored")
     end
     assert_near(params:get("v" .. voice_idx .. "_freq"), captured_freq[voice_idx], 1e-6, "freq recalled exactly")
   end
@@ -658,7 +658,7 @@ test("a PSET whose quantize differs from the current value loads the voice's exa
     local prefix = "v" .. voice_idx .. "_"
     assert_equal(params:get(prefix .. "quantize"), 0, prefix .. "quantize off, as saved")
     assert_near(params:get(prefix .. "freq"), 450, 1e-9, prefix .. "freq 450 Hz, as saved (quantize on before)")
-    assert_near(S.voices[voice_idx].params.freq, 450, 1e-9, prefix .. "freq stored as saved")
+    assert_near(S.voices[voice_idx].values.freq, 450, 1e-9, prefix .. "freq stored as saved")
   end
   local sent = {}
   for _, call in ipairs(context.calls_named("setVoiceParam")) do
@@ -698,7 +698,7 @@ test("a scale or root change re-snaps a quantized freq, and a PSET saved after i
   params:set("v1_freq", freq_of(64)); params:set("v2_freq", freq_of(64))       -- E4
   params:set("scale", option_index("scale", "Natural Minor"))
   assert_near(params:get("v1_freq"), freq_of(63), 1e-9, "E4 snaps to Eb4 in C minor (a tie goes down)")
-  assert_near(S.voices[1].params.freq, freq_of(63), 1e-9, "stored snapped")
+  assert_near(S.voices[1].values.freq, freq_of(63), 1e-9, "stored snapped")
   assert_near(params:get("v2_freq"), freq_of(64), 1e-9, "a voice without quantize keeps E4")
   local pset_path = context.data_dir .. "strata-03.pset"
   params:write(pset_path)
@@ -752,7 +752,7 @@ test("a freq stored behind the filter's back between two turns restarts the shad
   enc_param_delta(3, "v1_freq", 1)                          -- the shadow at 69.8: A4
   -- a path that skips the filter changed the stored freq (the stored value
   -- is then not what the filter last returned)
-  local_value("S").voices[1].params.freq = freq_of(64)
+  local_value("S").voices[1].values.freq = freq_of(64)
   enc_param_delta(3, "v1_freq", 1)                          -- from the param's A4: 69.8 again
   assert_near(params:get("v1_freq"), 440, 1e-6, "the turn starts again from its own value: A4, not E5")
 end)
