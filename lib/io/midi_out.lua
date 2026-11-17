@@ -554,6 +554,22 @@ return function(S)
     request_redraw()
   end)
 
+  -- As the menu closes, after S.lib.io_ports' own hook (included first) has
+  -- told every move: each port whose device is still owed notes pays them
+  -- there. A device moved away and back to its port in one visit is told
+  -- nothing, since the port holds what it held before (#747)
+  function M.reconcile_owed()
+    if state.stopped then return end
+    local paid = false
+    for port = 1, S.lib.io_ports.PORTS.count do
+      local name = S.lib.io_ports.device(port)
+      if name ~= nil and state.left_with[name] ~= nil and pay_owed(port, name) then paid = true end
+    end
+    if paid then request_redraw() end
+  end
+
+  S.register_menu_close(function() M.reconcile_owed() end)
+
   ---------------------------------------------------------------------------
   -- Params (PSET-only, group strata_out_midi)
   ---------------------------------------------------------------------------
