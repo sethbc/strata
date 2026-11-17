@@ -824,6 +824,12 @@ return function(S)
     reconcile_engine(n)
   end
 
+  -- LFO n's home routing changed (S.lib.matrix.set_home, a load or an
+  -- apply of the matrix's block)
+  function M.home_changed(n)
+    settings_changed(n, false)
+  end
+
   -- A control param's edit (rate, depth, offset, phase, mod amounts): the
   -- next step sends it (a control param's action never calls the engine),
   -- at once for a hand edit; an edit made while S.deferrable_write is set
