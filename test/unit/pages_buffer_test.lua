@@ -2039,6 +2039,8 @@ test("BUFFER's slices field shows the mode and the count, -- for an empty slot",
   redraw()
   assert_equal(field_named(context, "slices").value, "--", "an empty slot")
   assert_true(field_named(context, "slices").cursor)
+  -- the final review's Lua B, Minor 3: K3 opens nothing on an empty slot
+  assert_equal(hint_text(context), "K2:ld/clr", "an empty slot's slices field names no K3")
   load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 2))
   redraw(); assert_equal(field_named(context, "slices").value, "off", "audio, no slices")
   S.lib.samples.settings(1).mode, fake.markers[1] = 2, { 0, 1, 2, 3 }

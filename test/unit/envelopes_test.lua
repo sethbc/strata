@@ -490,4 +490,25 @@ test("a step resolves each envelope routing once and owns needs no second resolu
   assert_true(envelopes.owns(3), "and without the id")
 end)
 
+-- The final review's Lua B, Minor 1: ALT+E3 turns an envelope's control
+-- rows finely (enc_param_delta), and the ALT hint says so; loop, an option,
+-- has no fine turn
+test("MOD's ALT hint names E3:fine on an envelope's control rows, not on loop", function()
+  local context, S = loaded()
+  h.show_page("MOD")
+  assert_true(S.lib.pages_mod.open_settings("env1"))
+  key(1, 1); redraw()
+  assert_equal(h.hint_text(context), "E3:fine", "attack with ALT")
+  local before = params:get("v1_env_attack")
+  enc(3, 1)
+  local fine = params:get("v1_env_attack") - before
+  key(1, 0)
+  params:set("v1_env_attack", before)
+  enc(3, 1)
+  assert_true(fine > 0 and fine < params:get("v1_env_attack") - before, "ALT+E3 turns it finer than E3")
+  enc(2, 5); key(1, 1); redraw()
+  assert_equal(h.hint_text(context), "", "loop with ALT: no fine turn")
+  key(1, 0)
+end)
+
 end

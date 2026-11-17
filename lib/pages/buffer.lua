@@ -725,14 +725,18 @@ return function(S)
   -- The hint row's keys (redraw() draws the "hints" flash instead while
   -- one shows): while K2, ALT+K2 or ALT+K3 is down, what its release will
   -- do, changing at hold_seconds (the frame clock redraws: animates); else
-  -- "edit" on the slices field, "stop" while the cursor slot records or is
+  -- "edit" on the slices field of a slot with audio, "stop" while the cursor slot records or is
   -- armed, "..." while its take that ended waits for the engine (K3 does
   -- nothing then)
   local function buffer_hints(alt_held)
     local texts, at = held_hint()
     if texts then return util.time() - at >= PAGE.hold_seconds and texts[2] or texts[1] end
     if alt_held then return "K2:rnd/fill K3:sv/trim" end
-    if cursor_field().name == "slices" then return "K2:ld/clr K3:edit" end
+    if cursor_field().name == "slices" then
+      -- an empty slot has no slices to edit: K3 only flashes so
+      local none = S.lib.ui_slice_editor.slot_text(cursor_slot()) == S.lib.ui_slice_editor.EDITOR.none_text
+      return none and "K2:ld/clr" or "K2:ld/clr K3:edit"
+    end
     local buffer = S.buffers[cursor_slot()]
     local record_hint = buffer.finishing and "..." or (buffer.recording and "stop" or "rec")
     return "K2:ld/clr K3:" .. record_hint

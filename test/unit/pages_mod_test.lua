@@ -884,7 +884,7 @@ test("the settings view lays out with each row selected", function()
   S.register_mod_source({ key = "long", name = "LONG", section = "probes", range = { 0, 1 },
     value = function() return 0 end, fields = function()
       return { { label = string.rep("W", 30), value = function() return string.rep("W", 30) end,
-        press = function() end } }
+        enc = function() end, press = function() end } }
     end })
   assert_true(S.lib.pages_mod.open_settings("long")); redraw()
   assert_screen_layout(context, "the settings view, a 30-letter label from a function")
@@ -980,6 +980,33 @@ test("the hint row names each row's keys", function()
   assert_equal(hint_text(context), "K2:clear K3:learn E3:group", "a row with a target")
   key(1, 0)
   assert_screen_layout(context, "the hints")
+end)
+
+-- The final review's Lua B, Minor 6: the envelope and sequence rows at their
+-- widest are layout states, so the layout tests and the renders draw them
+test("MOD's layout states draw the envelope and sequence rows at their widest", function()
+  local wanted = {
+    ["EN7 at 999ms 999ms"] = "999ms 999ms",
+    ["EN7 at ~999ms 49ms, routed to a Lua destination"] = "~999ms 49ms",
+    ["RS4 clocked by voice 7 at 16/16"] = "voice 7 16/16",
+    ["EN7's settings at its widest"] = "999ms",
+    ["RS4's settings at 16 values, the new row"] = "new",
+  }
+  local found = 0
+  for name, text in pairs(wanted) do
+    local context, S = loaded()
+    local record = S.registry.pages[S.constants.UI_PAGES.index.MOD]
+    for _, state in ipairs(record.layout_states) do
+      if state.name == name then
+        found = found + 1
+        state.setup(context)
+        redraw()
+        assert_true(screen_shows(context, text), name .. ": shows " .. text)
+        assert_screen_layout(context, name)
+      end
+    end
+  end
+  assert_equal(found, 5, "the five states")
 end)
 
 end
