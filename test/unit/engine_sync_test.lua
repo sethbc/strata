@@ -1606,4 +1606,63 @@ test("a start and a voice sync carry the factor", function()
   sync.clear_engine_factor("follow", "v1_buf_scan")
 end)
 
+-- A call as test/fixtures/3.7.0-start-calls.lua writes it: name(args),
+-- numbers "%.9g", strings "%q"
+local function start_call_line(call)
+  local parts = {}
+  for index = 1, #call.args do
+    local value = call.args[index]
+    parts[index] = type(value) == "number" and string.format("%.9g", value) or string.format("%q", tostring(value))
+  end
+  return call.name .. "(" .. table.concat(parts, ", ") .. ")"
+end
+
+-- A start's lines with the run of setVoiceParam after voiceOn and the
+-- hooks' two (attackTime, releaseTime) sorted: 3.7.0 sent that run in a
+-- pairs() order; nothing else moves
+local START_HOOK_SENDS = 2
+local function start_canonical(lines)
+  local out = {}
+  for index, line in ipairs(lines) do out[index] = line end
+  local voice_on
+  for index, line in ipairs(out) do
+    if line:match("^voiceOn%(") then voice_on = index end
+  end
+  assert_true(voice_on ~= nil, "the start sends voiceOn")
+  local first = voice_on + START_HOOK_SENDS + 1
+  local last = first - 1
+  while out[last + 1] and out[last + 1]:match("^setVoiceParam%(") do last = last + 1 end
+  local run = {}
+  for index = first, last do run[#run + 1] = out[index] end
+  table.sort(run)
+  for offset, line in ipairs(run) do out[first + offset - 1] = line end
+  return out
+end
+
+-- The groundwork before 3.8 (design section 2): a start sends 3.7.0's
+-- messages, the synth params' run compared as a set
+test("a voice start sends 3.7.0's messages", function()
+  math.randomseed(37)
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  for voice = 1, S.constants.NUM_VOICES do
+    if S.voices[voice].active then toggle_voice(voice) end
+  end
+  params:set("v3_source", 2)  -- buffer 1
+  local fixture = dofile(h.repo_root .. "/test/fixtures/3.7.0-start-calls.lua")
+  for _, start in ipairs({{"voice_1", 1}, {"voice_4", 4}, {"buffer_voice_3", 3}}) do
+    local label, voice = start[1], start[2]
+    context.clear_engine_calls()
+    toggle_voice(voice)
+    assert_true(S.voices[voice].active, label .. " started")
+    local lines = {}
+    for _, call in ipairs(context.engine_calls) do lines[#lines + 1] = start_call_line(call) end
+    local expected, actual = start_canonical(fixture[label]), start_canonical(lines)
+    for index = 1, math.max(#expected, #actual) do
+      assert_equal(actual[index], expected[index], label .. ": call " .. index)
+    end
+  end
+end)
+
 end
