@@ -3253,7 +3253,7 @@ test("a scenes file below format 9 is set aside whole, never converted", functio
     assert_equal(file_text(dir .. "scenes.data.bak"), text, case.name .. ": whole, as scenes.data.bak")
     assert_equal(S.scene_file.problem, "older", case.name .. ": SETUP names it as older")
     assert_equal(S.scene_file.backup, dir .. "scenes.data.bak", case.name .. ": and its backup")
-    assert_equal(printed_count(context, "older than format 9"), 1, case.name .. ": one console line names the floor")
+    assert_equal(printed_count(context, "older than format " .. S.constants.SCENE_FORMAT_FLOOR), 1, case.name .. ": one console line names the floor")
     -- the next save writes this session's scenes beside the backup, which stays
     capture_scene(3)
     cleanup()
@@ -3340,12 +3340,12 @@ test("a 3.7 scenes file is set aside whole and reads as older", function()
   assert_equal(S.lib.ui_flash.text("hints"), "scenes older (SETUP)", "the start's flash says older")
   local lines = 0
   for _, line in ipairs(context.printed) do
-    if line:find("format 8", 1, true) and line:find("format 9", 1, true) then lines = lines + 1 end
+    if line:find("format 8", 1, true) and line:find("format " .. S.constants.SCENE_DATA_VERSION, 1, true) then lines = lines + 1 end
   end
   assert_equal(lines, 1, "one console line names format 8 and format 9")
   capture_scene(1)
   assert_true(save_scenes_to_disk(), "saved")
-  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 9, "the next save writes version 9")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, S.constants.SCENE_DATA_VERSION, "the next save writes the build's format")
   assert_equal(S.scene_file.problem, "older", "SETUP still names the set-aside file")
   assert_equal(file_text(dir .. "scenes.data.bak"), text, "and the backup stays")
   cleanup()
@@ -3371,7 +3371,7 @@ test("an older file still in place is not autosaved over", function()
   assert_equal(S.lib.scenes.autosave(), nil, "the autosave does not write")
   assert_equal(file_text(dir .. "scenes.data"), text, "the older file is as it was")
   assert_true(save_scenes_to_disk(), "a save from SETUP writes")
-  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 9, "format 9")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, S.constants.SCENE_DATA_VERSION, "the build's format")
   assert_equal(S.scene_file.problem, nil, "and the problem is over")
 end)
 
@@ -3387,9 +3387,10 @@ test("a file newer than the build is set aside and its line names one format", f
   S = local_value("S")
   assert_equal(file_text(dir .. "scenes.data.bak"), text, "set aside whole")
   assert_equal(S.scene_file.problem, "unreadable", "a newer file is unreadable, not older")
-  assert_equal(printed_count(context, "9 to 9"), 0, "the line does not say 9 to 9")
-  assert_equal(printed_count(context, "version 10"), 1, "one line names the file's version")
-  assert_equal(printed_count(context, "format 9"), 1, "and the one format this build reads")
+  local version = S.constants.SCENE_DATA_VERSION
+  assert_equal(printed_count(context, version .. " to " .. version), 0, "the line does not say 9 to 9")
+  assert_equal(printed_count(context, "version " .. (version + 1)), 1, "one line names the file's version")
+  assert_equal(printed_count(context, "format " .. version), 1, "and the one format this build reads")
 end)
 
 -- The first path at which two values differ, or nil when they are equal
@@ -3430,7 +3431,7 @@ test("a format 9 file loads with nothing changed", function()
   local before = deep_copy(S.scenes)
   local dir = context.data_dir .. "strata/"
   os.execute("mkdir -p '" .. dir .. "'")
-  assert_true(S.lib.data_files.write(dir .. "scenes.data", { version = 9, scenes = deep_copy(S.scenes) }), "written")
+  assert_true(S.lib.data_files.write(dir .. "scenes.data", { version = S.constants.SCENE_DATA_VERSION, scenes = deep_copy(S.scenes) }), "written")
   context = load_strata({ data_subdir = "format_nine" })
   S = local_value("S")
   for slot = 1, S.constants.NUM_SCENES do
@@ -3440,7 +3441,7 @@ test("a format 9 file loads with nothing changed", function()
   assert_true(S.scenes[1].populated and S.scenes[5].populated, "the saved scenes load")
   assert_true(not util.file_exists(dir .. "scenes.data.bak"), "nothing is set aside")
   assert_true(save_scenes_to_disk(), "saved")
-  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, 9, "the save writes version 9")
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, S.constants.SCENE_DATA_VERSION, "the save writes the build's format")
   cleanup()
 end)
 

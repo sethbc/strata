@@ -660,7 +660,7 @@ test("the start's flash names an older scenes file beside unreadable buffers", f
   load_strata({ data_subdir = subdir })
   local S = local_value("S")
   local text = S.lib.ui_flash.text("hints")
-  assert_equal(text, "data files older/bad (SETUP)")
+  assert_equal(text, "data files not loaded (SETUP)")
   assert_true(S.lib.ui_header.hint_fits(text), "it fits the hint row")
 end)
 
