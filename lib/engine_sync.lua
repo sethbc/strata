@@ -5,9 +5,12 @@
 -- grain keys and syncs included). The functions that were global stay
 -- global, as does engine_param_value; engine_mod_source, with_lfo_offsets,
 -- send_engine_value and grain_key_message are fields of this module's table
--- (S.lib.engine_sync) for the code that calls them: engine_mod_source and
--- grain_key_message in lib/params_setup.lua, the other two in lib/lfos.lua
--- and lib/matrix.lua (the LFO clock); start_voice for the pattern clock (lib/sequencer.lua);
+-- (S.lib.engine_sync) for the code that calls them: engine_mod_source in
+-- lib/voices.lua (the crossmod record), grain_key_message in
+-- lib/params_setup.lua, with_lfo_offsets in lib/matrix.lua,
+-- lib/expression.lua and lib/delay_sync.lua, send_engine_value in those
+-- and lib/lfos.lua, lib/envelopes.lua, lib/scan.lua and
+-- lib/params_setup.lua; start_voice for the pattern clock (lib/sequencer.lua);
 -- add_voice_sender for lib/params_setup.lua's voice params, whose sends
 -- to a stopped voice the send budget leaves uncounted (#642).
 -- 3.4's hooks are fields too: the base override (set_base_override,

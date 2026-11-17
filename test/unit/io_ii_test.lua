@@ -1017,7 +1017,7 @@ test("leaving the bus sends at most 15 lines at once; the offs past 14 are owed 
   end
 end)
 
--- Whether a list of lines holds one of Teletype's handlers, or the reset of them
+-- Whether a list of lines holds one of Teletype's three handlers
 local function has_handler(lines)
   for _, line in ipairs(lines) do
     for _, handler in ipairs(HANDLERS) do
@@ -1069,8 +1069,7 @@ test("strata leads turned straight to teletype leads sends the handlers only onc
   assert_true(not has_handler(at_once), "no handler with the leave's lines")
   for index = 1, 3 do
     local lines = step()
-    assert_true(not has_handler(lines), "no handler at step " .. index .. ": " .. table.concat(lines, "|"))
-    assert_true(#lines <= 15, "at most 15 lines in an instant")
+    assert_equal(#lines, 0, "step " .. index .. " sends nothing while the leave's lines go: " .. table.concat(lines, "|"))
   end
   assert_equal(table.concat(step(), "|"), table.concat(HANDLERS, "|"), "the three handlers, in order, at the 4th step")
   for _ = 1, 10 do assert_equal(#step(), 0, "nothing more on later steps") end

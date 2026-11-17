@@ -3476,7 +3476,7 @@ test("a file newer than the build is set aside and its line names one format", f
   assert_equal(file_text(dir .. "scenes.data.bak"), text, "set aside whole")
   assert_equal(S.scene_file.problem, "unreadable", "a newer file is unreadable, not older")
   local version = S.constants.SCENE_DATA_VERSION
-  assert_equal(printed_count(context, version .. " to " .. version), 0, "the line does not say 9 to 9")
+  assert_equal(printed_count(context, version .. " to " .. version), 0, "the line does not say " .. version .. " to " .. version)
   assert_equal(printed_count(context, "version " .. (version + 1)), 1, "one line names the file's version")
   assert_equal(printed_count(context, "format " .. version), 1, "and the one format this build reads")
 end)
@@ -4079,6 +4079,41 @@ test("with no backup name free the live scenes stay", function()
     assert_true(lines[1]:find("); the live scenes stay", 1, true) ~= nil, lines[1])
     if why then assert_true(lines[1]:find("(" .. why .. ")", 1, true) ~= nil, lines[1]) end
   end
+end)
+
+test("a silent PSET read takes the PSET's scenes and prints no scenes loaded line", function()
+  local context, S = pset_session()
+  local pset_1, _, side_1 = pset_files(context, 1)
+  scramble_state(29); S.lib.scenes.save(3)
+  params:write(pset_1)
+  local held = S.lib.data_files.encode(S.scenes)
+  S.lib.scenes.set_name(3, "later")  -- then a PSET save of these: the load needs no backup
+  params:write((pset_files(context, 2)))
+  params:read(pset_1, true)
+  assert_equal(S.lib.data_files.encode(S.scenes), held, "PSET 1's scenes taken")
+  assert_equal(#lines_holding(context, "scenes loaded from " .. side_1), 0, "no scenes loaded line")
+  params:read(pset_1)
+  assert_equal(#lines_holding(context, "scenes loaded from " .. side_1), 1, "a read that is not silent prints it")
+end)
+
+test("a PSET's scenes refused in a session whose live file is blocked say so on the hint row too", function()
+  local subdir = "pset-blocked-" .. fresh_name()
+  local live_dir = data_root .. subdir .. "/strata/"
+  -- every backup name is taken (by a folder): the newer file cannot be moved aside
+  os.execute("mkdir -p '" .. live_dir .. "scenes.data.bak'")
+  for number = 2, 9 do os.execute("mkdir -p '" .. live_dir .. "scenes.data.bak." .. number .. "'") end
+  h.write_text(live_dir .. "scenes.data", tabutil_text({ version = 99, scenes = {} }))
+  local context, S = pset_session(subdir)
+  assert_equal(S.scene_autosave_blocked, true, "the live file blocks the autosave")
+  local pset_1, _, side_1 = pset_files(context, 1)
+  scramble_state(27); S.lib.scenes.save(1)
+  params:write(pset_1)
+  scramble_state(28); S.lib.scenes.save(2)  -- in no PSET, and not on disk
+  local before = S.lib.data_files.encode(S.scenes)
+  params:read(pset_1)
+  assert_equal(S.lib.data_files.encode(S.scenes), before, "the live scenes stay")
+  assert_equal(#lines_holding(context, "scenes from " .. side_1 .. " not loaded"), 1, "one console line")
+  assert_equal(S.lib.ui_flash.text("hints"), S.lib.scenes.PSET_SCENES.refused, "and the hint row says so")
 end)
 
 test("an edit from an earlier session still counts; a PSET save then a new session makes no backup", function()

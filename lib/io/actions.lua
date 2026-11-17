@@ -57,7 +57,7 @@ return function(S)
   function M.next_scene()
     local scenes = S.lib.scenes
     local n = scenes.next_slot(S.current_scene, scenes.playable_slots(1, NUM_SCENES), {100, 0, 0})
-    if n == nil then return ignored("next_scene", "no scene is saved") end
+    if n == nil then return ignored("next_scene", "no scene can play") end
     return M.recall_scene(n)
   end
 

@@ -144,7 +144,7 @@ return function(S)
       when = function(voice_idx) return M.uses_buffer(voice_idx) end,
     },
     layout_states = layout_states,
-    fader = {{keys = {"loop_start", "loop_length"}, when = M.uses_buffer, rank = 2}},
+    fader = {{keys = {LOOP.start_key, LOOP.length_key}, when = M.uses_buffer, rank = 2}},
     -- VOICE's ALT+K2 on a buffer voice's synth section (#557), after the
     -- buffer params, in row order: the start uniform 0 to random_max_start,
     -- then the length uniform from random_min_length to 1 - the start just

@@ -624,8 +624,8 @@ return function(S)
       end
     end
     if not reader then return 0, 1 end
-    local extras = S.voices[reader].values
-    return extras[LOOP.start_key] or 0, extras[LOOP.length_key] or 1
+    local values = S.voices[reader].values
+    return values[LOOP.start_key] or 0, values[LOOP.length_key] or 1
   end
 
   -- Timestamped stereo WAV of the slot's loop region in audio/strata/: true

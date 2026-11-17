@@ -17,9 +17,8 @@
 -- lower-numbered LFO's shape value. Registers the LFOs as modulation
 -- sources lfo1..lfo6, the clock's start and cleanup steps and the "lfo
 -- clock" invariant. S.selected_lfo is the LFO the LFO page and arc work
--- on. The functions that were global stay global (lfo_destination_id,
--- add_lfo_params); the rest are fields of this module's table
--- (S.lib.lfos).
+-- on. The function that was global stays global (add_lfo_params); the
+-- rest are fields of this module's table (S.lib.lfos).
 
 return function(S)
   local M = {}
@@ -226,10 +225,6 @@ return function(S)
     return S.LFO_DESTINATIONS[M.destination_index(n)]
   end
   M.destination = destination_of
-
-  function lfo_destination_id(n)
-    return destination_of(n).resolve()
-  end
 
   -- Whether LFO n runs in the engine when it plays: its destination is
   -- fast. Its label then shows "~"

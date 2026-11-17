@@ -8,7 +8,8 @@
 -- on the scale as it is turned. MAIN's randomize and mutation never touch
 -- any of it; the fader pages show the pitch, size and pan jitters (the
 -- record's fader group, rank 3), no other variation param; VOICE's ALT+K2
--- on its section draws some (the record's randomize, #557). See docs/notes/lua/variation.md.
+-- on its section draws some (the record's randomize, #557). See
+-- docs/notes/lua/variation.md.
 
 return function(S)
   local M = {}
@@ -125,8 +126,8 @@ return function(S)
 
   -- The semitones of the voice's interval set (empty while it is off)
   function M.interval_set(voice_idx)
-    local extras = S.voices[voice_idx].values
-    local set = extras.intervals
+    local values = S.voices[voice_idx].values
+    local set = values.intervals
     if set == V.set_index.octaves then return V.octaves end
     if set == V.set_index.fifths then return V.fifths end
     if set == V.set_index.chord then
@@ -141,7 +142,7 @@ return function(S)
     end
     if set == V.set_index.custom then
       local custom = {}
-      for index = 1, #V.custom_defaults do table.insert(custom, extras["custom_interval_" .. index]) end
+      for index = 1, #V.custom_defaults do table.insert(custom, values["custom_interval_" .. index]) end
       return custom
     end
     return {}

@@ -1825,6 +1825,8 @@ test("a home on a voice's main follows a source switch and leaves no stale offse
   assert_equal(matrix.offset("v1_buf_pos"), 0)
   assert_near(matrix.offset(main), 0.25 * (high - low), 1e-9, "the synth param's offset again")
   assert_near(S.engine_param_values[main], params:get(main) + 0.25 * (high - low), 1e-9)
+  context.clear_engine_calls(); lfo_step(context, 10)
+  assert_equal(#fast_calls(context, 0, 1), 0, "after the 0, later steps send nothing more on the position's channel")
 end)
 
 end
