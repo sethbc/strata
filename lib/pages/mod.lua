@@ -1021,11 +1021,13 @@ return function(S)
       local field = settings_field()
       if alt_held then return (field and type(field.fine_enc) == "function") and "E3:fine" or "" end
       -- a row with a press names it, and E2:row gives way: with an 8-letter
-      -- label the four parts pass the hint row's 128 px
+      -- label the four parts pass the hint row's 128 px. E3 is named only
+      -- where the row turns (a random sequence's new row has a press alone)
+      local edit = (field and type(field.enc) == "function") and "E3:edit" or nil
       if field and type(field.press) == "function" then
-        return joined("K2:back", "K3:" .. field_label(field), "E3:edit")
+        return joined("K2:back", "K3:" .. field_label(field), edit)
       end
-      return "K2:back E2:row E3:edit"
+      return joined("K2:back", "E2:row", edit)
     end
     if state.view == "targets" then
       local column = MOD_PAGE.columns[state.target_column]
@@ -1377,6 +1379,35 @@ return function(S)
     S.register_mod_source({key = "layout settings", name = "WWWW", section = "a section of a later release",
       range = {0, 1}, value = function() return 0 end, fields = fields})
   end
+  -- 3.7's envelope and sequence rows at their widest (the final review's
+  -- Lua B, Minor 6), on the list and in their settings views: EN7 at
+  -- 999ms 999ms, and at ~999ms 49ms routed to a Lua destination; RS4
+  -- clocked by voice 7 at 16/16
+  local function widest_envelope(approximate)
+    params:set("v7_env_attack", 0.999)
+    params:set("v7_env_decay", approximate and 0.049 or 0.999)
+    if approximate then
+      S.lib.matrix.set_routing(1, "env7", "reverb_mix"); params:set(depth_id(1), 50)
+    end
+  end
+  local function widest_sequence()
+    params:set("rseq4_clock", #S.constants.DIVISIONS.names + S.constants.NUM_VOICES)
+    params:set("rseq4_length", S.lib.random_sequences.RSEQ.values)
+    if not S.voices[S.constants.NUM_VOICES].active then toggle_voice(S.constants.NUM_VOICES) end
+    while S.lib.random_sequences.position(4) ~= S.lib.random_sequences.RSEQ.values do
+      S.lib.engine_sync.retrigger(S.constants.NUM_VOICES, 1, "step")
+    end
+  end
+  table.insert(layout_states, state("EN7 at 999ms 999ms", "source:env7", function() widest_envelope(false) end))
+  table.insert(layout_states, state("EN7 at ~999ms 49ms, routed to a Lua destination", "source:env7",
+    function() widest_envelope(true) end))
+  table.insert(layout_states, state("RS4 clocked by voice 7 at 16/16", "source:rseq4", widest_sequence))
+  table.insert(layout_states, {name = "EN7's settings at its widest", setup = function()
+    widest_envelope(true); open_settings("env7")
+  end})
+  table.insert(layout_states, {name = "RS4's settings at 16 values, the new row", setup = function()
+    widest_sequence(); open_settings("rseq4"); S.mod_page.settings_row = 4
+  end})
   -- its row in the list, whose hint names K3:edit
   table.insert(layout_states, state("a later source with settings, on its row", "source:layout settings",
     settings_probe))

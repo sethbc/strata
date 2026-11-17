@@ -502,4 +502,21 @@ test("the widest sequence fits MOD's list and its settings view", function()
   end
 end)
 
+-- The final review's Lua B, Important 1: the settings view names E3 only on
+-- a row E3 turns: the new row has a press and no turn
+test("MOD's settings view names E3 only on a row that turns", function()
+  local context, S = loaded()
+  h.show_page("MOD")
+  assert_true(S.lib.pages_mod.open_settings("rseq1"))
+  redraw()
+  assert_equal(h.hint_text(context), "K2:back E2:row E3:edit", "length: E3 turns it")
+  enc(2, 3); redraw()
+  assert_equal(h.hint_text(context), "K2:back K3:new", "new: a press, no turn")
+  enc(2, 1); redraw()
+  assert_equal(h.hint_text(context), "K2:back E2:row E3:edit", "v1: E3 turns it")
+  key(1, 1); redraw()
+  assert_equal(h.hint_text(context), "E3:fine", "v1 with ALT: its fine turn")
+  key(1, 0)
+end)
+
 end

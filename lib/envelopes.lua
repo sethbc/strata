@@ -121,7 +121,7 @@ return function(S)
   local function hold_for(voice_idx, info)
     if info and type(info.gate_seconds) == "number" then return info.gate_seconds end
     local sequencer = S.lib.sequencer
-    if sequencer and S.voices[voice_idx].extras.seq_gate == sequencer.SEQ.gate_on then
+    if S.voices[voice_idx].extras.seq_gate == sequencer.SEQ.gate_on then
       return sequencer.gate_seconds(voice_idx) or 0
     end
     return 0
@@ -362,8 +362,11 @@ return function(S)
     local rows = {}
     for index, key in ipairs(ENV.keys) do
       local id = "v" .. voice_idx .. "_" .. key
+      local function turn(d) enc_param_delta(3, id, d) end
+      -- a control row turns finely under ALT (enc_param_delta reads it):
+      -- its fine_enc says so, for MOD's ALT hint; the loop, an option, has none
       rows[index] = {label = ENV.labels[index], value = function() return tostring(params:string(id)) end,
-        enc = function(d) enc_param_delta(3, id, d) end}
+        enc = turn, fine_enc = key ~= "env_loop" and turn or nil}
     end
     return rows
   end
