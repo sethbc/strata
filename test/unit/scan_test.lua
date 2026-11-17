@@ -185,6 +185,25 @@ test("a voice that leaves its buffer stops following at once, running or stopped
   assert_equal(S.lib.engine_sync.engine_factor("v1_buf_scan"), 1, "a stopped voice's switch, at once")
 end)
 
+test("a recall that takes a stopped voice off its buffer settles its follow at once (#739)", function()
+  local context, S, tempos = loaded()
+  tempos[1] = 120
+  params:set("clock_tempo", 90)
+  params:set("v1_follow", FOLLOW.repitch)
+  lfo_step(context)
+  assert_near(S.lib.engine_sync.engine_factor("v1_buf_scan"), 0.75, 1e-9, "following on buffer 1")
+  toggle_voice(1)
+  assert_true(not S.voices[1].active, "voice 1 is stopped")
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  capture_scene(1)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  assert_near(S.lib.engine_sync.engine_factor("v1_buf_scan"), 0.75, 1e-9, "back on the buffer: the source hook")
+  recall_scene(1, 0)  -- no LFO step after it
+  assert_equal(params:get("v1_source"), S.constants.SOURCE_SYNTH, "the recall leaves the buffer")
+  assert_equal(S.lib.engine_sync.engine_factor("v1_buf_scan"), 1, "the factor goes with the recall")
+  assert_true(not S.voices[1].active, "the voice is still stopped")
+end)
+
 -- The budget's window (math.floor(util.time() / window_seconds)): run the
 -- clocks to the middle of the next one, then spend it all on reverb sends
 -- outside deferrable, so a deferrable send in it waits
