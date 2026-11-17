@@ -1142,4 +1142,62 @@ test("every voice_scene_keys default equals its param's default", function()
   assert_true(not pcall(S.lib.params_setup.voice_scene_keys, 0), "no voice 0")
 end)
 
+-- The groundwork before 3.8 (package 2a, ruling 14): the grain envelope
+-- and mode go out through send_param_to_engine, as an option index - 1,
+-- and only while the voice runs
+test("grain_env and grain_mode send envShape and grainMode x - 1, only while running", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  assert_true(S.voices[1].active and not S.voices[3].active, "voice 1 runs, voice 3 is stopped")
+  assert_true(S.engine_senders.v1_grain_env ~= nil and S.engine_senders.v1_grain_mode ~= nil,
+    "both have an engine sender")
+  context.clear_engine_calls()
+  params:set("v1_grain_env", 3); params:set("v1_grain_mode", 2)
+  local sent = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do sent[#sent + 1] = table.concat(call.args, " ") end
+  assert_equal(table.concat(sent, ","), "0 envShape 2,0 grainMode 1", "each once, as an index from 0")
+  assert_equal(S.engine_param_values.v1_grain_env, 3, "recorded as sent")
+  context.clear_engine_calls()
+  params:set("v3_grain_env", 4); params:set("v3_grain_mode", 2)
+  assert_equal(#context.calls_named("setGrainParam"), 0, "a stopped voice gets nothing")
+  assert_equal(S.voices[3].values.grain_env, 4, "but stores it")
+end)
+
+test("mod_source sends setModSource through engine_mod_source, only while running", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  assert_true(S.engine_senders.v1_mod_source_2 ~= nil, "a mod source has an engine sender")
+  context.clear_engine_calls()
+  params:set("v1_mod_source_2", 5)
+  params:set("v1_mod_source_2", 0)
+  local sent = {}
+  for _, call in ipairs(context.calls_named("setModSource")) do sent[#sent + 1] = table.concat(call.args, " ") end
+  assert_equal(table.concat(sent, ","), "0 2 4,0 2 -1", "voice 5 as engine voice 4, none as -1")
+  assert_equal(S.engine_param_values.v1_mod_source_2, 0, "recorded as sent")
+  context.clear_engine_calls()
+  params:set("v3_mod_source_1", 2)
+  assert_equal(#context.calls_named("setModSource"), 0, "a stopped voice gets nothing")
+  assert_equal(S.voices[3].values.mod_source_1, 2, "but stores it")
+end)
+
+-- #318, ruling 15: the synth record's add turns its filtered keys' own
+-- delta into a turn; no other record's
+test("the PARAMS menu's own delta turns freq but not expression's press target", function()
+  load_strata()
+  local S = local_value("S")
+  assert_equal(type(S.lib.params_setup.turn_on_own_delta), "function", "exported")
+  local turned = {}
+  for _, key in ipairs({ "freq", "press_target" }) do
+    local filter = S.registry.param_filters[key]
+    S.registry.param_filters[key] = function(voice_idx, value, previous, turn)
+      turned[key] = turn
+      return filter(voice_idx, value, previous, turn)
+    end
+  end
+  params:lookup_param("v1_freq"):delta(1)
+  assert_equal(turned.freq, true, "freq's own delta is a turn")
+  params:lookup_param("v1_press_target"):delta(1)
+  assert_equal(turned.press_target, false, "press_target's is not")
+end)
+
 end

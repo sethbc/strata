@@ -166,7 +166,7 @@ local function register_binary_row(S)
   local record = { name = "probe", count = 1, grain_keys = {}, scene_defaults = { probe_switch = 0 },
     discrete = { probe_switch = { 0, 1 } }, voice_rows = { section = "mix", rows = { "probe_switch" } }, fader = false }
   function record.add(voice_idx)
-    S.lib.params_setup.add_voice_extra(voice_idx, record, "probe_switch",
+    S.lib.params_setup.add_voice_param(voice_idx, record, "probe_switch",
       { type = "binary", name = "probe switch", behavior = "toggle", default = 0 })
   end
   S.register_voice_params(record)
@@ -211,14 +211,14 @@ test("VOICE's section position counts come from voice_page_rows", function()
     local record = { name = "probe", count = 1, scene_defaults = { probe = 0 },
       voice_rows = { section = "grain", rows = { "probe" } }, fader = false }
     function record.add(voice_idx)
-      S.lib.params_setup.add_voice_extra(voice_idx, record, "probe",
+      S.lib.params_setup.add_voice_param(voice_idx, record, "probe",
         { type = "control", name = "probe", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
     end
     S.register_voice_params(record)
     local section = { name = "probe sect", count = 1, scene_defaults = { probe_level = 0 },
       voice_rows = { section = "probe sect", rows = { "probe_level" } }, fader = false }
     function section.add(voice_idx)
-      S.lib.params_setup.add_voice_extra(voice_idx, section, "probe_level",
+      S.lib.params_setup.add_voice_param(voice_idx, section, "probe_level",
         { type = "control", name = "probe level", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
     end
     S.register_voice_params(section)

@@ -250,7 +250,7 @@ test("the filter & sends section is on VOICE for every source", function()
   end
 end)
 
-test("randomize, mutation and the fader pages leave the voice filter and sends alone", function()
+test("randomize and mutation leave the voice filter and sends alone; the fader pages show them", function()
   local context = load_strata()
   finish_startup(context)
   local S = local_value("S")
@@ -265,10 +265,15 @@ test("randomize, mutation and the fader pages leave the voice filter and sends a
   for voice_idx = 1, S.constants.NUM_VOICES do
     assert_near(params:get("v" .. voice_idx .. "_filter_mix"), 0.33, 1e-9, "voice " .. voice_idx .. " filter mix")
     assert_near(params:get("v" .. voice_idx .. "_delay_send"), 0.66, 1e-9, "voice " .. voice_idx .. " delay send")
+    -- the fader pages show the cutoff, res, mix and both sends (the groundwork
+    -- before 3.8), never the filter type, an option
+    local shown = {}
     for _, param_id in ipairs(fader_param_ids(voice_idx)) do
-      assert_true(not param_id:find("filter", 1, true) and not param_id:find("send", 1, true),
-        param_id .. " is not a voice filter or send")
+      if param_id:find("filter", 1, true) or param_id:find("send", 1, true) then shown[#shown + 1] = param_id end
     end
+    local prefix = "v" .. voice_idx .. "_"
+    assert_equal(table.concat(shown, ","), prefix .. "filter_freq," .. prefix .. "filter_res," .. prefix
+      .. "filter_mix," .. prefix .. "delay_send," .. prefix .. "reverb_send", "voice " .. voice_idx .. "'s faders")
   end
   assert_equal(params:get("delay_bypass"), 0); assert_equal(params:get("reverb_bypass"), 0)
 end)

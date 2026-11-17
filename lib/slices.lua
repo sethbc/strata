@@ -488,7 +488,7 @@ return function(S)
     name = "slices",
     count = 1,
     add = function(voice)
-      S.lib.params_setup.add_voice_extra(voice, record, SLICES.key, {
+      S.lib.params_setup.add_voice_param(voice, record, SLICES.key, {
         type = "option", name = "slices", options = SLICES.options, default = SLICES.off,
         -- the own note's slice ends with the option it was played under
         action = function() S.lib.notes.set_own_region(voice, nil) end,

@@ -119,7 +119,7 @@ return function(S)
     name = "loops",
     count = 2,
     add = function(voice_idx)
-      S.lib.params_setup.add_voice_extra(voice_idx, record, LOOP.start_key, {
+      S.lib.params_setup.add_voice_param(voice_idx, record, LOOP.start_key, {
         type = "control",
         name = "loop start",
         controlspec = controlspec.new(0, 1, "lin", 0, 0),
@@ -127,7 +127,7 @@ return function(S)
         action = function() clamp_length(voice_idx) end,
       })
       -- exponential, so short loops get fine steps
-      S.lib.params_setup.add_voice_extra(voice_idx, record, LOOP.length_key, {
+      S.lib.params_setup.add_voice_param(voice_idx, record, LOOP.length_key, {
         type = "control",
         name = "loop length",
         controlspec = controlspec.new(LOOP.min_length, 1, "exp", 0, 1),
@@ -143,7 +143,7 @@ return function(S)
       when = function(voice_idx) return M.uses_buffer(voice_idx) end,
     },
     layout_states = layout_states,
-    fader = false,
+    fader = {{keys = {"loop_start", "loop_length"}, when = M.uses_buffer, rank = 2}},
     -- VOICE's ALT+K2 on a buffer voice's synth section (#557), after the
     -- buffer params, in row order: the start uniform 0 to random_max_start,
     -- then the length uniform from random_min_length to 1 - the start just

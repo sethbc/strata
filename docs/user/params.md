@@ -211,4 +211,4 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | seq direction | forward, reverse, ping-pong, random | forward | The order the voice takes its steps |
 | seq misstep | 0-100% | 0 | The chance of a step up or down instead of the direction's |
 
-None of the extras (history to seq misstep) is changed by MAIN's randomize or the mutations, or is on the grid's fader pages; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).
+None of the extras (history to seq misstep) is changed by MAIN's randomize or the mutations. The grid's fader pages show the voice filter's cutoff, resonance and mix, both sends, a buffer voice's loop, the three jitters and the voice's attack and release, after the voice's own faders; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).

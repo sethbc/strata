@@ -1077,4 +1077,28 @@ test("128h: a position release on one row keeps another row's held key in the sa
   context.grid.press(1, 9, 2, 0); context.grid.press(1, 5, 2, 0)
 end)
 
+-- The groundwork before 3.8 (package 2a): a voice has up to 8 fader pages,
+-- all on row 5 left of the macro key at column 16
+test("the faders page reaches the last page", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.grid.plug(1, 16, 8)
+  tap(context, 1, 6, 8)  -- page 2
+  assert_equal(local_value("grid_voice_select"), 1, "voice 1 (resonator)")
+  assert_equal(fader_page_count(1), 8, "8 fader pages")
+  for x = 1, 16 do
+    local expected = x == 1 and 15 or ((x <= 8 or x == 16) and 4 or 0)
+    assert_equal(device:get_led(x, 5), expected, "row 5 column " .. x)
+  end
+  tap(context, 1, 8, 5)
+  assert_equal(local_value("param_page"), 8, "column 8 picks the last page")
+  local ids = fader_param_ids(1)
+  local shown = local_value("S").lib.grid_faders.shown_fader_ids(1)
+  assert_equal(table.concat(shown, ","), table.concat({ ids[29], ids[30], ids[31], ids[32] }, ","), "faders 29-32")
+  assert_equal(shown[4], "v1_release", "the last is the release")
+  tap(context, 1, 16, 4)
+  assert_near(params:get("v1_release"), 30, 1e-6, "row 4 column 16 sets it")
+  tap(context, 1, 16, 5)
+  assert_true(local_value("S").lib.grid_faders.shows_macros(1), "column 16 is still the macro key")
+end)
+
 end

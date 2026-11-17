@@ -114,17 +114,6 @@ local HEADER = {dots_x = 32, dot_spacing = 4, dot_size = 2, dot_level = 3, curre
 local SCENES_FIELDS = {"scene_transition_time", "scene_sequencer_enabled", "scene_sequence_length", "scene_duration",
   "scene_chance_next", "scene_chance_previous", "scene_chance_random"}
 
--- A voice's grain keys holding an option index rather than a continuous
--- value, mapped to their option count: mutation never touches them (scenes
--- read the same ranges from S.lib.params_setup.voice_scene_keys)
-local DISCRETE_GRAIN_KEYS = {
-  grain_env = #GRAIN_ENV_OPTIONS,
-  grain_mode = #GRAIN_MODE_OPTIONS
-}
-
--- A voice's grain keys gentle_mutate changes for buffer-sourced voices
-local BUFFER_MUTATION_KEYS = {"buf_pos", "buf_rate", "buf_scan"}
-
 -- Per voice type, on MAIN: the synthesis param E3 and arc ring 2 adjust
 -- (param id suffix, screen label and screen value format; the arc ring sweeps
 -- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring),
@@ -330,8 +319,6 @@ return {
   UI_PAGES = UI_PAGES,
   HEADER = HEADER,
   SCENES_FIELDS = SCENES_FIELDS,
-  DISCRETE_GRAIN_KEYS = DISCRETE_GRAIN_KEYS,
-  BUFFER_MUTATION_KEYS = BUFFER_MUTATION_KEYS,
   MAIN_PARAMS = MAIN_PARAMS,
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,

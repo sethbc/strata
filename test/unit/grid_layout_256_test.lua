@@ -16,13 +16,13 @@ test("256-grid parameter page faders set values and show them (I8)", function()
   press(2, 14)  -- select voice 2 (fm)
   local ids = fader_param_ids(2)
   assert_equal(ids[1], "v2_freq", "first fader is freq")
-  assert_equal(#ids, 6 + 6 + 9, "fm has 21 faders")
-  assert_equal(fader_page_count(2), 6, "fm has 6 fader pages")
+  assert_equal(#ids, 6 + 6 + 9 + 10, "fm has 31 faders (3.7's 21, then the voice mix, jitters, attack and release)")
+  assert_equal(fader_page_count(2), 8, "fm has 8 fader pages")
   assert_equal(ids[11], "v2_grain_env", "grain envelope follows the other grain faders")
   assert_equal(ids[12], "v2_grain_mode", "grain mode follows the envelope")
-  assert_equal(fader_page_count(1), 6, "resonator has 6 fader pages")
-  assert_equal(fader_page_count(3), 5, "folder has 5 fader pages")
-  assert_equal(fader_page_count(4), 5, "sub has 5 fader pages")
+  assert_equal(fader_page_count(1), 8, "resonator has 8 fader pages")
+  assert_equal(fader_page_count(3), 8, "folder has 8 fader pages")
+  assert_equal(fader_page_count(4), 7, "sub has 7 fader pages")
 
   press(16, 9)  -- page 1 row 1 full right -> freq max
   assert_near(params:get("v2_freq"), 2000, 1, "column 16 sets max")
@@ -48,8 +48,8 @@ test("256-grid parameter page faders set values and show them (I8)", function()
   assert_true(sub_column > 1, "40 Hz shows above column 1 (got " .. sub_column .. ")")
   assert_equal(device:get_led(sub_column, 9), 15, "sub freq LED at its column")
   press(2, 14)  -- back to voice 2 (fm)
-  assert_equal(device:get_led(6, 13), 4, "row 13 shows page 6 available")
-  assert_equal(device:get_led(7, 13), 0, "no page 7")
+  assert_equal(device:get_led(8, 13), 4, "row 13 shows page 8 available")
+  assert_equal(device:get_led(9, 13), 0, "no page 9")
 
   press(3, 13)  -- page 3: faders 9-12 = grain_pitch, grain_spread, grain_env, grain_mode
   assert_equal(device:get_led(3, 13), 15, "page 3 selected")
@@ -324,16 +324,19 @@ test("buffer faders replace synth faders for a buffer-sourced voice", function()
   local context = load_strata()
   local device = context.grid.plug(1, 16, 16)
   local press = function(x, y) context.grid.press(1, x, y, 1); context.grid.press(1, x, y, 0) end
-  press(14, 8); press(1, 14)            -- grid page 2, voice 1 (resonator: 6 fader pages)
-  press(6, 13); assert_equal(local_value("param_page"), 6)
+  press(14, 8); press(1, 14)            -- grid page 2, voice 1 (resonator: 8 fader pages)
+  press(8, 13); assert_equal(local_value("param_page"), 8)
   params:set("v1_source", 2)
   local ids = fader_param_ids(1)
   assert_equal(ids[1], "v1_buf_pos"); assert_equal(ids[2], "v1_buf_rate")
   assert_equal(ids[3], "v1_buf_scan"); assert_equal(ids[4], "v1_amp")
   assert_equal(ids[5], "v1_pan", "pan follows the level (the engine pans buffer voices)")
   assert_equal(ids[6], "v1_grain_size", "grain faders follow")
-  assert_equal(#ids, 5 + 6 + 9); assert_equal(fader_page_count(1), 5)
-  assert_equal(local_value("param_page"), 5, "fader page clamped when the source shrinks the list")
+  assert_equal(#ids, 5 + 6 + 9 + 12); assert_equal(fader_page_count(1), 8)
+  params:set("v1_source", 10)
+  assert_equal(fader_page_count(1), 7, "an input voice has 7")
+  assert_equal(local_value("param_page"), 7, "fader page clamped when the source shrinks the list")
+  params:set("v1_source", 2)
   press(1, 13); press(16, 10)           -- page 1, row 2 = buf_rate max
   assert_near(params:get("v1_buf_rate"), 4, 1e-6, "buf_rate fader")
   assert_equal(device:get_led(16, 10), 15)
@@ -1141,11 +1144,11 @@ test("256 row 13 past the voice's last fader page leaves the page", function()
   local device = context.grid.plug(1, 16, 16)
   local press = function(x, y) context.grid.press(1, x, y, 1); context.grid.press(1, x, y, 0) end
   press(14, 8)  -- page 2
-  press(3, 14)  -- voice 3 (folder): 5 fader pages
+  press(4, 14)  -- voice 4 (sub): 7 fader pages
   press(2, 13)
   assert_equal(S.param_page, 2, "page 2 is taken")
-  press(6, 13); press(16, 13)
-  assert_equal(S.param_page, 2, "pages 6 and 16 are not the voice's")
+  press(8, 13); press(16, 13)
+  assert_equal(S.param_page, 2, "pages 8 and 16 are not the voice's")
   assert_equal(device:get_led(2, 13), 15, "row 13 still shows page 2")
 end)
 
@@ -1570,6 +1573,117 @@ test("256: the position page shows and plays a slice row", function()
   grid_tap(context, 4, 1)
   assert_equal(double.plays[2].n, 20)
   assert_near(params:get("v1_buf_pos"), 0, 1e-9, "no jump")
+end)
+
+-- The groundwork before 3.8 (package 2a, ruling 12): the fader pages read
+-- the records' fader groups; 3.7's faders keep their order and pages, and
+-- the voice filter and sends, the loop (buffer voices), the jitters and
+-- the attack and release follow
+local CROSSMOD_FADERS = { "mod_source_1", "mod_amp_amt_1", "mod_freq_amt_1", "mod_source_2", "mod_amp_amt_2",
+  "mod_freq_amt_2", "mod_source_3", "mod_amp_amt_3", "mod_freq_amt_3" }
+local GRAIN_FADERS = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode" }
+local function fader_list(voice, ...)
+  local ids = {}
+  for _, keys in ipairs({ ... }) do
+    for _, key in ipairs(keys) do ids[#ids + 1] = "v" .. voice .. "_" .. key end
+  end
+  return table.concat(ids, ",")
+end
+
+test("each voice's faders are 3.7's, then the new ones, per source", function()
+  load_strata()
+  local mix = { "filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send" }
+  local rest = { "pitch_jitter", "size_jitter", "pan_jitter", "attack", "release" }
+  local loop = { "loop_start", "loop_length" }
+  local synth = { [1] = { "freq", "rq", "noise", "mod1", "mod2", "amp", "pan" }, [4] = { "freq", "drift", "amp" } }
+  local level = { [1] = { "amp", "pan" }, [4] = { "amp" } }
+  for _, voice in ipairs({ 1, 4 }) do
+    params:set("v" .. voice .. "_source", 1)
+    assert_equal(table.concat(fader_param_ids(voice), ","),
+      fader_list(voice, synth[voice], GRAIN_FADERS, CROSSMOD_FADERS, mix, rest), "voice " .. voice .. " synth")
+    params:set("v" .. voice .. "_source", 2)
+    assert_equal(table.concat(fader_param_ids(voice), ","),
+      fader_list(voice, { "buf_pos", "buf_rate", "buf_scan" }, level[voice], GRAIN_FADERS, CROSSMOD_FADERS, mix, loop,
+        rest), "voice " .. voice .. " buffer 1")
+    params:set("v" .. voice .. "_source", 10)
+    assert_equal(table.concat(fader_param_ids(voice), ","),
+      fader_list(voice, GRAIN_FADERS, level[voice], CROSSMOD_FADERS, mix, rest), "voice " .. voice .. " input")
+  end
+end)
+
+test("the page counts per voice and source", function()
+  load_strata()
+  local function counts(voice) return #fader_param_ids(voice) .. " " .. fader_page_count(voice) end
+  assert_equal(counts(1), "32 8", "resonator synth")
+  for _, voice in ipairs({ 2, 5, 6, 7 }) do assert_equal(counts(voice), "31 8", "voice " .. voice .. " synth") end
+  assert_equal(counts(3), "30 8", "folder synth")
+  assert_equal(counts(4), "28 7", "sub synth")
+  params:set("v1_source", 2); params:set("v4_source", 2)
+  assert_equal(counts(1), "32 8", "a buffer voice")
+  assert_equal(counts(4), "31 8", "sub on a buffer")
+  params:set("v1_source", 10); params:set("v4_source", 10)
+  assert_equal(counts(1), "27 7", "input")
+  assert_equal(counts(4), "26 7", "sub on input")
+end)
+
+test("the new faders follow their warp", function()
+  load_strata()
+  set_param_from_column("v1_attack", 1)
+  assert_near(params:get("v1_attack"), 0.005, 1e-9, "attack column 1 is 0.005 s")
+  set_param_from_column("v1_attack", 16)
+  assert_near(params:get("v1_attack"), 30, 1e-6, "column 16 is 30 s")
+  set_param_from_column("v1_attack", 8)
+  assert_near(params:get("v1_attack"), 0.005 * (30 / 0.005) ^ (7 / 15), 1e-6, "column 8 in exponential steps")
+  assert_equal(fader_position("v1_attack"), 8, "and shows at column 8")
+  set_param_from_column("v1_filter_freq", 1)
+  assert_near(params:get("v1_filter_freq"), 20, 1e-6, "filter_freq column 1 is 20 Hz")
+  set_param_from_column("v1_filter_freq", 16)
+  assert_near(params:get("v1_filter_freq"), 20000, 1e-3, "column 16 is 20 kHz")
+  set_param_from_column("v1_filter_freq", 8)
+  assert_near(params:get("v1_filter_freq"), 20 * 1000 ^ (7 / 15), 1e-3, "column 8 in exponential steps")
+  for _, id in ipairs({ "v1_attack", "v1_filter_freq", "v1_pitch_jitter", "v1_delay_send" }) do
+    assert_equal(fader_zero_column(id), nil, id .. " spans no 0: no zero column")
+  end
+end)
+
+test("a loop fader appears only on a buffer voice", function()
+  load_strata()
+  local function has_loop(voice)
+    local ids = table.concat(fader_param_ids(voice), ",")
+    return ids:find("_loop_start", 1, true) ~= nil, ids:find("_loop_length", 1, true) ~= nil
+  end
+  for voice = 1, 7 do
+    for _, source in ipairs({ 1, 2, 9, 10 }) do
+      params:set("v" .. voice .. "_source", source)
+      local start, length = has_loop(voice)
+      local buffer = source > 1 and source < 10
+      assert_equal(start, buffer, "voice " .. voice .. " source " .. source .. ": loop start")
+      assert_equal(length, buffer, "and loop length")
+    end
+  end
+end)
+
+test("fader groups sort by rank, and groups of one rank keep their registration order", function()
+  local function probe(name, rank)
+    local record = { name = name, count = 1, fader = { { keys = { name }, rank = rank } } }
+    function record.add(voice_idx)
+      local_value("S").lib.params_setup.add_voice_param(voice_idx, record, name,
+        { type = "control", name = name, controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+    end
+    return record
+  end
+  load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_voice_params(probe("probe_a", 1))
+    S.register_voice_params(probe("probe_b", nil))
+    S.register_voice_params(probe("probe_c", 2.5))
+  end })
+  local ids = fader_param_ids(1)
+  local tail = {}
+  for index = 7 + 6 + 9 + 1, #ids do tail[#tail + 1] = ids[index] end
+  assert_equal(table.concat(tail, ","), "v1_probe_b,v1_filter_freq,v1_filter_res,v1_filter_mix,v1_delay_send,"
+    .. "v1_reverb_send,v1_probe_a,v1_probe_c,v1_pitch_jitter,v1_size_jitter,v1_pan_jitter,v1_attack,v1_release",
+    "rank 0 after the built-ins, a rank's later group after its earlier, 2.5 between 2 and 3")
 end)
 
 end

@@ -313,7 +313,7 @@ test("a scene file's invalid loop pair is cut to fit when it loads", function()
   assert_equal(broken.loop_start, "x"); assert_equal(broken.loop_length, 2, "left for validate_scene to reject")
 end)
 
-test("randomize, mutation and the fader pages leave loops alone", function()
+test("randomize and mutation leave loops alone; a buffer voice's fader pages show them", function()
   local context = load_strata()
   finish_startup(context)
   local S = local_value("S")
@@ -331,9 +331,14 @@ test("randomize, mutation and the fader pages leave loops alone", function()
     local start, length = loop_of(voice_idx)
     assert_near(start, 0.5, 1e-9, "voice " .. voice_idx .. "'s start untouched")
     assert_near(length, 0.25, 1e-9, "voice " .. voice_idx .. "'s length untouched")
+    -- the fader pages show the loop on a buffer voice only (the groundwork before 3.8)
+    local shown = {}
     for _, param_id in ipairs(fader_param_ids(voice_idx)) do
-      assert_true(not param_id:find("loop", 1, true), param_id .. " is not a loop param")
+      if param_id:find("loop", 1, true) then shown[#shown + 1] = param_id end
     end
+    local expected = voice_uses_buffer(voice_idx) and ("v" .. voice_idx .. "_loop_start,v" .. voice_idx
+      .. "_loop_length") or ""
+    assert_equal(table.concat(shown, ","), expected, "voice " .. voice_idx .. "'s loop faders")
   end
 end)
 

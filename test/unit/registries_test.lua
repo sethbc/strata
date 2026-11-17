@@ -1,6 +1,6 @@
 -- test/unit/registries_test.lua
 -- The registries 3.2's modules add to (lib/state.lua): voice params
--- (S.registry.voice_params, add_voice_extra), scene fields, source change
+-- (S.registry.voice_params, add_voice_param), scene fields, source change
 -- hooks, param filters, LFO destinations, fx params, and S.performance.
 -- Their readers are lib/params_setup.lua, lib/engine_sync.lua,
 -- lib/scenes.lua, lib/lfos.lua, lib/ui/voice_rows.lua and lib/pages/voice.lua.
@@ -24,10 +24,10 @@ local function probe_record(overrides)
     fader = false,
   }
   function record.add(voice_idx)
-    local add_voice_extra = local_value("S").lib.params_setup.add_voice_extra
-    add_voice_extra(voice_idx, record, "probe",
+    local add_voice_param = local_value("S").lib.params_setup.add_voice_param
+    add_voice_param(voice_idx, record, "probe",
       { type = "control", name = "probe", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
-    add_voice_extra(voice_idx, record, "probe_switch",
+    add_voice_param(voice_idx, record, "probe_switch",
       { type = "binary", name = "probe switch", behavior = "toggle", default = 0 })
   end
   for key, value in pairs(overrides or {}) do record[key] = value end
@@ -93,10 +93,11 @@ test("a registered voice param is added, stored, sent and synced", function()
   assert_true(position["v1_mod_speed"] < position["voice 1 extras"], "after the cross-modulation params")
   -- after the script's own records' params (lib/history.lua's), registered
   -- at include, less those their add_first put ahead of the synthesis params
+  -- (the built-in records, under their own separators, come before extras)
   local before = 0
   for _, record in ipairs(S.registry.voice_params) do
     if record.name == "probe" then break end
-    before = before + record.count
+    if record.separator == nil then before = before + record.count end
   end
   before = before - (position["v1_" .. S.voices[1].param_order[1]] - position["voice 1: " .. S.voices[1].name] - 1)
   assert_equal(position["v1_probe"], position["voice 1 extras"] + 1 + before, "the record's params follow it")
@@ -142,7 +143,7 @@ end)
 test("a record's add_first params come before the voice's synthesis params, counted with its add's", function()
   local record = probe_record({ count = 3 })
   function record.add_first(voice_idx)
-    local_value("S").lib.params_setup.add_voice_extra(voice_idx, record, "probe_first",
+    local_value("S").lib.params_setup.add_voice_param(voice_idx, record, "probe_first",
       { type = "control", name = "probe first", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
   end
   load_with(function(S) S.register_voice_params(record) end)
@@ -432,14 +433,14 @@ local function register_row_records(S)
     discrete = {}, voice_rows = { section = "probe sect", rows = { "sect_level" }, before = "crossmod",
       when = function(voice_idx) return voice_uses_buffer(voice_idx) end } })
   function before.add(voice_idx)
-    S.lib.params_setup.add_voice_extra(voice_idx, before, "sect_level",
+    S.lib.params_setup.add_voice_param(voice_idx, before, "sect_level",
       { type = "control", name = "sect level", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
   end
   S.register_voice_params(before)
   local tail = probe_record({ name = "tail", count = 1, grain_keys = {}, scene_defaults = { tail_mode = 1 },
     discrete = { tail_mode = { 1, 2 } }, voice_rows = { section = "tail", rows = { "tail_mode" } } })
   function tail.add(voice_idx)
-    S.lib.params_setup.add_voice_extra(voice_idx, tail, "tail_mode",
+    S.lib.params_setup.add_voice_param(voice_idx, tail, "tail_mode",
       { type = "option", name = "tail mode", options = { "a", "b" }, default = 1 })
   end
   S.register_voice_params(tail)
@@ -525,7 +526,7 @@ return function(S)
   local record = {name = "late", count = 1, grain_keys = {late = "posSpread"}, scene_defaults = {late = 0},
     voice_rows = {section = "mix", rows = {"late"}}, fader = false}
   function record.add(voice_idx)
-    S.lib.params_setup.add_voice_extra(voice_idx, record, "late",
+    S.lib.params_setup.add_voice_param(voice_idx, record, "late",
       {type = "control", name = "late", controlspec = controlspec.new(0, 1, "lin", 0.01, 0)})
   end
   S.register_voice_params(record)
@@ -1220,6 +1221,153 @@ test("a modulation source's fields are checked", function()
     hint = fn } } }))
   assert_true(not ok and tostring(err):find("hint", 1, true) ~= nil, "an unknown key, named: " .. tostring(err))
   assert_equal(#S.registry.mod_sources, 2, "nothing refused was kept")
+end)
+
+-- The groundwork before 3.8 (package 2a): the built-in per-voice params are
+-- records too, registered by lib/voices.lua, so they come first
+test("the built-in records come first: synth, grain, crossmod", function()
+  local context = load_with(function(S) S.register_voice_params(probe_record()) end)
+  finish_startup(context)
+  local S = local_value("S")
+  local names = {}
+  for index = 1, 3 do names[index] = S.registry.voice_params[index].name end
+  assert_equal(table.concat(names, ","), "synth,grain,crossmod", "the first three records")
+  assert_equal(S.registry.voice_params[#S.registry.voice_params].name, "probe", "a registered record follows them")
+  local by_name = {}
+  for _, record in ipairs(S.registry.voice_params) do by_name[record.name] = record end
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    assert_equal(by_name.synth.count(voice_idx), #S.voices[voice_idx].param_order, "synth counts the voice's param_order")
+  end
+  assert_equal(by_name.grain.count, 10, "the source and the nine grain params")
+  assert_equal(by_name.crossmod.count, 10, "three slots of three, then the speed")
+  assert_equal(by_name.synth.separator, false, "the synth params sit under the voice's heading")
+  assert_equal(by_name.grain.separator, "granular")
+  assert_equal(by_name.crossmod.separator, "cross-modulation")
+end)
+
+test("count may be a function of the voice, checked per voice", function()
+  -- voice 2 gets one more param than the others
+  local record = probe_record({ count = function(voice_idx) return voice_idx == 2 and 3 or 2 end })
+  local add = record.add
+  function record.add(voice_idx)
+    add(voice_idx)
+    if voice_idx == 2 then
+      local_value("S").lib.params_setup.add_voice_param(voice_idx, record, "probe_more",
+        { type = "control", name = "probe more", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+    end
+  end
+  load_with(function(S) S.register_voice_params(record) end)
+  assert_true(params.lookup.v2_probe_more ~= nil and params.lookup.v1_probe_more == nil, "voice 2's third param")
+  -- a voice's count that is no whole number from 1 is refused at registration
+  load_with(function(S)
+    assert_true(refused(S.register_voice_params, probe_record({ name = "p2",
+      count = function(voice_idx) return voice_idx == 5 and 0 or 2 end })), "voice 5's count 0")
+    assert_true(refused(S.register_voice_params, probe_record({ name = "p3",
+      count = function(voice_idx) return voice_idx == 7 and 1.5 or 2 end })), "voice 7's count 1.5")
+  end)
+  -- and an add that adds another number for one voice fails at init, naming it
+  local ok, problem = pcall(load_with, function(S) S.register_voice_params(probe_record({ name = "p4",
+    count = function(voice_idx) return voice_idx == 6 and 3 or 2 end })) end)
+  assert_true(not ok and tostring(problem):find("p4", 1, true) ~= nil and tostring(problem):find("count", 1, true) ~= nil,
+    "voice 6's add of two against a count of 3: " .. tostring(problem))
+end)
+
+test("a record's fader, main_randomize and mutate groups are checked", function()
+  load_with(function(S)
+    local index = 0
+    local function bad(overrides)
+      index = index + 1
+      overrides.name = "bad" .. index
+      return refused(S.register_voice_params, probe_record(overrides))
+    end
+    local function keys_of() return { "probe" } end
+    local function draw() return 0 end
+    -- fader
+    assert_true(bad({ fader = true }), "fader = true")
+    assert_true(bad({ fader = { { keys = "probe" } } }), "fader keys that are neither a list nor a function")
+    assert_true(bad({ fader = { { keys = { "probe" }, when = 1 } } }), "a fader when that is no function")
+    assert_true(bad({ fader = { { keys = { "probe" }, rank = "1" } } }), "a rank that is no number")
+    assert_true(bad({ fader = { { keys = { 3 } } } }), "a fader key is a string")
+    assert_true(bad({ fader = { "probe" } }), "a fader group is a table")
+    -- main_randomize
+    assert_true(bad({ main_randomize = { { keys = { "probe" } } } }), "a missing draw")
+    assert_true(bad({ main_randomize = { { keys = 1, draw = draw } } }), "randomize keys neither list nor function")
+    assert_true(bad({ main_randomize = { { keys = { "probe" }, draw = draw, when = true } } }), "a randomize when")
+    -- mutate
+    assert_true(bad({ mutate = { { keys = { "probe" }, chance = 1.5 } } }), "a chance above 1")
+    assert_true(bad({ mutate = { { keys = { "probe" }, chance = -0.1 } } }), "a chance below 0")
+    assert_true(bad({ mutate = { { keys = { "probe" }, scale = "x" } } }), "a scale that is no number")
+    assert_true(bad({ mutate = { { keys = { "probe" }, warped = 1 } } }), "warped is a boolean")
+    assert_true(bad({ mutate = { { keys = { "probe" }, when = "x" } } }), "a mutate when")
+    assert_true(bad({ mutate = "probe" }), "mutate is a list of groups")
+    -- accepted: every documented form (false is probe_record's own)
+    S.register_voice_params(probe_record({ name = "good1", fader = { { keys = keys_of, when = keys_of, rank = 2 } },
+      main_randomize = { { keys = { "probe" }, draw = draw } },
+      mutate = { { keys = keys_of, chance = 0.5, scale = 0.2, warped = false } } }))
+  end)
+end)
+
+test("a fader key no record added for the voice refuses at init, naming the record", function()
+  local ok, problem = pcall(load_with, function(S)
+    S.register_voice_params(probe_record({ name = "faded", fader = { { keys = { "probe", "never_added" } } } }))
+  end)
+  assert_true(not ok, "refused")
+  assert_true(tostring(problem):find("faded", 1, true) ~= nil and tostring(problem):find("never_added", 1, true) ~= nil,
+    "names the record and the key: " .. tostring(problem))
+  -- a key another record added for the voice is allowed (grain's faders name amp and pan)
+  load_with(function(S)
+    S.register_voice_params(probe_record({ name = "faded", fader = { { keys = { "probe", "grain_size", "freq" } } } }))
+  end)
+  local ids = table.concat(fader_param_ids(1), ",")
+  assert_true(ids:find("v1_probe,v1_grain_size,v1_freq", 1, true) ~= nil, "the group's keys in order: " .. ids)
+end)
+
+test("voice_keys and send_order are checked; records with one separator share it", function()
+  load_with(function(S)
+    local index = 0
+    local function bad(overrides)
+      index = index + 1
+      overrides.name = "bad" .. index
+      return refused(S.register_voice_params, probe_record(overrides))
+    end
+    local function send() end
+    assert_true(bad({ voice_keys = { probe = 3 } }), "a voice key is a name, {name} or {send}")
+    assert_true(bad({ voice_keys = { probe = { name = 3 } } }), "a name is a string")
+    assert_true(bad({ voice_keys = { probe = { send = "x" } } }), "a send is a function")
+    assert_true(bad({ voice_keys = { probe = { name = "x", carry = true } } }), "carry is only false")
+    assert_true(bad({ voice_keys = function() return { probe = 1 } end }), "a function's table is checked too")
+    assert_true(bad({ grain_keys = { probe = { name = "posSpread", carry = 1 } } }), "a grain key's carry is false")
+    assert_true(bad({ send_order = { "probe", "probe" } }), "a key once")
+    assert_true(bad({ send_order = { "other" } }), "send_order names the record's sent keys")
+    assert_true(bad({ send_order = {} }), "and every one of them")
+    assert_true(bad({ send_order = "probe" }), "send_order is a list")
+    assert_true(bad({ separator = 3 }), "a separator is a string or false")
+    S.register_voice_params(probe_record({ name = "good1", grain_keys = { probe = { name = "posSpread", carry = false } },
+      voice_keys = { probe_switch = { send = send, carry = false } }, send_order = { "probe_switch", "probe" } }))
+  end)
+  -- two records with one separator: one separator before the first
+  local function probe_named(name, separator)
+    local record = { name = name, count = 1, fader = false, separator = separator }
+    function record.add(voice_idx)
+      local_value("S").lib.params_setup.add_voice_param(voice_idx, record, name,
+        { type = "control", name = name, controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+    end
+    return record
+  end
+  load_with(function(S)
+    S.register_voice_params(probe_named("probe_a", "probes"))
+    S.register_voice_params(probe_named("probe_b", "probes"))
+    S.register_voice_params(probe_named("probe_c", false))
+  end)
+  local position, separators = {}, 0
+  for index, param in ipairs(params.params) do
+    position[param.id] = index
+    if param.id == "voice 3 probes" then separators = separators + 1 end
+  end
+  assert_equal(separators, 1, "one voice 3 probes separator")
+  assert_equal(position["v3_probe_a"], position["voice 3 probes"] + 1, "the first record's param follows it")
+  assert_equal(position["v3_probe_b"], position["v3_probe_a"] + 1, "the second shares it")
+  assert_equal(position["v3_probe_c"], position["v3_probe_b"] + 1, "false: no separator")
 end)
 
 end

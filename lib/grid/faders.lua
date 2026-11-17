@@ -11,55 +11,47 @@
 
 return function(S)
   local M = {}
-  local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
   local GRID_LAYOUT = S.lib.grid_core.GRID_LAYOUT
 
-  -- A buffer-sourced voice's first faders: its buffer params, then its level
-  -- and pan (voice_level_fader_keys; the other synthesis params do nothing
-  -- while the synth is off)
-  local BUFFER_FADER_KEYS = {"buf_pos", "buf_rate", "buf_scan"}
-  -- The six grain params (envelope shape and grain mode are option params,
-  -- shown as index faders)
-  local GRAIN_FADER_KEYS = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}
-
-  local function append_fader_ids(ids, prefix, keys)
-    for _, key in ipairs(keys) do
-      table.insert(ids, prefix .. key)
-    end
-  end
-
   -- The synthesis params every source applies: level, and pan for the voices
-  -- that have it (sub has none). The engine pans buffer and input grains too.
+  -- that have it (sub has none). The engine pans buffer and input grains
+  -- too. The grain record's fader groups (lib/voices.lua) read it
   function voice_level_fader_keys(voice_idx)
     local keys = {"amp"}
     if S.lib.voices.is_synth_key(voice_idx, "pan") then table.insert(keys, "pan") end
     return keys
   end
 
-  -- Ordered param IDs for a voice's fader pages (on every layout): the voice's synthesis
-  -- params (param_order), or BUFFER_FADER_KEYS and the level and pan for a
-  -- buffer source, then the grain params, then the nine crossmod slot values
-  -- (source, amp mod, freq mod for each slot). An input source has no buffer
-  -- params, and of its synth params only the level and pan do anything: its
-  -- faders start with the grain params, then the level and pan.
+  -- Ordered param IDs for a voice's fader pages (on every layout): every
+  -- voice-param record's fader groups (S.registry.voice_params' fader, the
+  -- groundwork before 3.8) whose when holds for the voice (all without
+  -- one), sorted by rank (default 0) and, within a rank, in registration
+  -- order. The built-in records' groups (rank 0) give 3.7's faders: the
+  -- synthesis params (param_order) on a synth source, a buffer source's
+  -- buffer params, level and pan, the six grain params (envelope and mode
+  -- are index faders), an input source's level and pan, then the nine
+  -- crossmod slot values; then the voice filter and sends (rank 1), a
+  -- buffer voice's loop (2), the jitters (3), attack and release (4)
   function fader_param_ids(voice_idx)
     local prefix = "v" .. voice_idx .. "_"
-    local ids = {}
-    if voice_uses_synth(voice_idx) then
-      append_fader_ids(ids, prefix, S.voices[voice_idx].param_order)
-      append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
-    elseif voice_uses_buffer(voice_idx) then
-      append_fader_ids(ids, prefix, BUFFER_FADER_KEYS)
-      append_fader_ids(ids, prefix, voice_level_fader_keys(voice_idx))
-      append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
-    else
-      append_fader_ids(ids, prefix, GRAIN_FADER_KEYS)
-      append_fader_ids(ids, prefix, voice_level_fader_keys(voice_idx))
+    local groups = {}
+    for _, record in ipairs(S.registry.voice_params) do
+      for _, group in ipairs(record.fader or {}) do
+        if not group.when or group.when(voice_idx) then groups[#groups + 1] = group end
+      end
     end
-    for slot = 1, NUM_MOD_SLOTS do
-      table.insert(ids, prefix .. "mod_source_" .. slot)
-      table.insert(ids, prefix .. "mod_amp_amt_" .. slot)
-      table.insert(ids, prefix .. "mod_freq_amt_" .. slot)
+    -- a stable sort: insertion, moving a group only past higher ranks
+    for index = 2, #groups do
+      local group, position = groups[index], index
+      while position > 1 and (groups[position - 1].rank or 0) > (group.rank or 0) do
+        groups[position] = groups[position - 1]
+        position = position - 1
+      end
+      groups[position] = group
+    end
+    local ids = {}
+    for _, group in ipairs(groups) do
+      for _, key in ipairs(S.lib.params_setup.group_keys(group, voice_idx)) do ids[#ids + 1] = prefix .. key end
     end
     return ids
   end

@@ -2070,7 +2070,7 @@ test("a recall and a fade set a voice's registered fields in sorted key order (#
     local record = { name = "probe order", count = #keys, scene_defaults = defaults, fader = false }
     function record.add(voice_idx)
       for _, key in ipairs(keys) do
-        S.lib.params_setup.add_voice_extra(voice_idx, record, key, { type = "control", name = key,
+        S.lib.params_setup.add_voice_param(voice_idx, record, key, { type = "control", name = key,
           controlspec = controlspec.new(0, 1, "lin", 0, 0),
           action = function() if voice_idx == 1 then table.insert(order, key) end end })
       end
@@ -3450,7 +3450,7 @@ test("a record's scene defaults may depend on the voice", function()
     local record = { name = "probe voice", count = 1, fader = false,
       scene_defaults = function(voice) return { probe_level = probe_default(voice) } end }
     function record.add(voice)
-      local_value("S").lib.params_setup.add_voice_extra(voice, record, "probe_level",
+      local_value("S").lib.params_setup.add_voice_param(voice, record, "probe_level",
         { type = "control", name = "probe level", controlspec = controlspec.new(0, 1, "lin", 0, probe_default(voice)) })
     end
     local_value("S").register_voice_params(record)

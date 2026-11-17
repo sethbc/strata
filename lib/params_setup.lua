@@ -6,8 +6,9 @@
 -- the voice params (add_voice_params, get_param_spec), the redraw-on-param
 -- wrapper (redraw_on_param_changes, called by init after the records) and
 -- the tempo-follow handlers; these stay global. S.fx_last_mix.filter is
--- read by the FX page's K3. Reads, at init, the registered voice params
--- (added through S.lib.params_setup.add_voice_extra), fx params, param
+-- read by the FX page's K3. Reads, at init, the voice-param records (the
+-- built-in synth, grain and crossmod ones first, lib/voices.lua; each
+-- param added through S.lib.params_setup.add_voice_param), fx params, param
 -- filters and source change hooks (lib/state.lua), and sets S.performance
 -- (the standard tier's values until the "performance" record fills it).
 
@@ -16,10 +17,6 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
   local NUM_SCENES = S.constants.NUM_SCENES
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
-  local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
-  local GRAIN_ENV_OPTIONS = S.constants.GRAIN_ENV_OPTIONS
-  local GRAIN_MODE_OPTIONS = S.constants.GRAIN_MODE_OPTIONS
-  local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
   local FX_GROUP_PARAMS = 11  -- the fx group's own params; registered fx params follow them
 
   -- The performance tier's values (tier, buffer_seconds, max_grains,
@@ -791,30 +788,55 @@ return function(S)
     end
   end
 
-  -- Per record name: the keys its add added through add_voice_extra (for
-  -- the checks after each add)
-  local extra_keys = {}
+  M.turn_on_own_delta = turn_on_own_delta
 
-  -- Add one param of a registered voice-param record (S.registry.voice_params)
-  -- for voice voice_idx: param is a params:add table without an id; the id
-  -- is v<i>_<key>. Its action runs the key's param filter, stores the value
+  -- Per voice, per record name: the keys its add and add_first added
+  -- through add_voice_param ({key = true}), kept after init: the checks
+  -- after each add, the fader check and a built-in record's scene keys
+  -- (voice_scene_keys) read them
+  local added_keys = {}
+  for voice_idx = 1, NUM_VOICES do added_keys[voice_idx] = {} end
+
+  -- The sender of a record's grain key or voice key (S.lib.state's
+  -- shapes): setGrainParam with its engine name and value conversion,
+  -- setVoiceParam likewise, or the entry's own send
+  local function key_sender(voice_idx, grain_key, voice_key)
+    if grain_key then
+      return function(value)
+        local name, sent = S.lib.engine_sync.grain_key_message(grain_key, value)
+        engine.setGrainParam(voice_idx - 1, name, sent)
+      end
+    end
+    if type(voice_key) == "table" and voice_key.send then
+      return function(value) voice_key.send(voice_idx, value) end
+    end
+    return function(value)
+      local name, sent = S.lib.engine_sync.grain_key_message(voice_key, value)
+      engine.setVoiceParam(voice_idx - 1, name, sent)
+    end
+  end
+
+  -- Add one param of a voice-param record (S.registry.voice_params, the
+  -- built-in synth, grain and crossmod records among them) for voice
+  -- voice_idx: param is a params:add table without an id; the id is
+  -- v<i>_<key>. Its action runs the key's param filter, stores the value
   -- in S.voices[i].values[key], ends a randomize's undo, sends it through
   -- send_param_to_engine and then runs param.action, if any. A key in
-  -- record.grain_keys gets the engine sender: setGrainParam with its engine
-  -- name (and value conversion), only while the voice runs. Called by the
-  -- record's add, at init
-  function M.add_voice_extra(voice_idx, record, key, param)
+  -- record.grain_keys or the voice's record.voice_keys gets the engine
+  -- sender (key_sender), only while the voice runs. Called by the record's
+  -- add, at init
+  function M.add_voice_param(voice_idx, record, key, param)
     if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then
-      error("add_voice_extra: voice " .. tostring(voice_idx) .. " is not 1.." .. NUM_VOICES, 2)
+      error("add_voice_param: voice " .. tostring(voice_idx) .. " is not 1.." .. NUM_VOICES, 2)
     end
     if type(record) ~= "table" or type(record.name) ~= "string" then
-      error("add_voice_extra: a registered record is needed", 2)
+      error("add_voice_param: a registered record is needed", 2)
     end
     if type(key) ~= "string" or not key:match("^[%w_]+$") then
-      error("add_voice_extra " .. record.name .. ": key " .. tostring(key) .. " is not a param id suffix", 2)
+      error("add_voice_param " .. record.name .. ": key " .. tostring(key) .. " is not a param id suffix", 2)
     end
     if type(param) ~= "table" or param.id ~= nil then
-      error("add_voice_extra " .. record.name .. ": a params:add table without an id", 2)
+      error("add_voice_param " .. record.name .. ": a params:add table without an id", 2)
     end
     local param_id = "v" .. voice_idx .. "_" .. key
     local own_action = param.action
@@ -823,7 +845,7 @@ return function(S)
     args.id = param_id
     args.action = function(x)
       local values = S.voices[voice_idx].values
-      if args.type == "number" then x = pset.whole(param_id, x) end  -- (the custom intervals, #554)
+      if args.type == "number" then x = pset.whole(param_id, x) end  -- (the mod sources, the custom intervals, #554)
       x = filtered_value(voice_idx, key, param_id, x, values[key])
       values[key] = x
       note_param_edit(param_id)  -- an edit ends a randomize's undo
@@ -834,14 +856,11 @@ return function(S)
     S.voices[voice_idx].values[key] = params:get(param_id)
 
     local grain_key = record.grain_keys and record.grain_keys[key]
-    if grain_key then
-      add_voice_sender(voice_idx, param_id, function(value)
-        local name, sent = S.lib.engine_sync.grain_key_message(grain_key, value)
-        engine.setGrainParam(voice_idx - 1, name, sent)
-      end)
-    end
-    extra_keys[record.name] = extra_keys[record.name] or {}
-    extra_keys[record.name][key] = true
+    local voice_key = S.voice_keys_of(record, voice_idx)[key]
+    if grain_key or voice_key then add_voice_sender(voice_idx, param_id, key_sender(voice_idx, grain_key, voice_key)) end
+    local added = added_keys[voice_idx]
+    added[record.name] = added[record.name] or {}
+    added[record.name][key] = true
   end
 
   -- Per record name: how many params its add_first added for the voice
@@ -849,13 +868,13 @@ return function(S)
   local first_added = {}
 
   -- Each record's add_first for voice voice_idx, ahead of the voice's
-  -- built-in params: norns reads a PSET line by line in param order, so a
+  -- synth params: norns reads a PSET line by line in param order, so a
   -- param a built-in param's filter reads (variation's quantize, read by the
   -- freq filter) must come first, or the filter would apply the current
   -- value, not the PSET's, to the built-in param (#125)
   local function add_first_voice_params(voice_idx)
     for _, record in ipairs(S.registry.voice_params) do
-      extra_keys[record.name] = {}
+      added_keys[voice_idx][record.name] = {}
       first_added[record.name] = 0
       if record.add_first then
         local before = #params.params
@@ -865,326 +884,84 @@ return function(S)
     end
   end
 
-  -- Each record's add for voice voice_idx, counted with its add_first's,
-  -- then a check that every key it names (grain keys, scene keys, rows) is
-  -- one of its params
-  local function add_registered_voice_params(voice_idx)
+  -- The keys a record's group (fader, main_randomize, mutate) gives for a voice
+  function M.group_keys(group, voice_idx)
+    if type(group.keys) == "function" then return group.keys(voice_idx) end
+    return group.keys
+  end
+
+  -- After a record's add for voice voice_idx: it added exactly its count
+  -- (with its add_first's), and every key it names (grain and voice keys,
+  -- scene keys, discrete keys, rows) is one of its params; a discrete key
+  -- of a record without scene defaults (a built-in one) has its param's
+  -- default inside its range
+  local function check_record(voice_idx, record, added)
+    local count = S.voice_param_count(record, voice_idx)
+    if added ~= count then
+      error(string.format("voice params %s: add%s added %d params for voice %d, but its count is %d", record.name,
+        record.add_first and " and add_first" or "", added, voice_idx, count), 0)
+    end
+    local own = added_keys[voice_idx][record.name]
+    local named = {record.grain_keys or {}, S.voice_keys_of(record, voice_idx), S.voice_scene_defaults(record, voice_idx),
+      record.discrete or {}}
+    for _, keys in ipairs(named) do
+      for key in pairs(keys) do
+        if not own[key] then error("voice params " .. record.name .. ": " .. key .. " is not a param its add added", 0) end
+      end
+    end
+    for _, key in ipairs(record.voice_rows and record.voice_rows.rows or {}) do
+      if not own[key] then error("voice params " .. record.name .. ": row " .. key .. " is not a param its add added", 0) end
+    end
+    if record.scene_defaults ~= nil then return end
+    for key, range in pairs(record.discrete or {}) do
+      local default = param_default("v" .. voice_idx .. "_" .. key)
+      if default % 1 ~= 0 or default < range[1] or default > range[2] then
+        error("voice params " .. record.name .. ": " .. key .. "'s default is outside its discrete range", 0)
+      end
+    end
+  end
+
+  -- Every key a record's fader groups give for voice voice_idx (whatever
+  -- their when) is a param some record added for the voice
+  local function check_faders(voice_idx)
+    local added = {}
+    for _, keys in pairs(added_keys[voice_idx]) do
+      for key in pairs(keys) do added[key] = true end
+    end
     for _, record in ipairs(S.registry.voice_params) do
-      local before = #params.params
-      record.add(voice_idx)
-      local added = first_added[record.name] + #params.params - before
-      if added ~= record.count then
-        error(string.format("voice params %s: add%s added %d params, but its count is %d", record.name,
-          record.add_first and " and add_first" or "", added, record.count), 0)
-      end
-      for _, keys in ipairs({record.grain_keys or {}, S.voice_scene_defaults(record, voice_idx)}) do
-        for key in pairs(keys) do
-          if not extra_keys[record.name][key] then
-            error("voice params " .. record.name .. ": " .. key .. " is not a param its add added", 0)
+      for _, group in ipairs(record.fader or {}) do
+        for _, key in ipairs(M.group_keys(group, voice_idx)) do
+          if not added[key] then
+            error("voice params " .. record.name .. ": fader key " .. tostring(key) .. " is no param of voice "
+              .. voice_idx, 0)
           end
-        end
-      end
-      for _, key in ipairs(record.voice_rows and record.voice_rows.rows or {}) do
-        if not extra_keys[record.name][key] then
-          error("voice params " .. record.name .. ": row " .. key .. " is not a param its add added", 0)
         end
       end
     end
   end
 
-  -- Synthesis params whose step is finer than the default string's 0.01 show
-  -- three decimals, so every encoder detent changes the text (#386)
-  local VOICE_PARAM_FORMATS = {
-    drift = function(param) return string.format("%.3f", param:get()) end,
-    ratio = function(param) return string.format("%.3f", param:get()) end,
-  }
-
+  -- A voice's params: its heading, every record's add_first, then each
+  -- record's add in registration order (the built-in synth, grain and
+  -- crossmod first), each record under its separator: a separator
+  -- "voice <i> <separator>" (nil: "extras") before a record whose separator
+  -- differs from the record's before it, none for false (the synth params
+  -- sit under the heading). Separators are outside a record's count
   function add_voice_params(voice_idx)
-    local v = S.voices[voice_idx]
-    local prefix = "v" .. voice_idx .. "_"
-    local engine_voice = voice_idx - 1
-    local function add_sender(param_id, send) add_voice_sender(voice_idx, param_id, send) end
-
-    params:add_separator("voice " .. voice_idx .. ": " .. v.name)
-
-    -- The registered params a PSET must read before the built-in ones
-    -- (each record's add_first), then the synthesis params
+    params:add_separator("voice " .. voice_idx .. ": " .. S.voices[voice_idx].name)
     add_first_voice_params(voice_idx)
-
-    -- Voice params (in param_order so the menu order is stable)
-    for _, key in ipairs(v.param_order) do
-      local spec = get_param_spec(key)
-      spec.default = v.values[key]  -- the voices table holds each voice's defaults
-      local param_id = prefix .. key
-      params:add{
-        type = "control",
-        id = param_id,
-        name = key,
-        controlspec = spec,
-        formatter = VOICE_PARAM_FORMATS[key],
-        action = function(x)
-          x = filtered_value(voice_idx, key, param_id, x, S.voices[voice_idx].values[key])
-          S.voices[voice_idx].values[key] = x
-          note_param_edit(param_id)  -- randomize sets it: an edit ends its undo
-          send_param_to_engine(param_id, x)
-        end
-      }
-      add_sender(param_id, function(value) engine.setVoiceParam(engine_voice, key, value) end)
-      turn_on_own_delta(key, param_id)
+    local previous = false
+    for _, record in ipairs(S.registry.voice_params) do
+      local separator = record.separator
+      if separator == nil then separator = "extras" end
+      if separator ~= previous and separator ~= false then
+        params:add_separator("voice " .. voice_idx .. " " .. separator)
+      end
+      previous = separator
+      local before = #params.params
+      record.add(voice_idx)
+      check_record(voice_idx, record, first_added[record.name] + #params.params - before)
     end
-
-    -- Grain params
-    params:add_separator("voice " .. voice_idx .. " granular")
-
-    -- Source: always sent, so the engine knows it before the voice starts
-    -- (a stopped voice only records it; voiceOn then builds the right synths)
-    params:add{
-      type = "option",
-      id = prefix .. "source",
-      name = "source",
-      options = SOURCE_OPTIONS,
-      default = v.source,
-      action = function(x)
-        S.voices[voice_idx].source = x
-        S.lib.engine_sync.send_grain_source(voice_idx)
-        -- the registered hooks (S.registry.source_change), before the sync,
-        -- so it sends what they set (freeze cleared, never the old freeze
-        -- first); a scene recall sets every value itself, so they never run
-        -- during one
-        if not S.scene_recall_in_progress then
-          for _, hook in ipairs(S.registry.source_change) do hook(voice_idx, x) end
-        end
-        -- a scene recall syncs once, after it has set every param
-        if S.voices[voice_idx].active and not S.scene_recall_in_progress then
-          sync_voice_values_to_engine(voice_idx)
-        end
-        -- the grid fader list follows the source (buffer or synth params)
-        if S.grid_voice_select == voice_idx then
-          S.param_page = util.clamp(S.param_page, 1, fader_page_count(voice_idx))
-        end
-        grid_redraw()
-      end
-    }
-
-    params:add{
-      type = "control",
-      id = prefix .. "buf_pos",
-      name = "buffer position",
-      -- step 0: the drift moves in steps far smaller than 0.01
-      controlspec = controlspec.new(0, 1, "lin", 0, v.values.buf_pos),
-      action = function(x)
-        S.voices[voice_idx].values.buf_pos = x
-        if not S.drift_writing then
-          S.buf_pos_base[voice_idx] = x
-        end
-        note_param_edit(prefix .. "buf_pos")
-        send_param_to_engine(prefix .. "buf_pos", x)
-      end
-    }
-    add_sender(prefix .. "buf_pos", function(value)
-      engine.setGrainParam(engine_voice, "bufPos", value)
-    end)
-
-    params:add{
-      type = "control",
-      id = prefix .. "buf_rate",
-      name = "buffer rate",
-      -- step 0 (#679): the own note of a MIDI or sequenced note plays the
-      -- exact rate, as its chord's extra notes do; a turn's size is the
-      -- quantum (0.01 of the range), never the step
-      controlspec = controlspec.new(0.25, 4, "exp", 0, v.values.buf_rate),
-      action = function(x)
-        S.voices[voice_idx].values.buf_rate = x
-        note_param_edit(prefix .. "buf_rate")
-        send_param_to_engine(prefix .. "buf_rate", x)
-      end
-    }
-    add_sender(prefix .. "buf_rate", function(value)
-      engine.setGrainParam(engine_voice, "bufRate", value)
-    end)
-
-    params:add{
-      type = "control",
-      id = prefix .. "buf_scan",
-      name = "buffer scan",
-      controlspec = controlspec.new(-2, 2, "lin", 0.01, v.values.buf_scan),
-      action = function(x)
-        S.voices[voice_idx].values.buf_scan = x
-        note_param_edit(prefix .. "buf_scan")
-        send_param_to_engine(prefix .. "buf_scan", x)
-      end
-    }
-    add_sender(prefix .. "buf_scan", function(value)
-      engine.setGrainParam(engine_voice, "bufScan", value)
-    end)
-
-    params:add{
-      type = "control",
-      id = prefix .. "grain_size",
-      name = "grain size",
-      controlspec = controlspec.new(0.01, 0.5, "lin", 0.01, v.values.grain_size, "s"),
-      action = function(x)
-        S.voices[voice_idx].values.grain_size = x
-        note_param_edit(prefix .. "grain_size")
-        send_param_to_engine(prefix .. "grain_size", x)
-      end
-    }
-    add_sender(prefix .. "grain_size", function(value)
-      engine.setGrainParam(engine_voice, "grainSize", value)
-    end)
-
-    params:add{
-      type = "control",
-      id = prefix .. "grain_density",
-      name = "grain density",
-      controlspec = controlspec.new(1, 100, "lin", 1, v.values.grain_density, "/s"),
-      action = function(x)
-        S.voices[voice_idx].values.grain_density = x
-        note_param_edit(prefix .. "grain_density")  -- a page randomize sets it
-        send_param_to_engine(prefix .. "grain_density", x)
-      end
-    }
-    add_sender(prefix .. "grain_density", function(value)
-      engine.setGrainParam(engine_voice, "grainDensity", value * engine_param_value("master_density"))
-    end)
-
-    params:add{
-      type = "control",
-      id = prefix .. "grain_pitch",
-      name = "grain pitch",
-      -- step 0: the drift moves in steps far smaller than 0.01
-      controlspec = controlspec.new(0.25, 4, "lin", 0, v.values.grain_pitch, "x"),
-      action = function(x)
-        S.voices[voice_idx].values.grain_pitch = x
-        if not S.drift_writing then
-          S.grain_pitch_base[voice_idx] = x
-        end
-        note_param_edit(prefix .. "grain_pitch")
-        send_param_to_engine(prefix .. "grain_pitch", x)
-      end
-    }
-    add_sender(prefix .. "grain_pitch", function(value)
-      engine.setGrainParam(engine_voice, "pitchShift", value)
-    end)
-
-    params:add{
-      type = "control",
-      id = prefix .. "grain_spread",
-      name = "position spread",
-      controlspec = controlspec.new(0, 1, "lin", 0.01, v.values.grain_spread),
-      action = function(x)
-        S.voices[voice_idx].values.grain_spread = x
-        note_param_edit(prefix .. "grain_spread")
-        send_param_to_engine(prefix .. "grain_spread", x)
-      end
-    }
-    add_sender(prefix .. "grain_spread", function(value)
-      engine.setGrainParam(engine_voice, "posSpread", value)
-    end)
-
-    params:add{
-      type = "option",
-      id = prefix .. "grain_env",
-      name = "grain envelope",
-      options = GRAIN_ENV_OPTIONS,
-      default = v.values.grain_env,
-      action = function(x)
-        S.voices[voice_idx].values.grain_env = x
-        note_param_edit(prefix .. "grain_env")
-        if S.voices[voice_idx].active then
-          engine.setGrainParam(voice_idx - 1, "envShape", x - 1)
-        end
-      end
-    }
-
-    params:add{
-      type = "option",
-      id = prefix .. "grain_mode",
-      name = "grain mode",
-      options = GRAIN_MODE_OPTIONS,
-      default = v.values.grain_mode,
-      action = function(x)
-        S.voices[voice_idx].values.grain_mode = x
-        if S.voices[voice_idx].active then
-          engine.setGrainParam(voice_idx - 1, "grainMode", x - 1)
-        end
-      end
-    }
-
-    -- Cross-modulation params: per slot (1..NUM_MOD_SLOTS) its source, amp
-    -- mod and freq mod, in that order (the ids, names and menu order saved
-    -- PSETs hold), each writing the voice's values (#392)
-    params:add_separator("voice " .. voice_idx .. " cross-modulation")
-    local function mod_source_text(param)
-      if param:get() == 0 then return "none" end
-      return "voice " .. param:get()
-    end
-    for slot = 1, NUM_MOD_SLOTS do
-      local amp_id, freq_id = prefix .. "mod_amp_amt_" .. slot, prefix .. "mod_freq_amt_" .. slot
-
-      params:add{
-        type = "number",
-        id = prefix .. "mod_source_" .. slot,
-        name = "mod source " .. slot,
-        min = 0,
-        max = NUM_VOICES,
-        default = v.values["mod_source_" .. slot],
-        formatter = mod_source_text,
-        action = function(x)
-          x = pset.whole(prefix .. "mod_source_" .. slot, x)  -- never a fraction to the engine (#554)
-          S.voices[voice_idx].values["mod_source_" .. slot] = x
-          if S.voices[voice_idx].active then
-            engine.setModSource(voice_idx - 1, slot, S.lib.engine_sync.engine_mod_source(x))
-          end
-        end
-      }
-
-      params:add{
-        type = "control",
-        id = amp_id,
-        name = "amp mod " .. slot,
-        controlspec = controlspec.new(-2, 2, "lin", 0.01, v.values["mod_amp_amt_" .. slot]),
-        action = function(x)
-          S.voices[voice_idx].values["mod_amp_amt_" .. slot] = x
-          note_param_edit(amp_id)  -- a page randomize sets it
-          send_param_to_engine(amp_id, x)
-        end
-      }
-      add_sender(amp_id, function(value) engine.setModAmpAmt(engine_voice, slot, value) end)
-
-      params:add{
-        type = "control",
-        id = freq_id,
-        name = "freq mod " .. slot,
-        controlspec = controlspec.new(-2, 2, "lin", 0.01, v.values["mod_freq_amt_" .. slot]),
-        action = function(x)
-          S.voices[voice_idx].values["mod_freq_amt_" .. slot] = x
-          note_param_edit(freq_id)
-          send_param_to_engine(freq_id, x)
-        end
-      }
-      add_sender(freq_id, function(value) engine.setModFreqAmt(engine_voice, slot, value) end)
-    end
-
-    -- Global mod speed (shared across all slots)
-    params:add{
-      type = "control",
-      id = prefix .. "mod_speed",
-      name = "mod speed",
-      controlspec = controlspec.new(0.1, 50, "exp", 0.1, v.values.mod_speed, "Hz"),
-      action = function(x)
-        S.voices[voice_idx].values.mod_speed = x
-        note_param_edit(prefix .. "mod_speed")
-        send_param_to_engine(prefix .. "mod_speed", x)
-      end
-    }
-    add_sender(prefix .. "mod_speed", function(value) engine.setModSpeed(engine_voice, value) end)
-
-    -- The registered voice params (S.registry.voice_params), under one separator
-    if #S.registry.voice_params > 0 then
-      params:add_separator("voice " .. voice_idx .. " extras")
-      add_registered_voice_params(voice_idx)
-    end
+    check_faders(voice_idx)
   end
 
   -- Every synthesis param's spec, built once. get_param_spec hands out a copy
@@ -1221,110 +998,87 @@ return function(S)
     return spec:copy()
   end
 
-  -- A voice's engine parts (the groundwork before 3.8, ruling 5): what a
-  -- start and a sync send, which lib/engine_sync.lua sends. A part is
-  -- {name, kept = {entry, ...}, voice_level = {entry, ...}}: kept entries
-  -- are setGrainParam messages, which the engine keeps for a stopped voice
-  -- (a start sends them before voiceOn); voice_level entries are the
-  -- controls voiceOn resets (a start sends them after it). An entry has key
-  -- (the voice's value it sends; absent for a keyless send) and exactly one
-  -- of grain = engine name (setGrainParam), voice = engine name
-  -- (setVoiceParam) or send = fn(voice_idx, value); value = fn(x) converts
-  -- the value, and carry = false sends the stored value at a start, never
-  -- the param's override and offsets. The parts, in order: synth (the synth
-  -- keys, sorted), grain (the nine, in their fixed order), crossmod (per
-  -- slot its source and amounts, then the speed), bend, then one part per
-  -- registered voice-param record, in registration order (its grain keys
-  -- sorted, then its sync)
-  local function option_index(x) return x - 1 end
-  local GRAIN_PART = {
-    {key = "grain_size", grain = "grainSize"},
-    {key = "grain_density", grain = "grainDensity",
-      value = function(x) return x * engine_param_value("master_density") end},
-    {key = "grain_pitch", grain = "pitchShift"},
-    {key = "grain_spread", grain = "posSpread"},
-    {key = "grain_env", grain = "envShape", value = option_index, carry = false},
-    {key = "grain_mode", grain = "grainMode", value = option_index, carry = false},
-    {key = "buf_pos", grain = "bufPos"},
-    {key = "buf_rate", grain = "bufRate"},
-    {key = "buf_scan", grain = "bufScan"},
-  }
-  local CROSSMOD_PART = {}
-  for slot = 1, NUM_MOD_SLOTS do
-    table.insert(CROSSMOD_PART, {key = "mod_source_" .. slot, carry = false, send = function(voice_idx, x)
-      engine.setModSource(voice_idx - 1, slot, S.lib.engine_sync.engine_mod_source(x))
-    end})
-    table.insert(CROSSMOD_PART, {key = "mod_amp_amt_" .. slot, carry = false, send = function(voice_idx, x)
-      engine.setModAmpAmt(voice_idx - 1, slot, x)
-    end})
-    table.insert(CROSSMOD_PART, {key = "mod_freq_amt_" .. slot, carry = false, send = function(voice_idx, x)
-      engine.setModFreqAmt(voice_idx - 1, slot, x)
-    end})
-  end
-  table.insert(CROSSMOD_PART, {key = "mod_speed", carry = false, send = function(voice_idx, x)
-    engine.setModSpeed(voice_idx - 1, x)
-  end})
+  -- A voice's engine parts (the groundwork before 3.8, rulings 5 and 11):
+  -- what a start and a sync send, which lib/engine_sync.lua sends. A part
+  -- is {name, kept = {entry, ...}, voice_level = {entry, ...}}: kept
+  -- entries are setGrainParam messages and a record's sync, which the
+  -- engine keeps for a stopped voice (a start sends them before voiceOn);
+  -- voice_level entries are the controls voiceOn resets (a start sends
+  -- them after it). An entry has key (the voice's value it sends; absent
+  -- for a keyless send) and exactly one of grain = engine name
+  -- (setGrainParam), voice = engine name (setVoiceParam) or send =
+  -- fn(voice_idx, value); value = fn(x) converts the value, and carry =
+  -- false sends the stored value at a start, never the param's override
+  -- and offsets. One part per record (S.registry.voice_params), in
+  -- registration order: its grain keys (kept) and voice keys
+  -- (voice_level), each in its send_order (default sorted), its sync last
+  -- in kept; the bend part follows the crossmod record's. The built-in
+  -- records come first, so the parts begin synth (the synth keys, sorted),
+  -- grain (the nine, in their fixed order), crossmod (per slot its source
+  -- and amounts, then the speed), bend. Every call builds fresh tables, so
+  -- a caller may change what it gets
+
   -- the MIDI pitchbend wheel's current position (voiceOn resets the engine's to 1)
-  local BEND_PART = {{send = function(voice_idx)
+  local function send_bend(voice_idx)
     engine.setVoiceParam(voice_idx - 1, "bend", S.midi_state.bend[voice_idx])
-  end}}
+  end
+
+  -- A record's keys of one kind ({key = entry}) in its send_order, or sorted
+  local function in_send_order(record, keys)
+    local ordered = {}
+    if record.send_order then
+      for _, key in ipairs(record.send_order) do
+        if keys[key] ~= nil then ordered[#ordered + 1] = key end
+      end
+      return ordered
+    end
+    for key in pairs(keys) do ordered[#ordered + 1] = key end
+    table.sort(ordered)
+    return ordered
+  end
+
+  -- A part entry for a grain key (kind "grain") or a voice key ("voice")
+  local function part_entry(kind, key, spec)
+    if type(spec) == "string" then return {key = key, [kind] = spec} end
+    if spec.send then return {key = key, send = spec.send, carry = spec.carry} end
+    return {key = key, [kind] = spec.name, value = spec.value, carry = spec.carry}
+  end
 
   function M.voice_engine_parts(voice_idx)
     if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then
       error("voice_engine_parts: voice " .. tostring(voice_idx) .. " is not 1.." .. NUM_VOICES, 2)
     end
-    local synth_keys = {}
-    for _, key in ipairs(S.voices[voice_idx].param_order) do synth_keys[#synth_keys + 1] = key end
-    table.sort(synth_keys)
-    local synth = {}
-    for index, key in ipairs(synth_keys) do synth[index] = {key = key, voice = key} end
-    local parts = {
-      {name = "synth", kept = {}, voice_level = synth},
-      {name = "grain", kept = GRAIN_PART, voice_level = {}},
-      {name = "crossmod", kept = {}, voice_level = CROSSMOD_PART},
-      {name = "bend", kept = {}, voice_level = BEND_PART},
-    }
+    local parts = {}
     for _, record in ipairs(S.registry.voice_params) do
-      local keys = {}
-      for key in pairs(record.grain_keys or {}) do keys[#keys + 1] = key end
-      table.sort(keys)
-      local kept = {}
-      for _, key in ipairs(keys) do
-        local grain_key = record.grain_keys[key]
-        if type(grain_key) == "table" then
-          kept[#kept + 1] = {key = key, grain = grain_key.name, value = grain_key.value}
-        else
-          kept[#kept + 1] = {key = key, grain = grain_key}
-        end
+      local grain_keys, voice_keys = record.grain_keys or {}, S.voice_keys_of(record, voice_idx)
+      local kept, voice_level = {}, {}
+      for _, key in ipairs(in_send_order(record, grain_keys)) do
+        kept[#kept + 1] = part_entry("grain", key, grain_keys[key])
       end
       if record.sync then kept[#kept + 1] = {send = function(index) record.sync(index) end} end
-      parts[#parts + 1] = {name = record.name, kept = kept, voice_level = {}}
+      for _, key in ipairs(in_send_order(record, voice_keys)) do
+        voice_level[#voice_level + 1] = part_entry("voice", key, voice_keys[key])
+      end
+      parts[#parts + 1] = {name = record.name, kept = kept, voice_level = voice_level}
+      if record.name == "crossmod" then parts[#parts + 1] = {name = "bend", kept = {}, voice_level = {{send = send_bend}}} end
     end
     return parts
   end
 
-  -- A voice's scene keys (the groundwork before 3.8, ruling 5): list, the
-  -- entries {key, default, range, limits} in recall order, and by_key, the
-  -- same entries by key. The order (ruling 4): the voice's synth keys
-  -- sorted, the nine grain keys sorted, the ten crossmod keys sorted, then
-  -- the registered records' scene keys sorted, so a recall sets freq
-  -- before freeze and loop_length before loop_start. A built-in key's
-  -- default is its param's (param_default, read at the call, after init);
-  -- range {min, max} marks a discrete key (the grain envelope and mode, the
-  -- mod sources, a record's discrete keys), limits a record's scene_ranges.
-  -- solo and note_cap are no scene keys (their records give no
-  -- scene_defaults)
-  local SCENE_GRAIN_KEYS = {"buf_pos", "buf_rate", "buf_scan", "grain_density", "grain_env", "grain_mode",
-    "grain_pitch", "grain_size", "grain_spread"}
-  local SCENE_GRAIN_RANGES = {grain_env = {1, #GRAIN_ENV_OPTIONS}, grain_mode = {1, #GRAIN_MODE_OPTIONS}}
-  local SCENE_CROSSMOD_KEYS = {"mod_speed"}
-  for slot = 1, NUM_MOD_SLOTS do
-    for _, name in ipairs({"mod_source_", "mod_amp_amt_", "mod_freq_amt_"}) do
-      table.insert(SCENE_CROSSMOD_KEYS, name .. slot)
-    end
-  end
-  table.sort(SCENE_CROSSMOD_KEYS)
-  local MOD_SOURCE_RANGE = {0, NUM_VOICES}
+  -- A voice's scene keys (the groundwork before 3.8, rulings 4 and 5):
+  -- list, the entries {key, default, range, limits} in recall order, and
+  -- by_key, the same entries by key. A built-in record's (synth, grain,
+  -- crossmod) scene keys are every value its add added for the voice (the
+  -- grain record's source is no value), each default its param's
+  -- (param_default, read at the call, after init); another record's are
+  -- its scene_defaults' keys. The order: the synth record's keys sorted,
+  -- the grain record's sorted, the crossmod record's sorted, then every
+  -- other record's scene keys sorted together, so a recall sets freq
+  -- before freeze and loop_length before loop_start. range {min, max}
+  -- marks a discrete key (the record's discrete: the grain envelope and
+  -- mode, the mod sources, ...), limits a record's scene_ranges. solo and
+  -- note_cap are no scene keys (their records give no scene_defaults)
+  local BUILT_IN_RECORDS = {synth = true, grain = true, crossmod = true}
 
   function M.voice_scene_keys(voice_idx)
     if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then
@@ -1332,31 +1086,28 @@ return function(S)
     end
     local prefix = "v" .. voice_idx .. "_"
     local list, by_key = {}, {}
-    local function add(key, default, range, limits)
-      local entry = {key = key, default = default, range = range, limits = limits}
+    local function add(key, default, record)
+      local entry = {key = key, default = default, range = record.discrete and record.discrete[key],
+        limits = record.scene_ranges and record.scene_ranges[key]}
       list[#list + 1] = entry
       by_key[key] = entry
     end
-    local synth = {}
-    for _, key in ipairs(S.voices[voice_idx].param_order) do synth[#synth + 1] = key end
-    table.sort(synth)
-    for _, key in ipairs(synth) do add(key, param_default(prefix .. key)) end
-    for _, key in ipairs(SCENE_GRAIN_KEYS) do add(key, param_default(prefix .. key), SCENE_GRAIN_RANGES[key]) end
-    for _, key in ipairs(SCENE_CROSSMOD_KEYS) do
-      add(key, param_default(prefix .. key), key:match("^mod_source_") and MOD_SOURCE_RANGE or nil)
-    end
     local registered, records = {}, {}
     for _, record in ipairs(S.registry.voice_params) do
-      for key, default in pairs(S.voice_scene_defaults(record, voice_idx)) do
-        registered[#registered + 1] = key
-        records[key] = {record = record, default = default}
+      if BUILT_IN_RECORDS[record.name] then
+        local keys = {}
+        for key in pairs(added_keys[voice_idx][record.name] or {}) do keys[#keys + 1] = key end
+        table.sort(keys)
+        for _, key in ipairs(keys) do add(key, param_default(prefix .. key), record) end
+      else
+        for key, default in pairs(S.voice_scene_defaults(record, voice_idx)) do
+          registered[#registered + 1] = key
+          records[key] = {record = record, default = default}
+        end
       end
     end
     table.sort(registered)
-    for _, key in ipairs(registered) do
-      local record, default = records[key].record, records[key].default
-      add(key, default, record.discrete and record.discrete[key], record.scene_ranges and record.scene_ranges[key])
-    end
+    for _, key in ipairs(registered) do add(key, records[key].default, records[key].record) end
     return list, by_key
   end
 

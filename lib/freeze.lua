@@ -90,7 +90,7 @@ return function(S)
     -- Read at init, after the performance setting has filled S.performance,
     -- so the mode's options are the running tier's
     add = function(voice_idx)
-      S.lib.params_setup.add_voice_extra(voice_idx, record, M.FREEZE.key, {
+      S.lib.params_setup.add_voice_param(voice_idx, record, M.FREEZE.key, {
         type = "binary",
         name = "freeze",
         behavior = "toggle",
@@ -106,7 +106,7 @@ return function(S)
           grid_redraw()
         end,
       })
-      S.lib.params_setup.add_voice_extra(voice_idx, record, M.FREEZE.mode_key, {
+      S.lib.params_setup.add_voice_param(voice_idx, record, M.FREEZE.mode_key, {
         type = "option",
         name = "freeze mode",
         options = M.mode_options(),

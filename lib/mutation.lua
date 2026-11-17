@@ -14,8 +14,6 @@
 return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
-  local DISCRETE_GRAIN_KEYS = S.constants.DISCRETE_GRAIN_KEYS
-  local BUFFER_MUTATION_KEYS = S.constants.BUFFER_MUTATION_KEYS
   local UNDO_SECONDS = S.constants.UNDO_SECONDS
 
   -- Per-voice drift (drift_update on the 10 Hz drift_metro): a slow random
@@ -188,31 +186,34 @@ return function(S)
     return true
   end
 
-  -- MAIN's whole-voice spec (randomize_voice, MAIN's ALT+K2): for a synth
-  -- source every synthesis param but amp, uniform in its controlspec's
-  -- normalized range (so exp params, freq and cutoff, spread evenly across
-  -- octaves); for a buffer source the buffer params (rate 0.5-2, even in
-  -- octaves; gentle scan); for the input neither (they do nothing); then
-  -- grain size and pitch. The synth params are drawn in the voice's
-  -- param_order (ruling 9 of the groundwork before 3.8; pairs order
-  -- before), so the order is the same on every run and on both Luas
+  -- A record group's keys for a voice (S.lib.params_setup.group_keys), or
+  -- none when its when says no
+  local function shown_keys(group, voice_idx)
+    if group.when and not group.when(voice_idx) then return {} end
+    return S.lib.params_setup.group_keys(group, voice_idx)
+  end
+
+  -- MAIN's whole-voice spec (randomize_voice, MAIN's ALT+K2): every
+  -- record's main_randomize groups (the groundwork before 3.8), in
+  -- registration order, each key with its group's draw. The built-in
+  -- records hold 3.7's sets (lib/voices.lua): for a synth source every
+  -- synthesis param but amp, uniform in its controlspec's normalized range
+  -- (so exp params, freq and cutoff, spread evenly across octaves), in the
+  -- voice's param_order (ruling 9; pairs order before), so the order is
+  -- the same on every run and on both Luas; for a buffer source the buffer
+  -- params (rate 0.5-2, even in octaves; gentle scan); for the input
+  -- neither (they do nothing); then grain size and pitch
   function M.voice_spec(voice_idx)
     local prefix = "v" .. voice_idx .. "_"
     local draws = {}
-    local function add(key, draw) draws[#draws + 1] = {id = prefix .. key, draw = draw} end
-    if voice_uses_synth(voice_idx) then
-      for _, key in ipairs(S.voices[voice_idx].param_order) do
-        if key ~= "amp" then  -- never the level
-          add(key, function() return params:lookup_param(prefix .. key).controlspec:map(math.random()) end)
+    for _, record in ipairs(S.registry.voice_params) do
+      for _, group in ipairs(record.main_randomize or {}) do
+        for _, key in ipairs(shown_keys(group, voice_idx)) do
+          local param_id = prefix .. key
+          draws[#draws + 1] = {id = param_id, draw = function() return group.draw(voice_idx, key, param_id) end}
         end
       end
-    elseif voice_uses_buffer(voice_idx) then
-      add("buf_pos", function() return math.random() end)
-      add("buf_rate", function() return 2 ^ (math.random() * 2 - 1) end)
-      add("buf_scan", function() return math.random() - 0.5 end)
     end
-    add("grain_size", function() return math.random() * 0.3 + 0.05 end)
-    add("grain_pitch", function() return math.random() * 2 + 0.5 end)
     return {page = S.constants.UI_PAGES.index.MAIN, section = "voice", voice = voice_idx, draws = draws}
   end
 
@@ -228,7 +229,7 @@ return function(S)
   end
 
   -- Called by the actions of every param a randomize can set
-  -- (lib/params_setup.lua, add_voice_extra's for the registered params): an
+  -- (lib/params_setup.lua, add_voice_param's for every per-voice param): an
   -- edit of a held param ends the undo, so undo never overwrites it. The
   -- drift's writes and randomize's and undo's own are not edits
   function note_param_edit(param_id)
@@ -323,54 +324,32 @@ return function(S)
     for i = 1, NUM_VOICES do
       -- Only mutate active, unlocked voices
       if S.voices[i].active and not S.locked[i] then
-        local v = S.voices[i]
-
-        if voice_uses_synth(i) then
-          -- Iterate through synthesis parameters
-          for _, key in ipairs(v.param_order) do
-            local current_val = v.values[key]
-            -- Skip amplitude and pan to preserve stability
-            if key ~= "amp" and key ~= "pan" then
-              -- Check if this parameter should mutate
-              if math.random() < probability then
-                local spec = params:lookup_param("v" .. i .. "_" .. key).controlspec
-
-                -- Mutation delta as a fraction of the normalized range, so exp
-                -- params move evenly in octaves. Gaussian-like distribution by
-                -- averaging random values
-                local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
-                set_mutated_param(i, "v" .. i .. "_" .. key, mutated_value(spec, current_val, delta))
+        local values = S.voices[i].values
+        -- Every record's mutate groups (the groundwork before 3.8), in
+        -- registration order. The built-in records hold 3.7's sets
+        -- (lib/voices.lua): a synth source its synthesis params but amp and
+        -- pan, a buffer source its buffer params instead (input neither),
+        -- then grain size, pitch and spread at a fraction of the
+        -- probability (chance) and a delta scale; never the source, the
+        -- envelope, the mode or crossmod. Each key mutates with
+        -- probability x chance; its delta is gaussian-like (two averaged
+        -- draws) x amount x scale: across the normalized range for a
+        -- warped group (exp params move evenly in octaves), else in the
+        -- param's units, clamped to its range
+        for _, record in ipairs(S.registry.voice_params) do
+          for _, group in ipairs(record.mutate or {}) do
+            for _, key in ipairs(shown_keys(group, i)) do
+              if math.random() < probability * (group.chance or 1) then
+                local param_id = "v" .. i .. "_" .. key
+                local spec = params:lookup_param(param_id).controlspec
+                local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * (group.scale or 1)
+                if group.warped == false then
+                  set_mutated_param(i, param_id, util.clamp(values[key] + delta, spec.minval, spec.maxval))
+                else
+                  set_mutated_param(i, param_id, mutated_value(spec, values[key], delta))
+                end
               end
             end
-          end
-        elseif voice_uses_buffer(i) then
-          -- Buffer sources mutate their buffer params instead of the (silent)
-          -- synthesis params. Input sources mutate only the grain params
-          -- below. The source itself never mutates.
-          for _, key in ipairs(BUFFER_MUTATION_KEYS) do
-            if not DISCRETE_GRAIN_KEYS[key] and math.random() < probability then
-              local param_id = "v" .. i .. "_" .. key
-              local spec = params:lookup_param(param_id).controlspec
-              -- delta across the normalized range, so exp buf_rate moves evenly
-              local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount
-              set_mutated_param(i, param_id, mutated_value(spec, v.values[key], delta))
-            end
-          end
-        end
-
-        -- Occasionally mutate granular parameters (lower probability: a
-        -- fraction of it, and a delta scale, per key). The discrete ones
-        -- (DISCRETE_GRAIN_KEYS: envelope shape, grain mode) never mutate.
-        for _, mutation in ipairs({
-          {param = "grain_size", chance = 0.5, scale = 0.2},
-          {param = "grain_pitch", chance = 0.3, scale = 1.0},
-          {param = "grain_spread", chance = 0.2, scale = 0.3}
-        }) do
-          if not DISCRETE_GRAIN_KEYS[mutation.param] and math.random() < probability * mutation.chance then
-            local param_id = "v" .. i .. "_" .. mutation.param
-            local spec = params:lookup_param(param_id).controlspec
-            local delta = ((math.random() + math.random()) / 2 - 0.5) * 2 * amount * mutation.scale
-            set_mutated_param(i, param_id, util.clamp(v.values[mutation.param] + delta, spec.minval, spec.maxval))
           end
         end
       end

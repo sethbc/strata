@@ -575,7 +575,7 @@ test("the variation rows lay out on VOICE", function()
   end
 end)
 
-test("randomize, mutation and the faders leave variation alone", function()
+test("randomize and mutation leave variation alone; the faders show the jitters", function()
   local context = load_strata()
   finish_startup(context)
   local S = local_value("S")
@@ -593,11 +593,18 @@ test("randomize, mutation and the faders leave variation alone", function()
     for key, value in pairs(values) do
       assert_near(params:get("v" .. voice_idx .. "_" .. key), value, 1e-9, "voice " .. voice_idx .. " " .. key .. " untouched")
     end
+    -- the fader pages show the three jitters (the groundwork before 3.8), no other variation param
+    local jitters = { pitch_jitter = true, size_jitter = true, pan_jitter = true }
+    local shown = {}
     for _, param_id in ipairs(fader_param_ids(voice_idx)) do
       for key in pairs(VARIATION_DEFAULTS) do
-        assert_true(param_id ~= "v" .. voice_idx .. "_" .. key, param_id .. " is not a variation param")
+        if param_id == "v" .. voice_idx .. "_" .. key then
+          assert_true(jitters[key], param_id .. " is a jitter")
+          shown[#shown + 1] = key
+        end
       end
     end
+    assert_equal(table.concat(shown, ","), "pitch_jitter,size_jitter,pan_jitter", "voice " .. voice_idx .. "'s jitters")
   end
   assert_equal(params:get("scale"), 1); assert_equal(params:get("root"), 1)
 end)

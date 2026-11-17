@@ -70,7 +70,7 @@ A hook of the LFO clock (`S.lib.lfos.on_step`), registered by the start step, so
 
 ### The note cap
 
-`v<i>_note_cap` (number, 1-`NOTE_SLOTS`, default 8, name `note cap`, shown as its number), a registered voice-params record `notes` with `voice_rows = {section = "notes", rows = {"note_cap"}, before = "variation"}`, no grain keys, no scene key of its own (PSET only), `fader = false`, and a layout state per voice (`v<i> note cap`, the cursor on its row) for VOICE's layout tests and renders. VOICE's ALT+K2 on its section does nothing (no draw). Lowering it under held notes keeps them (`lowered[voice]`, cleared once no used slot is past the cap): branches 3 and 5 only use slots under the new cap.
+`v<i>_note_cap` (number, 1-`NOTE_SLOTS`, default 8, name `note cap`, shown as its number), a registered voice-params record `notes` with `voice_rows = {section = "notes", rows = {"note_cap"}, before = "variation"}`, no grain keys, no scene key of its own (PSET only), faders for `attack` and `release` (`fader = {{keys = {"attack", "release"}, rank = 4}}`, the last on a voice's fader pages, the groundwork before 3.8; the cap has none), and a layout state per voice (`v<i> note cap`, the cursor on its row) for VOICE's layout tests and renders. VOICE's ALT+K2 on its section does nothing (no draw). Lowering it under held notes keeps them (`lowered[voice]`, cleared once no used slot is past the cap): branches 3 and 5 only use slots under the new cap.
 
 ### Registrations
 

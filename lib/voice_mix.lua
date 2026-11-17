@@ -170,7 +170,7 @@ return function(S)
     count = #M.VOICE_MIX.keys,
     add = function(voice_idx)
       for _, key in ipairs(M.VOICE_MIX.keys) do
-        S.lib.params_setup.add_voice_extra(voice_idx, record, key, voice_mix_param(key))
+        S.lib.params_setup.add_voice_param(voice_idx, record, key, voice_mix_param(key))
       end
       -- mute and solo send the effective mute (not a grain key: that sends
       -- a stored value as it is) to the voices whose answer changed
@@ -197,7 +197,7 @@ return function(S)
     discrete = {filter_type = {1, #M.VOICE_MIX.filter_types}, mute = {0, 1}},
     voice_rows = {section = M.VOICE_MIX.section, rows = M.VOICE_MIX.keys},
     layout_states = layout_states,
-    fader = false,
+    fader = {{keys = {"filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send"}, rank = 1}},
     -- VOICE's ALT+K2 on this section (#557): the type a uniform option, the
     -- cutoff 100-8000 Hz even in octaves (2 ^ uniform(log2 100, log2 8000)),
     -- the res below self-oscillation and the sends moderate. The filter's
