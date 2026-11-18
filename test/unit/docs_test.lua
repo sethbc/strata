@@ -1765,13 +1765,24 @@ function CI_WORKFLOW.cache_problems(workflow)
   end
   -- a PATH key in an env block (#817): the workflow's, the shard job's or a
   -- step's sets the PATH every command under it runs with, so a directory
-  -- put first there shadows a command the pinned lines run. A block is the
-  -- lines indented under its `env:` (a step's first key, `- env:`, too; a
-  -- comment after the `env:` dropped), a flow mapping on that line, or one
-  -- the line opens and later lines go on (`env: {`). Its limit: it reads the
-  -- YAML by lines, so an env given by an expression (`env: ${{ ... }}`, such
-  -- as `fromJSON`) or through an anchor or merge key (`<<: *name`) is not
-  -- read; the workflow uses neither
+  -- put first there shadows a command the pinned lines run.
+  -- What it reads, by lines: the env of the workflow (before `jobs:`), of the
+  -- shard job and of each of its steps. An `env:` line (a step's first key,
+  -- `- env:`, too), its comment dropped, opens a block when nothing is left
+  -- or when it opens a flow mapping it does not close (`env: {`); the block
+  -- is the lines after it indented deeper than the `env:`, comments dropped.
+  -- A PATH key is found wherever on a line a key can start: after the
+  -- indent, after a `{` and after any `,`, quoted or not, with any spacing
+  -- before its colon, on the block's lines and in a flow mapping on the
+  -- `env:` line itself (`env: { A: 1, PATH: x }`); a key that only ends in
+  -- PATH (`MYPATH`) passes.
+  -- What it does not: it parses no quotes, so a value holding the text
+  -- (`A: "x, PATH: y"`) is refused too, a known over-refusal; and it does
+  -- not read an env given by an expression (`env: ${{ ... }}`, such as
+  -- `fromJSON`) or through an anchor or merge key (`<<: *name`), nor a flow
+  -- mapping's line indented no deeper than its `env:`. The workflow uses
+  -- none of these
+  local function names_path(text) return ("," .. text):find("[{,]%s*[\"']?PATH[\"']?%s*:") ~= nil end
   for _, scope in ipairs({ workflow:match("^(.-\n)jobs:\n") or "", shard.text }) do
     local block
     for line in (scope .. "\n"):gmatch("([^\n]*)\n") do
@@ -1779,8 +1790,8 @@ function CI_WORKFLOW.cache_problems(workflow)
       if block and not skipped and #line:match("^%s*") <= block then block = nil end
       local lead, rest = line:match("^(%s*%-?%s*)env:%s*(.-)%s*$")
       if lead then rest = rest:gsub("^#.*$", ""):gsub("%s+#.*$", "") end
-      local key = not skipped and ((lead and rest:match("[{,]%s*[\"']?PATH[\"']?%s*:"))
-        or (block and line:match("^%s*[{,]?%s*[\"']?PATH[\"']?%s*:")))
+      local content = line:match("^%s*(.-)%s*$"):gsub("%s+#.*$", "")
+      local key = not skipped and ((lead and names_path(rest)) or (block and names_path(content)))
       if key then problem("PATH is set in an env block (every command under it runs with that PATH): " .. line:match("^%s*(.-)%s*$")) end
       if lead and not skipped and (rest == "" or rest:match("^{[^}]*$")) then block = #lead end
     end
@@ -1967,6 +1978,19 @@ test("a kept package reaches apt's archive folder only through the hash check, b
     { name = "PATH in a flow mapping over lines", expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow",
       edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
         "        env: {\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1,\n          PATH: /tmp/shadow\n        }\n" } },
+    -- X13's re-review: a key after a comma in mid-line, over lines (bare,
+    -- and quoted with a space before its colon) and on one line
+    { name = "PATH after a comma in mid-line, in a flow mapping over lines",
+      expect = "PATH is set in an env block (every command under it runs with that PATH): SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
+        "        env: {\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s\n        }\n" } },
+    { name = "a quoted PATH after a comma in mid-line, spaced before its colon",
+      expect = "PATH is set in an env block (every command under it runs with that PATH): SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1,  'PATH' : /tmp/s",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
+        "        env: {\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1,  'PATH' : /tmp/s\n        }\n" } },
+    { name = "PATH after a comma in a flow mapping on one line",
+      expect = "PATH is set in an env block (every command under it runs with that PATH): env: { SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s }",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n", "        env: { SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s }\n" } },
     -- the pinned start: a PATH of its own before the loop, and a line above the script's first
     { name = "a PATH of its own above debs=", expect = differs(start, 3, 'export PATH="$RUNNER_TEMP/bin:$PATH"'),
       edits = { debs, '          export PATH="$RUNNER_TEMP/bin:$PATH"\n' .. debs } },
@@ -1996,7 +2020,8 @@ test("a kept package reaches apt's archive folder only through the hash check, b
   local install_start = "        timeout-minutes: 4\n        run: |\n          echo \"jackd2 "
   for _, env in ipairs({ "        env:\n          SC_STARTED: 1\n          MYPATH: /tmp/bin\n", "        env: { PATH_NOTE: none }\n",
       "        env:\n          STRATA_PATH: /tmp/bin\n", "        env:  # PATH is the runner's own\n          SC_STARTED: 1\n",
-      "        env: {\n          SC_STARTED: 1,\n          MYPATH: /tmp/bin\n        }\n", "        with:\n          path: /tmp/bin\n" }) do
+      "        env: {\n          SC_STARTED: 1,\n          MYPATH: /tmp/bin\n        }\n", "        with:\n          path: /tmp/bin\n",
+      "        env: {\n          SC_STARTED: 1, MYPATH: /tmp/bin\n        }\n", "        env: { SC_STARTED: 1, MYPATH: /tmp/bin }\n" }) do
     assert_equal(table.concat(CI_WORKFLOW.cache_problems(CI_WORKFLOW.mutated(workflow, install_start,
       "        timeout-minutes: 4\n" .. env .. "        run: |\n          echo \"jackd2 ")), " | "), "",
       "the cache problems of an install step with " .. env)
