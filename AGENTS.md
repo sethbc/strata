@@ -153,7 +153,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 | `engine.syncScan(voice, phase)` | `"if"` | Voice 0-6's own scan phase, 0-2 passes |
 | `engine.setSlotGain(slot, gain)` | `"if"` | Slot 0-7's gain, 0-16 |
 
-**Guarded commands** ignore an out-of-range index or a non-finite continuous argument with one console line, and clip their continuous arguments to the ranges above (`docs/notes/engine/modulation.md`, `docs/notes/engine/envelopes.md`, `docs/notes/engine/notes.md`, `docs/notes/engine/positions.md`): `setFastLfo`, `stopFastLfo`, `syncFastLfo`, `setScatter`, `setFastOffset`, `setFastEnv`, `stopFastEnv`, `noteOn`, `noteOff`, `noteExpression`, `setNotePool`, `noteRegion`, `syncScan`, `setSlotGain`, `setDelayFreeze`, `setTuning`, `setTuningTone`, `setShimmer`.
+**Guarded commands** ignore an out-of-range index or a non-finite continuous argument with one console line; a continuous argument out of the ranges above is clipped, or ignored alike by `setTuning` and `setTuningTone` (`docs/notes/engine/modulation.md`, `docs/notes/engine/envelopes.md`, `docs/notes/engine/notes.md`, `docs/notes/engine/positions.md`, `docs/notes/engine/effects.md`, `docs/notes/engine/tuning.md`): `setFastLfo`, `stopFastLfo`, `syncFastLfo`, `setScatter`, `setFastOffset`, `setFastEnv`, `stopFastEnv`, `noteOn`, `noteOff`, `noteExpression`, `setNotePool`, `noteRegion`, `syncScan`, `setSlotGain`, `setDelay`, `setDelayFreeze`, `setTuning`, `setTuningTone`, `setShimmer`.
 
 **Polls** (engine → Lua) pack each report into one float, and Lua matches each report to the command it names: `docs/notes/engine/buffers.md` (Polls, The polls' encodings), `docs/notes/engine/record.md`, `docs/notes/lua/buffers.md` and `docs/notes/lua/record.md`.
 
