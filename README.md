@@ -74,7 +74,7 @@ After installing, restart norns from its own menu: SYSTEM > RESTART. Strata's en
 - [Sequencer](docs/user/sequencer.md) - each voice's pattern length, division, swing and direction, step conditions, probability, ratchets, step locks, notes, slices and gates, fill, Euclidean fill, chaining and following the clock's transport
 - [Screen Controls](docs/user/controls.md) - the ten screen pages (one file each under docs/user/pages/), E1, the header, ALT, fine adjustment and center detents
 - [MIDI Input](docs/user/midi.md) - playing voices from MIDI and mapping CCs
-- [Monome Grid](docs/user/grid.md) - grid sizes (one layout file each under docs/user/grid/), holds and step levels (since 3.4 a step key toggles its step when you let go, not when you press, and a step held 0.3 s opens the step editor), and the pattern sequencer
+- [Monome Grid](docs/user/grid.md) - panes, pages and strips (a file for each size under docs/user/grid/, each page under docs/user/grid/pages/), holds and step levels (since 3.4 a step key toggles its step when you let go, not when you press, and a step held 0.3 s opens the step editor), and the pattern sequencer
 - [Monome Arc](docs/user/arc.md) - arc rings, button and LED feedback
 - [IO and Supported Devices](docs/user/pages/io.md) - the IO page: MIDI out, crow, the ii bus, controllers, remote grids and arcs, OSC and the tape loop, with [a page for each device](docs/user/io/devices.md)
 - [Parameters Reference](docs/user/params.md) - everything in the PARAMETERS menu

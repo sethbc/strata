@@ -30,7 +30,7 @@
 
 Elsewhere:
 - Its start steps (`START_ORDER.drift_metro`, `mutation_metro`) create `S.drift_metro` and `S.mutation_metro` at init.
-- `drift_update` calls `S.lib.grid_faders.follow_faders()` (`lib/grid/faders.lua`), which redraws the grids while one shows page 2 only when a fader shown there moved, whoever moved it (#324).
+- `drift_update` calls `S.lib.grid_faders.follow_faders()` (`lib/grid/faders.lua`), which redraws the grids only when a fader line or a page signature a pane shows moved, whoever moved it (#324; `docs/notes/lua/grid/pane.md`).
 - `UNDO_SECONDS` is in `lib/constants.lua`, aliased at the top of the constructor. The keys and draws `voice_spec` and `mutate_voices` use are the records' (`main_randomize`, `mutate`; the built-in ones in `lib/voices.lua`), each group's keys read through `S.lib.params_setup.group_keys`.
 - The actions of the params a randomize sets call `note_param_edit` (`lib/params_setup.lua`); `recall_scene` and `recall_scene_instant` call `clear_undo` (`lib/scenes.lua`).
 - The ALT+K2 that calls `randomize` and `undo`, and its hint, are the shared handler's (`S.lib.ui_alt.k2_down`, `k2_up`, `k2_hint`, `docs/notes/lua/ui/alt-and-keys.md`); each page's spec is its record's `randomize_section` (MAIN's: `docs/notes/lua/pages/main.md`).
