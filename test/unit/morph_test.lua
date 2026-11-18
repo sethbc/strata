@@ -1235,6 +1235,55 @@ test("a type that differs among corners switches at the crossing with that corne
   assert_true(ok, tostring(problem))
 end)
 
+-- Fix round 1 (the review's finding 1): a corner reproduces its own scene,
+-- whichever corner's type lacks the key. Two corners of each type: the
+-- pair whose keys the first corner (A) lacks blends along its edge and
+-- lands on each corner's own value
+local function paired_types(first, second)
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for slot, corner in ipairs({ first[1], first[2], second[1], second[2] }) do
+    params:set("v1_type", S.lib.types.record(corner.type).index)
+    params:set("v1_" .. corner.key, corner.value)
+    capture_scene(slot)
+  end
+  params:set("v1_type", S.lib.types.record(first[1].type).index)
+  return context, S
+end
+
+test("a key the first corner's type lacks lands on each corner and blends between the corners that hold it", function()
+  local context, S = paired_types(
+    { { type = "resonator", key = "rq", value = 0.2 }, { type = "resonator", key = "rq", value = 0.8 } },
+    { { type = "fm", key = "ratio", value = 2 }, { type = "fm", key = "ratio", value = 4 } })
+  settle_xy(context, 0.5, 0.5)  -- through the middle, where every corner counts (ruling 87)
+  settle_xy(context, 1, 1)
+  assert_equal(S.lib.types.of(1).key, "fm", "at D: fm")
+  assert_near(params:get("v1_ratio"), 4, 1e-9, "D's ratio")
+  settle_xy(context, 0.5, 1)
+  assert_near(params:get("v1_ratio"), 3, 0.05, "between C and D the ratio blends")
+  settle_xy(context, 0, 1)
+  assert_near(params:get("v1_ratio"), 2, 1e-9, "at C: C's ratio")
+  settle_xy(context, 0, 0)
+  assert_equal(S.lib.types.of(1).key, "resonator", "back at A: resonator")
+  assert_near(params:get("v1_rq"), 0.2, 1e-9, "A's rq")
+end)
+
+test("the mirror: a key the bottom corners lack lands on the top corners and blends between them", function()
+  local context, S = paired_types(
+    { { type = "fm", key = "ratio", value = 2 }, { type = "fm", key = "ratio", value = 4 } },
+    { { type = "resonator", key = "rq", value = 0.2 }, { type = "resonator", key = "rq", value = 0.8 } })
+  settle_xy(context, 0.5, 0)
+  assert_near(params:get("v1_ratio"), 3, 0.05, "between A and B the ratio blends")
+  settle_xy(context, 0.5, 0.5)
+  settle_xy(context, 1, 1)
+  assert_equal(S.lib.types.of(1).key, "resonator", "at D: resonator")
+  assert_near(params:get("v1_rq"), 0.8, 1e-9, "D's rq")
+  settle_xy(context, 0.5, 1)
+  assert_near(params:get("v1_rq"), 0.5, 0.02, "between C and D the rq blends")
+  settle_xy(context, 0, 1)
+  assert_near(params:get("v1_rq"), 0.2, 1e-9, "at C: C's rq")
+end)
+
 test("corners of one type blend their synth keys as today", function()
   local context, S = typed_corners()
   params:set("morph_c", 9)  -- an empty slot: A and B alone
