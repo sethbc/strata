@@ -47,6 +47,14 @@
             * this.notePark(noteGate, attack, release)
     }
 
+    // Karplus's two Pluck lines' longest delay (s): Pluck takes
+    // ceil(max x rate + 1) + 64 frames, rounded up to a power of two, from
+    // the pool in its constructor, and 0.0839 s is 4096 frames at 48 kHz
+    // (and at 44.1 kHz), where 0.1 s took 8192: 49.7 KB a synth, not 80.9.
+    // Its lowest pitch is 1 / 0.0839 = 11.9 Hz (Lua's freq floor is 20 Hz;
+    // bend and crossmod below it hold there)
+    karplusMaxDelay { ^0.0839 }
+
     // The ranges (s) of every voice def's attackTime and releaseTime (a
     // later Lua param's spec is compared with them)
     attackTimeRange { ^#[0.005, 30] }
@@ -348,7 +356,7 @@
             sig = Pluck.ar(
                 in: pluck,
                 trig: exciteTrig,
-                maxdelaytime: 0.1,
+                maxdelaytime: this.karplusMaxDelay,
                 delaytime: modFreq.reciprocal,
                 decaytime: decayTime,
                 coef: damping.linlin(0, 1, 0.1, 0.9)
@@ -358,7 +366,7 @@
             sig = [sig, Pluck.ar(
                 in: pluck,
                 trig: exciteTrig,
-                maxdelaytime: 0.1,
+                maxdelaytime: this.karplusMaxDelay,
                 delaytime: (modFreq * 1.002).reciprocal,
                 decaytime: decayTime,
                 coef: damping.linlin(0, 1, 0.1, 0.9)

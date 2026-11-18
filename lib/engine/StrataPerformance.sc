@@ -243,12 +243,36 @@
 
     // Bytes the high tier allocates for slots of `seconds`: 8 slots x 2 mono
     // buffers, every voice's 2-channel ring and 2-channel copy ring (the
-    // rings area's allocRings) and the input ring (highHistorySeconds +
-    // ringGuardSeconds + 1), 4-byte samples
+    // rings area's allocRings), the input ring (highHistorySeconds +
+    // ringGuardSeconds + 1) and the fixed buffers (fixedBufferBytes), 4-byte
+    // samples
     highMemoryBytes { arg seconds, sampleRate;
         ^(numBuffers * 2 * seconds * sampleRate * 4)
             + (numVoices * 2 * 2 * this.ringSeconds * sampleRate * 4)
             + (2 * (this.highHistorySeconds + this.ringGuardSeconds + 1) * sampleRate * 4)
+            + this.fixedBufferBytes(sampleRate)
+    }
+
+    // The sizes of 3.8's fixed buffer sets, ordinary RAM on both tiers,
+    // which the areas that allocate them read (so none of them edits this
+    // file or the figure; design §0.2, ruling 10). delayLineFrames (the
+    // delay's line, two buffers) is StrataDelay.sc's
+    // Seconds of each voice's output ring, a channel pair a voice
+    outRingSeconds { ^4 }
+    // Frames of the whole window bank: 15 skews x 8 shapes of 1024
+    windowBankFrames { ^122880 }
+    // Frames of the whole wavetable bank: 8 tables of 4096 (2048 samples in
+    // wavetable form)
+    wavetableBankFrames { ^32768 }
+    // Frames of each of shimmer's four rings
+    shimmerRingFrames { ^16384 }
+
+    // Bytes of the fixed buffer sets, counted once: the delay's two lines,
+    // every voice's 2-channel output ring, the window bank, the wavetable
+    // bank and shimmer's four rings, 4-byte samples (13733888 at 48 kHz)
+    fixedBufferBytes { arg sampleRate;
+        ^((2 * this.delayLineFrames) + (numVoices * 2 * this.outRingSeconds * sampleRate) + this.windowBankFrames
+            + this.wavetableBankFrames + (4 * this.shimmerRingFrames)) * 4
     }
 
     // The tier and its values from the setting, the board model and
