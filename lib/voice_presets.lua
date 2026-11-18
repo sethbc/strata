@@ -166,6 +166,71 @@ return function(S)
     return loaded[voice_idx]
   end
 
+  -- Put a sound ({type, values}) on the voice, named shown_name on its
+  -- preset row: the data apply_voice gets is, for each of the voice's
+  -- scene keys of the sound's type (voice_scene_keys), a synth key from the
+  -- sound else the voice's remembered value, an in key from the sound else
+  -- the voice's capture, an out key from the capture, with the voice's own
+  -- active and source and the sound's type. A key the sound has and this
+  -- build lacks is in no list and dropped. A type this build lacks applies
+  -- nothing (one console line, a flash). The voice is let go of in a
+  -- running fade first (S.lib.scenes.release_voice). True once applied
+  local function apply_sound(voice_idx, sound, shown_name)
+    if not S.lib.types.record(sound.type) then
+      print("strata: voice preset " .. shown_name .. " is of type " .. tostring(sound.type)
+        .. ", which this build lacks; nothing loaded")
+      flash(VOICE_PRESETS.texts.no_type)
+      return false
+    end
+    local current = S.lib.scenes.capture_voice(voice_idx)
+    local remembered = S.voices[voice_idx].values
+    local values = {}
+    for _, entry in ipairs((S.lib.params_setup.voice_scene_keys(voice_idx, sound.type))) do
+      local key, value = entry.key, nil
+      if entry.synth then
+        value = sound.values[key]
+        if value == nil then value = remembered[key] end
+      elseif KEYS[key] == true then
+        value = sound.values[key]
+        if value == nil then value = current.values[key] end
+      else
+        value = current.values[key]
+      end
+      values[key] = value
+    end
+    S.lib.scenes.release_voice(voice_idx)
+    local applied = S.lib.scenes.apply_voice(voice_idx,
+      {active = current.active, source = current.source, type = sound.type, values = values})
+    if not applied then
+      flash(VOICE_PRESETS.texts.not_loaded)
+      return false
+    end
+    loaded[voice_idx] = shown_name
+    request_redraw()
+    grid_redraw()
+    return true
+  end
+
+  -- Load slot's preset into the voice: its sound, the voice's place kept
+  -- (apply_sound). False for no voice, no slot, an empty slot (a flash) or
+  -- a preset that does not apply
+  function M.load(voice_idx, slot)
+    if not valid_voice(voice_idx) or not valid_slot(slot) then return false end
+    local preset = library[slot]
+    if not preset then
+      flash(VOICE_PRESETS.texts.nothing)
+      return false
+    end
+    return apply_sound(voice_idx, {type = preset.type, values = copy_values(preset.values)}, preset.name)
+  end
+
+  -- Copy another voice's sound (M.capture(from_voice)) into to_voice, as a
+  -- load does; its row shows v<from>. False for no voice or the same one
+  function M.copy(from_voice, to_voice)
+    if not valid_voice(from_voice) or not valid_voice(to_voice) or from_voice == to_voice then return false end
+    return apply_sound(to_voice, M.capture(from_voice), VOICE_PRESETS.copy_prefix .. from_voice)
+  end
+
   -- Save the voice's sound (M.capture) in slot as name (printable ASCII,
   -- cut to name_max) and write voices.data: true, or false and why (no
   -- voice or slot, or the file not written: the slot is as it was, and a
