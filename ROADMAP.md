@@ -1,6 +1,6 @@
 # Strata roadmap
 
-The order and scope of the releases from 3.1 to 3.8 and 4.0. 3.1 to 3.7 have shipped (Shipped, below); **the three small revisions between 3.7 and 3.8, then 3.8, sound, are next.** `docs/status.md` has the open items.
+The order and scope of the releases from 3.1 to 3.9 and 4.0. 3.1 to 3.7 have shipped (Shipped, below); **the three small revisions between 3.7 and 3.8, then 3.8, sound, are next.** `docs/status.md` has the open items.
 
 Date: 2026-11-07
 Status: brainstorm, reviewed 2026-11-07; cross-release decisions added 2026-11-08 (see "Cross-release decisions (2026-11-08)"). Added 2026-11-11, at the maintainer's request: releases 3.7 (rhythm) and 3.8 (sound), with fourteen features from a review of four hardware granular instruments, and in 3.6 the iii scripts and program change. It sets the order and scope of the releases after 3.0.2. It is not a build plan: each release gets its own design document (like `docs/design/3.0-design.md`) and an implementation plan before any code is written.
@@ -25,7 +25,8 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 6. 3.6: integration. crow, Just Friends and other ii (i2c) devices reached through crow, MIDI out, transport, OSC, dedicated controller layouts, and iii scripts for grids and arcs that run them.
 7. 3.7: rhythm (added 2026-11-11). Sample slices, buffers that follow the tempo and carry a key, scan modes, trig conditions, pattern directions, scene chains with chance, a synced delay, and envelope and random-sequence modulators.
 8. 3.8: sound (added 2026-11-11). More voice types, a deeper grain (a continuous window, grain probability, a grain arpeggiator, constant overlap), voices that grain each other, an input channel per voice, microtuning with a scale editor, shimmer, a delay freeze and per-voice sound presets.
-9. 4.0: a full code review of the whole project once 3.8 is out (a pre-4.0 release), then 4.0 with its fixes, the hardware check (#6) and the factory presets' sounds.
+9. 3.9: what 3.8 delays (added 2026-11-18). A version number was kept free before 4.0 for this: a feature cut from 3.8 or a finding too large for its last fix wave is built here, the high tier's reverb freeze first.
+10. 4.0: a full code review of the whole project once 3.9 is out (a pre-4.0 release), then 4.0 with its fixes, the hardware check (#6) and the factory presets' sounds.
 
 ## Non-goals
 
@@ -63,6 +64,7 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 | 3.6 | Integration | Mostly Lua | Low to medium |
 | 3.7 | Rhythm: slices, tempo-aware buffers, scan modes, sequencer and scene-chain depth, modulators | Engine and Lua | Medium |
 | 3.8 | Sound: voice types, a deeper grain, voice-to-voice graining, microtuning, shimmer, voice presets | Engine and Lua | Medium to high |
+| 3.9 | What 3.8 delays: the high tier's reverb freeze, and whatever its last review defers | Engine and Lua | Medium |
 | pre-4.0 | Full code review of the whole project | Everything (review fixes only) | Low to medium |
 | 4.0 | Release of the reviewed code, checked on hardware, with factory sounds | Everything | Low |
 
@@ -70,7 +72,8 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 - 3.2's grain-engine rework comes before 3.3 and 3.5. Freeing memory per voice makes polyphony affordable, and the unified grain path gives buffer, input and synth voices the same features.
 - 3.3 comes before 3.4 (2026-11-08): 3.4 builds on 3.3's scene version, its bookmarks and its per-voice mix stage. The brainstorm's "3.4 can move ahead of 3.3" no longer holds.
 - 3.7 and 3.8 (added 2026-11-11) come after 3.6: slices and trig conditions build on 3.4's sequencer and 3.3's positions, and new voice types, microtuning and voice presets on 3.5's note allocation, so neither is designed before those have shipped. Each gets its own design first, like every release.
-- The full review comes last, after 3.8, when every planned feature is in, so it reviews the code 4.0 ships. Since 2026-11-16 it is the review alone: everything else once kept for it was moved up to before 3.8 or into 3.8 (the maintainer), and only what needs a norns in hand (#6, the factory sounds) waits for 4.0.
+- 3.9 (added 2026-11-18) takes what 3.8 delays, so that 3.8 ships at its planned scope less what failed its own conditions and nothing is pushed into the review.
+- The full review comes last, after 3.9, when every planned feature is in, so it reviews the code 4.0 ships. Since 2026-11-16 it is the review alone: everything else once kept for it was moved up to before 3.8 or into 3.8 (the maintainer), and only what needs a norns in hand (#6, the factory sounds) waits for 4.0.
 
 ## Development approach (all releases)
 
@@ -160,7 +163,14 @@ The seven items below, and the scale editor above, were added on 2026-11-11 from
 
 ### Delay freeze and clear
 
-- **Freeze** holds what is in the delay as a loop (its feedback at one and its input closed) until released, as a drone to play over; **clear** empties it at once. Both are controls on the delay SynthDef, with a key on FX and the grids. A reverb freeze is possible only in the high tier's reverb and is the design's to weigh.
+- **Freeze** holds what is in the delay as a loop (its feedback at one and its input closed) until released, as a drone to play over; **clear** empties it at once. Both are controls on the delay SynthDef, with a key on FX and the grids. A reverb freeze, possible only in the high tier's reverb, was designed for 3.8 and cut when the frozen tail failed its 1 dB condition (#819); it is 3.9's.
+
+## 3.9: what 3.8 delays
+
+Added 2026-11-18 (the maintainer): a version number was left free before 4.0 on purpose, and 3.9 takes whatever 3.8 delays. Each item has its issue on the 3.9 milestone; 3.9 gets its own design first, like every release.
+
+- **The high tier's reverb freeze** (#819). 3.8's package built the design's freeze on the FDN and measured it on SuperCollider 3.13 and 3.14.1: frozen, the tail lost 2.4 to 3.2 dB above 6 kHz in six seconds and stepped by up to 1.24 dB at the freeze, so by the plan's own condition it was cut. The cause is known (an interpolating delay line never lands on a whole sample once its time has moved), and so is what a freeze that holds needs: whole-sample reads on every line while frozen, by a second read of each line (about 144 KB of the real-time pool) or by moving the lines into buffers (that much back to the pool), and taps that keep their interpolation and damping. The FX page and the grids' FX page already reach the freeze through one test (`S.lib.fx_hold.offered`), so they light up when it exists.
+- **What 3.8's last review defers**: a finding too large for 3.8's fix wave goes here with its issue, never into the pre-4.0 review.
 
 ## pre-4.0 and 4.0: full review, then release
 
