@@ -257,10 +257,10 @@ jobs:
       # below can run before anything is unpacked
       - name: Install SuperCollider and JACK
         # The slowest install that succeeds: 45 s and 5 to kill the first try,
-        # 75 and 5 for the second, then the refill and the unpacking (23 s at
-        # most in #786's runs; 21-28 s cached, 80-90 s with the second mirror):
-        # about 155 s. 4 minutes leave room for an unpacking three times as
-        # slow, and a download that never finishes fails by the ::error:: line
+        # 75 and 5 for the second, then the refill and the unpacking, which a
+        # whole cached install did in 38 s at most (five runs, docs/checks.md):
+        # about 170 s, inside its 4 minutes, and a download that never
+        # finishes fails by the ::error:: line
         timeout-minutes: 4
         run: |
           echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections

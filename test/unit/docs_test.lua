@@ -1650,7 +1650,8 @@ done < "$RUNNER_TEMP/sc-packages.sha512"
 -- lines run (#792): a shell function or an alias in any step of the shard,
 -- BASH_ENV anywhere in the workflow (bash runs its file before every step's
 -- script), a write to GITHUB_PATH or a PATH written to GITHUB_ENV in any step
--- (both reach every later step)
+-- (both reach every later step), and a PATH key in the env of the workflow,
+-- the shard job or any of its steps (#817)
 function CI_WORKFLOW.cache_problems(workflow)
   local problems, at = {}, {}
   local function problem(text) problems[#problems + 1] = text end
@@ -1760,6 +1761,23 @@ function CI_WORKFLOW.cache_problems(workflow)
   for line in (workflow .. "\n"):gmatch("([^\n]*)\n") do
     if not line:match("^%s*#") and line:find("BASH_ENV", 1, true) then
       problem("BASH_ENV is set (bash runs its file before every step's script): " .. line:match("^%s*(.-)%s*$"))
+    end
+  end
+  -- a PATH key in an env block (#817): the workflow's, the shard job's or a
+  -- step's sets the PATH every command under it runs with, so a directory
+  -- put first there shadows a command the pinned lines run. A block is the
+  -- lines indented under its `env:` (a step's first key, `- env:`, too), or
+  -- a flow mapping on that line
+  for _, scope in ipairs({ workflow:match("^(.-\n)jobs:\n") or "", shard.text }) do
+    local block
+    for line in (scope .. "\n"):gmatch("([^\n]*)\n") do
+      local skipped = line:match("^%s*$") or line:match("^%s*#")
+      if block and not skipped and #line:match("^%s*") <= block then block = nil end
+      local lead, rest = line:match("^(%s*%-?%s*)env:%s*(.-)%s*$")
+      local key = not skipped and ((lead and rest:match("[{,]%s*[\"']?PATH[\"']?%s*:"))
+        or (block and line:match("^%s*[\"']?PATH[\"']?%s*:")))
+      if key then problem("PATH is set in an env block (every command under it runs with that PATH): " .. line:match("^%s*(.-)%s*$")) end
+      if lead and not skipped and rest == "" then block = #lead end
     end
   end
   return problems
@@ -1923,6 +1941,19 @@ test("a kept package reaches apt's archive folder only through the hash check, b
     { name = "BASH_ENV in the install step's env", expect = "BASH_ENV is set (bash runs its file before every step's script): BASH_ENV: /tmp/shadow.sh",
       edits = { "        timeout-minutes: 4\n        run: |\n          echo \"jackd2 ",
         "        timeout-minutes: 4\n        env:\n          BASH_ENV: /tmp/shadow.sh\n        run: |\n          echo \"jackd2 " } },
+    -- #817: a PATH key in an env block, the step's, the job's or the
+    -- workflow's (each reaches the install's commands), and in a flow mapping
+    { name = "PATH in the install step's env", expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
+      edits = { "        timeout-minutes: 4\n        run: |\n          echo \"jackd2 ",
+        "        timeout-minutes: 4\n        env:\n          PATH: /tmp/shadow:/usr/bin:/bin\n        run: |\n          echo \"jackd2 " } },
+    { name = "PATH in the shard job's env", expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
+      edits = { "      STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}\n",
+        "      STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}\n      PATH: /tmp/shadow:/usr/bin:/bin\n" } },
+    { name = "PATH in the workflow's env", expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
+      edits = { "\nenv:\n", "\nenv:\n  PATH: /tmp/shadow:/usr/bin:/bin\n" } },
+    { name = "PATH in a flow mapping on a step's env", expect = "PATH is set in an env block (every command under it runs with that PATH): env: { PATH: /tmp/shadow }",
+      edits = { "        timeout-minutes: 4\n        run: |\n          echo \"jackd2 ",
+        "        timeout-minutes: 4\n        env: { PATH: /tmp/shadow }\n        run: |\n          echo \"jackd2 " } },
     -- the pinned start: a PATH of its own before the loop, and a line above the script's first
     { name = "a PATH of its own above debs=", expect = differs(start, 3, 'export PATH="$RUNNER_TEMP/bin:$PATH"'),
       edits = { debs, '          export PATH="$RUNNER_TEMP/bin:$PATH"\n' .. debs } },
@@ -1947,6 +1978,13 @@ test("a kept package reaches apt's archive folder only through the hash check, b
   for _, line in ipairs({ 'echo "PATH is $PATH"', 'echo "SC_STARTED=1" >> "$GITHUB_ENV"', 'export MYPATH="$RUNNER_TEMP/bin"' }) do
     assert_equal(table.concat(CI_WORKFLOW.cache_problems(CI_WORKFLOW.mutated(workflow, prefix, "          " .. line .. "\n" .. prefix)), " | "), "",
       "the cache problems of a list step with " .. line)
+  end
+  -- #817: nor an env block with other keys (the restore step's has one)
+  local install_start = "        timeout-minutes: 4\n        run: |\n          echo \"jackd2 "
+  for _, env in ipairs({ "        env:\n          SC_STARTED: 1\n          MYPATH: /tmp/bin\n", "        env: { PATH_NOTE: none }\n" }) do
+    assert_equal(table.concat(CI_WORKFLOW.cache_problems(CI_WORKFLOW.mutated(workflow, install_start,
+      "        timeout-minutes: 4\n" .. env .. "        run: |\n          echo \"jackd2 ")), " | "), "",
+      "the cache problems of an install step with " .. env)
   end
 end)
 
