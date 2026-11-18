@@ -631,6 +631,94 @@ test("a load refuses a key the index lists not, and one that is no key", functio
   assert_true(not factory().loading(), "no clock")
 end)
 
+-- 4d fix round 1: a set written on another machine (CRLF lines), and the
+-- values norns' read takes (a negative, an exponent)
+test("a CRLF set.params loads as its Unix copy, a negative and an exponent too", function()
+  local lines = { "-- dusk", '"buf1_file": pad.wav', '"v1_grain_size": 3.1e-1', '"v1_pan": -0.5',
+    '"v1_seq_length": 1.2E1', '"tuning_name": 19 equal' }
+  local loaded = {}
+  for _, ending in ipairs({ "\n", "\r\n" }) do
+    local context = session({ prepare = function(dir)
+      write_set_file(dir, "set.params", table.concat(lines, ending) .. ending)
+    end })
+    assert_true(factory().load("dusk")); run_load(context)
+    local name = ending == "\n" and "unix" or "crlf"
+    loaded[name] = { buf1_file = params:get("buf1_file"):sub(#install_dir(context) + 1),
+      v1_grain_size = params:get("v1_grain_size"), v1_pan = params:get("v1_pan"),
+      v1_seq_length = params:get("v1_seq_length"), tuning_name = params:get("tuning_name") }
+  end
+  assert_equal(loaded.unix.buf1_file, "pad.wav", "the slot line")
+  assert_near(loaded.unix.v1_grain_size, 0.31, 1e-9, "an exponent")
+  assert_near(loaded.unix.v1_pan, -0.5, 1e-9, "a negative")
+  assert_equal(loaded.unix.v1_seq_length, 12, "an exponent of a number param")
+  assert_equal(loaded.unix.tuning_name, "19 equal", "a text")
+  for key, value in pairs(loaded.unix) do
+    assert_equal(loaded.crlf[key], value, key .. ": the CRLF copy loads as the Unix one")
+  end
+  load_strata()
+  assert_equal(factory().parse_params('"a": 1\r\n"b": two words\r\n').b, "two words", "the parser drops a line's \\r")
+end)
+
+-- 4d fix round 1: a file installed short (a power cut before the card
+-- wrote it whole: the copy writes no fsync) is copied again
+test("an installed file of another size than the set's is copied again", function()
+  local context, _, dir = session()
+  local install = install_dir(context)
+  util.make_dir(install)
+  write_text(install .. "pad.wav", "RIFF")
+  assert_true(factory().load("dusk")); run_load(context)
+  assert_equal(file_text(install .. "pad.wav"), file_text(dir .. "factory/dusk/audio/pad.wav"), "copied whole")
+  assert_true(not util.file_exists(install .. "pad.wav.part"), "through its .part, gone")
+end)
+
+-- 4d fix round 1: the departures the report named
+test("a set whose files cannot be read is refused before any clock", function()
+  for _, case in ipairs({ { file = "set.samples.data", text = "garbage" }, { file = "set.params" } }) do
+    local context, _, dir = session({ prepare = function(dir)
+      if case.text then write_set_file(dir, case.file, case.text) else os.remove(dir .. "factory/dusk/" .. case.file) end
+    end })
+    local loaded, why = factory().load("dusk")
+    assert_equal(loaded, false, case.file .. ": refused")
+    assert_equal(why, "unreadable", case.file)
+    assert_true(not factory().loading(), case.file .. ": no clock")
+    assert_equal(#lines_with(context, "dusk not loaded: " .. dir .. "factory/dusk/" .. case.file), 1,
+      case.file .. ": one line naming it")
+  end
+end)
+
+test("a sample record the checks refuse is left out with one line; the file installs", function()
+  local context = session({ prepare = function(dir)
+    write_set_file(dir, "set.samples.data", h.tabutil_text({ version = 1, files = {
+      ["pad.wav"] = { tempo = 1000 }, ["bell.wav"] = { key = 64 }, ["drone.wav"] = {} } }))
+  end })
+  assert_true(factory().load("dusk")); run_load(context)
+  local install = install_dir(context)
+  assert_equal(#lines_with(context, "pad.wav's settings are refused"), 1, "one line")
+  assert_true(util.file_exists(install .. "pad.wav"), "the file is installed")
+  assert_equal(stored_settings(context, install .. "pad.wav"), nil, "with no record")
+  assert_equal(stored_settings(context, install .. "bell.wav").key, 64, "the others keep theirs")
+  assert_equal(marked(context), 1, "and the load is whole")
+end)
+
+test("a pending set the index no longer lists loads nothing and is left", function()
+  local first = load_strata()
+  cleanup()
+  util.make_dir(first.data_dir .. "strata/")
+  write_text(first.data_dir .. "strata/factory.data", h.tabutil_text({ version = 1, pending = "gone", loaded = {} }))
+  local context = session({ first_run = true, unstarted = true, data_subdir = folder_of(first) })
+  assert_true(not factory().loading(), "no load: the marker was found")
+  assert_equal(marker(context).pending, "gone", "the marker as it was")
+end)
+
+test("a first run whose marker cannot be written starts no load", function()
+  local restore = h.watch_writes("factory.data.part", { at = "write", after = 0 })
+  local context = session({ first_run = true, unstarted = true })
+  restore()
+  assert_true(not factory().loading(), "no load: pending could not be written first")
+  assert_equal(#lines_with(context, "error: factory file not saved"), 1, "one line")
+  assert_equal(marker(context), nil, "no factory.data")
+end)
+
 -- The first run (ruling 51)
 test("a start with no index writes nothing", function()
   local context = load_strata()
