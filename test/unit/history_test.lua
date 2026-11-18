@@ -307,4 +307,34 @@ test("a start sends inputChannel before voiceOn", function()
   assert_true(channel_at and on_at and channel_at < on_at, "the channel before voiceOn")
 end)
 
+-- 3.8 (package 1d, fix round 1): the channel is discrete: a fade between
+-- two scenes leaves it as it was until the fade's end, then sets it, with
+-- one inputChannel send
+test("a fade switches the input channel at its end, with one send", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  assert_true(S.voices[1].active, "voice 1 runs")
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  params:set("v1_input_channel", 3)
+  capture_scene(2)
+  params:set("v1_input_channel", 1)
+  capture_scene(1)
+  context.clear_engine_calls()
+  recall_scene(2, 4); wake(context, "scene_transition_clock")
+  context.clock.run_for(2)
+  local function channel_sends()
+    local sent = {}
+    for _, call in ipairs(context.calls_named("setGrainParam")) do
+      if call.args[1] == 0 and call.args[2] == "inputChannel" then sent[#sent + 1] = call.args[3] end
+    end
+    return sent
+  end
+  assert_equal(params:get("v1_input_channel"), 1, "unchanged halfway through the fade")
+  assert_equal(#channel_sends(), 0, "nothing sent during the fade")
+  context.clock.run_for(3)
+  assert_equal(params:get("v1_input_channel"), 3, "the scene's channel at the fade's end")
+  assert_equal(table.concat(channel_sends(), ","), "2", "one send: right, inputChannel 2")
+end)
+
 end
