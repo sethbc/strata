@@ -23,10 +23,12 @@ var readBus = { arg bus; h.readBus(bus) };
 var powerDb = { arg ratio; (ratio.max(1e-30).log10 * 10).round(0.01) };
 var ampDb = { arg ratio; ratio.max(1e-15).ampdb.round(0.1) };
 // the windows an analysis measures, and the values it gives each
-var numWindows = 8, fields = 6, windowField;
+var numWindows = 8, fields = 7, windowField;
 var startCheckDelay, allocLine, runCases, guarded, withIgnoredLines;
-var checkHeldLoop, checkLoopBehavior, checkFreezeCommand, checkIgnoredValues, checkClearCommand, checkFreshEngine;
+var checkHeldLoop, checkLoopBehavior, checkClearEdge, checkFreezeCommand, checkIgnoredValues, checkClearCommand, checkFreshEngine;
 var times = [0.375, 0.30928];
+// a clear's largest sample step against the steady signal's (checkClearEdge)
+var clearStepBound = 1.0;
 
 // A control bus's value over time from the synth's start: first, second
 // from at (s), third from endAt
@@ -45,18 +47,20 @@ SynthDef(\strataCheckDelayInput, { arg out, noise = 0, noiseTo = 1e9, sine = 0, 
 // end] s each): per window, the sum of its squared samples (both channels),
 // the same of its 6-24 kHz band (two second-order highpasses at 6 kHz), of
 // its side ((L - R) / 2) and its mid ((L + R) / 2), its largest absolute
-// sample and the largest absolute difference from ref (summed over both
-// channels); six values a window on out. It frees itself at seconds
+// sample, the largest absolute difference from ref (summed over both
+// channels) and its largest step from one sample to the next (either
+// channel); seven values a window on out. It frees itself at seconds
 SynthDef(\strataCheckDelayWindows, { arg in, ref, out, seconds = 1, windows = #[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     var sig = In.ar(in, 2), other = In.ar(ref, 2), elapsed = Sweep.ar(0, 1);
     var band = HPF.ar(HPF.ar(sig, 6000), 6000);
     var mid = (sig[0] + sig[1]) * 0.5, side = (sig[0] - sig[1]) * 0.5;
     var largest = sig[0].abs.max(sig[1].abs), difference = (sig - other).abs.sum;
+    var steps = (sig - Delay1.ar(sig)).abs, step = steps[0].max(steps[1]);
     Out.kr(out, 8.collect({ arg index;
         var inside = (elapsed >= windows[index * 2]) * (elapsed < windows[(index * 2) + 1]);
         A2K.kr([Integrator.ar(sig.squared.sum * inside, 1), Integrator.ar(band.squared.sum * inside, 1),
             Integrator.ar(side.squared * inside, 1), Integrator.ar(mid.squared * inside, 1),
-            RunningMax.ar(largest * inside), RunningMax.ar(difference * inside)])
+            RunningMax.ar(largest * inside), RunningMax.ar(difference * inside), RunningMax.ar(step * inside)])
     }).flat);
     Line.kr(0, 0, seconds, doneAction: 2);
 }).add;
@@ -72,7 +76,8 @@ startCheckDelay = { arg inBus, outBus, line, controls, target, addAction = \addT
 };
 
 // A window's field of a case's values (fields: 0 energy, 1 band energy, 2
-// side energy, 3 mid energy, 4 peak, 5 largest difference from ref)
+// side energy, 3 mid energy, 4 peak, 5 largest difference from ref, 6
+// largest step from one sample to the next)
 windowField = { arg values, window, field; values !? { values[(window * fields) + field] } ? 0 };
 
 // Run cases at once, in one group created in one bundle, for seconds of
@@ -247,6 +252,30 @@ checkLoopBehavior = {
             ampDb.(windowField.(values, 1, 4) / steady.max(1e-15))));
 };
 
+// A clear ends without a step (#308's kind of click): a steady sine at 0.5,
+// feedback 0.4, time 0.375 s, cleared at 2 s. Across the window's end
+// (about 2.38 s, where the return opens again) and one delay time after it
+// (where what the reopened feedback wrote comes back), the return's largest
+// step from one sample to the next stays within clearStepBound (1) of its
+// largest in steady state. The sine is low (about 29 Hz: a smooth signal
+// whose own steps are small, so a gain that steps up in a control block
+// shows) and a whole number of cycles a loop period (eleven), so the loop's
+// repeats add in phase: the steady return is the largest the loop ever
+// plays, and the refill after the clear, a part of that sum, is never
+// louder. (At about 100 Hz the repeats partly cancel, and the input alone
+// after a clear has larger steps than the steady return, a step or not.)
+checkClearEdge = {
+    var rate = server.sampleRate, block = server.options.blockSize, time = 0.375;
+    var freq = 11 * rate / ((time * rate).round + block);
+    var results = runCases.([(delay: [\time, time, \feedback, 0.4], input: [\sine, 0.5, \freq, freq, \sineFrom, 0],
+        steps: (t_clear: [0, 1, 1, 2, 1e9]), windows: [[1.0, 1.99], [2.3, 2.85], [2.3, 2.5], [2.5, 2.85]])], 3.05);
+    var values = results[0], steady = windowField.(values, 0, 6), edge = windowField.(values, 1, 6);
+    check.((steady > 0.001) and: { edge <= (steady * clearStepBound) },
+        "delay: a clear ends without a step: the return's largest sample step across its window's end and one delay time after is within % of its steady largest at % Hz (% against %: the window's end %, the feedback's return %)".format(
+            clearStepBound, freq.round(0.01), edge.round(0.00001), steady.round(0.00001), windowField.(values, 2, 6).round(0.00001),
+            windowField.(values, 3, 6).round(0.00001)));
+};
+
 // setDelayFreeze sets the node's frozen and keeps it; it is kept through a
 // bypass (the lifted node starts with it) and set while bypassed
 checkFreezeCommand = {
@@ -322,6 +351,7 @@ checkFreshEngine = {
 
 guarded.("the held loop", checkHeldLoop);
 guarded.("the loop's behavior", checkLoopBehavior);
+guarded.("the clear's edge", checkClearEdge);
 guarded.("setDelayFreeze", checkFreezeCommand);
 guarded.("setDelayFreeze's ignored values", checkIgnoredValues);
 guarded.("clearDelay", checkClearCommand);
