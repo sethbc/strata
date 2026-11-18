@@ -1,6 +1,6 @@
 # Audio Sources and Buffers
 
-Granulating a sample buffer or the live input instead of a voice's synth, and how buffers are saved and restored. Back to the [README](../../README.md).
+Granulating a sample buffer, the live input or a voice's sound instead of a voice's synth, and how buffers are saved and restored. Back to the [README](../../README.md).
 
 Every voice can grain something other than its own synth. Its **source** (the BUFFER screen page, grid page 4, or PARAMETERS > the voice's granular section) is its synth (the default), one of eight sample buffers (`buf 1` to `buf 8`), the live stereo input, or a voice's sound (`voice 1` to `voice 7`: another voice's, or its own; see [Voices as sources](#voices-as-sources)):
 - **Buffers** hold up to 16 seconds of stereo audio each, or up to 300 on the high tier ([Performance tiers](technical.md#performance-tiers)), at the norns sample rate of 48 kHz: a file at a higher rate keeps fewer seconds (8 of 16 for a 96 kHz file). Load a sound file, record into a buffer (from the input, the master or a voice, see [Recording](#recording)), clear or save one from the BUFFER screen page, a grid's [positions page](grid/pages/positions.md) (record and clear, on its second side) or the PARAMETERS **buffers** group. The BUFFER page's input meter shows the level going in before you record
