@@ -490,6 +490,44 @@ local function deep_copy(value)
   return copy
 end
 
+-- The comparisons with 3.7.0's fixtures (3.8's package 0g): an allowed
+-- difference's text may name a voice by the tokens <v> (its number, 1 to
+-- NUM_VOICES) and <v0> (its engine index, 0 to NUM_VOICES - 1).
+-- voice_count() is lib/constants.lua's NUM_VOICES, read without a load
+local voice_count_read
+local function voice_count()
+  voice_count_read = voice_count_read or dofile(repo_root .. "/lib/constants.lua").NUM_VOICES
+  return voice_count_read
+end
+local function has_voice_token(text)
+  return type(text) == "string" and (text:find("<v>", 1, true) or text:find("<v0>", 1, true)) ~= nil
+end
+local function fill_voice_tokens(text, voice)
+  if type(text) ~= "string" then return text end
+  return (text:gsub("<v0>", tostring(voice - 1)):gsub("<v>", tostring(voice)))
+end
+-- A copy of entry with its fields' tokens filled for voice
+local function voice_entry(entry, fields, voice)
+  local copy = {}
+  for key, value in pairs(entry) do copy[key] = value end
+  for _, field in ipairs(fields) do copy[field] = fill_voice_tokens(entry[field], voice) end
+  return copy
+end
+-- The entries an allowed difference stands for: itself when none of its
+-- fields (a list of keys) holds a token, otherwise one copy a voice, in
+-- voice order, each filled and carrying its `voice`
+local function voice_entries(entry, fields)
+  local tokened = false
+  for _, field in ipairs(fields) do tokened = tokened or has_voice_token(entry[field]) end
+  if not tokened then return {entry} end
+  local entries = {}
+  for voice = 1, voice_count() do
+    entries[voice] = voice_entry(entry, fields, voice)
+    entries[voice].voice = voice
+  end
+  return entries
+end
+
 -- The text lib/tabutil.lua's tab.save writes for `value`: a data file as
 -- norns writes it (tab.load reads only that layout)
 local function tabutil_text(value)
@@ -1018,6 +1056,8 @@ return {
   shown_step_editor = shown_step_editor,
   slice_doubles = slice_doubles,
   deep_copy = deep_copy,
+  voice_count = voice_count,
+  voice_entries = voice_entries,
   tabutil_text = tabutil_text,
   file_text = file_text,
   workflow_shards = workflow_shards,

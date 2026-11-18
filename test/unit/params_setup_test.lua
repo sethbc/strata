@@ -992,22 +992,44 @@ local function field_text(value)
   return type(value) == "string" and string.format("%q", value) or tostring(value)
 end
 
--- The differences from 3.7.0 the groundwork before 3.8 makes on purpose
--- (its Global Constraints: every surviving param keeps its id, default, spec
--- and place; the fixture stays 3.7.0's). The package that makes a
--- difference adds its entry here, with why; an empty list leaves the
--- comparison exactly as strict as the fixture. An entry is one of:
+-- The differences from 3.7.0 the groundwork before 3.8 and 3.8 make on
+-- purpose (their Global Constraints: every surviving param keeps its id,
+-- default, spec and place but for the differences named here; the fixture
+-- stays 3.7.0's). The package that makes a difference adds its entries in
+-- the same commit, as registration lines: a block of its own inside the
+-- list, opening `-- <id>: <what> (design §n)`, one entry a line, each why
+-- beginning "<id>: ". An empty list leaves the comparison exactly as strict
+-- as the fixture. An entry is one of:
 --   {kind = "removed", id = <id>, why = <text>}: 3.7.0's param <id> is gone
 --     (every fixture record with that id is left out of the comparison);
---   {kind = "group_size", id = <group id>, n = <count>, why = <text>}: the
---     group keeps its place, with n params;
+--   {kind = "added", id = <new id>, after = <id>, record = {t = <type code>,
+--     name = <text>, ...}, why = <text>}: a new param directly after <id>
+--     (a 3.7.0 id or an earlier added one; several after one id keep the
+--     list's order); record holds t, name and any of PARAM_FIXTURE_FIELDS
+--     but id, and the comparison checks the id, the place and those fields;
+--   {kind = "default", id = <id>, default = <value>, string = <text>?,
+--     why = <text>}: a changed default, and the string a formatted param
+--     shows at it;
+--   {kind = "name", id = <id>, name = <text>, why = <text>};
+--   {kind = "range", id = <id>, min = <n>?, max = <n>?, why = <text>}: a
+--     control's or number's bounds (an omitted one stays 3.7.0's);
+--   {kind = "group_size", id = <group id>, add = <k>, why = <text>}: the
+--     group keeps its place, k params more (several add entries for one
+--     group sum: a group several packages grow is sized only so); or
+--     n = <count> in place of add (2b's LFO groups alone; never beside add);
 --   {kind = "options", id = <id>, options = {<text>, ...}, why = <text>}: the
 --     option param keeps its place, with these options.
--- An entry naming an id the fixture lacks, or of another kind, raises.
+-- An id or after holding <v> (a voice's number) or <v0> (its engine index)
+-- stands for one entry a voice (h.voice_entries). One id may carry entries
+-- of several kinds, one of each (group_size's add excepted); removed stands
+-- alone but beside added (a move). An entry naming an id the fixture lacks
+-- (added aside), an added 3.7.0 id with no removed, an after no record has,
+-- a kind that does not fit the param, another kind or no why raises.
 local PARAM_FIXTURE_ALLOWED = {
   {kind = "options", id = "midi_note_off", options = {"latch", "release"}, why = "note off is latch or release (design section 8)"},
 }
--- 2b: an LFO's destination is its home routing in the matrix (design §4)
+-- 2b: an LFO's destination is its home routing in the matrix (design §4);
+-- its six LFOs' entries follow the list (an LFO is no voice token)
 for n = 1, 6 do
   local why = "2b: LFO " .. n .. "'s destination is its home routing in the matrix (slot " .. (16 + n) .. ")"
   table.insert(PARAM_FIXTURE_ALLOWED, {kind = "removed", id = "strata_lfo" .. n .. "_dest", why = why})
@@ -1016,39 +1038,119 @@ for n = 1, 6 do
 end
 
 -- The fixture's records as this build should have them: a copy of each,
--- the allowed differences applied
+-- the allowed differences applied. An added record carries `only`, the
+-- set of fields its entry gives, and first_param_difference compares
+-- those alone (its id and place always)
+local PARAM_FIXTURE_KINDS = {removed = true, group_size = true, options = true, added = true, default = true,
+  name = true, range = true}
+local PARAM_FIXTURE_FIELD_SET = {}
+for _, field in ipairs(PARAM_FIXTURE_FIELDS) do PARAM_FIXTURE_FIELD_SET[field] = true end
+local function added_record(entry, where)
+  local record = entry.record
+  if type(record) ~= "table" or record.t == nil or type(record.name) ~= "string" then
+    error(where .. ": an added record needs t and name", 3)
+  end
+  if type(entry.after) ~= "string" then error(where .. ": an added entry needs after", 3) end
+  local copy, only = {id = entry.id}, {id = true}
+  for field, value in pairs(record) do
+    if field == "id" or not PARAM_FIXTURE_FIELD_SET[field] then
+      error(where .. ": an added record has no field " .. tostring(field), 3)
+    end
+    copy[field], only[field] = value, true
+  end
+  copy.only = only
+  return copy
+end
 local function allowed_records(fixture, allowed)
-  local removed, changed, listed = {}, {}, {}
   local known = {}
   for _, record in ipairs(fixture) do known[record.id] = record end
-  for index, entry in ipairs(allowed) do
-    local where = "allowed difference " .. index .. " (" .. tostring(entry.id) .. ")"
-    if type(entry.why) ~= "string" or entry.why == "" then error(where .. " says no why", 2) end
-    local record = known[entry.id]
-    if not record then error(where .. ": 3.7.0 has no such param", 2) end
-    if listed[entry.id] then error(where .. ": a second entry for the param", 2) end
-    listed[entry.id] = true
-    if entry.kind == "removed" then
-      removed[entry.id] = true
-    elseif entry.kind == "group_size" then
-      if record.t ~= params.tGROUP then error(where .. ": a group size for a param that is no group", 2) end
-      changed[entry.id] = {field = "n", value = entry.n}
-    elseif entry.kind == "options" then
-      if record.t ~= params.tOPTION then error(where .. ": options for a param that is no option", 2) end
-      changed[entry.id] = {field = "options", value = entry.options}
-    else
-      error(where .. ": no kind " .. tostring(entry.kind), 2)
+  local kinds, removed, changes, sizes, added = {}, {}, {}, {}, {}
+  for index, listed in ipairs(allowed) do
+    -- an entry whose id or after holds <v> or <v0> stands for one a voice
+    for _, entry in ipairs(h.voice_entries(listed, {"id", "after"})) do
+      local where = "allowed difference " .. index .. " (" .. tostring(entry.id) .. ")"
+      if type(entry.why) ~= "string" or entry.why == "" then error(where .. " says no why", 2) end
+      local kind = entry.kind
+      if not PARAM_FIXTURE_KINDS[kind] then error(where .. ": no kind " .. tostring(kind), 2) end
+      local id = entry.id
+      kinds[id] = kinds[id] or {}
+      if kinds[id][kind] and not (kind == "group_size" and entry.add ~= nil) then
+        error(where .. ": a second " .. kind .. " entry for the param", 2)
+      end
+      kinds[id][kind] = true
+      local record = known[id]
+      changes[id] = changes[id] or {}
+      if kind == "added" then
+        added[#added + 1] = {after = entry.after, record = added_record(entry, where), where = where}
+      elseif not record then
+        error(where .. ": 3.7.0 has no such param", 2)
+      elseif kind == "removed" then
+        removed[id] = true
+      elseif kind == "group_size" then
+        if record.t ~= params.tGROUP then error(where .. ": a group size for a param that is no group", 2) end
+        local size = sizes[id] or {}
+        sizes[id] = size
+        if (entry.n == nil) == (entry.add == nil) then error(where .. ": a group size gives n or add", 2) end
+        if entry.n ~= nil then size.n = entry.n else size.add = (size.add or 0) + entry.add end
+        if size.n and size.add then error(where .. ": n beside add for one group", 2) end
+      elseif kind == "options" then
+        if record.t ~= params.tOPTION then error(where .. ": options for a param that is no option", 2) end
+        changes[id].options = entry.options
+      elseif kind == "default" then
+        if record.t == params.tSEPARATOR or record.t == params.tGROUP then error(where .. ": no default to change", 2) end
+        if entry.default == nil then error(where .. ": a default entry gives the default", 2) end
+        changes[id].default = entry.default
+        if entry.string ~= nil then changes[id].string = entry.string end
+      elseif kind == "name" then
+        if type(entry.name) ~= "string" then error(where .. ": a name entry gives the name", 2) end
+        changes[id].name = entry.name
+      elseif kind == "range" then
+        if record.t ~= params.tCONTROL and record.t ~= params.tNUMBER then
+          error(where .. ": a range for a param that is no control or number", 2)
+        end
+        if entry.min == nil and entry.max == nil then error(where .. ": a range gives min, max or both", 2) end
+        if entry.min ~= nil then changes[id].min = entry.min end
+        if entry.max ~= nil then changes[id].max = entry.max end
+      end
     end
   end
-  local records = {}
+  -- removed stands alone, but for added (a move); an added 3.7.0 id needs its removed
+  for id, set in pairs(kinds) do
+    for kind in pairs(set) do
+      if set.removed and kind ~= "removed" and kind ~= "added" then
+        error("allowed differences (" .. id .. "): removed beside " .. kind, 2)
+      end
+    end
+    if set.added and known[id] and not set.removed then
+      error("allowed differences (" .. id .. "): 3.7.0 has the param, and an added one needs its removed", 2)
+    end
+  end
+  for id, size in pairs(sizes) do changes[id].n = size.n or (known[id].n + size.add) end
+  -- the records in order: each record kept, then what is placed after it
+  -- (in the list's order, each followed by what is placed after it)
+  local followers, records, placed = {}, {}, {}
+  for _, item in ipairs(added) do
+    followers[item.after] = followers[item.after] or {}
+    table.insert(followers[item.after], item)
+  end
+  local function place(id)
+    for _, item in ipairs(followers[id] or {}) do
+      placed[item] = true
+      records[#records + 1] = item.record
+      place(item.record.id)
+    end
+  end
   for _, record in ipairs(fixture) do
     if not removed[record.id] then
       local copy = {}
       for field, value in pairs(record) do copy[field] = value end
-      local change = changed[record.id]
-      if change then copy[change.field] = change.value end
+      for field, value in pairs(changes[record.id] or {}) do copy[field] = value end
       records[#records + 1] = copy
+      place(record.id)
     end
+  end
+  for _, item in ipairs(added) do
+    if not placed[item] then error(item.where .. ": no record " .. item.after .. " to follow", 2) end
   end
   return records
 end
@@ -1063,7 +1165,7 @@ local function first_param_difference(expected, actual)
         .. tostring(got and got.id)
     end
     for _, field in ipairs(PARAM_FIXTURE_FIELDS) do
-      if field_text(got[field]) ~= field_text(want[field]) then
+      if (not want.only or want.only[field]) and field_text(got[field]) ~= field_text(want[field]) then
         return "param " .. index .. " (" .. want.id .. ")'s " .. field .. ": expected " .. field_text(want[field])
           .. ", got " .. field_text(got[field])
       end
@@ -1131,7 +1233,116 @@ test("the fixture comparison honors each kind of allowed difference, and only th
   assert_true(not pcall(allowed_records, fixture, {{kind = "options", id = "lfo", options = {"a"}, why = "a test"}}),
     "options on a group")
   assert_true(not pcall(allowed_records, fixture, {entries[3], {kind = "removed", id = "mode", why = "a test"}}),
-    "two entries for one id")
+    "removed beside another kind for one id")
+  assert_true(not pcall(allowed_records, fixture, {entries[3], {kind = "options", id = "mode", options = {"a"}, why = "a test"}}),
+    "two entries of one kind for one id")
+end)
+
+-- 3.8's package 0g: the kinds a later package names its difference with
+-- (added, default, name, range, group_size's add form), each the only
+-- difference between a small fixture and build, and their misuses
+test("the fixture comparison honors added, default, name, range and a group's add, and only those", function()
+  local NUM_VOICES = h.voice_count()
+  local fixture = {
+    {id = "head", t = params.tSEPARATOR, name = "head"},
+    {id = "shift", t = params.tNUMBER, name = "shift", default = 0, min = 0, max = 2},
+    {id = "fx", t = params.tGROUP, name = "fx", n = 2},
+    {id = "level", t = params.tCONTROL, name = "level", default = 1, min = 0, max = 4, warp = "lin", step = 0,
+      quantum = 0.01, units = "", string = "1 dB"},
+    {id = "label", t = params.tNUMBER, name = "label", default = 0, min = 0, max = 1},
+    {id = "span", t = params.tNUMBER, name = "span", default = 1, min = 0, max = 4},
+    {id = "kept", t = params.tNUMBER, name = "kept", default = 1, min = 0, max = 4},
+  }
+  for voice = 1, NUM_VOICES do
+    fixture[#fixture + 1] = {id = "v" .. voice .. "_y", t = params.tBINARY, name = "y", default = 0}
+  end
+  local build = {
+    {id = "head", t = params.tSEPARATOR, name = "head"},
+    {id = "fx", t = params.tGROUP, name = "fx", n = 4},
+    {id = "level", t = params.tCONTROL, name = "level", default = 2, min = 0, max = 4, warp = "lin", step = 0,
+      quantum = 0.01, units = "", string = "2 dB"},
+    {id = "label", t = params.tNUMBER, name = "tag", default = 0, min = 0, max = 1},
+    {id = "span", t = params.tNUMBER, name = "span", default = 1, min = 0, max = 8},
+    {id = "shift", t = params.tNUMBER, name = "shift", default = 0, min = 0, max = 2},
+    {id = "kept", t = params.tNUMBER, name = "kept", default = 1, min = 0, max = 4},
+    -- the fields an added record leaves out are not compared
+    {id = "new", t = params.tNUMBER, name = "new", default = 0, min = 0, max = 9},
+    {id = "new2", t = params.tBINARY, name = "new2", default = 1},
+  }
+  for voice = 1, NUM_VOICES do
+    build[#build + 1] = {id = "v" .. voice .. "_y", t = params.tBINARY, name = "y", default = 0}
+    build[#build + 1] = {id = "v" .. voice .. "_x", t = params.tBINARY, name = "x", default = 0}
+  end
+  local entries = {
+    {kind = "added", id = "new", after = "kept", record = {t = params.tNUMBER, name = "new", default = 0}, why = "a test"},
+    {kind = "added", id = "new2", after = "kept", record = {t = params.tBINARY, name = "new2"}, why = "a test"},
+    {kind = "default", id = "level", default = 2, string = "2 dB", why = "a test"},
+    {kind = "name", id = "label", name = "tag", why = "a test"},
+    {kind = "range", id = "span", max = 8, why = "a test"},
+    {kind = "group_size", id = "fx", add = 1, why = "a test"},
+    {kind = "group_size", id = "fx", add = 1, why = "another test"},
+    {kind = "added", id = "v<v>_x", after = "v<v>_y", record = {t = params.tBINARY, name = "x"}, why = "a test"},
+    -- a move: removed and added for one id
+    {kind = "removed", id = "shift", why = "a test"},
+    {kind = "added", id = "shift", after = "span", record = {t = params.tNUMBER, name = "shift", default = 0, min = 0,
+      max = 2}, why = "a test"},
+  }
+  local function differs(allowed)
+    local ok, records = pcall(allowed_records, fixture, allowed)
+    return not ok or first_param_difference(records, build) ~= nil
+  end
+  assert_equal(first_param_difference(allowed_records(fixture, entries), build), nil, "every difference is allowed")
+  assert_equal(fixture[4].default, 1, "the fixture itself is left alone")
+  -- each entry left out fails: raises, or the build differs
+  for left_out = 1, #entries do
+    local others = {}
+    for index, entry in ipairs(entries) do
+      if index ~= left_out then others[#others + 1] = entry end
+    end
+    assert_true(differs(others), entries[left_out].kind .. " " .. entries[left_out].id .. " left out: the build differs")
+  end
+  -- an entry allows only what it says
+  local function with(index, entry)
+    local copy = {}
+    for at, item in ipairs(entries) do copy[at] = at == index and entry or item end
+    return copy
+  end
+  assert_true(differs(with(1, {kind = "added", id = "new", after = "kept", record = {t = params.tNUMBER, name = "new",
+    default = 1}, why = "a test"})), "an added record's fields are compared")
+  assert_true(differs(with(2, {kind = "added", id = "new2", after = "head", record = {t = params.tBINARY,
+    name = "new2"}, why = "a test"})), "an added record's place is compared")
+  assert_true(differs(with(3, {kind = "default", id = "level", default = 2, why = "a test"})),
+    "a default without its string leaves the old string")
+  assert_true(differs(with(5, {kind = "range", id = "span", min = 1, why = "a test"})), "a range sets only its bounds")
+  -- a token entry stands for one entry a voice: a build without the last voice's param differs
+  local last_x = table.remove(build)
+  assert_equal(last_x.id, "v" .. NUM_VOICES .. "_x", "the build's last record")
+  assert_true(differs(entries), "the token entry asks for every voice's param")
+  build[#build + 1] = last_x
+  -- several added after one id keep the list's order
+  local swapped = with(1, entries[2])
+  swapped[2] = entries[1]
+  assert_true(differs(swapped), "two added after one id, swapped, differ")
+  -- each misuse raises
+  local function raises(allowed) return not pcall(allowed_records, fixture, allowed) end
+  assert_true(raises(with(1, {kind = "added", id = "new", after = "nowhere", record = {t = params.tNUMBER,
+    name = "new"}, why = "a test"})), "an after naming nothing")
+  assert_true(raises(with(1, {kind = "added", id = "new", after = "kept", record = {name = "new"}, why = "a test"})),
+    "an added record without t")
+  assert_true(raises(with(1, {kind = "added", id = "new", after = "kept", record = {t = params.tNUMBER}, why = "a test"})),
+    "an added record without a name")
+  assert_true(raises(with(1, {kind = "added", id = "new", after = "kept", record = {t = params.tNUMBER, name = "new",
+    hue = 1}, why = "a test"})), "an added record with a field the fixture has not")
+  assert_true(raises({entries[5], {kind = "range", id = "span", min = 1, why = "a test"}}), "two range entries for one id")
+  assert_true(raises({{kind = "group_size", id = "fx", n = 4, add = 2, why = "a test"}}), "n beside add")
+  assert_true(raises({{kind = "group_size", id = "fx", n = 3, why = "a test"}, entries[6]}), "an n entry and an add entry")
+  assert_true(raises({{kind = "added", id = "kept", after = "head", record = {t = params.tNUMBER, name = "kept"},
+    why = "a test"}}), "added for a 3.7.0 id with no removed")
+  assert_true(raises({{kind = "removed", id = "label", why = "a test"}, entries[4]}), "removed beside a name")
+  assert_true(raises({{kind = "range", id = "level"}}), "no why")
+  assert_true(raises({{kind = "range", id = "head", max = 2, why = "a test"}}), "a range for a separator")
+  assert_true(raises({{kind = "name", id = "never", name = "x", why = "a test"}}), "a name for no 3.7.0 param")
+  assert_true(raises({{kind = "default", id = "kept", why = "a test"}}), "a default entry with no default")
 end)
 
 -- The groundwork before 3.8 (ruling 5): a voice's scene keys, each with
