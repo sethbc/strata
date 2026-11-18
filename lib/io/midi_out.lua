@@ -42,10 +42,13 @@ return function(S)
   -- slot k's last value; left_with[name][channel][note]: the notes a device
   -- was sounding as it left, by the name of the device that got them, each
   -- owed its own off where that device is next found; asked[port]: the scene a
-  -- program change in on that port asked for, until its recall lands
+  -- program change in on that port asked for, until its recall lands;
+  -- setup_due[port]: the port's MPE zone owes its device a setup, sent once
+  -- the port settles with its device not held (#772); held_owner[port]: the
+  -- remote or midigrid name whose claim holds the port, so its release is known
   local state = {config = {}, notes = {}, counts = {}, use = {}, member_times = {}, expressing = {}, cursor = 1,
     express_ports = {}, cc_last = {}, left_with = {}, asked = {}, tick = 0, stopped = false,
-    bend_range = MIDI_OUT.bend_range.default, noted = {}, dirty = false}
+    bend_range = MIDI_OUT.bend_range.default, noted = {}, dirty = false, setup_due = {}, held_owner = {}}
   for voice = 1, NUM_VOICES do
     state.config[voice] = {port = 0, channel = voice, mode = 1, members = MIDI_OUT.max_members}
     state.notes[voice] = {}
@@ -114,6 +117,20 @@ return function(S)
   end
 
   local function takedown(port) rpn(port, MIDI_OUT.rpn_zone, 0, MIDI_OUT.master_channel) end
+
+  -- The settled route's MPE voice on port, or nil
+  local function zone_voice_on(port)
+    for voice = 1, NUM_VOICES do
+      local config = state.config[voice]
+      if is_mpe(config) and config.port == port then return voice end
+    end
+    return nil
+  end
+
+  -- The port's zone owes its device a setup: marked while it has one
+  local function mark_setup(port)
+    if zone_voice_on(port) then state.setup_due[port] = true end
+  end
 
   -- Why a set of routes cannot be (design §4.2): a second MPE voice on a
   -- port, or a plain voice's channel inside an MPE zone on its port; nil
@@ -563,15 +580,25 @@ return function(S)
       departed(port)
     else
       pay_owed(port, name)
-      for voice = 1, NUM_VOICES do
-        local config = state.config[voice]
-        if is_mpe(config) and config.port == port then setup(port, config.members) end
-      end
+      -- the zone's setup waits for the port to settle: a remote may claim
+      -- the device in a later hook (#772)
+      mark_setup(port)
       for k = 1, MIDI_OUT.slots do
         if param_value(slot_id(k, "port")) == port then state.cc_last[k] = nil end
       end
     end
     request_redraw()
+  end)
+
+  -- The port settled (S.lib.io_ports' on_settled: its arrival or release
+  -- told to every hook, a claim made meanwhile included): a setup due goes
+  -- once to a device there that nothing holds; while held it stays due; with
+  -- no device it is dropped (the next arrival marks it again) (#772)
+  S.lib.io_ports.on_settled("io_midi_out", function(port)
+    if state.stopped or not state.setup_due[port] or remote_holds(port) then return end
+    state.setup_due[port] = nil
+    local voice = zone_voice_on(port)
+    if voice and present(port) then setup(port, state.config[voice].members) end
   end)
 
   -- As the menu closes, after S.lib.io_ports' own hook (included first) has
@@ -605,8 +632,19 @@ return function(S)
   -- and its channel and note get one note_off (send_offs). Its end later
   -- sends nothing, nor does the expression step. A controller's claim
   -- leaves the port's notes alone
+  -- The release of a holder's claim marks the port's zone setup due, sent
+  -- once the port settles (below) unless the release is taken straight back
   S.lib.io_ports.on_claim("io_midi_out", function(port, owner)
-    if state.stopped or owner == nil or not holders[owner] then return end
+    if state.stopped then return end
+    if owner == nil then
+      if state.held_owner[port] ~= nil then
+        state.held_owner[port] = nil
+        mark_setup(port)
+      end
+      return
+    end
+    if not holders[owner] then return end
+    state.held_owner[port] = owner
     settle_moved(port)
     local offs = {}
     for voice = 1, NUM_VOICES do
@@ -719,11 +757,14 @@ return function(S)
     for port = 1, S.lib.io_ports.PORTS.count do
       local was, now = before[port], after[port]
       if was and (not now or now.voice ~= was.voice) then takedown(port) end
+      -- a zone gone owes no setup
+      if not now then state.setup_due[port] = nil end
     end
     for port = 1, S.lib.io_ports.PORTS.count do
       local was, now = before[port], after[port]
       if now and (not was or was.voice ~= now.voice or was.members ~= now.members or bend_changed) then
-        setup(port, now.members)
+        -- a port a remote holds is not reached: its setup waits for the port to settle free
+        if remote_holds(port) then state.setup_due[port] = true else setup(port, now.members) end
       end
     end
     state.config = new

@@ -211,10 +211,14 @@ return function(S)
   function M.clock_id() return draw.clock end
 
   -- Whether this module holds the port (a remote grid's or arc's, or one
-  -- midigrid's device is on): MIDI out sends nothing there
+  -- midigrid's device is on): MIDI out sends nothing there. A kind holds
+  -- its port only while the port's owner is still its own, so from the
+  -- moment disconnect's release clears the owner (claimed_port is kept
+  -- until release returns) the port is free to the release's hooks (#772)
   function M.holds(port)
     for _, kind in ipairs(KINDS) do
-      if records[kind].claimed_port == port then return true end
+      local record = records[kind]
+      if record.claimed_port == port and S.lib.io_ports.owner(port) == record.owner then return true end
     end
     return midigrid.ports[port] == true
   end

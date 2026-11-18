@@ -1341,7 +1341,7 @@ test("a played MPE note on a held port sends nothing, let go, at a new value or 
   step(context, S)
   context.midi.send(1, {type = "note_off", note = 60, vel = 0, ch = 2})
   step(context, S)
-  assert_equal(sent(device), "", "the device never got the note: no value, no off")
+  assert_equal(sent(device), SETUP_15_48, "the device never got the note: no value, no off; the port let go gets its zone's setup (#772)")
 end)
 
 test("a played MPE note sounding on a port a remote grid claims gets its member channel's off, then nothing (#769)", function()
@@ -1366,7 +1366,71 @@ test("a played MPE note sounding on a port a remote grid claims gets its member 
   step(context, S)
   context.midi.send(1, {type = "note_off", note = 60, vel = 0, ch = 2})
   step(context, S)
-  assert_equal(sent(device), "", "no later value and no second off, held or let go")
+  assert_equal(sent(device), SETUP_15_48, "no later value and no second off, held or let go; the port let go gets its zone's setup (#772)")
+end)
+
+-- #772: an MPE zone's setup goes once a port settles (S.lib.io_ports'
+-- on_settled, after every change and claim hook) with its device not held:
+-- a device a remote takes as it arrives gets none, and a port a remote
+-- grid, a remote arc or midigrid lets go gets it before its first note
+
+test("an MPE zone's setup waits while a remote grid takes its arriving device (#772)", function()
+  local context, S = started()
+  mpe_voice(1, 3); settled(context)
+  remote_grid_at(S, 0)
+  assert_true(S.lib.io_rig.set("remote_grid_port", 3), "the rig's grid port 3, with no device there")
+  local device = context.midi.plug(3, "iii grid")
+  assert_equal(sent(device), ASK_HELLO, "the remote's ask alone: no RPN (cc 101, 100, 6) reaches it")
+  assert_true(S.lib.io_remote.holds(3), "the remote holds the port")
+end)
+
+test("a port a remote grid lets go gets its zone setup before its first MPE note (#772)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "iii grid")
+  remote_grid_at(S, 3)
+  for cc, value in pairs({ [0] = 16, [1] = 8, [2] = 1 }) do
+    context.midi.send(3, { type = "cc", cc = cc, val = value, ch = 1 })
+  end
+  context.clock.run_for(0.2)
+  clear(device)
+  mpe_voice(1, 3); settled(context)
+  for _, entry in ipairs(lines(device)) do
+    assert_true(not entry:find("^cc 10[01] ") and not entry:find("^cc 6 "), "the route settled while held sends no RPN: " .. entry)
+  end
+  clear(device)
+  remote_grid_at(S, 0)
+  assert_equal(sent(device), "cc 4 0 1|" .. SETUP_15_48, "the remote's own clear, then the zone's one setup")
+  clear(device)
+  midi_target(S).note_on(1, "p1", 60, 1, played_info("k1"))
+  assert_equal(sent(device), "pitchbend 8192 2|note_on 60 127 2", "the first note follows its setup")
+end)
+
+test("a port midigrid lets go gets its zone setup (#772)", function()
+  local context, S = started()
+  local launchpad = context.midi.plug(1, "Launchpad X")
+  with_midigrid(S, launchpad, function()
+    assert_true(S.lib.io_remote.holds(1), "midigrid holds port 1")
+    mpe_voice(2, 1); settled(context)
+    assert_equal(sent(launchpad), "", "the route settled while held sends nothing")
+    assert_true(S.lib.io_rig.set("midi_grid", "off"), "midi grid off")
+    assert_true(not S.lib.io_remote.holds(1), "the port is let go")
+    assert_equal(sent(launchpad), SETUP_15_48, "the zone's one setup")
+  end)
+end)
+
+test("a release the remote arc takes straight back sends no setup (#772)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "iii grid")
+  remote_grid_at(S, 3)
+  assert_true(S.lib.io_rig.set("remote_arc_port", 3), "the arc named on port 3 too")
+  assert_equal(S.lib.io_remote.status("arc"), "in use", "the arc waits")
+  mpe_voice(1, 3); settled(context)
+  clear(device)
+  remote_grid_at(S, 0)
+  assert_equal(S.lib.io_ports.owner(3), "remote arc", "the arc claims inside the grid's release")
+  assert_equal(sent(device), ASK_HELLO, "the arc's ask alone: no RPN")
+  assert_true(S.lib.io_rig.set("remote_arc_port", 0), "the arc lets go")
+  assert_equal(sent(device), ASK_HELLO .. "|" .. SETUP_15_48, "then the setup, once")
 end)
 
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()

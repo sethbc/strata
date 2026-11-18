@@ -392,6 +392,55 @@ test("a claimed port has one owner", function()
   assert_equal(ports.owner(17), nil, "and has no owner")
 end)
 
+test("on_settled hears a port once its arrival or release has reached every hook, a claim made by one included", function()
+  local context = load_strata()
+  local ports = local_value("S").lib.io_ports
+  local heard = {}
+  local function note(text) heard[#heard + 1] = text end
+  ports.on_settled("b", function(port) note("settled b " .. port) end)
+  ports.on_change("hook", function(port, name) note("change " .. port .. " " .. tostring(name)) end)
+  local take_back = true
+  ports.on_claim("hook", function(port, owner)
+    note("claim " .. port .. " " .. tostring(owner))
+    -- a release that another name claims straight back, once, as remote's arc does
+    if owner == nil and port == 5 and take_back then
+      take_back = false
+      ports.claim(5, "second")
+    end
+  end)
+  ports.on_settled("a", function(port) note("settled a " .. port) end)
+  context.midi.plug(3, "box")
+  assert_equal(table.concat(heard, ", "), "change 3 box, settled b 3, settled a 3",
+    "an arrival: after every change hook, in the order the names were registered")
+  heard = {}
+  context.midi.unplug(3)
+  assert_equal(table.concat(heard, ", "), "change 3 nil", "nothing for a departure")
+  heard = {}
+  ports.claim(4, "first")
+  assert_equal(table.concat(heard, ", "), "claim 4 first", "nothing for a claim")
+  heard = {}
+  ports.release(4, "first")
+  assert_equal(table.concat(heard, ", "), "claim 4 nil, settled b 4, settled a 4", "a release, after its claim hooks")
+  ports.claim(5, "first")
+  heard = {}
+  ports.release(5, "first")
+  assert_equal(table.concat(heard, ", "), "claim 5 nil, claim 5 second, settled b 5, settled a 5",
+    "a release taken straight back settles once, after the claim made inside it")
+  heard = {}
+  context.midi.plug(3, "box")
+  _menu.set_mode(true); context.midi.reassign(3, 6); _menu.set_mode(false)
+  assert_equal(table.concat(heard, ", "), "change 3 box, settled b 3, settled a 3, change 3 nil, change 6 box, settled b 6, settled a 6",
+    "a move in the menu settles its arrival only")
+  heard = {}
+  ports.on_settled("b", function() error("a settled hook's error") end)
+  ports.release(5, "second")
+  h.claim_script_errors(context, 1, "strata: midi settled hook b failed: ", "a settled hook's error")
+  assert_equal(table.concat(heard, ", "), "claim 5 nil, settled a 5", "a raising hook: one line, and the next still runs")
+  heard = {}
+  ports.release(17, "x"); ports.release(0, "x"); ports.claim(17, "x")
+  assert_equal(#heard, 0, "nothing for a port outside 1 to 16")
+end)
+
 test("out gives the port's vport and nil outside 1 to 16", function()
   load_strata()
   local ports = local_value("S").lib.io_ports
