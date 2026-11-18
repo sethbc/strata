@@ -19,6 +19,8 @@
 --                        live file written at once
 --   pset_hook(before_read, after_read, after_write, after_delete)  the
 --                        record S.register_pset_hook takes
+-- and the module's read_only(fn) and reading_only() (3.8): while fn runs,
+-- no read sets a file aside (a factory set's, in the script's folder).
 -- See docs/notes/lua/data-files.md (Side files).
 
 return function(S)
@@ -26,6 +28,30 @@ return function(S)
 
   -- The live files' folder
   local LIVE_DIR = _path.data .. "strata/"
+  -- skipped: how an unusable file's line ends while reading only (3.8)
+  local SIDE_FILES = {skipped = "a factory file, never moved: skipped"}
+  M.SIDE_FILES = SIDE_FILES
+
+  -- Set while read_only(fn) runs fn (3.8, 4d): every read then leaves an
+  -- unusable file where it is
+  local reading_only = false
+
+  -- Run fn with every side file read only: an unusable file is never set
+  -- aside, one line says it was skipped, and its module loads it as a
+  -- missing file (load(nil)). The flag is cleared after fn, an error
+  -- included, which is raised again. A factory set's files are read so
+  -- (S.lib.factory), in the script's own folder
+  function M.read_only(fn)
+    if type(fn) ~= "function" then error("side_files.read_only: fn is a function", 2) end
+    reading_only = true
+    local ok, problem = pcall(fn)
+    reading_only = false
+    if not ok then error(problem, 0) end
+  end
+
+  function M.reading_only()
+    return reading_only
+  end
 
   local REQUIRED = {
     {field = "name", kind = "string"}, {field = "contents", kind = "string"}, {field = "version", kind = "number"},
@@ -97,7 +123,11 @@ return function(S)
         end
       end
       local writable = true
-      if why then
+      if why and reading_only then
+        -- a factory set's file (read_only): never moved, loaded as missing
+        print("error loading " .. spec.name .. " file " .. path .. ": " .. why .. "; " .. SIDE_FILES.skipped)
+        loaded = nil
+      elseif why then
         local backup, failure = S.lib.data_files.set_aside(path, spec.backup_suffix)
         print("error loading " .. spec.name .. " file " .. path .. ": " .. why .. "; "
           .. (backup and ("kept as " .. backup) or ("not moved: " .. tostring(failure))))

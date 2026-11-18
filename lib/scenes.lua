@@ -1069,7 +1069,9 @@ return function(S)
   -- by a capture and a name, set by a PSET save and load, cleared when that
   -- PSET is deleted, read back at a start (a value that is no string reads
   -- as nil)
-  S.scene_file = {problem = nil, backup = nil, unsaved = false, pset = nil}
+  -- start_outcome (3.8): what the start's load found, "loaded", "missing",
+  -- "unreadable" or "older" (nil before it ran)
+  S.scene_file = {problem = nil, backup = nil, unsaved = false, pset = nil, start_outcome = nil}
   -- The load a player asks for (request_load): while a scene is unsaved, the
   -- first request arms until armed_until, confirm_seconds long, and a second
   -- inside it loads. start_flash_seconds: how long the start's hint row names
@@ -1450,6 +1452,9 @@ return function(S)
     print("scenes in no PSET kept as " .. backup)
     return true
   end
+  -- 3.8 (4d): a factory set's load keeps the live scenes so first (step 3
+  -- of S.lib.factory's load)
+  M.back_up_live = back_up_live
 
   -- The PSET's scenes (side_files' load): nil (no file, or an unusable one
   -- the helper set aside) leaves the live scenes, and clears the mark when
@@ -1466,6 +1471,17 @@ return function(S)
         S.scene_file.pset = nil
         rewrite_live_pset()
       end
+      return
+    end
+    -- a factory set's scenes (S.lib.side_files.read_only, 3.8): its load
+    -- kept the live scenes first (back_up_live), and no PSET holds them, so
+    -- no mark names the set's folder in the script
+    if S.lib.side_files.reading_only() then
+      take_scenes(scene_table, path, silent)
+      S.scene_file.pset = nil
+      SCENE_LOAD.armed_until = 0
+      M.autosave()
+      request_redraw()
       return
     end
     local kept, why = back_up_live()
@@ -1509,6 +1525,9 @@ return function(S)
     -- (a file that cannot be read, or an older Strata's, is named on the
     -- hint row of whatever page comes up; SETUP's status rows keep it)
     local outcome = load_scenes_from_disk()
+    -- whether a scenes file was found at this start (3.8: the factory's
+    -- first run, S.lib.factory, reads it)
+    S.scene_file.start_outcome = outcome
     if outcome == "unreadable" or outcome == "older" then
       S.lib.ui_flash.start("hints", "scenes " .. outcome .. " (SETUP)", SCENE_LOAD.start_flash_seconds)
     end

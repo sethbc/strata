@@ -339,6 +339,41 @@ test("a version that is no whole number is set aside, with or without a floor", 
   end
 end)
 
+-- 3.8 (4d, design §9): a factory set's side files are read in place, in
+-- the script's folder, inside read_only(fn): an unusable one is skipped,
+-- never renamed
+test("read_only never sets a file aside and loads it as missing", function()
+  local context, S = loaded()
+  local files, state = probe(S)
+  local path = context.data_dir .. "set.probe.data"
+  write_text(path, "garbage")
+  local bytes = file_text(path)
+  assert_equal(S.lib.side_files.reading_only(), false, "not reading only before")
+  local inside
+  S.lib.side_files.read_only(function()
+    inside = S.lib.side_files.reading_only()
+    assert_equal(files.read(path), true, "may be written (it is never moved)")
+  end)
+  assert_equal(inside, true, "reading only inside fn")
+  assert_equal(S.lib.side_files.reading_only(), false, "and not after it")
+  assert_equal(file_text(path), bytes, "the file keeps its bytes, in place")
+  assert_true(not util.file_exists(path .. ".bak"), "no .bak beside it")
+  assert_equal(#state.loads, 1, "one load")
+  assert_equal(state.loads[1].data, nil, "load(nil), as for a missing file")
+  local lines = lines_with(context, "error loading probe file " .. path .. ": ")
+  assert_equal(#lines, 1, "one console line")
+  assert_true(lines[1]:sub(-#"skipped") == "skipped", "ending skipped: " .. lines[1])
+end)
+
+test("the flag clears after an error in fn", function()
+  local _, S = loaded()
+  local ok, problem = pcall(S.lib.side_files.read_only, function() error("probe failure") end)
+  assert_true(not ok, "the error is raised again")
+  assert_true(tostring(problem):find("probe failure", 1, true) ~= nil, tostring(problem))
+  assert_equal(S.lib.side_files.reading_only(), false, "the flag is cleared")
+  assert_true(not pcall(S.lib.side_files.read_only, "no function"), "fn is a function")
+end)
+
 test("a floor above the version is refused", function()
   local _, S = loaded()
   local ok, problem = pcall(probe, S, { version = 2, floor = 3 })

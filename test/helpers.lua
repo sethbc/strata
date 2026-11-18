@@ -104,7 +104,9 @@ end
 -- every param: each group must have all of its params. Each load gets its
 -- own data directory (unless options.data_subdir names a shared one): a
 -- counter, since tests reseed math.random and two loads after one seed
--- would draw the same name.
+-- would draw the same name. options.script_dir (3.8) names the script's
+-- folder (norns.state.path, context.script_dir; a factory test's copy of
+-- its fixture), else it is the load's own empty <data_dir>script/.
 local loads = 0
 
 -- The performance_active.data the next load_strata finds, as the engine
@@ -143,9 +145,10 @@ local function load_strata(options)
   local data_dir = data_root .. (options.data_subdir or ("load" .. loads)) .. "/"
   invariant_check.loaded = true
   local context = stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec,
-    data_dir = data_dir, quiet = true, module_sources = options.module_sources }
+    data_dir = data_dir, quiet = true, module_sources = options.module_sources, script_dir = options.script_dir }
   context.data_dir = data_dir
   context.audio_dir = data_dir .. "audio/"
+  context.script_dir = norns.state.path  -- the script's folder (3.8: options.script_dir, else an empty one)
   write_pending_performance_active(data_dir)
   if options.before_load then options.before_load(context) end
   local chunk = options.source and assert(load(options.source, "@" .. LUA_PATH)) or assert(loadfile(LUA_PATH))

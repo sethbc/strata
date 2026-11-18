@@ -331,21 +331,27 @@ return function(S)
     return copy_record(record)
   end
 
-  -- A whole save succeeded: the saved file's entry (start 0) takes the
-  -- record the save was sent with
+  -- A whole save succeeded (or a factory set installed a file, 3.8): the
+  -- file's entry (start 0) takes the record. Returns whether it was stored:
+  -- false for a record the checks refuse, which stores nothing
   function M.store_file(path, record)
-    if type(path) ~= "string" or type(record) ~= "table" then return end
+    if type(path) ~= "string" then return false end
+    -- checked as a samples.data entry is (3.8, ruling 53: a factory set's
+    -- records come from a file); a field it lacks takes its default
+    local checked = record_from(record)
+    if not checked then return false end
     local entry = find(path, 0)
     if not entry then
       entry = {path = path, start = 0, used = 0, settings = default_record()}
       entries[#entries + 1] = entry
     end
-    local copy = copy_record(record)
+    local copy = copy_record(checked)
     for _, field in ipairs(FIELDS) do entry.settings[field] = copy[field] end
     use_count = use_count + 1
     entry.used = use_count
     prune()
     schedule_save()
+    return true
   end
 
   -- buffers.data's value for the slot: its take's record when it holds a

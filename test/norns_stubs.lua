@@ -3345,8 +3345,13 @@ function stubs.install(options)
   local blank = function() context.screen.clear(); context.screen.update() end
   _G.refresh = none
   -- norns.state: the script's data folder and short name, as Script.load
-  -- sets them (lua/core/state.lua), for numbered PSETs (params:write(1))
-  _G.norns = { state = { data = options.data_dir .. "strata/", shortname = "strata" }, platform = 0, none = none,
+  -- sets them (lua/core/state.lua), for numbered PSETs (params:write(1)),
+  -- and the script's folder (path, with a trailing /, lua/core/script.lua;
+  -- 3.8): options.script_dir, else <data_dir>script/, made empty, so no
+  -- test start finds a factory set
+  local script_path = options.script_dir or (options.data_dir .. "script/")
+  _G.norns = { state = { data = options.data_dir .. "strata/", shortname = "strata", path = script_path },
+    platform = 0, none = none,
     blank = blank, script = { redraw = blank, refresh = none },
     -- lua/core/pmap.lua (make_pmap), cleared as Script.clear does: empty
     -- until a test maps a param or reads the file
@@ -3358,6 +3363,7 @@ function stubs.install(options)
       init = function() _menu.set_mode(_menu.mode) end } }
   _G._path = { data = options.data_dir, audio = options.data_dir .. "audio/" }
   util.make_dir(_G._path.audio)
+  util.make_dir(script_path)
   package.loaded["ui"] = context.UI
   package.preload["ui"] = function() return context.UI end
   package.loaded["musicutil"] = nil
