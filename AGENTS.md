@@ -153,7 +153,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 | `engine.syncScan(voice, phase)` | `"if"` | Voice 0-6's own scan phase, 0-2 passes |
 | `engine.setSlotGain(slot, gain)` | `"if"` | Slot 0-7's gain, 0-16 |
 
-**Guarded commands** ignore an out-of-range index or a non-finite continuous argument with one console line; a continuous argument out of the ranges above is clipped, or ignored alike by `setTuning` and `setTuningTone` (`docs/notes/engine/modulation.md`, `docs/notes/engine/envelopes.md`, `docs/notes/engine/notes.md`, `docs/notes/engine/positions.md`, `docs/notes/engine/effects.md`, `docs/notes/engine/tuning.md`): `setFastLfo`, `stopFastLfo`, `syncFastLfo`, `setScatter`, `setFastOffset`, `setFastEnv`, `stopFastEnv`, `noteOn`, `noteOff`, `noteExpression`, `setNotePool`, `noteRegion`, `syncScan`, `setSlotGain`, `setDelay`, `setDelayFreeze`, `setTuning`, `setTuningTone`, `setShimmer`.
+**Guarded commands** ignore an out-of-range index or a non-finite continuous argument with one console line; a continuous argument out of the ranges above is clipped, or ignored alike by `setTuning` and `setTuningTone` (`docs/notes/engine/modulation.md`, `docs/notes/engine/envelopes.md`, `docs/notes/engine/notes.md`, `docs/notes/engine/positions.md`, `docs/notes/engine/effects.md`, `docs/notes/engine/tuning.md`, `docs/notes/engine/onsets.md`): `setFastLfo`, `stopFastLfo`, `syncFastLfo`, `setScatter`, `setFastOffset`, `setFastEnv`, `stopFastEnv`, `noteOn`, `noteOff`, `noteExpression`, `setNotePool`, `noteRegion`, `syncScan`, `setSlotGain`, `analyzeBuffer`, `setDelay`, `setDelayFreeze`, `setTuning`, `setTuningTone`, `setShimmer`.
 
 **Polls** (engine → Lua) pack each report into one float, and Lua matches each report to the command it names: `docs/notes/engine/buffers.md` (Polls, The polls' encodings), `docs/notes/engine/record.md`, `docs/notes/lua/buffers.md` and `docs/notes/lua/record.md`.
 
@@ -166,7 +166,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 One or two lines each: the rule, then the notes file whose "Must not break" list holds the detail, the reasons and the exceptions. Read that file before changing the code a rule names.
 
 The engine's (under docs/notes/engine/):
-- **A voice's own note never creates a node** on a step or a MIDI note (`retrigger`); an extra note creates exactly one synth in its slot, through `S.lib.notes` alone. Velocity only scales the accent envelope's `levelScale` in every voice and grain SynthDef and in `\strataVoiceMix`, with one allowance. `docs/notes/engine/voices.md`, `docs/notes/lua/notes.md`
+- **A voice's own note never creates a node** on a step or a MIDI note (`retrigger`); an extra note creates exactly one synth in its slot, through `S.lib.notes` alone. Velocity only scales the accent envelope's `levelScale` in every voice and grain SynthDef and in `\strataVoiceMix` (Karplus's pluck impulse is the one allowance). `docs/notes/engine/voices.md`, `docs/notes/lua/notes.md`
 - **Replace, never stack**: a source switch replaces the grain synth; fading synths are cut with `cutSynth`, never a second `release`; new grain synths are placed with `startPlacedGrainSynth`. `docs/notes/engine/lifecycle.md`
 - **A type switch cuts**: `setVoiceType` frees the voice's cutting set, cuts its voice synth (never a release) and restarts its voice-synth notes; under a spectral freeze it waits for the unfreeze; `gateVoice` re-gates a releasing voice synth only of the voice's current type. `docs/notes/engine/types.md`
 - **`openedGate(gate)`** wraps every ASR gate; never `gate.max(...)`. `docs/notes/engine/lifecycle.md`
@@ -243,7 +243,7 @@ The Lua side's, across modules:
 - **Strata follows the transport and never leads it**: `clock.transport` start and stop move the patterns only while `seq_follow_transport` is on; nothing calls the clock's own start or stop; a clock tests the beat its `clock.sync` returned, never the live beat. `docs/notes/lua/sequencer.md`
 - **Notes** are played, released and expressed only through `S.lib.notes`, which alone calls `noteOn`, `noteOff`, `noteExpression`, `noteRegion` and `setNotePool`; its flush sends at most 16 `noteExpression` a step, counted (`count_sends`), never deferred. `docs/notes/lua/notes.md`
 - **Slices**: a slice is played only through `S.lib.slices.play`; a one-voice step sets the own region through `S.lib.notes.set_own_region`; a missing slice plays nothing. `docs/notes/lua/slices.md`
-- **Targets**: a voice's external notes start, end and are expressed only through `S.lib.io_targets`; an off goes to exactly the targets its on went to, and every note on gets its off. Every ii message goes through `S.lib.io_ii`, which sends none unless Strata leads the bus. `docs/notes/lua/io/targets.md`, `docs/notes/lua/io/ii.md`
+- **Targets**: a voice's external notes start, end and are expressed only through `S.lib.io_targets`; an off goes to exactly the targets its on went to, and a voice's stop, a route change, a mute and cleanup end every note, the patterns' stop its step notes. Every ii message goes through `S.lib.io_ii`, which sends none unless Strata leads the bus. `docs/notes/lua/io/targets.md`, `docs/notes/lua/io/ii.md`
 
 ## Working in parallel
 

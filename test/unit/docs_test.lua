@@ -893,6 +893,71 @@ test("AGENTS.md command table lists exactly the engine's commands", function()
   end
 end)
 
+-- #808: AGENTS.md's guarded-commands sentence names exactly the commands
+-- whose handler refuses a bad value with one line through a guard helper:
+-- a call in the addCommand's function, or in an engine method that
+-- function calls (this.<method> or areaCall(\<method>), one level down, as
+-- setTuning's handler reaches postTuningIgnored)
+local GUARDED_COMMANDS = {
+  helpers = { "fastModIndicesValid", "fastModValuesFinite", "postTuningIgnored" },
+}
+function GUARDED_COMMANDS.block_at(text, open)
+  local depth = 0
+  for index = open, #text do
+    local char = text:sub(index, index)
+    if char == "{" then depth = depth + 1
+    elseif char == "}" then depth = depth - 1; if depth == 0 then return text:sub(open, index) end end
+  end
+  return ""
+end
+function GUARDED_COMMANDS.scan(source)
+  local function method_body(name)
+    local at = source:find("\n%s+" .. name .. "%s*{")
+    return at and GUARDED_COMMANDS.block_at(source, source:find("{", at, true)) or ""
+  end
+  local found = {}
+  for start, name in source:gmatch("()this%.addCommand%(\\(%w+)") do
+    local block = GUARDED_COMMANDS.block_at(source, source:find("{", start, true))
+    local text = block
+    for called in block:gmatch("this%.([%a_][%w_]*)") do text = text .. method_body(called) end
+    for called in block:gmatch("areaCall%(\\([%a_][%w_]*)") do text = text .. method_body(called) end
+    for _, helper in ipairs(GUARDED_COMMANDS.helpers) do
+      if text:find("this%." .. helper .. "%(") then found[name] = true end
+    end
+  end
+  return found
+end
+
+test("AGENTS.md's guarded commands are the commands whose handlers call a guard helper (#808)", function()
+  local planted = GUARDED_COMMANDS.scan(table.concat({
+    "    this.addCommand(\\direct, \"i\", { arg msg; if (this.fastModIndicesValid(\\direct, [])) { } });",
+    "    this.addCommand(\\viaMethod, \"i\", { arg msg; this.checkIt(msg[1]) });",
+    "    this.addCommand(\\viaAreaCall, \"i\", { arg msg; this.areaCall(\\checkThat, msg[1]) });",
+    "    this.addCommand(\\plain, \"i\", { arg msg; this.other(msg[1]) });",
+    "    checkIt { arg value; ^this.postTuningIgnored(\\viaMethod, \"why\") }",
+    "    checkThat { arg value; this.fastModValuesFinite(\\viaAreaCall, []) }",
+    "    other { arg value; ^value }",
+  }, "\n"))
+  local planted_names = {}
+  for name in pairs(planted) do planted_names[#planted_names + 1] = name end
+  table.sort(planted_names)
+  assert_equal(table.concat(planted_names, " "), "direct viaAreaCall viaMethod", "the scan finds a guard in the handler and one method down")
+  local guarded = GUARDED_COMMANDS.scan(stubs.strip_sc_comments(engine_sources()))
+  local file = assert(io.open(repo_root .. "/AGENTS.md", "r")); local doc = file:read("*a"); file:close()
+  local sentence = doc:match("\n%*%*Guarded commands%*%*[^\n]*")
+  assert_true(sentence ~= nil, "AGENTS.md has the guarded-commands sentence")
+  local listed, problems = {}, {}
+  for name in (sentence or ""):match("%):(.*)$"):gmatch("`(%w+)`") do listed[name] = true end
+  for name in pairs(guarded) do
+    if not listed[name] then problems[#problems + 1] = name .. " is guarded but not in the sentence" end
+  end
+  for name in pairs(listed) do
+    if not guarded[name] then problems[#problems + 1] = name .. " is in the sentence but its handler calls no guard helper" end
+  end
+  table.sort(problems)
+  assert_equal(table.concat(problems, "; "), "", "the guarded-commands sentence against the engine's handlers")
+end)
+
 test("every repo path the maintained docs name exists (#52)", function()
   local checked = 0
   for _, doc_name in ipairs(maintained_docs()) do
