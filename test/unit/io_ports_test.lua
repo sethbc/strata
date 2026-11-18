@@ -441,6 +441,59 @@ test("on_settled hears a port once its arrival or release has reached every hook
   assert_equal(#heard, 0, "nothing for a port outside 1 to 16")
 end)
 
+test("a reconcile settles each moved port once, after every move it tells", function()
+  local context = load_strata()
+  local ports = local_value("S").lib.io_ports
+  context.midi.plug(2, "synth a")
+  context.midi.plug(4, "synth b")
+  local heard = {}
+  ports.on_change("hook", function(port, name) heard[#heard + 1] = "change " .. port .. " " .. tostring(name) end)
+  ports.on_settled("hook", function(port) heard[#heard + 1] = "settled " .. port end)
+  _menu.set_mode(true)
+  context.midi.reassign(2, 3)
+  context.midi.reassign(4, 2)
+  _menu.set_mode(false)
+  assert_equal(table.concat(heard, ", "), "change 2 nil, change 4 nil, change 2 synth b, change 3 synth a, settled 2, settled 3",
+    "every departure and arrival told first, then each arrived port settles once, in the order told")
+end)
+
+test("a release inside a departure's hooks settles once, after every change hook", function()
+  local context = load_strata()
+  local ports = local_value("S").lib.io_ports
+  context.midi.plug(3, "box")
+  ports.claim(3, "probe")
+  local heard = {}
+  ports.on_change("releaser", function(port, name)
+    heard[#heard + 1] = "change releaser " .. port .. " " .. tostring(name)
+    if port == 3 and name == nil then ports.release(3, "probe") end
+  end)
+  ports.on_change("later", function(port, name) heard[#heard + 1] = "change later " .. port .. " " .. tostring(name) end)
+  ports.on_settled("hook", function(port) heard[#heard + 1] = "settled " .. port .. " " .. tostring(ports.device(port)) end)
+  context.midi.unplug(3)
+  assert_equal(table.concat(heard, ", "), "change releaser 3 nil, change later 3 nil, settled 3 nil",
+    "the release settles once, after the departure's last hook, the port naming no device")
+end)
+
+test("a settled hook that claims or releases a port settles each port once", function()
+  local context = load_strata()
+  local ports = local_value("S").lib.io_ports
+  ports.claim(6, "probe")
+  local heard, acted = {}, false
+  ports.on_settled("actor", function(port)
+    heard[#heard + 1] = "settled actor " .. port
+    if port == 3 and not acted then
+      acted = true
+      ports.claim(3, "taker")
+      ports.release(6, "probe")
+    end
+  end)
+  ports.on_settled("watcher", function(port) heard[#heard + 1] = "settled watcher " .. port end)
+  context.midi.plug(3, "box")
+  assert_equal(table.concat(heard, ", "), "settled actor 3, settled watcher 3, settled actor 6, settled watcher 6",
+    "port 3 settles once (its claim settles nothing); the release made there settles port 6 once, after port 3")
+  assert_equal(ports.owner(3), "taker", "the claim stands")
+end)
+
 test("out gives the port's vport and nil outside 1 to 16", function()
   load_strata()
   local ports = local_value("S").lib.io_ports

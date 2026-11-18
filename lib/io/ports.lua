@@ -96,7 +96,8 @@ return function(S)
     end
   end
 
-  -- run() (which tells hooks of port's arrival, departure or release), then,
+  -- run() (which tells hooks of port's arrival, departure or release; port
+  -- nil for a telling around several, as reconcile's), then,
   -- unless it is inside another such telling, the settled hooks of each port
   -- whose arrival or release (settles) was told meanwhile: so a claim or
   -- release a hook made inside it is told before the port settles, and the
@@ -294,12 +295,17 @@ return function(S)
         state.seen[port] = current
       end
     end
-    for _, port in ipairs(left) do
-      told(port, false, function() run_set(state.changes, "midi change hook", port, nil) end)
-    end
-    for _, port in ipairs(arrived) do
-      told(port, true, function() run_set(state.changes, "midi change hook", port, vports[port].name) end)
-    end
+    -- one telling around every move, so no port settles until all of them
+    -- are told: a departure's release (a remote letting go of the port a
+    -- device moved onto) never settles a port whose arrival is still to come
+    told(nil, false, function()
+      for _, port in ipairs(left) do
+        told(port, false, function() run_set(state.changes, "midi change hook", port, nil) end)
+      end
+      for _, port in ipairs(arrived) do
+        told(port, true, function() run_set(state.changes, "midi change hook", port, vports[port].name) end)
+      end
+    end)
   end
 
   S.register_menu_close(function() M.reconcile() end)
