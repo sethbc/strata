@@ -66,7 +66,7 @@ These CCs make a good starting point (they follow the usual General MIDI meaning
 | 10 | Pan | a voice's pan (for example voice 1 pan; the Sub, voice 4, has no pan) |
 | 74 | Brightness | filter freq (not with an MPE controller: CC 74 is its slide) |
 | 71 | Resonance | filter res |
-| 91 | Reverb | reverb mix |
-| 93 | Chorus | delay mix |
+| 91 | Reverb | reverb level |
+| 93 | Chorus | delay level |
 
 On most controllers CC 7 and CC 10 are an overall volume and pan. Strata has no single global amplitude or pan parameter, so map them to the voices you play: each voice's `v<n>_amp` and `v<n>_pan` (shown as amp and pan in its PARAMETERS section) work for synth-, buffer- and input-sourced voices alike.

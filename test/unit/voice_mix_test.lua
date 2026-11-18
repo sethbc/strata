@@ -739,4 +739,21 @@ test("delay_to_reverb goes as setReverb's fourth argument", function()
   assert_true(found ~= nil and found.resolve() == "delay_to_reverb" and found.group == "global", "the LFO destination dly>rev")
 end)
 
+-- delay_to_reverb's action calls note_param_edit, as every fx param's
+-- does (#557): FX's randomize (3.8's 4a) draws it, and an edit by hand
+-- ends the undo that holds it, never one that does not
+test("an edit of delay_to_reverb ends a randomize's undo that holds it", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local mutation = S.lib.mutation
+  local FX = S.constants.UI_PAGES.index.FX
+  mutation.randomize({ page = FX, section = "probe", draws = { { id = "delay_to_reverb", draw = function() return 0.3 end } } })
+  assert_near(params:get("delay_to_reverb"), 0.3, 1e-9, "the draw is set")
+  assert_true(mutation.undo_for(FX, "probe", nil), "the randomize holds an undo")
+  params:set("reverb_damp", 0.2)
+  assert_true(mutation.undo_for(FX, "probe", nil), "an edit of a param the undo does not hold keeps it")
+  params:set("delay_to_reverb", 0.6)
+  assert_equal(S.undo, nil, "an edit of delay_to_reverb ends the undo")
+end)
+
 end

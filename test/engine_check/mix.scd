@@ -627,7 +627,7 @@ if (hasStage.not) {
     }.value;
 
     // Bypassed: the filter mix back to 0 (and the delay and reverb at their
-    // defaults, their mixes broadcast), the lags settled
+    // defaults, their levels on their own nodes), the lags settled
     command.(\setDelay, 0.375, 0.4, 0.0, 0);
     command.(\setReverb, 0.43, 0.8, 0.5, 1);
     server.sync; 1.0.wait;
