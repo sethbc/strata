@@ -1026,7 +1026,9 @@ end
 -- (added aside), an added 3.7.0 id with no removed, an after no record has,
 -- a kind that does not fit the param, another kind or no why raises.
 local PARAM_FIXTURE_ALLOWED = {
-  {kind = "options", id = "midi_note_off", options = {"latch", "release"}, why = "note off is latch or release (design section 8)"},
+  -- groundwork: MIDI note off is latch or release (the groundwork design §8)
+  {kind = "options", id = "midi_note_off", options = {"latch", "release"},
+    why = "groundwork: note off is latch or release (design section 8)"},
 }
 -- 2b: an LFO's destination is its home routing in the matrix (design §4);
 -- its six LFOs' entries follow the list (an LFO is no voice token)
