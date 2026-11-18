@@ -338,9 +338,8 @@ return function(S)
 
   -- per port: the record kept in the grid core's port state (so an unplug
   -- forgets it): {held = {voice, cell, cells, page} (the position key held),
-  -- hold = {[voice] = page}, store = {[voice] = page} (the 256's store keys,
-  -- one per voice), store_down = page (the one store key of a layout that
-  -- selects a grid voice; nil while up), pressed = {[voice] = key},
+  -- hold = {[voice] = page}, store = {[voice] = page} (a store key per
+  -- voice), pressed = {[voice] = key},
   -- bank = {[voice] = the slice bank shown, nil for 1}, slices = {[voice] =
   -- {[cell] = the slice key held: {n, page, token, released}}}}.
   -- `records` names each record this module made, to find it again when
@@ -455,20 +454,10 @@ return function(S)
   end
 
   -- The release of a slice key the port holds for a voice's cell: true
-  -- when there was one. On a layout whose rows show the grid voice
-  -- (any_voice: the 64) the release names the grid voice as it is now,
-  -- which may have changed since the press: it ends the key of that cell
-  -- for whichever voice it was pressed for, as a strip key's release does
-  -- (#221). There one physical key is one cell, so at most one voice holds
-  -- it; on the 128h and 128v two rows or columns can hold the same cell,
-  -- and each release names its own voice
-  local function release_slice_key(port, record, voice_idx, cell, any_voice)
+  -- when there was one. Each line is one voice's, so a release names the
+  -- voice it was pressed for; two lines can hold the same cell
+  local function release_slice_key(port, record, voice_idx, cell)
     local held = record.slices[voice_idx]
-    if not (held and held[cell]) and any_voice then
-      for held_voice, voice_held in pairs(record.slices) do
-        if voice_held[cell] then voice_idx, held = held_voice, voice_held end
-      end
-    end
     local entry = held and held[cell]
     if not entry then return false end
     held[cell] = nil
@@ -494,10 +483,6 @@ return function(S)
         record.store[voice_idx] = nil
         record.pressed[voice_idx] = nil
       end
-    end
-    if record.store_down and (gone or record.store_down ~= page) then
-      record.store_down = nil
-      record.pressed = {}
     end
     if record.held and (gone or record.held.page ~= page) then record.held = nil end
     -- a slice key whose release can no longer come ends now
@@ -527,28 +512,10 @@ return function(S)
     return false
   end
 
-  -- A position press also makes the voice the grid voice on the layouts
-  -- whose record says so (the 128s and the 64; never the 256, whose rows
-  -- are one voice each), and their one strip acts for the grid voice
-  local function selects_grid_voice(port)
-    local layout = S.lib.grid_core.layout_of(port)
-    return layout ~= nil and layout.selects_grid_voice == true
-  end
-
-  -- Whether the layout's position keys name the grid voice, at their press
-  -- and their release (its record's rows_show_grid_voice: the 64, whose
-  -- rows 1-2 are the grid voice's); the other layouts' rows and columns are
-  -- each one voice's
-  local function rows_show_grid_voice(port)
-    local layout = S.lib.grid_core.layout_of(port)
-    return layout ~= nil and layout.rows_show_grid_voice == true
-  end
-
-  -- Whether a port's store is down for a voice: its one store key on a
-  -- layout that selects a grid voice (store follows the grid voice), the
-  -- voice's own key on the 256
+  -- Whether a port's store is down for a voice: the voice's own store key
+  -- (3.8: every layout's lines are one voice each)
   local function storing(record, voice_idx)
-    return record.store_down ~= nil or record.store[voice_idx] ~= nil
+    return record.store[voice_idx] ~= nil
   end
 
   -- A key of a row of `cells` cells (design 3.3 section 5.2): a press jumps
@@ -563,16 +530,13 @@ return function(S)
     if records[port] then end_stale_port(port, records[port]) end
     if z == 0 then
       local record = records[port]
-      local any_voice = rows_show_grid_voice(port)
-      if record and release_slice_key(port, record, voice_idx, cell, any_voice) then return end
-      -- the position key held likewise: on the 64 its release ends it under
-      -- the voice that pressed it, whatever the grid voice is now (#733)
+      if record and release_slice_key(port, record, voice_idx, cell) then return end
+      -- the position key held likewise, for the voice that pressed it (#733)
       local held = record and record.held
-      if held and (held.voice == voice_idx or any_voice) and held.cells == cells and held.cell == cell then record.held = nil end
+      if held and held.voice == voice_idx and held.cells == cells and held.cell == cell then record.held = nil end
       return
     end
     if not buffer_voice(voice_idx) then return end
-    if selects_grid_voice(port) then select_grid_voice(voice_idx) end
     if cells == SLICE_ROW.bank_size and M.slice_row(voice_idx) then
       press_slice_key(port, voice_idx, cell)
       return
@@ -617,56 +581,24 @@ return function(S)
           M.recall_bookmark_quantized(voice_idx, key)
         end
       elseif records[port] then
-        -- on the layouts that select a grid voice the release ends the key
-        -- for whichever voice it was pressed for (the grid voice may have
-        -- changed since, as for hold and store, #221); the 256's ends only
-        -- its own voice's
+        -- a release ends only its own voice's key
         local pressed = records[port].pressed
-        if selects_grid_voice(port) then
-          for pressed_voice, pressed_key in pairs(pressed) do
-            if pressed_key == key then pressed[pressed_voice] = nil end
-          end
-        elseif pressed[voice_idx] == key then
-          pressed[voice_idx] = nil
-        end
+        if pressed[voice_idx] == key then pressed[voice_idx] = nil end
       end
     elseif key == "store" then
       if z == 1 then
-        -- on the layouts that select a grid voice store is the port's (one
-        -- key, for whatever voice the grid shows); the 256 has one per voice
-        if selects_grid_voice(port) then
-          record_of(port).store_down = page
-        else
-          record_of(port).store[voice_idx] = page
-        end
+        record_of(port).store[voice_idx] = page
       elseif records[port] then
-        -- the port's one store key's release ends it, whatever voice it
-        -- names (#221); the 256's ends only its own voice's
-        if selects_grid_voice(port) then
-          records[port].store_down = nil
-          records[port].pressed = {}
-        else
-          records[port].store[voice_idx] = nil
-          records[port].pressed[voice_idx] = nil
-        end
+        records[port].store[voice_idx] = nil
+        records[port].pressed[voice_idx] = nil
       end
     elseif key == "hold" then
       if z == 1 then
         record_of(port).hold[voice_idx] = page
         M.hold_scan(voice_idx, true, "grid:" .. port)
       else
-        -- likewise one hold key per port where a grid voice is selected:
-        -- the release ends the hold for every held voice (each once)
-        local ended = {[voice_idx] = true}
-        if records[port] then
-          if selects_grid_voice(port) then
-            for held_voice in pairs(records[port].hold) do ended[held_voice] = true end
-            records[port].hold = {}
-          else
-            records[port].hold[voice_idx] = nil
-          end
-        end
-        for held_voice in pairs(ended) do M.hold_scan(held_voice, false, "grid:" .. port) end
+        if records[port] then records[port].hold[voice_idx] = nil end
+        M.hold_scan(voice_idx, false, "grid:" .. port)
       end
     elseif key == "whole" and z == 1 then
       whole_loop(voice_idx)
@@ -937,20 +869,6 @@ return function(S)
       if scan_hold[voice_idx] ~= has_holder then
         return "voice " .. voice_idx .. ": scan held " .. tostring(scan_hold[voice_idx])
           .. " with " .. (has_holder and "holders" or "no holder")
-      end
-    end
-  end)
-
-  -- A port holds store one way only: its one store key (store_down) on a
-  -- layout that selects a grid voice, a key per voice (store) on the others
-  S.register_invariant("strip store", function()
-    for port, record in pairs(records) do
-      local state = S.lib.grid_core.existing_port_state(port)  -- reads only: never creates a gone port's state
-      local layout = state ~= nil and state.positions == record and S.lib.grid_core.layout_of(port)
-      if layout and layout.selects_grid_voice and next(record.store) ~= nil then
-        return "grid " .. port .. " selects a grid voice but holds store per voice"
-      elseif layout and not layout.selects_grid_voice and record.store_down ~= nil then
-        return "grid " .. port .. " has a store key per voice but holds the port's store"
       end
     end
   end)

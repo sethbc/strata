@@ -1055,7 +1055,9 @@ end)
 
 test("bufferState poll redraws the screen and the grid's buffer page", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
-  local device = context.grid.plug(1, 16, 16); context.grid.press(1, 16, 8, 1)
+  local device = context.grid.plug(1, 16, 16)
+  local S = local_value("S")
+  S.lib.grid_core.set_page(1, S.constants.GRID_PAGES.sources)  -- accepted with no record (3.8, ruling 55)
   load_buffer(3, "/tmp/a.wav")
   local refreshes = device.refresh_count
   context.screen.texts = {}

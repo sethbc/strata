@@ -157,10 +157,13 @@ S.lib.arc_buffer = include("lib/arc/buffer")(S)
 S.lib.arc_scenes = include("lib/arc/scenes")(S)
 S.lib.arc_io = include("lib/arc/io")(S)
 
--- The grid: the core first, then the faders and one file per layout, each
--- registering its {key, redraw} record in S.registry.grid_layouts
+-- The grid: the core first, then the faders, the pane engine, one file per
+-- page (each registering its record in S.registry.grid_pages) and one per
+-- layout (each its arrange record in S.registry.grid_layouts)
 S.lib.grid_core = include("lib/grid/core")(S)
 S.lib.grid_faders = include("lib/grid/faders")(S)
+S.lib.grid_pane = include("lib/grid/pane")(S)
+S.lib.grid_pages_patterns = include("lib/grid/pages/patterns")(S)
 S.lib.grid_layout_256 = include("lib/grid/layout_256")(S)
 S.lib.grid_layout_128h = include("lib/grid/layout_128h")(S)
 S.lib.grid_layout_128v = include("lib/grid/layout_128v")(S)

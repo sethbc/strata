@@ -47,8 +47,8 @@ return function(S)
     end
   end
 
-  -- The filter and delay params are faders on the 256 grid's FX page: redraw
-  -- only while a grid shows it (no other layout shows them). A scene
+  -- The filter and delay params are faders on the grid's FX page: redraw
+  -- only while a pane shows it (any_fx_faders). A scene
   -- transition sets them on every step and redraws the grid once per step
   -- itself.
   local function fx_fader_changed()

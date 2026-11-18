@@ -521,19 +521,6 @@ test("the drift leaves a stopped voice's grain pitch and buffer position (#410)"
   assert_true(voices[1].values.grain_pitch ~= 1.5 and voices[1].values.buf_pos ~= 0.5, "a running voice's do")
 end)
 
-test("a drift tick brings a param set elsewhere to the 256's fader page (#410)", function()
-  local context = load_strata(); finish_startup(context)
-  local device = context.grid.plug(1, 16, 16)
-  local press = function(x, y) context.grid.press(1, x, y, 1); context.grid.press(1, x, y, 0) end
-  press(14, 8)                                              -- grid page 2 (the faders)
-  press(2, 14)                                              -- voice 2 (fm): row 11 is its index fader
-  assert_true(device:get_led(16, 11) ~= 15, "index is not at its top")
-  params:set("v2_index", 10)                                -- E3, MIDI or PARAMS: no grid redraw of its own
-  assert_true(device:get_led(16, 11) ~= 15, "the set alone leaves the fader as it was")
-  drift_update()
-  assert_equal(device:get_led(16, 11), 15, "the next drift tick shows it")
-end)
-
 test("the undo's expiry clock forgets its id before it clears the undo, so it never cancels itself (#410)", function()
   local context = load_strata(); finish_startup(context)
   randomize_voice(1)

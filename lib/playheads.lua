@@ -235,19 +235,9 @@ return function(S)
 
   local function end_stale_holds() S.lib.positions.end_stale_holds() end
 
-  -- Whether a connected grid shows positions now: the position page, or the
-  -- page its layout record names as `strip_page` (the 128h's page 4 shows
-  -- the grid voice's strip)
+  -- Whether a pane of a connected grid shows the position page now
   local function shows_positions()
-    local grid_core = S.lib.grid_core
-    for port, grid_port in pairs(S.grids) do
-      if grid_port.device then
-        local page = grid_core.page(port)
-        local layout = grid_core.layout_of(port)
-        if page == POSITION_PAGE or (layout ~= nil and layout.strip_page == page) then return true end
-      end
-    end
-    return false
+    return S.lib.grid_core.any_page(POSITION_PAGE)
   end
 
   local function redraw_position_grids()

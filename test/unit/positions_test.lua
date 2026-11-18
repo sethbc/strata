@@ -207,36 +207,23 @@ test("only buffer voices answer position keys; a stopped one keeps its new posit
   assert_near(params:get("v3_buf_pos"), 0.25, 1e-9, "a cell outside the row is ignored")
 end)
 
-test("a position press selects the grid voice on the 128s and the 64, never on the 256", function()
-  local context, S = buffer_voices()
-  local positions = S.lib.positions
-  local plugged = {[1] = {16, 16}, [2] = {16, 8}, [3] = {8, 16}, [4] = {8, 8}}
-  for port, size in pairs(plugged) do context.grid.plug(port, size[1], size[2]) end
-  S.grid_voice_select = 6
-  positions.grid_key(1, 3, 5, 16, 1); positions.grid_key(1, 3, 5, 16, 0)
-  assert_equal(S.grid_voice_select, 6, "the 256 keeps its grid voice")
-  local expected = {[2] = 3, [3] = 2, [4] = 1}  -- voices 1-3 read buffers
-  for port = 2, 4 do
-    S.grid_voice_select = 6
-    positions.grid_key(port, expected[port], 5, 16, 1); positions.grid_key(port, expected[port], 5, 16, 0)
-    assert_equal(S.grid_voice_select, expected[port], "port " .. port .. " selects the pressed voice")
-  end
-end)
-
-test("a press on a synth or input voice's row never changes the grid voice, on any layout", function()
+-- 3.8 (ruling 56): every layout's lines are one voice each, so a position
+-- press never picks the grid voice (the faders page's voice keys do)
+test("a position press never changes the grid voice", function()
   local context, S = buffer_voices()
   local positions = S.lib.positions
   params:set("v4_source", 1)
   params:set("v5_source", S.constants.SOURCE_INPUT)
-  context.grid.plug(2, 16, 8); context.grid.plug(3, 8, 16); context.grid.plug(4, 8, 8)
-  for port = 2, 4 do
-    S.grid_voice_select = 6
-    positions.grid_key(port, 4, 5, 16, 1); positions.grid_key(port, 4, 5, 16, 0)
-    positions.grid_key(port, 5, 5, 16, 1); positions.grid_key(port, 5, 5, 16, 0)
-    assert_equal(S.grid_voice_select, 6, "port " .. port .. ": the grid voice stays")
-    positions.grid_key(port, 3, 5, 16, 1); positions.grid_key(port, 3, 5, 16, 0)
-    assert_equal(S.grid_voice_select, 3, "port " .. port .. ": a buffer voice's row selects it")
+  local plugged = {[1] = {16, 16}, [2] = {16, 8}, [3] = {8, 16}, [4] = {8, 8}}
+  for port, size in pairs(plugged) do context.grid.plug(port, size[1], size[2]) end
+  for port = 1, 4 do
+    for _, voice_idx in ipairs({1, 2, 3, 4, 5}) do
+      S.grid_voice_select = 6
+      positions.grid_key(port, voice_idx, 5, 16, 1); positions.grid_key(port, voice_idx, 5, 16, 0)
+      assert_equal(S.grid_voice_select, 6, "port " .. port .. ", voice " .. voice_idx .. ": the grid voice stays")
+    end
   end
+  assert_near(params:get("v3_buf_pos"), 0.25, 1e-9, "the presses still jump")
 end)
 
 test("a scene recall that switches a running voice's source forgets its last recalled bookmark", function()
@@ -744,37 +731,10 @@ test("the bookmark rows show on VOICE for a buffer voice only", function()
   assert_true(not outline(1):find("bookmark", 1, true), "an input voice")
 end)
 
--- A stand-in for a connected grid of a size (what `selects_grid_voice` reads)
+-- A stand-in for a connected grid of a size (what layout_of reads)
 local function with_grid(S, cols, rows)
   S.grids[1] = {cols = cols, rows = rows}
 end
-
-test("a strip hold's release ends the hold for the voice it was pressed for, after a grid voice change", function()
-  local _, S = buffer_voices()
-  with_grid(S, 16, 8)
-  local positions = S.lib.positions
-  positions.strip_key(1, 1, "hold", 1)
-  assert_equal(positions.scan_held(1), true, "voice 1 held")
-  positions.strip_key(1, 2, "hold", 0)
-  assert_equal(positions.scan_held(1), false, "a release naming voice 2 ends voice 1's hold")
-  assert_equal(positions.scan_held(2), false)
-  assert_equal(positions.strip_level(1, "hold"), 4)
-  S.grids[1] = nil
-end)
-
-test("a strip store's release ends store for the voice it was pressed for, after a grid voice change", function()
-  local _, S = buffer_voices()
-  with_grid(S, 16, 8)
-  local positions = S.lib.positions
-  positions.strip_key(1, 1, "store", 1)
-  assert_equal(positions.strip_level(1, "store"), 15)
-  positions.strip_key(1, 2, "store", 0)
-  assert_equal(positions.strip_level(1, "store"), 4, "a release naming voice 2 ends voice 1's store")
-  params:set("v1_bookmark_3", 0.9)
-  positions.strip_key(1, 1, 3, 1)
-  assert_near(params:get("v1_buf_pos"), 0.9, 1e-9, "the next press recalls instead of storing")
-  S.grids[1] = nil
-end)
 
 test("a strip hold's release sends one scanHold 0 for the voice it names and holds", function()
   local context, S = buffer_voices()
@@ -816,8 +776,8 @@ test("on a 256 a strip store's release ends only its own voice: voice 2's next b
   S.grids[1] = nil
 end)
 
--- #239: on the grids with one strip, store belongs to the port; each
--- grid's store LED shows only its own key
+-- #239: store is a port's, per voice; each grid's store LED shows only
+-- its own key
 test("the store LED is the port's own", function()
   local context, S = buffer_voices()
   local positions = S.lib.positions
@@ -835,26 +795,7 @@ test("the store LED is the port's own", function()
   assert_equal(positions.strip_level(1, "store", 2), 4)
 end)
 
-test("each grid's redraw lights only its own store key", function()
-  local context, S = buffer_voices()
-  local full = context.grid.plug(1, 16, 16)
-  local wide = context.grid.plug(2, 16, 8)
-  S.lib.grid_core.set_page(1, 5)  -- the 256's strips: voice v's on row 8 + v
-  S.lib.grid_core.set_page(2, 4)  -- the 128h's strip: store at (13, 6)
-  S.grid_voice_select = 1
-  S.lib.positions.strip_key(2, 1, "store", 1)
-  grid_redraw()
-  assert_equal(wide:get_led(13, 6), 15, "the 128h's store key is down")
-  assert_equal(full:get_led(6, 9), 4, "the 256's store key for voice 1 is not")
-  S.lib.positions.strip_key(2, 1, "store", 0)
-  S.lib.positions.strip_key(1, 1, "store", 1)
-  grid_redraw()
-  assert_equal(full:get_led(6, 9), 15, "the 256's store key for voice 1 is down")
-  assert_equal(wide:get_led(13, 6), 4, "the 128h's is not")
-  S.lib.positions.strip_key(1, 1, "store", 0)
-end)
-
-test("a one-strip grid's store ends when the grid shows another page", function()
+test("a 128h's store ends when the grid shows another page", function()
   local context, S = buffer_voices()
   local positions = S.lib.positions
   context.grid.plug(1, 16, 8)
@@ -1330,26 +1271,6 @@ test("a pick the slices no longer reach is forgotten when a key reads it", funct
   positions.strip_key(1, 1, 3, 1); positions.strip_key(1, 1, 3, 0)  -- an empty bank: not picked
   doubles.counts[1] = 40
   assert_equal(positions.bank(1, 1), 1, "a bank key's press forgot it too")
-end)
-
-test("the slice rows repaint from the playhead clock when a slice starts or ends", function()
-  local context, S, doubles = slice_voices(20)
-  local device = context.grid.plug(1, 16, 16)
-  S.lib.grid_core.set_page(1, 5)
-  grid_redraw()
-  assert_equal(device:get_led(3, 1), 9, "slice 3 exists")
-  local before = S.lib.positions.display_signature()
-  doubles.sounding.other = {voice = 1, n = 3}
-  assert_true(S.lib.positions.display_signature() ~= before, "the signature sees a slice start")
-  context.clock.run_for(0.2)
-  assert_equal(device:get_led(3, 1), 15, "the clock repainted it playing")
-  doubles.sounding.other = nil
-  context.clock.run_for(0.2)
-  assert_equal(device:get_led(3, 1), 9, "and ended")
-  S.lib.positions.strip_key(1, 1, 2, 1); S.lib.positions.strip_key(1, 1, 2, 0)
-  context.clock.run_for(0.2)
-  assert_equal(device:get_led(5, 1), 0, "a bank change shows")
-  assert_equal(device:get_led(2, 9), 15, "and its key")
 end)
 
 test("a held slice key ends when its grid shows another page or leaves", function()

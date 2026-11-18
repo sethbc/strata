@@ -599,7 +599,7 @@ test("displayed changes from every source reach the screen and arc on the next f
   assert_drawn_on_next_frame(context, arc_hardware, "toggle_lock", function() toggle_lock(1) end)
   assert_true(local_value("locked")[1], "toggle_lock locked voice 1"); toggle_lock(1)
   assert_drawn_on_next_frame(context, arc_hardware, "grid voice button", function()
-    context.grid.press(1, 13, 14, 1); context.grid.press(1, 13, 14, 0)
+    context.grid.press(1, 14, 8, 1); context.grid.press(1, 14, 8, 0)  -- O5
   end)
   assert_true(voices[5].active, "the grid started voice 5")
   assert_drawn_on_next_frame(context, arc_hardware, "arc turn", function() context.arc.turn(1, 2, 8) end)
