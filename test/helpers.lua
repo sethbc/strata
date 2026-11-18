@@ -377,9 +377,16 @@ local function grid_pane(context, arrangement, opts)
     return S.lib.grid_pane.physical(layout, info.pane, x, y, core.half(port, info.pane))
   end
   local handle = {port = port, device = device, pane = info.pane, arrangement = arrangement}
+  -- raises unless the pane then shows that page, side and half (a side the
+  -- page has not is refused by set_page, so a test never runs on another)
   function handle.show(page, side, half)
-    core.set_page(port, page, info.pane, side or 1)
-    core.set_half(port, info.pane, half or info.half)
+    side, half = side or 1, half or info.half
+    core.set_page(port, page, info.pane, side)
+    core.set_half(port, info.pane, half)
+    local wanted = info.pane .. ":" .. page .. ":" .. side .. ":" .. half
+    if core.view(port, info.pane) ~= wanted then
+      error(arrangement .. " shows " .. core.view(port, info.pane) .. ", not " .. wanted, 2)
+    end
     grid_redraw()
   end
   function handle.press(x, y, z)

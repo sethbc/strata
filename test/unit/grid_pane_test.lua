@@ -389,7 +389,10 @@ test("NV: a tap plays at release; held 0.5 s the chooser picks page, side and ha
   small.press(STRIP.chooser, line, 1)
   context.clock.run_for(0.3)
   small.press(5, 2, 1)
-  context.clock.run_for(0.25)
+  context.clock.run_for(0.15)
+  assert_equal(small.led(STRIP.chooser, line), 4, "held 0.45 s: the chooser is still closed")
+  assert_equal(small.led(1, 2), 0, "and the pane still shows patterns (the chooser would light it 4)")
+  context.clock.run_for(0.1)
   assert_equal(small.led(STRIP.chooser, line), 15, "15 while the chooser shows")
   assert_equal(small.led(1, 1), 15, "the shown choice: patterns, side 1, left half")
   assert_equal(small.led(1, 2), 4, "patterns' right half")
@@ -554,6 +557,143 @@ test("a page whose redraw fails spares the other pane and the strips, and prints
   assert_equal(top.led(page_key(pages.fx), STRIP.line), 15, "the failing pane's strip is drawn")
   assert_equal(bottom.led(page_key(pages.patterns), STRIP.line), 15, "and the other's")
   h.claim_script_errors(context, 1, "strata: grid page redraw failed: ", "broken page")
+end)
+
+-- The pane object's interface (the review's T1) ----------------------------
+
+-- What a probe page saw of its pane at each press: the fields and what
+-- each wrapper answered for the key pressed
+local function interface_probe(pages)
+  local seen = {}
+  local probe = probe_grid_page(pages.fx)
+  probe.press = function(pane, x, y, z)
+    if z ~= 1 then
+      seen.release = (seen.release or 0) + 1
+      return
+    end
+    seen.width, seen.offset, seen.turned = pane.width, pane.offset, pane.turned
+    seen.shows_x, seen.shows_left, seen.shows_right = pane.shows(x), pane.shows(1), pane.shows(16)
+    seen.held = pane.held(x, y) ~= nil
+    seen.off_pane = pane.held(x, 8)  -- line 8 is no pane key
+    seen.pending_before = pane.hold_pending(x, y)
+    pane.on_hold(x, y, 0.5, function() seen.fired = (seen.fired or 0) + 1 end)
+    seen.pending_after = pane.hold_pending(x, y)
+    pane.press_as(x, y, "probe")
+    seen.role = pane.pressed_as(x, y, "probe") and not pane.pressed_as(x, y, "other")
+    pane.consume(x, y)
+    seen.consumed = pane.consumed(x, y)
+    local state = pane.state()
+    state.presses = (state.presses or 0) + 1
+    seen.state = state
+  end
+  return probe, seen
+end
+
+test("the pane object's fields and wrappers on every arrangement, the 128v and the 64's right half among them", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local S = S_table()
+    local pages = PAGES()
+    local _, seen = interface_probe(pages)
+    local pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    local x = arrangement == "64 right" and 11 or 3
+    pane.press(x, 2, 1)
+    local half = arrangement:find("^64") ~= nil
+    assert_equal(seen.width, half and 8 or 16, arrangement .. ": width")
+    assert_equal(seen.offset, arrangement == "64 right" and 8 or 0, arrangement .. ": offset")
+    assert_equal(seen.turned, arrangement == "128v", arrangement .. ": turned")
+    assert_true(seen.shows_x, arrangement .. ": shows the key pressed")
+    assert_equal(seen.shows_left, arrangement ~= "64 right", arrangement .. ": shows column 1")
+    assert_equal(seen.shows_right, arrangement ~= "64 left", arrangement .. ": shows column 16")
+    assert_true(seen.held, arrangement .. ": held(x, y) is the key's press time")
+    assert_equal(seen.off_pane, nil, arrangement .. ": a strip line is no pane key")
+    assert_true(not seen.pending_before and seen.pending_after, arrangement .. ": hold_pending follows on_hold")
+    assert_true(seen.role, arrangement .. ": press_as and pressed_as")
+    assert_true(seen.consumed, arrangement .. ": consume and consumed")
+    context.clock.run_for(0.6)
+    assert_equal(seen.fired, 1, arrangement .. ": on_hold fired once")
+    pane.press(x, 2, 0)
+    assert_equal(seen.release, nil, arrangement .. ": the consumed key's release never reached the page")
+    assert_equal(seen.state.presses, 1, arrangement .. ": state() kept the count")
+    assert_equal(S.lib.grid_core.port_state(1).pages.fx, seen.state, arrangement .. ": at port_state(port).pages[name]")
+    -- gesture_key in pane coordinates: a tap of recorder 1 records
+    local probe = S.registry.grid_pages[pages.fx]
+    probe.press = function(p, px, py, z) p.gesture_key(px, py, z, 1) end
+    pane.tap(x, 3)
+    assert_equal(S.lib.gestures.state(1), "recording", arrangement .. ": gesture_key at its release")
+    S.lib.gestures.clear(1)
+  end
+end)
+
+-- The controller's ruling on C1: a page's state is port_state(port).pages[name]
+test("a page's state() is per port and page, never the positions module's record, and goes with the grid", function()
+  local context = load_bare()
+  local S = S_table()
+  local pages = PAGES()
+  local states = {}
+  local probe = probe_grid_page(pages.positions)
+  probe.press = function(pane, _, _, z)
+    if z == 1 then states[#states + 1] = pane.state() end
+  end
+  local top = grid_pane(context, "256 top")
+  local small = grid_pane(context, "64 left", {port = 2})
+  top.show(pages.positions); small.show(pages.positions)
+  top.tap(2, 1)
+  small.tap(2, 1)
+  top.tap(3, 1)
+  assert_true(states[1] ~= states[2], "each port its own")
+  assert_equal(states[1], states[3], "one table a port and page")
+  assert_equal(S.lib.grid_core.port_state(1).pages.positions, states[1], "kept at port_state(port).pages[name]")
+  -- the positions module's record at port_state(port).positions is its own
+  S.buffers[1].seconds = 16
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  S.lib.positions.strip_key(1, 1, "store", 1)
+  S.lib.positions.strip_key(1, 1, "store", 0)
+  assert_true(S.lib.grid_core.port_state(1).positions ~= states[1], "the page's state is not the module's record")
+  assert_equal(states[1].hold, nil, "and holds none of its fields")
+  context.grid.unplug(1)
+  assert_equal(S.lib.grid_core.existing_port_state(1), nil, "unplugged: the port's state, pages included, is gone")
+  assert_true(S.lib.grid_core.port_state(2).pages.positions == states[2], "the other grid keeps its own")
+end)
+
+-- The controller's ruling on C2: a page's faders and signature run contained
+test("a page whose faders or signature raises is contained: no fader lines, an unchanged signature, the tick goes on", function()
+  local context = load_bare()
+  local S = S_table()
+  local pages = PAGES()
+  local broken = {faders = true, signature = false}
+  local probe = probe_grid_page(pages.fx, {
+    faders = function() if broken.faders then error("broken faders") end return {} end,
+    signature = function() if broken.signature then error("broken signature") end return "s" end,
+    redraw = function(_, led) led(1, 1, 9) end})
+  local pane = grid_pane(context, "128h")
+  pane.show(pages.fx)
+  for _ = 1, 3 do grid_redraw() end
+  assert_equal(pane.led(1, 1), 9, "the page is drawn, as having no fader lines")
+  assert_true(pcall(drift_update), "the drift tick does not raise")
+  assert_true(pcall(drift_update), "nor the next")
+  pane.tap(1, 2)
+  assert_equal(#probe.presses, 2, "its keys still reach the page")
+  h.claim_script_errors(context, 1, "strata: grid page faders failed: ", "broken faders")
+  broken.faders, broken.signature = false, true
+  local follow = S.lib.grid_faders.follow_faders
+  assert_true(pcall(follow), "a raising signature is contained")
+  local refreshes = pane.device.refresh_count
+  follow(); follow()
+  assert_equal(pane.device.refresh_count, refreshes, "and reads as unchanged: idle ticks repaint nothing")
+  h.claim_script_errors(context, 1, "strata: grid page signature failed: ", "broken signature")
+end)
+
+test("h.grid_pane's show raises when the pane does not end on the page, side and half asked for", function()
+  local context = load_bare()
+  local pages = PAGES()
+  probe_grid_page(pages.fx)
+  local pane = grid_pane(context, "128h")
+  local ok, err = pcall(pane.show, pages.fx, 2)
+  assert_true(not ok, "a side the page lacks is refused, so show raises")
+  assert_true(tostring(err):find("shows", 1, true) ~= nil, "naming what it shows: " .. tostring(err))
+  assert_true(pcall(pane.show, pages.fx, 1), "a side it has is shown")
 end)
 
 -- Step 5: every key of every registered page -----------------------------
