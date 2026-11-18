@@ -1214,7 +1214,7 @@ test("every CI job has a timeout", function()
   end
   -- lua-suite runs one shard of a Lua suite a runner, in parallel on its
   -- cores (3.8's package x5); lua gathers them, as engine gathers the shards
-  local expected = { ["lua-suite"] = 10, lua = 5, ["engine-shard"] = 35, engine = 5 }
+  local expected = { ["lua-suite"] = 10, lua = 5, ["engine-shard"] = 37, engine = 5 }
   for _, name in ipairs(order) do
     assert_true(jobs[name].minutes ~= nil, "job " .. name .. " has a timeout-minutes at its own indent")
     assert_true(expected[name] ~= nil, "job " .. name .. " has no expected timeout in this test")
@@ -1584,7 +1584,8 @@ done < "$RUNNER_TEMP/sc-packages.sha512"
 -- script does not (#792); anything that can shadow a command the pinned
 -- lines run (#792): a shell function or an alias in any step of the shard,
 -- BASH_ENV anywhere in the workflow (bash runs its file before every step's
--- script)
+-- script), a write to GITHUB_PATH or a PATH written to GITHUB_ENV in any step
+-- (both reach every later step)
 function CI_WORKFLOW.cache_problems(workflow)
   local problems, at = {}, {}
   local function problem(text) problems[#problems + 1] = text end
@@ -1647,6 +1648,21 @@ function CI_WORKFLOW.cache_problems(workflow)
   -- and nothing writes the SHA512 list (a read of it is `< "<the list>"`)
   for index, step in ipairs(steps) do
     local script = CI_WORKFLOW.script(step, true)
+    -- what a step leaves to the steps after it (#792's review): GITHUB_PATH
+    -- at all, and a PATH in a step that writes GITHUB_ENV (as NAME=value or
+    -- as a NAME<<delimiter block, so on any line of that step)
+    local writes_env = false
+    for _, line in ipairs(script) do
+      if line:find("%f[%w_]GITHUB_ENV%f[^%w_]") then writes_env = true end
+    end
+    for _, line in ipairs(script) do
+      if line:find("%f[%w_]GITHUB_PATH%f[^%w_]") then
+        problem("GITHUB_PATH is written (its directories come first in PATH for every later step): " .. line:match("^%s*(.-)$"))
+      end
+      if writes_env and (line:find("%f[%w_]PATH%s*=") or line:find("%f[%w_]PATH%s*<<")) then
+        problem("PATH is written to GITHUB_ENV (it reaches every later step): " .. line:match("^%s*(.-)$"))
+      end
+    end
     if #script == 0 and CI_WORKFLOW.names_archives(step.text) then
       problem("step " .. tostring(step.name or step.uses) .. " names apt's archive folder")
     end
@@ -1771,7 +1787,7 @@ test("a kept package reaches apt's archive folder only through the hash check, b
   end
   local loop, start = "verify-and-copy loop", "install step's start"
   local function also(expect, extra) expect[#expect + 1] = extra; return expect end
-  local debs = '          debs="$RUNNER_TEMP/sc-debs"\n'
+  local debs, prefix = '          debs="$RUNNER_TEMP/sc-debs"\n', '          prefix="sc-debs-'
   local cases = {
     -- inside the pinned loop: every edit fails by its first changed line.
     -- The case nobody wrote down: the whole kept folder copied "to save a loop"
@@ -1840,14 +1856,33 @@ test("a kept package reaches apt's archive folder only through the hash check, b
         "an alias in the engine shard (it could shadow a command the pinned lines run): shopt -s expand_aliases; alias sha512sum=true"),
       edits = { debs, "          shopt -s expand_aliases; alias sha512sum=true\n" .. debs } },
     { name = "BASH_ENV in the install step's env", expect = "BASH_ENV is set (bash runs its file before every step's script): BASH_ENV: /tmp/shadow.sh",
-      edits = { "        timeout-minutes: 4\n        run: |\n", "        timeout-minutes: 4\n        env:\n          BASH_ENV: /tmp/shadow.sh\n        run: |\n" } },
+      edits = { "        timeout-minutes: 4\n        run: |\n          echo \"jackd2 ",
+        "        timeout-minutes: 4\n        env:\n          BASH_ENV: /tmp/shadow.sh\n        run: |\n          echo \"jackd2 " } },
     -- the pinned start: a PATH of its own before the loop, and a line above the script's first
     { name = "a PATH of its own above debs=", expect = differs(start, 3, 'export PATH="$RUNNER_TEMP/bin:$PATH"'),
       edits = { debs, '          export PATH="$RUNNER_TEMP/bin:$PATH"\n' .. debs } },
     { name = "a line above the install's first", expect = "the install step's start is not the script's first line: line 1 is `set +o errexit`",
       edits = { '          echo "jackd2 jackd/tweak_rt_limits', '          set +o errexit\n          echo "jackd2 jackd/tweak_rt_limits' } },
+    -- what an earlier step leaves to the later ones (each step is a new
+    -- bash, so a function or an alias stays in its own): GITHUB_PATH, and a
+    -- PATH written to GITHUB_ENV, either way GitHub reads it
+    { name = "a directory added to GITHUB_PATH in the list step",
+      expect = 'GITHUB_PATH is written (its directories come first in PATH for every later step): echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"',
+      edits = { prefix, '          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"\n' .. prefix } },
+    { name = "a PATH written to GITHUB_ENV in the list step",
+      expect = 'PATH is written to GITHUB_ENV (it reaches every later step): echo "PATH=$RUNNER_TEMP/bin:$PATH" >> "$GITHUB_ENV"',
+      edits = { prefix, '          echo "PATH=$RUNNER_TEMP/bin:$PATH" >> "$GITHUB_ENV"\n' .. prefix } },
+    { name = "a PATH written to GITHUB_ENV as a block",
+      expect = "PATH is written to GITHUB_ENV (it reaches every later step): echo 'PATH<<END'",
+      edits = { prefix, "          {\n            echo 'PATH<<END'\n            echo \"$RUNNER_TEMP/bin\"\n            echo END\n          } >> \"$GITHUB_ENV\"\n" .. prefix } },
   }
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases)
+  -- and none of them refuses a step that reads PATH or writes another
+  -- variable to GITHUB_ENV (the workflow writes to GITHUB_ENV nowhere today)
+  for _, line in ipairs({ 'echo "PATH is $PATH"', 'echo "SC_STARTED=1" >> "$GITHUB_ENV"', 'export MYPATH="$RUNNER_TEMP/bin"' }) do
+    assert_equal(table.concat(CI_WORKFLOW.cache_problems(CI_WORKFLOW.mutated(workflow, prefix, "          " .. line .. "\n" .. prefix)), " | "), "",
+      "the cache problems of a list step with " .. line)
+  end
 end)
 
 -- #786: what would weaken apt's own checks, each refused (apt-get(8),
