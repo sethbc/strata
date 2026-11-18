@@ -152,7 +152,7 @@ jobs:
           - mix,variation,grains,structure,performance
           - modulation,freeze,envelopes
           - memory,rings
-          - record,waveform,onsets
+          - record,waveform,onsets,delay
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
       # the norns commit the engine is compiled against (sc/core classes), in full:
@@ -327,9 +327,9 @@ jobs:
 
       # A port that already has a server must fail the run at once, naming the
       # port, and must leave that server running (#471). These two steps run
-      # on one shard only, record, waveform and onsets' (well under its timeout).
+      # on one shard only, record, waveform, onsets and delay's (well under its timeout).
       - name: Engine check refuses a port that already has a server
-        if: matrix.areas == 'record,waveform,onsets'
+        if: matrix.areas == 'record,waveform,onsets,delay'
         run: |
           scsynth -u 57391 > "$RUNNER_TEMP/scsynth-other.log" 2>&1 &
           other=$!
@@ -347,7 +347,7 @@ jobs:
       # A server that cannot boot (the port held by a socket that never
       # answers) must fail the run within seconds, naming the cause (#472)
       - name: Engine check fails at once when scsynth cannot boot
-        if: matrix.areas == 'record,waveform,onsets'
+        if: matrix.areas == 'record,waveform,onsets,delay'
         run: |
           python3 -c 'import socket, time; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", 57392)); time.sleep(120)' &
           holder=$!

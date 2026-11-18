@@ -359,7 +359,7 @@
         var state = areaState[\effects];
         // the kept controls start at the SynthDefs' defaults (the Lua params'
         // defaults: the script never bangs its params)
-        state[\controls][\delay] = this.effectDefaults(\strataDelay, [\time, \feedback, \mix, \pingPong]);
+        state[\controls][\delay] = this.effectDefaults(\strataDelay, [\time, \feedback, \mix, \pingPong, \frozen]);
         state[\controls][\reverb] = this.effectDefaults(\strataReverb, [\mix, \size, \damp, \delayToReverb]);
 
         // The chain at the tail of the engine group, in signal order: the

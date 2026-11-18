@@ -704,6 +704,10 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     setMasterDrift = none, setReverb = none, setDelay = none,
     -- effect 0 delay, 1 reverb (the engine ignores others; Lua never sends them)
     setBypass = function(args) return range("effect", args[1], 0, 1) or range("bypassed", args[2], 0, 1) end,
+    -- 3.8's delay freeze and clear (design §7.2, §7.3): frozen 0 or 1 (the
+    -- engine ignores another, with one line); the clear takes no argument
+    setDelayFreeze = function(args) return range("frozen", args[1], 0, 1) end,
+    clearDelay = none,
     -- the engine ignores a root outside 0-11 or a mask outside 1-4095: Lua never sends one
     setScale = function(args) return range("root", args[1], 0, 11) or range("mask", args[2], 1, 4095) end,
     -- 3.4's fast modulation (design §0.3), each index as the engine checks

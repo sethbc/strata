@@ -279,8 +279,9 @@ test("fx params: defaults, one exactly sized strata_fx group, scene defaults mat
   assert_true(group_index, "strata_fx group exists")
   assert_equal(params.params[group_index].t, params.tGROUP)
   -- then the registered fx params (lib/voice_mix.lua's two bypass params
-  -- and its delay to reverb, lib/delay_sync.lua's sync, division and ping-pong)
-  assert_equal(params.params[group_index].n, #FX_PARAM_IDS + 2 + 1 + 3, "group size")
+  -- and its delay to reverb, lib/delay_sync.lua's sync, division and
+  -- ping-pong, 3.8's lib/fx_hold.lua's delay freeze and clear)
+  assert_equal(params.params[group_index].n, #FX_PARAM_IDS + 2 + 1 + 3 + 2, "group size")
   for offset, param_id in ipairs(FX_PARAM_IDS) do
     assert_equal(params.params[group_index + offset].id, param_id, "group entry " .. offset)
   end
@@ -1063,6 +1064,12 @@ local PARAM_FIXTURE_ALLOWED = {
   {kind = "default", id = "reverb_mix", default = 0.43, why = "1a: the reverb's level starts at 0.3 / 0.7 (design section 7.1)"},
   {kind = "name", id = "delay_mix", name = "delay level", why = "1a: the delay's mix is its return's level"},
   {kind = "name", id = "reverb_mix", name = "reverb level", why = "1a: the reverb's mix is its return's level"},
+  -- 1b: the delay's freeze and clear (design §7.2, §7.3; t 9 is a binary, 6 a trigger)
+  {kind = "added", id = "delay_freeze", after = "delay_pingpong", why = "1b: the delay's freeze (design section 7.3)",
+    record = {t = 9, name = "delay freeze", default = 0}},
+  {kind = "added", id = "delay_clear", after = "delay_freeze", why = "1b: the delay's clear (design section 7.2)",
+    record = {t = 6, name = "delay clear"}},
+  {kind = "group_size", id = "strata_fx", add = 2, why = "1b: delay_freeze and delay_clear join the fx group"},
   -- 1c: the grain envelope goes; the window's shape and skew, probability,
   -- the cloud and its overlap and the pan wander join each voice's extras
   -- (design §4.1, §4.2, §4.4, §4.5); t is the fixture's type code (3 a control, 2 an option:

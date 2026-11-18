@@ -289,7 +289,7 @@ var checkVoiceSynthSizes = {
 // What one \strataDelay takes of the pool (3.8: its line is two buffers,
 // ordinary RAM, so only its graph is left): twenty nodes on private buses,
 // on one pair of check buffers of the engine's size
-var delayDefLimitKB = 16;
+var delayDefLimitKB = 20;
 var checkDelaySize = {
     var privateBus = Bus.audio(server, 2), group = Group.after(engine.processGroup), line, size;
     line = 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) });

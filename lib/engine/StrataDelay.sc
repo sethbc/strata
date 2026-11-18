@@ -1,8 +1,10 @@
 // StrataDelay.sc
 // The master delay: its line (two mono buffers the effects area allocates
-// and frees), its SynthDef, the node's start and the setDelay command. No
-// area of its own: the effects area owns the node and its place in the
-// chain, and calls these. See docs/notes/engine/effects.md.
+// and frees), its SynthDef with 3.8's freeze and clear, the node's start
+// and its commands (setDelay, setDelayFreeze, clearDelay). No area of its
+// own: the effects area owns the node and its place in the chain, and
+// calls these. See docs/notes/engine/effects.md and
+// docs/notes/engine/delay.md (the freeze and the clear).
 
 + Engine_Strata {
     // Frames of each of the delay line's two buffers: 2^18 (5.46 s at
@@ -10,6 +12,26 @@
     // largest one under the buffer's size, less a frame), so 5.4 s fits.
     // A literal, so nothing depends on whether 2 ** 18 is an Integer
     delayLineFrames { ^262144 }
+
+    // The freeze's ramp (s, 3.8 design §7.3): the loop's gain rises to
+    // exactly 1 and the input closes over it, and a release undoes both
+    delayFreezeSeconds { ^0.02 }
+
+    // The ramp as Slew's rate (a change of 1 a ramp; Slew reaches its
+    // target exactly, where a one-pole lag only approaches it)
+    delayFreezeRate { ^1 / this.delayFreezeSeconds }
+
+    // While frozen the ping-pong cross-feed is snapped to 0 or 1: 1 from
+    // this up (a cross of 0.5 would make the two lines one)
+    delayPingPongSnap { ^0.5 }
+
+    // A clear mutes the feedback and the return for the delay time and this
+    // (s, design §7.2): what the line held has gone by then
+    delayClearMargin { ^0.005 }
+
+    // The return's fade out and back in at a clear's window (s, the 60 dB
+    // time of its lag), inside the margin, so neither edge clicks
+    delayClearFade { ^0.003 }
 
     // The delay's line: [left, right], allocated once (bufnums never change)
     delayLine { ^areaState[\effects][\delayLine] }
@@ -49,18 +71,40 @@
         // both channels and the right line's feedback, the right line only
         // the left's, so the repeats alternate sides. It plays what 3.7's
         // DelayC lines played, sample for sample (the same cubic
-        // interpolation on a power-of-two line). The time's clip stays a
-        // literal: the Lua stub reads setDelay's limit from it.
+        // interpolation on a power-of-two line). The clips stay literals:
+        // the Lua stub reads setDelay's and setDelayFreeze's limits from
+        // them.
+        // 3.8's freeze (frozen, 0 or 1; design §7.3): hold, a linear ramp
+        // over delayFreezeSeconds that reaches 1 exactly, takes the loop's
+        // gain to the feedback's max with it (exactly 1) and closes the
+        // input (times 1 - hold); the time is held at its value at the
+        // freeze (Gate before the lag, so a time sent meanwhile waits for the
+        // release and a release glides to it) and, while frozen, rounded to
+        // whole samples (a fractional time's interpolation darkens the loop
+        // at every pass); the cross-feed moves with hold to pingPong snapped
+        // to 0 or 1 (delayPingPongSnap), so the loop keeps its width.
+        // Unfrozen (hold 0) every product is the graph before, bit for bit.
+        // 3.8's clear (t_clear, a trigger; design §7.2): a Trig1 window of
+        // the delay time and delayClearMargin mutes the feedback (at once)
+        // and the return (faded over delayClearFade), so what the line held
+        // is gone when it ends and the line holds only what came in since
         SynthDef(\strataDelay, {
-            arg in, out, bufL, bufR, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0;
-            var input = In.ar(in, 2) * this.liftFade(fadeIn), returned = LocalIn.ar(2);
-            var cross = pingPong.clip(0, 1).lag(0.05), keep = 1 - cross;
+            arg in, out, bufL, bufR, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0, frozen=0, t_clear=0;
+            var hold = Slew.kr(frozen.clip(0, 1), this.delayFreezeRate, this.delayFreezeRate);
+            var isFrozen = frozen.clip(0, 1) > 0;
+            var input = In.ar(in, 2) * this.liftFade(fadeIn) * (1 - hold), returned = LocalIn.ar(2);
+            var held = Gate.kr(time.clip(0.01, 5.4), 1 - isFrozen).lag(0.1);
+            var delayTime = Select.kr(isFrozen, [held, (held * SampleRate.ir).round / SampleRate.ir]);
+            var lagged = pingPong.clip(0, 1).lag(0.05);
+            var snapped = (pingPong.clip(0, 1) >= this.delayPingPongSnap).lag(0.05);
+            var cross = lagged + ((snapped - lagged) * hold), keep = 1 - cross;
+            var muted = 1 - Trig1.kr(t_clear, delayTime + this.delayClearMargin);
             var delayed = BufDelayC.ar([bufL, bufR], [
                 input[0] + (input[1] * cross) + (returned[0] * keep) + (returned[1] * cross),
                 (input[1] * keep) + (returned[1] * keep) + (returned[0] * cross)
-            ], time.lag(0.1).clip(0.01, 5.4));
-            LocalOut.ar(delayed * feedback.clip(0, 0.95));
-            Out.ar(out, delayed * mix.clip(0, 1).lag(this.fxMixLag));
+            ], delayTime);
+            LocalOut.ar(delayed * feedback.clip(0, 0.95).max(hold) * muted);
+            Out.ar(out, delayed * muted.lag(this.delayClearFade) * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
     }
 
@@ -79,16 +123,33 @@
                     \pingPong, msg[4]);
             };
         });
+
+        // msg: frozen, 0 (release) or 1 (freeze): kept, so a lift re-creates
+        // the node with it (Lua releases a freeze before it bypasses), and
+        // set on the node. Another value is ignored with one line
+        this.addCommand(\setDelayFreeze, "i", { arg msg;
+            if (this.fastModIndicesValid(\setDelayFreeze, [[\frozen, msg[1], 1]])) {
+                this.keepEffectControls(\delay, (frozen: msg[1]));
+                this.setSynth(\delay, \frozen, msg[1]);
+            };
+        });
+
+        // No argument: the running delay's clear window opens (t_clear).
+        // Never kept, and nothing while the delay is bypassed (in its fade
+        // too: a lifted delay starts empty anyway)
+        this.addCommand(\clearDelay, "", { arg msg;
+            if (this.effectLive(\delay) == 1) { this.setSynth(\delay, \t_clear, 1); };
+        });
     }
 
     // The delay node, on the filtered delay send and the line, writing
-    // delayBus, from the kept controls (mix: that mix instead, when given;
-    // fadeIn 1: its input fades in, liftFade)
+    // delayBus, from the kept controls, frozen among them (mix: that mix
+    // instead, when given; fadeIn 1: its input fades in, liftFade)
     startDelay { arg target, addAction, mix, fadeIn = 0;
         var controls = areaState[\effects][\controls][\delay];
         synths[\delay] = Synth(\strataDelay, [\in, this.mixBus(\delaySendPost), \out, delayBus,
             \bufL, this.delayLine[0], \bufR, this.delayLine[1],
             \time, controls[\time], \feedback, controls[\feedback], \mix, mix ? controls[\mix],
-            \pingPong, controls[\pingPong], \fadeIn, fadeIn], target, addAction);
+            \pingPong, controls[\pingPong], \frozen, controls[\frozen], \fadeIn, fadeIn], target, addAction);
     }
 }
