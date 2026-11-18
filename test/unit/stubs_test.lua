@@ -1761,7 +1761,7 @@ test("the stub follows each voice's type from setVoiceType", function()
 end)
 
 test("a voiceTypeDefs shorter than numVoices fails the parse", function()
-  local patched, count = h.engine_sources():gsub(",%s*\\strataRing%s*%]", "]")
+  local patched, count = h.engine_sources():gsub(",%s*\\strataRing[%s\\%w,]*%]", "]")
   assert_equal(count, 1, "the patch applies")
   local ok, problem = pcall(stubs.engine_spec_from_source, patched)
   assert_true(not ok, "the parse fails")
