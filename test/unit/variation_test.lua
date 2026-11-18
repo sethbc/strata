@@ -826,9 +826,16 @@ test("a MIDI key in 19 equal plays its degree", function()
   context.midi.send(1, { type = "note_on", note = 61, vel = 100, ch = 1 })
   assert_near(params:get("v1_freq"), freq_of(60 + 12 / 19), 1e-3, "key 61 is one 19th of an octave above C4")
   context.midi.send(1, { type = "note_off", note = 61, vel = 0, ch = 1 })
-  params:set("v1_quantize", 1)
-  context.midi.send(1, { type = "note_on", note = 79, vel = 100, ch = 1 })
-  assert_near(params:get("v1_freq"), freq_of(72), 1e-3, "key 79 is the octave, quantized onto itself")
+  -- a key that is no tone of its scale snaps on a quantized voice: in ji
+  -- normal key 61 is 60 + 1.1173, out of C major; the nearest major tone
+  -- is the just D (62.0391, 9/8 above C), not C. A buffer voice shows it (a
+  -- synth voice's freq filter would snap the freq anyway)
+  select_tuning("ji normal")
+  params:set("scale", option_index("scale", "Major"))
+  params:set("v3_source", 2)
+  params:set("v3_quantize", 1)
+  context.midi.send(1, { type = "note_on", note = 61, vel = 100, ch = 3 })
+  assert_near(params:get("v3_buf_rate"), 9 / 8, 0.006, "ji normal, C major: key 61 reads at the just D's rate (a 0.01 step)")
 end)
 
 test("a quantized freq in a dense tuning moves about one tone a detent", function()
