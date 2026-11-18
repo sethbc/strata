@@ -55,10 +55,11 @@ local function trimmed(text) return (text:gsub("%s+$", "")) end
 
 -- The "<section> <k>/<n>" text VOICE shows for param_id, from the selected
 -- voice's voice_page_rows (registered sections and rows included)
+-- (3.8: the first rows, the type's, are section "voice" with no label row)
 local function section_text(S, param_id)
   local sections, cursor_section, position = 0, nil, nil
-  for _, row in ipairs(voice_page_rows(S.selected_voice)) do
-    if row.selectable == false then sections = sections + 1 end
+  for index, row in ipairs(voice_page_rows(S.selected_voice)) do
+    if row.selectable == false or index == 1 then sections = sections + 1 end
     if row.param_id == param_id then cursor_section, position = row.section, sections end
   end
   assert_true(cursor_section, "no VOICE row " .. param_id)
@@ -69,10 +70,11 @@ end
 -- field's param id
 local function voice_sections(S)
   local sections = {}
-  for _, row in ipairs(voice_page_rows(S.selected_voice)) do
+  for index, row in ipairs(voice_page_rows(S.selected_voice)) do
     if row.selectable == false then
       table.insert(sections, { name = row.section })
     else
+      if index == 1 then table.insert(sections, { name = row.section }) end  -- the unlabeled "voice" section
       local section = sections[#sections]
       section.first = section.first or row.param_id
       section.last = row.param_id
@@ -181,7 +183,7 @@ test("VOICE draws the section and its position at the top right", function()
     if entry.text == expected then found = entry end
   end
   assert_true(found, "VOICE shows " .. expected)
-  assert_true(expected:find("^grain 2/"), "a synth voice's grain section is the second")
+  assert_true(expected:find("^grain 3/"), "a synth voice's grain section is the third (after voice and synth)")
   assert_equal(found.align, "right", "right-aligned")
   assert_equal(found.x, VALUE_RIGHT, "at the values' right edge")
   local voice_text = texts_on_row(context, SECTION_Y)[1]
@@ -230,7 +232,7 @@ test("VOICE's section position counts come from voice_page_rows", function()
   assert_equal(voice_sections(S)[synth_sections].name, "probe sect", "the registered section, after mix")
   put_cursor(S, "v1_grain_density")
   local expected = section_text(S, "v1_grain_density")
-  assert_equal(expected, "grain 2/" .. synth_sections, "from the rows")
+  assert_equal(expected, "grain 3/" .. synth_sections, "from the rows")
   assert_true(h.screen_shows(context, expected), "VOICE shows " .. expected)
   put_cursor(S, "v1_probe")
   assert_true(h.screen_shows(context, section_text(S, "v1_probe")), "the registered row's section")
@@ -296,7 +298,9 @@ end)
 
 test("E2 moves through fields and on into the next section", function()
   local context, S = started_voice_page()
-  assert_equal(cursor_param(S), "v1_freq", "the cursor starts on the first field")
+  assert_equal(cursor_param(S), "v1_type", "the cursor starts on the first field, the type's (3.8)")
+  enc(2, 1)
+  assert_equal(cursor_param(S), "v1_freq", "the synth section's first after it (the label takes no stop)")
   enc(2, 1)
   assert_equal(cursor_param(S), "v1_rq")
   enc(2, 4)
@@ -304,7 +308,7 @@ test("E2 moves through fields and on into the next section", function()
   enc(2, -1)
   assert_equal(cursor_param(S), "v1_mod2", "and back")
   enc(2, -50)
-  assert_equal(cursor_param(S), "v1_freq", "stops at the first field")
+  assert_equal(cursor_param(S), "v1_type", "stops at the first field")
   enc(2, 100)
   local sections = voice_sections(S)
   assert_equal(cursor_param(S), sections[#sections].last, "stops at the last field")
@@ -329,7 +333,7 @@ end)
 
 test("K2 and K3 jump to the previous and next section's first field", function()
   local _, S = started_voice_page()
-  enc(2, 1)
+  enc(2, 2)
   assert_equal(cursor_param(S), "v1_rq")
   tap(3); assert_equal(cursor_param(S), "v1_grain_size", "K3: grain")
   tap(3); assert_equal(cursor_param(S), "v1_mod_speed", "K3: crossmod")
@@ -346,7 +350,8 @@ test("K2 and K3 jump to the previous and next section's first field", function()
   tap(2); assert_equal(cursor_param(S), "v1_grain_size", "K2 from inside crossmod: grain")
   tap(2); assert_equal(cursor_param(S), "v1_freq", "K2: synth")
   enc(2, 2)
-  tap(2); assert_equal(cursor_param(S), "v1_freq", "K2 in the first section: its first field")
+  tap(2); assert_equal(cursor_param(S), "v1_type", "K2 from inside synth: the voice section's type row (3.8)")
+  tap(2); assert_equal(cursor_param(S), "v1_type", "K2 in the first section: its first field")
   -- an input voice: no synth section, so K2 stops at its first section
   -- (grain, or a registered section before it)
   params:set("v1_source", S.constants.SOURCE_INPUT)
@@ -589,7 +594,7 @@ test("with an arc connected the screen marks the ring group", function()
     table.sort(labels)
     return table.concat(labels, ",")
   end
-  put_cursor(S, "v1_grain_density")
+  put_cursor(S, "v1_grain_pitch")  -- 3.8: the type row moves the groups by one; pitch starts one
   assert_equal(marked_labels(), "", "no marks without an arc")
   context.arc.plug(1)
   assert_true(S.arc_connected, "the arc is connected")
@@ -822,7 +827,7 @@ test("a Sub voice's mix section has no pan: K2:rand, and the press does nothing 
   local context, S = started_voice_page()
   local sub
   for voice_idx = 1, S.constants.NUM_VOICES do
-    if S.voices[voice_idx].values.pan == nil then sub = voice_idx end
+    if not S.lib.voices.is_synth_key(voice_idx, "pan") then sub = voice_idx end
   end
   assert_true(sub ~= nil, "a voice without pan (Sub)")
   S.selected_voice = sub
@@ -1021,6 +1026,133 @@ test("the mute and solo rows end VOICE's last section and E3 sets them", functio
   assert_equal(params:get("v1_solo"), 1, "E3 solos")
   redraw()
   h.assert_screen_layout(context, "VOICE on the solo row")
+end)
+
+---------------------------------------------------------------------------
+-- 3.8 (package 0d): the type row
+---------------------------------------------------------------------------
+
+local function type_calls(context)
+  local found = {}
+  for _, call in ipairs(context.calls_named("setVoiceType")) do found[#found + 1] = call.args[1] .. " " .. call.args[2] end
+  return table.concat(found, ", ")
+end
+
+test("VOICE's first row is the voice's type, in section voice with no label row", function()
+  local context, S = started_voice_page()
+  local rows = voice_page_rows(1)
+  assert_equal(rows[1].param_id, "v1_type", "the type row first")
+  assert_equal(rows[1].label, "type"); assert_equal(rows[1].section, "voice"); assert_equal(rows[1].kind, "type")
+  assert_equal(rows[1].selectable, true)
+  assert_equal(rows[2].selectable, false, "then the synth section's label")
+  assert_equal(S.lib.ui_voice_rows.first_field_row(1), 1, "the first field row is the type's")
+  assert_equal(cursor_param(S), "v1_type", "the cursor starts on it")
+  redraw()
+  local label, value = drawn_row(context, "type")
+  assert_true(label ~= nil and value ~= nil, "drawn with its value")
+  assert_equal(value.text, "resonator", "the type's name")
+  local section
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == SECTION_Y and entry.align == "right" then section = entry.text end
+  end
+  assert_equal(section, section_text(S, "v1_type"), "the section line counts it")
+  assert_true(section:match("^voice 1/") ~= nil, "voice 1/n: " .. tostring(section))
+  key(3, 1); key(3, 0)
+  assert_equal(cursor_param(S), "v1_freq", "K3 jumps to the synth section's first field")
+  key(2, 1); key(2, 0)
+  assert_equal(cursor_param(S), "v1_type", "K2 back to the type row")
+end)
+
+test("VOICE's type row holds a pending choice until E3 rests TYPES.settle_seconds", function()
+  local context, S = started_voice_page()
+  assert_equal(cursor_param(S), "v1_type", "the cursor on the type row")
+  context.clear_engine_calls()
+  for _ = 1, 3 do enc(3, 1) end
+  assert_equal(type_calls(context), "", "no setVoiceType while it turns")
+  assert_equal(S.lib.types.pending(1), 4, "the pending choice: sub")
+  assert_equal(params:get("v1_type"), 1, "the param unchanged")
+  redraw()
+  local _, value = drawn_row(context, "type")
+  assert_equal(value.text, "sub", "the pending name drawn")
+  assert_equal(value.level, 4, "dim")
+  context.clock.run_for(S.lib.types.TYPES.settle_seconds)
+  assert_equal(type_calls(context), "0 3", "one setVoiceType(0, 3) once it rests")
+  assert_equal(S.lib.types.of(1).key, "sub", "voice 1 is sub")
+  assert_equal(S.lib.types.pending(1), nil, "nothing pending")
+  redraw()
+  _, value = drawn_row(context, "type")
+  assert_equal(value.text, "sub")
+  assert_true(value.level ~= 4, "drawn as a value again")
+  -- the choice is clamped to the list
+  for _ = 1, 20 do enc(3, -1) end
+  assert_equal(S.lib.types.pending(1), 1, "clamped at the first type")
+  context.clock.run_for(S.lib.types.TYPES.settle_seconds)
+  assert_equal(S.lib.types.of(1).key, "resonator")
+end)
+
+test("a voice pick applies the pending type", function()
+  local context, S = started_voice_page()
+  context.clear_engine_calls()
+  enc(3, 1)
+  assert_equal(S.lib.types.pending(1), 2, "fm pending")
+  context.clock.run_for(0.1)
+  S.lib.ui_keys.select_voice_by(1)
+  assert_equal(S.selected_voice, 2, "voice 2 picked")
+  assert_equal(S.lib.types.of(1).key, "fm", "voice 1 is fm at once")
+  assert_equal(type_calls(context), "0 1", "one setVoiceType(0, 1)")
+  context.clock.run_for(1)
+  assert_equal(type_calls(context), "0 1", "and no other")
+end)
+
+test("leaving VOICE or a stop applies it", function()
+  local context, S = started_voice_page()
+  context.clear_engine_calls()
+  enc(3, 1)
+  context.clock.run_for(0.1)
+  show_page("MAIN")
+  assert_equal(S.lib.types.of(1).key, "fm", "leaving VOICE applies fm")
+  assert_equal(type_calls(context), "0 1", "one setVoiceType(0, 1)")
+  show_page("VOICE")
+  S.lib.pages_voice.place_cursor(1)
+  assert_true(S.voices[1].active, "voice 1 runs")
+  context.clear_engine_calls()
+  enc(3, 1)
+  context.clock.run_for(0.1)
+  toggle_voice(1)
+  assert_true(not S.voices[1].active, "stopped")
+  assert_equal(S.lib.types.of(1).key, "folder", "a stop applies folder")
+  assert_equal(type_calls(context), "0 2", "one setVoiceType(0, 2)")
+  context.clock.run_for(1)
+  assert_equal(type_calls(context), "0 2", "and no other")
+end)
+
+test("set cancels a pending choice", function()
+  local context, S = started_voice_page()
+  context.clear_engine_calls()
+  enc(3, 1)
+  assert_equal(S.lib.types.pending(1), 2, "fm pending")
+  assert_true(S.lib.types.set(1, "pulse"), "set to pulse")
+  assert_equal(S.lib.types.of(1).key, "pulse", "voice 1 is pulse")
+  assert_equal(S.lib.types.pending(1), nil, "the pending choice canceled")
+  context.clock.run_for(0.5)
+  assert_equal(S.lib.types.of(1).key, "pulse", "still pulse after the settle time")
+  assert_equal(type_calls(context), "0 4", "no second setVoiceType")
+  assert_true(not S.lib.types.set(1, "glass"), "an unknown type is refused")
+  assert_true(not S.lib.types.set(0, "fm"), "and no voice")
+end)
+
+test("ALT+K2 held on the type row resets the default type; a quick press draws nothing there", function()
+  local context, S = started_voice_page()
+  params:set("v1_type", 3)
+  assert_equal(cursor_param(S), "v1_type")
+  local before = all_param_values()
+  quick_alt_k2()
+  local after = all_param_values()
+  for id, value in pairs(before) do
+    assert_equal(after[id], value, id .. ": a quick press on the type row changes nothing")
+  end
+  held_alt_k2(context)
+  assert_equal(params:get("v1_type"), 1, "held: the default type, resonator")
 end)
 
 end

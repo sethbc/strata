@@ -3311,11 +3311,11 @@ end)
 -- from the defaults (fill_scene); an older one is set aside to its first
 -- free backup name, never converted, and reads as older. The groundwork
 -- before 3.8 raises the floor to 9 (rulings 1-3): 3.5's 7 and 3.7's 8 are
--- set aside too
-test("a scenes file below format 9 is set aside whole, never converted", function()
+-- set aside too; 3.8 raises it to 10 (package 0d): the groundwork's 9 as well
+test("a scenes file below format 10 is set aside whole, never converted", function()
   local context = load_strata({ data_subdir = "floor_source" })
   local S = local_value("S")
-  assert_equal(S.constants.SCENE_FORMAT_FLOOR, 9, "the floor is format 9")
+  assert_equal(S.constants.SCENE_FORMAT_FLOOR, 10, "the floor is format 10")
   capture_scene(2)
   local scenes = deep_copy(S.scenes)
   local cases = {
@@ -3324,6 +3324,7 @@ test("a scenes file below format 9 is set aside whole, never converted", functio
     { name = "format 6", value = { version = 6, scenes = scenes } },
     { name = "format 7 (3.5's)", value = { version = 7, scenes = scenes } },
     { name = "format 8 (3.7's)", value = { version = 8, scenes = scenes } },
+    { name = "format 9 (the groundwork's, never released)", value = { version = 9, scenes = scenes } },
     { name = "the bare array before 2.1", value = scenes },
   }
   for index, case in ipairs(cases) do
@@ -3409,7 +3410,7 @@ end)
 
 -- Review focus 2: the first start after the update finds 3.7's scenes.data
 -- (format 8). It is set aside whole and reads as older, not damaged, and
--- the next save writes format 9
+-- the next save writes the build's format
 test("a 3.7 scenes file is set aside whole and reads as older", function()
   local context = load_strata({ data_subdir = "format_eight" })
   local S = local_value("S")
@@ -3430,7 +3431,7 @@ test("a 3.7 scenes file is set aside whole and reads as older", function()
   for _, line in ipairs(context.printed) do
     if line:find("format 8", 1, true) and line:find("format " .. S.constants.SCENE_DATA_VERSION, 1, true) then lines = lines + 1 end
   end
-  assert_equal(lines, 1, "one console line names format 8 and format 9")
+  assert_equal(lines, 1, "one console line names format 8 and the build's format")
   capture_scene(1)
   assert_true(save_scenes_to_disk(), "saved")
   assert_equal(S.lib.data_files.read(dir .. "scenes.data").version, S.constants.SCENE_DATA_VERSION, "the next save writes the build's format")
@@ -3506,13 +3507,15 @@ local function first_difference(a, b, path)
   return nil
 end
 
--- The groundwork before 3.8: a format 9 file, written from captures, loads
--- with every scene as it was saved, and the next save writes 9
-test("a format 9 file loads with nothing changed", function()
+-- The groundwork before 3.8: a file of the build's format (3.8: 10),
+-- written from captures, loads with every scene as it was saved, and the
+-- next save writes it again
+test("a format 10 file loads with nothing changed", function()
   local context = load_strata({ data_subdir = "format_nine" })
   local S = local_value("S")
-  assert_equal(S.constants.SCENE_DATA_VERSION, 9, "the build's format is 9")
-  assert_equal(S.constants.SCENE_FORMAT_FLOOR, 9, "the floor is 9")
+  assert_equal(S.constants.SCENE_DATA_VERSION, 10, "the build's format is 10")
+  assert_equal(S.constants.SCENE_FORMAT_FLOOR, 10, "the floor is 10")
+  params:set("v2_type", S.lib.types.record("ring").index)  -- a voice on another type
   scramble_state(17); capture_scene(1)
   scramble_state(23); capture_scene(5)
   S.lib.scenes.set_name(5, "five")
@@ -3554,14 +3557,15 @@ test("a record's scene defaults may depend on the voice", function()
     scene.data.voices[voice].values.release = nil
   end
   fill_scene(scene)
-  local envelope = S.lib.notes.NOTES.envelope
+  -- each voice's own times: its default type's envelope (3.8)
+  local function envelope(voice) return S.lib.types.record(S.lib.types.default_key(voice)).envelope end
   for voice = 1, S.constants.NUM_VOICES do
     local extras = scene.data.voices[voice].values
     assert_near(extras.probe_level, probe_default(voice), 1e-9, "voice " .. voice .. ": its own probe default")
     -- a scene without the notes voice's attack and release gets each
     -- voice's own default, as 3.5's migration gave
-    assert_equal(extras.attack, envelope[voice][1], "voice " .. voice .. " attack")
-    assert_equal(extras.release, envelope[voice][2], "voice " .. voice .. " release")
+    assert_equal(extras.attack, envelope(voice).attack, "voice " .. voice .. " attack")
+    assert_equal(extras.release, envelope(voice).release, "voice " .. voice .. " release")
   end
   assert_true(validate_scene(scene), "the filled scene validates")
   -- a file without them loads with each voice's own times
@@ -3574,18 +3578,23 @@ test("a record's scene defaults may depend on the voice", function()
     "written")
   assert_equal(load_scenes_from_disk(), "loaded")
   for voice = 1, S.constants.NUM_VOICES do
-    assert_equal(S.scenes[1].data.voices[voice].values.release, envelope[voice][2], "voice " .. voice .. " loads its release")
+    assert_equal(S.scenes[1].data.voices[voice].values.release, envelope(voice).release, "voice " .. voice .. " loads its release")
   end
   -- a function whose table for some voice holds a value that is no number
-  -- is refused, as such a table is (a fresh S, whose registries are open)
-  local fresh = include("lib/state")()
-  fresh.constants = S.constants
-  local ok = pcall(fresh.register_voice_params, { name = "bad voice defaults", count = 1, add = function() end,
-    scene_defaults = function(voice) return { probe = voice == 3 and "x" or 0 } end })
-  assert_true(not ok, "a function's tables are checked, every voice's")
-  fresh.register_voice_params({ name = "good voice defaults", count = 1, add = function() end,
-    scene_defaults = function(voice) return { probe = voice } end })
-  assert_equal(#fresh.registry.voice_params, 1, "a good one is kept")
+  -- is refused, as such a table is, at init (3.8, ruling 19: the function
+  -- may read the voice types, which are read at init)
+  cleanup()
+  local ok, problem = pcall(load_strata, { data_subdir = "floor_bad_voice_defaults", before_init = function()
+    local record = { name = "bad voice defaults", count = 1, fader = false,
+      scene_defaults = function(voice) return { probe = voice == 3 and "x" or 0 } end }
+    function record.add(voice)
+      local_value("S").lib.params_setup.add_voice_param(voice, record, "probe",
+        { type = "control", name = "probe", controlspec = controlspec.new(0, 1, "lin", 0, 0) })
+    end
+    local_value("S").register_voice_params(record)
+  end })
+  assert_true(not ok and tostring(problem):find("bad voice defaults", 1, true) ~= nil,
+    "a function's tables are checked, every voice's: " .. tostring(problem))
 end)
 
 ---------------------------------------------------------------------------
@@ -3630,7 +3639,8 @@ test("capture_voice holds exactly the scene keys", function()
     assert_equal(data.values.solo, nil, "no solo")
     local fields = {}
     for field in pairs(data) do fields[field] = true end
-    assert_equal(key_set_text(fields), "active,source,values", "voice " .. voice .. ": three fields")
+    assert_equal(key_set_text(fields), "active,source,type,values", "voice " .. voice .. ": four fields (3.8: type)")
+    assert_equal(data.type, S.voices[voice].name, "voice " .. voice .. ": its type's key")
   end
   assert_equal(S.lib.scenes.capture_voice(4).values.pan, nil, "voice 4 (sub) has no pan")
   assert_true(S.lib.scenes.capture_voice(1).values.pan ~= nil, "voice 1 has one")
@@ -3740,12 +3750,13 @@ test("a recall applies a voice's built-in keys sorted, then its registered keys 
     local entries = S.lib.scenes.voice_entries(voice, voice_data)
     assert_equal(entries[1].key, "active", "voice " .. voice .. ": active first")
     assert_equal(entries[2].id, "v" .. voice .. "_source", "then the source")
+    assert_equal(entries[3].id, "v" .. voice .. "_type", "then the type (3.8)")
     local expected = reference_voice_keys(S, voice, voice_data.values)
-    assert_equal(#entries, #expected + 2, "voice " .. voice .. ": one entry a key")
+    assert_equal(#entries, #expected + 3, "voice " .. voice .. ": one entry a key")
     local position = {}
     for index, key in ipairs(expected) do
-      assert_equal(entries[index + 2].id, "v" .. voice .. "_" .. key, "voice " .. voice .. " entry " .. (index + 2))
-      assert_equal(entries[index + 2].voice, voice, "carries its voice")
+      assert_equal(entries[index + 3].id, "v" .. voice .. "_" .. key, "voice " .. voice .. " entry " .. (index + 3))
+      assert_equal(entries[index + 3].voice, voice, "carries its voice")
       position[key] = index
     end
     assert_true(position.freq < position.freeze, "freq before freeze")
@@ -3843,7 +3854,7 @@ test("a PSET save writes its sixteen scenes beside it, an empty set too", functi
   params:write(pset)
   local written = S.lib.data_files.read(side)
   assert_equal(type(written), "table", "strata-01.scenes.data written")
-  assert_equal(written.version, S.constants.SCENE_DATA_VERSION, "format 9")
+  assert_equal(written.version, S.constants.SCENE_DATA_VERSION, "the build's format")
   assert_equal(#written.scenes, S.constants.NUM_SCENES, "sixteen slots")
   for slot = 1, S.constants.NUM_SCENES do assert_true(not written.scenes[slot].populated, "slot " .. slot .. " empty") end
   assert_equal(S.lib.data_files.read(live_scenes_path(context)).pset, base, "the live file names the PSET")
@@ -4011,7 +4022,8 @@ test("an unusable scenes file beside a PSET is set aside with one line and the l
     params:write(pset_1)
     local text = "return {"
     if case == "format 8" then
-      local relabeled, count = h.file_text(side_1):gsub('%["version"%]=9,', '["version"]=8,')
+      local relabeled, count = h.file_text(side_1):gsub('%["version"%]=' .. S.constants.SCENE_DATA_VERSION .. ',',
+        '["version"]=8,')
       assert_equal(count, 1, "the one version field")
       text = relabeled
     end
@@ -4025,7 +4037,8 @@ test("an unusable scenes file beside a PSET is set aside with one line and the l
     assert_equal(#lines, 1, case .. ": one line")
     assert_true(lines[1]:find("; kept as " .. side_1 .. ".bak", 1, true) ~= nil, lines[1])
     if case == "format 8" then
-      assert_true(lines[1]:find(": not a version 9 scenes file;", 1, true) ~= nil, "one version named: " .. lines[1])
+      assert_true(lines[1]:find(": not a version " .. S.constants.SCENE_DATA_VERSION .. " scenes file;", 1, true) ~= nil,
+        "one version named: " .. lines[1])
     end
     assert_equal(S.lib.data_files.encode(S.scenes), before, case .. ": the live scenes stay")
     assert_equal(h.file_text(live_scenes_path(context)), live_text, case .. ": the live file as it was")
@@ -4237,6 +4250,209 @@ test("the live file's pset field is no scene", function()
     assert_equal(loaded.scene_file.problem, nil, "the file is fine")
     assert_equal(loaded.scene_file.pset, case.reads, "pset " .. tostring(case.pset) .. " reads as " .. tostring(case.reads))
   end
+end)
+
+---------------------------------------------------------------------------
+-- 3.8 (package 0d): format 10, a scene voice's type
+---------------------------------------------------------------------------
+
+local function type_index(S, key) return S.lib.types.record(key).index end
+
+test("capture_voice holds the type and only its keys", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local data = S.lib.scenes.capture_voice(1)
+  assert_equal(data.type, "resonator", "voice 1's type")
+  assert_true(data.values.rq ~= nil, "rq in")
+  assert_equal(data.values.ratio, nil, "ratio out")
+  params:set("v1_type", type_index(S, "fm"))
+  data = S.lib.scenes.capture_voice(1)
+  assert_equal(data.type, "fm", "after the change: fm")
+  assert_true(data.values.ratio ~= nil, "ratio in")
+  assert_equal(data.values.rq, nil, "rq out")
+end)
+
+test("a scene's synth keys are checked against its own type", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("v1_type", type_index(S, "fm"))
+  capture_scene(1)
+  params:set("v1_type", type_index(S, "resonator"))
+  assert_true(validate_scene(S.scenes[1]), "a scene of fm with fm's keys is valid while voice 1 is resonator")
+  local bad = deep_copy(S.scenes[1])
+  bad.data.voices[1].values.rq = 0.5
+  S.scenes[2] = bad
+  assert_true(not validate_scene(S.scenes[2]), "fm holding rq is refused")
+  local untyped = deep_copy(S.scenes[1])
+  untyped.data.voices[1].type = nil
+  untyped.data.voices[1].values.ratio, untyped.data.voices[1].values.index = nil, nil
+  untyped.data.voices[1].values.modFreq = nil
+  untyped.data.voices[1].values.rq, untyped.data.voices[1].values.noise = 0.2, 0.3
+  untyped.data.voices[1].values.mod1, untyped.data.voices[1].values.mod2 = 0.2, 0.3
+  fill_scene(untyped)
+  assert_equal(untyped.data.voices[1].type, "resonator", "a missing type is the voice's default")
+  S.scenes[3] = untyped
+  assert_true(validate_scene(S.scenes[3]), "and the filled scene is valid")
+  local typo = deep_copy(S.scenes[1])
+  typo.data.voices[1].type = 7
+  S.scenes[4] = typo
+  assert_true(not validate_scene(S.scenes[4]), "a type that is no key string is refused")
+end)
+
+test("a scene of a type this build lacks keeps its keys and leaves the voice's type", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  capture_scene(1)
+  local scene = deep_copy(S.scenes[1])
+  local voice = scene.data.voices[1]
+  voice.type = "glass"
+  for _, key in ipairs(S.lib.types.record("resonator").param_order) do
+    if key ~= "freq" and key ~= "amp" and key ~= "pan" then voice.values[key] = nil end
+  end
+  voice.values.shimmer = 0.5
+  voice.values.freq = 333          -- a synth key: kept, never applied
+  voice.values.grain_size = 0.33   -- a shared key
+  S.scenes[5] = scene
+  assert_true(validate_scene(S.scenes[5]), "valid: the shared keys and any finite number")
+  params:set("v1_type", type_index(S, "pulse"))
+  context.clear_engine_calls()
+  recall_scene(5)
+  assert_equal(params:get("v1_type"), type_index(S, "pulse"), "the voice keeps its type")
+  assert_near(params:get("v1_grain_size"), 0.33, 1e-6, "the shared keys apply")
+  assert_true(math.abs(params:get("v1_freq") - 333) > 1, "the lacking type's synth keys do not")
+  assert_equal(#context.calls_named("setVoiceType"), 0, "no type is sent")
+  local dir = context.data_dir .. "strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  assert_true(save_scenes_to_disk(), "saved")
+  local written = S.lib.data_files.read(dir .. "scenes.data").scenes[5].data.voices[1]
+  assert_equal(written.type, "glass", "a save keeps glass")
+  assert_equal(written.values.shimmer, 0.5, "and its own key")
+  local nan = deep_copy(scene)
+  nan.data.voices[1].values.shimmer = 0 / 0
+  S.scenes[6] = nan
+  assert_true(not validate_scene(S.scenes[6]), "but not a value that is no finite number")
+end)
+
+test("a recall applies the type before the keys, one sync after", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  assert_true(S.voices[1].active, "voice 1 runs")
+  params:set("v1_type", type_index(S, "fm"))
+  params:set("v1_ratio", 3)
+  capture_scene(1)
+  params:set("v1_type", type_index(S, "resonator"))
+  local syncs = {}
+  local sync = sync_voice_values_to_engine
+  sync_voice_values_to_engine = function(voice)
+    syncs[#syncs + 1] = voice
+    return sync(voice)
+  end
+  context.clear_engine_calls()
+  local recalled, recall_error = pcall(recall_scene, 1)
+  sync_voice_values_to_engine = sync
+  assert_true(recalled, tostring(recall_error))
+  local type_at, first_fm
+  for index, call in ipairs(context.engine_calls) do
+    if call.name == "setVoiceType" and call.args[1] == 0 then type_at = type_at or index end
+    if call.name == "setVoiceParam" and call.args[1] == 0 and (call.args[2] == "ratio" or call.args[2] == "index") then
+      first_fm = first_fm or index
+    end
+  end
+  assert_true(type_at ~= nil and first_fm ~= nil and type_at < first_fm, "setVoiceType(0, 1) before any fm send")
+  assert_equal(context.engine_calls[type_at].args[2], type_index(S, "fm") - 1, "fm")
+  local voice_1 = 0
+  for _, voice in ipairs(syncs) do if voice == 1 then voice_1 = voice_1 + 1 end end
+  assert_equal(voice_1, 1, "one sync of voice 1")
+  assert_equal(params:get("v1_ratio"), 3, "the scene's ratio")
+end)
+
+test("a fade of one type fades the synth keys; across types the type and its keys land at the end", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("v1_rq", 0.2); params:set("v1_grain_size", 0.1)
+  capture_scene(1)
+  params:set("v1_rq", 0.8); params:set("v1_grain_size", 0.3)
+  capture_scene(2)
+  recall_scene(1)
+  recall_scene(2, 1)
+  context.clock.run_for(0.5)
+  local rq = params:get("v1_rq")
+  assert_true(rq > 0.2 and rq < 0.8, "one type: rq moves mid-fade (" .. rq .. ")")
+  context.clock.run_for(1)
+  assert_near(params:get("v1_rq"), 0.8, 1e-9, "and lands")
+  -- across types
+  params:set("v1_type", type_index(S, "fm")); params:set("v1_ratio", 4); params:set("v1_grain_size", 0.4)
+  capture_scene(3)
+  recall_scene(1)
+  assert_equal(params:get("v1_type"), type_index(S, "resonator"))
+  local ratio = params:get("v1_ratio")
+  recall_scene(3, 1)
+  context.clock.run_for(0.5)
+  assert_equal(params:get("v1_type"), type_index(S, "resonator"), "mid-fade: the type unchanged")
+  assert_equal(params:get("v1_ratio"), ratio, "and fm's ratio unchanged")
+  local size = params:get("v1_grain_size")
+  assert_true(size > 0.1 and size < 0.4, "the shared grain size moves (" .. size .. ")")
+  context.clock.run_for(1)
+  assert_equal(S.lib.types.of(1).key, "fm", "at the end: fm")
+  assert_equal(params:get("v1_ratio"), 4, "with the scene's ratio")
+end)
+
+test("apply_voice applies another type's data, type first", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("v2_type", type_index(S, "karplus")); params:set("v2_decay", 7)
+  local data = S.lib.scenes.capture_voice(2)
+  params:set("v2_type", type_index(S, "fm"))
+  context.clear_engine_calls()
+  assert_equal(S.lib.scenes.apply_voice(2, data), true, "applied")
+  assert_equal(S.lib.types.of(2).key, "karplus", "the data's type")
+  assert_near(params:get("v2_decay"), 7, 1e-9, "its keys")
+  assert_equal(encode(S.lib.scenes.capture_voice(2)), encode(data), "voice 2 is the data again")
+  local wrong = deep_copy(data)
+  wrong.values.ratio = 2
+  assert_equal(S.lib.scenes.apply_voice(2, wrong), false, "another type's key is refused")
+end)
+
+-- Review Focus 2 (3.8 plan): a recall that changes the type of a frozen
+-- voice, a voice holding a chord and a buffer voice
+test("a recall changes the type of a frozen voice, a voice holding a chord and a buffer voice", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice = 1, 3 do
+    if not S.voices[voice].active then toggle_voice(voice) end
+  end
+  params:set("v3_source", S.constants.SOURCE_SYNTH + 1)  -- buffer 1
+  -- voice 1 frozen on its synth (the scene holds it frozen too); each voice
+  -- captured on another type
+  params:set("v1_freeze", 1)
+  params:set("v1_type", type_index(S, "pulse"))
+  params:set("v2_type", type_index(S, "ring"))
+  params:set("v3_type", type_index(S, "sub"))
+  capture_scene(1)
+  params:set("v1_type", type_index(S, "resonator"))
+  params:set("v2_type", type_index(S, "fm"))
+  params:set("v3_type", type_index(S, "folder"))
+  for _, note in ipairs({ 60, 64, 67, 71 }) do
+    S.lib.notes.play(2, { owner = "midi", key = note, pitch = note, velocity = 1, park = true, set_own = function() end })
+  end
+  local held = S.lib.notes.held(2)
+  assert_true(held >= 3, "voice 2 holds its chord (" .. held .. ")")
+  context.clear_engine_calls()
+  local recalled, recall_error = pcall(recall_scene, 1)
+  assert_true(recalled, "the recall raises nothing: " .. tostring(recall_error))
+  assert_equal(S.lib.types.of(1).key, "pulse", "voice 1 on the scene's type")
+  assert_equal(S.lib.types.of(2).key, "ring", "voice 2 too")
+  assert_equal(S.lib.types.of(3).key, "sub", "voice 3 too")
+  for voice = 1, 3 do
+    local count = 0
+    for _, call in ipairs(context.calls_named("setVoiceType")) do
+      if call.args[1] == voice - 1 then count = count + 1 end
+    end
+    assert_equal(count, 1, "one setVoiceType for voice " .. voice)
+  end
+  assert_equal(params:get("v1_freeze"), 1, "voice 1 still frozen")
+  assert_equal(S.lib.notes.held(2), held, "voice 2's notes still held by S.lib.notes")
+  assert_equal(S.voices[3].source, S.constants.SOURCE_SYNTH + 1, "voice 3 keeps its buffer")
 end)
 
 test("the scenes' PSET hook runs before morph's", function()

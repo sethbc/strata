@@ -5,7 +5,7 @@
 - Every voice-list entry is plain ASCII and at most `5m pulse [L] 8` wide (3.5's count included: exactly the 60 px bound as the harness measures with norns' own advances, so it ends by x=60; without a count `5+ pulse [L]` is 49 px); a voice type's `MAIN_PARAMS[type].list_name` has at most 5 characters, and a count is one digit (`NOTE_SLOTS` is 8). A longer name or a wider mark leaves no room for the count.
 - The count (3.5) is `S.lib.notes.held(i)`, read at each `update_voice_list()`, never a copy: the notes module calls `update_voice_list()` and `request_redraw()` whenever a voice's held count changes, so the list never shows a count the voice no longer holds.
 - The voice list never scrolls past an end: `place_voice_list()` sets `num_above_selected` to 0 for the first voice, 2 for the last and 1 otherwise, on every `update_voice_list()` and every draw (the selection can move without `update_voice_list`).
-- The main parameter comes from `main_param_entry(voice_idx)` (`MAIN_PARAMS`, `BUFFER_MAIN_PARAM`, `INPUT_MAIN_PARAM`), never from an `if v.name ==` chain. E3, arc ring 2 and the details column all use it. The three fields come from `main_fields(voice_idx)`; E3 edits `main_fields(S.selected_voice)[S.main_field]` through `enc_param_delta`.
+- The main parameter comes from `main_param_entry(voice_idx)` (the voice's current type's record's `main`, 3.8, `docs/notes/lua/types.md`; `BUFFER_MAIN_PARAM`, `INPUT_MAIN_PARAM`), never from an `if v.name ==` chain, so it follows a type change at once. E3, arc ring 2 and the details column all use it. The three fields come from `main_fields(voice_idx)`; E3 edits `main_fields(S.selected_voice)[S.main_field]` through `enc_param_delta`.
 - K3 and MAIN's `arc_button` are the same function (`start_stop_selected_voice`): start or stop, never lock, never fire a triggered grain.
 - ALT+K3 goes through the record's `alt_key` (`alt_action`) and is `toggle_lock`, at the press. ALT+K2 acts on release through the shared handler (`S.lib.ui_alt.k2_down` from `alt_key`, `k2_up` from `alt_key_release`, `docs/notes/lua/ui/alt-and-keys.md`): a quick press undoes only while `undo_available(S.selected_voice)` (MAIN's undo of that voice), else randomizes it; a press held `ALT_HOLD_SECONDS` cancels (MAIN has no `alt_hold`). The hint and the release share one decision (`k2_hint`: `undo`, `locked` or `rand`, then `cancel` once held `ALT_HOLD_SECONDS`; `locked` and `cancel` do nothing), so it never offers an undo the key would not run, says `locked` instead of `rand` when the voice is locked (randomize would do nothing), and says `cancel` when the release would do nothing. MAIN animates while ALT+K2 is down (`main_animates`, `S.lib.ui_alt.k2_held`), so the frame clock draws `K2:cancel` at the hold time.
 - ALT+K2 acts on the voice selected at its release, not at its press: an E2 turn while K2 is down (with ALT, E2 reaches `main_enc`, MAIN having no `alt_enc`) selects another voice, and the hint follows it, since `randomize_section` and `k2_hint` read `S.selected_voice` when they run.
@@ -31,9 +31,9 @@
 
 ## Main parameter and fields
 
-- `main_param_id(voice_idx)` returns the param of field 1 and arc ring 2: `v<i>_freq` resonator, `_index` fm, `_fold` folder, `_drift` sub, `_width` pulse, `_decay` karplus, `_ratio` ring.
+- `main_param_id(voice_idx)` returns the param of field 1 and arc ring 2, by the voice's current type: `v<i>_freq` resonator, `_index` fm, `_fold` folder, `_drift` sub, `_width` pulse, `_decay` karplus, `_ratio` ring.
 - It reads `main_param_entry(voice_idx)`, whose `label` is its screen label:
-  - the `MAIN_PARAMS` entry for the voice type (param id suffix, screen label, value format; arc ring 2 sweeps it with `arc_sweep_param`);
+  - the voice's current type's `main` (`S.lib.types.of(voice_idx).main`: param id suffix, screen label, value format; arc ring 2 sweeps it with `arc_sweep_param`);
   - `BUFFER_MAIN_PARAM` (`buf_pos`, label `pos`, `%.2f`) for a buffer source (3.0 design §1);
   - `INPUT_MAIN_PARAM` (`grain_size`, label `size`, `%.2f s`) for the input source (its synth and buffer params do nothing).
 - `main_fields(voice_idx)` returns the three ids MAIN shows: `{main_param_id(i), "v<i>_grain_size", "v<i>_grain_density"}` for a synth or buffer voice, `{"v<i>_grain_size", "v<i>_grain_density", "v<i>_grain_pitch"}` for an input voice (its main param already is grain size).
@@ -46,7 +46,7 @@
 - Each entry is `<n><+|-|m|s> <name>[ [L]][ <count>]` (`m`: a running voice that `S.lib.voice_mix.silenced` says is silenced; `s`: a running voice that is soloed and not muted; a stopped voice is always `-`; the mute and solo params' actions rebuild the list), plain ASCII, so its width does not depend on how the norns font draws other glyphs:
   - the voice number;
   - active status (`+` running, `-` stopped);
-  - the voice type's short name, `MAIN_PARAMS[type].list_name` (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`; at most 5 characters). The details column shows the full name and ON/OFF;
+  - the voice's current type's short name, its record's `list_name` (`S.lib.types.of(i).list_name`: `reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`; at most 5 characters, which the registry checks); a type change rebuilds the list. The details column shows the full name and ON/OFF;
   - lock status (` [L]` suffix);
   - 3.5: the voice's held notes (` <n>`, `S.lib.notes.held(i)`) while it holds `LAYOUT.count_from` (2) or more: `1+ reso 3`, `5m pulse [L] 8`. One note (the own note alone) shows no count.
 - Four rows (y 15-48). The norns `ScrollingList` leaves a blank first row when the first entry is selected with one row above the selection, so `place_voice_list()` sets `num_above_selected` per selection (0 first, 2 last, 1 otherwise): voices 1-4 for voice 1, 4-7 for voice 7.

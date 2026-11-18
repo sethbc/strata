@@ -5,7 +5,9 @@
 -- `S.lib.voices = include("lib/voices")(S)`; the constructor sets its S
 -- fields itself, and its table (S.lib.voices) holds is_synth_key(voice_idx,
 -- key). A voice is {name, active, source, param_order, values}: values holds
--- every value of the voice by key, its param id without "v<i>_".
+-- every value of the voice by key, its param id without "v<i>_"; name and
+-- param_order are its current voice type's key and synth keys (3.8: the
+-- v<i>_type param, set at init and by every type change; lib/types.lua).
 
 return function(S)
   local M = {}
@@ -15,216 +17,42 @@ return function(S)
   local SOURCE_INPUT = S.constants.SOURCE_INPUT
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
 
-  -- State
-  S.voices = {
-    {
-      name = "resonator",
-      active = false,
-      source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-      param_order = {"freq", "rq", "noise", "mod1", "mod2", "amp", "pan"},  -- display / grid order of params
-      -- every value of the voice, by key (its param id without v<i>_): the
-      -- synth params (param_order's keys), the grain and buffer params and
-      -- crossmod; lib/params_setup.lua adds each registered record's
-      values = {
-        freq = 100,
-        amp = 0.3,
-        pan = 0,
-        rq = 0.1,
-        noise = 0.5,
-        mod1 = 0.1,
-        mod2 = 0.15,
-        grain_size = 0.1,
-        grain_density = 20,
-        grain_pitch = 1,
-        grain_spread = 0.5,
-        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
-        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
-        buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-        buf_rate = 1,
-        buf_scan = 0,
-        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
-        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
-        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
-        mod_speed = 10
-      }
-    },
-    {
-      name = "fm",
-      active = false,
-      source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-      param_order = {"freq", "ratio", "index", "modFreq", "amp", "pan"},  -- display / grid order of params
-      -- every value of the voice, by key (its param id without v<i>_): the
-      -- synth params (param_order's keys), the grain and buffer params and
-      -- crossmod; lib/params_setup.lua adds each registered record's
-      values = {
-        freq = 80,
-        amp = 0.25,
-        pan = 0,
-        ratio = 1.5,
-        index = 2,
-        modFreq = 0.05,
-        grain_size = 0.15,
-        grain_density = 15,
-        grain_pitch = 1,
-        grain_spread = 0.3,
-        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
-        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
-        buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-        buf_rate = 1,
-        buf_scan = 0,
-        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
-        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
-        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
-        mod_speed = 10
-      }
-    },
-    {
-      name = "folder",
-      active = false,
-      source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-      param_order = {"freq", "fold", "mod", "amp", "pan"},  -- display / grid order of params
-      -- every value of the voice, by key (its param id without v<i>_): the
-      -- synth params (param_order's keys), the grain and buffer params and
-      -- crossmod; lib/params_setup.lua adds each registered record's
-      values = {
-        freq = 60,
-        amp = 0.3,
-        pan = 0,
-        fold = 1,
-        mod = 0.2,
-        grain_size = 0.08,
-        grain_density = 25,
-        grain_pitch = 1,
-        grain_spread = 0.4,
-        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
-        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
-        buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-        buf_rate = 1,
-        buf_scan = 0,
-        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
-        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
-        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
-        mod_speed = 10
-      }
-    },
-    {
-      name = "sub",
-      active = false,
-      source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-      param_order = {"freq", "drift", "amp"},  -- display / grid order of params
-      -- every value of the voice, by key (its param id without v<i>_): the
-      -- synth params (param_order's keys), the grain and buffer params and
-      -- crossmod; lib/params_setup.lua adds each registered record's
-      values = {
-        freq = 40,
-        amp = 0.4,
-        drift = 0.02,
-        grain_size = 0.2,
-        grain_density = 10,
-        grain_pitch = 1,
-        grain_spread = 0.2,
-        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
-        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
-        buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-        buf_rate = 1,
-        buf_scan = 0,
-        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
-        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
-        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
-        mod_speed = 10
-      }
-    },
-    {
-      name = "pulse",
-      active = false,
-      source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-      param_order = {"freq", "width", "cutoff", "res", "amp", "pan"},  -- display / grid order of params
-      -- every value of the voice, by key (its param id without v<i>_): the
-      -- synth params (param_order's keys), the grain and buffer params and
-      -- crossmod; lib/params_setup.lua adds each registered record's
-      values = {
-        freq = 120,
-        amp = 0.3,
-        pan = 0,
-        width = 0.5,
-        cutoff = 2000,
-        res = 0.8,  -- rises with resonance: 0.8 is the filter's rq 0.3, 3.2's default 0.3 (#314)
-        grain_size = 0.12,
-        grain_density = 18,
-        grain_pitch = 1,
-        grain_spread = 0.35,
-        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
-        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
-        buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-        buf_rate = 1,
-        buf_scan = 0,
-        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
-        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
-        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
-        mod_speed = 10
-      }
-    },
-    {
-      name = "karplus",
-      active = false,
-      source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-      param_order = {"freq", "decay", "damping", "excite", "amp", "pan"},  -- display / grid order of params
-      -- every value of the voice, by key (its param id without v<i>_): the
-      -- synth params (param_order's keys), the grain and buffer params and
-      -- crossmod; lib/params_setup.lua adds each registered record's
-      values = {
-        freq = 200,
-        amp = 0.35,
-        pan = 0,
-        decay = 4,
-        damping = 0.5,
-        excite = 0.3,
-        grain_size = 0.08,
-        grain_density = 22,
-        grain_pitch = 1,
-        grain_spread = 0.25,
-        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
-        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
-        buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-        buf_rate = 1,
-        buf_scan = 0,
-        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
-        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
-        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
-        mod_speed = 10
-      }
-    },
-    {
-      name = "ring",
-      active = false,
-      source = SOURCE_SYNTH,  -- SOURCE_OPTIONS index
-      param_order = {"freq", "ratio", "mod", "brightness", "amp", "pan"},  -- display / grid order of params
-      -- every value of the voice, by key (its param id without v<i>_): the
-      -- synth params (param_order's keys), the grain and buffer params and
-      -- crossmod; lib/params_setup.lua adds each registered record's
-      values = {
-        freq = 300,
-        amp = 0.25,
-        pan = 0,
-        ratio = 1.618,
-        mod = 0.2,
-        brightness = 0.5,
-        grain_size = 0.1,
-        grain_density = 20,
-        grain_pitch = 1,
-        grain_spread = 0.4,
-        grain_env = 1,  -- GRAIN_ENV_OPTIONS index
-        grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
-        buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
-        buf_rate = 1,
-        buf_scan = 0,
-        mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
-        mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
-        mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
-        mod_speed = 10
-      }
-    }
+  -- State. A voice's synth values (every type's keys) and its name and
+  -- param_order (its current type's key and keys) are the synth record's,
+  -- set at init (below): nil before it, so nothing reads them at include
+  -- time. The grain defaults that differ by voice: size, density and spread
+  local GRAIN_DEFAULTS = {
+    {grain_size = 0.1, grain_density = 20, grain_spread = 0.5},
+    {grain_size = 0.15, grain_density = 15, grain_spread = 0.3},
+    {grain_size = 0.08, grain_density = 25, grain_spread = 0.4},
+    {grain_size = 0.2, grain_density = 10, grain_spread = 0.2},
+    {grain_size = 0.12, grain_density = 18, grain_spread = 0.35},
+    {grain_size = 0.08, grain_density = 22, grain_spread = 0.25},
+    {grain_size = 0.1, grain_density = 20, grain_spread = 0.4},
   }
+  -- every voice's other grain, buffer and crossmod defaults
+  local SHARED_DEFAULTS = {
+    grain_pitch = 1,
+    grain_env = 1,  -- GRAIN_ENV_OPTIONS index
+    grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
+    buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
+    buf_rate = 1,
+    buf_scan = 0,
+    mod_source_1 = 0, mod_amp_amt_1 = 0, mod_freq_amt_1 = 0,  -- a source: 0 = none, 1-7 = voice number
+    mod_source_2 = 0, mod_amp_amt_2 = 0, mod_freq_amt_2 = 0,
+    mod_source_3 = 0, mod_amp_amt_3 = 0, mod_freq_amt_3 = 0,
+    mod_speed = 10,
+  }
+  S.voices = {}
+  for voice_idx = 1, NUM_VOICES do
+    -- every value of the voice, by key (its param id without v<i>_): the
+    -- grain and buffer params and crossmod here; the synth record adds
+    -- every type's synth keys, lib/params_setup.lua each registered record's
+    local values = {}
+    for key, value in pairs(SHARED_DEFAULTS) do values[key] = value end
+    for key, value in pairs(GRAIN_DEFAULTS[voice_idx]) do values[key] = value end
+    S.voices[voice_idx] = {active = false, source = SOURCE_SYNTH, values = values}  -- source: a SOURCE_OPTIONS index
+  end
 
   -- A voice's grain source: its synth, a buffer slot, or the live input
   function voice_uses_synth(voice_idx)
@@ -253,13 +81,14 @@ return function(S)
     S.locked[i] = false
   end
 
-  -- Whether key is one of voice voice_idx's synth params (its param_order;
-  -- false for a number that is no voice). A synth-key test goes through
-  -- it, never values[key] ~= nil: a voice's values hold every key of its
-  -- params, the grain, crossmod and registered ones too
+  -- Whether key is one of voice voice_idx's current type's synth params
+  -- (its param_order; false for a number that is no voice, and before
+  -- init). A synth-key test goes through it, never values[key] ~= nil: a
+  -- voice's values hold every key of its params, every type's synth keys,
+  -- the grain, crossmod and registered ones too
   function M.is_synth_key(voice_idx, key)
     local voice = type(voice_idx) == "number" and S.voices[voice_idx]
-    if not voice then return false end
+    if not voice or not voice.param_order then return false end
     for _, synth_key in ipairs(voice.param_order) do
       if synth_key == key then return true end
     end
@@ -293,40 +122,144 @@ return function(S)
       end
     end
 
-    -- Synthesis params whose step is finer than the default string's 0.01
-    -- show three decimals, so every encoder detent changes the text (#386)
-    local SYNTH_FORMATS = {
-      drift = function(param) return string.format("%.3f", param:get()) end,
-      ratio = function(param) return string.format("%.3f", param:get()) end,
-    }
+    -- 3.8 (design §2.2, package 0d): every voice has every type's synth
+    -- keys (S.lib.types.keys()), its default type's param_order first, then
+    -- the rest in type order (so every 3.7.0 param keeps its place); a
+    -- key's default is the default type's, else the first type's that has
+    -- it. The voice's v<i>_type (added first, by add_first) picks its type:
+    -- its name and param_order follow it, and only its keys show and reach
+    -- the engine (reaches)
+    local function default_type(voice_idx) return S.lib.types.record(S.lib.types.default_key(voice_idx)) end
+    local function voice_synth_keys(voice_idx)
+      local keys, listed = {}, {}
+      local function take(key)
+        if not listed[key] then
+          listed[key] = true
+          keys[#keys + 1] = key
+        end
+      end
+      for _, key in ipairs(default_type(voice_idx).param_order) do take(key) end
+      for _, key in ipairs(S.lib.types.keys()) do take(key) end
+      return keys
+    end
+    local function synth_default(voice_idx, key)
+      local own = default_type(voice_idx).defaults[key]
+      if own ~= nil then return own end
+      for _, record in ipairs(S.lib.types.list()) do
+        if record.defaults[key] ~= nil then return record.defaults[key] end
+      end
+    end
+    -- A key's formatter: its format string (three decimals where the step
+    -- is finer than the default string's 0.01, #386), or nil
+    local function synth_formatter(key)
+      local format = S.lib.types.format(key)
+      if not format then return nil end
+      return function(param) return string.format(format, param:get()) end
+    end
 
-    -- The voice's own synth params (its param_order), under the voice's
-    -- heading: a control each with its get_param_spec spec and the voices
-    -- table's default, sent with setVoiceParam under its own name. MAIN's
-    -- randomize draws all but amp (uniform in the normalized range), the
-    -- mutations move all but amp and pan, and the faders show them all, on
-    -- a synth source only. A filtered key's own delta (the PARAMS menu's
-    -- E3) is a turn (turn_on_own_delta, #318; this record's keys only)
+    -- The voice's fields follow its type: name its key, param_order a copy of its keys
+    local function take_type(voice_idx, record)
+      local order = {}
+      for index, key in ipairs(record.param_order) do order[index] = key end
+      S.voices[voice_idx].name = record.key
+      S.voices[voice_idx].param_order = order
+    end
+
+    -- Show the voice's current type's synth params, hide the others
+    local function show_type_keys(voice_idx)
+      for _, key in ipairs(S.lib.types.keys()) do
+        local param_id = "v" .. voice_idx .. "_" .. key
+        if M.is_synth_key(voice_idx, key) then params:show(param_id) else params:hide(param_id) end
+      end
+    end
+
+    -- Per voice, its heading separator's id (the text it was added with,
+    -- lib/params_setup.lua's add_voice_params); its name follows the type
+    local function heading_id(voice_idx) return "voice " .. voice_idx .. ": " .. S.lib.types.default_key(voice_idx) end
+
+    -- The v<i>_type action (design §2.2, §2.3): the voice takes the type
+    -- (its pending choice on VOICE canceled first: every path that sets
+    -- the type cancels it, so the later act stands, ruling 63), shows its
+    -- keys, renames its heading, sends setVoiceType always (a stopped
+    -- voice's engine side records it), ends an undo holding a synth key
+    -- of the voice, and, outside a recall, syncs a running voice once (a
+    -- recall syncs after its last entry, lib/scenes.lua)
+    local function type_changed(voice_idx, index)
+      local record = S.lib.types.list()[index]
+      S.lib.types.cancel(voice_idx)
+      take_type(voice_idx, record)
+      show_type_keys(voice_idx)
+      if _menu and _menu.rebuild_params then _menu.rebuild_params() end
+      local heading = params:lookup_param(heading_id(voice_idx))
+      heading.name = "voice " .. voice_idx .. ": " .. record.name
+      S.lib.engine_sync.send_voice_type(voice_idx)
+      for _, key in ipairs(S.lib.types.keys()) do note_param_edit("v" .. voice_idx .. "_" .. key) end
+      if S.voices[voice_idx].active and not S.scene_recall_in_progress then sync_voice_values_to_engine(voice_idx) end
+      -- the grid fader list follows the type (its synth keys)
+      if S.grid_voice_select == voice_idx then
+        S.param_page = util.clamp(S.param_page, 1, fader_page_count(voice_idx))
+      end
+      update_voice_list()
+      request_redraw()
+      grid_redraw()
+    end
+
+    -- The voice's synth params (every type's keys, under the voice's
+    -- heading, after v<i>_type): a control each with S.lib.types.spec and
+    -- its default (synth_default), sent with setVoiceParam under its own
+    -- name while the voice's type has it (reaches). MAIN's randomize draws
+    -- all of the current type's but amp (uniform in the normalized range),
+    -- the mutations move all but amp and pan, and the faders show them
+    -- all, on a synth source only. A filtered key's own delta (the PARAMS
+    -- menu's E3) is a turn (turn_on_own_delta, #318; this record's keys only)
     local synth_record
     synth_record = {
       name = "synth",
-      count = function(voice_idx) return #S.voices[voice_idx].param_order end,
+      count = function() return 1 + #S.lib.types.keys() end,  -- the type, then every key
       separator = false,
+      add_first = function(voice_idx)
+        local names = {}
+        for index, record in ipairs(S.lib.types.list()) do names[index] = record.name end
+        local default = default_type(voice_idx)
+        take_type(voice_idx, default)
+        params:add{
+          type = "option",
+          id = "v" .. voice_idx .. "_type",
+          name = "type",
+          options = names,
+          default = default.index,
+          action = function(x) type_changed(voice_idx, x) end,
+        }
+      end,
       add = function(voice_idx)
-        local voice = S.voices[voice_idx]
-        for _, key in ipairs(voice.param_order) do
-          local spec = get_param_spec(key)
-          spec.default = voice.values[key]  -- the voices table holds each voice's defaults
+        for _, key in ipairs(voice_synth_keys(voice_idx)) do
+          local spec = S.lib.types.spec(key)
+          spec.default = synth_default(voice_idx, key)
           add_param(voice_idx, synth_record, key, {type = "control", name = key, controlspec = spec,
-            formatter = SYNTH_FORMATS[key]})
+            formatter = synth_formatter(key)})
           S.lib.params_setup.turn_on_own_delta(key, "v" .. voice_idx .. "_" .. key)
         end
+        show_type_keys(voice_idx)
       end,
-      voice_keys = function(voice_idx)
+      voice_keys = function()
         local keys = {}
-        for _, key in ipairs(S.voices[voice_idx].param_order) do keys[key] = key end
+        for _, key in ipairs(S.lib.types.keys()) do keys[key] = key end
         return keys
       end,
+      reaches = function(voice_idx, key) return M.is_synth_key(voice_idx, key) end,
+      -- a scene holds its own type's keys (nil: the voice's current type; a
+      -- type this build lacks, none)
+      scene_keys = function(voice_idx, type_key)
+        local record = S.lib.types.record(type_key or S.voices[voice_idx].name)
+        return record and record.param_order or {}
+      end,
+      -- VOICE's synth section: the current type's keys but amp and pan (the
+      -- mix section's), or a buffer voice's buffer params; none for input
+      voice_rows = {section = "synth", before = "mix", rows = function(voice_idx)
+        if voice_uses_synth(voice_idx) then return synth_keys_but({amp = true, pan = true})(voice_idx) end
+        if voice_uses_buffer(voice_idx) then return {"buf_pos", "buf_rate", "buf_scan"} end
+        return {}
+      end},
       fader = {{keys = function(voice_idx) return S.voices[voice_idx].param_order end, when = uses_synth}},
       main_randomize = {{keys = synth_keys_but({amp = true}), when = uses_synth,
         draw = function(_, _, param_id) return params:lookup_param(param_id).controlspec:map(math.random()) end}},
@@ -432,6 +365,9 @@ return function(S)
       send_order = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode",
         "buf_pos", "buf_rate", "buf_scan"},
       discrete = {grain_env = {1, #GRAIN_ENV_OPTIONS}, grain_mode = {1, #GRAIN_MODE_OPTIONS}},
+      scene_keys = true,  -- every value its add added (the source is a voice field)
+      voice_rows = {section = "grain", before = "mix",
+        rows = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}},
       fader = {
         {keys = buffer_and_level_keys, when = uses_buffer},
         {keys = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}},
@@ -459,6 +395,7 @@ return function(S)
       return "voice " .. param:get()
     end
     local crossmod_keys, crossmod_order, crossmod_discrete, crossmod_faders = {}, {}, {}, {}
+    local crossmod_rows = {"mod_speed"}  -- VOICE's crossmod section: the speed, then per slot its three
     for slot = 1, NUM_MOD_SLOTS do
       local source, amp, freq = "mod_source_" .. slot, "mod_amp_amt_" .. slot, "mod_freq_amt_" .. slot
       crossmod_keys[source] = {carry = false, send = function(voice_idx, x)
@@ -470,6 +407,7 @@ return function(S)
       for _, key in ipairs({source, amp, freq}) do
         crossmod_order[#crossmod_order + 1] = key
         crossmod_faders[#crossmod_faders + 1] = key
+        crossmod_rows[#crossmod_rows + 1] = key
       end
     end
     crossmod_keys.mod_speed = {carry = false, send = function(voice_idx, x) engine.setModSpeed(voice_idx - 1, x) end}
@@ -496,6 +434,8 @@ return function(S)
       voice_keys = crossmod_keys,
       send_order = crossmod_order,
       discrete = crossmod_discrete,
+      scene_keys = true,
+      voice_rows = {section = "crossmod", before = "mix", rows = crossmod_rows},
       fader = {{keys = crossmod_faders}},
     }
 

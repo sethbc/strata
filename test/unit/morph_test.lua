@@ -1188,4 +1188,60 @@ test("swept across the crossing on every apply, the morph switches at most once 
     "under the budget's 1500 a second: " .. messages / 2)
 end)
 
+-- 3.8 (package 0d): a voice's type among the corners. A, B resonator (rq 0.2
+-- and 0.8), C fm (ratio 3), D empty
+local function typed_corners()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("v1_rq", 0.2); capture_scene(1)
+  params:set("v1_rq", 0.8); capture_scene(2)
+  params:set("v1_type", S.lib.types.record("fm").index); params:set("v1_ratio", 3); capture_scene(3)
+  params:set("v1_type", S.lib.types.record("resonator").index); params:set("v1_ratio", 1.5)
+  params:set("v1_rq", 0.2)
+  return context, S
+end
+
+test("a type that differs among corners switches at the crossing with that corner's synth keys", function()
+  local context, S = typed_corners()
+  local applies = {}
+  local apply = S.lib.scenes.apply_entries
+  S.lib.scenes.apply_entries = function(entries, opts)
+    local ids = {}
+    for _, entry in ipairs(entries) do
+      if entry.id == "v1_type" or entry.id == "v1_ratio" or entry.id == "v1_rq" then ids[#ids + 1] = entry.id end
+    end
+    if #ids > 0 then applies[#applies + 1] = table.concat(ids, " ") end
+    return apply(entries, opts)
+  end
+  local ok, problem = pcall(function()
+    settle_xy(context, 0.5, 0)
+    local rq = params:get("v1_rq")
+    assert_true(rq > 0.3 and rq < 0.7, "between A and B rq blends (" .. rq .. ")")
+    assert_equal(S.lib.types.of(1).key, "resonator", "and the type stays")
+    settle_xy(context, 0.25, 0.4)
+    local held = params:get("v1_rq")
+    settle_xy(context, 0.1, 0.45)
+    assert_equal(params:get("v1_rq"), held, "rq never blends toward C, which lacks it")
+    applies = {}
+    settle_xy(context, 0, 1)
+    assert_equal(S.lib.types.of(1).key, "fm", "at C: fm")
+    assert_equal(params:get("v1_ratio"), 3, "with C's ratio")
+    assert_equal(table.concat(applies, " | "), "v1_type v1_ratio", "in one discrete apply, the type first")
+    settle_xy(context, 1, 0)
+    assert_equal(S.lib.types.of(1).key, "resonator", "back at B: resonator")
+    assert_near(params:get("v1_rq"), 0.8, 1e-9, "with B's rq")
+  end)
+  S.lib.scenes.apply_entries = apply
+  assert_true(ok, tostring(problem))
+end)
+
+test("corners of one type blend their synth keys as today", function()
+  local context, S = typed_corners()
+  params:set("morph_c", 9)  -- an empty slot: A and B alone
+  settle(context, 0.5)
+  local rq = params:get("v1_rq")
+  assert_near(rq, 0.5, 0.02, "rq at the middle of A and B")
+  assert_equal(S.lib.types.of(1).key, "resonator", "the type never moves")
+end)
+
 end

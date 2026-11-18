@@ -178,16 +178,34 @@ return function(S)
     return units
   end
 
+  -- 3.8 (package 0d): a corner's value of a synth key its scene's type
+  -- lacks (another type's key): the entry's value there is MISSING
+  local MISSING = false
+
   -- Each valid corner's value under the key of an entry, or nil when one
-  -- lacks it or holds it as another kind
+  -- lacks it or holds it as another kind; a synth key (entry.synth) a
+  -- corner lacks is MISSING there (3.8), the others' values kept
   local function corner_values(entry, corners, by_key)
     local values = {}
     for _, corner in ipairs(corners) do
       local counterpart = by_key[corner][entry_key(entry)]
-      if not (counterpart and counterpart.kind == entry.kind) then return nil end
-      values[corner] = counterpart.value
+      if counterpart == nil and entry.synth then
+        values[corner] = MISSING
+      elseif not (counterpart and counterpart.kind == entry.kind) then
+        return nil
+      else
+        values[corner] = counterpart.value
+      end
     end
     return values
+  end
+
+  -- Whether every corner listed holds the values' key (none is MISSING)
+  local function held_by(values, corners)
+    for _, corner in ipairs(corners) do
+      if values[corner] == MISSING then return false end
+    end
+    return true
   end
 
   -- The plan over the four slots (by corner): the valid corners, in
@@ -198,9 +216,13 @@ return function(S)
   -- recall order, each with every valid corner's value; the ramps' named
   -- ids and switches per pair. An entry equal in every valid corner, or
   -- missing from one, is left out; which of the rest an apply writes
-  -- depends on the corners counting there (counting_corners). ready is
-  -- false with fewer than MORPH.min_corners valid corners; empty is then
-  -- the first empty or invalid corner's slot
+  -- depends on the corners counting there (counting_corners). 3.8: a synth
+  -- key a corner's type lacks (MISSING there) is a continuous item that
+  -- blends only while every counting corner holds it, and also, per
+  -- corner that holds it, a discrete entry (partial) that lands with the
+  -- corner's type while a counting corner lacks it. ready is false with
+  -- fewer than MORPH.min_corners valid corners; empty is then the first
+  -- empty or invalid corner's slot
   local function build_plan(slots)
     local plan = {slots = slots, revisions = {}, valid = {}, corners = {}}
     for _, corner in ipairs(MORPH.corners) do
@@ -240,9 +262,15 @@ return function(S)
     for _, corner in ipairs(plan.corners) do
       plan.discrete[corner] = {}
       for _, entry in ipairs(lists[corner]) do
-        local values = entry.kind ~= "continuous" and corner_values(entry, plan.corners, by_key)
-        if values and differs_among(values, plan.corners) then
+        local values = corner_values(entry, plan.corners, by_key)
+        if values and entry.kind ~= "continuous" and differs_among(values, plan.corners) then
           table.insert(plan.discrete[corner], {entry = entry, key = entry_key(entry), values = values})
+        elseif values and entry.kind == "continuous" and not held_by(values, plan.corners) then
+          -- a synth key another corner's type lacks: set with its type
+          local discrete = {}
+          for field, value in pairs(entry) do discrete[field] = value end
+          discrete.kind = "discrete"
+          table.insert(plan.discrete[corner], {entry = discrete, key = entry_key(entry), values = values, partial = true})
         end
       end
     end
@@ -410,6 +438,7 @@ return function(S)
   -- (it follows its blend back to an edge), or it differs among the
   -- counting corners
   local function item_active(item, counting)
+    if not held_by(item.values, counting) then return false end  -- 3.8: a counting corner's type lacks it
     return state.applied.values[item.id] ~= nil or differs_among(item.values, counting)
   end
 
@@ -522,7 +551,9 @@ return function(S)
     local owned, list = state.applied.owned, {}
     for _, candidate in ipairs(plan.discrete[corner]) do
       local write
-      if owned[candidate.key] then
+      if candidate.partial and held_by(candidate.values, counting) then
+        write = false  -- 3.8: every counting corner holds it, so it blends
+      elseif owned[candidate.key] then
         write = from ~= nil and from ~= corner and not same_value(candidate.values[corner], candidate.values[from])
       else
         write = differs_among(candidate.values, counting)

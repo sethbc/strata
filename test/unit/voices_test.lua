@@ -119,7 +119,7 @@ test("every voice holds its values in one table, by its param ids' keys", functi
     local listed = {}
     for _, param in ipairs(params.params) do
       local key = type(param.id) == "string" and param.id:sub(1, #prefix) == prefix and param.id:sub(#prefix + 1)
-      if key and key ~= "source" and not key:match("^out_") and not key:match("^zone") then
+      if key and key ~= "source" and key ~= "type" and not key:match("^out_") and not key:match("^zone") then
         listed[key] = true
         assert_true(v.values[key] ~= nil, param.id .. " has a value")
         -- an exp control's get is map(unmap(x)), an ulp or two from the value

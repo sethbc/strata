@@ -1044,14 +1044,19 @@ end)
 -- The envelope times (package 2g)
 -------------------------------------------------------------------------------
 
+-- Each voice's default times: its default type's envelope (3.8, package 0d)
+local function default_envelope(S, voice)
+  return S.lib.types.record(S.lib.types.default_key(voice)).envelope
+end
+
 test("attack and release default to each voice's times of 3.4", function()
   local context = load_strata()
   local S = started(context)
-  local envelope = S.lib.notes.NOTES.envelope
-  assert_equal(#envelope, S.constants.NUM_VOICES, "a pair per voice")
+  assert_equal(S.lib.notes.NOTES.envelope, nil, "the times are the types' (3.8)")
   for voice = 1, S.constants.NUM_VOICES do
-    assert_near(params:get("v" .. voice .. "_attack"), envelope[voice][1], 1e-9, "voice " .. voice .. " attack")
-    assert_near(params:get("v" .. voice .. "_release"), envelope[voice][2], 1e-9, "voice " .. voice .. " release")
+    local envelope = default_envelope(S, voice)
+    assert_near(params:get("v" .. voice .. "_attack"), envelope.attack, 1e-9, "voice " .. voice .. " attack")
+    assert_near(params:get("v" .. voice .. "_release"), envelope.release, 1e-9, "voice " .. voice .. " release")
   end
   assert_near(params:get("v1_attack"), 4, 1e-9); assert_near(params:get("v1_release"), 8, 1e-9)
   assert_near(params:get("v4_attack"), 8, 1e-9); assert_near(params:get("v4_release"), 12, 1e-9)
@@ -1067,6 +1072,24 @@ test("attack and release default to each voice's times of 3.4", function()
     assert_true(text:find("v" .. voice .. "_note_cap,v" .. voice .. "_attack,v" .. voice .. "_release", 1, true)
       ~= nil, "attack and release follow note cap: " .. text)
   end
+end)
+
+test("attack and release keep the voice's values across a type change; their defaults are the default type's envelope",
+    function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_attack", 1.5)
+  context.clear_engine_calls()
+  params:set("v1_type", S.lib.types.record("karplus").index)
+  assert_near(params:get("v1_attack"), 1.5, 1e-9, "the attack the voice had")
+  assert_near(params:get("v1_release"), default_envelope(S, 1).release, 1e-9, "the release its own default")
+  assert_true(default_envelope(S, 1).release ~= S.lib.types.record("karplus").envelope.release,
+    "not the new type's")
+  local sent = {}
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do sent[call.args[2]] = call.args[3] end
+  assert_near(sent.attackTime, 1.5, 1e-9, "the running voice's sync sends its attack to the new type's synth")
+  assert_equal(params:lookup_param("v1_attack").controlspec.default, default_envelope(S, 1).attack,
+    "the attack's default is the default type's")
 end)
 
 test("they reach the engine as attackTime and releaseTime, at a turn and at a start", function()
@@ -1115,30 +1138,41 @@ test("a scene without the times recalls each voice's default times", function()
     scene.data.voices[voice].values.release = nil
   end
   fill_scene(scene)
-  local envelope = S.lib.notes.NOTES.envelope
   for voice = 1, S.constants.NUM_VOICES do
-    assert_equal(scene.data.voices[voice].values.attack, envelope[voice][1], "voice " .. voice .. " attack")
-    assert_equal(scene.data.voices[voice].values.release, envelope[voice][2], "voice " .. voice .. " release")
+    local envelope = default_envelope(S, voice)
+    assert_equal(scene.data.voices[voice].values.attack, envelope.attack, "voice " .. voice .. " attack")
+    assert_equal(scene.data.voices[voice].values.release, envelope.release, "voice " .. voice .. " release")
   end
   scene.data.voices[1].values.attack = 2
   fill_scene(scene)
   assert_equal(scene.data.voices[1].values.attack, 2, "a stored value is kept (idempotent)")
 end)
 
-test("the engine's default times equal NOTES.envelope", function()
+-- 3.8 (package 0d): each type's envelope is its def's attackTime and
+-- releaseTime defaults, the def found by name in any engine file (a later
+-- type's def is in a file of its own)
+test("the engine's default times equal each type's envelope, paired by def name", function()
   load_strata()
+  local S = local_value("S")
+  local defaults = {}
+  local listing = io.popen('ls lib/engine/*.sc lib/Engine_Strata.sc')
+  for path in listing:lines() do
+    local file = assert(io.open(path))
+    local source = file:read("*a"); file:close()
+    for name, body in source:gmatch("SynthDef%(\\(%w+), {(.-)}%)") do
+      local attack, release = body:match("attackTime=([%d%.]+), releaseTime=([%d%.]+)")
+      if attack then defaults[name] = {tonumber(attack), tonumber(release)} end
+    end
+  end
+  listing:close()
+  for _, record in ipairs(S.lib.types.list()) do
+    local found = defaults[record.def]
+    assert_true(found ~= nil, record.key .. ": its def " .. record.def .. " has default times")
+    assert_equal(found[1], record.envelope.attack, record.key .. " attack")
+    assert_equal(found[2], record.envelope.release, record.key .. " release")
+  end
   local file = assert(io.open("lib/engine/StrataVoiceDefs.sc"))
   local text = file:read("*a"); file:close()
-  local pairs_found = {}
-  for attack, release in text:gmatch("attackTime=([%d%.]+), releaseTime=([%d%.]+);") do
-    pairs_found[#pairs_found + 1] = {tonumber(attack), tonumber(release)}
-  end
-  local envelope = local_value("S").lib.notes.NOTES.envelope
-  assert_equal(#pairs_found, #envelope, "one default pair per voice def")
-  for voice = 1, #envelope do
-    assert_equal(pairs_found[voice][1], envelope[voice][1], "voice " .. voice .. " attack")
-    assert_equal(pairs_found[voice][2], envelope[voice][2], "voice " .. voice .. " release")
-  end
   local a_lo, a_hi = text:match("attackTimeRange { %^#%[([%d%.]+), ([%d%.]+)%] }")
   local r_lo, r_hi = text:match("releaseTimeRange { %^#%[([%d%.]+), ([%d%.]+)%] }")
   local a_min, a_max = param_range("v1_attack")

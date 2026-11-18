@@ -677,7 +677,7 @@ test("MAIN's ALT pan ring is dark and ignored for Sub", function()
   local S = local_value("S")
   show_page("MAIN")
   S.selected_voice = 4
-  assert_true(S.voices[4].values.pan == nil, "Sub has no pan")
+  assert_true(not S.lib.voices.is_synth_key(4, "pan"), "Sub has no pan")
   key(1, 1)
   local before = {}
   for _, row in ipairs(voice_page_rows(4)) do
@@ -726,7 +726,8 @@ test("VOICE rings follow the cursor's group of four", function()
     end
   end
   place_voice_cursor(row_of("v1_grain_density"))
-  local group = { "v1_mod2", "v1_grain_size", "v1_grain_density", "v1_grain_pitch" }
+  -- (3.8: the type row is the first field, so the groups start one key earlier)
+  local group = { "v1_mod1", "v1_mod2", "v1_grain_size", "v1_grain_density" }
   for ring, param_id in ipairs(group) do
     local before = {}
     for _, other in ipairs(group) do before[other] = params:get(other) end
@@ -746,11 +747,11 @@ test("VOICE rings follow the cursor's group of four", function()
   -- an option row in the next group: one whole value per 20 ticks
   place_voice_cursor(row_of("v1_grain_env"))
   local env = params:get("v1_grain_env")
-  context.arc.turn(1, 2, 19)
+  context.arc.turn(1, 3, 19)
   assert_equal(params:get("v1_grain_env"), env, "19 ticks do not step the envelope")
-  context.arc.turn(1, 2, 1)
+  context.arc.turn(1, 3, 1)
   assert_equal(params:get("v1_grain_env"), env + 1, "the 20th steps it once")
-  context.arc.turn(1, 2, -20)
+  context.arc.turn(1, 3, -20)
   assert_equal(params:get("v1_grain_env"), env, "20 back step it back")
   -- a number row (a mod source) steps the same way
   local function ring_of(param_id)
@@ -774,6 +775,25 @@ test("VOICE rings follow the cursor's group of four", function()
   assert_equal(params:get("v2_mod_source_1"), other, "voice 1's carried ticks never step voice 2")
   context.arc.turn(1, ring, 15)
   assert_equal(params:get("v2_mod_source_1"), other + 1, "20 of its own ticks do")
+end)
+
+-- 3.8 (package 0d): a ring on the type row moves its pending choice, a
+-- step per 20 ticks, and the type applies once the ring rests
+test("an arc ring on VOICE's type row turns the pending choice, never the param", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  S.selected_voice = 1
+  show_page("VOICE")
+  place_voice_cursor(1)
+  context.clear_engine_calls()
+  context.arc.turn(1, 1, 45)
+  assert_equal(S.lib.types.pending(1), 3, "45 ticks: two types on")
+  assert_equal(params:get("v1_type"), 1, "the param unchanged")
+  assert_equal(#context.calls_named("setVoiceType"), 0, "nothing sent while it turns")
+  context.clock.run_for(S.lib.types.TYPES.settle_seconds)
+  assert_equal(params:get("v1_type"), 3, "applied once at rest")
+  assert_equal(#context.calls_named("setVoiceType"), 1, "one setVoiceType")
 end)
 
 test("an arc ring on a binary VOICE row toggles it once per whole step", function()

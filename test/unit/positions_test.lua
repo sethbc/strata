@@ -411,7 +411,7 @@ test("bookmarks default to the quarters and are scene fields that crossfade", fu
       assert_near(params:get("v" .. voice_idx .. "_bookmark_" .. n), expected, 1e-9)
     end
   end
-  assert_equal(S.constants.SCENE_DATA_VERSION, 9)
+  assert_equal(S.constants.SCENE_DATA_VERSION, 10)  -- 3.8: format 10
   params:set("v1_bookmark_2", 0.75)
   capture_scene(1)
   assert_near(S.scenes[1].data.voices[1].values.bookmark_2, 0.75, 1e-9, "the scene captures it")

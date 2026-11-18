@@ -37,10 +37,9 @@ return function(S)
     neutral = {bend = 1, amp = 1, position = 0, size = 0, main = 0},
     expression_ranges = {bend = {0.0625, 16}, amp = {0, 2}, position = {-1, 1}, size = {-1, 1}, main = {-1, 1}},
     cap = {key = "note_cap", name = "note cap", section = "notes", before = "variation"},
-    -- each voice's {attack, release} (s): its def's times, which the engine
-    -- plays when no param says otherwise (a docs test compares them), and
-    -- the engine's ranges (voiceEnvelope clips to them)
-    envelope = {{4, 8}, {5, 10}, {3, 6}, {8, 12}, {2, 4}, {0.01, 2}, {3, 5}},
+    -- the engine's ranges of the attack and release (voiceEnvelope clips
+    -- to them); each voice's defaults are its default type's envelope
+    -- (3.8: the type records', read at init, voice_envelope)
     envelope_ranges = {attack = {0.005, 30}, release = {0.01, 30}},
     envelope_keys = {"attack", "release"}, envelope_engine = {attack = "attackTime", release = "releaseTime"}}
   M.NOTES = NOTES
@@ -896,6 +895,12 @@ return function(S)
       engine.setVoiceParam(voice - 1, NOTES.envelope_engine[key], values[key])
     end
   end
+  -- A voice's default {attack, release}: its default voice type's envelope,
+  -- its def's times, which the engine plays when no param says otherwise (a
+  -- notes test compares them). Read at init or later (ruling 19)
+  local function voice_envelope(voice)
+    return S.lib.types.record(S.lib.types.default_key(voice)).envelope
+  end
   local cap_record
   cap_record = {
     name = "notes",
@@ -911,7 +916,7 @@ return function(S)
         local range = NOTES.envelope_ranges[key]
         S.lib.params_setup.add_voice_param(voice, cap_record, key, {
           type = "control", name = key,
-          controlspec = controlspec.new(range[1], range[2], "exp", 0, NOTES.envelope[voice][index], "s"),
+          controlspec = controlspec.new(range[1], range[2], "exp", 0, voice_envelope(voice)[key], "s"),
         })
         S.lib.engine_sync.add_voice_sender(voice, "v" .. voice .. "_" .. key, function(value)
           engine.setVoiceParam(voice - 1, NOTES.envelope_engine[key], value)
@@ -922,10 +927,11 @@ return function(S)
     sync = function(voice)
       if S.voices[voice].active then send_envelope(voice) end
     end,
-    -- each voice's own times (a function of the voice): a scene without
-    -- them gets the voice's defaults (fill_scene)
+    -- each voice's own times (a function of the voice, checked at init): a
+    -- scene without them gets the voice's defaults (fill_scene)
     scene_defaults = function(voice)
-      return {attack = NOTES.envelope[voice][1], release = NOTES.envelope[voice][2]}
+      local envelope = voice_envelope(voice)
+      return {attack = envelope.attack, release = envelope.release}
     end,
     scene_ranges = {attack = NOTES.envelope_ranges.attack, release = NOTES.envelope_ranges.release},
     voice_rows = {section = NOTES.cap.section, rows = {NOTES.cap.key, "attack", "release"}, before = NOTES.cap.before},

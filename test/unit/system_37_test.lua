@@ -69,6 +69,9 @@ local RUN_CALLS_ALLOWED = {
   -- 3.7: setDelay's fourth value, ping-pong, at 0 (3.7 design §6); no start sends setDelay, so its count is 0
   {kind = "rewrite", match = "^(setDelay%([^,]+, [^,]+, [^,]+), 0%)$", replace = "%1)", count = 0,
     why = "3.7: setDelay carries ping-pong, 0 by default"},
+  -- 0d: a start sends the voice's type right after its source (design §2.2)
+  {kind = "drop", match = '^setVoiceType%(<v0>, <v0>%)$', count = 1,
+    why = "0d: each voice's start sends setVoiceType, on its own type, right after setGrainSource (design §2.2)"},
 }
 
 -- A call as the fixture writes it: name(args), numbers "%.9g", strings "%q"
@@ -148,6 +151,18 @@ test("a fresh Strata has every 3.7 feature off", function()
   -- every call since the load, RUN_CALLS_ALLOWED's differences applied
   local lines = {}
   for _, call in ipairs(context.engine_calls) do lines[#lines + 1] = call_line(call) end
+  -- 0d's difference, before its drop: each voice's type once, right after its source
+  for voice = 1, NUM_VOICES do
+    local type_line, count = string.format("setVoiceType(%d, %d)", voice - 1, voice - 1), 0
+    for index, line in ipairs(lines) do
+      if line == type_line then
+        count = count + 1
+        assert_true(lines[index - 1]:match("^setGrainSource%(" .. (voice - 1) .. ", ") ~= nil,
+          type_line .. " right after the voice's setGrainSource")
+      end
+    end
+    assert_equal(count, 1, type_line .. " once in the run")
+  end
   local recorded, sent = h.allowed_call_lines(dofile(h.repo_root .. "/test/fixtures/3.6.0-start-calls.lua"), lines,
     RUN_CALLS_ALLOWED, "a fresh run")
   local expected, actual = canonical(recorded), canonical(sent)
@@ -298,7 +313,7 @@ test("a 3.6 scenes file is set aside whole; a 3.6 PSET and a version 2 buffers.d
   cleanup()
 end)
 
-test("a scenes file older than format 9 and a version 1 buffers.data are set aside, never converted or overwritten",
+test("a scenes file older than format 10 and a version 1 buffers.data are set aside, never converted or overwritten",
     function()
   math.randomseed(SYSTEM.seed)
   local subdir, dir = fresh_dir("system37-below-floors")
@@ -405,12 +420,76 @@ test("a 3.7 PSET and its side files load with no error line", function()
   cleanup()
 end)
 
--- The groundwork plan's ruling 2: this build's own files, recorded from it
--- (test/fixtures/groundwork-files.lua; its header says how), load as saved
-test("this build's own files load: a format 9 scenes file, a PSET and its five side files", function()
+-- The groundwork plan's ruling 2: the groundwork's own files, recorded from
+-- it (test/fixtures/groundwork-files.lua; its header says how). 3.8 raises
+-- the scenes floor to 10 (package 0d): its format 9 scenes are set aside
+-- as older, the live file and the PSET's, and its PSET still loads, each
+-- voice on its own type
+test("format 9's scenes are set aside as older; its PSET loads", function()
   math.randomseed(SYSTEM.seed)
   local files = dofile(h.repo_root .. "/test/fixtures/groundwork-files.lua")
   local subdir, dir = fresh_dir("system-groundwork-files")
+  local root = h.data_root .. subdir .. "/"
+  local audio = root .. "audio/"
+  os.execute("mkdir -p '" .. audio .. "'")
+  local base = root .. "strata-05"
+  local live_text = files["scenes.data"]:gsub("@DATA@", root)
+  write_text(dir .. "scenes.data", live_text)
+  local pset_text = files["strata-05.pset"]:gsub("@AUDIO@", audio)
+  write_text(base .. ".pset", pset_text)
+  local sides = {"macros", "matrix", "gestures", "sequences", "scenes"}
+  for _, key in ipairs(sides) do
+    write_text(base .. "." .. key .. ".data", files["strata-05." .. key .. ".data"])
+  end
+  local context = load_strata({data_subdir = subdir}); finish_startup(context)
+  local S = local_value("S")
+  -- the live scenes file: format 9, below the floor, set aside whole
+  assert_equal(S.lib.data_files.read(dir .. "scenes.data.bak").version, 9, "the groundwork wrote format 9")
+  assert_equal(file_text(dir .. "scenes.data.bak"), live_text, "set aside whole")
+  assert_equal(S.scene_file.problem, "older", "it reads as older")
+  for slot = 1, S.constants.NUM_SCENES do assert_true(not S.scenes[slot].populated, "scene " .. slot .. ": none") end
+  -- the PSET and its side files: the scenes side file is set aside (its one
+  -- line), the rest load
+  params:set("v2_type", S.lib.types.record("sub").index)
+  local from = #context.printed + 1
+  params:read(base .. ".pset")
+  lfo_step(context, 3)
+  local errors = error_lines(context, from)
+  assert_equal(#errors, 1, "one line holding error: " .. table.concat(errors, " | "))
+  assert_true(errors[1]:find(base .. ".scenes.data", 1, true) ~= nil, "the PSET's format 9 scenes': " .. errors[1])
+  assert_true(util.file_exists(base .. ".scenes.data.bak"), "set aside")
+  local compared = 0
+  for _, entry in ipairs(pset_lines(pset_text)) do
+    local id = entry.id
+    assert_true(params.lookup[id] ~= nil, id .. ": every line names a param of this build")
+    if params:lookup_param(id).t ~= params.tGROUP then
+      local number = tonumber(entry.value)
+      if number and params:lookup_param(id).t ~= params.tTEXT then
+        assert_near(params:get(id), number, 1e-9 * math.max(1, math.abs(number)), id .. " as saved")
+      else
+        assert_equal(tostring(params:get(id)), entry.value, id .. " as saved")
+      end
+      compared = compared + 1
+    end
+  end
+  assert_true(compared > 800, compared .. " of the PSET's values compared")
+  for voice = 1, S.constants.NUM_VOICES do
+    assert_equal(S.lib.types.of(voice).key, S.lib.types.default_key(voice), "voice " .. voice .. " on its own type")
+  end
+  local routing = S.lib.matrix.routing(1)
+  assert_equal(routing.source, "macro1", "routing 1 from the matrix file"); assert_equal(routing.dest, "v3_grain_pitch")
+  assert_equal(S.lib.matrix.home(1), "v2_main", "LFO 1's home"); assert_equal(S.lib.matrix.home(2), "reverb_mix")
+  local target = S.lib.macros.targets(1)[1]
+  assert_equal(target.id, "reverb_mix", "macro 1's target from the macros file")
+  cleanup()
+end)
+
+-- 3.8 (package 0d): this build's own files (test/fixtures/format-10-files.lua;
+-- its header says how), recorded with voice 2 on another type, load as saved
+test("this build's own files load: a format 10 scenes file, a PSET and its five side files", function()
+  math.randomseed(SYSTEM.seed)
+  local files = dofile(h.repo_root .. "/test/fixtures/format-10-files.lua")
+  local subdir, dir = fresh_dir("system-format-10-files")
   local root = h.data_root .. subdir .. "/"
   local audio = root .. "audio/"
   os.execute("mkdir -p '" .. audio .. "'")
@@ -424,14 +503,13 @@ test("this build's own files load: a format 9 scenes file, a PSET and its five s
   end
   local context = load_strata({data_subdir = subdir}); finish_startup(context)
   local S = local_value("S")
-  -- the live scenes file: format 9, held by PSET 5
   assert_equal(S.scene_file.problem, nil, "the scenes file loads")
   assert_equal(S.scene_file.pset, base, "naming the PSET that holds its scenes")
   assert_true(S.scenes[1].populated and S.scenes[4].populated, "scenes 1 and 4")
   assert_equal(S.lib.scenes.name(4), "four", "with scene 4's name")
+  assert_equal(S.scenes[1].data.voices[2].type, "ring", "scene 1 holds voice 2 on ring")
   assert_equal(S.scenes[1].data.patterns[2][3], 9, "scene 1's voice 2 step 3 at level 9")
   local scenes_before = S.lib.data_files.encode(S.scenes)
-  -- the PSET and its five side files
   local from = #context.printed + 1
   params:read(base .. ".pset")
   lfo_step(context, 3)
@@ -452,6 +530,7 @@ test("this build's own files load: a format 9 scenes file, a PSET and its five s
     end
   end
   assert_true(compared > 800, compared .. " of the PSET's values compared")
+  assert_equal(S.lib.types.of(2).key, "ring", "voice 2 on the PSET's ring")
   assert_equal(S.scenes[1].data.voices[1].source, 2, "scene 1 holds voice 1 on buffer 1")
   local routing = S.lib.matrix.routing(1)
   assert_equal(routing.source, "macro1", "routing 1 from the matrix file"); assert_equal(routing.dest, "v3_grain_pitch")
@@ -465,6 +544,73 @@ test("this build's own files load: a format 9 scenes file, a PSET and its five s
   for _, key in ipairs(sides) do
     assert_true(not util.file_exists(base .. "." .. key .. ".data.bak"), key .. ": nothing set aside")
   end
+  cleanup()
+end)
+
+-- The 3.7 PSET (the 3.6 fixture's PSET as 3.7 writes it, KEYS_3_7), its
+-- side files written beside it
+local function pset_3_7(name)
+  local files = files_3_6()
+  local subdir = fresh_dir(name)
+  local root = h.data_root .. subdir .. "/"
+  local audio = root .. "audio/"
+  os.execute("mkdir -p '" .. audio .. "'")
+  local text = files[PSET_3_6.base .. ".pset"]:gsub("@AUDIO@", audio)
+  text = text:gsub('"midi_note_off": 1\n', '"midi_note_off": 3\n')
+  text = text:gsub('("strata_lfo(%d)_dest": [^\n]*\n)', function(line, n)
+    return line .. '"strata_lfo' .. n .. '_dest_key": ' .. KEYS_3_7[tonumber(n)] .. "\n"
+  end)
+  local pset = root .. PSET_3_6.base .. ".pset"
+  write_text(pset, text)
+  for _, key in ipairs(PSET_3_6.sides) do
+    local side = PSET_3_6.base .. "." .. key .. ".data"
+    write_text(root .. side, files[side])
+  end
+  return subdir, pset, text
+end
+
+-- Review Focus 1 (3.8 plan): a 3.7 PSET loaded over a session that has
+-- moved on (voice 2 on another type). 1a, 1c and 1e each add one assertion
+test("a 3.7 PSET loads with no error line and each voice its old type", function()
+  math.randomseed(SYSTEM.seed)
+  local subdir, pset = pset_3_7("system37-pset-types")
+  local context = load_strata({data_subdir = subdir}); finish_startup(context)
+  local S = local_value("S")
+  params:set("v2_type", S.lib.types.record("sub").index)
+  local from = #context.printed + 1
+  params:read(pset)
+  lfo_step(context, 3)
+  local errors = error_lines(context, from)
+  assert_equal(#errors, 0, "no line holding error: " .. table.concat(errors, " | "))
+  for voice = 1, S.constants.NUM_VOICES do
+    assert_equal(S.lib.types.of(voice).key, S.lib.types.default_key(voice), "voice " .. voice .. " its old type")
+  end
+  cleanup()
+end)
+
+test("a 3.7 PSET puts every voice back on its own type", function()
+  math.randomseed(SYSTEM.seed)
+  local subdir, pset, text = pset_3_7("system37-pset-own-types")
+  local context = load_strata({data_subdir = subdir}); finish_startup(context)
+  local S = local_value("S")
+  if not S.voices[2].active then toggle_voice(2) end
+  params:set("v2_type", S.lib.types.record("sub").index)
+  params:set("v2_drift", 0.07)
+  context.clear_engine_calls()
+  params:read(pset)
+  assert_equal(S.lib.types.of(2).key, "fm", "voice 2 back on fm")
+  local saved = {}
+  for _, entry in ipairs(pset_lines(text)) do saved[entry.id] = tonumber(entry.value) end
+  for _, key in ipairs(S.lib.types.record("fm").param_order) do
+    assert_near(params:get("v2_" .. key), saved["v2_" .. key], 1e-9, "v2_" .. key .. ": the PSET's FM line")
+  end
+  assert_near(params:get("v2_drift"), params:lookup_param("v2_drift").controlspec.default, 1e-9,
+    "v2_drift, no line in a 3.7 PSET, takes its default")
+  local ratio
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 1 and call.args[2] == "ratio" then ratio = call.args[3] end
+  end
+  assert_near(ratio, saved.v2_ratio, 1e-9, "the running voice plays the PSET's FM ratio")
   cleanup()
 end)
 

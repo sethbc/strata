@@ -1771,7 +1771,12 @@ test("every control param with a sender sends its LFO-offset value; one without 
         and not softcut_senders[param.id] then
       local sender = S.engine_senders[param.id]
       local value = other_value(param)
-      if sender then
+      if sender and not S.lib.engine_sync.reaches_engine(param.id) then
+        -- 3.8 (0d): a synth key the voice's type lacks: its gated sender sends nothing
+        context.clear_engine_calls()
+        params:set(param.id, value)
+        assert_equal(#context.engine_calls, 0, param.id .. " reaches no engine and makes no engine call")
+      elseif sender then
         local minval, maxval = param_range(param.id)
         S.lib.engine_sync.set_extra_offset("test", param.id, 0.2 * 0.5 * (maxval - minval))
         context.clear_engine_calls()

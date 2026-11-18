@@ -4,6 +4,8 @@ The seven synthesis voices, each voice's granular processor and the per-voice pe
 
 ## Seven Synthesis Voices
 
+Each voice plays one synth type, picked on its VOICE page's `type` row (below). The voices start on these seven, voice 1 on the first and so on, so a fresh Strata sounds as 3.7 did:
+
 1. **Resonator** - Filtered noise through resonant filter banks with slow modulation (level-matched to the other voices and limited, so at its normal settings it no longer pushes the rest of the mix down; as a cross-modulation source it is now as strong as the other voices, where before it drove what it modulated to the limit at almost any depth)
 2. **FM** - Two-operator FM synthesis with evolving harmonic/inharmonic timbres
 3. **Folder** - Sine wave through wavefolder with dynamic folding amount
@@ -12,9 +14,17 @@ The seven synthesis voices, each voice's granular processor and the per-voice pe
 6. **Karplus** - Karplus-Strong plucked string synthesis for organic, physical timbres
 7. **Ring** - Ring modulation between two oscillators for metallic, bell-like textures
 
+### Voice types
+
+A voice's type is its `type` row on VOICE, the first row of the page (and its first parameter in PARAMETERS). Turn E3 there to choose: the new name shows dim while you turn, and the voice changes to it once the encoder has rested for 0.3 s, so turning through five types changes the sound once. Choosing another voice, leaving VOICE or stopping the voice changes it at once. An arc ring on the row does the same. Hold ALT+K2 on the row to put the voice back on its own type.
+
+A type change keeps the voice's other settings: its grains, its sends, its attack and release, its freeze. Every voice keeps the settings of every type, so switching back to a type finds its parameters where the voice left them. A change works on a locked voice (the lock guards against randomize and mutation, not edits), and no randomize or mutation ever changes a type. MAIN's E3 and arc ring 2 follow the new type's main parameter.
+
+A scene stores each voice's type, and a recall puts it back (a fade between two scenes of one type fades the synth parameters; between types, the type and its parameters change at the fade's end). A PSET stores each voice's type and every type's parameters; a PSET saved before 3.8 puts each voice back on its own type.
+
 ## Synthesis Parameters
 
-Each voice's own parameters, by the names the VOICE page's synth section, MAIN and PARAMETERS (the voice's first part) show; the grid's fader pages run through them in this order. MAIN's E3 and arc ring 2 adjust the one marked *main*. Most of the sounds also move on their own: slow random wobbles keep each voice drifting while nothing is turned, so a setting is the center of a movement more than a fixed value. Every voice also has **amp**, its level (0-1; 0.25 to 0.4 to start, by voice), and all but the Sub have **pan** (-1 left to 1 right, 0 center); the VOICE page shows them in its mix section. While a voice's source is a buffer or the input, its synthesis parameters do nothing; amp and pan still do.
+Each type's own parameters, by the names the VOICE page's synth section, MAIN and PARAMETERS (the voice's first part) show; the grid's fader pages run through them in this order. MAIN's E3 and arc ring 2 adjust the one marked *main*. Most of the sounds also move on their own: slow random wobbles keep each voice drifting while nothing is turned, so a setting is the center of a movement more than a fixed value. Every voice also has **amp**, its level (0-1; 0.25 to 0.4 to start, by voice), and all but the Sub have **pan** (-1 left to 1 right, 0 center); the VOICE page shows them in its mix section. While a voice's source is a buffer or the input, its synthesis parameters do nothing; amp and pan still do.
 
 **Resonator**
 

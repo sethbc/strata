@@ -13,7 +13,6 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
   local GRAIN_MODE_OPTIONS = S.constants.GRAIN_MODE_OPTIONS
   local UI_PAGES = S.constants.UI_PAGES
-  local MAIN_PARAMS = S.constants.MAIN_PARAMS
   local BUFFER_MAIN_PARAM = S.constants.BUFFER_MAIN_PARAM
   local INPUT_MAIN_PARAM = S.constants.INPUT_MAIN_PARAM
   local UI = require "ui"
@@ -82,7 +81,7 @@ return function(S)
       local lock = S.locked[i] and " [L]" or ""
       local held = S.lib.notes.held(i)
       local count = held >= LAYOUT.count_from and (" " .. held) or ""
-      items[i] = i .. status .. " " .. MAIN_PARAMS[S.voices[i].name].list_name .. lock .. count
+      items[i] = i .. status .. " " .. S.lib.types.of(i).list_name .. lock .. count
     end
     S.voice_list = UI.ScrollingList.new(0, 10, 1, items)
     S.voice_list.num_visible = 4  -- rows at y 15-48, clear of the hint row at y 62
@@ -95,9 +94,12 @@ return function(S)
     update_voice_list()
   end)
 
+  -- The param MAIN's E3 and arc ring 2 adjust, {key, label, format}: a
+  -- synth voice's type's main (3.8: its record's, lib/types/<key>.lua), a
+  -- buffer voice's position, an input voice's grain size
   function main_param_entry(voice_idx)
     if voice_uses_synth(voice_idx) then
-      return MAIN_PARAMS[S.voices[voice_idx].name]
+      return S.lib.types.of(voice_idx).main
     elseif voice_uses_buffer(voice_idx) then
       return BUFFER_MAIN_PARAM
     end

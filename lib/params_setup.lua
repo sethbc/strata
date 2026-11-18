@@ -757,8 +757,8 @@ return function(S)
   -- A voice param's engine call runs only while the voice is running
   -- (a start sends everything: S.lib.engine_sync.start_voice); the send
   -- budget counts only the sends that reach the engine (#642)
-  local function add_voice_sender(voice_idx, param_id, send)
-    S.lib.engine_sync.add_voice_sender(voice_idx, param_id, send)
+  local function add_voice_sender(voice_idx, param_id, send, reaches)
+    S.lib.engine_sync.add_voice_sender(voice_idx, param_id, send, reaches)
   end
 
   -- A voice param's value through its key's registered filter
@@ -857,7 +857,12 @@ return function(S)
 
     local grain_key = record.grain_keys and record.grain_keys[key]
     local voice_key = S.voice_keys_of(record, voice_idx)[key]
-    if grain_key or voice_key then add_voice_sender(voice_idx, param_id, key_sender(voice_idx, grain_key, voice_key)) end
+    -- 3.8: a record's reaches gates the sender (the synth record's: only
+    -- while the voice's type has the key)
+    local reaches = record.reaches and function() return record.reaches(voice_idx, key) end
+    if grain_key or voice_key then
+      add_voice_sender(voice_idx, param_id, key_sender(voice_idx, grain_key, voice_key), reaches)
+    end
     local added = added_keys[voice_idx]
     added[record.name] = added[record.name] or {}
     added[record.name][key] = true
@@ -909,8 +914,17 @@ return function(S)
         if not own[key] then error("voice params " .. record.name .. ": " .. key .. " is not a param its add added", 0) end
       end
     end
-    for _, key in ipairs(record.voice_rows and record.voice_rows.rows or {}) do
+    local rows = record.voice_rows and record.voice_rows.rows or {}
+    if type(rows) == "function" then rows = rows(voice_idx) end  -- the voice's rows at init
+    for _, key in ipairs(rows) do
       if not own[key] then error("voice params " .. record.name .. ": row " .. key .. " is not a param its add added", 0) end
+    end
+    local scene_keys = record.scene_keys
+    if type(scene_keys) == "function" then scene_keys = scene_keys(voice_idx) end
+    if type(scene_keys) == "table" then
+      for _, key in ipairs(scene_keys) do
+        if not own[key] then error("voice params " .. record.name .. ": scene key " .. key .. " is not a param its add added", 0) end
+      end
     end
     if record.scene_defaults ~= nil then return end
     for key, range in pairs(record.discrete or {}) do
@@ -947,7 +961,17 @@ return function(S)
   -- differs from the record's before it, none for false (the synth params
   -- sit under the heading). Separators are outside a record's count
   function add_voice_params(voice_idx)
-    params:add_separator("voice " .. voice_idx .. ": " .. S.voices[voice_idx].name)
+    -- 3.8 (ruling 19): a record whose count, voice_keys or scene_defaults
+    -- is a function of the voice is checked now, at init
+    for _, record in ipairs(S.registry.voice_params) do
+      if type(record.count) == "function" or type(record.voice_keys) == "function"
+        or type(record.scene_defaults) == "function" then
+        S.check_voice_params(record, voice_idx, 0)
+      end
+    end
+    -- the heading names the voice's own type (its id stays this text; the
+    -- v<i>_type action renames it)
+    params:add_separator("voice " .. voice_idx .. ": " .. tostring(S.lib.types.default_key(voice_idx)))
     add_first_voice_params(voice_idx)
     local previous = false
     for _, record in ipairs(S.registry.voice_params) do
@@ -964,38 +988,14 @@ return function(S)
     check_faders(voice_idx)
   end
 
-  -- Every synthesis param's spec, built once. get_param_spec hands out a copy
-  -- (add_voice_params changes the copy's default). Units and decimals are
-  -- display only (#386, #387)
-  local VOICE_PARAM_SPECS = {
-      freq = controlspec.new(20, 2000, "exp", 0, 100, "Hz"),  -- step 0: MIDI notes keep exact pitch
-      amp = controlspec.new(0, 1, "lin", 0.01, 0.3),
-      pan = controlspec.new(-1, 1, "lin", 0.01, 0),
-      rq = controlspec.new(0.01, 1, "lin", 0.01, 0.1),
-      noise = controlspec.new(0, 1, "lin", 0.01, 0.5),
-      mod1 = controlspec.new(0.01, 1, "lin", 0.01, 0.1, "Hz"),
-      mod2 = controlspec.new(0.01, 1, "lin", 0.01, 0.15, "Hz"),
-      ratio = controlspec.new(0.5, 8, "lin", 0.001, 1.5),  -- fine step: Ring defaults to 1.618
-      index = controlspec.new(0, 10, "lin", 0.1, 2),
-      modFreq = controlspec.new(0.01, 1, "lin", 0.01, 0.05, "Hz"),
-      fold = controlspec.new(0.1, 5, "lin", 0.1, 1),
-      mod = controlspec.new(0.01, 2, "lin", 0.01, 0.2),
-      drift = controlspec.new(0.001, 0.1, "lin", 0.001, 0.02),
-      width = controlspec.new(0.05, 0.95, "lin", 0.01, 0.5),
-      cutoff = controlspec.new(100, 8000, "exp", 10, 2000, "Hz"),
-      res = controlspec.new(0.1, 1, "lin", 0.01, 0.8),  -- the Pulse's: rises with resonance (#314)
-      decay = controlspec.new(0.5, 10, "lin", 0.1, 4, "s"),
-      damping = controlspec.new(0.1, 0.9, "lin", 0.01, 0.5),
-      excite = controlspec.new(0.1, 2, "lin", 0.01, 0.3, "Hz"),
-      brightness = controlspec.new(0, 1, "lin", 0.01, 0.5)
-  }
-
-  -- A copy of a synthesis param's spec; a name with no spec is an error, so a
-  -- param left out of VOICE_PARAM_SPECS never gets a 0-1 range unseen (#315)
+  -- A copy of a synthesis param's spec, its voice type records' one spec
+  -- (S.lib.types.spec, 3.8: the records hold them); a name no type has is
+  -- an error, so a param never gets a 0-1 range unseen (#315). Units and
+  -- decimals are display only (#386, #387)
   function get_param_spec(param_name)
-    local spec = VOICE_PARAM_SPECS[param_name]
-    if not spec then error("get_param_spec: no spec for " .. tostring(param_name), 2) end
-    return spec:copy()
+    local found, spec = pcall(S.lib.types.spec, param_name)
+    if not found then error("get_param_spec: no spec for " .. tostring(param_name), 2) end
+    return spec
   end
 
   -- A voice's engine parts (the groundwork before 3.8, rulings 5 and 11):
@@ -1051,13 +1051,16 @@ return function(S)
     local parts = {}
     for _, record in ipairs(S.registry.voice_params) do
       local grain_keys, voice_keys = record.grain_keys or {}, S.voice_keys_of(record, voice_idx)
+      -- 3.8: a key the record's reaches refuses now is left out (the synth
+      -- part is the voice's current type's keys)
+      local function reaches(key) return record.reaches == nil or record.reaches(voice_idx, key) end
       local kept, voice_level = {}, {}
       for _, key in ipairs(in_send_order(record, grain_keys)) do
-        kept[#kept + 1] = part_entry("grain", key, grain_keys[key])
+        if reaches(key) then kept[#kept + 1] = part_entry("grain", key, grain_keys[key]) end
       end
       if record.sync then kept[#kept + 1] = {send = function(index) record.sync(index) end} end
       for _, key in ipairs(in_send_order(record, voice_keys)) do
-        voice_level[#voice_level + 1] = part_entry("voice", key, voice_keys[key])
+        if reaches(key) then voice_level[#voice_level + 1] = part_entry("voice", key, voice_keys[key]) end
       end
       parts[#parts + 1] = {name = record.name, kept = kept, voice_level = voice_level}
       if record.name == "crossmod" then parts[#parts + 1] = {name = "bend", kept = {}, voice_level = {{send = send_bend}}} end
@@ -1065,22 +1068,39 @@ return function(S)
     return parts
   end
 
-  -- A voice's scene keys (the groundwork before 3.8, rulings 4 and 5):
-  -- list, the entries {key, default, range, limits} in recall order, and
-  -- by_key, the same entries by key. A built-in record's (synth, grain,
-  -- crossmod) scene keys are every value its add added for the voice (the
-  -- grain record's source is no value), each default its param's
-  -- (param_default, read at the call, after init); another record's are
-  -- its scene_defaults' keys. The order: the synth record's keys sorted,
-  -- the grain record's sorted, the crossmod record's sorted, then every
-  -- other record's scene keys sorted together, so a recall sets freq
-  -- before freeze and loop_length before loop_start. range {min, max}
+  -- A voice's scene keys (the groundwork before 3.8, rulings 4 and 5; 3.8,
+  -- package 0d: a type's): list, the entries {key, default, range, limits,
+  -- synth} in recall order, and by_key, the same entries by key, for the
+  -- type type_key (nil: the voice's current type). A record with
+  -- scene_keys (the built-in synth, grain and crossmod) has those keys
+  -- (true: every value its add added for the voice, the grain record's
+  -- source being no value; a function: what it gives for the voice and the
+  -- type key, the synth record's that type's keys, none for a type this
+  -- build lacks), each default its param's (param_default, read at the
+  -- call, after init), the synth record's marked synth = true; another
+  -- record's are its scene_defaults' keys. The order: each scene_keys
+  -- record's keys sorted, in registration order (synth, grain, crossmod),
+  -- then every other record's scene keys sorted together, so a recall sets
+  -- freq before freeze and loop_length before loop_start. range {min, max}
   -- marks a discrete key (the record's discrete: the grain envelope and
   -- mode, the mod sources, ...), limits a record's scene_ranges. solo and
   -- note_cap are no scene keys (their records give no scene_defaults)
-  local BUILT_IN_RECORDS = {synth = true, grain = true, crossmod = true}
+  local SYNTH_RECORD = "synth"
 
-  function M.voice_scene_keys(voice_idx)
+  -- A scene_keys record's keys for the voice and type, sorted
+  local function record_scene_keys(record, voice_idx, type_key)
+    local keys, given = {}, record.scene_keys
+    if given == true then
+      for key in pairs(added_keys[voice_idx][record.name] or {}) do keys[#keys + 1] = key end
+    else
+      if type(given) == "function" then given = given(voice_idx, type_key) end
+      for index, key in ipairs(given) do keys[index] = key end
+    end
+    table.sort(keys)
+    return keys
+  end
+
+  function M.voice_scene_keys(voice_idx, type_key)
     if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then
       error("voice_scene_keys: voice " .. tostring(voice_idx) .. " is not 1.." .. NUM_VOICES, 2)
     end
@@ -1088,17 +1108,16 @@ return function(S)
     local list, by_key = {}, {}
     local function add(key, default, record)
       local entry = {key = key, default = default, range = record.discrete and record.discrete[key],
-        limits = record.scene_ranges and record.scene_ranges[key]}
+        limits = record.scene_ranges and record.scene_ranges[key], synth = record.name == SYNTH_RECORD or nil}
       list[#list + 1] = entry
       by_key[key] = entry
     end
     local registered, records = {}, {}
     for _, record in ipairs(S.registry.voice_params) do
-      if BUILT_IN_RECORDS[record.name] then
-        local keys = {}
-        for key in pairs(added_keys[voice_idx][record.name] or {}) do keys[#keys + 1] = key end
-        table.sort(keys)
-        for _, key in ipairs(keys) do add(key, param_default(prefix .. key), record) end
+      if record.scene_keys ~= nil then
+        for _, key in ipairs(record_scene_keys(record, voice_idx, type_key)) do
+          add(key, param_default(prefix .. key), record)
+        end
       else
         for key, default in pairs(S.voice_scene_defaults(record, voice_idx)) do
           registered[#registered + 1] = key

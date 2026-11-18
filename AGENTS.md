@@ -64,6 +64,7 @@ A top-level module `lib/<name>.lua` the table leaves out is `S.lib.<name>`, its 
 | `strata.lua` (entry points) | | `docs/notes/lua/state-and-voices.md` | strata_test.lua, structure_test.lua |
 | `lib/state.lua`, `lib/constants.lua` | S itself, S.constants | `docs/notes/lua/state-and-voices.md` | structure_test.lua, registries_test.lua |
 | `lib/voices.lua` | `voices` | `docs/notes/lua/state-and-voices.md` | voices_test.lua |
+| `lib/types/<key>.lua` (one per voice type, in type order) | `types_<key>` | `docs/notes/lua/types.md` | types_test.lua, types_<key>_test.lua |
 | `lib/ui/frame.lua` | `ui_frame` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_layout_test.lua |
 | `lib/side_files.lua` | `side_files` | `docs/notes/lua/data-files.md` (Side files) | side_files_test.lua |
 | `lib/midi_in.lua` | `midi_in` | `docs/notes/lua/midi.md` | midi_in_test.lua |
@@ -97,7 +98,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 - **`S`** (`lib/state.lua`) is built fresh on every load. State more than one module uses is a field of `S` under its plain name; state one module uses stays local to it. `S.constants` is `lib/constants.lua`.
 - **Includes**: only `strata.lua` calls `include`, once per module, always as `include("lib/<path>")`, never `"strata/lib/..."` (a test checks).
 - **A module** is a constructor, `return function(S) local M = {} ... return M end`, ending with exactly `  return M` and `end`; its table is `S.lib.<name>`, or `S.lib.<dir>_<basename>` in a subfolder. Functions that were global stay global, in their module (`MODULE_HOMES`).
-- **Registries** (`S.registry`) are read at init or at each use, never at include time: eight close at init, the other 25 stay open, and each `S.register_*` function checks its argument and refuses a duplicate name. The list, record shapes and which close: `docs/notes/lua/state-and-voices.md` (Modules and `S`).
+- **Registries** (`S.registry`) are read at init or at each use, never at include time: nine close at init, the other 25 stay open, and each `S.register_*` function checks its argument and refuses a duplicate name. The list, record shapes and which close: `docs/notes/lua/state-and-voices.md` (Modules and `S`).
 - **`S.performance`** is the tier the engine runs (`lib/performance.lua` reads the engine's `performance_active.data`). Every tier-dependent spec reads it; the setting itself (`performance.data`) is SETUP's, never a param.
 - Tests reach script state with `local_value(name)` and `find_upvalue(name)`: a field of `S`, then of `S.constants`, then an upvalue of a global function.
 
@@ -151,7 +152,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 
 **Index conversion**: voices are 0-indexed in SC and 1-indexed in Lua, so always pass `voice_idx - 1`. Mod sources go through `engine_mod_source()` (Lua 0 = none / 1-7 → SC -1 / 0-6).
 
-**The `voices` table is the only source of values.** The engine holds no per-voice defaults: a start (`S.lib.engine_sync.start_voice`) sends every value, and param actions reach the engine only while a voice is active, except the `v<i>_source` action, which also reaches stopped voices. The order: `docs/notes/lua/engine-sync.md`.
+**The `voices` table is the only source of values.** The engine holds no per-voice defaults: a start (`S.lib.engine_sync.start_voice`) sends every value, and param actions reach the engine only while a voice is active, except the `v<i>_source` and `v<i>_type` actions, which also reach stopped voices. The order: `docs/notes/lua/engine-sync.md`.
 
 ### Invariants that are easy to break
 
@@ -202,7 +203,7 @@ The engine's (under docs/notes/engine/):
 
 The Lua side's, across modules:
 - **Param → engine**: a control param's action calls `send_param_to_engine(id, value)` with an `S.engine_senders[id]` entry, never `engine.*`; a command carrying several params reads the others with `engine_param_value(id)`; LFOs never `params:set` their destination. `docs/notes/lua/engine-sync.md`, `docs/notes/lua/lfos.md`
-- **Scenes**: a new captured field needs `validate_scene` coverage and a `fill_scene` default; discrete keys switch at the end of a transition, never crossfade; a recall sends one full sync per running voice whose source changed. `docs/notes/lua/scenes.md`
+- **Scenes**: a new captured field needs `validate_scene` coverage and a `fill_scene` default; discrete keys switch at the end of a transition, never crossfade; a recall sends one full sync per running voice whose source or type changed; a scene's synth keys are its own type's. `docs/notes/lua/scenes.md`
 - **Data files** (`scenes.data`, `buffers.data`, `macros.data`, `matrix.data`, `gestures.data`, `sequences.data`, `samples.data`, `grids.data`, `notes.data`, `io.data`) are written only through `S.lib.data_files.write` and read only through `S.lib.data_files.read`, never `tab.save` or `tab.load`; a backup never replaces an earlier one. `docs/notes/lua/data-files.md`, `docs/notes/lua/scenes.md`, `docs/notes/lua/buffers.md`
 - **Source tests**: `voice_uses_synth(i)` / `voice_uses_buffer(i)`, never `not voice_uses_synth` (that includes input). `docs/notes/lua/state-and-voices.md`
 - **Grid, arc and MIDI handlers live on the vport only**, never on the raw device passed to `grid.add`. `docs/notes/lua/grid-core.md`, `docs/notes/lua/arc-core.md`, `docs/notes/lua/midi.md`, `docs/notes/lua/io/ports.md`
@@ -214,6 +215,7 @@ The Lua side's, across modules:
 - **Selected voice**: after init, `S.selected_voice` changes only through `S.lib.ui_keys.select_voice_by`. `docs/notes/lua/midi.md`
 - **Filter restore mix**: `S.fx_last_mix.filter` changes only in `lib/params_setup.lua`, never in the FX page; the delay and reverb have none. `docs/notes/lua/pages/fx.md`
 - **Per-voice params** are `S.register_voice_params` records (the built-ins `synth`, `grain`, `crossmod` first), added with `add_voice_param`; a record names the keys MAIN's randomize, the mutations and the fader pages reach (`main_randomize`, `mutate`, `fader`); registered LFO destinations join their voice's group. `docs/notes/lua/params.md`
+- **Voice types**: a type is only appended, never reordered (Lua's `S.register_voice_type` order is the engine's `voiceTypeDefs`, a docs test); a synth key's sender reaches the engine only while the voice's type has it; a scene's synth keys are checked against its own `type`. `docs/notes/lua/types.md`
 - **Mute and solo**: a mute silences in the mix stage (`voiceMute`, sent as `S.lib.voice_mix.silenced(voice)`, never as a stored value) and never stops a voice; scenes store mutes and never solos. `docs/notes/lua/voice-mix.md`
 - **Loop pairs**: scenes set `loop_length` before `loop_start` (sorted key order), so the length's filter stands down during a recall or transition, the start's action cuts a length that does not fit, and a loaded pair goes through `normalize_scene`. `docs/notes/lua/loops.md`, `docs/notes/lua/scenes.md`
 - **Scale quantize**: one `freq` filter snaps a per-voice shadow note that only a turn moves (`S.lib.ui_detent.as_turn`); every other set snaps its own value; `scaleNote` is resent whenever it moves; a voice's `quantize` loads ahead of its `freq` (`add_first`). `docs/notes/lua/variation.md`
@@ -268,7 +270,7 @@ How to run each check, what it needs and how CI runs them: `docs/checks.md`. How
 
 ## Code Style Guidelines
 
-**Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals in each module using them), among them `NUM_VOICES` (7), `NUM_SCENES` (16), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (9), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (10, `#UI_PAGES`), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `NUM_LFOS` (6), `NOTE_SLOTS` (8) and `NORNS_SAMPLE_RATE` (48000); the others are listed in `docs/notes/lua/state-and-voices.md` (Owns). The engine mirrors several, and docs tests compare them (`docs/checks.md`, The Lua tests). The slot length is a tier value, not a constant: read `S.performance.buffer_seconds`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
+**Named constants, never magic numbers.** They live in `lib/constants.lua` (`S.constants`, aliased as locals in each module using them), among them `NUM_VOICES` (7), `NUM_SCENES` (16), `PATTERN_LENGTH` (16), `SCENE_DATA_VERSION` (10), `NUM_MOD_SLOTS` (3), `NUM_UI_PAGES` (10, `#UI_PAGES`), `MAX_STEP_LEVEL` (15), `NUM_BUFFERS` (8), `NUM_LFOS` (6), `NOTE_SLOTS` (8) and `NORNS_SAMPLE_RATE` (48000); the others are listed in `docs/notes/lua/state-and-voices.md` (Owns). The engine mirrors several, and docs tests compare them (`docs/checks.md`, The Lua tests). The slot length is a tier value, not a constant: read `S.performance.buffer_seconds`. Never hardcode 7, 8 or 16 in voice, scene, pattern or buffer code (bare numbers in grid code are coordinates and LED levels).
 
 **Lua's 200-local limit applies to each function, checked by a test**: every file's main chunk and every module constructor keeps at least 30 locals free; group a feature's constants in one table (`LFO_PAGE`, ...) and split a module that runs short (`docs/notes/lua/state-and-voices.md`).
 
@@ -283,7 +285,7 @@ How to run each check, what it needs and how CI runs them: `docs/checks.md`. How
 ### CRITICAL: keep Lua and the engine in sync
 
 - A new or changed `addCommand` needs: matching `engine.*` calls (same count and types; SC type codes i/f/s), the table row above, and the engine stub picks it up from the SC source.
-- A new SynthDef argument the user controls needs its `voices` default, its `param_order` place, a `get_param_spec()` spec and the exact case-sensitive name; a grain param is a record's `grain_keys` entry.
+- A new SynthDef argument the user controls needs its type record's default, `param_order` place and spec and the exact case-sensitive name; a grain param is a record's `grain_keys` entry.
 - Lua defaults are what the engine plays (`S.lib.engine_sync.start_voice` sends them at every start). SynthDef defaults for the filter and delay must equal the Lua param defaults, because the script never bangs its params.
 - New voice-level controls that a buffer or input grain synth also needs belong in `voiceControls` / `grainControls` and `controlNameSets` (see Audio Sources in `docs/notes/engine/grains.md`).
 
@@ -296,7 +298,7 @@ Details: the UI core's notes (`docs/notes/lua/ui-core.md`, an index of docs/note
 - **Redraws**: when state the screen or arc shows changes, call `request_redraw()` (`S.lib.ui_frame.request_screen_redraw()` for a frequent change no arc ring shows); never call `redraw()` or `arc_redraw()` from script code, nor `request_redraw()` from a page's `draw()`. Grid redraws stay direct (`grid_redraw()`) (`docs/notes/lua/ui/redraws.md`).
 - **Header and hints**: `redraw()` draws the header (y=8, `draw_header()`, positions in `S.constants.HEADER`) and the hint row (y=62); a page never calls `draw_hints`. Transient messages go through `S.lib.ui_flash`, never a page's own flash clock. Indicators use `[BRACKETS]` (`docs/notes/lua/ui/header-and-flashes.md`; MAIN's columns: `docs/notes/lua/pages/main.md`).
 - **Cursors other modules move** go through their owner: the VOICE cursor through `S.lib.ui_cursors` (`sync`, `place`, `move`; never `clamp_all()` alone or a bare assignment), the SCENES cursor through `S.lib.pages_scenes.move_cursor` (`docs/notes/lua/pages/scenes.md`), row pages through `S.lib.ui_field_list`. A ring never reaches into a page's state (`docs/notes/lua/ui/field-list-and-cursors.md`).
-- A new voice type needs a `MAIN_PARAMS` entry (E3, the MAIN display and arc ring 2 follow; `list_name` is its voice-list name, at most 5 characters) and `get_param_spec()` specs.
+- A new voice type is a `lib/types/<key>.lua` record (`S.register_voice_type`: keys, specs, `main`, `note_main`, envelope) and a def appended to `voiceTypeDefs` and `noteMainRanges` (`docs/notes/lua/types.md`); `list_name` is at most 5 characters.
 - The layout tests check every page for overlapping strings, text off-screen, the hint row and the MAIN divider; keep them passing. They miss strings crowding on nearby baselines and text over a rect or line: look at the page renders after a layout change (`docs/notes/lua/ui/layout-and-renders.md`).
 - Before finishing, check that new values are visible with units, hints match the keys, all 7 voices fit, and nothing leaves 128×64.
 
