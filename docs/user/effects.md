@@ -29,7 +29,7 @@ The voice filter's cutoff and both sends are LFO destinations (`v1 vfilt`, `v1 d
 
 ## Delay freeze and clear
 
-Both are on the [FX page](pages/fx.md) (its `freeze` and `clear` rows, and ALT+K3 on any delay row freezes or releases) and in the fx group of the PARAMETERS menu. While the delay is frozen a small square shows in the header on every page.
+Both are on the [FX page](pages/fx.md) (its `freeze` and `clear` rows, and ALT+K3 on any delay row freezes or releases) and in the fx group of the PARAMETERS menu. While the delay is frozen, FX's dot in the header stands tall on every page.
 
 - **delay freeze** - Holds what the delay is playing as a loop you can play over: within 20 ms its feedback goes to exactly 100% and it stops taking in sound, so the loop keeps its level, its brightness and, with ping-pong on, its width (a ping-pong of 50% or more is held as full ping-pong, below it as none). The loop keeps its length: a tempo change under sync or a new delay time waits until you release the freeze. Released, the loop fades away at the delay's feedback and the delay takes in sound again.
 - **delay clear** - Empties the delay at once: its echoes stop, and the first echo of what comes in after plays one delay time later. Frozen, it empties the loop (it stays frozen, silent, until released).

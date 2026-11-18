@@ -1099,6 +1099,7 @@ local DESCENDER_CLEARANCE = 7
 -- and no dots; no header rect (dot, play mark) under a header string; and a
 -- hint row at y 62.
 local function assert_screen_layout(context, where)
+  local header_constants = local_value("S").constants.HEADER
   local rows = {}
   for _, entry in ipairs(context.screen.texts) do
     local left, right = text_span(entry)
@@ -1149,7 +1150,9 @@ local function assert_screen_layout(context, where)
         assert_true(rect.x + rect.w <= text.left or rect.x >= text.right,
           string.format("a header rect at x %d-%d is under '%s' (%s)", rect.x, rect.x + rect.w - 1, text.text, where))
       end
-      if rect.w == HEADER_DOT_SIZE and rect.h == HEADER_DOT_SIZE then table.insert(dots, rect) end
+      if rect.w == HEADER_DOT_SIZE and (rect.h == HEADER_DOT_SIZE or rect.h == header_constants.frozen_h) then
+        table.insert(dots, rect)
+      end
     end
   end
   local flash = local_value("S").lib.ui_flash.text("header")
@@ -1159,8 +1162,12 @@ local function assert_screen_layout(context, where)
   else
     assert_equal(#dots, #PAGE_TITLES, "a page dot per page (" .. where .. ")")
     table.sort(dots, function(a, b) return a.x < b.x end)
+    -- 3.8: while anything is frozen FX's dot is the 2x5 bar, and only then
+    local bar_index = local_value("S").lib.fx_hold.any_frozen() and local_value("S").constants.UI_PAGES.index.FX
     for index, dot in ipairs(dots) do
       assert_equal(dot.x, HEADER_DOTS_X + (index - 1) * HEADER_DOT_SPACING, "page dot " .. index .. " (" .. where .. ")")
+      assert_equal(dot.h, index == bar_index and header_constants.frozen_h or HEADER_DOT_SIZE,
+        "page dot " .. index .. "'s height (" .. where .. ")")
     end
     assert_true(dots[1].x - title_right >= 4, "the page dots start at least 4 px after " .. title .. " (" .. where .. ")")
   end

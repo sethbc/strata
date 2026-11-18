@@ -11,8 +11,8 @@
 -- is 0 at the lift; a freeze set while its effect is bypassed is refused,
 -- the param put back to off and echoed to a mapped controller (plan
 -- ruling 26). The functions are FX's, the
--- header's and the grids' (packages 4a, 4b): offered, frozen, toggle,
--- release, clear, any_frozen. See docs/notes/lua/fx-hold.md.
+-- header's and the grids' (packages 4a, 4b): offered, frozen, can_freeze,
+-- toggle, release, clear, any_frozen. See docs/notes/lua/fx-hold.md.
 
 return function(S)
   local M = {}
@@ -41,11 +41,17 @@ return function(S)
     return false
   end
 
+  -- Whether toggle would freeze or release an effect now: offered and not
+  -- bypassed (a bypassed effect has no node, and its freeze is refused).
+  -- FX's ALT+K3 and its hint ask this too
+  function M.can_freeze(effect)
+    return M.offered(effect) and not S.lib.voice_mix.bypassed(effect)
+  end
+
   -- Freeze or release an effect, through set_binary_param (a controller
-  -- mapped to the param follows, #538). Nothing for an effect not offered
-  -- or bypassed
+  -- mapped to the param follows, #538). Nothing unless can_freeze
   function M.toggle(effect)
-    if not M.offered(effect) or S.lib.voice_mix.bypassed(effect) then return end
+    if not M.can_freeze(effect) then return end
     set_binary_param(M.FX_HOLD[effect].freeze_id, M.frozen(effect) and 0 or 1)
   end
 

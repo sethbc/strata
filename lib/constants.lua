@@ -106,7 +106,8 @@ UI_PAGES.ARC_FULL_TURN_MARGIN = 1e-6
 local HEADER = {dots_x = 32, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
   dot_y = 4, mutation_x = 76, play_x = 90, play_y = 3, rec_x = 96, scene_right = 127, status_x = 79,
   status_play_x = 73, flash_x = 40, flash_width = 74, flash_seconds = 1.5,
-  frozen_x = 70, frozen_y = 4, frozen_size = 3, frozen_level = 15}  -- 3.8: the frozen mark, after the tenth dot
+  -- 3.8: while anything is frozen, FX's own dot stands as a bar (its x is the dot's)
+  frozen_y = 2, frozen_w = 2, frozen_h = 5, frozen_level = 15}
 
 -- The params the SCENES page lists after the sixteen slots: its cursor's
 -- stops NUM_SCENES + 1 .. NUM_SCENES + #SCENES_FIELDS (17-23;

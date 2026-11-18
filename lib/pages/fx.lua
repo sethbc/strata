@@ -119,13 +119,6 @@ return function(S)
   end
   M.row_param_id = row_param_id
 
-  -- Whether ALT+K3 on the effect's rows freezes or releases it: offered and
-  -- running (a bypassed effect has no node to freeze, and its freeze is
-  -- refused)
-  local function freezes(effect)
-    return effect ~= nil and S.lib.fx_hold.offered(effect) and not S.lib.voice_mix.bypassed(effect)
-  end
-
   -- Whether K3 on the row clears the delay: the clear row of a running delay
   local function clears(row)
     return row.hold == "clear" and not S.lib.voice_mix.bypassed(row.effect)
@@ -196,7 +189,7 @@ return function(S)
     local row = cursor_row()
     if alt_held then
       local hint = S.lib.ui_alt.k2_hint(record)
-      if freezes(row.effect) then
+      if S.lib.fx_hold.can_freeze(row.effect) then
         hint = hint .. " " .. (S.lib.fx_hold.frozen(row.effect) and FX.hints.unfreeze or FX.hints.freeze)
       end
       local param_id = row_param_id(row)
@@ -301,7 +294,7 @@ return function(S)
       S.lib.ui_alt.k2_down(); request_redraw()
     elseif n == 3 then
       local effect = cursor_row().effect
-      if freezes(effect) then S.lib.fx_hold.toggle(effect) end
+      S.lib.fx_hold.toggle(effect)  -- nothing unless S.lib.fx_hold.can_freeze(effect)
     end
   end
   local function fx_alt_key_release(n)
@@ -365,12 +358,6 @@ return function(S)
       {name = "delay frozen", setup = function()
         S.lib.fx_hold.toggle("delay")
         S.fx_row = row_of("delay_time")
-      end},
-      -- frz on the reverb's section row where its freeze is offered (the
-      -- high tier, if a later package adds it); else the section unmarked
-      {name = "reverb frozen on high", setup = function()
-        S.lib.fx_hold.toggle("reverb")
-        S.fx_row = row_of("reverb_mix")
       end},
       {name = "the clear row", setup = function() S.fx_row = hold_row_of("delay", "clear") end},
       -- the widest hint: K2:cancel K3:unfreeze E3:fine (122 px)
