@@ -4520,4 +4520,49 @@ test("a scene with source 17 is valid; one with 18 is set aside", function()
   assert_true(not validate_scene(scene), "source " .. (#C.SOURCE_OPTIONS + 1) .. " is set aside")
 end)
 
+-- 3.8 (4d, ruling 49): whether a scenes file was found at this start, for
+-- the factory's first run
+test("the scenes start step records its outcome", function()
+  local context = load_strata({ data_subdir = "outcome-" .. fresh_name() })
+  local S = local_value("S")
+  assert_equal(S.scene_file.start_outcome, "missing", "a fresh data folder: missing")
+  capture_scene(1)
+  cleanup()
+  context = load_strata({ data_subdir = context.data_dir:match("([^/]+)/$") })
+  S = local_value("S")
+  assert_equal(S.scene_file.start_outcome, "loaded", "a saved scenes file: loaded")
+  local dir = context.data_dir .. "strata/"
+  write_text(dir .. "scenes.data", "garbage")
+  context = load_strata({ data_subdir = context.data_dir:match("([^/]+)/$") })
+  assert_equal(local_value("S").scene_file.start_outcome, "unreadable", "an unreadable file: unreadable")
+  write_text(dir .. "scenes.data", tabutil_text({ version = 8, scenes = {} }))
+  load_strata({ data_subdir = context.data_dir:match("([^/]+)/$") })
+  assert_equal(local_value("S").scene_file.start_outcome, "older", "a 3.7 file: older")
+end)
+
+test("a read-only scenes load neither backs up nor marks a PSET", function()
+  local context, S = pset_session()
+  scramble_state(3); S.lib.scenes.save(4)
+  local set_scenes = deep_copy(S.scenes)
+  local base = context.data_dir .. "set"
+  assert_true(S.lib.data_files.write(base .. S.lib.scenes.PSET_SCENES.side_suffix,
+    { version = S.constants.SCENE_DATA_VERSION, scenes = set_scenes }))
+  scramble_state(8); S.lib.scenes.save(1)
+  assert_equal(S.scene_file.pset, nil, "the live scenes are in no PSET")
+  local kept = S.lib.scenes.back_up_live()
+  assert_equal(kept, true, "the explicit backup is made")
+  assert_true(util.file_exists(live_scenes_path(context) .. ".bak"), "as scenes.data.bak")
+  local hook
+  for _, record in ipairs(S.registry.pset_hooks) do
+    if record.name == "scenes" then hook = record end
+  end
+  S.lib.side_files.read_only(function() hook.read(base, nil, base .. ".params", false) end)
+  assert_equal(S.lib.data_files.encode(S.scenes), S.lib.data_files.encode(set_scenes), "the set's scenes are taken")
+  assert_equal(S.scene_file.pset, nil, "no PSET is marked as holding them")
+  assert_true(not util.file_exists(live_scenes_path(context) .. ".bak.2"), "one .bak, the explicit one's")
+  local live = S.lib.data_files.read(live_scenes_path(context))
+  assert_equal(S.lib.data_files.encode(live.scenes), S.lib.data_files.encode(set_scenes), "the live file holds them")
+  assert_equal(live.pset, nil, "and names no PSET")
+end)
+
 end

@@ -53,6 +53,24 @@ test("each load gets its own data directory, even after the same random seed (#5
   assert_true(first.data_dir ~= second.data_dir, "two loads share " .. first.data_dir)
 end)
 
+-- 3.8 (4d): the script's folder, as Script.load sets it (with a trailing
+-- /), an empty folder of the load's own unless the test names one, so no
+-- test start finds a factory set
+test("norns.state.path is an empty folder unless a test names one", function()
+  local context = load_strata()
+  local path = norns.state.path
+  assert_equal(path, context.data_dir .. "script/", "the load's own script folder")
+  assert_equal(context.script_dir, path, "the context names it")
+  assert_true(util.file_exists(path), "it exists")
+  local listing = io.popen("ls -A " .. h.shell_quote(path)):read("*a")
+  assert_equal(listing, "", "and is empty")
+  local named = data_root .. "named_script/"
+  os.execute("mkdir -p " .. h.shell_quote(named))
+  context = load_strata({ script_dir = named })
+  assert_equal(norns.state.path, named, "a named folder is the script's")
+  assert_equal(context.script_dir, named)
+end)
+
 -- A name that is no field of S or S.constants is looked for among the
 -- global functions' upvalues; two of them holding different locals of that
 -- name would make the answer depend on pairs(_G)'s order, which changes

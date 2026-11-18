@@ -107,6 +107,24 @@ test("a file's settings come back when it is loaded into another slot", function
   assert_equal(samples().settings(2).key, 57, "remembered across sessions")
 end)
 
+-- 3.8 (4d, ruling 53): a factory set's records are checked before they are
+-- stored, as a samples.data entry is
+test("store_file refuses a record its checks refuse", function()
+  local context = load_strata(); finish_startup(context)
+  local file = context.audio_dir .. "refused.wav"
+  assert_equal(samples().store_file(file, { tempo = 1000 }), false, "a tempo of 1000 is refused")
+  settle_load(context, 1, file, 8)
+  assert_equal(samples().settings(1).tempo, nil, "nothing was stored for the file")
+  context.clock.run_for(0.11)
+  local saved = samples_file(context)
+  assert_true(saved == nil or #saved.files == 0 or saved.files[1].settings.tempo == nil, "nor written")
+  local good = context.audio_dir .. "kept.wav"
+  assert_equal(samples().store_file(good, { tempo = 90, key = 57 }), true, "a record the checks take is stored")
+  settle_load(context, 2, good, 8)
+  assert_equal(samples().settings(2).tempo, 90)
+  assert_equal(samples().settings(2).mode, 1, "a field the record lacks takes its default")
+end)
+
 test("a start point is part of the key", function()
   local context = load_strata(); finish_startup(context)
   local file = context.audio_dir .. "long.wav"
