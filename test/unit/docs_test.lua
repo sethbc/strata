@@ -2206,10 +2206,49 @@ test("the engine check's default timeout fits a full local run and CI keeps 570 
   assert_true(step ~= nil, "the workflow has an Engine check step")
   assert_true(step:find("ENGINE_CHECK_TIMEOUT=570", 1, true) ~= nil, "CI passes ENGINE_CHECK_TIMEOUT=570")
   assert_true(step:find("timeout %-%-kill%-after=%d+ 600 ") ~= nil, "CI keeps its 600 s limit around the shard, with a kill after it (#790)")
-  assert_true(read_repo_file("test/run_engine_check.sh"):find("ENGINE_CHECK_TIMEOUT:-1800", 1, true) ~= nil,
-    "the runner's default timeout is 1800 s")
-  assert_true(read_repo_file("test/engine_check.scd"):find("{ 1770 }", 1, true) ~= nil,
-    "the check's fallback deadline is 1770 s")
+  local default = tonumber(read_repo_file("test/run_engine_check.sh"):match("ENGINE_CHECK_TIMEOUT:%-(%d+)}") or "")
+  assert_true(default ~= nil, "the runner has a default timeout (ENGINE_CHECK_TIMEOUT:-<seconds>)")
+  assert_true(read_repo_file("test/engine_check.scd"):find("{ " .. (default - 30) .. " }", 1, true) ~= nil,
+    "the check's fallback deadline is the default timeout less 30 s, " .. (default - 30) .. " s")
+end)
+
+-- #816: a full run in one sclang (every area, no shards) has room under the
+-- runner's default timeout: at least ENGINE_TIMEOUT_ROOM times the sum the
+-- workflow's area times state (the sum is the times' own: structure_test.lua,
+-- #731), so a new area cannot close the gap unnoticed; and the docs say the
+-- default and the deadline, 30 s under it, as they are
+local ENGINE_TIMEOUT_ROOM = 1.5
+local function engine_timeout_problems(workflow, runner)
+  local problems = {}
+  local stated = tonumber((workflow:match("Area times on [^\n]*\n(.-) s in all") or ""):match("(%d+)$") or "")
+  local default = tonumber(runner:match("ENGINE_CHECK_TIMEOUT:%-(%d+)}") or "")
+  if not stated then problems[#problems + 1] = "the workflow's area times state no sum (<n> s in all)" end
+  if not default then problems[#problems + 1] = "the runner has no default timeout (ENGINE_CHECK_TIMEOUT:-<seconds>)" end
+  if stated and default and default < ENGINE_TIMEOUT_ROOM * stated then
+    problems[#problems + 1] = "the default timeout, " .. default .. " s, is under " .. ENGINE_TIMEOUT_ROOM
+      .. " times the area times' " .. stated .. " s (" .. ENGINE_TIMEOUT_ROOM * stated .. " s)"
+  end
+  return problems
+end
+
+test("the engine check's default timeout is half as much again as a full run's area times (#816)", function()
+  local workflow, runner = read_repo_file(".github/workflows/test.yml"), read_repo_file("test/run_engine_check.sh")
+  assert_equal(table.concat(engine_timeout_problems(workflow, runner), " | "), "", "the default timeout's room")
+  -- #816's figures: 1733 s of areas (CI run 44395161831) against 1800 s
+  local planted = "  # Area times on SuperCollider 3.13 at 3.8 (s):\n  # lifecycle 1000,\n  # record 733: 1733 s in all.\n"
+  assert_equal(table.concat(engine_timeout_problems(planted, "sclang_timeout=${ENGINE_CHECK_TIMEOUT:-1800}\n"), " | "),
+    "the default timeout, 1800 s, is under 1.5 times the area times' 1733 s (2599.5 s)", "#816's 1800 s is refused")
+  assert_equal(table.concat(engine_timeout_problems(planted, "sclang_timeout=${ENGINE_CHECK_TIMEOUT:-2700}\n"), " | "),
+    "", "2700 s has room for 1733 s")
+  assert_equal(#engine_timeout_problems("", ""), 2, "no table and no default are both refused")
+  local default = tonumber(runner:match("ENGINE_CHECK_TIMEOUT:%-(%d+)}"))
+  for _, path in ipairs({ "docs/checks.md", "docs/notes/test-harness/engine-check-runner.md", "docs/notes/engine/structure.md",
+      "test/run_engine_check.sh", "test/engine_check.scd" }) do
+    local text = read_repo_file(path)
+    for _, seconds in ipairs({ default, default - 30 }) do
+      assert_true(text:find("%f[%d]" .. seconds .. "%f[%D]") ~= nil, path .. " gives the default timeout and its deadline: " .. seconds .. " s")
+    end
+  end
 end)
 
 -- British spellings that must not creep back in (whole words, case-insensitive).

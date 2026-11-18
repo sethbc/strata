@@ -68,7 +68,7 @@ case ${STRATA_ENGINE_CHECK_ONE_SCLANG:-} in
   *) echo "STRATA_ENGINE_CHECK_ONE_SCLANG must be 1 or empty, got \"$STRATA_ENGINE_CHECK_ONE_SCLANG\"" >&2; exit 2 ;;
 esac
 # checked here, before any shard of a full run starts (each would refuse it)
-sclang_timeout=${ENGINE_CHECK_TIMEOUT:-1800}
+sclang_timeout=${ENGINE_CHECK_TIMEOUT:-2700}
 case $sclang_timeout in
   ''|*[!0-9]*) echo "ENGINE_CHECK_TIMEOUT must be a number of seconds, got \"$sclang_timeout\"" >&2; exit 2 ;;
 esac
@@ -206,11 +206,12 @@ YAML
 # fails to compile: it waits at its prompt, holding the caller's lock (and
 # CI's job) for good. So the run is wrapped in timeout (sclang_timeout
 # seconds: a full run of every area takes about 29 minutes (3.14.1 and 3.13, 1733 s of areas, the figures in the workflow's comment), the check's own deadline
-# is 30 s less (1770 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
+# is 30 s less (2670 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
 # long soak given a longer ENGINE_CHECK_TIMEOUT gets a longer deadline too;
-# a full run in one sclang has only about 40 s of room under it at CI's
-# speed and may meet it, so give such a run a larger ENGINE_CHECK_TIMEOUT,
-# #816 will raise the default),
+# the default, 2700 s, is 1.56 times those 1733 s (CI's run 44395161831),
+# so a full run in one sclang has 937 s of room under the deadline at CI's
+# speed, #816, and a docs test holds the default at 1.5 times the
+# workflow's sum),
 # CI passes ENGINE_CHECK_TIMEOUT=570 so each shard stays inside its 600 s) and killed as soon as sclang reports a compile error.
 # timeout signals the whole process group, the scsynth sclang booted
 # included; the script's own stop (and its limit, when there is no timeout
