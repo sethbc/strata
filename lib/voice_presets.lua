@@ -1,0 +1,246 @@
+-- lib/voice_presets.lua
+-- Voice presets (3.8, design §8; S.lib.voice_presets): the library of
+-- VOICE_PRESETS.slots named voice sounds in voices.data (the device's,
+-- shared by every PSET: read at its start step, written at each save and
+-- clear through S.lib.data_files, never at exit and never by a PSET or a
+-- factory load), the filter that makes a voice's capture a sound
+-- (VOICE_PRESETS.keys: every voice scene key that is no synth key, in or
+-- out; every type's synth keys are in), and a load, a copy and a save. A
+-- load or a copy takes a voice's sound (its type, its synth keys and the
+-- in keys) and keeps its place (its active and source, and every out key),
+-- lets go of the voice in a running fade (S.lib.scenes.release_voice) and
+-- holds the voice's capture from before for VOICE's undo
+-- (S.lib.mutation.hold_voice). Fields of this module's table:
+-- VOICE_PRESETS, capture, load, copy, save, clear, preset, loaded_name.
+-- See docs/notes/lua/voice-presets.md
+
+return function(S)
+  local M = {}
+  local NUM_VOICES = S.constants.NUM_VOICES
+  local UI_PAGES = S.constants.UI_PAGES
+
+  -- voices.data's version and the oldest this build reads (a version is
+  -- compared only with these names)
+  local VOICE_PRESET_DATA_VERSION = 1
+  local VOICE_PRESET_FORMAT_FLOOR = 1
+
+  -- The library's file, its slots, a name's length (a scene name's), the
+  -- backup suffix of an unusable file, the texts it flashes and prints,
+  -- what a copy shows as its name (copy_prefix and the voice's number), and
+  -- the filter: every voice scene key that is no synth key, true (in: it
+  -- shapes the sound whatever the voice reads) or false (out: a place in
+  -- audio, another voice, a running state, the rig or the pattern). A test
+  -- fails on a voice scene key the table does not name (design §8.1,
+  -- ruling 48)
+  local VOICE_PRESETS = {
+    file = "voices.data",
+    slots = 64,
+    name_max = S.constants.SCENE_NAME_MAX,
+    backup_suffix = ".bak",
+    copy_prefix = "v",
+    texts = {not_saved = "preset not saved", no_type = "no such type", nothing = "empty slot",
+      not_loaded = "preset not loaded"},
+    keys = {
+      -- in (39)
+      grain_size = true, grain_density = true, grain_pitch = true, grain_spread = true, grain_mode = true,
+      grain_shape = true, grain_skew = true, grain_prob = true, grain_cloud = true, grain_overlap = true,
+      pan_wander = true, intervals = true, interval_prob = true, custom_interval_1 = true,
+      custom_interval_2 = true, custom_interval_3 = true, custom_interval_4 = true, custom_interval_5 = true,
+      pitch_jitter = true, pan_jitter = true, size_jitter = true, reverse = true, quantize = true, arp = true,
+      filter_type = true, filter_freq = true, filter_res = true, filter_mix = true, delay_send = true,
+      reverb_send = true, dry = true, attack = true, release = true, env_attack = true, env_decay = true,
+      env_sustain = true, env_release = true, env_curve = true, env_loop = true,
+      -- out (39)
+      buf_pos = false, buf_rate = false, buf_scan = false, mod_source_1 = false, mod_source_2 = false,
+      mod_source_3 = false, mod_amp_amt_1 = false, mod_amp_amt_2 = false, mod_amp_amt_3 = false,
+      mod_freq_amt_1 = false, mod_freq_amt_2 = false, mod_freq_amt_3 = false, mod_speed = false,
+      history = false, freeze = false, freeze_mode = false, input_channel = false, loop_start = false,
+      loop_length = false, bookmark_1 = false, bookmark_2 = false, bookmark_3 = false, bookmark_4 = false,
+      scan_mode = false, follow = false, slices = false, mute = false, press_target = false,
+      press_depth = false, slide_target = false, slide_depth = false, seq_length = false,
+      seq_division = false, seq_direction = false, seq_gate = false, seq_gate_length = false,
+      seq_gate_release = false, seq_swing = false, seq_misstep = false,
+    },
+  }
+  M.VOICE_PRESETS = VOICE_PRESETS
+  local KEYS = VOICE_PRESETS.keys
+
+  -- The library: per slot nil or {name, type, values}; started once the
+  -- start step ran; blocked when an unusable file could not be set aside
+  -- (nothing is written over it this session)
+  local library = {}
+  local store = {started = false, blocked = false}
+  -- Per voice, the name shown on VOICE's preset row: the preset last
+  -- loaded into it, or a copy's v<n> (not stored, design §8.4)
+  local loaded = {}
+
+  local function path() return S.lib.scenes.scene_data_dir .. VOICE_PRESETS.file end
+
+  local function is_whole(value, low, high)
+    return type(value) == "number" and value % 1 == 0 and value >= low and value <= high
+  end
+  local function valid_voice(voice_idx) return is_whole(voice_idx, 1, NUM_VOICES) end
+  local function valid_slot(slot) return is_whole(slot, 1, VOICE_PRESETS.slots) end
+  local function finite(value) return type(value) == "number" and value > -math.huge and value < math.huge end
+
+  local function flash(text)
+    S.lib.ui_flash.start("hints", text, nil, UI_PAGES.index.VOICE)
+  end
+
+  -- A name as a preset keeps it: text's printable ASCII, cut to name_max
+  local function clean_name(text)
+    return (tostring(text):gsub("[^\32-\126]", ""):sub(1, VOICE_PRESETS.name_max))
+  end
+
+  -- A stored preset as this build can keep it, or nil: a name of at most
+  -- name_max printable characters, a type key (^[%w_]+$; a type this build
+  -- lacks is kept, and a load of it refused) and values holding finite
+  -- numbers by string key
+  local function preset_from(stored)
+    if type(stored) ~= "table" then return nil end
+    if type(stored.name) ~= "string" or #stored.name > VOICE_PRESETS.name_max or stored.name:find("[^\32-\126]") then
+      return nil
+    end
+    if type(stored.type) ~= "string" or not stored.type:match("^[%w_]+$") then return nil end
+    if type(stored.values) ~= "table" then return nil end
+    local values = {}
+    for key, value in pairs(stored.values) do
+      if type(key) ~= "string" or not finite(value) then return nil end
+      values[key] = value
+    end
+    return {name = stored.name, type = stored.type, values = values}
+  end
+
+  local function copy_values(values)
+    local copy = {}
+    for key, value in pairs(values) do copy[key] = value end
+    return copy
+  end
+
+  -- What voices.data holds: the version and every filled slot
+  local function stored_value()
+    local presets = {}
+    for slot = 1, VOICE_PRESETS.slots do
+      local preset = library[slot]
+      if preset then presets[slot] = {name = preset.name, type = preset.type, values = copy_values(preset.values)} end
+    end
+    return {version = VOICE_PRESET_DATA_VERSION, presets = presets}
+  end
+
+  -- Write voices.data: true, or false and why (the session's file blocked,
+  -- or the write failed; the file is then as it was)
+  local function write()
+    if store.blocked then return false, VOICE_PRESETS.file .. " could not be set aside at the start" end
+    util.make_dir(S.lib.scenes.scene_data_dir)
+    local written, problem = S.lib.data_files.write(path(), stored_value())
+    if not written then
+      print("strata: " .. VOICE_PRESETS.file .. " not saved: " .. tostring(problem))
+      return false, tostring(problem)
+    end
+    return true
+  end
+
+  -- A voice's sound: its capture (S.lib.scenes.capture_voice) filtered to
+  -- its type and the values of its type's synth keys and the in keys; nil
+  -- for a number that is no voice
+  function M.capture(voice_idx)
+    if not valid_voice(voice_idx) then return nil end
+    local capture = S.lib.scenes.capture_voice(voice_idx)
+    local values = {}
+    for _, entry in ipairs((S.lib.params_setup.voice_scene_keys(voice_idx))) do
+      if entry.synth or KEYS[entry.key] == true then values[entry.key] = capture.values[entry.key] end
+    end
+    return {type = capture.type, values = values}
+  end
+
+  -- A slot's preset as the picker shows it, {name, type}, or nil (empty,
+  -- or a number that is no slot)
+  function M.preset(slot)
+    local preset = valid_slot(slot) and library[slot]
+    if not preset then return nil end
+    return {name = preset.name, type = preset.type}
+  end
+
+  -- The name VOICE's preset row shows for the voice, or nil
+  function M.loaded_name(voice_idx)
+    return loaded[voice_idx]
+  end
+
+  -- Save the voice's sound (M.capture) in slot as name (printable ASCII,
+  -- cut to name_max) and write voices.data: true, or false and why (no
+  -- voice or slot, or the file not written: the slot is as it was, and a
+  -- flash says so)
+  function M.save(voice_idx, slot, name)
+    if not valid_voice(voice_idx) then return false, "no voice " .. tostring(voice_idx) end
+    if not valid_slot(slot) then return false, "no slot " .. tostring(slot) end
+    if type(name) ~= "string" then return false, "a name is a string" end
+    local before = library[slot]
+    local sound = M.capture(voice_idx)
+    library[slot] = {name = clean_name(name), type = sound.type, values = sound.values}
+    local written, why = write()
+    if not written then
+      library[slot] = before
+      flash(VOICE_PRESETS.texts.not_saved)
+      return false, why
+    end
+    request_redraw()
+    return true
+  end
+
+  -- Empty slot and write voices.data: true, or false (no slot, an empty
+  -- one, or the file not written: the slot is as it was, with a flash)
+  function M.clear(slot)
+    if not valid_slot(slot) or library[slot] == nil then return false end
+    local before = library[slot]
+    library[slot] = nil
+    if not write() then
+      library[slot] = before
+      flash(VOICE_PRESETS.texts.not_saved)
+      return false
+    end
+    request_redraw()
+    return true
+  end
+
+  -- The start step: read voices.data (parsed, never run). Missing: an
+  -- empty library. Unreadable, of a version outside the floor and this
+  -- build's, or not of the library's shape: set aside (voices.data.bak,
+  -- ...) with one console line, the library empty; one that cannot be set
+  -- aside blocks every write this session. A damaged preset is left out
+  -- (the next write drops it), with one line naming how many
+  S.register_start(S.constants.START_ORDER.voice_presets_load, function()
+    library, loaded = {}, {}
+    store.started, store.blocked = true, false
+    local value, outcome, why = S.lib.data_files.read(path())
+    if value == nil and outcome == "missing" then return end
+    local problem = value == nil and (why or outcome) or nil
+    if not problem then
+      if type(value) ~= "table" then
+        problem = "not a table"
+      elseif type(value.version) ~= "number" or value.version < VOICE_PRESET_FORMAT_FLOOR
+        or value.version > VOICE_PRESET_DATA_VERSION then
+        problem = "version " .. tostring(value.version)
+      elseif type(value.presets) ~= "table" then
+        problem = "no presets"
+      end
+    end
+    if problem then
+      local backup, failure = S.lib.data_files.set_aside(path(), VOICE_PRESETS.backup_suffix)
+      if not backup then store.blocked = true end
+      print("strata: " .. VOICE_PRESETS.file .. " not used (" .. tostring(problem) .. "): the library is empty; "
+        .. (backup and ("kept as " .. backup:match("[^/]*$")) or ("not moved: " .. tostring(failure))))
+      return
+    end
+    local damaged = 0
+    for slot, stored in pairs(value.presets) do
+      local preset = valid_slot(slot) and preset_from(stored)
+      if preset then library[slot] = preset else damaged = damaged + 1 end
+    end
+    if damaged > 0 then
+      print("strata: " .. VOICE_PRESETS.file .. ": " .. damaged .. " damaged "
+        .. (damaged == 1 and "preset" or "presets") .. " left out (the next write drops them)")
+    end
+  end)
+
+  return M
+end

@@ -190,6 +190,7 @@ local START_ORDER = {
   buffers_load = 110,    -- lib/buffers.lua: buffers.data (sets S.buffers_loaded)
   sequences_load = 111,  -- lib/random_sequences.lua: sequences.data, the random sequences' values (3.7)
   arp = 112,             -- lib/arp.lua: the shuffle's LFO step hook (3.8)
+  voice_presets_load = 113,  -- lib/voice_presets.lua: voices.data, the voice preset library (3.8)
   factory_first_run = 117,  -- lib/factory.lua: with an index, factory.data read and a first run's load started (3.8)
   startup_clock = 120,   -- strata.lua: voices 1 and 2
   lfo_clock = 125,       -- lib/lfos.lua: the LFO clock (3.4)
