@@ -19,11 +19,22 @@ return function(S)
   local HINT_ROW_Y = 62
   local HINT_ROW_WIDTH = 128
 
-  -- The page dots (one per page, NUM_UI_PAGES), the current page's bright
+  -- The page dots (one per page, NUM_UI_PAGES), the current page's bright.
+  -- While the delay or an offered reverb is frozen (S.lib.fx_hold.any_frozen,
+  -- which reads only an offered freeze), FX's dot stands as a bright bar,
+  -- 2x5 from y 2 (3.8, the plan's ruling 28 as amended): it points at the
+  -- page that holds the freeze, on every page, FX's own too
   local function draw_page_dots()
+    local frozen = S.lib.fx_hold.any_frozen()
     for page = 1, NUM_UI_PAGES do
-      screen.level(page == S.ui_page and HEADER.current_dot_level or HEADER.dot_level)
-      screen.rect(HEADER.dots_x + (page - 1) * HEADER.dot_spacing, HEADER.dot_y, HEADER.dot_size, HEADER.dot_size)
+      local x = HEADER.dots_x + (page - 1) * HEADER.dot_spacing
+      if frozen and page == UI_PAGES.index.FX then
+        screen.level(HEADER.frozen_level)
+        screen.rect(x, HEADER.frozen_y, HEADER.frozen_w, HEADER.frozen_h)
+      else
+        screen.level(page == S.ui_page and HEADER.current_dot_level or HEADER.dot_level)
+        screen.rect(x, HEADER.dot_y, HEADER.dot_size, HEADER.dot_size)
+      end
       screen.fill()
     end
   end
@@ -35,17 +46,6 @@ return function(S)
     for column = 0, 2 do
       screen.rect(x + column, HEADER.play_y + column, 1, 5 - 2 * column)
     end
-    screen.fill()
-  end
-
-  -- The frozen mark (3.8): a filled 3x3 square at x 70-72, y 4-6, filling
-  -- the gap after the tenth dot and before SEQ's play mark (x 73), while the
-  -- delay or an offered reverb is frozen (S.lib.fx_hold.any_frozen, which
-  -- reads only an offered freeze)
-  local function draw_frozen_mark()
-    if not S.lib.fx_hold.any_frozen() then return end
-    screen.level(HEADER.frozen_level)
-    screen.rect(HEADER.frozen_x, HEADER.frozen_y, HEADER.frozen_size, HEADER.frozen_size)
     screen.fill()
   end
 
@@ -84,7 +84,7 @@ return function(S)
   end
 
   -- The header, y 8: the page title, then a header flash while one shows,
-  -- else the page dots, the frozen mark and either the page's header_status (with the play
+  -- else the page dots (FX's a bar while anything is frozen) and either the page's header_status (with the play
   -- mark) or the indicators; the scene at the right
   function draw_header()
     screen.level(15)
@@ -98,7 +98,6 @@ return function(S)
       screen.text(S.lib.ui_text.fit_text(flash, HEADER.flash_width))
     else
       draw_page_dots()
-      draw_frozen_mark()
       local record = S.registry.pages[S.ui_page]
       local status = record and record.header_status and record.header_status()
       if status then

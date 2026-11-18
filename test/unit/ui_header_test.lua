@@ -76,10 +76,13 @@ test("the header constants are the plan's", function()
   local HEADER = local_value("S").constants.HEADER
   local expected = { dots_x = 32, dot_spacing = 4, dot_size = 2, dot_level = 3, current_dot_level = 15,
     mutation_x = 76, play_x = 90, rec_x = 96, scene_right = 127, status_x = 79, status_play_x = 73,
-    flash_x = 40, flash_width = 74, flash_seconds = 1.5, frozen_x = 70, frozen_y = 4 }
+    flash_x = 40, flash_width = 74, flash_seconds = 1.5, frozen_y = 2, frozen_w = 2, frozen_h = 5 }
   for name, value in pairs(expected) do
     assert_equal(HEADER[name], value, "HEADER." .. name)
   end
+  -- the frozen bar is FX's own dot (ruling 28 as amended): its x is the
+  -- dot's, never a constant of its own
+  assert_equal(HEADER.frozen_x, nil, "no HEADER.frozen_x")
 end)
 
 test("the header draws ten page dots with the current one bright", function()
@@ -438,66 +441,101 @@ test("the hint row is cut to the screen", function()
   assert_screen_layout(context, "BUFFER with a long flash")
 end)
 
--- 3.8 (package 4a, plan ruling 28): a 3x3 square at x 70 while the delay or
--- the reverb is frozen. The reverb's freeze was cut from 3.8 (#819) and is
--- reached only through S.lib.fx_hold.offered("reverb"); a later package may
--- add it behind that seam, so the test builds it: FX_HOLD's reverb record
--- and a binary param of its id, the id written once
+-- 3.8 (package 4a, plan ruling 28 as amended at its review): while the delay
+-- or the reverb is frozen, FX's own page dot stands as a 2x5 bar at level 15.
+-- The reverb's freeze was cut from 3.8 (#819) and is reached only through
+-- S.lib.fx_hold.offered("reverb"); a later package may add it behind that
+-- seam, so the test builds it: FX_HOLD's reverb record and a binary param
+-- of its id, the id written once
 local REVERB_FREEZE_ID = "reverb_freeze"
 
--- The header's 3x3 rects (the frozen mark), as drawn
-local function frozen_marks(context)
+-- The header rects at FX's dot's x (its dot or its bar), as drawn
+local function fx_dot_rects(context, fx_x)
   local found = {}
   for _, rect in ipairs(header_rects(context)) do
-    if rect.w == 3 and rect.h == 3 then table.insert(found, rect) end
+    if rect.x == fx_x then table.insert(found, rect) end
   end
   return found
+end
+
+-- Whether two rects come within `gap` px of each other (touch or overlap
+-- when the gap is 1)
+local function within(a, b, gap)
+  return a.x < b.x + b.w + gap and b.x < a.x + a.w + gap and a.y < b.y + b.h + gap and b.y < a.y + a.h + gap
 end
 
 test("the header marks a frozen delay or reverb on every page", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
+  local HEADER = S.constants.HEADER
+  local fx_x = HEADER.dots_x + (S.constants.UI_PAGES.index.FX - 1) * HEADER.dot_spacing
+  assert_equal(fx_x, 44, "FX's dot at x 44")
   local function each_page(check)
     for page = 1, #PAGE_TITLES do
       show_page(page); context.screen.clear(); redraw()
       check(PAGE_TITLES[page])
     end
   end
-  each_page(function(name) assert_equal(#frozen_marks(context), 0, name .. ": no mark while nothing is frozen") end)
-  -- a reverb not offered: its param (were it there) at 1 draws none; on this
-  -- build it is absent and nothing reads it
-  assert_true(not S.lib.fx_hold.offered("reverb"), "the reverb's freeze is not offered")
-  params:set("delay_freeze", 1)
-  each_page(function(name)
-    local marks = frozen_marks(context)
-    assert_equal(#marks, 1, name .. ": one mark while the delay is frozen")
-    assert_equal(marks[1].x, 70, name .. ": from x 70"); assert_equal(marks[1].x + marks[1].w - 1, 72, "to x 72")
-    assert_equal(marks[1].y, 4, name .. ": at y 4")
-    assert_true(marks[1].filled == true, name .. ": filled"); assert_equal(marks[1].level, 15, name .. ": at level 15")
+  local function assert_dot(name)
+    local rects = fx_dot_rects(context, fx_x)
+    assert_equal(#rects, 1, name .. ": one rect at FX's dot")
+    assert_equal(rects[1].w, 2, name .. ": FX's dot 2 wide"); assert_equal(rects[1].h, 2, name .. ": and 2 high")
+    assert_equal(rects[1].y, HEADER.dot_y, name .. ": at the dots' y")
+  end
+  local function assert_bar(name)
+    local rects = fx_dot_rects(context, fx_x)
+    assert_equal(#rects, 1, name .. ": one rect at FX's dot")
+    local bar = rects[1]
+    assert_equal(bar.w, 2, name .. ": the bar 2 wide"); assert_equal(bar.h, 5, name .. ": 5 high")
+    assert_equal(bar.y, 2, name .. ": from y 2")
+    assert_true(bar.filled == true, name .. ": filled"); assert_equal(bar.level, 15, name .. ": at level 15")
+    for _, rect in ipairs(header_rects(context)) do
+      if rect ~= bar then
+        assert_true(not within(rect, bar, 1), name .. ": the rect at x " .. rect.x .. " keeps 1 px clear of the bar")
+      end
+    end
+    for _, entry in ipairs(texts_on_row(context, 8)) do
+      local left, right = text_span(entry)
+      assert_true(right < bar.x - 1 or left > bar.x + bar.w, name .. ": " .. entry.text .. " clears the bar")
+    end
+    assert_equal(#page_dots(context), 9, name .. ": the other nine dots stay")
     assert_screen_layout(context, name .. " with the delay frozen")
-  end)
-  -- SEQ with its status and the patterns playing: the mark ends left of the play mark at 73
+  end
+  each_page(assert_dot)
+  -- a reverb not offered: on this build its param is absent and nothing reads it
+  assert_true(not S.lib.fx_hold.offered("reverb"), "the reverb's freeze is not offered")
+  -- SEQ with its status and the patterns playing: the play mark as it is unfrozen
+  local function play_rects()
+    local found = {}
+    for _, rect in ipairs(header_rects(context)) do
+      if rect.x >= HEADER.status_play_x then table.insert(found, rect.x .. "," .. rect.y .. "," .. rect.w .. "," .. rect.h) end
+    end
+    return table.concat(found, " ")
+  end
   show_page("SEQ"); pattern_toggle(); context.screen.clear(); redraw()
-  local mark = frozen_marks(context)[1]
-  assert_true(mark and mark.x + mark.w <= 73, "on SEQ playing, the mark ends left of x 73")
-  local dots = page_dots(context)
-  assert_true(dots[#dots].x + dots[#dots].w <= mark.x, "and right of the last dot")
-  assert_screen_layout(context, "SEQ playing with the delay frozen")
+  local unfrozen_play = play_rects()
+  assert_true(unfrozen_play ~= "", "SEQ playing draws its play mark")
+  params:set("delay_freeze", 1)
+  context.screen.clear(); redraw()
+  assert_bar("SEQ playing")
+  assert_equal(play_rects(), unfrozen_play, "the play mark is untouched")
   pattern_toggle()
-  -- a flash hides it
+  each_page(assert_bar)
+  -- a flash hides it, with the dots
   header_flash("loaded"); context.screen.clear(); redraw()
-  assert_equal(#frozen_marks(context), 0, "a header flash hides the mark")
+  assert_equal(#fx_dot_rects(context, fx_x), 0, "a header flash hides the bar")
   context.clock.run_for(2); context.screen.clear(); redraw()
-  assert_equal(#frozen_marks(context), 1, "and it comes back after")
+  assert_bar("after the flash")
   params:set("delay_freeze", 0)
+  each_page(assert_dot)
   -- a reverb offered: a frozen reverb marks too
   params:add{ type = "binary", id = REVERB_FREEZE_ID, name = "reverb freeze", behavior = "toggle", default = 0 }
   S.lib.fx_hold.FX_HOLD.reverb = { freeze_id = REVERB_FREEZE_ID }
   params:set(REVERB_FREEZE_ID, 1)
-  each_page(function(name) assert_equal(#frozen_marks(context), 1, name .. ": the mark while the reverb is frozen") end)
-  -- the param at 1 with the freeze no longer offered (a standard tier's): none
+  each_page(function(name) assert_bar(name .. ", the reverb frozen") end)
+  -- the param at 1 with the freeze not offered (a standard tier's): the dot
   S.lib.fx_hold.FX_HOLD.reverb = nil
-  each_page(function(name) assert_equal(#frozen_marks(context), 0, name .. ": a reverb not offered marks nothing") end)
+  each_page(function(name) assert_dot(name .. ", a reverb not offered") end)
 end)
 
 -- 3.4: the dots move 4 px left (for 3.4's ninth page, MOD) and the

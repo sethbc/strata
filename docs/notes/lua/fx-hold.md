@@ -6,7 +6,7 @@
 - **A freeze set while its effect is bypassed is refused** (the plan's ruling 26): the freeze's action sets the param back to 0 through `set_binary_param`, so a controller mapped to it is echoed the 0 (its light follows the param). That set re-enters the action with 0, which is never refused, and costs one redundant `setDelayFreeze(0)` (the engine keeps 0 through the bypass, as the release before every bypass left it); never a `setDelayFreeze(1)`. `toggle` does nothing at all while bypassed. So a MIDI map or a PARAMS edit never leaves a freeze for a lift.
 - **Both params reach the engine only through their senders** (`send_param_to_engine`): `delay_freeze` sends `engine.setDelayFreeze(value)`, `delay_clear` `engine.clearDelay()` (no argument; the trigger's action sends the value 1, so the send budget never holds a nil).
 - **`toggle` and `release` go through `set_binary_param`**, so a controller mapped to `delay_freeze` follows (#538).
-- The ids are `FX_HOLD`'s; 4a's FX rows and header mark and 4b's grid keys read `offered`, `frozen`, `toggle`, `clear` and `any_frozen`, never a param's presence (the plan's ruling 27).
+- The ids are `FX_HOLD`'s; 4a's FX rows and header mark and 4b's grid keys read `offered`, `frozen`, `can_freeze`, `toggle`, `clear` and `any_frozen`, never a param's presence (the plan's ruling 27).
 - **The reverb has no freeze** (3.8's package 3a, ruling 27): the high tier's FDN, frozen, did not hold its level and its tail within 1 dB, so the freeze is cut: no `FX_HOLD.reverb`, no `reverb_freeze` param, no engine command, and `offered("reverb")` is false on every tier (a test pins it). Why: #819 and `docs/notes/engine/effects.md` (the FDN).
 
 ## What it owns
@@ -18,13 +18,14 @@
 - `M.FX_HOLD = {delay = {freeze_id = "delay_freeze", clear_id = "delay_clear"}}`.
 - `M.offered(effect)`: true for `"delay"`, false for anything else (the reverb's freeze is cut).
 - `M.frozen(effect)`: offered and its freeze param at 1. `M.any_frozen()`: any effect frozen.
-- `M.toggle(effect)`: freezes or releases through `set_binary_param`; nothing while the effect is not offered or bypassed.
+- `M.can_freeze(effect)`: whether `toggle` would freeze or release it now, offered and not bypassed. `toggle` asks it, and so do FX's ALT+K3 and its `K3:freeze` hint, so the hint never offers what the key would not do (4a's review).
+- `M.toggle(effect)`: freezes or releases through `set_binary_param`; nothing unless `can_freeze(effect)`.
 - `M.release(effect)`: nothing for an effect not offered; otherwise sets the freeze param to 0 when it is 1.
 - `M.clear()`: `params:set("delay_clear", 1)`.
 
 What a frozen delay does is the engine's (`docs/notes/engine/delay.md`): the loop's gain exactly 1, the input closed, the time held (a tempo move or a `delay_time` change under a freeze is sent as usual and waits in the engine for the release), ping-pong snapped. Lua keeps sending `setDelay` while frozen; a release then plays the time Lua last sent.
 
-Both are also FX's rows (`freeze` and `clear`, its ALT+K3 freezing the row's effect, `docs/notes/lua/pages/fx.md`), the header's frozen mark reads `any_frozen` (`docs/notes/lua/ui/header-and-flashes.md`), and both can be mapped to MIDI from PARAMS > fx.
+Both are also FX's rows (`freeze` and `clear`, its ALT+K3 freezing the row's effect, `docs/notes/lua/pages/fx.md`), the header's frozen mark (FX's page dot as a bar) reads `any_frozen` (`docs/notes/lua/ui/header-and-flashes.md`), and both can be mapped to MIDI from PARAMS > fx.
 
 ## Tests (`test/unit/fx_hold_test.lua`)
 

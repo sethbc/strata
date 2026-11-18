@@ -940,6 +940,26 @@ test("the reverb's freeze row shows -- where it is not offered, and E3 does noth
   assert_true(not h.screen_shows(context, "--"), "and no --")
 end)
 
+-- A clear does nothing on a bypassed delay (the engine's "nothing while
+-- bypassed"), so there the clear row offers none: it shows --, and K3 is the
+-- bypass as on every other delay row (#419: the hint names only what acts)
+test("on a bypassed delay the clear row shows --, and K3 lifts the bypass", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  params:set("delay_bypass", 1)
+  select_row_index(hold_row_index("delay", "clear"))
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "--"), "the clear row shows --")
+  assert_true(not h.screen_shows(context, "K3"), "and no K3")
+  assert_equal(shown_hint(context), "K3:delay on", "the hint is the lift")
+  context.clear_engine_calls()
+  key(3, 1); key(3, 0)
+  assert_equal(#context.calls_named("clearDelay"), 0, "no clearDelay")
+  assert_equal(params:get("delay_bypass"), 0, "K3 lifts the bypass")
+  assert_equal(#context.calls_named("setBypass"), 1, "one setBypass")
+  assert_equal(shown_hint(context), "K3:clear", "running again, the row clears")
+end)
+
 test("the clear row shows K3; its hint is K3:clear", function()
   local context = load_strata(); finish_startup(context)
   show_page("FX")
@@ -1040,27 +1060,50 @@ test("ALT+K2 on shimmer draws the interval (uniform), delay 0-0.5 and reverb 0-0
   end
 end)
 
-test("FX's 3.8 layout states lay out, the reverb frozen on high with its freeze offered", function()
+-- The reverb frozen on high is not a layout state (the library plants no
+-- test param; on this build its freeze is not offered): the test plants the
+-- freeze behind fx_hold's seam, on a high tier, and freezes it with toggle
+test("FX lays out with a reverb frozen on high where its freeze is offered", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  assert_equal(S.performance.tier, "high", "the high tier")
+  plant_reverb_freeze(S)
+  show_page("FX")
+  S.lib.fx_hold.toggle("reverb")
+  assert_equal(params:get(REVERB_FREEZE_ID), 1, "toggle freezes the offered reverb")
+  for _, param_id in ipairs({ "reverb_mix", "delay_to_reverb" }) do
+    select_row_index(row_index(param_id))
+    for _, alt in ipairs({ 0, 1 }) do
+      key(1, alt); context.screen.clear(); redraw()
+      local count = 0
+      for _, entry in ipairs(context.screen.texts) do if entry.text == "frz" then count = count + 1 end end
+      if param_id == "reverb_mix" then assert_equal(count, 1, "frz on the reverb's section row") end
+      assert_screen_layout(context, "FX reverb frozen on high, " .. param_id .. (alt == 1 and ", ALT" or ""))
+    end
+    key(1, 0)
+  end
+  select_row_index(row_index("reverb_mix"))
+  key(1, 1)
+  assert_equal(shown_hint(context), "K2:rand K3:unfreeze E3:fine", "ALT offers the release")
+  key(1, 0)
+end)
+
+test("FX's 3.8 layout states lay out", function()
   for _, case in ipairs({
     { name = "delay frozen", frz = 1 },
-    { name = "reverb frozen on high", frz = 1, plant = true },
-    { name = "reverb frozen on high", frz = 0 },
     { name = "the clear row", shows = "K3" },
     { name = "ALT on a frozen delay row", hint = "K2:cancel K3:unfreeze E3:fine" },
     { name = "shimmer at oct+5th and 100%", shows = "oct+5th" },
     { name = "last row", shows = "oct down" },  -- the widest interval name, 38 px
   }) do
-    if case.plant then
-      h.write_performance_active({ tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60,
-        reason = "high: setting" })
-    end
     local context = load_strata(); finish_startup(context)
     local S = local_value("S")
-    if case.plant then
-      assert_equal(S.performance.tier, "high", "the high tier")
-      plant_reverb_freeze(S)
-    end
     show_page("FX")
+    for _, each in ipairs(S.registry.pages[S.constants.UI_PAGES.index.FX].layout_states) do
+      assert_true(not each.name:find("reverb frozen", 1, true), "no layout state freezes the reverb")
+    end
     local record = S.registry.pages[S.constants.UI_PAGES.index.FX]
     local state
     for _, each in ipairs(record.layout_states) do
