@@ -1247,6 +1247,364 @@ test("the runner removes its temporary folder on every way out and fails a run w
   end
 end)
 
+-- The parallel run and its shards (3.8's package x5). Each test builds a
+-- small tree of unit files under data_root and runs test/run.lua on it
+-- (--dir) under an interpreter, from the repository root. A run started
+-- by a test is single-process (STRATA_TEST_INSIDE_RUN, which every command
+-- a run starts carries), so these clear it to run the parallel runner
+-- unless `nested` is set.
+local RUNNER = {}
+
+-- The interpreter this run is under (arg's lowest index)
+function RUNNER.interpreter()
+  local lowest = 0
+  while arg[lowest - 1] do lowest = lowest - 1 end
+  return arg[lowest]
+end
+
+-- The other interpreter of the two the suite runs under (Lua 5.3 and
+-- LuaJIT, both on PATH where the suite runs, CI's runners included): its
+-- path, found with `command -v`
+function RUNNER.other_interpreter()
+  local names = rawget(_G, "jit") and { "lua5.3", "lua" } or { "luajit" }
+  for _, name in ipairs(names) do
+    local pipe = assert(io.popen("command -v " .. name .. " 2>/dev/null"))
+    local path = pipe:read("*l"); pipe:close()
+    if path and path ~= "" then
+      local probe = assert(io.popen(h.shell_quote(path) .. " -e 'io.write(_VERSION, rawget(_G, \"jit\") and \" jit\" or \"\")'"))
+      local version = probe:read("*a"); probe:close()
+      if (name == "luajit") == (version:find("jit", 1, true) ~= nil) and (name == "luajit" or version == "Lua 5.3") then
+        return path
+      end
+    end
+  end
+  error("the shard test needs both Lua 5.3 and LuaJIT on PATH (" .. table.concat(names, " or ") .. " not found)")
+end
+
+-- A tree of unit files: `files` maps a file name to its source
+function RUNNER.tree(name, files)
+  local dir = data_root .. "runner-tree-" .. name
+  os.execute("mkdir -p " .. h.shell_quote(dir))
+  for file, source in pairs(files) do h.write_text(dir .. "/" .. file, source) end
+  return dir
+end
+
+-- A unit file's source registering `count` passing tests named
+-- "<label> 1" .. "<label> <count>", each busy for a moment so that
+-- processes overlap; `extra` is added inside the function
+function RUNNER.passing(label, count, extra)
+  return "return function(h)\n  for i = 1, " .. count .. " do\n    h.test(" .. string.format("%q", label)
+    .. " .. ' ' .. i, function() local x = 0; for j = 1, 20000 do x = x + j end end)\n  end\n"
+    .. (extra or "") .. "end\n"
+end
+
+-- Run test/run.lua with `arguments` (a list, each quoted) under
+-- options.interpreter (default: this run's), options.env (shell
+-- assignments, such as "STRATA_TEST_JOBS=2 ") and options.prelude (Lua run
+-- before the runner, in its process only). Returns the output (stdout and
+-- stderr) without the prelude's lines, the exit status and the run's
+-- temporary folder (the one os.tmpname gave helpers.lua, or nil)
+function RUNNER.run(arguments, options)
+  options = options or {}
+  local quoted = {}
+  for i, argument in ipairs(arguments) do quoted[i] = h.shell_quote(argument) end
+  local report_tmpname = 'local tmpname = os.tmpname; os.tmpname = function() local name = tmpname();'
+    .. ' io.stderr:write("tmpname " .. name .. "\\n"); return name end; '
+  local command = "cd " .. h.shell_quote(repo_root) .. " && " .. (options.nested and "" or "unset STRATA_TEST_INSIDE_RUN; ")
+    .. (options.env or "") .. h.shell_quote(options.interpreter or RUNNER.interpreter()) .. " -e "
+    .. h.shell_quote(report_tmpname .. (options.prelude or "")) .. " test/run.lua " .. table.concat(quoted, " ")
+    .. " 2>&1; echo \"exit $?\""
+  local pipe = assert(io.popen(command))
+  local output = pipe:read("*a")
+  pipe:close()
+  local folder = output:match("tmpname (%S+)")
+  local status = tonumber(output:match("exit (%d+)%s*$"))
+  output = output:gsub("tmpname %S+\n", ""):gsub("exit %d+%s*$", "")
+  return output, status, folder
+end
+
+function RUNNER.exists(path)
+  local file = io.open(path, "r"); if file then file:close() end
+  return file ~= nil
+end
+
+-- The output's lines, and its last line
+function RUNNER.lines(output)
+  local lines = {}
+  for line in (output .. (output:sub(-1) == "\n" and "" or "\n")):gmatch("([^\n]*)\n") do lines[#lines + 1] = line end
+  return lines, lines[#lines]
+end
+
+-- A run's checks every case shares: the exit status and that it left no
+-- temporary folder behind
+function RUNNER.check(output, status, folder, expected_status, what)
+  assert_equal(status, expected_status, what .. ": the exit status\n" .. output)
+  assert_true(folder == nil or not RUNNER.exists(folder), what .. ": the run left no folder behind: " .. tostring(folder))
+end
+
+-- The tree most cases share: three files of 5, 4 and 3 passing tests
+function RUNNER.three_files(name)
+  return RUNNER.tree(name, { ["alpha_test.lua"] = RUNNER.passing("alpha", 5), ["beta_test.lua"] = RUNNER.passing("beta", 4),
+    ["gamma_test.lua"] = RUNNER.passing("gamma", 3) })
+end
+
+-- What a single-process run of three_files prints, as test/run.lua printed it before the parallel run
+function RUNNER.three_files_output()
+  local lines = {}
+  for _, file in ipairs({ { "alpha", 5 }, { "beta", 4 }, { "gamma", 3 } }) do
+    for i = 1, file[2] do lines[#lines + 1] = "ok   " .. file[1] .. " " .. i end
+  end
+  return table.concat(lines, "\n") .. "\n\n12 tests, 0 failures\n"
+end
+
+test("a single-process run prints what test/run.lua printed before the parallel run", function()
+  local dir = RUNNER.three_files("single")
+  for _, case in ipairs({ { "--jobs", "1" }, { "-j", "1" }, { "--jobs", "1", "--shard", "1/1" } }) do
+    table.insert(case, 1, dir); table.insert(case, 1, "--dir")
+    local output, status, folder = RUNNER.run(case)
+    RUNNER.check(output, status, folder, 0, table.concat(case, " "))
+    assert_equal(output, RUNNER.three_files_output(), table.concat(case, " ") .. ": the output, byte for byte")
+  end
+  local output, status, folder = RUNNER.run({ "--dir", dir }, { env = "STRATA_TEST_JOBS=1 " })
+  RUNNER.check(output, status, folder, 0, "STRATA_TEST_JOBS=1")
+  assert_equal(output, RUNNER.three_files_output(), "STRATA_TEST_JOBS=1: the output, byte for byte")
+  h.remove_tree(dir)
+end)
+
+test("a parallel run prints each file's lines whole, then its processes and a single-process run's totals", function()
+  local dir = RUNNER.three_files("parallel")
+  local output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", "3" })
+  RUNNER.check(output, status, folder, 0, "--jobs 3")
+  local lines, last = RUNNER.lines(output)
+  assert_equal(last, "12 tests, 0 failures", "the last line is the totals")
+  assert_equal(lines[#lines - 1], "", "a blank line before the totals, as a single-process run prints")
+  assert_true(lines[#lines - 2]:match("^3 unit files in 3 processes, %d+ s$") ~= nil, "the processes line: " .. lines[#lines - 2])
+  -- every ok line of the single-process run, each once, each file's together and in its order
+  local expected = RUNNER.lines(RUNNER.three_files_output())
+  local seen, first, last_at = {}, {}, {}
+  for at, line in ipairs(lines) do
+    local label, index = line:match("^ok   (%a+) (%d+)$")
+    if label then
+      assert_true(not seen[line], "printed once: " .. line); seen[line] = true
+      first[label] = first[label] or at
+      assert_equal(at - first[label] + 1, tonumber(index), "the file's lines are whole and in order: " .. line .. "\n" .. output)
+      last_at[label] = at
+    end
+  end
+  for i = 1, 12 do assert_true(seen[expected[i]], "the parallel run printed " .. expected[i]) end
+  assert_equal(#lines, 12 + 3, "nothing else was printed:\n" .. output)
+  h.remove_tree(dir)
+end)
+
+test("a parallel run's failing test fails the run and is printed again before the totals", function()
+  local dir = RUNNER.tree("failing", { ["alpha_test.lua"] = RUNNER.passing("alpha", 5), ["beta_test.lua"] = RUNNER.passing("beta", 4),
+    ["gamma_test.lua"] = RUNNER.passing("gamma", 2, '  h.test("gamma fails", function() error("planted failure", 0) end)\n') })
+  local output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", "3" })
+  RUNNER.check(output, status, folder, 1, "a failing test")
+  local lines, last = RUNNER.lines(output)
+  assert_equal(last, "12 tests, 1 failures", "the totals count the failure")
+  local at = {}
+  for index, line in ipairs(lines) do
+    if line == "FAIL gamma fails" then
+      at[#at + 1] = index
+      assert_true(lines[index + 1]:find("planted failure", 1, true) ~= nil, "its message follows it: " .. tostring(lines[index + 1]))
+    end
+  end
+  assert_equal(#at, 2, "printed in place and again:\n" .. output)
+  -- the repeat is at the end of the log: after every ok line, before the processes line
+  for index = at[2], #lines do assert_true(not lines[index]:match("^ok   "), "the repeat comes after every ok line:\n" .. output) end
+  assert_true(lines[#lines - 2]:match("^3 unit files in 3 processes, %d+ s$") and at[2] < #lines - 2,
+    "the repeat comes before the processes line and the totals:\n" .. output)
+  h.remove_tree(dir)
+end)
+
+test("a parallel run fails and names a process that crashes, a file that does not load and one that registers no test", function()
+  local leave = '  h.test("%s leaves", function() io.write("data root " .. h.data_root .. "\\n"); io.flush(); %s end)\n'
+  local dir = RUNNER.tree("abnormal", {
+    ["alpha_test.lua"] = RUNNER.passing("alpha", 5),
+    ["crash_test.lua"] = RUNNER.passing("crash", 1, string.format(leave, "crash", "os.exit(3)")),
+    ["signal_test.lua"] = RUNNER.passing("signal", 1, string.format(leave, "signal", 'os.execute("kill -9 $PPID")')),
+    ["quiet_test.lua"] = RUNNER.passing("quiet", 1, string.format(leave, "quiet", "os.exit(0)")),
+    ["broken_test.lua"] = "return function(h) h.test('broken', function() end)\n",
+    ["empty_test.lua"] = "return function(h) end\n",
+  })
+  local output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", "6" })
+  RUNNER.check(output, status, folder, 1, "abnormal endings")
+  local lines, last = RUNNER.lines(output)
+  local abnormal = { "crash_test.lua", "signal_test.lua", "quiet_test.lua", "broken_test.lua", "empty_test.lua" }
+  for _, name in ipairs(abnormal) do
+    local count = 0
+    for _, line in ipairs(lines) do
+      if line:match("^FAIL ") and line:find(name, 1, true) then count = count + 1 end
+    end
+    assert_equal(count, 2, name .. " is named in a FAIL line, in place and again before the totals:\n" .. output)
+  end
+  local tests, failures = last:match("^(%d+) tests, (%d+) failures$")
+  assert_true(tests ~= nil, "the last line is the totals: " .. tostring(last))
+  assert_true(tonumber(failures) >= #abnormal, "each abnormal ending counts as a failure: " .. last)
+  assert_true(output:find("ok   alpha 5", 1, true) ~= nil, "the other file still ran")
+  -- the processes that ended abnormally kept their folders inside the run's, which is gone
+  local roots = 0
+  for root in output:gmatch("data root (%S+)") do
+    roots = roots + 1
+    assert_true(folder and root:sub(1, #folder) == folder, "a process's folder is inside the run's: " .. root)
+    assert_true(not RUNNER.exists(root), "and gone: " .. root)
+  end
+  assert_equal(roots, 3, "the three that ended in a test said where their folder was:\n" .. output)
+  h.remove_tree(dir)
+end)
+
+test("a parallel run fails when no file matches, and when a file is reported by no process or by two", function()
+  local dir = RUNNER.three_files("accounting")
+  local output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", "3", "no_file_has_this" })
+  RUNNER.check(output, status, folder, 1, "no file matched")
+  assert_true(output:find("no unit file", 1, true) ~= nil, "it says why: " .. output)
+  -- the parent's reading of its processes' reports, planted: beta's report
+  -- is dropped, alpha's comes twice
+  local plant = 'local popen = io.popen; io.popen = function(command, ...) local pipe = popen(command, ...);'
+    .. ' if not tostring(command):find("xargs", 1, true) then return pipe end;'
+    .. ' local proxy = {}; function proxy:lines() local next_line, pending = pipe:lines(), nil; return function()'
+    .. ' if pending then local line = pending; pending = nil; return line end; local line = next_line();'
+    .. ' while line and line:find("beta_test.lua", 1, true) do line = next_line() end;'
+    .. ' if line and line:find("alpha_test.lua", 1, true) then pending = line end; return line end end;'
+    .. ' function proxy:read(...) return pipe:read(...) end; function proxy:close() return pipe:close() end; return proxy end; '
+  output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", "3" }, { prelude = plant })
+  RUNNER.check(output, status, folder, 1, "a file reported by no process, and one reported twice")
+  assert_true(output:find("FAIL beta_test.lua", 1, true) ~= nil, "the file no process reported is named: " .. output)
+  assert_true(output:find("FAIL alpha_test.lua", 1, true) ~= nil, "the file reported twice is named: " .. output)
+  local _, last = RUNNER.lines(output)
+  assert_true(not last:match(" 0 failures$"), "the totals show failures: " .. last)
+  h.remove_tree(dir)
+end)
+
+-- The names of the files a run's ok lines came from (each test is named
+-- after its file), sorted
+function RUNNER.files_run(output)
+  local names = {}
+  for label in output:gmatch("ok   (%a+) 1\n") do names[#names + 1] = label end
+  table.sort(names)
+  return names
+end
+
+test("--shard K/N runs one part of a partition of the unit files, the same on Lua 5.3 and LuaJIT", function()
+  local files, all = {}, {}
+  local counts = { alpha = 1, beta = 9, gamma = 3, delta = 3, epsilon = 2, zeta = 7, eta = 5 }
+  for label, count in pairs(counts) do files[label .. "_test.lua"] = RUNNER.passing(label, count); all[#all + 1] = label end
+  table.sort(all)
+  local dir = RUNNER.tree("shards", files)
+  local other = RUNNER.other_interpreter()
+  local count = 3
+  do
+    local seen = {}
+    for shard = 1, count do
+      local spec = shard .. "/" .. count
+      local by_interpreter = {}
+      for _, case in ipairs({ { interpreter = RUNNER.interpreter(), jobs = "1" }, { interpreter = other, jobs = "1" },
+          { interpreter = RUNNER.interpreter(), jobs = "2" } }) do
+        local output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", case.jobs, "--shard", spec }, { interpreter = case.interpreter })
+        RUNNER.check(output, status, folder, 0, "--shard " .. spec .. " under " .. case.interpreter)
+        by_interpreter[#by_interpreter + 1] = table.concat(RUNNER.files_run(output), " ")
+      end
+      assert_equal(by_interpreter[2], by_interpreter[1], "--shard " .. spec .. ": the same files under " .. other)
+      assert_equal(by_interpreter[3], by_interpreter[1], "--shard " .. spec .. ": the same files run in parallel")
+      for label in by_interpreter[1]:gmatch("%a+") do
+        assert_true(seen[label] == nil, label .. " is in shards " .. tostring(seen[label]) .. " and " .. spec); seen[label] = spec
+      end
+      -- a filter keeps the shard's own files that match it (a shard with
+      -- none of them fails, as a filter matching nothing does)
+      local output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", "1", "--shard", spec, "eta" })
+      local expected = {}
+      for label in by_interpreter[1]:gmatch("%a+") do if (label .. "_test.lua"):find("eta", 1, true) then expected[#expected + 1] = label end end
+      RUNNER.check(output, status, folder, #expected > 0 and 0 or 1, "--shard " .. spec .. " eta")
+      assert_equal(table.concat(RUNNER.files_run(output), " "), table.concat(expected, " "), "--shard " .. spec .. " eta")
+    end
+    for _, label in ipairs(all) do assert_true(seen[label] ~= nil, label .. " is in one of " .. count .. " shards") end
+  end
+  h.remove_tree(dir)
+end)
+
+test("the unit files' shards are a partition balanced by each file's weight, and every unit file has one", function()
+  local names = unit_files(repo_root .. "/test/unit")
+  local weights = h.UNIT_FILE_SECONDS
+  assert_true(type(weights) == "table", "h.UNIT_FILE_SECONDS is the unit files' weights")
+  for _, name in ipairs(names) do
+    assert_true(weights[name] ~= nil, name .. " has a weight in UNIT_FILE_SECONDS (test/helpers.lua): add a line with its"
+      .. " seconds under lua test/run.lua " .. name:gsub("%.lua$", ""))
+  end
+  local listed = {}
+  for _, name in ipairs(names) do listed[name] = true end
+  for name, seconds in pairs(weights) do
+    assert_true(listed[name], "UNIT_FILE_SECONDS names " .. name .. ", which is no unit file")
+    assert_true(type(seconds) == "number" and seconds >= 1 and seconds == math.floor(seconds), name .. "'s weight is a whole number of seconds")
+  end
+  local total, heaviest = 0, 0
+  for _, name in ipairs(names) do total = total + weights[name]; heaviest = math.max(heaviest, weights[name]) end
+  for count = 1, 4 do
+    local seen, loads = {}, {}
+    for shard = 1, count do
+      loads[shard] = 0
+      for _, name in ipairs(h.shard_files(names, shard, count)) do
+        assert_true(seen[name] == nil, name .. " is in two of " .. count .. " shards"); seen[name] = shard
+        loads[shard] = loads[shard] + weights[name]
+      end
+      -- greedy by weight: no shard exceeds the even share by more than the heaviest file
+      assert_true(loads[shard] <= total / count + heaviest, "shard " .. shard .. "/" .. count .. " is balanced: " .. loads[shard])
+    end
+    for _, name in ipairs(names) do assert_true(seen[name] ~= nil, name .. " is in one of " .. count .. " shards") end
+  end
+  -- a file with no weight still runs, in some shard
+  local with_new = { "zz_new_test.lua" }
+  for _, name in ipairs(names) do with_new[#with_new + 1] = name end
+  local found = 0
+  for shard = 1, 3 do
+    for _, name in ipairs(h.shard_files(with_new, shard, 3)) do if name == "zz_new_test.lua" then found = found + 1 end end
+  end
+  assert_equal(found, 1, "a unit file with no weight is in exactly one shard")
+end)
+
+test("test/run.lua refuses a malformed --jobs, --shard or STRATA_TEST_JOBS with a usage line", function()
+  local dir = RUNNER.three_files("usage")
+  local cases = {
+    { "--shard", "0/3" }, { "--shard", "4/3" }, { "--shard", "1/0" }, { "--shard", "x" }, { "--shard", "1/" },
+    { "--shard", "1/3/4" }, { "--shard", "-1/3" }, { "--shard", "1.5/3" }, { "--shard" }, { "--jobs", "0" },
+    { "--jobs", "x" }, { "--jobs", "-2" }, { "-j" }, { "--frob" }, { "alpha", "beta" },
+  }
+  for _, case in ipairs(cases) do
+    table.insert(case, 1, dir); table.insert(case, 1, "--dir")
+    local output, status, folder = RUNNER.run(case)
+    RUNNER.check(output, status, folder, 2, table.concat(case, " "))
+    assert_true(output:find("\nusage: ", 1, true) or output:find("^usage: "), table.concat(case, " ") .. ": a usage line\n" .. output)
+    assert_true(not output:find("ok   ", 1, true), table.concat(case, " ") .. ": no test ran\n" .. output)
+  end
+  local output, status, folder = RUNNER.run({ "--dir", dir }, { env = "STRATA_TEST_JOBS=many " })
+  RUNNER.check(output, status, folder, 2, "STRATA_TEST_JOBS=many")
+  assert_true(output:find("usage: ", 1, true) ~= nil, "STRATA_TEST_JOBS=many: a usage line\n" .. output)
+  h.remove_tree(dir)
+end)
+
+test("a run started inside a run is single-process, and STRATA_TEST_JOBS sets the default", function()
+  local dir = RUNNER.three_files("nested")
+  local output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", "3" }, { nested = true })
+  RUNNER.check(output, status, folder, 0, "a nested --jobs 3")
+  assert_equal(output, RUNNER.three_files_output(), "a run inside a run prints a single-process run's output")
+  output, status, folder = RUNNER.run({ "--dir", dir }, { env = "STRATA_TEST_JOBS=2 " })
+  RUNNER.check(output, status, folder, 0, "STRATA_TEST_JOBS=2")
+  assert_true(output:find("\n3 unit files in 2 processes, %d+ s\n\n12 tests, 0 failures\n$") ~= nil, "STRATA_TEST_JOBS=2:\n" .. output)
+  output, status, folder = RUNNER.run({ "--dir", dir, "-j", "3" }, { env = "STRATA_TEST_JOBS=1 " })
+  RUNNER.check(output, status, folder, 0, "-j 3 over STRATA_TEST_JOBS=1")
+  assert_true(output:find("\n3 unit files in 3 processes, %d+ s\n") ~= nil, "the option wins over the variable:\n" .. output)
+  -- with neither, the machine's cores (h.default_jobs), never more than the files
+  local jobs = math.min(h.default_jobs(), 3)
+  output, status, folder = RUNNER.run({ "--dir", dir })
+  RUNNER.check(output, status, folder, 0, "the default")
+  if jobs == 1 then
+    assert_equal(output, RUNNER.three_files_output(), "one core: a single-process run")
+  else
+    assert_true(output:find("\n3 unit files in " .. jobs .. " processes, %d+ s\n") ~= nil, "the default, " .. jobs .. " processes:\n" .. output)
+  end
+  h.remove_tree(dir)
+end)
+
 -- The suite deletes its temporary folders only through h.remove_tree (#134)
 test("remove_tree deletes only inside the suite's temporary folder", function()
   local function exists(path)
