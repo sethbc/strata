@@ -515,16 +515,41 @@ test("the voice-hit hook sends nothing", function()
   assert_equal(#context.engine_calls, 0, "a hit sends nothing")
 end)
 
+-- The shuffle's draws forced (2b's fix round 2): math.random replaced while
+-- fn runs, as sequencer_test.lua's counting_random does, and put back even
+-- when fn raises. Fisher-Yates over draws of n gives the order 1..n (the
+-- set ascending); draws of 1 give another order
+local KEEP_ORDER = function(n) return n end
+local OTHER_ORDER = function() return 1 end
+local function drawing(rule, fn)
+  local real = math.random
+  math.random = rule
+  local ok, problem = pcall(fn)
+  math.random = real
+  if not ok then error(problem, 0) end
+end
+
 test("shuffle: a hit marks the voice and the next LFO step resends (9 messages, counted); 4 s without a hit resends", function()
   local context, S = started()
-  shuffling(context, S)
+  math.randomseed(2)
+  local NINE = S.lib.arp.ARP.max_steps + 1
+  drawing(KEEP_ORDER, function() shuffling(context, S) end)
+  assert_equal(list_text(S.lib.arp.list(1, S.lib.variation.interval_set(1))), list_text({-12, -5, 0, 7, 12}),
+    "the first draw: the set in order")
+  -- a hit whose draw repeats the order sends nothing
   S.lib.engine_sync.retrigger(1, 1, "action")
   assert_equal(list_sends(context, 1), 0, "the hit itself sends no list")
+  drawing(KEEP_ORDER, function() lfo_step(context, S) end)
+  assert_equal(list_sends(context, 1), 0, "a draw that repeats the order: no list")
+  -- a hit whose draw differs sends the list: nine messages, counted
+  S.lib.engine_sync.retrigger(1, 1, "action")
   local before = S.lib.engine_sync.budget_state().sent
-  lfo_step(context, S)
-  assert_equal(list_sends(context, 1), S.lib.arp.ARP.max_steps + 1, "the next step resends: 9 messages")
-  assert_equal(S.lib.engine_sync.budget_state().sent - before, S.lib.arp.ARP.max_steps + 1, "counted")
-  assert_equal(list_text(sorted(last_list(context, 1))), list_text({-12, -5, 0, 7, 12}), "a shuffle of the set")
+  drawing(OTHER_ORDER, function() lfo_step(context, S) end)
+  assert_equal(list_sends(context, 1), NINE, "a draw that differs: 9 messages")
+  assert_equal(S.lib.engine_sync.budget_state().sent - before, NINE, "counted")
+  local list = last_list(context, 1)
+  assert_equal(list_text(sorted(list)), list_text({-12, -5, 0, 7, 12}), "a shuffle of the set")
+  assert_true(list_text(list) ~= list_text({-12, -5, 0, 7, 12}), "in another order")
   context.clear_engine_calls()
   lfo_step(context, S)
   assert_equal(list_sends(context, 1), 0, "no hit: nothing at the next step")
@@ -532,8 +557,12 @@ test("shuffle: a hit marks the voice and the next LFO step resends (9 messages, 
   lfo_step(context, S)
   assert_equal(list_sends(context, 1), 0, "nothing before 4 s")
   context.set_time(util.time() + 0.6)
-  lfo_step(context, S)
-  assert_equal(list_sends(context, 1), S.lib.arp.ARP.max_steps + 1, "4 s without a hit: resent")
+  drawing(KEEP_ORDER, function() lfo_step(context, S) end)
+  assert_equal(list_sends(context, 1), NINE, "4 s without a hit, a draw that differs: resent")
+  context.clear_engine_calls()
+  context.set_time(util.time() + S.lib.arp.ARP.shuffle_seconds + 0.1)
+  drawing(KEEP_ORDER, function() lfo_step(context, S) end)
+  assert_equal(list_sends(context, 1), 0, "4 s again, the draw repeating: no list")
   -- another mode, a stopped voice: no resend
   context.clear_engine_calls()
   params:set("v1_arp", mode("up"))
