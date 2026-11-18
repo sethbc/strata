@@ -431,6 +431,29 @@ return function(S)
     S.lib.params_setup.set_text_default("tuning_tones", TUNING.default_text)
   end
 
+  -- A PSET without the tuning lines (3.7's) is read over the session's
+  -- tuning: its voices' freq lines are set, and snapped, in that tuning,
+  -- and only then does the read give the tuning its default. So when that
+  -- default changed the tuning, every voice's freq the file names is set
+  -- again from the file's own value, now in the default tuning (with the
+  -- file's scale and root, which come before the voices), honoring the
+  -- read's silent flag: a PSET loads the voice's exact saved pitch (#125). A
+  -- PSET with its tuning lines, or one read over the default tuning, sets
+  -- nothing here
+  S.register_pset_hook({name = "tuning", read = function(path_base, number, pset_path, silent)
+    local setup = S.lib.params_setup
+    if not setup.read_defaulted("tuning_tones") then return end
+    local file = io.open(pset_path, "r")
+    if not file then return end
+    local text = file:read("*a") or ""
+    file:close()
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      local id = "v" .. voice_idx .. "_freq"
+      local value = tonumber(setup.pset_value(text, id) or "")
+      if value then params:set(id, value, silent) end
+    end
+  end})
+
   -- The start makes the tunings folder; it sends nothing (the engine starts
   -- in the default tuning, 3.8 ruling 42)
   S.register_start(S.constants.START_ORDER.tuning, function() util.make_dir(folder()) end)

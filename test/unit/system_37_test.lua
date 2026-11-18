@@ -601,17 +601,17 @@ test("a 3.7 PSET loads with no error line and each voice its old type", function
   local context = load_strata({data_subdir = subdir}); finish_startup(context)
   local S = local_value("S")
   params:set("v2_type", S.lib.types.record("sub").index)
-  -- 1e: the PSET's voice 3 quantizes on a twelve-equal note (D4), read over
-  -- a session in nineteen equal steps
-  local d4 = 440 * 2 ^ ((62 - 69) / 12)
+  -- 1e: the PSET's voice 3 quantizes on a twelve-equal note (C#4), read over
+  -- a session in five equal steps (wider than a semitone, so the tuning in
+  -- force at the voice's line would move it)
+  local csharp4 = 440 * 2 ^ ((61 - 69) / 12)
   local quantized, quantize_lines = h.file_text(pset):gsub('"v3_quantize": [^\n]*\n', '"v3_quantize": 1\n')
-  local edited, freq_lines = quantized:gsub('"v3_freq": [^\n]*\n', '"v3_freq": ' .. d4 .. '\n')
+  local edited, freq_lines = quantized:gsub('"v3_freq": [^\n]*\n', '"v3_freq": ' .. csharp4 .. '\n')
   assert_equal(quantize_lines + freq_lines, 2, "the 3.7 PSET has a v3_quantize and a v3_freq line")
   h.write_text(pset, edited)
-  for _, entry in ipairs(S.lib.tuning.built_ins()) do
-    if entry.name == "19 equal" then S.lib.tuning.select(entry) end
-  end
-  assert_equal(S.lib.tuning.count(), 19, "the session is in nineteen equal steps")
+  params:set("tuning_name", "5 equal")
+  params:set("tuning_tones", "1200 0 240 480 720 960")
+  assert_equal(S.lib.tuning.count(), 5, "the session is in five equal steps, each wider than a semitone")
   local from = #context.printed + 1
   params:read(pset)
   lfo_step(context, 3)
@@ -645,7 +645,7 @@ test("a 3.7 PSET loads with no error line and each voice its old type", function
   -- 1e: twelve equal steps again (the PSET has no tuning lines), and voice
   -- 3 on its saved note to the cent
   assert_equal(params:get("tuning_name"), "12 equal", "tuning_name is the twelve-equal tuning's")
-  assert_near(69 + 12 * math.log(params:get("v3_freq") / 440) / math.log(2), 62, 0.01, "voice 3's freq is D4 to the cent")
+  assert_near(69 + 12 * math.log(params:get("v3_freq") / 440) / math.log(2), 61, 0.01, "voice 3's freq is C#4 to the cent")
   cleanup()
 end)
 
