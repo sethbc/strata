@@ -279,27 +279,27 @@ end)
 
 -- 4a's review: one answer to "would toggle freeze or release this effect
 -- now", which toggle and FX's hint and key share
-test("can_freeze is offered and not bypassed, and toggle acts only when it is true", function()
+test("freezable is offered and not bypassed, and toggle acts only when it is true", function()
   local context, _, fx_hold = loaded()
-  assert_true(fx_hold.can_freeze("delay"), "a running delay can freeze")
+  assert_true(fx_hold.freezable("delay"), "a running delay can freeze")
   params:set("delay_freeze", 1)
-  assert_true(fx_hold.can_freeze("delay"), "and a frozen one can be released")
+  assert_true(fx_hold.freezable("delay"), "and a frozen one can be released")
   params:set("delay_bypass", 1)
-  assert_true(not fx_hold.can_freeze("delay"), "a bypassed delay cannot")
+  assert_true(not fx_hold.freezable("delay"), "a bypassed delay cannot")
   params:set("delay_bypass", 0)
   for _, effect in ipairs({"reverb", "filter", false}) do
-    assert_true(not fx_hold.can_freeze(effect or nil), tostring(effect) .. " cannot (not offered)")
+    assert_true(not fx_hold.freezable(effect or nil), tostring(effect) .. " cannot (not offered)")
   end
-  -- toggle asks can_freeze: with it false, toggle does nothing
-  local real = fx_hold.can_freeze
-  fx_hold.can_freeze = function() return false end
+  -- toggle asks freezable: with it false, toggle does nothing
+  local real = fx_hold.freezable
+  fx_hold.freezable = function() return false end
   context.clear_engine_calls()
   fx_hold.toggle("delay")
-  fx_hold.can_freeze = real
-  assert_equal(#context.engine_calls, 0, "toggle sends nothing when can_freeze says no")
+  fx_hold.freezable = real
+  assert_equal(#context.engine_calls, 0, "toggle sends nothing when freezable says no")
   assert_equal(params:get("delay_freeze"), 0, "and leaves the freeze")
   fx_hold.toggle("delay")
-  assert_equal(params:get("delay_freeze"), 1, "with can_freeze true it freezes")
+  assert_equal(params:get("delay_freeze"), 1, "with freezable true it freezes")
 end)
 
 test("a tempo change under a frozen synced delay keeps the freeze", function()

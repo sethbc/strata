@@ -189,7 +189,7 @@ return function(S)
     local row = cursor_row()
     if alt_held then
       local hint = S.lib.ui_alt.k2_hint(record)
-      if S.lib.fx_hold.can_freeze(row.effect) then
+      if S.lib.fx_hold.freezable(row.effect) then
         hint = hint .. " " .. (S.lib.fx_hold.frozen(row.effect) and FX.hints.unfreeze or FX.hints.freeze)
       end
       local param_id = row_param_id(row)
@@ -294,7 +294,7 @@ return function(S)
       S.lib.ui_alt.k2_down(); request_redraw()
     elseif n == 3 then
       local effect = cursor_row().effect
-      S.lib.fx_hold.toggle(effect)  -- nothing unless S.lib.fx_hold.can_freeze(effect)
+      S.lib.fx_hold.toggle(effect)  -- nothing unless S.lib.fx_hold.freezable(effect)
     end
   end
   local function fx_alt_key_release(n)
