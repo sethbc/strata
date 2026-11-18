@@ -19,7 +19,7 @@
 - `clearDelay()`, `""`: no argument (norns takes an empty format, as `Engine_PolySub.sc` does). Sets `t_clear` 1 on the running node; nothing while bypassed.
 - Released, the loop decays at the feedback the node holds (`setDelay`'s, kept through the freeze): 0.4 is about -8 dB a pass, under -40 dB 2 s after the release at 0.375 s.
 - Frozen and cleared, the loop empties and stays frozen on silence (the input is closed), until a release opens the input again.
-- The node takes 14.3 KB of the pool on 3.14.1 (the memory area's twenty-node probe, under its 20 KB limit, `delayDefLimitKB`; 7.5 KB before the freeze and the clear).
+- The node takes 14.3 KB of the pool on 3.14.1 and on 3.13 (the memory area's twenty-node probe, under its 20 KB limit, `delayDefLimitKB`; 7.5 KB before the freeze and the clear).
 
 ## The engine check (`test/engine_check/delay.scd`)
 
