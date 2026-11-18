@@ -31,6 +31,7 @@ var readings, frozenAt, live, fading, ok, savedFadeWait = engine.bufferFadeWait;
 var rampPath, rampFile, other, otherCommand, writerNodes, root, write, high, toggles;
 var old, readsCopy, restartGrain, startInput, attempt, precondition;
 var tone, meters, peaksOver, sentDuring, inOneBundle, ringPeak, writerBefore, kept, fails, failWatcher, standard;
+var gapLimitSeconds = 0.05, block = server.options.blockSize, headAcross, headGoesOn, gapBus, gapProbe, copyHead, copiedAt;
 
 // A grain synth's reads while seconds pass: [largest lookback, smallest
 // lookback, largest read, smallest read, seconds with a grain]. Reads only
@@ -56,6 +57,13 @@ SynthDef(\strataCheckFreezeGrainStart, { arg in, out;
     var read = sig[0] / sig[1].max(0.001);
     var onset = (on - Delay1.ar(on)) > 0;
     Out.kr(out, A2K.kr(Latch.ar(read, DelayN.ar(onset, 0.001, 0.001))));
+}).add;
+// The longest silence (s) since t_reset: a stretch where both channels'
+// samples together stay under 1e-4 (a tone's zero crossings last
+// microseconds)
+SynthDef(\strataCheckFreezeGap, { arg in, out, t_reset = 0;
+    var sig = In.ar(in, 2), silent = sig.abs.sum < 1e-4;
+    Out.kr(out, A2K.kr(RunningMax.ar(Sweep.ar(1 - silent, silent), T2A.ar(t_reset))));
 }).add;
 // The timecode: into out (voice 1's bus, while voiceOn > 0) and out2 (the
 // input bus, while inputOn > 0); the time to now (audio) and nowKr
@@ -714,7 +722,7 @@ high = other.tier == \high;
 // the spectral writer's def is added by a high engine only (so not in the
 // runner's allDefs, which the structure area checks on the standard engine)
 check.(high and: { SynthDescLib.global.at(\strataRingWriteSpectral).notNil }
-    and: { SynthDescLib.global.at(\strataRingWriteSpectral).controlNames.collect(_.asSymbol) == [\in, \bufL, \bufR, \phaseOut, \fftL, \fftR] }
+    and: { SynthDescLib.global.at(\strataRingWriteSpectral).controlNames.collect(_.asSymbol) == [\in, \bufL, \bufR, \phaseOut, \resume, \fftL, \fftR] }
     and: { other.areaState[\freeze][\spectralBuffers].size == other.numVoices }
     and: { other.areaState[\freeze][\spectralBuffers].flat.every({ arg buffer; buffer.numFrames == other.spectralFrames }) },
     "freeze: a high engine adds strataRingWriteSpectral, with strataRingWrite's controls and a voice's FFT pair (fftL, fftR)");
@@ -740,6 +748,81 @@ toggles = 20.collect({ arg index;
 });
 check.(high and: { toggles.every(_.value) } and: { other.areaState[\freeze][\frozen][0].not },
     "freeze: spectral writer replacement leaves one writer per voice (high %, 20 toggles: %)".format(high, toggles));
+// #801: a writer that replaces another goes on from the write head. A
+// writer reports on its phase bus the frame it writes at the start of each
+// block. On SuperCollider 3.13 a replaced writer used to start at frame 0
+// (its Phasor never saw the reset to the phase bus on its first sample):
+// at a spectral freeze the frozen grains, grainMaxSeconds behind the head,
+// then read the ring's end, silence where the voice had not played, for
+// about half a second. Voice 6: a steady tone on its bus (its voice synth
+// played elsewhere), its grains through the rectangular envelope, the tone
+// started 0.8 s before the freeze with the head between a quarter and 0.4
+// of the ring (the ring's end then holds only the silence written before
+// the tone). headAcross reads the head before and after action, a sync
+// between (the head away from the ring's ends, so a jump to 0 shows), and
+// the synth path's longest silence over the second after: [the head's step,
+// the frames the two reads span, the longest silence]. headGoesOn: the step
+// is within a block (the replacement's first block) and the reads' frames
+// and their slack
+headAcross = { arg voice, action, low = 0.25, high = 0.75;
+    var bus = other.areaState[\rings][\phaseBuses][voice], frames = other.ringBuffersFor(voice, 0)[0].numFrames;
+    var before, after, sent;
+    h.waitFor({ var head = h.readBusValue(bus); (head > (frames * low)) and: { head < (frames * high) } }, 5);
+    gapProbe.set(\t_reset, 1);
+    server.sync;
+    before = h.readBusValue(bus);
+    sent = Main.elapsedTime;
+    action.value;
+    server.sync;
+    after = h.readBusValue(bus);
+    sent = (Main.elapsedTime - sent) * sampleRate;
+    1.0.wait;
+    [(after - before).wrap(frames.neg / 2, frames / 2), sent, h.readBusValue(gapBus)]
+};
+headGoesOn = { arg reading;
+    (reading[0] >= (block.neg - (periodSlack * sampleRate))) and: { reading[0] <= (reading[1] + block + (periodSlack * sampleRate)) }
+};
+gapBus = Bus.control(server, 1);
+otherCommand.(\setGrainParam, 6, \freezeMode, 1.0);
+h.waitFor({ var head = h.readBusValue(other.areaState[\rings][\phaseBuses][6]), frames = other.ringBuffersFor(6, 0)[0].numFrames;
+    (head > (frames * 0.25)) and: { head < (frames * 0.4) } }, 5);
+tone = Synth(\strataCheckSine, [\out, other.granBuses[6], \freq, 440], other.voiceGroup, \addToHead);
+otherCommand.(\voiceOn, 6, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+server.sync;
+other.synths[other.voiceKey(6)].set(\out, quietBus.index);
+[\posSpread, \panSpread].do({ arg control; otherCommand.(\setGrainParam, 6, control, 0.0) });
+other.synths[other.grainKey(6)].set(\envBuf, rectEnv.bufnum);
+gapProbe = Synth(\strataCheckFreezeGap, [\in, other.voicePathBus(6, 0), \out, gapBus],
+    other.synths[other.voiceMixKey(6)], \addBefore);
+server.sync;
+0.8.wait;
+readings = headAcross.(6, { otherCommand.(\setGrainParam, 6, \freeze, 1.0) });
+check.(high and: { headGoesOn.(readings) },
+    "freeze: a spectral freeze's writer goes on from the write head (#801: a step of % frames over % frames of reads, within a block of them)".format(
+        readings[0], readings[1].round));
+check.(high and: { readings[2] <= gapLimitSeconds },
+    "freeze: a spectral freeze has no gap: the synth path's longest silence over the second after it is at most % s (#801: % s)".format(
+        gapLimitSeconds, readings[2].round(0.001)));
+readings = headAcross.(6, { otherCommand.(\setGrainParam, 6, \freeze, 0.0) });
+check.(high and: { headGoesOn.(readings) },
+    "freeze: an unfreeze from spectral's writer goes on from the write head (#801: a step of % frames over % frames of reads, within a block of them)".format(
+        readings[0], readings[1].round));
+check.(high and: { readings[2] <= gapLimitSeconds },
+    "freeze: an unfreeze from spectral has no gap: the synth path's longest silence over the second after it is at most % s (#801: % s)".format(
+        gapLimitSeconds, readings[2].round(0.001)));
+// a hold's writer, paused (run 0) and run again (run 1), is never replaced:
+// its head stands still while frozen and goes on from where it stood
+otherCommand.(\setGrainParam, 6, \freezeMode, 0.0);
+otherCommand.(\setGrainParam, 6, \freeze, 1.0);
+server.sync; 0.1.wait;
+kept = phaseMoves.(other.areaState[\rings][\phaseBuses][6]);
+readings = headAcross.(6, { otherCommand.(\setGrainParam, 6, \freeze, 0.0) }, -1, 2);
+check.(kept.not and: { headGoesOn.(readings) },
+    "freeze: a hold's paused writer stands still and its run goes on from where it stood (moved while frozen %; a step of % frames over % frames of reads)".format(
+        kept, readings[0], readings[1].round));
+otherCommand.(\voiceOff, 6);
+server.sync;
+gapProbe.free; tone.free; gapBus.free;
 // spectral on silence (a stopped voice: its bus is silent) writes only the
 // dither, far below hearing: no buzz at the hop rate
 otherCommand.(\setGrainParam, 4, \freezeMode, 1.0);
@@ -787,6 +870,15 @@ server.sync; 0.2.wait;
 writerBefore = other.ringWriterFor(2);
 otherCommand.(\setGrainParam, 2, \freeze, 1.0);
 h.waitFor({ other.areaState[\freeze][\copied][2] }, 0.5);
+// the copy writer, a new node (never a replacement), starts at the copy's
+// end, its phase bus's 0 (#801): its head, read just after, has gone on no
+// further than the wait's step (50 ms), the read and a block
+copiedAt = Main.elapsedTime;
+copyHead = h.readBusValue(other.copyRingFor(2)[2]);
+copiedAt = (Main.elapsedTime - copiedAt + 0.05) * sampleRate;
+check.(copyHead.inclusivelyBetween(0, copiedAt + block + (periodSlack * sampleRate)),
+    "freeze: a spectral input freeze's copy writer starts at the copy's end (its head % frames after at most % frames)".format(
+        copyHead, copiedAt.round));
 server.sync;
 readings = writerNodes.value;
 kept = readings.detect({ arg node; node.id == (other.synths[other.copyWriterKeys[2]] !? { arg synth; synth.nodeID }) });

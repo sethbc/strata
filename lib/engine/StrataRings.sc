@@ -97,18 +97,36 @@
         rings[\writers] = [];
     }
 
+    // A ring writer's frame position (audio rate), for both writer defs: a
+    // count of the frames since the writer started, from where it starts,
+    // wrapped to the ring. It starts at the frame on phaseOut, latched on
+    // its first sample: a new writer (resume 0: a fresh engine's writers, a
+    // copy writer at its copy's end) there, and a writer that replaces
+    // another (resume 1: replaceRingWriter) a block on, for phaseOut holds
+    // the frame the old one wrote at the start of its last block, so it
+    // carries on where that one was. A paused writer run again goes on from
+    // where it stood (its count waits with it). No Phasor reset by a
+    // trigger on the first sample: SuperCollider 3.13's Phasor takes its
+    // trigger's first value as the last one, so it never sees that trigger,
+    // and a replaced writer started at frame 0 (#801). Latch sees a trigger
+    // on its first sample on 3.13 and 3.14 alike.
+    ringWritePhase { arg bufL, phaseOut, resume;
+        var frames = BufFrames.kr(bufL);
+        var start = Latch.ar(In.kr(phaseOut) + (resume * context.server.options.blockSize), Impulse.ar(0));
+        ^(Phasor.ar(0, 1, 0, frames) + start).wrap(0, frames)
+    }
+
     addRingDefs {
-        // A ring writer: a Phasor over the ring's frames drives two BufWrs
-        // (always appending: the ring holds the last BufFrames of its input)
-        // and reports its frame position on phaseOut. It starts from the
-        // position on phaseOut, so a writer that replaces another (the freeze
-        // area's) carries on where that one was. The input goes through
+        // A ring writer: its frame position (ringWritePhase) drives two
+        // BufWrs (always appending: the ring holds the last BufFrames of its
+        // input) and it reports the position on phaseOut, carrying on from
+        // the writer it replaces (resume 1). The input goes through
         // zeroBadValues first: a voice that blows up never writes NaN into a
         // ring that frozen or later grains replay.
         SynthDef(\strataRingWrite, {
-            arg in, bufL, bufR, phaseOut;
+            arg in, bufL, bufR, phaseOut, resume = 0;
             var sig = In.ar(in, 2).collect({ arg channel; this.zeroBadValues(channel) });
-            var phase = Phasor.ar(Impulse.ar(0), 1, 0, BufFrames.kr(bufL), In.kr(phaseOut));
+            var phase = this.ringWritePhase(bufL, phaseOut, resume);
             BufWr.ar(sig[0], bufL, phase);
             BufWr.ar(sig[1], bufR, phase);
             Out.kr(phaseOut, A2K.kr(phase));
