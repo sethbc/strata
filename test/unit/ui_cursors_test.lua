@@ -424,8 +424,8 @@ test("voice_rows.rows may be a function, and swaps replace a row of the section"
     end
     return table.concat(list, " ")
   end
-  -- (3.8 1c's five rows come between: its record registers before the probe)
-  local grain = "grain_mode grain_shape grain_skew grain_prob grain_cloud pan_wander"
+  -- (3.8 1c's five rows and 2b's arp come between: their records register before the probe)
+  local grain = "grain_mode grain_shape grain_skew grain_prob grain_cloud pan_wander arp"
   assert_equal(ids(1), "grain_size grain_density grain_pitch grain_spread " .. grain .. " probe_a",
     "voice 1: its row added, no swap")
   assert_equal(ids(2), "grain_size probe_b grain_pitch grain_spread " .. grain .. " probe_a",

@@ -93,6 +93,11 @@ local RUN_CALLS_ALLOWED = {
   -- 1d: each voice start sends its input channel, stereo (design §5)
   {kind = "drop", match = '^setGrainParam%(<v0>, "inputChannel", 0%)$', count = 1,
     why = "1d: each voice's start sends the input channel, 0: stereo (design section 5)"},
+  -- 2b: the arpeggiator, off (design §4.3)
+  {kind = "drop", match = '^setGrainParam%(<v0>, "arpOn", 0%)$', count = 1,
+    why = "2b: each voice's start sends the arpeggiator, 0: off (design section 4.3)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "arpFold", 0%)$', count = 1,
+    why = "2b: each voice's start sends the arpeggiator's fold, 0 (design section 4.3)"},
 }
 
 -- A call as the fixture writes it: name(args), numbers "%.9g", strings "%q"

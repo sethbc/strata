@@ -900,6 +900,30 @@ test("release: each key's note ends with its key, the own note parks, the voice 
   assert_true(not voices[3].active)
 end)
 
+-- 3.8 (design §4.3, package 2b): on an arpeggiating voice a held chord is
+-- the list. A key struck again while latched neither adds a step nor
+-- restarts the voice
+test("C-E-G latched, E struck again: list still {0, 4, 7}, one retrigger", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
+  note_on(context, 1, 60); note_on(context, 1, 64); note_on(context, 1, 67)
+  note_off(context, 1, 64)  -- latched; C and G still down
+  context.clear_engine_calls()
+  note_on(context, 1, 64)
+  local values, count = {}, nil
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    local index = call.args[2]:match("^interval(%d)$")
+    if index then values[tonumber(index)] = call.args[3] end
+    if call.args[2] == "intervalCount" then count = call.args[3] end
+  end
+  assert_equal(count, 3, "three steps")
+  assert_equal(table.concat({values[1], values[2], values[3]}, ","), "0,4,7", "still {0, 4, 7}")
+  assert_equal(#context.calls_named("retrigger"), 1, "one retrigger")
+  assert_equal(#context.calls_named("voiceOn") + #context.calls_named("noteOn"), 0, "no start, no note")
+  assert_equal(#S.lib.arp.held(1), 2, "E held once")
+end)
+
 test("midi_note_off offers latch and release, latch the default", function()
   load_strata()
   local S = local_value("S")
