@@ -29,9 +29,29 @@
     // (s, design §7.2): what the line held has gone by then
     delayClearMargin { ^0.005 }
 
-    // The return's fade out and back in at a clear's window (s, the 60 dB
-    // time of its lag), inside the margin, so neither edge clicks
+    // The return's fade out at a clear (s), inside the margin: the return
+    // falls silent at once, without a step
     delayClearFade { ^0.003 }
+
+    // The feedback's and the return's fade back in as a clear's window ends
+    // (s): the line takes what it returns again, and a gain stepped back up
+    // in one control block wrote a step into the line, heard one delay time
+    // later (as #308's click), and stepped the return itself. Over 20 ms of
+    // a raised cosine the fade's largest slope on a full-scale tone down to
+    // about 20 Hz stays under the tone's own, so neither has a sample step
+    // larger than the steady signal's (the delay area's check)
+    delayClearOpenSeconds { ^0.02 }
+
+    // A clear's gain from muted (1, or 0 inside the window): back to 1 over
+    // delayClearOpenSeconds and down to 0 at close (per second; a fall of
+    // ControlRate.ir is one control block), each as a raised cosine of a
+    // linear Slew, so it starts and ends without a corner. Exactly 1 while
+    // muted is 1 (Slew starts at its input, and cos(pi) is -1 in single
+    // precision): an uncleared delay plays its graph before, bit for bit
+    delayClearGain { arg muted, close;
+        var ramp = Slew.kr(muted, 1 / this.delayClearOpenSeconds, close);
+        ^(1 - cos(ramp * pi)) * 0.5
+    }
 
     // The delay's line: [left, right], allocated once (bufnums never change)
     delayLine { ^areaState[\effects][\delayLine] }
@@ -87,7 +107,8 @@
         // 3.8's clear (t_clear, a trigger; design §7.2): a Trig1 window of
         // the delay time and delayClearMargin mutes the feedback (at once)
         // and the return (faded over delayClearFade), so what the line held
-        // is gone when it ends and the line holds only what came in since
+        // is gone when it ends and the line holds only what came in since;
+        // both come back over delayClearOpenSeconds (delayClearGain)
         SynthDef(\strataDelay, {
             arg in, out, bufL, bufR, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0, frozen=0, t_clear=0;
             var hold = Slew.kr(frozen.clip(0, 1), this.delayFreezeRate, this.delayFreezeRate);
@@ -103,8 +124,8 @@
                 input[0] + (input[1] * cross) + (returned[0] * keep) + (returned[1] * cross),
                 (input[1] * keep) + (returned[1] * keep) + (returned[0] * cross)
             ], delayTime);
-            LocalOut.ar(delayed * feedback.clip(0, 0.95).max(hold) * muted);
-            Out.ar(out, delayed * muted.lag(this.delayClearFade) * mix.clip(0, 1).lag(this.fxMixLag));
+            LocalOut.ar(delayed * feedback.clip(0, 0.95).max(hold) * this.delayClearGain(muted, ControlRate.ir));
+            Out.ar(out, delayed * this.delayClearGain(muted, 1 / this.delayClearFade) * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
     }
 
