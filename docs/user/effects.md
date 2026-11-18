@@ -23,7 +23,7 @@ The voice filter's cutoff and both sends are LFO destinations (`v1 vfilt`, `v1 d
 
 ## Bypass
 
-`delay bypass` and `reverb bypass` (PARAMS > fx, or K3 on the FX page's delay or reverb rows) switch an effect off completely: it fades out over 50 ms and stops running, which frees its CPU (the delay's line, kept apart from the memory the voices use, is emptied). Lifting the bypass brings it back at the same mix, starting empty, so the echoes or the tail build up again from a 50 ms fade-in (a sound already playing comes into the first echo without a click).
+`delay bypass` and `reverb bypass` (PARAMS > fx, or K3 on the FX page's delay or reverb rows) switch an effect off completely: it fades out over 50 ms and stops running, which frees its CPU, and the reverb's memory too (the delay's line is kept apart from the memory the voices use, and emptied). Lifting the bypass brings it back at the same mix, starting empty, so the echoes or the tail build up again from a 50 ms fade-in (a sound already playing comes into the first echo without a click).
 
 - The mix keeps its value while bypassed, and changing it, the delay time or the reverb size meanwhile takes effect when the bypass is lifted.
 - A mix of 0 is not a bypass: an LFO, a scene fade or a MIDI CC can take a mix through 0 and the effect keeps running, so its echoes and tail are still there when the mix comes back up.
