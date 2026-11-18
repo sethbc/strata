@@ -1545,10 +1545,88 @@ test("a voice moved to another port while its old port is held leaves the takedo
   assert_equal(sent(other), SETUP_15_48, "nothing more on the new port")
 end)
 
--- Cleanup sends no zone message on a free port (the device keeps its zone),
--- and a held port does no worse: the release in the remote's cleanup step
--- comes after MIDI out's stop
-test("cleanup sends no takedown, owed or not (#788)", function()
+-- #789: at cleanup every zone MIDI out set up on a free port with its
+-- device there is taken down (the takedown above, once a port), after the
+-- targets' step (142) sent every note's off and before the ports' step
+-- (152) lets the vports go
+
+local SETUP_7_48 = "cc 101 0 1|cc 100 6 1|cc 6 7 1|cc 101 0 2|cc 100 0 2|cc 6 48 2|cc 101 0 1|cc 100 0 1|cc 6 2 1"
+
+-- What device had been sent as the ports' own cleanup step began
+local function sent_at_ports_cleanup(S, devices)
+  local seen = {}
+  for _, record in ipairs(S.registry.cleanup) do
+    if record.order == S.constants.CLEANUP_ORDER.io_ports then
+      local step = record.fn
+      record.fn = function(...)
+        for name, device in pairs(devices) do seen[name] = sent(device) end
+        return step(...)
+      end
+    end
+  end
+  return seen
+end
+
+test("cleanup takes down every zone it set up, after the last note off and before the ports' cleanup (#789)", function()
+  local context, S = started()
+  local first, second = context.midi.plug(3, "synth a"), context.midi.plug(5, "synth b")
+  mpe_voice(1, 3); mpe_voice(2, 5, 7); settled(context)
+  assert_equal(sent(first), SETUP_15_48, "voice 1's zone on port 3")
+  assert_equal(sent(second), SETUP_7_48, "voice 2's zone of 7 members on port 5")
+  clear(first); clear(second)
+  S.patterns[1][1] = 15; S.patterns[2][1] = 15
+  pattern_clock_start()
+  context.clock.run_for(0.01)
+  for name, device in pairs({first = first, second = second}) do
+    local ons = 0
+    for _, text in ipairs(lines(device)) do if text:match("^note_on ") then ons = ons + 1 end end
+    assert_true(ons > 0, name .. " sounds a note before cleanup: " .. sent(device))
+    clear(device)
+  end
+  local seen = sent_at_ports_cleanup(S, {first = first, second = second})
+  cleanup()
+  for name, device in pairs({first = first, second = second}) do
+    local text = sent(device)
+    assert_true(text:match("^note_off %d+ %d+") ~= nil, name .. ": the notes' offs go first: " .. text)
+    assert_equal(text:sub(-#TAKEDOWN), TAKEDOWN, name .. ": the takedown comes after the last note off: " .. text)
+    assert_equal(select(2, text:gsub("cc 100 6 1", "")), 1, name .. ": one takedown: " .. text)
+    assert_equal(seen[name], text, name .. ": all of it was sent before the ports' cleanup")
+  end
+end)
+
+test("cleanup sends no takedown to a port with no zone (#789)", function()
+  local context, S = started()
+  local plain, gone = context.midi.plug(2, "synth a"), context.midi.plug(4, "synth b")
+  params:set("v1_out_port", 2)
+  mpe_voice(3, 4); settled(context)
+  params:set("v3_out_mode", 1); settled(context)
+  assert_equal(sent(gone), SETUP_15_48 .. "|" .. TAKEDOWN, "voice 3's zone set up, then taken down")
+  assert_true(midi_target(S).routed(1), "voice 1 plays port 2, plain")
+  clear(plain); clear(gone)
+  cleanup()
+  assert_equal(sent(plain), "", "a plain voice's port gets no zone message")
+  assert_equal(sent(gone), "", "a zone already taken down is not taken down again")
+end)
+
+test("cleanup sends no takedown to a zone's port with no device (#789)", function()
+  local context, S = started()
+  context.midi.plug(3, "synth")
+  mpe_voice(1, 3); settled(context)
+  context.midi.unplug(3)
+  local calls = 0
+  local real_out = S.lib.io_ports.out
+  S.lib.io_ports.out = function(...) calls = calls + 1; return real_out(...) end
+  cleanup()
+  S.lib.io_ports.out = real_out
+  assert_equal(calls, 0, "no vport is reached for a port with no device")
+end)
+
+-- A held port at cleanup: the remote's step (147), which lets the port go,
+-- comes after MIDI out's (143), so the port is held at the moment of the
+-- takedown; a takedown owed there, or a zone there, is dropped with the
+-- script (as #788 forgets a takedown its device leaves with), never an error.
+-- A free port's zone beside it is taken down
+test("cleanup drops a takedown owed to a held port, and takes down a free port's zone (#788, #789)", function()
   local context, S = started()
   local synth = zone_then_held(context, S)
   params:set("v1_out_mode", 1); settled(context)
@@ -1557,7 +1635,14 @@ test("cleanup sends no takedown, owed or not (#788)", function()
   clear(free)
   cleanup()
   assert_equal(sent(synth), "", "the held port's owed takedown is not sent")
-  assert_equal(sent(free), "", "nor is a free port's zone taken down")
+  assert_equal(sent(free), TAKEDOWN, "the free port's zone is taken down once")
+end)
+
+test("cleanup sends nothing to a zone on a held port (#789)", function()
+  local context, S = started()
+  local synth = zone_then_held(context, S)
+  cleanup()
+  assert_equal(sent(synth), "", "the port the remote holds gets no takedown")
 end)
 
 test("a zone taken down while midigrid holds its port is taken down when midigrid lets it go (#788)", function()
