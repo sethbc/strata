@@ -349,8 +349,7 @@ return function(S)
   -- from the freeze reference on a frozen synth voice, clamped to the
   -- engine's 0.25-4}; nil for a voice outside 1..NUM_VOICES or a pitch that
   -- is not a finite number. Every note's pitch becomes what the engine plays
-  -- here; a tuning also reaches the key's pitch, the scale snap, a degree, a
-  -- chord's notes and the engine's quantize table
+  -- here
   function M.note_values(voice, pitch)
     if not whole_in(voice, 1, NUM_VOICES) or not finite(pitch) then return nil end
     local min_freq, max_freq = param_range("v" .. voice .. "_freq")
