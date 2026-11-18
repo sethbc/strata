@@ -1766,34 +1766,51 @@ function CI_WORKFLOW.cache_problems(workflow)
   -- a PATH key in an env block (#817): the workflow's, the shard job's or a
   -- step's sets the PATH every command under it runs with, so a directory
   -- put first there shadows a command the pinned lines run.
-  -- What it reads, by lines: the env of the workflow (before `jobs:`), of the
-  -- shard job and of each of its steps. An `env:` line (a step's first key,
-  -- `- env:`, too), its comment dropped, opens a block when nothing is left
-  -- or when it opens a flow mapping it does not close (`env: {`); the block
-  -- is the lines after it indented deeper than the `env:`, comments dropped.
-  -- A PATH key is found wherever on a line a key can start: after the
-  -- indent, after a `{` and after any `,`, quoted or not, with any spacing
-  -- before its colon, on the block's lines and in a flow mapping on the
-  -- `env:` line itself (`env: { A: 1, PATH: x }`); a key that only ends in
+  -- What it reads, by lines, comments and blank lines dropped: the env of
+  -- the workflow (before `jobs:`), of the shard job and of each of its
+  -- steps. An `env:` line (a step's first key, `- env:`, too) with nothing
+  -- after it opens a block: the lines after it indented deeper than the
+  -- `env:`, or, when the first of them starts with `{`, the lines from that
+  -- `{` to its closing `}`. One that opens a flow mapping it does not close
+  -- (`env: {`) opens the lines to that `}`, whatever their indent (braces
+  -- counted, so `${{ ... }}` balances). On those lines and on the `env:`
+  -- line itself (`env: { A: 1, PATH: x }`), a PATH key is matched as a
+  -- plain or quoted key (`PATH`, `"PATH"`, `'PATH'`, any spacing before its
+  -- colon) after the line's indent, a `{` or a `,`; a key that only ends in
   -- PATH (`MYPATH`) passes.
   -- What it does not: it parses no quotes, so a value holding the text
-  -- (`A: "x, PATH: y"`) is refused too, a known over-refusal; and it does
-  -- not read an env given by an expression (`env: ${{ ... }}`, such as
-  -- `fromJSON`) or through an anchor or merge key (`<<: *name`), nor a flow
-  -- mapping's line indented no deeper than its `env:`. The workflow uses
-  -- none of these
+  -- (`A: "x, PATH: y"`) is refused too, a known over-refusal, and a brace
+  -- in a quoted value is counted; it does not read an explicit key written
+  -- with `?` (`? PATH` then `: x`), a tagged key (`!!str PATH: x`), an env
+  -- given by an expression (`env: ${{ ... }}`, such as `fromJSON`) or one
+  -- through an anchor or merge key (`<<: *name`). The workflow uses none of
+  -- these
   local function names_path(text) return ("," .. text):find("[{,]%s*[\"']?PATH[\"']?%s*:") ~= nil end
+  local function braces(text) return select(2, text:gsub("{", "")) - select(2, text:gsub("}", "")) end
+  local function blamed(line) problem("PATH is set in an env block (every command under it runs with that PATH): " .. line:match("^%s*(.-)%s*$")) end
   for _, scope in ipairs({ workflow:match("^(.-\n)jobs:\n") or "", shard.text }) do
-    local block
+    -- block: the env:'s indent while its indented block lasts; depth: the
+    -- braces open while a `{`-opened block lasts; first: the next line is
+    -- the first after an `env:` with nothing after it
+    local block, depth, first
     for line in (scope .. "\n"):gmatch("([^\n]*)\n") do
-      local skipped = line:match("^%s*$") or line:match("^%s*#")
-      if block and not skipped and #line:match("^%s*") <= block then block = nil end
-      local lead, rest = line:match("^(%s*%-?%s*)env:%s*(.-)%s*$")
-      if lead then rest = rest:gsub("^#.*$", ""):gsub("%s+#.*$", "") end
-      local content = line:match("^%s*(.-)%s*$"):gsub("%s+#.*$", "")
-      local key = not skipped and ((lead and names_path(rest)) or (block and names_path(content)))
-      if key then problem("PATH is set in an env block (every command under it runs with that PATH): " .. line:match("^%s*(.-)%s*$")) end
-      if lead and not skipped and (rest == "" or rest:match("^{[^}]*$")) then block = #lead end
+      if not (line:match("^%s*$") or line:match("^%s*#")) then
+        local content = line:match("^%s*(.-)%s*$"):gsub("%s+#.*$", "")
+        if first and content:match("^{") then depth = 0 end
+        first = false
+        if depth then
+          if names_path(content) then blamed(line) end
+          depth = depth + braces(content)
+          if depth <= 0 then depth, block = nil, nil end
+        else
+          if block and #line:match("^%s*") <= block then block = nil end
+          local lead, rest = line:match("^(%s*%-?%s*)env:%s*(.-)%s*$")
+          if lead then rest = rest:gsub("^#.*$", ""):gsub("%s+#.*$", "") end
+          if (lead and names_path(rest)) or (block and names_path(content)) then blamed(line) end
+          if lead and rest == "" then block, first = #lead, true
+          elseif lead and rest:match("^{") and braces(rest) > 0 then depth = braces(rest) end
+        end
+      end
     end
   end
   return problems
@@ -1991,6 +2008,16 @@ test("a kept package reaches apt's archive folder only through the hash check, b
     { name = "PATH after a comma in a flow mapping on one line",
       expect = "PATH is set in an env block (every command under it runs with that PATH): env: { SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s }",
       edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n", "        env: { SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s }\n" } },
+    -- X13's third review: a flow mapping's lines at the env:'s own indent
+    -- (PyYAML takes both), opened on the env: line and on the line after it
+    { name = "PATH in a flow mapping whose lines sit at the env:'s indent",
+      expect = "PATH is set in an env block (every command under it runs with that PATH): SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
+        "        env: {\n        SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s\n        }\n" } },
+    { name = "PATH in a flow mapping opened on the line after env:",
+      expect = "PATH is set in an env block (every command under it runs with that PATH): SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
+        "        env:\n          {\n        SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s\n        }\n" } },
     -- the pinned start: a PATH of its own before the loop, and a line above the script's first
     { name = "a PATH of its own above debs=", expect = differs(start, 3, 'export PATH="$RUNNER_TEMP/bin:$PATH"'),
       edits = { debs, '          export PATH="$RUNNER_TEMP/bin:$PATH"\n' .. debs } },
@@ -2021,7 +2048,9 @@ test("a kept package reaches apt's archive folder only through the hash check, b
   for _, env in ipairs({ "        env:\n          SC_STARTED: 1\n          MYPATH: /tmp/bin\n", "        env: { PATH_NOTE: none }\n",
       "        env:\n          STRATA_PATH: /tmp/bin\n", "        env:  # PATH is the runner's own\n          SC_STARTED: 1\n",
       "        env: {\n          SC_STARTED: 1,\n          MYPATH: /tmp/bin\n        }\n", "        with:\n          path: /tmp/bin\n",
-      "        env: {\n          SC_STARTED: 1, MYPATH: /tmp/bin\n        }\n", "        env: { SC_STARTED: 1, MYPATH: /tmp/bin }\n" }) do
+      "        env: {\n          SC_STARTED: 1, MYPATH: /tmp/bin\n        }\n", "        env: { SC_STARTED: 1, MYPATH: /tmp/bin }\n",
+      "        env: {\n        SC_STARTED: 1\n        }\n        with:\n          path: /tmp/bin\n",
+      "        env:\n          {\n        SC_STARTED: \"${{ github.sha }}\"\n        }\n        with:\n          path: /tmp/bin\n" }) do
     assert_equal(table.concat(CI_WORKFLOW.cache_problems(CI_WORKFLOW.mutated(workflow, install_start,
       "        timeout-minutes: 4\n" .. env .. "        run: |\n          echo \"jackd2 ")), " | "), "",
       "the cache problems of an install step with " .. env)
