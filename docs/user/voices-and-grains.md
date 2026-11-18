@@ -207,7 +207,22 @@ Each voice has `mute` and `solo` rows at the end of VOICE's filter & sends secti
 
 ### Scales
 
-PARAMETERS > scale holds the **scale** (off, or any of norns' scales: Major, Natural Minor, Dorian, the pentatonics, ...) and its **root** (C-B), which every quantizing voice shares. With the scale off, quantize rounds to semitones. A synth voice quantizes around its own pitch; a buffer or input voice, whose key Strata cannot know, takes its audio to be in the root (C4 for root C). A buffer voice played at another rate (a MIDI note, its buffer rate) is transposed by it and its grains still land on the scale. Changing the scale or root moves every quantizing voice's pitch to the nearest tone of the new scale (not while a scene is recalled or fading). Scenes capture the scale and root and switch them at the end of a fade. A PSET loads every voice's saved pitch exactly, whatever its quantize was set to before.
+PARAMETERS > scale holds the **scale** (off, or any of norns' scales: Major, Natural Minor, Dorian, the pentatonics, ...) and its **root** (C-B), which every quantizing voice shares. With the scale off, quantize rounds to semitones. A synth voice quantizes around its own pitch; a buffer or input voice, whose key Strata cannot know, takes its audio to be in the root (C4 for root C). A buffer voice played at another rate (a MIDI note, its buffer rate) is transposed by it and its grains still land on the scale. Changing the scale or root moves every quantizing voice's pitch to the nearest tone of the new scale (not while a scene is recalled or fading). Scenes capture the scale, root and scale mask and switch them at the end of a fade. A PSET loads every voice's saved pitch exactly, whatever its quantize was set to before.
+
+A grain lands on the tone nearest its own pitch (a tie goes down). Since 3.8 this holds for a pitch between two notes too (a jittered grain, a fractional pitch shift): in a scale, about one fractional pitch in six now lands a tone away from where Strata 3.7 put it.
+
+The **custom** scale (the last in the list) is any set of the twelve notes, held as the scale mask; the scale and tuning editor (SETUP's `scale & tuning`) toggles its notes. Toggling a note of a built-in scale there copies that scale into custom first.
+
+### Tunings
+
+Strata plays one tuning, 12 equal (exact equal temperament) by default. Every MIDI key, quantize, step degree and chord follows it. Choose one on SETUP's `scale & tuning` editor: the built-ins are 12 equal; the five just tunings of norns' intonation library (ji normal, ptolemy, overtone, undertone, lamonte); pythagorean and meantone 1/4 (fifths from Eb to G#); 19, 24 and 31 equal; and Partch's 43. Your own Scala (`.scl`) files in `data/strata/tunings/` follow them, named for the file. A file is read as text: one over 128 tones, with a period outside 100-4800 cents or tones that do not ascend is refused, and the editor's hint row says why.
+
+- **Keys**: degree 0 sits on MIDI note 60 plus the root (C4 for root C), and each key above or below is the next tone, a period up or down at each wrap. So the root transposes the tuning, and A is 440 Hz only where the tuning puts it.
+- **Scales** apply only in a tuning of twelve notes to an octave (the just tunings, pythagorean, meantone): there the scale picks which of its twelve tones are allowed. In any other tuning every tone is allowed and the editor shows `--` for the scale and its notes.
+- **Chords** (the chord interval set): with a scale on, in twelve notes to an octave, the scale's 1st, 3rd, 5th and 7th tones; otherwise the tuning's tones nearest 0, 4, 7 and 11 semitones.
+- **Turning** a quantized pitch with E3 moves about one tone a detent in a dense tuning (24 or 31 equal, Partch); 12 equal and every scale turn as before.
+- A PSET saves the tuning, and a PSET without one (saved before 3.8) loads 12 equal. Scenes do not hold the tuning.
+- MIDI out in MPE mode sends a tuned note's distance from its nearest key in its bend; plain MIDI out and nb send the nearest key ([MIDI out](io/midi-out.md)). crow, Just Friends, W/syn, the ER-301 and the TELEXo play the tuned pitch as it is.
 
 ## Performance Features
 
