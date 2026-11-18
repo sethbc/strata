@@ -188,6 +188,84 @@ test("a scan hold or a held position key ends when its grid changes page or goes
   assert_near(start, 0, 1e-9, "the loop unchanged"); assert_near(length, 1, 1e-9)
 end)
 
+-- 3.8: a press record keeps the view of the pane it came from
+-- (grid_core.view(port, pane)), so a key held on a 256's lower pane lives
+-- while that pane shows what it was pressed on, whatever the upper shows
+test("a press on a 256's lower pane ends with the lower pane's page change, not the upper's", function()
+  local context, S = buffer_voices()
+  local positions, grid_core, pages = S.lib.positions, S.lib.grid_core, S.constants.GRID_PAGES
+  context.grid.plug(1, 16, 16)
+  grid_core.set_page(1, pages.patterns, 1)
+  grid_core.set_page(1, pages.positions, 2)
+  context.clear_engine_calls()
+  positions.strip_key(1, 1, "hold", 1, 2)
+  positions.strip_key(1, 2, "store", 1, 2)
+  positions.grid_key(1, 1, 5, 16, 1, 2)
+  context.clock.run_for(0.2)
+  assert_equal(positions.holds_scan(1, "grid:1"), true, "the lower pane's hold lives through the ticks")
+  assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_down, "and its store")
+  -- the upper pane's page change leaves the lower pane's keys alone
+  grid_core.set_page(1, pages.faders, 1)
+  context.clock.run_for(0.2)
+  assert_equal(positions.holds_scan(1, "grid:1"), true, "the upper pane's page change ends no hold")
+  assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_down, "nor the store")
+  positions.grid_key(1, 1, 9, 16, 1, 2)
+  local start, length = loop_of(1)
+  assert_near(start, 0.25, 1e-9, "the held cell 5 and cell 9 set the loop")
+  assert_near(length, 0.3125, 1e-9)
+  positions.grid_key(1, 1, 9, 16, 0, 2)
+  -- the lower pane's own page change ends them within a tick
+  grid_core.set_page(1, pages.patterns, 2)
+  context.clock.run_for(0.1)
+  assert_equal(positions.holds_scan(1, "grid:1"), false, "the lower pane's page change ends its hold")
+  assert_equal(last_grain(context, "scanHold", 0), 0, "scanHold 0 sent")
+  assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_up, "and its store")
+  grid_core.set_page(1, pages.positions, 2)
+  positions.grid_key(1, 1, 13, 16, 1, 2)
+  assert_near(params:get("v1_buf_pos"), 0.75, 1e-9, "a jump to cell 13: no stale anchor")
+  positions.grid_key(1, 1, 13, 16, 0, 2); positions.grid_key(1, 1, 5, 16, 0, 2)
+  -- a press without a pane is pane 1's: the lower pane's page leaves it alone
+  grid_core.set_page(1, pages.positions, 1)
+  positions.strip_key(1, 1, "hold", 1)
+  grid_core.set_page(1, pages.patterns, 2)
+  context.clock.run_for(0.1)
+  assert_equal(positions.holds_scan(1, "grid:1"), true, "pane 1's hold, with no pane given")
+  grid_core.set_page(1, pages.patterns, 1)
+  context.clock.run_for(0.1)
+  assert_equal(positions.holds_scan(1, "grid:1"), false, "ended by pane 1's page change")
+end)
+
+-- Both panes of a 256 can show a voice's store and hold keys (positions'
+-- second side): each is held per view, so the key down in one pane lasts
+-- through the other pane's release or page change, in either order
+test("a voice's store or hold held in both panes of a 256 lasts until its last pane lets go", function()
+  local context, S = buffer_voices()
+  local positions, grid_core, pages = S.lib.positions, S.lib.grid_core, S.constants.GRID_PAGES
+  context.grid.plug(1, 16, 16)
+  grid_core.set_page(1, pages.positions, 1); grid_core.set_page(1, pages.positions, 2)
+  for _, first in ipairs({1, 2}) do
+    local second = 3 - first
+    positions.strip_key(1, 1, "store", 1, first); positions.strip_key(1, 1, "store", 1, second)
+    positions.strip_key(1, 1, "hold", 1, first); positions.strip_key(1, 1, "hold", 1, second)
+    positions.strip_key(1, 1, "store", 0, second); positions.strip_key(1, 1, "hold", 0, second)
+    assert_equal(positions.strip_level(1, "store", 1), positions.LEVELS.key_down, first .. " first: pane " .. first .. "'s store is still down")
+    assert_equal(positions.holds_scan(1, "grid:1"), true, first .. " first: and its hold")
+    -- the other pane's page change ends its keys, never the first's
+    positions.strip_key(1, 1, "store", 1, second); positions.strip_key(1, 1, "hold", 1, second)
+    grid_core.set_page(1, pages.patterns, second)
+    context.clock.run_for(0.1)
+    assert_equal(positions.strip_level(1, "store", 1), positions.LEVELS.key_down, first .. " first: a page change of pane " .. second .. " leaves the store")
+    assert_equal(positions.holds_scan(1, "grid:1"), true, first .. " first: and the hold")
+    params:set("v1_buf_pos", 0.6)
+    positions.strip_key(1, 1, 3, 1, first); positions.strip_key(1, 1, 3, 0, first)
+    assert_near(positions.bookmark(1, 3), 0.6, 0.05, first .. " first: the store still stores")
+    positions.strip_key(1, 1, "store", 0, first); positions.strip_key(1, 1, "hold", 0, first)
+    assert_equal(positions.strip_level(1, "store", 1), positions.LEVELS.key_up, first .. " first: the last release ends the store")
+    assert_equal(positions.holds_scan(1, "grid:1"), false, first .. " first: and the hold")
+    grid_core.set_page(1, pages.positions, second)
+  end
+end)
+
 test("only buffer voices answer position keys; a stopped one keeps its new position", function()
   local context, S = buffer_voices()
   local positions = S.lib.positions
