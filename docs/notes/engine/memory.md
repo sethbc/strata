@@ -354,3 +354,5 @@ Every other case moves by 20-60 KB the same way (seven stages, about 0.6-1.3 KB 
 
 The tightest case, high synth -> buffer -> synth, is 4320 KB free on 3.13, 736 above its floor (the design's §1 counted -165 KB for the grain additions on 21 grain synths: the case lost 200); the pool cases lose 370-540 KB to the additions on up to 53 grain synths and keep 750 KB or more above 1280.
 
+On `main` after 1a's plain stage (39.6 KB) and the five new voice types (Karplus still the costliest voice def, 48.9 KB), with 1c rebased onto it, the memory area alone reads the same on 3.14.1 and on 3.13: `\strataGrainBuf` 91.8 KB and `\strataGrainRing` 73.3 KB (3.2's copies 73.3 and 69.1), so the 94 KB limit holds; standard 4990-5430 KB free (synth -> buffer -> synth the tightest), high 4320-5310 (synth -> buffer -> synth, 736 above 3584), the pool-full cases 2450, 2710-2720 and 3300 standard and 2350, 2050 and 2690-2710 high (the tightest 770 above 1280), eight recordings 5160 / 4480-4500. No log printed `alloc failed`.
+

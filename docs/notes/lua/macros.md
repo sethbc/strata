@@ -33,7 +33,7 @@ Elsewhere: the MOD page and its rings (package 2a) draw and edit the macros thro
 ## Targets
 
 `target_ids()`, in this order, only ids whose params exist now (the list is rebuilt when params are added or a target is registered):
-- every LFO destination (`S.LFO_DESTINATIONS`) but `none` and the global entries whose param is a macro: in the list's order (3.7, by voice: the globals, then per voice its built-in ones, a voice's `main` as `v<i>_main`, and its registered `hist`, `vfilt`, `dsend`, `rsend`, `amp`), 102 in all;
+- every LFO destination (`S.LFO_DESTINATIONS`) but `none` and the global entries whose param is a macro: in the list's order (3.7, by voice: the globals, the registered `dly>rev` among them, then per voice its built-in ones, a voice's `main` as `v<i>_main`, and its registered `shape`, `skew`, `hist`, `vfilt`, `dsend`, `rsend`, `amp`): `#S.LFO_DESTINATIONS` less `none` and the 16 macros, 117 on this build;
 - each LFO's `strata_lfo<n>_rate` and `strata_lfo<n>_depth` (n 1-6);
 - each routing's `matrix_<k>_depth` (k 1-16, `lib/matrix.lua`);
 - 3.6's registered targets (`S.register_macro_target(id, label)`, `S.registry.macro_targets`, plan ruling 4: a module's own control params, such as the tape's), in registration order, each only while its param exists and is a control (an id with no param, or an option, is left out). The register function refuses a `macro_<n>` id, so no macro becomes a target this way.

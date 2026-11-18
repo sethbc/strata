@@ -208,13 +208,15 @@ command.(\setGrainParam, 0, \sizeJitter, 0.0);
 // today's
 {
     var cycle = [1, 2, 4], folded = [1, 2, 4, 2];
-    // (2 %: the rates are an octave apart, and a ring grain at 4 in triggered
-    // mode lasts a third of its size, too short to read to 0.3 %)
-    var near = { arg rate, target; (rate / target - 1).abs < 0.02 };
+    // a rate within tolerance (0.3 %) of target; the check across
+    // retriggered and continuous grains passes 2 %: a ring grain at 4 in
+    // triggered mode lasts a third of its size, too short to read to 0.3 %
+    // (it reads 3.975), and the rates are an octave apart
+    var near = { arg rate, target, tolerance = 0.003; (rate / target - 1).abs < tolerance };
     var place = { arg rate, list; list.detectIndex({ arg target; near.(rate, target) }) };
     // whether the rates follow list in turn from some place in it
-    var inTurn = { arg rates, list;
-        list.size.collect({ arg start; rates.every({ arg rate, index; near.(rate, list.wrapAt(start + index)) }) }).any(_.value)
+    var inTurn = { arg rates, list, tolerance = 0.003;
+        list.size.collect({ arg start; rates.every({ arg rate, index; near.(rate, list.wrapAt(start + index), tolerance) }) }).any(_.value)
     };
     var steps = { arg rates; rates.collect({ arg rate; place.(rate, cycle) ? -1 }) }, gaps;
     command.(\setGrainParam, 0, \grainSize, 0.1);
@@ -303,7 +305,7 @@ command.(\setGrainParam, 0, \sizeJitter, 0.0);
         rates = grainLog.(5.5).collect(_.first);
         log.stop;
         command.(\setGrainParam, 0, \grainMode, 0);
-        check.((rates.size >= 20) and: { inTurn.(rates, list) },
+        check.((rates.size >= 20) and: { inTurn.(rates, list, 0.02) },
             "variation: the arpeggio holds its order across retriggered grains (on a block's first sample) and continuous ones (arpFold %: %, % grains; rates %)".format(
                 fold, label, rates.size, rates.collect(_.round(0.001))));
     });

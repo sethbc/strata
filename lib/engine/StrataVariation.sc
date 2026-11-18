@@ -71,8 +71,9 @@
     // the step from before its own trigger, wherever the trigger falls in a
     // block: grainRate's Select.kr reads the count at the block's first
     // sample (the one before a trigger inside the block), and the sum that
-    // adds the interval to the jitter (an audio-rate plus a control-rate
-    // input) ramps the control input from its last block's value, so a
+    // adds the interval to the jitter (TRand x pitchJitter + interval,
+    // which sclang builds as one MulAdd, its add a control-rate input)
+    // ramps a changed add input from its last block's value, so a
     // trigger on the block's first sample (a retrigger's, T2A's) also
     // takes the old step; the ramp has ended before the next grain, which
     // the trigger's hold keeps at least two blocks later. So the order
