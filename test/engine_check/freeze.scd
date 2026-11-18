@@ -31,7 +31,8 @@ var readings, frozenAt, live, fading, ok, savedFadeWait = engine.bufferFadeWait;
 var rampPath, rampFile, other, otherCommand, writerNodes, root, write, high, toggles;
 var old, readsCopy, restartGrain, startInput, attempt, precondition;
 var tone, meters, peaksOver, sentDuring, inOneBundle, ringPeak, writerBefore, kept, fails, failWatcher, standard;
-var gapLimitSeconds = 0.05, block = server.options.blockSize, headAcross, headGoesOn, gapBus, gapProbe, copyHead, copiedAt;
+var gapLimitSeconds = 0.05, block = server.options.blockSize, headStepFrames = server.options.blockSize;
+var steps, stepBus, stepProbe, gapBus, gapProbe, copyHead, copiedAt;
 
 // A grain synth's reads while seconds pass: [largest lookback, smallest
 // lookback, largest read, smallest read, seconds with a grain]. Reads only
@@ -64,6 +65,14 @@ SynthDef(\strataCheckFreezeGrainStart, { arg in, out;
 SynthDef(\strataCheckFreezeGap, { arg in, out, t_reset = 0;
     var sig = In.ar(in, 2), silent = sig.abs.sum < 1e-4;
     Out.kr(out, A2K.kr(RunningMax.ar(Sweep.ar(1 - silent, silent), T2A.ar(t_reset))));
+}).add;
+// A phase bus's step from one block to the next (frames, wrapped at the
+// ring's), since t_reset: [the smallest, the largest, how many runs of
+// steps were neither 0 nor block]
+SynthDef(\strataCheckFreezeHeadStep, { arg in, out, frames = 1, block = 64, t_reset = 0;
+    var head = In.kr(in), step = (head - Delay1.kr(head)).wrap(0, frames);
+    var other = ((step - block).abs > 0.5) * (step > 0.5);
+    Out.kr(out, [RunningMin.kr(step, t_reset), RunningMax.kr(step, t_reset), PulseCount.kr(other, t_reset)]);
 }).add;
 // The timecode: into out (voice 1's bus, while voiceOn > 0) and out2 (the
 // input bus, while inputOn > 0); the time to now (audio) and nowKr
@@ -754,38 +763,30 @@ check.(high and: { toggles.every(_.value) } and: { other.areaState[\freeze][\fro
 // (its Phasor never saw the reset to the phase bus on its first sample):
 // at a spectral freeze the frozen grains, grainMaxSeconds behind the head,
 // then read the ring's end, silence where the voice had not played, for
-// about half a second. Voice 6: a steady tone on its bus (its voice synth
-// played elsewhere), its grains through the rectangular envelope, the tone
-// started 0.8 s before the freeze with the head between a quarter and 0.4
-// of the ring (the ring's end then holds only the silence written before
-// the tone). headAcross reads the head before and after action, a sync
-// between (the head away from the ring's ends, so a jump to 0 shows), and
-// the synth path's longest silence over the second after: [the head's step,
-// the frames the two reads span, the longest silence]. headGoesOn: the step
-// is within a block (the replacement's first block) and the reads' frames
-// and their slack
-headAcross = { arg voice, action, low = 0.25, high = 0.75;
-    var bus = other.areaState[\rings][\phaseBuses][voice], frames = other.ringBuffersFor(voice, 0)[0].numFrames;
-    var before, after, sent;
-    h.waitFor({ var head = h.readBusValue(bus); (head > (frames * low)) and: { head < (frames * high) } }, 5);
-    gapProbe.set(\t_reset, 1);
-    server.sync;
-    before = h.readBusValue(bus);
-    sent = Main.elapsedTime;
-    action.value;
-    server.sync;
-    after = h.readBusValue(bus);
-    sent = (Main.elapsedTime - sent) * sampleRate;
-    1.0.wait;
-    [(after - before).wrap(frames.neg / 2, frames / 2), sent, h.readBusValue(gapBus)]
-};
-headGoesOn = { arg reading;
-    (reading[0] >= (block.neg - (periodSlack * sampleRate))) and: { reading[0] <= (reading[1] + block + (periodSlack * sampleRate)) }
-};
+// about half a second, and an unfreeze from spectral left a seam. Voice 6:
+// a steady tone on its bus (its voice synth played elsewhere), its grains
+// through the rectangular envelope, the tone started 0.8 s before the
+// freeze with the head between a quarter and 0.4 of the ring (the ring's
+// end then holds only the silence written before the tone). The step
+// probe, in processGroup (after every writer), reads the voice's phase bus
+// each block: every step from one block to the next (wrapped at the ring's
+// frames) must be exactly headStepFrames, one block, across a spectral
+// freeze and its unfreeze (a replaced writer that started at its phase bus
+// itself, not a block on, would read 0 there; 3.13's jump to frame 0 reads
+// the rest of the ring). Over a hold's run 0 and 1 the steps are 0 while
+// paused and one block while running, nothing else (the writer is never
+// replaced); over the voice's start, one block throughout. The gap: the
+// synth path's longest silence over the second after the freeze
+steps = { var values = h.readBus(stepBus); (min: values[0], max: values[1], other: values[2]) };
+stepBus = Bus.control(server, 3);
+stepProbe = Synth(\strataCheckFreezeHeadStep, [\in, other.areaState[\rings][\phaseBuses][6], \out, stepBus,
+    \frames, other.ringBuffersFor(6, 0)[0].numFrames, \block, headStepFrames], other.processGroup, \addToHead);
 gapBus = Bus.control(server, 1);
 otherCommand.(\setGrainParam, 6, \freezeMode, 1.0);
 h.waitFor({ var head = h.readBusValue(other.areaState[\rings][\phaseBuses][6]), frames = other.ringBuffersFor(6, 0)[0].numFrames;
     (head > (frames * 0.25)) and: { head < (frames * 0.4) } }, 5);
+stepProbe.set(\t_reset, 1);
+server.sync; 0.05.wait;
 tone = Synth(\strataCheckSine, [\out, other.granBuses[6], \freq, 440], other.voiceGroup, \addToHead);
 otherCommand.(\voiceOn, 6, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
 server.sync;
@@ -796,33 +797,39 @@ gapProbe = Synth(\strataCheckFreezeGap, [\in, other.voicePathBus(6, 0), \out, ga
     other.synths[other.voiceMixKey(6)], \addBefore);
 server.sync;
 0.8.wait;
-readings = headAcross.(6, { otherCommand.(\setGrainParam, 6, \freeze, 1.0) });
-check.(high and: { headGoesOn.(readings) },
-    "freeze: a spectral freeze's writer goes on from the write head (#801: a step of % frames over % frames of reads, within a block of them)".format(
-        readings[0], readings[1].round));
-check.(high and: { readings[2] <= gapLimitSeconds },
-    "freeze: a spectral freeze has no gap: the synth path's longest silence over the second after it is at most % s (#801: % s)".format(
-        gapLimitSeconds, readings[2].round(0.001)));
-readings = headAcross.(6, { otherCommand.(\setGrainParam, 6, \freeze, 0.0) });
-check.(high and: { headGoesOn.(readings) },
-    "freeze: an unfreeze from spectral's writer goes on from the write head (#801: a step of % frames over % frames of reads, within a block of them)".format(
-        readings[0], readings[1].round));
-check.(high and: { readings[2] <= gapLimitSeconds },
-    "freeze: an unfreeze from spectral has no gap: the synth path's longest silence over the second after it is at most % s (#801: % s)".format(
-        gapLimitSeconds, readings[2].round(0.001)));
-// a hold's writer, paused (run 0) and run again (run 1), is never replaced:
-// its head stands still while frozen and goes on from where it stood
-otherCommand.(\setGrainParam, 6, \freezeMode, 0.0);
+readings = steps.value;
+check.((readings[\min] == headStepFrames) and: { readings[\max] == headStepFrames } and: { readings[\other] == 0 },
+    "freeze: a voice's start leaves its writer's head stepping exactly % frames a block (steps % to %)".format(
+        headStepFrames, readings[\min], readings[\max]));
+stepProbe.set(\t_reset, 1);
+gapProbe.set(\t_reset, 1);
+server.sync; 0.05.wait;
 otherCommand.(\setGrainParam, 6, \freeze, 1.0);
-server.sync; 0.1.wait;
-kept = phaseMoves.(other.areaState[\rings][\phaseBuses][6]);
-readings = headAcross.(6, { otherCommand.(\setGrainParam, 6, \freeze, 0.0) }, -1, 2);
-check.(kept.not and: { headGoesOn.(readings) },
-    "freeze: a hold's paused writer stands still and its run goes on from where it stood (moved while frozen %; a step of % frames over % frames of reads)".format(
-        kept, readings[0], readings[1].round));
+1.0.wait;
+check.(high and: { h.readBusValue(gapBus) <= gapLimitSeconds },
+    "freeze: a spectral freeze has no gap: the synth path's longest silence over the second after it is at most % s (#801: % s)".format(
+        gapLimitSeconds, h.readBusValue(gapBus).round(0.001)));
+otherCommand.(\setGrainParam, 6, \freeze, 0.0);
+0.3.wait;
+readings = steps.value;
+check.(high and: { readings[\min] == headStepFrames } and: { readings[\max] == headStepFrames } and: { readings[\other] == 0 },
+    "freeze: across a spectral freeze and its unfreeze the replaced writers' head steps exactly % frames a block (#801: steps % to %, % runs of other steps)".format(
+        headStepFrames, readings[\min], readings[\max], readings[\other]));
+// a hold's writer, paused (run 0) and run again (run 1), is never replaced
+otherCommand.(\setGrainParam, 6, \freezeMode, 0.0);
+stepProbe.set(\t_reset, 1);
+server.sync; 0.05.wait;
+otherCommand.(\setGrainParam, 6, \freeze, 1.0);
+0.3.wait;
+otherCommand.(\setGrainParam, 6, \freeze, 0.0);
+0.3.wait;
+readings = steps.value;
+check.((readings[\min] == 0) and: { readings[\max] == headStepFrames } and: { readings[\other] == 0 },
+    "freeze: a hold's paused writer stands still and its run goes on from where it stood (steps % to %, % runs of steps neither 0 nor %)".format(
+        readings[\min], readings[\max], readings[\other], headStepFrames));
 otherCommand.(\voiceOff, 6);
 server.sync;
-gapProbe.free; tone.free; gapBus.free;
+gapProbe.free; stepProbe.free; tone.free; gapBus.free; stepBus.free;
 // spectral on silence (a stopped voice: its bus is silent) writes only the
 // dither, far below hearing: no buzz at the hop rate
 otherCommand.(\setGrainParam, 4, \freezeMode, 1.0);
