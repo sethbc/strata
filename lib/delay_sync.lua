@@ -19,11 +19,12 @@ return function(S)
   local M = {}
   local DIVISIONS = S.constants.DIVISIONS
 
-  -- max_seconds: the engine's delay line (\strataDelay's DelayC and its clip
-  -- on time; a docs test compares them); default_division: 1/8D (an index of
-  -- DIVISIONS.names); threshold: how far the synced time moves (a fraction
-  -- of itself) from the time last sent before the step hook resends it
-  M.DELAY = {max_seconds = 2.7, default_division = 7, threshold = 0.005}
+  -- max_seconds: the engine's delay line (\strataDelay's buffer line and
+  -- its clip on time, 5.4 s; a test compares them); default_division: 1/8D
+  -- (an index of DIVISIONS.names); threshold: how far the synced time
+  -- moves (a fraction of itself) from the time last sent before the step
+  -- hook resends it
+  M.DELAY = {max_seconds = 5.4, default_division = 7, threshold = 0.005}
 
   -- The send budget's id for the step hook's and a recall's sends: it holds
   -- a space, so no param id can be it. Its engine sender is the delay's

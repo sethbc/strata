@@ -244,10 +244,10 @@ return function(S)
         params:set("delay_bypass", 1); params:set("reverb_bypass", 1); params:set("reverb_mix", 1)
         S.fx_row = row_of("reverb_mix")
       end},
-      -- the time row's widest label: 1 bar at 30 BPM, halved twice
+      -- the time row's widest label: 1 bar at 20 BPM, halved twice
       {name = "delay synced and halved", setup = function()
         params:set("delay_sync", 1); params:set("delay_division", #S.constants.DIVISIONS.names)
-        params:set("clock_tempo", 30)
+        params:set("clock_tempo", 20)
         S.fx_row = row_of("delay_time")
       end},
       -- ALT's widest hint, on a row that turns finely: K2:cancel E3:fine

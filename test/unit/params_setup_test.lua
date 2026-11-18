@@ -1029,6 +1029,8 @@ local PARAM_FIXTURE_ALLOWED = {
   -- groundwork: MIDI note off is latch or release (the groundwork design §8)
   {kind = "options", id = "midi_note_off", options = {"latch", "release"},
     why = "groundwork: note off is latch or release (design section 8)"},
+  -- 0b: the delay's line is a buffer, so its time reaches 5.4 s (design §0.2)
+  {kind = "range", id = "delay_time", max = 5.4, why = "0b: the delay's line is a buffer, 5.4 s (design §0.2)"},
 }
 -- 2b: an LFO's destination is its home routing in the matrix (design §4);
 -- its six LFOs' entries follow the list (an LFO is no voice token)

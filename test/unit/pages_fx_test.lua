@@ -595,7 +595,7 @@ test("the delay's time row shows and edits the division while synced; K3 is stil
   assert_equal(params:get("delay_bypass"), 1, "K3 on the time row is still the bypass")
   key(3, 1); key(3, 0)
   -- halved: the division and what plays
-  params:set("delay_division", 12); params:set("clock_tempo", 60)
+  params:set("delay_division", 12); params:set("clock_tempo", 30)
   context.screen.clear(); redraw()
   assert_true(h.screen_shows(context, "1 bar>1/2"), "a halved division shows what plays")
   -- sync off: the time row is delay_time again

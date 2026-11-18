@@ -1393,7 +1393,7 @@ test("offset_for and m_for", function()
   load_strata()
   local lfos = local_value("S").lib.lfos
   assert_near(lfos.offset_for("reverb_mix", 0.5), 0.25, 1e-12)
-  assert_near(lfos.offset_for("delay_time", -1), -1.345, 1e-12, "half of 0.01-2.7 s")
+  assert_near(lfos.offset_for("delay_time", -1), -2.695, 1e-12, "half of 0.01-5.4 s")
   assert_near(lfos.m_for("v1_grain_pitch", 1, 1.9375), 0.5, 1e-12)
   assert_near(lfos.m_for("v2_buf_pos", 0.2, 0.45), 0.5, 1e-12)
   assert_near(lfos.m_for("v3_grain_size", 0.1, 0.0755), -0.1, 1e-12)

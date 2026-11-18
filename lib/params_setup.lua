@@ -531,7 +531,7 @@ return function(S)
       type = "control",
       id = "delay_time",
       name = "delay time",
-      controlspec = controlspec.new(0.01, 2.7, "exp", 0.001, 0.375, "s"),
+      controlspec = controlspec.new(0.01, 5.4, "exp", 0.001, 0.375, "s"),
       action = function(x)
         note_param_edit("delay_time")
         send_param_to_engine("delay_time", x)
