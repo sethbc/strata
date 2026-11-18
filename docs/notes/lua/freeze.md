@@ -29,5 +29,5 @@ The record `freeze` (count 2, `S.register_voice_params`):
 
 - **VOICE**: the mix section ends with `freeze` (and `freeze mode` on high), through the record's `voice_rows` (`when` hides the mode row on standard). E3 toggles and picks, as on any VOICE row.
 - **MAIN**: `[F]` on the status row (y 26) after `[L]` and `[T]` (`docs/notes/lua/pages/main.md`).
-- **Grid**: 256 page 4 column 12, and row 16 columns 1-7 while column 8 of row 16 is held; 128h page 4 column 12; 128v sources page row 14. LEDs 15 frozen, 3 not. The 64 has no room (`docs/notes/lua/grid/layout_256.md`, `layout_128h.md`, `layout_128v.md`).
+- **Grid**: the voices page's FZ key (page 6, x 4 of voice v's line, on every layout and the 64's left half) calls `M.toggle_quantized(v)` and lights from `M.is_frozen(v)`: 15 frozen, 3 not, so it shows the state, never a waiting toggle (`docs/notes/lua/grid/pages/voices.md`).
 - `layout_states`: each voice frozen with VOICE's cursor on its freeze row (`test/unit/ui_layout_test.lua`, the page renders).
