@@ -48,7 +48,7 @@ Each voice generates a modulation signal (envelope follower + slow LFO) that can
 - **Folder**: freq, fold, mod, amp, pan
 - **Sub**: freq, drift, amp
 - **Pulse**: freq, width, cutoff, res (0.1-1, rising with resonance: the filter's rq is 1.1 - res), amp, pan
-- **Karplus**: freq, decay, damping, excite, amp, pan
+- **Karplus**: freq, decay, damping, excite, amp, pan. Its two `Pluck` lines take `maxdelaytime` `karplusMaxDelay` (0.0839 s: 4096 frames at 48 kHz and at 44.1 kHz, where 3.7's 0.1 s took 8192; 49.7 KB of the pool a synth, 80.9 before 3.8), so its lowest pitch is 11.9 Hz: a pitch bent or crossmodulated below it (Lua's freq floor is 20 Hz) holds there, where it held at 10 Hz.
 - **Ring**: freq, ratio, mod, brightness, amp, pan
 
 **The note controls (3.5, package 1a)**: the controls 3.5's notes use (design 3.5 §3.2, §3.5), which package 2a's note lifecycle sets; Lua sends none of them (`setVoiceParam` refuses each but the envelope times):

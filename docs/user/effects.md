@@ -5,7 +5,7 @@ Master density, tape drift, the filter, delay, reverb, each voice's own filter a
 - **Master Density** - Controls grain density across all voices simultaneously
 - **Tape Drift** - Adds slow pitch drift to the entire mix for analog warmth; the amount sets the depth (0 = none, the default ±0.2 %, the largest ±2 %). It only bends the pitch: a steady tone keeps its level at any amount (in earlier versions the drift's pitch shifter also made every sound flutter, at 0 too, and took some of the treble)
 - **Filter** - Lowpass, highpass or bandpass filter on the whole mix with resonance; its mix fades from bypassed (the default) to fully filtered, and changing the filter type crossfades (20 ms) instead of clicking. A cutoff that jumps up (a scene recall, a square or random LFO, a controller jump) glides to its new value at 100 octaves a second, the whole range in a tenth of a second, so a resonant filter no longer throws a burst; it falls as fast as before. It filters what goes to the delay and reverb too, as it always has
-- **Delay** - Stereo delay (10 ms to 2.7 s) with feedback, after the filter; starts dry. Its time can follow the tempo in divisions of the beat (`sync`), and its repeats can alternate left and right (ping-pong): see [FX](pages/fx.md)
+- **Delay** - Stereo delay (10 ms to 5.4 s) with feedback, after the filter; starts dry. Its time can follow the tempo in divisions of the beat (`sync`), and its repeats can alternate left and right (ping-pong): see [FX](pages/fx.md)
 - **Reverb** - Adjustable mix (fully dry to fully wet), size, and damping. On the high performance setting it is a richer reverb (a feedback delay network) with about the same decay at each size
 - **Limiter** - A limiter in the master stage catches peaks from filter resonance and delay feedback before the soft saturation
 - **Tempo** - Sets norns' clock tempo, which the pattern sequencer follows; a tempo changed in PARAMETERS > CLOCK or by an external clock is picked up too
@@ -23,7 +23,7 @@ The voice filter's cutoff and both sends are LFO destinations (`v1 vfilt`, `v1 d
 
 ## Bypass
 
-`delay bypass` and `reverb bypass` (PARAMS > fx, or K3 on the FX page's delay or reverb rows) switch an effect off completely: it fades out over 50 ms and stops running, which frees its CPU and its memory (the delay's 1 MB). Lifting the bypass brings it back at the same mix, starting empty, so the echoes or the tail build up again from a 50 ms fade-in (a sound already playing comes into the first echo without a click).
+`delay bypass` and `reverb bypass` (PARAMS > fx, or K3 on the FX page's delay or reverb rows) switch an effect off completely: it fades out over 50 ms and stops running, which frees its CPU (the delay's line, kept apart from the memory the voices use, is emptied). Lifting the bypass brings it back at the same mix, starting empty, so the echoes or the tail build up again from a 50 ms fade-in (a sound already playing comes into the first echo without a click).
 
 - The mix keeps its value while bypassed, and changing it, the delay time or the reverb size meanwhile takes effect when the bypass is lifted.
 - A mix of 0 is not a bypass: an LFO, a scene fade or a MIDI CC can take a mix through 0 and the effect keeps running, so its echoes and tail are still there when the mix comes back up.
