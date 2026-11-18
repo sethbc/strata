@@ -285,13 +285,15 @@ server.sync;
     // bins' phases and the overlapping frames partly cancel (any type, a
     // spread of several dB; a silent new voice, the dither's phases alone,
     // costs about 1 dB). With none the same windows moved -1.00 to +0.77 dB.
-    // The edges are about three standard deviations past the worst figure
-    // each way: the freeze's own spread never fails them,
+    // The edges are three standard deviations (the larger, 1.97) past the
+    // worst figure each way, rounded out to the half decibel: -9.22 - 5.91 =
+    // -15.13, so -15.5; +0.28 + 5.91 = +6.19, so +6.5. The freeze's own
+    // spread never fails them,
     // while silence (the level x 0.1 reads -20 to -29 dB) or a held spectrum
     // that runs away (x 10: +11 to +20 dB) does. A hold lost to the live
     // voice read +0.8 to +13.0 dB, often inside the band: the ring check
     // is what catches it (the writer replaced, freeze 0)
-    var holdLimitDb = 1, spectralLowDb = -15, spectralHighDb = 6.5;
+    var holdLimitDb = 1, spectralLowDb = -15.5, spectralHighDb = 6.5;
     var spectralSettleSeconds = 0.7, spectralReachSeconds = 0.6;
     var frozenSwitch = { arg target, mode, label;
         var run = { arg name ... args; h.commandTo(target, name, *args) };
