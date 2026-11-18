@@ -187,10 +187,14 @@ return function(S)
     return tidy(reference + (periods * period + allowed[index]) / TUNING.semitone)
   end
 
-  -- The step in semitones when the allowed tones are an equal division of
-  -- the period (every gap within octave_tolerance cents), else nil
+  -- The step in semitones when every tone of the tuning is allowed and
+  -- they divide the period equally (every gap within octave_tolerance
+  -- cents), else nil
   function M.equal_step()
     local allowed, period = M.allowed(), current.period
+    -- a scale's tones, however evenly spaced (Whole Tone), are no division
+    -- of the tuning: a degree then walks them from the voice's own pitch
+    if #allowed ~= #current.tones then return nil end
     local gap = period / #allowed
     for index = 1, #allowed do
       local next_tone = allowed[index + 1] or (allowed[1] + period)
@@ -204,7 +208,8 @@ return function(S)
 
   -- The chord interval set, in semitones from 0 (3.8 ruling 40): with a
   -- scale on in a tuning of twelve tones to an octave, its degrees 1, 3, 5
-  -- and 7 (two periods of the allowed tones); otherwise the tuning's tones
+  -- and 7 (two periods of the allowed tones, measured from the lowest, so
+  -- the first is always 0); otherwise the tuning's tones
   -- nearest 0, 4, 7 and 11 semitones, each once
   function M.chord()
     local V = S.lib.variation.VARIATION
@@ -214,8 +219,10 @@ return function(S)
       for whole = 0, 1 do
         for _, tone in ipairs(allowed) do two[#two + 1] = whole * current.period + tone end
       end
+      -- measured from the lowest allowed tone, so a chord holds its own
+      -- note (a custom scale without its root included)
       for _, degree in ipairs(V.chord_degrees) do
-        if two[degree] then chord[#chord + 1] = tidy(two[degree] / TUNING.semitone) end
+        if two[degree] then chord[#chord + 1] = tidy((two[degree] - two[1]) / TUNING.semitone) end
       end
       return chord
     end

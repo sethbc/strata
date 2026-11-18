@@ -4344,4 +4344,22 @@ test("degrees walk a tuning's tones", function()
   assert_near(seq.degree_semitones(1, -3), -36 / 19, 1e-6, "and three down")
 end)
 
+-- Fix round 1: a masked scale whose tones are evenly spaced (Whole Tone) is
+-- no equal division of the tuning: a degree walks its tones from the
+-- voice's own pitch, as 3.7 did
+test("a Whole Tone degree from an off-scale voice walks the scale, as 3.7", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local seq = S.lib.sequencer
+  for index, option in ipairs(params:lookup_param("scale").options) do
+    if option == "Whole Tone" then params:set("scale", index) end
+  end
+  params:set("root", 1)
+  params:set("v1_freq", 440 * 2 ^ ((61 - 69) / 12))  -- C#4, off the scale
+  assert_near(seq.degree_semitones(1, 1), 1, 1e-6, "from C#, degree 1 is D#: one semitone up")
+  params:set("v1_freq", 440 * 2 ^ ((60.3 - 69) / 12))
+  assert_near(seq.degree_semitones(1, 1), 1.7, 1e-6, "from 60.3, degree 1 is D: 1.7 semitones up")
+end)
+
 end
