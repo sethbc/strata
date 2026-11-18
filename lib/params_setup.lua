@@ -188,11 +188,14 @@ return function(S)
   -- One line of a PSET file's text as norns' params:read reads it
   -- (lua/core/paramset.lua): a line not starting "--" whose first quoted
   -- string is followed by a colon gives that string unquoted, the id, and
-  -- the rest of the line, its raw value; any other line gives nil. The one
+  -- the rest of the line, its raw value (a trailing \r dropped: norns keeps
+  -- it, which a number's tonumber ignores but a text or a file name would
+  -- not); any other line gives nil. The one
   -- reader of a line (the read hook's named ids, pset_value, 3.8's factory
   -- sets' parse_params)
   function M.pset_line(line)
     if type(line) ~= "string" or line:sub(1, 2) == "--" then return nil end
+    line = line:gsub("\r$", "")  -- a file written with CRLF lines (3.8: a factory set made elsewhere)
     local quoted, value = line:match('(".-")%s*:%s*(.*)')
     if not quoted then return nil end
     return (quoted:gsub('^"', ''):gsub('"$', ''):gsub('\\"', '"')), value

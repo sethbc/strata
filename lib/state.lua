@@ -44,7 +44,7 @@ return function()
     invariants = {},    -- {name, fn} records, checked by the test harness after every unit test
     -- 3.4's (design §0.1, §8.10, §10.1)
     scene_blocks = {},      -- top-level scene blocks {key, default, capture, validate, apply, discrete, through_zero}
-    pset_hooks = {},        -- {name, write, read, delete}, run by the PSET actions (lib/params_setup.lua)
+    pset_hooks = {},        -- {name, write, read, delete}, run by the PSET actions (lib/params_setup.lua) and six by a factory set's load
     param_touch = {},       -- fn(param_id, source), run after an encoder, arc or grid edit of a param
     lock_change = {},       -- fn(voice_idx, locked), run after a voice's lock flips
     step_outputs = {},      -- {name, play, stop, available}, each pattern hit's outputs

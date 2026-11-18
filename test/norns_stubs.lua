@@ -3362,8 +3362,9 @@ function stubs.install(options)
     menu = { status = function() return context.menu.mode end,
       init = function() _menu.set_mode(_menu.mode) end } }
   _G._path = { data = options.data_dir, audio = options.data_dir .. "audio/" }
-  util.make_dir(_G._path.audio)
-  util.make_dir(script_path)
+  -- the audio folder and the script's in one mkdir (a process per load)
+  local function shell_quoted(path) return "'" .. path:gsub("'", "'\\''") .. "'" end
+  os.execute("mkdir -p " .. shell_quoted(_G._path.audio) .. " " .. shell_quoted(script_path))
   package.loaded["ui"] = context.UI
   package.preload["ui"] = function() return context.UI end
   package.loaded["musicutil"] = nil

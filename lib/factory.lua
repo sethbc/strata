@@ -252,8 +252,19 @@ return function(S)
     return true
   end
 
+  -- A file's size in bytes, or nil when it cannot be opened
+  local function file_size(path)
+    local file = io.open(path, "rb")
+    if not file then return nil end
+    local size = file:seek("end")
+    file:close()
+    return size
+  end
+
   -- Step 1: every file set.samples.data names copied to the install folder,
-  -- in name order, a clock.sleep(0) after each; a file there left alone.
+  -- in name order, a clock.sleep(0) after each; a file there of the set's
+  -- file's size left alone (one of another size, cut short by a power cut
+  -- the copy's lack of fsync allows, is copied again through its .part).
   -- Returns the installed names ({[name] = true}) and the missing ones (one
   -- line each), or nil when a copy failed (one line: the load stops)
   local function install(set, files)
@@ -265,21 +276,20 @@ return function(S)
     local installed, missing = {}, {}
     for _, name in ipairs(names) do
       local destination = folder .. name
-      if util.file_exists(destination) then
+      local source = set_folder(set.key) .. FACTORY.audio_folder .. name
+      local source_size = file_size(source)
+      if util.file_exists(destination) and (source_size == nil or file_size(destination) == source_size) then
         installed[name] = true
+      elseif source_size == nil then
+        print("factory: " .. set.key .. ": " .. name .. " is missing from the set; its slot line is skipped")
+        missing[name] = true
       else
-        local source = set_folder(set.key) .. FACTORY.audio_folder .. name
-        if not util.file_exists(source) then
-          print("factory: " .. set.key .. ": " .. name .. " is missing from the set; its slot line is skipped")
-          missing[name] = true
-        else
-          local copied, why = copy_file(source, destination)
-          if not copied then
-            print("factory: " .. set.key .. " not loaded: " .. name .. " could not be installed (" .. why .. ")")
-            return nil
-          end
-          installed[name] = true
+        local copied, why = copy_file(source, destination)
+        if not copied then
+          print("factory: " .. set.key .. " not loaded: " .. name .. " could not be installed (" .. why .. ")")
+          return nil
         end
+        installed[name] = true
       end
       clock.sleep(0)
     end
