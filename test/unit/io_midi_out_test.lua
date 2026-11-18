@@ -2202,6 +2202,25 @@ test("an MPE note's bend carries its pitch's cents", function()
   target.note_off(1, "p1")
 end)
 
+-- Fix round 1: the shared channel's bookkeeping (start_note's third
+-- caller of encoded) keeps the other note's detune, so the next step finds
+-- its bend already sent and resends nothing over the new note's
+test("a second played note on a tuned note's shared channel leaves its bend alone", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "mpe synth")
+  mpe_voice(1, 2, 1); settled(context)
+  local target = midi_target(S)
+  local real_raw = S.lib.expression.raw
+  S.lib.expression.raw = function() return {bend = 1} end
+  target.note_on(1, "p1", 60.3, 1, played_info(7))
+  target.note_on(1, "p2", 64, 1, played_info(8))
+  clear(device)
+  step(context, S, 2)
+  assert_equal(sent(device):match("pitchbend"), nil, "no bend resent over the second note's: " .. sent(device))
+  S.lib.expression.raw = real_raw
+  target.note_off(1, "p1"); target.note_off(1, "p2")
+end)
+
 test("a plain note sends its nearest key and no bend", function()
   local context, S = started()
   local device = context.midi.plug(3, "synth")

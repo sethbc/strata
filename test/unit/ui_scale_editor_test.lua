@@ -131,6 +131,18 @@ test("a MIDI note toggles its class while the editor is open, and plays nothing"
   S.lib.notes.play = real_play
 end)
 
+-- Fix round 1: reset_midi_input clears the note tap without telling the
+-- editor; its next draw sets it again (every path that resets the input
+-- also asks for a redraw: a port's removal, the MIDI params' actions)
+test("the note tap is set again at the next draw after reset_midi_input", function()
+  local context, S, editor = loaded()
+  reset_midi_input()
+  request_redraw()
+  next_frame(context)
+  context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 1 })
+  assert_equal(params:get("scale_mask"), 4095 - 64, "F# toggled after the reset")
+end)
+
 test("in 19 equal the scale and notes rows show -- and change nothing", function()
   local context, S, editor = loaded()
   select_tuning(S, "19 equal")
