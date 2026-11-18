@@ -42,7 +42,9 @@ local NEW_COMMANDS = {"noteRegion", "syncScan", "setSlotGain", "analyzeBuffer", 
 -- h.allowed_call_lines (test/helpers.lua; docs/notes/test-harness/run-and-helpers.md),
 -- applied to the whole run's lines and the fixture's before the
 -- comparison. count is for the run; an entry whose match or replace holds
--- <v> or <v0> stands for one entry a voice, its count per voice. The
+-- <v> or <v0> stands for one entry a voice, its count per voice. A match
+-- is anchored: it starts with ^, and ends with $ when count is above 0 (a
+-- prefix such as '^noteRegion%(' only for count 0), or the helper raises. The
 -- package that changes a start message adds its entries here in the same
 -- commit, as it does to START_CALLS_ALLOWED (test/unit/engine_sync_test.lua):
 -- registration lines, a block of its own opening `-- <id>: <what> (design §n)`,
