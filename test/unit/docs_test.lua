@@ -2691,24 +2691,28 @@ test("params.md's scrub friction gives the glide lengths the code measures (#342
 end)
 
 -- The record keys and triggers record with the record settings (3.3's
--- record_buffer), never "the input for the record duration"; grid.md keeps
--- its Positions section, where a press, the LEDs and the strip are
--- described, and gives the two-key loop's edges in either order (#337,
--- #353, #356, #358, #362). 3.8: the per-layout Positions and record-key
--- checks go to the positions page's own user page with its package
-test("the record keys use the record settings; grid.md keeps Positions (#337, #353, #356, #358, #362)", function()
+-- record_buffer), never "the input for the record duration"; the
+-- positions page's user page (3.8: docs/user/grid/pages/positions.md, which
+-- took grid.md's Positions) describes a press, the LEDs and the marks,
+-- gives the two-key loop's edges in either order, and says its record keys
+-- record with the record settings (#337, #353, #356, #358, #362)
+test("the record keys use the record settings; the positions page gives the loop's edges (#337, #353, #356, #358, #362)", function()
   load_strata()
   local trigger = read_repo_file("docs/user/params.md"):match("\n  %- Record:[^\n]*")
   assert_true(trigger ~= nil, "params.md describes a buffer's Record trigger")
   assert_true(trigger:find("record settings", 1, true) and not trigger:find("live input", 1, true),
     "the Record trigger records with the record settings")
-  local positions = doc_section(read_repo_file("docs/user/grid.md"), "## Positions")
-  assert_true(positions ~= nil, "grid.md has a Positions section")
+  local path = "docs/user/grid/pages/positions.md"
+  local positions = read_repo_file(path)
   assert_true(positions:find("from the start of the earlier", 1, true) and positions:find("in either order", 1, true),
-    "grid.md's Positions gives the loop's edges in either order")
-  for _, path in ipairs(markdown_files("docs/user/grid")) do
-    assert_true(not read_repo_file(path):lower():find("record the input", 1, true),
-      path .. " never says the record keys record the input")
+    path .. " gives the loop's edges in either order")
+  local slots = doc_section(positions, "## Side 2: the marks and the slots")
+  assert_true(slots ~= nil, path .. " has its side 2")
+  assert_true(slots:find("with the record settings", 1, true), path .. "'s record keys use the record settings")
+  assert_true(read_repo_file("docs/user/grid.md"):find("](grid/pages/positions.md)", 1, true), "grid.md links the positions page")
+  for _, file in ipairs(markdown_files("docs/user/grid")) do
+    assert_true(not read_repo_file(file):lower():find("record the input", 1, true),
+      file .. " never says the record keys record the input")
   end
 end)
 

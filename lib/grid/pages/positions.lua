@@ -1,0 +1,97 @@
+-- lib/grid/pages/positions.lua
+-- Grid page 5, positions (3.8, design §10.7), two sides. Side 1: seven
+-- lines of sixteen cells, a line per voice, each key a jump (a held pair a
+-- loop, a slice row its slice) through S.lib.positions.grid_key. Side 2:
+-- every voice's marks on its line (bookmarks 1-4, ST store, HD hold, WH
+-- whole, through S.lib.positions.strip_key) and the slots' record (line 1)
+-- and clear (line 2) keys on columns 9-16. Each key passes its pane, so a
+-- held key ends with its own pane's page, side or half change. Written in
+-- pane coordinates (lib/grid/pane.lua), so it is the same on every layout
+
+return function(S)
+  local M = {}
+  local NUM_VOICES = S.constants.NUM_VOICES
+  local NUM_BOOKMARKS = S.constants.NUM_BOOKMARKS
+  local NUM_BUFFERS = S.constants.NUM_BUFFERS
+  local GRID_PAGES = S.constants.GRID_PAGES
+  local CELLS = GRID_PAGES.position_cells
+
+  -- Side 2's columns (pane coordinates): the bookmarks on 1..NUM_BOOKMARKS,
+  -- then the voice's keys, and the slots from slot_column + 1 (slot n at
+  -- slot_column + n); the record keys on line 1, the clear keys on line 2
+  local POSITIONS_PAGE = {
+    marks = {[6] = "store", [7] = "hold", [8] = "whole"},
+    slot_column = 8,
+    record_line = 1,
+    clear_line = 2,
+  }
+  M.POSITIONS_PAGE = POSITIONS_PAGE
+
+  -- Side 2's mark of column x: a bookmark number, "store", "hold",
+  -- "whole", or nil
+  local function mark_of(x)
+    if x >= 1 and x <= NUM_BOOKMARKS then return x end
+    return POSITIONS_PAGE.marks[x]
+  end
+
+  -- Side 2's slot of column x, or nil
+  local function slot_of(x)
+    local slot = x - POSITIONS_PAGE.slot_column
+    if slot >= 1 and slot <= NUM_BUFFERS then return slot end
+    return nil
+  end
+
+  local function press_marks(pane, x, y, z)
+    local mark = mark_of(x)
+    if mark ~= nil then
+      S.lib.positions.strip_key(pane.port, y, mark, z, pane.index)
+      return
+    end
+    local slot = slot_of(x)
+    if slot == nil or z ~= 1 then return end
+    if y == POSITIONS_PAGE.record_line then
+      S.lib.grid_core.record_key(slot)
+    elseif y == POSITIONS_PAGE.clear_line then
+      S.lib.grid_core.clear_key(slot)
+    end
+  end
+
+  local function draw_marks(pane, led)
+    local positions = S.lib.positions
+    for voice_idx = 1, NUM_VOICES do
+      for n = 1, NUM_BOOKMARKS do led(n, voice_idx, positions.strip_level(voice_idx, n, pane.port)) end
+      for x, mark in pairs(POSITIONS_PAGE.marks) do led(x, voice_idx, positions.strip_level(voice_idx, mark, pane.port)) end
+    end
+    for slot = 1, NUM_BUFFERS do
+      local x = POSITIONS_PAGE.slot_column + slot
+      led(x, POSITIONS_PAGE.record_line, S.lib.grid_core.record_level(slot))
+      led(x, POSITIONS_PAGE.clear_line, S.lib.grid_core.CLEAR_LEVEL)
+    end
+  end
+
+  M.record = {
+    name = "positions",
+    index = GRID_PAGES.positions,
+    sides = 2,
+    press = function(pane, x, y, z)
+      if y < 1 or y > NUM_VOICES or x < 1 or x > CELLS then return end
+      if pane.side == 2 then
+        press_marks(pane, x, y, z)
+      else
+        S.lib.positions.grid_key(pane.port, y, x, CELLS, z, pane.index)
+      end
+    end,
+    redraw = function(pane, led)
+      if pane.side == 2 then
+        draw_marks(pane, led)
+        return
+      end
+      for voice_idx = 1, NUM_VOICES do
+        for cell = 1, CELLS do led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, CELLS, pane.port)) end
+      end
+    end,
+  }
+  S.register_grid_page(M.record)
+
+  return M
+end
