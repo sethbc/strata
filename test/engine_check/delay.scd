@@ -195,16 +195,20 @@ checkLoopBehavior = {
         (delay: delay, input: [\sine, 0.5, \sineFrom, 1.5], steps: (frozen: [0, 1, 1, 1, 1e9]), windows: [[1.6, 4.0]]),
         (delay: delay, input: [\sine, 0.5, \sineFrom, 1.5], windows: [[1.6, 4.0]]),
         // 2, 3: frozen from 1 to 5 s on the same noise, case 2's time set to
-        // 0.2 s at 2 s; case 2's difference from case 3
+        // 0.2 s at 2 s; case 2's difference from case 3. A window ends 10 ms
+        // before a step (the release here, the clear and the release below):
+        // a step synth's Sweep.kr runs a block ahead of an analysis's
+        // Sweep.ar on SuperCollider 3.13 (3.14 changed when Sweep adds its
+        // increment), so the release would fall inside a window ending at 5 s
         (delay: delay, input: noise, steps: (frozen: [0, 1, 0, 1, 5], time: [0.375, 0.2, 0.2, 2, 1e9]), ref: 3,
-            windows: [[1.5, 5.0], [5.6, 7.0]]),
-        (delay: delay, inputFrom: 2, steps: (frozen: [0, 1, 0, 1, 5]), windows: [[1.5, 5.0]]),
+            windows: [[1.5, 4.99], [5.6, 7.0]]),
+        (delay: delay, inputFrom: 2, steps: (frozen: [0, 1, 0, 1, 5]), windows: [[1.5, 4.99]]),
         // 4: noise until 2 s, frozen from 1 to 3 s
         (delay: delay, input: noise ++ [\noiseTo, 2], steps: (frozen: [0, 1, 0, 1, 3]),
-            windows: [[2.0, 3.0], [5.0, 5.5], [1.5, 2.0]]),
+            windows: [[2.0, 2.99], [5.0, 5.5], [1.5, 2.0]]),
         // 5: steady noise, cleared at 2 s
         (delay: delay, input: noise, steps: (t_clear: [0, 1, 1, 2, 1e9]),
-            windows: [[1.0, 2.0], [2.01, 2.375], [2.395, 2.7]]),
+            windows: [[1.0, 1.99], [2.01, 2.375], [2.395, 2.7]]),
         // 6: noise until 1.5 s, cleared at 2 s
         (delay: delay, input: noise ++ [\noiseTo, 1.5], steps: (t_clear: [0, 1, 1, 2, 1e9]),
             windows: [[1.0, 1.5], [2.385, 4.0]]),
@@ -221,11 +225,11 @@ checkLoopBehavior = {
         "delay: a time change waits for the release: setDelay's 0.2 s while frozen changes nothing until the release (largest difference from a node left at 0.375 s, frozen %, after the release %)".format(
             windowField.(results[2], 0, 5), windowField.(results[2], 1, 5).round(0.001)));
     values = results[4];
-    held = powerDb.((windowField.(values, 0, 0) / 1.0) / (windowField.(values, 2, 0) / 0.5).max(1e-30));
+    held = powerDb.((windowField.(values, 0, 0) / 0.99) / (windowField.(values, 2, 0) / 0.5).max(1e-30));
     check.((windowField.(values, 0, 0) > 100) and: { held.abs <= 1 }
-        and: { ((windowField.(values, 1, 0) / 0.5) / windowField.(values, 0, 0)) < 1e-4 },
-        "delay: a release decays at the kept feedback 0.4: held until it (% dB from 2 to 3 s against 1.5 to 2 s), under -40 dB 2 s after it (% dB of the frozen level)".format(
-            held, powerDb.((windowField.(values, 1, 0) / 0.5) / windowField.(values, 0, 0).max(1e-30))));
+        and: { ((windowField.(values, 1, 0) / 0.5) / (windowField.(values, 0, 0) / 0.99)) < 1e-4 },
+        "delay: a release decays at the kept feedback 0.4: held until it (% dB from 2 to 2.99 s against 1.5 to 2 s), under -40 dB 2 s after it (% dB of the frozen level)".format(
+            held, powerDb.((windowField.(values, 1, 0) / 0.5) / (windowField.(values, 0, 0) / 0.99).max(1e-30))));
     values = results[5];
     steady = windowField.(values, 0, 4);
     check.((steady > 0.1) and: { windowField.(values, 1, 4) < (steady * 0.001) } and: { windowField.(values, 2, 4) > (steady * 0.1) },
