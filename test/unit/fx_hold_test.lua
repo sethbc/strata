@@ -244,7 +244,7 @@ end)
 test("release('reverb') does nothing while the reverb is not offered", function()
   local context, _, fx_hold = loaded()
   assert_true(fx_hold.offered("delay"), "the delay's freeze is offered")
-  assert_true(not fx_hold.offered("reverb") and not fx_hold.frozen("reverb"), "the reverb's is not (until 3a)")
+  assert_true(not fx_hold.offered("reverb") and not fx_hold.frozen("reverb"), "the reverb's is not (cut from 3.8)")
   assert_true(not fx_hold.offered("filter") and not fx_hold.offered(nil), "nor anything else")
   context.clear_engine_calls()
   fx_hold.release("reverb"); fx_hold.toggle("reverb")
@@ -252,6 +252,29 @@ test("release('reverb') does nothing while the reverb is not offered", function(
   params:set("reverb_bypass", 1)
   assert_equal(table.concat(call_names(context, {"setDelayFreeze", "setBypass"}), " "), "setBypass(1, 1)",
     "the reverb's bypass sends its bypass alone")
+end)
+
+-- The plan's ruling 27: 3.8's package 3a measured the high tier's reverb
+-- freeze and cut it (its level and its tail did not hold within 1 dB), so
+-- the reverb is offered no freeze on either tier and has no record, param
+-- or command: 4a's and 4b's reverb freeze paths read offered("reverb")
+test("the reverb is offered no freeze on either tier (the freeze is cut from 3.8)", function()
+  for _, tier in ipairs({"standard", "high"}) do
+    local context, S, fx_hold = loaded()
+    S.performance.tier = tier
+    assert_true(not fx_hold.offered("reverb"), "not offered on " .. tier)
+    assert_true(not fx_hold.frozen("reverb") and not fx_hold.any_frozen(), "and never frozen on " .. tier)
+    assert_equal(fx_hold.FX_HOLD.reverb, nil, "no reverb record")
+    assert_equal(params.lookup["reverb_freeze"], nil, "no reverb_freeze param")
+    context.clear_engine_calls()
+    fx_hold.toggle("reverb"); fx_hold.release("reverb")
+    assert_equal(#context.engine_calls, 0, "toggle and release of the reverb send nothing on " .. tier)
+  end
+  local spec = h.stubs.engine_spec_from_source(h.engine_sources())
+  assert_true(not h.stubs.engine_signatures_from_source(h.engine_sources()).setReverbFreeze,
+    "the engine has no setReverbFreeze")
+  assert_true(spec.synthdef_controls.strataReverbFDN ~= nil and not spec.synthdef_controls.strataReverbFDN.frozen,
+    "and the FDN no frozen control")
 end)
 
 test("a tempo change under a frozen synced delay keeps the freeze", function()
