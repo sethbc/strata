@@ -169,12 +169,15 @@ return function(S)
       and undo.voice == voice and util.time() < undo.until_time
   end
 
-  -- 3.8 (package 3b, design §8.3, ruling 46): the held voice undo. After a
-  -- voice preset's load or copy has applied, hold the voice's capture from
-  -- before it (S.lib.scenes.capture_voice) as the one undo, VOICE's, for
-  -- UNDO_SECONDS: values names every v<i>_<key> of the capture and of the
-  -- voice's scene keys now, so an edit of either (note_param_edit) ends it.
-  -- Called after the apply, whose own param actions are edits
+  -- 3.8 (package 3b, design §8.3, ruling 46 as amended): the held voice
+  -- undo. After a voice preset's load or copy has applied, hold the
+  -- voice's sound from before it, capture = {type, values} holding what a
+  -- load can change (the type's synth keys and the In keys: S.lib.voice_presets'
+  -- filtered capture), as the one undo, VOICE's, for UNDO_SECONDS. values
+  -- names every v<i>_<key> of the capture and of the voice's synth keys
+  -- now (the loaded type's), so an edit of the old or the new sound
+  -- (note_param_edit) ends it; an Out key's write does not. Called after
+  -- the apply, whose own param actions are edits
   function M.hold_voice(voice_idx, capture)
     if not is_index(voice_idx, NUM_VOICES) or type(capture) ~= "table" or type(capture.values) ~= "table" then
       error("hold_voice: a voice index and its capture", 2)
@@ -183,8 +186,10 @@ return function(S)
     local prefix = "v" .. voice_idx .. "_"
     local values = {}
     for key, value in pairs(capture.values) do values[prefix .. key] = value end
-    for key, value in pairs(S.lib.scenes.capture_voice(voice_idx).values) do
-      if values[prefix .. key] == nil then values[prefix .. key] = value end
+    for _, entry in ipairs((S.lib.params_setup.voice_scene_keys(voice_idx))) do
+      if entry.synth and values[prefix .. entry.key] == nil then
+        values[prefix .. entry.key] = S.voices[voice_idx].values[entry.key]
+      end
     end
     hold_undo({page = S.constants.UI_PAGES.index.VOICE, voice = voice_idx}, values, {}, nil,
       {type = capture.type, values = capture.values})
@@ -203,8 +208,9 @@ return function(S)
   -- and the grid follow), and a pattern's old steps through replace_pattern;
   -- the undo ends first. Returns false when nothing is held or its window
   -- has ended. A held voice undo (3.8) applies its capture's type and
-  -- values with the voice's present active and source (ruling 46), through
-  -- S.lib.scenes.apply_voice
+  -- values (what a load can change) through S.lib.scenes.apply_voice, every
+  -- other scene key of that type (the Out keys) at its present value, with
+  -- the voice's present active and source (ruling 46 as amended)
   function M.undo()
     local undo = S.undo
     if not undo or util.time() >= undo.until_time then return false end
@@ -212,8 +218,14 @@ return function(S)
     write_as_undo(function()
       if undo.capture then
         local voice = S.voices[undo.voice]
+        local values = {}
+        for _, entry in ipairs((S.lib.params_setup.voice_scene_keys(undo.voice, undo.capture.type))) do
+          local value = undo.capture.values[entry.key]
+          if value == nil then value = voice.values[entry.key] end
+          values[entry.key] = value
+        end
         S.lib.scenes.apply_voice(undo.voice, {active = voice.active, source = voice.source,
-          type = undo.capture.type, values = undo.capture.values})
+          type = undo.capture.type, values = values})
       end
       for _, param_id in ipairs(undo.ids) do set_randomized_param(param_id, undo.values[param_id]) end
       if undo.pattern then S.lib.sequencer.replace_pattern(undo.pattern.voice, undo.pattern.steps) end

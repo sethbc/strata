@@ -51,6 +51,17 @@ local function rows_shown(context, S)
   return shown
 end
 
+-- The text of the row drawn at the selected level (the cursor's)
+local function selected_row(context, S)
+  local layout = S.lib.ui_voice_picker.VOICE_PICKER
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.level == layout.levels.selected and entry.y >= layout.first_y and entry.y < h.HINT_ROW_Y
+      and entry.align ~= "right" then
+      return row_at(context, entry.y)
+    end
+  end
+end
+
 local function shows(context, S, text)
   for _, row in ipairs(rows_shown(context, S)) do
     if row == text then return true end
@@ -99,14 +110,55 @@ test("E2 moves the picker's cursor and scrolls; E3 does nothing", function()
   next_frame(context)
   assert_equal(rows_shown(context, S)[1], "from voice 2 " .. S.lib.types.of(2).list_name, "back on the first voice row")
   assert_equal(hint_text(context), "K2:back K3:copy", "a voice row's hint")
+  -- one E3 turn on slot 1 leaves the cursor, the view and every param
+  enc(2, S.constants.NUM_VOICES - 1)
+  next_frame(context)
+  local view, cursor_row = table.concat(rows_shown(context, S), "|"), selected_row(context, S)
+  assert_equal(cursor_row, "01 --", "on slot 1")
+  local before = {}
+  for _, param_id in ipairs(params.params) do
+    if param_id.id then before[param_id.id] = params:get(param_id.id) end
+  end
   context.clear_engine_calls()
-  local before = h.deep_copy(S.voices[1].values)
-  enc(3, 1); enc(3, -1)
+  enc(3, 1)
   next_frame(context)
   assert_equal(#context.engine_calls, 0, "E3 sends nothing")
-  for key, value in pairs(before) do assert_equal(S.voices[1].values[key], value, key .. " unchanged") end
-  assert_equal(rows_shown(context, S)[1], "from voice 2 " .. S.lib.types.of(2).list_name, "the cursor unmoved")
-  assert_equal(hint_text(context), "K2:back K3:copy", "still on the voice row")
+  for id, value in pairs(before) do assert_equal(params:get(id), value, id .. " unchanged") end
+  assert_equal(selected_row(context, S), cursor_row, "the cursor unmoved")
+  assert_equal(table.concat(rows_shown(context, S), "|"), view, "the view unmoved")
+end)
+
+test("a refused load flashes on the picker's hint row", function()
+  local context, S = opened()
+  enc(2, S.constants.NUM_VOICES - 1)
+  tap(3)
+  next_frame(context)
+  assert_equal(hint_text(context), S.lib.voice_presets.VOICE_PRESETS.texts.nothing, "an empty slot")
+end)
+
+test("a preset of a type this build lacks flashes on the picker's hint row", function()
+  local subdir = "voice-picker-nope-" .. math.random(1, 1e9)
+  local dir = h.data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  local first = load_strata({ data_subdir = subdir }); finish_startup(first)
+  local S0 = local_value("S")
+  assert_true(S0.lib.voice_presets.save(2, 1, "later"), "saved")
+  local value = S0.lib.data_files.read(dir .. "voices.data")
+  value.presets[1].type = "nope"
+  assert_true(S0.lib.data_files.write(dir .. "voices.data", value), "a later build's type")
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  show_page("VOICE")
+  for index, row in ipairs(voice_page_rows(1)) do
+    if row.kind == "preset" then S.lib.pages_voice.place_cursor(index) end
+  end
+  tap(3)
+  enc(2, S.constants.NUM_VOICES - 1)
+  next_frame(context)
+  assert_true(shows(context, S, "01 later ?"), "the slot shows ? for the type")
+  tap(3)
+  next_frame(context)
+  assert_equal(hint_text(context), S.lib.voice_presets.VOICE_PRESETS.texts.no_type, "the refusal")
 end)
 
 test("the hints follow the row and ALT", function()
@@ -127,11 +179,15 @@ test("K3 copies a voice row and loads a filled slot", function()
   tap(3)
   assert_equal(S.voices[1].name, S.voices[2].name, "voice 2's sound copied into voice 1")
   assert_equal(S.lib.voice_presets.loaded_name(1), "v2", "the row's name")
+  next_frame(context)
+  assert_equal(hint_text(context), "loaded v2", "the hint row says what it loaded")
   assert_true(S.lib.voice_presets.save(3, 1, "folded"), "a preset of voice 3")
   enc(2, S.constants.NUM_VOICES - 1)
   tap(3)
   assert_equal(S.voices[1].name, S.voices[3].name, "voice 3's preset loaded")
   assert_equal(S.lib.voice_presets.loaded_name(1), "folded", "the row's name")
+  next_frame(context)
+  assert_equal(hint_text(context), "loaded folded", "the hint row says what it loaded")
   assert_true(picker.is_open(), "the picker stays open to try another")
   enc(2, 1)
   local name = S.voices[1].name
@@ -147,12 +203,21 @@ test("ALT+K3 on a slot names it on K3's release and saves", function()
   assert_true(not context.textentry.open, "nothing opens on the press")
   key(3, 0)
   assert_true(context.textentry.open, "the release opens the entry")
+  local te = context.textentry.library
+  assert_equal(te.txt, "", "an empty slot's entry starts empty")
+  assert_equal(te.heading, "preset 03 name", "its heading names the slot")
   context.textentry.finish("dusk")
   assert_true(not context.textentry.open, "closed")
   local preset = S.lib.voice_presets.preset(3)
   assert_equal(preset and preset.name, "dusk", "slot 3 saved as dusk")
   assert_equal(preset and preset.type, S.voices[1].name, "voice 1's sound")
   assert_true(picker.is_open(), "the picker is still open")
+  key(1, 1); key(3, 1); key(3, 0)
+  assert_equal(te.txt, "dusk", "a filled slot's entry starts from its name")
+  assert_equal(te.heading, "preset 03 name", "the heading")
+  context.textentry.finish("a much longer name than twelve")
+  assert_equal(S.lib.voice_presets.preset(3).name, ("a much longer name than twelve"):sub(1, S.constants.SCENE_NAME_MAX),
+    "a longer name is cut to twelve")
 end)
 
 test("a canceled entry saves nothing", function()
@@ -216,6 +281,40 @@ test("a name entry the norns menu took over is forgotten when the menu closes", 
   context.textentry.finish("noon")
   assert_equal(S.lib.voice_presets.preset(1).name, "noon", "which saves its slot")
   assert_true(picker.is_open(), "the picker stays open")
+end)
+
+
+-- A press the norns menu took never reaches the picker's release: the menu
+-- close forgets it (as SEQ's step editor forgets its ALT+K2)
+local function menu_opens_and_closes()
+  _menu.set_mode(true)
+  _menu.set_mode(false)
+end
+
+test("an ALT+K2 press the menu took is forgotten", function()
+  local context, S = opened()
+  assert_true(S.lib.voice_presets.save(2, 1, "keep"), "a preset in slot 1")
+  enc(2, S.constants.NUM_VOICES - 1)
+  key(1, 1); key(2, 1)
+  menu_opens_and_closes()
+  next_frame(context)
+  assert_equal(hint_text(context), "K2:back K3:load", "no held ALT+K2 after the menu")
+  assert_true(not S.lib.ui_modal.top().animates(), "the picker stops redrawing every frame")
+  context.clock.run_for(S.constants.ALT_HOLD_SECONDS * 4)
+  next_frame(context)
+  assert_equal(hint_text(context), "K2:back K3:load", "nor later")
+  assert_true(S.lib.voice_presets.preset(1) ~= nil, "nothing cleared")
+end)
+
+test("an ALT+K3 press the menu took is forgotten", function()
+  local context, S = opened()
+  assert_true(S.lib.voice_presets.save(3, 1, "folded"), "a preset in slot 1")
+  enc(2, S.constants.NUM_VOICES - 1)
+  key(1, 1); key(3, 1)
+  menu_opens_and_closes()
+  tap(3)
+  assert_equal(S.lib.voice_presets.loaded_name(1), "folded", "the next K3 loads")
+  assert_true(not context.textentry.open, "and opens no name entry")
 end)
 
 end
