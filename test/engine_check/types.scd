@@ -252,15 +252,16 @@ check.(h.formatOf(\setVoiceType) == "ii", "types: setVoiceType is \"ii\" (%)".fo
 // setVoiceType" (design §0.3; Review Focus 2's engine half): voice 0 on
 // the Resonator at 220 Hz for 2 s, frozen (hold), two ring-stream notes;
 // after 1 s it switches to type 1. The ring writer is the same node, still
-// paused, never replaced; freeze stays 1; the synth path's RMS over the
-// second after the switch is within 1 dB of the second before; an FM voice
-// synth runs and the Resonator is cutting; the stream notes keep their
-// nodes. On a high engine the same with freezeMode 1 (spectral): the
-// spectral writer is the same node, and the held sound goes on (both
-// seconds above 1e-4). Its level is not compared: a spectral freeze's own
-// level moves 1.5 to 3.2 dB between its first and second seconds on 3.13
-// with no switch at all (PV_MagFreeze holds the magnitudes, the phases
-// come on from the voice bus), and about as much with one. The grains
+// paused, never replaced; freeze stays 1, kept and on the voice's ring
+// grain synth on the server; the synth path's RMS over the second after
+// the switch is within 1 dB of the second before; an FM voice synth runs
+// and the Resonator is cutting; the stream notes keep their nodes. On a
+// high engine the same with freezeMode 1 (spectral): the spectral writer
+// is the same node, and the held sound goes on within a looser band (the
+// edges beside the hold limit, below): a spectral freeze's own level moves
+// -0.2 to +3.2 dB between its first and second seconds with no switch at
+// all (PV_MagFreeze holds the magnitudes, the phases come on from the
+// voice bus), and about as much with one. The grains
 // read the held ring at one place and pan (posSpread and panSpread 0), so
 // the held sound repeats and two seconds of it match: with the spreads at
 // their 0.5 a hold's own level moved -1.27 to +0.5 dB between the seconds
@@ -272,10 +273,24 @@ SynthDef(\strataCheckTypesWindowRms, { arg in, out, t_reset = 0;
 }).add;
 server.sync;
 {
+    // The hold case's limit (dB, either way), and the spectral case's band
+    // (dB, the second after the switch against the second before), from
+    // every spectral figure measured: with a switch -1.66 to +0.39 on
+    // 3.14.1 and +0.51 to +2.22 on 3.13, with none -0.20 to +1.49 on 3.14.1
+    // and +1.41 to +3.19 on 3.13 (docs/notes/engine/types.md). About 1.8 dB
+    // beyond them both ways, so the freeze's own drift never fails it, while
+    // silence (a hold lost to nothing) or a held spectrum that runs away
+    // does. A hold lost to the live voice measured -5.08 to +12.13 dB, much
+    // of it inside the band: the ring check catches that one (the writer
+    // replaced, freeze 0)
+    var holdLimitDb = 1, spectralLowDb = -3.5, spectralHighDb = 5;
     var frozenSwitch = { arg target, mode, label;
         var run = { arg name ... args; h.commandTo(target, name, *args) };
-        var voice = 0, writerBefore, writerAfter, phaseMoving, old, new, streams, streamsAfter, before, after, db;
+        var voice = 0, writerBefore, writerAfter, phaseMoving, old, new, streams, streamsAfter, before, after, db, grainFreeze;
         var meterBus = Bus.control(server, 1), meter, window, phaseBus = target.areaState[\rings][\phaseBuses][voice];
+        // the grain spreads the voice keeps (nil: never sent), put back after
+        var spreadKeys = [\posSpread, \panSpread], spreads = spreadKeys.collect({ arg key; target.grainControls[voice][key] });
+        var defDefault = { arg key; SynthDescLib.global.at(\strataGrainRing).controls.detect({ arg each; each.name == key }).defaultValue };
         window = { meter.set(\t_reset, 1); 1.0.wait; h.readBusValue(meterBus).max(0).sqrt };
         run.(\setGrainSource, voice, 0);
         run.(\setGrainParam, voice, \freezeMode, mode);
@@ -301,6 +316,10 @@ server.sync;
         after = window.value;
         writerAfter = target.ringWriterFor(voice);
         streamsAfter = [1, 2].collect({ arg slot; [target.noteRecord(voice, slot)[\kind], target.noteRecord(voice, slot)[\synth]] });
+        // the server's own freeze: the voice's ring grain synth's control
+        // (the ring writers have none: hold is the writer paused, spectral
+        // the writer's def)
+        grainFreeze = target.synths[target.grainKey(voice)] !? { arg synth; h.getControl(synth, \freeze) };
         phaseMoving = h.readBusValue(phaseBus);
         0.2.wait;
         phaseMoving = h.readBusValue(phaseBus) != phaseMoving;
@@ -309,23 +328,28 @@ server.sync;
             and: { h.synthTree(target.voiceGroup).any({ arg node; (node[\id] == writerBefore.nodeID)
                 and: { node[\def] == if (mode == 0) { \strataRingWrite } { \strataRingWriteSpectral } } }) }
             and: { (mode == 0).not or: { phaseMoving.not } }
-            and: { target.grainControls[voice][\freeze] == 1 } and: { target.areaState[\freeze][\frozen][voice] },
-            "types: a frozen synth voice keeps its ring across setVoiceType (% tier, %: the same writer %, %, freeze %)".format(
+            and: { target.grainControls[voice][\freeze] == 1 } and: { target.areaState[\freeze][\frozen][voice] }
+            and: { grainFreeze == 1 },
+            "types: a frozen synth voice keeps its ring across setVoiceType (% tier, %: the same writer %, %, freeze % kept, % on the grain synth)".format(
                 target.tier, label, writerAfter === writerBefore, if (mode == 0) { "paused " ++ phaseMoving.not } { "spectral" },
-                target.grainControls[voice][\freeze]));
-        check.((if (mode == 0) { db.abs <= 1 } { after > 1e-4 }) and: { before > 1e-4 } and: { new.notNil } and: { new.defName.asSymbol == \strataFM }
+                target.grainControls[voice][\freeze], grainFreeze));
+        check.((if (mode == 0) { db.abs <= holdLimitDb } { (db >= spectralLowDb) and: { db <= spectralHighDb } })
+            and: { before > 1e-4 } and: { new.notNil } and: { new.defName.asSymbol == \strataFM }
             and: { target.cuttingSynths[voice].includes(old) or: { old.isPlaying.not } },
-            "types: a frozen synth voice keeps its held sound across setVoiceType (% tier, %: synth path RMS % then %, % dB%; new %)".format(
+            "types: a frozen synth voice keeps its held sound across setVoiceType (% tier, %: synth path RMS % then %, % dB, %; new %)".format(
                 target.tier, label, before.round(0.00001), after.round(0.00001), db.round(0.01),
-                if (mode == 0) { ", at most 1" } { ", not compared: spectral" }, new !? { new.defName }));
+                if (mode == 0) { "at most %".format(holdLimitDb) } { "% to %".format(spectralLowDb, spectralHighDb) }, new !? { new.defName }));
         check.((streamsAfter == streams) and: { streams.every({ arg each; (each[0] == \stream) and: { each[1].notNil } }) },
             "types: a frozen voice's stream notes keep their nodes across setVoiceType (% tier: %)".format(target.tier, streamsAfter));
         meter.free; meterBus.free;
         run.(\setGrainParam, voice, \freeze, 0.0);
         run.(\setGrainParam, voice, \freezeMode, 0.0);
-        // (the grain defs' defaults)
-        run.(\setGrainParam, voice, \posSpread, 0.5);
-        run.(\setGrainParam, voice, \panSpread, 0.5);
+        // the spreads put back: a kept value as it was, one never sent as
+        // the def's default to the synth and out of the kept controls again
+        [spreadKeys, spreads].flop.do({ arg pair;
+            run.(\setGrainParam, voice, pair[0], pair[1] ?? { defDefault.(pair[0]) });
+            if (pair[1].isNil) { target.grainControls[voice].removeAt(pair[0]) };
+        });
         h.stopAllVoices(target);
         run.(\setNotePool, 0);
         run.(\setVoiceType, voice, voice);
