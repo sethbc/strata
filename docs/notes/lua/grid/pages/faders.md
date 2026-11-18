@@ -5,7 +5,7 @@
 - **Whether the port shows the macros is `pane.state().macros`** (true or nil), per port and forgotten with its grid; never `port_state` directly (P20). A bank key sets it, a page key or a voice key clears it. The bank itself is global (`S.lib.macros.bank()`): a bank key on one grid changes the bank every surface shows.
 - **n, the count of type keys, is the registry's** (`#S.lib.types.list()`, read at each draw and press), never a literal (D4, ruling 64): key x is `S.lib.types.list()[x]`, keys past n are dark and dead.
 - **A type key applies at once through `S.lib.types.set(S.grid_voice_select, key)`**, whose `v<i>_type` action cancels the voice's pending VOICE choice (ruling 63), so the grid's later act stands; then `S.param_page` is clamped to the new type's page count (the action clamps it too).
-- **`S.param_page` and `S.grid_voice_select` are set only by a page key (`x <= fader_page_count`) and `select_grid_voice`**; the source and type actions (`lib/voices.lua`) clamp the page when the grid voice's list shrinks.
+- **The page sets `S.param_page` only with a page key (`x <= fader_page_count`) and a type key's clamp to the new type's count, and `S.grid_voice_select` only through `select_grid_voice`** (which clamps the page too); the source and type actions (`lib/voices.lua`) clamp the page when the grid voice's list shrinks.
 - **`signature(pane)`** is the grid voice, `S.param_page`, its page count, the macros flag, the bank and the voice's type key: a type set on VOICE, a bank set on MOD and a page count moved by a source change show within a drift tick. The fader lines' positions are followed by the engine.
 
 ## Owns

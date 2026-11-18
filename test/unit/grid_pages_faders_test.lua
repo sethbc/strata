@@ -69,27 +69,53 @@ local function page_ids(S)
   return shown
 end
 
--- The voice's param_order in the test's own S lengthened with its own keys
--- until it has `pages` fader pages (the faders that follow it fill the
--- rest); `extra` keys more after that. A probe: the next type switch
--- replaces it
+-- The voice's param_order in the test's own S made of its own keys (in
+-- turn, repeated as needed) so that its fader list has exactly the first
+-- fader of page `pages` and `extra` more after it, whatever the faders
+-- that follow the synth params number today. A probe: the next type
+-- switch replaces it
 local function probe_pages(S, voice_idx, pages, extra)
   local own = {}
   for index, key in ipairs(S.voices[voice_idx].param_order) do own[index] = key end
+  local others = #fader_param_ids(voice_idx) - #own
+  local total = (pages - 1) * FADER_LINES + 1 + (extra or 0)
+  assert_true(total - others >= 1, "voice " .. voice_idx .. "'s other faders leave room for the probe")
   local order = {}
-  for index, key in ipairs(own) do order[index] = key end
+  for index = 1, total - others do order[index] = own[(index - 1) % #own + 1] end
   S.voices[voice_idx].param_order = order
-  local n = 0
-  while fader_page_count(voice_idx) < pages do
-    n = n + 1
-    order[#order + 1] = own[(n - 1) % #own + 1]
-  end
-  for _ = 1, extra or 0 do
-    n = n + 1
-    order[#order + 1] = own[(n - 1) % #own + 1]
-  end
-  assert_equal(fader_page_count(voice_idx), pages, "the probe gives voice " .. voice_idx .. " " .. pages .. " pages")
+  assert_equal(#fader_param_ids(voice_idx), total, "the probe gives voice " .. voice_idx .. " " .. total .. " faders")
+  assert_equal(fader_page_count(voice_idx), pages, "and " .. pages .. " pages")
   grid_redraw()
+end
+
+-- Show the page of the grid voice's fader list that holds fader `index`,
+-- by its line 5 key where the pane shows it (else as a page key would set
+-- it); returns the fader's line
+local function show_fader(S, pane, index)
+  local page = math.ceil(index / FADER_LINES)
+  if pane.shows(page, LINE.pages) then
+    pane.tap(page, LINE.pages)
+  else
+    S.param_page = page
+    grid_redraw()
+  end
+  assert_equal(S.param_page, page, pane.arrangement .. ": fader " .. index .. "'s page " .. page .. " shown")
+  return (index - 1) % FADER_LINES + 1
+end
+
+-- The place of id in the grid voice's fader list, or nil
+local function index_of(S, id)
+  for index, other in ipairs(fader_param_ids(S.grid_voice_select)) do
+    if other == id then return index end
+  end
+  return nil
+end
+
+-- A tapped fader key k shows the value there, the bar below and nothing above
+local function assert_shown_at(pane, line, k, keys, what)
+  assert_equal(pane.led(fader_x(pane, k), line), 15, what .. ": the value at key " .. k)
+  if k > 1 then assert_equal(pane.led(fader_x(pane, k - 1), line), 8, what .. ": the bar below it") end
+  if k < keys then assert_equal(pane.led(fader_x(pane, k + 1), line), 0, what .. ": nothing above it") end
 end
 
 local function type_calls(context)
@@ -124,24 +150,20 @@ test("the faders set and show the picked voice's params (I8)", function()
   each_arrangement(function(_, S, pane, arrangement)
     local keys = shown_keys(pane)
     pane.tap(2, LINE.voices)
-    assert_equal(S.grid_voice_select, 2, arrangement .. ": line 7 key 2 picks voice 2 (fm)")
+    assert_equal(S.grid_voice_select, 2, arrangement .. ": line 7 key 2 picks voice 2")
     local ids = fader_param_ids(2)
-    assert_equal(ids[1], "v2_freq", arrangement .. ": its first fader is freq")
-    assert_equal(ids[2], "v2_ratio", arrangement)
-    assert_equal(ids[3], "v2_index", arrangement)
+    for line = 1, 3 do
+      assert_true(ids[line] ~= nil and ids[line]:find("^v2_") ~= nil, arrangement .. ": line " .. line .. " is a fader of voice 2")
+    end
     pane.tap(fader_x(pane, keys), 1)
-    local _, freq_max = param_range("v2_freq")
-    assert_near(params:get("v2_freq"), freq_max, 1e-6, arrangement .. ": line 1's top key sets freq to its maximum")
-    assert_equal(pane.led(fader_x(pane, keys), 1), 15, arrangement .. ": freq shows at its top key")
-    local ratio_min = param_range("v2_ratio")
+    local _, first_max = param_range(ids[1])
+    assert_near(params:get(ids[1]), first_max, 1e-6, arrangement .. ": line 1's top key sets " .. ids[1] .. " to its maximum")
+    assert_equal(pane.led(fader_x(pane, keys), 1), 15, arrangement .. ": it shows at its top key")
+    local second_min = param_range(ids[2])
     pane.tap(fader_x(pane, 1), 2)
-    assert_near(params:get("v2_ratio"), ratio_min, 1e-6, arrangement .. ": line 2's bottom key sets ratio to its minimum")
-    local middle = keys / 2
-    pane.tap(fader_x(pane, middle), 3)
-    assert_equal(fader_position("v2_index", keys), middle, arrangement .. ": line 3 key " .. middle .. " on index")
-    assert_equal(pane.led(fader_x(pane, middle), 3), 15, arrangement .. ": the value bright")
-    assert_equal(pane.led(fader_x(pane, middle - 1), 3), 8, arrangement .. ": the bar below it")
-    assert_equal(pane.led(fader_x(pane, middle + 1), 3), 0, arrangement .. ": nothing above it")
+    assert_near(params:get(ids[2]), second_min, 1e-6, arrangement .. ": line 2's bottom key sets " .. ids[2] .. " to its minimum")
+    pane.tap(fader_x(pane, keys / 2), 3)
+    assert_shown_at(pane, 3, fader_position(ids[3], keys), keys, arrangement .. ": line 3's middle key on " .. ids[3])
     -- the faders are the shown page's: page 2's line 1 is fader 5
     if pane.shows(2, LINE.pages) then
       pane.tap(2, LINE.pages)
@@ -199,31 +221,31 @@ end)
 test("a buffer voice's faders", function()
   each_arrangement(function(context, S, pane, arrangement)
     local keys = shown_keys(pane)
+    local first_synth = "v1_" .. S.voices[1].param_order[1]
+    assert_equal(fader_param_ids(1)[1], first_synth, arrangement .. ": a synth voice's faders start at its synth params")
     params:set("v1_source", 2)
     local ids = fader_param_ids(1)
-    assert_equal(table.concat({ids[1], ids[2], ids[3], ids[4], ids[5]}, " "), "v1_buf_pos v1_buf_rate v1_buf_scan v1_amp v1_pan",
-      arrangement .. ": the buffer params, the level and pan (the engine pans buffer voices)")
-    assert_equal(ids[6], "v1_grain_size", arrangement .. ": the grain faders follow")
+    assert_true(index_of(S, "v1_buf_pos") ~= nil, arrangement .. ": a buffer voice's faders have its buffer params")
+    assert_true(index_of(S, "v1_pan") ~= nil, arrangement .. ": and pan (the engine pans buffer voices)")
+    assert_equal(index_of(S, first_synth), nil, arrangement .. ": and not the synth params")
     pane.tap(fader_x(pane, keys), 2)
-    local _, rate_max = param_range("v1_buf_rate")
-    assert_near(params:get("v1_buf_rate"), rate_max, 1e-6, arrangement .. ": line 2 is buf_rate")
+    local _, second_max = param_range(ids[2])
+    assert_near(params:get(ids[2]), second_max, 1e-6, arrangement .. ": line 2's top key sets " .. ids[2])
     assert_equal(pane.led(fader_x(pane, keys), 2), 15, arrangement)
-    if pane.shows(2, LINE.pages) then
-      context.clock.advance()  -- voice 1 running
-      assert_true(S.voices[1].active, arrangement .. ": voice 1 runs")
-      context.clear_engine_calls()
-      pane.tap(2, LINE.pages)
-      pane.tap(fader_x(pane, 1), 1)
-      assert_near(params:get("v1_pan"), -1, 1e-6, arrangement .. ": page 2's line 1 is pan, its bottom key hard left")
-      assert_equal(pane.led(fader_x(pane, 1), 1), 15, arrangement .. ": the pan fader shows it")
-      local sent
-      for _, call in ipairs(context.calls_named("setVoiceParam")) do
-        if call.args[1] == 0 and call.args[2] == "pan" then sent = call.args[3] end
-      end
-      assert_near(sent, -1, 1e-6, arrangement .. ": a buffer voice's pan reaches the engine")
+    context.clock.advance()  -- voice 1 running
+    assert_true(S.voices[1].active, arrangement .. ": voice 1 runs")
+    context.clear_engine_calls()
+    local pan_line = show_fader(S, pane, index_of(S, "v1_pan"))
+    pane.tap(fader_x(pane, 1), pan_line)
+    assert_near(params:get("v1_pan"), -1, 1e-6, arrangement .. ": pan's bottom key pans hard left")
+    assert_equal(pane.led(fader_x(pane, 1), pan_line), 15, arrangement .. ": the pan fader shows it")
+    local sent
+    for _, call in ipairs(context.calls_named("setVoiceParam")) do
+      if call.args[1] == 0 and call.args[2] == "pan" then sent = call.args[3] end
     end
+    assert_near(sent, -1, 1e-6, arrangement .. ": a buffer voice's pan reaches the engine")
     params:set("v1_source", 1)
-    assert_equal(fader_param_ids(1)[1], "v1_freq", arrangement .. ": the synth faders return")
+    assert_equal(fader_param_ids(1)[1], first_synth, arrangement .. ": the synth faders return")
   end)
 end)
 
@@ -276,10 +298,9 @@ test("the last page is reached", function()
     local ids = fader_param_ids(1)
     local last_line = (#ids - 1) % FADER_LINES + 1
     assert_equal(page_ids(S)[last_line], ids[#ids], arrangement .. ": the last fader on line " .. last_line)
-    assert_equal(ids[#ids], "v1_release", arrangement .. ": the last is the release")
     pane.tap(fader_x(pane, keys), last_line)
-    local _, release_max = param_range("v1_release")
-    assert_near(params:get("v1_release"), release_max, 1e-6, arrangement .. ": its top key sets it")
+    local _, last_max = param_range(ids[#ids])
+    assert_near(params:get(ids[#ids]), last_max, 1e-6, arrangement .. ": its top key sets " .. ids[#ids])
   end)
 end)
 
@@ -298,9 +319,10 @@ test("line 5 reaches page 10", function()
     assert_equal(pane.led(10, LINE.pages), 15, arrangement .. ": lit")
     local ids = fader_param_ids(1)
     local shown = page_ids(S)
-    assert_equal(shown[1], ids[37], arrangement .. ": line 1 shows fader 37")
+    local tenth_first = (10 - 1) * FADER_LINES + 1
+    assert_equal(shown[1], ids[tenth_first], arrangement .. ": line 1 shows fader " .. tenth_first)
     pane.tap(fader_x(pane, keys), 1)
-    assert_equal(fader_position(ids[37], keys), keys, arrangement .. ": and sets it")
+    assert_equal(fader_position(ids[tenth_first], keys), keys, arrangement .. ": and sets it")
     if pane.shows(11, LINE.pages) then
       pane.tap(11, LINE.pages)
       assert_equal(S.param_page, 10, arrangement .. ": key 11 is no page key")
@@ -401,37 +423,38 @@ test("the faders follow a param set off the grid within a drift tick (#410)", fu
   each_arrangement(function(_, S, pane, arrangement)
     local keys = shown_keys(pane)
     select_grid_voice(3)  -- stopped: nothing of it drifts
-    grid_redraw()
+    local id = "v3_" .. S.voices[3].param_order[1]  -- its first synth param, wherever the list puts it
+    local line = show_fader(S, pane, index_of(S, id))
     drift_update()  -- the first look
-    local id = page_ids(S)[1]
-    assert_equal(id, "v3_freq", arrangement)
     local default_key = fader_position(id, keys)
-    assert_equal(pane.led(fader_x(pane, default_key), 1), 15, arrangement .. ": v3_freq's default")
-    local spec = params:lookup_param(id).controlspec
-    params:set(id, spec.minval)
+    assert_equal(pane.led(fader_x(pane, default_key), line), 15, arrangement .. ": " .. id .. "'s default")
+    local id_min = param_range(id)
+    params:set(id, id_min)
     if default_key ~= 1 then
-      assert_equal(pane.led(fader_x(pane, default_key), 1), 15, arrangement .. ": the set alone redraws no grid")
+      assert_equal(pane.led(fader_x(pane, default_key), line), 15, arrangement .. ": the set alone redraws no grid")
     end
     drift_update()
-    assert_equal(pane.led(fader_x(pane, 1), 1), 15, arrangement .. ": the tick moved the fader to the minimum")
+    assert_equal(pane.led(fader_x(pane, 1), line), 15, arrangement .. ": the tick moved the fader to the minimum")
     local before = pane.device.refresh_count
     for _ = 1, 10 do drift_update() end
     assert_equal(pane.device.refresh_count - before, 0, arrangement .. ": ten idle ticks repaint nothing")
     -- 256:144: the faders follow a mutation (each draw lands randomly)
     select_grid_voice(1)
-    local freq_min = param_range("v1_freq")
-    params:set("v1_freq", freq_min)
+    local mutated = "v1_" .. S.voices[1].param_order[1]  -- a synth param the mutations reach
+    local mutated_line = show_fader(S, pane, index_of(S, mutated))
+    local mutated_min = param_range(mutated)
+    params:set(mutated, mutated_min)
     params:set("mutation_probability", 1)
     params:set("mutation_amount", 1)
-    local freq_key = 1
+    local mutated_key = 1
     for _ = 1, 40 do
       gentle_mutate()
-      freq_key = fader_position("v1_freq", keys)
-      if freq_key > 1 then break end
+      mutated_key = fader_position(mutated, keys)
+      if mutated_key > 1 then break end
     end
-    assert_true(freq_key > 1, arrangement .. ": the mutation moved freq off its minimum")
+    assert_true(mutated_key > 1, arrangement .. ": the mutation moved " .. mutated .. " off its minimum")
     drift_update()
-    assert_equal(pane.led(fader_x(pane, freq_key), 1), 15, arrangement .. ": the freq fader follows the mutation")
+    assert_equal(pane.led(fader_x(pane, mutated_key), mutated_line), 15, arrangement .. ": its fader follows the mutation")
   end)
 end)
 
@@ -508,6 +531,9 @@ end)
 test("a type set on VOICE shows on line 6 within a drift tick", function()
   each_arrangement(function(context, S, pane, arrangement)
     local list = S.lib.types.list()
+    -- the macros on lines 1-4, so the type change moves no fader line and
+    -- only the page's signature can show it
+    if pane.shows(FIRST_BANK, LINE.pages) then pane.tap(FIRST_BANK, LINE.pages) end
     drift_update()
     local signature = S.lib.grid_pane.signature()
     show_page("VOICE")
@@ -525,21 +551,29 @@ end)
 -- Unmentioned case: the source action clamps S.param_page
 test("a source change that shortens the voice's pages shows its last page", function()
   each_arrangement(function(_, S, pane, arrangement)
-    params:set("v1_source", 2)
-    local buffer_pages = fader_page_count(1)
-    if not pane.shows(buffer_pages, LINE.pages) then return end
-    pane.tap(buffer_pages, LINE.pages)
-    assert_equal(S.param_page, buffer_pages, arrangement .. ": a buffer voice's last page shown")
-    params:set("v1_source", 10)
-    local input_pages = fader_page_count(1)
-    assert_true(input_pages < buffer_pages, arrangement .. ": an input voice has fewer pages")
-    assert_equal(S.param_page, input_pages, arrangement .. ": the page clamped to the input voice's last")
-    assert_equal(pane.led(input_pages, LINE.pages), 15, arrangement .. ": line 5 lights it")
-    assert_equal(pane.led(buffer_pages, LINE.pages), 0, arrangement .. ": the gone page dark")
+    -- the synth source with ten pages (the probe), then the source of
+    -- buffer slot 1 or the input, whichever has fewer
+    local fewer, fewer_pages
+    for _, source in ipairs({2, 10}) do
+      params:set("v1_source", source)
+      local count = fader_page_count(1)
+      if fewer_pages == nil or count < fewer_pages then fewer, fewer_pages = source, count end
+    end
+    params:set("v1_source", 1)
+    probe_pages(S, 1, 10)
+    show_fader(S, pane, (10 - 1) * FADER_LINES + 1)
+    assert_equal(S.param_page, 10, arrangement .. ": the synth voice's page 10 shown")
+    params:set("v1_source", fewer)
+    assert_true(fewer_pages < 10, arrangement .. ": source " .. fewer .. " has fewer pages (" .. fewer_pages .. ")")
+    assert_equal(S.param_page, fewer_pages, arrangement .. ": the page clamped to its last")
+    if pane.shows(fewer_pages, LINE.pages) then
+      assert_equal(pane.led(fewer_pages, LINE.pages), 15, arrangement .. ": line 5 lights it")
+    end
+    if pane.shows(10, LINE.pages) then assert_equal(pane.led(10, LINE.pages), 0, arrangement .. ": the gone page dark") end
     local keys = shown_keys(pane)
     local shown = page_ids(S)
     pane.tap(fader_x(pane, keys), 1)
-    assert_equal(fader_position(shown[1], keys), keys, arrangement .. ": line 1 is the input voice's page's fader")
+    assert_equal(fader_position(shown[1], keys), keys, arrangement .. ": line 1 is the new last page's first fader")
     params:set("v1_source", 1)
   end)
 end)
@@ -549,14 +583,9 @@ end)
 test("a page with fewer than four faders and an empty macro slot draw dark and raise nothing", function()
   each_arrangement(function(context, S, pane, arrangement)
     local keys = shown_keys(pane)
-    probe_pages(S, 1, 9, 0)
+    probe_pages(S, 1, 10, 1)  -- page 10 holds two faders
     local ids = fader_param_ids(1)
     local on_last = (#ids - 1) % FADER_LINES + 1
-    if on_last == FADER_LINES then
-      probe_pages(S, 1, 10, 1)
-      ids = fader_param_ids(1)
-      on_last = (#ids - 1) % FADER_LINES + 1
-    end
     local count = fader_page_count(1)
     pane.tap(count, LINE.pages)
     assert_true(on_last < FADER_LINES, arrangement .. ": the last page has " .. on_last .. " faders")
