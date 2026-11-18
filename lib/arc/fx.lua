@@ -2,8 +2,10 @@
 -- The FX page's arc rings: filter freq and res, delay time and mix. While
 -- the delay is synced (S.lib.delay_sync, 3.7) ring 3 turns its division
 -- instead, one whole step per ARC_FX.ticks_per_step ticks carried under
--- "fx:3", and shows the division's place. Sets arc_delta and arc_redraw on
--- FX's S.registry.pages record.
+-- "fx:3", and shows the division's place. With ALT held (3.8, design
+-- §7.6) the rings turn the delay's feedback, the reverb's level and the
+-- shimmer's delay and reverb amounts. Sets arc_delta, arc_redraw,
+-- arc_alt_delta and arc_alt_redraw on FX's S.registry.pages record.
 
 return function(S)
   local M = {}
@@ -16,6 +18,14 @@ return function(S)
     {param_id = "filter_res"},
     {param_id = "delay_time", synced = "delay_division"},
     {param_id = "delay_mix"}
+  }
+
+  -- With ALT held: the param each ring sweeps (all control params)
+  local ARC_FX_ALT_RINGS = {
+    {param_id = "delay_feedback"},
+    {param_id = "reverb_mix"},
+    {param_id = "shimmer_delay"},
+    {param_id = "shimmer_reverb"}
   }
 
   local ARC_FX = {
@@ -55,12 +65,25 @@ return function(S)
     end
   end
 
+  local function arc_fx_alt_delta(n, delta)
+    local ring = ARC_FX_ALT_RINGS[n]
+    if ring then arc_sweep_param(ring.param_id, delta) end
+  end
+
+  local function arc_fx_alt_redraw(arc_port)
+    for n, ring in ipairs(ARC_FX_ALT_RINGS) do
+      arc_ring_fill(arc_port, n, param_fraction(ring.param_id), ARC_FX.level)
+    end
+  end
+
   -- FX's record (lib/pages/fx.lua) gains its rings: arc_delta and arc_redraw
   -- in lib/arc/core.lua dispatch through S.registry.pages[S.ui_page]
   local record = S.registry.pages[S.constants.UI_PAGES.index.FX]
   assert(record, "lib/arc/fx.lua: no FX page record in S.registry.pages")
   record.arc_delta = arc_fx_delta
   record.arc_redraw = arc_fx_redraw
+  record.arc_alt_delta = arc_fx_alt_delta
+  record.arc_alt_redraw = arc_fx_alt_redraw
 
   return M
 end

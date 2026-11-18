@@ -38,6 +38,17 @@ return function(S)
     screen.fill()
   end
 
+  -- The frozen mark (3.8): a filled 3x3 square at x 70-72, y 4-6, filling
+  -- the gap after the tenth dot and before SEQ's play mark (x 73), while the
+  -- delay or an offered reverb is frozen (S.lib.fx_hold.any_frozen, which
+  -- reads only an offered freeze)
+  local function draw_frozen_mark()
+    if not S.lib.fx_hold.any_frozen() then return end
+    screen.level(HEADER.frozen_level)
+    screen.rect(HEADER.frozen_x, HEADER.frozen_y, HEADER.frozen_size, HEADER.frozen_size)
+    screen.fill()
+  end
+
   -- "REC" while any slot records (a slot waiting to start, armed by a beat,
   -- a bar or a level, does not count), else "ARM" while one is armed, else nil
   local function record_indicator()
@@ -73,7 +84,7 @@ return function(S)
   end
 
   -- The header, y 8: the page title, then a header flash while one shows,
-  -- else the page dots and either the page's header_status (with the play
+  -- else the page dots, the frozen mark and either the page's header_status (with the play
   -- mark) or the indicators; the scene at the right
   function draw_header()
     screen.level(15)
@@ -87,6 +98,7 @@ return function(S)
       screen.text(S.lib.ui_text.fit_text(flash, HEADER.flash_width))
     else
       draw_page_dots()
+      draw_frozen_mark()
       local record = S.registry.pages[S.ui_page]
       local status = record and record.header_status and record.header_status()
       if status then

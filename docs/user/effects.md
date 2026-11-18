@@ -22,18 +22,18 @@ Every voice has a "filter & sends" section on the VOICE page (and in PARAMS, aft
 
 Since 3.8 the sends are plain sends, as on a mixing desk: each voice plays dry at its dry level and sends to the delay and the reverb at its sends, and the delay and the reverb return their echoes and tail at their own levels (`delay level` and `reverb level` in PARAMS, `level` on the FX page). The sends are taken before the dry level, so a voice at dry 0 is all effect. The master sums the dry mix and the two returns (times 0.7, so the limiter and the saturation see the level they always did).
 
-- **delay to reverb** (PARAMS > fx, 0-100%, default 100%) - How much of the delay's return the reverb takes. At 100% the echoes are reverberated as before; at 0 a voice with no reverb send has dry echoes. A reverb at level 0 leaves the echoes: the delay's return reaches the master on its own. It is an LFO destination (`dly>rev`), and scenes keep it and crossfade it.
+- **delay to reverb** (PARAMS > fx and FX's `from delay` row, 0-100%, default 100%) - How much of the delay's return the reverb takes. At 100% the echoes are reverberated as before; at 0 a voice with no reverb send has dry echoes. A reverb at level 0 leaves the echoes: the delay's return reaches the master on its own. It is an LFO destination (`dly>rev`), and scenes keep it and crossfade it.
 - **A default start sounds as before**: the reverb's level starts at 43% (3.7's 30% divided by 0.7) with every voice dry and sending at 100%. A scene or a PSET away from the defaults keeps its values, so its balance changes once: 3.7's reverb mix of 30% now reads as a level of 30%, a little less reverb than before, and its delay mix now adds the echoes on top of the dry sound instead of crossfading it away.
 
 The voice filter's cutoff and both sends are LFO destinations (`v1 vfilt`, `v1 dsend`, `v1 rsend`, ...); the dry level is not. Scenes keep all seven; the filter type switches at the end of a transition, the others fade. Randomize and mutations leave them alone (VOICE's ALT+K2 on the section never draws the dry level either); the grid's [faders page](grid/pages/faders.md) shows the cutoff, resonance, mix, the dry level and both sends on the voice's fader pages, on every grid size.
 
 ## Delay freeze and clear
 
-Both are in the fx group of the PARAMETERS menu.
+Both are on the [FX page](pages/fx.md) (its `freeze` and `clear` rows, and ALT+K3 on any delay row freezes or releases) and in the fx group of the PARAMETERS menu. While the delay is frozen a small square shows in the header on every page.
 
 - **delay freeze** - Holds what the delay is playing as a loop you can play over: within 20 ms its feedback goes to exactly 100% and it stops taking in sound, so the loop keeps its level, its brightness and, with ping-pong on, its width (a ping-pong of 50% or more is held as full ping-pong, below it as none). The loop keeps its length: a tempo change under sync or a new delay time waits until you release the freeze. Released, the loop fades away at the delay's feedback and the delay takes in sound again.
 - **delay clear** - Empties the delay at once: its echoes stop, and the first echo of what comes in after plays one delay time later. Frozen, it empties the loop (it stays frozen, silent, until released).
-- Neither is saved: a PSET never stores a freeze, and loading one leaves a freeze as it is unless the PSET bypasses the delay; scenes leave both alone. Bypassing the delay, by hand or by a PSET, ends a freeze, and a freeze cannot be set while the delay is bypassed. Both can be mapped to MIDI (PARAMETERS > MAP); the FX page gets their rows in a later 3.8 package.
+- Neither is saved: a PSET never stores a freeze, and loading one leaves a freeze as it is unless the PSET bypasses the delay; scenes leave both alone. Bypassing the delay, by hand or by a PSET, ends a freeze, and a freeze cannot be set while the delay is bypassed. Both can be mapped to MIDI (PARAMETERS > MAP).
 
 ## Shimmer
 
@@ -43,7 +43,7 @@ Shimmer shifts the pitch of what the delay and the reverb feed back to themselve
 - **shimmer delay** - 0-100%, 0 at first: how much of the delay's feedback is shifted. At 100% each repeat steps by the interval; the delay's feedback still sets how fast the echoes fade, so shimmer never makes them louder, and a frozen delay keeps shimmering at a steady level. A shifted repeat arrives a few tens of milliseconds after the plain one would.
 - **shimmer reverb** - 0-100%, 0 at first: how much of the reverb's sound is shifted, filtered (100 Hz to 6 kHz) and fed back into it. Loud or quiet, the reverb shimmers in proportion to what you send it. At a large reverb size and a high amount the loop would build up by itself: while you play it is held near the level of what you send the reverb, and when the send stops it falls to a quiet halo that does not die away until you turn the amount or the size down. At the largest sizes a steady, dense send fills the reverb by itself, and it then shimmers little.
 - At 0% each effect sounds exactly as it does without shimmer. The interval is shared by both.
-- Scenes keep all three (the interval switches at the end of a transition, the amounts fade); a bypass keeps them, and lifting it brings the effect back with the same shimmer. `shim dly` and `shim rev` are LFO destinations. All three can be mapped to MIDI (PARAMETERS > MAP); the FX page gets their rows in a later 3.8 package.
+- Scenes keep all three (the interval switches at the end of a transition, the amounts fade); a bypass keeps them, and lifting it brings the effect back with the same shimmer. `shim dly` and `shim rev` are LFO destinations. All three can be mapped to MIDI (PARAMETERS > MAP), and they are the FX page's shimmer section ([FX](pages/fx.md)); with ALT held the arc's FX rings 3 and 4 turn the two amounts.
 
 ## Bypass
 

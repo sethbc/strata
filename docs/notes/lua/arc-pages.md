@@ -24,7 +24,7 @@
 ## Owns
 
 - `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/mod.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua`, `lib/arc/io.lua` (`S.lib.arc_main`, ...): each page's rings. `strata.lua` includes them after every page file. SETUP has no arc file (no ring fields on its record).
-- `ARC_MAIN_ALT_KEYS` and `ARC_MAIN_LEVELS` (`lib/arc/main.lua`), `ARC_VOICE` (`lib/arc/voice.lua`), `ARC_SEQ` (`lib/arc/seq.lua`), `ARC_FX_RINGS` (`lib/arc/fx.lua`), `ARC_LFO` (`lib/arc/lfo.lua`), `ARC_MOD` (`lib/arc/mod.lua`), `ARC_BUFFER_RINGS` (`lib/arc/buffer.lua`), `ARC_SCENES` (`lib/arc/scenes.lua`), `ARC_IO_RINGS` (`lib/arc/io.lua`).
+- `ARC_MAIN_ALT_KEYS` and `ARC_MAIN_LEVELS` (`lib/arc/main.lua`), `ARC_VOICE` (`lib/arc/voice.lua`), `ARC_SEQ` (`lib/arc/seq.lua`), `ARC_FX_RINGS` and `ARC_FX_ALT_RINGS` (`lib/arc/fx.lua`), `ARC_LFO` (`lib/arc/lfo.lua`), `ARC_MOD` (`lib/arc/mod.lua`), `ARC_BUFFER_RINGS` (`lib/arc/buffer.lua`), `ARC_SCENES` (`lib/arc/scenes.lua`), `ARC_IO_RINGS` (`lib/arc/io.lua`).
 - Unit tests: `test/unit/arc_pages_test.lua`. The dispatch, fills, carried ticks and button are `lib/arc/core.lua`'s (`docs/notes/lua/arc-core.md`).
 
 ## Rings per page
@@ -57,10 +57,11 @@ SEQ's step editor (`editor_delta`/`editor_redraw`, `ARC_SEQ.editor_rings`, `ARC_
 - Drawn: a set lock through `arc_ring_fill` at `param_value_fraction(param, value)`, an off one at the param's `param_fraction` (where a turn starts); prob, ratchet, note, bookmark and level through `arc_ring_fill_position` at their place in their range (prob 0-100, ratchet 1-4, note -14..14, bookmark 1..4, level 0-15), off ones at their start (100 %, one hit, note 0, bookmark 1). Set or level rings at 15 (`ARC_SEQ.editor_set_level`), off ones at 4 (`ARC_SEQ.editor_off_level`).
 - The button does nothing while the editor is open (its owner has no `arc_key`).
 
-FX (`ARC_FX_RINGS`, `{param_id, synced?}` per ring; `ARC_FX` holds the level and the steps' ticks):
+FX (`arc_fx_delta`/`arc_fx_redraw`, with ALT `arc_fx_alt_delta`/`arc_fx_alt_redraw`; `ARC_FX_RINGS`, `{param_id, synced?}` per ring; `ARC_FX` holds the level and the steps' ticks):
 - ring 1 `filter_freq`, ring 2 `filter_res`, ring 3 `delay_time`, ring 4 `delay_mix`;
 - each drawn at level 12 to `param_fraction(param_id)` of a turn, so the exp params (filter freq, delay time) follow their controlspec warp.
 - 3.7: while the delay plays a division (`S.lib.delay_sync.playing()`), ring 3 steps `delay_division` (its `synced`) one division per 20 ticks (`ARC_FX.ticks_per_step`) through `arc_whole_steps("fx:3", ...)` and `delay_with_detent`, drawn through `arc_ring_fill_position` at the division's place among the twelve; `delay_time` is left alone. A turn while unsynced forgets the carry.
+- 3.8, with ALT (`arc_alt_delta`/`arc_alt_redraw`, `ARC_FX_ALT_RINGS`, design §7.6): ring 1 `delay_feedback`, ring 2 `reverb_mix` (the reverb's level), ring 3 `shimmer_delay`, ring 4 `shimmer_reverb`, each a control param swept through `arc_sweep_param` and drawn at level 12 (`ARC_FX.level`) through `arc_ring_fill` to `param_fraction(param_id)`. No ALT ring is synced or carries ticks.
 
 IO (`ARC_IO_RINGS`, `{param_id}` per ring; 3.6):
 - ring 1 `tapeloop_level`, ring 2 `tapeloop_rate`, ring 3 `tapeloop_feedback`, ring 4 `tapeloop_wear`, through `arc_sweep_param`;

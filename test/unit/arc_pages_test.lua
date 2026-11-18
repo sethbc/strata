@@ -188,6 +188,40 @@ test("arc FX page: rings adjust filter freq/res, delay time/mix and show them", 
   assert_equal(params:get("master_density"), density, "density is not on the FX rings")
 end)
 
+-- 3.8 (package 4a, design §7.6): with ALT the FX rings turn the delay's
+-- feedback, the reverb's level and the two shimmer amounts
+test("arc FX with ALT turns delay feedback, reverb level and shimmer delay and reverb, drawn at 12", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  show_page("FX")
+  local ids = { "delay_feedback", "reverb_mix", "shimmer_delay", "shimmer_reverb" }
+  local plain = {}
+  for _, id in ipairs({ "filter_freq", "filter_res", "delay_time", "delay_mix" }) do plain[id] = params:get(id) end
+  key(1, 1)
+  for ring, id in ipairs(ids) do
+    local spec = params:lookup_param(id).controlspec
+    params:set(id, spec:map(0.25))
+    context.arc.turn(1, ring, 100)
+    assert_true(params:get(id) > spec:map(0.25), "ALT ring " .. ring .. " raises " .. id)
+    next_frame(context)
+    assert_near(device.segments[ring].to, spec:unmap(params:get(id)) * math.pi * 2, 1e-9,
+      "ALT ring " .. ring .. " shows " .. id)
+    assert_equal(device.segments[ring].level, 12, "ALT ring " .. ring .. " at level 12")
+  end
+  for id, value in pairs(plain) do assert_equal(params:get(id), value, id .. " is not turned with ALT") end
+  -- a full turn sweeps each range
+  local ticks = local_value("UI_PAGES").ARC_TICKS_PER_SWEEP
+  for ring, id in ipairs(ids) do
+    params:set(id, 0)
+    context.arc.turn(1, ring, ticks)
+    assert_near(params:get(id), params:lookup_param(id).controlspec.maxval, 1e-6, "1024 ticks sweep " .. id)
+  end
+  key(1, 0)
+  local feedback = params:get("delay_feedback")
+  context.arc.turn(1, 1, -50)
+  assert_equal(params:get("delay_feedback"), feedback, "without ALT ring 1 is the filter's freq again")
+end)
+
 test("arc FX ring 3 turns the delay's division while it is synced, and shows it", function()
   local context = load_strata()
   local device = context.arc.plug(1)
@@ -1176,6 +1210,10 @@ test("ring brightness: MAIN, VOICE, SEQ, SCENES, FX, LFO, BUFFER and MOD draw th
   assert_levels({12, 12, 12, 12}, "SCENES")
   show_page("FX"); arc_redraw()
   assert_levels({12, 12, 12, 12}, "FX")
+  params:set("shimmer_delay", 0.5); params:set("shimmer_reverb", 0.5)  -- at 0 a ring draws no segment
+  key(1, 1); arc_redraw()
+  assert_levels({12, 12, 12, 12}, "FX ALT")
+  key(1, 0)
   -- LFO: depth rings 15 while running, 4 off; ring 4 at 12
   show_page("LFO")
   params:set("strata_lfo1", 1); params:set("strata_lfo2", 0); params:set("strata_lfo3", 0)
