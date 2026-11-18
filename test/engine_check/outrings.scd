@@ -6,7 +6,7 @@
 // self-read, a loop held at full scale, a stopped or muted read voice, an
 // extra note on a voice source and the rings' bytes against
 // fixedBufferBytes; then a reader's freeze (its copy, its fade, the
-// unfreeze's bundle, spectral on a high engine), the read voice's freeze and
+// unfreeze's bundle, a late copy's retry and abandon, spectral on a high engine), the read voice's freeze and
 // the input channel.
 //
 // The read lag is read on a timecode: a check synth adds the time (wrapped
@@ -27,6 +27,7 @@ var state, taps, tapGroup, probeGroup, quietBus, nowBus, readOut, rectEnv, tone,
 var outRing, grainOf, startReader, timeReads, peakOver, levelOver, ringPeaks, stepBus, stepProbe, steps, bufnums;
 var tapSound, stages, badBus, badProbe, scratchL, scratchR, phaseBus, writer, units, record, expect, mixBuses, reader;
 var fadeWaitBefore, copyRing, inOneBundle, heardBus, heardProbe, inputRing, root, other, otherCommand, spectralNodes, copiedAt;
+var lateCopyChecks;
 
 // A grain synth's reads of the timecode while seconds pass: [largest
 // lookback, smallest lookback] (s), read only while the right channel is on
@@ -81,6 +82,17 @@ SynthDef(\strataCheckOutRotation, { arg bufA, bufB, offset = 0, out, t_reset = 0
     var frames = BufFrames.kr(bufA), phase = Phasor.ar(0, 1, 0, frames), reset = T2A.ar(t_reset);
     var x = BufRd.ar(1, bufA, phase, 1, 1), y = BufRd.ar(1, bufB, (phase + offset).wrap(0, frames), 1, 1);
     Out.kr(out, A2K.kr([Peak.ar((x - y).abs, reset), Peak.ar(x.abs, reset)]));
+}).add;
+// The timecode a copy ring holds over frames frames from start, read only
+// where its right channel is on: [the newest, the oldest] since t_reset
+SynthDef(\strataCheckOutCopyTimes, { arg bufL, bufR, start = 0, frames = 1, out, t_reset = 0;
+    var phase = Phasor.ar(0, 1, 0, frames) + start, reset = T2A.ar(t_reset);
+    var left = BufRd.ar(1, bufL, phase, 1, 1), right = BufRd.ar(1, bufR, phase, 1, 1);
+    var on = right > (0.05 * timecodeFlag), written = left / right.max(0.0001) * timecodeWrap;
+    Out.kr(out, A2K.kr([
+        RunningMax.ar(Select.ar(on, [DC.ar(-1000), written]), reset),
+        RunningMin.ar(Select.ar(on, [DC.ar(1000), written]), reset)
+    ]));
 }).add;
 // Seconds from t_reset until a stereo bus first passes 0.001
 SynthDef(\strataCheckOutHeard, { arg in, out, t_reset = 0;
@@ -509,6 +521,122 @@ check.((readings[0] < silence) and: { readings[1] < 0.05 },
     "outrings: a reader frozen over a stopped voice holds silence and, unfrozen 1 s after that voice's voiceOn, reads it again within 50 ms (frozen peak %, heard after % s)".format(
         readings[0].round(0.00001), readings[1].round(0.001)));
 h.stopAllVoices;
+
+// ---- A reader's late copy (#809) ----
+// voice 3 (engine voice 2) stopped, the timecode added to its tap; voice 4
+// (engine voice 3) reads it. The engine check's step before each copy's
+// message (beforeCopyHook, called with the attempt) waits, so the copy goes
+// out late while the read voice's writer keeps writing: a real late copy.
+// copyTimes reads the timecode over the copy's last frozenReachSeconds (what
+// a frozen grain can read with no scan) and at its last frame (the read
+// point's newest audio): with nothing written after the read point there,
+// the newest is the last frame's.
+lateCopyChecks = {
+    var freeze = engine.areaState[\freeze], frames = outRing.(2)[0].numFrames;
+    var reach = engine.tryPerform(\frozenReachSeconds) ? 3.0;
+    var roomSeconds = (engine.tryPerform(\copyRoomFrames, frames) ? sampleRate) / sampleRate;
+    var lines = List.new, attempts = List.new, copyTimes, values, frozenState, late;
+    copyTimes = { arg voice;
+        var ring = copyRing.(voice), size = ring[0].numFrames, span = (reach * sampleRate).round.asInteger.min(size);
+        var bus = Bus.control(server, 2), probe, times, last;
+        probe = Synth(\strataCheckOutCopyTimes, [\bufL, ring[0], \bufR, ring[1], \start, size - span, \frames, span,
+            \out, bus], probeGroup, \addToTail);
+        server.sync; probe.set(\t_reset, 1);
+        ((span / sampleRate) + 0.1).wait;
+        times = h.readBus(bus);
+        probe.free; bus.free;
+        last = [h.bufferSample(ring[0], size - 1), h.bufferSample(ring[1], size - 1)];
+        (newest: times[0], oldest: times[1], last: last[0] / last[1].max(0.0001) * timecodeWrap)
+    };
+    frozenState = { arg voice; [freeze[\frozen][voice], freeze[\copied][voice], engine.grainControls[voice][\freeze]] };
+    freeze[\postLine] = { arg line; lines.add(line) };
+    tapSound = Synth(\strataCheckOutTimecode, [\out, taps[2], \now, nowBus], probeGroup);
+    startReader.(3, sourceOf.(2), 0.05, 50.0, 0.2, true);
+    // a copy on time lands at its first attempt
+    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt) };
+    command.(\setGrainParam, 3, \freeze, 1.0);
+    h.waitFor({ freeze[\copied][3] }, 1);
+    command.(\setGrainParam, 3, \freeze, 0.0);
+    check.(attempts.asArray == [1] and: { lines.isEmpty },
+        "outrings: a reader's copy on time lands at its first attempt (attempts %, lines %)".format(attempts, lines));
+    // the ring all timecode, then a copy late past the frozen read point
+    // (outRingSeconds - grainMaxSeconds): the retry, from a fresh read
+    // point, keeps no audio written after its read point where the frozen
+    // grains read
+    (engine.outRingSeconds + 0.3).wait;
+    late = engine.outRingSeconds - engine.grainMaxSeconds + 0.2;
+    attempts.clear;
+    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); if (attempt == 1) { late.wait } };
+    command.(\setGrainParam, 3, \freeze, 1.0);
+    h.waitFor({ freeze[\copied][3] }, late + 2);
+    engine.beforeCopyHook = nil;
+    values = copyTimes.(3);
+    check.(freeze[\copied][3] and: { attempts.asArray == [1, 2] }
+        and: { values[\newest] <= (values[\last] + 0.001) } and: { values[\oldest] >= (values[\last] - reach - 0.1) }
+        and: { getControl.(grainOf.(3), \bufL) == copyRing.(3)[0].bufnum } and: { lines.isEmpty },
+        "outrings: a reader's hold whose copy is % s late retries once and keeps no audio written after its read point where frozen grains read (attempts %; the last % s of the copy hold % to % s, its last frame %)".format(
+            late.round(0.01), attempts, reach.round(0.001), values[\oldest].round(0.001), values[\newest].round(0.001),
+            values[\last].round(0.001)));
+    command.(\setGrainParam, 3, \freeze, 0.0);
+    // both attempts late past the room: the hold is abandoned, with one
+    // console line; the reader reads the live ring unfrozen, its freeze 0
+    (engine.freezeLeaveSeconds + 0.1).wait;
+    late = roomSeconds + 0.3;
+    attempts.clear;
+    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); late.wait };
+    command.(\setGrainParam, 3, \freeze, 1.0);
+    h.waitFor({ freeze[\frozen][3].not }, (2 * late) + 2);
+    engine.beforeCopyHook = nil;
+    server.sync;
+    check.((attempts.asArray == [1, 2]) and: { frozenState.(3) == [false, false, 0] }
+        and: { getControl.(grainOf.(3), \freeze) == 0 } and: { getControl.(grainOf.(3), \bufL) == outRing.(2)[0].bufnum }
+        and: { getControl.(grainOf.(3), \phaseBus) == outRing.(2)[2].index } and: { lines.size == 1 },
+        "outrings: a reader's hold whose copy and retry are both % s late (room % s) is abandoned: unfrozen on its live ring, one line (attempts %, [frozen, copied, freeze] %, lines %)".format(
+            late.round(0.001), roomSeconds.round(0.001), attempts, frozenState.(3), lines));
+    // a switch during a late copy's retry cancels it: no copy, no line
+    lines.clear; attempts.clear;
+    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); late.wait };
+    command.(\setGrainParam, 3, \freeze, 1.0);
+    h.waitFor({ attempts.includes(2) }, late + 2);
+    copyRing.(3).keep(2).do(_.zero);
+    server.sync;
+    command.(\setGrainSource, 3, sourceOf.(4));
+    (late + 0.3).wait;
+    engine.beforeCopyHook = nil;
+    values = ringPeaks.(copyRing.(3).keep(2));
+    check.((attempts.asArray == [1, 2]) and: { frozenState.(3) == [false, false, 0] } and: { lines.isEmpty }
+        and: { values.every({ arg pair; pair[0] == 0 }) },
+        "outrings: a switch during a late copy's retry cancels it (attempts %, [frozen, copied, freeze] %, lines %, copy ring peaks %)".format(
+            attempts, frozenState.(3), lines, values.collect(_.first)));
+    // a source ring shorter than the copy ring is refused, with one line,
+    // and the hold abandoned (voice 7's out ring stood in for by a 1 s pair
+    // for the freeze, then given back)
+    lines.clear; attempts.clear;
+    values = (outRings: engine.areaState[\outRings], left: engine.areaState[\outRings][\left][6],
+        right: engine.areaState[\outRings][\right][6], shortL: Buffer.alloc(server, sampleRate, 1),
+        shortR: Buffer.alloc(server, sampleRate, 1));
+    server.sync;
+    startReader.(4, sourceOf.(6));
+    values[\outRings][\left][6] = values[\shortL];
+    values[\outRings][\right][6] = values[\shortR];
+    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt) };
+    command.(\setGrainParam, 4, \freeze, 1.0);
+    h.waitFor({ freeze[\frozen][4].not }, 2);
+    engine.beforeCopyHook = nil;
+    values[\outRings][\left][6] = values[\left];
+    values[\outRings][\right][6] = values[\right];
+    server.sync;
+    check.((attempts.asArray == [1]) and: { frozenState.(4) == [false, false, 0] } and: { lines.size == 1 }
+        and: { lines.first.contains("refused") } and: { getControl.(grainOf.(4), \freeze) == 0 },
+        "outrings: a source ring shorter than the copy ring is refused with one line and the hold abandoned (attempts %, [frozen, copied, freeze] %, lines %)".format(
+            attempts, frozenState.(4), lines));
+    [values[\shortL], values[\shortR]].do(_.free);
+    freeze[\postLine] = nil;
+    tapSound.free;
+    h.stopAllVoices;
+    [3, 4].do({ arg voice; command.(\setGrainParam, voice, \freeze, 0.0) });
+};
+lateCopyChecks.value;
 
 // ---- The input channel ----
 // voice 5 (engine voice 4) on the input: left hands both reads the input's

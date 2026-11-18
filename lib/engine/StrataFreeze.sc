@@ -399,6 +399,13 @@
     // and no later copy started (an unfreeze or switch wins). The faded
     // readers get ringLevel 1 back once the copy is in (or abandoned), by
     // the latest copy only.
+    // A copy is in only if it ran inside its room (#809): the head is read
+    // again once the server has done it, and a copy the writer outran
+    // (copyOnTime) is made again once from a fresh read point (the readers'
+    // fade is still down: nothing reads the copy ring); a second late one,
+    // a head the server never gave, or a refused span abandons the hold
+    // (abandonCopy). The re-read, the retry and the abandon run only while
+    // the copy is current, as every step does.
     copyInputToCopyRing { arg voice;
         var state = areaState[\freeze], change = this.ringChanges[voice], copy = state[\copies][voice] + 1;
         var readers = this.copyRingReaders(voice), server = context.server;
@@ -410,19 +417,113 @@
             this.sendToSynth(synth.setMsg(\ringLevel, 0));
         });
         fork({
-            var head;
+            var ring, head, after, readAt, seconds, attempt = 0, landed = false, refused = false;
             if (readers.notEmpty) { bufferFadeWait.wait };
-            if (current.value) { head = this.areaCall(\ringHeadFrame, this.ringBuffersFor(voice, state[\source][voice])[2]) };
-            if (current.value and: { head.notNil }) {
-                this.copyInputSpan(voice, head);
-                server.sync;  // answered once both channels' copies are done
-                if (current.value) { this.holdCopyRing(voice) };
+            while { landed.not and: { refused.not } and: { attempt < this.copyAttempts } and: { current.value } } {
+                attempt = attempt + 1;
+                after = nil;
+                ring = this.ringBuffersFor(voice, state[\source][voice]);
+                head = this.areaCall(\ringHeadFrame, ring[2]);
+                readAt = Main.elapsedTime;
+                if (current.value and: { head.notNil }) { this.beforeCopyHook.value(voice, attempt) };
+                if (current.value and: { head.notNil }) {
+                    refused = this.copyInputSpan(voice, head).not;
+                    if (refused.not) {
+                        server.sync;  // answered once both channels' copies are done
+                        if (current.value) { after = this.areaCall(\ringHeadFrame, ring[2]) };
+                    };
+                };
+                seconds = Main.elapsedTime - readAt;
+                if (current.value and: { this.copyOnTime(voice, head, after, seconds, ring[0].numFrames) }) {
+                    this.holdCopyRing(voice);
+                    landed = true;
+                };
+            };
+            if (landed.not and: { current.value }) {
+                this.areaCall(\abandonCopy, voice, if (refused) { nil } {
+                    "its copy was not in within its room (% s) in % attempts, the last % s after its read point".format(
+                        (this.copyRoomFrames(ring[0].numFrames, this.copyHistory(voice)) / server.sampleRate).round(0.001),
+                        attempt, seconds.round(0.001)) });
             };
             if ((state[\copies][voice] == copy) and: { (state[\stopped] ? false).not }) {
                 this.restoreFadedReaders(voice);
             };
         }, SystemClock);
     }
+
+    // How many times a hold's copy is made at most: once, and one retry
+    copyAttempts { ^2 }
+
+    // How far behind a frozen copy's end its grains can read with no scan
+    // (s): the frozen read point (ringScanOffset's grainMaxSeconds), the
+    // read margin and the spread (the lookback; history is 0 inside the
+    // copy), and a grain at ringMaxRate either way (forward it starts
+    // (ringMaxRate - 1) x grainMaxSeconds further back and reads
+    // grainMaxSeconds on; reversed it reads ringMaxRate x grainMaxSeconds
+    // back from its start): 3.005 s
+    frozenReachSeconds {
+        ^this.grainMaxSeconds + this.ringReadMargin + this.ringSpreadSeconds + (this.ringMaxRate * this.grainMaxSeconds)
+    }
+
+    // The history a copy of the voice's source is taken at (s): the input's
+    // kept history, clipped; 0 for a voice source
+    copyHistory { arg voice;
+        var source = areaState[\freeze][\source][voice];
+        ^if (source == this.inputSource) { (grainControls[voice][\history] ? 0).clip(0, historySeconds) } { 0 }
+    }
+
+    // A copy's room (frames): how far the source ring's writer may go from
+    // the head's read until the copy runs before audio it writes after the
+    // read reaches what a frozen grain reads. That audio enters the copy at
+    // copy frame ringReadMargin + history + a block (the head on the phase
+    // bus is the start of the block its writer has written) less the source
+    // ring's spare length (its frames less the copy's), and a frozen grain
+    // reads the copy's last frozenReachSeconds and a block (its reader's
+    // block lag). So: the source ring's frames less the frozen reach, the
+    // read margin, the history and two blocks. 0.987 s of an output ring
+    // at 48 kHz (no spare length); 1.99 s of the input ring at its longest
+    // history (ringGuardSeconds + 1 s spare), more at less
+    copyRoomFrames { arg sourceFrames, history = 0;
+        var sampleRate = context.server.sampleRate;
+        ^sourceFrames - ((this.frozenReachSeconds + this.ringReadMargin + history) * sampleRate)
+            - (2 * context.server.options.blockSize)
+    }
+
+    // Whether a copy ran inside its room: the head read again after it
+    // (after; nil when the server did not answer) moved less than
+    // copyRoomFrames from the read point's, counted round the ring, and
+    // less than that time passed between the two reads (so the count never
+    // went a whole ring round: a head read waits at most 1 s)
+    copyOnTime { arg voice, head, after, seconds, ringFrames;
+        var room = this.copyRoomFrames(ringFrames, this.copyHistory(voice));
+        ^head.notNil and: { after.notNil } and: { (after - head).mod(ringFrames) < room }
+            and: { (seconds * context.server.sampleRate) < room }
+    }
+
+    // Give up a hold whose copy never ran inside its room (why: the line's
+    // reason; nil when copyInputSpan posted one): the voice is unfrozen as
+    // the freeze param's unfreeze does it (unfreezeWithControl, one
+    // bundle), so its grain synths read its live ring at freeze 0 and the
+    // engine's freeze state reads 0. Lua is not told: its v<i>_freeze stays
+    // 1 until it is set again
+    abandonCopy { arg voice, why;
+        why !? { this.postFreezeLine("strata: voice % hold abandoned: %".format(voice + 1, why)) };
+        this.unfreezeWithControl(voice, 0);
+    }
+
+    // One console line of the freeze area (the engine check collects them
+    // through areaState[\freeze][\postLine])
+    postFreezeLine { arg line;
+        var post = areaState[\freeze][\postLine];
+        if (post.notNil) { post.value(line) } { line.postln };
+    }
+
+    // The engine check's step before each copy's message: a function of the
+    // voice and the attempt (1, or 2 for the retry), called inside the
+    // copy's routine, where it may wait so that the copy goes out late while
+    // the source ring's writer keeps writing (#809). nil: nothing
+    beforeCopyHook { ^areaState[\freeze][\beforeCopy] }
+    beforeCopyHook_ { arg hook; areaState[\freeze][\beforeCopy] = hook }
 
     // A ring writer's frame now (on its phase bus: the input writer's, or a
     // read voice's output ring writer's), inside a routine; nil if the
@@ -439,15 +540,23 @@
     // source's output ring, 3.8) ending ringReadMargin + history (the
     // input's only) before head into the voice's copy ring, oldest first
     // from frame 0: one /b_gen copy per channel, two when the span wraps
-    // the ring's end (an output ring, as long as the copy ring, always does)
+    // the ring's end (an output ring, as long as the copy ring, always does).
+    // A source ring shorter than the copy ring would leave the copy's start
+    // unwritten (a negative span): refused, with one console line (#809).
+    // Answers whether it copied
     copyInputSpan { arg voice, head;
         var rings = areaState[\rings], sampleRate = context.server.sampleRate, source = areaState[\freeze][\source][voice];
         var from = this.ringBuffersFor(voice, source), inputFrames = from[0].numFrames, voiceFrames = rings[\copyL][voice].numFrames;
-        var history = if (source == this.inputSource) { (grainControls[voice][\history] ? 0).clip(0, historySeconds) } { 0 };
-        var end = (head - ((this.ringReadMargin + history) * sampleRate)).round.asInteger.mod(inputFrames);
-        var start = end - voiceFrames;
+        var history = this.copyHistory(voice), end, start, spans;
+        if (inputFrames < voiceFrames) {
+            this.postFreezeLine("strata: voice % hold refused: its source ring (% frames) is shorter than its copy ring (% frames)".format(
+                voice + 1, inputFrames, voiceFrames));
+            ^false
+        };
+        end = (head - ((this.ringReadMargin + history) * sampleRate)).round.asInteger.mod(inputFrames);
+        start = end - voiceFrames;
         // [source frame, copy ring frame, frames]
-        var spans = if (start >= 0) { [[start, 0, voiceFrames]] } {
+        spans = if (start >= 0) { [[start, 0, voiceFrames]] } {
             [[start + inputFrames, 0, start.neg], [0, start.neg, end]]
         };
         spans.do({ arg span;
@@ -456,6 +565,7 @@
                 from[1].copyData(rings[\copyR][voice], span[1], span[0], span[2]);
             };
         });
+        ^true
     }
 
     // The copy is in: the copy ring's phase bus at its end (frame 0 = the
