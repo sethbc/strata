@@ -192,7 +192,7 @@ test("the bypass params are stored in PSETs and never in scenes", function()
 end)
 
 -- 3.8 (design §7.3): a bypass ends its effect's freeze first, so the
--- engine keeps no freeze for the lift; the reverb has none yet (3a)
+-- engine keeps no freeze for the lift; the reverb has none (cut from 3.8)
 test("a bypass ends its effect's freeze before it bypasses", function()
   local context = load_strata()
   finish_startup(context)
