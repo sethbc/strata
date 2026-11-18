@@ -1471,6 +1471,9 @@ return function(S)
         S.scene_file.pset = nil
         rewrite_live_pset()
       end
+      -- a factory set without usable scenes (read only, 3.8): its load set
+      -- the live file aside first, so the live scenes are written back
+      if S.lib.side_files.reading_only() then M.autosave() end
       return
     end
     -- a factory set's scenes (S.lib.side_files.read_only, 3.8): its load
