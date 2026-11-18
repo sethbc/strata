@@ -36,6 +36,7 @@ return function(S)
     line_gap = 6,        -- between the voice and the section on their line
     speed_format = "%.2fx",  -- buf_scan's value: a speed (3.7)
     pending_level = 4,       -- the type row's pending choice (3.8)
+    no_preset = "--",        -- the preset row with nothing loaded (3.8)
   }
   local LAYOUT = M.LAYOUT
 
@@ -99,6 +100,11 @@ return function(S)
   -- spaces dropped; mod sources by voice name; a buffer voice's scan as a
   -- speed (3.7: "1.00x", 1 the audio's own rate)
   local function value_text(row)
+    if row.kind == S.lib.ui_voice_rows.PRESET_KIND then
+      -- the preset last loaded into the voice (3.8), as norns' font draws it
+      local name = S.lib.voice_presets.loaded_name(S.selected_voice)
+      return name and S.lib.ui_text.printable(name) or LAYOUT.no_preset
+    end
     local key = param_key(row)
     if row.kind == S.lib.ui_voice_rows.TYPE_KIND then
       -- the pending choice's name while the row turns (3.8), else the type's
@@ -209,6 +215,7 @@ return function(S)
   -- The draw of the selected voice's row (fn() -> value), or nil for a row
   -- the randomize keeps
   local function row_draw(voice_idx, row)
+    if row.kind == S.lib.ui_voice_rows.PRESET_KIND then return nil end  -- no param (3.8)
     local key = param_key(row)
     for _, record in ipairs(S.registry.voice_params) do
       local draw = record.randomize and record.randomize[key]
@@ -255,6 +262,8 @@ return function(S)
       return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (S.locked[S.selected_voice] and "unlock" or "lock")
     end
     if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
+    local rows, cursor = M.sync_cursor()
+    if rows[cursor].kind == S.lib.ui_voice_rows.PRESET_KIND then return "K2:prev K3:pick" end
     return "K2:prev K3:next"
   end
 
@@ -264,7 +273,9 @@ return function(S)
       S.lib.ui_cursors.move("voice", d)  -- anchors where it lands
     elseif n == 3 then
       local row = rows[cursor]
-      if row.kind == S.lib.ui_voice_rows.TYPE_KIND then
+      if row.kind == S.lib.ui_voice_rows.PRESET_KIND then
+        return  -- the preset row (3.8): E3 does nothing; K3 opens the picker
+      elseif row.kind == S.lib.ui_voice_rows.TYPE_KIND then
         -- the type row (3.8): a pending choice, applied once E3 rests
         S.lib.types.turn(S.selected_voice, d > 0 and 1 or -1)
       elseif row.kind == "binary" then
@@ -279,9 +290,13 @@ return function(S)
 
   -- K2: the first field of the section before the cursor's (in the first
   -- section, its own first field). K3: the next section's first field (in
-  -- the last section, nothing)
+  -- the last section, nothing); on the preset row (3.8), the voice picker
   local function voice_key(n)
     local rows, cursor = M.sync_cursor()
+    if n == 3 and rows[cursor].kind == S.lib.ui_voice_rows.PRESET_KIND then
+      S.lib.ui_voice_picker.open(S.selected_voice)
+      return
+    end
     local position, sections = section_position(rows, cursor)
     local target
     if n == 2 then
@@ -316,7 +331,9 @@ return function(S)
   local function voice_reset_row()
     local rows, cursor = M.sync_cursor()
     local param_id = rows[cursor].param_id
-    if rows[cursor].kind == S.lib.ui_voice_rows.TYPE_KIND then
+    if rows[cursor].kind == S.lib.ui_voice_rows.PRESET_KIND then
+      return  -- no param to reset (3.8)
+    elseif rows[cursor].kind == S.lib.ui_voice_rows.TYPE_KIND then
       -- the voice's own type, at once (a pending choice canceled)
       S.lib.types.set(S.selected_voice, S.lib.types.default_key(S.selected_voice))
     elseif rows[cursor].kind == "binary" then
@@ -415,6 +432,61 @@ return function(S)
   table.insert(layout_states, {name = "ALT+K2 held past the hold time", setup = function(context)
     key(1, 1); key(2, 1)
     context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
+  end})
+
+  -- 3.8 (package 3b): the preset row with a twelve-character name, and the
+  -- voice picker (S.lib.ui_voice_picker) on a voice row, on slot 1 with a
+  -- twelve-character name and the widest type, on slot 64 empty, with ALT
+  -- held, with ALT+K2 past the hold time, and a refused load's flash (K3 on
+  -- an empty slot). Each reads the types and the library at its setup
+  local function preset_name() return string.rep("W", S.constants.SCENE_NAME_MAX) end
+  local function widest_type()
+    local widest, width = nil, -1
+    for _, record in ipairs(S.lib.types.list()) do
+      local extent = screen.text_extents(record.list_name)
+      if extent > width then widest, width = record, extent end
+    end
+    return widest
+  end
+  local function filled_slot_one()
+    params:set("v2_type", widest_type().index)
+    S.lib.voice_presets.save(2, 1, preset_name())
+  end
+  -- The picker open on voice 1, E2 turned row_moves rows from its first
+  local function open_picker(row_moves, prepare)
+    S.selected_voice = 1
+    if prepare then prepare() end
+    S.lib.ui_voice_picker.open(1)
+    enc(2, row_moves)
+  end
+  local function slot_count() return S.lib.voice_presets.VOICE_PRESETS.slots end
+  table.insert(layout_states, {name = "preset row, a twelve-character name", setup = function()
+    S.selected_voice = 1
+    S.lib.voice_presets.save(2, 1, preset_name())
+    S.lib.voice_presets.load(1, 1)
+    for index, row in ipairs(voice_page_rows(1)) do
+      if row.kind == S.lib.ui_voice_rows.PRESET_KIND then M.place_cursor(index) end
+    end
+  end})
+  table.insert(layout_states, {name = "voice picker, a voice row", setup = function() open_picker(0) end})
+  table.insert(layout_states, {name = "voice picker, slot 1 named, the widest type", setup = function()
+    open_picker(NUM_VOICES - 1, filled_slot_one)
+  end})
+  table.insert(layout_states, {name = "voice picker, slot 64 empty", setup = function()
+    open_picker(NUM_VOICES - 1 + slot_count())
+  end})
+  table.insert(layout_states, {name = "voice picker, ALT held", setup = function()
+    open_picker(NUM_VOICES - 1, filled_slot_one)
+    key(1, 1)
+  end})
+  table.insert(layout_states, {name = "voice picker, ALT+K2 past the hold time", setup = function(context)
+    open_picker(NUM_VOICES - 1, filled_slot_one)
+    key(1, 1); key(2, 1)
+    context.clock.run_for(S.lib.ui_voice_picker.VOICE_PICKER.hold_seconds)
+  end})
+  table.insert(layout_states, {name = "voice picker, a refused load's flash", setup = function()
+    open_picker(NUM_VOICES)
+    key(3, 1); key(3, 0)
   end})
 
   -- The page's record, at VOICE's place in UI_PAGES: enc, key and redraw in

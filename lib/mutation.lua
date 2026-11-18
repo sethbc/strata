@@ -103,10 +103,11 @@ return function(S)
     end
   end
 
-  -- Hold the undo of the randomize just made, for UNDO_SECONDS
-  local function hold_undo(spec, values, ids, pattern)
+  -- Hold the undo of the randomize just made (or, 3.8, of a voice preset's
+  -- load: capture), for UNDO_SECONDS
+  local function hold_undo(spec, values, ids, pattern, capture)
     S.undo = {page = spec.page, section = spec.section, voice = spec.voice, values = values, ids = ids,
-      pattern = pattern, until_time = util.time() + UNDO_SECONDS}
+      pattern = pattern, capture = capture, until_time = util.time() + UNDO_SECONDS}
     undo_clock = clock.run(function()
       clock.sleep(UNDO_SECONDS)
       undo_clock = nil  -- first: clear_undo would cancel this clock
@@ -159,12 +160,41 @@ return function(S)
   end
 
   -- Whether a quick ALT+K2 on page `page`, section `section`, voice `voice`
-  -- (nil off a voice's page) would undo: the undo held is that one's and its
-  -- window has not ended
+  -- (nil off a voice's page) would undo: the undo held is that one's (a
+  -- held voice undo, 3.8: any section of its page and voice) and its window
+  -- has not ended
   function M.undo_for(page, section, voice)
     local undo = S.undo
-    return undo ~= nil and undo.page == page and undo.section == section and undo.voice == voice
-      and util.time() < undo.until_time
+    return undo ~= nil and undo.page == page and (undo.section == section or undo.capture ~= nil)
+      and undo.voice == voice and util.time() < undo.until_time
+  end
+
+  -- 3.8 (package 3b, design §8.3, ruling 46): the held voice undo. After a
+  -- voice preset's load or copy has applied, hold the voice's capture from
+  -- before it (S.lib.scenes.capture_voice) as the one undo, VOICE's, for
+  -- UNDO_SECONDS: values names every v<i>_<key> of the capture and of the
+  -- voice's scene keys now, so an edit of either (note_param_edit) ends it.
+  -- Called after the apply, whose own param actions are edits
+  function M.hold_voice(voice_idx, capture)
+    if not is_index(voice_idx, NUM_VOICES) or type(capture) ~= "table" or type(capture.values) ~= "table" then
+      error("hold_voice: a voice index and its capture", 2)
+    end
+    clear_undo()
+    local prefix = "v" .. voice_idx .. "_"
+    local values = {}
+    for key, value in pairs(capture.values) do values[prefix .. key] = value end
+    for key, value in pairs(S.lib.scenes.capture_voice(voice_idx).values) do
+      if values[prefix .. key] == nil then values[prefix .. key] = value end
+    end
+    hold_undo({page = S.constants.UI_PAGES.index.VOICE, voice = voice_idx}, values, {}, nil,
+      {type = capture.type, values = capture.values})
+    request_redraw()
+  end
+
+  -- A held voice undo of voice_idx is held and its window has not ended
+  function M.holds_voice(voice_idx)
+    local undo = S.undo
+    return undo ~= nil and undo.capture ~= nil and undo.voice == voice_idx and util.time() < undo.until_time
   end
 
   -- Put back what the held randomize replaced, in the order it set them (a
@@ -172,12 +202,19 @@ return function(S)
   -- back whole), through the params' actions (so the LFO offsets, the engine
   -- and the grid follow), and a pattern's old steps through replace_pattern;
   -- the undo ends first. Returns false when nothing is held or its window
-  -- has ended
+  -- has ended. A held voice undo (3.8) applies its capture's type and
+  -- values with the voice's present active and source (ruling 46), through
+  -- S.lib.scenes.apply_voice
   function M.undo()
     local undo = S.undo
     if not undo or util.time() >= undo.until_time then return false end
     clear_undo()
     write_as_undo(function()
+      if undo.capture then
+        local voice = S.voices[undo.voice]
+        S.lib.scenes.apply_voice(undo.voice, {active = voice.active, source = voice.source,
+          type = undo.capture.type, values = undo.capture.values})
+      end
       for _, param_id in ipairs(undo.ids) do set_randomized_param(param_id, undo.values[param_id]) end
       if undo.pattern then S.lib.sequencer.replace_pattern(undo.pattern.voice, undo.pattern.steps) end
     end)
@@ -191,6 +228,13 @@ return function(S)
   local function shown_keys(group, voice_idx)
     if group.when and not group.when(voice_idx) then return {} end
     return S.lib.params_setup.group_keys(group, voice_idx)
+  end
+
+  -- The held voice undo of voice_idx, if one is held (4c's grid voices
+  -- page): whether it ran. Any other undo is left alone
+  function M.undo_voice(voice_idx)
+    if not M.holds_voice(voice_idx) then return false end
+    return M.undo()
   end
 
   -- MAIN's whole-voice spec (randomize_voice, MAIN's ALT+K2): every

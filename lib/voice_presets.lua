@@ -205,6 +205,7 @@ return function(S)
       flash(VOICE_PRESETS.texts.not_loaded)
       return false
     end
+    S.lib.mutation.hold_voice(voice_idx, current)  -- after the apply, whose actions are edits
     loaded[voice_idx] = shown_name
     request_redraw()
     grid_redraw()

@@ -926,4 +926,146 @@ test("mutations reach 3.7's sets; amp, pan, env, mode and source are never touch
   end
 end)
 
+
+-- 3.8 (package 3b, ruling 46): a voice preset's load or copy holds the
+-- voice's capture from before it, undone by a quick ALT+K2 on VOICE
+local function preset_session()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  return context, S, S.lib.voice_presets
+end
+
+local function quick_alt_k2()
+  key(1, 1); key(2, 1); key(2, 0); key(1, 0)
+end
+
+-- VOICE on voice_idx, the cursor on the first row of section
+local function voice_page_on(S, voice_idx, section)
+  show_page("VOICE")
+  S.selected_voice = voice_idx
+  for index, row in ipairs(voice_page_rows(voice_idx)) do
+    if row.section == section and row.selectable ~= false then
+      S.lib.pages_voice.place_cursor(index)
+      return
+    end
+  end
+  error("no section " .. section)
+end
+
+test("a held voice undo puts the voice back", function()
+  local _, S, presets = preset_session()
+  params:set("v2_grain_size", 0.21)
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  params:set("v4_grain_size", 0.33)
+  local before = deep_copy(S.lib.scenes.capture_voice(4))
+  assert_true(presets.load(4, 1), "loaded")
+  assert_equal(S.voices[4].name, "fm", "voice 4 on fm")
+  assert_true(S.lib.mutation.holds_voice(4), "the load is held")
+  voice_page_on(S, 4, "mix")
+  quick_alt_k2()
+  assert_equal(S.undo, nil, "the undo is used")
+  assert_equal(S.voices[4].name, before.type, "the type from before")
+  for key, value in pairs(before.values) do
+    assert_near(S.voices[4].values[key], value, 1e-9 * math.max(1, math.abs(value)), key .. " from before")
+  end
+end)
+
+test("an edit after a load ends its undo", function()
+  local _, S, presets = preset_session()
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  assert_true(presets.load(4, 1), "loaded")
+  assert_true(S.lib.mutation.holds_voice(4), "held")
+  params:set("v4_grain_size", 0.12)
+  assert_true(not S.lib.mutation.holds_voice(4), "the edit ends it")
+  assert_equal(S.undo, nil, "no undo")
+  -- a key the load brought (fm's ratio; voice 4 was sub) ends it too
+  assert_true(presets.load(4, 1), "loaded again")
+  params:set("v4_ratio", params:lookup_param("v4_ratio").controlspec:map(0.9))
+  assert_true(not S.lib.mutation.holds_voice(4), "an edit of the loaded sound's key ends it")
+end)
+
+test("the undo keeps the voice's present active and source", function()
+  local _, S, presets = preset_session()
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  assert_true(not S.voices[4].active, "voice 4 stopped")
+  local own_type = S.voices[4].name
+  assert_true(presets.load(4, 1), "loaded")
+  toggle_voice(4)
+  params:set("v4_source", S.constants.SOURCE_SYNTH + 1)
+  local source = S.voices[4].source
+  assert_true(S.lib.mutation.holds_voice(4), "a start and a source switch are no sound edit")
+  voice_page_on(S, 4, "grain")
+  quick_alt_k2()
+  assert_equal(S.undo, nil, "undone")
+  assert_true(S.voices[4].active, "still running")
+  assert_equal(S.voices[4].source, source, "the present source")
+  assert_equal(S.voices[4].name, own_type, "the type from before")
+end)
+
+test("undo_voice undoes only that voice's hold; holds_voice says so", function()
+  local _, S, presets = preset_session()
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  assert_true(not S.lib.mutation.holds_voice(3), "nothing held")
+  assert_true(presets.load(3, 1), "loaded")
+  assert_true(S.lib.mutation.holds_voice(3), "voice 3's hold")
+  assert_true(not S.lib.mutation.holds_voice(5), "not voice 5's")
+  assert_equal(S.lib.mutation.undo_voice(5), false, "voice 5 has none")
+  assert_equal(S.voices[3].name, "fm", "voice 3 still loaded")
+  assert_equal(S.lib.mutation.undo_voice(3), true, "voice 3's undone")
+  assert_equal(S.voices[3].name, "folder", "back on folder")
+  assert_equal(S.lib.mutation.undo_voice(3), false, "once")
+  randomize_voice(3)
+  assert_true(not S.lib.mutation.holds_voice(3), "a randomize's undo is no hold")
+  assert_equal(S.lib.mutation.undo_voice(3), false, "and undo_voice leaves it")
+  assert_true(undo_available(3), "MAIN's undo stands")
+end)
+
+test("a held voice undo lapses after UNDO_SECONDS", function()
+  local context, S, presets = preset_session()
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  assert_true(presets.load(4, 1), "loaded")
+  local VOICE = S.constants.UI_PAGES.index.VOICE
+  assert_true(S.lib.mutation.undo_for(VOICE, "grain", 4), "any VOICE section of voice 4")
+  assert_true(S.lib.mutation.undo_for(VOICE, "voice", 4), "the type row's section too")
+  assert_true(not S.lib.mutation.undo_for(VOICE, "grain", 3), "not another voice")
+  assert_true(not S.lib.mutation.undo_for(S.constants.UI_PAGES.index.MAIN, "voice", 4), "not another page")
+  context.clock.run_for(S.constants.UNDO_SECONDS + 0.01)
+  assert_true(not S.lib.mutation.holds_voice(4), "lapsed")
+  assert_equal(S.undo, nil, "cleared")
+  voice_page_on(S, 4, "grain")
+  local name = S.voices[4].name
+  quick_alt_k2()
+  assert_equal(S.voices[4].name, name, "no undo after the window")
+end)
+
+test("a copy made through copy() is undone by ALT+K2 on VOICE", function()
+  local _, S, presets = preset_session()
+  local before = deep_copy(S.lib.scenes.capture_voice(5))
+  assert_true(presets.copy(2, 5), "copied")
+  assert_equal(S.voices[5].name, "fm", "voice 5 on voice 2's type")
+  voice_page_on(S, 5, "grain")
+  quick_alt_k2()
+  assert_equal(S.voices[5].name, before.type, "voice 5's own type")
+  for key, value in pairs(before.values) do
+    assert_near(S.voices[5].values[key], value, 1e-9 * math.max(1, math.abs(value)), key .. " from before")
+  end
+end)
+
+test("a load's type stands over a pending type choice", function()
+  local context, S, presets = preset_session()
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  voice_page_on(S, 1, "voice")
+  local pulse = S.lib.types.record("pulse").index
+  for _ = 1, pulse - S.lib.types.of(1).index do enc(3, 1) end
+  assert_equal(S.lib.types.pending(1), pulse, "the choice is pulse")
+  context.clear_engine_calls()
+  assert_true(presets.load(1, 1), "loaded before the settle")
+  assert_equal(S.lib.types.pending(1), nil, "the choice is canceled")
+  context.clock.run_for(S.lib.types.TYPES.settle_seconds + 0.1)
+  assert_equal(S.voices[1].name, "fm", "voice 1 is fm")
+  for _, call in ipairs(context.calls_named("setVoiceType")) do
+    assert_true(not (call.args[1] == 0 and call.args[2] == pulse - 1), "no setVoiceType for pulse")
+  end
+end)
+
 end

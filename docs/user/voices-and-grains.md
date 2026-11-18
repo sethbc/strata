@@ -27,6 +27,18 @@ A type change keeps the voice's other settings: its grains, its sends, its attac
 
 A scene stores each voice's type, and a recall puts it back (a fade between two scenes of one type fades the synth parameters; between types, the type and its parameters change at the fade's end). A PSET stores each voice's type and every type's parameters; a PSET saved before 3.8 puts each voice back on its own type.
 
+### Voice presets
+
+A preset is a voice's sound, named: its type and that type's parameters, its grain settings (size, density, pitch, spread, mode, the window, probability, the cloud and overlap, the pan wander), its variation (the jitters, the intervals, reverse, quantize, the arpeggiator), its filter and sends, its dry level, level and pan, its attack and release and its envelope's shape. It never holds where the voice plays from or how it runs: the source and input channel, the buffer position, rate, scan, loop, bookmarks and slices, scan mode and follow, freeze and history, mute and solo, the pattern and the sequencer's settings, the crossmod slots and speed, or expression.
+
+The library has 64 slots, kept in `voices.data` (one library for the device, whatever PSET is loaded). Open it with K3 on VOICE's `preset` row (see [VOICE](pages/voice.md)):
+- **Load** a slot into the voice (K3): the voice takes the preset's sound and keeps its place: its source, whether it runs, its position in its audio, its pattern and its lock. A buffer voice takes the type for later, heard when it plays its synth. A parameter the preset does not hold keeps the voice's own value. A locked voice can be loaded into
+- **Copy** another voice's sound (K3 on `from voice <n>`) the same way
+- **Save** the voice into a slot (ALT+K3, then a name of up to twelve characters)
+- **Clear** a slot (ALT+K2 held)
+
+A quick ALT+K2 on VOICE within 5 seconds, on any row of that voice, undoes a load or a copy (one made from a grid too); any edit of the voice's sound ends that undo. A load during a scene fade takes the voice out of the fade: the other voices land on the scene, and the loaded one keeps its new sound. A preset of a type this build does not have loads nothing. A `voices.data` that cannot be read is kept aside as `voices.data.bak` and the library starts empty.
+
 ## Synthesis Parameters
 
 Each type's own parameters, by the names the VOICE page's synth section, MAIN and PARAMETERS (the voice's first part) show; the grid's fader pages run through them in this order. MAIN's E3 and arc ring 2 adjust the one marked *main*. Most of the sounds also move on their own: slow random wobbles keep each voice drifting while nothing is turned, so a setting is the center of a movement more than a fixed value. Every voice also has **amp**, its level (0-1; 0.25 to 0.4 to start, by voice), and all but the Sub have **pan** (-1 left to 1 right, 0 center); the VOICE page shows them in its mix section. While a voice's source is a buffer or the input, its synthesis parameters do nothing; amp and pan still do.

@@ -299,7 +299,7 @@ end)
 test("E2 moves through fields and on into the next section", function()
   local context, S = started_voice_page()
   assert_equal(cursor_param(S), "v1_type", "the cursor starts on the first field, the type's (3.8)")
-  enc(2, 1)
+  enc(2, 2)  -- past the preset row (3b)
   assert_equal(cursor_param(S), "v1_freq", "the synth section's first after it (the label takes no stop)")
   enc(2, 1)
   assert_equal(cursor_param(S), "v1_rq")
@@ -333,7 +333,7 @@ end)
 
 test("K2 and K3 jump to the previous and next section's first field", function()
   local _, S = started_voice_page()
-  enc(2, 2)
+  enc(2, 3)  -- past the preset row (3b)
   assert_equal(cursor_param(S), "v1_rq")
   tap(3); assert_equal(cursor_param(S), "v1_grain_size", "K3: grain")
   tap(3); assert_equal(cursor_param(S), "v1_mod_speed", "K3: crossmod")
@@ -1044,7 +1044,7 @@ test("VOICE's first row is the voice's type, in section voice with no label row"
   assert_equal(rows[1].param_id, "v1_type", "the type row first")
   assert_equal(rows[1].label, "type"); assert_equal(rows[1].section, "voice"); assert_equal(rows[1].kind, "type")
   assert_equal(rows[1].selectable, true)
-  assert_equal(rows[2].selectable, false, "then the synth section's label")
+  assert_equal(rows[3].selectable, false, "then (after 3b's preset row) the synth section's label")
   assert_equal(S.lib.ui_voice_rows.first_field_row(1), 1, "the first field row is the type's")
   assert_equal(cursor_param(S), "v1_type", "the cursor starts on it")
   redraw()
@@ -1153,6 +1153,87 @@ test("ALT+K2 held on the type row resets the default type; a quick press draws n
   end
   held_alt_k2(context)
   assert_equal(params:get("v1_type"), 1, "held: the default type, resonator")
+end)
+
+
+-- 3.8 (package 3b): the preset row, after the type row in its section
+local function preset_row_index()
+  for index, row in ipairs(voice_page_rows(local_value("S").selected_voice)) do
+    if row.kind == "preset" then return index end
+  end
+end
+
+test("the row shows the name last loaded, else --", function()
+  local context, S = started_voice_page()
+  local index = preset_row_index()
+  assert_equal(index, 2, "the second row, after the type")
+  local row = voice_page_rows(1)[index]
+  assert_equal(row.section, S.lib.ui_voice_rows.VOICE_SECTION, "in the type row's section")
+  assert_equal(row.param_id, nil, "no param")
+  S.lib.pages_voice.place_cursor(index)
+  redraw()
+  local label, value = drawn_row(context, "preset")
+  assert_true(label ~= nil, "the preset row is drawn")
+  assert_equal(value and value.text, "--", "nothing loaded yet")
+  assert_equal(hint_text(context), "K2:prev K3:pick", "K3 opens the picker")
+  local name = string.rep("W", S.constants.SCENE_NAME_MAX)
+  assert_true(S.lib.voice_presets.save(2, 1, name), "a twelve-character preset")
+  assert_true(S.lib.voice_presets.load(1, 1), "loaded")
+  redraw()
+  _, value = drawn_row(context, "preset")
+  assert_equal(value and value.text, name, "the name last loaded")
+  assert_true(S.lib.voice_presets.copy(3, 1), "a copy")
+  redraw()
+  _, value = drawn_row(context, "preset")
+  assert_equal(value and value.text, "v3", "a copy shows the voice")
+  capture_scene(1); recall_scene(1, 0)
+  redraw()
+  _, value = drawn_row(context, "preset")
+  assert_equal(value and value.text, "v3", "a recall leaves it")
+end)
+
+test("the cursor anchored on the preset row stays on it", function()
+  local _, S = started_voice_page()
+  local index = preset_row_index()
+  S.lib.pages_voice.place_cursor(index)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  local rows, cursor = S.lib.pages_voice.sync_cursor()
+  assert_equal(rows[cursor].kind, "preset", "on a buffer source")
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  rows, cursor = S.lib.pages_voice.sync_cursor()
+  assert_equal(rows[cursor].kind, "preset", "and back on the synth")
+  enc(3, 1); enc(3, -1)
+  assert_true(not S.lib.ui_voice_picker.is_open(), "E3 does nothing there")
+  key(1, 1); key(2, 1); key(2, 0); key(1, 0)
+  assert_true(not S.lib.ui_voice_picker.is_open(), "nor ALT+K2")
+  rows, cursor = S.lib.pages_voice.sync_cursor()
+  assert_equal(rows[cursor].kind, "preset", "the cursor stays")
+end)
+
+test("no arc ring reaches the preset row", function()
+  local context, S = started_voice_page()
+  context.arc.plug(1)
+  local index = preset_row_index()
+  S.lib.pages_voice.place_cursor(index)
+  local rows, cursor = S.lib.pages_voice.sync_cursor()
+  local _, group = voice_page_group(rows, cursor)
+  for _, row_index in ipairs(group) do
+    assert_true(rows[row_index].param_id ~= nil, "every ring's row has a param")
+  end
+  assert_equal(group[1], 1, "ring 1 is the type row")
+  assert_equal(group[2], index + 2, "ring 2 skips the preset row and the synth label")
+  redraw()
+  local preset_y
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.text == "preset" then preset_y = entry.y end
+  end
+  for _, rect in ipairs(context.screen.rects or {}) do
+    assert_true(not (rect.x == MARK_X and rect.y <= preset_y and rect.y + rect.h > preset_y),
+      "no ring mark beside the preset row")
+  end
+  for ring = 2, 4 do context.arc.turn(1, ring, 40) end
+  assert_true(not S.lib.ui_voice_picker.is_open(), "a ring opens nothing")
+  context.arc.unplug(1)
 end)
 
 end
