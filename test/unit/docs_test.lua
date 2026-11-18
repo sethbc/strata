@@ -1524,7 +1524,7 @@ function CI_WORKFLOW.leaves_archives(command)
   end
   return words[#words]:sub(1, #"$debs") == "$debs"
 end
--- #786: the two pieces of the shard's scripts the cache's safety rests on,
+-- #786, #792: the pieces of the shard's scripts the cache's safety rests on,
 -- pinned verbatim (dedented, trailing spaces dropped): any edit of them fails
 -- the tests by its first changed line, and whoever changes one changes its
 -- text here in the same commit, on purpose.
@@ -1536,8 +1536,17 @@ end
 -- assignment to the loop's done: every line the loop reads that this step
 -- sets): a kept file is copied into apt's archive folder only inside the if
 -- whose condition is its own check, so a damaged or altered file never
--- reaches apt, which takes any file of the right size there as downloaded
+-- reaches apt, which takes any file of the right size there as downloaded.
+-- The install step's start (#792, from the script's first line, which it
+-- must be, to the kept folder's assignment, where the loop's piece starts):
+-- nothing before the loop can shadow a command it runs (a function, an
+-- alias or a PATH of its own for sha512sum)
 CI_WORKFLOW.PINNED = {
+  { name = "install step's start", step = "install", first = 'echo "jackd2 ', from_start = true, text = [==[
+echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections
+packages=(jackd2 "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION")
+debs="$RUNNER_TEMP/sc-debs"
+]==] },
   { name = "making of the SHA512 list", step = "list", first = ": > ", text = [==[
 : > "$RUNNER_TEMP/empty-status"
 nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
@@ -1571,7 +1580,11 @@ done < "$RUNNER_TEMP/sc-packages.sha512"
 -- path, a part of one or Dir::Cache) other than to read it or to copy from
 -- it into the kept folder, or writes the SHA512 list; the kept folder is not
 -- the one the restore fills; the save is not the step right after the
--- install or runs on an exact hit
+-- install or runs on an exact hit; a pinned piece that must start the
+-- script does not (#792); anything that can shadow a command the pinned
+-- lines run (#792): a shell function or an alias in any step of the shard,
+-- BASH_ENV anywhere in the workflow (bash runs its file before every step's
+-- script)
 function CI_WORKFLOW.cache_problems(workflow)
   local problems, at = {}, {}
   local function problem(text) problems[#problems + 1] = text end
@@ -1605,6 +1618,8 @@ function CI_WORKFLOW.cache_problems(workflow)
     end
     if #starts ~= 1 then
       problem("the " .. piece.name .. " is not found once (" .. #starts .. " lines start with `" .. piece.first .. "`)")
+    elseif piece.from_start and starts[1] ~= 1 then
+      problem("the " .. piece.name .. " is not the script's first line: line 1 is `" .. tostring(script[1]) .. "`")
     else
       local differs
       for offset, line in ipairs(expected) do
@@ -1617,7 +1632,9 @@ function CI_WORKFLOW.cache_problems(workflow)
         end
       end
       if not differs then
-        exempt[at[piece.step]] = { from = starts[1], to = starts[1] + #expected - 1 }
+        local ranges = exempt[at[piece.step]] or {}
+        ranges[#ranges + 1] = { from = starts[1], to = starts[1] + #expected - 1 }
+        exempt[at[piece.step]] = ranges
       end
     end
   end
@@ -1634,7 +1651,18 @@ function CI_WORKFLOW.cache_problems(workflow)
       problem("step " .. tostring(step.name or step.uses) .. " names apt's archive folder")
     end
     for line_index, line in ipairs(script) do
-      local pinned = exempt[index] and line_index >= exempt[index].from and line_index <= exempt[index].to
+      local pinned = false
+      for _, range in ipairs(exempt[index] or {}) do
+        if line_index >= range.from and line_index <= range.to then pinned = true end
+      end
+      for _, command in ipairs(CI_WORKFLOW.commands(line)) do
+        if command:match("^function%s") or command:match("^[^%s=()'\"$]+%s*%(%s*%)") then
+          problem("a shell function is defined in the engine shard (it could shadow a command the pinned lines run): " .. line)
+        end
+      end
+      if line:find("%f[%w_]alias%f[^%w_]") then
+        problem("an alias in the engine shard (it could shadow a command the pinned lines run): " .. line)
+      end
       for _, command in ipairs(pinned and {} or CI_WORKFLOW.commands(line)) do
         if CI_WORKFLOW.names_archives(command) and not CI_WORKFLOW.leaves_archives(command) then
           problem("a file can reach apt's archive folder past the hash check: " .. line)
@@ -1644,6 +1672,13 @@ function CI_WORKFLOW.cache_problems(workflow)
           problem("the SHA512 list is written past its pinned making: " .. line)
         end
       end
+    end
+  end
+  -- the workflow's env, the job's, a step's or a line written to
+  -- $GITHUB_ENV: any of them reaches every step of the shard after it
+  for line in (workflow .. "\n"):gmatch("([^\n]*)\n") do
+    if not line:match("^%s*#") and line:find("BASH_ENV", 1, true) then
+      problem("BASH_ENV is set (bash runs its file before every step's script): " .. line:match("^%s*(.-)%s*$"))
     end
   end
   return problems
@@ -1708,7 +1743,8 @@ function CI_WORKFLOW.failing_cases(workflow, find_problems, cases)
   for _, case in ipairs(cases) do
     local text = workflow
     for i = 1, #case.edits, 2 do text = CI_WORKFLOW.mutated(text, case.edits[i], case.edits[i + 1]) end
-    local found = table.concat(find_problems(text), "\n  ")    for _, expect in ipairs(type(case.expect) == "table" and case.expect or { case.expect }) do
+    local found = table.concat(find_problems(text), "\n  ")
+    for _, expect in ipairs(type(case.expect) == "table" and case.expect or { case.expect }) do
       if not found:find(expect, 1, true) then
         missed[#missed + 1] = case.name .. ": the problems should name " .. expect .. "; they are: " .. (found == "" and "(none)" or found)
       end
@@ -1720,7 +1756,8 @@ end
 -- #786: the making of the SHA512 list and the verify-and-copy loop are
 -- pinned verbatim (CI_WORKFLOW.PINNED), and outside them nothing puts a file
 -- in apt's archive folder: apt takes any file of the right size there as
--- downloaded
+-- downloaded. #792: so is the install step's start, and nothing in the
+-- shard can shadow a command the pinned lines run
 test("a kept package reaches apt's archive folder only through the hash check, by its place in the script (#786)", function()
   local workflow = read_repo_file(".github/workflows/test.yml")
   assert_equal(table.concat(CI_WORKFLOW.cache_problems(workflow), " | "), "", "the workflow's cache problems")
@@ -1732,7 +1769,9 @@ test("a kept package reaches apt's archive folder only through the hash check, b
   local function differs(region, line, found)
     return { "the " .. region .. " differs from its pinned text at line " .. line .. ":", "found `" .. found .. "`" }
   end
-  local loop = "verify-and-copy loop"
+  local loop, start = "verify-and-copy loop", "install step's start"
+  local function also(expect, extra) expect[#expect + 1] = extra; return expect end
+  local debs = '          debs="$RUNNER_TEMP/sc-debs"\n'
   local cases = {
     -- inside the pinned loop: every edit fails by its first changed line.
     -- The case nobody wrote down: the whole kept folder copied "to save a loop"
@@ -1789,6 +1828,24 @@ test("a kept package reaches apt's archive folder only through the hash check, b
     { name = "the SHA512 list written again after its pinned making",
       expect = 'sha512sum "$RUNNER_TEMP"/sc-debs/*.deb > "$RUNNER_TEMP/sc-packages.sha512"',
       edits = { "          fi\n          prefix=", '          fi\n          sha512sum "$RUNNER_TEMP"/sc-debs/*.deb > "$RUNNER_TEMP/sc-packages.sha512"\n          prefix=' } },
+    -- #792: what shadows sha512sum before the loop runs it. The issue's
+    -- probe, a function above debs=, fails by the pinned start and by name
+    { name = "sha512sum shadowed by a function above debs=", expect = also(differs(start, 3, "sha512sum() { :; }"),
+        "a shell function is defined in the engine shard (it could shadow a command the pinned lines run): sha512sum() { :; }"),
+      edits = { debs, "          sha512sum() { :; }\n" .. debs } },
+    { name = "a function by the keyword, in another step",
+      expect = "a shell function is defined in the engine shard (it could shadow a command the pinned lines run): function sha512sum { :; }",
+      edits = { "          jackd --no-realtime -d dummy", "          function sha512sum { :; }\n          jackd --no-realtime -d dummy" } },
+    { name = "sha512sum shadowed by an alias above debs=", expect = also(differs(start, 3, "shopt -s expand_aliases; alias sha512sum=true"),
+        "an alias in the engine shard (it could shadow a command the pinned lines run): shopt -s expand_aliases; alias sha512sum=true"),
+      edits = { debs, "          shopt -s expand_aliases; alias sha512sum=true\n" .. debs } },
+    { name = "BASH_ENV in the install step's env", expect = "BASH_ENV is set (bash runs its file before every step's script): BASH_ENV: /tmp/shadow.sh",
+      edits = { "        timeout-minutes: 4\n        run: |\n", "        timeout-minutes: 4\n        env:\n          BASH_ENV: /tmp/shadow.sh\n        run: |\n" } },
+    -- the pinned start: a PATH of its own before the loop, and a line above the script's first
+    { name = "a PATH of its own above debs=", expect = differs(start, 3, 'export PATH="$RUNNER_TEMP/bin:$PATH"'),
+      edits = { debs, '          export PATH="$RUNNER_TEMP/bin:$PATH"\n' .. debs } },
+    { name = "a line above the install's first", expect = "the install step's start is not the script's first line: line 1 is `set +o errexit`",
+      edits = { '          echo "jackd2 jackd/tweak_rt_limits', '          set +o errexit\n          echo "jackd2 jackd/tweak_rt_limits' } },
   }
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases)
 end)
