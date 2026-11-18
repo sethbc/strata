@@ -17,6 +17,8 @@ Each voice plays one synth type, picked on its VOICE page's `type` row (below). 
 1. **Additive** - A bank of up to 16 sine partials over the pitch: a tilt from bright to almost a sine, a stretch that bends the series out of tune, a balance of the odd and even partials, and one slow wander of the brightness. No voice starts on it
 1. **Noise** - Colored noise and crackling dust through a bank of four resonances at the voice's pitch, from a breathy wash to a ringing, whistling tone (no voice starts on it: choose it on the `type` row)
 
+- **Saw** - Three detuned variable saws on each side through the Pulse's resonant lowpass, for a wide, slowly beating pad. No voice starts on it; any voice can choose it. Its width, cutoff and res are the Pulse's own parameters, so a Pulse voice switched to Saw keeps its filter where it was
+
 ### Voice types
 
 A voice's type is its `type` row on VOICE, the first row of the page (and its first parameter in PARAMETERS). Turn E3 there to choose: the new name shows dim while you turn, and the voice changes to it once the encoder has rested for 0.3 s, so turning through five types changes the sound once. Choosing another voice, leaving VOICE or stopping the voice changes it at once. An arc ring on the row does the same. Hold ALT+K2 on the row to put the voice back on its own type.
@@ -120,6 +122,16 @@ Each type's own parameters, by the names the VOICE page's synth section, MAIN an
 | `dust` | 0.5-50 /s | 8 | How many bursts of dust a second (each side a little apart) |
 | `q` (main) | 0.005-1 | 0.05 | The width of the resonances: lower is narrower, ringing at the pitch like a whistle; 1 is a broad, breathy hiss. The level stays about even across it, and a limiter keeps the narrowest from jumping out |
 | `bank` | 0-1 | 0.7 | The resonant bank against the plain noise: 0 is the noise alone, 1 only the resonances. The bank swells slowly between 0.6 and full |
+
+**Saw**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 100 | The pitch of the saws |
+| `width` (main) | 0.05-0.95 | 0.5 | Each saw's shape: 0.5 is a triangle, soft and hollow; toward either end it becomes a sawtooth, brighter and buzzier |
+| `detune` | 0-0.02 | 0.003 | How far apart the three saws on each side are, as a fraction of the pitch: the second is that far off it, the third twice as far, upward on the left and downward on the right. 0 is one plain saw; higher beats faster and spreads wider |
+| `cutoff` | 100-8000 Hz | 2000 | The resonant lowpass's cutoff, as the Pulse's: it wanders between half and twice the setting, within 100-8000 Hz |
+| `res` | 0.1-1 | 0.8 | The filter's resonance, as the Pulse's: higher is a sharper peak that rings at the cutoff, 0.1 flat. One setting sounds the same on both types |
 
 ## Granular Processing
 

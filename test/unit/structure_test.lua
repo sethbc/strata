@@ -1298,6 +1298,8 @@ local ENGINE_AREAS = { performance = 10, voices = 20, typeWave = 21, grains = 30
   modulation = 160, notes = 170, onsets = 180, envelopes = 190, typeAdditive = 22 }
   modulation = 160, notes = 170, onsets = 180, envelopes = 190,
   typeNoise = 23 }
+  modulation = 160, notes = 170, onsets = 180, envelopes = 190,
+  typeSaw = 24 }
 
 test("every engine file is named Strata*.sc and defines each strataArea method once", function()
   local files, areas, orders = engine_files(), {}, {}
