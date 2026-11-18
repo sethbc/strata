@@ -20,6 +20,15 @@
     noiseBankLevels { ^#[1, 0.6, 0.4, 0.25] }
     // color 0 to 1 is the lowpass's cutoff over this range, exponentially (Hz)
     noiseColorRange { ^#[200, 16000] }
+    // The dust: its right channel's rate against the left's, and its level
+    // against the pink noise's (grit 1 is the dust alone at this level)
+    noiseDustSpread { ^1.1 }
+    noiseDustLevel { ^4 }
+    // The bank's slow swell: its rate (Hz) and its lowest level (full at the top)
+    noiseSwellRate { ^0.1 }
+    noiseSwellFloor { ^0.6 }
+    // The plain noise's level where bank lets it through
+    noisePlainLevel { ^0.3 }
     // The level against the Pulse voice's at the defaults (RMS at 220 Hz,
     // the types area's check), and the limiter's level (before the
     // balance, which passes a channel whole when panned to it)
@@ -49,17 +58,18 @@
             // pink noise and dust (grit, at dust bursts a second, a little
             // apart left and right), a channel each. Pink noise has energy
             // near 0 Hz: taken out here, before the voice bus (subsonicBlock)
-            source = (PinkNoise.ar([1, 1]) * (1 - grit)) + (Dust2.ar([dust, dust * 1.1]) * grit * 4);
+            source = (PinkNoise.ar([1, 1]) * (1 - grit)) + (Dust2.ar([dust, dust * this.noiseDustSpread]) * grit * this.noiseDustLevel);
             source = LPF.ar(this.subsonicBlock(source), color.linexp(0, 1, this.noiseColorRange[0], this.noiseColorRange[1]));
 
             // The bank: a narrow Resonz rings quieter (noise power goes with
             // the bandwidth), so the sum is raised by rq's square root's
-            // reciprocal; a slow swell between 0.6 and full. Each resonance
-            // stays below Nyquist (filterCeiling)
+            // reciprocal; a slow swell (noiseSwellRate) between
+            // noiseSwellFloor and full. Each resonance stays below Nyquist
+            // (filterCeiling)
             resonances = this.noiseBankLevels.collect({ arg level, k;
                 Resonz.ar(source, (modFreq * (this.noiseSpread ** k)).min(SampleRate.ir * filterCeiling), rq, level)
-            }).sum * rq.reciprocal.sqrt * LFNoise1.kr(0.1).range(0.6, 1);
-            sig = (resonances * bank) + (source * (1 - bank) * 0.3);
+            }).sum * rq.reciprocal.sqrt * LFNoise1.kr(this.noiseSwellRate).range(this.noiseSwellFloor, 1);
+            sig = (resonances * bank) + (source * (1 - bank) * this.noisePlainLevel);
 
             // The bank's gain at a narrow q and the dust's bursts make the
             // level swing widely: a limiter at noiseCeiling, after the
