@@ -12,7 +12,7 @@ var formatOf = { arg name; h.formatOf(name) };
 var synthNames = { arg group; h.synthNames(group) };
 var getControl = { arg synth, control; h.getControl(synth, control) };
 var voiceDefs = h.voiceDefs, allDefs = h.allDefs, grainDefs = h.grainDefs, chainDefs = h.chainDefs;
-var names, voiceNames, grainIndices, firstGrain, other;
+var names, voiceNames, grainIndices, firstGrain, other, otherLine;
 
 // free with fades still pending (#22, #47): with a long fade wait, a
 // clear, a load and a recording on slots that running voices read (voices 1-3,
@@ -76,7 +76,10 @@ var childrenOf = { arg group;
 // What an engine still holds after free: [nodes in its context's engine
 // group, buses not freed, buffers not freed] (nil state, never made, counts
 // as freed)
-var engineLeft = { arg target;
+// line: the delay's line, held before free (freeDelayLine forgets it, so
+// a freed engine's state no longer names it; #807); the engine's own while
+// it still holds one
+var engineLeft = { arg target, line;
     var rings = target.areaState[\rings], record = target.areaState[\record], mix = target.areaState[\mix];
     var outRings = target.areaState[\outRings] ? ();
     var buses = [target.inputBus, target.silentBus, target.mainBus, target.filterBus, target.delayBus, target.reverbBus]
@@ -88,7 +91,7 @@ var engineLeft = { arg target;
     var buffers = (target.areaState[\grains][\windowBank] ? []) ++ target.buffersL ++ target.buffersR
         ++ (rings[\voiceL] ? []) ++ (rings[\voiceR] ? []) ++ [rings[\inputL], rings[\inputR], target.areaState[\scale][\buffer]]
         ++ (target.areaState[\waveform][\peakBuffers] ? []) ++ (outRings[\left] ? []) ++ (outRings[\right] ? [])
-        ++ (target.areaState[\effects][\shimmerRings] ? []);
+        ++ (target.areaState[\effects][\shimmerRings] ? []) ++ (target.areaState[\effects][\delayLine] ? line ? []);
     [childrenOf.(target.context.xg).size, buses.count({ arg bus; bus.notNil and: { bus.index.notNil } }),
         buffers.count({ arg buffer; buffer.notNil and: { buffer.bufnum.notNil } })]
 };
@@ -100,8 +103,9 @@ var engineLeft = { arg target;
 // buffer. Before the fix the first raise ended free: every stop below it
 // and every free were skipped.
 var checkFreeContained = {
-    var target = h.startEngine, lines = List.new, raised, areas, left;
+    var target = h.startEngine, lines = List.new, raised, areas, left, delayLine;
     target.postInvariantWarning = { arg line; lines.add(line) };
+    delayLine = target.delayLine;
     areas = target.instVarAt(\areas);
     target.instVarPut(\areas, areas.select({ arg area; area[\order] < 75 })
         ++ [(name: \checkRaises, order: 75,
@@ -110,8 +114,8 @@ var checkFreeContained = {
     try { h.freeEngine(target) } { arg error; raised = error };
     h.freeEngine(target);  // (the commands back to h.engine, should free have raised)
     server.sync;
-    left = engineLeft.(target);
-    check.(raised.isNil and: { left == [0, 0, 0] },
+    left = engineLeft.(target, delayLine);
+    check.(raised.isNil and: { delayLine.size == 2 } and: { left == [0, 0, 0] },
         "structure: free frees every node, bus and buffer though an area's stop and free raise (#499; raised: %, left nodes, buses, buffers: %)".format(
             raised !? _.errorString, left));
     // (the message never quotes the lines: run_engine_check.sh would fail on them)
@@ -166,11 +170,16 @@ var checkDefCallers = {
 // gives, and the check calls alloc itself. The performance area's files go
 // below the check's temp dir, as buildEngine's. Returns (engine, raised,
 // lines: the invariant lines it posted, group: its engine group, freed by
-// the caller after h.freeEngine, which gives the OSC defs back to h.engine).
+// the caller after h.freeEngine, which gives the OSC defs back to h.engine;
+// delayLine: the delay's line as alloc raised).
 var failingAlloc = {
-    var group = Group.tail(server), built = Engine_Strata.newCopyArgs, lines = List.new, raised;
+    var group = Group.tail(server), built = Engine_Strata.newCopyArgs, lines = List.new, raised, delayLine;
     var settings = [Engine_Strata.settingsDir, Engine_Strata.modelPath];
-    built.instVarPut(\context, (server: server, xg: group, out_b: { Error("check: no output bus").throw }));
+    // (the delay's line is held as the output bus raises: the rollback's
+    // freeDelayLine forgets it, #807)
+    built.instVarPut(\context, (server: server, xg: group, out_b: {
+        delayLine = built.areaState[\effects][\delayLine];
+        Error("check: no output bus").throw }));
     built.instVarPut(\commands, List.new);
     built.instVarPut(\commandNames, Dictionary.new);
     built.instVarPut(\pollNames, Set.new);
@@ -181,7 +190,7 @@ var failingAlloc = {
     Engine_Strata.settingsDir = settings[0];
     Engine_Strata.modelPath = settings[1];
     server.sync;
-    (engine: built, raised: raised, lines: lines, group: group)
+    (engine: built, raised: raised, lines: lines, group: group, delayLine: delayLine)
 };
 
 // The polls the engine's areas register: every `this.addPoll(\name` in its
@@ -208,11 +217,12 @@ var declaredPolls = {
 var checkAllocRolledBack = {
     var names = engine.pollNames.asArray, held = names.collect({ arg name; CronePollRegistry.getPollFromName(name) });
     var failed = failingAlloc.value, built = failed[\engine], lines = failed[\lines], raised = failed[\raised];
-    var left = engineLeft.(built), defsLeft = built.commands.select({ arg command; OSCdef.all[command.name].notNil });
+    var left = engineLeft.(built, failed[\delayLine]), defsLeft = built.commands.select({ arg command; OSCdef.all[command.name].notNil });
     check.((raised !? { raised.errorString.find("check: no output bus").notNil }) == true,
         "structure: alloc raises the error that stopped it again (#499; got %)".format(raised !? _.errorString));
-    check.(left == [0, 0, 0],
-        "structure: alloc that raises leaves no node, bus or buffer of what it built (#499; left nodes, buses, buffers: %)".format(left));
+    check.((failed[\delayLine].size == 2) and: { left == [0, 0, 0] },
+        "structure: alloc that raises leaves no node, bus or buffer of what it built, the delay's line among them (#499, #807; line held: %, left nodes, buses, buffers: %)".format(
+            failed[\delayLine].size, left));
     // every area that had begun stops and frees what it partly made without
     // raising (an area phase that raised would be reported in a line; the
     // message names the phases without quoting the lines)
@@ -496,6 +506,7 @@ other = h.startEngine;
     h.commandTo(other, \voiceOn, voice, 110.0, 0.2, 0.0, 0.5, 20.0, 1.0);
 });
 server.sync; 0.2.wait;
+otherLine = other.delayLine;  // (free forgets it: freeDelayLine, #807)
 freeDuringPendingFades.(other, h.stereoPath);
 server.sync;
 check.(synthNames.(other.context.xg).size == 0, "free removes every engine node");
@@ -514,9 +525,21 @@ check.((other.areaState[\outRings][\left] ++ other.areaState[\outRings][\right])
     and: { other.areaState[\outRings][\phaseBuses].every({ arg bus; bus.index.isNil }) }
     and: { other.outRingWriterKeys.every({ arg key; other.synths[key].isNil }) },
     "structure: free frees the output rings, their phase buses and their writers");
+check.((otherLine.size == 2) and: { otherLine.every({ arg buffer; buffer.bufnum.isNil }) },
+    "structure: free frees the delay's line (#807; % buffers held)".format(otherLine.size));
 // (engineLeft counts a running engine's nodes, buses and buffers, and none of a freed one's)
-check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other) == [0, 0, 0] },
-    "structure: engineLeft counts what an engine holds (running %, freed %)".format(engineLeft.(engine), engineLeft.(other)));
+check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other, otherLine) == [0, 0, 0] },
+    "structure: engineLeft counts what an engine holds (running %, freed %)".format(engineLeft.(engine),
+        engineLeft.(other, otherLine)));
+// (#807) and a delay's line held before free while its two buffers are
+// still allocated, as a free that left the line would leave them
+{
+    var kept = 2.collect({ Buffer.alloc(server, 64, 1) }), counted;
+    server.sync;
+    counted = engineLeft.(other, kept);
+    kept.do(_.free); server.sync;
+    check.(counted == [0, 0, 2], "structure: engineLeft counts a delay's line free left allocated (#807; counted %)".format(counted));
+}.value;
 
 checkVoiceHit.value;
 checkFreeContained.value;
