@@ -1464,6 +1464,131 @@ test("a synth moved in the menu onto the port the rig names for a remote gets th
   assert_equal(S.lib.io_ports.owner(3), "remote grid", "the remote holds the synth's port")
 end)
 
+-- #788: a zone taken down while a remote or midigrid holds its port owes
+-- its device the takedown (state.takedown_due), sent once the port settles
+-- free with that device there
+
+-- A synth on port 3 with voice 1's zone set up there, then a remote grid
+-- named on port 3, holding it: the synth has had the setup, then the ask
+local function zone_then_held(context, S)
+  local synth = context.midi.plug(3, "synth")
+  mpe_voice(1, 3); settled(context)
+  assert_equal(sent(synth), SETUP_15_48, "the zone set up on the free port")
+  clear(synth)
+  remote_grid_at(S, 3)
+  assert_equal(sent(synth), ASK_HELLO, "the remote's ask")
+  clear(synth)
+  return synth
+end
+
+test("a zone taken down while a remote grid holds its port is taken down when the port is let go (#788)", function()
+  local context, S = started()
+  local synth = zone_then_held(context, S)
+  params:set("v1_out_mode", 1); settled(context)
+  assert_equal(sent(synth), "", "the held port is sent nothing")
+  remote_grid_at(S, 0)
+  assert_equal(sent(synth), TAKEDOWN, "the takedown once, and no setup, as the rig lets the port go")
+  clear(synth)
+  settled(context)
+  assert_equal(sent(synth), "", "nothing more")
+end)
+
+test("a zone that returns before the port is let go gets its setup alone (#788)", function()
+  local context, S = started()
+  local synth = zone_then_held(context, S)
+  params:set("v1_out_mode", 1); settled(context)
+  params:set("v1_out_mode", MPE_INDEX); settled(context)
+  assert_equal(sent(synth), "", "the held port is sent nothing")
+  remote_grid_at(S, 0)
+  assert_equal(sent(synth), SETUP_15_48, "the setup once, standing for the takedown")
+end)
+
+test("a takedown owed to a device that leaves is forgotten (#788)", function()
+  local context, S = started()
+  zone_then_held(context, S)
+  params:set("v1_out_mode", 1); settled(context)
+  context.midi.unplug(3)
+  local other = context.midi.plug(3, "synth b")
+  assert_equal(sent(other), ASK_HELLO, "the remote takes the new device: its ask alone")
+  clear(other)
+  remote_grid_at(S, 0)
+  assert_equal(sent(other), "", "no takedown reaches the device that came after")
+end)
+
+-- A menu close tells the departure and the arrival together, so the port
+-- settles held by the remote that takes the new device: only the
+-- departure itself can forget the takedown
+test("a takedown owed to a device that SYSTEM > DEVICES moves off its port is forgotten (#788)", function()
+  local context, S = started()
+  zone_then_held(context, S)
+  params:set("v1_out_mode", 1); settled(context)
+  local other = context.midi.plug(5, "synth b")
+  _menu.set_mode(true)
+  context.midi.reassign(5, 3)  -- synth b takes port 3; the zone's synth is left on no port
+  _menu.set_mode(false)
+  assert_equal(S.lib.io_ports.owner(3), "remote grid", "the remote takes synth b")
+  clear(other)
+  remote_grid_at(S, 0)
+  assert_equal(sent(other), "", "no takedown reaches the device that came after")
+end)
+
+test("a voice moved to another port while its old port is held leaves the takedown owed there (#788)", function()
+  local context, S = started()
+  local synth = zone_then_held(context, S)
+  local other = context.midi.plug(5, "synth b")
+  clear(other)
+  params:set("v1_out_port", 5); settled(context)
+  assert_equal(sent(other), SETUP_15_48, "the free port's setup at once")
+  assert_equal(sent(synth), "", "the held port is sent nothing")
+  remote_grid_at(S, 0)
+  assert_equal(sent(synth), TAKEDOWN, "the old port's takedown at its release")
+  assert_equal(sent(other), SETUP_15_48, "nothing more on the new port")
+end)
+
+-- Cleanup sends no zone message on a free port (the device keeps its zone),
+-- and a held port does no worse: the release in the remote's cleanup step
+-- comes after MIDI out's stop
+test("cleanup sends no takedown, owed or not (#788)", function()
+  local context, S = started()
+  local synth = zone_then_held(context, S)
+  params:set("v1_out_mode", 1); settled(context)
+  local free = context.midi.plug(5, "synth b")
+  mpe_voice(2, 5); settled(context)
+  clear(free)
+  cleanup()
+  assert_equal(sent(synth), "", "the held port's owed takedown is not sent")
+  assert_equal(sent(free), "", "nor is a free port's zone taken down")
+end)
+
+test("a zone taken down while midigrid holds its port is taken down when midigrid lets it go (#788)", function()
+  local context, S = started()
+  local launchpad = context.midi.plug(1, "Launchpad X")
+  mpe_voice(2, 1); settled(context)
+  assert_equal(sent(launchpad), SETUP_15_48, "the zone set up on the free port")
+  clear(launchpad)
+  with_midigrid(S, launchpad, function()
+    assert_true(S.lib.io_remote.holds(1), "midigrid holds port 1")
+    params:set("v2_out_mode", 1); settled(context)
+    assert_equal(sent(launchpad), "", "the held port is sent nothing")
+    assert_true(S.lib.io_rig.set("midi_grid", "off"), "midi grid off")
+    assert_equal(sent(launchpad), TAKEDOWN, "the takedown once, and no setup")
+  end)
+end)
+
+test("a zone taken down while a remote arc holds its port is taken down when the arc lets it go (#788)", function()
+  local context, S = started()
+  local synth = context.midi.plug(3, "synth")
+  mpe_voice(1, 3); settled(context)
+  clear(synth)
+  assert_true(S.lib.io_rig.set("remote_arc_port", 3), "the arc on port 3")
+  assert_true(S.lib.io_remote.holds(3), "the arc holds port 3")
+  clear(synth)
+  params:set("v1_out_mode", 1); settled(context)
+  assert_equal(sent(synth), "", "the held port is sent nothing")
+  assert_true(S.lib.io_rig.set("remote_arc_port", 0), "the arc lets go")
+  assert_equal(sent(synth), TAKEDOWN, "the takedown once, and no setup")
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")
