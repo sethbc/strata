@@ -27,8 +27,22 @@ local engine_spec = stubs.parse_engine_spec(engine_sources())
 local engine_spec_problems = stubs.engine_spec_problems(engine_spec)
 assert(#engine_spec_problems == 0, table.concat(engine_spec_problems, "\n"))
 
-local data_root = os.tmpname()
-os.remove(data_root)
+-- A process of a parallel run (test/run.lua) gets its folder from the run,
+-- inside the run's own (STRATA_TEST_DATA_ROOT, "<run's folder>workers/<file>/",
+-- beside the run's worker.sh), so the run removes it however the process
+-- ends; any other value is refused. Every other run makes a fresh one
+local given_root = os.getenv("STRATA_TEST_DATA_ROOT")
+local data_root
+if given_root and given_root ~= "" then
+  local workers = given_root:match("^(/.+/workers/)[%w_%-%.]+/$")
+  local script = workers and io.open(workers .. "worker.sh", "r")
+  if not script then error("STRATA_TEST_DATA_ROOT is not a folder a parallel run gave: " .. given_root, 0) end
+  script:close()
+  data_root = given_root:sub(1, -2)
+else
+  data_root = os.tmpname()
+  os.remove(data_root)
+end
 os.execute("mkdir -p '" .. data_root .. "'")
 data_root = data_root .. "/"
 -- an absolute folder at least two levels down (os.tmpname gives /tmp/lua_XXXXXX)
@@ -1212,13 +1226,14 @@ local function unit_files(dir, filter)
   return names
 end
 
--- Load each unit file unit_files(dir, filter) lists, in order. A unit file
+-- Load each unit file unit_files(dir, filter) lists, in order, or, when
+-- `filter` is a list of names, those files in that order. A unit file
 -- returns function(h), which registers its tests with h.test. Returns the
 -- names loaded. A file that returns no function, or whose function
 -- registers no test, is an error naming it (#484): a test file emptied or
 -- all behind a condition never passes as 0 tests
 local function load_unit_files(dir, filter, helpers)
-  local names = unit_files(dir, filter)
+  local names = type(filter) == "table" and filter or unit_files(dir, filter)
   for _, name in ipairs(names) do
     local chunk = assert(loadfile(dir .. "/" .. name))
     local register = chunk()
@@ -1232,6 +1247,167 @@ local function load_unit_files(dir, filter, helpers)
   end
   return names
 end
+
+---------------------------------------------------------------------------
+-- shards and the parallel run (test/run.lua)
+---------------------------------------------------------------------------
+
+-- Each unit file's weight for the shards and the parallel run's order: its
+-- seconds run alone (`lua test/run.lua <name>`, Lua 5.3, rounded, at least
+-- 1; measured at 3.8's package x5 with several files running at once).
+-- Every unit file has a line (a test in stubs_test.lua checks it, and that
+-- every line names a file); a file with none still runs, weighing
+-- UNIT_FILE_DEFAULT_SECONDS
+local UNIT_FILE_SECONDS = {
+  ["arc_core_test.lua"] = 1,
+  ["arc_pages_test.lua"] = 3,
+  ["bookmarks_test.lua"] = 1,
+  ["buffers_test.lua"] = 7,
+  ["chance_test.lua"] = 1,
+  ["conditions_test.lua"] = 1,
+  ["data_files_test.lua"] = 2,
+  ["delay_sync_test.lua"] = 2,
+  ["docs_test.lua"] = 29,
+  ["engine_sync_test.lua"] = 3,
+  ["envelopes_test.lua"] = 1,
+  ["expression_test.lua"] = 1,
+  ["files_test.lua"] = 4,
+  ["freeze_test.lua"] = 1,
+  ["gestures_test.lua"] = 4,
+  ["grid_core_test.lua"] = 4,
+  ["grid_layout_128h_test.lua"] = 3,
+  ["grid_layout_128v_test.lua"] = 2,
+  ["grid_layout_256_test.lua"] = 4,
+  ["grid_layout_64_test.lua"] = 2,
+  ["history_test.lua"] = 1,
+  ["input_level_test.lua"] = 1,
+  ["io_actions_test.lua"] = 1,
+  ["io_controllers_test.lua"] = 1,
+  ["io_crow_test.lua"] = 2,
+  ["io_er301_test.lua"] = 1,
+  ["io_ii_test.lua"] = 3,
+  ["io_jf_test.lua"] = 1,
+  ["io_keyed_test.lua"] = 1,
+  ["io_midi_out_test.lua"] = 5,
+  ["io_nb_test.lua"] = 2,
+  ["io_osc_test.lua"] = 1,
+  ["io_ports_test.lua"] = 1,
+  ["io_remote_test.lua"] = 2,
+  ["io_rig_test.lua"] = 1,
+  ["io_system_test.lua"] = 18,
+  ["io_tape_test.lua"] = 1,
+  ["io_targets_test.lua"] = 1,
+  ["io_txo_test.lua"] = 2,
+  ["io_wsyn_test.lua"] = 1,
+  ["io_wtape_test.lua"] = 1,
+  ["lfos_test.lua"] = 4,
+  ["loops_test.lua"] = 1,
+  ["macros_test.lua"] = 3,
+  ["matrix_test.lua"] = 5,
+  ["midi_in_test.lua"] = 5,
+  ["mod_sources_test.lua"] = 1,
+  ["morph_test.lua"] = 3,
+  ["mpe_test.lua"] = 1,
+  ["mutation_test.lua"] = 21,
+  ["notes_test.lua"] = 4,
+  ["pages_buffer_test.lua"] = 8,
+  ["pages_fx_test.lua"] = 2,
+  ["pages_io_test.lua"] = 4,
+  ["pages_lfo_test.lua"] = 2,
+  ["pages_main_test.lua"] = 2,
+  ["pages_mod_test.lua"] = 2,
+  ["pages_scenes_test.lua"] = 2,
+  ["pages_seq_test.lua"] = 3,
+  ["pages_setup_test.lua"] = 3,
+  ["pages_voice_test.lua"] = 3,
+  ["params_setup_test.lua"] = 2,
+  ["performance_test.lua"] = 2,
+  ["playheads_test.lua"] = 2,
+  ["positions_test.lua"] = 4,
+  ["quantize_test.lua"] = 1,
+  ["random_sequences_test.lua"] = 1,
+  ["record_test.lua"] = 3,
+  ["registries_test.lua"] = 3,
+  ["samples_test.lua"] = 3,
+  ["scan_test.lua"] = 1,
+  ["scatter_test.lua"] = 1,
+  ["scenes_test.lua"] = 15,
+  ["sequencer_test.lua"] = 10,
+  ["side_files_test.lua"] = 1,
+  ["slices_test.lua"] = 2,
+  ["strata_test.lua"] = 2,
+  ["structure_test.lua"] = 88,
+  ["stubs_test.lua"] = 19,
+  ["system_37_test.lua"] = 2,
+  ["ui_alt_test.lua"] = 1,
+  ["ui_cursors_test.lua"] = 1,
+  ["ui_detent_test.lua"] = 2,
+  ["ui_field_list_test.lua"] = 1,
+  ["ui_header_test.lua"] = 1,
+  ["ui_layout_test.lua"] = 125,
+  ["ui_modal_test.lua"] = 1,
+  ["ui_pages_test.lua"] = 1,
+  ["ui_slice_editor_test.lua"] = 2,
+  ["ui_test.lua"] = 1,
+  ["ui_zones_test.lua"] = 1,
+  ["variation_test.lua"] = 2,
+  ["voice_mix_test.lua"] = 1,
+  ["voices_test.lua"] = 1,
+  ["waveforms_test.lua"] = 1,
+}
+local UNIT_FILE_DEFAULT_SECONDS = 3
+
+local function unit_file_seconds(name) return UNIT_FILE_SECONDS[name] or UNIT_FILE_DEFAULT_SECONDS end
+
+-- `names` heaviest first (unit_file_seconds, then the name): the order the
+-- shards are dealt in and a parallel run starts its processes in
+local function heaviest_first(names)
+  local sorted = {}
+  for index, name in ipairs(names) do sorted[index] = name end
+  table.sort(sorted, function(a, b)
+    local weight_a, weight_b = unit_file_seconds(a), unit_file_seconds(b)
+    if weight_a ~= weight_b then return weight_a > weight_b end
+    return a < b
+  end)
+  return sorted
+end
+
+-- Shard `shard` of `count` of the unit files `names` (all of them, never a
+-- filter's, so a file's shard does not depend on the filter), sorted by
+-- name: each file, heaviest first, goes to the shard with the least weight
+-- so far (the lowest number on a tie). Whole numbers and names only, so
+-- the shards are the same on every machine and interpreter, and each file
+-- is in exactly one
+local function shard_files(names, shard, count)
+  local loads, mine = {}, {}
+  for index = 1, count do loads[index] = 0 end
+  for _, name in ipairs(heaviest_first(names)) do
+    local lightest = 1
+    for index = 2, count do
+      if loads[index] < loads[lightest] then lightest = index end
+    end
+    loads[lightest] = loads[lightest] + unit_file_seconds(name)
+    if lightest == shard then mine[#mine + 1] = name end
+  end
+  table.sort(mine)
+  return mine
+end
+
+-- The machine's cores: nproc (GNU coreutils), else getconf (POSIX; macOS
+-- has it), else 1
+local function core_count()
+  local pipe = io.popen("nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null")
+  local text = pipe and pipe:read("*a") or ""
+  if pipe then pipe:close() end
+  local cores = tonumber(text:match("^%s*(%d+)%s*$") or "")
+  return (cores and cores >= 1) and cores or 1
+end
+
+-- A run's processes when neither --jobs nor STRATA_TEST_JOBS names a
+-- number: the machine's cores, at most DEFAULT_JOBS_CAP (why:
+-- docs/notes/test-harness/run-and-helpers.md, The parallel run)
+local DEFAULT_JOBS_CAP = 8
+local function default_jobs() return math.min(core_count(), DEFAULT_JOBS_CAP) end
 
 return {
   test_dir = test_dir,
@@ -1309,4 +1485,9 @@ return {
   tap = tap,
   unit_files = unit_files,
   load_unit_files = load_unit_files,
+  UNIT_FILE_SECONDS = UNIT_FILE_SECONDS,
+  heaviest_first = heaviest_first,
+  shard_files = shard_files,
+  core_count = core_count,
+  default_jobs = default_jobs,
 }
