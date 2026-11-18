@@ -204,8 +204,15 @@ test("copy is a load of the other voice's filtered capture", function()
   for key, value in pairs(S.voices[6].values) do
     if presets.VOICE_PRESETS.keys[key] == false then out_before[key] = value end
   end
+  local source_before = h.deep_copy(S.lib.scenes.capture_voice(3))
   assert_true(presets.copy(3, 6), "copied")
   assert_equal(S.voices[6].name, S.voices[3].name, "voice 3's type")
+  local source_after = S.lib.scenes.capture_voice(3)
+  assert_equal(source_after.type, source_before.type, "the source voice keeps its type")
+  assert_equal(source_after.active, source_before.active, "and its running state")
+  for key, value in pairs(source_before.values) do
+    assert_equal(source_after.values[key], value, "the source voice's " .. key .. " unchanged")
+  end
   local sound = presets.capture(3)
   -- a control param set again moves by its controlspec's round trip (an ulp)
   for key, value in pairs(sound.values) do
@@ -291,6 +298,86 @@ test("a load into a buffer voice keeps the buffer and takes the type for later",
     if call.args[1] == 0 and call.args[2] == "ratio" then sent = call.args[3] end
   end
   assert_near(sent or -1, ratio, 1e-6, "with the preset's ratio")
+end)
+
+
+-- A fade from scene 1 (every grain size 0.1) to scene 2 (0.4) over 2 s, at
+-- its fifth step
+local function fade_at_step_five(context, S)
+  for voice_idx = 1, S.constants.NUM_VOICES do params:set("v" .. voice_idx .. "_grain_size", 0.1) end
+  capture_scene(1)
+  for voice_idx = 1, S.constants.NUM_VOICES do params:set("v" .. voice_idx .. "_grain_size", 0.4) end
+  capture_scene(2)
+  recall_scene(1, 0)
+  recall_scene(2, 2)
+  for _ = 1, 4 do wake(context, "scene_transition_clock") end
+  assert_true(S.scene_transition_active, "the fade runs")
+end
+
+test("a refused load during a fade does not let go of the voice", function()
+  local context, S, presets = saved_and_edited("refused", 2, 1, function(stored) stored.values.filter_type = 99 end)
+  fade_at_step_five(context, S)
+  assert_true(not presets.load(3, 1), "a preset whose filter type is out of range is refused")
+  assert_true(not S.SCENE_TRANSITION.released[3], "voice 3 is not let go of")
+  context.clock.run_for(3)
+  assert_true(not S.scene_transition_active, "the fade ended")
+  assert_near(S.voices[3].values.grain_size, 0.4, 1e-9, "voice 3 holds scene 2")
+end)
+
+test("a refused copy during a fade does not let go of the voice", function()
+  local context, S, presets = loaded()
+  fade_at_step_five(context, S)
+  local apply_voice = S.lib.scenes.apply_voice
+  S.lib.scenes.apply_voice = function() return false end  -- an apply the scenes refuse
+  local copied = presets.copy(2, 3)
+  S.lib.scenes.apply_voice = apply_voice
+  assert_true(not copied, "the copy is refused")
+  assert_true(not S.SCENE_TRANSITION.released[3], "voice 3 is not let go of")
+  context.clock.run_for(3)
+  assert_near(S.voices[3].values.grain_size, 0.4, 1e-9, "voice 3 holds scene 2")
+end)
+
+test("a write that drops a damaged preset keeps the file as read", function()
+  local subdir, dir = fresh_subdir("damaged")
+  local _, S0, first = loaded({ data_subdir = subdir })
+  assert_true(first.save(2, 1, "good"), "a good preset")
+  assert_true(first.save(3, 2, "bad"), "one to damage")
+  local value = S0.lib.data_files.read(dir .. "voices.data")
+  value.presets[2].name = 7  -- no name: left out at the start
+  assert_true(S0.lib.data_files.write(dir .. "voices.data", value), "damaged")
+  local as_read = file_text(dir .. "voices.data")
+  local context, S, presets = loaded({ data_subdir = subdir })
+  assert_equal(#lines_naming(context, "voices.data"), 1, "one console line for the damaged preset")
+  assert_equal(presets.preset(2), nil, "the damaged preset left out")
+  assert_true(presets.save(4, 3, "third"), "a save into another slot")
+  assert_equal(file_text(dir .. "voices.data.bak"), as_read, "the file as read is kept")
+  local written = S.lib.data_files.read(dir .. "voices.data")
+  local slots = {}
+  for slot in pairs(written.presets) do slots[#slots + 1] = slot end
+  table.sort(slots)
+  assert_equal(table.concat(slots, " "), "1 3", "voices.data holds the two good presets")
+  assert_true(presets.save(5, 4, "fourth"), "a later save")
+  assert_true(not util.file_exists(dir .. "voices.data.bak.2"), "keeps no second backup")
+end)
+
+test("a write that would drop a damaged preset, with no backup name free, is refused", function()
+  local subdir, dir = fresh_subdir("damaged-blocked")
+  local _, S0, first = loaded({ data_subdir = subdir })
+  assert_true(first.save(2, 1, "good"), "a good preset")
+  assert_true(first.save(3, 2, "bad"), "one to damage")
+  local value = S0.lib.data_files.read(dir .. "voices.data")
+  value.presets[2].name = 7
+  assert_true(S0.lib.data_files.write(dir .. "voices.data", value), "damaged")
+  local as_read = file_text(dir .. "voices.data")
+  write_text(dir .. "voices.data.bak", "old")
+  for number = 2, 9 do write_text(dir .. "voices.data.bak." .. number, "old") end
+  local _, S, presets = loaded({ data_subdir = subdir })
+  local saved, why = presets.save(4, 3, "third")
+  assert_true(not saved, "the save is refused")
+  assert_true(type(why) == "string", "with why")
+  assert_true(S.lib.ui_flash.slots.hints.text ~= nil, "a flash shows")
+  assert_equal(file_text(dir .. "voices.data"), as_read, "the file is as it was")
+  assert_equal(presets.preset(3), nil, "nothing saved")
 end)
 
 end

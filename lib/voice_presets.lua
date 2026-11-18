@@ -67,9 +67,11 @@ return function(S)
 
   -- The library: per slot nil or {name, type, values}; started once the
   -- start step ran; blocked when an unusable file could not be set aside
-  -- (nothing is written over it this session)
+  -- (nothing is written over it this session); dropped while the file as
+  -- read holds a damaged preset the start left out (the first write keeps
+  -- the file as a backup first)
   local library = {}
-  local store = {started = false, blocked = false}
+  local store = {started = false, blocked = false, dropped = false}
   -- Per voice, the name shown on VOICE's preset row: the preset last
   -- loaded into it, or a copy's v<n> (not stored, design §8.4)
   local loaded = {}
@@ -131,6 +133,18 @@ return function(S)
   -- or the write failed; the file is then as it was)
   local function write()
     if store.blocked then return false, VOICE_PRESETS.file .. " could not be set aside at the start" end
+    if store.dropped then
+      -- the file as read, damaged presets and all, is kept before the
+      -- first write drops them; no backup name free: nothing is written
+      local backup, failure = S.lib.data_files.set_aside(path(), VOICE_PRESETS.backup_suffix)
+      if not backup then
+        print("strata: " .. VOICE_PRESETS.file .. " not saved: its damaged presets could not be kept ("
+          .. tostring(failure) .. ")")
+        return false, tostring(failure)
+      end
+      store.dropped = false
+      print("strata: " .. VOICE_PRESETS.file .. " as read kept as " .. backup:match("[^/]*$"))
+    end
     util.make_dir(S.lib.scenes.scene_data_dir)
     local written, problem = S.lib.data_files.write(path(), stored_value())
     if not written then
@@ -140,17 +154,22 @@ return function(S)
     return true
   end
 
+  -- A capture (S.lib.scenes.capture_voice's) as a sound: its type and the
+  -- values of its type's synth keys and the in keys
+  local function sound_of(voice_idx, capture)
+    local values = {}
+    for _, entry in ipairs((S.lib.params_setup.voice_scene_keys(voice_idx, capture.type))) do
+      if entry.synth or KEYS[entry.key] == true then values[entry.key] = capture.values[entry.key] end
+    end
+    return {type = capture.type, values = values}
+  end
+
   -- A voice's sound: its capture (S.lib.scenes.capture_voice) filtered to
   -- its type and the values of its type's synth keys and the in keys; nil
   -- for a number that is no voice
   function M.capture(voice_idx)
     if not valid_voice(voice_idx) then return nil end
-    local capture = S.lib.scenes.capture_voice(voice_idx)
-    local values = {}
-    for _, entry in ipairs((S.lib.params_setup.voice_scene_keys(voice_idx))) do
-      if entry.synth or KEYS[entry.key] == true then values[entry.key] = capture.values[entry.key] end
-    end
-    return {type = capture.type, values = values}
+    return sound_of(voice_idx, S.lib.scenes.capture_voice(voice_idx))
   end
 
   -- A slot's preset as the picker shows it, {name, type}, or nil (empty,
@@ -173,8 +192,10 @@ return function(S)
   -- the voice's capture, an out key from the capture, with the voice's own
   -- active and source and the sound's type. A key the sound has and this
   -- build lacks is in no list and dropped. A type this build lacks applies
-  -- nothing (one console line, a flash). The voice is let go of in a
-  -- running fade first (S.lib.scenes.release_voice). True once applied
+  -- nothing (one console line, a flash). Once applied, the voice is let go
+  -- of in a running fade (S.lib.scenes.release_voice: the fade's steps run
+  -- on its clock, so none comes between), never after a refused apply,
+  -- which leaves the voice in the fade. True once applied
   local function apply_sound(voice_idx, sound, shown_name)
     if not S.lib.types.record(sound.type) then
       print("strata: voice preset " .. shown_name .. " is of type " .. tostring(sound.type)
@@ -198,14 +219,14 @@ return function(S)
       end
       values[key] = value
     end
-    S.lib.scenes.release_voice(voice_idx)
     local applied = S.lib.scenes.apply_voice(voice_idx,
       {active = current.active, source = current.source, type = sound.type, values = values})
     if not applied then
       flash(VOICE_PRESETS.texts.not_loaded)
       return false
     end
-    S.lib.mutation.hold_voice(voice_idx, current)  -- after the apply, whose actions are edits
+    S.lib.scenes.release_voice(voice_idx)
+    S.lib.mutation.hold_voice(voice_idx, sound_of(voice_idx, current))  -- after the apply, whose actions are edits
     loaded[voice_idx] = shown_name
     request_redraw()
     grid_redraw()
@@ -276,7 +297,7 @@ return function(S)
   -- (the next write drops it), with one line naming how many
   S.register_start(S.constants.START_ORDER.voice_presets_load, function()
     library, loaded = {}, {}
-    store.started, store.blocked = true, false
+    store.started, store.blocked, store.dropped = true, false, false
     local value, outcome, why = S.lib.data_files.read(path())
     if value == nil and outcome == "missing" then return end
     local problem = value == nil and (why or outcome) or nil
@@ -303,8 +324,9 @@ return function(S)
       if preset then library[slot] = preset else damaged = damaged + 1 end
     end
     if damaged > 0 then
+      store.dropped = true
       print("strata: " .. VOICE_PRESETS.file .. ": " .. damaged .. " damaged "
-        .. (damaged == 1 and "preset" or "presets") .. " left out (the next write drops them)")
+        .. (damaged == 1 and "preset" or "presets") .. " left out (the file is kept as a backup at the next write)")
     end
   end)
 

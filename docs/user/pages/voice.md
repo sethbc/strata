@@ -8,8 +8,8 @@ Below it, five rows at a time, the voice's parameters. The first row, `type`, is
 
 The second row, `preset`, shows the name of the preset last loaded into the voice (`v3` after a copy from voice 3), or `--`. K3 there opens the voice picker (`LOAD INTO VOICE <n>`): the six other voices (`from voice 2  fm`), then the 64 slots of the preset library (`01 glass pad  wave`, or `02 --` for an empty one). In the picker:
 - **E2** - Move through the list (E3 does nothing)
-- **K3** - On a voice row, copy that voice's sound into this one; on a slot, load its preset. The picker stays open, so you can try one after another
-- **ALT+K3** - On a slot, save this voice's sound there: a name entry opens when you let go of K3 (up to twelve characters); canceling it saves nothing
+- **K3** - On a voice row, copy that voice's sound into this one; on a slot, load its preset. The hint row says what was loaded (`loaded glass pad`), and the picker stays open, so you can try one after another
+- **ALT+K3** - On a slot, save this voice's sound there: a name entry opens when you let go of K3, starting from the slot's name; a name longer than twelve characters is cut to twelve, and canceling saves nothing
 - **ALT+K2** - Held half a second on a filled slot, then let go: clear the slot. A quick press does nothing
 - **K2** - Back to VOICE
 

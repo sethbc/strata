@@ -24,7 +24,7 @@ return function(S)
     title_y = 16, first_y = 24, spacing = 7, visible = 5, value_right = 124, type_gap = 4,
     levels = {title = 10, selected = 15, other = 4},
     title = "LOAD INTO VOICE ", from = "from voice ", empty = "--", unknown_type = "?", slot_format = "%02d",
-    entry_heading = "preset %02d name",
+    entry_heading = "preset %02d name", loaded = "loaded ",
     hold_seconds = S.constants.ALT_HOLD_SECONDS,
   }
   M.VOICE_PICKER = VOICE_PICKER
@@ -131,6 +131,9 @@ return function(S)
   -- release (SCENES' pattern, a copy of its own)
   ---------------------------------------------------------------------------
 
+  -- A copy of SCENES' name entry (lib/pages/scenes.lua, open_name_entry and
+  -- reconcile_name_entry): a fix to one belongs in the other too (3.8's
+  -- ruling keeps the copy; the final review records it).
   -- The callback it was given (nil while none is open), the slot it names,
   -- and Strata's key and enc as it opened
   local NAME_ENTRY = {callback = nil, slot = nil, script_key = nil, script_enc = nil}
@@ -140,6 +143,8 @@ return function(S)
     request_redraw()
   end
 
+  -- (A copy of SCENES' open_name_entry in lib/pages/scenes.lua: a fix to
+  -- one belongs in the other.)
   -- Open the entry for slot, from its name; the text saves the voice there
   -- (S.lib.voice_presets.save), a cancel saves nothing
   local function open_name_entry(slot)
@@ -159,12 +164,16 @@ return function(S)
   end
 
   -- norns has one textentry: as SCENES' reconcile_name_entry
-  -- (docs/notes/lua/pages/scenes.md), when the menu closes and the entry's
-  -- callback is no longer the picker's, the entry is forgotten and Strata's
-  -- key and enc are put back; when it is still the picker's and the entry
-  -- holds the keys, the entry takes the screen back. Acts only on its own
-  -- callback, so SCENES' entry is left to SCENES
+  -- (lib/pages/scenes.lua, a copy of it: a fix to one belongs in the
+  -- other), when the menu closes and the entry's callback is no longer the
+  -- picker's, the entry is forgotten and Strata's key and enc are put
+  -- back; when it is still the picker's and the entry holds the keys, the
+  -- entry takes the screen back. Acts only on its own callback, so SCENES'
+  -- entry is left to SCENES. First, an ALT+K2 or ALT+K3 press the menu
+  -- took (its release never comes) is forgotten, as SEQ's step editor
+  -- forgets its ALT+K2 (forget_editor_k2_press)
   function M.reconcile_name_entry()
+    picker.k2_at, picker.k3_slot = nil, nil
     if NAME_ENTRY.callback == nil then return end
     if textentry.callback ~= NAME_ENTRY.callback then
       key, enc = NAME_ENTRY.script_key, NAME_ENTRY.script_enc
@@ -181,12 +190,20 @@ return function(S)
   -- Keys
   ---------------------------------------------------------------------------
 
+  -- K3: a voice row's sound copied, a slot's preset loaded (an empty slot:
+  -- nothing, and the library's flash); what it loaded flashes on the hint
+  -- row (the picker stays open, so the player sees what changed)
   local function press_k3()
     local row = current_row()
+    local applied
     if row.voice then
-      presets().copy(row.voice, picker.voice)
+      applied = presets().copy(row.voice, picker.voice)
     else
-      presets().load(picker.voice, row.slot)  -- an empty slot: nothing, and a flash
+      applied = presets().load(picker.voice, row.slot)
+    end
+    if applied then
+      S.lib.ui_flash.start("hints", VOICE_PICKER.loaded .. S.lib.ui_text.printable(presets().loaded_name(picker.voice)),
+        nil, S.constants.UI_PAGES.index.VOICE)
     end
     request_redraw()
   end

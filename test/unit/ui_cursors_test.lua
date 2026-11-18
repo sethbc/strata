@@ -475,4 +475,30 @@ test("the cursor and row functions live in their modules", function()
   moved = pcall(voice_page_rows, S.constants.NUM_VOICES + 1)
   assert_true(not moved, "voice 8 is out of range")
 end)
+
+-- 3.8 (package 3b): a row with no param (the preset row) is anchored by its
+-- own key, so it is found again wherever the rows put it, never a label row
+-- (which has no key either)
+test("the voice anchor finds the preset row by its key", function()
+  load_strata()
+  local S = local_value("S")
+  local real_rows = voice_page_rows
+  local preset_index
+  for index, row in ipairs(real_rows(1)) do
+    if row.kind == "preset" then preset_index = index end
+  end
+  S.lib.ui_cursors.place("voice", preset_index)
+  -- a label row above the preset row (as a later section before it would be)
+  voice_page_rows = function(voice_idx)
+    local rows = real_rows(voice_idx)
+    table.insert(rows, preset_index, {label = "above", section = "above", selectable = false})
+    return rows
+  end
+  local ok, rows, cursor = pcall(S.lib.ui_cursors.sync, "voice")
+  voice_page_rows = real_rows
+  assert_true(ok, tostring(rows))
+  assert_equal(rows[cursor].kind, "preset", "the cursor is on the preset row, not the label above it")
+  assert_equal(cursor, preset_index + 1, "one row further down")
+end)
+
 end

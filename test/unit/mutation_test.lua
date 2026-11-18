@@ -978,10 +978,48 @@ test("an edit after a load ends its undo", function()
   params:set("v4_grain_size", 0.12)
   assert_true(not S.lib.mutation.holds_voice(4), "the edit ends it")
   assert_equal(S.undo, nil, "no undo")
-  -- a key the load brought (fm's ratio; voice 4 was sub) ends it too
-  assert_true(presets.load(4, 1), "loaded again")
+end)
+
+test("an edit of a key the load brought ends its undo", function()
+  local _, S, presets = preset_session()
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  assert_equal(S.voices[4].name, "sub", "voice 4 on sub, which has no ratio")
+  assert_true(presets.load(4, 1), "loaded")
+  assert_true(S.lib.mutation.holds_voice(4), "held")
   params:set("v4_ratio", params:lookup_param("v4_ratio").controlspec:map(0.9))
-  assert_true(not S.lib.mutation.holds_voice(4), "an edit of the loaded sound's key ends it")
+  assert_true(not S.lib.mutation.holds_voice(4), "an edit of fm's ratio ends it")
+end)
+
+-- ruling 46 amended (3b's fix round): the undo puts back what a load can
+-- change (the type, its synth keys, the In keys) and leaves every Out key
+-- at its present value
+test("the undo leaves an Out key the drift moved where it is", function()
+  local _, S, presets = preset_session()
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  params:set("v4_source", S.constants.SOURCE_SYNTH + 1)
+  toggle_voice(4)
+  params:set("v4_buf_pos", 0.5)
+  assert_true(presets.load(4, 1), "loaded")
+  set_drifted_param("v4_buf_pos", 0.4938)  -- the drift's write, no edit
+  assert_true(S.lib.mutation.holds_voice(4), "the drift ends nothing")
+  assert_true(S.lib.mutation.undo_voice(4), "undone")
+  assert_equal(S.voices[4].name, "sub", "the type from before")
+  assert_near(S.voices[4].values.buf_pos, 0.4938, 1e-9, "the position stays where the drift left it")
+end)
+
+test("the undo leaves an Out key a scene step set where it is", function()
+  local _, S, presets = preset_session()
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  params:set("v4_grain_size", 0.33)
+  assert_true(presets.load(4, 1), "loaded")
+  S.lib.scenes.set_value("v4_seq_length", 9)  -- as a fade's step sets a param
+  S.lib.scenes.set_value("v4_mute", 1)
+  assert_true(S.lib.mutation.holds_voice(4), "an Out key's write ends nothing")
+  assert_true(S.lib.mutation.undo_voice(4), "undone")
+  assert_equal(S.voices[4].name, "sub", "the type from before")
+  assert_near(S.voices[4].values.grain_size, 0.33, 1e-9, "an In key from before")
+  assert_equal(S.voices[4].values.seq_length, 9, "the Out keys keep their present values")
+  assert_equal(S.voices[4].values.mute, 1, "the mute too")
 end)
 
 test("the undo keeps the voice's present active and source", function()

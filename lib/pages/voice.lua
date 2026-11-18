@@ -437,8 +437,9 @@ return function(S)
   -- 3.8 (package 3b): the preset row with a twelve-character name, and the
   -- voice picker (S.lib.ui_voice_picker) on a voice row, on slot 1 with a
   -- twelve-character name and the widest type, on slot 64 empty, with ALT
-  -- held, with ALT+K2 past the hold time, and a refused load's flash (K3 on
-  -- an empty slot). Each reads the types and the library at its setup
+  -- held, with ALT+K2 past the hold time, a refused load's flash (K3 on an
+  -- empty slot) and a load's (K3 on slot 1, its twelve-character name).
+  -- Each reads the types and the library at its setup
   local function preset_name() return string.rep("W", S.constants.SCENE_NAME_MAX) end
   local function widest_type()
     local widest, width = nil, -1
@@ -486,6 +487,10 @@ return function(S)
   end})
   table.insert(layout_states, {name = "voice picker, a refused load's flash", setup = function()
     open_picker(NUM_VOICES)
+    key(3, 1); key(3, 0)
+  end})
+  table.insert(layout_states, {name = "voice picker, a load's flash", setup = function()
+    open_picker(NUM_VOICES - 1, filled_slot_one)
     key(3, 1); key(3, 0)
   end})
 
