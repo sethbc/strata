@@ -23,7 +23,7 @@ return function(S)
   -- Whether an effect ("delay", "reverb") has a freeze here: the delay's
   -- always, nothing else. The reverb's is cut from 3.8 (package 3a, plan
   -- ruling 27: the high tier's FDN did not hold its level and its tail
-  -- within 1 dB), so offered("reverb") is false on every tier
+  -- within 1 dB; #819), so offered("reverb") is false on every tier
   function M.offered(effect)
     return M.FX_HOLD[effect] ~= nil
   end
