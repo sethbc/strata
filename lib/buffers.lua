@@ -134,7 +134,8 @@ return function(S)
     return math.floor(slot)
   end
 
-  -- Buffer state is shown on the BUFFER page and the 256 grid's page 4, and
+  -- Buffer state is shown on the BUFFER page and every grid's sources page
+  -- and positions' second side (the record keys), and
   -- what the slots remember goes to buffers.data when it changed (remember,
   -- set with the disk functions further down)
   local remember = function() end

@@ -55,6 +55,15 @@ local function each_arrangement(body, opts)
   end
 end
 
+-- The pane-coordinate x of a strip's key (S.lib.grid_pane.STRIPS), on
+-- line 8, the strip's line
+local function strip_x(S, strip, name)
+  for x, key in ipairs(S.lib.grid_pane.STRIPS[strip]) do
+    if key == name then return x end
+  end
+  error("no key " .. name .. " on the " .. strip .. " strip", 2)
+end
+
 local function scan_hold_sent(context)
   local held
   for _, call in ipairs(context.calls_named("setGrainParam")) do
@@ -414,7 +423,7 @@ test("a store key held on side 2 ends when its pane shows side 1, and the other 
   top.press(MARK_X.store, 1, 1)
   bottom.press(MARK_X.store, 1, 1)
   -- the top pane's lit page key pressed again: its next side, side 1
-  top.tap(2 + pages.positions, 8)
+  top.tap(strip_x(S, "upper", "page " .. pages.positions), 8)
   assert_equal(S.lib.grid_core.view(1, 1), "1:5:1:1", "the top pane shows side 1")
   context.clock.run_for(0.2)
   local bookmark = params:get("v1_bookmark_1")
@@ -430,6 +439,46 @@ test("a store key held on side 2 ends when its pane shows side 1, and the other 
   assert_near(params:get("v1_buf_pos"), 0.1, 1e-9, "and jumps nowhere")
   bottom.press(MARK_X.store, 1, 0)
   assert_equal(S.lib.positions.strip_level(1, "store", 1), S.lib.positions.LEVELS.key_up, "both stores are up")
+end)
+
+-- A turn (Review Focus 4): a 128h turned upright is a new layout on the
+-- port, which starts over (grid_core's forget_port), so page 5's held keys
+-- end at the next tick, never act afterward, and nothing is stored
+test("a 128h turned with a store key and a position cell held on page 5 ends both and stores nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local positions, pages, LEVELS = S.lib.positions, S.constants.GRID_PAGES, S.lib.positions.LEVELS
+  -- the store key, held on side 2
+  local wide = grid_pane(context, "128h")
+  wide.show(pages.positions, 2)
+  wide.press(MARK_X.store, 1, 1)
+  assert_equal(positions.strip_level(1, "store"), LEVELS.key_down, "ST held")
+  h.resize_grid(context, 1, 8, 16)
+  context.clock.run_for(0.1)
+  assert_equal(positions.strip_level(1, "store"), LEVELS.key_up, "the turn ends the store within a tick")
+  local upright = grid_pane(context, "128v")
+  upright.show(pages.positions, 2)
+  params:set("v1_buf_pos", 0.6)
+  upright.tap(1, 1)
+  assert_near(params:get("v1_bookmark_1"), 0, 1e-9, "a bookmark key afterward recalls: nothing stored")
+  assert_near(params:get("v1_buf_pos"), 0, 1e-9, "the recall jumped to bookmark 1")
+  -- a position cell, held on side 1 (its jump waits for the bar, so the
+  -- held cell shows at 11 away from the playhead)
+  h.resize_grid(context, 1, 16, 8)
+  wide = grid_pane(context, "128h")
+  wide.show(pages.positions, 1)
+  params:set("quantize_actions", 3)  -- bar
+  wide.press(9, 1, 1)
+  assert_equal(positions.grid_level(1, 9, 16, 1), LEVELS.held, "cell 9 held, at 11")
+  h.resize_grid(context, 1, 8, 16)
+  context.clock.run_for(0.1)
+  assert_true(positions.grid_level(1, 9, 16, 1) ~= LEVELS.held, "the turn ends the held cell within a tick")
+  params:set("quantize_actions", 1)
+  upright = grid_pane(context, "128v")
+  upright.show(pages.positions, 1)
+  upright.tap(13, 1)
+  assert_near(params:get("v1_loop_length"), 1, 1e-9, "a cell afterward makes no loop with it")
+  assert_near(params:get("v1_loop_start"), 0, 1e-9)
 end)
 
 -- The 64's halves --------------------------------------------------------
