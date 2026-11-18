@@ -909,16 +909,16 @@ test("C-E-G latched, E struck again: list still {0, 4, 7}, one retrigger", funct
   params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
   note_on(context, 1, 60); note_on(context, 1, 64); note_on(context, 1, 67)
   note_off(context, 1, 64)  -- latched; C and G still down
+  lfo_step(context)
   context.clear_engine_calls()
   note_on(context, 1, 64)
-  local values, count = {}, nil
+  lfo_step(context)
+  local list_messages = 0
   for _, call in ipairs(context.calls_named("setGrainParam")) do
-    local index = call.args[2]:match("^interval(%d)$")
-    if index then values[tonumber(index)] = call.args[3] end
-    if call.args[2] == "intervalCount" then count = call.args[3] end
+    if call.args[2]:match("^interval%d$") or call.args[2] == "intervalCount" then list_messages = list_messages + 1 end
   end
-  assert_equal(count, 3, "three steps")
-  assert_equal(table.concat({values[1], values[2], values[3]}, ","), "0,4,7", "still {0, 4, 7}")
+  assert_equal(list_messages, 0, "the list unchanged: no list message (fix round 1)")
+  assert_equal(table.concat(S.lib.arp.list(1, {}), ","), "0,4,7", "still {0, 4, 7}")
   assert_equal(#context.calls_named("retrigger"), 1, "one retrigger")
   assert_equal(#context.calls_named("voiceOn") + #context.calls_named("noteOn"), 0, "no start, no note")
   assert_equal(#S.lib.arp.held(1), 2, "E held once")

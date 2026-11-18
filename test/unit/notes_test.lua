@@ -1663,6 +1663,29 @@ test("play on an arpeggiating voice returns NOTES.arp_slot and takes no slot", f
   assert_equal(play(context, 3, 1, 60, {quiet = true}), 1, "a stopped voice's note is its own")
 end)
 
+-- 2b's fix round 1 (the review's minor 2): the seam's two other branches
+test("on an arpeggiating voice with slot 1 free, an extra_only note is the arpeggiator's, never a slot", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
+  assert_true(S.lib.notes.slots(1)[1] == nil, "slot 1 free on a running voice")
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 2, 64, {owner = "seq", extra_only = true}), S.lib.notes.NOTES.arp_slot, "the list's")
+  assert_equal(#context.calls_named("noteOn"), 0, "no noteOn"); assert_equal(S.lib.notes.pool_used(), 0)
+end)
+
+test("a key in the list played again with slot 1 free becomes the own note and leaves the list", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes, arp = S.lib.notes, S.lib.arp
+  params:set("v1_arp", arp.ARP.mode_index.up)
+  play(context, 1, 1, 60); play(context, 1, 2, 64)
+  assert_equal(#arp.held(1), 1, "E in the list")
+  notes.release(1, "midi", 1)  -- the own note's record goes; it sounds on
+  assert_equal(play(context, 1, 2, 64), 1, "E again: the own note")
+  assert_equal(#arp.held(1), 0, "and no longer in the list")
+end)
+
 -- The list holds pitches alone: a slice's note (a region) plays in its slot
 test("a note with a region (a slice) on an arpeggiating voice keeps its slot", function()
   local context = load_strata()

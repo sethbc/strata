@@ -253,6 +253,9 @@ end
 
 local function release_mode() params:set("midi_note_off", 2) end
 
+-- One LFO step: a held chord's change reaches the engine there (fix round 1)
+local function tick(context, S) context.clock.advance_until(S.lfo_clock) end
+
 test("C-E-G held by MIDI on a running arpeggiating voice: intervals 0, 4, 7, count 3; play returns 1, 0, 0; no noteOn on slots 2-8; pool_used 0", function()
   local context, S = started()
   local notes = S.lib.notes
@@ -260,6 +263,7 @@ test("C-E-G held by MIDI on a running arpeggiating voice: intervals 0, 4, 7, cou
   params:set("v1_arp", mode("up"))
   context.clear_engine_calls()
   for _, number in ipairs({60, 64, 67}) do note_on(context, 1, number) end
+  tick(context, S)
   assert_list(context, 1, {0, 4, 7}, "the held chord is the list")
   local counts = grain_values(context, 1, "intervalCount")
   assert_equal(counts[#counts], 3, "intervalCount 3")
@@ -289,8 +293,10 @@ test("release mode: lifting E resends {0, 7}", function()
   release_mode()
   params:set("v1_arp", mode("up"))
   for _, number in ipairs({60, 64, 67}) do note_on(context, 1, number) end
+  tick(context, S)
   context.clear_engine_calls()
   note_off(context, 1, 64)
+  tick(context, S)
   assert_list(context, 1, {0, 7}, "E's step gone")
   assert_equal(count_named(context, "noteOff"), 0, "no noteOff")
   assert_true(S.voices[1].active, "the voice runs")
@@ -300,15 +306,19 @@ test("latch: the list stays until the next chord's first key", function()
   local context, S = started()
   params:set("v1_arp", mode("up"))
   for _, number in ipairs({60, 64, 67}) do note_on(context, 1, number) end
+  tick(context, S)
   context.clear_engine_calls()
   for _, number in ipairs({60, 64, 67}) do note_off(context, 1, number) end
+  tick(context, S)
   assert_equal(#context.engine_calls, 0, "the lifts send nothing")
   assert_equal(#S.lib.arp.held(1), 2, "the chord stays")
   -- the next chord's first key replaces it
   note_on(context, 1, 62)
+  tick(context, S)
   assert_list(context, 1, {}, "the chord gone: the voice's set, none")
   assert_equal(#S.lib.arp.held(1), 0, "nothing held")
   note_on(context, 1, 65)
+  tick(context, S)
   assert_list(context, 1, {0, 3}, "the new chord, from D")
 end)
 
@@ -317,17 +327,19 @@ test("lifting C (the own note) leaves the own note sounding: no noteOff on slot 
   release_mode()
   params:set("v1_arp", mode("up"))
   for _, number in ipairs({60, 64, 67}) do note_on(context, 1, number) end
+  tick(context, S)
   context.clear_engine_calls()
   note_off(context, 1, 60)
+  tick(context, S)
   assert_equal(count_named(context, "noteOff"), 0, "no noteOff: the own note does not park")
   assert_true(S.voices[1].active, "the voice runs")
   assert_equal(list_text(S.lib.arp.list(1, S.lib.variation.interval_set(1))), list_text({0, 4, 7}),
     "the list keeps C as its base")
-  local last = last_list(context, 1)
-  assert_true(last == nil or list_text(last) == list_text({0, 4, 7}), "anything sent is {0, 4, 7}")
+  assert_list(context, 1, nil, "nothing sent: the list is unchanged")
   -- the next key takes the free slot 1: the own note and the new base
   context.clear_engine_calls()
   note_on(context, 1, 69)
+  tick(context, S)
   assert_equal(S.lib.notes.slots(1)[1].pitch, 69, "A is the own note")
   assert_list(context, 1, {-5, -2, 0}, "E and G worked out again from A")
 end)
@@ -402,6 +414,7 @@ test("a 19-tone tuning: E's interval is fractional", function()
   params:set("v1_arp", mode("up"))
   context.clear_engine_calls()
   note_on(context, 1, 60); note_on(context, 1, 64)
+  tick(context, S)
   local list = last_list(context, 1)
   assert_equal(#list, 2, "two steps")
   assert_near(list[1], 0, 1e-9, "C")
@@ -426,8 +439,10 @@ test("a held chord takes at most eight steps, the own note's included", function
   local context, S = started()
   params:set("v1_arp", mode("up"))
   for number = 60, 70 do note_on(context, 1, number) end
+  tick(context, S)
   context.clear_engine_calls()
   note_on(context, 1, 71)
+  tick(context, S)
   local list = last_list(context, 1)
   assert_equal(#list, S.lib.arp.ARP.max_steps, "eight steps")
   assert_equal(list_text(list), list_text({0, 5, 6, 7, 8, 9, 10, 11}), "the newest seven kept, up")
@@ -542,6 +557,106 @@ test("the shuffle draws a fresh order: over many hits every place takes more tha
   local distinct = 0
   for _ in pairs(firsts) do distinct = distinct + 1 end
   assert_true(distinct > 1, "the first step changes: " .. distinct .. " values")
+end)
+
+---------------------------------------------------------------------------
+-- Fix round 1: a list is sent only when it changed, once a step
+---------------------------------------------------------------------------
+
+test("a chord of four keys in one burst sends its list once, at the next LFO step; the first key's own note at once", function()
+  local context, S = started()
+  params:set("v1_arp", mode("up"))
+  lfo_step(context, S)
+  context.clear_engine_calls()
+  for _, number in ipairs({60, 64, 67, 71}) do note_on(context, 1, number) end
+  assert_near(params:get("v1_freq"), 261.6256, 1e-3, "C is the own note at once")
+  assert_equal(count_named(context, "retrigger", 1), 4, "each key accents the voice at once")
+  assert_equal(list_sends(context, 1), 0, "no list yet")
+  lfo_step(context, S)
+  assert_equal(list_sends(context, 1), S.lib.arp.ARP.max_steps + 1, "the list once: nine messages")
+  assert_list(context, 1, {0, 4, 7, 11}, "the whole chord")
+  context.clear_engine_calls()
+  lfo_step(context, S)
+  assert_equal(list_sends(context, 1), 0, "none at the step after")
+end)
+
+test("seven voices given an eight-key chord in one step send at most 7 x 9 list messages, counted, and none the next", function()
+  local context, S = started()
+  local NUM_VOICES, ARP = S.constants.NUM_VOICES, S.lib.arp.ARP
+  for voice = 1, NUM_VOICES do
+    if not S.voices[voice].active then toggle_voice(voice) end
+    params:set("v" .. voice .. "_arp", mode("up"))
+  end
+  lfo_step(context, S)
+  context.clear_engine_calls()
+  for voice = 1, NUM_VOICES do
+    for key = 0, ARP.max_steps - 1 do
+      S.lib.notes.play(voice, {owner = "midi", key = key, pitch = 60 + key, velocity = 0.5, park = true,
+        set_own = function() end})
+    end
+  end
+  local sent = 0
+  for voice = 1, NUM_VOICES do sent = sent + list_sends(context, voice) end
+  assert_equal(sent, 0, "no list while the keys arrive")
+  context.clear_engine_calls()
+  local before = S.lib.engine_sync.budget_state().sent
+  lfo_step(context, S)
+  sent = 0
+  for voice = 1, NUM_VOICES do sent = sent + list_sends(context, voice) end
+  assert_equal(sent, NUM_VOICES * (ARP.max_steps + 1), "7 x 9 list messages")
+  assert_equal(S.lib.engine_sync.budget_state().sent - before, NUM_VOICES * (ARP.max_steps + 1),
+    "each counted in the budget's window")
+  context.clear_engine_calls()
+  before = S.lib.engine_sync.budget_state().sent
+  lfo_step(context, S)
+  sent = 0
+  for voice = 1, NUM_VOICES do sent = sent + list_sends(context, voice) end
+  assert_equal(sent, 0, "none at the next step")
+  assert_equal(S.lib.engine_sync.budget_state().sent - before, 0, "nothing counted")
+end)
+
+test("a key held again at its pitch sends no list; a restarted voice's start still sends its list", function()
+  local context, S = started()
+  params:set("v1_arp", mode("up"))
+  local function play(key, pitch)
+    return S.lib.notes.play(1, {owner = "midi", key = key, pitch = pitch, velocity = 0.5, park = true,
+      set_own = function() end})
+  end
+  play(1, 60); play(2, 64); play(3, 67)
+  lfo_step(context, S)
+  context.clear_engine_calls()
+  play(2, 64)
+  lfo_step(context, S)
+  assert_equal(list_sends(context, 1), 0, "E again at its pitch: no list")
+  assert_equal(count_named(context, "retrigger", 1), 1, "its accent")
+  -- a start sends the list the sync holds, whatever was sent before the stop
+  toggle_voice(1)
+  context.clear_engine_calls()
+  toggle_voice(1)
+  assert_equal(list_sends(context, 1), S.lib.arp.ARP.max_steps + 1, "the start's sync sends the list")
+end)
+
+test("turning the arpeggiator on moves held notes into the list with no off or on at MIDI out; a lift sends its one off", function()
+  local context, S = started()
+  release_mode()
+  local device = context.midi.plug(3, "synth")
+  params:set("v1_out_port", 3)
+  lfo_step(context, S)
+  note_on(context, 1, 60); note_on(context, 1, 64); note_on(context, 1, 67)
+  local function notes_sent()
+    local texts = {}
+    for _, data in ipairs(device.sent) do
+      local msg = midi.to_msg(data)
+      if msg.type == "note_on" or msg.type == "note_off" then texts[#texts + 1] = msg.type .. " " .. msg.note end
+    end
+    return table.concat(texts, ", ")
+  end
+  device.sent = {}
+  params:set("v1_arp", mode("up"))
+  assert_equal(#S.lib.arp.held(1), 2, "E and G in the list")
+  assert_equal(notes_sent(), "", "the targets hear nothing as the notes move")
+  note_off(context, 1, 64)
+  assert_equal(notes_sent(), "note_off 64", "E's lift: its one off")
 end)
 
 end

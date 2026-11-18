@@ -1044,7 +1044,7 @@ return function(S)
       if record and not record.region then
         taken[#taken + 1] = {owner = record.owner, key = record.key, pitch = record.pitch, velocity = record.velocity}
         engine.noteOff(voice - 1, slot - 1, 1)
-        forget(record, now)
+        forget(record, now, true)  -- it moves to the list: no ended (the arpeggiator's end comes later)
       end
     end
     count(#taken)

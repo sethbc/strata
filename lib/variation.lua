@@ -157,6 +157,7 @@ return function(S)
       engine.setGrainParam(voice_idx - 1, "interval" .. index, set[index] or 0)
     end
     engine.setGrainParam(voice_idx - 1, "intervalCount", math.min(#set, V.max_intervals))
+    S.lib.arp.sent(voice_idx, set)  -- what the engine holds now: an unchanged list is never sent again
   end
 
   -- The voice's interval set, while it runs

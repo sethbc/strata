@@ -114,13 +114,44 @@ return function(S)
   local function fold(voice) return mode_index(voice) == ARP.mode_index.up_down and 1 or 0 end
   local function send_fold(voice) engine.setGrainParam(voice - 1, "arpFold", fold(voice)) end
 
-  -- The list again to a running voice: interval1..8 and intervalCount
+  -- Per voice: the list the engine was last sent (every send of
+  -- S.lib.variation's send_intervals_now records it through M.sent: a
+  -- start's and a sync's included), and whether the held chord changed
+  -- since (pending: the list goes at the next LFO step, if it differs)
+  local remembered, pending = {}, {}
+
+  function M.sent(voice, list)
+    if not valid_voice(voice) then return end
+    local copy = {}
+    for index = 1, math.min(#list, ARP.max_steps) do copy[index] = list[index] end
+    remembered[voice] = copy
+  end
+
+  local function same_list(a, b)
+    if a == nil or #a ~= #b then return false end
+    for index = 1, #a do
+      if a[index] ~= b[index] then return false end
+    end
+    return true
+  end
+
+  -- The list again to a running voice when it differs from the one the
+  -- engine was last sent: interval1..8 and intervalCount
   -- (S.lib.variation.send_intervals), counted in the engine budget's window
-  local function resend(voice)
+  local function send_if_changed(voice)
+    pending[voice] = nil
     if not S.voices[voice].active then return end
+    local list = M.list(voice, S.lib.variation.interval_set(voice))
+    local wanted = {}
+    for index = 1, math.min(#list, ARP.max_steps) do wanted[index] = list[index] end
+    if same_list(remembered[voice], wanted) then return end
     S.lib.variation.send_intervals(voice)
     S.lib.engine_sync.count_sends(ARP.max_steps + 1)
   end
+
+  -- The held chord changed: its list goes at the next LFO step, once for
+  -- every key of a burst or a step's chord, and only if it differs
+  local function resend(voice) pending[voice] = true end
 
   local function find(voice, owner, key)
     for index, entry in ipairs(entries[voice]) do
@@ -192,7 +223,7 @@ return function(S)
   function M.clear(voice)
     if not valid_voice(voice) then return end
     drop(voice, function() return true end, false)
-    bases[voice], shuffles[voice] = nil, nil
+    bases[voice], shuffles[voice], pending[voice] = nil, nil, nil
   end
 
   -- Copies of voice's held notes, oldest first: {owner, key, pitch, velocity}
@@ -215,15 +246,14 @@ return function(S)
   end
 
   -- Turned on: the voice's held extra notes join the list (their slots cut,
-  -- S.lib.notes.take_extras); turned off: the list's held notes go
+  -- S.lib.notes.take_extras). A note that moves keeps its start: the hooks
+  -- hear neither an end nor a start (an external target plays on), and its
+  -- end comes when it leaves the list. Turned off: the list's notes go
   local function mode_changed(voice)
     if M.on(voice) then
       base_of(voice)
       for _, taken in ipairs(S.lib.notes.take_extras(voice)) do
-        if find(voice, taken.owner, taken.key) == nil then
-          entries[voice][#entries[voice] + 1] = taken
-          tell("started", voice, taken)
-        end
+        if find(voice, taken.owner, taken.key) == nil then entries[voice][#entries[voice] + 1] = taken end
       end
     else
       M.clear(voice)
@@ -289,11 +319,13 @@ return function(S)
         local steps = #entries[voice] > 0 and #entries[voice] + 1 or #S.lib.variation.interval_set(voice)
         if steps > 1 then
           shuffles[voice] = nil
-          resend(voice)
+          pending[voice] = true
         else
           shuffled_at[voice] = now
         end
       end
+      -- a held chord's change (or a reshuffle): its list, once, if it differs
+      if pending[voice] then send_if_changed(voice) end
     end
   end
 
