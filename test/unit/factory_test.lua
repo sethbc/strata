@@ -129,8 +129,11 @@ test("every rig group's params are rig, and no other Strata param is", function(
   -- between are rig
   local between = { tempo = true, seq_follow_transport = true }
   for _, id in ipairs(local_value("S").lib.params_setup.record_param_ids()) do
-    if not in_group[id] then
-      assert_equal(factory().is_rig(id), between[id] == true, id .. (between[id] and " is rig" or " is sound"))
+    if not in_group[id] and between[id] then
+      assert_true(factory().is_rig(id), id .. " is rig")
+    elseif not in_group[id] then
+      assert_true(not factory().is_rig(id), id .. " is a sound param outside the rig groups, but it matches a "
+        .. "FACTORY.rig pattern: rename it or rule on it")
     end
   end
   for _, id in ipairs({ "scene_sequencer_enabled", "mutation_enabled", "v1_solo", "v7_solo", "record_duration",
@@ -142,6 +145,79 @@ test("every rig group's params are rig, and no other Strata param is", function(
     "seq_follow_transport", "tapeloop_level", "crow_out1_source" }) do
     assert_equal(factory().is_rig(id), true, id .. " is rig")
   end
+end)
+
+-- A value of param other than its load default, or nil: a control's at a
+-- quarter or three quarters of its range, a number's or an option's next
+-- (or previous), a binary's other, a text param a probe text (a text with
+-- no load default is kept by any load: moved, it shows nothing else
+-- touches it); none for a file param, a trigger or a param saved nowhere
+local function off_default(param)
+  if param.t == params.tTEXT and param.save ~= false then return "factory probe" end
+  local default = local_value("S").lib.params_setup.load_default(param)
+  if default == nil then return nil end
+  if param.t == params.tCONTROL then
+    local quarter = param.controlspec:map(0.25)
+    if math.abs(quarter - default) > 1e-6 then return quarter end
+    return param.controlspec:map(0.75)
+  end
+  if param.t == params.tNUMBER then return default + 1 <= param.max and default + 1 or default - 1 end
+  if param.t == params.tOPTION then return default < param.count and default + 1 or default - 1 end
+  if param.t == params.tBINARY then return 1 - default end
+  return nil
+end
+
+-- 4d fix round 1: one param of every rig group and every rig pattern, each
+-- moved off its default, survives a load whose set.params names none of
+-- them, and no action of theirs runs during the load (no engine, MIDI,
+-- crow, ii or tape send)
+test("a load never sets a rig param to its default", function()
+  local context, S = session()
+  local rig = factory().FACTORY.rig
+  local chosen, order = {}, {}
+  -- the first param of ids that can be moved off its default, moved
+  local function pick(ids, where)
+    for _, id in ipairs(ids) do
+      if not chosen[id] then
+        local param = params:lookup_param(id)
+        local value = off_default(param)
+        if value ~= nil then
+          params:set(id, value)
+          if params:get(id) ~= S.lib.params_setup.load_default(param) then
+            chosen[id] = { value = params:get(id), where = where, actions = 0 }
+            order[#order + 1] = id
+            return
+          end
+        end
+      end
+    end
+    error("no param of " .. where .. " can be moved off its default", 2)
+  end
+  for _, group_id in ipairs(rig.groups) do pick(group_params(group_id), "the group " .. group_id) end
+  local record_ids = S.lib.params_setup.record_param_ids()
+  for _, pattern in ipairs(rig.patterns) do
+    local ids = {}
+    for _, id in ipairs(record_ids) do
+      if id:match(pattern) then ids[#ids + 1] = id end
+    end
+    assert_true(#ids > 0, "the pattern " .. pattern .. " matches a Strata param")
+    local covered = false
+    for _, id in ipairs(ids) do
+      if chosen[id] then covered = true end
+    end
+    if not covered then pick(ids, "the pattern " .. pattern) end
+  end
+  for _, id in ipairs(order) do
+    local param = params:lookup_param(id)
+    local real = param.action
+    param.action = function(...) chosen[id].actions = chosen[id].actions + 1; return real(...) end
+  end
+  assert_true(factory().load("dusk")); run_load(context)
+  for _, id in ipairs(order) do
+    assert_equal(params:get(id), chosen[id].value, id .. " (" .. chosen[id].where .. ") kept")
+    assert_equal(chosen[id].actions, 0, id .. "'s action never runs during the load")
+  end
+  assert_true(#order >= #rig.groups, #order .. " rig params moved")
 end)
 
 test("parse_params reads norns' line form", function()
@@ -370,6 +446,36 @@ test("the allow side covers 3.8's sound params and skips the holds", function()
   assert_equal(params:get("v1_grain_prob"), 40)
   assert_equal(params:get("v1_grain_cloud"), 2)
   assert_equal(params:get("v1_pan_wander"), 10)
+end)
+
+-- 4d fix round 1: the allow side, derived: every sound param of Strata's
+-- records (not rig, saved, no trigger) that has a load default, each moved
+-- off it first, goes back to it in a load whose set.params names none of
+-- them, so a sound param a later package adds is covered without a line
+-- here (a failure names it)
+test("every sound param a set has no line for goes to its load default", function()
+  local context, S = session({ prepare = function(dir) write_set_file(dir, "set.params", "-- dusk\n") end })
+  local setup = S.lib.params_setup
+  local moved = {}
+  for _, id in ipairs(setup.record_param_ids()) do
+    local param = params:lookup_param(id)
+    local default = setup.load_default(param)
+    local sound = default ~= nil and not factory().is_rig(id) and param.t ~= params.tTEXT
+    local value = sound and off_default(param) or nil
+    if value ~= nil then
+      params:set(id, value)
+      if params:get(id) ~= default then moved[#moved + 1] = id end
+    end
+  end
+  assert_true(#moved > 0, "sound params moved off their defaults")
+  assert_true(factory().load("dusk")); run_load(context)
+  for _, id in ipairs(moved) do
+    local param = params:lookup_param(id)
+    local default = setup.load_default(param)
+    local value = params:get(id)
+    local same = value == default or (type(value) == "number" and math.abs(value - default) < 1e-6)
+    assert_true(same, id .. " has no line, so it loads its default " .. tostring(default) .. ", not " .. tostring(value))
+  end
 end)
 
 test("a held delay freeze stays through a load", function()
