@@ -1,9 +1,10 @@
 // StrataVoices.sc
 // The voices area: the voices' buses, groups and state, the voice commands
 // (voiceOn, retrigger, voiceOff, setVoiceParam, setGrainParam,
-// setGrainSource and the crossmod commands), setVoiceControl,
-// envBufnumFor and voiceHit (the areas' hook for a voice's hits). See
-// docs/notes/engine/voices.md.
+// setGrainSource, setVoiceType and the crossmod commands), the voice types
+// (3.8: voiceTypeDefs, a type per voice), setVoiceControl, envBufnumFor and
+// voiceHit (the areas' hook for a voice's hits). See
+// docs/notes/engine/voices.md and docs/notes/engine/types.md.
 
 + Engine_Strata {
     // The voices area (order 20)
@@ -11,7 +12,7 @@
         ^(
             order: 20,
             allocState: { this.areaCall(\allocVoiceState) },
-            addDefs: { this.areaCall(\addVoiceDefs); voiceSynthDefs },
+            addDefs: { this.areaCall(\addVoiceDefs); this.areaCall(\voiceTypeDefs) },
             addCommands: { this.areaCall(\addVoiceCommands) },
             start: { this.areaCall(\startVoiceGroups) },
             stop: { this.areaCall(\stopVoices) },
@@ -20,9 +21,10 @@
     }
 
     allocVoiceState {
-        // Voice SynthDef for each voice index (0-indexed, as sent by Lua)
-        voiceSynthDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
-            \strataPulse, \strataKarplus, \strataRing];
+        // Each voice's type (3.8): voice v on type v, a number into
+        // voiceTypeDefs (setVoiceType changes it). voiceSynthDefs, declared
+        // in Engine_Strata.sc, is no longer assigned: voiceDefFor answers
+        areaState[\voices][\types] = Array.fill(numVoices, { arg voice; voice });
 
         // Audio buses for granular processing (one stereo bus per voice)
         granBuses = Array.fill(numVoices, { Bus.audio(context.server, 2) });
@@ -182,6 +184,23 @@
             };
         });
 
+        // type (3.8): 0..numVoiceTypes - 1, into voiceTypeDefs. Anything
+        // else, and the voice's own type, is ignored without a line, as the
+        // other voice commands ignore a bad index. A stopped, buffer or input
+        // voice only records it (its next start on the synth source plays
+        // it); a running synth voice's voice synth is cut and replaced in one
+        // bundle, never stacked (replaceVoiceType). See
+        // docs/notes/engine/types.md
+        this.addCommand(\setVoiceType, "ii", { arg msg;
+            var voice = msg[1], type = msg[2];
+            if (this.validVoice(voice) and: { this.validVoiceType(type) } and: { type != this.voiceType(voice) }) {
+                areaState[\voices][\types][voice] = type;
+                if ((grainSource[voice] == 0) and: { synths[this.voiceKey(voice)].notNil }) {
+                    this.areaCall(\replaceVoiceType, voice)
+                };
+            };
+        });
+
         // Multi-source cross-modulation commands. A slot outside
         // 1..numModSlots is ignored (it would name a control no SynthDef has,
         // kept in voiceControls for good)
@@ -222,6 +241,35 @@
             };
         });
     }
+
+    // The voice types (3.8, design §0.3): each type's voice SynthDef, in
+    // type order, one name a line (a type package appends its line; Lua's
+    // types are registered in the same order, a docs test compares them).
+    // The voices area's addDefs returns it, so controlNameSets knows every
+    // type's def. See docs/notes/engine/types.md
+    voiceTypeDefs {
+        ^#[
+            \strataResonator,
+            \strataFM,
+            \strataFolder,
+            \strataSub,
+            \strataPulse,
+            \strataKarplus,
+            \strataRing
+        ]
+    }
+
+    numVoiceTypes { ^this.voiceTypeDefs.size }
+
+    validVoiceType { arg type;
+        ^type.isInteger and: { (type >= 0) and: { type < this.numVoiceTypes } }
+    }
+
+    // The voice's type (0-based, into voiceTypeDefs) and its def: what every
+    // voice synth the voice starts plays, its own and its extra notes'
+    voiceType { arg voice; ^areaState[\voices][\types][voice] }
+
+    voiceDefFor { arg voice; ^this.voiceTypeDefs[this.voiceType(voice)] }
 
     // A hit on a voice (3.7, design §0.2): kind is \start (voiceOn on a
     // stopped or releasing voice, after its bundle), \retrigger (retrigger

@@ -1739,6 +1739,33 @@ test("the engine stub rejects the controls the engine sets itself (#458)", funct
   assert_true(not spec.grain_params.gate and not spec.voice_params[1].gate, "gate is still the engine's")
 end)
 
+-- 3.8 (package 0c): a voice's synth is its type (voiceTypeDefs), so the
+-- stub keeps each voice's type from the setVoiceType calls it sees and
+-- checks setVoiceParam's names against that type's def
+test("the stub follows each voice's type from setVoiceType", function()
+  load_strata()
+  local function rejected(command, ...) return not pcall(engine[command], ...) end
+  assert_true(rejected("setVoiceParam", 0, "ratio", 1.5), "voice 0 starts on the Resonator, which has no ratio")
+  engine.setVoiceType(0, 1)
+  engine.setVoiceParam(0, "ratio", 1.5)
+  assert_true(rejected("setVoiceParam", 0, "rq", 0.5), "on FM, rq is no control")
+  assert_true(rejected("setVoiceType", 0, #engine_spec.voice_type_defs), "a type past the engine's list")
+  assert_true(rejected("setVoiceType", 0, -1), "a type below 0")
+  assert_true(rejected("setVoiceType", engine_spec.num_voices, 0), "a voice past the voices")
+  engine.setVoiceParam(0, "ratio", 1.5)
+  load_strata()
+  assert_true(rejected("setVoiceParam", 0, "ratio", 1.5), "a new load starts voice 0 on the Resonator again")
+  engine.setVoiceParam(0, "rq", 0.5)
+end)
+
+test("a voiceTypeDefs shorter than numVoices fails the parse", function()
+  local patched, count = h.engine_sources():gsub(",%s*\\strataRing%s*%]", "]")
+  assert_equal(count, 1, "the patch applies")
+  local ok, problem = pcall(stubs.engine_spec_from_source, patched)
+  assert_true(not ok, "the parse fails")
+  assert_true(tostring(problem):find("voiceTypeDefs", 1, true) ~= nil, "naming voiceTypeDefs: " .. tostring(problem))
+end)
+
 test("audio.file_info reads a test sound file and a registered table", function()
   local context = load_strata()
   local path = context.audio_dir .. "probe.wav"

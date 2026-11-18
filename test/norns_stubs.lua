@@ -270,7 +270,9 @@ end
 --                             of the FX controls it sets, or the command's
 --                             own msg[i].clip(low, high) (name: the var it is
 --                             assigned to, else "argument i")
---   voice_synthdefs[i]        voiceSynthDefs = [...], i = engine voice + 1
+--   voice_type_defs[i]        voiceTypeDefs { ^#[...] }, i = type + 1 (3.8: a
+--                             voice's synth is its type, voice v on type v
+--                             at the start, so there are at least numVoices)
 --   mod_slots                 modBus1..N on every voice SynthDef
 --   grain_params              setGrainParam names: every control of the
 --                             grain SynthDefs (the areas' grainDefs:
@@ -280,7 +282,7 @@ end
 --                             itself (the keys of its grainParamHandlers: (...))
 --                             and any `param == \name` in setGrainParam, less
 --                             engine_controls and voice_level_grain_controls
---   voice_params[i]           setVoiceParam names: the voice's SynthDef's
+--   voice_params[i]           setVoiceParam names of type i - 1: its SynthDef's
 --                             controls (bend is one), plus any `param == \name`,
 --                             less engine_controls
 --   engine_controls[name]     the controls the engine sets itself, which both
@@ -438,7 +440,7 @@ function stubs.engine_spec_from_source(source)
     control_limits = {},
     fx_commands = {},
     argument_limits = {},
-    voice_synthdefs = {},
+    voice_type_defs = {},
     grain_params = {},
     voice_params = {},
     engine_controls = {},
@@ -492,18 +494,18 @@ function stubs.engine_spec_from_source(source)
     if next(limits) then spec.argument_limits[command] = limits end
   end
 
-  local voice_list = source:match("voiceSynthDefs%s*=%s*%[(.-)%]")
+  local voice_list = source:match("voiceTypeDefs%s*{%s*%^%s*#?%[(.-)%]")
   for name in (voice_list or ""):gmatch("\\([%w_]+)") do
-    assert(spec.synthdef_controls[name], "engine source: voiceSynthDefs names unknown SynthDef \\" .. name)
-    table.insert(spec.voice_synthdefs, name)
+    assert(spec.synthdef_controls[name], "engine source: voiceTypeDefs names unknown SynthDef \\" .. name)
+    table.insert(spec.voice_type_defs, name)
   end
-  assert(not (voice_list and spec.num_voices) or #spec.voice_synthdefs == spec.num_voices,
-    "engine source: voiceSynthDefs does not list numVoices SynthDefs")
+  assert(not (voice_list and spec.num_voices) or #spec.voice_type_defs >= spec.num_voices,
+    "engine source: voiceTypeDefs lists fewer types than numVoices (voice v starts on type v)")
 
   spec.mod_slots = 0
-  while #spec.voice_synthdefs > 0 do
+  while #spec.voice_type_defs > 0 do
     local control = "modBus" .. (spec.mod_slots + 1)
-    for _, name in ipairs(spec.voice_synthdefs) do
+    for _, name in ipairs(spec.voice_type_defs) do
       if not spec.synthdef_controls[name][control] then control = nil; break end
     end
     if not control then break end
@@ -523,7 +525,7 @@ function stubs.engine_spec_from_source(source)
     for _, name in ipairs(event_keys(engine_block(source, position))) do spec.grain_params[name] = true end
   end
   if commands.setGrainParam then engine_special_params(source, "setGrainParam", spec.grain_params) end
-  for index, name in ipairs(spec.voice_synthdefs) do
+  for index, name in ipairs(spec.voice_type_defs) do
     spec.voice_params[index] = shallow_copy(spec.synthdef_controls[name])
     if commands.setVoiceParam then engine_special_params(source, "setVoiceParam", spec.voice_params[index]) end
   end
@@ -580,7 +582,7 @@ function stubs.engine_spec_problems(spec)
   need(spec.note_pool_max, "notePoolMax { ^N }")
   need(spec.num_env_routes, "numEnvRoutes { ^N }")
   need(spec.input_source, "inputSource { ^numBuffers + N }")
-  need(#spec.voice_synthdefs > 0, "voiceSynthDefs = [...]")
+  need(#spec.voice_type_defs > 0, "voiceTypeDefs { ^#[...] }")
   need(next(spec.grain_params), "the grain SynthDefs (grainDefs: [predicate -> \\name, ...])")
   need(spec.enumerations.envShape, "envBuffers = [...].collect")
   return problems
@@ -609,6 +611,10 @@ local DOCUMENTED_LIMITS = {
 -- test's performance_active.data: stubs.active_buffer_seconds).
 local function engine_argument_checks(spec, lookup_param, buffer_seconds)
   local last_voice = spec.num_voices - 1
+  -- each voice's type (engine voice + 1 -> type), as the setVoiceType calls
+  -- this install sees leave it: voice v starts on type v (3.8)
+  local voice_types = {}
+  for voice = 1, spec.num_voices do voice_types[voice] = voice - 1 end
   local function range(what, value, low, high)
     if value < low or value > high then
       return string.format("%s %s is outside %g..%g", what, tostring(value), low, high)
@@ -664,8 +670,16 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
   local checks = {
     voiceOn = voice, voiceOff = voice, retrigger = voice, setModSpeed = voice,
     setVoiceParam = function(args)
-      return voice(args)
-        or named_param(args, spec.voice_params[args[1] + 1], "\\" .. spec.voice_synthdefs[args[1] + 1])
+      if voice(args) then return voice(args) end
+      local type = voice_types[args[1] + 1]
+      return named_param(args, spec.voice_params[type + 1], "\\" .. spec.voice_type_defs[type + 1])
+    end,
+    -- 3.8: voice 0..numVoices-1, type 0..numVoiceTypes-1 (the engine
+    -- ignores another); a valid one is the voice's type from now on
+    setVoiceType = function(args)
+      local problem = voice(args) or range("type", args[2], 0, #spec.voice_type_defs - 1)
+      if not problem then voice_types[args[1] + 1] = args[2] end
+      return problem
     end,
     setGrainParam = function(args)
       return voice(args) or named_param(args, spec.grain_params, "the grain SynthDefs")

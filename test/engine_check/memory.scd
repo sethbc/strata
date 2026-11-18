@@ -300,24 +300,19 @@ var checkDelaySize = {
 };
 
 // Every voice of an engine on one voice def (3.8, ruling 13: the worst
-// cases run with every voice on the costliest), and nil puts back the defs
-// it had. Check-only: it writes the engine's voiceSynthDefs, which every
-// reader indexes at use (package 0c gives it a body of setVoiceType). Only
-// with no voice synth playing or releasing (gateVoice would take a
-// releasing one back whatever its def)
-var castDefs = IdentityDictionary.new;
+// cases run with every voice on the costliest), and nil puts each voice
+// back on its own type: one setVoiceType per voice (the type whose def it
+// is, target.voiceTypeDefs.indexOf), after every voice is stopped, so each
+// voice's next start plays it. A voice synth still playing or releasing in
+// voiceGroup is reported (none should be: h.stopAllVoices waits for them)
 var castVoices = { arg target, defName;
-    var stray;
+    var stray, type = defName !? { target.voiceTypeDefs.indexOf(defName) };
     h.stopAllVoices(target);
     stray = h.synthNames(target.voiceGroup).select({ arg name; h.voiceDefs.includes(name) });
-    check.(stray.isEmpty, "memory: no voice synth plays or releases when the % tier's voices are cast % (left: %)".format(
+    check.(stray.isEmpty and: { defName.isNil or: { type.notNil } },
+        "memory: no voice synth plays or releases when the % tier's voices are cast % (left: %)".format(
         target.tier, if (defName.isNil) { "back" } { "to \\" ++ defName }, stray));
-    if (defName.notNil) {
-        castDefs[target] = castDefs[target] ? target.voiceSynthDefs.copy;
-        target.numVoices.do({ arg voice; target.voiceSynthDefs.put(voice, defName) });
-    } {
-        castDefs.removeAt(target) !? { arg saved; saved.do({ arg name, voice; target.voiceSynthDefs.put(voice, name) }) };
-    };
+    target.numVoices.do({ arg voice; h.commandTo(target, \setVoiceType, voice, type ? voice) });
 };
 
 // A scenario that errors while the groups are paused still leaves them

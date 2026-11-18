@@ -657,7 +657,7 @@ checkSynthNote = {
     start = bundle.detect({ arg msg; (msg[0] == 9) and: { synth.notNil } and: { msg[2] == synth.nodeID } });
     nodes = h.synthTree(engine.voiceGroup);
     check.(synth.notNil and: { slotState.(voice, 1) == \live } and: { nodes.first.notNil } and: { nodes.first[\id] == synth.nodeID }
-        and: { nodes.first[\def] == engine.voiceSynthDefs[voice] }
+        and: { nodes.first[\def] == engine.voiceDefFor(voice) }
         and: { nodes.first[\controls][\out] == engine.granBuses[voice].index }
         and: { near.(nodes.first[\controls][\freq], 220) } and: { near.(controlOf.(own, \freq), 110) }
         and: { near.(nodes.first[\controls][\velocity], 0.6) } and: { nodes.first[\controls][\noteGate] == 1 }
@@ -675,7 +675,7 @@ checkSynthChord = {
     (2 .. 7).do({ arg slot; playNote.(voice, slot, 1.0, 1.0, 110.0 * (1 + (slot / 4))) });
     server.sync;
     nodes = h.synthTree(h.context.xg);
-    voiceSynths = nodes.count({ arg node; (node[\def] == engine.voiceSynthDefs[voice]) and: { node[\controls][\out] == engine.granBuses[voice].index } });
+    voiceSynths = nodes.count({ arg node; (node[\def] == engine.voiceDefFor(voice)) and: { node[\controls][\out] == engine.granBuses[voice].index } });
     grains = nodes.count({ arg node; h.grainDefs.includes(node[\def]) and: { node[\controls][\out] == engine.voicePathBus(voice, 0).index } });
     writers = nodes.count({ arg node; node[\def].asString.beginsWith("strataRingWrite") and: { node[\controls][\in] == engine.granBuses[voice].index } });
     mods = nodes.count({ arg node; (node[\def] == \strataMod) and: { node[\controls][\in] == engine.granBuses[voice].index } });
@@ -962,7 +962,7 @@ checkCuttingBound = {
 checkSourceSwitch = {
     var voice = 6, results = List.new, kindOf = IdentityDictionary[0 -> \voice, 1 -> \buffer], defOf;
     kindOf[engine.inputSource] = \input;
-    defOf = (voice: engine.voiceSynthDefs[voice], buffer: \strataGrainBuf, input: \strataGrainRing);
+    defOf = (voice: engine.voiceDefFor(voice), buffer: \strataGrainBuf, input: \strataGrainRing);
     startSynthVoice.(voice);
     command.(\setNotePool, 16);
     if (engine.bufferFrames[0] == 0) { command.(\loadBuffer, 0, h.stereoPath, 0); h.waitFor({ engine.bufferFrames[0] > 0 }, 3) };
@@ -1132,7 +1132,7 @@ checkFrozenNotes = {
     server.sync;
     ok = streams.every({ arg synth; synth.notNil and: { sentValue.(bundle, synth, \kill) == 1 } })
         and: { restarted.every({ arg synth; synth.notNil and: { streams.includes(synth).not }
-            and: { bundle.any({ arg msg; (msg[0] == 9) and: { msg[2] == synth.nodeID } and: { msg[1].asSymbol == engine.voiceSynthDefs[voice] } }) } }) }
+            and: { bundle.any({ arg msg; (msg[0] == 9) and: { msg[2] == synth.nodeID } and: { msg[1].asSymbol == engine.voiceDefFor(voice) } }) } }) }
         and: { [1, 2].every({ arg slot; slotRecord.(voice, slot)[\kind] == \voice }) } and: { slotState.(voice, 3) == \empty }
         and: { near.(controlOf.(restarted[0], \freq), 330) } and: { near.(controlOf.(restarted[1], \freq), 165) }
         and: { near.(sentValue.(bundle, own, \noteRate), 1) } and: { sentValue.(bundle, own, \noteGate) == 1 }

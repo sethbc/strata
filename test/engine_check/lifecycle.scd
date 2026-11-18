@@ -127,7 +127,7 @@ var checkStopStartCycles = { arg voice;
         });
         held.addAll(engine.fadingSynths[voice]); held.addAll(engine.cuttingSynths[voice]);
         trackedGrains = max(trackedGrains, held.count({ arg synth; grainDefs.includes(synth.defName.asSymbol) }));
-        trackedVoices = max(trackedVoices, held.count({ arg synth; synth.defName.asSymbol == engine.voiceSynthDefs[voice] }));
+        trackedVoices = max(trackedVoices, held.count({ arg synth; synth.defName.asSymbol == engine.voiceDefFor(voice) }));
     });
     check.(trackedGrains <= 3, "six fast stop / source / start / switch cycles hold at most three grain synths after every command (worst %)".format(trackedGrains));
     check.((trackedVoices <= 3) and: { trackedVoices >= 2 }, "and at most three voice synths, two at once after [9, 0] (worst %)".format(trackedVoices));
@@ -138,7 +138,7 @@ var checkStopStartCycles = { arg voice;
         server.sync;
         nodes = synthNodes.(context.xg);
         serverGrains = max(serverGrains, voiceGrainNodes.(nodes, voice).size);
-        serverVoices = max(serverVoices, nodes.count({ arg node; node.def == engine.voiceSynthDefs[voice] }));
+        serverVoices = max(serverVoices, nodes.count({ arg node; node.def == engine.voiceDefFor(voice) }));
     });
     check.((serverGrains <= 3) and: { serverVoices <= 3 },
         "and the server runs at most three of each after every step (worst % grain, % voice)".format(serverGrains, serverVoices));
@@ -932,7 +932,7 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
     var ownCounts = { arg target;
         var nodes = synthNodes.(context.xg), ids = noteIDs.value, own = nodes.reject({ arg node; ids.includes(node[\id]) });
         [voiceGrainNodes.(own, target).size,
-            own.count({ arg node; (node.def == engine.voiceSynthDefs[target]) and: { node.controls[\out].asInteger == engine.granBuses[target].index } })]
+            own.count({ arg node; (node.def == engine.voiceDefFor(target)) and: { node.controls[\out].asInteger == engine.granBuses[target].index } })]
     };
     var grainBefore, voiceBefore, grainCount, voiceCount, bounded = true, live = List.new, maxGrain = 0, maxVoice = 0;
     var trackedGrains = 0, trackedVoices = 0, agree = List.new;
@@ -989,7 +989,7 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
             });
             held.addAll(engine.fadingSynths[cycleVoice]); held.addAll(engine.cuttingSynths[cycleVoice]);
             trackedGrains = max(trackedGrains, held.count({ arg synth; grainDefs.includes(synth.defName.asSymbol) }));
-            trackedVoices = max(trackedVoices, held.count({ arg synth; synth.defName.asSymbol == engine.voiceSynthDefs[cycleVoice] }));
+            trackedVoices = max(trackedVoices, held.count({ arg synth; synth.defName.asSymbol == engine.voiceDefFor(cycleVoice) }));
             bounded = bounded and: { slotsBounded.value };
         });
     });
