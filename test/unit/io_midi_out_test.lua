@@ -1594,6 +1594,22 @@ test("cleanup takes down every zone it set up, after the last note off and befor
   end
 end)
 
+-- A played note held into cleanup is ended only by the targets' step (142):
+-- the patterns' stop ends no played note, so its off before the takedown
+-- shows the takedown comes after that step
+test("a played MPE note held into cleanup gets its off before the zone's takedown (#789)", function()
+  local context, S = started()
+  local synth = context.midi.plug(3, "synth")
+  mpe_voice(1, 3); settled(context)
+  clear(synth)
+  context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 1})
+  assert_true(sent(synth):match("note_on 60 %d+ 2$") ~= nil, "the played note sounds on member 2: " .. sent(synth))
+  assert_true(next(S.lib.io_targets.sounding(1)) ~= nil, "the targets hold the played note")
+  clear(synth)
+  cleanup()
+  assert_equal(sent(synth), "note_off 60 2|" .. TAKEDOWN, "the held note's off, then the takedown")
+end)
+
 test("cleanup sends no takedown to a port with no zone (#789)", function()
   local context, S = started()
   local plain, gone = context.midi.plug(2, "synth a"), context.midi.plug(4, "synth b")
