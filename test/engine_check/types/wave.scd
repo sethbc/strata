@@ -17,7 +17,20 @@ var typeIndex = engine.voiceTypeDefs.indexOf(\strataWave);
 var known = bank.notNil and: { typeIndex.notNil } and: { SynthDescLib.global.at(\strataWave).notNil };
 // The own keys' range ends (the record's specs, lib/types/wave.lua)
 var keyEnds = [[\morph, 0, 1], [\morphRate, 0.01, 1], [\morphDepth, 0, 1], [\detune, 0, 0.02]];
-var levelFloor = 0.005, levelCeiling = 1, subsonicCeiling = 0.15, morphMinimumDb = 1;
+var levelFloor = 0.005, levelCeiling = 1, subsonicCeiling = 0.15;
+// The tables' RMS within tableSpreadDb of the loudest (the controller's
+// ruling at 1f's review), and morph 1's share of energy above 4.5 times
+// the pitch at least morphMinimumShare above morph 0's
+var tableSpreadDb = 3, morphMinimumShare = 0.25;
+// The level probe's outputs (strataCheckWaveLevel) a probe
+var probeChannels = 7;
+// The RMS of a probe's left channel and of its highpassed left channel
+// over its window of `seconds`, from its outputs
+var windowRms = { arg values, seconds; [((values[4] - values[3]).max(0) / seconds).sqrt,
+    ((values[6] - values[5]).max(0) / seconds).sqrt] };
+// Whether value is a constant of the def (its constants map value -> index)
+var defHasConstant = { arg defName, value;
+    SynthDescLib.global.at(defName) !? { arg desc; desc.def.constants.keys.any({ arg each; each == value }) } ? false };
 // count frames of a buffer from index, read from the server
 var framesOf = { arg buffer, index, count;
     var condition = Condition(false), values;
@@ -43,15 +56,18 @@ var startWave = { arg bus, group, args;
     Synth(\strataWave, [\out, bus, \attackTime, 0.01, \modBus1, silent, \modBus2, silent, \modBus3, silent] ++ args, group)
 };
 
-// The level probe: from t_reset, the stereo bus's peak, its peak below
-// 8 Hz (two 8 Hz lowpasses), whether a bad value came, and the integral of
-// its left channel's square latched at `from` and at `to` seconds
-SynthDef(\strataCheckWaveLevel, { arg in, out, t_reset = 0, from = 0, to = 2;
+// The level probe (probeChannels outputs): from t_reset, the stereo bus's
+// peak, its peak below 8 Hz (two 8 Hz lowpasses), whether a bad value came,
+// the integral of its left channel's square latched at `from` and at `to`
+// seconds, and the same of its left channel above `high` Hz (two highpasses)
+SynthDef(\strataCheckWaveLevel, { arg in, out, t_reset = 0, from = 0, to = 2, high = 990;
     var sig = In.ar(in, 2), reset = T2A.ar(t_reset), elapsed = Sweep.kr(t_reset, 1);
     var energy = A2K.kr(Integrator.ar(sig[0].squared * SampleDur.ir, 1)), low = LPF.ar(LPF.ar(sig, 8), 8);
+    var highEnergy = A2K.kr(Integrator.ar(HPF.ar(HPF.ar(sig[0], high), high).squared * SampleDur.ir, 1));
     Out.kr(out, [A2K.kr(Peak.ar(sig[0].abs.max(sig[1].abs), reset)), A2K.kr(Peak.ar(low[0].abs.max(low[1].abs), reset)),
         A2K.kr(Peak.ar(CheckBadValues.ar(sig.sum, 0, 0) > 0, reset)),
-        Latch.kr(energy, elapsed >= from), Latch.kr(energy, elapsed >= to)]);
+        Latch.kr(energy, elapsed >= from), Latch.kr(energy, elapsed >= to),
+        Latch.kr(highEnergy, elapsed >= from), Latch.kr(highEnergy, elapsed >= to)]);
 }).add;
 server.sync;
 
@@ -65,30 +81,40 @@ if (engine.respondsTo(\addWaveDef)) { engine.areaCall(\addWaveDef); server.sync 
 // "wave: the bank is eight consecutive buffers holding wavetableBankFrames":
 // waveBankSize buffers of waveTableFrames, consecutive bufnums (VOsc3 reads
 // a table and the next), their frames summing to 0b's wavetableBankFrames,
-// each filled on the server (frames near a table's quarter are not all 0),
-// and \strataWave reads this engine's bank (its first bufnum a constant of
-// the def), as a type after the roster's (voiceTypeDefs)
+// each filled on the server (the 16 frames from an eighth of a table are
+// not all 0), as a type after the roster's (voiceTypeDefs). (That the def
+// reads its engine's bank is proven on the second engine below, whose bank
+// is not at bufnum 0: the def has a 0 of its own)
 {
     var bufnums = bank !? { bank.collect(_.bufnum) } ? [], sizes = bank !? { bank.collect(_.numFrames) } ? [];
     var filled = (bank ? []).collect({ arg buffer;
         framesOf.(buffer, engine.waveTableFrames div: 8, 16).any({ arg value; value.abs > 0.001 }) });
     var reported = serverFrames.(bufnums);
-    var reads = known and: { SynthDescLib.global.at(\strataWave).def.constants.includes(bufnums[0]) };
     check.(known and: { bank.size == engine.waveBankSize } and: { engine.waveBankSize == 8 }
         and: { (bufnums.differentiate.drop(1)).every(_ == 1) }
         and: { sizes.sum == engine.wavetableBankFrames } and: { sizes.every(_ == engine.waveTableFrames) }
-        and: { reported == sizes } and: { filled.every(_ == true) } and: { reads }
+        and: { reported == sizes } and: { filled.every(_ == true) }
         and: { typeIndex >= engine.numVoices },
-        "wave: the bank is eight consecutive buffers holding wavetableBankFrames (bufnums %, frames %, on the server %, filled %, the def reads it %, type %)".format(
-            bufnums, sizes, reported, filled, reads, typeIndex));
+        "wave: the bank is eight consecutive buffers holding wavetableBankFrames (bufnums %, frames %, on the server %, filled %, type %)".format(
+            bufnums, sizes, reported, filled, typeIndex));
 }.value;
 
-// "wave: free leaves no buffer of the bank": a second engine's bank, its
-// bufnums taken first, is freed with the engine: every Buffer freed and the
-// server reports no frames at any of its bufnums
+// "wave: an engine's def reads its own bank": a second engine, whose bank
+// starts past h.engine's (so not at 0, a constant the def has anyway),
+// re-adds \strataWave with its own first bufnum as a constant, and not
+// h.engine's (when that is not 0).
+// "wave: free leaves no buffer of the bank": that bank, its bufnums taken
+// first, is freed with the engine: every Buffer freed and the server
+// reports no frames at any of its bufnums
 {
-    var target = h.startEngine, other = bankOf.(target), bufnums, before, after, freed;
+    var target = h.startEngine, other = bankOf.(target), bufnums, before, after, freed, own, mine;
     bufnums = other !? { other.collect(_.bufnum) } ? [];
+    own = bufnums.notEmpty and: { defHasConstant.(\strataWave, bufnums[0]) };
+    mine = bank !? { bank[0].bufnum };
+    check.(known and: { bufnums.notEmpty } and: { bufnums[0] != 0 } and: { bufnums[0] != mine } and: { own }
+        and: { (mine == 0) or: { defHasConstant.(\strataWave, mine).not } },
+        "wave: an engine's def reads its own bank (the second engine's first bufnum % a constant of the def %; h.engine's %)".format(
+            bufnums[0], own, mine));
     before = serverFrames.(bufnums);
     h.freeEngine(target);
     server.sync;
@@ -111,14 +137,14 @@ if (engine.respondsTo(\addWaveDef)) { engine.areaCall(\addWaveDef); server.sync 
     var results = List.new;
     [110, 2000].do({ arg freq;
         var group = Group.tail(server), buses = cases.collect({ Bus.audio(server, 2) });
-        var levels = Bus.control(server, cases.size * 5), probes;
+        var levels = Bus.control(server, cases.size * probeChannels), probes;
         if (known) { cases.do({ arg args, index; startWave.(buses[index], group, [\freq, freq] ++ args) }) };
         probes = cases.collect({ arg args, index;
-            Synth(\strataCheckWaveLevel, [\in, buses[index], \out, levels.index + (index * 5)], group, \addToTail) });
+            Synth(\strataCheckWaveLevel, [\in, buses[index], \out, levels.index + (index * probeChannels)], group, \addToTail) });
         server.sync; 0.5.wait;
         probes.do(_.set(\t_reset, 1));
         1.5.wait;
-        h.readBus(levels).clump(5).do({ arg values, index; results.add([freq, cases[index], values[0], values[2]]) });
+        h.readBus(levels).clump(probeChannels).do({ arg values, index; results.add([freq, cases[index], values[0], values[2]]) });
         group.free; server.sync; buses.do(_.free); levels.free;
     });
     check.(known and: { results.size == (2 * cases.size) } and: { results.every({ arg each;
@@ -131,7 +157,7 @@ if (engine.respondsTo(\addWaveDef)) { engine.areaCall(\addWaveDef); server.sync 
 // at its defaults at 110 Hz, over 4 s from 2 s after the start (a wavetable
 // of sines has no energy at 0 Hz, and the detune's beating none either)
 {
-    var group = Group.tail(server), bus = Bus.audio(server, 2), levels = Bus.control(server, 5), probe, values;
+    var group = Group.tail(server), bus = Bus.audio(server, 2), levels = Bus.control(server, probeChannels), probe, values;
     if (known) { startWave.(bus, group, [\freq, 110]) };
     probe = Synth(\strataCheckWaveLevel, [\in, bus, \out, levels.index], group, \addToTail);
     server.sync; 2.0.wait;
@@ -144,25 +170,55 @@ if (engine.respondsTo(\addWaveDef)) { engine.areaCall(\addWaveDef); server.sync 
     group.free; server.sync; bus.free; levels.free;
 }.value;
 
-// "wave: morph 0 and 1 both play, and they differ": at 220 Hz with
-// morphDepth 0 (no wander), the RMS of the left channel over the same 2 s
-// window, morph 0 (the sine) against morph 1 (the brightest table), more
-// than morphMinimumDb apart, both above levelFloor
+// "wave: the eight tables play within 3 dB of each other": at 220 Hz, at
+// the defaults but morphDepth 0 (no wander), one \strataWave at each table's
+// place (morph k / (waveBankSize - 1)), the RMS of each left channel over
+// the same 2 s window within tableSpreadDb of the loudest, each above
+// levelFloor. The level at the defaults' morph 0.3 is shown beside them
+// (not checked)
 {
-    var group = Group.tail(server), buses = 2.collect({ Bus.audio(server, 2) }), levels = Bus.control(server, 10);
-    var probes, values, rms, apartDb;
-    if (known) { [0, 1].do({ arg morph, index; startWave.(buses[index], group, [\freq, 220, \morph, morph, \morphDepth, 0]) }) };
+    var size = if (known) { engine.waveBankSize } { 2 };
+    var morphs = ((0 .. (size - 1)) / (size - 1)) ++ [0.3];
+    var group = Group.tail(server), buses = morphs.collect({ Bus.audio(server, 2) });
+    var levels = Bus.control(server, morphs.size * probeChannels), probes, rms, tables, spreadDb;
+    if (known) { morphs.do({ arg morph, index; startWave.(buses[index], group, [\freq, 220, \morph, morph, \morphDepth, 0]) }) };
     probes = buses.collect({ arg bus, index;
-        Synth(\strataCheckWaveLevel, [\in, bus, \out, levels.index + (index * 5), \from, 0.5, \to, 2.5], group, \addToTail) });
+        Synth(\strataCheckWaveLevel, [\in, bus, \out, levels.index + (index * probeChannels), \from, 0.5, \to, 2.5], group, \addToTail) });
     server.sync; 0.2.wait;
     server.makeBundle(0.1, { probes.do(_.set(\t_reset, 1)) });
     3.0.wait;
-    values = h.readBus(levels).clump(5);
-    rms = values.collect({ arg each; ((each[4] - each[3]).max(0) / 2).sqrt });
-    apartDb = (rms[0].max(1e-9) / rms[1].max(1e-9)).ampdb.abs;
-    check.(known and: { rms.every({ arg each; each > levelFloor }) } and: { apartDb > morphMinimumDb },
-        "wave: morph 0 and 1 both play, and they differ (RMS at 220 Hz: morph 0 %, morph 1 %, % dB apart, more than % dB)".format(
-            rms[0].round(0.0001), rms[1].round(0.0001), apartDb.round(0.01), morphMinimumDb));
+    rms = h.readBus(levels).clump(probeChannels).collect({ arg values; windowRms.(values, 2)[0] });
+    tables = rms.drop(-1);
+    spreadDb = (tables.maxItem.max(1e-9) / tables.minItem.max(1e-9)).ampdb;
+    check.(known and: { tables.size == engine.waveBankSize } and: { tables.every({ arg each; each > levelFloor }) }
+        and: { spreadDb <= tableSpreadDb },
+        "wave: the eight tables play within 3 dB of each other (RMS at 220 Hz, morph % : %; % dB from the quietest to the loudest, at most %; at morph 0.3: %)".format(
+            morphs.drop(-1).round(0.001), tables.round(0.0001), spreadDb.round(0.01), tableSpreadDb, rms.last.round(0.0001)));
+    group.free; server.sync; buses.do(_.free); levels.free;
+}.value;
+
+// "wave: morph 0 and 1 both play, and they differ": at 220 Hz with
+// morphDepth 0 (no wander), over the same 2 s window, morph 0 (the sine)
+// against morph 1 (the brightest table): both above levelFloor, and the
+// share of the left channel's energy above the fourth harmonic (two 990 Hz
+// highpasses) at least morphMinimumShare greater at morph 1. Its spectrum
+// is what differs, not its level (the tables play at matched level: the
+// controller's ruling at 1f's review, which replaced a level difference here)
+{
+    var group = Group.tail(server), buses = 2.collect({ Bus.audio(server, 2) }), levels = Bus.control(server, 2 * probeChannels);
+    var probes, rms, shares;
+    if (known) { [0, 1].do({ arg morph, index; startWave.(buses[index], group, [\freq, 220, \morph, morph, \morphDepth, 0]) }) };
+    probes = buses.collect({ arg bus, index;
+        Synth(\strataCheckWaveLevel, [\in, bus, \out, levels.index + (index * probeChannels), \from, 0.5, \to, 2.5, \high, 990],
+            group, \addToTail) });
+    server.sync; 0.2.wait;
+    server.makeBundle(0.1, { probes.do(_.set(\t_reset, 1)) });
+    3.0.wait;
+    rms = h.readBus(levels).clump(probeChannels).collect({ arg values; windowRms.(values, 2) });
+    shares = rms.collect({ arg each; (each[1] / each[0].max(1e-9)).squared });
+    check.(known and: { rms.every({ arg each; each[0] > levelFloor }) } and: { (shares[1] - shares[0]) >= morphMinimumShare },
+        "wave: morph 0 and 1 both play, and they differ (at 220 Hz: RMS morph 0 %, morph 1 %; share of the energy above the fourth harmonic, morph 0 %, morph 1 %, at least % more)".format(
+            rms[0][0].round(0.0001), rms[1][0].round(0.0001), shares[0].round(0.001), shares[1].round(0.001), morphMinimumShare));
     group.free; server.sync; buses.do(_.free); levels.free;
 }.value;
 
@@ -186,14 +242,14 @@ if (engine.respondsTo(\addWaveDef)) { engine.areaCall(\addWaveDef); server.sync 
     defs = notes.collect({ arg synth; synth !? { synth.defName.asSymbol } });
     group = Group.after(engine.voiceGroup);
     buses = slots.collect({ Bus.audio(server, 2) });
-    levels = Bus.control(server, slots.size * 5);
+    levels = Bus.control(server, slots.size * probeChannels);
     notes.do({ arg synth, index; synth !? { synth.set(\out, buses[index]) } });
     probes = slots.collect({ arg slot, index;
-        Synth(\strataCheckWaveLevel, [\in, buses[index], \out, levels.index + (index * 5)], group) });
+        Synth(\strataCheckWaveLevel, [\in, buses[index], \out, levels.index + (index * probeChannels)], group) });
     server.sync; 0.3.wait;
     probes.do(_.set(\t_reset, 1));
     1.0.wait;
-    values = h.readBus(levels).clump(5);
+    values = h.readBus(levels).clump(probeChannels);
     command.(\setVoiceParam, voice, \morph, 0.9);
     server.sync;
     morphs = notes.collect({ arg synth; synth !? { h.getControl(synth, \morph) } });
