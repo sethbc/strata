@@ -3,7 +3,9 @@
 // takes of the pool, and the worst cases (spaced switches, a burst, fast
 // recalls, every voice on three buffer slots, the worst cases with one
 // recording, eight recordings) on norns' 8192 KB pool: 3 MB left on standard,
-// 3.5 MB on high (3 MB on both tiers with eight recordings running).
+// 3.5 MB on high (3 MB on both tiers with eight recordings running), and the
+// three pool cases (1280 KB). Since 3.8 every case runs with every voice on
+// the costliest voice def, and one limit holds every voice def.
 //
 // Everything is measured with allocation probes, as on SuperCollider 3.13
 // (norns' and CI's version, which has no /rtMemoryStatus):
@@ -244,21 +246,21 @@ var checkModulationSizes = {
 // What each voice SynthDef and \strataMod take of the pool (design 3.5
 // §0.2, the measurement 3.5's note pool is sized from): twenty of each,
 // playing to a private bus with every crossmod slot on the silent bus, each
-// line its own (Karplus's two 0.1 s Pluck lines allocate in its first block,
-// which sizeOf waits past). Each voice def's limit (design 3.5 §3.6, the
-// controller's ruling 22) is its size with 3.5's note controls (package 1a,
-// the memory shard on 3.13: 21.9, 19.4, 16.0, 14.3, 16.9, 80.9 and 17.7 KB)
-// plus 2 KB, rounded up to a whole KB, so a reading a probe step (0.85 KB)
-// higher passes and a def that grows by more than a KB or two fails;
-// \strataMod's is package 0b's 5.9 KB plus 4 (docs/notes/engine/memory.md)
-var voiceDefLimitsKB = (strataResonator: 24, strataFM: 22, strataFolder: 18, strataSub: 17,
-    strataPulse: 19, strataKarplus: 83, strataRing: 20, strataMod: 9.9);
+// line its own (Karplus's two Pluck lines are taken in its constructor).
+// Since 3.8 (design §1, ruling 13) one limit holds every voice def,
+// voiceDefLimitKB: any voice may be any type, so every worst case runs with
+// every voice on the costliest def (castVoices), and a def over the limit is
+// made smaller, never excused. \strataMod's is 3.5's 5.9 KB plus 4
+// (docs/notes/engine/memory.md). The sizes are kept in voiceDefSizes and
+// the largest names costliestVoiceDef
+var voiceDefLimitKB = 52, modDefLimitKB = 9.9;
+var voiceDefSizes = (), costliestVoiceDef;
 var checkVoiceSynthSizes = {
     var privateBus = Bus.audio(server, 2), controlBus = Bus.control(server, 1), group = Group.after(engine.processGroup);
     var silent = engine.silentBus.index;
     var defNames = h.voiceDefs ++ [\strataMod];
     defNames.do({ arg name;
-        var desc = SynthDescLib.global.at(name), size, limit = voiceDefLimitsKB[name] ? 0;
+        var desc = SynthDescLib.global.at(name), size, limit = if (name == \strataMod) { modDefLimitKB } { voiceDefLimitKB };
         size = if (desc.isNil) { 0 } {
             sizeOf.({
                 if (name == \strataMod) {
@@ -273,8 +275,49 @@ var checkVoiceSynthSizes = {
             // "\%" would escape the placeholder)
             "memory: % takes % KB of the pool (at most % KB; % UGens; by allocation probes)".format(
                 "\\" ++ name, size.round(0.1), limit, desc !? { desc.def.children.size }));
+        if (name != \strataMod) { voiceDefSizes[name] = size };
     });
+    costliestVoiceDef = h.voiceDefs.maxItem({ arg name; voiceDefSizes[name] });
+    check.(costliestVoiceDef.notNil and: { voiceDefSizes[costliestVoiceDef] > 0 },
+        "memory: the costliest voice def is % (% KB), on every voice in every worst case".format(
+            "\\" ++ costliestVoiceDef, voiceDefSizes[costliestVoiceDef] !? { arg size; size.round(0.1) }));
     group.free; privateBus.free; controlBus.free;
+};
+
+// What one \strataDelay takes of the pool (3.8: its line is two buffers,
+// ordinary RAM, so only its graph is left): twenty nodes on private buses,
+// on one pair of check buffers of the engine's size
+var delayDefLimitKB = 16;
+var checkDelaySize = {
+    var privateBus = Bus.audio(server, 2), group = Group.after(engine.processGroup), line, size;
+    line = 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) });
+    server.sync;
+    size = sizeOf.({ Synth(\strataDelay, [\in, privateBus, \out, privateBus, \bufL, line[0], \bufR, line[1], \mix, 1], group) });
+    check.((size > 0) and: { size <= delayDefLimitKB },
+        "memory: % takes % KB of the pool (at most % KB, by allocation probes)".format("\\strataDelay", size.round(0.1),
+            delayDefLimitKB));
+    group.free; server.sync; line.do(_.free); privateBus.free;
+};
+
+// Every voice of an engine on one voice def (3.8, ruling 13: the worst
+// cases run with every voice on the costliest), and nil puts back the defs
+// it had. Check-only: it writes the engine's voiceSynthDefs, which every
+// reader indexes at use (package 0c gives it a body of setVoiceType). Only
+// with no voice synth playing or releasing (gateVoice would take a
+// releasing one back whatever its def)
+var castDefs = IdentityDictionary.new;
+var castVoices = { arg target, defName;
+    var stray;
+    h.stopAllVoices(target);
+    stray = h.synthNames(target.voiceGroup).select({ arg name; h.voiceDefs.includes(name) });
+    check.(stray.isEmpty, "memory: no voice synth plays or releases when the % tier's voices are cast % (left: %)".format(
+        target.tier, if (defName.isNil) { "back" } { "to \\" ++ defName }, stray));
+    if (defName.notNil) {
+        castDefs[target] = castDefs[target] ? target.voiceSynthDefs.copy;
+        target.numVoices.do({ arg voice; target.voiceSynthDefs.put(voice, defName) });
+    } {
+        castDefs.removeAt(target) !? { arg saved; saved.do({ arg name, voice; target.voiceSynthDefs.put(voice, name) }) };
+    };
 };
 
 // A scenario that errors while the groups are paused still leaves them
@@ -418,15 +461,18 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         command.(\noteExpression, voice, slot, 1.0, 1.0, 0.0, 0.0, 0.0);
         command.(\noteOn, voice, slot, 60.0 + slot, 110.0 * (1 + (slot / 8)), 1.0, 1.0);
     };
-    // [live, cutting] extra notes across every voice, and the live Karplus notes
+    // [live, cutting] extra notes across every voice, and the live notes of
+    // the costliest voice def across every voice
     var poolHeld = {
         var slots = target.areaState[\notes][\slots].collect({ arg each; each.copyToEnd(1) }).flatten;
         [slots.count({ arg record; record[\state] == \live }), slots.count({ arg record; record[\cutting].notNil })]
     };
-    var poolKarplus = {
-        target.areaState[\notes][\slots][5].copyToEnd(1).count({ arg record;
-            (record[\state] == \live) and: { record[\synth] !? { arg synth; synth.defName.asSymbol == \strataKarplus } ? false } })
+    var poolCostliest = {
+        target.areaState[\notes][\slots].collect({ arg each; each.copyToEnd(1) }).flatten.count({ arg record;
+            (record[\state] == \live) and: { record[\synth] !? { arg synth; synth.defName.asSymbol == costliestVoiceDef } ? false } })
     };
+    var costliestName = "\\" ++ costliestVoiceDef;
+    var poolSpread = [2, 2, 2, 1, 1, 7, 1];
     var engineGroups = [target.voiceGroup, target.processGroup];
     var cutHoldSeconds = 0.01, voicesHeld = false;
     var pendingHolds = List.new((target.numVoices * 2) + target.notePoolMax);   // [hold, cut synth] node pairs probeHeadroom made and has not yet released
@@ -514,8 +560,11 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         probeBus.setAll(0);
         2.5.wait; server.sync;
     };
+    // every voice on the costliest voice def through every scenario (3.8,
+    // ruling 13), put back however the scenarios end
+    castVoices.(target, costliestVoiceDef);
     // every scenario runs guarded: an error in one still resumes the groups and frees the holds (#218)
-    guardedHold.value(engineGroups, pendingHolds, {
+    { guardedHold.value(engineGroups, pendingHolds, {
         probeBus.setAll(0); server.sync;
         startModulation.value;
         server.sync; 0.1.wait;
@@ -670,40 +719,76 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
         server.sync;
         // synth -> buffer -> synth with the pool full of voice-synth notes,
-        // Karplus's seven first (the costliest note), then nine on the other
-        // voices: the first switch cuts them and restarts them as buffer
-        // notes, the second (held) cuts those and restarts them as voice
-        // synths, so at the probes the pool holds sixteen live voice synth
-        // notes and sixteen cutting buffer notes, beside the voices' own
-        // synths of the existing case (a ring grain synth and a voice synth
-        // cutting per voice)
+        // every one of the costliest def (every voice is): the first switch
+        // cuts them and restarts them as buffer notes, the second (held)
+        // cuts those and restarts them as voice synths, so at the probes the
+        // pool holds sixteen live voice synth notes and sixteen cutting
+        // buffer notes, beside the voices' own synths of the existing case
+        // (a ring grain synth and a voice synth cutting per voice)
         startAll.value;
         // (a freeze an earlier case engaged is lifted first, as Lua's start
         // sends each voice's freeze: these voices' notes are voice synths)
         target.numVoices.do({ arg voice; command.(\setGrainParam, voice, \freeze, 0.0) });
-        poolNotes.([2, 2, 2, 1, 1, 7, 1]).do({ arg pair; playPoolNote.(*pair) });
+        poolNotes.(poolSpread).do({ arg pair; playPoolNote.(*pair) });
         server.sync; 0.2.wait;
         switchAll.({ arg voice; voice + 1 });
         0.2.wait; server.sync;
         holdVoices.value;
         switchAll.({ 0 });
         engage.value(command);
-        probeHeadroom.("seven voices at grain size 0.5, switched synth -> buffer -> synth 0.2 s apart, sixteen voice synth notes (Karplus's seven first)",
+        probeHeadroom.("seven voices at grain size 0.5, switched synth -> buffer -> synth 0.2 s apart, sixteen voice synth notes of the costliest def (%)".format(costliestName),
             "worst case with the pool full", 5, { arg fits, freeKB;
-                var held = poolHeld.value, karplus = poolKarplus.value, names = h.synthNames(target.context.xg);
+                var held = poolHeld.value, costliest = poolCostliest.value, names = h.synthNames(target.context.xg);
                 var counts = [names.count(_ == \strataGrainBuf), names.count(_ == \strataGrainRing),
-                    names.count({ arg name; h.voiceDefs.includes(name) }), names.count(_ == \strataKarplus)];
-                poolFigures.add([target.tier, "synth -> buffer -> synth, Karplus's seven first", freeKB.round(1)]);
-                check.(fits and: { held == [16, 16] } and: { karplus == 7 },
-                    "memory: synth -> buffer -> synth with the pool full of voice-synth notes, Karplus's seven first, leaves 1280 KB (% tier: about % KB free; live and cutting notes %, Karplus notes %)".format(
-                        target.tier, freeKB.round(10), held, karplus));
+                    names.count({ arg name; h.voiceDefs.includes(name) }), names.count(_ == costliestVoiceDef)];
+                poolFigures.add([target.tier, "synth -> buffer -> synth, sixteen voice synth notes", freeKB.round(1)]);
+                check.(fits and: { held == [16, 16] } and: { costliest == 16 },
+                    "memory: synth -> buffer -> synth with the pool full of voice-synth notes of the costliest def (%) leaves 1280 KB (% tier: about % KB free; live and cutting notes %, notes of the costliest def %)".format(
+                        costliestName, target.tier, freeKB.round(10), held, costliest));
                 // on the server at the probe: the voices' own (a ring grain
                 // synth live and one cutting, the buffer grain synth fading, a
                 // voice synth live and one cutting, each voice) and the pool's
-                // 16 cutting buffer notes and 16 live voice synth notes (seven
-                // Karplus, beside the Karplus voice's own two)
-                check.(counts == [23, 14, 30, 9],
-                    "memory: synth -> buffer -> synth with the pool full holds its synths at the probes: 23 strataGrainBuf (7 fading, 16 cutting notes), 14 strataGrainRing, 30 voice synths (14 the voices', 16 notes), 9 strataKarplus (% tier: %)".format(
+                // 16 cutting buffer notes and 16 live voice synth notes, every
+                // voice synth of the costliest def
+                check.(counts == [23, 14, 30, 30],
+                    "memory: synth -> buffer -> synth with the pool full holds its synths at the probes: 23 strataGrainBuf (7 fading, 16 cutting notes), 14 strataGrainRing, 30 voice synths (14 the voices', 16 notes), 30 of the costliest def (% tier: %)".format(
+                        target.tier, counts));
+            }, (2 * target.numVoices) + target.notePoolMax);
+        h.stopAllVoices(target);
+        // The third pool case (3.8, ruling 14): the second case's steps up
+        // to its last switch, then inside the hold each of the sixteen notes
+        // released and played again (a noteOn on a releasing slot cuts its
+        // tail and frees the buffer note cutting there), so each slot holds
+        // a live and a cutting voice synth of the costliest def: what a type
+        // switch under a full held chord leaves, as an upper bound (a real
+        // switch cuts the old def)
+        startAll.value;
+        target.numVoices.do({ arg voice; command.(\setGrainParam, voice, \freeze, 0.0) });
+        poolNotes.(poolSpread).do({ arg pair; playPoolNote.(*pair) });
+        server.sync; 0.2.wait;
+        switchAll.({ arg voice; voice + 1 });
+        0.2.wait; server.sync;
+        holdVoices.value;
+        switchAll.({ 0 });
+        poolNotes.(poolSpread).do({ arg pair; command.(\noteOff, pair[0], pair[1], 0) });
+        poolNotes.(poolSpread).do({ arg pair; playPoolNote.(*pair) });
+        engage.value(command);
+        probeHeadroom.("seven voices at grain size 0.5, switched synth -> buffer -> synth 0.2 s apart, sixteen voice synth notes of the costliest def (%) live and cutting".format(costliestName),
+            "worst case with the pool full", 5, { arg fits, freeKB;
+                var held = poolHeld.value, costliest = poolCostliest.value, names = h.synthNames(target.context.xg);
+                var counts = [names.count(_ == \strataGrainBuf), names.count(_ == \strataGrainRing),
+                    names.count({ arg name; h.voiceDefs.includes(name) }), names.count(_ == costliestVoiceDef)];
+                poolFigures.add([target.tier, "synth -> buffer -> synth, every pool slot's voice synth live and cutting", freeKB.round(1)]);
+                check.(fits and: { held == [16, 16] } and: { costliest == 16 },
+                    "memory: synth -> buffer -> synth with every pool slot's voice synth live and cutting (a type switch under a full held chord) leaves 1280 KB (% tier: about % KB free; live and cutting notes %, live notes of the costliest def (%) %)".format(
+                        target.tier, freeKB.round(10), held, costliestName, costliest));
+                // on the server at the probe: the voices' buffer grain synths
+                // fading (7), their ring grain synths live and cutting (14),
+                // and 46 voice synths, every one of the costliest def: the
+                // voices' 7 live and 7 cutting, the pool's 16 live and 16
+                // cutting
+                check.(counts == [7, 14, 46, 46],
+                    "memory: the third pool case holds its synths at the probes: 7 strataGrainBuf (fading), 14 strataGrainRing, 46 voice synths (14 the voices', 32 notes), 46 of the costliest def (% tier: %)".format(
                         target.tier, counts));
             }, (2 * target.numVoices) + target.notePoolMax);
         h.stopAllVoices(target);
@@ -711,7 +796,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         stopModulation.value;
         server.sync; 0.6.wait;
         probeBus.free;
-    });
+    }) }.protect({ castVoices.(target, nil) });
     figures
 };
 
@@ -749,7 +834,7 @@ var checkHighWorstCase = {
             .count({ arg writer; writer.defName.asSymbol == \strataRingWriteSpectral }));
     });
     check.((spectral[0] == high.numVoices) and: { spectral[1] == high.numVoices } and: { spectral[3] == high.numVoices }
-        and: { spectral[9] == high.numVoices },
+        and: { spectral[9] == high.numVoices } and: { spectral[10] == high.numVoices },
         "memory: the high run engages spectral freeze on every voice (spectral writers per scenario: %)".format(spectral));
     engine = h.replaceEngine(nil);
     check.(engine.tier == \standard, "memory: the default engine is back for the areas that follow");
@@ -780,13 +865,14 @@ checkGrainSynthSizes.value;
 checkRecordSizes.value;
 checkModulationSizes.value;
 checkVoiceSynthSizes.value;
+checkDelaySize.value;
 check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
     "memory: the default engine runs tier standard (idle, about % KB of the pool free; a small probe % KB)".format(
         idleFreeKB.round(10), probeKB.round(0.1)));
 checkGuardResumes.value;
 checkMemoryWorstCase.(engine, 12, "3 MB");
 checkHighWorstCase.value;
-check.((modulationRunning.size == 20) and: { modulationRunning.every({ arg each; each[2] == [6, 1, 1, 16] }) },
+check.((modulationRunning.size == 22) and: { modulationRunning.every({ arg each; each[2] == [6, 1, 1, 16] }) },
     "memory: six engine LFOs, scatter on every voice and destination and sixteen envelope routes run through every worst case on both tiers (% probes; cases without them: %)".format(
         modulationRunning.size, modulationRunning.reject({ arg each; each[2] == [6, 1, 1, 16] }).collect({ arg each; [each[0], each[2]] })));
 check.((recordingFits.size == 2) and: { recordingFits.every({ arg each; each[1] }) },
