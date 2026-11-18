@@ -133,13 +133,13 @@ jobs:
   # (docs/status.md), not a run to repeat.
   engine-shard:
     name: engine (${{ matrix.areas }})
-    # Covers every setup step at its own limit (list 2, restore 2, install 4
-    # and save 2 minutes: 600 s), a minute for the steps with none (the job's
-    # set up, the checkouts and JACK: 15 s at most in #786's measured runs)
-    # and the check's own 600 s: 1260 s, so a hung step that has a limit fails
-    # by its own name (the norns clone and the steps after the check have
-    # none, #790; docs/checks.md, Installs); the default is 360
-    timeout-minutes: 21
+    # The sum of every step's own limit (#790: the two checkouts 2 minutes
+    # each, list 2, restore 2, install 4, save 2, JACK 2, the check 11, the
+    # three refusal checks 2, 2 and 3: 34 minutes) and a minute for the
+    # runner's own steps (set up job, the checkout's post step, complete job:
+    # 6 s at most in five runs), so a hung step fails by its own name before
+    # the job's limit (docs/checks.md, Installs); the default is 360
+    timeout-minutes: 35
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -180,8 +180,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+        # 9 s at most in five runs of seven shards; so for each short step below
+        timeout-minutes: 2
 
       - name: Check out norns
+        # 2 s at most
+        timeout-minutes: 2
         run: |
           git clone --filter=blob:none --no-checkout https://github.com/monome/norns.git "$NORNS_DIR"
           git -C "$NORNS_DIR" checkout "$NORNS_REF"
@@ -308,17 +312,27 @@ jobs:
 
       # scsynth talks to JACK; a dummy driver needs no sound card
       - name: Start JACK (dummy driver)
+        # 4 s at most (its own wait gives up after 10 s)
+        timeout-minutes: 2
         run: |
           jackd --no-realtime -d dummy -r 48000 -p 1024 > "$RUNNER_TEMP/jackd.log" 2>&1 &
           for i in $(seq 1 20); do jack_lsp > /dev/null 2>&1 && exit 0; sleep 0.5; done
           cat "$RUNNER_TEMP/jackd.log"; exit 1
 
+      # 360 s at most in five runs. timeout signals the runner at 600 s; the
+      # runner's own stop (sclang's tree, then up to 10 s for its scsynth)
+      # ends it within about 11 s, and a process that ignores the signal is
+      # killed 15 s after it: 615 s at most, inside the step's 660
       - name: Engine check
-        run: SCLANG="$(command -v sclang)" ENGINE_CHECK_TIMEOUT=570 timeout 600 test/run_engine_check.sh "$NORNS_DIR"
+        run: SCLANG="$(command -v sclang)" ENGINE_CHECK_TIMEOUT=570 timeout --kill-after=15 600 test/run_engine_check.sh "$NORNS_DIR"
+        timeout-minutes: 11
 
       # A failed precondition must end the run with its own line and nothing
       # after it (#485): the unknown area's failure line, and no ERROR line
+      # 2 s at most; at its ENGINE_CHECK_TIMEOUT of 60 s, the runner's 10 s
+      # kill-after and 10 s for a scsynth to end, about 80 s
       - name: Engine check refuses an unknown area cleanly
+        timeout-minutes: 2
         run: |
           status=0
           out=$(STRATA_ENGINE_CHECK_AREAS=nosucharea SCLANG="$(command -v sclang)" ENGINE_CHECK_TIMEOUT=60 test/run_engine_check.sh "$NORNS_DIR" 2>&1) || status=$?
@@ -330,8 +344,10 @@ jobs:
       # A port that already has a server must fail the run at once, naming the
       # port, and must leave that server running (#471). These two steps run
       # on one shard only, record, waveform, onsets, delay and shimmer's (well under its timeout).
+      # 6 s at most; 3 s and the 80 s above at its 60 s
       - name: Engine check refuses a port that already has a server
         if: matrix.areas == 'record,waveform,onsets,delay,shimmer'
+        timeout-minutes: 2
         run: |
           scsynth -u 57391 > "$RUNNER_TEMP/scsynth-other.log" 2>&1 &
           other=$!
@@ -348,8 +364,11 @@ jobs:
 
       # A server that cannot boot (the port held by a socket that never
       # answers) must fail the run within seconds, naming the cause (#472)
+      # 7 s at most; 1 s, its ENGINE_CHECK_TIMEOUT of 100 s, 10 s and 10 s
+      # at most at its own limit: about 121 s
       - name: Engine check fails at once when scsynth cannot boot
         if: matrix.areas == 'record,waveform,onsets,delay,shimmer'
+        timeout-minutes: 3
         run: |
           python3 -c 'import socket, time; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", 57392)); time.sleep(120)' &
           holder=$!

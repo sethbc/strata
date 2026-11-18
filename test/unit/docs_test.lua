@@ -1214,7 +1214,7 @@ test("every CI job has a timeout", function()
   end
   -- lua-suite runs one shard of a Lua suite a runner, in parallel on its
   -- cores (3.8's package x5); lua gathers them, as engine gathers the shards
-  local expected = { ["lua-suite"] = 10, lua = 5, ["engine-shard"] = 21, engine = 5 }
+  local expected = { ["lua-suite"] = 10, lua = 5, ["engine-shard"] = 35, engine = 5 }
   for _, name in ipairs(order) do
     assert_true(jobs[name].minutes ~= nil, "job " .. name .. " has a timeout-minutes at its own indent")
     assert_true(expected[name] ~= nil, "job " .. name .. " has no expected timeout in this test")
@@ -1230,8 +1230,9 @@ test("every CI job has a timeout", function()
   assert_true(jobs["lua-suite"].text:find("lua: [lua5.3, luajit]", 1, true) ~= nil, "lua-suite runs Lua 5.3 and LuaJIT")
   assert_true(jobs["lua-suite"].text:find("${{ matrix.lua }} test/run.lua", 1, true) ~= nil, "each runs the suite")
   assert_true(jobs["lua-suite"].text:find("lua5.3 test/sync_check.lua", 1, true) ~= nil, "lua-suite runs the sync check")
-  -- the shard's timeout covers its engine check plus setup
-  local seconds = tonumber(jobs["engine-shard"].text:match("name: Engine check\n%s+run:[^\n]-timeout (%d+) "))
+  -- the shard's timeout covers its engine check plus setup (#790: the
+  -- check's timeout has a kill-after)
+  local seconds = tonumber(jobs["engine-shard"].text:match("name: Engine check\n%s+run:[^\n]-timeout %-%-kill%-after=%d+ (%d+) "))
   assert_true(seconds ~= nil, "the engine check step has a timeout in seconds")
   local setup_seconds = 180
   assert_true(seconds + setup_seconds <= jobs["engine-shard"].minutes * 60,
@@ -1414,22 +1415,30 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
     end
     if job.name == "engine-shard" then
       -- the installs' limits leave the check its own 600 s within the job's
-      local check = tonumber(job.text:match("name: Engine check\n%s+run:[^\n]-timeout (%d+) ") or "")
-      assert_true(check ~= nil, "the engine check step has a timeout in seconds")
+      local kill, check = job.text:match("name: Engine check\n%s+run:[^\n]-timeout %-%-kill%-after=(%d+) (%d+) ")
+      kill, check = tonumber(kill or ""), tonumber(check or "")
+      assert_true(check ~= nil, "the engine check step has a timeout in seconds, with a --kill-after")
       assert_true(apt_seconds + (check or 0) <= job.minutes * 60,
         "the shard's installs (" .. apt_seconds .. " s) and its check (" .. tostring(check) .. " s) fit its " .. job.minutes .. " minutes")
-      -- #786: every step before the check at its own limit (the cache's
-      -- restore and save too), the steps with none, and the check's own
-      -- limit fit the job's, so a hung setup step with a limit fails by its own name
-      local setup, limited = CI_WORKFLOW.SECONDS.unlimited_steps, {}
+      -- #786, #790: every step has a limit of its own (the checkouts, the
+      -- cache's restore and save, JACK's start, the check and the refusal
+      -- checks after it too), and the job's limit is their sum and the
+      -- allowance for the runner's own steps, so a hung step fails by its
+      -- own name, never by the job's limit
+      local total, unlimited, check_step = CI_WORKFLOW.SECONDS.runner_steps, {}, nil
       for _, step in ipairs(job.steps) do
-        if step.name == "Engine check" then break end
-        if step.minutes then setup = setup + step.minutes * 60; limited[#limited + 1] = tostring(step.name) end
+        if step.name == "Engine check" then check_step = step end
+        if step.minutes then total = total + step.minutes * 60 else unlimited[#unlimited + 1] = tostring(step.name or step.uses) end
       end
-      assert_true(#limited >= 4, "the list, restore, install and save have limits: " .. table.concat(limited, ", "))
-      assert_true(setup + (check or 0) <= job.minutes * 60, "the shard's setup at its limits (" .. setup
-        .. " s, " .. CI_WORKFLOW.SECONDS.unlimited_steps .. " of them for the steps with none) and its check ("
-        .. tostring(check) .. " s) fit its " .. job.minutes .. " minutes")
+      assert_equal(table.concat(unlimited, ", "), "", "the shard's steps with no timeout-minutes of their own")
+      assert_equal(total, job.minutes * 60, "the shard's limit, in seconds, against its steps' limits and "
+        .. CI_WORKFLOW.SECONDS.runner_steps .. " s for the runner's own steps")
+      -- the check's timeout, and its kill of a process that ignores the
+      -- signal, both land inside the check step's own limit
+      assert_true(kill ~= nil and kill >= 1, "the check's timeout kills a process that ignores its signal (--kill-after)")
+      assert_true(check_step and check_step.minutes and (check or 0) + (kill or 0) < check_step.minutes * 60,
+        "the check's timeout (" .. tostring(check) .. " s) and its kill-after (" .. tostring(kill)
+        .. " s) end inside the check step's " .. tostring(check_step and check_step.minutes) .. " minutes")
     end
   end
   assert_true(installing["lua-suite"] and installing["engine-shard"], "both the Lua suites and the engine shards install with apt-get")
@@ -1440,10 +1449,12 @@ end)
 -- each) and the allowances the limits are sized with. After its downloads
 -- the install refills the kept folder and unpacks: 23 s at most after the
 -- second mirror's download, 28 s at most for a whole cached install; the
--- allowance is about twice that. The steps with no limit of their own (the
--- job's set up, the two checkouts, JACK's start, the job's end) took 15 s
--- at most together; the allowance is four times that
-CI_WORKFLOW.SECONDS = { after_downloads = 60, unlimited_steps = 60 }
+-- allowance is about twice that. #790: every step of the shard has a limit
+-- of its own; the runner's own steps (set up job, the checkout's post step,
+-- complete job), which no limit can name, took 6 s at most together in
+-- five runs of seven shards (44367155756 to 44385889124); the allowance is
+-- a minute
+CI_WORKFLOW.SECONDS = { after_downloads = 60, runner_steps = 60 }
 
 -- #786: the workflow's text with `old` (found exactly once, so a mutation
 -- never passes by missing its place) replaced by `new`
@@ -2037,7 +2048,7 @@ test("the engine check's default timeout fits a full local run and CI keeps 570 
   local step = workflow:match("%- name: Engine check\n(.-)\n\n") or workflow:match("%- name: Engine check\n(.*)$")
   assert_true(step ~= nil, "the workflow has an Engine check step")
   assert_true(step:find("ENGINE_CHECK_TIMEOUT=570", 1, true) ~= nil, "CI passes ENGINE_CHECK_TIMEOUT=570")
-  assert_true(step:find("timeout 600", 1, true) ~= nil, "CI keeps its 600 s limit around the shard")
+  assert_true(step:find("timeout %-%-kill%-after=%d+ 600 ") ~= nil, "CI keeps its 600 s limit around the shard, with a kill after it (#790)")
   assert_true(read_repo_file("test/run_engine_check.sh"):find("ENGINE_CHECK_TIMEOUT:-1800", 1, true) ~= nil,
     "the runner's default timeout is 1800 s")
   assert_true(read_repo_file("test/engine_check.scd"):find("{ 1770 }", 1, true) ~= nil,
