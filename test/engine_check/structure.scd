@@ -83,7 +83,7 @@ var engineLeft = { arg target;
         ++ (record[\headBuses] ? []) ++ (record[\voiceTaps] ? []) ++ [record[\tapSink], record[\idleHead]]
         ++ [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].collect({ arg name; mix[name] })
         ++ (mix[\synthPaths] ? []) ++ (mix[\otherPaths] ? []);
-    var buffers = target.envBuffers ++ target.buffersL ++ target.buffersR
+    var buffers = (target.areaState[\grains][\windowBank] ? []) ++ target.buffersL ++ target.buffersR
         ++ (rings[\voiceL] ? []) ++ (rings[\voiceR] ? []) ++ [rings[\inputL], rings[\inputR], target.areaState[\scale][\buffer]]
         ++ (target.areaState[\waveform][\peakBuffers] ? []);
     [childrenOf.(target.context.xg).size, buses.count({ arg bus; bus.notNil and: { bus.index.notNil } }),
@@ -496,7 +496,8 @@ server.sync; 0.2.wait;
 freeDuringPendingFades.(other, h.stereoPath);
 server.sync;
 check.(synthNames.(other.context.xg).size == 0, "free removes every engine node");
-check.(other.envBuffers.every({ arg buffer; buffer.bufnum.isNil }), "free frees the envelope buffers");
+check.((other.areaState[\grains][\windowBank] ? []).notEmpty
+    and: { other.areaState[\grains][\windowBank].every({ arg buffer; buffer.bufnum.isNil }) }, "free frees the window bank");
 check.((other.buffersL ++ other.buffersR).every({ arg buffer; buffer.bufnum.isNil }), "free frees the buffer slots");
 check.(([other.inputBus, other.silentBus, other.mainBus, other.filterBus, other.delayBus, other.reverbBus]
     ++ other.granBuses ++ other.modBuses ++ other.recordFrameBuses).every({ arg bus; bus.index.isNil }),

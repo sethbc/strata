@@ -139,7 +139,7 @@ local function section_cases(S)
       drawn = { "buf_pos", "buf_rate", "buf_scan", "loop_start", "loop_length" } },
     { section = "input", source = "input", cursor = "history", drawn = { "history" } },
     { section = "grain", source = "synth", cursor = "grain_mode",
-      drawn = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env" } },
+      drawn = { "grain_size", "grain_density", "grain_pitch", "grain_spread" } },
     { section = "crossmod", source = "synth", cursor = "mod_source_2", drawn = crossmod },
     { section = "mix", source = "synth", cursor = "amp", drawn = { "pan" } },
     { section = "variation", source = "synth", cursor = "intervals",
@@ -451,15 +451,15 @@ test("ALT+K2 held resets the field to its default; ALT+K3 locks", function()
   assert_true(math.abs(params:get("v1_grain_spread") - 0.9) > 0.01, "away from 0.9")
   assert_equal(local_value("undo"), nil, "a reset holds no undo")
   -- an option row too
-  put_cursor(S, "v1_grain_env")
-  params:set("v1_grain_env", 3)
+  put_cursor(S, "v1_grain_cloud")
+  params:set("v1_grain_cloud", 2)
   key(2, 1); context.clock.run_for(HELD_SECONDS); key(2, 0)
-  assert_equal(params:get("v1_grain_env"), param_default("v1_grain_env"), "an option row resets")
+  assert_equal(params:get("v1_grain_cloud"), param_default("v1_grain_cloud"), "an option row resets")
   -- a locked voice's row resets too (a locked voice can still be edited)
   toggle_lock(1)
-  params:set("v1_grain_env", 3)
+  params:set("v1_grain_cloud", 2)
   key(2, 1); context.clock.run_for(HELD_SECONDS); key(2, 0)
-  assert_equal(params:get("v1_grain_env"), param_default("v1_grain_env"), "a locked voice's row resets")
+  assert_equal(params:get("v1_grain_cloud"), param_default("v1_grain_cloud"), "a locked voice's row resets")
   toggle_lock(1)
   assert_true(not S.locked[1], "voice 1 starts unlocked")
   tap(3)
@@ -468,9 +468,9 @@ test("ALT+K2 held resets the field to its default; ALT+K3 locks", function()
   assert_true(not S.locked[1], "and unlocks it")
   key(1, 0)
   -- the plain keys never reset or lock
-  params:set("v1_grain_env", 3)
+  params:set("v1_grain_cloud", 2)
   tap(2); tap(3)
-  assert_equal(params:get("v1_grain_env"), 3, "K2 does not reset")
+  assert_equal(params:get("v1_grain_cloud"), 2, "K2 does not reset")
   assert_true(not S.locked[1], "K3 does not lock")
 end)
 
@@ -848,7 +848,7 @@ test("undo after a source switch restores the grain params (#557)", function()
   local context, S = started_voice_page()
   if not S.voices[1].active then toggle_voice(1) end
   assert_true(S.voices[1].active, "voice 1 runs")
-  local grain_ids = { "v1_grain_size", "v1_grain_density", "v1_grain_pitch", "v1_grain_spread", "v1_grain_env" }
+  local grain_ids = { "v1_grain_size", "v1_grain_density", "v1_grain_pitch", "v1_grain_spread" }
   local before = {}
   for _, id in ipairs(grain_ids) do before[id] = params:get(id) end
   put_cursor(S, "v1_grain_size")

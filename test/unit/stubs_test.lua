@@ -1705,7 +1705,7 @@ test("the stub reads a constant given as a method", function()
   assert_equal(stubs.parse_engine_spec("bufferStateStride { ^100 }").buffer_state_stride, 100)
   assert_equal(stubs.parse_engine_spec("var <>bufferSeconds = 16;").buffer_seconds, 16, "a writable var")
   assert_equal(engine_spec.buffer_state_stride, 1000, "the engine's stride")
-  assert_true(engine_spec.grain_params.envShape, "a grainParamHandlers key is a grain param")
+  assert_true(engine_spec.grain_params.history, "a grainParamHandlers key is a grain param")
   assert_true(engine_spec.grain_params.bufPos and engine_spec.grain_params.posSpread, "both grainDefs' controls are grain params")
 end)
 
@@ -1721,7 +1721,7 @@ test("the engine stub rejects the controls the engine sets itself (#458)", funct
     local ok, message = pcall(engine[command], ...)
     return not ok and tostring(message):find('"' .. name .. '"', 1, true) ~= nil
   end
-  for _, name in ipairs({ "kill", "gate", "out", "bufnumL", "bufnumR", "bufFrames", "bufRateScale", "envBuf", "bufL", "bufR",
+  for _, name in ipairs({ "kill", "gate", "out", "bufnumL", "bufnumR", "bufFrames", "bufRateScale", "envBuf", "windowBank", "bufL", "bufR",
       "phaseBus", "ringLevel", "rateLevel", "t_trig", "pan", "bend", "modBus1", "modBus3", "modFreqAmt1", "modFreqAmt3" }) do
     assert_true(refused("setGrainParam", 0, name, 1), "setGrainParam refuses " .. name)
   end
@@ -1730,7 +1730,7 @@ test("the engine stub rejects the controls the engine sets itself (#458)", funct
     assert_true(refused("setVoiceParam", 0, name, 1), "setVoiceParam refuses " .. name)
   end
   -- what Lua sends is still taken: FM's modFreq is no crossmod amount
-  engine.setGrainParam(0, "grainSize", 0.1); engine.setGrainParam(0, "envShape", 0); engine.setGrainParam(0, "history", 0)
+  engine.setGrainParam(0, "grainSize", 0.1); engine.setGrainParam(0, "windowShape", 0.57); engine.setGrainParam(0, "history", 0)
   engine.setVoiceParam(0, "pan", 0); engine.setVoiceParam(0, "bend", 1); engine.setVoiceParam(1, "modFreq", 0.5)
   -- the stub reads the engine's own list: a control taken off it is a name again
   local source = h.engine_sources()

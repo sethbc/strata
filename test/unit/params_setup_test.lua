@@ -32,49 +32,57 @@ test("every voice param has a menu param, ordered by param_order", function()
   end
 end)
 
-test("grain envelope param: options, default, scenes, never mutated or randomized", function()
+-- 3.8 1c (design §4.1, §4.4): the grain envelope is gone, no param and no
+-- scene key; the cloud is the grain's option now: its options, default,
+-- discrete scene key, the fill of a scene without it, its validation, and
+-- no mutation or randomize moves it
+test("grain_env is gone; the grain cloud param: options, default, scenes, never mutated or randomized", function()
   local context = load_strata(); finish_startup(context)
-  for voice_idx = 1, 7 do
-    local param = params:lookup_param("v" .. voice_idx .. "_grain_env")
-    assert_equal(param.t, params.tOPTION, "voice " .. voice_idx .. " grain_env is an option")
-    assert_equal(param.count, 5, "five envelope shapes")
-    assert_equal(params:get("v" .. voice_idx .. "_grain_env"), 1, "default hann")
-    assert_equal(local_value("voices")[voice_idx].values.grain_env, 1, "voices table holds the index")
-  end
-  local names = {}
-  for index = 1, 5 do params:set("v1_grain_env", index); names[index] = params:string("v1_grain_env") end
-  assert_equal(table.concat(names, ","), "hann,sine,perc,linen,trap")
-  -- the scene key's default is its param's, and it is discrete
   local S = local_value("S")
   for voice_idx = 1, 7 do
-    local _, by_key = S.lib.params_setup.voice_scene_keys(voice_idx)
-    assert_equal(by_key.grain_env.default, 1, "voice " .. voice_idx .. " grain_env scene default: hann")
-    assert_equal(table.concat(by_key.grain_env.range, ","), "1,5", "five shapes")
+    assert_equal(params.lookup["v" .. voice_idx .. "_grain_env"], nil, "voice " .. voice_idx .. " has no grain_env")
+    assert_equal(S.voices[voice_idx].values.grain_env, nil, "and holds none")
+    local param = params:lookup_param("v" .. voice_idx .. "_grain_cloud")
+    assert_equal(param.t, params.tOPTION, "voice " .. voice_idx .. " grain_cloud is an option")
+    assert_equal(param.count, 2, "two clouds")
+    assert_equal(params:get("v" .. voice_idx .. "_grain_cloud"), 1, "default density")
+    assert_equal(S.voices[voice_idx].values.grain_cloud, 1, "voices table holds the index")
   end
-  -- a scene without the envelope is filled with hann
-  params:set("v2_grain_env", 4)
+  local names = {}
+  for index = 1, 2 do params:set("v1_grain_cloud", index); names[index] = params:string("v1_grain_cloud") end
+  assert_equal(table.concat(names, ","), "density,overlap")
+  params:set("v1_grain_cloud", 1)
+  -- the scene key's default is its param's, and it is discrete
+  for voice_idx = 1, 7 do
+    local _, by_key = S.lib.params_setup.voice_scene_keys(voice_idx)
+    assert_equal(by_key.grain_env, nil, "voice " .. voice_idx .. ": no grain_env scene key")
+    assert_equal(by_key.grain_cloud.default, 1, "voice " .. voice_idx .. " grain_cloud scene default: density")
+    assert_equal(table.concat(by_key.grain_cloud.range, ","), "1,2", "two clouds")
+  end
+  -- a scene without the cloud is filled with density
+  params:set("v2_grain_cloud", 2)
   capture_scene(3)
   local scene = local_value("scenes")[3]
-  for voice_idx = 1, 7 do scene.data.voices[voice_idx].values.grain_env = nil end
+  for voice_idx = 1, 7 do scene.data.voices[voice_idx].values.grain_cloud = nil end
   fill_scene(scene)
-  assert_equal(scene.data.voices[2].values.grain_env, 1, "missing env migrates to hann")
-  assert_true(validate_scene(scene), "migrated scene validates")
-  scene.data.voices[2].values.grain_env = 2.5
-  assert_true(not validate_scene(scene), "a fractional envelope index is rejected")
-  scene.data.voices[2].values.grain_env = 0
-  assert_true(not validate_scene(scene), "envelope index 0 is rejected")
-  scene.data.voices[2].values.grain_env = 1
-  -- mutation and randomize leave the envelope alone
+  assert_equal(scene.data.voices[2].values.grain_cloud, 1, "a missing cloud fills to density")
+  assert_true(validate_scene(scene), "the filled scene validates")
+  scene.data.voices[2].values.grain_cloud = 1.5
+  assert_true(not validate_scene(scene), "a fractional cloud index is rejected")
+  scene.data.voices[2].values.grain_cloud = 0
+  assert_true(not validate_scene(scene), "cloud index 0 is rejected")
+  scene.data.voices[2].values.grain_cloud = 1
+  -- mutation and randomize leave the cloud alone
   for voice_idx = 1, 7 do
-    if not local_value("voices")[voice_idx].active then toggle_voice(voice_idx) end
-    params:set("v" .. voice_idx .. "_grain_env", 4)
+    if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
+    params:set("v" .. voice_idx .. "_grain_cloud", 2)
   end
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
   math.randomseed(5)
   for _ = 1, 50 do gentle_mutate() end
   for voice_idx = 1, 7 do randomize_voice(voice_idx) end
   for voice_idx = 1, 7 do
-    assert_equal(params:get("v" .. voice_idx .. "_grain_env"), 4, "voice " .. voice_idx .. " envelope unchanged")
+    assert_equal(params:get("v" .. voice_idx .. "_grain_cloud"), 2, "voice " .. voice_idx .. " cloud unchanged")
   end
 end)
 
@@ -1055,6 +1063,28 @@ local PARAM_FIXTURE_ALLOWED = {
   {kind = "default", id = "reverb_mix", default = 0.43, why = "1a: the reverb's level starts at 0.3 / 0.7 (design section 7.1)"},
   {kind = "name", id = "delay_mix", name = "delay level", why = "1a: the delay's mix is its return's level"},
   {kind = "name", id = "reverb_mix", name = "reverb level", why = "1a: the reverb's mix is its return's level"},
+  -- 1c: the grain envelope goes; the window's shape and skew, probability,
+  -- the cloud and its overlap and the pan wander join each voice's extras
+  -- (design §4.1, §4.2, §4.4, §4.5); t is the fixture's type code (3 a control, 2 an option:
+  -- params is not loaded when this list is built)
+  {kind = "removed", id = "v<v>_grain_env", why = "1c: the five grain envelopes are gone (design §4.1)"},
+  {kind = "added", id = "v<v>_grain_shape", after = "voice <v> extras", why = "1c: the window's shape (design §4.1)",
+    record = {t = 3, name = "grain shape", default = 0.57, min = 0, max = 1, warp = "lin", step = 0.01,
+      quantum = 0.01, units = "", string = "0.57"}},
+  {kind = "added", id = "v<v>_grain_skew", after = "v<v>_grain_shape", why = "1c: the window's skew (design §4.1)",
+    record = {t = 3, name = "grain skew", default = 0, min = -1, max = 1, warp = "lin", step = 0.01,
+      quantum = 0.01, units = "", string = "0.00"}},
+  {kind = "added", id = "v<v>_grain_prob", after = "v<v>_grain_skew", why = "1c: the grains' probability (design §4.2)",
+    record = {t = 3, name = "grain prob", default = 100, min = 0, max = 100, warp = "lin", step = 1,
+      quantum = 0.01, units = "%", string = "100 %"}},
+  {kind = "added", id = "v<v>_grain_cloud", after = "v<v>_grain_prob", why = "1c: the cloud mode (design §4.4)",
+    record = {t = 2, name = "grain cloud", default = 1, options = {"density", "overlap"}}},
+  {kind = "added", id = "v<v>_grain_overlap", after = "v<v>_grain_cloud", why = "1c: the overlap cloud's overlap (design §4.4)",
+    record = {t = 3, name = "grain overlap", default = 2, min = 0.25, max = 16, warp = "exp", step = 0,
+      quantum = 0.01, units = "x", string = "2.00 x"}},
+  {kind = "added", id = "v<v>_pan_wander", after = "v<v>_grain_overlap", why = "1c: the pan wander (design §4.5)",
+    record = {t = 3, name = "pan wander", default = 50, min = 0, max = 100, warp = "lin", step = 1,
+      quantum = 0.01, units = "%", string = "50 %"}},
 }
 -- 2b: an LFO's destination is its home routing in the matrix (design §4);
 -- its six LFOs' entries follow the list (an LFO is no voice token)
@@ -1445,25 +1475,24 @@ test("every voice_scene_keys default equals its param's default", function()
   assert_true(not pcall(S.lib.params_setup.voice_scene_keys, 0), "no voice 0")
 end)
 
--- The groundwork before 3.8 (package 2a, ruling 14): the grain envelope
--- and mode go out through send_param_to_engine, as an option index - 1,
--- and only while the voice runs
-test("grain_env and grain_mode send envShape and grainMode x - 1, only while running", function()
+-- The groundwork before 3.8 (package 2a, ruling 14): the grain mode goes
+-- out through send_param_to_engine, as an option index - 1, and only while
+-- the voice runs (3.8 1c: the envelope it went with is gone)
+test("grain_mode sends grainMode x - 1, only while running", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   assert_true(S.voices[1].active and not S.voices[3].active, "voice 1 runs, voice 3 is stopped")
-  assert_true(S.engine_senders.v1_grain_env ~= nil and S.engine_senders.v1_grain_mode ~= nil,
-    "both have an engine sender")
+  assert_true(S.engine_senders.v1_grain_mode ~= nil, "it has an engine sender")
   context.clear_engine_calls()
-  params:set("v1_grain_env", 3); params:set("v1_grain_mode", 2)
+  params:set("v1_grain_mode", 2)
   local sent = {}
   for _, call in ipairs(context.calls_named("setGrainParam")) do sent[#sent + 1] = table.concat(call.args, " ") end
-  assert_equal(table.concat(sent, ","), "0 envShape 2,0 grainMode 1", "each once, as an index from 0")
-  assert_equal(S.engine_param_values.v1_grain_env, 3, "recorded as sent")
+  assert_equal(table.concat(sent, ","), "0 grainMode 1", "once, as an index from 0")
+  assert_equal(S.engine_param_values.v1_grain_mode, 2, "recorded as sent")
   context.clear_engine_calls()
-  params:set("v3_grain_env", 4); params:set("v3_grain_mode", 2)
+  params:set("v3_grain_mode", 2)
   assert_equal(#context.calls_named("setGrainParam"), 0, "a stopped voice gets nothing")
-  assert_equal(S.voices[3].values.grain_env, 4, "but stores it")
+  assert_equal(S.voices[3].values.grain_mode, 2, "but stores it")
 end)
 
 test("mod_source sends setModSource through engine_mod_source, only while running", function()

@@ -341,12 +341,12 @@ var checkRegateReportsStarts = { arg voice;
 });
 
 // Every voice started, voice 0 with the grain params the checks below
-// carry over (pitch 2, position spread 0.7, the first envelope buffer)
+// carry over (pitch 2, position spread 0.7, a window shape of 0.25)
 h.startAllVoices;
 silentIndex = engine.silentBus.index;
 command.(\setGrainParam, 0, \pitchShift, 2.0);
 command.(\setGrainParam, 0, \posSpread, 0.7);
-command.(\setGrainParam, 0, \envShape, 1);
+command.(\setGrainParam, 0, \windowShape, 0.25);
 server.sync;
 
 // ---- Audio sources: replace, never stack ----
@@ -367,7 +367,7 @@ check.(grainBuf.defName == \strataGrainBuf, "voice 1 now runs strataGrainBuf");
 check.(getControl.(grainBuf, \bufnumL) == engine.buffersL[2].bufnum, "source 3 reads slot 3 (index 2)");
 check.(getControl.(grainBuf, \bufPos) == 0.25, "grain controls set before the switch carry over (bufPos)");
 check.(getControl.(grainBuf, \pitchShift) == 2.0, "grain controls carry over (pitchShift)");
-check.(getControl.(grainBuf, \envBuf) == engine.envBuffers[0].bufnum, "grain controls carry over (envBuf)");
+check.(getControl.(grainBuf, \windowShape) == 0.25, "grain controls carry over (windowShape)");
 check.(getControl.(grainBuf, \out) == engine.voicePathBus(0, 3).index, "strataGrainBuf writes the voice's other path");
 check.(getControl.(stageOf.(0), \mirrorOut) == engine.granBuses[0].index, "the stage mirrors the other path into the voice bus");
 check.(getControl.(grainBuf, \bufFrames) == 0, "an empty slot plays with bufFrames 0");
@@ -608,18 +608,18 @@ check.((after[1] === oldTrio[1]) and: { getControl.(after[1], \bufFrames) == 110
 // grain synths finish within the grain release (no orphans)
 oldTrio = voiceTrio.(3);  // Sub: 12 s voice release
 command.(\setGrainParam, 3, \grainMode, 1);
-command.(\setGrainParam, 3, \envShape, 2);
+command.(\setGrainParam, 3, \windowShape, 0.75);
 command.(\voiceOff, 3);
 command.(\setGrainSource, 3, 9);  // the input; only recorded: the voice is stopped
 command.(\voiceOn, 3, 40.0, 0.25, 0.0, 0.1, 10.0, 1.0); server.sync;
 after = voiceTrio.(3);
 // voiceOn merges its values into the voice's grain controls, so a new
 // grain synth starts in the voice's grain mode (no stray continuous grains; M2)
-check.((getControl.(after[1], \grainMode) == 1) and: { getControl.(after[1], \envBuf) == engine.envBuffers[1].bufnum }
+check.((getControl.(after[1], \grainMode) == 1) and: { getControl.(after[1], \windowShape) == 0.75 }
     and: { getControl.(after[1], \grainSize).equalWithPrecision(0.1) },
-    "a grain synth built by voiceOn keeps the voice's grain mode and envelope, with voiceOn's size");
+    "a grain synth built by voiceOn keeps the voice's grain mode and window, with voiceOn's size");
 command.(\setGrainParam, 3, \grainMode, 0);
-command.(\setGrainParam, 3, \envShape, 0);
+command.(\setGrainParam, 3, \windowShape, 0.57);
 check.(after[0].isNil and: { after[1].defName == \strataGrainRing } and: { after[1] !== oldTrio[1] }
     and: { getControl.(after[1], \bufL) == engine.ringBuffersFor(3, engine.inputSource)[0].bufnum }
     and: { after[2] === oldTrio[2] }, "voiceOn after a source switch in the release builds the new grain synth, re-gates the mod synth");
@@ -806,7 +806,7 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
         [[\setGrainSource, voice, slot + 1],
             [\setGrainParam, voice, \grainSize, 0.1], [\setGrainParam, voice, \grainDensity, 20.0],
             [\setGrainParam, voice, \pitchShift, 1.0], [\setGrainParam, voice, \posSpread, 0.0],
-            [\setGrainParam, voice, \envShape, 0.0], [\setGrainParam, voice, \grainMode, mode],
+            [\setGrainParam, voice, \windowShape, 0.57], [\setGrainParam, voice, \grainMode, mode],
             [\setGrainParam, voice, \bufPos, bufPos], [\setGrainParam, voice, \bufRate, 1.0],
             [\setGrainParam, voice, \bufScan, 0.0]]
     };

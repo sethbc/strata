@@ -619,16 +619,16 @@ test("an arc ring's whole-step turn is an arc touch", function()
   local rows = voice_page_rows(S.selected_voice)
   local option_index
   for index, row in ipairs(rows) do
-    if row.kind == "option" and row.param_id:match("_grain_env$") then option_index = index end
+    if row.kind == "option" and row.param_id:match("_grain_mode$") then option_index = index end
   end
-  assert_true(option_index ~= nil, "VOICE has the grain envelope row")
+  assert_true(option_index ~= nil, "VOICE has the grain mode row")
   S.lib.ui_cursors.place("voice", option_index)
   local _, row_indices = voice_page_group(rows, option_index)
   local ring
   for n, index in ipairs(row_indices) do if index == option_index then ring = n end end
   local before = params:get(rows[option_index].param_id)
-  context.arc.turn(1, ring, before < #S.constants.GRAIN_ENV_OPTIONS and 20 or -20)
-  assert_true(params:get(rows[option_index].param_id) ~= before, "the ring stepped the envelope")
+  context.arc.turn(1, ring, before < #S.constants.GRAIN_MODE_OPTIONS and 20 or -20)
+  assert_true(params:get(rows[option_index].param_id) ~= before, "the ring stepped the mode")
   assert_equal(take(), rows[option_index].param_id .. ":arc", "VOICE's whole-step ring")
 end)
 
@@ -745,14 +745,14 @@ test("VOICE rings follow the cursor's group of four", function()
     assert_ring_fraction(device, ring, param_fraction(param_id), "VOICE ring " .. ring .. " (" .. param_id .. ")")
   end
   -- an option row in the next group: one whole value per 20 ticks
-  place_voice_cursor(row_of("v1_grain_env"))
-  local env = params:get("v1_grain_env")
+  place_voice_cursor(row_of("v1_grain_mode"))
+  local env = params:get("v1_grain_mode")
   context.arc.turn(1, 3, 19)
-  assert_equal(params:get("v1_grain_env"), env, "19 ticks do not step the envelope")
+  assert_equal(params:get("v1_grain_mode"), env, "19 ticks do not step the mode")
   context.arc.turn(1, 3, 1)
-  assert_equal(params:get("v1_grain_env"), env + 1, "the 20th steps it once")
+  assert_equal(params:get("v1_grain_mode"), env + 1, "the 20th steps it once")
   context.arc.turn(1, 3, -20)
-  assert_equal(params:get("v1_grain_env"), env, "20 back step it back")
+  assert_equal(params:get("v1_grain_mode"), env, "20 back step it back")
   -- a number row (a mod source) steps the same way
   local function ring_of(param_id)
     place_voice_cursor(row_of(param_id))

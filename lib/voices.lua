@@ -33,7 +33,6 @@ return function(S)
   -- every voice's other grain, buffer and crossmod defaults
   local SHARED_DEFAULTS = {
     grain_pitch = 1,
-    grain_env = 1,  -- GRAIN_ENV_OPTIONS index
     grain_mode = 1,  -- GRAIN_MODE_OPTIONS index
     buf_pos = 0,  -- buffer sources: position in the valid region (0-1)
     buf_rate = 1,
@@ -104,7 +103,6 @@ return function(S)
   -- later modules, called only then
   do
     local NUM_MOD_SLOTS = S.constants.NUM_MOD_SLOTS
-    local GRAIN_ENV_OPTIONS = S.constants.GRAIN_ENV_OPTIONS
     local GRAIN_MODE_OPTIONS = S.constants.GRAIN_MODE_OPTIONS
     local function add_param(...) S.lib.params_setup.add_voice_param(...) end
     local function option_index(x) return x - 1 end
@@ -267,14 +265,16 @@ return function(S)
     }
 
     -- The source (an option: always sent, so the engine knows it before
-    -- the voice starts; it is a voice field, no value) and the nine grain
+    -- the voice starts; it is a voice field, no value) and the eight grain
     -- and buffer params, under "granular", sent with setGrainParam in their
-    -- fixed order. The envelope and mode are option indexes (discrete,
-    -- sent as index - 1, no start value). MAIN's randomize draws the buffer
-    -- params on a buffer source, then grain size and pitch; the mutations
-    -- move the buffer params on a buffer source, then grain size, pitch
-    -- and spread. The faders: a buffer source's buffer params, level and
-    -- pan, then the six grain params, then an input source's level and pan
+    -- fixed order. The mode is an option index (discrete, sent as index -
+    -- 1, no start value). MAIN's randomize draws the buffer params on a
+    -- buffer source, then grain size and pitch; the mutations move the
+    -- buffer params on a buffer source, then grain size, pitch and spread.
+    -- The faders: a buffer source's buffer params, level and pan, then the
+    -- grain params with 3.8's window shape and skew (lib/grain.lua's keys,
+    -- where 3.7's envelope was: ruling 31), then an input source's level
+    -- and pan
     local BUFFER_DRAWS = {
       buf_pos = function() return math.random() end,
       buf_rate = function() return 2 ^ (math.random() * 2 - 1) end,  -- 0.5-2, even in octaves
@@ -293,7 +293,7 @@ return function(S)
     local grain_record
     grain_record = {
       name = "grain",
-      count = 10,
+      count = 9,
       separator = "granular",
       add = function(voice_idx)
         local voice = S.voices[voice_idx]
@@ -346,8 +346,6 @@ return function(S)
           action = function(x) if not S.drift_writing then S.grain_pitch_base[voice_idx] = x end end})
         add_param(voice_idx, grain_record, "grain_spread", {type = "control", name = "position spread",
           controlspec = controlspec.new(0, 1, "lin", 0.01, values.grain_spread)})
-        add_param(voice_idx, grain_record, "grain_env", {type = "option", name = "grain envelope",
-          options = GRAIN_ENV_OPTIONS, default = values.grain_env})
         add_param(voice_idx, grain_record, "grain_mode", {type = "option", name = "grain mode",
           options = GRAIN_MODE_OPTIONS, default = values.grain_mode})
       end,
@@ -356,21 +354,20 @@ return function(S)
         grain_density = {name = "grainDensity", value = function(x) return x * engine_param_value("master_density") end},
         grain_pitch = "pitchShift",
         grain_spread = "posSpread",
-        grain_env = {name = "envShape", value = option_index, carry = false},
         grain_mode = {name = "grainMode", value = option_index, carry = false},
         buf_pos = "bufPos",
         buf_rate = "bufRate",
         buf_scan = "bufScan",
       },
-      send_order = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode",
+      send_order = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_mode",
         "buf_pos", "buf_rate", "buf_scan"},
-      discrete = {grain_env = {1, #GRAIN_ENV_OPTIONS}, grain_mode = {1, #GRAIN_MODE_OPTIONS}},
+      discrete = {grain_mode = {1, #GRAIN_MODE_OPTIONS}},
       scene_keys = true,  -- every value its add added (the source is a voice field)
       voice_rows = {section = "grain", before = "mix",
-        rows = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}},
+        rows = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_mode"}},
       fader = {
         {keys = buffer_and_level_keys, when = uses_buffer},
-        {keys = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode"}},
+        {keys = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_shape", "grain_skew", "grain_mode"}},
         {keys = function(voice_idx) return voice_level_fader_keys(voice_idx) end, when = uses_input},
       },
       main_randomize = {

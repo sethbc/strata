@@ -138,9 +138,11 @@ var checkGrainSynthSizes = {
         synths.do(_.free); server.sync;
         (before - after) * probeKB / count
     });
-    // (88 KB is 3.3's, 3.4's and 3.5's limit: design 3.3 Question 1)
-    check.(sizes.every({ arg size; (size > 0) and: { size < 88 } }),
-        "memory: each grain synth takes under 88 KB of the pool (% KB, by allocation probes; 3.2's copies, with their filter and sends: % KB)".format(
+    // (94 KB since 3.8's 1c: its largest measure, \strataGrainBuf's 91.8 KB
+    // on 3.13, plus 2 KB, rounded up, at most 97 (plan Global Constraints);
+    // 88 KB was 3.3's to 3.7's, design 3.3 Question 1)
+    check.(sizes.every({ arg size; (size > 0) and: { size < 94 } }),
+        "memory: each grain synth takes under 94 KB of the pool (% KB, by allocation probes; 3.2's copies, with their filter and sends: % KB)".format(
             [grainDefs, sizes.round(0.1)].flop.collect({ arg pair; "% %".format(*pair) }).join(", "),
             sizes32.round(0.1)));
     // the stage's size (design 3.3 §0c.6): under 42 KB since 3.4, where 3.3

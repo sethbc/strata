@@ -1087,8 +1087,8 @@ return function(S)
   -- record's keys sorted, in registration order (synth, grain, crossmod),
   -- then every other record's scene keys sorted together, so a recall sets
   -- freq before freeze and loop_length before loop_start. range {min, max}
-  -- marks a discrete key (the record's discrete: the grain envelope and
-  -- mode, the mod sources, ...), limits a record's scene_ranges. solo and
+  -- marks a discrete key (the record's discrete: the grain mode and
+  -- cloud, the mod sources, ...), limits a record's scene_ranges. solo and
   -- note_cap are no scene keys (their records give no scene_defaults)
   local SYNTH_RECORD = "synth"
 

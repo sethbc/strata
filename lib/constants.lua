@@ -52,11 +52,6 @@ local SCRUB = {release_seconds = 0.08, window_seconds = 0.1, max_glide_seconds =
 local STANDARD_PERFORMANCE = {tier = "standard", buffer_seconds = STANDARD_BUFFER_SECONDS, max_grains = 128,
   history_seconds = 16}
 
--- Grain envelope shapes (v<i>_grain_env option order). Option n is sent to
--- the engine as envShape n - 1: 0 = GrainIn's built-in Hann, 1-4 = the
--- engine's envelope buffers
-local GRAIN_ENV_OPTIONS = {"hann", "sine", "perc", "linen", "trap"}
-
 -- Grain modes (v<i>_grain_mode option order), sent as grainMode n - 1:
 -- 0 = continuous (grain density grains per second), 1 = triggered (one grain
 -- per retrigger: pattern steps and MIDI notes)
@@ -305,7 +300,6 @@ return {
   FAST_MOD_NOTE_SLOTS = 1,    -- Fast-modulation note slots per voice: setFastOffset's 0..FAST_MOD_NOTE_SLOTS - 1 (engine fastModNoteSlots; 3.5 keeps 1: per-note values are controls on the note's own synth)
   NOTE_SLOTS = 8,  -- Notes per voice: slot 1 the voice's own, 2-8 from the pool (engine noteSlots)
   NOTE_POOL = {max = 16, standard = 4, high = 8},  -- Extra notes all voices share: the checked maximum (engine notePoolMax) and each tier's default
-  GRAIN_ENV_OPTIONS = GRAIN_ENV_OPTIONS,
   GRAIN_MODE_OPTIONS = GRAIN_MODE_OPTIONS,
   SOURCE_SYNTH = SOURCE_SYNTH,
   SOURCE_INPUT = SOURCE_INPUT,

@@ -15,9 +15,9 @@
 var engine = h.engine, server = h.server;
 var check = { arg condition, message; h.check(condition, message) };
 var command = { arg name ... args; h.command(name, *args) };
-var probeGroup, quietBus, nowBus, readOut, rectEnv, timecode, logRates, logDurs, grainLog, startTimecodeVoice;
+var probeGroup, quietBus, nowBus, readOut, rectEnv, timecode, logRates, logDurs, logEnds, grainLog, startTimecodeVoice;
 var grains, rates, semitones, majorMask = 2741, majorOffsets, before, after, state, bufferOffsets;
-var rampPath, rampFile, rampFrames, scaleNote, leftPath, peakBus, peakProbe, levels, ratioDb, logFrames = 128, sentinel = -1000;
+var rampPath, rampFile, rampFrames, scaleNote, leftPath, peakBus, peakProbe, levels, ratioDb, logFrames = 256, sentinel = -1000;
 var varyControls = [\reverseProb, \pitchJitter, \panJitter, \sizeJitter, \intervalCount, \intervalProb, \quantize,
     \scaleNote] ++ (1..8).collect({ arg index; ("interval" ++ index).asSymbol });
 
@@ -27,8 +27,9 @@ SynthDef(\strataCheckVariationTimecode, { arg out, now;
     Out.ar(now, time);
 }).add;
 // One frame per grain, at its end: its rate into rates, its length (s)
-// into durs. Frame BufFrames - 1 takes every other sample's write
-SynthDef(\strataCheckGrainLog, { arg in, rates, durs;
+// into durs, and when it ended (s since the log started) into ends. Frame
+// BufFrames - 1 takes every other sample's write
+SynthDef(\strataCheckGrainLog, { arg in, rates, durs, ends;
     var sig = In.ar(in, 2);
     var on = sig[1] > 0.05;
     var read = sig[0] / sig[1].max(0.001);
@@ -39,6 +40,7 @@ SynthDef(\strataCheckGrainLog, { arg in, rates, durs;
     var index = Select.ar(ended, [DC.ar(BufFrames.kr(rates) - 1), PulseCount.ar(ended) - 1]);
     BufWr.ar(Delay1.ar(rate), rates, index, 0);
     BufWr.ar(Delay1.ar(elapsed), durs, index, 0);
+    BufWr.ar(Delay1.ar(Sweep.ar(0, 1)), ends, index, 0);
 }).add;
 // The grain SynthDefs hold scaleBuffer's bufnum as a constant, and every
 // engine built on this server re-adds them with its own: an earlier area's
@@ -55,28 +57,29 @@ peakBus = Bus.control(server, 2);
 rectEnv = Buffer.loadCollection(server, Array.fill(1024, 1.0));
 logRates = Buffer.alloc(server, logFrames, 1);
 logDurs = Buffer.alloc(server, logFrames, 1);
+logEnds = Buffer.alloc(server, logFrames, 1);
 server.sync;
 
-// The grains a voice (engine voice 0 by default) plays while seconds pass: [rate, length] per grain,
+// The grains a voice (engine voice 0 by default) plays while seconds pass: [rate, length, end] per grain,
 // the first left out (it may have started before the log)
 grainLog = { arg seconds, voice = 0;
-    var log, values = [nil, nil];
-    [logRates, logDurs].do({ arg buffer; buffer.fill(0, logFrames, sentinel) });
+    var log, values = [nil, nil, nil];
+    [logRates, logDurs, logEnds].do({ arg buffer; buffer.fill(0, logFrames, sentinel) });
     server.sync;
     engine.synths[engine.grainKey(voice)].set(\out, readOut.index);
-    log = Synth(\strataCheckGrainLog, [\in, readOut, \rates, logRates, \durs, logDurs], probeGroup);
+    log = Synth(\strataCheckGrainLog, [\in, readOut, \rates, logRates, \durs, logDurs, \ends, logEnds], probeGroup);
     seconds.wait;
     log.free;
     engine.synths[engine.grainKey(voice)].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);
     h.check(h.getControl(engine.synths[engine.grainKey(voice)], \out) == engine.voicePathBus(voice, engine.grainSource[voice]).index,
         "variation: a grain synth's out is restored to its own path (voice %)".format(voice));
     server.sync;
-    [logRates, logDurs].do({ arg buffer, index;
+    [logRates, logDurs, logEnds].do({ arg buffer, index;
         var condition = Condition(false);
         buffer.loadToFloatArray(action: { arg array; values[index] = array; condition.test = true; condition.signal });
         h.awaitReply(condition);
     });
-    [values[0].copyRange(0, logFrames - 2), values[1].copyRange(0, logFrames - 2)].flop
+    [values[0].copyRange(0, logFrames - 2), values[1].copyRange(0, logFrames - 2), values[2].copyRange(0, logFrames - 2)].flop
         .select({ arg pair; pair[0] != sentinel }).drop(1)
 };
 // Voice voice on source with its synth (if any) played elsewhere, its
@@ -195,8 +198,224 @@ rates = grains.collect({ arg pair; pair[1] });
 check.((grains.size >= 8) and: { rates.maxItem <= 0.505 } and: { rates.maxItem >= 0.495 } and: { rates.minItem < 0.49 },
     "variation: sizeJitter never makes a grain longer than 0.5 s (lengths %)".format(rates.collect(_.round(0.001))));
 command.(\setGrainParam, 0, \sizeJitter, 0.0);
+
+// ---- 3.8's arpeggiator step (design §4.3) ----
+// intervals 0, 12 and 24 (rates 1, 2 and 4), five 0.1 s grains a second:
+// with arpOn 1 each grain plays the next of the three in turn (the step is
+// read at a control block's start, so a grain may play the step before its
+// own: the order holds, a grain late), with arpFold 1 there and back; a
+// grain grainProb drops never advances the step; with arpOn 0 the draw is
+// today's
+{
+    var cycle = [1, 2, 4], folded = [1, 2, 4, 2];
+    // (2 %: the rates are an octave apart, and a ring grain at 4 in triggered
+    // mode lasts a third of its size, too short to read to 0.3 %)
+    var near = { arg rate, target; (rate / target - 1).abs < 0.02 };
+    var place = { arg rate, list; list.detectIndex({ arg target; near.(rate, target) }) };
+    // whether the rates follow list in turn from some place in it
+    var inTurn = { arg rates, list;
+        list.size.collect({ arg start; rates.every({ arg rate, index; near.(rate, list.wrapAt(start + index)) }) }).any(_.value)
+    };
+    var steps = { arg rates; rates.collect({ arg rate; place.(rate, cycle) ? -1 }) }, gaps;
+    command.(\setGrainParam, 0, \grainSize, 0.1);
+    command.(\setGrainParam, 0, \grainDensity, 5.0);
+    [[1, 0.0], [2, 12.0], [3, 24.0]].do({ arg pair; command.(\setGrainParam, 0, ("interval" ++ pair[0]).asSymbol, pair[1]) });
+    command.(\setGrainParam, 0, \intervalCount, 3.0);
+    command.(\setGrainParam, 0, \arpOn, 1.0);
+    0.5.wait;
+    rates = grainLog.(3.0).collect(_.first);
+    check.((rates.size >= 10) and: { inTurn.(rates, cycle) },
+        "variation: arpOn 1, intervals 0, 12, 24, count 3: rates cycle 1, 2, 4 (a lag of one grain allowed; rates %)".format(
+            rates.collect(_.round(0.001))));
+    command.(\setGrainParam, 0, \arpFold, 1.0);
+    0.5.wait;
+    rates = grainLog.(3.0).collect(_.first);
+    check.((rates.size >= 10) and: { inTurn.(rates, folded) },
+        "variation: arpFold 1: 1, 2, 4, 2, 1 (rates %)".format(rates.collect(_.round(0.001))));
+    command.(\setGrainParam, 0, \arpFold, 0.0);
+    command.(\setGrainParam, 0, \grainProb, 0.5);
+    0.5.wait;
+    grains = grainLog.(10.0);
+    rates = grains.collect(_.first);
+    // each grain that sounds plays the step after the last one that
+    // sounded; the check means something only when some two sounding
+    // grains are a number of triggers apart that is no multiple of three
+    // (dropped grains that advanced the step would then show), the gaps
+    // read from when each grain ended, 0.2 s a trigger at density 5
+    gaps = grains.collect(_.last).differentiate.drop(1).collect({ arg seconds; (seconds * 5).round.asInteger });
+    check.((rates.size >= 12) and: { gaps.any({ arg gap; (gap % 3) != 0 }) }
+        and: { steps.(rates).slide(2, 1).clump(2).every({ arg pair; (pair[0] >= 0) and: { pair[1] == ((pair[0] + 1) % 3) } }) },
+        "variation: a dropped grain does not advance the step (grainProb 0.5; rates %; triggers between sounding grains %)".format(
+            rates.collect(_.round(0.001)), gaps));
+    command.(\setGrainParam, 0, \grainProb, 1.0);
+    // the order wherever a grain starts in a control block (fix round 1):
+    // at density 20 from a fresh voiceOn (a grain synth's Impulse fires on
+    // its first sample, so at 2400 samples a grain its starts alternate
+    // between a block's first sample and its middle), then at 13 a second
+    // (3692.3 samples a grain: a start's place in the block drifts through
+    // the block, its first sample included) over 130 grains, the cycle and
+    // the fold each: every grain the same step, its own or the one before,
+    // never a step skipped or played twice. 0.04 s grains, so none overlap
+    [[cycle, 0, "1, 2, 4"], [folded, 1, "1, 2, 4, 2, 1"]].do({ arg each;
+        var list = each[0], fold = each[1], label = each[2];
+        command.(\setGrainParam, 0, \arpFold, fold);
+        command.(\voiceOff, 0);
+        // until the grain synth has ended (a voiceOn would re-gate it)
+        h.waitFor({ engine.releasingSynths[0].values.every({ arg synth; synth.defName != \strataGrainRing })
+            and: { engine.synths[engine.grainKey(0)].isNil } }, 5);
+        startTimecodeVoice.(0, 0, 0.04, 20.0, 1.0);
+        0.5.wait;
+        rates = grainLog.(2.0).collect(_.first);
+        check.((rates.size >= 24) and: { inTurn.(rates, list) },
+            "variation: the arpeggio holds its order at density 20 from a fresh voiceOn (arpFold %: %, % grains; rates %)".format(
+                fold, label, rates.size, rates.collect(_.round(0.001))));
+        command.(\setGrainParam, 0, \grainDensity, 13.0);
+        0.3.wait;
+        rates = grainLog.(10.5).collect(_.first);
+        check.((rates.size >= 130) and: { inTurn.(rates, list) },
+            "variation: the arpeggio skips and repeats no step at 13 grains a second over 130 grains (arpFold %: %, % grains; first breaks at %)".format(
+                fold, label, rates.size, list.size.collect({ arg start;
+                    rates.detectIndex({ arg rate, index; near.(rate, list.wrapAt(start + index)).not }) }).reject(_.isNil).maxItem));
+    });
+    // ... and across grains on a block's first sample and grains inside
+    // one: a retrigger's grain starts on its block's first sample (T2A),
+    // a continuous grain mostly inside its block, so the cycle and the
+    // fold run on through continuous grains (13 a second, each inside its
+    // block: at 5 a second, 9600 samples, every grain fell on a block's
+    // first sample too, so the modes could not differ), six retriggers
+    // 0.15 s apart, continuous grains, six retriggers and continuous
+    // grains again: one rule for every grain, no step skipped or repeated
+    // where the mode changes
+    [[cycle, 0, "1, 2, 4"], [folded, 1, "1, 2, 4, 2, 1"]].do({ arg each;
+        var list = each[0], fold = each[1], label = each[2], log;
+        command.(\setGrainParam, 0, \arpFold, fold);
+        command.(\setGrainParam, 0, \grainDensity, 13.0);
+        0.3.wait;
+        log = Routine({
+            2.do({
+                0.9.wait;
+                command.(\setGrainParam, 0, \grainMode, 1);
+                6.do({ arg index; server.makeBundle(0.1 + (index * 0.15), { command.(\retrigger, 0, 1.0) }) });
+                1.1.wait;
+                command.(\setGrainParam, 0, \grainMode, 0);
+            });
+        }).play;
+        rates = grainLog.(5.5).collect(_.first);
+        log.stop;
+        command.(\setGrainParam, 0, \grainMode, 0);
+        check.((rates.size >= 20) and: { inTurn.(rates, list) },
+            "variation: the arpeggio holds its order across retriggered grains (on a block's first sample) and continuous ones (arpFold %: %, % grains; rates %)".format(
+                fold, label, rates.size, rates.collect(_.round(0.001))));
+    });
+    command.(\setGrainParam, 0, \arpFold, 0.0);
+    command.(\setGrainParam, 0, \grainSize, 0.1);
+    command.(\setGrainParam, 0, \grainDensity, 5.0);
+    command.(\setGrainParam, 0, \arpOn, 0.0);
+    0.5.wait;
+    rates = grainLog.(4.0).collect(_.first);
+    check.((rates.size >= 12) and: { rates.every({ arg rate; place.(rate, cycle).notNil }) }
+        and: { cycle.every({ arg target; rates.any({ arg rate; near.(rate, target) }) }) } and: { inTurn.(rates, cycle).not },
+        "variation: arpOn 0 draws as today: each grain one of the three at random (rates %)".format(rates.collect(_.round(0.001))));
+    command.(\setGrainParam, 0, \intervalCount, 0.0);
+    command.(\setGrainParam, 0, \grainDensity, 20.0);
+}.value;
+
 command.(\voiceOff, 0);
 timecode.free;
+
+// ---- 3.8's probability and the overlap cloud (design §4.2, §4.4) ----
+// Voice 3 on a slot of DC, every grain through an envelope that is 1 for
+// four frames near its start and 0 elsewhere (one blip as each grain
+// starts, at every size the checks use), on a private bus: a counter counts
+// the blips in a window the server times, so it counts the grains started
+// however they overlap
+{
+    var voice = 2, slot = 2, path = h.tempDir +/+ "variation-dc.wav", countBus = Bus.control(server, 1);
+    var blip = Buffer.loadCollection(server, [0.0, 1.0, 1.0, 1.0, 1.0] ++ Array.fill(1019, 0.0)), counter, count, counts;
+    SynthDef(\strataCheckGrainCount, { arg in, out, seconds = 1, t_reset = 0;
+        var reset = T2A.ar(t_reset), open = Sweep.ar(reset, 1) < seconds;
+        Out.kr(out, A2K.kr(PulseCount.ar((In.ar(in, 2).abs.sum > 1e-4) * open, reset)));
+    }).add;
+    h.writeTestFile(path, server.sampleRate, (2 * server.sampleRate).asInteger, [1.0, 1.0]);
+    command.(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
+    command.(\setGrainSource, voice, slot + 1);
+    command.(\voiceOn, voice, 100.0, 0.5, 0.0, 0.01, 20.0, 1.0);
+    server.sync;
+    [[\posSpread, 0.0], [\panSpread, 0.0], [\bufPos, 0.25], [\bufScan, 0.0]].do({ arg pair; command.(\setGrainParam, voice, *pair) });
+    engine.synths[engine.grainKey(voice)].set(\out, readOut.index, \envBuf, blip.bufnum);
+    counter = Synth(\strataCheckGrainCount, [\in, readOut, \out, countBus], probeGroup);
+    server.sync; 0.3.wait;                     // past the grain synth's attack
+    // the grains started in `seconds` from now (a window the server times)
+    count = { arg seconds, during;
+        counter.set(\seconds, seconds, \t_reset, 1);
+        server.sync;
+        during.value;
+        (seconds + 0.2).wait;
+        h.readBus(countBus).first
+    };
+    // probability (continuous mode): 400 triggers in 2 s at density 200
+    command.(\setGrainParam, voice, \grainDensity, 200.0);
+    0.1.wait;
+    counts = [count.(2.0)];
+    command.(\setGrainParam, voice, \grainProb, 0.5);
+    0.1.wait;
+    counts = counts ++ [count.(2.0)];
+    check.(((counts[0] - 400).abs <= 2) and: { counts[1] >= 160 } and: { counts[1] <= 240 },
+        "variation: grainProb 0.5 passes 40-60 percent of 400 triggers at density 200 (% of %)".format(counts[1], counts[0]));
+    command.(\setGrainParam, voice, \grainProb, 0.0);
+    0.1.wait;
+    counts = [count.(1.0)];
+    command.(\setGrainParam, voice, \grainMode, 1);
+    0.1.wait;
+    counts = counts ++ [count.(1.0, { 5.do({ arg index; server.makeBundle(0.1 + (index * 0.1), {
+        command.(\retrigger, voice, 1.0) }) }) })];
+    check.((counts[0] == 0) and: { counts[1] == 5 },
+        "variation: grainProb 0 sounds no grain in continuous mode and one grain per retrigger in triggered mode (% grains in 1 s; % for 5 retriggers)".format(
+            counts[0], counts[1]));
+    command.(\setGrainParam, voice, \grainMode, 0);
+    command.(\setGrainParam, voice, \grainProb, 1.0);
+    // the overlap cloud: grainOverlap over the size, within 0.1 to 250 a second
+    command.(\setGrainParam, voice, \grainDensity, 20.0);
+    command.(\setGrainParam, voice, \grainSize, 0.1);
+    command.(\setGrainParam, voice, \grainOverlap, 2.0);
+    command.(\setGrainParam, voice, \overlapOn, 1);
+    0.2.wait;
+    counts = [count.(2.0)];
+    command.(\setGrainParam, voice, \grainSize, 0.01);
+    command.(\setGrainParam, voice, \grainOverlap, 16.0);
+    0.2.wait;
+    counts = counts ++ [count.(1.0)];
+    command.(\setGrainParam, voice, \grainSize, 0.1);
+    command.(\setGrainParam, voice, \grainOverlap, 2.0);
+    // a size fast offset of +0.245 s (one half range): the size 0.345 s
+    command.(\setFastOffset, voice, 0, 2, 0.245 / engine.fastModHalfRanges[2]);
+    0.3.wait;
+    counts = counts ++ [count.(2.0)];
+    command.(\setFastOffset, voice, 0, 2, 0.0);
+    check.(((counts[0] - 40).abs <= 2) and: { (counts[1] - 250).abs <= 3 }
+        and: { ((counts[2] / 40) - (0.1 / 0.345)).abs < 0.06 },
+        "variation: overlapOn 1, grainOverlap 2, size 0.1: 40 ± 2 triggers in 2 s (%); size 0.01, overlap 16: 250 a second (%); a size fast offset of +0.245 lowers the rate by its ratio (% in 2 s, ratio %, want %)".format(
+            counts[0], counts[1], counts[2], (counts[2] / 40).round(0.001), (0.1 / 0.345).round(0.001)));
+    // triggered mode with the overlap cloud: one grain per retrigger, none without
+    0.3.wait;
+    [[\grainMode, 1], [\grainOverlap, 16.0], [\grainSize, 0.01]].do({ arg pair; command.(\setGrainParam, voice, *pair) });
+    0.2.wait;
+    counts = [count.(1.0)];
+    counts = counts ++ [count.(1.5, { 10.do({ arg index; server.makeBundle(0.1 + (index * 0.1), {
+        command.(\retrigger, voice, 1.0) }) }) })];
+    check.((counts[0] == 0) and: { counts[1] == 10 },
+        "variation: triggered mode with the overlap cloud: grainMode 1, overlapOn 1, grainOverlap 16, size 0.01: no grain in 1 s without a t_trig (%); 10 retriggers 100 ms apart give exactly 10 grains (%)".format(
+            counts[0], counts[1]));
+    [[\grainMode, 0], [\overlapOn, 0], [\grainOverlap, 2.0], [\grainSize, 0.1], [\posSpread, 0.5], [\panSpread, 0.5],
+        [\bufPos, 0.0]].do({ arg pair; command.(\setGrainParam, voice, *pair) });
+    counter.free;
+    command.(\voiceOff, voice);
+    command.(\setGrainSource, voice, 0);
+    command.(\clearBuffer, slot);
+    server.sync;
+    [countBus, blip].do(_.free);
+    File.delete(path);
+}.value;
 
 // ---- Pan jitter (voice 2 on a buffer slot) ----
 // stereo.wav holds 0.5 left and -0.25 right: at zero pan jitter the left
@@ -291,7 +510,7 @@ command.(\setGrainParam, 0, \grainDensity, 20.0);
 command.(\setGrainParam, 0, \scaleNote, 60.0);
 probeGroup.free;
 [quietBus, nowBus, readOut, peakBus].do(_.free);
-[rectEnv, logRates, logDurs].do(_.free);
+[rectEnv, logRates, logDurs, logEnds].do(_.free);
 File.delete(leftPath);
 File.delete(rampPath);
 server.sync;

@@ -403,7 +403,7 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
     // position: a steady level with tiny sample-to-sample steps, so an
     // abrupt cut steps by about the level and a fade by far less
     [[\bufPos, 0.5], [\bufScan, 0], [\posSpread, 0], [\bufRate, 1], [\pitchShift, 1],
-        [\grainSize, 0.2], [\grainDensity, 20], [\grainMode, 0], [\envShape, 0]].do({ arg pair;
+        [\grainSize, 0.2], [\grainDensity, 20], [\grainMode, 0], [\windowShape, 0.57]].do({ arg pair;
         command.(\setGrainParam, 1, pair[0], pair[1]);
     });
     command.(\setVoiceParam, 1, \amp, 1);

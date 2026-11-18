@@ -61,7 +61,7 @@ return function(S)
 
   -- A value as a fraction (0-1) of a param's range. Control params follow
   -- their controlspec warp (exp for freq, cutoff, mod speed); number params
-  -- (mod sources) and option params (grain envelope) are linear.
+  -- (mod sources) and option params (grain mode) are linear.
   function param_value_fraction(param_id, value)
     local spec = params:lookup_param(param_id).controlspec
     if spec then

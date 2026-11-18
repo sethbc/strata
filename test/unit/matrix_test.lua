@@ -1175,8 +1175,11 @@ test("matrix: macros target matrix depths", function()
   local macros = S.lib.macros
   local listed = {}
   for index, id in ipairs(macros.target_ids()) do listed[id] = index end
+  -- (after the LFO destinations but none and the macros, read from the
+  -- list, and the six LFOs' rates and depths)
+  local destinations = #S.LFO_DESTINATIONS - 1 - 16
   for k = 1, 16 do
-    assert_equal(listed["matrix_" .. k .. "_depth"], 115 + k, "R" .. k .. "'s depth, after the LFOs' rates and depths")
+    assert_equal(listed["matrix_" .. k .. "_depth"], destinations + 12 + k, "R" .. k .. "'s depth, after the LFOs' rates and depths")
   end
   assert_equal(macros.target_label("matrix_3_depth"), "R3 depth")
   macros.set_target(1, 1, "matrix_1_depth", 0, 1)
@@ -1421,13 +1424,13 @@ end)
 test("matrix: its destinations are the LFO destinations but none and the macros, by param id", function()
   local context, S, matrix = loaded()
   local ids = matrix.destination_ids()
-  assert_equal(#ids, 103, "the 67 built-in destinations, the 35 registered per-voice ones and 1a's dly>rev")
+  assert_equal(#ids, 117, "the 67 built-in destinations, the 49 registered per-voice ones (1c's shape and skew among them) and 1a's dly>rev")
   assert_equal(ids[1], "master_density", "without none")
   assert_equal(ids[11], "reverb_damp")
   assert_equal(ids[12], "delay_to_reverb", "the registered global (3.8, 1a)")
   assert_equal(ids[13], "v1_main", "a voice's main entry")
   assert_equal(ids[14], "v1_grain_size")
-  assert_equal(ids[103], "v7_amp", "the registered ones, to v7 amp")
+  assert_equal(ids[#ids], "v7_amp", "the registered ones, to v7 amp, last")
   for _, id in ipairs(ids) do
     assert_true(not id:match("^macro_") and not id:match("^strata_lfo") and not id:match("^matrix_"),
       id .. " is no macro, LFO param or matrix depth")
@@ -1451,8 +1454,8 @@ test("the routing view's destinations come in the same order", function()
   for index = 1, #ids do
     if ids[index]:match("^v3_") then voice3[#voice3 + 1] = index end
   end
-  assert_equal(#voice3, 13, "13 destinations of voice 3")
-  assert_equal(voice3[#voice3] - voice3[1], 12, "one run, nothing between them")
+  assert_equal(#voice3, 15, "15 destinations of voice 3")
+  assert_equal(voice3[#voice3] - voice3[1], 14, "one run, nothing between them")
   assert_equal(ids[voice3[1]], "v3_main"); assert_equal(ids[voice3[#voice3]], "v3_amp")
   assert_equal(ids[voice3[1] - 1], "v2_amp", "after voice 2's last")
   assert_equal(ids[voice3[#voice3] + 1], "v4_main", "before voice 4's first")

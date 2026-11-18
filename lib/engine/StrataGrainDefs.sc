@@ -1,8 +1,8 @@
 // StrataGrainDefs.sc
-// The grain SynthDefs and the grains area: the envelope buffers, the
-// source -> grain SynthDef table and the envShape and history grain
-// params. Both grain SynthDefs are GrainBuf pairs built by grainBody; pitch
-// is the grain rate. See docs/notes/engine/grains.md.
+// The grain SynthDefs and the grains area: the window bank (3.8), the
+// source -> grain SynthDef table and the history grain param. Both grain
+// SynthDefs are GrainBuf pairs built by grainBody; pitch is the grain rate.
+// See docs/notes/engine/grains.md.
 
 + Engine_Strata {
     // The longest grain any grain synth plays (s): Lua's largest grain size,
@@ -15,15 +15,36 @@
     // GrainBuf drops grains and prints "Too many grains"). Two retriggers on
     // one voice within it (a MIDI flood, or a chord's notes arriving in
     // separate blocks) give one grain; pattern steps (at least 50 ms apart)
-    // and continuous grains (at most 200 a second: density 100 x master 2)
-    // never lose one
+    // and continuous grains (at most 200 a second: density 100 x master 2;
+    // 3.8's overlap cloud, at most 250) never lose one
     grainTriggerSeconds { ^0.004 }
+
+    // The window bank (3.8, design §4.1): windowShapes x windowSkews fixed
+    // tables of windowFrames, table shape x windowSkews + skew. A shape runs
+    // from pointed (0) through the Hann (windowHannShape) to flat-topped
+    // (windowShapes - 1); a skew moves the peak from early (0, percussive)
+    // through the middle (windowSkewMiddle, even) to late (windowSkews - 1,
+    // swelling). 480 KB of ordinary RAM, the window term of
+    // fixedBufferBytes (windowBankFrames, StrataPerformance.sc)
+    windowShapes { ^8 }
+    windowSkews { ^15 }
+    windowFrames { ^1024 }
+    windowHannShape { ^4 }
+    windowSkewMiddle { ^(this.windowSkews - 1) div: 2 }
+    // The table GrainBuf's own Hann window (-1) plays in place of: shape 4
+    // at skew 0, 4 x 15 + 7
+    windowHannIndex { ^(this.windowHannShape * this.windowSkews) + this.windowSkewMiddle }
+    // The bank's Buffers (consecutive bufnums), the grains area's state
+    windowBank { ^areaState[\grains][\windowBank] }
+    // How far the outermost skews move the peak from the middle (0.5 of the
+    // table): to 0.1 at skew -1, 0.9 at +1
+    windowSkewReach { ^0.4 }
 
     // The grains area (order 30)
     strataAreaGrains {
         ^(
             order: 30,
-            allocState: { this.areaCall(\allocEnvelopeBuffers) },
+            allocState: { this.areaCall(\allocWindowBank) },
             addDefs: { this.areaCall(\addGrainDefs); [\strataGrainRing, \strataGrainBuf] },
             // A buffer slot's voice reads it with strataGrainBuf; the synth
             // and input sources read their ring with strataGrainRing (the
@@ -33,17 +54,6 @@
                 { true } -> \strataGrainRing
             ],
             grainParamHandlers: (
-                // envShape is an index (0 = Hann, 1-4 = envBuffers) that the
-                // engine turns into the grain synth's envBuf, kept so a
-                // replacement grain synth (source switch) starts with it
-                envShape: { arg voice, value;
-                    var bufnum = this.envBufnumFor(value.round.asInteger);
-                    if (bufnum.notNil) {
-                        grainControls[voice][\envBuf] = bufnum;
-                        this.setGrainSynths(voice, \envBuf, bufnum);
-                    };
-                    true
-                },
                 // history (s back from the input ring's head) is kept for
                 // every voice but reaches only an input voice's grain synth:
                 // the synth source reads its own 4 s ring at history 0
@@ -55,23 +65,90 @@
                     true
                 }
             ),
-            free: { this.areaCall(\freeEnvelopeBuffers) }
+            free: { this.areaCall(\freeWindowBank) }
         )
     }
 
-    allocEnvelopeBuffers {
-        // Grain envelope shapes selected by setGrainParam(voice, \envShape, n):
-        // 0 = GrainBuf's built-in Hann (envbufnum -1), 1-4 = these buffers
-        envBuffers = [
-            Env.sine,
-            Env.perc(0.1, 0.9),
-            Env.linen(0.1, 0.8, 0.1),
-            Env([0, 1, 1, 0], [0.25, 0.5, 0.25])  // trapezoid
-        ].collect({ arg env; Buffer.loadCollection(context.server, env.asSignal(1024)) });
+    // The bank, allocated once from windowBankFrames (3.8, ruling 10) at
+    // consecutive bufnums, each table's /b_setn riding as its /b_alloc's
+    // completion message (a bare setn could reach the server before the
+    // asynchronous allocation completes), and its first bufnum kept in
+    // every voice's grainControls, so each grain synth the engine starts
+    // reads this engine's bank (windowBank, engine-owned). The 3.7
+    // envelope buffers are gone: Engine_Strata.sc's envBuffers stays nil
+    allocWindowBank {
+        var count = this.windowShapes * this.windowSkews, frames = this.windowBankFrames div: count;
+        var tables = this.windowTables(frames), keys = (0 .. frames - 1), first;
+        areaState[\grains][\windowBank] = Buffer.allocConsecutive(count, context.server, frames, 1,
+            { arg buffer, index; buffer.setnMsg(0, tables[index].at(keys)) });
+        first = this.windowBank.first.bufnum;
+        numVoices.do({ arg voice; grainControls[voice][\windowBank] = first });
     }
 
-    freeEnvelopeBuffers {
-        envBuffers.do({ arg buffer; buffer.free });
+    freeWindowBank {
+        (this.windowBank ? []).do({ arg buffer; buffer.free });
+    }
+
+    // The bank's tables (Signals of `frames`), table shape x windowSkews +
+    // skew, from Signal primitives only (no sclang function runs per
+    // sample). x runs 0 to 1 across the table; a skew warps it piecewise
+    // linearly so the middle of the window falls at its peak p (0.5 at
+    // skew 0, 0.5 -/+ windowSkewReach at the outermost skews), where every
+    // shape is flat, so the warp leaves no corner; h = sin^2(pi x) is the
+    // Hann. A shape below windowHannShape is h ^ 2^((Hann - shape) / 2)
+    // (pointed, to h^4), one above it 1 - (1 - h) ^ 2^(shape - Hann)
+    // (flat-topped, to 1 - (1 - h)^8, about a linen with 20 % ramps).
+    // Each table is scaled to a peak of exactly 1; both ends are 0
+    windowTables { arg frames;
+        var ramp = Signal.newClear(frames).fill(1.0).fade(0, frames - 1, 0, frames / (frames - 1));
+        ^(0 .. (this.windowShapes * this.windowSkews) - 1).collect({ arg index;
+            var shape = index div: this.windowSkews, skew = index % this.windowSkews;
+            var peak = 0.5 + (this.windowSkewReach * ((skew - this.windowSkewMiddle) / this.windowSkewMiddle));
+            var warped = (ramp * (0.5 / peak)).min(0.5) + ((ramp - peak) * (0.5 / (1 - peak))).max(0);
+            var hann = (warped * pi).sin.squared, table;
+            table = case
+                { shape < this.windowHannShape } { this.windowPower(hann, 2 ** ((this.windowHannShape - shape) / 2)) }
+                { shape > this.windowHannShape } { this.windowPower(hann.neg + 1, 2 ** (shape - this.windowHannShape)).neg + 1 }
+                { hann };
+            table * (1 / table.peak)
+        })
+    }
+
+    // A Signal (0 to 1) to a power above 0, as exp(power x log): sclang 3.13
+    // has no pow of a Signal (3.14 has); log 0 is -inf, whose exp is 0
+    windowPower { arg signal, power;
+        ^(signal.max(0).log * power).exp
+    }
+
+    // The envelope number both GrainBufs of a grain synth read (GrainBuf
+    // latches it with each grain): the window bank's table for the shape
+    // rounded to one of windowShapes and the skew to one of windowSkews,
+    // GrainBuf's own Hann (-1) at windowHannIndex (the default graph is
+    // 3.7's), and envBuf in its place while it is 0 or above (an
+    // engine-owned override, which only the engine check sets: a
+    // rectangular envelope for its timecode reads). With no windowShape in
+    // the Event (a check-only copy of an older def) envBuf alone (ruling 33)
+    windowPick { arg c;
+        var windowShape = c[\windowShape], windowSkew = c[\windowSkew], index, window;
+        if (windowShape.isNil) { ^c[\envBuf] };
+        index = ((windowShape.clip(0, 1) * (this.windowShapes - 1)).round * this.windowSkews)
+            + ((windowSkew.clip(-1, 1) + 1) * this.windowSkewMiddle).round;
+        window = Select.kr(BinaryOpUGen('==', index, this.windowHannIndex), [c[\windowBank] + index, -1]);
+        ^Select.kr(c[\envBuf] >= 0, [window, c[\envBuf]])
+    }
+
+    // The grains per second of continuous mode: grainDensity, or with the
+    // overlap cloud (overlapOn 1, 3.8 design §4.4) grainOverlap over the
+    // size the grain plays (after the fast offsets and the note's size; the
+    // size jitter is a per-grain draw, which cannot set the rate), within
+    // 0.1 to 250. Lua sends grainOverlap with master density applied. With
+    // no overlapOn in the Event (a check-only control set) grainDensity
+    // alone (ruling 33). (written on the control's own name: the Lua stub
+    // reads the enumeration from "overlapOn.round.clip(0, 1)")
+    grainCloudRate { arg c;
+        var overlapOn = c[\overlapOn];
+        if (overlapOn.isNil) { ^c[\grainDensity] };
+        ^Select.kr(overlapOn.round.clip(0, 1), [c[\grainDensity], (c[\grainOverlap] / c[\grainSize]).clip(0.1, 250)])
     }
 
     // The two grain SynthDefs. Both declare the same grain controls (their
@@ -98,7 +175,14 @@
     // 3.7's scan controls (scanMode, regionStart, regionLength, followRate,
     // slotGain, t_scanSync, scanSyncPhase), each at its default 3.6's graph:
     // \strataGrainBuf's reader takes them (slotGrainReader); the ring def
-    // declares and ignores them, as it does the loop's.
+    // declares and ignores them, as it does the loop's. 3.8's (design §4):
+    // windowShape and windowSkew (the window's pick, windowPick; at the
+    // Hann's shape and skew 0 GrainBuf's own window), grainProb (every
+    // grain at 1), overlapOn and grainOverlap (the density cloud at 0:
+    // grainCloudRate), arpOn and arpFold (the interval draw at 0:
+    // grainRate), and windowBank, the bank's first bufnum (a named control,
+    // engine-owned, sent with every voice's grain controls: a def built by
+    // another engine on this server has that engine's bank as its default).
     addGrainDefs {
         // Granular processor for a ring: the voice's own (synth source) or
         // the input's (input source), each written by a strataRingWrite
@@ -117,7 +201,9 @@
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
             loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0,
             noteGate=1, noteBend=1, noteAmp=1, notePos=0, noteSize=0, velocity=1, t_accent=0, noteRate=1,
-            scanMode=0, regionStart=0, regionLength=0, followRate=1, slotGain=1, t_scanSync=0, scanSyncPhase=0;
+            scanMode=0, regionStart=0, regionLength=0, followRate=1, slotGain=1, t_scanSync=0, scanSyncPhase=0,
+            windowShape=0.57, windowSkew=0, grainProb=1, overlapOn=0, grainOverlap=2, arpOn=0, arpFold=0;
+            var windowBank = \windowBank.kr(this.windowBank.first.bufnum);
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index);
             var m = this.fastModRead(fastModIn);
@@ -131,7 +217,9 @@
                 intervals: [interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8],
                 intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote,
                 fastMod: m, noteRate: noteRate, noteSize: noteSize, noteBend: noteBend,
-                noteGate: noteGate, noteAmp: noteAmp, velocity: velocity, t_accent: t_accent
+                noteGate: noteGate, noteAmp: noteAmp, velocity: velocity, t_accent: t_accent,
+                windowBank: windowBank, windowShape: windowShape, windowSkew: windowSkew, grainProb: grainProb,
+                overlapOn: overlapOn, grainOverlap: grainOverlap, arpOn: arpOn, arpFold: arpFold
             );
             this.grainBody(controls, this.areaCall(\ringGrainReader, bufL, bufR, phaseBus, posSpread, history, bufScan, freeze));
         }).add;
@@ -160,7 +248,9 @@
             intervalCount=0, intervalProb=1, quantize=0, scaleNote=60,
             loopStart=0, loopLength=1, scrubRate=0, scanHold=0, t_scanReset=0,
             noteGate=1, noteBend=1, noteAmp=1, notePos=0, noteSize=0, velocity=1, t_accent=0,
-            scanMode=0, regionStart=0, regionLength=0, followRate=1, slotGain=1, t_scanSync=0, scanSyncPhase=0;
+            scanMode=0, regionStart=0, regionLength=0, followRate=1, slotGain=1, t_scanSync=0, scanSyncPhase=0,
+            windowShape=0.57, windowSkew=0, grainProb=1, overlapOn=0, grainOverlap=2, arpOn=0, arpFold=0;
+            var windowBank = \windowBank.kr(this.windowBank.first.bufnum);
             var recHeadBus = \recHeadBus.kr(areaState[\record][\idleHead].index);
             var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index);
             var m = this.fastModRead(fastModIn);
@@ -179,7 +269,9 @@
                 intervals: [interval1, interval2, interval3, interval4, interval5, interval6, interval7, interval8],
                 intervalCount: intervalCount, intervalProb: intervalProb, quantize: quantize, scaleNote: scaleNote,
                 fastMod: m, noteRate: 1, noteSize: noteSize, noteBend: noteBend,
-                noteGate: noteGate, noteAmp: noteAmp, velocity: velocity, t_accent: t_accent
+                noteGate: noteGate, noteAmp: noteAmp, velocity: velocity, t_accent: t_accent,
+                windowBank: windowBank, windowShape: windowShape, windowSkew: windowSkew, grainProb: grainProb,
+                overlapOn: overlapOn, grainOverlap: grainOverlap, arpOn: arpOn, arpFold: arpFold
             );
             this.grainBody(controls, this.areaCall(\slotGrainReader, bufnumL, bufnumR, bufFrames, bufRateScale, this.fastModPosition(bufPos, m, notePos),
                 bufRate, bufScan, posSpread, freeze, loopStart, loopLength, scrubRate, scanHold, t_scanReset, recHeadBus, scan));
@@ -193,9 +285,10 @@
     // read: the left and right buffers (bufL, bufR), the rate, duration and
     // start (pos, 0-1 of the buffer) each GrainBuf latches per grain, and an
     // output level (level).
-    //   1. The trigger: grainDensity grains per second (grainMode 0) or one
-    //      per t_trig (1: retrigger, pattern steps, MIDI notes), never two
-    //      within grainTriggerSeconds.
+    //   1. The trigger: grainCloudRate's grains per second (grainMode 0:
+    //      grainDensity, or 3.8's overlap cloud) or one per t_trig (1:
+    //      retrigger, pattern steps, MIDI notes), never two within
+    //      grainTriggerSeconds; in continuous mode each passes grainProb.
     //   2. Rate and duration: grainRate and grainDur (StrataVariation.sc);
     //      pitchShift is the rate (an exact transposition). bend and the
     //      frequency crossmod enter it scaled by rateLevel: 0 for the synth
@@ -203,8 +296,9 @@
     //      (lagged noteLag) multiplies it outside rateLevel's term, so it
     //      bends every grain synth's note, quantized or not, the synth
     //      source's (a frozen synth voice's streams) included.
-    //   3. Two stereo GrainBufs, the left buffer's grains panned to -1 and
-    //      the right's to +1 (plus grainPan's offset), so the pair stays
+    //   3. Two stereo GrainBufs on windowPick's envelope, the left buffer's
+    //      grains panned to -1 and the right's to +1 (plus grainPan's
+    //      offset), so the pair stays
     //      sample-aligned and keeps its image; then the slow pan wander
     //      (Balance2 by panSpread) and the voice's pan (panBalance; 0 for
     //      the synth source).
@@ -222,7 +316,7 @@
     // Returns (sig: the stereo signal, fade: its fade).
     grainSignal { arg controls, reader;
         var c = this.fastMod(controls), env, modSigs, rateMod, bendRate, grainMode, mode, trig;
-        var vary, rate, dur, read, panOffset, left, right, sig;
+        var vary, rate, dur, read, panOffset, left, right, sig, grainProb, window;
 
         env = EnvGen.kr(Env.asr(0.1, 1, grainRelease), this.openedGate(c[\gate]), doneAction: 2) * this.killFade(c[\kill]);
 
@@ -237,23 +331,39 @@
         // enumeration from "grainMode.round.clip(0, 1)")
         grainMode = c[\grainMode];
         mode = grainMode.round.clip(0, 1);
-        // (Trig1 holds the trigger high for grainTriggerSeconds and ignores
-        // any other meanwhile: every grain input reads its rising edge)
-        trig = Trig1.ar(Select.ar(mode, [Impulse.ar(c[\grainDensity]), T2A.ar(c[\t_trig])]), this.grainTriggerSeconds);
+        // (Trig1 holds the trigger high and ignores any other meanwhile:
+        // every grain input reads its rising edge. It refuses a trigger
+        // until its counter, round(duration x the rate) samples, has run out
+        // a sample after the hold ends, so the hold is a sample shorter than
+        // grainTriggerSeconds: two starts are at least grainTriggerSeconds
+        // apart, and an Impulse of exactly 1 / grainTriggerSeconds, the
+        // overlap cloud's 250 a second, loses no grain)
+        trig = Trig1.ar(Select.ar(mode, [Impulse.ar(this.grainCloudRate(c)), T2A.ar(c[\t_trig])]),
+            this.grainTriggerSeconds - SampleDur.ir);
+        // 3.8's probability (design §4.2): in continuous mode each held
+        // trigger passes a draw (a dropped one still held its window, and
+        // draws nothing downstream: no rate, size or pan, no arpeggio
+        // step); in triggered mode (mode 1) every one passes
+        if (c[\grainProb].notNil) {
+            grainProb = c[\grainProb];
+            trig = trig * (TRand.ar(0, 1, trig) < grainProb.max(mode));
+        };
 
         vary = (
             reverseProb: c[\reverseProb], pitchJitter: c[\pitchJitter], intervals: c[\intervals],
-            intervalCount: c[\intervalCount], intervalProb: c[\intervalProb], quantize: c[\quantize], scaleNote: c[\scaleNote]
+            intervalCount: c[\intervalCount], intervalProb: c[\intervalProb], quantize: c[\quantize], scaleNote: c[\scaleNote],
+            arpOn: c[\arpOn], arpFold: c[\arpFold]
         );
         rate = this.grainRate(trig, c[\pitchShift], bendRate, vary);
         dur = this.grainDur(trig, c[\grainSize], c[\sizeJitter]).min(this.grainMaxSeconds);
         read = reader.value(trig, rate, dur, mode);
 
         panOffset = this.grainPan(trig, c[\panJitter]);
+        window = this.windowPick(c);
         left = GrainBuf.ar(2, trig, read[\dur], read[\bufL], read[\rate], read[\pos], 2,
-            (panOffset - 1).clip(-1, 1), c[\envBuf], maxGrains);
+            (panOffset - 1).clip(-1, 1), window, maxGrains);
         right = GrainBuf.ar(2, trig, read[\dur], read[\bufR], read[\rate], read[\pos], 2,
-            (panOffset + 1).clip(-1, 1), c[\envBuf], maxGrains);
+            (panOffset + 1).clip(-1, 1), window, maxGrains);
         sig = left + right;
         sig = Balance2.ar(sig[0], sig[1], LFNoise1.kr(2).range(c[\panSpread].neg, c[\panSpread]));
         sig = this.panBalance(sig, c[\pan]);

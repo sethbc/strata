@@ -1099,7 +1099,7 @@ test("scene recall: one full sync per voice whose source changed, after its para
         assert_near(sent.grain.grainDensity, voice.values.grain_density * master, 1e-9, label .. "grainDensity")
         assert_near(sent.grain.pitchShift, voice.values.grain_pitch, 1e-9, label .. "pitchShift")
         assert_near(sent.grain.posSpread, voice.values.grain_spread, 1e-9, label .. "posSpread")
-        assert_equal(sent.grain.envShape, voice.values.grain_env - 1, label .. "envShape")
+        assert_near(sent.grain.windowShape, voice.values.grain_shape, 1e-9, label .. "windowShape")
         assert_equal(sent.grain.grainMode, voice.values.grain_mode - 1, label .. "grainMode")
         assert_near(sent.grain.bufPos, voice.values.buf_pos, 1e-9, label .. "bufPos")
         assert_near(sent.grain.bufRate, voice.values.buf_rate, 1e-9, label .. "bufRate")
@@ -1310,16 +1310,16 @@ end)
 
 test("fill_scene fills a voice's missing keys with their defaults and tolerates malformed data", function()
   load_strata()
-  params:set("v2_grain_env", 3); params:set("v2_grain_mode", 2)
+  params:set("v2_grain_cloud", 2); params:set("v2_grain_mode", 2)
   capture_scene(1)
   local scene = deep_copy(local_value("scenes")[1])
   -- a missing key is filled with its default (the param's), present ones are kept
-  scene.data.voices[2].values.grain_env = nil
+  scene.data.voices[2].values.grain_cloud = nil
   scene.data.voices[2].values.mod_speed = nil
   scene.data.voices[3].values.freq = nil
   scene.data.voices[5].values.reverb_send = nil
   fill_scene(scene)
-  assert_equal(scene.data.voices[2].values.grain_env, params:lookup_param("v2_grain_env").default, "grain_env filled")
+  assert_equal(scene.data.voices[2].values.grain_cloud, params:lookup_param("v2_grain_cloud").default, "grain_cloud filled")
   assert_near(scene.data.voices[2].values.mod_speed, params:lookup_param("v2_mod_speed").controlspec.default, 1e-9,
     "mod_speed filled")
   assert_near(scene.data.voices[3].values.freq, params:lookup_param("v3_freq").controlspec.default, 1e-9, "freq filled")
@@ -2099,10 +2099,10 @@ end)
 ---------------------------------------------------------------------------
 
 -- A scene voice's keys in recall order since the groundwork before 3.8
--- (ruling 4), written out here: the voice's synth keys sorted, the nine
+-- (ruling 4), written out here: the voice's synth keys sorted, the eight
 -- grain keys sorted, the ten crossmod keys sorted, then every other key of
 -- the voice's values (its registered keys) sorted
-local REFERENCE_GRAIN_KEYS = { "buf_pos", "buf_rate", "buf_scan", "grain_density", "grain_env", "grain_mode",
+local REFERENCE_GRAIN_KEYS = { "buf_pos", "buf_rate", "buf_scan", "grain_density", "grain_mode",
   "grain_pitch", "grain_size", "grain_spread" }
 local REFERENCE_CROSSMOD_KEYS = { "mod_amp_amt_1", "mod_amp_amt_2", "mod_amp_amt_3", "mod_freq_amt_1", "mod_freq_amt_2",
   "mod_freq_amt_3", "mod_source_1", "mod_source_2", "mod_source_3", "mod_speed" }
@@ -2204,9 +2204,9 @@ end
 -- The merged scene_transition_targets (lib/scenes.lua at 3.3.2), copied
 -- verbatim but for the voice's values (re-based as reference_recall is),
 -- with the local helpers it calls (LFO_STATE, registered_voice_scene_keys).
--- The discrete built-in keys (the grain envelope and mode, the mod sources)
+-- The discrete built-in keys (the grain mode, the mod sources)
 -- are written out
-local REFERENCE_DISCRETE_KEYS = { grain_env = true, grain_mode = true, mod_source_1 = true, mod_source_2 = true,
+local REFERENCE_DISCRETE_KEYS = { grain_mode = true, mod_source_1 = true, mod_source_2 = true,
   mod_source_3 = true }
 local function reference_targets(S, scene_data)
   local NUM_VOICES = S.constants.NUM_VOICES
@@ -3807,7 +3807,7 @@ test("a scene voice missing a key, or holding another voice's synth key, is refu
   refused(function(voices) voices[3].values.loop_start = nil end, "voice 3 without a registered key")
   refused(function(voices) voices[2].values.rq = 0.5 end, "voice 2 (fm) holding the resonator's rq")
   refused(function(voices) voices[4].values.pan = 0 end, "voice 4 (sub) holding a pan")
-  refused(function(voices) voices[5].values.grain_env = 1.5 end, "a fractional envelope")
+  refused(function(voices) voices[5].values.grain_cloud = 1.5 end, "a fractional cloud")
   refused(function(voices) voices[5].values.grain_mode = 3 end, "a grain mode past the options")
   refused(function(voices) voices[6].values.solo = 0 end, "a solo (no scene key)")
   refused(function(voices) voices[6].params = {} end, "a 3.7 field beside values")
@@ -4228,6 +4228,46 @@ test("a mark whose PSET still holds the live scenes is trusted across sessions: 
   params:write(pset_1)
   cleanup()
   context, S = pset_session(subdir)
+  assert_equal(S.scene_file.pset, base_1, "the mark read back")
+  params:read(pset_2)
+  assert_true(not util.file_exists(live_scenes_path(context) .. ".bak"), "no backup: PSET 1 holds the live scenes")
+  assert_true(not S.scenes[1].populated, "PSET 2's scenes")
+end)
+
+-- #799 (fixed by 1a; pinned by 1c): a format 10 file of a build before a
+-- package added a voice scene key (3.8's 1c added six) loads with the key
+-- filled, and its PSET still counts as holding the live scenes: the
+-- mark's comparison fills the PSET's scenes as a load does, so a load of
+-- another PSET backs nothing up
+test("a format 10 scenes file lacking a later key loads, the key filled, and its PSET still holds it: no backup (#799)", function()
+  local subdir = "pset-later-key-" .. fresh_name()
+  local context, S = pset_session(subdir)
+  local pset_1, base_1, side_1 = pset_files(context, 1)
+  local pset_2 = pset_files(context, 2)
+  params:write(pset_2)
+  scramble_state(27); S.lib.scenes.save(1)
+  params:write(pset_1)
+  -- both files as a build before grain_prob existed wrote them
+  local stripped = 0
+  for _, path in ipairs({ live_scenes_path(context), side_1 }) do
+    local file = S.lib.data_files.read(path)
+    for _, scene in ipairs(file.scenes) do
+      for _, voice in ipairs(scene.data and scene.data.voices or {}) do
+        if voice.values.grain_prob ~= nil then stripped = stripped + 1 end
+        voice.values.grain_prob = nil
+      end
+    end
+    S.lib.data_files.write(path, file)
+  end
+  assert_true(stripped >= 2 * S.constants.NUM_VOICES, "grain_prob taken out of every voice of both files (" .. stripped .. ")")
+  cleanup()
+  context, S = pset_session(subdir)
+  assert_equal(S.scene_file.problem, nil, "the scenes file loads")
+  assert_true(S.scenes[1].populated, "scene 1 with it")
+  for voice = 1, S.constants.NUM_VOICES do
+    assert_equal(S.scenes[1].data.voices[voice].values.grain_prob, S.lib.grain.GRAIN.prob_default,
+      "voice " .. voice .. "'s grain_prob filled with its default")
+  end
   assert_equal(S.scene_file.pset, base_1, "the mark read back")
   params:read(pset_2)
   assert_true(not util.file_exists(live_scenes_path(context) .. ".bak"), "no backup: PSET 1 holds the live scenes")

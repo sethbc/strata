@@ -16,13 +16,14 @@ test("input-sourced voices: main param, faders, randomize, mutate and drift use 
   for _, id in ipairs(fader_param_ids(1)) do
     assert_true(not id:find("_buf_"), id .. ": no buffer faders for input")
   end
-  -- the grain faders, then level and pan (the engine pans input voices), then crossmod
-  assert_equal(fader_param_ids(1)[7], "v1_amp"); assert_equal(fader_param_ids(1)[8], "v1_pan")
-  assert_equal(fader_param_ids(1)[9], "v1_mod_source_1")
+  -- the grain faders (3.8 1c: seven, the window's shape and skew for the
+  -- envelope), then level and pan (the engine pans input voices), then crossmod
+  assert_equal(fader_param_ids(1)[8], "v1_amp"); assert_equal(fader_param_ids(1)[9], "v1_pan")
+  assert_equal(fader_param_ids(1)[10], "v1_mod_source_1")
   params:set("v4_source", 10)
-  assert_equal(fader_param_ids(4)[7], "v4_amp"); assert_equal(fader_param_ids(4)[8], "v4_mod_source_1", "sub has no pan fader")
-  -- (3.8, 1a: the dry level one more of the last 11)
-  assert_equal(#fader_param_ids(1), 6 + 2 + 9 + 11); assert_equal(fader_page_count(1), 7, "an input voice has 7 fader pages")
+  assert_equal(fader_param_ids(4)[8], "v4_amp"); assert_equal(fader_param_ids(4)[9], "v4_mod_source_1", "sub has no pan fader")
+  -- (3.8, 1a: the dry level one more of the last 11; 1c: seven grain faders)
+  assert_equal(#fader_param_ids(1), 7 + 2 + 9 + 11); assert_equal(fader_page_count(1), 8, "an input voice has 8 fader pages")
   assert_equal(fader_page_count(4), 7, "an input-sourced sub has 7 fader pages")
   params:set("v1_grain_size", 0.2)
   enc(3, 2); assert_true(params:get("v1_grain_size") > 0.2, "E3 on MAIN moves grain size")

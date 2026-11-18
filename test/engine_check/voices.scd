@@ -375,7 +375,7 @@ var checkEngineOwnedControls = { arg bufferVoice, synthVoice;
     var grainKey = engine.grainKey(bufferVoice), voiceKey = engine.voiceKey(synthVoice);
     var grain = engine.synths[grainKey], voiceSynth = engine.synths[voiceKey], slot = engine.grainSource[bufferVoice] - 1;
     var keptGrain = engine.grainControls[bufferVoice].copy, keptVoice = engine.voiceControls[synthVoice].copy;
-    var envBuf = engine.grainControls[bufferVoice][\envBuf], otherEnvelope;
+    var otherEnvelope = engine.windowBank[3].bufnum, otherBank = engine.windowBank[1].bufnum;
     var unchanged = { arg now, before, names; names.every({ arg name; now[name] == before[name] }) };
     var grainNames, voiceNames;
     command.(\setGrainParam, bufferVoice, \kill, 1);
@@ -386,10 +386,9 @@ var checkEngineOwnedControls = { arg bufferVoice, synthVoice;
         "voices: setGrainParam and setVoiceParam refuse kill: the grain and voice synths play on (#458)");
     // (only where the engine took it: never again kill a synth it starts)
     engine.grainControls[bufferVoice].removeAt(\kill); engine.voiceControls[synthVoice].removeAt(\kill);
-    otherEnvelope = engine.envBuffers.detect({ arg buffer; buffer.bufnum != envBuf }).bufnum;
     grainNames = [\gate, 1, \out, engine.voicePathBus(bufferVoice, slot + 1).index, \t_trig, 0,
         \bufnumL, engine.buffersL[slot].bufnum, \bufnumR, engine.buffersR[slot].bufnum, \bufFrames, engine.bufferFrames[slot],
-        \bufRateScale, 1, \envBuf, otherEnvelope, \ringLevel, 1, \rateLevel, 1,
+        \bufRateScale, 1, \envBuf, otherEnvelope, \windowBank, otherBank, \ringLevel, 1, \rateLevel, 1,
         \pan, engine.voiceControls[bufferVoice][\pan], \bend, engine.voiceControls[bufferVoice][\bend],
         \modBus1, engine.voiceControls[bufferVoice][\modBus1], \modFreqAmt1, engine.voiceControls[bufferVoice][\modFreqAmt1]];
     grainNames.pairsDo({ arg name, value; command.(\setGrainParam, bufferVoice, name, value) });
@@ -397,14 +396,13 @@ var checkEngineOwnedControls = { arg bufferVoice, synthVoice;
     voiceNames.pairsDo({ arg name, value; command.(\setVoiceParam, synthVoice, name, value) });
     server.sync;
     check.(unchanged.(engine.grainControls[bufferVoice], keptGrain, grainNames.clump(2).collect(_[0])),
-        "voices: setGrainParam keeps none of gate, out, t_trig, the slot's controls, envBuf, ringLevel, rateLevel, pan, bend or the crossmod (#458; kept: %)".format(
+        "voices: setGrainParam keeps none of gate, out, t_trig, the slot's controls, envBuf, windowBank, ringLevel, rateLevel, pan, bend or the crossmod (#458; kept: %)".format(
             grainNames.clump(2).collect(_[0]).reject({ arg name; engine.grainControls[bufferVoice][name] == keptGrain[name] })));
     check.(unchanged.(engine.voiceControls[synthVoice], keptVoice, voiceNames.clump(2).collect(_[0])),
         "voices: setVoiceParam keeps none of gate, out, t_trig, velocity or the crossmod amounts (#458; kept: %)".format(
             voiceNames.clump(2).collect(_[0]).reject({ arg name; engine.voiceControls[synthVoice][name] == keptVoice[name] })));
     // (only where the engine took them)
     engine.grainControls[bufferVoice] = keptGrain; engine.voiceControls[synthVoice] = keptVoice;
-    command.(\setGrainParam, bufferVoice, \envShape, engine.envBuffers.detectIndex({ arg buffer; buffer.bufnum == envBuf }) !? (_ + 1) ? 0);
     command.(\setModAmpAmt, synthVoice, 1, 0); command.(\setModFreqAmt, synthVoice, 1, 0);
     server.sync;
 };
@@ -879,7 +877,7 @@ check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synth
 // below; 3.8's setVoiceType with type 1).
 // Before #262 voiceOff raised for -1, numVoices and 99; 1.5 is here as a pin, so a non-integer index stays ignored.
 // Nothing raises, and no node, tracked synth or kept value changes (the
-// grain params: a stored one, envShape, the freeze area's freeze and
+// grain params: a stored one, windowShape, the freeze area's freeze and
 // history, a stage's filterFreq).
 {
     var raised = 0, synthsBefore, enginesBefore, releasingBefore, keptBefore, freqBefore, kept;
@@ -898,7 +896,7 @@ check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synth
         try { command.(\voiceOff, index) } { raised = raised + 1 };
         try { command.(\retrigger, index, 1.0) } { raised = raised + 1 };
         try { command.(\setVoiceParam, index, \amp, 0.3) } { raised = raised + 1 };
-        [[\grainSize, 0.2], [\envShape, 1], [\freeze, 1], [\history, 2.0], [\filterFreq, 900.0]].do({ arg pair;
+        [[\grainSize, 0.2], [\windowShape, 0.25], [\freeze, 1], [\history, 2.0], [\filterFreq, 900.0]].do({ arg pair;
             try { command.(\setGrainParam, index, pair[0], pair[1]) } { raised = raised + 1 };
         });
         try { command.(\setGrainSource, index, 3) } { raised = raised + 1 };

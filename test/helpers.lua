@@ -963,7 +963,7 @@ local function scramble_state(seed)
     params:set("v" .. voice_idx .. "_buf_scan", math.random() * 4 - 2)
     params:set("v" .. voice_idx .. "_grain_spread", math.random())
     params:set("v" .. voice_idx .. "_grain_density", math.random(1, 100))
-    params:set("v" .. voice_idx .. "_grain_env", math.random(1, 5))
+    params:set("v" .. voice_idx .. "_grain_shape", math.random(1, 5) / 5)
     params:set("v" .. voice_idx .. "_grain_mode", math.random(1, 2))
     for slot = 1, 3 do
       params:set("v" .. voice_idx .. "_mod_source_" .. slot, math.random(0, 7))

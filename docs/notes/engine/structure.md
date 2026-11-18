@@ -148,7 +148,7 @@ Buses are allocated in `alloc` (`numVoices = 7` in the engine must match `NUM_VO
 - 1 stereo `delayBus` (the delay's return, read by the reverb and the master)
 - 1 stereo `reverbBus` (the reverb's return, master input)
 - the mix area's (`areaState[\mix]`, `docs/notes/engine/mix.md`): per voice a stereo synth path and other path, stereo delay and reverb sends and their filtered copies (3.7's 2-channel control `fxMix` went with 3.8's plain sends)
-- 4 `envBuffers` (grain envelope shapes, 1024 frames each; see `envShape`)
+- the window bank (3.8): 120 consecutive tables of 1024 frames, `areaState[\grains][\windowBank]` (`docs/notes/engine/grains.md`); `envBuffers`, 3.7's four envelopes, stays nil
 - 1 stereo `inputBus` (live input from `\strataInput`)
 - `numBuffers` mono control `recordFrameBuses` (frames recorded so far, for `stopRecord`)
 - `numBuffers` (8) slot pairs `buffersL`/`buffersR`, mono, `bufferSeconds` each (the tier's: 16 s on standard, ≈ 49 MB in all; up to 300 s on high; see `docs/notes/engine/buffers.md` and `docs/notes/engine/performance.md`)

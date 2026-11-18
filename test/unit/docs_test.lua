@@ -142,16 +142,15 @@ test("the engine source parsers skip // and /* */ comments (#25)", function()
   for _, name in ipairs(stubs.engine_polls_from_source(commented)) do
     assert_true(name ~= "ghostPoll", "a commented-out poll is skipped")
   end
-  -- #24's SynthDef and envelope parsers: a commented-out SynthDef, argument or Env
+  -- #24's SynthDef and enumeration parsers: a commented-out SynthDef,
+  -- argument or clip (3.8: the grain envelopes' Env list is gone)
   local patched, count = source:gsub("SynthDef%(\\strataGrainRing, {%s*arg ", "%0/* ghostControl=0, */ ")
   assert_equal(count, 1, "argument patch applies")
-  patched, count = patched:gsub("envBuffers%s*=%s*%[", "%0\n            // Env.ghost,")
-  assert_equal(count, 1, "envelope patch applies")
-  local spec = stubs.engine_spec_from_source(patched .. "\n// SynthDef(\\ghostDef, { arg ghost; });")
+  local spec = stubs.engine_spec_from_source(patched .. "\n// SynthDef(\\ghostDef, { arg ghost; });\n// overlapOn.round.clip(0, 5)")
   assert_true(spec.synthdef_controls.ghostDef == nil, "a commented-out SynthDef is skipped")
   assert_true(not spec.synthdef_controls.strataGrainRing.ghostControl, "a commented-out argument is skipped")
   assert_true(spec.synthdef_controls.strataGrainRing.grainSize, "the arguments around it are read")
-  assert_equal(spec.enumerations.envShape[2], engine_spec.enumerations.envShape[2], "a commented-out Env is not counted")
+  assert_equal(spec.enumerations.overlapOn[2], engine_spec.enumerations.overlapOn[2], "a commented-out clip is not read")
 end)
 
 test("strip_sc_comments fails on an unterminated string, symbol or block comment (#51)", function()
@@ -196,13 +195,17 @@ test("the engine stub reads its limits and controls from the engine source (#24)
   assert_equal(spec.voice_type_defs[spec.num_voices], "strataRing", "the last voice's own type's SynthDef")
   assert_true(spec.synthdef_controls.strataFM.ratio, "strataFM controls parsed")
   assert_true(spec.synthdef_controls.strataGrainBuf.bufPos, "strataGrainBuf controls parsed")
-  assert_true(spec.grain_params.envShape, "setGrainParam's own envShape is accepted")
+  assert_true(spec.grain_params.history, "a grainParamHandlers key (history) is accepted")
+  assert_true(spec.grain_params.envShape == nil, "3.8: envShape is gone")
   assert_true(spec.grain_params.bufPos and spec.grain_params.grainSize, "grain SynthDef controls are accepted")
   -- each enumerated control is 0..options - 1 of its Lua option param
   assert_equal(spec.enumerations.grainMode[1], 0, "grainMode from 0")
   assert_equal(spec.enumerations.grainMode[2], #local_value("GRAIN_MODE_OPTIONS") - 1, "grainMode to triggered")
-  assert_equal(spec.enumerations.envShape[1], 0, "envShape from Hann")
-  assert_equal(spec.enumerations.envShape[2], #local_value("GRAIN_ENV_OPTIONS") - 1, "envShape to the last envelope buffer")
+  -- 3.8: the overlap cloud and the arpeggiator's switches, 0..1
+  for _, name in ipairs({"overlapOn", "arpOn", "arpFold"}) do
+    assert_equal(table.concat(spec.enumerations[name] or {}, ","), "0,1", name .. " is 0..1")
+  end
+  assert_equal(spec.enumerations.overlapOn[2], #local_value("S").lib.grain.GRAIN.clouds - 1, "overlapOn to the last cloud")
   assert_equal(spec.enumerations.filterType[1], 0, "filterType from lowpass")
   assert_equal(spec.enumerations.filterType[2], 2, "filterType to bandpass")
   -- a control added to a grain SynthDef is picked up without stub changes
@@ -666,9 +669,14 @@ test("the engine stub rejects out-of-range engine arguments (#24)", function()
   -- enumerated grain params: whole numbers in range
   assert_engine_rejects("grainMode", "setGrainParam", 0, "grainMode", 2)
   assert_engine_rejects("grainMode", "setGrainParam", 0, "grainMode", 0.5)
-  assert_engine_rejects("envShape", "setGrainParam", 0, "envShape", 5)
-  assert_engine_rejects("envShape", "setGrainParam", 0, "envShape", -1)
-  engine.setGrainParam(0, "grainMode", 1); engine.setGrainParam(0, "envShape", 4)
+  assert_engine_rejects("overlapOn", "setGrainParam", 0, "overlapOn", 2)
+  assert_engine_rejects("overlapOn", "setGrainParam", 0, "overlapOn", 0.5)
+  assert_engine_rejects("arpOn", "setGrainParam", 0, "arpOn", 2)
+  assert_engine_rejects("arpFold", "setGrainParam", 0, "arpFold", 0.5)
+  assert_engine_rejects("envShape", "setGrainParam", 0, "envShape", 0)  -- 3.8: gone
+  assert_engine_rejects("windowBank", "setGrainParam", 0, "windowBank", 3)  -- engine-owned
+  engine.setGrainParam(0, "grainMode", 1); engine.setGrainParam(0, "overlapOn", 1)
+  engine.setGrainParam(0, "arpOn", 1); engine.setGrainParam(0, "arpFold", 0)
 end)
 
 -- A NaN fails every `<` and `>` of a range check, and an infinity passes
@@ -761,11 +769,11 @@ test("the engine stub rejects param names the SynthDefs do not have (#24)", func
   engine.setVoiceParam(0, "ratio", 1.5)
   assert_engine_rejects("nonsense", "setVoiceParam", 0, "nonsense", 1)
   for engine_voice = 0, spec.num_voices - 1 do engine.setVoiceParam(engine_voice, "bend", 1) end
-  -- grain params: either grain SynthDef's controls (kept for a source switch) plus envShape
+  -- grain params: either grain SynthDef's controls (kept for a source switch) plus the handlers' (history)
   assert_engine_rejects("ratio", "setGrainParam", 0, "ratio", 1)
   assert_engine_rejects("grainsize", "setGrainParam", 0, "grainsize", 0.1)
   engine.setGrainParam(0, "bufPos", 0.5); engine.setGrainParam(0, "grainSize", 0.1)
-  engine.setGrainParam(0, "envShape", 0)
+  engine.setGrainParam(0, "history", 0); engine.setGrainParam(0, "windowShape", 0.57)
 end)
 
 test("AGENTS.md is the only agent instructions file", function()

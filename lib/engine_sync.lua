@@ -537,13 +537,19 @@ return function(S)
       engine_param_value("reverb_damp"), engine_param_value("delay_to_reverb"))
   end
 
-  -- Master density scales every running voice's grain density: one
-  -- message per running voice, as the budget counts it (engine_messages,
-  -- which declares this local)
+  -- Master density scales every running voice's grain rate: one message
+  -- per running voice, as the budget counts it (engine_messages, which
+  -- declares this local): its grain density, or in 3.8's overlap mode
+  -- (S.lib.grain.overlap) its overlap, which the engine divides by the
+  -- size (ruling 35: the engine has no master density of its own)
   function send_master_density_to_engine(density)
     for i = 1, NUM_VOICES do
       if S.voices[i].active then
-        engine.setGrainParam(i - 1, "grainDensity", engine_param_value("v" .. i .. "_grain_density") * density)
+        if S.lib.grain.overlap(i) then
+          engine.setGrainParam(i - 1, "grainOverlap", engine_param_value("v" .. i .. "_grain_overlap") * density)
+        else
+          engine.setGrainParam(i - 1, "grainDensity", engine_param_value("v" .. i .. "_grain_density") * density)
+        end
       end
     end
   end

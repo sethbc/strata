@@ -16,7 +16,7 @@ Anchors (ruling W7, #109). A cursor over rows that change, listed in the module'
 
 `voice_page_rows(voice_idx)` (global, `lib/ui/voice_rows.lua`) lists, first, the voice's type row (3.8: `{label = "type", param_id = "v<i>_type", section = "voice", kind = "type", selectable = true}`, with no label row above it, `docs/notes/lua/types.md`), then every param of a voice in four sections (the built-in `synth`, `grain` and `crossmod` records' `voice_rows`, each `before = "mix"`, and VOICE's own `mix`), each opened by a label row `{label = <section>, section = <section>, selectable = false}`. A field row is `{label = <param name>, param_id, section, selectable = true, kind}`, `kind` being `"control"`, `"number"`, `"option"` or `"binary"` from the param's type (binary: only registered rows).
 - `synth`: `param_order` (the current type's keys) without `amp` and `pan` (the synth record's `voice_rows.rows`, a function of the voice); for a buffer source `buf_pos`, `buf_rate`, `buf_scan`; for the input source the section, label included, is left out.
-- `grain`: `grain_size`, `grain_density`, `grain_pitch`, `grain_spread`, `grain_env`, `grain_mode`.
+- `grain`: `grain_size`, `grain_density` (in 3.8's overlap cloud `grain_overlap` in its place: `lib/grain.lua`'s `voice_rows.swaps`), `grain_pitch`, `grain_spread`, `grain_mode`, then `lib/grain.lua`'s `grain_shape`, `grain_skew`, `grain_prob`, `grain_cloud` and `pan_wander`.
 - `crossmod`: `mod_speed`, then per slot `mod_source_<s>`, `mod_amp_amt_<s>`, `mod_freq_amt_<s>`.
 - `mix`: `source`, `amp`, and `pan` when the voice has one (Sub has none).
 

@@ -292,8 +292,7 @@ end
 --   voice_level_grain_controls[name]  voiceLevelGrainControls { ... }:
 --                             setGrainParam refuses them too
 --   enumerations[name]        {low, high}: whole-number controls the engine
---                             rounds (name.round.clip(low, high)), and envShape
---                             (0 = Hann, 1..envBuffers.size, envBufnumFor)
+--                             rounds (name.round.clip(low, high))
 -- Comments are stripped first (strip_sc_comments). A part the source does
 -- not hold is left out (nil, or an empty table), so a fragment parses too;
 -- stubs.engine_spec_problems lists what the whole engine must have.
@@ -550,11 +549,6 @@ function stubs.engine_spec_from_source(source)
     assert(not known or (known[1] == range[1] and known[2] == range[2]), "engine source: " .. name .. " is clipped to two ranges")
     spec.enumerations[name] = range
   end
-  local envelopes = source:match("envBuffers%s*=%s*%[(.-)%]%.collect")
-  if envelopes then
-    local _, envelope_count = envelopes:gsub("Env[%.%(]", "")
-    spec.enumerations.envShape = { 0, envelope_count }
-  end
   return spec
 end
 
@@ -584,7 +578,6 @@ function stubs.engine_spec_problems(spec)
   need(spec.input_source, "inputSource { ^numBuffers + N }")
   need(#spec.voice_type_defs > 0, "voiceTypeDefs { ^#[...] }")
   need(next(spec.grain_params), "the grain SynthDefs (grainDefs: [predicate -> \\name, ...])")
-  need(spec.enumerations.envShape, "envBuffers = [...].collect")
   return problems
 end
 

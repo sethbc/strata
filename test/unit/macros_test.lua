@@ -150,13 +150,18 @@ test("target ids leave out macros, morph and discrete params", function()
   assert_equal(ids[11], "reverb_damp")
   assert_equal(ids[12], "delay_to_reverb", "the registered global (3.8, 1a)")
   assert_equal(ids[13], "v1_main", "a voice's main entry")
-  assert_equal(listed["v3_grain_pitch"], 12 + 2 * 13 + 4, "v3 pitch (3.7: 13 destinations a voice)")
-  assert_equal(ids[103], "v7_amp", "the registered destinations, to v7 amp")
-  assert_equal(ids[104], "strata_lfo1_rate", "then the LFOs' rates and depths")
-  assert_equal(ids[105], "strata_lfo1_depth")
-  assert_equal(ids[115], "strata_lfo6_depth")
-  for k = 1, 16 do assert_equal(listed["matrix_" .. k .. "_depth"], 115 + k, "then routing " .. k .. "'s depth") end
-  assert_equal(#ids, 131 + #S.registry.macro_targets, "and nothing after them but the registered targets")
+  assert_equal(listed["v3_grain_pitch"], 12 + 2 * 15 + 4, "v3 pitch (12 globals with 1a's dly>rev, 15 destinations a voice with 1c's shape and skew)")
+  -- (the LFO destinations but none and the sixteen macros: read from the
+  -- list, so a release that adds a destination moves nothing here)
+  local destinations = #S.LFO_DESTINATIONS - 1 - 16
+  assert_equal(ids[destinations], "v7_amp", "the registered destinations, to v7 amp")
+  assert_equal(ids[destinations + 1], "strata_lfo1_rate", "then the LFOs' rates and depths")
+  assert_equal(ids[destinations + 2], "strata_lfo1_depth")
+  assert_equal(ids[destinations + 12], "strata_lfo6_depth")
+  for k = 1, 16 do
+    assert_equal(listed["matrix_" .. k .. "_depth"], destinations + 12 + k, "then routing " .. k .. "'s depth")
+  end
+  assert_equal(#ids, destinations + 12 + 16 + #S.registry.macro_targets, "and nothing after them but the registered targets")
   -- set_target takes only these ids
   assert_equal(macros.set_target(1, 1, "macro_2", 0, 1), false, "a macro is no target")
   assert_equal(macros.set_target(1, 1, "morph", 0, 1), false, "nor the morph")
@@ -1014,10 +1019,10 @@ end)
 test("the 16 macros register as destinations and sources", function()
   local context, S, macros = loaded()
   local destinations = S.LFO_DESTINATIONS
-  assert_equal(#destinations, 120, "after v7 amp, 104 (3.8: 1a's dly>rev among the globals)")
+  assert_equal(#destinations, 134, "after v7 amp, 118 (3.8: 1a's dly>rev among the globals, 1c's shape and skew in each voice)")
   for m = 1, 16 do
-    local entry = destinations[104 + m]
-    assert_equal(entry.label, "macro " .. m, "destination " .. (104 + m))
+    local entry = destinations[118 + m]
+    assert_equal(entry.label, "macro " .. m, "destination " .. (118 + m))
     assert_equal(entry.resolve(), "macro_" .. m)
     assert_equal(entry.group, "macros", "the macros' group")
     assert_equal(entry.fast, nil, "run in Lua")
@@ -1058,7 +1063,8 @@ test("a registered macro target follows the matrix depths", function()
   params:add{ type = "control", id = "x_level", name = "x level", controlspec = controlspec.new(0, 1, "lin", 0, 0.5) }
   params:add{ type = "option", id = "z_mode", name = "z mode", options = { "a", "b" } }
   local before = macros.target_ids()
-  assert_equal(before[131], "matrix_16_depth", "read before the registration (3.6's own targets follow it)")
+  -- (the LFO destinations but none and the macros, the LFOs' twelve, then the sixteen depths: read from the list)
+  assert_equal(before[#S.LFO_DESTINATIONS - 1 - 16 + 12 + 16], "matrix_16_depth", "read before the registration (3.6's own targets follow it)")
   S.register_macro_target("x_level", "x level")
   local ids = macros.target_ids()
   assert_equal(#ids, #before + 1, "one more")

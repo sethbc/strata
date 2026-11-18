@@ -78,7 +78,7 @@ local function ids(voice_idx, keys)
   return table.concat(list, " ")
 end
 
-local GRAIN_KEYS = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode" }
+local GRAIN_KEYS = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_mode" }
 local CROSSMOD_KEYS = { "mod_speed", "mod_source_1", "mod_amp_amt_1", "mod_freq_amt_1", "mod_source_2",
   "mod_amp_amt_2", "mod_freq_amt_2", "mod_source_3", "mod_amp_amt_3", "mod_freq_amt_3" }
 
@@ -96,7 +96,7 @@ test("VOICE rows for a synth voice", function()
   local rows = voice_page_rows(1)
   assert_equal(row_ids(built_in(rows)), expected_rows(1, { "freq", "rq", "noise", "mod1", "mod2" },
     { "source", "amp", "pan" }), "voice 1's rows")
-  assert_equal(#built_in(rows), 29, "3.1's four label rows and 24 fields, and the type row")
+  assert_equal(#built_in(rows), 28, "3.1's four label rows and 23 fields (3.8 1c: no envelope), and the type row")
   local kinds = { [params.tCONTROL] = "control", [params.tNUMBER] = "number", [params.tOPTION] = "option",
     [params.tBINARY] = "binary" }
   for index, row in ipairs(rows) do
@@ -114,7 +114,7 @@ test("VOICE rows for a synth voice", function()
     end
   end
   assert_equal(rows[row_of(rows, "v1_freq")].kind, "control")
-  assert_equal(rows[row_of(rows, "v1_grain_env")].kind, "option")
+  assert_equal(rows[row_of(rows, "v1_grain_mode")].kind, "option")
   assert_equal(rows[row_of(rows, "v1_mod_source_2")].kind, "number")
   assert_equal(rows[row_of(rows, "v1_source")].kind, "option")
 end)
@@ -215,27 +215,28 @@ test("voice_page_group returns the cursor's group of four selectable rows", func
   group, indices = voice_page_group(rows, 1)
   assert_equal(group, 1)
   assert_equal(group_ids(rows, indices), "v1_type v1_freq v1_rq v1_noise", "the first group")
-  -- voice 1 has 25 fields: its seventh group holds the last one
+  -- (3.8 1c: the grain envelope's row gone, one field fewer each)
+  -- voice 1 has 24 fields: its sixth group is full
   group, indices = voice_page_group(rows, #rows)
-  assert_equal(group, 7)
-  assert_equal(group_ids(rows, indices), "v1_pan")
-  -- voice 2 (FM) has 24 fields: its sixth group is full
+  assert_equal(group, 6)
+  assert_equal(group_ids(rows, indices), "v1_mod_freq_amt_3 v1_source v1_amp v1_pan")
+  -- voice 2 (FM) has 23 fields: its sixth group holds three
   local fm_rows = built_in(voice_page_rows(2))
-  assert_equal(count_selectable(fm_rows), 24)
+  assert_equal(count_selectable(fm_rows), 23)
   group, indices = voice_page_group(fm_rows, #fm_rows)
   assert_equal(group, 6)
-  assert_equal(group_ids(fm_rows, indices), "v2_mod_freq_amt_3 v2_source v2_amp v2_pan", "voice 2's last group is full")
-  -- voice 4 (Sub, no pan) has 21 fields, so its sixth group holds one; on
-  -- input it has 19, and its last group three rows
+  assert_equal(group_ids(fm_rows, indices), "v2_source v2_amp v2_pan", "voice 2's last group holds three")
+  -- voice 4 (Sub, no pan) has 20 fields, so its fifth group is full; on
+  -- input it has 18, and its last group two rows
   local sub_rows = built_in(voice_page_rows(4))
-  assert_equal(count_selectable(sub_rows), 21)
-  assert_equal(#select(2, voice_page_group(sub_rows, #sub_rows)), 1)
+  assert_equal(count_selectable(sub_rows), 20)
+  assert_equal(#select(2, voice_page_group(sub_rows, #sub_rows)), 4)
   params:set("v4_source", local_value("S").constants.SOURCE_INPUT)
   sub_rows = built_in(voice_page_rows(4))
   group, indices = voice_page_group(sub_rows, #sub_rows)
   assert_equal(group, 5)
-  assert_equal(group_ids(sub_rows, indices), "v4_mod_freq_amt_3 v4_source v4_amp",
-    "voice 4's last group on input has three rows")
+  assert_equal(group_ids(sub_rows, indices), "v4_source v4_amp",
+    "voice 4's last group on input has two rows")
 end)
 
 test("cursors clamp when the selected voice's rows shrink", function()
@@ -423,11 +424,13 @@ test("voice_rows.rows may be a function, and swaps replace a row of the section"
     end
     return table.concat(list, " ")
   end
-  assert_equal(ids(1), "grain_size grain_density grain_pitch grain_spread grain_env grain_mode probe_a",
+  -- (3.8 1c's five rows come between: its record registers before the probe)
+  local grain = "grain_mode grain_shape grain_skew grain_prob grain_cloud pan_wander"
+  assert_equal(ids(1), "grain_size grain_density grain_pitch grain_spread " .. grain .. " probe_a",
     "voice 1: its row added, no swap")
-  assert_equal(ids(2), "grain_size probe_b grain_pitch grain_spread grain_env grain_mode probe_a",
+  assert_equal(ids(2), "grain_size probe_b grain_pitch grain_spread " .. grain .. " probe_a",
     "voice 2: the density's row swapped for probe_b")
-  assert_equal(ids(3), "grain_size grain_density grain_pitch grain_spread grain_env grain_mode",
+  assert_equal(ids(3), "grain_size grain_density grain_pitch grain_spread " .. grain,
     "voice 3: the function gives no row")
   swapped[2] = nil
   assert_true(ids(2):find("grain_density", 1, true) ~= nil, "a swap that gives nil leaves the row")

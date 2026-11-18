@@ -194,7 +194,8 @@ test("history is an LFO destination after its voice's built-ins", function()
   local index = {}
   for position, destination in ipairs(S.LFO_DESTINATIONS) do index[destination.label] = position end
   for voice_idx = 1, S.constants.NUM_VOICES do
-    local destination = S.LFO_DESTINATIONS[index["v" .. voice_idx .. " scan"] + 1]
+    -- (3.8 1c: the window's shape and skew, registered first, come between)
+    local destination = S.LFO_DESTINATIONS[index["v" .. voice_idx .. " skew"] + 1]
     assert_equal(destination.label, "v" .. voice_idx .. " hist", "right after the voice's built-ins (3.7: by voice)")
     assert_equal(destination.resolve(), "v" .. voice_idx .. "_history")
   end
