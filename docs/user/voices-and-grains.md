@@ -18,6 +18,7 @@ Each voice plays one synth type, picked on its VOICE page's `type` row (below). 
 1. **Noise** - Colored noise and crackling dust through a bank of four resonances at the voice's pitch, from a breathy wash to a ringing, whistling tone (no voice starts on it: choose it on the `type` row)
 
 - **Saw** - Three detuned variable saws on each side through the Pulse's resonant lowpass, for a wide, slowly beating pad. No voice starts on it; any voice can choose it. Its width, cutoff and res are the Pulse's own parameters, so a Pulse voice switched to Saw keeps its filter where it was
+1. **Formant** - A vowel voice: two formant oscillators a side sing at formants that move between vowels, from an "ee" toward an "ah", with a slow wander of their own; its main parameter scales both formants up or down, from a darker, larger voice to a smaller, brighter one
 
 ### Voice types
 
@@ -132,6 +133,15 @@ Each type's own parameters, by the names the VOICE page's synth section, MAIN an
 | `detune` | 0-0.02 | 0.003 | How far apart the three saws on each side are, as a fraction of the pitch: the second is that far off it, the third twice as far, upward on the left and downward on the right. 0 is one plain saw; higher beats faster and spreads wider |
 | `cutoff` | 100-8000 Hz | 2000 | The resonant lowpass's cutoff, as the Pulse's: it wanders between half and twice the setting, within 100-8000 Hz |
 | `res` | 0.1-1 | 0.8 | The filter's resonance, as the Pulse's: higher is a sharper peak that rings at the cutoff, 0.1 flat. One setting sounds the same on both types |
+
+**Formant**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 100 | The pitch the formants sing at (one each side, a little apart) |
+| `formant` (main) | 0.5-2 | 1 | A scale on both formants' frequencies: below 1 a darker, larger voice, above 1 a smaller, brighter one (at 2 and a high pitch it turns harsh) |
+| `vowel` | 0-1 | 0.5 | Where the formants sit between vowels, from an "ee" at 0 to an "ah" at 1: at 0 the first at 300 Hz and the second at 2300, at 1 the first at 800 and the second at 1100 (times the formant scale). It wanders 0.2 either way |
+| `bw` | 0.1-1 | 0.5 | Each formant's width, as a fraction of its frequency: low is a narrow, ringing formant, high a broad, soft one |
 
 ## Granular Processing
 

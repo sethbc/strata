@@ -259,7 +259,8 @@
             \strataWave,
             \strataAdditive,
             \strataNoise,
-            \strataSaw
+            \strataSaw,
+            \strataFormant
         ]
     }
 
