@@ -309,3 +309,17 @@ Measured with the memory area first in its run, before (the base, `main` with 3.
 ("Before" ran the voices on their own defs, Karplus on voice 5 only; "after" runs every voice on Karplus. The before column's pool cases had Karplus's seven notes first and nine on the other voices.)
 
 The delay's line gives back about 1010-1030 KB at every case (the idle engine 6580 to 7610 KB free on 3.13); the cases that hold voice synths give part of it back to Karplus on every voice: synth -> buffer -> synth holds 14 Karplus (14 × 49.7 = 696 KB, against 377.6 KB of the seven defs twice), about 320 KB, and the second pool case 30 (16 × 2 × 49.7 = 1491 KB against 1110 for the voices' own defs twice and seven old Karplus and nine other notes), about 380 KB. The design's sums held: high synth -> buffer -> synth 4510-4520 KB (expected about 4520), the high pool case 2390-2400 (about 2390), the third case 2870-2890 on high (about 2900) and 3450-3480 on standard (about 3540: the facts' scratch third case, 2529 KB with every voice on the trimmed Karplus, plus the delay's 1010; the 60-90 KB is in that first term, the scratch case's, since the delay's term matches at the cases measured both ways: standard synth -> buffer -> synth 4171 + 1010 = 5181 against 5160-5190, the standard pool case 2041 + 1010 = 3051 against 3030-3080). Every floor holds with room: the tightest mixed case, high synth -> buffer -> synth, is 926-936 KB above 3584 (about 820-840 counting the spectral writers' late allocations, about 100 KB); the tightest pool case, high synth -> buffer -> synth with the pool full, 1110-1120 above 1280; eight recordings on high 1588-1618 above 3072. No run printed `alloc failed`. This is the room 3.8's later engine packages are measured against (design §1: about 4300 KB expected at the tightest case once every one has landed).
+
+## 3.8: plain sends (package 1a)
+
+The stage loses 3.7's `fxMix` reader, its lag and the crossfade's products, and gains the `dry` control and its lag (3.8 design §7.1): `\strataVoiceMix` reads 39.6 KB on 3.14.1 and on 3.13, against 40.21 and 40.87 KB on the base (`land/batch-4`), 2.4 KB under the 42 KB limit. The master and the pre-master tap lose their `fxMix` reader too. Measured with the memory area first in its run: 3.14.1 the memory area alone, 3.13 the memory shard of three full runs in Docker (identical), the base on 3.13 the memory area alone in its container.
+
+| Worst case (KB free) | 3.14.1 base | 3.14.1 1a | 3.13 base | 3.13 1a | floor |
+|---|---|---|---|---|---|
+| standard, synth -> buffer -> synth | 5160 | 5210 | 5190 | 5210 | 3072 |
+| standard, synth -> buffer -> synth, pool full | 3030 | 3080 | 3080 | 3080 | 1280 |
+| high, synth -> buffer -> synth (the tightest mixed case) | 4510 | 4540 | 4520 | 4540 | 3584 |
+| high, synth -> buffer -> synth, pool full (the tightest pool case) | 2390 | 2420 | 2400 | 2420 | 1280 |
+| eight recordings, high | 4660 | 4700 | 4690 | 4700 | 3072 |
+
+Every other case moves by 20-60 KB the same way (seven stages, about 0.6-1.3 KB each, and the master's and the tap's readers). No run printed `alloc failed`.
