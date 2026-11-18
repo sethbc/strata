@@ -256,7 +256,7 @@ Every floor holds. The tightest is high synth -> buffer -> synth, 3820 KB free, 
 ## 3.8: the delay's line and Karplus (package 0b)
 
 3.8's types let any voice be any type, so the memory area is recast to the worst a free choice can reach (design §1, the 3.8 plan's rulings 10-14), and room is made first:
-- **The delay's line is two buffers** (`StrataDelay.sc`: `BufDelayC` on two mono buffers of 2^18 frames, ordinary RAM), where 3.7's `DelayC` took 1 MB of the pool. The node is about 14 KB with 3.8's freeze and clear (`memory: \strataDelay takes <n> KB of the pool (at most 20 KB ...)`, twenty nodes: 14.3 KB on 3.14.1 and on 3.13; 7.5-7.6 KB before them, the 3.8 facts' prototype 13.5 KB). Its limit (`delayDefLimitKB`, the plan's ruling 12) is 20 KB, raised from 0b's 16 by package 1b from its own measurement. A bypass no longer returns pool memory.
+- **The delay's line is two buffers** (`StrataDelay.sc`: `BufDelayC` on two mono buffers of 2^18 frames, ordinary RAM), where 3.7's `DelayC` took 1 MB of the pool. The node is about 17 KB with 3.8's freeze and clear (`memory: \strataDelay takes <n> KB of the pool (at most 20 KB ...)`, twenty nodes: 16.9 KB on 3.14.1 and on 3.13, 14.3 before the clear's fade back in; 7.5-7.6 KB before them, the 3.8 facts' prototype 13.5 KB). Its limit (`delayDefLimitKB`, the plan's ruling 12) is 20 KB, raised from 0b's 16 by package 1b from its own measurement. A bypass no longer returns pool memory.
 - **Karplus's two `Pluck` lines take `karplusMaxDelay`** (0.0839 s, 4096 frames each, where 0.1 s took 8192): 49.7 KB where it was 80.9.
 - **One limit, 52 KB, holds every voice def**, and the check names the costliest (`costliestVoiceDef`, Karplus).
 - **`castVoices(target, defName)`** (check-only) puts every voice on the costliest def before each tier's first start, after `h.stopAllVoices` and a check that no voice def plays or releases in `voiceGroup`, and puts each voice back on its own type after the tier's last case, however it ends (a `protect`). Since 3.8's package 0c it sends one `setVoiceType` per voice (the def's type, `voiceTypeDefs.indexOf`; nil puts voice v back on type v), so every reader (`voiceDefFor`) plays it at the voice's next start. So every case holds the costliest def wherever it held a voice synth: synth -> buffer -> synth 14 of it, the second pool case 30 (`[23, 14, 30, 30]`: `\strataGrainBuf`, `\strataGrainRing`, voice synths, the costliest def).
@@ -275,7 +275,7 @@ Measured with the memory area first in its run, before (the base, `main` with 3.
 | `\strataKarplus` | 80.9 | 48.1 | 80.9 | 48.9 | 52 (83 before) |
 | `\strataRing` | 17.7 | 16.6 | 17.7 | 16.9 | 52 |
 | `\strataMod` | 5.9 | 5.0 | 5.9 | 5.1 | 9.9 |
-| `\strataDelay` | (about 1032 with its `DelayC` lines: the 3.8 facts) | 7.5 | | 7.6 | 16 |
+| `\strataDelay` | (about 1032 with its `DelayC` lines: the 3.8 facts) | 7.5 (16.9 with 1b's freeze and clear) | | 7.6 (16.9 with 1b's) | 16 (20 since 1b) |
 | `\strataGrainBuf` | 82.6 | 80.4 | 82.6 | 81.7 | 88 |
 | `\strataGrainRing` | 64.0 | 62.2 | 64.0 | 63.2 | 88 |
 | `\strataVoiceMix` | 41.29 | 40.21 | 41.29 | 40.87 | 42 |
