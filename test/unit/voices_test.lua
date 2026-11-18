@@ -213,4 +213,24 @@ test("a voice source's faders are the grain params, then level and pan", functio
   assert_equal(main_param_id(1), "v1_grain_size", "its main param is an input voice's")
 end)
 
+-- 3.8 (package 1d, fix round 1): the source tests it adds take any index:
+-- one outside 1..NUM_VOICES (or no number) is no input voice, no voice
+-- source, reads no voice and draws an empty label, never an error (2c calls
+-- them from grid keys)
+test("voice_uses_input, voice_uses_voice, voice_source_voice and voice_source_label take any index", function()
+  load_strata()
+  local C = local_value("S").constants
+  for _, index in ipairs({0, C.NUM_VOICES + 1, -1, 1.5, "1"}) do
+    local what = "index " .. tostring(index)
+    assert_equal(voice_uses_input(index), false, what .. ": no input voice")
+    assert_equal(voice_uses_voice(index), false, what .. ": no voice source")
+    assert_equal(voice_source_voice(index), nil, what .. ": reads no voice")
+    assert_equal(voice_source_label(index), "", what .. ": an empty label")
+  end
+  assert_equal(voice_uses_input(nil), false, "nil: no input voice")
+  assert_equal(voice_uses_voice(nil), false, "nil: no voice source")
+  assert_equal(voice_source_voice(nil), nil, "nil: reads no voice")
+  assert_equal(voice_source_label(nil), "", "nil: an empty label")
+end)
+
 end

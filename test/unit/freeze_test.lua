@@ -442,23 +442,35 @@ test("a raising freeze-change hook is reported and skipped", function()
 end)
 
 -- 3.8 (package 1d): a voice reading another voice's ring freezes as an
--- input voice does (hold, and spectral on high), and a switch unfreezes it
+-- input voice does: on high its spectral mode reaches the engine
+-- (freezeMode 1, then freeze 1), on standard the mode stays hold (freezeMode
+-- 0); a switch to another voice's ring unfreezes it
 test("a voice source freezes, and a switch unfreezes", function()
-  h.write_performance_active(HIGH)
-  local context = load_strata()
-  finish_startup(context)
-  local S = local_value("S")
-  local source = S.constants.SOURCE_VOICE_FIRST + 1
-  params:set("v1_source", source)
-  context.clear_engine_calls()
-  params:set("v1_freeze_mode", 2)
-  params:set("v1_freeze", 1)
-  local sent = sent_freeze(context)
-  assert_equal(sent[#sent] and sent[#sent].name, "freeze"); assert_equal(sent[#sent] and sent[#sent].value, 1, "frozen")
-  assert_true(S.lib.freeze.spectral_offered(), "spectral is offered on high")
+  local function freeze_spectral(tier)
+    if tier then h.write_performance_active(tier) end
+    local context = load_strata()
+    finish_startup(context)
+    local S = local_value("S")
+    params:set("v1_source", S.constants.SOURCE_VOICE_FIRST + 1)
+    context.clear_engine_calls()
+    params:set("v1_freeze_mode", 2)
+    params:set("v1_freeze", 1)
+    local texts = {}
+    for _, each in ipairs(sent_freeze(context)) do
+      if each.voice == 0 then texts[#texts + 1] = each.name .. " " .. each.value end
+    end
+    return S, table.concat(texts, ", ")
+  end
+  local S, sent = freeze_spectral(HIGH)
+  assert_equal(sent, "freezeMode 1, freeze 1", "on high: spectral, then the freeze")
   assert_true(S.lib.freeze.is_frozen(1), "the voice is frozen")
-  params:set("v1_source", source + 1)
+  params:set("v1_source", S.constants.SOURCE_VOICE_FIRST + 2)
   assert_equal(params:get("v1_freeze"), 0, "a switch to another voice's ring unfreezes")
+  S, sent = freeze_spectral({tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
+    reason = "standard: setting"})
+  assert_equal(params:get("v1_freeze_mode"), 1, "standard offers hold only")
+  assert_true(not sent:find("freezeMode 1", 1, true), "standard never sends spectral (sent: " .. sent .. ")")
+  assert_true(sent:find("freeze 1", 1, true) ~= nil, "standard freezes in hold (sent: " .. sent .. ")")
 end)
 
 end

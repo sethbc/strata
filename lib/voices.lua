@@ -67,27 +67,35 @@ return function(S)
     return source > SOURCE_SYNTH and source < SOURCE_INPUT
   end
 
+  -- (the 3.8 tests below take any index: one that is no voice, 1..NUM_VOICES,
+  -- is no input voice, no voice source and an empty label, never an error;
+  -- the grid's keys call them)
+  local function source_of(voice_idx)
+    local voice = type(voice_idx) == "number" and S.voices[voice_idx] or nil
+    return voice and voice.source or nil
+  end
+
   function voice_uses_input(voice_idx)
-    return S.voices[voice_idx].source == SOURCE_INPUT
+    return source_of(voice_idx) == SOURCE_INPUT
   end
 
   function voice_uses_voice(voice_idx)
-    local source = S.voices[voice_idx].source
-    return source >= SOURCE_VOICE_FIRST and source < SOURCE_VOICE_FIRST + NUM_VOICES
+    local source = source_of(voice_idx)
+    return source ~= nil and source >= SOURCE_VOICE_FIRST and source < SOURCE_VOICE_FIRST + NUM_VOICES
   end
 
   -- The voice (1..NUM_VOICES) a voice-source voice reads, or nil
   function voice_source_voice(voice_idx)
     if not voice_uses_voice(voice_idx) then return nil end
-    return S.voices[voice_idx].source - SOURCE_VOICE_FIRST + 1
+    return source_of(voice_idx) - SOURCE_VOICE_FIRST + 1
   end
 
   -- The source's short name: the option's, or v<j> for a voice source
-  -- (MAIN's and BUFFER's, design §12)
+  -- (MAIN's and BUFFER's, design §12); "" for no voice
   function voice_source_label(voice_idx)
     local read = voice_source_voice(voice_idx)
     if read then return "v" .. read end
-    return SOURCE_OPTIONS[S.voices[voice_idx].source]
+    return SOURCE_OPTIONS[source_of(voice_idx)] or ""
   end
 
   -- The buffer slot (1..NUM_BUFFERS) a buffer-sourced voice reads, or nil for
