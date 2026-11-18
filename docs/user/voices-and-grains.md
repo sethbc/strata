@@ -104,7 +104,7 @@ Each type's own parameters, by the names the VOICE page's synth section, MAIN an
 | param | range | default | what it does |
 |---|---|---|---|
 | `freq` | 20-2000 Hz | 100 | The pitch: the first partial, the others above it |
-| `tilt` (main) | 0-3 | 1 | How fast the partials fall away: partial k is at 1/k^tilt of the first, so 0 is every partial equal (bright and buzzy), 1 a sawtooth-like slope, 3 almost a plain sine. The whole is kept at one level whatever the tilt |
+| `tilt` (main) | 0-3 | 1 | How fast the partials fall away: partial k is at 1/k^tilt of the first, so 0 is every partial equal (bright and buzzy), 1 a sawtooth-like slope, 3 almost a plain sine. Its peak stays bounded whatever the tilt, but a flatter tilt spreads it over more partials and sounds quieter (at 0 about 13 dB under 3) |
 | `stretch` | -1-1 | 0 | Bends the series: at 0 the partials are whole multiples of the pitch (harmonic); above it they spread wider, below it they crowd closer, both bell-like and out of tune. A partial that would pass 21.6 kHz is silent |
 | `oddEven` | 0-1 | 0.5 | Which partials sound: 0 the odd ones only (hollow, like a clarinet), 0.5 all of them, 1 the even ones only (the first always sounds) |
 | `wander` | 0.01-1 Hz | 0.2 | The rate of a slow random drift of the tilt, 0.3 either way, which makes the color breathe |
