@@ -1362,6 +1362,39 @@ test("no .sc file is tracked outside the engine's files (#332)", function()
   assert_true(ignore:find("test/**/*.sc", 1, true) ~= nil, ".gitignore keeps a generated copy of a test class out of a commit")
 end)
 
+-- norns' SELECT menu lists every .lua file under dust/code/ at any depth but
+-- those in a folder of these names (~/src/norns/lua/core/menu/select.lua:
+-- grep -Ev "/(lib|data|crow|test|docs)/" on find's paths) (#813).
+local NORNS_MENU_SKIPS = { "lib", "data", "crow", "test", "docs" }
+
+-- The tracked paths norns would list, each as find prints it (strata/<path>).
+local function norns_menu_entries(paths)
+  local listed = {}
+  for _, path in ipairs(paths) do
+    local shown = "strata/" .. path
+    local skipped = false
+    for _, name in ipairs(NORNS_MENU_SKIPS) do
+      if shown:find("/" .. name .. "/", 1, true) then skipped = true end
+    end
+    if path:match("%.lua$") and not skipped then listed[#listed + 1] = shown end
+  end
+  return listed
+end
+
+test("norns lists strata alone: no other tracked .lua file is outside the folders its menu skips (#813)", function()
+  local planted = norns_menu_entries({ "strata.lua", "lib/voices.lua", "iii/strata_grid.lua", "test/unit/x_test.lua",
+    "extras/lib/e16/strata.lua", "tools/touchosc/layout.lua", "docs/x.md", "extras/data/x.lua", "crow/x.lua" })
+  assert_equal(table.concat(planted, " "), "strata/strata.lua strata/iii/strata_grid.lua strata/tools/touchosc/layout.lua",
+    "the scan names what norns would list")
+  local paths = {}
+  local listing = assert(io.popen("cd '" .. repo_root .. "' && git ls-files"))
+  for path in listing:lines() do paths[#paths + 1] = path end
+  listing:close()
+  assert_true(#paths > 100, "git ls-files listed the repository")
+  local listed = norns_menu_entries(paths)
+  assert_equal(table.concat(listed, ", "), "strata/strata.lua", "norns' script list would show: " .. table.concat(listed, ", "))
+end)
+
 -- A LocalBuf built into a SynthDef corrupts sclang 3.13's garbage collector
 -- (norns runs 3.13), which crashes sclang a little later (an assertion in
 -- its collector). Engine SynthDefs take server buffers as controls instead.

@@ -11,7 +11,7 @@
 
 ## What it owns
 
-`lib/io/osc.lua` (`S.lib.io_osc`): `M.OSC = {sends_per_tick = 32, feedback_hz = 15, echo_seconds = 0.25, watch}` (`watch` is the starting watch list: the sixteen macros and each voice's `v<i>_mute` and `v<i>_amp`, the params of `tools/touchosc/layout.lua`) and `M.running()`.
+`lib/io/osc.lua` (`S.lib.io_osc`): `M.OSC = {sends_per_tick = 32, feedback_hz = 15, echo_seconds = 0.25, watch}` (`watch` is the starting watch list: the sixteen macros and each voice's `v<i>_mute` and `v<i>_amp`, the params of `tools/touchosc/lib/layout.lua`) and `M.running()`.
 
 | Address in | Does |
 |---|---|
@@ -27,6 +27,6 @@ Every message with a `from` host sets the last sender (feedback goes to `{host, 
 
 IO's `osc` section: rig rows `osc_feedback` and `osc_port`; its status is the sender's host or `no sender`. Its layout states are `no sender` and `with a sender` (the rig setting cannot be set from the module, so a state shows the setting as it is).
 
-`tools/touchosc/layout.lua` is the layouts' description and `tools/touchosc/generate.py` writes `extras/touchosc/strata-tablet.tosc` and `strata-phone.tosc` from it, the same bytes every run (node IDs are uuid5 of their paths), and `generate.py --check` exits non-zero when a committed file differs (`tools/touchosc/README.md`); the `.tosc` format is unofficial and unverified in TouchOSC.
+`tools/touchosc/lib/layout.lua` is the layouts' description and `tools/touchosc/generate.py` writes `extras/touchosc/strata-tablet.tosc` and `strata-phone.tosc` from it, the same bytes every run (node IDs are uuid5 of their paths), and `generate.py --check` exits non-zero when a committed file differs (`tools/touchosc/README.md`); the `.tosc` format is unofficial and unverified in TouchOSC.
 
 Tests: `test/unit/io_osc_test.lua`.

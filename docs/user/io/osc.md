@@ -37,7 +37,7 @@ TouchOSC has no default ports, so type them in. In its connections, make a UDP c
 - **Send port**: 10111
 - **Receive port**: the same number as `port` in the IO page's `osc` section (9000 by default)
 
-Two layouts are in `extras/touchosc/` in the Strata folder: `strata-tablet.tosc` and `strata-phone.tosc`. Each has three pages: the sixteen macros, the seven voices (run, mute and level) and the sixteen scenes with the patterns' toggle. They are made by `tools/touchosc/generate.py` from `tools/touchosc/layout.lua` (see `tools/touchosc/README.md`), in a file format Hexler does not document.
+Two layouts are in `extras/touchosc/` in the Strata folder: `strata-tablet.tosc` and `strata-phone.tosc`. Each has three pages: the sixteen macros, the seven voices (run, mute and level) and the sixteen scenes with the patterns' toggle. They are made by `tools/touchosc/generate.py` from `tools/touchosc/lib/layout.lua` (see `tools/touchosc/README.md`), in a file format Hexler does not document.
 
 ## Sources
 

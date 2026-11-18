@@ -14,7 +14,7 @@ Built from iii v1.1.2's documents and source (monome's iii code page, monome.org
 
 1. Put the device in iii mode: hold a key (the top-left key on a grid, the only key on an arc) while plugging it in.
 2. Open diii, monome's uploader (monome.org/docs/iii/diii, in a Chromium-family browser, or the `diii` command line tool), with the device plugged into your computer.
-3. Upload `iii/strata_grid.lua` (for a grid) or `iii/strata_arc.lua` (for an arc) from Strata's folder, then make it the script that runs at start: type `first('strata_grid.lua')` (or `first('strata_arc.lua')`) in diii.
+3. Upload `extras/lib/iii/strata_grid.lua` (for a grid) or `extras/lib/iii/strata_arc.lua` (for an arc) from Strata's folder (on norns, `dust/code/strata/extras/lib/iii/`), then make it the script that runs at start: type `first('strata_grid.lua')` (or `first('strata_arc.lua')`) in diii.
 4. Plug the device into norns. SYSTEM > DEVICES > MIDI lists it as `iii grid` or `iii arc`; note its port.
 
 ## The three settings

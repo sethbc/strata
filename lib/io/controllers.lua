@@ -5,7 +5,7 @@
 -- (absolute, 7 or 14 bits, with pickup) on the sixteen macros, whatever bank
 -- is shown. Their ports and CCs are rig settings, read live through
 -- S.lib.io_rig; ports are taken and listened to only through S.lib.io_ports.
--- The E16's script that draws the frames is extras/e16/strata.lua.
+-- The E16's script that draws the frames is extras/lib/e16/strata.lua.
 -- Notes: docs/notes/lua/io/controllers.md
 
 return function(S)

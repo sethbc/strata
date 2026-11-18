@@ -11,7 +11,7 @@ return function(S)
   local M = {}
 
   -- The tunables. watch is the starting watch list: the params of
-  -- tools/touchosc/layout.lua (the sixteen macros, each voice's mute and level)
+  -- tools/touchosc/lib/layout.lua (the sixteen macros, each voice's mute and level)
   local OSC = {sends_per_tick = 32, feedback_hz = 15, echo_seconds = 0.25, watch = {}}
   M.OSC = OSC
   for m = 1, S.constants.NUM_MACROS do table.insert(OSC.watch, "macro_" .. m) end

@@ -1,4 +1,4 @@
--- extras/e16/strata.lua
+-- extras/lib/e16/strata.lua
 -- A script for an OXI E16 scene: draws Strata's macros on the E16's rings,
 -- labels and page title from the SysEx frames Strata sends (lib/io/controllers.lua,
 -- docs/user/io/controllers.md). Load it into the scene with OXI's app. It is
