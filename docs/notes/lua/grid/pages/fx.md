@@ -1,0 +1,31 @@
+## Must not break
+
+- **Every key sets a param, through its owner, and the page sends no engine command**: a bypass key goes through `set_binary_param` on `S.lib.voice_mix.BYPASS[effect].param_id` (the bypass's action ends the freeze first), a freeze key through `S.lib.fx_hold.toggle(effect)` (refused while bypassed), DC through `S.lib.fx_hold.clear()` (`params:set("delay_clear", 1)`), ds through `set_binary_param("delay_sync", ...)`, fm through `S.lib.params_setup.toggle_filter_mix()` (read at each press), the interval and the filter's type through `params:set`. The page never names `S.fx_last_mix` (a test reads the file): only `lib/params_setup.lua` writes it (AGENTS "Filter restore mix").
+- **The reverb's freeze is read only through `S.lib.fx_hold.offered("reverb")`** (plan ruling 27), never the param's presence: the press, the redraw (`frozen`, which checks `offered` first) and the signature each ask `offered` before any read, so with no freeze (3.8: package 3a's freeze was cut, #819) RF is dark (0) and dead and no read of `reverb_freeze` happens; a later package that puts `FX_HOLD.reverb = {freeze_id = ...}` and its param in place lights it with no change here. The page never writes a freeze id: they are `FX_HOLD`'s.
+- **A freeze set while its effect is bypassed goes back off** (plan ruling 26, the param's own rule): the key shows the param, so DF stays 4 on a bypassed delay.
+- **The fader lines are the engine's** (`faders(pane)`): five lines a set, each a 16-key line of an id that exists; the delay's time line is `S.lib.grid_faders.fx_fader_id("delay_time")` (the division while synced). The page's `press` never sees their keys.
+- **What the follow must cover**: the FX params' actions redraw no grid but for `filter_freq`, `filter_res`, `delay_time`, `delay_feedback` and `delay_mix` (`fx_fader_changed`, gated by `any_fx_faders()` and off during a scene transition), `delay_sync` and `delay_division` (`delay_sync`'s `shown_changed`, gated the same) and `delay_freeze` (always). Everything else reaches the page through the drift tick (`S.lib.grid_faders.follow_faders`): the fader lines' positions are the engine's part of the signature, and `signature(pane)` adds the set, the interval, sync, the filter's type, whether its mix is above 0, each effect's bypass and its freeze (`-` while not offered). A press repaints through `grid_key`, so DC's held light (`pane.held`) needs nothing more.
+- **Index checks**: a press needs z 1, a whole x in 1-16 and line 6 or 7; anything else does nothing. A stored set outside 1-3 reads as the delay.
+
+## Owns
+
+- `lib/grid/pages/fx.lua` (`S.lib.grid_pages_fx`): its record (`M.record`, one side, `faders`, `signature`), registered at `GRID_PAGES.fx`, and `M.FX_PAGE` (the lines, the sets' ids, the key positions, the param ids it names, `levels`).
+- State: `pane.state().set` (1 delay, 2 reverb, 3 master; the delay while unset), per port: a 256 whose two panes both show FX shows one set on both, as every page's `pane.state()` is shared by a port's panes; it goes with the grid (`forget_port`).
+- Unit tests: `test/unit/grid_pages_fx_test.lua`, on every arrangement of the pane harness that shows the keys each test needs, with the four tests 0e handed on: the 256's "grid page 4 shows FX faders in rows 3-7 and keeps row 8/16" as "the FX faders show and set", "the delay fader picks the division while the delay is synced" as "the time fader picks the division while synced" (ruling P6: unsynced, the last key is `S.lib.delay_sync.DELAY.max_seconds`), "a scene transition redraws the grid once per step on grid page 4" as "a scene transition redraws once per step", and `grid_core_test.lua`'s "an FX change redraws the grids only while one shows the FX faders" as "an FX change redraws only while a grid shows the FX page".
+
+## Keys and LEDs (design §10.9)
+
+| Line | x | Press | LED |
+|---|---|---|---|
+| 1-5 | 1-16 | the set's fader lines: delay `fx_fader_id("delay_time")`, `delay_feedback`, `delay_mix`, `delay_pingpong`, `shimmer_delay`; reverb `reverb_mix`, `reverb_size`, `reverb_damp`, `shimmer_reverb`, `delay_to_reverb`; master `filter_freq`, `filter_res`, `filter_mix`, `master_density`, `drift_amount` | the engine's bar |
+| 6 | 1-3 | `set = x` | 15 / 4 |
+| 6 | 5-9 | `shimmer_interval = x - 4` (`#SHIMMER.ratios` keys) | 15 / 4 |
+| 7 | 1, 6 | the delay's, the reverb's bypass toggled | 8 playing, 2 bypassed |
+| 7 | 2 | `delay_sync` toggled | 15 / 4 |
+| 7 | 3, 7 | while `offered(effect)`: `fx_hold.toggle(effect)`; else nothing | offered: 15 frozen / 4; else 0 |
+| 7 | 4 | `fx_hold.clear()` | 15 held, 4 |
+| 7 | 9-11 | `filter_type = x - 8` (the param's option count) | 15 / 4 |
+| 7 | 12 | `toggle_filter_mix()` | 15 mix above 0, 4 |
+| 6, 7 | the rest | nothing | 0 |
+
+Turned (the 128v), each line is a column: the faders run up columns 1-5 (row 16 the minimum), line 6 down column 6, line 7 down column 7. On a 64 the left half (x 1-8) holds the set keys, intervals 1-4 and line 7's x 1-7 (the delay's and the reverb's keys), the right half (x 9-16) interval 5 and the filter's keys (x 9-12); the five fader lines run across the half's eight keys on both halves (the time line's twelve divisions over eight keys).

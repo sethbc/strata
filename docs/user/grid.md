@@ -15,7 +15,8 @@ Since 3.8 every grid is built on one model. A **pane** is seven lines of sixteen
 3. [Scenes](grid/pages/scenes.md) - recall and save the sixteen scenes, the morph's corners and its X and Y, the scene sequencer and the gesture recorders
 4. [Sources](grid/pages/sources.md) - what each voice grains: its synth, another voice or itself, the input (stereo, left or right) or a buffer
 5. [Positions](grid/pages/positions.md) - each voice's buffer as sixteen cells; on its second side every voice's bookmark, store, hold and whole keys, and the slots' record and clear keys
-6. voices, 7. FX - coming in the rest of 3.8
+6. voices - coming in the rest of 3.8
+7. [FX](grid/pages/fx.md) - the delay, the reverb and the master in three sets of five faders, the bypasses, the delay's freeze and clear, sync, the filter's type and mix, and shimmer's interval
 
 Until a page arrives its page key is dark and does nothing.
 
