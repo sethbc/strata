@@ -12,6 +12,7 @@ local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local write_text, file_text, data_root, shell_quote = h.write_text, h.file_text, h.data_root, h.shell_quote
 local assert_near, scramble_state = h.assert_near, h.scramble_state
+local show_page = h.show_page
 local function note_freq(note) return 440 * 2 ^ ((note - 69) / 12) end
 
 local FIXTURE = h.repo_root .. "/test/fixtures/factory/"
@@ -429,6 +430,118 @@ test("a load refuses a key the index lists not, and one that is no key", functio
   assert_equal(select(2, factory().load("dawn")), "no set")
   assert_equal(select(2, factory().load("../dusk")), "no set")
   assert_true(not factory().loading(), "no clock")
+end)
+
+-- The first run (ruling 51)
+test("a start with no index writes nothing", function()
+  local context = load_strata()
+  assert_equal(local_value("S").factory_clock, nil, "no load")
+  assert_true(not util.file_exists(context.data_dir .. "strata/factory.data"), "no factory.data")
+  assert_true(not util.file_exists(context.audio_dir .. "strata/factory"), "no install folder")
+  finish_startup(context)
+  assert_true(not util.file_exists(context.data_dir .. "strata/factory.data"), "nor after the start")
+end)
+
+test("a first run writes pending before the copy", function()
+  local context = session({ first_run = true, unstarted = true })
+  local held = marker(context)
+  assert_equal(held.pending, "dusk", "factory.data names the first-run set as pending")
+  assert_equal(next(held.loaded), nil, "and nothing loaded")
+  assert_true(factory().loading(), "its load runs, not awaited")
+  assert_true(not util.file_exists(install_dir(context) .. "bell.wav"), "before the first file")
+end)
+
+test("a whole load writes loaded and clears pending", function()
+  local context, _, dir = session({ first_run = true, unstarted = true })
+  run_load(context)
+  assert_equal(marked(context), 1, "dusk loaded")
+  assert_equal(marker(context).pending, nil, "pending cleared")
+  assert_near(params:get("v1_grain_size"), 0.31, 1e-9, "the set's sound")
+  cleanup()
+  context = load_strata({ script_dir = dir, data_subdir = folder_of(context) })
+  assert_true(not factory().loading(), "a second start runs nothing")
+end)
+
+test("a start that finds pending runs that load again, though a scenes file now exists", function()
+  local context, _, dir = session({ first_run = true, unstarted = true })
+  context.clock.advance()  -- the first file (bell.wav) installed, the clock asleep after it
+  local install = install_dir(context)
+  assert_true(util.file_exists(install .. "bell.wav") and not util.file_exists(install .. "drone.wav"), "one file in")
+  cleanup()
+  assert_true(util.file_exists(live_scenes(context)), "the cleanup wrote a scenes file")
+  assert_equal(marker(context).pending, "dusk", "pending names the set")
+  local restore, opened = h.watch_writes("never")
+  context = load_strata({ script_dir = dir, data_subdir = folder_of(context) })
+  assert_equal(local_value("S").scene_file.start_outcome, "loaded", "this start found a scenes file")
+  assert_true(factory().loading(), "the load runs again")
+  run_load(context)
+  restore()
+  local wrote = {}
+  for _, name in ipairs(opened) do wrote[name:match("[^/]*$")] = true end
+  assert_true(not wrote["bell.wav.part"], "the first file left alone")
+  assert_true(wrote["drone.wav.part"] and wrote["pad.wav.part"], "the other two copied")
+  assert_equal(marker(context).pending, nil, "pending cleared at its end")
+  assert_equal(marked(context), 1)
+end)
+
+test("a player whose scenes file was found gets loaded = {} and no load", function()
+  local first = load_strata(); finish_startup(first)
+  capture_scene(1)
+  cleanup()
+  local context = session({ first_run = true, unstarted = true, data_subdir = folder_of(first) })
+  assert_true(not factory().loading(), "no load")
+  local held = marker(context)
+  assert_equal(held.version, 1)
+  assert_equal(held.pending, nil)
+  assert_equal(next(held.loaded), nil, "{version = 1, loaded = {}}")
+end)
+
+test("an unreadable scenes file is no first run", function()
+  local first = load_strata()
+  cleanup()
+  util.make_dir(first.data_dir .. "strata/")
+  write_text(first.data_dir .. "strata/scenes.data", "garbage")
+  local context, S = session({ first_run = true, unstarted = true, data_subdir = folder_of(first) })
+  assert_equal(S.scene_file.start_outcome, "unreadable")
+  assert_true(not factory().loading(), "no load")
+  assert_equal(next(marker(context).loaded), nil, "loaded = {}")
+end)
+
+test("an unusable marker is set aside and counts as found", function()
+  local first = load_strata()
+  cleanup()
+  util.make_dir(first.data_dir .. "strata/")
+  write_text(first.data_dir .. "strata/factory.data", "garbage")
+  local context = session({ first_run = true, unstarted = true, data_subdir = folder_of(first) })
+  assert_true(not factory().loading(), "no load")
+  assert_equal(file_text(context.data_dir .. "strata/factory.data.bak"), "garbage", "kept as factory.data.bak")
+  assert_equal(#lines_with(context, "error loading factory file"), 1, "one line")
+  assert_equal(next(marker(context).loaded), nil, "written afresh: loaded = {}")
+end)
+
+test("cleanup cancels the load clock", function()
+  local context = session({ first_run = true, unstarted = true })
+  assert_true(factory().loading())
+  cleanup()
+  assert_equal(local_value("S").factory_clock, nil, "no clock after cleanup")
+  context.clock.run_for(1)
+  assert_true(not util.file_exists(install_dir(context) .. "bell.wav"), "nothing copied after it")
+end)
+
+-- SETUP's list
+test("a second load while one runs is refused", function()
+  local context, S = session()
+  show_page("SETUP")
+  factory().open_list()
+  key(3, 1); key(3, 0)
+  assert_true(factory().loading(), "K3 loads")
+  local clock_id = S.factory_clock
+  assert_equal(select(2, factory().load("dusk")), "loading", "load refuses a second")
+  key(3, 1); key(3, 0)
+  assert_equal(S.factory_clock, clock_id, "one clock")
+  assert_equal(S.lib.ui_flash.text("hints"), "loading", "the list flashes loading")
+  run_load(context)
+  factory().close_list()
 end)
 
 end
