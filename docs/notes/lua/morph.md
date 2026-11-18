@@ -46,7 +46,7 @@
 - `MORPH`, the module's one table of tunables (`apply_hz` 10, `hysteresis` 0.02, `max_values_per_apply` 120, `send_threshold` 1/1000, `epsilon`, `param_count` 6, `corners` `{"a", "b", "c", "d"}`, `min_corners` 2, `row_partner` and `column_partner`, `crossing_seconds` 0.3).
 - `S.morph_clock`, the cleanup step `CLEANUP_ORDER.morph_clock` (112, cancels the clock, the one place that does, and drops the waiting apply), the PSET hook `morph` and the invariant `morph clock` (a move, a value left or a waiting crossing always has a clock, and the clock's coroutine is not dead).
 
-Elsewhere: `S.lib.scenes.set_value` (`lib/scenes.lua`) is the scenes' own `set_scene_value`, exported for morph; `S.lib.scenes.takeovers()` counts recalls and transitions started (#584). The MOD page's rows `A`-`D`, `morph` and `y` are `lib/pages/mod.lua`'s; the 256's XY pad is `lib/grid/layout_256.lua`'s (`docs/notes/lua/grid/layout_256.md`).
+Elsewhere: `S.lib.scenes.set_value` (`lib/scenes.lua`) is the scenes' own `set_scene_value`, exported for morph; `S.lib.scenes.takeovers()` counts recalls and transitions started (#584). The MOD page's rows `A`-`D`, `morph` and `y` are `lib/pages/mod.lua`'s; the grid's corners and X and Y faders are the scenes page's (`lib/grid/pages/scenes.lua`, `docs/notes/lua/grid/pages/scenes.md`).
 
 ## The plan
 
