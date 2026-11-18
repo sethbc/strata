@@ -78,7 +78,8 @@
             strataKarplus: [\decay, 0.5, 10],
             strataRing: [\ratio, 0.5, 8],
             strataWave: [\morph, 0, 1],
-            strataAdditive: [\tilt, 0, 3]
+            strataAdditive: [\tilt, 0, 3],
+            strataNoise: [\q, 0.005, 1]
         )
     }
 

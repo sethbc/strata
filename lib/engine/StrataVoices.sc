@@ -257,7 +257,8 @@
             \strataKarplus,
             \strataRing,
             \strataWave,
-            \strataAdditive
+            \strataAdditive,
+            \strataNoise
         ]
     }
 
