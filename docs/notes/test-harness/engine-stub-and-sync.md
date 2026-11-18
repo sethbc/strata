@@ -8,7 +8,7 @@
 
 It rejects any `engine.*` call whose name, argument count or types do not match the SC `addCommand` signatures. An `f` or `i` argument must also be finite: a NaN fails every `<` and `>` of the range checks below and an infinity passes an open one, so both are refused as types (`must be a finite number`, `must be an integer`) (#477).
 
-It range-checks the values, with limits parsed from the engine source by `stubs.parse_engine_spec` (`numVoices`, `numBuffers`, `inputSource`, `voiceSynthDefs`, the SynthDef `arg` lists):
+It range-checks the values, with limits parsed from the engine source by `stubs.parse_engine_spec` (`numVoices`, `numBuffers`, `inputSource`, `voiceTypeDefs` (3.8: the types, at least `numVoices`; the stub keeps each voice's type from the `setVoiceType` calls it sees, voice v on type v at each install, and checks `setVoiceParam`'s names against that type's def), the SynthDef `arg` lists):
 - voice 0..numVoices-1, slot 0..numBuffers-1, source 0..numBuffers+1;
 - mod slot 1..N (`modBus1..N` on every voice SynthDef), mod source -1..numVoices-1;
 - the whole-number controls the engine rounds and clips (`name.round.clip(low, high)`: `filterType` 0-2, `grainMode` 0-1, and the stage's `seqGate` and `voiceMute` 0-1, 3.4), plus `envShape` 0..the number of `envBuffers`;

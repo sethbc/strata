@@ -22,7 +22,7 @@ var failures = 0;
 var startFailed = false;
 // The fixed order the areas run in; an absent 3.2 file is skipped
 var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \mix, \performance,
-    \rings, \freeze, \variation, \loops, \record, \waveform, \positions, \modulation, \envelopes, \notes, \onsets, \soak];
+    \rings, \freeze, \variation, \loops, \record, \waveform, \positions, \modulation, \envelopes, \notes, \onsets, \types, \soak];
 // Areas that run only when $STRATA_ENGINE_CHECK_AREAS names them, never in
 // a full run or a CI shard: the soak (docs/notes/engine/files.md, #131)
 var onDemandAreas = [\soak];
@@ -45,12 +45,16 @@ var areas = if (missingAreas.notEmpty) {
 // timeout ($ENGINE_CHECK_TIMEOUT, 1800 by default), so a long soak can be given more
 var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInteger; if (given > 0) { given } { 1770 } }.value;
 var context, engine, h, runChecks, bootFailed, portAnswered, statusResponder, booted = false;
-var voiceDefs = [\strataResonator, \strataFM, \strataFolder, \strataSub,
-    \strataPulse, \strataKarplus, \strataRing];
-var allDefs = voiceDefs ++ [\strataMod, \strataGrainRing, \strataGrainBuf, \strataVoiceMix, \strataInput, \strataRecord, \strataRingWrite,
-    \strataFilter, \strataDelay, \strataReverb, \strataMaster];
+// The voice defs are the engine's type list (3.8: voiceTypeDefs), read once
+// the engine is built (readVoiceDefs), so a type package edits no list here
+var voiceDefs, allDefs, engineVoiceDefs;
 var grainDefs = [\strataGrainRing, \strataGrainBuf];
-var engineVoiceDefs = voiceDefs ++ grainDefs ++ [\strataMod];
+var readVoiceDefs = { arg target;
+    voiceDefs = target.voiceTypeDefs.asArray;
+    allDefs = voiceDefs ++ [\strataMod, \strataGrainRing, \strataGrainBuf, \strataVoiceMix, \strataInput, \strataRecord, \strataRingWrite,
+        \strataFilter, \strataDelay, \strataReverb, \strataMaster];
+    engineVoiceDefs = voiceDefs ++ grainDefs ++ [\strataMod];
+};
 // Every /poll/value message the run receives, and each poll's values as
 // they arrive, by poll index (a List each): the helpers read one poll's
 // values instead of scanning every message, which grow all run long. Each
@@ -798,7 +802,7 @@ var pollsMoved = {
 // After each area: nothing of a voice is left running, h.engine's polls are
 // in norns' poll registry as the runner left them (an area that moved them
 // is named, and they are put back, so the next area starts as every area
-// does), every slot is empty
+// does), every voice is on its own type, every slot is empty
 var finishArea = { arg name, seconds;
     var left = voiceNodesLeft.(engine), keys = engine.synths.keys.reject({ arg key; engine.effectKeys.includes(key) });
     var notes = noteRecordsLeft.(engine);
@@ -811,6 +815,9 @@ var finishArea = { arg name, seconds;
     check.(moved.isEmpty, "%: leaves h.engine's polls in norns' poll registry, the same objects at their indices, running as before%".format(
         name, if (moved.isEmpty) { "" } { " (moved: %)".format(moved) }));
     if (moved.notEmpty) { putBackPolls.(enginePolls) };
+    // (3.8) every voice back on its own type (each stopped by now), so no
+    // area leaves a voice on another type for the next
+    engine.numVoices.do({ arg voice; command.(\setVoiceType, voice, voice) });
     engine.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
     server.sync;
     ("area %: % s".format(name, seconds.round(0.1))).postln;
@@ -915,6 +922,7 @@ runChecks = {
 
         engine = buildEngine.(context);
         "compiled and allocated Engine_Strata".postln;
+        readVoiceDefs.(engine);
         addDefs32.(engine);
         server.sync;
         defaultScratchDir = engine.scratchDir;

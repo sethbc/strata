@@ -146,7 +146,7 @@ jobs:
       # garbage collector crashed (#131); rings builds a standard engine only
       matrix:
         areas:
-          - buffers,loops
+          - buffers,loops,types
           - lifecycle,files,positions,notes
           - effects,voices
           - mix,variation,grains,structure,performance

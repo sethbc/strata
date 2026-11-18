@@ -436,7 +436,10 @@ var checkVoiceParamSends = { arg voice;
 // unchanged with no tolerance widened, which is the audio proof (two voice
 // synths never match sample for sample: every def draws random values)
 var noteControlDefaults = (noteGate: 1, noteBend: 1, noteAmp: 1, noteMain: 0);
-// each def's ASR times in 3.4 (design 3.5 §3.5)
+// each def's ASR times in 3.4 (design 3.5 §3.5): the seven 3.4 defs only.
+// A later type's def (3.8) is checked for its ASR wiring and for defaults
+// inside attackTimeRange and releaseTimeRange; its exact times are compared
+// with its Lua record by the Lua tests
 var asrTimes34 = (strataResonator: [4, 8], strataFM: [5, 10], strataFolder: [3, 6], strataSub: [8, 12],
     strataPulse: [2, 4], strataKarplus: [0.01, 2], strataRing: [3, 5]);
 var controlDefault = { arg defName, controlName;
@@ -652,10 +655,11 @@ var checkNoteAttack = {
 };
 
 // "voices: the default attack and release are each def's times of 3.4":
-// attackTime and releaseTime default to them, and the ASR (the EnvGen that
-// frees the synth) takes its times from both, clipped to attackTimeRange
-// and releaseTimeRange (0.005-30 and 0.01-30 s), as every def's
-// voiceEnvelope does
+// attackTime and releaseTime default to them (a def 3.4 did not have: to
+// times inside the ranges), and the ASR (the EnvGen that frees the synth)
+// takes its times from both, clipped to attackTimeRange and
+// releaseTimeRange (0.005-30 and 0.01-30 s), as every def's voiceEnvelope
+// does
 var checkNoteTimes = {
     var attackRange = engine.tryPerform(\attackTimeRange) ? [nil, nil], releaseRange = engine.tryPerform(\releaseTimeRange) ? [nil, nil];
     var found = voiceDefs.collect({ arg defName;
@@ -670,8 +674,12 @@ var checkNoteTimes = {
         [defName, defaults, asr.notNil]
     });
     check.((attackRange.asArray == [0.005, 30]) and: { releaseRange.asArray == [0.01, 30] }
-        and: { found.every({ arg each; each[2] and: { [each[1], asrTimes34[each[0]]].flop.every({ arg pair;
-            pair[0].notNil and: { pair[0].equalWithPrecision(pair[1], 1e-6) } }) } }) },
+        and: { found.every({ arg each; each[2] and: {
+            asrTimes34[each[0]] !? { arg times; [each[1], times].flop.every({ arg pair;
+                pair[0].notNil and: { pair[0].equalWithPrecision(pair[1], 1e-6) } }) }
+            ?? { each[1][0].notNil and: { each[1][1].notNil }
+                and: { each[1][0].inclusivelyBetween(attackRange[0], attackRange[1]) }
+                and: { each[1][1].inclusivelyBetween(releaseRange[0], releaseRange[1]) } } } }) },
         "voices: the default attack and release are each def's times of 3.4 (ranges %, %; defaults, and the ASR takes them: %)".format(
             attackRange, releaseRange, found));
 };
@@ -867,7 +875,8 @@ command.(\retrigger, 4, 0.5);
 command.(\setModSpeed, 4, 2.0);
 check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synths");
 // an index outside the voices, or not an integer, is ignored (#262), by
-// every one of the ten voice commands (#504; voiceOn 1.5 is voice 1, below).
+// every one of the eleven voice commands (#504; voiceOn 1.5 is voice 1,
+// below; 3.8's setVoiceType with type 1).
 // Before #262 voiceOff raised for -1, numVoices and 99; 1.5 is here as a pin, so a non-integer index stays ignored.
 // Nothing raises, and no node, tracked synth or kept value changes (the
 // grain params: a stored one, envShape, the freeze area's freeze and
@@ -877,7 +886,7 @@ check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synth
     var releasingTotal = { engine.releasingSynths.inject(0, { arg sum, dict; sum + dict.size }) };
     var sorted = { arg dict; dict.keys.asArray.sort.collect({ arg key; [key, dict[key]] }) };
     var keptState = { [engine.voiceControls.collect(sorted), engine.grainControls.collect(sorted),
-        engine.grainSource.copy, engine.modSpeeds.copy] };
+        engine.grainSource.copy, engine.modSpeeds.copy, engine.numVoices.collect({ arg voice; engine.voiceType(voice) })] };
     command.(\voiceOn, 0, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
     server.sync;
     synthsBefore = synthNames.(context.xg).size;
@@ -897,6 +906,7 @@ check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synth
         try { command.(\setModAmpAmt, index, 1, 0.5) } { raised = raised + 1 };
         try { command.(\setModFreqAmt, index, 1, 0.5) } { raised = raised + 1 };
         try { command.(\setModSpeed, index, 3.0) } { raised = raised + 1 };
+        try { command.(\setVoiceType, index, 1) } { raised = raised + 1 };
     });
     server.sync;
     kept = keptState.value;
@@ -904,10 +914,10 @@ check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synth
     check.((raised == 0) and: { synthNames.(context.xg).size <= synthsBefore }
         and: { engine.synths.size == enginesBefore }
         and: { releasingTotal.value <= releasingBefore },
-        "the ten voice commands ignore a voice index outside the voices (% raised)".format(raised));
+        "the eleven voice commands ignore a voice index outside the voices (% raised)".format(raised));
     check.(kept == keptBefore,
-        "the ten voice commands keep no value for a voice index outside the voices (#504; changed: %)".format(
-            [\voiceControls, \grainControls, \grainSource, \modSpeeds].select({ arg name, index; kept[index] != keptBefore[index] })));
+        "the eleven voice commands keep no value for a voice index outside the voices (#504; changed: %)".format(
+            [\voiceControls, \grainControls, \grainSource, \modSpeeds, \types].select({ arg name, index; kept[index] != keptBefore[index] })));
     // voiceOn converts its index first: 1.5 is voice 1 (running, so it takes the new freq)
     freqBefore = getControl.(engine.synths[\voice1], \freq);
     command.(\voiceOn, 1.5, 333.0, 0.2, 0.0, 0.1, 10.0, 1.0);

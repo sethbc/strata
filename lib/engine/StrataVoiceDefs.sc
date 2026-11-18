@@ -65,10 +65,18 @@
     // Each voice def's expression control, the one 3.5's per-note main
     // expression (noteMain) moves, and its range: Lua's param spec of that
     // control (VOICE_PARAM_SPECS, lib/params_setup.lua; a docs test compares
-    // them). The Resonator's is rq, since its MAIN param is its pitch
+    // them). The Resonator's is rq, since its MAIN param is its pitch. One
+    // entry a line, in type order (a type package appends its line)
     noteMainRanges {
-        ^(strataResonator: [\rq, 0.01, 1], strataFM: [\index, 0, 10], strataFolder: [\fold, 0.1, 5], strataSub: [\drift, 0.001, 0.1],
-            strataPulse: [\width, 0.05, 0.95], strataKarplus: [\decay, 0.5, 10], strataRing: [\ratio, 0.5, 8])
+        ^(
+            strataResonator: [\rq, 0.01, 1],
+            strataFM: [\index, 0, 10],
+            strataFolder: [\fold, 0.1, 5],
+            strataSub: [\drift, 0.001, 0.1],
+            strataPulse: [\width, 0.05, 0.95],
+            strataKarplus: [\decay, 0.5, 10],
+            strataRing: [\ratio, 0.5, 8]
+        )
     }
 
     // A voice def's expression control as it plays: value (the control) +

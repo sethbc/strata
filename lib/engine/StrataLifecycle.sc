@@ -4,10 +4,11 @@
 // See docs/notes/engine/lifecycle.md and docs/notes/engine/memory.md.
 
 + Engine_Strata {
-    // The voice's own voice synth, from voiceControls, with the own note's
-    // park and expression (ownNotePairs, the notes area's)
+    // The voice's own voice synth, of its type's def (voiceDefFor), from
+    // voiceControls, with the own note's park and expression (ownNotePairs,
+    // the notes area's), at the head of voiceGroup
     startVoiceSynth { arg voice;
-        var defName = voiceSynthDefs[voice];
+        var defName = this.voiceDefFor(voice);
         ^this.watchVoiceSynth(voice, this.voiceKey(voice),
             Synth(defName, [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice])
                 ++ this.ownNotePairs(voice, defName), target: voiceGroup))
@@ -133,7 +134,8 @@
     // longer the synth) is given a forced release (release(grainRelease)),
     // both as the voice's fadingSynths (fadeSupersededSynths), so the next
     // switch or mismatched start can cut them and the voice holds at most
-    // its live synths, one fading and one cutting set (#46). New grain
+    // its live synths, one fading and one cutting set (#46). A releasing
+    // voice synth of another type (3.8) is cut instead (below). New grain
     // synths are placed by startPlacedGrainSynth; the mix group is already
     // before a re-gated mod synth. A synth whose start the server never
     // confirmed is forgotten first (forgetFailedStarts), so it is started
@@ -155,14 +157,21 @@
         };
         this.fadeSupersededSynths(voice, superseded);
 
-        // Voice synth: synth source only
+        // Voice synth: synth source only. A releasing one of another type
+        // (setVoiceType while the voice was stopped) is cut, never taken back
+        // (3.8, ruling 15): the old type's tail never comes back, and the
+        // voice holds two voice synths at most, the new and the cut
         if (grainSource[voice] == 0) {
+            if (stillReleasing.(voiceKey) and: { releasing[voiceKey].defName.asSymbol != this.voiceDefFor(voice) }) {
+                this.freeCuttingSynths(voice);
+                this.cutVoiceSynth(voice, releasing.removeAt(voiceKey));
+            };
             if (synths[voiceKey].isNil and: { stillReleasing.(voiceKey) }) { synths[voiceKey] = releasing.removeAt(voiceKey) };
             if (synths[voiceKey].isNil) {
                 synths[voiceKey] = this.startVoiceSynth(voice);
             } {
-                this.sendToSynth(synths[voiceKey].setMsg(\gate, 1, *(this.controlPairs(voiceSynthDefs[voice], voiceControls[voice])
-                    ++ this.ownNotePairs(voice, voiceSynthDefs[voice]))));
+                this.sendToSynth(synths[voiceKey].setMsg(\gate, 1, *(this.controlPairs(this.voiceDefFor(voice), voiceControls[voice])
+                    ++ this.ownNotePairs(voice, this.voiceDefFor(voice)))));
             };
         };
 
@@ -340,6 +349,29 @@
             };
         };
         this.restartNotes(voice);
+    }
+
+    // A running synth voice's new type (3.8, setVoiceType): its voice synth
+    // is cut and the type's def started, in one bundle, so it lands in one
+    // block. See docs/notes/engine/types.md
+    replaceVoiceType { arg voice;
+        context.server.makeBundle(nil, { this.areaCall(\switchVoiceType, voice) });
+    }
+
+    // replaceVoiceType's work, inside its bundle: the cutting set freed (a
+    // voice then holds the new voice synth and the cut one, never more),
+    // the voice synth cut (the kill fade, never a release), the new def at
+    // the head of voiceGroup (startVoiceSynth reads voiceDefFor), and the
+    // voice's live voice synth notes restarted on it (restartVoiceNotes, the
+    // notes area's). The grain synth and the ring writer are untouched, so a
+    // frozen voice keeps its ring and its held sound
+    switchVoiceType { arg voice;
+        var old;
+        this.freeCuttingSynths(voice);
+        old = synths.removeAt(this.voiceKey(voice));
+        if (old.notNil) { this.cutVoiceSynth(voice, old) };
+        synths[this.voiceKey(voice)] = this.startVoiceSynth(voice);
+        this.restartVoiceNotes(voice);
     }
 
     // Cut (switchCutTime) the voice's fading synths: those an earlier

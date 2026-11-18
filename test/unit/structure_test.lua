@@ -1260,7 +1260,10 @@ end
 
 -- A variable nothing reads is a leftover (pitchShiftWindow outlived the
 -- PitchShift stage 3.2 removed, #151): every class-level variable is named
--- again somewhere in the engine's code
+-- again somewhere in the engine's code, but a retired one: still declared
+-- since lib/Engine_Strata.sc is never edited, and used nowhere else (3.8's
+-- package 0c: voiceTypeDefs and a type per voice replace voiceSynthDefs)
+local RETIRED_ENGINE_VARIABLES = { voiceSynthDefs = true }
 test("every variable Engine_Strata.sc declares is used in the engine's code", function()
   local files = engine_files()
   local code = {}
@@ -1273,11 +1276,14 @@ test("every variable Engine_Strata.sc declares is used in the engine's code", fu
   end
   local names = engine_class_variables(files[1].text)
   assert_true(#names > 50, "the class variables are found (" .. #names .. ")")
-  local unused = {}
+  local unused, retired_used = {}, {}
   for _, name in ipairs(names) do
-    if uses(name) < 2 then unused[#unused + 1] = name end
+    if RETIRED_ENGINE_VARIABLES[name] then
+      if uses(name) > 1 then retired_used[#retired_used + 1] = name end
+    elseif uses(name) < 2 then unused[#unused + 1] = name end
   end
   assert_true(#unused == 0, "declared but never used: " .. table.concat(unused, ", "))
+  assert_true(#retired_used == 0, "a retired variable is used again: " .. table.concat(retired_used, ", "))
   -- the scan sees a variable declared and never used
   local probe = engine_class_variables("Engine_Strata : CroneEngine {\n    classvar <>a;\n    var <b = 1, c;  // x\n    *new { var d; }\n}")
   assert_equal(table.concat(probe, " "), "a b c", "classvar and var names, not a method's locals")
@@ -1432,11 +1438,14 @@ local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "f
 -- methods that keep a closure and are called from a function (a SynthDef
 -- function, an onFree, a fork, a scheduled function, a makeBundle
 -- function, a command function): never called but through areaCall. Each
--- is defined and called through areaCall at least once. The third line's
+-- is defined and called through areaCall at least once. The second line's
+-- two are 3.8's type switch (setVoiceType's replaceVoiceType and its
+-- bundle's switchVoiceType). The fourth line's
 -- six are the commands' (loadBuffer, clearBuffer, saveBuffer, recordBuffer,
 -- stopRecord, setBypass); the last three are the onsets pass's
 -- (analyzeBuffer's analyzeSlot, its fork's runOnsetPass and writeOnsetsFile)
 local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "inputHeadFrame", "gateVoice",
+  "replaceVoiceType", "switchVoiceType",
   "voiceSynthFreed", "prepareTake", "startFastLfo", "watchFastLfo", "watchFastEnv",
   "loadSlot", "clearSlot", "saveSlot", "recordSlot", "stopRecordSlot", "setEffectBypass",
   "analyzeSlot", "runOnsetPass", "writeOnsetsFile" }

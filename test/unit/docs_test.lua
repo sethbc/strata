@@ -191,9 +191,9 @@ test("the engine stub reads its limits and controls from the engine source (#24)
   assert_equal(spec.num_buffers, local_value("NUM_BUFFERS"), "numBuffers")
   assert_equal(spec.input_source, local_value("NUM_BUFFERS") + 1, "inputSource")
   assert_equal(spec.mod_slots, local_value("NUM_MOD_SLOTS"), "modBus1..N on every voice SynthDef")
-  assert_equal(#spec.voice_synthdefs, spec.num_voices, "one voice SynthDef per voice")
-  assert_equal(spec.voice_synthdefs[1], "strataResonator", "voice 0 SynthDef")
-  assert_equal(spec.voice_synthdefs[7], "strataRing", "voice 6 SynthDef")
+  assert_true(#spec.voice_type_defs >= spec.num_voices, "the default roster gives voice i type i")
+  assert_equal(spec.voice_type_defs[1], "strataResonator", "type 0's SynthDef")
+  assert_equal(spec.voice_type_defs[spec.num_voices], "strataRing", "the last voice's own type's SynthDef")
   assert_true(spec.synthdef_controls.strataFM.ratio, "strataFM controls parsed")
   assert_true(spec.synthdef_controls.strataGrainBuf.bufPos, "strataGrainBuf controls parsed")
   assert_true(spec.grain_params.envShape, "setGrainParam's own envShape is accepted")
@@ -427,14 +427,13 @@ test("the engine stub's voice and slot limits follow numVoices and numBuffers in
   local source = engine_sources()
   local patched, count = source:gsub("var <numVoices = %d+;", "var <numVoices = 6;")
   assert_equal(count, 1, "numVoices patch applies")
-  patched, count = patched:gsub(",%s*\\strataRing%]", "]")
-  assert_equal(count, 1, "voiceSynthDefs patch applies")
   patched, count = patched:gsub("var <numBuffers = %d+;", "var <numBuffers = 4;")
   assert_equal(count, 1, "numBuffers patch applies")
   local spec = stubs.parse_engine_spec(patched)
   assert_equal(spec.num_voices, 6, "numVoices read from the patched copy")
   assert_equal(spec.num_buffers, 4, "numBuffers read from the patched copy")
   assert_equal(spec.input_source, 5, "inputSource follows numBuffers")
+  assert_equal(#spec.voice_type_defs, #engine_spec.voice_type_defs, "the type list does not follow numVoices")
   -- the stub's range checks use them
   stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = spec,
     data_dir = data_root .. "patched_engine/", quiet = true }
@@ -756,6 +755,9 @@ test("the engine stub rejects param names the SynthDefs do not have (#24)", func
   -- ratio is a strataFM control (voice 1), not one of strataResonator (voice 0)
   assert_engine_rejects("ratio", "setVoiceParam", 0, "ratio", 1.5)
   engine.setVoiceParam(1, "ratio", 1.5)
+  -- (3.8) on FM's type, voice 0 takes it
+  engine.setVoiceType(0, 1)
+  engine.setVoiceParam(0, "ratio", 1.5)
   assert_engine_rejects("nonsense", "setVoiceParam", 0, "nonsense", 1)
   for engine_voice = 0, spec.num_voices - 1 do engine.setVoiceParam(engine_voice, "bend", 1) end
   -- grain params: either grain SynthDef's controls (kept for a source switch) plus envShape
@@ -1008,7 +1010,7 @@ end
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
   "effects", "mix", "performance", "rings", "freeze", "variation", "loops", "record", "waveform", "positions", "modulation",
-  "envelopes", "notes", "onsets", "soak" }
+  "envelopes", "notes", "onsets", "types", "soak" }
 
 -- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them
 -- (its onDemandAreas: the soak, #131), as a set
@@ -2943,7 +2945,7 @@ test("the engine's expression controls and ranges equal the Lua specs", function
   end
   local expected = { strataResonator = "rq", strataFM = "index", strataFolder = "fold", strataSub = "drift",
     strataPulse = "width", strataKarplus = "decay", strataRing = "ratio" }
-  for _, def in ipairs(engine_spec.voice_synthdefs) do
+  for _, def in ipairs(engine_spec.voice_type_defs) do
     local range = ranges[def]
     assert_true(range ~= nil, "noteMainRanges has an entry for \\" .. def)
     assert_equal(range.control, expected[def], "\\" .. def .. "'s expression control")
@@ -2955,7 +2957,7 @@ test("the engine's expression controls and ranges equal the Lua specs", function
   end
   local count = 0
   for _ in pairs(ranges) do count = count + 1 end
-  assert_equal(count, #engine_spec.voice_synthdefs, "one noteMainRanges entry per voice SynthDef")
+  assert_equal(count, #engine_spec.voice_type_defs, "one noteMainRanges entry per voice type")
 end)
 
 -- 3.5's per-note controls are the engine's own (design §3.2): setVoiceParam
@@ -2977,7 +2979,7 @@ test("the stub refuses the per-note controls and accepts the envelope times", fu
   assert_engine_rejects(owned, "setVoiceParam", 0, "t_gate", 1)
   engine.setVoiceParam(0, "attackTime", 0.01)
   engine.setVoiceParam(0, "releaseTime", 30)
-  for index, def in ipairs(engine_spec.voice_synthdefs) do
+  for index, def in ipairs(engine_spec.voice_type_defs) do
     for _, name in ipairs({"attackTime", "releaseTime"}) do
       assert_true(engine_spec.voice_params[index][name], name .. " is a setVoiceParam name of \\" .. def)
     end

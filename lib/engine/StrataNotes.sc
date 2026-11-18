@@ -257,7 +257,7 @@
             ++ (if (silent) { [\velocity, record[\velocity]] } { this.noteAccentPairs(record) }) ++ [\noteGate, 1]
             ++ this.noteExpressionPairs(kind, record[\expression]) ++ this.noteRegionPairs(record);
         if (kind == \voice) {
-            defName = voiceSynthDefs[voice];
+            defName = this.voiceDefFor(voice);
             ^this.watchNoteSynth(voice, slot, Synth(defName,
                 [\out, granBuses[voice]] ++ this.controlPairs(defName, voiceControls[voice]) ++ notePairs, voiceGroup, \addToHead))
         };
@@ -495,7 +495,7 @@
     // defName has
     ownNotePairs { arg voice, defName;
         var own = this.noteRecord(voice, 0), expression = own[\expression], controls;
-        var isVoiceDef = voiceSynthDefs.includes(defName), sounds = isVoiceDef == this.ownNoteOnGrain(voice).not;
+        var isVoiceDef = this.voiceTypeDefs.includes(defName), sounds = isVoiceDef == this.ownNoteOnGrain(voice).not;
         if (sounds.not) { expression = this.neutralNoteExpression };
         controls = Dictionary[\noteGate -> (if ((sounds or: { isVoiceDef }) and: { own[\parked] }) { 0 } { 1 }),
             \noteBend -> expression[\bend], \noteAmp -> expression[\amp], \noteMain -> expression[\main],
@@ -525,7 +525,7 @@
     notesUnfrozen { arg voice;
         this.noteRecord(voice, 0)[\rate] = 1;
         this.setSynth(this.grainKey(voice), *this.ownNotePairs(voice, \strataGrainRing));
-        this.setSynth(this.voiceKey(voice), *this.ownNotePairs(voice, voiceSynthDefs[voice]));
+        this.setSynth(this.voiceKey(voice), *this.ownNotePairs(voice, this.voiceDefFor(voice)));
         (1 .. (this.noteSlots - 1)).do({ arg slot;
             var record = this.noteRecord(voice, slot), wasLive = record[\state] == \live, order = record[\order];
             if ((record[\kind] == \stream) and: { record[\synth].notNil }) {
@@ -597,6 +597,23 @@
                 this.cutNote(voice, slot);
                 this.leaveStream(voice, record);
                 if (wasLive) { this.areaCall(\startNote, voice, slot, order, true) };
+            };
+        });
+    }
+
+    // A running synth voice's type switch (switchVoiceType, in its bundle):
+    // each live extra note of kind \voice is cut and restarts on the
+    // voice's new def at its kept freq (startNoteSynth reads voiceDefFor),
+    // keeping its order, silent (ruling 45). A releasing note keeps its
+    // release on the old def, and a frozen voice's \stream notes (they read
+    // its ring and name no def) are left as they are. So a slot still holds
+    // one live or releasing synth and one cutting synth at most
+    restartVoiceNotes { arg voice;
+        (1 .. (this.noteSlots - 1)).do({ arg slot;
+            var record = this.noteRecord(voice, slot), order = record[\order];
+            if ((record[\kind] == \voice) and: { record[\state] == \live } and: { record[\synth].notNil }) {
+                this.cutNote(voice, slot);
+                this.areaCall(\startNote, voice, slot, order, true);
             };
         });
     }
