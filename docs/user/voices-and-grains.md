@@ -15,6 +15,7 @@ Each voice plays one synth type, picked on its VOICE page's `type` row (below). 
 7. **Ring** - Ring modulation between two oscillators for metallic, bell-like textures
 8. **Wave** - A wavetable voice that glides through eight tables, from a pure sine to a bright buzz, with three slightly detuned copies for a slow chorus (3.8; no voice starts on it: choose it on a voice's `type` row)
 1. **Additive** - A bank of up to 16 sine partials over the pitch: a tilt from bright to almost a sine, a stretch that bends the series out of tune, a balance of the odd and even partials, and one slow wander of the brightness. No voice starts on it
+1. **Noise** - Colored noise and crackling dust through a bank of four resonances at the voice's pitch, from a breathy wash to a ringing, whistling tone (no voice starts on it: choose it on the `type` row)
 
 ### Voice types
 
@@ -108,6 +109,17 @@ Each type's own parameters, by the names the VOICE page's synth section, MAIN an
 | `stretch` | -1-1 | 0 | Bends the series: at 0 the partials are whole multiples of the pitch (harmonic); above it they spread wider, below it they crowd closer, both bell-like and out of tune. A partial that would pass 21.6 kHz is silent |
 | `oddEven` | 0-1 | 0.5 | Which partials sound: 0 the odd ones only (hollow, like a clarinet), 0.5 all of them, 1 the even ones only (the first always sounds) |
 | `wander` | 0.01-1 Hz | 0.2 | The rate of a slow random drift of the tilt, 0.3 either way, which makes the color breathe |
+
+**Noise**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 100 | The pitch of the bank: four resonances, at 1, 1.5, 2.25 and 3.375 times it, each quieter than the one below |
+| `color` | 0-1 | 0.5 | The lowpass on the noise and dust before the bank: 0 is dark (200 Hz), 1 bright (16 kHz) |
+| `grit` | 0-1 | 0.3 | Dust against noise: 0 is smooth pink noise, 1 only crackling bursts of dust |
+| `dust` | 0.5-50 /s | 8 | How many bursts of dust a second (each side a little apart) |
+| `q` (main) | 0.005-1 | 0.05 | The width of the resonances: lower is narrower, ringing at the pitch like a whistle; 1 is a broad, breathy hiss. The level stays about even across it, and a limiter keeps the narrowest from jumping out |
+| `bank` | 0-1 | 0.7 | The resonant bank against the plain noise: 0 is the noise alone, 1 only the resonances. The bank swells slowly between 0.6 and full |
 
 ## Granular Processing
 
