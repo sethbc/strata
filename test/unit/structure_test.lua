@@ -1293,14 +1293,10 @@ test("every variable Engine_Strata.sc declares is used in the engine's code", fu
 end)
 
 -- The engine areas and their orders (the 3.2 design, §0)
-local ENGINE_AREAS = { performance = 10, voices = 20, typeWave = 21, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70,
-local ENGINE_AREAS = { performance = 10, voices = 20, typeFormant = 25, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70,
+local ENGINE_AREAS = { performance = 10, voices = 20, typeWave = 21, typeAdditive = 22, typeNoise = 23,
+  typeSaw = 24, typeFormant = 25, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70,
   scale = 80, variation = 90, loop = 100, freeze = 110, mix = 120, record = 130, waveform = 140, positions = 150,
-  modulation = 160, notes = 170, onsets = 180, envelopes = 190, typeAdditive = 22 }
-  modulation = 160, notes = 170, onsets = 180, envelopes = 190,
-  typeNoise = 23 }
-  modulation = 160, notes = 170, onsets = 180, envelopes = 190,
-  typeSaw = 24 }
+  modulation = 160, notes = 170, onsets = 180, envelopes = 190 }
 
 test("every engine file is named Strata*.sc and defines each strataArea method once", function()
   local files, areas, orders = engine_files(), {}, {}

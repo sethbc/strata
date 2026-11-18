@@ -4,7 +4,7 @@ The seven synthesis voices, each voice's granular processor and the per-voice pe
 
 ## Seven Synthesis Voices
 
-Each voice plays one synth type, picked on its VOICE page's `type` row (below). The voices start on these seven, voice 1 on the first and so on, so a fresh Strata sounds as 3.7 did:
+Each voice plays one synth type, picked on its VOICE page's `type` row (below). The voices start on the first seven, voice 1 on the first and so on, so a fresh Strata sounds as 3.7 did; the other five (3.8) are chosen on a voice's `type` row:
 
 1. **Resonator** - Filtered noise through resonant filter banks with slow modulation (level-matched to the other voices and limited, so at its normal settings it no longer pushes the rest of the mix down; as a cross-modulation source it is now as strong as the other voices, where before it drove what it modulated to the limit at almost any depth)
 2. **FM** - Two-operator FM synthesis with evolving harmonic/inharmonic timbres
@@ -14,11 +14,10 @@ Each voice plays one synth type, picked on its VOICE page's `type` row (below). 
 6. **Karplus** - Karplus-Strong plucked string synthesis for organic, physical timbres
 7. **Ring** - Ring modulation between two oscillators for metallic, bell-like textures
 8. **Wave** - A wavetable voice that glides through eight tables, from a pure sine to a bright buzz, with three slightly detuned copies for a slow chorus (3.8; no voice starts on it: choose it on a voice's `type` row)
-1. **Additive** - A bank of up to 16 sine partials over the pitch: a tilt from bright to almost a sine, a stretch that bends the series out of tune, a balance of the odd and even partials, and one slow wander of the brightness. No voice starts on it
-1. **Noise** - Colored noise and crackling dust through a bank of four resonances at the voice's pitch, from a breathy wash to a ringing, whistling tone (no voice starts on it: choose it on the `type` row)
-
-- **Saw** - Three detuned variable saws on each side through the Pulse's resonant lowpass, for a wide, slowly beating pad. No voice starts on it; any voice can choose it. Its width, cutoff and res are the Pulse's own parameters, so a Pulse voice switched to Saw keeps its filter where it was
-1. **Formant** - A vowel voice: two formant oscillators a side sing at formants that move between vowels, from an "ee" toward an "ah", with a slow wander of their own; its main parameter scales both formants up or down, from a darker, larger voice to a smaller, brighter one
+9. **Additive** - A bank of up to 16 sine partials over the pitch: a tilt from bright to almost a sine, a stretch that bends the series out of tune, a balance of the odd and even partials, and one slow wander of the brightness. No voice starts on it
+10. **Noise** - Colored noise and crackling dust through a bank of four resonances at the voice's pitch, from a breathy wash to a ringing, whistling tone (no voice starts on it: choose it on the `type` row)
+11. **Saw** - Three detuned variable saws on each side through the Pulse's resonant lowpass, for a wide, slowly beating pad. No voice starts on it; any voice can choose it. Its width, cutoff and res are the Pulse's own parameters, so a Pulse voice switched to Saw keeps its filter where it was
+12. **Formant** - A vowel voice: two formant oscillators a side sing at formants that move between vowels, from an "ee" toward an "ah", with a slow wander of their own; its main parameter scales both formants up or down, from a darker, larger voice to a smaller, brighter one
 
 ### Voice types
 
