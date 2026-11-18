@@ -1044,6 +1044,7 @@ local function start_steps()
       "print 1 buffers reloading from buffers.data" } },
     { "sequences load", { "file read sequences.data", "redraw requested" } },
     { "arp", {} },
+    { "voice presets load", { "file read voices.data" } },
     { "factory first run", { "file read index.data" } },
     { "startup clock", voice_sync },
     { "lfo clock", { "clock started" } },

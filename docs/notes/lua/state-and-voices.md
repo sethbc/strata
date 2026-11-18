@@ -86,6 +86,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
 | 111 | load the random sequences' values from data/strata/sequences.data (`START_ORDER.sequences_load`; with no file it can use, every value is drawn and the timed write started, one it cannot use is set aside), then redraw the screen (3.7) | `lib/random_sequences.lua` |
 | 112 | join the arpeggiator's shuffle to the LFO clock's step hooks, once (`START_ORDER.arp`; sends nothing) (3.8) | `lib/arp.lua` |
+| 113 | read the voice preset library from data/strata/voices.data (`START_ORDER.voice_presets_load`; missing: an empty library; one it cannot use is set aside, and one that cannot be set aside blocks every write this session) (3.8) | `lib/voice_presets.lua` |
 | 117 | with a factory index in the script's folder (3.8 ships none: then nothing is read further and nothing written), read `factory.data`: a pending set the index lists loads again; no marker, no scenes file found at this start (`S.scene_file.start_outcome` `"missing"`) and a first-run set write `{pending = <key>, loaded = {}}` and start its load, not awaited; no marker otherwise writes `{loaded = {}}`; an unusable one is set aside and written afresh (`START_ORDER.factory_first_run`, ruling 51, 3.8) | `lib/factory.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 125 | check every global LFO destination's param, then start the LFO clock (`S.lfo_clock`, 48 Hz, 3.4) | `lib/lfos.lua` |
@@ -296,6 +297,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 | `lib/slices.lua` | `slices` | `docs/notes/lua/slices.md` | slices_test.lua |
 | `lib/io/<name>.lua`: `rig`, `ports` (before `lib/midi_in.lua`), `actions`, `keyed`, `targets`, `midi_out`, `crow`, `ii`, `jf`, `wsyn`, `wtape`, `er301`, `txo`, `nb`, `controllers`, `remote`, `osc`, `tape` | `io_<name>` | `docs/notes/lua/io/<name>.md` | io_<name>_test.lua |
 | `lib/delay_sync.lua` | `delay_sync` | `docs/notes/lua/delay-sync.md` | delay_sync_test.lua |
+| `lib/voice_presets.lua` | `voice_presets` | `docs/notes/lua/voice-presets.md` | voice_presets_test.lua |
 | `lib/fx_hold.lua` | `fx_hold` | `docs/notes/lua/fx-hold.md` | fx_hold_test.lua |
 | `lib/factory.lua` | `factory` | `docs/notes/lua/factory.md` | factory_test.lua |
 | `lib/shimmer.lua` | `shimmer` | `docs/notes/lua/shimmer.md` | shimmer_test.lua |
