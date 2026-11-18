@@ -32,22 +32,29 @@
     // times this, added to the tilt the partials' levels fall by)
     additiveWanderDepth { ^0.3 }
 
+    // The mute's lag (s): a bend or crossmod sweeping a partial across the
+    // limit fades it (and the normalization with it) instead of stepping it
+    additiveMuteLag { ^0.03 }
+
     // The additive voice. Partial k (1..additivePartials) sits at
     // freq x k ** (1 + 0.05 x stretch), at a level of k ** -tilt times its
     // odd or even level (oddEven 0: the odd partials only, 0.5 all, 1 the
     // even only; the fundamental always), the tilt moved either way by one
     // slow LFNoise1 at the wander rate, which serves every partial (no
     // oscillator a partial: design §3). Each is worked out in logarithms, so
-    // a partial costs two MulAdds, two exps, its mute's comparison and the
-    // mute's product at control rate, and its SinOsc and one MulAdd at audio
+    // a partial costs two MulAdds, two exps, its mute's comparison, lag
+    // and product at control rate, and its SinOsc and one MulAdd at audio
     // rate (the running sum of its side). A partial at or above
     // additiveMuteRatio x the sample rate (the frequency after bend,
-    // crossmod and the note's bend) is muted, and the sum is normalized by
-    // the levels' sum, so tilt, stretch and oddEven change the color, not
-    // the level. The partials alternate in pairs between the two sides
-    // (1 and 2 left, 3 and 4 right, ...), so both sides sound whatever
-    // oddEven leaves; Balance2 pans them. A sum of sines has no energy near
-    // 0 Hz, so no subsonicBlock. The tilt is the expression control
+    // crossmod and the note's bend) is muted, over additiveMuteLag, and the
+    // sum is normalized by the levels' sum, which bounds the peak whatever
+    // the tilt (a flat tilt spreads it over many partials and is quieter).
+    // The voice is centered at pan 0: the fundamental starts both sides'
+    // sums, and the upper partials spread in pairs (2 left, 3 and 4 right,
+    // 5 and 6 left, ...), so the sides' levels stay within about 1 dB at
+    // every tilt and oddEven (the check holds them within 1.5); Balance2
+    // pans the pair as the other types' do. A sum of sines has no energy
+    // near 0 Hz, so no subsonicBlock. The tilt is the expression control
     // (noteMainValue)
     addAdditiveDef {
         var count = this.additivePartials;
@@ -79,15 +86,17 @@
             oddLog = (2 - (2 * oddEven.clip(0, 1))).clip(0.00001, 1).log;
             evenLog = (2 * oddEven.clip(0, 1)).clip(0.00001, 1).log;
 
-            // the fundamental: level 1, muted only above the limit
-            amps = [logFreq < logLimit];
+            // the fundamental: level 1, muted only above the limit, on both
+            // sides (one SinOsc that starts each side's sum)
+            amps = [(logFreq < logLimit).lag(this.additiveMuteLag)];
             left = SinOsc.ar(modFreq, 0, amps[0]);
-            right = 0;
+            right = left;
             (2 .. count).do({ arg k;
                 var logK = k.log, logPartial = (power * logK) + logFreq;
-                var a = ((slope * logK) + if (k.odd) { oddLog } { evenLog }).exp * (logPartial < logLimit);
+                var a = ((slope * logK) + if (k.odd) { oddLog } { evenLog }).exp
+                    * (logPartial < logLimit).lag(this.additiveMuteLag);
                 amps = amps.add(a);
-                // pairs of partials alternate sides: 1-2 left, 3-4 right, ...
+                // the upper partials spread in pairs: 2 left, 3-4 right, 5-6 left, ...
                 if (((k - 1) div: 2).even) {
                     left = SinOsc.ar(logPartial.exp, 0, a, left)
                 } {
