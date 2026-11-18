@@ -79,7 +79,8 @@
             strataRing: [\ratio, 0.5, 8],
             strataWave: [\morph, 0, 1],
             strataAdditive: [\tilt, 0, 3],
-            strataNoise: [\q, 0.005, 1]
+            strataNoise: [\q, 0.005, 1],
+            strataSaw: [\width, 0.05, 0.95]
         )
     }
 

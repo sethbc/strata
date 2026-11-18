@@ -151,7 +151,7 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 
 | parameter | range | default | |
 |---|---|---|---|
-| type | resonator, fm, folder, sub, pulse, karplus, ring, wave, additive, noise | by voice: resonator, fm, folder, sub, pulse, karplus, ring | The voice's synth ([Voice types](voices-and-grains.md#voice-types)). First under the voice's heading; a PSET from before 3.8 has no line for it and puts each voice back on its own type |
+| type | resonator, fm, folder, sub, pulse, karplus, ring, wave, additive, noise, saw | by voice: resonator, fm, folder, sub, pulse, karplus, ring | The voice's synth ([Voice types](voices-and-grains.md#voice-types)). First under the voice's heading; a PSET from before 3.8 has no line for it and puts each voice back on its own type |
 | quantize | off/on | off | Right after the type and above the voice's freq, so a PSET sets it before the freq ([Grain variation](voices-and-grains.md#grain-variation)) |
 | source | synth, buf 1-8, input | synth | What the voice's grains read ([Audio Sources and Buffers](sources-and-buffers.md)) |
 | buffer position | 0-1 | 0 | Where a buffer-sourced voice's grains read, in its loop |

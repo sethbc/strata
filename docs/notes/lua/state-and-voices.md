@@ -245,7 +245,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 | `lib/state.lua`, `lib/constants.lua` | S itself, S.constants | `docs/notes/lua/state-and-voices.md` | structure_test.lua, registries_test.lua |
 | `lib/voices.lua` | `voices` | `docs/notes/lua/state-and-voices.md` | voices_test.lua |
 | `lib/types.lua` | `types` | `docs/notes/lua/types.md` | types_test.lua |
-| `lib/types/<key>.lua` (one per voice type, in type order: `resonator`, `fm`, `folder`, `sub`, `pulse`, `karplus`, `ring`, `wave`, `additive`, `noise`) | `types_<key>` | `docs/notes/lua/types.md` | types_test.lua, types_<key>_test.lua |
+| `lib/types/<key>.lua` (one per voice type, in type order: `resonator`, `fm`, `folder`, `sub`, `pulse`, `karplus`, `ring`, `wave`, `additive`, `noise`, `saw`) | `types_<key>` | `docs/notes/lua/types.md` | types_test.lua, types_<key>_test.lua |
 | `lib/ui/frame.lua` | `ui_frame` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_layout_test.lua |
 | `lib/engine_sync.lua` | `engine_sync` | `docs/notes/lua/engine-sync.md` | engine_sync_test.lua |
 | `lib/data_files.lua` | `data_files` | `docs/notes/lua/data-files.md` | data_files_test.lua |
