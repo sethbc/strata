@@ -792,6 +792,29 @@ local function workflow_shards()
   return shards
 end
 
+-- The workflow's table of area times (its comment, "Area times on ...:"
+-- then "<area> <seconds>, ..."), in `workflow`'s text: the sum of every time
+-- listed, and the sum the comment states ("<n> s in all"), nil without one.
+-- The tests' one reader of that table (structure_test.lua's #491 and #731,
+-- docs_test.lua's #816)
+local function workflow_area_times(workflow)
+  local after = workflow:match("Area times on [^\n]*\n(.*)")
+  if not after then return nil end
+  local lines = {}
+  -- the table's comment lines (their "#" dropped), to the one with its sum
+  for line in after:gmatch("([^\n]*)\n?") do
+    local text = line:match("^%s*#%s?(.*)$")
+    if not text then break end
+    lines[#lines + 1] = text
+    if text:find(":") then break end
+  end
+  local joined = table.concat(lines, " ")
+  local times = joined:match("^(.-):") or joined
+  local total = 0
+  for seconds in times:gmatch("%a+ (%d+)") do total = total + tonumber(seconds) end
+  return total, tonumber(joined:match(":%s*(%d+) s in all"))
+end
+
 -- Write `text` to path as it is (binary mode), replacing what it held
 local function write_text(path, text)
   local file = assert(io.open(path, "wb")); file:write(text); file:close()
@@ -1481,6 +1504,7 @@ return {
   tabutil_text = tabutil_text,
   file_text = file_text,
   workflow_shards = workflow_shards,
+  workflow_area_times = workflow_area_times,
   write_text = write_text,
   watch_writes = watch_writes,
   maintained_docs = maintained_docs,
