@@ -15,13 +15,13 @@ PSETs (PARAMETERS > PSET) save every one of them, and the sixteen scenes beside 
 - Filter freq (20-20000 Hz, default 5000)
 - Filter res (0-1, default 0.5)
 - Filter mix (0 = bypass, the default, to 1)
-- Delay time (0.01-2.7 s, default 0.375)
+- Delay time (0.01-5.4 s, default 0.375)
 - Delay feedback (0-0.95, default 0.4)
 - Delay mix (0 = dry, the default, to 1)
 - Reverb mix, size and damping
 - Tape drift amount (depth of the pitch drift; 0 = none, default 0.01 = ±0.2 %; it bends the pitch only, with no flutter in the level)
 - Delay bypass and reverb bypass (off by default): switch the effect off completely, freeing its CPU and memory, and keep its mix (see [Bypass](effects.md#bypass)). PSETs store them; scenes do not
-- Delay sync (off by default): the delay plays delay division at the tempo instead of delay time; a division longer than 2.7 s plays at half its length (or a quarter, ...) until it fits (see [FX](pages/fx.md))
+- Delay sync (off by default): the delay plays delay division at the tempo instead of delay time; a division longer than 5.4 s plays at half its length (or a quarter, ...) until it fits (see [FX](pages/fx.md))
 - Delay division (1/32, 1/16T, 1/16, 1/16D, 1/8T, 1/8, 1/8D, 1/4T, 1/4, 1/4D, 1/2, 1 bar; default 1/8D)
 - Delay ping-pong (0-1, default 0): at 1 the repeats alternate left and right. Scenes store the three: sync and division switch at the end of a transition, ping-pong crossfades
 
