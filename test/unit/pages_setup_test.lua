@@ -118,7 +118,7 @@ test("every SETUP field shows its own label on its row", function()
     enc(2, 1)
     if S.setup_cursor == before then break end
   end
-  assert_equal(seen, 17, "the seventeen fields: thirteen, and four grid rotations (no buffer length on the standard setting)")
+  assert_equal(seen, 18, "the eighteen fields: fourteen, and four grid rotations (no buffer length on the standard setting)")
 end)
 
 test("SETUP's save and load fields run the function their record holds", function()
@@ -138,21 +138,21 @@ test("SETUP's save and load fields run the function their record holds", functio
       field.run = real
     end
   end
-  assert_equal(table.concat(ran, ","), "mpe & zones,save scenes,load scenes", "K3 runs each field's own function")
+  assert_equal(table.concat(ran, ","), "mpe & zones,save scenes,load scenes,scale & tuning", "K3 runs each field's own function")
 end)
 
 test("SETUP scrolls with a marker and reaches both ends", function()
   local context = load_strata(); finish_startup(context)
   context.grid.plug(1, 16, 16)
   show_page("SETUP")
-  enc(2, 16)
+  enc(2, 17)
   redraw()
-  assert_equal(local_value("S").setup_cursor, 17, "the cursor is on performance, the last field")
+  assert_equal(local_value("S").setup_cursor, 18, "the cursor is on performance, the last field")
   assert_true(screen_shows(context, "grid 4 rotation"), "the field above it, grid 4 rotation, is drawn")
   assert_true(not screen_shows(context, "buffers: 0 restored"), "the last status line is below the view")
   enc(2, 20)  -- E2 on the last field scrolls over the status rows (#319)
   redraw()
-  assert_equal(local_value("S").setup_cursor, 17, "the cursor stays on performance")
+  assert_equal(local_value("S").setup_cursor, 18, "the cursor stays on performance")
   assert_true(screen_shows(context, "buffers: 0 restored"), "the last status line is drawn")
   assert_true(not text_entry(context, "midi 1: none"), "the first fields scrolled out")
   local marker_bottom
@@ -199,7 +199,7 @@ local function scrolled_off_the_last_field(context)
   S.scene_file.problem = "unreadable"   -- one unreadable scenes file: two more rows below
   show_page("SETUP")
   enc(2, 60); redraw()
-  assert_equal(S.setup_cursor, 17, "the cursor is on performance, the last field")
+  assert_equal(S.setup_cursor, 18, "the cursor is on performance, the last field")
   assert_true(not text_entry(context, "performance"), "the performance row has scrolled out of view")
   return S
 end
@@ -219,7 +219,7 @@ test("SETUP's E3 while scrolled brings the cursor's field back; the next E3 edit
   local S = scrolled_off_the_last_field(context)
   enc(3, -1); redraw()
   assert_true(text_entry(context, "performance") ~= nil, "the performance row is back in view")
-  assert_equal(S.setup_cursor, 17, "the cursor stays on performance")
+  assert_equal(S.setup_cursor, 18, "the cursor stays on performance")
   enc(3, 1)
   assert_equal(S.lib.performance.setting().performance, "standard", "with the field in view E3 edits it")
 end)

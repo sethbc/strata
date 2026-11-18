@@ -301,6 +301,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 | `lib/ui/detent.lua` | `ui_detent` | `docs/notes/lua/ui-core.md` | ui_detent_test.lua |
 | `lib/ui/zones.lua` | `ui_zones` | `docs/notes/lua/ui-core.md` (The zones editor) | ui_zones_test.lua |
 | `lib/ui/slice_editor.lua` | `ui_slice_editor` | `docs/notes/lua/ui/slice-editor.md` | ui_slice_editor_test.lua |
+| `lib/ui/scale_editor.lua` | `ui_scale_editor` | `docs/notes/lua/ui/scale-editor.md` | ui_scale_editor_test.lua |
 | `lib/pages/<page>.lua`: `main`, `voice`, `seq`, `fx`, `lfo`, `mod`, `buffer`, `scenes`, `setup`, `io` | `pages_<page>` (`pages_main`, ...) | `docs/notes/lua/pages/<page>.md` (`docs/notes/lua/pages/main.md`, ...) | pages_<page>_test.lua (pages_main_test.lua, ...) |
 | `lib/arc/core.lua` | `arc_core` | `docs/notes/lua/arc-core.md` | arc_core_test.lua |
 | `lib/arc/main.lua`, `lib/arc/voice.lua`, `lib/arc/seq.lua`, `lib/arc/fx.lua`, `lib/arc/lfo.lua`, `lib/arc/mod.lua`, `lib/arc/buffer.lua`, `lib/arc/scenes.lua`, `lib/arc/io.lua` | `arc_main`, `arc_voice`, `arc_seq`, `arc_fx`, `arc_lfo`, `arc_mod`, `arc_buffer`, `arc_scenes`, `arc_io` | `docs/notes/lua/arc-pages.md` | arc_pages_test.lua |
@@ -343,6 +344,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
   | `macro learn` | `lib/macros.lua` | learn waits for a touch exactly while its timeout clock runs (`S.macro_learn_clock`) (3.4) |
   | `matrix learn` | `lib/matrix.lua` | matrix learn waits for a touch exactly while its timeout clock runs (`S.matrix_learn_clock`) (3.4) |
   | `zones editor` | `lib/ui/zones.lua` | the zones editor's learn waits exactly while its timeout clock is pending (`S.zones_learn_clock`, its coroutine alive) and the note tap is set, and only while the editor is open; the open editor's own owner is the modal one (or beneath SEQ's step editor), the closed editor's never (3.5) |
+  | `scale editor` | `lib/ui/scale_editor.lua` | the open scale and tuning editor's own owner is the modal one (or beneath SEQ's step editor), the closed editor's never; its cursor is on a row and a class, and a pending tuning choice is one of its choices (3.8) |
   | `lfo clock` | `lib/lfos.lua` | the LFO clock (`S.lfo_clock`) runs from its start step to cleanup, and only then (3.4) |
   | `step editor` | `lib/pages/seq.lua` | the step editor is open exactly while its owner is the modal one (`S.lib.ui_modal.top()`) (3.4) |
   | `notes` | `lib/notes.lua` | the note pool is a whole number in 0..`NOTE_POOL.max`, the extra notes held never exceed it, and a stopped voice holds none (3.5) |
