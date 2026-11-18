@@ -405,8 +405,15 @@ return function(S)
       S.lib.ui_flash.start("hints", FACTORY.texts.refused)
       return
     end
-    apply_params(set, lines, installed, missing)
-    read_side_files(set)
+    -- from here the live file is set aside: whatever the rest does (the
+    -- set's scenes taken or not, a step that raises), the scenes in memory
+    -- are written back before the step ends
+    local ran, failure = pcall(function()
+      apply_params(set, lines, installed, missing)
+      read_side_files(set)
+    end)
+    S.lib.scenes.autosave()
+    if not ran then error(failure, 0) end
     finish(set)
   end
 

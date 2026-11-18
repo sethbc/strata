@@ -391,21 +391,114 @@ test("an unusable side file is skipped and not renamed", function()
   assert_equal(S.scenes[1].name, "dusk", "and the scenes")
 end)
 
+-- The samples.data entries, by path ({path = settings}), once its write has run
+local function stored_entries(context)
+  context.clock.run_for(0.11)
+  local saved = local_value("S").lib.data_files.read(context.data_dir .. "strata/samples.data")
+  local entries = {}
+  for _, entry in ipairs(saved and saved.files or {}) do entries[entry.path] = entry.settings end
+  return entries
+end
+
+-- The ruling: the settings are stored before the backup (the fact file's
+-- order), so a refused backup leaves the installed files' records, and
+-- nothing else of the player's changes
 test("a backup that cannot be made stops the load", function()
   local context, S = session()
   scramble_state(5); S.lib.scenes.save(2)
+  local mine = context.audio_dir .. "mine.wav"
+  assert_true(S.lib.samples.store_file(mine, { tempo = 120 }), "a record of the player's")
+  assert_true(S.lib.macros.set_target(2, 1, "v3_amp", 0.1, 0.9), "a macro target of the player's")
+  assert_true(S.lib.matrix.set_routing(3, "lfo2", "v4_amp"), "a matrix routing of the player's")
+  local entries_before = stored_entries(context)
   local path = live_scenes(context)
   for number = 1, S.lib.data_files.DATA_FILES.backups do
     write_text(path .. ".bak" .. (number > 1 and ("." .. number) or ""), "taken")
   end
   local live_bytes, scenes_text = file_text(path), S.lib.data_files.encode(S.scenes)
-  local size = params:get("v1_grain_size")
+  local values = {}
+  for _, id in ipairs(S.lib.params_setup.record_param_ids()) do values[id] = params:get(id) end
+  local side_bytes = {}
+  for _, name in ipairs({ "macros", "matrix", "gestures", "sequences" }) do
+    side_bytes[name] = file_text(context.data_dir .. "strata/" .. name .. ".data")
+  end
   assert_true(factory().load("dusk")); run_load(context)
   assert_equal(#lines_with(context, "dusk not loaded: the scenes in no PSET could not be kept"), 1, "one line")
-  assert_equal(params:get("v1_grain_size"), size, "no param set")
+  for id, value in pairs(values) do assert_equal(params:get(id), value, id .. " unchanged") end
   assert_equal(S.lib.data_files.encode(S.scenes), scenes_text, "the live scenes stay")
   assert_equal(file_text(path), live_bytes, "and their file")
+  assert_equal(S.lib.macros.targets(2)[1].id, "v3_amp", "the macros stay")
+  assert_equal(S.lib.matrix.routing(3).dest, "v4_amp", "the matrix stays")
+  for name, bytes in pairs(side_bytes) do
+    assert_equal(file_text(context.data_dir .. "strata/" .. name .. ".data"), bytes, name .. ".data unchanged")
+  end
+  local entries = stored_entries(context)
+  for entry_path, settings in pairs(entries_before) do
+    assert_equal(S.lib.data_files.encode(entries[entry_path]), S.lib.data_files.encode(settings),
+      entry_path .. "'s record unchanged")
+  end
+  local added = {}
+  for entry_path in pairs(entries) do
+    if not entries_before[entry_path] then added[#added + 1] = entry_path:sub(#install_dir(context) + 1) end
+  end
+  table.sort(added)
+  assert_equal(table.concat(added, " "), "bell.wav drone.wav pad.wav", "the only additions: the installed files' records")
+  for entry_path in pairs(entries) do
+    if not entries_before[entry_path] then
+      assert_equal(entry_path:sub(1, #install_dir(context)), install_dir(context), entry_path .. " is installed")
+    end
+  end
   assert_equal(marked(context), nil, "nothing marked loaded")
+end)
+
+-- 4d fix round 1 (ruling): once the backup has moved the live file aside,
+-- scenes.data is on disk again when the load's step ends, holding what is
+-- in memory, on every path: the set's scenes taken, its scenes file missing
+-- or unusable, a later step failing
+local function scenes_kept_case(context, S, why)
+  local path = live_scenes(context)
+  assert_true(util.file_exists(path), why .. ": scenes.data is on disk after the load")
+  assert_true(util.file_exists(path .. ".bak"), why .. ": and the backup beside it")
+  local held = S.lib.data_files.read(path)
+  assert_equal(S.lib.data_files.encode(held.scenes), S.lib.data_files.encode(S.scenes),
+    why .. ": holding the scenes in memory")
+end
+
+test("a set without a scenes file leaves the live scenes on disk", function()
+  for _, case in ipairs({ { why = "no set.scenes.data", text = nil }, { why = "an unusable one", text = "garbage" } }) do
+    local context, S, dir = session({ prepare = function(dir)
+      if case.text then write_set_file(dir, "set.scenes.data", case.text)
+      else os.remove(dir .. "factory/dusk/set.scenes.data") end
+    end })
+    scramble_state(4); S.lib.scenes.save(3)
+    local before = S.lib.data_files.encode(S.scenes)
+    assert_true(factory().load("dusk")); run_load(context)
+    assert_equal(S.lib.data_files.encode(S.scenes), before, case.why .. ": the live scenes stay")
+    scenes_kept_case(context, S, case.why)
+    -- a restart with no cleanup (a crash, the power cut): the start finds a
+    -- scenes file, so nothing takes the player for a new one
+    local again = load_strata({ script_dir = dir, data_subdir = folder_of(context) })
+    assert_equal(local_value("S").scene_file.start_outcome, "loaded", case.why .. ": the next start finds them")
+    assert_equal(S.lib.data_files.encode(local_value("S").scenes), before, case.why .. ": the same scenes")
+    assert_true(again ~= nil)
+  end
+end)
+
+test("a load that fails after the backup leaves the live scenes on disk", function()
+  local context, S = session()
+  scramble_state(4); S.lib.scenes.save(3)
+  local before = S.lib.data_files.encode(S.scenes)
+  local param = params:lookup_param("v1_amp")
+  local real = param.action
+  param.action = function() error("a probe's failing action") end
+  assert_true(factory().load("dusk")); run_load(context)
+  param.action = real
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "the load's clock raised once")
+  assert_true(errors[1]:find("a probe's failing action", 1, true) ~= nil, errors[1])
+  assert_equal(S.lib.data_files.encode(S.scenes), before, "the live scenes stay")
+  scenes_kept_case(context, S, "a failed step")
+  assert_equal(marked(context), nil, "nothing marked")
 end)
 
 test("audio installs once; a new version installs beside the old", function()
