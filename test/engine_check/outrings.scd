@@ -318,19 +318,27 @@ tone.free;
 h.stopAllVoices;
 
 // ---- The read lag: two blocks and the margin, sample by sample ----
-// voice 3 (engine voice 2) stopped, the timecode added to its tap; voice 4
-// (engine voice 3) on source first + 2, 4 ms grains at 187.3 a second
-tapSound = Synth(\strataCheckOutTimecode, [\out, taps[2], \now, nowBus], probeGroup);
-server.sync; 0.5.wait;
-startReader.(3, sourceOf.(2), 0.004, 187.3, 0.2, true);
-0.3.wait;
-readings = timeReads.(3, 2.0);
+// The read voice stopped, the timecode added to its tap; the reader on its
+// ring, 4 ms grains at 187.3 a second. In either node order: voice 4
+// (engine voice 3) reading voice 3 (engine voice 2), its mix group after
+// the read voice's, and voice 1 (engine voice 0) reading voice 7 (the last),
+// its mix group before it. Every reader runs in processGroup and every
+// output ring writer in the tap group, after them all, so the lag is the
+// same either way
 expect = (2 * block / sampleRate) + engine.ringReadMargin;
-check.((readings[1] >= (expect - 0.00005)) and: { readings[0] <= (expect + 0.00005) },
-    "outrings: a reader starts every grain two blocks and ringReadMargin behind the read voice's tap, sample by sample (% ms; lookback % to % ms)".format(
-        (expect * 1000).round(0.001), (readings[1] * 1000).round(0.001), (readings[0] * 1000).round(0.001)));
-tapSound.free;
-h.stopAllVoices;
+[[2, 3, "after"], [engine.numVoices - 1, 0, "before"]].do({ arg pair;
+    var read = pair[0], readerVoice = pair[1];
+    tapSound = Synth(\strataCheckOutTimecode, [\out, taps[read], \now, nowBus], probeGroup);
+    server.sync; 0.5.wait;
+    startReader.(readerVoice, sourceOf.(read), 0.004, 187.3, 0.2, true);
+    0.3.wait;
+    readings = timeReads.(readerVoice, 2.0);
+    check.((readings[1] >= (expect - 0.00005)) and: { readings[0] <= (expect + 0.00005) },
+        "outrings: a reader starts every grain two blocks and ringReadMargin behind the read voice's tap, sample by sample (engine voice % reading %, its mix group % the read voice's: % ms; lookback % to % ms)".format(
+            readerVoice, read, pair[2], (expect * 1000).round(0.001), (readings[1] * 1000).round(0.001), (readings[0] * 1000).round(0.001)));
+    tapSound.free;
+    h.stopAllVoices;
+});
 
 // ---- A self-read plays ----
 startReader.(4, sourceOf.(4));
