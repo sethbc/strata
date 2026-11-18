@@ -63,10 +63,11 @@
     releaseTimeRange { ^#[0.01, 30] }
 
     // Each voice def's expression control, the one 3.5's per-note main
-    // expression (noteMain) moves, and its range: Lua's param spec of that
-    // control (VOICE_PARAM_SPECS, lib/params_setup.lua; a docs test compares
-    // them). The Resonator's is rq, since its MAIN param is its pitch. One
-    // entry a line, in type order (a type package appends its line)
+    // expression (noteMain) moves, and its range: the spec of that control
+    // in the def's type record (lib/types/<key>.lua: the key its note_main
+    // names; a docs test compares them). The Resonator's is rq, since its
+    // MAIN param is its pitch. One entry a line, in type order (a type
+    // package appends its line)
     noteMainRanges {
         ^(
             strataResonator: [\rq, 0.01, 1],
@@ -75,7 +76,8 @@
             strataSub: [\drift, 0.001, 0.1],
             strataPulse: [\width, 0.05, 0.95],
             strataKarplus: [\decay, 0.5, 10],
-            strataRing: [\ratio, 0.5, 8]
+            strataRing: [\ratio, 0.5, 8],
+            strataWave: [\morph, 0, 1]
         )
     }
 

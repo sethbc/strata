@@ -77,7 +77,7 @@ test("the seven built-in types register in type order with 3.7's keys, defaults,
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local list = S.lib.types.list()
-  assert_equal(#list, #BUILT_IN, "the seven built-in types")
+  assert_true(#list >= #BUILT_IN, "the seven built-in types, first")
   for index, want in ipairs(BUILT_IN) do
     local record = list[index]
     local where = "type " .. index .. " (" .. want.key .. ")"
@@ -112,9 +112,10 @@ test("S.lib.types answers for the voices: of, default_key, keys, spec and format
   assert_equal(S.lib.types.of(0), nil, "no voice 0")
   assert_equal(S.lib.types.of(S.constants.NUM_VOICES + 1), nil, "no voice past the last")
   assert_equal(S.lib.types.of("1"), nil, "a string is no voice")
-  assert_equal(table.concat(S.lib.types.keys(), " "),
-    "freq rq noise mod1 mod2 amp pan ratio index modFreq fold mod drift width cutoff res decay damping excite brightness",
-    "every distinct key, in type order")
+  local built_in_keys =
+    "freq rq noise mod1 mod2 amp pan ratio index modFreq fold mod drift width cutoff res decay damping excite brightness"
+  assert_equal(table.concat(S.lib.types.keys(), " "):sub(1, #built_in_keys), built_in_keys,
+    "every distinct key, in type order (the built-in types' first)")
   local spec = S.lib.types.spec("ratio")
   assert_equal(spec_text(spec), expected_spec_text("ratio"), "ratio's one spec")
   spec.maxval = 99
@@ -237,7 +238,7 @@ test("every voice has every type's synth key, its default type's first, in 3.7's
     end
   end
   local voice_2 = synth_ids(S, 2)
-  assert_equal(#voice_2, 20, "voice 2's twenty synth ids")
+  assert_equal(#voice_2, #S.lib.types.keys(), "voice 2's synth ids, one a key")
   assert_equal(table.concat(voice_2, " ", 1, 6), "v2_freq v2_ratio v2_index v2_modFreq v2_amp v2_pan",
     "fm's six first")
   assert_equal(params.lookup["v2_type"] - 1, params.lookup["voice 2: fm"], "the type is first under the voice's heading")

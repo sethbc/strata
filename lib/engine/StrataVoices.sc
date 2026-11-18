@@ -255,7 +255,8 @@
             \strataSub,
             \strataPulse,
             \strataKarplus,
-            \strataRing
+            \strataRing,
+            \strataWave
         ]
     }
 

@@ -13,6 +13,7 @@ Each voice plays one synth type, picked on its VOICE page's `type` row (below). 
 5. **Pulse** - Pulse width modulation synthesis with resonant filtering for classic analog sounds. Its res (0.1-1, default 0.8) rises with resonance like every other res: turned up, the filter rings at its cutoff; at 0.1 it is flat. Before 3.3 it ran the other way: a PSET saved then loads its number as it is, and so plays another resonance. A controller mapped to it or its grid fader sharpens it as it goes up
 6. **Karplus** - Karplus-Strong plucked string synthesis for organic, physical timbres
 7. **Ring** - Ring modulation between two oscillators for metallic, bell-like textures
+8. **Wave** - A wavetable voice that glides through eight tables, from a pure sine to a bright buzz, with three slightly detuned copies for a slow chorus (3.8; no voice starts on it: choose it on a voice's `type` row)
 
 ### Voice types
 
@@ -86,6 +87,16 @@ Each type's own parameters, by the names the VOICE page's synth section, MAIN an
 | `ratio` (main) | 0.5-8 | 1.618 | The second oscillator's frequency as a multiple of the carrier's: the ring tone is their sum and difference, metallic away from whole numbers. It wanders 0.1 either way |
 | `mod` | 0.01-2 | 0.2 | How fast the ratio wanders (new random values a second) |
 | `brightness` | 0-1 | 0.5 | How much of the plain carrier is mixed in under the ring tone |
+
+**Wave**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 100 | The pitch |
+| `morph` (main) | 0-1 | 0.3 | The place in the bank of eight tables, which go from a pure sine (0) through fuller and hollower ones to a bright buzz of many harmonics (1); between two tables it blends them. Amplitude cross-modulation moves it too |
+| `morphRate` | 0.01-1 Hz | 0.05 | How fast the place wanders on its own (new random values a second) |
+| `morphDepth` | 0-1 | 0.2 | How far it wanders either way of `morph`: 0 holds it still, 1 can sweep the whole bank |
+| `detune` | 0-0.02 | 0.003 | How far apart the three copies on each side are tuned, as a fraction of the pitch (the left above it, the right below): 0 is one clean tone, higher a faster, wider chorus |
 
 ## Granular Processing
 
