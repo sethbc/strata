@@ -18,12 +18,13 @@ return function(S)
   local grid_core = S.lib.grid_core
   local LEVELS = grid_core.LEVELS
 
-  -- A pane is NUM_VOICES lines of `width` keys; its strip is line
-  -- `strip_line` in the pane coordinates the harness and M.physical use;
-  -- a 64 shows half_width columns of it at a time. The strip keys' and
-  -- the chooser's levels; a fader line's bar and value
+  -- A pane is NUM_VOICES lines of `width` keys (a pattern's steps); its
+  -- strip is the line after them in the pane coordinates the harness and
+  -- M.physical use; a 64 shows half_width columns (its own) of it at a
+  -- time. The strip keys' and the chooser's levels; a fader line's bar
+  -- and value. A page's state is kept in port_state(port)[pages_key]
   local PANE = {
-    width = 16, half_width = 8, strip_line = 8, halves = 2,
+    width = S.constants.PATTERN_LENGTH, half_width = 8, strip_line = NUM_VOICES + 1, pages_key = "pages",
     levels = {fill_on = 15, fill_off = 4, tempo_held = 15, tempo_idle = 4, muted = 15, unmuted = 4,
       chooser_shown = 15, choice_shown = 15, choice_other = 4, dark = 0, bar = 8, value = 15},
     -- the 64's chooser: row r of column c (page c) picks side and half
@@ -121,11 +122,15 @@ return function(S)
       width = width, offset = offset, turned = geometry.turned == true}
     local function at(x, y) return physical_of(geometry, index, x, y, half) end
     function pane.shows(x) return type(x) == "number" and x > offset and x <= offset + width end
+    -- the page's per-port state, port_state(port).pages[name] (never a
+    -- key of port_state itself, where lib/positions.lua keeps its record)
     function pane.state()
       local name = GRID_PAGES.names[pane.page]
-      local state = grid_core.port_state(port)
-      state[name] = state[name] or {}
-      return state[name]
+      local port_state = grid_core.port_state(port)
+      port_state[PANE.pages_key] = port_state[PANE.pages_key] or {}
+      local pages = port_state[PANE.pages_key]
+      pages[name] = pages[name] or {}
+      return pages[name]
     end
     -- the core's helper fn at the physical key of (x, y), or nil off the pane
     local function wrap(fn)
@@ -155,8 +160,7 @@ return function(S)
   -- x_of = fn(k) -> pane x}. A line that fits the shown columns is drawn
   -- as it is (upward on a turned pane); one wider than a half is drawn
   -- across the half's keys; any other is not shown
-  local function shown_lines(record, pane)
-    if record.faders == nil then return {} end
+  local function read_lines(record, pane)
     local lines = {}
     for _, line in ipairs(record.faders(pane) or {}) do
       local first, keys = line.first, line.keys
@@ -172,6 +176,21 @@ return function(S)
       end
       lines[#lines + 1] = entry
     end
+    return lines
+  end
+
+  -- Per port and pane ("<port>:<pane>"): the faders and signature errors
+  -- last printed (each page function runs contained, as its redraw does)
+  local fader_errors, signature_errors = {}, {}
+
+  -- The page's fader lines, read contained: a faders(pane) that raises
+  -- prints once and the pane has no fader lines (its keys reach the page)
+  local function shown_lines(record, pane)
+    if record.faders == nil then return {} end
+    local lines = {}
+    S.lib.ui_frame.contained_call(fader_errors, pane.port .. ":" .. pane.index, "grid page faders", function()
+      lines = read_lines(record, pane)
+    end)
     return lines
   end
 
@@ -427,9 +446,15 @@ return function(S)
         local pane = pane_object(geometry, port, index)
         local record = S.registry.grid_pages[pane.page]
         if record and (record.faders or record.signature) then
+          -- contained per pane: a signature that raises prints once and
+          -- reads as unchanged, so the drift tick goes on
           local part = {grid_core.view(port, index)}
-          for _, line in ipairs(shown_lines(record, pane)) do part[#part + 1] = fader_position(line.id, line.keys) end
-          if record.signature then part[#part + 1] = tostring(record.signature(pane)) end
+          local read = S.lib.ui_frame.contained_call(signature_errors, port .. ":" .. index, "grid page signature",
+            function()
+              for _, line in ipairs(shown_lines(record, pane)) do part[#part + 1] = fader_position(line.id, line.keys) end
+              if record.signature then part[#part + 1] = tostring(record.signature(pane)) end
+            end)
+          if not read then part = {grid_core.view(port, index), "?"} end
           parts[#parts + 1] = port .. "=" .. table.concat(part, ",")
         end
       end

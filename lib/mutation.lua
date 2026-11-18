@@ -291,9 +291,10 @@ return function(S)
       end
     end
 
-    -- The faders pages follow every param they show (the grain pitch
-    -- drifts; the screen, the arc, MIDI maps and PARAMETERS set the rest):
-    -- a grid on page 2 is redrawn when a shown fader moved (#324)
+    -- The grids follow every param they show (the grain pitch drifts; the
+    -- screen, the arc, MIDI maps and PARAMETERS set the rest): a grid is
+    -- redrawn when a fader line or a page signature a pane shows moved
+    -- (#324; lib/grid/pane.lua, contained per pane)
     S.lib.grid_faders.follow_faders()
 
     -- drift_update is the script's 10 Hz tick: also drop keys held into the menu
