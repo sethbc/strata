@@ -140,6 +140,7 @@ S.lib.ui_detent = include("lib/ui/detent")(S)
 S.lib.ui_menu_watch = include("lib/ui/menu_watch")(S)
 S.lib.ui_zones = include("lib/ui/zones")(S)
 S.lib.ui_slice_editor = include("lib/ui/slice_editor")(S)
+S.lib.ui_voice_picker = include("lib/ui/voice_picker")(S)
 S.lib.ui_scale_editor = include("lib/ui/scale_editor")(S)
 
 -- The screen pages, in UI_PAGES order: each creates its record at

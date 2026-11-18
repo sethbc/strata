@@ -182,8 +182,8 @@ test("loop rows show in a buffer voice's section only", function()
       local outline = row_ids(voice_idx)
       -- (3.7: then the scan rows, lib/scan.lua, and the slices option's
       -- row, lib/slices.lua, in their modules' include order)
-      -- (3.8: after the type row, voice:<v>_type)
-      local expected = string.format("voice:%s_type synth synth:%s_buf_pos synth:%s_buf_rate synth:%s_buf_scan "
+      -- (3.8: after the type row, voice:<v>_type, and 3b's preset row, voice)
+      local expected = string.format("voice:%s_type voice synth synth:%s_buf_pos synth:%s_buf_rate synth:%s_buf_scan "
         .. "synth:%s_loop_start synth:%s_loop_length synth:%s_scan_mode synth:%s_follow synth:%s_slices grain ",
         prefix, prefix, prefix, prefix, prefix, prefix, prefix, prefix,
         prefix)

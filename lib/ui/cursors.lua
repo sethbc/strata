@@ -22,12 +22,13 @@ return function(S)
   }
 
   -- The cursors over rows that change: rows() gives the current rows,
-  -- key(row) what the anchor remembers of a row (for voice, the param id
-  -- without its "v<i>_" prefix, so the same param of another voice matches)
+  -- key(row) what the anchor remembers of a row (for voice, the row's own
+  -- key, 3.8's preset row's, else the param id without its "v<i>_" prefix,
+  -- so the same param of another voice matches)
   local ROW_CURSORS = {
     voice = {
       rows = function() return voice_page_rows(S.selected_voice) end,
-      key = function(row) return row and row.param_id and row.param_id:match("^v%d+_(.+)$") end,
+      key = function(row) return row and (row.key or (row.param_id and row.param_id:match("^v%d+_(.+)$"))) end,
     },
   }
 

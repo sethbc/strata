@@ -19,6 +19,9 @@ return function(S)
   -- with no label row above it (3b's preset row joins the section)
   M.VOICE_SECTION = "voice"
   M.TYPE_KIND = "type"
+  -- 3.8 (package 3b): the second row, the voice's preset (no param: its
+  -- key is the cursor's anchor; K3 opens S.lib.ui_voice_picker)
+  M.PRESET_KIND = "preset"
 
   -- VOICE's own section, after the built-in records' (which name it as
   -- their before): the source, level and pan (Sub has no pan)
@@ -107,7 +110,9 @@ return function(S)
 
   -- The rows of voice voice_idx: first the type row {label = "type",
   -- param_id = "v<i>_type", section = "voice", kind = "type", selectable =
-  -- true} (3.8; no label row above it), then per section a label row
+  -- true} (3.8; no label row above it) and the preset row {label =
+  -- "preset", kind = "preset", key = "preset", section = "voice",
+  -- selectable = true} (3.8, package 3b: no param_id), then per section a label row
   -- {label = <section>, section = <section>, selectable = false}, then one
   -- row per param {label = <param name>, param_id, section, selectable =
   -- true, kind = "control"|"number"|"option"|"binary"}. The registered rows
@@ -116,7 +121,8 @@ return function(S)
     check_voice(voice_idx)
     local prefix = "v" .. voice_idx .. "_"
     local rows = {{label = "type", param_id = prefix .. "type", section = M.VOICE_SECTION, kind = M.TYPE_KIND,
-      selectable = true}}
+      selectable = true},
+      {label = "preset", kind = M.PRESET_KIND, key = "preset", section = M.VOICE_SECTION, selectable = true}}
     for _, section in ipairs(sections_with_registered_rows(voice_idx)) do
       if section.keys then
         table.insert(rows, {label = section.name, section = section.name, selectable = false})
@@ -139,17 +145,22 @@ return function(S)
     return 1
   end
 
-  -- The cursor's group of GROUP_SIZE selectable rows: with k the cursor's
-  -- position among the selectable rows, group ceil(k / GROUP_SIZE), and the
-  -- row indices of its selectable rows (fewer than GROUP_SIZE in the last
-  -- group). The arc's rings 1-4 edit them in order.
+  -- The cursor's group of GROUP_SIZE param rows (selectable rows with a
+  -- param_id: the preset row, 3.8, is none, so no ring reaches it): with k
+  -- the cursor's position among the param rows (the last at or before it,
+  -- at least 1), group ceil(k / GROUP_SIZE), and the row indices of its
+  -- param rows (fewer than GROUP_SIZE in the last group). The arc's rings
+  -- 1-4 edit them in order.
   function voice_page_group(rows, cursor)
-    local position = S.lib.ui_field_list.ordinal(rows, cursor)
-    local group = math.ceil(position / M.GROUP_SIZE)
+    local position = 0
+    for index = 1, math.min(cursor, #rows) do
+      if rows[index].selectable ~= false and rows[index].param_id then position = position + 1 end
+    end
+    local group = math.ceil(math.max(position, 1) / M.GROUP_SIZE)
     local first, last = M.GROUP_SIZE * group - (M.GROUP_SIZE - 1), M.GROUP_SIZE * group
     local row_indices, count = {}, 0
     for index, row in ipairs(rows) do
-      if row.selectable ~= false then
+      if row.selectable ~= false and row.param_id then
         count = count + 1
         if count >= first and count <= last then table.insert(row_indices, index) end
       end

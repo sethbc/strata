@@ -1,0 +1,27 @@
+## Must not break
+
+- **The picker is a modal owner** (`S.lib.ui_modal`): open exactly while its own owner is the modal top, but beneath SEQ's step editor as the zones editor allows (a registered invariant, "voice picker"); no key is held on a closed picker. VOICE's K3 opens it only from the `preset` row, so it is never open with another of VOICE's owners.
+- **Every count is a name**: the other voices are `NUM_VOICES - 1` rows, the slots `S.lib.voice_presets.VOICE_PRESETS.slots`, the hold `VOICE_PICKER.hold_seconds` (`ALT_HOLD_SECONDS`); every position and text is a field of `VOICE_PICKER` (ruling D4).
+- **E2 moves, E3 does nothing**: E2 goes through `S.lib.ui_field_list.move_scroll`, and the cursor and the view's tail are kept while the picker is closed, as the zones editor's are; E3 changes no row and no param.
+- **A name is drawn as norns' font can draw it**: a slot's name goes through `S.lib.ui_text.printable` and is cut by `fit_text` to the room left of its type (`type_gap` px), as the scale editor draws a file's name (#551).
+- **The name entry is the picker's own copy of SCENES' pattern**: norns' `textentry`, opened on ALT+K3's release (the entry cancels on a K2 release, and K3's would reach it), after `forget_held_keys()` (so ALT is not held after it); its own `S.register_menu_close` reconcile acts only while its own callback is open: when the menu took the one textentry over it forgets the entry and puts Strata's key and enc back, and when the menu only came and went it hands the screen back to the entry. `lib/pages/scenes.lua` is untouched, and each reconcile leaves the other's entry alone. `lib/ui/voice_picker.lua` is the third file that may write the globals `key`, `enc` and `redraw` (`test/unit/structure_test.lua`'s allowance).
+- **Its hint row shows a flash first**: under a modal owner `redraw()` takes the hints from the owner, so `hints` returns `S.lib.ui_flash.text("hints")` while one shows (a refused load or save, flashed by `S.lib.voice_presets` with VOICE's page).
+- **ALT+K2's clear decides at the release**, by how long it was held: `hold_seconds` or more on a filled slot clears it (`S.lib.voice_presets.clear`); a quick press does nothing. The owner `animates` while K2 is down, so the hint turns from `K2:hold` to `K2:clear` at the hold time.
+
+## lib/ui/voice_picker.lua (`S.lib.ui_voice_picker`)
+
+Opened by K3 on VOICE's `preset` row (`lib/pages/voice.lua`) for the selected voice. Fields: `open(voice_idx)`, `close()`, `is_open()`, `reconcile_name_entry()` (its menu-close hook) and `VOICE_PICKER` (the layout and texts).
+
+The screen: the title `LOAD INTO VOICE <n>` at x 0, y 16 (`title_y`), level 10; five rows (`visible`) from y 24 (`first_y`), 7 px apart, through `S.lib.ui_field_list.draw` (its scroll marker at x 127): `from voice <n>` with the voice's type `list_name` right-aligned at x 124 (`value_right`), then `<nn> <name>` with the preset's type `list_name` (`?` for a type this build lacks), or `<nn> --` for an empty slot. The cursor's row at level 15, the others at 4.
+
+| Row | K3 | ALT+K3 | ALT+K2 held |
+|-----|----|--------|-------------|
+| a voice | copies its sound into the voice (`S.lib.voice_presets.copy`) | | |
+| a filled slot | loads it (`load`) | names it and saves the voice there | clears it |
+| an empty slot | nothing, and the flash `empty slot` | names it and saves the voice there | |
+
+K2 (no ALT) closes it at the press. A load or a copy leaves the picker open, so presets can be tried one after another; the VOICE `preset` row shows the name. Hints: `K2:back K3:copy` (a voice row), `K2:back K3:load` (a filled slot), `K2:back` (an empty one); with ALT `K2:clear K3:save` (`K3:save` on an empty slot, nothing on a voice row); while ALT+K2 is down `K2:hold`, past the hold time `K2:clear` (`K2:cancel` on a row with nothing to clear).
+
+VOICE's record carries the layout states: the `preset` row with a twelve-character name; the picker on a voice row, on slot 1 with a twelve-character name and the type with the widest `list_name`, on slot 64 empty, with ALT held, with ALT+K2 past the hold time, and a refused load's flash (K3 on an empty slot).
+
+Tests: `test/unit/ui_voice_picker_test.lua`; the `preset` row's own in `test/unit/pages_voice_test.lua`.
