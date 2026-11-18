@@ -94,7 +94,7 @@ test("a recorder records hand edits of control params only", function()
   assert_equal(S.gestures[1].pattern.count, 1, "an encoder edit of a control: one event")
   local event = S.gestures[1].pattern.event[1]
   assert_equal(event.id, "reverb_mix")
-  assert_near(event.value, 0.31, 1e-9, "the value after the edit")
+  assert_near(event.value, 0.44, 1e-9, "the value after the edit")
   hand_edit("filter_type")                -- an option
   set_binary_param("v1_freeze", 1); S.lib.ui_detent.run_touch_hooks("v1_freeze", "grid")  -- a binary
   hand_edit("v1_source")                  -- a source

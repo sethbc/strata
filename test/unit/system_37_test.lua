@@ -72,6 +72,9 @@ local RUN_CALLS_ALLOWED = {
   -- 0d: a start sends the voice's type right after its source (design §2.2)
   {kind = "drop", match = '^setVoiceType%(<v0>, <v0>%)$', count = 1,
     why = "0d: each voice's start sends setVoiceType, on its own type, right after setGrainSource (design §2.2)"},
+  -- 1a: each voice start sends setGrainParam(<v0>, "dry", 1) (design §7.1)
+  {kind = "drop", match = '^setGrainParam%(<v0>, "dry", 1%)$', count = 1,
+    why = "1a: each voice's start sends the stage's dry level, 1 (design section 7.1)"},
 }
 
 -- A call as the fixture writes it: name(args), numbers "%.9g", strings "%q"
@@ -584,6 +587,13 @@ test("a 3.7 PSET loads with no error line and each voice its old type", function
   assert_equal(#errors, 0, "no line holding error: " .. table.concat(errors, " | "))
   for voice = 1, S.constants.NUM_VOICES do
     assert_equal(S.lib.types.of(voice).key, S.lib.types.default_key(voice), "voice " .. voice .. " its old type")
+  end
+  -- 1a: the PSET's reverb mix (0.3) is read as it stands, now a level; the
+  -- params a 3.7 PSET lacks keep their defaults
+  assert_near(params:get("reverb_mix"), 0.3, 1e-9, "the PSET's reverb_mix line, read as a level")
+  assert_near(params:get("delay_to_reverb"), 1, 1e-9, "delay_to_reverb at its default")
+  for voice = 1, S.constants.NUM_VOICES do
+    assert_near(params:get("v" .. voice .. "_dry"), 1, 1e-9, "v" .. voice .. "_dry at its default")
   end
   cleanup()
 end)

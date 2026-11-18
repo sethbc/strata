@@ -1,19 +1,23 @@
 -- lib/voice_mix.lua
--- Each voice's own filter and effect sends, and the effects' bypass. A
--- registered voice-param record (S.register_voice_params), voice_mix:
--- v<i>_filter_type, _filter_freq, _filter_res and _filter_mix (the voice
--- filter after its grains; mix 0, the default, leaves it out) and
--- v<i>_delay_send and _reverb_send (0-1, default 1: 3.1's chain). They are
--- grain params, scene fields (the type switches at a transition's end), a
--- VOICE section "filter & sends" and LFO destinations (the cutoff and both
--- sends). Two fx params (S.register_fx_params), delay_bypass and
--- reverb_bypass, free and re-create the effect's engine node
--- (engine.setBypass); PSETs store them, scenes never do. MAIN's
--- randomize and mutation never touch any of them; the fader pages show
--- the cutoff, res and mix and both sends (the record's fader group, rank
--- 1: right after 3.7's faders), never the filter type, mute or solo;
--- VOICE's ALT+K2 on its section draws all but the filter's mix (the
--- record's randomize, #557). 3.4 adds v<i>_mute and v<i>_solo (binary,
+-- Each voice's own filter, dry level and effect sends, and the effects'
+-- bypass. A registered voice-param record (S.register_voice_params),
+-- voice_mix: v<i>_filter_type, _filter_freq, _filter_res and _filter_mix
+-- (the voice filter after its grains; mix 0, the default, leaves it out),
+-- v<i>_dry (3.8: the stage's dry level, 0-1, default 1) and v<i>_delay_send
+-- and _reverb_send (0-1, default 1), plain sends taken before the dry
+-- level. They are grain params, scene fields (the type switches at a
+-- transition's end), a VOICE section "filter & sends" and LFO destinations
+-- (the cutoff and both sends; dry is none). Two fx params
+-- (S.register_fx_params), delay_bypass and reverb_bypass, free and
+-- re-create the effect's engine node (engine.setBypass); PSETs store them,
+-- scenes never do. A third fx record, sends, holds 3.8's delay_to_reverb
+-- (how much of the delay's return the reverb takes, setReverb's fourth
+-- value; a scene global and an LFO destination, dly>rev). MAIN's randomize
+-- and mutation never touch any of them; the fader pages show the cutoff,
+-- res and mix, dry and both sends (the record's fader group, rank 1: right
+-- after 3.7's faders), never the filter type, mute or solo; VOICE's ALT+K2
+-- on its section draws all but the filter's mix and dry (the record's
+-- randomize, #557). 3.4 adds v<i>_mute and v<i>_solo (binary,
 -- default 0): silenced(voice) is the answer, sent to the engine as the
 -- stage's voiceMute (a scene stores the mute, never the solo). See
 -- docs/notes/lua/voice-mix.md.
@@ -25,7 +29,8 @@ return function(S)
   M.VOICE_MIX = {
     section = "filter & sends",   -- VOICE's last section, after mix
     filter_types = {"lowpass", "highpass", "bandpass"},
-    keys = {"filter_type", "filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send", "mute", "solo"},
+    keys = {"filter_type", "filter_freq", "filter_res", "filter_mix", "dry", "delay_send", "reverb_send", "mute",
+      "solo"},
     lfo = {{label = "vfilt", key = "filter_freq"}, {label = "dsend", key = "delay_send"},
       {label = "rsend", key = "reverb_send"},
       {label = "amp", key = "amp"}},
@@ -112,7 +117,7 @@ return function(S)
     end
   end
 
-  -- The sends are 0-1 values shown as a percent (display only)
+  -- The sends and the dry level are 0-1 values shown as a percent (display only)
   local function send_percent(param) return string.format("%d %%", math.floor(param:get() * 100 + 0.5)) end
 
   -- The params' specs (a params:add table without an id), by key
@@ -133,6 +138,9 @@ return function(S)
       return {type = "control", name = "filter res", controlspec = controlspec.new(0, 1, "lin", 0.01, 0.5)}
     elseif key == "filter_mix" then
       return {type = "control", name = "filter mix", controlspec = controlspec.new(0, 1, "lin", 0.01, 0)}
+    elseif key == "dry" then
+      return {type = "control", name = "dry", controlspec = controlspec.new(0, 1, "lin", 0.01, 1),
+        formatter = send_percent}
     elseif key == "delay_send" then
       return {type = "control", name = "delay send", controlspec = controlspec.new(0, 1, "lin", 0.01, 1),
         formatter = send_percent}
@@ -192,19 +200,21 @@ return function(S)
       filter_freq = "filterFreq",
       filter_res = "filterRes",
       filter_mix = "filterMix",
+      dry = "dry",
       delay_send = "delaySend",
       reverb_send = "reverbSend",
     },
-    scene_defaults = {filter_type = 1, filter_freq = 5000, filter_res = 0.5, filter_mix = 0, delay_send = 1,
+    scene_defaults = {filter_type = 1, filter_freq = 5000, filter_res = 0.5, filter_mix = 0, dry = 1, delay_send = 1,
       reverb_send = 1, mute = 0},
     discrete = {filter_type = {1, #M.VOICE_MIX.filter_types}, mute = {0, 1}},
     voice_rows = {section = M.VOICE_MIX.section, rows = M.VOICE_MIX.keys},
     layout_states = layout_states,
-    fader = {{keys = {"filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send"}, rank = 1}},
+    fader = {{keys = {"filter_freq", "filter_res", "filter_mix", "dry", "delay_send", "reverb_send"}, rank = 1}},
     -- VOICE's ALT+K2 on this section (#557): the type a uniform option, the
     -- cutoff 100-8000 Hz even in octaves (2 ^ uniform(log2 100, log2 8000)),
     -- the res below self-oscillation and the sends moderate. The filter's
-    -- mix is kept: 0 would leave the filter out
+    -- mix is kept: 0 would leave the filter out; and dry: a draw near 0
+    -- would silence the voice's dry sound
     randomize = {
       filter_type = function() return math.random(#M.VOICE_MIX.filter_types) end,
       filter_freq = function() return 100 * (8000 / 100) ^ math.random() end,
@@ -239,6 +249,33 @@ return function(S)
       end
     end,
   })
+
+  -- 3.8's delay into the reverb (design §7.1), after the bypass params: how
+  -- much of the delay's return feeds the reverb, 0-1 (1, the default, is
+  -- 3.7's). Its engine sender is the reverb's (setReverb's fourth value,
+  -- lib/engine_sync.lua); a continuous scene global and a global LFO
+  -- destination
+  M.DELAY_TO_REVERB = {param_id = "delay_to_reverb", name = "delay to reverb", lfo_label = "dly>rev"}
+  S.register_fx_params({
+    name = "sends",
+    count = 1,
+    add = function()
+      local id = M.DELAY_TO_REVERB.param_id
+      params:add{
+        type = "control",
+        id = id,
+        name = M.DELAY_TO_REVERB.name,
+        controlspec = controlspec.new(0, 1, "lin", 0.01, 1),
+        formatter = send_percent,
+        action = function(x)
+          note_param_edit(id)  -- a page randomize sets it: an edit ends its undo
+          send_param_to_engine(id, x)
+        end,
+      }
+    end,
+  })
+  S.register_scene_field({id = M.DELAY_TO_REVERB.param_id, default = 1})
+  S.register_lfo_global_destination(M.DELAY_TO_REVERB.lfo_label, M.DELAY_TO_REVERB.param_id)
 
   return M
 end

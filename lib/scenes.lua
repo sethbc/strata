@@ -114,7 +114,7 @@ return function(S)
     {id = "delay_time", continuous = true, default = 0.375},
     {id = "delay_feedback", continuous = true, default = 0.4},
     {id = "delay_mix", continuous = true, default = 0},
-    {id = "reverb_mix", continuous = true, default = 0.3},
+    {id = "reverb_mix", continuous = true, default = 0.43},
     {id = "reverb_size", continuous = true, default = 0.8},
     {id = "reverb_damp", continuous = true, default = 0.5},
     {id = "drift_amount", continuous = true, default = 0.01}
@@ -1416,16 +1416,18 @@ return function(S)
   end
 
   -- Whether the PSET the mark names still holds the live scenes: its
-  -- scenes file is there, of this format, and its scenes encode as
-  -- S.scenes (the file deleted, copied without the PSET or saved over
-  -- elsewhere makes the mark stale, #766)
+  -- scenes file is there, of this format, and its scenes, filled as a load
+  -- fills them (scenes_problem: a key added under the format since the file
+  -- was written takes its default), encode as S.scenes (the file deleted,
+  -- copied without the PSET or saved over elsewhere makes the mark stale,
+  -- #766)
   local function mark_holds_live()
     local mark = S.scene_file.pset
     if mark == nil then return false end
     local held = S.lib.data_files.read(mark .. PSET_SCENES.side_suffix)
     local data_files = S.lib.data_files
     return type(held) == "table" and held.version == SCENE_DATA_VERSION and type(held.scenes) == "table"
-      and data_files.encode(held.scenes) == data_files.encode(S.scenes)
+      and scenes_problem(held.scenes) == nil and data_files.encode(held.scenes) == data_files.encode(S.scenes)
   end
 
   -- Before a PSET load replaces them: live scenes no PSET holds (no mark,

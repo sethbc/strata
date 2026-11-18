@@ -570,7 +570,8 @@ end
 test("each FX param's controlspec lies within the engine's limit for its argument (#51)", function()
   local problems, compared = fx_specs_outside_engine_limits(load_strata())
   assert_equal(#problems, 0, table.concat(problems, "; "))
-  assert_equal(compared, 8, "filter freq, res and mix; delay time, feedback, mix and ping-pong; reverb mix compared")
+  assert_equal(compared, 9,
+    "filter freq, res and mix; delay time, feedback, mix and ping-pong; reverb mix; delay to reverb compared")
   local widened, count = patched_script('controlspec%.new%(0, 0%.95, "lin", 0%.01, 0%.4%)', 'controlspec.new(0, 0.99, "lin", 0.01, 0.4)')
   assert_equal(count, 1, "delay feedback patch applies")
   problems = fx_specs_outside_engine_limits(load_strata(widened))
@@ -600,7 +601,7 @@ test("fx_commands reads every setSynth in a command body (#51)", function()
   assert_equal(settings_of(spec, "setFilter"),
     "1:strataFilter.freq 2:strataFilter.res 3:strataFilter.filterType 4:strataFilter.mix", "every argument")
   assert_equal(settings_of(spec, "setReverb"),
-    "1:strataReverb.mix 2:strataReverb.size 3:strataMaster.drift 3:strataReverb.damp",
+    "1:strataReverb.mix 2:strataReverb.size 3:strataMaster.drift 3:strataReverb.damp 4:strataReverb.delayToReverb",
     "a second FX synth set by the same command")
 end)
 

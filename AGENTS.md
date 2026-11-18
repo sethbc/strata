@@ -114,9 +114,9 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 | `engine.setVoiceParam(voice, param, value)` | `"isf"` | Set a synthesis param, or `bend` (MIDI pitchbend ratio) |
 | `engine.setGrainParam(voice, param, value)` | `"isf"` | Set a grain param (`envShape` index, `grainMode` 0 continuous / 1 triggered, `bufPos`, `freeze` 0/1, `freezeMode` 0 hold / 1 spectral, `t_scanReset` not stored, `scrubRate` and `scanHold` transient, `scanMode` 0 wrap / 1 bounce / 2 one shot, `regionStart` and `regionLength` 0-1, `followRate` 0.25-4, handler-only `rootNote`, ...) |
 | `engine.setMasterDrift(amount)` | `"f"` | Global tape drift |
-| `engine.setReverb(mix, size, damp)` | `"fff"` | Reverb mix 0-1, size, damping. `FreeVerb2` on standard, the FDN on high. Kept while bypassed |
-| `engine.setFilter(freq, res, type, mix)` | `"ffif"` | Master filter, on all three of its instances (dry, delay send, reverb send): 20-20000 Hz, res 0-1, type 0 LP / 1 HP / 2 BP, mix 0 = bypass |
-| `engine.setDelay(time, feedback, mix, pingPong)` | `"ffff"` | Master delay: 0.01-5.4 s, feedback 0-0.95, mix 0-1 (0 = dry, the node keeps running), pingPong 0-1. Kept while bypassed |
+| `engine.setReverb(mix, size, damp, delayToReverb)` | `"ffff"` | Reverb: level 0-1 (the return), size 0-1, damping 0-1, delayToReverb 0-1. `FreeVerb2` on standard, the FDN on high. All four kept while bypassed |
+| `engine.setFilter(freq, res, type, mix)` | `"ffif"` | Master filter, one instance on each bus it filters, before the effects (dry, delay send, reverb send; never the returns): 20-20000 Hz, res 0-1, type 0 LP / 1 HP / 2 BP, mix 0 = bypass |
+| `engine.setDelay(time, feedback, mix, pingPong)` | `"ffff"` | Master delay: 0.01-5.4 s, feedback 0-0.95, level 0-1 (the return; 0 = silent, the node keeps running), pingPong 0-1. Kept while bypassed |
 | `engine.setBypass(effect, bypassed)` | `"ii"` | Effect 0 delay / 1 reverb (others ignored), bypassed 0 or 1: frees the node after its fade and re-creates it in its place when lifted. Only this frees an effect |
 | `engine.setModSource(voice, slot, sourceVoice)` | `"iii"` | Crossmod source for slot 1-3 (-1 = none → `silentBus`, 0-6 = voice). The three crossmod commands ignore any other slot |
 | `engine.setModAmpAmt(voice, slot, amount)` | `"iif"` | Crossmod amplitude depth (-2 to 2) |
@@ -189,8 +189,8 @@ The engine's (under docs/notes/engine/):
 - **Fade before zeroing**: never zero a slot directly; go through `afterSlotFade`, and fading `\strataGrainBuf`s only ever get `bufFrames 0`. `docs/notes/engine/buffers.md`
 - **Messages to synths that can end on their own** go through `sendToSynth`, never `synth.set`/`release`/`free`/`moveBefore`; the effects chain's `effectKeys` get plain sends. `docs/notes/engine/lifecycle.md`
 - **Bypass is explicit**: only `setBypass` frees the delay or reverb and re-creates it in its place; a mix at 0 only silences; the master filters are never freed. `docs/notes/engine/effects.md`
-- **Sends reproduce 3.0's chain**: every mix reader lags 0.05 s, the bus and the nodes' mix controls move in one bundle, and a stage gets its send and mix buses through `stageControls` (`docs/notes/engine/mix.md`). `docs/notes/engine/effects.md`
-- **NaN guards**: the three `\strataFilter`s and `\strataMod` (input and output) replace bad values with `zeroBadValues`. `docs/notes/engine/effects.md`, `docs/notes/engine/voices.md`
+- **Plain sends**: a stage writes its signal times `dry` to the dry bus and times each send to its send bus, the sends taken before the dry level; the returns are levels; `masterSum` is the three summed times 0.7 and the pre-master tap reads it; a stage gets its send buses through `stageControls`. `docs/notes/engine/mix.md`, `docs/notes/engine/effects.md`
+- **NaN guards**: the three `\strataFilter`s (one on the dry bus and one on each send) and `\strataMod` (input and output) replace bad values with `zeroBadValues`. `docs/notes/engine/effects.md`, `docs/notes/engine/voices.md`
 - **File writes** go to a `.part` file renamed into place, never the final path; `deleteStaleParts` deletes only old `.part` and temporary float files; a peaks write, save or scratch take renames through `renameIntoPlace`, never its own `unixCmd` or `systemCmd`. `docs/notes/engine/files.md`, `docs/notes/engine/waveform.md`
 - **The peaks file is in place before the length is reported**: a load's `bufferChanged` runs as `writeSlotPeaks`' action, after the rename; a failed write still reports the length. `docs/notes/engine/waveform.md`
 - **The peak scan allocates nothing per sample**: bin-aligned chunks and `Signal`'s `peak`, never `maxItem` or `minItem` (a structure test enforces it). `docs/notes/engine/waveform.md`

@@ -1333,7 +1333,7 @@ test("fill_scene fills a voice's missing keys with their defaults and tolerates 
   assert_equal(scene.data.voices[4].values, nil, "missing parent tables are not invented")
   scene.data.reverb_mix = nil
   fill_scene(scene)
-  assert_near(scene.data.reverb_mix, 0.3, 1e-9, "missing global filled from its default")
+  assert_near(scene.data.reverb_mix, 0.43, 1e-9, "missing global filled from its default")
   scene.data.reverb_mix = 0.9
   fill_scene(scene)
   assert_near(scene.data.reverb_mix, 0.9, 1e-9, "present values are kept")

@@ -529,9 +529,12 @@ return function(S)
     S.lib.delay_sync.sent(time)
   end
 
+  -- The reverb's one sender: its level (a return level since 3.8), size,
+  -- damping and how much of the delay's return it takes (3.8's
+  -- delay_to_reverb, lib/voice_mix.lua)
   local function send_reverb_to_engine()
     engine.setReverb(engine_param_value("reverb_mix"), engine_param_value("reverb_size"),
-      engine_param_value("reverb_damp"))
+      engine_param_value("reverb_damp"), engine_param_value("delay_to_reverb"))
   end
 
   -- Master density scales every running voice's grain density: one
@@ -556,6 +559,7 @@ return function(S)
   S.engine_senders.reverb_mix = send_reverb_to_engine
   S.engine_senders.reverb_size = send_reverb_to_engine
   S.engine_senders.reverb_damp = send_reverb_to_engine
+  S.engine_senders.delay_to_reverb = send_reverb_to_engine
   S.engine_senders.drift_amount = function(value) engine.setMasterDrift(value) end
 
   -- The source each voice's engine has (what engine.setGrainSource last

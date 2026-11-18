@@ -1676,8 +1676,8 @@ test("bipolar grid faders have a column that sets exactly 0, and keep both ends 
 end)
 
 -- 3.7's faders (3.7.0's 21 per synth voice), then the groundwork's: the
--- voice filter and sends, the loop (buffer voices), the jitters and
--- the attack and release follow
+-- voice filter and sends (3.8, 1a: the dry level before them), the loop
+-- (buffer voices), the jitters and the attack and release follow
 local CROSSMOD_FADERS = { "mod_source_1", "mod_amp_amt_1", "mod_freq_amt_1", "mod_source_2", "mod_amp_amt_2",
   "mod_freq_amt_2", "mod_source_3", "mod_amp_amt_3", "mod_freq_amt_3" }
 local GRAIN_FADERS = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode" }
@@ -1691,7 +1691,7 @@ end
 
 test("each voice's faders are 3.7's, then the new ones, per source", function()
   load_strata()
-  local mix = { "filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send" }
+  local mix = { "filter_freq", "filter_res", "filter_mix", "dry", "delay_send", "reverb_send" }
   local rest = { "pitch_jitter", "size_jitter", "pan_jitter", "attack", "release" }
   local loop = { "loop_start", "loop_length" }
   local synth = { [1] = { "freq", "rq", "noise", "mod1", "mod2", "amp", "pan" }, [4] = { "freq", "drift", "amp" } }
@@ -1713,16 +1713,17 @@ end)
 test("the page counts per voice and source", function()
   load_strata()
   local function counts(voice) return #fader_param_ids(voice) .. " " .. fader_page_count(voice) end
-  assert_equal(counts(1), "32 8", "resonator synth")
-  for _, voice in ipairs({ 2, 5, 6, 7 }) do assert_equal(counts(voice), "31 8", "voice " .. voice .. " synth") end
-  assert_equal(counts(3), "30 8", "folder synth")
-  assert_equal(counts(4), "28 7", "sub synth")
+  -- (3.8, 1a: each count one more, the dry level)
+  assert_equal(counts(1), "33 9", "resonator synth")
+  for _, voice in ipairs({ 2, 5, 6, 7 }) do assert_equal(counts(voice), "32 8", "voice " .. voice .. " synth") end
+  assert_equal(counts(3), "31 8", "folder synth")
+  assert_equal(counts(4), "29 8", "sub synth")
   params:set("v1_source", 2); params:set("v4_source", 2)
-  assert_equal(counts(1), "32 8", "a buffer voice")
-  assert_equal(counts(4), "31 8", "sub on a buffer")
+  assert_equal(counts(1), "33 9", "a buffer voice")
+  assert_equal(counts(4), "32 8", "sub on a buffer")
   params:set("v1_source", 10); params:set("v4_source", 10)
-  assert_equal(counts(1), "27 7", "input")
-  assert_equal(counts(4), "26 7", "sub on input")
+  assert_equal(counts(1), "28 7", "input")
+  assert_equal(counts(4), "27 7", "sub on input")
 end)
 
 test("the new faders follow their warp", function()
@@ -1780,7 +1781,7 @@ test("fader groups sort by rank, and groups of one rank keep their registration 
   local ids = fader_param_ids(1)
   local tail = {}
   for index = 7 + 6 + 9 + 1, #ids do tail[#tail + 1] = ids[index] end
-  assert_equal(table.concat(tail, ","), "v1_probe_b,v1_filter_freq,v1_filter_res,v1_filter_mix,v1_delay_send,"
+  assert_equal(table.concat(tail, ","), "v1_probe_b,v1_filter_freq,v1_filter_res,v1_filter_mix,v1_dry,v1_delay_send,"
     .. "v1_reverb_send,v1_probe_a,v1_probe_c,v1_pitch_jitter,v1_size_jitter,v1_pan_jitter,v1_attack,v1_release",
     "rank 0 after the built-ins, a rank's later group after its earlier, 2.5 between 2 and 3")
 end)

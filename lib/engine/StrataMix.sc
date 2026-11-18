@@ -1,12 +1,10 @@
 // StrataMix.sc
 // The mix area: one persistent mix stage per voice (\strataVoiceMix), which
 // holds what all of a voice's grain synths share: the voice filter
-// (voiceFilter), the voice-level gain (voiceLevel), the delay and reverb
-// sends (voiceOutput, with gains that reproduce 3.0's crossfade mixes at
-// sends of 1), the mirror and the voice tap. Holds the voices' path buses
-// and mix groups, the send buses, their filtered copies and fxMixBus (the
-// global delay and reverb mixes the effects area broadcasts). See
-// docs/notes/engine/mix.md.
+// (voiceFilter), the voice-level gain (voiceLevel), its dry level and its
+// delay and reverb sends (voiceOutput: 3.8's plain sends), the mirror and
+// the voice tap. Holds the voices' path buses and mix groups, the send
+// buses and their filtered copies. See docs/notes/engine/mix.md.
 
 + Engine_Strata {
     // The mix area (order 120)
@@ -27,6 +25,7 @@
                 filterFreq: { arg voice, value; this.setStageParam(voice, \filterFreq, value) },
                 filterRes: { arg voice, value; this.setStageParam(voice, \filterRes, value) },
                 filterMix: { arg voice, value; this.setStageParam(voice, \filterMix, value) },
+                dry: { arg voice, value; this.setStageParam(voice, \dry, value) },
                 delaySend: { arg voice, value; this.setStageParam(voice, \delaySend, value) },
                 reverbSend: { arg voice, value; this.setStageParam(voice, \reverbSend, value) }
             )
@@ -62,13 +61,13 @@
         ^true
     }
 
-    // The mixes' lag in every reader (s): 3.0's delay lagged its mix by as much
+    // The lag (s) of every send, dry level and return level (and of a lifted
+    // node's input fade, liftFade): 3.0's delay lagged its mix by as much
     fxMixLag { ^0.05 }
 
     // The buses (areaState[\mix]): the delay and reverb sends (stereo audio,
-    // written by every stage), their copies after the master filter
-    // (...Post), and fxMix (control, 2 channels: the delay mix and the reverb
-    // mix as the engine broadcasts them). The effects area's buses are
+    // written by every stage) and their copies after the master filter
+    // (...Post). The effects area's buses are
     // named here too: dry (mainBus, every stage's out), dryPost
     // (filterBus), delayReturn (delayBus) and reverbReturn (reverbBus). Each
     // voice has its two paths (stereo audio): the synth path (synthPaths,
@@ -81,7 +80,6 @@
     allocMixBuses {
         var state = areaState[\mix], server = context.server;
         [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].do({ arg name; state[name] = Bus.audio(server, 2) });
-        state[\fxMix] = Bus.control(server, 2);
         state[\dry] = mainBus;
         state[\dryPost] = filterBus;
         state[\delayReturn] = delayBus;
@@ -111,15 +109,14 @@
     mixBusControls {
         ^Dictionary[
             \delaySendOut -> this.mixBus(\delaySend).index,
-            \reverbSendOut -> this.mixBus(\reverbSend).index,
-            \fxMixIn -> this.mixBus(\fxMix).index
+            \reverbSendOut -> this.mixBus(\reverbSend).index
         ]
     }
 
     // The mix area's own buses (every node is gone by now)
     freeMixBuses {
         var state = areaState[\mix];
-        [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost, \fxMix].do({ arg name; this.mixBus(name).free });
+        [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].do({ arg name; this.mixBus(name).free });
         (state[\synthPaths] ++ state[\otherPaths]).do({ arg bus; bus.free });
     }
 
@@ -134,7 +131,8 @@
     // bad (its raw outputs read NaN or inf: codes 1 and 2 of
     // CheckBadValues, never code 3, a denormal) is replaced in place
     // (replaceBadVoiceMix). The mirror is the other path only, filtered and
-    // after the level; the tap the whole output, before the sends.
+    // after the level; the tap the whole output, before the dry level and the
+    // sends (so a voice at dry 0 still records and feeds its readers).
     // voiceMixMod (the modulation area's, StrataModulation.sc) declares the
     // stage's fastModIn, gate and mute controls and gives the level lines
     // their amp offset and gate.
@@ -142,14 +140,14 @@
         SynthDef(\strataVoiceMix, {
             arg synthIn, otherIn, out, mirrorOut, amp=1, modBus1=0, modBus2=0, modBus3=0,
             modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0, t_trig=0, velocity=1,
-            filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0, delaySend=1, reverbSend=1;
+            filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0, dry=1, delaySend=1, reverbSend=1;
             var voice = \voice.kr(0);
             var c = this.voiceMixMod((
                 synthIn: synthIn, otherIn: otherIn, out: out, mirrorOut: mirrorOut,
                 tapOut: \tapOut.kr(areaState[\record][\tapSink].index),
                 amp: amp, modBuses: [modBus1, modBus2, modBus3], modAmpAmts: [modAmpAmt1, modAmpAmt2, modAmpAmt3],
                 t_trig: t_trig, velocity: velocity, filterType: filterType, filterFreq: filterFreq, filterRes: filterRes,
-                filterMix: filterMix, delaySend: delaySend, reverbSend: reverbSend
+                filterMix: filterMix, dry: dry, delaySend: delaySend, reverbSend: reverbSend
             ));
             var guard = { arg signal; signal.collect({ arg channel; this.zeroBadValues(channel) }) };
             var synthPath = guard.(In.ar(c[\synthIn], 2)), otherPath = guard.(In.ar(c[\otherIn], 2));
@@ -166,7 +164,7 @@
             var other = filtered.drop(2) * this.voiceLevel(c[\amp], modSig + c[\ampOffset], accent);
             var sig = ((filtered.keep(2) * this.voiceLevel(1, c[\ampOffset], 0)) + other) * c[\voiceGate];
             SendReply.ar(bad, '/strataVoiceMixBad', voice);
-            this.voiceOutput(sig, c[\out], c[\delaySend], c[\reverbSend]);
+            this.voiceOutput(sig, c[\out], c[\dry], c[\delaySend], c[\reverbSend]);
             Out.ar(c[\mirrorOut], other);
             Out.ar(c[\tapOut], sig);
         }).add;
@@ -239,23 +237,16 @@
             filterMix.lag(0.05).clip(0, 1))
     }
 
-    // Write a stage's stereo output. With the voice's sends s_d and s_r
-    // (delaySend, reverbSend, 0-1, lagged) and the global mixes m_d and m_r
-    // (fxMixIn, lagged fxMixLag):
-    //   out (dry):     (1 - s_d m_d)(1 - s_r m_r)
-    //   delay send:    s_d
-    //   reverb send:   s_r (1 - s_d m_d)
-    // The effects add m_d D (the delay's return) and m_r R (the reverb's)
-    // back (StrataEffects.sc), so at sends of 1 this is term for term 3.0's
-    // serial chain, and at sends of 0 the voice plays dry at full level.
-    // (The stage writes the mirror and the tap itself.)
-    voiceOutput { arg sig, out, delaySend, reverbSend;
-        // (the engine broadcasts mixes already clipped to 0-1: liveMix)
-        var mixes = In.kr(\fxMixIn.kr(this.mixBus(\fxMix).index), 2).lag(this.fxMixLag);
-        var toDelay = delaySend.clip(0, 1).lag(this.fxMixLag), toReverb = reverbSend.clip(0, 1).lag(this.fxMixLag);
-        var pastDelay = 1 - (toDelay * mixes[0]);
-        Out.ar(out, sig * (pastDelay * (1 - (toReverb * mixes[1]))));
-        Out.ar(\delaySendOut.kr(this.mixBus(\delaySend).index), sig * toDelay);
-        Out.ar(\reverbSendOut.kr(this.mixBus(\reverbSend).index), sig * (toReverb * pastDelay));
+    // Write a stage's stereo output: plain sends (3.8). The dry bus takes
+    // the signal times the voice's dry level, each send bus the signal times
+    // its send (each 0-1, lagged fxMixLag); the sends are taken before the
+    // dry level, so a voice at dry 0 is fully wet. The returns are levels of
+    // their own (the delay's and the reverb's mix), and the master sums the
+    // three (masterSum, StrataEffects.sc). (The stage writes the mirror and
+    // the tap itself, before the dry level.)
+    voiceOutput { arg sig, out, dry, delaySend, reverbSend;
+        Out.ar(out, sig * dry.clip(0, 1).lag(this.fxMixLag));
+        Out.ar(\delaySendOut.kr(this.mixBus(\delaySend).index), sig * delaySend.clip(0, 1).lag(this.fxMixLag));
+        Out.ar(\reverbSendOut.kr(this.mixBus(\reverbSend).index), sig * reverbSend.clip(0, 1).lag(this.fxMixLag));
     }
 }

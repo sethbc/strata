@@ -74,13 +74,13 @@
         var fade = this.recordFadeSeconds, preroll = this.recordPrerollSeconds;
         var points = this.waveformPoints;
         var sampleRate = context.server.sampleRate, fadeFrames = fade * sampleRate;
-        // The master's own sum, for the pre-master record source: the filter,
-        // delay and reverb returns, before drift, the limiter and the
-        // saturator. A bypassed delay or reverb leaves its bus unwritten,
+        // The master's own sum (masterSum: the filtered dry bus and the
+        // delay and reverb returns, times masterSumGain), for the pre-master
+        // record source, before drift, the limiter and the saturator. A bypassed delay or reverb leaves its bus unwritten,
         // which In.ar reads as silence, exactly as the master does.
         SynthDef(\strataTapPreMaster, {
-            arg out, in, delayIn, reverbIn, fxMix;
-            Out.ar(out, this.masterSum(in, delayIn, reverbIn, fxMix));
+            arg out, in, delayIn, reverbIn;
+            Out.ar(out, this.masterSum(in, delayIn, reverbIn));
         }).add;
 
         // One recording into a slot's buffer pair (design 3.3, section 1.4).
@@ -183,7 +183,7 @@
         var state = areaState[\record];
         state[\tapGroup] = Group.tail(context.xg);
         synths[\tapPreMaster] = Synth(\strataTapPreMaster, [\out, state[\preMasterBus], \in, filterBus, \delayIn, delayBus,
-            \reverbIn, reverbBus, \fxMix, this.mixBus(\fxMix)], state[\tapGroup], \addToHead);
+            \reverbIn, reverbBus], state[\tapGroup], \addToHead);
         state[\armReplies] = OSCFunc({ arg msg;
             var index = msg[2].asInteger, take = if (this.validBuffer(index)) { state[\takes][index] };
             // only this take's synth (another engine on the same server has its own)

@@ -17,10 +17,11 @@ PSETs (PARAMETERS > PSET) save every one of them, and the sixteen scenes beside 
 - Filter mix (0 = bypass, the default, to 1)
 - Delay time (0.01-5.4 s, default 0.375)
 - Delay feedback (0-0.95, default 0.4)
-- Delay mix (0 = dry, the default, to 1)
-- Reverb mix, size and damping
+- Delay level (the delay's return, 0 = silent, the default, to 1; the id stays `delay_mix`)
+- Reverb level (its return, 0-1, default 0.43; the id stays `reverb_mix`), size and damping
 - Tape drift amount (depth of the pitch drift; 0 = none, default 0.01 = ±0.2 %; it bends the pitch only, with no flutter in the level)
-- Delay bypass and reverb bypass (off by default): switch the effect off completely, freeing its CPU (and the reverb's memory; the delay's line is kept apart, emptied), and keep its mix (see [Bypass](effects.md#bypass)). PSETs store them; scenes do not
+- Delay bypass and reverb bypass (off by default): switch the effect off completely, freeing its CPU (and the reverb's memory; the delay's line is kept apart, emptied), and keep its level (see [Bypass](effects.md#bypass)). PSETs store them; scenes do not
+- Delay to reverb (0-100 %, default 100): how much of the delay's return the reverb takes; at 0 a voice with no reverb send has dry echoes ([Plain sends](effects.md#plain-sends)). Scenes store it and crossfade it
 - Delay sync (off by default): the delay plays delay division at the tempo instead of delay time; a division longer than 5.4 s plays at half its length (or a quarter, ...) until it fits (see [FX](pages/fx.md))
 - Delay division (1/32, 1/16T, 1/16, 1/16D, 1/8T, 1/8, 1/8D, 1/4T, 1/4, 1/4D, 1/2, 1 bar; default 1/8D)
 - Delay ping-pong (0-1, default 0): at 1 the repeats alternate left and right. Scenes store the three: sync and division switch at the end of a transition, ping-pong crossfades
@@ -182,6 +183,7 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | filter freq | 20-20000 Hz | 5000 | |
 | filter res | 0-1 | 0.5 | |
 | filter mix | 0-1 | 0 | 0 leaves the filter out |
+| dry | 0-100% | 100 | The voice's dry level: how much of it reaches the mix dry. The sends are taken before it, so at 0 the voice is all effect ([Plain sends](effects.md#plain-sends)) |
 | delay send | 0-100% | 100 | |
 | reverb send | 0-100% | 100 | |
 | mute | off/on | off | Silences the voice without stopping it; scenes keep it ([Mute and solo](voices-and-grains.md#mute-and-solo)) |
@@ -212,4 +214,4 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | seq direction | forward, reverse, ping-pong, random | forward | The order the voice takes its steps |
 | seq misstep | 0-100% | 0 | The chance of a step up or down instead of the direction's |
 
-None of the extras (history to seq misstep) is changed by MAIN's randomize or the mutations. The grid's fader pages show the voice filter's cutoff, resonance and mix, both sends, a buffer voice's loop, the three jitters and the voice's attack and release, after the voice's own faders; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).
+None of the extras (history to seq misstep) is changed by MAIN's randomize or the mutations. The grid's fader pages show the voice filter's cutoff, resonance and mix, the dry level, both sends, a buffer voice's loop, the three jitters and the voice's attack and release, after the voice's own faders; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).

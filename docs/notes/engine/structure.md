@@ -100,9 +100,9 @@ Each of the 7 voices follows this path (synth source; see Audio Sources in `docs
 2. The voice's ring writer (`strataRingWrite`) records `granBuses[i]` into the voice's ring, and the granular processor (`strataGrainRing`) reads that ring and writes the voice's synth path (see `docs/notes/engine/rings.md`; its stage, `strataVoiceMix`, filters and sends it, `docs/notes/engine/mix.md`). A buffer-sourced voice has no voice synth: `strataGrainBuf` reads its buffer pair; an input-sourced voice's `strataGrainRing` reads the input ring (written from `inputBus`). Both write the voice's other path, and only that (a grain SynthDef has one `Out`); the stage writes the other path, filtered and after the level, to `granBuses[i]` (the mirror), so crossmod keeps working, and the voice's whole output to its tap (`docs/notes/engine/record.md`)
 3. Modulation synth (`strataMod`) analyzes voice bus output (the voice synth, or the stage's mirror) and generates control signal to `modBuses[i]`
 4. Other voice synths can read from any `modBuses[i]` to modulate their amplitude and/or frequency
-5. Each voice's stage (`strataVoiceMix`) writes its dry part to `mainBus` and its delay and reverb sends to the mix area's send buses (`voiceOutput`); three master filters (`strataFilter`) process `mainBus` (to `filterBus`) and the two sends; the delay (`strataDelay`) processes the filtered delay send and returns to `delayBus`
-6. Reverb (`strataReverb`, or `strataReverbFDN` on high) processes the filtered reverb send plus `delayBus` and returns to `reverbBus` (see `docs/notes/engine/effects.md`)
-7. Master (`strataMaster`) sums `filterBus` and the two returns (`masterSum`), applies drift, a `Limiter.ar(sig, 0.95)` safety stage that catches peaks before saturation, then saturation, and outputs to norns output
+5. Each voice's stage (`strataVoiceMix`) writes its signal times its dry level to `mainBus` and times each send to the mix area's send buses (`voiceOutput`: plain sends, 3.8); three master filters (`strataFilter`) process `mainBus` (to `filterBus`) and the two sends; the delay (`strataDelay`) processes the filtered delay send and returns to `delayBus` at its level
+6. Reverb (`strataReverb`, or `strataReverbFDN` on high) processes the filtered reverb send plus `delayToReverb` of `delayBus` and returns to `reverbBus` at its level (see `docs/notes/engine/effects.md`)
+7. Master (`strataMaster`) sums `filterBus` and the two returns times 0.7 (`masterSum`, `masterSumGain`), applies drift, a `Limiter.ar(sig, 0.95)` safety stage that catches peaks before saturation, then saturation, and outputs to norns output
 
 ## Lua ↔ SuperCollider details
 
@@ -147,7 +147,7 @@ Buses are allocated in `alloc` (`numVoices = 7` in the engine must match `NUM_VO
 - 1 stereo `filterBus` (that filter's output, the master's dry input)
 - 1 stereo `delayBus` (the delay's return, read by the reverb and the master)
 - 1 stereo `reverbBus` (the reverb's return, master input)
-- the mix area's (`areaState[\mix]`, `docs/notes/engine/mix.md`): per voice a stereo synth path and other path, stereo delay and reverb sends, their filtered copies, and the 2-channel control `fxMix`
+- the mix area's (`areaState[\mix]`, `docs/notes/engine/mix.md`): per voice a stereo synth path and other path, stereo delay and reverb sends and their filtered copies (3.7's 2-channel control `fxMix` went with 3.8's plain sends)
 - 4 `envBuffers` (grain envelope shapes, 1024 frames each; see `envShape`)
 - 1 stereo `inputBus` (live input from `\strataInput`)
 - `numBuffers` mono control `recordFrameBuses` (frames recorded so far, for `stopRecord`)

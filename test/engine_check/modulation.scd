@@ -193,7 +193,7 @@ addCheckDefs = {
     SynthDef(\strataCheckVoiceMix33, {
         arg synthIn, otherIn, out, mirrorOut, amp=1, modBus1=0, modBus2=0, modBus3=0,
         modAmpAmt1=0, modAmpAmt2=0, modAmpAmt3=0, t_trig=0, velocity=1,
-        filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0, delaySend=1, reverbSend=1;
+        filterType=0, filterFreq=5000, filterRes=0.5, filterMix=0, delaySend=1, reverbSend=1, dry=1;
         var c = (
             synthIn: synthIn, otherIn: otherIn, out: out, mirrorOut: mirrorOut,
             tapOut: \tapOut.kr(engine.areaState[\record][\tapSink].index),
@@ -209,7 +209,7 @@ addCheckDefs = {
         var accent = engine.voiceAccent(c[\t_trig], c[\velocity]);
         var other = filtered.drop(2) * engine.voiceLevel(c[\amp], modSig, accent);
         var sig = filtered.keep(2) + other;
-        engine.voiceOutput(sig, c[\out], c[\delaySend], c[\reverbSend]);
+        engine.voiceOutput(sig, c[\out], dry, c[\delaySend], c[\reverbSend]);
         Out.ar(c[\mirrorOut], other);
         Out.ar(c[\tapOut], sig);
     }).add;
@@ -288,7 +288,7 @@ loadNoiseSlot = { arg slot;
 // reverb send, mirror, tap), its inputs, silent mod slots, then extra
 stageArgs = { arg outBus, synthIn, otherIn, extra;
     [\synthIn, synthIn, \otherIn, otherIn, \out, outBus.index, \delaySendOut, outBus.index + 2, \reverbSendOut, outBus.index + 4,
-        \mirrorOut, outBus.index + 6, \tapOut, outBus.index + 8, \fxMixIn, engine.mixBus(\fxMix).index,
+        \mirrorOut, outBus.index + 6, \tapOut, outBus.index + 8,
         \modBus1, engine.silentBus.index, \modBus2, engine.silentBus.index, \modBus3, engine.silentBus.index,
         \fastModIn, state[\silentFastModBus].index] ++ (extra ? [])
 };

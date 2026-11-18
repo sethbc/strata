@@ -45,11 +45,11 @@ return function(S)
       {label = "delay", selectable = false, bypass = "delay"},
       {label = "time", param_id = "delay_time", format = "%.3f s", effect = "delay", synced = "delay_division"},
       {label = "fdbk", param_id = "delay_feedback", format = percent, effect = "delay"},
-      {label = "mix", param_id = "delay_mix", format = percent, effect = "delay"},
+      {label = "level", param_id = "delay_mix", format = percent, effect = "delay"},  -- 3.8: the return's level
       {label = "sync", param_id = "delay_sync", format = on_off, effect = "delay", binary = true},
       {label = "ping", param_id = "delay_pingpong", format = percent, effect = "delay"},
       {label = "reverb", selectable = false, bypass = "reverb"},
-      {label = "mix", param_id = "reverb_mix", format = percent, effect = "reverb"},
+      {label = "level", param_id = "reverb_mix", format = percent, effect = "reverb"},
       {label = "size", param_id = "reverb_size", format = "%.2f", effect = "reverb"},
       {label = "damp", param_id = "reverb_damp", format = percent, effect = "reverb"}
     },
