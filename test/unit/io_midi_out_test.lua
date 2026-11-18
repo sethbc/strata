@@ -1450,6 +1450,20 @@ test("a device that arrives on a port the rig still names for a remote is the re
   assert_equal(sent(synth), "pitchbend 8192 2|note_on 60 127 2", "the first note follows its setup")
 end)
 
+test("a synth moved in the menu onto the port the rig names for a remote gets the ask alone (#772)", function()
+  local context, S = started()
+  context.midi.plug(3, "iii grid")
+  remote_grid_at(S, 3)
+  mpe_voice(1, 3); settled(context)
+  local synth = context.midi.plug(5, "synth")
+  clear(synth)
+  _menu.set_mode(true)
+  context.midi.reassign(5, 3)  -- the synth takes port 3; the iii grid is left on no port
+  _menu.set_mode(false)
+  assert_equal(sent(synth), ASK_HELLO, "the remote's ask alone: no RPN (cc 101, 100, 6) before the remote claims it")
+  assert_equal(S.lib.io_ports.owner(3), "remote grid", "the remote holds the synth's port")
+end)
+
 test("a route change, a voice stop and cleanup leave as many offs as ons on every channel", function()
   local context, S = started()
   local device = context.midi.plug(2, "synth")
