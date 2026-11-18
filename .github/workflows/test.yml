@@ -134,12 +134,12 @@ jobs:
   engine-shard:
     name: engine (${{ matrix.areas }})
     # The sum of every step's own limit (#790: the two checkouts 2 minutes
-    # each, list 2, restore 2, install 4, save 2, JACK 2, the check 11, the
-    # three refusal checks 2, 2 and 3: 34 minutes) and a minute for the
+    # each, list 4, restore 2, install 4, save 2, JACK 2, the check 11, the
+    # three refusal checks 2, 2 and 3: 36 minutes) and a minute for the
     # runner's own steps (set up job, the checkout's post step, complete job:
     # 6 s at most in five runs), so a hung step fails by its own name before
     # the job's limit (docs/checks.md, Installs); the default is 360
-    timeout-minutes: 35
+    timeout-minutes: 37
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -201,7 +201,9 @@ jobs:
       # makes a new key, and the old entry ages out
       - name: List SuperCollider and JACK's packages
         id: packages
-        timeout-minutes: 2
+        # 7 to 103 s in five runs: its apt-get update reads the mirrors whose
+        # slowness #785 met, so the install's 4 minutes
+        timeout-minutes: 4
         run: |
           set -o pipefail
           sudo apt-get $APT_NETWORK_OPTIONS update
