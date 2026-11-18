@@ -288,7 +288,9 @@ test("the interval keys", function()
         end
       end
     end
-    -- set elsewhere (FX, a scene), it shows within a drift tick
+    -- set elsewhere (FX, a scene), it shows within a drift tick (after a
+    -- first look: the load's first tick always repaints)
+    drift_update()
     params:set(SHIMMER.interval_id, SHIMMER.default_interval)
     drift_update()
     for x = first, last do
@@ -386,7 +388,9 @@ test("line 7's keys and levels", function()
       pane.tap(key("reverb_freeze"))
       assert_equal(params:get(freeze_id), 0, arrangement .. ": RF again releases it")
       assert_equal(pane.led(key("reverb_freeze")), 4, arrangement .. ": 4")
-      -- set elsewhere, it shows within a drift tick
+      -- set elsewhere, it shows within a drift tick (after a first look:
+      -- the load's first tick always repaints)
+      drift_update()
       params:set(freeze_id, 1)
       drift_update()
       assert_equal(pane.led(key("reverb_freeze")), 15, arrangement .. ": a freeze set elsewhere shows within a tick")
@@ -480,6 +484,28 @@ test("a param set elsewhere reaches the page within a drift tick", function()
       drift_update()
       if pane.shows(x, y) then assert_equal(pane.led(x, y), level, arrangement .. ": " .. what) end
     end
+    -- the three whose own action repaints (sync, the delay's freeze) or
+    -- whose change is a press's (the set), each changed here so that only
+    -- its term of the page's signature can show it: sync and the freeze
+    -- set silently (no action) while the reverb set hides the time line,
+    -- the set written to the port's state with every shown fader at its
+    -- minimum, so the fader lines look the same in either set
+    pick_set(pane, SET_X.reverb)
+    drift_update()
+    check("sync set without its action", function() params:set("delay_sync", 1, true) end,
+      KEY_X.delay_sync, LINE.keys, 15)
+    check("the delay's freeze set without its action", function() params:set("delay_freeze", 1, true) end,
+      KEY_X.delay_freeze, LINE.keys, 15)
+    params:set("delay_freeze", 0, true); params:set("delay_sync", 0, true)
+    for _, set_index in ipairs({SET_X.reverb, SET_X.master}) do
+      for _, id in ipairs(SETS[set_index]) do params:set(id, (param_range(id))) end
+    end
+    drift_update()
+    check("the set changed without a key", function()
+      S.lib.grid_core.port_state(pane.port).pages.fx.set = SET_X.master
+    end, SET_X.master, LINE.picks, 15)
+    S.lib.grid_core.port_state(pane.port).pages.fx.set = SET_X.delay
+    drift_update()
     check("delay bypassed", function() params:set("delay_bypass", 1) end, KEY_X.delay_bypass, LINE.keys, 2)
     check("reverb bypassed", function() params:set("reverb_bypass", 1) end, KEY_X.reverb_bypass, LINE.keys, 2)
     check("the filter type", function() params:set("filter_type", 3) end, KEY_X.filter_first + 2, LINE.keys, 15)
