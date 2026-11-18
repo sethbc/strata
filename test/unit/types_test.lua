@@ -182,7 +182,7 @@ test("register_voice_type refuses a record without freq or amp, a list name over
   assert_true(refused(function(r) r.specs.ratio = nil end), "a key with no spec")
   assert_true(refused(function(r) r.envelope = {attack = 1} end), "an envelope with no release")
   assert_true(refused(function(r) r.key = "two words" end), "a key that is no param id suffix")
-  assert_true(refused(function(r) r.colour = 1 end), "an unknown field")
+  assert_true(refused(function(r) r.hue = 1 end), "an unknown field")
   assert_true(not pcall(S.register_voice_type, probe_record()), "the live registry is closed at init")
   cleanup()
 end)
