@@ -827,7 +827,7 @@ return function(S)
     -- the periodic poll repeats unchanged values: redraw only on a change
     if not changed then return end
     request_redraw()  -- the BUFFER page shows the seconds, SETUP the restored count
-    if S.lib.grid_core.any_page(S.constants.GRID_PAGES.sources) then grid_redraw() end
+    if S.lib.grid_core.any_page(S.constants.GRID_PAGES.sources) or S.lib.grid_core.any_page(S.constants.GRID_PAGES.positions, 2) then grid_redraw() end
     remember()  -- a take that settled has its scratch path now
   end
 

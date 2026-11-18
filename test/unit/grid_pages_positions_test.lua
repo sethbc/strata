@@ -1,0 +1,552 @@
+-- test/unit/grid_pages_positions_test.lua
+-- Grid page 5, positions (lib/grid/pages/positions.lua, design §10.7): side
+-- 1 a line of sixteen cells per voice, side 2 every voice's marks and the
+-- slots' record and clear keys, on every arrangement (h.grid_pane)
+-- Run alone: lua test/run.lua grid_pages_positions
+
+return function(h)
+local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
+local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
+local grid_pane, shown_step_editor = h.grid_pane, h.shown_step_editor
+
+-- Voices 1-3 on slot 1 (16 s, loaded), each loop the whole slot; voice 4
+-- on its synth
+local function buffer_voices(context)
+  local S = local_value("S")
+  S.buffers[1].seconds = 16; S.buffers[1].loaded = true
+  for voice_idx = 1, 3 do
+    params:set("v" .. voice_idx .. "_source", S.constants.SOURCE_SYNTH + 1)
+    params:set("v" .. voice_idx .. "_loop_length", 1); params:set("v" .. voice_idx .. "_loop_start", 0)
+  end
+  context.clear_engine_calls()
+  return S
+end
+
+-- The pane's first and last shown column: a half shows eight
+local function shown_columns(pane)
+  local first, last
+  for x = 1, 16 do
+    if pane.shows(x, 1) then
+      first = first or x
+      last = x
+    end
+  end
+  return first, last
+end
+
+-- Side 2's columns: the marks (bookmarks 1-4, ST 6, HD 7, WH 8) and slot n
+-- at 8 + n, in pane coordinates
+local MARK_X = {store = 6, hold = 7, whole = 8}
+local SLOT_X = 8
+
+-- body(context, S, pane, arrangement) on each arrangement (opts.only: a
+-- test of keys some arrangements do not show keeps those that show column
+-- opts.only), the pane on positions' given side (1 by default)
+local function each_arrangement(body, opts)
+  opts = opts or {}
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_strata(); finish_startup(context)
+    local S = buffer_voices(context)
+    local pane = grid_pane(context, arrangement)
+    if opts.only == nil or pane.shows(opts.only, 1) then
+      pane.show(S.constants.GRID_PAGES.positions, opts.side or 1)
+      body(context, S, pane, arrangement)
+    end
+  end
+end
+
+local function scan_hold_sent(context)
+  local held
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "scanHold" then held = call.args[3] end
+  end
+  return held
+end
+
+-- 3.7 (design §10): a slice row, on the doubles test/helpers.lua shares
+-- (h.slice_doubles): `voice` takes notes and its slot holds `count` slices
+local function slice_double(S, voice, count)
+  local doubles = h.slice_doubles(S, {[voice_buffer_slot(voice)] = count})
+  doubles.takes[voice] = true
+  return doubles
+end
+
+test("the positions page is registered at its index, with two sides", function()
+  load_strata()
+  local S = local_value("S")
+  local record = S.registry.grid_pages[S.constants.GRID_PAGES.positions]
+  assert_true(record ~= nil, "a record at page 5")
+  assert_equal(record.name, "positions")
+  assert_equal(record.sides, 2, "two sides")
+  assert_equal(S.lib.grid_pages_positions.record, record, "the module keeps its record")
+end)
+
+-- Side 1 -----------------------------------------------------------------
+
+test("a press jumps and a held pair sets the loop", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    local first = shown_columns(pane)
+    pane.tap(first + 4, 2)
+    assert_near(params:get("v2_buf_pos"), (first + 3) / 16, 1e-9, arrangement .. ": line 2 jumps voice 2 to its cell")
+    assert_near(params:get("v1_buf_pos"), 0, 1e-9, arrangement .. ": and leaves voice 1")
+    pane.press(first, 2, 1); pane.press(first + 4, 2, 1)
+    pane.press(first + 4, 2, 0); pane.press(first, 2, 0)
+    assert_near(params:get("v2_loop_start"), (first - 1) / 16, 1e-9, arrangement .. ": the earlier cell's start")
+    assert_near(params:get("v2_loop_length"), 5 / 16, 1e-9, arrangement .. ": to the later cell's end")
+    assert_near(params:get("v2_buf_pos"), 0, 1e-9, arrangement .. ": at the loop's start")
+    for _, voice_idx in ipairs({1, 3}) do
+      pane.tap(first + 1, voice_idx)
+      assert_near(params:get("v" .. voice_idx .. "_buf_pos"), first / 16, 1e-9, arrangement .. ": line " .. voice_idx .. " is voice " .. voice_idx)
+    end
+    assert_equal(S.grid_voice_select, 1, arrangement .. ": a press never selects the grid voice")
+  end)
+end)
+
+test("a position release on one line keeps another line's held key in the same column (#733)", function()
+  each_arrangement(function(_, _, pane, arrangement)
+    local first = shown_columns(pane)
+    pane.press(first, 1, 1)      -- voice 1's cell
+    pane.press(first, 2, 1)      -- voice 2's, the port's held key
+    pane.press(first, 1, 0)      -- voice 1's release
+    pane.press(first + 4, 2, 1)  -- voice 2's key is still down: a loop
+    assert_near(params:get("v2_loop_start"), (first - 1) / 16, 1e-6, arrangement .. ": loop start")
+    assert_near(params:get("v2_loop_length"), 5 / 16, 1e-6, arrangement .. ": loop length")
+    pane.press(first + 4, 2, 0); pane.press(first, 2, 0)
+  end)
+end)
+
+test("LEDs follow grid_level", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    local first, last = shown_columns(pane)
+    local cells = S.constants.GRID_PAGES.position_cells
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      for cell = first, last do
+        assert_equal(pane.led(cell, voice_idx), S.lib.positions.grid_level(voice_idx, cell, cells, pane.port),
+          arrangement .. ": voice " .. voice_idx .. " cell " .. cell)
+      end
+    end
+    for cell = first, last do assert_equal(pane.led(cell, 4), 0, arrangement .. ": voice 4 reads no buffer") end
+    params:set("v1_buf_pos", 0.45)
+    S.lib.playheads.reset(1)
+    grid_redraw()
+    if pane.shows(8, 1) then
+      assert_equal(pane.led(8, 1), 15, arrangement .. ": the playhead cell (0.45 of 16 is cell 8)")
+      assert_true(pane.led(1, 1) < 15, arrangement .. ": and not the others")
+    else
+      for cell = first, last do assert_true(pane.led(cell, 1) < 15, arrangement .. ": the playhead is on the other half") end
+    end
+  end)
+end)
+
+test("a slice row plays", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    local double = slice_double(S, 2, 20)
+    grid_redraw()
+    local first, last = shown_columns(pane)
+    for cell = first, last do assert_equal(pane.led(cell, 2), 9, arrangement .. ": slice " .. cell) end
+    pane.press(first + 4, 2, 1)
+    assert_equal(double.plays[1].n, first + 4, arrangement .. ": the cell's slice")
+    assert_equal(double.plays[1].note.key, 100 + first + 4)
+    assert_equal(pane.led(first + 4, 2), 15, arrangement .. ": playing")
+    -- a release on another line never ends it
+    pane.press(first + 4, 3, 1); pane.press(first + 4, 3, 0)
+    assert_equal(#double.offs, 0, arrangement .. ": voice 2's key is still down")
+    pane.press(first + 4, 2, 0)
+    assert_equal(#double.offs, 1, arrangement .. ": its own release ends it")
+    assert_equal(double.offs[1].voice, 2); assert_equal(double.offs[1].key, 100 + first + 4)
+    assert_equal(pane.led(first + 4, 2), 9, arrangement .. ": a slice again")
+    assert_near(params:get("v2_buf_pos"), 0, 1e-9, arrangement .. ": no jump")
+    -- the bank keys are on side 2: bank 2 shows slices 17-32
+    pane.show(S.constants.GRID_PAGES.positions, 2)
+    if pane.shows(1, 1) then
+      assert_equal(pane.led(1, 2), 15, arrangement .. ": bank 1 shown")
+      assert_equal(pane.led(2, 2), 4, arrangement .. ": bank 2 holds slices")
+      assert_equal(pane.led(3, 2), 0, arrangement .. ": bank 3 none")
+      pane.tap(2, 2)
+      assert_equal(pane.led(2, 2), 15, arrangement .. ": bank 2 shown")
+      assert_equal(pane.led(1, 2), 4)
+      pane.show(S.constants.GRID_PAGES.positions, 1)
+      assert_equal(pane.led(first + 3, 2), 9, arrangement .. ": slice 20")
+      assert_equal(pane.led(first + 4, 2), 0, arrangement .. ": no slice 21")
+      pane.tap(first + 3, 2)
+      assert_equal(double.plays[2].n, 20, arrangement .. ": bank 2's fourth key")
+    end
+  end)
+end)
+
+-- Side 2 -----------------------------------------------------------------
+
+test("the marks recall, store, hold and restore the whole loop", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local positions = S.lib.positions
+    pane.tap(2, 2)
+    assert_near(params:get("v2_buf_pos"), 0.25, 1e-9, arrangement .. ": bookmark 2 recalled on line 2")
+    params:set("v2_buf_pos", 0.6)
+    pane.press(MARK_X.store, 2, 1); pane.press(3, 2, 1)
+    assert_equal(pane.led(3, 2), positions.LEVELS.stored, arrangement .. ": 15 while it stores")
+    pane.press(3, 2, 0); pane.press(MARK_X.store, 2, 0)
+    assert_near(positions.bookmark(2, 3), 0.6, 0.05, arrangement .. ": ST held + bookmark 3 stores at the playhead")
+    context.clear_engine_calls()
+    pane.press(MARK_X.hold, 1, 1)
+    assert_equal(positions.scan_held(1), true, arrangement .. ": HD holds line 1's voice")
+    assert_equal(scan_hold_sent(context), 1, arrangement .. ": scanHold 1 down")
+    assert_equal(pane.led(MARK_X.hold, 1), positions.LEVELS.key_down)
+    pane.press(MARK_X.hold, 1, 0)
+    assert_equal(scan_hold_sent(context), 0, arrangement .. ": scanHold 0 up")
+    params:set("v2_loop_length", 0.5)
+    pane.tap(MARK_X.whole, 2)
+    assert_near(params:get("v2_loop_start"), 0, 1e-9, arrangement .. ": whole loop")
+    assert_near(params:get("v2_loop_length"), 1, 1e-9)
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      for n = 1, S.constants.NUM_BOOKMARKS do
+        assert_equal(pane.led(n, voice_idx), positions.strip_level(voice_idx, n, pane.port), arrangement .. ": bookmark " .. n)
+      end
+      for mark, x in pairs(MARK_X) do
+        assert_equal(pane.led(x, voice_idx), positions.strip_level(voice_idx, mark, pane.port), arrangement .. ": " .. mark)
+      end
+      assert_equal(pane.led(5, voice_idx), 0, arrangement .. ": column 5 dark")
+    end
+    assert_equal(pane.led(MARK_X.whole, 2), positions.LEVELS.whole, arrangement .. ": WH lit while whole")
+  end, {side = 2, only = 1})
+end)
+
+test("a synth voice's marks are dark and store nothing (#445)", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    params:set("v1_source", 1)
+    grid_redraw()
+    for x = 1, 8 do assert_equal(pane.led(x, 1), 0, arrangement .. ": line 1, column " .. x) end
+    pane.press(MARK_X.store, 1, 1)
+    pane.press(2, 1, 1)
+    assert_equal(pane.led(MARK_X.store, 1), 0, arrangement .. ": store held: dark")
+    assert_equal(pane.led(2, 1), 0, arrangement .. ": the pressed bookmark: dark")
+    assert_equal(params:get("v1_bookmark_2"), 0.25, arrangement .. ": and the bookmark keeps its value")
+    pane.press(2, 1, 0); pane.press(MARK_X.store, 1, 0)
+    params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+    grid_redraw()
+    assert_equal(pane.led(MARK_X.store, 1), S.lib.positions.LEVELS.key_up, arrangement .. ": a buffer voice's store is up")
+  end, {side = 2, only = 1})
+end)
+
+test("the marks follow an off-grid change within a tick (#322)", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local LEVELS = S.lib.positions.LEVELS
+    context.clock.run_for(0.5)
+    assert_equal(pane.led(MARK_X.whole, 2), LEVELS.whole, arrangement .. ": whole: the loop is the whole slot")
+    params:set("v2_loop_length", 0.5)  -- the arc, an LFO or a scene moves the loop
+    context.clock.run_for(1 / 15 + 0.01)
+    assert_equal(pane.led(MARK_X.whole, 2), LEVELS.key_up, arrangement .. ": WH repainted")
+    local device = pane.device
+    local before = device.refresh_count
+    params:set("v2_bookmark_3", 0.9)  -- BUFFER's field, an arc ring or a scene fade sets the param
+    context.clock.run_for(1 / 15 + 0.01)
+    assert_equal(device.refresh_count, before + 1, arrangement .. ": a bookmark stored off the grid: one redraw")
+    context.clock.run_for(1)
+    assert_equal(device.refresh_count, before + 1, arrangement .. ": and no more")
+    -- the hold of another grid and of the arc light HD
+    context.grid.plug(2, 16, 8)
+    S.lib.grid_core.set_page(2, S.constants.GRID_PAGES.positions, 1, 2)
+    S.lib.positions.strip_key(2, 1, "hold", 1, 1)
+    assert_equal(pane.led(MARK_X.hold, 1), LEVELS.key_down, arrangement .. ": another grid's hold lights HD")
+    context.grid.unplug(2)
+    context.clock.run_for(0.2)
+    assert_equal(S.lib.positions.scan_held(1), false, arrangement .. ": the tick released the gone grid's hold")
+    assert_equal(pane.led(MARK_X.hold, 1), LEVELS.key_up, arrangement .. ": and HD goes dark")
+  end, {side = 2, only = 1})
+end)
+
+test("HD lights while BUFFER's ALT ring 1 holds and goes dark when ALT comes up", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local LEVELS = S.lib.positions.LEVELS
+    context.arc.plug(1)
+    h.show_page("BUFFER")
+    assert_equal(S.selected_voice, 1)
+    assert_equal(pane.led(MARK_X.hold, 1), LEVELS.key_up, arrangement .. ": not held")
+    key(1, 1)
+    context.arc.turn(1, 1, 1)
+    assert_equal(S.lib.positions.scan_held(1), true, arrangement .. ": the arc holds voice 1")
+    assert_equal(pane.led(MARK_X.hold, 1), LEVELS.key_down, arrangement .. ": the arc's hold lights HD")
+    key(1, 0)
+    assert_equal(S.lib.positions.scan_held(1), false, arrangement .. ": ALT up releases it")
+    assert_equal(pane.led(MARK_X.hold, 1), LEVELS.key_up, arrangement .. ": and HD goes dark")
+  end, {side = 2, only = 1})
+end)
+
+test("a grid moved to another port releases its store and its scan hold", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local positions = S.lib.positions
+    pane.press(MARK_X.hold, 1, 1)
+    pane.press(MARK_X.store, 1, 1)
+    assert_equal(positions.scan_held(1), true, arrangement .. ": the grid holds voice 1's scan")
+    assert_equal(positions.strip_level(1, "store"), positions.LEVELS.key_down, arrangement .. ": store is down")
+    _menu.set_mode(true)  -- SYSTEM > DEVICES
+    context.grid.reassign(1, 2)
+    _menu.set_mode(false)
+    assert_equal(positions.strip_level(1, "store", 2), positions.LEVELS.key_up, arrangement .. ": on its new port the store is up at once")
+    local moved = grid_pane(context, arrangement, {port = 2})
+    moved.show(S.constants.GRID_PAGES.positions, 2)
+    local bookmark = params:get("v1_bookmark_1")
+    params:set("v1_buf_pos", 0.6)
+    moved.press(1, 1, 1)
+    assert_near(params:get("v1_bookmark_1"), bookmark, 1e-9, arrangement .. ": a bookmark press there recalls: nothing stored")
+    moved.press(1, 1, 0)
+    context.clock.run_for(0.2)
+    assert_equal(positions.scan_held(1), false, arrangement .. ": the next playhead tick released the scan hold")
+    assert_equal(positions.holds_scan(1, "grid:1"), false, arrangement .. ": the old port holds nothing")
+    assert_equal(positions.holds_scan(1, "grid:2"), false, arrangement .. ": nor the new one")
+    assert_equal(positions.strip_level(1, "store"), positions.LEVELS.key_up, arrangement .. ": no port holds store")
+  end, {side = 2, only = 1})
+end)
+
+test("each grid lights only its own store key", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local pages = S.constants.GRID_PAGES
+  local full = grid_pane(context, "256 top")
+  local wide = grid_pane(context, "128h", {port = 2})
+  full.show(pages.positions, 2); wide.show(pages.positions, 2)
+  wide.press(MARK_X.store, 1, 1)
+  assert_equal(wide.led(MARK_X.store, 1), 15, "the 128h's store key is down")
+  assert_equal(full.led(MARK_X.store, 1), 4, "the 256's is not")
+  wide.press(MARK_X.store, 1, 0)
+  full.press(MARK_X.store, 1, 1)
+  assert_equal(full.led(MARK_X.store, 1), 15, "the 256's store key is down")
+  assert_equal(wide.led(MARK_X.store, 1), 4, "the 128h's is not")
+  full.press(MARK_X.store, 1, 0)
+end)
+
+test("side 2's keys record and clear slots 1-8", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local NUM_BUFFERS = S.constants.NUM_BUFFERS
+    pane.tap(SLOT_X + 5, 1)
+    assert_equal(context.calls_named("recordBuffer")[1].args[1], 4, arrangement .. ": line 1, column 13 records slot 5")
+    assert_equal(pane.led(SLOT_X + 5, 1), 15, arrangement .. ": lit while it records")
+    pane.tap(SLOT_X + 5, 1)
+    assert_equal(#context.calls_named("stopRecord"), 1, arrangement .. ": a second press stops it early")
+    pane.tap(SLOT_X + 4, 2)
+    assert_equal(context.calls_named("clearBuffer")[1].args[1], 3, arrangement .. ": line 2, column 12 clears slot 4")
+    for slot = 1, NUM_BUFFERS do
+      pane.tap(SLOT_X + slot, 2)
+      assert_equal(context.calls_named("clearBuffer")[#context.calls_named("clearBuffer")].args[1], slot - 1,
+        arrangement .. ": clear key " .. slot)
+    end
+    load_buffer(2, "/tmp/a.wav")              -- loaded, not from the grid
+    params:set("record_duration", 2); params:set("buf6_record", 1)  -- recording, from params
+    for slot = 1, NUM_BUFFERS do
+      assert_equal(pane.led(SLOT_X + slot, 1), S.lib.grid_core.record_level(slot), arrangement .. ": record key " .. slot)
+      assert_equal(pane.led(SLOT_X + slot, 2), S.lib.grid_core.CLEAR_LEVEL, arrangement .. ": clear key " .. slot)
+      for y = 3, S.constants.NUM_VOICES do assert_equal(pane.led(SLOT_X + slot, y), 0, arrangement .. ": line " .. y .. " dark") end
+    end
+    assert_equal(pane.led(SLOT_X + 6, 1), 15, arrangement .. ": recording")
+    assert_equal(pane.led(SLOT_X + 2, 1), 8, arrangement .. ": loaded")
+    assert_equal(pane.led(SLOT_X + 3, 1), 2, arrangement .. ": empty")
+    context.clear_engine_calls()
+    for y = 3, S.constants.NUM_VOICES do pane.tap(SLOT_X + 1, y) end
+    assert_equal(#context.calls_named("recordBuffer") + #context.calls_named("clearBuffer"), 0,
+      arrangement .. ": lines 3-7 of the slots do nothing")
+  end, {side = 2, only = SLOT_X + 1})
+end)
+
+test("an armed slot's key lights 11", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    params:set("record_sync", 3)
+    assert_equal(pane.led(SLOT_X + 3, 1), 2, arrangement .. ": empty")
+    pane.tap(SLOT_X + 3, 1)
+    -- the engine reports take 1 of slot 3 armed: ((1 * 4) + 0) * 8 + 2
+    context.polls.fire("recordState", ((1 * 4) + 0) * 8 + 2)
+    assert_equal(S.lib.record.state(3).phase, "armed")
+    grid_redraw()
+    assert_equal(pane.led(SLOT_X + 3, 1), 11, arrangement .. ": armed")
+    -- and recording: ((1 * 4) + 1) * 8 + 2
+    context.polls.fire("recordState", ((1 * 4) + 1) * 8 + 2)
+    grid_redraw()
+    assert_equal(pane.led(SLOT_X + 3, 1), 15, arrangement .. ": recording")
+  end, {side = 2, only = SLOT_X + 1})
+end)
+
+test("a slot's state change redraws a grid on side 2", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    load_buffer(3, "/tmp/a.wav")
+    local before = pane.device.refresh_count
+    context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 12.5))
+    assert_true(pane.device.refresh_count > before, arrangement .. ": the bufferState poll redraws the grid")
+    assert_equal(pane.led(SLOT_X + 3, 1), S.lib.grid_core.record_level(3), arrangement .. ": slot 3's key shows it")
+  end, {side = 2, only = SLOT_X + 1})
+end)
+
+-- Both panes and both sides ------------------------------------------------
+
+test("positions over its second side on a 256: a store held below stores the bookmark pressed below", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local pages = S.constants.GRID_PAGES
+  local top = grid_pane(context, "256 top")
+  local bottom = grid_pane(context, "256 bottom")
+  top.show(pages.positions, 1); bottom.show(pages.positions, 2)
+  params:set("v1_buf_pos", 0.6)
+  bottom.press(MARK_X.store, 1, 1)
+  bottom.press(3, 1, 1); bottom.press(3, 1, 0)
+  assert_near(params:get("v1_bookmark_3"), 0.6, 0.05, "the store held below stores the bookmark pressed below")
+  bottom.press(MARK_X.store, 1, 0)
+  -- a cell above jumps, and the bookmark below recalls it again
+  top.tap(13, 1)
+  assert_near(params:get("v1_buf_pos"), 0.75, 1e-9, "the cell above jumps")
+  assert_equal(top.led(13, 1), 15, "and shows the playhead")
+  bottom.tap(3, 1)
+  assert_near(params:get("v1_buf_pos"), params:get("v1_bookmark_3"), 1e-9, "the bookmark below recalls it")
+  assert_equal(bottom.led(3, 1), S.lib.positions.LEVELS.recalled, "lit as the last recalled")
+  -- the top pane's page change leaves the bottom pane's held store
+  bottom.press(MARK_X.store, 1, 1)
+  top.show(pages.patterns)
+  context.clock.run_for(0.2)
+  params:set("v1_buf_pos", 0.3)
+  bottom.press(4, 1, 1); bottom.press(4, 1, 0)
+  assert_near(params:get("v1_bookmark_4"), 0.3, 0.05, "the store below still stores")
+  bottom.press(MARK_X.store, 1, 0)
+end)
+
+test("a store key held on side 2 ends when its pane shows side 1, and the other pane's held store still stores", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local pages = S.constants.GRID_PAGES
+  local top = grid_pane(context, "256 top")
+  local bottom = grid_pane(context, "256 bottom")
+  top.show(pages.positions, 2); bottom.show(pages.positions, 2)
+  top.press(MARK_X.store, 1, 1)
+  bottom.press(MARK_X.store, 1, 1)
+  -- the top pane's lit page key pressed again: its next side, side 1
+  top.tap(2 + pages.positions, 8)
+  assert_equal(S.lib.grid_core.view(1, 1), "1:5:1:1", "the top pane shows side 1")
+  context.clock.run_for(0.2)
+  local bookmark = params:get("v1_bookmark_1")
+  params:set("v1_buf_pos", 0.6)
+  bottom.press(1, 1, 1); bottom.press(1, 1, 0)
+  assert_near(params:get("v1_bookmark_1"), 0.6, 0.05, "a bookmark key below stores v1_bookmark_1")
+  assert_true(math.abs(params:get("v1_bookmark_1") - bookmark) > 0.1, "a store, not the old value")
+  bookmark = params:get("v1_bookmark_1")
+  params:set("v1_buf_pos", 0.1)
+  context.clear_engine_calls()
+  top.press(MARK_X.store, 1, 0)  -- the top ST's release, after the side change
+  assert_near(params:get("v1_bookmark_1"), bookmark, 1e-9, "the top pane's release stores nothing")
+  assert_near(params:get("v1_buf_pos"), 0.1, 1e-9, "and jumps nowhere")
+  bottom.press(MARK_X.store, 1, 0)
+  assert_equal(S.lib.positions.strip_level(1, "store", 1), S.lib.positions.LEVELS.key_up, "both stores are up")
+end)
+
+-- The 64's halves --------------------------------------------------------
+
+test("the 64's halves show cells 1-8 and 9-16", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local cells = S.constants.GRID_PAGES.position_cells
+  local left = grid_pane(context, "64 left")
+  left.show(S.constants.GRID_PAGES.positions, 1, 1)
+  for x = 1, 8 do assert_equal(left.led(x, 1), S.lib.positions.grid_level(1, x, cells, 1), "left: cell " .. x) end
+  assert_equal(left.shows(9, 1), false, "the left half shows no cell 9")
+  left.tap(5, 1)
+  assert_near(params:get("v1_buf_pos"), 0.25, 1e-9, "left: cell 5 of 16")
+  local right = grid_pane(context, "64 right")
+  right.show(S.constants.GRID_PAGES.positions, 1, 2)
+  for x = 9, 16 do assert_equal(right.led(x, 1), S.lib.positions.grid_level(1, x, cells, 1), "right: cell " .. x) end
+  right.tap(9, 1)
+  assert_near(params:get("v1_buf_pos"), 0.5, 1e-9, "right: the first key is cell 9")
+  -- side 2: the marks on the left half, the slots on the right
+  right.show(S.constants.GRID_PAGES.positions, 2, 2)
+  assert_equal(right.led(SLOT_X + 1, 1), S.lib.grid_core.record_level(1), "right: slot 1's record key")
+  left.show(S.constants.GRID_PAGES.positions, 2, 1)
+  assert_equal(left.led(MARK_X.store, 1), S.lib.positions.LEVELS.key_up, "left: voice 1's store")
+end)
+
+test("a cell held on the left half ends when the chooser shows the right half; a pair on the right sets a loop in cells 9-16", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local positions = S.lib.positions
+  local left = grid_pane(context, "64 left")
+  left.show(S.constants.GRID_PAGES.positions, 1, 1)
+  left.press(7, 1, 1)                    -- a loop anchor on the left
+  left.press(1, 8, 1)                    -- NV, held: the chooser
+  context.clock.run_for(0.6)
+  left.tap(S.constants.GRID_PAGES.positions, 2)  -- positions' right half
+  assert_equal(S.lib.grid_core.view(1, 1), "1:5:1:2", "the chooser shows the right half")
+  left.press(1, 8, 0)
+  local right = grid_pane(context, "64 right")
+  right.press(15, 1, 0)                  -- the anchor's key comes up: column 7 is cell 15 now
+  context.clock.run_for(0.1)
+  right.tap(10, 1)
+  assert_near(params:get("v1_loop_length"), 1, 1e-9, "no stale anchor made a loop")
+  assert_near(params:get("v1_buf_pos"), 9 / 16, 1e-9, "a jump to cell 10")
+  right.press(10, 1, 1); right.press(14, 1, 1)
+  right.press(14, 1, 0); right.press(10, 1, 0)
+  assert_near(params:get("v1_loop_start"), 9 / 16, 1e-9, "the loop from cell 10")
+  assert_near(params:get("v1_loop_length"), 5 / 16, 1e-9, "to cell 14")
+  assert_true(not positions.scan_held(1), "nothing held")
+end)
+
+test("64: the positions view is per port", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local one = grid_pane(context, "64 left")
+  local two = grid_pane(context, "64 left", {port = 2})
+  one.show(S.constants.GRID_PAGES.positions, 1, 1)
+  two.show(S.constants.GRID_PAGES.patterns, 1, 1)
+  S.lib.grid_core.set_half(2, 1, 2)
+  assert_equal(S.lib.grid_core.view(1, 1), "1:5:1:1", "port 1 shows positions' left half")
+  assert_equal(S.lib.grid_core.view(2, 1), "1:1:1:2", "port 2 its own steps' right half")
+end)
+
+test("64: a hold key whose release comes after the view switched leaks nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local positions = S.lib.positions
+  local left = grid_pane(context, "64 left")
+  left.show(S.constants.GRID_PAGES.positions, 2, 1)
+  left.press(MARK_X.hold, 1, 1)  -- scan hold down
+  assert_true(positions.scan_held(1), "held")
+  left.show(S.constants.GRID_PAGES.patterns, 1, 1)  -- the view leaves positions
+  left.press(MARK_X.hold, 1, 0)
+  context.clock.run_for(0.1)
+  assert_true(not positions.scan_held(1), "no stuck scan hold")
+end)
+
+test("64: a hold in the step views keeps working and never reaches positions", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local calls = 0
+  local original_strip, original_grid = S.lib.positions.strip_key, S.lib.positions.grid_key
+  S.lib.positions.strip_key = function() calls = calls + 1 end
+  S.lib.positions.grid_key = function() calls = calls + 1 end
+  local left = grid_pane(context, "64 left")
+  left.show(S.constants.GRID_PAGES.patterns, 1, 1)
+  local shown = {}
+  local function look() shown[#shown + 1] = tostring(shown_step_editor()) end
+  left.press(3, 2, 1); context.clock.run_for(0.6); look()
+  left.press(3, 2, 0); look()
+  left.press(6, 3, 1); context.clock.run_for(0.6); look()
+  left.press(6, 3, 0); look()
+  S.lib.positions.strip_key, S.lib.positions.grid_key = original_strip, original_grid
+  assert_equal(calls, 0, "no positions call from the step views")
+  assert_equal(table.concat(shown, ","), "2 3 1,nil,3 6 1,nil", "each hold opened the step editor, each release closed it")
+end)
+
+test("the slice rows repaint from the playhead clock when a slice starts or ends", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local doubles = slice_double(S, 1, 20)
+  local pane = grid_pane(context, "256 top")
+  pane.show(S.constants.GRID_PAGES.positions, 1)
+  assert_equal(pane.led(3, 1), 9, "slice 3 exists")
+  local before = S.lib.positions.display_signature()
+  doubles.sounding.other = {voice = 1, n = 3}
+  assert_true(S.lib.positions.display_signature() ~= before, "the signature sees a slice start")
+  context.clock.run_for(0.2)
+  assert_equal(pane.led(3, 1), 15, "the clock repainted it playing")
+  doubles.sounding.other = nil
+  context.clock.run_for(0.2)
+  assert_equal(pane.led(3, 1), 9, "and ended")
+  S.lib.positions.strip_key(1, 1, 2, 1); S.lib.positions.strip_key(1, 1, 2, 0)
+  context.clock.run_for(0.2)
+  assert_equal(pane.led(5, 1), 0, "a bank change shows")
+  pane.show(S.constants.GRID_PAGES.positions, 2)
+  assert_equal(pane.led(2, 1), 15, "and its key, on side 2")
+end)
+
+end

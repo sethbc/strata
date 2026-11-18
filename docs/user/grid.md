@@ -13,7 +13,9 @@ Since 3.8 every grid is built on one model. A **pane** is seven lines of sixteen
 1. [Patterns](grid/pages/patterns.md) - seven lines of sixteen steps
 2. faders - coming in the rest of 3.8
 3. [Scenes](grid/pages/scenes.md) - recall and save the sixteen scenes, the morph's corners and its X and Y, the scene sequencer and the gesture recorders
-4. sources, 5. positions, 6. voices, 7. FX - coming in the rest of 3.8
+4. sources - coming in the rest of 3.8
+5. [Positions](grid/pages/positions.md) - each voice's buffer as sixteen cells; on its second side every voice's bookmark, store, hold and whole keys, and the slots' record and clear keys
+6. voices, 7. FX - coming in the rest of 3.8
 
 Until a page arrives its page key is dark and does nothing.
 
@@ -54,37 +56,6 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - **Setting a step's level** - hold a step key and press another key of the same voice: the held step's level becomes that key's share of 15 along the voice's keys (key 16 = 15, key 8 = 8, key 1 = 1; on the 8×8, key 8 of the half = 15 and key 4 = 8; on the 8×16, down the voice's column). The second key does not toggle its own step. Press more keys while still holding to try other levels: every further key of that voice sets the held step's level for as long as the first key stays down, and a key that set a level never takes one itself. On the 16×16 a voice's keys in both panes count as one: a voice has one held step on a grid. Clearing, randomizing or pasting the voice's pattern, recalling a scene (the scene sequencer's next scene too), a chain link, changing the pane's page or switching the 8×8's half ends the level setting: the held key's release changes nothing, and the next key turns its own step on or off. Only the step editor's own clear, fill, randomize and undo leave the key that opened it as the held step
 - Unplugging a grid (or leaving the script) while a key is held cancels its hold: nothing happens at its hold or its release, a step editor it opened closes, and a held FL lets fill go
 - **Changing a pane's page ends what its held keys were doing**: a key of that pane still held when it shows another page does nothing at its hold or its release (a step does not toggle and its editor closes). The other pane's keys and the strips' keys go on: a held FL keeps fill on, a held tempo key keeps repeating. Another grid's page change leaves this grid's keys alone
-
-## Positions
-
-The positions page (page 5) arrives in the rest of 3.8; this is what it will do. A voice's buffer is cut into 16 cells from its start to its end, one line per voice, and each voice has a bookmark strip. Only voices reading a buffer respond.
-
-- **A press** jumps the voice to its cell's start. Inside the voice's loop it moves within the loop; outside it, the loop goes back to the whole buffer first, as recalling a bookmark outside the loop does. Either way a running voice's scan restarts from there, and an arc glide ends
-- **Two keys** set a loop: hold one cell and press another of the same voice, and the loop runs from the start of the earlier cell to the end of the later one, in either order (two neighbors make a loop two cells long); the voice then jumps to the loop's start
-- **The strip**: the four bookmark keys recall bookmarks 1-4 (a jump to the bookmark, as above); while store is held, every bookmark key pressed stores the voice's playhead instead of recalling it; hold stops the voice's scan while it is down (it stays held until everything holding it lets go: another grid's hold key, or the arc's ring 1 turned with ALT on the BUFFER page); whole puts the loop back to the whole buffer without a jump
-- **On the beat**: with PARAMETERS > sequencer > quantize actions on beat or bar, a press, a two-key loop and a bookmark recall wait for the next beat or bar of the clock, and the header says so (`v1 jump at bar`, `v1 bm 2 at bar`); a second press before then replaces the first. Store, hold and whole act at once ([Parameters](params.md#sequencer-group))
-
-What the cells show, brightest first:
-- the playhead, where the voice's grains start, at 15 (a stopped voice shows where it will start)
-- the record head, at 13, while the buffer records without emptying (an overdub or a loop recording)
-- a held cell, at 11
-- the cells inside the loop at 4 to 8 and those outside it at 1 to 3, brighter where the buffer's audio is louder, so the row draws the waveform
-- a voice that reads no buffer, or whose buffer is empty, has a dark row
-
-What the strip shows (all of it dark for a voice that reads no buffer):
-- a bookmark key at 6, the bookmark last recalled at 10 (until the voice changes its source), and 15 while you store it; a bookmark that waits for its beat or bar (quantize actions) blinks between 15 and 2 until it lands
-- the store key at 15 while it is held, 4 otherwise
-- the hold key at 15 while the voice's scan is held (by any grid or the arc), 4 otherwise
-- the whole key at 15 while the loop is the whole buffer, 4 otherwise
-
-### Slice rows
-
-A voice set to play slices (its `slices` row on [VOICE](pages/voice.md) not off) whose buffer has slices shows them on its position line instead of positions, 16 at a time. A voice with slices off, or a buffer with none, keeps its positions.
-
-- **A press** plays its slice, and letting go ends it, except in one shot with a moving scan, where a slice plays to its end. A key with no slice does nothing
-- **The bank keys**: while the line shows slices, the strip's four bookmark keys pick the bank it shows: slices 1-16, 17-32, 33-48 or 49-64. A bank with no slices cannot be picked. Each grid keeps its own bank per voice, and a new file in the slot whose slices do not reach the bank puts it back to 1. Store, hold and whole keep their meaning. Bookmarks are then recalled from [BUFFER](pages/buffer.md)'s `bm` field and from steps' bookmark locks
-- **On the beat**: with quantize actions on beat or bar, a press waits for the next beat or bar (`v1 sl 5 at bar`), and a key let go before then takes it back, except in one shot with a moving scan, where a tap still plays at the beat
-- **What it shows**: a slice playing at 15, a held key at 11, a slice at 9, no slice dark; the bank keys light 15 for the bank shown, 4 for a bank that holds slices and 0 for one that holds none
 
 ## Pattern Sequencer Features
 
