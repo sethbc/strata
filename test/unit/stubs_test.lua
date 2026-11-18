@@ -1477,6 +1477,47 @@ test("a parallel run fails when no file matches, and when a file is reported by 
   h.remove_tree(dir)
 end)
 
+-- A process's report is trusted only whole and only when its exit status
+-- agrees with it. Each file below breaks one after its tests ran: its test
+-- replaces os.rename (the report is cut short once in place) or os.exit
+-- (the process ends 0 or 1 whatever its report says)
+test("a parallel run fails a process whose report is cut short or disagrees with its exit status", function()
+  local cut = '  h.test("cut shortens its report", function() local rename, open = os.rename, io.open;'
+    .. ' os.rename = function(from, to) local ok, problem = rename(from, to);'
+    .. ' if tostring(to):find("%.report$") then local file = open(to, "rb"); local text = file:read("*a"); file:close();'
+    .. ' file = open(to, "wb"); file:write(text:sub(1, #text - 4)); file:close() end; return ok, problem end end)\n'
+  local exit_with = '  h.test("%s exits %d", function() local exit = os.exit; os.exit = function() exit(%d) end; %s end)\n'
+  local dir = RUNNER.tree("reports", {
+    ["alpha_test.lua"] = RUNNER.passing("alpha", 2),
+    ["cut_test.lua"] = RUNNER.passing("cut", 1, cut),
+    ["calm_test.lua"] = RUNNER.passing("calm", 1, string.format(exit_with, "calm", 0, 0, 'error("a failure it hides", 0)')),
+    ["alarm_test.lua"] = RUNNER.passing("alarm", 1, string.format(exit_with, "alarm", 1, 1, "")),
+  })
+  local output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", "4" })
+  RUNNER.check(output, status, folder, 1, "a cut report and two exit statuses that disagree")
+  for _, case in ipairs({ { "cut_test.lua", "exit 0" }, { "calm_test.lua", "exit 0" }, { "alarm_test.lua", "exit 1" } }) do
+    local line = "FAIL " .. case[1] .. ": its process ended abnormally (" .. case[2]
+    local _, count = output:gsub(line:gsub("%p", "%%%0"), "")
+    assert_equal(count, 2, case[1] .. " is named, in place and again before the totals:\n" .. output)
+  end
+  local _, last = RUNNER.lines(output)
+  local failures = tonumber(last:match("^%d+ tests, (%d+) failures$") or "")
+  assert_true(failures and failures >= 3, "each counts as a failure: " .. tostring(last))
+  h.remove_tree(dir)
+end)
+
+test("a run reads unit files from a folder whose path holds a quote or a dollar sign", function()
+  local dir = RUNNER.tree('quote"d $HOME `x`', { ["alpha_test.lua"] = RUNNER.passing("alpha", 5), ["beta_test.lua"] = RUNNER.passing("beta", 4),
+    ["gamma_test.lua"] = RUNNER.passing("gamma", 3) })
+  for _, jobs in ipairs({ "1", "3" }) do
+    local output, status, folder = RUNNER.run({ "--dir", dir, "--jobs", jobs })
+    RUNNER.check(output, status, folder, 0, "--jobs " .. jobs .. " from " .. dir)
+    local _, last = RUNNER.lines(output)
+    assert_equal(last, "12 tests, 0 failures", "--jobs " .. jobs .. ": every file ran\n" .. output)
+  end
+  h.remove_tree(dir)
+end)
+
 -- The names of the files a run's ok lines came from (each test is named
 -- after its file), sorted
 function RUNNER.files_run(output)
@@ -1523,21 +1564,23 @@ test("--shard K/N runs one part of a partition of the unit files, the same on Lu
   h.remove_tree(dir)
 end)
 
-test("the unit files' shards are a partition balanced by each file's weight, and every unit file has one", function()
+test("the unit files' shards are a partition balanced by weight, a file with no weight takes the default, and no weight is stale", function()
   local names = unit_files(repo_root .. "/test/unit")
   local weights = h.UNIT_FILE_SECONDS
   assert_true(type(weights) == "table", "h.UNIT_FILE_SECONDS is the unit files' weights")
-  for _, name in ipairs(names) do
-    assert_true(weights[name] ~= nil, name .. " has a weight in UNIT_FILE_SECONDS (test/helpers.lua): add a line with its"
-      .. " seconds under lua test/run.lua " .. name:gsub("%.lua$", ""))
-  end
-  local listed = {}
-  for _, name in ipairs(names) do listed[name] = true end
+  -- a weight is optional; a line naming no unit file is stale
+  assert_equal(table.concat(h.stale_unit_weights({ "a_test.lua" }, { ["a_test.lua"] = 2, ["gone_test.lua"] = 4, ["old_test.lua"] = 1 }), " "),
+    "gone_test.lua old_test.lua", "the lines naming no unit file, sorted")
+  assert_equal(table.concat(h.stale_unit_weights({ "a_test.lua", "new_test.lua" }, { ["a_test.lua"] = 2 }), " "), "",
+    "a unit file with no line is no problem")
+  assert_equal(table.concat(h.stale_unit_weights(names, weights), ", "), "",
+    "UNIT_FILE_SECONDS (test/helpers.lua) names no unit file: remove these lines")
   for name, seconds in pairs(weights) do
-    assert_true(listed[name], "UNIT_FILE_SECONDS names " .. name .. ", which is no unit file")
     assert_true(type(seconds) == "number" and seconds >= 1 and seconds == math.floor(seconds), name .. "'s weight is a whole number of seconds")
   end
+  assert_equal(h.unit_file_seconds("zz_new_test.lua"), h.UNIT_FILE_DEFAULT_SECONDS, "a file with no line weighs the default")
   local total, heaviest = 0, 0
+  weights = setmetatable({}, { __index = function(_, name) return h.unit_file_seconds(name) end })
   for _, name in ipairs(names) do total = total + weights[name]; heaviest = math.max(heaviest, weights[name]) end
   for count = 1, 4 do
     local seen, loads = {}, {}
