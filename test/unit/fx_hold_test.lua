@@ -196,6 +196,32 @@ test("a PSET load leaves a freeze as it is", function()
   assert_equal(#freeze_calls(context), 0, "and sends no setDelayFreeze")
 end)
 
+-- The plan's ruling 26 over 61: a bypass ends its effect's freeze whatever
+-- sets it, a PSET's delay_bypass 1 among them (the node is freed, and a
+-- freeze that outlived it would come back unasked at the lift); a PSET
+-- that leaves the delay running leaves the freeze as it is
+test("a PSET that bypasses the delay ends its freeze, one that does not leaves it", function()
+  local context = loaded()
+  params:set("delay_bypass", 1)
+  local bypassed_path = context.data_dir .. "bypassed.pset"
+  params:write(bypassed_path, "bypassed")
+  params:set("delay_bypass", 0)
+  local running_path = context.data_dir .. "running.pset"
+  params:write(running_path, "running")
+  params:set("delay_freeze", 1)
+  context.clear_engine_calls()
+  params:read(bypassed_path)
+  assert_equal(table.concat(call_names(context, {"setDelayFreeze", "setBypass"}), " "),
+    "setDelayFreeze(0) setBypass(0, 1)", "a PSET's bypass ends the freeze first")
+  assert_equal(params:get("delay_freeze"), 0, "and the freeze reads 0")
+  params:set("delay_bypass", 0)
+  params:set("delay_freeze", 1)
+  context.clear_engine_calls()
+  params:read(running_path)
+  assert_equal(params:get("delay_freeze"), 1, "a PSET that leaves the delay running leaves the freeze on")
+  assert_equal(#freeze_calls(context), 0, "and sends no setDelayFreeze")
+end)
+
 test("release('reverb') does nothing while the reverb is not offered", function()
   local context, _, fx_hold = loaded()
   assert_true(fx_hold.offered("delay"), "the delay's freeze is offered")
