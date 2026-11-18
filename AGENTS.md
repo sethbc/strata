@@ -125,7 +125,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 | `engine.setModFreqAmt(voice, slot, amount)` | `"iif"` | Crossmod frequency depth (-2 to 2) |
 | `engine.setModSpeed(voice, speed)` | `"if"` | Mod signal LFO speed (0.1-50), kept per voice |
 | `engine.setGrainSource(voice, source)` | `"ii"` | 0 = synth, 1-8 = buffer slot, 9 = input. Replaces a running voice's grain synth (never stacks), records a stopped voice's choice; same source = no-op |
-| `engine.setVoiceType(voice, type)` | `"ii"` | Voice 0-6's synth: type 0 to `numVoiceTypes` - 1 (`voiceTypeDefs`' order). Cuts and replaces a running synth voice's voice synth (never stacks), records any other voice's; same type = no-op |
+| `engine.setVoiceType(voice, type)` | `"ii"` | Voice 0-6's synth: type 0 to `numVoiceTypes` - 1 (`voiceTypeDefs`' order). Cuts and replaces a running synth voice's voice synth (never stacks), records any other voice's and a spectral-frozen voice's until its unfreeze; same type = no-op |
 | `engine.loadBuffer(slot, path, start)` | `"isf"` | Read a file into slot 0-7 from `start` seconds into it (at the file's rate; 0 = the beginning), at most `bufferSeconds` at the server rate; voices reading the slot fade first. A failure is reported on `bufferLoadFailed`. `docs/notes/engine/buffers.md` |
 | `engine.recordBuffer(slot, seconds, level, feedback, source, threshold, loop, delay, sent)` | `"ifffififf"` | Record `source` (0 input, 1 pre-master, 2 post-master, 3-9 voice 1-7; others input) × `level` into slot 0-7 for `seconds` (at most `bufferSeconds`): each frame keeps the old audio × `feedback` (0 with `loop` 0 is a replace take), `loop` 0/1, `threshold` linear (0 = none), starting `delay` s after `sent` (`util.time() % 1000`). States on `recordState`. `docs/notes/engine/record.md` |
 | `engine.clearBuffer(slot)` | `"i"` | Zero slot 0-7 after its voices fade (cancels a recording) |
@@ -163,7 +163,7 @@ One or two lines each: the rule, then the notes file whose "Must not break" list
 The engine's (under docs/notes/engine/):
 - **A voice's own note never creates a node** on a step or a MIDI note (`retrigger`); an extra note creates exactly one synth in its slot, through `S.lib.notes` alone. Velocity only scales the accent envelope's `levelScale` in every voice and grain SynthDef and in `\strataVoiceMix` (Karplus's pluck impulse is the one allowance). `docs/notes/engine/voices.md`, `docs/notes/lua/notes.md`
 - **Replace, never stack**: a source switch replaces the grain synth; fading synths are cut with `cutSynth`, never a second `release`; new grain synths are placed with `startPlacedGrainSynth`. `docs/notes/engine/lifecycle.md`
-- **A type switch cuts**: `setVoiceType` frees the voice's cutting set, cuts its voice synth (never a release) and restarts its voice-synth notes; `gateVoice` re-gates a releasing voice synth only of the voice's current type. `docs/notes/engine/types.md`
+- **A type switch cuts**: `setVoiceType` frees the voice's cutting set, cuts its voice synth (never a release) and restarts its voice-synth notes; under a spectral freeze it waits for the unfreeze; `gateVoice` re-gates a releasing voice synth only of the voice's current type. `docs/notes/engine/types.md`
 - **`openedGate(gate)`** wraps every ASR gate; never `gate.max(...)`. `docs/notes/engine/lifecycle.md`
 - **Silent bus**: unrouted mod slots read `silentBus`, never control bus 0. `docs/notes/engine/voices.md`
 - **Limiter before the tanh saturator** in `\strataMaster`, never after it. `docs/notes/engine/effects.md`

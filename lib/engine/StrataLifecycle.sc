@@ -358,6 +358,23 @@
         context.server.makeBundle(nil, { this.areaCall(\switchVoiceType, voice) });
     }
 
+    // Whether the voice's live voice synth is of another def than its type's:
+    // a switch made under a spectral freeze, waiting for the unfreeze. No
+    // state: one def a type, so the synth's defName is its type
+    voiceTypeWaits { arg voice;
+        var synth = synths[this.voiceKey(voice)];
+        ^synth.notNil and: { synth.defName.asSymbol != this.voiceDefFor(voice) }
+    }
+
+    // The one place a waiting switch is applied (the unfreeze of a spectral
+    // freeze, unfreezeVoice): on a voice still on its synth source whose
+    // voice synth is not of its type, the switch a type change always makes
+    // (replaceVoiceType). A voice switched to another source has its voice
+    // synth fading; its return to the synth starts the type's def
+    applyWaitingVoiceType { arg voice;
+        if ((grainSource[voice] == 0) and: { this.voiceTypeWaits(voice) }) { this.areaCall(\replaceVoiceType, voice) };
+    }
+
     // replaceVoiceType's work, inside its bundle: the cutting set freed (a
     // voice then holds the new voice synth and the cut one, never more),
     // the voice synth cut (the kill fade, never a release), the new def at

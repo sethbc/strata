@@ -189,13 +189,16 @@
         // other voice commands ignore a bad index. A stopped, buffer or input
         // voice only records it (its next start on the synth source plays
         // it); a running synth voice's voice synth is cut and replaced in one
-        // bundle, never stacked (replaceVoiceType). See
-        // docs/notes/engine/types.md
+        // bundle, never stacked (replaceVoiceType), but under a spectral
+        // freeze, which takes its phases from the voice synth: there the
+        // type is recorded and the unfreeze applies it (applyWaitingVoiceType).
+        // See docs/notes/engine/types.md
         this.addCommand(\setVoiceType, "ii", { arg msg;
             var voice = msg[1], type = msg[2];
             if (this.validVoice(voice) and: { this.validVoiceType(type) } and: { type != this.voiceType(voice) }) {
                 areaState[\voices][\types][voice] = type;
-                if ((grainSource[voice] == 0) and: { synths[this.voiceKey(voice)].notNil }) {
+                if ((grainSource[voice] == 0) and: { synths[this.voiceKey(voice)].notNil }
+                    and: { this.spectralHoldsVoice(voice).not }) {
                     this.areaCall(\replaceVoiceType, voice)
                 };
             };
