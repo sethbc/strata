@@ -1215,7 +1215,7 @@ local function tap(n) key(n, 1); key(n, 0) end
 -- name contains it (plain text, not a pattern), sorted by name
 local function unit_files(dir, filter)
   local names = {}
-  local listing = io.popen('ls -1 "' .. dir .. '" 2>/dev/null')
+  local listing = io.popen("ls -1 " .. shell_quote(dir) .. " 2>/dev/null")
   for name in listing:read("*a"):gmatch("[^\n]+") do
     if name:match("_test%.lua$") and (not filter or name:find(filter, 1, true)) then
       table.insert(names, name)
@@ -1255,9 +1255,10 @@ end
 -- Each unit file's weight for the shards and the parallel run's order: its
 -- seconds run alone (`lua test/run.lua <name>`, Lua 5.3, rounded, at least
 -- 1; measured at 3.8's package x5 with several files running at once).
--- Every unit file has a line (a test in stubs_test.lua checks it, and that
--- every line names a file); a file with none still runs, weighing
--- UNIT_FILE_DEFAULT_SECONDS
+-- A line is optional: a file with none runs as every file does, weighing
+-- UNIT_FILE_DEFAULT_SECONDS, and a line only improves the balance, so a
+-- heavy new file (over ten seconds alone, say) is worth one. A line naming
+-- no unit file is stale, and a test in stubs_test.lua fails on it
 local UNIT_FILE_SECONDS = {
   ["arc_core_test.lua"] = 1,
   ["arc_pages_test.lua"] = 3,
@@ -1358,6 +1359,18 @@ local UNIT_FILE_SECONDS = {
 local UNIT_FILE_DEFAULT_SECONDS = 3
 
 local function unit_file_seconds(name) return UNIT_FILE_SECONDS[name] or UNIT_FILE_DEFAULT_SECONDS end
+
+-- The lines of `weights` (UNIT_FILE_SECONDS) that name none of the unit
+-- files `names`, sorted
+local function stale_unit_weights(names, weights)
+  local listed, stale = {}, {}
+  for _, name in ipairs(names) do listed[name] = true end
+  for name in pairs(weights) do
+    if not listed[name] then stale[#stale + 1] = name end
+  end
+  table.sort(stale)
+  return stale
+end
 
 -- `names` heaviest first (unit_file_seconds, then the name): the order the
 -- shards are dealt in and a parallel run starts its processes in
@@ -1486,6 +1499,9 @@ return {
   unit_files = unit_files,
   load_unit_files = load_unit_files,
   UNIT_FILE_SECONDS = UNIT_FILE_SECONDS,
+  UNIT_FILE_DEFAULT_SECONDS = UNIT_FILE_DEFAULT_SECONDS,
+  unit_file_seconds = unit_file_seconds,
+  stale_unit_weights = stale_unit_weights,
   heaviest_first = heaviest_first,
   shard_files = shard_files,
   core_count = core_count,
