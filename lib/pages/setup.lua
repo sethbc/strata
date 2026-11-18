@@ -3,7 +3,8 @@
 -- mpe & zones (K3 opens S.lib.ui_zones' editor) and note pool, mutations
 -- on/off, rate, probability, amount, save scenes, load scenes, each grid
 -- port's rotation, the performance setting and its buffer length; 3.8's
--- scale & tuning (K3 opens S.lib.ui_scale_editor's editor)) with the status
+-- scale & tuning (K3 opens S.lib.ui_scale_editor's editor) and factory sets
+-- (K3 opens S.lib.factory's list)) with the status
 -- lines (the running tier,
 -- grids, arc, buffers) below it; E2 moves the cursor, E3 edits the field's
 -- value, K3 runs an action field (save, load, mpe & zones). It scrolls like FX
@@ -81,6 +82,9 @@ return function(S)
     -- 3.8: the scale and tuning editor (S.lib.ui_scale_editor, a modal
     -- owner), appended after transport (ruling 44)
     {label = "scale & tuning", kind = "action", hint = "open", run = function() S.lib.ui_scale_editor.open() end},
+    -- 3.8: the factory sets' list (S.lib.factory, a modal owner), after
+    -- scale & tuning (ruling 44)
+    {label = "factory sets", kind = "action", hint = "open", run = function() S.lib.factory.open_list() end},
   }
   M.SETUP_FIELDS = SETUP_FIELDS
 
@@ -457,6 +461,49 @@ return function(S)
     end},
   }
 
+  -- The factory sets list (S.lib.factory, a modal owner) opened from its
+  -- row, over an index of sets written to the script's folder first (none:
+  -- no index); with a set's files, a load can start
+  local function factory_index(sets, with_files)
+    local folder = norns.state.path .. S.lib.factory.FACTORY.folder
+    util.make_dir(folder)
+    S.lib.data_files.write(folder .. S.lib.factory.FACTORY.index, {version = 1, sets = sets})
+    if not with_files then return end
+    for _, set in ipairs(sets) do
+      local set_folder = folder .. set.key .. "/"
+      util.make_dir(set_folder)
+      local handle = io.open(set_folder .. S.lib.factory.FACTORY.params_file, "w")
+      handle:write("-- " .. set.name .. "\n")
+      handle:close()
+      S.lib.data_files.write(set_folder .. S.lib.factory.FACTORY.samples_file, {version = 1, files = {}})
+    end
+  end
+  local FACTORY_SETS = {{key = "glass", name = "MMMMMMMMMMMM", version = 12}, {key = "dusk", name = "dusk", version = 1}}
+  local FACTORY_LIST_STATES = {
+    {name = "the factory sets row", setup = function()
+      enc(2, -20)
+      while setup_rows()[S.setup_cursor].label ~= "factory sets" do enc(2, 1) end
+    end},
+    {name = "factory sets list, none", setup = function() S.lib.factory.open_list() end},
+    {name = "factory sets list, a twelve-character name and v12", setup = function()
+      factory_index(FACTORY_SETS)
+      S.lib.factory.open_list()
+    end},
+    {name = "factory sets list, the armed prompt", setup = function()
+      factory_index(FACTORY_SETS, true)
+      S.scene_file.unsaved = true
+      S.lib.factory.open_list()
+      S.lib.ui_modal.top().key(3, 1)
+    end},
+    {name = "factory sets list, a set loading and a second load refused", setup = function()
+      factory_index(FACTORY_SETS, true)
+      S.lib.factory.open_list()
+      local owner = S.lib.ui_modal.top()
+      owner.key(3, 1)
+      owner.key(3, 1)
+    end},
+  }
+
   -- The page's record, at SETUP's place in UI_PAGES: enc, key and redraw in
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. It has no arc
   -- fields: the rings stay dark on SETUP. Each layout state's setup runs on a
@@ -537,6 +584,8 @@ return function(S)
       SCALE_EDITOR_STATES[1], SCALE_EDITOR_STATES[2], SCALE_EDITOR_STATES[3], SCALE_EDITOR_STATES[4],
       SCALE_EDITOR_STATES[5], SCALE_EDITOR_STATES[6], SCALE_EDITOR_STATES[7], SCALE_EDITOR_STATES[8],
       SCALE_EDITOR_STATES[9],
+      FACTORY_LIST_STATES[1], FACTORY_LIST_STATES[2], FACTORY_LIST_STATES[3], FACTORY_LIST_STATES[4],
+      FACTORY_LIST_STATES[5],
       {name = "performance: active file not written", setup = function()
         S.performance = {tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
           reason = "standard: performance_active.data could not be written"}

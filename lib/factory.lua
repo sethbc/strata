@@ -47,7 +47,7 @@ return function(S)
         "^record_beats$", "^input_follow_gain$", "^tempo$", "^seq_follow_transport$"},
     },
     list = {visible = 6, first_y = 18, spacing = 7, value_right = 124, version_gap = 4, levels = {selected = 15, other = 4}},
-    texts = {none = "none", loading = "loading", confirm = "K3 again: drop unsaved", refused = "set not loaded"},
+    texts = {none = "none", loading = "loading", refused = "set not loaded"},
   }
   M.FACTORY = FACTORY
 
@@ -448,11 +448,152 @@ return function(S)
     end
   end)
 
-  -- The load's clock is a live coroutine while it is set
+  ---------------------------------------------------------------------------
+  -- The first run and the cleanup
+  ---------------------------------------------------------------------------
+
+  -- The start step (ruling 51), after the live files are read and before
+  -- any voice starts: with no index, nothing (and nothing is written). A
+  -- marker holding pending (a set the index lists) runs that load again,
+  -- whatever this start found; no marker, no scenes file found at this
+  -- start and a first-run set write {pending = <key>, loaded = {}} and
+  -- start its load (not awaited); no marker otherwise writes {loaded = {}}
+  S.register_start(S.constants.START_ORDER.factory_first_run, function()
+    local index = read_index()
+    if not index then return end
+    local marker, found = read_marker()
+    if marker.pending and find_set(index, marker.pending) then
+      M.load(marker.pending)
+      return
+    end
+    if found then
+      if marker.unusable then write_marker({loaded = {}}) end
+      return
+    end
+    if S.scene_file.start_outcome == "missing" and index.first_run then
+      if write_marker({pending = index.first_run, loaded = {}}) then M.load(index.first_run) end
+      return
+    end
+    write_marker({loaded = {}})
+  end)
+
+  ---------------------------------------------------------------------------
+  -- SETUP's list (a modal owner)
+  ---------------------------------------------------------------------------
+
+  -- open; the cursor (an index into sets); the sets listed at open; the
+  -- armed prompt's end (util.time(); 0: not armed)
+  local list = {open = false, cursor = 1, sets = {}, armed_until = 0}
+  local owner
+
+  local function list_flash(text, seconds)
+    S.lib.ui_flash.start("hints", text, seconds, S.constants.UI_PAGES.index.SETUP)
+  end
+
+  local function draw_row(row, y, selected, value_right)
+    local layout = FACTORY.list
+    screen.level(selected and layout.levels.selected or layout.levels.other)
+    screen.move(0, y)
+    local version = "v" .. row.set.version
+    local room = value_right - screen.text_extents(version) - layout.version_gap
+    screen.text(S.lib.ui_text.fit_text(S.lib.ui_text.printable(row.set.name), room))
+    screen.move(value_right, y)
+    screen.text_right(version)
+  end
+
+  local function draw()
+    if not list.open then return end
+    local layout = FACTORY.list
+    if #list.sets == 0 then
+      screen.level(layout.levels.other)
+      screen.move(0, layout.first_y)
+      screen.text(FACTORY.texts.none)
+      return
+    end
+    local rows = {}
+    for index, set in ipairs(list.sets) do rows[index] = {label = set.name, set = set} end
+    S.lib.ui_field_list.draw(rows, list.cursor, {visible = layout.visible, first_y = layout.first_y,
+      spacing = layout.spacing, value_right = layout.value_right}, draw_row)
+  end
+
+  local function hints(alt_held)
+    local flash = S.lib.ui_flash.text("hints")
+    if flash then return flash end
+    if #list.sets == 0 then return alt_held and "" or "K2:back" end
+    if alt_held then return "E2:set" end
+    return "K2:back E2:set K3:load"
+  end
+
+  local function enc(n, d)
+    if not list.open or n ~= 2 or #list.sets == 0 then return end
+    list.cursor = util.clamp(list.cursor + d, 1, #list.sets)
+    request_redraw()
+  end
+
+  -- K3: the set under the cursor loads; while a scene of this session is
+  -- not on disk the first press arms for SCENE_LOAD.confirm_seconds and a
+  -- second inside it loads, as load scenes asks
+  local function press_load()
+    local set = list.sets[list.cursor]
+    if not set then return end
+    if M.loading() then
+      list_flash(FACTORY.texts.loading)
+      return
+    end
+    local confirm_seconds = S.lib.scenes.SCENE_LOAD.confirm_seconds
+    if S.scene_file.unsaved and util.time() >= list.armed_until then
+      list.armed_until = util.time() + confirm_seconds
+      list_flash(S.lib.pages_setup.SETUP_PAGE.load_texts.confirm, confirm_seconds)  -- load scenes' prompt
+      return
+    end
+    list.armed_until = 0
+    local loaded = M.load(set.key)
+    list_flash(loaded and FACTORY.texts.loading or FACTORY.texts.refused)
+  end
+
+  local function key(n, z)
+    if not list.open or z ~= 1 or S.alt_held then return end
+    if n == 2 then
+      M.close_list()
+    elseif n == 3 then
+      press_load()
+    end
+  end
+
+  owner = {draw = draw, hints = hints, enc = enc, key = key}
+
+  -- Open the list over SETUP (its factory sets row): the index's sets, read
+  -- now; already open, nothing
+  function M.open_list()
+    if list.open then return end
+    list.open, list.cursor, list.armed_until = true, 1, 0
+    list.sets = M.sets()
+    S.lib.ui_modal.push(owner)
+  end
+
+  function M.close_list()
+    if not list.open then return end
+    list.open = false
+    S.lib.ui_modal.pop(owner)
+  end
+
+  function M.is_open() return list.open end
+
+  -- The load's clock runs exactly while a load runs (its coroutine alive);
+  -- the open list's owner is the modal one (or beneath SEQ's step editor),
+  -- the closed list's never; the cursor is on a set
   S.register_invariant("factory", function()
     local thread = S.factory_clock and clock.threads and clock.threads[S.factory_clock]
     if S.factory_clock and (thread == nil or coroutine.status(thread) == "dead") then
       return "S.factory_clock " .. tostring(S.factory_clock) .. " is no live clock"
+    end
+    local top = S.lib.ui_modal.top()
+    if not list.open and top == owner then return "the list is closed but its owner is the modal one" end
+    if list.open and top ~= owner and not (top == S.lib.pages_seq.step_editor_owner and S.lib.pages_seq.step_editor()) then
+      return "the list is open but the modal owner is " .. tostring(top)
+    end
+    if list.open and #list.sets > 0 and (list.cursor < 1 or list.cursor > #list.sets) then
+      return "the cursor is on " .. tostring(list.cursor) .. " of " .. #list.sets
     end
   end)
 

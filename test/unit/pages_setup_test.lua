@@ -118,7 +118,7 @@ test("every SETUP field shows its own label on its row", function()
     enc(2, 1)
     if S.setup_cursor == before then break end
   end
-  assert_equal(seen, 18, "the eighteen fields: fourteen, and four grid rotations (no buffer length on the standard setting)")
+  assert_equal(seen, 19, "the nineteen fields: fifteen, and four grid rotations (no buffer length on the standard setting)")
 end)
 
 test("SETUP's save and load fields run the function their record holds", function()
@@ -138,21 +138,21 @@ test("SETUP's save and load fields run the function their record holds", functio
       field.run = real
     end
   end
-  assert_equal(table.concat(ran, ","), "mpe & zones,save scenes,load scenes,scale & tuning", "K3 runs each field's own function")
+  assert_equal(table.concat(ran, ","), "mpe & zones,save scenes,load scenes,scale & tuning,factory sets", "K3 runs each field's own function")
 end)
 
 test("SETUP scrolls with a marker and reaches both ends", function()
   local context = load_strata(); finish_startup(context)
   context.grid.plug(1, 16, 16)
   show_page("SETUP")
-  enc(2, 17)
+  enc(2, 18)
   redraw()
-  assert_equal(local_value("S").setup_cursor, 18, "the cursor is on performance, the last field")
+  assert_equal(local_value("S").setup_cursor, 19, "the cursor is on performance, the last field")
   assert_true(screen_shows(context, "grid 4 rotation"), "the field above it, grid 4 rotation, is drawn")
   assert_true(not screen_shows(context, "buffers: 0 restored"), "the last status line is below the view")
   enc(2, 20)  -- E2 on the last field scrolls over the status rows (#319)
   redraw()
-  assert_equal(local_value("S").setup_cursor, 18, "the cursor stays on performance")
+  assert_equal(local_value("S").setup_cursor, 19, "the cursor stays on performance")
   assert_true(screen_shows(context, "buffers: 0 restored"), "the last status line is drawn")
   assert_true(not text_entry(context, "midi 1: none"), "the first fields scrolled out")
   local marker_bottom
@@ -199,7 +199,7 @@ local function scrolled_off_the_last_field(context)
   S.scene_file.problem = "unreadable"   -- one unreadable scenes file: two more rows below
   show_page("SETUP")
   enc(2, 60); redraw()
-  assert_equal(S.setup_cursor, 18, "the cursor is on performance, the last field")
+  assert_equal(S.setup_cursor, 19, "the cursor is on performance, the last field")
   assert_true(not text_entry(context, "performance"), "the performance row has scrolled out of view")
   return S
 end
@@ -219,7 +219,7 @@ test("SETUP's E3 while scrolled brings the cursor's field back; the next E3 edit
   local S = scrolled_off_the_last_field(context)
   enc(3, -1); redraw()
   assert_true(text_entry(context, "performance") ~= nil, "the performance row is back in view")
-  assert_equal(S.setup_cursor, 18, "the cursor stays on performance")
+  assert_equal(S.setup_cursor, 19, "the cursor stays on performance")
   enc(3, 1)
   assert_equal(S.lib.performance.setting().performance, "standard", "with the field in view E3 edits it")
 end)
@@ -918,6 +918,72 @@ test("SETUP's midi row names a claimed port's owner", function()
   assert_screen_layout(context, "SETUP with a claimed MIDI port")
   S.lib.io_ports.release(1, "e16"); next_frame(context)
   assert_true(screen_shows(context, "midi 1: keys"), "released: the device's name again")
+end)
+
+-- 3.8 (4d): the factory sets row and its list. A copy of the fixture as a
+-- script folder of the test's own (ruling 53), its index naming no first
+-- run
+local factory_copies = 0
+local function factory_script()
+  factory_copies = factory_copies + 1
+  local dir = h.data_root .. "setup-factory-" .. factory_copies .. "/"
+  os.execute("mkdir -p " .. h.shell_quote(dir .. "factory"))
+  os.execute("cp -R " .. h.shell_quote(h.repo_root .. "/test/fixtures/factory/") .. ". " .. h.shell_quote(dir .. "factory/"))
+  h.write_text(dir .. "factory/index.data", h.tabutil_text({ version = 1,
+    sets = { { key = "dusk", name = "dusk", version = 1 } } }))
+  return dir
+end
+
+test("the factory sets row opens the list; none with no index", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("SETUP"); cursor_on("factory sets")
+  redraw()
+  assert_equal(hint_text(context), "E2:field K3:open", "an action row")
+  tap(3)
+  assert_true(S.lib.factory.is_open(), "K3 opens the list")
+  next_frame(context)
+  assert_true(screen_shows(context, "none"), "with no index it says none")
+  assert_true(not screen_shows(context, "factory sets"), "over SETUP's rows")
+  assert_equal(hint_text(context), "K2:back", "only K2 acts")
+  assert_screen_layout(context, "SETUP's factory sets list, none")
+  tap(3)
+  assert_true(not S.lib.factory.loading(), "K3 loads nothing")
+  tap(2)
+  assert_true(not S.lib.factory.is_open(), "K2 closes it")
+  next_frame(context)
+  assert_true(screen_shows(context, "factory sets"), "SETUP again")
+end)
+
+test("K3 loads; with unsaved scenes a second K3 within 2 s", function()
+  local context = load_strata({ script_dir = factory_script() }); finish_startup(context)
+  local S = local_value("S")
+  show_page("SETUP"); cursor_on("factory sets"); tap(3)
+  next_frame(context)
+  assert_true(screen_shows(context, "dusk"), "the set's name")
+  assert_true(screen_shows(context, "v1"), "and its version")
+  assert_equal(hint_text(context), "K2:back E2:set K3:load")
+  assert_screen_layout(context, "SETUP's factory sets list")
+  S.scene_file.unsaved = true
+  tap(3)
+  assert_true(not S.lib.factory.loading(), "unsaved scenes: the first K3 only arms")
+  assert_equal(S.lib.ui_flash.text("hints"), "K3 again: drop unsaved", "and says so")
+  context.clock.run_for(S.lib.scenes.SCENE_LOAD.confirm_seconds + 0.1)
+  tap(3)
+  assert_true(not S.lib.factory.loading(), "past 2 s a K3 arms again")
+  context.clock.run_for(1)
+  tap(3)
+  assert_true(S.lib.factory.loading(), "a second K3 within 2 s loads")
+  assert_equal(S.lib.ui_flash.text("hints"), "loading")
+  for _ = 1, 100 do
+    if not S.lib.factory.loading() then break end
+    context.clock.advance()
+  end
+  assert_true(not S.lib.factory.loading(), "the load ends")
+  assert_equal(S.lib.ui_flash.text("header"), "dusk", "the header names the set")
+  S.scene_file.unsaved = false
+  tap(3)
+  assert_true(S.lib.factory.loading(), "with nothing unsaved one K3 loads")
 end)
 
 end

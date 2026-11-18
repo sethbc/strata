@@ -86,6 +86,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
 | 111 | load the random sequences' values from data/strata/sequences.data (`START_ORDER.sequences_load`; with no file it can use, every value is drawn and the timed write started, one it cannot use is set aside), then redraw the screen (3.7) | `lib/random_sequences.lua` |
 | 112 | join the arpeggiator's shuffle to the LFO clock's step hooks, once (`START_ORDER.arp`; sends nothing) (3.8) | `lib/arp.lua` |
+| 117 | with a factory index in the script's folder (3.8 ships none: then nothing is read further and nothing written), read `factory.data`: a pending set the index lists loads again; no marker, no scenes file found at this start (`S.scene_file.start_outcome` `"missing"`) and a first-run set write `{pending = <key>, loaded = {}}` and start its load, not awaited; no marker otherwise writes `{loaded = {}}`; an unusable one is set aside and written afresh (`START_ORDER.factory_first_run`, ruling 51, 3.8) | `lib/factory.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 125 | check every global LFO destination's param, then start the LFO clock (`S.lfo_clock`, 48 Hz, 3.4) | `lib/lfos.lua` |
 | 130 | start the frame clock (`start_frame_clock`) | `lib/ui/frame.lua` |
@@ -349,7 +350,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
   | `matrix learn` | `lib/matrix.lua` | matrix learn waits for a touch exactly while its timeout clock runs (`S.matrix_learn_clock`) (3.4) |
   | `zones editor` | `lib/ui/zones.lua` | the zones editor's learn waits exactly while its timeout clock is pending (`S.zones_learn_clock`, its coroutine alive) and the note tap is set, and only while the editor is open; the open editor's own owner is the modal one (or beneath SEQ's step editor), the closed editor's never (3.5) |
   | `scale editor` | `lib/ui/scale_editor.lua` | the open scale and tuning editor's own owner is the modal one (or beneath SEQ's step editor), the closed editor's never; its cursor is on a row and a class, and a pending tuning choice is one of its choices (3.8) |
-  | `factory` | `lib/factory.lua` | a factory set's load clock (`S.factory_clock`) is a live coroutine while it is set (3.8) |
+  | `factory` | `lib/factory.lua` | a factory set's load clock (`S.factory_clock`) is a live coroutine while it is set; the open list's own owner is the modal one (or beneath SEQ's step editor), the closed list's never, and its cursor is on a set (3.8) |
   | `lfo clock` | `lib/lfos.lua` | the LFO clock (`S.lfo_clock`) runs from its start step to cleanup, and only then (3.4) |
   | `step editor` | `lib/pages/seq.lua` | the step editor is open exactly while its owner is the modal one (`S.lib.ui_modal.top()`) (3.4) |
   | `notes` | `lib/notes.lua` | the note pool is a whole number in 0..`NOTE_POOL.max`, the extra notes held never exceed it, and a stopped voice holds none (3.5) |
