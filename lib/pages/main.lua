@@ -325,6 +325,8 @@ return function(S)
       layout_state("all locked, running, triggered, frozen, field 3", 1),
       layout_state("last voice, buffer source", NUM_VOICES, S.constants.SOURCE_SYNTH + S.constants.NUM_BUFFERS),
       layout_state("resonator, input source", 1, S.constants.SOURCE_INPUT),
+      -- 3.8: a voice source shows v<j> where a buffer voice shows its slot
+      layout_state("last voice, voice 7's ring", NUM_VOICES, S.constants.SOURCE_VOICE_FIRST + NUM_VOICES - 1),
       -- the list's m and s marks: voice 1 muted, voice 2 soloed (3 and 4 are m too)
       {name = "voice list marks m and s", setup = function()
         for i = 1, NUM_VOICES do

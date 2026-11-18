@@ -1360,7 +1360,7 @@ test("transition skips discrete voice fields; scenes keep source and buffer para
   -- validation and migration of the source field
   local scene = deep_copy(local_value("scenes")[1])
   assert_true(validate_scene(scene), "captured scene validates")
-  for _, bad in ipairs({ 0, 11, 2.5, "buf 1" }) do
+  for _, bad in ipairs({ 0, #local_value("S").constants.SOURCE_OPTIONS + 1, 2.5, "buf 1" }) do  -- (3.8: 17 options)
     scene.data.voices[2].source = bad
     assert_true(not validate_scene(scene), "source " .. tostring(bad) .. " rejected")
   end
@@ -4503,6 +4503,19 @@ test("the scenes' PSET hook runs before morph's", function()
   for position, hook in ipairs(S.registry.pset_hooks) do index[hook.name] = position end
   assert_true(index.scenes ~= nil, "scenes registers a PSET hook")
   assert_true(index.morph ~= nil and index.scenes < index.morph, "before morph's")
+end)
+
+-- 3.8 (package 1d): a voice's source ranges over the seventeen options
+test("a scene with source 17 is valid; one with 18 is set aside", function()
+  local context = load_strata(); finish_startup(context)
+  local C = local_value("S").constants
+  assert_equal(#C.SOURCE_OPTIONS, C.SOURCE_VOICE_FIRST + C.NUM_VOICES - 1, "the last option is voice 7's ring")
+  capture_scene(1)
+  local scene = deep_copy(local_value("scenes")[1])
+  scene.data.voices[2].source = #C.SOURCE_OPTIONS
+  assert_true(validate_scene(scene), "source " .. #C.SOURCE_OPTIONS .. " (voice 7's ring) is valid")
+  scene.data.voices[2].source = #C.SOURCE_OPTIONS + 1
+  assert_true(not validate_scene(scene), "source " .. (#C.SOURCE_OPTIONS + 1) .. " is set aside")
 end)
 
 end

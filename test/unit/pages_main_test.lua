@@ -947,4 +947,20 @@ test("MAIN's layout states hold every voice's widest entry with a count", functi
   end
 end)
 
+-- 3.8 (package 1d, design §12): a voice on a voice source shows v<j> where
+-- a buffer voice shows its slot, and an input voice's fields
+test("MAIN shows v2 and grain size for a voice on voice 2", function()
+  local context = load_strata(); finish_startup(context)
+  local C = local_value("S").constants
+  params:set("v1_source", C.SOURCE_VOICE_FIRST + 1)
+  redraw()
+  assert_true(screen_shows(context, "v2"), "the read voice")
+  assert_true(not screen_shows(context, "voice 2"), "never the option's long name")
+  assert_equal(main_param_id(1), "v1_grain_size", "the main param is grain size")
+  assert_equal(table.concat(main_fields(1), ","), "v1_grain_size,v1_grain_density,v1_grain_pitch", "an input voice's fields")
+  local label, value = field_texts(context, 1)
+  assert_equal(label and label.text, "size")
+  assert_equal(value and value.text, string.format("%.2f s", params:get("v1_grain_size")))
+end)
+
 end

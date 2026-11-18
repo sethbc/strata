@@ -428,7 +428,8 @@ check.(getControl.(engine.synths[\grain0], \bufL) == engine.ringBuffersFor(0, 0)
     "synth source: grain reads the voice ring and writes the voice's synth path (no mirror, no level)");
 check.([\modBus1, \modBus2, \modBus3].every({ arg control; getControl.(engine.synths[\grain0], control) == silentIndex }),
     "synth source: the grain synth's mod buses are the silent bus, never control bus 0");
-command.(\setGrainSource, 0, 10);
+// (3.8: the voice sources end at voiceSourceFirst + numVoices - 1)
+command.(\setGrainSource, 0, engine.voiceSourceFirst + engine.numVoices);
 command.(\setGrainSource, 0, -1);
 server.sync;
 check.(engine.grainSource[0] == 0, "out-of-range sources are ignored");

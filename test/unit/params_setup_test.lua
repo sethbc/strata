@@ -320,15 +320,19 @@ test("source and buffer params: options, defaults, voices table, labels", functi
   load_strata()
   local voices = local_value("voices")
   local names = {}
-  for index = 1, 10 do params:set("v1_source", index); names[index] = params:string("v1_source") end
-  assert_equal(table.concat(names, ","), "synth,buf 1,buf 2,buf 3,buf 4,buf 5,buf 6,buf 7,buf 8,input")
+  -- (3.8, package 1d: the voices' output rings after the input)
+  local C = local_value("S").constants
+  for index = 1, #C.SOURCE_OPTIONS do params:set("v1_source", index); names[index] = params:string("v1_source") end
+  local voice_names = {}
+  for voice = 1, C.NUM_VOICES do voice_names[voice] = "voice " .. voice end
+  assert_equal(table.concat(names, ","), "synth,buf 1,buf 2,buf 3,buf 4,buf 5,buf 6,buf 7,buf 8,input," .. table.concat(voice_names, ","))
   params:set("v1_source", 1)
   local expected = { buf_pos = 0, buf_rate = 1, buf_scan = 0 }
   for voice_idx = 1, 7 do
     local prefix = "v" .. voice_idx .. "_"
     local source = params:lookup_param(prefix .. "source")
     assert_equal(source.t, params.tOPTION, "source is an option")
-    assert_equal(source.count, 10, "synth, eight buffers, input")
+    assert_equal(source.count, #C.SOURCE_OPTIONS, "synth, eight buffers, input, seven voices")
     assert_equal(params:get(prefix .. "source"), 1, "default synth")
     assert_equal(voices[voice_idx].source, 1, "voices table holds the source index")
     for key, default in pairs(expected) do
@@ -1112,6 +1116,13 @@ local PARAM_FIXTURE_ALLOWED = {
     record = {t = 8, name = "tuning", default = "12 equal"}},
   {kind = "added", id = "tuning_tones", after = "tuning_name", why = "1e: the tuning's tones (design section 6.4)",
     record = {t = 8, name = "tuning tones", default = "1200 0 100 200 300 400 500 600 700 800 900 1000 1100"}},
+  -- 1d: the voice sources join the source's options at their end (ruling
+  -- P8), and an input voice's channel follows its history (design §5)
+  {kind = "options", id = "v<v>_source", options = {"synth", "buf 1", "buf 2", "buf 3", "buf 4", "buf 5", "buf 6", "buf 7",
+    "buf 8", "input", "voice 1", "voice 2", "voice 3", "voice 4", "voice 5", "voice 6", "voice 7"},
+    why = "1d: a voice can grain another voice's output ring, or its own (design section 5)"},
+  {kind = "added", id = "v<v>_input_channel", after = "v<v>_history", why = "1d: an input voice reads stereo, left or right (design section 5)",
+    record = {t = 2, name = "input channel", default = 1, options = {"stereo", "left", "right"}}},
 }
 -- 2b: an LFO's destination is its home routing in the matrix (design §4);
 -- its six LFOs' entries follow the list (an LFO is no voice token)

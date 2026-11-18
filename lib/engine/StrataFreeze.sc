@@ -10,6 +10,12 @@
 //   its own then continues (spectral). An input freeze never touches the
 //   voice's own ring or its writer, so a synth-source grain synth (whose
 //   path carries no voice level) never reads input audio (#494, #495);
+// - a voice-source voice's (3.8) the same way: the 4 s behind its read
+//   point of the read voice's output ring copied into its copy ring, and
+//   on spectral a writer of the read voice's tap into it. The copy family
+//   (frozenOnInput, readsInputCopy, copyInputToCopyRing, copyInputSpan,
+//   returnToInputRing) keeps its names for both: a ring another writer
+//   writes (freezesByCopy);
 // - a buffer voice's scan: stopped (scanRate).
 // Spectral asked for on the standard tier, or for a buffer voice, holds.
 // See docs/notes/engine/freeze.md.
@@ -149,11 +155,18 @@
         ^held * (this.grainMaxSeconds + (scan * this.ringSeconds))
     }
 
-    // Whether the voice is frozen with an input ring copy (or spectral
-    // writer of the input) as what its grains read: its history is then 0
+    // Whether a source freezes by a copy into the voice's copy ring: the
+    // input, and 3.8's voice sources (rings another writer writes)
+    freezesByCopy { arg source;
+        ^(source == this.inputSource) or: { this.voiceSource(source) }
+    }
+
+    // Whether the voice is frozen with a copy (of the input ring or, 3.8, of
+    // a read voice's output ring; or a spectral writer of the input or of
+    // the read voice's tap) as what its grains read: its history is then 0
     frozenOnInput { arg voice;
         var state = areaState[\freeze];
-        ^this.validVoice(voice) and: { state[\frozen][voice] } and: { state[\source][voice] == this.inputSource }
+        ^this.validVoice(voice) and: { state[\frozen][voice] } and: { this.freezesByCopy(state[\source][voice]) }
     }
 
     // Whether the voice's ring is held by a spectral writer of its voice bus
@@ -193,8 +206,8 @@
     // grainReadPairs). Frozen on another source or mode (the source changed
     // while the voice was stopped), it is unfrozen first. Each freeze is a
     // ring change, so a copy still waiting for an earlier freeze never runs.
-    // An input voice's freeze is its copy alone: its own ring and writer go
-    // on writing its voice bus.
+    // An input or voice-source voice's freeze is its copy alone: its own
+    // ring and writer go on writing its voice bus.
     freezeVoice { arg voice;
         var state = areaState[\freeze], mode, source;
         if (this.validVoice(voice).not) { ^this };
@@ -204,7 +217,7 @@
             this.unfreezeVoice(voice);
         };
         if (state[\frozen][voice]) {
-            if ((source == this.inputSource) and: { state[\copied][voice] }) { this.pointAtCopyRing(voice) };
+            if (this.freezesByCopy(source) and: { state[\copied][voice] }) { this.pointAtCopyRing(voice) };
             ^this
         };
         state[\frozen][voice] = true;
@@ -220,16 +233,16 @@
                 this.replaceRingWriter(voice, \strataRingWriteSpectral, granBuses[voice])
             } { this.pauseRingWriter(voice) };
         }
-        { source == this.inputSource } { this.copyInputToCopyRing(voice) };
+        { this.freezesByCopy(source) } { this.copyInputToCopyRing(voice) };
         // a slot: the grain synth's freeze control stops its scan (scanRate)
     }
 
     // Undo freezeVoice. replaceGrainSynth calls it before every source
     // switch of a running voice (grainSource is the new source by then).
     // A synth voice's writer resumes: a paused one from its own phase, a
-    // spectral one replaced from its phase bus. An input voice's copy
-    // writer (spectral) is freed and the grain synths reading its copy are
-    // set back to the input ring at the voice's history; its own writer
+    // spectral one replaced from its phase bus. An input or voice-source
+    // voice's copy writer (spectral) is freed and the grain synths reading
+    // its copy are set back to the ring it froze; its own writer
     // never stopped. The kept freeze control is 0, so a grain synth the
     // switch starts is unfrozen. A spectral one's end applies a type switch
     // that waited for it (applyWaitingVoiceType), after the writer's
@@ -254,9 +267,9 @@
                 this.applyWaitingVoiceType(voice);
             } { this.resumeRingWriter(voice) };
         }
-        { source == this.inputSource } {
+        { this.freezesByCopy(source) } {
             this.stopCopyWriter(voice);
-            this.returnToInputRing(voice);
+            this.returnToInputRing(voice, source);
         };
     }
 
@@ -343,16 +356,22 @@
     }
 
     // A spectral input freeze: a writer of the input into the voice's copy
-    // ring, from the copy's end (its phase bus, 0), at the tail of
-    // voiceGroup (after the input synth), beside the voice's own writer.
-    // Nothing on the standard tier (no FFT buffers), when the voice has one
-    // already, or once the area stopped
+    // ring, from the copy's end (its phase bus, 0: a new node, resume 0),
+    // at the tail of voiceGroup (after the input synth), beside the voice's
+    // own writer. A voice source's (3.8): a writer of the read voice's tap,
+    // at the tail of the record area's tap group (after every stage has
+    // written its tap). Nothing on the standard tier (no FFT buffers), when
+    // the voice has one already, or once the area stopped
     startCopyWriter { arg voice;
-        var key = this.copyWriterKeys[voice], ring = this.copyRingFor(voice);
-        var fft = areaState[\freeze][\spectralBuffers][voice];
+        var key = this.copyWriterKeys[voice], ring = this.copyRingFor(voice), source = areaState[\freeze][\source][voice];
+        var fft = areaState[\freeze][\spectralBuffers][voice], in = inputBus, target = voiceGroup;
         if (fft.isNil or: { synths[key].notNil } or: { areaState[\freeze][\stopped] ? false }) { ^this };
-        synths[key] = Synth(\strataRingWriteSpectral, [\in, inputBus, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2],
-            \fftL, fft[0], \fftR, fft[1]], voiceGroup, \addToTail);
+        if (this.voiceSource(source)) {
+            in = areaState[\record][\voiceTaps][this.readVoiceOf(source)];
+            target = areaState[\record][\tapGroup];
+        };
+        synths[key] = Synth(\strataRingWriteSpectral, [\in, in, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2],
+            \fftL, fft[0], \fftR, fft[1]], target, \addToTail);
     }
 
     // Free the voice's copy writer, if any (quietly: one whose /s_new found
@@ -370,7 +389,9 @@
 
     // An input voice's hold: the 4 s of the input ring ending at its read
     // point (the head minus ringReadMargin + history) copied into the
-    // voice's copy ring, then the copy ring's phase bus set to the copy's
+    // voice's copy ring (a voice source's, 3.8: of the read voice's output
+    // ring, ending ringReadMargin behind its head), then the copy ring's
+    // phase bus set to the copy's
     // end and its live grain synth set to read the copy. Fade before
     // overwriting: the copy ring's readers get ringLevel 0 and the copy
     // waits bufferFadeWait when any plays, and goes ahead at once
@@ -391,7 +412,7 @@
         fork({
             var head;
             if (readers.notEmpty) { bufferFadeWait.wait };
-            if (current.value) { head = this.areaCall(\inputHeadFrame) };
+            if (current.value) { head = this.areaCall(\ringHeadFrame, this.ringBuffersFor(voice, state[\source][voice])[2]) };
             if (current.value and: { head.notNil }) {
                 this.copyInputSpan(voice, head);
                 server.sync;  // answered once both channels' copies are done
@@ -403,23 +424,26 @@
         }, SystemClock);
     }
 
-    // The input writer's frame now (its phase bus), inside a routine; nil if
-    // the server does not answer
-    inputHeadFrame {
+    // A ring writer's frame now (on its phase bus: the input writer's, or a
+    // read voice's output ring writer's), inside a routine; nil if the
+    // server does not answer
+    ringHeadFrame { arg bus;
         var condition = Condition(false), value;
-        areaState[\rings][\phaseBuses][numVoices].get({ arg frame; value = frame; condition.test = true; condition.signal });
+        bus.get({ arg frame; value = frame; condition.test = true; condition.signal });
         SystemClock.sched(1, { condition.test = true; condition.signal; nil });
         condition.wait;
         ^value
     }
 
-    // Copy the 4 s of the input ring ending ringReadMargin + history before
-    // head into the voice's copy ring, oldest first from frame 0: one /b_gen
-    // copy per channel, two when the span wraps the input ring's end
+    // Copy the 4 s of the frozen source's ring (the input ring, or a voice
+    // source's output ring, 3.8) ending ringReadMargin + history (the
+    // input's only) before head into the voice's copy ring, oldest first
+    // from frame 0: one /b_gen copy per channel, two when the span wraps
+    // the ring's end (an output ring, as long as the copy ring, always does)
     copyInputSpan { arg voice, head;
-        var rings = areaState[\rings], sampleRate = context.server.sampleRate;
-        var inputFrames = rings[\inputL].numFrames, voiceFrames = rings[\copyL][voice].numFrames;
-        var history = (grainControls[voice][\history] ? 0).clip(0, historySeconds);
+        var rings = areaState[\rings], sampleRate = context.server.sampleRate, source = areaState[\freeze][\source][voice];
+        var from = this.ringBuffersFor(voice, source), inputFrames = from[0].numFrames, voiceFrames = rings[\copyL][voice].numFrames;
+        var history = if (source == this.inputSource) { (grainControls[voice][\history] ? 0).clip(0, historySeconds) } { 0 };
         var end = (head - ((this.ringReadMargin + history) * sampleRate)).round.asInteger.mod(inputFrames);
         var start = end - voiceFrames;
         // [source frame, copy ring frame, frames]
@@ -428,8 +452,8 @@
         };
         spans.do({ arg span;
             if (span[2] > 0) {
-                rings[\inputL].copyData(rings[\copyL][voice], span[1], span[0], span[2]);
-                rings[\inputR].copyData(rings[\copyR][voice], span[1], span[0], span[2]);
+                from[0].copyData(rings[\copyL][voice], span[1], span[0], span[2]);
+                from[1].copyData(rings[\copyR][voice], span[1], span[0], span[2]);
             };
         });
     }
@@ -452,16 +476,30 @@
     // readers
     pointAtCopyRing { arg voice;
         var synth = synths[this.grainKey(voice)];
-        if (synth.isNil or: { grainSource[voice] != this.inputSource }) { ^this };
+        if (synth.isNil or: { this.freezesByCopy(grainSource[voice]).not }) { ^this };
         this.setGrainSynths(voice, *this.grainReadPairs(voice));
         ([synth] ++ this.noteSynths(voice, \grain)).do({ arg each; this.noteInputReader(voice, each) });
     }
 
-    // Whether the voice's grain synth reads its input copy: the voice is on
-    // the input, frozen on the input, and the copy is in its copy ring
+    // Whether the voice's grain synth reads its copy: the voice is on the
+    // input or a voice source, frozen with a copy of that very source, and
+    // the copy is in its copy ring
     readsInputCopy { arg voice;
-        ^(grainSource[voice] == this.inputSource) and: { this.frozenOnInput(voice) }
+        ^this.freezesByCopy(grainSource[voice]) and: { this.frozenOnInput(voice) }
+            and: { areaState[\freeze][\source][voice] == grainSource[voice] }
             and: { areaState[\freeze][\copied][voice] }
+    }
+
+    // A ring's [left, right] buffers for the voice's input channel (3.8:
+    // the kept inputChannel, 0 stereo, 1 the left twice, 2 the right
+    // twice): the input source's only, its copy included; any other ring as
+    // it is
+    channelPair { arg voice, source, ring;
+        if (source != this.inputSource) { ^[ring[0], ring[1]] };
+        ^switch (grainControls[voice][\inputChannel] ? 0)
+        { 1 } { [ring[0], ring[0]] }
+        { 2 } { [ring[1], ring[1]] }
+        { [ring[0], ring[1]] }
     }
 
     // What a voice's ring grain synth reads, as strataGrainRing controls:
@@ -470,19 +508,23 @@
     // ring at history 0 (history is for the input ring, so a voice that
     // leaves the input never reads a wrapped ring); the input source the
     // input ring at the voice's history, or its frozen copy (the copy
-    // ring) at history 0; a buffer source nothing (empty).
+    // ring) at history 0; a voice source (3.8) the read voice's output
+    // ring, or its frozen copy, at history 0; a buffer source nothing
+    // (empty). The input's channel applies to its ring and its copy
+    // (channelPair).
     grainReadPairs { arg voice;
-        var source = grainSource[voice], ring, history = 0;
+        var source = grainSource[voice], ring, history = 0, pair;
         case
         { source == 0 } { ring = this.ringBuffersFor(voice, 0) }
-        { source == this.inputSource } {
+        { this.freezesByCopy(source) } {
             if (this.readsInputCopy(voice)) { ring = this.copyRingFor(voice) } {
                 ring = this.ringBuffersFor(voice, source);
-                history = grainControls[voice][\history] ? 0;
+                if (source == this.inputSource) { history = grainControls[voice][\history] ? 0 };
             };
         }
         { ^[] };
-        ^[\bufL, ring[0].bufnum, \bufR, ring[1].bufnum, \phaseBus, ring[2].index, \history, history]
+        pair = this.channelPair(voice, source, ring);
+        ^[\bufL, pair[0].bufnum, \bufR, pair[1].bufnum, \phaseBus, ring[2].index, \history, history]
     }
 
     // Count a grain synth among the copy ring's readers (inputReaders)
@@ -497,16 +539,20 @@
         areaState[\freeze][\inputReaders].removeAt(synth);
     }
 
-    // Set the input grain synths reading the copy ring back to the input
-    // ring at the voice's history; they still count as the copy ring's
-    // readers for freezeLeaveSeconds (their grains already playing)
-    returnToInputRing { arg voice;
-        var held = areaState[\freeze][\inputReaders], ring = this.ringBuffersFor(voice, this.inputSource);
-        var until = SystemClock.seconds + this.freezeLeaveSeconds;
+    // Set the grain synths reading the copy ring back to the ring the voice
+    // froze (source: the input ring at the voice's history, its channel
+    // applied, or a voice source's output ring at history 0, 3.8); they
+    // still count as the copy ring's readers for freezeLeaveSeconds (their
+    // grains already playing). The source is the unfreeze's: a switch calls
+    // it with grainSource already the new one
+    returnToInputRing { arg voice, source;
+        var held = areaState[\freeze][\inputReaders], ring = this.ringBuffersFor(voice, source);
+        var until = SystemClock.seconds + this.freezeLeaveSeconds, pair = this.channelPair(voice, source, ring);
+        var history = if (source == this.inputSource) { grainControls[voice][\history] ? 0 } { 0 };
         held.keysValuesDo({ arg synth, entry;
             if ((entry[\voice] == voice) and: { entry[\until].isNil }) {
-                this.sendToSynth(synth.setMsg(\bufL, ring[0].bufnum, \bufR, ring[1].bufnum,
-                    \phaseBus, ring[2].index, \history, grainControls[voice][\history] ? 0));
+                this.sendToSynth(synth.setMsg(\bufL, pair[0].bufnum, \bufR, pair[1].bufnum,
+                    \phaseBus, ring[2].index, \history, history));
                 entry[\until] = until;
             };
         });

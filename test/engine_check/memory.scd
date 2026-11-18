@@ -40,6 +40,9 @@ var reserveBus = Bus.control(server, 1);
 var modulationRunning = List.new;
 // 3.5's pool cases' figures, both tiers: [tier, case, free KB]
 var poolFigures = List.new;
+// 3.8's voice-source cases (package 1d), both tiers: [tier, case, free KB,
+// strataGrainRing at the probes, spectral copy writers]
+var voiceSourceFigures = List.new;
 
 // Send the flood of small probes now (in processGroup, at the tail), with
 // error reports off for that bundle. Returns their bus and node IDs; read
@@ -206,6 +209,21 @@ var checkRecordSizes = {
         "memory: the head guard takes at most 8 KB per buffer grain synth (% KB: % KB against % KB without it)".format(
             (guardKB - plainKB).round(0.1), guardKB.round(0.1), plainKB.round(0.1)));
     group.free; privateBus.free; controlBus.free;
+};
+
+// What one output ring writer (3.8, package 1d: \strataOutRingWrite, seven
+// run in every case) takes of the pool, as the record synth is measured:
+// the small probes that fit with and without twenty of them
+var outRingWriterKB;
+var checkOutRingWriterSize = {
+    var privateBus = Bus.audio(server, 2), phaseBuses = Bus.control(server, 20), group = Group.after(engine.processGroup);
+    var ring = engine.outRingFor(0);
+    outRingWriterKB = sizeOf.({ arg index;
+        Synth(\strataOutRingWrite, [\in, privateBus, \bufL, ring[0], \bufR, ring[1], \phaseOut, phaseBuses.index + index], group)
+    });
+    check.((outRingWriterKB > 0) and: { outRingWriterKB <= 8 },
+        "memory: an output ring writer takes at most 8 KB (% KB of the pool, by allocation probes)".format(outRingWriterKB.round(0.1)));
+    group.free; privateBus.free; phaseBuses.free;
 };
 
 // What each node of 3.4's modulation area takes of the pool (design §3.6):
@@ -789,6 +807,68 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
                         target.tier, counts));
             }, (2 * target.numVoices) + target.notePoolMax);
         h.stopAllVoices(target);
+        // 3.8 (package 1d): voices that grain each other. Source
+        // voiceSourceFirst + j reads voice j's output ring; each voice
+        // reads another's (ringOf, never its own). V2: every voice switched
+        // between three other voices' rings 0.2 s apart, 21
+        // \strataGrainRing at the probes; on high the freeze is spectral on
+        // every voice, so each reader runs a copy writer of its read
+        // voice's tap (seven spectral writers no other case runs beside
+        // ring readers), waited for before the probes. V4: V2 with the pool
+        // full, sixteen ring notes live and cutting (53 \strataGrainRing).
+        // The design's prototype read V2 at 4118-4135 KB and V4 at
+        // 1882-1899 on high (docs/design/3.8-facts/engine-grain.md)
+        {
+            var ringOf = { arg voice, step; target.voiceSourceFirst + ((voice + step + 1) % target.numVoices) };
+            var copyWriters = { target.copyWriterKeys.count({ arg key; target.synths[key].notNil }) };
+            var engageRings = {
+                engage.value(command);
+                if (target.tier == \high) { h.waitFor({ copyWriters.value == target.numVoices }, 1) };
+            };
+            var report = { arg label, rings, floorText;
+                { arg fits, freeKB;
+                    var names = h.synthNames(target.context.xg), counts;
+                    counts = [names.count(_ == \strataGrainRing), names.count(_ == \strataRingWriteSpectral)];
+                    voiceSourceFigures.add([target.tier, label, freeKB.round(1)] ++ counts);
+                    check.(fits and: { counts[0] == rings } and: { counts[1] == if (target.tier == \high) { target.numVoices } { 0 } },
+                        "memory: % leaves % (% tier: about % KB free; % strataGrainRing, % spectral copy writers)".format(
+                            label, floorText, target.tier, freeKB.round(10), counts[0], counts[1]));
+                }
+            };
+            target.numVoices.do({ arg voice; command.(\setGrainParam, voice, \freeze, 0.0) });
+            server.sync; 0.6.wait;
+            target.numVoices.do({ arg voice; command.(\setGrainSource, voice, ringOf.(voice, 0)) });
+            startAll.value;
+            server.sync; 0.2.wait;
+            2.do({ arg step;
+                if (step > 0) { 0.2.wait; server.sync; holdVoices.value };
+                target.numVoices.do({ arg voice; command.(\setGrainSource, voice, ringOf.(voice, step + 1)) });
+            });
+            engageRings.value;
+            probeHeadroom.("V2 every voice switched between three other voices' rings 0.2 s apart", "all-ring worst case", nil,
+                report.("V2, every voice switched between three other voices' rings", 3 * target.numVoices, floorLabel));
+            h.stopAllVoices(target);
+            target.numVoices.do({ arg voice; command.(\setGrainParam, voice, \freeze, 0.0) });
+            server.sync; 0.6.wait;
+            target.numVoices.do({ arg voice; command.(\setGrainSource, voice, ringOf.(voice, 0)) });
+            startAll.value;
+            server.sync; 0.2.wait;
+            2.do({ arg step;
+                if (step > 0) { 0.2.wait; server.sync; holdVoices.value };
+                target.numVoices.do({ arg voice; command.(\setGrainSource, voice, ringOf.(voice, step + 1)) });
+            });
+            poolNotes.([3, 3, 2, 2, 2, 2, 2]).do({ arg pair; playPoolNote.(*pair) });
+            poolNotes.([3, 3, 2, 2, 2, 2, 2]).do({ arg pair; command.(\noteOff, pair[0], pair[1], 0) });
+            poolNotes.([3, 3, 2, 2, 2, 2, 2]).do({ arg pair; playPoolNote.(*pair) });
+            engageRings.value;
+            probeHeadroom.("V4 all-ring with sixteen ring notes live and cutting", "all-ring worst case with the pool full", 5,
+                report.("V4, V2 with sixteen ring notes live and cutting", (3 * target.numVoices) + (2 * target.notePoolMax), "1280 KB"),
+                target.numVoices + target.notePoolMax);
+            h.stopAllVoices(target);
+            target.numVoices.do({ arg voice; command.(\setGrainParam, voice, \freeze, 0.0) });
+            target.numVoices.do({ arg voice; command.(\setGrainSource, voice, 0) });
+            server.sync;
+        }.value;
         command.(\setNotePool, 0);
         stopModulation.value;
         server.sync; 0.6.wait;
@@ -860,6 +940,7 @@ idleFreeKB = (floodFit.value * probeKB) + reserveKB;
 checkGrainMemorySizes.value;
 checkGrainSynthSizes.value;
 checkRecordSizes.value;
+checkOutRingWriterSize.value;
 checkModulationSizes.value;
 checkVoiceSynthSizes.value;
 checkDelaySize.value;
@@ -869,13 +950,17 @@ check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
 checkGuardResumes.value;
 checkMemoryWorstCase.(engine, 12, "3 MB");
 checkHighWorstCase.value;
-check.((modulationRunning.size == 22) and: { modulationRunning.every({ arg each; each[2] == [6, 1, 1, 16] }) },
+// (13 probes a tier since 3.8's 1d: its V2 and V4)
+check.((modulationRunning.size == 26) and: { modulationRunning.every({ arg each; each[2] == [6, 1, 1, 16] }) },
     "memory: six engine LFOs, scatter on every voice and destination and sixteen envelope routes run through every worst case on both tiers (% probes; cases without them: %)".format(
         modulationRunning.size, modulationRunning.reject({ arg each; each[2] == [6, 1, 1, 16] }).collect({ arg each; [each[0], each[2]] })));
 check.((recordingFits.size == 2) and: { recordingFits.every({ arg each; each[1] }) },
     "memory: 3 MB free on both tiers with eight recordings running (%)".format(
         recordingFits.collect({ arg each; "% about % KB free".format(each[0], each[2]) }).join(", ")));
 ("memory: the pool cases leave (KB free): %".format(poolFigures.collect({ arg each; "% %: %".format(*each) }).join("; "))).postln;
+("memory: the voice-source cases leave (KB free, strataGrainRing, spectral copy writers): %".format(
+    voiceSourceFigures.collect({ arg each; "% %: % (%, %)".format(*each) }).join("; "))).postln;
+check.(voiceSourceFigures.size == 4, "memory: the voice-source cases V2 and V4 ran on both tiers (% figures)".format(voiceSourceFigures.size));
 h.stopAllVoices;
 reserveBus.free;
 }

@@ -3,7 +3,7 @@
 Where the eight sample buffers are recorded, filled, cleared and saved, where a buffer's waveform and the voices playing it show, and where the selected voice's source is chosen, so it all works without a grid. Back to [Screen Controls](../controls.md).
 
 **Left column.** Twelve fields, four at a time (the list scrolls as the field cursor moves; a brighter mark on the dividing line shows where you are). A small `>` marks the field E3 edits:
-- `v1`...`v7`: the selected voice (picked on MAIN) and its source: `synth`, `buf 1` ... `buf 8` or `input`.
+- `v1`...`v7`: the selected voice (picked on MAIN) and its source: `synth`, `buf 1` ... `buf 8`, `input`, or `v1` ... `v7` for another voice's sound or its own ([Voices as sources](../sources-and-buffers.md#voices-as-sources)).
 - `rec`: what a recording takes: the input (`in`), the master before its effects (`pre`) or after them (`post`, Strata's own output only), or one voice (`v1`-`v7`).
 - `dur`: the record duration, up to the buffer length (16 s, or up to 300 s on the high tier). With sync on it becomes `len`, the length in beats (`16b`); when that many beats would not fit in a buffer at the current tempo it shows how many do, with `max` (`8b max`), and the recording is that many beats long, so a loop recorded that way wraps on the beat (`<1b max` when not even one beat fits: the recording is then a whole buffer).
 - `lvl`: the record level.

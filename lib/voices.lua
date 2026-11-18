@@ -1,7 +1,9 @@
 -- lib/voices.lua
 -- The voices: their definitions (S.voices, built fresh by each script load),
 -- which voices are locked (S.locked), the master density, the selected voice,
--- and the global helpers that test a voice's grain source. strata.lua runs
+-- and the global helpers that test a voice's grain source (exactly one of
+-- voice_uses_synth, voice_uses_buffer, voice_uses_input and, 3.8,
+-- voice_uses_voice holds for a voice). strata.lua runs
 -- `S.lib.voices = include("lib/voices")(S)`; the constructor sets its S
 -- fields itself, and its table (S.lib.voices) holds is_synth_key(voice_idx,
 -- key). A voice is {name, active, source, param_order, values}: values holds
@@ -15,6 +17,7 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
   local SOURCE_SYNTH = S.constants.SOURCE_SYNTH
   local SOURCE_INPUT = S.constants.SOURCE_INPUT
+  local SOURCE_VOICE_FIRST = S.constants.SOURCE_VOICE_FIRST
   local SOURCE_OPTIONS = S.constants.SOURCE_OPTIONS
 
   -- State. A voice's synth values (every type's keys) and its name and
@@ -53,7 +56,8 @@ return function(S)
     S.voices[voice_idx] = {active = false, source = SOURCE_SYNTH, values = values}  -- source: a SOURCE_OPTIONS index
   end
 
-  -- A voice's grain source: its synth, a buffer slot, or the live input
+  -- A voice's grain source: its synth, a buffer slot, the live input, or
+  -- (3.8) a voice's output ring, another's or its own. Exactly one holds
   function voice_uses_synth(voice_idx)
     return S.voices[voice_idx].source == SOURCE_SYNTH
   end
@@ -63,7 +67,26 @@ return function(S)
     return source > SOURCE_SYNTH and source < SOURCE_INPUT
   end
 
+  function voice_uses_input(voice_idx)
+    return S.voices[voice_idx].source == SOURCE_INPUT
+  end
+
+  function voice_uses_voice(voice_idx)
+    local source = S.voices[voice_idx].source
+    return source >= SOURCE_VOICE_FIRST and source < SOURCE_VOICE_FIRST + NUM_VOICES
+  end
+
+  -- The voice (1..NUM_VOICES) a voice-source voice reads, or nil
+  function voice_source_voice(voice_idx)
+    if not voice_uses_voice(voice_idx) then return nil end
+    return S.voices[voice_idx].source - SOURCE_VOICE_FIRST + 1
+  end
+
+  -- The source's short name: the option's, or v<j> for a voice source
+  -- (MAIN's and BUFFER's, design §12)
   function voice_source_label(voice_idx)
+    local read = voice_source_voice(voice_idx)
+    if read then return "v" .. read end
     return SOURCE_OPTIONS[S.voices[voice_idx].source]
   end
 
@@ -108,7 +131,8 @@ return function(S)
     local function option_index(x) return x - 1 end
     local function uses_synth(voice_idx) return voice_uses_synth(voice_idx) end
     local function uses_buffer(voice_idx) return voice_uses_buffer(voice_idx) end
-    local function uses_input(voice_idx) return not voice_uses_synth(voice_idx) and not voice_uses_buffer(voice_idx) end
+    -- an input or voice-source voice: a ring another writer writes
+    local function uses_ring(voice_idx) return voice_uses_input(voice_idx) or voice_uses_voice(voice_idx) end
     -- a voice's synth keys but those listed in `except`
     local function synth_keys_but(except)
       return function(voice_idx)
@@ -252,7 +276,8 @@ return function(S)
         return record and record.param_order or {}
       end,
       -- VOICE's synth section: the current type's keys but amp and pan (the
-      -- mix section's), or a buffer voice's buffer params; none for input
+      -- mix section's), or a buffer voice's buffer params; none for an input
+      -- or voice-source voice
       voice_rows = {section = "synth", before = "mix", rows = function(voice_idx)
         if voice_uses_synth(voice_idx) then return synth_keys_but({amp = true, pan = true})(voice_idx) end
         if voice_uses_buffer(voice_idx) then return {"buf_pos", "buf_rate", "buf_scan"} end
@@ -273,8 +298,8 @@ return function(S)
     -- buffer params on a buffer source, then grain size, pitch and spread.
     -- The faders: a buffer source's buffer params, level and pan, then the
     -- grain params with 3.8's window shape and skew (lib/grain.lua's keys,
-    -- where 3.7's envelope was: ruling 31), then an input source's level
-    -- and pan
+    -- where 3.7's envelope was: ruling 31), then an input or voice
+    -- source's level and pan
     local BUFFER_DRAWS = {
       buf_pos = function() return math.random() end,
       buf_rate = function() return 2 ^ (math.random() * 2 - 1) end,  -- 0.5-2, even in octaves
@@ -368,7 +393,7 @@ return function(S)
       fader = {
         {keys = buffer_and_level_keys, when = uses_buffer},
         {keys = {"grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_shape", "grain_skew", "grain_mode"}},
-        {keys = function(voice_idx) return voice_level_fader_keys(voice_idx) end, when = uses_input},
+        {keys = function(voice_idx) return voice_level_fader_keys(voice_idx) end, when = uses_ring},
       },
       main_randomize = {
         {keys = {"buf_pos", "buf_rate", "buf_scan"}, when = uses_buffer, draw = drawn_by(BUFFER_DRAWS)},

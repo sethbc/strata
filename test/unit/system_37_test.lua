@@ -90,6 +90,9 @@ local RUN_CALLS_ALLOWED = {
     why = "1c: each voice's start sends the overlap, 2 at master density 1 (design §4.4)"},
   {kind = "drop", match = '^setGrainParam%(<v0>, "panSpread", 0%.5%)$', count = 1,
     why = "1c: each voice's start sends the pan wander, 0.5, the grain synth's default (design §4.5)"},
+  -- 1d: each voice start sends its input channel, stereo (design §5)
+  {kind = "drop", match = '^setGrainParam%(<v0>, "inputChannel", 0%)$', count = 1,
+    why = "1d: each voice's start sends the input channel, 0: stereo (design section 5)"},
 }
 
 -- A call as the fixture writes it: name(args), numbers "%.9g", strings "%q"

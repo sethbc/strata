@@ -149,10 +149,11 @@
 
     // What the voice's next extra note is: a voice synth (a synth voice), a
     // stream of its frozen ring (a frozen synth voice), or a grain synth of
-    // its buffer slot or of the input
+    // its buffer slot or of a ring another writer writes (the input, or 3.8's
+    // voice sources: \input, pitched by its pitchShift)
     noteKindFor { arg voice;
         var source = grainSource[voice];
-        if (source == this.inputSource) { ^\input };
+        if ((source == this.inputSource) or: { this.voiceSource(source) }) { ^\input };
         if (source.inclusivelyBetween(1, numBuffers)) { ^\buffer };
         if (this.frozenSynthVoice(voice)) { ^\stream };
         ^\voice
@@ -213,12 +214,13 @@
     // The controls only one note's synth takes, never a voice-wide send's
     // (design 3.5 §3.2): the note controls, its velocity and accent, and the
     // control that is its pitch: a buffer note's bufRate and scaleNote, an
-    // input note's pitchShift; 3.7's region (regionStart, regionLength: the
-    // own note's from setGrainParam, an extra note's from noteRegion)
+    // input note's pitchShift (a voice source's too, 3.8); 3.7's region
+    // (regionStart, regionLength: the own note's from setGrainParam, an extra
+    // note's from noteRegion)
     perNoteGrainControls { arg voice;
         var names = [\noteGate, \noteBend, \noteAmp, \notePos, \noteSize, \noteRate, \velocity, \t_accent,
             \regionStart, \regionLength];
-        if (grainSource[voice] == this.inputSource) { ^names ++ [\pitchShift] };
+        if ((grainSource[voice] == this.inputSource) or: { this.voiceSource(grainSource[voice]) }) { ^names ++ [\pitchShift] };
         if (grainSource[voice].inclusivelyBetween(1, numBuffers)) { ^names ++ [\bufRate, \scaleNote] };
         ^names
     }

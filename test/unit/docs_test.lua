@@ -189,6 +189,7 @@ test("the engine stub reads its limits and controls from the engine source (#24)
   assert_equal(spec.num_voices, local_value("NUM_VOICES"), "numVoices")
   assert_equal(spec.num_buffers, local_value("NUM_BUFFERS"), "numBuffers")
   assert_equal(spec.input_source, local_value("NUM_BUFFERS") + 1, "inputSource")
+  assert_equal(spec.voice_source_first, local_value("SOURCE_VOICE_FIRST") - 1, "voiceSourceFirst (3.8)")
   assert_equal(spec.mod_slots, local_value("NUM_MOD_SLOTS"), "modBus1..N on every voice SynthDef")
   assert_true(#spec.voice_type_defs >= spec.num_voices, "the default roster gives voice i type i")
   assert_equal(spec.voice_type_defs[1], "strataResonator", "type 0's SynthDef")
@@ -436,6 +437,7 @@ test("the engine stub's voice and slot limits follow numVoices and numBuffers in
   assert_equal(spec.num_voices, 6, "numVoices read from the patched copy")
   assert_equal(spec.num_buffers, 4, "numBuffers read from the patched copy")
   assert_equal(spec.input_source, 5, "inputSource follows numBuffers")
+  assert_equal(spec.voice_source_first, 6, "voiceSourceFirst follows numBuffers")
   assert_equal(#spec.voice_type_defs, #engine_spec.voice_type_defs, "the type list does not follow numVoices")
   -- the stub's range checks use them
   stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = spec,
@@ -443,7 +445,8 @@ test("the engine stub's voice and slot limits follow numVoices and numBuffers in
   engine.voiceOff(5); engine.clearBuffer(3); engine.setGrainSource(0, 5); engine.setModSource(0, 1, 5)
   assert_engine_rejects("voice", "voiceOff", 6)
   assert_engine_rejects("slot", "clearBuffer", 4)
-  assert_engine_rejects("source", "setGrainSource", 0, 6)
+  engine.setGrainSource(0, 11)  -- (3.8: voice 6 of six's ring, voiceSourceFirst 6)
+  assert_engine_rejects("source", "setGrainSource", 0, 12)
   assert_engine_rejects("mod source", "setModSource", 0, 1, 6)
 end)
 
@@ -697,10 +700,10 @@ test("the engine stub rejects out-of-range engine arguments (#24)", function()
   assert_engine_rejects("slot", "saveBuffer", 8, "/tmp/x.wav", 0, 1)
   assert_engine_rejects("slot", "recordBuffer", 8, 4, 1, 0, 0, 0, 0, 0, 0)
   engine.clearBuffer(0); engine.clearBuffer(7)
-  -- sources are 0 (synth), 1..numBuffers, numBuffers + 1 (input)
-  assert_engine_rejects("source", "setGrainSource", 0, 10)
+  -- sources are 0 (synth), 1..numBuffers, numBuffers + 1 (input), then (3.8) a voice source a voice
+  assert_engine_rejects("source", "setGrainSource", 0, engine_spec.voice_source_first + engine_spec.num_voices)
   assert_engine_rejects("source", "setGrainSource", 0, -1)
-  engine.setGrainSource(0, 0); engine.setGrainSource(0, 9)
+  engine.setGrainSource(0, 0); engine.setGrainSource(0, 9); engine.setGrainSource(0, engine_spec.voice_source_first + engine_spec.num_voices - 1)
   -- mod slots are 1..3, mod sources -1 (none) or a voice
   for _, command in ipairs({"setModAmpAmt", "setModFreqAmt"}) do
     assert_engine_rejects("mod slot", command, 0, 0, 0.5)
@@ -1068,7 +1071,7 @@ end
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
   "effects", "delay", "mix", "performance", "rings", "freeze", "variation", "tuning", "loops", "record", "waveform", "positions", "modulation",
-  "envelopes", "notes", "onsets", "types", "soak" }
+  "envelopes", "notes", "onsets", "types", "outrings", "soak" }
 
 -- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them
 -- (its onDemandAreas: the soak, #131), as a set

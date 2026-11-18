@@ -399,7 +399,8 @@ end)
 -- Module path -> the global functions defined there. Later moves add a
 -- module's entry before moving its functions
 local MODULE_HOMES = {
-  ["lib/voices.lua"] = { "voice_uses_synth", "voice_uses_buffer", "voice_source_label", "voice_buffer_slot" },
+  ["lib/voices.lua"] = { "voice_uses_synth", "voice_uses_buffer", "voice_uses_input", "voice_uses_voice",
+    "voice_source_voice", "voice_source_label", "voice_buffer_slot" },
   ["lib/ui/frame.lua"] = { "request_redraw", "draw_frame", "start_frame_clock", "stop_frame_clock" },
   ["lib/engine_sync.lua"] = { "send_param_to_engine", "engine_param_value", "toggle_voice", "toggle_lock",
     "sync_voice_values_to_engine" },
@@ -1297,7 +1298,7 @@ end)
 -- The engine areas and their orders (the 3.2 design, §0)
 local ENGINE_AREAS = { performance = 10, voices = 20, typeWave = 21, typeAdditive = 22, typeNoise = 23,
   typeSaw = 24, typeFormant = 25, grains = 30, buffers = 40, files = 50, effects = 60, rings = 70,
-  scale = 80, variation = 90, loop = 100, freeze = 110, mix = 120, record = 130, waveform = 140, positions = 150,
+  scale = 80, variation = 90, loop = 100, freeze = 110, mix = 120, record = 130, outRings = 135, waveform = 140, positions = 150,
   modulation = 160, notes = 170, onsets = 180, envelopes = 190 }
 
 test("every engine file is named Strata*.sc and defines each strataArea method once", function()
@@ -1450,7 +1451,7 @@ local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "f
 -- six are the commands' (loadBuffer, clearBuffer, saveBuffer, recordBuffer,
 -- stopRecord, setBypass); the last three are the onsets pass's
 -- (analyzeBuffer's analyzeSlot, its fork's runOnsetPass and writeOnsetsFile)
-local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "inputHeadFrame", "gateVoice",
+local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "ringHeadFrame", "gateVoice",
   "replaceVoiceType", "switchVoiceType",
   "voiceSynthFreed", "prepareTake", "startFastLfo", "watchFastLfo", "watchFastEnv",
   "loadSlot", "clearSlot", "saveSlot", "recordSlot", "stopRecordSlot", "setEffectBypass",

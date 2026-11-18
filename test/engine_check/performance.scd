@@ -98,6 +98,12 @@ check.((engine.tryPerform(\fixedBufferBytes, 48000) == 13733888)
         + (4 * 16384)) * 4) },
     "performance: fixedBufferBytes at 48 kHz is 13733888 (the delay's two lines of 262144 frames, seven output rings of 4 s a channel pair, a window bank of 122880 frames, a wavetable bank of 32768 and shimmer's four rings of 16384; got %)".format(
         engine.tryPerform(\fixedBufferBytes, 48000)));
+// ... its output rings' term is what the out rings area allocated (3.8,
+// package 1d; scaled to 48 kHz)
+check.((engine.areaState[\outRings][\left] ++ engine.areaState[\outRings][\right]).collect(_.numFrames).sum * 4 * 48000 / server.sampleRate
+    == (engine.numVoices * 2 * engine.outRingSeconds * 48000 * 4),
+    "performance: fixedBufferBytes' output-ring term is what the out rings area allocated (% buffers)".format(
+        (engine.areaState[\outRings][\left] ++ engine.areaState[\outRings][\right]).size));
 // ... and its delay term is what the effects area allocated
 check.((engine.tryPerform(\delayLine) !? { arg line; line.collect(_.numFrames).sum * 4 })
     == (2 * (engine.tryPerform(\delayLineFrames) ? 0) * 4) and: { engine.tryPerform(\delayLineFrames) == 262144 },

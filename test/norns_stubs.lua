@@ -255,6 +255,9 @@ end
 --   note_pool_max             slots per voice and the pool's largest size
 --   num_env_routes            numEnvRoutes { ^N }: 3.7's envelope routes
 --   input_source              inputSource { ^numBuffers + N }
+--   voice_source_first        voiceSourceFirst { ^numBuffers + N }: 3.8's first
+--                             voice source (setGrainSource takes up to it +
+--                             num_voices - 1)
 --   synthdef_controls[def]    the SynthDef's `arg a, b=1, ...;` (or |...|) names
 --   synthdef_defaults[def]    its arguments' numeric defaults (b = 1)
 --   control_limits[def][c]    {low, high}: a control the SynthDef body clips
@@ -452,6 +455,8 @@ function stubs.engine_spec_from_source(source)
   }
   local input_offset = tonumber(source:match("inputSource%s*{%s*%^%s*numBuffers%s*%+%s*(%d+)%s*}"))
   spec.input_source = spec.num_buffers and input_offset and (spec.num_buffers + input_offset)
+  local voice_offset = tonumber(source:match("voiceSourceFirst%s*{%s*%^%s*numBuffers%s*%+%s*(%d+)%s*}"))
+  spec.voice_source_first = spec.num_buffers and voice_offset and (spec.num_buffers + voice_offset)
 
   for name, position in source:gmatch("SynthDef%(%s*\\([%w_]+)%s*,%s*{()") do
     local rest = source:sub(position)
@@ -582,6 +587,7 @@ function stubs.engine_spec_problems(spec)
   need(spec.tuning_max_tones and spec.tuning_min_period and spec.tuning_max_period,
     "tuningMaxTones, tuningMinPeriod and tuningMaxPeriod { ^N }")
   need(spec.input_source, "inputSource { ^numBuffers + N }")
+  need(spec.voice_source_first, "voiceSourceFirst { ^numBuffers + N }")
   need(#spec.voice_type_defs > 0, "voiceTypeDefs { ^#[...] }")
   need(next(spec.grain_params), "the grain SynthDefs (grainDefs: [predicate -> \\name, ...])")
   return problems
@@ -685,7 +691,10 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     setGrainParam = function(args)
       return voice(args) or named_param(args, spec.grain_params, "the grain SynthDefs")
     end,
-    setGrainSource = function(args) return voice(args) or range("source", args[2], 0, spec.input_source) end,
+    -- 3.8: 0 synth, 1..numBuffers slots, the input, then a voice source a voice
+    setGrainSource = function(args)
+      return voice(args) or range("source", args[2], 0, spec.voice_source_first + spec.num_voices - 1)
+    end,
     clearBuffer = slot, stopRecord = slot,
     -- 3.7's transients pass: slot 0-7 (the engine ignores another, with one line)
     analyzeBuffer = slot,

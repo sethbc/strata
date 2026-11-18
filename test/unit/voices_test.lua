@@ -159,4 +159,58 @@ test("is_synth_key is a voice's param_order", function()
   assert_true(not S.lib.voices.is_synth_key(0, "freq") and not S.lib.voices.is_synth_key(8, "freq"), "no such voice")
 end)
 
+-- 3.8 (package 1d): voices as sources. The source list's names and the
+-- constants' own values, pinned once here; every other test reads the names
+test("the source list is synth, the buffers, input, then voice 1 to voice 7", function()
+  load_strata()
+  local C = local_value("S").constants
+  assert_equal(C.SOURCE_SYNTH, 1); assert_equal(C.SOURCE_INPUT, 10); assert_equal(C.SOURCE_VOICE_FIRST, 11)
+  assert_equal(#C.SOURCE_OPTIONS, 17)
+  local expected = {"synth"}
+  for slot = 1, C.NUM_BUFFERS do expected[#expected + 1] = "buf " .. slot end
+  expected[#expected + 1] = "input"
+  for voice = 1, C.NUM_VOICES do expected[#expected + 1] = "voice " .. voice end
+  assert_equal(table.concat(C.SOURCE_OPTIONS, ","), table.concat(expected, ","))
+  assert_equal(C.SOURCE_VOICE_FIRST, C.SOURCE_INPUT + 1, "the voice sources follow the input")
+end)
+
+test("exactly one source predicate holds for each of the 17 options", function()
+  load_strata()
+  local C = local_value("S").constants
+  for option = 1, #C.SOURCE_OPTIONS do
+    params:set("v2_source", option)
+    local held = {}
+    for name, predicate in pairs({synth = voice_uses_synth, buffer = voice_uses_buffer, input = voice_uses_input,
+        voice = voice_uses_voice}) do
+      if predicate(2) then held[#held + 1] = name end
+    end
+    local expected = option == C.SOURCE_SYNTH and "synth" or option < C.SOURCE_INPUT and "buffer"
+      or option == C.SOURCE_INPUT and "input" or "voice"
+    assert_equal(table.concat(held, ","), expected, "option " .. option .. " (" .. C.SOURCE_OPTIONS[option] .. ")")
+  end
+end)
+
+test("voice_source_voice and voice_source_label", function()
+  load_strata()
+  local C = local_value("S").constants
+  for option = 1, #C.SOURCE_OPTIONS do
+    params:set("v3_source", option)
+    local read = option >= C.SOURCE_VOICE_FIRST and option - C.SOURCE_VOICE_FIRST + 1 or nil
+    assert_equal(voice_source_voice(3), read, "option " .. option .. "'s read voice")
+    assert_equal(voice_source_label(3), read and ("v" .. read) or C.SOURCE_OPTIONS[option], "option " .. option .. "'s label")
+  end
+end)
+
+test("a voice source's faders are the grain params, then level and pan", function()
+  load_strata()
+  local C = local_value("S").constants
+  params:set("v1_source", C.SOURCE_INPUT)
+  local input = table.concat(fader_param_ids(1), ",")
+  params:set("v1_source", C.SOURCE_VOICE_FIRST + 1)
+  assert_equal(table.concat(fader_param_ids(1), ","), input, "a voice source's faders are an input voice's")
+  assert_equal(fader_param_ids(1)[1], "v1_grain_size"); assert_equal(fader_param_ids(1)[8], "v1_amp")
+  assert_equal(fader_param_ids(1)[9], "v1_pan")
+  assert_equal(main_param_id(1), "v1_grain_size", "its main param is an input voice's")
+end)
+
 end

@@ -28,7 +28,7 @@ The left column lists the voices, four at a time: each entry is the voice number
 ## Details
 
 The right column shows the selected voice:
-- its full name and its source on the right (`synth`, `buf 1`-`buf 8`, `input`). A long name is shortened where it would run into the source. A `~` after the name (`RESONAT~`) says the engine is moving the voice: an LFO that is on and runs in the engine on one of its grain pitch, buffer position, grain size, voice filter cutoff or level, scatter (which leaves a locked voice alone) or a routing of the modulation matrix ([MOD](mod.md)). These move the sound around your settings, so the values below stay as you set them;
+- its full name and its source on the right (`synth`, `buf 1`-`buf 8`, `input`, or `v1`-`v7` for a voice that grains a voice's sound). A long name is shortened where it would run into the source. A `~` after the name (`RESONAT~`) says the engine is moving the voice: an LFO that is on and runs in the engine on one of its grain pitch, buffer position, grain size, voice filter cutoff or level, scatter (which leaves a locked voice alone) or a routing of the modulation matrix ([MOD](mod.md)). These move the sound around your settings, so the values below stay as you set them;
 - `ON` or `OFF`, then `[L]` when locked and `[T]` when its grains are in triggered mode. Last comes `[F]` while the voice's audio is frozen: its grains keep playing the same few seconds (freeze is on the [VOICE](voice.md) page, the grid and MIDI);
 - three fields, each with its unit. The cursor (`>`) marks the one E3 adjusts:
   - the main parameter, then grain size (`size`, seconds) and grain density (`dens`, grains per second). The main parameter is:
@@ -40,7 +40,7 @@ The right column shows the selected voice:
     - Karplus: decay time (`decay`)
     - Ring: frequency ratio (`ratio`)
     - any voice whose source is a buffer: buffer position (`pos`)
-  - a voice whose source is the input: grain size, grain density and grain pitch (`pitch`, a ratio).
+  - a voice whose source is the input or a voice: grain size, grain density and grain pitch (`pitch`, a ratio).
 
 Locking a voice doesn't dim its values: they can still be edited. The voice's crossmod sources are on the [VOICE](voice.md) page.
 

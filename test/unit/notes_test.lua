@@ -1624,4 +1624,20 @@ test("only lib/notes.lua sends the own region's grain params", function()
   assert_equal(table.concat(found, "; "), "", "the own region's sends")
 end)
 
+-- 3.8 (package 1d): an extra note on a voice source is an input voice's
+-- note: its rate from 60, as its grain pitch
+test("an extra note on a voice source plays its rate as an input voice's", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_source", S.constants.SOURCE_VOICE_FIRST + 1)
+  assert_near(S.lib.notes.note_values(1, 72).rate, 2, 1e-9, "72 is rate 2, from 60")
+  play(context, 1, 1, 60)
+  assert_near(params:get("v1_grain_pitch"), 1, 1e-9, "the own note at 60 plays grain pitch 1")
+  context.clear_engine_calls()
+  play(context, 1, 2, 67)
+  local on = context.calls_named("noteOn")
+  assert_equal(#on, 1, "an extra note")
+  assert_near(on[1].args[5], 2 ^ (7 / 12), 1e-9, "67 over 60")
+end)
+
 end

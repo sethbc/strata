@@ -163,8 +163,8 @@ test("only an input voice's VOICE rows show history", function()
     end
     params:set(prefix .. "_source", S.constants.SOURCE_INPUT)
     local outline = row_ids(voice_idx)
-    assert_true(outline:find("input input:" .. prefix .. "_history grain ", 1, true),
-      prefix .. " on the input: an input section with history, before grain: " .. outline)
+    assert_true(outline:find("input input:" .. prefix .. "_history input:" .. prefix .. "_input_channel grain ", 1, true),
+      prefix .. " on the input: an input section with history and (3.8) the channel, before grain: " .. outline)
   end
 end)
 
@@ -248,6 +248,63 @@ test("history's randomize draws 0 to the tier's history, uniform (#557)", functi
     assert_true(low < tier.seconds * 0.05 and high > tier.seconds * 0.95, tier.name .. ": spans its range")
     assert_true(below_middle > 160 and below_middle < 240, tier.name .. ": uniform (" .. below_middle .. " of 400 below the middle)")
   end
+end)
+
+-- 3.8 (package 1d): the input channel, the history record's second param
+test("v<i>_input_channel: stereo, left or right, sent as inputChannel 0-2, a discrete scene key, a row on an input voice only", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local param = params:lookup_param("v1_input_channel")
+  assert_true(param ~= nil, "each voice has an input channel")
+  assert_equal(table.concat(param.options, ","), "stereo,left,right")
+  assert_equal(params:get("v1_input_channel"), 1, "stereo by default")
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  context.clear_engine_calls()
+  for _, option in ipairs({2, 3, 1}) do  -- (from stereo: a change each time)
+    params:set("v1_input_channel", option)
+    local sent = {}
+    for _, call in ipairs(context.calls_named("setGrainParam")) do
+      if call.args[2] == "inputChannel" then table.insert(sent, call) end
+    end
+    assert_equal(sent[#sent] and sent[#sent].args[1], 0, "to engine voice 0")
+    assert_equal(sent[#sent] and sent[#sent].args[3], option - 1, "option " .. option .. " sent as " .. (option - 1))
+  end
+  local record
+  for _, each in ipairs(S.registry.voice_params) do if each.name == "history" then record = each end end
+  assert_equal(record.scene_defaults.input_channel, 1, "a scene lacking it fills stereo")
+  assert_equal(table.concat(record.discrete.input_channel, ","), "1,3", "a discrete key, 1 to 3")
+  params:set("v2_source", S.constants.SOURCE_INPUT)
+  params:set("v2_input_channel", 3)
+  capture_scene(1)
+  assert_equal(S.scenes[1].data.voices[2].values.input_channel, 3, "the scene captures it")
+  -- the row: on an input voice, after history; nowhere else
+  local outline = row_ids(2)
+  assert_true(outline:find("input input:v2_history input:v2_input_channel grain ", 1, true),
+    "the input section holds history, then the channel: " .. outline)
+  for _, source in ipairs({S.constants.SOURCE_SYNTH, S.constants.SOURCE_SYNTH + 1, S.constants.SOURCE_VOICE_FIRST + 2}) do
+    params:set("v2_source", source)
+    assert_true(not row_ids(2):find("input_channel", 1, true), "no channel row on source " .. source .. ": " .. row_ids(2))
+  end
+end)
+
+test("a start sends inputChannel before voiceOn", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  params:set("v3_source", S.constants.SOURCE_INPUT)
+  params:set("v3_input_channel", 2)
+  context.clear_engine_calls()
+  toggle_voice(3)
+  local channel_at, on_at
+  for index, call in ipairs(context.engine_calls) do
+    if call.name == "setGrainParam" and call.args[1] == 2 and call.args[2] == "inputChannel" then
+      channel_at = channel_at or index
+      assert_equal(call.args[3], 1, "left")
+    end
+    if call.name == "voiceOn" and call.args[1] == 2 then on_at = on_at or index end
+  end
+  assert_true(channel_at and on_at and channel_at < on_at, "the channel before voiceOn")
 end)
 
 end

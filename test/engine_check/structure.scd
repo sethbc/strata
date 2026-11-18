@@ -78,14 +78,16 @@ var childrenOf = { arg group;
 // as freed)
 var engineLeft = { arg target;
     var rings = target.areaState[\rings], record = target.areaState[\record], mix = target.areaState[\mix];
+    var outRings = target.areaState[\outRings] ? ();
     var buses = [target.inputBus, target.silentBus, target.mainBus, target.filterBus, target.delayBus, target.reverbBus]
         ++ target.granBuses ++ target.modBuses ++ target.recordFrameBuses ++ (rings[\phaseBuses] ? [])
+        ++ (outRings[\phaseBuses] ? [])
         ++ (record[\headBuses] ? []) ++ (record[\voiceTaps] ? []) ++ [record[\tapSink], record[\idleHead]]
         ++ [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].collect({ arg name; mix[name] })
         ++ (mix[\synthPaths] ? []) ++ (mix[\otherPaths] ? []);
     var buffers = (target.areaState[\grains][\windowBank] ? []) ++ target.buffersL ++ target.buffersR
         ++ (rings[\voiceL] ? []) ++ (rings[\voiceR] ? []) ++ [rings[\inputL], rings[\inputR], target.areaState[\scale][\buffer]]
-        ++ (target.areaState[\waveform][\peakBuffers] ? []);
+        ++ (target.areaState[\waveform][\peakBuffers] ? []) ++ (outRings[\left] ? []) ++ (outRings[\right] ? []);
     [childrenOf.(target.context.xg).size, buses.count({ arg bus; bus.notNil and: { bus.index.notNil } }),
         buffers.count({ arg buffer; buffer.notNil and: { buffer.bufnum.notNil } })]
 };
@@ -367,7 +369,7 @@ check.(true, "commands on a never-started voice do not throw (M6)");
 // Node ordering inside context.xg (M5)
 h.startAllVoices;
 // (the record area's tap group, after the master, is checked below with xg's own nodes)
-names = synthNames.(context.xg).reject({ arg name; [\strataTapPreMaster, \strataRecord].includes(name) });
+names = synthNames.(context.xg).reject({ arg name; [\strataTapPreMaster, \strataRecord, \strataOutRingWrite].includes(name) });
 voiceNames = names.select({ arg name; voiceDefs.includes(name) });
 grainIndices = names.collect({ arg name, index; if (grainDefs.includes(name) or: { name == \strataMod }) { index } }).reject(_.isNil);
 firstGrain = grainIndices.minItem;
@@ -506,6 +508,11 @@ check.((other.areaState[\record][\headBuses] ++ other.areaState[\record][\voiceT
         ++ [other.areaState[\record][\tapSink], other.areaState[\record][\idleHead]]).every({ arg bus; bus.index.isNil })
     and: { other.areaState[\waveform][\peakBuffers].every({ arg buffer; buffer.bufnum.isNil }) },
     "structure: free frees the head buses, the voice taps and the peak buffers");
+// (3.8) the output rings, their phase buses and their writers
+check.((other.areaState[\outRings][\left] ++ other.areaState[\outRings][\right]).every({ arg buffer; buffer.bufnum.isNil })
+    and: { other.areaState[\outRings][\phaseBuses].every({ arg bus; bus.index.isNil }) }
+    and: { other.outRingWriterKeys.every({ arg key; other.synths[key].isNil }) },
+    "structure: free frees the output rings, their phase buses and their writers");
 // (engineLeft counts a running engine's nodes, buses and buffers, and none of a freed one's)
 check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other) == [0, 0, 0] },
     "structure: engineLeft counts what an engine holds (running %, freed %)".format(engineLeft.(engine), engineLeft.(other)));
