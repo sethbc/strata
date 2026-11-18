@@ -385,13 +385,13 @@ end
 
 ## Usage
 
-Manual performance, from grid page 3 (the 256's and 128h's scenes 1-16 on columns 1-16):
+Manual performance, from grid page 3 (`lib/grid/pages/scenes.lua`, `docs/notes/lua/grid/pages/scenes.md`: scenes 1-16 on x 1-16 of lines 1 and 2):
 1. Build a sound.
-2. Hold a row 3 button for half a second (`scene_save_seconds`) to save it to a scene slot.
+2. Hold SV (line 7, x 2) and press a line 1 or 2 key to save it to a scene slot.
 3. Change parameters.
 4. Save to another slot.
-5. Press row 1 buttons to switch between scenes instantly.
-6. Press row 2 buttons to crossfade between scenes.
+5. Press line 1's keys to switch between scenes instantly.
+6. Press line 2's keys to crossfade between scenes.
 
 On the screen, SCENES does the same for one bank of eight at a time and names the slots (ALT+K2, `docs/notes/lua/pages/scenes.md`).
 

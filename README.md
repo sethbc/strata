@@ -17,7 +17,7 @@ This is version 3.7.0. [CHANGELOG.md](CHANGELOG.md) says what each release chang
 - Waveforms and playheads on the BUFFER page; position jumps, loops and four bookmarks per voice on every grid (and bookmark recalls on the BUFFER page); arc scrubbing that glides on with a set friction
 - Per-voice freeze, grain variation (reverse, jitter, intervals), scale quantize and loop regions
 - Cross-modulation between voices, six global LFOs (the fast ones run in the engine) and probability-based mutations
-- Sixteen macros, a morph between two scenes or four (an XY pad on the 16×16 grid), scatter, gesture recorders and a sixteen-routing modulation matrix on the MOD page, with the live input's level as a source
+- Sixteen macros, a morph between two scenes or four (its X and Y on every grid's scenes page), scatter, gesture recorders and a sixteen-routing modulation matrix on the MOD page, with the live input's level as a source
 - A filter and delay and reverb sends per voice; filter, delay, reverb and a limiter on the master output
 - Sixteen named scenes in two banks, with smooth recall and a scene sequencer; actions that can wait for the beat or bar
 - Mute and solo for every voice

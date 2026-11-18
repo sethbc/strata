@@ -11,7 +11,11 @@ The grid has no LFO controls; the LFOs live on the screen's LFO page, the arc's 
 Since 3.8 every grid is built on one model. A **pane** is seven lines of sixteen keys, with a **strip** of fixed keys; a line is a voice on the pages that are per voice, line 1 voice 1. A pane shows one of seven **pages**, the same on every size:
 
 1. [Patterns](grid/pages/patterns.md) - seven lines of sixteen steps
-2. faders, 3. scenes, 4. sources, 5. positions, 6. voices, 7. FX - coming in the rest of 3.8: until then their page keys are dark and do nothing, and only the patterns page is filled
+2. faders - coming in the rest of 3.8
+3. [Scenes](grid/pages/scenes.md) - recall and save the sixteen scenes, the morph's corners and its X and Y, the scene sequencer and the gesture recorders
+4. sources, 5. positions, 6. voices, 7. FX - coming in the rest of 3.8
+
+Until a page arrives its page key is dark and does nothing.
 
 The sizes, one page each:
 
