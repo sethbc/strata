@@ -1149,9 +1149,9 @@ test("every CI job has a timeout", function()
       jobs[current].text = (jobs[current].text or "") .. line .. "\n"
     end
   end
-  -- lua-suite runs one Lua suite a runner (Lua 5.3 and LuaJIT in parallel);
-  -- lua gathers them, as engine gathers the shards
-  local expected = { ["lua-suite"] = 15, lua = 5, ["engine-shard"] = 21, engine = 5 }
+  -- lua-suite runs one shard of a Lua suite a runner, in parallel on its
+  -- cores (3.8's package x5); lua gathers them, as engine gathers the shards
+  local expected = { ["lua-suite"] = 10, lua = 5, ["engine-shard"] = 21, engine = 5 }
   for _, name in ipairs(order) do
     assert_true(jobs[name].minutes ~= nil, "job " .. name .. " has a timeout-minutes at its own indent")
     assert_true(expected[name] ~= nil, "job " .. name .. " has no expected timeout in this test")
@@ -1232,6 +1232,86 @@ test("every action the workflow uses is pinned by a full commit, its version in 
     "a tag, a short commit and a commit with no version are found, and only those")
   local workflow = read_repo_file(".github/workflows/test.yml")
   assert_equal(table.concat(CI_WORKFLOW.unpinned_actions(workflow), " | "), "", "the workflow's unpinned actions")
+end)
+
+-- What is wrong with a shard list's text (the items between the brackets
+-- of lua-suite's `shard: [...]` line): an item that is not "K/N", counts
+-- that differ, a shard missing or repeated. Empty when it is 1/N .. N/N
+function CI_WORKFLOW.shard_problems(list)
+  local problems, seen, count, items = {}, {}, nil, 0
+  for item in (list .. ","):gmatch("%s*([^,]-)%s*,") do
+    items = items + 1
+    local shard, of = item:match('^"(%d+)/(%d+)"$')
+    shard, of = tonumber(shard), tonumber(of)
+    if not shard then
+      problems[#problems + 1] = "not a quoted K/N: " .. item
+    else
+      count = count or of
+      if of ~= count then problems[#problems + 1] = "a shard of another count: " .. item end
+      if seen[shard] then problems[#problems + 1] = "repeated: " .. item end
+      seen[shard] = true
+    end
+  end
+  if items == 0 or not count then return #problems > 0 and problems or { "no shard" } end
+  for shard = 1, count do
+    if not seen[shard] then problems[#problems + 1] = "missing: " .. shard .. "/" .. count end
+  end
+  for shard in pairs(seen) do
+    if shard < 1 or shard > count then problems[#problems + 1] = "out of range: " .. shard .. "/" .. count end
+  end
+  return problems
+end
+
+-- 3.8's package x5: the Lua suite runs a job per interpreter and shard of
+-- the unit files (test/run.lua --shard), each in parallel on its runner's
+-- cores, gathered by the lua job; the sync check runs once a run
+test("CI's Lua suite jobs run each shard of the unit files under each interpreter, the sync check once", function()
+  for _, case in ipairs({ { '"1/1"', "" }, { '"1/2", "2/2"', "" }, { '"2/3", "1/3", "3/3"', "" },
+      { '"1/2"', "missing: 2/2" }, { '"1/2", "1/2", "2/2"', "repeated: \"1/2\"" }, { '"1/2", "2/3"', "a shard of another count: \"2/3\"" },
+      { '1/1', "not a quoted K/N: 1/1" }, { '"0/1", "1/1"', "out of range: 0/1" }, { "", "not a quoted K/N: " } }) do
+    assert_equal(table.concat(CI_WORKFLOW.shard_problems(case[1]), " | "), case[2], "the shard list " .. case[1])
+  end
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  local jobs = CI_WORKFLOW.jobs(workflow)
+  local suite = jobs["lua-suite"]
+  local list = suite.text:match("\n        shard:%s*%[([^%]\n]*)%]%s*\n")
+  assert_true(list ~= nil, "lua-suite's matrix names its shards on one line (shard: [...])")
+  assert_equal(table.concat(CI_WORKFLOW.shard_problems(list or ""), " | "), "", "the shards are 1/N .. N/N, each once")
+  assert_true(suite.text:find("\n      fail%-fast: false\n") ~= nil, "a failing job never cancels the others")
+  local runs, sync_steps, cores = 0, {}, false
+  for _, job in ipairs(jobs) do
+    for _, step in ipairs(job.steps) do
+      if step.text:find("test/sync_check.lua", 1, true) then sync_steps[#sync_steps + 1] = { job = job.name, step = step } end
+      if job.name == "lua-suite" and step.text:find("\n%s+run: nproc\n") then cores = true end
+      if step.text:find("test/run.lua", 1, true) then
+        runs = runs + 1
+        assert_equal(job.name, "lua-suite", "only lua-suite runs the Lua suite")
+        assert_true(step.text:find("run: ${{ matrix.lua }} test/run.lua --shard ${{ matrix.shard }}\n", 1, true) ~= nil,
+          "each job runs its shard, on the runner's cores (no --jobs): " .. step.text)
+      end
+    end
+  end
+  assert_equal(runs, 1, "one step runs the suite")
+  assert_true(cores, "lua-suite prints the runner's cores (nproc) before the suite")
+  -- the sync check: one step, run by the Lua 5.3 job of the first shard only
+  assert_equal(#sync_steps, 1, "one step runs the sync check")
+  assert_equal(sync_steps[1] and sync_steps[1].job, "lua-suite", "lua-suite runs the sync check")
+  assert_true(sync_steps[1] and sync_steps[1].step.text:find("\n%s+if: matrix%.lua == 'lua5%.3' && startsWith%(matrix%.shard, '1/'%)\n"),
+    "the sync check runs in the Lua 5.3 job of shard 1 only")
+  assert_true(suite.text:find("\n        lua: [lua5.3, luajit]\n", 1, true) ~= nil, "one Lua 5.3 and one LuaJIT job a shard")
+  -- the required lua job needs every job that runs the suite and passes only when each passed
+  local lua = jobs.lua
+  local needs = lua.text:match("\n    needs:%s*([^\n]+)\n") or ""
+  local needed = {}
+  for name in needs:gsub("[%[%]]", ""):gmatch("[%w_%-]+") do needed[name] = true end
+  for _, job in ipairs(jobs) do
+    if job.text:find("test/run.lua", 1, true) then
+      assert_true(needed[job.name], "the lua job needs " .. job.name)
+      assert_true(lua.text:find('test "${{ needs.' .. job.name .. '.result }}" = success', 1, true) ~= nil,
+        "the lua job fails unless every " .. job.name .. " job passed")
+    end
+  end
+  assert_true(lua.text:find("\n    if: always%(%)\n") ~= nil, "the lua job runs whatever the suites did")
 end)
 
 -- #785: a slow package mirror canceled three engine shards at the job's

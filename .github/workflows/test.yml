@@ -32,19 +32,37 @@ env:
   APT_NETWORK_OPTIONS: -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
 
 jobs:
-  # The behavior tests run once per interpreter, each on its own runner, so
-  # the job takes about as long as the slower suite instead of both in turn
-  # (at 3.4.0, about 5 and 4.5 minutes; together they took 9.5 of the 15)
+  # The behavior tests run once per interpreter and shard, each job on its
+  # own runner, and each runs its unit files in parallel on the runner's
+  # cores (test/run.lua: as many processes as nproc, at most 8). Run in one
+  # process each suite took 9 to 11 minutes (run 44224340612: 8 min 58 s on
+  # Lua 5.3, 10 min 47 s on LuaJIT), twice an engine shard's 3.5 to 5.5.
+  # On a 32-core machine at 3.8's package x5 the suite took 7.5 to 8 minutes
+  # in one process and 2.3 to 2.4 in 4, and no count of processes takes it
+  # under its slowest file (ui_layout_test.lua, about 2 minutes there). CI
+  # ran the one-process suite in 1.25 (Lua 5.3) to 1.6 (LuaJIT) times that
+  # machine's time (docs/checks.md, The Lua jobs and their times)
   lua-suite:
-    name: lua (${{ matrix.lua }})
-    # Covers the apt install and one suite (about 5 minutes); the default is 360
-    timeout-minutes: 15
+    name: lua (${{ matrix.lua }}, ${{ matrix.shard }})
+    # The whole suite on 4 cores: about 144 s there x 1.6 = 4 minutes, plus
+    # about 1 for checkout and the install. 10 covers twice that, or the
+    # whole suite on 2 cores (248 s x 1.6 = 6.6 minutes) with the install's
+    # own 3; the default is 360
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
-      # norns runs Lua 5.3 (matron links lua53); LuaJIT catches 5.1-isms
       matrix:
+        # norns runs Lua 5.3 (matron links lua53); LuaJIT catches 5.1-isms
         lua: [lua5.3, luajit]
+        # The shards of the unit files (test/run.lua --shard K/N; every file
+        # in exactly one, test/unit/docs_test.lua checks the list is whole).
+        # One shard while the runner has 4 cores (the aim: no Lua job over 5
+        # minutes). If nproc says 2, or a job's Behavior tests take over 4
+        # minutes, make it ["1/2", "2/2"] (at 2 processes there the shards
+        # took 130 and 117 s); more gain little, since shard 1 holds
+        # ui_layout_test.lua
+        shard: ["1/1"]
     steps:
       # Pinned by commit (a tag can move). To move it: `gh api repos/actions/checkout/releases/latest`
       # names the newest release, its tag's commit goes here with the version in the comment (#533)
@@ -62,11 +80,16 @@ jobs:
           sudo apt-get $APT_NETWORK_OPTIONS update
           sudo apt-get $APT_NETWORK_OPTIONS install -y lua5.3 luajit
 
-      - name: Behavior tests
-        run: ${{ matrix.lua }} test/run.lua
+      # The run's processes are the runner's cores: the log says how many
+      - name: The runner's cores
+        run: nproc
 
+      - name: Behavior tests
+        run: ${{ matrix.lua }} test/run.lua --shard ${{ matrix.shard }}
+
+      # Once a run: in the Lua 5.3 job of shard 1
       - name: Lua / engine command sync check
-        if: matrix.lua == 'lua5.3'
+        if: matrix.lua == 'lua5.3' && startsWith(matrix.shard, '1/')
         run: lua5.3 test/sync_check.lua
 
   # The required status check: passes only when both suites passed (a
