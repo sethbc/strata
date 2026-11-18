@@ -187,6 +187,59 @@ test("the tuning row: E3 moves a dim pending choice and K3 applies it; a refused
   assert_true(hint_text(context):find("count", 1, true) ~= nil, "its reason in the editor's hints: " .. hint_text(context))
 end)
 
+-- Fix round 1: a file's name is drawn printable (#551) and fits
+test("a tuning file's name with a non-ASCII byte draws printable and fits", function()
+  local context, S, editor = loaded()
+  local folder = _path.data .. S.lib.tuning.TUNING.folder
+  h.write_text(folder .. "caf\195\169 tuning.scl", "Cafe\n1\n2/1\n")
+  editor.close(); editor.open()
+  enc(2, 3); enc(3, 100)
+  next_frame(context)
+  assert_equal(row(context, "tuning"), "tuning cafe tuning", "drawn as norns' font can draw it")
+  assert_screen_layout(context, "a non-ASCII file name")
+end)
+
+-- Fix round 1: one rule names a file's choice and its tuning (the extension
+-- matched without case, cut to name_max), so after a file is applied E3
+-- steps on from it
+test("E3 steps on from an applied file, whatever its name's length or extension's case", function()
+  local context, S, editor = loaded()
+  local folder = _path.data .. S.lib.tuning.TUNING.folder
+  local long = string.rep("a", 30)
+  h.write_text(folder .. long .. ".scl", "Long\n1\n2/1\n")
+  h.write_text(folder .. "b.SCL", "Upper\n1\n2/1\n")
+  editor.close(); editor.open()
+  enc(2, 3)
+  local built_ins = #S.lib.tuning.built_ins()
+  enc(3, built_ins)  -- from 12 equal to the first file
+  next_frame(context)
+  tap(3)
+  assert_equal(params:get("tuning_name"), string.rep("a", S.lib.tuning.TUNING.name_max), "the long file, its name cut")
+  enc(3, 1)
+  next_frame(context)
+  assert_equal(row(context, "tuning"), "tuning b", "E3 steps on from the long file to b (.SCL dropped)")
+  tap(3)
+  assert_equal(params:get("tuning_name"), "b", "b applied")
+  enc(3, -1)
+  next_frame(context)
+  local text = row(context, "tuning")
+  assert_true(text:find("aaaa", 1, true) ~= nil, "E3 back from b reaches the long file: " .. text)
+end)
+
+-- Fix round 1 (#419): with ALT held E3 still acts (no row has a fine
+-- step), K2 and K3 do not: the hints say so
+test("with ALT held the hints name E2 and E3, as the keys act", function()
+  local context, S, editor = loaded()
+  key(1, 1)
+  next_frame(context)
+  assert_equal(hint_text(context), "E2:row E3:value", "root, ALT held")
+  enc(3, 2)
+  assert_equal(params:string("root"), "D", "E3 acts with ALT held")
+  tap(2)
+  assert_true(editor.is_open(), "K2 does nothing with ALT held")
+  key(1, 0)
+end)
+
 test("the editor's every state stays inside the layout", function()
   local context, S, editor = loaded()
   params:set("scale", option_index("scale", "Gagaku Rittsu Sen Pou"))
@@ -203,7 +256,8 @@ test("the editor's every state stays inside the layout", function()
   for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.SETUP].layout_states) do names[state.name] = true end
   for _, name in ipairs({ "scale & tuning editor, root", "scale & tuning editor, the widest scale",
       "scale & tuning editor, every class in", "scale & tuning editor, the longest tuning",
-      "scale & tuning editor, a long file name", "scale & tuning editor, 19 equal",
+      "scale & tuning editor, a long file name", "scale & tuning editor, a non-ASCII file name",
+      "scale & tuning editor, 19 equal",
       "scale & tuning editor, a pending choice", "scale & tuning editor, a refused file" }) do
     assert_true(names[name], "SETUP's layout state: " .. name)
   end

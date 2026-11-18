@@ -385,6 +385,16 @@ return function(S)
 
   local function folder() return _path.data .. TUNING.folder end
 
+  -- A file's tuning name: the file's name without its extension (matched
+  -- without case), its control characters dropped (a PSET line stays one
+  -- line), cut to name_max. The editor names a file's choice by it too
+  function M.file_tuning_name(file)
+    local name = file:gsub("%.([^./]+)$", function(extension)
+      if extension:lower() == TUNING.extension then return "" end
+    end)
+    return (name:gsub("%c", ""):sub(1, TUNING.name_max))
+  end
+
   -- The .scl files in the tunings folder, sorted by name (none when it is
   -- missing)
   function M.files()
@@ -409,8 +419,7 @@ return function(S)
     file:close()
     local period, tones = M.parse_scl(text)
     if not period then return refuse(tones) end
-    local shown = name:gsub("%." .. TUNING.extension .. "$", ""):gsub("%c", ""):sub(1, TUNING.name_max)
-    return {name = shown, period = period, tones = tones}
+    return {name = M.file_tuning_name(name), period = period, tones = tones}
   end
 
   ---------------------------------------------------------------------------
