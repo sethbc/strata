@@ -121,7 +121,7 @@ jobs:
   # buffers and notes the means of three runs at 3.7, where buffers had lost its fixed waits after a load and after a recording, #706 and #718). The
   # slowest shard is lifecycle, files, positions and notes, about 236 s of areas (239 s with its
   # sclang's start in the slowest of those three runs), far under each shard's 570 s; the other six
-  # take 141-167 s. In those runs every shard passed.
+  # take 141-176 s. In those runs every shard passed.
   # memory runs first in its shard (areaOrder), so CI's memory figures are the area's alone.
   # Since #652 the areas no longer depend on each other's order, so the grouping is a
   # choice for the times alone; files and structure share no shard only because this
