@@ -34,20 +34,32 @@ return function(S)
     reference_octave = 60,             -- buffer and input voices: scaleNote is root + 60
     semitones = 12,
     a4_note = 69, a4_freq = 440,
+    -- 3.8: the scale held as a mask (scale_mask), the last scale option,
+    -- tested for by name (ruling 39); the mask's range
+    custom_scale = "custom", mask_range = {1, 4095},
   }
   local V = M.VARIATION
 
-  -- The global scale options: off, then musicutil's scales by name
+  -- The global scale options: off, then musicutil's scales by name, then
+  -- custom (3.8: appended, so no saved index moves)
   function M.scale_options()
     local options = {"off"}
     for _, scale in ipairs(musicutil.SCALES) do table.insert(options, scale.name) end
+    table.insert(options, V.custom_scale)
     return options
   end
 
-  -- The musicutil scale the scale param picks, or nil while it is off
+  -- Whether the scale param picks custom (by its name, ruling 39)
+  function M.scale_is_custom()
+    local param = params:lookup_param("scale")
+    return param.options[params:get("scale")] == V.custom_scale
+  end
+
+  -- The musicutil scale the scale param picks, or nil while it is off or
+  -- custom
   local function current_scale()
     local index = params:get("scale")
-    if index <= 1 then return nil end
+    if index <= 1 or M.scale_is_custom() then return nil end
     return musicutil.SCALES[index - 1]
   end
 
@@ -60,6 +72,7 @@ return function(S)
   -- above it); the chromatic mask while the scale is off
   -- (arithmetic, not Lua 5.3's bit operators: the tests also run on LuaJIT)
   function M.scale_mask()
+    if M.scale_is_custom() then return params:get("scale_mask") end
     local scale = current_scale()
     if not scale then return V.chromatic_mask end
     local classes, mask = {}, 0
@@ -68,21 +81,15 @@ return function(S)
     return math.floor(mask)
   end
 
-  -- Whether a whole MIDI note is a tone of the scale (mask: scale_mask())
-  local function is_tone(note, mask)
-    return math.floor(mask / 2 ^ ((note - M.root()) % V.semitones)) % 2 == 1
+  -- Whether a scale is on (the scale param not off)
+  function M.scale_on()
+    return params:get("scale") > 1
   end
 
-  -- The scale tone nearest a MIDI note (fractional or whole; a tie goes
-  -- down), as the engine's q(n) does for whole notes
+  -- The allowed tone nearest a MIDI note (fractional or whole; a tie goes
+  -- down): the tuning's snap (S.lib.tuning.snap, 3.8)
   function M.snap_note(note)
-    local mask = M.scale_mask()
-    local below = math.floor(note)
-    while not is_tone(below, mask) do below = below - 1 end
-    local above = math.ceil(note)
-    while not is_tone(above, mask) do above = above + 1 end
-    if above - note < note - below then return above end
-    return below
+    return S.lib.tuning.snap(note)
   end
 
   local function freq_to_note(freq) return V.a4_note + V.semitones * math.log(freq / V.a4_freq) / math.log(2) end
@@ -130,16 +137,9 @@ return function(S)
     local set = values.intervals
     if set == V.set_index.octaves then return V.octaves end
     if set == V.set_index.fifths then return V.fifths end
-    if set == V.set_index.chord then
-      local scale = current_scale()
-      if not scale then return V.chromatic_chord end
-      local notes = musicutil.generate_scale(0, scale.name, 2)
-      local chord = {}
-      for _, degree in ipairs(V.chord_degrees) do
-        if notes[degree] then table.insert(chord, notes[degree]) end
-      end
-      return chord
-    end
+    -- the chord: the tuning's (3.8 ruling 40: a scale's degrees 1, 3, 5
+    -- and 7 in twelve tones to an octave, else its tones nearest 0, 4, 7, 11)
+    if set == V.set_index.chord then return S.lib.tuning.chord() end
     if set == V.set_index.custom then
       local custom = {}
       for index = 1, #V.custom_defaults do table.insert(custom, values["custom_interval_" .. index]) end
@@ -167,21 +167,29 @@ return function(S)
     engine.setScale(M.root(), M.scale_mask())
   end
 
-  -- The freq of the scale tone nearest a note, inside the voice's freq
-  -- range (the nearest tone inside it at either end)
+  -- The freq of the allowed tone nearest a note, inside the voice's freq
+  -- range (the nearest tone inside it at either end: the tuning's snap,
+  -- then its steps, 3.8)
   local function tone_freq(voice_idx, note)
     local low, high = param_range("v" .. voice_idx .. "_freq")
-    local mask = M.scale_mask()
-    local tone = M.snap_note(note)
-    while note_to_freq(tone) > high do
-      tone = tone - 1
-      while not is_tone(tone, mask) do tone = tone - 1 end
-    end
-    while note_to_freq(tone) < low do
-      tone = tone + 1
-      while not is_tone(tone, mask) do tone = tone + 1 end
-    end
+    local tuning = S.lib.tuning
+    local tone = tuning.snap(note)
+    while note_to_freq(tone) > high do tone = tuning.step(tone, -1) end
+    while note_to_freq(tone) < low do tone = tuning.step(tone, 1) end
     return note_to_freq(tone)
+  end
+
+  -- How far a turn moves the shadow for each semitone of raw travel (3.8
+  -- ruling 41): min(1, the allowed tones' mean step / one detent's travel),
+  -- the detent's travel from the freq spec (its quantum of the range, in
+  -- semitones), so a dense tuning turns about one tone a detent and twelve
+  -- equal steps and every built-in scale (a mean step of a semitone or
+  -- more against 0.8) turn as before
+  local function turn_scale(voice_idx)
+    local low, high = param_range("v" .. voice_idx .. "_freq")
+    local quantum = params:lookup_param("v" .. voice_idx .. "_freq").controlspec.quantum
+    local detent = quantum * (freq_to_note(high) - freq_to_note(low))
+    return math.min(1, S.lib.tuning.mean_step() / detent)
   end
 
   -- The freq filter's state per voice: shadow[i], the unsnapped note the
@@ -207,7 +215,7 @@ return function(S)
       local low, high = param_range("v" .. voice_idx .. "_freq")
       local note = freq_to_note(value)
       if turned and shadow[voice_idx] ~= nil and previous ~= nil and previous == returned[voice_idx] then
-        shadow[voice_idx] = shadow[voice_idx] + note - freq_to_note(previous)
+        shadow[voice_idx] = shadow[voice_idx] + (note - freq_to_note(previous)) * turn_scale(voice_idx)
       else
         shadow[voice_idx] = note
       end
@@ -230,10 +238,13 @@ return function(S)
     params:set(param_id, tone_freq(voice_idx, freq_to_note(S.voices[voice_idx].values.freq)))
   end
 
-  -- A note for a MIDI note on a quantized voice: the nearest scale tone
-  function M.midi_note(voice_idx, note)
-    if M.quantizes(voice_idx) then return M.snap_note(note) end
-    return note
+  -- The pitch a MIDI key plays on a voice: the key's pitch in the tuning
+  -- (S.lib.tuning.pitch_of_key, 3.8; the key itself in twelve equal
+  -- steps), snapped to the nearest allowed tone on a quantized voice
+  function M.midi_note(voice_idx, key)
+    local pitch = S.lib.tuning.pitch_of_key(key)
+    if M.quantizes(voice_idx) then return S.lib.tuning.snap(pitch) end
+    return pitch
   end
 
   -- VOICE's layout tests and page renders: every voice with the custom
@@ -362,14 +373,29 @@ return function(S)
   -- A source change moves a buffer or input voice's reference to the root
   S.register_source_change(function(voice_idx) M.send_scale_note(voice_idx) end)
 
-  -- Every quantized voice's stored freq onto the scale (a scale or root
-  -- change), so the freq a PSET or scene captures is a tone of it; never
-  -- during a scene recall or transition, whose values stand as saved
-  local function snap_quantized_freqs()
+  -- Every quantized voice's stored freq onto the scale (a scale, root or
+  -- tuning change), so the freq a PSET or scene captures is a tone of it;
+  -- never during a scene recall or transition, whose values stand as saved
+  function M.snap_quantized_freqs()
     if S.scene_recall_in_progress or S.scene_transition_active then return end
     for voice_idx = 1, NUM_VOICES do
       if M.quantizes(voice_idx) then snap_freq(voice_idx) end
     end
+  end
+  local snap_quantized_freqs = M.snap_quantized_freqs
+
+  -- Every running chord voice's intervals again (a scale or tuning change)
+  local function send_chords()
+    for voice_idx = 1, NUM_VOICES do
+      if S.voices[voice_idx].values.intervals == V.set_index.chord then M.send_intervals(voice_idx) end
+    end
+  end
+
+  -- The tuning changed (S.lib.tuning.apply_text, 3.8): every quantized freq
+  -- snapped to it and every chord resent
+  function M.tuning_changed()
+    snap_quantized_freqs()
+    send_chords()
   end
 
   -- The global scale and root (PARAMS, before the voices, so a PSET sets
@@ -382,9 +408,7 @@ return function(S)
       action = function()
         M.send_scale()
         snap_quantized_freqs()
-        for voice_idx = 1, NUM_VOICES do
-          if S.voices[voice_idx].values.intervals == V.set_index.chord then M.send_intervals(voice_idx) end
-        end
+        send_chords()
       end}
     params:add{type = "option", id = "root", name = "root", options = musicutil.NOTE_NAMES, default = 1,
       action = function()
@@ -392,11 +416,25 @@ return function(S)
         snap_quantized_freqs()
         for voice_idx = 1, NUM_VOICES do M.send_scale_note(voice_idx) end
       end}
+    -- 3.8: the custom scale's mask, which acts only while the scale is
+    -- custom (so a scale or root change still sends one setScale)
+    params:add{type = "number", id = "scale_mask", name = "scale mask", min = V.mask_range[1], max = V.mask_range[2],
+      default = V.chromatic_mask,
+      action = function()
+        if not M.scale_is_custom() then return end
+        M.send_scale()
+        snap_quantized_freqs()
+        send_chords()
+      end}
+    -- 3.8: the tuning's two text params (lib/tuning.lua), still before every voice
+    S.lib.tuning.add_params()
   end
 
   -- Both are discrete scene globals: a transition switches them at its end
   S.register_scene_field({id = "scale", default = 1, discrete = true})
   S.register_scene_field({id = "root", default = 1, discrete = true})
+  -- 3.8: the custom scale's mask, a discrete scene global beside them
+  S.register_scene_field({id = "scale_mask", default = V.chromatic_mask, discrete = true})
 
   return M
 end

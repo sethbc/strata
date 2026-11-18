@@ -654,8 +654,8 @@
         // Hz, rate 0.25-4, velocity 0-1. The engine keeps note in the slot's
         // record (ruling 46): a ring-stream note leaving the stream takes its
         // rate from it (leaveStream, ruling 53); a buffer note's scaleNote
-        // comes from the voice's reference note and its rate (noteScaleNote);
-        // a later release's tunings will need a note's number apart from its rate
+        // comes from the voice's reference note and its rate (noteScaleNote).
+        // A tuning (3.8) needs nothing here: Lua sends each note's tuned pitch
         this.addCommand(\noteOn, "iiffff", { arg msg;
             var voice = msg[1], slot = msg[2], note, freq, rate, velocity;
             if (this.fastModIndicesValid(\noteOn, [[\voice, voice, lastVoice], [\slot, slot, lastSlot]])

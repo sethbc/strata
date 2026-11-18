@@ -150,7 +150,7 @@ jobs:
           - lifecycle,files,positions,notes
           - effects,voices
           - mix,variation,grains,structure,performance
-          - modulation,freeze,envelopes
+          - modulation,freeze,envelopes,tuning
           - memory,rings
           - record,waveform,onsets,delay
     env:

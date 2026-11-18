@@ -52,7 +52,7 @@ return function(S)
   -- listed nothing and $(...) in a name ran as a command (#465). Here the
   -- folder is one single-quoted word after --: no name is read as a
   -- command or an option
-  local function list_folder(folder)
+  function M.list_folder(folder)
     if type(folder) ~= "string" or folder:sub(1, 1) ~= "/" or folder:find("\0", 1, true)
       or not util.file_exists(folder) then
       return nil
@@ -63,20 +63,27 @@ return function(S)
     return names
   end
 
-  -- The sound files in folder, by name: not folders (ls -p marks them with
-  -- "/"), not dot files. nil for a folder that cannot be listed
-  local function sound_files(folder)
+  local list_folder = M.list_folder
+
+  -- The files in folder whose extension (lower-cased) is a key of
+  -- extensions, by name: not folders (ls -p marks them with "/"), not dot
+  -- files. nil for a folder that cannot be listed (3.8: also the tunings
+  -- folder's .scl files, lib/tuning.lua)
+  function M.files_of(folder, extensions)
     local names = list_folder(folder)
     if not names then return nil end
     local found = {}
     for _, name in ipairs(names) do
       local extension = name:match("%.([^./]+)$")
-      if name:sub(1, 1) ~= "." and name:sub(-1) ~= "/" and extension and SOUND_EXTENSIONS[extension:lower()] then
+      if name:sub(1, 1) ~= "." and name:sub(-1) ~= "/" and extension and extensions[extension:lower()] then
         found[#found + 1] = name
       end
     end
     return found
   end
+
+  -- The sound files in folder, by name (nil for a folder that cannot be listed)
+  local function sound_files(folder) return M.files_of(folder, SOUND_EXTENSIONS) end
 
   -- The flash for a folder that gave no file: it cannot be opened, or it
   -- holds no sound file. The folder as the player knows it, never its

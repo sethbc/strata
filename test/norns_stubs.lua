@@ -434,6 +434,10 @@ function stubs.engine_spec_from_source(source)
     note_pool_max = engine_number(source, "notePoolMax"),
     -- 3.7's envelopes (StrataEnvelopes.sc)
     num_env_routes = engine_number(source, "numEnvRoutes"),
+    -- 3.8's tuning (StrataScale.sc)
+    tuning_max_tones = engine_number(source, "tuningMaxTones"),
+    tuning_min_period = engine_number(source, "tuningMinPeriod"),
+    tuning_max_period = engine_number(source, "tuningMaxPeriod"),
     synthdef_controls = {},
     synthdef_defaults = {},
     control_limits = {},
@@ -575,6 +579,8 @@ function stubs.engine_spec_problems(spec)
   need(spec.note_slots, "noteSlots { ^N }")
   need(spec.note_pool_max, "notePoolMax { ^N }")
   need(spec.num_env_routes, "numEnvRoutes { ^N }")
+  need(spec.tuning_max_tones and spec.tuning_min_period and spec.tuning_max_period,
+    "tuningMaxTones, tuningMinPeriod and tuningMaxPeriod { ^N }")
   need(spec.input_source, "inputSource { ^numBuffers + N }")
   need(#spec.voice_type_defs > 0, "voiceTypeDefs { ^#[...] }")
   need(next(spec.grain_params), "the grain SynthDefs (grainDefs: [predicate -> \\name, ...])")
@@ -608,6 +614,8 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
   -- this install sees leave it: voice v starts on type v (3.8)
   local voice_types = {}
   for voice = 1, spec.num_voices do voice_types[voice] = voice - 1 end
+  -- the tuning set the last valid setTuning began (3.8): {count, period}
+  local tuning_set = nil
   local function range(what, value, low, high)
     if value < low or value > high then
       return string.format("%s %s is outside %g..%g", what, tostring(value), low, high)
@@ -710,6 +718,24 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     clearDelay = none,
     -- the engine ignores a root outside 0-11 or a mask outside 1-4095: Lua never sends one
     setScale = function(args) return range("root", args[1], 0, 11) or range("mask", args[2], 1, 4095) end,
+    -- 3.8's tuning (design §6.2), as the engine checks it, anything else
+    -- ignored there with one line: setTuning begins a set of count
+    -- 1..tuningMaxTones tones a period of tuningMinPeriod..tuningMaxPeriod
+    -- cents; setTuningTone gives tone 0..count - 1 of the set begun, its
+    -- cents from 0 to below the period
+    setTuning = function(args)
+      local problem = range("count", args[1], 1, spec.tuning_max_tones)
+        or float_range("period", args[2], spec.tuning_min_period, spec.tuning_max_period)
+      if not problem then tuning_set = {count = args[1], period = args[2]} end
+      return problem
+    end,
+    setTuningTone = function(args)
+      if not tuning_set then return "setTuningTone with no set begun (setTuning)" end
+      if args[2] < 0 or args[2] >= tuning_set.period then
+        return string.format("cents %s is outside 0 to below the period %g", tostring(args[2]), tuning_set.period)
+      end
+      return range("index", args[1], 0, tuning_set.count - 1)
+    end,
     -- 3.4's fast modulation (design §0.3), each index as the engine checks
     -- it, an out-of-range one ignored there: an engine LFO
     -- 0..numFastLfos-1 on a voice's destination 0..numFastDestinations-1

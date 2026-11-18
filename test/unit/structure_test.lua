@@ -1012,6 +1012,7 @@ local function start_steps()
     { "menu watch", { "menu watched" } },
     { "drift metro", { "metro created", "drift metro started" } },
     { "mutation metro", { "metro created" } },
+    { "tuning", {} },
     { "buffer polls", { "poll set bufferState", "poll started bufferState", "poll set bufferLoadFailed",
       "poll started bufferLoadFailed", "poll set bufferSaveResult", "poll started bufferSaveResult",
       "poll set takeWriteFailed", "poll started takeWriteFailed" } },
@@ -2202,6 +2203,26 @@ test("the engine's sample paths run no sclang function per sample (#131)", funct
   local loops = per_sample_loops((condition or "") .. (loop or ""))
   assert_equal(#loops, 0, "interleaveFiles' chunk loop runs no function per sample (found " .. table.concat(loops, ", ") .. ")")
   assert_true((loop or ""):find("this%.interleaveChunk%(") ~= nil, "each chunk goes through interleaveChunk")
+end)
+
+-- 3.8's tuning table (design §6.2): every frame is worked out by Signal
+-- primitives, the one sclang loop a while over the tones' boundaries
+test("the tuning table is built with Signal primitives (#131)", function()
+  local text
+  for _, file in ipairs(engine_files()) do
+    if file.path:match("StrataScale%.sc$") then text = file.text end
+  end
+  assert_true(text ~= nil, "the engine sources hold StrataScale.sc")
+  for _, name in ipairs({ "tuningTable", "tuningAllowed", "tuningTableMsg" }) do
+    local body = sc_method_body(text or "", name)
+    assert_true(body ~= nil, "StrataScale.sc defines " .. name)
+    local loops = per_sample_loops(body or "")
+    assert_equal(#loops, 0, name .. " runs no function per frame (found " .. table.concat(loops, ", ") .. ")")
+  end
+  local body = sc_method_body(text or "", "tuningTable") or ""
+  assert_true(body:find("while%s*{") ~= nil, "tuningTable walks the boundaries in a while loop")
+  assert_true((sc_method_body(text or "", "sendTuningTable") or ""):find("listSendMsg", 1, true) ~= nil,
+    "the table goes out as one message (listSendMsg), never Buffer.setn")
 end)
 
 -- 3.7's onsets pass (#131): the chunk loop reads each file into a fresh

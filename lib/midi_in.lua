@@ -493,8 +493,9 @@ return function(S)
   end
 
   -- One MIDI note on one voice, through the allocator (S.lib.notes.play;
-  -- key channel * 128 + note, channel 1 when not given): snapped to the
-  -- scale for a quantized voice, with velocity / 127, parking under other
+  -- key channel * 128 + note, channel 1 when not given): the key's pitch in
+  -- the tuning, snapped to the scale for a quantized voice
+  -- (S.lib.variation.midi_note, 3.8), with velocity / 127, parking under other
   -- notes, its first expression from raw = {bend, pressure, slide} (the
   -- note's slide is measured from here). The allocator starts a stopped
   -- voice and accents the own note; a gated voice gets its own gate length

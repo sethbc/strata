@@ -160,6 +160,7 @@ local START_ORDER = {
   menu_watch = 30,       -- lib/ui/menu_watch.lua: forget held keys as the menu opens
   drift_metro = 40,      -- lib/mutation.lua: created and started
   mutation_metro = 50,   -- lib/mutation.lua: created; its param starts it
+  tuning = 55,           -- lib/tuning.lua: the tunings folder made; nothing sent (3.8)
   buffer_polls = 60,     -- lib/buffers.lua: bufferState, bufferLoadFailed and bufferSaveResult
   samples_load = 61,     -- lib/samples.lua: samples.data, a file's settings (3.7; before buffers_load)
   input_level = 62,      -- lib/input_level.lua: the input level polls (3.4)

@@ -809,4 +809,112 @@ test("a frozen synth voice's scaleNote is its freeze reference, whatever freq", 
   assert_near(last_grain(context, 0, "scaleNote"), note_of(330), 1e-9, "the unfreeze resends the stored freq's")
 end)
 
+-- 3.8 (design §6): the tuning reaches every site ---------------------------
+
+local function select_tuning(name)
+  local tuning = local_value("lib").tuning
+  for _, entry in ipairs(tuning.built_ins()) do
+    if entry.name == name then return tuning.select(entry) end
+  end
+  error("no built-in tuning " .. name)
+end
+
+test("a MIDI key in 19 equal plays its degree", function()
+  local context = load_strata()
+  finish_startup(context)
+  select_tuning("19 equal")
+  context.midi.send(1, { type = "note_on", note = 61, vel = 100, ch = 1 })
+  assert_near(params:get("v1_freq"), freq_of(60 + 12 / 19), 1e-3, "key 61 is one 19th of an octave above C4")
+  context.midi.send(1, { type = "note_off", note = 61, vel = 0, ch = 1 })
+  params:set("v1_quantize", 1)
+  context.midi.send(1, { type = "note_on", note = 79, vel = 100, ch = 1 })
+  assert_near(params:get("v1_freq"), freq_of(72), 1e-3, "key 79 is the octave, quantized onto itself")
+end)
+
+test("a quantized freq in a dense tuning moves about one tone a detent", function()
+  local context = load_strata()
+  finish_startup(context)
+  select_tuning("24 equal")
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", 440)
+  assert_near(note_of(params:get("v1_freq")), 69, 1e-6, "A4 is a tone of 24 equal")
+  for detent = 1, 10 do
+    enc_param_delta(3, "v1_freq", 1)
+    assert_near(note_of(params:get("v1_freq")), 69 + detent / 2, 1e-4, "detent " .. detent .. ": a quarter tone each")
+  end
+  for detent = 1, 4 do
+    enc_param_delta(3, "v1_freq", -1)
+    assert_near(note_of(params:get("v1_freq")), 74 - detent / 2, 1e-4, "back down, detent " .. detent)
+  end
+end)
+
+test("a tuning change snaps every quantized voice and resends every chord", function()
+  local context = load_strata()
+  finish_startup(context)
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", freq_of(61))
+  params:set("v2_intervals", option_index("v2_intervals", "chord"))
+  if not local_value("S").voices[2].active then toggle_voice(2) end
+  context.clear_engine_calls()
+  select_tuning("19 equal")
+  local steps = (note_of(params:get("v1_freq")) - 60) * 19 / 12
+  assert_near(steps, math.floor(steps + 0.5), 1e-3, "voice 1's freq is a 19-EDO tone")
+  assert_near(note_of(params:get("v1_freq")), 60 + 2 * 12 / 19, 1e-3, "the one nearest C#4")
+  local chord = sent_intervals(context, 1)
+  local expected = { 0, 6, 11, 17 }
+  assert_equal(#chord, #expected, "the chord was resent: four tones")
+  for index, steps_up in ipairs(expected) do
+    assert_near(chord[index], steps_up * 12 / 19, 1e-3, "19 equal's chord: the tones nearest 0, 4, 7 and 11")
+  end
+end)
+
+test("custom is the last scale and scale_mask holds it", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local options = params:lookup_param("scale").options
+  assert_equal(options[#options], "custom", "custom ends the options")
+  assert_equal(#options, #require("musicutil").SCALES + 2, "after off and every musicutil scale")
+  context.clear_engine_calls()
+  params:set("scale_mask", 1453)
+  assert_equal(#context.calls_named("setScale"), 0, "scale_mask sends nothing while the scale is not custom")
+  params:set("scale", #options)
+  local calls = context.calls_named("setScale")
+  assert_equal(#calls, 1, "custom sends one setScale")
+  assert_equal(calls[1].args[1], 0); assert_equal(calls[1].args[2], 1453, "with the mask")
+  params:set("root", option_index("root", "D"))
+  params:set("scale_mask", 2741)
+  calls = context.calls_named("setScale")
+  assert_equal(calls[#calls].args[1], 2, "root D"); assert_equal(calls[#calls].args[2], 2741, "a mask change sends while custom")
+  assert_equal(S.lib.variation.scale_mask(), 2741, "scale_mask() reads it")
+  local fields = {}
+  for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do fields[global.id] = global end
+  assert_true(fields.scale_mask and not fields.scale_mask.continuous and fields.scale_mask.default == 4095,
+    "scale_mask: a discrete scene global, 4095")
+  capture_scene(1)
+  assert_equal(S.scenes[1].data.scale_mask, 2741, "a scene captures the mask")
+  params:set("scale_mask", 4095)
+  recall_scene(1, 4); wake(context, "scene_transition_clock")
+  assert_equal(params:get("scale_mask"), 4095, "midway the mask has not switched")
+  context.clock.run_for(5)
+  assert_equal(params:get("scale_mask"), 2741, "the fade's end sets it")
+end)
+
+test("the chord set follows the tuning (ruling 40)", function()
+  local context = load_strata()
+  finish_startup(context)
+  context.clear_engine_calls()
+  params:set("v1_intervals", option_index("v1_intervals", "chord"))
+  assert_equal(table.concat(sent_intervals(context, 0), ","), "0,4,7,11", "twelve equal, scale off: 0, 4, 7, 11")
+  params:set("scale", option_index("scale", "Major Pentatonic"))
+  assert_equal(table.concat(sent_intervals(context, 0), ","), "0,4,9,14", "Major Pentatonic: 0, 4, 9, 14")
+  params:set("scale", option_index("scale", "Major"))
+  select_tuning("ji normal")
+  local chord = sent_intervals(context, 0)
+  local just = { 0, 3.863137, 7.019550, 10.882687 }
+  for index, semitones in ipairs(just) do
+    assert_near(chord[index], semitones, 1e-3, "ji normal, C major: degree " .. (2 * index - 1) .. "'s just tone")
+  end
+end)
+
 end

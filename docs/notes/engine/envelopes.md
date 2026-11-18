@@ -55,7 +55,7 @@ A node takes 6.7 KB of the pool (3.13 and 3.14.1 alike; the memory check's limit
 
 ### The check (`test/engine_check/envelopes.scd`)
 
-It runs in about 15 s, in the `modulation,freeze,envelopes` CI shard (`.github/workflows/test.yml`). Its checks:
+It runs in about 15 s, in the `modulation,freeze,envelopes,tuning` CI shard (`.github/workflows/test.yml`). Its checks:
 - the area's order (190), sixteen empty routes and no node at its start;
 - the two signatures; each valid call recorded with its clipped arguments (every bound met from both sides);
 - every bad index (route 16 and -1, source and voice 7 and -1, destination 5 and -1, loop 2 and -1, a fractional route; `stopFastEnv` 16, -1 and 0.5) and every continuous argument NaN or infinite: one line each, nothing recorded, no node, every channel at 0;

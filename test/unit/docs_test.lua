@@ -533,6 +533,55 @@ test("the scale and bypass params' defaults equal the engine's start state (#460
   end
 end)
 
+-- 3.8's tuning (design §6.2): lib/tuning.lua's TUNING mirrors the engine's
+-- tuning constants, and its default is the tuning the engine starts in
+-- (allocScaleBuffer's tones and period), so a start need send none (ruling
+-- 42); #460's rule, extended: what the tuning param's default sends is
+-- that start
+test("the tuning constants equal the engine's", function()
+  local context = load_strata()
+  local source = stubs.strip_sc_comments(engine_sources())
+  local function engine_value(name)
+    local value = tonumber(source:match("%f[%w_]" .. name .. "%s*{%s*%^%s*(%-?[%d%.]+)%s*}") or "")
+    assert_true(value ~= nil, "the engine defines " .. name .. " { ^N }")
+    return value
+  end
+  local TUNING = local_value("lib").tuning.TUNING
+  local mirrors = {max_tones = "tuningMaxTones", min_period = "tuningMinPeriod", max_period = "tuningMaxPeriod",
+    octave = "octaveCents", twelve = "tuningTwelve", octave_tolerance = "tuningOctaveTolerance",
+    root_key = "tuningRootKey", table_frames = "tuningTableFrames", table_low = "tuningTableLow",
+    table_resolution = "tuningTableResolution"}
+  for field, method in pairs(mirrors) do
+    assert_equal(TUNING[field], engine_value(method), "TUNING." .. field .. " vs the engine's " .. method)
+  end
+  local start = source:find("\n%s*allocScaleBuffer%s*{")
+  local alloc = source:sub(start, (source:find("\n    }", start, true)))
+  local count, period, divisor = alloc:match(
+    "state%[\\tones%]%s*=%s*%(0 %.%. %(this%.(%w+) %- 1%)%)%s*%*%s*%(this%.(%w+) div: this%.(%w+)%)%s*;")
+  assert_true(count ~= nil and period ~= nil and count == divisor,
+    "allocScaleBuffer starts the tones as equal steps the test can read")
+  assert_equal(alloc:match("state%[\\period%]%s*=%s*this%.(%w+)%s*;"), period, "allocScaleBuffer's period is the tones' period")
+  local tones = {}
+  for step = 0, engine_value(count) - 1 do tones[#tones + 1] = step * math.floor(engine_value(period) / engine_value(count)) end
+  assert_equal(TUNING.default.period, engine_value(period), "TUNING.default's period vs the engine's start")
+  assert_equal(table.concat(TUNING.default.tones, " "), table.concat(tones, " "), "TUNING.default's tones vs the engine's start")
+  -- #460's rule, extended to the tuning: what the tuning param's default
+  -- sends is the engine's start
+  context.clear_engine_calls()
+  params:lookup_param("tuning_tones"):bang()
+  local started = context.calls_named("setTuning")
+  local sent = context.calls_named("setTuningTone")
+  assert_equal(#started, 1, "tuning_tones' action sends setTuning")
+  assert_equal(started[1].args[1], #tones, "setTuning's count (Lua default) vs allocScaleBuffer's")
+  assert_equal(started[1].args[2], engine_value(period), "setTuning's period (Lua default) vs allocScaleBuffer's")
+  local sent_tones = {}
+  for index, call in ipairs(sent) do
+    assert_equal(call.args[1], index - 1, "setTuningTone " .. index .. "'s index")
+    sent_tones[index] = call.args[2]
+  end
+  assert_equal(table.concat(sent_tones, " "), table.concat(tones, " "), "the tones (Lua default) vs allocScaleBuffer's")
+end)
+
 -- A Lua FX param whose range is wider than the limit the engine clips its
 -- control to fails here (the range check only sees the values sent)
 -- The FX params whose controlspec range leaves the limit the engine clips
@@ -1018,7 +1067,7 @@ end
 
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
-  "effects", "delay", "mix", "performance", "rings", "freeze", "variation", "loops", "record", "waveform", "positions", "modulation",
+  "effects", "delay", "mix", "performance", "rings", "freeze", "variation", "tuning", "loops", "record", "waveform", "positions", "modulation",
   "envelopes", "notes", "onsets", "types", "soak" }
 
 -- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them
