@@ -229,8 +229,9 @@ return function(S)
   end
 
   -- The bypass params, at the end of the fx group. Each sends
-  -- engine.setBypass through its engine sender; neither touches the mix
-  -- (the FX page's K3 toggles them, lib/pages/fx.lua)
+  -- engine.setBypass through its engine sender, a bypass after releasing
+  -- its effect's freeze (lib/fx_hold.lua); neither touches the mix (the FX
+  -- page's K3 toggles them, lib/pages/fx.lua)
   S.register_fx_params({
     name = "bypass",
     count = #M.BYPASS_ORDER,
@@ -243,7 +244,13 @@ return function(S)
           name = bypass.name,
           behavior = "toggle",
           default = 0,
-          action = function(x) send_param_to_engine(bypass.param_id, x) end,
+          -- a bypass ends its effect's freeze first (design §7.3), so the
+          -- engine keeps no freeze for the lift (S.lib.fx_hold, included
+          -- later: read at each use)
+          action = function(x)
+            if x == 1 then S.lib.fx_hold.release(effect) end
+            send_param_to_engine(bypass.param_id, x)
+          end,
         }
         S.engine_senders[bypass.param_id] = function(value) engine.setBypass(bypass.engine_effect, value) end
       end

@@ -1018,7 +1018,7 @@ end
 
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
-  "effects", "mix", "performance", "rings", "freeze", "variation", "loops", "record", "waveform", "positions", "modulation",
+  "effects", "delay", "mix", "performance", "rings", "freeze", "variation", "loops", "record", "waveform", "positions", "modulation",
   "envelopes", "notes", "onsets", "types", "soak" }
 
 -- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them

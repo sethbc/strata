@@ -191,6 +191,30 @@ test("the bypass params are stored in PSETs and never in scenes", function()
   assert_equal(#context.calls_named("setBypass"), 0, "and sends no setBypass")
 end)
 
+-- 3.8 (design §7.3): a bypass ends its effect's freeze first, so the
+-- engine keeps no freeze for the lift; the reverb has none yet (3a)
+test("a bypass ends its effect's freeze before it bypasses", function()
+  local context = load_strata()
+  finish_startup(context)
+  local function sent()
+    local names = {}
+    for _, call in ipairs(context.engine_calls) do
+      if call.name == "setDelayFreeze" or call.name == "setBypass" then
+        table.insert(names, call.name .. "(" .. table.concat(call.args, ", ") .. ")")
+      end
+    end
+    return table.concat(names, " ")
+  end
+  params:set("delay_freeze", 1)
+  context.clear_engine_calls()
+  params:set("delay_bypass", 1)
+  assert_equal(sent(), "setDelayFreeze(0) setBypass(0, 1)", "the freeze ends, then the bypass")
+  assert_equal(params:get("delay_freeze"), 0, "the freeze param reads 0")
+  context.clear_engine_calls()
+  params:set("delay_bypass", 0); params:set("reverb_bypass", 1); params:set("reverb_bypass", 0)
+  assert_equal(sent(), "setBypass(0, 0) setBypass(1, 1) setBypass(1, 0)", "a lift, and the reverb's bypass, send no freeze")
+end)
+
 test("a mix set to 0 never sets the bypass and a bypass never changes the mix", function()
   local context = load_strata()
   finish_startup(context)

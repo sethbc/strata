@@ -308,12 +308,14 @@ end)
 
 -- The groundwork before 3.8 (design §1): the lock's state is S.locked and a
 -- scene's field locked; "frozen" names only the audio freeze (is_frozen,
--- frozen_level, the freeze hook's argument)
+-- frozen_level, the freeze hook's argument; 3.8's S.lib.fx_hold.frozen,
+-- the delay's audio freeze)
 test("the lock is S.locked, and no Lua file names S.frozen or a scene field frozen", function()
   local found = {}
   for _, source in ipairs(h.read_lua_sources()) do
     if not source.path:match("^test/") then
-      local code = source.text:gsub("%-%-[^\n]*", "")
+      local code = source.text:gsub("%-%-[^\n]*", ""):gsub("fx_hold%.frozen%(", "fx_hold.audio_frozen(")
+      if source.path == "lib/fx_hold.lua" then code = code:gsub("M%.frozen%(", "M.audio_frozen(") end
       if code:find("function toggle_lock%(") then found.toggle_lock = true end
       if code:find("S%.locked%[") then found.state = true end
       assert_true(not code:find("S%.frozen"), source.path .. " names S.frozen")

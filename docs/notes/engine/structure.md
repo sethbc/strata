@@ -11,7 +11,7 @@
 
 ## The engine check and the notes, per area
 
-The engine check is a runner, `test/engine_check.scd`: it boots a silent scsynth on `$STRATA_SC_PORT`, builds the engine and runs the area files `test/engine_check/<area>.scd` in a fixed order (`areaOrder`: structure, voices, grains, lifecycle, memory, buffers, files, effects, mix, performance, rings, freeze, variation, loops, record, waveform, positions, modulation, envelopes, notes, onsets, types, then the on-demand soak), which a docs test compares with the runner's. `$STRATA_ENGINE_CHECK_AREAS` (comma- or space-separated) runs only the areas it names, still in that order; a name with no area file fails the run (`ENGINE CHECK FAILED: no area <name>`). Each area file returns a function of the helper Event `h`; call a helper as a method (`h.check(condition, message)`, `h.command(\voiceOn, ...)`):
+The engine check is a runner, `test/engine_check.scd`: it boots a silent scsynth on `$STRATA_SC_PORT`, builds the engine and runs the area files `test/engine_check/<area>.scd` in a fixed order (`areaOrder`: structure, voices, grains, lifecycle, memory, buffers, files, effects, delay, mix, performance, rings, freeze, variation, loops, record, waveform, positions, modulation, envelopes, notes, onsets, types, then the on-demand soak), which a docs test compares with the runner's. `$STRATA_ENGINE_CHECK_AREAS` (comma- or space-separated) runs only the areas it names, still in that order; a name with no area file fails the run (`ENGINE CHECK FAILED: no area <name>`). Each area file returns a function of the helper Event `h`; call a helper as a method (`h.check(condition, message)`, `h.command(\voiceOn, ...)`):
 
 | Helper | What it does |
 |--------|--------------|
@@ -47,6 +47,7 @@ Each area stops the voices it started. After each area the runner checks `"<area
 | buffers | `test/engine_check/buffers.scd` | `docs/notes/engine/buffers.md` | the slots, their polls, load, record, clear, fade before zeroing, the Lua side |
 | files | `test/engine_check/files.scd` | `docs/notes/engine/files.md` | file writes, `.part` files, the scratch directory |
 | effects | `test/engine_check/effects.scd` | `docs/notes/engine/effects.md` | filter, delay, reverb, master |
+| delay | `test/engine_check/delay.scd` | `docs/notes/engine/delay.md` | 3.8's delay freeze and clear: a held loop's level, band and width, the closed input, the held time, the release, the clear, the two commands and the kept `frozen`; in the `record,waveform,onsets,delay` CI shard |
 | mix | `test/engine_check/mix.scd` | `docs/notes/engine/mix.md` | the per-voice mix stage: equality with 3.2 on the server, its placement, values and bad-value reset |
 | performance | `test/engine_check/performance.scd` | `docs/notes/engine/performance.md` | the values a performance tier sets |
 | rings | `test/engine_check/rings.scd` | `docs/notes/engine/rings.md` | the ring writers, where ring grains read (pitch as rate, the lookback, history), the GrainBuf wrap |

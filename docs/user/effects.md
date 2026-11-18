@@ -27,6 +27,14 @@ Since 3.8 the sends are plain sends, as on a mixing desk: each voice plays dry a
 
 The voice filter's cutoff and both sends are LFO destinations (`v1 vfilt`, `v1 dsend`, `v1 rsend`, ...); the dry level is not. Scenes keep all seven; the filter type switches at the end of a transition, the others fade. Randomize and mutations leave them alone (VOICE's ALT+K2 on the section never draws the dry level either); the grid's [faders page](grid/pages/faders.md) shows the cutoff, resonance, mix, the dry level and both sends on the voice's fader pages, on every grid size.
 
+## Delay freeze and clear
+
+Both are in the fx group of the PARAMETERS menu.
+
+- **delay freeze** - Holds what the delay is playing as a loop you can play over: within 20 ms its feedback goes to exactly 100% and it stops taking in sound, so the loop keeps its level, its brightness and, with ping-pong on, its width (a ping-pong of 50% or more is held as full ping-pong, below it as none). The loop keeps its length: a tempo change under sync or a new delay time waits until you release the freeze. Released, the loop fades away at the delay's feedback and the delay takes in sound again.
+- **delay clear** - Empties the delay at once: its echoes stop, and the first echo of what comes in after plays one delay time later. Frozen, it empties the loop (it stays frozen, silent, until released).
+- Neither is saved: a PSET neither stores nor changes a freeze, and scenes leave both alone. Bypassing the delay ends a freeze, and a freeze cannot be set while the delay is bypassed. Both can be mapped to MIDI (PARAMETERS > MAP); the FX page gets their rows in a later 3.8 package.
+
 ## Bypass
 
 `delay bypass` and `reverb bypass` (PARAMS > fx, or K3 on the FX page's delay or reverb rows) switch an effect off completely: it fades out over 50 ms and stops running, which frees its CPU, and the reverb's memory too (the delay's line is kept apart from the memory the voices use, and emptied). Lifting the bypass brings it back at the same level, starting empty, so the echoes or the tail build up again from a 50 ms fade-in (a sound already playing comes into the first echo without a click).
