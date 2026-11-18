@@ -293,7 +293,7 @@ test("the delay fader picks the division while the delay is synced", function()
   assert_equal(device:get_led(fader_position("delay_time"), 5), 15, "sync off: the fader shows delay_time")
   assert_true(device:get_led(16, 5) ~= 15, "and no longer the division")
   context.grid.press(1, 16, 5, 1)
-  assert_near(params:get("delay_time"), 2.7, 1e-6, "unsynced, the last column is delay_time's top")
+  assert_near(params:get("delay_time"), 5.4, 1e-6, "unsynced, the last column is delay_time's top")
   assert_equal(params:get("delay_division"), 12)
 end)
 

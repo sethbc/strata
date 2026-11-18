@@ -1,9 +1,10 @@
 // StrataEffects.sc
 // The effects area: the master filter (three instances, one per mix bus),
 // the delay and the reverb as returns, the master sum and output, their
-// commands (setFilter, setDelay, setReverb, setMasterDrift, setBypass) and
-// the chain at the tail of the engine group. The bypass frees the delay or
-// the reverb and re-creates it when lifted. See docs/notes/engine/effects.md.
+// commands (setFilter, setReverb, setMasterDrift, setBypass; the delay's
+// line, def and setDelay are in StrataDelay.sc) and the chain at the tail
+// of the engine group. The bypass frees the delay or the reverb and
+// re-creates it when lifted. See docs/notes/engine/effects.md.
 
 + Engine_Strata {
     // The effects area (order 60)
@@ -49,6 +50,7 @@
         state[\controls] = IdentityDictionary.new;
         state[\bypassed] = IdentityDictionary[\delay -> false, \reverb -> false];
         state[\pendingFrees] = IdentityDictionary.new;
+        this.allocDelayLine;
     }
 
     // The master filter's design, shared with the voice filter
@@ -144,28 +146,8 @@
                 filterType.round.clip(0, 2), mix.lag(0.05).clip(0, 1)));
         }).add;
 
-        // Stereo delay with feedback (LocalIn/LocalOut around DelayC, max
-        // 2.7 s: two lines of 2^17 samples at 48 kHz, 1 MB, the size a 2 s
-        // line already took), on the filtered delay send (through liftFade:
-        // fadeIn 1 on a node a bypass lift creates; the feedback path is not
-        // faded). It returns the delayed signal only, at its mix (lagged as
-        // fxMixBus's readers: m_d D). The time lag avoids zipper noise when
-        // the time changes. pingPong (0-1, lagged 50 ms) crossfades the
-        // lines' inputs linearly: at 0 each line takes its own channel and
-        // its own feedback (3.6's graph, exactly); at 1 the left line takes
-        // both channels and the right line's feedback, the right line only
-        // the left's, so the repeats alternate sides.
-        SynthDef(\strataDelay, {
-            arg in, out, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0;
-            var input = In.ar(in, 2) * this.liftFade(fadeIn), returned = LocalIn.ar(2);
-            var cross = pingPong.clip(0, 1).lag(0.05), keep = 1 - cross;
-            var delayed = DelayC.ar([
-                input[0] + (input[1] * cross) + (returned[0] * keep) + (returned[1] * cross),
-                (input[1] * keep) + (returned[1] * keep) + (returned[0] * cross)
-            ], 2.7, time.lag(0.1).clip(0.01, 2.7));
-            LocalOut.ar(delayed * feedback.clip(0, 0.95));
-            Out.ar(out, delayed * mix.clip(0, 1).lag(this.fxMixLag));
-        }).add;
+        // The delay (StrataDelay.sc), called here, not inside a function
+        this.addDelayDef;
 
         // The standard tier's reverb: FreeVerb2 fully wet on the filtered
         // reverb send plus the delay's return (through liftFade, as the
@@ -274,22 +256,7 @@
             });
         });
 
-        // msg: time (s), feedback, mix, pingPong. Kept for a bypassed
-        // delay's next node; while bypassed the mix sent and broadcast stays 0.
-        // A non-finite argument is ignored with one line, as 3.4's commands
-        // ignore one (fastModValuesFinite): a NaN in the node's lag or
-        // feedback loop would stay there until a bypass re-created it
-        this.addCommand(\setDelay, "ffff", { arg msg;
-            if (this.fastModValuesFinite(\setDelay, [[\time, msg[1]], [\feedback, msg[2]], [\mix, msg[3]],
-                [\pingPong, msg[4]]])) {
-                this.keepEffectControls(\delay, (time: msg[1], feedback: msg[2], mix: msg[3], pingPong: msg[4]));
-                context.server.makeBundle(nil, {
-                    this.setSynth(\delay, \time, msg[1], \feedback, msg[2], \mix, msg[3] * this.effectLive(\delay),
-                        \pingPong, msg[4]);
-                    this.broadcastFxMix;
-                });
-            };
-        });
+        this.addDelayCommands;
 
         // msg: effect (0 delay, 1 reverb; others ignored), bypassed (0 or 1)
         this.addCommand(\setBypass, "ii", { arg msg;
@@ -323,7 +290,8 @@
     // Bypass an effect (\delay, \reverb) or lift its bypass. A bypass sets
     // its mix and the broadcast mix to 0 (so the dry gains return to full
     // and nothing jumps), then frees the node after bypassFadeTime: its CPU
-    // and its real-time memory (the delay's 1 MB) come back. Lifting it
+    // and its few KB of the pool come back (the delay's line is buffers,
+    // kept: the free's bundle empties it, emptyDelayLine). Lifting it
     // inside that wait cancels the free and restores the mix; lifting it
     // later creates the node again in its place, from the kept controls at
     // mix 0 and with fadeIn 1 (its input rises over fxMixLag, so the new
@@ -348,7 +316,12 @@
             SystemClock.sched(this.bypassFadeTime, {
                 if (state[\pendingFrees][key] === token) {
                     state[\pendingFrees].removeAt(key);
-                    synths.removeAt(key) !? { arg synth; synth.free };
+                    synths.removeAt(key) !? { arg synth;
+                        context.server.makeBundle(nil, {
+                            synth.free;
+                            if (key == \delay) { this.emptyDelayLine };
+                        });
+                    };
                 };
                 nil
             });
@@ -364,16 +337,6 @@
                 this.broadcastFxMix;
             });
         };
-    }
-
-    // The delay node, on the filtered delay send, writing delayBus, from
-    // the kept controls (mix: that mix instead, when given; fadeIn 1: its
-    // input fades in, liftFade)
-    startDelay { arg target, addAction, mix, fadeIn = 0;
-        var controls = areaState[\effects][\controls][\delay];
-        synths[\delay] = Synth(\strataDelay, [\in, this.mixBus(\delaySendPost), \out, delayBus,
-            \time, controls[\time], \feedback, controls[\feedback], \mix, mix ? controls[\mix],
-            \pingPong, controls[\pingPong], \fadeIn, fadeIn], target, addAction);
     }
 
     // The reverb node for the tier (high: the FDN), on the filtered reverb
@@ -430,8 +393,9 @@
         });
     }
 
-    // The chain's buses (every area's nodes are gone by now)
+    // The chain's buses and the delay's line (every area's nodes are gone by now)
     freeEffects {
+        this.freeDelayLine;
         mainBus.free;
         filterBus.free;
         delayBus.free;

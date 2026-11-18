@@ -24,7 +24,8 @@ var mixBus = { arg name; engine.mixBus(name) };
 var db = { arg ratio; ratio.max(1e-9).ampdb.round(0.1) };
 var masterUGens, readStep;
 var checkFilterCrossfade, checkEffectsGuard, checkEffectSendsReported, checkRouting, checkChain30, checkDrySends;
-var checkBypassFrees, checkBypassMemory, checkBypassToggling, checkMixThroughZero, checkSetWhileBypassed;
+var checkBypassFrees, checkBypassToggling, checkMixThroughZero, checkSetWhileBypassed;
+var allocLine, freeLine, lineMax, checkDelayLine, checkLiftStartsEmpty, checkLineAsDelayC;
 var checkReverbBypass, checkFdn, chainTail, delayNodes, floodFit, smallProbeKB, probeKB;
 var checkFreshDefaults, checkFilterTypes, checkCutoffStep, checkFilterAsBefore, checkMasterSteady, checkLiftStartsSmoothly;
 var checkBypassFreeTiming, echoPeaks, checkPingPong, checkPingPongKept, checkLongDelay;
@@ -178,6 +179,32 @@ SynthDef(\strataCheckStepPeaks, { arg in, out;
     Out.kr(out, A2K.kr([RunningMax.ar(level * (time > 1) * (time <= 1.9)), RunningMax.ar(level * (time > 2))]));
 }).add;
 SynthDef(\strataCheckPinkNoise, { arg out; Out.ar(out, PinkNoise.ar(0.5 ! 2)) }).add;
+// A check-only copy of 3.7's \strataDelay, on its own DelayC lines of 2.7 s
+// (lib/engine/StrataEffects.sc at 3.7.0), against which the engine's buffer
+// line is compared (3.8 design §0.2)
+SynthDef(\strataCheckDelayC37, {
+    arg in, out, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0;
+    var input = In.ar(in, 2) * engine.liftFade(fadeIn), returned = LocalIn.ar(2);
+    var cross = pingPong.clip(0, 1).lag(0.05), keep = 1 - cross;
+    var delayed = DelayC.ar([
+        input[0] + (input[1] * cross) + (returned[0] * keep) + (returned[1] * cross),
+        (input[1] * keep) + (returned[1] * keep) + (returned[0] * cross)
+    ], 2.7, time.lag(0.1).clip(0.01, 2.7));
+    LocalOut.ar(delayed * feedback.clip(0, 0.95));
+    Out.ar(out, delayed * mix.clip(0, 1).lag(engine.fxMixLag));
+}).add;
+// The largest absolute difference between two stereo buses and the largest
+// sample of the second (both channels summed), on out, from the node's
+// start; it frees itself at seconds
+SynthDef(\strataCheckDiffPeak, { arg inA, inB, out, seconds = 1;
+    var b = In.ar(inB, 2);
+    Out.kr(out, A2K.kr([RunningMax.ar((In.ar(inA, 2) - b).abs.sum), RunningMax.ar(b.abs.sum)]));
+    Line.kr(0, 0, seconds, doneAction: 2);
+}).add;
+// A delay time on a control bus: center + depth x a sine at rate Hz
+SynthDef(\strataCheckTimeLfo, { arg out, center = 0.3, depth = 0.1, rate = 0.5;
+    Out.kr(out, SinOsc.kr(rate, 0, depth, center));
+}).add;
 // The master's output (in) against the master without its shifter: the
 // limiter, the saturation and amp 0.7 on the filtered dry bus (clean) two
 // samples late, as the shifter at ratio 1 delays it. Since t_reset: the
@@ -789,21 +816,29 @@ checkBypassFreeTiming = {
     server.sync;
 };
 
-// A node of the engine's own \strataDelay on buses of its own (the
-// engine's delay untouched), fed a one-sample impulse on the left in the
-// same bundle as \strataCheckEchoPeaks, which reads the node's return in
-// three windows (in server time, so a busy machine changes nothing; its
+// A delay line of the engine's size for a check's own \strataDelay: two
+// fresh mono buffers (a node on the engine's own would write into its
+// running line; a bufnum left out is buffer 0). Free them with freeLine
+allocLine = { var line = 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) }); server.sync; line };
+freeLine = { arg line; line.do(_.free); server.sync };
+
+// A node of the engine's own \strataDelay on buses and a line of its own
+// (the engine's delay untouched), fed a one-sample impulse on the left in
+// the same bundle as \strataCheckEchoPeaks, which reads the node's return
+// in three windows (in server time, so a busy machine changes nothing; its
 // /n_end ends the wait): the six peaks (window 1 left, right, ...).
 // controls: the delay's (mix 1 unless given)
 echoPeaks = { arg controls, windows;
     var group = Group.after(context.xg), inBus = Bus.audio(server, 2), outBus = Bus.audio(server, 2);
     var resultBus = Bus.control(server, 6), condition = Condition(false), seconds = windows.last + 0.05, values;
+    var line = allocLine.value;
     resultBus.setAll(0);
     server.sync;
     server.makeBundle(nil, {
         var analysis;
         Synth(\strataCheckLeftImpulse, [\out, inBus], group, \addToTail);
-        Synth(\strataDelay, [\in, inBus, \out, outBus, \mix, 1] ++ controls, group, \addToTail);
+        Synth(\strataDelay, [\in, inBus, \out, outBus, \bufL, line[0], \bufR, line[1], \mix, 1] ++ controls, group,
+            \addToTail);
         analysis = Synth(\strataCheckEchoPeaks, [\in, outBus, \out, resultBus, \windows, windows, \seconds, seconds],
             group, \addToTail);
         OSCFunc({ condition.test = true; condition.signal }, '/n_end', server.addr, argTemplate: [analysis.nodeID]).oneShot;
@@ -812,6 +847,7 @@ echoPeaks = { arg controls, windows;
     values = readBus.(resultBus);
     group.free; server.sync;
     [inBus, outBus, resultBus].do(_.free);
+    freeLine.(line);
     values
 };
 
@@ -859,28 +895,135 @@ checkPingPongKept = {
     server.sync;
 };
 
-// The delay line holds 2.7 s: an impulse comes back at 2.7 s and nowhere
-// else (a 2 s line would return it at 2 s): whether it did, and the peaks
-// before, at and after 2.7 s
+// The delay line holds 5.4 s (3.8 design §0.2): an impulse comes back at
+// 5.4 s and nowhere else (3.7's 2.7 s clip would return it at 2.7 s, in the
+// first window): the peaks before, at and after 5.4 s
 checkLongDelay = {
-    var peaks = echoPeaks.([\time, 2.7, \feedback, 0], [0, 2.68, 2.69, 2.71, 2.72, 2.9]);
-    [(peaks.size == 6) and: { peaks[2] > 0.5 } and: { [0, 1, 3, 4, 5].every({ arg index; peaks[index] < 0.0005 }) }, peaks]
+    var peaks = echoPeaks.([\time, 5.4, \feedback, 0], [0, 5.38, 5.39, 5.41, 5.42, 5.6]);
+    check.((peaks.size == 6) and: { peaks[2] > 0.5 } and: { [0, 1, 3, 4, 5].every({ arg index; peaks[index] < 0.0005 }) },
+        "effects: a time of 5.4 s is reached (peaks L, R before, at and after 5.4 s: %)".format(
+            peaks.collect({ arg value; value.round(0.0001) })));
 };
 
-// Freeing the delay gives its DelayC lines (1 MB) back to the pool: a
-// 2.7 s line costs what a 2 s one did (both round up to 2^17 samples)
-checkBypassMemory = {
-    var running, bypassed, freedKB, long = checkLongDelay.value;
-    running = floodFit.value;
+// The largest absolute sample a buffer holds (read through a file)
+lineMax = { arg buffer;
+    var condition = Condition(false), peak;
+    buffer.loadToFloatArray(action: { arg array; peak = array.abs.maxItem; condition.test = true; condition.signal });
+    awaitReply.(condition, 10);
+    peak
+};
+
+// The delay's line is two mono buffers of delayLineFrames (2^18) the effects
+// area allocates once and reads with BufDelayC: the node runs on them, and
+// a bypass and its lift keep them (bufnums never change). The free's bundle
+// empties them (emptyDelayLine): with pink noise on the delay send the line
+// holds audio, and after the free it holds none
+checkDelayLine = {
+    var line = engine.delayLine, ugens = SynthDescLib.global.at(\strataDelay).def.children;
+    var bufnums = line !? { line.collect(_.bufnum) }, nodeBufnums, first, lifted, noise, filled, emptied;
+    nodeBufnums = { engine.synths[\delay] !? { arg synth; [getControl.(synth, \bufL), getControl.(synth, \bufR)] } };
+    first = nodeBufnums.value;
+    noise = Synth(\strataCheckPinkNoise, [\out, mixBus.(\delaySend)], engine.processGroup, \addToTail);
+    server.sync; 0.5.wait;
+    filled = line !? { line.collect({ arg buffer; lineMax.(buffer) }) };
+    noise.free; server.sync;
     command.(\setBypass, 0, 1);
     0.2.wait; server.sync;
-    bypassed = floodFit.value;
-    freedKB = (bypassed - running) * probeKB;
-    check.(long[0] and: { freedKB.inclusivelyBetween(900, 1100) },
-        "effects: a time of 2.7 s is reached, and a bypassed delay still returns about 1 MB (about % KB more free; a probe % KB; peaks L, R before, at and after 2.7 s %)".format(
-            freedKB.round(1), probeKB.round(0.1), long[1].collect({ arg value; value.round(0.0001) })));
+    emptied = line !? { line.collect({ arg buffer; lineMax.(buffer) }) };
     command.(\setBypass, 0, 0);
-    server.sync; 0.1.wait;
+    server.sync;
+    lifted = nodeBufnums.value;
+    check.(line.notNil and: { line.size == 2 } and: { line.every({ arg buffer; (buffer.numFrames == 262144)
+            and: { buffer.numChannels == 1 } }) } and: { first == bufnums } and: { lifted == bufnums }
+        and: { engine.delayLine.collect(_.bufnum) == bufnums }
+        and: { ugens.count({ arg ugen; ugen.class == BufDelayC }) == 2 } and: { ugens.any({ arg ugen; ugen.class == DelayC }).not },
+        "effects: the delay's line is two buffers of 262144 frames, one channel each, whose bufnums a bypass and its lift keep (frames %, channels %, bufnums %; the node's % and, lifted, %; BufDelayC lines %)".format(
+            line !? { line.collect(_.numFrames) }, line !? { line.collect(_.numChannels) }, bufnums, first, lifted,
+            ugens.count({ arg ugen; ugen.class == BufDelayC })));
+    check.(filled.notNil and: { filled.every({ arg peak; peak.notNil and: { peak > 0.01 } }) }
+        and: { emptied.every({ arg peak; peak == 0 }) },
+        "effects: a bypass's free empties the delay's line (largest sample with noise on the send %, after the free %)".format(
+            filled, emptied));
+};
+
+// A player bypasses the delay mid-echo and lifts it after the free: the
+// lift plays nothing of the old line. An impulse on the delay send at
+// feedback 0.9 and mix 1 (its echoes heard at 0.5 and 1 s), a bypass past
+// its free, a lift; then the return stays under -60 dB for 5.5 s, a line's
+// length and more
+checkLiftStartsEmpty = {
+    var heardBus = Bus.control(server, 6), afterBus = Bus.control(server, 6), condition = Condition(false), heard, after;
+    command.(\setFilter, 5000.0, 0.5, 0, 0.0);
+    command.(\setMasterDrift, 0.0);
+    command.(\setReverb, 0.0, 0.8, 0.5);
+    command.(\setDelay, 0.5, 0.9, 1.0, 0);
+    heardBus.setAll(0); afterBus.setAll(0);
+    server.sync; 0.3.wait;
+    server.makeBundle(nil, {
+        Synth(\strataCheckLeftImpulse, [\out, mixBus.(\delaySend)], engine.processGroup, \addToTail);
+        Synth(\strataCheckEchoPeaks, [\in, engine.delayBus, \out, heardBus, \windows, [0.45, 0.6, 0.95, 1.1, 1.1, 1.2],
+            \seconds, 1.25], engine.synths[\master], \addAfter);
+    });
+    1.3.wait; server.sync;
+    heard = readBus.(heardBus);
+    command.(\setBypass, 0, 1);
+    0.2.wait; server.sync;
+    server.makeBundle(nil, {
+        var analysis;
+        command.(\setBypass, 0, 0);
+        analysis = Synth(\strataCheckEchoPeaks, [\in, engine.delayBus, \out, afterBus, \windows, [0, 1.8, 1.8, 3.6, 3.6, 5.5],
+            \seconds, 5.55], engine.synths[\master], \addAfter);
+        OSCFunc({ condition.test = true; condition.signal }, '/n_end', server.addr, argTemplate: [analysis.nodeID]).oneShot;
+    });
+    awaitReply.(condition, 60);
+    after = readBus.(afterBus);
+    check.((heard.size == 6) and: { heard[0] > 0.3 } and: { heard[2] > 0.3 } and: { after.size == 6 }
+        and: { after.every({ arg peak; peak < 0.001 }) },
+        "effects: a lifted delay starts empty (the echoes before the bypass %, the return's peaks in 5.5 s after the lift %)".format(
+            heard.collect({ arg value; value.round(0.0001) }), after.collect({ arg value; value.round(0.000001) })));
+    heardBus.free; afterBus.free;
+    command.(\setMasterDrift, 0.01);
+    command.(\setReverb, 0.3, 0.8, 0.5);
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
+    server.sync;
+};
+
+// The buffer line plays what 3.7's DelayC played: the engine's \strataDelay
+// on a line of its own beside a check-only copy of 3.7's def, both on the
+// same pink noise for 5.5 s, feedback 0.4, ping-pong 0.5, at a fractional
+// fixed time (0.30928 s) and on a 0.5 Hz LFO (0.2-0.4 s): largest
+// difference 0 (both interpolate a power-of-two line with the same cubic)
+checkLineAsDelayC = {
+    var compare = { arg lfo;
+        var group = Group.after(context.xg), noiseBus = Bus.audio(server, 2), outA = Bus.audio(server, 2);
+        var outB = Bus.audio(server, 2), timeBus = Bus.control(server, 1), resultBus = Bus.control(server, 2);
+        var line = allocLine.value, condition = Condition(false), seconds = 5.5, values;
+        var controls = [\time, 0.30928, \feedback, 0.4, \pingPong, 0.5, \mix, 1];
+        resultBus.setAll(0);
+        server.sync;
+        server.makeBundle(nil, {
+            var copy, node, analysis;
+            if (lfo) { Synth(\strataCheckTimeLfo, [\out, timeBus], group, \addToTail) };
+            Synth(\strataCheckPinkNoise, [\out, noiseBus], group, \addToTail);
+            copy = Synth(\strataCheckDelayC37, [\in, noiseBus, \out, outA] ++ controls, group, \addToTail);
+            node = Synth(\strataDelay, [\in, noiseBus, \out, outB, \bufL, line[0], \bufR, line[1]] ++ controls, group,
+                \addToTail);
+            if (lfo) { copy.map(\time, timeBus); node.map(\time, timeBus) };
+            analysis = Synth(\strataCheckDiffPeak, [\inA, outA, \inB, outB, \out, resultBus, \seconds, seconds], group,
+                \addToTail);
+            OSCFunc({ condition.test = true; condition.signal }, '/n_end', server.addr, argTemplate: [analysis.nodeID]).oneShot;
+        });
+        awaitReply.(condition, seconds * 10);
+        values = readBus.(resultBus);
+        group.free; server.sync;
+        [noiseBus, outA, outB, timeBus, resultBus].do(_.free);
+        freeLine.(line);
+        values
+    };
+    var fixed = compare.(false), moving = compare.(true);
+    check.([fixed, moving].every({ arg values; (values.size == 2) and: { values[0] == 0 } and: { values[1] > 0.1 } }),
+        "effects: the buffer line plays what DelayC played (largest difference at 0.30928 s %, on a 0.5 Hz LFO %; largest return % and %)".format(
+            fixed[0], moving[0], fixed[1] !? { arg value; value.round(0.001) }, moving[1] !? { arg value; value.round(0.001) }));
 };
 
 // Toggled at 20 Hz for 2 s, the delay never has two nodes, and once it
@@ -1158,7 +1301,10 @@ checkMasterSteady.value;
 checkBypassFrees.value;
 checkLiftStartsSmoothly.(0);
 checkBypassFreeTiming.value;
-checkBypassMemory.value;
+checkDelayLine.value;
+checkLongDelay.value;
+checkLiftStartsEmpty.value;
+checkLineAsDelayC.value;
 checkBypassToggling.value;
 checkMixThroughZero.value;
 checkSetWhileBypassed.value;

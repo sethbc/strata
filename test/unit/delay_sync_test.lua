@@ -91,22 +91,32 @@ end)
 test("a division that does not fit is halved until it does", function()
   local _, _, delay_sync = loaded()
   params:set("delay_sync", 1); params:set("delay_division", DIVISION.bar)
+  -- 3.8: the line holds 5.4 s (design §0.2), so 1 bar at 60 BPM fits
   params:set("clock_tempo", 60)
-  assert_near(delay_sync.time(), 2.0, 1e-9, "60 BPM, 1 bar (4 s): 2 s")
-  assert_equal(delay_sync.playing().halvings, 1, "halved once")
-  assert_equal(delay_sync.label(), "1 bar>1/2")
-  params:set("clock_tempo", 30)
-  assert_near(delay_sync.time(), 2.0, 1e-9, "30 BPM, 1 bar (8 s): 2 s")
-  assert_equal(delay_sync.playing().halvings, 2, "halved twice")
-  assert_equal(delay_sync.label(), "1 bar>1/4")
-  params:set("clock_tempo", 88.9)
-  assert_near(delay_sync.time(), 4 * 60 / 88.9, 1e-9, "88.9 BPM, 1 bar (2.6997 s): not halved")
+  assert_near(delay_sync.time(), 4.0, 1e-9, "60 BPM, 1 bar (4 s): not halved")
   assert_equal(delay_sync.playing().halvings, 0, "not halved")
   assert_equal(delay_sync.label(), "1 bar")
-  -- the tempo's ends (Review Focus 3): 1 bar at 20 BPM (12 s) halves three
-  -- times to half a beat; 1/32 at 300 BPM is 0.025 s, above the 0.01 floor
+  params:set("clock_tempo", 30)
+  assert_near(delay_sync.time(), 4.0, 1e-9, "30 BPM, 1 bar (8 s): 4 s")
+  assert_equal(delay_sync.playing().halvings, 1, "halved once")
+  assert_equal(delay_sync.label(), "1 bar>1/2")
   params:set("clock_tempo", 20)
-  assert_near(delay_sync.time(), 1.5, 1e-9, "20 BPM, 1 bar (12 s): 1.5 s")
+  assert_near(delay_sync.time(), 3.0, 1e-9, "20 BPM, 1 bar (12 s): 3 s")
+  assert_equal(delay_sync.playing().halvings, 2, "halved twice")
+  assert_equal(delay_sync.label(), "1 bar>1/4")
+  -- the boundary: 44.5 BPM's bar (5.393 s) fits, 44.4 BPM's (5.405 s) does not
+  params:set("clock_tempo", 44.5)
+  assert_near(delay_sync.time(), 4 * 60 / 44.5, 1e-9, "44.5 BPM, 1 bar (5.393 s): not halved")
+  assert_equal(delay_sync.playing().halvings, 0, "not halved")
+  assert_equal(delay_sync.label(), "1 bar")
+  params:set("clock_tempo", 44.4)
+  assert_near(delay_sync.time(), 2 * 60 / 44.4, 1e-9, "44.4 BPM, 1 bar (5.405 s): halved once")
+  assert_equal(delay_sync.playing().halvings, 1, "halved once")
+  assert_equal(delay_sync.label(), "1 bar>1/2")
+  -- the tempo's ends (Review Focus 3): 1 bar at 10 BPM (24 s) halves three
+  -- times to half a beat; 1/32 at 300 BPM is 0.025 s, above the 0.01 floor
+  params:set("clock_tempo", 10)
+  assert_near(delay_sync.time(), 3.0, 1e-9, "10 BPM, 1 bar (24 s): 3 s")
   assert_equal(delay_sync.playing().halvings, 3, "halved three times")
   assert_equal(delay_sync.label(), "1 bar>1/8")
   params:set("delay_division", 1)  -- 1/32
@@ -116,14 +126,15 @@ test("a division that does not fit is halved until it does", function()
   assert_equal(delay_sync.label(), "1/32")
   -- a halved length a division has names it; one none has, the seconds
   params:set("delay_division", 8)  -- 1/4T, 2/3 of a beat
-  params:set("clock_tempo", 10)    -- 4 s: halved once, 2 s, 1/3 of a beat
-  assert_equal(delay_sync.playing().halvings, 1, "1/4T at 10 BPM is halved once")
+  params:set("clock_tempo", 5)     -- 8 s: halved once, 4 s, 1/3 of a beat
+  assert_equal(delay_sync.playing().halvings, 1, "1/4T at 5 BPM is halved once")
   assert_equal(delay_sync.label(), "1/4T>1/8T")
-  params:set("delay_division", 10) -- 1/4D: 9 s at 10 BPM, halved twice: 2.25 s, 3/8 of a beat
+  params:set("delay_division", 10) -- 1/4D: 18 s at 5 BPM, halved twice: 4.5 s, 3/8 of a beat
+  assert_equal(delay_sync.playing().halvings, 2)
   assert_equal(delay_sync.label(), "1/4D>1/16D")
-  params:set("clock_tempo", 5)     -- 18 s: halved three times, 2.25 s, 3/16 of a beat
+  params:set("clock_tempo", 3)     -- 30 s: halved three times, 3.75 s, 3/16 of a beat
   assert_equal(delay_sync.playing().halvings, 3)
-  assert_equal(delay_sync.label(), "1/4D>2.25 s")
+  assert_equal(delay_sync.label(), "1/4D>3.75 s")
 end)
 
 test("a tempo change resends the time within a step, and a move under 0.5% sends nothing", function()
@@ -610,7 +621,7 @@ test("DELAY.max_seconds equals the engine's limit on setDelay's time", function(
   local limit = h.engine_spec.argument_limits.setDelay[1]
   assert_equal(limit.name, "time")
   assert_near(delay_sync.DELAY.max_seconds, limit.high, 1e-9, "the stub's limit, read from \\strataDelay")
-  assert_near(delay_sync.DELAY.max_seconds, 2.7, 1e-9)
+  assert_near(delay_sync.DELAY.max_seconds, 5.4, 1e-9)
   local low, high = param_range("delay_time")
   assert_near(high, delay_sync.DELAY.max_seconds, 1e-9, "delay_time reaches it")
   assert_near(low, 0.01, 1e-9)
