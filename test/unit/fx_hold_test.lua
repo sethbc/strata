@@ -142,16 +142,35 @@ test("a bypass ends the delay's freeze first", function()
     "the lift sends no freeze")
 end)
 
+-- The refusal goes back to off through set_binary_param (the path toggle
+-- echoes by), so a mapped controller hears the 0; the re-entered action
+-- sends one redundant setDelayFreeze(0) (the engine keeps 0 through the
+-- bypass) and does not refuse again
 test("a freeze set while bypassed is refused", function()
   local context, _, fx_hold = loaded()
+  local controller = context.midi.plug(1)
+  norns.pmap.data.delay_freeze = { dev = 1, ch = 1, cc = 47, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+    echo = true, value = 0 }
+  local function echoes()
+    local values = {}
+    for _, message in ipairs(controller.sent) do
+      if message[2] == 47 then table.insert(values, message[3]) end
+    end
+    return table.concat(values, ",")
+  end
   params:set("delay_bypass", 1)
   context.clear_engine_calls()
   params:set("delay_freeze", 1)
   assert_equal(params:get("delay_freeze"), 0, "the param goes back to off")
-  assert_equal(#freeze_calls(context), 0, "and no setDelayFreeze goes out")
+  local sent = call_names(context, {"setDelayFreeze"})
+  for _, call in ipairs(sent) do assert_equal(call, "setDelayFreeze(0)", "no setDelayFreeze(1) goes out") end
+  assert_true(#sent <= 1, "at most one setDelayFreeze(0) goes out (sent " .. table.concat(sent, " ") .. ")")
+  assert_equal(echoes(), "0", "the mapped controller hears the 0")
+  context.clear_engine_calls()
   fx_hold.toggle("delay")
   assert_equal(params:get("delay_freeze"), 0, "toggle does nothing while bypassed")
-  assert_equal(#freeze_calls(context), 0, "and sends nothing")
+  assert_equal(#context.engine_calls, 0, "and sends nothing")
+  assert_equal(echoes(), "0", "nor echoes anything")
   params:set("delay_bypass", 0)
   fx_hold.toggle("delay")
   assert_equal(params:get("delay_freeze"), 1, "lifted, toggle freezes")

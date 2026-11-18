@@ -9,7 +9,8 @@
 -- (plan ruling 61). A bypass ends its effect's freeze first (the bypass
 -- action, lib/voice_mix.lua, calls release), so the engine's kept freeze
 -- is 0 at the lift; a freeze set while its effect is bypassed is refused,
--- the param put back to off (plan ruling 26). The functions are FX's, the
+-- the param put back to off and echoed to a mapped controller (plan
+-- ruling 26). The functions are FX's, the
 -- header's and the grids' (packages 4a, 4b): offered, frozen, toggle,
 -- release, clear, any_frozen. See docs/notes/lua/fx-hold.md.
 
@@ -70,9 +71,12 @@ return function(S)
         behavior = "toggle",
         default = 0,
         action = function(x)
-          -- refused while bypassed: back to off, silently (nothing to send)
+          -- refused while bypassed: back to off through set_binary_param,
+          -- so a mapped controller hears the 0. Its set re-enters this
+          -- action with 0, which is never refused and sends one redundant
+          -- setDelayFreeze(0) (the engine keeps 0 through the bypass)
           if x == 1 and S.lib.voice_mix.bypassed("delay") then
-            params:set(delay.freeze_id, 0, true)
+            set_binary_param(delay.freeze_id, 0)
             return
           end
           send_param_to_engine(delay.freeze_id, x)
