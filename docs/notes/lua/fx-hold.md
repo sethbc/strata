@@ -7,7 +7,7 @@
 - **Both params reach the engine only through their senders** (`send_param_to_engine`): `delay_freeze` sends `engine.setDelayFreeze(value)`, `delay_clear` `engine.clearDelay()` (no argument; the trigger's action sends the value 1, so the send budget never holds a nil).
 - **`toggle` and `release` go through `set_binary_param`**, so a controller mapped to `delay_freeze` follows (#538).
 - The ids are `FX_HOLD`'s; 4a's FX rows and header mark and 4b's grid keys read `offered`, `frozen`, `toggle`, `clear` and `any_frozen`, never a param's presence (the plan's ruling 27).
-- **The reverb has no freeze** (3.8's package 3a, ruling 27): the high tier's FDN, frozen, did not hold its level and its tail within 1 dB, so the freeze is cut: no `FX_HOLD.reverb`, no `reverb_freeze` param, no engine command, and `offered("reverb")` is false on every tier (a test pins it). Why: `docs/notes/engine/effects.md` (the FDN).
+- **The reverb has no freeze** (3.8's package 3a, ruling 27): the high tier's FDN, frozen, did not hold its level and its tail within 1 dB, so the freeze is cut: no `FX_HOLD.reverb`, no `reverb_freeze` param, no engine command, and `offered("reverb")` is false on every tier (a test pins it). Why: #819 and `docs/notes/engine/effects.md` (the FDN).
 
 ## What it owns
 
