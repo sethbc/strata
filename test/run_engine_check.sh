@@ -207,7 +207,10 @@ YAML
 # CI's job) for good. So the run is wrapped in timeout (sclang_timeout
 # seconds: a full run of every area takes about 29 minutes (3.14.1 and 3.13, 1733 s of areas, the figures in the workflow's comment), the check's own deadline
 # is 30 s less (1770 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
-# long soak given a longer ENGINE_CHECK_TIMEOUT gets a longer deadline too),
+# long soak given a longer ENGINE_CHECK_TIMEOUT gets a longer deadline too;
+# a full run in one sclang has only about 40 s of room under it at CI's
+# speed and may meet it, so give such a run a larger ENGINE_CHECK_TIMEOUT,
+# #816 will raise the default),
 # CI passes ENGINE_CHECK_TIMEOUT=570 so each shard stays inside its 600 s) and killed as soon as sclang reports a compile error.
 # timeout signals the whole process group, the scsynth sclang booted
 # included; the script's own stop (and its limit, when there is no timeout
