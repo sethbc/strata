@@ -34,9 +34,40 @@ local SYSTEM = {
   grid_port = 1, fill_key = {x = 9, y = 8},
 }
 
--- The commands a 3.6 Strata never sent, and the grain keys every voice sync carries since 3.7
+-- The commands a 3.6 Strata never sent (a 3.6 PSET's read sends none of them either)
 local NEW_COMMANDS = {"noteRegion", "syncScan", "setSlotGain", "analyzeBuffer", "setFastEnv", "stopFastEnv"}
-local NEW_SYNC_KEYS = {scanMode = 0, followRate = 1, rootNote = 60, regionStart = 0, regionLength = 0}
+
+-- What a fresh run (init, the start-up, every voice started and stopped)
+-- sends beyond test/fixtures/3.6.0-start-calls.lua: entries for
+-- h.allowed_call_lines (test/helpers.lua; docs/notes/test-harness/run-and-helpers.md),
+-- applied to the whole run's lines and the fixture's before the
+-- comparison. count is for the run; an entry whose match or replace holds
+-- <v> or <v0> stands for one entry a voice, its count per voice. The
+-- package that changes a start message adds its entries here in the same
+-- commit, as it does to START_CALLS_ALLOWED (test/unit/engine_sync_test.lua):
+-- registration lines, a block of its own opening `-- <id>: <what> (design §n)`,
+-- one entry a line, each why beginning "<id>: "
+local RUN_VOICES = h.voice_count()
+local RUN_CALLS_ALLOWED = {
+  -- 3.7: the commands a fresh start never sends (3.7 design §12)
+  {kind = "drop", match = "^noteRegion%(", count = 0, why = "3.7: noteRegion is new in 3.7, and a fresh run sends none"},
+  {kind = "drop", match = "^syncScan%(", count = 0, why = "3.7: syncScan is new in 3.7, and a fresh run sends none"},
+  {kind = "drop", match = "^setSlotGain%(", count = 0, why = "3.7: setSlotGain is new in 3.7, and a fresh run sends none"},
+  {kind = "drop", match = "^analyzeBuffer%(", count = 0, why = "3.7: analyzeBuffer is new in 3.7, and a fresh run sends none"},
+  {kind = "drop", match = "^setFastEnv%(", count = 0, why = "3.7: setFastEnv is new in 3.7, and a fresh run sends none"},
+  {kind = "drop", match = "^stopFastEnv%(", count = 0, why = "3.7: stopFastEnv is new in 3.7, and a fresh run sends none"},
+  -- 3.7: the grain keys every voice sync carries, each at its 3.6 sound, once in each voice's start (3.7 design §12)
+  {kind = "drop", match = '^setGrainParam%(%d+, "scanMode", 0%)$', count = RUN_VOICES, why = "3.7: the scan mode, wrap"},
+  {kind = "drop", match = '^setGrainParam%(%d+, "followRate", 1%)$', count = RUN_VOICES, why = "3.7: follow's rate, 1"},
+  {kind = "drop", match = '^setGrainParam%(%d+, "rootNote", 60%)$', count = RUN_VOICES, why = "3.7: the root note, 60"},
+  {kind = "drop", match = '^setGrainParam%(%d+, "regionStart", 0%)$', count = RUN_VOICES,
+    why = "3.7: the own region's start, 0"},
+  {kind = "drop", match = '^setGrainParam%(%d+, "regionLength", 0%)$', count = RUN_VOICES,
+    why = "3.7: the own region's length, 0 (the loop)"},
+  -- 3.7: setDelay's fourth value, ping-pong, at 0 (3.7 design §6); no start sends setDelay, so its count is 0
+  {kind = "rewrite", match = "^(setDelay%([^,]+, [^,]+, [^,]+), 0%)$", replace = "%1)", count = 0,
+    why = "3.7: setDelay carries ping-pong, 0 by default"},
+}
 
 -- A call as the fixture writes it: name(args), numbers "%.9g", strings "%q"
 local function call_line(call)
@@ -112,27 +143,12 @@ test("a fresh Strata has every 3.7 feature off", function()
   for voice = 1, NUM_VOICES do
     if S.voices[voice].active then toggle_voice(voice) end
   end
-  -- every call since the load, the new sync keys and setDelay's fourth value taken out
-  local lines, removed = {}, {}
-  for _, call in ipairs(context.engine_calls) do
-    for _, name in ipairs(NEW_COMMANDS) do assert_true(call.name ~= name, "no " .. name .. " is sent") end
-    local key = call.name == "setGrainParam" and call.args[2]
-    if key and NEW_SYNC_KEYS[key] ~= nil then
-      assert_equal(call.args[3], NEW_SYNC_KEYS[key], key .. " at its 3.6 value")
-      removed[key] = (removed[key] or 0) + 1
-    elseif call.name == "setDelay" then
-      assert_equal(#call.args, 4, "setDelay has four values")
-      assert_equal(call.args[4], 0, "its fourth, ping-pong, at 0")
-      lines[#lines + 1] = call_line({name = call.name, args = {call.args[1], call.args[2], call.args[3]}})
-    else
-      lines[#lines + 1] = call_line(call)
-    end
-  end
-  for key in pairs(NEW_SYNC_KEYS) do
-    assert_equal(removed[key], NUM_VOICES, key .. ": once in each voice's start")
-  end
-  local fixture = dofile(h.repo_root .. "/test/fixtures/3.6.0-start-calls.lua")
-  local expected, actual = canonical(fixture), canonical(lines)
+  -- every call since the load, RUN_CALLS_ALLOWED's differences applied
+  local lines = {}
+  for _, call in ipairs(context.engine_calls) do lines[#lines + 1] = call_line(call) end
+  local recorded, sent = h.allowed_call_lines(dofile(h.repo_root .. "/test/fixtures/3.6.0-start-calls.lua"), lines,
+    RUN_CALLS_ALLOWED, "a fresh run")
+  local expected, actual = canonical(recorded), canonical(sent)
   for index = 1, math.max(#expected, #actual) do
     if expected[index] ~= actual[index] then
       h.fail("call " .. index .. ": 3.6.0 sent " .. tostring(expected[index]) .. ", this build " .. tostring(actual[index]))
