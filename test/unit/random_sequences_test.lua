@@ -381,9 +381,10 @@ test("the largest scenes file holds 6898 tables", function()
   -- matrix_test.lua writes that file and counts its tables against the
   -- figure; here, the block's share: the block and its four lists, always
   -- captured whole, five tables a scene, 80 in all, over a base of 6818
-  -- (3.6's 7394 less the groundwork's 672: a format 9 voice is two tables,
-  -- itself and its values, where 3.7's was eight, 16 x 7 x 6; and its six
-  -- LFO home routings in the matrix block, 16 x 6)
+  -- (3.6's 7394 less the groundwork's 672: a scene voice is two tables,
+  -- itself and its values (format 9's and 3.8's 10, whose type is a
+  -- string), where 3.7's was eight, 16 x 7 x 6; and its six LFO home
+  -- routings in the matrix block, 16 x 6)
   local context, S = loaded()
   capture_scene(1)
   local block = S.scenes[1].data.sequences

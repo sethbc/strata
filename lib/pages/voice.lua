@@ -378,16 +378,6 @@ return function(S)
       end
     end
   end
-  -- 3.8: the type row holding a pending choice, drawn dim, toward each
-  -- type (the longest names among them)
-  for index = 1, #S.registry.voice_types do
-    table.insert(layout_states, {name = "type row pending " .. index, setup = function()
-      S.selected_voice = 1
-      M.place_cursor(1)
-      local current = S.lib.types.of(1).index
-      if index ~= current then S.lib.types.turn(1, index - current) end
-    end})
-  end
   -- An arc marking the ring group, and a stopped, locked voice in triggered
   -- mode with a crossmod source by name
   table.insert(layout_states, {name = "arc ring group", setup = function(context)
@@ -433,13 +423,27 @@ return function(S)
     randomize_section = voice_randomize_section, alt_hold = voice_reset_row, animates = voice_animates,
     arc_button = start_or_stop_selected_voice, layout_states = layout_states}
 
-  -- init's start step: every registered voice-param record's layout_states
-  -- (S.registry.voice_params) after VOICE's own, so its rows are drawn by
-  -- the layout tests and the page renders. Registries are read at init, so
-  -- a record registered by a module included after this one counts too
+  -- 3.8: the type row holding a pending choice, drawn dim, toward the
+  -- type at index (each type's name, the longest among them)
+  local function type_pending_state(index)
+    return {name = "type row pending " .. index, setup = function()
+      S.selected_voice = 1
+      M.place_cursor(1)
+      local current = S.lib.types.of(1).index
+      if index ~= current then S.lib.types.turn(1, index - current) end
+    end}
+  end
+
+  -- init's start step: a pending type row toward each voice type (the
+  -- types are read at init, never at include time), then every registered
+  -- voice-param record's layout_states (S.registry.voice_params) after
+  -- VOICE's own, so its rows are drawn by the layout tests and the page
+  -- renders. Registries are read at init, so a record registered by a
+  -- module included after this one counts too
   local own_layout_states = #layout_states
   S.register_start(S.constants.START_ORDER.voice_layout_states, function()
     for index = #layout_states, own_layout_states + 1, -1 do layout_states[index] = nil end
+    for index = 1, #S.lib.types.list() do table.insert(layout_states, type_pending_state(index)) end
     for _, record in ipairs(S.registry.voice_params) do
       for _, state in ipairs(record.layout_states or {}) do table.insert(layout_states, state) end
     end
