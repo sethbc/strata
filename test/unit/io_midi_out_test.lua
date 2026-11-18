@@ -2164,4 +2164,53 @@ test("a program change for an empty scene keeps the guard of the one waiting", f
   assert_equal(sent(device), "", "scene 5's landing is not echoed")
 end)
 
+
+---------------------------------------------------------------------------
+-- 3.8 (design §6.5): a tuned pitch's distance from its nearest key rides
+-- the MPE bend; plain MIDI out sends the nearest key
+test("an MPE note's bend carries its pitch's cents", function()
+  local context, S = started()
+  local device = context.midi.plug(2, "mpe synth")
+  mpe_voice(1, 2); settled(context)
+  assert_equal(params:get("midi_out_bend_range"), 48, "the bend range is 48 semitones")
+  local target = midi_target(S)
+  clear(device)
+  target.note_on(1, "s1", 60.3, 1, step_info())
+  local list = lines(device)
+  local channel = list[#list]:match("^note_on 60 127 (%d+)$")
+  assert_true(channel ~= nil, "the nearest key, 60: " .. sent(device))
+  assert_equal(list[1], "pitchbend 8243 " .. channel, "8192 + 8192 * 0.3 / 48, before the note on")
+  target.note_off(1, "s1")
+  -- a played note: its raw bend (a semitone) and its cents
+  local raw = {bend = 2 ^ (1 / 12)}
+  local real_raw = S.lib.expression.raw
+  S.lib.expression.raw = function() return raw end
+  clear(device)
+  target.note_on(1, "p1", 60.3, 1, played_info(7))
+  list = lines(device)
+  channel = list[#list]:match("^note_on 60 127 (%d+)$")
+  assert_true(channel ~= nil, sent(device))
+  assert_equal(list[1], "pitchbend 8414 " .. channel, "8192 + 8192 * 1.3 / 48")
+  -- the express step: the same values send nothing; a bend back to 1 resends the cents alone
+  clear(device)
+  step(context, S, 2)
+  assert_equal(sent(device):match("pitchbend"), nil, "nothing changed, nothing resent: " .. sent(device))
+  raw = {bend = 1}
+  step(context, S, 2)
+  assert_true(sent(device):find("pitchbend 8243 " .. channel, 1, true) ~= nil, "the express step keeps the detune: " .. sent(device))
+  S.lib.expression.raw = real_raw
+  target.note_off(1, "p1")
+end)
+
+test("a plain note sends its nearest key and no bend", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "synth")
+  params:set("v2_out_port", 3); settled(context)
+  local target = midi_target(S)
+  clear(device)
+  target.note_on(2, "s1", 60.6, 1, step_info())
+  assert_equal(sent(device), "note_on 61 127 2", "the nearest key, no bend")
+  target.note_off(2, "s1")
+end)
+
 end

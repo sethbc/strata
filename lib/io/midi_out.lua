@@ -164,10 +164,12 @@ return function(S)
   local function round(value) return math.floor(value + 0.5) end
 
   -- A field's outgoing value from raw = {bend, pressure, slide}, or nil
-  local function encoded(field, raw)
+  local function encoded(field, raw, detune)
     if field == "bend" then
       local bend = finite(raw.bend) and raw.bend > 0 and raw.bend or 1
-      local semitones = 12 * math.log(bend) / math.log(2)
+      -- 3.8: a tuned pitch's distance from its nearest key (detune, in
+      -- semitones) rides the bend
+      local semitones = 12 * math.log(bend) / math.log(2) + (detune or 0)
       return util.clamp(round(MIDI_OUT.bend_center + MIDI_OUT.bend_center * semitones / state.bend_range), 0,
         MIDI_OUT.bend_max)
     end
@@ -323,8 +325,10 @@ return function(S)
       return
     end
     local channel = mpe and allocate(config.port, config.members) or config.channel
+    -- detune: the pitch's distance from the key sent (3.8: a tuned pitch's
+    -- cents, carried by an MPE note's bend; plain notes send the key alone)
     local record = {voice = voice, port = config.port, device = S.lib.io_ports.device(config.port),
-      channel = channel, note = note, mpe = mpe, sent = {}}
+      channel = channel, note = note, mpe = mpe, sent = {}, detune = pitch - note}
     local counts = table_at(state.counts, config.port, channel)
     local use = table_at(state.use, config.port)
     -- the note already sounds there (#709): a retrigger, its off before
@@ -343,7 +347,7 @@ return function(S)
       end
       if played or (use[channel] or 0) == 0 then
         for _, field in ipairs(MIDI_OUT.fields) do
-          local value = encoded(field, raw or {})
+          local value = encoded(field, raw or {}, record.detune)
           if value ~= nil then
             send_field(record, field, value)
             record.sent[field] = value
@@ -359,7 +363,7 @@ return function(S)
           if other ~= record and other.port == record.port and other.channel == channel then
             local now = S.lib.expression.raw(other.voice, other.owner, other.key)
             for _, field in ipairs(now and MIDI_OUT.fields or {}) do
-              local value = encoded(field, now)
+              local value = encoded(field, now, other.detune)
               if value ~= nil then other.sent[field] = value end
             end
           end
@@ -396,7 +400,7 @@ return function(S)
       local raw = S.lib.expression.raw(record.voice, record.owner, record.key)
       if raw then
         for _, field in ipairs(MIDI_OUT.fields) do
-          local value = encoded(field, raw)
+          local value = encoded(field, raw, record.detune)
           if value ~= nil and value ~= record.sent[field] then
             if budget == 0 then
               state.cursor = index
