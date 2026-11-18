@@ -95,7 +95,7 @@ return function(S)
     local choices = {}
     for _, entry in ipairs(tuning().built_ins()) do choices[#choices + 1] = {name = entry.name, entry = entry} end
     for _, name in ipairs(tuning().files()) do
-      choices[#choices + 1] = {name = name:gsub("%." .. tuning().TUNING.extension .. "$", ""), file = name}
+      choices[#choices + 1] = {name = tuning().file_tuning_name(name), file = name}
     end
     editor.choices = choices
   end
@@ -188,7 +188,8 @@ return function(S)
     local room = value_right - screen.text_extents(row.label) - SCALE_EDITOR.value_gap
     screen.level(pending and levels.pending or (selected and levels.selected or levels.other))
     screen.move(value_right, y)
-    screen.text_right(S.lib.ui_text.fit_text(text, room))
+    -- a file's name as norns' font can draw it, measured as drawn (#551)
+    screen.text_right(S.lib.ui_text.fit_text(S.lib.ui_text.printable(text), room))
   end
 
   local function draw()
@@ -199,13 +200,19 @@ return function(S)
   end
 
   -- The hint row: a refused file's reason while it shows; otherwise only
-  -- the keys that act on the row (with ALT, E2 alone)
+  -- the keys that act on the row (#419). With ALT held E3 turns as without
+  -- (no row has a fine step) and K2 and K3 do nothing, so the hints are E2
+  -- and the row's E3
   local function hints(alt_held)
     local flash = S.lib.ui_flash.text("hints")
     if flash then return flash end
-    if alt_held then return "E2:row" end
     local key = ROWS[editor.row].key
-    if (key == "scale" or key == "notes") and not scale_rows() then return "K2:back" end
+    local absent = (key == "scale" or key == "notes") and not scale_rows()
+    if alt_held then
+      if absent then return "E2:row" end
+      return "E2:row E3:" .. (key == "notes" and "note" or key == "tuning" and "tuning" or "value")
+    end
+    if absent then return "K2:back" end
     if key == "notes" then return "K2:back E3:note K3:" .. note_name(editor.class) end
     if key == "tuning" then return editor.pending and "K2:back K3:apply E3:tuning" or "K2:back E3:tuning" end
     return "K2:back E3:value"

@@ -432,8 +432,13 @@ return function(S)
     scale_editor_state("scale & tuning editor, the longest tuning", 4, function() use_tuning("meantone 1/4") end),
     scale_editor_state("scale & tuning editor, a long file name", 4, function()
       tunings_file("a very long tuning file name for the editor.scl", "Long\n1\n2/1\n")
+      -- its name as load_file gives it (cut to name_max), wider than the row
       local entry = S.lib.tuning.load_file("a very long tuning file name for the editor.scl")
-      if entry then entry.name = "a very long tuning file name for the editor" end
+      if entry then S.lib.tuning.select(entry) end
+    end),
+    scale_editor_state("scale & tuning editor, a non-ASCII file name", 4, function()
+      tunings_file("caf\195\169 \195\188ber tuning.scl", "Cafe\n1\n2/1\n")
+      local entry = S.lib.tuning.load_file("caf\195\169 \195\188ber tuning.scl")
       if entry then S.lib.tuning.select(entry) end
     end),
     scale_editor_state("scale & tuning editor, 19 equal", 3, function() use_tuning("19 equal") end),
@@ -531,6 +536,7 @@ return function(S)
       zones_editor_state("mpe & zones editor, learning v7's high", 3 + S.constants.NUM_VOICES, 3, true, "high"),
       SCALE_EDITOR_STATES[1], SCALE_EDITOR_STATES[2], SCALE_EDITOR_STATES[3], SCALE_EDITOR_STATES[4],
       SCALE_EDITOR_STATES[5], SCALE_EDITOR_STATES[6], SCALE_EDITOR_STATES[7], SCALE_EDITOR_STATES[8],
+      SCALE_EDITOR_STATES[9],
       {name = "performance: active file not written", setup = function()
         S.performance = {tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
           reason = "standard: performance_active.data could not be written"}
