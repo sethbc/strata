@@ -1277,7 +1277,7 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
         "the shard's installs (" .. apt_seconds .. " s) and its check (" .. tostring(check) .. " s) fit its " .. job.minutes .. " minutes")
       -- #786: every step before the check at its own limit (the cache's
       -- restore and save too), the steps with none, and the check's own
-      -- limit fit the job's, so a hung setup step fails by its own name
+      -- limit fit the job's, so a hung setup step with a limit fails by its own name
       local setup, limited = CI_WORKFLOW.SECONDS.unlimited_steps, {}
       for _, step in ipairs(job.steps) do
         if step.name == "Engine check" then break end
@@ -1350,10 +1350,12 @@ function CI_WORKFLOW.commands(line)
   return commands
 end
 -- whether a text names apt's archive folder (as the install's variable, by
--- its path, or as the setting that moves it, Dir::Cache, apt.conf(5))
+-- its path or a part of it, so a path built through another variable counts
+-- too, or as the setting that moves it, Dir::Cache, apt.conf(5))
 function CI_WORKFLOW.names_archives(text)
   return text:find("$archives", 1, true) ~= nil or text:find("${archives}", 1, true) ~= nil
-    or text:find("/var/cache/apt/archives", 1, true) ~= nil or text:lower():find("dir::cache", 1, true) ~= nil
+    or text:find("/archives", 1, true) ~= nil or text:find("cache/apt", 1, true) ~= nil
+    or text:lower():find("dir::cache", 1, true) ~= nil
 end
 -- whether a command that names apt's archive folder puts nothing in it: the
 -- folder's assignment, a test, or a cp into the kept folder (the refill)
@@ -1412,10 +1414,16 @@ function CI_WORKFLOW.cache_problems(workflow)
   end
   if #checks ~= 1 then problem("the install has " .. #checks .. " lines with sha512sum --check, not one"); return problems end
   local check_at = checks[1]
+  -- the condition is exactly the file's test and its check, so the if takes
+  -- the check's own status: the steps run as bash -e without pipefail, so
+  -- anything after it (a ; true, a | tee) or around it (a $(...) tested for
+  -- output) would hide a failed check
   local indent, condition = install[check_at]:match("^(%s*)if (.-); then$")
-  local checked = condition and condition:match('echo "%$sum  ([^"]+)" | sha512sum %-%-check')
-  if not checked or condition:find("||", 1, true) or condition:find("!", 1, true) then
-    problem("the hash check is not the whole condition of the copy's if (sha512sum --check): " .. install[check_at])
+  local exists, checked = (condition or ""):match('^%[ %-f "([^"]+)" %] && echo "%$sum  ([^"]+)" | sha512sum %-%-check %-%-status$')
+  if not checked or exists ~= checked then
+    checked = nil
+    problem("the hash check is not the whole condition of the copy's if, as "
+      .. '`if [ -f "<file>" ] && echo "$sum  <file>" | sha512sum --check --status; then`: ' .. install[check_at])
   end
   local block_end, copy_at = #install + 1, {}
   for index = check_at + 1, #install do
@@ -1528,7 +1536,8 @@ function CI_WORKFLOW.failing_cases(workflow, find_problems, cases)
   for _, case in ipairs(cases) do
     local text = workflow
     for i = 1, #case.edits, 2 do text = CI_WORKFLOW.mutated(text, case.edits[i], case.edits[i + 1]) end
-    local found = table.concat(find_problems(text), "\n  ")    if not found:find(case.expect, 1, true) then
+    local found = table.concat(find_problems(text), "\n  ")
+    if not found:find(case.expect, 1, true) then
       missed[#missed + 1] = case.name .. ": the problems should name " .. case.expect .. "; they are: " .. (found == "" and "(none)" or found)
     end
   end
@@ -1569,6 +1578,18 @@ test("a kept package reaches apt's archive folder only through the hash check, b
     { name = "the check reading another list", expect = "sc-packages.sha512",
       edits = { '            fi\n          done < "$RUNNER_TEMP/sc-packages.sha512"\n          echo "$kept',
         '            fi\n          done < "$debs/sums.sha512"\n          echo "$kept' } },
+    -- a check whose status the if never sees (the steps run as bash -e
+    -- without pipefail: a pipeline's status is its last command's)
+    { name = "the check's status ignored", expect = "sha512sum --check --status; true; then",
+      edits = { "sha512sum --check --status; then", "sha512sum --check --status; true; then" } },
+    { name = "the check piped into a log", expect = 'sha512sum --check | tee -a "$RUNNER_TEMP/check.log"; then',
+      edits = { "sha512sum --check --status; then", 'sha512sum --check | tee -a "$RUNNER_TEMP/check.log"; then' } },
+    { name = "the check's output tested instead of its status", expect = 'sha512sum --check 2>&1)" ]; then',
+      edits = { '&& echo "$sum  $debs/$name" | sha512sum --check --status; then',
+        '&& [ -n "$(echo "$sum  $debs/$name" | sha512sum --check 2>&1)" ]; then' } },
+    -- apt's archive folder by a path built through a variable
+    { name = "the archive folder through a variable", expect = 'sudo cp "$debs"/*.deb "$apt/archives/"',
+      edits = { "          kept=0\n", '          apt=/var/cache/apt\n          sudo cp "$debs"/*.deb "$apt/archives/"\n          kept=0\n' } },
   }
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases)
 end)

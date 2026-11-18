@@ -111,8 +111,9 @@ jobs:
     # Covers every setup step at its own limit (list 2, restore 2, install 4
     # and save 2 minutes: 600 s), a minute for the steps with none (the job's
     # set up, the checkouts and JACK: 15 s at most in #786's measured runs)
-    # and the check's own 600 s: 1260 s, so a hung step fails by its own name
-    # (docs/checks.md, Installs); the default is 360
+    # and the check's own 600 s: 1260 s, so a hung step that has a limit fails
+    # by its own name (the norns clone and the steps after the check have
+    # none, #790; docs/checks.md, Installs); the default is 360
     timeout-minutes: 21
     runs-on: ubuntu-24.04
     strategy:
