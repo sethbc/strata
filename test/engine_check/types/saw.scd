@@ -4,8 +4,8 @@
 // voiceTypeDefs after the seven built-in types, with its noteMainRanges
 // entry; at its defaults and at each own key's range ends, at 110 and
 // 2000 Hz, it plays finite values, peaks above sawPeakFloor and under 1,
-// and leaves under subsonicCeiling of its peak below 8 Hz (but for the
-// closed filter's one corner, closedCase); and a held
+// and leaves under subsonicCeiling of its peak below 8 Hz (with no floor
+// at the closed filter's one corner, closedCase); and a held
 // chord's three extra notes on a saw voice start three \strataSaw synths.
 // Its pool size is the memory area's (checkVoiceSynthSizes, every def of
 // voiceTypeDefs against 52 KB). See docs/notes/engine/types.md (Saw)
@@ -34,9 +34,10 @@ check.(sawType.notNil and: { sawType >= engine.numVoices }
 // the lowpasses settle. Pulse at its own defaults, at 110 Hz, is the level
 // reference the message reports.
 // The one exception, closedCase (the cutoff at its low end at 2000 Hz):
-// the lowpass closed four octaves under the note is near silence, as
-// Pulse's is, so it is finite, under 1 and quieter than the same cutoff
-// at 110 Hz (openCase: the filter cuts the higher note more), with no floor
+// the lowpass closed four octaves under the note leaves it near silence,
+// so it has no floor; it keeps the rest of the measure (finite, under 1,
+// under subsonicCeiling of its peak below 8 Hz) and is quieter than the
+// same cutoff at 110 Hz (openCase: the filter cuts the higher note more)
 {
     var sawSeconds = 4, settleSeconds = 1.5;
     var silent = engine.silentBus.index;
@@ -79,7 +80,7 @@ check.(sawType.notNil and: { sawType >= engine.numVoices }
         var sound = (v.size == 5) and: { v.every({ arg value; value.isNaN.not and: { value < inf } }) }
             and: { v[4] == 0 } and: { peak < 1 };
         var ok = if (each == closedCase) {
-            sound and: { openPeak.notNil } and: { peak < openPeak }
+            sound and: { openPeak.notNil } and: { peak < openPeak } and: { low < (peak * subsonicCeiling) }
         } {
             sound and: { peak > sawPeakFloor } and: { low < (peak * subsonicCeiling) }
         };
@@ -87,9 +88,10 @@ check.(sawType.notNil and: { sawType >= engine.numVoices }
     });
     failures = results.reject({ arg each; each[3] });
     check.((results.size == cases.size) and: { failures.isEmpty },
-        "types: saw at its defaults and its keys' range ends, at 110 and 2000 Hz, is finite, peaks above % and under 1 and leaves under % of its peak below 8 Hz; at % only finite, under 1 and under % (% against %) (failing [[freq, key, value], peak, below 8 Hz]: %; peaks from % to %; at its defaults at 110 Hz % against Pulse's %, % dB)".format(
+        "types: saw at its defaults and its keys' range ends, at 110 and 2000 Hz, is finite, peaks above % and under 1 and leaves under % of its peak below 8 Hz; at % no floor, and under % (% against %, below 8 Hz %) (failing [[freq, key, value], peak, below 8 Hz]: %; peaks from % to %; at its defaults at 110 Hz % against Pulse's %, % dB)".format(
             sawPeakFloor, subsonicCeiling, closedCase, openCase,
             peaks[cases.indexOfEqual(closedCase)] !? { arg peak; peak.round(0.0001) }, openPeak !? { arg peak; peak.round(0.0001) },
+            results.detect({ arg each; each[0] == closedCase }) !? { arg each; each[2].round(0.000001) },
             failures.collect({ arg each; [each[0], each[1].round(0.0001), each[2].round(0.0001)] }),
             results.collect({ arg each; each[1] }).minItem.round(0.0001), results.collect({ arg each; each[1] }).maxItem.round(0.0001),
             results[0][1].round(0.0001), (referenceValues.copyRange(2, 3).maxItem ? 0).round(0.0001),

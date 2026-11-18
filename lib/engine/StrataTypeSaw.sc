@@ -20,8 +20,9 @@
         // detune 0 is one saw and the sides beat apart as it rises. width,
         // the expression control (noteMainValue), is each saw's width: 0.5
         // a triangle, toward either end a saw. A VarSaw's mean is 0 at any
-        // width, so nothing reaches 0 Hz. Then Pulse's resonant lowpass: the
-        // cutoff wanders between half and twice the setting, within
+        // width, so nothing reaches 0 Hz. Then a resonant lowpass on Pulse's
+        // range: the cutoff wanders between half and twice the setting (at
+        // the prototype's 0.1 Hz; Pulse's wanders at 0.2 Hz), within
         // 100-8000 Hz, and res plays the filter's rq as 1.1 - res (Lua's
         // PULSE_RES.mirror, which a test compares), so one res sounds the
         // same on both types
