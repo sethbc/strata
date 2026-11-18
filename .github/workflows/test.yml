@@ -17,6 +17,20 @@ concurrency:
   group: tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # Every apt-get below takes these (#785): apt tries a failed file once more
+  # (Acquire::Retries, apt.conf(5)) and drops a connection that sends nothing
+  # for 15 s (Acquire::http::Timeout, "the connection as well as the data
+  # timeout", apt-transport-http(1); https has its own key). The runner's
+  # sources name a mirror list (mirror+file:/etc/apt/apt-mirrors.txt: its
+  # cloud's mirror, then https://archive.ubuntu.com), and apt tries the next
+  # mirror only once a file has failed on the first, retries included
+  # (apt-transport-mirror(1)), so one retry, as the runner image sets itself,
+  # keeps that failover quick. On the command line these win over the image's
+  # /etc/apt/apt.conf.d (apt.conf(5), the order apt reads its configuration).
+  # A mirror that is slow but still sending fails nothing: see the install
+  APT_NETWORK_OPTIONS: -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
+
 jobs:
   # The behavior tests run once per interpreter, each on its own runner, so
   # the job takes about as long as the slower suite instead of both in turn
@@ -40,10 +54,13 @@ jobs:
 
       # Both on each runner, as the one job before had them (Lua 5.3's
       # global-reference checks need its luac5.3; LuaJIT skips them)
+      # A slow mirror fails this step by its own name, not the job at its
+      # limit (#785); it takes under a minute
       - name: Install Lua 5.3 and LuaJIT
+        timeout-minutes: 3
         run: |
-          sudo apt-get update
-          sudo apt-get install -y lua5.3 luajit
+          sudo apt-get $APT_NETWORK_OPTIONS update
+          sudo apt-get $APT_NETWORK_OPTIONS install -y lua5.3 luajit
 
       - name: Behavior tests
         run: ${{ matrix.lua }} test/run.lua
@@ -140,12 +157,120 @@ jobs:
           git clone --filter=blob:none --no-checkout https://github.com/monome/norns.git "$NORNS_DIR"
           git -C "$NORNS_DIR" checkout "$NORNS_REF"
 
+      # The install keeps its package files between runs (#785: a slow mirror
+      # canceled three of the shards, still downloading their 111 MB at 142 kB/s,
+      # where the others took seconds). This step lists every file the three
+      # packages need on a system with nothing installed (an empty dpkg
+      # status), each with its SHA512 from apt's lists, and names the cache
+      # entry after that list. Every shard gets the same key whatever its image
+      # has installed (in #785's run one fleet had a library the other
+      # downloaded) and whichever mirror it uses; a new build of any package
+      # makes a new key, and the old entry ages out
+      - name: List SuperCollider and JACK's packages
+        id: packages
+        timeout-minutes: 2
+        run: |
+          set -o pipefail
+          sudo apt-get $APT_NETWORK_OPTIONS update
+          : > "$RUNNER_TEMP/empty-status"
+          nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
+          apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s jackd2 \
+              "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION" \
+            | awk '/^Inst / { for (i = 3; i <= NF; i++) if (substr($i, 1, 1) == "(") { print $2 "=" substr($i, 2); break } }' \
+            > "$RUNNER_TEMP/sc-install.txt"
+          xargs apt-cache "${nothing_installed[@]}" show < "$RUNNER_TEMP/sc-install.txt" \
+            | awk -v native="$(dpkg --print-architecture)" \
+                '/^Package: / { p = $2 } /^Version: / { v = $2 } /^Architecture: / { a = $2 } /^SHA512: / { s = $2 }
+                 /^$/ { if (s != "" && (a == native || a == "all")) { gsub(/:/, "%3a", v); print s "  " p "_" v "_" a ".deb" }; p = v = a = s = "" }' \
+            | sort -u > "$RUNNER_TEMP/sc-packages.sha512"
+          if [ "$(wc -l < "$RUNNER_TEMP/sc-packages.sha512")" -lt "$(wc -l < "$RUNNER_TEMP/sc-install.txt")" ]; then
+            echo "a package has no SHA512 in apt's lists"; exit 1
+          fi
+          prefix="sc-debs-$ImageOS-$RUNNER_ARCH-$SC_APT_VERSION-"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          echo "key=$prefix$(sha256sum < "$RUNNER_TEMP/sc-packages.sha512" | cut -c1-64)" >> "$GITHUB_OUTPUT"
+          echo "$(wc -l < "$RUNNER_TEMP/sc-packages.sha512") package files in the list"
+
+      # GitHub's scoping (docs/checks.md, Installs): a pull request's run reads
+      # what main's runs saved and what its own pull request's merge ref saved
+      # (a rerun of a slow shard finds what a faster shard saved), never
+      # another pull request's. A miss, or a restore that fails or times out,
+      # only means apt downloads the files
+      - name: Restore SuperCollider and JACK's packages
+        id: restore
+        # Pinned by commit, as checkout is (#533): `gh api repos/actions/cache/releases/latest`
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1
+        with:
+          path: ${{ runner.temp }}/sc-debs
+          key: ${{ steps.packages.outputs.key }}
+          restore-keys: ${{ steps.packages.outputs.prefix }}
+
+      # apt decides what to install, and downloads every file the cache lacks.
+      # A kept file reaches apt only when its SHA512 is the one apt's lists
+      # give: apt takes any file of the right size in its archive folder as
+      # downloaded, so a damaged one would only fail in dpkg. A slow mirror
+      # fails no file, so neither apt's timeout nor its mirror failover ends
+      # it: a download unfinished after 45 s (a normal one takes 3-12 s) is
+      # stopped and run again with https://archive.ubuntu.com, the runner's
+      # own second mirror, put first in its mirror list. The lists, their
+      # signatures and every file's hash are apt's as before; files already
+      # downloaded stay. Unfinished again after 75 s, the step fails by name.
+      # The kept folder is then refilled with the list's files, so the save
+      # below can run before anything is unpacked
       - name: Install SuperCollider and JACK
+        timeout-minutes: 3
         run: |
           echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections
-          sudo apt-get update
-          sudo apt-get install -y jackd2 \
-            "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION"
+          packages=(jackd2 "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION")
+          debs="$RUNNER_TEMP/sc-debs"
+          archives=/var/cache/apt/archives
+          mirrors=/etc/apt/apt-mirrors.txt
+          mkdir -p "$debs"
+          kept=0
+          while read -r sum name; do
+            if [ -f "$debs/$name" ] && echo "$sum  $debs/$name" | sha512sum --check --status; then
+              sudo cp "$debs/$name" "$archives/"
+              kept=$((kept + 1))
+            fi
+          done < "$RUNNER_TEMP/sc-packages.sha512"
+          echo "$kept package files from the cache, each matching apt's lists"
+          status=0
+          sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS install -y --download-only "${packages[@]}" || status=$?
+          if { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; } && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
+            echo "::warning::apt's first mirror is slow (download unfinished after 45 s): trying https://archive.ubuntu.com first"
+            sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
+            cat "$mirrors"
+            status=0
+            sudo timeout --kill-after=5 75 apt-get $APT_NETWORK_OPTIONS install -y --download-only "${packages[@]}" || status=$?
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the packages did not download (exit $status; 124 or 137: too slow). The engine check never ran: rerun this job"
+            exit 1
+          fi
+          rm -f -- "$debs"/*.deb
+          while read -r sum name; do
+            if [ -f "$archives/$name" ]; then cp "$archives/$name" "$debs/"; fi
+          done < "$RUNNER_TEMP/sc-packages.sha512"
+          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"
+
+      # Saved right after the install, whatever the check does later, when the
+      # key was not an exact hit: the first shard to install saves the entry,
+      # and a rerun of a shard that was too slow restores it. Every shard may
+      # try the one key: the first saves it and the others only log that it is
+      # taken (actions/cache's save logs a refused save and never fails on it)
+      - name: Keep SuperCollider and JACK's packages
+        if: steps.restore.outputs.cache-hit != 'true'
+        # The restore's release (#533)
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        timeout-minutes: 2
+        with:
+          path: ${{ runner.temp }}/sc-debs
+          key: ${{ steps.packages.outputs.key }}
 
       # scsynth talks to JACK; a dummy driver needs no sound card
       - name: Start JACK (dummy driver)

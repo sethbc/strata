@@ -1174,6 +1174,202 @@ test("every CI job has a timeout", function()
     "the shard's timeout covers its " .. seconds .. " s check plus " .. setup_seconds .. " s of setup")
 end)
 
+-- The workflow's jobs and their steps, as far as the tests below read them:
+-- each job's name, timeout-minutes and steps; each step's text, name, id,
+-- uses, timeout-minutes and whether it may fail (continue-on-error)
+local CI_WORKFLOW = {}
+function CI_WORKFLOW.jobs(workflow)
+  local jobs, job, step = {}, nil, nil
+  for line in ((workflow:match("\njobs:\n(.*)$") or "") .. "\n"):gmatch("([^\n]*)\n") do
+    local job_name = line:match("^  ([%w_%-]+):%s*$")
+    if job_name then
+      job = { name = job_name, steps = {}, text = "" }; step = nil
+      jobs[#jobs + 1] = job; jobs[job_name] = job
+    elseif job then
+      job.text = job.text .. line .. "\n"
+      job.minutes = job.minutes or tonumber(line:match("^    timeout%-minutes:%s*(%d+)%s*$") or "")
+      local first = line:match("^      %- (.*)$")
+      if first then
+        step = { text = "" }; job.steps[#job.steps + 1] = step
+        line = "        " .. first
+      end
+      if step and not line:match("^%s*#") then
+        step.text = step.text .. line .. "\n"
+        local key, value = line:match("^        ([%w_%-]+):%s*(.-)%s*$")
+        if key == "name" or key == "id" or key == "uses" then step[key] = value
+        elseif key == "timeout-minutes" then step.minutes = tonumber(value)
+        elseif key == "continue-on-error" then step.may_fail = value == "true" end
+      end
+    end
+  end
+  return jobs
+end
+-- the uses: lines that are not an action pinned by a full commit with its
+-- version in a comment (#533)
+function CI_WORKFLOW.unpinned_actions(text)
+  local problems = {}
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    local reference = line:match("^%s*%-?%s*uses:%s*(.-)%s*$")
+    if reference then
+      local commit = reference:match("^[%w_.%-]+/[%w_.%-/]+@(%x+) # v%d+[%.%d]*$")
+      if not commit or #commit ~= 40 then problems[#problems + 1] = reference end
+    end
+  end
+  return problems
+end
+
+test("every action the workflow uses is pinned by a full commit, its version in a comment (#533)", function()
+  local sample = table.concat({
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+    "        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0",
+    "      - uses: actions/cache@v6",
+    "      - uses: actions/cache@55cc834 # v6.1.0",
+    "      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+  }, "\n")
+  assert_equal(table.concat(CI_WORKFLOW.unpinned_actions(sample), " | "),
+    "actions/cache@v6 | actions/cache@55cc834 # v6.1.0 | actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+    "a tag, a short commit and a commit with no version are found, and only those")
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  assert_equal(table.concat(CI_WORKFLOW.unpinned_actions(workflow), " | "), "", "the workflow's unpinned actions")
+end)
+
+-- #785: a slow package mirror cancelled three engine shards at the job's
+-- limit while apt was still downloading. Every apt-get gives up on a dead
+-- connection (APT_NETWORK_OPTIONS, apt's command line winning over the
+-- runner's apt.conf.d), and every step that runs one has a limit of its own,
+-- so a slow install fails by the step's name and the check keeps its 600 s
+test("every apt-get in CI has retries and a stall limit, in a step with its own time limit (#785)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  local options = workflow:match("\nenv:\n.-\n  APT_NETWORK_OPTIONS:%s*([^\n]-)%s*\n")
+  assert_true(options ~= nil, "the workflow's env sets APT_NETWORK_OPTIONS for every job")
+  options = options or ""
+  local retries = tonumber(options:match("%-o Acquire::Retries=(%d+)") or "")
+  assert_true(retries ~= nil and retries >= 1 and retries <= 5, "a failed file is tried again, a few times: " .. options)
+  for _, scheme in ipairs({ "http", "https" }) do
+    local seconds = tonumber(options:match("%-o Acquire::" .. scheme .. "::Timeout=(%d+)") or "")
+    assert_true(seconds ~= nil and seconds >= 5 and seconds <= 60, scheme .. " drops a stalled connection within a minute: " .. options)
+  end
+  local jobs, installing = CI_WORKFLOW.jobs(workflow), {}
+  for _, job in ipairs(jobs) do
+    local apt_seconds = 0
+    for _, step in ipairs(job.steps) do
+      local calls = 0
+      for line in step.text:gmatch("[^\n]+") do
+        if line:find("apt%-get ") then
+          calls = calls + 1
+          assert_true(line:find("apt-get $APT_NETWORK_OPTIONS ", 1, true) ~= nil,
+            job.name .. "'s step " .. tostring(step.name) .. " runs apt-get without APT_NETWORK_OPTIONS: " .. line)
+        end
+      end
+      if calls > 0 then
+        assert_true(step.minutes ~= nil, job.name .. "'s step " .. tostring(step.name) .. " runs apt-get and has a timeout-minutes")
+        assert_true((step.minutes or 0) < job.minutes, job.name .. "'s step " .. tostring(step.name) .. "'s limit is under the job's")
+        apt_seconds = apt_seconds + (step.minutes or 0) * 60
+        installing[job.name] = true
+      end
+    end
+    if job.name == "engine-shard" then
+      -- the installs' limits leave the check its own 600 s within the job's
+      local check = tonumber(job.text:match("name: Engine check\n%s+run:[^\n]-timeout (%d+) ") or "")
+      assert_true(check ~= nil, "the engine check step has a timeout in seconds")
+      assert_true(apt_seconds + (check or 0) <= job.minutes * 60,
+        "the shard's installs (" .. apt_seconds .. " s) and its check (" .. tostring(check) .. " s) fit its " .. job.minutes .. " minutes")
+    end
+  end
+  assert_true(installing["lua-suite"] and installing["engine-shard"], "both the Lua suites and the engine shards install with apt-get")
+end)
+
+-- #785: the engine shards keep the package files they download (actions/cache,
+-- restored before the install, saved after it) and trust none unchecked: apt
+-- takes any file of the right size in its archive folder as downloaded, so a
+-- kept file reaches apt only when its SHA512 is the one apt's lists give
+test("the engine shards keep their packages between runs and check each one against apt's lists (#785)", function()
+  local jobs = CI_WORKFLOW.jobs(read_repo_file(".github/workflows/test.yml"))
+  local shard = jobs["engine-shard"]
+  local at = {}
+  for index, step in ipairs(shard.steps) do
+    if step.id == "packages" then at.list = index end
+    if step.uses and step.uses:match("^actions/cache/restore@") then at.restore = index end
+    if step.name == "Install SuperCollider and JACK" then at.install = index end
+    if step.uses and step.uses:match("^actions/cache/save@") then at.save = index end
+    if step.name == "Engine check" then at.check = index end
+  end
+  for _, part in ipairs({ "list", "restore", "install", "save", "check" }) do
+    assert_true(at[part] ~= nil, "the engine shard has its " .. part .. " step")
+  end
+  assert_true(at.list < at.restore and at.restore < at.install and at.install < at.save and at.save < at.check,
+    "the shard lists its packages, restores them, installs, keeps them, then runs the check")
+  -- saved as soon as the install has succeeded, whatever the check does, so
+  -- a rerun of a shard that was too slow finds what a faster one saved
+  assert_equal(at.save, at.install + 1, "the save is the step right after the install")
+  local list, restore, install, save = shard.steps[at.list], shard.steps[at.restore], shard.steps[at.install], shard.steps[at.save]
+  -- the key names the packages (each file's name and SHA512) and the image's
+  -- release, never its build or a mirror's address
+  local key = list.text:match('echo "key=([^\n]*)"')
+  assert_true(key ~= nil and key:find("sha256sum", 1, true) ~= nil, "the key ends in a hash of the package list: " .. tostring(key))
+  local prefix = list.text:match('prefix="([^"\n]*)"') or ""
+  for _, part in ipairs({ "$ImageOS", "$SC_APT_VERSION" }) do
+    assert_true(prefix:find(part, 1, true) ~= nil, "the key's prefix names " .. part .. ": " .. prefix)
+  end
+  assert_true(not list.text:find("ImageVersion", 1, true) and not list.text:find("print-uris", 1, true),
+    "the key names no image build and no mirror (the run of #785 had two of each)")
+  assert_true(list.text:find("SHA512", 1, true) ~= nil, "the list holds each file's SHA512 from apt's lists")
+  -- one key for every shard: the list is what the packages need with nothing
+  -- installed, so what an image has installed does not change it
+  assert_true(list.text:find('Dir::State::status="$RUNNER_TEMP/empty-status"', 1, true) ~= nil
+    and list.text:find(': > "$RUNNER_TEMP/empty-status"', 1, true) ~= nil, "the list is made against an empty dpkg status")
+  -- restore and save: the same pinned action, folder and key; neither can fail the shard
+  assert_equal(save.uses:match("@(%x+)"), restore.uses:match("@(%x+)"), "restore and save are one release of actions/cache")
+  local path = restore.text:match("\n%s+path:%s*([^\n]-)%s*\n")
+  assert_true(path ~= nil and path:find("${{ runner.temp }}/", 1, true) == 1, "the kept folder is in the runner's temp folder: " .. tostring(path))
+  assert_equal(save.text:match("\n%s+path:%s*([^\n]-)%s*\n"), path, "save keeps the folder restore fills")
+  for _, step in ipairs({ restore, save }) do
+    assert_equal(step.text:match("\n%s+key:%s*([^\n]-)%s*\n"), "${{ steps.packages.outputs.key }}", tostring(step.uses) .. "'s key")
+    assert_true(step.may_fail and step.minutes ~= nil, tostring(step.uses) .. " has a limit and never fails the shard")
+  end
+  assert_equal(restore.text:match("\n%s+restore%-keys:%s*([^\n]-)%s*\n"), "${{ steps.packages.outputs.prefix }}", "a near miss restores most files")
+  assert_equal(save.text:match("\n%s+if:%s*([^\n]-)%s*\n"), "steps." .. tostring(restore.id) .. ".outputs.cache-hit != 'true'",
+    "an exact hit saves nothing")
+  -- the install hands apt only checked files; apt still installs
+  assert_true(install.text:find("sha512sum --check", 1, true) ~= nil, "each kept file is checked against its SHA512")
+  assert_true(not install.text:find("dpkg -i", 1, true) and not install.text:find("dpkg --install", 1, true), "nothing is installed past apt")
+  assert_true(install.text:find('install -y --download-only "${packages[@]}"', 1, true) ~= nil,
+    "apt downloads what the cache lacked before the kept folder is refilled")
+  assert_true(install.text:find('echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections', 1, true) ~= nil,
+    "the JACK debconf line is kept")
+end)
+
+-- #785: a slow mirror sends data, so no file fails and neither apt's timeout
+-- nor its mirror failover ends it. The download has a limit of its own, then
+-- runs again with the runner's second mirror (https://archive.ubuntu.com,
+-- already in its mirror list) first, within the step's limit; apt's lists,
+-- their signatures and the files' hashes are checked as before
+test("a slow mirror ends the engine shard's download early and tries archive.ubuntu.com, apt's checks unchanged (#785)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  local install
+  for _, step in ipairs(CI_WORKFLOW.jobs(workflow)["engine-shard"].steps) do
+    if step.name == "Install SuperCollider and JACK" then install = step end
+  end
+  assert_true(install ~= nil, "the engine shard has its install step")
+  local limits = {}
+  for seconds in install.text:gmatch("sudo timeout %-%-kill%-after=%d+ (%d+) apt%-get %$APT_NETWORK_OPTIONS install %-y %-%-download%-only ") do
+    limits[#limits + 1] = tonumber(seconds)
+  end
+  assert_equal(#limits, 2, "the download runs under a limit, and once more after the mirrors are reordered")
+  assert_true(limits[1] <= 60, "the first try gives up within a minute (a normal one takes seconds): " .. tostring(limits[1]))
+  local first, second = install.text:find("sudo timeout", 1, true), select(2, install.text:find("sudo timeout.-sudo timeout"))
+  local reorder = install.text:find("sudo sed -i -E '/^https:\\/\\/archive\\.ubuntu\\.com\\/ubuntu\\//! s/priority:[0-9]+/priority:9/' \"$mirrors\"", 1, true)
+  assert_true(reorder ~= nil and first < reorder and reorder < second, "only the mirror list's priorities change, between the two tries")
+  assert_true(install.text:find("mirrors=/etc/apt/apt-mirrors.txt", 1, true) ~= nil, "the list changed is the runner's own")
+  -- both tries and the unpacking (about 25 s) fit in the step's limit
+  assert_true(limits[1] + limits[2] + 30 <= install.minutes * 60, "both tries fit the step's " .. install.minutes .. " minutes")
+  assert_true(install.text:find("::error::", 1, true) ~= nil, "a download that never finishes fails the step with its own line")
+  for _, weakening in ipairs({ "allow-unauthenticated", "AllowUnauthenticated", "AllowInsecureRepositories", "trusted=yes",
+      "Check-Valid-Until", "AllowDowngradeToInsecureRepositories", "dpkg -i", "dpkg --install", "sources.list" }) do
+    assert_true(not workflow:find(weakening, 1, true), "the workflow never weakens apt's checks or changes its sources: " .. weakening)
+  end
+end)
+
 -- The SuperCollider 3.13 image (test/run_engine_check_313.sh) runs what CI
 -- runs: the same Ubuntu release and SuperCollider package
 test("the 3.13 Docker image pins CI's SuperCollider and Ubuntu", function()
