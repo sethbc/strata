@@ -18,7 +18,7 @@
 - Scene fields: `S.register_scene_field({id = "shimmer_interval", default = 3, discrete = true})`, and the amounts at 0, continuous.
 - LFO global destinations `shim dly` and `shim rev` (`S.register_lfo_global_destination`), after 1a's `dly>rev`: every per-voice and macro destination's index is two higher than before.
 
-Until 4a there is no FX row: the three are in PARAMS > fx, and can be mapped to MIDI. 4a reads `S.lib.shimmer` for FX's shimmer rows and the arc's ALT rings, 4b the interval for its keys.
+FX shows the three as its shimmer section (its ALT+K2 draws them, `docs/notes/lua/pages/fx.md`) and the arc's FX ALT rings 3 and 4 turn the amounts (`docs/notes/lua/arc-pages.md`); 4b reads the interval for its keys. All three can be mapped to MIDI from PARAMS > fx.
 
 ## Tests (`test/unit/shimmer_test.lua`)
 

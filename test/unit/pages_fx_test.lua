@@ -48,8 +48,8 @@ test("FX page rows stay apart and inside 128x64 at every row and value", functio
   for _, row in ipairs(all_rows) do
     if row.selectable ~= false then rows[#rows + 1] = row end
   end
-  assert_equal(#rows, 14, "density, drift, 4 filter, 5 delay, 3 reverb rows")
-  assert_equal(#all_rows, 18, "plus four section labels")
+  assert_equal(#rows, 21, "density, drift, 4 filter, 7 delay, 5 reverb, 3 shimmer rows")
+  assert_equal(#all_rows, 26, "plus five section labels")
   local function screen_has(text)
     for _, entry in ipairs(context.screen.texts) do
       if entry.text == text then return true end
@@ -58,10 +58,13 @@ test("FX page rows stay apart and inside 128x64 at every row and value", functio
   end
   for _, extreme in ipairs({ "max", "min" }) do
     for _, row in ipairs(rows) do
+      if not row.param_id then goto next_row end  -- a hold row: the freeze is drawn on and off below
       local min_value, max_value = param_range(row.param_id)
       if row.param_id == "filter_type" then min_value, max_value = 2, 3 end  -- highpass, bandpass
       params:set(row.param_id, extreme == "max" and max_value or min_value)
+      ::next_row::
     end
+    params:set("delay_freeze", extreme == "max" and 1 or 0)
     enc(2, -100)
     for row = 1, #rows do
       assert_true(local_value("FX_PAGE").rows[local_value("fx_row")] == rows[row], "E2 steps one selectable row")
@@ -230,7 +233,8 @@ test("FX hints name the effect", function()
   params:set("filter_mix", 0); assert_equal(hint_text(), "K3:filter on")
   S.fx_row = row_index("master_density"); assert_equal(hint_text(), "E3:value")
   S.fx_row = row_index("drift_amount"); assert_equal(hint_text(), "E3:value")
-  -- ALT+K3 does nothing on FX: the hint names no K3 (#419)
+  -- both effects bypassed: ALT+K3 freezes nothing, so the hint names no K3
+  -- (#419); the filter and master rows have no freeze
   key(1, 1)
   for _, id in ipairs({"delay_feedback", "reverb_mix", "filter_mix", "master_density"}) do
     S.fx_row = row_index(id)
@@ -427,10 +431,12 @@ local FX_SECTIONS = {
   { row = "master_density", ids = { "master_density", "drift_amount" } },
   { row = "filter_freq", ids = { "filter_type", "filter_freq", "filter_res" } },
   { row = "delay_time", ids = { "delay_time", "delay_feedback", "delay_mix" } },
-  { row = "reverb_size", ids = { "reverb_mix", "reverb_size", "reverb_damp" } },
+  { row = "reverb_size", ids = { "reverb_mix", "reverb_size", "reverb_damp", "delay_to_reverb" } },
+  { row = "shimmer_delay", ids = { "shimmer_interval", "shimmer_delay", "shimmer_reverb" } },
 }
 local ALL_FX_IDS = { "master_density", "drift_amount", "filter_type", "filter_freq", "filter_res", "filter_mix",
-  "delay_time", "delay_feedback", "delay_mix", "delay_bypass", "reverb_mix", "reverb_size", "reverb_damp", "reverb_bypass" }
+  "delay_time", "delay_feedback", "delay_mix", "delay_bypass", "delay_freeze", "reverb_mix", "reverb_size",
+  "reverb_damp", "delay_to_reverb", "reverb_bypass", "shimmer_interval", "shimmer_delay", "shimmer_reverb" }
 local function fx_snapshot()
   local out = {}
   for _, id in ipairs(ALL_FX_IDS) do out[id] = params:get(id) end
@@ -445,7 +451,8 @@ end
 local FX_RANGES = {
   master_density = { 0.5, 1.5 }, drift_amount = { 0, 0.03 }, filter_freq = { 100, 10000 }, filter_res = { 0, 0.7 },
   delay_time = { 0.05, 1.0 }, delay_feedback = { 0, 0.7 }, delay_mix = { 0, 0.5 },
-  reverb_mix = { 0, 0.5 }, reverb_size = { 0.3, 0.95 }, reverb_damp = { 0, 1 },
+  reverb_mix = { 0, 0.5 }, reverb_size = { 0.3, 0.95 }, reverb_damp = { 0, 1 }, delay_to_reverb = { 0.3, 1 },
+  shimmer_delay = { 0, 0.5 }, shimmer_reverb = { 0, 0.4 },
 }
 
 test("ALT+K2 randomizes the selected row's section only", function()
@@ -589,7 +596,7 @@ test("the delay's time row shows and edits the division while synced; K3 is stil
   context.screen.clear(); redraw()
   assert_true(h.screen_shows(context, "1/4T"), "the new division shows")
   key(1, 1)
-  assert_equal(shown(context), "K2:rand", "ALT offers no fine turn for a division")
+  assert_equal(shown(context), "K2:rand K3:freeze", "ALT offers no fine turn for a division (3.8: the freeze)")
   key(1, 0)
   key(3, 1); key(3, 0)
   assert_equal(params:get("delay_bypass"), 1, "K3 on the time row is still the bypass")
@@ -629,6 +636,449 @@ test("FX lays out with the delay synced and halved", function()
   context.screen.clear(); redraw()
   assert_true(h.screen_shows(context, "1 bar>1/4"), "the widest label shows")
   assert_screen_layout(context, "FX " .. state.name)
+end)
+
+-- 3.8 (package 4a, design §7.6): the delay's freeze and clear, the
+-- delay-to-reverb amount and a shimmer section. The reverb's freeze was cut
+-- from 3.8 (#819): FX reaches it only through S.lib.fx_hold.offered("reverb").
+-- A later package may add it behind that seam, so these tests also build it
+-- in the stub session: FX_HOLD's reverb record and a binary param of its
+-- id, the id written once here
+local REVERB_FREEZE_ID = "reverb_freeze"
+local function plant_reverb_freeze(S)
+  params:add{ type = "binary", id = REVERB_FREEZE_ID, name = "reverb freeze", behavior = "toggle", default = 0,
+    action = function() request_redraw() end }
+  S.lib.fx_hold.FX_HOLD.reverb = { freeze_id = REVERB_FREEZE_ID }
+end
+
+-- The FX_PAGE.rows index of the hold row of an effect ("freeze", "clear")
+local function hold_row_index(effect, hold)
+  for index, row in ipairs(local_value("FX_PAGE").rows) do
+    if row.effect == effect and row.hold == hold then return index end
+  end
+end
+
+local function select_row_index(index)
+  local_value("S").fx_row = index
+end
+
+local function shown_hint(context)
+  context.screen.clear(); redraw()
+  return hint_text(context)
+end
+
+-- Every call a params function gets naming `id` raises, until the returned
+-- function puts them back (a cut freeze's param is read by nothing)
+local function forbid_param(id)
+  local names = { "get", "set", "lookup_param", "string", "get_raw", "set_raw", "delta", "t", "set_action" }
+  local own = {}
+  for _, name in ipairs(names) do
+    own[name] = rawget(params, name)
+    local real = params[name]
+    params[name] = function(self, param_id, ...)
+      if param_id == id then error("the cut param " .. id .. " was reached through params:" .. name, 2) end
+      return real(self, param_id, ...)
+    end
+  end
+  return function()
+    for _, name in ipairs(names) do params[name] = own[name] end
+  end
+end
+
+test("FX lists master, filter, delay, reverb and shimmer in order", function()
+  load_strata()
+  local rows = local_value("FX_PAGE").rows
+  local expected = {
+    { "master", "master" }, { "density", "master", "master_density" }, { "drift", "master", "drift_amount" },
+    { "filter", "filter" }, { "type", "filter", "filter_type" }, { "freq", "filter", "filter_freq" },
+    { "res", "filter", "filter_res" }, { "mix", "filter", "filter_mix" },
+    { "delay", "delay" }, { "time", "delay", "delay_time" }, { "fdbk", "delay", "delay_feedback" },
+    { "level", "delay", "delay_mix" }, { "sync", "delay", "delay_sync" }, { "ping", "delay", "delay_pingpong" },
+    { "freeze", "delay", hold = "freeze" }, { "clear", "delay", hold = "clear" },
+    { "reverb", "reverb" }, { "level", "reverb", "reverb_mix" }, { "size", "reverb", "reverb_size" },
+    { "damp", "reverb", "reverb_damp" }, { "from delay", "reverb", "delay_to_reverb" },
+    { "freeze", "reverb", hold = "freeze" },
+    { "shimmer", "shimmer" }, { "interval", "shimmer", "shimmer_interval" },
+    { "delay", "shimmer", "shimmer_delay" }, { "reverb", "shimmer", "shimmer_reverb" },
+  }
+  assert_equal(#rows, 26, "26 rows")
+  local labels, params_rows = 0, 0
+  for index, want in ipairs(expected) do
+    local row = rows[index]
+    local where = "row " .. index .. " (" .. want[1] .. ")"
+    assert_equal(row.label, want[1], where .. " label")
+    assert_equal(row.section, want[2], where .. " section")
+    if row.selectable == false then
+      labels = labels + 1
+      assert_equal(row.param_id, nil, where .. ": a label has no param")
+    else
+      params_rows = params_rows + 1
+      assert_equal(row.param_id, want[3], where .. " param")
+      assert_equal(row.hold, want.hold, where .. " hold")
+      if want.hold then assert_equal(row.effect, want[2], where .. ": a hold row names its effect") end
+    end
+  end
+  assert_equal(labels, 5, "five section labels")
+  assert_equal(params_rows, 21, "21 param rows: 2 + 4 + 7 + 5 + 3")
+  assert_equal(local_value("FX_PAGE").frozen_text, "frz")
+  -- the delay's and reverb's labels carry their bypass and freeze
+  for _, index in ipairs({ 9, 17 }) do
+    assert_equal(rows[index].bypass, rows[index].section, rows[index].label .. " shows its bypass")
+    assert_equal(rows[index].freeze, rows[index].section, rows[index].label .. " shows its freeze")
+  end
+  for _, row in ipairs(rows) do
+    if row.section == "shimmer" then assert_equal(row.effect, nil, "a shimmer row has no effect for K3") end
+  end
+end)
+
+test("FX works with the reverb freeze cut", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  -- a cut 3a leaves the build without the param: removed from the stub's
+  -- params if a build has it
+  local index = params.lookup[REVERB_FREEZE_ID]
+  if index then table.remove(params.params, index); params.lookup[REVERB_FREEZE_ID] = nil end
+  S.lib.fx_hold.FX_HOLD.reverb = nil
+  assert_true(not S.lib.fx_hold.offered("reverb"), "the reverb's freeze is not offered")
+  local restore = forbid_param(REVERB_FREEZE_ID)
+  local ok, err = pcall(function()
+    show_page("FX")
+    params:set("mutation_enabled", 1)
+    local rows = S.FX_PAGE.rows
+    for row_index = 1, #rows do
+      if rows[row_index].selectable ~= false then
+        select_row_index(row_index)
+        for _, alt in ipairs({ 0, 1 }) do
+          key(1, alt); context.screen.clear(); redraw()
+          assert_screen_layout(context, "FX, the reverb freeze cut, row " .. row_index .. (alt == 1 and ", ALT" or ""))
+        end
+        key(1, 0)
+      end
+    end
+    local freeze_row = hold_row_index("reverb", "freeze")
+    select_row_index(freeze_row)
+    context.screen.clear(); redraw()
+    local freeze_text
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.y and entry.text == "--" then freeze_text = entry end
+    end
+    assert_true(freeze_text ~= nil, "the reverb's freeze row shows --")
+    for _, param_id in ipairs({ "reverb_mix", "reverb_size", "reverb_damp", "delay_to_reverb" }) do
+      select_row_index(row_index(param_id))
+      context.clear_engine_calls()
+      key(1, 1); key(3, 1); key(3, 0); key(1, 0)
+      assert_equal(#context.engine_calls, 0, "ALT+K3 on " .. param_id .. " sends nothing")
+    end
+    select_row_index(freeze_row)
+    context.clear_engine_calls()
+    key(1, 1); key(3, 1); key(3, 0); key(1, 0)
+    enc(3, 1); enc(3, -1)
+    assert_equal(#context.engine_calls, 0, "ALT+K3 and E3 on the reverb's freeze row send nothing")
+    -- the header on every page, with the delay frozen and not
+    for _, frozen in ipairs({ 0, 1 }) do
+      params:set("delay_freeze", frozen)
+      for page = 1, #PAGE_TITLES do show_page(page); redraw() end
+    end
+  end)
+  restore()
+  assert_true(ok, tostring(err))
+end)
+
+test("K3 on the clear row clears; on every other delay and reverb row it bypasses", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  select_row_index(hold_row_index("delay", "clear"))
+  context.clear_engine_calls()
+  key(3, 1); key(3, 0)
+  assert_equal(#context.calls_named("clearDelay"), 1, "one clearDelay()")
+  assert_equal(#context.calls_named("clearDelay")[1].args, 0, "with no argument")
+  assert_equal(#context.calls_named("setBypass"), 0, "no setBypass")
+  assert_equal(params:get("delay_bypass"), 0, "the delay keeps running")
+  local rows = local_value("FX_PAGE").rows
+  for index, row in ipairs(rows) do
+    if (row.effect == "delay" or row.effect == "reverb") and row.hold ~= "clear" then
+      select_row_index(index)
+      context.clear_engine_calls()
+      key(3, 1); key(3, 0)
+      assert_equal(params:get(row.effect .. "_bypass"), 1, "K3 on " .. row.label .. " bypasses the " .. row.effect)
+      assert_equal(#context.calls_named("clearDelay"), 0, "and clears nothing")
+      key(3, 1); key(3, 0)
+      assert_equal(params:get(row.effect .. "_bypass"), 0, "a second K3 lifts it")
+    end
+  end
+end)
+
+test("ALT+K3 freezes and releases the row's effect; nothing on a bypassed effect, on the shimmer rows, or on a reverb not offered", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("FX")
+  local function alt_k3() key(1, 1); key(3, 1); key(3, 0); key(1, 0) end
+  for _, param_id in ipairs({ "delay_time", "delay_pingpong" }) do
+    select_row_index(row_index(param_id))
+    context.clear_engine_calls()
+    alt_k3()
+    assert_equal(params:get("delay_freeze"), 1, "ALT+K3 on " .. param_id .. " freezes the delay")
+    local calls = context.calls_named("setDelayFreeze")
+    assert_equal(#calls, 1, "one setDelayFreeze"); assert_equal(calls[1].args[1], 1)
+    alt_k3()
+    assert_equal(params:get("delay_freeze"), 0, "and a second releases it")
+    assert_equal(context.calls_named("setDelayFreeze")[2].args[1], 0)
+  end
+  select_row_index(hold_row_index("delay", "clear"))
+  alt_k3(); assert_equal(params:get("delay_freeze"), 1, "the clear row is a delay row"); alt_k3()
+  -- a reverb not offered: nothing
+  select_row_index(row_index("reverb_size"))
+  context.clear_engine_calls(); alt_k3()
+  assert_equal(#context.engine_calls, 0, "ALT+K3 on a reverb not offered sends nothing")
+  -- the shimmer and filter and master rows: nothing
+  for _, param_id in ipairs({ "shimmer_interval", "shimmer_delay", "shimmer_reverb", "filter_freq", "master_density" }) do
+    select_row_index(row_index(param_id))
+    context.clear_engine_calls(); alt_k3()
+    assert_equal(#context.engine_calls, 0, "ALT+K3 on " .. param_id .. " sends nothing")
+    assert_equal(params:get("delay_freeze"), 0, "and freezes nothing")
+  end
+  -- a reverb offered (the seam a later package may fill): ALT+K3 freezes it
+  plant_reverb_freeze(S)
+  select_row_index(row_index("reverb_damp"))
+  alt_k3()
+  assert_equal(params:get(REVERB_FREEZE_ID), 1, "ALT+K3 on a reverb row freezes an offered reverb")
+  assert_equal(params:get("delay_freeze"), 0, "and leaves the delay")
+  alt_k3()
+  assert_equal(params:get(REVERB_FREEZE_ID), 0, "and releases it")
+  -- bypassed: nothing
+  params:set("reverb_bypass", 1)
+  alt_k3()
+  assert_equal(params:get(REVERB_FREEZE_ID), 0, "a bypassed reverb does not freeze")
+end)
+
+test("ALT+K3 on a bypassed delay does nothing", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  params:set("delay_bypass", 1)
+  for _, index in ipairs({ row_index("delay_feedback"), hold_row_index("delay", "freeze") }) do
+    select_row_index(index)
+    context.clear_engine_calls()
+    key(1, 1)
+    local hint = shown_hint(context)
+    assert_true(not hint:find("K3", 1, true), "the hint has no K3: " .. hint)
+    key(3, 1); key(3, 0); key(1, 0)
+    assert_equal(#context.engine_calls, 0, "ALT+K3 sends nothing")
+    assert_equal(params:get("delay_freeze"), 0, "delay_freeze stays 0")
+  end
+end)
+
+test("E3 turns a freeze row on and off", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("FX")
+  select_row_index(hold_row_index("delay", "freeze"))
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "off"), "the freeze row shows off")
+  enc(3, 1); assert_equal(params:get("delay_freeze"), 1, "E3 up freezes")
+  enc(3, 1); assert_equal(params:get("delay_freeze"), 1, "a further turn up keeps it")
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "on"), "the freeze row shows on")
+  enc(3, -1); assert_equal(params:get("delay_freeze"), 0, "E3 down releases")
+  plant_reverb_freeze(S)
+  select_row_index(hold_row_index("reverb", "freeze"))
+  enc(3, 1); assert_equal(params:get(REVERB_FREEZE_ID), 1, "an offered reverb's row freezes")
+  enc(3, -1); assert_equal(params:get(REVERB_FREEZE_ID), 0)
+end)
+
+test("a frozen effect's section row shows frz at level 4", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("FX")
+  local function entries(text)
+    local found = {}
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == text then table.insert(found, entry) end
+    end
+    return found
+  end
+  local function label_y(name)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == name and entry.level == 2 then return entry.y end
+    end
+  end
+  select_row_index(row_index("delay_time"))
+  context.screen.clear(); redraw()
+  assert_equal(#entries("frz"), 0, "nothing frozen: no frz")
+  params:set("delay_freeze", 1)
+  context.screen.clear(); redraw()
+  local found = entries("frz")
+  assert_equal(#found, 1, "the delay's section row shows frz")
+  assert_equal(found[1].y, label_y("delay"), "on the delay's section row")
+  assert_equal(found[1].level, 4, "at level 4")
+  assert_screen_layout(context, "FX delay frozen")
+  params:set("delay_freeze", 0)
+  plant_reverb_freeze(S)
+  params:set(REVERB_FREEZE_ID, 1)
+  select_row_index(row_index("reverb_mix"))
+  context.screen.clear(); redraw()
+  found = entries("frz")
+  assert_equal(#found, 1, "the reverb's section row shows frz")
+  assert_equal(found[1].y, label_y("reverb"), "on the reverb's section row")
+  assert_equal(found[1].level, 4, "at level 4")
+end)
+
+test("the reverb's freeze row shows -- where it is not offered, and E3 does nothing there", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("FX")
+  select_row_index(hold_row_index("reverb", "freeze"))
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "--"), "the row shows --")
+  context.clear_engine_calls()
+  enc(3, 1); enc(3, -1)
+  assert_equal(#context.engine_calls, 0, "E3 sends nothing")
+  assert_equal(shown_hint(context), "K3:reverb bypass", "K3 is the reverb's bypass")
+  -- offered: on and off
+  plant_reverb_freeze(S)
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "off"), "an offered reverb's row shows off")
+  assert_true(not h.screen_shows(context, "--"), "and no --")
+end)
+
+test("the clear row shows K3; its hint is K3:clear", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  select_row_index(hold_row_index("delay", "clear"))
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "K3"), "the clear row shows K3")
+  assert_equal(shown_hint(context), "K3:clear")
+  context.clear_engine_calls()
+  enc(3, 1); enc(3, -1)
+  assert_equal(#context.engine_calls, 0, "E3 does nothing on the clear row")
+  assert_screen_layout(context, "FX the clear row")
+end)
+
+test("with ALT on a delay or reverb row the hint is K2:rand K3:freeze E3:fine, or K3:unfreeze while frozen", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("FX")
+  key(1, 1)
+  select_row_index(row_index("delay_feedback"))
+  assert_equal(shown_hint(context), "K2:rand K3:freeze E3:fine")
+  params:set("delay_freeze", 1)
+  assert_equal(shown_hint(context), "K2:rand K3:unfreeze E3:fine")
+  select_row_index(hold_row_index("delay", "freeze"))
+  assert_equal(shown_hint(context), "K2:rand K3:unfreeze", "a binary row turns no finer")
+  select_row_index(row_index("delay_feedback"))
+  key(2, 1); context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
+  local widest = shown_hint(context)
+  assert_equal(widest, "K2:cancel K3:unfreeze E3:fine", "the widest ALT hint")
+  assert_equal(screen.text_extents(widest), 122, "measures 122 px")
+  assert_screen_layout(context, "FX ALT on a frozen delay row")
+  key(2, 0)
+  -- a reverb not offered: no K3; offered, K3:freeze
+  select_row_index(row_index("reverb_size"))
+  assert_equal(shown_hint(context), "K2:rand E3:fine", "no K3 on a reverb not offered")
+  plant_reverb_freeze(S)
+  assert_equal(shown_hint(context), "K2:rand K3:freeze E3:fine")
+  params:set(REVERB_FREEZE_ID, 1)
+  assert_equal(shown_hint(context), "K2:rand K3:unfreeze E3:fine")
+  -- the shimmer rows: no K3
+  select_row_index(row_index("shimmer_delay"))
+  assert_equal(shown_hint(context), "K2:rand E3:fine", "no K3 on shimmer")
+  key(1, 0)
+end)
+
+test("K3 and the hint do nothing on the shimmer rows", function()
+  local context = load_strata(); finish_startup(context)
+  show_page("FX")
+  for _, param_id in ipairs({ "shimmer_interval", "shimmer_delay", "shimmer_reverb" }) do
+    select_row_index(row_index(param_id))
+    assert_equal(shown_hint(context), "E3:value", param_id .. ": E3:value")
+    context.clear_engine_calls()
+    key(3, 1); key(3, 0)
+    assert_equal(#context.engine_calls, 0, "K3 on " .. param_id .. " sends nothing")
+  end
+  params:set("shimmer_interval", 4); params:set("shimmer_delay", 1)
+  select_row_index(row_index("shimmer_interval"))
+  context.screen.clear(); redraw()
+  assert_true(h.screen_shows(context, "oct+5th"), "the interval's name")
+  assert_true(h.screen_shows(context, "100%"), "an amount in percent")
+  enc(3, -1); assert_equal(params:get("shimmer_interval"), 3, "E3 turns the interval")
+end)
+
+test("ALT+K2 on shimmer draws the interval (uniform), delay 0-0.5 and reverb 0-0.4", function()
+  local cases = {
+    { row = "shimmer_delay", ranges = { shimmer_delay = { 0, 0.5 }, shimmer_reverb = { 0, 0.4 } },
+      option = "shimmer_interval" },
+    { row = "reverb_size", ranges = { reverb_mix = { 0, 0.5 }, reverb_size = { 0.3, 0.95 }, reverb_damp = { 0, 1 },
+      delay_to_reverb = { 0.3, 1 } } },
+  }
+  for _, case in ipairs(cases) do
+    local context = load_strata(); finish_startup(context)
+    show_page("FX")
+    params:set("filter_mix", 0.4)
+    params:set("delay_freeze", 1)
+    local seen = {}
+    for seed = 1, 40 do
+      select_row_index(row_index(case.row))
+      math.randomseed(seed)
+      context.clear_engine_calls()
+      key(1, 1); key(2, 1); key(2, 0); key(1, 0)
+      for id, range in pairs(case.ranges) do
+        local value = params:get(id)
+        assert_true(value >= range[1] - 1e-6 and value <= range[2] + 1e-6, id .. " in its range: " .. value)
+      end
+      if case.option then seen[params:get(case.option)] = true end
+      assert_equal(params:get("delay_freeze"), 1, "the freeze is never drawn")
+      assert_equal(params:get("filter_mix"), 0.4, "nor the filter's mix")
+      assert_equal(params:get("delay_bypass") + params:get("reverb_bypass"), 0, "nor a bypass")
+      assert_equal(#context.calls_named("clearDelay"), 0, "nor the clear")
+      assert_equal(#context.calls_named("setDelayFreeze"), 0, "and no freeze is sent")
+      key(1, 1); key(2, 1); key(2, 0); key(1, 0)  -- undo
+    end
+    if case.option then
+      for option = 1, #params:lookup_param(case.option).options do
+        assert_true(seen[option], case.option .. " draws option " .. option)
+      end
+    end
+  end
+end)
+
+test("FX's 3.8 layout states lay out, the reverb frozen on high with its freeze offered", function()
+  for _, case in ipairs({
+    { name = "delay frozen", frz = 1 },
+    { name = "reverb frozen on high", frz = 1, plant = true },
+    { name = "reverb frozen on high", frz = 0 },
+    { name = "the clear row", shows = "K3" },
+    { name = "ALT on a frozen delay row", hint = "K2:cancel K3:unfreeze E3:fine" },
+    { name = "shimmer at oct+5th and 100%", shows = "oct+5th" },
+    { name = "last row", shows = "oct down" },  -- the widest interval name, 38 px
+  }) do
+    if case.plant then
+      h.write_performance_active({ tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60,
+        reason = "high: setting" })
+    end
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    if case.plant then
+      assert_equal(S.performance.tier, "high", "the high tier")
+      plant_reverb_freeze(S)
+    end
+    show_page("FX")
+    local record = S.registry.pages[S.constants.UI_PAGES.index.FX]
+    local state
+    for _, each in ipairs(record.layout_states) do
+      if each.name == case.name then state = each end
+    end
+    assert_true(state ~= nil, "the FX record has the state " .. case.name)
+    state.setup(context)
+    context.screen.clear(); redraw()
+    if case.frz then
+      local count = 0
+      for _, entry in ipairs(context.screen.texts) do if entry.text == "frz" then count = count + 1 end end
+      assert_equal(count, case.frz, case.name .. ": frz shown " .. case.frz)
+    end
+    if case.shows then assert_true(h.screen_shows(context, case.shows), case.name .. " shows " .. case.shows) end
+    if case.hint then assert_equal(hint_text(context), case.hint, case.name .. "'s hint") end
+    assert_screen_layout(context, "FX " .. case.name)
+    key(2, 0); key(1, 0)
+  end
 end)
 
 end

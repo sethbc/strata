@@ -24,7 +24,7 @@
 
 What a frozen delay does is the engine's (`docs/notes/engine/delay.md`): the loop's gain exactly 1, the input closed, the time held (a tempo move or a `delay_time` change under a freeze is sent as usual and waits in the engine for the release), ping-pong snapped. Lua keeps sending `setDelay` while frozen; a release then plays the time Lua last sent.
 
-Until 4a there is no FX row for either param: they are in PARAMS > fx and can be mapped to MIDI.
+Both are also FX's rows (`freeze` and `clear`, its ALT+K3 freezing the row's effect, `docs/notes/lua/pages/fx.md`), the header's frozen mark reads `any_frozen` (`docs/notes/lua/ui/header-and-flashes.md`), and both can be mapped to MIDI from PARAMS > fx.
 
 ## Tests (`test/unit/fx_hold_test.lua`)
 
