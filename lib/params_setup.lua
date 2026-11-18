@@ -137,7 +137,9 @@ return function(S)
   -- are number params
   -- text_defaults: a text param's text for a PSET with no line for it, by
   -- id (M.set_text_default; 3.8)
-  local pset = {number_params = {}, record_params = {}, text_defaults = {}}
+  -- read_changed: the ids the last read set to their default (no line for
+  -- them) when that changed them (3.8, the tuning's PSET hook reads it)
+  local pset = {number_params = {}, record_params = {}, text_defaults = {}, read_changed = {}}
 
   -- The text a PSET read gives text param id when the file has no line for
   -- it (3.8: tuning_name and tuning_tones, lib/tuning.lua); a text param
@@ -197,6 +199,25 @@ return function(S)
     return named
   end
 
+  -- The text of id's line in a PSET file's text, as norns' params:read
+  -- reads it (the rest of the line after the quoted id and its colon), or
+  -- nil for no line (3.8: the tuning's PSET hook reads a voice's freq)
+  function M.pset_value(text, id)
+    for line in text:gmatch("[^\n]+") do
+      if line:sub(1, 2) ~= "--" then
+        local quoted, value = line:match('(".-")%s*:%s*(.*)')
+        if quoted and (quoted:gsub('^"', ''):gsub('"$', ''):gsub('\\"', '"')) == id then return value end
+      end
+    end
+    return nil
+  end
+
+  -- Whether the last PSET read gave id its default (the file had no line
+  -- for it) and that changed it (3.8)
+  function M.read_defaulted(id)
+    return pset.read_changed[id] == true
+  end
+
   -- The value a param loads when a PSET has no line for it (#628): its
   -- default, as norns' set_default gives it, for the types that have one
   -- (control, number, option, taper, a binary that is not a trigger; a
@@ -240,11 +261,13 @@ return function(S)
     local file = io.open(filename, "r")
     local text = file and file:read("*a")
     if file then file:close() end
+    pset.read_changed = {}
     if text then
       local named, defaulted = pset.named_ids(text), 0
       for _, id in ipairs(pset.record_params) do
         local default = not named[id] and pset.default(params:lookup_param(id))
         if default then
+          if params:get(id) ~= default then pset.read_changed[id] = true end
           params:set(id, default, silent)
           defaulted = defaulted + 1
         end

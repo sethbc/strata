@@ -383,6 +383,68 @@ test("a PSET without the tuning lines comes back in twelve equal steps, its quan
   assert_equal(#sent_tuning(context), 0, "and sends nothing")
 end)
 
+-- Fix round 1 (#125 with the tuning): a PSET without the tuning lines,
+-- read over a session in another tuning, loads every voice's saved freq
+-- exactly once the default tuning is in force
+local FIVE_EQUAL = "1200 0 240 480 720 960"
+
+-- A PSET of this session (voice 3 quantized on C#4) without its tuning
+-- lines, at path
+local function pset_without_tuning(context, name)
+  util.make_dir(context.data_dir)
+  params:set("v3_quantize", 1)
+  params:set("v3_freq", freq_of(61))
+  local path = context.data_dir .. name .. ".pset"
+  params:write(path, name)
+  local lines = {}
+  for line in h.file_text(path):gmatch("[^\n]*\n") do
+    if not line:match('^"tuning_') then lines[#lines + 1] = line end
+  end
+  h.write_text(path, table.concat(lines))
+  return path
+end
+
+-- How many times v3_freq's action runs while fn does
+local function freq_actions(fn)
+  local param = params:lookup_param("v3_freq")
+  local real, count = param.action, 0
+  param.action = function(...) count = count + 1; return real(...) end
+  fn()
+  param.action = real
+  return count
+end
+
+test("a PSET without the tuning lines loads a quantized voice's saved pitch over a coarse tuning (#125)", function()
+  local context = load_strata({ data_subdir = "tuning_pset_coarse" }); finish_startup(context)
+  local path = pset_without_tuning(context, "csharp")
+  params:set("tuning_name", "5 equal")
+  params:set("tuning_tones", FIVE_EQUAL)
+  assert_equal(tuning().count(), 5, "the session is in five equal steps")
+  params:read(path)
+  assert_equal(tuning().count(), 12, "twelve equal steps again")
+  assert_near(note_of(params:get("v3_freq")), 61, 0.01, "voice 3 on C#4 to the cent")
+end)
+
+test("a PSET with its tuning lines, or read over twelve equal steps, sets no freq twice", function()
+  local context = load_strata({ data_subdir = "tuning_pset_once" }); finish_startup(context)
+  local path = pset_without_tuning(context, "plain")
+  params:set("v3_freq", freq_of(64))
+  assert_equal(freq_actions(function() params:read(path) end), 1, "over twelve equal steps: the voice's line alone")
+  assert_near(note_of(params:get("v3_freq")), 61, 0.01, "C#4")
+  use("19 equal")
+  params:set("v3_freq", freq_of(60 + 12 * 7 / 19))
+  local tuned = context.data_dir .. "tuned.pset"
+  params:write(tuned, "tuned")
+  local saved = params:get("v3_freq")
+  use("12 equal")
+  local count = freq_actions(function() params:read(tuned) end)
+  -- the tuning line's change re-snaps the session's freq first (as a scale
+  -- line does, #125), then the voice's own line sets the saved one: nothing
+  -- sets it again after
+  assert_equal(count, 2, "with its tuning lines: the re-snap and the voice's line, no third set")
+  assert_equal(params:get("v3_freq"), saved, "the saved freq, exactly")
+end)
+
 test("the start sends no tuning and makes the tunings folder", function()
   local context = load_strata(); finish_startup(context)
   assert_equal(#sent_tuning(context), 0, "a default start sends no setTuning or setTuningTone (ruling 42)")
