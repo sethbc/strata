@@ -85,6 +85,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 109 | read the note pool from data/strata/notes.data (`START_ORDER.notes_load`; a missing file leaves the tier's default, one it cannot use too, with a console line), send it (`setNotePool`) and join the expression flush to the LFO clock's step hooks (3.5) | `lib/notes.lua` |
 | 110 | reload the remembered buffers, after the scenes, which may use them (`load_buffers_from_disk`, sets `S.buffers_loaded`) | `lib/buffers.lua` |
 | 111 | load the random sequences' values from data/strata/sequences.data (`START_ORDER.sequences_load`; with no file it can use, every value is drawn and the timed write started, one it cannot use is set aside), then redraw the screen (3.7) | `lib/random_sequences.lua` |
+| 112 | join the arpeggiator's shuffle to the LFO clock's step hooks, once (`START_ORDER.arp`; sends nothing) (3.8) | `lib/arp.lua` |
 | 120 | the start-up clock (below) | `strata.lua` |
 | 125 | check every global LFO destination's param, then start the LFO clock (`S.lfo_clock`, 48 Hz, 3.4) | `lib/lfos.lua` |
 | 130 | start the frame clock (`start_frame_clock`) | `lib/ui/frame.lua` |
@@ -287,6 +288,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 | `lib/envelopes.lua` | `envelopes` | `docs/notes/lua/envelopes.md` | envelopes_test.lua |
 | `lib/matrix.lua` | `matrix` | `docs/notes/lua/matrix.md` | matrix_test.lua |
 | `lib/notes.lua` | `notes` | `docs/notes/lua/notes.md` | notes_test.lua |
+| `lib/arp.lua` | `arp` | `docs/notes/lua/arp.md` | arp_test.lua |
 | `lib/mpe.lua` | `mpe` | `docs/notes/lua/mpe.md` | mpe_test.lua |
 | `lib/expression.lua` | `expression` | `docs/notes/lua/expression.md` | expression_test.lua |
 | `lib/slices.lua` | `slices` | `docs/notes/lua/slices.md` | slices_test.lua |
@@ -348,6 +350,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
   | `lfo clock` | `lib/lfos.lua` | the LFO clock (`S.lfo_clock`) runs from its start step to cleanup, and only then (3.4) |
   | `step editor` | `lib/pages/seq.lua` | the step editor is open exactly while its owner is the modal one (`S.lib.ui_modal.top()`) (3.4) |
   | `notes` | `lib/notes.lua` | the note pool is a whole number in 0..`NOTE_POOL.max`, the extra notes held never exceed it, and a stopped voice holds none (3.5) |
+  | `arp` | `lib/arp.lua` | only a running arpeggiating voice holds notes in its list, at most `ARP.max_steps` - 1, each owner and key once and none also in a slot (3.8) |
   | `rig` | `lib/io/rig.lua` | every rig setting holds a value of its spec (`RIG.specs`), and no other key is held (3.6) |
   | `targets` | `lib/io/targets.lua` | every sounding target note names only registered targets (at least one), and no voice's id has two pending offs or an off for a note no longer sounding (3.6) |
   | `midi out` | `lib/io/midi_out.lua` | no port has two MPE voices nor a plain voice's channel inside an MPE voice's zone on it, and no note or channel count is negative (3.6) |

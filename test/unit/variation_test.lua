@@ -936,4 +936,27 @@ test("the chord set follows the tuning (ruling 40)", function()
   end
 end)
 
+-- 3.8 (package 2b): the intervals sent are the arpeggiator's list
+test("send_intervals sends the arpeggiator's list when it is on", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local V = S.lib.variation.VARIATION
+  params:set("v1_intervals", V.set_index.fifths)
+  local function sent()
+    local values = {}
+    for _, call in ipairs(context.calls_named("setGrainParam")) do
+      local index = call.args[1] == 0 and call.args[2]:match("^interval(%d)$")
+      if index and tonumber(index) <= 5 then values[tonumber(index)] = call.args[3] end
+    end
+    return table.concat(values, " ")
+  end
+  context.clear_engine_calls()
+  S.lib.variation.send_intervals(1)
+  assert_equal(sent(), "-12 -5 0 7 12", "off: the set as it is")
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.down)
+  context.clear_engine_calls()
+  S.lib.variation.send_intervals(1)
+  assert_equal(sent(), "12 7 0 -5 -12", "down: the arpeggiator's order")
+end)
+
 end

@@ -1640,4 +1640,76 @@ test("an extra note on a voice source plays its rate as an input voice's", funct
   assert_near(on[1].args[5], 2 ^ (7 / 12), 1e-9, "67 over 60")
 end)
 
+-- 3.8 (design §4.3, package 2b): on an arpeggiating voice a further note is
+-- the arpeggiator's, never a slot
+test("play on an arpeggiating voice returns NOTES.arp_slot and takes no slot", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
+  assert_equal(play(context, 1, 1, 60), 1, "the first note: the own note")
+  context.clear_engine_calls()
+  assert_equal(play(context, 1, 2, 64), notes.NOTES.arp_slot, "the second: the arpeggiator's")
+  assert_equal(notes.NOTES.arp_slot, 0, "0: truthy, never 1")
+  assert_equal(#context.calls_named("noteOn") + #context.calls_named("noteExpression"), 0, "no note command")
+  assert_equal(notes.pool_used(), 0, "no place in the pool"); assert_equal(notes.held(1), 1, "slot 1 alone")
+  assert_equal(notes.find(1, "midi", 2), nil, "find does not find it")
+  assert_equal(#notes.slots(1), 1, "one slot used")
+  -- extra_only (a step chord's further note) and quiet go the same way; own_only never
+  assert_equal(play(context, 1, 3, 67, {owner = "seq", extra_only = true}), 0, "extra_only: the arpeggiator's")
+  assert_equal(play(context, 1, 4, 72, {own_only = true}), 1, "own_only: the own note")
+  -- a stopped voice: slot 1, as ever
+  params:set("v3_arp", S.lib.arp.ARP.mode_index.up)
+  assert_equal(play(context, 3, 1, 60, {quiet = true}), 1, "a stopped voice's note is its own")
+end)
+
+-- The list holds pitches alone: a slice's note (a region) plays in its slot
+test("a note with a region (a slice) on an arpeggiating voice keeps its slot", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
+  play(context, 1, 1, 60)
+  context.clear_engine_calls()
+  local slot = play(context, 1, 2, 60, {owner = "grid", region = {0.25, 0.25}})
+  assert_equal(slot, 2, "an extra slot")
+  assert_equal(#context.calls_named("noteOn"), 1, "its noteOn")
+  assert_equal(#S.lib.arp.held(1), 0, "nothing in the list")
+  -- turned on again over it, the arpeggiator leaves it in its slot
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.off)
+  play(context, 1, 3, 64)
+  context.clear_engine_calls()
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
+  assert_equal(S.lib.notes.find(1, "grid", 2), 2, "the slice's note keeps its slot")
+  assert_equal(#context.calls_named("noteOff"), 1, "the plain extra note alone is cut")
+  assert_equal(#S.lib.arp.held(1), 1, "and is in the list")
+end)
+
+test("release, release_owner, forget_owner, forget and release_all reach the arpeggiator's entries", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes, arp = S.lib.notes, S.lib.arp
+  local function keys(voice)
+    local list = {}
+    for _, entry in ipairs(arp.held(voice)) do list[#list + 1] = entry.owner .. tostring(entry.key) end
+    return table.concat(list, " ")
+  end
+  params:set("v1_arp", arp.ARP.mode_index.up)
+  play(context, 1, 1, 60); play(context, 1, 2, 64); play(context, 1, 3, 67); play(context, 1, 4, 70, {owner = "seq"})
+  play(context, 1, 5, 72, {owner = "grid"})
+  assert_equal(keys(1), "midi2 midi3 seq4 grid5", "four held")
+  context.clear_engine_calls()
+  assert_equal(notes.release(1, "midi", 2), true, "release: true"); assert_equal(keys(1), "midi3 seq4 grid5")
+  assert_equal(notes.release(1, "midi", 2), false, "a second release: false")
+  assert_equal(#context.calls_named("noteOff"), 0, "no noteOff")
+  notes.release_owner(1, "seq"); assert_equal(keys(1), "midi3 grid5", "release_owner")
+  assert_equal(notes.forget(1, "grid", 5), true, "forget: true"); assert_equal(keys(1), "midi3")
+  notes.forget_owner(1, "midi"); assert_equal(keys(1), "", "forget_owner")
+  assert_true(notes.slots(1)[1] == nil, "the own note was MIDI's: dropped, sounding on")
+  play(context, 1, 6, 60); play(context, 1, 7, 64)
+  notes.release_all(1); assert_equal(keys(1), "", "release_all")
+  play(context, 1, 6, 60); play(context, 1, 7, 64)
+  toggle_voice(1); assert_equal(keys(1), "", "the voice's stop")
+  assert_equal(#context.calls_named("noteOff"), 0, "never a noteOff")
+end)
+
 end

@@ -148,9 +148,11 @@ return function(S)
     return {}
   end
 
-  -- interval1..8 (0 past the set) and intervalCount, always
+  -- interval1..8 (0 past the list) and intervalCount, always: the list the
+  -- arpeggiator orders (3.8, S.lib.arp.list: the set as it is while it is
+  -- off, else the set or the held chord in the mode's order)
   local function send_intervals_now(voice_idx)
-    local set = M.interval_set(voice_idx)
+    local set = S.lib.arp.list(voice_idx, M.interval_set(voice_idx))
     for index = 1, V.max_intervals do
       engine.setGrainParam(voice_idx - 1, "interval" .. index, set[index] or 0)
     end

@@ -2452,6 +2452,45 @@ test("a step's chord plays its first note as the override and the rest as extra 
   pattern_clock_stop()
 end)
 
+-- 3.8 (design §4.3, package 2b): on an arpeggiating voice a step's chord
+-- is the arpeggiator's list for its step, never extra notes
+test("a three-note step chord on an arpeggiating voice: no noteOn for notes 2-3; list {0, a, b} for the step; gone at the next step without a chord", function()
+  local context, S = setup()
+  local seq, notes = S.lib.sequencer, S.lib.notes
+  params:set("v1_freq", 440)
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.down)
+  S.patterns[1][1] = 15
+  S.patterns[1][2] = 15
+  seq.set_step_attr(1, 1, "notes", {0, 4, 7})
+  local function list()
+    local values, count = {}, nil
+    for _, call in ipairs(context.calls_named("setGrainParam")) do
+      if call.args[1] == 0 then
+        local index = call.args[2]:match("^interval(%d)$")
+        if index then values[tonumber(index)] = call.args[3] end
+        if call.args[2] == "intervalCount" then count = call.args[3] end
+      end
+    end
+    if count == nil then return "nil" end
+    local texts = {}
+    for index = 1, count do texts[index] = string.format("%g", values[index]) end
+    return "{" .. table.concat(texts, ", ") .. "}"
+  end
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_equal(#note_calls(context, "noteOn", 0), 0, "no noteOn for notes 2 and 3")
+  assert_equal(list(), "{7, 4, 0}", "the step's chord is the list, down")
+  assert_equal(#retriggers_of(context, 0), 1, "one retrigger: the step's")
+  assert_equal(notes.pool_used(), 0, "the pool unused")
+  assert_equal(#S.lib.arp.held(1), 2, "the arpeggiator holds notes 2 and 3")
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_equal(list(), "{}", "the next step has no chord: the list ends")
+  assert_equal(#S.lib.arp.held(1), 0, "nothing held")
+  assert_equal(#note_calls(context, "noteOff", 0), 0, "no noteOff")
+  pattern_clock_stop()
+end)
+
 test("a chord step on a stopped voice starts it, then takes its further notes", function()
   local context, S = setup()
   local seq, notes = S.lib.sequencer, S.lib.notes

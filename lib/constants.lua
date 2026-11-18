@@ -189,6 +189,7 @@ local START_ORDER = {
   notes_load = 109,      -- lib/notes.lua: notes.data, the note pool (3.5)
   buffers_load = 110,    -- lib/buffers.lua: buffers.data (sets S.buffers_loaded)
   sequences_load = 111,  -- lib/random_sequences.lua: sequences.data, the random sequences' values (3.7)
+  arp = 112,             -- lib/arp.lua: the shuffle's LFO step hook (3.8)
   startup_clock = 120,   -- strata.lua: voices 1 and 2
   lfo_clock = 125,       -- lib/lfos.lua: the LFO clock (3.4)
   frame_clock = 130,     -- lib/ui/frame.lua

@@ -461,8 +461,9 @@ end
 test("registered rows appear in their VOICE section, new sections in place, binary rows have kind binary", function()
   load_with(register_row_records)
   local outline = row_outline(1)
-  -- (after 3.8 1c's rows, registered before the probe)
-  assert_true(outline:find("grain:v1_pan_wander:control grain:v1_probe:control grain:v1_probe_switch:binary crossmod ",
+  -- (after 3.8 1c's rows and 2b's arp, registered before the probe)
+  assert_true(outline:find("grain:v1_pan_wander:control grain:v1_arp:option grain:v1_probe:control "
+    .. "grain:v1_probe_switch:binary crossmod ",
     1, true), "probe rows end the grain section: " .. outline)
   assert_true(not outline:find("probe sect", 1, true), "a synth voice has no probe sect section")
   -- (after mix and the sections registered before it: lib/variation.lua's)

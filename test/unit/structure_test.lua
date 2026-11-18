@@ -1042,6 +1042,7 @@ local function start_steps()
     { "buffers load", { "file read buffers.data", "engine.loadBuffer", "redraw requested", "grid redrawn",
       "print 1 buffers reloading from buffers.data" } },
     { "sequences load", { "file read sequences.data", "redraw requested" } },
+    { "arp", {} },
     { "startup clock", voice_sync },
     { "lfo clock", { "clock started" } },
     { "frame clock", { "clock started" } },

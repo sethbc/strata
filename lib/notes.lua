@@ -33,6 +33,9 @@ return function(S)
     rate_root_note = 60, rate_range = {0.25, 4}, note_range = {0, 127}, a4 = {note = 69, freq = 440},
     owners = {midi = true, seq = true, grid = true},  -- 3.7: a grid's slice keys (key port * 100 + slice)
     step_owner = "seq",  -- the sequencer's owner (SEQ.note_owner): its chord's extra notes are no hit of their own
+    -- 3.8 (package 2b): what play returns for a note the arpeggiator takes
+    -- (truthy and never 1: it holds no slot), and the slot its hooks hear
+    arp_slot = 0,
     expression_keys = {"bend", "amp", "position", "size", "main"},
     neutral = {bend = 1, amp = 1, position = 0, size = 0, main = 0},
     expression_ranges = {bend = {0.0625, 16}, amp = {0, 2}, position = {-1, 1}, size = {-1, 1}, main = {-1, 1}},
@@ -216,6 +219,9 @@ return function(S)
       end
     end
   end
+  -- 3.8 (package 2b): lib/arp.lua tells the hooks of its held notes, each
+  -- a record {voice, slot = NOTES.arp_slot, owner, key, pitch, velocity}
+  M.run_note_hooks = run_note_hooks
 
   -- A note leaves its slot: the flush skips it, and a held one's slot ended
   -- now (and the hooks hear it ended, unless moved: its next record carries on)
@@ -491,6 +497,8 @@ return function(S)
     if not note.quiet then S.lib.engine_sync.retrigger(voice, record.velocity, "note") end
     count(messages)
     if M.held(voice) ~= held_before then held_changed() end
+    -- 3.8: the own note is the arpeggiator's base (its held steps resent from it)
+    S.lib.arp.own_note(voice, record.pitch)
     return 1
   end
 
@@ -584,6 +592,16 @@ return function(S)
     -- quiet note its caller never started), so branches 3 to 6 run only on
     -- a running voice
     local own = slots[voice][1]
+    -- 3.8 (package 2b, design §4.3): on a running arpeggiating voice whose
+    -- own note is held, a further note (a chord's, extra_only, too) is a
+    -- step of the arpeggiator's list, never a slot (NOTES.arp_slot). With
+    -- slot 1 free the note is the own note and the list's new base; the
+    -- same key held in the list leaves it first. A note with a region (a
+    -- slice) plays as before: the list holds pitches alone
+    if S.voices[voice].active and S.lib.arp.on(voice) and not played.region then
+      if (own and own.held) or note.extra_only then return S.lib.arp.hold(voice, played) end
+      S.lib.arp.release(voice, played.owner, played.key)
+    end
     if note.extra_only then
       -- 3 alone: a free extra slot under the cap, room in the pool, a running voice
       local active = S.voices[voice].active
@@ -665,10 +683,12 @@ return function(S)
     held_changed()
   end
 
-  -- A note held to its end (3.7's hold_to_end) is left alone: false
+  -- A note held to its end (3.7's hold_to_end) is left alone: false. A note
+  -- in no slot may be the arpeggiator's (3.8: S.lib.arp.release)
   function M.release(voice, owner, key)
     local slot = M.find(voice, owner, key)
-    if not slot or slots[voice][slot].hold_to_end then return false end
+    if not slot then return S.lib.arp.release(voice, owner, key) end
+    if slots[voice][slot].hold_to_end then return false end
     release_slot(voice, slot)
     return true
   end
@@ -705,6 +725,7 @@ return function(S)
   -- slice still playing to its end (the final review's I-1)
   function M.release_owner(voice, owner)
     if not whole_in(voice, 1, NUM_VOICES) then return end
+    S.lib.arp.release_owner(voice, owner)  -- 3.8: the owner's steps of the arpeggiator's list first
     local order = {}
     for slot = 2, NOTE_SLOTS do table.insert(order, slot) end
     table.insert(order, 1)
@@ -722,6 +743,7 @@ return function(S)
   -- note ends (ruling 39)
   function M.forget_owner(voice, owner)
     if not whole_in(voice, 1, NUM_VOICES) then return end
+    S.lib.arp.forget_owner(voice, owner)  -- 3.8: the owner's steps of the arpeggiator's list
     for slot = 2, NOTE_SLOTS do
       local record = slots[voice][slot]
       if record and record.held and record.owner == owner then release_slot(voice, slot) end
@@ -738,7 +760,7 @@ return function(S)
   -- with nothing sent (it sounds on as nobody's). true when a note went
   function M.forget(voice, owner, key)
     local slot = M.find(voice, owner, key)
-    if not slot then return false end
+    if not slot then return S.lib.arp.release(voice, owner, key) end  -- 3.8: perhaps the arpeggiator's
     if slot > 1 then
       release_slot(voice, slot)
     else
@@ -753,6 +775,7 @@ return function(S)
   function M.release_all(voice)
     if not whole_in(voice, 1, NUM_VOICES) then return end
     local held_before, now = M.held(voice), util.time()
+    S.lib.arp.clear(voice)  -- 3.8: the arpeggiator's held steps, sending nothing
     for slot = 1, NOTE_SLOTS do
       if slots[voice][slot] then forget(slots[voice][slot], now) end
     end
@@ -1006,6 +1029,31 @@ return function(S)
       held_changed()
       unpark_alone(voice, now)  -- ruling 39: the cuts may have taken the voice's last held note
     end
+  end
+
+  -- 3.8 (package 2b): the arpeggiator turned on takes voice's held extra
+  -- notes: each one's {owner, key, pitch, velocity}, in slot order, and its
+  -- slot cut (noteOff with cut 1) and forgotten, as a freeze's cuts are
+  -- (cut_extras' way); a note with a region (a slice) keeps its slot
+  function M.take_extras(voice)
+    local taken = {}
+    if not whole_in(voice, 1, NUM_VOICES) then return taken end
+    local now = util.time()
+    for slot = 2, NOTE_SLOTS do
+      local record = slots[voice][slot]
+      if record and not record.region then
+        taken[#taken + 1] = {owner = record.owner, key = record.key, pitch = record.pitch, velocity = record.velocity}
+        engine.noteOff(voice - 1, slot - 1, 1)
+        forget(record, now)
+      end
+    end
+    count(#taken)
+    if #taken > 0 then
+      update_lowered(voice)
+      held_changed()
+      unpark_alone(voice, now)  -- ruling 39: the cuts may have taken the voice's last held note
+    end
+    return taken
   end
 
   -- Every start (after its voiceOn, the voice not yet marked running) and
