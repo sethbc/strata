@@ -157,7 +157,9 @@
         var cents = (Signal.newClear(frames).putEach(keys, keys) * (100 / res)) + ((low - rootNote) * 100);
         var periods = (((rootNote - low) * 100) / period).ceil + 1;  // whole periods that make every frame's cents positive
         var shifted = cents + (periods * period);
-        var into = shifted.mod(period);                              // cents into the period
+        // cents into the period, [0, period): a wrap into [-half, half) moved
+        // up by half (3.13's Signal has no mod; 3.14 added one)
+        var into = (shifted - (period / 2)).wrap2(period / 2) + (period / 2);
         var start = shifted - into - (periods * period);             // the period's start, cents from degree 0
         var tone = (into * 0) + ext[0], boundary = 0;
         while { boundary < (ext.size - 1) } {
