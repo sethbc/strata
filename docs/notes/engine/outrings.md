@@ -37,7 +37,7 @@ The freeze area's copy family serves a voice source as it serves the input (`fre
 
 ## Memory
 
-The writer takes about 5 KB of the pool (seven: about 35 KB in every case), measured by the memory area beside the grain defs. The memory area's voice-source cases (3.8, package 1d, from the design's prototype): V2, every voice switched between three other voices' rings 0.2 s apart (21 `\strataGrainRing`, and on high seven spectral copy writers), and V4, V2 with the pool full, sixteen ring notes live and cutting; the figures are in [memory.md](memory.md).
+The writer takes 5.9 KB of the pool (seven: about 41 KB in every case), by twenty-writer allocation probes (`checkOutRingWriterSize`, at most 8 KB), on 3.14.1 and on 3.13 alike. The memory area's voice-source cases (3.8, package 1d, from the design's prototype): V2, every voice switched between three other voices' rings 0.2 s apart (21 `\strataGrainRing` at the probes, and on high seven spectral copy writers, waited for before the probes), against the floors 3072 and 3584 KB; and V4, V2 with the pool full, sixteen ring notes live and cutting (53 `\strataGrainRing`), against 1280 KB. Measured at the package (3.14.1, and three runs on 3.13): V2 5760 KB free on standard and 5050-5060 on high, V4 3400 on standard and 2690 on high. They are not the tightest cases: high synth -> buffer -> synth read 4270 in the same runs. The prototype read V2 at 4118-4135 and V4 at 1882-1899 on high, before 0b moved the delay's line out of the pool.
 
 ## The engine check (`test/engine_check/outrings.scd`)
 
