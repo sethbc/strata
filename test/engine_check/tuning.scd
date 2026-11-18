@@ -192,8 +192,12 @@ SynthDef(\strataCheckTuningGrainLog, { arg in, rates, durs;
     BufWr.ar(Delay1.ar(rate), rates, index, 0);
     BufWr.ar(Delay1.ar(elapsed), durs, index, 0);
 }).add;
-// the grain defs bake in scaleBuffer's bufnum: rebuild them for this engine (variation.scd)
+// the grain defs bake in scaleBuffer's bufnum: rebuild them for this engine
+// (variation.scd), and the stage with them, so the three defs' descs stay
+// one engine's (the modulation area, after this one in its shard, checks
+// that they default fastModIn to one engine's silent bus)
 engine.addGrainDefs;
+engine.addVoiceMixDef;
 probeGroup = Group.after(engine.processGroup);
 quietBus = Bus.audio(server, 2);
 readOut = Bus.audio(server, 2);
