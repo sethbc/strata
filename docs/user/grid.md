@@ -15,14 +15,14 @@ Since 3.8 every grid is built on one model. A **pane** is seven lines of sixteen
 3. [Scenes](grid/pages/scenes.md) - recall and save the sixteen scenes, the morph's corners and its X and Y, the scene sequencer and the gesture recorders
 4. [Sources](grid/pages/sources.md) - what each voice grains: its synth, another voice or itself, the input (stereo, left or right) or a buffer
 5. [Positions](grid/pages/positions.md) - each voice's buffer as sixteen cells; on its second side every voice's bookmark, store, hold and whole keys, and the slots' record and clear keys
-6. voices - coming in the rest of 3.8
+6. [Voices](grid/pages/voices.md) - each voice's mute, solo and lock, its pattern's clear, randomize and copy, a copy of its sound onto another voice, and its level. Its FZ key freezes the voice's audio
 7. [FX](grid/pages/fx.md) - the delay, the reverb and the master in three sets of five faders, the bypasses, the delay's freeze and clear, sync, the filter's type and mix, and shimmer's interval
 
 Until a page arrives its page key is dark and does nothing.
 
 The sizes, one page each:
 
-- [16×16 (256)](grid/256.md) - two panes, rows 1-7 over rows 9-15, each with its own page and strip; it starts on patterns over voices (patterns over patterns until the voices page arrives)
+- [16×16 (256)](grid/256.md) - two panes, rows 1-7 over rows 9-15, each with its own page and strip; it starts on patterns over voices
 - [16×8 (128 horizontal)](grid/128h.md) - one pane, its strip on row 8
 - [8×16 (128 vertical)](grid/128v.md) - one pane turned: voices down columns 1-7, the strip down column 8. A monome 128 reports itself as 16×8: to play it upright, set its port's rotation on [SETUP](pages/setup.md) (`grid 1 rotation` for port 1) to 90 or 270, whichever puts its cable where you want it
 - [8×8 (64)](grid/64.md) - the left or the right half of a pane, eight columns at a time, with a small strip on row 8; hold its first key to choose the page and half

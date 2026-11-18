@@ -2,7 +2,7 @@
 
 - The layout is its spec alone (`S.lib.grid_pane.arrange`): no key, LED or page of its own; pages are their own files (`docs/notes/lua/grid/pane.md`).
 - Two panes, each with its own page, side and keys: a page change on one ends only that pane's keys, never the other's or a strip's.
-- It starts on patterns over voices (`start`); while the voices page has no record the bottom pane starts on patterns.
+- It starts on patterns over voices (`start`); a start page with no record would start on patterns (the core's `start_page`).
 
 ## Owns
 
