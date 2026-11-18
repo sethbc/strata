@@ -1599,6 +1599,50 @@ test("every constant AGENTS.md quotes with a value has that value", function()
   assert_true(#problems == 0, table.concat(problems, "\n"))
 end)
 
+-- The rest of AGENTS.md's Named constants live in state-and-voices.md's
+-- constants bullet: `NAME` (number), `TABLE.field` (number), `NAME`
+-- (`field` number, ...) and names quoted without a value (#783)
+test("every constant state-and-voices.md quotes beside AGENTS.md's has that value (#783)", function()
+  load_strata()
+  local constants = local_value("S").constants
+  local notes = read_repo_file("docs/notes/lua/state-and-voices.md")
+  local bullet = notes:match("\n  %- Beside the %a+ `AGENTS%.md` quotes %(Named constants%):([^\n]*)")
+  assert_true(bullet ~= nil, "found the bullet beside AGENTS.md's Named constants")
+  local problems, plain, fields = {}, 0, 0
+  local function compare(label, actual, quoted)
+    if actual ~= tonumber(quoted) then
+      table.insert(problems, label .. ": the notes say " .. quoted .. ", constants has " .. tostring(actual))
+    end
+  end
+  for name, suffix, after in bullet:gmatch("`([%u_][%u%d_]*)([%.%w_]*)`()") do
+    local value = constants[name]
+    local label = name .. suffix
+    local field = suffix:match("^%.([%a_][%w_]*)$")
+    if suffix ~= "" and not field then
+      table.insert(problems, label .. ": not a NAME or NAME.field quote")
+    elseif field and type(value) == "table" then value = value[field] end
+    if value == nil or (field and type(constants[name]) ~= "table") then
+      table.insert(problems, label .. ": quoted in the notes, but constants has no such value")
+    else
+      local paren = bullet:match("^ (%b())", after)
+      local number = paren and paren:match("^%((%-?%d[%d%.]*)[,)]")
+      if number then
+        if field then fields = fields + 1 else plain = plain + 1 end
+        compare(label, value, number)
+      elseif paren then
+        for key, quoted in paren:gmatch("`([%l_][%w_]*)` (%-?%d[%d%.]*)") do
+          fields = fields + 1
+          compare(label .. "." .. key, type(value) == "table" and value[key] or nil, quoted)
+        end
+      end
+    end
+  end
+  -- a stale name is listed above; these catch a bullet the patterns no longer read
+  if plain < 13 then table.insert(problems, "the bullet quotes at least thirteen plain values, saw " .. plain) end
+  if fields < 4 then table.insert(problems, "the bullet quotes at least four field values, saw " .. fields) end
+  assert_true(#problems == 0, table.concat(problems, "\n"))
+end)
+
 test("state-and-voices.md names every registry", function()
   load_strata()
   local notes = read_repo_file("docs/notes/lua/state-and-voices.md")
