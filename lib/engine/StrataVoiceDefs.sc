@@ -48,11 +48,13 @@
     }
 
     // Karplus's two Pluck lines' longest delay (s): Pluck takes
-    // ceil(max x rate + 1) + 64 frames, rounded up to a power of two, from
-    // the pool in its constructor, and 0.0839 s is 4096 frames at 48 kHz
-    // (and at 44.1 kHz), where 0.1 s took 8192: 49.7 KB a synth, not 80.9.
-    // Its lowest pitch is 1 / 0.0839 = 11.9 Hz (Lua's freq floor is 20 Hz;
-    // bend and crossmod below it hold there)
+    // ceil(max x rate + 1) + a block of frames, rounded up to a power of
+    // two, from the pool in its constructor, and 0.0839 s is 4096 frames at
+    // 48 kHz (and at 44.1 kHz), where 0.1 s took 8192: 49.7 KB a synth, not
+    // 80.9. Pluck clips its delay to that line, not to this time, so its
+    // lowest pitch is 48000 / 4096 = 11.7 Hz (10.8 Hz at 44.1 kHz; 5.9 Hz
+    // with 0.1 s): a lower pitch (a bend or crossmod under Lua's 20 Hz
+    // floor, an extra note down to noteOn's 8 Hz) holds there
     karplusMaxDelay { ^0.0839 }
 
     // The ranges (s) of every voice def's attackTime and releaseTime (a
