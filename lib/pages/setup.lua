@@ -2,7 +2,8 @@
 -- The SETUP page: a field list (MIDI port, channel mode, 3.5's note off,
 -- mpe & zones (K3 opens S.lib.ui_zones' editor) and note pool, mutations
 -- on/off, rate, probability, amount, save scenes, load scenes, each grid
--- port's rotation, the performance setting and its buffer length) with the status
+-- port's rotation, the performance setting and its buffer length; 3.8's
+-- scale & tuning (K3 opens S.lib.ui_scale_editor's editor)) with the status
 -- lines (the running tier,
 -- grids, arc, buffers) below it; E2 moves the cursor, E3 edits the field's
 -- value, K3 runs an action field (save, load, mpe & zones). It scrolls like FX
@@ -77,6 +78,9 @@ return function(S)
     end},
     -- 3.4: the patterns follow the clock's transport (lib/sequencer.lua)
     {label = "transport", kind = "param", param_id = "seq_follow_transport", binary = {[0] = "off", [1] = "follow"}},
+    -- 3.8: the scale and tuning editor (S.lib.ui_scale_editor, a modal
+    -- owner), appended after transport (ruling 44)
+    {label = "scale & tuning", kind = "action", hint = "open", run = function() S.lib.ui_scale_editor.open() end},
   }
   M.SETUP_FIELDS = SETUP_FIELDS
 
@@ -389,6 +393,65 @@ return function(S)
     end}
   end
 
+  -- The scale and tuning editor (S.lib.ui_scale_editor) opened from its
+  -- row, the cursor on row (1 root, 2 scale, 3 notes, 4 tuning), after
+  -- prepare: the widest scale name, every class in, the longest built-in, a
+  -- long file name (cut by fit_text), 19 equal's --, a pending choice, a
+  -- refused file's reason
+  local function scale_editor_state(name, row, prepare)
+    return {name = name, setup = function()
+      -- a layout state plays no MIDI: the note tap is a do-nothing stand-in
+      S.lib.midi_in.set_note_tap = function() end
+      if prepare then prepare() end
+      local editor = S.lib.ui_scale_editor
+      editor.open()
+      local owner = S.lib.ui_modal.top()
+      owner.enc(2, row - 1)
+    end}
+  end
+  local function use_tuning(wanted)
+    for _, entry in ipairs(S.lib.tuning.built_ins()) do
+      if entry.name == wanted then S.lib.tuning.select(entry) end
+    end
+  end
+  local function tunings_file(file, text)
+    local folder = _path.data .. S.lib.tuning.TUNING.folder
+    util.make_dir(folder)
+    local handle = io.open(folder .. file, "w")
+    handle:write(text)
+    handle:close()
+  end
+  local SCALE_EDITOR_STATES = {
+    scale_editor_state("scale & tuning editor, root", 1),
+    scale_editor_state("scale & tuning editor, the widest scale", 2, function()
+      for index, option in ipairs(params:lookup_param("scale").options) do
+        if option == "Gagaku Rittsu Sen Pou" then params:set("scale", index) end
+      end
+    end),
+    scale_editor_state("scale & tuning editor, every class in", 3),
+    scale_editor_state("scale & tuning editor, the longest tuning", 4, function() use_tuning("meantone 1/4") end),
+    scale_editor_state("scale & tuning editor, a long file name", 4, function()
+      tunings_file("a very long tuning file name for the editor.scl", "Long\n1\n2/1\n")
+      local entry = S.lib.tuning.load_file("a very long tuning file name for the editor.scl")
+      if entry then entry.name = "a very long tuning file name for the editor" end
+      if entry then S.lib.tuning.select(entry) end
+    end),
+    scale_editor_state("scale & tuning editor, 19 equal", 3, function() use_tuning("19 equal") end),
+    {name = "scale & tuning editor, a pending choice", setup = function()
+      S.lib.midi_in.set_note_tap = function() end
+      S.lib.ui_scale_editor.open()
+      local owner = S.lib.ui_modal.top()
+      owner.enc(2, 3); owner.enc(3, 1)
+    end},
+    {name = "scale & tuning editor, a refused file", setup = function()
+      S.lib.midi_in.set_note_tap = function() end
+      tunings_file("broken.scl", "Broken\n0\n")
+      S.lib.ui_scale_editor.open()
+      local owner = S.lib.ui_modal.top()
+      owner.enc(2, 3); owner.enc(3, 100); owner.key(3, 1)
+    end},
+  }
+
   -- The page's record, at SETUP's place in UI_PAGES: enc, key and redraw in
   -- strata.lua dispatch through S.registry.pages[S.ui_page]. It has no arc
   -- fields: the rings stay dark on SETUP. Each layout state's setup runs on a
@@ -428,7 +491,7 @@ return function(S)
         enc(2, 60)
       end},
       {name = "a 16x8 turned upright, the rotation fields", setup = function(context)
-        context.grid.plug(1, 16, 8); S.lib.grid_core.set_rotation(1, 1); enc(2, 12)
+        context.grid.plug(1, 16, 8); S.lib.grid_core.set_rotation(1, 1); enc(2, 13)
       end},
       {name = "buffers missing", setup = function()
         S.buffers[1].missing_path = "/x/a.wav"; S.buffers[2].missing_path = "/x/b.wav"
@@ -466,6 +529,8 @@ return function(S)
       zones_editor_state("mpe & zones editor, v7's high at its widest", 3 + S.constants.NUM_VOICES, 3, true),
       zones_editor_state("mpe & zones editor, learning v7's low", 3 + S.constants.NUM_VOICES, 2, true, "low"),
       zones_editor_state("mpe & zones editor, learning v7's high", 3 + S.constants.NUM_VOICES, 3, true, "high"),
+      SCALE_EDITOR_STATES[1], SCALE_EDITOR_STATES[2], SCALE_EDITOR_STATES[3], SCALE_EDITOR_STATES[4],
+      SCALE_EDITOR_STATES[5], SCALE_EDITOR_STATES[6], SCALE_EDITOR_STATES[7], SCALE_EDITOR_STATES[8],
       {name = "performance: active file not written", setup = function()
         S.performance = {tier = "standard", buffer_seconds = 16, max_grains = 128, history_seconds = 16,
           reason = "standard: performance_active.data could not be written"}

@@ -1,0 +1,29 @@
+## Must not break
+
+- **The editor is a modal owner** (`S.lib.ui_modal`): open exactly while its own owner is the modal top, but beneath SEQ's step editor as the zones editor allows (a registered invariant, "scale editor"). SETUP's key handler does not run under a modal owner, so it and the zones editor are never open together.
+- **A class toggle under a built-in scale (or off) writes `scale_mask` first, then `scale` = custom**, so the one `setScale` (custom's action) carries the new mask; `scale_mask`'s action sends nothing while the scale is not custom. Under custom only `scale_mask` changes. The last class cannot be turned off (the mask stays 1-4095).
+- **In a tuning that is not twelve notes to an octave** (`S.lib.tuning.scale_active()` false) the scale and notes rows show `--`, E3 and K3 there change nothing, and the note tap takes no note.
+- **A pending tuning choice sends nothing**: E3 on the tuning row moves it (drawn dim), K3 applies it through `S.lib.tuning.select` (one `setTuning` set); closing drops it. The folder is listed once, at open (`S.lib.tuning.files()`, a shell's `ls`).
+- **The note tap is the editor's while it is open**: `S.lib.midi_in.set_note_tap(M.note)` at open and again at each draw (`reset_midi_input` clears the tap without telling its owner), cleared at close. A note it takes plays nothing.
+- **A refused file's reason shows on the editor's own hint row**: under a modal owner `redraw()` takes the hints from the owner, never from the "hints" flash, so the owner's `hints` returns `S.lib.ui_flash.text("hints")` while one shows (the flash itself, started with SETUP's page, ends on its clock).
+
+## lib/ui/scale_editor.lua (`S.lib.ui_scale_editor`)
+
+Opened from SETUP's `scale & tuning` row (K3; an action row appended after `transport`, 3.8 ruling 44). Fields: `open`, `close`, `is_open`, `note(key)` (the tap) and `SCALE_EDITOR` (the layout).
+
+Rows, top to bottom, six visible from y 18, 7 px apart, values right-aligned at x 124 (`S.lib.ui_field_list.draw`, as SETUP's and the zones editor's):
+
+| Row | Shows | E3 | K3 |
+|-----|-------|----|----|
+| root | `params:string("root")` | `enc_param_delta` on `root` | |
+| scale | the scale's name, or `--` | `enc_param_delta` on `scale` (not under `--`) | |
+| notes | twelve cells, a degree from the root each, 8 px apart from x 28: a natural's letter, `#` for a sharp, `.` for a class out of the scale; or `--` | the class cursor (0-11, clamped) | toggles the class |
+| tuning | the tuning's name, or the pending choice's (dim), cut by `S.lib.ui_text.fit_text` | the pending choice: the built-ins, then the folder's files | applies it |
+
+The hint row: `K2:back E3:value` (root, scale), `K2:back E3:note K3:<the cursor's class>` (notes), `K2:back E3:tuning`, with `K3:apply` while a choice is pending, `K2:back` alone on a row showing `--`, `E2:row` with ALT; a refused file's reason while its flash shows. K2 closes (with ALT nothing).
+
+The note tap (`M.note(key)`): while open and the scale applies, a note toggles class `(key - (60 + root)) % 12` and is taken. A refused file (`S.lib.tuning.load_file`'s reason) leaves the tuning as it was.
+
+SETUP's record carries the editor's layout states (`scale_editor_state` in `lib/pages/setup.lua`): the cursor on root; the widest scale name (`Gagaku Rittsu Sen Pou`, 97 px, right-aligned at 124 it starts at x 27, clear of `scale`); every class in (`C # D # E F # G # A # B`); the longest built-in (`meantone 1/4`); a long file name cut by `fit_text`; 19 equal's `--`; a pending choice; a refused file's reason on the hint row. Each layout state's note tap is a do-nothing stand-in.
+
+Tests: `test/unit/ui_scale_editor_test.lua` (the SETUP row, the rows and E3, the class toggle's order and its one `setScale`, the last class, the note tap open and closed, 19 equal's `--`, the pending tuning and a refused file, every state's layout).
