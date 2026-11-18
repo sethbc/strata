@@ -4,14 +4,15 @@
 - **A fader line's keys are the engine's**: a page lists its lines in `faders(pane)`; the engine sets them (`set_param_from_column(id, k, keys)`) and draws them, and the page's `press` and `redraw` never see those keys.
 - **A page change ends only its pane's keys, never a strip key** (ruling 54): the strips' keys (fill, a tempo repeat, a mute, NV) go on across any page change; a grid's removal and cleanup still end them.
 - **A page with no record is dark and its page key dead**; `set_page` still shows it (ruling 55), and a start page with no record starts on patterns.
-- **Each pane's redraw is contained** (`S.lib.ui_frame.contained_call`, keyed `port .. ":" .. pane`, label `grid page redraw`), so a failing page prints once per distinct message and spares the other pane and the strips.
+- **Each pane's redraw is contained** (`S.lib.ui_frame.contained_call`, keyed `port .. ":" .. pane`, label `grid page redraw`), so a failing page prints once per distinct message and spares the other pane and the strips. **So are its `faders` and `signature`** (labels `grid page faders`, `grid page signature`, the same key): a page whose `faders` raises has no fader lines (drawn and pressed as such), one whose `signature` raises reads as unchanged, each printing once, and the drift tick (`follow_faders`) goes on to the rest of its work.
+- **A page's state lives at `port_state(port).pages[name]`**, made by `pane.state()`, never in `port_state(port)` itself (where `lib/positions.lua` keeps its record at `.positions`) and never read through `port_state` by a page; it goes with the port's grid (`forget_port`).
 - The registry is open: `S.registry.grid_pages` is read at each press, redraw and follow, never at include or init, so a test can put a probe page at a free index of its own `S` (`h.probe_grid_page`, `h.no_grid_page`).
 - The strips are built from `GRID_PAGES.count` and `NUM_VOICES` and sum to sixteen keys (`2 + 7 + 7`); a test pins it.
-- Per-port state (the 64's chooser, a page's `pane.state()`) lives in `port_state(port)`, so it goes with the grid.
+- Per-port state (the 64's chooser at `port_state(port).chooser`, a page's `pane.state()` at `port_state(port).pages[name]`) lives in `port_state(port)`, so it goes with the grid.
 
 ## Owns
 
-- `lib/grid/pane.lua` (`S.lib.grid_pane`, included after `lib/grid/faders.lua` and before the pages and the layouts): `arrange(spec)`, `STRIPS`, `physical(layout, pane, x, y, half)` (the harness's way to a key), `signature()`. Locals: `PANE` (widths, the strip line, the strip and chooser levels, the chooser's rows), `KEY_ACTIONS`, the geometry of each arranged record (`geometries`, weak keys), `physical_of`, `locate`, `pane_object`, `shown_lines`, `place_on`, `draw_line`, the chooser (`chooser_shown`, `chooser_choice`, `chooser_key`, `draw_chooser`, `chooser_strip_key`), `tempo_key`, `page_key`, `strip_key`, `strip_level`, `take_key`, `draw_page`, `draw_grid`, `redraw_errors`.
+- `lib/grid/pane.lua` (`S.lib.grid_pane`, included after `lib/grid/faders.lua` and before the pages and the layouts): `arrange(spec)`, `STRIPS`, `physical(layout, pane, x, y, half)` (the harness's way to a key), `signature()`. Locals: `PANE` (widths, the strip line, the strip and chooser levels, the chooser's rows), `KEY_ACTIONS`, the geometry of each arranged record (`geometries`, weak keys), `physical_of`, `locate`, `pane_object`, `read_lines`, `shown_lines` (contained), `fader_errors`, `signature_errors`, `place_on`, `draw_line`, the chooser (`chooser_shown`, `chooser_choice`, `chooser_key`, `draw_chooser`, `chooser_strip_key`), `tempo_key`, `page_key`, `strip_key`, `strip_level`, `take_key`, `draw_page`, `draw_grid`, `redraw_errors`.
 - The registry `S.registry.grid_pages` and `S.register_grid_page` (`lib/state.lua`, `docs/notes/lua/state-and-voices.md`).
 - Unit tests: `test/unit/grid_pane_test.lua`; the harness in `test/helpers.lua` (`h.grid_pane`, `h.GRID_ARRANGEMENTS`, `h.probe_grid_page`, `h.no_grid_page`, `h.resize_grid`).
 
@@ -31,7 +32,7 @@ A grid is one or two **panes**, each showing one of the seven pages (`S.constant
 
 ### The pane object
 
-Built per key and per redraw for (port, pane) and handed to the page: `port`, `index` (1 top, 2 bottom), `page`, `side`, `width` (16, or 8 on a 64), `offset` (0, or 8 on a 64's right half), `turned` (the 128v), `shows(x)`, `state()` (`port_state(port)[record.name]`, made on demand; a port's two panes on one page share it), and the wrappers in pane coordinates, each calling the core with the physical key (nil off the pane): `held`, `hold_pending`, `on_hold(x, y, seconds, fn)`, `consume`, `consumed`, `press_as(x, y, role)`, `pressed_as(x, y, role)`, `gesture_key(x, y, z, k)` and `step_key(x, y, z, voice, step)`, which passes position `x - offset` of `width`, so a level follows the keys shown. The redraw's `led(x, y, level)` takes pane coordinates and drops a key the grid does not show and any y outside 1-7.
+Built per key and per redraw for (port, pane) and handed to the page: `port`, `index` (1 top, 2 bottom), `page`, `side`, `width` (16, or 8 on a 64), `offset` (0, or 8 on a 64's right half), `turned` (the 128v), `shows(x)`, `state()` (`port_state(port).pages[record.name]`, made on demand; a port's two panes on one page share it), and the wrappers in pane coordinates, each calling the core with the physical key (nil off the pane): `held`, `hold_pending`, `on_hold(x, y, seconds, fn)`, `consume`, `consumed`, `press_as(x, y, role)`, `pressed_as(x, y, role)`, `gesture_key(x, y, z, k)` and `step_key(x, y, z, voice, step)`, which passes position `x - offset` of `width`, so a level follows the keys shown. The redraw's `led(x, y, level)` takes pane coordinates and drops a key the grid does not show and any y outside 1-7.
 
 ### Dispatch
 
@@ -61,7 +62,7 @@ A page's `faders(pane)` returns `{{line, first, keys, id}, ...}` (keys 16 or 8).
 
 ### The follow
 
-`signature()`: for each pane of each connected grid (ports in order) whose page has fader lines or a `signature`, `view(port, pane)`, each shown line's position and `record.signature(pane)`; nil when no pane has any. `S.lib.grid_faders.follow_faders()` (the drift tick) redraws the grids when it differs from its last look, so a page needs no param action of its own to follow a param set elsewhere.
+`signature()`: for each pane of each connected grid (ports in order) whose page has fader lines or a `signature`, `view(port, pane)`, each shown line's position and `record.signature(pane)`, each pane's part read contained (a raising one reads as `view,?`, so unchanged); nil when no pane has any. `S.lib.grid_faders.follow_faders()` (the drift tick) redraws the grids when it differs from its last look, so a page needs no param action of its own to follow a param set elsewhere.
 
 ## Registering a page
 
