@@ -1311,8 +1311,9 @@ function CI_WORKFLOW.mutated(text, old, new)
 end
 -- a step's run script, one entry a command line: the lines under `run: |`
 -- (or the one after `run:`), dedented, a line ending in a backslash joined
--- to the next (CI_WORKFLOW.jobs has already left out the comment lines)
-function CI_WORKFLOW.script(step)
+-- to the next unless `raw` (CI_WORKFLOW.jobs has already left out the
+-- comment lines)
+function CI_WORKFLOW.script(step, raw)
   local lines, indent, inside = {}, nil, false
   for line in step.text:gmatch("([^\n]*)\n") do
     local lead = line:match("^( *)%S")
@@ -1322,7 +1323,7 @@ function CI_WORKFLOW.script(step)
         indent = indent or #lead
         local text = (line:sub(indent + 1):gsub("%s+$", ""))
         local last = lines[#lines]
-        if last and last:match("\\$") then lines[#lines] = (last:gsub("%s*\\$", " ")) .. (text:gsub("^%s+", ""))
+        if not raw and last and last:match("\\$") then lines[#lines] = (last:gsub("%s*\\$", " ")) .. (text:gsub("^%s+", ""))
         else lines[#lines + 1] = text end
       end
     else
@@ -1369,13 +1370,54 @@ function CI_WORKFLOW.leaves_archives(command)
   end
   return words[#words]:sub(1, #"$debs") == "$debs"
 end
+-- #786: the two pieces of the shard's scripts the cache's safety rests on,
+-- pinned verbatim (dedented, trailing spaces dropped): any edit of them fails
+-- the tests by its first changed line, and whoever changes one changes its
+-- text here in the same commit, on purpose.
+-- The making of the SHA512 list (the list step, from the empty dpkg status
+-- to the list's write: every command name and sum come from): the sums are
+-- the SHA512 fields of apt's own lists, whose signatures apt has checked, so
+-- a kept file can only match what the archive published.
+-- The verify-and-copy loop (the install step, from the kept folder's
+-- assignment to the loop's done: every line the loop reads that this step
+-- sets): a kept file is copied into apt's archive folder only inside the if
+-- whose condition is its own check, so a damaged or altered file never
+-- reaches apt, which takes any file of the right size there as downloaded
+CI_WORKFLOW.PINNED = {
+  { name = "making of the SHA512 list", step = "list", first = ": > ", text = [==[
+: > "$RUNNER_TEMP/empty-status"
+nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
+apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s jackd2 \
+    "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION" \
+  | awk '/^Inst / { for (i = 3; i <= NF; i++) if (substr($i, 1, 1) == "(") { print $2 "=" substr($i, 2); break } }' \
+  > "$RUNNER_TEMP/sc-install.txt"
+xargs apt-cache "${nothing_installed[@]}" show < "$RUNNER_TEMP/sc-install.txt" \
+  | awk -v native="$(dpkg --print-architecture)" \
+      '/^Package: / { p = $2 } /^Version: / { v = $2 } /^Architecture: / { a = $2 } /^SHA512: / { s = $2 }
+       /^$/ { if (s != "" && (a == native || a == "all")) { gsub(/:/, "%3a", v); print s "  " p "_" v "_" a ".deb" }; p = v = a = s = "" }' \
+  | sort -u > "$RUNNER_TEMP/sc-packages.sha512"
+]==] },
+  { name = "verify-and-copy loop", step = "install", first = "debs=", text = [==[
+debs="$RUNNER_TEMP/sc-debs"
+archives=/var/cache/apt/archives
+mirrors=/etc/apt/apt-mirrors.txt
+mkdir -p "$debs"
+kept=0
+while read -r sum name; do
+  if [ -f "$debs/$name" ] && echo "$sum  $debs/$name" | sha512sum --check --status; then
+    sudo cp "$debs/$name" "$archives/"
+    kept=$((kept + 1))
+  fi
+done < "$RUNNER_TEMP/sc-packages.sha512"
+]==] },
+}
 -- what breaks the cache's safety in a workflow's text, one line each: the
--- kept folder is the one the restore fills; in the install, one if whose
--- condition is the hash check (sha512sum --check, against the SHA512s the
--- list step wrote from apt's lists) holds the one copy of the checked file
--- into apt's archive folder, and no other command of the shard names that
--- folder but to read it; the save is the step right after the install and
--- runs only on the restore's miss
+-- pinned pieces differ from their text (the first differing line); outside
+-- them, a line of any step of the shard names apt's archive folder (by a
+-- path, a part of one or Dir::Cache) other than to read it or to copy from
+-- it into the kept folder, or writes the SHA512 list; the kept folder is not
+-- the one the restore fills; the save is not the step right after the
+-- install or runs on an exact hit
 function CI_WORKFLOW.cache_problems(workflow)
   local problems, at = {}, {}
   local function problem(text) problems[#problems + 1] = text end
@@ -1397,80 +1439,55 @@ function CI_WORKFLOW.cache_problems(workflow)
   if at.save ~= at.install + 1 or at.save > at.check then problem("the save is not the step right after the install") end
   local miss = "steps." .. tostring(steps[at.restore].id) .. ".outputs.cache-hit != 'true'"
   if steps[at.save].text:match("\n%s+if:%s*([^\n]-)%s*\n") ~= miss then problem("the save runs on an exact hit: its if is not " .. miss) end
-  local install = CI_WORKFLOW.script(steps[at.install])
+  -- the pinned pieces, verbatim; a piece that matches is exempt from the
+  -- route checks below (its lines are the ones that may name the folder)
+  local exempt = {}
+  for _, piece in ipairs(CI_WORKFLOW.PINNED) do
+    local script, expected = CI_WORKFLOW.script(steps[at[piece.step]], true), {}
+    for line in piece.text:gmatch("([^\n]*)\n") do expected[#expected + 1] = line end
+    local starts = {}
+    for index, line in ipairs(script) do
+      if line:sub(1, #piece.first) == piece.first then starts[#starts + 1] = index end
+    end
+    if #starts ~= 1 then
+      problem("the " .. piece.name .. " is not found once (" .. #starts .. " lines start with `" .. piece.first .. "`)")
+    else
+      local differs
+      for offset, line in ipairs(expected) do
+        local found = script[starts[1] + offset - 1]
+        if found ~= line then
+          problem("the " .. piece.name .. " differs from its pinned text at line " .. offset .. ": expected `" .. line
+            .. "`, found `" .. tostring(found) .. "`")
+          differs = true
+          break
+        end
+      end
+      if not differs then
+        exempt[at[piece.step]] = { from = starts[1], to = starts[1] + #expected - 1 }
+      end
+    end
+  end
+  -- the kept folder is the one the restore fills (and the save keeps)
   local kept = steps[at.restore].text:match("\n%s+path:%s*([^\n]-)%s*\n") or ""
-  local debs, archives
-  for _, line in ipairs(install) do
-    debs = debs or line:match("^debs=(.*)$"); archives = archives or line:match("^archives=(.*)$")
+  if kept ~= "${{ runner.temp }}/sc-debs" then
+    problem("the kept folder the restore fills (" .. kept .. ") is not the install's debs, \"$RUNNER_TEMP/sc-debs\"")
   end
-  if kept:find("${{ runner.temp }}/", 1, true) ~= 1 or debs ~= '"' .. kept:gsub("%${{ runner%.temp }}", "$RUNNER_TEMP") .. '"' then
-    problem("the kept folder the restore fills (" .. kept .. ") is not the install's debs, in the runner's temp folder (" .. tostring(debs) .. ")")
-  end
-  if archives ~= "/var/cache/apt/archives" then problem("the install's archives is not apt's archive folder: " .. tostring(archives)) end
-  -- the hash check: one if, its condition the check of the file it copies
-  local checks = {}
-  for index, line in ipairs(install) do
-    if line:find("sha512sum --check", 1, true) then checks[#checks + 1] = index end
-  end
-  if #checks ~= 1 then problem("the install has " .. #checks .. " lines with sha512sum --check, not one"); return problems end
-  local check_at = checks[1]
-  -- the condition is exactly the file's test and its check, so the if takes
-  -- the check's own status: the steps run as bash -e without pipefail, so
-  -- anything after it (a ; true, a | tee) or around it (a $(...) tested for
-  -- output) would hide a failed check
-  local indent, condition = install[check_at]:match("^(%s*)if (.-); then$")
-  local exists, checked = (condition or ""):match('^%[ %-f "([^"]+)" %] && echo "%$sum  ([^"]+)" | sha512sum %-%-check %-%-status$')
-  if not checked or exists ~= checked then
-    checked = nil
-    problem("the hash check is not the whole condition of the copy's if, as "
-      .. '`if [ -f "<file>" ] && echo "$sum  <file>" | sha512sum --check --status; then`: ' .. install[check_at])
-  end
-  local block_end, copy_at = #install + 1, {}
-  for index = check_at + 1, #install do
-    if indent and install[index] == indent .. "fi" then block_end = index; break end
-    if indent and (install[index]:match("^" .. indent .. "else") or install[index]:match("^" .. indent .. "elif")) then
-      problem("the hash check's if has another branch: " .. install[index])
-    end
-    local commands = CI_WORKFLOW.commands(install[index])
-    if checked and #commands == 1 and (commands[1] == 'cp "' .. checked .. '" "$archives/"' or commands[1] == 'cp "' .. checked .. '" "$archives"') then
-      copy_at[index] = true; copy_at.count = (copy_at.count or 0) + 1
-    end
-  end
-  if copy_at.count ~= 1 then
-    problem("the hash check's if holds " .. tostring(copy_at.count or 0) .. " copies of the checked file into apt's archive folder, not one")
-  end
-  -- the loop around it reads the SHA512s the list step wrote, which nothing else writes
-  local loop_indent
-  for index = check_at - 1, 1, -1 do
-    loop_indent = install[index]:match("^(%s*)while read %-r sum name; do$")
-    if loop_indent then break end
-  end
-  local done
-  for index = block_end + 1, #install do
-    if loop_indent and install[index]:sub(1, #loop_indent + 4) == loop_indent .. "done" then done = install[index]; break end
-  end
-  if not loop_indent or done ~= loop_indent .. 'done < "$RUNNER_TEMP/sc-packages.sha512"' then
-    problem("the hash check's loop does not read the list step's \"$RUNNER_TEMP/sc-packages.sha512\": " .. tostring(done))
-  end
-  local listed = false
-  for _, line in ipairs(CI_WORKFLOW.script(steps[at.list])) do
-    listed = listed or line:find('> "$RUNNER_TEMP/sc-packages.sha512"', 1, true) ~= nil
-  end
-  if not listed then problem("the list step does not write \"$RUNNER_TEMP/sc-packages.sha512\"") end
-  -- nothing else puts a file in apt's archive folder, and nothing else writes the SHA512s
+  -- outside the pinned pieces nothing puts a file in apt's archive folder,
+  -- and nothing writes the SHA512 list (a read of it is `< "<the list>"`)
   for index, step in ipairs(steps) do
-    local script = CI_WORKFLOW.script(step)
+    local script = CI_WORKFLOW.script(step, true)
     if #script == 0 and CI_WORKFLOW.names_archives(step.text) then
       problem("step " .. tostring(step.name or step.uses) .. " names apt's archive folder")
     end
     for line_index, line in ipairs(script) do
-      for _, command in ipairs(CI_WORKFLOW.commands(line)) do
-        if CI_WORKFLOW.names_archives(command) and not (index == at.install and copy_at[line_index])
-            and not CI_WORKFLOW.leaves_archives(command) then
+      local pinned = exempt[index] and line_index >= exempt[index].from and line_index <= exempt[index].to
+      for _, command in ipairs(pinned and {} or CI_WORKFLOW.commands(line)) do
+        if CI_WORKFLOW.names_archives(command) and not CI_WORKFLOW.leaves_archives(command) then
           problem("a file can reach apt's archive folder past the hash check: " .. line)
         end
-        if index ~= at.list and command:find("sc-packages.sha512", 1, true) and not command:match('^done < "') then
-          problem("a step other than the list writes or reads the SHA512s past the hash check: " .. line)
+        if command:find("sc-packages", 1, true)
+            and not (command:find('< "$RUNNER_TEMP/sc-packages.sha512"', 1, true) and not command:find(">", 1, true)) then
+          problem("the SHA512 list is written past its pinned making: " .. line)
         end
       end
     end
@@ -1529,24 +1546,27 @@ function CI_WORKFLOW.apt_weakenings(workflow)
   end
   return found
 end
--- each case: a name, the edits (old, new, ...) and a text the problems name;
--- every case that is not refused is reported, not only the first
+-- each case: a name, the edits (old, new, ...) and a text the problems name
+-- (or a list of texts, each named); every case that is not refused is
+-- reported, not only the first
 function CI_WORKFLOW.failing_cases(workflow, find_problems, cases)
   local missed = {}
   for _, case in ipairs(cases) do
     local text = workflow
     for i = 1, #case.edits, 2 do text = CI_WORKFLOW.mutated(text, case.edits[i], case.edits[i + 1]) end
-    local found = table.concat(find_problems(text), "\n  ")
-    if not found:find(case.expect, 1, true) then
-      missed[#missed + 1] = case.name .. ": the problems should name " .. case.expect .. "; they are: " .. (found == "" and "(none)" or found)
+    local found = table.concat(find_problems(text), "\n  ")    for _, expect in ipairs(type(case.expect) == "table" and case.expect or { case.expect }) do
+      if not found:find(expect, 1, true) then
+        missed[#missed + 1] = case.name .. ": the problems should name " .. expect .. "; they are: " .. (found == "" and "(none)" or found)
+      end
     end
   end
   assert_true(#missed == 0, "mutations of the workflow not refused:\n" .. table.concat(missed, "\n"))
 end
 
--- #786: the hash check comes before the one copy of a kept file into apt's
--- archive folder, inside its if, and nothing else puts a file there: apt
--- takes any file of the right size in that folder as downloaded
+-- #786: the making of the SHA512 list and the verify-and-copy loop are
+-- pinned verbatim (CI_WORKFLOW.PINNED), and outside them nothing puts a file
+-- in apt's archive folder: apt takes any file of the right size there as
+-- downloaded
 test("a kept package reaches apt's archive folder only through the hash check, by its place in the script (#786)", function()
   local workflow = read_repo_file(".github/workflows/test.yml")
   assert_equal(table.concat(CI_WORKFLOW.cache_problems(workflow), " | "), "", "the workflow's cache problems")
@@ -1554,42 +1574,67 @@ test("a kept package reaches apt's archive folder only through the hash check, b
   local copy = '              sudo cp "$debs/$name" "$archives/"\n'
   local after_loop = '          echo "$kept package files from the cache, each matching apt\'s lists"\n'
   local function added(line) return { after_loop, "          " .. line .. "\n" .. after_loop } end
+  -- an edit of a pinned region fails by the region's first differing line
+  local function differs(region, line, found)
+    return { "the " .. region .. " differs from its pinned text at line " .. line .. ":", "found `" .. found .. "`" }
+  end
+  local loop = "verify-and-copy loop"
   local cases = {
-    -- the case nobody wrote down: the whole kept folder copied "to save a loop"
-    { name = "the kept folder copied before the check", expect = 'sudo cp "$debs"/*.deb "$archives/"',
+    -- inside the pinned loop: every edit fails by its first changed line.
+    -- The case nobody wrote down: the whole kept folder copied "to save a loop"
+    { name = "the kept folder copied before the check", expect = differs(loop, 5, 'sudo cp "$debs"/*.deb "$archives/"'),
       edits = { "          kept=0\n", '          sudo cp "$debs"/*.deb "$archives/"\n          kept=0\n' } },
-    { name = "the copy moved before the check", expect = 'sudo cp "$debs/$name" "$archives/"',
+    { name = "the copy moved before the check", expect = differs(loop, 7, '  sudo cp "$debs/$name" "$archives/"'),
       edits = { check .. copy, copy:sub(3) .. check } },
-    { name = "the copy moved out of the check's if", expect = 'sudo cp "$debs/$name" "$archives/"',
+    { name = "the copy moved out of the check's if", expect = differs(loop, 8, "    kept=$((kept + 1))"),
       edits = { copy .. "              kept=$((kept + 1))\n            fi\n", "              kept=$((kept + 1))\n            fi\n" .. copy:sub(3) } },
-    { name = "the check made optional", expect = "sha512sum --check",
+    { name = "the check made optional", expect = differs(loop, 7, '  if [ -f "$debs/$name" ] || echo "$sum  $debs/$name" | sha512sum --check --status; then'),
       edits = { '[ -f "$debs/$name" ] && echo', '[ -f "$debs/$name" ] || echo' } },
+    { name = "the check reading another list", expect = differs(loop, 11, 'done < "$debs/sums.sha512"'),
+      edits = { '            fi\n          done < "$RUNNER_TEMP/sc-packages.sha512"\n          echo "$kept',
+        '            fi\n          done < "$debs/sums.sha512"\n          echo "$kept' } },
+    -- a check whose status the if never sees (the steps run as bash -e
+    -- without pipefail: a pipeline's status is its last command's)
+    { name = "the check's status ignored",
+      expect = differs(loop, 7, '  if [ -f "$debs/$name" ] && echo "$sum  $debs/$name" | sha512sum --check --status; true; then'),
+      edits = { "sha512sum --check --status; then", "sha512sum --check --status; true; then" } },
+    { name = "the check piped into a log",
+      expect = differs(loop, 7, '  if [ -f "$debs/$name" ] && echo "$sum  $debs/$name" | sha512sum --check | tee -a "$RUNNER_TEMP/check.log"; then'),
+      edits = { "sha512sum --check --status; then", 'sha512sum --check | tee -a "$RUNNER_TEMP/check.log"; then' } },
+    { name = "the check's output tested instead of its status",
+      expect = differs(loop, 7, '  if [ -f "$debs/$name" ] && [ -n "$(echo "$sum  $debs/$name" | sha512sum --check 2>&1)" ]; then'),
+      edits = { '&& echo "$sum  $debs/$name" | sha512sum --check --status; then',
+        '&& [ -n "$(echo "$sum  $debs/$name" | sha512sum --check 2>&1)" ]; then' } },
+    -- the re-review's three: the copy on the check's failure, the if closed
+    -- before the copy, and a sum made from the kept file itself
+    { name = "the copy in an else one indent deeper", expect = differs(loop, 8, "    true"),
+      edits = { copy, "              true\n              else\n" .. copy } },
+    { name = "the check's if closed before the copy", expect = differs(loop, 8, "    true"),
+      edits = { copy, "              true\n              fi\n              if true; then\n" .. copy } },
+    { name = "the sum made from the kept file", expect = differs(loop, 7, '  sum=$(sha512sum "$debs/$name" | cut -d" " -f1)'),
+      edits = { check, '            sum=$(sha512sum "$debs/$name" | cut -d" " -f1)\n' .. check } },
+    -- inside the pinned making of the SHA512 list: a sum that is not apt's
+    { name = "the list's sums not apt's", expect = { "the making of the SHA512 list differs from its pinned text at line 9:", "/^SHA256: /" },
+      edits = { "/^SHA512: / { s = $2 }", "/^SHA256: / { s = $2 }" } },
+    -- outside the pinned text: any other route into apt's archive folder
     { name = "an unchecked mv", expect = 'sudo mv "$debs"/*.deb "$archives/"', edits = added('sudo mv "$debs"/*.deb "$archives/"') },
     { name = "an unchecked install", expect = 'sudo install -m 644 "$debs"/*.deb /var/cache/apt/archives/',
       edits = added('sudo install -m 644 "$debs"/*.deb /var/cache/apt/archives/') },
     { name = "an unchecked ln", expect = 'sudo ln -s "$debs"/*.deb "$archives"', edits = added('sudo ln -s "$debs"/*.deb "$archives"') },
     { name = "a cp to a target directory", expect = 'sudo cp -t "$archives" "$debs"/*.deb', edits = added('sudo cp -t "$archives" "$debs"/*.deb') },
+    { name = "the archive folder through a variable", expect = 'sudo cp "$debs"/*.deb "$apt/archives/"',
+      edits = { after_loop, '          apt=/var/cache/apt\n          sudo cp "$debs"/*.deb "$apt/archives/"\n' .. after_loop } },
+    { name = "a copy in another step", expect = 'a file can reach apt\'s archive folder past the hash check: sudo cp "$RUNNER_TEMP"/sc-debs/*.deb /var/cache/apt/archives/',
+      edits = { "          jackd --no-realtime -d dummy", '          sudo cp "$RUNNER_TEMP"/sc-debs/*.deb /var/cache/apt/archives/\n          jackd --no-realtime -d dummy' } },
     { name = "apt pointed at the kept folder", expect = 'Dir::Cache::archives="$debs"',
       edits = { 'install -y --download-only "${packages[@]}" || status=$?\n          if',
         '-o Dir::Cache::archives="$debs" install -y --download-only "${packages[@]}" || status=$?\n          if' } },
     { name = "the restore filling apt's archive folder", expect = "/var/cache/apt/archives",
       edits = { "          path: ${{ runner.temp }}/sc-debs\n          key: ${{ steps.packages.outputs.key }}\n          restore-keys",
         "          path: /var/cache/apt/archives\n          key: ${{ steps.packages.outputs.key }}\n          restore-keys" } },
-    { name = "the check reading another list", expect = "sc-packages.sha512",
-      edits = { '            fi\n          done < "$RUNNER_TEMP/sc-packages.sha512"\n          echo "$kept',
-        '            fi\n          done < "$debs/sums.sha512"\n          echo "$kept' } },
-    -- a check whose status the if never sees (the steps run as bash -e
-    -- without pipefail: a pipeline's status is its last command's)
-    { name = "the check's status ignored", expect = "sha512sum --check --status; true; then",
-      edits = { "sha512sum --check --status; then", "sha512sum --check --status; true; then" } },
-    { name = "the check piped into a log", expect = 'sha512sum --check | tee -a "$RUNNER_TEMP/check.log"; then',
-      edits = { "sha512sum --check --status; then", 'sha512sum --check | tee -a "$RUNNER_TEMP/check.log"; then' } },
-    { name = "the check's output tested instead of its status", expect = 'sha512sum --check 2>&1)" ]; then',
-      edits = { '&& echo "$sum  $debs/$name" | sha512sum --check --status; then',
-        '&& [ -n "$(echo "$sum  $debs/$name" | sha512sum --check 2>&1)" ]; then' } },
-    -- apt's archive folder by a path built through a variable
-    { name = "the archive folder through a variable", expect = 'sudo cp "$debs"/*.deb "$apt/archives/"',
-      edits = { "          kept=0\n", '          apt=/var/cache/apt\n          sudo cp "$debs"/*.deb "$apt/archives/"\n          kept=0\n' } },
+    { name = "the SHA512 list written again after its pinned making",
+      expect = 'sha512sum "$RUNNER_TEMP"/sc-debs/*.deb > "$RUNNER_TEMP/sc-packages.sha512"',
+      edits = { "          fi\n          prefix=", '          fi\n          sha512sum "$RUNNER_TEMP"/sc-debs/*.deb > "$RUNNER_TEMP/sc-packages.sha512"\n          prefix=' } },
   }
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases)
 end)
