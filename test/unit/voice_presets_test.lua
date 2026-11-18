@@ -127,4 +127,170 @@ test("an unusable voices.data is set aside, never written over", function()
 end)
 
 
+-- Save voice from_voice's sound into slot, then rewrite the stored preset
+-- through edit(stored) and start again on the same data: the new load's
+-- context, S and module
+local function saved_and_edited(name, from_voice, slot, edit)
+  local subdir, dir = fresh_subdir(name)
+  local _, S, presets = loaded({ data_subdir = subdir })
+  assert_true(presets.save(from_voice, slot, name), "saved")
+  local value = S.lib.data_files.read(dir .. "voices.data")
+  edit(value.presets[slot])
+  assert_true(S.lib.data_files.write(dir .. "voices.data", value), "rewritten")
+  return loaded({ data_subdir = subdir })
+end
+
+test("a load takes the sound and keeps the place", function()
+  local context, S, presets = loaded()
+  params:set("v2_grain_size", 0.2); params:set("v2_delay_send", 0.4)
+  assert_true(presets.save(2, 1, "fm one"), "an fm preset")
+  params:set("v1_source", source_option(S, "buf 1"))
+  params:set("v1_buf_pos", 0.3); params:set("v1_seq_length", 5); params:set("v1_mute", 1)
+  assert_true(S.voices[1].active, "voice 1 runs")
+  assert_true(presets.load(1, 1), "loaded")
+  local values = S.voices[1].values
+  assert_equal(S.voices[1].name, "fm", "the preset's type")
+  assert_near(values.grain_size, 0.2, 1e-9, "the preset's grain size")
+  assert_near(values.delay_send, 0.4, 1e-9, "the preset's delay send")
+  assert_equal(S.voices[1].source, source_option(S, "buf 1"), "the source kept")
+  assert_true(S.voices[1].active, "still running")
+  assert_near(values.buf_pos, 0.3, 1e-9, "the buffer position kept")
+  assert_equal(values.seq_length, 5, "the pattern's length kept")
+  assert_equal(values.mute, 1, "the mute kept")
+  assert_equal(presets.loaded_name(1), "fm one", "the row's name")
+  assert_true(not presets.load(1, 2), "an empty slot loads nothing")
+  assert_equal(#lines_naming(context, "apply_voice"), 0, "no refused apply")
+end)
+
+test("a synth key the preset lacks keeps the voice's remembered value", function()
+  local _, S, presets = saved_and_edited("lacks", 2, 3, function(stored) stored.values.ratio = nil end)
+  params:set("v1_type", S.lib.types.record("fm").index)
+  local spec = params:lookup_param("v1_ratio").controlspec
+  local edited = spec:map(0.77)
+  params:set("v1_ratio", edited)
+  edited = params:get("v1_ratio")
+  params:set("v1_type", S.lib.types.record("resonator").index)
+  assert_true(presets.load(1, 3), "loaded")
+  assert_equal(S.voices[1].name, "fm", "the preset's type")
+  assert_equal(params:get("v1_ratio"), edited, "the voice's remembered ratio")
+end)
+
+test("a key this build lacks is dropped", function()
+  local context, S, presets = saved_and_edited("future", 2, 4, function(stored) stored.values.future_key = 1 end)
+  assert_true(presets.load(5, 4), "loaded")
+  assert_equal(S.voices[5].name, "fm", "the preset's type")
+  assert_equal(S.voices[5].values.future_key, nil, "the unknown key is not set")
+  assert_equal(#lines_naming(context, "apply_voice"), 0, "no refused apply")
+end)
+
+test("a preset of a type this build lacks loads nothing", function()
+  local context, S, presets = saved_and_edited("nope", 2, 6, function(stored) stored.type = "nope" end)
+  assert_equal(presets.preset(6).type, "nope", "kept in the library")
+  local before = h.deep_copy(S.voices[1].values)
+  local name = S.voices[1].name
+  local printed = #context.printed
+  assert_true(not presets.load(1, 6), "nothing loaded")
+  assert_equal(#context.printed - printed, 1, "one console line")
+  assert_true(S.lib.ui_flash.slots.hints.text ~= nil, "a flash")
+  assert_equal(S.voices[1].name, name, "the type unchanged")
+  for key, value in pairs(before) do assert_equal(S.voices[1].values[key], value, key .. " unchanged") end
+end)
+
+test("copy is a load of the other voice's filtered capture", function()
+  local _, S, presets = loaded()
+  params:set("v3_grain_size", 0.31); params:set("v3_filter_freq", 1234); params:set("v3_reverb_send", 0.6)
+  params:set("v6_seq_length", 7); params:set("v6_buf_pos", 0.6); params:set("v6_mod_speed", 3)
+  local out_before = {}
+  for key, value in pairs(S.voices[6].values) do
+    if presets.VOICE_PRESETS.keys[key] == false then out_before[key] = value end
+  end
+  assert_true(presets.copy(3, 6), "copied")
+  assert_equal(S.voices[6].name, S.voices[3].name, "voice 3's type")
+  local sound = presets.capture(3)
+  -- a control param set again moves by its controlspec's round trip (an ulp)
+  for key, value in pairs(sound.values) do
+    assert_near(S.voices[6].values[key], value, 1e-9 * math.max(1, math.abs(value)), key .. " is voice 3's")
+  end
+  for key, value in pairs(out_before) do assert_equal(S.voices[6].values[key], value, key .. " kept") end
+  assert_equal(presets.loaded_name(6), presets.VOICE_PRESETS.copy_prefix .. 3, "the row shows v3")
+  assert_true(not presets.copy(6, 6), "a voice is not copied into itself")
+  assert_true(not presets.copy(0, 6), "no voice 0")
+end)
+
+test("a locked voice can be loaded into", function()
+  local _, S, presets = loaded()
+  assert_true(presets.save(2, 1, "fm"), "saved")
+  toggle_lock(4)
+  assert_true(S.locked[4], "locked")
+  assert_true(presets.load(4, 1), "loaded")
+  assert_equal(S.voices[4].name, "fm", "the preset's type")
+  assert_true(S.locked[4], "still locked")
+end)
+
+test("a load during a fade lets go of the voice", function()
+  local context, S, presets = loaded()
+  for voice_idx = 1, S.constants.NUM_VOICES do params:set("v" .. voice_idx .. "_grain_size", 0.1) end
+  capture_scene(1)
+  for voice_idx = 1, S.constants.NUM_VOICES do params:set("v" .. voice_idx .. "_grain_size", 0.4) end
+  capture_scene(2)
+  params:set("v5_grain_size", 0.27)
+  assert_true(presets.save(5, 1, "five"), "a preset of voice 5")
+  recall_scene(1, 0)
+  recall_scene(2, 2)  -- 20 steps of 0.1 s; the first runs at once
+  for _ = 1, 4 do wake(context, "scene_transition_clock") end
+  assert_true(S.scene_transition_active, "the fade runs")
+  assert_true(presets.load(3, 1), "loaded at step 5")
+  assert_true(S.SCENE_TRANSITION.released[3], "voice 3 let go")
+  context.clock.run_for(3)
+  assert_true(not S.scene_transition_active, "the fade ended")
+  assert_equal(S.current_scene, 2, "scene 2 current")
+  assert_near(S.voices[3].values.grain_size, 0.27, 1e-9, "voice 3 holds the preset")
+  assert_equal(S.voices[3].name, S.voices[5].name, "and its type")
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    if voice_idx ~= 3 and voice_idx ~= 5 then
+      assert_near(S.voices[voice_idx].values.grain_size, 0.4, 1e-9, "voice " .. voice_idx .. " holds scene 2")
+    end
+  end
+end)
+
+test("a load into a buffer voice keeps the buffer and takes the type for later", function()
+  local context, S, presets = loaded()
+  params:set("v2_ratio", params:lookup_param("v2_ratio").controlspec:map(0.66))
+  local ratio = params:get("v2_ratio")
+  assert_true(presets.save(2, 1, "fm"), "an fm preset")
+  local buffer = source_option(S, "buf 1")
+  params:set("v1_source", buffer)
+  context.clear_engine_calls()
+  assert_true(presets.load(1, 1), "loaded")
+  assert_equal(S.voices[1].source, buffer, "the buffer kept")
+  assert_equal(params:get("v1_type"), S.lib.types.record("fm").index, "v1_type is fm")
+  -- the merged senders reach the engine by type, not by source (0d's
+  -- reaches): the type change's one sync sends the running buffer voice's
+  -- fm keys, which the engine records for the synth source; none of
+  -- another type's keys goes out, and the grain source stays the buffer
+  local fm = S.lib.types.record("fm")
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    local key = call.args[2]
+    if call.args[1] == 0 and S.lib.types.record("resonator").specs[key] then
+      assert_true(fm.specs[key] ~= nil, "only fm's keys are sent: " .. tostring(key))
+    end
+  end
+  for _, call in ipairs(context.calls_named("setGrainSource")) do
+    if call.args[1] == 0 then assert_equal(call.args[2], buffer - 1, "the grain source stays the buffer") end
+  end
+  local typed = false
+  for _, call in ipairs(context.calls_named("setVoiceType")) do
+    if call.args[1] == 0 then typed = call.args[2] == fm.index - 1 end
+  end
+  assert_true(typed, "the engine records fm for the voice")
+  context.clear_engine_calls()
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  assert_equal(S.lib.types.of(1).key, "fm", "the synth source plays fm")
+  local sent = nil
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 0 and call.args[2] == "ratio" then sent = call.args[3] end
+  end
+  assert_near(sent or -1, ratio, 1e-6, "with the preset's ratio")
+end)
+
 end

@@ -398,6 +398,7 @@ return function(S)
     S.SCENE_TRANSITION.target = nil
     S.SCENE_TRANSITION.previous = nil
     S.SCENE_TRANSITION.step = nil
+    S.SCENE_TRANSITION.released = nil
     -- a fade that ends canceled or failed is redrawn even when it went back
     -- to the current scene: the blink phase (step) changed
     if was_active and (how == "canceled" or how == "failed") then
@@ -536,16 +537,23 @@ return function(S)
   -- is cleared, the syncs run, and the error is raised again with its
   -- traceback. opts.only = "discrete" (the blocks and discrete entries) or
   -- "continuous" applies only those; any other only raises before anything
-  -- is applied. Redraws are the caller's
+  -- is applied. opts.skip_voices (3.8, a set by voice: a fade's released
+  -- voices, release_voice) drops every entry of those voices first (their
+  -- active, source, type, values, lock and pattern). Redraws are the caller's
   local applied_errors = {}  -- the scene-applied hooks' last printed message, by name
   function M.apply_entries(entries, opts)
     local only = opts and opts.only
     if only ~= nil and only ~= "discrete" and only ~= "continuous" then
       error("apply_entries: only is nil, \"discrete\" or \"continuous\", not " .. tostring(only), 2)
     end
+    local skip_voices = opts and opts.skip_voices or {}
     local list = {}
     for _, entry in ipairs(entries) do
-      if only == nil or (only == "continuous") == (entry.kind == "continuous") then table.insert(list, entry) end
+      local voice_idx = entry_voice(entry)
+      if (only == nil or (only == "continuous") == (entry.kind == "continuous"))
+        and not (voice_idx and skip_voices[voice_idx]) then
+        table.insert(list, entry)
+      end
     end
     local last_entry = {}  -- per voice, the index of its last entry but its pattern
     for index, entry in ipairs(list) do
@@ -592,7 +600,8 @@ return function(S)
     if not applied then error(apply_error, 0) end
   end
 
-  -- Snapshot {id, start, target, step} for every continuous entry of the
+  -- Snapshot {id, start, target, step, voice} (voice: a per-voice param's,
+  -- else nil) for every continuous entry of the
   -- scene (scene_entries), the params a smooth transition crossfades. Start
   -- values are read once, before the fade, so the fade moves linearly from
   -- start to target over the whole transition. Grain sources, mod sources,
@@ -602,11 +611,12 @@ return function(S)
   -- land at the end with the type (the shared keys fade).
   function scene_transition_targets(scene_data)
     local targets = {}
-    local function add_target(param_id, target_value)
+    local function add_target(param_id, target_value, voice_idx)
       -- number params (the LFO depths) step in whole numbers: the fade rounds
       -- to them (the end applies the scene's exact value)
       local step = params:lookup_param(param_id).t == params.tNUMBER and 1 or nil
-      table.insert(targets, {id = param_id, start = params:get(param_id), target = target_value, step = step})
+      table.insert(targets, {id = param_id, start = params:get(param_id), target = target_value, step = step,
+        voice = voice_idx})
     end
 
     -- an LFO the fade stops (running now, off in the scene) fades its depth
@@ -622,9 +632,9 @@ return function(S)
       if entry.kind == "continuous" and not (entry.synth and other_type[entry.voice]) then
         local global = globals[entry.id]
         if not (global and global.lfo and S.lib.lfos.transition_stops(global.lfo, scene_data)) then
-          add_target(entry.id, entry.value)
+          add_target(entry.id, entry.value, entry.voice)
         elseif global.stop_target ~= nil then
-          add_target(entry.id, global.stop_target)
+          add_target(entry.id, global.stop_target, entry.voice)
         end
       end
     end
@@ -708,6 +718,11 @@ return function(S)
       local targets = scene_transition_targets(scene_data)
       local switches = through_zero_switches(scene_data, targets)
       local switched = false
+      -- 3.8 (ruling 45): the voices a load let go of (release_voice), kept
+      -- here for the steps and the landing, reachable as
+      -- SCENE_TRANSITION.released while the fade runs (end_scene_transition
+      -- clears that field before the landing applies the scene)
+      local released = {}
 
       -- scene_transition_active, SCENE_TRANSITION.next_step_due, target and
       -- previous are always set together here (step by each step) and
@@ -719,6 +734,7 @@ return function(S)
       S.SCENE_TRANSITION.next_step_due = util.time()  -- the first step runs at once
       S.SCENE_TRANSITION.target = scene_num
       S.SCENE_TRANSITION.previous = S.current_scene
+      S.SCENE_TRANSITION.released = released
       S.current_scene = scene_num
       S.scene_transition_clock = clock.run(function()
         local step_time = transition_time / S.SCENE_TRANSITION.steps
@@ -730,7 +746,7 @@ return function(S)
           -- is current again), then raise the error again, with its traceback
           local stepped, step_error = xpcall(function()
             for _, target in ipairs(targets) do
-              set_scene_value(target.id, step_value(target, mix))
+              if not (target.voice and released[target.voice]) then set_scene_value(target.id, step_value(target, mix)) end
             end
             -- the through-zero switches, once, at the first step from the midpoint
             if mix >= 0.5 and not switched then
@@ -756,7 +772,7 @@ return function(S)
         -- is the previous scene current again. current_if_failed covers an
         -- error in the recall's apply_entries only: one raised after it
         -- (update_voice_list) leaves the target current
-        recall_scene_instant(scene_num, scene_data, end_scene_transition("landing"), true)
+        recall_scene_instant(scene_num, scene_data, end_scene_transition("landing"), true, released)
       end)
       -- its first step has run and drawn the target as current
     else
@@ -777,12 +793,14 @@ return function(S)
   -- current_if_failed (a fade's landing passes its previous scene) is the
   -- scene current if the recall fails; nil leaves the current scene as it is.
   -- landing (a fade's landing passes true): the fade's first step told the
-  -- scene-recalled hooks already, so they are not told again
-  function recall_scene_instant(scene_num, scene_data, current_if_failed, landing)
+  -- scene-recalled hooks already, so they are not told again.
+  -- released (3.8, a fade's landing passes the fade's set): the voices a
+  -- load let go of during the fade, left out of the landing (skip_voices)
+  function recall_scene_instant(scene_num, scene_data, current_if_failed, landing, released)
     scene_data = scene_data or S.scenes[scene_num].data
     clear_undo()  -- a recall ends the randomize undo (a fade's end too)
     local recalled, recall_error = xpcall(function()
-      M.apply_entries(M.scene_entries(scene_data))
+      M.apply_entries(M.scene_entries(scene_data), released and {skip_voices = released} or nil)
     end, with_traceback)
     -- a failed recall never makes its scene current: a fade's landing puts
     -- its previous scene back (current_if_failed); otherwise the current
@@ -1562,8 +1580,9 @@ return function(S)
     cancel_scene_transition()
   end)
 
-  -- A fade runs exactly while its next step is due, it has a target and a
-  -- step applied last, and no transition clock outlives the fade
+  -- A fade runs exactly while its next step is due, it has a target, a
+  -- step applied last and its released set (3.8), and no transition clock
+  -- outlives the fade
   S.register_invariant("scene transition", function()
     local due = S.SCENE_TRANSITION.next_step_due
     if S.scene_transition_active ~= (due ~= nil) then
@@ -1579,6 +1598,11 @@ return function(S)
     if (step ~= nil) ~= S.scene_transition_active then
       return "scene_transition_active is " .. tostring(S.scene_transition_active)
         .. " but SCENE_TRANSITION.step is " .. tostring(step)
+    end
+    local released = S.SCENE_TRANSITION.released
+    if (type(released) == "table") ~= S.scene_transition_active then
+      return "scene_transition_active is " .. tostring(S.scene_transition_active)
+        .. " but SCENE_TRANSITION.released is " .. tostring(released)
     end
     if not S.scene_transition_active and S.scene_transition_clock ~= nil then
       return "no transition is active but scene_transition_clock is " .. tostring(S.scene_transition_clock)
@@ -1645,6 +1669,19 @@ return function(S)
   function M.fading_to()
     if S.scene_transition_active then return S.SCENE_TRANSITION.target end
     return nil
+  end
+
+  -- Let go of a voice in the running fade (3.8, design §8.3, ruling 45): a
+  -- voice preset's load or copy takes the voice out of the fade's steps
+  -- and its landing, so the fade never pulls the loaded sound back. True
+  -- only while a fade runs; false (nothing changes) otherwise and for a
+  -- number that is no voice
+  function M.release_voice(voice_idx)
+    if not is_integer_between(voice_idx, 1, NUM_VOICES) then return false end
+    local released = S.SCENE_TRANSITION.released
+    if not (S.scene_transition_active and released) then return false end
+    released[voice_idx] = true
+    return true
   end
 
   -- Whether the displays light `slot` as the current scene: the scene a fade

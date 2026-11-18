@@ -329,7 +329,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 
   | Name | Module | Holds |
   |------|--------|-------|
-  | `scene transition` | `lib/scenes.lua` | `S.scene_transition_active == (S.SCENE_TRANSITION.next_step_due ~= nil)`, `S.SCENE_TRANSITION.target` and `.step` are set exactly while the flag is true, and `S.scene_transition_clock` is nil whenever the flag is false |
+  | `scene transition` | `lib/scenes.lua` | `S.scene_transition_active == (S.SCENE_TRANSITION.next_step_due ~= nil)`, `S.SCENE_TRANSITION.target`, `.step` and `.released` (3.8, a table) are set exactly while the flag is true, and `S.scene_transition_clock` is nil whenever the flag is false |
   | `scene sequencer` | `lib/scenes.lua` | `S.scene_sequencer_recall_due` is true only while the sequencer is on, and `S.scene_sequencer_enabled == (S.scene_sequencer_clock ~= nil)` with that clock's coroutine not dead (#329) |
   | `pattern clock` | `lib/sequencer.lua` | `S.pattern_playing == (S.pattern_clock ~= nil)` |
   | `midi ports` | `lib/io/ports.lua` | a MIDI vport's `event` is the ports' dispatcher exactly while the port has a listener |
