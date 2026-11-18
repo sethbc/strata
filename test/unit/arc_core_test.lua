@@ -75,7 +75,7 @@ test("arc_ring_fill_param picks the bipolar fill for ranges through zero", funct
   local ok, err = pcall(function()
     assert_true(param_spans_zero("v1_mod_amp_amt_1"), "amp mod -2 to 2 spans 0")
     assert_true(not param_spans_zero("filter_res"), "filter res 0 to 1 does not")
-    assert_true(not param_spans_zero("v1_grain_env"), "an option param never does")
+    assert_true(not param_spans_zero("v1_grain_mode"), "an option param never does")
     params:set("v1_mod_amp_amt_1", -1)
     arc_ring_fill_param(device, 1, "v1_mod_amp_amt_1", 15)
     assert_equal(calls[#calls], "bipolar", "amp mod is drawn bipolar")

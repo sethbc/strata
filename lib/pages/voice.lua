@@ -197,7 +197,6 @@ return function(S)
     grain_density = uniform(2, 40),
     grain_pitch = uniform(0.5, 2.5),
     grain_spread = uniform(0, 0.6),
-    grain_env = function(param_id) return math.random(params:lookup_param(param_id).count) end,
     mod_speed = function() return 0.2 * (10 / 0.2) ^ math.random() end,  -- 0.2-10 Hz, even in octaves
     pan = uniform(-0.8, 0.8),
   }

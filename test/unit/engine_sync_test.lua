@@ -39,7 +39,7 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
     assert_near(sent.grain.grainDensity, voice.values.grain_density * 1.5, 1e-9, "voice " .. voice_idx .. " grainDensity")
     assert_equal(sent.grain.pitchShift, voice.values.grain_pitch, "voice " .. voice_idx .. " pitchShift")
     assert_equal(sent.grain.posSpread, voice.values.grain_spread, "voice " .. voice_idx .. " posSpread")
-    assert_equal(sent.grain.envShape, voice.values.grain_env - 1, "voice " .. voice_idx .. " envShape")
+    assert_near(sent.grain.windowShape, voice.values.grain_shape, 1e-9, "voice " .. voice_idx .. " windowShape")
     assert_equal(sent.grain.grainMode, voice.values.grain_mode - 1, "voice " .. voice_idx .. " grainMode")
     assert_equal(sent.grain.bufPos, voice.values.buf_pos, "voice " .. voice_idx .. " bufPos")
     assert_equal(sent.grain.bufRate, voice.values.buf_rate, "voice " .. voice_idx .. " bufRate")
@@ -236,25 +236,6 @@ test("the largest grain overlap Lua can send fits the engine's maxGrains", funct
     assert_true(size_max * density_max * master_max <= max_grains - 1,
       string.format("voice %d: %.2f s x %d x %.1f = %.0f overlapping grains fit maxGrains %d",
         voice_idx, size_max, density_max, master_max, size_max * density_max * master_max, max_grains))
-  end
-end)
-
-test("grain envelope option reaches the engine and is synced on start", function()
-  local context = load_strata(); finish_startup(context)
-  params:set("v1_grain_env", 3)
-  local calls = context.calls_named("setGrainParam"); local last = calls[#calls]
-  assert_equal(last.args[2], "envShape"); assert_equal(last.args[3], 2)
-  toggle_voice(3); params:set("v3_grain_env", 5); toggle_voice(3)       -- on, edit, off
-  context.clear_engine_calls(); toggle_voice(3)                          -- on again: synced
-  local sent = engine_state_for_voice(context.engine_calls, 2)
-  assert_equal(sent.grain.envShape, 4)
-  capture_scene(1); params:set("v1_grain_env", 1)
-  recall_scene(1, 2); wake(context, "scene_transition_clock")
-  assert_equal(params:get("v1_grain_env"), 1, "transition does not interpolate env")
-  recall_scene(1, 0); assert_equal(params:get("v1_grain_env"), 3)
-  -- an option param floors fractional values, so check the fade list directly
-  for _, target in ipairs(scene_transition_targets(local_value("scenes")[1].data)) do
-    assert_true(not target.id:find("_grain_env$"), target.id .. " is not crossfaded")
   end
 end)
 
@@ -1057,12 +1038,14 @@ test("a morph crossing at a full window: its discrete switch goes at once, uncou
   local sync = S.lib.engine_sync
   S.drift_metro:stop()
   local synth = S.constants.SOURCE_SYNTH
-  -- scene 2: reverb 0.6, voice 3 running on buffer 1 at envelope 2; scene
-  -- 1 (the state): reverb 0.2, voice 3 stopped on its synth at envelope 1
-  params:set("reverb_mix", 0.6); params:set("v3_source", synth + 1); params:set("v3_grain_env", 2)
+  -- scene 2: reverb 0.6, voice 3 running on buffer 1 in the overlap cloud;
+  -- scene 1 (the state): reverb 0.2, voice 3 stopped on its synth in the
+  -- density cloud (3.8 1c: the cloud, a discrete grain key, in place of
+  -- 3.7's envelope)
+  params:set("reverb_mix", 0.6); params:set("v3_source", synth + 1); params:set("v3_grain_cloud", 2)
   if not S.voices[3].active then toggle_voice(3) end
   capture_scene(2)
-  params:set("reverb_mix", 0.2); toggle_voice(3); params:set("v3_source", synth); params:set("v3_grain_env", 1)
+  params:set("reverb_mix", 0.2); toggle_voice(3); params:set("v3_source", synth); params:set("v3_grain_cloud", 1)
   capture_scene(1)
   params:set("morph_a", 1); params:set("morph_b", 2)
   params:set("morph", 0.4); context.clock.run_for(0.5)   -- at scene 1's corner
@@ -1076,12 +1059,12 @@ test("a morph crossing at a full window: its discrete switch goes at once, uncou
       if call.name == name and call.args[1] == 2 and (second == nil or call.args[2] == second) then return index end
     end
   end
-  local source, envelope, voice_on = index_of("setGrainSource", 1), index_of("setGrainParam", "envShape"),
+  local source, envelope, voice_on = index_of("setGrainSource", 1), index_of("setGrainParam", "overlapOn"),
     index_of("voiceOn")
   assert_true(S.voices[3].active and voice_on ~= nil, "the crossing started voice 3 at once")
   assert_true(source ~= nil and source < voice_on, "its source went first")
   assert_true(envelope ~= nil and envelope < voice_on, "its grain values before voiceOn")
-  assert_equal(context.engine_calls[envelope].args[3], 1, "at scene 2's envelope")
+  assert_equal(context.engine_calls[envelope].args[3], 1, "at scene 2's cloud")
   assert_equal(sync.budget_state().sent, 150, "none of it counted: the window is where it was")
   assert_equal(#context.calls_named("setReverb"), 0, "the crossing's continuous value waits")
   assert_equal(sync.budget_state().pending, 1)
@@ -1840,6 +1823,21 @@ local START_CALLS_ALLOWED = {
   -- 1a: each voice start sends setGrainParam(<v0>, "dry", 1) (design §7.1)
   {kind = "drop", match = '^setGrainParam%(<v0>, "dry", 1%)$', count = 1,
     why = "1a: each voice start sends the stage's dry level, 1 (design section 7.1)"},
+  -- 1c: the grain controls replace envShape (design §4.1, §4.2, §4.4, §4.5)
+  {kind = "drop", side = "fixture", match = '^setGrainParam%(<v0>, "envShape", 0%)$', count = 1,
+    why = "1c: the five grain envelopes are gone, and with them envShape (design §4.1)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "windowShape", 0%.57%)$', count = 1,
+    why = "1c: a start sends the window's shape, 0.57, the Hann's table: GrainBuf's own window (design §4.1)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "windowSkew", 0%)$', count = 1,
+    why = "1c: a start sends the window's skew, 0 (design §4.1)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "grainProb", 1%)$', count = 1,
+    why = "1c: a start sends the grains' probability, 1: every grain (design §4.2)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "overlapOn", 0%)$', count = 1,
+    why = "1c: a start sends the cloud, 0: the density's (design §4.4)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "grainOverlap", 2%)$', count = 1,
+    why = "1c: a start sends the overlap, 2 at master density 1 (design §4.4)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "panSpread", 0%.5%)$', count = 1,
+    why = "1c: a start sends the pan wander, 0.5, the grain synth's default that no 3.7 start sent (design §4.5)"},
 }
 local START_LABELS = {voice_1 = true, voice_4 = true, buffer_voice_3 = true}
 -- The entries of START_CALLS_ALLOWED that apply to the start label
@@ -1906,7 +1904,7 @@ local function module_records(S)
   end
   return records
 end
-local GRAIN_PART = {"grainSize", "grainDensity", "pitchShift", "posSpread", "envShape", "grainMode", "bufPos",
+local GRAIN_PART = {"grainSize", "grainDensity", "pitchShift", "posSpread", "grainMode", "bufPos",
   "bufRate", "bufScan"}
 
 -- A call as "name" or "name:key" for setGrainParam and setVoiceParam
@@ -1950,10 +1948,10 @@ test("voice_engine_parts names synth, grain, crossmod, bend, then the records", 
     end
     assert_equal(table.concat(sent, ","), table.concat(synth_keys, ","), "voice " .. voice .. "'s synth keys sorted")
     assert_equal(#parts[1].kept, 0, "nothing of the synth part is kept")
-    -- the grain part: the nine, kept, in their fixed order
+    -- the grain part: the eight, kept, in their fixed order
     local grain = {}
     for index, entry in ipairs(parts[2].kept) do grain[index] = entry.grain end
-    assert_equal(table.concat(grain, ","), table.concat(GRAIN_PART, ","), "the grain part's nine in order")
+    assert_equal(table.concat(grain, ","), table.concat(GRAIN_PART, ","), "the grain part's eight in order")
     assert_equal(#parts[2].voice_level, 0, "nothing of the grain part is voice-level")
     -- crossmod: per slot its source and amounts, then the speed; none carried
     local crossmod = {}
@@ -2007,12 +2005,19 @@ test("a sync sends voice_level before kept, per part", function()
   expected[#expected + 1] = "setModSpeed"
   expected[#expected + 1] = "setVoiceParam:bend"
   for index, tag in ipairs(expected) do assert_equal(tags[index], tag, "sync call " .. index) end
-  -- then each record's kept part, in registration order: its grain keys by key
+  -- then each record's kept part, in registration order: its grain keys by
+  -- key, or in its send_order (3.8 1c's grain_controls has one)
   local position = #expected
   for _, record in ipairs(module_records(S)) do
     local keys = {}
     for key in pairs(record.grain_keys or {}) do keys[#keys + 1] = key end
     table.sort(keys)
+    if record.send_order then
+      keys = {}
+      for _, key in ipairs(record.send_order) do
+        if record.grain_keys and record.grain_keys[key] then keys[#keys + 1] = key end
+      end
+    end
     for _, key in ipairs(keys) do
       local grain_key = record.grain_keys[key]
       local name = type(grain_key) == "table" and grain_key.name or grain_key

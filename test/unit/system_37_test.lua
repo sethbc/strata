@@ -75,6 +75,21 @@ local RUN_CALLS_ALLOWED = {
   -- 1a: each voice start sends setGrainParam(<v0>, "dry", 1) (design §7.1)
   {kind = "drop", match = '^setGrainParam%(<v0>, "dry", 1%)$', count = 1,
     why = "1a: each voice's start sends the stage's dry level, 1 (design section 7.1)"},
+  -- 1c: the grain controls replace envShape (design §4.1, §4.2, §4.4, §4.5)
+  {kind = "drop", side = "fixture", match = '^setGrainParam%(<v0>, "envShape", 0%)$', count = 1,
+    why = "1c: the five grain envelopes are gone, and with them envShape (design §4.1)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "windowShape", 0%.57%)$', count = 1,
+    why = "1c: each voice's start sends the window's shape, 0.57, the Hann's table (design §4.1)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "windowSkew", 0%)$', count = 1,
+    why = "1c: each voice's start sends the window's skew, 0 (design §4.1)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "grainProb", 1%)$', count = 1,
+    why = "1c: each voice's start sends the grains' probability, 1 (design §4.2)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "overlapOn", 0%)$', count = 1,
+    why = "1c: each voice's start sends the cloud, 0: the density's (design §4.4)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "grainOverlap", 2%)$', count = 1,
+    why = "1c: each voice's start sends the overlap, 2 at master density 1 (design §4.4)"},
+  {kind = "drop", match = '^setGrainParam%(<v0>, "panSpread", 0%.5%)$', count = 1,
+    why = "1c: each voice's start sends the pan wander, 0.5, the grain synth's default (design §4.5)"},
 }
 
 -- A call as the fixture writes it: name(args), numbers "%.9g", strings "%q"
@@ -191,6 +206,8 @@ local PSET_3_6 = {
   sides = {"macros", "matrix", "gestures"},
   -- the 3.6 lines 3.7 has no param for, each with why
   drops = {strata_pset_format = "3.7 writes no format line and reads one as nothing (0d)"},
+  -- 3.8 1c: the grain envelope is gone; its lines name no param
+  grain_env = "^v%d_grain_env$",
   -- an LFO's destination: since the groundwork before 3.8 its home routing
   -- in the matrix, so the line names no param, and the version 1 matrix
   -- side file holds no home: the LFO is aimed at nothing
@@ -279,6 +296,8 @@ test("a 3.6 scenes file is set aside whole; a 3.6 PSET and a version 2 buffers.d
     if id:match(PSET_3_6.lfo_dest) then
       assert_equal(params.lookup[id], nil, id .. ": no param")
       assert_equal(S.lib.matrix.home(tonumber(id:match(PSET_3_6.lfo_dest))), "", id .. ": the LFO is aimed at nothing")
+    elseif id:match(PSET_3_6.grain_env) then
+      assert_equal(params.lookup[id], nil, id .. ": the grain envelope names no param (3.8 1c)")
     elseif not params.lookup[id] then
       assert_true(PSET_3_6.drops[id] ~= nil, id .. ": a 3.6 line with no param here, and none expected")
     elseif params:lookup_param(id).t == params.tGROUP then
@@ -464,8 +483,10 @@ test("format 9's scenes are set aside as older; its PSET loads", function()
   local compared = 0
   for _, entry in ipairs(pset_lines(pset_text)) do
     local id = entry.id
-    assert_true(params.lookup[id] ~= nil, id .. ": every line names a param of this build")
-    if params:lookup_param(id).t ~= params.tGROUP then
+    -- (3.8 1c: but the grain envelope's, which name none)
+    assert_true(params.lookup[id] ~= nil or id:match(PSET_3_6.grain_env) ~= nil,
+      id .. ": every line names a param of this build")
+    if params.lookup[id] and params:lookup_param(id).t ~= params.tGROUP then
       local number = tonumber(entry.value)
       if number and params:lookup_param(id).t ~= params.tTEXT then
         assert_near(params:get(id), number, 1e-9 * math.max(1, math.abs(number)), id .. " as saved")
@@ -594,6 +615,21 @@ test("a 3.7 PSET loads with no error line and each voice its old type", function
   assert_near(params:get("delay_to_reverb"), 1, 1e-9, "delay_to_reverb at its default")
   for voice = 1, S.constants.NUM_VOICES do
     assert_near(params:get("v" .. voice .. "_dry"), 1, 1e-9, "v" .. voice .. "_dry at its default")
+  end
+  -- 1c: the PSET's v<i>_grain_env lines name no param (and print no error
+  -- line, above), and each voice's window is at its defaults
+  local envelopes = 0
+  for line in h.file_text(pset):gmatch("[^\n]+") do
+    local id = line:match('^"(v%d+_grain_env)"')
+    if id then
+      envelopes = envelopes + 1
+      assert_equal(params.lookup[id], nil, id .. " names no param")
+    end
+  end
+  assert_equal(envelopes, S.constants.NUM_VOICES, "the 3.7 PSET holds every voice's grain_env line")
+  for voice = 1, S.constants.NUM_VOICES do
+    assert_near(params:get("v" .. voice .. "_grain_shape"), 0.57, 1e-9, "voice " .. voice .. "'s shape at its default")
+    assert_near(params:get("v" .. voice .. "_grain_skew"), 0, 1e-9, "voice " .. voice .. "'s skew at its default")
   end
   cleanup()
 end)

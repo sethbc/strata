@@ -340,8 +340,8 @@ local function lfo_labels(registered)
   return labels
 end
 
--- the script's own per-voice registrations (lib/history.lua's, lib/voice_mix.lua's)
-local OWN_PER_VOICE = { "hist", "vfilt", "dsend", "rsend", "amp" }
+-- the script's own per-voice registrations (lib/grain.lua's, lib/history.lua's, lib/voice_mix.lua's)
+local OWN_PER_VOICE = { "shape", "skew", "hist", "vfilt", "dsend", "rsend", "amp" }
 
 local function list_labels(destinations)
   local labels = {}
@@ -389,9 +389,9 @@ test("the LFO page's ALT+E3 groups keep each voice, its registered destinations 
   end)
   finish_startup(context)
   local S = local_value("S")
-  -- 1 + 12 + 7 x 14 + 16: each voice's group holds 14 with the probe (the
+  -- 1 + 12 + 7 x 16 + 16: each voice's group holds 16 with the probe (the
   -- globals 12 with 1a's dly>rev)
-  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 14 28 42 56 70 84 98 112")
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 14 30 46 62 78 94 110 126")
   -- ALT+E3 on the destination field: none, the globals, each v<i> main, then the macros
   h.show_page("LFO")
   S.lfo_field = 1
@@ -405,7 +405,8 @@ test("the LFO page's ALT+E3 groups keep each voice, its registered destinations 
   key(1, 0)
   assert_equal(table.concat(landed, ","),
     "density,v1 main,v2 main,v3 main,v4 main,v5 main,v6 main,v7 main,macro 1,macro 1")
-  assert_equal(S.LFO_DESTINATIONS[111].label, "v7 probe", "the probe ends voice 7's group")
+  -- (the last before the sixteen macros, read from the list)
+  assert_equal(S.LFO_DESTINATIONS[#S.LFO_DESTINATIONS - 16].label, "v7 probe", "the probe ends voice 7's group")
 end)
 
 test("registered fx params grow the fx group and follow its 11 params", function()
@@ -460,7 +461,8 @@ end
 test("registered rows appear in their VOICE section, new sections in place, binary rows have kind binary", function()
   load_with(register_row_records)
   local outline = row_outline(1)
-  assert_true(outline:find("grain:v1_grain_mode:option grain:v1_probe:control grain:v1_probe_switch:binary crossmod ",
+  -- (after 3.8 1c's rows, registered before the probe)
+  assert_true(outline:find("grain:v1_pan_wander:control grain:v1_probe:control grain:v1_probe_switch:binary crossmod ",
     1, true), "probe rows end the grain section: " .. outline)
   assert_true(not outline:find("probe sect", 1, true), "a synth voice has no probe sect section")
   -- (after mix and the sections registered before it: lib/variation.lua's)
@@ -1241,7 +1243,7 @@ test("the built-in records come first: synth, grain, crossmod", function()
     -- 3.8 (0d): the type, then every type's synth key
     assert_equal(by_name.synth.count(voice_idx), 1 + #S.lib.types.keys(), "synth counts the type and every synth key")
   end
-  assert_equal(by_name.grain.count, 10, "the source and the nine grain params")
+  assert_equal(by_name.grain.count, 9, "the source and the eight grain params (3.8 1c: no envelope)")
   assert_equal(by_name.crossmod.count, 10, "three slots of three, then the speed")
   assert_equal(by_name.synth.separator, false, "the synth params sit under the voice's heading")
   assert_equal(by_name.grain.separator, "granular")

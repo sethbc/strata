@@ -161,12 +161,17 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | grain density | 1-100 /s | by voice: 20, 15, 25, 10, 18, 22, 20 | Grains a second |
 | grain pitch | 0.25-4 x | 1 | The transposition ratio |
 | position spread | 0-1 | by voice: 0.5, 0.3, 0.4, 0.2, 0.35, 0.25, 0.4 | |
-| grain envelope | hann, sine, perc, linen, trap | hann | |
 | grain mode | continuous, triggered | continuous | |
 | mod source 1-3 | none, voice 1 to voice 7 | none | The voice that modulates this one, in each of the three slots ([Cross-Modulation](modulation.md#cross-modulation)) |
 | amp mod 1-3 | -2 to 2 | 0 | How far that voice moves this one's level |
 | freq mod 1-3 | -2 to 2 | 0 | How far that voice moves this one's pitch |
 | mod speed | 0.1-50 Hz | 10 | The rate of the slow random wobble in this voice's own modulation signal, the one it sends to the voices it modulates |
+| grain shape | 0-1 | 0.57 | The grain's window, from pointed through the Hann (the default) to flat-topped ([Granular Processing](voices-and-grains.md#granular-processing)). 3.8; a 3.7 PSET's `grain envelope` line names no param and is not loaded |
+| grain skew | -1 to 1 | 0 | The window's lean: percussive at -1, even at 0, swelling at 1 |
+| grain prob | 0-100 % | 100 | The chance each grain sounds, in continuous mode |
+| grain cloud | density, overlap | density | What sets the grains a second: the grain density, or the overlap over the grain size |
+| grain overlap | 0.25-16 x | 2 | How many grains at once in the overlap cloud |
+| pan wander | 0-100 % | 50 | How far the slow random pan wander moves the grains |
 | history | 0-16 s (0-60 s on the high tier) | 0 | Input-sourced voices: how far back in the live input the grains play ([Granular Processing](voices-and-grains.md#granular-processing)) |
 | freeze | off/on | off | Hold what the voice's grains play ([Freeze](pages/voice.md#freeze)) |
 | freeze mode | hold (and spectral on the high tier) | hold | |
@@ -214,4 +219,4 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | seq direction | forward, reverse, ping-pong, random | forward | The order the voice takes its steps |
 | seq misstep | 0-100% | 0 | The chance of a step up or down instead of the direction's |
 
-None of the extras (history to seq misstep) is changed by MAIN's randomize or the mutations. The grid's fader pages show the voice filter's cutoff, resonance and mix, the dry level, both sends, a buffer voice's loop, the three jitters and the voice's attack and release, after the voice's own faders; ALT+K2 on VOICE randomizes some of them with the section under the cursor ([VOICE](pages/voice.md)).
+None of the extras (grain shape to seq misstep) is changed by MAIN's randomize or the mutations. The grid's fader pages show the window's shape and skew among the grain faders (where 3.7's envelope was), and, after the voice's own faders, the voice filter's cutoff, resonance and mix, the dry level, both sends, a buffer voice's loop, the three jitters and the voice's attack and release; ALT+K2 on VOICE randomizes some of the extras with the section under the cursor ([VOICE](pages/voice.md)).

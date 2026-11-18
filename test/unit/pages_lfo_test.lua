@@ -139,16 +139,17 @@ end)
 test("group starts come from the destinations list", function()
   load_strata()
   -- (the globals end with 1a's dly>rev, at 13)
-  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 14 27 40 53 66 79 92 105")
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 14 29 44 59 74 89 104 119")
   local destinations = local_value("LFO_DESTINATIONS")
-  for index, label in pairs({ [22] = "v1 hist", [23] = "v1 vfilt", [24] = "v1 dsend", [25] = "v1 rsend", [26] = "v1 amp" }) do
+  for index, label in pairs({ [22] = "v1 shape", [23] = "v1 skew", [24] = "v1 hist", [25] = "v1 vfilt", [26] = "v1 dsend",
+      [27] = "v1 rsend", [28] = "v1 amp" }) do
     assert_equal(destinations[index].label, label, "a registered destination joins its voice")
   end
   assert_equal(lfo_dest_group_jump(1, -1), 1, "clamped at none")
   assert_equal(lfo_dest_group_jump(5, 1), 14, "next start above")
   assert_equal(lfo_dest_group_jump(5, -1), 2, "last start below")
-  assert_equal(lfo_dest_group_jump(104, -1), 92, "from v7 amp back to v7 main")
-  assert_equal(lfo_dest_group_jump(105, 1), 105, "clamped at the last group (the macros)")
+  assert_equal(lfo_dest_group_jump(118, -1), 104, "from v7 amp back to v7 main")
+  assert_equal(lfo_dest_group_jump(119, 1), 119, "clamped at the last group (the macros)")
 end)
 
 -- #580, 3.7: a registered global destination joins the globals; the
@@ -164,12 +165,12 @@ test("a registered global joins the globals and the macros stay the last group (
   assert_equal(destinations[13].label, "dly>rev", "the script's own registered global")
   assert_equal(destinations[14].label, "probe 1", "after rev damp and dly>rev")
   assert_equal(destinations[15].label, "probe 2")
-  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 16 29 42 55 68 81 94 107")
-  assert_equal(lfo_dest_group_jump(106, 1), 107, "from v7 amp to macro 1")
-  assert_equal(destinations[107].label, "macro 1")
-  assert_equal(lfo_dest_group_jump(108, -1), 107, "back to the group's start")
-  assert_equal(lfo_dest_group_jump(107, -1), 94, "and to voice 7")
-  assert_equal(lfo_dest_group_jump(107, 1), 107, "the last group")
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 16 31 46 61 76 91 106 121")
+  assert_equal(lfo_dest_group_jump(120, 1), 121, "from v7 amp to macro 1")
+  assert_equal(destinations[121].label, "macro 1")
+  assert_equal(lfo_dest_group_jump(122, -1), 121, "back to the group's start")
+  assert_equal(lfo_dest_group_jump(121, -1), 106, "and to voice 7")
+  assert_equal(lfo_dest_group_jump(121, 1), 121, "the last group")
   assert_equal(lfo_dest_group_jump(15, -1), 2, "probe 2 is in the globals")
 end)
 
@@ -334,7 +335,7 @@ test("ALT+E3 on the destination jumps a group; elsewhere it is fine on the rate 
   local function alt_e3(d) with_alt(function() enc(3, d) end) end
   alt_e3(1); assert_equal(home_index(1), 2, "none to the first global")
   alt_e3(1); assert_equal(home_index(1), 14, "to v1 main")
-  alt_e3(1); assert_equal(home_index(1), 27, "to v2 main")
+  alt_e3(1); assert_equal(home_index(1), 29, "to v2 main")
   aim_index(1, 16)
   alt_e3(-1); assert_equal(home_index(1), 14, "back to its group's start")
   alt_e3(-1); assert_equal(home_index(1), 2, "then the globals")

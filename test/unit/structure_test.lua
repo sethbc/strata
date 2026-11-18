@@ -1265,8 +1265,9 @@ end
 -- PitchShift stage 3.2 removed, #151): every class-level variable is named
 -- again somewhere in the engine's code, but a retired one: still declared
 -- since lib/Engine_Strata.sc is never edited, and used nowhere else (3.8's
--- package 0c: voiceTypeDefs and a type per voice replace voiceSynthDefs)
-local RETIRED_ENGINE_VARIABLES = { voiceSynthDefs = true }
+-- package 0c: voiceTypeDefs and a type per voice replace voiceSynthDefs;
+-- 1c: the window bank, areaState[\grains][\windowBank], replaces envBuffers)
+local RETIRED_ENGINE_VARIABLES = { voiceSynthDefs = true, envBuffers = true }
 test("every variable Engine_Strata.sc declares is used in the engine's code", function()
   local files = engine_files()
   local code = {}

@@ -1,7 +1,7 @@
 // test/engine_check/grains.scd
 // The grain stage: both grain SynthDefs' controls and UGens, a stopped
 // voice's source choice, voiceOn for a buffer source, the grain params
-// (pitch, mode, envelope shapes), triggered grains on a synth voice, and
+// (pitch, mode), 3.8's window bank and its pick, triggered grains on a synth voice, and
 // buffer- and input-sourced grains (pan, triggered mode, the grain end).
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
@@ -15,7 +15,7 @@ var readBus = { arg bus; h.readBus(bus) };
 var measure = { arg probe, bus, seconds = 0.3; h.measure(probe, bus, seconds) };
 var writeTestFile = { arg path, sampleRate, frames, values; h.writeTestFile(path, sampleRate, frames, values) };
 var grainDefs = h.grainDefs, scratchRoot = h.tempDir;
-var before, envSamples, voicesStarted;
+var before, voicesStarted;
 var probe, peakBus, readPeak, triggeredBus, continuousPeak, untriggeredPeak, triggeredPeak;
 
 var controlDefault = { arg defName, controlName;
@@ -347,9 +347,163 @@ var checkSlotGain = {
             showPair.(doubled), showPair.(ring)));
 };
 
+// 3.8's window bank, the pick and two traced corners (design §4.1; called
+// below, with every voice running)
+var checkWindowBank = {
+    var bank = engine.tryPerform(\windowBank) ? [], shapes = engine.tryPerform(\windowShapes) ? 0;
+    var skews = engine.tryPerform(\windowSkews) ? 0, frames = engine.tryPerform(\windowFrames) ? 0;
+    var hannIndex = engine.tryPerform(\windowHannIndex) ? -1, middle = (skews - 1) div: 2;
+    var first = bank.first !? { arg buffer; buffer.bufnum } ? 0;
+    var tables, bad, peaks, hann, hannError, picks, pickBus, pickSynth, readPick, expected, wanted, kept, refused;
+    check.((shapes * skews == 120) and: { frames == 1024 } and: { hannIndex == ((4 * skews) + middle) }
+        and: { bank.size == (shapes * skews) } and: { bank.every({ arg buffer; buffer.numFrames == frames }) }
+        and: { bank.every({ arg buffer, index; buffer.bufnum == (first + index) }) },
+        "grains: the window bank is 120 tables of 1024 frames at consecutive bufnums (% shapes x % skews, % frames; % tables)".format(
+            shapes, skews, frames, bank.size));
+    check.(((shapes * skews * frames) == engine.windowBankFrames)
+        and: { (bank.sum({ arg buffer; buffer.numFrames }) * 4) == (engine.windowBankFrames * 4) },
+        "grains: the bank's bytes equal fixedBufferBytes' window term, and windowShapes x windowSkews x windowFrames equals windowBankFrames (% frames, windowBankFrames %)".format(
+            shapes * skews * frames, engine.windowBankFrames));
+    tables = bank.collect({ arg buffer;
+        var condition = Condition(false), values;
+        buffer.loadToFloatArray(action: { arg array; values = array; condition.test = true; condition.signal });
+        awaitReply.(condition);
+        values
+    });
+    bad = tables.collect({ arg table, index;
+        var ok = table.notNil and: { table.size == frames }
+            and: { table.every({ arg value; value.isNaN.not and: { value >= 0 } and: { value <= 1 } }) }
+            and: { (table.maxItem - 1).abs <= 1e-6 } and: { table.first <= 0.01 } and: { table.last <= 0.01 };
+        if (ok) { nil } { index }
+    }).reject(_.isNil);
+    check.(bad.isEmpty and: { tables.size > 0 },
+        "grains: every window table is within 0..1, peaks at 1 (within 1e-6) and starts and ends at most 0.01 (bad tables %)".format(bad));
+    // each shape's peak at skew -1, 0 and +1: the middle of the frames at
+    // the top (within 1e-6 of it: one frame, or two, for a pointed table;
+    // the flat top of a flat-topped one)
+    peaks = shapes.collect({ arg shape;
+        [0, middle, skews - 1].collect({ arg skew; tables[(shape * skews) + skew] !? { arg table;
+            var top = (0 .. frames - 1).select({ arg frame; table[frame] >= (table.maxItem - 1e-6) });
+            (top.first + top.last) / 2 } })
+    });
+    check.(peaks.notEmpty and: { peaks.every({ arg each; each.every(_.notNil) and: { each[0] < (frames / 4) }
+        and: { each[2] >= (frames * 3 / 4) } and: { (each[1] - ((frames - 1) / 2)).abs <= 1 } }) },
+        "grains: skew -1's peak is in the first quarter, +1's in the last, 0's at the center within a frame (the middle of each top, by shape %)".format(peaks));
+    hann = tables[hannIndex];
+    hannError = hann !? { (0 .. frames - 1).collect({ arg frame;
+        (hann[frame] - (0.5 - (0.5 * cos(2pi * frame / (frames - 1))))).abs }).maxItem };
+    check.(hannError.notNil and: { hannError < 1e-3 },
+        "grains: table (4, %) is a Hann within 1e-3 (largest difference %)".format(middle, hannError));
+
+    // the pick (windowPick): the shape rounded to one of windowShapes, the
+    // skew to one of windowSkews (the middle is skew 0), the Hann's table
+    // played as GrainBuf's own window (-1), and envBuf 0 or above in its place
+    SynthDef(\strataCheckWindowPick, { arg out, windowBank = 0, windowShape = 0.57, windowSkew = 0, envBuf = -1;
+        Out.kr(out, engine.windowPick((windowBank: windowBank, windowShape: windowShape, windowSkew: windowSkew, envBuf: envBuf)));
+    }).add;
+    pickBus = Bus.control(server, 1);
+    server.sync;
+    pickSynth = Synth(\strataCheckWindowPick, [\out, pickBus, \windowBank, first], engine.processGroup, \addToTail);
+    readPick = { arg shape, skew, envBuf;
+        pickSynth.set(\windowShape, shape, \windowSkew, skew, \envBuf, envBuf);
+        server.sync; 0.05.wait;
+        readBus.(pickBus).first
+    };
+    // [shape, skew, envBuf, the envelope number wanted]
+    expected = [[0.42, 0, -1, first + (3 * skews) + middle], [0.57, 0, -1, -1], [0.72, 0, -1, first + (5 * skews) + middle],
+        [0.5, 0, -1, -1], [0.64, 0, -1, -1], [0, -1, -1, first], [1, 1, -1, first + (shapes * skews) - 1],
+        [2, -3, -1, first + ((shapes - 1) * skews)], [0.57, 0.1, -1, first + hannIndex + 1], [0.3, 0.5, 5, 5]];
+    picks = expected.collect({ arg each; readPick.(each[0], each[1], each[2]) });
+    wanted = expected.collect(_.last);
+    check.(picks == wanted,
+        "grains: windowShape 0.42, 0.57 and 0.72 at skew 0 give table 3·15+7, -1 and table 5·15+7; the Hann's band (0.50 to 0.64) gives -1; the corners and clipped values their tables; envBuf 5 overrides (picks %, wanted %)".format(
+            picks, wanted));
+    pickSynth.free; pickBus.free;
+
+    // every grain synth starts with the bank's first bufnum, which
+    // setGrainParam never changes (nor envBuf)
+    check.(bank.notEmpty and: { getControl.(engine.synths[\grain0], \windowBank) == first }
+        and: { (0 .. engine.numVoices - 1).every({ arg voice; engine.grainControls[voice][\windowBank] == first }) },
+        "grains: grain synths start with windowBank = the bank's first bufnum (%; grain 0 has %)".format(first,
+            getControl.(engine.synths[\grain0], \windowBank)));
+    kept = [engine.grainControls[0][\windowBank], engine.grainControls[0][\envBuf]];
+    command.(\setGrainParam, 0, \windowBank, 3);
+    command.(\setGrainParam, 0, \envBuf, 3);
+    server.sync;
+    refused = [getControl.(engine.synths[\grain0], \windowBank), getControl.(engine.synths[\grain0], \envBuf),
+        engine.grainControls[0][\windowBank], engine.grainControls[0][\envBuf]];
+    check.(refused == ([first, -1] ++ kept),
+        "grains: setGrainParam refuses windowBank and envBuf (synth and kept values %)".format(refused));
+
+    // at each shape a grain sounds: voice 1's ring grains (its synth
+    // running since startAllVoices) at shapes 0.42, 0.57 and 0.72
+    {
+        var out = Bus.audio(server, 2), peakBus = Bus.control(server, 2), group = Group.after(engine.processGroup);
+        var probe = Synth(\strataCheckChannelPeaks, [\in, out, \out, peakBus], group), levels;
+        engine.synths[\grain1].set(\out, out.index);
+        levels = [0.42, 0.57, 0.72].collect({ arg shape;
+            command.(\setGrainParam, 1, \windowShape, shape);
+            server.sync; 0.2.wait;
+            measure.(probe, peakBus, 0.3).sum
+        });
+        command.(\setGrainParam, 1, \windowShape, 0.57);
+        engine.synths[\grain1].set(\out, engine.voicePathBus(1, engine.grainSource[1]).index);
+        check.(levels.every({ arg level; level > 0.01 }),
+            "grains: windowShape 0.42, 0.57 and 0.72 each sound (peaks %)".format(levels.round(0.0001)));
+        group.free; server.sync;
+        [out, peakBus].do(_.free);
+    }.value;
+
+    // a long grain on a DC ring traces its table: one 0.5 s grain in
+    // triggered mode, recorded from its first sample, against the table
+    // read as GrainBuf reads it (sample n at frame n x windowFrames / the
+    // grain's samples, linear), scaled by the least squares gain, within 1e-3
+    SynthDef(\strataCheckWindowTrace, { arg in, buf;
+        RecordBuf.ar(In.ar(in, 2)[0], buf, loop: 0, doneAction: 2);
+    }).add;
+    server.sync;
+    [[0, -1, 0], [1, 1, (shapes * skews) - 1]].do({ arg corner;
+        var ringFrames = (2 * server.sampleRate).asInteger, grainSamples = (0.5 * server.sampleRate).floor.asInteger;
+        var ringL = Buffer.alloc(server, ringFrames, 1), ringR = Buffer.alloc(server, ringFrames, 1);
+        var phase = Bus.control(server, 1), out = Bus.audio(server, 2), record = Buffer.alloc(server, grainSamples + 64, 1);
+        var group = Group.after(engine.processGroup), grain, condition = Condition(false), trace, table = tables[corner[2]], error;
+        server.sync;
+        [ringL, ringR].do({ arg buffer; buffer.fill(0, ringFrames, 1.0) });
+        phase.set(ringFrames div: 2);
+        server.sync;
+        grain = Synth(\strataGrainRing, [\out, out, \bufL, ringL, \bufR, ringR, \phaseBus, phase, \grainMode, 1,
+            \grainSize, 0.5, \posSpread, 0, \panSpread, 0, \rateLevel, 0, \pan, 0, \windowBank, first,
+            \windowShape, corner[0], \windowSkew, corner[1],
+            \fastModIn, engine.areaState[\modulation][\silentFastModBus].index], group, \addToHead);
+        server.sync; 0.3.wait;                 // past the grain synth's own attack
+        server.makeBundle(nil, {
+            grain.set(\t_trig, 1);
+            Synth(\strataCheckWindowTrace, [\in, out, \buf, record], group, \addToTail);
+        });
+        0.7.wait; server.sync;
+        record.loadToFloatArray(action: { arg array; trace = array; condition.test = true; condition.signal });
+        awaitReply.(condition);
+        error = (table.notNil and: { trace.notNil }).if({ [0, 1, 2].collect({ arg offset;
+            var last = (grainSamples * (frames - 1) / frames).floor.asInteger - 4, gain, cross = 0, energy = 0, worst = 0;
+            var expect = { arg n; var position = n * frames / grainSamples, index = position.floor.asInteger;
+                table[index] + ((position - index) * (table[(index + 1).min(frames - 1)] - table[index])) };
+            (0 .. last).do({ arg n; var e = expect.(n); cross = cross + (trace[n + offset] * e); energy = energy + (e * e) });
+            gain = cross / energy.max(1e-12);
+            (0 .. last).do({ arg n; worst = worst.max(((trace[n + offset] / gain.max(1e-12)) - expect.(n)).abs) });
+            [worst, gain]
+        }).minItem({ arg each; each[0] }) }, { nil });
+        check.(error.notNil and: { error[1] > 0.1 } and: { error[0] < 1e-3 },
+            "grains: at shape % / skew % a long grain on a DC ring traces that table within 1e-3 ([largest difference, gain] %)".format(
+                corner[0], corner[1], error));
+        group.free; server.sync;
+        [ringL, ringR, phase, out, record].do(_.free);
+    });
+};
+
 // SynthDefs
 grainDefs.do({ arg name;
-    [\grainMode, \t_trig, \bend, \envBuf].do({ arg control;
+    [\grainMode, \t_trig, \bend, \envBuf, \windowShape, \windowSkew, \grainProb, \overlapOn, \grainOverlap, \arpOn,
+            \arpFold, \windowBank].do({ arg control;
         check.(SynthDescLib.global.at(name).controlNames.collect(_.asSymbol).includes(control),
             "% has a % control".format(name, control));
     });
@@ -381,6 +535,13 @@ check.(grainDefs.every({ arg name;
     ++ [[\intervalCount, 0], [\intervalProb, 1], [\quantize, 0], [\scaleNote, 60], [\loopStart, 0], [\loopLength, 1]];
     defaults.every({ arg pair; controlDefault.(name, pair[0]) == pair[1] })
 }), "grains: both grain defs declare every 3.2 control");
+// "grains: both grain defs declare 3.8's grain controls", each neutral at
+// its default: the Hann's shape, no skew, every grain, the density cloud,
+// no arpeggio, envBuf below 0 (the pick plays)
+check.(grainDefs.every({ arg name;
+    [[\windowShape, 0.57], [\windowSkew, 0], [\grainProb, 1], [\overlapOn, 0], [\grainOverlap, 2], [\arpOn, 0], [\arpFold, 0],
+        [\envBuf, -1]].every({ arg pair; ((controlDefault.(name, pair[0]) ? inf) - pair[1]).abs < 1e-6 })
+}), "grains: both grain defs declare 3.8's grain controls at their neutral defaults");
 // "grains: the hook methods exist": the areas that fill them later
 // (variation, loop, freeze, mix) keep these names
 check.([\grainRate, \grainPan, \grainDur, \slotGrainPos, \scanRate, \ringScanOffset, \freezeVoice, \unfreezeVoice, \voiceOutput, \voiceFilter]
@@ -444,36 +605,14 @@ server.sync;
 check.(getControl.(engine.synths[\grain0], \grainMode) == 1, "setGrainParam grainMode reaches the grain synth");
 command.(\setGrainParam, 0, \grainMode, 0);
 
-// Grain envelope shapes: envShape 0 = built-in Hann (-1), 1-4 = envBuffers
-check.(engine.envBuffers.size == 4, "four grain envelope buffers");
-check.(engine.envBuffers.every({ arg buffer; buffer.numFrames == 1024 }),
-    "envelope buffers hold 1024 frames");
-envSamples = { var condition = Condition(false), values;
-    engine.envBuffers[3].loadToFloatArray(action: { arg array;
-        values = array; condition.test = true; condition.signal });
-    awaitReply.(condition);
-    values
-}.value;
-check.((envSamples[0].abs < 0.01) and: { (envSamples[512] - 1).abs < 0.01 },
-    "trapezoid envelope buffer is loaded on the server (0 at the start, 1 in the middle)");
-check.(getControl.(engine.synths[\grain0], \envBuf) == -1, "grain synths start with the Hann envelope");
-command.(\setGrainParam, 0, \envShape, 2);
-server.sync;
-check.(getControl.(engine.synths[\grain0], \envBuf) == engine.envBuffers[1].bufnum,
-    "envShape 2 selects the second envelope buffer");
-command.(\setGrainParam, 0, \envShape, 4);
-server.sync;
-check.(getControl.(engine.synths[\grain0], \envBuf) == engine.envBuffers[3].bufnum,
-    "envShape 4 selects the last envelope buffer");
-command.(\setGrainParam, 0, \envShape, 0);
-server.sync;
-check.(getControl.(engine.synths[\grain0], \envBuf) == -1, "envShape 0 returns to the Hann envelope");
-command.(\setGrainParam, 0, \envShape, 1);
-command.(\setGrainParam, 0, \envShape, 9);
-command.(\setGrainParam, 0, \envShape, -1);
-server.sync;
-check.(getControl.(engine.synths[\grain0], \envBuf) == engine.envBuffers[0].bufnum,
-    "an out-of-range envShape is ignored");
+// 3.8's window bank (design §4.1): windowShapes x windowSkews tables of
+// windowFrames at consecutive bufnums, each within 0..1 and peaking at 1,
+// both ends near 0, the skew moving the peak (skew -1 in the first
+// quarter, +1 in the last, 0 at the center); the table at the Hann's place
+// is a Hann; the bank is fixedBufferBytes' window term. Then the pick, a
+// grain synth's windowBank, setGrainParam's refusals, and two corner
+// tables traced by a long grain
+checkWindowBank.value;
 
 // Triggered grain mode on a running synth voice (voice 0, its
 // resonator long past its attack): no grain and no position-spread
@@ -552,7 +691,7 @@ checkSourceGrains.(1, 2);
     check.((one > 0.5) and: { many > 50 } and: { many <= 125.5 },
         "a flood of 200 retriggers in 0.5 s never sounds more than 125 grains at once (at most %; one grain %)".format(
             many.round(0.1), one.round(0.0001)));
-    [[\grainMode, 0], [\grainSize, 0.1], [\posSpread, 0.5], [\panSpread, 0.5], [\envShape, 0]]
+    [[\grainMode, 0], [\grainSize, 0.1], [\posSpread, 0.5], [\panSpread, 0.5]]
         .do({ arg pair; command.(\setGrainParam, voice, *pair) });
     engine.synths[engine.grainKey(voice)].set(\out, engine.voicePathBus(voice, engine.grainSource[voice]).index);
     command.(\setGrainSource, voice, 0);

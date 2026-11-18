@@ -419,8 +419,8 @@ return function(S)
   -- the scene's type in recall order (voice_scene_keys: the built-in keys
   -- sorted, then the registered keys sorted, so freq comes before freeze
   -- and loop_length before loop_start; a type this build lacks: the shared
-  -- keys alone), continuous but a key with a range (the grain envelope and
-  -- mode, the mod sources, a record's discrete keys). Each param entry is
+  -- keys alone), continuous but a key with a range (the grain mode and
+  -- cloud, the mod sources, a record's discrete keys). Each param entry is
   -- {kind, id, value, voice}, a synth key's with synth = true
   function M.voice_entries(voice_idx, voice_data)
     local prefix = "v" .. voice_idx .. "_"

@@ -9,7 +9,7 @@ local function values_of(voice, keys)
   for _, key in ipairs(keys) do out[key] = voice.values[key] end
   return out
 end
-local GRAIN_VALUE_KEYS = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode", "buf_pos", "buf_rate", "buf_scan" }
+local GRAIN_VALUE_KEYS = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_mode", "buf_pos", "buf_rate", "buf_scan" }
 local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.assert_equal, h.assert_near
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local deep_copy, show_page = h.deep_copy, h.show_page
@@ -133,10 +133,10 @@ end
 test("gentle_mutate touches only the grain keys the grain record's mutate groups name", function()
   local context = load_strata(); finish_startup(context)   -- voice 1 running
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
-  params:set("v1_grain_env", 3); params:set("v1_grain_mode", 2)
+  params:set("v1_grain_shape", 0.3); params:set("v1_grain_mode", 2)
   math.randomseed(13)
   for _ = 1, 50 do gentle_mutate() end
-  assert_equal(params:get("v1_grain_env"), 3, "envelope shape never mutates")
+  assert_equal(params:get("v1_grain_shape"), 0.3, "the window shape never mutates")
   assert_equal(params:get("v1_grain_mode"), 2, "grain mode never mutates")
   -- the groups are the guard: with none, no grain or buffer key mutates
   local record = grain_record()
@@ -654,7 +654,7 @@ end)
 
 -- The params a page randomize may set besides randomize_voice's (VOICE's
 -- grain and crossmod sections, FX's), each ending the undo when edited
-local PAGE_RANDOMIZED_IDS = { "v1_grain_density", "v1_grain_spread", "v1_grain_env", "v1_mod_speed",
+local PAGE_RANDOMIZED_IDS = { "v1_grain_density", "v1_grain_spread", "v1_mod_speed",
   "v1_mod_amp_amt_1", "v1_mod_amp_amt_2", "v1_mod_amp_amt_3", "v1_mod_freq_amt_1", "v1_mod_freq_amt_2",
   "v1_mod_freq_amt_3", "master_density", "drift_amount", "filter_type", "filter_freq", "filter_res",
   "delay_time", "delay_feedback", "delay_mix", "reverb_mix", "reverb_size", "reverb_damp" }
@@ -913,13 +913,13 @@ test("mutations reach 3.7's sets; amp, pan, env, mode and source are never touch
     assert_equal(sorted_ids(mutated(voice)), sorted_ids(with_prefix(voice, { "grain_size", "grain_pitch", "grain_spread" })),
       "voice " .. voice .. " input")
   end
-  -- never amp, pan, the envelope, the mode or the source, on any voice and source
+  -- never amp, pan, the window shape, the mode or the source, on any voice and source
   for voice = 1, S.constants.NUM_VOICES do
     for _, source in ipairs({ 1, 3, 10 }) do
       params:set("v" .. voice .. "_source", source)
       for _, id in ipairs(mutated(voice)) do
         local key = id:match("^v%d+_(.+)$")
-        assert_true(key ~= "amp" and key ~= "pan" and key ~= "grain_env" and key ~= "grain_mode" and key ~= "source"
+        assert_true(key ~= "amp" and key ~= "pan" and key ~= "grain_shape" and key ~= "grain_mode" and key ~= "source"
           and not key:match("^mod_"), id .. " is never mutated")
       end
     end

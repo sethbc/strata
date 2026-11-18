@@ -2,8 +2,8 @@
 // The voices area: the voices' buses, groups and state, the voice commands
 // (voiceOn, retrigger, voiceOff, setVoiceParam, setGrainParam,
 // setGrainSource, setVoiceType and the crossmod commands), the voice types
-// (3.8: voiceTypeDefs, a type per voice), setVoiceControl, envBufnumFor and
-// voiceHit (the areas' hook for a voice's hits). See
+// (3.8: voiceTypeDefs, a type per voice), setVoiceControl and voiceHit (the
+// areas' hook for a voice's hits). See
 // docs/notes/engine/voices.md and docs/notes/engine/types.md.
 
 + Engine_Strata {
@@ -154,7 +154,7 @@
         });
 
         // A param an area handles (grainParamHandlers: the grains area's
-        // envShape) goes to its handler, which returns true when it has
+        // history) goes to its handler, which returns true when it has
         // dealt with it; other params pass straight through, to the own grain
         // synth and the voice's extra notes (setGrainSynths, which keeps a
         // note's own pitch its own). Every value is kept so a replacement
@@ -314,14 +314,6 @@
         silentBus.free;
     }
 
-    // GrainIn envbufnum for an envShape index: 0 = built-in Hann (-1),
-    // 1-4 = envBuffers; nil for anything else
-    envBufnumFor { arg index;
-        if (index == 0) { ^-1 };
-        if ((index >= 1) and: { index <= envBuffers.size }) { ^envBuffers[index - 1].bufnum };
-        ^nil
-    }
-
     // A voice-level control (synthesis param, crossmod routing or amount):
     // kept for restarts, sent to the voice synth and the voice's extra voice
     // synth notes (setVoiceSynths: freq only to the own note's), to the grain
@@ -353,7 +345,8 @@
     // a buffer grain synth reads (bufnumL/R, bufFrames, bufRateScale,
     // recHeadBus), the ring a ring grain synth reads (bufL/R, phaseBus,
     // ringLevel), the source's rate switch (rateLevel), the envelope's
-    // buffer (envBuf, from envShape) and the fast-modulation block a grain
+    // override (envBuf, which only the engine check sets) and 3.8's window
+    // bank (windowBank, the grains area's), the fast-modulation block a grain
     // synth or stage reads (fastModIn, the modulation area's), and 3.5's
     // per-note controls, which the notes area sets on one note's synth
     // (noteGate, noteBend, noteAmp, noteMain, notePos, noteSize, noteRate
@@ -366,7 +359,7 @@
     // rejects the same names.
     engineOwnedControls {
         ^#[\out, \gate, \kill, \t_trig, \velocity, \bufnumL, \bufnumR, \bufFrames, \bufRateScale, \recHeadBus,
-            \bufL, \bufR, \phaseBus, \ringLevel, \rateLevel, \envBuf, \fastModIn,
+            \bufL, \bufR, \phaseBus, \ringLevel, \rateLevel, \envBuf, \windowBank, \fastModIn,
             \noteGate, \noteBend, \noteAmp, \noteMain, \notePos, \noteSize, \noteRate, \t_accent, \t_gate,
             \slotGain, \t_scanSync, \scanSyncPhase]
     }

@@ -514,7 +514,7 @@ checkInputNote = {
 };
 
 // A voice-wide grain param (grainSize; pitchShift on a buffer voice; the
-// envelope, as its envBuf; the voice's pan, a voice-level grain control; an
+// window shape; the voice's pan, a voice-level grain control; an
 // input voice's history; a buffer voice's t_scanReset, never stored)
 // reaches the own grain synth and every live note of the voice; bufRate
 // only the own note's (each note keeps its own, with its own scaleNote,
@@ -530,7 +530,7 @@ checkGrainFanOut = {
     inputNote = slotSynth.(input, 1);
     command.(\setGrainParam, buffer, \grainSize, 0.3);
     command.(\setGrainParam, buffer, \pitchShift, 1.25);
-    command.(\setGrainParam, buffer, \envShape, 2.0);
+    command.(\setGrainParam, buffer, \windowShape, 0.75);
     command.(\setVoiceParam, buffer, \pan, 0.25);
     command.(\setGrainParam, buffer, \bufRate, 0.5);
     command.(\setGrainParam, buffer, \scaleNote, 62.0);
@@ -544,7 +544,7 @@ checkGrainFanOut = {
     synths = [ownBuffer] ++ notes;
     ok = notes.every(_.notNil) and: { inputNote.notNil }
         and: { synths.every({ arg synth; near.(controlOf.(synth, \grainSize), 0.3) and: { near.(controlOf.(synth, \pitchShift), 1.25) }
-            and: { controlOf.(synth, \envBuf) == engine.envBuffers[1].bufnum } and: { near.(controlOf.(synth, \pan), 0.25) } }) }
+            and: { near.(controlOf.(synth, \windowShape), 0.75) } and: { near.(controlOf.(synth, \pan), 0.25) } }) }
         and: { near.(controlOf.(ownBuffer, \bufRate), 0.5) } and: { near.(controlOf.(ownBuffer, \scaleNote), 62 + 0.5.ratiomidi) }
         and: { near.(controlOf.(notes[0], \bufRate), 1.5) } and: { near.(controlOf.(notes[0], \scaleNote), 62 + 1.5.ratiomidi) }
         and: { near.(controlOf.(notes[1], \bufRate), 2.0) } and: { near.(controlOf.(notes[1], \scaleNote), 74) }

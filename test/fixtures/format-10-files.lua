@@ -26,6 +26,19 @@
 -- five side files and names the PSET in the live file. scenes.data is the
 -- data folder's strata/scenes.data after that, and the other six are the
 -- strata-05.* files.
+--
+-- It is format 10 as the latest package left it: 3.8 is unreleased, so a
+-- package that removes or renames a scene key re-records it by the method
+-- above (a file of an earlier pre-release build holding the old key is
+-- set aside, by design: docs/notes/lua/scenes.md). Recorded again
+-- (2026-11-18) by 3.8's package 1c, which removed the grain envelope: by
+-- the same method, with LFO 1 on (as the first recording had it; the
+-- method above leaves it out) and any name of the data folder drawn
+-- before the seed. The grain envelope's entries are gone and 1c's six
+-- keys a voice are in (h.scramble_state's envelope draw sets the window's
+-- shape). Recorded on main after 1a (plain sends: dry, delay_to_reverb,
+-- reverb_mix's new default) and the five new voice types (their synth
+-- keys in every voice's PSET lines), so it holds them too.
 return {
   ["scenes.data"] = [==[
 return {
@@ -158,6 +171,7 @@ return {
    ["delay_pingpong"]=0.0,
    ["delay_sync"]=0,
    ["delay_time"]=0.375,
+   ["delay_to_reverb"]=1.0,
    ["drift_amount"]=0.01,
    ["filter_freq"]=5000.0,
    ["filter_mix"]=0.0,
@@ -225,7 +239,7 @@ return {
    ["mutation_rate"]=2.0,
    ["patterns"]={38},
    ["reverb_damp"]=0.5,
-   ["reverb_mix"]=0.3,
+   ["reverb_mix"]=0.43,
    ["reverb_size"]=0.8,
    ["root"]=1,
    ["scale"]=1,
@@ -328,6 +342,7 @@ return {
    ["delay_pingpong"]=0.0,
    ["delay_sync"]=0,
    ["delay_time"]=0.375,
+   ["delay_to_reverb"]=1.0,
    ["drift_amount"]=0.01,
    ["filter_freq"]=5000.0,
    ["filter_mix"]=0.0,
@@ -395,7 +410,7 @@ return {
    ["mutation_rate"]=2.0,
    ["patterns"]={45},
    ["reverb_damp"]=0.5,
-   ["reverb_mix"]=0.3,
+   ["reverb_mix"]=0.43,
    ["reverb_size"]=0.8,
    ["root"]=1,
    ["scale"]=1,
@@ -1261,6 +1276,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1275,11 +1291,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=100.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=78,
-   ["grain_env"]=4,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=0.6042609391734,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.23,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.33,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -1302,6 +1322,7 @@ return {
    ["noise"]=0.5,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -1342,6 +1363,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1356,11 +1378,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=80.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=43,
-   ["grain_env"]=1,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=0.76221138890833,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.2,
    ["grain_size"]=0.2,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.2,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -1381,6 +1407,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -1420,6 +1447,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1435,11 +1463,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=60.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=59,
-   ["grain_env"]=3,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=0.55324564967304,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.6,
    ["grain_size"]=0.23,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.63,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -1460,6 +1492,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -1499,6 +1532,7 @@ return {
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
    ["drift"]=0.02,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1513,11 +1547,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=40.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=59,
-   ["grain_env"]=1,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.4525856534019,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.2,
    ["grain_size"]=0.24,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.4,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -1536,6 +1574,7 @@ return {
    ["mod_speed"]=33.8,
    ["mute"]=0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -1575,6 +1614,7 @@ return {
    ["custom_interval_5"]=19,
    ["cutoff"]=2000,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1589,11 +1629,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=120.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=90,
-   ["grain_env"]=2,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.3119354471564,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.4,
    ["grain_size"]=0.26,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.54,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -1613,6 +1657,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -1655,6 +1700,7 @@ return {
    ["damping"]=0.5,
    ["decay"]=4.0,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1670,11 +1716,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=200.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=28,
-   ["grain_env"]=4,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.1401957152411,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.34,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.05,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -1694,6 +1744,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -1733,6 +1784,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1747,11 +1799,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=300.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=22,
-   ["grain_env"]=1,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.8077598148957,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.2,
    ["grain_size"]=0.26,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.56,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -1772,6 +1828,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -1823,6 +1880,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1837,11 +1895,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=100.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=45,
-   ["grain_env"]=1,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=2.3368766000494,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.2,
    ["grain_size"]=0.29,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.35,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -1864,6 +1926,7 @@ return {
    ["noise"]=0.5,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -1904,6 +1967,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1918,11 +1982,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=80.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=23,
-   ["grain_env"]=5,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=2.4383306857198,
+   ["grain_prob"]=100,
+   ["grain_shape"]=1.0,
    ["grain_size"]=0.24,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.15,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -1943,6 +2011,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -1982,6 +2051,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -1997,11 +2067,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=60.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=71,
-   ["grain_env"]=3,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=0.86499510053545,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.6,
    ["grain_size"]=0.08,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.8,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -2022,6 +2096,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -2061,6 +2136,7 @@ return {
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
    ["drift"]=0.02,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -2075,11 +2151,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=40.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=72,
-   ["grain_env"]=2,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=2.4791247202083,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.4,
    ["grain_size"]=0.13,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.46,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -2098,6 +2178,7 @@ return {
    ["mod_speed"]=35.9,
    ["mute"]=0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -2137,6 +2218,7 @@ return {
    ["custom_interval_5"]=19,
    ["cutoff"]=2000,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -2151,11 +2233,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=120.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=4,
-   ["grain_env"]=4,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.2443413771689,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.19,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.19,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -2175,6 +2261,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -2217,6 +2304,7 @@ return {
    ["damping"]=0.5,
    ["decay"]=4.0,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -2232,11 +2320,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=200.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=61,
-   ["grain_env"]=4,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.2789788441733,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.18,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.92,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -2256,6 +2348,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -2295,6 +2388,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -2309,11 +2403,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=184.74975800093,
+   ["grain_cloud"]=1,
    ["grain_density"]=19,
-   ["grain_env"]=4,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.0182461105287,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.35,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.79,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -2334,6 +2432,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.84,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -2407,7 +2506,7 @@ return {
 "scene_chance_next": 100
 "scene_chance_previous": 0
 "scene_chance_random": 0
-"strata_fx": 16
+"strata_fx": 17
 "filter_type": 1
 "filter_freq": 5000.0
 "filter_res": 0.5
@@ -2415,12 +2514,13 @@ return {
 "delay_time": 0.375
 "delay_feedback": 0.4
 "delay_mix": 0.0
-"reverb_mix": 0.3
+"reverb_mix": 0.43
 "reverb_size": 0.8
 "reverb_damp": 0.5
 "drift_amount": 0.01
 "delay_bypass": 0
 "reverb_bypass": 0
+"delay_to_reverb": 1.0
 "delay_sync": 0
 "delay_division": 7
 "delay_pingpong": 0.0
@@ -2815,6 +2915,22 @@ return {
 "v1_damping": 0.5
 "v1_excite": 0.3
 "v1_brightness": 0.5
+"v1_morph": 0.3
+"v1_morphRate": 0.05
+"v1_morphDepth": 0.2
+"v1_detune": 0.003
+"v1_tilt": 1.0
+"v1_stretch": 0.0
+"v1_oddEven": 0.5
+"v1_wander": 0.2
+"v1_color": 0.5
+"v1_grit": 0.3
+"v1_dust": 8.0
+"v1_q": 0.05
+"v1_bank": 0.7
+"v1_formant": 1.0
+"v1_vowel": 0.5
+"v1_bw": 0.5
 "v1_source": 6
 "v1_buf_pos": 0.27713945647702
 "v1_buf_rate": 0.98045004624873
@@ -2823,7 +2939,6 @@ return {
 "v1_grain_density": 45
 "v1_grain_pitch": 2.3368766000494
 "v1_grain_spread": 0.35
-"v1_grain_env": 1
 "v1_grain_mode": 1
 "v1_mod_source_1": 1
 "v1_mod_amp_amt_1": -0.61
@@ -2835,6 +2950,12 @@ return {
 "v1_mod_amp_amt_3": -1.52
 "v1_mod_freq_amt_3": -1.77
 "v1_mod_speed": 11.9
+"v1_grain_shape": 0.2
+"v1_grain_skew": 0.0
+"v1_grain_prob": 100
+"v1_grain_cloud": 1
+"v1_grain_overlap": 2.0
+"v1_pan_wander": 50
 "v1_history": 0
 "v1_freeze": 0
 "v1_freeze_mode": 1
@@ -2855,6 +2976,7 @@ return {
 "v1_filter_freq": 5000.0
 "v1_filter_res": 0.5
 "v1_filter_mix": 0.0
+"v1_dry": 1.0
 "v1_delay_send": 1.0
 "v1_reverb_send": 1.0
 "v1_mute": 0
@@ -2909,6 +3031,22 @@ return {
 "v2_damping": 0.5
 "v2_excite": 0.3
 "v2_brightness": 0.5
+"v2_morph": 0.3
+"v2_morphRate": 0.05
+"v2_morphDepth": 0.2
+"v2_detune": 0.003
+"v2_tilt": 1.0
+"v2_stretch": 0.0
+"v2_oddEven": 0.5
+"v2_wander": 0.2
+"v2_color": 0.5
+"v2_grit": 0.3
+"v2_dust": 8.0
+"v2_q": 0.05
+"v2_bank": 0.7
+"v2_formant": 1.0
+"v2_vowel": 0.5
+"v2_bw": 0.5
 "v2_source": 7
 "v2_buf_pos": 0.058346468489617
 "v2_buf_rate": 1.9127885366324
@@ -2917,7 +3055,6 @@ return {
 "v2_grain_density": 23
 "v2_grain_pitch": 2.4383306857198
 "v2_grain_spread": 0.15
-"v2_grain_env": 5
 "v2_grain_mode": 2
 "v2_mod_source_1": 1
 "v2_mod_amp_amt_1": -1.62
@@ -2929,6 +3066,12 @@ return {
 "v2_mod_amp_amt_3": -0.07
 "v2_mod_freq_amt_3": 0.92
 "v2_mod_speed": 15.6
+"v2_grain_shape": 1.0
+"v2_grain_skew": 0.0
+"v2_grain_prob": 100
+"v2_grain_cloud": 1
+"v2_grain_overlap": 2.0
+"v2_pan_wander": 50
 "v2_history": 0
 "v2_freeze": 0
 "v2_freeze_mode": 1
@@ -2949,6 +3092,7 @@ return {
 "v2_filter_freq": 5000.0
 "v2_filter_res": 0.5
 "v2_filter_mix": 0.0
+"v2_dry": 1.0
 "v2_delay_send": 1.0
 "v2_reverb_send": 1.0
 "v2_mute": 0
@@ -3003,6 +3147,22 @@ return {
 "v3_damping": 0.5
 "v3_excite": 0.3
 "v3_brightness": 0.5
+"v3_morph": 0.3
+"v3_morphRate": 0.05
+"v3_morphDepth": 0.2
+"v3_detune": 0.003
+"v3_tilt": 1.0
+"v3_stretch": 0.0
+"v3_oddEven": 0.5
+"v3_wander": 0.2
+"v3_color": 0.5
+"v3_grit": 0.3
+"v3_dust": 8.0
+"v3_q": 0.05
+"v3_bank": 0.7
+"v3_formant": 1.0
+"v3_vowel": 0.5
+"v3_bw": 0.5
 "v3_source": 3
 "v3_buf_pos": 0.19074117997661
 "v3_buf_rate": 1.7083861990832
@@ -3011,7 +3171,6 @@ return {
 "v3_grain_density": 71
 "v3_grain_pitch": 0.86499510053545
 "v3_grain_spread": 0.8
-"v3_grain_env": 3
 "v3_grain_mode": 1
 "v3_mod_source_1": 5
 "v3_mod_amp_amt_1": 0.47
@@ -3023,6 +3182,12 @@ return {
 "v3_mod_amp_amt_3": 0.89
 "v3_mod_freq_amt_3": -1.03
 "v3_mod_speed": 3.1
+"v3_grain_shape": 0.6
+"v3_grain_skew": 0.0
+"v3_grain_prob": 100
+"v3_grain_cloud": 1
+"v3_grain_overlap": 2.0
+"v3_pan_wander": 50
 "v3_history": 0
 "v3_freeze": 0
 "v3_freeze_mode": 1
@@ -3043,6 +3208,7 @@ return {
 "v3_filter_freq": 5000.0
 "v3_filter_res": 0.5
 "v3_filter_mix": 0.0
+"v3_dry": 1.0
 "v3_delay_send": 1.0
 "v3_reverb_send": 1.0
 "v3_mute": 0
@@ -3097,6 +3263,22 @@ return {
 "v4_damping": 0.5
 "v4_excite": 0.3
 "v4_brightness": 0.5
+"v4_morph": 0.3
+"v4_morphRate": 0.05
+"v4_morphDepth": 0.2
+"v4_detune": 0.003
+"v4_tilt": 1.0
+"v4_stretch": 0.0
+"v4_oddEven": 0.5
+"v4_wander": 0.2
+"v4_color": 0.5
+"v4_grit": 0.3
+"v4_dust": 8.0
+"v4_q": 0.05
+"v4_bank": 0.7
+"v4_formant": 1.0
+"v4_vowel": 0.5
+"v4_bw": 0.5
 "v4_source": 9
 "v4_buf_pos": 0.20526960352436
 "v4_buf_rate": 2.7047910975525
@@ -3105,7 +3287,6 @@ return {
 "v4_grain_density": 72
 "v4_grain_pitch": 2.4791247202083
 "v4_grain_spread": 0.46
-"v4_grain_env": 2
 "v4_grain_mode": 2
 "v4_mod_source_1": 7
 "v4_mod_amp_amt_1": 0.08
@@ -3117,6 +3298,12 @@ return {
 "v4_mod_amp_amt_3": 0.96
 "v4_mod_freq_amt_3": -0.63
 "v4_mod_speed": 35.9
+"v4_grain_shape": 0.4
+"v4_grain_skew": 0.0
+"v4_grain_prob": 100
+"v4_grain_cloud": 1
+"v4_grain_overlap": 2.0
+"v4_pan_wander": 50
 "v4_history": 0
 "v4_freeze": 0
 "v4_freeze_mode": 1
@@ -3137,6 +3324,7 @@ return {
 "v4_filter_freq": 5000.0
 "v4_filter_res": 0.5
 "v4_filter_mix": 0.0
+"v4_dry": 1.0
 "v4_delay_send": 1.0
 "v4_reverb_send": 1.0
 "v4_mute": 0
@@ -3191,6 +3379,22 @@ return {
 "v5_damping": 0.5
 "v5_excite": 0.3
 "v5_brightness": 0.5
+"v5_morph": 0.3
+"v5_morphRate": 0.05
+"v5_morphDepth": 0.2
+"v5_detune": 0.003
+"v5_tilt": 1.0
+"v5_stretch": 0.0
+"v5_oddEven": 0.5
+"v5_wander": 0.2
+"v5_color": 0.5
+"v5_grit": 0.3
+"v5_dust": 8.0
+"v5_q": 0.05
+"v5_bank": 0.7
+"v5_formant": 1.0
+"v5_vowel": 0.5
+"v5_bw": 0.5
 "v5_source": 7
 "v5_buf_pos": 0.94127021497115
 "v5_buf_rate": 2.2393809559289
@@ -3199,7 +3403,6 @@ return {
 "v5_grain_density": 4
 "v5_grain_pitch": 1.2443413771689
 "v5_grain_spread": 0.19
-"v5_grain_env": 4
 "v5_grain_mode": 1
 "v5_mod_source_1": 0
 "v5_mod_amp_amt_1": 1.72
@@ -3211,6 +3414,12 @@ return {
 "v5_mod_amp_amt_3": 1.84
 "v5_mod_freq_amt_3": 0.96
 "v5_mod_speed": 3.4
+"v5_grain_shape": 0.8
+"v5_grain_skew": 0.0
+"v5_grain_prob": 100
+"v5_grain_cloud": 1
+"v5_grain_overlap": 2.0
+"v5_pan_wander": 50
 "v5_history": 0
 "v5_freeze": 0
 "v5_freeze_mode": 1
@@ -3231,6 +3440,7 @@ return {
 "v5_filter_freq": 5000.0
 "v5_filter_res": 0.5
 "v5_filter_mix": 0.0
+"v5_dry": 1.0
 "v5_delay_send": 1.0
 "v5_reverb_send": 1.0
 "v5_mute": 0
@@ -3285,6 +3495,22 @@ return {
 "v6_cutoff": 2000
 "v6_res": 0.8
 "v6_brightness": 0.5
+"v6_morph": 0.3
+"v6_morphRate": 0.05
+"v6_morphDepth": 0.2
+"v6_detune": 0.003
+"v6_tilt": 1.0
+"v6_stretch": 0.0
+"v6_oddEven": 0.5
+"v6_wander": 0.2
+"v6_color": 0.5
+"v6_grit": 0.3
+"v6_dust": 8.0
+"v6_q": 0.05
+"v6_bank": 0.7
+"v6_formant": 1.0
+"v6_vowel": 0.5
+"v6_bw": 0.5
 "v6_source": 10
 "v6_buf_pos": 0.58007102133706
 "v6_buf_rate": 2.9350301923696
@@ -3293,7 +3519,6 @@ return {
 "v6_grain_density": 61
 "v6_grain_pitch": 1.2789788441733
 "v6_grain_spread": 0.92
-"v6_grain_env": 4
 "v6_grain_mode": 1
 "v6_mod_source_1": 2
 "v6_mod_amp_amt_1": -0.27
@@ -3305,6 +3530,12 @@ return {
 "v6_mod_amp_amt_3": 0.26
 "v6_mod_freq_amt_3": -0.18
 "v6_mod_speed": 24.3
+"v6_grain_shape": 0.8
+"v6_grain_skew": 0.0
+"v6_grain_prob": 100
+"v6_grain_cloud": 1
+"v6_grain_overlap": 2.0
+"v6_pan_wander": 50
 "v6_history": 0
 "v6_freeze": 0
 "v6_freeze_mode": 1
@@ -3325,6 +3556,7 @@ return {
 "v6_filter_freq": 5000.0
 "v6_filter_res": 0.5
 "v6_filter_mix": 0.0
+"v6_dry": 1.0
 "v6_delay_send": 1.0
 "v6_reverb_send": 1.0
 "v6_mute": 0
@@ -3379,6 +3611,22 @@ return {
 "v7_decay": 4.0
 "v7_damping": 0.5
 "v7_excite": 0.3
+"v7_morph": 0.3
+"v7_morphRate": 0.05
+"v7_morphDepth": 0.2
+"v7_detune": 0.003
+"v7_tilt": 1.0
+"v7_stretch": 0.0
+"v7_oddEven": 0.5
+"v7_wander": 0.2
+"v7_color": 0.5
+"v7_grit": 0.3
+"v7_dust": 8.0
+"v7_q": 0.05
+"v7_bank": 0.7
+"v7_formant": 1.0
+"v7_vowel": 0.5
+"v7_bw": 0.5
 "v7_source": 1
 "v7_buf_pos": 0.87912564352155
 "v7_buf_rate": 3.0207907976583
@@ -3387,7 +3635,6 @@ return {
 "v7_grain_density": 19
 "v7_grain_pitch": 1.0182461105287
 "v7_grain_spread": 0.79
-"v7_grain_env": 4
 "v7_grain_mode": 1
 "v7_mod_source_1": 7
 "v7_mod_amp_amt_1": 1.4
@@ -3399,6 +3646,12 @@ return {
 "v7_mod_amp_amt_3": -1.93
 "v7_mod_freq_amt_3": 0.41
 "v7_mod_speed": 15.6
+"v7_grain_shape": 0.8
+"v7_grain_skew": 0.0
+"v7_grain_prob": 100
+"v7_grain_cloud": 1
+"v7_grain_overlap": 2.0
+"v7_pan_wander": 50
 "v7_history": 0
 "v7_freeze": 0
 "v7_freeze_mode": 1
@@ -3419,6 +3672,7 @@ return {
 "v7_filter_freq": 5000.0
 "v7_filter_res": 0.5
 "v7_filter_mix": 0.0
+"v7_dry": 1.0
 "v7_delay_send": 1.0
 "v7_reverb_send": 1.0
 "v7_mute": 0
@@ -3755,6 +4009,7 @@ return {
    ["delay_pingpong"]=0.0,
    ["delay_sync"]=0,
    ["delay_time"]=0.375,
+   ["delay_to_reverb"]=1.0,
    ["drift_amount"]=0.01,
    ["filter_freq"]=5000.0,
    ["filter_mix"]=0.0,
@@ -3822,7 +4077,7 @@ return {
    ["mutation_rate"]=2.0,
    ["patterns"]={38},
    ["reverb_damp"]=0.5,
-   ["reverb_mix"]=0.3,
+   ["reverb_mix"]=0.43,
    ["reverb_size"]=0.8,
    ["root"]=1,
    ["scale"]=1,
@@ -3925,6 +4180,7 @@ return {
    ["delay_pingpong"]=0.0,
    ["delay_sync"]=0,
    ["delay_time"]=0.375,
+   ["delay_to_reverb"]=1.0,
    ["drift_amount"]=0.01,
    ["filter_freq"]=5000.0,
    ["filter_mix"]=0.0,
@@ -3992,7 +4248,7 @@ return {
    ["mutation_rate"]=2.0,
    ["patterns"]={45},
    ["reverb_damp"]=0.5,
-   ["reverb_mix"]=0.3,
+   ["reverb_mix"]=0.43,
    ["reverb_size"]=0.8,
    ["root"]=1,
    ["scale"]=1,
@@ -4858,6 +5114,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -4872,11 +5129,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=100.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=78,
-   ["grain_env"]=4,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=0.6042609391734,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.23,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.33,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -4899,6 +5160,7 @@ return {
    ["noise"]=0.5,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -4939,6 +5201,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -4953,11 +5216,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=80.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=43,
-   ["grain_env"]=1,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=0.76221138890833,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.2,
    ["grain_size"]=0.2,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.2,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -4978,6 +5245,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5017,6 +5285,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5032,11 +5301,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=60.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=59,
-   ["grain_env"]=3,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=0.55324564967304,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.6,
    ["grain_size"]=0.23,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.63,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5057,6 +5330,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5096,6 +5370,7 @@ return {
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
    ["drift"]=0.02,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5110,11 +5385,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=40.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=59,
-   ["grain_env"]=1,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.4525856534019,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.2,
    ["grain_size"]=0.24,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.4,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5133,6 +5412,7 @@ return {
    ["mod_speed"]=33.8,
    ["mute"]=0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5172,6 +5452,7 @@ return {
    ["custom_interval_5"]=19,
    ["cutoff"]=2000,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5186,11 +5467,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=120.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=90,
-   ["grain_env"]=2,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.3119354471564,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.4,
    ["grain_size"]=0.26,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.54,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5210,6 +5495,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5252,6 +5538,7 @@ return {
    ["damping"]=0.5,
    ["decay"]=4.0,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5267,11 +5554,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=200.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=28,
-   ["grain_env"]=4,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.1401957152411,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.34,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.05,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5291,6 +5582,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5330,6 +5622,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5344,11 +5637,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=300.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=22,
-   ["grain_env"]=1,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.8077598148957,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.2,
    ["grain_size"]=0.26,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.56,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5369,6 +5666,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5420,6 +5718,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5434,11 +5733,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=100.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=45,
-   ["grain_env"]=1,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=2.3368766000494,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.2,
    ["grain_size"]=0.29,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.35,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5461,6 +5764,7 @@ return {
    ["noise"]=0.5,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5501,6 +5805,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5515,11 +5820,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=80.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=23,
-   ["grain_env"]=5,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=2.4383306857198,
+   ["grain_prob"]=100,
+   ["grain_shape"]=1.0,
    ["grain_size"]=0.24,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.15,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5540,6 +5849,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5579,6 +5889,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5594,11 +5905,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=60.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=71,
-   ["grain_env"]=3,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=0.86499510053545,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.6,
    ["grain_size"]=0.08,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.8,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5619,6 +5934,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5658,6 +5974,7 @@ return {
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
    ["drift"]=0.02,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5672,11 +5989,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=40.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=72,
-   ["grain_env"]=2,
    ["grain_mode"]=2,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=2.4791247202083,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.4,
    ["grain_size"]=0.13,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.46,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5695,6 +6016,7 @@ return {
    ["mod_speed"]=35.9,
    ["mute"]=0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5734,6 +6056,7 @@ return {
    ["custom_interval_5"]=19,
    ["cutoff"]=2000,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5748,11 +6071,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=120.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=4,
-   ["grain_env"]=4,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.2443413771689,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.19,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.19,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5772,6 +6099,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5814,6 +6142,7 @@ return {
    ["damping"]=0.5,
    ["decay"]=4.0,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5829,11 +6158,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=200.0,
+   ["grain_cloud"]=1,
    ["grain_density"]=61,
-   ["grain_env"]=4,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.2789788441733,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.18,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.92,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5853,6 +6186,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.0,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,
@@ -5892,6 +6226,7 @@ return {
    ["custom_interval_4"]=12,
    ["custom_interval_5"]=19,
    ["delay_send"]=1.0,
+   ["dry"]=1.0,
    ["env_attack"]=0.005,
    ["env_curve"]=-4.0,
    ["env_decay"]=0.2,
@@ -5906,11 +6241,15 @@ return {
    ["freeze"]=0,
    ["freeze_mode"]=1,
    ["freq"]=184.74975800093,
+   ["grain_cloud"]=1,
    ["grain_density"]=19,
-   ["grain_env"]=4,
    ["grain_mode"]=1,
+   ["grain_overlap"]=2.0,
    ["grain_pitch"]=1.0182461105287,
+   ["grain_prob"]=100,
+   ["grain_shape"]=0.8,
    ["grain_size"]=0.35,
+   ["grain_skew"]=0.0,
    ["grain_spread"]=0.79,
    ["history"]=0,
    ["interval_prob"]=100,
@@ -5931,6 +6270,7 @@ return {
    ["mute"]=0,
    ["pan"]=0.84,
    ["pan_jitter"]=0.0,
+   ["pan_wander"]=50,
    ["pitch_jitter"]=0.0,
    ["press_depth"]=100,
    ["press_target"]=2,

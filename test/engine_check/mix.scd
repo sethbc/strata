@@ -16,7 +16,7 @@ var voice = 4;  // Pulse: a short attack (2 s) among the sustaining voices
 // runs: -39.4, -36.6 and -38.6 dB, the slot fade on a noise slot), plus 6 dB
 var fadeBoundDb = -30.6;
 var silent = -30.dbamp;   // a reference peak under this means nothing was compared
-var neutralGrain = [\posSpread, 0, \panSpread, 0, \pitchShift, 1.0, \bufPos, 0.3, \bufRate, 1, \bufScan, 0, \envShape, 0, \history, 0,
+var neutralGrain = [\posSpread, 0, \panSpread, 0, \pitchShift, 1.0, \bufPos, 0.3, \bufRate, 1, \bufScan, 0, \windowShape, 0.57, \history, 0,
     \grainMode, 0, \reverseProb, 0, \pitchJitter, 0, \panJitter, 0, \sizeJitter, 0, \intervalCount, 0, \quantize, 0,
     \loopStart, 0, \loopLength, 1, \freeze, 0];
 var stageOf = { arg target; engine.synths[engine.voiceMixKey(target)] };

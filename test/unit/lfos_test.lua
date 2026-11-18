@@ -668,8 +668,9 @@ end)
 -- (3.8's registered dly>rev, package 1a, joins the globals after them)
 local GLOBAL_LABELS = { "density", "drift", "filt freq", "filt res", "filt mix", "dly time", "dly fdbk", "dly mix",
   "rev mix", "rev size", "rev damp", "dly>rev" }
-local VOICE_SUFFIXES = { "main", "size", "dens", "pitch", "spread", "pos", "rate", "scan", "hist", "vfilt", "dsend",
-  "rsend", "amp" }
+-- (3.8 1c: the window's shape and skew follow the scan)
+local VOICE_SUFFIXES = { "main", "size", "dens", "pitch", "spread", "pos", "rate", "scan", "shape", "skew", "hist", "vfilt",
+  "dsend", "rsend", "amp" }
 
 test("the destinations are none, the globals, each voice's together, then the macros", function()
   load_strata()
@@ -684,7 +685,7 @@ test("the destinations are none, the globals, each voice's together, then the ma
   local labels = {}
   for index, destination in ipairs(destinations) do labels[index] = destination.label end
   assert_equal(table.concat(labels, ","), table.concat(expected, ","), "the whole list, in order")
-  assert_equal(#destinations, 120, "1 + 12 + 7 x 13 + 16: today's destinations, each once")
+  assert_equal(#destinations, 134, "1 + 12 + 7 x 15 + 16: today's destinations, each once")
   -- an LFO's destination is its home routing (the groundwork before 3.8):
   -- entry index's home id is its key ("" for none), and back
   assert_equal(params.lookup[lfo_id(6, "dest")], nil, "no destination param")
@@ -705,17 +706,17 @@ test("the destinations are none, the globals, each voice's together, then the ma
   end
   assert_equal(keys[1], "none"); assert_equal(keys[2], "master_density")
   -- (3.8: 1a's dly>rev ends the globals, at 13)
-  assert_equal(destinations[14].key, "v1_main"); assert_equal(destinations[23].key, "v1_filter_freq")
+  assert_equal(destinations[14].key, "v1_main"); assert_equal(destinations[25].key, "v1_filter_freq")
   -- the groups ALT+E3 jumps by: indices into the list
   local groups = {}
   for _, group in ipairs(S.lib.lfos.destination_groups()) do
     groups[#groups + 1] = group.name .. " " .. group.first .. "-" .. group.last
   end
-  assert_equal(table.concat(groups, ", "), "global 2-13, voice 1 14-26, voice 2 27-39, voice 3 40-52, "
-    .. "voice 4 53-65, voice 5 66-78, voice 6 79-91, voice 7 92-104, macros 105-120")
+  assert_equal(table.concat(groups, ", "), "global 2-13, voice 1 14-28, voice 2 29-43, voice 3 44-58, "
+    .. "voice 4 59-73, voice 5 74-88, voice 6 89-103, voice 7 104-118, macros 119-134")
   -- every destination of voice 3 lies between voice 2's last and voice 4's first
   for index, destination in ipairs(destinations) do
-    if destination.label:match("^v3 ") then assert_true(index >= 40 and index <= 52, destination.label .. " in voice 3") end
+    if destination.label:match("^v3 ") then assert_true(index >= 44 and index <= 58, destination.label .. " in voice 3") end
   end
   -- every destination is a control param whose label (with ~ when it
   -- runs in the engine) fits the page's right column
@@ -855,8 +856,8 @@ test("a destination registered after init's list joins its voice's group", funct
   assert_equal(destinations[#destinations].label, "macro 16", "the macros still end the list")
   local groups = {}
   for _, group in ipairs(S.lib.lfos.destination_groups()) do groups[#groups + 1] = group.name .. " " .. group.first .. "-" .. group.last end
-  assert_equal(table.concat(groups, ", "), "global 2-14, voice 1 15-28, voice 2 29-42, voice 3 43-56, "
-    .. "voice 4 57-70, voice 5 71-84, voice 6 85-98, voice 7 99-112, macros 113-128")
+  assert_equal(table.concat(groups, ", "), "global 2-14, voice 1 15-30, voice 2 31-46, voice 3 47-62, "
+    .. "voice 4 63-78, voice 5 79-94, voice 6 95-110, voice 7 111-126, macros 127-142")
   -- a key is stored, so two destinations never share one
   local ok, problem = pcall(load_strata, { before_init = function()
     local_value("S").register_lfo_destination("again", "grain_size")
@@ -1195,33 +1196,33 @@ local DESTINATIONS_BEFORE_729 = {
   "v1 main|v1_main|voice 1",
   "v1 size|v1_grain_size|voice 1", "v1 dens|v1_grain_density|voice 1", "v1 pitch|v1_grain_pitch|voice 1",
   "v1 spread|v1_grain_spread|voice 1", "v1 pos|v1_buf_pos|voice 1", "v1 rate|v1_buf_rate|voice 1",
-  "v1 scan|v1_buf_scan|voice 1", "v1 hist|v1_history|voice 1", "v1 vfilt|v1_filter_freq|voice 1",
+  "v1 scan|v1_buf_scan|voice 1", "v1 shape|v1_grain_shape|voice 1", "v1 skew|v1_grain_skew|voice 1", "v1 hist|v1_history|voice 1", "v1 vfilt|v1_filter_freq|voice 1",
   "v1 dsend|v1_delay_send|voice 1", "v1 rsend|v1_reverb_send|voice 1", "v1 amp|v1_amp|voice 1",
   "v2 main|v2_main|voice 2", "v2 size|v2_grain_size|voice 2", "v2 dens|v2_grain_density|voice 2",
   "v2 pitch|v2_grain_pitch|voice 2", "v2 spread|v2_grain_spread|voice 2", "v2 pos|v2_buf_pos|voice 2",
-  "v2 rate|v2_buf_rate|voice 2", "v2 scan|v2_buf_scan|voice 2", "v2 hist|v2_history|voice 2",
+  "v2 rate|v2_buf_rate|voice 2", "v2 scan|v2_buf_scan|voice 2", "v2 shape|v2_grain_shape|voice 2", "v2 skew|v2_grain_skew|voice 2", "v2 hist|v2_history|voice 2",
   "v2 vfilt|v2_filter_freq|voice 2", "v2 dsend|v2_delay_send|voice 2", "v2 rsend|v2_reverb_send|voice 2",
   "v2 amp|v2_amp|voice 2", "v3 main|v3_main|voice 3", "v3 size|v3_grain_size|voice 3",
   "v3 dens|v3_grain_density|voice 3", "v3 pitch|v3_grain_pitch|voice 3", "v3 spread|v3_grain_spread|voice 3",
-  "v3 pos|v3_buf_pos|voice 3", "v3 rate|v3_buf_rate|voice 3", "v3 scan|v3_buf_scan|voice 3",
+  "v3 pos|v3_buf_pos|voice 3", "v3 rate|v3_buf_rate|voice 3", "v3 scan|v3_buf_scan|voice 3", "v3 shape|v3_grain_shape|voice 3", "v3 skew|v3_grain_skew|voice 3",
   "v3 hist|v3_history|voice 3", "v3 vfilt|v3_filter_freq|voice 3", "v3 dsend|v3_delay_send|voice 3",
   "v3 rsend|v3_reverb_send|voice 3", "v3 amp|v3_amp|voice 3", "v4 main|v4_main|voice 4",
   "v4 size|v4_grain_size|voice 4", "v4 dens|v4_grain_density|voice 4", "v4 pitch|v4_grain_pitch|voice 4",
   "v4 spread|v4_grain_spread|voice 4", "v4 pos|v4_buf_pos|voice 4", "v4 rate|v4_buf_rate|voice 4",
-  "v4 scan|v4_buf_scan|voice 4", "v4 hist|v4_history|voice 4", "v4 vfilt|v4_filter_freq|voice 4",
+  "v4 scan|v4_buf_scan|voice 4", "v4 shape|v4_grain_shape|voice 4", "v4 skew|v4_grain_skew|voice 4", "v4 hist|v4_history|voice 4", "v4 vfilt|v4_filter_freq|voice 4",
   "v4 dsend|v4_delay_send|voice 4", "v4 rsend|v4_reverb_send|voice 4", "v4 amp|v4_amp|voice 4",
   "v5 main|v5_main|voice 5", "v5 size|v5_grain_size|voice 5", "v5 dens|v5_grain_density|voice 5",
   "v5 pitch|v5_grain_pitch|voice 5", "v5 spread|v5_grain_spread|voice 5", "v5 pos|v5_buf_pos|voice 5",
-  "v5 rate|v5_buf_rate|voice 5", "v5 scan|v5_buf_scan|voice 5", "v5 hist|v5_history|voice 5",
+  "v5 rate|v5_buf_rate|voice 5", "v5 scan|v5_buf_scan|voice 5", "v5 shape|v5_grain_shape|voice 5", "v5 skew|v5_grain_skew|voice 5", "v5 hist|v5_history|voice 5",
   "v5 vfilt|v5_filter_freq|voice 5", "v5 dsend|v5_delay_send|voice 5", "v5 rsend|v5_reverb_send|voice 5",
   "v5 amp|v5_amp|voice 5", "v6 main|v6_main|voice 6", "v6 size|v6_grain_size|voice 6",
   "v6 dens|v6_grain_density|voice 6", "v6 pitch|v6_grain_pitch|voice 6", "v6 spread|v6_grain_spread|voice 6",
-  "v6 pos|v6_buf_pos|voice 6", "v6 rate|v6_buf_rate|voice 6", "v6 scan|v6_buf_scan|voice 6",
+  "v6 pos|v6_buf_pos|voice 6", "v6 rate|v6_buf_rate|voice 6", "v6 scan|v6_buf_scan|voice 6", "v6 shape|v6_grain_shape|voice 6", "v6 skew|v6_grain_skew|voice 6",
   "v6 hist|v6_history|voice 6", "v6 vfilt|v6_filter_freq|voice 6", "v6 dsend|v6_delay_send|voice 6",
   "v6 rsend|v6_reverb_send|voice 6", "v6 amp|v6_amp|voice 6", "v7 main|v7_main|voice 7",
   "v7 size|v7_grain_size|voice 7", "v7 dens|v7_grain_density|voice 7", "v7 pitch|v7_grain_pitch|voice 7",
   "v7 spread|v7_grain_spread|voice 7", "v7 pos|v7_buf_pos|voice 7", "v7 rate|v7_buf_rate|voice 7",
-  "v7 scan|v7_buf_scan|voice 7", "v7 hist|v7_history|voice 7", "v7 vfilt|v7_filter_freq|voice 7",
+  "v7 scan|v7_buf_scan|voice 7", "v7 shape|v7_grain_shape|voice 7", "v7 skew|v7_grain_skew|voice 7", "v7 hist|v7_history|voice 7", "v7 vfilt|v7_filter_freq|voice 7",
   "v7 dsend|v7_delay_send|voice 7", "v7 rsend|v7_reverb_send|voice 7", "v7 amp|v7_amp|voice 7",
   "macro 1|macro_1|macros", "macro 2|macro_2|macros", "macro 3|macro_3|macros", "macro 4|macro_4|macros",
   "macro 5|macro_5|macros", "macro 6|macro_6|macros", "macro 7|macro_7|macros", "macro 8|macro_8|macros",
