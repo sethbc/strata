@@ -4,7 +4,8 @@
 // voiceTypeDefs after the seven built-in types, with its noteMainRanges
 // entry; at its defaults and at each own key's range ends, at 110 and
 // 2000 Hz, it plays finite values, peaks above sawPeakFloor and under 1,
-// and leaves under subsonicCeiling of its peak below 8 Hz; and a held
+// and leaves under subsonicCeiling of its peak below 8 Hz (but for the
+// closed filter's one corner, closedCase); and a held
 // chord's three extra notes on a saw voice start three \strataSaw synths.
 // Its pool size is the memory area's (checkVoiceSynthSizes, every def of
 // voiceTypeDefs against 52 KB). See docs/notes/engine/types.md (Saw)
@@ -31,13 +32,18 @@ check.(sawType.notNil and: { sawType >= engine.numVoices }
 // slots on silentBus), a probe after it: per channel the peak of two 8 Hz
 // lowpasses, the peak, and any NaN or inf. Measured over sawSeconds after
 // the lowpasses settle. Pulse at its own defaults, at 110 Hz, is the level
-// reference the message reports
+// reference the message reports.
+// The one exception, closedCase (the cutoff at its low end at 2000 Hz):
+// the lowpass closed four octaves under the note is near silence, as
+// Pulse's is, so it is finite, under 1 and quieter than the same cutoff
+// at 110 Hz (openCase: the filter cuts the higher note more), with no floor
 {
     var sawSeconds = 4, settleSeconds = 1.5;
     var silent = engine.silentBus.index;
     var ends = [[\width, 0.05], [\width, 0.95], [\detune, 0], [\detune, 0.02], [\cutoff, 100], [\cutoff, 8000],
         [\res, 0.1], [\res, 1]];
     var cases = [110, 2000].collect({ arg freq; [[freq, nil, nil]] ++ ends.collect({ arg pair; [freq] ++ pair }) }).flatten(1);
+    var closedCase = [2000, \cutoff, 100], openCase = [110, \cutoff, 100], peaks, openPeak;
     var group, buses, probeBus, probes, values, results, failures, reference, referenceBus, referenceProbe, referenceOut, referenceValues;
     SynthDef(\strataCheckSawProbe, { arg in, out, t_reset = 0;
         var sig = In.ar(in, 2), reset = T2A.ar(t_reset), codes = CheckBadValues.ar(sig, 0, 0);
@@ -66,16 +72,24 @@ check.(sawType.notNil and: { sawType >= engine.numVoices }
     sawSeconds.wait;
     values = h.readBus(probeBus).clump(5);
     referenceValues = h.readBus(referenceOut);
+    peaks = cases.collect({ arg each, index; (values[index] ? []).copyRange(2, 3).maxItem ? 0 });
+    openPeak = peaks[cases.indexOfEqual(openCase)];
     results = cases.collect({ arg each, index;
-        var v = values[index] ? [], peak = v.copyRange(2, 3).maxItem ? 0, low = v.copyRange(0, 1).maxItem ? 0;
-        var ok = (v.size == 5) and: { v.every({ arg value; value.isNaN.not and: { value < inf } }) }
-            and: { v[4] == 0 } and: { peak > sawPeakFloor } and: { peak < 1 } and: { low < (peak * subsonicCeiling) };
+        var v = values[index] ? [], peak = peaks[index], low = v.copyRange(0, 1).maxItem ? 0;
+        var sound = (v.size == 5) and: { v.every({ arg value; value.isNaN.not and: { value < inf } }) }
+            and: { v[4] == 0 } and: { peak < 1 };
+        var ok = if (each == closedCase) {
+            sound and: { openPeak.notNil } and: { peak < openPeak }
+        } {
+            sound and: { peak > sawPeakFloor } and: { low < (peak * subsonicCeiling) }
+        };
         [each, peak, low, ok]
     });
     failures = results.reject({ arg each; each[3] });
     check.((results.size == cases.size) and: { failures.isEmpty },
-        "types: saw at its defaults and its keys' range ends, at 110 and 2000 Hz, is finite, peaks above % and under 1 and leaves under % of its peak below 8 Hz (failing [[freq, key, value], peak, below 8 Hz]: %; peaks from % to %; at its defaults at 110 Hz % against Pulse's %, % dB)".format(
-            sawPeakFloor, subsonicCeiling,
+        "types: saw at its defaults and its keys' range ends, at 110 and 2000 Hz, is finite, peaks above % and under 1 and leaves under % of its peak below 8 Hz; at % only finite, under 1 and under % (% against %) (failing [[freq, key, value], peak, below 8 Hz]: %; peaks from % to %; at its defaults at 110 Hz % against Pulse's %, % dB)".format(
+            sawPeakFloor, subsonicCeiling, closedCase, openCase,
+            peaks[cases.indexOfEqual(closedCase)] !? { arg peak; peak.round(0.0001) }, openPeak !? { arg peak; peak.round(0.0001) },
             failures.collect({ arg each; [each[0], each[1].round(0.0001), each[2].round(0.0001)] }),
             results.collect({ arg each; each[1] }).minItem.round(0.0001), results.collect({ arg each; each[1] }).maxItem.round(0.0001),
             results[0][1].round(0.0001), (referenceValues.copyRange(2, 3).maxItem ? 0).round(0.0001),
