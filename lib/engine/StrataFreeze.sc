@@ -106,7 +106,7 @@
         var window = this.spectralFrames;
         if (tier != \high) { ^this };
         SynthDef(\strataRingWriteSpectral, {
-            arg in, bufL, bufR, phaseOut, fftL, fftR;
+            arg in, bufL, bufR, phaseOut, resume = 0, fftL, fftR;
             var dry = In.ar(in, 2).collect({ arg channel; this.zeroBadValues(channel) });
             var settle = 2 * window * SampleDur.ir;
             var held = Line.kr(0, 1, settle) >= 1;
@@ -119,7 +119,7 @@
             });
             var mix = EnvGen.kr(Env([0, 0, 1], [settle, 0.01]));
             var sig = [dry, wet].flop.collect({ arg pair; XFade2.ar(pair[0], pair[1], mix * 2 - 1) });
-            var phase = Phasor.ar(Impulse.ar(0), 1, 0, BufFrames.kr(bufL), In.kr(phaseOut));
+            var phase = this.ringWritePhase(bufL, phaseOut, resume);
             BufWr.ar(sig[0], bufL, phase);
             BufWr.ar(sig[1], bufR, phase);
             Out.kr(phaseOut, A2K.kr(phase));
@@ -287,11 +287,11 @@
 
     // Replace the voice's ring writer with one of defName reading the bus
     // in (Synth.replace frees the old one in the same server step); the new
-    // one starts from the phase on its bus. A synth voice's spectral freeze
-    // and its unfreeze only
+    // one carries on from the old one's head (resume 1: ringWritePhase). A
+    // synth voice's spectral freeze and its unfreeze only
     replaceRingWriter { arg voice, defName, in;
         var key = this.ringWriterKeys[voice], old = synths[key], ring = this.ringBuffersFor(voice, 0), writer;
-        var args = [\in, in, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2]], fft;
+        var args = [\in, in, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2], \resume, 1], fft;
         if (old.isNil or: { areaState[\freeze][\stopped] ? false }) { ^this };
         if (defName == \strataRingWriteSpectral) {
             fft = areaState[\freeze][\spectralBuffers][voice];
