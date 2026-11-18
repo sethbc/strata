@@ -257,11 +257,14 @@ check.(h.formatOf(\setVoiceType) == "ii", "types: setVoiceType is \"ii\" (%)".fo
 // the switch is within 1 dB of the second before; an FM voice synth runs
 // and the Resonator is cutting; the stream notes keep their nodes. On a
 // high engine the same with freezeMode 1 (spectral): the spectral writer
-// is the same node, and the held sound goes on within a looser band (the
-// edges beside the hold limit, below): a spectral freeze's own level moves
-// -0.2 to +3.2 dB between its first and second seconds with no switch at
-// all (PV_MagFreeze holds the magnitudes, the phases come on from the
-// voice bus), and about as much with one. The grains
+// is the same node, and the held sound goes on within a wider band (the
+// edges beside the hold limit, below), each second measured where the
+// grains play only held audio: from spectralSettleSeconds after the
+// freeze (the frozen grains start grainMaxSeconds back, in the voice's
+// live audio from before it) and from spectralReachSeconds after the
+// switch (until then they play what the ring held before it). PV_MagFreeze
+// holds the magnitudes and takes the phases from the voice bus, so the new
+// type's voice synth sets the held spectrum's phases. The grains
 // read the held ring at one place and pan (posSpread and panSpread 0), so
 // the held sound repeats and two seconds of it match: with the spreads at
 // their 0.5 a hold's own level moved -1.27 to +0.5 dB between the seconds
@@ -274,16 +277,22 @@ SynthDef(\strataCheckTypesWindowRms, { arg in, out, t_reset = 0;
 server.sync;
 {
     // The hold case's limit (dB, either way), and the spectral case's band
-    // (dB, the second after the switch against the second before), from
-    // every spectral figure measured: with a switch -1.66 to +0.39 on
-    // 3.14.1 and +0.51 to +2.22 on 3.13, with none -0.20 to +1.49 on 3.14.1
-    // and +1.41 to +3.19 on 3.13 (docs/notes/engine/types.md). About 1.8 dB
-    // beyond them both ways, so the freeze's own drift never fails it, while
-    // silence (a hold lost to nothing) or a held spectrum that runs away
-    // does. A hold lost to the live voice measured -5.08 to +12.13 dB, much
-    // of it inside the band: the ring check catches that one (the writer
-    // replaced, freeze 0)
-    var holdLimitDb = 1, spectralLowDb = -3.5, spectralHighDb = 5;
+    // (dB, the held second after the switch against the held second
+    // before; docs/notes/engine/types.md, #798). With the switch it read
+    // -7.67 to +0.10 dB on 3.14.1 (sd 1.78, n 62) and -7.87 to +0.20 on
+    // 3.13 (sd 1.97, n 50), and -9.22 at worst in earlier runs. The switch
+    // lowers the held level: the new voice synth's partials set the held
+    // bins' phases and the overlapping frames partly cancel (any type, a
+    // spread of several dB; a silent new voice, the dither's phases alone,
+    // costs about 1 dB). With none the same windows moved -1.00 to +0.77 dB.
+    // The edges are about three standard deviations past the worst figure
+    // each way: the freeze's own spread never fails them,
+    // while silence (the level x 0.1 reads -20 to -29 dB) or a held spectrum
+    // that runs away (x 10: +11 to +20 dB) does. A hold lost to the live
+    // voice read +0.8 to +13.0 dB, often inside the band: the ring check
+    // is what catches it (the writer replaced, freeze 0)
+    var holdLimitDb = 1, spectralLowDb = -15, spectralHighDb = 6.5;
+    var spectralSettleSeconds = 0.7, spectralReachSeconds = 0.6;
     var frozenSwitch = { arg target, mode, label;
         var run = { arg name ... args; h.commandTo(target, name, *args) };
         var voice = 0, writerBefore, writerAfter, phaseMoving, old, new, streams, streamsAfter, before, after, db, grainFreeze;
@@ -310,9 +319,11 @@ server.sync;
         writerBefore = target.ringWriterFor(voice);
         streams = [1, 2].collect({ arg slot; [target.noteRecord(voice, slot)[\kind], target.noteRecord(voice, slot)[\synth]] });
         old = target.synths[target.voiceKey(voice)];
+        if (mode == 1) { spectralSettleSeconds.wait };
         before = window.value;
         run.(\setVoiceType, voice, 1);
         new = target.synths[target.voiceKey(voice)];
+        if (mode == 1) { spectralReachSeconds.wait };
         after = window.value;
         writerAfter = target.ringWriterFor(voice);
         streamsAfter = [1, 2].collect({ arg slot; [target.noteRecord(voice, slot)[\kind], target.noteRecord(voice, slot)[\synth]] });
