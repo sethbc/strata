@@ -27,6 +27,12 @@ var numWindows = 8, fields = 7, windowField;
 var startCheckDelay, allocLine, runCases, guarded, withIgnoredLines;
 var checkHeldLoop, checkLoopBehavior, checkClearEdge, checkFreezeCommand, checkIgnoredValues, checkClearCommand, checkFreshEngine;
 var times = [0.375, 0.30928];
+// the audio channels the server's allocator holds (#807: the area gives
+// back every bus it allocates), how many it held as the area began, and
+// the fresh engine's context's (checkFreshEngine: its inputs and its
+// silent output, which the harness frees only at the run's end)
+var audioChannelsHeld = { server.audioBusAllocator.blocks.sum({ arg block; block.size }) };
+var audioChannelsAtStart = audioChannelsHeld.value, contextChannels = 0;
 // a clear's largest sample step against the steady signal's (checkClearEdge)
 var clearStepBound = 1.0;
 
@@ -93,7 +99,9 @@ windowField = { arg values, window, field; values !? { values[(window * fields) 
 // windowField reads them
 runCases = { arg cases, seconds;
     var group = Group.after(context.xg), silent = Bus.audio(server, 2), condition = Condition(false), ended = 0;
-    var made = cases.collect({ (inBus: Bus.audio(server, 2), outBus: Bus.audio(server, 2), line: allocLine.value,
+    // (an inputFrom case shares its input's bus and allocates none: #807)
+    var made = cases.collect({ arg case; (inBus: if (case[\inputFrom].isNil) { Bus.audio(server, 2) },
+        outBus: Bus.audio(server, 2), line: allocLine.value,
         resultBus: Bus.control(server, numWindows * fields), stepBuses: List.new) });
     var results;
     made.do({ arg each; each[\resultBus].setAll(0) });
@@ -345,6 +353,7 @@ checkClearCommand = {
 checkFreshEngine = {
     var fresh = h.startEngine(()), values;
     server.sync;
+    contextChannels = (fresh.context.in_b ++ [fresh.context.out_b]).sum({ arg bus; bus.numChannels });
     values = [fresh.synths[\delay] !? { arg synth; getControl.(synth, \frozen) },
         fresh.areaState[\effects][\controls][\delay][\frozen]];
     h.freeEngine(fresh);
@@ -365,4 +374,7 @@ try { command.(\setDelayFreeze, 0) } { };
 command.(\setBypass, 0, 0);
 command.(\setDelay, 0.375, 0.4, 0.0, 0);
 server.sync;
+check.(audioChannelsHeld.value == (audioChannelsAtStart + contextChannels),
+    "delay: the area leaves no audio bus allocated but the fresh engine's context (#807; % channels held at its start, % at its end, % the context's)".format(
+        audioChannelsAtStart, audioChannelsHeld.value, contextChannels));
 }
