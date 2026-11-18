@@ -558,7 +558,7 @@ return function(S)
     params:add{
       type = "control",
       id = "delay_mix",
-      name = "delay mix",
+      name = "delay level",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0),
       action = function(x)
         note_param_edit("delay_mix")
@@ -570,8 +570,9 @@ return function(S)
     params:add{
       type = "control",
       id = "reverb_mix",
-      name = "reverb mix",
-      controlspec = controlspec.new(0, 1, "lin", 0.01, 0.3),
+      name = "reverb level",
+      -- 3.7's 0.3 / 0.7 (masterSum's gain), so a default start sounds as 3.7.0's
+      controlspec = controlspec.new(0, 1, "lin", 0.01, 0.43),
       action = function(x)
         note_param_edit("reverb_mix")
         send_param_to_engine("reverb_mix", x)

@@ -421,7 +421,7 @@ test("an LFO on a fast destination runs in the engine", function()
   assert_equal(context.calls_named("setFastLfo")[1].args[3], 2, "size")
   assert_equal(#context.calls_named("stopFastLfo"), 0, "no stop")
   context.clear_engine_calls()
-  params:set("reverb_mix", 0.3)
+  params:set("reverb_mix", 0.43)
   aim(1, "rev mix")
   assert_equal(#calls_with(context, "stopFastLfo", 0), 1, "a Lua destination stops the engine LFO")
   assert_true(not lfos.is_engine_run(1))
@@ -432,7 +432,7 @@ test("an LFO on a fast destination runs in the engine", function()
   lfo_step(context)   -- the matrix's next step gives a Lua destination back (ruling 17)
   local restores = context.calls_named("setReverb")
   assert_equal(#restores, 1, "off: the stored value sent once")
-  assert_near(restores[1].args[1], 0.3, 1e-9)
+  assert_near(restores[1].args[1], 0.43, 1e-9)
   lfo_step(context, 3)
   assert_equal(#context.calls_named("setReverb"), 1, "and nothing after")
   -- every fast destination, the voice's amp and filter cutoff included
@@ -665,8 +665,9 @@ test("engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step
 end)
 
 -- 3.7 (decision 24): the list by voice, each destination stored by its key
+-- (3.8's registered dly>rev, package 1a, joins the globals after them)
 local GLOBAL_LABELS = { "density", "drift", "filt freq", "filt res", "filt mix", "dly time", "dly fdbk", "dly mix",
-  "rev mix", "rev size", "rev damp" }
+  "rev mix", "rev size", "rev damp", "dly>rev" }
 local VOICE_SUFFIXES = { "main", "size", "dens", "pitch", "spread", "pos", "rate", "scan", "hist", "vfilt", "dsend",
   "rsend", "amp" }
 
@@ -683,7 +684,7 @@ test("the destinations are none, the globals, each voice's together, then the ma
   local labels = {}
   for index, destination in ipairs(destinations) do labels[index] = destination.label end
   assert_equal(table.concat(labels, ","), table.concat(expected, ","), "the whole list, in order")
-  assert_equal(#destinations, 119, "1 + 11 + 7 x 13 + 16: today's destinations, each once")
+  assert_equal(#destinations, 120, "1 + 12 + 7 x 13 + 16: today's destinations, each once")
   -- an LFO's destination is its home routing (the groundwork before 3.8):
   -- entry index's home id is its key ("" for none), and back
   assert_equal(params.lookup[lfo_id(6, "dest")], nil, "no destination param")
@@ -703,17 +704,18 @@ test("the destinations are none, the globals, each voice's together, then the ma
     end
   end
   assert_equal(keys[1], "none"); assert_equal(keys[2], "master_density")
-  assert_equal(destinations[13].key, "v1_main"); assert_equal(destinations[22].key, "v1_filter_freq")
+  -- (3.8: 1a's dly>rev ends the globals, at 13)
+  assert_equal(destinations[14].key, "v1_main"); assert_equal(destinations[23].key, "v1_filter_freq")
   -- the groups ALT+E3 jumps by: indices into the list
   local groups = {}
   for _, group in ipairs(S.lib.lfos.destination_groups()) do
     groups[#groups + 1] = group.name .. " " .. group.first .. "-" .. group.last
   end
-  assert_equal(table.concat(groups, ", "), "global 2-12, voice 1 13-25, voice 2 26-38, voice 3 39-51, "
-    .. "voice 4 52-64, voice 5 65-77, voice 6 78-90, voice 7 91-103, macros 104-119")
+  assert_equal(table.concat(groups, ", "), "global 2-13, voice 1 14-26, voice 2 27-39, voice 3 40-52, "
+    .. "voice 4 53-65, voice 5 66-78, voice 6 79-91, voice 7 92-104, macros 105-120")
   -- every destination of voice 3 lies between voice 2's last and voice 4's first
   for index, destination in ipairs(destinations) do
-    if destination.label:match("^v3 ") then assert_true(index >= 39 and index <= 51, destination.label .. " in voice 3") end
+    if destination.label:match("^v3 ") then assert_true(index >= 40 and index <= 52, destination.label .. " in voice 3") end
   end
   -- every destination is a control param whose label (with ~ when it
   -- runs in the engine) fits the page's right column
@@ -848,13 +850,13 @@ test("a destination registered after init's list joins its voice's group", funct
     if voice_idx < 7 then assert_equal(destinations[probe + 1].label, "v" .. (voice_idx + 1) .. " main") end
   end
   local gprobe = destination_index("gprobe")
-  assert_equal(gprobe, destination_index("rev damp") + 1, "a registered global joins the globals")
+  assert_equal(gprobe, destination_index("dly>rev") + 1, "a registered global joins the globals (after 1a's dly>rev)")
   assert_equal(destinations[gprobe].group, "global")
   assert_equal(destinations[#destinations].label, "macro 16", "the macros still end the list")
   local groups = {}
   for _, group in ipairs(S.lib.lfos.destination_groups()) do groups[#groups + 1] = group.name .. " " .. group.first .. "-" .. group.last end
-  assert_equal(table.concat(groups, ", "), "global 2-13, voice 1 14-27, voice 2 28-41, voice 3 42-55, "
-    .. "voice 4 56-69, voice 5 70-83, voice 6 84-97, voice 7 98-111, macros 112-127")
+  assert_equal(table.concat(groups, ", "), "global 2-14, voice 1 15-28, voice 2 29-42, voice 3 43-56, "
+    .. "voice 4 57-70, voice 5 71-84, voice 6 85-98, voice 7 99-112, macros 113-128")
   -- a key is stored, so two destinations never share one
   local ok, problem = pcall(load_strata, { before_init = function()
     local_value("S").register_lfo_destination("again", "grain_size")
@@ -867,14 +869,15 @@ end)
 -- The engine calls 3.6 (main at de4949e6, the destination set by its index)
 -- made for each destination: LFO 1 a square held at its top, rate 0.003 Hz,
 -- depth 50 %, turned on and stepped three times (numbers to 4 places);
--- setDelay's fourth value, 3.7's ping-pong at its default 0, appended
+-- setDelay's fourth value, 3.7's ping-pong at its default 0, appended;
+-- setReverb's fourth, 3.8's delay to reverb at its default 1, appended
 local SOUND_BEFORE_3_7 = {
   v3_filter_freq = "setFastLfo 0.0000 2.0000 3.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
   v1_grain_pitch = "setFastLfo 0.0000 0.0000 0.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
   v5_buf_pos = "setFastLfo 0.0000 4.0000 1.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
   v6_grain_size = "setFastLfo 0.0000 5.0000 2.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
   v7_amp = "setFastLfo 0.0000 6.0000 4.0000 2.0000 0.0030 0.5000 0.0000; syncFastLfo 0.0000 0.0000",
-  reverb_mix = "setReverb 0.5500 0.8000 0.5000",
+  reverb_mix = "setReverb 0.5500 0.8000 0.5000 1.0000",
   delay_feedback = "setDelay 0.3750 0.6375 0.0000 0.0000",
   v1_main = "setVoiceParam 0.0000 freq 555.0000",
   v2_history = "setGrainParam 1.0000 history 4.0000",
@@ -1187,7 +1190,9 @@ local DESTINATIONS_BEFORE_729 = {
   "none|none|none", "density|master_density|global", "drift|drift_amount|global", "filt freq|filter_freq|global",
   "filt res|filter_res|global", "filt mix|filter_mix|global", "dly time|delay_time|global",
   "dly fdbk|delay_feedback|global", "dly mix|delay_mix|global", "rev mix|reverb_mix|global",
-  "rev size|reverb_size|global", "rev damp|reverb_damp|global", "v1 main|v1_main|voice 1",
+  "rev size|reverb_size|global", "rev damp|reverb_damp|global",
+  "dly>rev|delay_to_reverb|global",  -- 3.8, package 1a: a registered global, after the built-in ones
+  "v1 main|v1_main|voice 1",
   "v1 size|v1_grain_size|voice 1", "v1 dens|v1_grain_density|voice 1", "v1 pitch|v1_grain_pitch|voice 1",
   "v1 spread|v1_grain_spread|voice 1", "v1 pos|v1_buf_pos|voice 1", "v1 rate|v1_buf_rate|voice 1",
   "v1 scan|v1_buf_scan|voice 1", "v1 hist|v1_history|voice 1", "v1 vfilt|v1_filter_freq|voice 1",
@@ -1242,7 +1247,7 @@ test("a registered global destination's group is its registration's; the list is
   local destinations = local_value("LFO_DESTINATIONS")
   assert_equal(destinations[destination_index("probe mac")].group, "macros", "a global registered in the macros' group")
   assert_equal(destinations[destination_index("probe glob")].group, "global")
-  assert_equal(destination_index("probe glob"), destination_index("rev damp") + 1, "it joins the globals")
+  assert_equal(destination_index("probe glob"), destination_index("dly>rev") + 1, "it joins the globals (after 1a's dly>rev)")
   local groups = S.lib.lfos.destination_groups()
   local macros = groups[#groups]
   assert_equal(macros.name, "macros", "the macros still end the list")

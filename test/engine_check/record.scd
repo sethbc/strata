@@ -244,8 +244,12 @@ SynthDef(\strataCheckReadPositions, { arg in, out;
     Out.kr(out, [A2K.kr(Peak.ar(position * valid)), A2K.kr(Peak.ar((1 - position) * valid)),
         A2K.kr(Peak.ar(sig.abs.sum)), A2K.kr(Peak.ar(((codes > 0.5) * (codes < 2.5)).sum))]);
 }).add;
-SynthDef(\strataCheckMasterSum, { arg in, delayIn, reverbIn, fxMix, out;
-    Out.ar(out, engine.masterSum(in, delayIn, reverbIn, fxMix));
+SynthDef(\strataCheckMasterSum, { arg in, delayIn, reverbIn, out;
+    Out.ar(out, engine.masterSum(in, delayIn, reverbIn));
+}).add;
+// The three buses summed times 0.7, written out (3.8 design section 7.1)
+SynthDef(\strataCheckPlainSum, { arg a, b, c, out;
+    Out.ar(out, (In.ar(a, 2) + In.ar(b, 2) + In.ar(c, 2)) * 0.7);
 }).add;
 // One sign of the old audio and the other of the new one: any two samples
 // of a grain 8 samples apart that disagree come from both sides of the head
@@ -308,11 +312,11 @@ test.("record: pre-master equals masterSum, with the delay and reverb bypassed a
     var sumBus = Bus.audio(server, 2), diffBus = Bus.control(server, 2), sum, probe, diff = Array.newClear(2);
     var label = "record: pre-master equals masterSum, with the delay and reverb bypassed and not";
     h.command(\setDelay, 0.05, 0.3, 0.5, 0);
-    h.command(\setReverb, 0.5, 0.5, 0.5);
+    h.command(\setReverb, 0.5, 0.5, 0.5, 1);
     h.command(\voiceOn, 2, 220.0, 0.5, 0.0, 0.1, 20.0, 1.0);
     settle.(0.2);
     sum = Synth(\strataCheckMasterSum, [\in, engine.filterBus, \delayIn, engine.delayBus, \reverbIn, engine.reverbBus,
-        \fxMix, engine.mixBus(\fxMix), \out, sumBus], state[\tapGroup] ?? { context.xg }, \addToTail);
+        \out, sumBus], state[\tapGroup] ?? { context.xg }, \addToTail);
     probe = Synth(\strataCheckBusDiff, [\a, state[\preMasterBus] ?? { sumBus }, \b, sumBus, \out, diffBus], sum, \addAfter);
     server.sync;
     diff[0] = h.measure(probe, diffBus, 0.3);
@@ -325,7 +329,27 @@ test.("record: pre-master equals masterSum, with the delay and reverb bypassed a
     check.(state[\preMasterBus].notNil and: { diff.every({ arg each; (each[0] < 1e-5) and: { each[1] > 0.001 } }) },
         "% (differences %)".format(label, diff.collect(_.round(1e-6))));
     h.command(\setDelay, 0.01, 0, 0, 0);
-    h.command(\setReverb, 0, 0.5, 0.5);
+    h.command(\setReverb, 0, 0.5, 0.5, 1);
+});
+// 3.8's plain sends: the master's sum, which the pre-master tap reads, is
+// 0.7 of the dry bus and the two returns (design section 7.1)
+test.("record: pre-master is 0.7 of the three buses' sum", {
+    var sumBus = Bus.audio(server, 2), diffBus = Bus.control(server, 2), sum, probe, diff;
+    h.command(\setDelay, 0.05, 0.3, 0.5, 0);
+    h.command(\setReverb, 0.5, 0.5, 0.5, 1);
+    h.command(\voiceOn, 2, 220.0, 0.5, 0.0, 0.1, 20.0, 1.0);
+    settle.(0.2);
+    sum = Synth(\strataCheckPlainSum, [\a, engine.filterBus, \b, engine.delayBus, \c, engine.reverbBus, \out, sumBus],
+        state[\tapGroup] ?? { context.xg }, \addToTail);
+    probe = Synth(\strataCheckBusDiff, [\a, state[\preMasterBus] ?? { sumBus }, \b, sumBus, \out, diffBus], sum, \addAfter);
+    server.sync;
+    diff = h.measure(probe, diffBus, 0.3);
+    h.command(\voiceOff, 2);
+    probe.free; sum.free; server.sync; sumBus.free; diffBus.free;
+    check.(state[\preMasterBus].notNil and: { diff[0] < 1e-5 } and: { diff[1] > 0.001 },
+        "record: pre-master is 0.7 of the three buses' sum (difference %, level %)".format(diff[0], diff[1]));
+    h.command(\setDelay, 0.01, 0, 0, 0);
+    h.command(\setReverb, 0, 0.5, 0.5, 1);
 });
 test.("record: post-master equals the master's output", {
     h.command(\voiceOn, 2, 220.0, 0.5, 0.0, 0.1, 20.0, 1.0);

@@ -1837,6 +1837,9 @@ local START_CALLS_ALLOWED = {
   -- 0d: a start sends the voice's type right after its source (design §2.2)
   {kind = "drop", match = '^setVoiceType%(<v0>, <v0>%)$', count = 1,
     why = "0d: a start sends setVoiceType, each voice on its own type, right after setGrainSource (design §2.2)"},
+  -- 1a: each voice start sends setGrainParam(<v0>, "dry", 1) (design §7.1)
+  {kind = "drop", match = '^setGrainParam%(<v0>, "dry", 1%)$', count = 1,
+    why = "1a: each voice start sends the stage's dry level, 1 (design section 7.1)"},
 }
 local START_LABELS = {voice_1 = true, voice_4 = true, buffer_voice_3 = true}
 -- The entries of START_CALLS_ALLOWED that apply to the start label

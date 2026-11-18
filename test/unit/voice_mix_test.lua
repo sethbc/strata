@@ -233,7 +233,10 @@ test("the filter & sends section is on VOICE for every source", function()
       end
       assert_true(label_at ~= nil, "v" .. voice_idx .. " has the filter & sends section")
       local expected = {}
-      for _, key in ipairs(KEYS) do table.insert(expected, "v" .. voice_idx .. "_" .. key) end
+      for _, key in ipairs(KEYS) do
+        if key == "delay_send" then table.insert(expected, "v" .. voice_idx .. "_dry") end  -- 3.8: dry, then the sends
+        table.insert(expected, "v" .. voice_idx .. "_" .. key)
+      end
       for _, key in ipairs({"mute", "solo"}) do table.insert(expected, "v" .. voice_idx .. "_" .. key) end
       assert_equal(table.concat(keys, " "), table.concat(expected, " "), "its rows, in order")
     end
@@ -613,6 +616,127 @@ test("a mute or a solo tells the silence hooks each voice whose answer changed",
   -- its index: after the module's own hooks (lib/io/targets.lua's, 3.6) and this test's
   h.claim_script_errors(context, 1, "strata: silence change hook " .. #S.registry.silence_change .. " failed: ",
     "silence hook down")
+end)
+
+-- 3.8 (design §7.1): plain sends. A voice's dry level is the stage's dry,
+-- its sends taken before it
+test("every voice has a dry level, 0-1, 1 at first, sent as the stage's dry", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    local id = "v" .. voice_idx .. "_dry"
+    local param = params:lookup_param(id)
+    assert_true(param ~= nil and param.t == params.tCONTROL, id .. " is a control param")
+    assert_equal(param.name, "dry", id .. "'s name")
+    assert_near(params:get(id), 1, 1e-9, id .. " starts at 1")
+    local low, high = param_range(id)
+    assert_equal(low, 0, id .. " from 0"); assert_equal(high, 1, id .. " to 1")
+    assert_equal(param.controlspec.step, 0.01, id .. " in steps of 0.01")
+    assert_equal(params:string(id), "100 %", id .. " shows in percent")
+    -- in the filter & sends section, before the delay send
+    assert_equal(params.params[params.lookup[id] + 1].id, "v" .. voice_idx .. "_delay_send", id .. " before the delay send")
+  end
+  assert_true(S.voices[1].active and not S.voices[3].active, "voice 1 runs, voice 3 does not")
+  -- a stopped voice stores it and sends nothing
+  context.clear_engine_calls()
+  params:set("v3_dry", 0.5)
+  assert_equal(#sent_grain(context, "dry"), 0, "a stopped voice gets no message")
+  assert_near(S.voices[3].values.dry, 0.5, 1e-9, "the value is stored")
+  -- its start sends it
+  context.clear_engine_calls()
+  toggle_voice(3)
+  local sent = sent_grain(context, "dry")
+  assert_equal(#sent, 1, "the start sends dry once")
+  assert_equal(sent[1].voice, 2, "to engine voice 2"); assert_near(sent[1].value, 0.5, 1e-9, "at the voice's value")
+  -- and a running voice gets each change
+  context.clear_engine_calls()
+  params:set("v3_dry", 0.25)
+  sent = sent_grain(context, "dry")
+  assert_equal(#sent, 1, "a change sends one message")
+  assert_equal(sent[1].voice, 2); assert_near(sent[1].value, 0.25, 1e-9)
+end)
+
+test("dry is a scene key with default 1 and a fader, never randomized", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local record
+  for _, each in ipairs(S.registry.voice_params) do if each.name == "voice_mix" then record = each end end
+  assert_equal(record.grain_keys.dry, "dry", "the grain key")
+  assert_equal(record.scene_defaults.dry, 1, "the scene default")
+  assert_true(record.discrete.dry == nil, "dry crossfades")
+  assert_true(record.randomize.dry == nil, "VOICE's ALT+K2 never draws it")
+  local in_fader = false
+  for _, key in ipairs(record.fader[1].keys) do if key == "dry" then in_fader = true end end
+  assert_true(in_fader, "in the record's fader group")
+  -- a capture holds it; a scene without it fills 1
+  params:set("v2_dry", 0.3)
+  capture_scene(1)
+  assert_near(S.scenes[1].data.voices[2].values.dry, 0.3, 1e-9, "the scene captures dry")
+  S.scenes[1].data.voices[2].values.dry = nil
+  fill_scene(S.scenes[1])
+  assert_equal(S.scenes[1].data.voices[2].values.dry, 1, "fill_scene gives 1")
+  -- the faders show it; randomize, mutation and the LFOs leave it alone
+  local faders = table.concat(fader_param_ids(2), ",")
+  assert_true(("," .. faders .. ","):find(",v2_dry,", 1, true) ~= nil, "voice 2's faders show dry (" .. faders .. ")")
+  params:set("mutation_probability", 1); params:set("mutation_amount", 1)
+  math.randomseed(11)
+  for voice_idx = 1, S.constants.NUM_VOICES do randomize_voice(voice_idx) end
+  for _ = 1, 20 do gentle_mutate() end
+  assert_near(params:get("v2_dry"), 0.3, 1e-9, "randomize and mutation leave dry")
+  for _, destination in ipairs(S.LFO_DESTINATIONS) do
+    assert_true(destination.key ~= "v2_dry", "dry is no LFO destination")
+  end
+end)
+
+test("delay_to_reverb goes as setReverb's fourth argument", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local param = params:lookup_param("delay_to_reverb")
+  assert_true(param ~= nil and param.t == params.tCONTROL, "delay_to_reverb is a control param")
+  assert_equal(param.name, "delay to reverb")
+  assert_near(params:get("delay_to_reverb"), 1, 1e-9, "1 at first")
+  local low, high = param_range("delay_to_reverb")
+  assert_equal(low, 0); assert_equal(high, 1)
+  assert_equal(params:string("delay_to_reverb"), "100 %", "shown in percent")
+  assert_true(S.engine_senders.delay_to_reverb ~= nil, "it has an engine sender")
+  -- in the fx group
+  local group_index = params.lookup["strata_fx"]
+  local at = params.lookup["delay_to_reverb"]
+  assert_true(at > group_index and at <= group_index + params:get("strata_fx"), "in the fx group")
+  context.clear_engine_calls()
+  params:set("delay_to_reverb", 0.25)
+  local calls = context.calls_named("setReverb")
+  assert_true(#calls > 0, "a change sends setReverb")
+  local last = calls[#calls].args
+  assert_equal(#last, 4, "with four arguments")
+  assert_near(last[4], 0.25, 1e-9, "the fourth is delay_to_reverb")
+  assert_near(last[1], params:get("reverb_mix"), 1e-9, "the first the reverb's level")
+  -- an edit of the reverb's level carries it too
+  params:set("reverb_mix", 0.5)
+  calls = context.calls_named("setReverb")
+  assert_near(calls[#calls].args[4], 0.25, 1e-9, "the reverb's level carries it")
+  -- a continuous scene global, default 1, crossfaded by a fade
+  local global
+  for _, entry in ipairs(S.SCENE_GLOBAL_PARAMS) do if entry.id == "delay_to_reverb" then global = entry end end
+  assert_true(global ~= nil and global.continuous and global.default == 1, "a continuous scene global, default 1")
+  capture_scene(1)
+  assert_near(S.scenes[1].data.delay_to_reverb, 0.25, 1e-9, "the scene captures it")
+  params:set("delay_to_reverb", 1)
+  recall_scene(1, 4); wake(context, "scene_transition_clock")
+  context.clear_engine_calls()
+  context.clock.run_for(2)
+  local midway = params:get("delay_to_reverb")
+  assert_true(midway < 1 and midway > 0.25, "the fade crossfades it (got " .. midway .. ")")
+  calls = context.calls_named("setReverb")
+  assert_true(#calls > 0 and calls[#calls].args[4] < 1 and calls[#calls].args[4] > 0.25, "and the engine gets each step")
+  context.clock.run_for(3)
+  assert_near(params:get("delay_to_reverb"), 0.25, 1e-6, "it lands on the scene's value")
+  -- an LFO global destination
+  local found
+  for _, destination in ipairs(S.LFO_DESTINATIONS) do
+    if destination.label == "dly>rev" then found = destination end
+  end
+  assert_true(found ~= nil and found.resolve() == "delay_to_reverb" and found.group == "global", "the LFO destination dly>rev")
 end)
 
 end

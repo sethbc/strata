@@ -5,10 +5,12 @@
 // setFilter on all three filters, setDelay, the filter types (each passes
 // and stops what its name says), their crossfades (master and voice), a
 // cutoff step up that throws no spike and the filter as 3.0's wherever the
-// cutoff does not rise fast, the NaN guards, plain sends to the effects
-// chain's synths, the sends against check-only copies of 3.0's chain, the
-// master's drift shifter leaving a steady tone steady, the explicit bypass
-// (it frees and re-creates a node, a mix of 0 never does; a lifted delay's
+// cutoff does not rise fast, the NaN guards, plain messages to the effects
+// chain's synths, the plain sends (3.8: a stage's dry level and sends, the
+// returns as levels, the delay into the reverb, masterSum at 0.7 of the
+// three buses, a default start as 3.7's law), the master's drift shifter
+// leaving a steady tone steady, the explicit bypass
+// (it frees and re-creates a node, a level of 0 never does; a lifted delay's
 // first echo and a lifted reverb's tail start without a step; the free lands
 // after the fade when the command's handler runs late), and the high tier's
 // FDN reverb against FreeVerb2.
@@ -23,13 +25,14 @@ var measure = { arg probe, bus, seconds = 0.3; h.measure(probe, bus, seconds) };
 var mixBus = { arg name; engine.mixBus(name) };
 var db = { arg ratio; ratio.max(1e-9).ampdb.round(0.1) };
 var masterUGens, readStep;
-var checkFilterCrossfade, checkEffectsGuard, checkEffectSendsReported, checkRouting, checkChain30, checkDrySends;
+var checkFilterCrossfade, checkEffectsGuard, checkEffectSendsReported, checkRouting, checkPlainChain, checkPlainSends;
+var checkDefaultBalance, checkEchoesWithoutReverb;
 var checkBypassFrees, checkBypassToggling, checkMixThroughZero, checkSetWhileBypassed;
 var allocLine, freeLine, lineMax, checkDelayLine, checkLiftStartsEmpty, checkLineAsDelayC;
 var checkReverbBypass, checkFdn, chainTail, delayNodes, floodFit, smallProbeKB, probeKB;
 var checkFreshDefaults, checkFilterTypes, checkCutoffStep, checkFilterAsBefore, checkMasterSteady, checkLiftStartsSmoothly;
 var checkBypassFreeTiming, echoPeaks, checkPingPong, checkPingPongKept, checkLongDelay;
-var sentBy, setsControl, broadcasts;
+var sentBy, setsControl, setsNoBus;
 var floodCount = 640;
 
 // The defs in xg, in node order, from the filter on (the chain at its
@@ -79,8 +82,8 @@ smallProbeKB = {
     1028 / (without - with).max(1)
 };
 
-// Check-only copies of 3.0's chain (lib/Engine_Strata.sc at 3.1.0): the
-// filter, the delay and the reverb crossfading their own dry and wet
+// A check-only copy of 3.0's master filter (lib/Engine_Strata.sc at 3.1.0),
+// RHPF and all, against which checkFilterAsBefore holds today's (#305)
 SynthDef(\strataCheck30Filter, { arg in, out, freq=5000, res=0.5, filterType=0, mix=0;
     var dry, filtered, cutoff, rq, wet, type;
     dry = In.ar(in, 2).collect({ arg channel; engine.zeroBadValues(channel) });
@@ -95,30 +98,36 @@ SynthDef(\strataCheck30Filter, { arg in, out, freq=5000, res=0.5, filterType=0, 
     wet = mix.lag(0.05).clip(0, 1);
     Out.ar(out, dry + ((filtered - dry) * wet));
 }).add;
-SynthDef(\strataCheck30Delay, { arg in, out, time=0.375, feedback=0.4, mix=0;
-    var dry, delayed, wet;
-    dry = In.ar(in, 2);
-    delayed = DelayC.ar(dry + LocalIn.ar(2), 2, time.lag(0.1).clip(0.01, 2));
-    LocalOut.ar(delayed * feedback.clip(0, 0.95));
-    wet = mix.lag(0.05).clip(0, 1);
-    Out.ar(out, dry + ((delayed - dry) * wet));
+// A check-only reverb: \strataReverb's FreeVerb2, fully wet, fed the
+// filtered reverb send plus k times the delay's return, at its level (the
+// engine's reverb with no lift fade and no lags)
+SynthDef(\strataCheckPlainReverb, { arg send, delay, out, k = 1, mix = 0.43, size = 0.8, damp = 0.5;
+    var sig = In.ar(send, 2) + (In.ar(delay, 2) * k);
+    Out.ar(out, FreeVerb2.ar(sig[0], sig[1], 1, size, damp) * mix);
 }).add;
-SynthDef(\strataCheck30Reverb, { arg in, out, mix=0.3, size=0.8, damp=0.5;
-    var sig = In.ar(in, 2);
-    Out.ar(out, FreeVerb2.ar(sig[0], sig[1], mix, size, damp));
+// 3.7's law at the defaults (a check-only copy): the dry signal x times 0.7
+// plus 0.3 of FreeVerb2 fully wet on it (the filter at mix 0 and the delay
+// at mix 0 pass nothing else)
+SynthDef(\strataCheckLaw37, { arg in, out, size = 0.8, damp = 0.5;
+    var x = In.ar(in, 2);
+    Out.ar(out, (x * 0.7) + (FreeVerb2.ar(x[0], x[1], 1, size, damp) * 0.3));
+}).add;
+// Three stereo buses summed times 0.7 (design §7.1's masterSum, written out)
+SynthDef(\strataCheckPlainSum, { arg a, b, c, out;
+    Out.ar(out, (In.ar(a, 2) + In.ar(b, 2) + In.ar(c, 2)) * 0.7);
 }).add;
 // A stand-in grain synth: bursts of noise and a tone (raw, also written to
-// the raw bus) through the engine's voiceOutput with the given sends; its
-// buses are controls (voiceOutput's named controls, set from
+// the raw bus) through the engine's voiceOutput with the given dry level and
+// sends; its buses are controls (voiceOutput's named controls, set from
 // mixBusControls), so a check can move them to private buses
-SynthDef(\strataCheckChainSource, { arg out, raw, delaySend = 1, reverbSend = 1;
+SynthDef(\strataCheckChainSource, { arg out, raw, dry = 1, delaySend = 1, reverbSend = 1;
     var sig = ({ WhiteNoise.ar(0.15) } ! 2) * LFPulse.kr(3, 0, 0.3).lag(0.005) + SinOsc.ar([330, 331], 0, 0.08);
     Out.ar(raw, sig);
-    engine.voiceOutput(sig, out, delaySend, reverbSend);
+    engine.voiceOutput(sig, out, dry, delaySend, reverbSend);
 }).add;
 // The master's input (masterSum, as \strataMaster sums it) on the given buses
-SynthDef(\strataCheckMasterSum, { arg in, delayIn, reverbIn, fxMix, out;
-    Out.ar(out, engine.masterSum(in, delayIn, reverbIn, fxMix));
+SynthDef(\strataCheckMasterSum, { arg in, delayIn, reverbIn, out;
+    Out.ar(out, engine.masterSum(in, delayIn, reverbIn));
 }).add;
 // Two stereo buses compared: the energy of their difference and of the
 // reference (in), summed since the synth started
@@ -206,14 +215,15 @@ SynthDef(\strataCheckTimeLfo, { arg out, center = 0.3, depth = 0.1, rate = 0.5;
     Out.kr(out, SinOsc.kr(rate, 0, depth, center));
 }).add;
 // The master's output (in) against the master without its shifter: the
-// limiter, the saturation and amp 0.7 on the filtered dry bus (clean) two
-// samples late, as the shifter at ratio 1 delays it. Since t_reset: the
+// limiter, the saturation and amp 0.7 on the filtered dry bus (clean) times
+// masterSumGain (the master's sum with both returns silent) two samples
+// late, as the shifter at ratio 1 delays it. Since t_reset: the
 // running minimum and maximum of each one's level (a 0.5 ms / 20 ms
 // follower) and the largest difference between them.
 SynthDef(\strataCheckMasterLevel, { arg in, clean, out, t_reset = 0;
     var follow = { arg sig; Amplitude.ar(sig, 0.0005, 0.02) };
     var output = In.ar(in, 2)[0];
-    var plain = ((Limiter.ar(Delay2.ar(In.ar(clean, 2)[0]), 0.95) * 2).tanh * 0.5) * 0.7;
+    var plain = ((Limiter.ar(Delay2.ar(In.ar(clean, 2)[0] * engine.masterSumGain), 0.95) * 2).tanh * 0.5) * 0.7;
     var master = follow.(output), reference = follow.(plain), reset = T2A.ar(t_reset);
     Out.kr(out, A2K.kr([RunningMin.ar(master, reset), RunningMax.ar(master, reset),
         RunningMin.ar(reference, reset), RunningMax.ar(reference, reset), Peak.ar((output - plain).abs, reset)]));
@@ -400,8 +410,9 @@ readStep = { arg bus;
 // equal the Lua param defaults" pins the SynthDefs' defaults to the
 // params'; this pins what the nodes start with.) Each master filter at
 // 5000 Hz, res 0.5, lowpass, mix 0; the delay at 0.375 s, feedback 0.4, mix
-// 0, pingPong 0; the reverb at mix 0.3, size 0.8, damp 0.5; the drift at 0.01; fxMix
-// broadcasting 0 and 0.3; neither effect bypassed (the bypass params' 0);
+// 0, pingPong 0; the reverb at level 0.43, size 0.8, damp 0.5 and delay to
+// reverb 1 (3.8); the drift at 0.01; no fxMix bus (3.8's plain sends);
+// neither effect bypassed (the bypass params' 0);
 // the scale chromatic from C (what the scale and root params' defaults
 // send: setScale(0, 4095)).
 checkFreshDefaults = {
@@ -412,8 +423,10 @@ checkFreshDefaults = {
     server.sync;
     values = (
         filters: [\filter, \filterDelay, \filterReverb].collect({ arg key; read.(key, [\freq, \res, \filterType, \mix]) }),
-        delay: read.(\delay, [\time, \feedback, \mix, \pingPong]), reverb: read.(\reverb, [\mix, \size, \damp]),
-        drift: read.(\master, [\drift]), fxMix: readBus.(fresh.mixBus(\fxMix)),
+        delay: read.(\delay, [\time, \feedback, \mix, \pingPong]),
+        reverb: read.(\reverb, [\mix, \size, \damp, \delayToReverb]),
+        kept: fresh.areaState[\effects][\controls][\reverb].atAll([\mix, \size, \damp, \delayToReverb]),
+        drift: read.(\master, [\drift]), fxMix: [fresh.mixBus(\fxMix), fresh.areaState[\mix][\fxMix]],
         bypassed: [\delay, \reverb].collect({ arg key; fresh.areaState[\effects][\bypassed][key] }),
         scale: fresh.scaleRootAndMask
     );
@@ -424,9 +437,10 @@ checkFreshDefaults = {
             values[\filters]));
     check.(near.(values[\delay], [0.375, 0.4, 0, 0])
         and: { SynthDescLib.global.at(\strataDelay).controls.any({ arg control; control.name == \pingPong }) }
-        and: { near.(values[\reverb], [0.3, 0.8, 0.5]) } and: { near.(values[\drift], [0.01]) } and: { near.(values[\fxMix], [0, 0.3]) },
-        "effects: a fresh engine's delay starts at 0.375 s, feedback 0.4, dry and pingPong 0, its reverb at mix 0.3, size 0.8, damp 0.5, its drift at 0.01 and fxMix at 0 and 0.3, the Lua defaults (delay %, reverb %, drift %, fxMix %)".format(
-            values[\delay], values[\reverb], values[\drift], values[\fxMix]));
+        and: { near.(values[\reverb], [0.43, 0.8, 0.5, 1]) } and: { near.(values[\kept], [0.43, 0.8, 0.5, 1]) }
+        and: { near.(values[\drift], [0.01]) } and: { values[\fxMix] == [nil, nil] },
+        "effects: a fresh engine's delay starts at 0.375 s, feedback 0.4, level and pingPong 0, its reverb at level 0.43, size 0.8, damp 0.5 and delay to reverb 1 (kept so too), its drift at 0.01, with no fxMix bus, the Lua defaults (delay %, reverb %, kept %, drift %, fxMix %)".format(
+            values[\delay], values[\reverb], values[\kept], values[\drift], values[\fxMix]));
     check.((values[\bypassed] == [false, false]) and: { values[\scale] == [0, 4095] },
         "effects: a fresh engine has neither effect bypassed and plays the chromatic scale from C, the Lua defaults (bypassed %, scale %)".format(
             values[\bypassed], values[\scale]));
@@ -447,23 +461,24 @@ checkRouting = {
         and: { getControl.(engine.synths[\reverb], \out) == engine.reverbBus.index },
         "effects: the reverb reads the filtered reverb send and the delay's return, and writes its return (reverbBus)");
     check.((getControl.(master, \in) == engine.filterBus.index) and: { getControl.(master, \delayIn) == engine.delayBus.index }
-        and: { getControl.(master, \reverbIn) == engine.reverbBus.index } and: { getControl.(master, \fxMix) == mixBus.(\fxMix).index },
-        "effects: the master sums the filtered dry bus and the two returns, reading the mixes from fxMix");
+        and: { getControl.(master, \reverbIn) == engine.reverbBus.index }
+        and: { SynthDescLib.global.at(\strataMaster).controlNames.collect(_.asSymbol).includes(\fxMix).not },
+        "effects: the master sums the filtered dry bus and the two returns, and reads no mix bus");
     check.(chainTail.value == [\strataFilter, \strataFilter, \strataFilter, \strataDelay, \strataReverb, \strataMaster],
         "effects: xg ends filter x3 -> delay -> reverb -> master (got %)".format(chainTail.value));
     check.((mixBus.(\dry) === engine.mainBus) and: { mixBus.(\dryPost) === engine.filterBus }
         and: { mixBus.(\delayReturn) === engine.delayBus } and: { mixBus.(\reverbReturn) === engine.reverbBus }
-        and: { mixBus.(\fxMix).numChannels == 2 } and: { mixBus.(\fxMix).rate == \control }
+        and: { mixBus.(\fxMix).isNil }
         and: { [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].every({ arg name;
             (mixBus.(name).numChannels == 2) and: { mixBus.(name).rate == \audio } }) },
-        "effects: areaState[\\mix] holds the stereo send buses, their ...Post copies, the returns and fxMix (2 channels)");
+        "effects: areaState[\\mix] holds the stereo send buses, their ...Post copies and the returns, and no fxMix");
     // every stage takes this engine's buses
     check.((0..(engine.numVoices - 1)).every({ arg voice;
         var synth = engine.synths[engine.voiceMixKey(voice)];
         synth.notNil and: { getControl.(synth, \delaySendOut) == mixBus.(\delaySend).index }
             and: { getControl.(synth, \reverbSendOut) == mixBus.(\reverbSend).index }
-            and: { getControl.(synth, \fxMixIn) == mixBus.(\fxMix).index }
-    }), "effects: every voice's mix stage writes this engine's send buses and reads its fxMix");
+    }) and: { SynthDescLib.global.at(\strataVoiceMix).controlNames.collect(_.asSymbol).includes(\fxMixIn).not },
+        "effects: every voice's mix stage writes this engine's send buses and reads no mix bus");
 };
 
 // A NaN or inf on any of the three mix buses (a voice blowing up) becomes
@@ -472,7 +487,7 @@ checkRouting = {
 // values once they have passed. A probe on the bus itself sees the burst.
 checkEffectsGuard = {
     command.(\setDelay, 0.25, 0.5, 0.5, 0);
-    command.(\setReverb, 0.5, 0.8, 0.5);
+    command.(\setReverb, 0.5, 0.8, 0.5, 1);
     [[\dry, engine.mainBus], [\delaySend, mixBus.(\delaySend)], [\reverbSend, mixBus.(\reverbSend)]].do({ arg pair;
         var badBus = Bus.control(server, 1), busBadBus = Bus.control(server, 1), probe, busProbe, bad, busBad;
         probe = Synth(\strataCheckBadValues, [\in, context.out_b, \out, badBus], context.xg, \addAfter);
@@ -505,7 +520,7 @@ checkEffectSendsReported = {
     server.sync; freed.free; server.sync;
     engine.synths[\filter] = freed;
     captured = [{ command.(\setFilter, 5000.0, 0.5, 0, 0.0) }, { command.(\setDelay, 0.375, 0.4, 0.0, 0) },
-        { command.(\setReverb, 0.3, 0.8, 0.5) }, { command.(\setMasterDrift, 0.01) }, { command.(\setVoiceParam, 0, \amp, 0.2) }
+        { command.(\setReverb, 0.43, 0.8, 0.5, 1) }, { command.(\setMasterDrift, 0.01) }, { command.(\setVoiceParam, 0, \amp, 0.2) }
     ].collect({ arg send; server.makeBundle(false, send) });
     engine.synths[\filter] = filter;
     filterTargets = captured[0].select({ arg msg; msg[0] == 15 }).collect({ arg msg; msg[1] });
@@ -516,74 +531,101 @@ checkEffectSendsReported = {
     check.(quiet.(captured[4]), "and to a voice's synth inside a quiet bundle (got %)".format(captured[4]));
 };
 
-// 3.2's chain (the stand-in grain synth through voiceOutput, every send at
-// 1, then the engine's three filters, delay and reverb, and the master's
-// input, masterSum, on the engine's buses) against check-only copies of
-// 3.0's chain fed the stand-in's raw output (the input 3.0's master got):
-// the two differ by less than -60 dB of the reference. (The master after
-// the sum is the same def in both, but two of them never match: PitchShift
-// draws its time dispersion from the server's shared random generator.)
-// The engine's delay and reverb are bypassed and lifted first, so they
-// start empty as the copies do. fx: [filter freq, res, type, mix; delay
-// time, feedback, mix; reverb mix, size, damp]; sweep: a function of the
-// time (s) giving the delay mix, sent every 50 ms (with the copy's in the
-// same bundle), or nil.
-checkChain30 = { arg label, fx, sweep;
-    var rawBus = Bus.audio(server, 2), filtered30 = Bus.audio(server, 2), delayed30 = Bus.audio(server, 2);
-    var reverbed30 = Bus.audio(server, 2), out32 = Bus.audio(server, 2), sum32;
-    var energyBus = Bus.control(server, 2);
-    var group30 = Group.after(context.xg), compareGroup, copies, source, comparator, energies, ratio, elapsed = 0;
-    command.(\setFilter, *fx.copyRange(0, 3));
-    command.(\setDelay, *(fx.copyRange(4, 6) ++ [0]));
-    command.(\setReverb, *fx.copyRange(7, 9));
+// The plain chain (3.8 design §7.1): the stand-in grain synth through
+// voiceOutput at dry 1 and both sends 1, then the engine's three filters
+// (the filter on), its delay (level 0.5) and its reverb (level 0.4), at
+// delay to reverb k. The reverb's return matches a check-only
+// \strataReverb fed the filtered reverb send plus k times the delay's
+// return, at its level, within -60 dB of it; and masterSum, on the engine's
+// buses, is 0.7 times the three summed within 1e-6. The engine's delay and
+// reverb are bypassed and lifted first, so they start empty as the copy
+// does, and the source starts once the lifted levels have settled.
+checkPlainChain = { arg k;
+    var rawBus = Bus.audio(server, 2), copyBus = Bus.audio(server, 2), sumBus = Bus.audio(server, 2);
+    var plainBus = Bus.audio(server, 2), energyBus = Bus.control(server, 2), sumPeakBus = Bus.control(server, 2);
+    var group = Group.after(context.xg), copy, sums, source, energies, ratio, sumPeaks, condition = Condition(false);
+    command.(\setFilter, 1200.0, 0.4, 0, 0.6);
+    command.(\setDelay, 0.21, 0.5, 0.5, 0);
+    command.(\setReverb, 0.4, 0.7, 0.3, k);
     command.(\setBypass, 0, 1); command.(\setBypass, 1, 1);
     0.2.wait; server.sync;
     command.(\setBypass, 0, 0); command.(\setBypass, 1, 0);
     server.sync;
-    copies = [
-        Synth(\strataCheck30Filter, [\in, rawBus, \out, filtered30, \freq, fx[0], \res, fx[1], \filterType, fx[2], \mix, fx[3]],
-            group30, \addToTail),
-        Synth(\strataCheck30Delay, [\in, filtered30, \out, delayed30, \time, fx[4], \feedback, fx[5], \mix, fx[6]],
-            group30, \addToTail),
-        Synth(\strataCheck30Reverb, [\in, delayed30, \out, reverbed30, \mix, fx[7], \size, fx[8], \damp, fx[9]],
-            group30, \addToTail)
+    copy = Synth(\strataCheckPlainReverb, [\send, mixBus.(\reverbSendPost), \delay, engine.delayBus, \out, copyBus,
+        \k, k, \mix, 0.4, \size, 0.7, \damp, 0.3], engine.synths[\reverb], \addAfter);
+    sums = [
+        Synth(\strataCheckMasterSum, [\in, engine.filterBus, \delayIn, engine.delayBus, \reverbIn, engine.reverbBus,
+            \out, sumBus], engine.synths[\master], \addBefore),
+        Synth(\strataCheckPlainSum, [\a, engine.filterBus, \b, engine.delayBus, \c, engine.reverbBus, \out, plainBus],
+            engine.synths[\master], \addBefore)
     ];
-    compareGroup = Group.after(group30);
-    sum32 = Synth(\strataCheckMasterSum, [\in, engine.filterBus, \delayIn, engine.delayBus, \reverbIn, engine.reverbBus,
-        \fxMix, mixBus.(\fxMix), \out, out32], engine.synths[\master], \addBefore);
-    0.6.wait; server.sync;   // the lifted mixes settle
+    0.6.wait; server.sync;   // the lifted levels settle
+    server.makeBundle(nil, {
+        var peaks;
+        source = Synth(\strataCheckChainSource, [\out, engine.mainBus, \raw, rawBus]
+            ++ engine.mixBusControls.asKeyValuePairs, engine.processGroup, \addToTail);
+        Synth(\strataCheckCompare, [\in, engine.reverbBus, \ref, copyBus, \out, energyBus], group);
+        peaks = Synth(\strataCheckDiffPeak, [\inA, sumBus, \inB, plainBus, \out, sumPeakBus, \seconds, 1.5], group);
+        OSCFunc({ condition.test = true; condition.signal }, '/n_end', server.addr, argTemplate: [peaks.nodeID]).oneShot;
+    });
+    awaitReply.(condition, 15);
+    energies = readBus.(energyBus);
+    sumPeaks = readBus.(sumPeakBus);
+    ratio = if (energies.size == 2 and: { energies[1] > 0 }) { (energies[0] / energies[1]).sqrt } { 1 };
+    check.((energies.size == 2) and: { energies[1] > 1 } and: { ratio < 0.001 },
+        "effects: the reverb's return is FreeVerb2 on the reverb send plus % of the delay's return, at its level, within -60 dB (% dB, reference energy %)".format(
+            k, (ratio.max(1e-12).ampdb).round(0.1), energies[1] ? 0));
+    check.((sumPeaks.size == 2) and: { sumPeaks[1] > 0.01 } and: { sumPeaks[0] < 1e-6 },
+        "effects: masterSum is 0.7 of the dry bus and the two returns within 1e-6 (delay to reverb %: difference %, largest sample %)".format(
+            k, sumPeaks[0], sumPeaks[1]));
+    source.free; copy.free; sums.do(_.free); group.free; server.sync;
+    [rawBus, copyBus, sumBus, plainBus, energyBus, sumPeakBus].do(_.free);
+};
+
+// A default start sounds as 3.7.0's (design §7.1): at the defaults (dry 1,
+// sends 1, the filter at mix 0, the delay at level 0, the reverb at 0.43,
+// delay to reverb 1) the master's input is within -40 dB of 3.7's law,
+// 0.7 F(x) + 0.3 R(F(x)) (F the filter, here x itself; R FreeVerb2 fully
+// wet), on a check-only copy fed the stand-in's raw signal
+checkDefaultBalance = {
+    var rawBus = Bus.audio(server, 2), lawBus = Bus.audio(server, 2), sumBus = Bus.audio(server, 2);
+    var energyBus = Bus.control(server, 2), group = Group.after(context.xg), source, energies, ratio, sum;
+    command.(\setFilter, 5000.0, 0.5, 0, 0.0);
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
+    command.(\setReverb, 0.43, 0.8, 0.5, 1);
+    command.(\setBypass, 0, 1); command.(\setBypass, 1, 1);
+    0.2.wait; server.sync;
+    command.(\setBypass, 0, 0); command.(\setBypass, 1, 0);
+    server.sync;
+    Synth(\strataCheckLaw37, [\in, rawBus, \out, lawBus], group, \addToTail);
+    sum = Synth(\strataCheckMasterSum, [\in, engine.filterBus, \delayIn, engine.delayBus, \reverbIn, engine.reverbBus,
+        \out, sumBus], engine.synths[\master], \addBefore);
+    0.6.wait; server.sync;
     server.makeBundle(nil, {
         source = Synth(\strataCheckChainSource, [\out, engine.mainBus, \raw, rawBus]
             ++ engine.mixBusControls.asKeyValuePairs, engine.processGroup, \addToTail);
-        comparator = Synth(\strataCheckCompare, [\in, out32, \ref, reverbed30, \out, energyBus], compareGroup);
+        Synth(\strataCheckCompare, [\in, sumBus, \ref, lawBus, \out, energyBus], group, \addToTail);
     });
-    while { elapsed < 1.5 } {
-        if (sweep.notNil) {
-            server.makeBundle(nil, {
-                command.(\setDelay, fx[4], fx[5], sweep.(elapsed), 0);
-                copies[1].set(\mix, sweep.(elapsed));
-            });
-        };
-        0.05.wait; elapsed = elapsed + 0.05;
-    };
+    1.5.wait; server.sync;
     energies = readBus.(energyBus);
     ratio = if (energies.size == 2 and: { energies[1] > 0 }) { (energies[0] / energies[1]).sqrt } { 1 };
-    check.((energies.size == 2) and: { energies[1] > 1 } and: { ratio < 0.001 },
-        "effects: with every send at 1 the output matches 3.0's chain within -60 dB (%: % dB, reference energy %)".format(
-            label, (ratio.max(1e-12).ampdb).round(0.1), energies[1] ? 0));
-    source.free; comparator.free; sum32.free; group30.free; compareGroup.free; server.sync;
-    [rawBus, filtered30, delayed30, reverbed30, out32, energyBus].do(_.free);
+    check.((energies.size == 2) and: { energies[1] > 1 } and: { ratio < 0.01 },
+        "effects: at the defaults the master's input is 3.7's law (0.7 dry + 0.3 reverb) within -40 dB (% dB, reference energy %)".format(
+            (ratio.max(1e-12).ampdb).round(0.1), energies[1] ? 0));
+    source.free; sum.free; group.free; server.sync;
+    [rawBus, lawBus, sumBus, energyBus].do(_.free);
 };
 
-// A voice whose sends are 0 plays dry at full level at any global mix: the
-// stand-in's dry output equals its raw signal and its sends carry nothing,
-// with the delay and reverb mixes high; with its sends at 1 the dry part is
-// (1 - m_d)(1 - m_r) of it, the delay send all of it and the reverb send
-// (1 - m_d)
-checkDrySends = {
+// Plain sends (design §7.1): the stand-in's dry bus reads its signal x
+// times dry and each send bus x times that send, the sends taken before the
+// dry level, whatever the delay's and the reverb's levels (0.8 and 0.9):
+// [dry, delay send, reverb send] at [1, 0, 0], [1, 1, 1], [0, 1, 0.5] and
+// [0.5, 0.3, 1], each bus within 1e-5
+checkPlainSends = {
     var rawBus = Bus.audio(server, 2), dryBus = Bus.audio(server, 2), delayBus = Bus.audio(server, 2);
     var reverbBus = Bus.audio(server, 2), peakBus = Bus.control(server, 4);
     var group = Group.after(engine.processGroup), source, probe, peaks, results;
+    var cases = [[1, 0, 0], [1, 1, 1], [0, 1, 0.5], [0.5, 0.3, 1]];
     // the largest error of each bus against the raw signal times its gain
     SynthDef(\strataCheckSendPeaks, { arg raw, dry, delay, reverb, out, dryGain = 1, delayGain = 0, reverbGain = 0, t_reset = 0;
         var x = In.ar(raw, 2);
@@ -595,23 +637,65 @@ checkDrySends = {
         ]));
     }).add;
     command.(\setDelay, 0.375, 0.4, 0.8, 0);
-    command.(\setReverb, 0.9, 0.8, 0.5);
+    command.(\setReverb, 0.9, 0.8, 0.5, 1);
     server.sync; 0.2.wait;
-    // [delay send, reverb send, dry gain, delay send gain, reverb send gain]
-    results = [[0, 0, 1, 0, 0], [1, 1, 0.2 * 0.1, 1, 0.2]].collect({ arg each;
-        source = Synth(\strataCheckChainSource, [\out, dryBus, \raw, rawBus, \delaySend, each[0], \reverbSend, each[1],
-            \delaySendOut, delayBus.index, \reverbSendOut, reverbBus.index, \fxMixIn, mixBus.(\fxMix).index], group);
+    results = cases.collect({ arg each;
+        source = Synth(\strataCheckChainSource, [\out, dryBus, \raw, rawBus, \dry, each[0], \delaySend, each[1],
+            \reverbSend, each[2], \delaySendOut, delayBus.index, \reverbSendOut, reverbBus.index], group);
         probe = Synth(\strataCheckSendPeaks, [\raw, rawBus, \dry, dryBus, \delay, delayBus, \reverb, reverbBus, \out, peakBus,
-            \dryGain, each[2], \delayGain, each[3], \reverbGain, each[4]], group, \addToTail);
+            \dryGain, each[0], \delayGain, each[1], \reverbGain, each[2]], group, \addToTail);
         server.sync; 0.2.wait;
         peaks = measure.(probe, peakBus, 0.5);
         source.free; probe.free; server.sync;
         peaks
     });
     check.(results.every({ arg each; (each.size == 4) and: { each[3] > 0.1 } and: { each.keep(3).every({ arg peak; peak < 1e-5 }) } }),
-        "effects: a voice with sends 0 plays dry at full level at any global mix (delay 0.8, reverb 0.9; errors against dry x1 and empty sends, and at sends 1 dry x0.02, delay send x1, reverb send x0.2: %)".format(
-            results.collect({ arg each; each.round(0.000001) })));
+        "effects: plain sends: the dry bus is x times dry and each send x times its send, the levels aside (delay 0.8, reverb 0.9; [dry, delay, reverb] % : errors %)".format(
+            cases, results.collect({ arg each; each.round(0.000001) })));
     group.free; [rawBus, dryBus, delayBus, reverbBus, peakBus].do(_.free);
+};
+
+// What a player meets (3.8 plan, 1a): the reverb at level 0 while the delay
+// plays. The echoes still sound, since the delay's return reaches the master
+// on its own: an impulse on the delay send alone (time 0.1 s, feedback 0,
+// level 0.5, the filter at mix 0, the reverb at level 0) comes back on the
+// delay's return at 0.5 and on the master's input (masterSum on the
+// engine's buses) at 0.7 x 0.5, and nowhere before
+checkEchoesWithoutReverb = {
+    var sumBus = Bus.audio(server, 2), returnPeaks = Bus.control(server, 6), sumPeaks = Bus.control(server, 6);
+    var condition = Condition(false), sum, onReturn, onSum, windows = [0, 0.09, 0.09, 0.11, 0.11, 0.3];
+    command.(\setFilter, 5000.0, 0.5, 0, 0.0);
+    command.(\setMasterDrift, 0.0);
+    command.(\setReverb, 0.0, 0.8, 0.5, 1);
+    command.(\setDelay, 0.1, 0.0, 0.5, 0);
+    returnPeaks.setAll(0); sumPeaks.setAll(0);
+    sum = Synth(\strataCheckMasterSum, [\in, engine.filterBus, \delayIn, engine.delayBus, \reverbIn, engine.reverbBus,
+        \out, sumBus], engine.synths[\master], \addBefore);
+    server.sync; 0.5.wait;
+    server.makeBundle(nil, {
+        var analysis;
+        Synth(\strataCheckLeftImpulse, [\out, mixBus.(\delaySend)], engine.processGroup, \addToTail);
+        Synth(\strataCheckEchoPeaks, [\in, engine.delayBus, \out, returnPeaks, \windows, windows, \seconds, 0.35],
+            engine.synths[\master], \addAfter);
+        analysis = Synth(\strataCheckEchoPeaks, [\in, sumBus, \out, sumPeaks, \windows, windows, \seconds, 0.35],
+            engine.synths[\master], \addAfter);
+        OSCFunc({ condition.test = true; condition.signal }, '/n_end', server.addr, argTemplate: [analysis.nodeID]).oneShot;
+    });
+    awaitReply.(condition, 10);
+    server.sync;
+    onReturn = readBus.(returnPeaks);
+    onSum = readBus.(sumPeaks);
+    check.((onReturn.size == 6) and: { onSum.size == 6 } and: { onReturn[2].equalWithPrecision(0.5, 0.001) }
+        and: { onSum[2].equalWithPrecision(0.35, 0.001) }
+        and: { [0, 1, 3, 4, 5].every({ arg index; (onReturn[index] < 0.001) and: { onSum[index] < 0.001 } }) },
+        "effects: a reverb at level 0 leaves the echoes: the master's input holds the delay's return at 0.7 x its level (left peaks before, at and after the echo: return %, master's input %)".format(
+            onReturn.collect({ arg value; value.round(0.0001) }), onSum.collect({ arg value; value.round(0.0001) })));
+    sum.free; server.sync;
+    [sumBus, returnPeaks, sumPeaks].do(_.free);
+    command.(\setMasterDrift, 0.01);
+    command.(\setReverb, 0.43, 0.8, 0.5, 1);
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
+    server.sync;
 };
 
 // The master leaves a steady tone steady (#306). Its drift shifter has no
@@ -630,7 +714,7 @@ checkMasterSteady = {
             shifter !? { shifter.inputs[1] }, shifter !? { shifter.inputs[4] }));
     command.(\setFilter, 5000.0, 0.5, 0, 0.0);
     command.(\setDelay, 0.375, 0.4, 0.0, 0);
-    command.(\setReverb, 0.0, 0.8, 0.5);
+    command.(\setReverb, 0.0, 0.8, 0.5, 1);
     server.sync;
     tone = Synth(\strataCheckSine, [\out, engine.mainBus, \freq, 1000], engine.processGroup, \addToTail);
     probe = Synth(\strataCheckMasterLevel, [\in, context.out_b, \clean, engine.filterBus, \out, bus], context.xg, \addAfter);
@@ -651,7 +735,7 @@ checkMasterSteady = {
             swings.collect(_[0]), swings.collect(_[1])));
     tone.free; probe.free; server.sync; bus.free;
     command.(\setMasterDrift, 0.01);
-    command.(\setReverb, 0.3, 0.8, 0.5);
+    command.(\setReverb, 0.43, 0.8, 0.5, 1);
     server.sync;
 };
 
@@ -668,24 +752,24 @@ setsControl = { arg messages, node, control, value;
     messages.any({ arg msg; (msg[0] == 15) and: { msg[1] == node.nodeID } and: {
         msg.indexOf(control).notNil and: { msg[msg.indexOf(control) + 1].equalWithPrecision(value) } } })
 };
-// whether messages hold a /c_setn of fxMix to the two mixes
-broadcasts = { arg messages, delayMix, reverbMix;
-    messages.any({ arg msg; (msg[0].asSymbol == '/c_setn') and: { msg[1] == mixBus.(\fxMix).index }
-        and: { msg[3].equalWithPrecision(delayMix) } and: { msg[4].equalWithPrecision(reverbMix) } })
+// whether messages set no bus (3.8: no mix is broadcast, the levels are
+// the nodes' own)
+setsNoBus = { arg messages;
+    messages.every({ arg msg; [\c_set, \c_setn, \c_fill].includes(msg[0].asString.replace("/", "").asSymbol).not })
 };
 
-// The bypass: the delay's mix and the broadcast mix go to 0 at once (one
-// bundle, no free in it), the node is freed after the fade and re-created
-// in its place from the kept controls when lifted
+// The bypass: the delay's level goes to 0 (one bundle, no free in it, no
+// bus set), the node is freed after the fade and re-created in its place
+// from the kept controls when lifted
 checkBypassFrees = {
-    var before, after, broadcast, lifted, messages;
+    var before, after, lifted, messages;
     command.(\setDelay, 0.3, 0.45, 0.6, 0);
     server.sync; 0.1.wait;
     before = engine.synths[\delay];
     messages = sentBy.(\setBypass, 0, 1);
     check.((engine.synths[\delay] === before) and: { setsControl.(messages, before, \mix, 0) }
-        and: { broadcasts.(messages, 0, 0.3) } and: { messages.any({ arg msg; msg[0] == 11 }).not },
-        "effects: setBypass first sets the delay's mix and its broadcast to 0 in one bundle, keeping the node for the fade (sent %)".format(
+        and: { setsNoBus.(messages) } and: { messages.any({ arg msg; msg[0] == 11 }).not },
+        "effects: setBypass first sets the delay's level to 0, keeping the node for the fade and setting no bus (sent %)".format(
             messages));
     0.2.wait; server.sync;
     after = chainTail.value;
@@ -695,12 +779,12 @@ checkBypassFrees = {
     command.(\setBypass, 0, 0);
     server.sync;
     lifted = engine.synths[\delay];
-    broadcast = readBus.(mixBus.(\fxMix));
     check.(lifted.notNil and: { lifted !== before } and: { delayNodes.value == 1 }
         and: { chainTail.value == [\strataFilter, \strataFilter, \strataFilter, \strataDelay, \strataReverb, \strataMaster] }
         and: { getControl.(lifted, \time).equalWithPrecision(0.3) } and: { getControl.(lifted, \feedback).equalWithPrecision(0.45) }
-        and: { getControl.(lifted, \mix).equalWithPrecision(0.6) } and: { broadcast[0].equalWithPrecision(0.6) },
-        "effects: setBypass frees the delay after the mix fade and re-creates it when lifted (after the reverb send's filter, with time, feedback and mix kept; broadcast %)".format(broadcast));
+        and: { getControl.(lifted, \mix).equalWithPrecision(0.6) },
+        "effects: setBypass frees the delay after the level's fade and re-creates it when lifted (after the reverb send's filter, with time, feedback and level kept: level %)".format(
+            lifted !? { getControl.(lifted, \mix) }));
     // a lift inside the wait cancels the free: the same node, its mix back
     command.(\setBypass, 0, 1);
     command.(\setBypass, 0, 0);
@@ -730,8 +814,8 @@ checkLiftStartsSmoothly = { arg effect;
     var resetBoth, readBoth, steady, lifted;
     command.(\setFilter, 5000.0, 0.5, 0, 0.0);
     command.(\setMasterDrift, 0.0);
-    if (effect == 0) { command.(\setReverb, 0.0, 0.8, 0.5); command.(\setDelay, 0.05, 0.4, 0.5, 0) } {
-        command.(\setDelay, 0.375, 0.4, 0.0, 0); command.(\setReverb, 0.5, 0.8, 0.5) };
+    if (effect == 0) { command.(\setReverb, 0.0, 0.8, 0.5, 1); command.(\setDelay, 0.05, 0.4, 0.5, 0) } {
+        command.(\setDelay, 0.375, 0.4, 0.0, 0); command.(\setReverb, 0.5, 0.8, 0.5, 1) };
     server.sync;
     tone = Synth(\strataCheckSine, [\out, mixBus.([\delaySend, \reverbSend][effect]), \freq, 100], engine.processGroup, \addToTail);
     stepProbe = Synth(\strataCheckStep, [\in, [engine.delayBus, engine.reverbBus][effect], \out, stepBus],
@@ -759,7 +843,7 @@ checkLiftStartsSmoothly = { arg effect;
     tone.free; stepProbe.free; outStepProbe.free; server.sync;
     stepBus.free; outStepBus.free;
     command.(\setMasterDrift, 0.01);
-    command.(\setReverb, 0.3, 0.8, 0.5);
+    command.(\setReverb, 0.43, 0.8, 0.5, 1);
     command.(\setDelay, 0.375, 0.4, 0.0, 0);
     server.sync;
 };
@@ -782,7 +866,7 @@ checkBypassFreeTiming = {
     var stepBus = Bus.control(server, 1), tone, stepProbe, steady, results, address = NetAddr.localAddr;
     command.(\setFilter, 5000.0, 0.5, 0, 0.0);
     command.(\setMasterDrift, 0.0);
-    command.(\setReverb, 0.0, 0.8, 0.5);
+    command.(\setReverb, 0.0, 0.8, 0.5, 1);
     command.(\setDelay, 0.05, 0.4, 0.5, 0);
     server.sync;
     tone = Synth(\strataCheckSine, [\out, mixBus.(\delaySend), \freq, 100], engine.processGroup, \addToTail);
@@ -811,7 +895,7 @@ checkBypassFreeTiming = {
             results.collect(_[1])));
     tone.free; stepProbe.free; server.sync; stepBus.free;
     command.(\setMasterDrift, 0.01);
-    command.(\setReverb, 0.3, 0.8, 0.5);
+    command.(\setReverb, 0.43, 0.8, 0.5, 1);
     command.(\setDelay, 0.375, 0.4, 0.0, 0);
     server.sync;
 };
@@ -955,7 +1039,7 @@ checkLiftStartsEmpty = {
     var heardBus = Bus.control(server, 6), afterBus = Bus.control(server, 6), condition = Condition(false), heard, after;
     command.(\setFilter, 5000.0, 0.5, 0, 0.0);
     command.(\setMasterDrift, 0.0);
-    command.(\setReverb, 0.0, 0.8, 0.5);
+    command.(\setReverb, 0.0, 0.8, 0.5, 1);
     command.(\setDelay, 0.5, 0.9, 1.0, 0);
     heardBus.setAll(0); afterBus.setAll(0);
     server.sync; 0.3.wait;
@@ -983,7 +1067,7 @@ checkLiftStartsEmpty = {
             heard.collect({ arg value; value.round(0.0001) }), after.collect({ arg value; value.round(0.000001) })));
     heardBus.free; afterBus.free;
     command.(\setMasterDrift, 0.01);
-    command.(\setReverb, 0.3, 0.8, 0.5);
+    command.(\setReverb, 0.43, 0.8, 0.5, 1);
     command.(\setDelay, 0.375, 0.4, 0.0, 0);
     server.sync;
 };
@@ -1063,69 +1147,72 @@ checkBypassToggling = {
     check.((delayNodes.value == 1) and: { engine.synths[\delay].notNil }, "effects: and lifting it brings one back again");
 };
 
-// An LFO-rate series of setDelays taking the mix through 0 and back never
-// frees the delay node, and a mix of 0 broadcasts 0 with the node running
+// An LFO-rate series of setDelays taking the level through 0 and back never
+// frees the delay node: at 0 the node runs at level 0
 checkMixThroughZero = {
-    var node = engine.synths[\delay], zeroBroadcast;
+    var node = engine.synths[\delay], zeroLevel;
     50.do({ arg index;
         var mix = (0.4 * sin(index * 0.5)).max(0);
         command.(\setDelay, 0.3, 0.45, mix, 0);
-        if (index == 7) { server.sync; zeroBroadcast = readBus.(mixBus.(\fxMix))[0] };
+        if (index == 7) { server.sync; zeroLevel = getControl.(node, \mix) };
         0.02.wait;
     });
     server.sync; 0.2.wait;
-    check.((engine.synths[\delay] === node) and: { delayNodes.value == 1 } and: { zeroBroadcast == 0 }
+    check.((engine.synths[\delay] === node) and: { delayNodes.value == 1 } and: { zeroLevel == 0 }
         and: { h.synthTree(context.xg).any({ arg each; each[\id] == node.nodeID }) },
-        "effects: a mix swept through 0 never frees the node (broadcast at 0: %)".format(zeroBroadcast));
+        "effects: a level swept through 0 never frees the node (the node's level at 0: %)".format(zeroLevel));
 };
 
 // setDelay during the fade and after the free: the values are kept, the
-// mix sent and broadcast stays 0, and the lift brings them back
+// level sent stays 0 (no bus is set), and the lift brings them back
 checkSetWhileBypassed = {
-    var fading = engine.synths[\delay], broadcast, lifted, messages;
+    var fading = engine.synths[\delay], kept, lifted, messages;
     command.(\setBypass, 0, 1);
     messages = sentBy.(\setDelay, 0.2, 0.3, 0.7, 0);
     check.(setsControl.(messages, fading, \mix, 0) and: { setsControl.(messages, fading, \time, 0.2) }
-        and: { broadcasts.(messages, 0, engine.liveMix(\reverb)) },
-        "effects: setDelay during the bypass fade sets the time and keeps the mix and its broadcast at 0 (sent %)".format(messages));
+        and: { setsNoBus.(messages) },
+        "effects: setDelay during the bypass fade sets the time and keeps the level at 0, setting no bus (sent %)".format(messages));
     0.2.wait; server.sync;
     command.(\setDelay, 0.5, 0.6, 0.8, 0);
     server.sync;
-    broadcast = readBus.(mixBus.(\fxMix));
-    check.(engine.synths[\delay].isNil and: { delayNodes.value == 0 } and: { broadcast[0] == 0 },
-        "effects: setDelay while bypassed stores its values and keeps the mix at 0 (broadcast %)".format(broadcast));
+    kept = engine.areaState[\effects][\controls][\delay].atAll([\time, \feedback, \mix]);
+    check.(engine.synths[\delay].isNil and: { delayNodes.value == 0 } and: { kept == [0.5, 0.6, 0.8] },
+        "effects: setDelay while bypassed stores its values, with no node to set (kept %)".format(kept));
     command.(\setBypass, 0, 0);
     server.sync;
     lifted = engine.synths[\delay];
-    broadcast = readBus.(mixBus.(\fxMix));
     check.(lifted.notNil and: { getControl.(lifted, \time).equalWithPrecision(0.5) }
-        and: { getControl.(lifted, \feedback).equalWithPrecision(0.6) } and: { getControl.(lifted, \mix).equalWithPrecision(0.8) }
-        and: { broadcast[0].equalWithPrecision(0.8) },
-        "effects: and the lift creates the delay with them (broadcast %)".format(broadcast));
+        and: { getControl.(lifted, \feedback).equalWithPrecision(0.6) } and: { getControl.(lifted, \mix).equalWithPrecision(0.8) },
+        "effects: and the lift creates the delay with them (level %)".format(lifted !? { getControl.(lifted, \mix) }));
 };
 
 // The reverb's bypass: its node is freed and re-created before the master;
-// the delay is untouched; setReverb while bypassed is kept
+// the delay is untouched; setReverb while bypassed is kept, all four of its
+// values (3.8: delay to reverb among them)
 checkReverbBypass = {
-    var delay = engine.synths[\delay], before = engine.synths[\reverb], broadcast, lifted;
-    command.(\setReverb, 0.4, 0.7, 0.3);
-    command.(\setBypass, 1, 1);
+    var delay = engine.synths[\delay], before = engine.synths[\reverb], kept, lifted, messages;
+    command.(\setReverb, 0.4, 0.7, 0.3, 1);
+    messages = sentBy.(\setBypass, 1, 1);
+    check.(setsControl.(messages, before, \mix, 0) and: { setsNoBus.(messages) },
+        "effects: setBypass sets the reverb's level to 0 for its fade, setting no bus (sent %)".format(messages));
     0.2.wait; server.sync;
-    command.(\setReverb, 0.35, 0.6, 0.2);
+    command.(\setReverb, 0.35, 0.6, 0.2, 0.25);
     server.sync;
-    broadcast = readBus.(mixBus.(\fxMix));
+    kept = engine.areaState[\effects][\controls][\reverb].atAll([\mix, \size, \damp, \delayToReverb]);
     check.(engine.synths[\reverb].isNil and: { h.synthNames(context.xg).includes(\strataReverb).not }
-        and: { engine.synths[\delay] === delay } and: { broadcast[1] == 0 },
-        "effects: setBypass frees the reverb after its fade and leaves the delay (broadcast %)".format(broadcast));
+        and: { engine.synths[\delay] === delay } and: { kept == [0.35, 0.6, 0.2, 0.25] },
+        "effects: setBypass frees the reverb after its fade and leaves the delay; setReverb while bypassed is kept (kept %)".format(kept));
     command.(\setBypass, 1, 0);
     server.sync;
     lifted = engine.synths[\reverb];
-    broadcast = readBus.(mixBus.(\fxMix));
     check.(lifted.notNil and: { lifted !== before } and: { lifted.defName.asSymbol == \strataReverb }
         and: { chainTail.value == [\strataFilter, \strataFilter, \strataFilter, \strataDelay, \strataReverb, \strataMaster] }
         and: { getControl.(lifted, \mix).equalWithPrecision(0.35) } and: { getControl.(lifted, \size).equalWithPrecision(0.6) }
-        and: { getControl.(lifted, \damp).equalWithPrecision(0.2) } and: { broadcast[1].equalWithPrecision(0.35) },
-        "effects: lifting the reverb's bypass re-creates it before the master with the kept controls (broadcast %)".format(broadcast));
+        and: { getControl.(lifted, \damp).equalWithPrecision(0.2) } and: { getControl.(lifted, \delayToReverb).equalWithPrecision(0.25) },
+        "effects: lifting the reverb's bypass re-creates it before the master with the kept controls, delay to reverb among them (level %, delay to reverb %)".format(
+            lifted !? { getControl.(lifted, \mix) }, lifted !? { getControl.(lifted, \delayToReverb) }));
+    command.(\setReverb, 0.43, 0.8, 0.5, 1);
+    server.sync;
 };
 
 // The FDN (the high tier's reverb) against FreeVerb2, both fully wet at
@@ -1208,7 +1295,7 @@ checkFdn = {
             highReverb, high.synths[\reverb] !? { arg synth; synth.defName }));
     h.freeEngine(high);
     server.sync;
-    check.([\delaySend, \reverbSend, \delaySendPost, \reverbSendPost, \fxMix].every({ arg name; high.mixBus(name).index.isNil }),
+    check.([\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].every({ arg name; high.mixBus(name).index.isNil }),
         "effects: free frees the mix area's buses");
 };
 
@@ -1223,33 +1310,43 @@ check.(masterUGens.detectIndex({ arg ugen; ugen.isKindOf(Limiter) })
 // "effects: the filter and send controls feed a UGen", in the stage; each
 // grain def has one stereo Out (its path), the stage five (dry, the two
 // sends, the mirror and the tap)
-check.([\filterType, \filterFreq, \filterRes, \filterMix, \delaySend, \reverbSend].every({ arg control;
-    h.controlFeedsAUGen(\strataVoiceMix, control) }), "effects: the filter and send controls feed a UGen");
+check.([\filterType, \filterFreq, \filterRes, \filterMix, \dry, \delaySend, \reverbSend].every({ arg control;
+    h.controlFeedsAUGen(\strataVoiceMix, control) }), "effects: the filter, dry and send controls feed a UGen");
+check.(engine.masterSumGain == 0.7, "effects: masterSum's gain is 0.7, 3.7's dry share (design section 7.1)");
 check.(h.grainDefs.every({ arg name;
     SynthDescLib.global.at(name).def.children.select({ arg ugen; ugen.isKindOf(Out) }).size == 1 })
     and: { SynthDescLib.global.at(\strataVoiceMix).def.children.select({ arg ugen; ugen.isKindOf(Out) }).size == 5 },
     "effects: each grain def writes one path; the stage writes the dry bus, the two sends, the mirror and the tap");
 
-// The defaults a fresh engine starts with, then the 3.0 comparison and the
-// dry voice, with no voice running
+// The defaults a fresh engine starts with, then the plain chain at three
+// amounts of the delay into the reverb, the default balance, the plain
+// sends and the echoes without the reverb, with no voice running
 checkFreshDefaults.value;
 probeKB = smallProbeKB.value;
-checkChain30.("defaults", [5000.0, 0.5, 0, 0.0, 0.375, 0.4, 0.0, 0.3, 0.8, 0.5], nil);
-checkChain30.("filter on, delay mix swept by an LFO", [1200.0, 0.4, 0, 0.6, 0.21, 0.5, 0.5, 0.45, 0.7, 0.3],
-    { arg seconds; 0.5 + (0.4 * sin(2pi * 0.7 * seconds)) });
-checkDrySends.value;
+[0, 0.5, 1].do({ arg k; checkPlainChain.(k) });
+checkDefaultBalance.value;
+checkPlainSends.value;
+checkEchoesWithoutReverb.value;
 checkPingPong.value;
 
 h.startAllVoices;
 checkRouting.value;
 
-// Back to the defaults after checkChain30 and checkDrySends (the defaults
-// themselves are checkFreshDefaults'): the mixes reach fxMix
+// Back to the defaults after the plain chain and the sends (the defaults
+// themselves are checkFreshDefaults'): setReverb sets all four of the
+// reverb's controls
 command.(\setFilter, 5000.0, 0.5, 0, 0.0);
 command.(\setDelay, 0.375, 0.4, 0.0, 0);
-command.(\setReverb, 0.3, 0.8, 0.5);
+command.(\setReverb, 0.4, 0.7, 0.3, 0.6);
 server.sync;
-check.(readBus.(mixBus.(\fxMix)).round(0.0001) == [0.0, 0.3], "effects: setDelay and setReverb broadcast their mixes on fxMix (0 and 0.3)");
+{
+    var got = [\mix, \size, \damp, \delayToReverb].collect({ arg name; getControl.(engine.synths[\reverb], name) });
+    check.((got.size == 4) and: { [got, [0.4, 0.7, 0.3, 0.6]].flop.every({ arg pair;
+            pair[0].notNil and: { pair[0].equalWithPrecision(pair[1], 1e-6) } }) },
+        "effects: setReverb sets the reverb's level, size, damping and delay to reverb (got %)".format(got));
+}.value;
+command.(\setReverb, 0.43, 0.8, 0.5, 1);
+server.sync;
 
 command.(\setFilter, 800.0, 0.2, 1, 1.0);
 server.sync;
@@ -1264,7 +1361,6 @@ check.(getControl.(engine.synths[\delay], \time) == 0.25, "setDelay sets time");
 check.(getControl.(engine.synths[\delay], \feedback) == 0.5, "setDelay sets feedback");
 check.(getControl.(engine.synths[\delay], \mix) == 0.5, "setDelay sets mix");
 check.(getControl.(engine.synths[\delay], \pingPong) == 0.25, "setDelay sets pingPong");
-check.(readBus.(mixBus.(\fxMix))[0] == 0.5, "setDelay broadcasts the mix");
 // A non-finite argument leaves the delay as it was, with one line each (the
 // final review's engine Minor 3): a NaN in its lag or feedback loop would
 // stay in the node until a bypass re-created it
@@ -1281,8 +1377,7 @@ check.(readBus.(mixBus.(\fxMix))[0] == 0.5, "setDelay broadcasts the mix");
     server.sync;
     after = controls.collect({ arg name; getControl.(engine.synths[\delay], name) });
     check.((lines.size == 4) and: { lines.every({ arg line; line.beginsWith("strata: setDelay ignored: ") }) }
-        and: { after == before } and: { engine.areaState[\effects][\controls][\delay] == kept }
-        and: { readBus.(mixBus.(\fxMix))[0] == 0.5 },
+        and: { after == before } and: { engine.areaState[\effects][\controls][\delay] == kept },
         "effects: setDelay with a non-finite argument is ignored, one line each (lines %; controls % then %)".format(
             lines.asArray, before, after));
 }.value;
@@ -1317,7 +1412,7 @@ checkFdn.value;
 command.(\setBypass, 0, 0); command.(\setBypass, 1, 0);
 command.(\setFilter, 5000.0, 0.5, 0, 0.0);
 command.(\setDelay, 0.375, 0.4, 0.0, 0);
-command.(\setReverb, 0.3, 0.8, 0.5);
+command.(\setReverb, 0.43, 0.8, 0.5, 1);
 command.(\setMasterDrift, 0.01);
 server.sync;
 }

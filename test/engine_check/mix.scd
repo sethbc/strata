@@ -2,7 +2,8 @@
 // The per-voice mix stage (\strataVoiceMix, lib/engine/StrataMix.sc): that
 // every voice plays exactly as 3.2's grain synths did (design 3.3 §0c.4), on
 // the server, against references that hold 3.2's voice filter, level, sends
-// and mirror in the grain synth; the stage's placement, persistence, values
+// and mirror in the grain synth (with 3.8's plain output law: the harness's
+// voiceOutput32, so the comparisons stay exact); the stage's placement, persistence, values
 // and bad-value reset. See docs/notes/engine/mix.md.
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
@@ -19,7 +20,7 @@ var neutralGrain = [\posSpread, 0, \panSpread, 0, \pitchShift, 1.0, \bufPos, 0.3
     \grainMode, 0, \reverseProb, 0, \pitchJitter, 0, \panJitter, 0, \sizeJitter, 0, \intervalCount, 0, \quantize, 0,
     \loopStart, 0, \loopLength, 1, \freeze, 0];
 var stageOf = { arg target; engine.synths[engine.voiceMixKey(target)] };
-var defaults = (amp: 0.5, filterType: 0, filterFreq: 5000, filterRes: 0.5, filterMix: 0, delaySend: 1, reverbSend: 1,
+var defaults = (amp: 0.5, filterType: 0, filterFreq: 5000, filterRes: 0.5, filterMix: 0, dry: 1, delaySend: 1, reverbSend: 1,
     modBus: nil, modAmt: 0);
 var rate = server.sampleRate.asInteger;
 var slotPaths = [h.tempDir +/+ "mix-slot-0.wav", h.tempDir +/+ "mix-slot-1.wav"];
@@ -42,7 +43,7 @@ var addSplitReferences = {
         var modSig = (modSigs * c[\modAmpAmts]).sum.clip(-2, 2) * c[\modLevel];
         sig = h.voiceFilter32(grain[\sig], c[\filterType], c[\filterFreq], c[\filterRes], c[\filterMix]);
         sig = sig * grain[\fade] * (c[\amp] * (1 + modSig) * (1 + (accent * c[\accentAmt]))).clip(0, 2);
-        h.voiceOutput32(sig, c[\out], c[\mirrorOut], c[\mirrorLevel], c[\delaySend], c[\reverbSend]);
+        h.voiceOutput32(sig, c[\out], c[\mirrorOut], c[\mirrorLevel], c[\delaySend], c[\reverbSend], c[\dry]);
     };
     var controls = {
         (
@@ -57,7 +58,7 @@ var addSplitReferences = {
             intervals: (1..8).collect({ arg index; ("interval" ++ index).asSymbol.kr(0) }),
             intervalCount: \intervalCount.kr(0), intervalProb: \intervalProb.kr(1), quantize: \quantize.kr(0), scaleNote: \scaleNote.kr(60),
             filterType: \filterType.kr(0), filterFreq: \filterFreq.kr(5000), filterRes: \filterRes.kr(0.5), filterMix: \filterMix.kr(0),
-            delaySend: \delaySend.kr(1), reverbSend: \reverbSend.kr(1), fastMod: 0 ! 5,
+            dry: \dry.kr(1), delaySend: \delaySend.kr(1), reverbSend: \reverbSend.kr(1), fastMod: 0 ! 5,
             // (3.5's note controls, at their neutral defaults: the grain's own note)
             noteRate: 1, noteSize: \noteSize.kr(0), noteBend: \noteBend.kr(1), noteGate: \noteGate.kr(1), noteAmp: \noteAmp.kr(1),
             t_accent: \t_accent.tr(0)
@@ -93,10 +94,11 @@ var refPairs = { arg state, target, source, settings;
     var modBus = settings[\modBus] ?? { engine.silentBus.index };
     var pairs = [
         \out, state[\refBus].index, \mirrorOut, state[\refBus].index + 6,
-        \delaySendOut, state[\refBus].index + 2, \reverbSendOut, state[\refBus].index + 4, \fxMixIn, engine.mixBus(\fxMix).index,
+        \delaySendOut, state[\refBus].index + 2, \reverbSendOut, state[\refBus].index + 4,
         \grainSize, 0.1, \grainDensity, 20, \pitchShift, 1, \posSpread, 0, \panSpread, 0, \envBuf, -1, \grainMode, 0,
         \filterType, settings[\filterType], \filterFreq, settings[\filterFreq], \filterRes, settings[\filterRes],
-        \filterMix, settings[\filterMix], \delaySend, settings[\delaySend], \reverbSend, settings[\reverbSend], \pan, 0, \bend, 1, \history, 0
+        \filterMix, settings[\filterMix], \dry, settings[\dry], \delaySend, settings[\delaySend], \reverbSend, settings[\reverbSend],
+        \pan, 0, \bend, 1, \history, 0
     ];
     if (source == 0) {
         var ring = engine.ringBuffersFor(target, 0);
@@ -148,7 +150,7 @@ var withComparison = { arg target, body, verbatim = false;
 // The voice's values on the engine (the stage's lags settle before anything is compared)
 var prepareVoice = { arg target, source, settings;
     neutralGrain.pairsDo({ arg name, value; command.(\setGrainParam, target, name, value) });
-    [\filterType, \filterFreq, \filterRes, \filterMix, \delaySend, \reverbSend].do({ arg name;
+    [\filterType, \filterFreq, \filterRes, \filterMix, \dry, \delaySend, \reverbSend].do({ arg name;
         command.(\setGrainParam, target, name, settings[name]) });
     command.(\setGrainSource, target, source);
     server.sync; 0.3.wait;
@@ -305,7 +307,7 @@ var checkGroupOrder = {
 };
 var checkGrainDefsLostControls = {
     var removed = [\amp, \accentAmt, \modLevel, \modAmpAmt1, \modAmpAmt2, \modAmpAmt3, \mirrorOut, \mirrorLevel,
-        \filterType, \filterFreq, \filterRes, \filterMix, \delaySend, \reverbSend, \delaySendOut, \reverbSendOut, \fxMixIn];
+        \filterType, \filterFreq, \filterRes, \filterMix, \dry, \delaySend, \reverbSend, \delaySendOut, \reverbSendOut, \fxMixIn];
     var left = h.grainDefs.collect({ arg name;
         SynthDescLib.global.at(name).controlNames.collect(_.asSymbol).select({ arg control; removed.includes(control) })
     }).flatten;
@@ -316,17 +318,17 @@ var checkStageValues = {
     var stage = stageOf.(voice), silentIndex = engine.silentBus.index, before;
     var send = { arg name, value; command.(\setGrainParam, voice, name, value) };
     command.(\voiceOn, voice, 220.0, 0.25, 0.0, 0.1, 20.0, 1.0); server.sync;
-    [\filterType, \filterFreq, \filterRes, \filterMix, \delaySend, \reverbSend].do({ arg name, index;
-        var value = [2, 800, 0.7, 0.75, 0.2, 0.4][index];
+    [\filterType, \filterFreq, \filterRes, \filterMix, \dry, \delaySend, \reverbSend].do({ arg name, index;
+        var value = [2, 800, 0.7, 0.75, 0.5, 0.2, 0.4][index];
         send.(name, value);
     });
     server.sync;
-    check.([\filterType, \filterFreq, \filterRes, \filterMix, \delaySend, \reverbSend].every({ arg name, index;
-        var value = [2, 800, 0.7, 0.75, 0.2, 0.4][index];
+    check.([\filterType, \filterFreq, \filterRes, \filterMix, \dry, \delaySend, \reverbSend].every({ arg name, index;
+        var value = [2, 800, 0.7, 0.75, 0.5, 0.2, 0.4][index];
         getControl.(stage, name).equalWithPrecision(value) and: { engine.grainControls[voice][name] == value }
-    }), "mix: the six filter and send names reach the stage and are kept in grainControls");
-    [\filterType, \filterFreq, \filterRes, \filterMix].do({ arg name, index;
-        send.(name, [0, 5000, 0.5, 0][index]) });
+    }), "mix: the seven filter, dry and send names reach the stage and are kept in grainControls");
+    [\filterType, \filterFreq, \filterRes, \filterMix, \dry].do({ arg name, index;
+        send.(name, [0, 5000, 0.5, 0, 1][index]) });
     [\delaySend, \reverbSend].do({ arg name; send.(name, 1) });
     command.(\setVoiceParam, voice, \amp, 0.3);
     command.(\setModSource, voice, 2, 3);
@@ -586,15 +588,20 @@ if (hasStage.not) {
     checkStagePersistence.value;
     checkGroupOrder.value;
 
-    // Steady states: lowpass 1 kHz res 0.9, sends 0.6 and 0.3, delay and reverb mixes 0.5 and 0.4
+    // Steady states: lowpass 1 kHz res 0.9, sends 0.6 and 0.3 (the delay's and
+    // the reverb's levels, 0.5 and 0.4, no longer reach the stage: 3.8's plain
+    // sends)
     command.(\setDelay, 0.25, 0.4, 0.5, 0);
-    command.(\setReverb, 0.4, 0.8, 0.5);
+    command.(\setReverb, 0.4, 0.8, 0.5, 1);
     server.sync; 0.2.wait;
     {
         var settings = defaults.copy.putAll((filterFreq: 1000, filterRes: 0.9, filterMix: 1, delaySend: 0.6, reverbSend: 0.3, amp: 0.8));
         var sineSynth = Synth(\strataCheckModSine, [\out, engine.modBuses[0]], engine.voiceGroup, \addToHead);
         compareSteady.("mix: a synth voice equals 3.2's grain synth within 1e-6 in steady state", 0, settings);
         compareSteady.("mix: an input voice equals 3.2's within 1e-6 in steady state", engine.inputSource, settings);
+        // 3.8's dry level: the stage's dry bus at 0.5, its sends taken before it
+        compareSteady.("mix: a buffer voice at dry 0.5 equals the reference's plain law within 1e-6 in steady state", 1,
+            settings.copy.putAll((dry: 0.5)));
         compareSteady.("mix: a buffer voice equals 3.2's within 1e-6 in steady state, with crossmod, accents and an amp move", 1, settings, { arg state;
             server.makeBundle(nil, {
                 command.(\setModSource, voice, 1, 0);
@@ -622,7 +629,7 @@ if (hasStage.not) {
     // Bypassed: the filter mix back to 0 (and the delay and reverb at their
     // defaults, their mixes broadcast), the lags settled
     command.(\setDelay, 0.375, 0.4, 0.0, 0);
-    command.(\setReverb, 0.3, 0.8, 0.5);
+    command.(\setReverb, 0.43, 0.8, 0.5, 1);
     server.sync; 1.0.wait;
     {
         var settings = defaults.copy.putAll((amp: 0.8));
@@ -674,8 +681,8 @@ if (hasStage.not) {
 
     tone.free;
     command.(\setDelay, 0.375, 0.4, 0.0, 0);
-    command.(\setReverb, 0.3, 0.8, 0.5);
-    [\filterType, 0, \filterFreq, 5000, \filterRes, 0.5, \filterMix, 0, \delaySend, 1, \reverbSend, 1].pairsDo({ arg name, value;
+    command.(\setReverb, 0.43, 0.8, 0.5, 1);
+    [\filterType, 0, \filterFreq, 5000, \filterRes, 0.5, \filterMix, 0, \dry, 1, \delaySend, 1, \reverbSend, 1].pairsDo({ arg name, value;
         command.(\setGrainParam, voice, name, value) });
     slotPaths.do(File.delete(_));
     2.do({ arg slot; command.(\clearBuffer, slot) });

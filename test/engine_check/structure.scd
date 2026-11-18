@@ -81,7 +81,7 @@ var engineLeft = { arg target;
     var buses = [target.inputBus, target.silentBus, target.mainBus, target.filterBus, target.delayBus, target.reverbBus]
         ++ target.granBuses ++ target.modBuses ++ target.recordFrameBuses ++ (rings[\phaseBuses] ? [])
         ++ (record[\headBuses] ? []) ++ (record[\voiceTaps] ? []) ++ [record[\tapSink], record[\idleHead]]
-        ++ [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost, \fxMix].collect({ arg name; mix[name] })
+        ++ [\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].collect({ arg name; mix[name] })
         ++ (mix[\synthPaths] ? []) ++ (mix[\otherPaths] ? []);
     var buffers = target.envBuffers ++ target.buffersL ++ target.buffersR
         ++ (rings[\voiceL] ? []) ++ (rings[\voiceR] ? []) ++ [rings[\inputL], rings[\inputR], target.areaState[\scale][\buffer]]
@@ -461,7 +461,7 @@ h.stopAllVoices;
     var group = Group.after(engine.processGroup), ids, values;
     var args = { arg out; [\out, out, \mirrorOut, sink, \bufnumL, engine.buffersL[0].bufnum, \bufnumR, engine.buffersR[0].bufnum,
         \bufRateScale, 1, \bufFrames, rate * 2, \bufPos, 0.25, \grainSize, 0.1, \grainMode, 1, \posSpread, 0, \panSpread, 0,
-        \delaySendOut, sink.index, \reverbSendOut, sink.index, \fxMixIn, engine.mixBus(\fxMix).index] };
+        \delaySendOut, sink.index, \reverbSendOut, sink.index] };
     file.openWrite(path);
     h.writePeriodicSeconds(file, period, 2, rate);
     file.close;

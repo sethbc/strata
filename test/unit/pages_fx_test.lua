@@ -562,7 +562,7 @@ test("the delay's time row shows and edits the division while synced; K3 is stil
   local S = local_value("S")
   local labels = {}
   for index = row_index("delay_time"), row_index("delay_time") + 4 do labels[#labels + 1] = S.FX_PAGE.rows[index].label end
-  assert_equal(table.concat(labels, " "), "time fdbk mix sync ping", "the delay section's rows")
+  assert_equal(table.concat(labels, " "), "time fdbk level sync ping", "the delay section's rows")
   assert_equal(S.FX_PAGE.rows[row_index("delay_pingpong")].effect, "delay")
   -- sync: E3 turns it on and off
   select_fx_row("delay_sync")

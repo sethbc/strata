@@ -561,7 +561,7 @@ test("randomize records the old values and undo restores them (#557)", function(
   local context = load_strata(); finish_startup(context)
   local mutation = local_value("S").lib.mutation
   local FX = page_index("FX")
-  assert_near(params:get("reverb_mix"), 0.3, 1e-9, "reverb mix at its default")
+  assert_near(params:get("reverb_mix"), 0.43, 1e-9, "reverb mix at its default")
   assert_near(params:get("reverb_size"), 0.8, 1e-9, "reverb size at its default")
   local size_saw_mix
   local engine_calls = #context.engine_calls
@@ -577,12 +577,12 @@ test("randomize records the old values and undo restores them (#557)", function(
   assert_equal(undo.page, FX, "S.undo.page")
   assert_equal(undo.section, "reverb", "S.undo.section")
   assert_equal(undo.voice, nil, "S.undo.voice: FX has none")
-  assert_near(undo.values.reverb_mix, 0.3, 1e-9, "the old mix is held")
+  assert_near(undo.values.reverb_mix, 0.43, 1e-9, "the old mix is held")
   assert_near(undo.values.reverb_size, 0.8, 1e-9, "the old size is held")
   assert_near(undo.until_time, util.time() + 5, 1e-9, "S.undo.until_time")
   assert_true(local_value("undo_clock") ~= nil, "the expiry clock runs")
   assert_equal(mutation.undo(), true, "undo reports the undo")
-  assert_near(params:get("reverb_mix"), 0.3, 1e-9, "the mix is back")
+  assert_near(params:get("reverb_mix"), 0.43, 1e-9, "the mix is back")
   assert_near(params:get("reverb_size"), 0.8, 1e-9, "the size is back")
   assert_equal(local_value("undo"), nil, "the undo ends")
   assert_equal(local_value("undo_clock"), nil, "with its expiry clock")

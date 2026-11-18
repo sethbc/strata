@@ -154,7 +154,7 @@ var checkGrainSynthSizes = {
         var before = floodFit.value, synths, after;
         synths = stages.collect({ Synth(\strataVoiceMix, [\synthIn, privateBus, \otherIn, privateBus, \out, privateBus,
             \mirrorOut, privateBus, \tapOut, privateBus, \delaySendOut, privateBus.index, \reverbSendOut, privateBus.index,
-            \fxMixIn, engine.mixBus(\fxMix).index, \modBus1, engine.silentBus, \modBus2, engine.silentBus, \modBus3, engine.silentBus], group) });
+            \modBus1, engine.silentBus, \modBus2, engine.silentBus, \modBus3, engine.silentBus], group) });
         server.sync; 0.1.wait;
         after = floodFit.value;
         synths.do(_.free); server.sync;

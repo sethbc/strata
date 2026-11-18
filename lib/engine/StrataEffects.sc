@@ -1,6 +1,7 @@
 // StrataEffects.sc
-// The effects area: the master filter (three instances, one per mix bus),
-// the delay and the reverb as returns, the master sum and output, their
+// The effects area: the master filter (three instances, one on each bus
+// it filters before the effects), the delay and the reverb as returns at
+// their levels, the master sum and output, their
 // commands (setFilter, setReverb, setMasterDrift, setBypass; the delay's
 // line, def and setDelay are in StrataDelay.sc) and the chain at the tail
 // of the engine group. The bypass frees the delay or the reverb and
@@ -29,17 +30,17 @@
     // The effects setBypass frees, by its effect number (0 delay, 1 reverb)
     bypassKeys { ^[\delay, \reverb] }
 
-    // How long a bypass waits after broadcasting the mix as 0 before it
-    // frees the node: the readers' lag (fxMixLag) plus one block
+    // How long a bypass waits after setting the node's level to 0 before it
+    // frees it: the level's lag (fxMixLag) plus one block
     bypassFadeTime {
         ^this.fxMixLag + (context.server.options.blockSize / context.server.sampleRate)
     }
 
     allocEffectBuses {
         var state = areaState[\effects];
-        // mainBus: the dry part of every grain synth's output (out); filterBus:
-        // it after the master filter; delayBus: the delay's return (m_d D);
-        // reverbBus: the reverb's (m_r R). The send buses are the mix area's.
+        // mainBus: every stage's dry output (out); filterBus: it after the
+        // master filter; delayBus: the delay's return (at its level);
+        // reverbBus: the reverb's. The send buses are the mix area's.
         mainBus = Bus.audio(context.server, 2);
         filterBus = Bus.audio(context.server, 2);
         delayBus = Bus.audio(context.server, 2);
@@ -101,14 +102,18 @@
         ^cutoff.min((2 ** Slew.kr(cutoff.log2, this.cutoffRiseRate, 1e6)) * 1.0001)
     }
 
+    // The gain on the master's sum (3.8 design §7.1): 3.7's dry share at
+    // its default reverb mix (1 - 0.3), so with the reverb's level at 0.43
+    // (0.3 / 0.7) a default start sounds as 3.7.0's and the pre-master tap,
+    // the limiter and the saturator see what they saw. (masterAmp's
+    // amp=0.7 is another 0.7, at the output.)
+    masterSumGain { ^0.7 }
+
     // The master's input: the filtered dry bus (in), the delay's return
-    // (delayIn, m_d D) through the reverb's dry share (1 - m_r, from fxMix,
-    // lagged as every mix reader) and the reverb's return (reverbIn, m_r R):
-    // dry + m_d (1 - m_r) D + m_r R, which at sends of 1 is 3.0's chain
-    masterSum { arg in, delayIn, reverbIn, fxMix;
-        // (the engine broadcasts mixes already clipped to 0-1: liveMix)
-        var reverbMix = In.kr(fxMix + 1, 1).lag(this.fxMixLag);
-        ^In.ar(in, 2) + (In.ar(delayIn, 2) * (1 - reverbMix)) + In.ar(reverbIn, 2)
+    // (delayIn) and the reverb's (reverbIn), each at its own level, summed
+    // and times masterSumGain. The pre-master record tap reads it too.
+    masterSum { arg in, delayIn, reverbIn;
+        ^(In.ar(in, 2) + In.ar(delayIn, 2) + In.ar(reverbIn, 2)) * this.masterSumGain
     }
 
     // The gain on the input of a delay or reverb node: 1 from its first
@@ -132,11 +137,11 @@
     fdnDiffuserSeconds { ^[[0.0053, 0.0079, 0.0131, 0.0239], [0.0061, 0.0089, 0.0149, 0.0271]] }
 
     addEffectDefs {
-        // Master multimode filter (multimodeFilter), one on each mix bus
-        // (dry, delay send, reverb send): the filter is linear, so filtering
-        // the three parts equals filtering their sum, as 3.0 did before the
-        // delay. Its input first goes through the NaN guard: any NaN or inf
-        // (and denormal) sample is replaced with 0 (CheckBadValues), so a
+        // Master multimode filter (multimodeFilter), one on each bus it
+        // filters before the effects (dry, delay send, reverb send; never the
+        // returns): each filters what goes to one place. Its input first
+        // goes through the NaN guard: any NaN or inf (and denormal) sample
+        // is replaced with 0 (CheckBadValues), so a
         // voice that blows up can never poison the delay feedback or the
         // reverb for good. mix 0 (the default) passes the input unchanged.
         SynthDef(\strataFilter, {
@@ -150,11 +155,15 @@
         this.addDelayDef;
 
         // The standard tier's reverb: FreeVerb2 fully wet on the filtered
-        // reverb send plus the delay's return (through liftFade, as the
-        // delay's), returned at its mix (m_r R)
+        // reverb send plus delayToReverb (0-1, lagged; at 1, the default, the
+        // echoes are reverberated as in 3.7, at 0 a voice with no reverb send
+        // has dry echoes) of the delay's return (through liftFade, as the
+        // delay's), returned at its level (mix). The clips stay literals in
+        // the defs: the Lua stub reads setReverb's limits from them
         SynthDef(\strataReverb, {
-            arg in, delayIn, out, mix=0.3, size=0.8, damp=0.5, fadeIn=0;
-            var sig = (In.ar(in, 2) + In.ar(delayIn, 2)) * this.liftFade(fadeIn);
+            arg in, delayIn, out, mix=0.43, size=0.8, damp=0.5, delayToReverb=1, fadeIn=0;
+            var sig = (In.ar(in, 2) + (In.ar(delayIn, 2) * delayToReverb.clip(0, 1).lag(this.fxMixLag)))
+                * this.liftFade(fadeIn);
             var wet = FreeVerb2.ar(sig[0], sig[1], 1, size, damp);
             Out.ar(out, wet * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
@@ -170,9 +179,10 @@
         // drift slowly (LFNoise1) against metallic ringing. Left and right
         // are tapped from alternate lines. Every delay is sized by a constant.
         SynthDef(\strataReverbFDN, {
-            arg in, delayIn, out, mix=0.3, size=0.8, damp=0.5, fadeIn=0;
+            arg in, delayIn, out, mix=0.43, size=0.8, damp=0.5, delayToReverb=1, fadeIn=0;
             var room = size.clip(0, 1).lag(0.1), damping = damp.clip(0, 1).lag(0.1) * 0.4;
-            var sig = (In.ar(in, 2) + In.ar(delayIn, 2)) * this.liftFade(fadeIn);
+            var sig = (In.ar(in, 2) + (In.ar(delayIn, 2) * delayToReverb.clip(0, 1).lag(this.fxMixLag)))
+                * this.liftFade(fadeIn);
             var feedbackBase = 0.7 + (0.28 * room), reference = 1378 * SampleDur.ir;
             var drift = [0, 0, LFNoise1.kr(0.31) * 0.0006, 0, 0, 0, LFNoise1.kr(0.43) * 0.0005, 0];
             var lengths = this.fdnLineSeconds * (0.6 + (0.4 * room)) + drift;
@@ -198,11 +208,11 @@
             Out.ar(out, wet * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
 
-        // Master output: the mix (masterSum), then drift, the limiter and
+        // Master output: the sum (masterSum), then drift, the limiter and
         // the soft saturation.
         SynthDef(\strataMaster, {
-            arg in, delayIn, reverbIn, fxMix, out, amp=0.7, drift=0.01;
-            var sig = this.masterSum(in, delayIn, reverbIn, fxMix);
+            arg in, delayIn, reverbIn, out, amp=0.7, drift=0.01;
+            var sig = this.masterSum(in, delayIn, reverbIn);
             var driftMod;
 
             // Tape-style pitch drift at a fixed slow rate; drift sets the depth
@@ -234,14 +244,13 @@
             this.setSynth(\master, \drift, msg[1]);
         });
 
-        // msg: mix, size, damp. Kept for a bypassed reverb's next node; while
-        // bypassed the mix sent and broadcast stays 0
-        this.addCommand(\setReverb, "fff", { arg msg;
-            this.keepEffectControls(\reverb, (mix: msg[1], size: msg[2], damp: msg[3]));
-            context.server.makeBundle(nil, {
-                this.setSynth(\reverb, \mix, msg[1] * this.effectLive(\reverb), \size, msg[2], \damp, msg[3]);
-                this.broadcastFxMix;
-            });
+        // msg: mix (the return's level), size, damp, delayToReverb. All four
+        // kept for a bypassed reverb's next node; while bypassed the level
+        // sent stays 0
+        this.addCommand(\setReverb, "ffff", { arg msg;
+            this.keepEffectControls(\reverb, (mix: msg[1], size: msg[2], damp: msg[3], delayToReverb: msg[4]));
+            this.setSynth(\reverb, \mix, msg[1] * this.effectLive(\reverb), \size, msg[2], \damp, msg[3],
+                \delayToReverb, msg[4]);
         });
 
         // msg: freq, res, filterType (0 lowpass, 1 highpass, 2 bandpass), mix;
@@ -275,30 +284,18 @@
         ^if (areaState[\effects][\bypassed][key]) { 0 } { 1 }
     }
 
-    // The mix an effect's readers use: its kept mix, 0 while bypassed
-    liveMix { arg key;
-        ^areaState[\effects][\controls][key][\mix].clip(0, 1) * this.effectLive(key)
-    }
-
-    // Broadcast the delay and reverb mixes on fxMix (voiceOutput's and the
-    // master's readers). Inside the bundle that sets the nodes' own mixes,
-    // so every reader moves in the same block
-    broadcastFxMix {
-        this.mixBus(\fxMix).setn([this.liveMix(\delay), this.liveMix(\reverb)]);
-    }
-
     // Bypass an effect (\delay, \reverb) or lift its bypass. A bypass sets
-    // its mix and the broadcast mix to 0 (so the dry gains return to full
+    // its level to 0 (the node's mix, so its return fades out over its lag
     // and nothing jumps), then frees the node after bypassFadeTime: its CPU
     // and its few KB of the pool come back (the delay's line is buffers,
     // kept: the free's bundle empties it, emptyDelayLine). Lifting it
-    // inside that wait cancels the free and restores the mix; lifting it
+    // inside that wait cancels the free and restores the level; lifting it
     // later creates the node again in its place, from the kept controls at
-    // mix 0 and with fadeIn 1 (its input rises over fxMixLag, so the new
-    // line records no step: liftFade, #308), then sets the kept mix (both in
-    // one bundle), which fades in through the lag. A free in flight reaches
-    // the server before that creation. Only this frees or creates an effect:
-    // a mix of 0 only silences.
+    // level 0 and with fadeIn 1 (its input rises over fxMixLag, so the new
+    // line records no step: liftFade, #308), then sets the kept level (both
+    // in one bundle; the node clips it), which fades in through the lag. A
+    // free in flight reaches the server before that creation. Only this
+    // frees or creates an effect: a level of 0 only silences.
     setEffectBypass { arg key, bypassed;
         var state = areaState[\effects], token;
         if (state[\bypassed][key] == bypassed) { ^this };
@@ -306,13 +303,10 @@
         if (bypassed) {
             token = Object.new;
             state[\pendingFrees][key] = token;
-            context.server.makeBundle(nil, {
-                this.setSynth(key, \mix, 0);
-                this.broadcastFxMix;
-            });
+            this.setSynth(key, \mix, 0);
             // from the handler's own time: sclang runs an OSC handler with
             // its thread's time at when it runs, so however late it runs the
-            // wait counts from the bundle above (docs/notes/engine/effects.md)
+            // wait counts from the message above (docs/notes/engine/effects.md)
             SystemClock.sched(this.bypassFadeTime, {
                 if (state[\pendingFrees][key] === token) {
                     state[\pendingFrees].removeAt(key);
@@ -333,20 +327,20 @@
                     if (key == \delay) { this.startDelay(synths[\filterReverb], \addAfter, 0, 1) } {
                         this.startReverb(synths[\master], \addBefore, 0, 1) };
                 };
-                this.setSynth(key, \mix, this.liveMix(key));
-                this.broadcastFxMix;
+                this.setSynth(key, \mix, state[\controls][key][\mix]);
             });
         };
     }
 
     // The reverb node for the tier (high: the FDN), on the filtered reverb
     // send and the delay's return, writing reverbBus, from the kept controls
-    // (mix: that mix instead, when given; fadeIn 1: its input fades in,
+    // (mix: that level instead, when given; fadeIn 1: its input fades in,
     // liftFade)
     startReverb { arg target, addAction, mix, fadeIn = 0;
         var controls = areaState[\effects][\controls][\reverb];
         var args = [\in, this.mixBus(\reverbSendPost), \delayIn, delayBus, \out, reverbBus,
-            \mix, mix ? controls[\mix], \size, controls[\size], \damp, controls[\damp], \fadeIn, fadeIn];
+            \mix, mix ? controls[\mix], \size, controls[\size], \damp, controls[\damp],
+            \delayToReverb, controls[\delayToReverb], \fadeIn, fadeIn];
         if (tier == \high) {
             synths[\reverb] = Synth(\strataReverbFDN, args, target, addAction);
         } {
@@ -366,8 +360,7 @@
         // the kept controls start at the SynthDefs' defaults (the Lua params'
         // defaults: the script never bangs its params)
         state[\controls][\delay] = this.effectDefaults(\strataDelay, [\time, \feedback, \mix, \pingPong]);
-        state[\controls][\reverb] = this.effectDefaults(\strataReverb, [\mix, \size, \damp]);
-        this.broadcastFxMix;
+        state[\controls][\reverb] = this.effectDefaults(\strataReverb, [\mix, \size, \damp, \delayToReverb]);
 
         // The chain at the tail of the engine group, in signal order: the
         // three master filters (dry, delay send, reverb send), the delay, the
@@ -380,7 +373,7 @@
         this.startDelay(context.xg, \addToTail);
         this.startReverb(context.xg, \addToTail);
         synths[\master] = Synth(\strataMaster, [\in, filterBus, \delayIn, delayBus, \reverbIn, reverbBus,
-            \fxMix, this.mixBus(\fxMix), \out, context.out_b], context.xg, \addToTail);
+            \out, context.out_b], context.xg, \addToTail);
     }
 
     // The chain's synths (quietly, as the voices' are freed); a bypass

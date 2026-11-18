@@ -92,9 +92,12 @@ var chainDefs = [\strataFilter, \strataDelay, \strataReverb, \strataMaster];
 // them and a later comparison against 3.2's sound stays one. The stable
 // helpers they call (openedGate, killFade, panBalance, grainRate, grainDur,
 // grainPan, scanRate, ringScanOffset and the ring constants) are still the
-// engine's own. The voiceOutput copy reads this engine's fx mix bus and
-// sends by its default control values; every comparison sets them through
-// the control names (delaySendOut, reverbSendOut, fxMixIn) on both synths.
+// engine's own. The voiceOutput copy is 3.8's plain law (the dry bus the
+// signal times dry, each send the signal times that send; its dry argument
+// 1 in the verbatim 3.2 defs, which had none), so the comparisons against
+// 3.2's sound hold 3.2's defs with 3.8's output law. It writes the send
+// buses by its default control values; every comparison sets them through
+// the control names (delaySendOut, reverbSendOut) on both synths.
 // Each def also bakes in this engine's scaleBuffer bufnum at def time
 // (grainRate's quantize), so replaceEngine builds them again with the new
 // engine.
@@ -113,13 +116,10 @@ var addDefs32 = { arg e;
         multimodeFilter32.(sig, filterFreq.lag(0.05).clip(20, 20000), filterRes.clip(0, 1), filterType.round,
             filterMix.lag(0.05).clip(0, 1))
     };
-    var voiceOutput32 = { arg sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend;
-        var mixes = In.kr(\fxMixIn.kr(e.mixBus(\fxMix).index), 2).lag(e.fxMixLag);
-        var toDelay = delaySend.clip(0, 1).lag(e.fxMixLag), toReverb = reverbSend.clip(0, 1).lag(e.fxMixLag);
-        var pastDelay = 1 - (toDelay * mixes[0]);
-        Out.ar(out, sig * (pastDelay * (1 - (toReverb * mixes[1]))));
-        Out.ar(\delaySendOut.kr(e.mixBus(\delaySend).index), sig * toDelay);
-        Out.ar(\reverbSendOut.kr(e.mixBus(\reverbSend).index), sig * (toReverb * pastDelay));
+    var voiceOutput32 = { arg sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend, dry;
+        Out.ar(out, sig * dry.clip(0, 1).lag(e.fxMixLag));
+        Out.ar(\delaySendOut.kr(e.mixBus(\delaySend).index), sig * delaySend.clip(0, 1).lag(e.fxMixLag));
+        Out.ar(\reverbSendOut.kr(e.mixBus(\reverbSend).index), sig * reverbSend.clip(0, 1).lag(e.fxMixLag));
         Out.ar(mirrorOut, sig * mirrorLevel);
     };
     // (3.2's clips: control-rate Clips that read a grain's bounds once per
@@ -203,7 +203,7 @@ var addDefs32 = { arg e;
         sig = voiceFilter32.(sig, c[\filterType], c[\filterFreq], c[\filterRes], c[\filterMix]);
         sig = sig * env * read[\level] * c[\ringLevel].lag(0.05)
             * (c[\amp] * (1 + modSig) * (1 + (accent * c[\accentAmt]))).clip(0, 2);
-        voiceOutput32.(sig, c[\out], c[\mirrorOut], c[\mirrorLevel], c[\delaySend], c[\reverbSend]);
+        voiceOutput32.(sig, c[\out], c[\mirrorOut], c[\mirrorLevel], c[\delaySend], c[\reverbSend], DC.kr(1));
     };
     var grainControls32 = { arg out, gate, grainSize, grainDensity, pitchShift, posSpread, panSpread, envBuf, grainMode,
         t_trig, velocity, amp, bend, kill, pan, accentAmt, mirrorOut, mirrorLevel, modLevel, rateLevel,
@@ -952,8 +952,8 @@ runChecks = {
             // grain synth), for a reference built around the engine's reader
             voiceFilter32: { arg self, sig, filterType, filterFreq, filterRes, filterMix;
                 tail32[\voiceFilter].(sig, filterType, filterFreq, filterRes, filterMix) },
-            voiceOutput32: { arg self, sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend;
-                tail32[\voiceOutput].(sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend) },
+            voiceOutput32: { arg self, sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend, dry;
+                tail32[\voiceOutput].(sig, out, mirrorOut, mirrorLevel, delaySend, reverbSend, dry ?? { DC.kr(1) }) },
             stereoPath: scratchRoot +/+ "stereo.wav", monoPath: scratchRoot +/+ "mono.wav",
             longPath: scratchRoot +/+ "long.wav", textPath: scratchRoot +/+ "not-audio.wav",
             // helpers: each takes the Event first (h.check(condition, message))

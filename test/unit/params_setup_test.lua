@@ -270,9 +270,9 @@ test("fx params: defaults, one exactly sized strata_fx group, scene defaults mat
   end
   assert_true(group_index, "strata_fx group exists")
   assert_equal(params.params[group_index].t, params.tGROUP)
-  -- then the registered fx params (lib/voice_mix.lua's two bypass params,
-  -- lib/delay_sync.lua's sync, division and ping-pong)
-  assert_equal(params.params[group_index].n, #FX_PARAM_IDS + 2 + 3, "group size")
+  -- then the registered fx params (lib/voice_mix.lua's two bypass params
+  -- and its delay to reverb, lib/delay_sync.lua's sync, division and ping-pong)
+  assert_equal(params.params[group_index].n, #FX_PARAM_IDS + 2 + 1 + 3, "group size")
   for offset, param_id in ipairs(FX_PARAM_IDS) do
     assert_equal(params.params[group_index + offset].id, param_id, "group entry " .. offset)
   end
@@ -292,6 +292,19 @@ test("fx params: defaults, one exactly sized strata_fx group, scene defaults mat
     assert_true(in_scene[param_id], param_id .. " is a scene global")
     assert_equal(in_scene[param_id].continuous, param_id ~= "filter_type", param_id .. " continuity")
   end
+end)
+
+-- 3.8 (design §7.1): the returns are levels, and the reverb's starts at
+-- 0.43 (3.7's 0.3 / 0.7) so a default start sounds as 3.7.0's
+test("the reverb's level starts at 0.43 and is named reverb level", function()
+  load_strata()
+  assert_near(params:get("reverb_mix"), 0.43, 1e-9, "the reverb's level starts at 0.43")
+  assert_near(params:lookup_param("reverb_mix").controlspec.default, 0.43, 1e-9, "its spec's default")
+  assert_equal(params:lookup_param("reverb_mix").name, "reverb level", "the reverb's return is named its level")
+  assert_equal(params:lookup_param("delay_mix").name, "delay level", "and the delay's")
+  local global
+  for _, entry in ipairs(local_value("SCENE_GLOBAL_PARAMS")) do if entry.id == "reverb_mix" then global = entry end end
+  assert_near(global.default, 0.43, 1e-9, "its scene default")
 end)
 
 test("source and buffer params: options, defaults, voices table, labels", function()
@@ -623,7 +636,7 @@ test("a PSET has no strata_pset_format, and one that holds the line still loads"
     params:set("v5_res", 0.6); params:set("reverb_mix", 0.9)
     params:read(old_path)
     assert_near(params:get("v5_res"), 0.3, 1e-9, "format line " .. format .. ": the res as written")
-    assert_near(params:get("reverb_mix"), 0.3, 1e-9, "format line " .. format .. ": every other param as written")
+    assert_near(params:get("reverb_mix"), 0.43, 1e-9, "format line " .. format .. ": every other param as written")
   end
   for _, line in ipairs(context.printed) do
     assert_true(not line:find("mirrored", 1, true), "nothing is mirrored: " .. line)
@@ -1029,6 +1042,19 @@ local PARAM_FIXTURE_ALLOWED = {
     why = "groundwork: note off is latch or release (design section 8)"},
   -- 0b: the delay's line is a buffer, so its time reaches 5.4 s (design §0.2)
   {kind = "range", id = "delay_time", max = 5.4, why = "0b: the delay's line is a buffer, 5.4 s (design §0.2)"},
+  -- 1a: plain sends (design §7.1): a dry level per voice, the returns are
+  -- levels (the reverb's 0.43, 3.7's 0.3 / 0.7), the delay into the reverb
+  -- (t 3 is a control)
+  {kind = "added", id = "v<v>_dry", after = "v<v>_filter_mix", why = "1a: each voice's dry level (design section 7.1)",
+    record = {t = 3, name = "dry", default = 1, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01, units = "",
+      string = "100 %"}},
+  {kind = "added", id = "delay_to_reverb", after = "reverb_bypass", why = "1a: the delay into the reverb (design section 7.1)",
+    record = {t = 3, name = "delay to reverb", default = 1, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01,
+      units = "", string = "100 %"}},
+  {kind = "group_size", id = "strata_fx", add = 1, why = "1a: delay_to_reverb joins the fx group"},
+  {kind = "default", id = "reverb_mix", default = 0.43, why = "1a: the reverb's level starts at 0.3 / 0.7 (design section 7.1)"},
+  {kind = "name", id = "delay_mix", name = "delay level", why = "1a: the delay's mix is its return's level"},
+  {kind = "name", id = "reverb_mix", name = "reverb level", why = "1a: the reverb's mix is its return's level"},
 }
 -- 2b: an LFO's destination is its home routing in the matrix (design §4);
 -- its six LFOs' entries follow the list (an LFO is no voice token)

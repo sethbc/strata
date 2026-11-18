@@ -41,10 +41,10 @@
         // Synth(\strataDelay) passes, since a bufnum left at 0 is buffer 0),
         // up to 5.4 s, on the filtered delay send (through liftFade: fadeIn 1
         // on a node a bypass lift creates; the feedback path is not faded).
-        // It returns the delayed signal only, at its mix (lagged as
-        // fxMixBus's readers: m_d D). The time lag avoids zipper noise when
-        // the time changes. pingPong (0-1, lagged 50 ms) crossfades the
-        // lines' inputs linearly: at 0 each line takes its own channel and
+        // It returns the delayed signal only, at its level (mix, lagged
+        // fxMixLag, as every send and return), which the master sums. The
+        // time lag avoids zipper noise when the time changes. pingPong (0-1,
+        // lagged 50 ms) crossfades the lines' inputs linearly: at 0 each line takes its own channel and
         // its own feedback (3.6's graph, exactly); at 1 the left line takes
         // both channels and the right line's feedback, the right line only
         // the left's, so the repeats alternate sides. It plays what 3.7's
@@ -65,8 +65,9 @@
     }
 
     addDelayCommands {
-        // msg: time (s), feedback, mix, pingPong. Kept for a bypassed
-        // delay's next node; while bypassed the mix sent and broadcast stays 0.
+        // msg: time (s), feedback, mix (the return's level), pingPong. Kept
+        // for a bypassed delay's next node; while bypassed the level sent
+        // stays 0.
         // A non-finite argument is ignored with one line, as 3.4's commands
         // ignore one (fastModValuesFinite): a NaN in the node's lag or
         // feedback loop would stay there until a bypass re-created it
@@ -74,11 +75,8 @@
             if (this.fastModValuesFinite(\setDelay, [[\time, msg[1]], [\feedback, msg[2]], [\mix, msg[3]],
                 [\pingPong, msg[4]]])) {
                 this.keepEffectControls(\delay, (time: msg[1], feedback: msg[2], mix: msg[3], pingPong: msg[4]));
-                context.server.makeBundle(nil, {
-                    this.setSynth(\delay, \time, msg[1], \feedback, msg[2], \mix, msg[3] * this.effectLive(\delay),
-                        \pingPong, msg[4]);
-                    this.broadcastFxMix;
-                });
+                this.setSynth(\delay, \time, msg[1], \feedback, msg[2], \mix, msg[3] * this.effectLive(\delay),
+                    \pingPong, msg[4]);
             };
         });
     }
