@@ -14,6 +14,7 @@ Each voice plays one synth type, picked on its VOICE page's `type` row (below). 
 6. **Karplus** - Karplus-Strong plucked string synthesis for organic, physical timbres
 7. **Ring** - Ring modulation between two oscillators for metallic, bell-like textures
 8. **Wave** - A wavetable voice that glides through eight tables, from a pure sine to a bright buzz, with three slightly detuned copies for a slow chorus (3.8; no voice starts on it: choose it on a voice's `type` row)
+1. **Additive** - A bank of up to 16 sine partials over the pitch: a tilt from bright to almost a sine, a stretch that bends the series out of tune, a balance of the odd and even partials, and one slow wander of the brightness. No voice starts on it
 
 ### Voice types
 
@@ -97,6 +98,16 @@ Each type's own parameters, by the names the VOICE page's synth section, MAIN an
 | `morphRate` | 0.01-1 Hz | 0.05 | How fast the place wanders on its own (new random values a second) |
 | `morphDepth` | 0-1 | 0.2 | How far it wanders either way of `morph`: 0 holds it still, 1 can sweep the whole bank |
 | `detune` | 0-0.02 | 0.003 | How far apart the three copies on each side are tuned, as a fraction of the pitch (the left above it, the right below): 0 is one clean tone, higher a faster, wider chorus |
+
+**Additive**
+
+| param | range | default | what it does |
+|---|---|---|---|
+| `freq` | 20-2000 Hz | 100 | The pitch: the first partial, the others above it |
+| `tilt` (main) | 0-3 | 1 | How fast the partials fall away: partial k is at 1/k^tilt of the first, so 0 is every partial equal (bright and buzzy), 1 a sawtooth-like slope, 3 almost a plain sine. The whole is kept at one level whatever the tilt |
+| `stretch` | -1-1 | 0 | Bends the series: at 0 the partials are whole multiples of the pitch (harmonic); above it they spread wider, below it they crowd closer, both bell-like and out of tune. A partial that would pass 21.6 kHz is silent |
+| `oddEven` | 0-1 | 0.5 | Which partials sound: 0 the odd ones only (hollow, like a clarinet), 0.5 all of them, 1 the even ones only (the first always sounds) |
+| `wander` | 0.01-1 Hz | 0.2 | The rate of a slow random drift of the tilt, 0.3 either way, which makes the color breathe |
 
 ## Granular Processing
 

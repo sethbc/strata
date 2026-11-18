@@ -77,7 +77,8 @@
             strataPulse: [\width, 0.05, 0.95],
             strataKarplus: [\decay, 0.5, 10],
             strataRing: [\ratio, 0.5, 8],
-            strataWave: [\morph, 0, 1]
+            strataWave: [\morph, 0, 1],
+            strataAdditive: [\tilt, 0, 3]
         )
     }
 

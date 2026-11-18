@@ -2615,7 +2615,7 @@ test("voices-and-grains.md has a row for every synthesis param, with its range, 
         else
           rows_checked = rows_checked + 1
           local spec = record.specs[key]
-          local low, high, unit = row.range:match("^([%d%.]+)%-([%d%.]+) ?(%S*)%s*$")
+          local low, high, unit = row.range:match("^(%-?[%d%.]+)%-(%-?[%d%.]+) ?(%S*)%s*$")
           if not (low and math.abs(tonumber(low) - spec.minval) < 1e-9 and math.abs(tonumber(high) - spec.maxval) < 1e-9) then
             table.insert(problems, where .. ": range '" .. row.range .. "' is not " .. spec.minval .. "-" .. spec.maxval)
           elseif unit ~= (spec.units or "") then
