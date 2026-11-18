@@ -725,6 +725,9 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     -- engine ignores another, with one line); the clear takes no argument
     setDelayFreeze = function(args) return range("frozen", args[1], 0, 1) end,
     clearDelay = none,
+    -- 3.8's shimmer (design §7.4): the amounts 0-1 and the ratio 0.5-4 are the
+    -- defs' clips (argument_limits), a non-finite value the engine's line
+    setShimmer = none,
     -- the engine ignores a root outside 0-11 or a mask outside 1-4095: Lua never sends one
     setScale = function(args) return range("root", args[1], 0, 11) or range("mask", args[2], 1, 4095) end,
     -- 3.8's tuning (design §6.2), as the engine checks it, anything else

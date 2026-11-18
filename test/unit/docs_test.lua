@@ -625,8 +625,8 @@ end
 test("each FX param's controlspec lies within the engine's limit for its argument (#51)", function()
   local problems, compared = fx_specs_outside_engine_limits(load_strata())
   assert_equal(#problems, 0, table.concat(problems, "; "))
-  assert_equal(compared, 9,
-    "filter freq, res and mix; delay time, feedback, mix and ping-pong; reverb mix; delay to reverb compared")
+  assert_equal(compared, 11,
+    "filter freq, res and mix; delay time, feedback, mix and ping-pong; reverb mix; delay to reverb; shimmer's two amounts compared")
   local widened, count = patched_script('controlspec%.new%(0, 0%.95, "lin", 0%.01, 0%.4%)', 'controlspec.new(0, 0.99, "lin", 0.01, 0.4)')
   assert_equal(count, 1, "delay feedback patch applies")
   problems = fx_specs_outside_engine_limits(load_strata(widened))
@@ -641,7 +641,7 @@ test("fx_commands reads every setSynth in a command body (#51)", function()
     "this.setSynth(\\filter, \\freq, msg[1], \\res, msg[2]);\n            "
       .. "this.setSynth(\\filter, \\filterType, msg[3], \\mix, msg[4]);")
   assert_equal(count, 1, "setFilter patch applies")
-  patched, count = patched:gsub("(this%.setSynth%(\\reverb, [^;]*;)", "%1 this.setSynth(\\master, \\drift, msg[3]);")
+  patched, count = patched:gsub("(this%.setSynth%(\\reverb, \\mix[^;]*;)", "%1 this.setSynth(\\master, \\drift, msg[3]);")
   assert_equal(count, 1, "setReverb patch applies")
   local function settings_of(spec, command)
     local found = {}
@@ -1070,7 +1070,7 @@ end
 
 -- The engine check's runner and its area files (3.2 Wave 0b)
 local ENGINE_CHECK_AREA_ORDER = { "structure", "voices", "grains", "lifecycle", "memory", "buffers", "files",
-  "effects", "delay", "mix", "performance", "rings", "freeze", "variation", "tuning", "loops", "record", "waveform", "positions", "modulation",
+  "effects", "delay", "shimmer", "mix", "performance", "rings", "freeze", "variation", "tuning", "loops", "record", "waveform", "positions", "modulation",
   "envelopes", "notes", "onsets", "types", "outrings", "soak" }
 
 -- The areas the runner runs only when STRATA_ENGINE_CHECK_AREAS names them

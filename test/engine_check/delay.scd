@@ -66,13 +66,16 @@ SynthDef(\strataCheckDelayWindows, { arg in, ref, out, seconds = 1, windows = #[
 }).add;
 
 // A delay line of the engine's size for a check's own node: two fresh mono
-// buffers (a node on the engine's own would write into its running line)
-allocLine = { 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) }) };
+// buffers (a node on the engine's own would write into its running line),
+// then two shimmer rings (3.8: shiftL, shiftR; a ring left out is buffer 0)
+allocLine = { 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) })
+    ++ 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) }) };
 
 // The one place this area starts a \strataDelay: on its own buses and line,
 // at level 1 unless controls say otherwise
 startCheckDelay = { arg inBus, outBus, line, controls, target, addAction = \addToTail;
-    Synth(\strataDelay, [\in, inBus, \out, outBus, \bufL, line[0], \bufR, line[1], \mix, 1] ++ controls, target, addAction)
+    Synth(\strataDelay, [\in, inBus, \out, outBus, \bufL, line[0], \bufR, line[1], \shiftL, line[2], \shiftR, line[3],
+        \mix, 1] ++ controls, target, addAction)
 };
 
 // A window's field of a case's values (fields: 0 energy, 1 band energy, 2

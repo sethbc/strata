@@ -35,6 +35,16 @@ Both are in the fx group of the PARAMETERS menu.
 - **delay clear** - Empties the delay at once: its echoes stop, and the first echo of what comes in after plays one delay time later. Frozen, it empties the loop (it stays frozen, silent, until released).
 - Neither is saved: a PSET never stores a freeze, and loading one leaves a freeze as it is unless the PSET bypasses the delay; scenes leave both alone. Bypassing the delay, by hand or by a PSET, ends a freeze, and a freeze cannot be set while the delay is bypassed. Both can be mapped to MIDI (PARAMETERS > MAP); the FX page gets their rows in a later 3.8 package.
 
+## Shimmer
+
+Shimmer shifts the pitch of what the delay and the reverb feed back to themselves, so each echo, and the reverb's tail, climbs (or falls) by an interval: a bright, rising halo. Three params, in the fx group of the PARAMETERS menu:
+
+- **shimmer interval** - The step: `oct down` (an octave down), `fifth`, `octave` (at first), `oct+5th` (an octave and a fifth) or `2 oct` (two octaves). Each is a pure ratio, so it sounds the same in any tuning.
+- **shimmer delay** - 0-100%, 0 at first: how much of the delay's feedback is shifted. At 100% each repeat steps by the interval; the delay's feedback still sets how fast the echoes fade, so shimmer never makes them louder, and a frozen delay keeps shimmering at a steady level. A shifted repeat arrives a few tens of milliseconds after the plain one would.
+- **shimmer reverb** - 0-100%, 0 at first: how much of the reverb's sound is shifted, filtered (100 Hz to 6 kHz) and fed back into it. Loud or quiet, the reverb shimmers in proportion to what you send it. At a large reverb size and a high amount the loop would build up by itself: while you play it is held near the level of what you send the reverb, and when the send stops it falls to a quiet halo that does not die away until you turn the amount or the size down. At the largest sizes a steady, dense send fills the reverb by itself, and it then shimmers little.
+- At 0% each effect sounds exactly as it does without shimmer. The interval is shared by both.
+- Scenes keep all three (the interval switches at the end of a transition, the amounts fade); a bypass keeps them, and lifting it brings the effect back with the same shimmer. `shim dly` and `shim rev` are LFO destinations. All three can be mapped to MIDI (PARAMETERS > MAP); the FX page gets their rows in a later 3.8 package.
+
 ## Bypass
 
 `delay bypass` and `reverb bypass` (PARAMS > fx, or K3 on the FX page's delay or reverb rows) switch an effect off completely: it fades out over 50 ms and stops running, which frees its CPU, and the reverb's memory too (the delay's line is kept apart from the memory the voices use, and emptied). Lifting the bypass brings it back at the same level, starting empty, so the echoes or the tail build up again from a 50 ms fade-in (a sound already playing comes into the first echo without a click).
