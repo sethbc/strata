@@ -1,0 +1,6 @@
+-- dusk
+"v1_grain_size": 0.31
+"v1_amp": 0.42
+"buf1_file": pad.wav
+"buf2_file": bell.wav
+"buf3_file": drone.wav

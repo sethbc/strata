@@ -148,6 +148,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 110 | cancel a scene transition | `lib/scenes.lua` |
 | 112 | cancel the morph clock (`S.morph_clock`) and drop the apply it waited for (3.4) | `lib/morph.lua` |
 | 114 | cancel the macros' apply clock (`S.macro_clock`), dropping every apply that waits, and learn's timeout (`S.macro_learn_clock`) (`CLEANUP_ORDER.macros`, 3.4) | `lib/macros.lua` |
+| 116 | cancel a factory set's load clock (`S.factory_clock`) where it is: a copy cut short leaves its `.part`, which the next load writes over, and nothing is marked loaded (`CLEANUP_ORDER.factory`, 3.8) | `lib/factory.lua` |
 | 117 | end the zones editor's learn: cancel its timeout (`S.zones_learn_clock`) and every retired one, and clear the MIDI module's note tap (`CLEANUP_ORDER.zones_learn`, 3.5) | `lib/ui/zones.lua` |
 | 118 | cancel matrix learn's timeout (`S.matrix_learn_clock`) and forget the matrix's offsets (its extra offsets and fast sums), sending nothing; the matrix steps in the LFO clock and has no clock of its own (`CLEANUP_ORDER.matrix`, 3.4) | `lib/matrix.lua` |
 | 119 | end the note module's expression flush (`S.lib.notes.stop_flush`): nothing is due and its LFO step hook sends nothing after it (`CLEANUP_ORDER.notes`, 3.5) | `lib/notes.lua` |
@@ -295,6 +296,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 | `lib/io/<name>.lua`: `rig`, `ports` (before `lib/midi_in.lua`), `actions`, `keyed`, `targets`, `midi_out`, `crow`, `ii`, `jf`, `wsyn`, `wtape`, `er301`, `txo`, `nb`, `controllers`, `remote`, `osc`, `tape` | `io_<name>` | `docs/notes/lua/io/<name>.md` | io_<name>_test.lua |
 | `lib/delay_sync.lua` | `delay_sync` | `docs/notes/lua/delay-sync.md` | delay_sync_test.lua |
 | `lib/fx_hold.lua` | `fx_hold` | `docs/notes/lua/fx-hold.md` | fx_hold_test.lua |
+| `lib/factory.lua` | `factory` | `docs/notes/lua/factory.md` | factory_test.lua |
 | `lib/params_setup.lua` | `params_setup` | `docs/notes/lua/params.md` | params_setup_test.lua |
 | `lib/ui/params.lua`, `lib/ui/header.lua`, `lib/ui/flash.lua`, `lib/ui/text.lua`, `lib/ui/keys.lua`, `lib/ui/menu_watch.lua` | `ui_params`, `ui_header`, `ui_flash`, `ui_text`, `ui_keys`, `ui_menu_watch` | `docs/notes/lua/ui-core.md` | ui_test.lua, ui_header_test.lua, ui_pages_test.lua |
 | `lib/ui/field_list.lua` | `ui_field_list` | `docs/notes/lua/ui-core.md` | ui_field_list_test.lua |
@@ -347,6 +349,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
   | `matrix learn` | `lib/matrix.lua` | matrix learn waits for a touch exactly while its timeout clock runs (`S.matrix_learn_clock`) (3.4) |
   | `zones editor` | `lib/ui/zones.lua` | the zones editor's learn waits exactly while its timeout clock is pending (`S.zones_learn_clock`, its coroutine alive) and the note tap is set, and only while the editor is open; the open editor's own owner is the modal one (or beneath SEQ's step editor), the closed editor's never (3.5) |
   | `scale editor` | `lib/ui/scale_editor.lua` | the open scale and tuning editor's own owner is the modal one (or beneath SEQ's step editor), the closed editor's never; its cursor is on a row and a class, and a pending tuning choice is one of its choices (3.8) |
+  | `factory` | `lib/factory.lua` | a factory set's load clock (`S.factory_clock`) is a live coroutine while it is set (3.8) |
   | `lfo clock` | `lib/lfos.lua` | the LFO clock (`S.lfo_clock`) runs from its start step to cleanup, and only then (3.4) |
   | `step editor` | `lib/pages/seq.lua` | the step editor is open exactly while its owner is the modal one (`S.lib.ui_modal.top()`) (3.4) |
   | `notes` | `lib/notes.lua` | the note pool is a whole number in 0..`NOTE_POOL.max`, the extra notes held never exceed it, and a stopped voice holds none (3.5) |

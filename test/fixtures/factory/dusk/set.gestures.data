@@ -1,0 +1,30 @@
+return {
+-- Table: {1}
+{
+   ["recorders"]={2},
+   ["version"]=1,
+},
+-- Table: {2}
+{
+   {3},
+   {4},
+   {5},
+   {6},
+},
+-- Table: {3}
+{
+   ["quantize"]="free",
+},
+-- Table: {4}
+{
+   ["quantize"]="free",
+},
+-- Table: {5}
+{
+   ["quantize"]="free",
+},
+-- Table: {6}
+{
+   ["quantize"]="free",
+},
+}

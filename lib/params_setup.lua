@@ -185,29 +185,36 @@ return function(S)
     end}
   end
 
-  -- The ids a PSET file's text has a line for, found as norns' params:read
-  -- finds them (lua/core/paramset.lua): a line not starting "--" whose
-  -- first quoted string is followed by a colon, unquoted
+  -- One line of a PSET file's text as norns' params:read reads it
+  -- (lua/core/paramset.lua): a line not starting "--" whose first quoted
+  -- string is followed by a colon gives that string unquoted, the id, and
+  -- the rest of the line, its raw value; any other line gives nil. The one
+  -- reader of a line (the read hook's named ids, pset_value, 3.8's factory
+  -- sets' parse_params)
+  function M.pset_line(line)
+    if type(line) ~= "string" or line:sub(1, 2) == "--" then return nil end
+    local quoted, value = line:match('(".-")%s*:%s*(.*)')
+    if not quoted then return nil end
+    return (quoted:gsub('^"', ''):gsub('"$', ''):gsub('\\"', '"')), value
+  end
+
+  -- The ids a PSET file's text has a line for
   function pset.named_ids(text)
     local named = {}
     for line in text:gmatch("[^\n]+") do
-      if line:sub(1, 2) ~= "--" then
-        local quoted = line:match('(".-")%s*:%s*')
-        if quoted then named[(quoted:gsub('^"', ''):gsub('"$', ''):gsub('\\"', '"'))] = true end
-      end
+      local id = M.pset_line(line)
+      if id then named[id] = true end
     end
     return named
   end
 
-  -- The text of id's line in a PSET file's text, as norns' params:read
-  -- reads it (the rest of the line after the quoted id and its colon), or
-  -- nil for no line (3.8: the tuning's PSET hook reads a voice's freq)
+  -- The text of id's line in a PSET file's text (the rest of the line after
+  -- the quoted id and its colon), or nil for no line (3.8: the tuning's
+  -- PSET hook reads a voice's freq)
   function M.pset_value(text, id)
     for line in text:gmatch("[^\n]+") do
-      if line:sub(1, 2) ~= "--" then
-        local quoted, value = line:match('(".-")%s*:%s*(.*)')
-        if quoted and (quoted:gsub('^"', ''):gsub('"$', ''):gsub('\\"', '"')) == id then return value end
-      end
+      local line_id, value = M.pset_line(line)
+      if line_id == id then return value end
     end
     return nil
   end
@@ -224,8 +231,9 @@ return function(S)
   -- control made without a default, the value it starts at); nil for a
   -- param norns never saves (save off, a trigger, a separator or a group)
   -- and for a file or text param, which has none, but a text param given
-  -- one with M.set_text_default (3.8: the tuning's two)
-  function pset.default(param)
+  -- one with M.set_text_default (3.8: the tuning's two). The read hook's
+  -- (migrate_read_pset) and 3.8's factory sets' load (S.lib.factory) alike
+  function M.load_default(param)
     if param.save == false then return nil end
     if param.t == params.tTEXT then return pset.text_defaults[param.id] end
     if param.t == params.tCONTROL then
@@ -236,6 +244,14 @@ return function(S)
     if param.t == params.tNUMBER or param.t == params.tOPTION or param.t == params.tTAPER then return param.default end
     if param.t == params.tBINARY and param.behavior ~= "trigger" then return param.default end
     return nil
+  end
+
+  -- Every param Strata's records add (never norns' own), in menu order: the
+  -- read hook's list, a copy (3.8: the factory sets' load walks it too)
+  function M.record_param_ids()
+    local ids = {}
+    for index, id in ipairs(pset.record_params) do ids[index] = id end
+    return ids
   end
 
   -- norns' params.action_read, run after every params:read (PARAMS > PSET,
@@ -264,8 +280,8 @@ return function(S)
     pset.read_changed = {}
     if text then
       local named, defaulted = pset.named_ids(text), 0
-      for _, id in ipairs(pset.record_params) do
-        local default = not named[id] and pset.default(params:lookup_param(id))
+      for _, id in ipairs(M.record_param_ids()) do
+        local default = not named[id] and M.load_default(params:lookup_param(id))
         if default then
           if params:get(id) ~= default then pset.read_changed[id] = true end
           params:set(id, default, silent)

@@ -1573,4 +1573,36 @@ test("the PARAMS menu's own delta turns freq but not expression's press target",
   assert_equal(turned.press_target, false, "press_target's is not")
 end)
 
+-- 3.8 (4d): the read hook's two halves, exported for the factory sets'
+-- load, which defaults a set's missing lines as a PSET read does
+test("record_param_ids lists Strata's record params in menu order; load_default is the read hook's", function()
+  load_strata()
+  local setup = local_value("S").lib.params_setup
+  local ids = setup.record_param_ids()
+  local position = {}
+  for index, id in ipairs(ids) do position[id] = index end
+  assert_true(position.master_density ~= nil and position.v1_freq ~= nil, "Strata's params are listed")
+  assert_equal(position.clock_tempo, nil, "norns' own are not")
+  assert_equal(position.output_level, nil)
+  local last = 0
+  for _, param in ipairs(params.params) do
+    if param.id and position[param.id] then
+      assert_true(position[param.id] > last, param.id .. " in menu order")
+      last = position[param.id]
+    end
+  end
+  assert_equal(#ids, last, "each once")
+  ids[1] = "changed"
+  assert_true(setup.record_param_ids()[1] ~= "changed", "a copy each call")
+  local lookup = function(id) return params:lookup_param(id) end
+  assert_equal(setup.load_default(lookup("v1_grain_size")), 0.1, "a control: its default")
+  assert_equal(setup.load_default(lookup("v1_seq_length")), 16, "a number")
+  assert_equal(setup.load_default(lookup("scale")), 1, "an option")
+  assert_equal(setup.load_default(lookup("v1_quantize")), 0, "a binary that is no trigger")
+  assert_equal(setup.load_default(lookup("tuning_name")), "12 equal", "a text param 1e gave a default")
+  assert_equal(setup.load_default(lookup("delay_freeze")), nil, "a param saved nowhere: none")
+  assert_equal(setup.load_default(lookup("delay_clear")), nil, "a trigger: none")
+  assert_equal(setup.load_default(lookup("buf1_file")), nil, "a file param: none")
+end)
+
 end
