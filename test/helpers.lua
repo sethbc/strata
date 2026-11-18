@@ -538,13 +538,28 @@ end
 --   {kind = "rewrite", match = <pattern>, replace = <gsub replacement>,
 --     count = <n>, why = <text>}: every matching build line is rewritten
 --     into the old form (a changed value, a wider signature),
--- and raises unless exactly count lines matched. With voice (a start's
+-- and raises unless exactly count lines matched. match is anchored to the
+-- whole line: it starts with ^, and with a count above 0 it ends with an
+-- unescaped $ (a prefix such as '^noteRegion%(' is enough for count 0), or
+-- it raises naming its why: unanchored, '"scanMode", 0' would also match
+-- a "scanMode", 0.5 line. With voice (a start's
 -- voice number), <v> and <v0> in match and replace are filled from it;
 -- without (a whole run), an entry holding a token stands for one entry a
 -- voice, each matched on its own and count per voice, a miss naming the
 -- voice. label names the comparison in an error. An entry of no such kind
 -- or side, with no why, match or whole count, or a rewrite with no replace
 -- or of the fixture, raises
+-- A match pattern is anchored to the whole line: it starts with ^, and,
+-- when `whole` (a count above 0), ends with a $ that no odd run of % escapes
+-- (%$ is a dollar sign; %%$ a percent sign, then the anchor). Read on the
+-- entry's own text: a token fills digits, so it neither makes nor breaks
+-- an anchor, and a $ before a token is not last, so is a dollar sign
+local function pattern_anchored(match, whole)
+  if match:sub(1, 1) ~= "^" then return false end
+  if not whole then return true end
+  local escapes = #(match:match("(%%*)%$$") or "")
+  return match:sub(-1) == "$" and escapes % 2 == 0
+end
 local CALL_TOKEN_FIELDS = {"match", "replace"}
 local CALL_SIDES = {build = true, fixture = true}
 local function allowed_call_lines(fixture_lines, build_lines, entries, label, voice)
@@ -559,6 +574,10 @@ local function allowed_call_lines(fixture_lines, build_lines, entries, label, vo
     local count = entry.count
     if type(count) ~= "number" or count < 0 or count ~= math.floor(count) then
       error(where .. ": count " .. tostring(count) .. " is no whole number", 2)
+    end
+    if not pattern_anchored(entry.match, count > 0) then
+      error(where .. " (" .. entry.why .. "): match is not anchored: it starts with ^"
+        .. (count > 0 and ", and ends with an unescaped $ when count is above 0" or ""), 2)
     end
     local side = entry.side or "build"
     if not CALL_SIDES[side] then error(where .. ": no side " .. tostring(side), 2) end
