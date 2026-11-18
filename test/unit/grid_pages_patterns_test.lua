@@ -64,19 +64,26 @@ test("a second key sets the held step's level over 16 positions, 8 on a half", f
   each_arrangement(function(_, S, pane, arrangement)
     local first, last = shown_columns(pane)
     local positions = last - first + 1
-    S.patterns[2][first] = 15
+    S.patterns[2][first] = 5
     pane.press(first, 2, 1)
     pane.press(last, 2, 1)
-    assert_equal(S.patterns[2][first], 15, arrangement .. ": the line's last shown key is the top level")
+    assert_equal(S.patterns[2][first], 15, arrangement .. ": the line's last shown key is the top level, 15")
     pane.press(last, 2, 0)
+    -- the half-way key: 8 of 16 (round(8 * 15 / 16) = 8), or 4 of 8 on a
+    -- half (round(4 * 15 / 8) = round(7.5) = 8)
     local middle = first + positions / 2 - 1
     pane.press(middle, 2, 1)
-    local expected = S.lib.grid_core.level_for_position(positions / 2, positions)
-    assert_equal(S.patterns[2][first], expected, arrangement .. ": key " .. (positions / 2) .. " of " .. positions)
+    assert_equal(S.patterns[2][first], 8, arrangement .. ": the half-way key of " .. positions .. " sets 8")
     pane.press(middle, 2, 0)
+    local quarter = first + positions / 4 - 1
+    pane.press(quarter, 2, 1)
+    -- 4 of 16 (round(3.75) = 4), or 2 of 8 (round(3.75) = 4)
+    assert_equal(S.patterns[2][first], 4, arrangement .. ": the quarter key of " .. positions .. " sets 4")
+    pane.press(quarter, 2, 0)
     pane.press(first, 2, 0)
-    assert_equal(S.patterns[2][first], expected, arrangement .. ": neither release toggles")
-    assert_equal(S.patterns[2][last] + S.patterns[2][middle], 0, arrangement .. ": the level keys toggled nothing")
+    assert_equal(S.patterns[2][first], 4, arrangement .. ": neither release toggles")
+    assert_equal(S.patterns[2][last] + S.patterns[2][middle] + S.patterns[2][quarter], 0,
+      arrangement .. ": the level keys toggled nothing")
   end)
 end)
 
@@ -97,25 +104,33 @@ end)
 
 test("the sounding step between steps (#113)", function()
   each_arrangement(function(context, S, pane, arrangement)
-    local first = shown_columns(pane)
+    -- the second step the pane shows: step 2, or step 10 on the right half
+    local first, last = shown_columns(pane)
     local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
-    S.patterns[1][first + 1] = 9
+    local step = first + 1
+    S.patterns[1][step] = 9
     grid_redraw()
-    assert_equal(pane.led(first + 1, 1), 9, arrangement .. ": stopped, the stored level")
-    if first ~= 1 then return end  -- the right half shows steps 9-16, past the first two
-    assert_equal(pane.led(1, 2), 0, arrangement .. ": stopped, no playhead")
+    assert_equal(pane.led(step, 1), 9, arrangement .. ": stopped, the stored level")
+    assert_equal(pane.led(first, 2), 0, arrangement .. ": stopped, no playhead")
+    pattern_toggle()  -- step 1 plays at once
+    grid_redraw()
+    if first == 1 then
+      assert_equal(pane.led(1, 2), 4, arrangement .. ": just started, step 1 is the playhead")
+      assert_equal(pane.led(PATTERN_LENGTH, 2), pane.shows(PATTERN_LENGTH, 2) and 0 or nil,
+        arrangement .. ": never the last step")
+    else
+      for x = first, last do
+        assert_true(pane.led(x, 2) ~= 4, arrangement .. ": step 1 sounds on the other half: no playhead at " .. x)
+      end
+    end
+    for _ = 2, step do h.wake(context, "pattern_clock") end  -- the pane's second step plays
+    grid_redraw()  -- a redraw between steps
+    assert_equal(S.pattern_position, step + 1)
+    assert_equal(pane.led(step, 1), 15, arrangement .. ": the sounding active step at 15")
+    assert_equal(pane.led(step, 2), 4, arrangement .. ": the sounding empty step at 4")
+    assert_equal(pane.led(step + 1, 2), 0, arrangement .. ": not the next step")
     pattern_toggle()
-    grid_redraw()
-    assert_equal(pane.led(1, 2), 4, arrangement .. ": just started, step 1 is the playhead")
-    assert_equal(pane.led(PATTERN_LENGTH, 2), pane.shows(PATTERN_LENGTH, 2) and 0 or nil, arrangement .. ": never the last step")
-    h.wake(context, "pattern_clock")
-    grid_redraw()
-    assert_equal(S.pattern_position, 3)
-    assert_equal(pane.led(2, 1), 15, arrangement .. ": the sounding active step at 15")
-    assert_equal(pane.led(2, 2), 4, arrangement .. ": the sounding empty step at 4")
-    assert_equal(pane.led(3, 2), 0, arrangement .. ": not the next step")
-    pattern_toggle()
-    assert_equal(pane.led(2, 1), 9, arrangement .. ": stopped, the stored level again")
+    assert_equal(pane.led(step, 1), 9, arrangement .. ": stopped, the stored level again")
   end)
 end)
 

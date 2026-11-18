@@ -520,31 +520,31 @@ test("source and slot helpers check bounds and give the 256's levels", function(
   assert_equal(core.CLEAR_LEVEL, 4)
 end)
 
--- A key whose action redraws the grid too (a step's toggle_voice-like
--- redraws) still paints each grid once per press (#161)
-test("a step key repaints the grid once", function()
+-- A key whose action redraws the grid too (O4: toggle_voice calls
+-- grid_redraw) still paints each grid once per press and once per
+-- release (#161): grid_key holds the redraws while it handles the key
+test("a voice key whose action redraws repaints the grid once", function()
   local context = load_strata(); finish_startup(context)
-  local patterns = local_value("patterns")
-  -- each layout and the key of voice 2's step 3 on its patterns page
+  local S = local_value("S")
+  -- each layout and its O4 key (the strip's voice 4)
   local cases = {
-    {cols = 16, rows = 16, x = 3, y = 2},
-    {cols = 16, rows = 8, x = 3, y = 2},
-    {cols = 8, rows = 16, x = 2, y = 3},
-    {cols = 8, rows = 8, x = 3, y = 2},
+    {cols = 16, rows = 16, x = 13, y = 8},
+    {cols = 16, rows = 8, x = 13, y = 8},
+    {cols = 8, rows = 16, x = 8, y = 13},
+    {cols = 8, rows = 8, x = 5, y = 8},
   }
   for _, case in ipairs(cases) do
     local device = context.grid.plug(1, case.cols, case.rows)
-    patterns[2][3] = 0
+    local name = case.cols .. "x" .. case.rows
+    local active = S.voices[4].active
     local before = device.refresh_count
     context.grid.press(1, case.x, case.y, 1)
-    local name = case.cols .. "x" .. case.rows
+    assert_true(S.voices[4].active ~= active, name .. ": O4 toggles voice 4 (toggle_voice redraws the grids)")
     assert_equal(device.refresh_count - before, 1, name .. ": one repaint for the press")
     context.grid.press(1, case.x, case.y, 0)
-    assert_equal(patterns[2][3], 15, name .. ": the release toggles voice 2's step 3")
-    assert_equal(device.refresh_count - before, 2, name .. ": and one repaint for the release")
+    assert_equal(device.refresh_count - before, 2, name .. ": and one for the release")
     toggle_voice(4)
     assert_equal(device.refresh_count - before, 3, name .. ": a change from elsewhere still repaints")
-    toggle_voice(4)
     context.grid.unplug(1)
   end
 end)
