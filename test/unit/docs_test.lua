@@ -1151,7 +1151,7 @@ test("every CI job has a timeout", function()
   end
   -- lua-suite runs one Lua suite a runner (Lua 5.3 and LuaJIT in parallel);
   -- lua gathers them, as engine gathers the shards
-  local expected = { ["lua-suite"] = 15, lua = 5, ["engine-shard"] = 15, engine = 5 }
+  local expected = { ["lua-suite"] = 15, lua = 5, ["engine-shard"] = 21, engine = 5 }
   for _, name in ipairs(order) do
     assert_true(jobs[name].minutes ~= nil, "job " .. name .. " has a timeout-minutes at its own indent")
     assert_true(expected[name] ~= nil, "job " .. name .. " has no expected timeout in this test")
@@ -1234,7 +1234,7 @@ test("every action the workflow uses is pinned by a full commit, its version in 
   assert_equal(table.concat(CI_WORKFLOW.unpinned_actions(workflow), " | "), "", "the workflow's unpinned actions")
 end)
 
--- #785: a slow package mirror cancelled three engine shards at the job's
+-- #785: a slow package mirror canceled three engine shards at the job's
 -- limit while apt was still downloading. Every apt-get gives up on a dead
 -- connection (APT_NETWORK_OPTIONS, apt's command line winning over the
 -- runner's apt.conf.d), and every step that runs one has a limit of its own,
@@ -1275,9 +1275,360 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
       assert_true(check ~= nil, "the engine check step has a timeout in seconds")
       assert_true(apt_seconds + (check or 0) <= job.minutes * 60,
         "the shard's installs (" .. apt_seconds .. " s) and its check (" .. tostring(check) .. " s) fit its " .. job.minutes .. " minutes")
+      -- #786: every step before the check at its own limit (the cache's
+      -- restore and save too), the steps with none, and the check's own
+      -- limit fit the job's, so a hung setup step fails by its own name
+      local setup, limited = CI_WORKFLOW.SECONDS.unlimited_steps, {}
+      for _, step in ipairs(job.steps) do
+        if step.name == "Engine check" then break end
+        if step.minutes then setup = setup + step.minutes * 60; limited[#limited + 1] = tostring(step.name) end
+      end
+      assert_true(#limited >= 4, "the list, restore, install and save have limits: " .. table.concat(limited, ", "))
+      assert_true(setup + (check or 0) <= job.minutes * 60, "the shard's setup at its limits (" .. setup
+        .. " s, " .. CI_WORKFLOW.SECONDS.unlimited_steps .. " of them for the steps with none) and its check ("
+        .. tostring(check) .. " s) fit its " .. job.minutes .. " minutes")
     end
   end
   assert_true(installing["lua-suite"] and installing["engine-shard"], "both the Lua suites and the engine shards install with apt-get")
+end)
+
+-- #786: the engine shard's measured times (runs 44221169221, uncached with
+-- the second mirror on three shards, and 44224340612, cached; seven shards
+-- each) and the allowances the limits are sized with. After its downloads
+-- the install refills the kept folder and unpacks: 23 s at most after the
+-- second mirror's download, 28 s at most for a whole cached install; the
+-- allowance is about twice that. The steps with no limit of their own (the
+-- job's set up, the two checkouts, JACK's start, the job's end) took 15 s
+-- at most together; the allowance is four times that
+CI_WORKFLOW.SECONDS = { after_downloads = 60, unlimited_steps = 60 }
+
+-- #786: the workflow's text with `old` (found exactly once, so a mutation
+-- never passes by missing its place) replaced by `new`
+function CI_WORKFLOW.mutated(text, old, new)
+  local at = text:find(old, 1, true)
+  assert_true(at ~= nil and text:find(old, at + 1, true) == nil, "the mutation's text is in the workflow once: " .. old)
+  return text:sub(1, at - 1) .. new .. text:sub(at + #old)
+end
+-- a step's run script, one entry a command line: the lines under `run: |`
+-- (or the one after `run:`), dedented, a line ending in a backslash joined
+-- to the next (CI_WORKFLOW.jobs has already left out the comment lines)
+function CI_WORKFLOW.script(step)
+  local lines, indent, inside = {}, nil, false
+  for line in step.text:gmatch("([^\n]*)\n") do
+    local lead = line:match("^( *)%S")
+    if inside then
+      if lead and #lead <= 8 then break end
+      if lead then
+        indent = indent or #lead
+        local text = (line:sub(indent + 1):gsub("%s+$", ""))
+        local last = lines[#lines]
+        if last and last:match("\\$") then lines[#lines] = (last:gsub("%s*\\$", " ")) .. (text:gsub("^%s+", ""))
+        else lines[#lines + 1] = text end
+      end
+    else
+      local run = line:match("^        run:%s*(.-)%s*$")
+      if run == "|" then inside = true elseif run and run ~= "" then return { run } end
+    end
+  end
+  return lines
+end
+-- a script line's commands (split at ;, &&, || and |), each without the
+-- words before its command (if, then, do, sudo, ...)
+function CI_WORKFLOW.commands(line)
+  local commands = {}
+  for command in (line:gsub("&&", "\1"):gsub("||", "\1"):gsub("[;|]", "\1") .. "\1"):gmatch("([^\1]*)\1") do
+    command = command:match("^%s*(.-)%s*$")
+    local stripped = true
+    while stripped do
+      stripped = false
+      for _, word in ipairs({ "if", "then", "do", "else", "elif", "while", "until", "!", "sudo" }) do
+        if command:sub(1, #word + 1) == word .. " " then command = command:sub(#word + 2):match("^%s*(.-)$"); stripped = true end
+      end
+    end
+    if command ~= "" then commands[#commands + 1] = command end
+  end
+  return commands
+end
+-- whether a text names apt's archive folder (as the install's variable, by
+-- its path, or as the setting that moves it, Dir::Cache, apt.conf(5))
+function CI_WORKFLOW.names_archives(text)
+  return text:find("$archives", 1, true) ~= nil or text:find("${archives}", 1, true) ~= nil
+    or text:find("/var/cache/apt/archives", 1, true) ~= nil or text:lower():find("dir::cache", 1, true) ~= nil
+end
+-- whether a command that names apt's archive folder puts nothing in it: the
+-- folder's assignment, a test, or a cp into the kept folder (the refill)
+function CI_WORKFLOW.leaves_archives(command)
+  if command == "archives=/var/cache/apt/archives" or command:match("^%[ ") or command:match("^test ") then return true end
+  local words = {}
+  for word in command:gmatch("%S+") do words[#words + 1] = (word:gsub('"', "")) end
+  if words[1] ~= "cp" then return false end
+  for _, word in ipairs(words) do
+    if word:match("^%-t") or word:match("^%-%-target") then return false end
+  end
+  return words[#words]:sub(1, #"$debs") == "$debs"
+end
+-- what breaks the cache's safety in a workflow's text, one line each: the
+-- kept folder is the one the restore fills; in the install, one if whose
+-- condition is the hash check (sha512sum --check, against the SHA512s the
+-- list step wrote from apt's lists) holds the one copy of the checked file
+-- into apt's archive folder, and no other command of the shard names that
+-- folder but to read it; the save is the step right after the install and
+-- runs only on the restore's miss
+function CI_WORKFLOW.cache_problems(workflow)
+  local problems, at = {}, {}
+  local function problem(text) problems[#problems + 1] = text end
+  local shard = CI_WORKFLOW.jobs(workflow)["engine-shard"]
+  if not shard then return { "the workflow has no engine-shard job" } end
+  local steps = shard.steps
+  for index, step in ipairs(steps) do
+    if step.id == "packages" then at.list = index end
+    if step.uses and step.uses:match("^actions/cache/restore@") then at.restore = index end
+    if step.name == "Install SuperCollider and JACK" then at.install = index end
+    if step.uses and step.uses:match("^actions/cache/save@") then at.save = index end
+    if step.name == "Engine check" then at.check = index end
+  end
+  for _, part in ipairs({ "list", "restore", "install", "save", "check" }) do
+    if not at[part] then problem("the engine shard has no " .. part .. " step") end
+  end
+  if #problems > 0 then return problems end
+  if not (at.list < at.restore and at.restore < at.install) then problem("the shard does not list, restore, then install") end
+  if at.save ~= at.install + 1 or at.save > at.check then problem("the save is not the step right after the install") end
+  local miss = "steps." .. tostring(steps[at.restore].id) .. ".outputs.cache-hit != 'true'"
+  if steps[at.save].text:match("\n%s+if:%s*([^\n]-)%s*\n") ~= miss then problem("the save runs on an exact hit: its if is not " .. miss) end
+  local install = CI_WORKFLOW.script(steps[at.install])
+  local kept = steps[at.restore].text:match("\n%s+path:%s*([^\n]-)%s*\n") or ""
+  local debs, archives
+  for _, line in ipairs(install) do
+    debs = debs or line:match("^debs=(.*)$"); archives = archives or line:match("^archives=(.*)$")
+  end
+  if kept:find("${{ runner.temp }}/", 1, true) ~= 1 or debs ~= '"' .. kept:gsub("%${{ runner%.temp }}", "$RUNNER_TEMP") .. '"' then
+    problem("the kept folder the restore fills (" .. kept .. ") is not the install's debs, in the runner's temp folder (" .. tostring(debs) .. ")")
+  end
+  if archives ~= "/var/cache/apt/archives" then problem("the install's archives is not apt's archive folder: " .. tostring(archives)) end
+  -- the hash check: one if, its condition the check of the file it copies
+  local checks = {}
+  for index, line in ipairs(install) do
+    if line:find("sha512sum --check", 1, true) then checks[#checks + 1] = index end
+  end
+  if #checks ~= 1 then problem("the install has " .. #checks .. " lines with sha512sum --check, not one"); return problems end
+  local check_at = checks[1]
+  local indent, condition = install[check_at]:match("^(%s*)if (.-); then$")
+  local checked = condition and condition:match('echo "%$sum  ([^"]+)" | sha512sum %-%-check')
+  if not checked or condition:find("||", 1, true) or condition:find("!", 1, true) then
+    problem("the hash check is not the whole condition of the copy's if (sha512sum --check): " .. install[check_at])
+  end
+  local block_end, copy_at = #install + 1, {}
+  for index = check_at + 1, #install do
+    if indent and install[index] == indent .. "fi" then block_end = index; break end
+    if indent and (install[index]:match("^" .. indent .. "else") or install[index]:match("^" .. indent .. "elif")) then
+      problem("the hash check's if has another branch: " .. install[index])
+    end
+    local commands = CI_WORKFLOW.commands(install[index])
+    if checked and #commands == 1 and (commands[1] == 'cp "' .. checked .. '" "$archives/"' or commands[1] == 'cp "' .. checked .. '" "$archives"') then
+      copy_at[index] = true; copy_at.count = (copy_at.count or 0) + 1
+    end
+  end
+  if copy_at.count ~= 1 then
+    problem("the hash check's if holds " .. tostring(copy_at.count or 0) .. " copies of the checked file into apt's archive folder, not one")
+  end
+  -- the loop around it reads the SHA512s the list step wrote, which nothing else writes
+  local loop_indent
+  for index = check_at - 1, 1, -1 do
+    loop_indent = install[index]:match("^(%s*)while read %-r sum name; do$")
+    if loop_indent then break end
+  end
+  local done
+  for index = block_end + 1, #install do
+    if loop_indent and install[index]:sub(1, #loop_indent + 4) == loop_indent .. "done" then done = install[index]; break end
+  end
+  if not loop_indent or done ~= loop_indent .. 'done < "$RUNNER_TEMP/sc-packages.sha512"' then
+    problem("the hash check's loop does not read the list step's \"$RUNNER_TEMP/sc-packages.sha512\": " .. tostring(done))
+  end
+  local listed = false
+  for _, line in ipairs(CI_WORKFLOW.script(steps[at.list])) do
+    listed = listed or line:find('> "$RUNNER_TEMP/sc-packages.sha512"', 1, true) ~= nil
+  end
+  if not listed then problem("the list step does not write \"$RUNNER_TEMP/sc-packages.sha512\"") end
+  -- nothing else puts a file in apt's archive folder, and nothing else writes the SHA512s
+  for index, step in ipairs(steps) do
+    local script = CI_WORKFLOW.script(step)
+    if #script == 0 and CI_WORKFLOW.names_archives(step.text) then
+      problem("step " .. tostring(step.name or step.uses) .. " names apt's archive folder")
+    end
+    for line_index, line in ipairs(script) do
+      for _, command in ipairs(CI_WORKFLOW.commands(line)) do
+        if CI_WORKFLOW.names_archives(command) and not (index == at.install and copy_at[line_index])
+            and not CI_WORKFLOW.leaves_archives(command) then
+          problem("a file can reach apt's archive folder past the hash check: " .. line)
+        end
+        if index ~= at.list and command:find("sc-packages.sha512", 1, true) and not command:match('^done < "') then
+          problem("a step other than the list writes or reads the SHA512s past the hash check: " .. line)
+        end
+      end
+    end
+  end
+  return problems
+end
+-- what in a workflow's text weakens apt's checks, one line each: a setting
+-- or option that turns a check off (apt-get(8), apt.conf(5),
+-- apt-transport-https(1), apt's configure-index; matched without case,
+-- hyphens or underscores, so an option and its setting are one word), a
+-- change of the sources, and an install that names a file, which takes the
+-- file as it is, not as apt's lists give it
+function CI_WORKFLOW.apt_weakenings(workflow)
+  local found = {}
+  for line in (workflow .. "\n"):gmatch("([^\n]*)\n") do
+    local plain = line:lower():gsub("[-_]", "")
+    for _, word in ipairs({ "allowunauthenticated", "allowinsecurerepositories", "allowdowngradetoinsecurerepositories",
+        "allowweakrepositories", "checkvaliduntil", "checkdate", "forceyes", "verifypeer", "verifyhost", "trusted=yes",
+        "sources.list" }) do
+      if plain:find(word, 1, true) then found[#found + 1] = word .. ": " .. line:match("^%s*(.-)%s*$") end
+    end
+    for _, words in ipairs({ "dpkg -i", "dpkg --install", "dpkg --unpack" }) do
+      if line:find(words, 1, true) then found[#found + 1] = words .. ": " .. line:match("^%s*(.-)%s*$") end
+    end
+  end
+  for _, job in ipairs(CI_WORKFLOW.jobs(workflow)) do
+    for _, step in ipairs(job.steps) do
+      for _, line in ipairs(CI_WORKFLOW.script(step)) do
+        local paths = {}
+        local packages = line:match("^%s*packages=%((.*)%)%s*$")
+        if packages then
+          for word in packages:gmatch("%S+") do paths[#paths + 1] = word end
+        end
+        for _, command in ipairs(CI_WORKFLOW.commands(line)) do
+          local words, apt, install = {}, nil, nil
+          for word in command:gmatch("%S+") do words[#words + 1] = word end
+          for index, word in ipairs(words) do
+            if not apt and (word == "apt" or word == "apt-get") then apt = index end
+            if apt and not install and word == "install" then install = index end
+          end
+          local index = (install or #words) + 1
+          while install and index <= #words do
+            if words[index] == "-o" then index = index + 1
+            elseif not words[index]:match("^%-") then paths[#paths + 1] = words[index] end
+            index = index + 1
+          end
+        end
+        for _, word in ipairs(paths) do
+          if word:find("/", 1, true) or (word:gsub('"', "")):match("%.deb$") then
+            found[#found + 1] = "an install of a file path, past apt's lists: " .. line
+            break
+          end
+        end
+      end
+    end
+  end
+  return found
+end
+-- each case: a name, the edits (old, new, ...) and a text the problems name;
+-- every case that is not refused is reported, not only the first
+function CI_WORKFLOW.failing_cases(workflow, find_problems, cases)
+  local missed = {}
+  for _, case in ipairs(cases) do
+    local text = workflow
+    for i = 1, #case.edits, 2 do text = CI_WORKFLOW.mutated(text, case.edits[i], case.edits[i + 1]) end
+    local found = table.concat(find_problems(text), "\n  ")    if not found:find(case.expect, 1, true) then
+      missed[#missed + 1] = case.name .. ": the problems should name " .. case.expect .. "; they are: " .. (found == "" and "(none)" or found)
+    end
+  end
+  assert_true(#missed == 0, "mutations of the workflow not refused:\n" .. table.concat(missed, "\n"))
+end
+
+-- #786: the hash check comes before the one copy of a kept file into apt's
+-- archive folder, inside its if, and nothing else puts a file there: apt
+-- takes any file of the right size in that folder as downloaded
+test("a kept package reaches apt's archive folder only through the hash check, by its place in the script (#786)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  assert_equal(table.concat(CI_WORKFLOW.cache_problems(workflow), " | "), "", "the workflow's cache problems")
+  local check = '            if [ -f "$debs/$name" ] && echo "$sum  $debs/$name" | sha512sum --check --status; then\n'
+  local copy = '              sudo cp "$debs/$name" "$archives/"\n'
+  local after_loop = '          echo "$kept package files from the cache, each matching apt\'s lists"\n'
+  local function added(line) return { after_loop, "          " .. line .. "\n" .. after_loop } end
+  local cases = {
+    -- the case nobody wrote down: the whole kept folder copied "to save a loop"
+    { name = "the kept folder copied before the check", expect = 'sudo cp "$debs"/*.deb "$archives/"',
+      edits = { "          kept=0\n", '          sudo cp "$debs"/*.deb "$archives/"\n          kept=0\n' } },
+    { name = "the copy moved before the check", expect = 'sudo cp "$debs/$name" "$archives/"',
+      edits = { check .. copy, copy:sub(3) .. check } },
+    { name = "the copy moved out of the check's if", expect = 'sudo cp "$debs/$name" "$archives/"',
+      edits = { copy .. "              kept=$((kept + 1))\n            fi\n", "              kept=$((kept + 1))\n            fi\n" .. copy:sub(3) } },
+    { name = "the check made optional", expect = "sha512sum --check",
+      edits = { '[ -f "$debs/$name" ] && echo', '[ -f "$debs/$name" ] || echo' } },
+    { name = "an unchecked mv", expect = 'sudo mv "$debs"/*.deb "$archives/"', edits = added('sudo mv "$debs"/*.deb "$archives/"') },
+    { name = "an unchecked install", expect = 'sudo install -m 644 "$debs"/*.deb /var/cache/apt/archives/',
+      edits = added('sudo install -m 644 "$debs"/*.deb /var/cache/apt/archives/') },
+    { name = "an unchecked ln", expect = 'sudo ln -s "$debs"/*.deb "$archives"', edits = added('sudo ln -s "$debs"/*.deb "$archives"') },
+    { name = "a cp to a target directory", expect = 'sudo cp -t "$archives" "$debs"/*.deb', edits = added('sudo cp -t "$archives" "$debs"/*.deb') },
+    { name = "apt pointed at the kept folder", expect = 'Dir::Cache::archives="$debs"',
+      edits = { 'install -y --download-only "${packages[@]}" || status=$?\n          if',
+        '-o Dir::Cache::archives="$debs" install -y --download-only "${packages[@]}" || status=$?\n          if' } },
+    { name = "the restore filling apt's archive folder", expect = "/var/cache/apt/archives",
+      edits = { "          path: ${{ runner.temp }}/sc-debs\n          key: ${{ steps.packages.outputs.key }}\n          restore-keys",
+        "          path: /var/cache/apt/archives\n          key: ${{ steps.packages.outputs.key }}\n          restore-keys" } },
+    { name = "the check reading another list", expect = "sc-packages.sha512",
+      edits = { '            fi\n          done < "$RUNNER_TEMP/sc-packages.sha512"\n          echo "$kept',
+        '            fi\n          done < "$debs/sums.sha512"\n          echo "$kept' } },
+  }
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases)
+end)
+
+-- #786: what would weaken apt's own checks, each refused (apt-get(8),
+-- apt-transport-https(1), apt.conf(5) and apt's configure-index).
+-- --allow-downgrades is not among them: apt-get(8) says only that apt
+-- continues without asking when it downgrades; authentication is
+-- --allow-unauthenticated's, refused, as --force-yes is, which apt-get(8)
+-- says stands for --allow-unauthenticated and three others
+test("the workflow refuses every weakening of apt's checks and every install of a file path (#786)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  assert_equal(table.concat(CI_WORKFLOW.apt_weakenings(workflow), " | "), "", "the workflow's weakenings")
+  local install = '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n'
+  local function on_install(extra) return { install, '          sudo apt-get $APT_NETWORK_OPTIONS install -y ' .. extra .. ' "${packages[@]}"\n' } end
+  local function instead(line) return { install, "          " .. line .. "\n" } end
+  local cases = {
+    { name = "--force-yes", expect = "--force-yes", edits = on_install("--force-yes") },
+    { name = "Verify-Peer=false", expect = "Verify-Peer", edits = on_install("-o Acquire::https::Verify-Peer=false") },
+    { name = "Verify-Host=false", expect = "Verify-Host", edits = on_install("-o Acquire::https::Verify-Host=false") },
+    { name = "--allow-insecure-repositories", expect = "--allow-insecure-repositories",
+      edits = { "          sudo apt-get $APT_NETWORK_OPTIONS update\n          : >", "          sudo apt-get $APT_NETWORK_OPTIONS --allow-insecure-repositories update\n          : >" } },
+    { name = "AllowWeakRepositories", expect = "AllowWeakRepositories", edits = on_install("-o Acquire::AllowWeakRepositories=true") },
+    { name = "Check-Date", expect = "Check-Date", edits = on_install("-o Acquire::Check-Date=false") },
+    { name = "apt-get install of ./x.deb", expect = "./x.deb", edits = instead("sudo apt-get $APT_NETWORK_OPTIONS install -y ./x.deb") },
+    { name = "apt install of a path", expect = "/path/x.deb", edits = instead("sudo apt install -y /path/x.deb") },
+    { name = "apt-get install of a kept file", expect = '"$debs/$name"', edits = instead('sudo apt-get $APT_NETWORK_OPTIONS install -y "$debs/$name"') },
+    { name = "a path among the packages", expect = '"$debs/jackd2.deb"',
+      edits = { 'packages=(jackd2 "supercollider-language', 'packages=("$debs/jackd2.deb" "supercollider-language' } },
+    -- X2's list, as before
+    { name = "--allow-unauthenticated", expect = "--allow-unauthenticated", edits = on_install("--allow-unauthenticated") },
+    { name = "trusted=yes", expect = "trusted=yes", edits = instead('echo "deb [trusted=yes] file:/x ./" | sudo tee /etc/apt/sources.list.d/x.list') },
+    { name = "Check-Valid-Until", expect = "Check-Valid-Until", edits = on_install("-o Acquire::Check-Valid-Until=false") },
+    { name = "dpkg --install", expect = "dpkg --install", edits = instead('sudo dpkg --install "$debs"/*.deb') },
+    { name = "dpkg -i", expect = "dpkg -i", edits = instead('sudo dpkg -i "$debs"/*.deb') },
+    { name = "dpkg --unpack", expect = "dpkg --unpack", edits = instead('sudo dpkg --unpack "$debs"/*.deb') },
+  }
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, cases)
+end)
+
+-- #786: the save is the step right after the install, and runs only when the
+-- restore missed: a rerun of a shard that was too slow finds what a faster
+-- one saved, whatever the check did
+test("the cache is saved by the step right after the install, only on the restore's miss (#786)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  local condition = "        if: steps.restore.outputs.cache-hit != 'true'\n"
+  local save_start = workflow:find("      # Saved right after the install", 1, true)
+  local save_end = workflow:find("      # scsynth talks to JACK", 1, true)
+  assert_true(save_start ~= nil and save_end ~= nil, "the save step and the JACK step after it are found")
+  local save = workflow:sub(save_start, save_end - 1)
+  local check_run = workflow:match("(      %- name: Engine check\n        run: [^\n]*\n)")
+  assert_true(check_run ~= nil, "the engine check step is found")
+  local cases = {
+    { name = "the save moved after the engine check", expect = "the save is not the step right after the install",
+      edits = { save, "", check_run, check_run .. "\n" .. save } },
+    { name = "the save made unconditional", expect = "the save runs on an exact hit", edits = { condition, "" } },
+    { name = "the save run always", expect = "the save runs on an exact hit",
+      edits = { condition, "        if: always()\n" } },
+  }
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases)
 end)
 
 -- #785: the engine shards keep the package files they download (actions/cache,
@@ -1364,11 +1715,21 @@ test("a slow mirror ends the engine shard's download early and tries archive.ubu
   assert_true(install.text:find("mirrors=/etc/apt/apt-mirrors.txt", 1, true) ~= nil, "the list changed is the runner's own")
   -- both tries and the unpacking (about 25 s) fit in the step's limit
   assert_true(limits[1] + limits[2] + 30 <= install.minutes * 60, "both tries fit the step's " .. install.minutes .. " minutes")
-  assert_true(install.text:find("::error::", 1, true) ~= nil, "a download that never finishes fails the step with its own line")
-  for _, weakening in ipairs({ "allow-unauthenticated", "AllowUnauthenticated", "AllowInsecureRepositories", "trusted=yes",
-      "Check-Valid-Until", "AllowDowngradeToInsecureRepositories", "dpkg -i", "dpkg --install", "sources.list" }) do
-    assert_true(not workflow:find(weakening, 1, true), "the workflow never weakens apt's checks or changes its sources: " .. weakening)
+  -- #786: the worst run that still succeeds (each try to its limit and its
+  -- kill, the second one finishing, then the refill and the unpacking) ends
+  -- inside the step's limit, so a failure is the step's own ::error:: line
+  local worst = CI_WORKFLOW.SECONDS.after_downloads
+  for kill, seconds in install.text:gmatch("sudo timeout %-%-kill%-after=(%d+) (%d+) apt%-get ") do
+    worst = worst + tonumber(kill) + tonumber(seconds)
   end
+  assert_true(worst <= install.minutes * 60,
+    "the worst successful install (" .. worst .. " s) fits the step's " .. install.minutes .. " minutes")
+  assert_true(install.text:find("::error::", 1, true) ~= nil, "a download that never finishes fails the step with its own line")
+  -- X2's list (allow-unauthenticated, AllowInsecureRepositories, trusted=yes,
+  -- Check-Valid-Until, AllowDowngradeToInsecureRepositories, dpkg -i, dpkg
+  -- --install, sources.list) is in CI_WORKFLOW.apt_weakenings, with #786's
+  assert_equal(table.concat(CI_WORKFLOW.apt_weakenings(workflow), " | "), "",
+    "the workflow never weakens apt's checks or changes its sources")
 end)
 
 -- The SuperCollider 3.13 image (test/run_engine_check_313.sh) runs what CI

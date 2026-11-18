@@ -108,9 +108,12 @@ jobs:
   # (docs/status.md), not a run to repeat.
   engine-shard:
     name: engine (${{ matrix.areas }})
-    # Covers setup (norns clone, apt install, JACK) plus the check's own 600 s
-    # timeout; the default is 360
-    timeout-minutes: 15
+    # Covers every setup step at its own limit (list 2, restore 2, install 4
+    # and save 2 minutes: 600 s), a minute for the steps with none (the job's
+    # set up, the checkouts and JACK: 15 s at most in #786's measured runs)
+    # and the check's own 600 s: 1260 s, so a hung step fails by its own name
+    # (docs/checks.md, Installs); the default is 360
+    timeout-minutes: 21
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -222,7 +225,12 @@ jobs:
       # The kept folder is then refilled with the list's files, so the save
       # below can run before anything is unpacked
       - name: Install SuperCollider and JACK
-        timeout-minutes: 3
+        # The slowest install that succeeds: 45 s and 5 to kill the first try,
+        # 75 and 5 for the second, then the refill and the unpacking (23 s at
+        # most in #786's runs; 21-28 s cached, 80-90 s with the second mirror):
+        # about 155 s. 4 minutes leave room for an unpacking three times as
+        # slow, and a download that never finishes fails by the ::error:: line
+        timeout-minutes: 4
         run: |
           echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections
           packages=(jackd2 "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION")
