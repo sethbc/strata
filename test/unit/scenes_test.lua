@@ -3441,7 +3441,7 @@ test("a 3.7 scenes file is set aside whole and reads as older", function()
 end)
 
 -- An older file that cannot be set aside (every backup name taken) is never
--- written over by an autosave; a save from SETUP writes format 9 over it
+-- written over by an autosave; a save from SETUP writes the build's format over it
 test("an older file still in place is not autosaved over", function()
   local context = load_strata({ data_subdir = "format_eight_in_place" })
   local S = local_value("S")
@@ -3598,8 +3598,9 @@ test("a record's scene defaults may depend on the voice", function()
 end)
 
 ---------------------------------------------------------------------------
--- The groundwork before 3.8 (design §3, rulings 4 to 8): a format 9 voice
--- is {active, source, values}; capture_voice, apply_voice, voice_entries
+-- The groundwork before 3.8 (design §3, rulings 4 to 8): a scene voice
+-- (3.8's format 10) is {active, source, type, values}; capture_voice,
+-- apply_voice, voice_entries
 ---------------------------------------------------------------------------
 
 -- A plain value as text with sorted keys, so two captures compare as text
@@ -4385,11 +4386,12 @@ test("a fade of one type fades the synth keys; across types the type and its key
   capture_scene(3)
   recall_scene(1)
   assert_equal(params:get("v1_type"), type_index(S, "resonator"))
+  params:set("v1_ratio", 1.5)  -- the fade's start: fm's ratio (hidden on resonator) away from the scene's 4
   local ratio = params:get("v1_ratio")
   recall_scene(3, 1)
   context.clock.run_for(0.5)
   assert_equal(params:get("v1_type"), type_index(S, "resonator"), "mid-fade: the type unchanged")
-  assert_equal(params:get("v1_ratio"), ratio, "and fm's ratio unchanged")
+  assert_equal(params:get("v1_ratio"), ratio, "and fm's ratio unchanged, no fade toward 4")
   local size = params:get("v1_grain_size")
   assert_true(size > 0.1 and size < 0.4, "the shared grain size moves (" .. size .. ")")
   context.clock.run_for(1)
