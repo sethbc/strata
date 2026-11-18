@@ -1720,4 +1720,20 @@ test("with the editor open the four rings pick, nudge, turn the amount and the t
   assert_true(params:get("v1_buf_pos") ~= position, "BUFFER's ring 1 turns the position again")
 end)
 
+-- 3.8 (package 1d): a voice-source voice's rings are an input voice's
+test("MAIN ring 3 is grain pitch on a voice source", function()
+  local context = load_strata(); finish_startup(context)
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  show_page("MAIN")
+  S.selected_voice = 1
+  params:set("v1_source", S.constants.SOURCE_VOICE_FIRST + 2)   -- voice 3's ring
+  local size, pitch = params:get("v1_grain_size"), params:get("v1_grain_pitch")
+  context.arc.turn(1, 3, 40)
+  assert_true(params:get("v1_grain_pitch") > pitch, "ring 3 raises grain pitch")
+  assert_equal(params:get("v1_grain_size"), size, "and leaves grain size (ring 2's)")
+  arc_redraw()
+  assert_ring_fraction(device, 3, param_fraction("v1_grain_pitch"), "ring 3 shows grain pitch")
+end)
+
 end

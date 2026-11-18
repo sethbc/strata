@@ -1840,6 +1840,9 @@ local START_CALLS_ALLOWED = {
     why = "1c: a start sends the overlap, 2 at master density 1 (design §4.4)"},
   {kind = "drop", match = '^setGrainParam%(<v0>, "panSpread", 0%.5%)$', count = 1,
     why = "1c: a start sends the pan wander, 0.5, the grain synth's default that no 3.7 start sent (design §4.5)"},
+  -- 1d: each voice start sends its input channel, stereo (design §5)
+  {kind = "drop", match = '^setGrainParam%(<v0>, "inputChannel", 0%)$', count = 1,
+    why = "1d: a start sends the input channel, 0: stereo (design section 5)"},
 }
 local START_LABELS = {voice_1 = true, voice_4 = true, buffer_voice_3 = true}
 -- The entries of START_CALLS_ALLOWED that apply to the start label
@@ -2037,6 +2040,24 @@ test("engine_sync.lua reads no S.registry.voice_params", function()
   local source = h.file_text(h.repo_root .. "/lib/engine_sync.lua")
   assert_true(not source:find("registry.voice_params", 1, true), "no read of S.registry.voice_params")
   assert_true(not source:find("registry%.voice_params"), "none at all")
+end)
+
+-- 3.8 (package 1d): a voice source j (option SOURCE_VOICE_FIRST + j - 1)
+-- is sent as engine source SOURCE_VOICE_FIRST + j - 2; the stub takes the
+-- last and refuses the one after it
+test("sources 11-17 send setGrainSource 10-16; the stub takes 16 and refuses 17", function()
+  local context = load_strata(); finish_startup(context)
+  local C = local_value("S").constants
+  for read = 1, C.NUM_VOICES do
+    context.clear_engine_calls()
+    params:set("v1_source", C.SOURCE_VOICE_FIRST + read - 1)
+    local calls = context.calls_named("setGrainSource")
+    assert_equal(#calls, 1, "one setGrainSource for voice " .. read .. "'s ring")
+    assert_equal(calls[1].args[2], C.SOURCE_VOICE_FIRST + read - 2, "voice " .. read .. "'s ring")
+  end
+  local last = C.SOURCE_VOICE_FIRST + C.NUM_VOICES - 2
+  assert_true(pcall(engine.setGrainSource, 0, last), "the stub takes " .. last)
+  assert_true(not pcall(engine.setGrainSource, 0, last + 1), "the stub refuses " .. (last + 1))
 end)
 
 end

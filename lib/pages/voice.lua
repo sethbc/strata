@@ -348,6 +348,8 @@ return function(S)
     {name = "synth", option = S.constants.SOURCE_SYNTH},
     {name = "buf 1", option = source_option("buf 1")},
     {name = "input", option = S.constants.SOURCE_INPUT},
+    -- 3.8: a voice source (voice 7's ring: the longest option name)
+    {name = "voice 7", option = source_option("voice " .. NUM_VOICES)},
   }
   local function layout_state(voice_idx, source, section, edge)
     return {
@@ -369,7 +371,8 @@ return function(S)
   for voice_idx = 1, NUM_VOICES do
     for _, source in ipairs(LAYOUT_SOURCES) do
       for _, section in ipairs({S.lib.ui_voice_rows.VOICE_SECTION, "synth", "grain", "crossmod", "mix"}) do
-        if section ~= "synth" or source.option ~= S.constants.SOURCE_INPUT then
+        -- (an input or voice-source voice has no synth section)
+        if section ~= "synth" or source.option < S.constants.SOURCE_INPUT then
           for _, edge in ipairs({"first", "last"}) do
             table.insert(layout_states, layout_state(voice_idx, source, section, edge))
           end

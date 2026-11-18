@@ -58,15 +58,20 @@ local STANDARD_PERFORMANCE = {tier = "standard", buffer_seconds = STANDARD_BUFFE
 local GRAIN_MODE_OPTIONS = {"continuous", "triggered"}
 
 -- Grain sources (v<i>_source option order): the voice's own synth, buffer
--- slots 1..NUM_BUFFERS, then the live input. Option n is sent to the engine
--- as setGrainSource n - 1 (0 = synth, 1-8 = buffer slot, 9 = input).
+-- slots 1..NUM_BUFFERS, the live input, then (3.8) voices 1..NUM_VOICES'
+-- output rings. Option n is sent to the engine as setGrainSource n - 1 (0 =
+-- synth, 1-8 = buffer slot, 9 = input, 10-16 = voice 1-7's output ring)
 local SOURCE_SYNTH = 1
 local SOURCE_INPUT = NUM_BUFFERS + 2
+local SOURCE_VOICE_FIRST = SOURCE_INPUT + 1  -- option SOURCE_VOICE_FIRST + j - 1 reads voice j
 local SOURCE_OPTIONS = {"synth"}
 for slot = 1, NUM_BUFFERS do
   SOURCE_OPTIONS[slot + 1] = "buf " .. slot
 end
 SOURCE_OPTIONS[SOURCE_INPUT] = "input"
+for voice = 1, NUM_VOICES do
+  SOURCE_OPTIONS[SOURCE_VOICE_FIRST + voice - 1] = "voice " .. voice
+end
 
 -- The screen pages in E1 order. Each lib/pages/<page>.lua registers its
 -- record at S.registry.pages[UI_PAGES.index.<PAGE>]
@@ -304,6 +309,7 @@ return {
   GRAIN_MODE_OPTIONS = GRAIN_MODE_OPTIONS,
   SOURCE_SYNTH = SOURCE_SYNTH,
   SOURCE_INPUT = SOURCE_INPUT,
+  SOURCE_VOICE_FIRST = SOURCE_VOICE_FIRST,
   SOURCE_OPTIONS = SOURCE_OPTIONS,
   UI_PAGES = UI_PAGES,
   HEADER = HEADER,

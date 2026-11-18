@@ -8,13 +8,13 @@ The engine uses SuperCollider for synthesis and granular processing:
 - Seven independent synthesis voices
 - Up to eight notes on each voice: its own note and up to seven extra notes from a note pool the seven voices share (Performance tiers, below). A synth voice's extra note is another synth of the voice's kind on its voice bus, so the voice's one granular processor grains the whole chord; a buffer or input voice's extra note is a granular processor of its own, playing at the note's rate; a frozen synth voice's notes are streams of its frozen sound. Every note of a voice goes through the voice's one mix stage. The script decides which slot a note takes and which note a new one replaces; the engine holds at most one sounding and one fading synth in a slot, and never more notes than the pool, whatever arrives
 - Individual audio buses for each voice
-- Per-voice granular processors: two sample-aligned `GrainBuf`s (left and right) per voice. A synth- or input-sourced voice's grains read a ring buffer of its recent sound, a buffer-sourced voice's read the sample; both pan their grains the same way (the same fixed pan spread), and a buffer- or input-sourced voice's pan places it as it does a synth voice. A buffer grain never reads past the end of the sample, so short samples play at an even level. Grain pitch is the grain's playback rate, an exact transposition with no pitch-shifter stage
+- Per-voice granular processors: two sample-aligned `GrainBuf`s (left and right) per voice. A synth- or input-sourced voice's grains read a ring buffer of its recent sound (a voice-sourced one, 3.8, the read voice's output ring: the last 4 s of what that voice plays dry), a buffer-sourced voice's read the sample; both pan their grains the same way (the same fixed pan spread), and a buffer- or input-sourced voice's pan places it as it does a synth voice. A buffer grain never reads past the end of the sample, so short samples play at an even level. Grain pitch is the grain's playback rate, an exact transposition with no pitch-shifter stage
 - Real-time synthesis memory does not depend on grain size: what counts is how many synths run at once. Each voice keeps at most its running synths plus one fading out and one being cut, and each extra note one sounding and one being cut, however fast notes, source changes or scene recalls come, so all seven voices fit in norns' 8 MB real-time pool with room to spare. With no extra note playing, at the worst moment, with six engine LFOs, scatter and sixteen envelopes running, about 3.6 MB is in use on the standard tier and about 4.3 MB on the high tier (the engine check's memory test as CI runs it, on SuperCollider 3.13, at 3.7), and the check requires at least 3 MB of the pool left free on standard (3.5 MB on high). With all sixteen extra notes the pool allows playing at once, the worst moment the check measures leaves 1970 KB free on standard and 1760 KB on high (1750 KB on SuperCollider 3.14.1), against the 1280 KB the check requires there
 - Eight stereo buffers (each a pair of mono buffers: 16 s on the standard tier, about 49 MB in all, up to 300 s on the high tier) and a live stereo input bus. Each voice also keeps the last 4 s of its own sound and, for a frozen input, a 4 s copy of the input of its own (about 22 MB for the seven), and the input keeps its history (16 s, 60 s on the high tier)
 - Switching a voice's source replaces its grain synth; synths never stack
 - Cross-modulation routing via control buses
-- Each voice generates a modulation signal from its output (buffer- and input-sourced voices copy their grains back to their voice bus, so they modulate other voices too)
-- One mix stage per voice after its grains (the Voice Stage of the signal flow below): the voice's own filter, the level of a buffer- or input-sourced voice (a synth voice's level is set in its synth), and its delay and reverb sends. It writes the voice's dry sound to the main bus and its sends to a delay send bus and a reverb send bus beside it ([Each voice's filter and sends](effects.md#each-voices-filter-and-sends))
+- Each voice generates a modulation signal from its output (buffer-, input- and voice-sourced voices copy their grains back to their voice bus, so they modulate other voices too)
+- One mix stage per voice after its grains (the Voice Stage of the signal flow below): the voice's own filter, the level of a buffer-, input- or voice-sourced voice (a synth voice's level is set in its synth), and its delay and reverb sends. It writes the voice's dry sound to the main bus and its sends to a delay send bus and a reverb send bus beside it ([Each voice's filter and sends](effects.md#each-voices-filter-and-sends))
 - Master effects chain: the multimode filter (on the main bus and on each send bus, with the same settings), stereo delay (fed by the delay send), reverb (fed by the reverb send and the delay)
 - A limiter, then soft saturation, on master output
 - MIDI and most LFOs run in the Lua script and reach the engine as parameter changes; an LFO on a voice's grain pitch, position, size, filter cutoff or level runs in the engine itself
@@ -54,13 +54,14 @@ On the high tier each buffer holds up to the buffer length (60 s by default, up 
 ```
 Synth source:   Voice Synth → Voice Bus → Voice Ring → Granular Processor ┐
 Buffer source:  Buffer (L/R) → Granular Processor ───────────────────────┼→ Voice Stage
-Input source:   Audio input → Input Bus → Input Ring → Granular Processor ┘
+Input source:   Audio input → Input Bus → Input Ring → Granular Processor ┤
+Voice source:   a Voice Stage → its Output Ring ────── Granular Processor ┘
 
 Voice Stage ─ dry ────────── Filter ─────────────────────┐
             ─ delay send ─── Filter → Delay ─┬───────────┤
             ─ reverb send ── Filter ─────────┴→ Reverb ──┴→ Master (drift, limiter, saturation) → Output
 
-(one Voice Stage per voice: the voice filter, its level, the delay and reverb sends, and the copy of a buffer or input voice's grains to its Voice Bus)
+(one Voice Stage per voice: the voice filter, its level, the delay and reverb sends, the copy of a buffer, input or voice-source voice's grains to its Voice Bus, and the voice's sound before its dry level into its Output Ring, clipped softly, which any voice can read)
 (a synth voice's extra notes are more Voice Synths on its Voice Bus; a buffer or input voice's are more Granular Processors into its Voice Stage)
 
 Voice Bus → Mod Synth → Mod Bus → Other Voice Synths (cross-modulation)

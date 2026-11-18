@@ -11,8 +11,8 @@ The rings control the current screen page. They keep working while the norns men
 On the **MAIN** page:
 
 - **Ring 1** - Master density (0.1 to 2.0)
-- **Ring 2** - Selected voice's main parameter (always the first of the three fields E3 can edit on MAIN, whichever field the cursor is on: buffer position for a buffer-sourced voice, grain size for an input-sourced one)
-- **Ring 3** - Grain size for selected voice (grain pitch for an input-sourced voice, whose ring 2 already is grain size)
+- **Ring 2** - Selected voice's main parameter (always the first of the three fields E3 can edit on MAIN, whichever field the cursor is on: buffer position for a buffer-sourced voice, grain size for an input- or voice-sourced one)
+- **Ring 3** - Grain size for selected voice (grain pitch for an input- or voice-sourced voice, whose ring 2 already is grain size)
 - **Ring 4** - Grain density for selected voice
 
 With **K1 held** (ALT), MAIN's rings change to the selected voice's:

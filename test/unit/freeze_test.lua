@@ -441,4 +441,24 @@ test("a raising freeze-change hook is reported and skipped", function()
   assert_equal(table.concat(log, ", "), "2:true, grid, 2:false, grid", "the good hook and the grid redraw still run")
 end)
 
+-- 3.8 (package 1d): a voice reading another voice's ring freezes as an
+-- input voice does (hold, and spectral on high), and a switch unfreezes it
+test("a voice source freezes, and a switch unfreezes", function()
+  h.write_performance_active(HIGH)
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local source = S.constants.SOURCE_VOICE_FIRST + 1
+  params:set("v1_source", source)
+  context.clear_engine_calls()
+  params:set("v1_freeze_mode", 2)
+  params:set("v1_freeze", 1)
+  local sent = sent_freeze(context)
+  assert_equal(sent[#sent] and sent[#sent].name, "freeze"); assert_equal(sent[#sent] and sent[#sent].value, 1, "frozen")
+  assert_true(S.lib.freeze.spectral_offered(), "spectral is offered on high")
+  assert_true(S.lib.freeze.is_frozen(1), "the voice is frozen")
+  params:set("v1_source", source + 1)
+  assert_equal(params:get("v1_freeze"), 0, "a switch to another voice's ring unfreezes")
+end)
+
 end

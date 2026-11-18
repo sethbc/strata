@@ -1,7 +1,9 @@
 // StrataRings.sc
 // The rings area: each voice's ring and the input ring the ring grain
 // synths read, their persistent writers and phase buses, each voice's copy
-// ring (an input freeze's copy: the freeze area's), and the ring readers.
+// ring (an input or voice-source freeze's copy: the freeze area's), the
+// ring readers and the input channel (3.8). A voice source's ring is the
+// out rings area's (StrataOutRings.sc).
 // See docs/notes/engine/rings.md.
 
 + Engine_Strata {
@@ -39,8 +41,27 @@
             start: { this.areaCall(\startRingWriters) },
             stop: { this.areaCall(\stopRingWriters) },
             free: { this.areaCall(\freeRings) },
-            effectKeys: this.ringWriterKeys
+            effectKeys: this.ringWriterKeys,
+            // 3.8: an input voice's channel (handler-only: no grain def has
+            // the control; grainReadPairs applies it)
+            grainParamHandlers: (
+                inputChannel: { arg voice, value; this.areaCall(\setInputChannel, voice, value) }
+            )
         )
+    }
+
+    // The input channel (3.8, design §5): 0 stereo, 1 the left ring to both
+    // of the grain synth's reads, 2 the right; no UGen. Kept with the
+    // voice's grain controls (a switch away and back keeps it) and, on an
+    // input voice, sent as the read pairs to its grain synths, its live
+    // extra notes' too (grainReadPairs: a frozen one's copy the same way).
+    // A voice source ignores it. True: setGrainParam stores and sends
+    // nothing more
+    setInputChannel { arg voice, inputChannel;
+        // (a whole number: channelPair's switch matches 1 and 2, never 1.0)
+        grainControls[voice][\inputChannel] = inputChannel.round.clip(0, 2).asInteger;
+        if (grainSource[voice] == this.inputSource) { this.setGrainSynths(voice, *this.grainReadPairs(voice)) };
+        ^true
     }
 
     // The writers' synth keys: one per voice, then the input's
@@ -48,7 +69,9 @@
         ^numVoices.collect({ arg voice; ("ringWrite" ++ voice).asSymbol }) ++ [\ringWriteInput]
     }
 
-    // Every ring grain synth until it frees -> the voice it plays for
+    // Every ring grain synth until it frees -> the voice it plays for (the
+    // reading voice, never the ring: nothing needs a ring's readers, since a
+    // ring only appends and no reader is told anything)
     ringReaders { ^areaState[\rings][\readers] }
 
     // Per voice: counts the changes that make a pending ring copy stale
@@ -57,19 +80,22 @@
 
     // [left buffer, right buffer, phase bus] a ring grain synth reads for a
     // voice's source: the voice's own ring for the synth source, the input
-    // ring for the input source; nil for a buffer slot
+    // ring for the input source, the read voice's output ring for a voice
+    // source (3.8: the out rings area's, outRingFor); nil for a buffer slot
     ringBuffersFor { arg voice, source;
         var rings = areaState[\rings];
         case
         { source == 0 } { ^[rings[\voiceL][voice], rings[\voiceR][voice], rings[\phaseBuses][voice]] }
-        { source == this.inputSource } { ^[rings[\inputL], rings[\inputR], rings[\phaseBuses][numVoices]] };
+        { source == this.inputSource } { ^[rings[\inputL], rings[\inputR], rings[\phaseBuses][numVoices]] }
+        { this.voiceSource(source) } { ^this.outRingFor(this.readVoiceOf(source)) };
         ^nil
     }
 
     // [left buffer, right buffer, phase bus] of a voice's copy ring: what an
-    // input freeze holds (the freeze area writes it), read only by the
-    // voice's input grain synths. The voice's own ring only ever holds its
-    // voice bus, so a synth-source grain synth never reads input audio
+    // input or voice-source freeze holds (the freeze area writes it), read
+    // only by the voice's input and voice-source grain synths. The voice's
+    // own ring only ever holds its voice bus, so a synth-source grain synth
+    // never reads input audio
     copyRingFor { arg voice;
         var rings = areaState[\rings];
         ^[rings[\copyL][voice], rings[\copyR][voice], rings[\copyPhaseBuses][voice]]

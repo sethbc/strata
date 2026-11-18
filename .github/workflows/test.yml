@@ -148,7 +148,7 @@ jobs:
         areas:
           - buffers,loops,types
           - lifecycle,files,positions,notes
-          - effects,voices
+          - effects,voices,outrings
           - mix,variation,grains,structure,performance
           - modulation,freeze,envelopes,tuning
           - memory,rings

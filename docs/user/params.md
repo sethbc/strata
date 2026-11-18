@@ -154,7 +154,7 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 |---|---|---|---|
 | type | resonator, fm, folder, sub, pulse, karplus, ring, wave, additive, noise, saw, formant | by voice: resonator, fm, folder, sub, pulse, karplus, ring | The voice's synth ([Voice types](voices-and-grains.md#voice-types)). First under the voice's heading; a PSET from before 3.8 has no line for it and puts each voice back on its own type |
 | quantize | off/on | off | Right after the type and above the voice's freq, so a PSET sets it before the freq ([Grain variation](voices-and-grains.md#grain-variation)) |
-| source | synth, buf 1-8, input | synth | What the voice's grains read ([Audio Sources and Buffers](sources-and-buffers.md)) |
+| source | synth, buf 1-8, input, voice 1-7 | synth | What the voice's grains read: its synth, a buffer, the live input or a voice's output, another's or its own ([Audio Sources and Buffers](sources-and-buffers.md)) |
 | buffer position | 0-1 | 0 | Where a buffer-sourced voice's grains read, in its loop |
 | buffer rate | 0.25-4 | 1 | How fast a buffer-sourced voice's grains read the buffer |
 | buffer scan | -2 to 2 | 0 | How fast the position moves through the loop, as a speed: at 1 the audio's own rate, at 2 double, below 0 backward (VOICE shows it as `1.00x`). Before 3.7 it was loop lengths a second, so a scene or PSET saved then with a scan that is not 0 plays at another speed |
@@ -174,6 +174,7 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | grain overlap | 0.25-16 x | 2 | How many grains at once in the overlap cloud |
 | pan wander | 0-100 % | 50 | How far the slow random pan wander moves the grains |
 | history | 0-16 s (0-60 s on the high tier) | 0 | Input-sourced voices: how far back in the live input the grains play ([Granular Processing](voices-and-grains.md#granular-processing)) |
+| input channel | stereo, left, right | stereo | Input-sourced voices: both of the input's channels, or the left or the right one alone ([Audio Sources and Buffers](sources-and-buffers.md)) |
 | freeze | off/on | off | Hold what the voice's grains play ([Freeze](pages/voice.md#freeze)) |
 | freeze mode | hold (and spectral on the high tier) | hold | |
 | loop start | 0-1 | 0 | The part of the buffer a buffer-sourced voice plays ([Audio Sources and Buffers](sources-and-buffers.md)) |

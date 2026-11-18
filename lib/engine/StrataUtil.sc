@@ -25,8 +25,21 @@
 
     inputSource { ^numBuffers + 1 }
 
+    // 3.8: the first voice source; voiceSourceFirst + j reads voice j's
+    // output ring (the out rings area's), for j = 0..numVoices - 1
+    voiceSourceFirst { ^numBuffers + 2 }
+
+    // Whether a source is a voice source (another voice's output ring, or
+    // the voice's own)
+    voiceSource { arg source;
+        ^source.isInteger and: { source.inclusivelyBetween(this.voiceSourceFirst, this.voiceSourceFirst + numVoices - 1) }
+    }
+
+    // The voice a voice source reads
+    readVoiceOf { arg source; ^source - this.voiceSourceFirst }
+
     validSource { arg source;
-        ^source.isInteger and: { (source >= 0) and: { source <= this.inputSource } }
+        ^source.isInteger and: { (source >= 0) and: { source <= (this.voiceSourceFirst + numVoices - 1) } }
     }
 
     voiceRunning { arg voice;
