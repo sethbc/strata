@@ -900,6 +900,18 @@ test("custom is the last scale and scale_mask holds it", function()
   assert_equal(params:get("scale_mask"), 2741, "the fade's end sets it")
 end)
 
+-- Fix round 1: a chord always holds its own note: its degrees are measured
+-- from the lowest allowed tone
+test("a custom scale without its root still chords from 0", function()
+  local context = load_strata()
+  finish_startup(context)
+  context.clear_engine_calls()
+  params:set("v1_intervals", option_index("v1_intervals", "chord"))
+  params:set("scale_mask", 2 + 32 + 256)  -- C#, F, G#: the root out
+  params:set("scale", #params:lookup_param("scale").options)
+  assert_equal(table.concat(sent_intervals(context, 0), ","), "0,7,16", "measured from C#, the lowest tone")
+end)
+
 test("the chord set follows the tuning (ruling 40)", function()
   local context = load_strata()
   finish_startup(context)
