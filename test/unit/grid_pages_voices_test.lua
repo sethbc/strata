@@ -538,6 +538,84 @@ test("VC onto a locked voice loads the sound (a lock guards against randomize, n
   assert_equal(pane.led(KEY.lock, 4), 12, "its lock key lit")
 end)
 
+-- Fix round 1: a lock guards the voice's sound (its params), not its
+-- pattern (docs/notes/lua/mutation.md, as in 3.7), so the pattern keys
+-- still act on a locked voice; a change of the lock's reach is a decision
+test("RN and CL act on a locked voice's pattern (a lock guards its sound, not its pattern)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pane = voices_pane(context, "128h")
+  pane.tap(KEY.lock, 3)
+  assert_true(S.locked[3], "voice 3 locked")
+  for step = 1, S.constants.PATTERN_LENGTH do S.patterns[3][step] = 0 end
+  local real_random = math.random
+  math.random = function(low, high)  -- every step set, at its draw's top
+    if low == nil then return 1 end
+    return high
+  end
+  pane.press(KEY.randomize, 3, 1)
+  context.clock.run_for(0.51)
+  pane.press(KEY.randomize, 3, 0)
+  math.random = real_random
+  for step = 1, S.constants.PATTERN_LENGTH do
+    assert_equal(S.patterns[3][step], S.constants.MAX_STEP_LEVEL, "RN randomized the locked voice's step " .. step)
+  end
+  pane.press(KEY.clear, 3, 1)
+  context.clock.run_for(0.51)
+  pane.press(KEY.clear, 3, 0)
+  for step = 1, S.constants.PATTERN_LENGTH do
+    assert_equal(S.patterns[3][step], 0, "CL cleared the locked voice's step " .. step)
+  end
+  assert_true(S.locked[3], "and it stays locked")
+end)
+
+test("a paste onto a locked voice replaces its pattern", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pane = voices_pane(context, "128h")
+  S.patterns[1][2], S.patterns[1][11] = 15, 6
+  S.patterns[4][7] = 9
+  local copied = pattern_of(S, 1)
+  pane.tap(KEY.lock, 4)
+  assert_true(S.locked[4], "voice 4 locked")
+  pane.tap(KEY.pattern_copy, 1)
+  pane.tap(KEY.pattern_copy, 4)
+  assert_pattern(S, 4, copied, "the paste replaced the locked voice's pattern")
+  assert_true(S.locked[4], "and it stays locked")
+end)
+
+-- Fix round 1: holds are keyed per physical key, so two voices' CL keys
+-- held at once each act at their own hold
+test("two voices' CL held together each clear at their own hold; an early release cancels that one alone", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    S.patterns[2][1], S.patterns[5][1], S.patterns[6][1] = 15, 15, 15
+    pane.press(KEY.clear, 2, 1)
+    context.clock.run_for(0.2)
+    pane.press(KEY.clear, 5, 1)
+    assert_equal(pane.led(KEY.clear, 2), 15, arrangement .. ": voice 2's CL pending")
+    assert_equal(pane.led(KEY.clear, 5), 15, arrangement .. ": and voice 5's")
+    context.clock.run_for(0.31)
+    assert_equal(S.patterns[2][1], 0, arrangement .. ": voice 2 cleared at its hold")
+    assert_equal(S.patterns[5][1], 15, arrangement .. ": voice 5 not yet")
+    assert_equal(pane.led(KEY.clear, 5), 15, arrangement .. ": still pending")
+    context.clock.run_for(0.2)
+    assert_equal(S.patterns[5][1], 0, arrangement .. ": voice 5 cleared at its own")
+    pane.press(KEY.clear, 2, 0); pane.press(KEY.clear, 5, 0)
+    -- two held, one let go early: only the other acts
+    S.patterns[2][1] = 15
+    pane.press(KEY.clear, 6, 1)
+    pane.press(KEY.clear, 2, 1)
+    context.clock.run_for(0.3)
+    pane.press(KEY.clear, 6, 0)
+    assert_equal(pane.led(KEY.clear, 6), 2, arrangement .. ": voice 6's let go: back to 2")
+    assert_equal(pane.led(KEY.clear, 2), 15, arrangement .. ": voice 2's still pending")
+    context.clock.run_for(0.3)
+    pane.press(KEY.clear, 2, 0)
+    assert_equal(S.patterns[6][1], 15, arrangement .. ": voice 6's early release cleared nothing")
+    assert_equal(S.patterns[2][1], 0, arrangement .. ": voice 2's hold cleared it")
+  end, {{KEY.clear, 1}})
+end)
+
 test("lv sets v<v>_amp across eight keys on every arrangement", function()
   each_arrangement(function(_, S, pane, arrangement)
     local steps = pattern_of(S, 2)
