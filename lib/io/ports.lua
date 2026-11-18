@@ -48,7 +48,7 @@ return function(S)
   local state = {
     listeners = {}, dispatchers = {}, owners = {}, seen = {}, errors = {}, leaving = {},
     changes = new_set(), claims = new_set(), settles = new_set(),
-    -- telling: how many arrivals, departures and releases are being told
+    -- telling: how many arrivals, departures, claims and releases are being told
     -- (one inside another's hooks counts); unsettled: the ports whose
     -- arrival or release was told meanwhile, each once, in the order told;
     -- settling: their settled hooks are running
@@ -96,13 +96,14 @@ return function(S)
     end
   end
 
-  -- run() (which tells hooks of port's arrival, departure or release; port
-  -- nil for a telling around several, as reconcile's), then,
+  -- run() (which tells hooks of port's arrival, departure, claim or release;
+  -- port nil for a telling around several, as reconcile's), then,
   -- unless it is inside another such telling, the settled hooks of each port
-  -- whose arrival or release (settles) was told meanwhile: so a claim or
-  -- release a hook made inside it is told before the port settles, and the
-  -- port settles once. A telling inside a settled hook joins the ports
-  -- still to settle. An error is raised again once the count is restored
+  -- whose arrival or release (settles) was told meanwhile, in the order
+  -- their tellings ended: so a claim or release a hook made inside it is
+  -- told before the port settles, and the port settles once. A telling
+  -- inside a settled hook joins the ports still to settle. An error is
+  -- raised again once the count is restored
   local function told(port, settles, run)
     state.telling = state.telling + 1
     local ran, problem = pcall(run)
@@ -217,7 +218,9 @@ return function(S)
     if owner == name then return true end
     if owner ~= nil then return false end
     state.owners[port] = name
-    run_set(state.claims, "midi claim hook", port, name)
+    -- told, so a release a hook makes settles after the claim's last hook;
+    -- the claim itself settles nothing (#788)
+    told(port, false, function() run_set(state.claims, "midi claim hook", port, name) end)
     request_redraw()  -- SETUP and IO show the owner
     return true
   end

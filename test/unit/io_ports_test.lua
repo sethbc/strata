@@ -494,6 +494,28 @@ test("a settled hook that claims or releases a port settles each port once", fun
   assert_equal(ports.owner(3), "taker", "the claim stands")
 end)
 
+test("a release made inside a claim's hook settles after every hook of that claim has run", function()
+  local context = load_strata()
+  local ports = local_value("S").lib.io_ports
+  ports.claim(6, "probe")
+  local heard = {}
+  ports.on_claim("first", function(port, owner)
+    if port == 3 and owner == "taker" then
+      heard[#heard + 1] = "first 3"
+      ports.release(6, "probe")
+    end
+  end)
+  ports.on_claim("second", function(port, owner)
+    if port == 3 and owner == "taker" then heard[#heard + 1] = "second 3" end
+  end)
+  ports.on_settled("probe", function(port) heard[#heard + 1] = "settled " .. port end)
+  context.midi.plug(3, "box")
+  heard = {}
+  assert_true(ports.claim(3, "taker"), "port 3 claimed")
+  assert_equal(table.concat(heard, ", "), "first 3, second 3, settled 6",
+    "port 6 settles once, after the claim's last hook; the claim settles nothing of its own")
+end)
+
 test("out gives the port's vport and nil outside 1 to 16", function()
   load_strata()
   local ports = local_value("S").lib.io_ports
