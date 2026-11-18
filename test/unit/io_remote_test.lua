@@ -426,6 +426,19 @@ test("MIDI out sends nothing to the port a remote grid holds, and sends again on
   assert_equal(params:string("v1_out_port"), "3")
 end)
 
+test("holds is false while the port's release is told", function()
+  local context, S = started()
+  remote_grid(context, S, 3)
+  assert_true(S.lib.io_remote.holds(3), "while claimed: held")
+  local at_release
+  S.lib.io_ports.on_claim("probe", function(port, owner)
+    if port == 3 and owner == nil then at_release = S.lib.io_remote.holds(3) end
+  end)
+  set_rig(S, "remote_grid_port", 0)
+  assert_equal(at_release, false, "the release's claim hooks find the port not held")
+  assert_true(not S.lib.io_remote.holds(3), "nor afterward")
+end)
+
 test("MIDI out's section shows no [--] for a port a remote holds: its device is there", function()
   -- the user page's [--] means no device on a port MIDI out sends on
   local context, S = started()

@@ -7,7 +7,9 @@
 -- port's vport for sending, device(port) its device's name; on_change tells
 -- of a device arriving at or leaving a port (hot-plug, and a move made in
 -- SYSTEM > DEVICES once the menu closes); claim gives a port one owner (a
--- controller, a remote grid), which lib/midi_in.lua then leaves alone. The
+-- controller, a remote grid), which lib/midi_in.lua then leaves alone;
+-- on_settled tells of a port once its arrival or release has reached every
+-- change and claim hook (MIDI out's zone setup goes from there, #772). The
 -- start step keeps the hot-plug handlers it finds and calls them after its
 -- own listeners; the cleanup step puts them back and clears every event it
 -- set. See docs/notes/lua/io/ports.md.
@@ -45,7 +47,12 @@ return function(S)
   -- handlers found installed, and whether ours are
   local state = {
     listeners = {}, dispatchers = {}, owners = {}, seen = {}, errors = {}, leaving = {},
-    changes = new_set(), claims = new_set(),
+    changes = new_set(), claims = new_set(), settles = new_set(),
+    -- telling: how many arrivals, departures and releases are being told
+    -- (one inside another's hooks counts); unsettled: the ports whose
+    -- arrival or release was told meanwhile, each once, in the order told;
+    -- settling: their settled hooks are running
+    telling = 0, unsettled = {}, settling = false,
     -- wrapped_*: a cleanup found something installed over ours, which then
     -- stays and still leads to ours; entered_*: ours is running
     hot_plug = {kept_add = nil, kept_remove = nil, installed = false, wrapped_add = false, wrapped_remove = false,
@@ -87,6 +94,31 @@ return function(S)
       local fn = set.fns[name]
       if fn then S.lib.ui_frame.contained_call(state.errors, label .. " " .. name, label .. " " .. name, fn, ...) end
     end
+  end
+
+  -- run() (which tells hooks of port's arrival, departure or release), then,
+  -- unless it is inside another such telling, the settled hooks of each port
+  -- whose arrival or release (settles) was told meanwhile: so a claim or
+  -- release a hook made inside it is told before the port settles, and the
+  -- port settles once. A telling inside a settled hook joins the ports
+  -- still to settle. An error is raised again once the count is restored
+  local function told(port, settles, run)
+    state.telling = state.telling + 1
+    local ran, problem = pcall(run)
+    state.telling = state.telling - 1
+    if settles then
+      local queued = false
+      for _, entry in ipairs(state.unsettled) do queued = queued or entry == port end
+      if not queued then state.unsettled[#state.unsettled + 1] = port end
+    end
+    if state.telling == 0 and not state.settling then
+      state.settling = true
+      while #state.unsettled > 0 do
+        run_set(state.settles, "midi settled hook", table.remove(state.unsettled, 1))
+      end
+      state.settling = false
+    end
+    if not ran then error(problem, 0) end
   end
 
   local function dispatcher(port)
@@ -166,6 +198,15 @@ return function(S)
     set_entry(state.claims, name, fn)
   end
 
+  -- fn(port) once a port's arrival (a hot-plug or a move in the menu) or its
+  -- release has been told to every change and claim hook, any claim or
+  -- release a hook made meanwhile included; never for a departure or a claim
+  function M.on_settled(name, fn)
+    require_name("on_settled", name)
+    require_fn("on_settled", fn)
+    set_entry(state.settles, name, fn)
+  end
+
   -- The port for name: true when it is name's (now or already), false
   -- while another name holds it or outside 1..16
   function M.claim(port, name)
@@ -184,7 +225,7 @@ return function(S)
   function M.release(port, name)
     if not valid_port(port) or state.owners[port] == nil or state.owners[port] ~= name then return end
     state.owners[port] = nil
-    run_set(state.claims, "midi claim hook", port, nil)
+    told(port, true, function() run_set(state.claims, "midi claim hook", port, nil) end)
     request_redraw()
   end
 
@@ -215,7 +256,7 @@ return function(S)
     local port = device and device.port
     if state.hot_plug.installed and valid_port(port) then
       state.seen[port] = norns_midi().vports[port].device or device
-      run_set(state.changes, "midi change hook", port, device.name)
+      told(port, true, function() run_set(state.changes, "midi change hook", port, device.name) end)
     end
     if state.hot_plug.kept_add then state.hot_plug.kept_add(device) end
   end
@@ -227,7 +268,7 @@ return function(S)
     local ran, problem = pcall(function()
       if marked then
         state.seen[port] = nil
-        run_set(state.changes, "midi change hook", port, nil)
+        told(port, false, function() run_set(state.changes, "midi change hook", port, nil) end)
       end
       if state.hot_plug.kept_remove then state.hot_plug.kept_remove(device) end
     end)
@@ -253,8 +294,12 @@ return function(S)
         state.seen[port] = current
       end
     end
-    for _, port in ipairs(left) do run_set(state.changes, "midi change hook", port, nil) end
-    for _, port in ipairs(arrived) do run_set(state.changes, "midi change hook", port, vports[port].name) end
+    for _, port in ipairs(left) do
+      told(port, false, function() run_set(state.changes, "midi change hook", port, nil) end)
+    end
+    for _, port in ipairs(arrived) do
+      told(port, true, function() run_set(state.changes, "midi change hook", port, vports[port].name) end)
+    end
   end
 
   S.register_menu_close(function() M.reconcile() end)
