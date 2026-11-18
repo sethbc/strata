@@ -1,0 +1,170 @@
+return {
+-- Table: {1}
+{
+   ["scenes"]={2},
+   ["version"]=10,
+},
+-- Table: {2}
+{
+   {3},
+   {4},
+   {5},
+   {6},
+   {7},
+   {8},
+   {9},
+   {10},
+   {11},
+   {12},
+   {13},
+   {14},
+   {15},
+   {16},
+   {17},
+   {18},
+},
+-- Table: {3}
+{
+   ["data"]={19},
+   ["name"]="dusk",
+   ["populated"]=false,
+},
+-- Table: {4}
+{
+   ["data"]={20},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {5}
+{
+   ["data"]={21},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {6}
+{
+   ["data"]={22},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {7}
+{
+   ["data"]={23},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {8}
+{
+   ["data"]={24},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {9}
+{
+   ["data"]={25},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {10}
+{
+   ["data"]={26},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {11}
+{
+   ["data"]={27},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {12}
+{
+   ["data"]={28},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {13}
+{
+   ["data"]={29},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {14}
+{
+   ["data"]={30},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {15}
+{
+   ["data"]={31},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {16}
+{
+   ["data"]={32},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {17}
+{
+   ["data"]={33},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {18}
+{
+   ["data"]={34},
+   ["name"]="",
+   ["populated"]=false,
+},
+-- Table: {19}
+{
+},
+-- Table: {20}
+{
+},
+-- Table: {21}
+{
+},
+-- Table: {22}
+{
+},
+-- Table: {23}
+{
+},
+-- Table: {24}
+{
+},
+-- Table: {25}
+{
+},
+-- Table: {26}
+{
+},
+-- Table: {27}
+{
+},
+-- Table: {28}
+{
+},
+-- Table: {29}
+{
+},
+-- Table: {30}
+{
+},
+-- Table: {31}
+{
+},
+-- Table: {32}
+{
+},
+-- Table: {33}
+{
+},
+-- Table: {34}
+{
+},
+}

@@ -1,0 +1,16 @@
+return {
+-- Table: {1}
+{
+   ["matrix"]={2},
+   ["version"]=2,
+},
+-- Table: {2}
+{
+   {3},
+},
+-- Table: {3}
+{
+   ["dest"]="v2_amp",
+   ["source"]="lfo1",
+},
+}

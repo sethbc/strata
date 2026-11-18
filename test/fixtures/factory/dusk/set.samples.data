@@ -1,0 +1,28 @@
+return {
+-- Table: {1}
+{
+   ["files"]={2},
+   ["version"]=1,
+},
+-- Table: {2}
+{
+   ["bell.wav"]={3},
+   ["drone.wav"]={4},
+   ["pad.wav"]={5},
+},
+-- Table: {3}
+{
+   ["count"]=4,
+   ["key"]=64,
+   ["mode"]=2,
+},
+-- Table: {4}
+{
+   ["normalize"]=true,
+},
+-- Table: {5}
+{
+   ["key"]=57,
+   ["tempo"]=96,
+},
+}

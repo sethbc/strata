@@ -817,7 +817,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "type settle", "pattern clock",
   "gesture recorders",
   "quantized actions", "scene sequencer", "scene transition",
-  "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
+  "morph clock", "macro clock", "factory clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
   "buffer start reload", "buffer polls and timers", "slices poll", "record poll", "input meter", "flashes", "targets ended",
   "midi out", "ii stopped", "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler",
@@ -857,6 +857,7 @@ test("cleanup runs every registered step in today's order", function()
   S.lib.midi_in.set_note_tap = function() end  -- the MIDI module's note tap (3.5's 2b): a stand-in
   S.lib.ui_zones.open(); S.lib.ui_zones.learn(1)  -- the zones editor's learn timeout clock runs
   S.lib.types.turn(1, 1)  -- 3.8: voice 1's type row holds a pending choice, its settle clock runs
+  S.factory_clock = clock.run(function() clock.sleep(100) end)  -- 3.8: a factory set's load waits
   context.crow.plug(); params:set("crow_in2_mode", 2)  -- a crow with a jack set: its cleanup sends lines
   -- a remote grid on port 3 (3.6's 1d; the E16 above holds port 2): its hello attaches it and its draw clock runs
   S.lib.io_rig.set("remote_grid_port", 3)
@@ -892,7 +893,7 @@ test("cleanup runs every registered step in today's order", function()
     { "waveform loop", S.lib.waveforms.read_clock }, { "buffer start reload", S.lib.buffers.start_reload_clocks[2] },
     { "flashes", S.lib.ui_flash.slots.hints.clock }, { "flashes", S.lib.ui_flash.slots.header.clock },
     { "playheads clock", S.lib.playheads.clock_id() }, { "engine budget", S.engine_budget_clock },
-    { "morph clock", S.morph_clock }, { "macro clock", S.macro_clock },
+    { "morph clock", S.morph_clock }, { "macro clock", S.macro_clock }, { "factory clock", S.factory_clock },
     { "gestures saved", S.gesture_save_clock },  -- the recordings' timed write (#651), canceled as the step writes
     { "sequences saved", S.sequences_save_clock },  -- a first start's draw waits to be written, canceled the same way
     { "gesture recorders", S.gestures[2].clock }, { "quantized actions", S.lib.quantize.actions.scene.clock },
