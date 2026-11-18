@@ -17,29 +17,52 @@ var rootKey = engine.tuningRootKey, majorMask = 2741, bufnum = engine.scaleBuffe
 var equal12 = (0..11) * 100, equal19 = (0..18).collect({ arg step; step * 1200 / 19 });
 // ji normal (norns' intonation JI.normal), in cents
 var jiNormal = [0, 111.7313, 203.9100, 315.6413, 386.3137, 498.0450, 590.2237, 701.9550, 813.6863, 884.3587, 996.0900, 1088.2687];
-var readTable, centerOf, nearest, maskAllowed, sendTuning, mismatches, sameAs, lines, ignored, capture, before, table;
+var readTable, reference, maskAllowed, sendTuning, mismatches, sameAs, lines, ignored, capture, before, table;
 var probeGroup, quietBus, readOut, rectEnv, logRates, logDurs, logFrames = 256, sentinel = -1000, timecode, grainLog;
-var grains, semitones, buildTimes;
+var grains, semitones, buildTimes, keys = (0 .. (frames - 1)), centers, missed, found;
 
-// The table's frames (an Array of Floats)
+// Every frame's center, a Signal (a series made with putEach)
+centers = (Signal.newClear(frames).putEach(keys, keys) / res) + low;
+// The table's frames, a Signal
 readTable = {
     var condition = Condition(false), values;
     engine.scaleBuffer.loadToFloatArray(action: { arg array; values = array; condition.test = true; condition.signal });
     h.awaitReply(condition);
-    values.asArray
+    Signal.newClear(frames).putEach(keys, values)
 };
-centerOf = { arg frame; low + (frame / res) };
-// The allowed tone nearest pitch, a tie going down: allowed are cents above
-// degree 0 (key rootKey + root), repeated each period. Returns the tone and
-// how much nearer it is than the next nearest (0 at a midpoint)
-nearest = { arg pitch, allowed, period, root;
-    var rootNote = rootKey + root, periods = ((pitch - rootNote) * 100 / period).floor;
-    var candidates = [periods - 1, periods, periods + 1].collect({ arg count;
-        allowed.collect({ arg tone; rootNote + (((count * period) + tone) / 100) }) }).flatten.sort;
-    var distances = candidates.collect({ arg candidate; (candidate - pitch).abs });
-    var best = distances.minIndex, margin;
-    margin = distances.copy.put(best, inf).minItem - distances[best];
-    [candidates[best], margin]
+// The brute force, a construction of its own (not the engine's period
+// wrap): every candidate tone the table's range can reach (allowed are
+// cents above degree 0, key rootKey + root, repeated each period), in
+// ascending order, each one Signal pass over the frames within a period
+// of it (copyRange and overWrite: primitives, never a function per frame),
+// keeping each frame's nearest tone (a strictly nearer one only, so a tie
+// keeps the lower) and the distance to its second nearest. Returns the
+// nearest tones and each frame's margin (second distance less the nearest:
+// 0 at a midpoint)
+reference = { arg allowed, period, root;
+    var rootNote = rootKey + root, span = (period * res / 100).ceil.asInteger + 1;
+    var first = (((low - rootNote) * 100) / period).floor.asInteger - 1;
+    var last = ((((low + ((frames - 1) / res)) - rootNote) * 100) / period).ceil.asInteger + 1;
+    var best = Signal.newClear(frames), nearest = Signal.newClear(frames) + 1e9, second = Signal.newClear(frames) + 1e9;
+    (first .. last).do({ arg periods;
+        allowed.do({ arg tone;
+            var pitch = rootNote + (((periods * period) + tone) / 100);
+            var frame = ((pitch - low) * res).round.asInteger;
+            var from = (frame - span).max(0), to = (frame + span).min(frames - 1);
+            var distance, closer, part, near, next;
+            if (from <= to) {
+                distance = (centers.copyRange(from, to) - pitch).abs;
+                near = nearest.copyRange(from, to);
+                part = best.copyRange(from, to);
+                closer = (near - distance).sign.max(0);  // 1 where strictly nearer
+                next = second.copyRange(from, to).min(near.max(distance));
+                best.overWrite(part + (((part * -1) + pitch) * closer), from);
+                nearest.overWrite(near.min(distance), from);
+                second.overWrite(next, from);
+            };
+        });
+    });
+    [best, second - nearest]
 };
 // The tones of a twelve-tone tuning whose bit of mask is set (bit k: degree k)
 maskAllowed = { arg tones, mask; tones.select({ arg tone, degree; mask.bitAnd(1 << degree) != 0 }) };
@@ -49,21 +72,18 @@ sendTuning = { arg tones, period, order;
     (order ? (0 .. (tones.size - 1))).do({ arg index; command.(\setTuningTone, index, tones[index].asFloat) });
     server.sync;
 };
-// How many frames of table miss the nearest tone (exact: equal; else
-// within 1e-4 semitone, frames within 1e-3 of a midpoint left out)
+// How many frames of table miss the brute force's tone (exact: equal; else
+// within 1e-4 semitone, frames within 1e-3 of a midpoint left out), counted
+// with Signal primitives (integral sums)
 mismatches = { arg table, allowed, period, root, exact = true;
-    var count = 0;
-    table.do({ arg value, frame;
-        var found = nearest.(centerOf.(frame), allowed, period, root);
-        if (exact) {
-            if (value != found[0]) { count = count + 1 };
-        } {
-            if ((found[1] >= 1e-3) and: { (value - found[0]).abs > 1e-4 }) { count = count + 1 };
-        };
-    });
-    count
+    var expected = reference.(allowed, period, root), difference = (table - expected[0]).abs;
+    if (exact) {
+        difference.sign.integral.asInteger
+    } {
+        ((difference - 1e-4).sign.max(0) * (expected[1] - 1e-3).sign.max(0)).integral.asInteger
+    }
 };
-sameAs = { arg a, b; (a.size == b.size) and: { a.every({ arg value, index; value == b[index] }) } };
+sameAs = { arg a, b; (a.size == b.size) and: { (a - b).peak == 0 } };
 // Count the console lines the area posts while fn runs (postTuningIgnored)
 lines = List.new(64);
 capture = { arg fn;
@@ -81,31 +101,37 @@ check.((engine.scaleBuffer.numFrames == frames) and: { table.size == frames }
     and: { engine.tuningTonesAndPeriod == [equal12, engine.octaveCents] },
     "tuning: the table has tuningTableFrames frames and starts at twelve equal, chromatic from C (% frames, %, %)".format(
         table.size, engine.scaleRootAndMask, engine.tuningTonesAndPeriod));
-check.((mismatches.(table, equal12, engine.octaveCents, 0) == 0) and: { table.every({ arg value; value == value.round }) },
-    "tuning: every default frame is the nearest whole note to its center, a tie down, exactly (% missed)".format(
-        mismatches.(table, equal12, engine.octaveCents, 0)));
-// 3.7's quantize rounded n to the whole note, a half up: the default
-// table agrees but at the exact half semitones, where a tie goes down
+missed = mismatches.(table, equal12, engine.octaveCents, 0);
+check.(missed == 0, "tuning: every default frame is the nearest whole note to its center, a tie down, exactly (% missed)".format(missed));
+// the brute force can fail: one frame a tone off, and a half-semitone frame
+// tied up, are each found
 {
-var halves = 0, missed = 0;
-table.do({ arg value, frame;
-    var center = centerOf.(frame), half = (frame % res) == (res div: 2);
-    if (half) { halves = halves + 1 };
-    if (value != (if (half) { center.round - 1 } { center.round })) { missed = missed + 1 };
-});
-check.((missed == 0) and: { halves == (frames / res).round.asInteger },
-    "tuning: the default table lands where 3.7's quantize lands but at the % half semitones (% missed)".format(halves, missed));
+    var middle = frames div: 2, half = (frames div: 2) - ((frames div: 2) % res) + (res div: 2);
+    var off = mismatches.(table.copy.put(middle, table[middle] + 1), equal12, engine.octaveCents, 0);
+    var up = mismatches.(table.copy.put(half, table[half] + 1), equal12, engine.octaveCents, 0);
+    check.((off == 1) and: { up == 1 }, "tuning: the brute force finds a frame a tone off (%) and a tie gone up (%)".format(off, up));
+}.value;
+// 3.7's quantize rounded n to the whole note, a half up: the default
+// table (whole notes, above) is within half a semitone of every center, and
+// exactly half a semitone below it at the half semitones, where a tie goes
+// down; nowhere half a semitone above
+{
+    var offsets = centers - table;
+    var halves = frames - (offsets - 0.5).abs.sign.integral.asInteger;
+    var ups = frames - (offsets + 0.5).abs.sign.integral.asInteger;
+    check.((offsets.peak <= 0.5) and: { ups == 0 } and: { halves == (frames / res).round.asInteger },
+        "tuning: the default table lands where 3.7's quantize lands but at the % half semitones, a tie down (% up)".format(halves, ups));
 }.value;
 
 // ---- The scale's mask ----
 command.(\setScale, 0, majorMask); server.sync;
 table = readTable.value;
-check.(mismatches.(table, maskAllowed.(equal12, majorMask), engine.octaveCents, 0) == 0,
-    "tuning: setScale(0, C major) fills the table with the nearest tone of the scale, a tie down");
+missed = mismatches.(table, maskAllowed.(equal12, majorMask), engine.octaveCents, 0);
+check.(missed == 0, "tuning: setScale(0, C major) fills the table with the nearest tone of the scale, a tie down (% missed)".format(missed));
 command.(\setScale, 2, majorMask); server.sync;
 table = readTable.value;
-check.(mismatches.(table, maskAllowed.(equal12, majorMask), engine.octaveCents, 2) == 0,
-    "tuning: the mask is from the root (D major)");
+missed = mismatches.(table, maskAllowed.(equal12, majorMask), engine.octaveCents, 2);
+check.(missed == 0, "tuning: the mask is from the root (D major; % missed)".format(missed));
 before = [engine.scaleRootAndMask, table];
 check.(capture.({
     [[12, majorMask], [-1, majorMask], [0, 0], [0, 4096], [0, -5]].do({ arg pair; command.(\setScale, pair[0], pair[1]) });
@@ -118,23 +144,32 @@ command.(\setScale, 0, engine.chromaticMask); server.sync;
 // ---- Another tuning ----
 sendTuning.(equal19, engine.octaveCents);
 table = readTable.value;
-check.((engine.tuningTonesAndPeriod[0].size == 19) and: { mismatches.(table, equal19, engine.octaveCents, 0, false) == 0 },
-    "tuning: a 19-tone tuning lands every frame on the nearest 19-EDO pitch from C4 (% missed)".format(
-        mismatches.(table, equal19, engine.octaveCents, 0, false)));
+missed = mismatches.(table, equal19, engine.octaveCents, 0, false);
+check.((engine.tuningTonesAndPeriod[0].size == 19) and: { missed == 0 },
+    "tuning: a 19-tone tuning lands every frame on the nearest 19-EDO pitch from C4 (% missed)".format(missed));
 command.(\setScale, 0, majorMask); server.sync;
 check.(sameAs.(readTable.value, table), "tuning: setScale(0, C major) under 19 tones changes no frame (every tone allowed)");
 // twelve just tones with the mask
 sendTuning.(jiNormal, engine.octaveCents);
 table = readTable.value;
-check.(mismatches.(table, maskAllowed.(jiNormal, majorMask), engine.octaveCents, 0, false) == 0,
-    "tuning: the mask applies in twelve just tones to an octave (ji normal, C major; % missed)".format(
-        mismatches.(table, maskAllowed.(jiNormal, majorMask), engine.octaveCents, 0, false)));
+missed = mismatches.(table, maskAllowed.(jiNormal, majorMask), engine.octaveCents, 0, false);
+check.(missed == 0, "tuning: the mask applies in twelve just tones to an octave (ji normal, C major; % missed)".format(missed));
 // twelve tones of a 1300-cent period: no octave, every tone allowed
 sendTuning.((0..11).collect({ arg step; step * 1300 / 12 }), 1300);
 table = readTable.value;
-check.(mismatches.(table, (0..11).collect({ arg step; step * 1300 / 12 }), 1300, 0, false) == 0,
-    "tuning: twelve tones of 1300 cents ignore the mask (every tone allowed)");
+missed = mismatches.(table, (0..11).collect({ arg step; step * 1300 / 12 }), 1300, 0, false);
+check.(missed == 0, "tuning: twelve tones of 1300 cents ignore the mask (every tone allowed; % missed)".format(missed));
 command.(\setScale, 0, engine.chromaticMask);
+// a part-received set is dropped by the next setTuning: 10 of 19 tones of
+// 19 equal, then the whole of ji normal, which has fewer: the table is ji
+// normal's alone
+command.(\setTuning, 19, 1200.0);
+10.do({ arg index; command.(\setTuningTone, index, equal19[index].asFloat) });
+sendTuning.(jiNormal, engine.octaveCents);
+table = readTable.value;
+missed = mismatches.(table, jiNormal, engine.octaveCents, 0, false);
+check.((engine.tuningTonesAndPeriod[0].size == 12) and: { missed == 0 },
+    "tuning: a second setTuning drops a part-received set: the table is the whole second set's alone (% missed)".format(missed));
 sendTuning.(equal12, engine.octaveCents);
 
 // ---- Sets that keep the old tuning ----
