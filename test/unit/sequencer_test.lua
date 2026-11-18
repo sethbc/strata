@@ -2478,6 +2478,7 @@ test("a three-note step chord on an arpeggiating voice: no noteOn for notes 2-3;
   end
   context.clear_engine_calls()
   pattern_clock_start()
+  context.clock.advance_until(S.lfo_clock)  -- (2b's fix round 1: the list goes at the LFO step)
   assert_equal(#note_calls(context, "noteOn", 0), 0, "no noteOn for notes 2 and 3")
   assert_equal(list(), "{7, 4, 0}", "the step's chord is the list, down")
   assert_equal(#retriggers_of(context, 0), 1, "one retrigger: the step's")
@@ -2485,9 +2486,38 @@ test("a three-note step chord on an arpeggiating voice: no noteOn for notes 2-3;
   assert_equal(#S.lib.arp.held(1), 2, "the arpeggiator holds notes 2 and 3")
   context.clear_engine_calls()
   context.clock.advance_until(S.pattern_clocks[1])
+  context.clock.advance_until(S.lfo_clock)
   assert_equal(list(), "{}", "the next step has no chord: the list ends")
   assert_equal(#S.lib.arp.held(1), 0, "nothing held")
   assert_equal(#note_calls(context, "noteOff", 0), 0, "no noteOff")
+  pattern_clock_stop()
+end)
+
+-- 2b's fix round 1: an unchanged list is never sent again
+test("a step chord repeated unchanged on the next step sends no list message on an arpeggiating voice", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
+  S.patterns[1][1] = 15
+  S.patterns[1][2] = 15
+  seq.set_step_attr(1, 1, "notes", {0, 4, 7})
+  seq.set_step_attr(1, 2, "notes", {0, 4, 7})
+  local function list_messages()
+    local n = 0
+    for _, call in ipairs(context.calls_named("setGrainParam")) do
+      if call.args[1] == 0 and (call.args[2]:match("^interval%d$") or call.args[2] == "intervalCount") then n = n + 1 end
+    end
+    return n
+  end
+  pattern_clock_start()
+  context.clock.advance_until(S.lfo_clock)
+  assert_equal(#S.lib.arp.held(1), 2, "step 1's chord in the list")
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])
+  context.clock.advance_until(S.lfo_clock)
+  assert_equal(seq.sounding_step(1), 2, "step 2 played")
+  assert_equal(#retriggers_of(context, 0), 1, "its retrigger")
+  assert_equal(list_messages(), 0, "the same chord: no list message")
   pattern_clock_stop()
 end)
 
