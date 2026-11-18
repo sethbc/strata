@@ -426,7 +426,7 @@ checkFreshDefaults = {
         delay: read.(\delay, [\time, \feedback, \mix, \pingPong]),
         reverb: read.(\reverb, [\mix, \size, \damp, \delayToReverb]),
         kept: fresh.areaState[\effects][\controls][\reverb].atAll([\mix, \size, \damp, \delayToReverb]),
-        drift: read.(\master, [\drift]), fxMix: [fresh.mixBus(\fxMix), fresh.areaState[\mix][\fxMix]],
+        drift: read.(\master, [\drift]), fxMix: fresh.mixBus(\fxMix),
         bypassed: [\delay, \reverb].collect({ arg key; fresh.areaState[\effects][\bypassed][key] }),
         scale: fresh.scaleRootAndMask
     );
@@ -438,7 +438,7 @@ checkFreshDefaults = {
     check.(near.(values[\delay], [0.375, 0.4, 0, 0])
         and: { SynthDescLib.global.at(\strataDelay).controls.any({ arg control; control.name == \pingPong }) }
         and: { near.(values[\reverb], [0.43, 0.8, 0.5, 1]) } and: { near.(values[\kept], [0.43, 0.8, 0.5, 1]) }
-        and: { near.(values[\drift], [0.01]) } and: { values[\fxMix] == [nil, nil] },
+        and: { near.(values[\drift], [0.01]) } and: { values[\fxMix].isNil },
         "effects: a fresh engine's delay starts at 0.375 s, feedback 0.4, level and pingPong 0, its reverb at level 0.43, size 0.8, damp 0.5 and delay to reverb 1 (kept so too), its drift at 0.01, with no fxMix bus, the Lua defaults (delay %, reverb %, kept %, drift %, fxMix %)".format(
             values[\delay], values[\reverb], values[\kept], values[\drift], values[\fxMix]));
     check.((values[\bypassed] == [false, false]) and: { values[\scale] == [0, 4095] },
@@ -741,7 +741,7 @@ checkMasterSteady = {
 
 // A command's messages, captured (makeBundle(false) sends nothing) and
 // then sent as they are, so a check can read what the command sent inside
-// a wait as short as the bypass fade (one bundle; the free comes later)
+// a wait as short as the bypass fade (the free comes later)
 sentBy = { arg name ... args;
     var messages = server.makeBundle(false, { command.(name, *args) });
     server.sendBundle(nil, *messages);
@@ -758,9 +758,9 @@ setsNoBus = { arg messages;
     messages.every({ arg msg; [\c_set, \c_setn, \c_fill].includes(msg[0].asString.replace("/", "").asSymbol).not })
 };
 
-// The bypass: the delay's level goes to 0 (one bundle, no free in it, no
-// bus set), the node is freed after the fade and re-created in its place
-// from the kept controls when lifted
+// The bypass: the delay's level goes to 0 (one message, no free with it,
+// no bus set), the node is freed after the fade and re-created in its
+// place from the kept controls when lifted
 checkBypassFrees = {
     var before, after, lifted, messages;
     command.(\setDelay, 0.3, 0.45, 0.6, 0);
@@ -1284,6 +1284,14 @@ checkFdn = {
     write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
     high = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
     highReverb = high.synths[\reverb] !? { arg synth; synth.defName.asSymbol };
+    // the high engine's fresh reverb node, as checkFreshDefaults reads the standard one's
+    {
+        var fresh = [\mix, \size, \damp, \delayToReverb].collect({ arg name;
+            high.synths[\reverb] !? { arg synth; getControl.(synth, name) } });
+        check.(fresh.every(_.notNil) and: { [fresh, [0.43, 0.8, 0.5, 1]].flop.every({ arg pair;
+                pair[0].equalWithPrecision(pair[1], 1e-6) }) },
+            "effects: a fresh high engine's FDN starts at level 0.43, size 0.8, damp 0.5 and delay to reverb 1 (got %)".format(fresh));
+    }.value;
     h.commandTo(high, \setBypass, 1, 1);
     0.2.wait; server.sync;
     h.commandTo(high, \setBypass, 1, 0);
@@ -1293,6 +1301,39 @@ checkFdn = {
         and: { engine.synths[\reverb].defName.asSymbol == \strataReverb },
         "effects: the high tier runs the FDN reverb (also after a bypass is lifted) and standard FreeVerb2 (got %, %)".format(
             highReverb, high.synths[\reverb] !? { arg synth; synth.defName }));
+    // The FDN takes delayToReverb of the delay's return (3.8): a unit
+    // impulse on the high engine's delay return alone (written just before
+    // its reverb node), the reverb at level 1, size 0.8, damp 0.5: at
+    // delayToReverb 0 the FDN's return stays silent, at 1 its tail sounds.
+    // The peaks of the return in three windows over 1.5 s, read on the
+    // server (\strataCheckEchoPeaks, its /n_end ends the wait)
+    {
+        var tail = { arg k;
+            var resultBus = Bus.control(server, 6), condition = Condition(false), values;
+            resultBus.setAll(0);
+            h.commandTo(high, \setReverb, 1.0, 0.8, 0.5, k);
+            server.sync; 0.3.wait;
+            server.makeBundle(nil, {
+                var analysis;
+                Synth(\strataCheckImpulse, [\out, high.delayBus], high.synths[\reverb], \addBefore);
+                analysis = Synth(\strataCheckEchoPeaks, [\in, high.reverbBus, \out, resultBus,
+                    \windows, [0, 0.5, 0.5, 1, 1, 1.5], \seconds, 1.55], high.synths[\reverb], \addAfter);
+                OSCFunc({ condition.test = true; condition.signal }, '/n_end', server.addr,
+                    argTemplate: [analysis.nodeID]).oneShot;
+            });
+            awaitReply.(condition, 20);
+            values = readBus.(resultBus);
+            resultBus.free;
+            values
+        };
+        var none = tail.(0), some = tail.(1);
+        check.((none.size == 6) and: { none.every({ arg peak; peak < 1e-6 }) } and: { some.size == 6 }
+            and: { some.maxItem > 0.001 },
+            "effects: the FDN takes delay to reverb of the delay's return: an impulse on the return alone leaves it silent at 0 and sounds at 1 (peaks at 0 %, at 1 %)".format(
+                none.collect({ arg value; value.round(0.000001) }), some.collect({ arg value; value.round(0.0001) })));
+        h.commandTo(high, \setReverb, 0.43, 0.8, 0.5, 1);
+        server.sync;
+    }.value;
     h.freeEngine(high);
     server.sync;
     check.([\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].every({ arg name; high.mixBus(name).index.isNil }),
