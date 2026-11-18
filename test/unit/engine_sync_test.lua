@@ -1649,8 +1649,157 @@ local function start_canonical(lines)
   return out
 end
 
+-- 3.8's package 0g: h.allowed_call_lines on sample lines, a start's
+-- (voice 4, its tokens filled from it) and a whole run's (a token entry
+-- standing for one entry a voice, its count per voice)
+test("the start-call allowances name every difference, and only those", function()
+  local allowed_call_lines = h.allowed_call_lines
+  local fixture = {
+    'setNotePool(4)',
+    'setGrainParam(3, "envShape", 0)',
+    'setDelay(0.5, 0.3, 0.2)',
+    'voiceOn(3, 220, 0.5, 0, 0.1, 20, 1)',
+  }
+  local build = {
+    'setNotePool(4)',
+    'setVoiceType(3, 0)',
+    'loadPreset(3, "v4")',
+    'setDelay(0.5, 0.3, 0.2, 0)',
+    'voiceOn(3, 220, 0.5, 0, 0.1, 20, 1)',
+  }
+  local entries = {
+    {kind = "drop", match = '^setVoiceType%(<v0>, 0%)$', count = 1, why = "a test"},
+    {kind = "drop", side = "fixture", match = '^setGrainParam%(<v0>, "envShape", 0%)$', count = 1, why = "a test"},
+    {kind = "rewrite", match = '^(setDelay%([^,]+, [^,]+, [^,]+), 0%)$', replace = "%1)", count = 1, why = "a test"},
+    {kind = "drop", match = '^loadPreset%(<v0>, "v<v>"%)$', count = 1, why = "a test"},
+    {kind = "drop", match = '^setReverbFreeze%(', count = 0, why = "a test"},
+  }
+  local function same(a, b)
+    if #a ~= #b then return false end
+    for index = 1, #a do
+      if a[index] ~= b[index] then return false end
+    end
+    return true
+  end
+  local want, got = allowed_call_lines(fixture, build, entries, "voice_4", 4)
+  assert_true(same(want, got), "every difference is allowed")
+  assert_equal(table.concat(want, " "), "setNotePool(4) setDelay(0.5, 0.3, 0.2) voiceOn(3, 220, 0.5, 0, 0.1, 20, 1)",
+    "the fixture's envShape is dropped, the build's rewritten into it")
+  assert_equal(#fixture .. " " .. #build, "4 5", "the lines given are left alone")
+  -- each entry that makes a difference, left out, fails
+  for left_out = 1, #entries do
+    if entries[left_out].count > 0 then
+      local others = {}
+      for index, entry in ipairs(entries) do
+        if index ~= left_out then others[#others + 1] = entry end
+      end
+      assert_true(not same(allowed_call_lines(fixture, build, others, "voice_4", 4)),
+        entries[left_out].kind .. " " .. entries[left_out].match .. " left out: the lines differ")
+    end
+  end
+  local function with(index, field, value)
+    local copy = {}
+    for at, entry in ipairs(entries) do
+      copy[at] = entry
+      if at == index then
+        copy[at] = {}
+        for key, item in pairs(entry) do copy[at][key] = item end
+        copy[at][field] = value
+      end
+    end
+    return copy
+  end
+  local function raises(list, voice)
+    return not pcall(allowed_call_lines, fixture, build, list, "voice_4", voice == nil and 4 or voice)
+  end
+  -- the tokens are filled from the start: voice 4 is <v0> 3 and <v> 4
+  assert_true(raises(entries, 1), "voice 1's tokens match no line")
+  -- a count off by one raises, either way, and count 0 asserts no line
+  assert_true(raises(with(1, "count", 2)), "a count one high")
+  assert_true(raises(with(1, "count", 0)), "a count one low")
+  assert_true(raises(with(5, "match", '^setNotePool%(')), "count 0 on a line that is sent")
+  assert_true(raises(with(3, "count", 2)), "a rewrite's count")
+  assert_true(raises(with(2, "count", 0)), "a fixture drop's count")
+  -- each misuse raises
+  assert_true(raises(with(1, "why", nil)), "no why")
+  assert_true(raises(with(1, "why", "")), "an empty why")
+  assert_true(raises(with(1, "kind", "keep")), "no such kind")
+  assert_true(raises(with(1, "match", nil)), "no match")
+  assert_true(raises(with(1, "count", nil)), "no count")
+  assert_true(raises(with(1, "count", 1.5)), "a count that is no whole number")
+  assert_true(raises(with(1, "side", "both")), "no such side")
+  assert_true(raises(with(3, "replace", nil)), "a rewrite with no replace")
+  assert_true(raises(with(3, "side", "fixture")), "a rewrite of the fixture")
+  -- a whole run (no voice given): a token entry stands for one entry a
+  -- voice, each matched on its own line, its count per voice
+  local NUM_VOICES = h.voice_count()
+  local function run_lines(edit)
+    local lines = {'setNotePool(4)'}
+    for voice = 1, NUM_VOICES do
+      lines[#lines + 1] = string.format('loadPreset(%d, "v%d")', voice - 1, voice)
+      if edit then edit(lines, voice) end
+    end
+    return lines
+  end
+  local per_voice = {{kind = "drop", match = '^loadPreset%(<v0>, "v<v>"%)$', count = 1, why = "a test"}}
+  local _, run = allowed_call_lines({'setNotePool(4)'}, run_lines(), per_voice, "a run")
+  assert_equal(table.concat(run, " "), "setNotePool(4)", "every voice's line dropped, voice 4's as loadPreset(3, \"v4\")")
+  local function run_error(lines)
+    local ok, message = pcall(allowed_call_lines, {'setNotePool(4)'}, lines, per_voice, "a run")
+    return not ok and tostring(message) or ""
+  end
+  local swapped = run_lines(function(lines, voice)
+    if voice == 4 then lines[#lines] = 'loadPreset(4, "v3")' end
+  end)
+  assert_true(run_error(swapped):find("voice 4", 1, true) ~= nil, "voice 4's line as another's raises, naming voice 4")
+  local doubled = run_lines(function(lines, voice)
+    if voice == 4 then lines[#lines + 1] = lines[#lines] end
+  end)
+  assert_true(run_error(doubled):find("voice 4", 1, true) ~= nil, "a count one high for voice 4 raises, naming it")
+  local missing = run_lines(function(lines, voice)
+    if voice == NUM_VOICES then lines[#lines] = nil end
+  end)
+  assert_true(run_error(missing):find("voice " .. NUM_VOICES, 1, true) ~= nil, "the last voice's line missing raises")
+  local one_line = {'setNotePool(4)'}
+  for _ = 1, NUM_VOICES do one_line[#one_line + 1] = 'loadPreset(0, "v1")' end
+  assert_true(run_error(one_line):find("voice 1", 1, true) ~= nil, "seven voices each need their own match")
+  -- an entry with no token counts for the run
+  local whole = {{kind = "drop", match = '^loadPreset%(%d+, "v%d+"%)$', count = NUM_VOICES, why = "a test"}}
+  local _, all = allowed_call_lines({'setNotePool(4)'}, run_lines(), whole, "a run")
+  assert_equal(#all, 1, "a plain entry's count is the run's")
+end)
+
+-- The differences from 3.7.0 a start makes on purpose: entries for
+-- h.allowed_call_lines (test/helpers.lua; docs/notes/test-harness/run-and-helpers.md),
+-- applied to each start's lines and the fixture's before the comparison.
+-- The package that makes a difference adds its entries in the same commit,
+-- as registration lines: a block of its own, opening
+-- `-- <id>: <what> (design §n)`, one entry a line, each why beginning
+-- "<id>: ". An entry may carry starts = {<label>, ...} (of voice_1, voice_4
+-- and buffer_voice_3; all three when absent); <v> and <v0> are filled from
+-- the start it is applied to, and count is per start. A package that
+-- changes a start message adds an entry to RUN_CALLS_ALLOWED
+-- (test/unit/system_37_test.lua) too.
+local START_CALLS_ALLOWED = {
+}
+local START_LABELS = {voice_1 = true, voice_4 = true, buffer_voice_3 = true}
+-- The entries of START_CALLS_ALLOWED that apply to the start label
+local function start_allowances(label)
+  local entries = {}
+  for index, entry in ipairs(START_CALLS_ALLOWED) do
+    local applies = entry.starts == nil
+    for _, name in ipairs(entry.starts or {}) do
+      if not START_LABELS[name] then error("start allowance " .. index .. ": no start " .. tostring(name), 2) end
+      applies = applies or name == label
+    end
+    if applies then entries[#entries + 1] = entry end
+  end
+  return entries
+end
+
 -- The groundwork before 3.8 (design section 2): a start sends 3.7.0's
--- messages, the synth params' run compared as a set
+-- messages, the synth params' run compared as a set, but for
+-- START_CALLS_ALLOWED's differences
 test("a voice start sends 3.7.0's messages", function()
   math.randomseed(37)
   local context = load_strata()
@@ -1668,7 +1817,8 @@ test("a voice start sends 3.7.0's messages", function()
     assert_true(S.voices[voice].active, label .. " started")
     local lines = {}
     for _, call in ipairs(context.engine_calls) do lines[#lines + 1] = start_call_line(call) end
-    local expected, actual = start_canonical(fixture[label]), start_canonical(lines)
+    local recorded, sent = h.allowed_call_lines(fixture[label], lines, start_allowances(label), label, voice)
+    local expected, actual = start_canonical(recorded), start_canonical(sent)
     for index = 1, math.max(#expected, #actual) do
       assert_equal(actual[index], expected[index], label .. ": call " .. index)
     end

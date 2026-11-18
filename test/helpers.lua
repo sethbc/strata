@@ -528,6 +528,65 @@ local function voice_entries(entry, fields)
   return entries
 end
 
+-- The fixture's and the build's call lines (`name(args)`, as the start-call
+-- fixtures write them) with the allowed differences applied: copies, the
+-- lines given left alone. Each entry, in order, is
+--   {kind = "drop", side = "build" | "fixture" (default "build"),
+--     match = <Lua pattern over a whole line>, count = <n>, why = <text>}:
+--     every line of that side the pattern matches is removed (count 0
+--     asserts no line matches: a message never sent); or
+--   {kind = "rewrite", match = <pattern>, replace = <gsub replacement>,
+--     count = <n>, why = <text>}: every matching build line is rewritten
+--     into the old form (a changed value, a wider signature),
+-- and raises unless exactly count lines matched. With voice (a start's
+-- voice number), <v> and <v0> in match and replace are filled from it;
+-- without (a whole run), an entry holding a token stands for one entry a
+-- voice, each matched on its own and count per voice, a miss naming the
+-- voice. label names the comparison in an error. An entry of no such kind
+-- or side, with no why, match or whole count, or a rewrite with no replace
+-- or of the fixture, raises
+local CALL_TOKEN_FIELDS = {"match", "replace"}
+local CALL_SIDES = {build = true, fixture = true}
+local function allowed_call_lines(fixture_lines, build_lines, entries, label, voice)
+  local sides = {fixture = {}, build = {}}
+  for index, line in ipairs(fixture_lines) do sides.fixture[index] = line end
+  for index, line in ipairs(build_lines) do sides.build[index] = line end
+  for index, entry in ipairs(entries) do
+    local where = tostring(label) .. ": allowed call " .. index .. " (" .. tostring(entry.match) .. ")"
+    if type(entry.why) ~= "string" or entry.why == "" then error(where .. " says no why", 2) end
+    if entry.kind ~= "drop" and entry.kind ~= "rewrite" then error(where .. ": no kind " .. tostring(entry.kind), 2) end
+    if type(entry.match) ~= "string" then error(where .. ": no match", 2) end
+    local count = entry.count
+    if type(count) ~= "number" or count < 0 or count ~= math.floor(count) then
+      error(where .. ": count " .. tostring(count) .. " is no whole number", 2)
+    end
+    local side = entry.side or "build"
+    if not CALL_SIDES[side] then error(where .. ": no side " .. tostring(side), 2) end
+    if entry.kind == "rewrite" then
+      if side ~= "build" then error(where .. ": a rewrite rewrites build lines", 2) end
+      if type(entry.replace) ~= "string" then error(where .. ": a rewrite with no replace", 2) end
+    end
+    local applied = voice and {voice_entry(entry, CALL_TOKEN_FIELDS, voice)} or voice_entries(entry, CALL_TOKEN_FIELDS)
+    for _, one in ipairs(applied) do
+      local kept, matched = {}, 0
+      for _, line in ipairs(sides[side]) do
+        if line:match(one.match) then
+          matched = matched + 1
+          if one.kind == "rewrite" then kept[#kept + 1] = (line:gsub(one.match, one.replace, 1)) end
+        else
+          kept[#kept + 1] = line
+        end
+      end
+      sides[side] = kept
+      if matched ~= count then
+        error(where .. (one.voice and (", voice " .. one.voice) or "") .. ": " .. matched .. " " .. side
+          .. " lines matched, count " .. count, 2)
+      end
+    end
+  end
+  return sides.fixture, sides.build
+end
+
 -- The text lib/tabutil.lua's tab.save writes for `value`: a data file as
 -- norns writes it (tab.load reads only that layout)
 local function tabutil_text(value)
@@ -1058,6 +1117,7 @@ return {
   deep_copy = deep_copy,
   voice_count = voice_count,
   voice_entries = voice_entries,
+  allowed_call_lines = allowed_call_lines,
   tabutil_text = tabutil_text,
   file_text = file_text,
   workflow_shards = workflow_shards,
