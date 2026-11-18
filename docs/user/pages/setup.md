@@ -63,7 +63,7 @@ K3 on **scale & tuning** opens an editor over the page (PARAMETERS > scale holds
 SETUP ·········
 root                       D
 scale                 custom
-notes C . D . E F . G . A . B
+notes D . E F . G . A . . C .
 tuning           pythagorean
 K2:back E3:note K3:F#
 ```
@@ -72,6 +72,8 @@ K2:back E3:note K3:F#
 - **notes** - the scale's twelve notes from the root: a note's letter (or `#` for a sharp) when it is in the scale, `.` when it is not. E3 moves along them, K3 turns the one under the cursor in or out (the hint row names it). Under a built-in scale (or off) the first toggle copies the scale into **custom** and changes that; the last note cannot be turned out. While the editor is open a MIDI note toggles its note the same way and plays nothing
 - **tuning** - E3 steps through the built-in tunings, then your `.scl` files in `data/strata/tunings/` (listed when the editor opens), shown dim until K3 applies the one shown. A file Strata cannot read is refused and the hint row says why
 - In a tuning that is not twelve notes to an octave, **scale** and **notes** show `--` and do nothing: every tone of the tuning is allowed, and MIDI notes play
+- **E2** - move between the rows
 - **K2** - back to SETUP
+- With K1 held (ALT) E3 turns as without and K2 and K3 do nothing; the hint row names E2 and E3
 
 See [Tunings](../voices-and-grains.md#tunings).

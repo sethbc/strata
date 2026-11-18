@@ -19,7 +19,6 @@ return function(S)
     if value == math.floor(value) then return math.floor(value) end
     return value
   end
-  local function ratio_cents(numerator, denominator) return 1200 * math.log(numerator / denominator) / LOG2 end
 
   -- The tuning's constants. The first ten mirror the engine's
   -- (StrataScale.sc; a docs test compares them): 1-128 tones a period of
@@ -34,7 +33,7 @@ return function(S)
   local TUNING = {
     max_tones = 128, min_period = 100, max_period = 4800, octave = 1200, twelve = 12, octave_tolerance = 0.001,
     root_key = 60, table_frames = 4096, table_low = -100, table_resolution = 10,
-    tone_tolerance = 0.01, semitone = 100,
+    tone_tolerance = 0.01, semitone = 100, fifth_semitones = 7,
     default = {name = "12 equal", period = 1200, tones = {0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100}},
     default_text = "1200 0 100 200 300 400 500 600 700 800 900 1000 1100",
     folder = "strata/tunings/", extension = "scl", max_file_bytes = 65536, name_max = 24, cents_places = 4,
@@ -42,10 +41,16 @@ return function(S)
   }
   M.TUNING = TUNING
 
+  -- A ratio in cents
+  local function ratio_cents(numerator, denominator)
+    return TUNING.octave * math.log(numerator / denominator) / LOG2
+  end
+
   -- The built-ins (design §6.4), in the editor's order: an equal division
   -- (equal = n), ratios (norns' intonation tables, copied: the stub has no
-  -- intonation and none is required), or a chain of fifths of `fifth`
-  -- cents from `from` fifths below the first (Eb to G#)
+  -- intonation and none is required), or a chain of fifths from `from`
+  -- fifths below the first (Eb to G#), each fifth `fifth_of` = {a, b, n}:
+  -- the n-th root of a/b (3/2 itself; 5/1's fourth root, quarter-comma)
   local JUST = {
     normal = {{1, 1}, {16, 15}, {9, 8}, {6, 5}, {5, 4}, {4, 3}, {45, 32}, {3, 2}, {8, 5}, {5, 3}, {16, 9}, {15, 8}},
     ptolemy = {{1, 1}, {16, 15}, {9, 8}, {6, 5}, {5, 4}, {4, 3}, {45, 32}, {3, 2}, {8, 5}, {5, 3}, {9, 5}, {15, 8}},
@@ -66,8 +71,8 @@ return function(S)
     {name = "overtone", ratios = JUST.overtone},
     {name = "undertone", ratios = JUST.undertone},
     {name = "lamonte", ratios = JUST.lamonte},
-    {name = "pythagorean", fifth = ratio_cents(3, 2), from = -3},
-    {name = "meantone 1/4", fifth = 300 * math.log(5) / LOG2, from = -3},
+    {name = "pythagorean", fifth_of = {3, 2, 1}, from = -3},
+    {name = "meantone 1/4", fifth_of = {5, 1, 4}, from = -3},
     {name = "19 equal", equal = 19},
     {name = "24 equal", equal = 24},
     {name = "31 equal", equal = 31},
@@ -82,9 +87,10 @@ return function(S)
     elseif record.ratios then
       for index, ratio in ipairs(record.ratios) do tones[index] = ratio_cents(ratio[1], ratio[2]) end
     else
+      local fifth = ratio_cents(record.fifth_of[1], record.fifth_of[2]) / record.fifth_of[3]
       for fifths = record.from, record.from + TUNING.twelve - 1 do
-        local cents = (fifths * record.fifth) % TUNING.octave
-        tones[((fifths * 7) % TUNING.twelve) + 1] = cents  -- a fifth is seven semitones
+        local cents = (fifths * fifth) % TUNING.octave
+        tones[((fifths * TUNING.fifth_semitones) % TUNING.twelve) + 1] = cents
       end
     end
     tones[1] = 0
@@ -347,7 +353,8 @@ return function(S)
   end
 
   -- A .scl file's text read: period, tones, or nil and the reason. A UTF-8
-  -- BOM and CR line ends are taken as a Unix file's; a line starting "!" is
+  -- BOM is dropped; a CR ending a line is whitespace to the tokens read
+  -- (%s), so a CRLF file reads as its Unix copy; a line starting "!" is
   -- a comment; the first other line the description, the next the count
   -- (1-128), then that many pitch lines (blank ones skipped), each read up
   -- to its first space; 1/1 is implied, the last pitch is the period
@@ -358,7 +365,6 @@ return function(S)
     local description, count, pitches, number = nil, nil, {}, 0
     for line in (text .. "\n"):gmatch("([^\n]*)\n") do
       number = number + 1
-      line = line:gsub("\r$", "")
       if line:sub(1, 1) ~= "!" then
         local token = line:match("^%s*(%S+)")
         if description == nil then
