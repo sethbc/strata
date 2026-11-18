@@ -3369,26 +3369,9 @@ test("the workflow reads only, keeps no credentials and pins by full commit (#49
   assert_true(ref ~= nil and #ref == 40 and ref:match("^%x+$") ~= nil, "NORNS_REF is a full 40-character commit: " .. tostring(ref))
 end)
 
--- The workflow's table of area times (its comment, "Area times on ...:"
--- then "<area> <seconds>, ..."): the sum of every time listed, and the sum
--- the comment states ("<n> s in all"), nil without one
-local function workflow_area_times(workflow)
-  local after = workflow:match("Area times on [^\n]*\n(.*)")
-  if not after then return nil end
-  local lines = {}
-  -- the table's comment lines (their "#" dropped), to the one with its sum
-  for line in after:gmatch("([^\n]*)\n?") do
-    local text = line:match("^%s*#%s?(.*)$")
-    if not text then break end
-    lines[#lines + 1] = text
-    if text:find(":") then break end
-  end
-  local joined = table.concat(lines, " ")
-  local times = joined:match("^(.-):") or joined
-  local total = 0
-  for seconds in times:gmatch("%a+ (%d+)") do total = total + tonumber(seconds) end
-  return total, tonumber(joined:match(":%s*(%d+) s in all"))
-end
+-- The workflow's table of area times: the sum of every time listed, and
+-- the sum the comment states (h.workflow_area_times, test/helpers.lua)
+local workflow_area_times = h.workflow_area_times
 
 test("the workflow's area times are summed on every line of the table (#731)", function()
   local table_of = function(lines)

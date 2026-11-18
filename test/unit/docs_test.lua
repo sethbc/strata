@@ -1766,18 +1766,23 @@ function CI_WORKFLOW.cache_problems(workflow)
   -- a PATH key in an env block (#817): the workflow's, the shard job's or a
   -- step's sets the PATH every command under it runs with, so a directory
   -- put first there shadows a command the pinned lines run. A block is the
-  -- lines indented under its `env:` (a step's first key, `- env:`, too), or
-  -- a flow mapping on that line
+  -- lines indented under its `env:` (a step's first key, `- env:`, too; a
+  -- comment after the `env:` dropped), a flow mapping on that line, or one
+  -- the line opens and later lines go on (`env: {`). Its limit: it reads the
+  -- YAML by lines, so an env given by an expression (`env: ${{ ... }}`, such
+  -- as `fromJSON`) or through an anchor or merge key (`<<: *name`) is not
+  -- read; the workflow uses neither
   for _, scope in ipairs({ workflow:match("^(.-\n)jobs:\n") or "", shard.text }) do
     local block
     for line in (scope .. "\n"):gmatch("([^\n]*)\n") do
       local skipped = line:match("^%s*$") or line:match("^%s*#")
       if block and not skipped and #line:match("^%s*") <= block then block = nil end
       local lead, rest = line:match("^(%s*%-?%s*)env:%s*(.-)%s*$")
+      if lead then rest = rest:gsub("^#.*$", ""):gsub("%s+#.*$", "") end
       local key = not skipped and ((lead and rest:match("[{,]%s*[\"']?PATH[\"']?%s*:"))
-        or (block and line:match("^%s*[\"']?PATH[\"']?%s*:")))
+        or (block and line:match("^%s*[{,]?%s*[\"']?PATH[\"']?%s*:")))
       if key then problem("PATH is set in an env block (every command under it runs with that PATH): " .. line:match("^%s*(.-)%s*$")) end
-      if lead and not skipped and rest == "" then block = #lead end
+      if lead and not skipped and (rest == "" or rest:match("^{[^}]*$")) then block = #lead end
     end
   end
   return problems
@@ -1954,6 +1959,14 @@ test("a kept package reaches apt's archive folder only through the hash check, b
     { name = "PATH in a flow mapping on a step's env", expect = "PATH is set in an env block (every command under it runs with that PATH): env: { PATH: /tmp/shadow }",
       edits = { "        timeout-minutes: 4\n        run: |\n          echo \"jackd2 ",
         "        timeout-minutes: 4\n        env: { PATH: /tmp/shadow }\n        run: |\n          echo \"jackd2 " } },
+    -- X13's review: an env: line with a comment, and a flow mapping over
+    -- lines, both on the restore step's env
+    { name = "PATH under an env: line with a comment", expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
+        "        env:  # the download's limit\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n          PATH: /tmp/shadow:/usr/bin:/bin\n" } },
+    { name = "PATH in a flow mapping over lines", expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
+        "        env: {\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1,\n          PATH: /tmp/shadow\n        }\n" } },
     -- the pinned start: a PATH of its own before the loop, and a line above the script's first
     { name = "a PATH of its own above debs=", expect = differs(start, 3, 'export PATH="$RUNNER_TEMP/bin:$PATH"'),
       edits = { debs, '          export PATH="$RUNNER_TEMP/bin:$PATH"\n' .. debs } },
@@ -1981,7 +1994,9 @@ test("a kept package reaches apt's archive folder only through the hash check, b
   end
   -- #817: nor an env block with other keys (the restore step's has one)
   local install_start = "        timeout-minutes: 4\n        run: |\n          echo \"jackd2 "
-  for _, env in ipairs({ "        env:\n          SC_STARTED: 1\n          MYPATH: /tmp/bin\n", "        env: { PATH_NOTE: none }\n" }) do
+  for _, env in ipairs({ "        env:\n          SC_STARTED: 1\n          MYPATH: /tmp/bin\n", "        env: { PATH_NOTE: none }\n",
+      "        env:\n          STRATA_PATH: /tmp/bin\n", "        env:  # PATH is the runner's own\n          SC_STARTED: 1\n",
+      "        env: {\n          SC_STARTED: 1,\n          MYPATH: /tmp/bin\n        }\n", "        with:\n          path: /tmp/bin\n" }) do
     assert_equal(table.concat(CI_WORKFLOW.cache_problems(CI_WORKFLOW.mutated(workflow, install_start,
       "        timeout-minutes: 4\n" .. env .. "        run: |\n          echo \"jackd2 ")), " | "), "",
       "the cache problems of an install step with " .. env)
@@ -2251,16 +2266,17 @@ test("the engine check's default timeout fits a full local run and CI keeps 570 
 end)
 
 -- #816: a full run in one sclang (every area, no shards) has room under the
--- runner's default timeout: at least ENGINE_TIMEOUT_ROOM times the sum the
--- workflow's area times state (the sum is the times' own: structure_test.lua,
--- #731), so a new area cannot close the gap unnoticed; and the docs say the
--- default and the deadline, 30 s under it, as they are
+-- runner's default timeout: at least ENGINE_TIMEOUT_ROOM times the sum of the
+-- workflow's area times (read through h.workflow_area_times, the #491 and
+-- #731 tests' reader), so a new area cannot close the gap unnoticed; and the
+-- docs say the default and the deadline, 30 s under it, as they are
 local ENGINE_TIMEOUT_ROOM = 1.5
 local function engine_timeout_problems(workflow, runner)
   local problems = {}
-  local stated = tonumber((workflow:match("Area times on [^\n]*\n(.-) s in all") or ""):match("(%d+)$") or "")
+  local stated = h.workflow_area_times(workflow)
+  if stated == 0 then stated = nil end
   local default = tonumber(runner:match("ENGINE_CHECK_TIMEOUT:%-(%d+)}") or "")
-  if not stated then problems[#problems + 1] = "the workflow's area times state no sum (<n> s in all)" end
+  if not stated then problems[#problems + 1] = "the workflow has no area times" end
   if not default then problems[#problems + 1] = "the runner has no default timeout (ENGINE_CHECK_TIMEOUT:-<seconds>)" end
   if stated and default and default < ENGINE_TIMEOUT_ROOM * stated then
     problems[#problems + 1] = "the default timeout, " .. default .. " s, is under " .. ENGINE_TIMEOUT_ROOM
