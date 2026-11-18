@@ -411,7 +411,8 @@ readStep = { arg bus;
 // params'; this pins what the nodes start with.) Each master filter at
 // 5000 Hz, res 0.5, lowpass, mix 0; the delay at 0.375 s, feedback 0.4, mix
 // 0, pingPong 0; the reverb at level 0.43, size 0.8, damp 0.5 and delay to
-// reverb 1 (3.8); the drift at 0.01; no fxMix bus (3.8's plain sends);
+// reverb 1 (3.8); both at shimmer 0 and ratio 2 (3.8's shimmer, kept so
+// too); the drift at 0.01; no fxMix bus (3.8's plain sends);
 // neither effect bypassed (the bypass params' 0);
 // the scale chromatic from C (what the scale and root params' defaults
 // send: setScale(0, 4095)).
@@ -426,6 +427,8 @@ checkFreshDefaults = {
         delay: read.(\delay, [\time, \feedback, \mix, \pingPong]),
         reverb: read.(\reverb, [\mix, \size, \damp, \delayToReverb]),
         kept: fresh.areaState[\effects][\controls][\reverb].atAll([\mix, \size, \damp, \delayToReverb]),
+        shimmer: [\delay, \reverb].collect({ arg key; read.(key, [\shimmer, \shimmerRatio])
+            ++ fresh.areaState[\effects][\controls][key].atAll([\shimmer, \shimmerRatio]) }),
         drift: read.(\master, [\drift]), fxMix: fresh.mixBus(\fxMix),
         bypassed: [\delay, \reverb].collect({ arg key; fresh.areaState[\effects][\bypassed][key] }),
         scale: fresh.scaleRootAndMask
@@ -441,6 +444,9 @@ checkFreshDefaults = {
         and: { near.(values[\drift], [0.01]) } and: { values[\fxMix].isNil },
         "effects: a fresh engine's delay starts at 0.375 s, feedback 0.4, level and pingPong 0, its reverb at level 0.43, size 0.8, damp 0.5 and delay to reverb 1 (kept so too), its drift at 0.01, with no fxMix bus, the Lua defaults (delay %, reverb %, kept %, drift %, fxMix %)".format(
             values[\delay], values[\reverb], values[\kept], values[\drift], values[\fxMix]));
+    check.(values[\shimmer].every({ arg each; near.(each, [0, 2, 0, 2]) }),
+        "effects: a fresh engine's delay and reverb start at shimmer 0 and ratio 2, kept so too, the Lua defaults (delay, reverb: node and kept %)".format(
+            values[\shimmer]));
     check.((values[\bypassed] == [false, false]) and: { values[\scale] == [0, 4095] },
         "effects: a fresh engine has neither effect bypassed and plays the chromatic scale from C, the Lua defaults (bypassed %, scale %)".format(
             values[\bypassed], values[\scale]));
@@ -902,8 +908,10 @@ checkBypassFreeTiming = {
 
 // A delay line of the engine's size for a check's own \strataDelay: two
 // fresh mono buffers (a node on the engine's own would write into its
-// running line; a bufnum left out is buffer 0). Free them with freeLine
-allocLine = { var line = 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) }); server.sync; line };
+// running line; a bufnum left out is buffer 0), then two shimmer rings
+// (3.8: shiftL, shiftR, for the same reason). Free them with freeLine
+allocLine = { var line = 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) })
+    ++ 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) }); server.sync; line };
 freeLine = { arg line; line.do(_.free); server.sync };
 
 // A node of the engine's own \strataDelay on buses and a line of its own
@@ -921,7 +929,8 @@ echoPeaks = { arg controls, windows;
     server.makeBundle(nil, {
         var analysis;
         Synth(\strataCheckLeftImpulse, [\out, inBus], group, \addToTail);
-        Synth(\strataDelay, [\in, inBus, \out, outBus, \bufL, line[0], \bufR, line[1], \mix, 1] ++ controls, group,
+        Synth(\strataDelay, [\in, inBus, \out, outBus, \bufL, line[0], \bufR, line[1], \shiftL, line[2], \shiftR, line[3],
+            \mix, 1] ++ controls, group,
             \addToTail);
         analysis = Synth(\strataCheckEchoPeaks, [\in, outBus, \out, resultBus, \windows, windows, \seconds, seconds],
             group, \addToTail);
@@ -1090,7 +1099,8 @@ checkLineAsDelayC = {
             if (lfo) { Synth(\strataCheckTimeLfo, [\out, timeBus], group, \addToTail) };
             Synth(\strataCheckPinkNoise, [\out, noiseBus], group, \addToTail);
             copy = Synth(\strataCheckDelayC37, [\in, noiseBus, \out, outA] ++ controls, group, \addToTail);
-            node = Synth(\strataDelay, [\in, noiseBus, \out, outB, \bufL, line[0], \bufR, line[1]] ++ controls, group,
+            node = Synth(\strataDelay, [\in, noiseBus, \out, outB, \bufL, line[0], \bufR, line[1], \shiftL, line[2],
+                \shiftR, line[3]] ++ controls, group,
                 \addToTail);
             if (lfo) { copy.map(\time, timeBus); node.map(\time, timeBus) };
             analysis = Synth(\strataCheckDiffPeak, [\inA, outA, \inB, outB, \out, resultBus, \seconds, seconds], group,
@@ -1232,6 +1242,8 @@ checkFdn = {
         var seconds = 3, blocks = (seconds * server.sampleRate / server.options.blockSize).asInteger;
         var group = Group.after(context.xg), inBus = Bus.audio(server, 2), nothing = Bus.audio(server, 2);
         var outBuses = defNames.collect({ Bus.audio(server, 2) }), resultBus = Bus.control(server, 4 * defNames.size);
+        // each node's own two shimmer rings (3.8: a ring left out is buffer 0)
+        var rings = defNames.collect({ 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) }) });
         var condition = Condition(false), values;
         resultBus.setAll(0);
         server.sync;
@@ -1239,8 +1251,8 @@ checkFdn = {
             var analysis;
             Synth(\strataCheckImpulse, [\out, inBus], group, \addToTail);
             defNames.do({ arg defName, index;
-                Synth(defName, [\in, inBus, \delayIn, nothing, \out, outBuses[index], \mix, 1, \size, 0.8, \damp, 0.5],
-                    group, \addToTail)
+                Synth(defName, [\in, inBus, \delayIn, nothing, \out, outBuses[index], \shiftL, rings[index][0],
+                    \shiftR, rings[index][1], \mix, 1, \size, 0.8, \damp, 0.5], group, \addToTail)
             });
             analysis = Synth(\strataCheckDecayTimes, [\inA, outBuses[0], \inB, outBuses[1], \out, resultBus,
                 \blocks, blocks], group, \addToTail);
@@ -1250,7 +1262,7 @@ checkFdn = {
         awaitReply.(condition, seconds * 10);
         values = readBus.(resultBus);
         group.free; server.sync;
-        ([inBus, nothing, resultBus] ++ outBuses).do(_.free);
+        ([inBus, nothing, resultBus] ++ outBuses ++ rings.flatten).do(_.free);
         defNames.collect({ arg defName, index;
             var above5, above35, reached, peak;
             #above5, above35, reached, peak = values.copyRange(index * 4, (index * 4) + 3);
@@ -1261,11 +1273,13 @@ checkFdn = {
     };
     var poolKB = { arg defName;
         var inBus = Bus.audio(server, 2), outBus = Bus.audio(server, 2), without, with, synth;
+        var rings = 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) });
         without = floodFit.value;
-        synth = Synth(defName, [\in, inBus, \delayIn, inBus, \out, outBus], engine.processGroup, \addToTail);
+        synth = Synth(defName, [\in, inBus, \delayIn, inBus, \out, outBus, \shiftL, rings[0], \shiftR, rings[1]],
+            engine.processGroup, \addToTail);
         server.sync; 0.05.wait;
         with = floodFit.value;
-        synth.free; server.sync; inBus.free; outBus.free;
+        synth.free; server.sync; inBus.free; outBus.free; rings.do(_.free);
         (without - with) * probeKB
     };
     var rt60 = rt60s.([\strataReverb, \strataReverbFDN]), freeverb = rt60[0], fdn = rt60[1];

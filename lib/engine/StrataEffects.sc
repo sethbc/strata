@@ -2,10 +2,12 @@
 // The effects area: the master filter (three instances, one on each bus
 // it filters before the effects), the delay and the reverb as returns at
 // their levels, the master sum and output, their
-// commands (setFilter, setReverb, setMasterDrift, setBypass; the delay's
-// line, def and setDelay are in StrataDelay.sc) and the chain at the tail
-// of the engine group. The bypass frees the delay or the reverb and
-// re-creates it when lifted. See docs/notes/engine/effects.md.
+// commands (setFilter, setReverb, setMasterDrift, setBypass, setShimmer; the
+// delay's line, def and setDelay are in StrataDelay.sc), 3.8's shimmer
+// (shimmerShift, its four rings, the reverbs' loops) and the chain at the
+// tail of the engine group. The bypass frees the delay or the reverb and
+// re-creates it when lifted. See docs/notes/engine/effects.md and
+// docs/notes/engine/shimmer.md.
 
 + Engine_Strata {
     // The effects area (order 60)
@@ -52,6 +54,115 @@
         state[\bypassed] = IdentityDictionary[\delay -> false, \reverb -> false];
         state[\pendingFrees] = IdentityDictionary.new;
         this.allocDelayLine;
+        // shimmer's four mono rings (3.8 design §7.4): the delay's left and
+        // right, the reverb's left and right. Ordinary RAM (256 KB,
+        // fixedBufferBytes counts them), allocated once: bufnums never change
+        state[\shimmerRings] = 4.collect({ Buffer.alloc(context.server, this.shimmerRingFrames, 1) });
+    }
+
+    // 3.8's shimmer (design §7.4): one shifter, built twice, in the delay's
+    // feedback and around each reverb. Its window (s): the two read heads'
+    // delays sweep it, so it sets their rate, never memory
+    shimmerWindowSeconds { ^0.1 }
+
+    // The read heads trail the write head by at least this many control
+    // blocks, so a read never meets a frame the write has not made yet,
+    // whichever of BufWr and BufRd the graph runs first in a block (cubic
+    // interpolation reads a frame ahead)
+    shimmerLeadBlocks { ^2 }
+
+    // The reverbs' loop: its ceiling (a soft clip, -12 dB) and its filters
+    // (the shift carries energy out through them)
+    shimmerCeiling { ^0.25 }
+    shimmerLowpassHz { ^6000 }
+    shimmerHighpassHz { ^100 }
+
+    // An effect's two shimmer rings (\delay or \reverb): [left, right]
+    shimmerRingsFor { arg key;
+        var rings = areaState[\effects][\shimmerRings];
+        ^if (key == \delay) { rings.copyRange(0, 1) } { rings.copyRange(2, 3) }
+    }
+
+    // Zero an effect's two rings: sent in the bundle that frees its node,
+    // so the node a lift creates never reads a ring's old audio (a BufRd,
+    // unlike BufDelayC, reads whatever the ring holds)
+    emptyShimmerRings { arg key;
+        this.shimmerRingsFor(key).do({ arg buffer; context.server.listSendMsg(buffer.zeroMsg) });
+    }
+
+    // The pitch shifter (stereo in, stereo out): each channel is written
+    // into its ring (bufs: [left, right] mono buffers of shimmerRingFrames)
+    // at a Phasor and read by two cubic BufRd heads whose delays sweep
+    // shimmerWindowSeconds at the rate that shifts by ratio ((1 - ratio) /
+    // window, an LFSaw, the two heads half a cycle apart), each behind the
+    // write head by at least shimmerLeadBlocks. Their Hann gains, 0.5 +
+    // 0.5 x cos(pi x the first head's saw) and 1 less it, sum to exactly 1
+    // and are 0 where a head jumps: a convex mix, never above the ring's
+    // peak. BufRd's loop wraps the read frames
+    shimmerShift { arg sig, bufs, ratio;
+        var frames = this.shimmerRingFrames, window = this.shimmerWindowSeconds;
+        var phase = Phasor.ar(0, 1, 0, frames), saws = LFSaw.ar((1 - ratio) / window, [0, 1]);
+        var span = window * SampleRate.ir * 0.5, lead = this.shimmerLeadBlocks * BlockSize.ir;
+        var reads = phase - ((saws * span) + (span + lead));
+        var first = ((saws[0] * pi).cos * 0.5) + 0.5, gains = [first, 1 - first];
+        ^sig.collect({ arg channel, index;
+            BufWr.ar(channel, bufs[index], phase);
+            (BufRd.ar(1, bufs[index], reads, 1, 4) * gains).sum
+        })
+    }
+
+    // The duck (shimmerLoop). The reverb's output may carry shimmer up to
+    // shimmerOverInput times the send's level, plus the halo,
+    // shimmerHaloRms: the loop's gain falls linearly from 1 there to 0 at
+    // (1 + shimmerDuckRange) times it. The output's level is its RMS (both
+    // channels' mean square lagged shimmerHaloLag s, a 60 dB time, as
+    // Lag's); the send's is its mean square rising over shimmerSendAttack and
+    // falling over shimmerSendRelease (LagUD), so it rides the send's peaks
+    // and reads above its RMS (1.35 times on a sine, about 1.6 times on pink
+    // noise), and a tail keeps its shimmer while the send falls away, down to
+    // the halo
+    shimmerOverInput { ^1.5 }
+    shimmerHaloRms { ^0.07 }
+    shimmerHaloLag { ^0.5 }
+    shimmerSendAttack { ^0.05 }
+    shimmerSendRelease { ^2 }
+    shimmerDuckRange { ^0.25 }
+
+    // A stereo signal's level (both channels), its mean square lagged up
+    // and down (60 dB times), at control rate
+    shimmerLevel { arg sig, up, down;
+        ^A2K.kr(LagUD.ar((sig[0].squared + sig[1].squared) * 0.5, up, down)).sqrt
+    }
+
+    // The loop around a reverb (wet: its stereo output, and sent: what the
+    // reverb is sent, before the loop, each with its bad values already
+    // zeroed, so neither level follower can latch a NaN): shifted,
+    // low-passed at shimmerLowpassHz, high-passed at shimmerHighpassHz,
+    // clipped softly at shimmerCeiling ((x / ceiling).tanh x ceiling), times
+    // amount and times the duck, then any bad value zeroed: what goes back
+    // into the reverb's input (an exact 0 at amount 0). The clip bounds what
+    // the loop feeds in, but not what comes out: the reverb's own gain is far
+    // above 1 at a large size (FreeVerb2 at size 1, damp 0: a loop at the
+    // clip drove its output to a peak of 10.8), and a loop leaking a
+    // hundredth of the clip sustains it. So the duck holds the output to
+    // (1 + shimmerDuckRange) x (shimmerOverInput x the send's level + the
+    // halo): about 2.5 times the send's RMS on a sine and 3.0 times on pink
+    // noise, plus the halo; a loud send keeps its shimmer in proportion (its
+    // output is under that bound unless the loop runs away), a loop that
+    // would grow holds there, and once the send stops, at the halo (about -22
+    // dB RMS), whatever the reverb's gain, until the amount or the size comes
+    // down. Keyed on a level against the send's (2a's first law keyed on the
+    // output alone, and ducked every loud return)
+    shimmerLoop { arg wet, sent, bufs, amount, ratio;
+        var ceiling = this.shimmerCeiling;
+        var level = this.shimmerLevel(wet, this.shimmerHaloLag, this.shimmerHaloLag);
+        var bound = (this.shimmerLevel(sent, this.shimmerSendAttack, this.shimmerSendRelease) * this.shimmerOverInput)
+            + this.shimmerHaloRms;
+        var duck = (1 - ((level - bound) / (bound * this.shimmerDuckRange))).clip(0, 1);
+        var filtered = HPF.ar(LPF.ar(this.shimmerShift(wet, bufs, ratio), this.shimmerLowpassHz), this.shimmerHighpassHz);
+        ^filtered.collect({ arg channel;
+            this.zeroBadValues((channel / ceiling).tanh * ceiling * (amount * duck))
+        })
     }
 
     // The master filter's design, shared with the voice filter
@@ -159,12 +270,21 @@
         // echoes are reverberated as in 3.7, at 0 a voice with no reverb send
         // has dry echoes) of the delay's return (through liftFade, as the
         // delay's), returned at its level (mix). The clips stay literals in
-        // the defs: the Lua stub reads setReverb's limits from them
+        // the defs: the Lua stub reads setReverb's and setShimmer's limits
+        // from them. 3.8's shimmer (design §7.4): its one LocalIn takes the
+        // loop (shimmerLoop, on the reverb's two rings shiftL and shiftR,
+        // times shimmer 0-1, lagged fxMixLag; shimmerRatio 0.5-4) back into
+        // FreeVerb2's input; an exact 0 at shimmer 0, so the def is the one
+        // before, bit for bit. The send and the output pass zeroBadValues
         SynthDef(\strataReverb, {
-            arg in, delayIn, out, mix=0.43, size=0.8, damp=0.5, delayToReverb=1, fadeIn=0;
-            var sig = (In.ar(in, 2) + (In.ar(delayIn, 2) * delayToReverb.clip(0, 1).lag(this.fxMixLag)))
-                * this.liftFade(fadeIn);
-            var wet = FreeVerb2.ar(sig[0], sig[1], 1, size, damp);
+            arg in, delayIn, out, mix=0.43, size=0.8, damp=0.5, delayToReverb=1, fadeIn=0,
+                shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2;
+            var sent = ((In.ar(in, 2) + (In.ar(delayIn, 2) * delayToReverb.clip(0, 1).lag(this.fxMixLag)))
+                * this.liftFade(fadeIn)).collect({ arg channel; this.zeroBadValues(channel) });
+            var sig = sent + LocalIn.ar(2);
+            var wet = FreeVerb2.ar(sig[0], sig[1], 1, size, damp).collect({ arg channel; this.zeroBadValues(channel) });
+            LocalOut.ar(this.shimmerLoop(wet, sent, [shiftL, shiftR], shimmer.clip(0, 1).lag(this.fxMixLag),
+                shimmerRatio.clip(0.5, 4)));
             Out.ar(out, wet * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
 
@@ -178,21 +298,25 @@
         // size per 1378 samples, FreeVerb's mean comb). Two lines' lengths
         // drift slowly (LFNoise1) against metallic ringing. Left and right
         // are tapped from alternate lines. Every delay is sized by a constant.
+        // 3.8's shimmer loop (as \strataReverb's) takes channels 8 and 9 of
+        // its one LocalIn, widened to ten, and enters before the diffusers;
+        // the send and the output pass zeroBadValues
         SynthDef(\strataReverbFDN, {
-            arg in, delayIn, out, mix=0.43, size=0.8, damp=0.5, delayToReverb=1, fadeIn=0;
+            arg in, delayIn, out, mix=0.43, size=0.8, damp=0.5, delayToReverb=1, fadeIn=0,
+                shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2;
             var room = size.clip(0, 1).lag(0.1), damping = damp.clip(0, 1).lag(0.1) * 0.4;
-            var sig = (In.ar(in, 2) + (In.ar(delayIn, 2) * delayToReverb.clip(0, 1).lag(this.fxMixLag)))
-                * this.liftFade(fadeIn);
+            var sig = ((In.ar(in, 2) + (In.ar(delayIn, 2) * delayToReverb.clip(0, 1).lag(this.fxMixLag)))
+                * this.liftFade(fadeIn)).collect({ arg channel; this.zeroBadValues(channel) });
             var feedbackBase = 0.7 + (0.28 * room), reference = 1378 * SampleDur.ir;
             var drift = [0, 0, LFNoise1.kr(0.31) * 0.0006, 0, 0, 0, LFNoise1.kr(0.43) * 0.0005, 0];
             var lengths = this.fdnLineSeconds * (0.6 + (0.4 * room)) + drift;
             var diffused, feedback, lines, sum, wet;
-            diffused = sig.collect({ arg channel, side;
+            feedback = LocalIn.ar(10);
+            diffused = (sig + feedback.copyRange(8, 9)).collect({ arg channel, side;
                 this.fdnDiffuserSeconds[side].inject(channel, { arg each, time;
                     AllpassN.ar(each, time, time, time * 19)
                 })
             });
-            feedback = LocalIn.ar(8);
             lines = 8.collect({ arg index;
                 // each line's own maximum (its size-1 length plus the drift's
                 // room), so a short line never takes the longest one's memory
@@ -201,10 +325,11 @@
                 OnePole.ar(line, damping)
             });
             sum = lines.sum * (2 / 8);
+            wet = [lines[0] + lines[2] + lines[4] + lines[6], lines[1] + lines[3] + lines[5] + lines[7]]
+                .collect({ arg channel; this.zeroBadValues(channel) });
             LocalOut.ar(lines.collect({ arg line, index;
                 (line - sum) * (feedbackBase ** (lengths[index] / reference))
-            }));
-            wet = [lines[0] + lines[2] + lines[4] + lines[6], lines[1] + lines[3] + lines[5] + lines[7]];
+            }) ++ this.shimmerLoop(wet, sig, [shiftL, shiftR], shimmer.clip(0, 1).lag(this.fxMixLag), shimmerRatio.clip(0.5, 4)));
             Out.ar(out, wet * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
 
@@ -267,6 +392,20 @@
 
         this.addDelayCommands;
 
+        // msg: delayAmount, reverbAmount (0-1), ratio (0.5-4): the delay's
+        // feedback blend and the reverb's loop, at one interval (design
+        // §7.4). Kept for a bypassed effect's next node (all three, both
+        // effects). A non-finite argument is ignored with one line, as
+        // setDelay's (fastModValuesFinite); the defs clip the values
+        this.addCommand(\setShimmer, "fff", { arg msg;
+            if (this.fastModValuesFinite(\setShimmer, [[\delayAmount, msg[1]], [\reverbAmount, msg[2]], [\ratio, msg[3]]])) {
+                this.keepEffectControls(\delay, (shimmer: msg[1], shimmerRatio: msg[3]));
+                this.keepEffectControls(\reverb, (shimmer: msg[2], shimmerRatio: msg[3]));
+                this.setSynth(\delay, \shimmer, msg[1], \shimmerRatio, msg[3]);
+                this.setSynth(\reverb, \shimmer, msg[2], \shimmerRatio, msg[3]);
+            };
+        });
+
         // msg: effect (0 delay, 1 reverb; others ignored), bypassed (0 or 1)
         this.addCommand(\setBypass, "ii", { arg msg;
             var key = if (msg[1].isInteger) { this.bypassKeys[msg[1]] };
@@ -287,8 +426,9 @@
     // Bypass an effect (\delay, \reverb) or lift its bypass. A bypass sets
     // its level to 0 (the node's mix, so its return fades out over its lag
     // and nothing jumps), then frees the node after bypassFadeTime: its CPU
-    // and its few KB of the pool come back (the delay's line is buffers,
-    // kept: the free's bundle empties it, emptyDelayLine). Lifting it
+    // and its few KB of the pool come back (the delay's line and the
+    // shimmer rings are buffers, kept: the free's bundle empties them,
+    // emptyDelayLine, emptyShimmerRings). Lifting it
     // inside that wait cancels the free and restores the level; lifting it
     // later creates the node again in its place, from the kept controls at
     // level 0 and with fadeIn 1 (its input rises over fxMixLag, so the new
@@ -314,6 +454,7 @@
                         context.server.makeBundle(nil, {
                             synth.free;
                             if (key == \delay) { this.emptyDelayLine };
+                            this.emptyShimmerRings(key);
                         });
                     };
                 };
@@ -333,14 +474,17 @@
     }
 
     // The reverb node for the tier (high: the FDN), on the filtered reverb
-    // send and the delay's return, writing reverbBus, from the kept controls
-    // (mix: that level instead, when given; fadeIn 1: its input fades in,
+    // send, the delay's return and the reverb's two shimmer rings
+    // (shimmerRingsFor), writing reverbBus, from the kept controls (mix:
+    // that level instead, when given; fadeIn 1: its input fades in,
     // liftFade)
     startReverb { arg target, addAction, mix, fadeIn = 0;
-        var controls = areaState[\effects][\controls][\reverb];
+        var controls = areaState[\effects][\controls][\reverb], rings = this.shimmerRingsFor(\reverb);
         var args = [\in, this.mixBus(\reverbSendPost), \delayIn, delayBus, \out, reverbBus,
+            \shiftL, rings[0], \shiftR, rings[1],
             \mix, mix ? controls[\mix], \size, controls[\size], \damp, controls[\damp],
-            \delayToReverb, controls[\delayToReverb], \fadeIn, fadeIn];
+            \delayToReverb, controls[\delayToReverb], \shimmer, controls[\shimmer],
+            \shimmerRatio, controls[\shimmerRatio], \fadeIn, fadeIn];
         if (tier == \high) {
             synths[\reverb] = Synth(\strataReverbFDN, args, target, addAction);
         } {
@@ -359,8 +503,10 @@
         var state = areaState[\effects];
         // the kept controls start at the SynthDefs' defaults (the Lua params'
         // defaults: the script never bangs its params)
-        state[\controls][\delay] = this.effectDefaults(\strataDelay, [\time, \feedback, \mix, \pingPong, \frozen]);
-        state[\controls][\reverb] = this.effectDefaults(\strataReverb, [\mix, \size, \damp, \delayToReverb]);
+        state[\controls][\delay] = this.effectDefaults(\strataDelay, [\time, \feedback, \mix, \pingPong, \frozen,
+            \shimmer, \shimmerRatio]);
+        state[\controls][\reverb] = this.effectDefaults(\strataReverb, [\mix, \size, \damp, \delayToReverb,
+            \shimmer, \shimmerRatio]);
 
         // The chain at the tail of the engine group, in signal order: the
         // three master filters (dry, delay send, reverb send), the delay, the
@@ -386,9 +532,11 @@
         });
     }
 
-    // The chain's buses and the delay's line (every area's nodes are gone by now)
+    // The chain's buses, the delay's line and shimmer's rings (every area's
+    // nodes are gone by now; the rings stay listed, freed)
     freeEffects {
         this.freeDelayLine;
+        (areaState[\effects][\shimmerRings] ? []).do({ arg buffer; buffer.free });
         mainBus.free;
         filterBus.free;
         delayBus.free;

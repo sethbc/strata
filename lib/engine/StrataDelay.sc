@@ -1,7 +1,8 @@
 // StrataDelay.sc
 // The master delay: its line (two mono buffers the effects area allocates
 // and frees), its SynthDef with 3.8's freeze and clear, the node's start
-// and its commands (setDelay, setDelayFreeze, clearDelay). No area of its
+// and its commands (setDelay, setDelayFreeze, clearDelay); its feedback
+// carries 3.8's shimmer (shimmerShift, StrataEffects.sc). No area of its
 // own: the effects area owns the node and its place in the chain, and
 // calls these. See docs/notes/engine/effects.md and
 // docs/notes/engine/delay.md (the freeze and the clear).
@@ -108,9 +109,19 @@
         // the delay time and delayClearMargin mutes the feedback (at once)
         // and the return (faded over delayClearFade), so what the line held
         // is gone when it ends and the line holds only what came in since;
-        // both come back over delayClearOpenSeconds (delayClearGain)
+        // both come back over delayClearOpenSeconds (delayClearGain).
+        // 3.8's shimmer (shimmer 0-1, lagged fxMixLag; shimmerRatio 0.5-4;
+        // design §7.4): the feedback is a blend of the delayed signal and its
+        // shifted copy (shimmerShift, on the delay's two shimmer rings shiftL
+        // and shiftR, which every Synth(\strataDelay) passes as it passes its
+        // line), so each repeat steps by the ratio and the loop's gain is
+        // still the feedback's (the shifter's two heads are a convex mix);
+        // the return stays the delayed signal. At shimmer 0 the blend adds an
+        // exact 0 (the rings hold finite values): the graph before, bit for
+        // bit
         SynthDef(\strataDelay, {
-            arg in, out, bufL, bufR, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0, frozen=0, t_clear=0;
+            arg in, out, bufL, bufR, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0, frozen=0, t_clear=0,
+                shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2;
             var hold = Slew.kr(frozen.clip(0, 1), this.delayFreezeRate, this.delayFreezeRate);
             var isFrozen = frozen.clip(0, 1) > 0;
             var input = In.ar(in, 2) * this.liftFade(fadeIn) * (1 - hold), returned = LocalIn.ar(2);
@@ -124,7 +135,9 @@
                 input[0] + (input[1] * cross) + (returned[0] * keep) + (returned[1] * cross),
                 (input[1] * keep) + (returned[1] * keep) + (returned[0] * cross)
             ], delayTime);
-            LocalOut.ar(delayed * feedback.clip(0, 0.95).max(hold) * this.delayClearGain(muted, ControlRate.ir));
+            var shifted = this.shimmerShift(delayed, [shiftL, shiftR], shimmerRatio.clip(0.5, 4));
+            var fed = delayed + ((shifted - delayed) * shimmer.clip(0, 1).lag(this.fxMixLag));
+            LocalOut.ar(fed * feedback.clip(0, 0.95).max(hold) * this.delayClearGain(muted, ControlRate.ir));
             Out.ar(out, delayed * this.delayClearGain(muted, 1 / this.delayClearFade) * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
     }
@@ -163,14 +176,16 @@
         });
     }
 
-    // The delay node, on the filtered delay send and the line, writing
-    // delayBus, from the kept controls, frozen among them (mix: that mix
-    // instead, when given; fadeIn 1: its input fades in, liftFade)
+    // The delay node, on the filtered delay send, the line and the delay's
+    // two shimmer rings (shimmerRingsFor), writing delayBus, from the kept
+    // controls, frozen and shimmer's two among them (mix: that mix instead,
+    // when given; fadeIn 1: its input fades in, liftFade)
     startDelay { arg target, addAction, mix, fadeIn = 0;
-        var controls = areaState[\effects][\controls][\delay];
+        var controls = areaState[\effects][\controls][\delay], rings = this.shimmerRingsFor(\delay);
         synths[\delay] = Synth(\strataDelay, [\in, this.mixBus(\delaySendPost), \out, delayBus,
-            \bufL, this.delayLine[0], \bufR, this.delayLine[1],
+            \bufL, this.delayLine[0], \bufR, this.delayLine[1], \shiftL, rings[0], \shiftR, rings[1],
             \time, controls[\time], \feedback, controls[\feedback], \mix, mix ? controls[\mix],
-            \pingPong, controls[\pingPong], \frozen, controls[\frozen], \fadeIn, fadeIn], target, addAction);
+            \pingPong, controls[\pingPong], \frozen, controls[\frozen], \shimmer, controls[\shimmer],
+            \shimmerRatio, controls[\shimmerRatio], \fadeIn, fadeIn], target, addAction);
     }
 }

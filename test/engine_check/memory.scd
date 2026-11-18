@@ -304,19 +304,32 @@ var checkVoiceSynthSizes = {
     group.free; privateBus.free; controlBus.free;
 };
 
-// What one \strataDelay takes of the pool (3.8: its line is two buffers,
-// ordinary RAM, so only its graph is left): twenty nodes on private buses,
-// on one pair of check buffers of the engine's size
-var delayDefLimitKB = 20;
+// What one \strataDelay, \strataReverb and \strataReverbFDN take of the
+// pool (3.8: the delay's line and shimmer's rings are buffers, ordinary
+// RAM, so only the graphs are left): twenty nodes of each on private buses,
+// on one set of check buffers of the engine's sizes (a line, two rings:
+// every node passes them, since a bufnum left out is buffer 0). The limits
+// are 2a's, with both shimmer loops (3.8 design §7.4): the delay 30 KB
+// (1b's 20 before shimmer), FreeVerb2 130 KB (125 until 2a's fix round 2:
+// two probe steps of room was too thin for a CI gate, and 3a needs room),
+// the FDN 235 KB
+var delayDefLimitKB = 30, reverbDefLimitKB = 130, fdnDefLimitKB = 235;
 var checkDelaySize = {
-    var privateBus = Bus.audio(server, 2), group = Group.after(engine.processGroup), line, size;
+    var privateBus = Bus.audio(server, 2), group = Group.after(engine.processGroup), line, rings, sizes;
     line = 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) });
+    rings = 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) });
     server.sync;
-    size = sizeOf.({ Synth(\strataDelay, [\in, privateBus, \out, privateBus, \bufL, line[0], \bufR, line[1], \mix, 1], group) });
-    check.((size > 0) and: { size <= delayDefLimitKB },
-        "memory: % takes % KB of the pool (at most % KB, by allocation probes)".format("\\strataDelay", size.round(0.1),
-            delayDefLimitKB));
-    group.free; server.sync; line.do(_.free); privateBus.free;
+    sizes = [\strataDelay, \strataReverb, \strataReverbFDN].collect({ arg name;
+        sizeOf.({ Synth(name, [\in, privateBus, \delayIn, privateBus, \out, privateBus, \bufL, line[0], \bufR, line[1],
+            \shiftL, rings[0], \shiftR, rings[1], \mix, 1], group) })
+    });
+    [\strataDelay, \strataReverb, \strataReverbFDN].do({ arg name, index;
+        var limit = [delayDefLimitKB, reverbDefLimitKB, fdnDefLimitKB][index];
+        check.((sizes[index] > 0) and: { sizes[index] <= limit },
+            "memory: % takes % KB of the pool (at most % KB, by allocation probes)".format("\\" ++ name, sizes[index].round(0.1),
+                limit));
+    });
+    group.free; server.sync; (line ++ rings).do(_.free); privateBus.free;
 };
 
 // Every voice of an engine on one voice def (3.8, ruling 13: the worst

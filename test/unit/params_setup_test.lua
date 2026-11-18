@@ -280,8 +280,9 @@ test("fx params: defaults, one exactly sized strata_fx group, scene defaults mat
   assert_equal(params.params[group_index].t, params.tGROUP)
   -- then the registered fx params (lib/voice_mix.lua's two bypass params
   -- and its delay to reverb, lib/delay_sync.lua's sync, division and
-  -- ping-pong, 3.8's lib/fx_hold.lua's delay freeze and clear)
-  assert_equal(params.params[group_index].n, #FX_PARAM_IDS + 2 + 1 + 3 + 2, "group size")
+  -- ping-pong, 3.8's lib/fx_hold.lua's delay freeze and clear and
+  -- lib/shimmer.lua's interval and two amounts)
+  assert_equal(params.params[group_index].n, #FX_PARAM_IDS + 2 + 1 + 3 + 2 + 3, "group size")
   for offset, param_id in ipairs(FX_PARAM_IDS) do
     assert_equal(params.params[group_index + offset].id, param_id, "group entry " .. offset)
   end
@@ -1074,6 +1075,16 @@ local PARAM_FIXTURE_ALLOWED = {
   {kind = "added", id = "delay_clear", after = "delay_freeze", why = "1b: the delay's clear (design section 7.2)",
     record = {t = 6, name = "delay clear"}},
   {kind = "group_size", id = "strata_fx", add = 2, why = "1b: delay_freeze and delay_clear join the fx group"},
+  -- 2a: shimmer's interval and two amounts (design §7.4; t 2 is an option, 3 a control)
+  {kind = "added", id = "shimmer_interval", after = "delay_clear", why = "2a: shimmer's interval (design section 7.4)",
+    record = {t = 2, name = "shimmer interval", default = 3, options = {"oct down", "fifth", "octave", "oct+5th", "2 oct"}}},
+  {kind = "added", id = "shimmer_delay", after = "shimmer_interval", why = "2a: shimmer in the delay (design section 7.4)",
+    record = {t = 3, name = "shimmer delay", default = 0, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01,
+      units = "", string = "0 %"}},
+  {kind = "added", id = "shimmer_reverb", after = "shimmer_delay", why = "2a: shimmer around the reverb (design section 7.4)",
+    record = {t = 3, name = "shimmer reverb", default = 0, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01,
+      units = "", string = "0 %"}},
+  {kind = "group_size", id = "strata_fx", add = 3, why = "2a: shimmer's three params join the fx group"},
   -- 1c: the grain envelope goes; the window's shape and skew, probability,
   -- the cloud and its overlap and the pan wander join each voice's extras
   -- (design §4.1, §4.2, §4.4, §4.5); t is the fixture's type code (3 a control, 2 an option:

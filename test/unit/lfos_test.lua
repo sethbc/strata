@@ -665,9 +665,10 @@ test("engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step
 end)
 
 -- 3.7 (decision 24): the list by voice, each destination stored by its key
--- (3.8's registered dly>rev, package 1a, joins the globals after them)
+-- (3.8's registered dly>rev, package 1a, and shim dly and shim rev, 2a,
+-- join the globals after them)
 local GLOBAL_LABELS = { "density", "drift", "filt freq", "filt res", "filt mix", "dly time", "dly fdbk", "dly mix",
-  "rev mix", "rev size", "rev damp", "dly>rev" }
+  "rev mix", "rev size", "rev damp", "dly>rev", "shim dly", "shim rev" }
 -- (3.8 1c: the window's shape and skew follow the scan)
 local VOICE_SUFFIXES = { "main", "size", "dens", "pitch", "spread", "pos", "rate", "scan", "shape", "skew", "hist", "vfilt",
   "dsend", "rsend", "amp" }
@@ -685,7 +686,7 @@ test("the destinations are none, the globals, each voice's together, then the ma
   local labels = {}
   for index, destination in ipairs(destinations) do labels[index] = destination.label end
   assert_equal(table.concat(labels, ","), table.concat(expected, ","), "the whole list, in order")
-  assert_equal(#destinations, 134, "1 + 12 + 7 x 15 + 16: today's destinations, each once")
+  assert_equal(#destinations, 136, "1 + 14 + 7 x 15 + 16: today's destinations, each once")
   -- an LFO's destination is its home routing (the groundwork before 3.8):
   -- entry index's home id is its key ("" for none), and back
   assert_equal(params.lookup[lfo_id(6, "dest")], nil, "no destination param")
@@ -705,18 +706,18 @@ test("the destinations are none, the globals, each voice's together, then the ma
     end
   end
   assert_equal(keys[1], "none"); assert_equal(keys[2], "master_density")
-  -- (3.8: 1a's dly>rev ends the globals, at 13)
-  assert_equal(destinations[14].key, "v1_main"); assert_equal(destinations[25].key, "v1_filter_freq")
+  -- (3.8: 1a's dly>rev at 13, then 2a's shim dly and shim rev end the globals, at 15)
+  assert_equal(destinations[16].key, "v1_main"); assert_equal(destinations[27].key, "v1_filter_freq")
   -- the groups ALT+E3 jumps by: indices into the list
   local groups = {}
   for _, group in ipairs(S.lib.lfos.destination_groups()) do
     groups[#groups + 1] = group.name .. " " .. group.first .. "-" .. group.last
   end
-  assert_equal(table.concat(groups, ", "), "global 2-13, voice 1 14-28, voice 2 29-43, voice 3 44-58, "
-    .. "voice 4 59-73, voice 5 74-88, voice 6 89-103, voice 7 104-118, macros 119-134")
+  assert_equal(table.concat(groups, ", "), "global 2-15, voice 1 16-30, voice 2 31-45, voice 3 46-60, "
+    .. "voice 4 61-75, voice 5 76-90, voice 6 91-105, voice 7 106-120, macros 121-136")
   -- every destination of voice 3 lies between voice 2's last and voice 4's first
   for index, destination in ipairs(destinations) do
-    if destination.label:match("^v3 ") then assert_true(index >= 44 and index <= 58, destination.label .. " in voice 3") end
+    if destination.label:match("^v3 ") then assert_true(index >= 46 and index <= 60, destination.label .. " in voice 3") end
   end
   -- every destination is a control param whose label (with ~ when it
   -- runs in the engine) fits the page's right column
@@ -851,13 +852,13 @@ test("a destination registered after init's list joins its voice's group", funct
     if voice_idx < 7 then assert_equal(destinations[probe + 1].label, "v" .. (voice_idx + 1) .. " main") end
   end
   local gprobe = destination_index("gprobe")
-  assert_equal(gprobe, destination_index("dly>rev") + 1, "a registered global joins the globals (after 1a's dly>rev)")
+  assert_equal(gprobe, destination_index("shim rev") + 1, "a registered global joins the globals (after 2a's shim rev)")
   assert_equal(destinations[gprobe].group, "global")
   assert_equal(destinations[#destinations].label, "macro 16", "the macros still end the list")
   local groups = {}
   for _, group in ipairs(S.lib.lfos.destination_groups()) do groups[#groups + 1] = group.name .. " " .. group.first .. "-" .. group.last end
-  assert_equal(table.concat(groups, ", "), "global 2-14, voice 1 15-30, voice 2 31-46, voice 3 47-62, "
-    .. "voice 4 63-78, voice 5 79-94, voice 6 95-110, voice 7 111-126, macros 127-142")
+  assert_equal(table.concat(groups, ", "), "global 2-16, voice 1 17-32, voice 2 33-48, voice 3 49-64, "
+    .. "voice 4 65-80, voice 5 81-96, voice 6 97-112, voice 7 113-128, macros 129-144")
   -- a key is stored, so two destinations never share one
   local ok, problem = pcall(load_strata, { before_init = function()
     local_value("S").register_lfo_destination("again", "grain_size")
@@ -1193,6 +1194,7 @@ local DESTINATIONS_BEFORE_729 = {
   "dly fdbk|delay_feedback|global", "dly mix|delay_mix|global", "rev mix|reverb_mix|global",
   "rev size|reverb_size|global", "rev damp|reverb_damp|global",
   "dly>rev|delay_to_reverb|global",  -- 3.8, package 1a: a registered global, after the built-in ones
+  "shim dly|shimmer_delay|global", "shim rev|shimmer_reverb|global",  -- 3.8, package 2a: after it
   "v1 main|v1_main|voice 1",
   "v1 size|v1_grain_size|voice 1", "v1 dens|v1_grain_density|voice 1", "v1 pitch|v1_grain_pitch|voice 1",
   "v1 spread|v1_grain_spread|voice 1", "v1 pos|v1_buf_pos|voice 1", "v1 rate|v1_buf_rate|voice 1",
@@ -1248,7 +1250,7 @@ test("a registered global destination's group is its registration's; the list is
   local destinations = local_value("LFO_DESTINATIONS")
   assert_equal(destinations[destination_index("probe mac")].group, "macros", "a global registered in the macros' group")
   assert_equal(destinations[destination_index("probe glob")].group, "global")
-  assert_equal(destination_index("probe glob"), destination_index("dly>rev") + 1, "it joins the globals (after 1a's dly>rev)")
+  assert_equal(destination_index("probe glob"), destination_index("shim rev") + 1, "it joins the globals (after 2a's shim rev)")
   local groups = S.lib.lfos.destination_groups()
   local macros = groups[#groups]
   assert_equal(macros.name, "macros", "the macros still end the list")

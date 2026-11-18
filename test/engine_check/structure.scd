@@ -87,7 +87,8 @@ var engineLeft = { arg target;
         ++ (mix[\synthPaths] ? []) ++ (mix[\otherPaths] ? []);
     var buffers = (target.areaState[\grains][\windowBank] ? []) ++ target.buffersL ++ target.buffersR
         ++ (rings[\voiceL] ? []) ++ (rings[\voiceR] ? []) ++ [rings[\inputL], rings[\inputR], target.areaState[\scale][\buffer]]
-        ++ (target.areaState[\waveform][\peakBuffers] ? []) ++ (outRings[\left] ? []) ++ (outRings[\right] ? []);
+        ++ (target.areaState[\waveform][\peakBuffers] ? []) ++ (outRings[\left] ? []) ++ (outRings[\right] ? [])
+        ++ (target.areaState[\effects][\shimmerRings] ? []);
     [childrenOf.(target.context.xg).size, buses.count({ arg bus; bus.notNil and: { bus.index.notNil } }),
         buffers.count({ arg buffer; buffer.notNil and: { buffer.bufnum.notNil } })]
 };

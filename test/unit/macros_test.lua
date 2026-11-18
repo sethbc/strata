@@ -149,8 +149,9 @@ test("target ids leave out macros, morph and discrete params", function()
   assert_equal(ids[1], "master_density", "the LFO destinations first, without none")
   assert_equal(ids[11], "reverb_damp")
   assert_equal(ids[12], "delay_to_reverb", "the registered global (3.8, 1a)")
-  assert_equal(ids[13], "v1_main", "a voice's main entry")
-  assert_equal(listed["v3_grain_pitch"], 12 + 2 * 15 + 4, "v3 pitch (12 globals with 1a's dly>rev, 15 destinations a voice with 1c's shape and skew)")
+  assert_equal(ids[13], "shimmer_delay", "2a's"); assert_equal(ids[14], "shimmer_reverb")
+  assert_equal(ids[15], "v1_main", "a voice's main entry")
+  assert_equal(listed["v3_grain_pitch"], 14 + 2 * 15 + 4, "v3 pitch (14 globals with 1a's dly>rev and 2a's shimmers, 15 destinations a voice with 1c's shape and skew)")
   -- (the LFO destinations but none and the sixteen macros: read from the
   -- list, so a release that adds a destination moves nothing here)
   local destinations = #S.LFO_DESTINATIONS - 1 - 16
@@ -1019,10 +1020,10 @@ end)
 test("the 16 macros register as destinations and sources", function()
   local context, S, macros = loaded()
   local destinations = S.LFO_DESTINATIONS
-  assert_equal(#destinations, 134, "after v7 amp, 118 (3.8: 1a's dly>rev among the globals, 1c's shape and skew in each voice)")
+  assert_equal(#destinations, 136, "after v7 amp, 120 (3.8: 1a's dly>rev and 2a's shim dly and shim rev among the globals, 1c's shape and skew in each voice)")
   for m = 1, 16 do
-    local entry = destinations[118 + m]
-    assert_equal(entry.label, "macro " .. m, "destination " .. (118 + m))
+    local entry = destinations[120 + m]
+    assert_equal(entry.label, "macro " .. m, "destination " .. (120 + m))
     assert_equal(entry.resolve(), "macro_" .. m)
     assert_equal(entry.group, "macros", "the macros' group")
     assert_equal(entry.fast, nil, "run in Lua")

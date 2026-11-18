@@ -21,7 +21,7 @@ var failures = 0;
 // runs, and the start below is gated on this instead (#485)
 var startFailed = false;
 // The fixed order the areas run in; an absent 3.2 file is skipped
-var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \delay, \mix, \performance,
+var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \delay, \shimmer, \mix, \performance,
     \rings, \freeze, \variation, \tuning, \loops, \record, \waveform, \positions, \modulation, \envelopes, \notes, \onsets, \types, \outrings, \soak];
 // Areas that run only when $STRATA_ENGINE_CHECK_AREAS names them, never in
 // a full run or a CI shard: the soak (docs/notes/engine/files.md, #131)

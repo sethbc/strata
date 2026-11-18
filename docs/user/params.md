@@ -22,6 +22,7 @@ PSETs (PARAMETERS > PSET) save every one of them, and the sixteen scenes beside 
 - Tape drift amount (depth of the pitch drift; 0 = none, default 0.01 = ±0.2 %; it bends the pitch only, with no flutter in the level)
 - Delay bypass and reverb bypass (off by default): switch the effect off completely, freeing its CPU (and the reverb's memory; the delay's line is kept apart, emptied), and keep its level (see [Bypass](effects.md#bypass)). PSETs store them; scenes do not
 - Delay to reverb (0-100 %, default 100): how much of the delay's return the reverb takes; at 0 a voice with no reverb send has dry echoes ([Plain sends](effects.md#plain-sends)). Scenes store it and crossfade it
+- Shimmer interval (oct down, fifth, octave, oct+5th, 2 oct; default octave), shimmer delay and shimmer reverb (0-100 %, default 0): a pitch shift in the delay's feedback and around the reverb ([Shimmer](effects.md#shimmer)). Scenes store all three (the interval switches at a transition's end, the amounts crossfade)
 - Delay sync (off by default): the delay plays delay division at the tempo instead of delay time; a division longer than 5.4 s plays at half its length (or a quarter, ...) until it fits (see [FX](pages/fx.md))
 - Delay division (1/32, 1/16T, 1/16, 1/16D, 1/8T, 1/8, 1/8D, 1/4T, 1/4, 1/4D, 1/2, 1 bar; default 1/8D)
 - Delay ping-pong (0-1, default 0): at 1 the repeats alternate left and right. Scenes store the three: sync and division switch at the end of a transition, ping-pong crossfades

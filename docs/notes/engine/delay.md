@@ -20,7 +20,7 @@
 - `clearDelay()`, `""`: no argument (norns takes an empty format, as `Engine_PolySub.sc` does). Sets `t_clear` 1 on the running node; nothing while bypassed.
 - Released, the loop decays at the feedback the node holds (`setDelay`'s, kept through the freeze): 0.4 is about -8 dB a pass, under -40 dB 2 s after the release at 0.375 s.
 - Frozen and cleared, the loop empties and stays frozen on silence (the input is closed), until a release opens the input again.
-- The node takes 16.9 KB of the pool on 3.14.1 and on 3.13 (the memory area's twenty-node probe, under its 20 KB limit, `delayDefLimitKB`; 7.5 KB before the freeze and the clear, 14.3 KB before the clear's fade back in).
+- The node took 16.9 KB of the pool on 3.14.1 and on 3.13 with the freeze and the clear (the memory area's twenty-node probe; 7.5 KB before them, 14.3 KB before the clear's fade back in), and 24.4 KB with 3.8's shimmer (its feedback blend: `docs/notes/engine/shimmer.md`), under its 30 KB limit (`delayDefLimitKB`, 20 before shimmer).
 
 ## The engine check (`test/engine_check/delay.scd`)
 
@@ -29,4 +29,4 @@ The signal checks run nodes of the engine's own `\strataDelay` on buses and line
 - the input closed (a 1 kHz sine started after the freeze: nothing in the return, against its level unfrozen), a time change waiting for the release (a node whose time goes to 0.2 s while frozen plays what one left at 0.375 s plays, to the sample, until the release), a release decaying at the kept feedback (held within 1 dB until it, -42 dB 2 s after it), a clear (the return under -60 dB from 10 ms after it to one delay time, its new input back one delay time later; with the input stopped, and frozen, nothing after the window), and a clear ending without a step (`checkClearEdge`: a steady sine of eleven cycles a loop period, about 29 Hz, so the repeats add in phase and the refill is never louder than the steady return: across the window's end and one delay time after it the return's largest sample step stays within the steady largest, `clearStepBound` 1);
 - the commands on the engine's node: `setDelayFreeze` setting and keeping `frozen`, kept through a bypass and its lift and set while bypassed, 2 and -1 ignored with one line each; `clearDelay` setting `t_clear` on the running node, keeping nothing and sending nothing in a bypass's fade or after its free; a fresh engine's delay unfrozen (the node and the kept value).
 
-It builds one standard engine of its own (the fresh-engine check) and no high one, and runs in about 21 s, in the `record,waveform,onsets,delay` CI shard.
+It builds one standard engine of its own (the fresh-engine check) and no high one, and runs in about 21 s, in the `record,waveform,onsets,delay,shimmer` CI shard.

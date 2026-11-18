@@ -326,10 +326,11 @@ end)
 -- The LFO destinations by voice (3.7, design decision 24): none, the
 -- globals, then per voice its built-in ones followed by `registered` (the
 -- per-voice labels registered, in registration order), then the macros.
--- The globals end with the script's registered one (3.8's dly>rev, 1a)
+-- The globals end with the script's registered ones (3.8's dly>rev, 1a;
+-- shim dly and shim rev, 2a)
 local function lfo_labels(registered)
   local labels = { "none", "density", "drift", "filt freq", "filt res", "filt mix", "dly time", "dly fdbk",
-    "dly mix", "rev mix", "rev size", "rev damp", "dly>rev" }
+    "dly mix", "rev mix", "rev size", "rev damp", "dly>rev", "shim dly", "shim rev" }
   for voice_idx = 1, 7 do
     for _, suffix in ipairs({ "main", "size", "dens", "pitch", "spread", "pos", "rate", "scan" }) do
       table.insert(labels, "v" .. voice_idx .. " " .. suffix)
@@ -389,9 +390,9 @@ test("the LFO page's ALT+E3 groups keep each voice, its registered destinations 
   end)
   finish_startup(context)
   local S = local_value("S")
-  -- 1 + 12 + 7 x 16 + 16: each voice's group holds 16 with the probe (the
-  -- globals 12 with 1a's dly>rev)
-  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 14 30 46 62 78 94 110 126")
+  -- 1 + 14 + 7 x 16 + 16: each voice's group holds 16 with the probe (the
+  -- globals 14 with 1a's dly>rev and 2a's shim dly and shim rev)
+  assert_equal(table.concat(lfo_dest_group_starts(), " "), "1 2 16 32 48 64 80 96 112 128")
   -- ALT+E3 on the destination field: none, the globals, each v<i> main, then the macros
   h.show_page("LFO")
   S.lfo_field = 1
