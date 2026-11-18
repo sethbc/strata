@@ -983,9 +983,20 @@ return function(S)
   -- Cleanup and the invariant
   ---------------------------------------------------------------------------
 
-  -- Cleanup's step (after the targets ended every note): the express
-  -- queue dropped, and nothing more is sent
+  -- Cleanup's step (after the targets ended every note, before the ports
+  -- let the vports go): each port with a settled zone, or a takedown owed,
+  -- gets one takedown when its device is there and nothing holds it, so a
+  -- synth keeps no zone a script that ended asked for (#789; one owed to a
+  -- held port is dropped with the script, as one a device leaves with is,
+  -- #788); then the express queue dropped, and nothing more is sent
   function M.stop()
+    if not state.stopped then
+      local zones = zones_of(state.config)
+      for port = 1, S.lib.io_ports.PORTS.count do
+        if (zones[port] or state.takedown_due[port]) and present(port) then takedown(port) end
+      end
+      state.takedown_due = {}
+    end
     state.stopped = true
     state.expressing = {}
     state.cursor = 1

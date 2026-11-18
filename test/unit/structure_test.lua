@@ -929,7 +929,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(S.lib.positions, "hold_scan", "scan holds")
   watch_method(S.lib.notes, "stop_flush", "notes flush")
   watch_method(S.lib.io_targets, "stop_all", "targets ended")
-  watch_method(S.lib.io_midi_out, "stop", "midi out")  -- lib/io/midi_out.lua: the express queue dropped
+  watch_method(S.lib.io_midi_out, "stop", "midi out")  -- lib/io/midi_out.lua: the zones taken down, the express queue dropped
   watch_method(S.lib.io_ii, "stop", "ii stopped")  -- lib/io/ii.lua: the leaving sequence while it leads, then nothing more
   local real_set = params.set
   params.set = function(self, id, ...)
