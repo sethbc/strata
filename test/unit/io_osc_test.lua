@@ -1,6 +1,6 @@
 -- test/unit/io_osc_test.lua
 -- OSC in and feedback (lib/io/osc.lua, S.lib.io_osc) and the TouchOSC layout
--- description (tools/touchosc/layout.lua). Each comment cites
+-- description (tools/touchosc/lib/layout.lua). Each comment cites
 -- docs/design/3.6-facts/iii-osc-nb-softcut.md (the OSC fact file), section 2
 -- (norns' osc.lua) or section 3 (TouchOSC), and checks.md sections 5 and 6.
 -- No device or app is used. Run alone: lua test/run.lua io_osc
@@ -350,7 +350,7 @@ end)
 test("every address in the layout description is a param or one of Strata's addresses", function()
   -- checks.md §5: the description is a Lua table the generator reads; design §10.1's table
   local _, S = started()
-  local layout = dofile("tools/touchosc/layout.lua")
+  local layout = dofile("tools/touchosc/lib/layout.lua")
   local known = {["/strata/scene"] = true, ["/strata/patterns"] = true}
   for v = 1, 7 do known["/strata/voice/" .. v .. "/run"] = true; known["/strata/voice/" .. v .. "/retrigger"] = true end
   for _, id in ipairs(layout.params) do assert_true(params.lookup[id] ~= nil, id .. " is a param") end

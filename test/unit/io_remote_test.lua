@@ -4,8 +4,8 @@
 -- Strata (version 1, its numbers pinned here), the hello and attaching, the
 -- frame buffers and their 30 Hz draw clock, the virtual arc's segment, a
 -- device leaving and returning, a monome arc taking over, a MIDI grid
--- through the midigrid mod, and the two device scripts (iii/strata_grid.lua,
--- iii/strata_arc.lua) run in test/stub_iii.lua against the module.
+-- through the midigrid mod, and the two device scripts (extras/lib/iii/strata_grid.lua,
+-- extras/lib/iii/strata_arc.lua) run in test/stub_iii.lua against the module.
 -- Facts: docs/design/3.6-facts/iii-osc-nb-softcut.md §1b (iii's functions,
 -- event_midi's three bytes), docs/design/3.6-facts/checks.md §4 (LED levels
 -- 0 to 15, event_arc_key(z), device_version from 1.1.0) and §7 (midigrid's
@@ -16,8 +16,8 @@ return function(h)
 local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 
-local GRID_SCRIPT = h.repo_root .. "/iii/strata_grid.lua"
-local ARC_SCRIPT = h.repo_root .. "/iii/strata_arc.lua"
+local GRID_SCRIPT = h.repo_root .. "/extras/lib/iii/strata_grid.lua"
+local ARC_SCRIPT = h.repo_root .. "/extras/lib/iii/strata_arc.lua"
 
 local function started(options)
   local context = load_strata(options)
@@ -399,7 +399,7 @@ test("a device that leaves is detached and one that returns is asked again", fun
 end)
 
 test("MIDI out sends nothing to the port a remote grid holds, and sends again once the port is let go", function()
-  -- the iii script reads notes on channels 1 and 2 as LED sets (iii/strata_grid.lua's event_midi)
+  -- the iii script reads notes on channels 1 and 2 as LED sets (extras/lib/iii/strata_grid.lua's event_midi)
   local context, S = started()
   local device = remote_grid(context, S, 3)
   assert_equal(S.lib.io_ports.owner(3), "remote grid")

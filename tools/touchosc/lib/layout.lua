@@ -1,4 +1,4 @@
--- tools/touchosc/layout.lua
+-- tools/touchosc/lib/layout.lua
 -- The description of Strata's two TouchOSC layouts (3.6 design §10.3), read by
 -- tools/touchosc/generate.py (which writes extras/touchosc/*.tosc) and by
 -- test/unit/io_osc_test.lua, which checks every address in it.

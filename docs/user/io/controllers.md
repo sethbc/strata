@@ -13,7 +13,7 @@ Strata reads the E16's encoders as relative turns and, with a small script loade
 **Set up the E16** (in OXI's app, or on the E16):
 1. Set sixteen controls (the first page of a scene, say) to the type **CC Rel1** (or **CC Rel2**), one CC each, in a row: CC 102 to 117 and channel 16 are Strata's defaults. Output port: the USB port you connect to norns.
 2. Connect the E16 to norns by USB (it needs the host port's power, 200 mA) and choose its port in `e16 port`. `e16 channel`, `e16 cc` (the first of the sixteen CCs) and `e16 encoding` (`rel1` or `rel2`) must say what the controls send.
-3. Optionally, for rings and labels: load `extras/e16/strata.lua` (from Strata's folder on norns, `dust/code/strata/extras/e16/`) into the scene with OXI's app. The script is not loaded by norns.
+3. Optionally, for rings and labels: load `extras/lib/e16/strata.lua` (from Strata's folder on norns, `dust/code/strata/extras/lib/e16/`) into the scene with OXI's app. The script is not loaded by norns.
 
 **What a turn does.** Under `rel1` the E16 sends 1 for a step up and 127 for a step down; under `rel2` 63 for up and 65 for down. A turn is a turn of the macro's encoder on the norns: one detent (1 %) a step, so macro learn, the gesture recorders and MOD see it as a hand edit.
 

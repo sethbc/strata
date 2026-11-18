@@ -1,7 +1,7 @@
 -- test/unit/io_controllers_test.lua
 -- The controllers (lib/io/controllers.lua, S.lib.io_controllers): an OXI E16
 -- and a box of sixteen faders on the sixteen macros, the E16's script
--- (extras/e16/strata.lua) and IO's controllers section.
+-- (extras/lib/e16/strata.lua) and IO's controllers section.
 -- Facts: docs/design/3.6-facts/controllers.md sections 1 and 3, checks.md
 -- sections 2 and 3. No device is used: the frames and CCs below are the
 -- bytes those documents give.
@@ -447,7 +447,7 @@ test("the E16 script draws rings, labels and the title from Strata's frames", fu
   -- so the script adds 1 to the 0-based index byte of Strata's label frame
   local context, S = loaded()
   local e16 = require("stub_e16")()
-  e16.run("extras/e16/strata.lua")
+  e16.run("extras/lib/e16/strata.lua")
   local rig = S.lib.io_rig
   assert_true(rig.set("e16_port", E16_PORT))
   local device = context.midi.plug(E16_PORT, "OXI E16")

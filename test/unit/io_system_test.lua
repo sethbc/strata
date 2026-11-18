@@ -58,7 +58,7 @@ local SYSTEM = {
   flood_share = {first_seconds = 2, most_over_least = 3},
 }
 
-local GRID_SCRIPT = h.repo_root .. "/iii/strata_grid.lua"
+local GRID_SCRIPT = h.repo_root .. "/extras/lib/iii/strata_grid.lua"
 
 ---------------------------------------------------------------------------
 -- Recording what the stubs are sent, with the time and whether the LFO

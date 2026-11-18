@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write Strata's two TouchOSC layouts from tools/touchosc/layout.lua.
+"""Write Strata's two TouchOSC layouts from tools/touchosc/lib/layout.lua.
 
 Run on demand from the repository root (never by the tests):
 
@@ -26,7 +26,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-LAYOUT = ROOT / "tools" / "touchosc" / "layout.lua"
+LAYOUT = ROOT / "tools" / "touchosc" / "lib" / "layout.lua"
 OUT_DIR = ROOT / "extras" / "touchosc"
 
 # Lua prints the layout table as JSON (a table with 1..n keys is a list)
