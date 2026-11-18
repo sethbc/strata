@@ -109,14 +109,17 @@ return function(S)
   -- gated sender, so the send budget can ask whether a send reaches the
   -- engine before it counts it (#642). A sender installed over it later
   -- (another S.engine_senders entry) is no longer gated
+  -- 3.8 (package 0d): reaches, optional, a function of no argument: the
+  -- sender also sends only while it holds (a synth key while the voice's
+  -- type has it), and the budget counts it so
   local voice_gates = {}
 
-  function M.add_voice_sender(voice_idx, param_id, send)
+  function M.add_voice_sender(voice_idx, param_id, send, reaches)
     local function sender(value)
-      if S.voices[voice_idx].active then send(value) end
+      if S.voices[voice_idx].active and (reaches == nil or reaches()) then send(value) end
     end
     S.engine_senders[param_id] = sender
-    voice_gates[param_id] = {voice = voice_idx, sender = sender}
+    voice_gates[param_id] = {voice = voice_idx, sender = sender, reaches = reaches}
   end
 
   -- The master density's sender (below): one grainDensity per running voice
@@ -133,13 +136,15 @@ return function(S)
 
   -- How many engine messages a send of the id makes now (what the budget
   -- counts): 0 for an id with no sender (#646) and for a stopped voice's
-  -- param, whose gated sender sends nothing; one per running voice for the
+  -- param (or one its reaches refuses), whose gated sender sends nothing; one per running voice for the
   -- master density (#645); else 1
   local function engine_messages(param_id)
     local sender = S.engine_senders[param_id]
     if sender == nil or not_engine[param_id] then return 0 end
     local gate = voice_gates[param_id]
-    if gate ~= nil and sender == gate.sender then return S.voices[gate.voice].active and 1 or 0 end
+    if gate ~= nil and sender == gate.sender then
+      return (S.voices[gate.voice].active and (gate.reaches == nil or gate.reaches())) and 1 or 0
+    end
     if sender == send_master_density_to_engine then
       local running = 0
       for i = 1, NUM_VOICES do
@@ -574,6 +579,14 @@ return function(S)
     if changed and S.voices[voice_idx].active then run_grain_restart_hooks(voice_idx) end
   end
 
+  -- 3.8 (package 0d): the one caller of engine.setVoiceType: the voice's
+  -- current type (S.lib.types.of), 0-based, as the engine's voiceTypeDefs
+  -- order is the registry's. The v<i>_type action sends it always (a
+  -- stopped voice's engine side records it), a start right after the source
+  function M.send_voice_type(voice_idx)
+    engine.setVoiceType(voice_idx - 1, S.lib.types.of(voice_idx).index - 1)
+  end
+
   -- The voice-stop hooks (S.registry.voice_stop, 3.5), run after each
   -- engine.voiceOff the script sends, with the voice. Each is protected,
   -- as the LFO step hooks are: one that raises is printed with its
@@ -726,7 +739,7 @@ return function(S)
   -- toggle_voice redraws after it, and a pattern step once for all the
   -- voices it starts (#527). A voice outside 1..NUM_VOICES, or one already
   -- running, is left alone.
-  -- The source and every part's kept entries (S.lib.params_setup's
+  -- The source, the type (3.8) and every part's kept entries (S.lib.params_setup's
   -- voice_engine_parts: the grain values) go first: the engine keeps a stopped
   -- voice's and builds or re-gates its grain synth with them inside voiceOn's
   -- own bundle, so the first grain plays this start's values, never the last
@@ -754,9 +767,12 @@ return function(S)
     forget_sent_voice_values(voice_idx)
     -- not running yet, so no restart hook runs here
     M.send_grain_source(voice_idx)
+    M.send_voice_type(voice_idx)
     send_parts(voice_idx, parts, "kept", carried)
+    -- a type without pan (sub) plays it at 0, its hidden pan unsent (ruling 20)
+    local pan = S.lib.voices.is_synth_key(voice_idx, "pan") and value("pan", stored("pan")) or 0
     engine.voiceOn(voice_idx - 1, value("freq", stored("freq")), value("amp", stored("amp")),
-      value("pan", stored("pan") or 0), value("grain_size", stored("grain_size")),
+      pan, value("grain_size", stored("grain_size")),
       value("grain_density", stored("grain_density")) * engine_param_value("master_density"),
       value("grain_pitch", stored("grain_pitch")))
     local started, start_error = xpcall(function()

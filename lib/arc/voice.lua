@@ -6,6 +6,7 @@
 -- step one whole value per ARC_VOICE.ticks_per_step ticks, carried under
 -- "voice:<ring>", and binary params (registered rows) the same way, as a
 -- two-value option (a step up on, a step down off; the ring dark or full).
+-- The type row (3.8) steps its pending choice (S.lib.types.turn), never the param.
 -- Rings past the group's last row are dark and ignore turns. Sets only the arc fields (arc_delta, arc_redraw) on VOICE's
 -- S.registry.pages record (lib/pages/voice.lua).
 
@@ -49,7 +50,10 @@ return function(S)
     end
     local steps = arc_whole_steps(ticks_key, delta, ARC_VOICE.ticks_per_step)
     if steps == 0 then return end
-    if row.kind == "binary" then
+    if row.kind == S.lib.ui_voice_rows.TYPE_KIND then
+      -- the type row (3.8): its pending choice, applied once the ring rests
+      S.lib.types.turn(S.selected_voice, steps)
+    elseif row.kind == "binary" then
       -- a two-value option: a step up turns it on, a step down off
       set_binary_param(row.param_id, steps > 0 and 1 or 0)
     else

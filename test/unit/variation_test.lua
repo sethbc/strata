@@ -333,7 +333,7 @@ test("quantize snaps freq on all seven synth voices but never index, fold or the
     params:set(prefix .. "freq", 290)
     assert_near(params:get(prefix .. "freq"), freq_of(62), 1e-6, prefix .. "freq 290 Hz snaps to D4")
     assert_near(S.voices[voice_idx].values.freq, freq_of(62), 1e-6, "stored snapped")
-    local main_key = S.constants.MAIN_PARAMS[S.voices[voice_idx].name].key
+    local main_key = S.lib.types.of(voice_idx).main.key
     for _, key in ipairs(S.voices[voice_idx].param_order) do
       if key ~= "freq" then
         local id = prefix .. key

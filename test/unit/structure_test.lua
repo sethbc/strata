@@ -813,7 +813,8 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "gestures saved",
   "matrix saved", "samples saved", "rig saved",
   "buffer paths saved",
-  "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "pattern clock", "gesture recorders",
+  "startup clock", "frame clock", "drift metro", "mutation metro", "undo clock", "type settle", "pattern clock",
+  "gesture recorders",
   "quantized actions", "scene sequencer", "scene transition",
   "morph clock", "macro clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
@@ -854,6 +855,7 @@ test("cleanup runs every registered step in today's order", function()
   assert_true(S.lib.io_rig.set("e16_port", 2))  -- the controllers' echo clock runs while a port is set
   S.lib.midi_in.set_note_tap = function() end  -- the MIDI module's note tap (3.5's 2b): a stand-in
   S.lib.ui_zones.open(); S.lib.ui_zones.learn(1)  -- the zones editor's learn timeout clock runs
+  S.lib.types.turn(1, 1)  -- 3.8: voice 1's type row holds a pending choice, its settle clock runs
   context.crow.plug(); params:set("crow_in2_mode", 2)  -- a crow with a jack set: its cleanup sends lines
   -- a remote grid on port 3 (3.6's 1d; the E16 above holds port 2): its hello attaches it and its draw clock runs
   S.lib.io_rig.set("remote_grid_port", 3)
@@ -883,7 +885,7 @@ test("cleanup runs every registered step in today's order", function()
     end
   end
   local clocks = { { "startup clock", STARTUP.clock }, { "frame clock", local_value("UI_PAGES").frame_clock },
-    { "undo clock", local_value("undo_clock") },
+    { "undo clock", local_value("undo_clock") }, { "type settle", S.type_settle_clocks[1] },
     { "pattern clock", S.pattern_clock }, { "scene sequencer", S.scene_sequencer_clock },
     { "scene transition", S.scene_transition_clock }, { "buffer polls and timers", S.buffer_record_clocks[1] },
     { "waveform loop", S.lib.waveforms.read_clock }, { "buffer start reload", S.lib.buffers.start_reload_clocks[2] },
@@ -986,9 +988,10 @@ end)
 -- buffer path), the start-up clock (voice 1 starts and syncs at once) and the
 -- frame clock
 local function start_steps()
-  -- a start: the source and the grain values (the registered voice params'
+  -- a start: the source, the type (3.8) and the grain values (the registered voice params'
   -- grain keys and syncs with them), voiceOn, then the voice-level values (#325)
-  local voice_sync = { "engine.setGrainSource", "engine.setGrainParam", "engine.voiceOn", "engine.setVoiceParam" }
+  local voice_sync = { "engine.setGrainSource", "engine.setVoiceType", "engine.setGrainParam", "engine.voiceOn",
+    "engine.setVoiceParam" }
   for _ = 1, local_value("NUM_MOD_SLOTS") do
     for _, command in ipairs({ "engine.setModSource", "engine.setModAmpAmt", "engine.setModFreqAmt" }) do
       table.insert(voice_sync, command)

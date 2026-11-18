@@ -14,7 +14,6 @@ return function(S)
   local M = {}
   local UI_PAGES = S.constants.UI_PAGES
   local NUM_VOICES = S.constants.NUM_VOICES
-  local MAIN_PARAMS = S.constants.MAIN_PARAMS
   local field_list = S.lib.ui_field_list
   local fit_text = S.lib.ui_text.fit_text
 
@@ -36,6 +35,7 @@ return function(S)
     value_gap = 4,       -- the least room between a label and its value
     line_gap = 6,        -- between the voice and the section on their line
     speed_format = "%.2fx",  -- buf_scan's value: a speed (3.7)
+    pending_level = 4,       -- the type row's pending choice (3.8)
   }
   local LAYOUT = M.LAYOUT
 
@@ -64,12 +64,16 @@ return function(S)
     end
   end
 
-  -- The sections in rows, in order: {name, first = the first field's row index}
+  -- The sections in rows, in order: {name, first = the first field's row
+  -- index}. A section starts at a label row, or at a first row with none
+  -- above it (3.8: the type row's section, "voice")
   local function sections_of(rows)
     local sections = {}
     for index, row in ipairs(rows) do
       if row.selectable == false then
         table.insert(sections, {name = row.section})
+      elseif index == 1 then
+        table.insert(sections, {name = row.section, first = index})
       elseif sections[#sections] and not sections[#sections].first then
         sections[#sections].first = index
       end
@@ -88,7 +92,7 @@ return function(S)
   -- A mod source's value: the voice's number and short name ("3 fold"), or "none"
   local function mod_source_text(value)
     if value < 1 or value > NUM_VOICES then return "none" end
-    return value .. " " .. MAIN_PARAMS[S.voices[value].name].list_name
+    return value .. " " .. S.lib.types.of(value).list_name
   end
 
   -- A row's value: the param's own string (its unit included), trailing
@@ -96,6 +100,13 @@ return function(S)
   -- speed (3.7: "1.00x", 1 the audio's own rate)
   local function value_text(row)
     local key = param_key(row)
+    if row.kind == S.lib.ui_voice_rows.TYPE_KIND then
+      -- the pending choice's name while the row turns (3.8), else the type's
+      local voice_idx = tonumber(row.param_id:match("^v(%d+)_"))
+      local pending = S.lib.types.pending(voice_idx)
+      if pending then return S.lib.types.list()[pending].name end
+      return S.lib.types.of(voice_idx).name
+    end
     if key:match("^mod_source_%d+$") then
       return mod_source_text(params:get(row.param_id))
     end
@@ -130,7 +141,7 @@ return function(S)
     local prefix = S.selected_voice .. (voice.active and "+" or "-") .. " "
     local room = LAYOUT.value_right - screen.text_extents(section_text) - LAYOUT.line_gap
     local name_room = room - screen.text_extents(prefix .. lock_tag)
-    local voice_text = (prefix .. fit_text(MAIN_PARAMS[voice.name].list_name, name_room)):gsub("%s+$", "") .. lock_tag
+    local voice_text = (prefix .. fit_text(S.lib.types.of(S.selected_voice).list_name, name_room)):gsub("%s+$", "") .. lock_tag
     screen.level(10)
     screen.move(0, LAYOUT.section_y)
     screen.text(voice_text)
@@ -152,6 +163,10 @@ return function(S)
     screen.move(LAYOUT.field_x, y)
     screen.text(row.label)
     local room = LAYOUT.value_right - (LAYOUT.field_x + screen.text_extents(row.label)) - LAYOUT.value_gap
+    -- a pending type choice (3.8) is drawn dim until it applies
+    if row.kind == S.lib.ui_voice_rows.TYPE_KIND and S.lib.types.pending(S.selected_voice) then
+      screen.level(LAYOUT.pending_level)
+    end
     screen.move(LAYOUT.value_right, y)
     screen.text_right(fit_text(value_text(row), room))
   end
@@ -250,7 +265,10 @@ return function(S)
       S.lib.ui_cursors.move("voice", d)  -- anchors where it lands
     elseif n == 3 then
       local row = rows[cursor]
-      if row.kind == "binary" then
+      if row.kind == S.lib.ui_voice_rows.TYPE_KIND then
+        -- the type row (3.8): a pending choice, applied once E3 rests
+        S.lib.types.turn(S.selected_voice, d > 0 and 1 or -1)
+      elseif row.kind == "binary" then
         -- on with a turn up, off with a turn down (a toggle's delta would
         -- flip it either way)
         set_binary_param(row.param_id, d > 0 and 1 or 0)
@@ -299,7 +317,10 @@ return function(S)
   local function voice_reset_row()
     local rows, cursor = M.sync_cursor()
     local param_id = rows[cursor].param_id
-    if rows[cursor].kind == "binary" then
+    if rows[cursor].kind == S.lib.ui_voice_rows.TYPE_KIND then
+      -- the voice's own type, at once (a pending choice canceled)
+      S.lib.types.set(S.selected_voice, S.lib.types.default_key(S.selected_voice))
+    elseif rows[cursor].kind == "binary" then
       set_binary_param(param_id, param_default(param_id))  -- echoes to a MIDI map (#519)
     else
       params:set(param_id, param_default(param_id))
@@ -348,7 +369,7 @@ return function(S)
   local layout_states = {}
   for voice_idx = 1, NUM_VOICES do
     for _, source in ipairs(LAYOUT_SOURCES) do
-      for _, section in ipairs({"synth", "grain", "crossmod", "mix"}) do
+      for _, section in ipairs({S.lib.ui_voice_rows.VOICE_SECTION, "synth", "grain", "crossmod", "mix"}) do
         if section ~= "synth" or source.option ~= S.constants.SOURCE_INPUT then
           for _, edge in ipairs({"first", "last"}) do
             table.insert(layout_states, layout_state(voice_idx, source, section, edge))
@@ -356,6 +377,16 @@ return function(S)
         end
       end
     end
+  end
+  -- 3.8: the type row holding a pending choice, drawn dim, toward each
+  -- type (the longest names among them)
+  for index = 1, #S.registry.voice_types do
+    table.insert(layout_states, {name = "type row pending " .. index, setup = function()
+      S.selected_voice = 1
+      M.place_cursor(1)
+      local current = S.lib.types.of(1).index
+      if index ~= current then S.lib.types.turn(1, index - current) end
+    end})
   end
   -- An arc marking the ring group, and a stopped, locked voice in triggered
   -- mode with a crossmod source by name

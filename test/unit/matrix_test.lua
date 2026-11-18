@@ -1240,6 +1240,38 @@ test("matrix: v<i> main follows the voice's source", function()
   assert_near(engine_value(S, main), params:get(main), 1e-12)
 end)
 
+-- 3.8 (package 0d): v<i>_main resolves at each step, so a type change moves
+-- the routing to the new type's main param; the old one's offset returns
+-- to 0, recorded only (its key is hidden: its sender reaches no engine)
+test("matrix: a routing on v1_main follows a type change", function()
+  local context, S, matrix = loaded()
+  params:set("macro_1", 1)
+  local old_main = main_param_id(1)
+  assert_equal(old_main, "v1_freq", "resonator's main is its pitch")
+  route(S, 1, "macro1", "v1_main", 50)
+  lfo_step(context)
+  assert_true(matrix.offset(old_main) ~= 0, "the old main moves")
+  params:set("v1_type", S.lib.types.record("fm").index)
+  local new_main = main_param_id(1)
+  assert_equal(new_main, "v1_index", "fm's main")
+  local low, high = param_range(new_main)
+  params:set(new_main, low + 0.25 * (high - low))
+  context.clear_engine_calls(); lfo_step(context, 2)
+  assert_near(matrix.offset(new_main), 0.25 * (high - low), 1e-9, "the new main gets the offset")
+  assert_equal(matrix.offset("v1_rq"), 0, "no other key holds one")
+  local index_sent
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    if call.args[1] == 0 and call.args[2] == "index" then index_sent = call.args[3] end
+  end
+  assert_near(index_sent, params:get(new_main) + 0.25 * (high - low), 1e-9, "and it reaches the engine")
+  params:set("v1_type", 1)
+  context.clear_engine_calls(); lfo_step(context, 2)
+  assert_equal(matrix.offset(new_main), 0, "back on resonator, fm's index holds no offset")
+  for _, call in ipairs(context.calls_named("setVoiceParam")) do
+    assert_true(not (call.args[1] == 0 and call.args[2] == "index"), "and its hidden key sends nothing")
+  end
+end)
+
 test("matrix: uses_source and affects", function()
   local context, S, matrix = loaded()
   route(S, 1, "lfo2", "v3_grain_pitch", 40)

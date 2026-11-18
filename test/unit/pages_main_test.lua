@@ -528,16 +528,30 @@ test("the arc button starts and stops the voice on MAIN", function()
   assert_true(voices[1].active, "the button starts it again")
 end)
 
-test("every voice type's list name is at most 5 characters, as MAIN_PARAMS states (#49)", function()
+-- 3.8 (package 0d): each type's record holds its list name (MAIN_PARAMS is gone)
+test("every voice type's list name is at most 5 characters, as its type record states (#49)", function()
   load_strata()
-  local main_params = local_value("MAIN_PARAMS")
-  local voices = local_value("voices")
-  for voice_idx = 1, #voices do
-    local voice_type = voices[voice_idx].name
-    local list_name = main_params[voice_type].list_name
-    assert_true(type(list_name) == "string" and #list_name >= 1, voice_type .. " has a list name")
-    assert_true(#list_name <= 5, voice_type .. "'s list name '" .. list_name .. "' has at most 5 characters")
+  assert_equal(local_value("S").constants.MAIN_PARAMS, nil, "no MAIN_PARAMS: the records hold it")
+  for _, record in ipairs(local_value("S").lib.types.list()) do
+    local list_name = record.list_name
+    assert_true(type(list_name) == "string" and #list_name >= 1, record.key .. " has a list name")
+    assert_true(#list_name <= 5, record.key .. "'s list name '" .. list_name .. "' has at most 5 characters")
   end
+end)
+
+test("MAIN follows the type", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local device = context.arc.plug(1)
+  show_page("MAIN")
+  params:set("v1_type", S.lib.types.record("fm").index)
+  assert_equal(S.voice_list.entries[1], "1+ fm", "the list shows fm's list name")
+  assert_equal(main_param_id(1), "v1_index", "E3's param is fm's main")
+  assert_equal(main_param_entry(1).label, "index", "labeled so")
+  local before = params:get("v1_index")
+  context.arc.turn(1, 2, 200)
+  assert_true(params:get("v1_index") > before, "arc ring 2 moves v1_index")
+  assert_true(device ~= nil, "an arc")
 end)
 
 test("MAIN voice list fits its column for every voice, state and selection (#23)", function()

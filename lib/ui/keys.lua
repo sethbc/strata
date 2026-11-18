@@ -4,7 +4,8 @@
 -- (S.alt_held) and the keys held as ALT presses (S.key_press_alt; the ALT
 -- functions are in lib/ui/alt.lua), forgetting held keys (forget_held_keys,
 -- global), and select_voice_by and set_ui_page (which runs the page
--- records' leave and enter), fields of this module's table (S.lib.ui_keys).
+-- records' leave and enter; both apply the pending type choices, 3.8),
+-- fields of this module's table (S.lib.ui_keys).
 
 return function(S)
   local M = {}
@@ -43,19 +44,31 @@ return function(S)
   -- Step the shared selected voice (an omni MIDI pitchbend moves with it):
   -- MAIN's E2, SEQ's ALT+E2 and the arc's SEQ ring 4 (BUFFER's E2 picks a
   -- buffer)
+  -- 3.8 (ruling 63): every voice's pending type choice (VOICE's type row,
+  -- S.lib.types) applied at once
+  local function flush_pending_types()
+    for voice_idx = 1, NUM_VOICES do S.lib.types.flush(voice_idx) end
+  end
+
+  -- A voice pick applies the pending type choices first (ruling 63)
   local function select_voice_by(d)
     local previous_voice = S.selected_voice
     S.selected_voice = util.clamp(S.selected_voice + d, 1, NUM_VOICES)
-    if S.selected_voice ~= previous_voice then midi_bend_follow_selection(previous_voice) end
+    if S.selected_voice ~= previous_voice then
+      flush_pending_types()
+      midi_bend_follow_selection(previous_voice)
+    end
     update_voice_list()
   end
   M.select_voice_by = select_voice_by
 
   -- Show another page (draw_frame redraws the LFO page on every frame). On a
   -- change only, the old page's record gets leave() and the new one's
-  -- enter(), when they have them, and the arc's carried ticks are forgotten
+  -- enter(), when they have them, and the arc's carried ticks are forgotten.
+  -- Leaving VOICE applies the pending type choices first (ruling 63)
   local function set_ui_page(page)
     if page == S.ui_page then return end
+    if S.ui_page == S.constants.UI_PAGES.index.VOICE then flush_pending_types() end
     local old_record = S.registry.pages[S.ui_page]
     if old_record and old_record.leave then old_record.leave() end
     forget_arc_ticks()

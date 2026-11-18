@@ -10,7 +10,7 @@ This is version 3.7.0. [CHANGELOG.md](CHANGELOG.md) says what each release chang
 
 ## Features
 
-- Seven synthesis voices (Resonator, FM, Folder, Sub, Pulse, Karplus, Ring), each with its own granular processor
+- Seven voices, each with its own granular processor, each playing the synth type it picks
 - Eight sample buffers (up to 300 s each on a Pi 4 norns) and a live stereo input with up to 60 s of history as alternative grain sources
 - Recording into the buffers from the input, the master or any one voice: takes that replace a buffer, overdubs and loop recordings that keep playing while they record, armed by a level or started on the clock's beat or bar
 - Random files from a folder, a start point anywhere in a long file, and saving a buffer or just its loop region

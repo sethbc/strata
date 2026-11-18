@@ -99,7 +99,8 @@ test("a registered voice param is added, stored, sent and synced", function()
     if record.name == "probe" then break end
     if record.separator == nil then before = before + S.voice_param_count(record, 1) end
   end
-  before = before - (position["v1_" .. S.voices[1].param_order[1]] - position["voice 1: " .. S.voices[1].name] - 1)
+  -- (3.8: the synth record's own add_first, v1_type, is among those ahead, outside the extras' counts)
+  before = before - (position["v1_" .. S.voices[1].param_order[1]] - position["voice 1: " .. S.voices[1].name] - 2)
   assert_equal(position["v1_probe"], position["voice 1 extras"] + 1 + before, "the record's params follow it")
   assert_equal(position["v1_probe_switch"], position["v1_probe"] + 1)
 end)
@@ -578,7 +579,7 @@ test("a scene without the registered fields loads with every registered default"
   local context = load_with(register, { data_subdir = "v2_to_v3" })
   finish_startup(context)
   local S = local_value("S")
-  assert_equal(S.constants.SCENE_DATA_VERSION, 9)
+  assert_equal(S.constants.SCENE_DATA_VERSION, 10)  -- 3.8: format 10
   params:set("v2_probe", 0.6); params:set("probe_level", 0.9)
   capture_scene(2)
   local scene = deep_copy(S.scenes[2])
@@ -603,7 +604,7 @@ test("a scene without the registered fields loads with every registered default"
   assert_equal(params:get("v2_probe"), 0, "the recall applies the default")
   save_scenes_to_disk()
   local saved = context.tab.load(context.data_dir .. "strata/scenes.data")
-  assert_equal(saved.version, 9, "saved as version 9")
+  assert_equal(saved.version, S.constants.SCENE_DATA_VERSION, "saved in the build's format")
   -- with nothing registered, the same scene loads with the built-in keys alone
   tab.save({ version = S.constants.SCENE_FORMAT_FLOOR, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
   context = load_strata({ data_subdir = "v2_to_v3" })
@@ -835,7 +836,7 @@ test("the 3.3 constants", function()
   assert_equal(constants.WAVEFORMS.refresh_seconds, 2)
   assert_equal(constants.PLAYHEADS.update_hz, 15)
   assert_equal(constants.NORNS_SAMPLE_RATE, 48000)
-  assert_equal(constants.SCENE_DATA_VERSION, 9)
+  assert_equal(constants.SCENE_DATA_VERSION, 10)  -- 3.8: format 10
 end)
 
 test("the 3.7 tempo divisions: twelve names, each with its beats", function()
@@ -1235,7 +1236,8 @@ test("the built-in records come first: synth, grain, crossmod", function()
   local by_name = {}
   for _, record in ipairs(S.registry.voice_params) do by_name[record.name] = record end
   for voice_idx = 1, S.constants.NUM_VOICES do
-    assert_equal(by_name.synth.count(voice_idx), #S.voices[voice_idx].param_order, "synth counts the voice's param_order")
+    -- 3.8 (0d): the type, then every type's synth key
+    assert_equal(by_name.synth.count(voice_idx), 1 + #S.lib.types.keys(), "synth counts the type and every synth key")
   end
   assert_equal(by_name.grain.count, 10, "the source and the nine grain params")
   assert_equal(by_name.crossmod.count, 10, "three slots of three, then the speed")
@@ -1257,13 +1259,14 @@ test("count may be a function of the voice, checked per voice", function()
   end
   load_with(function(S) S.register_voice_params(record) end)
   assert_true(params.lookup.v2_probe_more ~= nil and params.lookup.v1_probe_more == nil, "voice 2's third param")
-  -- a voice's count that is no whole number from 1 is refused at registration
-  load_with(function(S)
-    assert_true(refused(S.register_voice_params, probe_record({ name = "p2",
-      count = function(voice_idx) return voice_idx == 5 and 0 or 2 end })), "voice 5's count 0")
-    assert_true(refused(S.register_voice_params, probe_record({ name = "p3",
-      count = function(voice_idx) return voice_idx == 7 and 1.5 or 2 end })), "voice 7's count 1.5")
-  end)
+  -- a voice's count that is no whole number from 1 is refused at init (3.8,
+  -- ruling 19: a function of the voice is checked then), naming the record
+  for _, bad in ipairs({{name = "p2", voice = 5, count = 0}, {name = "p3", voice = 7, count = 1.5}}) do
+    local ok, problem = pcall(load_with, function(S) S.register_voice_params(probe_record({ name = bad.name,
+      count = function(voice_idx) return voice_idx == bad.voice and bad.count or 2 end })) end)
+    assert_true(not ok and tostring(problem):find(bad.name, 1, true) ~= nil, "voice " .. bad.voice .. "'s count "
+      .. bad.count .. ": " .. tostring(problem))
+  end
   -- and an add that adds another number for one voice fails at init, naming it
   local ok, problem = pcall(load_with, function(S) S.register_voice_params(probe_record({ name = "p4",
     count = function(voice_idx) return voice_idx == 6 and 3 or 2 end })) end)
@@ -1342,7 +1345,6 @@ test("voice_keys and send_order are checked; records with one separator share it
     assert_true(bad({ voice_keys = { probe = { name = 3 } } }), "a name is a string")
     assert_true(bad({ voice_keys = { probe = { send = "x" } } }), "a send is a function")
     assert_true(bad({ voice_keys = { probe = { name = "x", carry = true } } }), "carry is only false")
-    assert_true(bad({ voice_keys = function() return { probe = 1 } end }), "a function's table is checked too")
     assert_true(bad({ grain_keys = { probe = { name = "posSpread", carry = 1 } } }), "a grain key's carry is false")
     assert_true(bad({ send_order = { "probe", "probe" } }), "a key once")
     assert_true(bad({ send_order = { "other" } }), "send_order names the record's sent keys")
@@ -1352,6 +1354,11 @@ test("voice_keys and send_order are checked; records with one separator share it
     S.register_voice_params(probe_record({ name = "good1", grain_keys = { probe = { name = "posSpread", carry = false } },
       voice_keys = { probe_switch = { send = send, carry = false } }, send_order = { "probe_switch", "probe" } }))
   end)
+  -- a function's table is checked too, at init (3.8, ruling 19)
+  local ok, problem = pcall(load_with, function(S)
+    S.register_voice_params(probe_record({ name = "bad keys", voice_keys = function() return { probe = 1 } end }))
+  end)
+  assert_true(not ok and tostring(problem):find("voice_keys", 1, true) ~= nil, "a function's table: " .. tostring(problem))
   -- two records with one separator: one separator before the first
   local function probe_named(name, separator)
     local record = { name = name, count = 1, fader = false, separator = separator }

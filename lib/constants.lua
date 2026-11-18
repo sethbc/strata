@@ -8,11 +8,11 @@
 local NUM_VOICES = 7
 local NUM_SCENES = 16  -- Scene slots, in two banks of SCENE_BANK_SIZE (3.4)
 local PATTERN_LENGTH = 16
-local SCENE_DATA_VERSION = 9  -- Scene file format version (written into scenes.data; 9 since the work before 3.8)
+local SCENE_DATA_VERSION = 10  -- Scene file format version (written into scenes.data; 10 since 3.8: a voice holds its type)
 -- The oldest format each data file loads (3.7, design decision 21): a file
 -- from its floor to the build's version loads, its missing fields filled
 -- from the defaults; an older one is set aside as a backup, never converted
-local SCENE_FORMAT_FLOOR = 9   -- scenes.data: files of 3.5-3.7 are set aside
+local SCENE_FORMAT_FLOOR = 10  -- scenes.data: files of 3.5-3.7 and the groundwork's 9 are set aside
 local BUFFER_FORMAT_FLOOR = 2  -- buffers.data: 3.3's version
 -- The Pulse voice's res rises with resonance (3.3, #314): the engine plays
 -- the filter's rq as mirror - res (StrataVoiceDefs.sc), so 0.1-1 maps onto
@@ -114,24 +114,11 @@ local HEADER = {dots_x = 32, dot_spacing = 4, dot_size = 2, dot_level = 3, curre
 local SCENES_FIELDS = {"scene_transition_time", "scene_sequencer_enabled", "scene_sequence_length", "scene_duration",
   "scene_chance_next", "scene_chance_previous", "scene_chance_random"}
 
--- Per voice type, on MAIN: the synthesis param E3 and arc ring 2 adjust
--- (param id suffix, screen label and screen value format; the arc ring sweeps
--- the param's range in UI_PAGES.ARC_TICKS_PER_SWEEP ticks, like every ring),
--- and the short name the voice list shows (at most 5 characters, which a
--- test asserts, so the widest entry, "+ pulse [L]", ends well left of the
--- divider at x 62)
-local MAIN_PARAMS = {
-  resonator = {key = "freq", label = "freq", format = "%.0f Hz", list_name = "reso"},
-  fm = {key = "index", label = "index", format = "%.1f", list_name = "fm"},
-  folder = {key = "fold", label = "fold", format = "%.1f", list_name = "fold"},
-  sub = {key = "drift", label = "drift", format = "%.3f", list_name = "sub"},
-  pulse = {key = "width", label = "width", format = "%.2f", list_name = "pulse"},
-  karplus = {key = "decay", label = "decay", format = "%.1f s", list_name = "karp"},
-  ring = {key = "ratio", label = "ratio", format = "%.2f", list_name = "ring"}
-}
-
--- A buffer-sourced voice shows and adjusts its buffer position instead; an
--- input-sourced voice its grain size (its synth and buffer params do nothing)
+-- Per voice type, MAIN's E3 and arc ring 2 param and the voice list's
+-- short name are the type's record's (3.8: main and list_name,
+-- lib/types/<key>.lua). A buffer-sourced voice shows and adjusts its
+-- buffer position instead; an input-sourced voice its grain size (its
+-- synth and buffer params do nothing)
 local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
@@ -251,6 +238,7 @@ local CLEANUP_ORDER = {
   drift_metro = 70,         -- lib/mutation.lua
   mutation_metro = 80,      -- lib/mutation.lua (and its param)
   undo_clock = 85,          -- lib/mutation.lua: the randomize undo's expiry clock
+  type_settle = 86,         -- lib/types.lua: the type rows' settle clocks canceled, nothing applied (3.8)
   pattern_clock = 90,       -- lib/sequencer.lua
   gestures = 95,            -- lib/gestures.lua: the recorders' clocks (3.4)
   quantize = 97,            -- lib/quantize.lua: the waiting actions (3.4)
@@ -325,7 +313,6 @@ return {
   UI_PAGES = UI_PAGES,
   HEADER = HEADER,
   SCENES_FIELDS = SCENES_FIELDS,
-  MAIN_PARAMS = MAIN_PARAMS,
   BUFFER_MAIN_PARAM = BUFFER_MAIN_PARAM,
   INPUT_MAIN_PARAM = INPUT_MAIN_PARAM,
   GRID_HOLD = GRID_HOLD,

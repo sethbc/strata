@@ -47,6 +47,14 @@ local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 -- S.lib.<dir>_<file>); a module adds its records to S.registry (pages,
 -- params, grid layouts, cleanup steps) as it loads.
 S.lib.voices = include("lib/voices")(S)
+S.lib.types = include("lib/types")(S)
+S.lib.types_resonator = include("lib/types/resonator")(S)
+S.lib.types_fm = include("lib/types/fm")(S)
+S.lib.types_folder = include("lib/types/folder")(S)
+S.lib.types_sub = include("lib/types/sub")(S)
+S.lib.types_pulse = include("lib/types/pulse")(S)
+S.lib.types_karplus = include("lib/types/karplus")(S)
+S.lib.types_ring = include("lib/types/ring")(S)
 S.lib.ui_frame = include("lib/ui/frame")(S)
 S.lib.engine_sync = include("lib/engine_sync")(S)
 S.lib.data_files = include("lib/data_files")(S)

@@ -2489,7 +2489,8 @@ test("params.md names every Strata group in menu order and every param of a voic
   local problems, checked = {}, 0
   for voice_idx, voice in ipairs(S.voices) do
     local synth_ids, members, order, inside = {}, {}, {}, false
-    for _, key in ipairs(voice.param_order) do synth_ids["v" .. voice_idx .. "_" .. key] = true end
+    -- (3.8: every voice type's synth keys, which voices-and-grains.md describes)
+    for _, key in ipairs(S.lib.types.keys()) do synth_ids["v" .. voice_idx .. "_" .. key] = true end
     -- the voice's params from its heading to the next voice's, but its
     -- synthesis params, grouped by family in menu order
     for _, param in ipairs(params.params) do
@@ -2579,10 +2580,11 @@ test("params.md names every Strata group in menu order and every param of a voic
   assert_true(checked >= 7 * 40, "every voice's params were checked, " .. checked)
 end)
 
--- Each voice's synthesis params, as the VOICE page, MAIN and PARAMETERS
--- show them: a table per voice under its bold name, a row per param of its
--- param_order (amp and pan are described once, above the tables), with the
--- param's range, unit and default, and MAIN's param marked (main) (#395)
+-- Each voice type's synthesis params, as the VOICE page, MAIN and
+-- PARAMETERS show them: a table per type (3.8: S.lib.types.list()) under
+-- its bold name, a row per key of its param_order (amp and pan are
+-- described once, above the tables), with the key's range, unit and the
+-- type's own default, and its main key marked (main) (#395)
 test("voices-and-grains.md has a row for every synthesis param, with its range, unit and default (#395)", function()
   local context = load_strata()
   h.finish_startup(context)
@@ -2590,29 +2592,28 @@ test("voices-and-grains.md has a row for every synthesis param, with its range, 
   local section = doc_section(read_repo_file("docs/user/voices-and-grains.md"), "## Synthesis Parameters")
   assert_true(section ~= nil, "voices-and-grains.md has a Synthesis Parameters section")
   local problems, rows_checked = {}, 0
-  for voice_idx, voice in ipairs(S.voices) do
+  for _, record in ipairs(S.lib.types.list()) do
     local rows, inside = {}, false
     for line in (section .. "\n"):gmatch("([^\n]*)\n") do
       local bold_name = line:match("^%*%*(.-)%*%*$")
       if bold_name then
-        inside = bold_name:lower() == voice.name
+        inside = bold_name:lower() == record.name
       elseif inside and line:sub(1, 1) == "|" then
         local key, rest, range, default = line:match("^| `([%w_]+)`([^|]*)| ([^|]+) | ([^|]+) |")
         if key then rows[key] = {main = rest:find("(main)", 1, true) ~= nil, range = range, default = default} end
       end
     end
     local expected_keys = {}
-    for _, key in ipairs(voice.param_order) do
+    for _, key in ipairs(record.param_order) do
       if key ~= "amp" and key ~= "pan" then
         expected_keys[key] = true
         local row = rows[key]
-        local param = params:lookup_param("v" .. voice_idx .. "_" .. key)
-        local where = voice.name .. " " .. key
+        local where = record.name .. " " .. key
         if not row then
           table.insert(problems, where .. ": no row")
         else
           rows_checked = rows_checked + 1
-          local spec = param.controlspec
+          local spec = record.specs[key]
           local low, high, unit = row.range:match("^([%d%.]+)%-([%d%.]+) ?(%S*)%s*$")
           if not (low and math.abs(tonumber(low) - spec.minval) < 1e-9 and math.abs(tonumber(high) - spec.maxval) < 1e-9) then
             table.insert(problems, where .. ": range '" .. row.range .. "' is not " .. spec.minval .. "-" .. spec.maxval)
@@ -2620,17 +2621,17 @@ test("voices-and-grains.md has a row for every synthesis param, with its range, 
             table.insert(problems, where .. ": unit '" .. unit .. "' is not '" .. tostring(spec.units) .. "'")
           end
           local default = tonumber(row.default:match("^%s*(.-)%s*$"))
-          if not default or math.abs(default - spec.default) > 1e-9 then
-            table.insert(problems, where .. ": default '" .. row.default .. "' is not " .. spec.default)
+          if not default or math.abs(default - record.defaults[key]) > 1e-9 then
+            table.insert(problems, where .. ": default '" .. row.default .. "' is not " .. record.defaults[key])
           end
-          if row.main ~= (S.constants.MAIN_PARAMS[voice.name].key == key) then
-            table.insert(problems, where .. ": (main) belongs on MAIN's param, " .. S.constants.MAIN_PARAMS[voice.name].key)
+          if row.main ~= (record.main.key == key) then
+            table.insert(problems, where .. ": (main) belongs on MAIN's param, " .. record.main.key)
           end
         end
       end
     end
     for key in pairs(rows) do
-      if not expected_keys[key] then table.insert(problems, voice.name .. " " .. key .. ": a row for no param") end
+      if not expected_keys[key] then table.insert(problems, record.name .. " " .. key .. ": a row for no param") end
     end
   end
   assert_true(rows_checked >= 20, "the tables were read, " .. rows_checked .. " rows")
@@ -2931,11 +2932,34 @@ test("the engine's note constants equal the script's", function()
   assert_equal(tonumber(high), S.lib.notes.NOTES.rate_range[2], "absoluteNoteRate's high clip = NOTES.rate_range")
 end)
 
+-- 3.8 (package 0d, ruling 21): a type is only appended, and Lua's
+-- registration order (S.register_voice_type, strata.lua's includes) is the
+-- engine's voiceTypeDefs order, so a saved type index means one def
+test("the engine's voiceTypeDefs equal Lua's types in order", function()
+  load_strata()
+  local S = local_value("S")
+  local source = stubs.strip_sc_comments(engine_sources())
+  local block = source:match("voiceTypeDefs%s*{%s*%^%s*#%[(.-)%]%s*}")
+  assert_true(block ~= nil, "voiceTypeDefs { ^#[...] } (StrataVoices.sc)")
+  local defs = {}
+  for name in block:gmatch("\\([%a_][%w_]*)") do defs[#defs + 1] = name end
+  local list = S.lib.types.list()
+  assert_equal(#list, #defs, "one Lua type per engine def")
+  for index, record in ipairs(list) do
+    assert_equal(record.def, defs[index], "type " .. index .. " (" .. record.key .. ")'s def")
+    assert_equal(record.index, index, record.key .. "'s index is its place")
+  end
+  assert_equal(table.concat(defs, " "), table.concat(engine_spec.voice_type_defs, " "), "the stub reads the same list")
+end)
+
 -- 3.5's per-note main expression (design §3.2): noteMain offsets one control
 -- of each voice SynthDef by its half range, clipped to the range, from
--- noteMainRanges' literals (StrataVoiceDefs.sc), which are Lua's param specs
+-- noteMainRanges' literals (StrataVoiceDefs.sc), which are Lua's param specs.
+-- 3.8 (package 0d): each type's control is its record's note_main, its
+-- range the record's spec of it
 test("the engine's expression controls and ranges equal the Lua specs", function()
   load_strata()
+  local S = local_value("S")
   local source = stubs.strip_sc_comments(engine_sources())
   local block = source:match("noteMainRanges%s*{%s*%^%s*(%b())%s*}")
   assert_true(block ~= nil, "noteMainRanges { ^(def: [\\control, lo, hi], ...) } (StrataVoiceDefs.sc)")
@@ -2943,15 +2967,14 @@ test("the engine's expression controls and ranges equal the Lua specs", function
   for def, control, low, high in block:gmatch("([%a_][%w_]*)%s*:%s*%[%s*\\([%a_][%w_]*)%s*,%s*(%-?[%d%.]+)%s*,%s*(%-?[%d%.]+)%s*%]") do
     ranges[def] = { control = control, low = tonumber(low), high = tonumber(high) }
   end
-  local expected = { strataResonator = "rq", strataFM = "index", strataFolder = "fold", strataSub = "drift",
-    strataPulse = "width", strataKarplus = "decay", strataRing = "ratio" }
-  for _, def in ipairs(engine_spec.voice_type_defs) do
+  for _, record in ipairs(S.lib.types.list()) do
+    local def = record.def
     local range = ranges[def]
     assert_true(range ~= nil, "noteMainRanges has an entry for \\" .. def)
-    assert_equal(range.control, expected[def], "\\" .. def .. "'s expression control")
+    assert_equal(range.control, record.note_main, "\\" .. def .. "'s expression control is " .. record.key .. "'s note_main")
     assert_true(engine_spec.synthdef_controls[def][range.control], "\\" .. range.control .. " is a control of \\" .. def)
     assert_true(engine_spec.synthdef_controls[def].noteMain, "\\" .. def .. " has a noteMain control")
-    local spec = get_param_spec(range.control)
+    local spec = record.specs[record.note_main]
     assert_near(range.low, spec.minval, 1e-9, def .. "'s " .. range.control .. " low = its spec's min")
     assert_near(range.high, spec.maxval, 1e-9, def .. "'s " .. range.control .. " high = its spec's max")
   end

@@ -79,6 +79,24 @@ end)
 -- they arrived a moment late, so the first grain played the last run's
 -- position, loop, envelope or mode (#325). voiceOn resets the voice-level
 -- values (bend, crossmod), so those follow it
+-- 3.8 (package 0d): the voice's type goes right after its source, so the
+-- engine builds the start's voice synth of the type
+test("a start sends setVoiceType after setGrainSource and before voiceOn", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  if S.voices[2].active then toggle_voice(2) end
+  params:set("v2_type", S.lib.types.record("ring").index)
+  context.clear_engine_calls()
+  toggle_voice(2)
+  local at = {}
+  for index, call in ipairs(context.engine_calls) do at[call.name] = at[call.name] or index end
+  assert_equal(at.setVoiceType, at.setGrainSource + 1, "the type right after the source")
+  assert_true(at.setVoiceType < at.voiceOn, "and before voiceOn")
+  local call = context.engine_calls[at.setVoiceType]
+  assert_equal(call.args[1] .. " " .. call.args[2], "1 " .. (S.lib.types.record("ring").index - 1), "voice 1 on ring")
+  assert_equal(#context.calls_named("setVoiceType"), 1, "once")
+end)
+
 test("a start sends the source and every grain value before voiceOn, the voice-level values after", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
@@ -98,8 +116,12 @@ test("a start sends the source and every grain value before voiceOn, the voice-l
     end
     assert_true(voice_on ~= nil, "voice " .. voice_idx .. ": voiceOn sent")
     assert_equal(calls[1].name, "setGrainSource", "voice " .. voice_idx .. ": the source first")
+    -- 3.8 (0d): then the type, before every grain value and voiceOn
+    assert_equal(calls[2].name, "setVoiceType", "voice " .. voice_idx .. ": the type right after the source")
+    assert_equal(calls[2].args[1] .. " " .. calls[2].args[2],
+      (voice_idx - 1) .. " " .. (local_value("S").lib.types.of(voice_idx).index - 1), "voice " .. voice_idx .. "'s type")
     local before = {}
-    for index = 2, voice_on - 1 do
+    for index = 3, voice_on - 1 do
       assert_equal(calls[index].name, "setGrainParam", "voice " .. voice_idx .. ": only grain values before voiceOn")
       before[calls[index].args[2]] = calls[index].args[3]
     end
@@ -1812,6 +1834,9 @@ end)
 -- changes a start message adds an entry to RUN_CALLS_ALLOWED
 -- (test/unit/system_37_test.lua) too.
 local START_CALLS_ALLOWED = {
+  -- 0d: a start sends the voice's type right after its source (design §2.2)
+  {kind = "drop", match = '^setVoiceType%(<v0>, <v0>%)$', count = 1,
+    why = "0d: a start sends setVoiceType, each voice on its own type, right after setGrainSource (design §2.2)"},
 }
 local START_LABELS = {voice_1 = true, voice_4 = true, buffer_voice_3 = true}
 -- The entries of START_CALLS_ALLOWED that apply to the start label
@@ -1848,6 +1873,15 @@ test("a voice start sends 3.7.0's messages", function()
     assert_true(S.voices[voice].active, label .. " started")
     local lines = {}
     for _, call in ipairs(context.engine_calls) do lines[#lines + 1] = start_call_line(call) end
+    -- 0d's difference, before its drop: the type once, right after the source
+    local type_line = string.format("setVoiceType(%d, %d)", voice - 1, voice - 1)
+    local type_at, type_count = nil, 0
+    for index, line in ipairs(lines) do
+      if line == type_line then type_at, type_count = index, type_count + 1 end
+    end
+    assert_equal(type_count, 1, label .. ": " .. type_line .. " once")
+    assert_true(lines[type_at - 1]:match("^setGrainSource%(" .. (voice - 1) .. ", ") ~= nil,
+      label .. ": right after setGrainSource")
     local recorded, sent = h.allowed_call_lines(fixture[label], lines, start_allowances(label), label, voice)
     local expected, actual = start_canonical(recorded), start_canonical(sent)
     for index = 1, math.max(#expected, #actual) do

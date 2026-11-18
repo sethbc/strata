@@ -62,17 +62,19 @@ return function()
     -- 3.7's (design §0.2), read at each use
     voice_hit = {},         -- {name, hit = fn(voice_idx, info)}, told once per hit by lib/engine_sync.lua
     scene_applied = {},     -- {name, fn = fn()}, run once by every apply_entries after its flag clears (lib/scenes.lua)
+    -- 3.8's (design §2.1), read at init
+    voice_types = {},       -- the voice types (register_voice_type), in type order: lib/types/<key>.lua, S.lib.types
   }
 
   -- The registries init reads once (voice_params, scene_fields,
   -- lfo_destinations, fx_params, start, menu_close, scene_blocks,
-  -- pset_hooks) are closed when init begins to read them
+  -- pset_hooks, voice_types) are closed when init begins to read them
   -- (close_registries, called by the first params record, "performance"): a
   -- registration after that is never used, so its register function raises,
   -- naming the registry (#384). The others are read at each use and stay open
   local closed = {}
   local INIT_READ = {"voice_params", "scene_fields", "lfo_destinations", "fx_params", "start", "menu_close",
-    "scene_blocks", "pset_hooks"}
+    "scene_blocks", "pset_hooks", "voice_types"}
 
   function M.close_registries()
     for _, name in ipairs(INIT_READ) do closed[name] = true end
@@ -152,7 +154,7 @@ return function()
   local VOICE_PARAM_FIELDS = {name = true, count = true, add = true, add_first = true, grain_keys = true,
     voice_keys = true, send_order = true, separator = true, sync = true, scene_defaults = true, discrete = true,
     scene_ranges = true, voice_rows = true, layout_states = true, normalize_scene = true, fader = true,
-    main_randomize = true, mutate = true, randomize = true}
+    main_randomize = true, mutate = true, randomize = true, reaches = true, scene_keys = true}
   local SCENE_FIELD_FIELDS = {id = true, default = true, discrete = true, set = true}
   local FX_PARAM_FIELDS = {name = true, count = true, add = true}
 
@@ -236,6 +238,48 @@ return function()
     return defaults
   end
 
+  -- A voice-param record's checks for one voice (register_voice_params'
+  -- per-voice part): its count, voice keys and send_order, and its scene
+  -- defaults with the discrete and scene_ranges keys they hold, every
+  -- voice's scene defaults holding voice 1's keys. Run by
+  -- register_voice_params for a record whose fields are all tables, else
+  -- at init by S.lib.params_setup (3.8, ruling 19). level: error's (0 at init)
+  function M.check_voice_params(record, voice_idx, level)
+    local where = "register_voice_params " .. tostring(record.name)
+    local function check(condition, message)
+      if not condition then error(where .. ": " .. message, level == 0 and 0 or level + 2) end
+    end
+    check(is_whole(M.voice_param_count(record, voice_idx), 1),
+      "count is a whole number of params, at least 1, for voice " .. voice_idx)
+    local voice_keys = M.voice_keys_of(record, voice_idx)
+    check(type(voice_keys) == "table" and all_entries(voice_keys, is_voice_key),
+      "voice_keys maps a key to an engine name, {name, value = fn, carry = false} or {send = fn, carry = false}")
+    check(record.send_order == nil or covers_sent_keys(record.send_order, record.grain_keys, voice_keys),
+      "send_order names each of its grain and voice keys once")
+    -- scene_defaults is a table, or a function of the voice that gives one
+    -- (3.7): each voice's table is checked, and all hold the same keys. A
+    -- record without them (a built-in one) has its discrete keys' defaults
+    -- checked at init (S.lib.params_setup's add_voice_params)
+    local first = M.voice_scene_defaults(record, 1)
+    local defaults = M.voice_scene_defaults(record, voice_idx)
+    check(type(first) == "table" and type(defaults) == "table" and all_entries(defaults, function(key, value)
+      return type(key) == "string" and type(value) == "number" and first[key] ~= nil
+    end) and all_entries(first, function(key) return defaults[key] ~= nil end),
+      "scene_defaults maps a key to a number (a function: for every voice, the same keys)")
+    check(all_entries(record.discrete, function(key, range)
+      local default = defaults[key]
+      local whole_range = type(range) == "table" and is_whole(range[1], -math.huge) and is_whole(range[2], range[1])
+      if record.scene_defaults == nil then return whole_range end
+      return whole_range and is_whole(default, range[1]) and default <= range[2]
+    end), "discrete maps a scene key to a whole {min, max} that holds its default")
+    check(all_entries(record.scene_ranges, function(key, range)
+      local default = defaults[key]
+      return type(range) == "table" and type(range[1]) == "number" and type(range[2]) == "number"
+        and range[1] <= range[2] and not (record.discrete and record.discrete[key])
+        and type(default) == "number" and default >= range[1] and default <= range[2]
+    end), "scene_ranges maps a continuous scene key to a {min, max} that holds its default")
+  end
+
   -- A module's per-voice params (3.2: freeze, variation, loops, history,
   -- the voice filter and sends; the groundwork before 3.8: the built-in
   -- synth, grain and crossmod records, which lib/voices.lua registers
@@ -262,9 +306,9 @@ return function()
   --     (setGrainParam): voiceOn resets the voice-level ones (#325);
   --   scene_defaults: {key = default} (each its param's default), or a
   --     function of the voice that gives that table (defaults that differ
-  --     by voice): the keys scenes capture into voices[i].values and
-  --     fill_scene fills (a built-in record has none: its scene keys are
-  --     every value it adds, S.lib.params_setup.voice_scene_keys);
+  --     by voice; checked at init): the keys scenes capture into
+  --     voices[i].values and fill_scene fills (a built-in record has none:
+  --     its scene_keys name them, S.lib.params_setup.voice_scene_keys);
   --   discrete: {key = {min, max}} (whole values): set at a transition's
   --     end, after the source; every other scene key crossfades;
   --   scene_ranges: {key = {min, max}} for a continuous scene key:
@@ -282,7 +326,19 @@ return function()
   --     1), warped (default true: the step moves in the normalized range;
   --     false: delta x scale in the param's units)}: what gentle_mutate moves;
   --   randomize: {key = fn(voice_idx) -> value}: the keys a press of ALT+K2
-  --     on their VOICE section randomizes, each with its draw (#557)
+  --     on their VOICE section randomizes, each with its draw (#557);
+  --   3.8 (package 0d): reaches = fn(voice_idx, key) -> boolean: whether a
+  --     key's sender reaches the engine now (the synth record's: the voice's
+  --     type has the key, S.lib.voices.is_synth_key); a key it refuses is
+  --     left out of the voice's engine parts and counts no engine message;
+  --   scene_keys = true | {key, ...} | fn(voice_idx, type_key) -> {key, ...}:
+  --     the scene keys of a record without scene_defaults, each default its
+  --     param's at the call (true: every key its add added; a function: a
+  --     voice's keys for a type key, the synth record's own type's); in
+  --     place of scene_defaults;
+  --   voice_rows.rows may be a function of the voice, and voice_rows.swaps
+  --     = {[key] = fn(voice_idx) -> key | nil} replaces a row of the
+  --     record's section by the key it gives (nil: the row stays)
   function M.register_voice_params(record)
     local kind = "register_voice_params"
     require_open("voice_params", kind)
@@ -304,50 +360,34 @@ return function()
     require_arg(record.separator == nil or record.separator == false
       or (type(record.separator) == "string" and record.separator ~= ""), where, "a separator is a string or false")
     require_arg(record.sync == nil or type(record.sync) == "function", where, "sync is a function")
-    -- count and voice_keys may be functions of the voice (the groundwork
-    -- before 3.8): each voice's is checked
-    for voice_idx = 1, M.constants.NUM_VOICES do
-      require_arg(is_whole(M.voice_param_count(record, voice_idx), 1), where,
-        "count is a whole number of params, at least 1, for voice " .. voice_idx)
-      local voice_keys = M.voice_keys_of(record, voice_idx)
-      require_arg(type(voice_keys) == "table" and all_entries(voice_keys, is_voice_key), where,
-        "voice_keys maps a key to an engine name, {name, value = fn, carry = false} or {send = fn, carry = false}")
-      require_arg(record.send_order == nil or covers_sent_keys(record.send_order, record.grain_keys, voice_keys),
-        where, "send_order names each of its grain and voice keys once")
-    end
-    -- scene_defaults is a table, or a function of the voice that gives one
-    -- (3.7): each voice's table is checked, and all hold the same keys. A
-    -- record without them (a built-in one) has its discrete keys' defaults
-    -- checked at init (S.lib.params_setup's add_voice_params)
-    local per_voice = type(record.scene_defaults) == "function"
-    local voice_count = per_voice and M.constants.NUM_VOICES or 1
-    local first = M.voice_scene_defaults(record, 1)
-    for voice_idx = 1, voice_count do
-      local defaults = M.voice_scene_defaults(record, voice_idx)
-      require_arg(type(defaults) == "table" and all_entries(defaults, function(key, value)
-        return type(key) == "string" and type(value) == "number" and first[key] ~= nil
-      end) and all_entries(first, function(key) return defaults[key] ~= nil end), where,
-        "scene_defaults maps a key to a number (a function: for every voice, the same keys)")
-      require_arg(all_entries(record.discrete, function(key, range)
-        local default = defaults[key]
-        local whole_range = type(range) == "table" and is_whole(range[1], -math.huge) and is_whole(range[2], range[1])
-        if record.scene_defaults == nil then return whole_range end
-        return whole_range and is_whole(default, range[1]) and default <= range[2]
-      end), where, "discrete maps a scene key to a whole {min, max} that holds its default")
-      require_arg(all_entries(record.scene_ranges, function(key, range)
-        local default = defaults[key]
-        return type(range) == "table" and type(range[1]) == "number" and type(range[2]) == "number"
-          and range[1] <= range[2] and not (record.discrete and record.discrete[key])
-          and type(default) == "number" and default >= range[1] and default <= range[2]
-      end), where, "scene_ranges maps a continuous scene key to a {min, max} that holds its default")
+    require_arg(record.reaches == nil or type(record.reaches) == "function", where, "reaches is a function")
+    local scene_keys = record.scene_keys
+    require_arg(scene_keys == nil or scene_keys == true or type(scene_keys) == "function"
+      or (type(scene_keys) == "table" and all_entries(scene_keys, function(_, key) return type(key) == "string" end)),
+      where, "scene_keys is true, a list of keys or a function of the voice and a type key")
+    require_arg(scene_keys == nil or record.scene_defaults == nil, where, "scene_keys stands in for scene_defaults")
+    -- The per-voice checks (count, voice_keys, send_order, scene_defaults,
+    -- discrete, scene_ranges): now when every field they read is a table
+    -- or a number; one a function of the voice gives (the groundwork
+    -- before 3.8, 3.7) is checked at init instead (3.8, ruling 19: such a
+    -- function may read the voice types, which are read at init), by
+    -- S.lib.params_setup, through M.check_voice_params
+    if type(record.count) ~= "function" and type(record.voice_keys) ~= "function"
+      and type(record.scene_defaults) ~= "function" then
+      for voice_idx = 1, M.constants.NUM_VOICES do M.check_voice_params(record, voice_idx, 2) end
     end
     local rows = record.voice_rows
     require_arg(rows == nil or (type(rows) == "table" and type(rows.section) == "string"
-      and type(rows.rows) == "table" and (rows.when == nil or type(rows.when) == "function")
+      and (type(rows.rows) == "table" or type(rows.rows) == "function")
+      and (rows.when == nil or type(rows.when) == "function")
       and (rows.before == nil or type(rows.before) == "string")), where,
-      "voice_rows is {section, rows, when = fn, before = <section>}")
-    require_arg(rows == nil or all_entries(rows.rows, function(_, key) return type(key) == "string" end), where,
+      "voice_rows is {section, rows = list | fn(voice_idx), when = fn, before = <section>, swaps}")
+    require_arg(rows == nil or type(rows.rows) == "function"
+      or all_entries(rows.rows, function(_, key) return type(key) == "string" end), where,
       "voice_rows.rows lists param keys")
+    require_arg(rows == nil or all_entries(rows.swaps, function(key, swap)
+      return type(key) == "string" and type(swap) == "function"
+    end), where, "voice_rows.swaps maps a row's key to fn(voice_idx) -> key | nil")
     require_arg(all_entries(record.layout_states, function(_, state)
       return type(state) == "table" and type(state.name) == "string" and type(state.setup) == "function"
     end), where, "layout_states lists {name, setup = fn}")
@@ -796,6 +836,103 @@ return function()
     require_arg(not id:match("^macro_%d+$"), kind .. " " .. id, "a macro is never a macro's target")
     require_arg(not name_taken(M.registry.macro_targets, "id", id), kind, "a second target " .. id)
     table.insert(M.registry.macro_targets, {id = id, label = label})
+  end
+
+  -- 3.8's voice type (design §2.1, package 0d): one record a type, from its
+  -- own file lib/types/<key>.lua, registered in type order (the engine's
+  -- voiceTypeDefs order, a docs test). The record: {key (^[%w_]+$, unique:
+  -- the scenes' name), name (the option's and separator's text), list_name
+  -- (1 to VOICE_TYPE_LIST_NAME_MAX characters, MAIN's list), def (the
+  -- engine def's name), param_order (its synth keys, freq first, amp then
+  -- pan, when present, last), defaults, specs (controlspecs) and formats
+  -- (format strings, optional) by key, main = {key, label, format} (MAIN's
+  -- E3 and arc ring 2), note_main (the key the per-note main expression
+  -- moves), envelope = {attack, release} (the attack and release defaults
+  -- of a voice that starts on it)}. The registry keeps a copy with index
+  -- (its place, 1-based; the engine's type is index - 1): a record that
+  -- gives one is refused. A key an earlier type has must give the same spec (its
+  -- minval, maxval, warp, step, quantum and units; the default may differ)
+  -- and format. It closes at init (INIT_READ)
+  local VOICE_TYPE_FIELDS = {key = true, name = true, list_name = true, def = true, param_order = true,
+    defaults = true, specs = true, formats = true, main = true, note_main = true, envelope = true}
+  local VOICE_TYPE_LIST_NAME_MAX = 5
+  local SPEC_FIELDS = {"minval", "maxval", "warp", "warp_name", "step", "quantum", "units"}
+
+  local function nonempty_string(value) return type(value) == "string" and value ~= "" end
+
+  -- The first registered type's spec and format of key, or nil when none has it
+  local function shared_key(key)
+    for _, record in ipairs(M.registry.voice_types) do
+      if record.specs[key] then return record.specs[key], record.formats[key] end
+    end
+  end
+
+  -- Whether param_order is freq first and ends with amp, then pan when it has one
+  local function well_ordered(order)
+    local has = {}
+    for _, key in ipairs(order) do has[key] = true end
+    if order[1] ~= "freq" or not has.amp then return false end
+    if has.pan then return order[#order] == "pan" and order[#order - 1] == "amp" end
+    return order[#order] == "amp"
+  end
+
+  function M.register_voice_type(record)
+    local kind = "register_voice_type"
+    require_open("voice_types", kind)
+    require_arg(type(record) == "table", kind, "a record is a table")
+    require_arg(type(record.key) == "string" and record.key:match("^[%w_]+$") ~= nil, kind,
+      "a key is a param id suffix")
+    require_arg(not name_taken(M.registry.voice_types, "key", record.key), kind, "a second type " .. record.key)
+    local where = kind .. " " .. record.key
+    require_known_fields(record, VOICE_TYPE_FIELDS, where)
+    require_arg(nonempty_string(record.name), where, "a name is a string")
+    require_arg(nonempty_string(record.list_name) and #record.list_name <= VOICE_TYPE_LIST_NAME_MAX, where,
+      "a list name is 1 to " .. VOICE_TYPE_LIST_NAME_MAX .. " characters")
+    require_arg(nonempty_string(record.def), where, "a def is the engine def's name")
+    local order = record.param_order
+    require_arg(type(order) == "table" and #order > 0 and all_entries(order, function(_, key)
+      return type(key) == "string" and key:match("^[%w_]+$") ~= nil
+    end), where, "param_order lists its synth keys")
+    require_arg(well_ordered(order), where, "param_order has freq first and amp, then pan, last")
+    require_arg(type(record.defaults) == "table" and type(record.specs) == "table"
+      and (record.formats == nil or type(record.formats) == "table"), where, "defaults, specs and formats are tables")
+    local formats = record.formats or {}
+    local listed = {}
+    for _, key in ipairs(order) do
+      require_arg(not listed[key], where, "param_order names " .. key .. " twice")
+      listed[key] = true
+      local spec, default = record.specs[key], record.defaults[key]
+      require_arg(type(spec) == "table" and type(spec.minval) == "number" and type(spec.maxval) == "number", where,
+        key .. " has a spec")
+      require_arg(type(default) == "number" and default >= math.min(spec.minval, spec.maxval)
+        and default <= math.max(spec.minval, spec.maxval), where, key .. " has a default inside its spec")
+      require_arg(formats[key] == nil or type(formats[key]) == "string", where, key .. "'s format is a string")
+      local first_spec, first_format = shared_key(key)
+      if first_spec then
+        for _, field in ipairs(SPEC_FIELDS) do
+          require_arg(first_spec[field] == spec[field], where, key .. "'s spec differs from an earlier type's (" .. field .. ")")
+        end
+        require_arg(first_format == formats[key], where, key .. "'s format differs from an earlier type's")
+      end
+    end
+    for _, table_name in ipairs({"defaults", "specs", "formats"}) do
+      require_arg(all_entries(record[table_name], function(key) return listed[key] end), where,
+        table_name .. " names only param_order's keys")
+    end
+    local main = record.main
+    require_arg(type(main) == "table" and listed[main.key] and nonempty_string(main.label)
+      and nonempty_string(main.format), where, "main is {key of param_order, label, format}")
+    require_arg(listed[record.note_main] == true, where, "note_main is a key of param_order")
+    local envelope = record.envelope
+    require_arg(type(envelope) == "table" and type(envelope.attack) == "number" and type(envelope.release) == "number",
+      where, "envelope is {attack, release}")
+    -- the registry keeps a copy, its formats filled in and its index set;
+    -- the caller's table is left as it was given
+    local stored = {}
+    for field, value in pairs(record) do stored[field] = value end
+    stored.formats = formats
+    stored.index = #M.registry.voice_types + 1
+    table.insert(M.registry.voice_types, stored)
   end
 
   -- The module tables, S.lib.<name> (strata.lua stores each constructor's

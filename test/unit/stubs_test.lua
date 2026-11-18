@@ -18,7 +18,7 @@ local function stub_state_source(extra_registry)
   return "return function() return { marker = 2, registry = { pages = {}, params = {}, start = {}, cleanup = {},"
     .. " grid_layouts = {}, voice_params = {}, scene_fields = {}, source_change = {}, param_filters = {},"
     .. " lfo_destinations = {}, fx_params = {}, menu_close = {}, mod_sources = {},"
-    .. " ii_devices = {}, grid_pages = {}, " .. extra_registry .. " }, lib = {}, register_start = function() end,"  -- ii_devices: lib/io/ii.lua's add_params at init
+    .. " ii_devices = {}, grid_pages = {}, voice_types = {}, " .. extra_registry .. " }, lib = {}, register_start = function() end,"  -- ii_devices: lib/io/ii.lua's add_params at init
     .. " register_cleanup = function() end, register_voice_params = function() end, register_fx_params = function() end,"
     .. " register_lfo_destination = function() end, register_param_filter = function() end,"
     .. " register_source_change = function() end, register_scene_field = function() end,"
@@ -42,7 +42,9 @@ local function stub_state_source(extra_registry)
     -- 3.7's (lib/random_sequences.lua registers its voice_hit hook as it loads)
     .. " register_voice_hit = function() end,"
     -- 3.8's (each lib/grid/pages/ file registers its page as it loads)
-    .. " register_grid_page = function() end } end"
+    .. " register_grid_page = function() end,"
+    -- 3.8's (each lib/types/ file registers its voice type as it loads)
+    .. " register_voice_type = function() end } end"
 end
 
 test("each load gets its own data directory, even after the same random seed (#50)", function()

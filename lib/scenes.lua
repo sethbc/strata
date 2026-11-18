@@ -13,7 +13,9 @@
 -- (S.lib.params_setup.voice_scene_keys), scene fields
 -- (S.registry.scene_fields), scene blocks (S.registry.scene_blocks) and
 -- lock hooks (S.registry.lock_change). A scene's voice is {active, source,
--- values} (format 9): capture_voice takes one and apply_voice applies one.
+-- type, values} (format 10, 3.8: type its voice type's key, values its
+-- type's synth keys and the shared keys): capture_voice takes one and
+-- apply_voice applies one.
 -- A recall is the list scene_entries builds (per voice, voice_entries'),
 -- applied by apply_entries (all fields of S.lib.scenes, which morph uses
 -- too). The functions stay global. The tables tests and
@@ -129,11 +131,19 @@ return function(S)
   end
 
   -- A voice's scene keys, read at use (after init): the list of {key,
-  -- default, range, limits} in recall order (S.lib.params_setup's
+  -- default, range, limits, synth} in recall order (S.lib.params_setup's
   -- voice_scene_keys: the voice's built-in keys sorted, then its registered
-  -- keys sorted) and the same entries by key
-  local function voice_scene_keys(voice_idx)
-    return S.lib.params_setup.voice_scene_keys(voice_idx)
+  -- keys sorted) and the same entries by key, for the type type_key (3.8;
+  -- nil: the voice's current type; a type this build lacks: no synth keys)
+  local function voice_scene_keys(voice_idx, type_key)
+    return S.lib.params_setup.voice_scene_keys(voice_idx, type_key)
+  end
+
+  -- A scene voice's type key as a string a key can be (^[%w_]+$), or nil
+  local function type_key_of(voice_data)
+    local key = voice_data.type
+    if type(key) == "string" and key:match("^[%w_]+$") then return key end
+    return nil
   end
 
   -- A registered field's own setter (its record's optional set =
@@ -250,9 +260,11 @@ return function(S)
     return type(value) == "string" and #value <= S.constants.SCENE_NAME_MAX and not value:find("[^\32-\126]")
   end
 
-  -- Fill a scene voice's missing fields (format 9: {active, source,
-  -- values}): the source (the synth), then, when values is a table, each of
-  -- the voice's scene keys it lacks with that key's default; then each
+  -- Fill a scene voice's missing fields (format 10: {active, source, type,
+  -- values}): the source (the synth) and the type (the voice's default,
+  -- S.lib.types.default_key), then, when values is a table, each of the
+  -- voice's scene keys of the scene's type it lacks with that key's
+  -- default (a type this build lacks: the shared keys alone); then each
   -- registered voice-param record's normalize_scene(values), if it has one,
   -- brings values a hand edit may have left inconsistent back to what the
   -- params allow (a loop past the slot's end), so a recall ends where the
@@ -261,9 +273,10 @@ return function(S)
   local function fill_voice(voice_idx, voice_data)
     if type(voice_data) ~= "table" then return end
     if voice_data.source == nil then voice_data.source = SOURCE_SYNTH end
+    if voice_data.type == nil then voice_data.type = S.lib.types.default_key(voice_idx) end
     local values = voice_data.values
-    if type(values) ~= "table" then return end
-    for _, entry in ipairs((voice_scene_keys(voice_idx))) do
+    if type(values) ~= "table" or not type_key_of(voice_data) then return end
+    for _, entry in ipairs((voice_scene_keys(voice_idx, voice_data.type))) do
       if values[entry.key] == nil then values[entry.key] = entry.default end
     end
     for _, record in ipairs(S.registry.voice_params) do
@@ -299,9 +312,10 @@ return function(S)
     for i = 1, NUM_VOICES do fill_voice(i, data.voices[i]) end
   end
 
-  -- A voice as a scene holds it (format 9): a fresh {active, source,
-  -- values}, values holding the voice's scene keys (voice_scene_keys) and
-  -- nothing else (no note_cap, no solo); nil for a number that is no voice.
+  -- A voice as a scene holds it (format 10): a fresh {active, source, type,
+  -- values}, type the voice's type's key, values holding the voice's scene
+  -- keys (voice_scene_keys: its current type's synth keys) and nothing else
+  -- (no note_cap, no solo); nil for a number that is no voice.
   -- The source's buffer contents are not captured
   function M.capture_voice(voice_idx)
     if not is_integer_between(voice_idx, 1, NUM_VOICES) then return nil end
@@ -309,7 +323,8 @@ return function(S)
     for _, entry in ipairs((voice_scene_keys(voice_idx))) do
       values[entry.key] = S.voices[voice_idx].values[entry.key]
     end
-    return {active = S.voices[voice_idx].active, source = S.voices[voice_idx].source, values = values}
+    return {active = S.voices[voice_idx].active, source = S.voices[voice_idx].source, type = S.voices[voice_idx].name,
+      values = values}
   end
 
   function capture_scene(scene_num)
@@ -398,21 +413,28 @@ return function(S)
 
   -- A voice's entries of a recall (scene_entries, apply_entries), from a
   -- scene voice that passed valid_voice_data: {kind = "discrete", key =
-  -- "active", voice, value}, its source (v<i>_source, discrete), then each
-  -- of its scene keys in recall order (voice_scene_keys: the built-in keys
+  -- "active", voice, value}, its source (v<i>_source, discrete), its type
+  -- (3.8: v<i>_type, discrete, its index; none for a type this build
+  -- lacks, which leaves the voice's type), then each of its scene keys of
+  -- the scene's type in recall order (voice_scene_keys: the built-in keys
   -- sorted, then the registered keys sorted, so freq comes before freeze
-  -- and loop_length before loop_start), continuous but a key with a range
-  -- (the grain envelope and mode, the mod sources, a record's discrete
-  -- keys). Each param entry is {kind, id, value, voice}
+  -- and loop_length before loop_start; a type this build lacks: the shared
+  -- keys alone), continuous but a key with a range (the grain envelope and
+  -- mode, the mod sources, a record's discrete keys). Each param entry is
+  -- {kind, id, value, voice}, a synth key's with synth = true
   function M.voice_entries(voice_idx, voice_data)
     local prefix = "v" .. voice_idx .. "_"
     local entries = {
       {kind = "discrete", key = "active", voice = voice_idx, value = voice_data.active},
       {kind = "discrete", id = prefix .. "source", value = voice_data.source, voice = voice_idx},
     }
-    for _, entry in ipairs((voice_scene_keys(voice_idx))) do
+    local record = S.lib.types.record(voice_data.type)
+    if record then
+      table.insert(entries, {kind = "discrete", id = prefix .. "type", value = record.index, voice = voice_idx})
+    end
+    for _, entry in ipairs((voice_scene_keys(voice_idx, voice_data.type))) do
       table.insert(entries, {kind = entry.range and "discrete" or "continuous", id = prefix .. entry.key,
-        value = voice_data.values[entry.key], voice = voice_idx})
+        value = voice_data.values[entry.key], voice = voice_idx, synth = entry.synth})
     end
     return entries
   end
@@ -486,6 +508,11 @@ return function(S)
       local previous_source = S.voices[voice_idx].source
       set_scene_value(entry.id, entry.value)
       state.source_changed[voice_idx] = S.voices[voice_idx].source ~= previous_source
+    elseif voice_idx and entry.id == "v" .. voice_idx .. "_type" then
+      -- 3.8: the type as the source: its action leaves the sync to the end
+      local previous_type = S.voices[voice_idx].name
+      set_scene_value(entry.id, entry.value)
+      state.type_changed[voice_idx] = S.voices[voice_idx].name ~= previous_type
     else
       set_scene_value(entry.id, entry.value)
     end
@@ -493,7 +520,7 @@ return function(S)
 
   -- Apply entries (any subset of scene_entries' output, in its order) as a
   -- recall does, with S.scene_recall_in_progress set throughout (the
-  -- v<i>_source action then leaves the full sync to the end): a param
+  -- v<i>_source and v<i>_type actions then leave the full sync to the end): a param
   -- through set_scene_value, a block through its record's apply, a lock
   -- that changes runs the lock_change hooks (S.registry.lock_change,
   -- fn(voice_idx, locked)), a pattern through
@@ -501,7 +528,7 @@ return function(S)
   -- stopped there; one it starts is started after its last entry in the
   -- list (its pattern aside, which follows every voice's entries), so
   -- toggle_voice syncs what was applied. Then each running voice whose
-  -- source changed, and that the list did not start, gets one
+  -- source or type (3.8) changed, and that the list did not start, gets one
   -- sync_voice_values_to_engine, even after an error in an action: the flag
   -- is cleared, the syncs run, and the error is raised again with its
   -- traceback. opts.only = "discrete" (the blocks and discrete entries) or
@@ -522,7 +549,7 @@ return function(S)
       local voice_idx = entry_voice(entry)
       if voice_idx and entry.key ~= "pattern" then last_entry[voice_idx] = index end
     end
-    local state = {blocks = {}, source_changed = {}, start_due = {}}
+    local state = {blocks = {}, source_changed = {}, type_changed = {}, start_due = {}}
     for _, record in ipairs(scene_blocks()) do state.blocks[record.key] = record end
 
     S.scene_recall_in_progress = true
@@ -538,6 +565,7 @@ return function(S)
           if not S.voices[voice_idx].active then
             toggle_voice(voice_idx)
             state.source_changed[voice_idx] = false
+            state.type_changed[voice_idx] = false
           end
         end
       end
@@ -553,9 +581,9 @@ return function(S)
     -- its held extra notes follow what it now is (S.lib.notes.recall_switched:
     -- cut when it ends a frozen synth voice, rulings 58 and 59)
     for i = 1, NUM_VOICES do
-      if state.source_changed[i] and S.voices[i].active then
+      if (state.source_changed[i] or state.type_changed[i]) and S.voices[i].active then
         sync_voice_values_to_engine(i)
-        S.lib.notes.recall_switched(i)
+        if state.source_changed[i] then S.lib.notes.recall_switched(i) end
       end
     end
     if not applied then error(apply_error, 0) end
@@ -566,7 +594,9 @@ return function(S)
   -- values are read once, before the fade, so the fade moves linearly from
   -- start to target over the whole transition. Grain sources, mod sources,
   -- discrete grain params (envelope shape, grain mode), freeze, lock and
-  -- active states switch at the end instead.
+  -- active states switch at the end instead. 3.8: a voice's synth keys of
+  -- a scene whose type differs from the voice's type at the fade's start
+  -- land at the end with the type (the shared keys fade).
   function scene_transition_targets(scene_data)
     local targets = {}
     local function add_target(param_id, target_value)
@@ -582,8 +612,11 @@ return function(S)
     -- state (#408)
     local globals = {}
     for _, global in ipairs(S.SCENE_GLOBAL_PARAMS) do globals[global.id] = global end
+    -- each voice's type now, read once, before the fade
+    local other_type = {}
+    for i = 1, NUM_VOICES do other_type[i] = scene_data.voices[i].type ~= S.voices[i].name end
     for _, entry in ipairs(M.scene_entries(scene_data)) do
-      if entry.kind == "continuous" then
+      if entry.kind == "continuous" and not (entry.synth and other_type[entry.voice]) then
         local global = globals[entry.id]
         if not (global and global.lfo and S.lib.lfos.transition_stops(global.lfo, scene_data)) then
           add_target(entry.id, entry.value)
@@ -1231,13 +1264,16 @@ return function(S)
     return load_scenes_from_disk()
   end
 
-  -- A scene voice (format 9) as a recall can apply it: a table holding
-  -- exactly active (a boolean), source (a whole SOURCE_OPTIONS index) and
-  -- values, which holds exactly the voice's scene keys (voice_scene_keys:
-  -- another voice type's synth key, a key a later version adds and a
-  -- missing key are all refused), each a finite number, a key with a range
-  -- a whole number inside it and one with limits a number inside them
-  local VOICE_FIELDS = {active = true, source = true, values = true}
+  -- A scene voice (format 10) as a recall can apply it: a table holding
+  -- exactly active (a boolean), source (a whole SOURCE_OPTIONS index), type
+  -- (a key string) and values, which holds exactly the voice's scene keys
+  -- of the scene's own type (voice_scene_keys(voice_idx, type): another
+  -- type's synth key, a key a later version adds and a missing key are all
+  -- refused), each a finite number, a key with a range a whole number
+  -- inside it and one with limits a number inside them. A type this build
+  -- lacks (3.8, design §2.4): every shared key as above, and any other key
+  -- a finite number (that type's own, kept in the file, never applied)
+  local VOICE_FIELDS = {active = true, source = true, type = true, values = true}
   local function valid_voice_data(voice_idx, voice_data)
     if type(voice_data) ~= "table" then return false end
     for field in pairs(voice_data) do
@@ -1247,12 +1283,15 @@ return function(S)
     if not is_integer_between(voice_data.source, 1, #SOURCE_OPTIONS) then return false end
     local values = voice_data.values
     if type(values) ~= "table" then return false end
-    local list, by_key = voice_scene_keys(voice_idx)
+    local type_key = type_key_of(voice_data)
+    if not type_key then return false end
+    local known = S.lib.types.record(type_key) ~= nil
+    local list, by_key = voice_scene_keys(voice_idx, type_key)
     for key, value in pairs(values) do
       local entry = by_key[key]
-      if entry == nil or not is_number(value) then return false end
-      if entry.range and not is_integer_between(value, entry.range[1], entry.range[2]) then return false end
-      if entry.limits and (value < entry.limits[1] or value > entry.limits[2]) then return false end
+      if not is_number(value) or (entry == nil and (known or type(key) ~= "string")) then return false end
+      if entry and entry.range and not is_integer_between(value, entry.range[1], entry.range[2]) then return false end
+      if entry and entry.limits and (value < entry.limits[1] or value > entry.limits[2]) then return false end
     end
     for _, entry in ipairs(list) do
       if values[entry.key] == nil then return false end
@@ -1260,12 +1299,12 @@ return function(S)
     return true
   end
 
-  -- Apply one voice's scene data (format 9, as capture_voice gives it) at
+  -- Apply one voice's scene data (format 10, as capture_voice gives it) at
   -- once, as a recall applies a voice: a copy of data is filled
-  -- (fill_voice) and checked (valid_voice_data), then its entries
-  -- (voice_entries) go through apply_entries with opts, so the voice stops
-  -- or starts by its active, its source goes first, and a running voice
-  -- whose source changes gets one sync. Leaves the voice's pattern and
+  -- (fill_voice) and checked (valid_voice_data, by the data's own type),
+  -- then its entries (voice_entries) go through apply_entries with opts, so
+  -- the voice stops or starts by its active, its source and then its type
+  -- go first, and a running voice whose source or type changes gets one sync. Leaves the voice's pattern and
   -- lock, the globals, the blocks, S.current_scene and a running transition
   -- alone; redraws are the caller's. A number that is no voice, or data
   -- still invalid after the fill, applies nothing: one console line, and
@@ -1362,7 +1401,7 @@ return function(S)
   -- Scenes with the PSET (the groundwork before 3.8, design §6, rulings 34
   -- and 35): each PSET's sixteen scenes in <path_base>.scenes.data, through
   -- S.lib.side_files (the live file keeps its own writer above). The spec's
-  -- floor is its version: exactly format 9 loads. refused: the hint row's
+  -- floor is its version: exactly the build's format (10) loads. refused: the hint row's
   -- flash when a PSET's scenes cannot be taken (the live ones stay)
   local PSET_SCENES = {side_suffix = ".scenes.data", backup_suffix = ".bak", refused = "pset scenes not loaded"}
   M.PSET_SCENES = PSET_SCENES

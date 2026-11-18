@@ -144,13 +144,14 @@ Scenes capture each voice's source and buffer position, rate and scan, but **not
 - Scale (off, or any of norns' scales; default off) and root (C-B, default C), shared by every voice that quantizes ([voices and grains](voices-and-grains.md#scales))
 
 ## Per-Voice Sections
-Each voice has four parts in the menu, in this order: its heading (`voice 1: resonator`), with quantize, the voice's synthesis parameters, its amp and (all but the Sub) its pan; then `voice 1 granular`, `voice 1 cross-modulation` and `voice 1 extras`. The synthesis parameters are listed voice by voice in [Synthesis Parameters](voices-and-grains.md#synthesis-parameters). The Pulse voice's res (0.1-1, default 0.8) rises with resonance, as every other res does: up is a sharper, ringing peak at the cutoff, 0.1 is flat. Before 3.3 it ran the other way (0.1 was the sharpest); a PSET saved then loads its number as it is, so it plays another resonance (a scenes file that old is set aside).
+Each voice has four parts in the menu, in this order: its heading (`voice 1: resonator`, naming the voice's type), with its type, quantize, the voice's synthesis parameters, its amp and (all but the Sub type) its pan; then `voice 1 granular`, `voice 1 cross-modulation` and `voice 1 extras`. Every voice holds the synthesis parameters of every type, but the menu shows only its current type's; the others keep their values (a PSET saves them all) and come back with their type. The synthesis parameters are listed type by type in [Synthesis Parameters](voices-and-grains.md#synthesis-parameters). The Pulse voice's res (0.1-1, default 0.8) rises with resonance, as every other res does: up is a sharper, ringing peak at the cutoff, 0.1 is flat. Before 3.3 it ran the other way (0.1 was the sharpest); a PSET saved then loads its number as it is, so it plays another resonance (a scenes file that old is set aside).
 
 The rest of each voice's parameters, in menu order. A default "by voice" gives voices 1-7's in turn; a numbered parameter's defaults are its numbers' in turn.
 
 | parameter | range | default | |
 |---|---|---|---|
-| quantize | off/on | off | First, right after the voice's heading and above its freq, so a PSET sets it before the freq ([Grain variation](voices-and-grains.md#grain-variation)) |
+| type | resonator, fm, folder, sub, pulse, karplus, ring | by voice: resonator, fm, folder, sub, pulse, karplus, ring | The voice's synth ([Voice types](voices-and-grains.md#voice-types)). First under the voice's heading; a PSET from before 3.8 has no line for it and puts each voice back on its own type |
+| quantize | off/on | off | Right after the type and above the voice's freq, so a PSET sets it before the freq ([Grain variation](voices-and-grains.md#grain-variation)) |
 | source | synth, buf 1-8, input | synth | What the voice's grains read ([Audio Sources and Buffers](sources-and-buffers.md)) |
 | buffer position | 0-1 | 0 | Where a buffer-sourced voice's grains read, in its loop |
 | buffer rate | 0.25-4 | 1 | How fast a buffer-sourced voice's grains read the buffer |

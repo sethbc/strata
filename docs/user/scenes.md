@@ -7,7 +7,7 @@ Strata includes a comprehensive scene system for longer-form composition and aut
 - **Disk Persistence** - Each scene you save is written to disk at once, and the scenes load on startup ([Saved scenes on disk](#saved-scenes-on-disk))
 - **Instant or Smooth Recall** - Jump immediately or crossfade between scenes
 - **Scene Sequencer** - Automatically progress through scenes for hands-free composition
-- **Complete State Capture** - Scenes store voice parameters and sources, patterns, lock states, and global settings, including each LFO's state, shape, rate, depth, offset, phase, inputs and destination, and the random sequences' values (not the audio in the sample buffers, nor a file's settings: [A File's Settings](files.md))
+- **Complete State Capture** - Scenes store voice parameters, sources and synth types (a recall puts each voice back on its scene's type), patterns, lock states, and global settings, including each LFO's state, shape, rate, depth, offset, phase, inputs and destination, and the random sequences' values (not the audio in the sample buffers, nor a file's settings: [A File's Settings](files.md))
 - **Grid Integration** - Dedicated [scenes page](grid/pages/scenes.md) on every grid for performance control
 - **Visual Feedback** - `S1`-`S16` indicator shows current scene on screen
 

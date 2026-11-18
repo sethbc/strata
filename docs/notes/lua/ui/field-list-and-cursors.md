@@ -6,7 +6,7 @@
 ## Cursors and VOICE rows
 
 `S.cursors` (`lib/ui/cursors.lua`) holds the cursors more than one page or ring set uses:
-- `voice`: a row index into `voice_page_rows(S.selected_voice)` (a `field_list` cursor). It starts on the first selectable row (row 2: row 1 is the first section's label).
+- `voice`: a row index into `voice_page_rows(S.selected_voice)` (a `field_list` cursor). It starts on the first selectable row, row 1, the type row (3.8: `S.lib.ui_voice_rows.first_field_row` returns 1 without reading the voice, so it runs at include time; before 3.8 it was row 2, after the first section's label).
 - `seq_step`: 1..`PATTERN_LENGTH`.
 - `scene`: 1..`NUM_SCENES + #SCENES_FIELDS` (23): the sixteen scene slots, then the seven `S.constants.SCENES_FIELDS` params (`scene_transition_time`, `scene_sequencer_enabled`, `scene_sequence_length`, `scene_duration`, `scene_chance_next`, `scene_chance_previous`, `scene_chance_random`).
 
@@ -14,18 +14,19 @@
 
 Anchors (ruling W7, #109). A cursor over rows that change, listed in the module's `ROW_CURSORS` (today only `voice`: its rows are `voice_page_rows(S.selected_voice)` and a row's key is its param id without `v<i>_`), keeps an anchor: the key and index of the row it was last deliberately put on. `S.lib.ui_cursors.sync(name)` returns `rows, cursor` and sets `S.cursors[name]` to the row with the anchored key when the current rows have one, else to `field_list.clamp(rows, anchor.index)`; before the first deliberate move it anchors where the cursor is. It never moves the anchor, so it is idempotent. `place(name, index)` anchors on row `index` (clamped) and returns what `sync` returns. `move(name, d)` on a row cursor moves from the synced cursor and places it where it lands, so a move right after a source change goes on from the anchored param. `sync` and `place` on any other name are errors. A new cursor over rows that change gets a `ROW_CURSORS` entry and the same calls; nothing else changes.
 
-`voice_page_rows(voice_idx)` (global, `lib/ui/voice_rows.lua`) lists every param of a voice in four sections, each opened by a label row `{label = <section>, section = <section>, selectable = false}`. A field row is `{label = <param name>, param_id, section, selectable = true, kind}`, `kind` being `"control"`, `"number"`, `"option"` or `"binary"` from the param's type (binary: only registered rows).
-- `synth`: `param_order` without `amp` and `pan`; for a buffer source `buf_pos`, `buf_rate`, `buf_scan`; for the input source the section, label included, is left out.
+`voice_page_rows(voice_idx)` (global, `lib/ui/voice_rows.lua`) lists, first, the voice's type row (3.8: `{label = "type", param_id = "v<i>_type", section = "voice", kind = "type", selectable = true}`, with no label row above it, `docs/notes/lua/types.md`), then every param of a voice in four sections (the built-in `synth`, `grain` and `crossmod` records' `voice_rows`, each `before = "mix"`, and VOICE's own `mix`), each opened by a label row `{label = <section>, section = <section>, selectable = false}`. A field row is `{label = <param name>, param_id, section, selectable = true, kind}`, `kind` being `"control"`, `"number"`, `"option"` or `"binary"` from the param's type (binary: only registered rows).
+- `synth`: `param_order` (the current type's keys) without `amp` and `pan` (the synth record's `voice_rows.rows`, a function of the voice); for a buffer source `buf_pos`, `buf_rate`, `buf_scan`; for the input source the section, label included, is left out.
 - `grain`: `grain_size`, `grain_density`, `grain_pitch`, `grain_spread`, `grain_env`, `grain_mode`.
 - `crossmod`: `mod_speed`, then per slot `mod_source_<s>`, `mod_amp_amt_<s>`, `mod_freq_amt_<s>`.
 - `mix`: `source`, `amp`, and `pan` when the voice has one (Sub has none).
 
-Registered rows (3.2's freeze, variation, loop, history, filter and send params) come from `S.registry.voice_params` (`docs/notes/lua/params.md`), read on each call, so a record registered by a module included after this one counts. For each record with `voice_rows = {section, rows, when, before}`, in registration order:
+Registered rows (3.2's freeze, variation, loop, history, filter and send params) come from `S.registry.voice_params` (`docs/notes/lua/params.md`), read on each call, so a record registered by a module included after this one counts. For each record with `voice_rows = {section, rows, when, before, swaps}` (`rows` a list or, 3.8, a function of the voice), in registration order:
 - its rows for which `when(voice_idx, key)` holds (all of them without `when`) go at the end of the section named `section`;
 - a section that is not there yet is added before the section named `before` (when there is one) or else at the end, after `mix` and any earlier registered section;
-- a section with no rows for the voice is left out, as the input voice's synth section is.
+- a section with no rows for the voice is left out, as the input voice's synth section is;
+- then each record's `swaps` (3.8, `{[key] = fn(voice_idx) -> key | nil}`) replace rows of its own section by the key each gives (nil leaves the row): 1c's overlap takes the density's row.
 
-A registered row keeps 3.1's row shape, so the cursor's anchor (`S.lib.ui_cursors.sync("voice")`, the param id without its `v<i>_` prefix) and the ring groups work on it unchanged. VOICE shows a binary row's value as `on` or `off`, and E3 sets it: on for a turn up, off for a turn down (a toggle's `params:delta` would flip it either way). `first_field_row` reads only the built-in sections: it runs before init, and the first section's first field is row 2 either way.
+A registered row keeps 3.1's row shape, so the cursor's anchor (`S.lib.ui_cursors.sync("voice")`, the param id without its `v<i>_` prefix) and the ring groups work on it unchanged. VOICE shows a binary row's value as `on` or `off`, and E3 sets it: on for a turn up, off for a turn down (a toggle's `params:delta` would flip it either way). `first_field_row` returns 1, the type row (3.8), reading no voice, param or record: it runs before init.
 
 A record's `layout_states` join VOICE's own at init (start step 15, `voice_layout_states`), so the layout tests and the page renders draw its rows without editing `lib/pages/voice.lua`. `test/unit/pages_voice_test.lua` computes every section count and last field from `voice_page_rows`, so a registered row changes no assertion there.
 

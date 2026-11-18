@@ -8,22 +8,26 @@ local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.as
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local engine_state_for_voice, FX_PARAM_IDS = h.engine_state_for_voice, h.FX_PARAM_IDS
 
+-- 3.8 (package 0d): every type's synth key is a menu param of every voice,
+-- the voice's own type's in its param_order first, each default the type
+-- record's
 test("every voice param has a menu param, ordered by param_order", function()
   load_strata()
-  local voices = local_value("voices")
+  local voices, types = local_value("voices"), local_value("S").lib.types
   for voice_idx = 1, 7 do
     local voice = voices[voice_idx]
-    local listed = {}
+    local record = types.of(voice_idx)
+    local previous = 0
     for _, key in ipairs(voice.param_order) do
-      listed[key] = true
       local param = params:lookup_param("v" .. voice_idx .. "_" .. key)
-      assert_near(param.controlspec.default, voice.values[key], 1e-9,
-        "voice " .. voice_idx .. " " .. key .. " default comes from the voices table")
+      assert_near(param.controlspec.default, record.defaults[key], 1e-9,
+        "voice " .. voice_idx .. " " .. key .. " default comes from its type's record")
+      assert_true(params.lookup[param.id] > previous, "voice " .. voice_idx .. " " .. key .. " in param_order")
+      previous = params.lookup[param.id]
     end
-    for key in pairs(voice.values) do
-      if pcall(get_param_spec, key) then  -- a synthesis param
-        assert_true(listed[key], "voice " .. voice_idx .. " param_order lists " .. key)
-      end
+    for _, key in ipairs(types.keys()) do
+      assert_true(params.lookup["v" .. voice_idx .. "_" .. key] ~= nil, "voice " .. voice_idx .. " has " .. key)
+      assert_true(voice.values[key] ~= nil, "voice " .. voice_idx .. " holds " .. key)
     end
   end
 end)
@@ -1035,6 +1039,49 @@ for n = 1, 6 do
   table.insert(PARAM_FIXTURE_ALLOWED, {kind = "group_size", id = "strata_lfo_" .. n, n = 12, why = why})
 end
 
+-- 0d: a voice's type and every type's synth keys on every voice (design
+-- §2.2). Generated from S.lib.types once a build is loaded, so a type
+-- package adds nothing here: per voice, v<i>_type after its heading, and
+-- each synth key its default type lacks after the param this build has
+-- before it, with its type, name and spec (its default the default
+-- type's, else the first type's that has the key)
+local function type_allowances(S)
+  local types, entries = S.lib.types, {}
+  for voice = 1, S.constants.NUM_VOICES do
+    local own = types.record(types.default_key(voice))
+    local why = "0d: voice " .. voice .. " has a type and every type's synth keys (design section 2.2)"
+    local names = {}
+    for index, record in ipairs(types.list()) do names[index] = record.name end
+    local function before(id) return params.params[params.lookup[id] - 1].id end
+    local id = "v" .. voice .. "_type"
+    entries[#entries + 1] = {kind = "added", id = id, after = before(id), why = why,
+      record = {t = params.tOPTION, name = "type", default = own.index, options = names}}
+    for _, key in ipairs(types.keys()) do
+      if own.defaults[key] == nil then
+        local spec, default = types.spec(key), nil
+        for _, record in ipairs(types.list()) do
+          if default == nil then default = record.defaults[key] end
+        end
+        local format = types.format(key)
+        id = "v" .. voice .. "_" .. key
+        entries[#entries + 1] = {kind = "added", id = id, after = before(id), why = why,
+          record = {t = params.tCONTROL, name = key, default = default, min = spec.minval, max = spec.maxval,
+            warp = spec.warp_name, step = spec.step, quantum = spec.quantum, units = spec.units,
+            string = format and string.format(format, default) or nil}}
+      end
+    end
+  end
+  return entries
+end
+
+-- PARAM_FIXTURE_ALLOWED with the allowances generated from a loaded build
+local function build_allowances(S)
+  local entries = {}
+  for _, entry in ipairs(PARAM_FIXTURE_ALLOWED) do entries[#entries + 1] = entry end
+  for _, entry in ipairs(type_allowances(S)) do entries[#entries + 1] = entry end
+  return entries
+end
+
 -- The fixture's records as this build should have them: a copy of each,
 -- the allowed differences applied. An added record carries `only`, the
 -- set of fields its entry gives, and first_param_difference compares
@@ -1180,7 +1227,7 @@ test("every param's id, type, name, default and spec is 3.7.0's, in order", func
   local fixture = dofile(h.repo_root .. "/test/fixtures/3.7.0-params.lua")
   local actual = {}
   for index = first, #params.params do actual[#actual + 1] = fixture_record(params.params[index], context.audio_dir) end
-  local difference = first_param_difference(allowed_records(fixture, PARAM_FIXTURE_ALLOWED), actual)
+  local difference = first_param_difference(allowed_records(fixture, build_allowances(local_value("S"))), actual)
   if difference then h.fail(difference) end
 end)
 
