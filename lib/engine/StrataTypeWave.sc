@@ -25,8 +25,8 @@
     waveBankSize { ^8 }
     waveTableFrames { ^this.wavetableBankFrames div: this.waveBankSize }
 
-    // Each table's harmonic amplitudes (b_gen sine1, normalized), darkest
-    // first: a sine, two, four and eight harmonics falling as 1/k, sixteen
+    // Each table's harmonic amplitudes, before waveBankAmplitudes evens
+    // their level, darkest first: a sine, two, four and eight harmonics falling as 1/k, sixteen
     // odd ones (a soft square), thirty-two falling as 1/k (a soft saw), a
     // peak of twelve around the sixth (a vowel-like formant) and sixty-four
     // falling as 1/sqrt(k), the brightest
@@ -43,16 +43,27 @@
         ]
     }
 
+    // The tables at matched level (1f's review): each spectrum scaled so the
+    // root of its squared amplitudes' sum is 1, so every table has a unit
+    // sine's RMS (a sum of sines' mean square is half its squared
+    // amplitudes' sum) and morph moves the timbre, not the loudness. sine1
+    // then fills them with its normalize flag off. A table's peak may pass 1
+    // (a stack's crest factor): the def's gain keeps the voice under it
+    waveBankAmplitudes {
+        ^this.waveBankSpectra.collect({ arg spectrum; spectrum * spectrum.squared.sum.sqrt.reciprocal })
+    }
+
     // The bank's Buffers, consecutive bufnums (VOsc3 reads a table and the
     // next), allocated once; bufnums never change
     waveBank { ^areaState[\typeWave][\bank] }
 
-    // Filled on the server by b_gen sine1 (normalize, wavetable, clear) in
-    // each b_alloc's completion message: no sclang loop over the samples
+    // Filled on the server by b_gen sine1 (not normalized: waveBankAmplitudes
+    // sets the level; wavetable, clear) in each b_alloc's completion message:
+    // no sclang loop over the samples
     allocWaveBank {
-        var spectra = this.waveBankSpectra;
+        var amplitudes = this.waveBankAmplitudes;
         areaState[\typeWave][\bank] = Buffer.allocConsecutive(this.waveBankSize, context.server, this.waveTableFrames, 1,
-            { arg buffer, index; buffer.sine1Msg(spectra[index], true, true, true) });
+            { arg buffer, index; buffer.sine1Msg(amplitudes[index], false, true, true) });
     }
 
     freeWaveBank {
@@ -68,7 +79,9 @@
     // built into the def (as scaleBuffer's is into the grain defs), so the
     // last engine built on a server owns it. A wavetable of sines has no
     // energy at 0 Hz, so there is no subsonic block. The three oscillators
-    // sum to about three times one: the 0.3 brings it to one's level
+    // sum to about three times one: the 0.3 brings it to one's level. Every
+    // table has a unit sine's RMS (waveBankAmplitudes), so morph and its
+    // wander keep the level
     addWaveDef {
         var base = this.waveBank[0].bufnum, span = this.waveBankSize - 1.001;
         SynthDef(\strataWave, {
