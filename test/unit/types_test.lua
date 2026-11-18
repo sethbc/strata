@@ -394,6 +394,38 @@ test("a recall's type entry, apply_voice's and a PSET read each cancel a pending
   cleanup()
 end)
 
+-- P13 amended (fix round 1): norns' Option:set runs the action only on a
+-- change, so a set, a recall, apply_voice and a PSET read that give the
+-- voice the type it already has cancel its pending choice outright
+test("a set, a recall, apply_voice and a PSET read of the current type each cancel a pending choice", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local settle = S.lib.types.TYPES.settle_seconds
+  capture_scene(1)
+  local data = S.lib.scenes.capture_voice(1)
+  local path = context.data_dir .. "strata-09.pset"
+  os.execute("mkdir -p '" .. context.data_dir .. "'")
+  params:write(path)
+  local acts = {
+    {"a set", function() S.lib.types.set(1, "resonator") end},
+    {"a recall", function() recall_scene(1) end},
+    {"apply_voice", function() assert_true(S.lib.scenes.apply_voice(1, data), "applied") end},
+    {"a PSET read", function() params:read(path) end},
+  }
+  for _, act in ipairs(acts) do
+    local where = act[1]
+    S.lib.types.turn(1, 2)
+    assert_equal(S.lib.types.pending(1), 3, where .. ": a choice pending toward folder")
+    context.clear_engine_calls()
+    act[2]()
+    assert_equal(S.lib.types.pending(1), nil, where .. ": canceled")
+    context.clock.run_for(settle + 0.2)
+    assert_equal(S.lib.types.of(1).key, "resonator", where .. ": still on its current type")
+    assert_equal(#calls(context, "setVoiceType"), 0, where .. ": no setVoiceType")
+  end
+  cleanup()
+end)
+
 test("a frozen voice stays frozen across a type change", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

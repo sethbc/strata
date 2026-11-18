@@ -219,6 +219,10 @@ return function(S)
   -- is no param (3.3 to 3.6's strata_pset_format) is skipped by norns'
   -- read, and nothing is converted.
   function M.migrate_read_pset(filename, silent)
+    -- 3.8 (ruling 63, P13 amended): a PSET read sets every voice's type, so
+    -- every pending type choice is canceled, also where the type's line
+    -- left the type as it was (its action runs only on a change)
+    for voice_idx = 1, NUM_VOICES do S.lib.types.cancel(voice_idx) end
     local file = io.open(filename, "r")
     local text = file and file:read("*a")
     if file then file:close() end

@@ -509,7 +509,10 @@ return function(S)
       set_scene_value(entry.id, entry.value)
       state.source_changed[voice_idx] = S.voices[voice_idx].source ~= previous_source
     elseif voice_idx and entry.id == "v" .. voice_idx .. "_type" then
-      -- 3.8: the type as the source: its action leaves the sync to the end
+      -- 3.8: the type as the source: its action leaves the sync to the end.
+      -- The voice's pending type choice is canceled outright: the param's
+      -- action runs only on a change (ruling 63, P13 amended)
+      S.lib.types.cancel(voice_idx)
       local previous_type = S.voices[voice_idx].name
       set_scene_value(entry.id, entry.value)
       state.type_changed[voice_idx] = S.voices[voice_idx].name ~= previous_type
