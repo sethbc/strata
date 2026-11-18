@@ -217,8 +217,9 @@ return function(S)
   -- ids and switches per pair. An entry equal in every valid corner, or
   -- missing from one, is left out; which of the rest an apply writes
   -- depends on the corners counting there (counting_corners). 3.8: a synth
-  -- key a corner's type lacks (MISSING there) is a continuous item that
-  -- blends only while every counting corner holds it, and also, per
+  -- key a corner's type lacks (MISSING there) is a continuous item (taken
+  -- from the first corner that holds it) that blends only while every
+  -- counting corner holds it, and also, per
   -- corner that holds it, a discrete entry (partial) that lands with the
   -- corner's type while a counting corner lacks it. ready is false with
   -- fewer than MORPH.min_corners valid corners; empty is then the first
@@ -247,14 +248,25 @@ return function(S)
     ramp_ids, plan.named, plan.switches = block_ramps(plan.corners, data)
     local items = {}
     plan.ramps, plan.ramp_by_id = {}, {}
-    for _, entry in ipairs(lists[plan.corners[1]]) do
-      local values = entry.kind == "continuous" and corner_values(entry, plan.corners, by_key)
-      if values and ramp_ids[entry.id] then
-        local item = plan_item(entry, values)
-        table.insert(plan.ramps, item)
-        plan.ramp_by_id[entry.id] = item
-      elseif values and differs_among(values, plan.corners) then
-        table.insert(items, plan_item(entry, values))
+    -- the first valid corner's entries, then (3.8, fix round 1) any synth
+    -- key a later corner holds that an earlier one's type lacks, in that
+    -- corner's order, so a key the first corner lacks blends between the
+    -- corners that hold it too
+    local seen = {}
+    for position, corner in ipairs(plan.corners) do
+      for _, entry in ipairs(lists[corner]) do
+        local key = entry_key(entry)
+        if not seen[key] and (position == 1 or entry.synth) then
+          seen[key] = true
+          local values = entry.kind == "continuous" and corner_values(entry, plan.corners, by_key)
+          if values and ramp_ids[entry.id] then
+            local item = plan_item(entry, values)
+            table.insert(plan.ramps, item)
+            plan.ramp_by_id[entry.id] = item
+          elseif values and differs_among(values, plan.corners) then
+            table.insert(items, plan_item(entry, values))
+          end
+        end
       end
     end
     plan.continuous = plan_units(items)
