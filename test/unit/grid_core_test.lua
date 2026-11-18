@@ -1,6 +1,7 @@
 -- test/unit/grid_core_test.lua
--- Grid core (lib/grid/core.lua): pages per port, held keys and holds, the
--- step-level gesture, the scene save hold and the shared key helpers
+-- Grid core (lib/grid/core.lua): pages per port and pane, held keys and
+-- holds, the step-level gesture, the shared key helpers, hot-plug, the
+-- rotation and the virtual grids; and the fader maths (lib/grid/faders.lua)
 -- Run alone: lua test/run.lua grid_core
 
 return function(h)
@@ -12,6 +13,12 @@ local function grid_core() return local_value("S").lib.grid_core end
 local function tap(context, port, x, y)
   context.grid.press(port, x, y, 1); context.grid.press(port, x, y, 0)
 end
+local function PAGES() return local_value("S").constants.GRID_PAGES end
+
+-- The 256's and 128h's row 8 (the upper strip): P1 at x 3, P7 at x 9.
+-- A probe page at the FX page's index (h.probe_grid_page) is a page with a
+-- record to change to, whatever pages main has
+local STRIP = {row = 8, patterns_key = 3, probe_key = 9}
 
 -- What the real step editor (the SEQ page's, S.lib.pages_seq) has open,
 -- as "voice step port", or nil (test/helpers.lua)
@@ -102,6 +109,7 @@ test("the step editor closes when its grid goes away, changes page or the patter
     context = load_strata(); finish_startup(context)
     S = local_value("S")
     patterns = local_value("patterns")
+    h.probe_grid_page(PAGES().fx)
     context.grid.plug(1, 16, 16)
     context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
     assert_equal(shown_step_editor(), "3 5 1", "the editor opened from port 1")
@@ -124,18 +132,18 @@ test("the step editor closes when its grid goes away, changes page or the patter
   fresh("unplugged")
 
   start()
-  context.grid.press(1, 14, 8, 1)  -- page 2, whose rows 1-7 are steps too
+  tap(context, 1, STRIP.probe_key, STRIP.row)  -- the top pane shows the probe page
   closed("a page change")
+  tap(context, 1, STRIP.patterns_key, STRIP.row)  -- and patterns again
   context.grid.press(1, 12, 3, 1); context.grid.press(1, 12, 3, 0)
   assert_equal(patterns[3][12], 15, "a page change: the voice's next key toggles its own step, sets no level")
-  context.grid.press(1, 5, 3, 0); context.grid.press(1, 14, 8, 0)
+  context.grid.press(1, 5, 3, 0)
   assert_equal(patterns[3][5], 0, "a page change: the stale key's release toggles nothing")
   fresh("a page change")
 
   start()
-  context.grid.press(1, 3, 15, 1); context.clock.run_for(0.51)  -- row 15: clear voice 3, once held
+  clear_pattern(3)
   closed("the pattern replaced")
-  context.grid.press(1, 3, 15, 0)
   context.grid.press(1, 12, 3, 1); context.grid.press(1, 12, 3, 0)
   assert_equal(patterns[3][12], 15, "replaced: the voice's next key toggles its own step")
   context.grid.press(1, 5, 3, 0)
@@ -205,10 +213,11 @@ end)
 test("a page change on another grid leaves the step editor open", function()
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
+  h.probe_grid_page(PAGES().fx)
   context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 16)
   context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
-  tap(context, 2, 15, 8)  -- grid 2 shows page 3
-  assert_equal(grid_core().page(2), 3)
+  tap(context, 2, STRIP.probe_key, STRIP.row)  -- grid 2 shows the probe page
+  assert_equal(grid_core().page(2), PAGES().fx)
   assert_equal(shown_step_editor(), "3 5 1", "grid 2's page change leaves port 1's editor open")
   context.grid.press(1, 5, 3, 0)
   assert_equal(shown_step_editor(), nil, "port 1's release closes it")
@@ -236,103 +245,26 @@ test("a stale step key never closes an editor opened elsewhere", function()
   assert_equal(shown_step_editor(), nil, "the key that opened it closes it")
 end)
 
--- Ruling 73: a recorder key acts at its release: a tap presses once; a
--- 0.5 s hold clears (with no playback, no recording started, no other
--- recorder's recording ended) and its release does nothing
-test("a recorder key presses at its release, and its hold only clears", function()
+-- A hold armed on one page never acts once its pane shows another page
+-- (a probe page's hold: each page's own holds are tested by its package);
+-- another grid's page change leaves this one's holds alone
+test("a page change cancels the pane's pending holds", function()
   local context = load_strata(); finish_startup(context)
-  local S = local_value("S")
-  local gestures = S.lib.gestures
-  context.grid.plug(1, 16, 16)
-  local function hold(x)
-    context.grid.press(1, x, 9, 1); context.clock.run_for(0.51); context.grid.press(1, x, 9, 0)
-  end
-  context.grid.press(1, 1, 9, 1)
-  assert_equal(gestures.state(1), "empty", "a press alone does nothing")
-  context.clock.run_for(0.3)
-  context.grid.press(1, 1, 9, 0)
-  assert_equal(gestures.state(1), "recording", "a release within 0.5 s presses: recording")
-  tap(context, 1, 16, 10)  -- macro_1 to 1, recorded
-  tap(context, 1, 1, 9)
-  assert_equal(gestures.state(1), "playing", "a tap presses once: playing, not stopped")
-  tap(context, 1, 1, 9)
-  assert_equal(gestures.state(1), "stopped")
-  -- a hold on a stopped recorder clears it and plays nothing
-  params:set("macro_1", 0.25)
-  hold(1)
-  assert_equal(gestures.state(1), "empty", "held on a stopped recorder: cleared")
-  assert_near(params:get("macro_1"), 0.25, 1e-9, "with no playback (macro_1 stays where the hand put it)")
-  -- a hold on a recording recorder clears the take and plays nothing
-  tap(context, 1, 2, 9)
-  tap(context, 1, 16, 10)  -- macro_1 to 1, recorded by recorder 2
-  params:set("macro_1", 0.25)
-  hold(2)
-  assert_equal(gestures.state(2), "empty", "held while recording: cleared")
-  assert_near(params:get("macro_1"), 0.25, 1e-9, "the take never played")
-  -- a hold on an empty recorder starts nothing and ends no other recording
-  tap(context, 1, 3, 9)
-  assert_equal(gestures.state(3), "recording")
-  hold(4)
-  assert_equal(gestures.state(4), "empty", "held on an empty recorder: still empty, nothing recording")
-  assert_equal(gestures.state(3), "recording", "recorder 3's recording goes on")
-  gestures.clear(3)
-end)
-
-test("two recorder keys held at once each act at their own release", function()
-  local context = load_strata(); finish_startup(context)
-  local gestures = local_value("S").lib.gestures
-  context.grid.plug(1, 16, 16)
-  context.grid.press(1, 1, 9, 1); context.grid.press(1, 2, 9, 1)
-  context.grid.press(1, 2, 9, 0)
-  assert_equal(gestures.state(2), "recording", "recorder 2's release presses it")
-  assert_equal(gestures.state(1), "empty", "recorder 1's key, still down, nothing yet")
-  context.grid.press(1, 1, 9, 0)
-  assert_equal(gestures.state(1), "recording", "recorder 1's release presses it")
-  assert_equal(gestures.state(2), "empty", "which ends recorder 2's empty recording")
-  gestures.clear(1)
-end)
-
--- A hold armed for a key's role on one page never acts once
--- the port shows another page: a scene save, a pattern clear, a
--- recorder's clear and a solo held through a page change do nothing
-test("a page change cancels the port's pending holds", function()
-  local context = load_strata(); finish_startup(context)
-  local S = local_value("S")
-  local patterns = local_value("patterns")
+  local probe = h.probe_grid_page(PAGES().fx, {hold = 0.5})
   context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 16)
-  -- a scene save held on page 3, the page left for page 1
-  tap(context, 1, 15, 8)
+  grid_core().set_page(1, PAGES().fx); grid_core().set_page(2, PAGES().fx)
   context.grid.press(1, 4, 3, 1)
-  tap(context, 1, 13, 8)
+  tap(context, 1, STRIP.patterns_key, STRIP.row)
   context.clock.run_for(0.6)
   context.grid.press(1, 4, 3, 0)
-  assert_true(not S.scenes[4].populated, "the save held through a page change saved nothing")
-  -- a clear held on page 1's row 15, the page left for page 2
-  patterns[2][3] = 15
-  context.grid.press(1, 2, 15, 1)
-  tap(context, 1, 14, 8)
-  context.clock.run_for(0.6)
-  context.grid.press(1, 2, 15, 0)
-  assert_equal(patterns[2][3], 15, "the clear held through a page change cleared nothing")
-  -- a recorder's clear and a solo held on page 1, the page left for page 3
-  tap(context, 1, 13, 8)
-  tap(context, 1, 1, 9)
-  assert_equal(S.lib.gestures.state(1), "recording")
-  context.grid.press(1, 1, 9, 1); context.grid.press(1, 6, 9, 1)
-  tap(context, 1, 15, 8)
-  context.clock.run_for(0.6)
-  context.grid.press(1, 1, 9, 0); context.grid.press(1, 6, 9, 0)
-  assert_equal(S.lib.gestures.state(1), "recording", "the recorder's clear held through a page change cleared nothing")
-  assert_equal(params:get("v2_solo"), 0, "the solo held through a page change soloed nothing")
-  assert_equal(params:get("v2_mute"), 0, "and its release muted nothing")
+  assert_equal(#probe.fired, 0, "the hold held through its pane's page change did nothing")
   -- another grid's page change leaves this one's holds alone
-  tap(context, 1, 13, 8)
-  context.grid.press(1, 6, 9, 1)
-  tap(context, 2, 15, 8)
+  grid_core().set_page(1, PAGES().fx)
+  context.grid.press(1, 4, 3, 1)
+  tap(context, 2, STRIP.patterns_key, STRIP.row)
   context.clock.run_for(0.6)
-  context.grid.press(1, 6, 9, 0)
-  assert_equal(params:get("v2_solo"), 1, "grid 2's page change: grid 1's solo hold acts")
-  S.lib.gestures.clear(1)
+  context.grid.press(1, 4, 3, 0)
+  assert_equal(#probe.fired, 1, "grid 2's page change: grid 1's hold acts")
 end)
 
 -- Ruling 67: the held step against the real step editor (the SEQ page's
@@ -459,46 +391,21 @@ test("level_for_position spreads the positions over the step levels", function()
   assert_equal(core.level_for_position(1, 8), 2)
 end)
 
-test("a scene save needs a 0.5 s hold", function()
-  local context = load_strata(); finish_startup(context)
-  local scenes = local_value("scenes")
-  local device = context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)  -- page 3
-  assert_equal(device:get_led(2, 3), 4, "save key idle")
-  context.grid.press(1, 2, 3, 1)
-  assert_equal(device:get_led(2, 3), 15, "a pending save lights at 15")
-  context.clock.run_for(0.4)
-  context.grid.press(1, 2, 3, 0)
-  assert_true(not scenes[2].populated, "released early: nothing saved")
-  assert_equal(device:get_led(2, 3), 4, "the release dims the key")
-  context.grid.press(1, 2, 3, 1)
-  context.clock.run_for(0.51)
-  assert_true(scenes[2].populated, "held 0.5 s: saved")
-  assert_equal(device:get_led(2, 3), 4, "no longer pending once saved")
-  assert_equal(device:get_led(2, 1), 8, "row 1 shows the saved scene")
-  context.grid.press(1, 2, 3, 0)
-  -- the 128h's row 3 too
-  local small = context.grid.plug(2, 16, 8); tap(context, 2, 7, 8)  -- page 3
-  context.grid.press(2, 5, 3, 1)
-  assert_equal(small:get_led(5, 3), 15)
-  context.clock.run_for(0.51)
-  assert_true(scenes[5].populated, "128h row 3 saves on a hold")
-end)
-
 test("removing a grid cancels its pending holds", function()
   local context = load_strata(); finish_startup(context)
-  local scenes = local_value("scenes")
-  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)
+  local probe = h.probe_grid_page(PAGES().fx, {hold = 0.5})
+  context.grid.plug(1, 16, 16); tap(context, 1, STRIP.probe_key, STRIP.row)
   context.grid.press(1, 2, 3, 1)
-  context.grid.press(1, 4, 1, 1)   -- a held key with no hold
+  context.grid.press(1, 4, 1, 1)
   assert_true(grid_core().hold_pending(1, 2, 3))
   grid_core().port_state(1).marker = true
   context.grid.unplug(1)
   context.clock.run_for(1)
-  assert_true(not scenes[2].populated, "no save after the grid is removed")
+  assert_equal(#probe.fired, 0, "no hold fires after the grid is removed")
   assert_equal(next(local_value("grid_held")[1] or {}), nil, "the port's held keys are forgotten")
   assert_true(not grid_core().hold_pending(1, 2, 3))
   assert_equal(grid_core().port_state(1).marker, nil, "the port's layout state is emptied")
-  assert_equal(grid_core().page(1), 1, "a new grid on the port starts on page 1")
+  assert_equal(grid_core().page(1), PAGES().patterns, "a new grid on the port starts on patterns")
   -- a stray release after the removal changes nothing and errors nowhere
   grid_key(1, 2, 3, 0)
 end)
@@ -513,12 +420,12 @@ end)
 
 test("cleanup cancels pending holds", function()
   local context = load_strata(); finish_startup(context)
-  local scenes = local_value("scenes")
-  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)
+  local probe = h.probe_grid_page(PAGES().fx, {hold = 0.5})
+  context.grid.plug(1, 16, 16); tap(context, 1, STRIP.probe_key, STRIP.row)
   context.grid.press(1, 6, 3, 1)
   cleanup()
   context.clock.run_for(1)
-  assert_true(not scenes[6].populated, "no save after cleanup")
+  assert_equal(#probe.fired, 0, "no hold fires after cleanup")
   assert_equal(grid_core().held(1, 6, 3), nil, "held keys are forgotten")
 end)
 
@@ -526,6 +433,8 @@ test("holds run once, release cancels them and consumed releases do nothing", fu
   local context = load_strata(); finish_startup(context)
   local core = grid_core()
   context.grid.plug(1, 16, 16)
+  h.probe_grid_page(PAGES().fx)
+  core.set_page(1, PAGES().fx, 2)  -- the bottom pane's keys reach a probe page
   local fired = 0
   context.grid.press(1, 9, 9, 1)
   assert_true(core.held(1, 9, 9) ~= nil, "a press is held")
@@ -560,22 +469,24 @@ test("each grid keeps its own page", function()
   local context = load_strata(); finish_startup(context)
   local core = grid_core()
   local patterns = local_value("patterns")
+  local pages = PAGES()
+  h.probe_grid_page(pages.fx)
   local first = context.grid.plug(1, 16, 16)
   local second = context.grid.plug(2, 16, 16)
-  tap(context, 1, 15, 8)
-  assert_equal(core.page(1), 3); assert_equal(core.page(2), 1)
+  tap(context, 1, STRIP.probe_key, STRIP.row)
+  assert_equal(core.page(1), pages.fx); assert_equal(core.page(2), pages.patterns)
   tap(context, 2, 3, 1)
   assert_equal(patterns[1][3], 15, "a key on grid 2's row 1 toggles a step")
-  assert_equal(first:get_led(15, 8), 15, "grid 1 shows page 3")
-  assert_equal(second:get_led(13, 8), 15, "grid 2 shows page 1")
-  assert_equal(second:get_led(15, 8), 2)
-  assert_true(core.any_page(3) and core.any_page(1), "any_page sees both")
-  assert_true(not core.any_page(2) and not core.any_page(4))
+  assert_equal(first:get_led(STRIP.probe_key, STRIP.row), 15, "grid 1 shows the probe page")
+  assert_equal(second:get_led(STRIP.patterns_key, STRIP.row), 15, "grid 2 shows patterns")
+  assert_equal(second:get_led(STRIP.probe_key, STRIP.row), 2)
+  assert_true(core.any_page(pages.fx) and core.any_page(pages.patterns), "any_page sees both")
+  assert_true(not core.any_page(pages.faders) and not core.any_page(pages.sources))
   context.grid.unplug(1)
-  assert_true(not core.any_page(3), "a removed grid shows no page")
-  core.set_page(2, 6); core.set_page(9, 2)
-  assert_equal(core.page(2), 1, "out-of-range pages are ignored")
-  assert_equal(core.page(9), 1, "out-of-range ports are ignored")
+  assert_true(not core.any_page(pages.fx), "a removed grid shows no page")
+  core.set_page(2, pages.count + 1); core.set_page(9, pages.faders)
+  assert_equal(core.page(2), pages.patterns, "out-of-range pages are ignored")
+  assert_equal(core.page(9), pages.patterns, "out-of-range ports are ignored")
 end)
 
 test("a named, unsettled slot's source key is not shown as empty", function()
@@ -609,30 +520,31 @@ test("source and slot helpers check bounds and give the 256's levels", function(
   assert_equal(core.CLEAR_LEVEL, 4)
 end)
 
--- A key whose action redraws the grid too (scene_sequence_length's) still
--- paints each grid once per press (#161)
-test("a sequence-length key repaints the grid once", function()
+-- A key whose action redraws the grid too (a step's toggle_voice-like
+-- redraws) still paints each grid once per press (#161)
+test("a step key repaints the grid once", function()
   local context = load_strata(); finish_startup(context)
-  local core = grid_core()
-  -- each layout's scene page and the key that sets length 3
+  local patterns = local_value("patterns")
+  -- each layout and the key of voice 2's step 3 on its patterns page
   local cases = {
-    {cols = 16, rows = 16, page = 3, x = 5, y = 5},
-    {cols = 16, rows = 8, page = 3, x = 3, y = 4},
-    {cols = 8, rows = 16, page = 3, x = 4, y = 11},
+    {cols = 16, rows = 16, x = 3, y = 2},
+    {cols = 16, rows = 8, x = 3, y = 2},
+    {cols = 8, rows = 16, x = 2, y = 3},
+    {cols = 8, rows = 8, x = 3, y = 2},
   }
-  for index, case in ipairs(cases) do
+  for _, case in ipairs(cases) do
     local device = context.grid.plug(1, case.cols, case.rows)
-    core.set_page(1, case.page)
-    params:set("scene_sequence_length", 1)
+    patterns[2][3] = 0
     local before = device.refresh_count
     context.grid.press(1, case.x, case.y, 1)
     local name = case.cols .. "x" .. case.rows
-    assert_equal(params:get("scene_sequence_length"), 3, name .. ": the key sets length 3")
     assert_equal(device.refresh_count - before, 1, name .. ": one repaint for the press")
     context.grid.press(1, case.x, case.y, 0)
-    assert_equal(device.refresh_count - before, 2, name .. ": and one for the release")
-    params:set("scene_sequence_length", 5)
-    assert_equal(device.refresh_count - before, 3, name .. ": a change from PARAMS still repaints")
+    assert_equal(patterns[2][3], 15, name .. ": the release toggles voice 2's step 3")
+    assert_equal(device.refresh_count - before, 2, name .. ": and one repaint for the release")
+    toggle_voice(4)
+    assert_equal(device.refresh_count - before, 3, name .. ": a change from elsewhere still repaints")
+    toggle_voice(4)
     context.grid.unplug(1)
   end
 end)
@@ -697,85 +609,6 @@ test("a release that raises still forgets its key", function()
   tap(context, 1, 11, 4)
   assert_equal(patterns[4][11], 15, "the voice's next tap toggles its own step")
   assert_equal(patterns[4][6], 0, "and sets no level on the stale one")
-end)
-
-test("an FX change redraws the grids only while one shows the FX faders", function()
-  local context = load_strata(); finish_startup(context)
-  local core = grid_core()
-  local wide = context.grid.plug(1, 16, 8)
-  local tall = context.grid.plug(2, 8, 16)
-  core.set_page(1, 4); core.set_page(2, 4)  -- their page 4: sources, freeze, slots (no FX)
-  local function refreshes() return wide.refresh_count + tall.refresh_count end
-  local before = refreshes()
-  for _, id in ipairs({ "filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix" }) do
-    params:delta(id, 1)
-  end
-  assert_equal(refreshes(), before, "a 16x8 and an 8x16 on page 4 show no FX: no redraw")
-  local full = context.grid.plug(3, 16, 16)
-  before = full.refresh_count
-  params:delta("delay_mix", 1)
-  assert_equal(full.refresh_count, before, "a 256 on page 1: no redraw")
-  core.set_page(3, 4)
-  params:delta("delay_mix", -1)
-  assert_equal(full.refresh_count, before + 1, "a 256 on page 4 shows the faders: one redraw")
-end)
-
-test("a layout record says whether a position press selects the grid voice", function()
-  local context = load_strata(); finish_startup(context)
-  local layouts = local_value("S").registry.grid_layouts
-  assert_equal(layouts["256"].selects_grid_voice, nil, "the 256's rows are one voice each")
-  for _, name in ipairs({"128h", "128v", "64"}) do
-    assert_equal(layouts[name].selects_grid_voice, true, name .. " selects the grid voice")
-  end
-  context.grid.plug(1, 16, 8)
-  assert_equal(grid_core().layout_of(1), layouts["128h"], "a connected 128h's record")
-  assert_equal(grid_core().layout_of(2), nil, "a port with no grid")
-  context.grid.plug(3, 12, 12)
-  assert_equal(grid_core().layout_of(3), nil, "a size with no layout")
-  -- so a position press there selects no grid voice
-  local S = local_value("S")
-  S.buffers[1].seconds = 16
-  params:set("v2_source", S.constants.SOURCE_SYNTH + 1)
-  S.grid_voice_select = 6
-  local cells = S.constants.GRID_PAGES.position_cells
-  S.lib.positions.grid_key(3, 2, 5, cells, 1); S.lib.positions.grid_key(3, 2, 5, cells, 0)
-  assert_equal(S.grid_voice_select, 6, "the grid voice is unchanged")
-  -- the same press on the 128h (port 1) selects voice 2: the 12x12 ignored
-  -- it for want of a layout
-  S.lib.positions.grid_key(1, 2, 5, cells, 1); S.lib.positions.grid_key(1, 2, 5, cells, 0)
-  assert_equal(S.grid_voice_select, 2, "a 128h's press selects the voice")
-end)
-
-test("a scene saved on a hold shows on the SCENES page on the next frame", function()
-  local context = load_strata(); finish_startup(context)
-  -- slot 2's box on the SCENES page (5x5, right of its number): its rect
-  -- from the last draw
-  local function slot_box(slot)
-    local number
-    for _, entry in ipairs(context.screen.texts) do
-      if entry.text == tostring(slot) and entry.y > 8 and entry.y < 46 then number = entry end
-    end
-    for _, rect in ipairs(context.screen.rects) do
-      if number and rect.w == 5 and rect.h == 5 and rect.x > number.x and rect.y == number.y - 5 then return rect end
-    end
-  end
-  h.show_page("SCENES")
-  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)
-  h.next_frame(context)
-  assert_true(not slot_box(2).filled, "slot 2 starts empty")
-  context.grid.press(1, 2, 3, 1)
-  h.next_frame(context)
-  local counter = h.count_screen_draws()
-  context.clock.run_for(0.3)  -- under 0.5 s since the press, frames included
-  assert_true(not local_value("scenes")[2].populated, "still pending")
-  assert_equal(counter.screen, 0, "a pending hold draws nothing")
-  context.clock.run_for(0.25)  -- the hold fires, then a frame
-  counter.restore()
-  assert_true(local_value("scenes")[2].populated, "held 0.5 s: saved")
-  assert_equal(counter.screen, 1, "the save draws on a frame, once")
-  assert_true(slot_box(2).filled, "slot 2's box is filled")
-  assert_true(not slot_box(3).filled, "slot 3's is not")
-  context.grid.press(1, 2, 3, 0)
 end)
 
 test("a third key sets only its own voice's held step", function()
@@ -845,23 +678,22 @@ test("a grid can show page 5 and any_page(5) counts it", function()
   assert_equal(core.page(1), 5)
   assert_true(core.any_page(5), "any_page counts page 5")
   assert_true(not core.any_page(4))
-  core.set_page(1, 6)
-  assert_equal(core.page(1), 5, "page 6 is ignored")
+  core.set_page(1, PAGES().count + 1)
+  assert_equal(core.page(1), 5, "a page past the count is ignored")
 end)
 
--- #242: every whole-pattern change ends the voice's held step gesture, as
--- the 256's paste does (#114). On a 256 page 1, row 15 column v clears voice
--- v and column 8 + v randomizes it, once held 0.5 s (#443)
-test("clear, randomize and a scene recall end a held step gesture, as a paste does", function()
-  -- clear (voice 1's step 3 held through the clear's half second: the
-  -- step editor it opened closes with the gesture)
+-- #242: every whole-pattern change ends the voice's held step gesture
+-- (#114): a clear, a randomize (from SEQ or a grid page) and a scene recall
+test("clear, randomize and a scene recall end a held step gesture", function()
+  -- clear (voice 1's step 3 held past its 0.3 s: the step editor it opened
+  -- closes with the gesture)
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
   context.grid.plug(1, 16, 16)
   context.grid.press(1, 3, 1, 1)  -- voice 1 step 3 held
-  context.grid.press(1, 1, 15, 1); context.clock.run_for(0.35)
+  context.clock.run_for(0.35)
   assert_equal(shown_step_editor(), "1 3 1", "clear: the held step opened the step editor")
-  context.clock.run_for(0.16); context.grid.press(1, 1, 15, 0)  -- clear voice 1
+  clear_pattern(1)
   assert_equal(shown_step_editor(), nil, "clear: the editor the held step opened closed")
   tap(context, 1, 9, 1)
   assert_equal(patterns[1][3], 0, "clear: the held step takes no level in the cleared pattern")
@@ -873,8 +705,7 @@ test("clear, randomize and a scene recall end a held step gesture, as a paste do
   patterns = local_value("patterns")
   context.grid.plug(1, 16, 16)
   context.grid.press(1, 3, 1, 1)
-  context.grid.press(1, 9, 15, 1); context.clock.run_for(0.51); context.grid.press(1, 9, 15, 0)  -- randomize voice 1
-  assert_equal(shown_step_editor(), nil, "randomize: the editor the held step opened closed")
+  randomize_pattern(1)
   local step_3, step_9 = patterns[1][3], patterns[1][9]
   tap(context, 1, 9, 1)
   assert_equal(patterns[1][3], step_3, "randomize: the held step keeps the level randomize gave it")
@@ -894,19 +725,6 @@ test("clear, randomize and a scene recall end a held step gesture, as a paste do
   assert_equal(patterns[1][9], 15, "recall: the next step key toggles its own step")
   context.grid.press(1, 3, 1, 0)
   assert_equal(patterns[1][3], 0, "recall: the held step's release toggles nothing")
-end)
-
-test("a scene saved on a grid hold flashes saved in the header", function()
-  local context = load_strata(); finish_startup(context)
-  local S = local_value("S")
-  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)  -- page 3
-  context.grid.press(1, 4, 3, 1)
-  context.clock.run_for(0.3)
-  context.grid.press(1, 4, 3, 0)
-  assert_equal(S.lib.ui_flash.text("header"), nil, "a release at 0.3 s saves nothing")
-  context.grid.press(1, 4, 3, 1)
-  context.clock.run_for(0.6)
-  assert_equal(S.lib.ui_flash.text("header"), "saved S4")
 end)
 
 -- SYSTEM > DEVICES moves a grid through update_devices() only, never
@@ -985,7 +803,7 @@ test("one of two 16x8 grids failing its redraw prints its error once", function(
   end
   local ok, err = pcall(function()
     for _ = 1, 5 do grid_redraw() end
-    assert_equal(second:get_led(5, 8), 15, "port 2 is drawn (its page key)")
+    assert_equal(second:get_led(STRIP.patterns_key, STRIP.row), 15, "port 2 is drawn (its page key)")
   end)
   layout.redraw = real_redraw
   if not ok then error(err, 0) end
@@ -994,8 +812,8 @@ test("one of two 16x8 grids failing its redraw prints its error once", function(
 end)
 
 -- #446: the sequencer's edits ask for no screen redraw; SEQ follows a grid
--- edit because grid_key (and row 15's hold) asks for one
-test("SEQ draws a grid step press, a release and a 256's row 15 clear on the next frame", function()
+-- edit because grid_key asks for one
+test("SEQ draws a grid step press and a release on the next frame", function()
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
   h.show_page("SEQ")
@@ -1010,16 +828,9 @@ test("SEQ draws a grid step press, a release and a 256's row 15 clear on the nex
   assert_equal(counter.screen, 1, "the frame after the press draws once")
   context.grid.press(1, 3, 1, 0)
   h.next_frame(context)
+  counter.restore()
   assert_equal(patterns[1][3], 15, "the release toggled voice 1 step 3 on")
   assert_equal(counter.screen, 2, "the frame after the release draws once")
-  context.grid.press(1, 1, 15, 1)
-  h.next_frame(context)
-  assert_equal(counter.screen, 3, "the press of row 15's clear key draws (its LED)")
-  context.clock.run_for(0.51)
-  counter.restore()
-  assert_equal(patterns[1][3], 0, "held half a second: voice 1's pattern is cleared")
-  assert_equal(counter.screen, 4, "the clear draws on a frame, once")
-  context.grid.press(1, 1, 15, 0)
 end)
 
 -- #447: the guards the notes describe, one test each
@@ -1039,18 +850,21 @@ test("a press with no release before it starts the key over", function()
   local context = load_strata(); finish_startup(context)
   local core = grid_core()
   local patterns = local_value("patterns")
-  local scenes = local_value("scenes")
-  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)  -- page 3
-  context.grid.press(1, 2, 3, 1)  -- scene 2's save hold
-  core.set_page(1, 1)
-  context.grid.press(1, 2, 3, 1)  -- again, no release seen: page 1's voice 3 step 2
+  local pages = PAGES()
+  local probe = h.probe_grid_page(pages.fx, {hold = 0.5})
+  context.grid.plug(1, 16, 16); tap(context, 1, STRIP.probe_key, STRIP.row)
+  context.grid.press(1, 2, 3, 1)  -- the probe's hold
+  core.set_page(1, pages.patterns)
+  context.grid.press(1, 2, 3, 1)  -- again, no release seen: patterns' voice 3 step 2
   context.clock.run_for(1)
-  assert_true(not scenes[2].populated, "the first press's hold was canceled")
+  assert_equal(#probe.fired, 0, "the first press's hold was canceled")
   assert_equal(shown_step_editor(), "3 2 1", "the second press's own hold opened the step editor")
   context.grid.press(1, 2, 3, 0)
   assert_equal(shown_step_editor(), nil, "whose release closes it")
   assert_equal(patterns[3][2], 0, "and toggles nothing")
-  -- a consumed mark goes with the second press
+  -- a consumed mark goes with the second press (on the bottom pane, on
+  -- the probe)
+  core.set_page(1, pages.fx, 2)
   local releases = 0
   local layout = local_value("S").registry.grid_layouts["256"]
   local real_key = layout.key
@@ -1063,18 +877,19 @@ test("a press with no release before it starts the key over", function()
   context.grid.press(1, 9, 9, 0)
   layout.key = real_key
   assert_equal(releases, 1, "the release after the second press reaches the layout")
-  -- a step entry goes with it: voice 1 step 3 held on page 1, pressed again
-  -- on page 3 (a recall there), is no longer a held step on page 1
+  -- a step entry goes with it: voice 1 step 3 held on patterns, pressed
+  -- again on a page with no record, is no longer a held step on patterns
+  h.no_grid_page(pages.scenes)
   context.grid.press(1, 3, 1, 1)
   assert_equal(patterns[1][3], 0, "voice 1 step 3 held")
-  core.set_page(1, 3)
+  core.set_page(1, pages.scenes)
   context.grid.press(1, 3, 1, 1)
-  core.set_page(1, 1)
+  core.set_page(1, pages.patterns)
   tap(context, 1, 8, 1)
   assert_equal(patterns[1][3], 0, "step 3 took no level")
   assert_equal(patterns[1][8], 15, "the key toggled its own step")
   context.grid.press(1, 3, 1, 0)
-  assert_equal(patterns[1][3], 0, "the release of the key pressed again on page 3 toggles nothing")
+  assert_equal(patterns[1][3], 0, "the release of the key pressed again on another page toggles nothing")
 end)
 
 test("a grid plugged into a port forgets the port's page, held keys and layout state", function()
@@ -1098,7 +913,7 @@ test("a grid moved in SYSTEM > DEVICES is repainted as the menu closes", functio
   local before = device.refresh_count
   _menu.set_mode(false)
   assert_equal(device.refresh_count - before, 1, "repainted once on port 2")
-  assert_true(device:get_led(13, 8) == 15, "it shows page 1")
+  assert_true(device:get_led(STRIP.patterns_key, STRIP.row) == 15, "it shows patterns")
 end)
 
 test("select_grid_voice refuses a voice outside 1-7", function()
@@ -1234,92 +1049,42 @@ test("scene_recall_level: the sequencer's fading target blinks, the next scene s
   params:set("scene_sequencer_enabled", 0)
 end)
 
-test("scene_save_level: 15 while the key's save hold is pending, 4 otherwise", function()
-  local context = load_strata(); finish_startup(context)
-  local core = grid_core()
-  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)  -- page 3
-  assert_equal(core.scene_save_level(1, 2, 3), 4, "idle")
-  context.grid.press(1, 2, 3, 1)
-  assert_equal(core.scene_save_level(1, 2, 3), 15, "pending")
-  assert_equal(core.scene_save_level(2, 2, 3), 4, "another port's key is idle")
-  context.grid.press(1, 2, 3, 0)
-  assert_equal(core.scene_save_level(1, 2, 3), 4, "released")
-end)
-
 -- #526: the same state lights the same on every grid: the four layouts on
 -- ports 1-4, voices 1 and 2 (from the start) and 3 running, voice 4
--- stopped, voice 3 locked, grid voice 2
-test("every layout lights voice, play, lock, page and pick keys at the core's shared levels", function()
+-- stopped, voice 3 locked. The strips' keys: the upper strip's O3 and O4
+-- at x 12 and 13 (the 128v's down column 8), the 64's at x 4 and 5
+test("every layout lights voice, play and page keys at the core's shared levels", function()
   local context = load_strata(); finish_startup(context)
   local core = grid_core()
-  local S = local_value("S")
+  h.probe_grid_page(PAGES().fx)
   local full = context.grid.plug(1, 16, 16)
   local wide = context.grid.plug(2, 16, 8)
   local tall = context.grid.plug(3, 8, 16)
   local small = context.grid.plug(4, 8, 8)
-  toggle_voice(3); toggle_lock(3); select_grid_voice(2)
+  toggle_voice(3); toggle_lock(3)
   grid_redraw()
   local levels = core.LEVELS
   local function same(what, expected, leds)
     for name, level in pairs(leds) do assert_equal(level, expected, what .. " on the " .. name) end
   end
   same("a stopped voice's key", levels.voice_stopped,
-    {["256"] = full:get_led(12, 14), ["128h"] = wide:get_led(12, 8), ["128v"] = tall:get_led(8, 4), ["64"] = small:get_led(5, 8)})
+    {["256"] = full:get_led(13, 8), ["128h"] = wide:get_led(13, 8), ["128v"] = tall:get_led(8, 13), ["64"] = small:get_led(5, 8)})
   same("a running voice's key", levels.voice_running,
-    {["256"] = full:get_led(11, 14), ["128h"] = wide:get_led(11, 8), ["128v"] = tall:get_led(8, 3), ["64"] = small:get_led(4, 8)})
-  same("a stopped play key", levels.stopped, {["256"] = full:get_led(1, 8), ["128h"] = wide:get_led(1, 8), ["128v"] = tall:get_led(8, 9)})
-  same("an idle page key", levels.page_other, {["256"] = full:get_led(14, 8), ["128h"] = wide:get_led(6, 8)})
-  same("the shown page's key", levels.page_shown, {["256"] = full:get_led(13, 8), ["128h"] = wide:get_led(5, 8)})
-  same("the grid voice's pick key", levels.picked,
-    {["256"] = full:get_led(2, 14), ["128v"] = tall:get_led(8, 11)})
-  same("another voice's pick key", levels.unpicked,
-    {["256"] = full:get_led(1, 14), ["128v"] = tall:get_led(8, 10)})
-  same("a lock key", levels.locked, {["256"] = full:get_led(3, 16)})
-  same("an unlocked key", levels.unlocked, {["256"] = full:get_led(1, 16)})
-  -- the 16x8's and 8x16's pick and lock keys are on their faders pages
-  core.set_page(2, 2); core.set_page(3, 2)
-  grid_redraw()
-  same("the grid voice's pick key", levels.picked, {["128h"] = wide:get_led(2, 6)})
-  same("another voice's pick key", levels.unpicked, {["128h"] = wide:get_led(1, 6)})
-  same("a lock key", levels.locked, {["128h"] = wide:get_led(3, 7), ["128v"] = tall:get_led(7, 12)})
-  same("an unlocked key", levels.unlocked, {["128h"] = wide:get_led(1, 7), ["128v"] = tall:get_led(7, 10)})
-  same("the shown fader page's key", levels.picked, {["128h"] = wide:get_led(1, 5), ["128v"] = tall:get_led(5, 1)})
-  same("another fader page's key", levels.unpicked, {["128h"] = wide:get_led(2, 5), ["128v"] = tall:get_led(5, 2)})
+    {["256"] = full:get_led(12, 8), ["128h"] = wide:get_led(12, 8), ["128v"] = tall:get_led(8, 12), ["64"] = small:get_led(4, 8)})
+  same("a stopped play key", levels.stopped,
+    {["256"] = full:get_led(1, 8), ["128h"] = wide:get_led(1, 8), ["128v"] = tall:get_led(8, 1), ["64"] = small:get_led(1, 8)})
+  same("an idle page key", levels.page_other,
+    {["256"] = full:get_led(9, 8), ["256 row 16"] = full:get_led(9, 16), ["128h"] = wide:get_led(9, 8), ["128v"] = tall:get_led(8, 9)})
+  same("the shown page's key", levels.page_shown,
+    {["256"] = full:get_led(3, 8), ["128h"] = wide:get_led(3, 8), ["128v"] = tall:get_led(8, 3)})
   assert_equal(core.voice_level(3), levels.voice_running, "voice_level reads the voice")
   assert_equal(core.voice_level(4), levels.voice_stopped)
   assert_equal(core.lock_level(3), levels.locked, "lock_level reads the lock")
   assert_equal(core.lock_level(1), levels.unlocked)
   assert_equal(core.play_level(), levels.stopped, "play_level reads the patterns")
   assert_true(levels.voice_stopped ~= levels.voice_running and levels.page_other ~= levels.page_shown
-    and levels.picked ~= levels.unpicked and levels.locked ~= levels.unlocked, "each pair is two levels")
-  S.grid_voice_select = 1
-end)
-
--- #324: the drift tick redraws a faders page only when a fader it shows
--- moved (a param set anywhere), never on every tick
-test("the faders follow a param set off the grid within a tick, and idle ticks repaint nothing", function()
-  local cases = {
-    {cols = 16, rows = 16, before = {5, 9}, after = {1, 9}},   -- row 9, the first fader
-    {cols = 16, rows = 8, before = {5, 1}, after = {1, 1}},    -- row 1
-    {cols = 8, rows = 16, before = {1, 12}, after = {1, 16}},  -- column 1, upright
-  }
-  for _, case in ipairs(cases) do
-    local name = case.cols .. "x" .. case.rows
-    local context = load_strata(); finish_startup(context)
-    local device = context.grid.plug(1, case.cols, case.rows)
-    grid_core().set_page(1, 2)
-    select_grid_voice(3)  -- stopped: nothing of it drifts
-    grid_redraw()
-    drift_update()  -- the first look
-    assert_equal(device:get_led(case.before[1], case.before[2]), 15, name .. ": v3_freq's default")
-    local spec = params:lookup_param("v3_freq").controlspec
-    params:set("v3_freq", spec.minval)
-    drift_update()
-    assert_equal(device:get_led(case.after[1], case.after[2]), 15, name .. ": the tick moved the fader to the minimum")
-    local before = device.refresh_count
-    for _ = 1, 10 do drift_update() end
-    assert_equal(device.refresh_count - before, 0, name .. ": ten idle ticks repaint nothing")
-  end
+    and levels.picked ~= levels.unpicked and levels.locked ~= levels.unlocked
+    and levels.side_two ~= levels.page_shown, "each pair is two levels")
 end)
 
 -- #451: a grid page outside the layouts is named (S.constants.GRID_PAGES),
@@ -1360,7 +1125,7 @@ test("after cleanup no grid, arc or MIDI handler of Strata's is left", function(
   assert_equal(lit(device), 0, "the grid is dark")
   context.clear_engine_calls()
   local before = device.refresh_count
-  tap(context, 1, 12, 14)  -- voice 4's on/off key on page 1
+  tap(context, 1, 13, 8)   -- voice 4's on/off key (O4)
   tap(context, 1, 3, 1)    -- a step
   assert_equal(lit(device), 0, "a press after cleanup lights nothing")
   assert_equal(device.refresh_count, before, "and repaints nothing")
@@ -1399,7 +1164,7 @@ test("a port's rotation turns its 16x8 into the 8x16 layout on page 1 with no he
   assert_equal(core.page(1), 1, "on page 1")
   assert_equal(core.held(1, 4, 1), nil, "no held key")
   assert_equal(core.existing_port_state(1), nil, "no layout state")
-  assert_equal(device:get_led(8, 8), S.lib.grid_layout_128v.LAYOUT.page_levels[1], "drawn as the 8x16 on page 1")
+  assert_equal(device:get_led(8, 3), S.constants.GRID_LEVELS.page_shown, "drawn as the 8x16 on patterns (P1, column 8 row 3)")
   context.grid.press(1, 4, 1, 0)  -- the stray release of the key held before
   local patterns = local_value("patterns")
   tap(context, 1, 2, 5)
@@ -1434,8 +1199,8 @@ test("a port's rotation is kept in grids.data and applied at start and to a grid
   context.grid.unplug(2)
   local later = context.grid.plug(2, 16, 8)
   assert_equal(later.rotation_value, 3, "applied to a grid plugged in")
-  assert_equal(later:get_led(8, 8), local_value("S").lib.grid_layout_128v.LAYOUT.page_levels[1],
-    "and drawn as the 8x16 on page 1")
+  assert_equal(later:get_led(8, 3), local_value("S").constants.GRID_LEVELS.page_shown,
+    "and drawn as the 8x16 on patterns (P1, column 8 row 3)")
   local other = context.grid.plug(3, 16, 8)
   assert_equal(other.rotation_value, 0, "another port keeps its own")
 end)
@@ -1555,21 +1320,21 @@ test("a grid whose size changes under its port starts on page 1 with no held key
   grid_redraw()
   assert_equal(core.page(1), 1, "page 1")
   assert_equal(core.held(1, 4, 1), nil, "no held key")
-  assert_equal(device:get_led(8, 8), local_value("S").lib.grid_layout_128v.LAYOUT.page_levels[1], "the 8x16 drawn")
+  assert_equal(device:get_led(8, 3), local_value("S").constants.GRID_LEVELS.page_shown, "the 8x16 drawn (P1 lit)")
 end)
 
 test("a grid moved in SYSTEM > DEVICES cancels the old port's pending holds", function()
   local context = load_strata(); finish_startup(context)
-  local scenes = local_value("scenes")
-  context.grid.plug(1, 16, 16); tap(context, 1, 15, 8)  -- page 3
+  local probe = h.probe_grid_page(PAGES().fx, {hold = 0.5})
+  context.grid.plug(1, 16, 16); tap(context, 1, STRIP.probe_key, STRIP.row)
   context.grid.press(1, 2, 3, 1)
-  assert_true(grid_core().hold_pending(1, 2, 3), "a scene save is pending on port 1")
+  assert_true(grid_core().hold_pending(1, 2, 3), "a probe's hold is pending on port 1")
   _menu.set_mode(true)
   context.grid.reassign(1, 2)
   _menu.set_mode(false)
   assert_true(not grid_core().hold_pending(1, 2, 3), "port 1's hold is canceled")
   context.clock.run_for(1)
-  assert_true(not scenes[2].populated, "no scene saved")
+  assert_equal(#probe.fired, 0, "it never fires")
 end)
 
 -- 3.6 (design §0.1): a grid that is no norns device (a remote grid, the
@@ -1603,9 +1368,10 @@ test("a virtual grid attaches above the four ports and plays its layout", functi
   core.reconcile_ports()
   assert_equal(S.grids[5], device, "reconcile_ports leaves it")
   -- a held key and its hold go with it
-  core.set_page(5, 3)
+  local probe = h.probe_grid_page(S.constants.GRID_PAGES.fx, {hold = 0.5})
+  core.set_page(5, S.constants.GRID_PAGES.fx)
   device.key(2, 3, 1)
-  assert_true(core.hold_pending(5, 2, 3), "a scene save is pending")
+  assert_true(core.hold_pending(5, 2, 3), "a probe's hold is pending")
   assert_equal(#h.check_invariants(), 0, "every invariant holds while attached")
   core.detach_virtual(5)
   assert_equal(S.grids[5], nil, "detached")
@@ -1614,7 +1380,7 @@ test("a virtual grid attaches above the four ports and plays its layout", functi
   assert_equal(core.held(5, 2, 3), nil, "its key forgotten")
   assert_equal(S.grid_held[5], nil, "and its held keys' table gone, as a port never attached has none")
   context.clock.run_for(1)
-  assert_true(not S.scenes[2].populated, "no scene saved")
+  assert_equal(#probe.fired, 0, "the hold never fires")
   -- refused: a norns port, a device without its fields, a port no constant names
   assert_equal(core.attach_virtual(3, virtual_grid(16, 16)), false, "port 3 is norns'")
   assert_equal(core.attach_virtual(5, {}), false, "an empty table")
@@ -1793,6 +1559,230 @@ test("without a facade the module norns loaded is the global, and hot-plug reach
     context.grid.plug(3, 16, 8)
     assert_equal(S.grids[3], nil, "after cleanup, nothing is")
   end)
+end)
+
+-- 3.8 (design §10.1): pages per port and pane -----------------------------
+
+test("set_page(port, page) shows the page on pane 1", function()
+  local context = load_strata(); finish_startup(context)
+  local core = grid_core()
+  local pages = PAGES()
+  h.probe_grid_page(pages.fx)
+  context.grid.plug(1, 16, 16)
+  core.set_page(1, pages.patterns, 2)
+  core.set_page(1, pages.fx)
+  assert_equal(core.page(1), pages.fx, "page(port) reads pane 1")
+  assert_equal(core.page(1, 1), pages.fx)
+  assert_equal(core.page(1, 2), pages.patterns, "pane 2 is left as it was")
+  assert_equal(core.side(1), 1, "side 1")
+  assert_equal(core.half(1), 1, "half 1")
+  assert_equal(local_value("S").grid_panes[1][1].page, pages.fx, "kept in S.grid_panes[port][pane]")
+end)
+
+-- Review Focus 4: a grid unplugged and plugged again, turned, or joined by
+-- a second grid of another size, while a pane shows a second side and a
+-- key is held
+test("a grid unplugged, turned or joined by another size keeps no stale pane", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local core = grid_core()
+  local pages = PAGES()
+  local probe = h.probe_grid_page(pages.fx, {sides = 2, hold = 0.5})
+  -- a 256 with its bottom pane on the probe's second side, a key held
+  context.grid.plug(1, 16, 16)
+  core.set_page(1, pages.fx, 2, 2)
+  context.grid.press(1, 4, 11, 1)
+  assert_true(core.hold_pending(1, 4, 11), "the probe armed its hold")
+  context.grid.unplug(1)
+  assert_true(not core.hold_pending(1, 4, 11), "unplugged: no hold clock is left")
+  assert_equal(S.grid_panes[1], nil, "and the port's pane state is forgotten")
+  context.clock.run_for(1)
+  assert_equal(#probe.fired, 0, "the hold never fires")
+  context.grid.plug(1, 16, 16)
+  assert_equal(core.page(1, 1), pages.patterns, "plugged again: the top pane on its default")
+  assert_equal(core.page(1, 2), S.registry.grid_pages[pages.voices] and pages.voices or pages.patterns,
+    "the bottom pane on its default")
+  assert_equal(core.side(1, 2), 1)
+  assert_true(pcall(grid_redraw), "both panes draw without error")
+  context.grid.unplug(1)
+  -- a 128h with a key held, turned to 8 by 16
+  context.grid.plug(1, 16, 8)
+  core.set_page(1, pages.fx, 1, 2)
+  context.grid.press(1, 3, 2, 1)
+  local presses = #probe.presses
+  h.resize_grid(context, 1, 8, 16)
+  assert_equal(core.layout_of(1), S.registry.grid_layouts["128v"], "one turned pane")
+  assert_equal(core.layout_of(1).panes, 1)
+  assert_true(not core.hold_pending(1, 3, 2), "the hold ended")
+  context.clock.run_for(1)
+  assert_equal(#probe.fired, 0, "and never fires")
+  context.grid.press(1, 3, 2, 0)
+  assert_equal(S.patterns[3][2], 0, "the old key's release toggles no step of the new arrangement")
+  assert_equal(#probe.presses, presses, "and reaches no probe")
+  context.grid.unplug(1)
+  -- a 64 plugged on a second port while the 256 stays: each port its own
+  context.grid.plug(1, 16, 16)
+  context.grid.plug(2, 8, 8)
+  core.set_page(1, pages.fx, 2, 2)
+  core.set_page(2, pages.fx, 1, 1)
+  core.set_half(2, 1, 2)
+  assert_equal(core.view(1, 1), "1:" .. pages.patterns .. ":1:1", "the 256's top pane")
+  assert_equal(core.view(1, 2), "2:" .. pages.fx .. ":2:1", "the 256's bottom pane")
+  assert_equal(core.view(2, 1), "1:" .. pages.fx .. ":1:2", "the 64's own page, side and half")
+  core.set_half(1, 2, 2)
+  assert_equal(core.view(2, 1), "1:" .. pages.fx .. ":1:2", "a change on port 1 leaves port 2's")
+  core.set_page(2, pages.patterns)
+  assert_equal(core.view(1, 2), "2:" .. pages.fx .. ":2:2", "and back")
+  assert_true(pcall(grid_redraw), "both draw without error")
+end)
+
+-- The fader maths (lib/grid/faders.lua), moved from the 256's file: which
+-- params a voice's fader pages show, and the key <-> value mapping
+
+test("bipolar grid faders have a column that sets exactly 0, and keep both ends (#49)", function()
+  load_strata()
+  -- 16 columns have no center: a plain sweep of -1..1 gives +/-0.07 there
+  params:set("v1_source", 2)  -- a buffer voice: its faders include scan and pan
+  for _, param_id in ipairs({"v1_pan", "v1_buf_scan", "v1_mod_amp_amt_1", "v1_mod_freq_amt_1"}) do
+    local minval, maxval = param_range(param_id)
+    local zero_column
+    local previous = -math.huge
+    for x = 1, 16 do
+      set_param_from_column(param_id, x)
+      local value = params:get(param_id)
+      assert_true(value > previous, param_id .. ": column " .. x .. " sets more than column " .. (x - 1))
+      previous = value
+      if value == 0 then zero_column = x end
+      assert_equal(fader_position(param_id), x, param_id .. ": the value set by column " .. x .. " shows there")
+    end
+    assert_true(zero_column ~= nil, param_id .. ": a column sets exactly 0")
+    assert_equal(zero_column, 9, param_id .. ": column 9 for a symmetric range (README)")
+    set_param_from_column(param_id, 1)
+    assert_near(params:get(param_id), minval, 1e-9, param_id .. ": column 1 still sets the minimum")
+    set_param_from_column(param_id, 16)
+    assert_near(params:get(param_id), maxval, 1e-9, param_id .. ": column 16 still sets the maximum")
+    params:set(param_id, 0)  -- 0 set elsewhere (PARAMS, a scene) shows at the zero column
+    assert_equal(fader_position(param_id), zero_column, param_id .. ": 0 shows at its column")
+  end
+  -- unipolar faders keep the plain sweep: column 8 on the exp freq fader
+  params:set("v1_source", 1)
+  set_param_from_column("v1_freq", 8)
+  assert_near(params:get("v1_freq"), 20 * (2000 / 20) ^ (7 / 15), 1.0, "column 8 on an exp fader")
+  -- the delay's time fader sweeps to the delay's longest time
+  -- (S.lib.delay_sync.DELAY.max_seconds)
+  set_param_from_column("delay_time", 16)
+  assert_near(params:get("delay_time"), local_value("S").lib.delay_sync.DELAY.max_seconds, 1e-6,
+    "column 16 is the delay's longest time")
+end)
+
+-- 3.7's faders (3.7.0's 21 per synth voice), then the groundwork's: the
+-- voice filter and sends, the loop (buffer voices), the jitters and
+-- the attack and release follow
+local CROSSMOD_FADERS = { "mod_source_1", "mod_amp_amt_1", "mod_freq_amt_1", "mod_source_2", "mod_amp_amt_2",
+  "mod_freq_amt_2", "mod_source_3", "mod_amp_amt_3", "mod_freq_amt_3" }
+local GRAIN_FADERS = { "grain_size", "grain_density", "grain_pitch", "grain_spread", "grain_env", "grain_mode" }
+local function fader_list(voice, ...)
+  local ids = {}
+  for _, keys in ipairs({ ... }) do
+    for _, key in ipairs(keys) do ids[#ids + 1] = "v" .. voice .. "_" .. key end
+  end
+  return table.concat(ids, ",")
+end
+
+test("each voice's faders are 3.7's, then the new ones, per source", function()
+  load_strata()
+  local mix = { "filter_freq", "filter_res", "filter_mix", "delay_send", "reverb_send" }
+  local rest = { "pitch_jitter", "size_jitter", "pan_jitter", "attack", "release" }
+  local loop = { "loop_start", "loop_length" }
+  local synth = { [1] = { "freq", "rq", "noise", "mod1", "mod2", "amp", "pan" }, [4] = { "freq", "drift", "amp" } }
+  local level = { [1] = { "amp", "pan" }, [4] = { "amp" } }
+  for _, voice in ipairs({ 1, 4 }) do
+    params:set("v" .. voice .. "_source", 1)
+    assert_equal(table.concat(fader_param_ids(voice), ","),
+      fader_list(voice, synth[voice], GRAIN_FADERS, CROSSMOD_FADERS, mix, rest), "voice " .. voice .. " synth")
+    params:set("v" .. voice .. "_source", 2)
+    assert_equal(table.concat(fader_param_ids(voice), ","),
+      fader_list(voice, { "buf_pos", "buf_rate", "buf_scan" }, level[voice], GRAIN_FADERS, CROSSMOD_FADERS, mix, loop,
+        rest), "voice " .. voice .. " buffer 1")
+    params:set("v" .. voice .. "_source", 10)
+    assert_equal(table.concat(fader_param_ids(voice), ","),
+      fader_list(voice, GRAIN_FADERS, level[voice], CROSSMOD_FADERS, mix, rest), "voice " .. voice .. " input")
+  end
+end)
+
+test("the page counts per voice and source", function()
+  load_strata()
+  local function counts(voice) return #fader_param_ids(voice) .. " " .. fader_page_count(voice) end
+  assert_equal(counts(1), "32 8", "resonator synth")
+  for _, voice in ipairs({ 2, 5, 6, 7 }) do assert_equal(counts(voice), "31 8", "voice " .. voice .. " synth") end
+  assert_equal(counts(3), "30 8", "folder synth")
+  assert_equal(counts(4), "28 7", "sub synth")
+  params:set("v1_source", 2); params:set("v4_source", 2)
+  assert_equal(counts(1), "32 8", "a buffer voice")
+  assert_equal(counts(4), "31 8", "sub on a buffer")
+  params:set("v1_source", 10); params:set("v4_source", 10)
+  assert_equal(counts(1), "27 7", "input")
+  assert_equal(counts(4), "26 7", "sub on input")
+end)
+
+test("the new faders follow their warp", function()
+  load_strata()
+  set_param_from_column("v1_attack", 1)
+  assert_near(params:get("v1_attack"), 0.005, 1e-9, "attack column 1 is 0.005 s")
+  set_param_from_column("v1_attack", 16)
+  assert_near(params:get("v1_attack"), 30, 1e-6, "column 16 is 30 s")
+  set_param_from_column("v1_attack", 8)
+  assert_near(params:get("v1_attack"), 0.005 * (30 / 0.005) ^ (7 / 15), 1e-6, "column 8 in exponential steps")
+  assert_equal(fader_position("v1_attack"), 8, "and shows at column 8")
+  set_param_from_column("v1_filter_freq", 1)
+  assert_near(params:get("v1_filter_freq"), 20, 1e-6, "filter_freq column 1 is 20 Hz")
+  set_param_from_column("v1_filter_freq", 16)
+  assert_near(params:get("v1_filter_freq"), 20000, 1e-3, "column 16 is 20 kHz")
+  set_param_from_column("v1_filter_freq", 8)
+  assert_near(params:get("v1_filter_freq"), 20 * 1000 ^ (7 / 15), 1e-3, "column 8 in exponential steps")
+  for _, id in ipairs({ "v1_attack", "v1_filter_freq", "v1_pitch_jitter", "v1_delay_send" }) do
+    assert_equal(fader_zero_column(id), nil, id .. " spans no 0: no zero column")
+  end
+end)
+
+test("a loop fader appears only on a buffer voice", function()
+  load_strata()
+  local function has_loop(voice)
+    local ids = table.concat(fader_param_ids(voice), ",")
+    return ids:find("_loop_start", 1, true) ~= nil, ids:find("_loop_length", 1, true) ~= nil
+  end
+  for voice = 1, 7 do
+    for _, source in ipairs({ 1, 2, 9, 10 }) do
+      params:set("v" .. voice .. "_source", source)
+      local start, length = has_loop(voice)
+      local buffer = source > 1 and source < 10
+      assert_equal(start, buffer, "voice " .. voice .. " source " .. source .. ": loop start")
+      assert_equal(length, buffer, "and loop length")
+    end
+  end
+end)
+
+test("fader groups sort by rank, and groups of one rank keep their registration order", function()
+  local function probe(name, rank)
+    local record = { name = name, count = 1, fader = { { keys = { name }, rank = rank } } }
+    function record.add(voice_idx)
+      local_value("S").lib.params_setup.add_voice_param(voice_idx, record, name,
+        { type = "control", name = name, controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+    end
+    return record
+  end
+  load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_voice_params(probe("probe_a", 1))
+    S.register_voice_params(probe("probe_b", nil))
+    S.register_voice_params(probe("probe_c", 2.5))
+  end })
+  local ids = fader_param_ids(1)
+  local tail = {}
+  for index = 7 + 6 + 9 + 1, #ids do tail[#tail + 1] = ids[index] end
+  assert_equal(table.concat(tail, ","), "v1_probe_b,v1_filter_freq,v1_filter_res,v1_filter_mix,v1_delay_send,"
+    .. "v1_reverb_send,v1_probe_a,v1_probe_c,v1_pitch_jitter,v1_size_jitter,v1_pan_jitter,v1_attack,v1_release",
+    "rank 0 after the built-ins, a rank's later group after its earlier, 2.5 between 2 and 3")
 end)
 
 end

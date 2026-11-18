@@ -31,7 +31,7 @@ local SYSTEM = {
   -- fill held over the third bar (passes 5 and 6), pressed and released a
   -- little before the bar's edges so no step falls on the press
   fill_margin = 0.05,
-  grid_port = 1, fill_key = {x = 9, y = 8},
+  grid_port = 1, fill_key = {x = 2, y = 8},
 }
 
 -- The commands a 3.6 Strata never sent (a 3.6 PSET's read sends none of them either)

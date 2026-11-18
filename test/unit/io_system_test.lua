@@ -335,6 +335,9 @@ local function surfaces(rig)
   rig.grid = watch_midi(S, grid_device.connect(context, SYSTEM.grid_port))
   set_rig(S, "remote_grid_port", SYSTEM.grid_port)
   assert_equal(S.lib.io_remote.status("grid"), "16x16", "the remote grid is attached")
+  -- the page the remote grid's top pane flips to: a probe that lights its
+  -- whole pane, whatever pages main has (3.8's pane harness)
+  h.probe_grid_page(S.constants.GRID_PAGES.fx, {redraw = "all"})
   set_rig(S, "osc_feedback", "on")
   context.osc.receive("/strata/hello", {}, {"10.0.0.2", 57121})
   for voice = 1, S.constants.NUM_VOICES do
@@ -476,14 +479,15 @@ local function everything_moves(rig)
       context.midi.send(SYSTEM.e16_port, {type = "cc", cc = 102 + math.floor(n / 6) % 16, val = 1, ch = 16})
     end
     -- every frame_every-th LFO step (16 times a second in the bounds
-    -- minute, against the remote's 30 Hz draw tick) the remote grid flips
-    -- between its second and third pages, which differ in well over a
-    -- tick's 96 cells, and is redrawn (the remote clock sends only the
-    -- cells that changed, so a redraw that changed little would not load
-    -- its bound)
+    -- minute, against the remote's 30 Hz draw tick) the remote grid's top
+    -- pane flips between patterns and a probe page lighting all its 112
+    -- keys, which differ in well over a tick's 96 cells, and is redrawn
+    -- (the remote clock sends only the cells that changed, so a redraw that
+    -- changed little would not load its bound)
     if n % rig.density.frame_every == 0 then
       local remote = S.constants.GRID_PORTS.remote
-      S.lib.grid_core.set_page(remote, S.lib.grid_core.page(remote) == 2 and 3 or 2)
+      local pages = S.constants.GRID_PAGES
+      S.lib.grid_core.set_page(remote, S.lib.grid_core.page(remote) == pages.fx and pages.patterns or pages.fx)
       grid_redraw()
     end
   end

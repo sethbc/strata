@@ -130,10 +130,7 @@ test("tempo param drives clock_tempo and grid tempo buttons (I1)", function()
   params:set("tempo", 133)
   assert_equal(params:get("clock_tempo"), 133, "tempo param sets clock_tempo")
   context.grid.plug(1, 16, 16)
-  context.grid.press(1, 13, 8, 1)  -- page 1
-  context.grid.press(1, 8, 8, 1)   -- +10 BPM
-  context.grid.press(1, 5, 8, 1)   -- -10 BPM
-  context.grid.press(1, 7, 8, 1)   -- +1 BPM
+  context.grid.press(1, 2, 16, 1)  -- T+ (row 16): +1 BPM
   assert_equal(params:get("clock_tempo"), 134, "grid tempo buttons reach clock_tempo")
 end)
 
@@ -147,11 +144,10 @@ test("tempo param follows a clock_tempo change made elsewhere (#15)", function()
   assert_equal(local_value("scenes")[1].data.tempo, 150, "scene captured the external tempo")
   -- grid +1 / -1 step from the external tempo, not from a stale value
   context.grid.plug(1, 16, 16)
-  context.grid.press(1, 13, 8, 1)
-  context.grid.press(1, 7, 8, 1)
+  context.grid.press(1, 2, 16, 1)  -- T+
   assert_equal(params:get("clock_tempo"), 151, "grid +1 steps from the external tempo")
   params:set("clock_tempo", 200)
-  context.grid.press(1, 6, 8, 1)
+  context.grid.press(1, 1, 16, 1)  -- T-
   assert_equal(params:get("clock_tempo"), 199, "grid -1 steps from the external tempo")
   -- recall applies the scene's tempo to the clock
   params:set("clock_tempo", 80)
@@ -176,12 +172,11 @@ test("the tempo param has clock_tempo's range: a 30 BPM scene recalls at 30 (#48
   recall_scene(1)
   assert_equal(params:get("clock_tempo"), 30, "recall sets the clock to 30 BPM")
   context.grid.plug(1, 16, 16)
-  context.grid.press(1, 13, 8, 1)  -- page 1
-  context.grid.press(1, 7, 8, 1)   -- +1 BPM
+  context.grid.press(1, 2, 16, 1)  -- T+: +1 BPM
   assert_equal(params:get("clock_tempo"), 31, "grid +1 steps from 30 BPM")
   params:set("clock_tempo", clock_min)
   assert_equal(params:get("tempo"), clock_min, "the param follows the clock down to its minimum")
-  context.grid.press(1, 6, 8, 1)   -- -1 BPM
+  context.grid.press(1, 1, 16, 1)  -- T-: -1 BPM
   assert_equal(params:get("tempo"), clock_min, "grid -1 at the minimum keeps the tempo param there")
   assert_equal(params:get("clock_tempo"), clock_min, "and the clock")
   -- an external source's tempo reaches the handler unclamped
@@ -592,13 +587,12 @@ test("the 256 grid's tempo keys flash the tempo the clock runs, under an externa
   local context = load_strata(); finish_startup(context)
   local flash = local_value("S").lib.ui_flash
   context.grid.plug(1, 16, 16)
-  context.grid.press(1, 13, 8, 1)  -- page 1
   params:set("clock_source", 2)    -- midi: the clock's tempo is not ours to set
   clock.tempo = 100
-  context.grid.press(1, 7, 8, 1)   -- +1 BPM
+  context.grid.press(1, 2, 16, 1)  -- T+ (row 16): +1 BPM
   assert_equal(flash.text("header"), "tempo 100", "the flash shows the running tempo, not the param")
   params:set("clock_source", 1)
-  context.grid.press(1, 7, 8, 1)
+  context.grid.press(1, 2, 16, 1)
   assert_equal(flash.text("header"), "tempo 122", "internal: the tempo it landed on (the clock reports it once it ticks)")
 end)
 

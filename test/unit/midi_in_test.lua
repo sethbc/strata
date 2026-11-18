@@ -303,7 +303,7 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
   assert_nothing_held(2, 2, 62, "lock")
   toggle_lock(2)
   local stoppers = {
-    { name = "grid voice toggle", voice = 4, stop = function() context.grid.press(1, 8 + 4, 14, 1) end },
+    { name = "grid voice toggle", voice = 4, stop = function() context.grid.press(1, 9 + 4, 8, 1) end },  -- O4
     { name = "scene recall", voice = 6, stop = function() recall_scene(1, 0) end },
   }
   for _, stopper in ipairs(stoppers) do

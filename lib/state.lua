@@ -30,7 +30,8 @@ return function()
     params = {},        -- param-adding functions, run by init in order
     start = {},         -- {order, fn} records, run by init() by order
     cleanup = {},       -- {order, fn} records, run by cleanup() by order
-    grid_layouts = {},  -- per grid layout ("256", "128h", ...), its {key, redraw, fx_faders_page?}
+    grid_layouts = {},  -- per grid layout ("256", "128h", ...), its {key, redraw, panes, pane_at, start_pages}
+    grid_pages = {},    -- 3.8: per grid page index, its {name, index, press, redraw, sides?, faders?, signature?}
     voice_params = {},  -- per-voice param records (register_voice_params), in registration order
     scene_fields = {},  -- global scene fields {id, default, discrete} (register_scene_field)
     source_change = {}, -- fn(voice_idx, source), run by each v<i>_source action before its sync, never in a scene recall
@@ -598,6 +599,31 @@ return function()
       return type(state) == "table" and type(state.name) == "string" and type(state.setup) == "function"
     end), where, "layout_states lists {name, setup = fn}")
     table.insert(M.registry.io_sections, record)
+  end
+
+  local GRID_PAGE_FIELDS = {name = true, index = true, press = true, redraw = true, sides = true, faders = true,
+    signature = true}
+
+  -- 3.8's grid page (design §10.1; lib/grid/pane.lua reads them at each
+  -- press and redraw, so it stays open): {name, index, press = fn(pane, x,
+  -- y, z), redraw = fn(pane, led), sides (1 or 2, 1 when absent), faders =
+  -- fn(pane) -> {{line, first, keys, id}, ...}, signature = fn(pane) ->
+  -- string}, the last three optional, at S.registry.grid_pages[index]. Its
+  -- index is a page of S.constants.GRID_PAGES no record holds, its name
+  -- that page's name (GRID_PAGES.names[index])
+  function M.register_grid_page(record)
+    local kind = "register_grid_page"
+    require_arg(type(record) == "table", kind, "a record is a table")
+    local pages = M.constants.GRID_PAGES
+    local index = record.index
+    require_arg(is_whole(index, 1) and index <= pages.count, kind, "an index is a grid page 1-" .. pages.count)
+    require_arg(M.registry.grid_pages[index] == nil, kind, "a second record at page " .. index)
+    require_arg(record.name == pages.names[index], kind, "page " .. index .. "'s name is " .. pages.names[index])
+    local where = kind .. " " .. record.name
+    require_known_fields(record, GRID_PAGE_FIELDS, where)
+    require_arg(record.sides == nil or record.sides == 1 or record.sides == 2, where, "sides is 1 or 2")
+    require_functions(record, where, {"press", "redraw"}, {"faders", "signature"})
+    M.registry.grid_pages[index] = record
   end
 
   -- A modulation source (lib/mod_sources.lua reads them, design §10.1):

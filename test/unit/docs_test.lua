@@ -943,7 +943,8 @@ test("every user page and grid layout doc is linked from its index", function()
     local files = markdown_files("docs/user/" .. folder)
     assert_true(#files >= expected[folder], #files .. " docs in docs/user/" .. folder .. "/")
     for _, path in ipairs(files) do
-      local link = "(" .. folder .. "/" .. path:match("([^/]+)$") .. ")"
+      -- linked by its path below docs/user/ (3.8: grid/pages/<name>.md)
+      local link = "(" .. path:sub(#"docs/user/" + 1) .. ")"
       assert_true(index_text:find(link, 1, true), index .. " links " .. path)
     end
   end
@@ -2183,43 +2184,63 @@ test("params.md's scrub friction gives the glide lengths the code measures (#342
 end)
 
 -- The record keys and triggers record with the record settings (3.3's
--- record_buffer), never "the input for the record duration"; each grid
--- layout (every registered one has its page, docs/user/grid/<key>.md) gives
--- the two-key loop's edges in either order and links grid.md's Positions,
--- where a press, the LEDs and the strip are described, and a page that has
--- record keys says they record with the record settings (#337, #353, #356,
--- #358, #362)
-test("the record keys use the record settings; the grid pages link Positions (#337, #353, #356, #358, #362)", function()
+-- record_buffer), never "the input for the record duration"; grid.md keeps
+-- its Positions section, where a press, the LEDs and the strip are
+-- described, and gives the two-key loop's edges in either order (#337,
+-- #353, #356, #358, #362). 3.8: the per-layout Positions and record-key
+-- checks go to the positions page's own user page with its package
+test("the record keys use the record settings; grid.md keeps Positions (#337, #353, #356, #358, #362)", function()
   load_strata()
   local trigger = read_repo_file("docs/user/params.md"):match("\n  %- Record:[^\n]*")
   assert_true(trigger ~= nil, "params.md describes a buffer's Record trigger")
   assert_true(trigger:find("record settings", 1, true) and not trigger:find("live input", 1, true),
     "the Record trigger records with the record settings")
-  assert_true(doc_section(read_repo_file("docs/user/grid.md"), "## Positions") ~= nil, "grid.md has a Positions section")
-  local layouts, pages = {}, {}
-  for key in pairs(local_value("S").registry.grid_layouts) do table.insert(layouts, key) end
-  table.sort(layouts)
-  for _, path in ipairs(markdown_files("docs/user/grid")) do pages[path:match("([^/]+)%.md$")] = true end
-  assert_true(#layouts >= 4, "the layouts are registered, saw " .. #layouts)
-  for _, key in ipairs(layouts) do
-    assert_true(pages[key], "docs/user/grid/" .. key .. ".md documents the registered layout " .. key)
-    pages[key] = nil
+  local positions = doc_section(read_repo_file("docs/user/grid.md"), "## Positions")
+  assert_true(positions ~= nil, "grid.md has a Positions section")
+  assert_true(positions:find("from the start of the earlier", 1, true) and positions:find("in either order", 1, true),
+    "grid.md's Positions gives the loop's edges in either order")
+  for _, path in ipairs(markdown_files("docs/user/grid")) do
+    assert_true(not read_repo_file(path):lower():find("record the input", 1, true),
+      path .. " never says the record keys record the input")
   end
-  assert_true(next(pages) == nil, "every page in docs/user/grid/ is a registered layout's: " .. tostring(next(pages)))
-  local with_record_keys = 0
-  for _, key in ipairs(layouts) do
-    local path = "docs/user/grid/" .. key .. ".md"
-    local text = read_repo_file(path)
-    assert_true(text:find("](../grid.md#positions)", 1, true), path .. " links grid.md's Positions")
-    assert_true(text:find("from the start of the earlier", 1, true) and text:find("in either order", 1, true),
-      path .. " gives the loop's edges in either order")
-    assert_true(not text:lower():find("record the input", 1, true), path .. " never says the record keys record the input")
-    if text:find("Record into buffer", 1, true) then
-      with_record_keys = with_record_keys + 1
-      assert_true(text:find("with the record settings", 1, true), path .. "'s record keys use the record settings")
+end)
+
+-- 3.8 (design §10.1): the layouts are the top-level files of
+-- docs/user/grid/, one per registered layout; the pages are
+-- docs/user/grid/pages/<name>.md, one per registered page record (each
+-- linked from grid.md, as the index test checks)
+test("docs/user/grid/ has a page for each registered layout, and docs/user/grid/pages/ one for each registered grid page", function()
+  load_strata()
+  local S = local_value("S")
+  local function documented(dir, prefix)
+    local found = {}
+    for _, path in ipairs(markdown_files(dir)) do
+      local name = path:match("^" .. prefix:gsub("%p", "%%%0") .. "([^/]+)%.md$")
+      if name then found[name] = true end
     end
+    return found
   end
-  assert_true(with_record_keys >= 3, "the layouts with record keys were read, " .. with_record_keys)
+  local layout_docs = documented("docs/user/grid", "docs/user/grid/")
+  local layouts = 0
+  for key in pairs(S.registry.grid_layouts) do
+    layouts = layouts + 1
+    assert_true(layout_docs[key], "docs/user/grid/" .. key .. ".md documents the registered layout " .. key)
+    layout_docs[key] = nil
+  end
+  assert_true(layouts >= 4, "the layouts are registered, saw " .. layouts)
+  assert_true(next(layout_docs) == nil, "every top-level page in docs/user/grid/ is a registered layout's: "
+    .. tostring(next(layout_docs)))
+  local page_docs = documented("docs/user/grid/pages", "docs/user/grid/pages/")
+  local pages = 0
+  for index, record in pairs(S.registry.grid_pages) do
+    pages = pages + 1
+    assert_equal(record.name, S.constants.GRID_PAGES.names[index], "page " .. index .. "'s record")
+    assert_true(page_docs[record.name], "docs/user/grid/pages/" .. record.name .. ".md documents the page")
+    page_docs[record.name] = nil
+  end
+  assert_true(pages >= 1, "the patterns page at least is registered, saw " .. pages)
+  assert_true(next(page_docs) == nil, "every page in docs/user/grid/pages/ is a registered page's: "
+    .. tostring(next(page_docs)))
 end)
 
 -- Three claims pages state from the code: effects.md's sends as the params

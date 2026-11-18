@@ -338,6 +338,136 @@ local function shown_step_editor()
   return editor.voice .. " " .. editor.step .. " " .. editor.port
 end
 
+-- 3.8's pane harness (lib/grid/pane.lua, design §10.1): the six places a
+-- page can be shown, each a layout and the pane and half it shows. A test
+-- loops over GRID_ARRANGEMENTS (or those that show the keys it needs) and
+-- names keys in pane coordinates only: x 1-16 along a line, y 1-7 the
+-- lines, y 8 the pane's strip (x its key, 1-16, or 1-8 on a 64)
+local GRID_ARRANGEMENTS = {"128h", "256 top", "256 bottom", "128v", "64 left", "64 right"}
+local GRID_ARRANGEMENT = {
+  ["128h"] = {layout = "128h", cols = 16, rows = 8, pane = 1, half = 1},
+  ["256 top"] = {layout = "256", cols = 16, rows = 16, pane = 1, half = 1},
+  ["256 bottom"] = {layout = "256", cols = 16, rows = 16, pane = 2, half = 1},
+  ["128v"] = {layout = "128v", cols = 8, rows = 16, pane = 1, half = 1},
+  ["64 left"] = {layout = "64", cols = 8, rows = 8, pane = 1, half = 1},
+  ["64 right"] = {layout = "64", cols = 8, rows = 8, pane = 1, half = 2},
+}
+
+-- A grid of the arrangement's size on opts.port (1 unless given; a grid of
+-- that size already there is used, so "256 top" and "256 bottom" can share
+-- one), its pane on the arrangement's half. Returns {port, device, pane,
+-- arrangement, show(page, side, half), press(x, y, z), tap(x, y), led(x,
+-- y), shows(x, y)}: led is nil for a key the arrangement does not show,
+-- and press raises for one. Each key goes through the layout's own spec
+-- (S.lib.grid_pane.physical), so no test writes a physical key
+local function grid_pane(context, arrangement, opts)
+  opts = opts or {}
+  local info = GRID_ARRANGEMENT[arrangement]
+  if info == nil then error("grid_pane: no arrangement " .. tostring(arrangement), 2) end
+  local port = opts.port or 1
+  local S = local_value("S")
+  local core = S.lib.grid_core
+  local device = context.grid.vports[port].device
+  if not (device and device.cols == info.cols and device.rows == info.rows) then
+    device = context.grid.plug(port, info.cols, info.rows)
+  end
+  local layout = S.registry.grid_layouts[info.layout]
+  if info.half ~= 1 then core.set_half(port, info.pane, info.half); grid_redraw() end
+  local function physical(x, y)
+    return S.lib.grid_pane.physical(layout, info.pane, x, y, core.half(port, info.pane))
+  end
+  local handle = {port = port, device = device, pane = info.pane, arrangement = arrangement}
+  function handle.show(page, side, half)
+    core.set_page(port, page, info.pane, side or 1)
+    core.set_half(port, info.pane, half or info.half)
+    grid_redraw()
+  end
+  function handle.press(x, y, z)
+    local px, py = physical(x, y)
+    if px == nil then error(arrangement .. " shows no key " .. x .. "," .. y, 2) end
+    context.grid.press(port, px, py, z)
+  end
+  -- a press and the release of the same physical key (a press may change
+  -- the half shown)
+  function handle.tap(x, y)
+    local px, py = physical(x, y)
+    if px == nil then error(arrangement .. " shows no key " .. x .. "," .. y, 2) end
+    context.grid.press(port, px, py, 1); context.grid.press(port, px, py, 0)
+  end
+  function handle.led(x, y)
+    local px, py = physical(x, y)
+    if px == nil then return nil end
+    return device:get_led(px, py)
+  end
+  function handle.shows(x, y) return physical(x, y) ~= nil end
+  return handle
+end
+
+-- A probe page in S.registry.grid_pages[index] of the test's own S, so a
+-- test of sides, fader lines or holds leans on no page main has: its name
+-- the index's, opts.sides (1 or 2), opts.faders (a list of fader lines, or
+-- fn(pane) -> one), opts.signature (fn(pane) -> string), opts.redraw ("all"
+-- lights every key of the pane at 15; a function is the redraw itself).
+-- Its press records each call in probe.presses ({pane, x, y, z, side});
+-- with opts.hold (seconds) a press arms pane.on_hold, whose firing is
+-- recorded in probe.fired ({pane, x, y, side}). Returns the record
+local function probe_grid_page(index, opts)
+  opts = opts or {}
+  local S = local_value("S")
+  local probe = {name = S.constants.GRID_PAGES.names[index], index = index, sides = opts.sides,
+    signature = opts.signature}
+  probe.presses, probe.fired = {}, {}
+  if type(opts.faders) == "function" then
+    probe.faders = opts.faders
+  elseif opts.faders then
+    probe.faders = function() return opts.faders end
+  end
+  probe.press = function(pane, x, y, z)
+    probe.presses[#probe.presses + 1] = {pane = pane.index, x = x, y = y, z = z, side = pane.side}
+    if opts.hold and z == 1 then
+      local side = pane.side
+      pane.on_hold(x, y, opts.hold, function()
+        probe.fired[#probe.fired + 1] = {pane = pane.index, x = x, y = y, side = side}
+      end)
+    end
+  end
+  if type(opts.redraw) == "function" then
+    probe.redraw = opts.redraw
+  elseif opts.redraw == "all" then
+    probe.redraw = function(_, led)
+      for x = 1, 16 do
+        for y = 1, S.constants.NUM_VOICES do led(x, y, 15) end
+      end
+    end
+  else
+    probe.redraw = function() end
+  end
+  S.registry.grid_pages[index] = probe
+  return probe
+end
+
+-- No record at the page's index in the test's own S (a page main may have)
+local function no_grid_page(index)
+  local_value("S").registry.grid_pages[index] = nil
+end
+
+-- Turn the grid plugged on a port so it reports cols x rows (the stub's
+-- rotation: a quarter turn swaps them), as a rotation made outside Strata
+-- would, then redraw (the next redraw follows a size change)
+local function resize_grid(context, port, cols, rows)
+  local device = context.grid.vports[port].device
+  if device == nil then error("resize_grid: no grid on port " .. port, 2) end
+  if cols == device.native_cols and rows == device.native_rows then
+    device:rotation(0)
+  elseif cols == device.native_rows and rows == device.native_cols then
+    device:rotation(1)
+  else
+    error("resize_grid: a " .. device.native_cols .. "x" .. device.native_rows .. " grid never reports "
+      .. cols .. "x" .. rows, 2)
+  end
+  grid_redraw()
+end
+
 -- The slice editor's (lib/ui/slice_editor.lua, design §3.7) on top: a
 -- slot with audio (S.buffers[slot].seconds above 0) has a settings record
 -- (doubles.store[slot], made at its first read: off, count 8, sensitivity
@@ -1132,6 +1262,11 @@ return {
   wake = wake,
   wake_buffer_clock = wake_buffer_clock,
   shown_step_editor = shown_step_editor,
+  GRID_ARRANGEMENTS = GRID_ARRANGEMENTS,
+  grid_pane = grid_pane,
+  probe_grid_page = probe_grid_page,
+  no_grid_page = no_grid_page,
+  resize_grid = resize_grid,
   slice_doubles = slice_doubles,
   deep_copy = deep_copy,
   voice_count = voice_count,

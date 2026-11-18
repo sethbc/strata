@@ -1,16 +1,16 @@
 -- lib/grid/core.lua
 -- The grids Strata drives (S.grids, one vport per port) and what every
--- layout shares: the grid UI state (each port's page, S.param_page,
--- S.grid_voice_select), the 256's GRID_LAYOUT geometry
+-- layout shares: the grid UI state (each port's panes, S.grid_panes, and
+-- S.param_page, S.grid_voice_select), the faders' GRID_LAYOUT
 -- (S.lib.grid_core.GRID_LAYOUT), attaching vports, hot-plug, voice
--- selection, each port's held keys and holds (S.grid_held), the step keys
--- (3.4: a toggle on release, the level gesture and the held step's step
--- editor, S.lib.pages_seq), the scene-save and gesture recorder keys, the
--- key helpers and levels the layouts share, and the
--- dispatch of key presses, releases and redraws to the layout records in
--- S.registry.grid_layouts (lib/grid/layout_256.lua, ...), chosen by each
--- grid's exact size. The functions that were global stay global, defined
--- here.
+-- selection, each port's held keys and holds (S.grid_held) and their end
+-- per pane (end_pane_keys), the step keys (3.4: a toggle on release, the
+-- level gesture and the held step's step editor, S.lib.pages_seq), the
+-- gesture recorder keys, the key helpers and levels the pages share, and
+-- the dispatch of key presses, releases and redraws to the layout records
+-- in S.registry.grid_layouts (each lib/grid/layout_<size>.lua's
+-- S.lib.grid_pane.arrange record), chosen by each grid's exact size. The
+-- functions that were global stay global, defined here.
 
 return function(S)
   local M = {}
@@ -27,29 +27,22 @@ return function(S)
   S.MAX_GRID_PORTS = 4
   S.grids = {}
 
-  -- Grid UI state. Each port shows its own page (M.page), numbered alike on
-  -- every layout (S.constants.GRID_PAGES): 1 patterns, 2 faders, 3 scenes,
-  -- 4 sources and buffers (the 256 adds the FX faders), 5 positions
-  local MAX_GRID_PAGES = S.constants.GRID_PAGES.count
-  S.grid_pages = {}
+  -- Grid UI state (3.8, design §10.1). Each pane of each port shows its own
+  -- page, side and half: S.grid_panes[port][pane] = {page, side, half}, set
+  -- by set_page and set_half; a pane with no entry shows its layout's start
+  -- page. Pages are numbered alike on every layout
+  -- (S.constants.GRID_PAGES): 1 patterns, 2 faders, 3 scenes, 4 sources, 5
+  -- positions, 6 voices, 7 fx
+  local GRID_PAGES = S.constants.GRID_PAGES
+  local MAX_GRID_PAGES = GRID_PAGES.count
+  local MAX_HALVES = 2
+  S.grid_panes = {}
   S.param_page = 1
   S.grid_voice_select = 1
 
-  -- Grid functions
-  local GRID_LAYOUT = {
-    fader_rows = 4,         -- 256-grid parameter page: one fader per row 9-12
-    fader_width = 16,       -- fader columns
-    fader_first_row = 9,
-    param_page_row = 13,
-    -- 256-grid BUFFER / FX page (page 4): record (row 1) and clear (row 2)
-    -- per buffer slot, one FX fader per row 3-7, one source row per voice 9-15
-    buffer_record_row = 1,
-    buffer_clear_row = 2,
-    fx_fader_ids = {"filter_freq", "filter_res", "delay_time", "delay_feedback", "delay_mix"},
-    fx_first_row = 3,
-    source_first_row = 9    -- voice v's row is 8 + v; column = source option (1 synth, 2-9 buffers, 10 input)
-  }
-  -- lib/grid/faders.lua and lib/grid/layout_256.lua alias it
+  -- The faders' geometry: four faders a fader page, sixteen keys a fader
+  -- (lib/grid/faders.lua aliases it)
+  local GRID_LAYOUT = {fader_rows = 4, fader_width = 16}
   M.GRID_LAYOUT = GRID_LAYOUT
 
   local function whole_number_in(value, low, high)
@@ -70,32 +63,95 @@ return function(S)
     return whole_number_in(port, 1, S.MAX_GRID_PORTS) or virtual_port(port)
   end
 
-  -- Pages per port: page(port) is 1 until set_page gives the port another
-  function M.page(port)
-    return S.grid_pages[port] or 1
+  -- The entry of a port's pane, or nil (the pane shows its start)
+  local function pane_entry(port, pane)
+    local panes = S.grid_panes[port]
+    return panes and panes[pane or 1]
   end
 
-  -- A page change ends what every key held on the port was pressed to do,
-  -- so no key acts on a page it was not pressed on: its step gestures end
-  -- (a step held on the page it leaves toggles nothing at its release,
-  -- takes no level and closes a step editor it opened), its pending holds
-  -- are canceled (a scene save, a pattern clear, a recorder's clear, a
-  -- solo) and its keys' roles are forgotten (a recorder or mute key's
-  -- release does nothing). Another port's keys are left alone
-  function M.set_page(port, page)
+  -- The pane's start page: its layout's start_pages entry, patterns for a
+  -- port with no layout and for a start page with no record yet
+  local function start_page(port, pane)
+    local layout = M.layout_of(port)
+    local page = layout and layout.start_pages and layout.start_pages[pane or 1] or GRID_PAGES.patterns
+    if S.registry.grid_pages[page] == nil then return GRID_PAGES.patterns end
+    return page
+  end
+
+  -- The panes of the grid on the port (1 with no grid)
+  local function pane_count(port)
+    local layout = M.layout_of(port)
+    return layout and layout.panes or 1
+  end
+
+  -- Pages per port and pane (pane defaults to 1): the page, side (1 or 2)
+  -- and half (1 or 2, a 64's shown half) the pane shows
+  function M.page(port, pane)
+    local entry = pane_entry(port, pane)
+    if entry then return entry.page end
+    return start_page(port, pane)
+  end
+
+  function M.side(port, pane)
+    local entry = pane_entry(port, pane)
+    return entry and entry.side or 1
+  end
+
+  function M.half(port, pane)
+    local entry = pane_entry(port, pane)
+    return entry and entry.half or 1
+  end
+
+  -- What a pane shows, as "<pane>:<page>:<side>:<half>": a press record
+  -- keeps it to know whether its pane still shows what it was pressed on
+  function M.view(port, pane)
+    pane = pane or 1
+    return pane .. ":" .. M.page(port, pane) .. ":" .. M.side(port, pane) .. ":" .. M.half(port, pane)
+  end
+
+  -- A change of what a pane shows ends what the pane's keys were pressed
+  -- to do (M.end_pane_keys, below)
+  local function set_pane(port, pane, page, side, half)
+    if page ~= M.page(port, pane) or side ~= M.side(port, pane) or half ~= M.half(port, pane) then
+      M.end_pane_keys(port, pane)
+    end
+    S.grid_panes[port] = S.grid_panes[port] or {}
+    S.grid_panes[port][pane] = {page = page, side = side, half = half}
+  end
+
+  -- Show a page on a pane (pane and side default to 1). Refused: a port
+  -- that is no grid port, a page outside 1..GRID_PAGES.count, a pane the
+  -- grid has not (1 with no grid), a side the page has not (1 for a page
+  -- with no record). A page with no record is accepted and drawn dark. A
+  -- change of page or side ends what the pane's keys were pressed to do;
+  -- the other pane's keys and the strips' are left alone
+  function M.set_page(port, page, pane, side)
+    pane, side = pane or 1, side or 1
     if not grid_port_number(port) then return end
     if not whole_number_in(page, 1, MAX_GRID_PAGES) then return end
-    if page ~= M.page(port) then
-      M.end_port_step_gestures(port)
-      M.end_port_holds(port)
-    end
-    S.grid_pages[port] = page
+    if not whole_number_in(pane, 1, pane_count(port)) then return end
+    local record = S.registry.grid_pages[page]
+    if not whole_number_in(side, 1, record and record.sides or 1) then return end
+    set_pane(port, pane, page, side, M.half(port, pane))
   end
 
-  -- Whether any connected grid shows the page (redraw only when one does)
-  function M.any_page(page)
+  -- Show a half (1 or 2) of a pane: the 64's chooser. A change ends the
+  -- pane's keys
+  function M.set_half(port, pane, half)
+    pane = pane or 1
+    if not grid_port_number(port) then return end
+    if not whole_number_in(pane, 1, pane_count(port)) or not whole_number_in(half, 1, MAX_HALVES) then return end
+    set_pane(port, pane, M.page(port, pane), M.side(port, pane), half)
+  end
+
+  -- Whether any pane of any connected grid shows the page (and the side,
+  -- when given): redraw only when one does
+  function M.any_page(page, side)
     for port, grid_port in pairs(S.grids) do
-      if grid_port.device and M.page(port) == page then return true end
+      local layout = grid_port.device and M.layout_of(port)
+      for pane = 1, layout and layout.panes or 0 do
+        if M.page(port, pane) == page and (side == nil or M.side(port, pane) == side) then return true end
+      end
     end
     return false
   end
@@ -217,8 +273,8 @@ return function(S)
     close_step_editor_of(port, x, y)
   end
 
-  -- Cancel every pending hold of a port and forget its keys' roles: a page
-  -- change (set_page) and forget_port. The keys stay held
+  -- Cancel every pending hold of a port and forget its keys' roles:
+  -- forget_port. The keys stay held
   function M.end_port_holds(port)
     for _, rows in pairs(hold_clocks[port] or {}) do
       for _, clock_id in pairs(rows) do clock.cancel(clock_id) end
@@ -242,9 +298,33 @@ return function(S)
     return role ~= nil and key_value(key_roles, port, x, y) == role
   end
 
+  -- End what the keys of one pane of a port were pressed to do (a page,
+  -- side or half change, the 64's chooser opening): for each key the
+  -- layout puts in that pane (pane_at), its step gesture ends (it toggles
+  -- nothing at its release, takes no level and closes a step editor it
+  -- opened), its pending hold is canceled and its role forgotten. The keys
+  -- stay held; a strip key (pane_at nil) and the other pane's are never
+  -- touched, so fill, a tempo repeat and NV go on
+  function M.end_pane_keys(port, pane)
+    local layout = M.layout_of(port)
+    if layout == nil or layout.pane_at == nil then return end
+    local function each_key(tables, fn)
+      local keys = {}
+      for x, rows in pairs(tables[port] or {}) do
+        for y in pairs(rows) do
+          if layout.pane_at(x, y) == pane then keys[#keys + 1] = {x, y} end
+        end
+      end
+      for _, key in ipairs(keys) do fn(key[1], key[2]) end
+    end
+    each_key(step_keys, function(x, y) drop_step_key(port, x, y) end)
+    each_key(hold_clocks, function(x, y) cancel_hold(port, x, y) end)
+    each_key(key_roles, function(x, y) set_key_value(key_roles, port, x, y, nil) end)
+  end
+
   -- Forget a port's keys: pending holds (canceled), held, consumed and step
   -- keys (a step editor one of them opened closes), their roles, its layout
-  -- state and its page
+  -- state and its panes
   local function forget_port(port)
     local key = step_editor.key
     if key and key.port == port then close_step_editor_of(port, key.x, key.y) end
@@ -253,7 +333,7 @@ return function(S)
     consumed_keys[port] = nil
     step_keys[port] = nil
     port_states[port] = nil
-    S.grid_pages[port] = nil
+    S.grid_panes[port] = nil
   end
 
   local function press_key(port, x, y)
@@ -371,8 +451,7 @@ return function(S)
   end
 
   -- End the step gesture on every step key held on one port, whatever the
-  -- voice: a page change and a 64's half switch call it, so a step held on
-  -- the page or half no longer shown never takes a level, never toggles at
+  -- voice and pane, so a step held never takes a level, never toggles at
   -- its release and closes a step editor it opened. The keys stay held. A
   -- port that is neither 1..S.MAX_GRID_PORTS nor a virtual one does nothing
   function M.end_port_step_gestures(port)
@@ -381,15 +460,6 @@ return function(S)
       for key_y in pairs(rows) do drop_step_key(port, key_x, key_y) end
     end
     step_keys[port] = nil
-  end
-
-  -- A scene save key: saves once held GRID_HOLD.scene_save_seconds (layouts
-  -- light it at 15 while hold_pending)
-  function M.scene_save_key(port, x, y, z, scene_num)
-    if z ~= 1 then return end
-    M.on_hold(port, x, y, GRID_HOLD.scene_save_seconds, function()
-      S.lib.scenes.save(scene_num)
-    end)
   end
 
   -- The key levels every layout shares (S.constants.GRID_LEVELS, #526): a
@@ -459,10 +529,9 @@ return function(S)
   -- (#452): a recall key 8 for a saved scene, 2 for an empty slot, 10 for
   -- the slot the running sequencer recalls next (#303), 15 for the current
   -- scene, which wins (S.lib.scenes.shows_current: the scene a fade goes to
-  -- blinks, #254); a fade key 6 saved, 2 empty; a save key 15 while its
-  -- hold is pending, 4 otherwise. A slot outside 1..NUM_SCENES is 0
-  local SCENE_LEVELS = {saved = 8, empty = 2, next = 10, current = 15, fade_saved = 6,
-    save_pending = 15, save_idle = 4}
+  -- blinks, #254); a fade key 6 saved, 2 empty. A slot outside
+  -- 1..NUM_SCENES is 0
+  local SCENE_LEVELS = {saved = 8, empty = 2, next = 10, current = 15, fade_saved = 6}
 
   function M.scene_recall_level(slot)
     if not whole_number_in(slot, 1, S.constants.NUM_SCENES) then return 0 end
@@ -474,11 +543,6 @@ return function(S)
   function M.scene_fade_level(slot)
     if not whole_number_in(slot, 1, S.constants.NUM_SCENES) then return 0 end
     return S.scenes[slot].populated and SCENE_LEVELS.fade_saved or SCENE_LEVELS.empty
-  end
-
-  -- The save key at (x, y) on the port
-  function M.scene_save_level(port, x, y)
-    return M.hold_pending(port, x, y) and SCENE_LEVELS.save_pending or SCENE_LEVELS.save_idle
   end
 
   local function valid_source(voice_idx, option)
@@ -539,37 +603,19 @@ return function(S)
     return nil
   end
 
-  -- The layout record of the grid connected to a port ({key, redraw,
-  -- fx_faders_page?, selects_grid_voice?, rows_show_grid_voice?,
-  -- shows_modulation?}: docs/notes/lua/grid-core.md), or nil (no grid, or a
-  -- size with no layout)
+  -- The layout record of the grid connected to a port (S.lib.grid_pane's
+  -- arrange record, {key, redraw, panes, pane_at, start_pages}:
+  -- docs/notes/lua/grid/pane.md), or nil (no grid, or a size with no
+  -- layout)
   function M.layout_of(port)
     local grid_port = S.grids[port]
     return grid_port and S.registry.grid_layouts[grid_layout(grid_port)] or nil
   end
 
-  -- Whether a connected grid shows the FX faders now: its layout record's
-  -- fx_faders_page (the 256's page 4; the other layouts have none) is the
-  -- port's page. The FX params' actions redraw the grids only then
+  -- Whether a pane of a connected grid shows the FX page: the FX params'
+  -- actions redraw the grids only then
   function M.any_fx_faders()
-    for port, grid_port in pairs(S.grids) do
-      local layout = grid_port.device and S.registry.grid_layouts[grid_layout(grid_port)]
-      if layout and layout.fx_faders_page == M.page(port) then return true end
-    end
-    return false
-  end
-
-  -- Whether a connected grid shows the macro faders or the morph now (3.4):
-  -- its layout record's shows_modulation(port) says so (the 256's pages 1
-  -- and 3, the 16x8's and 8x16's faders page on a bank and their scenes
-  -- page; the 64 has none). The drift tick follows them only then
-  -- (S.lib.grid_faders.follow_faders)
-  function M.any_modulation_shown()
-    for port, grid_port in pairs(S.grids) do
-      local layout = grid_port.device and S.registry.grid_layouts[grid_layout(grid_port)]
-      if layout and layout.shows_modulation and layout.shows_modulation(port) then return true end
-    end
-    return false
+    return M.any_page(GRID_PAGES.fx)
   end
 
   -- Per attached port, the device its vport held when attached (reconcile_ports)
@@ -716,7 +762,7 @@ return function(S)
 
   -- Hot-plug. norns passes the raw device here; store its port's vport (as
   -- grid_init does) rather than the device, which has no .device field.
-  -- A grid plugged in starts with no held keys, on page 1. Both handlers
+  -- A grid plugged in starts with no held keys, on its start pages. Both handlers
   -- go on norns' own module (norns_grid), which its hot-plug calls
   local function grid_added(device)
     local port = device.port
