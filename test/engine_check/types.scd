@@ -458,7 +458,8 @@ server.sync;
             run.(\setVoiceType, voice, voice);
             server.sync; (target.switchCutTime + 0.1).wait;
         };
-        var old, waited, units, now, held;
+        var old, waited, units, now, held, tracked = 0, onServer = 0;
+        var bound = { tracked = max(tracked, trackedVoiceSynths.(target, voice)) };
 
         // "types: a second switch under the freeze replaces the first"
         old = freezeSpectral.value;
@@ -507,21 +508,30 @@ server.sync;
 
         // voiceOff then voiceOn under the freeze: the start is the type's
         // def and the releasing Resonator is cut (gateVoice's rule); the
-        // unfreeze then has nothing to apply
+        // unfreeze then has nothing to apply. The voice holds two voice
+        // synths at most (the new and the cut), counted after each command
+        // (tracked) and synced after each (on the server, the extra notes'
+        // synths left out: there are none here)
         old = freezeSpectral.value;
+        tracked = 0; onServer = 0;
         run.(\setVoiceType, voice, 1);
+        bound.value;
         waited = target.synths[key] === old;
         run.(\voiceOff, voice);
-        server.sync;
+        bound.value;
+        server.sync; onServer = max(onServer, serverVoiceSynths.(target, voice));
         run.(\voiceOn, voice, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+        bound.value;
         now = target.synths[key];
         held = target.cuttingSynths[voice].includes(old);
+        server.sync; onServer = max(onServer, serverVoiceSynths.(target, voice));
         units = h.wireUnits({ run.(\setGrainParam, voice, \freeze, 0.0) });
-        server.sync;
+        bound.value;
+        server.sync; onServer = max(onServer, serverVoiceSynths.(target, voice));
         check.(waited and: { now.notNil } and: { now.defName.asSymbol == \strataFM } and: { held }
-            and: { kills.(units) == 0 } and: { target.synths[key] === now },
-            "types: a waiting switch is applied whatever ends the freeze (voiceOff then voiceOn: waited %, then %, the Resonator cut %, % cut at the unfreeze)".format(
-                waited, now !? { now.defName }, held, kills.(units)));
+            and: { kills.(units) == 0 } and: { target.synths[key] === now } and: { tracked <= 2 } and: { onServer <= 2 },
+            "types: a waiting switch is applied whatever ends the freeze (voiceOff then voiceOn: waited %, then %, the Resonator cut %, % cut at the unfreeze, voice synths at most % tracked and % on the server)".format(
+                waited, now !? { now.defName }, held, kills.(units), tracked, onServer));
         settle.value;
 
         // freezeMode 0 while frozen: the voice freezes again in hold
@@ -540,6 +550,60 @@ server.sync;
                 waited, now !? { now.defName }, target.areaState[\freeze][\frozen][voice], target.areaState[\freeze][\mode][voice],
                 target.ringWriterFor(voice) !? { arg writer; writer.defName }));
         settle.value;
+
+        // "types: a held chord's voice synth notes wait with the switch and
+        // move to the new def at the unfreeze" (0c's chord check, under the
+        // freeze): three extra notes held before the spectral freeze are
+        // voice synths of the Resonator (a freeze changes no note on its
+        // own; Lua cuts them, the engine does not). Through the wait each
+        // keeps its node and its def; the unfreeze restarts the three on FM
+        // at their kept freq (restartVoiceNotes, in switchVoiceType), each
+        // start in the unfreeze's one bundle with the voice synth's FM start
+        // and the kills of the Resonator and of the three old notes, which
+        // are cutting
+        {
+            var slots = [1, 2, 3], record = { arg slot; target.noteRecord(voice, slot) };
+            var notesBefore, notesDuring, notesAfter, records, freqs, noteUnits, bundledChord, fmVoice, held;
+            run.(\setGrainSource, voice, 0);
+            run.(\setGrainParam, voice, \freezeMode, 1.0);
+            run.(\voiceOn, voice, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+            run.(\setNotePool, target.notePoolMax);
+            slots.do({ arg slot;
+                run.(\noteExpression, voice, slot, 1.0, 1.0, 0.0, 0.0, 0.0);
+                run.(\noteOn, voice, slot, 60.0 + slot, 220.0 + (slot * 55), 1.0, 1.0);
+            });
+            server.sync; 0.3.wait;
+            run.(\setGrainParam, voice, \freeze, 1.0);
+            server.sync;
+            held = target.synths[key];
+            notesBefore = slots.collect({ arg slot; record.(slot)[\synth] });
+            run.(\setVoiceType, voice, 1);
+            server.sync; 0.1.wait;
+            notesDuring = slots.collect({ arg slot; record.(slot)[\synth] });
+            noteUnits = h.wireUnits({ run.(\setGrainParam, voice, \freeze, 0.0) });
+            fmVoice = target.synths[key];
+            notesAfter = slots.collect({ arg slot; record.(slot)[\synth] });
+            records = slots.collect({ arg slot; [record.(slot)[\state], record.(slot)[\cutting] === notesBefore[slot - 1]] });
+            bundledChord = noteUnits.any({ arg unit;
+                unit.any({ arg msg; isStartOf.(msg, fmVoice) }) and: { unit.any({ arg msg; isKillOf.(msg, held) }) }
+                    and: { notesAfter.every({ arg synth; unit.any({ arg msg; isStartOf.(msg, synth) }) }) }
+                    and: { notesBefore.every({ arg synth; unit.any({ arg msg; isKillOf.(msg, synth) }) }) } });
+            server.sync;
+            freqs = notesAfter.collect({ arg synth; synth !? { h.getControl(synth, \freq) } });
+            check.((target.synths[key] === fmVoice) and: { held !== fmVoice }
+                and: { notesBefore.every({ arg synth; synth.notNil and: { synth.defName.asSymbol == \strataResonator } }) }
+                and: { [notesBefore, notesDuring].flop.every({ arg pair; pair[0] === pair[1] }) }
+                and: { fmVoice.notNil } and: { fmVoice.defName.asSymbol == \strataFM }
+                and: { slots.every({ arg slot; var synth = notesAfter[slot - 1];
+                    synth.notNil and: { synth !== notesBefore[slot - 1] } and: { synth.defName.asSymbol == \strataFM }
+                        and: { records[slot - 1] == [\live, true] } and: { ((freqs[slot - 1] ? 0) - (220.0 + (slot * 55))).abs < 0.001 } }) }
+                and: { bundledChord },
+                "types: a held chord's voice synth notes wait with the switch and move to the new def at the unfreeze (kept through the wait %, [state, old cutting] %, defs %, freqs %, one bundle with the voice synth's switch %)".format(
+                    [notesBefore, notesDuring].flop.every({ arg pair; pair[0] === pair[1] }), records,
+                    notesAfter.collect({ arg synth; synth !? { synth.defName } }), freqs, bundledChord));
+            settle.value;
+            run.(\setNotePool, 0);
+        }.value;
     };
     var root = h.tempDir +/+ "types-high/", write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
     var other;
