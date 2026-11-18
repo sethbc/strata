@@ -4319,4 +4319,29 @@ test("a step naming a slice that does not exist plays as a plain step", function
   pattern_clock_stop()
 end)
 
+
+-- 3.8 (design §6.1, ruling 40): a degree is a tone of the tuning
+test("degrees walk a tuning's tones", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local seq, tuning = S.lib.sequencer, S.lib.tuning
+  local function use(name)
+    for _, entry in ipairs(tuning.built_ins()) do
+      if entry.name == name then tuning.select(entry) end
+    end
+  end
+  use("ji normal")
+  params:set("scale", 2); params:set("root", 1)
+  assert_equal(params:string("scale"), "Major", "the major scale")
+  params:set("v1_freq", 440 * 2 ^ (-9 / 12))  -- middle C
+  assert_near(seq.degree_semitones(1, 2), 3.863137, 1e-4, "ji normal, C major: degree 2 is the just third")
+  assert_near(seq.degree_semitones(1, 1), 2.039100, 1e-4, "degree 1 the just whole tone")
+  params:set("scale", 1)
+  use("19 equal")
+  params:set("v1_freq", 440 * 2 ^ (-8.7 / 12))  -- a voice between two tones
+  assert_near(seq.degree_semitones(1, 1), 12 / 19, 1e-6, "19 equal, scale off: one step from the voice's own pitch")
+  assert_near(seq.degree_semitones(1, -3), -36 / 19, 1e-6, "and three down")
+end)
+
 end

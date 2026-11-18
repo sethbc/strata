@@ -1092,6 +1092,26 @@ local PARAM_FIXTURE_ALLOWED = {
   {kind = "added", id = "v<v>_pan_wander", after = "v<v>_grain_overlap", why = "1c: the pan wander (design §4.5)",
     record = {t = 3, name = "pan wander", default = 50, min = 0, max = 100, warp = "lin", step = 1,
       quantum = 0.01, units = "%", string = "50 %"}},
+  -- 1e: the tuning (design §6.3, §6.4): scale gains custom at its end, the
+  -- custom scale's mask and the tuning's two text params (t 1 a number, 8
+  -- a text) join the scale's params, before every voice
+  {kind = "options", id = "scale", why = "1e: custom, the scale held as a mask, appended (design section 6.3)",
+    options = (function()
+      local options = {}
+      for _, record in ipairs(dofile(h.repo_root .. "/test/fixtures/3.7.0-params.lua")) do
+        if record.id == "scale" then
+          for index, name in ipairs(record.options) do options[index] = name end
+        end
+      end
+      options[#options + 1] = "custom"
+      return options
+    end)()},
+  {kind = "added", id = "scale_mask", after = "root", why = "1e: the custom scale's mask (design section 6.3)",
+    record = {t = 1, name = "scale mask", default = 4095, min = 1, max = 4095}},
+  {kind = "added", id = "tuning_name", after = "scale_mask", why = "1e: the tuning's name (design section 6.4)",
+    record = {t = 8, name = "tuning", default = "12 equal"}},
+  {kind = "added", id = "tuning_tones", after = "tuning_name", why = "1e: the tuning's tones (design section 6.4)",
+    record = {t = 8, name = "tuning tones", default = "1200 0 100 200 300 400 500 600 700 800 900 1000 1100"}},
 }
 -- 2b: an LFO's destination is its home routing in the matrix (design §4);
 -- its six LFOs' entries follow the list (an LFO is no voice token)

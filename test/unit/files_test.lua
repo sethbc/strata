@@ -265,4 +265,16 @@ test("filling eight free slots writes buffers.data once (#566)", function()
   assert_equal(count, 1, "one write for eight loads")
 end)
 
+-- 3.8: the lister is exported for the tunings folder (lib/tuning.lua)
+test("files_of lists a folder's files of the given extensions, any case, never folders or dot files", function()
+  local context = load_strata()
+  local files = local_value("lib").files
+  local folder = make_folder(context, "listed", { "a.scl", "B.SCL", ".hidden.scl", "c.txt", "d.scl/", "e.wav" })
+  local function sorted(names) table.sort(names); return table.concat(names, ",") end
+  assert_equal(sorted(files.files_of(folder, { scl = true })), "B.SCL,a.scl", "the two .scl files")
+  assert_equal(sorted(files.files_of(folder, { wav = true, txt = true })), "c.txt,e.wav", "or any set")
+  assert_equal(files.files_of(folder .. "missing/", { scl = true }), nil, "a missing folder lists nothing")
+  assert_true(#files.list_folder(folder) >= 5, "list_folder gives every name")
+end)
+
 end

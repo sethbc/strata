@@ -421,27 +421,20 @@ return function(S)
   local function voice_pitch_note(voice_idx) return value_note(voice_idx, params:get(note_param(voice_idx))) end
 
   -- The semitones from the voice's pitch to its k-th tone above (below, for
-  -- a negative k) among the global scale's tones, the root included; 0 for
-  -- degree 0. On the chromatic scale (the scale off) every semitone is a
-  -- tone, counted from the voice's own pitch: k semitones, so a voice
-  -- tuned between two notes keeps its tuning
+  -- a negative k) among the tuning's allowed tones (S.lib.tuning: the
+  -- scale's in twelve tones to an octave, every tone otherwise), the root
+  -- included; 0 for degree 0. Where the allowed tones are an equal division
+  -- (the scale off in twelve equal steps, 19 equal, ...) a degree is k
+  -- steps from the voice's own pitch, so a voice tuned between two tones
+  -- keeps its tuning (3.8 ruling 40)
   function M.degree_semitones(voice_idx, k)
     if not valid_voice(voice_idx) or not whole_between(k, -SEQ.max_degree, SEQ.max_degree) then return nil end
-    local mask, root = S.lib.variation.scale_mask(), S.lib.variation.root()
-    if k == 0 or mask == SEQ.chromatic_mask then return k end
+    if k == 0 then return 0 end
+    local tuning = S.lib.tuning
+    local step = tuning.equal_step()
+    if step then return k * step end
     local pitch = voice_pitch_note(voice_idx)
-    local direction = k > 0 and 1 or -1
-    local tone = k > 0 and math.floor(pitch + SEQ.tone_tolerance) or math.ceil(pitch - SEQ.tone_tolerance)
-    local found = 0
-    -- a scale holds its root, so at most an octave passes between two tones
-    for _ = 1, SEQ.semitones * (math.abs(k) + 1) do
-      tone = tone + direction
-      if math.floor(mask / 2 ^ ((tone - root) % SEQ.semitones)) % 2 == 1 then
-        found = found + 1
-        if found == math.abs(k) then return tone - pitch end
-      end
-    end
-    return nil
+    return tuning.step(pitch, k) - pitch
   end
 
   -- The voices output (design 8.3) ---------------------------------------

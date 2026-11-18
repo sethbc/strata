@@ -16,7 +16,7 @@ var engine = h.engine, server = h.server;
 var check = { arg condition, message; h.check(condition, message) };
 var command = { arg name ... args; h.command(name, *args) };
 var probeGroup, quietBus, nowBus, readOut, rectEnv, timecode, logRates, logDurs, logEnds, grainLog, startTimecodeVoice;
-var grains, rates, semitones, majorMask = 2741, majorOffsets, before, after, state, bufferOffsets;
+var grains, rates, semitones, majorMask = 2741, majorOffsets;
 var rampPath, rampFile, rampFrames, scaleNote, leftPath, peakBus, peakProbe, levels, ratioDb, logFrames = 256, sentinel = -1000;
 var varyControls = [\reverseProb, \pitchJitter, \panJitter, \sizeJitter, \intervalCount, \intervalProb, \quantize,
     \scaleNote] ++ (1..8).collect({ arg index; ("interval" ++ index).asSymbol });
@@ -100,31 +100,9 @@ h.grainDefs.do({ arg name;
     check.(unused.isEmpty, "variation: the variation controls feed a UGen in % (unused: %)".format(name, unused));
 });
 
-state = engine.areaState[\scale];
-bufferOffsets = {
-    var condition = Condition(false), values;
-    engine.scaleBuffer.loadToFloatArray(action: { arg array; values = array; condition.test = true; condition.signal });
-    h.awaitReply(condition);
-    values.asArray.collect(_.asInteger)
-};
-check.((engine.scaleBuffer.numFrames == 12) and: { engine.scaleRootAndMask == [0, 4095] }
-    and: { bufferOffsets.value == Array.fill(12, 0) },
-    "variation: the scale buffer has 12 frames and starts chromatic (root 0, mask 4095, every offset 0)");
-// C major: C# D# F# G# A# go down to C D F G A (a tie goes down)
+// C major's offset per pitch class to its nearest tone (0 for a tone): the
+// grain checks below read it. The tuning table's own checks are tuning.scd's
 majorOffsets = [0, -1, 0, -1, 0, 0, -1, 0, -1, 0, -1, 0];
-command.(\setScale, 0, majorMask); server.sync;
-check.(bufferOffsets.value == majorOffsets, "variation: setScale(0, C major) fills the offsets to the nearest tone (got %)"
-    .format(bufferOffsets.value));
-// D major (C# D E F# G A B): C is a tie between B and C#, so -1
-command.(\setScale, 2, majorMask); server.sync;
-check.(bufferOffsets.value == [-1, 0, 0, -1, 0, -1, 0, 0, -1, 0, -1, 0],
-    "variation: the mask is from the root (D major; got %)".format(bufferOffsets.value));
-before = [engine.scaleRootAndMask, bufferOffsets.value];
-[[12, majorMask], [-1, majorMask], [0, 0], [0, 4096], [0, -5]].do({ arg pair; command.(\setScale, pair[0], pair[1]) });
-server.sync;
-after = [engine.scaleRootAndMask, bufferOffsets.value];
-check.(after == before, "variation: setScale ignores a bad root or mask (kept %)".format(after[0]));
-command.(\setScale, 0, 4095); server.sync;
 
 // ---- Grain rates and lengths (voice 1 on the timecode) ----
 timecode = Synth(\strataCheckVariationTimecode, [\out, engine.granBuses[0], \now, nowBus], engine.voiceGroup, \addToHead);

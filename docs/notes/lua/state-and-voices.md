@@ -61,6 +61,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 30 | watch the norns menu opening (`watch_menu_opening`) | `lib/ui/menu_watch.lua` |
 | 40 | create and start the drift metro (`S.drift_metro`, 0.1 s, `drift_update`) | `lib/mutation.lua` |
 | 50 | create the mutation metro (`S.mutation_metro`, `mutation_rate`, `gentle_mutate`); the `mutation_enabled` param starts it | `lib/mutation.lua` |
+| 55 | make the tunings folder, data/strata/tunings/ (`START_ORDER.tuning`); nothing is sent: the engine starts in the default tuning (3.8) | `lib/tuning.lua` |
 | 60 | set and start the `bufferState`, `bufferLoadFailed` and `bufferSaveResult` polls (`S.buffer_polls`) | `lib/buffers.lua` |
 | 61 | read the files' settings from data/strata/samples.data (`START_ORDER.samples_load`, before the buffers' restore; a missing file gives none, one it cannot use is set aside as `samples.data.bak` with a console line and gives none) (3.7) | `lib/samples.lua` |
 | 62 | set and start the input level polls `amp_in_l` and `amp_in_r` (`START_ORDER.input_level`; a poll a norns lacks is skipped) (3.4) | `lib/input_level.lua` |
@@ -262,6 +263,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 | `lib/history.lua` | `history` | `docs/notes/lua/history.md` | history_test.lua |
 | `lib/freeze.lua` | `freeze` | `docs/notes/lua/freeze.md` | freeze_test.lua |
 | `lib/loops.lua` | `loops` | `docs/notes/lua/loops.md` | loops_test.lua |
+| `lib/tuning.lua` | `tuning` | `docs/notes/lua/tuning.md` | tuning_test.lua |
 | `lib/variation.lua` | `variation` | `docs/notes/lua/variation.md` | variation_test.lua |
 | `lib/voice_mix.lua` | `voice_mix` | `docs/notes/lua/voice-mix.md` | voice_mix_test.lua |
 | `lib/performance.lua` | `performance` | `docs/notes/lua/performance.md` | performance_test.lua |

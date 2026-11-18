@@ -135,7 +135,19 @@ return function(S)
   -- order: record_params, the id of every param the records add (Strata's
   -- own, never norns' system params), and number_params, those of them that
   -- are number params
-  local pset = {number_params = {}, record_params = {}}
+  -- text_defaults: a text param's text for a PSET with no line for it, by
+  -- id (M.set_text_default; 3.8)
+  local pset = {number_params = {}, record_params = {}, text_defaults = {}}
+
+  -- The text a PSET read gives text param id when the file has no line for
+  -- it (3.8: tuning_name and tuning_tones, lib/tuning.lua); a text param
+  -- without one keeps its text, as before
+  function M.set_text_default(id, text)
+    if type(id) ~= "string" or type(text) ~= "string" then
+      error("params_setup.set_text_default: id and text are strings", 2)
+    end
+    pset.text_defaults[id] = text
+  end
 
   -- A number param's value made whole in its action, before it is stored
   -- or reaches the engine (#554): norns' params:read sets each PSET line
@@ -190,9 +202,11 @@ return function(S)
   -- (control, number, option, taper, a binary that is not a trigger; a
   -- control made without a default, the value it starts at); nil for a
   -- param norns never saves (save off, a trigger, a separator or a group)
-  -- and for a file or text param, which has none
+  -- and for a file or text param, which has none, but a text param given
+  -- one with M.set_text_default (3.8: the tuning's two)
   function pset.default(param)
     if param.save == false then return nil end
+    if param.t == params.tTEXT then return pset.text_defaults[param.id] end
     if param.t == params.tCONTROL then
       local spec = param.controlspec
       if spec.default ~= nil then return spec.default end
