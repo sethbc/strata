@@ -255,16 +255,18 @@ check.(h.formatOf(\setVoiceType) == "ii", "types: setVoiceType is \"ii\" (%)".fo
 // paused, never replaced; freeze stays 1, kept and on the voice's ring
 // grain synth on the server; the synth path's RMS over the second after
 // the switch is within 1 dB of the second before; an FM voice synth runs
-// and the Resonator is cutting; the stream notes keep their nodes. On a
-// high engine the same with freezeMode 1 (spectral): the spectral writer
-// is the same node, and the held sound goes on within a wider band (the
-// edges beside the hold limit, below), each second measured where the
-// grains play only held audio: from spectralSettleSeconds after the
-// freeze (the frozen grains start grainMaxSeconds back, in the voice's
-// live audio from before it) and from spectralReachSeconds after the
-// switch (until then they play what the ring held before it). PV_MagFreeze
-// holds the magnitudes and takes the phases from the voice bus, so the new
-// type's voice synth sets the held spectrum's phases. The grains
+// and the Resonator is cutting (a hold switches at once); the stream notes
+// keep their nodes. On a high engine the same with freezeMode 1 (spectral):
+// the spectral writer is the same node, and the switch waits for the
+// unfreeze (PV_MagFreeze holds the magnitudes and takes the phases from the
+// voice bus, so a new voice synth would set the held spectrum's phases):
+// the Resonator keeps running and the held sound stays within the band of
+// a freeze with no switch (the edges beside the hold limit, below), each
+// second measured where the grains play only held audio: from
+// spectralSettleSeconds after the freeze (the frozen grains start
+// grainMaxSeconds back, in the voice's live audio from before it) and from
+// spectralReachSeconds after the switch. The unfreeze then makes the
+// switch, in its own bundle. The grains
 // read the held ring at one place and pan (posSpread and panSpread 0), so
 // the held sound repeats and two seconds of it match: with the spreads at
 // their 0.5 a hold's own level moved -1.27 to +0.5 dB between the seconds
@@ -277,27 +279,45 @@ SynthDef(\strataCheckTypesWindowRms, { arg in, out, t_reset = 0;
 server.sync;
 {
     // The hold case's limit (dB, either way), and the spectral case's band
-    // (dB, the held second after the switch against the held second
-    // before; docs/notes/engine/types.md, #798). With the switch it read
-    // -7.67 to +0.10 dB on 3.14.1 (sd 1.78, n 62) and -7.87 to +0.20 on
-    // 3.13 (sd 1.97, n 50), and -9.22 at worst in earlier runs. The switch
-    // lowers the held level: the new voice synth's partials set the held
-    // bins' phases and the overlapping frames partly cancel (any type, a
-    // spread of several dB; a silent new voice, the dither's phases alone,
-    // costs about 1 dB). With none the same windows moved -1.00 to +0.77 dB.
-    // The edges are three standard deviations (the larger, 1.97) past the
-    // worst figure each way, rounded out to the half decibel: -9.22 - 5.91 =
-    // -15.13, so -15.5; +0.28 + 5.91 = +6.19, so +6.5. The freeze's own
-    // spread never fails them,
-    // while silence (the level x 0.1 reads -20 to -29 dB) or a held spectrum
-    // that runs away (x 10: +11 to +20 dB) does. A hold lost to the live
-    // voice read +0.8 to +13.0 dB, often inside the band: the ring check
-    // is what catches it (the writer replaced, freeze 0)
-    var holdLimitDb = 1, spectralLowDb = -15.5, spectralHighDb = 6.5;
+    // (dB, the held second after the waiting switch against the held second
+    // before; docs/notes/engine/types.md, #798). The waiting switch leaves
+    // the voice synth alone, so the level moves as with no switch: -1.00 to
+    // +0.77 dB in X6's runs (sd 0.37 on 3.14.1, n 32; 0.28 on 3.13, n 30),
+    // and across the waiting switch -0.60 to +0.73 on 3.14.1 (sd 0.31, n 30)
+    // and -0.77 to +0.90 on 3.13 (sd 0.42, n 20). The edges are three
+    // standard deviations (the larger, 0.42) past the worst figure each way,
+    // rounded out to the tenth: -1.00 - 1.26 = -2.26, so -2.3; +0.90 + 1.26
+    // = +2.16, so +2.2. A switch made at once read -7.67 to +0.10 dB on
+    // 3.14.1 (mean -2.36) and -7.87 to +0.20 on 3.13 (mean -2.57): the wait
+    // check, not the band, is what fails it. Silence (the level x 0.1 reads
+    // -20 to -29 dB) and a held spectrum that runs away (x 10: +11 to +20
+    // dB) fail the band. A hold lost to the live voice read +0.8 to +13.0
+    // dB: the ring check is what catches it (the writer replaced, freeze 0)
+    var holdLimitDb = 1, spectralLowDb = -2.3, spectralHighDb = 2.2;
     var spectralSettleSeconds = 0.7, spectralReachSeconds = 0.6;
+    // An FM key sent under a waiting switch (FM's own index, not its default
+    // 2 and not a control of the Resonator): kept for the FM synth the
+    // unfreeze starts
+    var waitingIndex = 3.7;
+    // The voice synths a voice holds, tracked (live, releasing, fading and
+    // cutting) and on the server (its voice bus as out, the extra notes'
+    // synths left out: they write the voice bus too)
+    var trackedVoiceSynths = { arg target, voice;
+        var held = IdentitySet.new, key = target.voiceKey(voice);
+        [target.synths, target.releasingSynths[voice]].do({ arg dict; dict[key] !? { arg synth; held.add(synth) } });
+        held.addAll(target.fadingSynths[voice]); held.addAll(target.cuttingSynths[voice]);
+        held.count({ arg synth; isVoiceDef.(synth.defName) })
+    };
+    var serverVoiceSynths = { arg target, voice;
+        var notes = (1 .. (target.noteSlots - 1)).collect({ arg slot; var record = target.noteRecord(voice, slot);
+            [record[\synth], record[\cutting]].select(_.notNil).collect(_.nodeID) }).flatten;
+        h.synthTree(target.voiceGroup).count({ arg node; isVoiceDef.(node[\def]) and: { notes.includes(node[\id]).not }
+            and: { node[\controls][\out].asInteger == target.granBuses[voice].index } }) };
     var frozenSwitch = { arg target, mode, label;
         var run = { arg name ... args; h.commandTo(target, name, *args) };
         var voice = 0, writerBefore, writerAfter, phaseMoving, old, new, streams, streamsAfter, before, after, db, grainFreeze;
+        var waits = mode == 1, cuttingAtSwitch, oldCutAtSwitch, raised = 0, held = 0, onServer = 0, units, fm, cutting, bundled, gone, fmIndex, notesAfter;
+        var count = { held = max(held, trackedVoiceSynths.(target, voice)) };
         var meterBus = Bus.control(server, 1), meter, window, phaseBus = target.areaState[\rings][\phaseBuses][voice];
         // the grain spreads the voice keeps (nil: never sent), put back after
         var spreadKeys = [\posSpread, \panSpread], spreads = spreadKeys.collect({ arg key; target.grainControls[voice][key] });
@@ -325,6 +345,12 @@ server.sync;
         before = window.value;
         run.(\setVoiceType, voice, 1);
         new = target.synths[target.voiceKey(voice)];
+        cuttingAtSwitch = target.cuttingSynths[voice].size;
+        oldCutAtSwitch = target.cuttingSynths[voice].includes(old);
+        count.value;
+        // Lua's sync after a switch: the new type's keys, which the waiting
+        // voice synth lacks
+        if (waits) { try { run.(\setVoiceParam, voice, \index, waitingIndex) } { raised = raised + 1 }; count.value };
         if (mode == 1) { spectralReachSeconds.wait };
         after = window.value;
         writerAfter = target.ringWriterFor(voice);
@@ -347,14 +373,50 @@ server.sync;
                 target.tier, label, writerAfter === writerBefore, if (mode == 0) { "paused " ++ phaseMoving.not } { "spectral" },
                 target.grainControls[voice][\freeze], grainFreeze));
         check.((if (mode == 0) { db.abs <= holdLimitDb } { (db >= spectralLowDb) and: { db <= spectralHighDb } })
-            and: { before > 1e-4 } and: { new.notNil } and: { new.defName.asSymbol == \strataFM }
-            and: { target.cuttingSynths[voice].includes(old) or: { old.isPlaying.not } },
+            and: { before > 1e-4 } and: { new.notNil },
             "types: a frozen synth voice keeps its held sound across setVoiceType (% tier, %: synth path RMS % then %, % dB, %; new %)".format(
                 target.tier, label, before.round(0.00001), after.round(0.00001), db.round(0.01),
                 if (mode == 0) { "at most %".format(holdLimitDb) } { "% to %".format(spectralLowDb, spectralHighDb) }, new !? { new.defName }));
+        if (waits.not) {
+            check.((new !== old) and: { new.notNil } and: { new.defName.asSymbol == \strataFM }
+                and: { oldCutAtSwitch },
+                "types: a hold-frozen voice still switches at once (% tier: new %, the Resonator cutting %)".format(
+                    target.tier, new !? { new.defName }, oldCutAtSwitch));
+        } {
+            check.((new === old) and: { old.notNil } and: { old.defName.asSymbol == \strataResonator }
+                and: { target.voiceType(voice) == 1 } and: { target.voiceDefFor(voice) == \strataFM }
+                and: { cuttingAtSwitch == 0 } and: { raised == 0 } and: { old.isPlaying },
+                "types: a spectral-frozen voice's type switch waits for the unfreeze (% tier: type %, def %, the same Resonator %, % cutting, % raised)".format(
+                    target.tier, target.voiceType(voice), target.voiceDefFor(voice), new === old, cuttingAtSwitch, raised));
+        };
         check.((streamsAfter == streams) and: { streams.every({ arg each; (each[0] == \stream) and: { each[1].notNil } }) },
             "types: a frozen voice's stream notes keep their nodes across setVoiceType (% tier: %)".format(target.tier, streamsAfter));
         meter.free; meterBus.free;
+        // The unfreeze applies a waiting switch, in its own bundle: an FM
+        // voice synth with the index sent under the wait, the Resonator cut
+        // (kill 1 in the same bundle) and gone within switchCutTime and a
+        // margin, two voice synths at most throughout, and the stream notes
+        // restarted as FM voice synths (notesUnfrozen)
+        if (waits) {
+            units = h.wireUnits({ run.(\setGrainParam, voice, \freeze, 0.0) });
+            count.value;
+            fm = target.synths[target.voiceKey(voice)];
+            cutting = target.cuttingSynths[voice].includes(old);
+            bundled = units.any({ arg unit; unit.any({ arg msg; isStartOf.(msg, fm) }) and: { unit.any({ arg msg; isKillOf.(msg, old) }) } });
+            server.sync;
+            onServer = max(onServer, serverVoiceSynths.(target, voice));
+            fmIndex = fm !? { arg synth; h.getControl(synth, \index) };
+            notesAfter = [1, 2].collect({ arg slot; var record = target.noteRecord(voice, slot);
+                [record[\kind], record[\synth] !? { arg synth; synth.defName.asSymbol }] });
+            (target.switchCutTime + 0.1).wait; server.sync;
+            count.value; onServer = max(onServer, serverVoiceSynths.(target, voice));
+            gone = h.synthTree(target.voiceGroup).every({ arg node; node[\id] != old.nodeID });
+            check.(fm.notNil and: { fm !== old } and: { fm.defName.asSymbol == \strataFM } and: { cutting } and: { bundled } and: { gone }
+                and: { (fmIndex ? 0 - waitingIndex).abs < 0.001 } and: { held <= 2 } and: { onServer <= 2 }
+                and: { notesAfter.every({ arg each; each == [\voice, \strataFM] }) },
+                "types: a spectral-frozen voice's waiting switch is applied at the unfreeze (% tier: new %, the Resonator cutting % in the unfreeze's bundle % and gone %, index % (sent %), voice synths at most % tracked and % on the server, notes %)".format(
+                    target.tier, fm !? { fm.defName }, cutting, bundled, gone, fmIndex, waitingIndex, held, onServer, notesAfter));
+        };
         run.(\setGrainParam, voice, \freeze, 0.0);
         run.(\setGrainParam, voice, \freezeMode, 0.0);
         // the spreads put back: a kept value as it was, one never sent as
@@ -368,6 +430,117 @@ server.sync;
         run.(\setVoiceType, voice, voice);
         server.sync;
     };
+    // The waiting switch's other cases, on a high engine, voice 0 on the
+    // Resonator at 220 Hz frozen spectral: a second switch replaces the
+    // first, a switch back to the running type cancels the wait, and every
+    // path that ends the freeze applies it (a source switch away and back,
+    // voiceOff then voiceOn, freezeMode 0 while frozen). Each reads the
+    // Resonator still running just before what ends the freeze
+    var waitingSwitches = { arg target;
+        var run = { arg name ... args; h.commandTo(target, name, *args) };
+        var voice = 0, key = target.voiceKey(voice);
+        var kills = { arg units; units.flatten(1).count({ arg msg; ((msg[0] == 15) or: { msg[0] == '/n_set' })
+            and: { (2, 4 .. (msg.size - 2)).any({ arg index; (msg[index].asSymbol == \kill) and: { msg[index + 1] == 1 } }) } }) };
+        var starts = { arg units, def; units.flatten(1).count({ arg msg; ((msg[0] == 9) or: { msg[0] == '/s_new' }) and: { msg[1].asSymbol == def } }) };
+        var freezeSpectral = {
+            run.(\setGrainSource, voice, 0);
+            run.(\setGrainParam, voice, \freezeMode, 1.0);
+            run.(\voiceOn, voice, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+            server.sync; 0.3.wait;
+            run.(\setGrainParam, voice, \freeze, 1.0);
+            server.sync;
+            target.synths[key]
+        };
+        var settle = {
+            run.(\setGrainParam, voice, \freeze, 0.0);
+            run.(\setGrainParam, voice, \freezeMode, 0.0);
+            h.stopAllVoices(target);
+            run.(\setVoiceType, voice, voice);
+            server.sync; (target.switchCutTime + 0.1).wait;
+        };
+        var old, waited, units, now, held;
+
+        // "types: a second switch under the freeze replaces the first"
+        old = freezeSpectral.value;
+        run.(\setVoiceType, voice, 1);
+        run.(\setVoiceType, voice, 2);
+        waited = target.synths[key] === old;
+        units = h.wireUnits({ run.(\setGrainParam, voice, \freeze, 0.0) });
+        now = target.synths[key];
+        server.sync;
+        check.(waited and: { now.notNil } and: { now.defName.asSymbol == \strataFolder } and: { kills.(units) == 1 }
+            and: { target.cuttingSynths[voice].includes(old) } and: { starts.(units, \strataFM) == 0 },
+            "types: a second switch under the freeze replaces the first (waited %, then %, % cut, % FM starts)".format(
+                waited, now !? { now.defName }, kills.(units), starts.(units, \strataFM)));
+        settle.value;
+
+        // "types: a switch back to the running type under the freeze cancels
+        // the wait"
+        old = freezeSpectral.value;
+        run.(\setVoiceType, voice, 1);
+        run.(\setVoiceType, voice, 0);
+        waited = target.synths[key] === old;
+        units = h.wireUnits({ run.(\setGrainParam, voice, \freeze, 0.0) });
+        server.sync;
+        check.(waited and: { target.synths[key] === old } and: { old.isPlaying } and: { kills.(units) == 0 }
+            and: { target.cuttingSynths[voice].isEmpty } and: { target.voiceType(voice) == 0 },
+            "types: a switch back to the running type under the freeze cancels the wait (the same Resonator %, % cut, type %)".format(
+                target.synths[key] === old, kills.(units), target.voiceType(voice)));
+        settle.value;
+
+        // "types: a waiting switch is applied whatever ends the freeze": a
+        // source switch away (to slot 1: the Resonator fades, no voice synth
+        // starts) and back (the type's def starts, the freeze ended)
+        old = freezeSpectral.value;
+        run.(\setVoiceType, voice, 1);
+        waited = target.synths[key] === old;
+        run.(\setGrainSource, voice, 1);
+        held = target.synths[key];
+        run.(\setGrainSource, voice, 0);
+        now = target.synths[key];
+        server.sync;
+        check.(waited and: { held.isNil } and: { now.notNil } and: { now.defName.asSymbol == \strataFM }
+            and: { target.areaState[\freeze][\frozen][voice].not } and: { trackedVoiceSynths.(target, voice) <= 2 },
+            "types: a waiting switch is applied whatever ends the freeze (a source switch away and back: waited %, away %, back %, frozen %, % voice synths)".format(
+                waited, held !? { held.defName }, now !? { now.defName }, target.areaState[\freeze][\frozen][voice], trackedVoiceSynths.(target, voice)));
+        settle.value;
+
+        // voiceOff then voiceOn under the freeze: the start is the type's
+        // def and the releasing Resonator is cut (gateVoice's rule); the
+        // unfreeze then has nothing to apply
+        old = freezeSpectral.value;
+        run.(\setVoiceType, voice, 1);
+        waited = target.synths[key] === old;
+        run.(\voiceOff, voice);
+        server.sync;
+        run.(\voiceOn, voice, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+        now = target.synths[key];
+        held = target.cuttingSynths[voice].includes(old);
+        units = h.wireUnits({ run.(\setGrainParam, voice, \freeze, 0.0) });
+        server.sync;
+        check.(waited and: { now.notNil } and: { now.defName.asSymbol == \strataFM } and: { held }
+            and: { kills.(units) == 0 } and: { target.synths[key] === now },
+            "types: a waiting switch is applied whatever ends the freeze (voiceOff then voiceOn: waited %, then %, the Resonator cut %, % cut at the unfreeze)".format(
+                waited, now !? { now.defName }, held, kills.(units)));
+        settle.value;
+
+        // freezeMode 0 while frozen: the voice freezes again in hold
+        // (setFreezeMode: unfreeze, then freeze), and that unfreeze applies
+        // the switch: hold switches at once
+        old = freezeSpectral.value;
+        run.(\setVoiceType, voice, 1);
+        waited = target.synths[key] === old;
+        run.(\setGrainParam, voice, \freezeMode, 0.0);
+        now = target.synths[key];
+        server.sync;
+        check.(waited and: { now.notNil } and: { now.defName.asSymbol == \strataFM } and: { target.cuttingSynths[voice].includes(old) }
+            and: { target.areaState[\freeze][\frozen][voice] } and: { target.areaState[\freeze][\mode][voice] == \hold }
+            and: { target.ringWriterFor(voice) !? { arg writer; writer.defName.asSymbol == \strataRingWrite } ? false },
+            "types: a waiting switch is applied whatever ends the freeze (freezeMode 0 while frozen: waited %, then %, frozen % in %, writer %)".format(
+                waited, now !? { now.defName }, target.areaState[\freeze][\frozen][voice], target.areaState[\freeze][\mode][voice],
+                target.ringWriterFor(voice) !? { arg writer; writer.defName }));
+        settle.value;
+    };
     var root = h.tempDir +/+ "types-high/", write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
     var other;
     frozenSwitch.(engine, 0, "hold");
@@ -377,7 +550,11 @@ server.sync;
     write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
     other = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
     check.(other.tier == \high, "types: the spectral case's engine runs the high tier (%)".format(other.tier));
-    { frozenSwitch.(other, 1, "spectral") }.protect({ h.freeEngine(other); server.sync });
+    {
+        frozenSwitch.(other, 1, "spectral");
+        frozenSwitch.(other, 0, "hold");
+        waitingSwitches.(other);
+    }.protect({ h.freeEngine(other); server.sync });
 }.value;
 
 // A type package's own checks: test/engine_check/types/<key>.scd, sorted,

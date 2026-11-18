@@ -156,6 +156,15 @@
         ^this.validVoice(voice) and: { state[\frozen][voice] } and: { state[\source][voice] == this.inputSource }
     }
 
+    // Whether the voice's ring is held by a spectral writer of its voice bus
+    // (a synth voice's spectral freeze): PV_MagFreeze takes the held
+    // spectrum's phases from the voice synth, so a type switch waits for the
+    // unfreeze (setVoiceType, docs/notes/engine/types.md)
+    spectralHoldsVoice { arg voice;
+        var state = areaState[\freeze];
+        ^(state[\mode][voice] == \spectral) and: { state[\source][voice] == 0 }
+    }
+
     // The mode a freeze of the voice uses: spectral only on the high tier,
     // when freezeMode asks for it and the voice reads a ring
     freezeModeFor { arg voice;
@@ -222,7 +231,11 @@
     // writer (spectral) is freed and the grain synths reading its copy are
     // set back to the input ring at the voice's history; its own writer
     // never stopped. The kept freeze control is 0, so a grain synth the
-    // switch starts is unfrozen.
+    // switch starts is unfrozen. A spectral one's end applies a type switch
+    // that waited for it (applyWaitingVoiceType), after the writer's
+    // replace: every path that ends a spectral freeze comes here (the
+    // freeze param's unfreeze, inside its bundle; a mode change; a freeze
+    // on another mode or source; a source switch, whose voice synth fades)
     unfreezeVoice { arg voice;
         var state = areaState[\freeze], source, mode;
         if (this.validVoice(voice).not or: { state[\frozen][voice].not }) { ^this };
@@ -237,7 +250,8 @@
         case
         { source == 0 } {
             if (mode == \spectral) {
-                this.replaceRingWriter(voice, \strataRingWrite, granBuses[voice])
+                this.replaceRingWriter(voice, \strataRingWrite, granBuses[voice]);
+                this.applyWaitingVoiceType(voice);
             } { this.resumeRingWriter(voice) };
         }
         { source == this.inputSource } {
