@@ -894,4 +894,17 @@ test("a second load while one runs is refused", function()
   factory().close_list()
 end)
 
+-- #861: a set replaces every voice's sound, so VOICE's preset row names
+-- no preset after it, as after a PSET read
+test("a load clears the voices' preset names", function()
+  local context, S = session()
+  assert_true(S.lib.voice_presets.save(2, 1, "glass"), "a preset")
+  assert_true(S.lib.voice_presets.load(1, 1), "loaded into voice 1")
+  assert_true(S.lib.voice_presets.copy(4, 3), "voice 4 copied into voice 3")
+  assert_true(factory().load("dusk")); run_load(context)
+  assert_equal(S.lib.voice_presets.loaded_name(1), nil, "voice 1's name cleared")
+  assert_equal(S.lib.voice_presets.loaded_name(3), nil, "voice 3's too")
+  assert_equal(S.lib.voice_presets.preset(1).name, "glass", "the library is left alone")
+end)
+
 end

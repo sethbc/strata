@@ -31,14 +31,16 @@ return function(S)
   -- under _path.audio), a key's pattern (util.make_dir runs mkdir -p
   -- unquoted, so a key holds nothing a shell splits), the copy's chunk, the
   -- PSET hooks a set's side files are read through (by name, in registry
-  -- order), the marker's backup suffix; the rig (the params a set never
+  -- order; voice_presets reads no file: it clears the voices' preset names,
+  -- as at a PSET read, #861), the marker's backup suffix; the rig (the params a set never
   -- moves: every param of these menu groups and every id these patterns
   -- match, ruling 52); the list's layout and texts
   local FACTORY = {
     folder = "factory/", index = "index.data", marker = "factory.data", data_folder = "strata/",
     params_file = "set.params", samples_file = "set.samples.data", side_base = "set", audio_folder = "audio/",
     install_folder = "strata/factory/", key_pattern = "^[%w_%-]+$", copy_chunk_bytes = 1048576,
-    backup_suffix = ".bak", pset_hooks = {"scenes", "macros", "morph", "gestures", "sequences", "matrix"},
+    backup_suffix = ".bak", pset_hooks = {"scenes", "macros", "morph", "gestures", "sequences", "matrix",
+      "voice_presets"},
     rig = {
       groups = {"strata_midi", "strata_zones", "strata_out_midi", "strata_crow", "strata_out_ii", "strata_out_nb",
         "strata_tape", "strata_record", "strata_input"},
