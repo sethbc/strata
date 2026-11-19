@@ -4,7 +4,7 @@ Every parameter of the selected voice. Back to [Screen Controls](../controls.md)
 
 The selected voice is the one picked on MAIN (or from the grid). The line under the header shows it as on MAIN's list (`3- fold [L]`: its number, `+` running or `-` stopped, its short name, `[L]` when locked) and, at the right, the section the cursor is in and its place among the voice's sections (`grain 2/7`).
 
-Below it, five rows at a time, the voice's parameters. The first row, `type`, is the voice's synth type (`resonator`, `fm`, ...), with no section name above it: turn E3 there and the new type's name shows dim, and the voice changes to it once the encoder rests for 0.3 s (or at once when you pick another voice, leave VOICE or stop the voice). ALT+K2 held there puts the voice back on its own type; a quick ALT+K2 there randomizes nothing. See [Voice types](../voices-and-grains.md#voice-types). The cursor starts on it.
+Below it, five rows at a time, the voice's parameters. The first row, `type`, is the voice's synth type (`resonator`, `fm`, ...), with no section name above it: turn E3 there and the new type's name shows dim, and the voice changes to it once the encoder rests for 0.3 s (or at once when you pick another voice, leave VOICE or stop the voice). ALT+K2 held there puts the voice back on its own type; a quick ALT+K2 there randomizes nothing, so the ALT hint shows no `K2`. See [Voice types](../voices-and-grains.md#voice-types). The cursor starts on it.
 
 The second row, `preset`, shows the name of the preset last loaded into the voice (`v3` after a copy from voice 3), or `--`. K3 there opens the voice picker (`LOAD INTO VOICE <n>`): the six other voices (`from voice 2  fm`), then the 64 slots of the preset library (`01 glass pad  wave`, or `02 --` for an empty one). In the picker:
 - **E2** - Move through the list (E3 does nothing)
@@ -47,7 +47,7 @@ Each value is the parameter's own text with its unit, shortened when it does not
 - **ALT+K2** - Randomize the section under the cursor, when you let go of K2. Press it again within 5 seconds, in the same section of the same voice, to undo it (the synth section of a buffer voice counts as a section of its own, so after switching the source between the synth and a buffer, the press randomizes what the section shows). Hold it longer than half a second to reset the row under the cursor to its default instead
 - **ALT+K3** - Lock or unlock the voice (as on MAIN: a locked voice is skipped by randomize and mutations)
 
-The hint row shows `K2:prev K3:next` (`K2:prev K3:pick` on the preset row). With ALT (K1 held) it shows `K2:rand`, `K2:undo` while a quick press would undo, or `K2:locked` on a locked voice (whose rows a quick press leaves alone), then `K3:lock` or `K3:unlock`. Once ALT+K2 has been held half a second it shows `K2:reset`, and letting go resets the row (a locked voice's too).
+The hint row shows `K2:prev K3:next` (`K2:prev K3:pick` on the preset row). With ALT (K1 held) it shows `K2:rand`, `K2:undo` while a quick press would undo, or `K2:locked` on a locked voice (whose rows a quick press leaves alone), then `K3:lock` or `K3:unlock`; where a quick press has nothing to randomize (the type and preset rows) it shows no `K2`. Once ALT+K2 has been held half a second it shows `K2:reset`, and letting go resets the row (a locked voice's too); on the preset row it shows `K2:cancel`, and letting go does nothing.
 
 ### Randomize
 

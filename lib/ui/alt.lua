@@ -70,11 +70,14 @@ return function(S)
   end
 
   -- What a quick press on the record does: "undo" while the undo held is its
-  -- section's, else "locked" for a locked voice, else "rand"; with the spec
+  -- section's, else nil where it draws nothing (no spec, or a draws spec
+  -- with none: VOICE's type and preset rows, a Sub voice's mix; #823),
+  -- else "locked" for a locked voice, else "rand"; with the spec
   local function quick_action(record)
     local spec, reason
     if record.randomize_section then spec, reason = record.randomize_section() end
     if spec and S.lib.mutation.undo_for(spec.page, spec.section, spec.voice) then return "undo", spec end
+    if spec == nil or (spec.pattern == nil and #spec.draws == 0) then return nil end
     if reason == "locked" then return "locked" end
     return "rand", spec
   end
@@ -102,8 +105,10 @@ return function(S)
   -- once it is held ALT_HOLD_SECONDS, "K2:reset" on a page with alt_hold
   -- (or "K2:" and its alt_hold_hint, a string or a function returning one,
   -- 3.4: SEQ's edit, MOD's clear) and "K2:cancel" on one without (its
-  -- release does nothing); before, the quick action's. The record animates
-  -- while k2_held(), so the frame clock draws the change at the hold time
+  -- release does nothing); before, the quick action's, or nil where a
+  -- quick press does nothing (the page leaves K2 out of its hint, as MOD's
+  -- k2_part does). The record animates while k2_held(), so the frame clock
+  -- draws the change at the hold time
   function M.k2_hint(record)
     if held_long() then
       if not record.alt_hold then return "K2:cancel" end
@@ -111,7 +116,8 @@ return function(S)
       if type(hint) == "function" then hint = hint() end
       return "K2:" .. (hint or "reset")
     end
-    return "K2:" .. quick_action(record)
+    local action = quick_action(record)
+    return action and "K2:" .. action or nil
   end
 
   return M

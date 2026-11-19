@@ -253,15 +253,18 @@ return function(S)
   end
 
   -- The hint row (redraw() draws it after the page): with ALT, ALT+K2's
-  -- (the shared handler's: rand, undo or locked; reset once held past the
-  -- hold time) and ALT+K3's (lock). K1 let go while ALT+K2 is down: K2's
-  -- hint alone, since its release still acts
+  -- (the shared handler's: rand, undo or locked, none where a quick press
+  -- draws nothing, #823; reset, or cancel on the preset row, once held past
+  -- the hold time) and ALT+K3's (lock). K1 let go while ALT+K2 is down:
+  -- K2's hint alone, since its release still acts
   local function voice_hints(alt_held)
     local record = S.registry.pages[UI_PAGES.index.VOICE]
+    local k2 = S.lib.ui_alt.k2_hint(record)
     if alt_held then
-      return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (S.locked[S.selected_voice] and "unlock" or "lock")
+      local k3 = "K3:" .. (S.locked[S.selected_voice] and "unlock" or "lock")
+      return k2 and k2 .. " " .. k3 or k3
     end
-    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
+    if S.lib.ui_alt.k2_held() then return k2 or "" end
     local rows, cursor = M.sync_cursor()
     if rows[cursor].kind == S.lib.ui_voice_rows.PRESET_KIND then return "K2:prev K3:pick" end
     return "K2:prev K3:next"
@@ -341,6 +344,13 @@ return function(S)
     else
       params:set(param_id, param_default(param_id))
     end
+  end
+
+  -- What ALT+K2 held does (the record's alt_hold_hint): reset, or cancel
+  -- on the preset row, which voice_reset_row leaves alone (#823)
+  local function voice_alt_hold_hint()
+    local rows, cursor = M.sync_cursor()
+    return rows[cursor].kind == S.lib.ui_voice_rows.PRESET_KIND and "cancel" or "reset"
   end
 
   -- The frame clock redraws VOICE while ALT+K2 is down, so its hint turns
@@ -499,7 +509,8 @@ return function(S)
   -- are lib/arc/voice.lua's
   S.registry.pages[UI_PAGES.index.VOICE] = {name = "VOICE", draw = redraw_voice, hints = voice_hints,
     enc = voice_enc, key = voice_key, alt_key = voice_alt_key, alt_key_release = voice_alt_key_release,
-    randomize_section = voice_randomize_section, alt_hold = voice_reset_row, animates = voice_animates,
+    randomize_section = voice_randomize_section, alt_hold = voice_reset_row,
+    alt_hold_hint = voice_alt_hold_hint, animates = voice_animates,
     arc_button = start_or_stop_selected_voice, layout_states = layout_states}
 
   -- 3.8: the type row holding a pending choice, drawn dim, toward the

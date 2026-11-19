@@ -618,6 +618,10 @@ test("VOICE hints", function()
   local context, S = started_voice_page()
   assert_equal(hint_text(context), "K2:prev K3:next")
   key(1, 1); redraw()
+  assert_equal(hint_text(context), "K3:lock", "ALT on the type row: no quick K2 (#823)")
+  key(1, 0)
+  put_cursor(S, "v1_freq")  -- a synth row: its section draws
+  key(1, 1); redraw()
   assert_equal(hint_text(context), "K2:rand K3:lock", "ALT: a quick ALT+K2 randomizes")
   toggle_lock(1); redraw()
   assert_equal(hint_text(context), "K2:locked K3:unlock", "ALT on a locked voice")
@@ -823,7 +827,7 @@ test("ALT+K2 on a locked voice: K2:locked and nothing changes (#557)", function(
   end
 end)
 
-test("a Sub voice's mix section has no pan: K2:rand, and the press does nothing (#557)", function()
+test("a Sub voice's mix section has no pan: no quick K2 hint, and the press does nothing (#557, #823)", function()
   local context, S = started_voice_page()
   local sub
   for voice_idx = 1, S.constants.NUM_VOICES do
@@ -834,12 +838,12 @@ test("a Sub voice's mix section has no pan: K2:rand, and the press does nothing 
   put_cursor(S, "v" .. sub .. "_amp")
   assert_equal(#S.registry.pages[S.constants.UI_PAGES.index.VOICE].randomize_section().draws, 0, "no draws")
   key(1, 1); redraw()
-  assert_equal(hint_text(context), "K2:rand K3:lock", "the hint")
+  assert_equal(hint_text(context), "K3:lock", "the hint offers no quick K2 (#823)")
   local before = all_param_values()
   tap(2); redraw()
   for id, value in pairs(all_param_values()) do assert_equal(value, before[id], "Sub's mix: " .. id .. " unchanged") end
   assert_equal(local_value("undo"), nil, "no undo")
-  assert_equal(hint_text(context), "K2:rand K3:lock", "still rand")
+  assert_equal(hint_text(context), "K3:lock", "still none")
   key(1, 0)
 end)
 
@@ -1156,6 +1160,7 @@ test("ALT+K2 held on the type row resets the default type; a quick press draws n
 end)
 
 
+
 -- 3.8 (package 3b): the preset row, after the type row in its section
 local function preset_row_index()
   for index, row in ipairs(voice_page_rows(local_value("S").selected_voice)) do
@@ -1234,6 +1239,66 @@ test("no arc ring reaches the preset row", function()
   for ring = 2, 4 do context.arc.turn(1, ring, 40) end
   assert_true(not S.lib.ui_voice_picker.is_open(), "a ring opens nothing")
   context.arc.unplug(1)
+end)
+
+
+-- #823: the type and preset rows' section draws nothing, so the ALT hint
+-- offers no quick K2 there; held past the hold time, the type row resets
+-- and the preset row cancels, as the release does
+test("VOICE's type row: no quick K2 hint, K2:reset once held, as the release does (#823)", function()
+  local context, S = started_voice_page()
+  assert_equal(cursor_param(S), "v1_type", "the cursor on the type row")
+  params:set("v1_type", 3)
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K3:lock", "ALT: no quick K2 action to offer")
+  key(2, 1); redraw()
+  assert_equal(hint_text(context), "K3:lock", "while K2 is down: still none")
+  context.clock.run_for(HELD_SECONDS)
+  assert_equal(hint_text(context), "K2:reset K3:lock", "held past the hold time: letting go resets the type")
+  key(2, 0); redraw()
+  assert_equal(params:get("v1_type"), 1, "the release reset it")
+  assert_equal(hint_text(context), "K3:lock", "released: no quick K2 again")
+  key(1, 0)
+  key(1, 1); key(2, 1); key(1, 0)
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "", "K1 up, K2 down: the quick release does nothing, so no hint")
+  key(2, 0)
+  toggle_lock(1); key(1, 1); redraw()
+  assert_equal(hint_text(context), "K3:unlock", "a locked voice's type row: still no quick K2")
+  key(1, 0)
+end)
+
+test("VOICE's preset row: no quick K2 hint, K2:cancel once held, and the release changes nothing (#823)", function()
+  local context, S = started_voice_page()
+  S.lib.pages_voice.place_cursor(preset_row_index())
+  local before = all_param_values()
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K3:lock", "ALT: no quick K2 action to offer")
+  tap(2); redraw()
+  assert_equal(hint_text(context), "K3:lock", "a quick press did nothing, so still none")
+  key(2, 1); context.clock.run_for(HELD_SECONDS)
+  assert_equal(hint_text(context), "K2:cancel K3:lock", "held past the hold time: letting go resets nothing")
+  key(2, 0); key(1, 0)
+  for id, value in pairs(all_param_values()) do assert_equal(value, before[id], id .. " unchanged") end
+  assert_equal(local_value("undo"), nil, "no undo")
+end)
+
+test("a held voice preset load's undo still shows and runs on the preset row (#823)", function()
+  local context, S = started_voice_page()
+  assert_true(S.lib.voice_presets.save(1, 1, "P"), "a preset")
+  local saved = params:get("v1_noise")
+  params:set("v1_noise", saved < 0.5 and 0.9 or 0.1)
+  local edited = params:get("v1_noise")
+  assert_true(math.abs(edited - saved) > 0.01, "an edit away from the saved value")
+  assert_true(S.lib.voice_presets.load(1, 1), "loaded")
+  assert_near(params:get("v1_noise"), saved, 1e-6, "the load set the saved value")
+  S.lib.pages_voice.place_cursor(preset_row_index())
+  key(1, 1); redraw()
+  assert_equal(hint_text(context), "K2:undo K3:lock", "the load's undo is held")
+  tap(2); redraw()
+  assert_near(params:get("v1_noise"), edited, 1e-6, "the undo ran")
+  assert_equal(hint_text(context), "K3:lock", "nothing held now: no quick K2")
+  key(1, 0)
 end)
 
 end
