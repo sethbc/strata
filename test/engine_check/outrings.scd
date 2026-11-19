@@ -536,7 +536,7 @@ lateCopyChecks = {
     var reach = engine.tryPerform(\frozenReachSeconds) ? 3.0;
     var roomSeconds = (engine.tryPerform(\copyRoomFrames, frames) ? sampleRate) / sampleRate;
     var lines = List.new, attempts = List.new, copyTimes, values, frozenState, late;
-    var holdBuffer, perPartial, holdQueue;
+    var holdBuffer, perPartial, holdQueue, endedCount, endedReport, endedBefore;
     copyTimes = { arg voice;
         var ring = copyRing.(voice), size = ring[0].numFrames, span = (reach * sampleRate).round.asInteger.min(size);
         var bus = Bus.control(server, 2), probe, times, last;
@@ -550,6 +550,13 @@ lateCopyChecks = {
         (newest: times[0], oldest: times[1], last: last[0] / last[1].max(0.0001) * timecodeWrap)
     };
     frozenState = { arg voice; [freeze[\frozen][voice], freeze[\copied][voice], engine.grainControls[voice][\freeze]] };
+    // #858: the voice's freezes the engine ended itself so far, and whether
+    // freezeEnded's last report is the voice's count-th (what Lua reads)
+    endedCount = { arg voice; (freeze[\ended] ? [])[voice] ? 0 };
+    endedReport = { arg voice, count;
+        var poll = engine.tryPerform(\freezeEndedPoll), expected = engine.tryPerform(\freezeEndedValue, voice, count);
+        poll.notNil and: { expected.notNil } and: { poll.value == expected }
+    };
     freeze[\postLine] = { arg line; lines.add(line) };
     tapSound = Synth(\strataCheckOutTimecode, [\out, taps[2], \now, nowBus], probeGroup);
     startReader.(3, sourceOf.(2), 0.05, 50.0, 0.2, true);
@@ -597,6 +604,7 @@ lateCopyChecks = {
     // the live ring unfrozen, its freeze 0
     (engine.freezeLeaveSeconds + 0.1).wait;
     lines.clear; attempts.clear;
+    endedBefore = endedCount.(3);
     engine.tryPerform(\copyAttempts_, 2);
     engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); late.wait };
     command.(\setGrainParam, 3, \freeze, 1.0);
@@ -607,9 +615,11 @@ lateCopyChecks = {
     check.((attempts.asArray == [1, 2]) and: { frozenState.(3) == [false, false, 0] }
         and: { getControl.(grainOf.(3), \freeze) == 0 } and: { getControl.(grainOf.(3), \bufL) == outRing.(2)[0].bufnum }
         and: { getControl.(grainOf.(3), \phaseBus) == outRing.(2)[2].index }
-        and: { lines.size == 2 } and: { lines.last.contains("abandoned") } and: { engine.copyAttempts == 8 },
-        "outrings: a reader's hold whose bound of attempts is spent (2, each % s late) is abandoned with its line: unfrozen on its live ring (attempts %, [frozen, copied, freeze] %, lines %, bound back to %)".format(
-            late.round(0.001), attempts, frozenState.(3), lines, engine.copyAttempts));
+        and: { lines.size == 2 } and: { lines.last.contains("abandoned") } and: { engine.copyAttempts == 8 }
+        and: { endedCount.(3) == (endedBefore + 1) } and: { endedReport.(3, endedBefore + 1) },
+        "outrings: a reader's hold whose bound of attempts is spent (2, each % s late) is abandoned with its line and reported on freezeEnded (#858): unfrozen on its live ring (attempts %, [frozen, copied, freeze] %, lines %, bound back to %, ended % then %, report %)".format(
+            late.round(0.001), attempts, frozenState.(3), lines, engine.copyAttempts, endedBefore, endedCount.(3),
+            engine.tryPerform(\freezeEndedPoll) !? { arg poll; poll.value }));
     // The missing head (#835): the server's command queue held 1.5 s (a
     // /b_gen sine1 runs in its non-real-time thread, and every reply after
     // it, a /c_get's among them, waits for it), so the copy's first head
@@ -645,6 +655,7 @@ lateCopyChecks = {
     // copy was late
     (engine.freezeLeaveSeconds + 0.1).wait;
     lines.clear; attempts.clear;
+    endedBefore = endedCount.(3);
     engine.tryPerform(\copyAttempts_, 1);
     engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt) };
     holdQueue.(1.5);
@@ -655,13 +666,14 @@ lateCopyChecks = {
     server.sync;
     check.(attempts.isEmpty and: { frozenState.(3) == [false, false, 0] } and: { lines.size == 1 }
         and: { lines.first.contains("abandoned") } and: { lines.first.contains("no head") }
-        and: { lines.first.contains("late").not },
-        "outrings: a hold whose one attempt got no head from the server is abandoned with a line that says so (attempts with a head %, [frozen, copied, freeze] %, lines %)".format(
-            attempts, frozenState.(3), lines));
+        and: { lines.first.contains("late").not } and: { endedReport.(3, endedBefore + 1) },
+        "outrings: a hold whose one attempt got no head from the server is abandoned with a line that says so, and reported (attempts with a head %, [frozen, copied, freeze] %, lines %, ended % then %)".format(
+            attempts, frozenState.(3), lines, endedBefore, endedCount.(3)));
     holdBuffer.free;
     // a switch during a late copy's third attempt cancels it: no copy, no
-    // abandon (the one line is the late one)
+    // abandon (the one line is the late one), no freezeEnded report
     lines.clear; attempts.clear;
+    endedBefore = endedCount.(3);
     engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); late.wait };
     command.(\setGrainParam, 3, \freeze, 1.0);
     h.waitFor({ attempts.includes(3) }, (2 * late) + 2);
@@ -672,13 +684,15 @@ lateCopyChecks = {
     engine.beforeCopyHook = nil;
     values = ringPeaks.(copyRing.(3).keep(2));
     check.((attempts.asArray == [1, 2, 3]) and: { frozenState.(3) == [false, false, 0] } and: { lines.size == 1 }
-        and: { lines.first.contains("abandoned").not } and: { values.every({ arg pair; pair[0] == 0 }) },
+        and: { lines.first.contains("abandoned").not } and: { values.every({ arg pair; pair[0] == 0 }) }
+        and: { endedCount.(3) == endedBefore },
         "outrings: a switch during a late copy's third attempt cancels it (attempts %, [frozen, copied, freeze] %, lines %, copy ring peaks %)".format(
             attempts, frozenState.(3), lines, values.collect(_.first)));
     // a source ring shorter than the copy ring is refused, with one line,
     // and the hold abandoned (voice 7's out ring stood in for by a 1 s pair
     // for the freeze, then given back)
     lines.clear; attempts.clear;
+    endedBefore = endedCount.(4);
     values = (outRings: engine.areaState[\outRings], left: engine.areaState[\outRings][\left][6],
         right: engine.areaState[\outRings][\right][6], shortL: Buffer.alloc(server, sampleRate, 1),
         shortR: Buffer.alloc(server, sampleRate, 1));
@@ -694,7 +708,8 @@ lateCopyChecks = {
     values[\outRings][\right][6] = values[\right];
     server.sync;
     check.((attempts.asArray == [1]) and: { frozenState.(4) == [false, false, 0] } and: { lines.size == 1 }
-        and: { lines.first.contains("refused") } and: { getControl.(grainOf.(4), \freeze) == 0 },
+        and: { lines.first.contains("refused") } and: { getControl.(grainOf.(4), \freeze) == 0 }
+        and: { endedReport.(4, endedBefore + 1) },
         "outrings: a source ring shorter than the copy ring is refused with one line and the hold abandoned (attempts %, [frozen, copied, freeze] %, lines %)".format(
             attempts, frozenState.(4), lines));
     [values[\shortL], values[\shortR]].do(_.free);

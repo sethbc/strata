@@ -43,6 +43,7 @@
             order: 110,
             allocState: { this.areaCall(\allocFreezeState) },
             addDefs: { this.areaCall(\addFreezeDefs); [] },
+            addCommands: { this.areaCall(\addFreezePoll) },
             grainParamHandlers: (
                 freeze: { arg voice, value;
                     if (value > 0.5) { this.areaCall(\freezeVoice, voice); false } { this.areaCall(\unfreezeWithControl, voice, value); true }
@@ -66,6 +67,8 @@
     // set back); pruned when a synth frees (forgetInputReader).
     // \spectralBuffers: on the high tier, each voice's [left, right] FFT
     // buffers for its spectral writer (see addFreezeDefs), else empty.
+    // \ended: per voice, the freezes the engine ended on its own
+    // (abandonCopy), counted from 1 as the freezeEnded poll reports them.
     allocFreezeState {
         var state = areaState[\freeze], historyHandler;
         state[\spectralBuffers] = if (tier == \high) {
@@ -78,6 +81,7 @@
         state[\copies] = Array.fill(numVoices, 0);
         state[\faded] = Array.fill(numVoices, { IdentitySet.new });
         state[\inputReaders] = IdentityDictionary.new;
+        state[\ended] = Array.fill(numVoices, 0);
         state[\stopped] = false;
         // Inside a frozen input copy history is 0: a history change is kept
         // (it applies again on unfreeze) but not sent while the voice is
@@ -548,11 +552,30 @@
     // copyInputSpan posted one): the voice is unfrozen as
     // the freeze param's unfreeze does it (unfreezeWithControl, one
     // bundle), so its grain synths read its live ring at freeze 0 and the
-    // engine's freeze state reads 0. Lua is not told: its v<i>_freeze stays
-    // 1 until it is set again
+    // engine's freeze state reads 0. Then Lua is told on freezeEnded
+    // (#858), so its v<i>_freeze goes to 0 with no unfreeze sent back
     abandonCopy { arg voice, why;
+        var ended = areaState[\freeze][\ended];
         why !? { this.postFreezeLine("strata: voice % hold abandoned: %".format(voice + 1, why)) };
         this.unfreezeWithControl(voice, 0);
+        ended[voice] = ended[voice] + 1;
+        this.freezeEndedPoll !? { arg poll; poll.update(this.freezeEndedValue(voice, ended[voice])) };
+    }
+
+    // The freezeEnded poll (#858): one message per freeze the engine ended
+    // on its own (abandonCopy), so Lua sets the voice's v<i>_freeze to 0
+    // without sending the unfreeze back. Not periodic; a value request
+    // resends the last report (Lua acts on a voice's newest count only)
+    addFreezePoll {
+        areaState[\freeze][\endedPoll] = this.addPoll(\freezeEnded, { this.freezeEndedPoll.value ? 0.0 }, false);
+    }
+
+    freezeEndedPoll { ^areaState[\freeze][\endedPoll] }
+
+    // One float, as the slot polls' (matron's /poll/value is typed "if"):
+    // the voice's ended count (from 1) times numVoices plus the voice index
+    freezeEndedValue { arg voice, count;
+        ^((count * numVoices) + voice).asFloat
     }
 
     // One console line of the freeze area (the engine check collects them

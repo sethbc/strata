@@ -473,4 +473,49 @@ test("a voice source freezes, and a switch unfreezes", function()
   assert_true(sent:find("freeze 1", 1, true) ~= nil, "standard freezes in hold (sent: " .. sent .. ")")
 end)
 
+-- #858: the engine gave up a hold whose copy was late eight times over
+-- and unfroze the voice itself; its freezeEnded report (the voice's ended
+-- holds, counted from 1, times NUM_VOICES plus the engine voice) sets
+-- v<i>_freeze to 0 through set_binary_param, its action and hooks running,
+-- with no freeze message to the engine (it has unfrozen already). A repeat
+-- of a report (a value request resends the last) or an older one, a voice
+-- not frozen and a bad value do nothing
+test("the engine's ended hold sets v<i>_freeze to 0 and sends no unfreeze (#858)", function()
+  local log, context = {}, nil
+  context = load_strata({ before_init = function()
+    local_value("S").register_freeze_change(function(voice_idx, frozen) log[#log + 1] = voice_idx .. ":" .. tostring(frozen) end)
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  local NUM_VOICES = S.constants.NUM_VOICES
+  local function ended(voice_idx, count) context.polls.fire("freezeEnded", count * NUM_VOICES + voice_idx - 1) end
+  assert_true(S.voices[2].active, "voice 2 runs")
+  params:set("v2_source", S.constants.SOURCE_INPUT)
+  params:set("v2_freeze", 1)
+  local echoes = map_freeze(context, 2, 32)
+  log = {}
+  context.clear_engine_calls()
+  ended(2, 1)
+  assert_equal(params:get("v2_freeze"), 0, "the param follows the engine")
+  assert_true(not S.lib.freeze.is_frozen(2), "MAIN's [F] reads the voice unfrozen")
+  assert_equal(#sent_freeze(context), 0, "no freeze message reaches the engine")
+  assert_equal(table.concat(log, ", "), "2:false", "the freeze-change hooks ran")
+  assert_equal(echoes(), "0", "a mapped controller hears the unfreeze")
+  assert_equal(S.engine_param_values.v2_freeze, 0, "the engine's value is recorded as 0")
+  -- the next freeze reaches the engine again
+  params:set("v2_freeze", 1)
+  assert_equal(#sent_freeze(context), 1, "a freeze after it is sent")
+  context.clear_engine_calls()
+  ended(2, 1)
+  ended(2, 0)
+  assert_equal(params:get("v2_freeze"), 1, "a repeated or older report does nothing")
+  ended(3, 1)
+  assert_equal(params:get("v3_freeze"), 0, "a voice not frozen stays as it is")
+  for _, value in ipairs({0 / 0, -1, math.huge, "x"}) do context.polls.fire("freezeEnded", value) end
+  assert_equal(params:get("v2_freeze"), 1, "a bad value does nothing")
+  ended(2, 2)
+  assert_equal(params:get("v2_freeze"), 0, "the voice's next ended hold acts")
+  assert_equal(#sent_freeze(context), 0, "and sends nothing either")
+end)
+
 end

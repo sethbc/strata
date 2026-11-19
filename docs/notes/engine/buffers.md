@@ -21,7 +21,7 @@
 
 ## The polls' encodings
 
-Each of the five polls (engine → Lua) carries one float per message, with a 0-based slot `index` (Lua's slot is `index + 1`) and, where it names one, the slot's count of one command, counted from 1 in the engine and in Lua alike: `load` is `bufferLoads` (Lua's `loads_sent`), `save` is `bufferSaves` (`saves_sent`), `record` is `recordCounts` (`records_sent`).
+Each of the six polls (engine → Lua) carries one float per message, with a 0-based slot `index` (Lua's slot is `index + 1`; `freezeEnded`'s is a voice, Lua's `voice + 1`) and, where it names one, the slot's count of one command, counted from 1 in the engine and in Lua alike: `load` is `bufferLoads` (Lua's `loads_sent`), `save` is `bufferSaves` (`saves_sent`), `record` is `recordCounts` (`records_sent`).
 
 | Poll | Sent | Value (engine function) | The rest |
 |---|---|---|---|
@@ -30,8 +30,9 @@ Each of the five polls (engine → Lua) carries one float per message, with a 0-
 | `bufferSaveResult` | once per save whose write ends, not periodic | `(save * 2 + failed) * numBuffers + index` (`bufferSaveResultValue`) | `docs/notes/engine/files.md` (Save results); Lua: `docs/notes/lua/buffers.md` (Save results) |
 | `recordState` | once per change of a recording's state, not periodic | `((record * 4) + state) * numBuffers + index`, state 0 armed, 1 recording, 2 ended and kept, 3 canceled (`recordStateValue`) | `docs/notes/engine/record.md` (recordState, The state table); Lua: `docs/notes/lua/record.md` |
 | `takeWriteFailed` | once per kept take whose scratch write ends unwritten, not periodic | `record * numBuffers + index` (`takeWriteFailedValue`) | `docs/notes/engine/record.md` (takeWriteFailed); Lua: `docs/notes/lua/buffers.md` |
+| `freezeEnded` (3.8, #858) | once per freeze the engine ended itself (a hold abandoned), not periodic | `ended * numVoices + voice`, `ended` the voice's count of them from 1 (`freezeEndedValue`) | `docs/notes/engine/freeze.md`; Lua: `docs/notes/lua/freeze.md` |
 
-Decoding the last four: `index = value % numBuffers` and `rest = floor(value / numBuffers)`; `emptied` and `failed` are the lowest bit of `rest` and the number the rest of it (`floor(rest / 2)`), `recordState`'s state is `rest % 4` and its number `floor(rest / 4)`, and `takeWriteFailed`'s number is `rest`. `bufferState`'s decoding is in Polls, above.
+Decoding the last four: `index = value % numBuffers` and `rest = floor(value / numBuffers)`; `emptied` and `failed` are the lowest bit of `rest` and the number the rest of it (`floor(rest / 2)`), `recordState`'s state is `rest % 4` and its number `floor(rest / 4)`, and `takeWriteFailed`'s number is `rest`; `freezeEnded`'s voice is `value % numVoices` and its count `floor(value / numVoices)`. `bufferState`'s decoding is in Polls, above.
 
 ## Buffer slots
 
