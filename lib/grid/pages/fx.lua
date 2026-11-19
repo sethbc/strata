@@ -47,8 +47,6 @@ return function(S)
 
   local lines, keys, ids, levels = FX_PAGE.lines, FX_PAGE.keys, FX_PAGE.ids, FX_PAGE.levels
 
-  local function exists(param_id) return type(param_id) == "string" and params.lookup[param_id] ~= nil end
-
   local function whole_in(n, low, high)
     return type(n) == "number" and n == math.floor(n) and n >= low and n <= high
   end
@@ -64,14 +62,16 @@ return function(S)
   local function interval_count() return #S.lib.shimmer.SHIMMER.ratios end
   local function filter_type_count() return #params:lookup_param(ids.filter_type).options end
 
-  -- Lines 1-5 for the params that exist (the engine's draw reads
-  -- fader_position outside its containment, so no id that is no param is
-  -- listed)
+  -- Lines 1-5, the picked set's. A missing (renamed) param raises here,
+  -- inside the faders' containment (printed once, the page then has no
+  -- fader lines), never on the engine's draw path, which reads
+  -- fader_position outside it, and never drops a line silently
   local function faders(pane)
     local found = {}
     for line, id in ipairs(FX_PAGE.sets[set_of(pane)].ids) do
       local shown = S.lib.grid_faders.fx_fader_id(id)
-      if exists(shown) then found[#found + 1] = {line = line, first = 1, keys = FX_PAGE.line_keys, id = shown} end
+      params:lookup_param(shown)
+      found[#found + 1] = {line = line, first = 1, keys = FX_PAGE.line_keys, id = shown}
     end
     return found
   end

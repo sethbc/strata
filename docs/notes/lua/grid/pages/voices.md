@@ -8,7 +8,7 @@
 - **A refused voice copy changes nothing**: `copy` returns false (its own flash on VOICE), the mark stays and the target's key stays at 4.
 - **The level is a fader line** (`faders(pane)`: line v, `first` 9, eight keys, `v<v>_amp`, the voice's level, ruling 58) set and drawn by the pane engine alone; the page's `press` and `redraw` never see x 9-16 while the line is shown. A voice with no `v<v>_amp` param gets no line (its keys 9-16 are dark and dead).
 - **Every key, level and hold is `VOICES_PAGE`'s** (ruling D4); the numbers in the file are pane coordinates and the named levels.
-- **`signature(pane)`** is each voice's mute, solo, lock and freeze, and the two copies' voices: mute, solo and freeze redraw the grids from their params' actions, the lock from `toggle_lock`, the copies from the press (`grid_key`), but a scene recall's lock entry sets `S.locked` with no redraw until the recall ends, so the drift tick's follow covers it.
+- **`signature(pane)`** is each voice's lock and the two copies' voices: the lock redraws from `toggle_lock` and the copies from the press (`grid_key`), but a scene recall's lock entry sets `S.locked` with no redraw until the recall ends, so the drift tick's follow covers it. Mute, solo and freeze have no term: their params' actions always redraw the grids (`lib/voice_mix.lua`, `lib/freeze.lua`; a test pins it).
 - **Index checks**: a press needs z 1, a whole x in 1-8 and a whole y in 1..`NUM_VOICES`; anything else does nothing. Every action takes the checked voice.
 
 ## Owns
