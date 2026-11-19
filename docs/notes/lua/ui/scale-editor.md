@@ -6,10 +6,11 @@
 - **A pending tuning choice sends nothing**: E3 on the tuning row moves it (drawn dim), K3 applies it through `S.lib.tuning.select` (one `setTuning` set); closing drops it. The folder is listed once, at open (`S.lib.tuning.files()`, a shell's `ls`).
 - **The note tap is the editor's while it is open**: `S.lib.midi_in.set_note_tap(M.note)` at open and again at each draw (`reset_midi_input` clears the tap without telling its owner), cleared at close. A note it takes plays nothing.
 - **A refused file's reason shows on the editor's own hint row, and no other flash does**: under a modal owner `redraw()` takes the hints from the owner, never from the "hints" flash, so the owner's `hints` returns `S.lib.ui_flash.text("hints")` while it is the reason the editor flashed (`editor.reason`, dropped at open and close; the flash itself, started with SETUP's page, ends on its clock). Another module's hints flash, unscoped (a scenes or buffers load's) or SETUP's, never covers the editor's keys (#843).
+- **Cleanup closes an open editor** (`CLEANUP_ORDER.scale_editor`, 139): its owner leaves the modal stack and the note tap is cleared, as the factory list's step closes it (#847).
 
 ## lib/ui/scale_editor.lua (`S.lib.ui_scale_editor`)
 
-Opened from SETUP's `scale & tuning` row (K3; an action row appended after `transport`, 3.8 ruling 44). Fields: `open`, `close`, `is_open`, `note(key)` (the tap) and `SCALE_EDITOR` (the layout).
+Opened from SETUP's `scale & tuning` row (K3; an action row appended after `transport`, 3.8 ruling 44). Fields: `open`, `close`, `is_open`, `note(key)` (the tap) and `SCALE_EDITOR` (the layout); its cleanup step (139) closes it.
 
 Rows, top to bottom, six visible from y 18, 7 px apart, values right-aligned at x 124 (`S.lib.ui_field_list.draw`, as SETUP's and the zones editor's):
 
@@ -26,4 +27,4 @@ The note tap (`M.note(key)`): while open and the scale applies, a note toggles c
 
 SETUP's record carries the editor's layout states (`scale_editor_state` in `lib/pages/setup.lua`): the cursor on root; the widest scale name (`Gagaku Rittsu Sen Pou`, 97 px, right-aligned at 124 it starts at x 27, clear of `scale`); every class in (`C # D # E F # G # A # B`); the longest built-in (`meantone 1/4`); a long file name (as `load_file` gives it, cut to `name_max`, then by `fit_text`); a non-ASCII file name, drawn printable; 19 equal's `--`; a pending choice; a refused file's reason on the hint row. Each layout state's note tap is a do-nothing stand-in.
 
-Tests: `test/unit/ui_scale_editor_test.lua` (the SETUP row, the rows and E3, the class toggle's order and its one `setScale`, the last class, the note tap open and closed, 19 equal's `--`, the pending tuning and a refused file, another module's flash left off its hint row (#843), every state's layout).
+Tests: `test/unit/ui_scale_editor_test.lua` (the SETUP row, the rows and E3, the class toggle's order and its one `setScale`, the last class, the note tap open and closed, 19 equal's `--`, the pending tuning and a refused file, another module's flash left off its hint row (#843), the cleanup step, every state's layout).

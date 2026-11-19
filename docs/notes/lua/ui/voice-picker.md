@@ -11,7 +11,7 @@
 
 ## lib/ui/voice_picker.lua (`S.lib.ui_voice_picker`)
 
-Opened by K3 on VOICE's `preset` row (`lib/pages/voice.lua`) for the selected voice. Fields: `open(voice_idx)`, `close()`, `is_open()`, `reconcile_name_entry()` (its menu-close hook) and `VOICE_PICKER` (the layout and texts).
+Opened by K3 on VOICE's `preset` row (`lib/pages/voice.lua`) for the selected voice. Fields: `open(voice_idx)`, `close()`, `is_open()`, `reconcile_name_entry()` (its menu-close hook) and `VOICE_PICKER` (the layout and texts). Its cleanup step (`CLEANUP_ORDER.voice_picker`, 138) closes an open picker, so its owner is not left on the modal stack.
 
 The screen: the title `LOAD INTO VOICE <n>` at x 0, y 16 (`title_y`), level 10; five rows (`visible`) from y 24 (`first_y`), 7 px apart, through `S.lib.ui_field_list.draw` (its scroll marker at x 127): `from voice <n>` with the voice's type `list_name` right-aligned at x 124 (`value_right`), then `<nn> <name>` with the preset's type `list_name` (`?` for a type this build lacks), or `<nn> --` for an empty slot. The cursor's row at level 15, the others at 4.
 

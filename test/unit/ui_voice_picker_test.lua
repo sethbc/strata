@@ -317,4 +317,14 @@ test("an ALT+K3 press the menu took is forgotten", function()
   assert_true(not context.textentry.open, "and opens no name entry")
 end)
 
+-- Found with the scale editor's (as #847 of the factory list): cleanup
+-- closes an open picker
+test("cleanup closes the picker", function()
+  local _, S, picker = opened()
+  assert_true(picker.is_open(), "open")
+  cleanup()
+  assert_true(not picker.is_open(), "closed at cleanup")
+  assert_equal(S.lib.ui_modal.top(), nil, "its owner is off the stack")
+end)
+
 end
