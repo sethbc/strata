@@ -166,6 +166,8 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 132 | stop the `recordState` poll and forget the takes | `lib/record.lua` |
 | 133 | stop the `freezeEnded` poll (`CLEANUP_ORDER.freeze_poll`) (3.8, #858) | `lib/freeze.lua` |
 | 135 | stop the `amp_in_l` and `amp_in_r` input level polls and clear their callbacks (3.4: the polls moved from the BUFFER page, `input_meter` keeps its order) | `lib/input_level.lua` |
+| 138 | close an open voice picker, so its owner is not left on the modal stack (`CLEANUP_ORDER.voice_picker`, 3.8) | `lib/ui/voice_picker.lua` |
+| 139 | close an open scale & tuning editor: its owner off the modal stack, the MIDI module's note tap cleared (`CLEANUP_ORDER.scale_editor`, 3.8) | `lib/ui/scale_editor.lua` |
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
 | 142 | end every target note at once (`S.lib.io_targets.stop_all`: each sounding note's off to the targets its on went to, then each target's `stop_all`), before the MIDI handlers go; the LFO clock has stopped, so no off waits for a step (`CLEANUP_ORDER.io_targets`, 3.6) | `lib/io/targets.lua` |
 | 143 | take down each MPE zone MIDI out set up on a port with its device there that nothing holds (#789), then drop its express queue and send nothing more (`CLEANUP_ORDER.io_midi_out`, after the targets ended every note at 142, whose offs went out, and before the ports go at 147 and 152) (3.6) | `lib/io/midi_out.lua` |

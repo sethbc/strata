@@ -819,7 +819,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "quantized actions", "scene sequencer", "scene transition",
   "morph clock", "macro clock", "factory clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
-  "buffer start reload", "buffer polls and timers", "slices poll", "record poll", "freeze poll", "input meter", "flashes", "targets ended",
+  "buffer start reload", "buffer polls and timers", "slices poll", "record poll", "freeze poll", "input meter", "voice picker", "scale editor", "flashes", "targets ended",
   "midi out", "ii stopped", "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler",
   "midi ports", "voices off", "grids dark", "arc dark" }
 
@@ -942,6 +942,8 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(context.polls.polls.recordState, "stop", "record poll")
   watch_method(context.polls.polls.freezeEnded, "stop", "freeze poll")
   for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do watch_method(context.polls.polls[name], "stop", "input meter") end
+  watch_method(S.lib.ui_voice_picker, "close", "voice picker")  -- 3.8: an open picker closes
+  watch_method(S.lib.ui_scale_editor, "close", "scale editor")  -- 3.8: an open editor closes
   watch_field(osc, "event", "osc event")  -- lib/io/osc.lua clears the OSC handler (feedback clock canceled first)
   watch_method(S.lib.io_tape, "stop", "tape off")  -- lib/io/tape.lua: its voices off, the mixer back (only while on)
   watch_field(S.midi_device, "event", "midi handler")

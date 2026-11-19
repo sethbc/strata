@@ -285,4 +285,16 @@ test("another module's hints flash leaves the editor's hints; its own refused fi
   next_frame(context)
   assert_equal(hint_text(context), "K2:back E3:tuning", "a reason from before a close is not shown again")
 end)
+
+-- Found by Y5 (as #847 of the factory list): cleanup closes the editor
+test("cleanup closes the editor and clears the note tap", function()
+  local _, S, editor = loaded()
+  assert_true(editor.is_open(), "open")
+  local taps = {}
+  S.lib.midi_in.set_note_tap = function(fn) taps[#taps + 1] = fn == nil and "cleared" or "set" end
+  cleanup()
+  assert_true(not editor.is_open(), "closed at cleanup")
+  assert_equal(S.lib.ui_modal.top(), nil, "its owner is off the stack")
+  assert_equal(taps[#taps], "cleared", "the note tap cleared")
+end)
 end

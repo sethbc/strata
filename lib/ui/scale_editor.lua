@@ -9,7 +9,7 @@
 -- while it is open (the MIDI module's note tap, re-armed at each draw). In
 -- a tuning that is not twelve notes to an octave the scale and notes rows
 -- show -- and change nothing. Fields of this module's table: open, close,
--- is_open, note, SCALE_EDITOR. See docs/notes/lua/ui/scale-editor.md.
+-- is_open, note, SCALE_EDITOR; cleanup closes it. See docs/notes/lua/ui/scale-editor.md.
 
 return function(S)
   local M = {}
@@ -279,6 +279,10 @@ return function(S)
     S.lib.midi_in.set_note_tap(nil)
     S.lib.ui_modal.pop(owner)
   end
+
+  -- The cleanup step: an open editor closes, so its owner is not left on
+  -- the modal stack (as the factory list's, #847)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.scale_editor, function() M.close() end)
 
   function M.is_open()
     return editor.open

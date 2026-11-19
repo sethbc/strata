@@ -7,8 +7,8 @@
 -- or loads a filled slot into the voice; ALT+K3 on a slot names it in
 -- norns' textentry, opened on K3's release, and saves the voice there;
 -- ALT+K2 held VOICE_PICKER.hold_seconds and released clears a slot; K2
--- goes back. Fields of this module's table: open, close, is_open,
--- VOICE_PICKER. See docs/notes/lua/ui/voice-picker.md.
+-- goes back; cleanup closes it. Fields of this module's table: open,
+-- close, is_open, VOICE_PICKER. See docs/notes/lua/ui/voice-picker.md.
 
 return function(S)
   local M = {}
@@ -257,6 +257,10 @@ return function(S)
   end
 
   function M.is_open() return picker.open end
+
+  -- The cleanup step: an open picker closes, so its owner is not left on
+  -- the modal stack (as the factory list's, #847)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.voice_picker, function() M.close() end)
 
   -- The open picker's owner is the modal one (or beneath SEQ's step
   -- editor), the closed picker's never; its cursor is a row of its list;
