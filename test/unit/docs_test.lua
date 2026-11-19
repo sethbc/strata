@@ -1778,9 +1778,11 @@ function CI_WORKFLOW.cache_problems(workflow)
   -- plain or quoted key (`PATH`, `"PATH"`, `'PATH'`, any spacing before its
   -- colon) after the line's indent, a `{` or a `,`; a key that only ends in
   -- PATH (`MYPATH`) passes.
-  -- What it does not: it parses no quotes, so a value holding the text
-  -- (`A: "x, PATH: y"`) is refused too, a known over-refusal, and a brace
-  -- in a quoted value is counted; it does not read an explicit key written
+  -- What it does not: it parses no quotes, so a quoted value holding
+  -- `, PATH:` or `{ PATH:` (`A: "x, PATH: y"`) is refused too, a known
+  -- over-refusal (`A: "PATH: y"` passes), and a brace inside a quoted value
+  -- is counted as a brace, so a quoted `}` can end a `{`-opened block
+  -- early; it does not read an explicit key written
   -- with `?` (`? PATH` then `: x`), a tagged key (`!!str PATH: x`), an env
   -- given by an expression (`env: ${{ ... }}`, such as `fromJSON`) or one
   -- through an anchor or merge key (`<<: *name`). The workflow uses none of
