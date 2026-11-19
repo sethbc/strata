@@ -484,27 +484,19 @@ test("a param set elsewhere reaches the page within a drift tick", function()
       drift_update()
       if pane.shows(x, y) then assert_equal(pane.led(x, y), level, arrangement .. ": " .. what) end
     end
-    -- the three whose own action repaints (sync, the delay's freeze) or
-    -- whose change is a press's (the set), each changed here so that only
-    -- its term of the page's signature can show it: sync and the freeze
-    -- set silently (no action) while the reverb set hides the time line,
-    -- the set written to the port's state with every shown fader at its
-    -- minimum, so the fader lines look the same in either set
+    -- sync's action repaints, but not during a scene transition (#855):
+    -- set then, with the reverb set hiding the time line, only its term
+    -- of the page's signature can show it
     pick_set(pane, SET_X.reverb)
+    capture_scene(1)
+    recall_scene(1, 4)  -- step 1 runs now; the clock is never woken
+    assert_true(S.scene_transition_active, arrangement .. ": a transition runs")
     drift_update()
-    check("sync set without its action", function() params:set("delay_sync", 1, true) end,
+    check("sync set during a scene transition", function() params:set("delay_sync", 1) end,
       KEY_X.delay_sync, LINE.keys, 15)
-    check("the delay's freeze set without its action", function() params:set("delay_freeze", 1, true) end,
-      KEY_X.delay_freeze, LINE.keys, 15)
-    params:set("delay_freeze", 0, true); params:set("delay_sync", 0, true)
-    for _, set_index in ipairs({SET_X.reverb, SET_X.master}) do
-      for _, id in ipairs(SETS[set_index]) do params:set(id, (param_range(id))) end
-    end
-    drift_update()
-    check("the set changed without a key", function()
-      S.lib.grid_core.port_state(pane.port).pages.fx.set = SET_X.master
-    end, SET_X.master, LINE.picks, 15)
-    S.lib.grid_core.port_state(pane.port).pages.fx.set = SET_X.delay
+    cancel_scene_transition()
+    params:set("delay_sync", 0)
+    pick_set(pane, SET_X.delay)
     drift_update()
     check("delay bypassed", function() params:set("delay_bypass", 1) end, KEY_X.delay_bypass, LINE.keys, 2)
     check("reverb bypassed", function() params:set("reverb_bypass", 1) end, KEY_X.reverb_bypass, LINE.keys, 2)
@@ -523,6 +515,25 @@ test("a param set elsewhere reaches the page within a drift tick", function()
     for _ = 1, 10 do drift_update() end
     assert_equal(pane.device.refresh_count - before, 0, arrangement .. ": ten idle ticks repaint nothing")
   end)
+end)
+
+-- #855: the delay's freeze and the picked set have no term of the
+-- signature: the freeze's action repaints the grids whatever else runs,
+-- and the set changes only at a press, which repaints
+test("the delay's freeze and a set key repaint the grid at once, with no drift tick", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    capture_scene(1)
+    recall_scene(1, 4)  -- even during a scene transition
+    local before = pane.device.refresh_count
+    params:set("delay_freeze", 1)
+    assert_true(pane.device.refresh_count > before, arrangement .. ": the freeze's action repaints")
+    assert_equal(pane.led(KEY_X.delay_freeze, LINE.keys), 15, arrangement .. ": DF lit")
+    cancel_scene_transition()
+    before = pane.device.refresh_count
+    pane.tap(SET_X.master, LINE.picks)
+    assert_true(pane.device.refresh_count > before, arrangement .. ": a set key's press repaints")
+    assert_equal(pane.led(SET_X.master, LINE.picks), 15, arrangement .. ": the master set lit")
+  end, {{KEY_X.delay_freeze, LINE.keys}, {SET_X.master, LINE.picks}})
 end)
 
 test("the set is per port", function()

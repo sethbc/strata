@@ -165,17 +165,19 @@ return function(S)
   end
 
   -- What the drift tick's follow compares beside the fader lines: the
-  -- set, the interval, the bypasses, sync, the freezes (the reverb's only
-  -- while offered), the filter's type and whether its mix is above 0. Of
-  -- these only sync and the delay's freeze redraw the grids themselves
-  local function signature(pane)
+  -- interval, the bypasses, sync (whose action redraws, but not during a
+  -- scene transition), the reverb's freeze (only while offered), the
+  -- filter's type and whether its mix is above 0. The delay's freeze has
+  -- no term (its action always redraws the grids), nor the set (it
+  -- changes only at a press, which repaints)
+  local function signature()
     local voice_mix, fx_hold = S.lib.voice_mix, S.lib.fx_hold
-    local parts = {set_of(pane), params:get(interval_id()), params:get(ids.sync), params:get(ids.filter_type),
+    local parts = {params:get(interval_id()), params:get(ids.sync), params:get(ids.filter_type),
       tostring(params:get(ids.filter_mix) > 0)}
     for _, effect in ipairs(voice_mix.BYPASS_ORDER) do
       parts[#parts + 1] = tostring(voice_mix.bypassed(effect))
-      parts[#parts + 1] = fx_hold.offered(effect) and tostring(fx_hold.frozen(effect)) or "-"
     end
+    parts[#parts + 1] = fx_hold.offered("reverb") and tostring(fx_hold.frozen("reverb")) or "-"
     return table.concat(parts, ",")
   end
 

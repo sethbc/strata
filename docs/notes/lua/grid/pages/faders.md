@@ -4,8 +4,8 @@
 - **`faders(pane)` lists only params that exist** (`params.lookup`): the engine's `draw_line` reads `fader_position` outside the faders containment (`lib/grid/pane.lua`), so an id that is no param would raise on the draw path. A line with no fader (a last page of fewer than four, an empty macro slot) is left out: dark, and its keys reach `press`, which does nothing for lines 1-4.
 - **Whether the port shows the macros is `pane.state().macros`** (true or nil), per port and forgotten with its grid; never `port_state` directly (P20). A bank key sets it, a page key or a voice key clears it. The bank itself is global (`S.lib.macros.bank()`): a bank key on one grid changes the bank every surface shows.
 - **n, the count of type keys, is the registry's** (`#S.lib.types.list()`, read at each draw and press), never a literal (D4, ruling 64): key x is `S.lib.types.list()[x]`, keys past n are dark and dead.
-- **A type key applies at once through `S.lib.types.set(S.grid_voice_select, key)`**, whose `v<i>_type` action cancels the voice's pending VOICE choice (ruling 63), so the grid's later act stands; then `S.param_page` is clamped to the new type's page count (the action clamps it too).
-- **The page sets `S.param_page` only with a page key (`x <= fader_page_count`) and a type key's clamp to the new type's count, and `S.grid_voice_select` only through `select_grid_voice`** (which clamps the page too); the source and type actions (`lib/voices.lua`) clamp the page when the grid voice's list shrinks.
+- **A type key applies at once through `S.lib.types.set(S.grid_voice_select, key)`**, whose `v<i>_type` action cancels the voice's pending VOICE choice (ruling 63), so the grid's later act stands; the same action clamps `S.param_page` to the new type's page count, so the page keeps no clamp of its own (#855).
+- **The page sets `S.param_page` only with a page key (`x <= fader_page_count`), and `S.grid_voice_select` only through `select_grid_voice`** (which clamps the page too); the source and type actions (`lib/voices.lua`) clamp the page when the grid voice's list shrinks.
 - **`signature(pane)`** is the grid voice, `S.param_page`, its page count, the macros flag, the bank and the voice's type key: a type set on VOICE, a bank set on MOD and a page count moved by a source change show within a drift tick. The fader lines' positions are followed by the engine.
 
 ## Owns
@@ -20,7 +20,7 @@
 | 1-4 | 1-16 | fader lines (the engine's): the grid voice's page's four, or the shown bank's while `macros`; no fader: dark, dead | bar 8, value 15 |
 | 5 | 1-10 | `macros = nil`, `S.param_page = x` if `x <= fader_page_count(voice)`; else nothing | `fader_page_level(x)` 15 / 4 while not `macros`, 4 while `macros`; 0 past the count |
 | 5 | 12-15 | `S.lib.macros.set_bank(x - 11)`, `macros = true` | 15 the bank while `macros`; else 6 a bank with targets, 2 empty |
-| 6 | 1..n | `S.lib.types.set(voice, list()[x].key)`, then the page clamped | 15 the voice's type, 4 another |
+| 6 | 1..n | `S.lib.types.set(voice, list()[x].key)` (its action clamps the page) | 15 the voice's type, 4 another |
 | 7 | 1-7 | `macros = nil`, `select_grid_voice(x)` | 15 picked, 4 other (`GRID_LEVELS.picked`, `unpicked`) |
 | 5, 6, 7 | the rest | nothing | 0 |
 

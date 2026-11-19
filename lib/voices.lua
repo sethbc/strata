@@ -225,7 +225,8 @@ return function(S)
       S.lib.engine_sync.send_voice_type(voice_idx)
       for _, key in ipairs(S.lib.types.keys()) do note_param_edit("v" .. voice_idx .. "_" .. key) end
       if S.voices[voice_idx].active and not S.scene_recall_in_progress then sync_voice_values_to_engine(voice_idx) end
-      -- the grid fader list follows the type (its synth keys)
+      -- the grid fader list follows the type (its synth keys): the one
+      -- clamp, for every path, the faders page's type keys included
       if S.grid_voice_select == voice_idx then
         S.param_page = util.clamp(S.param_page, 1, fader_page_count(voice_idx))
       end
