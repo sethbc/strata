@@ -36,6 +36,7 @@ The UI core's notes, one file per part:
 - `lib/ui/slice_editor.lua` (`S.lib.ui_slice_editor`, 3.7): the slice editor (`docs/notes/lua/ui/slice-editor.md`).
 - `lib/ui/scale_editor.lua` (`S.lib.ui_scale_editor`, 3.8): the scale and tuning editor (`docs/notes/lua/ui/scale-editor.md`).
 - `lib/ui/menu_watch.lua` (`S.lib.ui_menu_watch`): the `_menu.set_mode` wrapper (`watch_menu_opening`, `unwatch_menu_opening`, `forget_keys_held_through_menu`; cleanup step 20).
+- `lib/ui/name_entry.lua` (`S.lib.ui_name_entry`, #849): the one name entry SCENES and the voice picker open norns' textentry through (`docs/notes/lua/ui/name-entry.md`).
 - `lib/ui/voice_rows.lua` (`S.lib.ui_voice_rows`): `voice_page_rows`, `voice_page_group` (global); `first_field_row`, `GROUP_SIZE` (fields).
 - `lib/ui/cursors.lua` (`S.lib.ui_cursors`): `S.cursors` and the row cursors' anchors; `move`, `sync`, `place`, `clamp_all` (fields).
 - The page renders: `test/render_pages.lua` and `test/render_pages.py` (`docs/notes/lua/ui/layout-and-renders.md`).

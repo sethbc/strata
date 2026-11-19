@@ -631,13 +631,13 @@ end)
 -- Globals more than one script file may write, each with the files that
 -- may write it: strata.lua defines key, enc and redraw; lib/pages/buffer.lua
 -- puts back the script's own key and enc when the file selector fails, and
--- lib/pages/scenes.lua and (3.8) lib/ui/voice_picker.lua when the norns
--- menu took their name entry over; a name entry puts norns.none in redraw
--- again (as textentry.enter does) when the menu closed over it
+-- lib/ui/name_entry.lua (SCENES' and the voice picker's name entry, #849)
+-- when the norns menu took a name entry over; a name entry puts norns.none
+-- in redraw again (as textentry.enter does) when the menu closed over it
 local GLOBALS_WRITTEN_IN_TWO_FILES = {
-  key = { "strata.lua", "lib/pages/buffer.lua", "lib/pages/scenes.lua", "lib/ui/voice_picker.lua" },
-  enc = { "strata.lua", "lib/pages/buffer.lua", "lib/pages/scenes.lua", "lib/ui/voice_picker.lua" },
-  redraw = { "strata.lua", "lib/pages/scenes.lua", "lib/ui/voice_picker.lua" },
+  key = { "strata.lua", "lib/pages/buffer.lua", "lib/ui/name_entry.lua" },
+  enc = { "strata.lua", "lib/pages/buffer.lua", "lib/ui/name_entry.lua" },
+  redraw = { "strata.lua", "lib/ui/name_entry.lua" },
 }
 
 -- Every global (a global function or any other value) that more than one

@@ -23,7 +23,6 @@ return function(S)
   local NUM_SCENES = S.constants.NUM_SCENES
   local SCENE_BANK_SIZE = S.constants.SCENE_BANK_SIZE
   local SCENES_FIELDS = S.constants.SCENES_FIELDS
-  local textentry = require "textentry"
 
   local SCENES_PAGE = {
     column_x = {0, 64},          -- left edge of each column
@@ -55,9 +54,10 @@ return function(S)
   -- entry is open for (nil while none is)
   S.scenes_page = {armed_slot = nil, armed_until = 0, bank = 1, naming = nil}
 
-  -- The name entry (norns' textentry, opened on ALT+K2's release, below):
-  -- the callback it was given and Strata's key and enc as it opened
-  local NAME_ENTRY = {callback = nil, script_key = nil, script_enc = nil}
+  -- The name entry (norns' textentry through S.lib.ui_name_entry, the
+  -- voice picker's too, #849; opened on ALT+K2's release, below): naming
+  -- goes back to nil whenever it closes
+  local name_entry = S.lib.ui_name_entry.new(function() S.scenes_page.naming = nil end)
 
   -- armed_slot and naming are each nil or a slot, and naming is set exactly
   -- while the page keeps an open entry's callback
@@ -68,8 +68,8 @@ return function(S)
     local slot, naming = S.scenes_page.armed_slot, S.scenes_page.naming
     if slot ~= nil and not is_slot(slot) then return "armed_slot is " .. tostring(slot) end
     if naming ~= nil and not is_slot(naming) then return "naming is " .. tostring(naming) end
-    if (naming ~= nil) ~= (NAME_ENTRY.callback ~= nil) then
-      return "naming is " .. tostring(naming) .. " but the name entry's callback is " .. tostring(NAME_ENTRY.callback)
+    if (naming ~= nil) ~= name_entry.is_open() then
+      return "naming is " .. tostring(naming) .. " but the name entry is " .. (name_entry.is_open() and "open" or "closed")
     end
   end)
 
@@ -280,61 +280,22 @@ return function(S)
     end
   end
 
-  -- The name entry: norns' textentry, which takes the global key, enc and
-  -- redraw for itself while it is open (and cancels on a K2 release), so it
-  -- opens on ALT+K2's release, with no modal owner (NAME_ENTRY, above)
-
-  -- The entry is closed (its callback ran) or will never call back
-  local function close_name_entry()
-    S.scenes_page.naming = nil
-    NAME_ENTRY.callback, NAME_ENTRY.script_key, NAME_ENTRY.script_enc = nil, nil, nil
-    request_redraw()
-  end
-
-  -- Open the entry for `slot`, starting from its name. Its text names the
-  -- slot (S.lib.scenes.set_name); a cancel (nil) keeps the old name
+  -- The name entry: norns' textentry (S.lib.ui_name_entry), which takes
+  -- the global key, enc and redraw for itself while it is open (and
+  -- cancels on a K2 release), so it opens on ALT+K2's release, with no
+  -- modal owner. Open for `slot`, starting from its name: its text names
+  -- the slot (S.lib.scenes.set_name); a cancel (nil) keeps the old name
   local function open_name_entry(slot)
-    -- the entry takes every key while open, K1's release with them: forget
-    -- the held keys and ALT now, or ALT would stay held after it
-    forget_held_keys()
-    local function named(text)
-      if NAME_ENTRY.callback ~= named then return end  -- forgotten when the menu took it over
-      close_name_entry()
-      if text ~= nil then S.lib.scenes.set_name(slot, text) end
-    end
     S.scenes_page.naming = slot
-    NAME_ENTRY.callback = named
-    NAME_ENTRY.script_key, NAME_ENTRY.script_enc = key, enc
-    textentry.enter(named, S.lib.scenes.name(slot), "scene " .. slot .. " name")
+    name_entry.open(S.lib.scenes.name(slot), "scene " .. slot .. " name",
+      function(text) S.lib.scenes.set_name(slot, text) end)
   end
 
-  -- norns has one textentry. Opened from the menu over Strata's (a PARAMS
-  -- text param, a PSET name) it takes the callback, and Strata's never
-  -- comes; its exit gives the menu its handlers back, while the globals
-  -- keep Strata's entry's, which norns' set_mode(false) hands to play mode
-  -- as the menu closes. So when the menu closes and the entry's callback is
-  -- no longer Strata's, the entry is forgotten, Strata's key and enc are put
-  -- back and play mode is routed to them again (norns.menu.init: this hook
-  -- runs after set_mode(false) copied the globals). When the callback is
-  -- still Strata's and the entry still holds the keys, the menu only came
-  -- and went over it: set_mode(false) put Strata's redraw back and drew the
-  -- page, so the entry takes the screen back, as its enter does. The
-  -- entry's own enter (norns.menu.init from play mode) runs that second
-  -- branch too, on every open: it puts its key in the global before the
-  -- init, so the hook does early what enter does next (norns.none in
-  -- redraw, then its own redraw). Its exit runs neither: the keys are back
-  -- before its init. A field of S.lib.pages_scenes: the menu-close hook
-  -- below
+  -- The menu-close hook (S.lib.ui_name_entry's reconcile: a menu that took
+  -- the one textentry over forgets the entry; one that came and went hands
+  -- it the screen back). A field of S.lib.pages_scenes
   function M.reconcile_name_entry()
-    if S.scenes_page.naming == nil then return end
-    if textentry.callback ~= NAME_ENTRY.callback then
-      key, enc = NAME_ENTRY.script_key, NAME_ENTRY.script_enc
-      close_name_entry()
-      norns.menu.init()
-    elseif key == textentry.key then
-      redraw = norns.none
-      textentry.redraw()
-    end
+    name_entry.reconcile()
   end
   S.register_menu_close(function() M.reconcile_name_entry() end)
 
