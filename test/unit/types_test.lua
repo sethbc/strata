@@ -435,9 +435,19 @@ test("a frozen voice stays frozen across a type change", function()
   context.clear_engine_calls()
   params:set("v1_type", 2)
   assert_equal(params:get("v1_freeze"), 1, "still frozen")
-  for _, call in ipairs(calls(context, "setGrainParam", 1)) do
-    assert_true(call.args[2] ~= "freeze" or call.args[3] == 1, "no freeze 0 is sent")
+  -- fact test 14 reads "no freeze grain send", but the type change's one
+  -- voice sync (fact test 7) sends every value, the held freeze among them,
+  -- and the engine's freezeVoice takes a freeze 1 of a frozen voice as the
+  -- freeze it holds. So exactly one freeze send, 1, after the type (#839)
+  local freezes, type_at, freeze_at = {}, nil, nil
+  for index, call in ipairs(context.engine_calls) do
+    if call.name == "setVoiceType" and call.args[1] == 0 then type_at = type_at or index end
+    if call.name == "setGrainParam" and call.args[1] == 0 and call.args[2] == "freeze" then
+      freezes[#freezes + 1] = tostring(call.args[3]); freeze_at = freeze_at or index
+    end
   end
+  assert_equal(table.concat(freezes, ","), "1", "one freeze grain send, 1: never 0, never twice")
+  assert_true(type_at ~= nil and freeze_at > type_at, "the sync's freeze comes after setVoiceType")
   assert_equal(#calls(context, "setVoiceType"), 1, "the type is sent")
   cleanup()
 end)

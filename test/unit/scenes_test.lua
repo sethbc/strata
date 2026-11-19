@@ -4499,7 +4499,8 @@ test("a recall changes the type of a frozen voice, a voice holding a chord and a
     S.lib.notes.play(2, { owner = "midi", key = note, pitch = note, velocity = 1, park = true, set_own = function() end })
   end
   local held = S.lib.notes.held(2)
-  assert_true(held >= 3, "voice 2 holds its chord (" .. held .. ")")
+  assert_equal(held, 4, "voice 2 holds its chord: its own note and three extra (#839)")
+  assert_equal(S.lib.notes.pool_used(), 3, "exactly three extra notes")
   context.clear_engine_calls()
   local recalled, recall_error = pcall(recall_scene, 1)
   assert_true(recalled, "the recall raises nothing: " .. tostring(recall_error))

@@ -551,7 +551,10 @@ test("MAIN follows the type", function()
   local before = params:get("v1_index")
   context.arc.turn(1, 2, 200)
   assert_true(params:get("v1_index") > before, "arc ring 2 moves v1_index")
-  assert_true(device ~= nil, "an arc")
+  params:set_raw("v1_index", 0.5); arc_redraw()
+  local drawn = device.segments[2]
+  assert_true(drawn ~= nil and math.abs(drawn.to - param_fraction("v1_index") * 2 * math.pi) < 1e-9,
+    "arc ring 2 is drawn from v1_index (#839)")
 end)
 
 test("MAIN voice list fits its column for every voice, state and selection (#23)", function()

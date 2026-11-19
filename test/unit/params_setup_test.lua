@@ -1050,6 +1050,9 @@ end
 -- alone but beside added (a move). An entry naming an id the fixture lacks
 -- (added aside), an added 3.7.0 id with no removed, an after no record has,
 -- a kind that does not fit the param, another kind or no why raises.
+-- An added record's t is norns' type code, named from the stubs' one
+-- table of them (params is not loaded when this list is built, #839)
+local T = h.stubs.PARAM_TYPE_CODES
 local PARAM_FIXTURE_ALLOWED = {
   -- groundwork: MIDI note off is latch or release (the groundwork design §8)
   {kind = "options", id = "midi_note_off", options = {"latch", "release"},
@@ -1058,58 +1061,56 @@ local PARAM_FIXTURE_ALLOWED = {
   {kind = "range", id = "delay_time", max = 5.4, why = "0b: the delay's line is a buffer, 5.4 s (design §0.2)"},
   -- 1a: plain sends (design §7.1): a dry level per voice, the returns are
   -- levels (the reverb's 0.43, 3.7's 0.3 / 0.7), the delay into the reverb
-  -- (t 3 is a control)
   {kind = "added", id = "v<v>_dry", after = "v<v>_filter_mix", why = "1a: each voice's dry level (design section 7.1)",
-    record = {t = 3, name = "dry", default = 1, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01, units = "",
+    record = {t = T.control, name = "dry", default = 1, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01, units = "",
       string = "100 %"}},
   {kind = "added", id = "delay_to_reverb", after = "reverb_bypass", why = "1a: the delay into the reverb (design section 7.1)",
-    record = {t = 3, name = "delay to reverb", default = 1, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01,
+    record = {t = T.control, name = "delay to reverb", default = 1, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01,
       units = "", string = "100 %"}},
   {kind = "group_size", id = "strata_fx", add = 1, why = "1a: delay_to_reverb joins the fx group"},
   {kind = "default", id = "reverb_mix", default = 0.43, why = "1a: the reverb's level starts at 0.3 / 0.7 (design section 7.1)"},
   {kind = "name", id = "delay_mix", name = "delay level", why = "1a: the delay's mix is its return's level"},
   {kind = "name", id = "reverb_mix", name = "reverb level", why = "1a: the reverb's mix is its return's level"},
-  -- 1b: the delay's freeze and clear (design §7.2, §7.3; t 9 is a binary, 6 a trigger)
+  -- 1b: the delay's freeze and clear (design §7.2, §7.3)
   {kind = "added", id = "delay_freeze", after = "delay_pingpong", why = "1b: the delay's freeze (design section 7.3)",
-    record = {t = 9, name = "delay freeze", default = 0}},
+    record = {t = T.binary, name = "delay freeze", default = 0}},
   {kind = "added", id = "delay_clear", after = "delay_freeze", why = "1b: the delay's clear (design section 7.2)",
-    record = {t = 6, name = "delay clear"}},
+    record = {t = T.trigger, name = "delay clear"}},
   {kind = "group_size", id = "strata_fx", add = 2, why = "1b: delay_freeze and delay_clear join the fx group"},
-  -- 2a: shimmer's interval and two amounts (design §7.4; t 2 is an option, 3 a control)
+  -- 2a: shimmer's interval and two amounts (design §7.4)
   {kind = "added", id = "shimmer_interval", after = "delay_clear", why = "2a: shimmer's interval (design section 7.4)",
-    record = {t = 2, name = "shimmer interval", default = 3, options = {"oct down", "fifth", "octave", "oct+5th", "2 oct"}}},
+    record = {t = T.option, name = "shimmer interval", default = 3, options = {"oct down", "fifth", "octave", "oct+5th", "2 oct"}}},
   {kind = "added", id = "shimmer_delay", after = "shimmer_interval", why = "2a: shimmer in the delay (design section 7.4)",
-    record = {t = 3, name = "shimmer delay", default = 0, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01,
+    record = {t = T.control, name = "shimmer delay", default = 0, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01,
       units = "", string = "0 %"}},
   {kind = "added", id = "shimmer_reverb", after = "shimmer_delay", why = "2a: shimmer around the reverb (design section 7.4)",
-    record = {t = 3, name = "shimmer reverb", default = 0, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01,
+    record = {t = T.control, name = "shimmer reverb", default = 0, min = 0, max = 1, warp = "lin", step = 0.01, quantum = 0.01,
       units = "", string = "0 %"}},
   {kind = "group_size", id = "strata_fx", add = 3, why = "2a: shimmer's three params join the fx group"},
   -- 1c: the grain envelope goes; the window's shape and skew, probability,
   -- the cloud and its overlap and the pan wander join each voice's extras
-  -- (design §4.1, §4.2, §4.4, §4.5); t is the fixture's type code (3 a control, 2 an option:
-  -- params is not loaded when this list is built)
+  -- (design §4.1, §4.2, §4.4, §4.5)
   {kind = "removed", id = "v<v>_grain_env", why = "1c: the five grain envelopes are gone (design §4.1)"},
   {kind = "added", id = "v<v>_grain_shape", after = "voice <v> extras", why = "1c: the window's shape (design §4.1)",
-    record = {t = 3, name = "grain shape", default = 0.57, min = 0, max = 1, warp = "lin", step = 0.01,
+    record = {t = T.control, name = "grain shape", default = 0.57, min = 0, max = 1, warp = "lin", step = 0.01,
       quantum = 0.01, units = "", string = "0.57"}},
   {kind = "added", id = "v<v>_grain_skew", after = "v<v>_grain_shape", why = "1c: the window's skew (design §4.1)",
-    record = {t = 3, name = "grain skew", default = 0, min = -1, max = 1, warp = "lin", step = 0.01,
+    record = {t = T.control, name = "grain skew", default = 0, min = -1, max = 1, warp = "lin", step = 0.01,
       quantum = 0.01, units = "", string = "0.00"}},
   {kind = "added", id = "v<v>_grain_prob", after = "v<v>_grain_skew", why = "1c: the grains' probability (design §4.2)",
-    record = {t = 3, name = "grain prob", default = 100, min = 0, max = 100, warp = "lin", step = 1,
+    record = {t = T.control, name = "grain prob", default = 100, min = 0, max = 100, warp = "lin", step = 1,
       quantum = 0.01, units = "%", string = "100 %"}},
   {kind = "added", id = "v<v>_grain_cloud", after = "v<v>_grain_prob", why = "1c: the cloud mode (design §4.4)",
-    record = {t = 2, name = "grain cloud", default = 1, options = {"density", "overlap"}}},
+    record = {t = T.option, name = "grain cloud", default = 1, options = {"density", "overlap"}}},
   {kind = "added", id = "v<v>_grain_overlap", after = "v<v>_grain_cloud", why = "1c: the overlap cloud's overlap (design §4.4)",
-    record = {t = 3, name = "grain overlap", default = 2, min = 0.25, max = 16, warp = "exp", step = 0,
+    record = {t = T.control, name = "grain overlap", default = 2, min = 0.25, max = 16, warp = "exp", step = 0,
       quantum = 0.01, units = "x", string = "2.00 x"}},
   {kind = "added", id = "v<v>_pan_wander", after = "v<v>_grain_overlap", why = "1c: the pan wander (design §4.5)",
-    record = {t = 3, name = "pan wander", default = 50, min = 0, max = 100, warp = "lin", step = 1,
+    record = {t = T.control, name = "pan wander", default = 50, min = 0, max = 100, warp = "lin", step = 1,
       quantum = 0.01, units = "%", string = "50 %"}},
   -- 1e: the tuning (design §6.3, §6.4): scale gains custom at its end, the
-  -- custom scale's mask and the tuning's two text params (t 1 a number, 8
-  -- a text) join the scale's params, before every voice
+  -- custom scale's mask and the tuning's two text params join the scale's
+  -- params, before every voice
   {kind = "options", id = "scale", why = "1e: custom, the scale held as a mask, appended (design section 6.3)",
     options = (function()
       local options = {}
@@ -1122,21 +1123,21 @@ local PARAM_FIXTURE_ALLOWED = {
       return options
     end)()},
   {kind = "added", id = "scale_mask", after = "root", why = "1e: the custom scale's mask (design section 6.3)",
-    record = {t = 1, name = "scale mask", default = 4095, min = 1, max = 4095}},
+    record = {t = T.number, name = "scale mask", default = 4095, min = 1, max = 4095}},
   {kind = "added", id = "tuning_name", after = "scale_mask", why = "1e: the tuning's name (design section 6.4)",
-    record = {t = 8, name = "tuning", default = "12 equal"}},
+    record = {t = T.text, name = "tuning", default = "12 equal"}},
   {kind = "added", id = "tuning_tones", after = "tuning_name", why = "1e: the tuning's tones (design section 6.4)",
-    record = {t = 8, name = "tuning tones", default = "1200 0 100 200 300 400 500 600 700 800 900 1000 1100"}},
+    record = {t = T.text, name = "tuning tones", default = "1200 0 100 200 300 400 500 600 700 800 900 1000 1100"}},
   -- 1d: the voice sources join the source's options at their end (ruling
   -- P8), and an input voice's channel follows its history (design §5)
   {kind = "options", id = "v<v>_source", options = {"synth", "buf 1", "buf 2", "buf 3", "buf 4", "buf 5", "buf 6", "buf 7",
     "buf 8", "input", "voice 1", "voice 2", "voice 3", "voice 4", "voice 5", "voice 6", "voice 7"},
     why = "1d: a voice can grain another voice's output ring, or its own (design section 5)"},
   {kind = "added", id = "v<v>_input_channel", after = "v<v>_history", why = "1d: an input voice reads stereo, left or right (design section 5)",
-    record = {t = 2, name = "input channel", default = 1, options = {"stereo", "left", "right"}}},
-  -- 2b: the arpeggiator (design §4.3; t 2 an option)
+    record = {t = T.option, name = "input channel", default = 1, options = {"stereo", "left", "right"}}},
+  -- 2b: the arpeggiator (design §4.3)
   {kind = "added", id = "v<v>_arp", after = "v<v>_release", why = "2b: each voice's arpeggiator (design section 4.3)",
-    record = {t = 2, name = "arp", default = 1, options = {"off", "up", "down", "up-down", "shuffle"}}},
+    record = {t = T.option, name = "arp", default = 1, options = {"off", "up", "down", "up-down", "shuffle"}}},
 }
 -- 2b: an LFO's destination is its home routing in the matrix (design §4);
 -- its six LFOs' entries follow the list (an LFO is no voice token)

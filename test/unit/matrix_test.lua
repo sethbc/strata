@@ -1261,7 +1261,8 @@ test("matrix: a routing on v1_main follows a type change", function()
   params:set(new_main, low + 0.25 * (high - low))
   context.clear_engine_calls(); lfo_step(context, 2)
   assert_near(matrix.offset(new_main), 0.25 * (high - low), 1e-9, "the new main gets the offset")
-  assert_equal(matrix.offset("v1_rq"), 0, "no other key holds one")
+  assert_equal(matrix.offset(old_main), 0, "the old main gives its offset back (#839)")
+  assert_equal(engine_value(S, old_main), params:get(old_main), "and holds no extra offset: its stored value")
   local index_sent
   for _, call in ipairs(context.calls_named("setVoiceParam")) do
     if call.args[1] == 0 and call.args[2] == "index" then index_sent = call.args[3] end
