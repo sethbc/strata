@@ -1770,10 +1770,12 @@ function CI_WORKFLOW.cache_problems(workflow)
   -- the workflow (before `jobs:`), of the shard job and of each of its
   -- steps. An `env:` line (a step's first key, `- env:`, too) with nothing
   -- after it opens a block: the lines after it indented deeper than the
-  -- `env:`, or, when the first of them starts with `{`, the lines from that
-  -- `{` to its closing `}`. One that opens a flow mapping it does not close
-  -- (`env: {`) opens the lines to that `}`, whatever their indent (braces
-  -- counted, so `${{ ... }}` balances). On those lines and on the `env:`
+  -- `env:`, and, when the first of them starts with `{`, the lines from that
+  -- `{` to its closing `}` too. One that opens a flow mapping (`env: {`)
+  -- opens the lines to that `}`, whatever their indent (braces counted, so
+  -- `${{ ... }}` balances), and the lines indented deeper than the `env:`.
+  -- A block ends at the later of the two: its brace's close and its
+  -- indent's end. On those lines and on the `env:`
   -- line itself (`env: { A: 1, PATH: x }`), a PATH key is matched as a
   -- plain or quoted key (`PATH`, `"PATH"`, `'PATH'`, any spacing before its
   -- colon) after the line's indent, a `{` or a `,`; a key that only ends in
@@ -1781,8 +1783,10 @@ function CI_WORKFLOW.cache_problems(workflow)
   -- What it does not: it parses no quotes, so a quoted value holding
   -- `, PATH:` or `{ PATH:` (`A: "x, PATH: y"`) is refused too, a known
   -- over-refusal (`A: "PATH: y"` passes), and a brace inside a quoted value
-  -- is counted as a brace, so a quoted `}` can end a `{`-opened block
-  -- early; it does not read an explicit key written
+  -- is counted as a brace, so a quoted `}` closes a `{`-opened block early;
+  -- the indent still holds the block's deeper lines, so only a flow
+  -- mapping whose lines sit at the `env:`'s own indent, after a quoted `}`,
+  -- is left unread; it does not read an explicit key written
   -- with `?` (`? PATH` then `: x`), a tagged key (`!!str PATH: x`), an env
   -- given by an expression (`env: ${{ ... }}`, such as `fromJSON`) or one
   -- through an anchor or merge key (`<<: *name`). The workflow uses none of
@@ -1791,9 +1795,10 @@ function CI_WORKFLOW.cache_problems(workflow)
   local function braces(text) return select(2, text:gsub("{", "")) - select(2, text:gsub("}", "")) end
   local function blamed(line) problem("PATH is set in an env block (every command under it runs with that PATH): " .. line:match("^%s*(.-)%s*$")) end
   for _, scope in ipairs({ workflow:match("^(.-\n)jobs:\n") or "", shard.text }) do
-    -- block: the env:'s indent while its indented block lasts; depth: the
-    -- braces open while a `{`-opened block lasts; first: the next line is
-    -- the first after an `env:` with nothing after it
+    -- block: the env:'s indent while its block lasts; depth: the braces
+    -- open while a `{`-opened block's brace is open (the block then lasts
+    -- whatever the indent); first: the next line is the first after an
+    -- `env:` with nothing after it
     local block, depth, first
     for line in (scope .. "\n"):gmatch("([^\n]*)\n") do
       if not (line:match("^%s*$") or line:match("^%s*#")) then
@@ -1803,14 +1808,18 @@ function CI_WORKFLOW.cache_problems(workflow)
         if depth then
           if names_path(content) then blamed(line) end
           depth = depth + braces(content)
-          if depth <= 0 then depth, block = nil, nil end
+          -- the brace has closed: the block's deeper lines are still its own
+          if depth <= 0 then depth = nil end
         else
           if block and #line:match("^%s*") <= block then block = nil end
           local lead, rest = line:match("^(%s*%-?%s*)env:%s*(.-)%s*$")
           if lead then rest = rest:gsub("^#.*$", ""):gsub("%s+#.*$", "") end
           if (lead and names_path(rest)) or (block and names_path(content)) then blamed(line) end
           if lead and rest == "" then block, first = #lead, true
-          elseif lead and rest:match("^{") and braces(rest) > 0 then depth = braces(rest) end
+          elseif lead and rest:match("^{") then
+            block = #lead
+            if braces(rest) > 0 then depth = braces(rest) end
+          end
         end
       end
     end
@@ -2020,6 +2029,20 @@ test("a kept package reaches apt's archive folder only through the hash check, b
       expect = "PATH is set in an env block (every command under it runs with that PATH): SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s",
       edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
         "        env:\n          {\n        SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1, PATH: /tmp/s\n        }\n" } },
+    -- #825: a quoted } closes the brace early, but the block lasts to its
+    -- indent's end, the later of the two
+    { name = "PATH after a quoted } in a flow mapping over lines",
+      expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/s",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
+        "        env: {\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: \"}\",\n          PATH: /tmp/s\n        }\n" } },
+    { name = "PATH after a quoted } on the env: line",
+      expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/s }",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
+        "        env: { SEGMENT_DOWNLOAD_TIMEOUT_MINS: \"}\",\n          PATH: /tmp/s }\n" } },
+    { name = "PATH after a quoted } in a flow mapping opened on the line after env:",
+      expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/s",
+      edits = { "        env:\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1\n",
+        "        env:\n          {\n          SEGMENT_DOWNLOAD_TIMEOUT_MINS: \"}\",\n          PATH: /tmp/s\n          }\n" } },
     -- the pinned start: a PATH of its own before the loop, and a line above the script's first
     { name = "a PATH of its own above debs=", expect = differs(start, 3, 'export PATH="$RUNNER_TEMP/bin:$PATH"'),
       edits = { debs, '          export PATH="$RUNNER_TEMP/bin:$PATH"\n' .. debs } },
@@ -2051,6 +2074,7 @@ test("a kept package reaches apt's archive folder only through the hash check, b
       "        env:\n          STRATA_PATH: /tmp/bin\n", "        env:  # PATH is the runner's own\n          SC_STARTED: 1\n",
       "        env: {\n          SC_STARTED: 1,\n          MYPATH: /tmp/bin\n        }\n", "        with:\n          path: /tmp/bin\n",
       "        env: {\n          SC_STARTED: 1, MYPATH: /tmp/bin\n        }\n", "        env: { SC_STARTED: 1, MYPATH: /tmp/bin }\n",
+      "        env: { SC_STARTED: \"}\",\n          MYPATH: /tmp/bin }\n        with:\n          path: /tmp/bin\n",
       "        env: {\n        SC_STARTED: 1\n        }\n        with:\n          path: /tmp/bin\n",
       "        env:\n          {\n        SC_STARTED: \"${{ github.sha }}\"\n        }\n        with:\n          path: /tmp/bin\n" }) do
     assert_equal(table.concat(CI_WORKFLOW.cache_problems(CI_WORKFLOW.mutated(workflow, install_start,
@@ -2477,10 +2501,16 @@ test("every constant AGENTS.md quotes with a value has that value", function()
   local paragraph = read_repo_file("AGENTS.md"):match("%*%*Named constants, never magic numbers%.%*%*[^\n]*")
   assert_true(paragraph ~= nil, "found the Named constants paragraph")
   local problems, checked = {}, 0
-  for name, value in paragraph:gmatch("`([%u_]+)` %((%d+)[,)]") do
-    checked = checked + 1
-    if constants[name] ~= tonumber(value) then
-      table.insert(problems, name .. ": AGENTS.md says " .. value .. ", constants has " .. tostring(constants[name]))
+  for name, paren in paragraph:gmatch("`([%u_][%u%d_]*)` (%b())") do
+    local value = paren:match("^%((%-?%d[%d%.]*)[,)]")
+    if value then
+      checked = checked + 1
+      if constants[name] ~= tonumber(value) then
+        table.insert(problems, name .. ": AGENTS.md says " .. value .. ", constants has " .. tostring(constants[name]))
+      end
+    elseif paren:match("^%(%-?%d") then
+      -- a value the pattern cannot read (`NAME` (16 per voice)) is no quote it may skip
+      table.insert(problems, name .. " " .. paren .. ": a quoted value the test cannot read (write `NAME` (value) or (value, ...))")
     end
   end
   assert_true(checked >= 10, "the paragraph quotes at least ten values, saw " .. checked)
@@ -2517,6 +2547,9 @@ test("every constant state-and-voices.md quotes beside AGENTS.md's has that valu
       if number then
         if field then fields = fields + 1 else plain = plain + 1 end
         compare(label, value, number)
+      elseif paren and paren:match("^%(%-?%d") then
+        -- a value the pattern cannot read (`NAME` (16 per voice)) is no quote it may skip
+        table.insert(problems, label .. " " .. paren .. ": a quoted value the test cannot read (write `NAME` (value) or (value, ...))")
       elseif paren then
         for key, quoted in paren:gmatch("`([%l_][%w_]*)` (%-?%d[%d%.]*)") do
           fields = fields + 1
