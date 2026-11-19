@@ -477,6 +477,19 @@ test("a silent PSET read brings the tuning to the read's text, and choosing it t
   params:read(path)
   sent = sent_tuning(context)
   assert_true(#sent == 20 and sent[1].args[1] == 19, "a read sends the tuning once (" .. #sent .. " sends)")
+  -- a silent read of 19 equal over ji normal, then a read of it that is
+  -- not silent: the text is unchanged (norns runs no action), but the
+  -- engine still has ji normal, so the read sends 19 equal (review fix)
+  use("ji normal")
+  params:read(path, true)
+  context.clear_engine_calls()
+  params:read(path)
+  sent = sent_tuning(context)
+  assert_true(#sent == 20 and sent[1].name == "setTuning" and sent[1].args[1] == 19,
+    "a read after a silent one sends the tuning the engine lacks (" .. #sent .. " sends)")
+  context.clear_engine_calls()
+  params:read(path)
+  assert_equal(#sent_tuning(context), 0, "and a read when the engine has it sends nothing")
 end)
 
 test("the start sends no tuning and makes the tunings folder", function()

@@ -463,7 +463,9 @@ return function(S)
 
   -- Every read first brings the tuning to tuning_tones' text when the read
   -- left the two apart (a silent read runs no action, #842), honoring its
-  -- silent flag, so tuning_name names the tuning in force. Then: a PSET
+  -- silent flag, so tuning_name names the tuning in force; a read that is
+  -- not silent also sends it when the engine lacks it (a silent read's
+  -- left it so, and a later read of the same text runs no action). Then: a PSET
   -- without the tuning lines (3.7's) is read over the session's
   -- tuning: its voices' freq lines are set, and snapped, in that tuning,
   -- and only then does the read give the tuning its default. So when that
@@ -474,8 +476,12 @@ return function(S)
   -- PSET with its tuning lines, or one read over the default tuning, sets
   -- nothing here
   S.register_pset_hook({name = "tuning", read = function(path_base, number, pset_path, silent)
-    local text = params:get("tuning_tones")
-    if text ~= current.text then M.apply_text(text, silent) end
+    local tones_text = params:get("tuning_tones")
+    if tones_text ~= current.text then
+      M.apply_text(tones_text, silent)
+    elseif not silent and engine_text ~= current.text then
+      M.apply_text(current.text)
+    end
     local setup = S.lib.params_setup
     if not setup.read_defaulted("tuning_tones") then return end
     local file = io.open(pset_path, "r")
