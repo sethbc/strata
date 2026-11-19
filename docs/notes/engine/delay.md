@@ -10,11 +10,11 @@
 - **A time lengthened inside a clear's window can bring back audio from before the clear**: the window's length is the delay time when it opens (plus the margin), and a longer time set inside it reads further back into the line, past what the window muted, once it ends.
 - **`frozen` is a kept control, `t_clear` is not**: `setDelayFreeze` keeps it (`keepEffectControls`) and `startDelay` passes it, so a lift re-creates the node with it; Lua's bypass releases a freeze before it bypasses (`docs/notes/lua/fx-hold.md`), so the kept value is 0 at a lift from Lua. `clearDelay` sends nothing while the delay is bypassed (`effectLive`: in the fade too) and is never kept.
 - **Every `Synth(\strataDelay` passes `bufL` and `bufR`** (`docs/notes/engine/effects.md`); this area's own nodes start in one place, `startCheckDelay`, on lines of their own.
-- The new controls are `arg`s with literal clips (`frozen.clip(0, 1)`), where the Lua stub reads them (the plan's ruling 24); the constants are named once (`delayFreezeSeconds`, `delayFreezeRate`, `delayPingPongSnap`, `delayClearMargin`, `delayClearFade`).
+- The new controls are `arg`s with literal clips (`frozen.clip(0, 1)`), where the Lua stub reads them (the plan's ruling 24); the constants are named once (`delayFreezeSeconds`, `delayFreezeRate`, `delayPingPongSnap`, `delayClearMargin`, `delayClearFade`, `delayClearOpenSeconds`).
 
 ## The freeze and the clear (`StrataDelay.sc`)
 
-`\strataDelay` (`in, out, bufL, bufR, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0, frozen=0, t_clear=0`) is the effects area's node (`docs/notes/engine/effects.md`); this file covers 3.8's two additions. The delay has no engine area of its own: `addDelayCommands` (called from `addEffectCommands`) adds the two commands beside `setDelay`.
+`\strataDelay` (`in, out, bufL, bufR, time=0.375, feedback=0.4, mix=0, pingPong=0, fadeIn=0, frozen=0, t_clear=0, shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2`) is the effects area's node (`docs/notes/engine/effects.md`); this file covers 3.8's two additions. The delay has no engine area of its own: `addDelayCommands` (called from `addEffectCommands`) adds the two commands beside `setDelay`.
 
 - `setDelayFreeze(frozen)`, `"i"`: 0 releases, 1 freezes; any other value (2, -1, a float) is ignored with one console line (`fastModIndicesValid`, which posts through the modulation area's `postFastModIgnored`: `strata: setDelayFreeze ignored: frozen 2 is not a whole number from 0 to 1`). It keeps the value and sets the node (`setSynth` skips a missing node: a freeze set while bypassed is kept for the lift).
 - `clearDelay()`, `""`: no argument (norns takes an empty format, as `Engine_PolySub.sc` does). Sets `t_clear` 1 on the running node; nothing while bypassed.
