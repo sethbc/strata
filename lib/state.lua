@@ -337,6 +337,9 @@ return function()
   --     param's at the call (true: every key its add added; a function: a
   --     voice's keys for a type key, the synth record's own type's); in
   --     place of scene_defaults;
+  --   synth_keys = true (#840): on a scene_keys record, its scene keys are
+  --     the voice type's synth keys, each entry of voice_scene_keys marked
+  --     synth (the synth record alone);
   --   voice_rows.rows may be a function of the voice, and voice_rows.swaps
   --     = {[key] = fn(voice_idx) -> key | nil} replaces a row of the
   --     record's section by the key it gives (nil: the row stays)
