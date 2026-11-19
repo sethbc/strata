@@ -262,4 +262,27 @@ test("the editor's every state stays inside the layout", function()
     assert_true(names[name], "SETUP's layout state: " .. name)
   end
 end)
+
+-- #843: the hint row shows only the editor's own reason (a refused file);
+-- another module's flash, unscoped or SETUP's, leaves its hints
+test("another module's hints flash leaves the editor's hints; its own refused file still shows", function()
+  local context, S, editor = loaded()
+  S.lib.ui_flash.start("hints", "scenes loaded")  -- unscoped, as lib/scenes.lua's
+  next_frame(context)
+  assert_equal(hint_text(context), "K2:back E3:value", "an unscoped flash: the editor's hints")
+  S.lib.ui_flash.start("hints", "setting not saved", nil, S.constants.UI_PAGES.index.SETUP)
+  next_frame(context)
+  assert_equal(hint_text(context), "K2:back E3:value", "a SETUP flash of another module: the editor's hints")
+  local folder = _path.data .. S.lib.tuning.TUNING.folder
+  h.write_text(folder .. "broken.scl", "Broken\n0\n")
+  editor.close(); editor.open()
+  enc(2, 3); enc(3, 100)
+  tap(3)
+  next_frame(context)
+  local reason = hint_text(context)
+  assert_true(reason:find("count", 1, true) ~= nil, "its own reason shows: " .. reason)
+  editor.close(); editor.open()
+  next_frame(context)
+  assert_equal(hint_text(context), "K2:back E3:tuning", "a reason from before a close is not shown again")
+end)
 end
