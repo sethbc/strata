@@ -496,6 +496,9 @@ test("a load that fails after the backup leaves the live scenes on disk", functi
   local errors = context.clock.take_errors()
   assert_equal(#errors, 1, "the load's clock raised once")
   assert_true(errors[1]:find("a probe's failing action", 1, true) ~= nil, errors[1])
+  -- #847: the load's clock is gone after the error, so the next load may start
+  assert_true(not factory().loading(), "not loading after the error")
+  assert_equal(S.factory_clock, nil, "S.factory_clock cleared")
   assert_equal(S.lib.data_files.encode(S.scenes), before, "the live scenes stay")
   scenes_kept_case(context, S, "a failed step")
   assert_equal(marked(context), nil, "nothing marked")
@@ -845,6 +848,34 @@ test("cleanup cancels the load clock", function()
   assert_equal(local_value("S").factory_clock, nil, "no clock after cleanup")
   context.clock.run_for(1)
   assert_true(not util.file_exists(install_dir(context) .. "bell.wav"), "nothing copied after it")
+end)
+
+-- #847: a first run (or a pending one) whose load is refused clears
+-- pending, so its line prints at that start alone
+test("a first run whose load is refused prints its line once and is not tried again", function()
+  local context, _, dir = session({ first_run = true, unstarted = true, prepare = function(dir)
+    write_set_file(dir, "set.samples.data", "garbage")
+  end })
+  assert_true(not factory().loading(), "refused: no load")
+  assert_equal(#lines_with(context, "dusk not loaded"), 1, "one line")
+  assert_equal(marker(context).pending, nil, "pending cleared")
+  assert_equal(next(marker(context).loaded), nil, "nothing loaded")
+  cleanup()
+  context = load_strata({ script_dir = dir, data_subdir = folder_of(context) })
+  assert_true(not factory().loading(), "the next start runs nothing")
+  assert_equal(#lines_with(context, "dusk not loaded"), 0, "and prints nothing")
+end)
+
+-- #847: SETUP's list is closed by the cleanup step, its owner popped
+test("cleanup closes SETUP's list", function()
+  local _, S = session()
+  show_page("SETUP")
+  factory().open_list()
+  local owner = S.lib.ui_modal.top()
+  assert_true(factory().is_open() and owner ~= nil, "the list is the modal owner")
+  cleanup()
+  assert_true(not factory().is_open(), "closed")
+  assert_true(S.lib.ui_modal.top() ~= owner, "its owner popped")
 end)
 
 -- SETUP's list
