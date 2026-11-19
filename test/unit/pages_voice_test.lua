@@ -1301,4 +1301,36 @@ test("a held voice preset load's undo still shows and runs on the preset row (#8
   key(1, 0)
 end)
 
+-- #845: interval prob is not used while the arpeggiator is on: the row is
+-- dimmed then, selected or not, label and value alike
+test("interval prob is dimmed while the arpeggiator is on", function()
+  local context, S = started_voice_page()
+  local levels = S.lib.pages_voice.LAYOUT.unused_levels
+  local function row_levels()
+    redraw()
+    local label, value = drawn_row(context, "interval prob")
+    assert_true(label and value, "the interval prob row is drawn")
+    return label.level, value.level
+  end
+  put_cursor(S, "v1_interval_prob")
+  local label, value = row_levels()
+  assert_equal(label, 15, "selected, arpeggiator off: bright")
+  assert_equal(value, 15, "its value too")
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
+  label, value = row_levels()
+  assert_equal(label, levels.selected, "selected, arpeggiator on: dimmed")
+  assert_equal(value, levels.selected, "its value too")
+  assert_true(levels.selected < 15, "dimmer than a selected row")
+  put_cursor(S, "v1_intervals")
+  label, value = row_levels()
+  assert_equal(label, levels.other, "not selected, arpeggiator on: dimmed")
+  assert_equal(value, levels.other, "its value too")
+  assert_true(levels.other < 4, "dimmer than another row")
+  params:set("v1_arp", S.lib.arp.ARP.mode_index.off)
+  label, value = row_levels()
+  assert_equal(label, 4, "not selected, arpeggiator off: as any row")
+  local reverse_label = drawn_row(context, "reverse")
+  assert_true(reverse_label == nil or reverse_label.level == 4, "another row is not dimmed")
+end)
+
 end

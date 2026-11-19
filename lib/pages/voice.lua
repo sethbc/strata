@@ -37,6 +37,9 @@ return function(S)
     speed_format = "%.2fx",  -- buf_scan's value: a speed (3.7)
     pending_level = 4,       -- the type row's pending choice (3.8)
     no_preset = "--",        -- the preset row with nothing loaded (3.8)
+    -- a row whose param is not used now (interval prob while the
+    -- arpeggiator is on, #845): selected, and not
+    unused_levels = {selected = 10, other = 2},
   }
   local LAYOUT = M.LAYOUT
 
@@ -153,6 +156,12 @@ return function(S)
     screen.text(voice_text)
   end
 
+  -- Whether the row's param is not used now: interval prob while the
+  -- voice's arpeggiator is on (every grain takes the list's next step, #845)
+  local function row_unused(row)
+    return param_key(row) == "interval_prob" and S.lib.arp.on(S.selected_voice)
+  end
+
   local function draw_row(row, y, selected, marked)
     if row.selectable == false then
       screen.level(2)
@@ -165,7 +174,11 @@ return function(S)
       screen.rect(LAYOUT.mark_x, y - (LAYOUT.mark_height - 1), 1, LAYOUT.mark_height)
       screen.fill()
     end
-    screen.level(selected and 15 or 4)
+    if row_unused(row) then
+      screen.level(selected and LAYOUT.unused_levels.selected or LAYOUT.unused_levels.other)
+    else
+      screen.level(selected and 15 or 4)
+    end
     screen.move(LAYOUT.field_x, y)
     screen.text(row.label)
     local room = LAYOUT.value_right - (LAYOUT.field_x + screen.text_extents(row.label)) - LAYOUT.value_gap
@@ -432,6 +445,12 @@ return function(S)
     S.selected_voice = 1
     toggle_lock(1)
     M.place_cursor(M.row_of("v1_filter_mix"))
+  end})
+  -- interval prob dimmed (#845): the arpeggiator on, the cursor on the row
+  table.insert(layout_states, {name = "interval prob, the arpeggiator on", setup = function()
+    S.selected_voice = 1
+    params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
+    M.place_cursor(M.row_of("v1_interval_prob"))
   end})
   -- ALT's hint row: the widest, K2:locked K3:unlock (on a row that draws),
   -- and ALT+K2 held past the hold time (K2:reset); on the type row, no
