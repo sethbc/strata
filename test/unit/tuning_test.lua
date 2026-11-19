@@ -445,6 +445,40 @@ test("a PSET with its tuning lines, or read over twelve equal steps, sets no fre
   assert_equal(params:get("v3_freq"), saved, "the saved freq, exactly")
 end)
 
+-- #842: a silent read sets tuning_name and tuning_tones without their
+-- actions; the read hook brings the module to the text the read left
+-- (sending nothing, as the read is silent), so the name shown is the
+-- tuning in force, and a later choice of that tuning reaches the engine,
+-- whose tuning the silent read left as it was
+test("a silent PSET read brings the tuning to the read's text, and choosing it then sends it (#842)", function()
+  local context = load_strata({ data_subdir = "tuning_silent_read" }); finish_startup(context)
+  util.make_dir(context.data_dir)
+  use("19 equal")
+  local path = context.data_dir .. "nineteen.pset"
+  params:write(path, "nineteen")
+  use("ji normal")
+  assert_equal(tuning().count(), 12, "the session moved to ji normal")
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(params:get("tuning_name"), "19 equal", "the read's name")
+  assert_equal(tuning().count(), 19, "and the module's tuning is the read's")
+  assert_near(tuning().tones()[2], 1200 / 19, 1e-3, "its tones")
+  assert_equal(#sent_tuning(context), 0, "a silent read sends nothing")
+  use("19 equal")
+  local sent = sent_tuning(context)
+  assert_true(#sent == 20 and sent[1].name == "setTuning" and sent[1].args[1] == 19,
+    "choosing 19 equal then sends it: setTuning(19, 1200) and its tones (" .. #sent .. " sends)")
+  context.clear_engine_calls()
+  use("19 equal")
+  assert_equal(#sent_tuning(context), 0, "choosing it again, the engine's tuning, sends nothing")
+  -- a read that is not silent applies the text through its action, once
+  use("ji normal")
+  context.clear_engine_calls()
+  params:read(path)
+  sent = sent_tuning(context)
+  assert_true(#sent == 20 and sent[1].args[1] == 19, "a read sends the tuning once (" .. #sent .. " sends)")
+end)
+
 test("the start sends no tuning and makes the tunings folder", function()
   local context = load_strata(); finish_startup(context)
   assert_equal(#sent_tuning(context), 0, "a default start sends no setTuning or setTuningTone (ruling 42)")
