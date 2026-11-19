@@ -36,10 +36,10 @@ var planAsBefore, planDelayBounded, planReverbBounded, planNanInLoop, planPresen
 // least presentDb over the same case at amount 0 (the smallest reading is
 // 34.9 dB, the delay at ratio 1.5), of noise noisePresentDb over it (the
 // band above 1200 Hz holds the reverb's own share of the low-passed noise,
-// so it reads 20.6-22.2 dB); a loud case's shifted band within
-// proportionalDb of ten times a quiet one's (20 dB, level for level); a
-// steady loud case the duck leaves alone moving at most pumpDb more than
-// the same case at amount 0
+// so it reads 20.8-21.3 dB, 3.14.1 and 3.13); a loud case's shifted band
+// within proportionalDb of ten times a quiet one's (20 dB, level for
+// level); a steady loud case the duck leaves alone moving at most pumpDb
+// more than the same case at amount 0
 var presentDb = 30, noisePresentDb = 15, proportionalDb = 6, pumpDb = 1.5;
 // the shifted band at least shiftDb over the band the other ratio would
 // make (planPresent: the shift follows the ratio; two band-passes at rq
@@ -201,7 +201,12 @@ SynthDef(\strataCheckShimmerFdn18, {
 // difference from ref)
 windowField = { arg values, window, field; values !? { values[(window * fields) + field] } ? 0 };
 // A case's bands field (0 band energy, 1 energy, 2 largest and 3 smallest
-// level over 100 ms; 4 to 7 the same of its otherBands), after its windows
+// level over 100 ms; 4 to 7 the same of its otherBands), after its windows.
+// "The level over 100 ms" is the power (both channels' squares summed)
+// through a one-pole smoothing whose time constant is 100 ms
+// (\strataCheckShimmerBands' Lag of 0.69 s: Lag's time is the 60 dB one,
+// 6.9 time constants), so a "pump" figure is the largest smoothed level
+// over the smallest, in dB
 bandsField = { arg values, field; values !? { values[(numWindows * fields) + field] } ? 0 };
 
 // The one place this area starts a node of a delay or reverb def: on its
@@ -523,7 +528,7 @@ planPresent = { arg defs;
 // each reverb at size 0.8, ratio 2, at amount 0 and at amount 1, on pink
 // noise, with one control block of inf and NaN on its input at 1 s: the
 // input carries them, the output none over 4 s, and from 1.5 s on it plays
-// as the same case without them does (its energy within haloSameDb): the
+// as the same case without them does (its energy within sameDb, 1 dB): the
 // send is zeroed before the reverb and its level follower, so neither
 // FreeVerb2's combs, the FDN's lines nor the follower latch a NaN
 planNanInLoop = {
