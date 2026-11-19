@@ -1748,24 +1748,28 @@ test("the start-call allowances name every difference, and only those", function
     return anchor_error({kind = kind or "drop", match = match, replace = "%1)", count = count or 1,
       why = "0x: an anchor case"}, lines)
   end
+  -- an anchor error, and no other: each line would match but for the anchor
+  local function unanchored(...)
+    return anchored(...):find("match is not anchored", 1, true) ~= nil
+  end
   local half = {'setGrainParam(3, "scanMode", 0.5)'}
-  assert_true(anchored('"scanMode", 0', half):find("0x: an anchor case", 1, true) ~= nil,
+  assert_true(unanchored('"scanMode", 0', half) and anchored('"scanMode", 0', half):find("0x: an anchor case", 1, true) ~= nil,
     "an unanchored match raises, naming its why (it would let scanMode 0.5 pass for 0)")
-  assert_true(anchored('^setGrainParam%(3, "scanMode", 0', half) ~= "", "no trailing $ with a count above 0")
-  assert_true(anchored('setGrainParam%(3, "scanMode", 0%.5%)$', half) ~= "", "no leading ^")
+  assert_true(unanchored('^setGrainParam%(3, "scanMode", 0', half), "no trailing $ with a count above 0")
+  assert_true(unanchored('setGrainParam%(3, "scanMode", 0%.5%)$', half), "no leading ^")
   assert_equal(anchored('^setGrainParam%(3, "scanMode", 0%.5%)$', half), "", "anchored at both ends, it passes")
-  assert_true(anchored('setReverbFreeze%(', {}, 0) ~= "", "count 0 still needs its ^")
+  assert_true(unanchored('setReverbFreeze%(', {}, 0), "count 0 still needs its ^")
   assert_equal(anchored('^setReverbFreeze%(', {}, 0), "", "count 0 may match a prefix")
-  assert_true(anchored('^(setDelay%(.-), 0%)', {'setDelay(0.5, 0.3, 0.2, 0)'}, 1, "rewrite") ~= "",
+  assert_true(unanchored('^(setDelay%(.-), 0%)', {'setDelay(0.5, 0.3, 0.2, 0)'}, 1, "rewrite"),
     "a rewrite with no trailing $")
   -- an escaped %$ at the end is a dollar sign, no anchor; %%$ is a percent sign, then the anchor
-  assert_true(anchored('^price%(4%$', {'price(4$'}) ~= "", "a pattern ending in %$ is unanchored")
+  assert_true(unanchored('^price%(4%$', {'price(4$'}), "a pattern ending in %$ is unanchored")
   assert_equal(anchored('^rate%(50%%$', {'rate(50%'}), "", "a pattern ending in %%$ is anchored")
   -- tokens fill digits only, so they neither make nor break the anchor: a
   -- $ before a token is no longer last, and is a dollar sign
   assert_equal(anchored('^setVoiceType%(<v0>, <v0>%)$', {'setVoiceType(3, 3)'}), "", "a token pattern ending in $")
-  assert_true(anchored('^setVoiceType%(<v0>, <v0>', {'setVoiceType(3, 3)'}) ~= "", "a token pattern with no $")
-  assert_true(anchored('^setVoiceType%(3, 3%)$<v0>', {'setVoiceType(3, 3)$3'}) ~= "", "a $ before a token")
+  assert_true(unanchored('^setVoiceType%(<v0>, <v0>', {'setVoiceType(3, 3)'}), "a token pattern with no $")
+  assert_true(unanchored('^setVoiceType%(3, 3%)$<v0>', {'setVoiceType(3, 3)$3'}), "a $ before a token")
   -- a whole run (no voice given): a token entry stands for one entry a
   -- voice, each matched on its own line, its count per voice
   local NUM_VOICES = h.voice_count()
