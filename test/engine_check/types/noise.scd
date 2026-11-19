@@ -4,10 +4,11 @@
 // through a lowpass and a resonant bank, lib/engine/StrataTypeNoise.sc)
 // sits in voiceTypeDefs at Lua's place for it, plays at its defaults and at
 // each own key's range ends, is level-matched to the Pulse voice, leaves
-// nothing under 8 Hz, stays under 1 at its hottest with accents, and plays
-// an extra note of a held chord as a synth of its own def. Its place is
-// read, never written as a number (ruling 64). The def's pool size is the
-// memory area's (checkVoiceSynthSizes measures every def of voiceTypeDefs).
+// nothing under 8 Hz, stays under 1 at its hottest with accents and past
+// the bank's Nyquist cap, and plays an extra note of a held chord as a
+// synth of its own def. Its place is read, never written as a number
+// (ruling 64). The def's pool size is the memory area's
+// (checkVoiceSynthSizes measures every def of voiceTypeDefs).
 { arg h;
 var engine = h.engine, server = h.server;
 var check = { arg condition, message; h.check(condition, message) };
@@ -165,6 +166,35 @@ if (desc.isNil) {
         check.((result[0].size == cases.size) and: { result[0].every({ arg peak; (peak > 0.005) and: { peak < 1 } }) }
             and: { result[1].every(_ == 0) },
             "noise: q 0.005, grit 1, accents every 0.25 s for 4 s stay under 1 (peaks %, bad values %)".format(
+                result[0].collect(show), result[1]));
+        modBus.free;
+    }.value;
+
+    // "noise: bent past the bank's Nyquist cap it stays finite and under
+    // 1": each resonance is capped at filterCeiling x the sample rate
+    // (21600 Hz at 48 kHz), which freq's range (20-2000 Hz) and the
+    // crossmod alone never reach (2000 x 1.5 ** 3 x 3 = 20250 Hz at the
+    // hottest above), but a note's bend (noteExpression's, up to 16) or
+    // the voice's pitchbend does: at 2000 Hz, noteBend 4 puts the top
+    // resonance on the cap (27000 Hz asked), 16 every one (32000 Hz and
+    // up), and bend 2 with noteBend 16 and the frequency crossmod at full
+    // asks for 192000 Hz and up. A Resonz above Nyquist with a wide
+    // band (rq 1) is unstable (its pole radius passes 1 once the frequency
+    // passes about 0.64 of the sample rate), so at q 1 and 0.005, amp 1,
+    // the bank at 1, the peak stays finite, above 0.005 and under 1
+    {
+        var modBus = Bus.control(server, 1), cases, result;
+        var hot = [\amp, 1, \bank, 1, \color, 1, \freq, 2000];
+        modBus.set(1);
+        cases = [0.005, 1].collect({ arg q; [
+            quick ++ hot ++ [\q, q, \noteBend, 4],
+            quick ++ hot ++ [\q, q, \noteBend, 16],
+            quick ++ hot ++ [\q, q, \bend, 2, \noteBend, 16, \modFreqAmt1, 2, \modBus1, modBus.index]
+        ] }).flatten(1);
+        result = playCases.(cases, 0.5, 2);
+        check.((result[0].size == cases.size) and: { result[0].every({ arg peak; peak.isNaN.not and: { peak > 0.005 } and: { peak < 1 } }) }
+            and: { result[1].every(_ == 0) },
+            "noise: bent past the bank's Nyquist cap it stays finite and under 1 (q 0.005 then 1, each at noteBend 4, 16 and 16 with bend 2 and the frequency crossmod at full: peaks %, bad values %)".format(
                 result[0].collect(show), result[1]));
         modBus.free;
     }.value;
