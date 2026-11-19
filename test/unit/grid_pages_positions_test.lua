@@ -382,6 +382,38 @@ test("a slot's state change redraws a grid on side 2", function()
   end, {side = 2, only = SLOT_X + 1})
 end)
 
+-- #854: the record keys on the grid itself, beyond the core's record_level
+test("a finished take's record key goes from 15 to 8, a cleared slot's to 2, a canceled take's back to 8", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    params:set("record_duration", 2); params:set("buf6_record", 1)
+    assert_equal(pane.led(SLOT_X + 6, 1), 15, arrangement .. ": recording")
+    h.wake_buffer_clock(context, 6)
+    assert_equal(pane.led(SLOT_X + 6, 1), 15, arrangement .. ": a take waiting for the engine stays lit")
+    context.polls.fire("bufferState", context.polls.buffer_state_value(6, 0, 3))  -- the engine reports the take
+    assert_equal(pane.led(SLOT_X + 6, 1), 8, arrangement .. ": the finished take shows as holding audio")
+    clear_buffer(6)
+    assert_equal(pane.led(SLOT_X + 6, 1), 2, arrangement .. ": cleared: 2")
+    load_buffer(3, "/tmp/a.wav")
+    context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 12.5))
+    assert_equal(pane.led(SLOT_X + 3, 1), 8, arrangement .. ": slot 3 holds audio")
+    params:set("record_sync", 3)
+    pane.tap(SLOT_X + 3, 1)
+    -- the engine reports take 1 of slot 3 armed: ((1 * 4) + 0) * 8 + 2
+    context.polls.fire("recordState", ((1 * 4) + 0) * 8 + 2)
+    grid_redraw()
+    assert_equal(pane.led(SLOT_X + 3, 1), 11, arrangement .. ": armed")
+    -- and canceled: ((1 * 4) + 3) * 8 + 2. A canceled replace take shows
+    -- the slot empty until the engine's next length report puts back what
+    -- it kept (#311's state table)
+    context.polls.fire("recordState", ((1 * 4) + 3) * 8 + 2)
+    grid_redraw()
+    assert_equal(pane.led(SLOT_X + 3, 1), 2, arrangement .. ": canceled: empty until the engine reports")
+    context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 12.5))
+    grid_redraw()
+    assert_equal(pane.led(SLOT_X + 3, 1), 8, arrangement .. ": the engine reports the kept audio: 8 again")
+  end, {side = 2, only = SLOT_X + 1})
+end)
+
 -- Both panes and both sides ------------------------------------------------
 
 test("positions over its second side on a 256: a store held below stores the bookmark pressed below", function()

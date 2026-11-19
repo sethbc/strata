@@ -685,6 +685,44 @@ test("a page whose faders or signature raises is contained: no fader lines, an u
   h.claim_script_errors(context, 1, "strata: grid page signature failed: ", "broken signature")
 end)
 
+-- #854: the containment is per pane: on a 256, the top pane's raising
+-- faders or signature never cost the bottom pane its fader lines or its
+-- signature's follow
+test("on a 256 a page whose faders or signature raises spares the other pane's", function()
+  local context = load_bare()
+  local S = S_table()
+  local pages = PAGES()
+  local broken = {faders = true, signature = false}
+  probe_grid_page(pages.fx, {
+    faders = function() if broken.faders then error("broken faders") end return {} end,
+    signature = function() if broken.signature then error("broken signature") end return "s" end})
+  local other = {signature = "a"}
+  probe_grid_page(pages.scenes, {faders = {{line = 1, first = 1, keys = 16, id = "delay_mix"}},
+    signature = function() return other.signature end})
+  local top = grid_pane(context, "256 top", {port = 1})
+  local bottom = grid_pane(context, "256 bottom", {port = 1})
+  top.show(pages.fx); bottom.show(pages.scenes)
+  grid_redraw()
+  bottom.tap(16, 1)
+  assert_equal(params:get("delay_mix"), 1, "the bottom pane's fader line sets its param")
+  assert_equal(bottom.led(16, 1), 15, "and shows it")
+  params:set("delay_mix", 0)
+  assert_true(pcall(drift_update), "the drift tick does not raise")
+  assert_equal(bottom.led(1, 1), 15, "the bottom pane's line shows its param")
+  h.claim_script_errors(context, 1, "strata: grid page faders failed: ", "broken faders")
+  broken.faders, broken.signature = false, true
+  local follow = S.lib.grid_faders.follow_faders
+  assert_true(pcall(follow), "a raising signature is contained")
+  follow()
+  local refreshes = bottom.device.refresh_count
+  follow()
+  assert_equal(bottom.device.refresh_count, refreshes, "an idle tick repaints nothing")
+  other.signature = "b"
+  follow()
+  assert_true(bottom.device.refresh_count > refreshes, "the bottom pane's signature change still repaints")
+  h.claim_script_errors(context, 1, "strata: grid page signature failed: ", "broken signature")
+end)
+
 test("h.grid_pane's show raises when the pane does not end on the page, side and half asked for", function()
   local context = load_bare()
   local pages = PAGES()
