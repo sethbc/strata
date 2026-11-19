@@ -18,8 +18,6 @@ Since 3.8 every grid is built on one model. A **pane** is seven lines of sixteen
 6. [Voices](grid/pages/voices.md) - each voice's mute, solo and lock, its pattern's clear, randomize and copy, a copy of its sound onto another voice, and its level. Its FZ key freezes the voice's audio
 7. [FX](grid/pages/fx.md) - the delay, the reverb and the master in three sets of five faders, the bypasses, the delay's freeze and clear, sync, the filter's type and mix, and shimmer's interval
 
-Until a page arrives its page key is dark and does nothing.
-
 The sizes, one page each:
 
 - [16×16 (256)](grid/256.md) - two panes, rows 1-7 over rows 9-15, each with its own page and strip; it starts on patterns over voices
@@ -42,7 +40,7 @@ A grid of any other size stays dark. SETUP's rotation fields turn any grid a qua
 
 - **PL** plays or stops the patterns: 15 while playing, 4 while stopped
 - **FL** holds fill while it is down: 15 while fill is on, however it was turned on ([Fill](sequencer.md#fill)). A page change leaves it held; unplugging the grid ends it
-- **P1-P7** show a page on the strip's pane (row 16's on the 256's bottom pane): the shown page 15, the others 2, a page that is not there yet 0. The lit key pressed again shows the page's second side, where it has one, and lights 10 there
+- **P1-P7** show a page on the strip's pane (row 16's on the 256's bottom pane): the shown page 15, the others 2. The lit key pressed again shows the page's second side, where it has one, and lights 10 there
 - **O1-O7** start or stop a voice: 12 running, 6 running but silenced (muted, or another voice soloed), 2 stopped
 - **T- T+** (the 256's row 16) set the tempo down or up by 1 BPM and show it in the header; held, they repeat after half a second, ten times a second, until you let go
 - **M1-M7** (the 256's row 16) mute or unmute a voice: 15 muted, 4 not
@@ -65,7 +63,7 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - **Real-time recording** - toggle steps while playing
 - **Visual feedback** - the step that just played is highlighted (bright if active, dim if empty): the same step the SEQ page shows, until the next one plays
 - **Tempo control** - 1-300 BPM, the range of norns' clock tempo: on the 16×16's row 16 (T- and T+, by 1), on the [SEQ page](pages/seq.md) (ALT+E3) or in PARAMETERS. The 16×8, 8×16 and 8×8 have no tempo keys
-- **Pattern operations** - clear or randomize a voice's pattern on the SEQ page (ALT+K2 randomizes, ALT+K3 clears the selected voice's)
+- **Pattern operations** - clear or randomize a voice's pattern on the SEQ page (ALT+K2 randomizes, ALT+K3 clears the selected voice's), or on the grid's [voices page](grid/pages/voices.md) (CL clears, RN randomizes, PC copies and pastes)
 - **Fill** - FL, held on the 16×16's and 16×8's row 8 and the 8×16's column 8, on every page: on while the key is down, lit 15 while fill is on however it was turned on ([Fill](sequencer.md#fill)). The 8×8 has no fill key
 - **Automatic voice triggering** - a step starts a voice that is off, and gives a running voice a short accent (Karplus re-plucks its string) without restarting it; a voice in triggered grain mode also fires one grain
 - **Step level is velocity** - a step's brightness (1-15) sets how strong its accent is (a triggered grain carries that accent): level 15 is full, level 6 is 6/15. Steps set by hand are 15; randomized patterns use levels 8-15. Set a step's level with the two-key gesture above

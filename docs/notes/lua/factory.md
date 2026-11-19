@@ -14,7 +14,7 @@
 
 ## lib/factory.lua (`S.lib.factory`)
 
-Included at the end of the data modules, after `lib/fx_hold.lua` (3b's voice presets module will precede it), before `lib/params_setup.lua`; it reads every other module at call time. 3.8 builds and tests the mechanism and ships no set: there is no `factory/` folder in the script, so `sets()` is empty and no start finds an index.
+Included at the end of the data modules, after `lib/voice_presets.lua` and `lib/fx_hold.lua`, before `lib/params_setup.lua`; it reads every other module at call time. 3.8 builds and tests the mechanism and ships no set: there is no `factory/` folder in the script, so `sets()` is empty and no start finds an index.
 
 Fields: `FACTORY`, `sets()`, `load(key)`, `loading()`, `parse_params(text)`, `is_rig(param_id)`, `open_list()`, `close_list()`, `is_open()`.
 
