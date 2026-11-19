@@ -6,7 +6,7 @@ This file gives coding agents guidance for working in this repository. It is an 
 
 ## Project Overview
 
-Strata is an ambient granular soundscape generator for monome norns (its features: README.md and the user pages under docs/user/). The current release is 3.7.0 (see CHANGELOG.md).
+Strata is an ambient granular soundscape generator for monome norns (its features: README.md and the user pages under docs/user/). The current release is 3.8.0 (see CHANGELOG.md).
 
 **Where things are documented:**
 - `docs/status.md`: **read first.** The open items (with GitHub issues) and the limits to plan around. Update it at the end of each piece of work.
@@ -156,7 +156,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 
 **Guarded commands** ignore an out-of-range index or a non-finite continuous argument with one console line; a continuous argument out of the ranges above is clipped, or ignored alike by `setTuning` and `setTuningTone` (`docs/notes/engine/modulation.md`, `docs/notes/engine/envelopes.md`, `docs/notes/engine/notes.md`, `docs/notes/engine/positions.md`, `docs/notes/engine/effects.md`, `docs/notes/engine/tuning.md`, `docs/notes/engine/onsets.md`): `setFastLfo`, `stopFastLfo`, `syncFastLfo`, `setScatter`, `setFastOffset`, `setFastEnv`, `stopFastEnv`, `noteOn`, `noteOff`, `noteExpression`, `setNotePool`, `noteRegion`, `syncScan`, `setSlotGain`, `analyzeBuffer`, `setDelay`, `setDelayFreeze`, `setTuning`, `setTuningTone`, `setShimmer`.
 
-**Polls** (engine → Lua) pack each report into one float, and Lua matches each report to the command it names (`freezeEnded`: a freeze the engine ended, `docs/notes/lua/freeze.md`): `docs/notes/engine/buffers.md` (Polls, The polls' encodings), `docs/notes/engine/record.md`, `docs/notes/lua/buffers.md` and `docs/notes/lua/record.md`.
+**Polls** (engine → Lua) pack each report into one float, and Lua matches each report to the command it names or, for `freezeEnded`, the engine's count of the freezes it ended (`docs/notes/lua/freeze.md`): `docs/notes/engine/buffers.md` (Polls, The polls' encodings), `docs/notes/engine/record.md`, `docs/notes/lua/buffers.md` and `docs/notes/lua/record.md`.
 
 **Index conversion**: voices are 0-indexed in SC and 1-indexed in Lua, so always pass `voice_idx - 1`. Mod sources go through `engine_mod_source()` (Lua 0 = none / 1-7 → SC -1 / 0-6).
 

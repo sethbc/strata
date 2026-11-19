@@ -1,6 +1,6 @@
 # Strata roadmap
 
-The order and scope of the releases from 3.1 to 3.9 and 4.0. 3.1 to 3.7 have shipped (Shipped, below); **the three small revisions between 3.7 and 3.8, then 3.8, sound, are next.** `docs/status.md` has the open items.
+The order and scope of the releases from 3.1 to 3.9 and 4.0. 3.1 to 3.8 have shipped (Shipped, below); **3.9, what 3.8 delays, is next**, then the pre-4.0 review. `docs/status.md` has the open items.
 
 Date: 2026-11-07
 Status: brainstorm, reviewed 2026-11-07; cross-release decisions added 2026-11-08 (see "Cross-release decisions (2026-11-08)"). Added 2026-11-11, at the maintainer's request: releases 3.7 (rhythm) and 3.8 (sound), with fourteen features from a review of four hardware granular instruments, and in 3.6 the iii scripts and program change. It sets the order and scope of the releases after 3.0.2. It is not a build plan: each release gets its own design document (like `docs/design/3.0-design.md`) and an implementation plan before any code is written.
@@ -84,7 +84,7 @@ The code and documents are restructured for agent-driven development, and every 
 
 ---
 
-## Shipped: 3.1 to 3.7
+## Shipped: 3.1 to 3.8
 
 | Release | Theme | Design | Shipped |
 |---|---|---|---|
@@ -95,86 +95,22 @@ The code and documents are restructured for agent-driven development, and every 
 | 3.5 | Polyphony and MPE | `docs/design/3.5-design.md` | 3.5.0, 2026-11-13 |
 | 3.6 | Integration | `docs/design/3.6-design.md` | 3.6.0, 2026-11-15 |
 | 3.7 | Rhythm | `docs/design/3.7-design.md` | 3.7.0, 2026-11-16 |
+| 3.8 | Sound | `docs/design/3.8-design.md` | 3.8.0, 2026-11-18 |
 
-Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13, 3.6's on 2026-11-15, 3.7's on 2026-11-16): each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table.
+Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13, 3.6's on 2026-11-15, 3.7's on 2026-11-16, 3.8's on 2026-11-18): each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table. The work between 3.7 and 3.8 (done 2026-11-17: the three revisions, `frozen` renamed `locked`, the 256's fader pages for newer params and MIDI note off as latch or release; the fixes of #738-#744 and #747-#754; and the three questions moved up from the pre-4.0 review: an LFO's own destination as a home routing of the matrix, one stepper under the pattern chain and the scene sequencer, the per-voice values as one table with one registration path, and scenes that travel with the PSET) had no release of its own and shipped in 3.8.0; its design is `docs/design/3.8-groundwork-design.md`.
 
 ---
-
-## Between 3.7 and 3.8: done
-
-Done 2026-11-17, with no release of its own (its fragments ride to 3.8.0): the three revisions (`frozen` renamed `locked`, the 256's fader pages for newer params, MIDI note off as latch or release), the fixes of #738-#744 and #747-#754 with the findings filed during the build, and the three questions moved up from the pre-4.0 review, decided and built: an LFO's own destination is a home routing of the matrix, one stepper runs under the pattern chain and the scene sequencer, the per-voice values are one table with one registration path (scene format 9), and scenes travel with the PSET. The design is `docs/design/3.8-groundwork-design.md`; what was decided while it was built is in `docs/decisions/3.8.md`. This section goes with 3.8.0.
-
-## 3.8: Sound
-
-Added 2026-11-11, at the maintainer's request. It widens what a voice can be. It gets its own design before code, and that design starts from the real-time memory left after 3.5. *2026-11-17:* its design is `docs/design/3.8-design.md`, approved that day; where it differs from the sketches below, the design rules ("The roadmap against the facts" there says where and why).
-
-### More voice types
-
-- Each of the seven voices has one fixed synth today (Resonator, FM, Folder, Sub, Pulse, Karplus, Ring). This release lets a voice choose its type, and adds types to choose from: a wavetable voice, an additive voice and a noise or texture voice are the candidates `docs/history.md` has listed since 1.0.
-- Seven voices stay seven (the non-goal above stands): this is a choice per voice, not more voices.
-- The design decides: which types; how a voice's params, its MAIN param, its scenes and its PSETs follow a type change (a scene made with one type recalled on another); what each new SynthDef costs in real-time memory against 3.5's notes per voice; whether old scenes need a migration (each voice's type defaults to today's). It builds on the value table and the scene format the groundwork left (`docs/design/3.8-groundwork-design.md`): a voice type is a record's set of keys.
-
-### Microtuning and a scale editor
-
-- Scales other than twelve equal steps: a tuning loaded from a Scala file or picked from a built-in list, applied wherever Strata turns a note into a frequency or a rate: 3.2's scale quantize, 3.4's step notes, MIDI notes and 3.5's note allocation and MPE.
-- **A scale editor** (added 2026-11-11, from the hardware review): toggle each of the twelve pitch classes to make a scale of your own, beside the built-in list. The engine's `setScale` already takes any 12-bit set, so this is a screen and a stored mask.
-- The design decides: one tuning for the script or one per voice; how a tuning meets the engine's quantize (`setScale` sends a 12-bit mask today); where its file lives and how PSETs and scenes name it.
-
-### The pan wander, and the sends (added 2026-11-16)
-
-- **The pan wander becomes a param.** Every grain synth pans its output with a slow random wander of half the stereo width, kept in 3.2 for old scenes and shown on no screen. A per-voice depth beside pan jitter, on VOICE and in scenes, defaulting to today's width.
-- **Plain sends are reopened at this release's design.** The sends keep 3.0's crossfade mix because a plain send and return would have made old scenes louder; with shimmer and the delay freeze on the table, the design weighs the conventional mixer again (`docs/design/3.7-facts/revisit.md`, 11).
-
-### Shimmer
-
-- Pitch-shifted feedback in the reverb or the delay, the rising or falling halo ambient music leans on.
-- It costs real-time memory (a pitch shifter is a delay line), so the design measures first on the standard tier, and may offer it on the high tier only, as the FDN reverb and spectral freeze are.
-
-### Voice presets
-
-- Save one voice's sound (its type, synth, grain, filter and send values) to a file and load it into any voice, and copy a voice's sound to another voice. Scenes store all seven voices at once and the grid's copy and paste covers patterns only, so there is no way today to keep or move a single voice's sound.
-- The design decides: what a preset holds and leaves out (the source and its buffer, the pattern, the lock); where the files live; the keys on VOICE and the grids.
-
-The seven items below, and the scale editor above, were added on 2026-11-11 from the same review of the GR-1, GR-MEGA, GR-2 and S-4.
-
-### A deeper grain
-
-- **A continuous grain window.** The five fixed envelope shapes become points on a continuous control (from percussive to swelling, with a skew), so an LFO, a macro or a routing can move the grain's shape. It is a finer bank of envelope buffers picked per grain, as the engine picks one of five today; the design sizes the bank against the buffer memory.
-- **Grain probability.** A chance for each grain to sound, for sparse and uneven clouds: one more per-grain draw, on the grain trigger, like 3.2's variation draws.
-- **A grain arpeggiator.** A voice's grain intervals are drawn at random today. An order (up, down, up and down, shuffled) steps the grains through the set in turn, and, after 3.5, through a held chord.
-- **Constant overlap.** A mode in which grain size and density move together, so one control changes the grain's length while the cloud keeps its thickness. Lua couples two params the engine already has.
-
-### Voices that grain each other
-
-- A voice's grain stage can read another voice's live sound, as it reads its own synth or the input today, so voices chain: one voice's output becomes the next one's material.
-- Every voice already writes a ring; the work is in the engine's ring readers (which ring a grain synth reads, freeze, and the rule that a ring is written only by its own writer) and in what a loop of voices reading each other does. The design measures the memory of a second reader per ring first.
-
-### An input channel per voice
-
-- An input voice picks the left channel, the right channel or both, so two mono sources (a guitar and a microphone, say) feed different voices. Today every input voice reads the one stereo input ring; a channel choice is a control on the grain synth's read.
-
-### The 256 layout as a whole (moved up 2026-11-16)
-
-- The 16×16 layout grew by filling holes (`revisit.md`, 13): page 5's key apart from pages 1 to 4, the scene sequence's length on two rows, freeze behind a hold, four keys that play and stop, no reverb fader. 3.8's design places its new keys (delay freeze, voice presets, the voice type) in a layout reworked as a whole, once, and says what follows on the 128s and the 64. Kept for the pre-4.0 review until 2026-11-16.
-
-### Factory presets: the code (moved up 2026-11-16)
-
-- 3.8's last package builds the code that installs and loads 4.0's factory presets (the rules under pre-4.0 and 4.0 below), once the voice types exist; the sounds are made at 4.0.
-
-### Delay freeze and clear
-
-- **Freeze** holds what is in the delay as a loop (its feedback at one and its input closed) until released, as a drone to play over; **clear** empties it at once. Both are controls on the delay SynthDef, with a key on FX and the grids. A reverb freeze, possible only in the high tier's reverb, was designed for 3.8 and cut when the frozen tail failed its 1 dB condition (#819); it is 3.9's.
 
 ## 3.9: what 3.8 delays
 
 Added 2026-11-18 (the maintainer): a version number was left free before 4.0 on purpose, and 3.9 takes whatever 3.8 delays. Each item has its issue on the 3.9 milestone; 3.9 gets its own design first, like every release.
 
 - **The high tier's reverb freeze** (#819). 3.8's package built the design's freeze on the FDN and measured it on SuperCollider 3.13 and 3.14.1: frozen, the tail lost 2.4 to 3.2 dB above 6 kHz in six seconds and stepped by up to 1.24 dB at the freeze, so by the plan's own condition it was cut. The cause is known (an interpolating delay line never lands on a whole sample once its time has moved), and so is what a freeze that holds needs: whole-sample reads on every line while frozen, by a second read of each line (about 144 KB of the real-time pool) or by moving the lines into buffers (that much back to the pool), and taps that keep their interpolation and damping. The FX page and the grids' FX page already reach the freeze through one test (`S.lib.fx_hold.offered`), so they light up when it exists.
-- **What 3.8's last review defers**: a finding too large for 3.8's fix wave goes here with its issue, never into the pre-4.0 review.
+- **What 3.8's last review deferred**: nothing. Its findings (#823-#861) were moved to 3.8 and fixed before 3.8.0, at the maintainer's word, so the 3.9 milestone holds #819 alone; a finding too large for a release's last fix wave still comes here with its issue, never into the pre-4.0 review.
 
 ## pre-4.0 and 4.0: full review, then release
 
-Added 2026-11-08. After 3.8 ships (3.6, until 3.7 and 3.8 were added on 2026-11-11), the whole project gets one full code review before 4.0, as 3.0.2 did for 3.0.1:
+Added 2026-11-08. After 3.9 ships (3.6, until 3.7 and 3.8 were added on 2026-11-11; 3.8, until 3.9 was added on 2026-11-18), the whole project gets one full code review before 4.0, as 3.0.2 did for 3.0.1:
 - **Scope.** All of it: the Lua script and its modules, the engine and its areas, the tests and checks (the Lua suites, the sync check, the engine check), CI, the user docs and the notes. Correctness first (bugs, broken invariants, races, memory on the standard and high tiers, SuperCollider 3.13 behavior on norns), then dead code, duplication and docs that no longer match the code.
 - **Every finding is filed and fixed, whatever its priority.** Each finding gets its own GitHub issue, from a crash to a stale comment, and each issue is fixed in its own pull request, through the usual checks. Nothing is triaged out, deferred to a later release or recorded as "known and accepted, no action": a finding is closed only by a merged fix. A final review of those fixes follows, and everything it finds is filed and fixed the same way, until a review finds nothing.
 - **Stricter than 3.0.2.** 3.0.2 followed this pattern (issues #10-#27, then #46-#52, one pull request each, all fixed), but grouped its findings by area into checklist issues and accepted three small ones without a fix (the "Known and accepted, no action" list in `docs/status.md`). pre-4.0 files one issue per finding and accepts none; the items on that list today are among its findings.
@@ -183,7 +119,7 @@ Added 2026-11-08. After 3.8 ships (3.6, until 3.7 and 3.8 were added on 2026-11-
 - **The review alone** (2026-11-16): what was kept for it moved up. The two questions added the same day (the 256's layout and an LFO's own destination as a routing) go to 3.8 and to the questions decided before 3.8, the known findings to the fixes before 3.8, and the factory presets' code to 3.8.
 - **Factory presets** (added 2026-11-11, at the maintainer's request). 4.0 ships content, so a new player hears what Strata can do in the first minute: a set of scenes, the PSET they belong to (with 3.4's side files for macros, routings and recorders) and a few short, freely licensed samples for the buffers.
   - They never touch a player's own data: they load only when asked (a SETUP action), or once on a first run that finds no scenes file, and a player's scenes, PSETs and buffers are never overwritten.
-  - The code that installs and loads them is built in 3.8 (its last package, moved up 2026-11-16), so the review covers it; the sounds themselves are made and tuned by ear on a norns, on both tiers, up to the release, beside the hardware check (#6).
+  - The code that installs and loads them was built in 3.8 (its last package, moved up 2026-11-16; SETUP's `factory sets` row), so the review covers it; the sounds themselves are made and tuned by ear on a norns, on both tiers, up to the release, beside the hardware check (#6).
   - 4.0's own design decides: how many scenes and which features each shows; where the files live in the repository and on the device; the samples' sources and licenses; how a later release adds to them or replaces them.
 
 ---

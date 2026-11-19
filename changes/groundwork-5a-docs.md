@@ -1,2 +1,0 @@
-### Changed
-- Docs: the decisions of the work before 3.8 (`docs/decisions/3.8.md`: the maintainer's decisions, the plan review's rulings, the plan's thirty-seven rulings and the build's, each with what it costs if wrong, and the seven places left for 3.8's voice types); the roadmap's "Between 3.7 and 3.8" marked done; the status file's next step (3.8's plan) and open items (#6, #772); the design marked where the build differs; the plan removed.
