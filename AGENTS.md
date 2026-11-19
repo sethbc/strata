@@ -76,6 +76,7 @@ A top-level module `lib/<name>.lua` the table leaves out is `S.lib.<name>`, its 
 | `lib/ui/voice_rows.lua`, `lib/ui/cursors.lua` | `ui_voice_rows`, `ui_cursors` | `docs/notes/lua/ui-core.md` | ui_cursors_test.lua |
 | `lib/ui/alt.lua` | `ui_alt` | `docs/notes/lua/ui-core.md` | ui_alt_test.lua |
 | `lib/ui/detent.lua` | `ui_detent` | `docs/notes/lua/ui-core.md` | ui_detent_test.lua |
+| `lib/ui/name_entry.lua` | `ui_name_entry` | `docs/notes/lua/ui/name-entry.md` | ui_name_entry_test.lua |
 | `lib/ui/zones.lua` | `ui_zones` | `docs/notes/lua/ui-core.md` (The zones editor) | ui_zones_test.lua |
 | `lib/ui/slice_editor.lua` | `ui_slice_editor` | `docs/notes/lua/ui/slice-editor.md` | ui_slice_editor_test.lua |
 | `lib/ui/voice_picker.lua` | `ui_voice_picker` | `docs/notes/lua/ui/voice-picker.md` | ui_voice_picker_test.lua |

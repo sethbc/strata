@@ -14,7 +14,6 @@ return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
   local field_list = S.lib.ui_field_list
-  local textentry = require "textentry"
 
   -- The layout: the title at title_y, visible rows from first_y, spacing px
   -- apart, a row's type right-aligned at value_right (the scroll marker owns
@@ -126,63 +125,31 @@ return function(S)
   end
 
   ---------------------------------------------------------------------------
-  -- The name entry: norns' textentry, which takes the global key, enc and
-  -- redraw while it is open and cancels on a K2 release, opened on K3's
-  -- release (SCENES' pattern, a copy of its own)
+  -- The name entry: norns' textentry through S.lib.ui_name_entry (SCENES'
+  -- too, #849), which takes the global key, enc and redraw while it is
+  -- open and cancels on a K2 release, opened on K3's release
   ---------------------------------------------------------------------------
 
-  -- A copy of SCENES' name entry (lib/pages/scenes.lua, open_name_entry and
-  -- reconcile_name_entry): a fix to one belongs in the other too (3.8's
-  -- ruling keeps the copy; the final review records it).
-  -- The callback it was given (nil while none is open), the slot it names,
-  -- and Strata's key and enc as it opened
-  local NAME_ENTRY = {callback = nil, slot = nil, script_key = nil, script_enc = nil}
+  local name_entry = S.lib.ui_name_entry.new()
 
-  local function close_name_entry()
-    NAME_ENTRY.callback, NAME_ENTRY.slot, NAME_ENTRY.script_key, NAME_ENTRY.script_enc = nil, nil, nil, nil
-    request_redraw()
-  end
-
-  -- (A copy of SCENES' open_name_entry in lib/pages/scenes.lua: a fix to
-  -- one belongs in the other.)
   -- Open the entry for slot, from its name; the text saves the voice there
   -- (S.lib.voice_presets.save), a cancel saves nothing
   local function open_name_entry(slot)
-    -- the entry takes every key while open, K1's release with them: forget
-    -- the held keys and ALT now, or ALT would stay held after it
-    forget_held_keys()
     local voice_idx = picker.voice
-    local function named(text)
-      if NAME_ENTRY.callback ~= named then return end  -- forgotten when the menu took it over
-      close_name_entry()
-      if text ~= nil then presets().save(voice_idx, slot, text) end
-    end
-    NAME_ENTRY.callback, NAME_ENTRY.slot = named, slot
-    NAME_ENTRY.script_key, NAME_ENTRY.script_enc = key, enc
     local preset = presets().preset(slot)
-    textentry.enter(named, preset and preset.name or "", string.format(VOICE_PICKER.entry_heading, slot))
+    name_entry.open(preset and preset.name or "", string.format(VOICE_PICKER.entry_heading, slot),
+      function(text) presets().save(voice_idx, slot, text) end)
   end
 
-  -- norns has one textentry: as SCENES' reconcile_name_entry
-  -- (lib/pages/scenes.lua, a copy of it: a fix to one belongs in the
-  -- other), when the menu closes and the entry's callback is no longer the
-  -- picker's, the entry is forgotten and Strata's key and enc are put
-  -- back; when it is still the picker's and the entry holds the keys, the
-  -- entry takes the screen back. Acts only on its own callback, so SCENES'
-  -- entry is left to SCENES. First, an ALT+K2 or ALT+K3 press the menu
-  -- took (its release never comes) is forgotten, as SEQ's step editor
-  -- forgets its ALT+K2 (forget_editor_k2_press)
+  -- The menu-close hook: first an ALT+K2 or ALT+K3 press the menu took
+  -- (its release never comes) is forgotten, as SEQ's step editor forgets
+  -- its ALT+K2 (forget_editor_k2_press); then the entry's reconcile (a menu
+  -- that took the one textentry over forgets the entry; one that came and
+  -- went hands it the screen back), which acts only on the picker's own
+  -- entry, so SCENES' is left to SCENES
   function M.reconcile_name_entry()
     picker.k2_at, picker.k3_slot = nil, nil
-    if NAME_ENTRY.callback == nil then return end
-    if textentry.callback ~= NAME_ENTRY.callback then
-      key, enc = NAME_ENTRY.script_key, NAME_ENTRY.script_enc
-      close_name_entry()
-      norns.menu.init()
-    elseif key == textentry.key then
-      redraw = norns.none
-      textentry.redraw()
-    end
+    name_entry.reconcile()
   end
   S.register_menu_close(function() M.reconcile_name_entry() end)
 
