@@ -536,6 +536,7 @@ lateCopyChecks = {
     var reach = engine.tryPerform(\frozenReachSeconds) ? 3.0;
     var roomSeconds = (engine.tryPerform(\copyRoomFrames, frames) ? sampleRate) / sampleRate;
     var lines = List.new, attempts = List.new, copyTimes, values, frozenState, late;
+    var holdBuffer, perPartial, holdQueue;
     copyTimes = { arg voice;
         var ring = copyRing.(voice), size = ring[0].numFrames, span = (reach * sampleRate).round.asInteger.min(size);
         var bus = Bus.control(server, 2), probe, times, last;
@@ -609,6 +610,55 @@ lateCopyChecks = {
         and: { lines.size == 2 } and: { lines.last.contains("abandoned") } and: { engine.copyAttempts == 8 },
         "outrings: a reader's hold whose bound of attempts is spent (2, each % s late) is abandoned with its line: unfrozen on its live ring (attempts %, [frozen, copied, freeze] %, lines %, bound back to %)".format(
             late.round(0.001), attempts, frozenState.(3), lines, engine.copyAttempts));
+    // The missing head (#835): the server's command queue held 1.5 s (a
+    // /b_gen sine1 runs in its non-real-time thread, and every reply after
+    // it, a /c_get's among them, waits for it), so the copy's first head
+    // read gets no answer within ringHeadFrame's 1 s and the attempt goes
+    // on without a copy (no beforeCopyHook). A missing head is no late
+    // copy: the late line counts late copies only. The second attempt's
+    // read is answered by the first's late reply (Bus.get matches by
+    // index), an older head, so its copy counts as late, and the third
+    // lands: one late copy, no line
+    holdBuffer = Buffer.alloc(server, 2 ** 20, 1);
+    server.sync;
+    perPartial = {
+        var started = Main.elapsedTime;
+        holdBuffer.sine1(Array.fill(20, 0.001), false, false, true);
+        server.sync;
+        (Main.elapsedTime - started) / 20
+    }.value;
+    holdQueue = { arg seconds; holdBuffer.sine1(Array.fill((seconds / perPartial).round.asInteger.clip(1, 4000), 0.001), false, false, true) };
+    (engine.freezeLeaveSeconds + 0.1).wait;
+    lines.clear; attempts.clear;
+    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt) };
+    holdQueue.(1.5);
+    command.(\setGrainParam, 3, \freeze, 1.0);
+    h.waitFor({ freeze[\copied][3] }, 5);
+    engine.beforeCopyHook = nil;
+    server.sync;
+    check.(freeze[\copied][3] and: { attempts.notEmpty } and: { attempts.first >= 2 } and: { lines.isEmpty },
+        "outrings: a copy whose head the server did not give within 1 s (its queue held 1.5 s) is made again, and the missing head is no late copy: no late line (attempts with a head %, lines %)".format(
+            attempts, lines));
+    command.(\setGrainParam, 3, \freeze, 0.0);
+    // the bound spent on a missing head (a bound of 1): the hold is
+    // abandoned with a line that says the server gave no head, not that a
+    // copy was late
+    (engine.freezeLeaveSeconds + 0.1).wait;
+    lines.clear; attempts.clear;
+    engine.tryPerform(\copyAttempts_, 1);
+    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt) };
+    holdQueue.(1.5);
+    command.(\setGrainParam, 3, \freeze, 1.0);
+    h.waitFor({ freeze[\frozen][3].not }, 3);
+    engine.beforeCopyHook = nil;
+    engine.tryPerform(\copyAttempts_, nil);
+    server.sync;
+    check.(attempts.isEmpty and: { frozenState.(3) == [false, false, 0] } and: { lines.size == 1 }
+        and: { lines.first.contains("abandoned") } and: { lines.first.contains("no head") }
+        and: { lines.first.contains("late").not },
+        "outrings: a hold whose one attempt got no head from the server is abandoned with a line that says so (attempts with a head %, [frozen, copied, freeze] %, lines %)".format(
+            attempts, frozenState.(3), lines));
+    holdBuffer.free;
     // a switch during a late copy's third attempt cancels it: no copy, no
     // abandon (the one line is the late one)
     lines.clear; attempts.clear;
