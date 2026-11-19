@@ -32,6 +32,6 @@ Line v is voice v (1-7); every key acts at its press but CL and RN, which act at
 | 8 | VC | no mark: mark v; another voice's mark: `voice_presets.copy(mark, v)` (the mark stays); the marked voice: drop it | - | 15 / 4 / 2 |
 | 9-16 | lv | a fader line of 8 keys, `v<v>_amp` (the pane engine's) | - | bar 8, value 15 |
 
-`copy` captures the marked voice's sound at the paste, loads it into v (its type, its type's synth keys and the library's sound keys) and keeps v's place, lets go of v in a running scene fade (`S.lib.scenes.release_voice`) and holds the one undo, which ALT+K2 on VOICE on that voice puts back (`S.lib.mutation.hold_voice`). The page has no undo key (`S.lib.mutation.undo_voice` is not called).
+`copy` captures the marked voice's sound at the paste, loads it into v (its type, its type's synth keys and the library's sound keys) and keeps v's place, lets go of v in a running scene fade (`S.lib.scenes.release_voice`) and holds the one undo, which ALT+K2 on VOICE on that voice puts back (`S.lib.mutation.hold_voice`). The page has no undo key.
 
 The 256's lower strip's mute keys (M1-M7, the pane engine's) and MU are one action in two places. Turned (the 128v), each voice's eight keys run down rows 1-8 of its column and its level up rows 9-16 (row 16 the minimum). On a 64 the left half (x 1-8) is the eight keys and the right half (x 9-16) the level fader across its eight keys; the copies are the port's, so a mark made on the left half is still shown after a switch to the right and back.

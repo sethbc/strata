@@ -516,7 +516,7 @@ test("ALT+K2 on VOICE undoes a grid voice copy", function()
   pane.tap(KEY.voice_copy, 5)
   assert_equal(S.voices[5].name, S.voices[2].name, "voice 5 on voice 2's type")
   assert_true(S.voices[5].name ~= before.type, "another type than its own")
-  assert_true(S.lib.mutation.holds_voice(5), "the copy's undo is held")
+  assert_true(S.lib.mutation.undo_for(S.constants.UI_PAGES.index.VOICE, "voice", 5), "the copy's undo is held")
   alt_k2_on_voice(S, 5)
   assert_equal(S.voices[5].name, before.type, "voice 5's own type")
   for key, value in pairs(before.values) do
