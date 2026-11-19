@@ -9,9 +9,10 @@
 -- load or a copy takes a voice's sound (its type, its synth keys and the
 -- in keys) and keeps its place (its active and source, and every out key),
 -- lets go of the voice in a running fade (S.lib.scenes.release_voice) and
--- holds the voice's capture from before for VOICE's undo
--- (S.lib.mutation.hold_voice). Fields of this module's table:
--- VOICE_PRESETS, capture, load, copy, save, clear, preset, loaded_name.
+-- holds the voice's sound from before (its type, synth keys and in keys,
+-- not its whole capture) for VOICE's undo (S.lib.mutation.hold_voice).
+-- Fields of this module's table: VOICE_PRESETS, capture, load, copy, save,
+-- clear, preset, loaded_name.
 -- See docs/notes/lua/voice-presets.md
 
 return function(S)
@@ -130,26 +131,39 @@ return function(S)
   end
 
   -- Write voices.data: true, or false and why (the session's file blocked,
-  -- or the write failed; the file is then as it was)
+  -- or the write failed; the file is then as it was). While the file as
+  -- read holds damaged presets, it is set aside first and kept only once
+  -- the write lands: a failed write moves it back (#848)
   local function write()
     if store.blocked then return false, VOICE_PRESETS.file .. " could not be set aside at the start" end
+    local backup
     if store.dropped then
       -- the file as read, damaged presets and all, is kept before the
       -- first write drops them; no backup name free: nothing is written
-      local backup, failure = S.lib.data_files.set_aside(path(), VOICE_PRESETS.backup_suffix)
+      local failure
+      backup, failure = S.lib.data_files.set_aside(path(), VOICE_PRESETS.backup_suffix)
       if not backup then
         print("strata: " .. VOICE_PRESETS.file .. " not saved: its damaged presets could not be kept ("
           .. tostring(failure) .. ")")
         return false, tostring(failure)
       end
-      store.dropped = false
-      print("strata: " .. VOICE_PRESETS.file .. " as read kept as " .. backup:match("[^/]*$"))
     end
     util.make_dir(S.lib.scenes.scene_data_dir)
     local written, problem = S.lib.data_files.write(path(), stored_value())
     if not written then
       print("strata: " .. VOICE_PRESETS.file .. " not saved: " .. tostring(problem))
+      if backup then
+        local restored, why = os.rename(backup, path())
+        if not restored then
+          print("strata: " .. VOICE_PRESETS.file .. " as read is kept as " .. backup:match("[^/]*$")
+            .. " (" .. tostring(why) .. ")")
+        end
+      end
       return false, tostring(problem)
+    end
+    if backup then
+      store.dropped = false
+      print("strata: " .. VOICE_PRESETS.file .. " as read kept as " .. backup:match("[^/]*$"))
     end
     return true
   end

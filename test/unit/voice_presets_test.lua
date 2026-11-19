@@ -380,4 +380,30 @@ test("a write that would drop a damaged preset, with no backup name free, is ref
   assert_equal(presets.preset(3), nil, "nothing saved")
 end)
 
+-- #848: the file as read is set aside only for a write that lands; a
+-- write that fails leaves voices.data as it was, and the next write keeps
+-- the backup then
+test("a failed write that would drop a damaged preset leaves voices.data as read", function()
+  local subdir, dir = fresh_subdir("damaged-write-fails")
+  local _, S0, first = loaded({ data_subdir = subdir })
+  assert_true(first.save(2, 1, "good"), "a good preset")
+  assert_true(first.save(3, 2, "bad"), "one to damage")
+  local value = S0.lib.data_files.read(dir .. "voices.data")
+  value.presets[2].name = 7
+  assert_true(S0.lib.data_files.write(dir .. "voices.data", value), "damaged")
+  local as_read = file_text(dir .. "voices.data")
+  local _, S, presets = loaded({ data_subdir = subdir })
+  os.execute("mkdir -p '" .. dir .. "voices.data.part/inside'")  -- the .part is a folder: the write fails
+  local saved, why = presets.save(4, 3, "third")
+  assert_true(not saved, "the save is refused")
+  assert_true(type(why) == "string", "with why")
+  assert_equal(file_text(dir .. "voices.data"), as_read, "voices.data is as it was")
+  assert_true(not util.file_exists(dir .. "voices.data.bak"), "no backup is left for a write that failed")
+  assert_equal(presets.preset(3), nil, "nothing saved")
+  h.remove_tree(dir .. "voices.data.part")
+  assert_true(presets.save(4, 3, "third"), "the next save writes")
+  assert_equal(file_text(dir .. "voices.data.bak"), as_read, "and keeps the file as read")
+  assert_equal(S.lib.data_files.read(dir .. "voices.data").presets[3].name, "third", "the new preset written")
+end)
+
 end
