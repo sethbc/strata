@@ -467,7 +467,8 @@ return function(S)
   local function factory_index(sets, with_files)
     local folder = norns.state.path .. S.lib.factory.FACTORY.folder
     util.make_dir(folder)
-    S.lib.data_files.write(folder .. S.lib.factory.FACTORY.index, {version = 1, sets = sets})
+    S.lib.data_files.write(folder .. S.lib.factory.FACTORY.index,
+      {version = S.lib.factory.FACTORY.index_version, sets = sets})
     if not with_files then return end
     for _, set in ipairs(sets) do
       local set_folder = folder .. set.key .. "/"
@@ -475,7 +476,8 @@ return function(S)
       local handle = io.open(set_folder .. S.lib.factory.FACTORY.params_file, "w")
       handle:write("-- " .. set.name .. "\n")
       handle:close()
-      S.lib.data_files.write(set_folder .. S.lib.factory.FACTORY.samples_file, {version = 1, files = {}})
+      S.lib.data_files.write(set_folder .. S.lib.factory.FACTORY.samples_file,
+        {version = S.lib.factory.FACTORY.set_version, files = {}})
     end
   end
   local FACTORY_SETS = {{key = "glass", name = "MMMMMMMMMMMM", version = 12}, {key = "dusk", name = "dusk", version = 1}}

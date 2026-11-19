@@ -36,16 +36,25 @@ return function(S)
   -- unusable file where it is
   local reading_only = false
 
+  -- xpcall's handler: the traceback of where fn raised, unless an inner
+  -- handler added one already, so the error raised again still says where
+  local function with_traceback(message)
+    if tostring(message):find("stack traceback:", 1, true) then return message end
+    return debug.traceback(tostring(message), 2)
+  end
+
   -- Run fn with every side file read only: an unusable file is never set
   -- aside, one line says it was skipped, and its module loads it as a
-  -- missing file (load(nil)). The flag is cleared after fn, an error
-  -- included, which is raised again. A factory set's files are read so
+  -- missing file (load(nil)). After fn, an error included (raised again
+  -- with its traceback), the flag is what it was before: a nested call
+  -- leaves the outer one's set (#847). A factory set's files are read so
   -- (S.lib.factory), in the script's own folder
   function M.read_only(fn)
     if type(fn) ~= "function" then error("side_files.read_only: fn is a function", 2) end
+    local outer = reading_only
     reading_only = true
-    local ok, problem = pcall(fn)
-    reading_only = false
+    local ok, problem = xpcall(fn, with_traceback)
+    reading_only = outer
     if not ok then error(problem, 0) end
   end
 

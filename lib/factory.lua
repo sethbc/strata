@@ -11,7 +11,7 @@
 -- their PSET hooks inside S.lib.side_files.read_only, the set's name flashed
 -- and factory.data (the marker: the sets loaded, by version, and a first
 -- run's pending set) written. The start step runs a first run's load; the
--- cleanup step cancels the clock; SETUP's factory sets row opens the list
+-- cleanup step cancels the clock and closes the list; SETUP's factory sets row opens the list
 -- (a modal owner). Fields of this module's table: FACTORY, sets, load,
 -- loading, parse_params, is_rig, open_list, close_list, is_open. See
 -- docs/notes/lua/factory.md.
@@ -48,6 +48,9 @@ return function(S)
     },
     list = {visible = 6, first_y = 18, spacing = 7, value_right = 124, version_gap = 4, levels = {selected = 15, other = 4}},
     texts = {none = "none", loading = "loading", refused = "set not loaded"},
+    -- the versions an index and a set's samples file are written at (a
+    -- test's or a layout state's, #847)
+    index_version = FACTORY_INDEX_DATA_VERSION, set_version = FACTORY_SET_DATA_VERSION,
   }
   M.FACTORY = FACTORY
 
@@ -460,12 +463,13 @@ return function(S)
 
   -- cleanup()'s step: the load's clock canceled where it is (a copy cut
   -- short leaves its .part, which the next load writes over, and marks
-  -- nothing)
+  -- nothing), and SETUP's list closed, its owner popped (#847)
   S.register_cleanup(S.constants.CLEANUP_ORDER.factory, function()
     if S.factory_clock then
       clock.cancel(S.factory_clock)
       S.factory_clock = nil
     end
+    M.close_list()
   end)
 
   ---------------------------------------------------------------------------
@@ -477,13 +481,15 @@ return function(S)
   -- marker holding pending (a set the index lists) runs that load again,
   -- whatever this start found; no marker, no scenes file found at this
   -- start and a first-run set write {pending = <key>, loaded = {}} and
-  -- start its load (not awaited); no marker otherwise writes {loaded = {}}
+  -- start its load (not awaited); no marker otherwise writes {loaded = {}}.
+  -- A pending load refused (its files unreadable: load's one line) clears
+  -- pending, so it is not tried, and its line not printed, at every start (#847)
   S.register_start(S.constants.START_ORDER.factory_first_run, function()
     local index = read_index()
     if not index then return end
     local marker, found = read_marker()
     if marker.pending and find_set(index, marker.pending) then
-      M.load(marker.pending)
+      if not M.load(marker.pending) then write_marker({loaded = marker.loaded}) end
       return
     end
     if found then
@@ -491,7 +497,9 @@ return function(S)
       return
     end
     if S.scene_file.start_outcome == "missing" and index.first_run then
-      if write_marker({pending = index.first_run, loaded = {}}) then M.load(index.first_run) end
+      if write_marker({pending = index.first_run, loaded = {}}) and not M.load(index.first_run) then
+        write_marker({loaded = {}})
+      end
       return
     end
     write_marker({loaded = {}})

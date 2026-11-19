@@ -374,6 +374,29 @@ test("the flag clears after an error in fn", function()
   assert_true(not pcall(S.lib.side_files.read_only, "no function"), "fn is a function")
 end)
 
+-- #847: read_only nests (an inner call restores the flag it found, an
+-- inner error too) and an error in fn keeps where it was raised
+test("a nested read_only keeps the flag set until the outer fn ends; an error keeps its traceback", function()
+  local _, S = loaded()
+  local side_files = S.lib.side_files
+  local after_inner, after_error
+  side_files.read_only(function()
+    side_files.read_only(function() end)
+    after_inner = side_files.reading_only()
+    pcall(side_files.read_only, function() error("inner failure") end)
+    after_error = side_files.reading_only()
+  end)
+  assert_equal(after_inner, true, "still reading only after the inner call")
+  assert_equal(after_error, true, "and after an inner call that raised")
+  assert_equal(side_files.reading_only(), false, "cleared after the outer")
+  local ok, problem = pcall(side_files.read_only, function() error("probe failure") end)
+  assert_true(not ok, "raised again")
+  assert_true(tostring(problem):find("probe failure", 1, true) ~= nil, tostring(problem))
+  assert_true(tostring(problem):find("stack traceback:", 1, true) ~= nil,
+    "with the traceback of where it was raised: " .. tostring(problem))
+  assert_equal(side_files.reading_only(), false, "the flag is cleared")
+end)
+
 test("a floor above the version is refused", function()
   local _, S = loaded()
   local ok, problem = pcall(probe, S, { version = 2, floor = 3 })
