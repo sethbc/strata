@@ -4,8 +4,8 @@
 -- Every MIDI key, snap, degree and chord goes through it: pitch_of_key,
 -- snap, step, allowed and chord. Two text params hold it (tuning_name,
 -- shown, and tuning_tones, hidden: the period, then each tone), PSET lines
--- before every voice; tuning_tones' action applies it and alone sends
--- setTuning and setTuningTone. The built-ins and the player's Scala files
+-- before every voice; tuning_tones' action (apply_text) applies it and
+-- alone sends setTuning and setTuningTone. The built-ins and the player's Scala files
 -- (data/strata/tunings/, read as text, never run). See
 -- docs/notes/lua/tuning.md.
 
@@ -97,9 +97,13 @@ return function(S)
     return tones
   end
 
-  -- The tuning in force: what tuning_tones' text last applied
-  local current = {period = TUNING.default.period, tones = {}}
+  -- The tuning in force: what tuning_tones' text last applied (text, as
+  -- the param held it). engine_text: the text whose tuning the engine has
+  -- (send's; the default's at the start, 3.8 ruling 42), which a silent
+  -- read leaves as it was (#842)
+  local current = {period = TUNING.default.period, tones = {}, text = TUNING.default_text}
   for index, cents in ipairs(TUNING.default.tones) do current.tones[index] = cents end
+  local engine_text = TUNING.default_text
 
   ---------------------------------------------------------------------------
   -- The tuning in force
@@ -300,20 +304,24 @@ return function(S)
   function M.send()
     engine.setTuning(#current.tones, current.period)
     for index, cents in ipairs(current.tones) do engine.setTuningTone(index - 1, cents) end
+    engine_text = current.text
   end
 
   -- tuning_tones' action: a text that reads is the tuning from now on, sent,
   -- then every quantized voice snapped and every chord resent; one that
   -- does not prints one line and the param goes back, silently, to the
-  -- tuning in force
-  function M.apply_text(text)
+  -- tuning in force. silent (a silent read's, #842): the tuning is taken
+  -- and nothing sent or set, as the read runs no action; the engine gets
+  -- it at the next send (a bang, a choice)
+  function M.apply_text(text, silent)
     local period, tones = M.parse_text(text)
     if not period then
       print("tuning: " .. tostring(tones))
-      params:set("tuning_tones", M.text_of(current.period, current.tones), true)
+      params:set("tuning_tones", current.text, true)
       return false
     end
-    current.period, current.tones = period, tones
+    current.period, current.tones, current.text = period, tones, text
+    if silent then return true end
     M.send()
     S.lib.variation.tuning_changed()
     request_redraw()
@@ -321,10 +329,17 @@ return function(S)
   end
 
   -- Choose an entry (a built-in or a file's: name, period, tones): its name,
-  -- then its text, whose action applies it
+  -- then its text, whose action applies it. norns runs a text param's
+  -- action only on a change, so a text tuning_tones holds already whose
+  -- tuning the engine lacks (a silent read's, #842) is applied here
   function M.select(entry)
+    local text = M.text_of(entry.period, entry.tones)
     params:set("tuning_name", entry.name)
-    params:set("tuning_tones", M.text_of(entry.period, entry.tones))
+    if params:get("tuning_tones") == text and engine_text ~= text then
+      M.apply_text(text)
+    else
+      params:set("tuning_tones", text)
+    end
   end
 
   function M.built_ins()
@@ -446,7 +461,10 @@ return function(S)
     S.lib.params_setup.set_text_default("tuning_tones", TUNING.default_text)
   end
 
-  -- A PSET without the tuning lines (3.7's) is read over the session's
+  -- Every read first brings the tuning to tuning_tones' text when the read
+  -- left the two apart (a silent read runs no action, #842), honoring its
+  -- silent flag, so tuning_name names the tuning in force. Then: a PSET
+  -- without the tuning lines (3.7's) is read over the session's
   -- tuning: its voices' freq lines are set, and snapped, in that tuning,
   -- and only then does the read give the tuning its default. So when that
   -- default changed the tuning, every voice's freq the file names is set
@@ -456,6 +474,8 @@ return function(S)
   -- PSET with its tuning lines, or one read over the default tuning, sets
   -- nothing here
   S.register_pset_hook({name = "tuning", read = function(path_base, number, pset_path, silent)
+    local text = params:get("tuning_tones")
+    if text ~= current.text then M.apply_text(text, silent) end
     local setup = S.lib.params_setup
     if not setup.read_defaulted("tuning_tones") then return end
     local file = io.open(pset_path, "r")

@@ -1007,6 +1007,36 @@ test("a voice scene key is marked synth by its record's synth_keys field, not by
   assert_equal(by_key.grain_size.synth, nil, "a grain key is not")
 end)
 
+-- #842: read_defaulted names what the last read set to its default, so
+-- each read starts it afresh: a PSET with its lines, read after one
+-- without them, defaults nothing
+test("read_defaulted holds only the last read's defaults (each read resets it)", function()
+  local context = load_strata({ data_subdir = "read_changed_reset" }); finish_startup(context)
+  local S = local_value("S")
+  local setup = S.lib.params_setup
+  util.make_dir(context.data_dir)
+  local nineteen
+  for _, entry in ipairs(S.lib.tuning.built_ins()) do
+    if entry.name == "19 equal" then nineteen = entry end
+  end
+  S.lib.tuning.select(nineteen)
+  local full = context.data_dir .. "full.pset"
+  params:write(full, "full")
+  local without = context.data_dir .. "without.pset"
+  local lines = {}
+  for line in h.file_text(full):gmatch("[^\n]*\n") do
+    if not line:match('^"tuning_') then lines[#lines + 1] = line end
+  end
+  h.write_text(without, table.concat(lines))
+  params:read(without)
+  assert_true(setup.read_defaulted("tuning_tones"), "a PSET without the tuning's lines defaults tuning_tones")
+  assert_true(setup.read_defaulted("tuning_name"), "and tuning_name")
+  params:read(full)
+  assert_true(not setup.read_defaulted("tuning_tones"), "the next read, with the lines, has defaulted nothing")
+  assert_true(not setup.read_defaulted("tuning_name"), "tuning_name neither")
+  assert_equal(params:get("tuning_name"), "19 equal", "the full PSET's tuning")
+end)
+
 -- A param as test/fixtures/3.7.0-params.lua records it (its header): id,
 -- t and name; the default; a control's spec, an option's options, a
 -- number's range, a group's size; the string a formatted param shows at
