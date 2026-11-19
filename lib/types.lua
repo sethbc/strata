@@ -146,8 +146,10 @@ return function(S)
     end
   end)
 
-  -- Apply a type at once: v<i>_type set to the record's index (its action
-  -- cancels the voice's pending choice). False for an unknown key or voice
+  -- Apply a type at once: v<i>_type set to the record's index. It cancels
+  -- the voice's pending choice itself, since the param's action (which
+  -- cancels one too) does not run for an unchanged value. False for an
+  -- unknown key or voice
   function M.set(voice_idx, key)
     local record = M.record(key)
     if not valid_voice(voice_idx) or not record then return false end

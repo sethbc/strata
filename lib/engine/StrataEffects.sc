@@ -426,8 +426,9 @@
     // Bypass an effect (\delay, \reverb) or lift its bypass. A bypass sets
     // its level to 0 (the node's mix, so its return fades out over its lag
     // and nothing jumps), then frees the node after bypassFadeTime: its CPU
-    // and its few KB of the pool come back (the delay's line and the
-    // shimmer rings are buffers, kept: the free's bundle empties them,
+    // and its graph's pool memory come back (about 24 KB for the delay,
+    // 125 KB for \strataReverb, 229 KB for the FDN; the delay's line and
+    // the shimmer rings are buffers, kept: the free's bundle empties them,
     // emptyDelayLine, emptyShimmerRings). Lifting it
     // inside that wait cancels the free and restores the level; lifting it
     // later creates the node again in its place, from the kept controls at

@@ -196,12 +196,6 @@ return function(S)
     request_redraw()
   end
 
-  -- A held voice undo of voice_idx is held and its window has not ended
-  function M.holds_voice(voice_idx)
-    local undo = S.undo
-    return undo ~= nil and undo.capture ~= nil and undo.voice == voice_idx and util.time() < undo.until_time
-  end
-
   -- Put back what the held randomize replaced, in the order it set them (a
   -- pair a section draws in order, a loop's start then its length, comes
   -- back whole), through the params' actions (so the LFO offsets, the engine
@@ -240,13 +234,6 @@ return function(S)
   local function shown_keys(group, voice_idx)
     if group.when and not group.when(voice_idx) then return {} end
     return S.lib.params_setup.group_keys(group, voice_idx)
-  end
-
-  -- The held voice undo of voice_idx, if one is held (4c's grid voices
-  -- page): whether it ran. Any other undo is left alone
-  function M.undo_voice(voice_idx)
-    if not M.holds_voice(voice_idx) then return false end
-    return M.undo()
   end
 
   -- MAIN's whole-voice spec (randomize_voice, MAIN's ALT+K2): every
