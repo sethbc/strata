@@ -235,6 +235,37 @@ test("a press on a 256's lower pane ends with the lower pane's page change, not 
   assert_equal(positions.holds_scan(1, "grid:1"), false, "ended by pane 1's page change")
 end)
 
+-- #851: a press record keeps its pane, so whether it is stale never
+-- depends on how grid_core.view spells a view (here with the pane last)
+test("a lower pane's press lives through the ticks whatever a view's text looks like", function()
+  local context, S = buffer_voices()
+  local positions, grid_core, pages = S.lib.positions, S.lib.grid_core, S.constants.GRID_PAGES
+  context.grid.plug(1, 16, 16)
+  local view = grid_core.view
+  grid_core.view = function(port, pane)
+    pane = pane or 1
+    return grid_core.page(port, pane) .. "/" .. grid_core.side(port, pane) .. "/" .. grid_core.half(port, pane) .. "@" .. pane
+  end
+  grid_core.set_page(1, pages.patterns, 1)
+  grid_core.set_page(1, pages.positions, 2)
+  positions.strip_key(1, 1, "hold", 1, 2)
+  positions.strip_key(1, 2, "store", 1, 2)
+  positions.grid_key(1, 1, 5, 16, 1, 2)
+  context.clock.run_for(0.2)
+  assert_equal(positions.holds_scan(1, "grid:1"), true, "the lower pane's hold lives")
+  assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_down, "and its store")
+  positions.grid_key(1, 1, 9, 16, 1, 2)
+  local start, length = loop_of(1)
+  assert_near(start, 0.25, 1e-9, "the held cell 5 lives: cells 5 and 9 set the loop")
+  assert_near(length, 0.3125, 1e-9)
+  positions.grid_key(1, 1, 9, 16, 0, 2)
+  grid_core.set_page(1, pages.patterns, 2)
+  context.clock.run_for(0.1)
+  assert_equal(positions.holds_scan(1, "grid:1"), false, "the lower pane's own page change still ends its hold")
+  assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_up, "and its store")
+  grid_core.view = view
+end)
+
 -- Both panes of a 256 can show a voice's store and hold keys (positions'
 -- second side): each is held per view, so the key down in one pane lasts
 -- through the other pane's release or page change, in either order
