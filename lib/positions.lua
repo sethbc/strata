@@ -418,13 +418,19 @@ return function(S)
 
   local function slice_note_key(port, n) return port * SLICE_ROW.port_key + n end
 
+  -- What the pane a key came from shows (grid_core.view: its page, side
+  -- and half), the tag each press record keeps beside its pane
+  local function view_of(port, pane)
+    return S.lib.grid_core.view(port, pane)
+  end
+
   -- A slice key's press: its slice plays at once, or at the beat or bar
   -- (the position key's quantized action, so a press replaces a waiting
   -- jump or slice of the voice). A cell with no slice does nothing
-  local function press_slice_key(port, voice_idx, cell, view)
+  local function press_slice_key(port, voice_idx, cell, pane)
     local n = first_slice(read_bank(port, voice_idx)) + cell - 1
     if n > slot_slices(voice_idx) then return end
-    local entry = {n = n, view = view}
+    local entry = {n = n, pane = pane, view = view_of(port, pane)}
     local note_key = slice_note_key(port, n)
     local _, token = S.lib.quantize.schedule("position" .. voice_idx, function()
       S.lib.slices.play(voice_idx, n, {owner = "grid", key = note_key, velocity = 1})
@@ -465,15 +471,10 @@ return function(S)
     return true
   end
 
-  -- What the pane a key came from shows (grid_core.view: its pane, page,
-  -- side and half), the tag each press record keeps; pane defaults to 1
-  local function view_of(port, pane)
-    return S.lib.grid_core.view(port, pane or 1)
-  end
-
-  -- Whether a press record's view is no longer what its pane shows
-  local function stale_view(port, view)
-    return view ~= S.lib.grid_core.view(port, tonumber(view:match("^(%d+):")))
+  -- Whether a press record's view (view_of, above) is no longer what its
+  -- pane shows; the record keeps its pane, so the view's text is opaque
+  local function stale_view(port, pane, view)
+    return view ~= view_of(port, pane)
   end
 
   -- End what a port's record holds that is stale: everything when its grid
@@ -486,8 +487,8 @@ return function(S)
     -- a voice's hold and store are held per view (both panes of a 256 can
     -- show them): each stale view leaves, and the key ends with its last
     local function stale_views(views)
-      for view in pairs(views) do
-        if gone or stale_view(port, view) then views[view] = nil end
+      for view, pane in pairs(views) do
+        if gone or stale_view(port, pane, view) then views[view] = nil end
       end
       return next(views) == nil
     end
@@ -503,11 +504,12 @@ return function(S)
         record.pressed[voice_idx] = nil
       end
     end
-    if record.held and (gone or stale_view(port, record.held.view)) then record.held = nil end
+    local held = record.held
+    if held and (gone or stale_view(port, held.pane, held.view)) then record.held = nil end
     -- a slice key whose release can no longer come ends now
     for voice_idx, held in pairs(record.slices) do
       for cell, entry in pairs(held) do
-        if gone or stale_view(port, entry.view) then
+        if gone or stale_view(port, entry.pane, entry.view) then
           held[cell] = nil
           end_slice_key(port, voice_idx, entry)
         end
@@ -538,11 +540,12 @@ return function(S)
   end
 
   -- A key held per view (store, hold): `views` is the record's table for
-  -- the key ({[voice] = {[view] = true}}). Down adds the view; up removes
-  -- it and returns true when no view holds the voice's key any more
-  local function key_down(views, voice_idx, view)
+  -- the key ({[voice] = {[view] = pane}}, the pane it was pressed on).
+  -- Down adds the view; up removes it and returns true when no view holds
+  -- the voice's key any more
+  local function key_down(views, voice_idx, view, pane)
     views[voice_idx] = views[voice_idx] or {}
-    views[voice_idx][view] = true
+    views[voice_idx][view] = pane
   end
 
   local function key_up(views, voice_idx, view)
@@ -575,7 +578,7 @@ return function(S)
     end
     if not buffer_voice(voice_idx) then return end
     if cells == SLICE_ROW.bank_size and M.slice_row(voice_idx) then
-      press_slice_key(port, voice_idx, cell, view_of(port, pane))
+      press_slice_key(port, voice_idx, cell, pane or 1)
       return
     end
     local record = record_of(port)
@@ -585,7 +588,8 @@ return function(S)
       S.lib.quantize.schedule("position" .. voice_idx, function() M.set_loop(voice_idx, (low - 1) / cells, high / cells) end, "v" .. voice_idx .. " jump")
       return
     end
-    record.held = {voice = voice_idx, cell = cell, cells = cells, view = view_of(port, pane)}
+    pane = pane or 1
+    record.held = {voice = voice_idx, cell = cell, cells = cells, pane = pane, view = view_of(port, pane)}
     S.lib.quantize.schedule("position" .. voice_idx, function() M.jump(voice_idx, (cell - 1) / cells) end, "v" .. voice_idx .. " jump")
   end
 
@@ -595,6 +599,7 @@ return function(S)
   function M.strip_key(port, voice_idx, key, z, pane)
     if not valid_voice(voice_idx) then return end
     if records[port] then end_stale_port(port, records[port]) end
+    pane = pane or 1
     local view = view_of(port, pane)
     -- a press on a voice that reads no buffer records nothing (its keys are
     -- dark and do nothing); releases always end what they ended before
@@ -625,13 +630,13 @@ return function(S)
       end
     elseif key == "store" then
       if z == 1 then
-        key_down(record_of(port).store, voice_idx, view)
+        key_down(record_of(port).store, voice_idx, view, pane)
       elseif records[port] and key_up(records[port].store, voice_idx, view) then
         records[port].pressed[voice_idx] = nil
       end
     elseif key == "hold" then
       if z == 1 then
-        key_down(record_of(port).hold, voice_idx, view)
+        key_down(record_of(port).hold, voice_idx, view, pane)
         M.hold_scan(voice_idx, true, "grid:" .. port)
       elseif not records[port] or key_up(records[port].hold, voice_idx, view) then
         M.hold_scan(voice_idx, false, "grid:" .. port)
