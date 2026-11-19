@@ -27,6 +27,13 @@
 //   4096 KB), and about 30-50 KB after the spectral writers' lazy
 //   allocations: too little for two 256 KB reserves. 3.3's floor of
 //   fourteen probes leaves 512 KB more.)
+// Compare one run's figures with another's by their probe counts, which
+// each line gives (the 256 KB probes and the small probes that fit), never
+// by the KB: a KB figure is the small probes times a probe's calibrated
+// size, and the calibration's whole count moves it (61 or 62 fewer small
+// probes beside 1 MB read a probe as 16.85 or 16.58 KB, which moved the
+// worst cases' figures by 10 to 30 KB with the same pool use). The same
+// use is the same counts, the small probes within one
 { arg h;
 var engine = h.engine, server = h.server;
 var check = { arg condition, message; h.check(condition, message) };
@@ -38,10 +45,11 @@ var reserveBus = Bus.control(server, 1);
 // worst cases, both tiers: [tier, case, [engine LFO nodes, scatter nodes,
 // offset nodes, envelope nodes]]
 var modulationRunning = List.new;
-// 3.5's pool cases' figures, both tiers: [tier, case, free KB]
+// 3.5's pool cases' figures, both tiers: [tier, case, free KB, small
+// probes]
 var poolFigures = List.new;
 // 3.8's voice-source cases (package 1d), both tiers: [tier, case, free KB,
-// strataGrainRing at the probes, spectral copy writers]
+// small probes, strataGrainRing at the probes, spectral copy writers]
 var voiceSourceFigures = List.new;
 
 // Send the flood of small probes now (in processGroup, at the tail), with
@@ -80,16 +88,19 @@ var floodFit = { var flood; server.sync; flood = floodStart.value; floodResult.(
 var reserveKB = 2 * 65;   // the two 64 KB DelayN probes around each flood
 
 // A small probe's size (KB): how many fewer fit beside four 256 KB DelayN
-// probes, which take 1024 KB of delay lines (and about 1 KB each of graph)
+// probes, which take 1024 KB of delay lines (and about 1 KB each of graph).
+// That count is kept (calibrationCount) for the idle line
+var calibrationCount;
 var smallProbeKB = {
     var bus = Bus.control(server, 4), without, with, probes;
     without = floodFit.value;
     probes = 4.collect({ arg index; Synth(\strataCheckMemProbe, [\out, bus.index + index], engine.processGroup, \addToTail) });
     with = floodFit.value;
     probes.do(_.free); server.sync; bus.free;
-    1028 / (without - with).max(1)
+    calibrationCount = (without - with).max(1);
+    1028 / calibrationCount
 };
-var probeKB, idleFreeKB;
+var probeKB, idleFreeKB, idleProbes;
 
 // maxGrains (one grain table per GrainBuf, from the pool) covers the
 // largest overlap Lua can ask for: grain size 0.5 s x density 100 x master
@@ -510,7 +521,8 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
     };
     // scenario: names the case in the check line ("worst case", "all-buffer
     // worst case"); count: the probes (probeCount unless given); report: a
-    // function of (all allocated, free KB) instead of the floor's own check;
+    // function of (all allocated, free KB, small probes, 256 KB probes)
+    // instead of the floor's own check;
     // cutBound: the cutting set's size this scenario makes (numVoices, one
     // grain synth per voice, unless given)
     // the notes area's cutting synths (3.5: an extra note's synth in its kill
@@ -524,7 +536,7 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         var cutting = target.numVoices.collect({ arg voice; target.cuttingSynths[voice].asArray.collect(_.nodeID) }).flatten
             ++ noteCutting.value.collect(_.nodeID);
         var holds = cutting.collect({ server.nextNodeID }), resumedAt, wasHeld = voicesHeld;
-        var probes, flood, infos = IdentitySet.new, watcher, present, values, freeKB, fits;
+        var probes, flood, infos = IdentitySet.new, watcher, present, values, freeKB, fits, smallProbes;
         count = count ? probeCount;
         scenario = scenario ? "worst case";
         cutBound = cutBound ? target.numVoices;
@@ -547,7 +559,8 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         ((resumedAt + (2 * target.switchCutTime)) - Main.elapsedTime).max(0).wait;
         watcher = OSCFunc({ arg msg; infos.add(msg[1]) }, '/n_info', server.addr);
         server.sendBundle(nil, ['/error', -1], *cutting.collect({ arg id; ['/n_query', id] }));
-        freeKB = (count * 256) + (floodResult.(flood) * probeKB) + reserveKB;
+        smallProbes = floodResult.(flood);
+        freeKB = (count * 256) + (smallProbes * probeKB) + reserveKB;
         watcher.free;
         present = cutting.count({ arg id; infos.includes(id) });
         if (scenario.contains("all-buffer") and: { scenario.contains("pool").not }) {
@@ -575,9 +588,9 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         check.((cutting.size <= cutBound) and: { (cutBound == target.numVoices) or: { cutting.size == cutBound } },
             "memory: the cutting set is the scenario's (one grain synth per voice, or a grain and a voice synth per voice for synth -> buffer -> synth; check that a scenario change does not legitimately cut a voice synth too before loosening this) (%: % cutting synths for % voices, bound %)".format(
                 label, cutting.size, target.numVoices, cutBound));
-        if (report.notNil) { report.value(fits, freeKB) } {
-            check.(fits, "memory: % free at the % %: % (about % KB free, the engine using about % KB more than idle)".format(
-                floorLabel, target.tier, scenario, label, freeKB.round(10), (idleFreeKB - freeKB).round(10)));
+        if (report.notNil) { report.value(fits, freeKB, smallProbes, count) } {
+            check.(fits, "memory: % free at the % %: % (about % KB free, % 256 KB probes and % small probes (idle %), the engine using about % KB more than idle)".format(
+                floorLabel, target.tier, scenario, label, freeKB.round(10), count, smallProbes, idleProbes, (idleFreeKB - freeKB).round(10)));
         };
         // the holds go and the cut synths finish their fade (errors off: one
         // the check found gone has been reported already)
@@ -703,9 +716,10 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         startAll.value;
         engage.value(command);
         probeHeadroom.("seven voices at grain size 0.5, switched 0.2 s apart and restarted, eight slots recording", nil, recordingProbes,
-            { arg fits, freeKB;
+            { arg fits, freeKB, smallProbes;
                 recordingFits.add([target.tier, fits and: { recordingsStarted }
-                    and: { target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, freeKB.round(10)]);
+                    and: { target.recordSynths.every({ arg synth; synth.notNil and: { synth.isPlaying } }) }, freeKB.round(10),
+                    recordingProbes, smallProbes]);
             });
         target.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
         h.stopAllVoices(target);
@@ -730,13 +744,13 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         poolNotes.([3, 3, 2, 2, 2, 2, 2]).do({ arg pair; playPoolNote.(*pair) });
         engage.value(command);
         probeHeadroom.("seven voices at grain size 0.5, each switched between three slots 0.2 s apart, sixteen buffer notes live and cutting",
-            "all-buffer worst case with the pool full", 5, { arg fits, freeKB;
+            "all-buffer worst case with the pool full", 5, { arg fits, freeKB, smallProbes;
                 var held = poolHeld.value, names = h.synthNames(target.context.xg);
                 var bufs = names.count(_ == \strataGrainBuf);
-                poolFigures.add([target.tier, "all-buffer, every pool slot live and cutting", freeKB.round(1)]);
+                poolFigures.add([target.tier, "all-buffer, every pool slot live and cutting", freeKB.round(1), smallProbes]);
                 check.(fits and: { held == [16, 16] },
-                    "memory: the all-buffer worst case with the pool full, every pool slot live and cutting, leaves 1280 KB (% tier: about % KB free; live and cutting notes %)".format(
-                        target.tier, freeKB.round(10), held));
+                    "memory: the all-buffer worst case with the pool full, every pool slot live and cutting, leaves 1280 KB (% tier: about % KB free, five 256 KB probes and % small probes; live and cutting notes %)".format(
+                        target.tier, freeKB.round(10), smallProbes, held));
                 // on the server at the probe: the voices' 21 (live, fading,
                 // cutting) and the pool's 16 live and 16 cutting
                 check.(bufs == 53,
@@ -765,14 +779,14 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         switchAll.({ 0 });
         engage.value(command);
         probeHeadroom.("seven voices at grain size 0.5, switched synth -> buffer -> synth 0.2 s apart, sixteen voice synth notes of the costliest def (%)".format(costliestName),
-            "worst case with the pool full", 5, { arg fits, freeKB;
+            "worst case with the pool full", 5, { arg fits, freeKB, smallProbes;
                 var held = poolHeld.value, costliest = poolCostliest.value, names = h.synthNames(target.context.xg);
                 var counts = [names.count(_ == \strataGrainBuf), names.count(_ == \strataGrainRing),
                     names.count({ arg name; h.voiceDefs.includes(name) }), names.count(_ == costliestVoiceDef)];
-                poolFigures.add([target.tier, "synth -> buffer -> synth, sixteen voice synth notes", freeKB.round(1)]);
+                poolFigures.add([target.tier, "synth -> buffer -> synth, sixteen voice synth notes", freeKB.round(1), smallProbes]);
                 check.(fits and: { held == [16, 16] } and: { costliest == 16 },
-                    "memory: synth -> buffer -> synth with the pool full of voice-synth notes of the costliest def (%) leaves 1280 KB (% tier: about % KB free; live and cutting notes %, notes of the costliest def %)".format(
-                        costliestName, target.tier, freeKB.round(10), held, costliest));
+                    "memory: synth -> buffer -> synth with the pool full of voice-synth notes of the costliest def (%) leaves 1280 KB (% tier: about % KB free, five 256 KB probes and % small probes; live and cutting notes %, notes of the costliest def %)".format(
+                        costliestName, target.tier, freeKB.round(10), smallProbes, held, costliest));
                 // on the server at the probe: the voices' own (a ring grain
                 // synth live and one cutting, the buffer grain synth fading, a
                 // voice synth live and one cutting, each voice) and the pool's
@@ -802,14 +816,14 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
         poolNotes.(poolSpread).do({ arg pair; playPoolNote.(*pair) });
         engage.value(command);
         probeHeadroom.("seven voices at grain size 0.5, switched synth -> buffer -> synth 0.2 s apart, sixteen voice synth notes of the costliest def (%) live and cutting".format(costliestName),
-            "worst case with the pool full", 5, { arg fits, freeKB;
+            "worst case with the pool full", 5, { arg fits, freeKB, smallProbes;
                 var held = poolHeld.value, costliest = poolCostliest.value, names = h.synthNames(target.context.xg);
                 var counts = [names.count(_ == \strataGrainBuf), names.count(_ == \strataGrainRing),
                     names.count({ arg name; h.voiceDefs.includes(name) }), names.count(_ == costliestVoiceDef)];
-                poolFigures.add([target.tier, "synth -> buffer -> synth, every pool slot's voice synth live and cutting", freeKB.round(1)]);
+                poolFigures.add([target.tier, "synth -> buffer -> synth, every pool slot's voice synth live and cutting", freeKB.round(1), smallProbes]);
                 check.(fits and: { held == [16, 16] } and: { costliest == 16 },
-                    "memory: synth -> buffer -> synth with every pool slot's voice synth live and cutting (a type switch under a full held chord) leaves 1280 KB (% tier: about % KB free; live and cutting notes %, live notes of the costliest def (%) %)".format(
-                        target.tier, freeKB.round(10), held, costliestName, costliest));
+                    "memory: synth -> buffer -> synth with every pool slot's voice synth live and cutting (a type switch under a full held chord) leaves 1280 KB (% tier: about % KB free, five 256 KB probes and % small probes; live and cutting notes %, live notes of the costliest def (%) %)".format(
+                        target.tier, freeKB.round(10), smallProbes, held, costliestName, costliest));
                 // on the server at the probe: the voices' buffer grain synths
                 // fading (7), their ring grain synths live and cutting (14),
                 // and 46 voice synths, every one of the costliest def: the
@@ -839,13 +853,13 @@ var checkMemoryWorstCase = { arg target, probeCount, floorLabel, engage;
                 if (target.tier == \high) { h.waitFor({ copyWriters.value == target.numVoices }, 1) };
             };
             var report = { arg label, rings, floorText;
-                { arg fits, freeKB;
+                { arg fits, freeKB, smallProbes, floorProbes;
                     var names = h.synthNames(target.context.xg), counts;
                     counts = [names.count(_ == \strataGrainRing), names.count(_ == \strataRingWriteSpectral)];
-                    voiceSourceFigures.add([target.tier, label, freeKB.round(1)] ++ counts);
+                    voiceSourceFigures.add([target.tier, label, freeKB.round(1), smallProbes] ++ counts);
                     check.(fits and: { counts[0] == rings } and: { counts[1] == if (target.tier == \high) { target.numVoices } { 0 } },
-                        "memory: % leaves % (% tier: about % KB free; % strataGrainRing, % spectral copy writers)".format(
-                            label, floorText, target.tier, freeKB.round(10), counts[0], counts[1]));
+                        "memory: % leaves % (% tier: about % KB free, % 256 KB probes and % small probes; % strataGrainRing, % spectral copy writers)".format(
+                            label, floorText, target.tier, freeKB.round(10), floorProbes, smallProbes, counts[0], counts[1]));
                 }
             };
             target.numVoices.do({ arg voice; command.(\setGrainParam, voice, \freeze, 0.0) });
@@ -949,7 +963,8 @@ server.sync;
 
 h.writeTestFile(rateFilePath, server.sampleRate.round.asInteger, server.sampleRate.round.asInteger, [0.3, 0.3]);
 probeKB = smallProbeKB.value;
-idleFreeKB = (floodFit.value * probeKB) + reserveKB;
+idleProbes = floodFit.value;
+idleFreeKB = (idleProbes * probeKB) + reserveKB;
 checkGrainMemorySizes.value;
 checkGrainSynthSizes.value;
 checkRecordSizes.value;
@@ -958,8 +973,8 @@ checkModulationSizes.value;
 checkVoiceSynthSizes.value;
 checkDelaySize.value;
 check.(engine.tier == \standard and: { probeKB > 4 } and: { probeKB < 64 },
-    "memory: the default engine runs tier standard (idle, about % KB of the pool free; a small probe % KB)".format(
-        idleFreeKB.round(10), probeKB.round(0.1)));
+    "memory: the default engine runs tier standard (idle, about % KB of the pool free, % small probes; a small probe % KB, % fewer beside 1 MB)".format(
+        idleFreeKB.round(10), idleProbes, probeKB.round(0.1), calibrationCount));
 checkGuardResumes.value;
 checkMemoryWorstCase.(engine, 12, "3 MB");
 checkHighWorstCase.value;
@@ -969,10 +984,10 @@ check.((modulationRunning.size == 26) and: { modulationRunning.every({ arg each;
         modulationRunning.size, modulationRunning.reject({ arg each; each[2] == [6, 1, 1, 16] }).collect({ arg each; [each[0], each[2]] })));
 check.((recordingFits.size == 2) and: { recordingFits.every({ arg each; each[1] }) },
     "memory: 3 MB free on both tiers with eight recordings running (%)".format(
-        recordingFits.collect({ arg each; "% about % KB free".format(each[0], each[2]) }).join(", ")));
-("memory: the pool cases leave (KB free): %".format(poolFigures.collect({ arg each; "% %: %".format(*each) }).join("; "))).postln;
-("memory: the voice-source cases leave (KB free, strataGrainRing, spectral copy writers): %".format(
-    voiceSourceFigures.collect({ arg each; "% %: % (%, %)".format(*each) }).join("; "))).postln;
+        recordingFits.collect({ arg each; "% about % KB free (% 256 KB probes and % small probes)".format(each[0], each[2], each[3], each[4]) }).join(", ")));
+("memory: the pool cases leave (KB free, small probes beside five 256 KB probes): %".format(poolFigures.collect({ arg each; "% %: % (%)".format(*each) }).join("; "))).postln;
+("memory: the voice-source cases leave (KB free, small probes, strataGrainRing, spectral copy writers): %".format(
+    voiceSourceFigures.collect({ arg each; "% %: % (%, %, %)".format(*each) }).join("; "))).postln;
 check.(voiceSourceFigures.size == 4, "memory: the voice-source cases V2 and V4 ran on both tiers (% figures)".format(voiceSourceFigures.size));
 h.stopAllVoices;
 reserveBus.free;
