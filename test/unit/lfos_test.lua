@@ -1771,7 +1771,9 @@ test("every control param with a sender sends its LFO-offset value; one without 
   -- send the offset value
   local softcut_senders = {}
   for _, id in ipairs(S.lib.io_tape.TAPE.macro_targets) do softcut_senders[id] = true end
-  local checked = 0
+  local checked, hidden = 0, 0
+  local type_keys = {}
+  for _, key in ipairs(S.lib.types.keys()) do type_keys[key] = true end
   for _, param in ipairs(params.params) do
     -- a macro's sender takes an LFO's value for its targets' round robin
     -- sends (lib/macros.lua, macros_test.lua), never an engine call
@@ -1780,10 +1782,17 @@ test("every control param with a sender sends its LFO-offset value; one without 
       local sender = S.engine_senders[param.id]
       local value = other_value(param)
       if sender and not S.lib.engine_sync.reaches_engine(param.id) then
-        -- 3.8 (0d): a synth key the voice's type lacks: its gated sender sends nothing
+        -- 3.8 (0d): a synth key the voice's type lacks: its gated sender
+        -- sends nothing. Every voice runs, so no other param is here (#839:
+        -- a param of another kind reaching no engine fails)
+        local voice_idx, key = param.id:match("^v(%d)_(.+)$")
+        voice_idx = tonumber(voice_idx)
+        assert_true(voice_idx ~= nil and type_keys[key] and not S.lib.voices.is_synth_key(voice_idx, key),
+          param.id .. " reaches no engine: only a synth key its voice's type lacks may")
         context.clear_engine_calls()
         params:set(param.id, value)
         assert_equal(#context.engine_calls, 0, param.id .. " reaches no engine and makes no engine call")
+        hidden = hidden + 1
       elseif sender then
         local minval, maxval = param_range(param.id)
         S.lib.engine_sync.set_extra_offset("test", param.id, 0.2 * 0.5 * (maxval - minval))
@@ -1807,6 +1816,7 @@ test("every control param with a sender sends its LFO-offset value; one without 
     end
   end
   assert_true(checked > 200, "many control params have senders: " .. checked)
+  assert_true(hidden > 0, "the hidden synth keys were among them: " .. hidden)
 end)
 
 -- AGENTS.md: a control param's action never calls the engine; an engine
