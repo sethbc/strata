@@ -188,15 +188,15 @@ return function(S)
     local record = S.registry.pages[UI_PAGES.index.FX]
     local row = cursor_row()
     if alt_held then
-      local hint = S.lib.ui_alt.k2_hint(record)
+      local freeze, fine
       if S.lib.fx_hold.freezable(row.effect) then
-        hint = hint .. " " .. (S.lib.fx_hold.frozen(row.effect) and FX.hints.unfreeze or FX.hints.freeze)
+        freeze = S.lib.fx_hold.frozen(row.effect) and FX.hints.unfreeze or FX.hints.freeze
       end
       local param_id = row_param_id(row)
-      if param_id and params:lookup_param(param_id).controlspec then hint = hint .. " " .. FX.hints.fine end
-      return hint
+      if param_id and params:lookup_param(param_id).controlspec then fine = FX.hints.fine end
+      return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record), freeze, fine)
     end
-    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
+    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record)) end
     if clears(row) then return FX.hints.clear end
     local effect = row.effect
     if not effect then return FX.hints.value end

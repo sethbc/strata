@@ -688,8 +688,8 @@ return function(S)
   -- The edit view's hints: k2_text is ALT+K2's (what letting go does) and
   -- k2_down whether it is held (K1 let go first: its hint alone)
   local function edit_hints(view, alt_held, k2_text, k2_down)
-    if alt_held then return k2_text .. " K3:clr E2:step" end
-    if k2_down then return k2_text end
+    if alt_held then return S.lib.ui_alt.join(k2_text, "K3:clr E2:step") end
+    if k2_down then return S.lib.ui_alt.join(k2_text) end
     local rows, cursor = sync_view(view)
     local row = rows[cursor]
     if row.spec.row == "clear" then return "K2:back K3:clr" end
@@ -715,8 +715,8 @@ return function(S)
     if edit_open then
       return edit_hints(views.page, alt_held, S.lib.ui_alt.k2_hint(record), S.lib.ui_alt.k2_held())
     end
-    if alt_held then return S.lib.ui_alt.k2_hint(record) .. " K3:clr E3:bpm" end
-    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
+    if alt_held then return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record), "K3:clr E3:bpm") end
+    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record)) end
     return "K2:" .. (S.pattern_playing and "stop" or "play") .. " K3:step E3:level"
   end
 

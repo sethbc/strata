@@ -372,4 +372,38 @@ test("a held ALT+K2 shows the record's alt_hold_hint", function()
   key(2, 0); key(1, 0)
 end)
 
+-- X14's review: k2_hint returns nil where a quick press draws nothing, so
+-- every page joins its hint parts through S.lib.ui_alt.join, which leaves a
+-- nil or empty part out; a randomizing page whose quick ALT+K2 draws
+-- nothing still draws a hint row, ALT held or K2 held after K1 let go
+test("join leaves out nil and empty parts", function()
+  load_strata()
+  local join = local_value("S").lib.ui_alt.join
+  assert_equal(join("K2:rand", "K3:lock"), "K2:rand K3:lock", "two parts")
+  assert_equal(join(nil, "K3:lock"), "K3:lock", "a nil part left out")
+  assert_equal(join("K2:rand", nil, "", "E3:fine"), "K2:rand E3:fine", "nil and empty parts left out")
+  assert_equal(join(nil), "", "nothing: an empty hint")
+  assert_equal(join(), "", "no parts: an empty hint")
+end)
+
+test("every randomizing page draws its hints when k2_hint is nil", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.lib.ui_alt.k2_hint = function() return nil end  -- as where a quick press draws nothing
+  for index, record in ipairs(S.registry.pages) do
+    if record.randomize_section then
+      S.lib.ui_keys.set_ui_page(index)
+      local ok, hints = pcall(record.hints, true)
+      assert_true(ok, record.name .. ": ALT held draws a hint row: " .. tostring(hints))
+      assert_equal(type(hints), "string", record.name .. ": the hint row is a string")
+      local real_held = S.lib.ui_alt.k2_held
+      S.lib.ui_alt.k2_held = function() return true end  -- K1 let go while ALT+K2 is down
+      ok, hints = pcall(record.hints, false)
+      S.lib.ui_alt.k2_held = real_held
+      assert_true(ok, record.name .. ": K2 held draws a hint row: " .. tostring(hints))
+      assert_equal(type(hints), "string", record.name .. ": the hint row is a string, K2 held")
+    end
+  end
+end)
+
 end

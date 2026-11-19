@@ -4,7 +4,8 @@
 -- strata.lua sets ALT through set(held) and sends ALT+K2/ALT+K3 to
 -- alt_action (global), which runs the page record's alt_key. Fields of this
 -- module's table (S.lib.ui_alt): set, run_release_hooks, and the shared
--- ALT+K2 of the randomizing pages: k2_down, k2_up, k2_held, k2_hint.
+-- ALT+K2 of the randomizing pages: k2_down, k2_up, k2_held, k2_hint, and
+-- join, the hint row's parts joined.
 -- S.alt_held and S.key_press_alt live in lib/ui/keys.lua, whose
 -- forget_held_keys clears them.
 
@@ -118,6 +119,18 @@ return function(S)
     end
     local action = quick_action(record)
     return action and "K2:" .. action or nil
+  end
+
+  -- A hint row from its parts, joined by a space, a nil or empty part left
+  -- out ("" for none): every page joins k2_hint's part, which may be nil,
+  -- through it, so a hint never concatenates a nil
+  function M.join(...)
+    local parts = {}
+    for index = 1, select("#", ...) do
+      local part = select(index, ...)
+      if part ~= nil and part ~= "" then parts[#parts + 1] = part end
+    end
+    return table.concat(parts, " ")
   end
 
   return M

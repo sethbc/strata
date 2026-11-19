@@ -1159,8 +1159,6 @@ test("ALT+K2 held on the type row resets the default type; a quick press draws n
   assert_equal(params:get("v1_type"), 1, "held: the default type, resonator")
 end)
 
-
-
 -- 3.8 (package 3b): the preset row, after the type row in its section
 local function preset_row_index()
   for index, row in ipairs(voice_page_rows(local_value("S").selected_voice)) do
@@ -1240,7 +1238,6 @@ test("no arc ring reaches the preset row", function()
   assert_true(not S.lib.ui_voice_picker.is_open(), "a ring opens nothing")
   context.arc.unplug(1)
 end)
-
 
 -- #823: the type and preset rows' section draws nothing, so the ALT hint
 -- offers no quick K2 there; held past the hold time, the type row resets
