@@ -6,7 +6,7 @@ Run on demand from the repository root (never by the tests):
     python3 tools/touchosc/generate.py
 
 It needs Python 3 (standard library only) and a `lua` or `luajit` on the PATH,
-which reads layout.lua and hands its table over as JSON. It writes
+which reads tools/touchosc/lib/layout.lua and hands its table over as JSON. It writes
 extras/touchosc/strata-tablet.tosc and strata-phone.tosc and prints, for each,
 the decompressed size and the count of controls.
 
@@ -254,9 +254,9 @@ def main():
             path.relative_to(ROOT), len(compressed), raw_size, nodes, controls))
     if check:
         if differs:
-            sys.exit("generate.py --check: differs from layout.lua: " + ", ".join(differs)
+            sys.exit("generate.py --check: differs from %s: " % LAYOUT.relative_to(ROOT) + ", ".join(differs)
                      + " (run python3 tools/touchosc/generate.py)")
-        print("generate.py --check: both files match layout.lua")
+        print("generate.py --check: both files match %s" % LAYOUT.relative_to(ROOT))
 
 
 if __name__ == "__main__":
