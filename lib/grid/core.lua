@@ -474,7 +474,7 @@ return function(S)
   -- (design §7.2, §11: a press, a hold that clears, a level per state)
   local SHARED_KEYS = {
     voice_silenced = 6,
-    gesture_clear_seconds = GRID_HOLD.scene_save_seconds,
+    gesture_clear_seconds = GRID_HOLD.action_hold_seconds,
     gesture_levels = {empty = 2, stopped = 5, playing = 10, recording = 15},
   }
 

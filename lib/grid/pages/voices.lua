@@ -9,9 +9,8 @@
 -- a 64 the left half is the eight keys, the right the level fader. Its
 -- state (the pattern copy and the voice mark, per port) is pane.state()'s
 --
--- CL and RN hold for GRID_HOLD.scene_save_seconds (0.5 s): the name is
--- historical (3.7's half-second scene save, gone with 3.8's SV key); it
--- is the grids' half-second hold
+-- CL and RN hold for GRID_HOLD.action_hold_seconds (0.5 s), the grids'
+-- half-second hold (a recorder's clear waits it too)
 
 return function(S)
   local M = {}
@@ -25,7 +24,7 @@ return function(S)
     keys = {mute = 1, solo = 2, lock = 3, freeze = 4, clear = 5, randomize = 6, pattern_copy = 7, voice_copy = 8},
     level_first = 9,
     level_keys = 8,
-    hold_seconds = GRID_HOLD.scene_save_seconds,
+    hold_seconds = GRID_HOLD.action_hold_seconds,
     levels = {on = 15, off = 4, freeze_on = 15, freeze_off = 3, pending = 15, idle = 2,
       copied = 15, target = 4, no_copy = 2},
   }
