@@ -559,54 +559,71 @@ lateCopyChecks = {
     command.(\setGrainParam, 3, \freeze, 0.0);
     check.(attempts.asArray == [1] and: { lines.isEmpty },
         "outrings: a reader's copy on time lands at its first attempt (attempts %, lines %)".format(attempts, lines));
-    // the ring all timecode, then a copy late past the frozen read point
-    // (outRingSeconds - grainMaxSeconds): the retry, from a fresh read
-    // point, keeps no audio written after its read point where the frozen
-    // grains read
-    (engine.outRingSeconds + 0.3).wait;
-    late = engine.outRingSeconds - engine.grainMaxSeconds + 0.2;
+    // a copy late but inside its room (about 0.64 s) lands at its first
+    // attempt: the room is not too strict
+    (engine.freezeLeaveSeconds + 0.1).wait;
+    late = roomSeconds - 0.35;
     attempts.clear;
     engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); if (attempt == 1) { late.wait } };
     command.(\setGrainParam, 3, \freeze, 1.0);
-    h.waitFor({ freeze[\copied][3] }, late + 2);
+    h.waitFor({ freeze[\copied][3] }, late + 1);
     engine.beforeCopyHook = nil;
-    values = copyTimes.(3);
-    check.(freeze[\copied][3] and: { attempts.asArray == [1, 2] }
-        and: { values[\newest] <= (values[\last] + 0.001) } and: { values[\oldest] >= (values[\last] - reach - 0.1) }
-        and: { getControl.(grainOf.(3), \bufL) == copyRing.(3)[0].bufnum } and: { lines.isEmpty },
-        "outrings: a reader's hold whose copy is % s late retries once and keeps no audio written after its read point where frozen grains read (attempts %; the last % s of the copy hold % to % s, its last frame %)".format(
-            late.round(0.01), attempts, reach.round(0.001), values[\oldest].round(0.001), values[\newest].round(0.001),
-            values[\last].round(0.001)));
+    check.(freeze[\copied][3] and: { attempts.asArray == [1] } and: { lines.isEmpty },
+        "outrings: a reader's copy % s late, inside its room (% s), lands at its first attempt with no line (attempts %, lines %)".format(
+            late.round(0.001), roomSeconds.round(0.001), attempts, lines));
     command.(\setGrainParam, 3, \freeze, 0.0);
-    // both attempts late past the room: the hold is abandoned, with one
-    // console line; the reader reads the live ring unfrozen, its freeze 0
+    // three copies late past the room, then one on time: the hold lands
+    // on the fourth's read point, with nothing written after it where the
+    // frozen grains read, and one console line (after the second)
     (engine.freezeLeaveSeconds + 0.1).wait;
     late = roomSeconds + 0.3;
     attempts.clear;
+    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); if (attempt <= 3) { late.wait } };
+    command.(\setGrainParam, 3, \freeze, 1.0);
+    h.waitFor({ freeze[\copied][3] }, (3 * late) + 2);
+    engine.beforeCopyHook = nil;
+    values = copyTimes.(3);
+    check.(freeze[\copied][3] and: { attempts.asArray == [1, 2, 3, 4] }
+        and: { values[\newest] <= (values[\last] + 0.001) } and: { values[\oldest] >= (values[\last] - reach - 0.1) }
+        and: { getControl.(grainOf.(3), \bufL) == copyRing.(3)[0].bufnum }
+        and: { lines.size == 1 } and: { lines.first.contains("abandoned").not },
+        "outrings: a reader's hold whose copy is % s late three times lands at the fourth, keeping no audio written after its read point where frozen grains read, with one line (attempts %; the last % s of the copy hold % to % s, its last frame %; lines %)".format(
+            late.round(0.001), attempts, reach.round(0.001), values[\oldest].round(0.001), values[\newest].round(0.001),
+            values[\last].round(0.001), lines));
+    command.(\setGrainParam, 3, \freeze, 0.0);
+    // the bound spent (a bound of 2 through copyAttempts' override): the
+    // hold is abandoned with its line, after the late one; the reader reads
+    // the live ring unfrozen, its freeze 0
+    (engine.freezeLeaveSeconds + 0.1).wait;
+    lines.clear; attempts.clear;
+    engine.tryPerform(\copyAttempts_, 2);
     engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); late.wait };
     command.(\setGrainParam, 3, \freeze, 1.0);
     h.waitFor({ freeze[\frozen][3].not }, (2 * late) + 2);
     engine.beforeCopyHook = nil;
+    engine.tryPerform(\copyAttempts_, nil);
     server.sync;
     check.((attempts.asArray == [1, 2]) and: { frozenState.(3) == [false, false, 0] }
         and: { getControl.(grainOf.(3), \freeze) == 0 } and: { getControl.(grainOf.(3), \bufL) == outRing.(2)[0].bufnum }
-        and: { getControl.(grainOf.(3), \phaseBus) == outRing.(2)[2].index } and: { lines.size == 1 },
-        "outrings: a reader's hold whose copy and retry are both % s late (room % s) is abandoned: unfrozen on its live ring, one line (attempts %, [frozen, copied, freeze] %, lines %)".format(
-            late.round(0.001), roomSeconds.round(0.001), attempts, frozenState.(3), lines));
-    // a switch during a late copy's retry cancels it: no copy, no line
+        and: { getControl.(grainOf.(3), \phaseBus) == outRing.(2)[2].index }
+        and: { lines.size == 2 } and: { lines.last.contains("abandoned") } and: { engine.copyAttempts == 8 },
+        "outrings: a reader's hold whose bound of attempts is spent (2, each % s late) is abandoned with its line: unfrozen on its live ring (attempts %, [frozen, copied, freeze] %, lines %, bound back to %)".format(
+            late.round(0.001), attempts, frozenState.(3), lines, engine.copyAttempts));
+    // a switch during a late copy's third attempt cancels it: no copy, no
+    // abandon (the one line is the late one)
     lines.clear; attempts.clear;
     engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); late.wait };
     command.(\setGrainParam, 3, \freeze, 1.0);
-    h.waitFor({ attempts.includes(2) }, late + 2);
+    h.waitFor({ attempts.includes(3) }, (2 * late) + 2);
     copyRing.(3).keep(2).do(_.zero);
     server.sync;
     command.(\setGrainSource, 3, sourceOf.(4));
     (late + 0.3).wait;
     engine.beforeCopyHook = nil;
     values = ringPeaks.(copyRing.(3).keep(2));
-    check.((attempts.asArray == [1, 2]) and: { frozenState.(3) == [false, false, 0] } and: { lines.isEmpty }
-        and: { values.every({ arg pair; pair[0] == 0 }) },
-        "outrings: a switch during a late copy's retry cancels it (attempts %, [frozen, copied, freeze] %, lines %, copy ring peaks %)".format(
+    check.((attempts.asArray == [1, 2, 3]) and: { frozenState.(3) == [false, false, 0] } and: { lines.size == 1 }
+        and: { lines.first.contains("abandoned").not } and: { values.every({ arg pair; pair[0] == 0 }) },
+        "outrings: a switch during a late copy's third attempt cancels it (attempts %, [frozen, copied, freeze] %, lines %, copy ring peaks %)".format(
             attempts, frozenState.(3), lines, values.collect(_.first)));
     // a source ring shorter than the copy ring is refused, with one line,
     // and the hold abandoned (voice 7's out ring stood in for by a 1 s pair
