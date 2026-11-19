@@ -32,7 +32,10 @@ var rampPath, rampFile, other, otherCommand, writerNodes, root, write, high, tog
 var old, readsCopy, restartGrain, startInput, attempt, precondition;
 var tone, meters, peaksOver, sentDuring, inOneBundle, ringPeak, writerBefore, kept, fails, failWatcher, standard;
 var gapLimitSeconds = 0.05, block = server.options.blockSize, headStepFrames = server.options.blockSize;
-var steps, stepBus, stepProbe, gapBus, gapProbe, copyHead, copiedAt;
+// the least a hold's 0.3 s pause keeps its head still at once (s): the
+// pause less the commands' slack on either side
+var holdStillSeconds = 0.3 - (2 * 0.06);
+var steps, stepBus, stepProbe, gapBus, gapProbe, copyHead, copiedAt, writerNow, writers;
 
 // A grain synth's reads while seconds pass: [largest lookback, smallest
 // lookback, largest read, smallest read, seconds with a grain]. Reads only
@@ -68,11 +71,13 @@ SynthDef(\strataCheckFreezeGap, { arg in, out, t_reset = 0;
 }).add;
 // A phase bus's step from one block to the next (frames, wrapped at the
 // ring's), since t_reset: [the smallest, the largest, how many runs of
-// steps were neither 0 nor block]
+// steps were neither 0 nor block, the longest stretch of 0 steps (s): how
+// long the head stood still at once]
 SynthDef(\strataCheckFreezeHeadStep, { arg in, out, frames = 1, block = 64, t_reset = 0;
     var head = In.kr(in), step = (head - Delay1.kr(head)).wrap(0, frames);
-    var other = ((step - block).abs > 0.5) * (step > 0.5);
-    Out.kr(out, [RunningMin.kr(step, t_reset), RunningMax.kr(step, t_reset), PulseCount.kr(other, t_reset)]);
+    var other = ((step - block).abs > 0.5) * (step > 0.5), still = step < 0.5;
+    Out.kr(out, [RunningMin.kr(step, t_reset), RunningMax.kr(step, t_reset), PulseCount.kr(other, t_reset),
+        RunningMax.kr(Sweep.kr(1 - still, still), t_reset)]);
 }).add;
 // The timecode: into out (voice 1's bus, while voiceOn > 0) and out2 (the
 // input bus, while inputOn > 0); the time to now (audio) and nowKr
@@ -777,8 +782,11 @@ check.(high and: { toggles.every(_.value) } and: { other.areaState[\freeze][\fro
 // paused and one block while running, nothing else (the writer is never
 // replaced); over the voice's start, one block throughout. The gap: the
 // synth path's longest silence over the second after the freeze
-steps = { var values = h.readBus(stepBus); (min: values[0], max: values[1], other: values[2]) };
-stepBus = Bus.control(server, 3);
+steps = { var values = h.readBus(stepBus); (min: values[0], max: values[1], other: values[2], still: values[3]) };
+stepBus = Bus.control(server, 4);
+// the voice's ring writer now: [its node, its def] (#833: the step check
+// holds only while the writers it reads were replaced inside its window)
+writerNow = { var writer = other.synths[other.ringWriterKeys[6]]; [writer.nodeID, writer.defName.asSymbol] };
 stepProbe = Synth(\strataCheckFreezeHeadStep, [\in, other.areaState[\rings][\phaseBuses][6], \out, stepBus,
     \frames, other.ringBuffersFor(6, 0)[0].numFrames, \block, headStepFrames], other.processGroup, \addToHead);
 gapBus = Bus.control(server, 1);
@@ -804,29 +812,44 @@ check.((readings[\min] == headStepFrames) and: { readings[\max] == headStepFrame
 stepProbe.set(\t_reset, 1);
 gapProbe.set(\t_reset, 1);
 server.sync; 0.05.wait;
+writers = [writerNow.value];
 otherCommand.(\setGrainParam, 6, \freeze, 1.0);
 1.0.wait;
+writers = writers.add(writerNow.value);
 check.(high and: { h.readBusValue(gapBus) <= gapLimitSeconds },
     "freeze: a spectral freeze has no gap: the synth path's longest silence over the second after it is at most % s (#801: % s)".format(
         gapLimitSeconds, h.readBusValue(gapBus).round(0.001)));
 otherCommand.(\setGrainParam, 6, \freeze, 0.0);
 0.3.wait;
+writers = writers.add(writerNow.value);
 readings = steps.value;
-check.(high and: { readings[\min] == headStepFrames } and: { readings[\max] == headStepFrames } and: { readings[\other] == 0 },
-    "freeze: across a spectral freeze and its unfreeze the replaced writers' head steps exactly % frames a block (#801: steps % to %, % runs of other steps)".format(
-        headStepFrames, readings[\min], readings[\max], readings[\other]));
-// a hold's writer, paused (run 0) and run again (run 1), is never replaced
+// both replaces fell inside the probe's window: three writers, one after
+// the other, the spectral one between two of the voice bus (#833)
+check.(high and: { readings[\min] == headStepFrames } and: { readings[\max] == headStepFrames } and: { readings[\other] == 0 }
+    and: { writers.collect(_.first).asSet.size == 3 }
+    and: { writers.collect(_.last) == [\strataRingWrite, \strataRingWriteSpectral, \strataRingWrite] },
+    "freeze: across a spectral freeze and its unfreeze, both replaces inside the window, the replaced writers' head steps exactly % frames a block (#801, #833: steps % to %, % runs of other steps; writers %)".format(
+        headStepFrames, readings[\min], readings[\max], readings[\other], writers));
+// a hold's writer, paused (run 0) and run again (run 1), is never replaced:
+// the head stands still the whole pause (0.3 s; at least holdStillSeconds
+// at once, not one block, #833) and goes on one block a step either side
 otherCommand.(\setGrainParam, 6, \freezeMode, 0.0);
 stepProbe.set(\t_reset, 1);
 server.sync; 0.05.wait;
+writers = [writerNow.value];
 otherCommand.(\setGrainParam, 6, \freeze, 1.0);
 0.3.wait;
+writers = writers.add(writerNow.value);
 otherCommand.(\setGrainParam, 6, \freeze, 0.0);
 0.3.wait;
+writers = writers.add(writerNow.value);
 readings = steps.value;
-check.((readings[\min] == 0) and: { readings[\max] == headStepFrames } and: { readings[\other] == 0 },
-    "freeze: a hold's paused writer stands still and its run goes on from where it stood (steps % to %, % runs of steps neither 0 nor %)".format(
-        readings[\min], readings[\max], readings[\other], headStepFrames));
+check.((readings[\min] == 0) and: { readings[\max] == headStepFrames } and: { readings[\other] == 0 }
+    and: { readings[\still] >= holdStillSeconds } and: { readings[\still] < 0.5 }
+    and: { writers.every({ arg writer; writer == writers.first }) } and: { writers.first.last == \strataRingWrite },
+    "freeze: a hold's paused writer stands still the whole pause and its run goes on from where it stood (steps % to %, % runs of steps neither 0 nor %; still % s at once, at least %; writers %)".format(
+        readings[\min], readings[\max], readings[\other], headStepFrames, readings[\still].round(0.001),
+        holdStillSeconds, writers));
 otherCommand.(\voiceOff, 6);
 server.sync;
 gapProbe.free; stepProbe.free; tone.free; gapBus.free; stepBus.free;
