@@ -192,6 +192,37 @@ test("a render dump failure names the page state that failed", function()
   cleanup()
 end)
 
+-- #860: a page's states shifted between the count and a state's fresh load
+-- (a source edited mid-run) fail the dump, never write one state's draw
+-- under another's name
+test("a render dump state shifted after the count fails, naming both", function()
+  local helpers = require("helpers")  -- the module itself: h is a view of it
+  local real_load, loads = helpers.load_strata, 0
+  helpers.load_strata = function(...)
+    local context = real_load(...)
+    loads = loads + 1
+    if loads > 1 then  -- every load after the count's: a state slips in first
+      for _, record in ipairs(local_value("S").registry.pages) do
+        if record.layout_states and #record.layout_states > 0 then
+          table.insert(record.layout_states, 1, { name = "intruder", setup = function() end })
+          break
+        end
+      end
+    end
+    return context
+  end
+  local ok, render = pcall(dofile, h.test_dir .. "/render_pages.lua")  -- it takes load_strata as it loads
+  helpers.load_strata = real_load
+  assert_true(ok, tostring(render))
+  render.STATES = {}
+  local dumped, problem = pcall(render.render_page_states, h.data_root .. "renders-shifted")
+  assert_true(not dumped, "the dump fails")
+  problem = tostring(problem)
+  assert_true(problem:find("intruder", 1, true) ~= nil, "it names the state that ran: " .. problem)
+  assert_equal(loads, 2, "at the first state: the count's load and the state's")
+  cleanup()
+end)
+
 test("every page's header, hints and text stay apart and inside 128x64 (M7)", function()
   local context = load_strata()
   params:set("mutation_enabled", 1)

@@ -139,8 +139,6 @@ local function write_state(out_dir, context, page, state_name)
   return name
 end
 
--- Draw every state and write <page>-<state>.json into out_dir (created if
--- missing). Returns the file names written, in order
 -- Run one state's steps (fn: its fresh page, setup, draw and the cleanup
 -- after it): an error in any of them raises again naming the page and the
 -- state, with the traceback of where it was raised (#860), so a run's one
@@ -150,6 +148,8 @@ local function in_state(page, state_name, fn)
   if not ok then error(page .. " state " .. tostring(state_name) .. ": " .. tostring(problem), 0) end
 end
 
+-- Draw every state and write <page>-<state>.json into out_dir (created if
+-- missing). Returns the file names written, in order
 function M.render_page_states(out_dir)
   os.execute("mkdir -p '" .. out_dir .. "'")
   local written = {}
@@ -177,7 +177,15 @@ function M.render_page_states(out_dir)
     for state_index, state_name in ipairs(entry.names) do
       in_state(entry.name, state_name, function()
         local context = fresh_page(entry.name)
+        -- the fresh load's state at this index is the one counted: a source
+        -- edited since the count (#860) fails here, never writes one
+        -- state's draw under another's name
         local state = local_value("S").registry.pages[index].layout_states[state_index]
+        local fresh_name = state and (state.name or ("state " .. state_index))
+        if fresh_name ~= state_name then
+          error("the fresh load's state " .. state_index .. " is " .. tostring(fresh_name)
+            .. ", not the counted " .. state_name .. " (a source changed during the run?)", 0)
+        end
         if state.setup then state.setup(context) end
         table.insert(written, write_state(out_dir, context, entry.name, state_name))
         cleanup()
