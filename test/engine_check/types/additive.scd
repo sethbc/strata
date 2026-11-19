@@ -4,8 +4,10 @@
 // defaults and at each own key's range ends at 110 and 2000 Hz, its two
 // sides within balanceLimitDb (1.5 dB) of each other at pan 0, nothing
 // below 8 Hz, no partial above 0.45 x the sample rate at 2000 Hz with
-// stretch 1, and three extra notes of a held chord on three synths of its
-// def. Each side is measured by itself. Its pool size is the memory area's
+// stretch 1, no alias at 12 kHz bent there from 2000 Hz (where only the
+// fundamental may play), and three extra notes of a held chord on three
+// synths of its def. Each side is measured by itself. Its pool size is the
+// memory area's
 // (checkVoiceSynthSizes, every voice def under one limit). See
 // docs/notes/engine/types.md
 { arg h;
@@ -42,6 +44,17 @@ SynthDef(\strataCheckAdditiveMeter, { arg in, out, t_reset = 0;
         8.do({ high = HPF.ar(high, SampleRate.ir * engine.additiveMuteRatio) });
         [Peak.ar(sig.abs, reset), Peak.ar(LPF.ar(LPF.ar(sig, 8), 8).abs, reset), Peak.ar(high.abs, reset),
             Sweep.ar(t_reset, sig.squared * SampleRate.ir) / samples]
+    }).flatten));
+}).add;
+// Each side by itself, since the last reset: [its peak, its peak with the
+// fundamental at `notch` Hz taken out (four band-rejects there, rq 0.05:
+// 600 Hz wide at 12 kHz)], the left side's two, then the right's
+SynthDef(\strataCheckAdditiveNotch, { arg in, out, t_reset = 0, notch = 12000;
+    var reset = T2A.ar(t_reset);
+    Out.kr(out, A2K.kr(In.ar(in, 2).collect({ arg sig;
+        var rest = sig;
+        4.do({ rest = BRF.ar(rest, notch, 0.05) });
+        [Peak.ar(sig.abs, reset), Peak.ar(rest.abs, reset)]
     }).flatten));
 }).add;
 server.sync;
@@ -162,6 +175,43 @@ if (type.notNil) {
         check.(sounding.(values) and: { db.every({ arg each; each < highCeilingDb }) },
             "additive: 2000 Hz at stretch 1 holds no partial above % x the sample rate (above it, of each side's peak, % dB; under % dB)".format(
                 engine.additiveMuteRatio, db.collect({ arg each; round.(each, 0.1) }), highCeilingDb));
+    }.value;
+
+    // "additive: bent to 12 kHz at stretch 1 only the fundamental plays":
+    // the stretch check above reads only the band above 0.45 x the sample
+    // rate, where a partial left unmuted at 2000 Hz would sound, so an
+    // alias folded below it (a partial past Nyquist plays at the sample
+    // rate less its frequency, or lower still) is not seen there. At 2000
+    // Hz bent 6 times (the voice's pitchbend; the mute reads the frequency
+    // after it), stretch 1 and tilt 0, the second partial would be at
+    // 24.8 kHz, so every partial but the fundamental is muted: one that
+    // played would fold to 23.2 kHz (the second), 10.0 kHz (the third),
+    // 3.4 kHz (the fourth) and on through the band. On each side, with the
+    // fundamental taken out, what is left peaks under -60 dB of the side's
+    // peak
+    {
+        var notchBus = Bus.control(server, 4), notchProbe, values, db, bent = 6.0;
+        setDefaults.value;
+        command.(\setVoiceParam, voice, \freq, 2000.0);
+        command.(\setVoiceParam, voice, \stretch, 1.0);
+        command.(\setVoiceParam, voice, \tilt, 0.0);
+        command.(\setVoiceParam, voice, \bend, bent);
+        server.sync;
+        notchProbe = Synth(\strataCheckAdditiveNotch, [\in, engine.granBuses[voice], \out, notchBus.index, \notch, 2000.0 * bent],
+            engine.voiceGroup, \addAfter);
+        server.sync; 0.5.wait;
+        values = h.measure(notchProbe, notchBus, 1.0);
+        db = [0, 1].collect({ arg index;
+            var each = if (values.size == 4) { values.copyRange(index * 2, (index * 2) + 1) };
+            if (each.notNil and: { each[0] > levelFloor }) { (each[1].max(1e-12) / each[0]).ampdb } { inf }
+        });
+        check.(db.every({ arg each; each < highCeilingDb }),
+            "additive: bent to 12 kHz at stretch 1 only the fundamental plays (with it taken out, of each side's peak, % dB; under % dB)".format(
+                db.collect({ arg each; round.(each, 0.1) }), highCeilingDb));
+        notchProbe.free;
+        command.(\setVoiceParam, voice, \bend, 1.0);
+        server.sync;
+        notchBus.free;
     }.value;
 
     // "additive: three extra notes of a held chord start three synths of its
