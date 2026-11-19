@@ -19,7 +19,7 @@ return function(S)
   local SCENES_PAGE = {
     lines = {recall = 1, fade = 2, corner = 3, morph = 4, morph_y = 5, length = 6, keys = 7},
     keys = {sequencer = 1, save = 2, half_save = 16, first_corner = 4, first_gesture = 9},
-    line_keys = S.constants.PATTERN_LENGTH,  -- a fader line's keys: the pane's whole line
+    line_keys = S.lib.grid_pane.LINE_KEYS,  -- a line's keys (its x bound, a fader line's keys)
     save_role = "save",
     levels = {on = LEVELS.picked, off = LEVELS.unpicked, corner_scene = 15, populated = 6, empty = 2,
       within = 8, beyond = 2, dark = 0},
@@ -30,12 +30,9 @@ return function(S)
 
   local function corners() return S.lib.morph.MORPH.corners end
 
-  local function exists(param_id) return params.lookup[param_id] ~= nil end
-
-  local function value_of(param_id)
-    if not exists(param_id) then return nil end
-    return params:get(param_id)
-  end
+  -- A param the page names is read plainly: a missing (renamed) one
+  -- raises, inside the pane engine's containment, which prints it once
+  local function value_of(param_id) return params:get(param_id) end
 
   -- The corner picked (1 = A, at first), per port
   local function corner_of(pane)
@@ -105,12 +102,13 @@ return function(S)
   end
 
   local function press(pane, x, y, z)
-    if type(x) ~= "number" or x < 1 or x > NUM_SCENES then return end
+    if type(x) ~= "number" or x < 1 or x > SCENES_PAGE.line_keys then return end
     if y == lines.keys then
       line_seven_key(pane, x, z)
       return
     end
-    if z ~= 1 then return end
+    -- lines 1-3 and 6 name a scene or a length: x 1..NUM_SCENES
+    if z ~= 1 or x > NUM_SCENES then return end
     if y == lines.recall or y == lines.fade then
       scene_key(pane, x, y)
     elseif y == lines.corner then
@@ -137,25 +135,25 @@ return function(S)
   local function redraw(pane, led)
     local core = S.lib.grid_core
     local corner_scene = value_of(corner_param(pane))
-    local length = value_of("scene_sequence_length") or 0
-    for x = 1, NUM_SCENES do
+    local length = value_of("scene_sequence_length")
+    for x = 1, math.min(NUM_SCENES, SCENES_PAGE.line_keys) do
       led(x, lines.recall, core.scene_recall_level(x))
       led(x, lines.fade, core.scene_fade_level(x))
       local scene = S.scenes[x]
       local level = (scene and scene.populated) and levels.populated or levels.empty
       led(x, lines.corner, x == corner_scene and levels.corner_scene or level)
       led(x, lines.length, x <= length and levels.within or levels.beyond)
-      led(x, lines.keys, line_seven_level(pane, x))
     end
+    for x = 1, SCENES_PAGE.line_keys do led(x, lines.keys, line_seven_level(pane, x)) end
   end
 
-  -- Lines 4 and 5: the morph's X and Y, for the params that exist
+  -- Lines 4 and 5: the morph's X and Y. A missing param raises here,
+  -- inside the faders' containment, never on the engine's draw path
   local function faders()
     local found = {}
     for _, line in ipairs({{lines.morph, "morph"}, {lines.morph_y, "morph_y"}}) do
-      if exists(line[2]) then
-        found[#found + 1] = {line = line[1], first = 1, keys = SCENES_PAGE.line_keys, id = line[2]}
-      end
+      params:lookup_param(line[2])
+      found[#found + 1] = {line = line[1], first = 1, keys = SCENES_PAGE.line_keys, id = line[2]}
     end
     return found
   end

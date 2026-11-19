@@ -5,9 +5,10 @@
 - **Every recall goes through the quantizer**, wrapped in a function: `S.lib.quantize.schedule("scene", function() recall_scene(x, 0) end, "S" .. x)` (line 1), and with `params:get("scene_transition_time")` read at the press (line 2). An unwrapped `recall_scene` would recall at once.
 - **SQ goes through `set_binary_param`**, so a MIDI map echoes it (#538).
 - **The recorders go through `pane.gesture_key(x, 7, z, x - 8)`** on the press and the release: the core's role makes a key act only at the release of a press made as that recorder's key, and its half-second hold clears.
-- **The morph's X and Y are fader lines** (`faders(pane)`: line 4 `morph`, line 5 `morph_y`, sixteen keys each), set and drawn by the pane engine through `set_param_from_column`, so a recorder records them as grid touches; `faders` lists only params that exist (the engine's `draw_line` reads `fader_position` outside its containment).
+- **The morph's X and Y are fader lines** (`faders(pane)`: line 4 `morph`, line 5 `morph_y`, `S.lib.grid_pane.LINE_KEYS` keys each), set and drawn by the pane engine through `set_param_from_column`, so a recorder records them as grid touches. A missing (renamed) `morph` or `morph_y` raises in `faders` (`params:lookup_param`), inside the faders' containment, which prints it once and leaves the page no fader lines; never on the engine's `draw_line` path, and never a line silently dropped (#853).
 - **The corner lives in `pane.state().corner`** (1-4, A at first), per port: a port's two panes on this page share it, and it goes with the port's grid. Never in `port_state` directly.
-- **`signature(pane)`** is the corner, `morph_a` to `morph_d`, the sequence length and `scene_sequencer_enabled`, read so that a missing param gives `nil` rather than raising: the corners' scenes have no action that redraws the grids, so the drift tick's follow shows them.
+- **`signature(pane)`** is the corner, `morph_a` to `morph_d`, the sequence length and `scene_sequencer_enabled`, read plainly, so a missing param raises (contained, printed once): the corners' scenes have no action that redraws the grids, so the drift tick's follow shows them.
+- **Bounds**: a press needs x in 1..`LINE_KEYS` (line 7 has all sixteen keys); lines 1-3 and 6 name a scene or a length, so they also need x <= `NUM_SCENES`, and the redraw draws them to `min(NUM_SCENES, LINE_KEYS)` and line 7 to `LINE_KEYS` (#853).
 
 ## Owns
 

@@ -18,13 +18,15 @@ return function(S)
   local grid_core = S.lib.grid_core
   local LEVELS = grid_core.LEVELS
 
-  -- A pane is NUM_VOICES lines of `width` keys (a pattern's steps); its
-  -- strip is the line after them in the pane coordinates the harness and
-  -- M.physical use; a 64 shows half_width columns (its own) of it at a
-  -- time. The strip keys' and the chooser's levels; a fader line's bar
-  -- and value. A page's state is kept in port_state(port)[pages_key]
+  -- A pane is NUM_VOICES lines of `width` keys (a grid row's sixteen,
+  -- whatever a pattern's length or the scene count: M.LINE_KEYS, every
+  -- line of a page, fader lines too); its strip is the line after them in
+  -- the pane coordinates the harness and M.physical use; a 64 shows
+  -- half_width columns (its own) of it at a time. The strip keys' and
+  -- the chooser's levels; a fader line's bar and value. A page's state is
+  -- kept in port_state(port)[pages_key]
   local PANE = {
-    width = S.constants.PATTERN_LENGTH, half_width = 8, strip_line = NUM_VOICES + 1, pages_key = "pages",
+    width = 16, half_width = 8, strip_line = NUM_VOICES + 1, pages_key = "pages",
     levels = {fill_on = 15, fill_off = 4, tempo_held = 15, tempo_idle = 4, muted = 15, unmuted = 4,
       chooser_shown = 15, choice_shown = 15, choice_other = 4, dark = 0, bar = 8, value = 15},
     -- the 64's chooser: row r of column c (page c) picks side and half
@@ -40,6 +42,10 @@ return function(S)
     for voice_idx = 1, NUM_VOICES do keys[#keys + 1] = voice_kind .. " " .. voice_idx end
     return keys
   end
+  -- The keys of a pane's line, for the pages (their x bounds, a fader
+  -- line's keys)
+  M.LINE_KEYS = PANE.width
+
   M.STRIPS = {upper = strip_of("play", "fill", "voice"), lower = strip_of("tempo -", "tempo +", "mute"),
     small = {"chooser"}}
   for voice_idx = 1, NUM_VOICES do M.STRIPS.small[#M.STRIPS.small + 1] = "voice " .. voice_idx end
