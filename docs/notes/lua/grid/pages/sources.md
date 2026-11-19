@@ -20,7 +20,7 @@ Line v is voice v (1-7); a press acts at its press, a release does nothing.
 | v (own) | not the synth: the synth; the synth: its own output (`SOURCE_VOICE_FIRST + v - 1`) | 15 the synth; its own output blinks 15 / 6 (0.5 s each); else 4 |
 | 1-7, not v | `SOURCE_VOICE_FIRST + x - 1` (reads voice x) | 15 selected; else 4 voice x running, 2 stopped |
 | 8 `in` | not the input: `SOURCE_INPUT` (the channel kept); the input: the next channel (stereo, left, right) | selected: 15 stereo, 11 left, 7 right; else 4 |
-| 9-16 | slot `x - 8` (`SOURCE_SYNTH + x - 8`) | 15 selected; else 2 free (`S.lib.buffers.is_free`), 4 holding audio (or loading) |
+| 9-16 | slot `x - 8` (`SOURCE_SYNTH + x - 8`) | 15 selected; else 2 free (`S.lib.buffers.is_free`), 4 holding audio (or loading or recording: not free) |
 
 A slot cleared while a voice reads it keeps that voice's source (and key at 15); its key on the other lines goes to 2 at once.
 

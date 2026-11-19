@@ -1164,15 +1164,20 @@ local function assert_screen_layout(context, where)
     if entry.x == 0 and entry.y == HINT_ROW_Y then hint_found = true end
   end
   assert_true(title_right, "page title " .. title .. " drawn at 0,8 (" .. where .. ")")
-  -- the header band: rects above y 9
+  -- the header band: rects above y 9. Every one over the dots' span is a
+  -- page dot (2x2, or FX's 2x5 bar), so a rect of another shape there
+  -- fails rather than going uncounted (#856)
   local dots = {}
+  local dots_right = HEADER_DOTS_X + (#PAGE_TITLES - 1) * HEADER_DOT_SPACING + HEADER_DOT_SIZE
   for _, rect in ipairs(context.screen.rects) do
     if rect.y + rect.h <= 9 then
       for _, text in ipairs(rows[8] or {}) do
         assert_true(rect.x + rect.w <= text.left or rect.x >= text.right,
           string.format("a header rect at x %d-%d is under '%s' (%s)", rect.x, rect.x + rect.w - 1, text.text, where))
       end
-      if rect.w == HEADER_DOT_SIZE and (rect.h == HEADER_DOT_SIZE or rect.h == header_constants.frozen_h) then
+      if rect.x + rect.w > HEADER_DOTS_X and rect.x < dots_right then
+        assert_true(rect.w == HEADER_DOT_SIZE and (rect.h == HEADER_DOT_SIZE or rect.h == header_constants.frozen_h),
+          string.format("a header rect of %dx%d at x %d over the page dots is no dot (%s)", rect.w, rect.h, rect.x, where))
         table.insert(dots, rect)
       end
     end
