@@ -185,9 +185,13 @@ check.(h.formatOf(\setVoiceType) == "ii", "types: setVoiceType is \"ii\" (%)".fo
 
 // The extra notes: three voice synth notes live and one releasing; a
 // switch leaves three live notes of the new def at their kept freq, the
-// three old ones cutting, and the releasing one releasing, not restarted
+// three old ones cutting, and the releasing one releasing, not restarted.
+// The three starts are in the switch's one bundle with the voice synth's
+// start and the kills of the old voice synth and of the three old notes
+// (restartVoiceNotes runs inside replaceVoiceType's bundle), as the
+// unfreeze's chord check below asks of a waiting switch
 {
-    var voice = 1, slots = [1, 2, 3, 4], old, after, records, ok, freqs;
+    var voice = 1, slots = [1, 2, 3, 4], old, after, records, ok, freqs, units, oldVoice, newVoice, bundled;
     var record = { arg slot; engine.noteRecord(voice, slot) };
     startVoice.(voice);
     command.(\setNotePool, engine.notePoolMax);
@@ -198,17 +202,24 @@ check.(h.formatOf(\setVoiceType) == "ii", "types: setVoiceType is \"ii\" (%)".fo
     command.(\noteOff, voice, 4, 0);
     server.sync; 0.05.wait;
     old = slots.collect({ arg slot; record.(slot)[\synth] });
-    command.(\setVoiceType, voice, 2);
+    oldVoice = engine.synths[engine.voiceKey(voice)];
+    units = h.wireUnits({ command.(\setVoiceType, voice, 2) });
+    newVoice = engine.synths[engine.voiceKey(voice)];
     after = slots.collect({ arg slot; record.(slot)[\synth] });
     records = slots.collect({ arg slot; [record.(slot)[\state], record.(slot)[\cutting] === old[slot - 1]] });
+    bundled = units.any({ arg unit;
+        unit.any({ arg msg; isStartOf.(msg, newVoice) }) and: { unit.any({ arg msg; isKillOf.(msg, oldVoice) }) }
+            and: { [1, 2, 3].every({ arg slot; unit.any({ arg msg; isStartOf.(msg, after[slot - 1]) })
+                and: { unit.any({ arg msg; isKillOf.(msg, old[slot - 1]) }) } }) } });
     server.sync;
     freqs = [1, 2, 3].collect({ arg slot; after[slot - 1] !? { arg synth; h.getControl(synth, \freq) } });
     ok = [1, 2, 3].every({ arg slot; var synth = after[slot - 1];
         synth.notNil and: { synth !== old[slot - 1] } and: { synth.defName.asSymbol == typeDefs[2] }
             and: { records[slot - 1] == [\live, true] } and: { (freqs[slot - 1] ? 0 - (220.0 + (slot * 55))).abs < 0.001 } })
-        and: { after[3] === old[3] } and: { record.(4)[\state] == \releasing } and: { record.(4)[\cutting].isNil };
-    check.(ok, "types: a switch under a chord restarts the three live voice synth notes on the new def at their freq, cuts the old ones and leaves the releasing one releasing ([state, old cutting]: %, freqs %, releasing kept %)".format(
-        records, freqs, after[3] === old[3]));
+        and: { after[3] === old[3] } and: { record.(4)[\state] == \releasing } and: { record.(4)[\cutting].isNil }
+        and: { oldVoice.notNil } and: { newVoice !== oldVoice } and: { bundled };
+    check.(ok, "types: a switch under a chord restarts the three live voice synth notes on the new def at their freq, cuts the old ones and leaves the releasing one releasing, in the switch's one bundle ([state, old cutting]: %, freqs %, releasing kept %, one bundle %)".format(
+        records, freqs, after[3] === old[3], bundled));
     h.stopAllVoices;
     command.(\setNotePool, 0);
     command.(\setVoiceType, voice, voice);
@@ -319,8 +330,9 @@ server.sync;
         var waits = mode == 1, cuttingAtSwitch, oldCutAtSwitch, raised = 0, held = 0, onServer = 0, units, fm, cutting, bundled, gone, fmIndex, notesAfter;
         var count = { held = max(held, trackedVoiceSynths.(target, voice)) };
         var meterBus = Bus.control(server, 1), meter, window, phaseBus = target.areaState[\rings][\phaseBuses][voice];
-        // the grain spreads the voice keeps (nil: never sent), put back after
-        var spreadKeys = [\posSpread, \panSpread], spreads = spreadKeys.collect({ arg key; target.grainControls[voice][key] });
+        // the kept grain controls the scenario sends (nil: never sent), as
+        // they were before it, put back after
+        var sentKeys = [\freeze, \freezeMode, \posSpread, \panSpread], sentBefore = sentKeys.collect({ arg key; target.grainControls[voice][key] });
         var defDefault = { arg key; SynthDescLib.global.at(\strataGrainRing).controls.detect({ arg each; each.name == key }).defaultValue };
         window = { meter.set(\t_reset, 1); 1.0.wait; h.readBusValue(meterBus).max(0).sqrt };
         run.(\setGrainSource, voice, 0);
@@ -417,14 +429,19 @@ server.sync;
                 "types: a spectral-frozen voice's waiting switch is applied at the unfreeze (% tier: new %, the Resonator cutting % in the unfreeze's bundle % and gone %, index % (sent %), voice synths at most % tracked and % on the server, notes %)".format(
                     target.tier, fm !? { fm.defName }, cutting, bundled, gone, fmIndex, waitingIndex, held, onServer, notesAfter));
         };
+        // the unfreeze, then the controls the scenario sent put back: a
+        // kept value as it was, one never sent as the def's default to the
+        // synth and out of the kept controls again (the voice was not
+        // frozen before, so its kept freeze, if any, is 0 and the unfreeze
+        // stands)
         run.(\setGrainParam, voice, \freeze, 0.0);
-        run.(\setGrainParam, voice, \freezeMode, 0.0);
-        // the spreads put back: a kept value as it was, one never sent as
-        // the def's default to the synth and out of the kept controls again
-        [spreadKeys, spreads].flop.do({ arg pair;
+        [sentKeys, sentBefore].flop.do({ arg pair;
             run.(\setGrainParam, voice, pair[0], pair[1] ?? { defDefault.(pair[0]) });
             if (pair[1].isNil) { target.grainControls[voice].removeAt(pair[0]) };
         });
+        check.(sentKeys.collect({ arg key; target.grainControls[voice][key] }) == sentBefore,
+            "types: the frozen switch's scenario puts back the voice's kept % (% tier, %: %, before %)".format(
+                sentKeys, target.tier, label, sentKeys.collect({ arg key; target.grainControls[voice][key] }), sentBefore));
         h.stopAllVoices(target);
         run.(\setNotePool, 0);
         run.(\setVoiceType, voice, voice);
