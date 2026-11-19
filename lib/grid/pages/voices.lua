@@ -147,16 +147,13 @@ return function(S)
     return found
   end
 
-  -- What the follow compares beside the level lines: each voice's mute,
-  -- solo, lock and freeze, and the two copies (a scene's lock entry sets
-  -- S.locked with no redraw of its own until the recall ends)
+  -- What the follow compares beside the level lines: each voice's lock
+  -- (a scene's lock entry sets S.locked with no redraw of its own until
+  -- the recall ends) and the two copies. Mute, solo and freeze have no
+  -- term: their params' actions always redraw the grids
   local function signature(pane)
     local parts = {}
-    for voice_idx = 1, NUM_VOICES do
-      parts[#parts + 1] = table.concat({tostring(is_on(param_of(voice_idx, "mute"))),
-        tostring(is_on(param_of(voice_idx, "solo"))), tostring(S.locked[voice_idx] == true),
-        tostring(S.lib.freeze.is_frozen(voice_idx))}, ":")
-    end
+    for voice_idx = 1, NUM_VOICES do parts[#parts + 1] = tostring(S.locked[voice_idx] == true) end
     local state = pane.state()
     parts[#parts + 1] = state.patterns and state.patterns.voice or "-"
     parts[#parts + 1] = state.sound and state.sound.voice or "-"

@@ -682,7 +682,7 @@ test("a 64's left half holds the eight keys, its right half the level fader", fu
   assert_equal(pane.led(KEY.voice_copy, 7), 15, "back on the left: the mark stays")
 end)
 
-test("the signature follows mute, solo, lock, freeze and the copies", function()
+test("the signature follows the lock and the copies", function()
   each_arrangement(function(_, S, pane, arrangement)
     drift_update()  -- the first look
     local before = pane.device.refresh_count
@@ -698,10 +698,7 @@ test("the signature follows mute, solo, lock, freeze and the copies", function()
       state = function() return S.lib.grid_core.port_state(pane.port).pages.voices end}
     local signature = record.signature(fake)
     for _, change in ipairs({
-      function() params:set("v1_mute", 1) end,
-      function() params:set("v1_solo", 1) end,
       function() toggle_lock(1) end,
-      function() params:set("v1_freeze", 1) end,
       function() fake.state().patterns = {voice = 1, steps = {}} end,
       function() fake.state().sound = {voice = 1} end,
     }) do
@@ -711,6 +708,25 @@ test("the signature follows mute, solo, lock, freeze and the copies", function()
       signature = now
     end
   end, {{KEY.lock, 1}})
+end)
+
+-- #855's kind (fix round 1): mute, solo and freeze have no term of the
+-- signature, since their params' actions always repaint the grids; a
+-- change of each repaints at once and leaves the signature as it was
+test("mute, solo and freeze repaint at once and are no term of the signature", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    local record = S.registry.grid_pages[S.constants.GRID_PAGES.voices]
+    local fake = {port = pane.port, index = 1, page = S.constants.GRID_PAGES.voices,
+      state = function() return S.lib.grid_core.port_state(pane.port).pages.voices end}
+    local signature = record.signature(fake)
+    for _, change in ipairs({{"v1_mute", KEY.mute, 15}, {"v1_solo", KEY.solo, 15}, {"v1_freeze", KEY.freeze, 15}}) do
+      local before = pane.device.refresh_count
+      params:set(change[1], 1)
+      assert_true(pane.device.refresh_count > before, arrangement .. ": " .. change[1] .. "'s action repaints")
+      assert_equal(pane.led(change[2], 1), change[3], arrangement .. ": and lights its key")
+      assert_equal(record.signature(fake), signature, arrangement .. ": " .. change[1] .. " is no term of the signature")
+    end
+  end, {{KEY.freeze, 1}})
 end)
 
 test("a lock and a mute a scene recall sets show at once", function()

@@ -545,6 +545,30 @@ test("the delay's freeze and a set key repaint the grid at once, with no drift t
   end, {{KEY_X.delay_freeze, LINE.keys}, {SET_X.master, LINE.picks}})
 end)
 
+-- #853 (fix round 1): a renamed FX param fails loudly, never dropping its
+-- line silently: faders raises naming it, contained and printed once by
+-- the pane engine, and the page's keys still work
+test("a missing FX fader param raises in faders, contained and printed once", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local record = S.registry.grid_pages[S.constants.GRID_PAGES.fx]
+  local state = {}
+  local pane_object = {width = 16, offset = 0, state = function() return state end}
+  local saved = params.lookup.shimmer_delay
+  params.lookup.shimmer_delay = nil
+  local ok, err = pcall(record.faders, pane_object)
+  params.lookup.shimmer_delay = saved
+  assert_true(not ok and tostring(err):find("shimmer_delay", 1, true) ~= nil,
+    "faders raises naming shimmer_delay: " .. tostring(err))
+  local pane = fx_pane(context, "128h")
+  params.lookup.shimmer_delay = nil
+  grid_redraw(); grid_redraw()
+  pane.tap(SET_X.reverb, LINE.picks)
+  params.lookup.shimmer_delay = saved
+  h.claim_script_errors(context, 1, "strata: grid page faders failed: ", "shimmer_delay")
+  assert_equal(pane.led(SET_X.reverb, LINE.picks), 15, "the set keys still work")
+end)
+
 test("the set is per port", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

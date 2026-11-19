@@ -6,9 +6,9 @@ Run on demand from the repository root (never by the tests):
     python3 tools/touchosc/generate.py
 
 It needs Python 3 (standard library only) and a `lua` or `luajit` on the PATH,
-which reads tools/touchosc/lib/layout.lua and hands its table over as JSON. It writes
-extras/touchosc/strata-tablet.tosc and strata-phone.tosc and prints, for each,
-the decompressed size and the count of controls.
+which reads tools/touchosc/lib/layout.lua and hands its table over as JSON. It
+writes extras/touchosc/strata-tablet.tosc and strata-phone.tosc and prints, for
+each, the decompressed size and the count of controls.
 
 The file format is the one the tosclib library writes (a zlib-compressed XML
 document, <lexml version="3">, one root GROUP holding a PAGER of GROUP pages),

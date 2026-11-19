@@ -7,7 +7,7 @@
 
 `assert_screen_layout(context, where)` (`test/helpers.lua`) checks one drawn screen:
 - no two strings on a row overlap, and nothing leaves 128×64 (measuring with norns' font advances, `stubs.text_width`: `docs/notes/test-harness/stubs.md`);
-- the page title at 0,8, then one page dot per page (ten 2×2 rects at x 32, 36, ..., 68, the first at least 4 px after the title; FX's a 2×5 bar exactly while `S.lib.fx_hold.any_frozen()`, 3.8), or, while a header flash shows (`S.lib.ui_flash.text("header")`), its text at 40,8 and no dots;
+- the page title at 0,8, then one page dot per page (ten 2×2 rects at x 32, 36, ..., 68, the first at least 4 px after the title; FX's a 2×5 bar exactly while `S.lib.fx_hold.any_frozen()`, 3.8; every header rect over the dots' span must be one of them, so a rect of another shape there fails), or, while a header flash shows (`S.lib.ui_flash.text("header")`), its text at 40,8 and no dots;
 - a string with a descender (g, j, p, q, y) has no string it overlaps horizontally less than 7 px below it (the font draws 2 px under the baseline; #422);
 - no header rect (a dot, the play mark: rects above y 9) lies under a header string;
 - a hint row is drawn at y=62;
