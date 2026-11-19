@@ -23,7 +23,7 @@ return function(S)
     title_y = 16, first_y = 24, spacing = 7, visible = 5, value_right = 124, type_gap = 4,
     levels = {title = 10, selected = 15, other = 4},
     title = "LOAD INTO VOICE ", from = "from voice ", empty = "--", unknown_type = "?", slot_format = "%02d",
-    entry_heading = "preset %02d name", loaded = "loaded ",
+    entry_heading = "preset %02d name", loaded = "loaded ", alt_voice_hint = "E2:row",
     hold_seconds = S.constants.ALT_HOLD_SECONDS,
   }
   M.VOICE_PICKER = VOICE_PICKER
@@ -95,7 +95,8 @@ return function(S)
   end
 
   -- The hint row: a flash while one shows (a refused load or save); with
-  -- ALT on a slot K2:clear (a filled one) and K3:save, ALT+K2 down K2:hold
+  -- ALT on a slot K2:clear (a filled one) and K3:save, on a voice row E2
+  -- alone (ALT's K2 and K3 do nothing there, #850), ALT+K2 down K2:hold
   -- and, past the hold time, K2:clear (its release clears); without ALT
   -- K2:back and K3's act on the row (copy, load; nothing on an empty slot)
   local function hints(alt_held)
@@ -108,7 +109,7 @@ return function(S)
       return k2_held_long() and "K2:clear" or "K2:hold"
     end
     if alt_held then
-      if not row.slot then return "" end
+      if not row.slot then return VOICE_PICKER.alt_voice_hint end
       return filled and "K2:clear K3:save" or "K3:save"
     end
     if row.voice then return "K2:back K3:copy" end

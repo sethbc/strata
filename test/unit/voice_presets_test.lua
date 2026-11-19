@@ -406,4 +406,30 @@ test("a failed write that would drop a damaged preset leaves voices.data as read
   assert_equal(S.lib.data_files.read(dir .. "voices.data").presets[3].name, "third", "the new preset written")
 end)
 
+-- #850: the name a voice's preset row shows is the preset last loaded
+-- into it only until a PSET read or a scene recall sets the voice anew
+test("a PSET read or a scene recall clears the names a load and a copy gave", function()
+  local context, S, presets = loaded()
+  assert_true(presets.save(2, 1, "glass"), "a preset")
+  assert_true(presets.load(1, 1), "loaded into voice 1")
+  assert_true(presets.copy(4, 3), "voice 4 copied into voice 3")
+  assert_equal(presets.loaded_name(1), "glass", "voice 1's name")
+  assert_equal(presets.loaded_name(3), "v4", "voice 3's name")
+  local path = context.data_dir .. "names.pset"
+  params:write(path)
+  params:read(path)
+  assert_equal(presets.loaded_name(1), nil, "a PSET read clears voice 1's")
+  assert_equal(presets.loaded_name(3), nil, "and voice 3's")
+  assert_true(presets.load(1, 1), "loaded again")
+  capture_scene(1)
+  recall_scene(1, 0)
+  assert_equal(presets.loaded_name(1), nil, "an instant recall clears it")
+  assert_true(presets.load(1, 1), "loaded again")
+  recall_scene(1, 2)
+  assert_equal(presets.loaded_name(1), nil, "a fade's first step clears it")
+  assert_true(presets.load(1, 1), "a load during the fade")
+  context.clock.run_for(3)
+  assert_equal(presets.loaded_name(1), "glass", "the load after the fade began keeps its name")
+end)
+
 end

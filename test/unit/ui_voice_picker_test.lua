@@ -172,6 +172,12 @@ test("the hints follow the row and ALT", function()
   key(1, 0); enc(2, 1); key(1, 1); next_frame(context)
   assert_equal(hint_text(context), "K3:save", "an empty slot with ALT")
   key(1, 0)
+  -- #850: on a voice row ALT's K2 and K3 do nothing, E2 still moves
+  enc(2, -100); key(1, 1); next_frame(context)
+  assert_equal(hint_text(context), "E2:row", "a voice row with ALT")
+  enc(2, 1); next_frame(context)
+  assert_equal(selected_row(context, S):match("^from voice"), "from voice", "E2 moved with ALT held")
+  key(1, 0)
 end)
 
 test("K3 copies a voice row and loads a filled slot", function()

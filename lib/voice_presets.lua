@@ -12,7 +12,8 @@
 -- holds the voice's sound from before (its type, synth keys and in keys,
 -- not its whole capture) for VOICE's undo (S.lib.mutation.hold_voice).
 -- Fields of this module's table: VOICE_PRESETS, capture, load, copy, save,
--- clear, preset, loaded_name.
+-- clear, preset, loaded_name (cleared by a PSET read and a scene recall:
+-- its PSET and recall hooks).
 -- See docs/notes/lua/voice-presets.md
 
 return function(S)
@@ -74,8 +75,15 @@ return function(S)
   local library = {}
   local store = {started = false, blocked = false, dropped = false}
   -- Per voice, the name shown on VOICE's preset row: the preset last
-  -- loaded into it, or a copy's v<n> (not stored, design §8.4)
+  -- loaded into it, or a copy's v<n> (not stored, design §8.4); a PSET read
+  -- or a scene recall sets every voice anew and clears them all (#850)
   local loaded = {}
+  local function forget_names()
+    loaded = {}
+    request_redraw()
+  end
+  S.register_pset_hook({name = "voice_presets", read = forget_names})
+  S.register_scene_recalled(forget_names)
 
   local function path() return S.lib.scenes.scene_data_dir .. VOICE_PRESETS.file end
 

@@ -1194,7 +1194,7 @@ test("the row shows the name last loaded, else --", function()
   capture_scene(1); recall_scene(1, 0)
   redraw()
   _, value = drawn_row(context, "preset")
-  assert_equal(value and value.text, "v3", "a recall leaves it")
+  assert_equal(value and value.text, "--", "a recall clears it (#850)")
 end)
 
 test("the cursor anchored on the preset row stays on it", function()
