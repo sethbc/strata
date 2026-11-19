@@ -210,10 +210,11 @@ return function(S)
 
   -- The hint row: K3 only on a voice row (its column, or with ALT its
   -- learn); E3 on every row (with ALT it turns as without: number and
-  -- option params have no fine step, so ALT names E2 and K3 only)
+  -- option params have no fine step, so ALT names E2, K3's learn and E3,
+  -- #844, as the scale editor's ALT hints name its E3)
   local function hints(alt_held)
     local voice_row = ROWS[editor.row].voice ~= nil
-    if alt_held then return voice_row and "E2:row K3:learn" or "E2:row" end
+    if alt_held then return voice_row and "E2:row K3:learn E3:value" or "E2:row E3:value" end
     return voice_row and "K2:back K3:column E3:value" or "K2:back E3:value"
   end
 
