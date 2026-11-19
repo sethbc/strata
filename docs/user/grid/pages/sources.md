@@ -21,7 +21,7 @@ What it shows:
 - the voice's source at 15; its own output blinks between 15 and 6, half a second each
 - the input key by its channel: 15 stereo, 11 left, 7 right; 4 while the voice reads something else
 - another voice's key at 4 while that voice runs, 2 while it is stopped
-- a buffer's key at 4 while the buffer holds audio, 2 while it is empty; a buffer cleared while a voice reads it dims to 2 at once on the other lines and stays lit at 15 on that voice's line, which keeps reading it
+- a buffer's key at 4 while the buffer holds audio, loads or records, 2 while it is empty; a buffer cleared while a voice reads it dims to 2 at once on the other lines and stays lit at 15 on that voice's line, which keeps reading it
 - the voice's own column at 4 while it reads something other than its synth or its own output
 
 A source set anywhere else (the screen, a scene, a MIDI map, PARAMETERS) shows at once; an input channel set on VOICE or in PARAMETERS within a tenth of a second.
