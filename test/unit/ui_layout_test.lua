@@ -177,6 +177,21 @@ test("the render dump writes one file per page state", function()
   for page in pairs(pages) do assert_true(shown[page], "a render of " .. page) end
 end)
 
+-- #860: a state that fails in the dump (its setup, its draw or the cleanup
+-- after it, which only the dump runs) fails naming its page and state, with
+-- the traceback, so one line of a run's output says which
+test("a render dump failure names the page state that failed", function()
+  local render = dofile(h.test_dir .. "/render_pages.lua")
+  table.insert(render.STATES, 1, { page = "FX", name = "probe fails", setup = function() error("probe raised") end })
+  local ok, problem = pcall(render.render_page_states, h.data_root .. "renders-probe")
+  assert_true(not ok, "the dump fails")
+  problem = tostring(problem)
+  assert_true(problem:find("FX state probe fails", 1, true) ~= nil, "it names the page and state: " .. problem)
+  assert_true(problem:find("probe raised", 1, true) ~= nil, "and the error: " .. problem)
+  assert_true(problem:find("traceback", 1, true) ~= nil, "with its traceback: " .. problem)
+  cleanup()
+end)
+
 test("every page's header, hints and text stay apart and inside 128x64 (M7)", function()
   local context = load_strata()
   params:set("mutation_enabled", 1)

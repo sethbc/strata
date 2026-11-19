@@ -141,28 +141,47 @@ end
 
 -- Draw every state and write <page>-<state>.json into out_dir (created if
 -- missing). Returns the file names written, in order
+-- Run one state's steps (fn: its fresh page, setup, draw and the cleanup
+-- after it): an error in any of them raises again naming the page and the
+-- state, with the traceback of where it was raised (#860), so a run's one
+-- failure line says which state it was
+local function in_state(page, state_name, fn)
+  local ok, problem = xpcall(fn, debug.traceback)
+  if not ok then error(page .. " state " .. tostring(state_name) .. ": " .. tostring(problem), 0) end
+end
+
 function M.render_page_states(out_dir)
   os.execute("mkdir -p '" .. out_dir .. "'")
   local written = {}
   for _, state in ipairs(M.STATES) do
-    local context = fresh_page(state.page)
-    if state.setup then state.setup(context) end
-    table.insert(written, write_state(out_dir, context, state.page, state.name))
-    cleanup()
+    in_state(state.page, state.name, function()
+      local context = fresh_page(state.page)
+      if state.setup then state.setup(context) end
+      table.insert(written, write_state(out_dir, context, state.page, state.name))
+      cleanup()
+    end)
   end
   -- each page record's own states (the layout tests draw them too)
   load_strata()
   local pages = local_value("S").registry.pages
   local counts = {}
-  for index, record in ipairs(pages) do counts[index] = { name = record.name, count = #(record.layout_states or {}) } end
+  for index, record in ipairs(pages) do
+    local names = {}
+    for state_index, state in ipairs(record.layout_states or {}) do
+      names[state_index] = state.name or ("state " .. state_index)
+    end
+    counts[index] = { name = record.name, names = names }
+  end
   cleanup()
   for index, entry in ipairs(counts) do
-    for state_index = 1, entry.count do
-      local context = fresh_page(entry.name)
-      local state = local_value("S").registry.pages[index].layout_states[state_index]
-      if state.setup then state.setup(context) end
-      table.insert(written, write_state(out_dir, context, entry.name, state.name or ("state " .. state_index)))
-      cleanup()
+    for state_index, state_name in ipairs(entry.names) do
+      in_state(entry.name, state_name, function()
+        local context = fresh_page(entry.name)
+        local state = local_value("S").registry.pages[index].layout_states[state_index]
+        if state.setup then state.setup(context) end
+        table.insert(written, write_state(out_dir, context, entry.name, state_name))
+        cleanup()
+      end)
     end
   end
   return written
