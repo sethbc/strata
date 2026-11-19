@@ -253,7 +253,7 @@ local function engine_value_method(name)
   local names = {}
   for arg in args:gmatch("[%w_]+") do table.insert(names, arg) end
   return function(...)
-    local values, tokens, position = {numBuffers = engine_spec.num_buffers}, {}, 1
+    local values, tokens, position = {numBuffers = engine_spec.num_buffers, numVoices = engine_spec.num_voices}, {}, 1
     for index, arg in ipairs(names) do values[arg] = select(index, ...) end
     -- tokens: numbers, names, ( ) + - * / and .message
     local text = body:gsub("%s+", "")
@@ -345,6 +345,18 @@ test("the engine's event polls decode in Lua's handlers (#459)", function()
   assert_true(save_buffer(6))
   context.polls.fire("bufferSaveResult", save_result_value(5, 2, true))
   assert_equal(S.lib.ui_flash.text("hints"), "buf 6 save failed", "bufferSaveResult: save 2 failed")
+end)
+
+-- #858: the freeze area's report of a hold it abandoned, as the engine
+-- encodes it, unfreezes Lua's voice
+test("the engine's freezeEnded poll decodes in Lua's handler (#858)", function()
+  local context = load_strata(); h.finish_startup(context)
+  local S = local_value("S")
+  local freeze_ended_value = engine_value_method("freezeEndedValue")
+  params:set("v2_source", S.constants.SOURCE_INPUT)
+  params:set("v2_freeze", 1)
+  context.polls.fire("freezeEnded", freeze_ended_value(1, 1))
+  assert_equal(params:get("v2_freeze"), 0, "voice 2's (engine voice 1) first ended hold")
 end)
 
 test("the engine's waveformPoints equals WAVEFORM_POINTS", function()

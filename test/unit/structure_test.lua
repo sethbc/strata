@@ -819,7 +819,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "quantized actions", "scene sequencer", "scene transition",
   "morph clock", "macro clock", "factory clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
-  "buffer start reload", "buffer polls and timers", "slices poll", "record poll", "input meter", "flashes", "targets ended",
+  "buffer start reload", "buffer polls and timers", "slices poll", "record poll", "freeze poll", "input meter", "flashes", "targets ended",
   "midi out", "ii stopped", "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler",
   "midi ports", "voices off", "grids dark", "arc dark" }
 
@@ -940,6 +940,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(S.buffer_polls.load_failed, "stop", "buffer polls and timers")
   watch_method(context.polls.polls.bufferOnsets, "stop", "slices poll")
   watch_method(context.polls.polls.recordState, "stop", "record poll")
+  watch_method(context.polls.polls.freezeEnded, "stop", "freeze poll")
   for _, name in ipairs({ "amp_in_l", "amp_in_r" }) do watch_method(context.polls.polls[name], "stop", "input meter") end
   watch_field(osc, "event", "osc event")  -- lib/io/osc.lua clears the OSC handler (feedback clock canceled first)
   watch_method(S.lib.io_tape, "stop", "tape off")  -- lib/io/tape.lua: its voices off, the mixer back (only while on)
@@ -1023,6 +1024,7 @@ local function start_steps()
       "poll started amp_in_r" } },
     { "slices poll", { "poll set bufferOnsets", "poll started bufferOnsets" } },
     { "record poll", { "poll set recordState", "poll started recordState" } },
+    { "freeze poll", { "poll set freezeEnded", "poll started freezeEnded" } },
     { "arc", { "arc connected" } },
     { "grids", { "file read grids.data", "print grid 1 connected: 16x16", "grid redrawn" } },
     { "io rig", { "file read io.data" } },

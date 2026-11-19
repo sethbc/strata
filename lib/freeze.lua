@@ -6,7 +6,9 @@
 -- params, two discrete scene fields, rows in VOICE's mix section, keys on
 -- the grid layouts and [F] on MAIN's status row. A source switch unfreezes
 -- (a source_change hook). Randomize, mutation and the fader pages never
--- touch either. Not the lock: that is toggle_lock and its own state. See
+-- touch either. Not the lock: that is toggle_lock and its own state. The
+-- freezeEnded poll (start step freeze_poll, cleanup step freeze_poll) sets
+-- v<i>_freeze to 0 when the engine ended a hold itself (#858). See
 -- docs/notes/lua/freeze.md.
 
 return function(S)
@@ -14,11 +16,11 @@ return function(S)
   local NUM_VOICES = S.constants.NUM_VOICES
 
   -- The record's names: the param keys (v<i>_freeze, v<i>_freeze_mode), their
-  -- engine grain params and VOICE section, and the modes (high offers both,
-  -- standard the first only)
+  -- engine grain params and VOICE section, the modes (high offers both,
+  -- standard the first only) and the engine's report of a freeze it ended
   M.FREEZE = {
     key = "freeze", mode_key = "freeze_mode", engine_name = "freeze", mode_engine_name = "freezeMode",
-    section = "mix", modes = {"hold", "spectral"},
+    section = "mix", modes = {"hold", "spectral"}, ended_poll = "freezeEnded",
   }
 
   local function valid_voice(voice_idx)
@@ -67,6 +69,12 @@ return function(S)
 
   -- The freeze-change hooks' last printed errors (contained_call), per hook
   local freeze_change_errors = {}
+
+  -- The freezeEnded poll (#858) and, per voice, the newest count it
+  -- reported; the voice whose ended freeze is being set to 0 (its freeze
+  -- sender then reaches no engine: the record's reaches)
+  local ended = {poll = nil, counts = {}, voice = nil}
+  for voice_idx = 1, NUM_VOICES do ended.counts[voice_idx] = 0 end
 
   -- VOICE's layout tests and page renders: every voice frozen, its cursor
   -- on the freeze row
@@ -126,6 +134,9 @@ return function(S)
     },
     layout_states = layout_states,
     fader = false,
+    -- the engine ended the voice's freeze itself (freeze_ended): the set
+    -- to 0 sends it no unfreeze
+    reaches = function(voice_idx, key) return key ~= M.FREEZE.key or ended.voice ~= voice_idx end,
   }
   S.register_voice_params(record)
 
@@ -135,6 +146,35 @@ return function(S)
   -- follows the unfreeze (#538)
   S.register_source_change(function(voice_idx)
     if M.is_frozen(voice_idx) then set_binary_param(param_id(voice_idx, M.FREEZE.key), 0) end
+  end)
+
+  -- freezeEnded (#858): count * NUM_VOICES + engine voice, count the
+  -- voice's freezes the engine ended on its own (a hold abandoned), from 1.
+  -- Only a newer count than the voice's last acts (a value request resends
+  -- the last report), and only on a frozen voice: v<i>_freeze goes to 0
+  -- through set_binary_param (its action, hooks and redraws run, a mapped
+  -- controller follows) while the record's reaches keeps the send from the
+  -- engine, which has unfrozen already
+  local function freeze_ended(value)
+    if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge then return end
+    value = math.floor(value + 0.5)
+    local voice_idx, count = value % NUM_VOICES + 1, math.floor(value / NUM_VOICES)
+    if count <= ended.counts[voice_idx] then return end
+    ended.counts[voice_idx] = count
+    if not M.is_frozen(voice_idx) then return end
+    ended.voice = voice_idx
+    local ok, set_error = pcall(set_binary_param, param_id(voice_idx, M.FREEZE.key), 0)
+    ended.voice = nil
+    if not ok then error(set_error, 0) end
+  end
+
+  S.register_start(S.constants.START_ORDER.freeze_poll, function()
+    ended.poll = poll.set(M.FREEZE.ended_poll, freeze_ended)
+    if ended.poll then ended.poll:start() end
+  end)
+
+  S.register_cleanup(S.constants.CLEANUP_ORDER.freeze_poll, function()
+    if ended.poll then ended.poll:stop() end
   end)
 
   return M

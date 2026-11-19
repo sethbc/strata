@@ -67,6 +67,7 @@ The sequence (`START_ORDER` in `lib/constants.lua`):
 | 62 | set and start the input level polls `amp_in_l` and `amp_in_r` (`START_ORDER.input_level`; a poll a norns lacks is skipped) (3.4) | `lib/input_level.lua` |
 | 64 | set and start the `bufferOnsets` poll, the transients pass's report (`START_ORDER.slices_poll`) (3.7) | `lib/slices.lua` |
 | 65 | set and start the `recordState` poll (`record_poll`) | `lib/record.lua` |
+| 66 | set and start the `freezeEnded` poll, a freeze the engine ended itself (`START_ORDER.freeze_poll`) (3.8, #858) | `lib/freeze.lua` |
 | 70 | connect the arc (`arc_init`) | `lib/arc/core.lua` |
 | 80 | read the grid rotations (`grids.data`), then connect the grids (`grid_init`) | `lib/grid/core.lua` |
 | 85 | read the rig settings from data/strata/io.data (`START_ORDER.io_rig`; a missing file gives the defaults, one it cannot use is set aside as `io.data.bak` with a console line and gives the defaults; no listener is told) (3.6) | `lib/io/rig.lua` |
@@ -163,6 +164,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 130 | stop the buffer polls and the recording timers (the engine finishes or frees any recording itself) | `lib/buffers.lua` |
 | 131 | stop the `bufferOnsets` poll and cancel the clock that reads the onsets files (`CLEANUP_ORDER.slices_poll`) (3.7) | `lib/slices.lua` |
 | 132 | stop the `recordState` poll and forget the takes | `lib/record.lua` |
+| 133 | stop the `freezeEnded` poll (`CLEANUP_ORDER.freeze_poll`) (3.8, #858) | `lib/freeze.lua` |
 | 135 | stop the `amp_in_l` and `amp_in_r` input level polls and clear their callbacks (3.4: the polls moved from the BUFFER page, `input_meter` keeps its order) | `lib/input_level.lua` |
 | 140 | cancel the flash clocks (the header's and the hint row's, `S.lib.ui_flash.cancel_all`) | `lib/ui/flash.lua` |
 | 142 | end every target note at once (`S.lib.io_targets.stop_all`: each sounding note's off to the targets its on went to, then each target's `stop_all`), before the MIDI handlers go; the LFO clock has stopped, so no off waits for a step (`CLEANUP_ORDER.io_targets`, 3.6) | `lib/io/targets.lua` |
