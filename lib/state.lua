@@ -154,7 +154,8 @@ return function()
   local VOICE_PARAM_FIELDS = {name = true, count = true, add = true, add_first = true, grain_keys = true,
     voice_keys = true, send_order = true, separator = true, sync = true, scene_defaults = true, discrete = true,
     scene_ranges = true, voice_rows = true, layout_states = true, normalize_scene = true, fader = true,
-    main_randomize = true, mutate = true, randomize = true, reaches = true, scene_keys = true}
+    main_randomize = true, mutate = true, randomize = true, reaches = true, scene_keys = true,
+    synth_keys = true}
   local SCENE_FIELD_FIELDS = {id = true, default = true, discrete = true, set = true}
   local FX_PARAM_FIELDS = {name = true, count = true, add = true}
 
@@ -366,6 +367,10 @@ return function()
       or (type(scene_keys) == "table" and all_entries(scene_keys, function(_, key) return type(key) == "string" end)),
       where, "scene_keys is true, a list of keys or a function of the voice and a type key")
     require_arg(scene_keys == nil or record.scene_defaults == nil, where, "scene_keys stands in for scene_defaults")
+    -- synth_keys (#840): its scene keys are the voice type's synth keys,
+    -- each entry of voice_scene_keys marked synth (the synth record's)
+    require_arg(record.synth_keys == nil or (record.synth_keys == true and scene_keys ~= nil), where,
+      "synth_keys is true, on a scene_keys record, or absent")
     -- The per-voice checks (count, voice_keys, send_order, scene_defaults,
     -- discrete, scene_ranges): now when every field they read is a table
     -- or a number; one a function of the voice gives (the groundwork

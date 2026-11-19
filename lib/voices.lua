@@ -245,6 +245,7 @@ return function(S)
     local synth_record
     synth_record = {
       name = "synth",
+      synth_keys = true,  -- its scene keys are the type's synth keys (voice_scene_keys' synth flag, #840)
       count = function() return 1 + #S.lib.types.keys() end,  -- the type, then every key
       separator = false,
       add_first = function(voice_idx)
