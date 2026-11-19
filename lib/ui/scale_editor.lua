@@ -38,9 +38,10 @@ return function(S)
 
   -- open; the cursor's row (an index into ROWS), the notes row's class (0
   -- to 11, a degree from the root), the tuning row's choices (listed at
-  -- open: the built-ins, then the files' names) and the pending choice's
-  -- index in them (nil: none)
-  local editor = {open = false, row = 1, class = 0, choices = {}, pending = nil}
+  -- open: the built-ins, then the files' names), the pending choice's
+  -- index in them (nil: none) and the refused file's reason the editor
+  -- flashed (nil: none; the hint row shows no other flash, #843)
+  local editor = {open = false, row = 1, class = 0, choices = {}, pending = nil, reason = nil}
 
   local function variation() return S.lib.variation end
   local function tuning() return S.lib.tuning end
@@ -125,7 +126,8 @@ return function(S)
     if choice.file then
       local loaded, reason = tuning().load_file(choice.file)
       if not loaded then
-        S.lib.ui_flash.start("hints", reason, nil, S.constants.UI_PAGES.index.SETUP)
+        editor.reason = tostring(reason)
+        S.lib.ui_flash.start("hints", editor.reason, nil, S.constants.UI_PAGES.index.SETUP)
         request_redraw()
         return
       end
@@ -199,13 +201,14 @@ return function(S)
       spacing = SCALE_EDITOR.spacing, value_right = SCALE_EDITOR.value_right}, draw_row)
   end
 
-  -- The hint row: a refused file's reason while it shows; otherwise only
-  -- the keys that act on the row (#419). With ALT held E3 turns as without
-  -- (no row has a fine step) and K2 and K3 do nothing, so the hints are E2
-  -- and the row's E3
+  -- The hint row: a refused file's reason while it shows (only the
+  -- editor's own: another module's hints flash, unscoped or SETUP's, never
+  -- covers the keys, #843); otherwise only the keys that act on the row
+  -- (#419). With ALT held E3 turns as without (no row has a fine step) and
+  -- K2 and K3 do nothing, so the hints are E2 and the row's E3
   local function hints(alt_held)
     local flash = S.lib.ui_flash.text("hints")
-    if flash then return flash end
+    if flash ~= nil and flash == editor.reason then return flash end
     local key = ROWS[editor.row].key
     local absent = (key == "scale" or key == "notes") and not scale_rows()
     if alt_held then
@@ -261,17 +264,18 @@ return function(S)
   function M.open()
     if editor.open then return end
     editor.open = true
-    editor.pending = nil
+    editor.pending, editor.reason = nil, nil
     list_choices()
     arm_tap()
     S.lib.ui_modal.push(owner)
   end
 
-  -- Close it: the note tap cleared, a pending choice dropped; closed, nothing
+  -- Close it: the note tap cleared, a pending choice and a reason dropped;
+  -- closed, nothing
   function M.close()
     if not editor.open then return end
     editor.open = false
-    editor.pending = nil
+    editor.pending, editor.reason = nil, nil
     S.lib.midi_in.set_note_tap(nil)
     S.lib.ui_modal.pop(owner)
   end
