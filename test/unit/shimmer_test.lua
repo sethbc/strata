@@ -113,6 +113,26 @@ test("each param's action notes the edit before it sends (a randomize draws them
     params:set(id, id == "shimmer_interval" and 4 or 0.6)
     assert_equal(S.undo, nil, "an edit of " .. id .. " ends the undo")
   end
+  -- the order (#838): each action notes its edit before its setShimmer
+  -- goes, so the edit is noted however the send fares
+  local real_note = note_param_edit
+  local noted = {}
+  note_param_edit = function(param_id)
+    noted[#noted + 1] = {id = param_id, sends = #context.calls_named("setShimmer")}
+    return real_note(param_id)
+  end
+  local ok, failure = pcall(function()
+    for _, id in ipairs(IDS) do
+      for index in pairs(noted) do noted[index] = nil end
+      context.clear_engine_calls()
+      params:set(id, id == "shimmer_interval" and 1 or 0.9)
+      assert_equal(#context.calls_named("setShimmer"), 1, id .. ": one setShimmer")
+      assert_true(#noted == 1 and noted[1].id == id, id .. ": its edit is noted once, by its own id")
+      assert_equal(noted[1].sends, 0, id .. ": the edit is noted before the setShimmer")
+    end
+  end)
+  note_param_edit = real_note
+  assert_true(ok, tostring(failure))
 end)
 
 test("shimmer's params are scene globals; the interval switches at a fade's end", function()
