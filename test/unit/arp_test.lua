@@ -449,6 +449,30 @@ test("a held chord takes at most eight steps, the own note's included", function
   assert_equal(#S.lib.arp.held(1), S.lib.arp.ARP.max_steps - 1, "seven held beside the own note")
 end)
 
+-- #846: a held chord with no own note kept (a step chord's further notes,
+-- extra_only, on a voice holding no slot) is measured from the voice's
+-- pitch; a freq turn resends it from the new pitch at the next LFO step,
+-- so the chord keeps its pitches, and an unchanged pitch sends nothing
+test("no own note kept: a freq turn resends the held chord from the new pitch at the next LFO step", function()
+  local context, S = started()
+  local function freq_of(note) return 440 * 2 ^ ((note - 69) / 12) end
+  params:set("v1_freq", freq_of(60))
+  params:set("v1_arp", mode("up"))
+  tick(context, S)
+  assert_equal(S.lib.notes.slots(1)[1], nil, "no own note held")
+  S.lib.notes.play(1, {owner = "seq", key = 1, pitch = 67, velocity = 0.5, extra_only = true, set_own = function() end})
+  tick(context, S)
+  assert_list(context, 1, {0, 7}, "G measured from C, the voice's pitch")
+  context.clear_engine_calls()
+  params:set("v1_freq", freq_of(62))
+  tick(context, S)
+  assert_list(context, 1, {0, 5}, "G measured from D, the new pitch: the chord keeps its pitches")
+  context.clear_engine_calls()
+  tick(context, S)
+  tick(context, S)
+  assert_equal(#grain_values(context, 1, "intervalCount"), 0, "an unchanged pitch sends nothing")
+end)
+
 test("the note hooks' starts and ends balance across the arpeggiator's paths", function()
   local context, S = started()
   local counts = {started = 0, ended = 0}
