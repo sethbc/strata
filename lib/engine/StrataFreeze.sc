@@ -410,9 +410,11 @@
     // (copyOnTime), or one whose head the server never gave, is made again
     // from a fresh read point while the copy is current, up to copyAttempts
     // (the readers' fade is still down: nothing reads the copy ring until a
-    // copy lands). One console line comes after the second late attempt
-    // (copyLateLineAttempt); the hold is abandoned (abandonCopy) only for a
-    // refused span or once the bound is spent. Each attempt, its re-read and
+    // copy lands). One console line comes after the second late copy
+    // (copyLateLineAttempt): an attempt whose head the server never gave is
+    // counted apart, as no copy, never as a late one (#835); the hold is
+    // abandoned (abandonCopy) only for a refused span or once the bound is
+    // spent, its line naming both counts. Each attempt, its re-read and
     // the abandon run only while the copy is current, as every step does.
     copyInputToCopyRing { arg voice;
         var state = areaState[\freeze], change = this.ringChanges[voice], copy = state[\copies][voice] + 1;
@@ -425,7 +427,7 @@
             this.sendToSynth(synth.setMsg(\ringLevel, 0));
         });
         fork({
-            var ring, history, head, after, readAt, seconds, attempt = 0, landed = false, refused = false;
+            var ring, history, head, after, readAt, seconds, attempt = 0, late = 0, missing = 0, landed = false, refused = false;
             if (readers.notEmpty) { bufferFadeWait.wait };
             while { landed.not and: { refused.not } and: { attempt < this.copyAttempts } and: { current.value } } {
                 attempt = attempt + 1;
@@ -448,17 +450,24 @@
                     this.holdCopyRing(voice);
                     landed = true;
                 } {
-                    if (current.value and: { refused.not } and: { attempt == this.copyLateLineAttempt }) {
-                        this.postFreezeLine("strata: voice % hold: its copy was late % times (room % s); made again until one is in time, at most % times".format(
-                            voice + 1, attempt, (this.copyRoomFrames(ring[0].numFrames, history) / server.sampleRate).round(0.001),
-                            this.copyAttempts));
+                    // a head read the server never answered (ringHeadFrame's
+                    // 1 s): no copy was made or none could be judged
+                    if (current.value and: { refused.not }) {
+                        if (head.isNil or: { after.isNil }) { missing = missing + 1 } {
+                            late = late + 1;
+                            if (late == this.copyLateLineAttempt) {
+                                this.postFreezeLine("strata: voice % hold: its copy was late % times (room % s); made again until one is in time, at most % times".format(
+                                    voice + 1, late, (this.copyRoomFrames(ring[0].numFrames, history) / server.sampleRate).round(0.001),
+                                    this.copyAttempts));
+                            };
+                        };
                     };
                 };
             };
             if (landed.not and: { current.value }) {
                 this.areaCall(\abandonCopy, voice, if (refused) { nil } {
-                    "its copy was not in within its room (% s) in % attempts".format(
-                        (this.copyRoomFrames(ring[0].numFrames, history) / server.sampleRate).round(0.001), attempt) });
+                    this.copyAbandonReason((this.copyRoomFrames(ring[0].numFrames, history) / server.sampleRate).round(0.001),
+                        attempt, late, missing) });
             };
             if ((state[\copies][voice] == copy) and: { (state[\stopped] ? false).not }) {
                 this.restoreFadedReaders(voice);
@@ -473,8 +482,18 @@
     copyAttempts { ^areaState[\freeze][\copyAttempts] ? 8 }
     copyAttempts_ { arg count; areaState[\freeze][\copyAttempts] = count }
 
-    // The late attempt after which the copy says so on the console, once
+    // The late copy after which the copy says so on the console, once (an
+    // attempt with no head from the server is no late copy, #835)
     copyLateLineAttempt { ^2 }
+
+    // An abandoned copy's reason (abandonCopy's line): its room (s), its
+    // attempts, how many were late and how many got no head from the server
+    copyAbandonReason { arg room, attempts, late, missing;
+        if (late == 0) { ^"the server gave no head in % attempts".format(attempts) };
+        if (missing == 0) { ^"its copy was not in within its room (% s) in % attempts".format(room, attempts) };
+        ^"its copy was not in within its room (% s) in % attempts (% of them with no head from the server)".format(
+            room, attempts, missing)
+    }
 
     // How far behind a frozen copy's end its grains can read with no scan
     // (s): the frozen read point (ringScanOffset's grainMaxSeconds), the
