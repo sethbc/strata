@@ -404,6 +404,19 @@ test("every randomizing page draws its hints when k2_hint is nil", function()
       assert_equal(type(hints), "string", record.name .. ": the hint row is a string, K2 held")
     end
   end
+  -- SEQ's step editor: its hints join editor_k2_text's part (k2_hint's
+  -- before the hold) in edit_hints, ALT held and K2 held after K1 let go
+  assert_true(S.lib.pages_seq.open_step_editor(1, 1, 1), "the step editor opens")
+  local owner = S.lib.pages_seq.step_editor_owner
+  local ok, hints = pcall(owner.hints, true)
+  assert_true(ok, "the step editor, ALT held: " .. tostring(hints))
+  assert_equal(hints, "K3:clr E2:step", "its ALT hint without a K2 part")
+  key(1, 1); key(2, 1); key(1, 0)  -- ALT+K2 down on the editor, then K1 let go
+  ok, hints = pcall(owner.hints, false)
+  assert_true(ok, "the step editor, K2 held: " .. tostring(hints))
+  assert_equal(hints, "", "K2 held with no K2 part: an empty hint row")
+  key(2, 0)
+  S.lib.pages_seq.close_step_editor(1)
 end)
 
 end
