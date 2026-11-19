@@ -76,13 +76,12 @@ return function(S)
   end
 
   -- A type key: the x-th registered type, at once (S.lib.types.set
-  -- cancels the voice's pending VOICE choice, ruling 63)
+  -- cancels the voice's pending VOICE choice, ruling 63; the v<i>_type
+  -- action clamps S.param_page to the new type's pages)
   local function type_key(x)
     local record = S.lib.types.list()[x]
     if record == nil then return end
-    local voice_idx = S.grid_voice_select
-    S.lib.types.set(voice_idx, record.key)
-    S.param_page = util.clamp(S.param_page, 1, fader_page_count(voice_idx))
+    S.lib.types.set(S.grid_voice_select, record.key)
   end
 
   local function press(pane, x, y, z)
