@@ -22,7 +22,7 @@ return function(S)
   -- S.lib.grid_faders.fx_fader_id: the division while synced)
   local FX_PAGE = {
     lines = {picks = 6, keys = 7},
-    line_keys = S.constants.PATTERN_LENGTH,
+    line_keys = S.lib.grid_pane.LINE_KEYS,
     sets = {
       {name = "delay", ids = {"delay_time", "delay_feedback", "delay_mix", "delay_pingpong", "shimmer_delay"}},
       {name = "reverb", ids = {"reverb_mix", "reverb_size", "reverb_damp", "shimmer_reverb", "delay_to_reverb"}},

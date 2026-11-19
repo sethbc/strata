@@ -20,7 +20,7 @@ return function(S)
     lines = {pages = 5, types = 6, voices = 7},
     page_keys = 10,   -- line 5's x 1-10: the fader pages (ruling 31)
     first_bank = 12,  -- line 5's x 12 on: the macro banks, bank x - 11
-    line_keys = S.constants.PATTERN_LENGTH,
+    line_keys = S.lib.grid_pane.LINE_KEYS,
     levels = {picked = LEVELS.picked, unpicked = LEVELS.unpicked, bank_targets = 6, bank_empty = 2, dark = 0},
   }
   M.FADERS_PAGE = FADERS_PAGE

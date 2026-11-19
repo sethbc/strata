@@ -536,27 +536,67 @@ test("line 7: SQ, SV, the corners and the recorders; the rest is dark", function
   end)
 end)
 
-test("the fader lines and the signature name only params that exist", function()
-  load_strata()
+-- #853: a renamed morph param fails loudly, never silently dropping its
+-- line: faders and signature raise naming it, and through the pane engine
+-- the failure is contained and printed once
+test("a missing morph param raises in faders and signature, contained and printed by the pane engine", function()
+  local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local record = S.registry.grid_pages[S.constants.GRID_PAGES.scenes]
   local state = {}
-  local pane = {width = 16, offset = 0, state = function() return state end}
+  local pane_object = {width = 16, offset = 0, state = function() return state end}
   local ids = {}
-  for _, line in ipairs(record.faders(pane)) do ids[#ids + 1] = line.line .. ":" .. line.id end
+  for _, line in ipairs(record.faders(pane_object)) do ids[#ids + 1] = line.line .. ":" .. line.id end
   assert_equal(table.concat(ids, " "), "4:morph 5:morph_y", "lines 4 and 5")
   local saved = params.lookup.morph_y
   params.lookup.morph_y = nil
-  local morph_a = params.lookup.morph_a
-  params.lookup.morph_a = nil
-  ids = {}
-  for _, line in ipairs(record.faders(pane)) do ids[#ids + 1] = line.id end
-  local ok, signature = pcall(record.signature, pane)
+  local ok, err = pcall(record.faders, pane_object)
   params.lookup.morph_y = saved
-  params.lookup.morph_a = morph_a
-  assert_equal(table.concat(ids, " "), "morph", "a missing param's line is left out")
-  assert_true(ok, "the signature does not raise: " .. tostring(signature))
-  assert_equal(type(signature), "string", "it is a string")
+  assert_true(not ok and tostring(err):find("morph_y", 1, true) ~= nil, "faders raises naming morph_y: " .. tostring(err))
+  saved = params.lookup.morph_a
+  params.lookup.morph_a = nil
+  ok, err = pcall(record.signature, pane_object)
+  params.lookup.morph_a = saved
+  assert_true(not ok and tostring(err):find("morph_a", 1, true) ~= nil, "signature raises naming morph_a: " .. tostring(err))
+  -- on a grid: printed once, and the page's other lines still work
+  local pane = scenes_pane(context, "128h")
+  saved = params.lookup.morph_y
+  params.lookup.morph_y = nil
+  grid_redraw(); grid_redraw()
+  pane.tap(3, 6)
+  params.lookup.morph_y = saved
+  h.claim_script_errors(context, 1, "strata: grid page faders failed: ", "morph_y")
+  assert_equal(params:get("scene_sequence_length"), 3, "line 6 still sets the length")
+end)
+
+-- #853: the page's x bound and line 7 are the pane's line (its sixteen
+-- keys, S.lib.grid_pane.LINE_KEYS), never the scene count: with eight
+-- scenes the recorders at x 9-12 still light and record, and the scene
+-- lines end at x 8
+test("with fewer scenes than keys, line 7 keeps its sixteen keys and the scene lines end at the last scene", function()
+  local file = assert(io.open(h.repo_root .. "/lib/constants.lua", "r"))
+  local source = file:read("*a")
+  file:close()
+  local patched, count = source:gsub("local NUM_SCENES = 16", "local NUM_SCENES = 8")
+  assert_equal(count, 1, "the probe finds NUM_SCENES")
+  local context = load_strata({module_sources = {["lib/constants"] = patched}}); finish_startup(context)
+  local S = local_value("S")
+  assert_equal(S.constants.NUM_SCENES, 8, "eight scenes")
+  assert_equal(S.lib.grid_pane.LINE_KEYS, 16, "a pane's line is still sixteen keys")
+  local pane = scenes_pane(context, "128h")
+  assert_equal(pane.led(9, 7), 2, "G1 at x 9 lights as an empty recorder")
+  assert_equal(pane.led(12, 7), 2, "and G4 at x 12")
+  pane.tap(9, 7)
+  assert_equal(S.lib.gestures.state(1), "recording", "G1's press and release start its recording")
+  for x = 9, 16 do
+    assert_equal(pane.led(x, 1), 0, "line 1 key " .. x .. " is past the last scene: dark")
+    assert_equal(pane.led(x, 6), 0, "line 6 key " .. x .. " too")
+  end
+  local length = params:get("scene_sequence_length")
+  pane.tap(12, 6)
+  pane.tap(12, 1)
+  assert_equal(params:get("scene_sequence_length"), length, "a length key past the last scene does nothing")
+  assert_true(S.current_scene ~= 12, "nor a scene key")
 end)
 
 end
