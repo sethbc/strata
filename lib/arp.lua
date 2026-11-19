@@ -324,6 +324,10 @@ return function(S)
           shuffled_at[voice] = now
         end
       end
+      -- a held chord with no own note's pitch kept is measured from the
+      -- voice's pitch now (base_of), which a freq turn, a scene or a step
+      -- moves (#846): its list is checked at every step, sent if it differs
+      if #entries[voice] > 0 and bases[voice] == nil then pending[voice] = true end
       -- a held chord's change (or a reshuffle): its list, once, if it differs
       if pending[voice] then send_if_changed(voice) end
     end
