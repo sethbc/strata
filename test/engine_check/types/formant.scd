@@ -14,9 +14,9 @@ var command = { arg name ... args; h.command(name, *args) };
 var def = \strataFormant;
 var typeIndex = engine.voiceTypeDefs.indexOf(def);
 // what a voice of the type must play: finite, a peak above levelFloor (not
-// silent) and under levelCeiling, and below 8 Hz (two 8 Hz lowpasses) a
-// peak under subsonicCeiling of the whole (the FM and Ring voices' measure,
-// docs/notes/engine/voices.md)
+// silent) and under levelCeiling, and below 8 Hz (two 8 Hz lowpasses, on
+// each channel) a peak under subsonicCeiling of the whole (the FM and Ring
+// voices' measure, docs/notes/engine/voices.md)
 var levelFloor = 0.005, levelCeiling = 1, subsonicCeiling = 0.15;
 // the own keys at the record's defaults, and each key's range (Lua's specs;
 // formant's is the expression's, noteMainRanges)
@@ -34,12 +34,14 @@ check.(typeIndex.notNil and: { typeIndex >= engine.numVoices },
 // (without the def in the list nothing below can run)
 if (typeIndex.notNil) {
 ranges = (formant: engine.noteMainRanges[def].copyToEnd(1), vowel: [0, 1], bw: [0.1, 1]);
-// A probe of a voice bus: its peak, its peak below 8 Hz and its bad values
+// A probe of a voice bus: its peak, its peak below 8 Hz and its bad values,
+// each the larger of its two channels' (the def blocks each channel's
+// subsonic energy by itself)
 SynthDef(\strataCheckFormantProbe, { arg in, out, t_reset = 0;
     var sig = In.ar(in, 2), reset = T2A.ar(t_reset);
     Out.kr(out, A2K.kr([
         Peak.ar(sig.abs.reduce(\max), reset),
-        Peak.ar(LPF.ar(LPF.ar(sig[0], 8), 8).abs, reset),
+        Peak.ar(LPF.ar(LPF.ar(sig, 8), 8).abs.reduce(\max), reset),
         Peak.ar(CheckBadValues.ar(sig[0], 0, 0).max(CheckBadValues.ar(sig[1], 0, 0)), reset)
     ]));
 }).add;
@@ -99,8 +101,9 @@ pitches.do({ arg freq;
 });
 
 // "formant: 2000 Hz at formant 2 is finite and under 1": the high note with
-// the formants scaled up a player will meet (both formants and the
-// bandwidth at their highest)
+// the formants scaled up a player will meet (the formant scale and the
+// bandwidth at their highest, at vowel 0: the first formant at the bottom
+// of its range, the second at the top of its)
 {
     var results = measureCases.([["formant 2", (formant: ranges[\formant][1], vowel: 0, bw: ranges[\bw][1]), 2000.0]],
         settleSeconds, levelSeconds);
@@ -116,7 +119,10 @@ pitches.do({ arg freq;
 // of its sine and carries DC that moves with the vowel's wander: without
 // the def's subsonicBlock 0.090 below 8 Hz of a 0.212 peak at 300 Hz
 // (formant 0.5) and 0.082 of 0.179 at 2000 Hz (formant 2), both failing;
-// with it under 0.0001 of every peak (3.14.1)
+// with it under 0.0001 of every peak, the larger of the two channels'
+// (0.00001 below 8 Hz at most, 3.14.1 and 3.13). Each channel is measured:
+// with the block on the left alone the right failed both cases (0.090 of
+// 0.212, 0.083 of 0.183), which a left-only probe read as passing
 {
     var low = (formant: ranges[\formant][0], vowel: 0, bw: ranges[\bw][1]);
     var high = (formant: ranges[\formant][1], vowel: 0, bw: ranges[\bw][1]);
