@@ -931,6 +931,32 @@ check.((other.areaState[\freeze][\mode][0] == \hold) and: { writerNodes.value.co
     "freeze: a mode change while frozen freezes again in the new mode");
 check.(other.grainControls[0][\freeze] == 1,
     "freeze: a freezeMode change keeps a frozen voice's freeze control (kept %)".format(other.grainControls[0][\freeze]));
+// #834: a mode change from spectral to hold sends the writer's replace,
+// the type switch that waited for the unfreeze and the hold's pause in one
+// packet (as unfreezeWithControl does), so the new writer never writes a
+// block into the held ring. Voice 1 (engine voice 0), running on its synth
+otherCommand.(\setGrainParam, 0, \freeze, 0.0);
+otherCommand.(\setGrainParam, 0, \freezeMode, 1.0);
+otherCommand.(\setGrainParam, 0, \freeze, 1.0);
+server.sync; 0.05.wait;
+otherCommand.(\setVoiceType, 0, 1);
+server.sync;
+precondition = [other.synths[other.voiceKey(0)].notNil, other.spectralHoldsVoice(0), other.voiceTypeWaits(0)];
+attempt = other.voiceDefFor(0);
+kept = sentDuring.({ otherCommand.(\setGrainParam, 0, \freezeMode, 0.0) });
+server.sync; 0.05.wait;
+readings = other.ringWriterFor(0) !? { arg writer; writer.nodeID };
+ok = kept.any({ arg packet;
+    var command = { arg msg, names; names.includesEqual(msg[0].asString) };
+    var started = { arg defName, nodeID; packet.any({ arg msg; command.(msg, ["9", "/s_new", "s_new"])
+        and: { msg[1].asSymbol == defName } and: { nodeID.isNil or: { msg[2] == nodeID } } }) };
+    started.(\strataRingWrite, readings) and: { started.(attempt, nil) }
+        and: { packet.any({ arg msg; command.(msg, ["12", "/n_run", "n_run"]) and: { msg[1] == readings } and: { msg[2] == 0 } }) }
+});
+check.(precondition.every(_.value) and: { ok } and: { other.areaState[\freeze][\mode][0] == \hold }
+    and: { other.voiceTypeWaits(0).not } and: { phaseMoves.(other.areaState[\rings][\phaseBuses][0]).not },
+    "freeze: a mode change from spectral to hold sends the writer's replace, the waiting type switch (%) and the pause in one packet (#834: [running, spectral, type waits] %, one packet %, packets %)".format(
+        attempt, precondition, ok, kept.collect({ arg packet; packet.collect({ arg msg; msg.keep(3) }) })));
 other.numVoices.do({ arg voice; otherCommand.(\setGrainParam, voice, \freeze, 0.0) });
 server.sync;
 check.(other.synths[other.copyWriterKeys[2]].isNil and: { writerNodes.value.count({ arg node; node.def == \strataRingWriteSpectral }) == 0 }

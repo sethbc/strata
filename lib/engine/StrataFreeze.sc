@@ -188,14 +188,20 @@
     }
 
     // freezeMode: kept, and a frozen voice whose mode changes is frozen again
-    // in the new one
+    // in the new one, in one bundle (#834), as unfreezeWithControl sends its
+    // unfreeze: from spectral to hold the writer's replace, the type switch
+    // that waited for the unfreeze and the new writer's pause land in one
+    // block, so the new writer never writes a block into the held ring
     setFreezeMode { arg voice, value;
         var state = areaState[\freeze];
         if (this.validVoice(voice).not) { ^this };
         grainControls[voice][\freezeMode] = value;
         if (state[\frozen][voice] and: { state[\mode][voice] != this.freezeModeFor(voice) }) {
-            this.unfreezeVoice(voice);
-            this.freezeVoice(voice);
+            // (freezeVoice through areaCall: a copy source's forks its copy)
+            context.server.makeBundle(nil, {
+                this.unfreezeVoice(voice);
+                this.areaCall(\freezeVoice, voice);
+            });
         };
     }
 
