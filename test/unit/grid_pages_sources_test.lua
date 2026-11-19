@@ -296,6 +296,24 @@ test("the blink redraws within a drift tick only while a voice reads itself", fu
   end)
 end)
 
+-- #854: a slot that is loading or recording is not free: its key is at 4,
+-- as one holding audio (S.lib.buffers.is_free, which the page reads)
+test("a loading or recording slot's key is at 4, not 2", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    load_buffer(3, "/tmp/a.wav")  -- loading: the engine has not reported it
+    params:set("record_duration", 2); params:set("buf4_record", 1)  -- recording into an empty slot
+    assert_equal(S.lib.buffers.status(3), "loading", arrangement .. ": slot 3 is loading")
+    assert_equal(S.lib.buffers.status(4), "recording", arrangement .. ": slot 4 is recording")
+    grid_redraw()
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      assert_equal(pane.led(SLOT_X + 3, voice_idx), 4, arrangement .. ": the loading slot on line " .. voice_idx)
+      assert_equal(pane.led(SLOT_X + 4, voice_idx), 4, arrangement .. ": the recording slot on line " .. voice_idx)
+      assert_equal(pane.led(SLOT_X + 5, voice_idx), 2, arrangement .. ": a free slot on line " .. voice_idx)
+    end
+    assert_page_lights(S, pane, arrangement)
+  end, {{SLOT_X + 3, 1}, {SLOT_X + 5, 1}})
+end)
+
 -- Unmentioned case (the brief's): a slot cleared while a voice reads it
 test("a cleared slot's key goes to 2 at once and the voice's key stays lit at 15", function()
   each_arrangement(function(context, S, pane, arrangement)

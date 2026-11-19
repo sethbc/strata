@@ -163,7 +163,8 @@ test("the faders set and show the picked voice's params (I8)", function()
     pane.tap(fader_x(pane, 1), 2)
     assert_near(params:get(ids[2]), second_min, 1e-6, arrangement .. ": line 2's bottom key sets " .. ids[2] .. " to its minimum")
     pane.tap(fader_x(pane, keys / 2), 3)
-    assert_shown_at(pane, 3, fader_position(ids[3], keys), keys, arrangement .. ": line 3's middle key on " .. ids[3])
+    assert_equal(fader_position(ids[3], keys), keys / 2, arrangement .. ": line 3's middle key sets " .. ids[3] .. " there")
+    assert_shown_at(pane, 3, keys / 2, keys, arrangement .. ": line 3's middle key on " .. ids[3])
     -- the faders are the shown page's: page 2's line 1 is fader 5
     if pane.shows(2, LINE.pages) then
       pane.tap(2, LINE.pages)
@@ -227,6 +228,8 @@ test("a buffer voice's faders", function()
     local ids = fader_param_ids(1)
     assert_true(index_of(S, "v1_buf_pos") ~= nil, arrangement .. ": a buffer voice's faders have its buffer params")
     assert_true(index_of(S, "v1_pan") ~= nil, arrangement .. ": and pan (the engine pans buffer voices)")
+    assert_true(index_of(S, "v1_amp") ~= nil, arrangement .. ": its level")
+    assert_true(index_of(S, "v1_grain_size") ~= nil, arrangement .. ": and its grain faders")
     assert_equal(index_of(S, first_synth), nil, arrangement .. ": and not the synth params")
     pane.tap(fader_x(pane, keys), 2)
     local _, second_max = param_range(ids[2])
@@ -490,6 +493,26 @@ test("a type key sets the type at once and lights it; keys past n are dark", fun
   end, {{1, LINE.types}, {2, LINE.types}})
 end)
 
+-- #854: a type key goes through S.lib.types.set (whose v<i>_type action
+-- cancels a pending VOICE choice and clamps S.param_page), never a bare
+-- params:set
+test("a type key sets the grid voice's type through S.lib.types.set", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    local list = S.lib.types.list()
+    local types, calls = S.lib.types, {}
+    local set = types.set
+    types.set = function(voice_idx, key, ...)
+      calls[#calls + 1] = voice_idx .. " " .. tostring(key)
+      return set(voice_idx, key, ...)
+    end
+    pane.tap(3, LINE.voices)
+    pane.tap(2, LINE.types)
+    types.set = set
+    assert_equal(table.concat(calls, ", "), "3 " .. list[2].key, arrangement .. ": one set, of voice 3's type to key 2's")
+    assert_equal(S.lib.types.of(3).key, list[2].key, arrangement .. ": which took")
+  end, {{3, LINE.voices}, {2, LINE.types}})
+end)
+
 test("a type key that shortens the voice's pages clamps S.param_page", function()
   each_arrangement(function(_, S, pane, arrangement)
     local list = S.lib.types.list()
@@ -531,10 +554,13 @@ end)
 test("a type set on VOICE shows on line 6 within a drift tick", function()
   each_arrangement(function(context, S, pane, arrangement)
     local list = S.lib.types.list()
-    -- the macros on lines 1-4, so the type change moves no fader line and
-    -- only the page's signature can show it
+    -- the macros on lines 1-4 where the pane shows a bank key, so the type
+    -- change moves no fader line there; the v<i>_type action repaints too,
+    -- so what this shows is line 6 and the signature's type term
     if pane.shows(FIRST_BANK, LINE.pages) then pane.tap(FIRST_BANK, LINE.pages) end
     drift_update()
+    local macro_lines = {}
+    for line = 1, FADER_LINES do macro_lines[line] = line_levels(pane, line) end
     local signature = S.lib.grid_pane.signature()
     show_page("VOICE")
     S.lib.pages_voice.place_cursor(S.lib.pages_voice.row_of("v1_type"))
@@ -545,6 +571,11 @@ test("a type set on VOICE shows on line 6 within a drift tick", function()
     assert_equal(pane.led(3, LINE.types), 15, arrangement .. ": line 6 lights it")
     assert_equal(pane.led(1, LINE.types), 4, arrangement .. ": and dims the old type")
     assert_true(S.lib.grid_pane.signature() ~= signature, arrangement .. ": the page's signature names the type")
+    if pane.shows(FIRST_BANK, LINE.pages) then
+      for line = 1, FADER_LINES do
+        assert_equal(line_levels(pane, line), macro_lines[line], arrangement .. ": macro line " .. line .. " unmoved")
+      end
+    end
   end, {{1, LINE.types}, {3, LINE.types}})
 end)
 

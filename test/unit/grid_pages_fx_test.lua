@@ -200,9 +200,11 @@ test("the time fader picks the division while synced", function()
 end)
 
 -- Moved: the 256's "a scene transition redraws the grid once per step on
--- grid page 4"
+-- grid page 4". The page's own part (#854): each step's repaint draws the
+-- master set's fader lines where the step put their params
 test("a scene transition redraws once per step", function()
   each_arrangement(function(context, S, pane, arrangement)
+    local keys = shown_keys(pane)
     pick_set(pane, SET_X.master)
     local fx = {filter_freq = 1000, filter_res = 0.2, filter_mix = 0.6, delay_time = 0.8, delay_feedback = 0.7,
       delay_mix = 0.5}
@@ -214,6 +216,9 @@ test("a scene transition redraws once per step", function()
       local refreshes = pane.device.refresh_count
       wake(context, "scene_transition_clock")
       assert_equal(pane.device.refresh_count - refreshes, 1, arrangement .. ": one grid redraw at step " .. step)
+      for line, id in ipairs({"filter_freq", "filter_res", "filter_mix"}) do
+        assert_shown_at(pane, line, fader_position(id, keys), keys, arrangement .. ": step " .. step .. "'s " .. id)
+      end
     end
     wake(context, "scene_transition_clock")  -- the end: the instant recall
     assert_near(params:get("filter_freq"), 1000, 1, arrangement .. ": the transition landed")
@@ -240,8 +245,12 @@ test("an FX change redraws only while a grid shows the FX page", function()
     assert_equal(pane.device.refresh_count, before, arrangement .. ": no pane on FX: no redraw")
     pane.show(S.constants.GRID_PAGES.fx)
     before = pane.device.refresh_count
-    params:delta("delay_mix", 1)
+    params:set("delay_mix", 0.6)
     assert_equal(pane.device.refresh_count, before + 1, arrangement .. ": a pane on FX: one redraw")
+    -- the page's own part (#854): that redraw draws the delay set's level
+    -- line where the change put it
+    local keys = shown_keys(pane)
+    assert_shown_at(pane, 3, fader_position("delay_mix", keys), keys, arrangement .. ": the delay's level line")
   end
 end)
 

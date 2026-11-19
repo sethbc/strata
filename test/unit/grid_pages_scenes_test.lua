@@ -116,6 +116,31 @@ test("SV held with a recall key saves that scene and recalls nothing; a recall k
   end)
 end)
 
+-- #854: a save onto a slot that holds a scene still recalls nothing
+test("SV held over a populated slot saves over it and recalls nothing", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    local first = shown_columns(pane)
+    local sv = sv_x(pane)
+    capture_scene(first); capture_scene(first + 1)
+    pane.tap(first + 1, 1)
+    assert_equal(S.current_scene, first + 1, arrangement .. ": scene " .. (first + 1) .. " recalled")
+    params:set("delay_mix", 0.37)
+    local saves = count_saves(S)
+    pane.press(sv, 7, 1)
+    pane.tap(first, 1)
+    pane.tap(first, 2)
+    pane.press(sv, 7, 0)
+    assert_equal(saves.n, 2, arrangement .. ": one save a key")
+    assert_equal(S.current_scene, first + 1, arrangement .. ": the current scene is unchanged")
+    assert_true(not S.scene_transition_active, arrangement .. ": no fade started")
+    assert_near(params:get("delay_mix"), 0.37, 1e-9, arrangement .. ": nothing recalled over the edit")
+    params:set("delay_mix", 0.8)
+    pane.tap(first, 1)
+    assert_equal(S.current_scene, first, arrangement .. ": SV let go, the key recalls the saved scene")
+    assert_near(params:get("delay_mix"), 0.37, 1e-6, arrangement .. ": which holds what was saved")
+  end)
+end)
+
 test("SV released first: the scene key recalls; a scene key held before SV comes down does nothing", function()
   each_arrangement(function(_, S, pane, arrangement)
     local first = shown_columns(pane)
@@ -516,7 +541,7 @@ test("a page change cancels a recorder key's clear", function()
 end)
 
 test("line 7: SQ, SV, the corners and the recorders; the rest is dark", function()
-  each_arrangement(function(_, _, pane, arrangement)
+  each_arrangement(function(_, S, pane, arrangement)
     local half_sv = not pane.shows(2, 7)
     local expected = {[1] = 4, [2] = 4, [4] = 15, [5] = 4, [6] = 4, [7] = 4, [9] = 2, [10] = 2, [11] = 2, [12] = 2,
       [16] = half_sv and 4 or 0}
@@ -525,14 +550,26 @@ test("line 7: SQ, SV, the corners and the recorders; the rest is dark", function
         assert_equal(pane.led(x, 7), expected[x] or 0, arrangement .. ": line 7 key " .. x)
       end
     end
-    -- the dark keys do nothing
-    local before = {params:get("scene_sequencer_enabled"), params:get("morph_a"), params:get("scene_sequence_length")}
+    -- the dark keys do nothing: no param, scene, corner or recorder moves
+    local function snapshot()
+      local parts = {}
+      for _, param in ipairs(params.params) do
+        -- a voice's params are left out: a drift tick moves a running
+        -- voice's pitch, and no key of the page reaches a voice
+        if param.id and not param.id:match("^v%d+_") then parts[#parts + 1] = param.id .. "=" .. tostring(params:get(param.id)) end
+      end
+      for n = 1, S.constants.NUM_SCENES do parts[#parts + 1] = tostring(S.scenes[n].populated) end
+      for k = 1, S.constants.NUM_GESTURES do parts[#parts + 1] = S.lib.gestures.state(k) end
+      parts[#parts + 1] = tostring(S.current_scene) .. " " .. tostring(S.scene_transition_active)
+      parts[#parts + 1] = tostring((S.lib.grid_core.port_state(pane.port).pages.scenes or {}).corner)
+      return table.concat(parts, " ")
+    end
+    local before = snapshot()
     for _, x in ipairs({3, 8, 13, 14, 15}) do
       if pane.shows(x, 7) then pane.tap(x, 7) end
     end
     if not half_sv and pane.shows(16, 7) then pane.tap(16, 7) end
-    assert_equal(table.concat(before, ","), table.concat({params:get("scene_sequencer_enabled"),
-      params:get("morph_a"), params:get("scene_sequence_length")}, ","), arrangement .. ": dark keys change nothing")
+    assert_equal(snapshot(), before, arrangement .. ": dark keys change nothing")
   end)
 end)
 
