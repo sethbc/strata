@@ -692,22 +692,21 @@ end
 --   {kind = "rewrite", match = <pattern>, replace = <gsub replacement>,
 --     count = <n>, why = <text>}: every matching build line is rewritten
 --     into the old form (a changed value, a wider signature),
--- and raises unless exactly count lines matched. match is anchored to the
--- whole line: it starts with ^, and with a count above 0 it ends with an
--- unescaped $ (a prefix such as '^noteRegion%(' is enough for count 0), or
--- it raises naming its why: unanchored, '"scanMode", 0' would also match
--- a "scanMode", 0.5 line. With voice (a start's
+-- and raises unless exactly count lines matched. With voice (a start's
 -- voice number), <v> and <v0> in match and replace are filled from it;
 -- without (a whole run), an entry holding a token stands for one entry a
 -- voice, each matched on its own and count per voice, a miss naming the
 -- voice. label names the comparison in an error. An entry of no such kind
 -- or side, with no why, match or whole count, or a rewrite with no replace
--- or of the fixture, raises
--- A match pattern is anchored to the whole line: it starts with ^, and,
--- when `whole` (a count above 0), ends with a $ that no odd run of % escapes
--- (%$ is a dollar sign; %%$ a percent sign, then the anchor). Read on the
--- entry's own text: a token fills digits, so it neither makes nor breaks
--- an anchor, and a $ before a token is not last, so is a dollar sign
+-- or of the fixture, raises.
+-- The anchor rule: match is anchored to the whole line, or the entry raises
+-- naming its why (unanchored, '"scanMode", 0' would also match a
+-- "scanMode", 0.5 line). It starts with ^, and, when `whole` (a count above
+-- 0), ends with a $ that no odd run of % escapes (%$ is a dollar sign; %%$
+-- a percent sign, then the anchor); for count 0 a prefix such as
+-- '^noteRegion%(' is enough. It is read on the entry's own text: a token
+-- fills digits, so it neither makes nor breaks an anchor, and a $ before a
+-- token is not last, so is a dollar sign
 local function pattern_anchored(match, whole)
   if match:sub(1, 1) ~= "^" then return false end
   if not whole then return true end

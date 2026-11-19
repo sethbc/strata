@@ -1522,7 +1522,7 @@ test("a parallel run fails a process whose report is cut short or disagrees with
   end
   local _, last = RUNNER.lines(output)
   local failures = tonumber(last:match("^%d+ tests, (%d+) failures$") or "")
-  assert_true(failures and failures >= 3, "each counts as a failure: " .. tostring(last))
+  assert_equal(failures, 3, "each counts as one failure: " .. tostring(last))
   h.remove_tree(dir)
 end)
 
