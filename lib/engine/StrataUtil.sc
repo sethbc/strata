@@ -147,11 +147,12 @@
     }
 
     // A voice's signal without what lies under the audible range: a 12 dB
-    // per octave highpass at subsonicCutoff. For the two voices whose
-    // synthesis makes a component at or near 0 Hz (FM, Ring: #309), before
-    // their voice bus, so it reaches neither the grains (which would turn
-    // it into a tone at the grain rate), the crossmod follower, the sends
-    // nor the master's limiter and saturation.
+    // per octave highpass at subsonicCutoff. For the voice types whose
+    // synthesis makes a component at or near 0 Hz (FM and Ring, #309; since
+    // 3.8 Noise, whose pink noise has energy there, and Formant, whose
+    // bursts carry DC), before their voice bus, so it reaches neither the
+    // grains (which would turn it into a tone at the grain rate), the
+    // crossmod follower, the sends nor the master's limiter and saturation.
     subsonicBlock { arg sig;
         ^HPF.ar(sig, this.subsonicCutoff)
     }
