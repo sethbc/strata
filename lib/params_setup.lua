@@ -1138,7 +1138,8 @@ return function(S)
   -- source being no value; a function: what it gives for the voice and the
   -- type key, the synth record's that type's keys, none for a type this
   -- build lacks), each default its param's (param_default, read at the
-  -- call, after init), the synth record's marked synth = true; another
+  -- call, after init), a synth_keys record's (the synth record's: the
+  -- type's keys) marked synth = true (#840: the field, never the name); another
   -- record's are its scene_defaults' keys. The order: each scene_keys
   -- record's keys sorted, in registration order (synth, grain, crossmod),
   -- then every other record's scene keys sorted together, so a recall sets
@@ -1146,8 +1147,6 @@ return function(S)
   -- marks a discrete key (the record's discrete: the grain mode and
   -- cloud, the mod sources, ...), limits a record's scene_ranges. solo and
   -- note_cap are no scene keys (their records give no scene_defaults)
-  local SYNTH_RECORD = "synth"
-
   -- A scene_keys record's keys for the voice and type, sorted
   local function record_scene_keys(record, voice_idx, type_key)
     local keys, given = {}, record.scene_keys
@@ -1169,7 +1168,7 @@ return function(S)
     local list, by_key = {}, {}
     local function add(key, default, record)
       local entry = {key = key, default = default, range = record.discrete and record.discrete[key],
-        limits = record.scene_ranges and record.scene_ranges[key], synth = record.name == SYNTH_RECORD or nil}
+        limits = record.scene_ranges and record.scene_ranges[key], synth = record.synth_keys or nil}
       list[#list + 1] = entry
       by_key[key] = entry
     end

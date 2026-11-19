@@ -970,6 +970,43 @@ test("a 3.6 group record adds its group only for a loaded module", function()
   assert_equal(calls, 1, "S.lib.io_tape's add_params ran once, at init")
 end)
 
+-- #840: a scene key's synth flag is its record's synth_keys field, never
+-- the record's name: the built-in synth record carries it, and a record of
+-- another name with it marks its keys so; synth_keys is true, on a
+-- scene_keys record, or absent
+test("a voice scene key is marked synth by its record's synth_keys field, not by the record's name", function()
+  load_strata({ before_init = function()
+    local S0 = local_value("S")
+    local function refused(fields)
+      local record = { name = "probe_bad", count = 1, add = function() end }
+      for key, value in pairs(fields) do record[key] = value end
+      return not pcall(S0.register_voice_params, record)
+    end
+    assert_true(refused({ scene_keys = {}, synth_keys = 1 }) and refused({ scene_keys = {}, synth_keys = "yes" })
+      and refused({ scene_keys = {}, synth_keys = false }), "synth_keys is true or absent")
+    assert_true(refused({ synth_keys = true, scene_defaults = {} }), "and only on a scene_keys record")
+    local probe
+    probe = { name = "probe_marked", count = 1, synth_keys = true, scene_keys = { "probe_marked" },
+      add = function(voice_idx)
+        S0.lib.params_setup.add_voice_param(voice_idx, probe, "probe_marked",
+          { type = "control", name = "probe marked", controlspec = controlspec.new(0, 1, "lin", 0.01, 0) })
+      end }
+    S0.register_voice_params(probe)
+  end })
+  local S = local_value("S")
+  local synth_record
+  for _, record in ipairs(S.registry.voice_params) do
+    if record.name == "synth" then synth_record = record end
+  end
+  assert_equal(synth_record.synth_keys, true, "the built-in synth record carries synth_keys")
+  local _, by_key = S.lib.params_setup.voice_scene_keys(1)
+  assert_equal(by_key.probe_marked.synth, true, "a record of another name with synth_keys marks its keys synth")
+  for _, key in ipairs(S.voices[1].param_order) do
+    assert_equal(by_key[key].synth, true, key .. ": the synth record's keys are marked")
+  end
+  assert_equal(by_key.grain_size.synth, nil, "a grain key is not")
+end)
+
 -- A param as test/fixtures/3.7.0-params.lua records it (its header): id,
 -- t and name; the default; a control's spec, an option's options, a
 -- number's range, a group's size; the string a formatted param shows at
