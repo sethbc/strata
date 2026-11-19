@@ -1484,6 +1484,10 @@ return function(S)
   -- scenes loaded line; a refusal's line and flash still show
   local function load_pset_scenes(scene_table, path, silent)
     local path_base = path:sub(1, #path - #PSET_SCENES.side_suffix)
+    -- the read set its sound already: a running fade ends where it is,
+    -- whatever the file holds, so no later step or landing of it puts the
+    -- old target's params back over it (#859; take_scenes cancels too)
+    cancel_scene_transition()
     if scene_table == nil then
       if S.scene_file.pset == path_base then
         S.scene_file.pset = nil
