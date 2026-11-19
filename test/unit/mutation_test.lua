@@ -939,13 +939,13 @@ local function quick_alt_k2()
   key(1, 1); key(2, 1); key(2, 0); key(1, 0)
 end
 
--- VOICE on voice_idx, the cursor on the first row of section
 -- Whether VOICE's held voice undo of voice_idx stands (undo_for is true on
 -- any VOICE section of its voice for a held load or copy)
 local function voice_undo_held(S, voice_idx)
   return S.lib.mutation.undo_for(S.constants.UI_PAGES.index.VOICE, "voice", voice_idx)
 end
 
+-- VOICE on voice_idx, the cursor on the first row of section
 local function voice_page_on(S, voice_idx, section)
   show_page("VOICE")
   S.selected_voice = voice_idx

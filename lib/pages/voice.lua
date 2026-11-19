@@ -273,11 +273,8 @@ return function(S)
   local function voice_hints(alt_held)
     local record = S.registry.pages[UI_PAGES.index.VOICE]
     local k2 = S.lib.ui_alt.k2_hint(record)
-    if alt_held then
-      local k3 = "K3:" .. (S.locked[S.selected_voice] and "unlock" or "lock")
-      return k2 and k2 .. " " .. k3 or k3
-    end
-    if S.lib.ui_alt.k2_held() then return k2 or "" end
+    if alt_held then return S.lib.ui_alt.join(k2, "K3:" .. (S.locked[S.selected_voice] and "unlock" or "lock")) end
+    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.join(k2) end
     local rows, cursor = M.sync_cursor()
     if rows[cursor].kind == S.lib.ui_voice_rows.PRESET_KIND then return "K2:prev K3:pick" end
     return "K2:prev K3:next"

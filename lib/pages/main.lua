@@ -237,9 +237,9 @@ return function(S)
     local voice_idx = S.selected_voice
     local record = S.registry.pages[UI_PAGES.index.MAIN]
     if alt_held then
-      return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (S.locked[voice_idx] and "unlock" or "lock")
+      return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record), "K3:" .. (S.locked[voice_idx] and "unlock" or "lock"))
     end
-    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
+    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record)) end
     return "K2:field K3:" .. (S.voices[voice_idx].active and "stop" or "start")
   end
 

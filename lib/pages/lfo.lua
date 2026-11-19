@@ -340,10 +340,11 @@ return function(S)
     local record = S.registry.pages[UI_PAGES.index.LFO]
     if alt_held then
       -- on the destination, ALT+E3 jumps a group
-      local jump = S.lfo_field == DEST_FIELD and " E3:group" or ""
-      return S.lib.ui_alt.k2_hint(record) .. " K3:" .. (lfo_running(S.selected_lfo) and "off" or "on") .. jump
+      local jump = S.lfo_field == DEST_FIELD and "E3:group" or nil
+      return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record), "K3:" .. (lfo_running(S.selected_lfo) and "off" or "on"),
+        jump)
     end
-    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.k2_hint(record) end
+    if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record)) end
     return "K2/K3:lfo E3:" .. LFO_FIELDS[S.lfo_field].label
   end
 
