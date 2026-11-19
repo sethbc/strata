@@ -1,8 +1,9 @@
 -- lib/io/remote.lua
 -- Remote grids and arcs (3.6 design §9), S.lib.io_remote: a grid or arc in
 -- iii mode running extras/lib/iii/strata_grid.lua or
--- extras/lib/iii/strata_arc.lua becomes one more grid (S.grids[GRID_PORTS.remote]) or the arc Strata follows (a
--- virtual arc), through a small protocol of notes and CCs on the device's
+-- extras/lib/iii/strata_arc.lua becomes one more grid
+-- (S.grids[GRID_PORTS.remote]) or the arc Strata follows (a virtual arc),
+-- through a small protocol of notes and CCs on the device's
 -- own MIDI port (PROTOCOL, version 1); and a MIDI grid through the midigrid
 -- mod attaches at GRID_PORTS.midigrid. The rig settings remote_grid_port,
 -- remote_arc_port and midi_grid choose them (read only, S.lib.io_rig). A

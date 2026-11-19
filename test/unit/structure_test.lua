@@ -1389,8 +1389,10 @@ end
 
 test("norns lists strata alone: no other tracked .lua file is outside the folders its menu skips (#813)", function()
   local planted = norns_menu_entries({ "strata.lua", "lib/voices.lua", "iii/strata_grid.lua", "test/unit/x_test.lua",
-    "extras/lib/e16/strata.lua", "tools/touchosc/layout.lua", "docs/x.md", "extras/data/x.lua", "crow/x.lua" })
-  assert_equal(table.concat(planted, " "), "strata/strata.lua strata/iii/strata_grid.lua strata/tools/touchosc/layout.lua",
+    "extras/lib/e16/strata.lua", "tools/touchosc/layout.lua", "docs/x.md", "extras/data/x.lua", "crow/x.lua",
+    "library/x.lua" })  -- a folder whose name only begins with a skipped one is listed (#857)
+  assert_equal(table.concat(planted, " "),
+    "strata/strata.lua strata/iii/strata_grid.lua strata/tools/touchosc/layout.lua strata/library/x.lua",
     "the scan names what norns would list")
   local paths = {}
   local listing = assert(io.popen("cd '" .. repo_root .. "' && git ls-files"))
