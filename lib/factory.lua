@@ -419,6 +419,9 @@ return function(S)
     -- set's scenes taken or not, a step that raises), the scenes in memory
     -- are written back before the step ends
     local ran, failure = pcall(function()
+      -- step 4 begins: a running scene fade ends where it is, so none of
+      -- its later steps or its landing sets params over the set's (#859)
+      cancel_scene_transition()
       apply_params(set, lines, installed, missing)
       read_side_files(set)
     end)

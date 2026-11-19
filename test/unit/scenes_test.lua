@@ -4036,6 +4036,28 @@ test("a PSET with no scenes file leaves the live scenes, with no backup and no l
   end
 end)
 
+-- #859: a PSET without scenes read during a fade ends the fade, so its
+-- later steps and its landing never put the scene's values back over the
+-- PSET's sound (as a PSET with scenes already did, take_scenes)
+test("a PSET with no scenes file read during a fade ends the fade: the PSET's sound stays", function()
+  local context, S = pset_session()
+  local pset_1, _, side_1 = pset_files(context, 1)
+  params:set("v1_grain_size", 0.3)
+  params:write(pset_1)
+  os.remove(side_1)
+  params:set("v1_grain_size", 0.1)
+  capture_scene(1)
+  params:set("v1_grain_size", 0.2)
+  recall_scene(1, 20)
+  context.clock.run_for(2)
+  assert_true(S.scene_transition_active, "a fade runs")
+  params:read(pset_1)
+  assert_true(not S.scene_transition_active, "the read ended the fade")
+  assert_equal(S.scene_transition_clock, nil, "and its clock")
+  context.clock.run_for(25)
+  assert_near(params:get("v1_grain_size"), 0.3, 1e-9, "the PSET's grain size stays")
+end)
+
 test("an unusable scenes file beside a PSET is set aside with one line and the live scenes stay", function()
   for _, case in ipairs({ "text", "format 8" }) do
     local context, S = pset_session()

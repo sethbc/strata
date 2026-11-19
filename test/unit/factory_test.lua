@@ -501,6 +501,38 @@ test("a load that fails after the backup leaves the live scenes on disk", functi
   assert_equal(marked(context), nil, "nothing marked")
 end)
 
+-- #859: a load ends a running scene fade before it sets the set's sound
+-- (step 4), so the fade's later steps and its landing never put the
+-- scene's values back: a set without scenes, and a load whose step 4 fails
+test("a load during a scene fade ends the fade first: the set's sound stays", function()
+  for _, case in ipairs({ { why = "no set.scenes.data" }, { why = "a failing step", fails = true } }) do
+    local context, S = session({ prepare = function(dir) os.remove(dir .. "factory/dusk/set.scenes.data") end })
+    params:set("v1_grain_size", 0.1)
+    capture_scene(1)
+    params:set("v1_grain_size", 0.2)
+    recall_scene(1, 60)
+    context.clock.run_for(2)
+    assert_true(S.scene_transition_active, case.why .. ": a fade runs")
+    local param, real = params:lookup_param("v1_amp"), nil
+    if case.fails then
+      real = param.action
+      param.action = function() error("a probe's failing action") end
+    end
+    assert_true(factory().load("dusk")); run_load(context)
+    if case.fails then
+      param.action = real
+      assert_equal(#context.clock.take_errors(), 1, case.why .. ": the load raised")
+    end
+    assert_true(not S.scene_transition_active, case.why .. ": the load ended the fade")
+    context.clock.run_for(70)
+    if not case.fails then
+      assert_near(params:get("v1_grain_size"), 0.31, 1e-9, case.why .. ": the set's grain size stays")
+    else
+      assert_true(math.abs(params:get("v1_grain_size") - 0.1) > 1e-6, case.why .. ": the fade never landed")
+    end
+  end
+end)
+
 test("audio installs once; a new version installs beside the old", function()
   local context, _, dir = session()
   assert_true(factory().load("dusk")); run_load(context)
