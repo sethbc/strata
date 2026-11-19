@@ -532,7 +532,12 @@ check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other, otherLine) == 
     "structure: engineLeft counts what an engine holds (running %, freed %)".format(engineLeft.(engine),
         engineLeft.(other, otherLine)));
 // (#807) and a delay's line held before free while its two buffers are
-// still allocated, as a free that left the line would leave them
+// still allocated, as a free that left the line would leave them. The
+// engine's own free left so (freeDelayLine forgetting the line without
+// freeing its buffers: #837's mutation, reverted) fails four checks here:
+// "free frees the delay's line", "engineLeft counts what an engine holds"
+// (freed [0, 0, 2]), and checkFreeContained's and checkAllocRolledBack's
+// (each left [0, 0, 2])
 {
     var kept = 2.collect({ Buffer.alloc(server, 64, 1) }), counted;
     server.sync;
