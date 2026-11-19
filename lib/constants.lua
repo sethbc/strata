@@ -125,11 +125,11 @@ local BUFFER_MAIN_PARAM = {key = "buf_pos", label = "pos", format = "%.2f"}
 local INPUT_MAIN_PARAM = {key = "grain_size", label = "size", format = "%.2f s"}
 
 -- Grid holds (lib/grid/core.lua, lib/grid/pane.lua): a recorder's clear
--- (and a page's save or clear hold) waits scene_save_seconds; a step key
+-- and the voices page's CL and RN wait action_hold_seconds; a step key
 -- held step_edit_seconds opens 3.4's step editor; the 64's NV key held
 -- chooser_seconds shows its chooser; a held tempo key repeats after
 -- tempo_repeat_delay, then every tempo_repeat_seconds
-local GRID_HOLD = {scene_save_seconds = 0.5, step_edit_seconds = 0.3, chooser_seconds = 0.5,
+local GRID_HOLD = {action_hold_seconds = 0.5, step_edit_seconds = 0.3, chooser_seconds = 0.5,
   tempo_repeat_delay = 0.5, tempo_repeat_seconds = 0.1}
 
 -- 3.8 (design §10.1): the grid pages, numbered alike on every layout, each

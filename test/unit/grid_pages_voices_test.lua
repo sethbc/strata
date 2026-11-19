@@ -226,6 +226,17 @@ test("freeze waits for the beat", function()
   end, {{KEY.freeze, 1}})
 end)
 
+-- #852: the grids' half-second hold is named for what it holds (a
+-- recorder's clear, CL and RN), not 3.7's scene save
+test("CL and RN hold for GRID_HOLD.action_hold_seconds, the grids' half-second hold", function()
+  load_strata()
+  local S = local_value("S")
+  local GRID_HOLD = S.constants.GRID_HOLD
+  assert_equal(GRID_HOLD.action_hold_seconds, 0.5, "the hold is half a second")
+  assert_equal(GRID_HOLD.scene_save_seconds, nil, "the old name is gone")
+  assert_equal(S.lib.grid_pages_voices.VOICES_PAGE.hold_seconds, GRID_HOLD.action_hold_seconds, "CL and RN read it")
+end)
+
 -- Moved: the 256's "256 row 15: clear and randomize light at 2 and act
 -- only once held half a second (#443)"
 test("clear and randomize act only after 0.5 s", function()
