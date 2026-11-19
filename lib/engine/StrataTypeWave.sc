@@ -26,10 +26,10 @@
     waveTableFrames { ^this.wavetableBankFrames div: this.waveBankSize }
 
     // Each table's harmonic amplitudes, before waveBankAmplitudes evens
-    // their level, darkest first: a sine, two, four and eight harmonics falling as 1/k, sixteen
-    // odd ones (a soft square), thirty-two falling as 1/k (a soft saw), a
-    // peak of twelve around the sixth (a vowel-like formant) and sixty-four
-    // falling as 1/sqrt(k), the brightest
+    // their level, darkest first: a sine, two, four and eight harmonics
+    // falling as 1/k, sixteen odd ones (a soft square), thirty-two falling
+    // as 1/k (a soft saw), a peak of twelve around the sixth (a vowel-like
+    // formant) and sixty-four falling as 1/sqrt(k), the brightest
     waveBankSpectra {
         ^[
             [1],
@@ -81,7 +81,9 @@
     // energy at 0 Hz, so there is no subsonic block. The three oscillators
     // sum to about three times one: the 0.3 brings it to one's level. Every
     // table has a unit sine's RMS (waveBankAmplitudes), so morph and its
-    // wander keep the level
+    // wander keep the level. In phase (detune 0) on the brightest table,
+    // whose peak is about 3.89, the three peaks add: about 0.74 at amp 0.3
+    // (the types area's wave check holds it under 1)
     addWaveDef {
         var base = this.waveBank[0].bufnum, span = this.waveBankSize - 1.001;
         SynthDef(\strataWave, {

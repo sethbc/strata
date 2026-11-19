@@ -22,7 +22,7 @@ var levelFloor = 0.005, levelCeiling = 1, subsonicCeiling = 0.15;
 // ruling at 1f's review), and morph 1's share of energy above 4.5 times
 // the pitch at least morphMinimumShare above morph 0's
 var tableSpreadDb = 3, morphMinimumShare = 0.25;
-// The level probe's outputs (strataCheckWaveLevel) a probe
+// How many outputs each level probe (strataCheckWaveLevel) writes
 var probeChannels = 7;
 // The RMS of a probe's left channel and of its highpassed left channel
 // over its window of `seconds`, from its outputs
@@ -151,6 +151,30 @@ if (engine.respondsTo(\addWaveDef)) { engine.areaCall(\addWaveDef); server.sync 
         (each[3] == 0) and: { each[2] > levelFloor } and: { each[2] < levelCeiling } }) },
         "wave: at its defaults and at each own key's range ends, at 110 and 2000 Hz, the voice is finite, peaks above % and under % ([Hz, controls, peak, bad]: %)".format(
             levelFloor, levelCeiling, results.collect({ arg each; [each[0], each[1], each[2].round(0.0001), each[3]] })));
+}.value;
+
+// "wave: in phase at the brightest table the voice peaks under 1": morph 1
+// (the brightest table, whose peak is the bank's highest) with detune 0, so
+// each side's three oscillators read the same phase and their peaks add,
+// and morphDepth 0 (no wander away from it), at 110 and 2000 Hz at the
+// default amp: the corner the cases above miss (their detune keeps the
+// three apart). By arithmetic 3 x 3.89 (the table's peak) x 0.707 (the
+// balance at pan 0) x 0.3 (the def's gain) x 0.3 (amp), about 0.74
+{
+    var group = Group.tail(server), freqs = [110, 2000], buses = freqs.collect({ Bus.audio(server, 2) });
+    var levels = Bus.control(server, freqs.size * probeChannels), probes, results;
+    if (known) { freqs.do({ arg freq, index;
+        startWave.(buses[index], group, [\freq, freq, \morph, 1, \detune, 0, \morphDepth, 0]) }) };
+    probes = freqs.collect({ arg freq, index;
+        Synth(\strataCheckWaveLevel, [\in, buses[index], \out, levels.index + (index * probeChannels)], group, \addToTail) });
+    server.sync; 0.5.wait;
+    probes.do(_.set(\t_reset, 1));
+    1.5.wait;
+    results = h.readBus(levels).clump(probeChannels).collect({ arg values; [values[0], values[2]] });
+    check.(known and: { results.every({ arg each; (each[1] == 0) and: { each[0] > levelFloor } and: { each[0] < levelCeiling } }) },
+        "wave: in phase at the brightest table (morph 1, detune 0, no wander) the voice peaks under % at 110 and 2000 Hz ([Hz, peak, bad]: %)".format(
+            levelCeiling, [freqs, results].flop.collect({ arg each; [each[0], each[1][0].round(0.0001), each[1][1]] })));
+    group.free; server.sync; buses.do(_.free); levels.free;
 }.value;
 
 // "wave: below 8 Hz the voice peaks under subsonicCeiling of its peak":
