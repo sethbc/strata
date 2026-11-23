@@ -99,16 +99,21 @@ return function(S)
     return want
   end
 
+  -- The three setup lines; the output is active only once the bus admitted
+  -- its env_act (#871: a full queue refuses it, and the output is then set
+  -- up at the next sync). The bus returns false for a refused line; a
+  -- refusal leaves an output set up earlier active, as the module still is
   local function set_up(output)
-    bus().send("txo", "env_act", output, 1)
+    local admitted = bus().send("txo", "env_act", output, 1) ~= false
     bus().send("txo", "env_att", output, params:get("txo_attack"))
     bus().send("txo", "env_dec", output, params:get("txo_decay"))
-    active[output] = true
+    if admitted then active[output] = true end
   end
 
   -- Take the module to what the params say: an output no voice needs any
   -- more gets env_act 0 (once), and the outputs named (one voice's, or all
-  -- of them) the three setup lines
+  -- of them) the three setup lines, with every other wanted output that is
+  -- not set up (its setup refused, #871)
   local function sync(only_voice)
     if not leading() then return end
     local want = wanted()
@@ -118,11 +123,10 @@ return function(S)
         active[output] = nil
       end
     end
-    if only_voice then
-      local output = envelope_output(only_voice)
-      if output then set_up(output) end
-    else
-      for _, output in ipairs(sorted_outputs(want)) do set_up(output) end
+    local named = only_voice and envelope_output(only_voice)
+    if named then set_up(named) end
+    for _, output in ipairs(sorted_outputs(want)) do
+      if not only_voice or (output ~= named and not active[output]) then set_up(output) end
     end
   end
 

@@ -194,22 +194,21 @@ return function(S)
     end
   end
 
-  -- The draw clock runs exactly while a remote device is attached
+  -- The draw clock runs exactly while a remote device is attached: a clock
+  -- of S.lib.clocks (#870), its handle in draw.clock, stopped (retired, never
+  -- canceled, while its resume may be posted) at the last detach
   local function update_clock()
     if any_attached() and draw.clock == nil then
-      draw.clock = clock.run(function()
-        while true do
-          clock.sleep(1 / REMOTE.draw_hz)
-          tick()
-        end
+      draw.clock = S.lib.clocks.run(function(handle)
+        while handle.sleep(1 / REMOTE.draw_hz) do tick() end
       end)
     elseif not any_attached() and draw.clock ~= nil then
-      clock.cancel(draw.clock)
+      S.lib.clocks.stop(draw.clock)
       draw.clock = nil
     end
   end
 
-  function M.clock_id() return draw.clock end
+  function M.clock_id() return draw.clock and draw.clock.id end
 
   -- Whether this module holds the port (a remote grid's or arc's, or one
   -- midigrid's device is on): MIDI out sends nothing there. A kind holds
@@ -601,7 +600,7 @@ return function(S)
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_remote, function()
     state.started = false
     if draw.clock then
-      clock.cancel(draw.clock)
+      S.lib.clocks.cancel(draw.clock)
       draw.clock = nil
     end
     for _, kind in ipairs(KINDS) do disconnect(records[kind], false) end

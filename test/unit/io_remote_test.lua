@@ -196,6 +196,26 @@ test("a hello of another version or size attaches nothing", function()
   assert_equal(status, nil, "the title shows no [--] while the device is there")
 end)
 
+test("the draw clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  -- #870: a bad hello detaches the grid after matron posted the draw clock's resume and before
+  -- Lua delivered it; the clock ends at that wake and draws no frame
+  local context, S = started()
+  local device = remote_grid(context, S, 3)
+  local id = S.lib.io_remote.clock_id()
+  assert_true(id ~= nil, "the draw clock runs")
+  local after_detach
+  context.clock.advance_until(id, function()
+    hello(context, 3, 16, 8, 3)
+    after_detach = #device.sent
+  end)
+  context.clock.run_for(0.5)
+  assert_equal(#context.clock.take_errors(), 0, "no resume reached a canceled clock")
+  assert_equal(#device.sent, after_detach, "no frame at the wake or after")
+  assert_equal(clock.threads[id], nil, "the clock ended at its wake")
+  assert_equal(S.lib.io_remote.clock_id(), nil, "no draw clock")
+  assert_equal(remote_invariant(S), nil, "the invariant holds")
+end)
+
 test("grid keys and LEDs use the protocol's numbers", function()
   local context, S = started()
   local device = remote_grid(context, S, 3, 16, 16)

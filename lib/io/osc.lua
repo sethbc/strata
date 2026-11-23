@@ -34,7 +34,7 @@ return function(S)
     patterns = nil,     -- 0 or 1 last sent
     ticks = 0,          -- ticks run
     since = {},         -- id -> the tick it was first seen differing from last_sent
-    clock = nil,        -- the feedback clock
+    clock = nil,        -- the feedback clock's handle (S.lib.clocks, #870)
     errors = {},        -- contained_call's last message per part
   }
   for _, id in ipairs(OSC.watch) do
@@ -125,9 +125,11 @@ return function(S)
     end
   end
 
-  local function stop_clock()
+  -- Stopped through S.lib.clocks (#870): retired, never canceled, while its
+  -- resume may be posted; the cleanup step cancels (at_cleanup)
+  local function stop_clock(at_cleanup)
     if state.clock then
-      clock.cancel(state.clock)
+      if at_cleanup then S.lib.clocks.cancel(state.clock) else S.lib.clocks.stop(state.clock) end
       state.clock = nil
     end
   end
@@ -137,11 +139,8 @@ return function(S)
     local wanted = rig.get("osc_feedback") == "on" and state.sender ~= nil
     if wanted and not state.clock then
       baseline()
-      state.clock = clock.run(function()
-        while true do
-          clock.sleep(1 / OSC.feedback_hz)
-          contained("tick", "osc feedback", tick)
-        end
+      state.clock = S.lib.clocks.run(function(handle)
+        while handle.sleep(1 / OSC.feedback_hz) do contained("tick", "osc feedback", tick) end
       end)
     elseif not wanted then
       stop_clock()
@@ -149,6 +148,7 @@ return function(S)
   end
 
   function M.running() return state.clock ~= nil end
+  function M.clock_id() return state.clock and state.clock.id end
 
   -- How many ids have an arrival time recorded (the tests' bound check)
   function M.tracked()
@@ -240,7 +240,7 @@ return function(S)
   end)
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_osc, function()
-    stop_clock()
+    stop_clock(true)
     state.sender = nil
     osc.event = nil
   end)

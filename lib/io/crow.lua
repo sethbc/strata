@@ -119,14 +119,15 @@ return function(S)
     budget.pending, budget.order = {}, {}
   end
 
-  -- Never canceled while the script runs (#654, as the engine budget's):
-  -- it ends at its own wake once nothing waits
+  -- Never stopped while the script runs (#654, as the engine budget's):
+  -- it ends at its own wake once nothing waits. A clock of S.lib.clocks
+  -- (#870), its handle in budget.clock, canceled only by the cleanup step
   local function start_flush_clock()
     if budget.clock then return end
-    budget.clock = clock.run(function()
+    budget.clock = S.lib.clocks.run(function(handle)
       while #budget.order > 0 do
         local next_window = math.max(current_window(), budget.window) + 1
-        clock.sleep(math.max(0, next_window * CROW.window_seconds - util.time()))
+        if not handle.sleep(math.max(0, next_window * CROW.window_seconds - util.time())) then return end
         enter_window(math.max(current_window(), next_window))
       end
       budget.clock = nil
@@ -166,11 +167,11 @@ return function(S)
     return {sent = sent, pending = #budget.order}
   end
 
-  -- For tests: the module's clocks that run (a copy)
+  -- For tests: the module's clocks that run (a copy), by their ids
   function M.clocks()
     local outputs = {}
-    for n, id in pairs(state.clocks) do outputs[n] = id end
-    return {flush = budget.clock, outputs = outputs}
+    for n, handle in pairs(state.clocks) do outputs[n] = handle.id end
+    return {flush = budget.clock and budget.clock.id, outputs = outputs}
   end
 
   ---------------------------------------------------------------------------
@@ -257,20 +258,22 @@ return function(S)
     return {}
   end
 
-  local function stop_output_clock(n)
+  -- Stopped through S.lib.clocks (#870): retired, never canceled, while
+  -- its resume may be posted; the cleanup step cancels (at_cleanup)
+  local function stop_output_clock(n, at_cleanup)
     if state.clocks[n] then
-      clock.cancel(state.clocks[n])
+      if at_cleanup then S.lib.clocks.cancel(state.clocks[n]) else S.lib.clocks.stop(state.clocks[n]) end
       state.clocks[n] = nil
     end
   end
 
-  -- One norns clock per clock output: output[n]() every division
+  -- One norns clock per clock output: output[n]() every division; a clock
+  -- of S.lib.clocks, its handle in state.clocks[n]
   local function start_output_clock(n)
     stop_output_clock(n)
     local beats = SPEC.division_beats[param_value(out_id(n, "div")) or SPEC.division_default]
-    state.clocks[n] = clock.run(function()
-      while true do
-        clock.sync(beats)
+    state.clocks[n] = S.lib.clocks.run(function(handle)
+      while handle.sync(beats) do
         if not norns_output(n) then M.send_now("output[" .. n .. "]()") end
       end
     end)
@@ -732,10 +735,10 @@ return function(S)
     if not state.started or state.stopped then return end
     drop_all_pending()
     if budget.clock then
-      clock.cancel(budget.clock)
+      S.lib.clocks.cancel(budget.clock)
       budget.clock = nil
     end
-    for n = 1, SPEC.outputs do stop_output_clock(n) end
+    for n = 1, SPEC.outputs do stop_output_clock(n, true) end
     if any_set() then
       for n = 1, SPEC.outputs do
         if not norns_output(n) then M.send_now(volts_line(n, 0)) end

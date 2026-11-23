@@ -588,6 +588,31 @@ test("a crow that leaves and returns turns off an envelope no longer wanted", fu
   assert_true(not on, "and does not set it up again")
 end)
 
+test("an envelope's setup the queue refused is sent again at the next sync", function()
+  -- #871: with the ii queue full (II.queue_max, 48) the three setup lines are refused; the
+  -- output is not set up on the module, so a later sync (here another voice's output changing)
+  -- sends them: crow-ii.md §2 (TELEXo), env_act(n, 1), env_att(n, ms), env_dec(n, ms)
+  local context, S = leading_real()
+  local ii = S.lib.io_ii
+  for k = 1, 60 do ii.send("filler", "full", k) end
+  assert_equal(ii.queued(), 48, "the queue is full")
+  local before = ii.dropped()
+  params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
+  assert_equal(ii.dropped() - before, 3, "the three setup lines were refused")
+  for _ = 1, 60 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(ii.queued(), 0, "drained")
+  assert_equal(last_line(context, "ii.txo.env_"), nil, "no setup line reached crow")
+  params:set("txo_attack", 25)
+  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(last_line(context, "ii.txo.env_att(3, "), nil, "an output not set up gets no time on its own")
+  params:set("v2_out_txo", 7)  -- the next sync: voice 2 to output 7, in pitch mode
+  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(last_line(context, "ii.txo.env_act(3, "), "ii.txo.env_act(3, 1)", "the envelope set up")
+  assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 25)", "its attack")
+  assert_equal(last_line(context, "ii.txo.env_dec(3, "), "ii.txo.env_dec(3, 500)", "its decay")
+  assert_equal(last_line(context, "ii.txo.env_act(7, "), nil, "the pitch-mode output gets no envelope")
+end)
+
 
 test("the TELEXo is routed only while Strata leads the bus, as Just Friends and W/ are", function()
   local _, S, state = started()

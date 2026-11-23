@@ -22,7 +22,10 @@ return function(S)
   -- players[key] = the player table listed at init; chosen[voice] = the key
   -- the voice plays (nil for none); uses[key] = the voices choosing it;
   -- notes[voice][id] = {player, note} for each note sent on
-  local state = {added = false, players = {}, chosen = {}, uses = {}, notes = {}, errors = {}}
+  -- activations[key] = the handle (S.lib.clocks, #870) of the clock nb's
+  -- default activation runs for the player, whose id the player keeps in
+  -- active_routine as nb's base does
+  local state = {added = false, players = {}, chosen = {}, uses = {}, notes = {}, errors = {}, activations = {}}
   for voice = 1, NUM_VOICES do state.notes[voice] = {} end
 
   local function selector(voice) return string.format(NB.selector, voice) end
@@ -48,21 +51,27 @@ return function(S)
   end
 
   -- nb's activation (duty 6): the player's own active, or is_active and a
-  -- clock that calls its own delayed_active a second later while still active
+  -- clock that calls its own delayed_active a second later while still
+  -- active. The clock is S.lib.clocks' (#870): a deactivation stops it,
+  -- retired, never canceled, while its resume may be posted
   local function activate(player, key)
     if call_own(player, key, "active") then return end
     player.is_active = true
-    player.active_routine = clock.run(function()
-      clock.sleep(NB.delayed_seconds)
+    local activation = S.lib.clocks.run(function(handle)
+      if not handle.sleep(NB.delayed_seconds) then return end
       player.active_routine = nil
+      if state.activations[key] == handle then state.activations[key] = nil end
       if player.is_active then call_own(player, key, "delayed_active") end
     end)
+    state.activations[key] = activation
+    player.active_routine = activation.id
   end
 
   local function deactivate(player, key)
     if call_own(player, key, "inactive") then return end
     player.is_active = false
-    if player.active_routine then clock.cancel(player.active_routine) end
+    S.lib.clocks.stop(state.activations[key])
+    state.activations[key] = nil
     player.active_routine = nil
   end
 
