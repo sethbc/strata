@@ -655,10 +655,97 @@ test("K3 on a dub sends stopRecord and leaves it recording until its ended repor
   assert_equal(#context.calls_named("stopRecord"), 1)
   assert_true(not buffers[1].finishing, "a dub never finishes"); assert_equal(buffers[1].confirm_since, nil)
   assert_equal(S.lib.buffers.status(1), "dub")
-  context.clock.run_for(local_value("BUFFER_SETTLE").fallback_seconds + 1)
-  assert_true(buffers[1].recording, "no fallback settles it")
+  -- (#904: until the fallback, BUFFER_SETTLE.fallback_seconds after K3)
+  context.clock.run_for(local_value("BUFFER_SETTLE").fallback_seconds - 1)
+  assert_true(buffers[1].recording, "still recording before the fallback")
   context.polls.fire("recordState", record_state_value(1, 2, 1))
   assert_equal(buffers[1].name, "take 1"); assert_true(not buffers[1].recording)
+  assert_equal(S.lib.record.clock_role(1), nil, "the report ended the fallback")
+  context.clock.run_for(2)
+  assert_equal(buffers[1].name, "take 1", "and nothing more happens")
+end)
+
+-- #904: a playable recording gets the fallback a replace take has: K3 is
+-- never answered by stopRecord alone for good when its report is lost
+test("a playable recording with no recordState settles after the fallback", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
+  params:set("record_feedback", 50)
+  record_buffer(1)
+  context.polls.fire("recordState", record_state_value(1, 1, 1))  -- recording; no report follows
+  record_buffer(1); record_buffer(1)
+  assert_equal(S.lib.record.clock_role(1), "fallback", "K3 started the fallback")
+  assert_equal(#context.calls_named("stopRecord"), 2)
+  context.clock.run_for(S.lib.buffers.BUFFER_SETTLE.fallback_seconds - 2)
+  assert_equal(S.lib.buffers.status(1), "dub", "a repeated K3 did not restart it, and it has not run yet")
+  context.clock.run_for(2.1)
+  assert_equal(S.lib.buffers.status(1), "loaded", "settled from the last known length")
+  assert_equal(buffers[1].name, "take 1"); assert_equal(buffers[1].path, scratch_take_path(1))
+  assert_equal(buffers[1].seconds, 4); assert_equal(S.lib.record.state(1), nil)
+  assert_equal(S.lib.record.clock_role(1), nil)
+  -- the late ended report changes nothing; K3 records again
+  context.polls.fire("recordState", record_state_value(1, 2, 1))
+  assert_equal(buffers[1].name, "take 1")
+  context.clear_engine_calls(); record_buffer(1)
+  assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records again")
+  -- a playable recording stopped while armed, with no report: as canceled
+  record_buffer(1)
+  params:set("record_threshold", 3)
+  load_buffer(2, "/tmp/b.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 6))
+  record_buffer(2); assert_equal(S.lib.record.state(2).phase, "armed")
+  record_buffer(2)
+  context.clock.run_for(S.lib.buffers.BUFFER_SETTLE.fallback_seconds + 0.1)
+  assert_equal(S.lib.buffers.status(2), "loaded", "an armed one never recorded: the slot as it was")
+  assert_equal(buffers[2].name, "b.wav"); assert_true(not buffers[2].recording)
+end)
+
+-- #870: the slot's one clock has a role, and a role's clock is not taken
+-- for another's: a take timer starts at the "recording" report whatever
+-- other clock the slot holds
+test("a role's clock is not taken for another's", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  params:set("record_threshold", 3); params:set("record_duration", 2)
+  record_buffer(3)
+  assert_equal(S.lib.record.state(3).phase, "armed")
+  assert_equal(S.lib.record.clock_role(3), nil, "no take timer while armed")
+  local noticed = 0
+  S.lib.record.run_slot_clock(3, "notice", 30, function() noticed = noticed + 1 end)
+  assert_equal(S.lib.record.clock_role(3), "notice")
+  assert_equal(type(S.buffer_record_clocks[3]), "number", "the slot's clock is an id (plan ruling 10)")
+  context.polls.fire("recordState", record_state_value(buffers[3].records_sent, 1, 3))
+  assert_equal(S.lib.record.clock_role(3), "take", "the recording report starts the take timer")
+  wake_buffer_clock(context, 3)
+  assert_true(buffers[3].finishing, "record_duration later it finishes")
+  assert_equal(S.lib.record.clock_role(3), "fallback")
+  context.clock.run_for(31)
+  assert_equal(noticed, 0, "the notice it replaced never ran")
+end)
+
+-- #870: the take timer is the clock helper's, stopped where its wake may
+-- be posted (the engine's "ended" report as the timer runs out)
+test("the take timer stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  params:set("record_duration", 2)
+  record_buffer(3)
+  assert_equal(S.lib.record.clock_role(3), "take")
+  local timer = S.buffer_record_clocks[3]
+  local fallback = nil
+  context.clock.advance_until(timer, function()
+    buffers[3].seconds = 2  -- the engine's length came first
+    context.polls.fire("recordState", record_state_value(buffers[3].records_sent, 2, 3))
+    fallback = S.buffer_record_clocks[3]
+  end)
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+  assert_true(not buffers[3].recording, "the ended report settled the take")
+  assert_equal(buffers[3].name, "take 3")
+  assert_equal(fallback, nil, "the settle ended the fallback too")
+  assert_equal(S.buffer_record_clocks[3], nil, "the timer did not finish the take again")
+  context.clock.run_for(6)
+  assert_equal(buffers[3].name, "take 3", "nothing more happens")
+  assert_true(not buffers[3].finishing)
 end)
 
 -- #404 (4): a recording forgets the slot's tracked loads, so a failure

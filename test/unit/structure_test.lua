@@ -132,7 +132,7 @@ end)
 -- in the package that owns it and removes its line, so the list only
 -- shrinks
 local BARE_CANCEL_FILES = {
-  ["lib/buffers.lua"] = 2, ["lib/record.lua"] = 1,
+  ["lib/buffers.lua"] = 1,
 }
 -- The files that keep their clock.cancel: the first nine cancel a clock
 -- only as the script starts or ends, when no resume can go astray; the

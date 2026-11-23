@@ -374,13 +374,11 @@ return function(S)
   -- (bufferLoadFailed) and undone; a clear, a recording or another load
   -- ends the wait. Giving the load up here (3.2 put back what the slot held
   -- before) left Lua showing the old file while the engine played the new
-  -- one (#317). It runs in buffer_record_clocks[slot], which a load, clear,
-  -- recording and cleanup cancel; the end of the check cancels it too
+  -- one (#317). It is the slot's clock in the role "notice"
+  -- (lib/record.lua's run_slot_clock, #870), which a load, clear,
+  -- recording and cleanup end; the end of the check ends it too
   local function start_check_notice(slot, load_number)
-    cancel_buffer_recording_timer(slot)
-    S.buffer_record_clocks[slot] = clock.run(function()
-      clock.sleep(BUFFER_SETTLE.check_notice_seconds)
-      S.buffer_record_clocks[slot] = nil
+    S.lib.record.run_slot_clock(slot, "notice", BUFFER_SETTLE.check_notice_seconds, function()
       local buffer = S.buffers[slot]
       if buffer.checking_from == nil or buffer.checking_load ~= load_number then return end
       print("buffer " .. slot .. ": the engine is still checking " .. tostring(buffer.path or "a file") .. " "
@@ -447,15 +445,19 @@ return function(S)
   end
   M.longest_start = longest_start
 
-  -- per slot: the clock that reloads the slot's file at a new start
+  -- per slot: the id of the clock that reloads the slot's file at a new
+  -- start, and its handle (a clock helper's, #870)
   local start_reload_clocks = {}
-  M.start_reload_clocks = start_reload_clocks  -- the tests find the clocks here
+  M.start_reload_clocks = start_reload_clocks  -- the tests find the clock ids here
+  local start_reload_handles = {}
 
-  local function cancel_start_reload(slot)
-    if start_reload_clocks[slot] then
-      clock.cancel(start_reload_clocks[slot])
-      start_reload_clocks[slot] = nil
-    end
+  -- End the slot's pending start reload: stopped, never canceled while its
+  -- wake may be posted (a detent 0.3 s after the last), or, at cleanup
+  -- (`ending`), canceled at once
+  local function cancel_start_reload(slot, ending)
+    local handle = start_reload_handles[slot]
+    if ending then S.lib.clocks.cancel(handle) else S.lib.clocks.stop(handle) end
+    start_reload_handles[slot], start_reload_clocks[slot] = nil, nil
   end
 
   -- Load path into the slot from start seconds into the file (default 0)
@@ -1125,7 +1127,7 @@ return function(S)
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_start_reload, function()
     -- a canceled reload's untried start goes back to what plays (after the save above)
     for slot = 1, NUM_BUFFERS do
-      cancel_start_reload(slot)
+      cancel_start_reload(slot, true)
       S.buffers[slot].start = S.buffers[slot].sent_start
     end
   end)
@@ -1255,11 +1257,13 @@ return function(S)
     if clamped == buffer.start and not start_reload_clocks[slot] then return end
     buffer.start = clamped
     cancel_start_reload(slot)
-    start_reload_clocks[slot] = clock.run(function()
-      clock.sleep(S.constants.FILES.restart_seconds)
-      start_reload_clocks[slot] = nil  -- before load_buffer, which cancels the slot's reload
+    local handle = S.lib.clocks.run(function(handle)
+      if not handle.sleep(S.constants.FILES.restart_seconds) then return end
+      -- forgotten before load_buffer, which ends the slot's reload
+      start_reload_handles[slot], start_reload_clocks[slot] = nil, nil
       if S.buffers[slot].path then load_buffer(slot, S.buffers[slot].path, S.buffers[slot].start) end
     end)
+    start_reload_handles[slot], start_reload_clocks[slot] = handle, handle.id
     request_redraw()
   end
   return M
