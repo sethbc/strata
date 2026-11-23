@@ -455,11 +455,9 @@ local ROWS = {
   {"finishing, stopped armed", "another load's number", "finishing, stopped armed"},
   {"finishing, stopped armed", "bufferLoadFailed untracked", "finishing, stopped armed"},
   {"finishing, stopped armed", "takeWriteFailed", "finishing, stopped armed", check = unsaved},
-  -- a fault, its issue yet to be filed: the fallback settles a take that
-  -- may never have recorded as take 1 on the scratch path (the old audio's
-  -- 4 s), as #904 kept an armed dub from doing
+  -- it never started (#974): a.wav comes back, on its own path
   {"finishing, stopped armed", "the fallback", "loaded", check = function()
-    named("take " .. SLOT)(); assert_equal(buffer().path, scratch_take_path(SLOT), "today: the scratch path")
+    named("a.wav")(); assert_equal(buffer().path, "/tmp/a.wav", "the file's path")
   end},
 
   {"loaded", "load_buffer", "loading, zero awaited"},

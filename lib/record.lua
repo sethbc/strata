@@ -89,15 +89,30 @@ return function(S)
   -- report settles a take within about 2 s. Without it the last known seconds
   -- is 0, so the take settles empty: the fallback exists so K3 is never
   -- ignored forever, not to recover audio.
+  -- A take stopped while still armed (finishing, phase "armed") that no
+  -- report ended never started (#974): it recorded nothing, so its fallback
+  -- leaves the slot as it was before it, as its "canceled" and the length
+  -- report after it would (lib/buffers.lua's kept_state), from the last
+  -- known length: the file back while the slot still reads its audio,
+  -- empty once the engine had emptied it. Never the scratch path of a take
+  -- that was not written (#904 settles an armed dub the same way)
+  local cancel_recording
   local function finish_buffer_take(slot)
     local buffer = S.buffers[slot]
     buffer.finishing = true
     buffer.confirm_since = util.time()
     M.run_slot_clock(slot, "fallback", BUFFER_SETTLE.fallback_seconds, function()
-      if buffer.finishing then
+      if not buffer.finishing then return end
+      local take = takes[slot]
+      if take and take.phase == "armed" then
+        local seconds = buffer.seconds
+        cancel_recording(slot, take)
+        buffer.seconds = seconds
+        S.lib.buffers.settle_kept_state(slot)
+      else
         settle_buffer_slot(slot)
-        S.lib.buffers.display_changed()
       end
+      S.lib.buffers.display_changed()
     end)
   end
 
@@ -216,8 +231,9 @@ return function(S)
     S.lib.samples.bind(slot)
   end
 
-  -- A recording's cancel, from its "canceled" report
-  local function cancel_recording(slot, take)
+  -- A recording's cancel, from its "canceled" report (or a replace take's
+  -- fallback that finds it never started, above)
+  cancel_recording = function(slot, take)
     local buffer = S.buffers[slot]
     M.cancel_timer(slot)
     takes[slot] = nil

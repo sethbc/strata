@@ -1121,4 +1121,45 @@ test("the SCENES layout state beside REC records a real take (#903)", function()
   assert_equal(table.concat(h.check_invariants(), "; "), "", "every invariant holds")
 end)
 
+
+-- 3.9 (#974): a replace take stopped while armed that no report ends (no
+-- "canceled", no "recording") never started, so its fallback leaves the
+-- slot as it was before the take, as a canceled take's next length report
+-- would, from the last known length: the file back while the slot still
+-- reads its audio, empty once the engine had emptied it. Never the scratch
+-- path of a take that was not written
+test("a replace take stopped while armed leaves the slot as it was after its fallback (#974)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local buffers = S.buffers
+  local function report(slot, seconds)
+    context.polls.fire("bufferState", context.polls.buffer_state_value(slot, buffers[slot].loads_sent, seconds))
+  end
+  local function stopped_armed(slot, param)
+    params:set(param, 2); record_buffer(slot); params:set(param, 1)
+    record_buffer(slot)                               -- K3 while armed
+    assert_true(buffers[slot].finishing and S_record_state(slot).phase == "armed", "slot " .. slot .. " stopped armed")
+    wake_buffer_clock(context, slot)                  -- the fallback, no report
+  end
+  -- synced, unprepared: the slot still reads the file's 4 s
+  load_buffer(1, "/tmp/a.wav"); report(1, 4)
+  stopped_armed(1, "record_sync")
+  assert_equal(S.lib.buffers.status(1), "loaded", "the file is back")
+  assert_equal(buffers[1].name, "a.wav"); assert_equal(buffers[1].path, "/tmp/a.wav", "on its own path")
+  assert_true(S.lib.samples.is_bound(1), "bound to its file's settings")
+  -- armed by a threshold: the engine emptied the slot at the send
+  load_buffer(2, "/tmp/b.wav"); report(2, 4)
+  stopped_armed(2, "record_threshold")
+  assert_equal(S.lib.buffers.status(2), "empty", "empty, as the engine left it")
+  assert_equal(buffers[2].path, nil, "no path"); assert_equal(buffers[2].name, "empty")
+  assert_true(not S.lib.samples.is_bound(2), "unbound")
+  -- an empty slot stays empty
+  stopped_armed(3, "record_sync")
+  assert_equal(S.lib.buffers.status(3), "empty"); assert_equal(buffers[3].path, nil)
+  for slot = 1, 3 do
+    assert_equal(S.lib.record.clock_role(slot), nil, "slot " .. slot .. ": no clock left")
+    assert_true(buffers[slot].path ~= scratch_take_path(slot), "slot " .. slot .. ": never the scratch path")
+  end
+end)
+
 end

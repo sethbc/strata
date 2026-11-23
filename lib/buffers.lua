@@ -366,6 +366,30 @@ return function(S)
     end
   end
 
+  -- What a canceled replace take kept (kept_state) is decided by the slot's
+  -- length (#311): audio means the take never prepared the slot, which is
+  -- put back as it was; none means the take had emptied it, which stays
+  -- empty and unbound. True when the kept state was put back
+  local function settle_kept_state(slot, has_audio)
+    local buffer = S.buffers[slot]
+    local kept = buffer.kept_state
+    buffer.kept_state = nil
+    if has_audio then
+      apply_buffer_state(slot, kept)
+      return true
+    elseif S.lib.samples.is_bound(slot) then
+      -- 3.7: the take had emptied the slot (no report of it said so)
+      S.lib.samples.unbind(slot)
+    end
+    return false
+  end
+  -- A replace take stopped while armed that no report ended (its fallback,
+  -- lib/record.lua, #974): decided as a canceled take's next length report
+  -- would be, from the slot's last known length
+  function M.settle_kept_state(slot)
+    if S.buffers[slot].kept_state ~= nil then settle_kept_state(slot, S.buffers[slot].seconds > 0) end
+  end
+
   -- The notice for a load the engine is still checking (checking_load =
   -- load_number) check_notice_seconds after it was sent: one console line
   -- and a flash on BUFFER. Nothing else changes: the load stays the slot's
@@ -776,17 +800,7 @@ return function(S)
     -- the first report after a replace take was canceled (the engine sends
     -- it right after "canceled") says what the take left: audio means it had
     -- not prepared the slot, which is as it was before the take
-    if buffer.kept_state ~= nil then
-      local kept = buffer.kept_state
-      buffer.kept_state = nil
-      if has_audio then
-        apply_buffer_state(slot, kept)
-        changed = true
-      elseif S.lib.samples.is_bound(slot) then
-        -- 3.7: the take had emptied the slot (no report of it said so)
-        S.lib.samples.unbind(slot)
-      end
-    end
+    if buffer.kept_state ~= nil and settle_kept_state(slot, has_audio) then changed = true end
     if buffer.recording and S.lib.record.slot_reported(slot, seconds) then changed = true end
     -- the engine wrote the slot's peaks before reporting its length; a new
     -- length's old overview goes now, never drawn at the new length (#401);
