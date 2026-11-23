@@ -279,4 +279,96 @@ test("quantize_actions is one option, the eighth of the eleven params in the seq
     "the sequencer's eleven (3.7: the chain's chances and fill), quantize_actions eighth")
 end)
 
+
+-- 3.9 (#919, package 2d): the machine of one key's action, quantize_actions
+-- on bar, a probe key "probe" whose action counts its runs. Each state is
+-- entered at beat 1.5 (retired: the waiting action dropped 1/64 beat before
+-- its bar, within QUANTIZE.wake_tolerance, so its clock is left to its
+-- resume). Each row's check runs to past the bar and asserts what ran
+do
+  local KEY = "probe"
+
+  local function probe(context) return function() context.runs = (context.runs or 0) + 1 end end
+
+  local function near_the_bar(context)
+    run_to_beat(context, (math.floor(clock.get_beats() / 4) + 1) * 4 - 1 / 64)
+  end
+
+  local function key_state(waits, retired)
+    return function(context)
+      local quantize = local_value("S").lib.quantize
+      params:set("quantize_actions", BAR)
+      run_to_beat(context, 1.5)
+      if waits then quantize.schedule(KEY, probe(context), "probe") end
+      if retired then
+        near_the_bar(context)
+        quantize.cancel(KEY)
+      end
+      context.runs = 0
+    end
+  end
+
+  local function key_state_of()
+    local quantize = local_value("S").lib.quantize
+    if quantize.waiting(KEY) then return "waiting" end
+    return next(quantize.retired) ~= nil and "retired" or "idle"
+  end
+
+  -- Past the bar: the action ran `runs` times in all and nothing is left
+  local function after_the_bar(runs)
+    return function(context)
+      local quantize = local_value("S").lib.quantize
+      run_to_beat(context, (math.floor(clock.get_beats() / 4) + 1) * 4 + 0.02)
+      assert_equal(context.runs, runs, "the action's runs, past the bar")
+      assert_true(not quantize.waiting(KEY) and next(quantize.retired) == nil, "nothing waits and no clock is left")
+      local errors = context.clock.take_errors()
+      assert_equal(#errors, 0, "no resume reaches a coroutine norns no longer has")
+    end
+  end
+
+  h.transition_table({
+    name = "quantize",
+    notes = {"docs/notes/lua/quantize.md", "quantize"},
+    states = {idle = key_state(), waiting = key_state(true), retired = key_state(true, true)},
+    events = {
+      ["schedule"] = function(context) local_value("S").lib.quantize.schedule(KEY, probe(context), "probe") end,
+      ["schedule, off"] = function(context)
+        params:set("quantize_actions", OFF)
+        local_value("S").lib.quantize.schedule(KEY, probe(context))
+      end,
+      ["cancel"] = function() local_value("S").lib.quantize.cancel(KEY) end,
+      ["cancel near the bar"] = function(context)
+        near_the_bar(context)
+        local_value("S").lib.quantize.cancel(KEY)
+      end,
+      ["the bar"] = function(context) run_to_beat(context, (math.floor(clock.get_beats() / 4) + 1) * 4 + 0.02) end,
+      ["cleanup"] = function() cleanup() end,
+    },
+    state_of = key_state_of,
+    rows = {
+      {"idle", "schedule", "waiting", check = after_the_bar(1)},
+      {"idle", "schedule, off", "idle", check = after_the_bar(1)},
+      {"idle", "cancel", "idle", check = after_the_bar(0)},
+      {"idle", "cancel near the bar", "idle", check = after_the_bar(0)},
+      {"idle", "the bar", "idle", check = after_the_bar(0)},
+      {"idle", "cleanup", "idle", check = after_the_bar(0)},
+      {"waiting", "schedule", "waiting", check = after_the_bar(1)},
+      {"waiting", "schedule, off", "idle", check = after_the_bar(1)},
+      {"waiting", "cancel", "idle", check = after_the_bar(0)},
+      {"waiting", "cancel near the bar", "retired", check = after_the_bar(0)},
+      {"waiting", "the bar", "idle", check = function(context)
+        assert_equal(context.runs, 1, "the action ran at the bar")
+        after_the_bar(1)(context)
+      end},
+      {"waiting", "cleanup", "idle", check = after_the_bar(0)},
+      {"retired", "schedule", "waiting", check = after_the_bar(1)},
+      {"retired", "schedule, off", "retired", check = after_the_bar(1)},
+      {"retired", "cancel", "retired", check = after_the_bar(0)},
+      {"retired", "cancel near the bar", "retired", check = after_the_bar(0)},
+      {"retired", "the bar", "idle", check = after_the_bar(0)},
+      {"retired", "cleanup", "idle", check = after_the_bar(0)},
+    },
+  })
+end
+
 end

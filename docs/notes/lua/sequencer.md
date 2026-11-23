@@ -37,12 +37,80 @@
 
 ## Machines
 
+### pattern clock
+- **State:** `S.pattern_playing`, the transport's `S.pattern_clock` and the voices' `S.pattern_clocks[v]` (the running clocks' ids; nil while stopped), and a start the play key left waiting (`S.lib.quantize.waiting("patterns")`): `stopped`, `armed` or `playing`. No accessor names it yet.
+- **Invariant:** `pattern clock`: playing exactly while the transport's and every voice's clock is recorded, each running and not retired; every retired clock still runs.
+- **Test:** `test/unit/sequencer_test.lua`: "pattern clock: stopped + play key" (one test a row: `quantize_actions` on bar, the MIDI clock followed), and "an error in a step stops the pattern clock and shows it stopped (#243)".
+
+A participant's wait and end (`wait_for`, `end_clock`, `finished`; this file's own code):
+
+```
+running -> waiting ("sync" or "sleep") for a beat on the count (the clock's beats + play.offset)
+waiting -> running at a wake from 1/32 before its beat to under a 16th after it: it plays
+waiting -> waiting at any other wake or a stale reference: the count kept, clock.sleep(0), a new wait
+end_clock -> retired (resume may be posted; at its next wake it ends, playing nothing) or canceled
+```
+
+With `quantize_actions` off the play key starts at once. A step's error stops as the play key does (#243).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `stopped` | `play key` | `armed` | `play at bar` flashes |
+| `stopped` | `the bar` | `stopped` | nothing |
+| `stopped` | `transport start` | `playing` | step 1 at once |
+| `stopped` | `transport stop` | `stopped` | nothing |
+| `stopped` | `cleanup` | `stopped` | nothing |
+| `armed` | `play key` | `stopped` | the start taken back |
+| `armed` | `the bar` | `playing` | step 1 on the bar |
+| `armed` | `transport start` | `playing` | step 1 at once; the start dropped |
+| `armed` | `transport stop` | `stopped` | the start dropped |
+| `armed` | `cleanup` | `stopped` | the start canceled |
+| `playing` | `play key` | `stopped` | at once, never quantized |
+| `playing` | `the bar` | `playing` | the same clocks play on |
+| `playing` | `transport start` | `playing` | every clock retired; step 1 at once |
+| `playing` | `transport stop` | `stopped` | every clock ended |
+| `playing` | `cleanup` | `stopped` | every clock ended |
+
+### step holds
+- **State:** per voice, this file's locals `overrides`, `last_played`, `chords`, `step_regions`, `step_region_to_end`, `step_slices`, `stepping` (a begun step's inputs until its first hit) and `gate_sent`. No accessor names them.
+- **Invariant:** `step holds`: while stopped all but `gate_sent` are empty; `step_region_to_end[v]` implies `step_regions[v]`; `step_slices[v].step` is `last_played[v]`; `gate_sent` holds only voices and lengths `gate_seconds` gives. A stop never empties `gate_sent`: it is the gate length the engine still holds (#639), set while stopped too.
+- **Test:** `test/unit/sequencer_test.lua`: "step holds: the invariant names each hold it forbids".
+
+No table of its own: a first hit sets them (the two machines below); every end is `end_overrides`'s (Must not break, above).
+
+### slice decision
+- **State:** the slices option (`one` stands for one or off), another owner on slot 1 (`held`, its key down), the next step's `notes` (`chord`), and an earlier slice ringing on the own note to its end (`rings`: `M.playing_region` in one shot).
+- **Invariant:** none: every combination is legal; what it leaves is `step holds`'s.
+- **Test:** `test/unit/sequencer_test.lua`: "slice decision: one, plain + first hit" (one test a row: voice 1 on four slices in one shot, step 2 on slice 2).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `one, plain` | `first hit` | `one, plain` | the own region, then the retrigger |
+| `one, chord` | `first hit` | `one, chord` | the region on every note; one retrigger |
+| `one, held` | `first hit` | `one, held` | the slice dropped; one retrigger |
+| `overlap, plain` | `first hit` | `overlap, rings` | the own region, then the retrigger |
+| `overlap, rings` | `first hit` | `overlap, rings` | an extra slot, its start the hit, no retrigger; with no room, the own note's (#744) |
+| `overlap, chord` | `first hit` | `overlap, chord` | the region on every note; one retrigger |
+| `overlap, held` | `first hit` | `overlap, held` | the retrigger, then an extra slot if there is room |
+
+### voice hit
+- **State:** the voice running (`S.voices[v].active`) and gated (`v<i>_seq_gate`).
+- **Invariant:** none: all four are legal; `gate_sent` is `step holds`'s.
+- **Test:** `test/unit/sequencer_test.lua`: "voice hit: stopped, ungated + first hit" (one test a row: voice 3, a step gate of one step).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `stopped, ungated` | `first hit` | `running, ungated` | `start_voice`: its `voiceOn` is the hit |
+| `stopped, gated` | `first hit` | `running, gated` | the start, the step's gate, one retrigger |
+| `running, ungated` | `first hit` | `running, ungated` | one retrigger, nothing else |
+| `running, gated` | `first hit` | `running, gated` | the step's gate if it changed, one retrigger |
+
 ### position and pass
 - **State:** each voice's `play.voices[voice]` (local): `last` (the step taken last, nil at a start), `taken` (the steps taken in the pass), `pass_length`, `heading` (ping-pong's way) and `way` (the direction of the step taken last, 3.9), all set by `start_position` and moved by `take_position` (and `ping_pong_step`); `way` is the pass's own state, not a second record of the param: it is a past value of `v<i>_seq_direction`, which no other field of the pass can give back once the param has changed; the pass number is `S.lib.conditions.pass(voice)`. No accessor names it: the state is the voice's `v<i>_seq_direction` while the patterns play, with `missteps` for a voice whose `v<i>_seq_misstep` is above 0.
 - **Invariant:** none: every combination of the fields is one the next step can take on from (a reverse pass cut mid-pass may stand above its length, ruled to stand in 3.7); the play state's is `pattern clock`'s.
-- **Test:** `test/unit/sequencer_test.lua`: "position and pass: reverse + to forward" (one test a row), and "the pass count moves once a wrap: a 1:2 step plays on every second pass through a direction change".
+- **Test:** `test/unit/sequencer_test.lua`: "position and pass: reverse + to forward" (one test a row), "position and pass: a direction change and a shorter length at every count of steps taken" (the rule's closed forms, counts 1 to 7), and "the pass count moves once a wrap: a 1:2 step plays on every second pass through a direction change".
 
-Each state is voice 1 alone with every step set, playing: `forward` and `reverse` at length 8 after three steps (`1 2 3`, `8 7 6`), `ping-pong` at length 8 after eleven (`1 2 3 4 5 6 7 8 7 6 5`), `missteps` forward at length 6 after five with every step a misstep up (`1 2 3 4 5`). The rule (in `take_position`): a pass still ends by its count of steps taken; at a step whose direction is not `way`, `taken` becomes `last` when the new direction is forward and `pass_length - last + 1` when it is reverse, so the count runs out exactly at the wrap; a change to ping-pong or random counts on. Wave 2 (package 2d) completes the table with the other directions and events.
+Each state is voice 1 alone with every step set, playing: `forward` and `reverse` at length 8 after three steps (`1 2 3`, `8 7 6`), `ping-pong` at length 8 after eleven (`1 2 3 4 5 6 7 8 7 6 5`), `random` at length 8 after three (its draws stubbed, `5 2 7 4 1 8 3 6` in turn), `missteps` forward at length 6 after five with every step a misstep up (`1 2 3 4 5`). The rule (in `take_position`): a pass still ends by its count of steps taken; at a step whose direction is not `way`, `taken` becomes `last` when the new direction is forward and `pass_length - last + 1` when it is reverse, so the count runs out exactly at the wrap; a change to ping-pong or random counts on, ping-pong on its own heading. Every cell is a row.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
@@ -58,6 +126,19 @@ Each state is voice 1 alone with every step set, playing: `forward` and `reverse
 | `missteps` | `length 4` | `missteps` | the length waits: the sixth step wraps by 6 (`6`), the next pass's by 4; known #961: the seventh, a misstep up from 6 at the start of a pass of 4, lands on `3`, neither next to 6 nor the wrap's `1` (the row asserts it until a ruling) |
 | `missteps` | `to forward` | `missteps` | no change: `6`, then pass 2 at `1` |
 | `missteps` | `to reverse` | `missteps` | the count becomes 2 (four steps left to step 1), each step a misstep up: `6 1 2 3`, then pass 2 |
+| `forward` | `to ping-pong` | `ping-pong` | counts on: `4 .. 8`, then pass 2 turns down |
+| `forward` | `to random` | `random` | counts on: five draws, then pass 2 |
+| `reverse` | `to ping-pong` | `ping-pong` | its heading is still up: `7 8`, then pass 2 turns down |
+| `reverse` | `to random` | `random` | counts on: five draws, then pass 2 |
+| `ping-pong` | `to ping-pong` | `ping-pong` | no change: `4 3 2 1`, then pass 3 |
+| `ping-pong` | `to random` | `random` | counts on from 3: five draws, then pass 3 |
+| `random` | `to forward` | `forward` | the count becomes 7: `8`, then pass 2 at `1` |
+| `random` | `to reverse` | `reverse` | the count becomes 2: `6 5 4 3 2 1`, then pass 2 at `8` |
+| `random` | `to ping-pong` | `ping-pong` | up from 7: `8`, then pass 2 turns down |
+| `random` | `to random` | `random` | no change: five draws, then pass 2 |
+| `random` | `length 4` | `random` | three taken, under 4: one draw of 4, then passes of 4 |
+| `missteps` | `to ping-pong` | `missteps` | a misstep's wrap is no turn: the pass never ends (to be filed) |
+| `missteps` | `to random` | `missteps` | counts on: `6`, then pass 2 |
 
 ## Owns
 
@@ -69,7 +150,7 @@ Each state is voice 1 alone with every step set, playing: `forward` and `reverse
   - the `voices` step output; the `steps` scene block; the `seq` voice-param record (eight params per voice); the `strata_seq` group (`add_params`, called by `lib/params_setup.lua`'s `seq` menu record);
   - the transport handlers (a local `transport` table: `start`, `stop`, the handlers found at install and `installed`, true from start step 160 to cleanup);
   - start step 160: the transport handlers installed; cleanup step 90: the patterns stopped, every retired clock canceled and the transport handlers given back;
-  - the `"pattern clock"` invariant.
+  - the `"pattern clock"` and `"step holds"` invariants.
 - Its unit tests: `test/unit/sequencer_test.lua`. The grid keys that edit patterns are in `docs/notes/lua/grid-core.md` (`step_key`) and each layout's notes. The user page is `docs/user/sequencer.md`.
 
 ## Data
@@ -106,14 +187,7 @@ Each state is voice 1 alone with every step set, playing: `forward` and `reverse
 - **The gate**: `gate_seconds(voice, step, hits)` is the step's `gate` (or `v<i>_seq_gate_length`) × the voice's nominal step (`division_beats × beat_seconds_now()`) / hits, clamped to 0.005-120 s; swing never changes it.
 - **Division reset** (`seq_division_reset`, while playing): the transport's next bar (`anchor + 4 m` after its last 16th) becomes the reset beat. A voice whose next tick would pass it waits for the bar instead; one due on the bar starts its position there (`start_position`: its direction's first step, pass 1) with the bar as its new anchor; the transport, at the bar, restarts (`restart_voice`) every voice still on its old anchor (one that was waiting past the bar).
 - **Stop** (`pattern_clock_stop`, also the transport's stop, cleanup step 90 and the error path): every clock ended (`end_clock`), the playheads cleared, the reset and the chain's next link dropped, every override and chord ended, then (when the patterns played) every output's `stop`, and `grid_redraw()`.
-- **States** (the `"pattern clock"` invariant):
-
-  | State | `S.pattern_playing` | `S.pattern_clock`, `S.pattern_clocks[v]` | sounding steps |
-  |-------|---------------------|-------------------|---------------------------|
-  | stopped | false | nil | nil |
-  | playing | true | the running clocks' ids | nil before the first step plays, then the step played last |
-
-  A clock that fails on its first run (which `clock.run` makes at once) leaves its id unrecorded, because `clock.run` re-raises before it returns, and its stop ends the clocks started before it.
+- **States**: the Machines entry `pattern clock`, above. A clock that fails on its first run (which `clock.run` makes at once) leaves its id unrecorded, because `clock.run` re-raises before it returns, and its stop ends the clocks started before it.
 
 ## The chain (design 8.8)
 
