@@ -49,6 +49,15 @@ return function(S)
     set_slot_clock(slot, nil)
   end
 
+  -- The slot's take has ended or been superseded (lib/buffers.lua's
+  -- settle of a replace take, a load, a clear): its clock ends and its
+  -- record goes (#903; a dub's end and a cancel forget it here: before
+  -- 3.9 a superseded take's stayed, hidden only by M.state's gate)
+  function M.end_take(slot)
+    M.cancel_timer(slot)
+    takes[slot] = nil
+  end
+
   -- Run the slot's clock in `role`: the one it held ends first; `seconds`
   -- later it is forgotten and action() runs
   function M.run_slot_clock(slot, role, seconds, action)
@@ -454,9 +463,10 @@ return function(S)
       print("recordState poll not found")
     end
   end)
+  -- (a running take's record stays: no take ends at cleanup, the engine
+  -- finishes or frees it, and the slot still records, #903)
   S.register_cleanup(S.constants.CLEANUP_ORDER.record, function()
     if record_poll then record_poll:stop() end
-    takes = {}
     synced_tempos = {}
   end)
 

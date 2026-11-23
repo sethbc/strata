@@ -13,7 +13,7 @@ local grid_pane, shown_step_editor = h.grid_pane, h.shown_step_editor
 -- on its synth
 local function buffer_voices(context)
   local S = local_value("S")
-  S.buffers[1].seconds = 16; S.buffers[1].loaded = true
+  S.buffers[1].seconds = 16; S.buffers[1].loaded = true; S.lib.samples.bind(1)  -- settled audio is bound
   for voice_idx = 1, 3 do
     params:set("v" .. voice_idx .. "_source", S.constants.SOURCE_SYNTH + 1)
     params:set("v" .. voice_idx .. "_loop_length", 1); params:set("v" .. voice_idx .. "_loop_start", 0)

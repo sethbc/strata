@@ -371,7 +371,7 @@ return function(S)
       populate_all()
       S.current_scene = NUM_SCENES
       S.cursors.scene = NUM_SCENES
-      S.buffers[1].recording = true
+      record_buffer(1)  -- a real take (3.9, #903: a slot records only with one)
     end))
     return states
   end

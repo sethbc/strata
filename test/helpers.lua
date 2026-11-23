@@ -1680,6 +1680,7 @@ local UNIT_FILE_SECONDS = {
   ["arc_pages_test.lua"] = 3,
   ["bookmarks_test.lua"] = 1,
   ["buffers_test.lua"] = 7,
+  ["buffers_slot_test.lua"] = 20,
   ["chance_test.lua"] = 1,
   ["conditions_test.lua"] = 1,
   ["data_files_test.lua"] = 2,

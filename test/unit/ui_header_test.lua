@@ -169,7 +169,7 @@ test("a page's header_status replaces [M], the play mark and REC", function()
   local record = S.registry.pages[S.constants.UI_PAGES.index.SEQ]
   local status = "120 bpm"
   record.header_status = function() return status end
-  params:set("mutation_enabled", 1); S.buffers[2].recording = true; S.current_scene = 8
+  params:set("mutation_enabled", 1); record_buffer(2); S.current_scene = 8
   show_page("SEQ")
   local shown = header_text(context, "120 bpm")
   assert_true(shown, "the status text"); assert_equal(shown.x, 79, "at x 79")

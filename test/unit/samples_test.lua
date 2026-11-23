@@ -738,4 +738,126 @@ test("a synced take takes the clock's tempo", function()
   settle_take(context, 5, 2)
   assert_equal(samples().tempo(5), nil)
 end)
+
+-- 3.9 (#907): the "settings binding" invariant: a slot that holds settled
+-- audio is bound, and a free one is not. Each state is put in through the
+-- binding's own calls, out of turn
+test("the settings binding invariant: settled audio is bound, a free slot is not (#907)", function()
+  local context = load_strata(); finish_startup(context)
+  h.allow_broken_invariants("each line is broken by hand")
+  local function broken() return table.concat(h.check_invariants(), "; ") end
+  settle_load(context, 1, "/tmp/one.wav", 4)
+  assert_equal(broken(), "", "a loaded file holds")
+  samples().unbind(1)
+  assert_equal(broken(), "settings binding: slot 1 holds settled audio (loaded, 4 s) but is not bound")
+  samples().bind(1)
+  assert_equal(broken(), "")
+  clear_buffer(1)
+  assert_equal(broken(), "", "a cleared slot holds")
+  samples().bind(1)
+  assert_equal(broken(), "settings binding: slot 1 is free (empty) but bound")
+end)
+
+
+-- 3.9 (#907): the binding by the slot's events, slot 2: what the slot is
+-- bound to (nothing, its own take's record or its file's), read from the
+-- module's `bound` and `OWN`. Each state is settled through the script and
+-- the engine stub's reports; each event too, its reports in the engine's
+-- order (a dub's length before its "ended", a canceled take's length after
+-- its "canceled")
+local BIND_SLOT = 2
+local function samples_local(name)
+  for index = 1, math.huge do
+    local upvalue_name, value = debug.getupvalue(samples().is_bound, index)
+    if not upvalue_name then break end
+    if upvalue_name == name then return value end
+  end
+  for index = 1, math.huge do
+    local upvalue_name, value = debug.getupvalue(samples().bind, index)
+    if not upvalue_name then return nil end
+    if upvalue_name == name then return value end
+  end
+end
+local function binding_of()
+  local bound = samples_local("bound")[BIND_SLOT]
+  if bound == nil then return "unbound" end
+  if bound == samples_local("OWN") then return "own" end
+  return "file"
+end
+local function bind_load(context) settle_load(context, BIND_SLOT, "/tmp/bind.wav", 4) end
+local function bind_take(context) settle_take(context, BIND_SLOT, 2) end
+h.transition_table({
+  name = "settings binding",
+  notes = {"docs/notes/lua/samples.md", "settings binding"},
+  states = {
+    ["unbound"] = function(context) bind_load(context); clear_buffer(BIND_SLOT) end,
+    ["file"] = bind_load,
+    ["own"] = bind_take,
+  },
+  events = {
+    ["a load settles"] = function(context) settle_load(context, BIND_SLOT, "/tmp/other.wav", 5) end,
+    ["a load settles empty"] = function(context)
+      load_buffer(BIND_SLOT, "/tmp/other.wav")
+      if local_value("S").buffers[BIND_SLOT].awaiting_zero then report(context, BIND_SLOT, 0) end
+      context.set_time(util.time() + 1.5); report(context, BIND_SLOT, 0)
+      assert_equal(local_value("S").lib.buffers.status(BIND_SLOT), "unsettled")
+    end,
+    ["a load fails"] = function(context)
+      local S = local_value("S")
+      load_buffer(BIND_SLOT, "/tmp/missing.wav")
+      context.polls.fire("bufferLoadFailed", (S.buffers[BIND_SLOT].loads_sent * 2) * 8 + BIND_SLOT - 1)
+    end,
+    ["a replace take starts"] = function() record_buffer(BIND_SLOT) end,
+    ["a replace take settles"] = bind_take,
+    ["a dub ends"] = function(context)
+      local S = local_value("S")
+      params:set("record_feedback", 50)
+      record_buffer(BIND_SLOT)
+      local number = S.buffers[BIND_SLOT].records_sent
+      context.polls.fire("recordState", record_state_value(number, 1, BIND_SLOT))
+      report(context, BIND_SLOT, math.max(S.buffers[BIND_SLOT].seconds, 3))   -- max(V, D) (engine row 2)
+      context.polls.fire("recordState", record_state_value(number, 2, BIND_SLOT))
+      params:set("record_feedback", 0)
+    end,
+    ["a synced take is canceled"] = function(context)
+      local S = local_value("S")
+      local seconds = S.buffers[BIND_SLOT].seconds
+      params:set("record_sync", 2); record_buffer(BIND_SLOT); params:set("record_sync", 1)
+      record_buffer(BIND_SLOT)                                     -- K3 while armed
+      context.polls.fire("recordState", record_state_value(S.buffers[BIND_SLOT].records_sent, 3, BIND_SLOT))
+      report(context, BIND_SLOT, seconds)                          -- the slot as it was (engine row 6)
+    end,
+    ["a clear"] = function() clear_buffer(BIND_SLOT) end,
+  },
+  state_of = binding_of,
+  rows = {
+    {"unbound", "a load settles", "file"},
+    {"unbound", "a load settles empty", "unbound"},
+    {"unbound", "a load fails", "unbound"},
+    {"unbound", "a replace take starts", "unbound"},
+    {"unbound", "a replace take settles", "own"},
+    {"unbound", "a dub ends", "own"},
+    {"unbound", "a synced take is canceled", "unbound"},
+    {"unbound", "a clear", "unbound"},
+    {"file", "a load settles", "file", check = function()
+      assert_equal(samples_local("bound")[BIND_SLOT].path, "/tmp/other.wav", "the new file's record")
+    end},
+    {"file", "a load settles empty", "unbound"},
+    {"file", "a load fails", "file"},
+    {"file", "a replace take starts", "unbound"},
+    {"file", "a replace take settles", "own"},
+    {"file", "a dub ends", "own"},
+    {"file", "a synced take is canceled", "file"},
+    {"file", "a clear", "unbound"},
+    {"own", "a load settles", "file"},
+    {"own", "a load settles empty", "unbound"},
+    {"own", "a load fails", "own"},
+    {"own", "a replace take starts", "unbound"},
+    {"own", "a replace take settles", "own"},
+    {"own", "a dub ends", "own"},
+    {"own", "a synced take is canceled", "own"},
+    {"own", "a clear", "unbound"},
+  },
+})
+
 end
