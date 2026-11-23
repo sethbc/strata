@@ -87,6 +87,15 @@ return function(S)
     return math.min(landing, woke)
   end
 
+  -- Whether a started handle's coroutine has gone: clock.threads[id] is
+  -- no live coroutine (canceled outside the helper, or dead), so no wake
+  -- is to come (#962)
+  local function gone(handle)
+    if type(handle.id) ~= "number" or not clock.threads then return false end
+    local thread = clock.threads[handle.id]
+    return type(thread) ~= "thread" or coroutine.status(thread) == "dead"
+  end
+
   -- Whether a handle's body waits outside its handle: it has started (its
   -- id known) and its coroutine (clock.threads[id], as lua/core/clock.lua
   -- keeps it) is suspended though the handle waits on nothing. One that
@@ -157,7 +166,8 @@ return function(S)
 
   -- End a handle's clock (nil, a stopped or an ended one: nothing), never
   -- raising: canceled at once while its wait's end is farther off than the
-  -- margin, else retired (M.retired), to end at its wake. A clock stopped
+  -- margin, else retired (M.retired), to end at its wake. One whose
+  -- coroutine has gone (gone) is neither: no wake is to come. A clock stopped
   -- from its own body's run (from a coroutine it resumed, too) is neither:
   -- its next wait returns false (one whose body raised is ended). One whose
   -- body waits outside its handle (a bare clock.sleep or clock.sync, a
@@ -166,6 +176,7 @@ return function(S)
   function M.stop(handle)
     if type(handle) ~= "table" or handle.stopped or handle.ended then return end
     handle.stopped = true
+    if gone(handle) then return end
     if handle.waiting == nil then
       if not waits_bare(handle) then return end
       M.bare[handle.id] = handle
