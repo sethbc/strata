@@ -620,8 +620,26 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
   -- this install sees leave it: voice v starts on type v (3.8)
   local voice_types = {}
   for voice = 1, spec.num_voices do voice_types[voice] = voice - 1 end
-  -- the tuning set the last valid setTuning began (3.8): {count, period}
+  -- the tuning set the last valid setTuning began (3.8) and its last tone
+  -- has not closed: {count, period, tones (by index + 1), received}
   local tuning_set = nil
+  -- an OSC float's value, float32, as the engine hears an "f" argument:
+  -- string.pack on Lua 5.3, an ffi float on LuaJIT (which has no string.pack)
+  local float32
+  local pack_string, unpack_string = string.pack or false, string.unpack or false
+  if pack_string then
+    float32 = function(value) return (unpack_string("f", pack_string("f", value))) end
+  else
+    local float_box = require("ffi").new("float[1]")
+    float32 = function(value) float_box[0] = value; return tonumber(float_box[0]) end
+  end
+  -- a problem with a float32 value names what Lua sent too, when it differs
+  local function heard(sent, problem)
+    if problem and float32(sent) ~= sent then
+      return string.format("%s (Lua sent %s; the engine hears a float32)", problem, tostring(sent))
+    end
+    return problem
+  end
   local function range(what, value, low, high)
     if value < low or value > high then
       return string.format("%s %s is outside %g..%g", what, tostring(value), low, high)
@@ -734,19 +752,36 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     -- ignored there with one line: setTuning begins a set of count
     -- 1..tuningMaxTones tones a period of tuningMinPeriod..tuningMaxPeriod
     -- cents; setTuningTone gives tone 0..count - 1 of the set begun, its
-    -- cents from 0 to below the period
+    -- cents from 0 to below the period. The engine hears the period and
+    -- the cents as OSC floats, so the stub checks their float32 values
+    -- (#960); the set's last tone checks the set and closes it, as the
+    -- engine's: tone 0 is 0 and each above the last, else it is dropped
     setTuning = function(args)
+      local period = float32(args[2])
       local problem = range("count", args[1], 1, spec.tuning_max_tones)
-        or float_range("period", args[2], spec.tuning_min_period, spec.tuning_max_period)
-      if not problem then tuning_set = {count = args[1], period = args[2]} end
+        or heard(args[2], float_range("period", period, spec.tuning_min_period, spec.tuning_max_period))
+      if not problem then tuning_set = {count = args[1], period = period, tones = {}, received = 0} end
       return problem
     end,
     setTuningTone = function(args)
       if not tuning_set then return "setTuningTone with no set begun (setTuning)" end
-      if args[2] < 0 or args[2] >= tuning_set.period then
-        return string.format("cents %s is outside 0 to below the period %g", tostring(args[2]), tuning_set.period)
+      local cents = float32(args[2])
+      if cents < 0 or cents >= tuning_set.period then
+        return heard(args[2], string.format("cents %s is outside 0 to below the period %g", tostring(cents),
+          tuning_set.period))
       end
-      return range("index", args[1], 0, tuning_set.count - 1)
+      local problem = range("index", args[1], 0, tuning_set.count - 1)
+      if problem then return problem end
+      local tones = tuning_set.tones
+      if tones[args[1] + 1] == nil then tuning_set.received = tuning_set.received + 1 end
+      tones[args[1] + 1] = cents
+      if tuning_set.received < tuning_set.count then return nil end
+      tuning_set = nil
+      local ascending = tones[1] == 0
+      for degree = 2, #tones do ascending = ascending and tones[degree] > tones[degree - 1] end
+      if not ascending then
+        return "the set's tones do not start at 0 and ascend (in float32, as the engine hears them): the tuning stays"
+      end
     end,
     -- 3.4's fast modulation (design §0.3), each index as the engine checks
     -- it, an out-of-range one ignored there: an engine LFO
