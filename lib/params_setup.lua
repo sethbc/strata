@@ -929,6 +929,51 @@ return function(S)
     added[record.name][key] = true
   end
 
+  -- A per-voice param's stored value (#951): a registered voice param's
+  -- S.voices[i].values[key], the type's index (S.lib.types.of) or the
+  -- source; nil for any other param
+  local function voice_stored_value(param_id)
+    local voice_idx, key = tostring(param_id):match("^v(%d+)_(.+)$")
+    local voice = S.voices[tonumber(voice_idx)]
+    if not voice then return nil end
+    if key == "type" then return S.lib.types.of(tonumber(voice_idx)).index end
+    if key == "source" then return voice.source end
+    for _, keys in pairs(added_keys[tonumber(voice_idx)]) do
+      if keys[key] then return voice.values[key] end
+    end
+    return nil
+  end
+
+  -- After a silent PSET read (#951, the controller's rulings 1 and 2), the
+  -- per-voice params end where a read with actions of the file leaves
+  -- them: the read set them without their actions, so each whose stored
+  -- value differs from what the read left goes back silently to its stored
+  -- value, and then each per-voice param that does not hold the read's
+  -- value (put back, or moved by an earlier one's action) is set to it,
+  -- with its action, in param order (a type and a source ahead of their
+  -- voice's other params; one left alone is never set again, since a
+  -- control's set of its own value can land a step of rounding away and
+  -- run its action): the read's own sets, so an action that reads
+  -- another param's stored value (quantize's snap reads the freq, a loop
+  -- start's cut the length) sees what it sees in a read with actions. The
+  -- last hook (this module is included after every other that registers
+  -- one); a read with actions has run every action already
+  S.register_pset_hook({name = "voice_params", read = function(path_base, number, pset_path, silent)
+    if not silent then return end
+    local read = {}
+    for _, param in ipairs(params.params) do
+      local stored = voice_stored_value(param.id)
+      if stored ~= nil then
+        local value = params:get(param.id)
+        read[#read + 1] = {id = param.id, value = value}
+        if stored ~= value then params:set(param.id, stored, true) end
+      end
+    end
+    for _, entry in ipairs(read) do
+      if params:get(entry.id) ~= entry.value then params:set(entry.id, entry.value) end
+    end
+  end})
+
   -- Per record name: how many params its add_first added for the voice
   -- being added (counted with its add's)
   local first_added = {}

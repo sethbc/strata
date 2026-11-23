@@ -783,20 +783,196 @@ test("a PSET line that is missing still means the default (#628)", function()
     if call.args[2] == "voiceMute" then muted[call.args[1] + 1] = call.args[3] end
   end
   for _, voice_idx in ipairs({ 1, 2, 4 }) do assert_equal(muted[voice_idx], 0, "voice " .. voice_idx .. " unmuted") end
-  -- a silent read sets them silently
+  -- a silent read's defaults are set silently; then the per-voice params'
+  -- hook (#951) sends the running voices what a read with actions does
   set_session()
   context.clear_engine_calls()
-  params:read(old_path, true)
-  for id, value in pairs(DEFAULTS_3_4) do assert_near(params:get(id), value, 1e-9, id .. " silently to its default") end
-  for _, call in ipairs(context.calls_named("setGrainParam")) do
-    assert_true(call.args[2] ~= "voiceMute", "a silent read sends no mute")
+  local setup = S.lib.params_setup
+  local real_migrate, sent_in_migrate = setup.migrate_read_pset, nil
+  setup.migrate_read_pset = function(...)
+    real_migrate(...)
+    sent_in_migrate = #context.engine_calls
   end
+  params:read(old_path, true)
+  setup.migrate_read_pset = real_migrate
+  for id, value in pairs(DEFAULTS_3_4) do assert_near(params:get(id), value, 1e-9, id .. " silently to its default") end
+  assert_equal(sent_in_migrate, 0, "the defaults are set silently")
+  muted = {}
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    if call.args[2] == "voiceMute" then muted[call.args[1] + 1] = call.args[3] end
+  end
+  for _, voice_idx in ipairs({ 1, 2, 4 }) do assert_equal(muted[voice_idx], 0, "silent: voice " .. voice_idx .. " unmuted") end
   -- a PSET saved now names every param: it loads as written, defaults left alone
   set_session()
   params:write(new_path, "new")
   for id, value in pairs(DEFAULTS_3_4) do params:set(id, value) end
   params:read(new_path)
   for id, value in pairs(SESSION_3_4) do assert_near(params:get(id), value, 1e-9, id .. " as the PSET saved it") end
+end)
+
+-- #951: a silent PSET read (params:read(n, true), a script's or a mod's)
+-- runs no param action, and add_voice_param's action is the one writer of
+-- S.voices[v].values: after the read, each voice param's stored value is
+-- the one its action would have stored for the value the read left
+test("a silent PSET read leaves no voice param's stored value behind (#951)", function()
+  local context = load_strata({ data_subdir = "pset_silent_values" }); finish_startup(context)
+  local S = local_value("S")
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "silent.pset"
+  params:set("v1_env_loop", 2); params:set("v1_grain_size", 0.37)
+  params:write(path, "silent")
+  params:set("v1_env_loop", 1); params:set("v1_grain_size", 0.1)
+  assert_equal(S.voices[1].values.env_loop, 1, "the session's loop is off before the read")
+  params:read(path, true)
+  assert_equal(params:get("v1_env_loop"), 2, "the read sets the loop param")
+  assert_equal(S.voices[1].values.env_loop, 2, "and the voice stores it")
+  assert_near(S.voices[1].values.grain_size, params:get("v1_grain_size"), 1e-9, "the grain size stored is the param's")
+  assert_near(S.voices[1].values.grain_size, 0.37, 1e-9, "the PSET's grain size")
+end)
+
+-- #951 (the controller's rulings 1 and 2): one PSET read, silent or with
+-- actions, from a session with voices 1-3 running. The PSET is the session
+-- with change() applied; the read starts from the session (a read with
+-- actions of its own PSET). Returns the voices' stored fields (values, type,
+-- source), each per-voice param's value, and the engine calls of the read,
+-- sorted, but scatter's one setScatter (its own hook sends it after a silent
+-- read: lib/scatter.lua). The arp's random draw (an order of random) is
+-- seeded the same before each read
+local function read_once(name, silent, change)
+  local context = load_strata({ data_subdir = "pset_silent_" .. name .. (silent and "_silent" or "_actions") })
+  finish_startup(context)
+  local S = local_value("S")
+  util.make_dir(context.data_dir)
+  for voice_idx = 1, 3 do
+    if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  local session, path = context.data_dir .. "session.pset", context.data_dir .. "changed.pset"
+  params:write(session, "session")
+  change(S)
+  params:write(path, "changed")
+  params:read(session)
+  context.clear_engine_calls()
+  math.randomseed(951)
+  params:read(path, silent)
+  local result = { stored = {}, params = {}, calls = {} }
+  for voice_idx = 1, 7 do
+    local voice = S.voices[voice_idx]
+    result.stored["v" .. voice_idx .. " type"] = voice.name
+    result.stored["v" .. voice_idx .. " source"] = voice.source
+    for key, value in pairs(voice.values) do
+      result.stored["v" .. voice_idx .. " " .. key] = value
+      result.params["v" .. voice_idx .. "_" .. key] = params:get("v" .. voice_idx .. "_" .. key)
+    end
+  end
+  for _, call in ipairs(context.engine_calls) do
+    if call.name ~= "setScatter" then
+      local parts = { call.name }
+      for _, arg in ipairs(call.args) do
+        parts[#parts + 1] = type(arg) == "number" and string.format("%.9g", arg) or tostring(arg)
+      end
+      result.calls[#result.calls + 1] = table.concat(parts, " ")
+    end
+  end
+  table.sort(result.calls)
+  return result, S
+end
+
+-- The two reads' results, field by field and call by call
+local function assert_same_reads(silent, actions, what)
+  for field, value in pairs(actions.stored) do
+    if type(value) == "number" then
+      assert_near(silent.stored[field], value, 1e-9, what .. ": " .. field .. " stored as a read with actions stores it")
+    else
+      assert_equal(silent.stored[field], value, what .. ": " .. field .. " stored as a read with actions stores it")
+    end
+  end
+  local counts, differ = {}, {}
+  for _, call in ipairs(actions.calls) do counts[call] = (counts[call] or 0) + 1 end
+  for _, call in ipairs(silent.calls) do counts[call] = (counts[call] or 0) - 1 end
+  for call, count in pairs(counts) do
+    if count ~= 0 then differ[#differ + 1] = call .. " (" .. (count > 0 and "actions +" or "silent +") .. math.abs(count) .. ")" end
+  end
+  table.sort(differ)
+  assert_equal(table.concat(differ, "\n"), "", what .. ": the running voices are sent what a read with actions sends them")
+end
+
+test("a silent read of a PSET with another type and source ends where a read with actions ends (#951)", function()
+  local function change(S)
+    local folder = S.lib.types.list()[3]
+    params:set("v1_type", folder.index)
+    for index, key in ipairs(folder.param_order) do
+      local param = params:lookup_param("v1_" .. key)
+      params:set(param.id, param.controlspec:map((index % 4 + 1) / 5))
+    end
+    params:set("v2_source", S.constants.SOURCE_SYNTH + 2)
+    params:set("v2_buf_rate", 1.5); params:set("v2_grain_size", 0.3)
+    params:set("v3_env_loop", 2); params:set("v3_mute", 1); params:set("v3_grain_size", 0.2)
+  end
+  local actions = read_once("type", false, change)
+  local silent, S = read_once("type", true, change)
+  assert_equal(silent.stored["v1 type"], S.lib.types.list()[3].key, "voice 1 takes the PSET's type")
+  assert_equal(silent.stored["v2 source"], S.constants.SOURCE_SYNTH + 2, "voice 2 the PSET's source")
+  assert_true(#actions.calls > 0, "a read with actions sends the changes to the running voices")
+  assert_same_reads(silent, actions, "another type and source")
+end)
+
+test("a quantized voice's freq is the PSET's after a silent read (#951)", function()
+  local pset_freq
+  local function change()
+    params:set("v2_quantize", 1)
+    params:set("v2_freq", 46.25)
+    pset_freq = params:get("v2_freq")
+  end
+  local actions = read_once("freq", false, change)
+  local silent = read_once("freq", true, change)
+  assert_near(params:get("v2_freq"), pset_freq, 1e-9, "the PSET's freq, a scale tone")
+  assert_near(silent.stored["v2 freq"], pset_freq, 1e-9, "stored, never the session's freq snapped over it")
+  assert_equal(silent.stored["v2 quantize"], 1, "the voice quantizes")
+  assert_same_reads(silent, actions, "a quantized freq")
+end)
+
+test("a silent read leaves the loop pair as the file has it (#951)", function()
+  local function change(S)
+    params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+    params:set("v1_loop_start", 0.6); params:set("v1_loop_length", 0.35)
+    params:set("v2_source", S.constants.SOURCE_SYNTH + 1)
+    params:set("v2_loop_length", 0.25)
+  end
+  local actions = read_once("loops", false, change)
+  local silent = read_once("loops", true, change)
+  assert_near(silent.stored["v1 loop_start"], 0.6, 1e-9, "voice 1's start as the file has it")
+  assert_near(silent.stored["v1 loop_length"], 0.35, 1e-9, "and its length")
+  assert_near(silent.params.v1_loop_length, 0.35, 1e-9, "the length param too")
+  assert_near(silent.stored["v2 loop_length"], 0.25, 1e-9, "voice 2's length, its start left at 0")
+  assert_same_reads(silent, actions, "the loop pair")
+end)
+
+-- The hook acts only on a silent read: a read with actions runs each
+-- changed per-voice param's action once, and no other's
+test("a read with actions runs no action twice (#951)", function()
+  local context = load_strata({ data_subdir = "pset_silent_once" }); finish_startup(context)
+  local S = local_value("S")
+  util.make_dir(context.data_dir)
+  if not S.voices[1].active then toggle_voice(1) end
+  local session, path = context.data_dir .. "session.pset", context.data_dir .. "changed.pset"
+  params:write(session, "session")
+  local changed = { v1_type = 4, v1_source = 2, v1_env_loop = 2, v1_grain_size = 0.3, v2_mute = 1 }
+  for id, value in pairs(changed) do params:set(id, value) end
+  params:write(path, "changed")
+  params:read(session)
+  local runs = {}
+  for _, param in ipairs(params.params) do
+    local id = tostring(param.id)
+    if id:match("^v%d+_") and param.action then
+      local action = param.action
+      param.action = function(...) runs[id] = (runs[id] or 0) + 1; return action(...) end
+    end
+  end
+  params:read(path)
+  for id in pairs(changed) do assert_equal(runs[id], 1, id .. "'s action runs once") end
+  for id, count in pairs(runs) do
+    assert_true(changed[id] ~= nil or count == 1, id .. " ran " .. count .. " times")
+  end
 end)
 
 -- 3.4's PSET hooks (S.register_pset_hook, design §0.1): the master record
