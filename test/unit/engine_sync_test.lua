@@ -1088,14 +1088,11 @@ test("a base override is a finite number; anything else raises naming the param"
   assert_near(sync.engine_base_value("v1_buf_pos"), 0.7, 1e-9, "and no override is set")
 end)
 
--- The (name, args) of every engine call, one line each
+-- The (name, args) of every engine call, one line each (h.call_line,
+-- the harness's one form of a call: #952)
 local function call_lines(calls)
   local lines = {}
-  for _, call in ipairs(calls) do
-    local args = {}
-    for index, arg in ipairs(call.args) do args[index] = tostring(arg) end
-    lines[#lines + 1] = call.name .. "(" .. table.concat(args, ", ") .. ")"
-  end
+  for _, call in ipairs(calls) do lines[#lines + 1] = h.call_line(call) end
   return table.concat(lines, "\n")
 end
 
@@ -1624,15 +1621,8 @@ test("a start and a voice sync carry the factor", function()
 end)
 
 -- A call as test/fixtures/3.7.0-start-calls.lua writes it: name(args),
--- numbers "%.9g", strings "%q"
-local function start_call_line(call)
-  local parts = {}
-  for index = 1, #call.args do
-    local value = call.args[index]
-    parts[index] = type(value) == "number" and string.format("%.9g", value) or string.format("%q", tostring(value))
-  end
-  return call.name .. "(" .. table.concat(parts, ", ") .. ")"
-end
+-- numbers "%.9g", strings "%q" (h.call_line, #952)
+local start_call_line = h.call_line
 
 -- A start's lines with the run of setVoiceParam after voiceOn and the
 -- hooks' two (attackTime, releaseTime) sorted: 3.7.0 sent that run in a
