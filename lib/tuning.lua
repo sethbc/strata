@@ -281,8 +281,9 @@ return function(S)
   -- bound are taken as the engine hears them (float32; each implies the
   -- doubles' test), so Lua refuses every set the engine would (two tones a
   -- double apart, a last tone a hair under the period, #884). Each test
-  -- names what passes, as the engine's do, so a value that is not a number
-  -- (every comparison with it false) or infinite is refused
+  -- names what passes (as the engine's ascent does; its tone and period
+  -- tests refuse isNaN and abs == inf by name), so a value that is not a
+  -- number (every comparison with it false) or infinite is refused here too
   local function tones_problem(period, tones)
     if #tones < 1 or #tones > TUNING.max_tones then return "count is not 1-" .. TUNING.max_tones end
     if not (period >= TUNING.min_period and period <= TUNING.max_period) then
