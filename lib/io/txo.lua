@@ -36,8 +36,9 @@ return function(S)
   local lines = {}
   -- active[output] = true: the output's envelope is set up on the module
   -- (all three setup lines admitted); TXO.partial: its env_act 1 was
-  -- admitted and a time refused (#871), so it is sent env_act 0 when no
-  -- voice wants it, and its setup again whole at the next sync
+  -- admitted and a time refused, at its setup or at a time change (#871),
+  -- so it is sent env_act 0 when no voice wants it, and its setup again
+  -- whole at the next sync
   local active = {}
 
   local function out_id(voice) return "v" .. voice .. "_out_txo" end
@@ -149,10 +150,14 @@ return function(S)
   end
 
   -- A time changed: only its command, once per output whose envelope is
-  -- set up (a turn of the knob sends a line an output a detent, not three)
+  -- set up (a turn of the knob sends a line an output a detent, not three).
+  -- A refused line leaves the module on the old time, so its output becomes
+  -- TXO.partial and the next sync sends its setup again whole (#871)
   local function send_time(command, value)
     if not leading() then return end
-    for _, output in ipairs(sorted_outputs(active)) do bus().send("txo", command, output, value) end
+    for _, output in ipairs(sorted_outputs(active)) do
+      if bus().send("txo", command, output, value) == false then active[output] = TXO.partial end
+    end
   end
 
   local function route_changed(voice)

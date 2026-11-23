@@ -293,6 +293,26 @@ test("the activation clock stopped as its wake is posted: no clock error, and no
   assert_equal(late.active_routine, nil, "and its clock gone")
 end)
 
+test("an activation clock another host canceled is not stopped again at the deselect", function()
+  -- #870's review (duty 6): nb's base cancels a player's active_routine itself (clock.cancel of
+  -- the id it keeps); deselected just before that clock's wake, the module stops no dead clock,
+  -- so none is kept retired and the clocks invariant holds
+  local context, S, players = started({ { "late", { "note_on", "note_off", "delayed_active" } } })
+  local late = players.late
+  choose(2, "late")
+  local id = late.active_routine
+  context.clock.run_for(S.lib.io_nb.NB.delayed_seconds - S.constants.CLOCKS.sleep_margin / 2)
+  clock.cancel(id)  -- another host's base, as nb's player base's inactive does
+  choose(2, "none")
+  assert_equal(late.is_active, false)
+  assert_equal(S.lib.clocks.retired[id], nil, "no dead clock kept retired")
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "clocks" then assert_equal(record.fn(), nil, "the clocks invariant holds") end
+  end
+  context.clock.run_for(S.lib.io_nb.NB.delayed_seconds)
+  assert_equal(count(late, "delayed_active"), 0)
+end)
+
 test("a player this module activated is deactivated though another host emptied the refcounts", function()
   -- duty 5: nbin's nb:init empties the table after Strata's init
   local _, _, players = started({ { "alpha", ALL }, { "plain", { "note_on", "note_off" } } })
