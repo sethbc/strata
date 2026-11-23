@@ -100,7 +100,7 @@ return function(S)
     else
       local press_owner = pressed[n]
       local released, release_error = true, nil
-      if press_owner == owner and owner.key then released, release_error = pcall(owner.key, n, 0) end
+      if press_owner == owner and owner.key then released, release_error = xpcall(owner.key, with_traceback, n, 0) end
       pressed[n], pressed_at[n] = nil, nil
       if not released then error(release_error, 0) end
     end

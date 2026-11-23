@@ -325,7 +325,7 @@ function key(n, z)
     if press_page == S.ui_page then
       local release = record.key_release
       if alt_press then release = record.alt_key_release end
-      if release then released, release_error = pcall(release, n) end
+      if release then released, release_error = xpcall(release, with_traceback, n) end
     end
     -- forgotten even when the release raised, which is then raised again
     S.key_press_page[n] = nil
