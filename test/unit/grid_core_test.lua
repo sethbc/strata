@@ -1473,6 +1473,18 @@ end)
 
 -- 3.9 (#930): the "grid keys" invariant holds the step keys and the step
 -- editor's key; each test breaks one line of it on purpose
+-- The upvalue `name` of fn (a core local fn reads), for a test that breaks
+-- a table of the core no field of S reaches
+local function upvalue_of(fn, name)
+  local index = 1
+  while true do
+    local upvalue_name, value = debug.getupvalue(fn, index)
+    if upvalue_name == nil then error("no upvalue " .. name) end
+    if upvalue_name == name then return value end
+    index = index + 1
+  end
+end
+
 local function grid_keys_broken()
   local found = {}
   for _, broken in ipairs(h.check_invariants()) do
@@ -1503,9 +1515,20 @@ test("the grid keys invariant fails for a step editor key that is not a held, co
   h.show_page("MAIN"); key(2, 1); key(2, 0)  -- K2 closes it on the screen; its key stays the editor's
   assert_equal(shown_step_editor(), nil, "closed on the screen")
   assert_equal(grid_keys_broken(), "", "a closed editor's key, held and consumed, breaks nothing")
-  h.allow_broken_invariants("the step editor's key's held mark is taken away")
+  h.allow_broken_invariants("the step editor's key's held mark, consumed mark and held step are each taken away")
+  local pressed_at = S.grid_held[1][5][3]
   S.grid_held[1][5][3] = nil
   assert_equal(grid_keys_broken(), "grid keys: the step editor's key, grid 1 key 5,3, is not held")
+  S.grid_held[1][5][3] = pressed_at
+  assert_equal(grid_keys_broken(), "", "its held mark back, nothing is broken")
+  -- the core's own tables, reached through the functions that read them
+  local consumed_keys = upvalue_of(grid_core().consumed, "consumed_keys")
+  local step_keys = upvalue_of(grid_core().step_key, "step_keys")
+  consumed_keys[1][5][3] = nil
+  assert_equal(grid_keys_broken(), "grid keys: the step editor's key, grid 1 key 5,3, is not consumed")
+  consumed_keys[1][5][3] = true
+  step_keys[1][5][3].level_key = true
+  assert_equal(grid_keys_broken(), "grid keys: the step editor's key, grid 1 key 5,3, is no held step")
 end)
 
 test("the grid keys invariant fails for an open step editor with no held, consumed step key on its port", function()
