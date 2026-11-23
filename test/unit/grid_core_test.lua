@@ -1309,6 +1309,52 @@ test("cleanup puts a turned grid back to rotation 0 and keeps the setting", func
   assert_equal(lit, 0, "and the grid is dark")
 end)
 
+-- 3.9 (#870): the hold clocks go through the clock helper, so a release,
+-- a page change or an unplug that falls after a hold's wake is posted
+-- never cancels a clock whose resume is on its way, and the hold's
+-- function does not run
+test("a grid hold stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context = load_strata(); finish_startup(context)
+  local probe = h.probe_grid_page(PAGES().fx, {hold = 0.5})
+  -- the hold clock the last press armed: the newest 0.5 s sleep
+  local function hold_clock()
+    for index = #context.clock.sleep_log, 1, -1 do
+      local entry = context.clock.sleep_log[index]
+      if entry.mode == "sleep" and entry.amount == 0.5 then return entry.id end
+    end
+  end
+  local function assert_no_clock_error(what)
+    local errors = context.clock.take_errors()
+    assert_equal(#errors, 0, what .. ": no resume reaches a canceled clock" .. (errors[1] and (": " .. errors[1]) or ""))
+  end
+  context.grid.plug(1, 16, 16); tap(context, 1, STRIP.probe_key, STRIP.row)
+  local stops = {
+    {"a release", function() context.grid.press(1, 2, 3, 0) end},
+    {"a page change", function() grid_core().set_page(1, PAGES().patterns) end},
+    {"an unplug", function() context.grid.unplug(1) end},
+  }
+  for _, stop in ipairs(stops) do
+    local where = stop[1]
+    if not local_value("S").grids[1] then context.grid.plug(1, 16, 16) end
+    if grid_core().page(1) ~= PAGES().fx then tap(context, 1, STRIP.probe_key, STRIP.row) end
+    context.grid.press(1, 2, 3, 1)
+    assert_true(grid_core().hold_pending(1, 2, 3), where .. ": the probe armed its hold")
+    context.clock.advance_until(hold_clock(), stop[2])
+    assert_no_clock_error(where .. " at the hold's wake")
+    assert_true(not grid_core().hold_pending(1, 2, 3), where .. ": no hold pending")
+    context.clock.run_for(1)
+    assert_equal(#probe.fired, 0, where .. ": the hold's function did not run")
+    if grid_core().held(1, 2, 3) then context.grid.press(1, 2, 3, 0) end
+  end
+  -- cleanup's step (170) cancels a pending hold outright
+  context.grid.plug(1, 16, 16); tap(context, 1, STRIP.probe_key, STRIP.row)
+  context.grid.press(1, 2, 3, 1)
+  local id = hold_clock()
+  cleanup()
+  assert_equal(context.clock.threads[id], nil, "cleanup cancels the hold clock")
+  assert_equal(#probe.fired, 0, "and its function never runs")
+end)
+
 -- #323's comment: a rotation made outside Strata (maiden) changes the size
 -- under an attached port with no add or remove; the port starts over
 test("a grid whose size changes under its port starts on page 1 with no held keys", function()

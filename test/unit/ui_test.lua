@@ -673,4 +673,38 @@ test("LFO animates while an LFO runs and SEQ while the patterns play", function(
   S.pattern_playing = false
 end)
 
+-- 3.9 (#870): a flash's clock goes through the clock helper, so a flash
+-- ended or replaced as its own wake is posted never cancels a clock whose
+-- resume is on its way, and the old clock's wake clears nothing
+test("the flash clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local flash = S.lib.ui_flash
+  local function assert_no_clock_error(what)
+    local errors = context.clock.take_errors()
+    assert_equal(#errors, 0, what .. ": no resume reaches a canceled clock" .. (errors[1] and (": " .. errors[1]) or ""))
+  end
+  -- ended (a nil text) at its wake
+  header_flash("a")
+  context.clock.advance_until(flash.slots.header.clock, function() header_flash(nil) end)
+  assert_no_clock_error("a flash ended at its wake")
+  assert_equal(flash.text("header"), nil, "the flash shows no text")
+  assert_equal(flash.slots.header.clock, nil, "and has no clock")
+  -- replaced at its wake: the new text stays its full length
+  header_flash("b")
+  context.clock.advance_until(flash.slots.header.clock, function() header_flash("c") end)
+  assert_no_clock_error("a flash replaced at its wake")
+  assert_equal(flash.text("header"), "c", "the old clock's wake leaves the new flash")
+  assert_true(flash.slots.header.clock ~= nil, "with its own clock")
+  assert_equal(#h.check_invariants(), 0, "every invariant holds")
+  context.clock.run_for(S.constants.HEADER.flash_seconds + 0.01)
+  assert_equal(flash.text("header"), nil, "the new flash ends at its own wake")
+  assert_equal(flash.slots.header.clock, nil)
+  -- every slot's flash ended (cancel_all, which stops) as one wake is posted
+  flash.start("hints", "hint", 1)
+  context.clock.advance_until(flash.slots.hints.clock, function() flash.cancel_all() end)
+  assert_no_clock_error("cancel_all at a wake")
+  assert_equal(flash.text("hints"), nil, "no hints flash shows")
+end)
+
 end
