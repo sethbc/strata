@@ -234,15 +234,22 @@ test("a press on a 256's lower pane ends with the lower pane's page change, not 
   positions.grid_key(1, 1, 13, 16, 1, 2)
   assert_near(params:get("v1_buf_pos"), 0.75, 1e-9, "a jump to cell 13: no stale anchor")
   positions.grid_key(1, 1, 13, 16, 0, 2); positions.grid_key(1, 1, 5, 16, 0, 2)
-  -- a press without a pane is pane 1's: the lower pane's page leaves it alone
+  -- a press without a pane is pane 1's: no still decides here, only the
+  -- pane its hold is kept under, so pane 2's release leaves it and pane
+  -- 1's ends it (and one with no pane ends pane 1's)
   grid_core.set_page(1, pages.positions, 1)
-  positions.strip_key(1, 1, "hold", 1, nil, pane_still(S, 1, 1))
-  grid_core.set_page(1, pages.patterns, 2)
-  context.clock.run_for(0.1)
-  assert_equal(positions.holds_scan(1, "grid:1"), true, "pane 1's hold, with no pane given")
-  grid_core.set_page(1, pages.patterns, 1)
-  context.clock.run_for(0.1)
-  assert_equal(positions.holds_scan(1, "grid:1"), false, "ended by pane 1's page change")
+  positions.strip_key(1, 1, "hold", 1)
+  positions.strip_key(1, 1, "hold", 1, 2)
+  positions.strip_key(1, 1, "hold", 0, 2)
+  assert_equal(positions.holds_scan(1, "grid:1"), true, "pane 2's release leaves the hold pressed with no pane")
+  positions.strip_key(1, 1, "hold", 0, 1)
+  assert_equal(positions.holds_scan(1, "grid:1"), false, "pane 1's release ends it: it was pane 1's")
+  positions.strip_key(1, 1, "hold", 1, 1)
+  positions.strip_key(1, 1, "hold", 1, 2)
+  positions.strip_key(1, 1, "hold", 0)
+  assert_equal(positions.holds_scan(1, "grid:1"), true, "a release with no pane ends pane 1's only")
+  positions.strip_key(1, 1, "hold", 0, 2)
+  assert_equal(positions.holds_scan(1, "grid:1"), false, "and pane 2's its own")
 end)
 
 -- #851, then #865: a press record keeps its pane and its still, so whether
@@ -677,10 +684,16 @@ test("the glide's clock stopped as its wake is posted: no clock error, and nothi
     assert_true(S.lib.positions.scrub_rate(1) > 0.05, "gliding")
     assert_equal(#started, 1, "one glide clock, on the helper")
     local handle = started[1]
+    -- the calls cleared before the wake, so a body that ran on at it (its
+    -- wait's false ignored: one more decay step, one more scrubRate 0) shows
+    context.clear_engine_calls()
     context.clock.advance_until(handle.id, function() S.lib.positions.jump(1, 0.5) end)
     assert_equal(#context.clock.take_errors(), 0, "no clock error at the wake")
     assert_equal(clock.threads[handle.id], nil, "the clock ended at its wake")
     assert_equal(clocks.retired[handle.id], nil, "and the helper forgot it")
+    local sent = grain_calls(context, "scrubRate")
+    assert_equal(#sent, 1, "one scrubRate, the jump's: the woken body did nothing")
+    assert_equal(sent[1].value, 0, "the jump's 0")
     context.clear_engine_calls()
     context.clock.run_for(2)
     assert_equal(#grain_calls(context, "scrubRate"), 0, "nothing more is sent")

@@ -455,6 +455,9 @@ return function(S)
     entry.token = token
     local held = record_of(port).slices
     held[voice_idx] = held[voice_idx] or {}
+    -- an entry already here (a re-press whose old release was lost, its
+    -- still true again through the new press's role) is overwritten: the
+    -- same slice under the same note key, ended by this press's release
     held[voice_idx][cell] = entry
   end
 

@@ -617,6 +617,24 @@ test("a slice key released under the chooser stops", function()
   assert_equal(#doubles.offs, 2, "the next key's slice plays and ends at its own release, nothing more")
 end)
 
+-- The real pane's still at a page change (a direct call's is a stand-in,
+-- test/unit/positions_test.lua): the core clears the key's role, so the
+-- held slice ends at the next tick and its late release ends nothing more
+test("a held slice key ends when its pane shows another page, and its late release ends nothing more", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local doubles = slice_double(S, 2, 20)
+    local first = shown_columns(pane)
+    pane.press(first + 4, 2, 1)
+    assert_equal(doubles.plays[1].n, first + 4, arrangement .. ": the key plays its slice")
+    pane.show(S.constants.GRID_PAGES.patterns)
+    context.clock.run_for(0.1)            -- a playhead tick
+    assert_equal(#doubles.offs, 1, arrangement .. ": the page change ends it")
+    assert_equal(doubles.offs[1].key, doubles.plays[1].note.key, arrangement .. ": the slice it played")
+    pane.press(first + 4, 2, 0)           -- the release, on another page now
+    assert_equal(#doubles.offs, 1, arrangement .. ": and its late release ends nothing more")
+  end)
+end)
+
 test("a 256 with both panes on positions keeps each pane's keys apart", function()
   local context = load_strata(); finish_startup(context)
   local S = buffer_voices(context)
