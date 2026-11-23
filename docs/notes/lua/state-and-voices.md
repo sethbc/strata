@@ -182,6 +182,7 @@ The sequence (`CLEANUP_ORDER` in `lib/constants.lua`):
 | 160 | `engine.voiceOff` for every running voice, each followed by the voice-stop hooks (3.5) (it reaches no handler on norns: the engine is already freed, above) | `lib/engine_sync.lua` |
 | 170 | clear every grid vport's key handler, put its grid back to rotation 0 and leave it dark, set `grid.add`/`grid.remove` to no-ops | `lib/grid/core.lua` |
 | 180 | clear the arc vport's handlers, leave the arc dark, set `arc.add`/`arc.remove` to no-ops | `lib/arc/core.lua` |
+| 190 | cancel every clock the clock helper retired that still waits for its wake (`CLEANUP_ORDER.clocks`, last of all: step 170 ends the grids' hold clocks; 3.9) | `lib/clocks.lua` |
 
 Every order in `CLEANUP_ORDER` has its step, checked as for the start steps above.
 
@@ -189,7 +190,7 @@ Adding a step:
 - A new resource gets its stop in the module that starts it, at a free order at its place in this sequence (the orders are spaced by 10).
 - The test "cleanup runs every registered step in today's order" (`test/unit/structure_test.lua`) logs each step's observable effect. It fails if a step moves, merges with another or is missing. Add the new step's effect to its `CLEANUP_STEPS` list.
 
-Clocks: cancel the running one before starting its replacement.
+Clocks: cancel the running one before starting its replacement. A clock that can be stopped near its wake runs on the clock helper (`S.lib.clocks`, `docs/notes/lua/clocks.md`), whose `stop` never cancels one whose resume may be posted (#626).
 
 ```lua
 if S.scene_transition_clock then
@@ -253,6 +254,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 |--------|--------------|-------|------------|
 | `strata.lua` (entry points) | | `docs/notes/lua/state-and-voices.md` | strata_test.lua, structure_test.lua |
 | `lib/state.lua`, `lib/constants.lua` | S itself, S.constants | `docs/notes/lua/state-and-voices.md` | structure_test.lua, registries_test.lua |
+| `lib/clocks.lua` | `clocks` | `docs/notes/lua/clocks.md` | clocks_test.lua |
 | `lib/voices.lua` | `voices` | `docs/notes/lua/state-and-voices.md` | voices_test.lua |
 | `lib/grain.lua` | `grain` | `docs/notes/lua/grain.md` | grain_test.lua |
 | `lib/types.lua` | `types` | `docs/notes/lua/types.md` | types_test.lua |

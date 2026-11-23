@@ -125,6 +125,76 @@ test("no data file is written in place: strata.lua and lib/ never use tab.save (
   assert_equal(#found, 0, table.concat(found, "; "))
 end)
 
+-- 3.9 (design section 3, #870): a clock is stopped through the clock
+-- helper (lib/clocks.lua, S.lib.clocks.stop or cancel), which never cancels
+-- one whose resume may be posted (#626). These files still call
+-- clock.cancel themselves, as often as listed; each moves onto the helper
+-- in the package that owns it and removes its line, so the list only
+-- shrinks
+local BARE_CANCEL_FILES = {
+  ["lib/buffers.lua"] = 2, ["lib/gestures.lua"] = 3, ["lib/grid/core.lua"] = 2,
+  ["lib/io/controllers.lua"] = 1, ["lib/io/crow.lua"] = 2, ["lib/io/nb.lua"] = 1, ["lib/io/osc.lua"] = 1,
+  ["lib/io/remote.lua"] = 2, ["lib/macros.lua"] = 4, ["lib/matrix.lua"] = 2, ["lib/morph.lua"] = 1,
+  ["lib/mutation.lua"] = 2, ["lib/positions.lua"] = 1, ["lib/record.lua"] = 1, ["lib/scenes.lua"] = 3,
+  ["lib/slices.lua"] = 1, ["lib/types.lua"] = 1, ["lib/ui/flash.lua"] = 1, ["lib/ui/zones.lua"] = 2,
+}
+-- The files that keep their clock.cancel: the first nine cancel a clock
+-- only as the script starts or ends, when no resume can go astray; the
+-- sequencer and the quantized actions keep their own rule, ruled on and
+-- tested apart (plan ruling 2)
+local EDGE_CANCEL_FILES = {
+  ["strata.lua"] = 1, ["lib/ui/frame.lua"] = 1, ["lib/lfos.lua"] = 2, ["lib/engine_sync.lua"] = 1,
+  ["lib/playheads.lua"] = 1, ["lib/waveforms.lua"] = 1, ["lib/samples.lua"] = 1, ["lib/side_files.lua"] = 1,
+  ["lib/factory.lua"] = 1,
+  ["lib/sequencer.lua"] = 2, ["lib/quantize.lua"] = 3,
+}
+local CLOCK_HELPER_FILE = "lib/clocks.lua"
+
+-- Every mention of clock.cancel in the script's Lua files (a call, or the
+-- function passed on), counted by file, comments and strings left out
+local function clock_cancel_counts(sources)
+  local counts = {}
+  for _, source in ipairs(sources) do
+    local sanitized = sync_check.sanitize_lua(source.text)
+    for _ in sanitized:gmatch("%f[%w_]clock%s*%.%s*cancel%f[^%w_]") do
+      counts[source.path] = (counts[source.path] or 0) + 1
+    end
+  end
+  return counts
+end
+
+test("clock.cancel is called only in lib/clocks.lua and the listed files, as often as listed", function()
+  -- the scanner itself
+  local counts = clock_cancel_counts({ { path = "lib/x.lua", text = table.concat({
+    "clock.cancel(id)",
+    "local cancel = clock . cancel",
+    '-- clock.cancel(id) in a comment; "clock.cancel(x)" in a string',
+    "S.lib.clocks.cancel(handle); myclock.cancel(x); clock.canceled = 1",
+  }, "\n") } })
+  assert_equal(counts["lib/x.lua"], 2, "a call and a reference are found; comments, strings and other names are not")
+  local problems = {}
+  for path in pairs(BARE_CANCEL_FILES) do
+    if EDGE_CANCEL_FILES[path] then table.insert(problems, path .. " is in both lists") end
+  end
+  counts = clock_cancel_counts(read_lua_sources())
+  for path, count in pairs(counts) do
+    local listed = BARE_CANCEL_FILES[path] or EDGE_CANCEL_FILES[path]
+    if path ~= CLOCK_HELPER_FILE and listed ~= count then
+      table.insert(problems, path .. " calls clock.cancel " .. count .. " times, listed " .. tostring(listed))
+    end
+  end
+  for _, list in ipairs({ BARE_CANCEL_FILES, EDGE_CANCEL_FILES }) do
+    for path, listed in pairs(list) do
+      if not counts[path] then
+        table.insert(problems, path .. " is listed for " .. listed .. " but calls clock.cancel no more: remove its line")
+      end
+    end
+  end
+  assert_true((counts[CLOCK_HELPER_FILE] or 0) > 0, CLOCK_HELPER_FILE .. " cancels the clocks it ends")
+  table.sort(problems)
+  assert_equal(#problems, 0, table.concat(problems, "\n"))
+end)
+
 -- 3.7 (design decision 21): a data file is loaded from its format floor
 -- (SCENE_FORMAT_FLOOR, BUFFER_FORMAT_FLOOR) to the build's version, and set
 -- aside otherwise; no code converts a particular older version. The scan
@@ -808,8 +878,9 @@ end)
 
 -- cleanup()'s steps, in the order cleanup has always run them: the files
 -- are saved before anything stops, the LFOs give their destinations back
--- before the voices go off, MIDI is detached before the voices go off, and
--- the controllers go dark last
+-- before the voices go off, MIDI is detached before the voices go off, the
+-- controllers go dark, and the clock helper's retired clocks are canceled
+-- last (3.9, #870: the grids' own step ends their hold clocks late)
 local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros saved", "sequences saved",
   "gestures saved",
   "matrix saved", "samples saved", "rig saved",
@@ -821,7 +892,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "engine budget",
   "buffer start reload", "buffer polls and timers", "slices poll", "record poll", "freeze poll", "input meter", "voice picker", "scale editor", "flashes", "targets ended",
   "midi out", "ii stopped", "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler",
-  "midi ports", "voices off", "grids dark", "arc dark" }
+  "midi ports", "voices off", "grids dark", "arc dark", "clocks" }
 
 test("cleanup runs every registered step in today's order", function()
   local context = load_strata()  -- init's start-up clock still waits to start voice 2
@@ -863,6 +934,9 @@ test("cleanup runs every registered step in today's order", function()
   S.lib.io_rig.set("remote_grid_port", 3)
   context.midi.plug(3, "iii grid")
   for cc, value in ipairs({ 16, 8, 1 }) do context.midi.send(3, { type = "cc", cc = cc - 1, val = value, ch = 1 }) end
+  -- 3.9 (#870): a clock of the helper stopped near its wake, retired until it
+  local retired = S.lib.clocks.run(function(handle) handle.sleep(S.constants.CLOCKS.sleep_margin / 2) end)
+  S.lib.clocks.stop(retired)
 
   -- the steps' observable effects, each logged once in a row; "|" marks
   -- the start of each registered step
@@ -901,7 +975,8 @@ test("cleanup runs every registered step in today's order", function()
     { "matrix learn", S.matrix_learn_clock },
     { "remote", S.lib.io_remote.clock_id() },
     { "controllers", S.lib.io_controllers.clock_id() },
-    { "lfos", S.lfo_clock } }
+    { "lfos", S.lfo_clock },
+    { "clocks", retired.id } }
   for voice_idx = 1, S.constants.NUM_VOICES do table.insert(clocks, { "pattern clock", S.pattern_clocks[voice_idx] }) end
   local clock_steps = {}
   for _, entry in ipairs(clocks) do
