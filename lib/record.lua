@@ -184,15 +184,16 @@ return function(S)
   end
 
   -- A playable recording's end, from its "ended" report or its fallback:
-  -- the slot is take <n> on the scratch path, loaded when its last known
-  -- length is above 0
-  local function end_playable(slot)
+  -- the slot is take <n> on the scratch path (with `unsaved`, on none: an
+  -- unsaved take, which plays, is not restored and can be saved), loaded
+  -- when its last known length is above 0
+  local function end_playable(slot, unsaved)
     local buffer = S.buffers[slot]
     M.cancel_timer(slot)
     takes[slot] = nil
     buffer.recording = false
     buffer.name = "take " .. slot
-    buffer.path = scratch_take_path(slot)
+    buffer.path = (not unsaved) and scratch_take_path(slot) or nil
     -- the take is the scratch file at the server rate, read from its start
     buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
     buffer.loaded = buffer.seconds > 0
@@ -232,16 +233,18 @@ return function(S)
   -- BUFFER_SETTLE.fallback_seconds later, with no "ended" or "canceled"
   -- report, it ends as a recording that ran, from the last known length,
   -- so K3 is never answered by stopRecord alone for good. One stopped
-  -- while still armed too: Lua cannot know whether it started (a synced
-  -- one records at its beat while the poll is missing), so the slot is
-  -- taken as recorded into, never left named for a file whose audio may
-  -- have changed (that would lose the dub at the next load; the other way
-  -- costs a save). A K3 while the fallback waits leaves it as it is
+  -- while still armed is taken as recorded into too, never left named for
+  -- a file whose audio may have changed (Lua cannot know whether it
+  -- started: a synced one records at its beat while the poll is missing),
+  -- but as an unsaved take, on no path: a cancel writes no take, and the
+  -- scratch file may hold an older one, which a restore would bring back
+  -- under this name. Either way the cost is at most a save. A K3 while
+  -- the fallback waits leaves it as it is
   start_playable_fallback = function(slot, take)
     if M.clock_role(slot) == "fallback" then return end
     M.run_slot_clock(slot, "fallback", BUFFER_SETTLE.fallback_seconds, function()
       if takes[slot] ~= take or not S.buffers[slot].recording then return end
-      end_playable(slot)
+      end_playable(slot, take.phase == "armed")
       S.lib.buffers.display_changed()
     end)
   end

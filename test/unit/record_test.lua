@@ -689,19 +689,40 @@ test("a playable recording with no recordState settles after the fallback", func
   assert_equal(buffers[1].name, "take 1")
   context.clear_engine_calls(); record_buffer(1)
   assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records again")
-  -- a playable recording stopped while armed, with no report: Lua cannot
-  -- know whether it started (a synced one records at its beat with the
-  -- poll missing), so the slot settles as recorded into, never as the file
-  record_buffer(1)
-  params:set("record_threshold", 3)
+  -- (one stopped while still armed: the next test)
+end)
+
+-- #904: a playable recording stopped while still armed, with no report:
+-- Lua cannot know whether it started (a synced one records at its beat
+-- while the poll is missing) nor whether a take was written (a cancel
+-- writes none, and the scratch file may hold an older take), so the slot
+-- settles as recorded into with no path, as an unsaved take: it plays, is
+-- not restored, and a save keeps it
+test("an armed dub's fallback settles as an unsaved take", function()
+  local subdir = "armed_dub_fallback_" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  -- an older take of slot 2 on the card, which a restore of the scratch path would bring back
+  util.make_dir(_path.audio .. "strata/scratch/")
+  h.write_text(scratch_take_path(2), "an older take")
+  params:set("record_feedback", 50); params:set("record_threshold", 3)
   load_buffer(2, "/tmp/b.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 6))
   record_buffer(2); assert_equal(S.lib.record.state(2).phase, "armed")
   record_buffer(2)
-  context.clock.run_for(S.lib.buffers.BUFFER_SETTLE.fallback_seconds + 0.1)
-  assert_equal(S.lib.buffers.status(2), "loaded", "settled from the last known length")
+  context.clock.run_for(S.lib.buffers.BUFFER_SETTLE.fallback_seconds + 0.2)
+  assert_equal(S.lib.buffers.status(2), "loaded", "it plays, from the last known length")
   assert_equal(buffers[2].name, "take 2", "no longer named for its file")
-  assert_equal(buffers[2].path, scratch_take_path(2), "nor on its path")
+  assert_equal(buffers[2].path, nil, "and on no path")
   assert_true(not buffers[2].recording)
+  local saved = S.lib.data_files.read(S.lib.scenes.scene_data_dir .. "buffers.data")
+  assert_equal(saved.paths[2], "", "buffers.data remembers no path for it")
+  -- a start afterward restores nothing into it
+  cleanup()
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  for _, call in ipairs(context.calls_named("loadBuffer")) do
+    assert_true(call.args[1] ~= 1, "nothing loads into slot 2: " .. tostring(call.args[2]))
+  end
+  assert_equal(local_value("S").lib.buffers.status(2), "empty", "slot 2 starts empty")
 end)
 
 -- #904: a dub with a length (loop off) gets its fallback when that length
