@@ -684,10 +684,17 @@ test("the flash clock stopped as its wake is posted: no clock error, and nothing
     local errors = context.clock.take_errors()
     assert_equal(#errors, 0, what .. ": no resume reaches a canceled clock" .. (errors[1] and (": " .. errors[1]) or ""))
   end
-  -- ended (a nil text) at its wake
+  -- ended (a nil text) at its wake: the old clock's wake asks for no
+  -- redraw (a body that ran on would clear the slot and ask for one)
   header_flash("a")
-  context.clock.advance_until(flash.slots.header.clock, function() header_flash(nil) end)
+  local real_request_redraw, wake_redraws = request_redraw, 0
+  context.clock.advance_until(flash.slots.header.clock, function()
+    header_flash(nil)
+    request_redraw = function(...) wake_redraws = wake_redraws + 1; return real_request_redraw(...) end
+  end)
+  request_redraw = real_request_redraw
   assert_no_clock_error("a flash ended at its wake")
+  assert_equal(wake_redraws, 0, "the ended flash's wake does nothing: no redraw asked for")
   assert_equal(flash.text("header"), nil, "the flash shows no text")
   assert_equal(flash.slots.header.clock, nil, "and has no clock")
   -- replaced at its wake: the new text stays its full length
@@ -699,7 +706,7 @@ test("the flash clock stopped as its wake is posted: no clock error, and nothing
   assert_equal(#h.check_invariants(), 0, "every invariant holds")
   context.clock.run_for(S.constants.HEADER.flash_seconds + 0.01)
   assert_equal(flash.text("header"), nil, "the new flash ends at its own wake")
-  assert_equal(flash.slots.header.clock, nil)
+  assert_equal(flash.slots.header.clock, nil, "and its clock is gone")
   -- every slot's flash ended (cancel_all, which stops) as one wake is posted
   flash.start("hints", "hint", 1)
   context.clock.advance_until(flash.slots.hints.clock, function() flash.cancel_all() end)

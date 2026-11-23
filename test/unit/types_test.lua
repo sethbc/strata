@@ -437,7 +437,15 @@ test("the type settle stopped as its wake is posted: no clock error, and nothing
   local id = S.type_settle_clocks[1]
   assert_equal(type(id), "number", "the settle clock runs")
   context.clear_engine_calls()
-  context.clock.advance_until(id, function() S.lib.types.cancel(1) end)
+  -- a body that ran on after the stop would flush (with nothing pending, a
+  -- flush changes nothing else): count the flushes its wake makes
+  local real_flush, wake_flushes = S.lib.types.flush, 0
+  context.clock.advance_until(id, function()
+    S.lib.types.cancel(1)
+    S.lib.types.flush = function(...) wake_flushes = wake_flushes + 1; return real_flush(...) end
+  end)
+  S.lib.types.flush = real_flush
+  assert_equal(wake_flushes, 0, "the canceled settle's wake does nothing: no flush")
   local errors = context.clock.take_errors()
   assert_equal(#errors, 0, "no resume reaches a canceled clock" .. (errors[1] and (": " .. errors[1]) or ""))
   assert_equal(S.lib.types.pending(1), nil, "nothing pending")

@@ -266,7 +266,7 @@ return function(S)
   end
 
   -- End the step gesture of the key at (x, y) on the port: its pending
-  -- editor hold is canceled, an editor it opened closes, and it is no
+  -- editor hold is stopped, an editor it opened closes, and it is no
   -- longer a step key (its release toggles nothing)
   local function drop_step_key(port, x, y)
     if key_value(step_keys, port, x, y) == nil then return end
@@ -311,7 +311,7 @@ return function(S)
   -- side or half change, the 64's chooser opening): for each key the
   -- layout puts in that pane (pane_at), its step gesture ends (it toggles
   -- nothing at its release, takes no level and closes a step editor it
-  -- opened), its pending hold is canceled and its role forgotten. The keys
+  -- opened), its pending hold is stopped and its role forgotten. The keys
   -- stay held; a strip key (pane_at nil) and the other pane's are never
   -- touched, so fill, a tempo repeat and NV go on
   function M.end_pane_keys(port, pane)
@@ -331,7 +331,7 @@ return function(S)
     each_key(key_roles, function(x, y) set_key_value(key_roles, port, x, y, nil) end)
   end
 
-  -- Forget a port's keys: pending holds (canceled), held, consumed and step
+  -- Forget a port's keys: pending holds (stopped), held, consumed and step
   -- keys (a step editor one of them opened closes), their roles, its layout
   -- state and its panes
   local function forget_port(port)
@@ -409,7 +409,7 @@ return function(S)
   -- held step on this port and toggles nothing yet, unless the voice already
   -- has one: then that step gets this key's level (its position,
   -- 1..positions, along the voice's shown steps), both keys are consumed,
-  -- the held step's pending editor hold is canceled and this key is a
+  -- the held step's pending editor hold is stopped and this key is a
   -- level key for as long as it is down (it never takes a level itself).
   -- A held step toggles at its release (release_step_key, unless consumed);
   -- held GRID_HOLD.step_edit_seconds (on_hold) it opens the step editor,
@@ -441,7 +441,7 @@ return function(S)
   -- randomize, a 256's paste, a scene recall, a chain link) calls it, so a
   -- step held from before never takes a level in the new pattern, never
   -- toggles at its release and closes a step editor it opened (its pending
-  -- hold is canceled). The keys stay held; the next step key of the voice
+  -- hold is stopped). The keys stay held; the next step key of the voice
   -- is a held step of its own. Ruling 71: a replacement the open step
   -- editor makes itself (S.lib.pages_seq.step_editor_replacing(): its
   -- euclid and clear rows, its randomize and undo) keeps the key that
@@ -897,7 +897,7 @@ return function(S)
   end
 
   -- Presses and releases. A press is held (S.grid_held) before the layout
-  -- sees it. A release cancels the key's hold, reaches the layout unless the
+  -- sees it. A release stops the key's hold, reaches the layout unless the
   -- key was consumed, toggles a held step key's step (release_step_key),
   -- then forgets the key (release_key), also when the layout or the toggle
   -- raised (#620), so no key stays held. Layouts get key(port, x, y, z)
@@ -973,8 +973,14 @@ return function(S)
   -- change). norns' SLEEP runs only cleanup() before the system shuts down,
   -- so a key or a grid plugged meanwhile reaches nothing (#468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()
-    for port = 1, S.MAX_GRID_PORTS do end_holds(port, S.lib.clocks.cancel); forget_port(port) end
-    for _, port in pairs(GRID_PORTS) do end_holds(port, S.lib.clocks.cancel); forget_port(port) end
+    for port = 1, S.MAX_GRID_PORTS do
+      end_holds(port, S.lib.clocks.cancel)
+      forget_port(port)
+    end
+    for _, port in pairs(GRID_PORTS) do
+      end_holds(port, S.lib.clocks.cancel)
+      forget_port(port)
+    end
     for _, grid_port in pairs(S.grids) do
       grid_port.key = nil
       grid_port:rotation(0)
