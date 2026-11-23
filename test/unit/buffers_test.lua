@@ -2654,4 +2654,35 @@ test("the buffer slots invariant: a missing path holds no file, a restore awaits
   assert_equal(broken(), "")
 end)
 
+
+-- 3.9 (2a's review): a failed long load whose undo puts back a state with
+-- no check (an empty slot, a restore's) ends the check's notice clock: no
+-- notice is left on a slot that checks nothing
+test("a checking load that fails ends its notice clock (#903)", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.audio.files["/tmp/long.wav"] = {2, 48000 * 120, 48000}
+  load_buffer(2, "/tmp/long.wav")
+  assert_equal(S.buffers[2].checking_from, 0, "checking, over an empty slot")
+  assert_equal(S.lib.record.clock_role(2), "notice", "its notice waits")
+  context.polls.fire("bufferLoadFailed", load_failed_value(2, 1))
+  assert_equal(S.lib.buffers.status(2), "empty", "the empty slot is back")
+  assert_equal(S.lib.record.clock_role(2), nil, "and no notice is left")
+end)
+
+-- The "buffer slots" invariant: a notice clock runs only while the slot
+-- checks a load
+test("the buffer slots invariant: a notice clock only while a load is checked (#903)", function()
+  local context = load_strata(); finish_startup(context)
+  h.allow_broken_invariants("the line is broken by hand")
+  local S = local_value("S")
+  local function broken() return table.concat(h.check_invariants(), "; ") end
+  S.lib.record.run_slot_clock(4, "notice", 30, function() end)
+  assert_equal(broken(), "buffer slots: slot 4 runs a check's notice clock but checks no load")
+  S.lib.record.cancel_timer(4)
+  assert_equal(broken(), "")
+end)
+
 end

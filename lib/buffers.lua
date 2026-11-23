@@ -893,8 +893,10 @@ return function(S)
     else
       -- buffers_restored needs no undo: a restore loads into a slot that is empty at start, so no report of old audio counted it
       apply_buffer_state(slot, left)
-      -- an earlier load still being checked: its notice starts again
-      if buffer.checking_load then start_check_notice(slot, buffer.checking_load) end
+      -- an earlier load still being checked: its notice starts again; a
+      -- state with no check keeps no notice of the failed one (2a's review)
+      if buffer.checking_load then start_check_notice(slot, buffer.checking_load)
+      elseif S.lib.record.clock_role(slot) == "notice" then cancel_buffer_recording_timer(slot) end
     end
     print("buffer " .. slot .. ": cannot load " .. failed.path .. " (missing, unreadable, empty or damaged)"
       .. (emptied and "; the buffer is now empty" or ""))
@@ -1161,7 +1163,8 @@ return function(S)
   -- once it no longer records, checks a load only while it awaits the
   -- engine's report, never settles empty while loaded, remembers a
   -- missing file only as a path (no file held, not loaded), restores only
-  -- a load that awaits the engine, and shows a start other than the last
+  -- a load that awaits the engine, runs a check's notice only while it
+  -- checks a load, and shows a start other than the last
   -- sent one only while a start reload is pending
   S.register_invariant("buffer slots", function()
     for slot = 1, NUM_BUFFERS do
@@ -1182,6 +1185,9 @@ return function(S)
       end
       if buffer.restoring and buffer.confirm_since == nil then
         return "slot " .. slot .. " is restoring but awaits no report (confirm_since nil)"
+      end
+      if S.lib.record.clock_role(slot) == "notice" and buffer.checking_from == nil then
+        return "slot " .. slot .. " runs a check's notice clock but checks no load"
       end
       if buffer.kept_state ~= nil and buffer.recording then
         return "slot " .. slot .. " records but keeps a canceled take's state"
