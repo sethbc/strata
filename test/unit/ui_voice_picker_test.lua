@@ -333,4 +333,39 @@ test("cleanup closes the picker", function()
   assert_equal(S.lib.ui_modal.top(), nil, "its owner is off the stack")
 end)
 
+
+-- #866: a grid's held step pushes SEQ's step editor over the open picker
+-- while ALT+K3 or ALT+K2 is down on it; the releases go to the editor, and
+-- the covered picker forgets its presses (S.lib.ui_modal.push)
+test("an owner covered while ALT+K3 is down forgets the press: a later plain K3 tap opens no name entry", function()
+  local context, S = opened()
+  assert_true(S.lib.voice_presets.save(3, 1, "folded"), "a preset in slot 1")
+  enc(2, S.constants.NUM_VOICES - 1)   -- slot 1
+  key(1, 1); key(3, 1)                 -- ALT+K3 down on slot 1
+  S.lib.pages_seq.open_step_editor(1, 1, 1)
+  key(3, 0); key(1, 0)                 -- the releases go to the editor
+  S.lib.pages_seq.close_step_editor(1)
+  assert_true(not context.textentry.open, "no name entry while the editor covered the picker")
+  tap(3)
+  assert_equal(S.lib.voice_presets.loaded_name(1), "folded", "the plain K3 loads")
+  assert_true(not context.textentry.open, "and its release opens no name entry")
+end)
+
+test("an owner covered while ALT+K2 is down shows its plain hint and does not animate", function()
+  local context, S = opened()
+  assert_true(S.lib.voice_presets.save(2, 1, "keep"), "a preset in slot 1")
+  enc(2, S.constants.NUM_VOICES - 1)
+  key(1, 1); key(2, 1)
+  S.lib.pages_seq.open_step_editor(1, 1, 1)
+  key(2, 0); key(1, 0)
+  S.lib.pages_seq.close_step_editor(1)
+  next_frame(context)
+  assert_equal(hint_text(context), "K2:back K3:load", "no held ALT+K2 once uncovered")
+  assert_true(not S.lib.ui_modal.top().animates(), "the picker does not redraw every frame")
+  context.clock.run_for(S.constants.ALT_HOLD_SECONDS * 4)
+  next_frame(context)
+  assert_equal(hint_text(context), "K2:back K3:load", "nor later")
+  assert_true(S.lib.voice_presets.preset(1) ~= nil, "nothing cleared")
+end)
+
 end

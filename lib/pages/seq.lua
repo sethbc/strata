@@ -332,8 +332,8 @@ return function(S)
     S.lib.sequencer.set_step_attr(voice_idx, step, "notes", #notes > 0 and notes or nil)
   end
 
-  -- The step editor, while it is open: {voice, step, port, alt_k2_at (the
-  -- time ALT+K2 went down on it, until its release)}
+  -- The step editor, while it is open: {voice, step, port}. Its ALT+K2's
+  -- press time is the modal's (S.lib.ui_modal.held_seconds, #866)
   local editor = nil
 
   -- True exactly while an action of the open step editor runs a pattern
@@ -826,6 +826,13 @@ return function(S)
 
   local editor_owner
 
+  -- How long ALT+K2 has been down on the editor, or nil: up, forgotten (a
+  -- second open, the norns menu, an owner pushed over it), or never its (a
+  -- plain K2 closes the editor at the press, so a K2 it holds is an ALT+K2)
+  local function editor_k2_held()
+    return S.lib.ui_modal.held_seconds(editor_owner, 2)
+  end
+
   -- ALT+E2 its step; E2 and E3 as the edit view's
   local function editor_enc(n, d)
     if editor == nil then return end
@@ -843,14 +850,15 @@ return function(S)
     if editor == nil then return end
     if n == 2 then
       if z == 1 and S.alt_held then
-        editor.alt_k2_at = util.time()
         S.lib.ui_alt.k2_down()
       elseif z == 1 then
         M.close_step_editor(editor.port)
-      elseif editor.alt_k2_at then
-        editor.alt_k2_at = nil
-        run_replacement(views.editor, function() S.lib.ui_alt.k2_up(editor_alt) end)
-        pattern_changed()
+      else
+        local held = editor_k2_held()
+        if held then
+          run_replacement(views.editor, function() S.lib.ui_alt.k2_up(editor_alt, held) end)
+          pattern_changed()
+        end
       end
     elseif n == 3 and z == 1 then
       if S.alt_held then
@@ -868,7 +876,8 @@ return function(S)
   -- The owner animates while ALT+K2 is held (#592), so the frame clock
   -- draws the change at the hold time
   local function editor_k2_text()
-    if editor.alt_k2_at and util.time() - editor.alt_k2_at >= ALT_HOLD_SECONDS then
+    local held = editor_k2_held()
+    if held and held >= ALT_HOLD_SECONDS then
       return row_resets(views.editor) and "K2:reset" or "K2:cancel"
     end
     return S.lib.ui_alt.k2_hint(editor_alt)
@@ -878,24 +887,20 @@ return function(S)
   -- while ALT+K2 is held on the editor (its hint turns at the hold time) or
   -- the patterns play (its strip's playhead moves), over any page
   local function editor_animates()
-    return editor ~= nil and (editor.alt_k2_at ~= nil or S.pattern_playing)
+    return editor ~= nil and (editor_k2_held() ~= nil or S.pattern_playing)
   end
 
   -- The norns menu takes every key while it is open, so an ALT+K2 release
-  -- made there never reaches the editor: its press is forgotten as the menu
-  -- closes, or the owner would animate and its hint stay K2:reset until it
-  -- closed. (SEQ's own view needs nothing here: its hint and animates read
-  -- S.lib.ui_alt.k2_held(), whose press marks the menu's opening forgets)
-  function M.forget_editor_k2_press()
-    if editor then editor.alt_k2_at = nil end
-  end
-  S.register_menu_close(function() M.forget_editor_k2_press() end)
+  -- made there never reaches the editor: the menu's opening forgets the
+  -- modal's presses (forget_held_keys), or the owner would animate and its
+  -- hint stay K2:reset until it closed. SEQ's own view reads
+  -- S.lib.ui_alt.k2_held(), whose press marks the opening forgets too
 
   editor_owner = {
     draw = function() if editor then draw_edit_view(views.editor) end end,
     hints = function(alt_held)
       if editor == nil then return "" end
-      return edit_hints(views.editor, alt_held, editor_k2_text(), editor.alt_k2_at ~= nil)
+      return edit_hints(views.editor, alt_held, editor_k2_text(), editor_k2_held() ~= nil)
     end,
     enc = editor_enc,
     key = editor_key,

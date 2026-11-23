@@ -29,9 +29,14 @@ return function(S)
   M.VOICE_PICKER = VOICE_PICKER
 
   -- open; the voice it loads into; the cursor (a row index) and the view's
-  -- tail, kept while it is closed; ALT+K2's press time (nil when up) and
-  -- the slot ALT+K3 went down on (its release opens the name entry)
-  local picker = {open = false, voice = 1, cursor = 1, tail = 0, k2_at = nil, k3_slot = nil}
+  -- tail, kept while it is closed; the slot ALT+K3 last went down on (nil
+  -- for a plain K3), read only while K3's press is the picker's
+  -- (S.lib.ui_modal.held_seconds answers): its release opens the name
+  -- entry. The press times are the modal's (#866), which a covering owner,
+  -- the norns menu and a name entry forget
+  local picker = {open = false, voice = 1, cursor = 1, tail = 0, k3_slot = nil}
+
+  local owner
 
   local function presets() return S.lib.voice_presets end
 
@@ -90,8 +95,15 @@ return function(S)
       spacing = VOICE_PICKER.spacing, value_right = VOICE_PICKER.value_right, tail = picker.tail}, draw_row)
   end
 
+  -- How long ALT+K2 has been down on the picker, or nil (a plain K2 closes
+  -- it at the press, so a K2 the picker holds is always an ALT+K2)
+  local function k2_held()
+    return S.lib.ui_modal.held_seconds(owner, 2)
+  end
+
   local function k2_held_long()
-    return picker.k2_at ~= nil and util.time() - picker.k2_at >= VOICE_PICKER.hold_seconds
+    local held = k2_held()
+    return held ~= nil and held >= VOICE_PICKER.hold_seconds
   end
 
   -- The hint row: a flash while one shows (a refused load or save); with
@@ -104,7 +116,7 @@ return function(S)
     if flash then return flash end
     local row = current_row()
     local filled = row.slot and presets().preset(row.slot) ~= nil
-    if picker.k2_at then
+    if k2_held() then
       if not filled then return "K2:cancel" end
       return k2_held_long() and "K2:clear" or "K2:hold"
     end
@@ -116,7 +128,7 @@ return function(S)
     return filled and "K2:back K3:load" or "K2:back"
   end
 
-  local function animates() return picker.k2_at ~= nil end
+  local function animates() return k2_held() ~= nil end
 
   local function enc_handler(n, d)
     if not picker.open or n ~= 2 then return end  -- E3 does nothing
@@ -142,14 +154,13 @@ return function(S)
       function(text) presets().save(voice_idx, slot, text) end)
   end
 
-  -- The menu-close hook: first an ALT+K2 or ALT+K3 press the menu took
-  -- (its release never comes) is forgotten, as SEQ's step editor forgets
-  -- its ALT+K2 (forget_editor_k2_press); then the entry's reconcile (a menu
-  -- that took the one textentry over forgets the entry; one that came and
-  -- went hands it the screen back), which acts only on the picker's own
-  -- entry, so SCENES' is left to SCENES
+  -- The menu-close hook: the entry's reconcile (a menu that took the one
+  -- textentry over forgets the entry; one that came and went hands it the
+  -- screen back), which acts only on the picker's own entry, so SCENES' is
+  -- left to SCENES. An ALT+K2 or ALT+K3 press the menu took (its release
+  -- never comes) needs nothing here: the menu's opening forgets the modal's
+  -- presses (forget_held_keys)
   function M.reconcile_name_entry()
-    picker.k2_at, picker.k3_slot = nil, nil
     name_entry.reconcile()
   end
   S.register_menu_close(function() M.reconcile_name_entry() end)
@@ -176,51 +187,47 @@ return function(S)
     request_redraw()
   end
 
-  -- K2 (no ALT) closes at the press; ALT+K2 notes its press and acts at the
-  -- release: held hold_seconds on a filled slot, it clears it. K3 (no ALT)
-  -- acts at the press; ALT+K3 on a slot opens the name entry at its release
+  -- K2 (no ALT) closes at the press; ALT+K2 acts at the release (the modal
+  -- noted its press): held hold_seconds on a filled slot, it clears it. K3
+  -- (no ALT) acts at the press; ALT+K3 on a slot opens the name entry at
+  -- its release. A release reads the press while it is still the picker's
   local function key_handler(n, z)
     if not picker.open then return end
     if n == 2 then
       if z == 1 then
-        if S.alt_held then picker.k2_at = util.time() else M.close() end
-      elseif picker.k2_at then
-        local long = k2_held_long()
-        picker.k2_at = nil
+        if not S.alt_held then M.close() end
+      elseif k2_held() then
         local row = current_row()
-        if long and row.slot then presets().clear(row.slot) end
+        if k2_held_long() and row.slot then presets().clear(row.slot) end
       end
     elseif n == 3 then
       if z == 1 then
-        if S.alt_held then
-          picker.k3_slot = current_row().slot
-        else
-          press_k3()
-        end
-      elseif picker.k3_slot then
-        local slot = picker.k3_slot
+        picker.k3_slot = S.alt_held and current_row().slot or nil
+        if not S.alt_held then press_k3() end
+      else
+        local slot = S.lib.ui_modal.held_seconds(owner, 3) and picker.k3_slot
         picker.k3_slot = nil
-        open_name_entry(slot)
+        if slot then open_name_entry(slot) end
       end
     end
     request_redraw()
   end
 
-  local owner = {draw = draw, hints = hints, enc = enc_handler, key = key_handler, animates = animates}
+  owner = {draw = draw, hints = hints, enc = enc_handler, key = key_handler, animates = animates}
 
   -- Open the picker over VOICE for voice_idx (K3 on its preset row): the
   -- cursor where it was left; already open, nothing
   function M.open(voice_idx)
     if picker.open then return end
     if type(voice_idx) ~= "number" or voice_idx % 1 ~= 0 or voice_idx < 1 or voice_idx > NUM_VOICES then return end
-    picker.open, picker.voice, picker.k2_at, picker.k3_slot = true, voice_idx, nil, nil
+    picker.open, picker.voice, picker.k3_slot = true, voice_idx, nil
     S.lib.ui_modal.push(owner)
   end
 
   -- Close it (K2); closed, nothing. The cursor stays for the next open
   function M.close()
     if not picker.open then return end
-    picker.open, picker.k2_at, picker.k3_slot = false, nil, nil
+    picker.open, picker.k3_slot = false, nil
     S.lib.ui_modal.pop(owner)
   end
 
@@ -243,7 +250,7 @@ return function(S)
     if picker.cursor < 1 or picker.cursor > count or picker.cursor % 1 ~= 0 then
       return "the cursor is on " .. tostring(picker.cursor) .. " of " .. count
     end
-    if not picker.open and (picker.k2_at ~= nil or picker.k3_slot ~= nil) then
+    if not picker.open and picker.k3_slot ~= nil then
       return "a key is held on the closed picker"
     end
   end)

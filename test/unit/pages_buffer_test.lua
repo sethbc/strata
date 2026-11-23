@@ -2086,4 +2086,25 @@ test("BUFFER's waveform marks slice starts", function()
 end)
 
 
+
+-- #866: a key held on BUFFER while a modal owner covers the page (a grid's
+-- step editor) is forgotten at the push: its release after the pop clears
+-- nothing and opens nothing, and the hint is the plain one
+test("a K2 held on BUFFER across a covering owner is forgotten: no clear, no selector, the plain hint", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  enc(2, 2)   -- slot 3
+  load_buffer(3, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 4))
+  context.clear_engine_calls(); context.fileselect.last = nil
+  context.set_time(100); key(2, 1)
+  S.lib.pages_seq.open_step_editor(1, 1, 1)
+  S.lib.pages_seq.close_step_editor(1)
+  context.set_time(100.6)
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "no hold hint for a forgotten press")
+  key(2, 0)
+  assert_equal(#context.calls_named("clearBuffer"), 0, "the release clears nothing")
+  assert_equal(context.fileselect.last, nil, "and opens no selector")
+end)
+
 end
