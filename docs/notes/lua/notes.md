@@ -18,6 +18,61 @@
 - **A steal of the caller's kind** (3.7, `steals`): an `extra_only` note that finds no room under the cap or the pool cuts the voice's oldest extra note (at least `cut_seconds` old) for which `steals(owner, key)` is true (`noteOff(v - 1, slot - 1, 1)`) and takes its slot; it never takes another voice's slot or a note `steals` refuses.
 - **What is stored where**: the note cap and the two envelope times are params, so PSETs keep them; the envelope times are also scene keys, the note cap is PSET-only and never a scene field. Extra notes, the pool (`notes.data`, device-level), the freeze reference and expression values are in neither a param, a scene nor a PSET.
 
+## Machines
+
+### own note slot
+- **State:** slot 1's record (`slots[voice][1]`, read through `M.slots(voice)[1]` and `M.held(voice)`): none (`free`), `held`, `parked` (its `parked` flag: only slot 1 parks) or, on a stopped voice, a held `quiet` note whose caller has yet to start the voice (`quiet, awaiting a start`). Beside it, per voice, `sent[voice][1]` (the expression the engine keeps for slot 0) and the freeze reference (`references[voice]`, `M.freeze_reference`).
+- **Invariant:** `notes`: the pool is a whole number in 0..`NOTE_POOL.max` and the held extra notes never pass it; every record is whole; a voice's used slots are under its cap unless it was lowered under them; a stopped voice holds no extra note and its slot 1 at most a held quiet note; each owner and key is held once a voice; a running voice with no held note keeps no parked own note (ruling 39).
+- **Two facts:** `play`'s return holds the slot taken and, as `NOTES.arp_slot` (0), "the arpeggiator took the note, which holds no slot": truthy so MIDI keeps its expression record, never 1 so `own_note_taken` and the sequencer's `== 1` stay false. A held `quiet` record on a stopped voice is both a held note and "its caller starts the voice next" (the grain-restart hook's slot-0 `noteOn` reads it).
+- **Test:** `test/unit/notes_test.lua` (each branch with its exact messages, parking, the unpark, `quiet` on a running and a stopped frozen synth voice, the voice-stop hook) and `test/unit/strata_test.lua`: "Lua's held notes agree with a model of the engine's slots over seeded random play (ruling 57)" (its seeds), which runs the invariant after every step. A table and no transition test: the model walks these rows at random.
+
+Impossible: a stop of a stopped voice (`quiet, awaiting a start`), and a parked or quiet note's release (neither is held to its key: a parked note's key is up, and a quiet note's caller starts the voice before anything releases it).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `free` | `play, running voice` | `held` | `set_own`; `noteExpression` on slot 0 when the engine's differs; a frozen synth voice's slot-0 `noteOn` (its rate); `retrigger` |
+| `free` | `play, stopped voice` | `held` | `set_own`; `toggle_voice` (its retrigger follows); `retrigger` |
+| `free` | `play quiet, stopped voice` | `quiet, awaiting a start` | `set_own`; nothing sent |
+| `free` | `the voice's stop` | `free` | nothing |
+| `held` | `play, the same owner and key` | `held` | a move: re-pitched and accented; the hooks hear `moved` |
+| `held` | `play, nothing to steal` | `held` | branch 6: the newest note takes slot 1, the old record forgotten |
+| `held` | `release, park asked, another note held` | `parked` | `noteOff(v - 1, 0, 0)`; the hooks hear `ended` |
+| `held` | `release, otherwise` | `free` | forgotten, nothing sent: the player decides (MIDI stops the voice, a step's override ends) |
+| `held` | `forget or forget_owner` | `free` | dropped, nothing sent: it sounds on as nobody's |
+| `held` | `its time ends` | `free` | a one-shot slice's `to_end`: forgotten, nothing sent |
+| `held` | `the voice's stop` | `free` | forgotten with the stop; slot 0's kept expression back to neutral |
+| `parked` | `play` | `held` | the unpark: slot-0 `noteOn`, then `retrigger` |
+| `parked` | `the voice's last held note ends` | `free` | it returns neutral, nobody's (ruling 39): `noteExpression` when slot 0's is not neutral, `noteOn` at velocity 0 |
+| `parked` | `forget_owner of its owner` | `parked` | it stays parked under the other owners' notes, to return when the last ends |
+| `parked` | `the voice's stop` | `free` | forgotten, nothing sent |
+| `quiet, awaiting a start` | `the caller's start` | `held` | the grain-restart hook sends a frozen synth voice's slot-0 `noteOn`; the caller accents |
+| `quiet, awaiting a start` | `play, stopped voice` | `held` | replaced (a stopped voice's slot 1 is always free, ruling 19); the voice starts |
+| `quiet, awaiting a start` | `play quiet, stopped voice` | `quiet, awaiting a start` | replaced, nothing sent |
+
+### extra note slot
+- **State:** an extra slot's record (`slots[voice][s]`, `s` 2..`NOTE_SLOTS`): none (`free`) or `held` (an extra note never parks). Beside it, `ended[voice][s]` (when its last note ended, for the free slot's choice), `sent[voice][s]` (the expression the engine keeps) and `regions_sent[voice][s]` (the region it keeps).
+- **Invariant:** none of its own: `notes` (the own note slot's, above) holds the extra slots too.
+- **Test:** `test/unit/notes_test.lua` (branches 3 to 5, the steals and the cut time, the freeze's cuts, a recall's into a frozen synth voice, a smaller pool, the timed end) and the notes walk of `test/unit/strata_test.lua`. A table and no transition test.
+
+Impossible: a play into a free slot of a stopped voice (branches 3 to 6 run only on a running voice: a stopped voice's play is slot 1's).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `free` | `play, room under the cap and the pool` | `held` | `noteExpression`, the slot's `noteRegion` when due, `noteOn`; a hit unless the sequencer's |
+| `free` | `play, the pool full` | `held` | the oldest note that may be stolen, on any voice, cut first (`noteOff` with cut 1) |
+| `free` | `the voice's stop` | `free` | nothing |
+| `held` | `play, the same owner and key` | `held` | re-pitched in place: `noteExpression` when it differs, then `noteOn` |
+| `held` | `stolen in place` | `held` | branch 5: the new note's `noteExpression` and `noteOn`, no `noteOff` |
+| `held` | `stolen for another note` | `free` | branch 4 or a `steals`: `noteOff` with cut 1 |
+| `held` | `release` | `free` | `noteOff(…, 0)`; a parked own note returns if this was the last held note |
+| `held` | `forget or forget_owner` | `free` | `noteOff(…, 0)` |
+| `held` | `a synth voice's freeze, or a recall that ends a frozen synth voice` | `free` | `cut_extras`: `noteOff` with cut 1, in slot order |
+| `held` | `the arpeggiator turned on` | `free` | `take_extras`: cut, into the list with no `ended` (a note with a region keeps its slot) |
+| `held` | `a smaller pool` | `free` | the newest past the pool released |
+| `held` | `its time ends` | `free` | `to_end`: released by the flush's step |
+| `held` | `a bind of its slot` | `free` | a note with a region released (`end_regions`) |
+| `held` | `the voice's stop` | `free` | forgotten, nothing sent (`voiceOff` ended it) |
+
 ## Owns
 
 `lib/notes.lua` (`S.lib.notes`, 3.5, packages 0a and 1b, design §2, §6.4), included after `lib/matrix.lua`, with its table `NOTES` (`M.NOTES`): `file` (`"notes.data"`), `version` (1), `backup_suffix` (`".bak"`), `cut_seconds` (0.05), `sends_per_step` (16), `rate_root_note` (60: the note at rate 1; 3.7: `note_values` and `own_pitch` read `S.lib.samples.rate_root(voice)`, a buffer voice's file's key when set), `rate_range` (`{0.25, 4}`), `note_range` (`{0, 127}`), `a4` (note 69 at 440 Hz: a frequency's note), `owners` (`midi`, `seq` and 3.7's `grid`, a grid's slice keys with the key `port * 100 + slice`), `step_owner` (`seq`), 3.8's `arp_slot` (0: what `play` returns for a note the arpeggiator takes, and the slot its hooks hear), `expression_keys` (`bend`, `amp`, `position`, `size`, `main`: `noteExpression`'s order), `neutral` (`{1, 1, 0, 0, 0}`), `expression_ranges` (bend 0.0625-16, amp 0-2, the rest -1..1: the engine's clips) and `cap` (the note cap's key, name and VOICE section), `envelope` (each voice's default `{attack, release}`), `envelope_ranges`, `envelope_keys` and `envelope_engine` (the engine's control names).

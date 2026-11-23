@@ -696,4 +696,313 @@ test("the engine's ended hold sets v<i>_freeze to 0 and sends no unfreeze (#858)
   assert_equal(#sent_freeze(context), 0, "and sends nothing either")
 end)
 
+-------------------------------------------------------------------------------
+-- 3.9 (#908): the voice kind, a table. A voice is a synth, frozen synth,
+-- buffer, input or voice source voice, stopped or running (read from the
+-- script: its source, its freeze and whether it runs); each event is a
+-- source set, a freeze set, a start or a stop, by hand or in a recall (an
+-- instant recall of a scene captured now with the one field changed). Voice
+-- 3 enters at 440 Hz (a running frozen synth voice takes its freeze
+-- reference there, note 69), then its freq goes to 220 Hz (note 57), and a
+-- running voice holds an own note and one extra note. The buffer states read
+-- slot 1 and the voice source states voice 1's ring; "source buffer 2" and
+-- "source voice 2" switch to slot 2 and voice 2's ring, so the same kind
+-- again is a switch too. Each row's check asserts the freeze param, the
+-- freeze reference, the extra notes held, the last scaleNote the event sent
+-- (or none) and that a model of the engine's slots (test/notes_model.lua)
+-- agrees with Lua's held notes
+-------------------------------------------------------------------------------
+local Model = require("notes_model")
+local KIND_VOICE = 3
+local KIND_PREFIX = "v" .. KIND_VOICE .. "_"
+local KIND_FROZE_AT, KIND_NOW = 69, 57  -- 440 Hz and 220 Hz as notes
+local KIND_RING = 60                     -- a buffer, input or voice source voice's scaleNote: root C + 60
+
+local function kind_sources(S)
+  local c = S.constants
+  return {synth = c.SOURCE_SYNTH, buffer = c.SOURCE_SYNTH + 1, input = c.SOURCE_INPUT,
+    ["voice source"] = c.SOURCE_VOICE_FIRST, ["buffer 2"] = c.SOURCE_SYNTH + 2, ["voice 2"] = c.SOURCE_VOICE_FIRST + 1}
+end
+
+local function kind_note(key, pitch)
+  return {owner = "midi", key = key, pitch = pitch, velocity = 0.5, park = true, set_own = function() end}
+end
+
+local function kind_enter(kind, running)
+  return function(context)
+    local S = local_value("S")
+    params:set(KIND_PREFIX .. "freq", 440)
+    params:set(KIND_PREFIX .. "source", kind_sources(S)[kind == "frozen synth" and "synth" or kind])
+    params:set(KIND_PREFIX .. "freeze", kind == "frozen synth" and 1 or 0)
+    if running then toggle_voice(KIND_VOICE) end
+    params:set(KIND_PREFIX .. "freq", 220)
+    if running then
+      assert_equal(S.lib.notes.play(KIND_VOICE, kind_note(1, 60)), 1, "the own note")
+      assert_equal(S.lib.notes.play(KIND_VOICE, kind_note(2, 64)), 2, "an extra note")
+    end
+    context.set_time(util.time() + 0.1)
+    context.kind_mark = #context.engine_calls
+  end
+end
+
+local function kind_of(S)
+  local kind = "input"
+  if voice_uses_synth(KIND_VOICE) then
+    kind = S.lib.freeze.is_frozen(KIND_VOICE) and "frozen synth" or "synth"
+  elseif voice_uses_buffer(KIND_VOICE) then
+    kind = "buffer"
+  elseif voice_uses_voice(KIND_VOICE) then
+    kind = "voice source"
+  end
+  return kind .. (S.voices[KIND_VOICE].active and ", running" or ", stopped")
+end
+
+-- A recall of a scene captured now, with change(scene's voice 3) applied
+local function kind_recall(change)
+  return function()
+    local S = local_value("S")
+    capture_scene(1)
+    change(S.scenes[1].data.voices[KIND_VOICE], S)
+    recall_scene(1, 0)
+  end
+end
+
+local function kind_source(target, recall)
+  if recall then
+    return kind_recall(function(voice, S) voice.source = kind_sources(S)[target] end)
+  end
+  return function() params:set(KIND_PREFIX .. "source", kind_sources(local_value("S"))[target]) end
+end
+
+local function kind_freeze(value, recall)
+  if recall then return kind_recall(function(voice) voice.values.freeze = value end) end
+  return function() params:set(KIND_PREFIX .. "freeze", value) end
+end
+
+local function kind_run(running, recall)
+  if recall then return kind_recall(function(voice) voice.active = running end) end
+  return function() toggle_voice(KIND_VOICE) end
+end
+
+local function kind_extras(S)
+  local extras = 0
+  for _, used in ipairs(S.lib.notes.slots(KIND_VOICE)) do
+    if used.slot > 1 and used.held then extras = extras + 1 end
+  end
+  return extras
+end
+
+-- The last scaleNote sent to voice 3 after call number `after` (nil: none)
+local function kind_scale_sent(context, after)
+  local sent
+  for index = after + 1, #context.engine_calls do
+    local call = context.engine_calls[index]
+    if call.name == "setGrainParam" and call.args[1] == KIND_VOICE - 1 and call.args[2] == "scaleNote" then
+      sent = call.args[3]
+    end
+  end
+  return sent
+end
+
+local function kind_assert(context, freeze, reference, extras, scale, where)
+  local S = local_value("S")
+  where = where and (where .. ": ") or ""
+  assert_equal(params:get(KIND_PREFIX .. "freeze"), freeze, where .. "the freeze param")
+  assert_equal(kind_extras(S), extras, where .. "the extra notes held")
+  -- a running voice: the scaleNote the engine holds (the last one sent,
+  -- whenever: a recall's freq set resends it as a hand set does); a stopped
+  -- voice: none sent by the event
+  if scale then
+    local held = kind_scale_sent(context, 0)
+    assert_true(held ~= nil, where .. "a scaleNote was sent")
+    h.assert_near(held, scale, 1e-9, where .. "the scaleNote the engine holds")
+  else
+    assert_equal(kind_scale_sent(context, context.kind_mark), nil, where .. "no scaleNote sent")
+  end
+  local found = S.lib.notes.freeze_reference(KIND_VOICE)
+  if reference then
+    assert_true(found ~= nil, where .. "a freeze reference")
+    h.assert_near(found, reference, 1e-9, where .. "the freeze reference")
+  else
+    assert_equal(found, nil, where .. "no freeze reference")
+  end
+  local model = Model.new(S.constants, S.lib.notes.NOTES)
+  model:feed(context.engine_calls)
+  local problems = model:compare(S)
+  assert_equal(table.concat(problems, "; "), "", where .. "the engine's slots agree with Lua's held notes")
+end
+
+-- A row's check: freeze (0 or 1), reference (a note or nil), extras (the
+-- extra notes held), scale (the last scaleNote sent, or false: none)
+local function kind_expect(freeze, reference, extras, scale, more)
+  return function(context)
+    kind_assert(context, freeze, reference, extras, scale)
+    if more then more(context) end
+  end
+end
+
+-- Ruling 58 (#690), driven on from a frozen synth voice a recall left a
+-- frozen buffer voice: a recall back to its synth, the freeze kept, cuts
+-- the extra note and takes a fresh reference
+local function kind_and_back(context)
+  context.kind_mark = #context.engine_calls
+  kind_source("synth", true)()
+  assert_equal(kind_of(local_value("S")), "frozen synth, running", "back on the synth, frozen")
+  kind_assert(context, 1, KIND_NOW, 0, KIND_NOW, "and back")
+end
+
+local E = kind_expect
+local SR, SS, FR, FS = "synth, running", "synth, stopped", "frozen synth, running", "frozen synth, stopped"
+local BR, BS, IR, IS = "buffer, running", "buffer, stopped", "input, running", "input, stopped"
+local VR, VS = "voice source, running", "voice source, stopped"
+
+local kind_states, kind_events = {}, {}
+for _, kind in ipairs({"synth", "frozen synth", "buffer", "input", "voice source"}) do
+  kind_states[kind .. ", stopped"] = kind_enter(kind, false)
+  kind_states[kind .. ", running"] = kind_enter(kind, true)
+end
+for _, how in ipairs({{", by hand", false}, {", in a recall", true}}) do
+  for _, target in ipairs({"synth", "buffer 2", "input", "voice 2"}) do
+    kind_events["source " .. target .. how[1]] = kind_source(target, how[2])
+  end
+  kind_events["freeze 1" .. how[1]] = kind_freeze(1, how[2])
+  kind_events["freeze 0" .. how[1]] = kind_freeze(0, how[2])
+  kind_events["start" .. how[1]] = kind_run(true, how[2])
+  kind_events["stop" .. how[1]] = kind_run(false, how[2])
+end
+
+local kind_impossible = {}
+for _, kind in ipairs({"synth", "frozen synth", "buffer", "input", "voice source"}) do
+  for _, how in ipairs({", by hand", ", in a recall"}) do
+    table.insert(kind_impossible, {kind .. ", running", "start" .. how,
+      "a start is a stopped voice's: K3 on a running voice is its stop, and a scene with it running starts nothing"})
+    table.insert(kind_impossible, {kind .. ", stopped", "stop" .. how,
+      "a stop is a running voice's: K3 on a stopped voice is its start, and a scene with it stopped stops nothing"})
+  end
+end
+
+-- by hand and in a recall alike: {event suffix, ...}
+local HAND, RECALL = ", by hand", ", in a recall"
+local kind_rows = {}
+local function rows(state, how, list)
+  for _, row in ipairs(list) do
+    table.insert(kind_rows, {state, row[1] .. how, row[2], check = row[3], known = row.known})
+  end
+end
+
+-- synth, running: an own note and an extra note held, unfrozen
+for _, how in ipairs({HAND, RECALL}) do
+  rows(SR, how, {
+    {"source synth", SR, E(0, nil, 1, KIND_NOW)},
+    {"source buffer 2", BR, E(0, nil, 1, KIND_RING)},
+    {"source input", IR, E(0, nil, 1, KIND_RING)},
+    {"source voice 2", VR, E(0, nil, 1, KIND_RING)},
+    {"freeze 1", FR, E(1, KIND_NOW, 0, KIND_NOW)},
+    {"freeze 0", SR, E(0, nil, 1, KIND_NOW)},
+    {"stop", SS, E(0, nil, 0, false)},
+  })
+end
+-- frozen synth, running: frozen at 440 Hz, its freq at 220 Hz since
+rows(FR, HAND, {
+  {"source synth", FR, E(1, KIND_FROZE_AT, 1, KIND_FROZE_AT)},
+  {"source buffer 2", BR, E(0, nil, 1, KIND_RING)},
+  {"source input", IR, E(0, nil, 1, KIND_RING)},
+  {"source voice 2", VR, E(0, nil, 1, KIND_RING)},
+})
+rows(FR, RECALL, {
+  {"source synth", FR, E(1, KIND_FROZE_AT, 1, KIND_FROZE_AT)},
+  {"source buffer 2", BR, E(1, nil, 1, KIND_RING, kind_and_back)},
+  {"source input", IR, E(1, nil, 1, KIND_RING)},
+  {"source voice 2", VR, E(1, nil, 1, KIND_RING)},
+})
+for _, how in ipairs({HAND, RECALL}) do
+  rows(FR, how, {
+    {"freeze 1", FR, E(1, KIND_FROZE_AT, 1, KIND_FROZE_AT)},
+    {"freeze 0", SR, E(0, nil, 1, KIND_NOW)},
+    {"stop", FS, E(1, KIND_NOW, 0, false)},
+  })
+end
+-- buffer, input and voice source, running
+for _, how in ipairs({HAND, RECALL}) do
+  rows(BR, how, {
+    {"source synth", SR, E(0, nil, 1, KIND_NOW)},
+    {"source buffer 2", BR, E(0, nil, 1, KIND_RING)},
+    {"source input", IR, E(0, nil, 1, KIND_RING)},
+    {"source voice 2", VR, E(0, nil, 1, KIND_RING)},
+    {"freeze 1", BR, E(1, nil, 1, KIND_RING)},
+    {"freeze 0", BR, E(0, nil, 1, KIND_RING)},
+    {"stop", BS, E(0, nil, 0, false)},
+  })
+  rows(IR, how, {
+    {"source synth", SR, E(0, nil, 1, KIND_NOW)},
+    {"source buffer 2", BR, E(0, nil, 1, KIND_RING)},
+    {"source input", IR, E(0, nil, 1, KIND_RING)},
+    {"source voice 2", VR, E(0, nil, 1, KIND_RING)},
+    {"freeze 1", IR, E(1, nil, 1, KIND_RING)},
+    {"freeze 0", IR, E(0, nil, 1, KIND_RING)},
+    {"stop", IS, E(0, nil, 0, false)},
+  })
+  rows(VR, how, {
+    {"source synth", SR, E(0, nil, 1, KIND_NOW)},
+    {"source buffer 2", BR, E(0, nil, 1, KIND_RING)},
+    {"source input", IR, E(0, nil, 1, KIND_RING)},
+    {"source voice 2", VR, E(0, nil, 1, KIND_RING)},
+    {"freeze 1", VR, E(1, nil, 1, KIND_RING)},
+    {"freeze 0", VR, E(0, nil, 1, KIND_RING)},
+    {"stop", VS, E(0, nil, 0, false)},
+  })
+end
+-- the stopped states: nothing held, nothing sent but a start's scaleNote
+for _, how in ipairs({HAND, RECALL}) do
+  rows(SS, how, {
+    {"source synth", SS, E(0, nil, 0, false)},
+    {"source buffer 2", BS, E(0, nil, 0, false)},
+    {"source input", IS, E(0, nil, 0, false)},
+    {"source voice 2", VS, E(0, nil, 0, false)},
+    {"freeze 1", FS, E(1, KIND_NOW, 0, false)},
+    {"freeze 0", SS, E(0, nil, 0, false)},
+    {"start", SR, E(0, nil, 0, KIND_NOW)},
+  })
+end
+rows(FS, HAND, {
+  {"source synth", FS, E(1, KIND_NOW, 0, false)},
+  {"source buffer 2", BS, E(0, nil, 0, false)},
+  {"source input", IS, E(0, nil, 0, false)},
+  {"source voice 2", VS, E(0, nil, 0, false)},
+})
+rows(FS, RECALL, {
+  {"source synth", FS, E(1, KIND_NOW, 0, false)},
+  {"source buffer 2", BS, E(1, nil, 0, false)},
+  {"source input", IS, E(1, nil, 0, false)},
+  {"source voice 2", VS, E(1, nil, 0, false)},
+})
+for _, how in ipairs({HAND, RECALL}) do
+  rows(FS, how, {
+    {"freeze 1", FS, E(1, KIND_NOW, 0, false)},
+    {"freeze 0", SS, E(0, nil, 0, false)},
+    {"start", FR, E(1, KIND_NOW, 0, KIND_NOW)},
+  })
+  for _, kind in ipairs({{BS, BR}, {IS, IR}, {VS, VR}}) do
+    rows(kind[1], how, {
+      {"source synth", SS, E(0, nil, 0, false)},
+      {"source buffer 2", BS, E(0, nil, 0, false)},
+      {"source input", IS, E(0, nil, 0, false)},
+      {"source voice 2", VS, E(0, nil, 0, false)},
+      {"freeze 1", kind[1], E(1, nil, 0, false)},
+      {"freeze 0", kind[1], E(0, nil, 0, false)},
+      {"start", kind[2], E(0, nil, 0, KIND_RING)},
+    })
+  end
+end
+
+h.transition_table({
+  name = "voice kind",
+  notes = {"docs/notes/lua/freeze.md", "voice kind"},
+  states = kind_states,
+  events = kind_events,
+  state_of = function() return kind_of(local_value("S")) end,
+  rows = kind_rows,
+  impossible = kind_impossible,
+})
+
 end

@@ -1850,6 +1850,61 @@ test("a release-mode voice held back by another owner's one-shot slice stops whe
   assert_true(not S.voices[1].active, "its lift, then its slice's end, stop it")
 end)
 
+-- 3.9 (#913): the invariant midi notes holds the held-back stop too:
+-- stop_pending marks only a running voice with no key down on it. A legal
+-- mark (the last key's lift under a one-shot slice) passes; the same mark on
+-- a voice marked stopped behind the hooks' back, and on a voice a key is
+-- down on (its channel's list and held agreeing), each break it
+local function midi_notes_invariant(S)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "midi notes" then return record.fn() end
+  end
+  error("no invariant midi notes")
+end
+
+local function held_back(option)
+  local context, S = sliced_voice(option)
+  function S.lib.scan.pass_seconds(_, fraction) return fraction * 2 end  -- a quarter: 0.5 s
+  params:set("midi_note_off", 2)
+  note_on(context, 1, 36)
+  note_off(context, 1, 36)
+  assert_true(S.voices[1].active, "held back: the slice plays to its end")
+  assert_equal(midi_notes_invariant(S), nil, "a held-back stop on a running voice with no key down is legal")
+  return context, S
+end
+
+test("the midi notes invariant holds a held-back stop to a running voice with no key down (#913)", function()
+  h.allow_broken_invariants("the test breaks the held-back stop's line on purpose")
+  local _, S = held_back(2)
+  S.voices[1].active = false  -- stopped with no voice-stop hook: the mark stays
+  local problem = midi_notes_invariant(S)
+  assert_true(problem ~= nil and problem:find("held%-back stop") ~= nil and problem:find("stopped") ~= nil,
+    "a mark on a stopped voice is reported (" .. tostring(problem) .. ")")
+  _, S = held_back(2)
+  local key = key_of(2, 50)
+  S.midi_state.note_voice[2] = { [50] = { 1 } }  -- a key down on voice 1, its list agreeing
+  S.midi_state.held[1][key] = true
+  problem = midi_notes_invariant(S)
+  assert_true(problem ~= nil and problem:find("held%-back stop") ~= nil and problem:find("key") ~= nil,
+    "a mark on a voice a key is down on is reported (" .. tostring(problem) .. ")")
+end)
+
+-- The held-back stop's clearers (docs/notes/lua/midi.md, Machines): the
+-- voice's stop, which leaves no mark on a stopped voice (the invariant's
+-- line fails without it), and a key down on the voice, after which the
+-- slice's end stops nothing while the key is held
+test("a held-back stop is cleared by the voice's stop and by a key down (#913)", function()
+  local context, S = held_back(2)
+  toggle_voice(1)
+  assert_true(not S.voices[1].active, "stopped by hand under the held-back stop")
+  assert_equal(midi_notes_invariant(S), nil, "the stop cleared the mark")
+  context, S = held_back(2)
+  note_on(context, 1, 37)
+  assert_equal(midi_notes_invariant(S), nil, "the key down cleared the mark")
+  context.clock.run_for(1)
+  assert_true(S.voices[1].active, "the slices' ends stop nothing while a key is down")
+end)
+
 -- 2b's review, the controller's ruling: the note hooks' heard hears every
 -- MIDI note a voice receives, a note outside its slices included, and starts nothing
 test("the heard note hook hears every note a voice receives, outside its slices too", function()

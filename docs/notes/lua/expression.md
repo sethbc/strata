@@ -23,13 +23,15 @@ Per voice, the record `expression` (registered after the allocator's `notes`, so
 
 `note_values(voice, raw) -> {bend, amp, position, size, main}` (nil for a voice outside 1..`NUM_VOICES`), from `raw = {bend, pressure, slide}`: `bend` a ratio (anything not finite is 1; clipped to the allocator's 0.0625-16), `pressure` 0-1 (nil: none yet), `slide` already relative to the touch's start, -1..1 (nil is 0). For each mapping with a value, its target, by where it acts on the voice now:
 
-| Target | Synth voice | Frozen synth voice | Buffer voice | Input voice |
-|---|---|---|---|---|
-| `amp`, `level` | the note's `amp` | the note's `amp` | the note's `amp` | the note's `amp` |
-| `main` | the note's `main` | nothing | the note's `position` | the note's `size` |
-| `size` | the voice's grain size | the note's `size` | the note's `size` | the note's `size` |
-| `position` | nothing | nothing | the note's `position` | nothing |
-| `density`, `cutoff` | the voice | the voice | the voice | the voice |
+| Target | Synth voice | Frozen synth voice | Buffer voice | Input voice | Voice source voice |
+|---|---|---|---|---|---|
+| `amp`, `level` | the note's `amp` | the note's `amp` | the note's `amp` | the note's `amp` | the note's `amp` |
+| `main` | the note's `main` | nothing | the note's `position` | the note's `size` | the note's `size` |
+| `size` | the voice's grain size | the note's `size` | the note's `size` | the note's `size` | the note's `size` |
+| `position` | nothing | nothing | the note's `position` | nothing | nothing |
+| `density`, `cutoff` | the voice | the voice | the voice | the voice | the voice |
+
+A voice source voice (3.8: it reads another voice's output ring) is placed as an input voice (`placement` reads only `voice_uses_synth` and `voice_uses_buffer`): its notes are input notes in the engine too, grains of a ring another writer writes (`noteKindFor`, #873). A frozen one is still a voice source voice, as a frozen buffer or input voice keeps its column; only a frozen synth voice has a column of its own (`docs/notes/lua/freeze.md`, the voice kind).
 
 - `amp`: a gain of `1 + depth × value`. `level`, for pressure: `1 - depth × (1 - value)` for a depth above 0, `1 + depth × value` below; with no pressure yet it is neutral (a nil pressure contributes nothing to any target). For slide, `level` acts exactly as `amp` does, `1 + depth × slide` (ruling 34): a slide is relative, 0 at every touch's start, so it cannot be a loudness, and `level`'s own formula would start every touch silent at +100 % (and keep a note silent on a controller that sends no CC74). Each gain is clipped 0-2, the gains on a note multiply, and the product is clipped 0-2.
 - Every other target: an offset of `depth × value` half ranges, clipped -1..1; offsets on one key add, and the sum is clipped -1..1.

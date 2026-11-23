@@ -1,0 +1,2 @@
+### Changed
+- Tests and notes only, nothing a player hears or sees: a table of what a voice's source switch, freeze, start and stop do to its freeze, its notes and its scale reference, by hand and in a scene recall, now runs as tests; the MIDI keys' held-back release-mode stop is checked to mark only a running voice with no key down; and the notes list what Lua remembers of each message it sent the engine.

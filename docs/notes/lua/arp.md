@@ -10,6 +10,32 @@
 - **A hit only marks its voice** (the `voice_hit` hook `arp`, which never sends); the shuffle's resend is the LFO step hook's, installed once at `START_ORDER.arp`. Every resend is `ARP.max_steps + 1` messages, counted (`S.lib.engine_sync.count_sends`), at that step.
 - The arpeggiator keeps nothing in a PSET or scene but its param: the held list, the base and the shuffle are state, never params.
 
+## Machines
+
+### arp list
+- **State:** per voice, the mode (`v<i>_arp`, `M.on(voice)`, `M.mode(voice)`) and the held list (`entries[voice]`, oldest first, read with `M.held(voice)`), with the base (`bases[voice]`), the shuffle (`shuffles[voice]`, `shuffled_at[voice]`), the hit marks (`marked[voice]`) and the list the engine was last sent (`remembered[voice]`, `M.sent`) and whether it is due again (`pending[voice]`). The states: `off`, `on, empty` (no note in the list) and `on, holding`.
+- **Invariant:** `arp`: only a running arpeggiating voice holds notes in its list, at most `ARP.max_steps - 1`, each owner and key once and none also in a slot of `S.lib.notes`.
+- **Two facts:** `bases[voice] == nil` is both "no own note's pitch kept" and "check the held chord's list at every LFO step" (#846: the base is then the voice's pitch now, which a freq turn, a scene or a step moves).
+- **Test:** `test/unit/arp_test.lua`: "C-E-G held by MIDI on a running arpeggiating voice: intervals 0, 4, 7, count 3; play returns 1, 0, 0; no noteOn on slots 2-8; pool_used 0", "turned on with two extra notes sounding: noteOff cut on both slots, their pitches in the list", "turned off: intervalCount 0 with no set; the held keys silent until played again", "a held chord takes at most eight steps, the own note's included", "the note hooks' starts and ends balance across the arpeggiator's paths". A table and no transition test.
+
+A further note is one `S.lib.notes.play` hands the list: on a running voice whose own note is held (an `extra_only` one too), never one with a region. A stopped voice is `off` or `on, empty`: its stop clears the list (the invariant), and a play on it takes slot 1, so it gets no further note.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `off` | `turned on, extra notes held` | `on, holding` | `take_extras`: each cut (`noteOff` with cut 1) and moved into the list with no `ended`; marked |
+| `off` | `turned on, none held` | `on, empty` | nothing taken; `arpOn` 1, `arpFold`, the intervals |
+| `off` | `a further note` | `off` | it is a slot's (`docs/notes/lua/notes.md`) |
+| `on, empty` | `a further note` | `on, holding` | held (`started`), marked; a hit unless the sequencer's |
+| `on, empty` | `turned off` | `off` | `arpOn` 0, `arpFold`, the intervals as the set gives them |
+| `on, empty` | `the voice's stop` | `on, empty` | the base and the shuffle go |
+| `on, holding` | `a further note` | `on, holding` | joins (the same owner and key re-pitched; past the room the oldest leaves); marked |
+| `on, holding` | `release, others held` | `on, holding` | it leaves (`ended`); marked |
+| `on, holding` | `release of the last held` | `on, empty` | it leaves; marked: the list goes back to the set |
+| `on, holding` | `the own note played` | `on, holding` | the new base; marked when it moved |
+| `on, holding` | `the LFO step, marked` | `on, holding` | the list sent once (`ARP.max_steps + 1` messages, counted) when it differs from `remembered` |
+| `on, holding` | `turned off` | `off` | cleared, each note's `ended` heard, nothing cut (the list's notes go silent); the intervals resent |
+| `on, holding` | `the voice's stop` | `on, empty` | cleared, nothing sent |
+
 ## lib/arp.lua (`S.lib.arp`)
 
 3.8, package 2b (design §4.3, §11, §12). Included right after `lib/notes.lua`; nothing reads `S.lib.arp` at include time.

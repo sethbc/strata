@@ -2600,13 +2600,9 @@ end)
 -- its names here; a name is never added: an invariant registered from now
 -- on gets its entry in the commit that registers it. The list only shrinks
 local UNTABLED_INVARIANTS = {
-  "midi notes",  -- lib/midi_in.lua
   "scan holds",  -- lib/positions.lua
   "buffer slots",  -- lib/buffers.lua
   "input level",  -- lib/input_level.lua
-  "engine budget",  -- lib/engine_sync.lua
-  "notes",  -- lib/notes.lua
-  "arp",  -- lib/arp.lua
 }
 
 -- The Machines entries of notes files ({{path, text}}) checked against the
