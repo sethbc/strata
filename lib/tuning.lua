@@ -266,8 +266,21 @@ return function(S)
     return table.concat(parts, " ")
   end
 
+  -- A number as the engine hears it, an OSC float (float32, rounded to the
+  -- nearest, #884): string.pack on Lua 5.3 (norns'), LuaJIT's ffi where
+  -- there is no string.pack (the test suites run on both)
+  local pack, unpack = string.pack or false, string.unpack or false
+  local ffi = not pack and require("ffi")
+  function M.float32(value)
+    if pack then return (unpack("f", pack("f", value))) end
+    return tonumber(ffi.new("float", value))
+  end
+
   -- A tone list's problem, or nil: 1-128 tones, the first 0, each above the
-  -- last, all below a period of 100-4800 cents
+  -- last, all below a period of 100-4800 cents. The ascent and the period's
+  -- bound are taken as the engine hears them (float32; each implies the
+  -- doubles' test), so Lua refuses every set the engine would (two tones a
+  -- double apart, a last tone a hair under the period, #884)
   local function tones_problem(period, tones)
     if #tones < 1 or #tones > TUNING.max_tones then return "count is not 1-" .. TUNING.max_tones end
     if period < TUNING.min_period or period > TUNING.max_period then
@@ -275,9 +288,11 @@ return function(S)
     end
     if tones[1] ~= 0 then return "the first tone is not 0" end
     for index = 2, #tones do
-      if tones[index] <= tones[index - 1] then return "tones do not ascend (tone " .. index .. ")" end
+      if M.float32(tones[index]) <= M.float32(tones[index - 1]) then
+        return "tones do not ascend (tone " .. index .. ")"
+      end
     end
-    if tones[#tones] >= period then return "a tone at or above the period" end
+    if M.float32(tones[#tones]) >= M.float32(period) then return "a tone at or above the period" end
     return nil
   end
 
