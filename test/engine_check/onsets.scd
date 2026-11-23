@@ -333,6 +333,7 @@ var checkInterrupted = {
 
 // Wait (inside the check routine) until condition is true or timeout
 // passes, looking every 5 ms (waitFor looks every 50 ms)
+// A copy of h.waitFor with its own step: the helper is test/engine_check.scd's, outside this area's file
 var waitFine = { arg condition, timeout = 5;
     var started = Main.elapsedTime;
     while { condition.value.not and: { (Main.elapsedTime - started) < timeout } } { 0.005.wait };
