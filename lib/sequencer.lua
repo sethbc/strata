@@ -1406,8 +1406,11 @@ return function(S)
   end
 
   -- Start (or start again) voice_idx's clock at beat, now: a running one
-  -- is ended (end_clock) and the new one gets a state of its own
+  -- is ended (end_clock) and the new one gets a state of its own. Nothing
+  -- while the patterns are stopped (#924: a voice's clock runs only while
+  -- they play, the "pattern clock" invariant)
   function M.restart_voice(voice_idx, beat)
+    if not S.pattern_playing then return end
     local running = S.pattern_clocks[voice_idx]
     S.pattern_clocks[voice_idx] = nil
     if running then
@@ -1484,13 +1487,15 @@ return function(S)
   -- (#242), so a step held from before never takes a level in the new
   -- pattern, and the voice's overrides (its locks and note: no step of the
   -- old pattern will end them). Every whole-pattern change goes through it;
-  -- it redraws nothing (callers do)
+  -- it forgets the voice's fill (S.seq_euclid, #923: euclid sets its own
+  -- after) and redraws nothing (callers do)
   function M.replace_pattern(voice_idx, steps)
     if type(voice_idx) ~= "number" or voice_idx % 1 ~= 0 then return end
     if voice_idx < 1 or voice_idx > NUM_VOICES or type(steps) ~= "table" then return end
     for step = 1, PATTERN_LENGTH do
       S.patterns[voice_idx][step] = whole_step_level(steps[step])
     end
+    S.seq_euclid[voice_idx] = nil
     end_overrides(voice_idx)
     S.lib.grid_core.end_step_gestures(voice_idx)
     S.lib.mutation.note_pattern_edit(voice_idx)
@@ -1518,10 +1523,9 @@ return function(S)
   -- er.gen(hits, length, rotation), hits at MAX_STEP_LEVEL and the rest 0;
   -- the steps past the length and every attribute are kept. Any whole hits
   -- and rotation: the hits clamped to 0..length, the rotation wrapped into
-  -- 0..length - 1 (design 8.6), and that pair is S.seq_euclid's. Nothing
-  -- while a scene recall is in progress
+  -- 0..length - 1 (design 8.6), and that pair is S.seq_euclid's
   function M.euclid(voice_idx, hits, rotation)
-    if not valid_voice(voice_idx) or S.scene_recall_in_progress then return end
+    if not valid_voice(voice_idx) then return end
     -- whole and finite (2^53: the largest whole a float holds exactly)
     if not whole_between(hits, -2 ^ 53, 2 ^ 53) or not whole_between(rotation, -2 ^ 53, 2 ^ 53) then return end
     local length = voice_length(voice_idx)
@@ -1703,7 +1707,9 @@ return function(S)
   -- installed later has replaced the script's.
   -- internal_source: the clock_source param's "internal" (the first of
   -- clock.add_params' options: internal, midi, link, crow)
-  local transport = {previous_start = nil, previous_stop = nil, internal_source = 1}
+  -- installed: from the start step until cleanup (#924: a handler installed
+  -- later may still chain to the script's after it; they then move nothing)
+  local transport = {previous_start = nil, previous_stop = nil, internal_source = 1, installed = false}
 
   -- Whether a transport start or stop moves the patterns now
   function M.follows_transport()
@@ -1728,7 +1734,9 @@ return function(S)
   -- retires every running clock (end_clock's all_posted), canceling none:
   -- each ends at its resume, within a tick, and plays nothing more
   function transport.start()
-    if M.follows_transport() then
+    if not transport.installed then
+      -- after cleanup: only the handler found at install
+    elseif M.follows_transport() then
       start_patterns(true)
       request_redraw()
     else
@@ -1738,7 +1746,7 @@ return function(S)
   end
 
   function transport.stop()
-    if M.follows_transport() then
+    if transport.installed and M.follows_transport() then
       pattern_clock_stop()
       request_redraw()
     end
@@ -1748,6 +1756,7 @@ return function(S)
   -- Installing them again (init run twice) changes nothing: the script's
   -- handlers never chain to themselves
   S.register_start(S.constants.START_ORDER.pattern_transport, function()
+    transport.installed = true
     if clock.transport.start ~= transport.start then
       transport.previous_start, clock.transport.start = clock.transport.start, transport.start
     end
@@ -1792,6 +1801,7 @@ return function(S)
     pattern_clock_stop()
     for id in pairs(play.retired) do clock.cancel(id) end
     play.retired = {}
+    transport.installed = false
     if clock.transport.start == transport.start then
       clock.transport.start, transport.previous_start = transport.previous_start, nil
     end
