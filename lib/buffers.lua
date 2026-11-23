@@ -170,11 +170,12 @@ return function(S)
       buffer.name = "take " .. slot
       -- (a take whose scratch file could not be written has none:
       -- takeWriteFailed). Only a replace take settles here; a playable
-      -- take's "ended" report (lib/record.lua's record_state_changed) sets
-      -- the scratch path itself, without asking take_unsaved. That is safe
-      -- because the engine sends "ended" before it starts the scratch write,
-      -- so a failure for a playable take always arrives after "ended" and
-      -- finds the scratch path to forget (take_write_failed)
+      -- take ends in lib/record.lua's end_playable (its "ended" report or
+      -- its fallback, #904), which reads take_unsaved the same way. The
+      -- engine sends "ended" before it starts the scratch write, so with the
+      -- report a failure arrives after it and finds the scratch path to
+      -- forget (take_write_failed); without it, a failure that came first
+      -- set take_unsaved, which the fallback's settle reads
       buffer.path = (not buffer.take_unsaved) and scratch_take_path(slot) or nil
     end
     if restored then S.buffers_restored = S.buffers_restored + 1 end

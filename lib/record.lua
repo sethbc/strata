@@ -184,16 +184,18 @@ return function(S)
   end
 
   -- A playable recording's end, from its "ended" report or its fallback:
-  -- the slot is take <n> on the scratch path (with `unsaved`, on none: an
-  -- unsaved take, which plays, is not restored and can be saved), loaded
-  -- when its last known length is above 0
-  local function end_playable(slot, unsaved)
+  -- the slot is take <n> on the scratch path, or on none when the take is
+  -- unsaved (take_unsaved: its write failed before this, or an armed one's
+  -- fallback set it), as confirm_buffer_audio settles a replace take: it
+  -- plays, is not restored and can be saved. Loaded when its last known
+  -- length is above 0
+  local function end_playable(slot)
     local buffer = S.buffers[slot]
     M.cancel_timer(slot)
     takes[slot] = nil
     buffer.recording = false
     buffer.name = "take " .. slot
-    buffer.path = (not unsaved) and scratch_take_path(slot) or nil
+    buffer.path = (not buffer.take_unsaved) and scratch_take_path(slot) or nil
     -- the take is the scratch file at the server rate, read from its start
     buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
     buffer.loaded = buffer.seconds > 0
@@ -244,7 +246,8 @@ return function(S)
     if M.clock_role(slot) == "fallback" then return end
     M.run_slot_clock(slot, "fallback", BUFFER_SETTLE.fallback_seconds, function()
       if takes[slot] ~= take or not S.buffers[slot].recording then return end
-      end_playable(slot, take.phase == "armed")
+      if take.phase == "armed" then S.buffers[slot].take_unsaved = true end
+      end_playable(slot)
       S.lib.buffers.display_changed()
     end)
   end

@@ -725,6 +725,36 @@ test("an armed dub's fallback settles as an unsaved take", function()
   assert_equal(local_value("S").lib.buffers.status(2), "empty", "slot 2 starts empty")
 end)
 
+-- #904: a dub that recorded and lost its "ended" report, whose scratch
+-- write failed (takeWriteFailed) before its fallback: the fallback's
+-- settle reads the take's unsaved flag, so the slot has no path either
+test("a takeWriteFailed before a recording dub's fallback leaves the slot with no path", function()
+  local subdir = "dub_write_failed_fallback_" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  util.make_dir(_path.audio .. "strata/scratch/")
+  h.write_text(scratch_take_path(1), "an older take")
+  params:set("record_feedback", 50)
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
+  record_buffer(1)
+  local number = buffers[1].records_sent
+  context.polls.fire("recordState", record_state_value(number, 1, 1))  -- recording
+  record_buffer(1)                                                     -- K3; "ended" is lost
+  context.polls.fire("takeWriteFailed", number * 8.0 + 0)              -- the scratch write failed
+  context.clock.run_for(S.lib.buffers.BUFFER_SETTLE.fallback_seconds + 0.2)
+  assert_equal(S.lib.buffers.status(1), "loaded", "it plays")
+  assert_equal(buffers[1].name, "take 1")
+  assert_equal(buffers[1].path, nil, "and on no path: its take was not written")
+  local saved = S.lib.data_files.read(S.lib.scenes.scene_data_dir .. "buffers.data")
+  assert_equal(saved.paths[1], "", "buffers.data remembers no path for it")
+  cleanup()
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  for _, call in ipairs(context.calls_named("loadBuffer")) do
+    assert_true(call.args[1] ~= 0, "nothing loads into slot 1: " .. tostring(call.args[2]))
+  end
+  assert_equal(local_value("S").lib.buffers.status(1), "empty", "slot 1 starts empty")
+end)
+
 -- #904: a dub with a length (loop off) gets its fallback when that length
 -- has run out, as a replace take's starts at its take's end; a loop, which
 -- has no end, keeps the fallback from K3
