@@ -722,6 +722,7 @@ return function(S)
   -- ends. Stopped from its own body (an apply's action), it is no longer
   -- state.clock: after that apply it touches nothing of a newer clock's,
   -- neither what is left nor, on an error, the clock. An error in an apply
+  -- forgets what was applied (any clock's next apply starts afresh) and
   -- ends the clock (it forgets its own id first, if still the clock) and
   -- is raised again
   local function start_clock()
@@ -736,10 +737,12 @@ return function(S)
         state.moved = false
         local applied, result = xpcall(function() return apply_position(kind == "rest") end, with_traceback)
         if not applied then
+          -- what the apply recorded may not have been set, whoever's clock
+          -- builds on it next
+          forget_applied()
           if state.clock == handle then
             S.morph_clock, state.clock = nil, nil
             state.pending = false
-            forget_applied()
           end
           error(result, 0)
         end
