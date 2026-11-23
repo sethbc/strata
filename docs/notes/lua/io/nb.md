@@ -11,13 +11,22 @@
 - **Strata's own sends**: the module sends nothing to crow, ii or MIDI itself. A player that does is another program's (design §7, decision 21); IO warns of it.
 - **Nothing by default**: with no entry in `note_players` every voice's list is `none`, no player is called, and no separator or sentinel is added.
 
+## Machines
+
+### nb players
+- **State:** `state.chosen[voice]` (the player each voice plays), `state.uses[key]` (the voices choosing it), the global `nb_player_refcounts` (shared with other hosts, taken as at least Strata's own uses) and `state.activations[key]` (nb's default activation clock).
+- **Invariant:** `nb`: each player's count of the voices that use it is a whole number, never below 0.
+- **Test:** `test/unit/io_nb_test.lua`: "the nb invariant names a count below 0" and "the nb invariant holds as voices choose, change and leave players".
+
+No table: a player is active while its count is above 0, one count up and one down per choice (`choose`), as Must not break gives.
+
 ## Owns
 
 `lib/io/nb.lua` (`S.lib.io_nb`), included after `lib/io/crow.lua`:
 - `NB`: `none = "none"`, `midi_prefix = "midi: "`, `delayed_seconds = 1`, `sentinel = "nb_sentinel_param"`, the selector's id form, the warning's text, the mark `[!]`, the group and separator ids.
 - `add_params()` (the menu record `out nb` of `lib/params_setup.lua` calls it at init): the group `strata_out_nb`, 14 params, a voice's `S.lib.io_keyed.add("v<i>_out_nb", ...)` each (the option and its hidden text param `v<i>_out_nb_key`); then, unless `nb_sentinel_param` exists or `note_players` is empty, the separator `strata_nb_players` (`nb players`), every entry's own `add_params` in name order and the hidden binary `nb_sentinel_param`.
 - The note target `nb` (`S.register_note_target`): `routed`, `note_on`, `note_off`, `stop_all`, `rows`, `status`.
-- A voice-stop hook (`S.register_voice_stop`) and the PSET hook `io_nb`.
+- A voice-stop hook (`S.register_voice_stop`), the PSET hook `io_nb` and the invariant `nb`.
 - No start or cleanup step: the targets core's cleanup step (`CLEANUP_ORDER.io_targets`) calls this target's `stop_all`.
 - Tests: `test/unit/io_nb_test.lua`, against the nb stub (`context.nb.add_player`). User page: `docs/user/io/nb.md`.
 

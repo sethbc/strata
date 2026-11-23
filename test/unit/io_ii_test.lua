@@ -1412,4 +1412,88 @@ test("IO's ii section: the bus leader row and its status", function()
   assert_equal(section.status(), nil, "a crow, nothing dropped")
 end)
 
+-- The invariant `ii` (#935): not leading with owing, leave_room only inside
+-- the leaving sequence, each learned line's waiting count equal to its
+-- sends in the queue, and asking equal to the turns that ask
+local function ii_invariant(S)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "ii" then return record.fn() end
+  end
+  error("no invariant ii")
+end
+
+-- lib/io/ii.lua's own state table (an upvalue of its leads)
+local function ii_state(S)
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(S.lib.io_ii.leads, index)
+    if name == nil then break end
+    if name == "state" then return value end
+  end
+  error("io_ii has no state upvalue")
+end
+
+-- Strata leads with a learned pair (probe tr) and two of its sends waiting
+local function leading_with_lines()
+  local context, S, ii = started()
+  lead(context, S)
+  ii.send_off("probe", "tr", 3, 0)  -- the pair learned
+  ii.send("probe", "tr", 3, 1)
+  ii.send("probe", "tr", 4, 1)
+  return context, S, ii
+end
+
+test("the ii invariant holds through a lead, a crow leaving with offs owed and its return", function()
+  local context, S, ii = leading_with_lines()
+  local step = stepper(context, S)
+  assert_equal(ii_invariant(S), nil, "leading, two sends of a learned pair waiting")
+  step()
+  assert_equal(ii_invariant(S), nil, "a step drained")
+  ii.send_off("probe", "tr", 4, 0)
+  context.crow.unplug()
+  assert_true(not ii.leads() and ii.owed() > 0, "crow gone: owing")
+  assert_equal(ii_invariant(S), nil, "owing, not leading")
+  context.crow.plug()
+  assert_true(ii.leads(), "the lead taken again")
+  assert_equal(ii_invariant(S), nil, "leading again, the owed offs queued")
+  drain(step, ii)
+  set_bus(S, "off")
+  assert_equal(ii_invariant(S), nil, "the lead given up")
+end)
+
+test("the ii invariant names leading while owing", function()
+  local _, S = leading_with_lines()
+  h.allow_broken_invariants("the test breaks the ii invariant on purpose")
+  ii_state(S).owing = true
+  assert_true(ii_invariant(S) ~= nil, "leading with owing is reported")
+end)
+
+test("the ii invariant names leave_room outside the leaving sequence", function()
+  local _, S = leading_with_lines()
+  h.allow_broken_invariants("the test breaks the ii invariant on purpose")
+  ii_state(S).leave_room = 3
+  assert_true(ii_invariant(S) ~= nil, "a leave_room left set is reported")
+end)
+
+test("the ii invariant names a line whose waiting count is not its sends in the queue", function()
+  local _, S = leading_with_lines()
+  h.allow_broken_invariants("the test breaks the ii invariant on purpose")
+  local state = ii_state(S)
+  local line = state.lines["probe\ntr\n3"]
+  assert_true(line ~= nil and line.waiting == 1, "line probe tr 3 has its one send waiting")
+  line.waiting = 2
+  local answer = ii_invariant(S)
+  assert_true(answer ~= nil and answer:find("probe", 1, true) ~= nil, "the line is named: " .. tostring(answer))
+  line.waiting = 1
+  state.lines["probe\ntr\n4"] = nil  -- a learned pair's waiting send with no count at all
+  assert_true(ii_invariant(S) ~= nil, "a waiting send of a learned pair with no line is reported")
+end)
+
+test("the ii invariant names an asking count that is not the turns asking", function()
+  local _, S = leading_with_lines()
+  h.allow_broken_invariants("the test breaks the ii invariant on purpose")
+  local state = ii_state(S)
+  state.asking = state.asking + 1
+  assert_true(ii_invariant(S) ~= nil, "asking one more than the turns is reported")
+end)
+
 end

@@ -581,4 +581,188 @@ test("the start step run again after a wrapped cleanup never chains the module t
     "wrapper add, change 4 x, found add x, wrapper remove, change 4 nil, found remove x", "each handler once")
 end)
 
+---------------------------------------------------------------------------
+-- The table `port tellings` (#936, docs/notes/lua/io/ports.md, The
+-- tellings): for each event, the order the change, claim and settled hooks
+-- of io_midi_out, remote, midi_in and io_controllers run in, and what
+-- device(port), owner(port) and S.lib.io_remote.holds(port) answer as each
+-- is entered. Each module's own hook is wrapped where it stands (the same
+-- name registered again keeps its place), so the script runs as it does
+-- and the test only reads. The remote grid's rig port is 3 throughout
+---------------------------------------------------------------------------
+
+local TELLING_PORT = 3
+local TELLING_DEVICE = "iii grid"
+local TELLING_SETS = {
+  {label = "change", field = "changes", register = "on_change"},
+  {label = "claim", field = "claims", register = "on_claim"},
+  {label = "settled", field = "settles", register = "on_settled"},
+}
+local TELLING_EVENTS = {"arrive", "leave", "claim", "release", "menu close with a move"}
+
+-- S.lib.io_ports' own state table (an upvalue of its on_change)
+local function ports_state(S)
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(S.lib.io_ports.on_change, index)
+    if name == nil then break end
+    if name == "state" then return value end
+  end
+  error("io_ports has no state upvalue")
+end
+
+-- Every hook of the three sets wrapped in place: each entry appends one
+-- row {event, hook, port, device, owner, holds}, as text, to rows
+local function record_tellings(S, event, rows)
+  local ports, state = S.lib.io_ports, ports_state(S)
+  for _, set in ipairs(TELLING_SETS) do
+    local names = {}
+    for index, name in ipairs(state[set.field].names) do names[index] = name end
+    for _, name in ipairs(names) do
+      local original = state[set.field].fns[name]
+      ports[set.register](name, function(port, ...)
+        rows[#rows + 1] = {event, set.label .. " " .. name, tostring(port), tostring(ports.device(port)),
+          tostring(ports.owner(port)), tostring(S.lib.io_remote.holds(port))}
+        return original(port, ...)
+      end)
+    end
+  end
+end
+
+local function set_rig(S, key, value) assert_true(S.lib.io_rig.set(key, value), "the rig takes " .. key) end
+
+-- Each event's setup (the state it starts from) and the event itself
+local TELLING_STEPS = {
+  ["arrive"] = {
+    setup = function(_, S) set_rig(S, "remote_grid_port", TELLING_PORT) end,
+    run = function(context) context.midi.plug(TELLING_PORT, TELLING_DEVICE) end},
+  ["leave"] = {
+    setup = function(context, S)
+      context.midi.plug(TELLING_PORT, TELLING_DEVICE)
+      set_rig(S, "remote_grid_port", TELLING_PORT)
+    end,
+    run = function(context) context.midi.unplug(TELLING_PORT) end},
+  ["claim"] = {
+    setup = function(context) context.midi.plug(TELLING_PORT, TELLING_DEVICE) end,
+    run = function(_, S) set_rig(S, "remote_grid_port", TELLING_PORT) end},
+  ["release"] = {
+    setup = function(context, S)
+      context.midi.plug(TELLING_PORT, TELLING_DEVICE)
+      set_rig(S, "remote_grid_port", TELLING_PORT)
+    end,
+    run = function(_, S) set_rig(S, "remote_grid_port", 0) end},
+  -- SYSTEM > DEVICES moves the device from port 2 onto the rig's port 3
+  ["menu close with a move"] = {
+    setup = function(context, S)
+      set_rig(S, "remote_grid_port", TELLING_PORT)
+      context.midi.plug(2, TELLING_DEVICE)
+    end,
+    run = function(context)
+      _menu.set_mode(true)
+      context.midi.reassign(2, TELLING_PORT)
+      _menu.set_mode(false)
+    end},
+}
+
+-- The rows the script tells now, event by event, each from a fresh script
+local function told_rows()
+  local rows = {}
+  for _, event in ipairs(TELLING_EVENTS) do
+    local context = load_strata(); h.finish_startup(context)
+    local S = local_value("S")
+    TELLING_STEPS[event].setup(context, S)
+    record_tellings(S, event, rows)
+    TELLING_STEPS[event].run(context, S)
+  end
+  return rows
+end
+
+-- The rows of the table under `## The tellings` in the ports' notes, each
+-- cell trimmed and its backticks stripped
+local function notes_tellings()
+  local file = assert(io.open("docs/notes/lua/io/ports.md", "r"))
+  local text = file:read("*a")
+  file:close()
+  local rows, inside, past_rule = {}, false, false
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    if line:match("^#") then
+      if inside then break end
+      inside = line == "## The tellings"
+    elseif inside and line:match("^|") then
+      if line:match("^|%-") then
+        past_rule = true
+      elseif past_rule then
+        local cells = {}
+        for cell in line:sub(2):gmatch("([^|]*)|") do
+          cells[#cells + 1] = (cell:gsub("`", ""):gsub("^%s+", ""):gsub("%s+$", ""))
+        end
+        rows[#rows + 1] = cells
+      end
+    end
+  end
+  assert_true(#rows > 0, "the ports' notes have a table under ## The tellings")
+  return rows
+end
+
+-- What the script tells, as the notes give it: arrive (a device plugged
+-- into the rig's port, claimed inside the remote's change hook), leave (that
+-- device unplugged, released inside the remote's change hook), claim (the
+-- rig set to the device's port), release (the rig set to 0), and the device
+-- moved in the menu from port 2 onto the rig's port
+local TELLINGS = {
+  {"arrive", "change io_midi_out", "3", "iii grid", "nil", "false"},
+  {"arrive", "change remote", "3", "iii grid", "nil", "false"},
+  {"arrive", "claim io_midi_out", "3", "iii grid", "remote grid", "false"},
+  {"arrive", "claim remote", "3", "iii grid", "remote grid", "false"},
+  {"arrive", "claim midi_in", "3", "iii grid", "remote grid", "false"},
+  {"arrive", "claim io_controllers", "3", "iii grid", "remote grid", "false"},
+  {"arrive", "change midi_in", "3", "iii grid", "remote grid", "true"},
+  {"arrive", "change io_controllers", "3", "iii grid", "remote grid", "true"},
+  {"arrive", "settled io_midi_out", "3", "iii grid", "remote grid", "true"},
+  {"leave", "change io_midi_out", "3", "nil", "remote grid", "true"},
+  {"leave", "change remote", "3", "nil", "remote grid", "true"},
+  {"leave", "claim io_midi_out", "3", "nil", "nil", "false"},
+  {"leave", "claim remote", "3", "nil", "nil", "false"},
+  {"leave", "claim midi_in", "3", "nil", "nil", "false"},
+  {"leave", "claim io_controllers", "3", "nil", "nil", "false"},
+  {"leave", "change midi_in", "3", "nil", "nil", "false"},
+  {"leave", "change io_controllers", "3", "nil", "nil", "false"},
+  {"leave", "settled io_midi_out", "3", "nil", "nil", "false"},
+  {"claim", "claim io_midi_out", "3", "iii grid", "remote grid", "false"},
+  {"claim", "claim remote", "3", "iii grid", "remote grid", "false"},
+  {"claim", "claim midi_in", "3", "iii grid", "remote grid", "false"},
+  {"claim", "claim io_controllers", "3", "iii grid", "remote grid", "false"},
+  {"release", "claim io_midi_out", "3", "iii grid", "nil", "false"},
+  {"release", "claim remote", "3", "iii grid", "nil", "false"},
+  {"release", "claim midi_in", "3", "iii grid", "nil", "false"},
+  {"release", "claim io_controllers", "3", "iii grid", "nil", "false"},
+  {"release", "settled io_midi_out", "3", "iii grid", "nil", "false"},
+  {"menu close with a move", "change io_midi_out", "2", "nil", "nil", "false"},
+  {"menu close with a move", "change remote", "2", "nil", "nil", "false"},
+  {"menu close with a move", "change midi_in", "2", "nil", "nil", "false"},
+  {"menu close with a move", "change io_controllers", "2", "nil", "nil", "false"},
+  {"menu close with a move", "change io_midi_out", "3", "iii grid", "nil", "false"},
+  {"menu close with a move", "change remote", "3", "iii grid", "nil", "false"},
+  {"menu close with a move", "claim io_midi_out", "3", "iii grid", "remote grid", "false"},
+  {"menu close with a move", "claim remote", "3", "iii grid", "remote grid", "false"},
+  {"menu close with a move", "claim midi_in", "3", "iii grid", "remote grid", "false"},
+  {"menu close with a move", "claim io_controllers", "3", "iii grid", "remote grid", "false"},
+  {"menu close with a move", "change midi_in", "3", "iii grid", "remote grid", "true"},
+  {"menu close with a move", "change io_controllers", "3", "iii grid", "remote grid", "true"},
+  {"menu close with a move", "settled io_midi_out", "3", "iii grid", "remote grid", "true"},
+}
+
+local function joined(rows)
+  local lines = {}
+  for index, row in ipairs(rows) do lines[index] = table.concat(row, " | ") end
+  return table.concat(lines, "\n")
+end
+
+test("port tellings: each event's hooks run in their order, each reading device, owner and holds as the table gives", function()
+  assert_equal(joined(told_rows()), joined(TELLINGS), "the hooks as the script tells them")
+end)
+
+test("port tellings: the notes' table equals the test's rows", function()
+  assert_equal(joined(notes_tellings()), joined(TELLINGS), "docs/notes/lua/io/ports.md, The tellings")
+end)
+
 end

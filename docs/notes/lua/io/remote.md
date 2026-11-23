@@ -11,6 +11,33 @@
 - **midigrid's `grid.connect()` is called through the global, with no argument, once** at the start step (with `midi_grid` on), once when `midi_grid` turns on and once per `rescan` that finds no midigrid object attached, the old object detached first: under the mod every call loads a fresh copy of its library and, when it finds a device, wraps `midi.add` again (`docs/design/3.6-facts/checks.md` §7), so a rescan leaves an attached object as it is. What it returns is attached at `GRID_PORTS.midigrid` only when it is none of `grid.vports[1]` to `[S.MAX_GRID_PORTS]`. This module never touches `lib/grid/core.lua`'s own ports.
 - **The device scripts use only iii's functions** and run on Lua 5.3 and LuaJIT alike (`math.floor`, never `//` or a bitwise operator), since `test/stub_iii.lua` runs them under both. Each takes iii as 1.1.0 or later exactly when `type(device_version) == "function"` (`checks.md` §4: what it returns is the firmware's date tag, not iii's version).
 
+## Machines
+
+### remote kinds
+- **State:** per kind (`grid`, `arc`) `records[kind]`: `claimed_port`, `in_use`, `parts`, `problem`, `virtual`; midigrid's `midigrid.device` and `midigrid.ports`; the draw clock's handle `draw.clock` (`M.clock_id()`). The state is named by `M.status(kind)`, which derives it at each read and keeps no record of its own.
+- **Invariant:** `remote`: a virtual device is attached exactly while a good hello is held (a remote arc followed, or given way to a monome arc), on a claimed port, the midigrid object attached while held, and the draw clock runs exactly while a remote grid or arc is attached.
+- **Two facts:** `record.claimed_port` is the port the kind listens on and the port it holds; `disconnect` releases while it is still set, so the kind's own claim hook does not take the port back, which is why `M.holds` also checks the port's owner.
+- **Test:** `test/unit/io_remote_test.lua`: "a device on the grid port is asked for its hello and attached at its size", "a hello of another version or size attaches nothing", "a device that leaves is detached and one that returns is asked again" and "holds is false while the port's release is told", after which the invariant runs.
+
+A kind's states are `M.status(kind)`'s texts; no test reads this table. `off`: the rig's port 0. A kind set to a port starts at `[--]`. `in use` drops back to `[--]` when its device leaves.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `off` | the rig's port set | `[--]`, or `no hello` with a device there | with a device, the port claimed (`in use` if another owner holds it), listened to, asked for the hello |
+| `[--]` | the device arrives | `no hello`, or `in use` | claimed and asked, or another owner holds the port |
+| `[--]` | the rig's port set to 0 | `off` | nothing held |
+| `in use` | the other owner releases | `no hello` | claimed (the claim hook) and asked |
+| `in use` | the device leaves | `[--]` | nothing held |
+| `no hello` | a good hello | attached | the virtual device attached, CC 4 = 0, the draw clock running |
+| `no hello` | a hello of another version or size | the problem | nothing attached; `version <n>?` or `size <c>x<r>?` |
+| `no hello` | the device leaves | `[--]` | unlistened, released |
+| the problem | a good hello | attached | as from `no hello` |
+| attached | the same hello again | attached | sent everything again |
+| attached | a hello of another version or size | the problem | detached, CC 4 = 0 |
+| attached | the device leaves | `[--]` | detached (nothing sent), unlistened, released; the clock stopped with the last |
+| attached | the rig's port changed | `off` at 0, else `[--]` or `no hello` at the new port | detached with CC 4 = 0, unlistened, released; the new port connected |
+| attached | cleanup | `[--]` | detached with CC 4 = 0, unlistened, released, the clock canceled |
+
 ## Owns
 
 - `lib/io/remote.lua` (`S.lib.io_remote`), included between `lib/io/actions.lua` and `lib/params_setup.lua`, and after `lib/io/midi_out.lua`, whose `held_by` it calls at include (#769); `extras/lib/iii/strata_grid.lua` and `extras/lib/iii/strata_arc.lua` (never loaded by norns).

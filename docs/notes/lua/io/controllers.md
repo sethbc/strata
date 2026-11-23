@@ -15,13 +15,22 @@
 - **Pickup**: a fader picks its macro up when its value comes within `pickup_window` (2/127) of the param or crosses it between two messages; a param value that is not what the fader last set ends it (`M.pickup` checks live). With hires on, a CC `faders_cc + m - 1 + 32` is the low 7 bits; once one has come the value is `(high * 128 + low) / 16383`, until then `high / 127`; a low byte before any high byte moves nothing.
 - **The start step 94 sends nothing** with both ports off (a structure test's start log): refreshes at start ask for no redraw.
 
+## Machines
+
+### controllers
+- **State:** `held[kind]` (the port each of `e16` and `faders` holds and listens on), the echo clock's handle `echo_clock` (`M.clock_id()`), `closing` (cleanup has begun), against the rig's `e16_port` and `faders_port` and `S.lib.io_ports.owner(port)`.
+- **Invariant:** `controllers`: a kind's held port is the rig's port for it and owned by that kind; the echo clock runs (`S.lib.clocks.alive`) exactly while a port is set and cleanup has not begun.
+- **Test:** `test/unit/io_controllers_test.lua`: "the controllers invariant names a held port its kind does not own", "the controllers invariant names a set port with no echo clock" and "the controllers invariant holds as the ports are set, let go and cleaned up".
+
+No table: `refresh(kind)` compares the rig's port with `held` at each change (a rig change, a release by another owner), and each fader's pickup is its own small state (Must not break).
+
 ## Owns
 
 `lib/io/controllers.lua` (`S.lib.io_controllers`, 3.6):
 - `M.CONTROLLERS`, `M.pickup(m)`, `M.map_clash()`, `M.clock_id()`;
 - the E16 handler (listener name `e16`) and the faders' (`faders`), the echo clock (15 Hz, at most 16 CCs a tick, newest values, one ring frame when any changed, a label frame for each macro whose first target changed), labels and the title at a device's arrival;
 - IO's `controllers` section: the eight settings as `rig` rows, a `status` row of sixteen marks (`|` picked up, `.` waiting), the section status `map clash` or `[--]` when a set port has no device; `layout_states` `no port set`, `port without device`, `both present` and `map clash`;
-- start step 94 (`START_ORDER.io_controllers`) and cleanup step 146 (`CLEANUP_ORDER.io_controllers`).
+- start step 94 (`START_ORDER.io_controllers`) and cleanup step 146 (`CLEANUP_ORDER.io_controllers`); the invariant `controllers`.
 
 `extras/lib/e16/strata.lua`: the E16 scene script (never loaded by norns): `controller.onSysex` checks the header, F7, 7-bit data and the frame's length, then draws the rings (`leds.update`), labels (`slots.update`) and the title (`page.setTitle`). `test/stub_e16.lua` runs it with the E16's globals.
 

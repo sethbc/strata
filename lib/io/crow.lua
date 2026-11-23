@@ -753,5 +753,19 @@ return function(S)
     for _, name in ipairs(hooks.event_order) do norns.crow.events[name] = function() end end
   end)
 
+  -- The jacks Strata set up (#935): set_up names only jacks that exist,
+  -- each true (a setting sent) or false (its off line sent)
+  S.register_invariant("crow", function()
+    for kind, count in pairs({input = SPEC.inputs, output = SPEC.outputs}) do
+      for n, value in pairs(state.set_up[kind]) do
+        if type(n) ~= "number" or n % 1 ~= 0 or n < 1 or n > count then
+          return "set_up names " .. kind .. " " .. tostring(n) .. ", no jack"
+        end
+        if type(value) ~= "boolean" then return kind .. " " .. n .. " set_up is " .. tostring(value) end
+      end
+    end
+    return nil
+  end)
+
   return M
 end

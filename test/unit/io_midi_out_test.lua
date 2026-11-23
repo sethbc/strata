@@ -2333,4 +2333,206 @@ test("a plain note sends its nearest key and no bend", function()
   target.note_off(2, "s1")
 end)
 
+---------------------------------------------------------------------------
+-- The table `midi out note` (#935, docs/notes/lua/io/midi_out.md): voice 1
+-- plain on port 3, channel 1, a synth there, its step notes of pitch 60 by
+-- the ids s1 and s2. The state is the voice's note records as the module
+-- holds them (live, held or departed, and how many), read from its state;
+-- a debt owed to a device is the module's left_with, which no state names,
+-- so every row that leaves one behind (or pays it) has a check that drives
+-- the script on until it shows: the device plugged in again gets its off
+---------------------------------------------------------------------------
+
+local NOTE_PORT, NOTE_OFF = 3, "note_off 60 1"
+
+-- lib/io/midi_out.lua's own state table (an upvalue of its stop)
+local function midi_out_state(S)
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(S.lib.io_midi_out.stop, index)
+    if name == nil then break end
+    if name == "state" then return value end
+  end
+  error("io_midi_out has no state upvalue")
+end
+
+local function note_state(S)
+  local kinds, count = {}, 0
+  for _, record in pairs(midi_out_state(S).notes[1]) do
+    count = count + 1
+    kinds[#kinds + 1] = record.held and "held" or record.departed and "departed" or "live"
+  end
+  if count == 0 then return "no note" end
+  for _, kind in ipairs(kinds) do
+    if kind ~= kinds[1] then return "mixed " .. table.concat(kinds, ", ") end
+  end
+  return kinds[1] .. " " .. count
+end
+
+local function note_remote(S, port)
+  assert_true(S.lib.io_rig.set("remote_grid_port", port), "remote grid on port " .. port)
+end
+
+-- The synth at port 3 and voice 1 routed there; held: a remote grid holds
+-- the port; count step notes started; departed: then the synth unplugged
+local function note_enter(count, held, departed)
+  return function(context)
+    local S = local_value("S")
+    context.device = context.midi.plug(NOTE_PORT, "synth")
+    params:set("v1_out_port", NOTE_PORT); settled(context)
+    if held then note_remote(S, NOTE_PORT) end
+    context.ids = {}
+    for k = 1, count do
+      context.ids[k] = "s" .. k
+      midi_target(S).note_on(1, "s" .. k, 60, 1, step_info())
+    end
+    if departed then context.midi.unplug(NOTE_PORT) end
+    clear(context.device)
+  end
+end
+
+-- A row's check: the device got exactly `expected` ("" for nothing); then,
+-- with plug, the synth plugged into port 3 again gets `owed` (its debt),
+-- and with ends, every id still kept ends sending nothing more
+local function note_sends(expected, options)
+  options = options or {}
+  return function(context)
+    local S = local_value("S")
+    assert_equal(sent(context.device), expected, "what the device got")
+    if options.plug then
+      if context.midi.vports[NOTE_PORT].device then context.midi.unplug(NOTE_PORT) end
+      local again = context.midi.plug(NOTE_PORT, "synth")
+      assert_equal(sent(again), options.plug, "what the synth plugged in again gets")
+      context.device = again
+    end
+    if options.ends then
+      clear(context.device)
+      for _, id in ipairs(context.ids) do midi_target(S).note_off(1, id) end
+      assert_equal(sent(context.device), options.ends == true and "" or options.ends, "what the ends send")
+    end
+  end
+end
+
+h.transition_table({
+  name = "midi out note",
+  notes = {"docs/notes/lua/io/midi_out.md", "midi out note"},
+  states = {
+    ["live 1"] = note_enter(1), ["live 2"] = note_enter(2),
+    ["held 1"] = note_enter(1, true), ["held 2"] = note_enter(2, true),
+    ["departed 1"] = note_enter(1, false, true), ["departed 2"] = note_enter(2, false, true),
+    ["no note"] = note_enter(0),
+  },
+  events = {
+    -- the newest id ends (an id that never started, with none)
+    ["its end"] = function(context)
+      local id = table.remove(context.ids) or "s9"
+      midi_target(local_value("S")).note_off(1, id)
+    end,
+    ["the device leaves"] = function(context) context.midi.unplug(NOTE_PORT) end,
+    ["a remote claims"] = function() note_remote(local_value("S"), NOTE_PORT) end,
+    ["the device arrives"] = function(context) context.device = context.midi.plug(NOTE_PORT, "synth") end,
+    -- the norns menu opened and closed, the device on port 3 (if one is
+    -- there) moved to port 4 in SYSTEM > DEVICES meanwhile
+    ["the menu closes"] = function(context)
+      _menu.set_mode(true)
+      if context.midi.vports[NOTE_PORT].device then context.midi.reassign(NOTE_PORT, 4) end
+      _menu.set_mode(false)
+    end,
+  },
+  state_of = function() return note_state(local_value("S")) end,
+  rows = {
+    {"live 1", "its end", "no note", check = note_sends(NOTE_OFF)},
+    {"live 1", "the device leaves", "departed 1", check = note_sends("", {plug = NOTE_OFF, ends = true})},
+    {"live 1", "a remote claims", "departed 1", check = note_sends(NOTE_OFF .. "|" .. ASK_HELLO, {ends = true})},
+    {"live 1", "the menu closes", "departed 1", check = note_sends(NOTE_OFF, {ends = true})},
+    {"live 2", "its end", "live 1", check = note_sends("", {ends = NOTE_OFF})},
+    {"live 2", "the device leaves", "departed 2", check = note_sends("", {plug = NOTE_OFF, ends = true})},
+    {"live 2", "a remote claims", "departed 2", check = note_sends(NOTE_OFF .. "|" .. ASK_HELLO, {ends = true})},
+    {"live 2", "the menu closes", "departed 2", check = note_sends(NOTE_OFF, {ends = true})},
+    {"held 1", "its end", "no note", check = note_sends("")},
+    {"held 1", "the device leaves", "held 1", check = note_sends("", {plug = ASK_HELLO, ends = true})},
+    {"held 1", "the menu closes", "held 1", check = note_sends("", {ends = true})},
+    {"held 2", "its end", "held 1", check = note_sends("", {ends = true})},
+    {"held 2", "the device leaves", "held 2", check = note_sends("", {plug = ASK_HELLO, ends = true})},
+    {"held 2", "the menu closes", "held 2", check = note_sends("", {ends = true})},
+    {"departed 1", "its end", "no note", check = note_sends("", {plug = NOTE_OFF})},
+    {"departed 1", "the device arrives", "departed 1", check = note_sends(NOTE_OFF, {ends = true})},
+    {"departed 1", "the menu closes", "departed 1", check = note_sends("", {plug = NOTE_OFF, ends = true})},
+    {"departed 2", "its end", "departed 1", check = note_sends("", {plug = NOTE_OFF, ends = true})},
+    {"departed 2", "the device arrives", "departed 2", check = note_sends(NOTE_OFF, {ends = true})},
+    {"departed 2", "the menu closes", "departed 2", check = note_sends("", {plug = NOTE_OFF, ends = true})},
+    {"no note", "its end", "no note", check = note_sends("")},
+    {"no note", "the device leaves", "no note", check = note_sends("", {plug = ""})},
+    {"no note", "a remote claims", "no note", check = note_sends(ASK_HELLO)},
+    {"no note", "the menu closes", "no note", check = note_sends("")},
+  },
+  impossible = {
+    {"live 1", "the device arrives", "the note's device is on its port: it arrives only after it leaves"},
+    {"live 2", "the device arrives", "the note's device is on its port: it arrives only after it leaves"},
+    {"held 1", "a remote claims", "a remote holds the port already, and a port has one owner"},
+    {"held 2", "a remote claims", "a remote holds the port already, and a port has one owner"},
+    {"held 1", "the device arrives", "the device is on its port, held: it arrives only after it leaves"},
+    {"held 2", "the device arrives", "the device is on its port, held: it arrives only after it leaves"},
+    {"departed 1", "the device leaves", "the device has left: the port is empty"},
+    {"departed 2", "the device leaves", "the device has left: the port is empty"},
+    {"departed 1", "a remote claims", "a remote claims only a port with a device on it, and the port is empty"},
+    {"departed 2", "a remote claims", "a remote claims only a port with a device on it, and the port is empty"},
+    {"no note", "the device arrives", "the device is on its port: it arrives only after it leaves"},
+  },
+})
+
+-- The invariant `midi out zones` (#935): a port's setup and takedown are
+-- never both due, and while the module runs held_owner names exactly the
+-- holder (a remote grid, a remote arc, midigrid) that owns the port
+local function invariant_answer(S, name)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == name then return record.fn() end
+  end
+  error("no invariant " .. name)
+end
+
+test("the midi out zones invariant holds through a remote's claim and release of a zone's port", function()
+  local context, S = started()
+  context.midi.plug(3, "synth")
+  mpe_voice(1, 3); settled(context)
+  remote_grid_at(S, 3)
+  assert_equal(invariant_answer(S, "midi out zones"), nil, "held: the holder is named")
+  params:set("v1_out_mode", 1); settled(context)  -- the zone goes while held: its takedown is due
+  assert_equal(invariant_answer(S, "midi out zones"), nil, "a takedown due alone")
+  remote_grid_at(S, 0)
+  assert_equal(invariant_answer(S, "midi out zones"), nil, "let go: nothing named, nothing due")
+end)
+
+test("the midi out zones invariant names a port with its setup and takedown both due", function()
+  local _, S = started()
+  h.allow_broken_invariants("the test breaks the midi out zones invariant on purpose")
+  local state = midi_out_state(S)
+  state.setup_due[5], state.takedown_due[5] = true, true
+  local answer = invariant_answer(S, "midi out zones")
+  assert_true(answer ~= nil and answer:find("port 5", 1, true) ~= nil, "port 5 is named: " .. tostring(answer))
+end)
+
+test("the midi out zones invariant names a held owner the ports do not agree with", function()
+  local context, S = started()
+  context.midi.plug(3, "synth")
+  h.allow_broken_invariants("the test breaks the midi out zones invariant on purpose")
+  local state = midi_out_state(S)
+  state.held_owner[4] = "remote grid"  -- nothing owns port 4
+  local answer = invariant_answer(S, "midi out zones")
+  assert_true(answer ~= nil and answer:find("port 4", 1, true) ~= nil, "port 4 is named: " .. tostring(answer))
+  state.held_owner[4] = nil
+  remote_grid_at(S, 3)
+  state.held_owner[3] = nil  -- the remote grid owns port 3
+  answer = invariant_answer(S, "midi out zones")
+  assert_true(answer ~= nil and answer:find("port 3", 1, true) ~= nil, "port 3 is named: " .. tostring(answer))
+end)
+
+test("the midi out zones invariant leaves the holders alone once the module has stopped", function()
+  local context, S = started()
+  context.midi.plug(3, "synth")
+  remote_grid_at(S, 3)
+  S.lib.io_midi_out.stop()
+  midi_out_state(S).held_owner[3] = nil
+  assert_equal(invariant_answer(S, "midi out zones"), nil, "stopped: the holders are not kept")
+end)
+
 end
