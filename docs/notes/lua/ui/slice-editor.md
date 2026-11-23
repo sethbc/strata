@@ -32,6 +32,7 @@ No test runs this table: it is one of the design's modal owners (its section 5, 
 | rows | K2 | closed | popped, a noted key forgotten |
 | rows | a MIDI note on the key row | rows | the note noted; the next step sets the key (`S.lib.samples.set`) |
 | rows | the slot emptied | closed | popped, a noted key forgotten |
+| rows | the grid's step editor pushed over it | rows | covered, as from markers |
 
 ## Owns
 

@@ -16,7 +16,7 @@
 ## Machines
 
 ### scenes prompt
-- **State:** the overwrite confirmation, `S.scenes_page.armed_slot` and `armed_until` against `S.cursors.scene` and `util.time()` (read through the page's local `armed()`): idle (no slot), armed (the cursor's slot, before `armed_until`), lapsed (a slot, but the cursor elsewhere or the time passed); the States section below gives each state's fields. Beside it, `S.scenes_page.naming`, the slot the page's name entry is open for: that entry's own machine (`S.lib.ui_name_entry`, `docs/notes/lua/ui/name-entry.md`), which `naming` follows (set as it opens, cleared by its callback or its reconcile), so it has no table here.
+- **State:** the overwrite confirmation, `S.scenes_page.armed_slot` and `armed_until` against `S.cursors.scene` and `util.time()` (read through the page's local `armed()`): idle (no slot), armed (the cursor's slot, before `armed_until`), lapsed (a slot, but the cursor elsewhere or the time passed); the States section below gives each state's fields. Beside it, `S.scenes_page.naming`, the slot the page's name entry is open for: its states are described in `docs/notes/lua/ui/name-entry.md` (`S.lib.ui_name_entry`), and `naming` follows them (set as it opens, cleared by its callback or its reconcile), so it has no table here.
 - **Invariant:** `scenes prompt`: `armed_slot` and `naming` are each nil or a slot in 1..`NUM_SCENES`, and `naming` is set exactly while the page keeps an open entry's callback.
 - **Test:** `test/unit/pages_scenes_test.lua`: "scenes prompt: every cell is decided" and its rows (SCENES shown, slot 1 holding a scene with the cursor on it, the clock at 100 s; lapsed is armed with 2.5 s passed); "the scenes prompt invariant holds the name entry's slot to its callback".
 
