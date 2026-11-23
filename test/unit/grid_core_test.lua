@@ -1444,6 +1444,202 @@ test("a virtual grid attaches above the four ports and plays its layout", functi
   assert_equal(device.rotations[#device.rotations], 0, "and turns it back")
 end)
 
+-- 3.9 (#932): a grid unplugged, emptied in SYSTEM > DEVICES or a virtual
+-- one detached goes through one detach, which leaves no held keys' table
+test("every detach leaves the port's held table nil", function()
+  local context = load_strata(); finish_startup(context)
+  local S, core = local_value("S"), grid_core()
+  local function held_then(port, press, detach, what)
+    press(port, 5, 1, 1)  -- voice 1's step 5, held, its editor hold pending
+    assert_true(core.held(port, 5, 1) ~= nil and core.hold_pending(port, 5, 1), what .. ": held first")
+    detach()
+    assert_equal(S.grids[port], nil, what .. ": detached")
+    assert_true(not core.hold_pending(port, 5, 1), what .. ": its hold stopped")
+    assert_equal(S.grid_held[port], nil, what .. ": the port's held table is nil, as a port never attached has none")
+  end
+  context.grid.plug(1, 16, 16)
+  held_then(1, context.grid.press, function() context.grid.unplug(1) end, "unplugged")
+  context.grid.plug(1, 16, 16)
+  held_then(1, context.grid.press, function()
+    _menu.set_mode(true); context.grid.reassign(1, 2); _menu.set_mode(false)
+  end, "moved off its port in SYSTEM > DEVICES")
+  local device = virtual_grid(16, 16)
+  core.attach_virtual(S.constants.GRID_PORTS.remote, device)
+  held_then(S.constants.GRID_PORTS.remote, function(_, x, y, z) device.key(x, y, z) end,
+    function() core.detach_virtual(S.constants.GRID_PORTS.remote) end, "a virtual grid detached")
+  context.clock.run_for(1)
+  assert_equal(shown_step_editor(), nil, "no hold fired after its detach")
+end)
+
+-- 3.9 (#930): the "grid keys" invariant holds the step keys and the step
+-- editor's key; each test breaks one line of it on purpose
+local function grid_keys_broken()
+  local found = {}
+  for _, broken in ipairs(h.check_invariants()) do
+    if broken:find("^grid keys: ") then found[#found + 1] = broken end
+  end
+  return table.concat(found, "\n")
+end
+
+test("the grid keys invariant fails for a step key that is not held", function()
+  local context = load_strata(); finish_startup(context)
+  local S, core = local_value("S"), grid_core()
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 5, 1, 1)  -- voice 1's step 5, a held step
+  core.end_port_holds(1)  -- its editor hold stopped: the key is held and a step key, nothing else
+  assert_equal(grid_keys_broken(), "", "held, the step key breaks nothing")
+  h.allow_broken_invariants("a held step key's held mark is taken away")
+  S.grid_held[1][5][1] = nil
+  assert_equal(grid_keys_broken(), "grid keys: grid 1 key 5,1 is a step key but not held")
+end)
+
+test("the grid keys invariant fails for a step editor key that is not a held, consumed step key", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 5, 3, 1)
+  context.clock.run_for(0.35)
+  assert_equal(shown_step_editor(), "3 5 1", "the held step opened the editor")
+  h.show_page("MAIN"); key(2, 1); key(2, 0)  -- K2 closes it on the screen; its key stays the editor's
+  assert_equal(shown_step_editor(), nil, "closed on the screen")
+  assert_equal(grid_keys_broken(), "", "a closed editor's key, held and consumed, breaks nothing")
+  h.allow_broken_invariants("the step editor's key's held mark is taken away")
+  S.grid_held[1][5][3] = nil
+  assert_equal(grid_keys_broken(), "grid keys: the step editor's key, grid 1 key 5,3, is not held")
+end)
+
+test("the grid keys invariant fails for an open step editor with no held, consumed step key on its port", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 5, 3, 1)
+  context.clock.run_for(0.35)
+  assert_equal(shown_step_editor(), "3 5 1", "the held step opened the editor")
+  assert_equal(grid_keys_broken(), "", "an editor its held key opened breaks nothing")
+  h.allow_broken_invariants("the step editor opened from Lua, with no grid key")
+  S.lib.pages_seq.open_step_editor(2, 4, 2)  -- port 2's editor: the key that opened one is port 1's
+  assert_equal(grid_keys_broken(), "grid keys: the step editor is open for port 2 with no held, consumed step key of that port")
+  context.grid.press(1, 5, 3, 0)  -- its release closes nothing: the editor is port 2's now
+  S.lib.pages_seq.close_step_editor(2)
+  S.lib.pages_seq.open_step_editor(1, 1, 1)  -- no key at all
+  assert_equal(grid_keys_broken(), "grid keys: the step editor is open for port 1 with no held, consumed step key of that port")
+end)
+
+-- 3.9: the "grid keys" machine's table (docs/notes/lua/grid-core.md), for
+-- one key on a 256 on port 1: (5, 1), voice 1's step 5 on the patterns
+-- pane; (8, 1) is another key of the voice (a level key while 5 is a held
+-- step). Whether a held key is still a step key is no field a reader can
+-- see, so the rows that enter "waiting" and "dropped" release the key to
+-- show it (a step key's release toggles its step, a dropped one's nothing)
+local KEY = {port = 1, x = 5, y = 1, voice = 1, step = 5, level_x = 8}
+local function key_press(z) return function(context) context.grid.press(KEY.port, KEY.x, KEY.y, z) end end
+local function key_state()
+  local core = grid_core()
+  if core.held(KEY.port, KEY.x, KEY.y) == nil then return "up" end
+  local pending, consumed = core.hold_pending(KEY.port, KEY.x, KEY.y), core.consumed(KEY.port, KEY.x, KEY.y)
+  local editor = shown_step_editor()
+  if editor == KEY.voice .. " " .. KEY.step .. " " .. KEY.port and consumed and not pending then return "editing" end
+  if editor ~= nil then return "held, the step editor open for " .. editor end
+  if pending and not consumed then return "waiting" end
+  if consumed and not pending then return "consumed" end
+  if not pending then return "dropped" end
+  return "held, consumed and its hold pending"
+end
+-- The key released: its step toggled (true) or not (false), the editor closed
+local function released_toggles(toggles)
+  return function(context)
+    local patterns = local_value("patterns")
+    local before = patterns[KEY.voice][KEY.step]
+    context.grid.press(KEY.port, KEY.x, KEY.y, 0)
+    assert_equal(patterns[KEY.voice][KEY.step] ~= before, toggles, toggles and "its release toggles the step" or "its release toggles nothing")
+    assert_equal(shown_step_editor(), nil, "no step editor open after its release")
+  end
+end
+local function editor_closed() assert_equal(shown_step_editor(), nil, "the step editor closed") end
+local function step_level(level)
+  return function() assert_equal(local_value("patterns")[KEY.voice][KEY.step], level, "the step took the level key's level") end
+end
+local function key_enter(...)
+  local steps = {...}
+  return function(context)
+    context.grid.plug(KEY.port, 16, 16)
+    for _, step in ipairs(steps) do step(context) end
+  end
+end
+local KEY_EVENTS = {
+  ["press"] = key_press(1),
+  ["release"] = key_press(0),
+  ["hold time"] = function(context) context.clock.run_for(0.35) end,
+  ["page change"] = function() grid_core().set_page(KEY.port, PAGES().scenes, 1) end,
+  ["level key"] = function(context) context.grid.press(KEY.port, KEY.level_x, KEY.y, 1) end,
+  ["pattern replaced"] = function()
+    local S = local_value("S")
+    local steps = {}
+    for step = 1, #S.patterns[KEY.voice] do steps[step] = S.patterns[KEY.voice][step] end
+    S.lib.sequencer.replace_pattern(KEY.voice, steps)
+  end,
+  ["unplug"] = function(context) context.grid.unplug(KEY.port) end,
+}
+-- level_for_position(8, 16): 8 * 15 / 16 = 7.5 -> 8
+local LEVELED = 8
+h.transition_table({
+  name = "grid keys",
+  notes = {"docs/notes/lua/grid-core.md", "grid keys"},
+  states = {
+    ["up"] = key_enter(),
+    ["waiting"] = key_enter(key_press(1)),
+    ["consumed"] = key_enter(key_press(1), KEY_EVENTS["level key"]),
+    ["editing"] = key_enter(key_press(1), KEY_EVENTS["hold time"]),
+    ["dropped"] = key_enter(key_press(1), KEY_EVENTS["pattern replaced"]),
+  },
+  events = KEY_EVENTS,
+  state_of = key_state,
+  rows = {
+    {"up", "press", "waiting", check = released_toggles(true)},
+    {"up", "release", "up"},
+    {"up", "hold time", "up"},
+    {"up", "page change", "up"},
+    {"up", "level key", "up", check = step_level(0)},
+    {"up", "pattern replaced", "up"},
+    {"up", "unplug", "up"},
+    {"waiting", "press", "waiting", check = released_toggles(true)},
+    {"waiting", "release", "up", check = step_level(15)},
+    {"waiting", "hold time", "editing"},
+    {"waiting", "page change", "dropped", check = released_toggles(false)},
+    {"waiting", "level key", "consumed", check = step_level(LEVELED)},
+    {"waiting", "pattern replaced", "dropped", check = released_toggles(false)},
+    {"waiting", "unplug", "up", check = function(context)
+      context.clock.run_for(1)
+      editor_closed()
+    end},
+    {"consumed", "press", "waiting", check = released_toggles(true)},
+    {"consumed", "release", "up", check = step_level(LEVELED)},
+    {"consumed", "hold time", "consumed"},
+    {"consumed", "page change", "consumed"},
+    {"consumed", "level key", "consumed", check = step_level(LEVELED)},
+    {"consumed", "pattern replaced", "consumed"},
+    {"consumed", "unplug", "up"},
+    {"editing", "press", "waiting", check = released_toggles(true)},
+    {"editing", "release", "up", check = function() editor_closed(); step_level(0)() end},
+    {"editing", "hold time", "editing"},
+    {"editing", "page change", "consumed", check = editor_closed},
+    {"editing", "level key", "editing", check = step_level(LEVELED)},
+    {"editing", "pattern replaced", "consumed", check = editor_closed},
+    {"editing", "unplug", "up", check = editor_closed},
+    {"dropped", "press", "waiting", check = released_toggles(true)},
+    {"dropped", "release", "up", check = step_level(0)},
+    {"dropped", "hold time", "dropped", check = released_toggles(false)},
+    {"dropped", "page change", "dropped", check = released_toggles(false)},
+    {"dropped", "level key", "dropped", check = function(context)
+      step_level(0)()
+      released_toggles(false)(context)
+    end},
+    {"dropped", "pattern replaced", "dropped", check = released_toggles(false)},
+    {"dropped", "unplug", "up"},
+  },
+  impossible = {},
+})
+
 test("ports 1 to 4 take norns' own vports only", function()
   local foreign = virtual_grid(16, 16)
   local context = load_strata({ before_init = function()

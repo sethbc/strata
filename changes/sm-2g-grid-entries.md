@@ -1,0 +1,2 @@
+### Changed
+- Developer groundwork only, nothing you hear or see changes: a grid that is unplugged, moved off its port in SYSTEM > DEVICES or detached as a remote grid now leaves through one shared path, the arc's connected state is read from the followed device, and the tests check the grid's held step keys and the step editor's key, with the grid keys' and the arc's transitions written down as tables the tests run (#930, #932).
