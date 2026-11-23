@@ -1045,4 +1045,80 @@ test("a synced take unbinds once: at its 0 s report, not again at its start", fu
   assert_equal(root_notes(), 1, "nor resends")
 end)
 
+
+-- 3.9 (#903): the "buffer slots" invariant holds a recording's take: a slot
+-- finishes only a replace take, and records only with a take. Each state
+-- is put in by hand (the script never makes either), one at a time
+test("the buffer slots invariant: finishing only for a replace take, recording only with a take (#903)", function()
+  local context = load_strata(); finish_startup(context)
+  h.allow_broken_invariants("each line is broken by hand")
+  local buffers = local_value("buffers")
+  local function broken() return table.concat(h.check_invariants(), "; ") end
+  params:set("record_feedback", 50)
+  record_buffer(1)
+  assert_equal(S_record_state(1).kind, "playable", "a dub")
+  assert_equal(broken(), "", "a dub holds")
+  buffers[1].finishing = true
+  assert_equal(broken(), "buffer slots: slot 1 is finishing a take that is not a replace take (playable)")
+  buffers[1].finishing = false
+  assert_equal(broken(), "")
+  buffers[2].recording = true
+  assert_equal(broken(), "buffer slots: slot 2 records with no take")
+  buffers[2].recording = false
+  assert_equal(broken(), "", "and holds again")
+end)
+
+-- The take's record (lib/record.lua's takes) as the global record_buffer holds it
+local function takes_record()
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(record_buffer, index)
+    if not name then return nil end
+    if name == "takes" then return value end
+  end
+end
+
+-- 3.9 (#903): a take's record goes where the take ends: a replace take's
+-- settle, a load or a clear that supersedes it, a dub's end and a cancel;
+-- cleanup leaves every running take's record, since none ends there (the
+-- engine finishes or frees it)
+test("a take's record goes where the take ends, and cleanup keeps a running one's (#903)", function()
+  local context = load_strata(); finish_startup(context)
+  local takes = takes_record()
+  assert_true(takes ~= nil, "the takes reached through record_buffer")
+  params:set("record_duration", 2)
+  record_buffer(1); record_buffer(1)              -- stopped: finishing
+  assert_true(takes[1] ~= nil, "a finishing take keeps its record")
+  context.polls.fire("bufferState", context.polls.buffer_state_value(1, 0, 1.5))
+  assert_equal(local_value("S").lib.buffers.status(1), "loaded", "settled")
+  assert_equal(takes[1], nil, "a settled take's record goes")
+  record_buffer(2); load_buffer(2, "/tmp/b.wav")
+  assert_equal(takes[2], nil, "a load supersedes the take")
+  record_buffer(3); clear_buffer(3)
+  assert_equal(takes[3], nil, "a clear supersedes the take")
+  record_buffer(4); wake_buffer_clock(context, 4); wake_buffer_clock(context, 4)  -- the timer, then the fallback
+  assert_equal(local_value("S").buffers[4].finishing, false, "the fallback settled it")
+  assert_equal(takes[4], nil, "a take the fallback settles goes")
+  record_buffer(5)
+  cleanup()
+  assert_true(takes[5] ~= nil, "cleanup keeps a running take's record")
+  assert_equal(S_record_state(5).number, 1, "and the slot still reads its take")
+end)
+
+
+-- 3.9 (#903): the SCENES layout state that shows REC makes a real take, so
+-- the slot records with one (the renders draw it)
+test("the SCENES layout state beside REC records a real take (#903)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local record = S.registry.pages[S.constants.UI_PAGES.index.SCENES]
+  local found = nil
+  for _, state in ipairs(record.layout_states) do
+    if state.name == "S16 current beside REC" then found = state end
+  end
+  assert_true(found ~= nil, "the layout state")
+  found.setup(context)
+  assert_equal(S_record_state(1) and S_record_state(1).phase, "recording", "slot 1 records a take")
+  assert_equal(table.concat(h.check_invariants(), "; "), "", "every invariant holds")
+end)
+
 end

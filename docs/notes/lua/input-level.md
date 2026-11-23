@@ -6,6 +6,15 @@
 - The polls are looked up with `poll.set` again, never kept from load time (#438: norns replaces its poll objects when it re-registers the polls, an engine load, and a dead poll would silence the meter and the `IN` source): `refresh()` does it (it gives the module's callback and rate, starts them and stops a different object held before), the start step calls it and so does BUFFER's `enter`. No other module names the polls.
 - The source's `value`, `describe` and `visible` never send and never yield (`docs/notes/lua/mod-sources.md`); a NaN or non-number poll value reads 0.
 
+## Machines
+
+### input polls
+- **State:** `state.started` (set by the start step, cleared by the cleanup step) and the two poll objects in `state.polls`, locals of `lib/input_level.lua`; `refresh()` looks them up again.
+- **Invariant:** `input level`: between the start step and the cleanup step every poll the norns has (`amp_in_l`, `amp_in_r`) is running.
+- **Test:** `test/unit/input_level_test.lua`: "the polls run from start to cleanup, whatever page shows".
+
+No table: two states (started or not), each entered by one step, and a poll a norns lacks is skipped in both.
+
 ## Owns
 
 `lib/input_level.lua` (`S.lib.input_level`, 3.4, package 1i, design §10.3), table `INPUT_LEVEL` (`poll_hz`, `polls`, `gain_param`, `hint`):

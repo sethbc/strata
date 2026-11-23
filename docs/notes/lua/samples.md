@@ -11,6 +11,42 @@
 - **A record at its defaults is never written** (no `samples.data` entry, `false` in `buffers.data`), and a value that fails its check changes nothing (`set` returns false).
 - **samples.data** is written only through `S.lib.data_files.write`, `SAMPLES.save_delay` (0.1 s) after the first change of a burst when what it would hold differs from what was last written, and at the cleanup step. Unreadable, of another version or without a file list, it is set aside as `samples.data.bak` (`S.lib.data_files.set_aside`) with one console line and the slots load with no settings; if it cannot be moved, nothing is written over it. It has no SETUP row (ruling 27). An entry whose path, start, `used` or settings fail their checks, a repeated one and one past `max_files` are left out, with one console line naming how many (the next write drops them).
 
+## Machines
+
+### settings binding
+- **State:** `bound[slot]` (a local of `lib/samples.lua`: nil, `OWN`, the slot's own take's record, or a file's entry), read with `S.lib.samples.is_bound(slot)`; `own[slot]` beside it is the take's record.
+- **Invariant:** `settings binding` (3.9, #907): a slot holding settled audio (status `"loaded"`, `seconds` above 0) is bound, and a free one (`"empty"` or `"missing"`) is not, but while a canceled replace take's slot awaits the engine's next length report (`kept_state`): the take may not have prepared it, so the old audio and its binding may still be there.
+- **Test:** `test/unit/samples_test.lua`: "settings binding: every cell is decided" and its rows (slot 2), and "the settings binding invariant: settled audio is bound, a free slot is not (#907)".
+
+The binding by the slot's events, each driven through the script with the engine stub's reports in the engine's order. Every cell is a row. The slot's own table (`docs/notes/lua/buffers/slot.md`) has a bind in its Effect column wherever a row binds or unbinds, and its rows hold this invariant too.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `unbound` | `a load settles` | `file` | `confirm_buffer_audio` binds the file's entry (path and start) |
+| `unbound` | `a load settles empty` | `unbound` | the settle with no audio unbinds (nothing to unbind) |
+| `unbound` | `a load fails` | `unbound` | `apply_buffer_state` of an empty state unbinds |
+| `unbound` | `a replace take starts` | `unbound` | `take_started` unbinds at the send |
+| `unbound` | `a replace take settles` | `own` | `start_take` starts a fresh own record, then the bind |
+| `unbound` | `a dub ends` | `own` | `take_from_file` (no file: no copy), then the bind |
+| `unbound` | `a synced take is canceled` | `unbound` | the 0 s after `canceled` drops the kept state |
+| `unbound` | `a clear` | `unbound` | `clear_buffer` unbinds |
+| `file` | `a load settles` | `file` | the new file's entry; a load that is sent binds nothing until it settles |
+| `file` | `a load settles empty` | `unbound` | the settle with no audio unbinds |
+| `file` | `a load fails` | `file` | `apply_buffer_state` puts the file back and binds it |
+| `file` | `a replace take starts` | `unbound` | `take_started` unbinds at the send: the old audio stops |
+| `file` | `a replace take settles` | `own` | a fresh own record (it recorded over the file's) |
+| `file` | `a dub ends` | `own` | the own record a copy of the file's; the file's untouched |
+| `file` | `a synced take is canceled` | `file` | the slot never prepared: still bound through the arm wait, its kept state put back |
+| `file` | `a clear` | `unbound` | `clear_buffer` unbinds and drops the own record |
+| `own` | `a load settles` | `file` | the file's entry; the own record goes |
+| `own` | `a load settles empty` | `unbound` | the settle with no audio unbinds |
+| `own` | `a load fails` | `own` | the take put back on its scratch path, bound to its record |
+| `own` | `a replace take starts` | `unbound` | `take_started` unbinds; the own record stays until the new take settles |
+| `own` | `a replace take settles` | `own` | a fresh own record |
+| `own` | `a dub ends` | `own` | a take dubbed keeps its own record |
+| `own` | `a synced take is canceled` | `own` | the take before it comes back with its record |
+| `own` | `a clear` | `unbound` | `clear_buffer` unbinds and drops the own record |
+
 ## What it owns
 
 `S.lib.samples` (3.7, design §4, decision 10; package 2d). The tunables are `SAMPLES` (`M.SAMPLES`): `file = "samples.data"`, `version = 1`, `max_files = 256`, `max_gain = 16`, `tempo_min = 20`, `tempo_max = 300`, `modes = {"off", "equal", "transients"}`, `default_count = 8`, `default_sensitivity = 50`, and the builder's `count_min = 2`, `count_max = 64`, `sensitivity_max = 100`, `key_max = 127`, `beats_per_bar = 4`, `seconds_per_minute = 60`, `save_delay = 0.1`, `backup_suffix = ".bak"`.

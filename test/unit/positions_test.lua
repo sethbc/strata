@@ -1492,4 +1492,175 @@ test("without the slices, the file's settings or the scan the slice rows fail lo
   assert_equal(#doubles.plays, 0)
 end)
 
+
+-- A local of lib/positions.lua, reached through the module function that
+-- holds it
+local function positions_local(S, fn_name, name)
+  local fn = S.lib.positions[fn_name]
+  for index = 1, math.huge do
+    local upvalue_name, value = debug.getupvalue(fn, index)
+    if not upvalue_name then return nil end
+    if upvalue_name == name then return value end
+  end
+end
+
+-- 3.9 (#907): the "scrub glide" invariant: a glide's rate is sent only
+-- while its clock runs (a rate with no clock would leave the engine
+-- gliding for good). A glide holds it; a rate put in by hand breaks it
+test("the scrub glide invariant: a glide's rate only with its clock (#907)", function()
+  local context, S = buffer_voices()
+  h.allow_broken_invariants("the line is broken by hand")
+  local function broken() return table.concat(h.check_invariants(), "; ") end
+  params:set("scrub_friction", 0)
+  params:set("v1_buf_pos", 0.2); S.lib.positions.scrub_turned(1)
+  context.clock.run_for(0.02)
+  params:set("v1_buf_pos", 0.3); S.lib.positions.scrub_turned(1)
+  context.clock.run_for(0.2)
+  assert_true(S.lib.positions.scrub_rate(1) ~= 0, "voice 1 glides")
+  assert_equal(broken(), "", "a glide holds")
+  local glide_rate = positions_local(S, "scrub_rate", "glide_rate")
+  glide_rate[2] = 0.5
+  assert_equal(broken(), "scrub glide: voice 2 glides at rate 0.5 with no clock")
+  glide_rate[2] = 0
+  assert_equal(broken(), "")
+end)
+
+
+-- buffer_voices' voices on the script a table's row has loaded
+local function buffer_voices_loaded(context)
+  local S = local_value("S")
+  S.buffers[1].seconds = 16
+  for voice_idx = 1, 3 do params:set("v" .. voice_idx .. "_source", S.constants.SOURCE_SYNTH + 1) end
+  context.clear_engine_calls()
+  return S
+end
+
+-- 3.9: the scan hold by its holders, voice 3 (a stopped buffer voice, so a
+-- start is its voice sync): which of the grid on port 1 and the arc hold it
+local HOLD_VOICE, GRID_HOLDER = 3, "grid:1"
+local function hold_state()
+  local S = local_value("S")
+  local grid, arc = S.lib.positions.holds_scan(HOLD_VOICE, GRID_HOLDER), S.lib.positions.holds_scan(HOLD_VOICE, "arc")
+  local held = S.lib.positions.scan_held(HOLD_VOICE)
+  if grid and arc then return held and "grid and arc" or "grid and arc, not held" end
+  if grid then return held and "grid" or "grid, not held" end
+  if arc then return held and "arc" or "arc, not held" end
+  return held and "held by nobody" or "free"
+end
+local function holding(holder, on)
+  return function() local_value("S").lib.positions.hold_scan(HOLD_VOICE, on, holder) end
+end
+local function enter_holds(grid, arc)
+  return function(context)
+    buffer_voices_loaded(context)
+    if grid then holding(GRID_HOLDER, true)() end
+    if arc then holding("arc", true)() end
+  end
+end
+-- The scanHold the engine was last sent for the voice, nil for none
+local function scan_hold_sent(value)
+  return function(context)
+    local last = nil
+    for _, call in ipairs(grain_calls(context, "scanHold")) do
+      if call.voice == HOLD_VOICE - 1 then last = call.value end
+    end
+    assert_equal(last, value, "the scanHold sent")
+  end
+end
+h.transition_table({
+  name = "scan hold",
+  notes = {"docs/notes/lua/positions.md", "scan hold"},
+  states = {
+    ["free"] = enter_holds(false, false),
+    ["grid"] = enter_holds(true, false),
+    ["arc"] = enter_holds(false, true),
+    ["grid and arc"] = enter_holds(true, true),
+  },
+  events = {
+    ["grid holds"] = function(context) context.clear_engine_calls(); holding(GRID_HOLDER, true)() end,
+    ["grid lets go"] = function(context) context.clear_engine_calls(); holding(GRID_HOLDER, false)() end,
+    ["arc holds"] = function(context) context.clear_engine_calls(); holding("arc", true)() end,
+    ["arc lets go"] = function(context) context.clear_engine_calls(); holding("arc", false)() end,
+    ["voice start"] = function(context) context.clear_engine_calls(); toggle_voice(HOLD_VOICE) end,
+  },
+  state_of = hold_state,
+  rows = {
+    {"free", "grid holds", "grid"},
+    {"free", "grid lets go", "free"},
+    {"free", "arc holds", "arc"},
+    {"free", "arc lets go", "free"},
+    {"free", "voice start", "free"},
+    {"grid", "grid holds", "grid"},
+    {"grid", "grid lets go", "free"},
+    {"grid", "arc holds", "grid and arc"},
+    {"grid", "arc lets go", "grid"},
+    {"grid", "voice start", "free"},
+    {"arc", "grid holds", "grid and arc"},
+    {"arc", "grid lets go", "arc"},
+    {"arc", "arc holds", "arc"},
+    {"arc", "arc lets go", "free"},
+    {"arc", "voice start", "free"},
+    {"grid and arc", "grid holds", "grid and arc"},
+    {"grid and arc", "grid lets go", "arc", check = scan_hold_sent(nil)},
+    {"grid and arc", "arc holds", "grid and arc"},
+    {"grid and arc", "arc lets go", "grid", check = scan_hold_sent(nil)},
+    {"grid and arc", "voice start", "free", check = scan_hold_sent(0)},
+  },
+})
+
+-- 3.9 (#907): the scrub glide, voice 1 (running) at friction 0: idle (no
+-- clock), waiting for the ring to be still (a clock, rate 0) or gliding
+-- (a clock and a rate), read from the module's glide_clock and its rate
+local function glide_state()
+  local S = local_value("S")
+  local clock_held = positions_local(S, "scrub_turned", "glide_clock")[1] ~= nil
+  local rate = S.lib.positions.scrub_rate(1)
+  if not clock_held then return rate == 0 and "idle" or "a rate with no clock" end
+  return rate == 0 and "waiting" or "gliding"
+end
+local function enter_glide(still_seconds)
+  return function(context)
+    local S = buffer_voices_loaded(context)
+    params:set("scrub_friction", 0)
+    if still_seconds then
+      fling(context, S, 0.1, 0.05)
+      context.clock.run_for(still_seconds)
+    end
+  end
+end
+local function turn()
+  params:set("v1_buf_pos", params:get("v1_buf_pos") + 0.01)
+  local_value("S").lib.positions.scrub_turned(1)
+end
+h.transition_table({
+  name = "scrub glide",
+  notes = {"docs/notes/lua/positions.md", "scrub glide"},
+  states = {
+    ["idle"] = enter_glide(nil),
+    ["waiting"] = enter_glide(0),
+    ["gliding"] = enter_glide(0.09),
+  },
+  events = {
+    ["a turn"] = turn,
+    ["the ring still"] = function(context) context.clock.run_for(0.09) end,
+    ["a jump"] = function() local_value("S").lib.positions.jump(1, 0.5) end,
+    ["a direct turn"] = function() params:set("scrub_friction", 100); turn() end,
+  },
+  state_of = glide_state,
+  rows = {
+    {"idle", "a turn", "waiting"},
+    {"idle", "the ring still", "idle"},
+    {"idle", "a jump", "idle"},
+    {"idle", "a direct turn", "idle"},
+    {"waiting", "a turn", "waiting"},
+    {"waiting", "the ring still", "gliding"},
+    {"waiting", "a jump", "idle"},
+    {"waiting", "a direct turn", "idle"},
+    {"gliding", "a turn", "waiting"},
+    {"gliding", "the ring still", "gliding"},
+    {"gliding", "a jump", "idle"},
+    {"gliding", "a direct turn", "idle"},
+  },
+})
+
 end

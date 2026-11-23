@@ -23,6 +23,60 @@
 - **A slice key's release ends the slice it played for the voice it was pressed for** (2e's review): each release names its own voice (two lines can hold the same cell), and a position key's release ends that voice's held key of that cell (#733), so no stale anchor stays lit at 11 or makes the next press a loop.
 - **`display_signature()` holds every slice row's levels and bank keys**, for no port and for each port with a record, so the playhead clock repaints a slice that starts or ends (S.lib.slices' notes end on their own) and each grid's own bank.
 
+## Machines
+
+### scan hold
+- **State:** per voice, `holders[v]` (a set of holders: `"grid:<port>"`, `"arc"`, `"caller"`) and `scan_hold[v]` (locals of `lib/positions.lua`), read with `S.lib.positions.scan_held(v)` and `holds_scan(v, holder)`; the port records' `hold` only remember which voices a port holds.
+- **Invariant:** `scan holds`: a voice's scan is held exactly while its set of holders is not empty (`scan_hold[v]` true with one or more holders, false with none; #238's one boolean behind several holders).
+- **Test:** `test/unit/positions_test.lua`: "scan hold: every cell is decided" and its rows (voice 3, a stopped buffer voice, so a start is its voice sync; the holders a grid on port 1 and the arc).
+
+Every cell is a row. `scanHold 1` goes out when the first holder joins and `scanHold 0` when the last one leaves, while the voice runs; the cleanup step `scrub_glide` lets every holder go through `hold_scan`.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `free` | `grid holds` | `grid` | the first holder: held (`scanHold 1` while running) |
+| `free` | `grid lets go` | `free` | a holder not in the set: nothing |
+| `free` | `arc holds` | `arc` | the first holder: held |
+| `free` | `arc lets go` | `free` | nothing |
+| `free` | `voice start` | `free` | the sync sends `scanHold 0` |
+| `grid` | `grid holds` | `grid` | already a holder: nothing |
+| `grid` | `grid lets go` | `free` | the last holder: not held (`scanHold 0` while running) |
+| `grid` | `arc holds` | `grid and arc` | another holder: nothing is sent |
+| `grid` | `arc lets go` | `grid` | not a holder: nothing |
+| `grid` | `voice start` | `free` | the sync empties the set and sends `scanHold 0` (the key's LED goes dim while it is down) |
+| `arc` | `grid holds` | `grid and arc` | another holder: nothing is sent |
+| `arc` | `grid lets go` | `arc` | not a holder: nothing |
+| `arc` | `arc holds` | `arc` | already a holder: nothing |
+| `arc` | `arc lets go` | `free` | the last holder: not held |
+| `arc` | `voice start` | `free` | the sync empties the set |
+| `grid and arc` | `grid holds` | `grid and arc` | nothing |
+| `grid and arc` | `grid lets go` | `arc` | one holder's release never ends another's hold: nothing is sent |
+| `grid and arc` | `arc holds` | `grid and arc` | nothing |
+| `grid and arc` | `arc lets go` | `grid` | nothing is sent |
+| `grid and arc` | `voice start` | `free` | the sync empties the set and sends `scanHold 0` |
+
+### scrub glide
+- **State:** per voice, `glide_clock[v]` (the clock helper's handle), `fling[v]` (`{turned_at, gliding}`, while the clock runs) and `glide_rate[v]` (as sent, `scrubRate`; read with `S.lib.positions.scrub_rate(v)`), locals of `lib/positions.lua`: idle (no clock), waiting for the ring to be still (a clock, rate 0) or gliding (a clock and a rate).
+- **Invariant:** `scrub glide` (3.9, #907): a voice's glide rate is not 0 only while its clock runs; a rate with no clock would leave the engine gliding for good.
+- **Test:** `test/unit/positions_test.lua`: "scrub glide: every cell is decided" and its rows (voice 1, running, at friction 0; its state read from the module's `glide_clock`), and "the scrub glide invariant: a glide's rate only with its clock (#907)".
+
+Every cell is a row. A grain restart and a voice sync end a glide as a jump does (Must not break, above).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `idle` | `a turn` | `waiting` | one clock starts for the run of turns |
+| `idle` | `the ring still` | `idle` | nothing |
+| `idle` | `a jump` | `idle` | nothing to end |
+| `idle` | `a direct turn` | `idle` | friction 100%: the ring is direct |
+| `waiting` | `a turn` | `waiting` | the same clock waits again from this turn (#515) |
+| `waiting` | `the ring still` | `gliding` | still for `release_seconds`: the ring's speed is sent |
+| `waiting` | `a jump` | `idle` | the clock stops (`S.lib.clocks.stop`) |
+| `waiting` | `a direct turn` | `idle` | the clock stops; the turns are kept |
+| `gliding` | `a turn` | `waiting` | `scrubRate 0` at once; the clock waits again |
+| `gliding` | `the ring still` | `gliding` | the rate decays with the friction |
+| `gliding` | `a jump` | `idle` | `scrubRate 0`; the clock stops |
+| `gliding` | `a direct turn` | `idle` | `scrubRate 0`; the clock stops |
+
 ## Owns
 
 `lib/positions.lua` (`S.lib.positions`): moving a voice's read position.
@@ -48,23 +102,7 @@ A bookmark key that waits (`waiting_bookmark(v)`) shows `LEVELS.waiting_high` / 
 
 ## States
 
-The scan hold, per voice (`scan_hold[v]` and `holders[v]`, locals of `lib/positions.lua`; the port records' `hold` only remember which voices a port holds):
-
-| `holders[v]` | `scan_hold[v]` | Meaning |
-|--------------|----------------|---------|
-| empty | false | not held: the voice scans |
-| one or more holders | true | held: `scanHold 1` was sent (while the voice ran) |
-
-Any other combination is illegal (the `"scan holds"` invariant). Transitions:
-
-| From | To | Function |
-|------|----|----------|
-| not held | held | `hold_scan(v, true, holder)`, a buffer voice only (`scanHold 1`) |
-| held | held (another holder) | `hold_scan(v, true, holder)` or `hold_scan(v, false, holder)` with another holder left: nothing is sent |
-| held | not held | `hold_scan(v, false, holder)` by the last holder (`scanHold 0`); the cleanup step `scrub_glide`, through `hold_scan` per holder |
-| either | not held | the `bookmarks` record's `sync` (every voice sync: the set emptied, `scanHold 0` sent) |
-
-The last recalled bookmark, per voice (`recalled[v]`, a local of `lib/positions.lua`):
+The scan hold and the glide are the Machines entries above. The last recalled bookmark, per voice (`recalled[v]`, a local of `lib/positions.lua`):
 
 | `recalled[v]` | Meaning |
 |---------------|---------|

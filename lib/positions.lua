@@ -916,6 +916,16 @@ return function(S)
     end
   end)
 
+  -- A glide's rate is sent only while its clock runs (3.9, #907): a rate
+  -- with no clock would leave the engine gliding for good
+  S.register_invariant("scrub glide", function()
+    for voice_idx = 1, NUM_VOICES do
+      if glide_rate[voice_idx] ~= 0 and not glide_clock[voice_idx] then
+        return "voice " .. voice_idx .. " glides at rate " .. tostring(glide_rate[voice_idx]) .. " with no clock"
+      end
+    end
+  end)
+
   -- A voice's scan is held exactly while it has a holder
   S.register_invariant("scan holds", function()
     for voice_idx = 1, NUM_VOICES do

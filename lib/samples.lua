@@ -504,6 +504,24 @@ return function(S)
     store.text = S.lib.data_files.encode(stored_value())
   end)
 
+  -- The binding names the audio that plays (3.9, #907): a slot that holds
+  -- settled audio (status "loaded", seconds above 0) is bound, and a free
+  -- one ("empty" or "missing") is not, but while a canceled replace take's
+  -- slot awaits the engine's next report (kept_state): the take may not
+  -- have prepared it, so the old audio, and its binding, may still be there
+  S.register_invariant("settings binding", function()
+    for slot = 1, NUM_BUFFERS do
+      local buffer, status = S.buffers[slot], S.lib.buffers.status(slot)
+      if status == "loaded" and buffer.seconds > 0 and bound[slot] == nil then
+        return "slot " .. slot .. " holds settled audio (loaded, " .. string.format("%g", buffer.seconds)
+          .. " s) but is not bound"
+      end
+      if S.lib.buffers.is_free(slot) and bound[slot] ~= nil and buffer.kept_state == nil then
+        return "slot " .. slot .. " is free (" .. status .. ") but bound"
+      end
+    end
+  end)
+
   -- The cleanup step: the waiting write is canceled and the file written
   -- (skipped if the start step never ran, or the file could not be moved)
   S.register_cleanup(S.constants.CLEANUP_ORDER.samples_save, function()

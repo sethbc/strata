@@ -202,7 +202,7 @@ return function(S)
     buffer.confirm_since = nil
     buffer.awaiting_zero = false
     if is_take then
-      cancel_buffer_recording_timer(slot)
+      S.lib.record.end_take(slot)
       buffer.finishing = false
       buffer.recording = false
     end
@@ -475,7 +475,7 @@ return function(S)
     if #buffer.pending_loads >= BUFFER_SETTLE.tracked_loads then table.remove(buffer.pending_loads, 1) end
     table.insert(buffer.pending_loads, {number = buffer.loads_sent, path = path, previous = buffer_state_before_load(slot)})
     -- loading cancels a recording in progress in the engine
-    cancel_buffer_recording_timer(slot)
+    S.lib.record.end_take(slot)
     cancel_start_reload(slot)
     engine.loadBuffer(slot - 1, path, start)
     -- the overview shown is the replaced audio's: it goes now, even for a
@@ -514,7 +514,7 @@ return function(S)
   function clear_buffer(slot)
     slot = slot_index(slot)
     if not slot then return end
-    cancel_buffer_recording_timer(slot)
+    S.lib.record.end_take(slot)
     cancel_start_reload(slot)
     engine.clearBuffer(slot - 1)
     set_buffer_file_param(slot, _path.audio)
@@ -1142,15 +1142,32 @@ return function(S)
     S.lib.record.stop_all()
   end)
 
-  -- A slot finishes only a recording, keeps a canceled take's state only
+  -- A slot finishes only a recording, and only a replace take's (3.9,
+  -- #903); records only with a take; keeps a canceled take's state only
   -- once it no longer records, checks a load only while it awaits the
-  -- engine's report, never settles empty while loaded, and shows a start
-  -- other than the last sent one only while a start reload is pending
+  -- engine's report, never settles empty while loaded, remembers a
+  -- missing file only as a path (no file held, not loaded), restores only
+  -- a load that awaits the engine, and shows a start other than the last
+  -- sent one only while a start reload is pending
   S.register_invariant("buffer slots", function()
     for slot = 1, NUM_BUFFERS do
       local buffer = S.buffers[slot]
+      local take = S.lib.record.state(slot)
       if buffer.finishing and not buffer.recording then
         return "slot " .. slot .. " is finishing but not recording"
+      end
+      if buffer.finishing and take and take.kind ~= "take" then
+        return "slot " .. slot .. " is finishing a take that is not a replace take (" .. tostring(take.kind) .. ")"
+      end
+      if buffer.recording and take == nil then
+        return "slot " .. slot .. " records with no take"
+      end
+      if buffer.missing_path ~= nil and (buffer.path ~= nil or buffer.loaded) then
+        return "slot " .. slot .. " remembers the missing " .. tostring(buffer.missing_path) .. " but holds "
+          .. tostring(buffer.path) .. " (loaded " .. tostring(buffer.loaded) .. ")"
+      end
+      if buffer.restoring and buffer.confirm_since == nil then
+        return "slot " .. slot .. " is restoring but awaits no report (confirm_since nil)"
       end
       if buffer.kept_state ~= nil and buffer.recording then
         return "slot " .. slot .. " records but keeps a canceled take's state"

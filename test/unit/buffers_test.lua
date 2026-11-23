@@ -2623,4 +2623,35 @@ test("buffers.data is version 3 with a take's settings", function()
   assert_true(not util.file_exists(path .. ".bak"), "the file is not set aside")
 end)
 
+
+-- 3.9 (#903): the "buffer slots" invariant holds a remembered missing file
+-- and a restore: a missing path is only a path (no file held, not loaded),
+-- and a restore marks only a load awaiting the engine. Each state is put
+-- in by hand, one at a time
+test("the buffer slots invariant: a missing path holds no file, a restore awaits the engine (#903)", function()
+  local context = load_strata(); finish_startup(context)
+  h.allow_broken_invariants("each line is broken by hand")
+  local buffers = local_value("buffers")
+  -- this invariant's lines only (a hand-made missing slot is still bound)
+  local function broken()
+    local lines = {}
+    for _, line in ipairs(h.check_invariants()) do
+      if line:find("buffer slots: ", 1, true) == 1 then lines[#lines + 1] = line end
+    end
+    return table.concat(lines, "; ")
+  end
+  load_buffer(1, "/tmp/one.wav"); state_report(context, 1, 1, 4)
+  assert_equal(broken(), "", "a loaded file holds")
+  buffers[1].missing_path = "/x/gone.wav"
+  assert_equal(broken(), "buffer slots: slot 1 remembers the missing /x/gone.wav but holds /tmp/one.wav (loaded true)")
+  buffers[1].path = nil
+  assert_equal(broken(), "buffer slots: slot 1 remembers the missing /x/gone.wav but holds nil (loaded true)")
+  buffers[1].loaded = false
+  assert_equal(broken(), "", "a missing path alone holds")
+  buffers[2].restoring = true
+  assert_equal(broken(), "buffer slots: slot 2 is restoring but awaits no report (confirm_since nil)")
+  buffers[2].restoring = false
+  assert_equal(broken(), "")
+end)
+
 end
