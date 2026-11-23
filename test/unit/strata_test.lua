@@ -410,12 +410,56 @@ end)
 -- and one that the seeds reached every path the model counts
 ---------------------------------------------------------------------------
 
--- The ops that cut no playing note ("never"), and the one that may cut only
--- a frozen synth voice's ("frozen"): the model's blind spot (ruling 59)
-local NOTES_WALK_CUTS = {
-  ["note off mode"] = "never", ["voice toggle"] = "never", source = "never", ["note cap"] = "never",
-  panic = "never", scene = "frozen",
+-- An op's cuts: "never" for the ops that cut no playing note, "frozen" for
+-- the one that may cut only a frozen synth voice's: the model's blind spot
+-- (ruling 59). Kept on the op itself (`cuts`), so a renamed op keeps it;
+-- `after` gets the op's name and reads it through NOTES_WALK_CUTS, built
+-- from the ops (each name once)
+local NOTES_WALK_OPS = {
+  { 6, "note on", function(state, random)
+    state.context.midi.send(1, { type = "note_on", ch = random(3), note = 47 + random(26), vel = 30 + random(97) })
+  end },
+  { 5, "note off", function(state, random)
+    local down = {}
+    for channel, channel_notes in pairs(state.S.midi_state.note_voice) do
+      for note in pairs(channel_notes) do down[#down + 1] = { channel, note } end
+    end
+    table.sort(down, function(a, b) return a[1] * 128 + a[2] < b[1] * 128 + b[2] end)
+    local key = down[random(#down + 1)] or { random(3), 47 + random(26) }
+    state.context.midi.send(1, { type = "note_off", ch = key[1], note = key[2], vel = 0 })
+  end },
+  { 5, "time", function(state, random) state.context.clock.run_for(0.01 * random(25)) end },
+  { 2, "two keys", function(state, random)  -- two keys, the first lifted: in release mode the own note parks under the second
+    local channel, low = random(3), 47 + random(20)
+    state.context.midi.send(1, { type = "note_on", ch = channel, note = low, vel = 90 })
+    state.context.midi.send(1, { type = "note_on", ch = channel, note = low + 1 + random(5), vel = 90 })
+    state.context.midi.send(1, { type = "note_off", ch = channel, note = low, vel = 0 })
+  end },
+  { 1, "note off mode", function(_, random) params:set("midi_note_off", random(2)) end, cuts = "never" },
+  { 1, "patterns", function(state)
+    if state.S.pattern_playing then pattern_clock_stop() else pattern_clock_start() end
+  end },
+  { 1, "voice toggle", function(_, random) toggle_voice(random(3)) end, cuts = "never" },
+  { 2, "source", function(state, random) params:set("v" .. random(3) .. "_source", state.sources[random(3)]) end,
+    cuts = "never" },
+  { 2, "freeze", function(_, random) params:set("v" .. random(3) .. "_freeze", random(2) - 1) end },
+  { 1, "pool", function(state, random) state.S.lib.notes.set_pool(random(7) - 1) end },
+  { 1, "note cap", function(state, random)
+    params:set("v" .. random(3) .. "_note_cap", random(state.S.constants.NOTE_SLOTS))
+  end, cuts = "never" },
+  { 0.3, "panic", function(state) state.context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 }) end,
+    cuts = "never" },
+  { 1, "scene", function(_, random) if random(2) == 1 then capture_scene(random(2)) else recall_scene(random(2)) end end,
+    cuts = "frozen" },
 }
+local NOTES_WALK_CUTS = {}
+for _, op in ipairs(NOTES_WALK_OPS) do
+  if op.cuts ~= nil and op.cuts ~= "never" and op.cuts ~= "frozen" then
+    error("the notes walk's op " .. op[2] .. ": cuts is never or frozen, not " .. tostring(op.cuts))
+  end
+  if NOTES_WALK_CUTS[op[2]] ~= nil then error("the notes walk names two ops " .. op[2]) end
+  NOTES_WALK_CUTS[op[2]] = op.cuts or false
+end
 
 h.walk({
   name = "Lua's held notes agree with a model of the engine's slots over seeded random play (ruling 57)",
@@ -440,40 +484,7 @@ h.walk({
     return { context = context, S = S, model = model,
       sources = { S.constants.SOURCE_SYNTH, S.constants.SOURCE_SYNTH + 1, S.constants.SOURCE_INPUT } }
   end,
-  ops = {
-    { 6, "note on", function(state, random)
-      state.context.midi.send(1, { type = "note_on", ch = random(3), note = 47 + random(26), vel = 30 + random(97) })
-    end },
-    { 5, "note off", function(state, random)
-      local down = {}
-      for channel, channel_notes in pairs(state.S.midi_state.note_voice) do
-        for note in pairs(channel_notes) do down[#down + 1] = { channel, note } end
-      end
-      table.sort(down, function(a, b) return a[1] * 128 + a[2] < b[1] * 128 + b[2] end)
-      local key = down[random(#down + 1)] or { random(3), 47 + random(26) }
-      state.context.midi.send(1, { type = "note_off", ch = key[1], note = key[2], vel = 0 })
-    end },
-    { 5, "time", function(state, random) state.context.clock.run_for(0.01 * random(25)) end },
-    { 2, "two keys", function(state, random)  -- two keys, the first lifted: in release mode the own note parks under the second
-      local channel, low = random(3), 47 + random(20)
-      state.context.midi.send(1, { type = "note_on", ch = channel, note = low, vel = 90 })
-      state.context.midi.send(1, { type = "note_on", ch = channel, note = low + 1 + random(5), vel = 90 })
-      state.context.midi.send(1, { type = "note_off", ch = channel, note = low, vel = 0 })
-    end },
-    { 1, "note off mode", function(_, random) params:set("midi_note_off", random(2)) end },
-    { 1, "patterns", function(state)
-      if state.S.pattern_playing then pattern_clock_stop() else pattern_clock_start() end
-    end },
-    { 1, "voice toggle", function(_, random) toggle_voice(random(3)) end },
-    { 2, "source", function(state, random) params:set("v" .. random(3) .. "_source", state.sources[random(3)]) end },
-    { 2, "freeze", function(_, random) params:set("v" .. random(3) .. "_freeze", random(2) - 1) end },
-    { 1, "pool", function(state, random) state.S.lib.notes.set_pool(random(7) - 1) end },
-    { 1, "note cap", function(state, random)
-      params:set("v" .. random(3) .. "_note_cap", random(state.S.constants.NOTE_SLOTS))
-    end },
-    { 0.3, "panic", function(state) state.context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 }) end },
-    { 1, "scene", function(_, random) if random(2) == 1 then capture_scene(random(2)) else recall_scene(random(2)) end end },
-  },
+  ops = NOTES_WALK_OPS,
   after = function(state, op_name)
     local model = state.model
     model:feed(state.context.engine_calls)

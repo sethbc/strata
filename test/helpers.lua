@@ -682,6 +682,40 @@ local function voice_entries(entry, fields)
   return entries
 end
 
+-- A recorded engine call ({name, args}, context.engine_calls') as the
+-- start-call fixtures write it: name(args), numbers "%.9g", strings "%q"
+local function call_line(call)
+  local parts = {}
+  for index = 1, #call.args do
+    local value = call.args[index]
+    parts[index] = type(value) == "number" and string.format("%.9g", value) or string.format("%q", tostring(value))
+  end
+  return call.name .. "(" .. table.concat(parts, ", ") .. ")"
+end
+
+-- A copy of call lines with each run of consecutive setVoiceParam lines of
+-- one voice sorted (3.6.0 sent such a run in a pairs() order that changed
+-- from run to run; 3.8.0 sends it sorted); nothing else moves
+local function canonical_call_lines(lines)
+  local out, run, run_key = {}, {}, nil
+  local function flush()
+    table.sort(run)
+    for _, line in ipairs(run) do out[#out + 1] = line end
+    run, run_key = {}, nil
+  end
+  for _, line in ipairs(lines) do
+    local key = line:match("^(setVoiceParam%(%d+),")
+    if key and key == run_key then
+      run[#run + 1] = line
+    else
+      flush()
+      if key then run_key, run[1] = key, line else out[#out + 1] = line end
+    end
+  end
+  flush()
+  return out
+end
+
 -- The fixture's and the build's call lines (`name(args)`, as the start-call
 -- fixtures write them) with the allowed differences applied: copies, the
 -- lines given left alone. Each entry, in order, is
@@ -813,7 +847,14 @@ local function notes_table(path, machine)
           end
           rows = {}  -- the separator row, |---|
         else
-          rows[#rows + 1] = {cells[columns.State], cells[columns.Event], cells[columns.Next]}
+          local row = {cells[columns.State], cells[columns.Event], cells[columns.Next]}
+          for position, column in ipairs({"State", "Event", "Next"}) do
+            if row[position] == nil then
+              error("notes_table: a row under " .. path .. ", ### " .. machine .. " has no " .. column .. " cell: "
+                .. line, 2)
+            end
+          end
+          rows[#rows + 1] = row
         end
       elseif header then
         break
@@ -827,6 +868,22 @@ local function notes_table(path, machine)
     if not columns[name] then error("notes_table: the table under " .. where .. " has no column " .. name, 2) end
   end
   return rows or {}
+end
+
+-- Where a known row's line goes when its test passes: printed, or, inside
+-- with_known_lines, kept in its list
+local known_lines_taken
+
+-- Run fn with the known rows' lines kept instead of printed (a self-test's
+-- own rows name no real issue): the lines, in order. Put back on every exit,
+-- and an error in fn is raised again
+local function with_known_lines(fn)
+  local outer, taken = known_lines_taken, {}
+  known_lines_taken = taken
+  local ok, err = pcall(fn)
+  known_lines_taken = outer
+  if not ok then error(err, 0) end
+  return taken
 end
 
 local function whole_positive(value) return type(value) == "number" and value >= 1 and value == math.floor(value) end
@@ -879,7 +936,10 @@ local function transition_table(spec)
         local broken = check_invariants()
         if #broken > 0 then fail(cell .. ": invariants broken after the event:\n" .. table.concat(broken, "\n")) end
       end
-      if known_line then real_print("     " .. known_line .. ": asserts today's fault") end
+      if known_line then
+        local line = known_line .. ": asserts today's fault"
+        if known_lines_taken then known_lines_taken[#known_lines_taken + 1] = line else real_print("     " .. line) end
+      end
     end)
   end
   test(name .. ": every cell is decided", function()
@@ -1797,9 +1857,12 @@ return {
   voice_count = voice_count,
   voice_entries = voice_entries,
   allowed_call_lines = allowed_call_lines,
+  call_line = call_line,
+  canonical_call_lines = canonical_call_lines,
   transition_table = transition_table,
   notes_table = notes_table,
   walk = walk,
+  with_known_lines = with_known_lines,
   tabutil_text = tabutil_text,
   file_text = file_text,
   workflow_shards = workflow_shards,
