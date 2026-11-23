@@ -2045,6 +2045,97 @@ test("a sync sends voice_level before kept, per part", function()
   end
 end)
 
+-- #928: a keyed id (a send key no param holds: an LFO's node and sync, a
+-- matrix fast channel, an envelope route, the synced delay's) holds a
+-- space, so no param id can be it, and does not start v<i>_, so a voice's
+-- sync (forget_sent_voice_values, which forgets every v<i>_ value and
+-- drops its waiting ones) keeps it. The one kind that starts v<i>_ is a
+-- voice's own (lib/scan.lua's follow rate and scan sync: a sender gated
+-- on that voice, add_voice_sender), which the voice's sync drops on
+-- purpose. The keys are every sender's and every one the round robin
+-- (mark_due's queue) and the budget (its values and its waiting ones)
+-- know after a start with each kind sent
+test("a keyed id holds a space and none starts v<i>_", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function upvalue(fn, wanted)
+    for index = 1, math.huge do
+      local name, value = debug.getupvalue(fn, index)
+      if name == nil then error("no upvalue " .. wanted) end
+      if name == wanted then return value end
+    end
+  end
+  local queue = upvalue(S.lib.lfos.mark_due, "queue")
+  local budget = upvalue(S.lib.engine_sync.expected_value, "budget")
+  local voice_gates = upvalue(S.lib.engine_sync.add_voice_sender, "voice_gates")
+  local function step(count)
+    for _ = 1, count or 1 do context.clock.advance_until(S.lfo_clock) end
+  end
+  -- each kind sent: LFO 1's node (a deferrable depth edit, then a silent
+  -- phase), a fast channel (R1 from LFO 1), an envelope route (R2 from
+  -- env1), the synced delay
+  local index_of = {}
+  for index, destination in ipairs(S.LFO_DESTINATIONS) do index_of[destination.label] = index end
+  assert_true(S.lib.matrix.set_home(1, S.lib.lfos.destination_id(index_of["v1 pitch"])), "LFO 1 on v1 pitch")
+  params:set("strata_lfo1", 1)
+  step()
+  S.lib.engine_sync.deferrable(function() params:set("strata_lfo1_depth", 60) end)
+  params:set("strata_lfo1_phase", 40, true)
+  assert_true(S.lib.matrix.set_routing(1, "lfo1", "v2_grain_size"), "R1 to a fast destination")
+  params:set("matrix_1_depth", 50)
+  assert_true(S.lib.matrix.set_routing(2, "env1", "v1_buf_pos"), "R2 an envelope route")
+  params:set("matrix_2_depth", 50)
+  params:set("delay_sync", 1)
+  params:set("clock_tempo", 100)
+  step(4)
+  local known, seen = {}, {}
+  local function know(key, where)
+    if params.lookup[key] == nil and not seen[key] then
+      seen[key] = true
+      table.insert(known, {key = key, where = where})
+    end
+  end
+  for key in pairs(S.engine_senders) do know(key, "a sender") end
+  for _, key in ipairs(queue.keys) do know(key, "the round robin") end
+  for key in pairs(S.engine_param_values) do know(key, "the budget's values") end
+  for key in pairs(budget.pending) do know(key, "the budget's waiting") end
+  table.sort(known, function(a, b) return a.key < b.key end)
+  local kinds = {}
+  for _, entry in ipairs(known) do
+    local key = entry.key
+    assert_true(key:find(" ", 1, true) ~= nil, "the keyed id " .. key .. " (" .. entry.where .. ") holds a space")
+    local voice = tonumber(key:match("^v(%d+)_"))
+    if voice then
+      local gate = voice_gates[key]
+      assert_true(gate ~= nil and gate.voice == voice and S.engine_senders[key] == gate.sender,
+        key .. " (" .. entry.where .. ") starts v" .. voice .. "_ and is no sender gated on voice " .. voice)
+    end
+    kinds[key:gsub("%d+", "#")] = true
+  end
+  for _, kind in ipairs({ "lfo# engine", "lfo# sync", "matrix fast # #", "env route #", "delay sync" }) do
+    assert_true(kinds[kind], "a key of the kind " .. kind .. " is known")
+  end
+  for _, kind in ipairs({ "lfo# engine", "matrix fast # #", "env route #", "delay sync" }) do
+    local sent = false
+    for key in pairs(S.engine_param_values) do
+      if key:gsub("%d+", "#") == kind then sent = true end
+    end
+    assert_true(sent, "a key of the kind " .. kind .. " was sent")
+  end
+  -- what the convention keeps: every running voice's sync leaves each
+  -- keyed id's value but a voice's own
+  local before = {}
+  for key, value in pairs(S.engine_param_values) do
+    if params.lookup[key] == nil and not key:match("^v%d+_") then before[key] = value end
+  end
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    if S.voices[voice_idx].active then sync_voice_values_to_engine(voice_idx) end
+  end
+  for key, value in pairs(before) do
+    assert_equal(S.engine_param_values[key], value, key .. " is kept through a voice sync")
+  end
+end)
+
 test("engine_sync.lua reads no S.registry.voice_params", function()
   local source = h.file_text(h.repo_root .. "/lib/engine_sync.lua")
   assert_true(not source:find("registry.voice_params", 1, true), "no read of S.registry.voice_params")

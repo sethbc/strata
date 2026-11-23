@@ -25,6 +25,99 @@
 - No step raises (#517): each LFO's step, each `on_step` hook and each send run through `S.lib.ui_frame.contained_call`, which prints `strata: LFO <n> step failed:` (or `LFO step hook`, `LFO send`) with the traceback, once per distinct message, and the clock and the other LFOs go on. A Lua home is resolved in the matrix's read of it (`strata: matrix home <n> failed:`); the LFO's own step resolves only a fast home (a fixed param) and reads a direct one's key.
 - The page randomize (#557) sets `strata_lfo<n>_shape`, `_rate`, `_division` and `_phase`, so their actions call `note_param_edit` (an edit of a held param ends the randomize undo). A new randomized LFO param needs the same call.
 
+## Machines
+
+### lfo clock
+- **State:** `S.lfo_clock` (the clock's id), the module's `clock_runs`, and the clock's coroutine in `clock.threads`: running from the start step `lfo_clock` (125) to the cleanup step `lfos` (120) or `stop_clock()`, else stopped.
+- **Invariant:** `lfo clock`: the clock runs exactly while `clock_runs` is set, its coroutine alive (one canceled or ended behind the module's back breaks it).
+- **Test:** `test/unit/lfos_test.lua`: "the LFO clock invariant holds from the start step to cleanup".
+
+`lib/lfos.lua` cancels its clock only as the script starts or ends (the start step, cleanup and a test's `stop_clock`), when no resume can go astray: it is one of the nine files that keep `clock.cancel` and do not use the clock helper (`docs/notes/lua/clocks.md`).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `stopped` | the start step `lfo_clock` | `running` | the global destinations checked, then a clock that sleeps `1 / LFO.step_hz` s and runs a step (one already kept is canceled first, which a normal init never meets) |
+| `running` | its wake | `running` | one step (the step pipeline, below) |
+| `running` | the cleanup step `lfos` | `stopped` | `stop_clock()` cancels it; nothing waits in the round robin, every direct destination is given back, the engine copies are forgotten and no `stopFastLfo` is sent (#461) |
+| `running` | `stop_clock()` (a test that wants a quiet scheduler) | `stopped` | canceled; the round robin keeps what waits |
+
+### LFO place
+- **State:** derived at every step from three facts, never stored: the on param (`strata_lfo<n>`), the depth param and the kind of the home's entry (`S.lib.lfos.destination(n)`: `fast`, a direct destination's key, any other). What was handed on is beside it: `state[n].engine` (the engine's copy), `direct.held[n]` and the matrix's `held` (`docs/notes/lua/matrix.md`, matrix holding). No accessor names the place yet (package 4c's `place(n)`); `is_engine_run(n)`, `engine_playing(n)`, `home_m(n) ~= nil`, `owns(n, id)` and `modulates(id)` each answer a part.
+- **Invariant:** none: every combination of the three is a place the next step converges to, and a stored place would be a second record of the params (the clock's invariant is `lfo clock`).
+- **Two facts:** the depth param at 0 is both an amount and "no engine node" (the node stops, and a depth swept through 0 starts it again with a sync; the fade's `stop_target` and a home's ramp through 0 rely on it); `state[n].engine` is both "a node exists" and the settings last sent to it; `home_m(n)` is nil for "does not play" (off, or the depth param 0) and 0 for "plays at 0" (the matrix adds nothing either way, and a direct destination stays held).
+- **Test:** `test/unit/lfos_test.lua`: "an LFO on a fast destination runs in the engine", "engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step and the budget's count (#633)", "a silent PSET read reaches a running engine LFO's offset and phase at the next step, once (#634)", "an LFO turned off gives its Lua destination back at the next step, once" and the recall tests ("a recall that changes every LFO setting sends nothing at once, then one setFastLfo and its sync"); package 3c's modulation walk checks the places against a model.
+
+The five places: `off` (the on param 0: nothing held); `idle` (on, at depth 0 or with its home none or unknown: nothing held); `engine` (on, depth above 0, a fast home: `state[n].engine` holds the node's settings); `direct` (on, depth above 0, a macro: `direct.held[n]` is its id); `matrix` (on, depth above 0, any other home: the matrix sums it into `held.lua[id]`, or `held.fast[id]` for a `v<i>_main` that resolves to a fast param, ruling 16). A transient of one step is legal: `state[n].engine` kept while the params no longer play in the engine (a silent read, a scene's apply), until the step stops the node.
+
+The table is the cause-to-path table: what each cause sends and when, at once (in the action), at the next step outside the round robin (uncounted, at most one send an LFO a step), or at the next step through the round robin (`mark_due`) and the send budget.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `off` | on (its action, a bang included) | its home's place | `turned`: the phase starts at the phase param; `engine`: `setFastLfo` and `syncFastLfo` at once; `direct`: held and handed over at the next step; `matrix`: summed at the next step, sent through the round robin |
+| `engine` | on again (a bang) | `engine` | the phase restarts and `syncFastLfo` goes at once, the node kept (#251) |
+| `engine` | off | `off` | `stopFastLfo` at once |
+| `direct` | off | `off` | the macro given back at once (`release_direct`) |
+| `matrix` | off | `off` | given back at the matrix's next step, through the round robin (ruling 17) |
+| `engine` | depth to 0 | `idle` | `stopFastLfo` at the next step, outside the round robin |
+| `direct` | depth to 0 | `idle` | the macro given back at once (the depth action) |
+| `matrix` | depth to 0 | `idle` | given back at the matrix's next step, through the round robin |
+| `idle` | depth above 0 (by hand or a deferrable source) | its home's place | `engine`: `setFastLfo` and `syncFastLfo` at the next step, outside the round robin (a start, whoever moved the depth); `direct`: held at the next step; `matrix`: summed at the next step, through the round robin |
+| `engine` | a hand edit of the rate, depth, offset or a mod amount, or a scene fade's step | `engine` | `setFastLfo` at the next step, outside the round robin (`edited`); a fade's step sets its params outside `deferrable`, so a 2 s fade sends its 20 `setFastLfo` so (#875) |
+| `engine` | a hand edit of the phase | `engine` | `setFastLfo` and `syncFastLfo` at the next step, outside the round robin |
+| `engine` | an edit by a deferrable source (a macro, morph, gesture playback) | `engine` | `lfo<n> engine` marked at the next step, through the round robin and the budget (`deferred`, #633); a phase edit `lfo<n> sync` alone, the same way |
+| `engine` | the shape, mode, division or a mod source | `engine` | `setFastLfo` at once, and `syncFastLfo` for the shape, a mode or a clocked LFO's division; while a scene applies only marked, and sent once at the next step |
+| `engine` | its home to another fast destination | `engine` | `setFastLfo` at once (a new voice or destination); only marked while a scene applies |
+| `engine` | its home to a Lua destination | `matrix` | `stopFastLfo` at once; summed from the matrix's next step |
+| `engine` | its home to a macro | `direct` | `stopFastLfo` at once; held at the next step |
+| `matrix` | its home to a fast destination | `engine` | `setFastLfo` and `syncFastLfo` at once; the old param given back at the matrix's next step |
+| `matrix` | its home to another Lua destination | `matrix` | the matrix's next step sums the new param and gives the old one back, both through the round robin |
+| `direct` | its home changed | the new home's place | the macro given back at once (`home_changed`), then as the rows above |
+| `matrix` | a voice's source switch (a home on `v<i>_main`) | `matrix` | `main` resolves again at the matrix's next step: the new param summed (a fast one through `setFastOffset`), the old one given back |
+| `engine` | a modulated rate past `LFO.engine_rate_threshold`, or depth past 1/1000 (its mod inputs) | `engine` | `lfo<n> engine` marked, through the round robin and the budget |
+| `engine` | the tempo (a clocked LFO's base rate past `LFO.engine_rate_threshold`) | `engine` | `setFastLfo` in the step that sees it, ahead of the round robin |
+| `engine` | a bar, or the beats fall (a clocked LFO; a transport start) | `engine` | `syncFastLfo` in the step |
+| `engine` | a silent set of the rate, depth or offset | `engine` | nothing at the set; compared at the next step and sent through the round robin (#634) |
+| `engine` | a silent set of the phase | `engine` | nothing at the set; `lfo<n> sync` at the next step, through the round robin (`phase_seen`) |
+| `off` | a silent set on | its home's place | nothing at the set; at the next step as the on row (an engine node's `setFastLfo` and `syncFastLfo` outside the round robin), its phase where the stale position lands |
+| `engine` | a silent set off, or of the depth to 0 | `off` or `idle` | nothing at the set; `stopFastLfo` at the next step |
+| `direct` | a silent set off, or of the depth to 0 | `off` or `idle` | nothing at the set; the macro given back at the next step (the step's `release_direct`) |
+| any place | a silent PSET read | the place the read's params give | the module has no PSET hook: its params converge at the next step, as the silent sets above; the matrix's hook loads the homes and tells each changed one (`home_changed`, reconciled then, with the read's LFO params in place); and the `voice_params` hook, the last, sets the read's per-voice params with their actions (#951, `docs/notes/lua/params.md`), so a Lua home on one is summed over its new stored value at the next step |
+| any place | a recall (instant, a fade's end, morph's discrete crossing) | the scene's place | the block sets the home, the globals only mark the LFO (`S.scene_recall_in_progress`); the on/off, applied last, starts or stops it at once with the scene's settings in place; else the next step sends it once (0e's review) |
+| `engine` | a voice's start or stop | `engine` | nothing: the node lives outside the voices |
+
+### step pipeline
+- **State:** where `step_all` is in a step, one synchronous call that never yields; the local `step_hooks` (the `on_step` hooks in registration order: `strata.lua`'s include order, then the start steps'), `direct.due` and the round robin (below).
+- **Invariant:** none: a step runs its four phases in one call, so no other code sees one half done; the clock's invariant is `lfo clock`.
+- **Test:** `test/unit/lfos_test.lua`: "the step hooks run macros, envelopes and random sequences before the matrix, and the notes flush last" (each hook's source file from `debug.getinfo`).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `asleep` | the clock's wake | `LFOs` | `util.time()` read once for the step |
+| `LFOs` | each LFO's step, in index order | `hand-overs` | its phase, value, rate' and depth'; an engine home reconciled (`reconcile_engine`), a direct one held and marked, a Lua one left to the matrix; each contained (`LFO <n> step`) |
+| `hand-overs` | each marked direct destination | `hooks` | handed over once with every holding LFO's offset (`send_direct`), contained (`LFO send`) |
+| `hooks` | each hook, in registration order | `drain` | contained (`LFO step hook`); a hook marks sends, the matrix's sums its routings and homes |
+| `drain` | the round robin's turn | `asleep` | at most `LFO.sends_per_step` (12) due keys that reach the engine, each inside `deferrable` |
+
+The hooks run in this order on this build: `midi_in`, `scan`, `conditions`, `macros`, `random_sequences`, `envelopes`, `matrix`, `expression`, `slices`, `io/targets`, `io/midi_out`, `io/crow`, `io/ii`, `delay_sync`, `ui/slice_editor` (all registered at include time), then the notes flush (`START_ORDER.notes_load`, 109) and the arp's shuffle (`START_ORDER.arp`, 112). Four relations matter, and the test holds them: the macros', the envelopes' and the random sequences' hooks run before the matrix's (each hands the matrix what it sums in the same step; moving one after it lags every routing it feeds by a step, 21 ms), and the notes flush runs after every hook registered at include time (`lib/expression.lua`'s marks are sent in the same step). The arp's shuffle runs after the flush; it sends the arp's lists (counted with `count_sends`), never a note's expression, so its place there costs nothing.
+
+### round robin
+- **State:** the local `queue`: `keys` (every key in the order first marked, never removed), `known[key]`, `due[key]` (the send waiting, or nil) and `cursor` (where the next drain starts). Per key: `unknown`, `known` (no send waiting) or `due`.
+- **Invariant:** none: every combination of the fields is legal; a key once known stays known.
+- **Two facts:** a key's place in `keys` is both that it is known and its turn in the round robin's order of fairness.
+- **Test:** `test/unit/lfos_test.lua`: "at most 12 sends a step, round robin, and every due key within two steps", "a stopped voice's due sends take none of a step's 12; a running voice's stay capped at 12 (#644)"; `test/unit/engine_sync_test.lua`: "a keyed id holds a space and none starts v<i>_".
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `unknown` | `mark_due(key, send)` | `due` | appended to `keys`, after every key known |
+| `known` | `mark_due(key, send)` | `due` | the send waits for its turn; the key keeps its place |
+| `due` | `mark_due(key, send)` | `due` | the newer send replaces the one waiting, in the same place |
+| `due` | its turn in the drain | `known` | sent inside `deferrable`; it takes one of the step's 12 only when `S.lib.engine_sync.reaches_engine(key)` (#644) |
+| `due` | the drain's 12 are taken before its turn | `due` | it waits; the next step's drain starts where this one stopped |
+| `due` | withdrawn: an LFO's own key, by `send_fast_lfo` or a stop (`reconcile_engine`), and every key at cleanup | `known` | `due[key] = nil`; every other module's send reads its state when it runs, so it is never withdrawn |
+| `known` | the drain passes it | `known` | nothing, and no slot taken |
+
+A key is a param id (a Lua destination's, shared by the LFOs, the matrix and the macros: one send carries every layer) or a keyed id that no param holds. A keyed id holds a space (no param id can be it) and does not start `v<i>_`, so a voice's sync (`forget_sent_voice_values`, `docs/notes/lua/engine-sync.md`) keeps the value it recorded: `lfo<n> engine`, `lfo<n> sync`, `matrix fast <voice> <destination>`, `env route <k>`, `delay sync`. A voice's own keyed ids (`lib/scan.lua`'s `v<i>_follow rate` and `v<i>_scan sync`, senders gated on the voice) start `v<i>_` on purpose: the voice's sync and start drop a value of theirs. The value `lfo<n> engine` and `lfo<n> sync` hand to the budget (the depth / 100, the phase) is read by nothing (#928): the senders read the LFO when they deliver, and the value is there for the budget, which keeps a waiting send as its key's value.
+
 ## Owns
 
 `lib/lfos.lua` (`S.lib.lfos`):
@@ -78,7 +171,7 @@ The percents' quantum is one percent a detent. A division of value r is a period
 Each step (`step_all`), every 1/48 s:
 - each LFO in index order (`step_lfo`): off, its value is 0. On: a free LFO's position advances by the rate it played since the last step times the time since (`util.time()`, so a late wake-up does not slow it); a clocked LFO's phase is `(beats / period + clocked_offset + phase)` mod 1, with `clocked_offset` integrating only what rate modulation adds, so an unmodulated clocked LFO is exact against the clock. A wrap draws a random shape's next value. Then its value (2u - 1), rate' and depth' (`evaluate`), and its home: the engine's settings (`reconcile_engine`) on a fast one, else a direct one held and marked (`step_direct`); a Lua home is the matrix's hook's;
 - the direct destinations the LFOs moved (a macro's), each handed over once, contained;
-- the `on_step` hooks (the macros', `docs/notes/lua/macros.md`, the matrix's, which sums each playing Lua home, then the note module's expression flush, registered at its start step so it runs after every hook registered at include time, `docs/notes/lua/notes.md`), each contained;
+- the `on_step` hooks (the macros', `docs/notes/lua/macros.md`, the matrix's, which sums each playing Lua home, then the note module's expression flush, registered at its start step so it runs after every hook registered at include time, `docs/notes/lua/notes.md`, and the arp's shuffle after it: Machines, step pipeline), each contained;
 - the drain: at most 12 of the due keys that reach the engine, in the round robin, each inside `deferrable` (a key that reaches none runs in its turn without a slot, #644).
 
 `phase(n)` is computed when read: a free LFO's from its last step plus the time since at the rate it plays, a clocked one's from `clock.get_beats()`, so the page's dot is smooth. `value(n)` is the last step's (and, at the turn-on, the start's).

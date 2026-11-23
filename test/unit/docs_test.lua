@@ -2611,11 +2611,9 @@ local UNTABLED_INVARIANTS = {
   "param turn",  -- lib/ui/detent.lua
   "engine budget",  -- lib/engine_sync.lua
   "modal owner",  -- lib/ui/modal.lua
-  "matrix learn",  -- lib/matrix.lua
   "zones editor",  -- lib/ui/zones.lua
   "scale editor",  -- lib/ui/scale_editor.lua
   "voice picker",  -- lib/ui/voice_picker.lua
-  "lfo clock",  -- lib/lfos.lua
   "step editor",  -- lib/pages/seq.lua
   "notes",  -- lib/notes.lua
   "arp",  -- lib/arp.lua

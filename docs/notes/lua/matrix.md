@@ -22,6 +22,54 @@
 - **Learn** waits exactly while its timeout clock runs (`S.matrix_learn_clock`, the `matrix learn` invariant), `MATRIX.learn_seconds` (10 s); `cancel_learn` ends both. The clock is the clock helper's (`S.lib.clocks`, #870, `docs/notes/lua/clocks.md`; `S.matrix_learn_clock` is its handle's id): its end stops it through the helper, which never cancels it once its resume may be posted (#626): within the helper's margin (`CLOCKS.sleep_margin`, 0.1 s) of the wake it is retired (its wait returns false at its wake and it ends, touching nothing a newer learn armed; the helper's cleanup step cancels a retired one still waiting), and only earlier is it canceled, so a burst of learns holds no clock slots.
 - **Every flash fits the header's flash room** (`S.constants.HEADER.flash_width`, 74 px) whole: `not a destination` (74 px), the widest learned destination `R10 > v2 spread` (68 px).
 
+## Machines
+
+### matrix learn
+- **State:** the local `learning` (`{k}` while learn waits for a touch, else nil), the timeout clock's handle (`learn_clock.handle`, `S.lib.clocks`) and `S.matrix_learn_clock`, its id while learn waits; `S.lib.matrix.learning()` names the routing. A stopped clock the helper retired near its wake is the helper's (`S.lib.clocks.retired`): since package 1q the module keeps no list of its own.
+- **Invariant:** `matrix learn`: learn waits exactly while `S.matrix_learn_clock` is set, and a retired clock is never `S.matrix_learn_clock`.
+- **Test:** `test/unit/matrix_test.lua`: "the invariant matrix learn fails for learn waiting with no clock and for a retired clock kept", "matrix: learn sets the destination from the next hand-touched param", "the matrix learn clock stopped as its wake is posted: no clock error, and nothing more happens".
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `idle` | `learn(k)` (MOD's ALT+K3 on the `dest` row) | `armed k` | a clock of `MATRIX.learn_seconds` (10 s); a redraw shows the header's notice |
+| `idle` | `learn` of no routing (not 1..16) | `idle` | refused (false) |
+| `idle` | a hand touch | `idle` | nothing |
+| `idle` | `cancel_learn()` | `idle` | nothing |
+| `armed k` | `learn(j)` | `armed j` | k's clock stopped through the helper (canceled, or retired near its wake), a new one started |
+| `armed k` | a hand touch of a destination (a voice's main param learns `v<i>_main`) | `idle` | the clock stopped, then `edit_routing(k, source, id)` (the 25 % rule) and the flash `R<k> > <label>`; no undo takes it back |
+| `armed k` | a hand touch of any other param | `armed k` | the flash `not a destination`; learn waits on |
+| `armed k` | `cancel_learn()` (MOD's K2 in its view, the routing view moved to another routing) | `idle` | the clock stopped; a redraw |
+| `armed k` | its clock's wake (10 s with no touch) | `idle` | learn ends and redraws |
+| `armed k` | a page change | `armed k` | nothing (ruling 80: the touch is made on another page) |
+| `armed k` | the cleanup step `matrix` (118) | `idle` | the clock canceled outright (`S.lib.clocks.cancel`), then `cancel_learn()` |
+
+### matrix holding
+- **State:** the local `held`: `lua[id]` (the extra offset the matrix set on a Lua destination), `fast[id]` (a fast destination tracked), `fast_want[id]` (what its next send carries) and `fast_extras[id]` (the macros'); what the engine has or will have is the send budget's `expected_value` (of the param id, or the channel's key `matrix fast <voice> <destination>`), never a record of the matrix's (#647). `S.lib.matrix.offset(id)` reads the sum. Per Lua param: `not held`, `held` (an offset), `returning` (no offset, its one send as the sum reaches 0 due in the round robin, `docs/notes/lua/lfos.md`); per fast channel: `untracked` or `tracked`.
+- **Invariant:** none: each step sums every routing again from scratch and compares with the budget's answer, so every combination converges at that step; a stored record of what was sent was the fault (#647).
+- **Test:** `test/unit/matrix_test.lua`: "matrix: clearing a routing restores the destination", "matrix: routings that cancel to exactly 0 send once, then nothing (#760)", "matrix: a fast sum that returns to 0 while its send waits sends 0, never the stale sum", "matrix: a voice start or a sync resends no unmoved fast channel", "matrix: an idle step sends nothing and leaves no offset".
+
+A Lua param that plays but sums to exactly 0 (routings that cancel, #760) is `not held`. A step's sum takes in every playing routing but those the envelopes own, every LFO home it does not own, and (fast) the macros' extras.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `not held` | a step with a sum other than 0 | `held` | the extra offset `matrix` set; marked due when the value moved past `LFO.send_threshold` from `expected_value(id)` |
+| `not held` | a step whose playing routings sum to exactly 0 | `not held` | marked due only when the value moved from `expected_value(id)` (another layer moved it, or a voice sync forgot it) |
+| `not held` | a step where nothing plays it | `not held` | nothing: the param is not in the step's sums |
+| `held` | a step with a sum other than 0 | `held` | the offset replaced; marked due when the value moved |
+| `held` | a step with a sum of 0 (nothing plays it, or its routings cancel) | `returning` | the offset given up, marked due once whatever the move |
+| `returning` | its turn in the round robin | `not held` | the base sent with the other layers' offsets |
+| `returning` | a step with a sum other than 0, before its turn | `held` | the offset set again; the one send waiting (one key) carries it |
+| `returning` | a step with a sum of 0, before its turn | `returning` | the send still waits |
+| `held` | its voice's start or sync (a `v<i>_` param) | `held` | the start and the sync send the param with its offset (`start_value`, `resend_modulated_voice_params`); the next step compares with what they recorded |
+| `held` | the cleanup step `matrix` | `not held` | the offsets forgotten; nothing sent (#461) |
+| `untracked` | a step whose clamped sum moved from the key's `expected_value` (0 before any send) | `tracked` | marked due under its key; the send goes through `send_engine_value`, counted, and may wait for the next window |
+| `tracked` | a step whose sum did not move | `tracked` | nothing |
+| `tracked` | a step with a sum of 0 while the key's expected value is not 0 | `tracked` | 0 marked due once (also over a nonzero sum still waiting) |
+| `tracked` | a step with a sum of 0 and the expected value 0 | `untracked` | nothing |
+| `tracked` | a voice's start or sync | `tracked` | nothing resent: the key does not start `v<i>_`, and the engine's offset node keeps its value |
+| `untracked` | a step with a sum of 0 | `untracked` | nothing |
+| `tracked` | the cleanup step `matrix` | `untracked` | forgotten; nothing sent |
+
 ## Owns
 
 `lib/matrix.lua` (`S.lib.matrix`, 3.4, package 1h, design §10.2):

@@ -1,0 +1,2 @@
+### Changed
+- Tests and notes only, nothing a player hears or sees: the order of the LFO clock's step hooks and the naming of the send budget's keys are now held by tests, and the notes describe each modulation state machine (an LFO's place and what each change sends when, the matrix's holding and learn, the step, the round robin, the envelopes) with corrected comments about scene fades and silent PSET reads.

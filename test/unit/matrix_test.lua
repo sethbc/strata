@@ -1016,6 +1016,34 @@ test("the matrix learn clock stopped as its wake is posted: no clock error, and 
   assert_true(S.matrix_learn_clock ~= nil and S.matrix_learn_clock ~= id, "on its own clock")
 end)
 
+-- The `matrix learn` invariant (docs/notes/lua/matrix.md, Machines): learn
+-- waits exactly while its clock is S.matrix_learn_clock, and a retired
+-- clock is never that clock
+test("the invariant matrix learn fails for learn waiting with no clock and for a retired clock kept", function()
+  local _, S, matrix = loaded()
+  local check
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "matrix learn" then check = record.fn end
+  end
+  assert_true(check ~= nil, "registered")
+  assert_equal(check(), nil, "idle: it holds")
+  matrix.learn(3)
+  assert_equal(check(), nil, "armed on its clock: it holds")
+  h.allow_broken_invariants("the test breaks the matrix learn invariant on purpose")
+  local id = S.matrix_learn_clock
+  S.matrix_learn_clock = nil
+  assert_true(tostring((check())):find("learn waits: true", 1, true) ~= nil, "learn waiting with no clock: " .. tostring((check())))
+  S.matrix_learn_clock = id
+  S.lib.clocks.retired[id] = true
+  assert_true(tostring((check())):find("retired", 1, true) ~= nil, "a retired clock kept as learn's: " .. tostring((check())))
+  S.lib.clocks.retired[id] = nil
+  matrix.cancel_learn()
+  S.matrix_learn_clock = id
+  assert_true(tostring((check())):find("learn waits: false", 1, true) ~= nil, "a clock with no learn: " .. tostring((check())))
+  S.matrix_learn_clock = nil
+  assert_equal(check(), nil, "idle again: it holds")
+end)
+
 -- Every flash learn raises fits the header's flash room
 -- (S.constants.HEADER.flash_width) whole: the refusal, and a learned
 -- destination for the widest routing number and the widest label
