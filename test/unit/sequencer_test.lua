@@ -4443,16 +4443,17 @@ do
     return played
   end
 
-  -- math.random() answers up (0.75: a misstep always, and upward), any
-  -- other call the real one; it puts the real one back once a later test
-  -- has loaded the script again (a new init), so a failing row leaks nothing
-  local function missteps_up(context)
+  -- math.random() answers draw (0.75: a misstep always, and upward; 0.25:
+  -- always, and downward; up when nil), any other call the real one; it
+  -- puts the real one back once a later test has loaded the script again
+  -- (a new init), so a failing row leaks nothing
+  local function missteps_up(context, draw)
     local real, init_at = math.random, init
     context.real_random = real
     math.random = function(...)
       if init ~= init_at then math.random = real; return real(...) end
       if select("#", ...) > 0 then return real(...) end
-      return 0.75
+      return draw or 0.75
     end
   end
 
@@ -4516,8 +4517,11 @@ do
       {"ping-pong", "length 4", "ping-pong", check = plays("1 2 3 4 5 6 7 8 7 6 5 4 3 2 1 2 3 4 3 2 1 2 3",
         "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 3 3 3 4 4 4 5 5", 12)},
       -- a misstep wraps by the pass's length: the sixth step by 6, the
-      -- steps of the next pass by 4
-      {"missteps", "length 4", "missteps", check = plays("1 2 3 4 5 6 3 4 1 2", "1 1 1 1 1 1 2 2 2 2", 5)},
+      -- steps of the next pass by 4. Known #961: the seventh, a misstep up
+      -- from 6 at the start of a pass of 4, lands on 3 (neither next to 6
+      -- nor the wrap's 1)
+      {"missteps", "length 4", "missteps", check = plays("1 2 3 4 5 6 3 4 1 2", "1 1 1 1 1 1 2 2 2 2", 5),
+        known = 961},
       {"missteps", "to forward", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 2 2 2 2", 5)},
       -- reverse's count: the steps left to step 1 (four), each a misstep up
       {"missteps", "to reverse", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 1 1 1 2", 5)},
@@ -4547,6 +4551,25 @@ do
       pattern_clock_stop()
       assert_equal(table.concat(played.steps, " "), case[4], case[1] .. " then " .. case[3])
     end
+    -- the misstep case: forward at length 6, every step a misstep down
+    -- (1 6 5 4 3), then a shorter length that waits: the pass of 6 ends
+    -- after its sixth step (2), then passes of 4 (1 4 3 2), step 1 playing
+    -- on the odd ones only
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    voice_1_only(S, 6)
+    S.lib.sequencer.set_step_attr(1, 1, "cond", "1:2")
+    params:set("v1_seq_misstep", 100)
+    missteps_up(context, 0.25)
+    local played = pass_output(S)
+    pattern_clock_start()
+    run_steps(context, 5)
+    params:set("v1_seq_length", 4)
+    run_steps(context, 9)
+    pattern_clock_stop()
+    math.random = context.real_random
+    assert_equal(table.concat(played.steps, " "), "1 6 5 4 3 2 4 3 2 1 4 3 2", "missteps then a shorter length")
+    assert_equal(table.concat(played.passes, " "), "1 1 1 1 1 1 2 2 2 3 3 3 3", "the pass of each")
   end)
 end
 
@@ -4554,7 +4577,7 @@ end
 -- #923: S.seq_euclid is the fill's, so any other whole-pattern change
 -- forgets it (SEQ's euclid row then reads "-")
 test("the euclid row is empty after a clear and after a recall", function()
-  local context = load_strata(); finish_startup(context)
+  finish_startup(load_strata())
   local S = local_value("S")
   local seq = S.lib.sequencer
   capture_scene(1)
@@ -4568,7 +4591,6 @@ test("the euclid row is empty after a clear and after a recall", function()
   seq.euclid(1, 5, 2)
   assert_equal(S.seq_euclid[1][1], 5, "a fill keeps its own")
   assert_equal(S.seq_euclid[1][2], 2, "and its rotation")
-  assert_true(context ~= nil)
 end)
 
 -- #924: a handler installed after Strata's that chains to it keeps calling
@@ -4592,7 +4614,11 @@ test("a transport start after cleanup does nothing", function()
   assert_equal(S.pattern_clock, nil, "with no clock")
   assert_equal(next(S.pattern_clocks), nil, "and no voice's clock")
   assert_equal(S.lib.sequencer.count_offset(), 0, "nor a count kept")
+  -- a stop: the patterns played after cleanup (a test's start) keep playing
+  pattern_clock_start()
   clock.transport.stop()
+  assert_equal(S.pattern_playing, true, "a stop after cleanup stops nothing")
+  pattern_clock_stop()
   assert_equal(table.concat(found, " "), "start stop", "the handlers it found still run")
 end)
 
