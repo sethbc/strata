@@ -106,7 +106,8 @@ return function(S)
   -- The playing state (local; read through the functions below): per voice
   -- {anchor, tick, beat, due} and its position (3.7: last, the step taken
   -- last, nil at a start; taken, the steps taken in the pass; pass_length;
-  -- heading, ping-pong's way, 1 or -1: start_position) and the transport's
+  -- heading, ping-pong's way, 1 or -1; 3.9's way, the direction of the
+  -- step taken last, nil at a start: start_position) and the transport's
   -- {anchor, tick, beat, due, played_at (the time of its last 16th)}, each
   -- with its wait's {last_sync, generation, sync_time, sync_beat,
   -- sync_beat_seconds, stale}. A
@@ -1170,6 +1171,7 @@ return function(S)
   -- reset's bar, a stop): no step taken, pass 1 with no outcome
   local function start_position(voice_idx, state)
     state.last, state.taken, state.heading, state.pass_length = nil, 0, 1, voice_length(voice_idx)
+    state.way = nil
     S.lib.conditions.start(voice_idx)
   end
 
@@ -1197,10 +1199,14 @@ return function(S)
   -- been taken, at the pass's end otherwise: forward is 3.6's wrap) and
   -- ends at each turn in ping-pong. At a pass's end the pass count moves
   -- (S.lib.conditions.next_pass), forward starts again at 1 and reverse at
-  -- the length, and the overrides end when no set step is left. A misstep
-  -- (seq_misstep percent, one draw made only above 0) moves one step up or
-  -- down (a second draw), wrapping, instead of the direction's move.
-  -- Forward with misstep 0 draws nothing
+  -- the length, and the overrides end when no set step is left. A
+  -- direction change (3.9, #874: state.way, the direction of the step
+  -- taken last) ends the pass where the new direction wraps: the count
+  -- becomes the position (forward) or the steps left to step 1 (reverse),
+  -- so it runs out at the wrap; to ping-pong or random it counts on. A
+  -- misstep (seq_misstep percent, one draw made only above 0) moves one
+  -- step up or down (a second draw), wrapping by the pass's length (#920),
+  -- instead of the direction's move. Forward with misstep 0 draws nothing
   local function take_position(voice_idx)
     local state = play.voices[voice_idx]
     local length = voice_length(voice_idx)
@@ -1213,6 +1219,11 @@ return function(S)
         step = way == SEQ.reverse and length or 1
       end
     else
+      if way ~= state.way and way == SEQ.forward then
+        state.taken = last
+      elseif way ~= state.way and way == SEQ.reverse then
+        state.taken = state.pass_length - last + 1
+      end
       if way ~= SEQ.ping_pong then
         if length ~= state.pass_length and state.taken < length then state.pass_length = length end
         if state.taken >= state.pass_length then
@@ -1221,7 +1232,7 @@ return function(S)
       end
       local chance = misstep(voice_idx)
       if chance > 0 and math.random() * SEQ.max_misstep < chance then
-        step = (last - 1 + (math.random() < 0.5 and -1 or 1)) % length + 1
+        step = (last - 1 + (math.random() < 0.5 and -1 or 1)) % state.pass_length + 1
       elseif way == SEQ.forward then
         step = (pass_ended or last + 1 > state.pass_length) and 1 or last + 1
       elseif way == SEQ.reverse then
@@ -1241,7 +1252,7 @@ return function(S)
         end_overrides(voice_idx)
       end
     end
-    state.last, state.taken = step, state.taken + 1
+    state.last, state.taken, state.way = step, state.taken + 1, way
     return step
   end
 

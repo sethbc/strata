@@ -4431,4 +4431,128 @@ test("a Whole Tone degree from an off-scale voice walks the scale, as 3.7", func
   assert_near(seq.degree_semitones(1, 1), 1.7, 1e-6, "from 60.3, degree 1 is D: 1.7 semitones up")
 end)
 
+-- 3.9 (#874, #920; design "Calls made in this design", ruling B2): a voice's
+-- position and pass. A direction change ends the pass where the new
+-- direction wraps; a misstep wraps by the pass's own length. Each state is
+-- voice 1 alone, every step set, playing; each row's check runs the steps
+-- after the event and reads the steps played and the pass each played on
+do
+  -- A step output that keeps each of voice 1's first hits' step and pass
+  local function pass_output(S)
+    local played = {steps = {}, passes = {}}
+    S.register_step_output({name = "position probe", play = function(event)
+      if event.voice ~= 1 or not event.first then return end
+      played.steps[#played.steps + 1] = event.step
+      played.passes[#played.passes + 1] = S.lib.conditions.pass(1)
+    end})
+    return played
+  end
+
+  -- math.random() answers up (0.75: a misstep always, and upward), any
+  -- other call the real one; it puts the real one back once a later test
+  -- has loaded the script again (a new init), so a failing row leaks nothing
+  local function missteps_up(context)
+    local real, init_at = math.random, init
+    context.real_random = real
+    math.random = function(...)
+      if init ~= init_at then math.random = real; return real(...) end
+      if select("#", ...) > 0 then return real(...) end
+      return 0.75
+    end
+  end
+
+  -- Voice 1 at length, in direction, playing for taken steps
+  local function playing(context, length, direction, taken)
+    local S = local_value("S")
+    voice_1_only(S, length)
+    params:set("v1_seq_direction", DIRECTION[direction])
+    context.played = pass_output(S)
+    pattern_clock_start()
+    run_steps(context, taken)
+  end
+
+  -- A row's check: after steps more, the steps and the passes played
+  local function plays(steps, passes, more)
+    return function(context)
+      run_steps(context, more or 7)
+      pattern_clock_stop()
+      if context.real_random then math.random = context.real_random end
+      assert_equal(table.concat(context.played.steps, " "), steps, "the steps played")
+      assert_equal(table.concat(context.played.passes, " "), passes, "the pass of each: it moves once a wrap")
+    end
+  end
+
+  h.transition_table({
+    name = "position and pass",
+    states = {
+      forward = function(context) playing(context, 8, "forward", 3) end,        -- 1 2 3
+      reverse = function(context) playing(context, 8, "reverse", 3) end,        -- 8 7 6
+      ["ping-pong"] = function(context) playing(context, 8, "ping-pong", 11) end,  -- 1 .. 8 7 6 5
+      -- forward at length 6, every step a misstep up: 1 2 3 4 5
+      missteps = function(context)
+        params:set("v1_seq_misstep", 100)
+        missteps_up(context)
+        playing(context, 6, "forward", 5)
+      end,
+    },
+    events = {
+      ["to forward"] = function() params:set("v1_seq_direction", DIRECTION.forward) end,
+      ["to reverse"] = function() params:set("v1_seq_direction", DIRECTION.reverse) end,
+      -- a shorter length: under the steps taken, it waits for the pass's end
+      ["length 4"] = function() params:set("v1_seq_length", 4) end,
+    },
+    state_of = function()
+      local S = local_value("S")
+      if not S.pattern_playing then return "stopped" end
+      if params:get("v1_seq_misstep") > 0 then return "missteps" end
+      return params:string("v1_seq_direction")
+    end,
+    rows = {
+      {"forward", "to forward", "forward", check = plays("1 2 3 4 5 6 7 8 1 2", "1 1 1 1 1 1 1 1 2 2")},
+      {"forward", "to reverse", "reverse", check = plays("1 2 3 2 1 8 7 6 5 4", "1 1 1 1 1 2 2 2 2 2")},
+      {"forward", "length 4", "forward", check = plays("1 2 3 4 1 2 3 4 1 2", "1 1 1 1 2 2 2 2 3 3")},
+      {"reverse", "to forward", "forward", check = plays("8 7 6 7 8 1 2 3 4 5", "1 1 1 1 1 2 2 2 2 2")},
+      {"reverse", "to reverse", "reverse", check = plays("8 7 6 5 4 3 2 1 8 7", "1 1 1 1 1 1 1 1 2 2")},
+      {"reverse", "length 4", "reverse", check = plays("8 7 6 5 4 3 2 1 4 3", "1 1 1 1 2 2 2 2 3 3")},
+      {"ping-pong", "to forward", "forward", check = plays("1 2 3 4 5 6 7 8 7 6 5 6 7 8 1 2 3 4 5 6 7 8 1",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 3 3 3 3 3 3 3 3 4", 12)},
+      {"ping-pong", "to reverse", "reverse", check = plays("1 2 3 4 5 6 7 8 7 6 5 4 3 2 1 8 7 6 5 4 3 2 1",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 3 3 3 3 3 3 3 3", 12)},
+      {"ping-pong", "length 4", "ping-pong", check = plays("1 2 3 4 5 6 7 8 7 6 5 4 3 2 1 2 3 4 3 2 1 2 3",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 3 3 3 4 4 4 5 5", 12)},
+      -- a misstep wraps by the pass's length: the sixth step by 6, the
+      -- steps of the next pass by 4
+      {"missteps", "length 4", "missteps", check = plays("1 2 3 4 5 6 3 4 1 2", "1 1 1 1 1 1 2 2 2 2", 5)},
+      {"missteps", "to forward", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 2 2 2 2", 5)},
+      -- reverse's count: the steps left to step 1 (four), each a misstep up
+      {"missteps", "to reverse", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 1 1 1 2", 5)},
+    },
+    notes = {"docs/notes/lua/sequencer.md", "position and pass"},
+  })
+
+  -- the pass count read by a condition: step 1 at 1:2 plays on the odd
+  -- passes only, through each change
+  test("the pass count moves once a wrap: a 1:2 step plays on every second pass through a direction change", function()
+    local cases = {
+      {"reverse", 3, "forward", "8 7 6 7 8 2 3 4 5 6 7 8 1 2"},
+      {"forward", 3, "reverse", "1 2 3 2 1 8 7 6 5 4 3 2 8 7"},
+      {"ping-pong", 11, "forward", "1 2 3 4 5 6 7 8 7 6 5 6 7 8 1 2 3 4"},
+    }
+    for _, case in ipairs(cases) do
+      local context = load_strata(); finish_startup(context)
+      local S = local_value("S")
+      voice_1_only(S, 8)
+      S.lib.sequencer.set_step_attr(1, 1, "cond", "1:2")
+      params:set("v1_seq_direction", DIRECTION[case[1]])
+      local played = pass_output(S)
+      pattern_clock_start()
+      run_steps(context, case[2])
+      params:set("v1_seq_direction", DIRECTION[case[3]])
+      run_steps(context, case[1] == "ping-pong" and 7 or 12)
+      pattern_clock_stop()
+      assert_equal(table.concat(played.steps, " "), case[4], case[1] .. " then " .. case[3])
+    end
+  end)
+end
+
 end
