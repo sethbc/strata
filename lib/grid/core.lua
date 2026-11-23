@@ -218,26 +218,28 @@ return function(S)
     return port_states[port]
   end
 
+  -- A pending hold's clock runs through the clock helper (hold_clocks holds
+  -- its handle) and is ended with S.lib.clocks.stop, which retires one
+  -- whose wake may be posted (#870): its sleep returns false and fn never
+  -- runs. Only cleanup's step cancels them outright
   local function cancel_hold(port, x, y)
-    local clock_id = key_value(hold_clocks, port, x, y)
-    if clock_id == nil then return end
-    clock.cancel(clock_id)
+    local handle = key_value(hold_clocks, port, x, y)
+    if handle == nil then return end
     set_key_value(hold_clocks, port, x, y, nil)
+    S.lib.clocks.stop(handle)
   end
 
   -- Run fn once if the key (held now) is still held after `seconds`. Its
-  -- release, the port's grid.remove and cleanup cancel it
+  -- release, the port's grid.remove and cleanup end it
   function M.on_hold(port, x, y, seconds, fn)
     if M.held(port, x, y) == nil then return end
     cancel_hold(port, x, y)
-    local clock_id
-    clock_id = clock.run(function()
-      clock.sleep(seconds)
-      if key_value(hold_clocks, port, x, y) ~= clock_id then return end
+    local handle = S.lib.clocks.run(function(hold)
+      if not hold.sleep(seconds) then return end
       set_key_value(hold_clocks, port, x, y, nil)
       fn()
     end)
-    set_key_value(hold_clocks, port, x, y, clock_id)
+    set_key_value(hold_clocks, port, x, y, handle)
   end
 
   -- The held step key that opened 3.4's step editor (design §8.7), as
@@ -273,14 +275,21 @@ return function(S)
     close_step_editor_of(port, x, y)
   end
 
-  -- Cancel every pending hold of a port and forget its keys' roles:
-  -- forget_port. The keys stay held
-  function M.end_port_holds(port)
-    for _, rows in pairs(hold_clocks[port] or {}) do
-      for _, clock_id in pairs(rows) do clock.cancel(clock_id) end
-    end
+  -- End every pending hold of a port with end_clock (S.lib.clocks.stop;
+  -- cleanup's step passes cancel) and forget its keys' roles
+  local function end_holds(port, end_clock)
+    local columns = hold_clocks[port]
     hold_clocks[port] = nil
     key_roles[port] = nil
+    for _, rows in pairs(columns or {}) do
+      for _, handle in pairs(rows) do end_clock(handle) end
+    end
+  end
+
+  -- End every pending hold of a port (stopped) and forget its keys' roles:
+  -- forget_port. The keys stay held
+  function M.end_port_holds(port)
+    end_holds(port, S.lib.clocks.stop)
   end
 
   -- Note that the key at (x, y), held now, was pressed in role (a string:
@@ -964,8 +973,8 @@ return function(S)
   -- change). norns' SLEEP runs only cleanup() before the system shuts down,
   -- so a key or a grid plugged meanwhile reaches nothing (#468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.grids_dark, function()
-    for port = 1, S.MAX_GRID_PORTS do forget_port(port) end
-    for _, port in pairs(GRID_PORTS) do forget_port(port) end
+    for port = 1, S.MAX_GRID_PORTS do end_holds(port, S.lib.clocks.cancel); forget_port(port) end
+    for _, port in pairs(GRID_PORTS) do end_holds(port, S.lib.clocks.cancel); forget_port(port) end
     for _, grid_port in pairs(S.grids) do
       grid_port.key = nil
       grid_port:rotation(0)

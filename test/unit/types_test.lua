@@ -427,6 +427,35 @@ test("a set, a recall, apply_voice and a PSET read of the current type each canc
   cleanup()
 end)
 
+-- 3.9 (#870): the settle clock goes through the clock helper, so a cancel
+-- that falls after its wake is posted (a recall, a set, a PSET read) never
+-- cancels a clock whose resume is on its way
+test("the type settle stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.lib.types.turn(1, 1)
+  local id = S.type_settle_clocks[1]
+  assert_equal(type(id), "number", "the settle clock runs")
+  context.clear_engine_calls()
+  context.clock.advance_until(id, function() S.lib.types.cancel(1) end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a canceled clock" .. (errors[1] and (": " .. errors[1]) or ""))
+  assert_equal(S.lib.types.pending(1), nil, "nothing pending")
+  assert_equal(S.type_settle_clocks[1], nil, "and no settle clock")
+  context.clock.run_for(S.lib.types.TYPES.settle_seconds * 2)
+  assert_equal(S.lib.types.of(1).key, "resonator", "the settle applied no type")
+  assert_equal(#calls(context, "setVoiceType"), 0, "no setVoiceType")
+  -- a turn as the wake is posted: the old settle applies nothing, the new one its choice
+  S.lib.types.turn(1, 1)
+  context.clock.advance_until(S.type_settle_clocks[1], function() S.lib.types.turn(1, 1) end)
+  assert_equal(#context.clock.take_errors(), 0, "a turn at the wake: no clock error")
+  assert_equal(S.lib.types.pending(1), 3, "the new choice pending")
+  assert_equal(S.lib.types.of(1).key, "resonator", "nothing applied at the old wake")
+  context.clock.run_for(S.lib.types.TYPES.settle_seconds + 0.2)
+  assert_equal(S.lib.types.of(1).key, "folder", "the new settle applies its choice")
+  cleanup()
+end)
+
 test("a frozen voice stays frozen across a type change", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

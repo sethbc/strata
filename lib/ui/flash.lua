@@ -14,8 +14,10 @@ return function(S)
 
   -- Per slot: the text (nil when none), ends_at (util.time() when it stops
   -- showing), page (the UI_PAGES index it belongs to, nil for every page)
-  -- and the clock that ends it. Tests read the clocks here
+  -- and the clock that ends it (its id; tests read the clocks here), run
+  -- through the clock helper (its handle in handles[slot])
   M.slots = {header = {ends_at = 0}, hints = {ends_at = 0}}
+  local handles = {}
 
   local function slot_state(slot)
     local state = M.slots[slot]
@@ -23,11 +25,12 @@ return function(S)
     return state
   end
 
-  local function cancel_clock(state)
-    if state.clock then
-      clock.cancel(state.clock)
-      state.clock = nil
-    end
+  -- End the slot's clock with end_clock (S.lib.clocks.stop, which retires
+  -- one whose wake may be posted, #870; cancel in cleanup)
+  local function cancel_clock(slot, end_clock)
+    local handle = handles[slot]
+    handles[slot], M.slots[slot].clock = nil, nil
+    if handle then (end_clock or S.lib.clocks.stop)(handle) end
   end
 
   -- Show `text` in `slot` for `seconds` (HEADER.flash_seconds if nil), on
@@ -39,7 +42,7 @@ return function(S)
   function M.start(slot, text, seconds, page)
     local state = slot_state(slot)
     seconds = seconds or HEADER.flash_seconds
-    cancel_clock(state)
+    cancel_clock(slot)
     request_redraw()
     if text == nil then
       state.text, state.page = nil, nil
@@ -48,12 +51,13 @@ return function(S)
     state.text = tostring(text)
     state.page = page
     state.ends_at = util.time() + seconds
-    state.clock = clock.run(function()
-      clock.sleep(seconds)
-      state.clock = nil
+    local handle = S.lib.clocks.run(function(flash)
+      if not flash.sleep(seconds) then return end
+      handles[slot], state.clock = nil, nil
       state.text = nil
       request_redraw()
     end)
+    handles[slot], state.clock = handle, handle.id
   end
 
   -- Standing notices (3.4): per slot, functions a module adds that return a
@@ -88,9 +92,11 @@ return function(S)
     return notice_text(slot)
   end
 
-  function M.cancel_all()
-    for _, state in pairs(M.slots) do
-      cancel_clock(state)
+  -- End every slot's flash (end_clock: S.lib.clocks.stop, or cancel in
+  -- cleanup)
+  function M.cancel_all(end_clock)
+    for slot, state in pairs(M.slots) do
+      cancel_clock(slot, end_clock)
       state.text = nil
     end
   end
@@ -101,7 +107,7 @@ return function(S)
   end
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.ui_flash, function()
-    M.cancel_all()
+    M.cancel_all(S.lib.clocks.cancel)
   end)
 
   -- A flash showing a text has the clock that ends it

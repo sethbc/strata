@@ -81,19 +81,25 @@ return function(S)
 
   -- VOICE's type row (design §2.3, ruling 63): E3 and the arc's ring move
   -- a pending choice, one a voice, applied once the turns have rested
-  -- settle_seconds (one settle clock a voice, S.type_settle_clocks[voice]),
-  -- or at once by a voice pick, leaving VOICE or the voice's stop (flush)
+  -- settle_seconds (one settle clock a voice, run through the clock helper:
+  -- its handle in settle_handles[voice], its id in
+  -- S.type_settle_clocks[voice], which tests read), or at once by a voice
+  -- pick, leaving VOICE or the voice's stop (flush)
   M.TYPES = {settle_seconds = 0.3}
   S.type_settle_clocks = {}
+  local settle_handles = {}
 
   -- Per voice, the type index VOICE's type row holds pending (nil: none)
   local pending = {}
 
-  local function stop_settle(voice_idx)
-    local id = S.type_settle_clocks[voice_idx]
-    if id then
-      S.type_settle_clocks[voice_idx] = nil
-      clock.cancel(id)
+  -- End the voice's settle clock with end_clock (S.lib.clocks.stop, which
+  -- retires one whose wake may be posted, #870; cancel in cleanup)
+  local function stop_settle(voice_idx, end_clock)
+    local handle = settle_handles[voice_idx]
+    if handle then
+      local end_settle = end_clock or S.lib.clocks.stop
+      settle_handles[voice_idx], S.type_settle_clocks[voice_idx] = nil, nil
+      end_settle(handle)
     end
   end
 
@@ -127,11 +133,12 @@ return function(S)
     if not current or type(d) ~= "number" then return end
     pending[voice_idx] = util.clamp((pending[voice_idx] or current.index) + d, 1, #S.registry.voice_types)
     stop_settle(voice_idx)
-    S.type_settle_clocks[voice_idx] = clock.run(function()
-      clock.sleep(M.TYPES.settle_seconds)
-      S.type_settle_clocks[voice_idx] = nil
+    local handle = S.lib.clocks.run(function(settle)
+      if not settle.sleep(M.TYPES.settle_seconds) then return end
+      settle_handles[voice_idx], S.type_settle_clocks[voice_idx] = nil, nil
       M.flush(voice_idx)
     end)
+    settle_handles[voice_idx], S.type_settle_clocks[voice_idx] = handle, handle.id
     request_redraw()
   end
 
@@ -142,7 +149,7 @@ return function(S)
   S.register_cleanup(S.constants.CLEANUP_ORDER.type_settle, function()
     for voice_idx = 1, NUM_VOICES do
       pending[voice_idx] = nil
-      stop_settle(voice_idx)
+      stop_settle(voice_idx, S.lib.clocks.cancel)
     end
   end)
 
