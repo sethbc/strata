@@ -135,7 +135,7 @@ local BARE_CANCEL_FILES = {
   ["lib/buffers.lua"] = 2, ["lib/gestures.lua"] = 3, ["lib/grid/core.lua"] = 2,
   ["lib/io/controllers.lua"] = 1, ["lib/io/crow.lua"] = 2, ["lib/io/nb.lua"] = 1, ["lib/io/osc.lua"] = 1,
   ["lib/io/remote.lua"] = 2, ["lib/macros.lua"] = 4, ["lib/matrix.lua"] = 2, ["lib/morph.lua"] = 1,
-  ["lib/mutation.lua"] = 2, ["lib/positions.lua"] = 1, ["lib/record.lua"] = 1, ["lib/scenes.lua"] = 3,
+  ["lib/mutation.lua"] = 2, ["lib/record.lua"] = 1, ["lib/scenes.lua"] = 3,
   ["lib/slices.lua"] = 1, ["lib/types.lua"] = 1, ["lib/ui/flash.lua"] = 1, ["lib/ui/zones.lua"] = 2,
 }
 -- The files that keep their clock.cancel: the first nine cancel a clock

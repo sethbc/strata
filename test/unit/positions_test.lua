@@ -40,6 +40,16 @@ local function loop_of(voice_idx)
   return params:get("v" .. voice_idx .. "_loop_start"), params:get("v" .. voice_idx .. "_loop_length")
 end
 
+-- A press's `still` for a direct call (3.9, #865), standing in for the
+-- grid page's (its key's role, which the core clears at its pane's page,
+-- side or half change): true while the pane shows what it showed at the
+-- press. A direct call without one ends only at its release or its port's
+-- going
+local function pane_still(S, port, pane)
+  local view = S.lib.grid_core.view(port, pane)
+  return function() return S.lib.grid_core.view(port, pane) == view end
+end
+
 test("a jump inside the loop moves buf_pos and resets the scan", function()
   local context, S = buffer_voices()
   params:set("v1_loop_length", 0.5); params:set("v1_loop_start", 0.25)
@@ -155,7 +165,7 @@ test("a scan hold or a held position key ends when its grid changes page or goes
   context.grid.plug(1, 16, 16)
   S.lib.grid_core.set_page(1, 5)
   context.clear_engine_calls()
-  positions.strip_key(1, 1, "hold", 1)
+  positions.strip_key(1, 1, "hold", 1, 1, pane_still(S, 1, 1))
   assert_equal(last_grain(context, "scanHold", 0), 1, "the hold key holds the scan")
   context.clock.run_for(0.2)
   assert_equal(#grain_calls(context, "scanHold"), 1, "still held: nothing more sent")
@@ -178,7 +188,7 @@ test("a scan hold or a held position key ends when its grid changes page or goes
   -- a held position key ends with the page too
   context.grid.plug(1, 16, 16)
   S.lib.grid_core.set_page(1, 5)
-  positions.grid_key(1, 1, 5, 16, 1)
+  positions.grid_key(1, 1, 5, 16, 1, 1, pane_still(S, 1, 1))
   S.lib.grid_core.set_page(1, 1)
   context.clock.run_for(0.1)
   S.lib.grid_core.set_page(1, 5)
@@ -188,9 +198,9 @@ test("a scan hold or a held position key ends when its grid changes page or goes
   assert_near(start, 0, 1e-9, "the loop unchanged"); assert_near(length, 1, 1e-9)
 end)
 
--- 3.8: a press record keeps the view of the pane it came from
--- (grid_core.view(port, pane)), so a key held on a 256's lower pane lives
--- while that pane shows what it was pressed on, whatever the upper shows
+-- 3.8: a press record keeps the pane it came from and (3.9, #865) its
+-- still, so a key held on a 256's lower pane lives while that pane's still
+-- holds, whatever the upper shows
 test("a press on a 256's lower pane ends with the lower pane's page change, not the upper's", function()
   local context, S = buffer_voices()
   local positions, grid_core, pages = S.lib.positions, S.lib.grid_core, S.constants.GRID_PAGES
@@ -198,9 +208,9 @@ test("a press on a 256's lower pane ends with the lower pane's page change, not 
   grid_core.set_page(1, pages.patterns, 1)
   grid_core.set_page(1, pages.positions, 2)
   context.clear_engine_calls()
-  positions.strip_key(1, 1, "hold", 1, 2)
-  positions.strip_key(1, 2, "store", 1, 2)
-  positions.grid_key(1, 1, 5, 16, 1, 2)
+  positions.strip_key(1, 1, "hold", 1, 2, pane_still(S, 1, 2))
+  positions.strip_key(1, 2, "store", 1, 2, pane_still(S, 1, 2))
+  positions.grid_key(1, 1, 5, 16, 1, 2, pane_still(S, 1, 2))
   context.clock.run_for(0.2)
   assert_equal(positions.holds_scan(1, "grid:1"), true, "the lower pane's hold lives through the ticks")
   assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_down, "and its store")
@@ -226,7 +236,7 @@ test("a press on a 256's lower pane ends with the lower pane's page change, not 
   positions.grid_key(1, 1, 13, 16, 0, 2); positions.grid_key(1, 1, 5, 16, 0, 2)
   -- a press without a pane is pane 1's: the lower pane's page leaves it alone
   grid_core.set_page(1, pages.positions, 1)
-  positions.strip_key(1, 1, "hold", 1)
+  positions.strip_key(1, 1, "hold", 1, nil, pane_still(S, 1, 1))
   grid_core.set_page(1, pages.patterns, 2)
   context.clock.run_for(0.1)
   assert_equal(positions.holds_scan(1, "grid:1"), true, "pane 1's hold, with no pane given")
@@ -235,54 +245,60 @@ test("a press on a 256's lower pane ends with the lower pane's page change, not 
   assert_equal(positions.holds_scan(1, "grid:1"), false, "ended by pane 1's page change")
 end)
 
--- #851: a press record keeps its pane, so whether it is stale never
--- depends on how grid_core.view spells a view (here with the pane last)
-test("a lower pane's press lives through the ticks whatever a view's text looks like", function()
+-- #851, then #865: a press record keeps its pane and its still, so whether
+-- it is stale never depends on a view's text: positions reads no view at
+-- all (grid_core.view raises here), only each press's still
+test("a lower pane's press lives through the ticks while its still holds, and reads no view", function()
   local context, S = buffer_voices()
   local positions, grid_core, pages = S.lib.positions, S.lib.grid_core, S.constants.GRID_PAGES
   context.grid.plug(1, 16, 16)
-  local view = grid_core.view
-  grid_core.view = function(port, pane)
-    pane = pane or 1
-    return grid_core.page(port, pane) .. "/" .. grid_core.side(port, pane) .. "/" .. grid_core.half(port, pane) .. "@" .. pane
-  end
   grid_core.set_page(1, pages.patterns, 1)
   grid_core.set_page(1, pages.positions, 2)
-  positions.strip_key(1, 1, "hold", 1, 2)
-  positions.strip_key(1, 2, "store", 1, 2)
-  positions.grid_key(1, 1, 5, 16, 1, 2)
-  context.clock.run_for(0.2)
-  assert_equal(positions.holds_scan(1, "grid:1"), true, "the lower pane's hold lives")
-  assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_down, "and its store")
-  positions.grid_key(1, 1, 9, 16, 1, 2)
-  local start, length = loop_of(1)
-  assert_near(start, 0.25, 1e-9, "the held cell 5 lives: cells 5 and 9 set the loop")
-  assert_near(length, 0.3125, 1e-9)
-  positions.grid_key(1, 1, 9, 16, 0, 2)
-  grid_core.set_page(1, pages.patterns, 2)
-  context.clock.run_for(0.1)
-  assert_equal(positions.holds_scan(1, "grid:1"), false, "the lower pane's own page change still ends its hold")
-  assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_up, "and its store")
+  local view = grid_core.view
+  grid_core.view = function() error("positions read a view") end
+  local held = true
+  local function still() return held end
+  local ok, problem = pcall(function()
+    positions.strip_key(1, 1, "hold", 1, 2, still)
+    positions.strip_key(1, 2, "store", 1, 2, still)
+    positions.grid_key(1, 1, 5, 16, 1, 2, still)
+    context.clock.run_for(0.2)
+    assert_equal(positions.holds_scan(1, "grid:1"), true, "the lower pane's hold lives")
+    assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_down, "and its store")
+    positions.grid_key(1, 1, 9, 16, 1, 2, still)
+    local start, length = loop_of(1)
+    assert_near(start, 0.25, 1e-9, "the held cell 5 lives: cells 5 and 9 set the loop")
+    assert_near(length, 0.3125, 1e-9)
+    positions.grid_key(1, 1, 9, 16, 0, 2)
+    held = false  -- the keys' release is lost
+    context.clock.run_for(0.1)
+    assert_equal(positions.holds_scan(1, "grid:1"), false, "a still that says false ends the hold within a tick")
+    assert_equal(positions.strip_level(2, "store", 1), positions.LEVELS.key_up, "and the store")
+    positions.grid_key(1, 1, 13, 16, 1, 2)
+    assert_near(params:get("v1_buf_pos"), 0.75, 1e-9, "and the held cell: the next press jumps")
+  end)
   grid_core.view = view
+  if not ok then error(problem, 0) end
 end)
 
 -- Both panes of a 256 can show a voice's store and hold keys (positions'
--- second side): each is held per view, so the key down in one pane lasts
+-- second side): each is held per pane, so the key down in one pane lasts
 -- through the other pane's release or page change, in either order
 test("a voice's store or hold held in both panes of a 256 lasts until its last pane lets go", function()
   local context, S = buffer_voices()
   local positions, grid_core, pages = S.lib.positions, S.lib.grid_core, S.constants.GRID_PAGES
   context.grid.plug(1, 16, 16)
   grid_core.set_page(1, pages.positions, 1); grid_core.set_page(1, pages.positions, 2)
+  local function down(key, pane) positions.strip_key(1, 1, key, 1, pane, pane_still(S, 1, pane)) end
   for _, first in ipairs({1, 2}) do
     local second = 3 - first
-    positions.strip_key(1, 1, "store", 1, first); positions.strip_key(1, 1, "store", 1, second)
-    positions.strip_key(1, 1, "hold", 1, first); positions.strip_key(1, 1, "hold", 1, second)
+    down("store", first); down("store", second)
+    down("hold", first); down("hold", second)
     positions.strip_key(1, 1, "store", 0, second); positions.strip_key(1, 1, "hold", 0, second)
     assert_equal(positions.strip_level(1, "store", 1), positions.LEVELS.key_down, first .. " first: pane " .. first .. "'s store is still down")
     assert_equal(positions.holds_scan(1, "grid:1"), true, first .. " first: and its hold")
     -- the other pane's page change ends its keys, never the first's
-    positions.strip_key(1, 1, "store", 1, second); positions.strip_key(1, 1, "hold", 1, second)
+    down("store", second); down("hold", second)
     grid_core.set_page(1, pages.patterns, second)
     context.clock.run_for(0.1)
     assert_equal(positions.strip_level(1, "store", 1), positions.LEVELS.key_down, first .. " first: a page change of pane " .. second .. " leaves the store")
@@ -646,6 +662,39 @@ test("an error inside the glide is printed once and the glide runs on to its end
   h.claim_script_errors(context, 2, "strata: scrub glide failed: ", "glide boom")  -- the two it caused (#473)
 end)
 
+-- #870: the glide's clock runs on the clock helper (S.lib.clocks), so a
+-- jump that ends the glide as the clock's wake is posted retires it
+test("the glide's clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context, S = buffer_voices()
+  params:set("scrub_friction", 0)
+  local clocks = S.lib.clocks
+  local real_run, started = clocks.run, {}
+  clocks.run = function(fn) local handle = real_run(fn); started[#started + 1] = handle; return handle end
+  local ok, problem = pcall(function()
+    -- a fling, then the glide: its clock sleeps a playhead update at a time
+    fling(context, S, 0.2, 0.3)
+    context.clock.run_for(0.2)
+    assert_true(S.lib.positions.scrub_rate(1) > 0.05, "gliding")
+    assert_equal(#started, 1, "one glide clock, on the helper")
+    local handle = started[1]
+    context.clock.advance_until(handle.id, function() S.lib.positions.jump(1, 0.5) end)
+    assert_equal(#context.clock.take_errors(), 0, "no clock error at the wake")
+    assert_equal(clock.threads[handle.id], nil, "the clock ended at its wake")
+    assert_equal(clocks.retired[handle.id], nil, "and the helper forgot it")
+    context.clear_engine_calls()
+    context.clock.run_for(2)
+    assert_equal(#grain_calls(context, "scrubRate"), 0, "nothing more is sent")
+    assert_equal(S.lib.positions.scrub_rate(1), 0, "the glide stays ended")
+    -- the next fling starts its own clock and glides
+    fling(context, S, 0.2, 0.3)
+    context.clock.run_for(0.2)
+    assert_true(S.lib.positions.scrub_rate(1) > 0.05, "the next fling glides")
+    assert_equal(#started, 2, "on a clock of its own")
+  end)
+  clocks.run = real_run
+  if not ok then error(problem, 0) end
+end)
+
 test("a new turn, a jump or a source switch ends the glide at once", function()
   local context, S = buffer_voices()
   params:set("scrub_friction", 0)
@@ -909,7 +958,7 @@ test("a 128h's store ends when the grid shows another page", function()
   local positions = S.lib.positions
   context.grid.plug(1, 16, 8)
   S.lib.grid_core.set_page(1, 4)
-  positions.strip_key(1, 1, "store", 1)
+  positions.strip_key(1, 1, "store", 1, 1, pane_still(S, 1, 1))
   S.lib.grid_core.set_page(1, 1)
   context.clock.run_for(0.1)
   assert_equal(positions.strip_level(1, "store", 1), 4, "store ended with the page")
@@ -1387,7 +1436,7 @@ test("a held slice key ends when its grid shows another page or leaves", functio
   context.grid.plug(1, 16, 16)
   S.lib.grid_core.set_page(1, 5)
   local positions = S.lib.positions
-  press(positions, 1, 1, 2)
+  positions.grid_key(1, 1, 2, 16, 1, 1, pane_still(S, 1, 1))
   S.lib.grid_core.set_page(1, 1)
   positions.end_stale_holds()
   assert_equal(#doubles.offs, 1, "the page change ends it")
