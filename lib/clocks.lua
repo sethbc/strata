@@ -91,8 +91,8 @@ return function(S)
   -- id known) and its coroutine (clock.threads[id], as lua/core/clock.lua
   -- keeps it) is suspended though the handle waits on nothing. One that
   -- runs is not ("running", or "normal" while a coroutine it resumed
-  -- runs), nor one whose body raised ("dead": clock.resume leaves it in
-  -- clock.threads), #954
+  -- runs), nor a dead one or one gone from clock.threads (a body that
+  -- raised, which the helper cancels as it raises, #956), #954
   local function waits_bare(handle)
     if type(handle.id) ~= "number" or not clock.threads then return false end
     local thread = clock.threads[handle.id]
@@ -136,9 +136,21 @@ return function(S)
       return resumed(handle)
     end
     handle.id = clock.run(function()
-      fn(handle)
+      local ok, err = pcall(fn, handle)
       handle.ended, handle.waiting = true, nil
       if handle.id then M.retired[handle.id] = nil end
+      if not ok then
+        -- #956: clock.resume raises without canceling a body that raised,
+        -- leaving its coroutine in clock.threads and its scheduler slot
+        -- claimed until cleanup. Cancel it here, from inside its own run:
+        -- clock.cancel only clears its slot (no wait is scheduled while it
+        -- runs) and its clock.threads entry (clock.resume holds the
+        -- coroutine), then raise the body's error as it was raised, for
+        -- clock.resume to report as before. A body that raised before its
+        -- first wait (no id yet) had no slot: clock.run raises it
+        if type(handle.id) == "number" then clock.cancel(handle.id) end
+        error(err, 0)
+      end
     end)
     return handle
   end
@@ -147,7 +159,7 @@ return function(S)
   -- raising: canceled at once while its wait's end is farther off than the
   -- margin, else retired (M.retired), to end at its wake. A clock stopped
   -- from its own body's run (from a coroutine it resumed, too) is neither:
-  -- its next wait returns false; nor is one whose body raised. One whose
+  -- its next wait returns false (one whose body raised is ended). One whose
   -- body waits outside its handle (a bare clock.sleep or clock.sync, a
   -- mistake) is retired, its wait's end not known, and kept in M.bare,
   -- which the invariant names
