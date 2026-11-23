@@ -58,9 +58,11 @@ return function(S)
   -- The length's filter stands down while a scene sets them (clamped to the
   -- old start's room, a recall from (0.5, 0.5) to (0, 1) would end at
   -- (0, 0.5)), and the start, set after it, has the last word: its action
-  -- cuts a length the new start leaves no room for
+  -- cuts a length the new start leaves no room for. Only while a recall's
+  -- apply or a fade step sets them (S.lib.scenes.setting()): a hand edit
+  -- between two steps of a fade is clamped as any other (#867)
   local function scene_setting()
-    return S.scene_recall_in_progress == true or S.scene_transition_active == true
+    return S.lib.scenes.setting()
   end
 
   -- The start stops at max_start

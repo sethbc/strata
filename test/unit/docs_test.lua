@@ -2600,7 +2600,7 @@ end)
 -- its names here; a name is never added: an invariant registered from now
 -- on gets its entry in the commit that registers it. The list only shrinks
 local UNTABLED_INVARIANTS = {
-  "scene transition", "scene sequencer",  -- lib/scenes.lua
+  "scene sequencer",  -- lib/scenes.lua
   "pattern clock",  -- lib/sequencer.lua
   "midi ports",  -- lib/io/ports.lua
   "midi notes",  -- lib/midi_in.lua

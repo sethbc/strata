@@ -48,11 +48,11 @@ return function(S)
   end
 
   -- The filter and delay params are faders on the grid's FX page: redraw
-  -- only while a pane shows it (any_fx_faders). A scene
-  -- transition sets them on every step and redraws the grid once per step
-  -- itself.
+  -- only while a pane shows it (any_fx_faders). A scene that sets them (a
+  -- fade step, a recall's apply: S.lib.scenes.setting()) redraws the grid
+  -- once itself; a hand edit during a fade redraws at once (#867).
   local function fx_fader_changed()
-    if S.lib.grid_core.any_fx_faders() and not S.scene_transition_active then grid_redraw() end
+    if S.lib.grid_core.any_fx_faders() and not S.lib.scenes.setting() then grid_redraw() end
   end
 
   -- Follow the clock when its tempo is set elsewhere (PARAMETERS > CLOCK, an

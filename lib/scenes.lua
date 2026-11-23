@@ -412,6 +412,22 @@ return function(S)
     end_scene_transition("canceled")
   end
 
+  -- True while a fade step sets its params (its loop of sets and its
+  -- through-zero switches), never for the whole fade: a hand edit between
+  -- two steps is a hand edit (#867). setting() reads it
+  local fade_step_setting = false
+
+  -- Whether a scene is setting values now (3.9, #867): inside
+  -- apply_entries (S.scene_recall_in_progress: a recall, a fade's landing,
+  -- morph's discrete entries, a voice's apply) or a fade step's own sets.
+  -- Never inside set_scene_value itself, which morph's continuous writes
+  -- go through too, so they keep the loop pair's filter on. The readers
+  -- (lib/loops.lua, lib/variation.lua, the FX faders' redraws) take a set
+  -- made while it is false for a hand edit
+  function M.setting()
+    return S.scene_recall_in_progress == true or fade_step_setting
+  end
+
   -- A voice's entries of a recall (scene_entries, apply_entries), from a
   -- scene voice that passed valid_voice_data: {kind = "discrete", key =
   -- "active", voice, value}, its source (v<i>_source, discrete), its type
@@ -743,8 +759,12 @@ return function(S)
           local mix = step / S.SCENE_TRANSITION.steps
           -- the flag must not outlive an error in a param action (the
           -- sequencer waits for it): end the transition (the previous scene
-          -- is current again), then raise the error again, with its traceback
+          -- is current again), then raise the error again, with its traceback.
+          -- Its sets are a scene's (setting()) and the flag goes back to what
+          -- it found, after an error too
+          local outer_setting = fade_step_setting
           local stepped, step_error = xpcall(function()
+            fade_step_setting = true
             for _, target in ipairs(targets) do
               if not (target.voice and released[target.voice]) then set_scene_value(target.id, step_value(target, mix)) end
             end
@@ -753,10 +773,12 @@ return function(S)
               switched = true
               for _, switch in ipairs(switches) do switch() end
             end
+            fade_step_setting = outer_setting
             S.SCENE_TRANSITION.step = step  -- these redraws show its phase
             request_redraw()
             grid_redraw()  -- keep the parameter faders moving with the fade
           end, with_traceback)
+          fade_step_setting = outer_setting
           if not stepped then
             end_scene_transition("failed")
             error(step_error, 0)

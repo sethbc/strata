@@ -879,6 +879,79 @@ test("a superseded fade's target stops blinking at once", function()
   assert_equal(scenes.shows_current(3), true, "the previous scene shows steady")
 end)
 
+-- 3.9 (#867): the table of the scene fade, its hand-edit rows (package 1d;
+-- 2c completes it). A hand edit during a fade is a hand edit: the loop
+-- length's filter (lib/loops.lua) stands down only while a recall's apply
+-- or a fade step sets the pair (S.lib.scenes.setting()), never for the
+-- whole fade. The hand set is voice 2's start 0.5, then its length 1
+local function fade_scenes()
+  params:set("reverb_mix", 0.6); capture_scene(2)
+  params:set("reverb_mix", 0.2); capture_scene(1)
+  recall_scene(1, 0)
+end
+
+local function assert_cut_length(what)
+  assert_near(params:get("v2_loop_start"), 0.5, 1e-9, what .. ": the start set by hand")
+  assert_near(params:get("v2_loop_length"), 0.5, 1e-9, what .. ": the length cut to 1 - start")
+end
+
+h.transition_table({
+  name = "scene fade",
+  states = {
+    idle = function() fade_scenes() end,
+    fading = function(context) fade_scenes(); recall_scene(2, 4); context.clock.run_for(0.3) end,
+  },
+  events = {
+    ["hand set"] = function() params:set("v2_loop_start", 0.5); params:set("v2_loop_length", 1) end,
+    cancel = function() cancel_scene_transition() end,
+  },
+  state_of = function()
+    return local_value("S").scene_transition_active and "fading" or "idle"
+  end,
+  rows = {
+    {"idle", "hand set", "idle", check = function() assert_cut_length("idle") end},
+    {"idle", "cancel", "idle", check = function()
+      assert_equal(local_value("S").current_scene, 1, "the current scene stays")
+    end},
+    {"fading", "hand set", "fading", check = function()
+      local S = local_value("S")
+      assert_cut_length("fading")
+      cancel_scene_transition()
+      assert_cut_length("after a cancel")
+      -- a capture of a pair set during a fade validates only if it fits
+      capture_scene(3)
+      local values = S.scenes[3].data.voices[2].values
+      assert_true(validate_scene(S.scenes[3]), "the capture validates")
+      assert_true(values.loop_start + values.loop_length <= 1 + S.lib.loops.LOOP.tolerance,
+        "and its pair fits: " .. values.loop_start .. " + " .. values.loop_length)
+    end},
+    {"fading", "cancel", "idle", check = function()
+      assert_equal(local_value("S").current_scene, 1, "the previous scene is current again")
+    end},
+  },
+  notes = {"docs/notes/lua/scenes/transitions.md", "scene fade"},
+})
+
+-- 3.9 (#867): a hand-moved FX fader during a fade is drawn at once, not at
+-- the fade's next step (lib/params_setup.lua, lib/delay_sync.lua)
+test("a hand-moved FX fader during a fade redraws the grid at once", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  fade_scenes()
+  recall_scene(2, 4); context.clock.run_for(0.3)
+  assert_true(S.scene_transition_active, "a fade runs")
+  S.lib.grid_core.any_fx_faders = function() return true end  -- a pane shows the FX page
+  local real_redraw, redraws = grid_redraw, 0
+  grid_redraw = function(...) redraws = redraws + 1; return real_redraw(...) end
+  params:set("filter_freq", 1000)
+  local after_filter = redraws
+  params:set("delay_division", 2)
+  grid_redraw = real_redraw
+  assert_true(after_filter > 0, "the filter's fader is drawn at once")
+  assert_true(redraws > after_filter, "and the delay division's")
+  cancel_scene_transition()
+end)
+
 -- An error in a sequenced recall (here the first step of its fade, which
 -- runs inside the sequencer's own clock) is reported and the sequencer
 -- keeps going: the recall has already cleared its transition state

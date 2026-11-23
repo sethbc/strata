@@ -159,9 +159,10 @@ return function(S)
   end)
 
   -- sync and the division change what FX's time row, arc ring 3 and the
-  -- 256's delay fader show
+  -- 256's delay fader show (a scene that sets them, S.lib.scenes.setting(),
+  -- redraws the grid once itself, #867)
   local function shown_changed()
-    if S.lib.grid_core.any_fx_faders() and not S.scene_transition_active then grid_redraw() end
+    if S.lib.grid_core.any_fx_faders() and not S.lib.scenes.setting() then grid_redraw() end
     request_redraw()
   end
 
