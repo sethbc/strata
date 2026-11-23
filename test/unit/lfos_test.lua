@@ -1931,7 +1931,8 @@ test("the step hooks run macros, envelopes and random sequences before the matri
   assert_true(type(hooks) == "table" and #hooks > 0, "on_step keeps its hooks in step_hooks")
   local files, position = {}, {}
   for index, fn in ipairs(hooks) do
-    local file = debug.getinfo(fn, "S").source:match("(lib/.+%.lua)$") or "?"
+    -- the last lib/ of the path: a checkout under a folder named lib keeps its names
+    local file = debug.getinfo(fn, "S").source:match("^.*[/@](lib/.+%.lua)$") or "?"
     files[index] = file
     assert_true(position[file] == nil, file .. " registers one step hook, saw two (" .. tostring(position[file]) .. ", "
       .. index .. ")")
@@ -1981,6 +1982,172 @@ test("the LFO clock invariant holds from the start step to cleanup", function()
   cleanup()
   assert_equal(check(), nil, "it holds after cleanup")
 end)
+
+-- The fn of the start or cleanup step at `order` (S.registry.start or
+-- .cleanup: {order, fn} records)
+local function step_fn(steps, order)
+  for _, record in ipairs(steps) do
+    if record.order == order then return record.fn end
+  end
+  error("no step at order " .. tostring(order))
+end
+
+-- The machine `lfo clock` (docs/notes/lua/lfos.md, Machines): running is
+-- S.lfo_clock set with its coroutine alive. Each state counts the steps
+-- the clock runs from then on (a hook's count, read by the checks only)
+local function clock_counting(stop)
+  return function(context)
+    local S = local_value("S")
+    context.steps = 0
+    S.lib.lfos.on_step(function() context.steps = context.steps + 1 end)
+    if stop then S.lib.lfos.stop_clock() end
+  end
+end
+local function clock_stepped(expected)
+  return function(context)
+    if expected then
+      assert_true(context.steps > 0, "the clock steps")
+    else
+      assert_equal(context.steps, 0, "no step runs")
+    end
+  end
+end
+
+h.transition_table({
+  name = "lfo clock",
+  notes = { "docs/notes/lua/lfos.md", "lfo clock" },
+  states = { stopped = clock_counting(true), running = clock_counting(false) },
+  events = {
+    ["the start step"] = function()
+      local S = local_value("S")
+      step_fn(S.registry.start, S.constants.START_ORDER.lfo_clock)()
+    end,
+    ["time passes"] = function(context) context.clock.run_for(0.1) end,
+    ["the cleanup step"] = function()
+      local S = local_value("S")
+      step_fn(S.registry.cleanup, S.constants.CLEANUP_ORDER.lfos)()
+    end,
+    ["stop_clock"] = function() local_value("S").lib.lfos.stop_clock() end,
+  },
+  state_of = function()
+    local S = local_value("S")
+    if S.lfo_clock == nil then return "stopped" end
+    local thread = clock.threads[S.lfo_clock]
+    if type(thread) == "thread" and coroutine.status(thread) ~= "dead" then return "running" end
+    return "a clock id with no running coroutine"
+  end,
+  rows = {
+    { "stopped", "the start step", "running", check = function(context)
+      context.clock.run_for(0.1)
+      clock_stepped(true)(context)
+    end },
+    { "stopped", "time passes", "stopped", check = clock_stepped(false) },
+    { "stopped", "the cleanup step", "stopped" },
+    { "stopped", "stop_clock", "stopped" },
+    { "running", "the start step", "running" },
+    { "running", "time passes", "running", check = clock_stepped(true) },
+    { "running", "the cleanup step", "stopped", check = function(context)
+      assert_equal(#context.calls_named("stopFastLfo"), 0, "no stopFastLfo (#461)")
+    end },
+    { "running", "stop_clock", "stopped" },
+  },
+})
+
+-- The machine `round robin` (docs/notes/lua/lfos.md, Machines): one
+-- key's place in the round robin, read from the module's queue (mark_due's
+-- upvalue). Twelve filler keys, each with a sender that reaches the
+-- engine, are known ahead of it and the cursor stands at the first, so a
+-- step whose twelve fillers are all due has no slot left for it
+local RR_SUBJECT, RR_FILLERS = "rr subject", 12
+local function rr_queue()
+  local lfos = local_value("S").lib.lfos
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(lfos.mark_due, index)
+    if name == nil then error("mark_due keeps no queue") end
+    if name == "queue" then return value end
+  end
+end
+local function rr_filler(k) return "rr filler " .. k end
+local function rr_mark(context, name)
+  local lfos = local_value("S").lib.lfos
+  lfos.mark_due(RR_SUBJECT, function() table.insert(context.rr_sent, name) end)
+end
+local function rr_enter(subject)
+  return function(context)
+    local S = local_value("S")
+    context.rr_sent = {}
+    S.engine_senders[RR_SUBJECT] = function() end
+    for k = 1, RR_FILLERS do
+      S.engine_senders[rr_filler(k)] = function() end
+      S.lib.lfos.mark_due(rr_filler(k), function() end)
+    end
+    lfo_step(context)
+    local queue = rr_queue()
+    assert_equal(#queue.keys, RR_FILLERS, "the fillers are the only keys known")
+    assert_equal(queue.cursor, 1, "the drain starts at the first filler")
+    if subject == "known" or subject == "due" then rr_mark(context, "entering") end
+    if subject == "known" then
+      lfo_step(context)
+      context.rr_sent = {}
+    end
+  end
+end
+local function rr_sent(expected)
+  return function(context)
+    assert_equal(table.concat(context.rr_sent, ", "), expected, "the subject's sends")
+  end
+end
+
+h.transition_table({
+  name = "round robin",
+  notes = { "docs/notes/lua/lfos.md", "round robin" },
+  states = { unknown = rr_enter("unknown"), known = rr_enter("known"), due = rr_enter("due") },
+  events = {
+    ["mark_due"] = function(context) rr_mark(context, "newer") end,
+    ["a step"] = function(context) lfo_step(context) end,
+    ["a full step"] = function(context)
+      local lfos = local_value("S").lib.lfos
+      for k = 1, RR_FILLERS do lfos.mark_due(rr_filler(k), function() end) end
+      lfo_step(context)
+    end,
+    ["the cleanup step"] = function()
+      local S = local_value("S")
+      step_fn(S.registry.cleanup, S.constants.CLEANUP_ORDER.lfos)()
+    end,
+  },
+  state_of = function()
+    local queue = rr_queue()
+    if not queue.known[RR_SUBJECT] then return "unknown" end
+    if queue.due[RR_SUBJECT] then return "due" end
+    return "known"
+  end,
+  rows = {
+    { "unknown", "mark_due", "due", check = function()
+      local queue = rr_queue()
+      assert_equal(queue.keys[#queue.keys], RR_SUBJECT, "appended after every key known")
+    end },
+    { "unknown", "a step", "unknown" },
+    { "unknown", "a full step", "unknown" },
+    { "unknown", "the cleanup step", "unknown" },
+    { "known", "mark_due", "due", check = function()
+      assert_equal(rr_queue().keys[RR_FILLERS + 1], RR_SUBJECT, "the key keeps its place")
+    end },
+    { "known", "a step", "known", check = rr_sent("") },
+    { "known", "a full step", "known", check = rr_sent("") },
+    { "known", "the cleanup step", "known" },
+    { "due", "mark_due", "due", check = function(context)
+      lfo_step(context)
+      rr_sent("newer")(context)
+    end },
+    { "due", "a step", "known", check = rr_sent("entering") },
+    { "due", "a full step", "due", check = function(context)
+      rr_sent("")(context)
+      lfo_step(context)
+      rr_sent("entering")(context)
+    end },
+    { "due", "the cleanup step", "known", check = rr_sent("") },
+  },
+})
 
 test("a Lua-run LFO is compared with the value waiting in the send budget, not the delivered one (#591)", function()
   local context = load_strata(); finish_startup(context)

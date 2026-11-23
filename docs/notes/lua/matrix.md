@@ -27,28 +27,35 @@
 ### matrix learn
 - **State:** the local `learning` (`{k}` while learn waits for a touch, else nil), the timeout clock's handle (`learn_clock.handle`, `S.lib.clocks`) and `S.matrix_learn_clock`, its id while learn waits; `S.lib.matrix.learning()` names the routing. A stopped clock the helper retired near its wake is the helper's (`S.lib.clocks.retired`): since package 1q the module keeps no list of its own.
 - **Invariant:** `matrix learn`: learn waits exactly while `S.matrix_learn_clock` is set, and a retired clock is never `S.matrix_learn_clock`.
-- **Test:** `test/unit/matrix_test.lua`: "the invariant matrix learn fails for learn waiting with no clock and for a retired clock kept", "matrix: learn sets the destination from the next hand-touched param", "the matrix learn clock stopped as its wake is posted: no clock error, and nothing more happens".
+- **Test:** `test/unit/matrix_test.lua`: "matrix learn: every cell is decided" and its rows (armed is `learning()` set, for routing 3 with its source set; `learn` arms routing 5), "the invariant matrix learn fails for learn waiting with no clock and for a retired clock kept", "the matrix learn clock stopped as its wake is posted: no clock error, and nothing more happens".
+
+Every cell is a row.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
-| `idle` | `learn(k)` (MOD's ALT+K3 on the `dest` row) | `armed k` | a clock of `MATRIX.learn_seconds` (10 s); a redraw shows the header's notice |
-| `idle` | `learn` of no routing (not 1..16) | `idle` | refused (false) |
-| `idle` | a hand touch | `idle` | nothing |
-| `idle` | `cancel_learn()` | `idle` | nothing |
-| `armed k` | `learn(j)` | `armed j` | k's clock stopped through the helper (canceled, or retired near its wake), a new one started |
-| `armed k` | a hand touch of a destination (a voice's main param learns `v<i>_main`) | `idle` | the clock stopped, then `edit_routing(k, source, id)` (the 25 % rule) and the flash `R<k> > <label>`; no undo takes it back |
-| `armed k` | a hand touch of any other param | `armed k` | the flash `not a destination`; learn waits on |
-| `armed k` | `cancel_learn()` (MOD's K2 in its view, the routing view moved to another routing) | `idle` | the clock stopped; a redraw |
-| `armed k` | its clock's wake (10 s with no touch) | `idle` | learn ends and redraws |
-| `armed k` | a page change | `armed k` | nothing (ruling 80: the touch is made on another page) |
-| `armed k` | the cleanup step `matrix` (118) | `idle` | the clock canceled outright (`S.lib.clocks.cancel`), then `cancel_learn()` |
+| `idle` | `learn` | `armed` | `learn(k)` (MOD's ALT+K3 on the `dest` row): a clock of `MATRIX.learn_seconds` (10 s); a redraw shows the header's notice |
+| `idle` | `learn of no routing` | `idle` | refused (false): k is not 1..16 |
+| `idle` | `a touch of a destination` | `idle` | nothing learned |
+| `idle` | `a touch of another param` | `idle` | nothing |
+| `idle` | `cancel_learn` | `idle` | nothing |
+| `idle` | `the timeout` | `idle` | nothing |
+| `idle` | `a page change` | `idle` | nothing |
+| `idle` | `the cleanup step` | `idle` | nothing to cancel; the offsets forgotten |
+| `armed` | `learn` | `armed` | the old routing's clock stopped through the helper (canceled, or retired near its wake), the new routing armed on a new clock |
+| `armed` | `learn of no routing` | `armed` | refused before anything is canceled (`learn` checks k first): the same routing, on the same clock |
+| `armed` | `a touch of a destination` | `idle` | the clock stopped, then `edit_routing(k, source, id)` (the 25 % rule) and the flash `R<k> > <label>` (a voice's main param learns `v<i>_main`); no undo takes it back |
+| `armed` | `a touch of another param` | `armed` | the flash `not a destination`; learn waits on, on the same clock |
+| `armed` | `cancel_learn` | `idle` | MOD's K2 in its view, or the routing view moved to another routing: the clock stopped; a redraw |
+| `armed` | `the timeout` | `idle` | 10 s with no touch: the clock's wake ends learn and redraws |
+| `armed` | `a page change` | `armed` | nothing (ruling 80: the touch is made on another page) |
+| `armed` | `the cleanup step` | `idle` | the clock canceled outright (`S.lib.clocks.cancel`), then `cancel_learn()` |
 
 ### matrix holding
 - **State:** the local `held`: `lua[id]` (the extra offset the matrix set on a Lua destination), `fast[id]` (a fast destination tracked), `fast_want[id]` (what its next send carries) and `fast_extras[id]` (the macros'); what the engine has or will have is the send budget's `expected_value` (of the param id, or the channel's key `matrix fast <voice> <destination>`), never a record of the matrix's (#647). `S.lib.matrix.offset(id)` reads the sum. Per Lua param: `not held`, `held` (an offset), `returning` (no offset, its one send as the sum reaches 0 due in the round robin, `docs/notes/lua/lfos.md`); per fast channel: `untracked` or `tracked`.
 - **Invariant:** none: each step sums every routing again from scratch and compares with the budget's answer, so every combination converges at that step; a stored record of what was sent was the fault (#647).
 - **Test:** `test/unit/matrix_test.lua`: "matrix: clearing a routing restores the destination", "matrix: routings that cancel to exactly 0 send once, then nothing (#760)", "matrix: a fast sum that returns to 0 while its send waits sends 0, never the stale sum", "matrix: a voice start or a sync resends no unmoved fast channel", "matrix: an idle step sends nothing and leaves no offset".
 
-A Lua param that plays but sums to exactly 0 (routings that cancel, #760) is `not held`. A step's sum takes in every playing routing but those the envelopes own, every LFO home it does not own, and (fast) the macros' extras.
+No `h.transition_table` holds this table (design section 5 makes it a smaller entry, a table and no test): a param's holding is summed again from every routing, home and extra at each step, so its events are every writer of those; the modulation walk (package 3c, design section 6) checks that after a step a model fed by the engine calls agrees with what the params imply, and that an idle step sends nothing. A Lua param that plays but sums to exactly 0 (routings that cancel, #760) is `not held`. A step's sum takes in every playing routing but those the envelopes own, every LFO home it does not own, and (fast) the macros' extras.
 
 | State | Event | Next | Effect |
 |---|---|---|---|

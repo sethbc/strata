@@ -1089,7 +1089,8 @@ test("a base override is a finite number; anything else raises naming the param"
 end)
 
 -- The (name, args) of every engine call, one line each (h.call_line,
--- the harness's one form of a call: #952)
+-- the harness's one form of a call: #952). OSC floats are float32, which
+-- "%.9g" writes exactly, so a line loses nothing the engine could receive
 local function call_lines(calls)
   local lines = {}
   for _, call in ipairs(calls) do lines[#lines + 1] = h.call_line(call) end
@@ -2045,7 +2046,7 @@ end)
 -- purpose. The keys are every sender's and every one the round robin
 -- (mark_due's queue) and the budget (its values and its waiting ones)
 -- know after a start with each kind sent
-test("a keyed id holds a space and none starts v<i>_", function()
+test("a keyed id holds a space and starts v<i>_ only as its voice's gated sender", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local function upvalue(fn, wanted)
