@@ -345,10 +345,14 @@ local function selected_voice_assignments(text)
     end
   end
   -- `S.selected_voice = x`, `a, S.selected_voice = ...` and, with more
-  -- targets after it on its line, `S.selected_voice, a = ...` (never `==`)
-  for _, pattern in ipairs({"()S%.selected_voice%s*=()", "()S%.selected_voice%s*,[%w_%.%[%] \t,]-=()"}) do
+  -- targets after it on its line, `S.selected_voice, a = ...` (never `==`).
+  -- A value after `{`, `(` or `=` is a read (`{S.selected_voice, key = 1}`,
+  -- `local a = S.selected_voice, b`), never the first of a target list
+  for index, pattern in ipairs({"()S%.selected_voice%s*=()", "()S%.selected_voice%s*,[%w_%.%[%] \t,]-=()"}) do
     for at, after in code:gmatch(pattern) do
-      if code:sub(after, after) ~= "=" then table.insert(events, {at = at, assignment = true}) end
+      local before = code:sub(1, at - 1):match("(%S)%s*$")
+      local read = index == 2 and (before == "{" or before == "(" or before == "=")
+      if code:sub(after, after) ~= "=" and not read then table.insert(events, {at = at, assignment = true}) end
     end
   end
   table.sort(events, function(a, b) return a.at < b.at end)
@@ -385,9 +389,12 @@ test("S.selected_voice is assigned only by select_voice_by, at init and in layou
       else table.insert(problems, source.path .. ": S.selected_voice assigned in " .. site) end
     end
     for site, count in pairs(allowed) do
-      if (counts[site] or 0) ~= count then
-        table.insert(problems, string.format("%s: %d assignments in %s, the list gives %d (list each one)",
-          source.path, counts[site] or 0, site, count))
+      local found = counts[site] or 0
+      if found == 0 then
+        table.insert(problems, source.path .. ": no assignment left in " .. site .. " (remove it from the list)")
+      elseif found ~= count then
+        table.insert(problems, string.format("%s: %d assignments in %s, the list gives %d",
+          source.path, found, site, count))
       end
     end
     if source.text:find("S%[%s*[\"']selected_voice[\"']%s*%]%s*=[^=]") or source.text:find("rawset%(%s*S%s*,%s*[\"']selected_voice") then
@@ -412,6 +419,9 @@ test("the selected voice scan finds an assignment's functions and skips comments
     "  S.selected_voice, other = 5, 6",
     "  other, S.selected_voice = 5, 6",
     "  f(S.selected_voice, x == 1)",
+    "  local t = {S.selected_voice, key = 1}",
+    "  g({ S.selected_voice, name = 1 })",
+    "  local a, b = S.selected_voice, c  d = 1",
     "  for i = 1, 2 do",
     "    table.insert(states, {name = 'x', setup = function() S.selected_voice = i end})",
     "  end",
