@@ -351,7 +351,7 @@ return {
   ENGINE_BUDGET = {messages_per_window = 150, window_seconds = 0.1},
   -- 3.9 (design section 3, #870): the clock helper (lib/clocks.lua) cancels
   -- a stopped clock only while its wait's end is farther off than these:
-  -- sleep_margin seconds before a sleep's wake (lib/ui/zones.lua's
+  -- sleep_margin seconds before a sleep's wake (the learns' former
   -- learn_wake_margin), sync_tolerance beats before a sync's landing (a
   -- tick's jitter, lib/quantize.lua's wake_tolerance); sync_epsilon is
   -- matron's FLT_EPSILON, with which it finds that landing

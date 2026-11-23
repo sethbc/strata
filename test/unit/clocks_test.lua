@@ -549,9 +549,9 @@ test("a stop of a clock that has already gone neither cancels nor retires it", f
   assert_equal(counts.runs + counts.ended, 0, "neither body ran again")
 end)
 
--- Review of 0b, finding 5: the helper's margins are the ones the zones
--- editor, the macros' learn and the quantized actions use
-test("the helper's margins are the zones editor's, the macros' and the quantized actions'", function()
+-- Review of 0b, finding 5: the helper's margins are the learns' former
+-- 0.1 s and the ones the quantized actions use
+test("the helper's margins are the learns' former 0.1 s and the quantized actions'", function()
   local context, S, clocks = loaded()
   local CLOCKS = S.constants.CLOCKS
   -- 0.1 s: the learn_wake_margin of the zones editor, the macros and the

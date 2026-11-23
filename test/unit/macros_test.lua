@@ -641,14 +641,21 @@ test("the macro apply clock stopped as its wake is posted: no clock error, and n
   context.clock.advance_until(id, function()
     macros.set_silently(1, 0.3)  -- nothing waits any more: the clock stops
     assert_true(S.lib.clocks.retired[id] ~= nil, "the helper retired it: its resume is posted")
+    -- a move at once: a new clock, and work waiting that a stopped clock
+    -- running on would find (review of 1q)
+    params:set("macro_1", 0.6)
   end)
   local errors = context.clock.take_errors()
   assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
-  assert_equal(clock.threads[id], nil, "it ended at its wake")
+  -- a stopped clock's waits return false at once: one that ran on would
+  -- apply the waiting move at its own wake, before the new clock's tick
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "nothing applied at the stopped clock's wake")
+  assert_equal(clock.threads[id], nil, "it ended at its wake, though a macro waits")
   assert_equal(S.lib.clocks.retired[id], nil, "and the helper forgot it")
-  assert_equal(S.macro_clock, nil, "nothing waits")
+  assert_true(S.macro_clock ~= nil and S.macro_clock ~= id, "the move waits on its own clock")
   settle(context)
-  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "nothing applied")
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "the move applies")
+  assert_equal(S.macro_clock, nil, "and nothing waits")
 end)
 
 test("writing a PSET always writes its side file, so an overwritten PSET never keeps a stale one", function()
