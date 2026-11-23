@@ -73,9 +73,13 @@
     // Zero both buffers: sent in the bundle that frees the delay node, so
     // the node a lift creates finds the line empty (BufDelayC also reads 0
     // for what a new node has not yet written, but a later reader of the
-    // buffers need not: a lifted delay starts empty)
+    // buffers need not: a lifted delay starts empty). An empty line has no
+    // loop to hold, so the kept frozen goes to 0 with it (#889): a node
+    // born frozen would close its input on the empty line and hold a time
+    // of 0 (Gate.kr starts closed at 0), and the lift starts it unfrozen
     emptyDelayLine {
         this.delayLine.do({ arg buffer; context.server.listSendMsg(buffer.zeroMsg) });
+        this.keepEffectControls(\delay, (frozen: 0));
     }
 
     addDelayDef {
@@ -158,12 +162,15 @@
             };
         });
 
-        // msg: frozen, 0 (release) or 1 (freeze): kept, so a lift re-creates
-        // the node with it (Lua releases a freeze before it bypasses), and
-        // set on the node. Another value is ignored with one line
+        // msg: frozen, 0 (release) or 1 (freeze): kept and set on the node.
+        // With no node (a bypass has freed it, emptying its line) 0 is
+        // kept, so a lift never starts a frozen node on an empty line
+        // (#889; Lua also releases a freeze before it bypasses and refuses
+        // one while bypassed: docs/notes/engine/delay.md, Freeze by bypass).
+        // Another value is ignored with one line
         this.addCommand(\setDelayFreeze, "i", { arg msg;
             if (this.fastModIndicesValid(\setDelayFreeze, [[\frozen, msg[1], 1]])) {
-                this.keepEffectControls(\delay, (frozen: msg[1]));
+                this.keepEffectControls(\delay, (frozen: if (synths[\delay].notNil) { msg[1] } { 0 }));
                 this.setSynth(\delay, \frozen, msg[1]);
             };
         });

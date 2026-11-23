@@ -690,6 +690,46 @@ var checkDecodeStops = { arg other, path60;
         "buffers: a long file's check superseded by a clear stops at its next chunk (% chunks of 192 read, % frames)".format(chunks, other.bufferFrames[4]));
 };
 
+// #885: an sclang error inside a long load's check (injected through
+// loadCheckFaultHook, which the check's routine calls after the file's
+// chunks with the slot and the load's number) still ends the load: it is
+// rejected at once under its own number, and the empty slot stays empty
+var checkLoadCheckFault = { arg other, path60;
+    var before = loadFailures.value.size, load, reports, reported;
+    other.loadCheckFaultHook = { arg index; if (index == 2) { Error("injected load check fault").throw } };
+    h.commandTo(other, \loadBuffer, 2, path60, 0);
+    load = other.bufferLoads[2];
+    reported = waitFor.({ loadFailures.value.size > before }, 5);
+    other.loadCheckFaultHook = nil;
+    reports = loadFailures.value.drop(before);
+    check.(reported and: { reports == [other.bufferLoadFailedValue(2, load, false)] } and: { other.bufferFrames[2] == 0 },
+        "buffers: an error in a long load's check reports bufferLoadFailed with the load's number (load %, reports %, % frames)".format(
+            load, reports, other.bufferFrames[2]));
+};
+
+// #946: a slot being loaded is at the server's rate, with 0 frames, until
+// its length is reported: the file's rate goes to the peaks write and is
+// set with the length in the write's action. The peaks mover, stopped,
+// holds the write open (for up to peaksMoverTimeout) while it is read
+var checkLoadRateWithLength = {
+    var path = scratchRoot +/+ "rate-946.wav", mover = engine.areaState[\waveform][\mover], frames = 22050;
+    var held, during, after;
+    h.writeTestFile(path, 44100, frames, [0.25, 0.25]);
+    ("kill -STOP " ++ mover[\pid]).systemCmd;
+    command.(\loadBuffer, 5, path, 0);
+    held = waitFor.({ mover[\pending] > 0 }, 0.8);
+    during = [engine.bufferSampleRates[5], engine.bufferFrames[5]];
+    ("kill -CONT " ++ mover[\pid]).systemCmd;
+    h.awaitLoad(5);
+    after = [engine.bufferSampleRates[5], engine.bufferFrames[5]];
+    check.(held and: { during == [server.sampleRate, 0] } and: { after == [44100, frames] }
+        and: { bufferStateSeen.(5, (frames / 44100).round(0.01)) },
+        "buffers: a slot being loaded is at the server's rate until its length is reported (peaks write held %; rate and frames then %, after %)".format(
+            held, during, after));
+    command.(\clearBuffer, 5); server.sync;
+    File.delete(path);
+};
+
 var checkLongSlots = {
     var other, path60 = scratchRoot +/+ "sixty.wav", path20 = scratchRoot +/+ "twenty.wav", freedChunks;
     var damaged = scratchRoot +/+ "twenty-damaged.flac";
@@ -706,6 +746,7 @@ var checkLongSlots = {
     checkDecodeYields.(other, path60);
     checkLoadYields.(other, path60);
     checkDecodeStops.(other, path60);
+    checkLoadCheckFault.(other, path60);
     // freed during a check: nothing applies to the freed buffers, and the
     // check stops at its next chunk (the file closed)
     freedChunks = decodeChunks.(other);
@@ -827,6 +868,7 @@ check.(engine.bufferFrames[4] == 11025 and: { (bufferSample.(engine.buffersL[4],
 checkLoadFailureReports.(textPath, stereoPath);
 checkReadFailureMatching.(stereoPath, monoPath);
 checkBadLoadsDuringRecording.(textPath, stereoPath);
+checkLoadRateWithLength.value;
 command.(\loadBuffer, 5, monoPath, 0); h.awaitLoad(5);
 check.((bufferSample.(engine.buffersL[5], 10) - 0.4).abs < 0.001
     and: { (bufferSample.(engine.buffersR[5], 10) - 0.4).abs < 0.001 }, "a mono file fills both channels");

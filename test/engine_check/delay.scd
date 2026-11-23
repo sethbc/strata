@@ -5,7 +5,8 @@
 // a snapped ping-pong keeps its width, the input is closed, a time change
 // waits for the release, a release decays at the kept feedback; a clear
 // mutes the return and empties the line, frozen or not. Then the commands:
-// setDelayFreeze sets and keeps frozen (through a bypass and its lift),
+// setDelayFreeze sets and keeps frozen (through a bypass's fade, dropped at
+// its free: a lift starts unfrozen at its kept time, #889),
 // ignores another value with one line, clearDelay sets the trigger and
 // nothing while bypassed, and a fresh engine starts unfrozen. The signal
 // checks run on nodes of the engine's own \strataDelay on buses and lines of
@@ -25,7 +26,8 @@ var ampDb = { arg ratio; ratio.max(1e-15).ampdb.round(0.1) };
 // the windows an analysis measures, and the values it gives each
 var numWindows = 8, fields = 7, windowField;
 var startCheckDelay, allocLine, runCases, guarded, withIgnoredLines;
-var checkHeldLoop, checkLoopBehavior, checkClearEdge, checkFreezeCommand, checkIgnoredValues, checkClearCommand, checkFreshEngine;
+var checkHeldLoop, checkLoopBehavior, checkClearEdge, checkFreezeCommand, checkLiftAfterFreedFreeze, checkIgnoredValues;
+var checkClearCommand, checkFreshEngine;
 var times = [0.375, 0.30928];
 // the audio channels the server's allocator holds (#807: the area gives
 // back every bus it allocates), how many it held as the area began, and
@@ -288,7 +290,9 @@ checkClearEdge = {
 };
 
 // setDelayFreeze sets the node's frozen and keeps it; it is kept through a
-// bypass (the lifted node starts with it) and set while bypassed
+// bypass's fade (a lift inside it keeps the node, frozen, with its loop)
+// and dropped once the bypass frees the node (#889: the lifted node starts
+// unfrozen), and a release while freed keeps 0
 checkFreezeCommand = {
     var controls = { engine.areaState[\effects][\controls][\delay] };
     var node = engine.synths[\delay], set, released, lifted, again;
@@ -301,22 +305,69 @@ checkFreezeCommand = {
     check.((set == [1, 1]) and: { released == [0, 0] },
         "delay: setDelayFreeze sets the node's frozen and keeps it (1: node, kept %; 0: %)".format(set, released));
     command.(\setDelayFreeze, 1);
+    // bypassed and lifted in one tick: inside the fade, the same node
     command.(\setBypass, 0, 1);
-    0.2.wait; server.sync;
     command.(\setBypass, 0, 0);
     server.sync;
-    lifted = engine.synths[\delay] !? { arg synth; getControl.(synth, \frozen) };
+    lifted = [engine.synths[\delay] === node, engine.synths[\delay] !? { arg synth; getControl.(synth, \frozen) }, controls.value[\frozen]];
     command.(\setBypass, 0, 1);
-    0.2.wait; server.sync;
+    // past the fade (bypassFadeTime, 51 ms): freed
+    0.1.wait; server.sync;
+    again = [controls.value[\frozen], engine.synths[\delay].isNil];
     command.(\setDelayFreeze, 0);
     server.sync;
-    again = [controls.value[\frozen], engine.synths[\delay].isNil];
+    again = again ++ [controls.value[\frozen]];
     command.(\setBypass, 0, 0);
     server.sync;
     again = again ++ [engine.synths[\delay] !? { arg synth; getControl.(synth, \frozen) }];
-    check.((lifted == 1) and: { again == [0, true, 0] },
-        "delay: frozen is kept through a bypass and its lift (the lifted node's %), and set while bypassed (kept, no node, lifted: %)".format(
+    check.((lifted == [true, 1, 1]) and: { again == [0, true, 0, 0] },
+        "delay: frozen is kept through a bypass's fade and a lift inside it (same node, the node's and kept %), and dropped once the bypass frees the node (kept, no node, kept after a release, lifted: %)".format(
             lifted, again));
+};
+
+// #889: a bypass that frees the delay drops its kept frozen (its line is
+// emptied: no loop is left to hold), and a freeze sent while it is freed
+// is not kept, so a lift starts the delay unfrozen at its kept time,
+// whichever way the freeze came: the lifted node's frozen 0 (and the kept
+// value), and a 1 kHz tone sent into it at the lift silent in its return
+// until the delay time (0.1 s) and back after it (windows from the tone's
+// start, measured on the server)
+checkLiftAfterFreedFreeze = {
+    var time = 0.1, results = List.new;
+    command.(\setDelay, time, 0.4, 1.0, 0);
+    [\beforeBypass, \whileFreed].do({ arg when;
+        var resultBus = Bus.control(server, numWindows * fields), silent = Bus.audio(server, 2);
+        var node, freedKept, kept, frozen, values, tone;
+        resultBus.setAll(0);
+        if (when == \beforeBypass) { command.(\setDelayFreeze, 1) };
+        command.(\setBypass, 0, 1);
+        // past the fade (bypassFadeTime, 51 ms): freed
+        0.1.wait; server.sync;
+        if (when == \whileFreed) { command.(\setDelayFreeze, 1) };
+        freedKept = engine.areaState[\effects][\controls][\delay][\frozen];
+        command.(\setBypass, 0, 0);
+        server.sync;
+        node = engine.synths[\delay];
+        frozen = getControl.(node, \frozen);
+        kept = engine.areaState[\effects][\controls][\delay][\frozen];
+        server.makeBundle(nil, {
+            tone = Synth(\strataCheckDelayInput, [\out, engine.mixBus(\delaySendPost), \sine, 0.5, \sineFrom, 0], node, \addBefore);
+            Synth(\strataCheckDelayWindows, [\in, engine.delayBus, \ref, silent, \out, resultBus, \seconds, 0.3,
+                \windows, [0.02, time - 0.03, time + 0.05, 0.28] ++ (0 ! 12)], node, \addAfter);
+        });
+        0.35.wait; server.sync;
+        values = readBus.(resultBus);
+        tone.free; server.sync;
+        [resultBus, silent].do(_.free);
+        results.add([when, freedKept, kept, frozen, windowField.(values, 0, 4).round(0.0001), windowField.(values, 1, 4).round(0.0001)]);
+    });
+    command.(\setDelayFreeze, 0);
+    command.(\setDelay, 0.375, 0.4, 0.0, 0);
+    server.sync;
+    check.(results.every({ arg each; (each[1] == 0) and: { each[2] == 0 } and: { each[3] == 0 }
+            and: { each[4] < 0.001 } and: { each[5] > 0.1 } }),
+        "delay: a bypass lifted with frozen kept starts the delay unfrozen at its kept time (when the freeze came, kept once freed, kept and the node's frozen after the lift, the return's peak before and after % s: %)".format(
+            time, results));
 };
 
 // Another value than 0 or 1 is ignored with one line, the node and the
@@ -365,6 +416,7 @@ guarded.("the held loop", checkHeldLoop);
 guarded.("the loop's behavior", checkLoopBehavior);
 guarded.("the clear's edge", checkClearEdge);
 guarded.("setDelayFreeze", checkFreezeCommand);
+guarded.("a lift after a freed freeze", checkLiftAfterFreedFreeze);
 guarded.("setDelayFreeze's ignored values", checkIgnoredValues);
 guarded.("clearDelay", checkClearCommand);
 guarded.("a fresh engine", checkFreshEngine);
