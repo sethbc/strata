@@ -519,6 +519,7 @@ end
 test("a morph clock stopped from its own body leaves the new clock's pending its own", function()
   local context, S = scrambled_scenes()
   local state = morph_state(S)
+  assert_true(state ~= nil, "morph's state reached through S.lib.morph.corner's upvalue")
   stop_from_own_set(S, 0.8)
   params:set("morph", 0.5)  -- a move: the clock waits on its first sleep
   local id = S.morph_clock
@@ -538,6 +539,7 @@ end)
 test("a morph clock stopped from its own body that then raises leaves the new clock running", function()
   local context, S = scrambled_scenes()
   local state = morph_state(S)
+  assert_true(state ~= nil, "morph's state reached through S.lib.morph.corner's upvalue")
   stop_from_own_set(S, 0.8, true)
   params:set("morph", 0.5)  -- a move: the clock waits on its first sleep
   local id = S.morph_clock
@@ -553,6 +555,61 @@ test("a morph clock stopped from its own body that then raises leaves the new cl
   context.clock.run_for(2)
   assert_equal(S.morph_clock, nil, "the new clock applied the move and rests")
   assert_near(params:get("reverb_mix"), 0.74, 1e-9, "the new position's (0.1 + 0.8 x 0.8)")
+  assert_equal(#context.clock.take_errors(), 0, "no other clock error")
+end)
+
+-- The continuous values the two scenes hold apart that still read scene
+-- 1's own
+local function values_left_at_scene_1(S)
+  local one, two, left = scene_data_values(S, 1), scene_data_values(S, 2), 0
+  for id, value in pairs(one) do
+    if two[id] and math.abs(two[id] - value) > 1e-6 and math.abs(params:get(id) - value) < 1e-9 then left = left + 1 end
+  end
+  return left
+end
+
+-- The stop made at the apply's discrete entries (before its values are
+-- recorded and set), and its first value's set then raising: the record
+-- the apply made holds values never set. The new move, back at the same
+-- position, has its first apply set them all (none skipped as already
+-- applied): as many values stay at scene 1's as when morph moves there
+-- plainly (review of 1q)
+test("an apply that raises after a stop from its own body forgets what it recorded", function()
+  local context, S = scrambled_scenes()
+  params:set("morph", 0.5); context.clock.run_for(2)
+  local plain = values_left_at_scene_1(S)
+  context, S = scrambled_scenes()
+  local apply_entries, set_value = S.lib.scenes.apply_entries, S.lib.scenes.set_value
+  local stage = "armed"
+  S.lib.scenes.apply_entries = function(...)
+    if stage == "armed" then
+      stage = "stopped"
+      for _, hook in ipairs(S.registry.pset_hooks) do
+        if hook.name == "morph" then hook.read() end
+      end
+      params:set("morph", 0.6); params:set("morph", 0.5)  -- a new clock, a move back to 0.5
+    end
+    local results = table.pack(apply_entries(...))
+    if stage == "stopped" then stage = "entries applied" end
+    return table.unpack(results, 1, results.n)
+  end
+  S.lib.scenes.set_value = function(id, value)
+    if stage == "entries applied" then
+      stage = "raised"
+      error("a target raised", 0)
+    end
+    return set_value(id, value)
+  end
+  params:set("morph", 0.5)  -- a move: the clock waits on its first sleep
+  local id = S.morph_clock
+  context.clock.advance_until(id, function() end)
+  assert_equal(stage, "raised", "the stop came at the discrete entries and the first value's set raised")
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "the stopped clock's apply raised: " .. table.concat(errors, "; "))
+  assert_true(S.morph_clock ~= nil and S.morph_clock ~= id, "the new clock is the morph's clock")
+  context.clock.run_for(2)
+  assert_equal(S.morph_clock, nil, "the new clock applied the move and rests")
+  assert_equal(values_left_at_scene_1(S), plain, "every value set at 0.5, as by a plain move there")
   assert_equal(#context.clock.take_errors(), 0, "no other clock error")
 end)
 
