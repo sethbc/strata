@@ -44,7 +44,7 @@ No test runs this table: the file selector is one of the design's smaller entrie
 
 ## Owns
 
-- `lib/pages/buffer.lua` (`S.lib.pages_buffer`): the BUFFER record (`draw`, `hints`, `enc`, `alt_enc`, `key`, `key_release`, `alt_key_release`, `enter`, `leave`, `animates`, `arc_button`, `layout_states`), `redraw_buffer`; `S.BUFFER_PAGE` (layout, levels, `hold_seconds`, the start steps and the file selector state), `S.buffer_page` (the cursors), the file selector (`close_buffer_file_selector`, `release_superseded_file_selector`, global), `buffer_page_flash` (global, on the shared "hints" flash); `S.lib.pages_buffer.INPUT_METER`, `input_meter_segments(amp)`, `slot_seconds_text(seconds)` and the meter state `S.lib.pages_buffer.meter` (`peak`, `peak_at`, `shown`); no cleanup step (3.4: `input_meter` is `lib/input_level.lua`'s).
+- `lib/pages/buffer.lua` (`S.lib.pages_buffer`): the BUFFER record (`draw`, `hints`, `enc`, `alt_enc`, `key`, `key_release`, `alt_key_release`, `enter`, `animates`, `arc_button`, `layout_states`), `redraw_buffer`; `S.BUFFER_PAGE` (layout, levels, `hold_seconds`, the start steps and the file selector state), `S.buffer_page` (the cursors), the file selector (`close_buffer_file_selector`, `release_superseded_file_selector`, global), `buffer_page_flash` (global, on the shared "hints" flash); `S.lib.pages_buffer.INPUT_METER`, `input_meter_segments(amp)`, `slot_seconds_text(seconds)` and the meter state `S.lib.pages_buffer.meter` (`peak`, `peak_at`, `shown`); no cleanup step (3.4: `input_meter` is `lib/input_level.lua`'s).
 - The buffers themselves (`S.buffers`, `load_buffer`, `clear_buffer`, `save_buffer`, `save_buffer_loop`, `buffer_load_failed`, `S.lib.buffers.set_start`, ...) are `lib/buffers.lua`'s (`docs/notes/lua/buffers.md`); recording (`record_buffer`, `S.lib.record.state`) is `lib/record.lua`'s; random files and filling (`S.lib.files`) are `lib/files.lua`'s; peaks, playheads and positions are `lib/waveforms.lua`'s, `lib/playheads.lua`'s and `lib/positions.lua`'s.
 - Its unit tests: `test/unit/pages_buffer_test.lua`. Its rings: `lib/arc/buffer.lua` (`docs/notes/lua/arc-pages.md`).
 
@@ -120,9 +120,9 @@ Transitions: `key()` notes the press (page and time) and forgets it after the re
 
 ## Input meter
 
-- `S.lib.pages_buffer.INPUT_METER = {poll_seconds = 0.05, segments = 8, floor_db = -48, db_per_segment = 6, peak_hold_seconds = 1}`.
+- `S.lib.pages_buffer.INPUT_METER = {segments = 8, floor_db = -48, db_per_segment = 6, peak_hold_seconds = 1}`.
 - `input_meter_segments(amp)` = `clamp(ceil((20 * log10(amp) - floor_db) / db_per_segment), 0, 8)`; 0 for `amp <= 0`, NaN or a non-number. So 0.5 (-6 dB) lights 7, 1 (0 dB) and above 8, 0.001 (-60 dB) none.
-- `enter` resets the meter (levels 0, no peak), then for each poll `poll.set(name, callback)`, sets its `time` to `poll_seconds` and starts it. `leave` and cleanup stop them.
+- `enter` calls `S.lib.input_level.refresh()`, which looks both polls up again (`poll.set`), sets their time and starts them, and clears the held peak (`peak`, `peak_at`, `shown`). The record has no `leave`: the polls are `lib/input_level.lua`'s (since 3.4), run from its start step to its cleanup step on every page (#971).
 - Each value sets that channel's amplitude; the level is the louder channel's segments. A value that changes the drawn level or peak asks for a screen redraw (`S.lib.ui_frame.request_screen_redraw()`, #434), unless the file selector is open (#435). When the level reaches or passes the held peak (or the hold has run out), the peak becomes the level and `peak_at` the time. The draw shows the level, plus the peak segment while `util.time() - peak_at < peak_hold_seconds` and the peak is above the level.
 
 ## The file selector (K2 release)
