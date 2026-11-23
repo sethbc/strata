@@ -307,25 +307,28 @@ end)
 -- tests and the page renders run, never the device. Each site by file and
 -- its enclosing functions, outside in: "constructor" is a module's
 -- `return function(S)`, "function" one with no name; a named one is the last
--- part of its name, or the field it is assigned to (`setup = function`)
+-- part of its name, or the field it is assigned to (`setup = function`).
+-- Each site holds exactly the number of assignments given, so a further
+-- setup or a second assignment in a listed function fails until it is
+-- listed. A source scan cannot follow an alias of S (`local state = S`)
 local SELECTED_VOICE_SITES = {
-  ["lib/ui/keys.lua"] = {"constructor > select_voice_by"},
-  ["lib/voices.lua"] = {"constructor"},
-  ["lib/arp.lua"] = {"constructor > setup"},
-  ["lib/expression.lua"] = {"constructor > setup"},
-  ["lib/freeze.lua"] = {"constructor > setup"},
-  ["lib/grain.lua"] = {"constructor > setup"},
-  ["lib/history.lua"] = {"constructor > setup"},
-  ["lib/loops.lua"] = {"constructor > setup"},
-  ["lib/notes.lua"] = {"constructor > add_layout_state > setup"},
-  ["lib/positions.lua"] = {"constructor > setup"},
-  ["lib/scan.lua"] = {"constructor > setup"},
-  ["lib/slices.lua"] = {"constructor > setup"},
-  ["lib/variation.lua"] = {"constructor > setup"},
-  ["lib/voice_mix.lua"] = {"constructor > layout_state > setup"},
-  ["lib/pages/main.lua"] = {"constructor > layout_state > setup", "constructor > setup"},
-  ["lib/pages/voice.lua"] = {"constructor > layout_state > setup", "constructor > setup",
-    "constructor > open_picker", "constructor > type_pending_state > setup"},
+  ["lib/ui/keys.lua"] = {["constructor > select_voice_by"] = 1},
+  ["lib/voices.lua"] = {["constructor"] = 1},
+  ["lib/arp.lua"] = {["constructor > setup"] = 1},
+  ["lib/expression.lua"] = {["constructor > setup"] = 1},
+  ["lib/freeze.lua"] = {["constructor > setup"] = 1},
+  ["lib/grain.lua"] = {["constructor > setup"] = 1},
+  ["lib/history.lua"] = {["constructor > setup"] = 2},
+  ["lib/loops.lua"] = {["constructor > setup"] = 1},
+  ["lib/notes.lua"] = {["constructor > add_layout_state > setup"] = 1},
+  ["lib/positions.lua"] = {["constructor > setup"] = 1},
+  ["lib/scan.lua"] = {["constructor > setup"] = 1},
+  ["lib/slices.lua"] = {["constructor > setup"] = 1},
+  ["lib/variation.lua"] = {["constructor > setup"] = 1},
+  ["lib/voice_mix.lua"] = {["constructor > layout_state > setup"] = 1},
+  ["lib/pages/main.lua"] = {["constructor > layout_state > setup"] = 1, ["constructor > setup"] = 1},
+  ["lib/pages/voice.lua"] = {["constructor > layout_state > setup"] = 1, ["constructor > setup"] = 4,
+    ["constructor > open_picker"] = 1, ["constructor > type_pending_state > setup"] = 1},
 }
 
 -- Every assignment of S.selected_voice in one source, as the names of the
@@ -341,8 +344,12 @@ local function selected_voice_assignments(text)
       table.insert(events, {at = at, word = word})
     end
   end
-  for at, after in code:gmatch("()S%.selected_voice%s*=()") do
-    if code:sub(after, after) ~= "=" then table.insert(events, {at = at, assignment = true}) end
+  -- `S.selected_voice = x`, `a, S.selected_voice = ...` and, with more
+  -- targets after it on its line, `S.selected_voice, a = ...` (never `==`)
+  for _, pattern in ipairs({"()S%.selected_voice%s*=()", "()S%.selected_voice%s*,[%w_%.%[%] \t,]-=()"}) do
+    for at, after in code:gmatch(pattern) do
+      if code:sub(after, after) ~= "=" then table.insert(events, {at = at, assignment = true}) end
+    end
   end
   table.sort(events, function(a, b) return a.at < b.at end)
   local blocks, found = {}, {}
@@ -369,22 +376,26 @@ local function selected_voice_assignments(text)
 end
 
 test("S.selected_voice is assigned only by select_voice_by, at init and in layout states", function()
-  local problems, seen = {}, {}
+  local problems, scanned = {}, {}
   for _, source in ipairs(h.read_lua_sources()) do
-    local allowed = {}
-    for _, site in ipairs(SELECTED_VOICE_SITES[source.path] or {}) do allowed[site] = true end
+    scanned[source.path] = true
+    local allowed, counts = SELECTED_VOICE_SITES[source.path] or {}, {}
     for _, site in ipairs(selected_voice_assignments(source.text)) do
-      if allowed[site] then seen[source.path .. ": " .. site] = true
+      if allowed[site] then counts[site] = (counts[site] or 0) + 1
       else table.insert(problems, source.path .. ": S.selected_voice assigned in " .. site) end
+    end
+    for site, count in pairs(allowed) do
+      if (counts[site] or 0) ~= count then
+        table.insert(problems, string.format("%s: %d assignments in %s, the list gives %d (list each one)",
+          source.path, counts[site] or 0, site, count))
+      end
     end
     if source.text:find("S%[%s*[\"']selected_voice[\"']%s*%]%s*=[^=]") or source.text:find("rawset%(%s*S%s*,%s*[\"']selected_voice") then
       table.insert(problems, source.path .. ": S.selected_voice assigned by its key")
     end
   end
-  for path, sites in pairs(SELECTED_VOICE_SITES) do
-    for _, site in ipairs(sites) do
-      if not seen[path .. ": " .. site] then table.insert(problems, path .. ": no assignment left in " .. site .. " (remove it from the list)") end
-    end
+  for path in pairs(SELECTED_VOICE_SITES) do
+    if not scanned[path] then table.insert(problems, path .. " is listed but is no source (remove it from the list)") end
   end
   table.sort(problems)
   assert_true(#problems == 0, "S.selected_voice outside its allowed sites:\n" .. table.concat(problems, "\n"))
@@ -398,6 +409,9 @@ test("the selected voice scan finds an assignment's functions and skips comments
     "  local text = \"S.selected_voice = 3\"",
     "  if S.selected_voice == 1 then end",
     "  S.selected_voice = 1",
+    "  S.selected_voice, other = 5, 6",
+    "  other, S.selected_voice = 5, 6",
+    "  f(S.selected_voice, x == 1)",
     "  for i = 1, 2 do",
     "    table.insert(states, {name = 'x', setup = function() S.selected_voice = i end})",
     "  end",
@@ -410,7 +424,7 @@ test("the selected voice scan finds an assignment's functions and skips comments
     "end",
   }, "\n"))
   assert_equal(table.concat(found, "; "),
-    "constructor; constructor > setup; constructor > pick; constructor > pick > function; constructor > select",
+    "constructor; constructor; constructor; constructor > setup; constructor > pick; constructor > pick > function; constructor > select",
     "the sites")
 end)
 
