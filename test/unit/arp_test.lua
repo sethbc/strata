@@ -771,6 +771,8 @@ local function arp_expect(list_keys, slot_keys, more)
 end
 
 local function sends_none(context) assert_equal(#context.engine_calls, 0, "nothing sent") end
+-- the event sent no list (its notes' own messages aside)
+local function no_list(context) assert_list(context, ARP_VOICE, nil, "no list sent") end
 local function arp_on_sent(value)
   return function(context)
     assert_equal(table.concat(grain_values(context, ARP_VOICE, "arpOn"), ","), value, "arpOn sent")
@@ -788,7 +790,10 @@ local function then_list(expected)
     assert_list(context, ARP_VOICE, expected, "the list the next LFO step sends")
   end
 end
-local function stopped(_, S) assert_true(not S.voices[ARP_VOICE].active, "the voice stopped") end
+local function stopped(context, S)
+  assert_true(not S.voices[ARP_VOICE].active, "the voice stopped")
+  no_list(context)
+end
 
 h.transition_table({
   name = "arp list",
@@ -815,9 +820,9 @@ h.transition_table({
       then_list(nil)(context, S)
     end)},
     {"off", "turned off", "off", check = arp_expect("", "2", sends_none)},
-    {"off", "a further note", "off", check = arp_expect("", "2,3")},
-    {"off", "release key 2", "off", check = arp_expect("", "")},
-    {"off", "the own note again", "off", check = arp_expect("", "2")},
+    {"off", "a further note", "off", check = arp_expect("", "2,3", no_list)},
+    {"off", "release key 2", "off", check = arp_expect("", "", no_list)},
+    {"off", "the own note again", "off", check = arp_expect("", "2", no_list)},
     {"off", "the LFO step", "off", check = arp_expect("", "2", function(context)
       assert_list(context, ARP_VOICE, nil, "no list sent")
     end)},
@@ -827,7 +832,7 @@ h.transition_table({
     {"on, empty", "a further note", "on, holding", check = arp_expect("3", "", then_list({0, 7}))},
     {"on, empty", "release key 2", "on, empty", check = arp_expect("", "", sends_none)},
     {"on, empty", "the own note again", "on, empty", check = arp_expect("", "", then_list(nil))},
-    {"on, empty", "the LFO step", "on, empty", check = arp_expect("", "")},
+    {"on, empty", "the LFO step", "on, empty", check = arp_expect("", "", sends_none)},
     {"on, empty", "the voice's stop", "on, empty", check = arp_expect("", "", stopped)},
     {"on, holding", "turned on", "on, holding", check = arp_expect("2", "", sends_none)},
     {"on, holding", "turned off", "off", check = arp_expect("", "", function(context, S)

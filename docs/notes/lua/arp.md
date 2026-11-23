@@ -24,25 +24,25 @@ A further note is one `S.lib.notes.play` hands the list: on a running voice whos
 |---|---|---|---|
 | `off` | `turned on` | `on, holding` | `take_extras`: key 2's slot cut (`noteOff` with cut 1), the note into the list with no `ended`; `arpOn` 1 and the list `{0, 4}` sent at once |
 | `off` | `turned off` | `off` | the same option: nothing sent |
-| `off` | `a further note` | `off` | a slot's (`docs/notes/lua/notes.md`) |
-| `off` | `release key 2` | `off` | its slot released |
-| `off` | `the own note again` | `off` | the own note re-pitched |
+| `off` | `a further note` | `off` | a slot's (`docs/notes/lua/notes.md`); no list sent |
+| `off` | `release key 2` | `off` | its slot released; no list sent |
+| `off` | `the own note again` | `off` | the own note re-pitched; no list sent |
 | `off` | `the LFO step` | `off` | no list sent |
-| `off` | `the voice's stop` | `off` | its notes forgotten |
+| `off` | `the voice's stop` | `off` | its notes forgotten; no list sent |
 | `on, empty` | `turned on` | `on, empty` | the same option: nothing sent |
 | `on, empty` | `turned off` | `off` | `arpOn` 0, `arpFold`, the intervals as the set gives them |
 | `on, empty` | `a further note` | `on, holding` | held (`started`), marked, a hit; the next step sends `{0, 7}` |
 | `on, empty` | `release key 2` | `on, empty` | no such note: nothing sent |
 | `on, empty` | `the own note again` | `on, empty` | the new base; nothing held to resend |
-| `on, empty` | `the LFO step` | `on, empty` | nothing |
-| `on, empty` | `the voice's stop` | `on, empty` | the base and the shuffle go |
+| `on, empty` | `the LFO step` | `on, empty` | nothing sent |
+| `on, empty` | `the voice's stop` | `on, empty` | the base and the shuffle go; no list sent |
 | `on, holding` | `turned on` | `on, holding` | the same option: nothing sent |
 | `on, holding` | `turned off` | `off` | cleared, each note's `ended` heard, nothing cut (the list's note goes silent); `arpOn` 0, the intervals resent |
 | `on, holding` | `a further note` | `on, holding` | joins (past the room the oldest leaves), marked; the next step sends `{0, 4, 7}` |
 | `on, holding` | `release key 2` | `on, empty` | it leaves (`ended`), marked; the next step sends the set's list again (empty here) |
 | `on, holding` | `the own note again` | `on, holding` | the new base (62), marked: the next step sends `{0, 2}` |
 | `on, holding` | `the LFO step` | `on, holding` | nothing marked: the list the engine has (`remembered`) stands, none sent |
-| `on, holding` | `the voice's stop` | `on, empty` | cleared, nothing sent |
+| `on, holding` | `the voice's stop` | `on, empty` | cleared; no list sent |
 
 ## lib/arp.lua (`S.lib.arp`)
 
