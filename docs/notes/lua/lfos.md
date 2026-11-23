@@ -38,12 +38,12 @@
 |---|---|---|---|
 | `stopped` | `the start step` | `running` | the global destinations checked, then a clock that sleeps `1 / LFO.step_hz` s and runs a step |
 | `stopped` | `time passes` | `stopped` | no step runs |
-| `stopped` | `the cleanup step` | `stopped` | nothing to cancel; the round robin is emptied and every direct destination given back |
+| `stopped` | `the cleanup step` | `stopped` | nothing to cancel (what the step does to waiting sends is the round robin's `the cleanup step`) |
 | `stopped` | `stop_clock` | `stopped` | nothing |
-| `running` | `the start step` | `running` | the kept clock canceled and a new one started (a normal init never meets this) |
+| `running` | `the start step` | `running` | the kept clock canceled and a new one started, so a wake runs one step (a normal init never meets this) |
 | `running` | `time passes` | `running` | one step at each wake (the step pipeline, below) |
-| `running` | `the cleanup step` | `stopped` | `stop_clock()` cancels it; nothing waits in the round robin, every direct destination is given back, the engine copies are forgotten and no `stopFastLfo` is sent (#461) |
-| `running` | `stop_clock` | `stopped` | canceled; the round robin keeps what waits |
+| `running` | `the cleanup step` | `stopped` | `stop_clock()` cancels it, and no `stopFastLfo` is sent (#461); the step also empties the round robin (its table's `the cleanup step`), gives every direct destination back and forgets the engine copies |
+| `running` | `stop_clock` | `stopped` | canceled |
 
 ### LFO place
 - **State:** derived at every step from three facts, never stored: the on param (`strata_lfo<n>`), the depth param and the kind of the home's entry (`S.lib.lfos.destination(n)`: `fast`, a direct destination's key, any other). What was handed on is beside it: `state[n].engine` (the engine's copy), `direct.held[n]` and the matrix's `held` (`docs/notes/lua/matrix.md`, matrix holding). No accessor names the place yet (package 4c's `place(n)`); `is_engine_run(n)`, `engine_playing(n)`, `home_m(n) ~= nil`, `owns(n, id)` and `modulates(id)` each answer a part.
