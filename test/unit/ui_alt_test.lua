@@ -474,4 +474,28 @@ test("ALT is forgotten after a name entry, K1 still down, until K1 is pressed ag
   key(1, 0)
 end)
 
+
+-- 1c's review: key() runs a page's release before it forgets the press (so
+-- the release reads held_seconds); a release that raises still forgets it,
+-- and the error still reaches the caller
+test("a release handler that raises leaves no key held (a page's, through key())", function()
+  local context = load_strata(); finish_startup(context)
+  local _, record = logging_fx_record()
+  local S = local_value("S")
+  record.key_release = function() error("release failed") end
+  record.alt_key_release = record.key_release
+  for _, alt in ipairs({ false, true }) do
+    if alt then key(1, 1) end
+    key(2, 1)
+    local ok, message = pcall(key, 2, 0)
+    if alt then key(1, 0) end
+    assert_true(not ok, "the error reaches the caller")
+    assert_true(tostring(message):find("release failed", 1, true) ~= nil, "with its message: " .. tostring(message))
+    assert_equal(S.key_press_page[2], nil, "no press page is left")
+    assert_equal(S.key_press_at[2], nil, "no press time is left")
+    assert_equal(S.key_press_alt[2], nil, "no ALT mark is left")
+    assert_equal(S.lib.ui_keys.held_seconds(2), nil, "the key reads as up")
+  end
+end)
+
 end
