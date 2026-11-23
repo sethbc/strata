@@ -658,6 +658,67 @@ test("the macro apply clock stopped as its wake is posted: no clock error, and n
   assert_equal(S.macro_clock, nil, "and nothing waits")
 end)
 
+-- A stop from the apply clock's own body (review of 1q): the target `id`'s
+-- action, once armed, sets its own macro `own` silently (nothing waits:
+-- the clock stops inside its own apply, so the helper neither retires nor
+-- cancels it) and moves macro `next` to `value` (a new clock, with work
+-- waiting). No shipped target does this; the test stands in for one
+local function stop_from_own_apply(macros, id, own, next, value)
+  local param = params:lookup_param(id)
+  local action, hook = param.action, {armed = false}
+  param.action = function(v)
+    if action then action(v) end
+    if hook.armed then
+      hook.armed = false
+      macros.set_silently(own, params:get("macro_" .. own))
+      params:set("macro_" .. next, value)
+    end
+  end
+  return hook
+end
+
+-- After that stop nothing waits before the loop's next pass: only its
+-- check of its own handle keeps it from applying the new clock's macro
+test("an apply clock stopped from its own body makes no further pass", function()
+  local context, S, macros = loaded()
+  macros.set_target(1, 1, "reverb_mix", 0, 1)
+  macros.set_target(2, 1, "delay_mix", 0, 1)
+  local hook = stop_from_own_apply(macros, "delay_mix", 2, 1, 0.6)
+  params:set("macro_1", 0.9); settle(context)
+  hook.armed = true
+  params:set("macro_2", 0.5)  -- the clock waits for its first apply
+  local id = S.macro_clock
+  context.clock.advance_until(id, function() end)
+  assert_near(params:get("delay_mix"), 0.5, 1e-9, "macro 2 applied, and its target's action ran")
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "the stopped clock applied nothing of the new clock's")
+  assert_equal(clock.threads[id], nil, "it ended")
+  assert_true(S.macro_clock ~= nil and S.macro_clock ~= id, "macro 1 waits on its own clock")
+  settle(context)
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "which applies it")
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+end)
+
+-- ... and the rest of the pass it was stopped in applies nothing either: a
+-- higher-numbered macro the new clock waits to apply is the new clock's
+test("an apply clock stopped from its own body applies nothing more in that pass", function()
+  local context, S, macros = loaded()
+  macros.set_target(1, 1, "delay_mix", 0, 1)
+  macros.set_target(3, 1, "reverb_mix", 0, 1)
+  local hook = stop_from_own_apply(macros, "delay_mix", 1, 3, 0.6)
+  params:set("macro_3", 0.9); settle(context)
+  hook.armed = true
+  params:set("macro_1", 0.5)  -- the clock waits for its first apply
+  local id = S.macro_clock
+  context.clock.advance_until(id, function() end)
+  assert_near(params:get("delay_mix"), 0.5, 1e-9, "macro 1 applied, and its target's action ran")
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "the rest of the stopped clock's pass applied nothing")
+  assert_equal(clock.threads[id], nil, "it ended")
+  assert_true(S.macro_clock ~= nil and S.macro_clock ~= id, "macro 3 waits on its own clock")
+  settle(context)
+  assert_near(params:get("reverb_mix"), 0.6, 1e-9, "which applies it")
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+end)
+
 test("writing a PSET always writes its side file, so an overwritten PSET never keeps a stale one", function()
   local context, S, macros = loaded()
   local path = context.data_dir .. "strata-02.pset"
