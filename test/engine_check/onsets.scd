@@ -3,7 +3,8 @@
 // bufferOnsets poll and its file, buf<n>.onsets in the settings folder.
 // Clicks at known frames, silence and a steady tone, the 63 kept at least
 // 30 ms apart, the strengths, the file in place before the report, a pass a
-// load, a clear or a recording overtakes, the refusals, a 300 s pass on a
+// load, a clear, a recording or a newer analysis overtakes, an older pass's
+// late rename that leaves a newer pass's file, the refusals, a 300 s pass on a
 // high engine that lets commands in, no file left behind, and an index out
 // of range. Test sound is built with C primitives (#131): single-sample
 // clicks put into a silent Signal, a period repeated.
@@ -330,6 +331,101 @@ var checkInterrupted = {
     File.delete(path);
 };
 
+// Wait (inside the check routine) until condition is true or timeout
+// passes, looking every 5 ms (waitFor looks every 50 ms)
+var waitFine = { arg condition, timeout = 5;
+    var started = Main.elapsedTime;
+    while { condition.value.not and: { (Main.elapsedTime - started) < timeout } } { 0.005.wait };
+    condition.value
+};
+// Every temporary float file of a slot's analyses on target
+var allTempFilesOf = { arg target, slot;
+    (Platform.defaultTempDir +/+ "strata-buf%-%-onsets*-*.wav".format(slot + 1, target.instanceTag)).pathMatch
+};
+
+// A second analyzeBuffer of a slot ends the pass under way at its next
+// chunk (#872): the older reports failed, the newer runs to its end and
+// writes the file, and only one pair of temporary files is there at a time.
+// Each chunk is slowed to 20 ms; the older pass has read two chunks when the
+// second command comes, and the pair is counted once four more chunks have
+// been read (the older pass, still going, would have read two of them).
+var checkSuperseded = {
+    var slot = 6, path = scratchRoot +/+ "onsets-superseded.wav", older, newer, before, atSecond, newerChunks, olderChunks;
+    var pairs, newerArrivedThen, frames;
+    h.writeTestFile(path, rate, 4 * rate, [0.25, -0.25]);
+    loadInto.(engine, slot, path);
+    if (File.exists(onsetsFile.(engine, slot))) { File.delete(onsetsFile.(engine, slot)) };
+    frames = engine.bufferFrames[slot];
+    // the chunks a whole pass over the slot reads
+    newerChunks = ((frames div: hop) / 64).ceil.asInteger;
+    state[\chunkWait] = 0.02;
+    protect {
+        before = state[\chunks];
+        older = startAnalysis.(engine, slot);
+        waitFine.({ state[\chunks] >= (before + 2) });
+        atSecond = state[\chunks];
+        newer = startAnalysis.(engine, slot);
+        waitFine.({ state[\chunks] >= (atSecond + 4) });
+        pairs = allTempFilesOf.(engine, slot);
+        newerArrivedThen = newer[\arrived].notNil;
+        finishAnalysis.(older);
+        finishAnalysis.(newer);
+    } { state[\chunkWait] = nil };
+    olderChunks = state[\chunks] - before - newerChunks;
+    check.((older[\failed] == true) and: { newer[\failed] == false } and: { File.exists(onsetsFile.(engine, slot)) }
+        and: { olderChunks <= ((atSecond - before) + 1) },
+        "onsets: a second analyzeBuffer ends the first at its next chunk: two reports, the first failed (failed %, %; the first read % chunks, % when the second came; file %)".format(
+            older[\failed], newer[\failed], olderChunks, atSecond - before, File.exists(onsetsFile.(engine, slot))));
+    check.(newerArrivedThen.not and: { pairs.size == 2 } and: { pairs.every({ arg each; each.contains("-onsets" ++ newer[\count] ++ "-") }) }
+        and: { allTempFilesOf.(engine, slot).isEmpty } and: { partFilesOf.(engine, slot).isEmpty },
+        "onsets: one pair of temporary files at a time while a newer pass runs (%; left %, .part %)".format(
+            pairs.collect({ arg each; each.basename }), allTempFilesOf.(engine, slot), partFilesOf.(engine, slot)));
+    command.(\clearBuffer, slot); server.sync;
+    File.delete(path);
+};
+
+// A pass that finds its slot changed after its rename was handed on deletes
+// the renamed file only while it is the slot's newest analysis (#888): with
+// the mover stopped, an older pass hands its rename on, the slot changes, a
+// newer pass hands its own on behind it, and the mover then renames both in
+// order while sclang waits (so no acknowledgment is seen between them). The
+// older pass reports failed and leaves the newer pass's file in place. The
+// change is the slot's count alone (slotChanged, as a load of the same audio
+// counts it): a load's own peaks rename would wait in the stopped mover.
+var checkOlderRename = {
+    var slot = 6, path = scratchRoot +/+ "onsets-older-rename.wav", frames = (0.5 * rate).asInteger;
+    var mover = engine.areaState[\waveform][\mover], older, newer, pid, handedOlder = false, handedNewer = false, fields, stopped = false;
+    writeClickFile.(path, frames, [(0.25 * rate).asInteger], [0.5]);
+    loadInto.(engine, slot, path);
+    if (File.exists(onsetsFile.(engine, slot))) { File.delete(onsetsFile.(engine, slot)) };
+    if (mover.notNil and: { mover[\alive] }) {
+        waitFor.({ mover[\pending] == 0 });
+        pid = mover[\pid];
+        ("kill -STOP " ++ pid).systemCmd;
+        stopped = true;
+        protect {
+            older = startAnalysis.(engine, slot);
+            handedOlder = waitFine.({ mover[\pending] == 1 }, 0.5);
+            engine.slotChanged(slot);
+            newer = startAnalysis.(engine, slot);
+            handedNewer = waitFine.({ mover[\pending] == 2 }, 0.5);
+        } {
+            // both renames land, in order, before any poll can see an acknowledgment
+            ("kill -CONT " ++ pid ++ "; sleep 0.2").systemCmd;
+        };
+        finishAnalysis.(older);
+        finishAnalysis.(newer);
+        waitFor.({ mover[\pending] == 0 });
+    };
+    fields = readOnsets.(onsetsFile.(engine, slot));
+    check.(stopped and: { handedOlder } and: { handedNewer } and: { older[\failed] == true } and: { newer[\failed] == false }
+        and: { fields.notNil } and: { fields[\frames] == [frames.asString] } and: { partFilesOf.(engine, slot).isEmpty },
+        "onsets: a pass that finds its slot changed after its rename was handed on leaves a newer pass's file (mover held %, handed on %, %; failed %, %; file %)".format(
+            stopped, handedOlder, handedNewer, older !? { older[\failed] }, newer !? { newer[\failed] }, fields.notNil));
+    command.(\clearBuffer, slot); server.sync;
+    File.delete(path);
+};
+
 // Refused at once, with a failed report: an empty slot, and a slot that
 // records (one holding audio, in a playable recording). Nothing is written.
 var checkRefused = {
@@ -438,6 +534,8 @@ body = {
         checkTexture.value;
         checkEnergies.value;
         checkInterrupted.value;
+        checkSuperseded.value;
+        checkOlderRename.value;
         checkRefused.value;
         checkLong.value;
         checkOutOfRange.value;
