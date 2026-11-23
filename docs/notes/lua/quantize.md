@@ -11,7 +11,7 @@
 ## Machines
 
 ### quantize
-- **State:** per key, its waiting action (`M.actions[key]`, read with `S.lib.quantize.waiting(key)`) and the clocks of dropped actions left to their resume (`M.retired`): `idle`, `waiting` or `retired`. What a waiting action does is its function's own: a freeze key's is a set of the value its press asked for (`docs/notes/lua/freeze.md`, freeze key), the play key's the patterns' start (`docs/notes/lua/sequencer.md`, pattern clock).
+- **State:** per key, its waiting action (`M.actions[key]`, read with `S.lib.quantize.waiting(key)`) and its dropped actions' clocks left to their resume (`M.retired`, by clock id; the test keeps the key's ids): `idle`, `waiting` or `retired`. What a waiting action does is its function's own: a freeze key's is a set of the value its press asked for (`docs/notes/lua/freeze.md`, freeze key), the play key's the patterns' start (`docs/notes/lua/sequencer.md`, pattern clock).
 - **Invariant:** `quantize`: every waiting action's clock runs and is not retired; every retired clock runs until its resume.
 - **Test:** `test/unit/quantize_test.lua`: "quantize: idle + schedule" (one test a row: `quantize_actions` on bar, a probe key, each state entered at beat 1.5; `retired` is a waiting action dropped 1/64 beat before its bar). Each row's check runs past the bar and counts the action's runs.
 
