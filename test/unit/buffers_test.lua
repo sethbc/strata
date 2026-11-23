@@ -1613,6 +1613,25 @@ test("a long file's start reloads 0.3 s after the last set_start", function()
   assert_equal(#context.calls_named("loadBuffer"), 1, "and no more")
 end)
 
+-- #870: the start reload is the clock helper's: a detent that falls as the
+-- reload's wake is posted retires it, and only the new reload loads
+test("the start reload stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context = load_strata(); finish_startup(context)
+  local buffers_lib = local_value("S").lib.buffers
+  local path = load_long_file(context, 1)
+  context.clear_engine_calls()
+  buffers_lib.set_start(1, 12.0)
+  context.clock.advance_until(buffers_lib.start_reload_clocks[1], function() buffers_lib.set_start(1, 13.0) end)
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+  assert_equal(#context.calls_named("loadBuffer"), 0, "the stopped reload loads nothing")
+  context.clock.run_for(0.35)
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "the new reload loads once")
+  assert_equal(loads[1].args[2], path); assert_near(loads[1].args[3], 13.0, 1e-9)
+  context.clock.run_for(2)
+  assert_equal(#context.calls_named("loadBuffer"), 1, "and nothing more")
+end)
+
 test("the start clamps to the file's length less the slot's", function()
   local context = load_strata(); finish_startup(context)
   local buffers_lib, buffers = local_value("S").lib.buffers, local_value("buffers")

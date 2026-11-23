@@ -10,29 +10,66 @@ return function(S)
   local NUM_BUFFERS = S.constants.NUM_BUFFERS
   local BUFFER_SETTLE = S.lib.buffers.BUFFER_SETTLE
 
-  -- per slot: the clock that ends the recording state, then the finishing
-  -- fallback; lib/buffers.lua keeps a long load's check notice here too
-  -- (start_check_notice), so a load, clear, recording or cleanup cancels
-  -- whichever runs
+  -- per slot: the id of the slot's one clock (the tests and the cleanup
+  -- order test read it as an id, plan ruling 10), a clock helper's (#870)
+  -- in one of three roles: "take" (the timer that ends a replace take),
+  -- "fallback" (a take's settle, or a playable recording's end, with no
+  -- report from the engine) or "notice" (lib/buffers.lua's notice for a
+  -- long load's check, start_check_notice). A load, clear, recording or
+  -- cleanup ends whichever runs
   S.buffer_record_clocks = {}
+  -- per slot: that clock's handle and role, beside its id
+  local slot_clocks = {}
   -- per slot, while a take records: what S.lib.record.state reports
   local takes = {}
   -- per slot: the clock's tempo at the start of its newest recording made
   -- with record_sync on (3.7: the take's tempo once it ends), else nil
   local synced_tempos = {}
 
-  -- Cancel the slot's recording timer, finishing fallback or check notice, if any
-  function M.cancel_timer(slot)
-    if S.buffer_record_clocks[slot] then
-      clock.cancel(S.buffer_record_clocks[slot])
-      S.buffer_record_clocks[slot] = nil
-    end
+  -- The one place the slot's clock is set: its handle and role, and its id
+  -- in S.buffer_record_clocks (nil handle: none)
+  local function set_slot_clock(slot, handle, role)
+    slot_clocks[slot] = handle and {handle = handle, role = role} or nil
+    S.buffer_record_clocks[slot] = handle and handle.id or nil
   end
 
-  -- Cancel every take timer (the cleanup step of lib/buffers.lua's polls)
+  -- The role of the slot's clock ("take", "fallback" or "notice"), or nil
+  -- when none runs
+  function M.clock_role(slot)
+    local entry = slot_clocks[slot]
+    return entry and entry.role or nil
+  end
+
+  -- End the slot's take timer, fallback or check notice, if any: stopped
+  -- through the clock helper, never canceled while its wake may be posted
+  -- (a report that ends a take arrives about when its timer runs out)
+  function M.cancel_timer(slot)
+    local entry = slot_clocks[slot]
+    if entry then S.lib.clocks.stop(entry.handle) end
+    set_slot_clock(slot, nil)
+  end
+
+  -- Run the slot's clock in `role`: the one it held ends first; `seconds`
+  -- later it is forgotten and action() runs
+  function M.run_slot_clock(slot, role, seconds, action)
+    M.cancel_timer(slot)
+    local handle = S.lib.clocks.run(function(handle)
+      if not handle.sleep(seconds) then return end
+      local entry = slot_clocks[slot]
+      if not entry or entry.handle ~= handle then return end
+      set_slot_clock(slot, nil)
+      action()
+    end)
+    set_slot_clock(slot, handle, role)
+  end
+
+  -- End every slot's clock at once (the cleanup step of lib/buffers.lua's
+  -- polls: norns ends every clock anyway)
   function M.stop_all()
     for slot = 1, NUM_BUFFERS do
-      M.cancel_timer(slot)
+      local entry = slot_clocks[slot]
+      if entry then S.lib.clocks.cancel(entry.handle) end
+      set_slot_clock(slot, nil)
     end
   end
 
@@ -47,9 +84,7 @@ return function(S)
     local buffer = S.buffers[slot]
     buffer.finishing = true
     buffer.confirm_since = util.time()
-    S.buffer_record_clocks[slot] = clock.run(function()
-      clock.sleep(BUFFER_SETTLE.fallback_seconds)
-      S.buffer_record_clocks[slot] = nil
+    M.run_slot_clock(slot, "fallback", BUFFER_SETTLE.fallback_seconds, function()
       if buffer.finishing then
         settle_buffer_slot(slot)
         S.lib.buffers.display_changed()
@@ -133,11 +168,67 @@ return function(S)
 
   -- Start the take timer: `seconds` later the take finishes
   local function start_take_timer(slot, seconds)
-    M.cancel_timer(slot)
-    S.buffer_record_clocks[slot] = clock.run(function()
-      clock.sleep(seconds)
-      S.buffer_record_clocks[slot] = nil
+    M.run_slot_clock(slot, "take", seconds, function()
       finish_buffer_take(slot)
+      S.lib.buffers.display_changed()
+    end)
+  end
+
+  -- A playable recording's end, from its "ended" report or its fallback:
+  -- the slot is take <n> on the scratch path, loaded when its last known
+  -- length is above 0
+  local function end_playable(slot)
+    local buffer = S.buffers[slot]
+    M.cancel_timer(slot)
+    takes[slot] = nil
+    buffer.recording = false
+    buffer.name = "take " .. slot
+    buffer.path = scratch_take_path(slot)
+    -- the take is the scratch file at the server rate, read from its start
+    buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
+    buffer.loaded = buffer.seconds > 0
+    set_buffer_file_param(slot, _path.audio)
+    S.lib.waveforms.stale(slot)
+    -- 3.7: a take now, its settings a copy of the file's it was
+    -- recorded over (a synced one's tempo the clock's at its start)
+    S.lib.samples.take_from_file(slot, M.synced_tempo(slot))
+    S.lib.samples.bind(slot)
+  end
+
+  -- A recording's cancel, from its "canceled" report or (a playable one
+  -- stopped while armed) its fallback
+  local function cancel_recording(slot, take)
+    local buffer = S.buffers[slot]
+    M.cancel_timer(slot)
+    takes[slot] = nil
+    buffer.recording = false
+    buffer.finishing = false
+    buffer.confirm_since = nil
+    if take.kind == "take" then
+      -- empty, unless the engine's next bufferState report (sent right
+      -- after this one) shows audio: the take had not prepared the slot,
+      -- and buffer_state_changed puts back what it replaced
+      buffer.name, buffer.path, buffer.loaded, buffer.seconds = "empty", nil, false, 0
+      buffer.settled_empty = false
+      buffer.kept_state = take.previous
+    else
+      -- a playable recording keeps the slot's audio, but the engine set
+      -- its gain to 1 at the command: its peaks are read again, and a
+      -- normalized slot's gain goes back (3.7, design §4.4)
+      S.lib.waveforms.stale(slot)
+    end
+  end
+
+  -- K3 on a playable recording (#904): BUFFER_SETTLE.fallback_seconds
+  -- later, with no "ended" or "canceled" report, it ends as the report
+  -- would have (from the last known length; one stopped while armed never
+  -- recorded and is canceled), so K3 is never answered by stopRecord alone
+  -- for good. A K3 while the fallback waits leaves it as it is
+  local function start_playable_fallback(slot, take)
+    if M.clock_role(slot) == "fallback" then return end
+    M.run_slot_clock(slot, "fallback", BUFFER_SETTLE.fallback_seconds, function()
+      if takes[slot] ~= take or not S.buffers[slot].recording then return end
+      if take.phase == "armed" then cancel_recording(slot, take) else end_playable(slot) end
       S.lib.buffers.display_changed()
     end)
   end
@@ -153,11 +244,14 @@ return function(S)
     if buffer.finishing then return end
     if buffer.recording then
       engine.stopRecord(slot - 1)
-      -- a playable recording ends with the engine's "ended" report; a take
-      -- settles from the engine's seconds (or its fallback)
+      -- a playable recording ends with the engine's "ended" report (or its
+      -- fallback, #904); a take settles from the engine's seconds (or its
+      -- fallback)
       if takes[slot] and takes[slot].kind == "take" then
         M.cancel_timer(slot)
         finish_buffer_take(slot)
+      elseif takes[slot] then
+        start_playable_fallback(slot, takes[slot])
       end
     else
       local feedback = params:get("record_feedback") / 100
@@ -302,25 +396,13 @@ return function(S)
       take.phase = "recording"
       take.started_at = util.time()
       take_started(slot, take)
-      if take.kind == "take" and not S.buffer_record_clocks[slot] and not buffer.finishing then
+      -- (no take timer yet: whatever else the slot's clock is, #870)
+      if take.kind == "take" and M.clock_role(slot) ~= "take" and not buffer.finishing then
         start_take_timer(slot, take.seconds)
       end
     elseif state_code == STATE_ENDED then
       if take.kind == "playable" then
-        M.cancel_timer(slot)
-        takes[slot] = nil
-        buffer.recording = false
-        buffer.name = "take " .. slot
-        buffer.path = scratch_take_path(slot)
-        -- the take is the scratch file at the server rate, read from its start
-        buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
-        buffer.loaded = buffer.seconds > 0
-        set_buffer_file_param(slot, _path.audio)
-        S.lib.waveforms.stale(slot)
-        -- 3.7: a take now, its settings a copy of the file's it was
-        -- recorded over (a synced one's tempo the clock's at its start)
-        S.lib.samples.take_from_file(slot, M.synced_tempo(slot))
-        S.lib.samples.bind(slot)
+        end_playable(slot)
       else
         if not buffer.finishing then
           M.cancel_timer(slot)
@@ -332,24 +414,7 @@ return function(S)
         if buffer.seconds > 0 then settle_buffer_slot(slot) end
       end
     elseif state_code == STATE_CANCELED then
-      M.cancel_timer(slot)
-      takes[slot] = nil
-      buffer.recording = false
-      buffer.finishing = false
-      buffer.confirm_since = nil
-      if take.kind == "take" then
-        -- empty, unless the engine's next bufferState report (sent right
-        -- after this one) shows audio: the take had not prepared the slot,
-        -- and buffer_state_changed puts back what it replaced
-        buffer.name, buffer.path, buffer.loaded, buffer.seconds = "empty", nil, false, 0
-        buffer.settled_empty = false
-        buffer.kept_state = take.previous
-      else
-        -- a playable recording keeps the slot's audio, but the engine set
-        -- its gain to 1 at the command: its peaks are read again, and a
-        -- normalized slot's gain goes back (3.7, design §4.4)
-        S.lib.waveforms.stale(slot)
-      end
+      cancel_recording(slot, take)
     end
     S.lib.buffers.display_changed()
   end
