@@ -1968,6 +1968,52 @@ test("the engine stub checks 3.7's three commands and grain params", function()
   assert_equal(#context.engine_calls, calls + 11, "the eleven calls in range are taken")
 end)
 
+-- The engine hears setTuning's period and setTuningTone's cents as OSC
+-- floats, float32 (StrataScale.sc's setTuning and setTuningTone): the set's
+-- last tone checks tone 0 is 0 and each above the last, on those values. Near
+-- 100 a float32 step is 2^-17 (7.6e-6), so 100.0000001 and 100.0000002 are
+-- both 100 there: the engine drops the set ("the set's tones do not start at
+-- 0 and ascend: the tuning stays") and closes it
+test("the engine stub refuses a tuning whose tones are equal in float32", function()
+  local context = load_strata()
+  engine.setTuning(3, 1200)
+  engine.setTuningTone(0, 0)
+  engine.setTuningTone(1, 100.0000001)
+  assert_stub_refuses("the set's tones do not start at 0 and ascend", "setTuningTone", 2, 100.0000002)
+  assert_stub_refuses("no set begun", "setTuningTone", 2, 200)
+  engine.setTuning(3, 1200)
+  engine.setTuningTone(0, 0)
+  engine.setTuningTone(1, 100)
+  assert_stub_refuses("the set's tones do not start at 0 and ascend", "setTuningTone", 2, 100)
+  engine.setTuning(3, 1200)
+  engine.setTuningTone(2, 100.001)
+  engine.setTuningTone(1, 100)
+  assert_stub_refuses("the set's tones do not start at 0 and ascend", "setTuningTone", 0, 50)
+  local calls = #context.engine_calls
+  engine.setTuning(3, 1200)
+  engine.setTuningTone(0, 0)
+  engine.setTuningTone(1, 100)
+  engine.setTuningTone(1, 100.0000001)  -- a tone sent again replaces it, as the engine's
+  engine.setTuningTone(2, 100.001)      -- distinct from 100 in float32: the set is whole
+  assert_equal(#context.engine_calls, calls + 5, "an ascending set is taken")
+  assert_equal(context.engine_calls[calls + 4].args[2], 100.0000001, "and recorded as Lua sent it")
+  assert_stub_refuses("no set begun", "setTuningTone", 2, 200)
+end)
+
+-- A period just past tuningMaxPeriod (4800) as a double is 4800 as a float32
+-- (a step of 2^-11 there), which the engine takes; the next float32 above
+-- 4800 is past it
+test("the engine stub hears a tuning's period in float32", function()
+  local context = load_strata()
+  local calls = #context.engine_calls
+  engine.setTuning(1, 4800.0001)
+  assert_equal(#context.engine_calls, calls + 1, "4800.0001 is 4800 in float32: taken")
+  assert_stub_refuses("is outside 100..4800 (Lua sent 4800.0003;", "setTuning", 1, 4800.0003)
+  assert_stub_refuses("is outside 100..4800 (Lua sent 99.9999;", "setTuning", 1, 99.9999)
+  engine.setTuning(1, 99.9999999)
+  assert_equal(#context.engine_calls, calls + 2, "99.9999999 is 100 in float32: taken")
+end)
+
 test("fastModIn is a control the engine sets itself", function()
   load_strata()
   assert_stub_refuses('"fastModIn" is a control the engine sets itself', "setGrainParam", 0, "fastModIn", 1)
