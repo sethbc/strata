@@ -3623,28 +3623,37 @@ end)
 
 -- 3.9 (#873): the notes model's kind rule (test/notes_model.lua's
 -- Model:kind_for) is the engine's (StrataNotes.sc's noteKindFor): the same
--- branches in the same order, each returning the same kind and naming the
--- same cases, an engine name read through its model name below. An engine
--- condition naming anything else fails, so a new case reaches the model
+-- branches in the same order, each returning the same kind and testing the
+-- same cases. A changed condition on either side fails, so a new case
+-- reaches the model
 test("the model's kind rule names the engine's cases", function()
-  -- Each branch's condition as its tokens (names and numbers, in order) on
-  -- each side, the lines before the branches first: compared token by token,
-  -- so any other name (this.<name> or a bare instance variable) or bound in
-  -- either fails, and each side's numbers are the other's
+  -- Each branch's condition as its tokens (names, numbers and comparison
+  -- operators, in order) on each side, the lines before the branches first,
+  -- against one expected list a side (the two languages spell their
+  -- operators apart): so any other name (this.<name> or a bare instance
+  -- variable), number or comparison operator in either fails, and each
+  -- side's numbers are the other's
   local EXPECTED = {
-    { kind = "", engine = { "var", "source", "grainSource", "voice" },
-      model = { "local", "source", "self", "voices", "voice", "source" } },
-    { kind = "input", engine = { "source", "this", "inputSource", "or", "this", "voiceSource", "source" },
-      model = { "source", "self", "input", "or", "self", "voice_source", "source" } },
+    { kind = "", engine = { "var", "source", "=", "grainSource", "voice" },
+      model = { "local", "source", "=", "self", "voices", "voice", "source" } },
+    { kind = "input", engine = { "source", "==", "this", "inputSource", "or", "this", "voiceSource", "source" },
+      model = { "source", "==", "self", "input", "or", "self", "voice_source", "source" } },
     { kind = "buffer", engine = { "source", "inclusivelyBetween", "1", "numBuffers" },
-      model = { "source", "1", "and", "source", "self", "buffers" } },
+      model = { "source", ">=", "1", "and", "source", "<=", "self", "buffers" } },
     { kind = "stream", engine = { "this", "frozenSynthVoice", "voice" }, model = { "self", "frozen_synth_voice", "voice" } },
     { kind = "voice", engine = {}, model = {} },
   }
+  -- names, numbers and comparison operators (runs of = < > ! ~), in order
   local function tokens(text)
-    local list = {}
-    for token in text:gmatch("[%w_]+") do list[#list + 1] = token end
-    return list
+    local list, position = {}, 1
+    while true do
+      local start, finish = text:find("[%w_]+", position)
+      local operator_start, operator_finish = text:find("[=<>!~]+", position)
+      if operator_start and (not start or operator_start < start) then start, finish = operator_start, operator_finish end
+      if not start then return list end
+      list[#list + 1] = text:sub(start, finish)
+      position = finish + 1
+    end
   end
   local function numbers(list)
     local found = {}
@@ -3698,21 +3707,26 @@ test("the model's kind rule names the engine's cases", function()
   local engine_text = engine_sources()
   local found = kind_rule_problems(engine_text, model_text)
   assert_equal(#found, 0, "the model's kind rule against the engine's: " .. table.concat(found, "; "))
-  -- the check's own controls: a bare instance variable in a condition, and
-  -- another lower bound of the buffer branch, each fail it
-  local function patched(old, new)
-    local start, finish = engine_text:find(old, 1, true)
-    assert_true(start ~= nil, "the engine source holds " .. old)
-    return engine_text:sub(1, start - 1) .. new .. engine_text:sub(finish + 1)
+  -- the check's own controls: a bare instance variable in a condition,
+  -- another lower bound of the buffer branch, and a changed comparison on
+  -- either side, each fail it
+  local function patched(text, old, new)
+    local start, finish = text:find(old, 1, true)
+    assert_true(start ~= nil, "the source holds " .. old)
+    return text:sub(1, start - 1) .. new .. text:sub(finish + 1)
   end
   local controls = {
-    { "a bare instance variable", patched("if (this.frozenSynthVoice(voice)) { ^\\stream };",
-      "if (this.frozenSynthVoice(voice) and: { grainSource[voice] == 0 }) { ^\\stream };") },
-    { "the buffer branch from 0", patched("if (source.inclusivelyBetween(1, numBuffers)) { ^\\buffer };",
-      "if (source.inclusivelyBetween(0, numBuffers)) { ^\\buffer };") },
+    { "a bare instance variable", patched(engine_text, "if (this.frozenSynthVoice(voice)) { ^\\stream };",
+      "if (this.frozenSynthVoice(voice) and: { grainSource[voice] == 0 }) { ^\\stream };"), model_text },
+    { "the buffer branch from 0", patched(engine_text, "if (source.inclusivelyBetween(1, numBuffers)) { ^\\buffer };",
+      "if (source.inclusivelyBetween(0, numBuffers)) { ^\\buffer };"), model_text },
+    { "the engine's input test as !=", patched(engine_text, "if ((source == this.inputSource) or:",
+      "if ((source != this.inputSource) or:"), model_text },
+    { "the model's buffer bound as >", engine_text, patched(model_text, "if source >= 1 and source <= self.buffers then",
+      "if source > 1 and source <= self.buffers then") },
   }
   for _, control in ipairs(controls) do
-    assert_true(#kind_rule_problems(control[2], model_text) > 0, control[1] .. ": the check fails it")
+    assert_true(#kind_rule_problems(control[2], control[3]) > 0, control[1] .. ": the check fails it")
   end
 end)
 
