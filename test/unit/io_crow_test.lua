@@ -391,6 +391,27 @@ test("a clock output pulses once per division with one line a pulse", function()
   assert_equal(clock.threads[id], nil, "its clock is gone")
 end)
 
+test("a clock output's clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  -- #870: the output turned off after matron posted its clock's resume and before Lua delivered
+  -- it; the clock ends at that wake and sends no pulse (crow-ii.md §1: output[n]() per pulse)
+  local context, S, crow_io = started()
+  context.crow.plug()
+  params:set("crow_out4_div", option("crow_out4_div", "1/4"))
+  params:set("crow_out4_source", option("crow_out4_source", "clock"))
+  local id = crow_io.clocks().outputs[4]
+  assert_true(id ~= nil, "its clock runs")
+  context.clock.advance_until(id, function()
+    params:set("crow_out4_source", option("crow_out4_source", "off"))
+    context.crow.clear()
+  end)
+  assert_equal(#context.clock.take_errors(), 0, "no resume reached a canceled clock")
+  assert_equal(count_lines(context, "output[4]()"), 0, "no pulse at the wake")
+  assert_equal(clock.threads[id], nil, "its clock ended at its wake")
+  context.clock.run_for(clock.get_beat_sec() * 2)
+  assert_equal(count_lines(context, "output[4]()"), 0, "and none after")
+  assert_equal(crow_io.clocks().outputs[4], nil, "no clock for output 4")
+end)
+
 test("norns' own crow clock keeps its jacks", function()
   -- crow-ii.md §1 How norns' clock relates to crow: input 1 is norns' under clock source crow,
   -- and "crow out" drives its output

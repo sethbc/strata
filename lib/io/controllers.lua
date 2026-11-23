@@ -40,7 +40,7 @@ return function(S)
   -- per number, which the first CC back to match it uses up)
   local echo = {last = {}, first = {}, sent = {}}
   local faders = {}     -- m -> {high, low, previous, picked, last_set}
-  local clock_id = nil
+  local echo_clock = nil  -- the echo clock's handle (S.lib.clocks, #870) while a port is set
   local tick_errors = {}
   local last_strip = nil
   local closing = false  -- cleanup has begun: a released port is not taken again
@@ -307,10 +307,12 @@ return function(S)
   -- Ports and the clock
   ---------------------------------------------------------------------------
 
-  local function stop_clock()
-    if clock_id then
-      clock.cancel(clock_id)
-      clock_id = nil
+  -- Stopped through S.lib.clocks (#870): retired, never canceled, while its
+  -- resume may be posted; the cleanup step cancels (at_cleanup)
+  local function stop_clock(at_cleanup)
+    if echo_clock then
+      if at_cleanup then S.lib.clocks.cancel(echo_clock) else S.lib.clocks.stop(echo_clock) end
+      echo_clock = nil
     end
   end
 
@@ -340,15 +342,12 @@ return function(S)
   local function update_clock()
     stop_clock()
     if setting("e16_port") == 0 and setting("faders_port") == 0 then return end
-    clock_id = clock.run(function()
-      while true do
-        clock.sleep(1 / CONTROLLERS.echo_hz)
-        tick()
-      end
+    echo_clock = S.lib.clocks.run(function(handle)
+      while handle.sleep(1 / CONTROLLERS.echo_hz) do tick() end
     end)
   end
 
-  function M.clock_id() return clock_id end
+  function M.clock_id() return echo_clock and echo_clock.id end
 
   local function release_kind(kind)
     local port = held[kind]
@@ -535,7 +534,7 @@ return function(S)
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_controllers, function()
     closing = true
-    stop_clock()
+    stop_clock(true)
     release_kind("e16")
     release_kind("faders")
   end)

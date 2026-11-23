@@ -311,6 +311,21 @@ test("with feedback off, or before any sender, nothing is sent", function()
   assert_equal(#context.osc.sent, 0)
 end)
 
+test("the feedback clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  -- #870: feedback turned off after matron posted the clock's resume and before Lua delivered
+  -- it; the clock ends at that wake and sends nothing
+  local context, S = feeding()
+  local id = S.lib.io_osc.clock_id()
+  assert_true(id ~= nil, "the feedback clock runs")
+  params:set("macro_3", 0.7)  -- a change the next tick would send
+  context.clock.advance_until(id, function() S.lib.io_rig.set("osc_feedback", "off") end)
+  context.clock.run_for(0.5)
+  assert_equal(#context.clock.take_errors(), 0, "no resume reached a canceled clock")
+  assert_equal(#context.osc.sent, 0, "nothing sent at the wake or after")
+  assert_equal(clock.threads[id], nil, "the clock ended at its wake")
+  assert_equal(S.lib.io_osc.running(), false, "no clock")
+end)
+
 test("cleanup clears osc.event and stops the clock", function()
   local _, S = feeding()
   assert_true(S.lib.io_osc.running())

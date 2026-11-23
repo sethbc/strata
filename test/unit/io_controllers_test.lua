@@ -94,6 +94,29 @@ test("with no controller port nothing listens, nothing is sent and no clock runs
   assert_equal(controllers.clock_id(), nil, "and ends when the last port is off")
 end)
 
+test("the echo clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  -- #870: the last port turned off after matron posted the clock's resume and before Lua
+  -- delivered it; the clock ends at that wake and runs no tick
+  local context, S, controllers = loaded()
+  local rig = S.lib.io_rig
+  assert_true(rig.set("faders_port", FADERS_PORT))
+  local id = controllers.clock_id()
+  assert_true(id ~= nil, "the clock runs")
+  local ticks = 0
+  local real = S.lib.ui_frame.contained_call
+  S.lib.ui_frame.contained_call = function(errors, key, label, ...)
+    if label == "controllers tick" then ticks = ticks + 1 end
+    return real(errors, key, label, ...)
+  end
+  context.clock.advance_until(id, function() assert_true(rig.set("faders_port", 0)) end)
+  context.clock.run_for(0.5)
+  S.lib.ui_frame.contained_call = real
+  assert_equal(#context.clock.take_errors(), 0, "no resume reached a canceled clock")
+  assert_equal(ticks, 0, "no tick at the wake or after")
+  assert_equal(clock.threads[id], nil, "the clock ended at its wake")
+  assert_equal(controllers.clock_id(), nil, "no clock")
+end)
+
 test("an E16 turn moves its macro by detents, in both encodings", function()
   -- controllers.md section 1: "Relative 1 will send a value of 1 to increment
   -- the control and 127 to decrement. Relative 2 ... uses 63 to increment and

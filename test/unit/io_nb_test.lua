@@ -268,6 +268,23 @@ test("a player with no active of its own gets nb's default, and delayed_active a
   assert_equal(count(late, "delayed_active"), 1, "no second delayed_active")
 end)
 
+test("the activation clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  -- #870 (duty 6): the player deselected after matron posted the clock's resume and before Lua
+  -- delivered it; the clock ends at that wake and calls no delayed_active
+  local context, S, players = started({ { "late", { "note_on", "note_off", "delayed_active" } } })
+  local late = players.late
+  choose(2, "late")
+  local id = late.active_routine
+  assert_true(id ~= nil, "a clock held in active_routine")
+  context.clock.advance_until(id, function() choose(2, "none") end)
+  context.clock.run_for(S.lib.io_nb.NB.delayed_seconds * 2)
+  assert_equal(#context.clock.take_errors(), 0, "no resume reached a canceled clock")
+  assert_equal(count(late, "delayed_active"), 0, "no delayed_active at the wake or after")
+  assert_equal(late.is_active, false)
+  assert_equal(late.active_routine, nil, "the clock gone")
+  assert_equal(clock.threads[id], nil, "it ended at its wake")
+end)
+
 test("a player this module activated is deactivated though another host emptied the refcounts", function()
   -- duty 5: nbin's nb:init empties the table after Strata's init
   local _, _, players = started({ { "alpha", ALL }, { "plain", { "note_on", "note_off" } } })

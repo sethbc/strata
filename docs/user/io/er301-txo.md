@@ -24,7 +24,7 @@ The `txo` row opens a list: the output (the 32 outputs span the TELEXo units on 
 - **pitch**: the output's cv is the note's pitch and its trigger the gate.
 - **envelope**: the output's cv is the level (the velocity, up to 5 V), played through the output's envelope: Strata sets the envelope's attack and decay (the two rows below) whenever it starts leading, and whenever one changes.
 
-When the last note on an output ends, its trigger goes low, and in envelope mode its envelope gate too (two messages). When Strata stops leading the bus it turns each envelope it set up off. An output whose envelope mode was turned off while crow was away has its envelope turned off when crow returns. All the settings are saved with a PSET and none is in a scene.
+When the last note on an output ends, its trigger goes low, and in envelope mode its envelope gate too (two messages). When Strata stops leading the bus it turns each envelope it set up off. An output whose envelope mode was turned off while crow was away has its envelope turned off when crow returns. An envelope set up while the bus was too busy to take it (see [ii](ii.md)) is set up again at the next change of any voice's txo output or mode. All the settings are saved with a PSET and none is in a scene.
 
 ## Sources
 
