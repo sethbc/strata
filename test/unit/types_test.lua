@@ -489,4 +489,30 @@ test("a frozen voice stays frozen across a type change", function()
   cleanup()
 end)
 
+
+-- 3.9 (#914): the invariant `type settle`, a pending choice exactly while
+-- its settle clock lives
+local function settle_broken()
+  for _, line in ipairs(h.check_invariants()) do
+    if line:sub(1, #"type settle: ") == "type settle: " then return line end
+  end
+end
+
+test("the type settle invariant names a pending choice whose settle clock was canceled behind its back", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.lib.types.turn(2, 1)
+  assert_equal(settle_broken(), nil, "pending, its clock running")
+  S.lib.types.flush(2)
+  assert_equal(settle_broken(), nil, "flushed: neither")
+  S.lib.types.turn(3, 1)
+  context.clock.run_for(S.lib.types.TYPES.settle_seconds + 0.1)
+  assert_equal(S.lib.types.pending(3), nil, "the settle applied it")
+  assert_equal(settle_broken(), nil, "settled: neither")
+  S.lib.types.turn(4, 1)
+  h.allow_broken_invariants("the test cancels a settle clock behind the module's back on purpose")
+  clock.cancel(S.type_settle_clocks[4])
+  assert_true(settle_broken() ~= nil, "a pending choice with no settle clock is reported")
+end)
+
 end

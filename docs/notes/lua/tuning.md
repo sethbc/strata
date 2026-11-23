@@ -10,6 +10,28 @@
 - **A player's file is read as text, never run**: at most `max_file_bytes`, `io.open(path, "rb")`; no `load`, `dofile` or `tonumber` alone on a token (it reads `0x10`, `1e3` and `inf`). A refused file prints one line (`tuning: <file>: <reason>`) and leaves the tuning.
 - **`TUNING` mirrors the engine's tuning constants** (`tuningMaxTones`, `tuningMinPeriod`, `tuningMaxPeriod`, `octaveCents`, `tuningTwelve`, `tuningOctaveTolerance`, `tuningRootKey`, `tuningTableFrames`, `tuningTableLow`, `tuningTableResolution`, `docs/notes/engine/tuning.md`; a docs test compares them).
 
+## Machines
+
+### tuning
+- **State:** three texts: `tuning_tones`' (the param's), `current.text` (the tuning in force, a local of `lib/tuning.lua`, read through `count()`, `period()` and `tones()`) and `engine_text` (the text whose tuning the engine has, `send`'s).
+- **Invariant:** `tuning`: the param's text equals `current.text`, through a refused text too (the action sets the param back, silently). `engine_text` may lag by design: a silent read takes the text and sends nothing.
+- **Test:** `test/unit/tuning_test.lua`: "the tuning invariant holds through a refused text and names a param text the tuning never took".
+
+The table has no test of its own; the tests named in Tests below cover its rows by example (#842's silent reads, the refusals, #884's float32). Inside a read the param's text can stand apart from `current.text` until the module's `read` PSET hook takes it, which is why the hook runs at every read.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `engine has it` | `a text that reads` | `engine has it` | `apply_text`: taken and sent (`setTuning`, then every `setTuningTone`), quantized voices snapped |
+| `engine has it` | `a refused text` | `engine has it` | one line, `tuning: <reason>`; the param is set back silently; nothing sent |
+| `engine has it` | `a silent read` | `engine lags` | the hook takes the file's text silently (`apply_text(text, true)`); nothing sent |
+| `engine has it` | `a read` | `engine has it` | a new text runs the action; the same text, nothing |
+| `engine has it` | `select` | `engine has it` | the entry's name and text; a new text runs the action |
+| `engine lags` | `a text that reads` | `engine has it` | taken and sent |
+| `engine lags` | `a refused text` | `engine lags` | one line; the param set back; nothing sent |
+| `engine lags` | `a silent read` | `engine lags` | taken silently again |
+| `engine lags` | `a read` | `engine has it` | the hook sends the tuning in force (`apply_text(current.text)`) |
+| `engine lags` | `select` | `engine has it` | the same text applied (`select`'s own `apply_text`), or a new one through the action |
+
 ## lib/tuning.lua (`S.lib.tuning`)
 
 The one tuning (3.8, design §6): a name, its tones in cents above the first (ascending, the first 0) and its period in cents. Included after `lib/loops.lua` and before `lib/variation.lua`; nothing is read at include time but `S.constants`.
@@ -32,7 +54,7 @@ The one tuning (3.8, design §6): a name, its tones in cents above the first (as
 
 **Params** (`add_params()`, from `S.lib.variation.add_scale_params()` after `root` and `scale_mask`): `tuning_name` (text, shown, `12 equal`; its action only asks for a redraw, so editing it in PARAMETERS only renames) and `tuning_tones` (text, hidden, `TUNING.default_text`; its action is `apply_text`), each with its `set_text_default`.
 
-**Start** (`START_ORDER.tuning`, 55): makes the tunings folder (`util.make_dir`); sends nothing. No registry, no cleanup step, no global function.
+**Start** (`START_ORDER.tuning`, 55): makes the tunings folder (`util.make_dir`); sends nothing. No registry, no cleanup step, no global function. The invariant `tuning` (3.9, #915; Machines).
 
 The editor that chooses a tuning is `docs/notes/lua/ui/scale-editor.md`; the engine's table, `docs/notes/engine/tuning.md`; MIDI out's tuned bend, `docs/notes/lua/io/midi_out.md`.
 

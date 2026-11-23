@@ -14,6 +14,58 @@
 - Scenes store the three: `delay_sync` and `delay_division` switch at a fade's end (`discrete`), `delay_pingpong` crossfades; a scene without them loads with their defaults (`fill_scene`).
 - No 3.7 param joins a randomize (ruling 35): FX's delay draw is still time, feedback and mix.
 
+## Machines
+
+### synced delay
+- **State:** the mode, `mode()` (a local: `"free"` while `delay_sync` is off, `"division"` while synced at a tempo that gives a length, `"synced, no length"` while synced at one that gives none, an external clock at 0), read from outside as `delay_sync` and `M.playing()` (nil but in the division); with it `held` (`M.held()`, a send held while a scene applies) and the time last sent (`last_sent`, `M.sent`).
+- **Invariant:** `delay sync`: `held` only while a scene's apply runs (`S.scene_recall_in_progress`); with sync off, once a send has gone, the time last sent is `M.time()` exactly (every change of an unsynced time sends at once). The two synced modes are not checked: a tempo moves with no event this module sees, and the LFO step catches up within a step, so between the move and the step the two legally differ; the table's rows assert the sends instead.
+- **Test:** `test/unit/delay_sync_test.lua`: "synced delay: every cell is decided" and its rows (a MIDI clock at 120 BPM, 0 for the no-length states; `delay_time` 0.6 s, 1/8D; each event then one LFO step; each row's check counts the `setDelay` sends and the time each carries), "the delay sync invariant names a held send outside a recall's apply" and "the delay sync invariant names an unsynced time the engine was never sent, and leaves a synced one to the step".
+
+A held state is entered inside a real `apply_entries`, suspended in a coroutine after its `delay_feedback` entry's action held the send. `apply ends` resumes it; `apply fails` resumes it with its entry raising: `apply_entries` puts the flag back and runs the scene-applied hooks before raising the error again, so this module's hook (`"delay sync"`, `S.register_scene_applied`) flushes the held send either way. A recall from a held state is an apply inside the running one, which keeps the outer's flag set (#892), so the send stays held until the outer ends. The cells that cannot happen are not rows: `apply ends` and `apply fails` from an unheld state (no apply runs); `tempo back` from the free and division states (entered at 120 BPM: the event leaves a tempo of 0); `tempo move` and `tempo to 0` from the no-length states (their tempo is 0, which moves only by giving a length again).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `free` | `tempo move` | `free` | nothing: unsynced, the tempo plays no part |
+| `free` | `modulation of the time` | `free` | one `setDelay` a step, the modulated `delay_time` |
+| `free` | `feedback edit` | `free` | one `setDelay`: `delay_time`, the new feedback |
+| `free` | `sync toggle` | `division` | one `setDelay`: the division (0.375 s, 1/8D at 120 BPM) |
+| `free` | `recall` | `free` | one `setDelay` as the apply ends: `delay_time`, the scene's feedback |
+| `free` | `tempo to 0` | `free` | nothing |
+| `division` | `tempo move` | `division` | one `setDelay` at the next step: the division at the new tempo |
+| `division` | `modulation of the time` | `division` | nothing: `time_unheard()` (#741) |
+| `division` | `feedback edit` | `division` | one `setDelay`: the division, the new feedback |
+| `division` | `sync toggle` | `free` | one `setDelay`: `delay_time` with its offsets now |
+| `division` | `recall` | `division` | one `setDelay` as the apply ends: the division, the scene's feedback |
+| `division` | `tempo to 0` | `synced, no length` | one `setDelay` at the next step, under `delay_time`'s key: `delay_time` with its offsets (#768) |
+| `synced, no length` | `modulation of the time` | `synced, no length` | one `setDelay` a step: `delay_time` with its offsets (#770) |
+| `synced, no length` | `feedback edit` | `synced, no length` | one `setDelay`: `delay_time` with its offsets, the new feedback |
+| `synced, no length` | `sync toggle` | `free` | one `setDelay`: `delay_time` with its offsets |
+| `synced, no length` | `recall` | `synced, no length` | one `setDelay` as the apply ends: `delay_time`, the scene's feedback |
+| `synced, no length` | `tempo back` | `division` | one `setDelay` at the next step: the division |
+| `free, held` | `tempo move` | `free, held` | nothing; the apply's end sends `delay_time` |
+| `free, held` | `modulation of the time` | `free, held` | the sends held; the apply's end sends the modulated time |
+| `free, held` | `feedback edit` | `free, held` | held; the apply's end sends the edit's feedback |
+| `free, held` | `sync toggle` | `division, held` | held; the apply's end sends the division |
+| `free, held` | `recall` | `free, held` | an apply inside the running one keeps the send held; the outer's end sends the inner scene's feedback |
+| `free, held` | `tempo to 0` | `free, held` | nothing; the apply's end sends `delay_time` |
+| `free, held` | `apply ends` | `free` | the hook sends one `setDelay`, every value the scene set |
+| `free, held` | `apply fails` | `free` | the same: the hooks run before the error is raised again |
+| `division, held` | `tempo move` | `division, held` | the step's resend held; the apply's end sends the new division time |
+| `division, held` | `modulation of the time` | `division, held` | nothing; the apply's end sends the division |
+| `division, held` | `feedback edit` | `division, held` | held; the apply's end sends the edit's feedback |
+| `division, held` | `sync toggle` | `free, held` | held; the apply's end sends `delay_time` |
+| `division, held` | `recall` | `division, held` | held (an inner apply); the outer's end sends the inner scene's feedback |
+| `division, held` | `tempo to 0` | `synced, no length, held` | the step's send held; the apply's end sends `delay_time` |
+| `division, held` | `apply ends` | `division` | one `setDelay`: the division, the scene's values |
+| `division, held` | `apply fails` | `division` | the same |
+| `synced, no length, held` | `modulation of the time` | `synced, no length, held` | held; the apply's end sends the modulated time |
+| `synced, no length, held` | `feedback edit` | `synced, no length, held` | held; the apply's end sends the edit's feedback |
+| `synced, no length, held` | `sync toggle` | `free, held` | held; the apply's end sends `delay_time` |
+| `synced, no length, held` | `recall` | `synced, no length, held` | held (an inner apply); the outer's end sends the inner scene's feedback |
+| `synced, no length, held` | `tempo back` | `division, held` | the step's resend held; the apply's end sends the division |
+| `synced, no length, held` | `apply ends` | `synced, no length` | one `setDelay`: `delay_time`, the scene's values |
+| `synced, no length, held` | `apply fails` | `synced, no length` | the same |
+
 ## Owns
 
 `lib/delay_sync.lua` (`S.lib.delay_sync`, 3.7 design §6, package 1d), included just before `lib/params_setup.lua`:
@@ -21,12 +73,12 @@
 - `M.time()`: the seconds the delay plays (above). Unsynced, `engine_param_value("delay_time")`; synced at a tempo that gives no finite, positive length (an external clock reporting 0), `delay_time` with its offsets as they are now (`S.lib.engine_sync.with_lfo_offsets("delay_time", params:get("delay_time"))`), never the delivered value, which skipped sends leave stale (#768).
 - `M.playing()`: `{division = index into S.constants.DIVISIONS, halvings = n}` while synced, else nil. FX's time row, arc ring 3 and the 256's delay fader turn the division while it is not nil.
 - `M.label()`: `1/8D`, or while halved the division and what plays: `1 bar>1/2` (the division whose beats equal the halved length) or `1/4D>3.75 s` (seconds when none does); nil while not synced.
-- `M.hold()`, `M.resend()`, `M.sent(time)`: a scene's held send, the step hook's resend and the time last sent, with the feedback, mix and ping-pong it carried (above). `M.time_unheard()`: whether a `delay_time` send would change nothing the engine plays (above).
+- `M.hold()`, `M.held()`, `M.resend()`, `M.sent(time)`: a scene's held send (and whether one is held), the step hook's resend and the time last sent, with the feedback, mix and ping-pong it carried (above). The local `mode()` (3.9, #911) names the mode `M.time()`, `M.time_unheard()` and the step hook read (Machines). `M.time_unheard()`: whether a `delay_time` send would change nothing the engine plays (above).
 - The fx record `delay sync` (`S.register_fx_params`, three params after the group's own and the bypasses): `delay_sync` (binary toggle, 0), `delay_division` (option, `DIVISIONS.names`, default 7, `1/8D`), `delay_pingpong` (control 0-1, step 0.01, 0). Each action calls `send_param_to_engine`; sync's and the division's also redraw the grids while a 256 shows the FX faders and request a redraw (FX's time row, arc ring 3).
-- The three scene fields and the step hook.
+- The three scene fields, the step hook and the invariant `delay sync` (Machines).
 
 Elsewhere: the delay's sender and its hold are `lib/engine_sync.lua`'s; the rows are FX's (`docs/notes/lua/pages/fx.md`), ring 3 `lib/arc/fx.lua`'s (`docs/notes/lua/arc-pages.md`), the fader `S.lib.grid_faders.fx_fader_id` (`docs/notes/lua/grid/layout_256.md`); `\strataDelay` and its ping-pong are the effects area's (`docs/notes/engine/effects.md`).
 
 ## Tests
 
-`test/unit/delay_sync_test.lua`: the four values with sync off; the division at 120 and 90 BPM; halving at 30, 20, 10, 5 and 3 BPM, not at 60, and at the boundary not at 44.5 BPM and once at 44.4 (the labels); a tempo change sent at the next step and a move under 0.5% not at all; a synced delay ignoring `delay_time` and an offset on it; the scene fields (fade, defaults, ranges); a recall's one `setDelay` at once with the scene's values (an instant recall changing only the feedback or mix, a fade's landing, a morph crossing carrying only `delay_sync`); `DELAY.max_seconds` against the stub's limit; #741's synced delay under a 5 Hz LFO's home or a routing on `delay_time` (no `setDelay` in 48 steps, all 12 probe keys run every step), on an external clock wavering under 0.5%, a feedback edit under it (one `setDelay`, 0.375 and 0.5), sync off (the modulated time at once) and a tempo move under it (resent within a step, one `setDelay` a step through a tempo ramp, #768); #762's synced delay under a 5 Hz LFO homed on a macro whose rows target `delay_time` and `reverb_mix`, the macro at 0 and at 0.5 (no `setDelay` in 48 steps while `reverb_mix` moves and is sent), a feedback edit under it (one `setDelay`, 0.375 and 0.5), sync off (the modulated time at once) and, unsynced, one `setDelay` a step; #768's probe (the macro's LFO off while synced, then a tempo of 0: the param's time with its offsets, not the stale delivered one); #770's probe (synced under LFO 1 homed on `delay_time`, and under a macro's LFO on it, eight steps of a MIDI clock at tempo 0: at most one `setDelay` a step, the last carrying the param's time with its offset; back at 120 BPM one send of the division) and an unmodulated synced delay going to tempo 0 and back to 120 (one send at each change, `delay_time` then the division). The tests that set an external clock's tempo put it back through `restoring_tempo`, which a failed assertion cannot skip. The FX rows in `pages_fx_test.lua`, ring 3 in `arc_pages_test.lua`, the fader in `grid_layout_256_test.lua`.
+`test/unit/delay_sync_test.lua`: the four values with sync off; the division at 120 and 90 BPM; halving at 30, 20, 10, 5 and 3 BPM, not at 60, and at the boundary not at 44.5 BPM and once at 44.4 (the labels); a tempo change sent at the next step and a move under 0.5% not at all; a synced delay ignoring `delay_time` and an offset on it; the scene fields (fade, defaults, ranges); a recall's one `setDelay` at once with the scene's values (an instant recall changing only the feedback or mix, a fade's landing, a morph crossing carrying only `delay_sync`); `DELAY.max_seconds` against the stub's limit; #741's synced delay under a 5 Hz LFO's home or a routing on `delay_time` (no `setDelay` in 48 steps, all 12 probe keys run every step), on an external clock wavering under 0.5%, a feedback edit under it (one `setDelay`, 0.375 and 0.5), sync off (the modulated time at once) and a tempo move under it (resent within a step, one `setDelay` a step through a tempo ramp, #768); #762's synced delay under a 5 Hz LFO homed on a macro whose rows target `delay_time` and `reverb_mix`, the macro at 0 and at 0.5 (no `setDelay` in 48 steps while `reverb_mix` moves and is sent), a feedback edit under it (one `setDelay`, 0.375 and 0.5), sync off (the modulated time at once) and, unsynced, one `setDelay` a step; #768's probe (the macro's LFO off while synced, then a tempo of 0: the param's time with its offsets, not the stale delivered one); #770's probe (synced under LFO 1 homed on `delay_time`, and under a macro's LFO on it, eight steps of a MIDI clock at tempo 0: at most one `setDelay` a step, the last carrying the param's time with its offset; back at 120 BPM one send of the division) and an unmodulated synced delay going to tempo 0 and back to 120 (one send at each change, `delay_time` then the division); the table `synced delay` and the invariant's two tests (Machines). The tests that set an external clock's tempo put it back through `restoring_tempo`, which a failed assertion cannot skip. The FX rows in `pages_fx_test.lua`, ring 3 in `arc_pages_test.lua`, the fader in `grid_layout_256_test.lua`.
