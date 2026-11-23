@@ -931,7 +931,7 @@ test("the time row is marked while the delay is frozen", function()
   local S = local_value("S")
   show_page("FX")
   local FX = local_value("FX_PAGE")
-  assert_equal(FX.held_text, "held")
+  assert_equal(FX.frozen_mark_text, "held")
   local function entry_of(text)
     for _, entry in ipairs(context.screen.texts) do
       if entry.text == text then return entry end
@@ -946,7 +946,8 @@ test("the time row is marked while the delay is frozen", function()
   assert_true(mark ~= nil, "a frozen delay's time row shows held")
   assert_equal(mark.y, label.y, "on the time row")
   assert_equal(mark.level, FX.bypass_level, "at level 4")
-  assert_true(mark.x >= FX.param_x + screen.text_extents("time"), "after the label")
+  -- 4 px clear of the label (a literal, so a mark drawn touching the label fails)
+  assert_equal(mark.x, label.x + screen.text_extents("time") + 4, "4 px after the label")
   assert_true(h.screen_shows(context, string.format("%.3f s", params:get("delay_time"))),
     "the row still shows the time the release plays")
   assert_screen_layout(context, "FX the time row held")
