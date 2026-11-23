@@ -520,6 +520,35 @@ test("a clock whose body raised frees its slot", function()
   assert_no_clock_error(context, "a raised body's stop and cancel")
 end)
 
+-- #962: a clock whose coroutine has gone (its id canceled with a bare
+-- clock.cancel outside the helper) has no wake to come; a stop of it,
+-- its wake past or far off, neither retires nor cancels it
+test("a stop of a clock that has already gone neither cancels nor retires it", function()
+  local context, S, clocks = loaded()
+  local invariant = clocks_invariant(S)
+  local counts = {runs = 0, ended = 0}
+  local past = repeating(clocks, counts, "sleep", 1)
+  local far = repeating(clocks, counts, "sleep", 10)
+  clock.cancel(past.id)  -- lost outside the helper
+  clock.cancel(far.id)
+  context.clock.run_for(1.5)  -- past the first one's wake
+  assert_true(not clocks.alive(past) and not clocks.alive(far), "a clock that has gone is not alive")
+  local cancels = 0
+  local real_cancel = clock.cancel
+  clock.cancel = function(id) cancels = cancels + 1; return real_cancel(id) end
+  clocks.stop(past)
+  clocks.stop(far)
+  clock.cancel = real_cancel
+  assert_true(past.stopped and far.stopped, "both are stopped")
+  assert_equal(clocks.retired[past.id], nil, "its wake past: not retired")
+  assert_equal(clocks.retired[far.id], nil, "its wake far off: not retired either")
+  assert_equal(cancels, 0, "and neither is canceled again")
+  assert_equal(invariant(), nil, "the invariant holds")
+  context.clock.run_for(10)
+  assert_no_clock_error(context, "stops of clocks that had gone")
+  assert_equal(counts.runs + counts.ended, 0, "neither body ran again")
+end)
+
 -- Review of 0b, finding 5: the helper's margins are the ones the zones
 -- editor, the macros' learn and the quantized actions use
 test("the helper's margins are the zones editor's, the macros' and the quantized actions'", function()
