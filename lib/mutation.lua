@@ -112,8 +112,11 @@ return function(S)
   end
 
   -- Hold the undo of the randomize just made (or, 3.8, of a voice preset's
-  -- load: capture), for UNDO_SECONDS
+  -- load: capture), for UNDO_SECONDS. A clock still running (an undo held
+  -- inside this one's own write: a nested randomize) is stopped before its
+  -- replacement starts, so it never clears the new undo at its own wake
   local function hold_undo(spec, values, ids, pattern, capture)
+    S.lib.clocks.stop(undo_handle)
     S.undo = {page = spec.page, section = spec.section, voice = spec.voice, values = values, ids = ids,
       pattern = pattern, capture = capture, until_time = util.time() + UNDO_SECONDS}
     undo_handle = S.lib.clocks.run(function(handle)
