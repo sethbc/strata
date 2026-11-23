@@ -963,11 +963,14 @@ test("the scene sequencer's clock stopped as its wake is posted: no clock error,
   local id = S.scene_sequencer_clock
   assert_true(id ~= nil, "the sequencer runs")
   assert_equal(S.current_scene, 1, "it recalled scene 1")
+  local position = S.scene_sequencer_position
   context.clock.advance_until(id, function() params:set("scene_sequencer_enabled", 0) end)
   context.clock.run_for(5)
   local errors = context.clock.take_errors()
   assert_equal(#errors, 0, "no resume reaches a canceled clock" .. (errors[1] and (": " .. errors[1]) or ""))
   assert_equal(S.current_scene, 1, "scene 2 was never recalled")
+  assert_equal(S.scene_sequencer_position, position, "the pass did not advance after its hold")
+  assert_equal(S.scene_sequencer_recall_due, false, "and marked no recall due")
   assert_equal(S.scene_sequencer_clock, nil, "no sequencer clock")
   assert_equal(S.lib.clocks.retired[id], nil, "the retired clock ended at its wake")
 end)
@@ -2691,6 +2694,34 @@ test("a block's through_zero ramps its ids through 0 and switches once at the mi
   assert_equal(#asked, 1, "an instant recall asks nothing")
   assert_equal(#switches, 1, "and switches nothing")
   assert_near(params:get("reverb_mix"), 0.8, 1e-9, "it sets the scene's value")
+end)
+
+-- 3.9 (#867, the review of 1d): a fade step's through-zero switches run as
+-- a scene's sets (S.lib.scenes.setting() true), as its loop of sets does;
+-- between steps no scene is setting
+test("a fade step's through-zero switches run while the scene is setting", function()
+  local seen = {}
+  local context = load_strata({ before_init = function()
+    add_scene_block(local_value("S"), { key = "tz", default = function() return 0 end,
+      capture = function() return 5 end, validate = function(value) return type(value) == "number" end,
+      apply = function() end, discrete = true,
+      through_zero = function()
+        return { { id = "reverb_mix", switch = function() table.insert(seen, local_value("S").lib.scenes.setting()) end } }
+      end })
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  params:set("reverb_mix", 0.8); capture_scene(1)
+  params:set("reverb_mix", 0.4)
+  recall_scene(1, 2)                                              -- 20 steps of 0.1 s; step 1 runs at once
+  for _ = 2, 10 do
+    assert_equal(S.lib.scenes.setting(), false, "between steps no scene is setting")
+    wake(context, "scene_transition_clock")                       -- step 10: f = 0.5
+  end
+  assert_equal(#seen, 1, "the switch ran at the midpoint")
+  assert_equal(seen[1], true, "while the scene was setting")
+  assert_equal(S.lib.scenes.setting(), false, "and the step put the flag back")
+  cancel_scene_transition()
 end)
 
 test("a registered continuous field outside its param's range fails validation", function()

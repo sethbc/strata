@@ -314,6 +314,28 @@ test("a scene file's invalid loop pair is cut to fit when it loads", function()
   assert_equal(broken.loop_start, "x"); assert_equal(broken.loop_length, 2, "left for validate_scene to reject")
 end)
 
+-- 3.9 (#867, the review of 1d): a fade step's own sets are a scene's
+-- (S.lib.scenes.setting()), so the length, set before the start, takes the
+-- step's value; with the filter on it would be cut to the old start's room
+-- and lag the start by a step
+test("a fade step sets the loop pair's exact values, the length's filter standing down", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("v1_loop_start", 0.5); params:set("v1_loop_length", 0.5); capture_scene(1)
+  params:set("v1_loop_start", 0); params:set("v1_loop_length", 1); capture_scene(2)
+  recall_scene(1, 0)
+  recall_scene(2, 4)                                              -- 20 steps; step 1 runs at once
+  local start, length = loop_of(1)
+  assert_near(start, 0.475, 1e-9, "step 1: the start a twentieth of the way from 0.5 to 0")
+  assert_near(length, 0.525, 1e-9, "step 1: the length a twentieth of the way from 0.5 to 1, not 0.5")
+  assert_equal(S.lib.scenes.setting(), false, "between steps no scene is setting")
+  wake(context, "scene_transition_clock")
+  start, length = loop_of(1)
+  assert_near(start, 0.45, 1e-9, "step 2: the start")
+  assert_near(length, 0.55, 1e-9, "step 2: the length")
+  cancel_scene_transition()
+end)
+
 -- 3.9 (#867): the length's filter stands down only while a recall's apply
 -- or a fade step sets the pair (S.lib.scenes.setting()), never inside
 -- set_scene_value, which morph sets through too: a morph move during a
