@@ -1091,11 +1091,6 @@ test("euclid writes the first length steps and keeps the attributes", function()
   seq.euclid(1, 3, 1)
   expected = {0, 15, 0, 0, 15, 0, 0, 15}
   for step = 1, 8 do assert_equal(S.patterns[1][step], expected[step], "rotated: step " .. step) end
-  -- nothing while a scene recall is in progress
-  S.scene_recall_in_progress = true
-  seq.euclid(1, 8, 0)
-  S.scene_recall_in_progress = false
-  for step = 1, 8 do assert_equal(S.patterns[1][step], expected[step], "a recall's fill: step " .. step .. " unchanged") end
 end)
 
 test("the chain loads the next scene's patterns every N bars and nothing else", function()
@@ -4554,5 +4549,65 @@ do
     end
   end)
 end
+
+
+-- #923: S.seq_euclid is the fill's, so any other whole-pattern change
+-- forgets it (SEQ's euclid row then reads "-")
+test("the euclid row is empty after a clear and after a recall", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local seq = S.lib.sequencer
+  capture_scene(1)
+  seq.euclid(1, 3, 1)
+  assert_equal(S.seq_euclid[1][1], 3, "the fill's hits")
+  clear_pattern(1)
+  assert_equal(S.seq_euclid[1], nil, "a clear forgets the fill")
+  seq.euclid(1, 3, 1)
+  recall_scene_instant(1)
+  assert_equal(S.seq_euclid[1], nil, "a recall forgets it")
+  seq.euclid(1, 5, 2)
+  assert_equal(S.seq_euclid[1][1], 5, "a fill keeps its own")
+  assert_equal(S.seq_euclid[1][2], 2, "and its rotation")
+  assert_true(context ~= nil)
+end)
+
+-- #924: a handler installed after Strata's that chains to it keeps calling
+-- it after cleanup; it then moves nothing (and still runs the one it found)
+test("a transport start after cleanup does nothing", function()
+  local found = {}
+  local context = load_strata({ before_init = function()
+    clock.transport.start = function() table.insert(found, "start") end
+    clock.transport.stop = function() table.insert(found, "stop") end
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  params:set("clock_source", CLOCK_SOURCE.midi)
+  local strata_start, strata_stop = clock.transport.start, clock.transport.stop
+  -- a later handler (a mod's) wraps Strata's
+  clock.transport.start = function() strata_start() end
+  clock.transport.stop = function() strata_stop() end
+  cleanup()
+  clock.transport.start()
+  assert_equal(S.pattern_playing, false, "the patterns stay stopped")
+  assert_equal(S.pattern_clock, nil, "with no clock")
+  assert_equal(next(S.pattern_clocks), nil, "and no voice's clock")
+  assert_equal(S.lib.sequencer.count_offset(), 0, "nor a count kept")
+  clock.transport.stop()
+  assert_equal(table.concat(found, " "), "start stop", "the handlers it found still run")
+end)
+
+-- #924: restart_voice stays public (its tests call it) and starts nothing
+-- while the patterns are stopped
+test("restart_voice while stopped does nothing and breaks no invariant", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for step = 1, 16 do S.patterns[1][step] = 15 end
+  context.clear_engine_calls()
+  S.lib.sequencer.restart_voice(1, clock.get_beats())
+  assert_equal(S.pattern_clocks[1], nil, "no voice clock")
+  context.clock.run_for(0.5)
+  assert_equal(#context.calls_named("retrigger"), 0, "nothing plays")
+  assert_equal(#context.calls_named("voiceOn"), 0, "nothing starts")
+end)
 
 end

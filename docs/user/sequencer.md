@@ -54,7 +54,7 @@ Normally a step only accents a voice that keeps sounding. With **seq gate** on (
 
 ## Euclidean fill
 
-A Euclidean fill spreads a number of hits as evenly as possible over the voice's length (3 hits over 8 steps: steps 1, 4 and 7), turned by a rotation (0 to the length - 1, wrapping around; the hits go from 0 to the length). It writes the voice's first length steps (hits at level 15, the rest off) and keeps the steps past the length and every step's attributes, so you can edit the steps by hand afterward.
+A Euclidean fill spreads a number of hits as evenly as possible over the voice's length (3 hits over 8 steps: steps 1, 4 and 7), turned by a rotation (0 to the length - 1, wrapping around; the hits go from 0 to the length). It writes the voice's first length steps (hits at level 15, the rest off) and keeps the steps past the length and every step's attributes, so you can edit the steps by hand afterward. SEQ's `euclid` row shows the fill until something else replaces the whole pattern (a clear, a randomize, a paste, an undo, a scene recall or a chain link); it then shows `-`, and the next turn starts from 0 hits.
 
 ## Chaining
 
