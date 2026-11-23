@@ -34,7 +34,12 @@ return function(S)
 
   -- A press's still (S.lib.positions' records): the key is held in the
   -- page's role, which the core clears at every way the key ends. A press
-  -- notes the role first; a release passes none
+  -- notes the role first; a release passes none. Since the role is set
+  -- before S.lib.positions checks its records, a re-press of a key whose
+  -- release was lost (under the 64's chooser) before the next tick makes
+  -- the old record's still true again: the new press then overwrites it
+  -- (the same key, cell, store or hold, the slice's same note key), which
+  -- leaves nothing behind
   local function still_of(pane, x, y, z)
     if z ~= 1 then return nil end
     pane.press_as(x, y, POSITIONS_PAGE.role)
