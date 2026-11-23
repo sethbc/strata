@@ -38,7 +38,7 @@
 ## Machines
 
 ### position and pass
-- **State:** each voice's `play.voices[voice]` (local): `last` (the step taken last, nil at a start), `taken` (the steps taken in the pass), `pass_length`, `heading` (ping-pong's way) and `way` (the direction of the step taken last, 3.9), all set by `start_position` and moved by `take_position` (and `ping_pong_step`); the pass number is `S.lib.conditions.pass(voice)`. No accessor names it: the state is the voice's `v<i>_seq_direction` while the patterns play, with `missteps` for a voice whose `v<i>_seq_misstep` is above 0.
+- **State:** each voice's `play.voices[voice]` (local): `last` (the step taken last, nil at a start), `taken` (the steps taken in the pass), `pass_length`, `heading` (ping-pong's way) and `way` (the direction of the step taken last, 3.9), all set by `start_position` and moved by `take_position` (and `ping_pong_step`); `way` is the pass's own state, not a second record of the param: it is a past value of `v<i>_seq_direction`, which no other field of the pass can give back once the param has changed; the pass number is `S.lib.conditions.pass(voice)`. No accessor names it: the state is the voice's `v<i>_seq_direction` while the patterns play, with `missteps` for a voice whose `v<i>_seq_misstep` is above 0.
 - **Invariant:** none: every combination of the fields is one the next step can take on from (a reverse pass cut mid-pass may stand above its length, ruled to stand in 3.7); the play state's is `pattern clock`'s.
 - **Test:** `test/unit/sequencer_test.lua`: "position and pass: reverse + to forward" (one test a row), and "the pass count moves once a wrap: a 1:2 step plays on every second pass through a direction change".
 
@@ -55,7 +55,7 @@ Each state is voice 1 alone with every step set, playing: `forward` and `reverse
 | `ping-pong` | `to forward` | `forward` | the count becomes 5: `6 7 8`, then pass 3 at `1` |
 | `ping-pong` | `to reverse` | `reverse` | the count becomes 4: `4 3 2 1`, then pass 3 at `8` |
 | `ping-pong` | `length 4` | `ping-pong` | the leg down goes on to `1`, then turns at 4: `2 3 4 3 2 1` |
-| `missteps` | `length 4` | `missteps` | the length waits: the sixth step wraps by 6 (`6`), the next pass's by 4 |
+| `missteps` | `length 4` | `missteps` | the length waits: the sixth step wraps by 6 (`6`), the next pass's by 4; known #961: the seventh, a misstep up from 6 at the start of a pass of 4, lands on `3`, neither next to 6 nor the wrap's `1` (the row asserts it until a ruling) |
 | `missteps` | `to forward` | `missteps` | no change: `6`, then pass 2 at `1` |
 | `missteps` | `to reverse` | `missteps` | the count becomes 2 (four steps left to step 1), each step a misstep up: `6 1 2 3`, then pass 2 |
 
