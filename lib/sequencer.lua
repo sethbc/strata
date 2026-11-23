@@ -1844,5 +1844,40 @@ return function(S)
     return clock_problem(S.pattern_clock, "the transport's clock")
   end)
 
+  -- 3.9 (#919): what a step holds on its voice ends together. Stopped, no
+  -- voice holds a step's overrides, step, chord, region, slice or begun
+  -- inputs; a region's end flag goes with its region, and a step slice is
+  -- the last played step's. gate_sent outlives a stop (the engine keeps
+  -- gateSeconds, #639): it holds only voices and gate lengths gate_seconds gives
+  local held_tables = {{"overrides", overrides}, {"last_played", last_played}, {"chords", chords},
+    {"step_regions", step_regions}, {"step_slices", step_slices}, {"step_region_to_end", step_region_to_end},
+    {"stepping", stepping}}
+  S.register_invariant("step holds", function()
+    if not S.pattern_playing then
+      for _, entry in ipairs(held_tables) do
+        local voice_idx = next(entry[2])
+        if voice_idx ~= nil then
+          return "stopped, but " .. entry[1] .. "[" .. tostring(voice_idx) .. "] is " .. tostring(entry[2][voice_idx])
+        end
+      end
+    end
+    for voice_idx = 1, NUM_VOICES do
+      if step_region_to_end[voice_idx] ~= nil and step_regions[voice_idx] == nil then
+        return "step_region_to_end[" .. voice_idx .. "] is " .. tostring(step_region_to_end[voice_idx]) .. " with no region"
+      end
+      local slice = step_slices[voice_idx]
+      if slice and slice.step ~= last_played[voice_idx] then
+        return "step_slices[" .. voice_idx .. "] is step " .. tostring(slice.step) .. "'s, but the last played is "
+          .. tostring(last_played[voice_idx])
+      end
+    end
+    for voice_idx, seconds in pairs(gate_sent) do
+      if not valid_voice(voice_idx) or type(seconds) ~= "number" or seconds < SEQ.gate_seconds[1]
+          or seconds > SEQ.gate_seconds[2] then
+        return "gate_sent[" .. tostring(voice_idx) .. "] is " .. tostring(seconds) .. ", no voice's gate length"
+      end
+    end
+  end)
+
   return M
 end

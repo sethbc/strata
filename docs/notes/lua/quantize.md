@@ -8,6 +8,36 @@
 - `PARAM_COUNT` is the number of params `add_params` adds (1): `lib/sequencer.lua`'s `strata_seq` group counts it in its size and calls `add_params` for its fifth param (plan item 11), so the group holds its seven params, `quantize_actions` fifth.
 - Cleanup step 97 cancels every waiting action and every retired clock, and nothing more (the flashes' own step, 140, ends the header's flash).
 
+## Machines
+
+### quantize
+- **State:** per key, its waiting action (`M.actions[key]`, read with `S.lib.quantize.waiting(key)`) and the clocks of dropped actions left to their resume (`M.retired`): `idle`, `waiting` or `retired`. What a waiting action does is its function's own: a freeze key's is a set of the value its press asked for (`docs/notes/lua/freeze.md`, freeze key), the play key's the patterns' start (`docs/notes/lua/sequencer.md`, pattern clock).
+- **Invariant:** `quantize`: every waiting action's clock runs and is not retired; every retired clock runs until its resume.
+- **Test:** `test/unit/quantize_test.lua`: "quantize: idle + schedule" (one test a row: `quantize_actions` on bar, a probe key, each state entered at beat 1.5; `retired` is a waiting action dropped 1/64 beat before its bar). Each row's check runs past the bar and counts the action's runs.
+
+The clock is this file's own (not `S.lib.clocks`): `schedule` starts it on `clock.sync(beats)`; at its wake it runs the action only while that is still the key's (`M.actions[key]`), else ends, forgetting its retired mark. Every cell is a row.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `idle` | `schedule` | `waiting` | the header flashes `<label> at bar`; it runs on the bar |
+| `idle` | `schedule, off` | `idle` | it runs at once |
+| `idle` | `cancel` | `idle` | nothing waits: false |
+| `idle` | `cancel near the bar` | `idle` | nothing waits: false |
+| `idle` | `the bar` | `idle` | nothing |
+| `idle` | `cleanup` | `idle` | nothing |
+| `waiting` | `schedule` | `waiting` | the old one canceled (far from its bar); the new one runs on the bar |
+| `waiting` | `schedule, off` | `idle` | the old one canceled; the new one runs at once |
+| `waiting` | `cancel` | `idle` | its clock canceled at once, its flash ended |
+| `waiting` | `cancel near the bar` | `retired` | its resume may be posted: the clock is left to wake and end, running nothing (#626) |
+| `waiting` | `the bar` | `idle` | it runs once |
+| `waiting` | `cleanup` | `idle` | its clock canceled |
+| `retired` | `schedule` | `waiting` | the new one runs on the bar; the retired clock ends there |
+| `retired` | `schedule, off` | `retired` | it runs at once |
+| `retired` | `cancel` | `retired` | nothing waits |
+| `retired` | `cancel near the bar` | `retired` | nothing waits |
+| `retired` | `the bar` | `idle` | the retired clock ends, running nothing |
+| `retired` | `cleanup` | `idle` | the retired clock canceled |
+
 ## Owns
 
 `lib/quantize.lua` (`S.lib.quantize`, 3.4, packages 0a and 1f):

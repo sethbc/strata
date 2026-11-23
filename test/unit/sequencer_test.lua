@@ -4011,8 +4011,9 @@ end)
 -- Voice 1 (running) reading buffer 1: 2 s (96000 frames, its peaks read) cut
 -- in count equal slices (default 4), v1_slices at option (1 off, 2 one, 3
 -- overlap); a 120 BPM clock, so a 1/16 step is 0.125 s
-local function sliced_setup(option, count)
-  local context, S = setup()
+-- Voice 1 of a loaded script reads buffer 1 (2 s) cut into count slices
+-- (4), with the slices option given (1 off, 2 one, 3 overlap)
+local function slice_voice_1(context, S, option, count)
   load_buffer(1, context.audio_dir .. "loop.wav")
   context.polls.fire("bufferState", context.polls.buffer_state_value(1, S.buffers[1].loads_sent, 2))
   local folder = S.lib.scenes.scene_data_dir
@@ -4026,6 +4027,11 @@ local function sliced_setup(option, count)
   S.lib.slices.make(1)
   params:set("v1_slices", option)
   context.clear_engine_calls()
+end
+
+local function sliced_setup(option, count)
+  local context, S = setup()
+  slice_voice_1(context, S, option, count)
   return context, S
 end
 
@@ -4457,11 +4463,31 @@ do
     end
   end
 
+  -- math.random(n) answers from RANDOM_DRAWS in turn (folded into 1..n),
+  -- math.random() the real one; put back as missteps_up's is
+  -- math.random(n) answers from RANDOM_DRAWS in turn (folded into 1..n);
+  -- math.random() answers misstep_draw (as missteps_up's draw), or the real
+  -- one without it. Put back as missteps_up's is
+  local RANDOM_DRAWS = {5, 2, 7, 4, 1, 8, 3, 6}
+  local function random_draws(context, misstep_draw)
+    local real, init_at, index = math.random, init, 0
+    context.real_random = real
+    math.random = function(...)
+      if init ~= init_at then math.random = real; return real(...) end
+      local count, n = select("#", ...), ...
+      if count == 0 and misstep_draw then return misstep_draw end
+      if count ~= 1 then return real(...) end
+      index = index % #RANDOM_DRAWS + 1
+      return (RANDOM_DRAWS[index] - 1) % n + 1
+    end
+  end
+
   -- Voice 1 at length, in direction, playing for taken steps
   local function playing(context, length, direction, taken)
     local S = local_value("S")
     voice_1_only(S, length)
     params:set("v1_seq_direction", DIRECTION[direction])
+    if not context.real_random then random_draws(context) end
     context.played = pass_output(S)
     pattern_clock_start()
     run_steps(context, taken)
@@ -4484,16 +4510,20 @@ do
       forward = function(context) playing(context, 8, "forward", 3) end,        -- 1 2 3
       reverse = function(context) playing(context, 8, "reverse", 3) end,        -- 8 7 6
       ["ping-pong"] = function(context) playing(context, 8, "ping-pong", 11) end,  -- 1 .. 8 7 6 5
+      -- random at length 8, its draws RANDOM_DRAWS: 5 2 7
+      random = function(context) playing(context, 8, "random", 3) end,
       -- forward at length 6, every step a misstep up: 1 2 3 4 5
       missteps = function(context)
         params:set("v1_seq_misstep", 100)
-        missteps_up(context)
+        random_draws(context, 0.75)
         playing(context, 6, "forward", 5)
       end,
     },
     events = {
       ["to forward"] = function() params:set("v1_seq_direction", DIRECTION.forward) end,
       ["to reverse"] = function() params:set("v1_seq_direction", DIRECTION.reverse) end,
+      ["to ping-pong"] = function() params:set("v1_seq_direction", DIRECTION["ping-pong"]) end,
+      ["to random"] = function() params:set("v1_seq_direction", DIRECTION.random) end,
       -- a shorter length: under the steps taken, it waits for the pass's end
       ["length 4"] = function() params:set("v1_seq_length", 4) end,
     },
@@ -4525,9 +4555,93 @@ do
       {"missteps", "to forward", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 2 2 2 2", 5)},
       -- reverse's count: the steps left to step 1 (four), each a misstep up
       {"missteps", "to reverse", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 1 1 1 2", 5)},
+      {"forward", "to ping-pong", "ping-pong", check = plays("1 2 3 4 5 6 7 8 7 6 5 4 3 2 1",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2", 12)},
+      {"forward", "to random", "random", check = plays("1 2 3 5 2 7 4 1 8 3 6 5 2 7 4",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2", 12)},
+      -- ping-pong's way is still up (reverse never turned it): it turns at 8
+      {"reverse", "to ping-pong", "ping-pong", check = plays("8 7 6 7 8 7 6 5 4 3 2 1 2 3 4",
+        "1 1 1 1 1 2 2 2 2 2 2 2 3 3 3", 12)},
+      {"reverse", "to random", "random", check = plays("8 7 6 5 2 7 4 1 8 3 6 5 2 7 4",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2", 12)},
+      {"ping-pong", "to ping-pong", "ping-pong", check = plays("1 2 3 4 5 6 7 8 7 6 5 4 3 2 1 2 3 4 5 6 7 8 7",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 3 3 3 3 3 3 3 4", 12)},
+      {"ping-pong", "to random", "random", check = plays("1 2 3 4 5 6 7 8 7 6 5 5 2 7 4 1 8 3 6 5 2 7 4",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 3 3 3 3 3 3 3", 12)},
+      {"random", "to forward", "forward", check = plays("5 2 7 8 1 2 3 4 5 6 7 8 1 2 3",
+        "1 1 1 1 2 2 2 2 2 2 2 2 3 3 3", 12)},
+      {"random", "to reverse", "reverse", check = plays("5 2 7 6 5 4 3 2 1 8 7 6 5 4 3",
+        "1 1 1 1 1 1 1 1 1 2 2 2 2 2 2", 12)},
+      {"random", "to ping-pong", "ping-pong", check = plays("5 2 7 8 7 6 5 4 3 2 1 2 3 4 5",
+        "1 1 1 1 2 2 2 2 2 2 2 3 3 3 3", 12)},
+      {"random", "to random", "random", check = plays("5 2 7 4 1 8 3 6 5 2 7 4 1 8 3",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2", 12)},
+      {"random", "length 4", "random", check = plays("5 2 7 4 1 4 3 2 1 2 3 4 1 4 3",
+        "1 1 1 1 2 2 2 2 3 3 3 3 4 4 4", 12)},
+      -- today's behavior, reported for an issue (h.transition_table takes
+      -- no known = 0): in ping-pong a misstep that wraps (6 to 1) neither
+      -- turns nor ends the pass, so with every step a misstep it never ends
+      {"missteps", "to ping-pong", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4 5 6 1 2 3 4 5",
+        "1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1", 12)},
+      {"missteps", "to random", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4 5 6 1 2 3 4 5",
+        "1 1 1 1 1 1 2 2 2 2 2 2 3 3 3 3 3", 12)},
     },
     notes = {"docs/notes/lua/sequencer.md", "position and pass"},
   })
+
+  -- The rule's closed forms at every count of steps taken, 1 to 7, at
+  -- length 8 (design section 5): forward for k steps, then reverse, plays
+  -- k - 1 down to 1 and pass 2 from 8; reverse for k, then forward, plays
+  -- 10 - k up to 8 and pass 2 from 1; a length of 4 applies at once under
+  -- 4 steps taken and at the pass's end from 4 on
+  test("position and pass: a direction change and a shorter length at every count of steps taken", function()
+    -- from up to to, or down with by -1 (empty when it is passed already)
+    local function range(from, to, by)
+      local list = {}
+      for step = from, to, by or 1 do list[#list + 1] = step end
+      return list
+    end
+    local function joined(...)
+      local list = {}
+      for _, part in ipairs({...}) do
+        for _, step in ipairs(part) do list[#list + 1] = step end
+      end
+      return list
+    end
+    local function run(direction, taken, event, more)
+      local context = load_strata(); finish_startup(context)
+      local S = local_value("S")
+      voice_1_only(S, 8)
+      params:set("v1_seq_direction", DIRECTION[direction])
+      local played = pass_output(S)
+      pattern_clock_start()
+      run_steps(context, taken)
+      event()
+      run_steps(context, more)
+      pattern_clock_stop()
+      return played
+    end
+    local function to(direction) return function() params:set("v1_seq_direction", DIRECTION[direction]) end end
+    local function length_4() params:set("v1_seq_length", 4) end
+    -- each case: its first pass's steps, then pass 2's first two
+    local cases = {}
+    for k = 1, 7 do
+      table.insert(cases, {"forward", k, "to reverse", to("reverse"), joined(range(1, k), range(k - 1, 1, -1)), {8, 7}})
+      table.insert(cases, {"reverse", k, "to forward", to("forward"), joined(range(8, 9 - k, -1), range(10 - k, 8)), {1, 2}})
+      table.insert(cases, {"forward", k, "length 4", length_4, range(1, k < 4 and 4 or 8), {1, 2}})
+      table.insert(cases, {"reverse", k, "length 4", length_4, range(8, k < 4 and 5 or 1, -1), {4, 3}})
+    end
+    for _, case in ipairs(cases) do
+      local first, second = case[5], case[6]
+      local played = run(case[1], case[2], case[4], #first - case[2] + #second)
+      local steps, passes = {}, {}
+      for index = 1, #first do steps[#steps + 1], passes[#passes + 1] = first[index], 1 end
+      for index = 1, #second do steps[#steps + 1], passes[#passes + 1] = second[index], 2 end
+      local what = case[1] .. " for " .. case[2] .. ", then " .. case[3]
+      assert_equal(table.concat(played.steps, " "), table.concat(steps, " "), what .. ": the steps")
+      assert_equal(table.concat(played.passes, " "), table.concat(passes, " "), what .. ": the passes")
+    end
+  end)
 
   -- the pass count read by a condition: step 1 at 1:2 plays on the odd
   -- passes only, through each change
@@ -4635,5 +4749,390 @@ test("restart_voice while stopped does nothing and breaks no invariant", functio
   assert_equal(#context.calls_named("retrigger"), 0, "nothing plays")
   assert_equal(#context.calls_named("voiceOn"), 0, "nothing starts")
 end)
+
+
+-- 3.9 (#919, package 2d): a step's holds on its voice. The tables are
+-- lib/sequencer.lua's locals: a test reaches one among the upvalues of the
+-- voices output's play and of the functions it calls
+local function sequencer_local(S, name)
+  local seen = {}
+  local function search(fn, depth)
+    if seen[fn] or depth > 4 then return nil end
+    seen[fn] = true
+    local index = 1
+    while true do
+      local upvalue_name, value = debug.getupvalue(fn, index)
+      if not upvalue_name then return nil end
+      if upvalue_name == name then return value end
+      if type(value) == "function" then
+        local found = search(value, depth + 1)
+        if found ~= nil then return found end
+      end
+      index = index + 1
+    end
+  end
+  for _, output in ipairs(S.registry.step_outputs) do
+    if output.name == "voices" then
+      local found = search(output.play, 1)
+      assert_true(type(found) == "table", "lib/sequencer.lua's " .. name .. " is reached")
+      return found
+    end
+  end
+  error("no voices output")
+end
+
+-- The step holds invariant's message for the script loaded last, or nil
+local function step_holds_problem()
+  for _, line in ipairs(h.check_invariants()) do
+    if line:find("^step holds: ") then return line end
+  end
+  return nil
+end
+
+test("step holds: the invariant names each hold it forbids", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  h.allow_broken_invariants("the test breaks step holds on purpose")
+  assert_equal(step_holds_problem(), nil, "a fresh script holds")
+  -- stopped: every hold of a step is empty
+  local held = {overrides = {}, last_played = 3, chords = {}, step_regions = {0, 0.25}, step_slices = {slice = 1, step = 3},
+    step_region_to_end = false, stepping = {}}
+  for _, name in ipairs({"overrides", "last_played", "chords", "step_regions", "step_slices", "step_region_to_end", "stepping"}) do
+    local tables = sequencer_local(S, name)
+    tables[2] = held[name]
+    local problem = step_holds_problem()
+    assert_true(problem ~= nil and problem:find(name .. "[2]", 1, true) ~= nil,
+      "stopped with " .. name .. "[2] set: " .. tostring(problem))
+    tables[2] = nil
+    assert_equal(step_holds_problem(), nil, name .. " cleared again")
+  end
+  -- playing: a region's end flag needs its region, a slice its step
+  pattern_clock_start()
+  local regions, to_end = sequencer_local(S, "step_regions"), sequencer_local(S, "step_region_to_end")
+  to_end[4] = true
+  assert_true((step_holds_problem() or ""):find("step_region_to_end[4]", 1, true), "an end flag with no region")
+  regions[4] = {0, 0.25}
+  assert_equal(step_holds_problem(), nil, "with its region")
+  local slices, last = sequencer_local(S, "step_slices"), sequencer_local(S, "last_played")
+  slices[5], last[5] = {slice = 2, step = 7, rings = false}, 6
+  assert_true((step_holds_problem() or ""):find("step_slices[5]", 1, true), "a slice of a step that was not the last played")
+  last[5] = 7
+  assert_equal(step_holds_problem(), nil, "the last played step's slice")
+  pattern_clock_stop()
+  assert_equal(step_holds_problem(), nil, "a stop ends them all")
+  -- gate_sent outlives a stop (the engine keeps gateSeconds, #639), but
+  -- holds only voices and gate lengths gate_seconds can give
+  local gates = sequencer_local(S, "gate_sent")
+  gates[1] = 0.25
+  assert_equal(step_holds_problem(), nil, "a gate length sent, kept while stopped")
+  for _, bad in ipairs({{S.constants.NUM_VOICES + 1, 0.25}, {1, 0}, {1, "0.25"}}) do
+    gates[1] = nil
+    gates[bad[1]] = bad[2]
+    assert_true(step_holds_problem() ~= nil, "gate_sent[" .. tostring(bad[1]) .. "] = " .. tostring(bad[2]))
+    gates[bad[1]] = nil
+  end
+end)
+
+
+-- 3.9 (#919): the slice decision, voice 1 reading a slot of four slices
+-- (each a quarter, 2 s long in one shot at buf_scan 0.25), the patterns
+-- playing. A state is the voice's option ("one" stands for one or off: a
+-- step plays its slice on both alike), whether another owner holds slot 1
+-- (MIDI's note 60, its key down), whether the next step has a chord ({0, 4})
+-- and whether an earlier step's slice rings on the own note to its end.
+-- Step 1 has played (slice 1 in the rings state, else plain); steps 2 and 3
+-- hold slice 2 (a quarter on). The event is step 2's first hit; each row's
+-- check asserts where the slice played and what the hit sent
+do
+  local SLICE_OPTION = {one = 2, overlap = 3}
+  local SLICE_2 = "0.25, 0.25"  -- slice 2's start and length, as the engine is sent them
+
+  local function slice_state(option, held, chord, rings)
+    return function(context)
+      local S = local_value("S")
+      slice_voice_1(context, S, SLICE_OPTION[option])
+      params:set("v1_scan_mode", 3); params:set("v1_buf_scan", 0.25)  -- one shot
+      local seq = S.lib.sequencer
+      for step = 1, 3 do S.patterns[1][step] = 15 end
+      if rings then seq.set_step_attr(1, 1, "slice", 1) end
+      for step = 2, 3 do
+        seq.set_step_attr(1, step, "slice", 2)
+        if chord then seq.set_step_attr(1, step, "notes", {0, 4}) end
+      end
+      if held then midi_note(S, 1, 60) end
+      pattern_clock_start()
+      context.clear_engine_calls()
+    end
+  end
+
+  -- The script's own reading: the option, slot 1's note (held, not parked,
+  -- not the sequencer's, its key down), the next step's notes, and whether
+  -- the own region a step set plays to its end and has not yet
+  local function slice_state_of()
+    local S = local_value("S")
+    if not S.pattern_playing then return "stopped" end
+    local option = S.lib.slices.option(1)
+    option = option == "off" and "one" or option
+    local first = S.lib.notes.slots(1)[1]
+    if first and first.slot == 1 and first.held and not first.parked and first.owner ~= "seq"
+        and S.midi_state.held[1][first.key] then
+      return option .. ", held"
+    end
+    local next_step = S.lib.sequencer.sounding_step(1) % S.constants.PATTERN_LENGTH + 1
+    if S.lib.sequencer.step_attr(1, next_step, "notes") then return option .. ", chord" end
+    local region = S.lib.sequencer.playing_region(1)
+    if option == "overlap" and region and S.lib.notes.pass_seconds(1, region[2]) ~= nil then return "overlap, rings" end
+    return option .. ", plain"
+  end
+
+  -- What step 2's hit sent voice 1: its region messages, retriggers and note starts
+  local function slice_sent(context)
+    return region_texts(context, 0), #retriggers_of(context, 0), #note_calls(context, "noteOn", 0)
+  end
+
+  -- The own note took slice 2 for the hit, before its retrigger, with no node
+  local function on_own_note(context)
+    local regions, retriggers, ons = slice_sent(context)
+    assert_equal(regions, "setGrainParam(0, regionStart, 0.25) setGrainParam(0, regionLength, 0.25)", "slice 2 on the own note")
+    assert_true(first_call(context, "setGrainParam", 0) < first_call(context, "retrigger", 0), "before the hit")
+    assert_equal(retriggers, 1, "one retrigger")
+    assert_equal(ons, 0, "no node")
+    assert_equal(local_value("S").lib.notes.own_region(1)[1], 0.25, "the own region is slice 2")
+  end
+
+  -- A chord: the own note and the further note in its extra slot both carry slice 2
+  local function on_the_chord(context)
+    local S = local_value("S")
+    local regions, retriggers = slice_sent(context)
+    assert_equal(regions, "setGrainParam(0, regionStart, 0.25) setGrainParam(0, regionLength, 0.25) noteRegion(0, 1, "
+      .. SLICE_2 .. ")", "slice 2 on the own note and on the chord's second note")
+    assert_equal(retriggers, 1, "one retrigger")
+    assert_equal(S.lib.notes.find(1, "seq", 2), 2, "the chord's second note in slot 2")
+  end
+
+  -- Another owner holds slot 1: the own region stays MIDI's (none here)
+  local function own_region_kept(context)
+    local S = local_value("S")
+    assert_equal(S.lib.notes.own_region(1), nil, "no region on the own note, which MIDI holds")
+    assert_equal(#retriggers_of(context, 0), 1, "one retrigger")
+  end
+
+  local function then_stop(check)
+    return function(context)
+      check(context)
+      pattern_clock_stop()
+    end
+  end
+
+  h.transition_table({
+    name = "slice decision",
+    notes = {"docs/notes/lua/sequencer.md", "slice decision"},
+    states = {
+      ["one, plain"] = slice_state("one"),
+      ["one, chord"] = slice_state("one", false, true),
+      ["one, held"] = slice_state("one", true),
+      ["overlap, plain"] = slice_state("overlap"),
+      ["overlap, rings"] = slice_state("overlap", false, false, true),
+      ["overlap, chord"] = slice_state("overlap", false, true),
+      ["overlap, held"] = slice_state("overlap", true),
+    },
+    events = {
+      ["first hit"] = function(context) context.clock.advance_until(local_value("S").pattern_clocks[1]) end,
+    },
+    state_of = slice_state_of,
+    rows = {
+      {"one, plain", "first hit", "one, plain", check = then_stop(on_own_note)},
+      {"one, chord", "first hit", "one, chord", check = then_stop(on_the_chord)},
+      {"one, held", "first hit", "one, held", check = then_stop(function(context)
+        own_region_kept(context)
+        assert_equal(region_texts(context, 0), "", "the slice is dropped: no region sent")
+      end)},
+      -- the own note's slice plays to its end in one shot: step 3's will ring
+      {"overlap, plain", "first hit", "overlap, rings", check = then_stop(on_own_note)},
+      {"overlap, rings", "first hit", "overlap, rings", check = then_stop(function(context)
+        local S = local_value("S")
+        local regions, retriggers, ons = slice_sent(context)
+        assert_equal(regions, "noteRegion(0, 1, " .. SLICE_2 .. ")", "slice 2 in an extra slot")
+        assert_equal(retriggers, 0, "no retrigger: the ringing slice 1 is not restarted")
+        assert_equal(ons, 1, "the slice's start is the hit")
+        assert_equal(S.lib.notes.own_region(1)[1], 0, "the own note still plays slice 1")
+        assert_equal(S.lib.notes.find(1, "seq", "slice2"), 2, "step 2's slice in slot 2")
+      end)},
+      {"overlap, chord", "first hit", "overlap, chord", check = then_stop(on_the_chord)},
+      {"overlap, held", "first hit", "overlap, held", check = then_stop(function(context)
+        own_region_kept(context)
+        assert_equal(region_texts(context, 0), "noteRegion(0, 1, " .. SLICE_2 .. ")", "slice 2 in an extra slot")
+        assert_true(first_call(context, "retrigger", 0) < first_call(context, "noteOn", 0), "after the retrigger")
+        assert_equal(local_value("S").lib.notes.find(1, "seq", "slice2"), 2, "in slot 2")
+      end)},
+    },
+  })
+end
+
+
+-- 3.9 (#919): the voice hit, voice 3 (stopped at a start, or started by
+-- hand) with step 1 set and its gate one step long (0.125 s, the voice's own
+-- half a step), gated or not. The event is step 1's first hit (the patterns'
+-- start plays it at once); each row's check asserts voice 3's start, gate
+-- and hit messages in order
+do
+  local HIT_VOICE = 3
+
+  local function hit_state(running, gated)
+    return function(context)
+      local S = local_value("S")
+      if running then toggle_voice(HIT_VOICE) end
+      params:set("v3_seq_gate", gated and 2 or 1)
+      S.patterns[HIT_VOICE][1] = 15
+      S.lib.sequencer.set_step_attr(HIT_VOICE, 1, "gate", 1)
+      context.clear_engine_calls()
+    end
+  end
+
+  local function hit_state_of()
+    local S = local_value("S")
+    return (S.voices[HIT_VOICE].active and "running" or "stopped") .. ", "
+      .. (params:get("v3_seq_gate") == 2 and "gated" or "ungated")
+  end
+
+  -- Voice 3's voiceOn, gateSeconds (with its value) and retrigger, in order
+  local function hit_sends(expected)
+    return function(context)
+      local sent = {}
+      for _, call in ipairs(context.engine_calls) do
+        if call.args[1] == HIT_VOICE - 1 then
+          if call.name == "voiceOn" or call.name == "retrigger" then table.insert(sent, call.name) end
+          if call.name == "setGrainParam" and call.args[2] == "gateSeconds" then
+            table.insert(sent, string.format("gateSeconds %g", call.args[3]))
+          end
+        end
+      end
+      pattern_clock_stop()
+      assert_equal(table.concat(sent, ", "), expected, "voice 3's start, gate and hit")
+    end
+  end
+
+  h.transition_table({
+    name = "voice hit",
+    notes = {"docs/notes/lua/sequencer.md", "voice hit"},
+    states = {
+      ["stopped, ungated"] = hit_state(false, false),
+      ["stopped, gated"] = hit_state(false, true),
+      ["running, ungated"] = hit_state(true, false),
+      ["running, gated"] = hit_state(true, true),
+    },
+    events = {["first hit"] = function() pattern_clock_start() end},
+    state_of = hit_state_of,
+    rows = {
+      {"stopped, ungated", "first hit", "running, ungated", check = hit_sends("voiceOn")},
+      {"stopped, gated", "first hit", "running, gated",
+        check = hit_sends("gateSeconds 0.0625, voiceOn, gateSeconds 0.125, retrigger")},
+      {"running, ungated", "first hit", "running, ungated", check = hit_sends("retrigger")},
+      {"running, gated", "first hit", "running, gated", check = hit_sends("gateSeconds 0.125, retrigger")},
+    },
+  })
+end
+
+
+-- 3.9 (#919): the play state, with quantize_actions on bar and the MIDI
+-- clock source (the transport followed), voice 1's steps all set, each
+-- state entered at beat 1.5. A waiting start is the quantizer's action
+-- "patterns"; each row that leaves a start waiting, or drops one, runs the
+-- bar in its check and asserts what the bar does
+do
+  local PLAY_BAR = 4  -- quantize_actions' bar, in beats
+
+  local function to_beat(context, beat) context.clock.run_for((beat - clock.get_beats()) * clock.get_beat_sec()) end
+  local function the_bar(context) to_beat(context, (math.floor(clock.get_beats() / PLAY_BAR) + 1) * PLAY_BAR + 0.02) end
+
+  local function play_state(start)
+    return function(context)
+      local S = local_value("S")
+      params:set("quantize_actions", 3)
+      params:set("clock_source", CLOCK_SOURCE.midi)
+      for step = 1, 16 do S.patterns[1][step] = 15 end
+      to_beat(context, 1.5)
+      if start == "armed" then pattern_toggle() end
+      if start == "playing" then pattern_clock_start() end
+      context.clock_before = S.pattern_clock
+    end
+  end
+
+  local function play_state_of()
+    local S = local_value("S")
+    if S.pattern_playing then return "playing" end
+    return S.lib.quantize.waiting("patterns") and "armed" or "stopped"
+  end
+
+  -- After the bar the patterns are still as they are now: a dropped start never fires
+  local function bar_changes_nothing(context)
+    local S = local_value("S")
+    local playing = S.pattern_playing
+    the_bar(context)
+    assert_equal(S.pattern_playing, playing, "the bar starts nothing")
+    assert_true(not S.lib.quantize.waiting("patterns"), "no start waits")
+    assert_true(S.lib.ui_flash.text("header") ~= "play at bar", "the flash has gone")
+    pattern_clock_stop()
+  end
+
+  -- A start at step 1 now, from a fresh clock, that no waiting start
+  -- restarts at the bar
+  local function started_now(context)
+    local S = local_value("S")
+    assert_equal(S.lib.sequencer.sounding_step(), 1, "step 1 at once")
+    assert_true(S.pattern_clock ~= context.clock_before, "a new clock plays")
+    assert_true(not S.lib.quantize.waiting("patterns"), "no start waits")
+    local started = S.pattern_clock
+    the_bar(context)
+    assert_equal(S.pattern_clock, started, "the bar starts nothing again")
+    pattern_clock_stop()
+  end
+
+  h.transition_table({
+    name = "pattern clock",
+    notes = {"docs/notes/lua/sequencer.md", "pattern clock"},
+    states = {stopped = play_state(), armed = play_state("armed"), playing = play_state("playing")},
+    events = {
+      ["play key"] = function() pattern_toggle() end,
+      ["the bar"] = the_bar,
+      ["transport start"] = function() clock.transport.start() end,
+      ["transport stop"] = function() clock.transport.stop() end,
+      ["cleanup"] = function() cleanup() end,
+    },
+    state_of = play_state_of,
+    rows = {
+      {"stopped", "play key", "armed", check = function(context)
+        local S = local_value("S")
+        assert_equal(S.lib.ui_flash.text("header"), "play at bar", "the header says the start waits")
+        the_bar(context)
+        assert_equal(S.pattern_playing, true, "the bar starts the patterns")
+        assert_equal(S.lib.sequencer.sounding_step(), 1, "at step 1")
+        pattern_clock_stop()
+      end},
+      {"stopped", "the bar", "stopped", check = bar_changes_nothing},
+      {"stopped", "transport start", "playing", check = started_now},
+      {"stopped", "transport stop", "stopped", check = bar_changes_nothing},
+      {"stopped", "cleanup", "stopped", check = bar_changes_nothing},
+      {"armed", "play key", "stopped", check = bar_changes_nothing},
+      {"armed", "the bar", "playing", check = function(context)
+        assert_equal(local_value("S").lib.sequencer.sounding_step(), 1, "step 1 on the bar")
+        pattern_clock_stop()
+      end},
+      {"armed", "transport start", "playing", check = started_now},
+      {"armed", "transport stop", "stopped", check = bar_changes_nothing},
+      {"armed", "cleanup", "stopped", check = bar_changes_nothing},
+      {"playing", "play key", "stopped", check = bar_changes_nothing},
+      {"playing", "the bar", "playing", check = function(context)
+        local S = local_value("S")
+        assert_equal(S.pattern_clock, context.clock_before, "the same clock plays on")
+        assert_true(S.lib.sequencer.sounding_step() ~= 1, "and is not started again")
+        pattern_clock_stop()
+      end},
+      {"playing", "transport start", "playing", check = started_now},
+      {"playing", "transport stop", "stopped", check = bar_changes_nothing},
+      {"playing", "cleanup", "stopped", check = bar_changes_nothing},
+    },
+  })
+end
 
 end

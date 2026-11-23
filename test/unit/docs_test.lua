@@ -2601,7 +2601,6 @@ end)
 -- on gets its entry in the commit that registers it. The list only shrinks
 local UNTABLED_INVARIANTS = {
   "scene sequencer",  -- lib/scenes.lua
-  "pattern clock",  -- lib/sequencer.lua
   "midi ports",  -- lib/io/ports.lua
   "midi notes",  -- lib/midi_in.lua
   "scan holds",  -- lib/positions.lua
@@ -2614,7 +2613,6 @@ local UNTABLED_INVARIANTS = {
   "engine budget",  -- lib/engine_sync.lua
   "modal owner",  -- lib/ui/modal.lua
   "morph clock",  -- lib/morph.lua
-  "quantize",  -- lib/quantize.lua
   "gesture recorders",  -- lib/gestures.lua
   "macro apply", "macro learn",  -- lib/macros.lua
   "matrix learn",  -- lib/matrix.lua
