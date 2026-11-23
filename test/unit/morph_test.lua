@@ -589,9 +589,8 @@ test("an apply that raises after a stop from its own body forgets what it record
       end
       params:set("morph", 0.6); params:set("morph", 0.5)  -- a new clock, a move back to 0.5
     end
-    local results = table.pack(apply_entries(...))
+    apply_entries(...)  -- (it returns nothing)
     if stage == "stopped" then stage = "entries applied" end
-    return table.unpack(results, 1, results.n)
   end
   S.lib.scenes.set_value = function(id, value)
     if stage == "entries applied" then
