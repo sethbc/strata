@@ -712,4 +712,138 @@ test("turning the arpeggiator on moves held notes into the list with no off or o
   assert_equal(notes_sent(), "note_off 64", "E's lift: its one off")
 end)
 
+---------------------------------------------------------------------------
+-- 3.9 (package 2b): the arp list, a table (docs/notes/lua/arp.md). Voice 1
+-- runs; its own note is MIDI's key 1 at C (60), held in every state. `off`:
+-- the arpeggiator off, key 2 (E, 64) in an extra slot; `on, empty`: up,
+-- nothing in the list; `on, holding`: up, key 2 in the list. The state is
+-- read from the script (S.lib.arp.on and held); each row's check asserts
+-- the list's keys and the extra slots' keys, and what the event sent
+---------------------------------------------------------------------------
+local ARP_VOICE = 1
+
+local function arp_play(key, pitch)
+  return local_value("S").lib.notes.play(ARP_VOICE, {owner = "midi", key = key, pitch = pitch, velocity = 0.5,
+    park = true, set_own = function() end})
+end
+
+local function arp_enter(on, holding)
+  return function(context)
+    params:set("v1_arp", on and mode("up") or mode("off"))
+    assert_equal(arp_play(1, 60), 1, "the own note")
+    if holding ~= nil then arp_play(2, 64) end
+    context.set_time(util.time() + 0.1)
+    tick(context, local_value("S"))  -- settled: a held chord's list sent, nothing marked
+    context.clear_engine_calls()
+  end
+end
+
+local function arp_state()
+  local arp = local_value("S").lib.arp
+  if not arp.on(ARP_VOICE) then return "off" end
+  return #arp.held(ARP_VOICE) > 0 and "on, holding" or "on, empty"
+end
+
+local function keys_text(list)
+  local keys = {}
+  for _, entry in ipairs(list) do keys[#keys + 1] = tostring(entry.key) end
+  table.sort(keys)
+  return table.concat(keys, ",")
+end
+
+local function extra_keys(S)
+  local extras = {}
+  for _, used in ipairs(S.lib.notes.slots(ARP_VOICE)) do
+    if used.slot > 1 and used.held then extras[#extras + 1] = used end
+  end
+  return keys_text(extras)
+end
+
+-- A row's check: the list's keys and the extra slots' keys (sorted, "" for
+-- none), then more(context, S)
+local function arp_expect(list_keys, slot_keys, more)
+  return function(context)
+    local S = local_value("S")
+    assert_equal(keys_text(S.lib.arp.held(ARP_VOICE)), list_keys, "the list's keys")
+    assert_equal(extra_keys(S), slot_keys, "the extra slots' keys")
+    if more then more(context, S) end
+  end
+end
+
+local function sends_none(context) assert_equal(#context.engine_calls, 0, "nothing sent") end
+local function arp_on_sent(value)
+  return function(context)
+    assert_equal(table.concat(grain_values(context, ARP_VOICE, "arpOn"), ","), value, "arpOn sent")
+  end
+end
+local function cut_slot_2(context)
+  local offs = extra_calls(context, ARP_VOICE, "noteOff")
+  assert_true(#offs == 1 and offs[1].args[2] == 1 and offs[1].args[3] == 1, "slot 2 cut (noteOff with cut 1)")
+end
+-- the next LFO step sends the list once: expected, or nothing (nil)
+local function then_list(expected)
+  return function(context, S)
+    context.clear_engine_calls()
+    tick(context, S)
+    assert_list(context, ARP_VOICE, expected, "the list the next LFO step sends")
+  end
+end
+local function stopped(_, S) assert_true(not S.voices[ARP_VOICE].active, "the voice stopped") end
+
+h.transition_table({
+  name = "arp list",
+  notes = {"docs/notes/lua/arp.md", "arp list"},
+  states = {
+    ["off"] = arp_enter(false, true),
+    ["on, empty"] = arp_enter(true),
+    ["on, holding"] = arp_enter(true, true),
+  },
+  events = {
+    ["turned on"] = function() params:set("v1_arp", mode("up")) end,
+    ["turned off"] = function() params:set("v1_arp", mode("off")) end,
+    ["a further note"] = function() arp_play(3, 67) end,
+    ["release key 2"] = function() local_value("S").lib.notes.release(ARP_VOICE, "midi", 2) end,
+    ["the own note again"] = function() arp_play(1, 62) end,
+    ["the LFO step"] = function(context) tick(context, local_value("S")) end,
+    ["the voice's stop"] = function() toggle_voice(ARP_VOICE) end,
+  },
+  state_of = arp_state,
+  rows = {
+    {"off", "turned on", "on, holding", check = arp_expect("2", "", function(context, S)
+      cut_slot_2(context); arp_on_sent("1")(context)
+      assert_list(context, ARP_VOICE, {0, 4}, "the action sends the list at once")
+      then_list(nil)(context, S)
+    end)},
+    {"off", "turned off", "off", check = arp_expect("", "2", sends_none)},
+    {"off", "a further note", "off", check = arp_expect("", "2,3")},
+    {"off", "release key 2", "off", check = arp_expect("", "")},
+    {"off", "the own note again", "off", check = arp_expect("", "2")},
+    {"off", "the LFO step", "off", check = arp_expect("", "2", function(context)
+      assert_list(context, ARP_VOICE, nil, "no list sent")
+    end)},
+    {"off", "the voice's stop", "off", check = arp_expect("", "", stopped)},
+    {"on, empty", "turned on", "on, empty", check = arp_expect("", "", sends_none)},
+    {"on, empty", "turned off", "off", check = arp_expect("", "", arp_on_sent("0"))},
+    {"on, empty", "a further note", "on, holding", check = arp_expect("3", "", then_list({0, 7}))},
+    {"on, empty", "release key 2", "on, empty", check = arp_expect("", "", sends_none)},
+    {"on, empty", "the own note again", "on, empty", check = arp_expect("", "", then_list(nil))},
+    {"on, empty", "the LFO step", "on, empty", check = arp_expect("", "")},
+    {"on, empty", "the voice's stop", "on, empty", check = arp_expect("", "", stopped)},
+    {"on, holding", "turned on", "on, holding", check = arp_expect("2", "", sends_none)},
+    {"on, holding", "turned off", "off", check = arp_expect("", "", function(context, S)
+      arp_on_sent("0")(context)
+      assert_equal(#extra_calls(context, ARP_VOICE, "noteOn"), 0, "the list's note stays silent")
+    end)},
+    {"on, holding", "a further note", "on, holding", check = arp_expect("2,3", "", then_list({0, 4, 7}))},
+    -- the list is the set again: the next step sends it, empty here (the default set's)
+    {"on, holding", "release key 2", "on, empty", check = arp_expect("", "", then_list({}))},
+    {"on, holding", "the own note again", "on, holding", check = arp_expect("2", "", then_list({0, 2}))},
+    {"on, holding", "the LFO step", "on, holding", check = arp_expect("2", "", function(context)
+      assert_list(context, ARP_VOICE, nil, "the list the engine has is unchanged: none sent")
+    end)},
+    {"on, holding", "the voice's stop", "on, empty", check = arp_expect("", "", stopped)},
+  },
+  impossible = {},
+})
+
 end

@@ -33,26 +33,9 @@
 ### engine budget
 - **State:** the local `budget` (`window`, the current window's index; `sent`, its count; `pending[id]` and `order`, the waiting values and the order their ids first waited; `failed`, the ids whose waiting value's sender raised) and `S.engine_budget_clock`, the flush clock; read with `M.budget_state()` and `M.expected_value(id)`. The states: `idle` (nothing waits, no clock), `waiting` (values wait, the clock runs) and `clock to its wake` (the clock runs on with nothing waiting, to the next window's start, where it ends: #654).
 - **Invariant:** `engine budget`: a value waits only while the flush clock runs, the clock is a live coroutine, and every waiting id has a value.
-- **Test:** `test/unit/engine_sync_test.lua`: "a deferrable send past the window's budget waits with its newest value", "a clock in the flush clock's tick that empties the waiting list leaves the flush clock to end at its wake (#654)", "a value that waits while the flush clock runs on idle goes at its wake, from the same clock (#654)", "count_sends enters direct sends in the budget's window". A table and no transition test: the contract (The send budget, below) is the specification.
+- **Test:** `test/unit/engine_sync_test.lua`: "a deferrable send past the window's budget waits with its newest value", "a clock in the flush clock's tick that empties the waiting list leaves the flush clock to end at its wake (#654)", "a value that waits while the flush clock runs on idle goes at its wake, from the same clock (#654)", "count_sends enters direct sends in the budget's window".
 
-A send with room is any send outside `deferrable`, one inside it the window has room for, and one that reaches no engine (recorded, never counted); `count_sends` only fills the window. A new window is entered by its first send or by the clock's wake, and its first sends are the waiting values, oldest first, as far as the window goes. Impossible: the clock's wake in `idle` (no clock runs), and nothing waits in `clock to its wake` for a send at once to drop.
-
-| State | Event | Next | Effect |
-|---|---|---|---|
-| `idle` | `a send with room` | `idle` | delivered and counted, its id's waiting value (none) dropped |
-| `idle` | `a deferrable send past the room` | `waiting` | its value waits under its id; the flush clock starts, asleep to the next window's start |
-| `idle` | `cleanup` | `idle` | nothing waits, no clock |
-| `waiting` | `a deferrable send past the room` | `waiting` | the id's value waits, the newest winning, in its first place |
-| `waiting` | `a send at once of the last waiting id` | `clock to its wake` | delivered; its older waiting value dropped; the clock is left to its wake |
-| `waiting` | `a new window's first send, all fit` | `clock to its wake` | the waiting values go first, then the send |
-| `waiting` | `a new window's first send, more than fits` | `waiting` | what fits goes; the rest wait for the next window |
-| `waiting` | `the clock's wake, all fit` | `idle` | the window entered, every waiting value sent; the clock finds nothing more and ends |
-| `waiting` | `the clock's wake, more than fits` | `waiting` | what fits goes; the clock sleeps to the next window |
-| `waiting` | `cleanup` | `idle` | the waiting values dropped, never sent; the clock canceled (the one cancel, #461) |
-| `clock to its wake` | `a send with room` | `clock to its wake` | delivered |
-| `clock to its wake` | `a deferrable send past the room` | `waiting` | waits for this clock's wake: never a second clock |
-| `clock to its wake` | `the clock's wake, nothing waits` | `idle` | the clock ends at its own wake, never canceled (#654) |
-| `clock to its wake` | `cleanup` | `idle` | the clock canceled |
+No table yet: a value's path through the budget is the contract below (The send budget), and the modulation walk (3.9's package 3c) checks it against the engine calls.
 
 ## Owns
 
