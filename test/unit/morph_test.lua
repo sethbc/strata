@@ -447,6 +447,40 @@ test("the morph clock stopped as its wake is posted: no clock error, and nothing
   assert_equal(S.morph_clock, nil, "and the clock rests")
 end)
 
+-- A stop from the morph clock's own body (review of 1q): reverb_mix's
+-- action, once armed, runs the PSET hook's stop inside the clock's apply
+-- (the helper neither retires nor cancels it) and moves the morph (a new
+-- clock, a move waiting). No shipped action does this; the test stands in
+-- for one. The stopped clock's next wait returns false at once: it ends,
+-- and the move is the new clock's
+test("a morph clock stopped from its own body applies nothing of the new clock's", function()
+  local context, S = two_scenes()
+  settle(context, 0.3)
+  local param = params:lookup_param("reverb_mix")
+  local action, armed = param.action, false
+  param.action = function(v)
+    if action then action(v) end
+    if armed then
+      armed = false
+      for _, hook in ipairs(S.registry.pset_hooks) do
+        if hook.name == "morph" then hook.read() end
+      end
+      params:set("morph", 0.8)
+    end
+  end
+  armed = true
+  params:set("morph", 0.5)  -- a move: the clock waits on its first sleep
+  local id = S.morph_clock
+  context.clock.advance_until(id, function() end)
+  assert_true(not armed, "the clock's apply set reverb_mix, and its action ran")
+  assert_near(params:get("reverb_mix"), 0.4, 1e-9, "only the stopped clock's own move (0.2 + 0.5 x 0.4)")
+  assert_equal(clock.threads[id], nil, "it ended")
+  assert_true(S.morph_clock ~= nil and S.morph_clock ~= id, "the new move waits on its own clock")
+  context.clock.run_for(0.5)
+  assert_near(params:get("reverb_mix"), 0.52, 1e-9, "which applies it (0.2 + 0.8 x 0.4)")
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+end)
+
 -- Scenes 1-4 with routing R1 to v1 size: each corner's {source, depth}
 -- (nil leaves the slot empty). The state is scene 1's
 local function routing_scenes(corners)

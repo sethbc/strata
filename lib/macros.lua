@@ -353,8 +353,9 @@ return function(S)
   -- applies once 1 / apply_hz has passed since its last apply; it sleeps to
   -- the next one due and ends when none waits, or at the first wake after
   -- it was stopped (its wait returns false; stopped from its own body, it
-  -- is no longer the apply clock's handle). An apply that raises prints
-  -- once and the others go on
+  -- is no longer the apply clock's handle, which the pass checks before
+  -- each macro and the loop before each pass). An apply that raises
+  -- prints once and the others go on
   local function start_clock()
     if S.macro_clock then return end
     local started = S.lib.clocks.run(function(handle)
@@ -362,6 +363,9 @@ return function(S)
       while handle == apply_clock.handle and any_pending() do
         local now, next_due = util.time(), nil
         for m = 1, NUM_MACROS do
+          -- stopped from its own body (an apply's target action): the
+          -- rest is the new clock's
+          if handle ~= apply_clock.handle then break end
           if applying.pending[m] then
             local due = (applying.last[m] or -math.huge) + 1 / MACROS.apply_hz
             if due <= now + MACROS.epsilon then
