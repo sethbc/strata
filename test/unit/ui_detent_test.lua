@@ -300,4 +300,118 @@ test("an encoder edit runs the touch hooks once; a detent the hold swallows runs
   assert_equal(#log, 1, "a plain set is no touch")
 end)
 
+-- #875: in the running script S.selected_voice changes only in
+-- select_voice_by (lib/ui/keys.lua). The other assignments are its
+-- initialization (lib/voices.lua's constructor) and the setups of the
+-- layout states of a page record or a voice-param record, which the layout
+-- tests and the page renders run, never the device. Each site by file and
+-- its enclosing functions, outside in: "constructor" is a module's
+-- `return function(S)`, "function" one with no name; a named one is the last
+-- part of its name, or the field it is assigned to (`setup = function`)
+local SELECTED_VOICE_SITES = {
+  ["lib/ui/keys.lua"] = {"constructor > select_voice_by"},
+  ["lib/voices.lua"] = {"constructor"},
+  ["lib/arp.lua"] = {"constructor > setup"},
+  ["lib/expression.lua"] = {"constructor > setup"},
+  ["lib/freeze.lua"] = {"constructor > setup"},
+  ["lib/grain.lua"] = {"constructor > setup"},
+  ["lib/history.lua"] = {"constructor > setup"},
+  ["lib/loops.lua"] = {"constructor > setup"},
+  ["lib/notes.lua"] = {"constructor > add_layout_state > setup"},
+  ["lib/positions.lua"] = {"constructor > setup"},
+  ["lib/scan.lua"] = {"constructor > setup"},
+  ["lib/slices.lua"] = {"constructor > setup"},
+  ["lib/variation.lua"] = {"constructor > setup"},
+  ["lib/voice_mix.lua"] = {"constructor > layout_state > setup"},
+  ["lib/pages/main.lua"] = {"constructor > layout_state > setup", "constructor > setup"},
+  ["lib/pages/voice.lua"] = {"constructor > layout_state > setup", "constructor > setup",
+    "constructor > open_picker", "constructor > type_pending_state > setup"},
+}
+
+-- Every assignment of S.selected_voice in one source, as the names of the
+-- functions it sits in (SELECTED_VOICE_SITES' form), in source order. The
+-- code is read with comments and strings blanked (sync_check's
+-- sanitize_lua), its blocks counted by keyword: function, do, if and repeat
+-- open one, end and until close it
+local function selected_voice_assignments(text)
+  local code = h.sync_check.sanitize_lua(text)
+  local events = {}
+  for at, word in code:gmatch("()%f[%w_]([%a_][%w_]*)") do
+    if word == "function" or word == "do" or word == "if" or word == "repeat" or word == "end" or word == "until" then
+      table.insert(events, {at = at, word = word})
+    end
+  end
+  for at, after in code:gmatch("()S%.selected_voice%s*=()") do
+    if code:sub(after, after) ~= "=" then table.insert(events, {at = at, assignment = true}) end
+  end
+  table.sort(events, function(a, b) return a.at < b.at end)
+  local blocks, found = {}, {}
+  for _, event in ipairs(events) do
+    if event.assignment then
+      local names = {}
+      for _, block in ipairs(blocks) do
+        if block ~= true then table.insert(names, block) end
+      end
+      table.insert(found, #names > 0 and table.concat(names, " > ") or "main chunk")
+    elseif event.word == "function" then
+      local own = code:match("^function%s+([%w_%.:]+)%s*%(", event.at)
+      local before = code:sub(math.max(1, event.at - 80), event.at - 1)
+      local name = own and own:match("([%w_]+)$") or before:match("([%w_]+)%s*=%s*$")
+        or (before:match("%f[%w_]return%s*$") and "constructor") or "function"
+      table.insert(blocks, name)
+    elseif event.word == "end" or event.word == "until" then
+      table.remove(blocks)
+    else
+      table.insert(blocks, true)
+    end
+  end
+  return found
+end
+
+test("S.selected_voice is assigned only by select_voice_by, at init and in layout states", function()
+  local problems, seen = {}, {}
+  for _, source in ipairs(h.read_lua_sources()) do
+    local allowed = {}
+    for _, site in ipairs(SELECTED_VOICE_SITES[source.path] or {}) do allowed[site] = true end
+    for _, site in ipairs(selected_voice_assignments(source.text)) do
+      if allowed[site] then seen[source.path .. ": " .. site] = true
+      else table.insert(problems, source.path .. ": S.selected_voice assigned in " .. site) end
+    end
+    if source.text:find("S%[%s*[\"']selected_voice[\"']%s*%]%s*=[^=]") or source.text:find("rawset%(%s*S%s*,%s*[\"']selected_voice") then
+      table.insert(problems, source.path .. ": S.selected_voice assigned by its key")
+    end
+  end
+  for path, sites in pairs(SELECTED_VOICE_SITES) do
+    for _, site in ipairs(sites) do
+      if not seen[path .. ": " .. site] then table.insert(problems, path .. ": no assignment left in " .. site .. " (remove it from the list)") end
+    end
+  end
+  table.sort(problems)
+  assert_true(#problems == 0, "S.selected_voice outside its allowed sites:\n" .. table.concat(problems, "\n"))
+end)
+
+test("the selected voice scan finds an assignment's functions and skips comments, strings and comparisons", function()
+  local found = selected_voice_assignments(table.concat({
+    "return function(S)",
+    "  local M = {}",
+    "  -- S.selected_voice = 2 (a comment)",
+    "  local text = \"S.selected_voice = 3\"",
+    "  if S.selected_voice == 1 then end",
+    "  S.selected_voice = 1",
+    "  for i = 1, 2 do",
+    "    table.insert(states, {name = 'x', setup = function() S.selected_voice = i end})",
+    "  end",
+    "  local function pick(d)",
+    "    if d then S.selected_voice = d end",
+    "    clock.run(function() S.selected_voice = 4 end)",
+    "  end",
+    "  function M.select(d) repeat S.selected_voice = d until true end",
+    "  return M",
+    "end",
+  }, "\n"))
+  assert_equal(table.concat(found, "; "),
+    "constructor; constructor > setup; constructor > pick; constructor > pick > function; constructor > select",
+    "the sites")
+end)
+
 end

@@ -9,7 +9,7 @@
 - Bounds-check every index (voice, scene, step, slot, grid coordinate) before indexing, so tables never grow by accident.
 - Cancel a running clock before starting its replacement.
 - Lua allows 200 locals in one function, and each file's main chunk and each module's constructor must keep at least 30 free (the locals probe, `docs/notes/test-harness/run-and-helpers.md`, Module safety nets; `strata.lua`'s main chunk uses 5). Group a feature's constants in one table (as `LFO_PAGE`, `GRID_LAYOUT`, `BUFFER_PAGE`, `FX_PAGE` and `BUFFER_SETTLE` do) rather than adding many `local`s, and split a module that runs short.
-- A state whose fields have illegal combinations has an invariant, registered with `S.register_invariant` in the module that owns the state. Nothing runs the invariants on the device; the test harness checks them after every unit test.
+- A state whose fields have illegal combinations has an invariant, registered with `S.register_invariant` in the module that owns the state. Nothing runs the invariants on the device; the test harness checks them after every unit test. Each is entered once, in a Machines entry of its module's notes (Registering an invariant, below).
 
 ## Owns
 
@@ -331,42 +331,21 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 ## Registering start and cleanup steps
 
 - **Registering a start step**: `S.register_start(S.constants.START_ORDER.<step>, fn)` in the module that owns the resource, next to its cleanup step, and one line in `START_ORDER` (`lib/constants.lua`) at a free order at its place in the sequence (spaced by 10; two steps never share one). init runs the steps after the params are added, so a step can read them. `init` itself is never edited. Add the step's effects to `start_steps()` in `test/unit/structure_test.lua`.
-- **Registering an invariant**: `S.register_invariant(name, fn)` in the module that owns the state, where it can see that state's private tables. `name` is a non-empty string no other invariant uses (a test failure names it); `fn()` returns nil while the invariant holds, else a string saying what is broken (which slot, key or field, and its value). `h.run_test` (`test/helpers.lua`) runs every registered invariant after each unit test that loaded the script, passed and reported no clock error, and fails the test that left one broken; nothing runs them on the device, so `fn` may be as thorough as the test needs. A test that breaks one on purpose calls `h.allow_broken_invariants(reason)`. Each task that fixes a state registers its invariant. The invariants registered today:
+- **Registering an invariant**: `S.register_invariant(name, fn)` in the module that owns the state, where it can see that state's private tables. `name` is a non-empty string no other invariant uses (a test failure names it); `fn()` returns nil while the invariant holds, else a string saying what is broken (which slot, key or field, and its value). `h.run_test` (`test/helpers.lua`) runs every registered invariant after each unit test that loaded the script, passed and reported no clock error, and fails the test that left one broken; nothing runs them on the device, so `fn` may be as thorough as the test needs. A test that breaks one on purpose calls `h.allow_broken_invariants(reason)`. Each task that fixes a state registers its invariant, and enters it once, in a Machines entry of its own module's notes, in the commit that registers it (3.9, design section 1, ruling B6); no table lists the invariants elsewhere.
+  - **The section**: a notes file whose module registers an invariant has a `## Machines` section, the one right after `## Must not break` (its second `##` heading), with one `###` entry a machine. A module whose notes are an index and topic files (`docs/notes/lua/scenes.md`, `docs/notes/lua/ui-core.md`) puts it in the topic file of the machine's part.
+  - **An entry**, in this order:
 
-  | Name | Module | Holds |
-  |------|--------|-------|
-  | `scene transition` | `lib/scenes.lua` | `S.scene_transition_active == (S.SCENE_TRANSITION.next_step_due ~= nil)`, `S.SCENE_TRANSITION.target`, `.step` and `.released` (3.8, a table) are set exactly while the flag is true, and `S.scene_transition_clock` is nil whenever the flag is false |
-  | `scene sequencer` | `lib/scenes.lua` | `S.scene_sequencer_recall_due` is true only while the sequencer is on, and `S.scene_sequencer_enabled == (S.scene_sequencer_clock ~= nil)` with that clock's coroutine not dead (#329) |
-  | `pattern clock` | `lib/sequencer.lua` | `S.pattern_playing == (S.pattern_clock ~= nil)` |
-  | `midi ports` | `lib/io/ports.lua` | a MIDI vport's `event` is the ports' dispatcher exactly while the port has a listener |
-  | `midi notes` | `lib/midi_in.lua` | a note is held on a voice (`S.midi_state.held`) exactly while some channel's note on maps it there (`note_voice`), and every `started` entry is a voice index set to true |
-  | `scan holds` | `lib/positions.lua` | a voice's scan is held exactly while it has a holder |
-  | `scenes prompt` | `lib/pages/scenes.lua` | `S.scenes_page.armed_slot` and `S.scenes_page.naming` are each nil or a whole scene number in 1..`NUM_SCENES`, and `naming` is set exactly while the page keeps an open name entry's callback |
-  | `grid keys` | `lib/grid/core.lua` | every consumed key and every key with a pending hold (`on_hold`) is a held key (`S.grid_held`), and a port has an attached device recorded (`attached_devices[port]`) exactly while it is attached (`S.grids[port]`) |
-  | `arc connection` | `lib/arc/core.lua` | `S.arc_connected == (S.arc_device ~= nil and S.arc_device.device ~= nil)` |
-  | `key presses` | `lib/ui/keys.lua` | every `S.key_press_alt[n]` has an `S.key_press_page[n]` |
-  | `buffer slots` | `lib/buffers.lua` | for every slot of `S.buffers`: `finishing` implies `recording`, `checking_from ~= nil` implies `confirm_since ~= nil`, and `settled_empty` and `loaded` are never both set; a name `take <number>` is the slot's own `take <n>`, and a scratch path `buf*.wav` is `buf<whole number>.wav` (#300); `start == sent_start` unless a start reload is pending (`start_reload_clocks[slot]`, #245) |
-  | `input level` | `lib/input_level.lua` | from the start step to cleanup, both input polls run (`amp_in_l`, `amp_in_r`; a poll a norns lacks is skipped) |
-  | `flash slots` | `lib/ui/flash.lua` | a flash slot with a text has a clock |
-  | `param turn` | `lib/ui/detent.lua` | `S.turning_param` is nil between events (a turn marks its param only while it sets it, #318) |
-  | `engine budget` | `lib/engine_sync.lua` | a value waits for the send budget only while its flush clock runs (`S.engine_budget_clock`, which may run on with nothing waiting to its next wake and ends there, never canceled while the script runs, #654), that clock's coroutine is not dead, and every waiting id has a value (3.4) |
-  | `modal owner` | `lib/ui/modal.lua` | no owner is on the modal stack twice, and every key down on an owner is on one that is pushed (3.4) |
-  | `morph clock` | `lib/morph.lua` | a morph move, a value left for the next apply or a waiting crossing (#653) always has `S.morph_clock` to apply it, and that clock's coroutine is not dead (3.4) |
-  | `quantize` | `lib/quantize.lua` | a quantized action waits (`S.lib.quantize.actions[key]`) exactly while its clock runs (3.4) |
-  | `gesture recorders` | `lib/gestures.lua` | at most one recorder records; pattern_time's `rec` is 1 exactly while its recorder records; a free loop's metro (`pattern.play`, with the metro itself running) or a quantized loop's clock (its coroutine alive) runs exactly while it plays, never both, and the right one for its loop; the 10-minute clock runs exactly while it records an event or more; it overdubs only while it plays; it is empty exactly when it holds no event and does not record; `gesture_<k>_play` is 1 exactly while it plays (3.4) |
-  | `macro apply` | `lib/macros.lua` | a macro waits for its apply exactly while the apply clock runs (`S.macro_clock`), and that clock's coroutine is not dead (3.4) |
-  | `macro learn` | `lib/macros.lua` | learn waits for a touch exactly while its timeout clock runs (`S.macro_learn_clock`) (3.4) |
-  | `matrix learn` | `lib/matrix.lua` | matrix learn waits for a touch exactly while its timeout clock runs (`S.matrix_learn_clock`) (3.4) |
-  | `zones editor` | `lib/ui/zones.lua` | the zones editor's learn waits exactly while its timeout clock is pending (`S.zones_learn_clock`, its coroutine alive) and the note tap is set, and only while the editor is open; the open editor's own owner is the modal one (or beneath SEQ's step editor), the closed editor's never (3.5) |
-  | `scale editor` | `lib/ui/scale_editor.lua` | the open scale and tuning editor's own owner is the modal one (or beneath SEQ's step editor), the closed editor's never; its cursor is on a row and a class, and a pending tuning choice is one of its choices (3.8) |
-  | `factory` | `lib/factory.lua` | a factory set's load clock (`S.factory_clock`) is a live coroutine while it is set; the open list's own owner is the modal one (or beneath SEQ's step editor), the closed list's never, and its cursor is on a set (3.8) |
-  | `voice picker` | `lib/ui/voice_picker.lua` | the open voice picker's own owner is the modal one (or beneath SEQ's step editor), the closed picker's never; its cursor is a row of its list; no key is held on a closed picker (3.8) |
-  | `lfo clock` | `lib/lfos.lua` | the LFO clock (`S.lfo_clock`) runs from its start step to cleanup, and only then (3.4) |
-  | `step editor` | `lib/pages/seq.lua` | the step editor is open exactly while its owner is the modal one (`S.lib.ui_modal.top()`) (3.4) |
-  | `notes` | `lib/notes.lua` | the note pool is a whole number in 0..`NOTE_POOL.max`, the extra notes held never exceed it, and a stopped voice holds none (3.5) |
-  | `arp` | `lib/arp.lua` | only a running arpeggiating voice holds notes in its list, at most `ARP.max_steps` - 1, each owner and key once and none also in a slot (3.8) |
-  | `rig` | `lib/io/rig.lua` | every rig setting holds a value of its spec (`RIG.specs`), and no other key is held (3.6) |
-  | `targets` | `lib/io/targets.lua` | every sounding target note names only registered targets (at least one), and no voice's id has two pending offs or an off for a note no longer sounding (3.6) |
-  | `midi out` | `lib/io/midi_out.lua` | no port has two MPE voices nor a plain voice's channel inside an MPE voice's zone on it, and no note or channel count is negative (3.6) |
-  | `remote` | `lib/io/remote.lua` | a remote grid or arc is attached (or, for the arc, followed unless a monome arc took over) exactly while its port's hello is held, on a claimed port; the midigrid is attached while held; the draw clock runs exactly while a remote device is attached (3.6) |
+    ```
+    ### <name>
+    - **State:** the fields that hold it, and the accessor that names it.
+    - **Invariant:** `<name>` (or "none", with the reason).
+    - **Two facts:** the field or flag, and the two facts it holds (only where one does).
+    - **Test:** `<test file>`: "<test name>".
+
+    | State | Event | Next | Effect |
+    |---|---|---|---|
+    ```
+
+    The heading is the machine's name, as a test reads it (`h.notes_table(path, "<name>")` returns the State, Event and Next of the first table under `### <name>`, backticks stripped). The State, Invariant and Test lines are required. The Invariant line begins with the registered names it enters, each in backticks (`` `a` ``, `` `a`, `b` `` or `` `a` and `b` ``), any text after them; or with `none`, and why (a machine that holds nothing illegal, or whose invariant is another machine's). A `- **Two facts:**` line names a field or flag that holds two facts (#948) and says both. The table is the machine's transitions, one row a state and event, with exactly the columns State, Event, Next and Effect; a machine with no table yet keeps its lines and one sentence saying why (a two-state flag needs none).
+  - **The test**: `test/unit/docs_test.lua`'s "every registered invariant has a Machines entry, and no name listed as untabled has one" loads the script and reads `S.registry.invariants` (never the source: `lib/arp.lua` passes its name as a constant), then every `- **Invariant:**` line under docs/notes/lua/. Each registered name is entered by an entry or listed in its `UNTABLED_INVARIANTS` (the 34 registered before 3.9, one line a module), never both; a name entered or listed must be registered; an Invariant line outside a Machines entry, an entry missing a required line and a table with other columns fail it. The list only shrinks: a package that enters a machine removes its names from it, and a new invariant is never added to it.
 - **Registering a cleanup step**: `S.register_cleanup(S.constants.CLEANUP_ORDER.<step>, fn)` in the module that starts the resource, and one line in `CLEANUP_ORDER` (`lib/constants.lua`) at a free order at its place in the sequence (orders are spaced by 10; two steps never share one). `cleanup()` itself is never edited.
