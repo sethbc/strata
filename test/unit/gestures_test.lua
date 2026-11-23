@@ -903,4 +903,182 @@ test("cleanup stops every recorder's metro and clock", function()
   context.clock.run_for(4)
 end)
 
+-- 3.9 (#948): the table of the gesture recorder, recorder 1 with a free
+-- loop of one reverb edit (playing on its metro), overdub the state beside
+-- playing. The limit is the cap the recorder meets: the 10-minute clock's
+-- wake where it runs (a recording with an event), else hand edits to
+-- GESTURES.max_events and one more (an overdub's cap; nothing records them
+-- in the other states). A load is a PSET read whose side file holds one
+-- stopped loop (a delay edit) for recorder 1; stop all is the cleanup
+-- step `gestures` (its clocks canceled, then every recorder stopped), the
+-- other caller of the PSET hook's before-read stop
+local GESTURE_TABLE = {pset = "strata-09"}
+
+local function recorder_state()
+  local recorder = local_value("S").gestures[1]
+  if recorder.state == "playing" and recorder.overdubbing then return "playing, overdubbing" end
+  return recorder.state
+end
+
+local function gesture_playing(context)
+  record(context, local_value("S").lib.gestures, 1, {{0.1, "reverb_mix", 1}}, 1)
+end
+
+-- Recorder 1's events, its play param and its playback: a metro exactly
+-- while it plays (a free loop), never a clock
+local function assert_recorder(count, playing, what)
+  local S = local_value("S")
+  local recorder = S.gestures[1]
+  assert_equal(recorder.pattern.count, count, what .. ": its events")
+  assert_equal(params:get("gesture_1_play"), playing and 1 or 0, what .. ": its play param")
+  assert_equal(recorder.pattern.metro.running == true, playing, what .. ": its metro")
+  assert_equal(recorder.clock, nil, what .. ": no clock (a free loop)")
+end
+
+local function assert_loaded_loop(what)
+  local recorder = local_value("S").gestures[1]
+  assert_recorder(1, false, what)
+  assert_equal(recorder.pattern.event[1].id, "delay_mix", what .. ": the file's loop")
+  assert_near(recorder.length_seconds, 2, 1e-9, what .. ": of 2 s")
+end
+
+h.transition_table({
+  name = "gesture recorder",
+  states = {
+    empty = function() end,
+    recording = function(context)
+      local_value("S").lib.gestures.press(1)
+      context.clock.run_for(0.1)
+      hand_edit("reverb_mix")
+    end,
+    playing = gesture_playing,
+    stopped = function(context)
+      gesture_playing(context)
+      local_value("S").lib.gestures.press(1)
+    end,
+    ["playing, overdubbing"] = function(context)
+      gesture_playing(context)
+      local_value("S").lib.gestures.overdub(1)
+    end,
+  },
+  events = {
+    press = function() local_value("S").lib.gestures.press(1) end,
+    clear = function() local_value("S").lib.gestures.clear(1) end,
+    ["play param 1"] = function() params:set("gesture_1_play", 1) end,
+    ["play param 0"] = function() params:set("gesture_1_play", 0) end,
+    ["the limit"] = function(context)
+      local S = local_value("S")
+      if S.gestures[1].limit_run then
+        context.clock.run_for(S.lib.gestures.GESTURES.max_seconds)
+        return
+      end
+      for n = 1, S.lib.gestures.GESTURES.max_events + 1 do
+        context.set_time(util.time() + 0.01)
+        hand_edit("reverb_mix", n % 2 == 1 and 1 or -1)
+      end
+    end,
+    ["a load"] = function(context)
+      local S = local_value("S")
+      local base = context.data_dir .. GESTURE_TABLE.pset
+      params:write(base .. ".pset")
+      assert_true(S.lib.data_files.write(base .. ".gestures.data", {version = 1, recorders = {
+        {quantize = "free", events = {{id = "delay_mix", value = 0.3}}, times = {2}}}}), "the side file")
+      params:read(base .. ".pset")
+    end,
+    ["stop all"] = function()
+      local S = local_value("S")
+      for _, step in ipairs(S.registry.cleanup) do
+        if step.order == S.constants.CLEANUP_ORDER.gestures then step.fn() end
+      end
+    end,
+  },
+  state_of = recorder_state,
+  rows = {
+    {"empty", "press", "recording", check = function()
+      assert_recorder(0, false, "a recording")
+      assert_equal(local_value("S").gestures[1].limit_run, nil, "no 10-minute clock before its first event")
+    end},
+    {"empty", "clear", "empty", check = function() assert_recorder(0, false, "an empty recorder cleared") end},
+    {"empty", "play param 1", "empty", check = function() assert_recorder(0, false, "play 1 on an empty recorder") end},
+    {"empty", "play param 0", "empty", check = function() assert_recorder(0, false, "play 0 on an empty recorder") end},
+    {"empty", "the limit", "empty", check = function() assert_recorder(0, false, "edits an empty recorder ignores") end},
+    {"empty", "a load", "stopped", check = function() assert_loaded_loop("an empty recorder loaded") end},
+    {"empty", "stop all", "empty", check = function() assert_recorder(0, false, "an empty recorder stopped") end},
+
+    {"recording", "press", "playing", check = function()
+      assert_recorder(1, true, "a recording ended by the key")
+      assert_equal(local_value("S").gestures[1].limit_run, nil, "its 10-minute clock stopped")
+    end},
+    {"recording", "clear", "empty", check = function()
+      assert_recorder(0, false, "a recording cleared")
+      assert_equal(local_value("S").gestures[1].limit_run, nil, "its 10-minute clock stopped")
+    end},
+    {"recording", "play param 1", "recording", check = function()
+      assert_equal(params:get("gesture_1_play"), 0, "the param goes back to the state")
+    end},
+    {"recording", "play param 0", "recording", check = function()
+      assert_equal(params:get("gesture_1_play"), 0, "the param stays 0")
+      assert_equal(local_value("S").gestures[1].pattern.count, 1, "the recording goes on")
+    end},
+    {"recording", "the limit", "playing", check = function()
+      local recorder = local_value("S").gestures[1]
+      assert_recorder(1, true, "a recording the 10-minute clock ended")
+      assert_near(recorder.length_seconds, local_value("S").lib.gestures.GESTURES.max_seconds, 1e-6, "a loop of 10 minutes")
+    end},
+    {"recording", "a load", "stopped", check = function() assert_loaded_loop("a recording replaced by a load") end},
+    {"recording", "stop all", "stopped", check = function()
+      assert_recorder(1, false, "a recording kept, stopped")
+      assert_equal(local_value("S").gestures[1].pattern.event[1].id, "reverb_mix", "with its event")
+    end},
+
+    {"playing", "press", "stopped", check = function() assert_recorder(1, false, "a loop stopped by the key") end},
+    {"playing", "clear", "empty", check = function() assert_recorder(0, false, "a playing loop cleared") end},
+    {"playing", "play param 1", "playing", check = function() assert_recorder(1, true, "play 1 on a playing loop") end},
+    {"playing", "play param 0", "stopped", check = function() assert_recorder(1, false, "play 0 stops it") end},
+    {"playing", "the limit", "playing", check = function()
+      assert_recorder(1, true, "a playing loop, not overdubbing, records no edit")
+    end},
+    {"playing", "a load", "stopped", check = function() assert_loaded_loop("a playing loop replaced by a load") end},
+    {"playing", "stop all", "stopped", check = function() assert_recorder(1, false, "a playing loop stopped") end},
+
+    {"stopped", "press", "playing", check = function() assert_recorder(1, true, "a stopped loop played by the key") end},
+    {"stopped", "clear", "empty", check = function() assert_recorder(0, false, "a stopped loop cleared") end},
+    {"stopped", "play param 1", "playing", check = function() assert_recorder(1, true, "play 1 plays it") end},
+    {"stopped", "play param 0", "stopped", check = function() assert_recorder(1, false, "play 0 on a stopped loop") end},
+    {"stopped", "the limit", "stopped", check = function() assert_recorder(1, false, "a stopped loop records no edit") end},
+    {"stopped", "a load", "stopped", check = function() assert_loaded_loop("a stopped loop replaced by a load") end},
+    {"stopped", "stop all", "stopped", check = function() assert_recorder(1, false, "a stopped loop stopped") end},
+
+    {"playing, overdubbing", "press", "stopped", check = function()
+      assert_recorder(1, false, "an overdub's loop stopped by the key")
+      assert_true(not local_value("S").gestures[1].overdubbing, "the stop ends the overdub")
+    end},
+    {"playing, overdubbing", "clear", "empty", check = function()
+      assert_recorder(0, false, "an overdub's loop cleared")
+      assert_true(not local_value("S").gestures[1].overdubbing, "and its overdub")
+    end},
+    {"playing, overdubbing", "play param 1", "playing, overdubbing", check = function()
+      assert_recorder(1, true, "play 1 on an overdub")
+    end},
+    {"playing, overdubbing", "play param 0", "stopped", check = function()
+      assert_recorder(1, false, "play 0 stops the loop")
+      assert_true(not local_value("S").gestures[1].overdubbing, "and ends the overdub")
+    end},
+    {"playing, overdubbing", "the limit", "playing", check = function()
+      local S = local_value("S")
+      assert_recorder(S.lib.gestures.GESTURES.max_events, true, "an overdub at the cap")
+      assert_equal(S.lib.ui_flash.text("header"), "G1 full", "flashed")
+    end},
+    {"playing, overdubbing", "a load", "stopped", check = function()
+      assert_loaded_loop("an overdub's loop replaced by a load")
+      assert_true(not local_value("S").gestures[1].overdubbing, "the load ends the overdub")
+    end},
+    {"playing, overdubbing", "stop all", "stopped", check = function()
+      assert_recorder(1, false, "an overdub's loop stopped")
+      assert_true(not local_value("S").gestures[1].overdubbing, "and its overdub")
+    end},
+  },
+  notes = {"docs/notes/lua/gestures.md", "gesture recorder"},
+})
+
 end

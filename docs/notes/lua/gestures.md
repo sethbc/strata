@@ -12,7 +12,54 @@
 - **The play param follows the state.** `gesture_<k>_play` is 1 exactly while recorder k plays; every state change sets it silently. Its action (a scene recall) plays a stopped recorder or stops a playing one; one that cannot follow (empty, recording) puts the param back. It is hidden and kept out of PSETs (`set_save` false): a PSET's recorders load stopped from its side file.
 - **The side files go through the module's `S.lib.side_files.new` files** (#648; `docs/notes/lua/data-files.md`, Side files: `name` and `contents` `gestures`, `key` `recorders`, `validate` each recorder's `record_problem`, `load` every recorder stopped, then the redraws), which reach the card through `S.lib.data_files` (`write` and `read`, an unusable one `set_aside`), never `tab.save` or `tab.load`. The PSET hook's `write` always writes, empty recorders included, so a PSET saved over never keeps an older side file; its `read` stops every recorder before it reads; a missing file loads empty recorders (a PSET from before 3.4 held none); a file it cannot use (unparsable, another version, a malformed recorder: a bad event or time, a quantized length that is no whole number of its unit, a free loop whose times do not sum to more than 0, whose metro would fire without a pause) is set aside with a console line and the recorders load empty, and the PSET still loads. An event whose id this build has no control param for is kept, saved again, and skipped when it plays. A recorder entry past `NUM_GESTURES` is ignored, not refused (the macros and the matrix refuse an out-of-range key and set the whole file aside), so a file from a later release with more recorders loads its first four and loses the rest at the next save here: whoever raises `NUM_GESTURES` meets this.
 - **Bounds:** at most `GESTURES.max_events` (1024) events per recorder, a recording or an overdub included (`G<k> full` flashes in the header), and a recording stops 10 minutes (`GESTURES.max_seconds`) after its first event. Every recorder index is checked (1..`NUM_GESTURES`).
-- The `gesture recorders` invariant (`docs/notes/lua/state-and-voices.md`; a recorder's run and clock in step, its `limit_run` held exactly while it records an event or more, each a live handle of the clock helper, `S.lib.clocks.alive`, so never a stopped or retired one; the retired clocks themselves are the helper's `clocks` invariant's) and the cleanup step `gestures` (95), which cancels every recorder's clocks (`S.lib.clocks.cancel`) and stops every metro; the helper's step (190) cancels the clocks a stop retired.
+- The `gesture recorders` invariant (its Machines entry, below; a recorder's run and clock in step, its `limit_run` held exactly while it records an event or more, each a live handle of the clock helper, `S.lib.clocks.alive`, so never a stopped or retired one; the retired clocks themselves are the helper's `clocks` invariant's) and the cleanup step `gestures` (95), which cancels every recorder's clocks (`S.lib.clocks.cancel`) and stops every metro; the helper's step (190) cancels the clocks a stop retired.
+
+## Machines
+
+### gesture recorder
+- **State:** `S.gestures[k].state` (`empty`, `recording`, `playing`, `stopped`), the one stored state, with `overdubbing` (only while playing), `run` and `clock` (a quantized loop's), `limit_run` (the 10-minute clock) and the pattern's `rec`, `play` and metro; `S.lib.gestures.state(k)` names it, and every writer of it is one of `press`, `clear`, `set_playing` (the play param's action), `finish_recording`, `fail`, `load_record` and `stop_all`.
+- **Invariant:** `gesture recorders`: at most one recorder records; a recorder's clock or metro runs exactly while it plays, its run with it; its 10-minute clock runs exactly while it records an event or more; it overdubs only while it plays; it is empty exactly when it holds no event and does not record; its play param is 1 exactly while it plays; its clocks are live handles of the clock helper.
+- **Test:** `test/unit/gestures_test.lua`: "gesture recorder: recording + the limit".
+
+The table (3.9, #948) is recorder 1's, with a free loop of one reverb edit (on its metro); `playing, overdubbing` is the state beside `playing` the overdub (`overdub(k)`, ALT+K3) makes. The limit is the cap the recorder meets: the 10-minute clock's wake where it runs (a recording with an event), else hand edits to `GESTURES.max_events` (1024) and one more, which only an overdub records. A load is a PSET read whose side file holds one stopped loop for the recorder (its hook stops every recorder first, then loads); stop all is the cleanup step `gestures` (its clocks canceled, then `stop_all`), the other caller of that stop. Every cell is a row.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| empty | press | recording | the pattern records; no 10-minute clock before the first event |
+| empty | clear | empty | nothing |
+| empty | play param 1 | empty | the param goes back to 0 |
+| empty | play param 0 | empty | nothing |
+| empty | the limit | empty | the edits are not recorded |
+| empty | a load | stopped | the file's loop, stopped |
+| empty | stop all | empty | nothing |
+| recording | press | playing | the loop plays from its first event; the 10-minute clock stops |
+| recording | clear | empty | the recording is dropped; the 10-minute clock stops |
+| recording | play param 1 | recording | the param goes back to 0 |
+| recording | play param 0 | recording | the recording goes on |
+| recording | the limit | playing | the 10-minute clock ends it: a loop of 600 s plays |
+| recording | a load | stopped | the stop keeps the recording, stopped; the file's loop replaces it |
+| recording | stop all | stopped | the recording is kept, stopped |
+| playing | press | stopped | its metro or clock stops |
+| playing | clear | empty | stopped and emptied |
+| playing | play param 1 | playing | nothing |
+| playing | play param 0 | stopped | a scene recall's stop |
+| playing | the limit | playing | the edits are not recorded |
+| playing | a load | stopped | the file's loop, stopped |
+| playing | stop all | stopped | its metro or clock stops |
+| stopped | press | playing | a free loop at once, its first event first; a quantized one from its next beat or bar |
+| stopped | clear | empty | emptied |
+| stopped | play param 1 | playing | a scene recall's play |
+| stopped | play param 0 | stopped | nothing |
+| stopped | the limit | stopped | the edits are not recorded |
+| stopped | a load | stopped | the file's loop replaces it |
+| stopped | stop all | stopped | nothing |
+| playing, overdubbing | press | stopped | the stop ends the overdub, and the live file follows |
+| playing, overdubbing | clear | empty | the overdub and the loop end |
+| playing, overdubbing | play param 1 | playing, overdubbing | nothing |
+| playing, overdubbing | play param 0 | stopped | the stop ends the overdub |
+| playing, overdubbing | the limit | playing | the 1024th event fills the loop; the next edit ends the overdub and flashes `G1 full` |
+| playing, overdubbing | a load | stopped | the stop ends the overdub; the file's loop replaces it |
+| playing, overdubbing | stop all | stopped | the overdub ends with the playback |
 
 ## Owns
 

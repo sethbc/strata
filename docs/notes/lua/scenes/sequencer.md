@@ -8,6 +8,34 @@
 - The three chances (`scene_chance_next`, `scene_chance_previous`, `scene_chance_random`) are PSET settings, never scene fields.
 - The sequencer never cuts a transition short. It waits for the transition's end, bounded by `SCENE_TRANSITION.overrun_seconds` measured from the fade's progress, never from its start.
 
+## Machines
+
+### scene sequencer
+- **State:** `S.scene_sequencer_enabled`, `S.scene_sequencer_clock` (the id; the handle is the local `sequencer_handle`), `S.scene_sequencer_position`, `S.scene_sequencer_recall_due`, `S.scene_sequencer_next` and the local `SEQUENCER_DRAW.move`; the param `scene_sequencer_enabled` starts and stops it. No accessor names the state; `S.lib.scenes.sequencer_next_slot()` names the slot it recalls next.
+- **Invariant:** `scene sequencer`: a recall is due and a next slot kept only while the sequencer runs, and it runs exactly while its clock is held, a coroutine not dead.
+- **Two facts:** `S.scene_sequencer_position` is the slot to recall next while `S.scene_sequencer_recall_due` is set (after the start and each advance) and the scene playing after the recall, through its hold; `sequencer_next_slot` reads the two apart by the flag.
+- **Test:** `test/unit/scenes_test.lua`: "the scene sequencer's clock stopped as its wake is posted: no clock error, and nothing more happens".
+
+The six states (3.9, #948), a table with no test yet: the examples above it in the test file cover its rows one by one. Recalling and advancing run inside one resume of the clock, with no wait: only the start's tick, the hold and the settling wait are where it waits. "No playable scene" is holding with nothing recalled (the pass prints `scene sequencer: no playable scene in slots 1-<length>` and holds the slot for the duration). The param and `S.scene_sequencer_enabled` are one fact kept twice: every start and stop goes through the param's action, and the error stop sets the param first (#329).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| off | the param to 1 | starting | the clock made, the position 1, a recall due, the draw forgotten |
+| starting | its tick (`handle.sleep(0)`) | recalling | a PSET read that set the param has finished |
+| recalling | the recall returns | holding | the next slot drawn once and kept (`next_slot`), the screen and grids redrawn |
+| recalling | the recall raises | holding | printed with its traceback; the scene holds its duration and the sequencer goes on |
+| recalling | no playable scene in the sequence | holding | nothing recalled, the slot held for the duration |
+| recalling | the draw was a repeat | holding | nothing recalled: the scene holds another duration |
+| holding | the hold ends, no fade runs | advancing | `max(scene_duration, transition_time)` slept |
+| holding | the hold ends, a fade runs | settling | it waits, `SCENE_TRANSITION.settle_seconds` at a time |
+| settling | the fade ends | advancing | the flag clear |
+| settling | the fade overruns | advancing | a step `overrun_seconds` late: the fade is canceled, with a console line |
+| advancing | the position set | recalling | the kept slot if it can still play, else drawn again, else the next slot wrapped; a recall due |
+| starting, holding or settling | the param to 0 | off | stopped through the clock helper (retired while its wake may be posted, else canceled); the draw forgotten |
+| recalling, settling or advancing | an error in the pass outside its recall (a param read, the wait, a redraw) | off | the clock forgets its id, the param goes to 0 (`set_binary_param`), the stop, the error raised again (#329) |
+| any but off | cleanup step 100 | off | the clock canceled at once, then the param and `scene_sequencer_stop()` |
+| any but off | `scene_sequencer_start()` again (a restart) | starting | the running clock stopped first, a new one made from position 1: one clock |
+
 ## Scene sequencer
 
 `scene_sequencer_start()`:
