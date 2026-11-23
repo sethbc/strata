@@ -30,7 +30,13 @@ return function(S)
     options = {"off", "one", "overlap"}, magic = "strata-onsets 1",
     key = "slices", section = "synth", off = 1, one = 2, overlap = 3, equal = 2, transients = 3,
     sensitivity_max = 100, threshold_margin = 1e-9, length_tolerance = 0.01, poll = "bufferOnsets",
-    default_rate = S.constants.NORNS_SAMPLE_RATE}
+    default_rate = S.constants.NORNS_SAMPLE_RATE,
+    -- s after which an awaited pass no longer blocks a new one (#872): a
+    -- 300 s slot's pass reports in 0.6-0.7 s on a desktop, most of it the
+    -- server's write of 115 MB of temporary float files
+    -- (docs/notes/engine/onsets.md), so 30 s leaves a Pi's slower card
+    -- about 45 times that; past it the report is taken as lost
+    analysis_timeout_seconds = 30}
   M.SLICES = SLICES
 
   local function finite(value)
@@ -55,6 +61,8 @@ return function(S)
   -- was sent in, the candidates held, the reports waiting for the read
   -- clock, and the recordings sent at the slot's last bind
   local analyses, awaited, generations, analysis_generations = {}, {}, {}, {}
+  -- per slot: util.time() at the newest analysis's send (#872's timeout)
+  local analysis_sent_at = {}
   local candidates, due_reads, records_seen = {}, {}, {}
   for slot = 1, NUM_BUFFERS do analyses[slot], generations[slot] = 0, 0 end
   local reader = {clock = nil, poll = nil}
@@ -144,11 +152,17 @@ return function(S)
   -- number). None while a pass of the audio the slot holds now (its
   -- generation) is awaited: the engine runs every pass it is sent, so a
   -- detent of the editor would start another over the whole slot; the
-  -- awaited one makes the markers at the settings it finds (#872)
+  -- awaited one makes the markers at the settings it finds (#872). Past
+  -- SLICES.analysis_timeout_seconds its report is taken as lost and a new
+  -- pass is sent; the old one's report, if it comes, is refused by its count
   function M.analyze(slot)
     if not valid_slot(slot) or S.buffers[slot].seconds <= 0 then return false end
-    if awaited[slot] ~= nil and analysis_generations[slot] == generations[slot] then return true end
+    if awaited[slot] ~= nil and analysis_generations[slot] == generations[slot]
+      and util.time() - analysis_sent_at[slot] < SLICES.analysis_timeout_seconds then
+      return true
+    end
     analyses[slot] = analyses[slot] + 1
+    analysis_sent_at[slot] = util.time()
     awaited[slot] = analyses[slot]
     analysis_generations[slot] = generations[slot]
     engine.analyzeBuffer(slot - 1)

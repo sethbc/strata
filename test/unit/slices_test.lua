@@ -250,6 +250,33 @@ test("a new analysis is sent once the audio's generation moves", function()
   assert_equal(list_text(S.lib.slices.markers(1)), "{0, 10000, 30000}", "made from the new audio's pass")
 end)
 
+-- #872: a pass whose report is lost stops blocking after a named timeout;
+-- a detent then sends again, and the lost pass's report, should it come,
+-- is refused by its count
+test("an awaited pass stops blocking after its timeout: a detent sends again", function()
+  local context, S = sliced(2)
+  local timeout = S.lib.slices.SLICES.analysis_timeout_seconds
+  assert_equal(timeout, 30, "the timeout is a named setting")
+  S.lib.samples.set(1, "mode", 3)
+  S.lib.slices.make(1)
+  assert_equal(#context.calls_named("analyzeBuffer"), 1)
+  context.clock.run_for(timeout - 0.5)
+  S.lib.samples.set(1, "sensitivity", 60); S.lib.slices.make(1)
+  assert_equal(#context.calls_named("analyzeBuffer"), 1, "inside the timeout: nothing sent")
+  context.clock.run_for(0.6)
+  assert_true(S.lib.slices.analyzing(1), "still awaited")
+  S.lib.samples.set(1, "sensitivity", 70); S.lib.slices.make(1)
+  assert_equal(#context.calls_named("analyzeBuffer"), 2, "past the timeout a detent sends again")
+  S.lib.samples.set(1, "sensitivity", 80); S.lib.slices.make(1)
+  assert_equal(#context.calls_named("analyzeBuffer"), 2, "and the new pass blocks in its turn")
+  -- the lost pass's report comes after all: refused by its count
+  answer(context, 1, 1, onsets_text(1, 96000, {40000}, {"1.000"}))
+  assert_equal(S.lib.slices.candidates(1), nil, "the older pass is not read")
+  assert_true(S.lib.slices.analyzing(1), "the new one is still awaited")
+  answer(context, 1, 2, onsets_text(1, 96000, CANDIDATES.onsets, CANDIDATES.strengths))
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0, 10000, 20000, 30000}", "made from the new pass, at 80")
+end)
+
 test("only the newest analysis of a slot is read, and never in the poll's callback", function()
   local context, S = sliced(2)
   S.lib.samples.set(1, "mode", 3)
@@ -653,6 +680,7 @@ test("cleanup ends the onsets read clock before it reads", function()
   write_text(onsets_path(1), onsets_text(1, 96000, CANDIDATES.onsets, CANDIDATES.strengths))
   context.polls.fire("bufferOnsets", onsets_value(1, 1))  -- the read waits for its clock
   cleanup()
+  assert_equal(context.clock.pending_count(), 0, "cleanup canceled the read clock: no clock left")
   context.clock.run_for(0.05)
   assert_equal(#context.clock.take_errors(), 0, "no clock error")
   assert_equal(S.lib.slices.candidates(1), nil, "nothing was read")
