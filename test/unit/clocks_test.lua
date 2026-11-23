@@ -479,6 +479,39 @@ test("a stop of a handle whose body raised is no bare wait", function()
   assert_no_clock_error(context, "a stop of a raised body")
 end)
 
+-- #956: clock.resume raises without canceling a body that raised, so its
+-- coroutine stays in clock.threads and its scheduler slot (one of
+-- matron's hundred) stays claimed until cleanup. The helper frees both
+-- as the body raises, and the error is reported as before
+test("a clock whose body raised frees its slot", function()
+  local context, S, clocks = loaded()
+  local handle = clocks.run(function(own)
+    if not own.sleep(0.1) then return end
+    error("the body's fault")
+  end)
+  assert_true(clock.events[handle.id] ~= nil, "its first wait holds a slot")
+  context.clock.run_for(0.2)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "the body's error is a clock error")
+  assert_true(errors[1]:find("^[^\n]*clocks_test%.lua:%d+: the body's fault$") ~= nil,
+    "reported as the body raised it: " .. tostring(errors[1]))
+  assert_equal(clock.threads[handle.id], nil, "its coroutine is gone from clock.threads")
+  assert_equal(clock.events[handle.id], nil, "and its scheduler slot is free")
+  assert_true(not clocks.alive(handle), "it is not alive")
+  -- a later stop or cancel does nothing more
+  local cancels = 0
+  local real_cancel = clock.cancel
+  clock.cancel = function(id) cancels = cancels + 1; return real_cancel(id) end
+  clocks.stop(handle)
+  clocks.cancel(handle)
+  clock.cancel = real_cancel
+  assert_equal(cancels, 0, "neither cancels again")
+  assert_equal(clocks.retired[handle.id], nil, "nothing retired")
+  assert_equal(clocks_invariant(S)(), nil, "every invariant holds")
+  context.clock.run_for(1)
+  assert_no_clock_error(context, "a raised body's stop and cancel")
+end)
+
 -- Review of 0b, finding 5: the helper's margins are the ones the zones
 -- editor, the macros' learn and the quantized actions use
 test("the helper's margins are the zones editor's, the macros' and the quantized actions'", function()
