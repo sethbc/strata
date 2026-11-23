@@ -432,4 +432,65 @@ test("a PSET read or a scene recall clears the names a load and a copy gave", fu
   assert_equal(presets.loaded_name(1), "glass", "the load after the fade began keeps its name")
 end)
 
+-- #869: an undo of a load or a copy puts back the sound from before it,
+-- and with it the name the row showed then (the held capture's
+-- preset_name), so the row never names a sound the voice no longer has
+test("an undo of a preset's load puts the row's name back (#869)", function()
+  local _, S, presets = loaded()
+  params:set("v1_freq", 330)
+  assert_true(presets.save(1, 1, "glass"), "a preset")
+  params:set("v1_freq", 220)
+  assert_true(presets.save(1, 2, "wood"), "another")
+  params:set("v1_freq", 110)
+  assert_true(presets.load(1, 1), "glass loaded")
+  assert_equal(presets.loaded_name(1), "glass", "the row names it")
+  assert_true(S.lib.mutation.undo(), "the load undone")
+  assert_near(params:get("v1_freq"), 110, 1e-9, "the sound from before")
+  assert_equal(presets.loaded_name(1), nil, "and the row's name from before: none")
+  assert_true(presets.load(1, 1), "glass loaded again")
+  assert_true(presets.load(1, 2), "then wood")
+  assert_true(S.lib.mutation.undo(), "wood's load undone")
+  assert_near(params:get("v1_freq"), 330, 1e-9, "glass's sound is back")
+  assert_equal(presets.loaded_name(1), "glass", "and its name")
+  assert_true(presets.copy(4, 1), "voice 4 copied in")
+  assert_equal(presets.loaded_name(1), "v4", "the copy's name")
+  assert_true(S.lib.mutation.undo(), "the copy undone")
+  assert_equal(presets.loaded_name(1), "glass", "the name before the copy")
+end)
+
+-- forget(voice_idx), for a write that sets the voice's sound anew without
+-- a recall (package 4b: a morph applying a voice's values)
+test("forget empties one voice's name and no other's (#869)", function()
+  local _, _, presets = loaded()
+  assert_true(presets.save(2, 1, "glass"), "a preset")
+  assert_true(presets.load(1, 1), "loaded into voice 1")
+  assert_true(presets.load(3, 1), "and voice 3")
+  local real_request_redraw, redraws = request_redraw, 0
+  request_redraw = function() redraws = redraws + 1; real_request_redraw() end
+  presets.forget(1)
+  request_redraw = real_request_redraw
+  assert_equal(presets.loaded_name(1), nil, "voice 1's name is gone")
+  assert_equal(presets.loaded_name(3), "glass", "voice 3's is kept")
+  assert_true(redraws > 0, "the row is redrawn")
+  presets.forget(0); presets.forget(local_value("S").constants.NUM_VOICES + 1); presets.forget("1")
+  assert_equal(presets.loaded_name(3), "glass", "a number that is no voice forgets nothing")
+end)
+
+-- store.started: before the start step has read voices.data, a save would
+-- write the empty library over the file unread, so it is refused
+test("a save before the start step reads voices.data writes nothing over it", function()
+  local subdir, dir = fresh_subdir("early")
+  local _, _, first = loaded({ data_subdir = subdir })
+  assert_true(first.save(2, 1, "kept"), "a preset on file")
+  local as_read = file_text(dir .. "voices.data")
+  local early
+  local _, _, presets = loaded({ data_subdir = subdir, before_init = function()
+    early = { local_value("S").lib.voice_presets.save(2, 3, "early") }
+  end })
+  assert_equal(early[1], false, "the early save is refused")
+  assert_equal(file_text(dir .. "voices.data"), as_read, "voices.data as it was")
+  assert_equal(presets.preset(1) and presets.preset(1).name, "kept", "the start reads the preset on file")
+  assert_equal(presets.preset(3), nil, "and nothing the early save made")
+end)
+
 end

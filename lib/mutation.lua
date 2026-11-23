@@ -176,8 +176,10 @@ return function(S)
   -- filtered capture), as the one undo, VOICE's, for UNDO_SECONDS. values
   -- names every v<i>_<key> of the capture and of the voice's synth keys
   -- now (the loaded type's), so an edit of the old or the new sound
-  -- (note_param_edit) ends it; an Out key's write does not. Called after
-  -- the apply, whose own param actions are edits
+  -- (note_param_edit) ends it; an Out key's write does not. The capture's
+  -- preset_name (a string or nil) is the name the voice's preset row showed
+  -- before, which the undo puts back (#869). Called after the apply, whose
+  -- own param actions are edits
   function M.hold_voice(voice_idx, capture)
     if not is_index(voice_idx, NUM_VOICES) or type(capture) ~= "table" or type(capture.values) ~= "table" then
       error("hold_voice: a voice index and its capture", 2)
@@ -192,7 +194,7 @@ return function(S)
       end
     end
     hold_undo({page = S.constants.UI_PAGES.index.VOICE, voice = voice_idx}, values, {}, nil,
-      {type = capture.type, values = capture.values})
+      {type = capture.type, values = capture.values, preset_name = capture.preset_name})
     request_redraw()
   end
 
@@ -204,7 +206,8 @@ return function(S)
   -- has ended. A held voice undo (3.8) applies its capture's type and
   -- values (what a load can change) through S.lib.scenes.apply_voice, every
   -- other scene key of that type (the Out keys) at its present value, with
-  -- the voice's present active and source (ruling 46 as amended)
+  -- the voice's present active and source (ruling 46 as amended), and puts
+  -- back the name the voice's preset row showed before (#869)
   function M.undo()
     local undo = S.undo
     if not undo or util.time() >= undo.until_time then return false end
@@ -220,6 +223,7 @@ return function(S)
         end
         S.lib.scenes.apply_voice(undo.voice, {active = voice.active, source = voice.source,
           type = undo.capture.type, values = values})
+        S.lib.voice_presets.restore_name(undo.voice, undo.capture.preset_name)
       end
       for _, param_id in ipairs(undo.ids) do set_randomized_param(param_id, undo.values[param_id]) end
       if undo.pattern then S.lib.sequencer.replace_pattern(undo.pattern.voice, undo.pattern.steps) end

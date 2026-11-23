@@ -13,7 +13,7 @@
 -- not its whole capture) for VOICE's undo (S.lib.mutation.hold_voice).
 -- Fields of this module's table: VOICE_PRESETS, capture, load, copy, save,
 -- clear, preset, loaded_name (cleared by a PSET read and a scene recall:
--- its PSET and recall hooks).
+-- its PSET and recall hooks; put back by an undo: restore_name), forget.
 -- See docs/notes/lua/voice-presets.md
 
 return function(S)
@@ -68,15 +68,19 @@ return function(S)
   local KEYS = VOICE_PRESETS.keys
 
   -- The library: per slot nil or {name, type, values}; started once the
-  -- start step ran; blocked when an unusable file could not be set aside
-  -- (nothing is written over it this session); dropped while the file as
-  -- read holds a damaged preset the start left out (the first write keeps
-  -- the file as a backup first)
+  -- start step ran (voices.data read: before it, no write is made, since
+  -- one would put the empty library over the file unread); blocked when an
+  -- unusable file could not be set aside (nothing is written over it this
+  -- session); dropped while the file as read holds a damaged preset the
+  -- start left out (the first write keeps the file as a backup first)
   local library = {}
   local store = {started = false, blocked = false, dropped = false}
   -- Per voice, the name shown on VOICE's preset row: the preset last
   -- loaded into it, or a copy's v<n> (not stored, design §8.4); a PSET read
-  -- or a scene recall sets every voice anew and clears them all (#850)
+  -- or a scene recall sets every voice anew and clears them all (#850); an
+  -- undo of a load or a copy puts back the name from before it
+  -- (restore_name, #869); a write that sets one voice anew without a
+  -- recall forgets its own (forget, #869)
   local loaded = {}
   local function forget_names()
     loaded = {}
@@ -143,6 +147,7 @@ return function(S)
   -- read holds damaged presets, it is set aside first and kept only once
   -- the write lands: a failed write moves it back (#848)
   local function write()
+    if not store.started then return false, VOICE_PRESETS.file .. " is not read yet" end
     if store.blocked then return false, VOICE_PRESETS.file .. " could not be set aside at the start" end
     local backup
     if store.dropped then
@@ -207,6 +212,26 @@ return function(S)
     return loaded[voice_idx]
   end
 
+  -- Empty the voice's name on its preset row, every other voice's kept
+  -- (#869): for a write that sets the voice's sound anew without a recall
+  -- (package 4b: a morph applying a voice's values). A number that is no
+  -- voice forgets nothing
+  function M.forget(voice_idx)
+    if not valid_voice(voice_idx) then return end
+    loaded[voice_idx] = nil
+    request_redraw()
+  end
+
+  -- Put back the name the voice's row showed before a load or a copy (a
+  -- string, or nil for none): S.lib.mutation.undo's, from the held
+  -- capture's preset_name (#869). A number that is no voice, or a name
+  -- that is no string, changes nothing
+  function M.restore_name(voice_idx, name)
+    if not valid_voice(voice_idx) or (name ~= nil and type(name) ~= "string") then return end
+    loaded[voice_idx] = name
+    request_redraw()
+  end
+
   -- Put a sound ({type, values}) on the voice, named shown_name on its
   -- preset row: the data apply_voice gets is, for each of the voice's
   -- scene keys of the sound's type (voice_scene_keys), a synth key from the
@@ -248,7 +273,11 @@ return function(S)
       return false
     end
     S.lib.scenes.release_voice(voice_idx)
-    S.lib.mutation.hold_voice(voice_idx, sound_of(voice_idx, current))  -- after the apply, whose actions are edits
+    -- after the apply, whose actions are edits; the row's name from before
+    -- goes with the sound, for the undo to put back (#869)
+    local before = sound_of(voice_idx, current)
+    before.preset_name = loaded[voice_idx]
+    S.lib.mutation.hold_voice(voice_idx, before)
     loaded[voice_idx] = shown_name
     request_redraw()
     grid_redraw()
