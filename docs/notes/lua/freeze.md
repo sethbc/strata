@@ -13,7 +13,7 @@
 ### freeze key
 - **State:** the voice's freeze (`v<i>_freeze`, `S.voices[i].values.freeze`, read with `S.lib.freeze.is_frozen(i)`) and whether its key's set waits (the action `freeze<i>`, `S.lib.quantize.waiting("freeze<i>")`); the value that waits is the scheduled function's own, held nowhere else.
 - **Invariant:** none: every pair of the freeze and a waiting set is legal, and the waiting action's clock is the `quantize` machine's (`lib/quantize.lua`).
-- **Test:** `test/unit/freeze_test.lua`: "freeze key: every cell is decided" and its rows (voice 3, `quantize_actions` on bar; the source switch goes between the synth and the input, the recall is of a scene holding the voice frozen on the source it has).
+- **Test:** `test/unit/freeze_test.lua`: "freeze key: every cell is decided" and its rows (voice 3, `quantize_actions` on bar; the source switch goes between the synth and the input, the recall is of a scene holding the opposite of the voice's freeze on the other source: it sets the scene's source, with no source change hook, then the scene's freeze).
 
 Every cell is a row: no pair of these states and events is impossible.
 
@@ -23,37 +23,37 @@ Every cell is a row: no pair of these states and events is impossible.
 | `off` | `source switch` | `off` | nothing to unfreeze |
 | `off` | `hand set 0` | `off` | nothing |
 | `off` | `hand set 1` | `on` | frozen at once |
-| `off` | `recall` | `on` | the scene's freeze, at once |
+| `off` | `recall` | `on` | the scene's source, then its freeze, at once |
 | `off` | `the bar` | `off` | nothing waits |
 | `on` | `key` | `on, unfreeze waits` | a set of 0 waits for the bar |
 | `on` | `source switch` | `off` | the source change hook unfreezes |
 | `on` | `hand set 0` | `off` | unfrozen at once |
 | `on` | `hand set 1` | `on` | nothing |
-| `on` | `recall` | `on` | the scene's freeze |
+| `on` | `recall` | `off` | the scene's source, then its freeze (0), at once |
 | `on` | `the bar` | `on` | nothing waits |
 | `off, freeze waits` | `key` | `off` | the waiting set is taken back, its flash ends |
 | `off, freeze waits` | `source switch` | `off, freeze waits` | the set still waits; the bar freezes the new source |
 | `off, freeze waits` | `hand set 0` | `off, freeze waits` | the set still waits |
 | `off, freeze waits` | `hand set 1` | `on, freeze waits` | frozen now; the bar sets nothing |
-| `off, freeze waits` | `recall` | `on, freeze waits` | the scene's freeze; the bar sets nothing |
+| `off, freeze waits` | `recall` | `on, freeze waits` | frozen by the scene; the bar sets nothing |
 | `off, freeze waits` | `the bar` | `on` | frozen |
 | `off, unfreeze waits` | `key` | `off` | the waiting set is taken back |
 | `off, unfreeze waits` | `source switch` | `off, unfreeze waits` | the set still waits; the bar sets nothing |
 | `off, unfreeze waits` | `hand set 0` | `off, unfreeze waits` | the set still waits; the bar sets nothing |
 | `off, unfreeze waits` | `hand set 1` | `on, unfreeze waits` | frozen now; the bar unfreezes |
-| `off, unfreeze waits` | `recall` | `on, unfreeze waits` | the scene's freeze; the bar unfreezes |
+| `off, unfreeze waits` | `recall` | `on, unfreeze waits` | frozen by the scene; the bar unfreezes |
 | `off, unfreeze waits` | `the bar` | `off` | nothing changes (a toggle froze here before #864) |
 | `on, freeze waits` | `key` | `on` | the waiting set is taken back |
 | `on, freeze waits` | `source switch` | `off, freeze waits` | unfrozen by the hook; the bar freezes the new source |
 | `on, freeze waits` | `hand set 0` | `off, freeze waits` | unfrozen now; the bar freezes |
 | `on, freeze waits` | `hand set 1` | `on, freeze waits` | the set still waits; the bar sets nothing |
-| `on, freeze waits` | `recall` | `on, freeze waits` | the set still waits; the bar sets nothing |
+| `on, freeze waits` | `recall` | `off, freeze waits` | unfrozen by the scene; the bar freezes the scene's source |
 | `on, freeze waits` | `the bar` | `on` | nothing changes (a toggle unfroze here before #864) |
 | `on, unfreeze waits` | `key` | `on` | the waiting set is taken back |
 | `on, unfreeze waits` | `source switch` | `off, unfreeze waits` | unfrozen by the hook; the bar sets nothing (it froze the new source before #864) |
 | `on, unfreeze waits` | `hand set 0` | `off, unfreeze waits` | unfrozen now; the bar sets nothing |
 | `on, unfreeze waits` | `hand set 1` | `on, unfreeze waits` | the set still waits |
-| `on, unfreeze waits` | `recall` | `on, unfreeze waits` | the set still waits; the bar unfreezes |
+| `on, unfreeze waits` | `recall` | `off, unfreeze waits` | unfrozen by the scene; the bar sets nothing |
 | `on, unfreeze waits` | `the bar` | `off` | unfrozen |
 
 ## Owns

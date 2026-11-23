@@ -398,12 +398,21 @@ end)
 -- happened before the bar; a second key takes the waiting set back. Which
 -- value waits is not readable from outside (it is the scheduled closure's),
 -- so the table keeps what each press asked for on the context, and the bar
--- rows, and the checks of the rows that lead to them, assert what the bar
--- then sets
+-- rows, and the check of every row that leaves a set waiting, run the bar
+-- and assert what it sets
 local KEY_VOICE = 3
 local KEY_ID = "v" .. KEY_VOICE .. "_freeze"
 local KEY_ACTION = "freeze" .. KEY_VOICE
 local KEY_BAR = 4  -- quantize_actions' bar, in beats
+
+local KEY_SOURCE_ID = "v" .. KEY_VOICE .. "_source"
+
+-- The source a switch or a recall moves voice 3 to: the input, or the synth
+-- from the input
+local function key_other_source(S)
+  if params:get(KEY_SOURCE_ID) == S.constants.SOURCE_INPUT then return S.constants.SOURCE_SYNTH end
+  return S.constants.SOURCE_INPUT
+end
 
 local function key_state(S) return S.lib.freeze.is_frozen(KEY_VOICE) and "on" or "off" end
 
@@ -461,20 +470,20 @@ h.transition_table({
   },
   events = {
     ["key"] = key_press,
-    ["source switch"] = function()
-      local S = local_value("S")
-      local source = params:get("v" .. KEY_VOICE .. "_source")
-      params:set("v" .. KEY_VOICE .. "_source",
-        source == S.constants.SOURCE_INPUT and S.constants.SOURCE_SYNTH or S.constants.SOURCE_INPUT)
-    end,
+    ["source switch"] = function() params:set(KEY_SOURCE_ID, key_other_source(local_value("S"))) end,
     ["hand set 0"] = function() params:set(KEY_ID, 0) end,
     ["hand set 1"] = function() params:set(KEY_ID, 1) end,
-    -- a scene that holds the voice frozen on the source it has now
+    -- a scene that holds the opposite of the voice's freeze on the other
+    -- source: the recall sets the scene's source (no source change hook
+    -- runs), then its freeze
     ["recall"] = function()
       local S = local_value("S")
       capture_scene(1)
-      S.scenes[1].data.voices[KEY_VOICE].values.freeze = 1
+      local scene_voice = S.scenes[1].data.voices[KEY_VOICE]
+      scene_voice.source = key_other_source(S)
+      scene_voice.values.freeze = S.lib.freeze.is_frozen(KEY_VOICE) and 0 or 1
       recall_scene(1, 0)
+      assert_equal(params:get(KEY_SOURCE_ID), scene_voice.source, "the recall set the scene's source")
     end,
     ["the bar"] = key_bar,
   },
@@ -487,17 +496,17 @@ h.transition_table({
     return state .. ", a set waits that no press asked for"
   end,
   rows = {
-    {"off", "key", "off, freeze waits"},
+    {"off", "key", "off, freeze waits", check = then_the_bar("on")},
     {"off", "source switch", "off"},
     {"off", "hand set 0", "off"},
     {"off", "hand set 1", "on"},
     {"off", "recall", "on"},
     {"off", "the bar", "off"},
-    {"on", "key", "on, unfreeze waits"},
+    {"on", "key", "on, unfreeze waits", check = then_the_bar("off")},
     {"on", "source switch", "off"},
     {"on", "hand set 0", "off"},
     {"on", "hand set 1", "on"},
-    {"on", "recall", "on"},
+    {"on", "recall", "off"},
     {"on", "the bar", "on"},
     {"off, freeze waits", "key", "off", check = then_the_bar("off")},
     {"off, freeze waits", "source switch", "off, freeze waits", check = then_the_bar("on")},
@@ -515,13 +524,13 @@ h.transition_table({
     {"on, freeze waits", "source switch", "off, freeze waits", check = then_the_bar("on")},
     {"on, freeze waits", "hand set 0", "off, freeze waits", check = then_the_bar("on")},
     {"on, freeze waits", "hand set 1", "on, freeze waits", check = then_the_bar("on")},
-    {"on, freeze waits", "recall", "on, freeze waits", check = then_the_bar("on")},
+    {"on, freeze waits", "recall", "off, freeze waits", check = then_the_bar("on")},
     {"on, freeze waits", "the bar", "on"},
     {"on, unfreeze waits", "key", "on", check = then_the_bar("on")},
     {"on, unfreeze waits", "source switch", "off, unfreeze waits", check = then_the_bar("off")},
     {"on, unfreeze waits", "hand set 0", "off, unfreeze waits", check = then_the_bar("off")},
     {"on, unfreeze waits", "hand set 1", "on, unfreeze waits", check = then_the_bar("off")},
-    {"on, unfreeze waits", "recall", "on, unfreeze waits", check = then_the_bar("off")},
+    {"on, unfreeze waits", "recall", "off, unfreeze waits", check = then_the_bar("off")},
     {"on, unfreeze waits", "the bar", "off"},
   },
 })
