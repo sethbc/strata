@@ -6,13 +6,16 @@
 -- is saved in a PSET (delay_freeze's save is off; norns never writes a
 -- trigger) or a scene, and neither is an LFO destination: the loop's audio
 -- is in neither, as a bypass's is not. A PSET load leaves a freeze as it is
--- (plan ruling 61). A bypass ends its effect's freeze first (the bypass
+-- (plan ruling 61), unless it leaves the delay bypassed: the read hook then
+-- releases it (#883). A bypass ends its effect's freeze first (the bypass
 -- action, lib/voice_mix.lua, calls release), so the engine's kept freeze
 -- is 0 at the lift; a freeze set while its effect is bypassed is refused,
 -- the param put back to off and echoed to a mapped controller (plan
--- ruling 26). The functions are FX's, the
--- header's and the grids' (packages 4a, 4b): offered, frozen, freezable,
--- toggle, release, clear, any_frozen. See docs/notes/lua/fx-hold.md.
+-- ruling 26). The invariant `fx hold`: the delay is never bypassed and
+-- frozen. A clear releases a freeze first (#912). The functions are FX's,
+-- the header's and the grids' (packages 4a, 4b): offered, frozen,
+-- freezable, toggle, release, clear, any_frozen. See
+-- docs/notes/lua/fx-hold.md.
 
 return function(S)
   local M = {}
@@ -62,10 +65,31 @@ return function(S)
     if params:get(M.FX_HOLD[effect].freeze_id) == 1 then set_binary_param(M.FX_HOLD[effect].freeze_id, 0) end
   end
 
-  -- Empty the delay (its trigger)
+  -- Empty the delay (its trigger, whose action releases a freeze first)
   function M.clear()
     params:set(M.FX_HOLD.delay.clear_id, 1)
   end
+
+  -- The delay bypassed and frozen at once: a bypassed delay has no node,
+  -- and a freeze kept for it would come back at the lift (#883)
+  local function bypassed_and_frozen()
+    return S.lib.voice_mix.bypassed("delay") and M.frozen("delay")
+  end
+
+  S.register_invariant("fx hold", function()
+    if bypassed_and_frozen() then
+      return "the delay is bypassed and frozen (delay_bypass 1, delay_freeze 1)"
+    end
+  end)
+
+  -- After a PSET read: a silent read sets delay_bypass with no action, so
+  -- the bypass's release never ran. Bypass wins (#883, ruling B2): the
+  -- freeze is released through its action, so the engine hears
+  -- setDelayFreeze(0) and a mapped controller its 0. Nothing otherwise (a
+  -- read with actions has released it already)
+  S.register_pset_hook({name = "fx_hold", read = function()
+    if bypassed_and_frozen() then M.release("delay") end
+  end})
 
   local delay = M.FX_HOLD.delay
   S.register_fx_params({
@@ -98,7 +122,12 @@ return function(S)
         type = "trigger",
         id = delay.clear_id,
         name = "delay clear",
-        action = function() send_param_to_engine(delay.clear_id, 1) end,
+        -- a frozen loop is released first, so it refills (#912, ruling
+        -- B2): setDelayFreeze(0), then clearDelay()
+        action = function()
+          M.release("delay")
+          send_param_to_engine(delay.clear_id, 1)
+        end,
       }
       S.engine_senders[delay.clear_id] = function() engine.clearDelay() end
     end,

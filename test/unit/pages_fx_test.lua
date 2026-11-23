@@ -922,6 +922,49 @@ test("a frozen effect's section row shows frz at level 4", function()
   assert_equal(found[1].level, 4, "at level 4")
 end)
 
+-- #911's mark: a frozen loop keeps the length it froze at, so the time row
+-- shows `held` beside its label (level 4, after the label) while the
+-- delay is frozen, in seconds and synced, and the value it shows is the
+-- one the release plays
+test("the time row is marked while the delay is frozen", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("FX")
+  local FX = local_value("FX_PAGE")
+  assert_equal(FX.held_text, "held")
+  local function entry_of(text)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text == text then return entry end
+    end
+  end
+  select_row_index(row_index("delay_time"))
+  context.screen.clear(); redraw()
+  assert_true(entry_of("held") == nil, "a running delay's time row has no mark")
+  S.lib.fx_hold.toggle("delay")
+  context.screen.clear(); redraw()
+  local mark, label = entry_of("held"), entry_of("time")
+  assert_true(mark ~= nil, "a frozen delay's time row shows held")
+  assert_equal(mark.y, label.y, "on the time row")
+  assert_equal(mark.level, FX.bypass_level, "at level 4")
+  assert_true(mark.x >= FX.param_x + screen.text_extents("time"), "after the label")
+  assert_true(h.screen_shows(context, string.format("%.3f s", params:get("delay_time"))),
+    "the row still shows the time the release plays")
+  assert_screen_layout(context, "FX the time row held")
+  -- off the cursor too, and synced
+  select_row_index(row_index("delay_feedback"))
+  context.screen.clear(); redraw()
+  assert_true(entry_of("held") ~= nil, "the mark shows on the row off the cursor")
+  params:set("delay_sync", 1)
+  select_row_index(row_index("delay_time"))
+  context.screen.clear(); redraw()
+  assert_true(entry_of("held") ~= nil and h.screen_shows(context, S.lib.delay_sync.label()),
+    "a synced time row is marked beside its division")
+  assert_screen_layout(context, "FX the synced time row held")
+  S.lib.fx_hold.toggle("delay")
+  context.screen.clear(); redraw()
+  assert_true(entry_of("held") == nil, "released, the mark goes")
+end)
+
 test("the reverb's freeze row shows -- where it is not offered, and E3 does nothing there", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

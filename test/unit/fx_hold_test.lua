@@ -241,6 +241,96 @@ test("a PSET that bypasses the delay ends its freeze, one that does not leaves i
   assert_equal(#freeze_calls(context), 0, "and sends no setDelayFreeze")
 end)
 
+-- #883 (ruling B2: bypass wins): a silent read sets delay_bypass with no
+-- action, so the bypass's release never runs and the delay was left
+-- bypassed and frozen, with ALT+K3 doing nothing (freezable false). The
+-- read hook releases the freeze through its action, so the engine hears
+-- setDelayFreeze(0) and a lift starts unfrozen
+test("a silent read that leaves the delay bypassed and frozen releases the freeze", function()
+  local context, S, fx_hold = loaded()
+  params:set("delay_bypass", 1)
+  local bypassed_path = context.data_dir .. "silent_bypassed.pset"
+  params:write(bypassed_path, "silent bypassed")
+  params:set("delay_bypass", 0)
+  fx_hold.toggle("delay")
+  assert_true(fx_hold.frozen("delay"), "frozen first")
+  context.clear_engine_calls()
+  params:read(bypassed_path, true)
+  assert_true(S.lib.voice_mix.bypassed("delay"), "the read bypasses the delay")
+  assert_equal(params:get("delay_freeze"), 0, "and the freeze is released")
+  assert_true(not fx_hold.frozen("delay"), "not frozen")
+  assert_equal(table.concat(call_names(context, {"setDelayFreeze"}), " "), "setDelayFreeze(0)",
+    "the engine hears the release")
+  -- the lift starts unfrozen, and ALT+K3's toggle then freezes again
+  params:set("delay_bypass", 0)
+  fx_hold.toggle("delay")
+  assert_true(fx_hold.frozen("delay"), "lifted, toggle freezes")
+end)
+
+-- The hook does nothing unless the read left both: a silent read that
+-- leaves the delay running keeps the freeze and sends nothing
+test("a silent read that leaves the delay running keeps its freeze and sends nothing", function()
+  local context, _, fx_hold = loaded()
+  local running_path = context.data_dir .. "silent_running.pset"
+  params:write(running_path, "silent running")
+  fx_hold.toggle("delay")
+  context.clear_engine_calls()
+  params:read(running_path, true)
+  assert_equal(params:get("delay_freeze"), 1, "the freeze stays on")
+  assert_equal(#freeze_calls(context), 0, "and no setDelayFreeze goes out")
+end)
+
+test("the invariant fx hold fails for a delay bypassed and frozen", function()
+  local _, S = loaded()
+  local invariant
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "fx hold" then invariant = record.fn end
+  end
+  assert_true(invariant ~= nil, "fx hold is registered")
+  assert_equal(invariant(), nil, "holds at the start")
+  -- broken on purpose with silent sets (no action runs), then put right
+  params:set("delay_freeze", 1)
+  params:set("delay_bypass", 1, true)
+  params:set("delay_freeze", 1, true)
+  local problem = invariant()
+  assert_true(type(problem) == "string" and problem:find("bypassed and frozen", 1, true) ~= nil,
+    "names the delay bypassed and frozen: " .. tostring(problem))
+  params:set("delay_freeze", 0, true)
+  assert_equal(invariant(), nil, "holds once released")
+end)
+
+-- #912 (ruling B2): a clear on a frozen delay emptied the loop and left it
+-- frozen on silence with its input closed. The clear releases the freeze
+-- first, so the loop refills
+test("clear on a frozen delay releases the freeze, then clears", function()
+  local context, _, fx_hold = loaded()
+  local controller = context.midi.plug(1)
+  norns.pmap.data.delay_freeze = { dev = 1, ch = 1, cc = 47, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+    echo = true, value = 0 }
+  fx_hold.toggle("delay")
+  context.clear_engine_calls()
+  fx_hold.clear()
+  assert_equal(table.concat(call_names(context, {"setDelayFreeze", "clearDelay"}), " "),
+    "setDelayFreeze(0) clearDelay()", "the release goes before the clear")
+  assert_equal(params:get("delay_freeze"), 0, "the freeze param reads 0")
+  local values = {}
+  for _, message in ipairs(controller.sent) do
+    if message[2] == 47 then table.insert(values, message[3]) end
+  end
+  assert_equal(table.concat(values, ","), "127,0", "a mapped controller hears the release")
+  -- the trigger itself (PARAMS, a MIDI map) does the same
+  fx_hold.toggle("delay")
+  context.clear_engine_calls()
+  params:set("delay_clear", 1)
+  assert_equal(table.concat(call_names(context, {"setDelayFreeze", "clearDelay"}), " "),
+    "setDelayFreeze(0) clearDelay()", "the trigger releases first too")
+  -- a running delay's clear sends the clear alone
+  context.clear_engine_calls()
+  fx_hold.clear()
+  assert_equal(table.concat(call_names(context, {"setDelayFreeze", "clearDelay"}), " "), "clearDelay()",
+    "an unfrozen clear touches no freeze")
+end)
+
 test("release('reverb') does nothing while the reverb is not offered", function()
   local context, _, fx_hold = loaded()
   assert_true(fx_hold.offered("delay"), "the delay's freeze is offered")

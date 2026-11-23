@@ -7,8 +7,9 @@
 -- the delay's clear row the clear. ALT+K3 freezes or releases the delay or
 -- reverb under the cursor (S.lib.fx_hold), never one bypassed or not
 -- offered. A bypassed effect's section row shows "byp", a frozen one's
--- "frz". While the delay is synced (S.lib.delay_sync, 3.7) its time row
--- shows the division that plays and E3 turns delay_division; E3 turns sync
+-- "frz", and a frozen delay's time row "held" after its label. While the
+-- delay is synced (S.lib.delay_sync, 3.7) its time row shows the division
+-- that plays and E3 turns delay_division; E3 turns sync
 -- and a freeze on and off. The reverb's freeze is reached only through
 -- S.lib.fx_hold.offered("reverb") (cut from 3.8, #819: its row shows --).
 -- Registers its S.registry.pages record. redraw_fx stays global.
@@ -36,7 +37,10 @@ return function(S)
   -- ALT+K3 act on ("filter", "delay", "reverb"); master and shimmer rows
   -- have none. A row's `binary` makes E3 turn it on (up) and off (down);
   -- `synced` names the param the row turns while the delay plays a
-  -- division, the row then showing S.lib.delay_sync.label(). A `hold` row
+  -- division, the row then showing S.lib.delay_sync.label(). A row's `held`
+  -- names the effect whose freeze marks it `held` after its label (the
+  -- delay's time row: a frozen loop keeps the length it froze at, and the
+  -- time shown is the one its release plays, #911). A `hold` row
   -- ("freeze", "clear") has no param_id: its param is its effect's in
   -- S.lib.fx_hold.FX_HOLD (freeze_id, clear_id), and none while the
   -- effect's freeze is not offered
@@ -52,7 +56,7 @@ return function(S)
       {label = "mix", section = "filter", param_id = "filter_mix", format = percent, effect = "filter"},
       {label = "delay", section = "delay", selectable = false, bypass = "delay", freeze = "delay"},
       {label = "time", section = "delay", param_id = "delay_time", format = "%.3f s", effect = "delay",
-        synced = "delay_division"},
+        synced = "delay_division", held = "delay"},
       {label = "fdbk", section = "delay", param_id = "delay_feedback", format = percent, effect = "delay"},
       {label = "level", section = "delay", param_id = "delay_mix", format = percent, effect = "delay"},  -- the return's
       {label = "sync", section = "delay", param_id = "delay_sync", format = on_off, effect = "delay", binary = true},
@@ -79,7 +83,9 @@ return function(S)
     row_level = 4,          -- every other param row
     bypass_text = "byp",    -- right-aligned on a bypassed effect's section row
     frozen_text = "frz",    -- in its place on a frozen one's (a bypass ends a freeze)
-    bypass_level = 4,       -- the level of both
+    bypass_level = 4,       -- the level of both, and of held
+    held_text = "held",     -- after a row's label while its `held` effect is frozen (#911)
+    held_gap = 4,           -- px between the label and held
     clear_text = "K3",      -- the clear row's value: K3 clears
     unavailable_text = "--",  -- a freeze not offered; the clear of a bypassed delay
     hints = {value = "E3:value", fine = "E3:fine", clear = "K3:clear", freeze = "K3:freeze",
@@ -157,6 +163,12 @@ return function(S)
     screen.level(selected and FX.selected_level or FX.row_level)
     screen.move(FX.param_x, y)
     screen.text(row.label)
+    if row.held and S.lib.fx_hold.frozen(row.held) then
+      screen.level(FX.bypass_level)
+      screen.move(FX.param_x + screen.text_extents(row.label) + FX.held_gap, y)
+      screen.text(FX.held_text)
+      screen.level(selected and FX.selected_level or FX.row_level)
+    end
     screen.move(value_right, y)
     screen.text_right(row_value(row))
   end
@@ -354,8 +366,16 @@ return function(S)
         key(1, 1); key(2, 1)
         context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
       end},
-      -- 3.8: frz on the delay's section row (the cursor on delay time)
+      -- 3.8: frz on the delay's section row (the cursor on delay time),
+      -- held on its time row (#911)
       {name = "delay frozen", setup = function()
+        S.lib.fx_hold.toggle("delay")
+        S.fx_row = row_of("delay_time")
+      end},
+      -- held beside the time row's widest label, 1 bar>1/4 (#911)
+      {name = "delay frozen, synced and halved", setup = function()
+        params:set("delay_sync", 1); params:set("delay_division", #S.constants.DIVISIONS.names)
+        params:set("clock_tempo", 20)
         S.lib.fx_hold.toggle("delay")
         S.fx_row = row_of("delay_time")
       end},
