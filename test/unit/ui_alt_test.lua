@@ -419,4 +419,59 @@ test("every randomizing page draws its hints when k2_hint is nil", function()
   S.lib.pages_seq.close_step_editor(1)
 end)
 
+
+-- #866: the press time is the dispatcher's (S.key_press_at, beside
+-- S.key_press_page), read through S.lib.ui_keys.held_seconds(n) and, on a
+-- modal owner, S.lib.ui_modal.held_seconds(owner, n); every way a release
+-- can be lost forgets it
+test("a key held across a page change, the menu and a covering owner reads nil", function()
+  local context = load_strata(); finish_startup(context)
+  local log = logging_fx_record()
+  local S = local_value("S")
+  local keys, modal = S.lib.ui_keys, S.lib.ui_modal
+  context.set_time(100); key(2, 1); context.set_time(100.5)
+  assert_equal(S.key_press_at[2], 100, "the press time, beside the press page")
+  assert_equal(keys.held_seconds(2), 0.5, "held on the page: how long")
+  assert_equal(keys.held_seconds(3), nil, "a key that is up: nil")
+  show_page("MAIN"); show_page("FX")
+  assert_equal(keys.held_seconds(2), nil, "across a page change: nil")
+  key(2, 0)
+  key(2, 1)
+  _menu.set_mode(true); _menu.set_mode(false)
+  assert_equal(keys.held_seconds(2), nil, "across the norns menu: nil")
+  key(2, 0)
+  local owner = {draw = function() end}
+  key(2, 1)
+  modal.push(owner); modal.pop(owner)
+  assert_equal(keys.held_seconds(2), nil, "across a covering owner: nil")
+  key(2, 0)
+  assert_equal(table.concat(log, ","), "key 2,key 2,key 2", "none of the three releases ran")
+  assert_true(next(S.key_press_at) == nil, "no press time is left")
+  -- an owner's press across the menu
+  modal.push(owner)
+  key(3, 1)
+  _menu.set_mode(true); _menu.set_mode(false)
+  assert_equal(modal.held_seconds(owner, 3), nil, "an owner's press across the norns menu: nil")
+  key(3, 0)
+  modal.pop(owner)
+end)
+
+-- #947, left as it is (the design's Calls): every path that takes a key's
+-- release away forgets ALT first, so ALT never sticks; the reverse stays.
+-- After a name entry closes with K1 still down, ALT is forgotten until K1
+-- is pressed again
+test("ALT is forgotten after a name entry, K1 still down, until K1 is pressed again (#947)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  key(1, 1)
+  local entry = S.lib.ui_name_entry.new()
+  entry.open("", "name", function() end)
+  assert_true(not S.alt_held, "the entry's opening forgets ALT")
+  context.textentry.finish("x")
+  assert_true(not S.alt_held, "K1 still down after the entry: no ALT")
+  key(1, 0); key(1, 1)
+  assert_true(S.alt_held, "K1 pressed again: ALT")
+  key(1, 0)
+end)
+
 end

@@ -1359,4 +1359,28 @@ test("the slice row follows cond on a buffer voice and turns off, then 1 to 64",
   end
 end)
 
+
+-- #866: the step editor's ALT+K2 reads the modal's press time
+-- (S.lib.ui_modal.held_seconds): a second open replaces the owner, so the
+-- press is forgotten and its release does nothing
+test("an ALT+K2 held across a second open of the step editor holds nothing", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local owner = S.lib.pages_seq.step_editor_owner
+  show_page("MAIN")
+  S.lib.pages_seq.open_step_editor(1, 1, 1)
+  key(1, 1); key(2, 1)
+  context.clock.run_for(0.6)
+  assert_true(owner.animates(), "held: the editor animates")
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:reset K3:clr E2:step", "held past the hold time: the reset's hint")
+  S.lib.pages_seq.open_step_editor(2, 3, 2)
+  assert_equal(S.lib.ui_modal.held_seconds(owner, 2), nil, "the second open forgets the press")
+  assert_equal(owner.animates(), false, "the editor stops animating")
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:rand K3:clr E2:step", "the hint is the quick press's")
+  key(2, 0); key(1, 0)
+  S.lib.pages_seq.close_step_editor(2)
+end)
+
 end

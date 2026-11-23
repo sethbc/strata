@@ -285,16 +285,18 @@ function enc(n, d)
 end
 
 -- Keys. K1 (which norns delivers only once held) is ALT: S.alt_held while
--- it is down (lib/ui/alt.lua). A K2 or K3 press goes to the page record's
--- key handler, or, with ALT held, to alt_action (the record's alt_key) and
--- is marked an ALT press (S.key_press_alt). A release goes only to the page
+-- it is down (lib/ui/alt.lua). A K2 or K3 press notes its page and time
+-- (S.key_press_page, S.key_press_at) and goes to the page record's key
+-- handler, or, with ALT held, to alt_action (the record's alt_key) and is
+-- marked an ALT press (S.key_press_alt). A release goes only to the page
 -- the key went down on, if it still shows (a key held across a page change
 -- does nothing when it comes up): an ALT press's to alt_key_release, even
--- if K1 came up first, any other's to key_release (if the record has them).
--- While a modal owner is pushed, K2 and K3 go to S.lib.ui_modal.key
--- instead (a press to the owner's key(n, 1), a release to its key(n, 0)
--- only if it saw the press), and the page forgets the key (a press it saw
--- releases into nothing)
+-- if K1 came up first, any other's to key_release (if the record has them);
+-- the marks are cleared after it, so the release reads how long the key
+-- was held (S.lib.ui_keys.held_seconds, #866). While a modal owner is
+-- pushed, K2 and K3 go to S.lib.ui_modal.key instead (a press to the
+-- owner's key(n, 1), a release to its key(n, 0) only if it saw the press),
+-- and the page forgets the key (a press it saw releases into nothing)
 function key(n, z)
   if not S.started then return end
   local owner = S.lib.ui_modal.top()
@@ -302,10 +304,12 @@ function key(n, z)
     S.lib.ui_alt.set(z == 1)
   elseif owner then
     S.key_press_page[n] = nil
+    S.key_press_at[n] = nil
     S.key_press_alt[n] = nil
     S.lib.ui_modal.key(n, z)
   elseif z == 1 then
     S.key_press_page[n] = S.ui_page
+    S.key_press_at[n] = util.time()
     if S.alt_held then
       S.key_press_alt[n] = true
       alt_action(S.ui_page, n)
@@ -315,14 +319,15 @@ function key(n, z)
     end
   else
     local press_page, alt_press = S.key_press_page[n], S.key_press_alt[n]
-    S.key_press_page[n] = nil
-    S.key_press_alt[n] = nil
     local record = S.registry.pages[S.ui_page]
     if press_page == S.ui_page then
       local release = record.key_release
       if alt_press then release = record.alt_key_release end
       if release then release(n) end
     end
+    S.key_press_page[n] = nil
+    S.key_press_at[n] = nil
+    S.key_press_alt[n] = nil
   end
   request_redraw()
 end

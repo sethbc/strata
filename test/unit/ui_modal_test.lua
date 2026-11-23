@@ -179,4 +179,39 @@ test("an owner's animates draws every frame over a page that does not; one witho
   assert_true(not ok, "an owner's animates is a function")
 end)
 
+
+-- #866: an owner's press time, read through held_seconds(owner, n): it
+-- answers only for the top owner that saw the press (inside its release
+-- too), and a push forgets the covered owner's presses
+test("held_seconds is nil for an owner that is not on top", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local modal = S.lib.ui_modal
+  local log = {}
+  local lower, upper = logging_owner(log), logging_owner({})
+  local at_release
+  lower.key = function(n, z)
+    log[#log + 1] = "key " .. n .. " " .. z
+    if z == 0 then at_release = modal.held_seconds(lower, n) end
+  end
+  modal.push(lower)
+  context.set_time(100); key(2, 1); context.set_time(100.25)
+  assert_equal(modal.held_seconds(lower, 2), 0.25, "the top owner that saw the press: how long it is held")
+  assert_equal(modal.held_seconds(lower, 3), nil, "a key that is up: nil")
+  assert_equal(modal.held_seconds(upper, 2), nil, "an owner that is not pushed: nil")
+  context.set_time(100.5); key(2, 0)
+  assert_equal(at_release, 0.5, "the owner's release reads how long the key was held")
+  assert_equal(modal.held_seconds(lower, 2), nil, "after the release: nil")
+  take(log)
+  context.set_time(101); key(3, 1)
+  modal.push(upper)
+  assert_equal(modal.held_seconds(lower, 3), nil, "covered: nil")
+  assert_equal(modal.held_seconds(upper, 3), nil, "the owner on top never saw the press")
+  modal.pop(upper)
+  assert_equal(modal.held_seconds(lower, 3), nil, "uncovered again: the press stays forgotten")
+  key(3, 0)
+  assert_equal(take(log), "key 3 1", "and its release reaches nothing")
+  modal.pop(lower)
+end)
+
 end

@@ -43,7 +43,7 @@ return function(S)
   -- name_min_width px (the voices shorten to "v2+" first). Strings in a row
   -- stay column_gap px apart. levels: the waveform, heads and ticks.
   -- hold_seconds: K2, ALT+K2 and ALT+K3 released this long after their
-  -- press act as holds.
+  -- press act as holds (ALT_HOLD_SECONDS, the other pages' hold).
   S.BUFFER_PAGE = {
     field_first_y = 16,
     field_spacing = 8,
@@ -86,7 +86,7 @@ return function(S)
     name_min_width = 12,    -- the cursor row's name keeps this much (a row with 16.0s still fits "v2+")
     minute_from = 59.95,    -- slot lengths from here on (60.0 to a tenth) show as m:ss ("1:05")
     checking_text = "...",  -- the length of a slot whose long file the engine is still checking
-    hold_seconds = 0.5,
+    hold_seconds = S.constants.ALT_HOLD_SECONDS,
     -- the start field: below `below` s it shows the start rounded to `step`
     -- s, as `format` of start / `unit`, so the label "start" always fits
     -- whole beside it; ALT+E3 moves one step, E3 at least start_min_step
@@ -696,19 +696,22 @@ return function(S)
       value_right = PAGE.value_right}, draw_slot_row)
   end
 
-  -- When K2 and K3 last went down (util.time()), plain or with ALT: their
-  -- release acts by how long they were held, so no clock is needed
-  local pressed_at = {}
+  -- How long K2 or K3 has been held, plain or with ALT: the dispatcher's
+  -- press time (S.lib.ui_keys.held_seconds, #866), which a page change,
+  -- the norns menu, the file selector and a modal owner pushed over the
+  -- page forget. A release (key() runs it before it forgets the press)
+  -- acts by how long the key was held, so no clock is needed
+  local function held_seconds(n)
+    return S.lib.ui_keys.held_seconds(n)
+  end
   local function held_long(n)
-    local at = pressed_at[n]
-    pressed_at[n] = nil
-    return at ~= nil and util.time() - at >= PAGE.hold_seconds
+    local held = held_seconds(n)
+    return held ~= nil and held >= PAGE.hold_seconds
   end
 
-  -- The hold hint's texts per key, {before hold_seconds, from it}: a key
-  -- counts as down while it went down on this page (S.key_press_page, which
-  -- a page change, the norns menu and the file selector clear) and the page
-  -- noted its press. Plain K3 records at the press and has no hold
+  -- The hold hint's texts per key, {before hold_seconds, from it}, while
+  -- the key is held (held_seconds answers). Plain K3 records at the press
+  -- and has no hold
   local HOLD_HINTS = {
     plain = {[2] = {"K2 up: load", "K2 up: clear"}},
     alt = {[2] = {"K2 up: random", "K2 up: fill"}, [3] = {"K3 up: save", "K3 up: save loop"}},
@@ -716,8 +719,9 @@ return function(S)
   local function held_hint()
     for n = 2, 3 do
       local texts = (S.key_press_alt[n] and HOLD_HINTS.alt or HOLD_HINTS.plain)[n]
-      if texts and pressed_at[n] and S.key_press_page[n] == UI_PAGES.index.BUFFER then
-        return texts, pressed_at[n]
+      local held = held_seconds(n)
+      if texts and held and S.key_press_page[n] == UI_PAGES.index.BUFFER then
+        return texts, held
       end
     end
   end
@@ -729,8 +733,8 @@ return function(S)
   -- armed, "..." while its take that ended waits for the engine (K3 does
   -- nothing then)
   local function buffer_hints(alt_held)
-    local texts, at = held_hint()
-    if texts then return util.time() - at >= PAGE.hold_seconds and texts[2] or texts[1] end
+    local texts, held = held_hint()
+    if texts then return held >= PAGE.hold_seconds and texts[2] or texts[1] end
     if alt_held then return "K2:rnd/fill K3:sv/trim" end
     if cursor_field().name == "slices" then
       -- an empty slot has no slices to edit: K3 only flashes so
@@ -777,10 +781,10 @@ return function(S)
     if not S.lib.ui_slice_editor.open(slot) then buffer_page_flash("buf " .. slot .. " empty") end
   end
 
+  -- K2's press does nothing (key() notes its time; it acts on release); K3
+  -- acts at the press
   local function buffer_key(n)
-    if n == 2 then
-      pressed_at[2] = util.time()
-    elseif n == 3 then
+    if n == 3 then
       if cursor_field().name == "slices" then open_slice_editor() else record_cursor_slot() end
     end
   end
@@ -804,12 +808,11 @@ return function(S)
   end
 
   -- ALT+K2 and ALT+K3 act on release (design 3.3 section 8.1, the one
-  -- exception to acting through alt_action at the press): the press only
-  -- notes its time. An ALT press releases through alt_key_release, never
-  -- key_release, so ALT+K2 never opens the file selector, even when K1
-  -- comes up first
-  local function buffer_alt_key(n)
-    pressed_at[n] = util.time()
+  -- exception to acting through alt_action at the press): the press does
+  -- nothing here (key() notes its time). An ALT press releases through
+  -- alt_key_release, never key_release, so ALT+K2 never opens the file
+  -- selector, even when K1 comes up first
+  local function buffer_alt_key()
   end
 
   -- ALT+K2 released: a random file into the cursor slot, or held, fill

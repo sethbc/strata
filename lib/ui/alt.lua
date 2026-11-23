@@ -47,27 +47,27 @@ return function(S)
   -- record's randomize_section() returns the spec of the section under its
   -- cursor (S.lib.mutation.randomize), with "locked" second for a locked
   -- voice (nothing is randomized, but an undo held there still runs), or
-  -- nil. k2_press is the last press ({page, at = util.time()}): k2_up
-  -- forgets it; a page change leaves it stale until the next k2_down, which
-  -- is harmless, since k2_held reads the key's press marks and k2_up runs
-  -- only from a release key() routes, which follows a k2_down on its page
+  -- nil. The press time is the dispatcher's (S.key_press_at, read through
+  -- S.lib.ui_keys.held_seconds; #866): this module keeps no mark of its
+  -- own, so a page change, the norns menu, the file selector and a modal
+  -- push, which forget the press, leave nothing to go stale
   local ALT_HOLD_SECONDS = S.constants.ALT_HOLD_SECONDS
-  local k2_press = nil
 
+  -- ALT+K2 went down on the page (its alt_key(2)) or on SEQ's step editor:
+  -- key() or the modal has noted the press, so there is nothing to keep
+  -- (key() requests the redraw that shows the held hint)
   function M.k2_down()
-    k2_press = {page = S.ui_page, at = util.time()}
   end
 
-  -- Whether the ALT+K2 press k2_down noted is down on the page showing: a
-  -- page change, the norns menu and the file selector forget it
-  -- (S.key_press_page), so a press carried away and back holds nothing
+  -- Whether ALT+K2 is down on the page showing: a page change, the norns
+  -- menu, the file selector and a modal push forget it (S.key_press_page),
+  -- so a press carried away and back holds nothing
   function M.k2_held()
-    return k2_press ~= nil and k2_press.page == S.ui_page and S.key_press_page[2] == S.ui_page
-      and S.key_press_alt[2] == true
+    return S.lib.ui_keys.held_seconds(2) ~= nil and S.key_press_alt[2] == true
   end
 
   local function held_long()
-    return M.k2_held() and util.time() - k2_press.at >= ALT_HOLD_SECONDS
+    return M.k2_held() and S.lib.ui_keys.held_seconds(2) >= ALT_HOLD_SECONDS
   end
 
   -- What a quick press on the record does: "undo" while the undo held is its
@@ -84,12 +84,15 @@ return function(S)
   end
 
   -- ALT+K2 released on the record's page: held ALT_HOLD_SECONDS, its
-  -- alt_hold; else the quick action (undo, randomize, nothing when locked)
-  function M.k2_up(record)
-    local press = k2_press
-    k2_press = nil
-    if press == nil or press.page ~= S.ui_page then return end
-    if util.time() - press.at >= ALT_HOLD_SECONDS then
+  -- alt_hold; else the quick action (undo, randomize, nothing when locked).
+  -- held is how long the key was down: by default the page's ALT+K2
+  -- (k2_held, read in the release key() runs); a modal owner passes its own
+  -- (S.lib.ui_modal.held_seconds, SEQ's step editor). No held press:
+  -- nothing
+  function M.k2_up(record, held)
+    if held == nil and M.k2_held() then held = S.lib.ui_keys.held_seconds(2) end
+    if held == nil then return end
+    if held >= ALT_HOLD_SECONDS then
       if record.alt_hold then record.alt_hold() end
     else
       local action, spec = quick_action(record)

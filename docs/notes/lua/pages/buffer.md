@@ -2,7 +2,7 @@
 
 - While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector (`fileselect.redraw()`), never the page, so no frame-clock redraw draws over the file list.
 - `buffer_key_release` calls `forget_held_keys()` just before `fileselect.enter`: the selector takes the keys, so a key held then would never be released to the script.
-- K2, ALT+K2 and ALT+K3 act on release, by how long they were held: the press only notes `util.time()` (`pressed_at`), and the release compares it with `S.BUFFER_PAGE.hold_seconds` (0.5 s). No clock. ALT+K2 and ALT+K3 are the one exception to acting through `alt_action` at the press (design 3.3 §8.1, Question 20): `alt_key` notes the press, `alt_key_release` acts.
+- K2, ALT+K2 and ALT+K3 act on release, by how long they were held: the dispatcher's press time (`S.lib.ui_keys.held_seconds(n)`, #866; the page keeps no mark of its own), compared with `S.BUFFER_PAGE.hold_seconds` (`ALT_HOLD_SECONDS`, 0.5 s, the other pages' hold). No clock. ALT+K2 and ALT+K3 are the one exception to acting through `alt_action` at the press (design 3.3 §8.1, Question 20): `alt_key` does nothing at the press, `alt_key_release` acts.
 - An ALT press releases through `alt_key_release`, never `key_release`, so ALT+K2 never opens the file selector or clears the slot, even when K1 comes up first (K1 down, K2 down, K1 up, K2 up). BUFFER never reads `S.key_press_page[2]` to change what K3 does: the K2+K3 save gesture is gone (ALT+K3 saves), and a K2 pressed with ALT is still in `S.key_press_page`.
 - K3 on the `slices` field (the twelfth and last, so the field indices the layout states set, 3 and 10, hold: plan ruling 20) opens the slice editor (`S.lib.ui_slice_editor.open(cursor slot)`, `docs/notes/lua/ui/slice-editor.md`) and records nothing; a slot with no audio flashes `buf <n> empty`, and its hint names no K3 there (`K2:ld/clr`: the final review's Lua B, Minor 3). On every other field K3 records. The arc button records on every field.
 - BUFFER's keys follow the other pages (3.7, plan ruling 31): a quick ALT+K2 is the random draw (`S.lib.files.random_into`), held it fills the empty slots; K2 held clears the slot (`clear_buffer`, no flash); a quick K2 opens the file selector; ALT+K3 as before.
@@ -87,16 +87,16 @@ The flash: `buffer_page_flash(text)` = `S.lib.ui_flash.start("hints", text, 1.5,
 
 ## Held keys
 
-A key counts as down for the hint (`held_hint()`) while `S.key_press_page[n]` is BUFFER's index and `pressed_at[n]` is set; `S.key_press_alt[n]` picks the plain or ALT texts. Plain K3 records at the press and has no hold. A "hints" flash covers the hold hint (`redraw()` draws the flash first).
+A key counts as down for the hint (`held_hint()`) while `S.lib.ui_keys.held_seconds(n)` answers and `S.key_press_page[n]` is BUFFER's index; `S.key_press_alt[n]` picks the plain or ALT texts. Plain K3 records at the press and has no hold. A "hints" flash covers the hold hint (`redraw()` draws the flash first).
 
-| State | `pressed_at[n]` | `S.key_press_page[n]` | `S.key_press_alt[n]` | Hint row |
-|-------|-----------------|-----------------------|----------------------|----------|
+| State | `S.key_press_at[n]` | `S.key_press_page[n]` | `S.key_press_alt[n]` | Hint row |
+|-------|---------------------|-----------------------|----------------------|----------|
 | up | nil | nil | nil | the page's own hints |
 | down short (under 0.5 s) | time | BUFFER | nil (K2) or true (ALT+K2, ALT+K3) | `K2 up: load`, `K2 up: random` or `K3 up: save` |
 | down long (0.5 s or more) | time | BUFFER | as above | `K2 up: clear`, `K2 up: fill` or `K3 up: save loop` |
-| taken (menu, selector or page change) | may stay set, harmless | nil | nil | the page's own hints |
+| taken (menu, selector, page change or a modal owner pushed over the page) | nil | nil | nil | the page's own hints |
 
-Transitions: the press (`buffer_key`, `buffer_alt_key`) notes `pressed_at`, the release (`held_long`) clears it, and `forget_held_keys` or a page change clears `S.key_press_page`, which ends the hint even if `pressed_at` is stale (`forget_held_keys` clears `S.key_press_page` and `S.key_press_alt` both; a page change clears both too, by #234). The hint is gated on `S.key_press_page[n]`, so a stale `pressed_at[n]` is harmless.
+Transitions: `key()` notes the press (page and time) and forgets it after the release handler ran (`held_long` reads it there); `forget_held_keys`, a page change and `S.lib.ui_modal.push` forget it (#234, #866), so its release then does nothing (a K2 held while the grid's step editor covered the page neither clears the slot nor opens the selector). The page keeps no press mark of its own, so none can go stale.
 
 ## Input meter
 
