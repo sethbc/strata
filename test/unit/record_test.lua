@@ -689,15 +689,62 @@ test("a playable recording with no recordState settles after the fallback", func
   assert_equal(buffers[1].name, "take 1")
   context.clear_engine_calls(); record_buffer(1)
   assert_equal(#context.calls_named("recordBuffer"), 1, "K3 records again")
-  -- a playable recording stopped while armed, with no report: as canceled
+  -- a playable recording stopped while armed, with no report: Lua cannot
+  -- know whether it started (a synced one records at its beat with the
+  -- poll missing), so the slot settles as recorded into, never as the file
   record_buffer(1)
   params:set("record_threshold", 3)
   load_buffer(2, "/tmp/b.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 6))
   record_buffer(2); assert_equal(S.lib.record.state(2).phase, "armed")
   record_buffer(2)
   context.clock.run_for(S.lib.buffers.BUFFER_SETTLE.fallback_seconds + 0.1)
-  assert_equal(S.lib.buffers.status(2), "loaded", "an armed one never recorded: the slot as it was")
-  assert_equal(buffers[2].name, "b.wav"); assert_true(not buffers[2].recording)
+  assert_equal(S.lib.buffers.status(2), "loaded", "settled from the last known length")
+  assert_equal(buffers[2].name, "take 2", "no longer named for its file")
+  assert_equal(buffers[2].path, scratch_take_path(2), "nor on its path")
+  assert_true(not buffers[2].recording)
+end)
+
+-- #904: a dub with a length (loop off) gets its fallback when that length
+-- has run out, as a replace take's starts at its take's end; a loop, which
+-- has no end, keeps the fallback from K3
+test("a dub that runs to its length with no report settles after the fallback", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local fallback = S.lib.buffers.BUFFER_SETTLE.fallback_seconds
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
+  params:set("record_feedback", 50); params:set("record_duration", 2)
+  record_buffer(1)
+  assert_equal(S.lib.record.clock_role(1), "take", "the length's timer runs")
+  context.polls.fire("recordState", record_state_value(1, 1, 1))  -- recording; no report follows
+  context.clock.run_for(2 + 0.05)
+  assert_equal(S.lib.record.clock_role(1), "fallback", "the length ran out: the fallback waits")
+  assert_equal(S.lib.buffers.status(1), "dub")
+  context.clock.run_for(fallback - 0.1)
+  assert_equal(S.lib.buffers.status(1), "dub", "not before the fallback")
+  context.clock.run_for(0.1)
+  assert_equal(S.lib.buffers.status(1), "loaded"); assert_equal(buffers[1].name, "take 1")
+  assert_equal(S.lib.record.clock_role(1), nil)
+  -- an armed dub's timer starts at its recording report
+  params:set("record_threshold", 3)
+  load_buffer(2, "/tmp/b.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 6))
+  record_buffer(2)
+  assert_equal(S.lib.record.clock_role(2), nil, "no timer while armed")
+  context.polls.fire("recordState", record_state_value(buffers[2].records_sent, 1, 2))
+  assert_equal(S.lib.record.clock_role(2), "take")
+  -- its ended report in time ends the timer: nothing more happens
+  context.polls.fire("recordState", record_state_value(buffers[2].records_sent, 2, 2))
+  assert_equal(S.lib.record.clock_role(2), nil); assert_equal(buffers[2].name, "take 2")
+  -- a loop has no end: no timer, its fallback starts at K3
+  params:set("record_threshold", 1); params:set("record_loop", 2)
+  load_buffer(3, "/tmp/c.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 6))
+  record_buffer(3)
+  assert_equal(S.lib.buffers.status(3), "loop"); assert_equal(S.lib.record.clock_role(3), nil, "no timer for a loop")
+  context.clock.run_for(30)
+  assert_equal(S.lib.buffers.status(3), "loop", "a loop runs until K3")
+  record_buffer(3)
+  assert_equal(S.lib.record.clock_role(3), "fallback")
+  context.clock.run_for(fallback + 0.1)
+  assert_equal(S.lib.buffers.status(3), "loaded"); assert_equal(buffers[3].name, "take 3")
 end)
 
 -- #870: the slot's one clock has a role, and a role's clock is not taken
