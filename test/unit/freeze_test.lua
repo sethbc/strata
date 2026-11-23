@@ -779,9 +779,14 @@ local function kind_freeze(value, recall)
   return function() params:set(KIND_PREFIX .. "freeze", value) end
 end
 
+-- A start or a stop: by hand through the actions' run_voice (crow, ii,
+-- OSC: on or off), which calls toggle_voice, K3's, only when the voice is
+-- not already as asked; in a recall the scene's active entry
 local function kind_run(running, recall)
   if recall then return kind_recall(function(voice) voice.active = running end) end
-  return function() toggle_voice(KIND_VOICE) end
+  return function()
+    assert_true(local_value("S").lib.io_actions.run_voice(KIND_VOICE, running and 1 or 0), "run_voice took it")
+  end
 end
 
 local function kind_extras(S)
@@ -871,22 +876,62 @@ for _, how in ipairs({{", by hand", false}, {", in a recall", true}}) do
   kind_events["stop" .. how[1]] = kind_run(false, how[2])
 end
 
-local kind_impossible = {}
-for _, kind in ipairs({"synth", "frozen synth", "buffer", "input", "voice source"}) do
-  for _, how in ipairs({", by hand", ", in a recall"}) do
-    table.insert(kind_impossible, {kind .. ", running", "start" .. how,
-      "a start is a stopped voice's: K3 on a running voice is its stop, and a scene with it running starts nothing"})
-    table.insert(kind_impossible, {kind .. ", stopped", "stop" .. how,
-      "a stop is a running voice's: K3 on a stopped voice is its start, and a scene with it stopped stops nothing"})
+-- The engine calls to voice 3 named `names` (a set) since the mark; for
+-- setGrainParam, only the grain param `param`
+local function kind_calls(context, names, param)
+  local count = 0
+  for index = context.kind_mark + 1, #context.engine_calls do
+    local call = context.engine_calls[index]
+    if names[call.name] and call.args[1] == KIND_VOICE - 1 and (param == nil or call.args[2] == param) then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+-- A start of a running voice and a stop of a stopped one change nothing:
+-- by hand nothing at all is sent; in a recall the voice is neither started,
+-- stopped nor switched and no note or freeze goes (a recall's freq set may
+-- resend its value and scaleNote, as in every recall row)
+local KIND_NO_RUN = {voiceOn = true, voiceOff = true, setGrainSource = true, noteOn = true, noteOff = true}
+local function kind_nothing(recall)
+  return function(context)
+    if not recall then
+      assert_equal(#context.engine_calls, context.kind_mark, "nothing sent")
+      return
+    end
+    assert_equal(kind_calls(context, KIND_NO_RUN), 0, "no start, stop, switch or note")
+    assert_equal(kind_calls(context, {setGrainParam = true}, "freeze"), 0, "no freeze sent")
   end
 end
 
 -- by hand and in a recall alike: {event suffix, ...}
 local HAND, RECALL = ", by hand", ", in a recall"
 local kind_rows = {}
+
+-- A recall's source set runs no source change hook: the freeze it sends is
+-- the end's sync's one, on a running voice whose source the scene changed
+-- (none on a stopped voice, whose senders are gated, or for the same
+-- source). The source hooks, run in a recall, would send more (#908's 5th
+-- review finding)
+local function recall_freezes(state, target)
+  if not state:find(", running$") then return 0 end
+  local same = (target == "synth" and state:find("synth, running$") ~= nil) or (target == "input" and state == "input, running")
+  return same and 0 or 1
+end
+
 local function rows(state, how, list)
   for _, row in ipairs(list) do
-    table.insert(kind_rows, {state, row[1] .. how, row[2], check = row[3], known = row.known})
+    local check, target = row[3], row[1]:match("^source (.+)$")
+    if how == RECALL and target then
+      local wanted, own = recall_freezes(state, target), check
+      check = function(context)
+        local sent = kind_calls(context, {setGrainParam = true}, "freeze")
+        own(context)
+        assert_equal(sent, wanted, "the freeze sends the recall made")
+      end
+    end
+    table.insert(kind_rows, {state, row[1] .. how, row[2], check = check, known = row.known})
   end
 end
 
@@ -900,6 +945,7 @@ for _, how in ipairs({HAND, RECALL}) do
     {"freeze 1", FR, E(1, KIND_NOW, 0, KIND_NOW)},
     {"freeze 0", SR, E(0, nil, 1, KIND_NOW)},
     {"stop", SS, E(0, nil, 0, false)},
+    {"start", SR, E(0, nil, 1, KIND_NOW, kind_nothing(how == RECALL))},
   })
 end
 -- frozen synth, running: frozen at 440 Hz, its freq at 220 Hz since
@@ -920,6 +966,7 @@ for _, how in ipairs({HAND, RECALL}) do
     {"freeze 1", FR, E(1, KIND_FROZE_AT, 1, KIND_FROZE_AT)},
     {"freeze 0", SR, E(0, nil, 1, KIND_NOW)},
     {"stop", FS, E(1, KIND_NOW, 0, false)},
+    {"start", FR, E(1, KIND_FROZE_AT, 1, KIND_FROZE_AT, kind_nothing(how == RECALL))},
   })
 end
 -- buffer, input and voice source, running
@@ -932,6 +979,7 @@ for _, how in ipairs({HAND, RECALL}) do
     {"freeze 1", BR, E(1, nil, 1, KIND_RING)},
     {"freeze 0", BR, E(0, nil, 1, KIND_RING)},
     {"stop", BS, E(0, nil, 0, false)},
+    {"start", BR, E(0, nil, 1, KIND_RING, kind_nothing(how == RECALL))},
   })
   rows(IR, how, {
     {"source synth", SR, E(0, nil, 1, KIND_NOW)},
@@ -941,6 +989,7 @@ for _, how in ipairs({HAND, RECALL}) do
     {"freeze 1", IR, E(1, nil, 1, KIND_RING)},
     {"freeze 0", IR, E(0, nil, 1, KIND_RING)},
     {"stop", IS, E(0, nil, 0, false)},
+    {"start", IR, E(0, nil, 1, KIND_RING, kind_nothing(how == RECALL))},
   })
   rows(VR, how, {
     {"source synth", SR, E(0, nil, 1, KIND_NOW)},
@@ -950,6 +999,7 @@ for _, how in ipairs({HAND, RECALL}) do
     {"freeze 1", VR, E(1, nil, 1, KIND_RING)},
     {"freeze 0", VR, E(0, nil, 1, KIND_RING)},
     {"stop", VS, E(0, nil, 0, false)},
+    {"start", VR, E(0, nil, 1, KIND_RING, kind_nothing(how == RECALL))},
   })
 end
 -- the stopped states: nothing held, nothing sent but a start's scaleNote
@@ -962,6 +1012,7 @@ for _, how in ipairs({HAND, RECALL}) do
     {"freeze 1", FS, E(1, KIND_NOW, 0, false)},
     {"freeze 0", SS, E(0, nil, 0, false)},
     {"start", SR, E(0, nil, 0, KIND_NOW)},
+    {"stop", SS, E(0, nil, 0, false, kind_nothing(how == RECALL))},
   })
 end
 rows(FS, HAND, {
@@ -981,6 +1032,7 @@ for _, how in ipairs({HAND, RECALL}) do
     {"freeze 1", FS, E(1, KIND_NOW, 0, false)},
     {"freeze 0", SS, E(0, nil, 0, false)},
     {"start", FR, E(1, KIND_NOW, 0, KIND_NOW)},
+    {"stop", FS, E(1, KIND_NOW, 0, false, kind_nothing(how == RECALL))},
   })
   for _, kind in ipairs({{BS, BR}, {IS, IR}, {VS, VR}}) do
     rows(kind[1], how, {
@@ -991,6 +1043,7 @@ for _, how in ipairs({HAND, RECALL}) do
       {"freeze 1", kind[1], E(1, nil, 0, false)},
       {"freeze 0", kind[1], E(0, nil, 0, false)},
       {"start", kind[2], E(0, nil, 0, KIND_RING)},
+      {"stop", kind[1], E(0, nil, 0, false, kind_nothing(how == RECALL))},
     })
   end
 end
@@ -1002,7 +1055,7 @@ h.transition_table({
   events = kind_events,
   state_of = function() return kind_of(local_value("S")) end,
   rows = kind_rows,
-  impossible = kind_impossible,
+  impossible = {},
 })
 
 end
