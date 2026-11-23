@@ -772,12 +772,10 @@ return function(S)
     return pattern_spec(S.selected_voice)
   end
 
-  -- ALT+K2 (through alt_action) only notes its press: it acts on release.
-  -- ALT+K3 clears the selected voice's pattern
+  -- ALT+K2 acts on release (seq_alt_key_release): its press time is the
+  -- dispatcher's (S.key_press_at). ALT+K3 clears the selected voice's pattern
   local function seq_alt_key(n)
-    if n == 2 then
-      S.lib.ui_alt.k2_down()
-    elseif n == 3 then
+    if n == 3 then
       clear_pattern(S.selected_voice)
       pattern_changed()
     end
@@ -816,7 +814,7 @@ return function(S)
 
   -- The step editor -------------------------------------------------------
 
-  -- What its ALT+K2 does, through S.lib.ui_alt's k2_down and k2_up (a quick
+  -- What its ALT+K2 does, through S.lib.ui_alt's k2_up (a quick
   -- press randomizes the editor's voice's pattern or undoes it, a hold
   -- resets the row), as SEQ's record does
   local editor_alt = {
@@ -850,7 +848,8 @@ return function(S)
     if editor == nil then return end
     if n == 2 then
       if z == 1 and S.alt_held then
-        S.lib.ui_alt.k2_down()
+        -- ALT+K2 down: nothing (the modal keeps its time), so it does not
+        -- close the editor; its release acts
       elseif z == 1 then
         M.close_step_editor(editor.port)
       else

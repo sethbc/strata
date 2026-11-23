@@ -266,12 +266,10 @@ return function(S)
     end
   end
 
-  -- ALT+K2 acts on release (main_alt_key_release): the press only notes its
-  -- time. ALT+K3: lock/unlock, at the press
+  -- ALT+K2 acts on release (main_alt_key_release): its press time is the
+  -- dispatcher's (S.key_press_at). ALT+K3: lock/unlock, at the press
   local function main_alt_key(n)
-    if n == 2 then
-      S.lib.ui_alt.k2_down()
-    elseif n == 3 then
+    if n == 3 then
       toggle_lock(S.selected_voice)
     end
     request_redraw()

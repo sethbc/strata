@@ -40,7 +40,7 @@ K1 held as ALT is confirmed on hardware, so the design's long-press fallback (§
 ## ALT+K2 on the randomizing pages
 
 One handler in `lib/ui/alt.lua` for every page whose ALT+K2 randomizes (MAIN, VOICE, SEQ, FX and LFO; #557), acting on release, as BUFFER's ALT keys do:
-- The page's `alt_key(2)` calls `S.lib.ui_alt.k2_down()`, which keeps nothing (`key()` noted the press time, #866), and its `alt_key_release(2)` calls `S.lib.ui_alt.k2_up(record)`. strata.lua's `key` routes the release there even when K1 came up first.
+- The page's ALT+K2 press calls nothing (`key()` notes the press time, #866; #959), and its `alt_key_release(2)` calls `S.lib.ui_alt.k2_up(record)`. strata.lua's `key` routes the release there even when K1 came up first.
 - `k2_up(record, held)` acts only on a press still held: `held` is how long it was down, by default the page's ALT+K2 (`k2_held()` and `S.lib.ui_keys.held_seconds(2)`, read in the release `key()` runs); SEQ's step editor passes its own (`S.lib.ui_modal.held_seconds`). With none, nothing:
   - held `ALT_HOLD_SECONDS` (0.5 s, `lib/constants.lua`) or longer: the record's `alt_hold()`, if it has one (VOICE and LFO: reset to default; SEQ, 3.4: the edit view opens, or in it the row resets, `docs/notes/lua/pages/seq.md`); a page without one (MAIN and FX) does nothing: the long press cancels;
   - quicker: `quick_action(record)`: `S.lib.mutation.undo()` while `undo_for(spec.page, spec.section, spec.voice)`, else nothing where the press draws nothing (no spec, or a draws spec with none: VOICE's type and preset rows, a Sub voice's mix; #823), else nothing for a locked voice, else `S.lib.mutation.randomize(spec)`. Then it requests a redraw.

@@ -618,14 +618,12 @@ return function(S)
     end
   end
 
-  -- ALT+K2 acts on release (S.lib.ui_alt); ALT+K3: learn in a view (the
-  -- target row, the routing's dest row), a routing's on/off and a source's
-  -- alt_press(3) in the list
+  -- ALT+K2 acts on release (S.lib.ui_alt; its press time is the
+  -- dispatcher's); ALT+K3: learn in a view (the target row, the routing's
+  -- dest row), a routing's on/off and a source's alt_press(3) in the list
   local function mod_alt_key(n)
     local state = S.mod_page
-    if n == 2 then
-      S.lib.ui_alt.k2_down()
-    elseif n == 3 then
+    if n == 3 then
       if state.view == "targets" then
         S.lib.macros.learn(state.macro, state.target_row)
       elseif state.view == "routing" then
