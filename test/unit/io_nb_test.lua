@@ -276,13 +276,21 @@ test("the activation clock stopped as its wake is posted: no clock error, and no
   choose(2, "late")
   local id = late.active_routine
   assert_true(id ~= nil, "a clock held in active_routine")
-  context.clock.advance_until(id, function() choose(2, "none") end)
-  context.clock.run_for(S.lib.io_nb.NB.delayed_seconds * 2)
+  -- deselected and chosen again in that gap: a new activation, its own clock
+  local new_id
+  context.clock.advance_until(id, function()
+    choose(2, "none")
+    choose(2, "late")
+    new_id = late.active_routine
+  end)
   assert_equal(#context.clock.take_errors(), 0, "no resume reached a canceled clock")
-  assert_equal(count(late, "delayed_active"), 0, "no delayed_active at the wake or after")
-  assert_equal(late.is_active, false)
-  assert_equal(late.active_routine, nil, "the clock gone")
-  assert_equal(clock.threads[id], nil, "it ended at its wake")
+  assert_equal(clock.threads[id], nil, "the old clock ended at its wake")
+  assert_equal(count(late, "delayed_active"), 0, "the old clock's wake calls no delayed_active")
+  assert_true(new_id ~= nil and new_id ~= id, "a new clock")
+  assert_equal(late.active_routine, new_id, "the new activation's clock is left alone")
+  context.clock.run_for(S.lib.io_nb.NB.delayed_seconds * 1.1)
+  assert_equal(count(late, "delayed_active"), 1, "the new activation's, once, a second after it")
+  assert_equal(late.active_routine, nil, "and its clock gone")
 end)
 
 test("a player this module activated is deactivated though another host emptied the refcounts", function()

@@ -613,6 +613,66 @@ test("an envelope's setup the queue refused is sent again at the next sync", fun
   assert_equal(last_line(context, "ii.txo.env_act(7, "), nil, "the pitch-mode output gets no envelope")
 end)
 
+test("a setup the queue took only in part is sent again whole at the next sync", function()
+  -- #871: with one place left (47 of II.queue_max waiting) env_act is admitted and env_att and
+  -- env_dec, later sends of its port's turn in the step, are refused; the output does not count
+  -- as set up, so the next sync sends all three (crow-ii.md §2, TELEXo)
+  local context, S = leading_real()
+  local ii = S.lib.io_ii
+  for k = 1, ii.II.queue_max - 1 - ii.queued() do ii.send("filler", "full", k) end  -- the lead's own lines count
+  assert_equal(ii.queued(), ii.II.queue_max - 1, "one place left")
+  local before = ii.dropped()
+  params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
+  assert_equal(ii.dropped() - before, 2, "env_att and env_dec refused")
+  for _ = 1, 60 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(last_line(context, "ii.txo.env_act(3, "), "ii.txo.env_act(3, 1)", "env_act reached crow")
+  assert_equal(last_line(context, "ii.txo.env_att(3, "), nil, "env_att did not")
+  params:set("v2_out_txo", 7)  -- the next sync: voice 2 to output 7, in pitch mode
+  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 10)", "its attack")
+  assert_equal(last_line(context, "ii.txo.env_dec(3, "), "ii.txo.env_dec(3, 500)", "its decay")
+  local env_acts = 0
+  for _, line in ipairs(context.crow.sent) do
+    if line == "ii.txo.env_act(3, 1)" then env_acts = env_acts + 1 end
+  end
+  assert_equal(env_acts, 2, "the setup sent again whole, env_act with it")
+  -- set up now: a further sync sends output 3 nothing
+  local from = #context.crow.sent
+  params:set("v2_out_txo", 8)
+  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
+  for index = from + 1, #context.crow.sent do
+    assert_true(not context.crow.sent[index]:find("(3, ", 1, true), "nothing more to output 3: " .. context.crow.sent[index])
+  end
+end)
+
+test("an output whose setup was taken only in part is turned off when no voice wants it", function()
+  -- #871: its env_act 1 reached the module, so leaving it sends env_act(n, 0) (crow-ii.md §2)
+  local context, S = leading_real()
+  local ii = S.lib.io_ii
+  for k = 1, ii.II.queue_max - 1 - ii.queued() do ii.send("filler", "full", k) end
+  params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
+  for _ = 1, 60 do context.clock.advance_until(S.lfo_clock) end
+  params:set("v1_out_txo_cv", 1)  -- back to pitch
+  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(last_line(context, "ii.txo.env_act(3, "), "ii.txo.env_act(3, 0)", "the envelope turned off")
+end)
+
+test("a setup is not tried again while the queue has no room for it", function()
+  -- #871 (the review's minor): a retry the queue cannot take is not sent, so it is not counted
+  -- as a drop the ii title shows
+  local context, S = leading_real()
+  local ii = S.lib.io_ii
+  for k = 1, 60 do ii.send("filler", "full", k) end
+  params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
+  local before = ii.dropped()
+  params:set("v2_out_txo", 7)  -- a sync while the queue is still full
+  assert_equal(ii.dropped() - before, 0, "no retry while the queue is full")
+  for _ = 1, 60 do context.clock.advance_until(S.lfo_clock) end
+  params:set("v2_out_txo", 8)  -- a sync with room
+  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(last_line(context, "ii.txo.env_act(3, "), "ii.txo.env_act(3, 1)", "set up once there is room")
+end)
+
 
 test("the TELEXo is routed only while Strata leads the bus, as Just Friends and W/ are", function()
   local _, S, state = started()
