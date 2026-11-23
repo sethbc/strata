@@ -261,6 +261,7 @@ test("a tuning with a tone or a period that is not a number, or infinite, is ref
   -- a ratio of two 400-digit integers is inf / inf: NaN cents
   local files = {
     {"x\n2\n" .. huge .. "/" .. huge .. "\n1200.0", "a NaN tone"},
+    {"x\n3\n" .. huge .. "/" .. huge .. "\n100.0\n1200.0", "a NaN tone before a finite one"},
     {"x\n1\n" .. huge .. "/" .. huge, "a NaN period"},
     {"x\n2\n" .. huge .. ".0\n1200.0", "an infinite tone"},
     {"x\n2\n1/" .. huge .. "\n1200.0", "a tone of minus infinity"},
