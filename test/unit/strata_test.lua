@@ -421,7 +421,13 @@ test("the notes model's stream note leaves at its note's rate against the voice'
   local Model = require("notes_model")
   -- the root before any rootNote is the one it is given (Lua's NOTES.rate_root_note, the engine's
   -- noteRateRootNote by a docs test), never a literal of the model's
-  assert_equal(Model.new(S.constants, { rate_root_note = 62 }).voices[0].root, 62, "the root it is given")
+  assert_equal(Model.new(S.constants, { rate_root_note = 62, rate_range = { 0.25, 4 } }).voices[0].root, 62,
+    "the root it is given")
+  -- and the rate clip is the range it is given (NOTES.rate_range, held to absoluteNoteRate's clip by a docs test)
+  local narrow = Model.new(S.constants, { rate_root_note = 60, rate_range = { 0.5, 2 } })
+  assert_near(narrow:absolute_rate(0, 84), 2, 1e-9, "84 over 60 clipped to the range's top")
+  assert_near(narrow:absolute_rate(0, 36), 0.5, 1e-9, "36 over 60 clipped to the range's bottom")
+  assert_true(not pcall(Model.new, S.constants, { rate_root_note = 60 }), "a notes table with no rate_range is refused")
   local model = Model.new(S.constants, S.lib.notes.NOTES)
   assert_equal(model.voices[6].root, S.lib.notes.NOTES.rate_root_note, "every voice's root: NOTES.rate_root_note")
   local calls = {}  -- one list, as the stub's: the model reads on from where it stopped

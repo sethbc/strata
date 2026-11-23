@@ -31,8 +31,11 @@ Model.__index = Model
 -- alloc)
 function Model.new(constants, notes)
   assert(notes and type(notes.rate_root_note) == "number", "Model.new: notes is S.lib.notes.NOTES (its rate_root_note)")
+  assert(type(notes.rate_range) == "table" and type(notes.rate_range[1]) == "number"
+    and type(notes.rate_range[2]) == "number", "Model.new: notes is S.lib.notes.NOTES (its rate_range)")
   local root = notes.rate_root_note
   local model = setmetatable({pool = 0, order = 0, errors = {}, voices = {}, input = constants.SOURCE_INPUT - 1,
+    rate_low = notes.rate_range[1], rate_high = notes.rate_range[2],
     voice_first = constants.SOURCE_VOICE_FIRST - 1, voice_count = constants.NUM_VOICES,
     slots = constants.NOTE_SLOTS, buffers = constants.NUM_BUFFERS, read = 0,
     -- how often each path ran, so a test can tell its sequence reached them
@@ -50,10 +53,12 @@ end
 function Model:error(text) table.insert(self.errors, text) end
 
 -- absoluteNoteRate: a note's rate against the voice's root (its rootNote,
--- notes.rate_root_note until Lua sends one; 3.7), clipped to 0.25-4 as the
--- engine clips it (a docs test holds NOTES.rate_range to that clip)
+-- notes.rate_root_note until Lua sends one; 3.7), clipped to
+-- notes.rate_range (a docs test holds it to the engine's clip)
+function Model:clip_rate(rate) return math.min(self.rate_high, math.max(self.rate_low, rate)) end
+
 function Model:absolute_rate(voice, note)
-  return math.min(4, math.max(0.25, 2 ^ ((note - self.voices[voice].root) / 12)))
+  return self:clip_rate(2 ^ ((note - self.voices[voice].root) / 12))
 end
 
 -- voiceSource: an engine source that reads a voice's output ring (3.8)
@@ -289,7 +294,7 @@ function Model:compare(S, allow)
     local lua_root = S.lib.samples.rate_root(voice_idx)
     if self.voices[voice_idx - 1].root ~= lua_root then return false end
     if record.root == nil or record.root == lua_root then return false end
-    local rate = math.min(4, math.max(0.25, 2 ^ ((pitch - record.root) / 12)))
+    local rate = self:clip_rate(2 ^ ((pitch - record.root) / 12))
     return math.abs(record.rate - rate) <= 1e-6
   end
   local function problem(text) table.insert(problems, text) end
