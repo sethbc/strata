@@ -619,6 +619,32 @@ test("SETUP lists a data file it could not read or write, and where an unreadabl
   assert_true(not status_texts():find("not saved", 1, true), status_texts())
 end)
 
+-- 3.9 (#868): what the load found and what the last write found are two
+-- facts (S.scene_file.load_problem and write_problem); SETUP reads the
+-- write's while it is set, else the load's, so a write that works after
+-- one that failed brings the set-aside file's row back
+test("a failed write after a set-aside, then a good one, keeps the row 'kept as scenes.data.bak'", function()
+  local subdir = "setup-kept-after-a-write-" .. math.random(1, 1e9)
+  local dir = h.data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  write_text(dir .. "scenes.data", "return {")
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  local kept = "scenes unreadable, kept|as scenes.data.bak"
+  assert_true(status_texts():find(kept, 1, true) ~= nil, "after the start: " .. status_texts())
+  S.lib.scenes.save(1)
+  assert_true(status_texts():find(kept, 1, true) ~= nil, "after a good save: " .. status_texts())
+  local restore = h.watch_writes("scenes.data", { at = "write", after = 0 })
+  S.lib.scenes.save(2)
+  restore()
+  assert_true(status_texts():find("scenes file not saved", 1, true) ~= nil, "after a failed save: " .. status_texts())
+  S.lib.scenes.save(3)
+  assert_true(status_texts():find(kept, 1, true) ~= nil, "after the next good save: " .. status_texts())
+  assert_true(not status_texts():find("not saved", 1, true), "the write's problem is over: " .. status_texts())
+  assert_equal(S.scene_file.load_problem, "unreadable", "the load's problem")
+  assert_equal(S.scene_file.write_problem, nil, "and no write's")
+end)
+
 -- The groundwork before 3.8 (ruling 3): a scenes file below the format
 -- floor (3.7's, the first start after the update) reads as older, not damaged
 test("SETUP's scenes row says older for a file below the floor", function()

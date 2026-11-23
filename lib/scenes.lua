@@ -1099,9 +1099,11 @@ return function(S)
   -- the empty in-memory scenes never replace the saved ones (#72)
   S.scenes_loaded = false
   -- What is known of scenes.data in this session (SETUP's status rows, the
-  -- load prompt): problem, nil, "unreadable" (the file could not be loaded),
-  -- "older" (its format is below SCENE_FORMAT_FLOOR: an older Strata's) or
-  -- "not saved" (the last write failed); backup, the name an unreadable or
+  -- load prompt): two facts kept apart (3.9, #868): load_problem, nil,
+  -- "unreadable" (the file could not be loaded) or "older" (its format is
+  -- below SCENE_FORMAT_FLOOR: an older Strata's), and write_problem, nil or
+  -- "not saved" (the last write failed); problem, what SETUP reads, is
+  -- derived from them (SCENE_FILE_PROBLEM, below); backup, the name an unreadable or
   -- older file was kept under (nil: still in place); unsaved, true while a scene
   -- captured in this session is not in the file (a write failed, or was
   -- blocked); pset, the path without .pset of the PSET that holds exactly
@@ -1111,7 +1113,24 @@ return function(S)
   -- as nil)
   -- start_outcome (3.8): what the start's load found, "loaded", "missing",
   -- "unreadable" or "older" (nil before it ran)
-  S.scene_file = {problem = nil, backup = nil, unsaved = false, pset = nil, start_outcome = nil}
+  -- problem, never stored: the write's while it is set, else the load's. A
+  -- set of it (a layout state's, a test's) sets the fact it names: "not
+  -- saved" the write's, anything else the load's, with no write's
+  local SCENE_FILE_PROBLEM = {
+    __index = function(state, key)
+      if key == "problem" then return rawget(state, "write_problem") or rawget(state, "load_problem") end
+    end,
+    __newindex = function(state, key, value)
+      if key ~= "problem" then
+        rawset(state, key, value)
+        return
+      end
+      rawset(state, "write_problem", value == "not saved" and value or nil)
+      if value ~= "not saved" then rawset(state, "load_problem", value) end
+    end,
+  }
+  S.scene_file = setmetatable({load_problem = nil, write_problem = nil, backup = nil, unsaved = false, pset = nil,
+    start_outcome = nil}, SCENE_FILE_PROBLEM)
   -- The load a player asks for (request_load): while a scene is unsaved, the
   -- first request arms until armed_until, confirm_seconds long, and a second
   -- inside it loads. start_flash_seconds: how long the start's hint row names
@@ -1132,18 +1151,16 @@ return function(S)
     local saved, detail = data_files.write(scene_data_file,
       {version = SCENE_DATA_VERSION, scenes = S.scenes, pset = state.pset})
     if not saved then
-      state.problem, state.unsaved = "not saved", true
+      state.write_problem, state.unsaved = "not saved", true
       print("error: scenes not saved to " .. scene_data_file .. " (" .. tostring(detail) .. "); the file is as it was")
       request_redraw()
       return false, detail
     end
     -- the file holds this session's scenes: a failed write, or an unreadable
     -- or older file still in place (a save from SETUP or PARAMS replaced
-    -- it), is over
-    local unloadable = state.problem == "unreadable" or state.problem == "older"
-    if state.problem == "not saved" or (unloadable and not state.backup) then
-      state.problem = nil
-    end
+    -- it), is over; one set aside stays what the load found (#868)
+    state.write_problem = nil
+    if state.load_problem ~= nil and not state.backup then state.load_problem = nil end
     state.unsaved = false
     S.scene_autosave_blocked = false
     if detail == "written" then print("scenes saved to " .. scene_data_file) end
@@ -1173,7 +1190,7 @@ return function(S)
     problem = problem or "unreadable"
     local backup = move_aside_unloadable_file(scene_data_file, "scenes")
     if not backup then S.scene_autosave_blocked = true end
-    S.scene_file.problem, S.scene_file.backup = problem, backup
+    S.scene_file.load_problem, S.scene_file.backup = problem, backup
     return problem
   end
 
@@ -1264,7 +1281,8 @@ return function(S)
 
     take_scenes(loaded.scenes, scene_data_file)
     S.scene_autosave_blocked = false
-    S.scene_file.problem, S.scene_file.backup, S.scene_file.unsaved = nil, nil, false
+    S.scene_file.load_problem, S.scene_file.write_problem = nil, nil
+    S.scene_file.backup, S.scene_file.unsaved = nil, false
     -- the PSET that holds these scenes (the field is no scene; a value that
     -- is no string reads as none)
     S.scene_file.pset = type(loaded.pset) == "string" and loaded.pset or nil
