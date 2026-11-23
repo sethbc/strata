@@ -719,23 +719,31 @@ return function(S)
   -- on the next tick, then one each 1 / apply_hz while the morph moves, and
   -- at rest more while values are left or off their exact blend, unless a
   -- recall took over. Stopped (stop_clock), its wait returns false and it
-  -- ends at once, touching nothing of a newer clock's. An error in an
-  -- apply ends the clock (it forgets its own id first) and is raised again
+  -- ends. Stopped from its own body (an apply's action), it is no longer
+  -- state.clock: after that apply it touches nothing of a newer clock's,
+  -- neither what is left nor, on an error, the clock. An error in an apply
+  -- ends the clock (it forgets its own id first, if still the clock) and
+  -- is raised again
   local function start_clock()
     if S.morph_clock then return end
     local started = S.lib.clocks.run(function(handle)
       if not handle.sleep(0) then return end
+      -- (a second line of defense: a stopped clock's wait already returns
+      -- false, and after an apply it returns if no longer state.clock)
       while state.clock == handle do
         local kind = next_apply()
         if not kind then break end
         state.moved = false
         local applied, result = xpcall(function() return apply_position(kind == "rest") end, with_traceback)
         if not applied then
-          S.morph_clock, state.clock = nil, nil
-          state.pending = false
-          forget_applied()
+          if state.clock == handle then
+            S.morph_clock, state.clock = nil, nil
+            state.pending = false
+            forget_applied()
+          end
           error(result, 0)
         end
+        if state.clock ~= handle then return end
         state.pending = result
         if not handle.sleep(1 / MORPH.apply_hz) then return end
       end
