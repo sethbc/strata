@@ -384,7 +384,9 @@ return function(S)
       print("buffer " .. slot .. ": the engine is still checking " .. tostring(buffer.path or "a file") .. " "
         .. BUFFER_SETTLE.check_notice_seconds .. " s after the load; the buffer keeps what it held until the engine"
         .. " answers (load or clear it to stop waiting)")
-      buffer_page_flash("buf " .. slot .. " still checking")
+      -- and how to leave it (#904): a load or a clear, K2 on BUFFER, as
+      -- its hint row names it (120 of the row's 128 px for buf 8)
+      buffer_page_flash("buf " .. slot .. " still checking K2:ld/clr")
     end)
   end
 
