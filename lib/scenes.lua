@@ -375,6 +375,18 @@ return function(S)
     return debug.traceback(tostring(message), 2)
   end
 
+  -- The fade's and the scene sequencer's clocks run on the clock helper
+  -- (lib/clocks.lua, #870): their handles, beside S.scene_transition_clock
+  -- and S.scene_sequencer_clock, which hold their ids for the tests
+  local transition_handle, sequencer_handle = nil, nil
+
+  -- Stop one of them: retired while its wake may be posted, canceled
+  -- farther from it. One whose coroutine has gone already (a test's lost
+  -- clock) is only forgotten: no resume of it can come
+  local function stop_clock(handle)
+    if S.lib.clocks.alive(handle) then S.lib.clocks.stop(handle) end
+  end
+
   -- The one way a transition ends (#253), `how` it ends:
   -- - "canceled" (cancel_scene_transition) and "superseded" (a new recall,
   --   which redraws itself): the clock is canceled;
@@ -387,9 +399,8 @@ return function(S)
   -- Returns the fade's previous scene (nil when no fade ran)
   local function end_scene_transition(how)
     local previous = S.SCENE_TRANSITION.previous
-    if (how == "canceled" or how == "superseded") and S.scene_transition_clock then
-      clock.cancel(S.scene_transition_clock)
-    end
+    if how == "canceled" or how == "superseded" then stop_clock(transition_handle) end
+    transition_handle = nil
     S.scene_transition_clock = nil
     local was_active = S.scene_transition_active
     if was_active and how ~= "landing" and S.current_scene ~= previous then S.current_scene = previous end
@@ -755,7 +766,7 @@ return function(S)
       S.SCENE_TRANSITION.previous = S.current_scene
       S.SCENE_TRANSITION.released = released
       S.current_scene = scene_num
-      S.scene_transition_clock = clock.run(function()
+      local handle = S.lib.clocks.run(function(handle)
         local step_time = transition_time / S.SCENE_TRANSITION.steps
 
         for step = 1, S.SCENE_TRANSITION.steps do
@@ -788,7 +799,8 @@ return function(S)
           end
           if step == 1 then tell_recalled(scene_num) end
           S.SCENE_TRANSITION.next_step_due = util.time() + step_time
-          clock.sleep(step_time)
+          -- stopped (a recall superseded it, a cancel): it ends here
+          if not handle.sleep(step_time) then return end
         end
 
         -- Final state: exact values plus the non-continuous params. The
@@ -799,6 +811,7 @@ return function(S)
         -- (update_voice_list) leaves the target current
         recall_scene_instant(scene_num, scene_data, end_scene_transition("landing"), true, released)
       end)
+      transition_handle, S.scene_transition_clock = handle, handle.id
       -- its first step has run and drawn the target as current
     else
       -- Instant recall: it makes the scene current when it is applied
@@ -851,16 +864,19 @@ return function(S)
   -- for ever. A transition whose next step or end is
   -- SCENE_TRANSITION.overrun_seconds late is stuck (its clock is gone) and is
   -- canceled. The bound follows the fade's progress, so a healthy fade whose
-  -- steps each run late under load is never cut short, however late it ends
-  function wait_for_scene_transition()
+  -- steps each run late under load is never cut short, however late it ends.
+  -- handle: the sequencer's clock (S.lib.clocks), which waits through it.
+  -- Returns false when that clock was stopped meanwhile, else true
+  function wait_for_scene_transition(handle)
     while S.scene_transition_active do
       if util.time() >= S.SCENE_TRANSITION.next_step_due + S.SCENE_TRANSITION.overrun_seconds then
         print("scene transition overran; canceled")
         cancel_scene_transition()
-        return
+        return true
       end
-      clock.sleep(S.SCENE_TRANSITION.settle_seconds)
+      if not handle.sleep(S.SCENE_TRANSITION.settle_seconds) then return false end
     end
+    return true
   end
 
   -- The stepper (the groundwork's design §5): one list of playable slots
@@ -967,9 +983,8 @@ return function(S)
   end
 
   function scene_sequencer_start()
-    if S.scene_sequencer_clock then
-      clock.cancel(S.scene_sequencer_clock)
-    end
+    stop_clock(sequencer_handle)
+    sequencer_handle = nil
 
     S.scene_sequencer_enabled = true
     S.scene_sequencer_position = 1
@@ -978,8 +993,10 @@ return function(S)
     grid_redraw()  -- the scene page shows the sequencer on
 
     -- One pass of the sequencer: recall the scene at the position (unless
-    -- its draw was a repeat), draw the next, hold, advance to the drawn slot
-    local function pass()
+    -- its draw was a repeat), draw the next, hold, advance to the drawn slot.
+    -- handle: its clock's. Returns false when the clock was stopped during
+    -- the hold (it then ends, doing nothing more), else true
+    local function pass(handle)
       -- Defensive index guard: the position is always in range here (it
       -- starts at 1 and the advance below wraps with the current length)
       local length = params:get("scene_sequence_length")
@@ -1029,8 +1046,8 @@ return function(S)
       -- ends: the next recall would cancel the fade before it applies the
       -- scene's discrete state (voices, sources, patterns, ...)
       local held = math.max(params:get("scene_duration"), transition_time)
-      clock.sleep(held)
-      wait_for_scene_transition()
+      if not handle.sleep(held) then return false end
+      if not wait_for_scene_transition(handle) then return false end
 
       -- Advance to the drawn slot, as the sequence is now: the kept one if
       -- it can still play, else drawn again. With no scene in the sequence
@@ -1050,13 +1067,14 @@ return function(S)
 
       request_redraw()
       grid_redraw()
+      return true
     end
 
-    S.scene_sequencer_clock = clock.run(function()
+    local handle = S.lib.clocks.run(function(handle)
       -- Begin on the next scheduler tick: a PSET load sets this param partway
       -- through its read, and the params it sets later (transition time,
       -- duration, length, FX, LFOs, voices) would overwrite scene 1
-      clock.sleep(0)
+      if not handle.sleep(0) then return end
 
       while S.scene_sequencer_enabled do
         -- An error anywhere else in a pass (a param read, the wait, a
@@ -1065,9 +1083,11 @@ return function(S)
         -- param (set_binary_param, #538) and the state agree (#329): forget
         -- this clock's id first, so the stop never cancels it from inside
         -- itself, then raise the error again for maiden
-        local passed, pass_error = xpcall(pass, with_traceback)
+        local passed, pass_result = xpcall(function() return pass(handle) end, with_traceback)
+        if passed and not pass_result then return end  -- stopped during its hold
         if not passed then
-          S.scene_sequencer_clock = nil
+          local pass_error = pass_result
+          S.scene_sequencer_clock, sequencer_handle = nil, nil
           forget_next_scene()
           if params.lookup["scene_sequencer_enabled"] then set_binary_param("scene_sequencer_enabled", 0) end
           if S.scene_sequencer_enabled then scene_sequencer_stop() end
@@ -1075,16 +1095,15 @@ return function(S)
         end
       end
     end)
+    sequencer_handle, S.scene_sequencer_clock = handle, handle.id
   end
 
   function scene_sequencer_stop()
     S.scene_sequencer_enabled = false
     S.scene_sequencer_recall_due = false
     forget_next_scene()
-    if S.scene_sequencer_clock then
-      clock.cancel(S.scene_sequencer_clock)
-      S.scene_sequencer_clock = nil
-    end
+    stop_clock(sequencer_handle)
+    sequencer_handle, S.scene_sequencer_clock = nil, nil
     request_redraw()
     grid_redraw()
   end
@@ -1618,12 +1637,15 @@ return function(S)
   -- Stop the scene sequencer through its param so param and state agree
   -- (a start that failed before init added the params has no param to set)
   S.register_cleanup(S.constants.CLEANUP_ORDER.scene_sequencer, function()
+    S.lib.clocks.cancel(sequencer_handle)  -- the script ends: at once, whatever its wait
     if params.lookup["scene_sequencer_enabled"] then params:set("scene_sequencer_enabled", 0) end
     scene_sequencer_stop()
   end)
 
-  -- Cancel any active transition clock
+  -- Cancel any active transition clock (at once, whatever its wait: the
+  -- script ends)
   S.register_cleanup(S.constants.CLEANUP_ORDER.scene_transition, function()
+    S.lib.clocks.cancel(transition_handle)
     cancel_scene_transition()
   end)
 
