@@ -208,10 +208,45 @@
                 state[\replacing][voice] = true;
                 replacement = Synth.replace(old, \strataVoiceMix, this.voiceMixArgs(voice));
                 synths[key] = replacement;
-                OSCFunc({ state[\replacing][voice] = false }, '/n_go', context.server.addr, argTemplate: [replacement.nodeID]).oneShot;
+                this.watchVoiceMix(voice, [old], replacement);
                 ("strata: voice " ++ (voice + 1) ++ " mix stage reset (bad values)").postln;
             };
         };
+    }
+
+    // A stage's replacement is in flight until its /n_go, which clears the
+    // voice's replacing flag. One whose /s_new failed (no room in the
+    // real-time pool) sends none (#886): past startConfirmWait, as the
+    // start confirmation waits (watchStart), the stage is started again
+    // (restartVoiceMix). stale: the nodes the replacement stands for (the
+    // stage it replaced), freed then
+    watchVoiceMix { arg voice, stale, replacement;
+        var state = areaState[\mix];
+        var confirmed = OSCFunc({ state[\replacing][voice] = false }, '/n_go', context.server.addr,
+            argTemplate: [replacement.nodeID]).oneShot;
+        SystemClock.sched(this.startConfirmWait, {
+            confirmed.free;
+            this.areaCall(\restartVoiceMix, voice, stale, replacement);
+            nil
+        });
+    }
+
+    // A replacement that never started (watchVoiceMix): while it is still
+    // the voice's stage, unconfirmed, and the engine is not past stop
+    // (pastStop), the stage it replaced and the replacement itself are
+    // freed, quietly (either may be gone or never have run), and a stage
+    // starts again at the tail of the voice's mix group, from its start
+    // controls and the voice's kept values, watched the same way
+    restartVoiceMix { arg voice, stale, replacement;
+        var state = areaState[\mix], key = this.voiceMixKey(voice), restarted;
+        if (this.pastStop or: { state[\replacing][voice].not } or: { synths[key] !== replacement }) { ^this };
+        context.server.makeBundle(nil, {
+            this.sendToSynth(*(stale ++ [replacement]).collect({ arg node; node.freeMsg }));
+            restarted = Synth(\strataVoiceMix, this.voiceMixArgs(voice), state[\mixGroups][voice], \addToTail);
+        });
+        synths[key] = restarted;
+        this.watchVoiceMix(voice, [], restarted);
+        ("strata: voice " ++ (voice + 1) ++ " mix stage started again (its replacement never started)").postln;
     }
 
     // The stages, then their groups (quietly, as every node is freed here)

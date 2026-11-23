@@ -12,7 +12,7 @@
 
 ## Owns
 
-`lib/engine/StrataOnsets.sc` (`strataAreaOnsets`, order 180): the `analyzeBuffer` command and the `bufferOnsets` poll. Its state, `areaState[\onsets]`: `\analyses` (per slot, the `analyzeBuffer` commands received, counted from 1 as Lua counts them; the count names the report), `\poll`, `\chunks` (the chunks every pass has read since alloc, for the check), `\chunkWait` (nil on norns: the check slows a pass with it) and `\stopped` (true from the area's `stop`).
+`lib/engine/StrataOnsets.sc` (`strataAreaOnsets`, order 180): the `analyzeBuffer` command and the `bufferOnsets` poll. Its state, `areaState[\onsets]`: `\analyses` (per slot, the `analyzeBuffer` commands received, counted from 1 as Lua counts them; the count names the report), `\poll`, `\chunks` (the chunks every pass has read since alloc, for the check), `\chunkWait` (nil on norns: the check slows a pass with it); a pass reads the engine's `pastStop` (3.9, #942, `StrataUtil.sc`; before, the area's own `\stopped`, true from its `stop`), so once `free` has begun its stop phase a pass still running reports nothing, and the area has no `stop` hook.
 
 Its literals: `onsetHopFrames` 256 (a power of two, below), `onsetCandidates` 63 (with the marker at 0, at most 64 slices), `onsetGapSeconds` 0.03, `onsetChunkFrames` 16384 (64 hops), `onsetFloor` 1e-6 × the hop's frames, `onsetStrengthCeiling` 1e9 (a NaN or an infinity in the audio never reaches the scaling).
 

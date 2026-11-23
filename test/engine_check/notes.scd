@@ -25,7 +25,7 @@ var checkSourceSwitch, checkBufferLoad, checkInputFreeze;
 var checkFrozenNotes, checkSpectralNotes;
 var wireMessages, sentCount, startValue, checkParkThroughFreeze, checkSilentRestarts, checkOwnNoteOnAccent;
 var withheldNote, checkFailedStartRoom, checkFreedLeaveWatchers, checkRestartPitches, checkExtraNoteGate;
-var checkNoteRegion, checkRootNote;
+var checkNoteRegion, checkRootNote, checkLiveWithoutSynth;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -637,6 +637,32 @@ checkFailedNoteStart = {
     watcher.free;
     command.(\noteOff, voice, 5, 1);
     server.sync; 0.1.wait;
+};
+
+// A live slot with no synth (#941: a state the record can hold, the slot's
+// state and synth being two fields, that no command should leave): noteSynths
+// skips it, and so do releaseNote (a noteOff, a voiceOff) and noteOn's live
+// branch, each with one invariant line and nothing sent or changed, where
+// both sent a message to nil and raised. The slot is set so by hand.
+checkLiveWithoutSynth = {
+    var voice = 1, slot = 4, record, lines = List.new, previous = engine.postInvariantWarning, raised = List.new, kept, nodes;
+    startSynthVoice.(voice);
+    command.(\setNotePool, 16);
+    record = slotRecord.(voice, slot);
+    record[\state] = \live;
+    record[\synth] = nil;
+    nodes = h.synthTree(engine.voiceGroup).size;
+    engine.postInvariantWarning = { arg line; lines.add(line) };
+    try { engine.releaseNote(voice, slot) } { arg error; raised.add(\releaseNote) };
+    try { command.(\noteOn, voice, slot, 62.0, 293.66, 1.0, 1.0) } { arg error; raised.add(\noteOn) };
+    server.sync;
+    engine.postInvariantWarning = previous;
+    kept = (slotState.(voice, slot) == \live) and: { slotSynth.(voice, slot).isNil } and: { h.synthTree(engine.voiceGroup).size == nodes };
+    check.(raised.isEmpty and: { kept } and: { lines.size == 2 } and: { lines.every({ arg line; line.find("no synth").notNil }) },
+        "notes: releaseNote and a noteOn on a live slot with no synth do nothing and warn (#941; raised in %, slot kept %, % invariant lines)".format(
+            raised.asArray, kept, lines.size));
+    record[\state] = \empty;
+    h.stopAllVoices;
 };
 
 // A synth voice's extra note: one voice synth of the voice's def at the
@@ -1593,6 +1619,7 @@ if (area.isNil or: { state.isNil }) {
     checkNoteRegion.value;
     checkFailedNoteStart.value;
     h.stopAllVoices;
+    checkLiveWithoutSynth.value;
     // synth-voice notes
     checkSynthNote.value;
     checkSynthChord.value;

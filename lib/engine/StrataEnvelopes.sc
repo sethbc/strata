@@ -34,9 +34,10 @@
     // areaState[\envelopes]: routes (one place per route: nil, or an Event
     // of its node and settings), nodeChannels (each envelope node -> the
     // channel it writes, until it ends), received (what each command last
-    // took, for the engine check) and stopped (true until start, and from
-    // stop: commands and hits do nothing, and no node's end restarts or
-    // zeroes anything)
+    // took, for the engine check) and stopped (true until start: the area
+    // not started yet). While it is true, and once the engine is past stop
+    // (pastStop, from free's stop phase, #942), commands and hits do
+    // nothing, and no node's end restarts or zeroes anything
     allocEnvelopes {
         var state = areaState[\envelopes];
         state[\routes] = Array.newClear(this.numEnvRoutes);
@@ -47,12 +48,12 @@
 
     startEnvelopes { areaState[\envelopes][\stopped] = false }
 
-    // The places are forgotten first, so no node's end starts another or
-    // zeroes a channel; the nodes are freed (the modulation area's stop,
+    // The places are forgotten first, and the engine is past stop by now
+    // (pastStop), so no node's end starts another or zeroes a channel; the
+    // nodes are freed (the modulation area's stop,
     // after this one, frees fastModGroup too)
     stopEnvelopes {
         var state = areaState[\envelopes], nodes = state[\nodeChannels].keys;
-        state[\stopped] = true;
         state[\routes] = Array.newClear(this.numEnvRoutes);
         state[\nodeChannels] = IdentityDictionary.new;
         nodes.do({ arg synth; this.sendToSynth(synth.freeMsg) });
@@ -107,7 +108,7 @@
     // unless another envelope node writes it now
     fastEnvEnded { arg route, synth;
         var state = areaState[\envelopes], channel = state[\nodeChannels].removeAt(synth), place;
-        if (state[\stopped]) { ^this };
+        if (state[\stopped] or: { this.pastStop }) { ^this };
         place = state[\routes][route];
         if (place.notNil and: { place[\synth] === synth }) {
             if (place[\running]) { place[\synth] = this.startFastEnv(route, place); ^this };
@@ -127,7 +128,7 @@
         var controls = [\out, channel, \depth, depth, \attack, attack, \decay, decay, \sustain, sustain, \release, release,
             \curve, curve, \loop, loop];
         var oldChannel;
-        if (state[\stopped]) { ^this };
+        if (state[\stopped] or: { this.pastStop }) { ^this };
         if (place.isNil) {
             place = (source: source, channel: channel, controls: controls, running: true);
             state[\routes][route] = place;
@@ -161,7 +162,7 @@
     // come hundreds a second
     envelopesHit { arg voice, kind;
         var state = areaState[\envelopes], places = state[\routes], route = 0, place, controls, hold;
-        if (state[\stopped]) { ^this };
+        if (state[\stopped] or: { this.pastStop }) { ^this };
         controls = grainControls[voice];
         hold = (controls[\seqGate] ? 0) * (controls[\gateSeconds] ? 0.1);
         while { route < places.size } {

@@ -50,7 +50,7 @@
                 },
                 freezeMode: { arg voice, value; this.areaCall(\setFreezeMode, voice, value); false }
             ),
-            stop: { areaState[\freeze][\stopped] = true; this.areaCall(\stopCopyWriters) },
+            stop: { this.areaCall(\stopCopyWriters) },
             free: { this.areaCall(\freeSpectralBuffers) },
             effectKeys: this.copyWriterKeys
         )
@@ -82,7 +82,6 @@
         state[\faded] = Array.fill(numVoices, { IdentitySet.new });
         state[\inputReaders] = IdentityDictionary.new;
         state[\ended] = Array.fill(numVoices, 0);
-        state[\stopped] = false;
         // Inside a frozen input copy history is 0: a history change is kept
         // (it applies again on unfreeze) but not sent while the voice is
         // frozen on the input. The grains area's handler does the rest.
@@ -329,7 +328,7 @@
     replaceRingWriter { arg voice, defName, in;
         var key = this.ringWriterKeys[voice], old = synths[key], ring = this.ringBuffersFor(voice, 0), writer;
         var args = [\in, in, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2], \resume, 1], fft;
-        if (old.isNil or: { areaState[\freeze][\stopped] ? false }) { ^this };
+        if (old.isNil or: { this.pastStop }) { ^this };
         if (defName == \strataRingWriteSpectral) {
             fft = areaState[\freeze][\spectralBuffers][voice];
             if (fft.isNil) { ^this };
@@ -371,11 +370,11 @@
     // own writer. A voice source's (3.8): a writer of the read voice's tap,
     // at the tail of the record area's tap group (after every stage has
     // written its tap). Nothing on the standard tier (no FFT buffers), when
-    // the voice has one already, or once the area stopped
+    // the voice has one already, or once the engine is past stop (pastStop)
     startCopyWriter { arg voice;
         var key = this.copyWriterKeys[voice], ring = this.copyRingFor(voice), source = areaState[\freeze][\source][voice];
         var fft = areaState[\freeze][\spectralBuffers][voice], in = inputBus, target = voiceGroup;
-        if (fft.isNil or: { synths[key].notNil } or: { areaState[\freeze][\stopped] ? false }) { ^this };
+        if (fft.isNil or: { synths[key].notNil } or: { this.pastStop }) { ^this };
         if (this.voiceSource(source)) {
             in = areaState[\record][\voiceTaps][this.readVoiceOf(source)];
             target = areaState[\record][\tapGroup];
@@ -424,7 +423,7 @@
         var state = areaState[\freeze], change = this.ringChanges[voice], copy = state[\copies][voice] + 1;
         var readers = this.copyRingReaders(voice), server = context.server;
         var current = { (state[\copies][voice] == copy) and: { this.ringChanges[voice] == change }
-            and: { (state[\stopped] ? false).not } };
+            and: { this.pastStop.not } };
         state[\copies][voice] = copy;
         readers.do({ arg synth;
             state[\faded][voice].add(synth);
@@ -473,7 +472,7 @@
                     this.copyAbandonReason((this.copyRoomFrames(ring[0].numFrames, history) / server.sampleRate).round(0.001),
                         attempt, late, missing) });
             };
-            if ((state[\copies][voice] == copy) and: { (state[\stopped] ? false).not }) {
+            if ((state[\copies][voice] == copy) and: { this.pastStop.not }) {
                 this.restoreFadedReaders(voice);
             };
         }, SystemClock);

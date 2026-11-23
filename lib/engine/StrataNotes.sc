@@ -334,11 +334,20 @@
         (cutting.size - most.max(0)).do({ arg index; this.freeNoteCutting(cutting[index]) });
     }
 
+    // A live slot with no synth: a state the record can hold (state and
+    // synth are two fields) that no command leaves, which noteSynths skips;
+    // releaseNote and extraNoteOn leave it as it is and post one line (#941)
+    warnLiveWithoutSynth { arg command, voice, slot;
+        this.warnInvariant("% on voice % slot %: the slot is live with no synth; nothing done (#941)".format(command, voice + 1, slot));
+    }
+
     // Release a live note: its synth's gate 0, the slot releasing until the
-    // synth frees after its release
+    // synth frees after its release. A live slot with no synth (no command
+    // leaves one, #941) is left as it is, with one invariant line
     releaseNote { arg voice, slot;
         var record = this.noteRecord(voice, slot);
         if (record[\state] != \live) { ^this };
+        if (record[\synth].isNil) { ^this.warnLiveWithoutSynth(\releaseNote, voice, slot) };
         this.sendToSynth(record[\synth].setMsg(\gate, 0));
         record[\state] = \releasing;
     }
@@ -400,6 +409,8 @@
         if (this.voiceRunning(voice).not) {
             ^this.postFastModIgnored(\noteOn, "voice % is stopped".format(voice))
         };
+        // a live slot with no synth (#941): nothing kept or sent, no hit, one line
+        if ((record[\state] == \live) and: { record[\synth].isNil }) { ^this.warnLiveWithoutSynth(\noteOn, voice, slot) };
         record[\note] = note;
         record[\freq] = freq;
         record[\rate] = rate;

@@ -22,7 +22,7 @@ Design 3.7 §7: each voice has an envelope (attack, decay to a sustain level, a 
 | `\routes` | one place per route (`numEnvRoutes`, 16): nil, or an Event of its node (`\synth`), `\source` (the voice whose hits fire it), `\channel`, `\controls` (`out`, `depth`, `attack`, `decay`, `sustain`, `release`, `curve`, `loop`) and `\running` (false from a stop: the node is releasing, and its end forgets the place) |
 | `\nodeChannels` | each envelope node → the channel it writes, until it ends |
 | `\received` | per command, the arguments it last took (the continuous ones clipped), for the engine check |
-| `\stopped` | true until `start`, and from `stop`: commands and hits do nothing, and no node's end restarts or zeroes anything |
+| `\stopped` | true until `start` (the area not started yet). While it is, and once the engine is past stop (`pastStop`, from `free`'s stop phase: 3.9, #942, `StrataUtil.sc`; the area's `stop` no longer sets this flag), commands and hits do nothing, and no node's end restarts or zeroes anything |
 
 The hooks: `allocState` (`allocEnvelopes`), `addDefs` (`addEnvelopeDefs`), `addCommands`, `start` (`startEnvelopes`: `\stopped` false), `stop` (`stopEnvelopes`) and `voiceHit`. No bus or buffer of its own, so no `free` hook.
 

@@ -95,7 +95,9 @@
     // follower), lfos (one place per engine LFO: an Event of its node and
     // settings, or nil), scatter (its place), nodeChannels (each LFO node ->
     // the channel it writes), received (what each command last took, for the
-    // engine check), stopped and fastModGroup (made in start). Every voice's
+    // engine check), stopped (true until start: the area not started yet;
+    // from free's stop phase every command and node end reads the engine's
+    // pastStop as well, #942) and fastModGroup (made in start). Every voice's
     // grain synths and stage read its note slot 0 block: fastModIn in
     // grainControls (every grain synth, replacements and restarts included,
     // starts with it) and in the mix area's stageControls (made by then:
@@ -134,11 +136,11 @@
         synths[this.fastOffsetsKey] = Synth(\strataFastOffsets, [\out, this.fastModBlock(0, 0)], state[\fastModGroup], \addToHead);
     }
 
-    // Every node goes with the group. The places are forgotten first, so no
-    // node's end starts another or zeroes a channel
+    // Every node goes with the group. The places are forgotten first, and
+    // the engine is past stop by now (pastStop), so no node's end starts
+    // another or zeroes a channel
     stopFastModulation {
         var state = areaState[\modulation];
-        state[\stopped] = true;
         state[\lfos] = Array.newClear(this.numFastLfos);
         state[\scatter] = nil;
         synths.removeAt(this.fastOffsetsKey);
@@ -350,7 +352,7 @@
     // now. Other writers on that channel write it again in the next block.
     fastLfoEnded { arg lfo, synth;
         var state = areaState[\modulation], channel = state[\nodeChannels].removeAt(synth), place;
-        if (state[\stopped]) { ^this };
+        if (state[\stopped] or: { this.pastStop }) { ^this };
         place = state[\lfos][lfo];
         if (place.notNil and: { place[\synth] === synth }) {
             if (place[\running]) { place[\synth] = this.areaCall(\startFastLfo, lfo, place, this.fastLfoPhaseNow(place)) } {
@@ -377,7 +379,7 @@
     setFastLfo { arg lfo, voice, destination, shape, rate, depth, offset;
         var state = areaState[\modulation], place = state[\lfos][lfo], channel = this.fastModChannel(voice, 0, destination);
         var controls = [\out, channel, \rate, rate, \depth, depth, \offset, offset], oldChannel, old, fresh, phase;
-        if (state[\stopped]) { ^this };
+        if (state[\stopped] or: { this.pastStop }) { ^this };
         if (place.isNil) {
             place = (shape: shape, channel: channel, controls: controls, running: true);
             state[\lfos][lfo] = place;
@@ -455,7 +457,7 @@
     // re-gated); depth 0 releases it (0.5 s), keeping its gains to fade from
     setScatter { arg depth, rate, destinations, voices;
         var state = areaState[\modulation], place = state[\scatter], gains;
-        if (state[\stopped]) { ^this };
+        if (state[\stopped] or: { this.pastStop }) { ^this };
         if (depth > 0) {
             gains = this.scatterGains(depth, destinations, voices);
             if (place.isNil) {
@@ -494,7 +496,7 @@
     // to 0 (the LFOs and the offset node write theirs again in the next block)
     scatterEnded { arg synth;
         var state = areaState[\modulation], place = state[\scatter];
-        if (state[\stopped]) { ^this };
+        if (state[\stopped] or: { this.pastStop }) { ^this };
         if (place.notNil and: { place[\synth] === synth } and: { place[\running] }) {
             place[\synth] = this.startScatter(place);
         } {
@@ -507,7 +509,7 @@
     // never ends on its own)
     setFastOffset { arg voice, noteSlot, destination, offset;
         var state = areaState[\modulation];
-        if (state[\stopped]) { ^this };
+        if (state[\stopped] or: { this.pastStop }) { ^this };
         this.setSynth(this.fastOffsetsKey,
             state[\offsetsIndex] + (this.fastModChannel(voice, noteSlot, destination) - this.fastModBlock(0, 0)), offset);
     }
