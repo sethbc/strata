@@ -2446,6 +2446,52 @@ test("stub clock: set_beat moves the beat and reschedules the waiting syncs from
   clock.cancel(syncing)
 end)
 
+-- matron's clock_scheduler_schedule_sync (clock_scheduler.cc) stores
+-- sync_beat_offset only for a coroutine that already holds its event slot.
+-- Its new-slot branch (a coroutine's first wait, when that is a sync) stores
+-- the beats and lands the sync with the offset it was given, but leaves the
+-- slot's sync_beat_offset as it was: 0 in a slot never used (the static
+-- array), else what its last holder stored (clock_scheduler_clear frees the
+-- slot and keeps the field). clock_scheduler_reschedule_sync_events then
+-- lands every waiting sync at clock_scheduler_next_clock_beat(beat,
+-- sync_beat, sync_beat_offset): ceil((beat + FLT_EPSILON) / sync_beat) *
+-- sync_beat + sync_beat_offset, a period on while below beat + FLT_EPSILON.
+-- With a bare install no slot has been used, so:
+--   clock A, slot 1, first sync(1, 0.5); set_beat(10.1): 11 + 0 = 11 (its
+--   own grid would be 11.5);
+--   A's second sync (its slot held: 0.5 stored) counts from 11: 12 + 0.5 =
+--   12.5; set_beat(20.1): 21 + 0.5 = 21.5, its own grid;
+--   A canceled (slot 1 keeps 0.5); clock B takes slot 1, first sync(1, 0.25);
+--   set_beat(30.1): 31 + 0.5 = 31.5 (its own grid would be 31.25); B's second
+--   sync (0.25 stored) counts from 31.5: 32 + 0.25 = 32.25
+test("stub clock: a first sync rescheduled by a beat change keeps the slot's earlier offset, as matron does", function()
+  local context = stubs.install { signatures = signatures, engine_polls = engine_polls, engine_spec = engine_spec,
+    data_dir = data_root .. "stub_first_sync/", quiet = true }
+  local function syncing(offset, wakes)
+    return clock.run(function() while true do table.insert(wakes, clock.sync(1, offset)) end end)
+  end
+  local a_wakes = {}
+  local a = syncing(0.5, a_wakes)
+  assert_equal(context.clock.events[a].slot, 1, "A holds slot 1, never used")
+  context.clock.set_beat(10.1)
+  context.clock.advance_until(a)
+  assert_near(a_wakes[1], 11, 1e-9, "A's first sync, rescheduled: the never-used slot's offset 0")
+  assert_near(context.clock.events[a].sync_beat, 12.5, 1e-9, "A's second sync counts on from 11")
+  context.clock.set_beat(20.1)
+  context.clock.advance_until(a)
+  assert_near(a_wakes[2], 21.5, 1e-9, "A's second sync, rescheduled: on its own grid")
+  clock.cancel(a)
+  local b_wakes = {}
+  local b = syncing(0.25, b_wakes)
+  assert_equal(context.clock.events[b].slot, 1, "B takes slot 1, which A freed")
+  context.clock.set_beat(30.1)
+  context.clock.advance_until(b)
+  assert_near(b_wakes[1], 31.5, 1e-9, "B's first sync, rescheduled: the offset A left in the slot")
+  context.clock.advance_until(b)
+  assert_near(b_wakes[2], 32.25, 1e-9, "B's second sync, with its own offset")
+  clock.cancel(b)
+end)
+
 -- matron's tick posts every resume due on it before Lua delivers any, so a
 -- reset or a jump can fall between a coroutine's post and its delivery
 test("stub clock: advance posts every due resume before delivering one, and advance_until can act between", function()
