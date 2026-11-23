@@ -378,9 +378,11 @@ return function(S)
 
   -- Every quantized voice's stored freq onto the scale (a scale, root or
   -- tuning change), so the freq a PSET or scene captures is a tone of it;
-  -- never during a scene recall or transition, whose values stand as saved
+  -- never while a scene sets values (a recall's apply, a fade step's sets:
+  -- S.lib.scenes.setting()), whose values stand as saved. A change by hand
+  -- during a fade snaps (#867)
   function M.snap_quantized_freqs()
-    if S.scene_recall_in_progress or S.scene_transition_active then return end
+    if S.lib.scenes.setting() then return end
     for voice_idx = 1, NUM_VOICES do
       if M.quantizes(voice_idx) then snap_freq(voice_idx) end
     end

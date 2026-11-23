@@ -715,16 +715,30 @@ test("a scale or root change re-snaps a quantized freq, and a PSET saved after i
   -- a root change too: C minor to D minor moves Eb4 to D4 (a tie goes down)
   params:set("root", 3)
   assert_near(params:get("v1_freq"), freq_of(62), 1e-9, "Eb4 snaps to D4 in D minor")
-  -- a scene recall's and a transition's values stand as saved (D4 is in
-  -- neither C# minor nor C# major)
+  -- a scene recall's values stand as saved (D4 is not in C# minor); a hand
+  -- change during a fade snaps (3.9, #867: the next test)
   S.scene_recall_in_progress = true
   params:set("root", 2)
   S.scene_recall_in_progress = false
   assert_near(params:get("v1_freq"), freq_of(62), 1e-9, "no re-snap during a scene recall")
-  S.scene_transition_active = true
+end)
+
+-- 3.9 (#867): a fade runs for up to 30 s, and a scale change made by hand
+-- meanwhile is a hand edit: the quantized freqs snap to it, as when idle
+test("a scale change during a fade snaps quantized freqs", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
   params:set("scale", option_index("scale", "Major"))
-  S.scene_transition_active = false
-  assert_near(params:get("v1_freq"), freq_of(62), 1e-9, "nor during a scene transition")
+  params:set("v1_quantize", 1)
+  params:set("v1_freq", freq_of(64))                                            -- E4
+  params:set("reverb_mix", 0.6); capture_scene(2)
+  params:set("reverb_mix", 0.2); capture_scene(1)
+  recall_scene(2, 4); context.clock.run_for(0.3)
+  assert_true(S.scene_transition_active, "a fade runs")
+  params:set("scale", option_index("scale", "Natural Minor"))
+  assert_near(params:get("v1_freq"), freq_of(63), 1e-9, "E4 snaps to Eb4 in C minor, as when idle")
+  assert_near(S.voices[1].values.freq, freq_of(63), 1e-9, "stored snapped")
+  cancel_scene_transition()
 end)
 
 -- #412: what the review's mutations of lib/variation.lua survived

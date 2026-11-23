@@ -314,6 +314,37 @@ test("a scene file's invalid loop pair is cut to fit when it loads", function()
   assert_equal(broken.loop_start, "x"); assert_equal(broken.loop_length, 2, "left for validate_scene to reject")
 end)
 
+-- 3.9 (#867): the length's filter stands down only while a recall's apply
+-- or a fade step sets the pair (S.lib.scenes.setting()), never inside
+-- set_scene_value, which morph sets through too: a morph move during a
+-- fade (which cancels the fade first) sets the pair with the filter on
+test("a morph move during a fade keeps the loop pair's filter on", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("v1_loop_start", 0); params:set("v1_loop_length", 1); capture_scene(2)
+  params:set("v1_loop_start", 0.5); params:set("v1_loop_length", 0.5); capture_scene(1)
+  recall_scene(2, 4); context.clock.run_for(0.3)
+  assert_true(S.scene_transition_active, "a fade runs")
+  -- at each of morph's sets of the length (inside deferrable, which no fade
+  -- step is), ask the filter what it would make of a length past the room
+  local filters = S.registry.param_filters
+  local real_filter, asked, stood_down = filters.loop_length, 0, 0
+  filters.loop_length = function(voice_idx, value, ...)
+    if S.deferrable_write and voice_idx == 1 then
+      asked = asked + 1
+      if real_filter(voice_idx, 2, ...) > S.lib.loops.max_length(voice_idx) then stood_down = stood_down + 1 end
+    end
+    return real_filter(voice_idx, value, ...)
+  end
+  params:set("morph", 0.5); context.clock.run_for(0.5)
+  filters.loop_length = real_filter
+  assert_true(not S.scene_transition_active, "the morph canceled the fade")
+  assert_true(asked > 0, "morph set the length")
+  assert_equal(stood_down, 0, "with the filter on at every set")
+  local start, length = loop_of(1)
+  assert_true(start + length <= 1 + S.lib.loops.LOOP.tolerance, "the pair fits: " .. start .. " + " .. length)
+end)
+
 test("randomize and mutation leave loops alone; a buffer voice's fader pages show them", function()
   local context = load_strata()
   finish_startup(context)

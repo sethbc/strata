@@ -4,6 +4,23 @@
 - A fade toward a scene that stops a running LFO (`S.lib.lfos.transition_stops(n, scene_data)`: `strata_lfo<n>` on now, off in the scene) fades that LFO's depth to 0 and holds its rate and offset; the end sets the scene's exact values with the state (#408). The LFO entries of `S.SCENE_GLOBAL_PARAMS` are `lib/lfos.lua`'s `S.lib.lfos.SCENE_FIELDS` (the records themselves, appended after the built-in globals), carrying `lfo = n` and the depth's `stop_target = 0`; this file never lists the LFO fields itself.
 - Every recall cancels a running transition first. Every exit of a transition (end, cancel, error) goes through the one local `end_scene_transition(how)`, which clears `S.scene_transition_active`, `S.scene_transition_clock` and the `SCENE_TRANSITION` fields together (#253). A fade that does not land puts the previous scene back as current, never leaving its target current; a landing keeps the target current while `recall_scene_instant` applies it, so no redraw during the landing shows the previous scene, and puts the previous scene back only if that recall fails. Inside the transition's clock its id is forgotten, never canceled.
 - Every display of the current scene (the header's `S<n>`, SCENES' slot, the grids' recall keys) asks `S.lib.scenes.shows_current(slot)`, never compares with `S.current_scene` itself, so the scene a fade goes to blinks on all of them alike and is steady once it lands (#254). `SCENE_TRANSITION.step` is set before each step's redraws and cleared by `end_scene_transition` before a landing applies its scene.
+- **A hand edit during a fade is a hand edit** (3.9, #867): `S.scene_transition_active` says a fade runs (up to 30 s), never that a scene sets a value now. A reader that stands down for a scene's own sets (the loop length's filter, the scale's re-snap, the FX faders' grid redraw) asks `S.lib.scenes.setting()`: true inside `apply_entries` and around a fade step's loop of sets and its through-zero switches (the local `fade_step_setting`, put back as it was found, after an error too), never inside `set_scene_value`, which morph's continuous writes go through too, so they keep the loop pair's filter on.
+
+## Machines
+
+### scene fade
+- **State:** `S.scene_transition_active`, `S.scene_transition_clock`, `SCENE_TRANSITION`'s `next_step_due`, `target`, `previous`, `step` and `released`, `S.current_scene`, and the fade's closure (`targets`, `switches`, `switched`, `released`); `S.lib.scenes.fading_to()` names the scene it goes to, `S.lib.scenes.setting()` whether a step sets its params now (the States table below).
+- **Invariant:** `scene transition`: `next_step_due`, `target`, `step` and `released` are set exactly while the flag is, and no clock is kept while idle.
+- **Test:** `test/unit/scenes_test.lua`: "scene fade: fading + hand set".
+
+The hand set is voice 2's loop start 0.5, then its length 1, by hand. The rows are the hand edit's and the cancel's (3.9, package 1d); the recalls, the steps, the end, `release_voice`, a capture into the target and a morph move, from the States table's states, are not rows yet.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| idle | hand set | idle | the length is cut to 0.5, what the start leaves |
+| idle | cancel | idle | nothing: the current scene stays |
+| fading | hand set | fading | the length is cut to 0.5 as when idle; it stays 0.5 after a cancel, and a capture holds a pair that fits |
+| fading | cancel | idle | the previous scene is current again; the screen and grids are redrawn |
 
 ## Smooth transitions
 
