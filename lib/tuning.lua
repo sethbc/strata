@@ -110,6 +110,9 @@ return function(S)
   ---------------------------------------------------------------------------
 
   function M.name() return params:get("tuning_name") end
+  -- Whether the engine has the tuning in force (false after a silent read
+  -- took a text it was never sent, #842)
+  function M.engine_has_tuning() return engine_text == current.text end
   function M.count() return #current.tones end
   function M.period() return current.period end
   function M.tones()

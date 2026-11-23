@@ -19,35 +19,43 @@
 ### synced delay
 - **State:** the mode, `mode()` (a local: `"free"` while `delay_sync` is off, `"division"` while synced at a tempo that gives a length, `"synced, no length"` while synced at one that gives none, an external clock at 0), read from outside as `delay_sync` and `M.playing()` (nil but in the division); with it `held` (`M.held()`, a send held while a scene applies) and the time last sent (`last_sent`, `M.sent`).
 - **Invariant:** `delay sync`: `held` only while a scene's apply runs (`S.scene_recall_in_progress`); with sync off, once a send has gone, the time last sent is `M.time()` exactly (every change of an unsynced time sends at once). The two synced modes are not checked: a tempo moves with no event this module sees, and the LFO step catches up within a step, so between the move and the step the two legally differ; the table's rows assert the sends instead.
-- **Test:** `test/unit/delay_sync_test.lua`: "synced delay: every cell is decided" and its rows (a MIDI clock at 120 BPM, 0 for the no-length states; `delay_time` 0.6 s, 1/8D; each event then one LFO step; each row's check counts the `setDelay` sends and the time each carries), "the delay sync invariant names a held send outside a recall's apply" and "the delay sync invariant names an unsynced time the engine was never sent, and leaves a synced one to the step".
+- **Test:** `test/unit/delay_sync_test.lua`: "synced delay: every cell is decided" and its rows (a MIDI clock at 120 BPM, 0 for the no-length states; `delay_time` 0.6 s, 1/8D; each event then one LFO step; each row's check counts the `setDelay` sends and the time each carries, and a sync toggle's also those it sent before its step), "the delay sync invariant names a held send outside a recall's apply" and "the delay sync invariant names an unsynced time the engine was never sent, and leaves a synced one to the step".
 
-A held state is entered inside a real `apply_entries`, suspended in a coroutine after its `delay_feedback` entry's action held the send. `apply ends` resumes it; `apply fails` resumes it with its entry raising: `apply_entries` puts the flag back and runs the scene-applied hooks before raising the error again, so this module's hook (`"delay sync"`, `S.register_scene_applied`) flushes the held send either way. A recall from a held state is an apply inside the running one, which keeps the outer's flag set (#892), so the send stays held until the outer ends. The cells that cannot happen are not rows: `apply ends` and `apply fails` from an unheld state (no apply runs); `tempo back` from the free and division states (entered at 120 BPM: the event leaves a tempo of 0); `tempo move` and `tempo to 0` from the no-length states (their tempo is 0, which moves only by giving a length again).
+A held state is entered inside a real `apply_entries`, suspended in a coroutine after its `delay_feedback` entry's action held the send. `apply ends` resumes it; `apply fails` resumes it with its entry raising: `apply_entries` puts the flag back and runs the scene-applied hooks before raising the error again, so this module's hook (`"delay sync"`, `S.register_scene_applied`) flushes the held send either way. A recall from a held state is an apply inside the running one, which keeps the outer's flag set (#892), so the send stays held until the outer ends. From an unheld state, `apply ends` and `apply fails` are an apply that sets no delay param (here `reverb_mix`), suspended and ended: `held` stays false, so the hook sends nothing. `tempo back` is the tempo returning from 0 to one with a length; from a free state at another tempo the event first brings it to 0 (a free delay hears neither). The cells that cannot happen, by the code, are not rows: `tempo back` from the division states (`mode()` gives a division only at a tempo that gives a length, so the tempo is not 0); `tempo move` and `tempo to 0` from the no-length states (no length is a tempo of 0, an external clock's, which moves only to one with a length, `tempo back`).
 
 | State | Event | Next | Effect |
 |---|---|---|---|
 | `free` | `tempo move` | `free` | nothing: unsynced, the tempo plays no part |
 | `free` | `modulation of the time` | `free` | one `setDelay` a step, the modulated `delay_time` |
 | `free` | `feedback edit` | `free` | one `setDelay`: `delay_time`, the new feedback |
-| `free` | `sync toggle` | `division` | one `setDelay`: the division (0.375 s, 1/8D at 120 BPM) |
+| `free` | `sync toggle` | `division` | one `setDelay` at the toggle, before any step: the division (0.375 s, 1/8D at 120 BPM) |
 | `free` | `recall` | `free` | one `setDelay` as the apply ends: `delay_time`, the scene's feedback |
 | `free` | `tempo to 0` | `free` | nothing |
+| `free` | `tempo back` | `free` | nothing (from 0: the event first brings a free delay there, which it does not hear either) |
+| `free` | `apply ends` | `free` | nothing: an apply that set no delay param held no send, and the hook sends none |
+| `free` | `apply fails` | `free` | nothing, the same |
 | `division` | `tempo move` | `division` | one `setDelay` at the next step: the division at the new tempo |
 | `division` | `modulation of the time` | `division` | nothing: `time_unheard()` (#741) |
 | `division` | `feedback edit` | `division` | one `setDelay`: the division, the new feedback |
-| `division` | `sync toggle` | `free` | one `setDelay`: `delay_time` with its offsets now |
+| `division` | `sync toggle` | `free` | one `setDelay` at the toggle: `delay_time` with its offsets now |
 | `division` | `recall` | `division` | one `setDelay` as the apply ends: the division, the scene's feedback |
 | `division` | `tempo to 0` | `synced, no length` | one `setDelay` at the next step, under `delay_time`'s key: `delay_time` with its offsets (#768) |
+| `division` | `apply ends` | `division` | nothing: no send was held |
+| `division` | `apply fails` | `division` | nothing |
 | `synced, no length` | `modulation of the time` | `synced, no length` | one `setDelay` a step: `delay_time` with its offsets (#770) |
 | `synced, no length` | `feedback edit` | `synced, no length` | one `setDelay`: `delay_time` with its offsets, the new feedback |
-| `synced, no length` | `sync toggle` | `free` | one `setDelay`: `delay_time` with its offsets |
+| `synced, no length` | `sync toggle` | `free` | one `setDelay` at the toggle: `delay_time` with its offsets |
 | `synced, no length` | `recall` | `synced, no length` | one `setDelay` as the apply ends: `delay_time`, the scene's feedback |
 | `synced, no length` | `tempo back` | `division` | one `setDelay` at the next step: the division |
+| `synced, no length` | `apply ends` | `synced, no length` | nothing: no send was held |
+| `synced, no length` | `apply fails` | `synced, no length` | nothing |
 | `free, held` | `tempo move` | `free, held` | nothing; the apply's end sends `delay_time` |
 | `free, held` | `modulation of the time` | `free, held` | the sends held; the apply's end sends the modulated time |
 | `free, held` | `feedback edit` | `free, held` | held; the apply's end sends the edit's feedback |
 | `free, held` | `sync toggle` | `division, held` | held; the apply's end sends the division |
 | `free, held` | `recall` | `free, held` | an apply inside the running one keeps the send held; the outer's end sends the inner scene's feedback |
 | `free, held` | `tempo to 0` | `free, held` | nothing; the apply's end sends `delay_time` |
+| `free, held` | `tempo back` | `free, held` | nothing; the apply's end sends `delay_time` |
 | `free, held` | `apply ends` | `free` | the hook sends one `setDelay`, every value the scene set |
 | `free, held` | `apply fails` | `free` | the same: the hooks run before the error is raised again |
 | `division, held` | `tempo move` | `division, held` | the step's resend held; the apply's end sends the new division time |

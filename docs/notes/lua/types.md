@@ -13,13 +13,22 @@
 ### type settle
 - **State:** per voice, the pending choice (`pending[voice]`, a local of `lib/types.lua`, read with `S.lib.types.pending(voice)`) and its settle clock (the handle in `settle_handles[voice]`, its id in `S.type_settle_clocks[voice]`).
 - **Invariant:** `type settle`: a voice has a pending choice exactly while its settle clock lives (`S.lib.clocks.alive` on the handle kept).
-- **Test:** `test/unit/types_test.lua`: "the type settle invariant names a pending choice whose settle clock was canceled behind its back".
+- **Test:** `test/unit/types_test.lua`: "type settle: every cell is decided" and its rows (voice 1 on resonator, on VOICE; `pending` is one turn toward fm; each check asserts the type the voice ends on once the settle's time has passed), and "the type settle invariant names a pending choice whose settle clock was canceled behind its back, and a settle clock with no choice".
 
-The table has no test of its own: each row is one of the sites that start, flush or cancel a pending choice, which `pages_voice_test.lua` and `types_test.lua` cover by example ("a set, a recall, apply_voice and a PSET read of the current type each cancel a pending choice", and the cancels of ruling 63). A flush applies the choice (through `params:set`, whose action cancels again) and ends the clock; a cancel forgets it and stops the clock (`S.lib.clocks.stop`). Each site is needed because norns' `Option:set` runs no action for an unchanged value (P13 amended, `docs/decisions/3.8.md`), so a ninth path that sets a voice's type must cancel too. From `none` every flush and cancel does nothing, and the settle's wake cannot come (no clock lives).
+Each row is one of the sites that start, apply or forget a pending choice. A flush applies the choice (through `params:set`, whose action cancels again) and ends the clock; a cancel forgets it and stops the clock (`S.lib.clocks.stop`). Each cancel is needed because norns' `Option:set` runs no action for an unchanged value (P13 amended, `docs/decisions/3.8.md`), so a ninth path that sets a voice's type must cancel too. The one cell that cannot happen is `none` + `the settle's wake`: a settle clock lives exactly while a choice is pending (the invariant), so none wakes.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
 | `none` | `turn` | `pending` | VOICE's E3 or the arc (`S.lib.types.turn`): a choice from the current type and a settle clock |
+| `none` | `a voice pick` | `none` | nothing to apply |
+| `none` | `leaving VOICE` | `none` | nothing to apply |
+| `none` | `the voice's stop` | `none` | nothing to apply |
+| `none` | `the type action` | `none` | the type is set; the action's cancel finds nothing |
+| `none` | `set` | `none` | nothing; the type it gives the voice already has |
+| `none` | `a recall's type entry` | `none` | nothing |
+| `none` | `a PSET read` | `none` | nothing |
+| `none` | `a factory set` | `none` | nothing |
+| `none` | `cleanup` | `none` | nothing |
 | `pending` | `turn` | `pending` | the choice moves; the clock is stopped and a new one started |
 | `pending` | `the settle's wake` | `none` | the settle clock (`lib/types.lua`, `turn`'s body) flushes |
 | `pending` | `a voice pick` | `none` | flushed: `S.lib.ui_keys.select_voice_by` (`lib/ui/keys.lua`, `flush_pending_types`) |
@@ -74,4 +83,4 @@ Read at each call, after init:
 
 ## Tests
 
-`test/unit/types_test.lua` (the registry and the seven built-in records, the API, every key on every voice, defaults, visibility, the gate, the type param's sends and sync, voiceOn's pan, lock and undo, freeze, the cancels of ruling 63, the invariant `type settle`); `pages_voice_test.lua` (the type row, the pending choice, a pick, leaving VOICE and a stop, `set`, ALT+K2), `arc_pages_test.lua` (the ring), `pages_main_test.lua` (MAIN follows the type), `scenes_test.lua` (format 10, Review Focus 2), `morph_test.lua`, `notes_test.lua` (the envelopes), `matrix_test.lua` (`v1_main`), `engine_sync_test.lua` (a start's `setVoiceType`), `system_37_test.lua` (Review Focus 1, the format 10 fixture `test/fixtures/format-10-files.lua`), `docs_test.lua` (the engine's list, the expression ranges, the voices-and-grains tables); each 3.8 type's own file, `types_wave_test.lua`, `types_additive_test.lua`, `types_noise_test.lua`, `types_saw_test.lua` and `types_formant_test.lua`.
+`test/unit/types_test.lua` (the registry and the seven built-in records, the API, every key on every voice, defaults, visibility, the gate, the type param's sends and sync, voiceOn's pan, lock and undo, freeze, the cancels of ruling 63, the invariant `type settle` and the table `type settle`); `pages_voice_test.lua` (the type row, the pending choice, a pick, leaving VOICE and a stop, `set`, ALT+K2), `arc_pages_test.lua` (the ring), `pages_main_test.lua` (MAIN follows the type), `scenes_test.lua` (format 10, Review Focus 2), `morph_test.lua`, `notes_test.lua` (the envelopes), `matrix_test.lua` (`v1_main`), `engine_sync_test.lua` (a start's `setVoiceType`), `system_37_test.lua` (Review Focus 1, the format 10 fixture `test/fixtures/format-10-files.lua`), `docs_test.lua` (the engine's list, the expression ranges, the voices-and-grains tables); each 3.8 type's own file, `types_wave_test.lua`, `types_additive_test.lua`, `types_noise_test.lua`, `types_saw_test.lua` and `types_formant_test.lua`.
