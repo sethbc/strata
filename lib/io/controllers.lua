@@ -360,8 +360,10 @@ return function(S)
   -- Take the kind's port as the rig has it now: the old one released, the
   -- new one claimed and listened to (a port another owner holds is not
   -- taken until its holder releases it); a device already there gets its
-  -- labels, and its CCs and rings follow at the next tick; quiet asks for no redraw
+  -- labels, and its CCs and rings follow at the next tick; quiet asks for no redraw.
+  -- Nothing once cleanup has begun: the rig listeners stay registered (#972)
   local function refresh(kind, quiet)
+    if closing then return end
     local want = setting(kind .. "_port")
     if held[kind] ~= want then release_kind(kind) end
     if kind == "faders" then reset_faders() end

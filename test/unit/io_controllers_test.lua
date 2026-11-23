@@ -740,4 +740,19 @@ test("the controllers invariant names a set port with no echo clock", function()
   assert_true(fn() ~= nil, "no clock under a set port is reported")
 end)
 
+-- #972: after cleanup the rig listeners are still registered; a rig change
+-- then claims no port and starts no clock
+test("a rig change after cleanup claims no controller port and starts no echo clock (#972)", function()
+  local context, S = loaded()
+  context.midi.plug(E16_PORT, "OXI E16")
+  context.midi.plug(FADERS_PORT, "16n")
+  cleanup()
+  assert_true(S.lib.io_rig.set("e16_port", E16_PORT))
+  assert_true(S.lib.io_rig.set("faders_port", FADERS_PORT))
+  assert_equal(S.lib.io_ports.owner(E16_PORT), nil, "the E16's port is not claimed")
+  assert_equal(S.lib.io_ports.owner(FADERS_PORT), nil, "nor the faders'")
+  assert_equal(S.lib.io_controllers.clock_id(), nil, "no echo clock")
+  assert_equal(invariant_fn(S, "controllers")(), nil, "the controllers invariant holds")
+end)
+
 end

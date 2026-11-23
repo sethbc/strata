@@ -14,6 +14,7 @@
 - **A 14-bit fader** (`faders_hires` on): the value is `(high * 128 + low) / 16383` once a low byte (CC + 32) has come, else `high / 127`; a new high byte resets the low to 0 once one has been seen (MIDI 1.0's rule for a 14-bit pair), so a boundary crossing never applies the old low byte; a 7-bit box never sends one and keeps its 7 bits.
 - **Pickup**: a fader picks its macro up when its value comes within `pickup_window` (2/127) of the param or crosses it between two messages; a param value that is not what the fader last set ends it (`M.pickup` checks live). With hires on, a CC `faders_cc + m - 1 + 32` is the low 7 bits; once one has come the value is `(high * 128 + low) / 16383`, until then `high / 127`; a low byte before any high byte moves nothing.
 - **The start step 94 sends nothing** with both ports off (a structure test's start log): refreshes at start ask for no redraw.
+- **Nothing after cleanup** (#972): the rig listeners stay registered, but `refresh` returns at once while `closing` is set (from cleanup step 146 to the next start step 94), so a rig change after cleanup claims no port and starts no clock; no message a device receives changes. Test: `a rig change after cleanup claims no controller port and starts no echo clock (#972)`.
 
 ## Machines
 
