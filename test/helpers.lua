@@ -759,6 +759,298 @@ local function allowed_call_lines(fixture_lines, build_lines, entries, label, vo
   return sides.fixture, sides.build
 end
 
+---------------------------------------------------------------------------
+-- State machines (3.9's package 0a, its design's section 2): a transition
+-- table run as tests, the table a notes file holds, and seeded walks. How to
+-- use them: docs/notes/test-harness/run-and-helpers.md (State machines)
+---------------------------------------------------------------------------
+
+-- A cell of a table, as its tests and messages name it: "<state> + <event>"
+local function cell_name(state, event) return tostring(state) .. " + " .. tostring(event) end
+
+-- The cells of a Markdown table row, trimmed, backticks stripped; an escaped
+-- pipe (\|) stays in its cell
+local ESCAPED_PIPE = "\1"
+local function table_cells(line)
+  local body = line:gsub("\\|", ESCAPED_PIPE):match("^%s*|(.*)$")
+  body = body:gsub("|%s*$", "")
+  local cells = {}
+  for cell in (body .. "|"):gmatch("([^|]*)|") do
+    cells[#cells + 1] = (cell:gsub(ESCAPED_PIPE, "|"):gsub("`", ""):match("^%s*(.-)%s*$"))
+  end
+  return cells
+end
+
+-- The rows {state, event, next} of the first table under the heading
+-- `### <machine>` of a notes file (a path from the repository's root, or
+-- absolute), from its columns State, Event and Next wherever they stand,
+-- backticks stripped. Headings and tables inside code fences do not count;
+-- the table must come before the section's next heading. Raises on a file it
+-- cannot read, no such heading, no table under it, or a column missing
+local function notes_table(path, machine)
+  local full = path:sub(1, 1) == "/" and path or (repo_root .. "/" .. path)
+  local file = io.open(full, "r")
+  if not file then error("notes_table: cannot read " .. path, 2) end
+  local text = file:read("*a")
+  file:close()
+  local heading, found, fenced, header, columns, rows = "### " .. machine, false, false, nil, nil, nil
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    if line:match("^%s*```") or line:match("^%s*~~~") then
+      fenced = not fenced
+      if header then break end
+    elseif not fenced then
+      if line:match("^#+%s") then
+        if found then break end
+        found = line:gsub("%s+$", "") == heading
+      elseif found and line:match("^%s*|") then
+        local cells = table_cells(line)
+        if not header then
+          header, columns = cells, {}
+          for index, name in ipairs(cells) do columns[name] = columns[name] or index end
+        elseif not rows then
+          if not line:match("^[%s|:%-]+$") then
+            error("notes_table: the table under " .. path .. ", ### " .. machine .. " has no |---| row after its header", 2)
+          end
+          rows = {}  -- the separator row, |---|
+        else
+          rows[#rows + 1] = {cells[columns.State], cells[columns.Event], cells[columns.Next]}
+        end
+      elseif header then
+        break
+      end
+    end
+  end
+  local where = path .. ", ### " .. machine
+  if not found then error("notes_table: no heading ### " .. machine .. " in " .. path, 2) end
+  if not header then error("notes_table: no table under " .. where, 2) end
+  for _, name in ipairs({"State", "Event", "Next"}) do
+    if not columns[name] then error("notes_table: the table under " .. where .. " has no column " .. name, 2) end
+  end
+  return rows or {}
+end
+
+local function whole_positive(value) return type(value) == "number" and value >= 1 and value == math.floor(value) end
+
+-- Run a state machine's table as tests (see the notes for the spec's
+-- fields): one test a row, `<name>: <state> + <event>`; `<name>: every cell
+-- is decided`; and, with spec.notes = {path, machine}, `<name>: the notes'
+-- table equals these rows`. Returns {known = {"<name>: <state> + <event> ->
+-- <next> (known #<issue>)", ...}}, the rows that assert a fault of an open
+-- issue; each prints its line when its test passes
+local function transition_table(spec)
+  if type(spec) ~= "table" or type(spec.name) ~= "string" or spec.name == "" then
+    error("transition_table: spec.name is a non-empty string", 2)
+  end
+  local name = spec.name
+  for _, field in ipairs({"states", "events", "rows"}) do
+    if type(spec[field]) ~= "table" then error("transition_table " .. name .. ": spec." .. field .. " is a table", 2) end
+  end
+  if type(spec.state_of) ~= "function" then error("transition_table " .. name .. ": spec.state_of is a function", 2) end
+  if spec.impossible ~= nil and type(spec.impossible) ~= "table" then
+    error("transition_table " .. name .. ": spec.impossible is a list", 2)
+  end
+  if spec.notes ~= nil and (type(spec.notes) ~= "table" or type(spec.notes[1]) ~= "string"
+      or type(spec.notes[2]) ~= "string") then
+    error("transition_table " .. name .. ": spec.notes is {path, machine}", 2)
+  end
+  local known = {}
+  for _, row in ipairs(spec.rows) do
+    local state, event, next_state = row[1], row[2], row[3]
+    local cell = cell_name(state, event)
+    local known_line = row.known ~= nil
+      and (name .. ": " .. cell .. " -> " .. tostring(next_state) .. " (known #" .. tostring(row.known) .. ")")
+    known[#known + 1] = known_line or nil
+    test(name .. ": " .. cell, function()
+      local enter, fire = spec.states[state], spec.events[event]
+      if type(enter) ~= "function" then fail(cell .. ": no state " .. tostring(state) .. " in spec.states") end
+      if type(fire) ~= "function" then fail(cell .. ": no event " .. tostring(event) .. " in spec.events") end
+      local context = load_strata()
+      finish_startup(context)
+      enter(context)
+      local now = spec.state_of(context)
+      if now ~= state then fail(cell .. ": entering " .. tostring(state) .. ", state_of gave " .. tostring(now)) end
+      fire(context)
+      now = spec.state_of(context)
+      if now ~= next_state then
+        fail(cell .. ": the next state: expected " .. tostring(next_state) .. ", got " .. tostring(now))
+      end
+      if row.check then row.check(context) end
+      if not invariant_check.allowed then
+        local broken = check_invariants()
+        if #broken > 0 then fail(cell .. ": invariants broken after the event:\n" .. table.concat(broken, "\n")) end
+      end
+      if known_line then real_print("     " .. known_line .. ": asserts today's fault") end
+    end)
+  end
+  test(name .. ": every cell is decided", function()
+    local problems, decided = {}, {}
+    local function decide(kind, index, state, event)
+      local cell = cell_name(state, event)
+      local where = kind .. " " .. index .. " (" .. cell .. ")"
+      if spec.states[state] == nil then problems[#problems + 1] = where .. ": no state " .. tostring(state) end
+      if spec.events[event] == nil then problems[#problems + 1] = where .. ": no event " .. tostring(event) end
+      if decided[cell] then
+        problems[#problems + 1] = cell .. ": decided twice (" .. decided[cell] .. " and " .. kind .. " " .. index .. ")"
+      else
+        decided[cell] = kind .. " " .. index
+      end
+      return where
+    end
+    for index, row in ipairs(spec.rows) do
+      local where = decide("row", index, row[1], row[2])
+      if spec.states[row[3]] == nil then
+        problems[#problems + 1] = where .. ": next state " .. tostring(row[3]) .. " is no state of spec.states"
+      end
+      if row.known ~= nil and not whole_positive(row.known) then
+        problems[#problems + 1] = where .. ": known is an issue's number, not " .. tostring(row.known)
+      end
+      if row.check ~= nil and type(row.check) ~= "function" then problems[#problems + 1] = where .. ": check is a function" end
+    end
+    for index, entry in ipairs(spec.impossible or {}) do
+      decide("impossible", index, entry[1], entry[2])
+      if type(entry[3]) ~= "string" or entry[3] == "" then
+        problems[#problems + 1] = cell_name(entry[1], entry[2]) .. ": no reason it is impossible"
+      end
+    end
+    local states, events = {}, {}
+    for state in pairs(spec.states) do states[#states + 1] = state end
+    for event in pairs(spec.events) do events[#events + 1] = event end
+    table.sort(states); table.sort(events)
+    for _, state in ipairs(states) do
+      for _, event in ipairs(events) do
+        local cell = cell_name(state, event)
+        if not decided[cell] then problems[#problems + 1] = cell .. ": undecided (no row and no impossible entry)" end
+      end
+    end
+    if #problems > 0 then fail(name .. ": " .. #problems .. " problems:\n" .. table.concat(problems, "\n")) end
+  end)
+  if spec.notes then
+    test(name .. ": the notes' table equals these rows", function()
+      local path, machine = spec.notes[1], spec.notes[2]
+      local problems, mine, theirs = {}, {}, {}
+      for _, row in ipairs(spec.rows) do mine[cell_name(row[1], row[2])] = row[3] end
+      local notes_rows = notes_table(path, machine)
+      for _, row in ipairs(notes_rows) do
+        local cell = cell_name(row[1], row[2])
+        if theirs[cell] ~= nil then problems[#problems + 1] = cell .. ": twice in the notes" end
+        theirs[cell] = row[3]
+      end
+      for _, row in ipairs(spec.rows) do
+        local cell = cell_name(row[1], row[2])
+        if theirs[cell] == nil then
+          problems[#problems + 1] = cell .. ": the notes have no row (the test's next: " .. tostring(row[3]) .. ")"
+        elseif theirs[cell] ~= row[3] then
+          problems[#problems + 1] = cell .. ": the notes' next is " .. theirs[cell] .. ", the test's " .. tostring(row[3])
+        end
+      end
+      for _, row in ipairs(notes_rows) do
+        local cell = cell_name(row[1], row[2])
+        if mine[cell] == nil then problems[#problems + 1] = cell .. ": in the notes, not a row of the test" end
+      end
+      if #problems > 0 then
+        fail(name .. ": the table of " .. path .. ", ### " .. machine .. ", differs:\n" .. table.concat(problems, "\n"))
+      end
+    end)
+  end
+  return {known = known}
+end
+
+-- MINSTD: the same numbers under Lua and LuaJIT (every product under
+-- 2 ^ 53), and none of the script's math.random draws; random(n) is 1 to n
+local function seeded_random(seed)
+  local state = seed
+  return function(n)
+    state = (state * 48271) % 2147483647
+    return state % n + 1
+  end
+end
+
+-- Seeded walks (see the notes for the spec's fields): one test a seed,
+-- `<name> (seed <n>)`, which loads the script, runs spec.setup(context,
+-- random) for its state, then spec.steps ops picked by weight; after each,
+-- spec.after(state, op_name)'s problems and every invariant, and after the
+-- last, spec.finish(state)'s. A problem fails the test naming the seed, the
+-- step and the ops so far. With spec.reached, one more test, `<name>: the
+-- walks reached every path`, asserts each counter spec.counts(state) gave,
+-- summed over the seeds, above 0
+local function walk(spec)
+  if type(spec) ~= "table" or type(spec.name) ~= "string" or spec.name == "" then
+    error("walk: spec.name is a non-empty string", 2)
+  end
+  local name = spec.name
+  local function refuse(what) error("walk " .. name .. ": " .. what, 3) end
+  if type(spec.seeds) ~= "table" or #spec.seeds == 0 then refuse("spec.seeds is a list of seeds") end
+  for _, seed in ipairs(spec.seeds) do
+    if not whole_positive(seed) or seed >= 2147483647 then refuse("a seed is a whole number from 1, not " .. tostring(seed)) end
+  end
+  if not whole_positive(spec.steps) then refuse("spec.steps is a whole number from 1") end
+  if type(spec.setup) ~= "function" then refuse("spec.setup is a function") end
+  if type(spec.ops) ~= "table" or #spec.ops == 0 then refuse("spec.ops is a list of {weight, name, fn}") end
+  local total = 0
+  for index, op in ipairs(spec.ops) do
+    if type(op[1]) ~= "number" or op[1] <= 0 or type(op[2]) ~= "string" or type(op[3]) ~= "function" then
+      refuse("op " .. index .. " is {weight above 0, name, fn}")
+    end
+    total = total + op[1]
+  end
+  for _, field in ipairs({"after", "finish", "counts"}) do
+    if spec[field] ~= nil and type(spec[field]) ~= "function" then refuse("spec." .. field .. " is a function") end
+  end
+  if spec.reached ~= nil and (type(spec.reached) ~= "table" or type(spec.counts) ~= "function") then
+    refuse("spec.reached is a list of counter names, with spec.counts")
+  end
+  local sums, walked = {}, {}
+  for _, seed in ipairs(spec.seeds) do
+    test(name .. " (seed " .. seed .. ")", function()
+      local context = load_strata()
+      finish_startup(context)
+      local random = seeded_random(seed)
+      local state = spec.setup(context, random)
+      local names = {}
+      local function check(where, problems)
+        local found = {}
+        if type(problems) == "string" then problems = {problems} end
+        for _, problem in ipairs(problems or {}) do found[#found + 1] = tostring(problem) end
+        if not invariant_check.allowed then
+          for _, broken in ipairs(check_invariants()) do found[#found + 1] = "invariant " .. broken end
+        end
+        if #found > 0 then
+          fail(name .. " (seed " .. seed .. "), " .. where .. ": " .. table.concat(found, "; ")
+            .. "\nthe ops so far: " .. table.concat(names, ", "))
+        end
+      end
+      for step = 1, spec.steps do
+        local pick, index = random(1000) * total / 1000, 0
+        repeat
+          index = index + 1
+          pick = pick - spec.ops[index][1]
+        until pick <= 0 or index == #spec.ops
+        local op = spec.ops[index]
+        names[#names + 1] = op[2]
+        op[3](state, random)
+        check("step " .. step .. " (op " .. op[2] .. ")", spec.after and spec.after(state, op[2]))
+      end
+      check("at the end", spec.finish and spec.finish(state))
+      if spec.counts then
+        for counter, count in pairs(spec.counts(state) or {}) do sums[counter] = (sums[counter] or 0) + count end
+      end
+      walked[#walked + 1] = seed
+    end)
+  end
+  if spec.reached then
+    test(name .. ": the walks reached every path", function()
+      local missing = {}
+      for _, counter in ipairs(spec.reached) do
+        if not ((sums[counter] or 0) > 0) then missing[#missing + 1] = counter .. " (" .. tostring(sums[counter] or 0) .. ")" end
+      end
+      if #missing > 0 then
+        fail(name .. ": the walks never reached " .. table.concat(missing, ", ") .. " (summed over the seeds walked to"
+          .. " the end: " .. (#walked > 0 and table.concat(walked, ", ") or "none") .. ", of " .. #spec.seeds .. ")")
+      end
+    end)
+  end
+end
+
 -- The text lib/tabutil.lua's tab.save writes for `value`: a data file as
 -- norns writes it (tab.load reads only that layout)
 local function tabutil_text(value)
@@ -1505,6 +1797,9 @@ return {
   voice_count = voice_count,
   voice_entries = voice_entries,
   allowed_call_lines = allowed_call_lines,
+  transition_table = transition_table,
+  notes_table = notes_table,
+  walk = walk,
   tabutil_text = tabutil_text,
   file_text = file_text,
   workflow_shards = workflow_shards,
