@@ -645,6 +645,26 @@ test("a setup the queue took only in part is sent again whole at the next sync",
   end
 end)
 
+test("a time change the queue refused reaches the module at a later sync", function()
+  -- #871 one step on: an output set up whole, then an attack change refused by a full queue;
+  -- the next sync sends the setup again whole, env_att(n, ms) with the new time (crow-ii.md §2)
+  local context, S = leading_real()
+  local ii = S.lib.io_ii
+  params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
+  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 10)", "set up whole")
+  for k = 1, 60 do ii.send("filler", "full", k) end
+  local before = ii.dropped()
+  params:set("txo_attack", 25)
+  assert_equal(ii.dropped() - before, 1, "the attack's line refused")
+  for _ = 1, 60 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 10)", "the module keeps the old time")
+  params:set("v2_out_txo", 7)  -- the next sync
+  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
+  assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 25)", "the new attack")
+  assert_equal(last_line(context, "ii.txo.env_dec(3, "), "ii.txo.env_dec(3, 500)", "and the decay, with the setup")
+end)
+
 test("an output whose setup was taken only in part is turned off when no voice wants it", function()
   -- #871: its env_act 1 reached the module, so leaving it sends env_act(n, 0) (crow-ii.md §2)
   local context, S = leading_real()
