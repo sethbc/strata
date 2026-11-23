@@ -975,6 +975,39 @@ test("a read with actions runs no action twice (#951)", function()
   end
 end)
 
+-- The hook returns at once at a read with actions: it reads and sets no
+-- param (a set alone could not tell, since after such a read no stored
+-- value differs). And it is the last PSET hook, after the tuning's, whose
+-- silent re-set of each v<i>_freq it must replay
+test("the voice params' PSET hook is the last and touches no param at a read with actions (#951)", function()
+  local context = load_strata({ data_subdir = "pset_silent_guard" }); finish_startup(context)
+  local S = local_value("S")
+  util.make_dir(context.data_dir)
+  local hooks, tuning_at = S.registry.pset_hooks, nil
+  for index, hook in ipairs(hooks) do
+    if hook.name == "tuning" then tuning_at = index end
+  end
+  assert_equal(hooks[#hooks].name, "voice_params", "the voice params' hook is the last PSET hook")
+  assert_true(tuning_at ~= nil and tuning_at < #hooks, "after the tuning's")
+  local hook = hooks[#hooks]
+  local path = context.data_dir .. "guard.pset"
+  params:write(path, "guard")
+  params:set("v1_grain_size", 0.3)
+  local own_read, touched = hook.read, nil
+  hook.read = function(...)
+    touched = 0
+    params.get = function(self, ...) touched = touched + 1; return getmetatable(self).get(self, ...) end
+    params.set = function(self, ...) touched = touched + 1; return getmetatable(self).set(self, ...) end
+    local ran, failure = pcall(own_read, ...)
+    params.get, params.set = nil, nil
+    if not ran then error(failure, 0) end
+  end
+  params:read(path)
+  hook.read = own_read
+  assert_equal(touched, 0, "a read with actions: the hook gets and sets no param")
+  assert_near(S.voices[1].values.grain_size, params:get("v1_grain_size"), 1e-9, "the read's own action stored it")
+end)
+
 -- 3.4's PSET hooks (S.register_pset_hook, design §0.1): the master record
 -- installs norns' three PSET actions, which run every hook with the PSET's
 -- path without .pset and the two-digit number norns passes (nil for a PSET
