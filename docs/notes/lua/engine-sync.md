@@ -28,6 +28,32 @@
 - **A factor is applied last and read everywhere** (3.7, plan ruling 13): `with_lfo_offsets` multiplies by the param's engine factors after the clamp and on its early return, so every send of the param carries it and `engine_param_value(id)` is the factored value; `start_value` and `resend_modulated_voice_params` treat a param with a factor as modulated, so a start and a voice sync carry it too. A factor is a finite number above 0 (anything else raises); 1 or nil clears it; the stored param never changes.
 - **A value waits only while `S.engine_budget_clock` runs, and the flush clock is never canceled while the script runs** (#654; the `engine budget` invariant: a value waiting has a clock, the clock is a live coroutine, every waiting id has a value). matron may have posted the clock's resume when a send empties the waiting list (another clock of its tick, delivered first), and norns' `clock.resume` raises on a canceled coroutine (`bad argument #1 to 'resume'`). So the clock runs on with nothing waiting to its next wake, the next window's start, and ends there. A value that waits meanwhile is that clock's, sent at that wake: never a second clock, never none while a value waits. Only cleanup step 127 cancels it (the script is ending). A waiting value's sender that raises never ends the flush clock (#637): each waiting value goes on its own, a failure prints `strata: engine send <id> failed: <error>` once per param, and the rest still go, so the clock ends only once nothing waits.
 
+## Machines
+
+### engine budget
+- **State:** the local `budget` (`window`, the current window's index; `sent`, its count; `pending[id]` and `order`, the waiting values and the order their ids first waited; `failed`, the ids whose waiting value's sender raised) and `S.engine_budget_clock`, the flush clock; read with `M.budget_state()` and `M.expected_value(id)`. The states: `idle` (nothing waits, no clock), `waiting` (values wait, the clock runs) and `clock to its wake` (the clock runs on with nothing waiting, to the next window's start, where it ends: #654).
+- **Invariant:** `engine budget`: a value waits only while the flush clock runs, the clock is a live coroutine, and every waiting id has a value.
+- **Test:** `test/unit/engine_sync_test.lua`: "a deferrable send past the window's budget waits with its newest value", "a clock in the flush clock's tick that empties the waiting list leaves the flush clock to end at its wake (#654)", "a value that waits while the flush clock runs on idle goes at its wake, from the same clock (#654)", "count_sends enters direct sends in the budget's window". A table and no transition test: the contract (The send budget, below) is the specification.
+
+A send with room is any send outside `deferrable`, one inside it the window has room for, and one that reaches no engine (recorded, never counted); `count_sends` only fills the window. A new window is entered by its first send or by the clock's wake, and its first sends are the waiting values, oldest first, as far as the window goes. Impossible: the clock's wake in `idle` (no clock runs), and nothing waits in `clock to its wake` for a send at once to drop.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `idle` | `a send with room` | `idle` | delivered and counted, its id's waiting value (none) dropped |
+| `idle` | `a deferrable send past the room` | `waiting` | its value waits under its id; the flush clock starts, asleep to the next window's start |
+| `idle` | `cleanup` | `idle` | nothing waits, no clock |
+| `waiting` | `a deferrable send past the room` | `waiting` | the id's value waits, the newest winning, in its first place |
+| `waiting` | `a send at once of the last waiting id` | `clock to its wake` | delivered; its older waiting value dropped; the clock is left to its wake |
+| `waiting` | `a new window's first send, all fit` | `clock to its wake` | the waiting values go first, then the send |
+| `waiting` | `a new window's first send, more than fits` | `waiting` | what fits goes; the rest wait for the next window |
+| `waiting` | `the clock's wake, all fit` | `idle` | the window entered, every waiting value sent; the clock finds nothing more and ends |
+| `waiting` | `the clock's wake, more than fits` | `waiting` | what fits goes; the clock sleeps to the next window |
+| `waiting` | `cleanup` | `idle` | the waiting values dropped, never sent; the clock canceled (the one cancel, #461) |
+| `clock to its wake` | `a send with room` | `clock to its wake` | delivered |
+| `clock to its wake` | `a deferrable send past the room` | `waiting` | waits for this clock's wake: never a second clock |
+| `clock to its wake` | `the clock's wake, nothing waits` | `idle` | the clock ends at its own wake, never canceled (#654) |
+| `clock to its wake` | `cleanup` | `idle` | the clock canceled |
+
 ## Owns
 
 `lib/engine_sync.lua` (`S.lib.engine_sync`):
@@ -169,3 +195,21 @@ Morph, the macros and the LFOs have no writer flag of their own: they write insi
 ### The undo's and the drift's flags
 
 The randomize undo's `undo_writing` (`write_as_undo`, `lib/mutation.lua`) and the drift's `S.drift_writing` (`set_drifted_param`) each put back the value they found when their write ends, even when it raises (the error is raised again, with its traceback), as `S.gesture_playing` and `side_files`' `reading_only` do (#892). A write nested in another (a randomize inside a randomize's draw, a drift write inside a drift write's action) therefore leaves the outer write's flag set until the outer write ends, and only the outermost write clears it. `docs/notes/lua/mutation.md` says what each flag keeps the param actions from doing.
+
+## Mirrors of the engine
+
+Lua keeps eleven records of what it sent the engine, each read to decide what to send next, and each reset by its own rule (#916). None reads back: a command the engine's guards ignore (`fastModIndicesValid`, `fastModValuesFinite`, `lib/engine/StrataModulation.sc`) posts one console line while Lua records it as sent, so the two differ until Lua's value next changes (3.9's modulation walk, package 3c, compares the modulation area's records with the engine calls). Each lives in its load's constructor or on that load's fresh `S`, so a script load resets every one.
+
+| Mirror | Holds | Set by | Reset by |
+|---|---|---|---|
+| `S.engine_param_values[id]` (`lib/engine_sync.lua`) | the last value sent for a param id (with its offsets and factors), or recorded for a send that reached no engine (a stopped voice's, #642) | `deliver` (every `send_engine_value`), a start's `send_now(id, value, already_sent)` | a voice's sync and start forget the voice's `v<i>_` ids (`forget_sent_voice_values`); a load. `engine_param_value(id)` falls back to `params:get(id)` |
+| `sent_sources[voice]` (`lib/engine_sync.lua`) | the source the engine last got (`setGrainSource`), to tell a running voice's source change from the same source again | `send_grain_source`, every `setGrainSource` | a load only (nil: the next send counts as a change) |
+| `sent[voice][slot]` (`lib/notes.lua`) | the expression the engine keeps for a note slot, so a note's expression is sent only when it differs | `send_expression`, every `noteExpression` | slot 1's goes back to neutral at the voice's stop (`voiceOn` resets slot 0's); a load (every slot neutral) |
+| `regions_sent[voice][slot]` (`lib/notes.lua`) | the region the engine keeps for an extra slot (`0, 0` for none) | `send_slot_region`, every `noteRegion` | a load (`0, 0`, the engine's alloc); kept across a voice's stop, release or cut, as the engine keeps it |
+| `sent_mute[voice]` (`lib/voice_mix.lua`) | the `voiceMute` the voice's stage last got (nil: the engine's 0), so only a changed answer is sent | `send_changed_mutes`, the record's `sync` | a load only; every voice sync writes it again |
+| `remembered[voice]` (`lib/arp.lua`) | the interval list the engine was last sent, so the LFO step sends a held chord's list only when it differs | `M.sent`, from every `send_intervals_now` (a start's and a sync's included) | a load only |
+| `last_sent` and `last_others` (`lib/delay_sync.lua`) | the delay time the delay's sender last sent and the feedback, mix and ping-pong that send carried (`time_unheard`) | `M.sent`, from every `setDelay` | a load only (nil: no send yet, the engine plays `delay_time`'s default) |
+| `engine_text` (`lib/tuning.lua`) | the text of the tuning the engine has, which a silent read leaves behind the param (#842) | `M.send` (`setTuning` and its tones) | a load (the default tuning's text, which the engine allocs with) |
+| `state[n].engine` (`lib/lfos.lua`) | an engine-run LFO's settings as last sent (`setFastLfo`), and that its node exists | `send_fast_lfo` | `reconcile_engine` once the LFO no longer plays in the engine (`stopFastLfo` sent); cleanup; a load |
+| the envelope routes' records, `S.engine_param_values["env route <k>"]` (`lib/envelopes.lua`) | a route's settings as last sent (`setFastEnv`), or `false` once `stopFastEnv` went; read through `expected_value`, so a waiting one counts | the budget's `deliver` | a load only: a voice's sync forgets `v<i>_` ids, never these |
+| the matrix's fast channels' records, `S.engine_param_values["matrix fast <voice> <destination>"]` (`lib/matrix.lua`) | the offset sum a fast channel last sent (`setFastOffset`), read through `expected_value` | the budget's `deliver` | a load only: the engine's offset node keeps its value across a voice's sync, stop and start |

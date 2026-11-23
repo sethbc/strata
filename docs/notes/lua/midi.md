@@ -20,6 +20,81 @@
 - **Program change in** (3.6, MIDI out's `midi_pc_in`, off by default): with it on, a program change 0 to `NUM_SCENES` - 1 on `midi_pc_channel`'s channel (its first option, `any`, every channel) calls `S.lib.io_midi_out.program_change_in(listening port, value)`, which recalls scene value + 1 as a scene key does (`docs/notes/lua/io/midi_out.md`). Its branch of `midi_event` sits before the MPE branch, so it recalls in every channel mode; any other program change, or any with `midi_pc_in` off, falls through to the branches as before (ignored, or to `S.lib.mpe.control` in the MPE modes, which ignores it).
 - Strata's code handles no CC but 123 and 120 (`release_held_notes(true)`) and, in the MPE modes, MPE's (74, 87, 6, 38, 100, 101, through `S.lib.mpe.control`); norns' PARAMS > MAP maps any other CC to any param. CC74 is not read in the plain modes.
 - The hot-plug and claim handlers (`S.lib.io_ports.on_change("midi_in", ...)`, `on_claim("midi_in", ...)`) are registered in the start step, never at include time: they read the `midi_device` param, which init adds (#469). The layout hook is registered there too (`S.lib.mpe` is included after this module).
+- **A held-back stop marks only a running voice with no key down** (`stop_pending`, 3.7; the `midi notes` invariant since 3.9, #913): only the last key's lift in release mode under a note playing to its end sets it, and every clearer (below, Machines) keeps it from outliving that.
+
+## Machines
+
+### midi notes
+- **State:** per voice, the keys down on it (`S.midi_state.held[voice]`, each `channel * 128 + note`, mirrored by `S.midi_state.note_voice[channel][note]`, the list of voices the note's note on played), whether a MIDI note started it (`S.midi_state.started[voice]`) and whether its release-mode stop is held back (`stop_pending[voice]`, a local). The states below are a voice's: `no key` (nothing held, no mark), `keys down` and `stop held back` (no key down, the mark set, the voice running while a note of it plays to its end, `S.lib.notes.plays_to_end`).
+- **Invariant:** `midi notes`: a key is down on a voice exactly while some channel's note on lists the voice for it (each list non-empty, its voices valid and distinct); `started` holds only `true` for a valid voice; `stop_pending` marks only a running voice with no key down (3.9, #913).
+- **Test:** `test/unit/midi_in_test.lua`: "the midi notes invariant holds a held-back stop to a running voice with no key down (#913)", "a held-back stop is cleared by the voice's stop and by a key down (#913)", "a release-mode voice held back by another owner's one-shot slice stops when the last ends", "a release-mode voice restarted right after its last key stopped it keeps running", "latch: a panic CC stops a voice a released key started, never one started elsewhere (#529)".
+
+A reset is `release_held_notes` (from `reset_midi_input`: a port or channel mode change, a note off change, the selected port's device gone, moved or claimed; and the MPE layout hook in the MPE modes); a panic is CC 123 or 120. `started` runs beside the table: set by `midi_note_on` when its play started a stopped voice, cleared by the grain-restart hook at every start, by `midi_note_off_for`'s stop and by the panic, which also stops every voice it holds. The mark's four clearers are a key down, the voice's stop (the voice-stop hook), its start (the grain-restart hook; a stopped voice holds no mark already, so this one only guards) and the LFO step, which stops the voice once no note of it plays to its end, or drops the mark once the voice no longer runs in release mode with no key down. Impossible: `stop held back` with a start (the voice runs; a stop first clears the mark).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `no key` | `key down` | `keys down` | the key is held and its note plays; a stopped voice starts (`started` set) |
+| `no key` | `the voice's stop` | `no key` | nothing of MIDI's |
+| `no key` | `a reset` | `no key` | nothing held: nothing sent |
+| `no key` | `a panic` | `no key` | a voice MIDI started stops |
+| `keys down` | `key down` | `keys down` | another key held; latch's first key of a chord replaced the last chord |
+| `keys down` | `key up, others down` | `keys down` | release: its note ends (the own note parks); latch: the note latches |
+| `keys down` | `last key up, release` | `no key` | the voice stops (`midi_note_off_for`), `started` cleared |
+| `keys down` | `last key up, release, a note plays to its end` | `stop held back` | the mark set; the note plays on |
+| `keys down` | `last key up, latch` | `no key` | the notes latch and sound on |
+| `keys down` | `the voice's stop` | `keys down` | its notes forgotten; the keys stay down, their offs send nothing |
+| `keys down` | `a reset` | `no key` | every key released; in release mode the voice stops |
+| `keys down` | `a panic` | `no key` | every key released and the voice stopped |
+| `stop held back` | `key down` | `keys down` | the mark goes: the new key's lift decides again |
+| `stop held back` | `the LFO step, nothing plays to its end` | `no key` | the voice stops |
+| `stop held back` | `the LFO step, a note still plays to its end` | `stop held back` | it waits |
+| `stop held back` | `the LFO step, latch since` | `no key` | the mark dropped; the voice runs on |
+| `stop held back` | `the voice's stop` | `no key` | the mark goes |
+| `stop held back` | `a reset` | `stop held back` | MIDI's notes forgotten (its slice playing to its end too); the LFO step then stops the voice once no other owner's note plays to its end |
+| `stop held back` | `a panic` | `no key` | a voice MIDI started stops, which clears the mark (one started elsewhere keeps it for the LFO step) |
+
+### note tap
+- **State:** `note_tap` (a local: nil, or the function every note on goes to first), set with `M.set_note_tap(fn)` by its two owners, SETUP's zones editor's learn (`lib/ui/zones.lua`) and the scale editor (`lib/ui/scale_editor.lua`).
+- **Invariant:** none: a function or nil, both legal (`set_note_tap` refuses anything else).
+- **Test:** `test/unit/midi_in_test.lua`: "a note tap consumes the notes it takes, and their note offs"; `test/unit/ui_zones_test.lua`: "a learn ends after 10 s, at K2 and at cleanup, and the note tap is cleared".
+
+Its clearers are its owner (`set_note_tap(nil)`, the tap itself included, from the next note), `reset_midi_input` and cleanup; the last two tell no owner, so the scale editor sets its tap again at its next draw. The MPE layout hook keeps it.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `none` | `set` | `set` | every note on goes to the tap first |
+| `none` | `note on` | `none` | the note plays |
+| `none` | `a reset` | `none` | nothing |
+| `set` | `note on, taken` | `set` | the note plays nothing and enters no list, so its off does nothing |
+| `set` | `note on, not taken` | `set` | the note plays |
+| `set` | `set` | `set` | the new tap from the next note (a tap may set it while it runs) |
+| `set` | `cleared` | `none` | from the next note |
+| `set` | `a reset` | `none` | cleared, its owner not told |
+| `set` | `the MPE layout hook` | `set` | kept: the zones editor's learn changes the layout while it is set |
+| `set` | `cleanup` | `none` | cleared |
+
+### listening port
+- **State:** `listening_port` (a local: the port `midi_event` listens on through `S.lib.io_ports.listen`, nil while the selected port is claimed or after cleanup), `S.midi_device` (the selected port's vport) and `attached_device` (the device last seen on it); the selected port is the `midi_device` param. States: `listening` (the selected port is free), `claimed` (another name owns it: not listened to, its notes never played) and `ended` (cleanup has run).
+- **Invariant:** none here: a port's listeners and its owner are the `midi ports` machine's (`lib/io/ports.lua`), which holds that its event and its listeners agree.
+- **Test:** `test/unit/midi_in_test.lua`: "MIDI in leaves a claimed port alone", "the MIDI port moved onto a claimed port listens to nothing until the claim is released", "MIDI device param, hot-plug and the SETUP page", "a MIDI device moved off the selected port in SYSTEM > DEVICES gives up the notes it held".
+
+A claim releases every MIDI note and resets the master bend ranges, as a port change does; its release listens again and resets nothing. SETUP's `midi` row names a claimed port's owner (`docs/notes/lua/pages/setup.md`); nothing on IO says the keyboard is not heard (#913's mark is package 5c's). Nothing happens in `ended`: every handler is gone (`lib/io/ports.lua`'s step after this one hands hot-plug back).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `listening` | `claimed` | `claimed` | unlistened; every MIDI note released, the ranges reset |
+| `listening` | `another port selected, free` | `listening` | listens there; every MIDI note released |
+| `listening` | `another port selected, claimed` | `claimed` | unlistened; every MIDI note released |
+| `listening` | `the device leaves` | `listening` | every MIDI note released, the ranges reset; still listening on the port |
+| `listening` | `a device arrives` | `listening` | attached; on the selected port the ranges reset |
+| `listening` | `the menu closes, the device moved` | `listening` | every MIDI note released, the ranges reset |
+| `listening` | `cleanup` | `ended` | unlistened, the tap cleared |
+| `claimed` | `released` | `listening` | listens again |
+| `claimed` | `another port selected, free` | `listening` | listens there |
+| `claimed` | `another port selected, claimed` | `claimed` | nothing heard |
+| `claimed` | `the device leaves` | `claimed` | nothing heard (nothing held to release) |
+| `claimed` | `a device arrives` | `claimed` | attached, still not heard |
+| `claimed` | `cleanup` | `ended` | the tap cleared |
 
 ## Owns
 
@@ -122,13 +197,6 @@ Slices (3.7, design §3.5, package 2b): on a voice that takes slice notes (`S.li
   - The other modes leave bends alone.
 - Pitchbend asks for no redraw: nothing on the screen or the arc shows the bend.
 
-## States
+## Tests
 
-A key's voices are the list in `note_voice[channel][note]`; `held[voice][key]` mirrors those entries.
-
-| Fields | Legal combinations | Transition |
-|--------|--------------------|------------|
-| `note_voice[ch][note]`, `held[voice][ch * 128 + note]` | a key is down on a voice exactly while its channel's list for the note holds the voice; each list non-empty, its voices valid and distinct | `midi_event` (note on, note off and a repeated note on); `release_held_notes` empties both (from `reset_midi_input`, also from `M.reconcile` when the selected vport's device changed, the panic and the layout hook) |
-| `started[voice]` | true or absent | set by `midi_note_on` when its play started the voice; cleared by the grain-restart hook at any start, by `midi_note_off_for`'s stop and by the panic |
-
-Tests: `test/unit/midi_in_test.lua` (pitch per source, velocity, the start order, clamping and channels; chords and the cap of 1; latch and release, in every channel mode; a note off's voices, repeated note ons in omni; input voices' grain pitch; quantize; pressure in the plain modes; mpe selected and mpe split, MPE's per-channel updates; the releases of every note, Review Focus 1 (a reset under latch with another owner's notes, a parked own note's return, a note off change, the layout hook only in the MPE modes and twice in a row, RPN 6 mid-handler), and a stopped voice's forgotten notes, Review Focus 2; the note tap; an old PSET's note off indices; pitchbend; hot-plug, the menu's reconcile and SETUP). `test/unit/sequencer_test.lua` plays real MIDI against the patterns for ruling 55: a latched note giving way at a note cap of 1 and a pool of 0, a key held down through steps, and a MIDI note taking a step's own note.
+The key state, the held-back stop, the tap and the port are under Machines, above (3.9 moved 3.5's States table there, #913). Tests: `test/unit/midi_in_test.lua` (pitch per source, velocity, the start order, clamping and channels; chords and the cap of 1; latch and release, in every channel mode; a note off's voices, repeated note ons in omni; input voices' grain pitch; quantize; pressure in the plain modes; mpe selected and mpe split, MPE's per-channel updates; the releases of every note, Review Focus 1 (a reset under latch with another owner's notes, a parked own note's return, a note off change, the layout hook only in the MPE modes and twice in a row, RPN 6 mid-handler), and a stopped voice's forgotten notes, Review Focus 2; the note tap; an old PSET's note off indices; pitchbend; hot-plug, the menu's reconcile and SETUP). `test/unit/sequencer_test.lua` plays real MIDI against the patterns for ruling 55: a latched note giving way at a note cap of 1 and a pool of 0, a key held down through steps, and a MIDI note taking a step's own note.

@@ -622,8 +622,18 @@ return function(S)
   -- A key is down on a voice exactly while some channel's note on lists the
   -- voice for that note: held[voice][channel * 128 + note] is set exactly
   -- when note_voice[channel][note] holds the voice; each list holds valid
-  -- voices, once each, and is never empty
+  -- voices, once each, and is never empty. 3.9 (#913): a held-back stop
+  -- (stop_pending) marks only a running voice with no key down on it
   S.register_invariant("midi notes", function()
+    for voice_idx, flag in pairs(stop_pending) do
+      if flag ~= true or not S.voices[voice_idx] then
+        return "the held-back stop has a bad entry for " .. tostring(voice_idx)
+      end
+      if not S.voices[voice_idx].active then return "the held-back stop marks stopped voice " .. voice_idx end
+      if next(S.midi_state.held[voice_idx]) ~= nil then
+        return "the held-back stop marks voice " .. voice_idx .. ", which a key is down on"
+      end
+    end
     for voice_idx, flag in pairs(S.midi_state.started) do
       if flag ~= true or type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES then
         return "started has a bad entry for " .. tostring(voice_idx)
