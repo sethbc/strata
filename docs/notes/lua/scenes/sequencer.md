@@ -14,8 +14,8 @@
 
 ```lua
 function scene_sequencer_start()
-  S.scene_sequencer_clock = clock.run(function()
-    clock.sleep(0)  -- start on the next scheduler tick (after a PSET read)
+  local handle = S.lib.clocks.run(function(handle)
+    if not handle.sleep(0) then return end  -- start on the next scheduler tick (after a PSET read)
     while S.scene_sequencer_enabled do
       -- one pass, under xpcall (an error stops the sequencer through its param, #329)
       if not plays(S.scene_sequencer_position, length) then  -- an empty or invalid slot is skipped at once (#513, #754)
@@ -25,13 +25,14 @@ function scene_sequencer_start()
       if SEQUENCER_DRAW.move ~= "repeat" then recall_scene(S.scene_sequencer_position, transition_time) end
       draw_next_scene(length)  -- S.lib.scenes.next_slot, once, into S.scene_sequencer_next
       local held = math.max(scene_duration, transition_time)
-      clock.sleep(held)
-      wait_for_scene_transition()
+      if not handle.sleep(held) then return end         -- stopped during the hold: it ends here
+      if not wait_for_scene_transition(handle) then return end
       -- the kept slot if it can still play in the sequence as it is now, else
       -- drawn again; with no scene in the sequence, the next slot, wrapped
       S.scene_sequencer_position = kept_next_scene(length_now) or ...
     end
   end)
+  S.scene_sequencer_clock = handle.id  -- the handle is kept in a local
 end
 ```
 
@@ -65,6 +66,6 @@ The next scene (3.7, design §5.4, decision 12):
 
 Length and PSET loads:
 - The sequencer advances with the `scene_sequence_length` it reads after the wait, so a sequence shortened while a scene plays drops a kept slot past its end and draws again: at the defaults that wraps to the first scene (it never jumps to the new last scene). A lengthened one keeps the slot it drew.
-- Its clock does nothing until the next scheduler tick (`clock.sleep(0)`). norns' `params:read` (a PSET load from the PARAMS menu) sets params one by one in file order, and `scene_sequencer_enabled` comes before the transition time, duration, length, FX, LFO and voice params. Started inside the read, the sequencer would recall scene 1 with the old transition time and the PSET's later lines would then overwrite it. On the next tick the read has finished.
-- `scene_sequencer_start` and `pattern_clock_start` cancel their running clock before starting a new one (tests check that a restart leaves one clock).
-- The `scene_sequencer_enabled` param action starts and stops the sequencer. Cleanup step 100 stops it through that param, then `scene_sequencer_stop()`.
+- Its clock does nothing until the next scheduler tick (`handle.sleep(0)`). norns' `params:read` (a PSET load from the PARAMS menu) sets params one by one in file order, and `scene_sequencer_enabled` comes before the transition time, duration, length, FX, LFO and voice params. Started inside the read, the sequencer would recall scene 1 with the old transition time and the PSET's later lines would then overwrite it. On the next tick the read has finished.
+- `scene_sequencer_start` and `pattern_clock_start` end their running clock before starting a new one (tests check that a restart leaves one clock). The sequencer's runs on the clock helper (3.9, #870, `docs/notes/lua/clocks.md`): a start or a stop stops it through `S.lib.clocks.stop`, which retires it while its wake may be posted (its settle wait wakes every 0.01 s, always inside the margin) and cancels it farther off; a retired clock's wait returns false at its wake and the pass and the clock return, doing nothing more. Every wait of its body (`handle.sleep(0)`, the hold, `wait_for_scene_transition(handle)`'s settle sleeps) is its handle's.
+- The `scene_sequencer_enabled` param action starts and stops the sequencer. Cleanup step 100 cancels its clock at once (`S.lib.clocks.cancel`: the script ends), then stops it through that param, then `scene_sequencer_stop()`.

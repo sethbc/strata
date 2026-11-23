@@ -932,6 +932,46 @@ h.transition_table({
   notes = {"docs/notes/lua/scenes/transitions.md", "scene fade"},
 })
 
+-- 3.9 (#870): the fade's clock and the scene sequencer's run on the clock
+-- helper (lib/clocks.lua): a stop as matron posts the clock's wake retires
+-- it, and the wake ends it without an error and without running a step
+test("the fade's clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  fade_scenes()
+  recall_scene(2, 2)                                   -- a 2 s fade: steps 0.1 s apart
+  local id = S.scene_transition_clock
+  context.clock.advance_until(id, function() recall_scene(1, 0) end)  -- a recall supersedes it
+  context.clock.run_for(0.5)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a canceled clock" .. (errors[1] and (": " .. errors[1]) or ""))
+  assert_true(not S.scene_transition_active, "no fade runs")
+  assert_equal(S.current_scene, 1, "the instant recall's scene is current")
+  assert_near(params:get("reverb_mix"), 0.2, 1e-9, "and no step of the old fade ran after it")
+  assert_equal(S.lib.clocks.retired[id], nil, "the retired clock ended at its wake")
+end)
+
+test("the scene sequencer's clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  fade_scenes()
+  params:set("scene_sequence_length", 2)
+  params:set("scene_duration", 4)
+  params:set("scene_transition_time", 0)
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1)
+  local id = S.scene_sequencer_clock
+  assert_true(id ~= nil, "the sequencer runs")
+  assert_equal(S.current_scene, 1, "it recalled scene 1")
+  context.clock.advance_until(id, function() params:set("scene_sequencer_enabled", 0) end)
+  context.clock.run_for(5)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a canceled clock" .. (errors[1] and (": " .. errors[1]) or ""))
+  assert_equal(S.current_scene, 1, "scene 2 was never recalled")
+  assert_equal(S.scene_sequencer_clock, nil, "no sequencer clock")
+  assert_equal(S.lib.clocks.retired[id], nil, "the retired clock ended at its wake")
+end)
+
 -- 3.9 (#867): a hand-moved FX fader during a fade is drawn at once, not at
 -- the fade's next step (lib/params_setup.lua, lib/delay_sync.lua)
 test("a hand-moved FX fader during a fade redraws the grid at once", function()
@@ -1124,8 +1164,11 @@ test("stopping and restarting the scene sequencer while it waits for a transitio
   assert_equal(#recalls, 2, "the sequencer is waiting inside wait_for_scene_transition")
   local waiting_clock = local_value("scene_sequencer_clock")
   params:set("scene_sequencer_enabled", 0)
-  assert_true(context.clock.threads[waiting_clock] == nil, "stopping cancels the waiting clock")
+  -- its settle wait wakes every 0.01 s, inside the clock helper's margin:
+  -- the stop retires it, and it ends at that wake (3.9, #870)
+  assert_true(local_value("S").lib.clocks.retired[waiting_clock] ~= nil, "stopping retires the waiting clock")
   context.clock.run_for(1, 0.001)
+  assert_true(context.clock.threads[waiting_clock] == nil, "which ends at its wake")
   assert_equal(#recalls, 2, "a stopped sequencer recalls nothing")
   params:set("scene_sequencer_enabled", 1)                         -- restart at 6 s: scene 1 again
   context.clock.run_for(8.5, 0.001)
