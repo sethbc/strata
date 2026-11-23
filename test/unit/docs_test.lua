@@ -3627,43 +3627,93 @@ end)
 -- same cases, an engine name read through its model name below. An engine
 -- condition naming anything else fails, so a new case reaches the model
 test("the model's kind rule names the engine's cases", function()
-  local MODEL_NAMES = { inputSource = "self.input", voiceSource = "self:voice_source", numBuffers = "self.buffers",
-    frozenSynthVoice = "self:frozen_synth_voice" }
-  local source = stubs.strip_sc_comments(engine_sources())
-  local engine_body = source:match("noteKindFor%s*{%s*arg%s+voice;(.-)\n    }")
-  assert_true(engine_body ~= nil, "noteKindFor { arg voice; ... } (StrataNotes.sc)")
+  -- Each branch's condition as its tokens (names and numbers, in order) on
+  -- each side, the lines before the branches first: compared token by token,
+  -- so any other name (this.<name> or a bare instance variable) or bound in
+  -- either fails, and each side's numbers are the other's
+  local EXPECTED = {
+    { kind = "", engine = { "var", "source", "grainSource", "voice" },
+      model = { "local", "source", "self", "voices", "voice", "source" } },
+    { kind = "input", engine = { "source", "this", "inputSource", "or", "this", "voiceSource", "source" },
+      model = { "source", "self", "input", "or", "self", "voice_source", "source" } },
+    { kind = "buffer", engine = { "source", "inclusivelyBetween", "1", "numBuffers" },
+      model = { "source", "1", "and", "source", "self", "buffers" } },
+    { kind = "stream", engine = { "this", "frozenSynthVoice", "voice" }, model = { "self", "frozen_synth_voice", "voice" } },
+    { kind = "voice", engine = {}, model = {} },
+  }
+  local function tokens(text)
+    local list = {}
+    for token in text:gmatch("[%w_]+") do list[#list + 1] = token end
+    return list
+  end
+  local function numbers(list)
+    local found = {}
+    for _, token in ipairs(list) do if token:match("^%d") then found[#found + 1] = token end end
+    return table.concat(found, " ")
+  end
+  -- the problems of one engine source and model text (empty: they agree)
+  local function kind_rule_problems(engine_text, model_text)
+    local problems = {}
+    local function check(ok, text) if not ok then problems[#problems + 1] = text end end
+    local engine_body = stubs.strip_sc_comments(engine_text):match("noteKindFor%s*{%s*arg%s+voice;(.-)\n    }")
+    local model_body = model_text:match("\nfunction Model:kind_for%(voice%)(.-)\nend\n")
+    check(engine_body ~= nil, "noteKindFor { arg voice; ... } (StrataNotes.sc)")
+    check(model_body ~= nil, "function Model:kind_for(voice) ... end (test/notes_model.lua)")
+    if not engine_body or not model_body then return problems end
+    -- entry 1 the lines before the branches (kind ""), then one a branch
+    local engine_branches, model_branches = { { condition = "", kind = "" } }, { { condition = "", kind = "" } }
+    for line in engine_body:gmatch("[^\n]+") do
+      local condition, kind = line:match("^%s*if%s*(%b())%s*{%s*%^\\(%w+)%s*}%s*;?%s*$")
+      if not kind then kind = line:match("^%s*%^\\(%w+)%s*;?%s*$") end
+      if kind then engine_branches[#engine_branches + 1] = { condition = condition or "", kind = kind }
+      elseif #engine_branches == 1 then engine_branches[1].condition = engine_branches[1].condition .. " " .. line
+      else check(false, "noteKindFor: a line that is no branch after its first branch: " .. line) end
+    end
+    for line in model_body:gmatch("[^\n]+") do
+      local condition, kind = line:match("^%s*if%s+(.-)%s+then%s+return%s+\"(%w+)\"%s+end%s*$")
+      if not kind then kind = line:match("^%s*return%s+\"(%w+)\"%s*$") end
+      if kind then model_branches[#model_branches + 1] = { condition = condition or "", kind = kind }
+      elseif #model_branches == 1 then model_branches[1].condition = model_branches[1].condition .. " " .. line
+      else check(false, "Model:kind_for: a line that is no branch after its first branch: " .. line) end
+    end
+    check(#engine_branches == #EXPECTED, "noteKindFor's four branches: " .. #engine_branches - 1)
+    check(#model_branches == #EXPECTED, "Model:kind_for's four branches: " .. #model_branches - 1)
+    for index, expected in ipairs(EXPECTED) do
+      local engine_branch = engine_branches[index] or { condition = "", kind = "(none)" }
+      local model_branch = model_branches[index] or { condition = "", kind = "(none)" }
+      local where = index == 1 and "before the branches" or "branch " .. index - 1 .. " (\\" .. expected.kind .. ")"
+      check(engine_branch.kind == expected.kind, where .. ": the engine's kind is " .. engine_branch.kind)
+      check(model_branch.kind == expected.kind, where .. ": the model's kind is " .. model_branch.kind)
+      local engine_tokens, model_tokens = tokens(engine_branch.condition), tokens(model_branch.condition)
+      check(table.concat(engine_tokens, " ") == table.concat(expected.engine, " "),
+        where .. ": the engine's tokens are " .. table.concat(engine_tokens, " "))
+      check(table.concat(model_tokens, " ") == table.concat(expected.model, " "),
+        where .. ": the model's tokens are " .. table.concat(model_tokens, " "))
+      check(numbers(engine_tokens) == numbers(model_tokens), where .. ": the engine's numbers "
+        .. numbers(engine_tokens) .. ", the model's " .. numbers(model_tokens))
+    end
+    return problems
+  end
   local file = assert(io.open(repo_root .. "/test/notes_model.lua", "r")); local model_text = file:read("*a"); file:close()
-  local model_body = model_text:match("\nfunction Model:kind_for%(voice%)(.-)\nend\n")
-  assert_true(model_body ~= nil, "function Model:kind_for(voice) ... end (test/notes_model.lua)")
-  local engine_branches, model_branches = {}, {}
-  for line in engine_body:gmatch("[^\n]+") do
-    local condition, kind = line:match("^%s*if%s*(%b())%s*{%s*%^\\(%w+)%s*}")
-    if not kind then kind = line:match("^%s*%^\\(%w+)%s*$") end
-    if kind then engine_branches[#engine_branches + 1] = { condition = condition or "", kind = kind } end
+  local engine_text = engine_sources()
+  local found = kind_rule_problems(engine_text, model_text)
+  assert_equal(#found, 0, "the model's kind rule against the engine's: " .. table.concat(found, "; "))
+  -- the check's own controls: a bare instance variable in a condition, and
+  -- another lower bound of the buffer branch, each fail it
+  local function patched(old, new)
+    local start, finish = engine_text:find(old, 1, true)
+    assert_true(start ~= nil, "the engine source holds " .. old)
+    return engine_text:sub(1, start - 1) .. new .. engine_text:sub(finish + 1)
   end
-  for line in model_body:gmatch("[^\n]+") do
-    local condition, kind = line:match("^%s*if%s+(.-)%s+then%s+return%s+\"(%w+)\"%s+end%s*$")
-    if not kind then kind = line:match("^%s*return%s+\"(%w+)\"%s*$") end
-    if kind then model_branches[#model_branches + 1] = { condition = condition or "", kind = kind } end
+  local controls = {
+    { "a bare instance variable", patched("if (this.frozenSynthVoice(voice)) { ^\\stream };",
+      "if (this.frozenSynthVoice(voice) and: { grainSource[voice] == 0 }) { ^\\stream };") },
+    { "the buffer branch from 0", patched("if (source.inclusivelyBetween(1, numBuffers)) { ^\\buffer };",
+      "if (source.inclusivelyBetween(0, numBuffers)) { ^\\buffer };") },
+  }
+  for _, control in ipairs(controls) do
+    assert_true(#kind_rule_problems(control[2], model_text) > 0, control[1] .. ": the check fails it")
   end
-  assert_equal(#engine_branches, 4, "noteKindFor's four branches")
-  assert_equal(#model_branches, #engine_branches, "Model:kind_for's branches, one an engine branch")
-  for index, engine_branch in ipairs(engine_branches) do
-    local model_branch = model_branches[index]
-    local where = "branch " .. index .. " (\\" .. engine_branch.kind .. ")"
-    assert_equal(model_branch.kind, engine_branch.kind, where .. ": the model's kind")
-    for name in engine_branch.condition:gmatch("this%.([%a_][%w_]*)") do
-      assert_true(MODEL_NAMES[name] ~= nil, where .. ": the engine names this." .. name .. ", which the model has no name for")
-    end
-    for engine_name, model_name in pairs(MODEL_NAMES) do
-      local in_engine = engine_branch.condition:find(engine_name, 1, true) ~= nil
-      local in_model = model_branch.condition:find(model_name, 1, true) ~= nil
-      assert_equal(in_model, in_engine, where .. ": " .. engine_name .. " in the engine's condition, "
-        .. model_name .. " in the model's")
-    end
-  end
-  assert_equal(engine_branches[#engine_branches].condition, "", "noteKindFor ends in a plain ^\\kind")
-  assert_equal(model_branches[#model_branches].condition, "", "Model:kind_for ends in a plain return")
 end)
 
 end

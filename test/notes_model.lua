@@ -25,11 +25,13 @@ Model.__index = Model
 -- constants: S.constants (NUM_VOICES, NOTE_SLOTS, NUM_BUFFERS,
 -- SOURCE_INPUT, SOURCE_VOICE_FIRST); an engine source is the Lua option
 -- less one (the input NUM_BUFFERS + 1, voice j's ring SOURCE_VOICE_FIRST +
--- j - 2). Each voice's root starts at the engine's noteRateRootNote (60)
--- and its type at its own index (StrataVoices.sc's alloc)
-local RATE_ROOT_NOTE = 60
-
-function Model.new(constants)
+-- j - 2). notes: S.lib.notes.NOTES, whose rate_root_note (a docs test
+-- holds it to the engine's noteRateRootNote) is each voice's root until Lua
+-- sends one. Each voice's type starts at its own index (StrataVoices.sc's
+-- alloc)
+function Model.new(constants, notes)
+  assert(notes and type(notes.rate_root_note) == "number", "Model.new: notes is S.lib.notes.NOTES (its rate_root_note)")
+  local root = notes.rate_root_note
   local model = setmetatable({pool = 0, order = 0, errors = {}, voices = {}, input = constants.SOURCE_INPUT - 1,
     voice_first = constants.SOURCE_VOICE_FIRST - 1, voice_count = constants.NUM_VOICES,
     slots = constants.NOTE_SLOTS, buffers = constants.NUM_BUFFERS, read = 0,
@@ -37,7 +39,7 @@ function Model.new(constants)
     counts = {starts = 0, restarts = 0, streams_left = 0, cuts = 0, parks = 0, unparks = 0, regrained = 0,
       voice_sourced = 0, retyped = 0}, live_cuts = {}}, Model)
   for voice = 0, constants.NUM_VOICES - 1 do
-    local state = {running = false, source = 0, frozen = false, root = RATE_ROOT_NOTE, type = voice,
+    local state = {running = false, source = 0, frozen = false, root = root, type = voice,
       own = {parked = false}, extra = {}}
     for slot = 1, constants.NOTE_SLOTS - 1 do state.extra[slot] = {state = "empty"} end
     model.voices[voice] = state
@@ -48,7 +50,8 @@ end
 function Model:error(text) table.insert(self.errors, text) end
 
 -- absoluteNoteRate: a note's rate against the voice's root (its rootNote,
--- 60 until Lua sends one; 3.7)
+-- notes.rate_root_note until Lua sends one; 3.7), clipped to 0.25-4 as the
+-- engine clips it (a docs test holds NOTES.rate_range to that clip)
 function Model:absolute_rate(voice, note)
   return math.min(4, math.max(0.25, 2 ^ ((note - self.voices[voice].root) / 12)))
 end
@@ -269,18 +272,23 @@ end
 -- and releasing notes stay within the engine's.
 -- allow (optional): the named differences a test allows while their fault
 -- is open, each counted in model.allowed[<name>] when it is met:
--- old_root, a held buffer or input note playing its pitch against the root
--- its rate was set under (record.root), where the voice's root has moved
--- since (a key change, a source switch to another root: the engine keeps a
--- held note's rate, and Lua resends none)
+-- old_root (#958), a held buffer or input note playing its pitch against
+-- the root its rate was set under (record.root), where the voice's root has
+-- moved since and the engine's root is Lua's now (a key change, a source
+-- switch to another root: the engine keeps a held note's rate, and Lua
+-- resends none)
 function Model:compare(S, allow)
   local problems, notes = {}, S.lib.notes
   allow = allow or {}
   self.allowed = self.allowed or {}
   local function allowed(name) self.allowed[name] = (self.allowed[name] or 0) + 1 end
+  -- (the engine's root now must be Lua's: a rootNote Lua never sent is
+  -- another fault, never passed here)
   local function old_root(voice_idx, record, pitch)
     if record.kind ~= "buffer" and record.kind ~= "input" then return false end
-    if record.root == nil or record.root == S.lib.samples.rate_root(voice_idx) then return false end
+    local lua_root = S.lib.samples.rate_root(voice_idx)
+    if self.voices[voice_idx - 1].root ~= lua_root then return false end
+    if record.root == nil or record.root == lua_root then return false end
     local rate = math.min(4, math.max(0.25, 2 ^ ((pitch - record.root) / 12)))
     return math.abs(record.rate - rate) <= 1e-6
   end
