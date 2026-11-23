@@ -280,19 +280,21 @@ return function(S)
   -- last, all below a period of 100-4800 cents. The ascent and the period's
   -- bound are taken as the engine hears them (float32; each implies the
   -- doubles' test), so Lua refuses every set the engine would (two tones a
-  -- double apart, a last tone a hair under the period, #884)
+  -- double apart, a last tone a hair under the period, #884). Each test
+  -- names what passes, as the engine's do, so a value that is not a number
+  -- (every comparison with it false) or infinite is refused
   local function tones_problem(period, tones)
     if #tones < 1 or #tones > TUNING.max_tones then return "count is not 1-" .. TUNING.max_tones end
-    if period < TUNING.min_period or period > TUNING.max_period then
+    if not (period >= TUNING.min_period and period <= TUNING.max_period) then
       return "period is not " .. TUNING.min_period .. "-" .. TUNING.max_period .. " cents"
     end
-    if tones[1] ~= 0 then return "the first tone is not 0" end
+    if not (tones[1] == 0) then return "the first tone is not 0" end
     for index = 2, #tones do
-      if M.float32(tones[index]) <= M.float32(tones[index - 1]) then
+      if not (M.float32(tones[index]) > M.float32(tones[index - 1])) then
         return "tones do not ascend (tone " .. index .. ")"
       end
     end
-    if M.float32(tones[#tones]) >= M.float32(period) then return "a tone at or above the period" end
+    if not (M.float32(tones[#tones]) < M.float32(period)) then return "a tone at or above the period" end
     return nil
   end
 
