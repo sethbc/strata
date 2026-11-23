@@ -615,4 +615,54 @@ test("the crow section shows presence, the jacks and an approximate mark", funct
   assert_true(S.lib.pages_io.show_section("crow"), "the page shows the section")
 end)
 
+
+-- A registered invariant's function, and an upvalue of it (the module's
+-- own locals, which the tests below break on purpose)
+local function invariant_fn(S, name)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == name then return record.fn end
+  end
+  error("no invariant " .. name)
+end
+
+local function upvalue_index(fn, wanted)
+  for index = 1, math.huge do
+    local name = debug.getupvalue(fn, index)
+    if name == nil then break end
+    if name == wanted then return index end
+  end
+  error("no upvalue " .. wanted)
+end
+
+local function upvalue(fn, wanted) return select(2, debug.getupvalue(fn, upvalue_index(fn, wanted))) end
+
+-- The invariant `crow` (#935): set_up names only jacks that exist (inputs
+-- 1 and 2, outputs 1 to 4), each true (a setting sent) or false (its off line)
+test("the crow invariant holds with jacks set up and set off", function()
+  local context, S = started()
+  context.crow.plug()
+  params:set("crow_in1_mode", option("crow_in1_mode", "trigger"))
+  params:set("crow_out2_source", option("crow_out2_source", "v1 gate"))
+  params:set("crow_in1_mode", option("crow_in1_mode", "off"))
+  assert_equal(invariant_fn(S, "crow")(), nil, "input 1 set off, output 2 set up")
+end)
+
+test("the crow invariant names a jack that does not exist", function()
+  local context, S = started()
+  context.crow.plug()
+  h.allow_broken_invariants("the test breaks the crow invariant on purpose")
+  local fn = invariant_fn(S, "crow")
+  local set_up = upvalue(fn, "state").set_up
+  set_up.output[5] = true
+  local answer = fn()
+  assert_true(answer ~= nil and answer:find("output 5", 1, true) ~= nil, "output 5 is named: " .. tostring(answer))
+  set_up.output[5] = nil
+  set_up.input[0] = false
+  answer = fn()
+  assert_true(answer ~= nil and answer:find("input 0", 1, true) ~= nil, "input 0 is named: " .. tostring(answer))
+  set_up.input[0] = nil
+  set_up.input[1] = "yes"
+  assert_true(fn() ~= nil, "a value that is neither true nor false is reported")
+end)
+
 end

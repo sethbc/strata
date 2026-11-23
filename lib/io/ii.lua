@@ -709,5 +709,35 @@ return function(S)
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_ii, function() M.stop() end)
 
+  -- The lead and the queue (#935): never leading while owing; leave_room
+  -- set only inside the leaving sequence; each learned line's waiting
+  -- count is its sends in the queue; asking counts the turns that ask
+  S.register_invariant("ii", function()
+    if state.leading and state.owing then return "leading while owing offs from a crow that left" end
+    if state.leave_room ~= nil then return "leave_room is " .. tostring(state.leave_room) .. " outside a leave" end
+    local waiting = {}
+    for _, entry in ipairs(state.queue) do
+      if not entry.off and state.pairs[entry.pair] then waiting[entry.key] = (waiting[entry.key] or 0) + 1 end
+    end
+    for key, count in pairs(waiting) do
+      local line = state.lines[key]
+      if not line or line.waiting ~= count then
+        return "line " .. key:gsub("\n", " ") .. " counts " .. tostring(line and line.waiting) .. " waiting, the queue "
+          .. count
+      end
+    end
+    for key, line in pairs(state.lines) do
+      if line.waiting ~= (waiting[key] or 0) then
+        return "line " .. key:gsub("\n", " ") .. " counts " .. line.waiting .. " waiting, the queue " .. (waiting[key] or 0)
+      end
+    end
+    local asking = 0
+    for _, turn in pairs(state.turns) do
+      if turn.asking then asking = asking + 1 end
+    end
+    if asking ~= state.asking then return "asking is " .. state.asking .. ", " .. asking .. " turns ask" end
+    return nil
+  end)
+
   return M
 end

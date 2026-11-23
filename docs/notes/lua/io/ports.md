@@ -11,6 +11,72 @@
 - **A port settles once its arrival or release has reached every hook** (#772): `on_settled` hooks hear `fn(port)`, contained and in the order their names were first registered (a raising one prints `strata: midi settled hook <name> failed: ...` and the next still runs). A port settles exactly then: after a hot-plug arrival's change hooks (`added`); after a release's claim hooks; and once per `reconcile`, after every departure and arrival of that menu close has been told (one telling wraps them all, so a departure's release, such as a remote letting go of the port a device was moved onto, never settles that port before its arrival is told and claimed). Every arrival, departure, claim and release is told through `told`, so any claim or release a hook makes meanwhile is told first: a telling inside another (a release inside a departure's, an arrival's or a claim's hooks, a claim taken straight back inside a release, a release or claim a settled hook makes) only queues its port, and the outermost settles the queue (#788). Ports settle in the order told: each joins the queue as its own telling ends, so a port released inside another telling queues before the port of the telling it is inside, and a port already queued keeps its first place; in a `reconcile` that is each port a departure's release queued (it settles even when nothing arrives there), then each arrived port in port order. So a port never settles while one of its hooks is still to run, a release taken straight back settles once with the new owner in place, and a release inside a claim's hooks settles after that claim's last hook. A settled hook reads the port as it then is: `device(port)` answers nil for a hot-plug removal (a release inside its departure settles before `removed` returns) and for a port a menu move left empty, and names the new device for a port that lost one device and gained another in the same `reconcile`. Never for a departure itself, a claim or a port outside 1..16. "Every hook" means the module's own hooks: a kept `midi.add` handler (a mod's wrapper, midigrid's) runs after `added` has settled the port, harmless today since none of them claims a port through this module. MIDI out sends a zone's setup from here (`docs/notes/lua/io/midi_out.md`). Tests: `on_settled hears a port once its arrival or release has reached every hook, a claim made by one included`, `a reconcile settles each moved port once, after every move it tells`, `a release inside a departure's hooks settles once, after every change hook`, `a settled hook that claims or releases a port settles each port once`, `a release made inside a claim's hook settles after every hook of that claim has run`.
 - **Ports are 1 to 16** (`M.PORTS.count`, norns' vports): a port outside that, or a fraction, does nothing; `listen` returns nil, `claim` false, `out`, `device` and `owner` nil. A bad name or function is a caller's error and raises.
 - `S.lib.io_ports` is included directly before `lib/midi_in.lua`, its first user.
+- **The tellings' order is part of the protocol** (#936): the change, claim and settled hooks of `io_midi_out`, `remote`, `midi_in` and `io_controllers` run in the order their names were first registered (`io_midi_out` and `remote` at include, `midi_in` at start step 90, `io_controllers` at 94), and each reads `device`, `owner` and `S.lib.io_remote.holds` mid-telling. Three answers carry weight: the owner is recorded before `holds` is true (a claim's hooks run before `connect` sets `claimed_port`, so MIDI out can still send the offs, #769); `holds` is false during a release (#772); `device` is nil during a removal (#704). An event queue would make the hooks read the answers after the change and undo all three. The table below (The tellings) is what the hooks read; a test holds it.
+
+## Machines
+
+### midi ports
+- **State:** `listeners[port]` and `dispatchers[port]` against each vport's `event`.
+- **Invariant:** `midi ports`: a vport's event is the dispatcher exactly while the port has a listener.
+- **Test:** `test/unit/io_ports_test.lua`: "the midi ports invariant names a port whose event and listeners disagree".
+
+A two-state fact per port (listened to or not), so no table: `listen` and `unlisten` are its only changes.
+
+### port tellings
+- **State:** per port, `owners[port]` (free or named), the device on the vport and `seen[port]`, `leaving[port]` (set only inside `removed`); for the module, `telling` (how deep the tellings nest), `unsettled` and `settling`; named by `device(port)`, `owner(port)` and `S.lib.io_remote.holds(port)`.
+- **Invariant:** none: the tellings are an order of calls, not a state that can be wrong at rest (no telling is open between two events); the listeners are `midi ports`'.
+- **Test:** `test/unit/io_ports_test.lua`: "port tellings: each event's hooks run in their order, each reading device, owner and holds as the table gives" and "port tellings: the notes' table equals the test's rows".
+
+Its table is no transition table: it gives, by event, each hook as it is entered and what it reads, under The tellings below.
+
+## The tellings
+
+The hooks as each event enters them, in order, and what `device(port)`, `owner(port)` and `holds(port)` (`S.lib.io_remote.holds`) answer at each one's entry. The remote grid's rig port is 3. `arrive`: `iii grid` plugged into port 3 (the remote's change hook claims it, so the claim's hooks run inside it); `leave`: that device unplugged while the remote holds the port (the remote's change hook releases it, inside the removal); `claim`: the rig set to 3 with the device there; `release`: the rig set to 0; `menu close with a move`: the device moved in SYSTEM > DEVICES from port 2 onto port 3, and the menu closed (every departure, then every arrival; only the arrived port settles). A row is one hook's entry; a nested telling's rows stand between the rows of the hook that made it.
+
+| Event | Hook | Port | `device` | `owner` | `holds` |
+|---|---|---|---|---|---|
+| arrive | change `io_midi_out` | 3 | `iii grid` | nil | false |
+| arrive | change `remote` | 3 | `iii grid` | nil | false |
+| arrive | claim `io_midi_out` | 3 | `iii grid` | `remote grid` | false |
+| arrive | claim `remote` | 3 | `iii grid` | `remote grid` | false |
+| arrive | claim `midi_in` | 3 | `iii grid` | `remote grid` | false |
+| arrive | claim `io_controllers` | 3 | `iii grid` | `remote grid` | false |
+| arrive | change `midi_in` | 3 | `iii grid` | `remote grid` | true |
+| arrive | change `io_controllers` | 3 | `iii grid` | `remote grid` | true |
+| arrive | settled `io_midi_out` | 3 | `iii grid` | `remote grid` | true |
+| leave | change `io_midi_out` | 3 | nil | `remote grid` | true |
+| leave | change `remote` | 3 | nil | `remote grid` | true |
+| leave | claim `io_midi_out` | 3 | nil | nil | false |
+| leave | claim `remote` | 3 | nil | nil | false |
+| leave | claim `midi_in` | 3 | nil | nil | false |
+| leave | claim `io_controllers` | 3 | nil | nil | false |
+| leave | change `midi_in` | 3 | nil | nil | false |
+| leave | change `io_controllers` | 3 | nil | nil | false |
+| leave | settled `io_midi_out` | 3 | nil | nil | false |
+| claim | claim `io_midi_out` | 3 | `iii grid` | `remote grid` | false |
+| claim | claim `remote` | 3 | `iii grid` | `remote grid` | false |
+| claim | claim `midi_in` | 3 | `iii grid` | `remote grid` | false |
+| claim | claim `io_controllers` | 3 | `iii grid` | `remote grid` | false |
+| release | claim `io_midi_out` | 3 | `iii grid` | nil | false |
+| release | claim `remote` | 3 | `iii grid` | nil | false |
+| release | claim `midi_in` | 3 | `iii grid` | nil | false |
+| release | claim `io_controllers` | 3 | `iii grid` | nil | false |
+| release | settled `io_midi_out` | 3 | `iii grid` | nil | false |
+| menu close with a move | change `io_midi_out` | 2 | nil | nil | false |
+| menu close with a move | change `remote` | 2 | nil | nil | false |
+| menu close with a move | change `midi_in` | 2 | nil | nil | false |
+| menu close with a move | change `io_controllers` | 2 | nil | nil | false |
+| menu close with a move | change `io_midi_out` | 3 | `iii grid` | nil | false |
+| menu close with a move | change `remote` | 3 | `iii grid` | nil | false |
+| menu close with a move | claim `io_midi_out` | 3 | `iii grid` | `remote grid` | false |
+| menu close with a move | claim `remote` | 3 | `iii grid` | `remote grid` | false |
+| menu close with a move | claim `midi_in` | 3 | `iii grid` | `remote grid` | false |
+| menu close with a move | claim `io_controllers` | 3 | `iii grid` | `remote grid` | false |
+| menu close with a move | change `midi_in` | 3 | `iii grid` | `remote grid` | true |
+| menu close with a move | change `io_controllers` | 3 | `iii grid` | `remote grid` | true |
+| menu close with a move | settled `io_midi_out` | 3 | `iii grid` | `remote grid` | true |
+
+So: a claim's hooks read the new owner with `holds` still false (the claim of an arrival included, inside the remote's change hook), and the change hooks after the remote's read it held; a removal's hooks, and the release and the settle inside it, read no device; a release's hooks and its settle read the port free; a menu move's departures settle nothing, and its arrival settles after every move is told.
 
 ## Owns
 
@@ -35,4 +101,23 @@
 
 ## Tests
 
-`test/unit/io_ports_test.lua`: the listeners' order and containment, a message on another port, the invariant, `on_change` for an arrival, a departure and a menu move, the handlers found installed (put in through `load_strata({before_init = ...})`, which runs after the script is loaded and before `init()`), a wrapper installed after init that still reaches them after cleanup, the start step run again after that cleanup, the claims, the settled hook (an arrival, a release, a reconcile's moves, a release inside a departure or a claim's hook, a settled hook that claims or releases), `out`. `test/unit/midi_in_test.lua` ("MIDI in leaves a claimed port alone", the port moved onto a claimed one, and MIDI keeping its place among its port's listeners), `test/unit/pages_setup_test.lua` (the `midi` row's owner) and `test/unit/structure_test.lua` (the steps, and only this module setting the handlers) cover the rest.
+`test/unit/io_ports_test.lua`: the listeners' order and containment, a message on another port, the invariant, `on_change` for an arrival, a departure and a menu move, the handlers found installed (put in through `load_strata({before_init = ...})`, which runs after the script is loaded and before `init()`), a wrapper installed after init that still reaches them after cleanup, the start step run again after that cleanup, the claims, the settled hook (an arrival, a release, a reconcile's moves, a release inside a departure or a claim's hook, a settled hook that claims or releases), `out`, and the table `port tellings` (each module's hook wrapped where it stands, by its own name registered again, so the script runs as it does). `test/unit/midi_in_test.lua` ("MIDI in leaves a claimed port alone", the port moved onto a claimed one, and MIDI keeping its place among its port's listeners), `test/unit/pages_setup_test.lua` (the `midi` row's owner) and `test/unit/structure_test.lua` (the steps, and only this module setting the handlers) cover the rest.
+
+## The io modules' lifecycle flags
+
+Seven flags under `lib/io/` say whether a module is before its start, running or after its cleanup (#938). Each flips at its own module's start or cleanup step (or, for nb, its params), not at one phase of the script's, so they are seven facts and no accessor joins them (plan ruling 14): between two steps one module is running while the next has not started or has already stopped, and each guard needs its own module's answer.
+
+| Module | Flag | Set by | Cleared by | What it guards |
+|---|---|---|---|---|
+| `lib/io/ports.lua` | `hot_plug.installed` | start step `io_ports` (88): true | cleanup step `io_ports` (152): false | the hot-plug handlers tell the change hooks, and `reconcile` tells a menu move, only while it is true; the kept handlers run either way |
+| `lib/io/crow.lua` | `started` | start step `io_crow` (92): true | never | a jack's lines are sent only once started (`active()`); the cleanup step does nothing before a start |
+| `lib/io/crow.lua` | `stopped` | cleanup step `io_crow` (145): true | never | `send_now` and `send_value` send nothing, the hot-plug handlers and events do nothing, `on_event` installs nothing |
+| `lib/io/ii.lua` | `started` | start step `io_ii` (93): true | never | with `stopped`, `active()`: a crow's setup takes the lead or sends Teletype's handlers, the `ii_bus` listener acts, Teletype's calls are answered, the handlers' wait sends |
+| `lib/io/ii.lua` | `stopped` | cleanup step `io_ii` (144), `M.stop()`: true | never | `active()` false; no off is owed while stopped; `M.stop()` runs the leaving sequence once |
+| `lib/io/controllers.lua` | `closing` | cleanup step `io_controllers` (146): true | start step `io_controllers` (94): false | a port released during cleanup is not claimed again by a controller that wants it (`port_released`) |
+| `lib/io/remote.lua` | `started` | start step `io_remote` (95): true | cleanup step `io_remote` (147): false | `connect`, `rescan`, the rig listeners and the ports' change and claim hooks act only while it is true |
+| `lib/io/midi_out.lua` | `stopped` | cleanup step `io_midi_out` (143), `M.stop()`: true | never | nothing is sent (`send`), no note starts, the step, ports and scene hooks, `settle` and program change in do nothing; the cleanup's takedowns go once |
+| `lib/io/nb.lua` | `added` | `M.add_params()` (the params record `out nb`, in init before any start step): true | never | IO's voice rows show the player selector, and the PSET hook stops the chosen players, only once the params exist |
+
+The cleanup order 142 to 152 is itself the io modules' protocol: every target note off (142), the zones down (143), the ii leave (144), crow's outputs off (145), the controllers' and the remotes' releases (146, 147), OSC (148), the tape (149), MIDI in (150), the ports (152).
+

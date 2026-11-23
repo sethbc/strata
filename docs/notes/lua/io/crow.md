@@ -12,6 +12,15 @@
 - **One clock per clock output**, ended before its replacement, when its source changes and when crow goes, and at cleanup. Every clock of the module is `S.lib.clocks`' (#870, `docs/notes/lua/clocks.md`): an output's is stopped with `S.lib.clocks.stop` (retired, never canceled, while its resume may be posted, and then it ends at that wake sending no pulse), and the cleanup step cancels with `S.lib.clocks.cancel`.
 - Every event handler and hook another module gives runs through `S.lib.ui_frame.contained_call`.
 
+## Machines
+
+### crow jacks
+- **State:** `state.set_up[kind][n]` (`input` 1 to 2, `output` 1 to 4): nil, never sent since crow's last reset; true, a setting sent; false, its off line sent (both nil and false send no off line); reset at each add (`crow.reset()`). Beside it `state.owners` (norns' clock's jacks, compared at each step by `follow_owners`) and `state.clocks[n]` (a clock output's handle).
+- **Invariant:** `crow`: `set_up` names only jacks that exist, each true or false.
+- **Test:** `test/unit/io_crow_test.lua`: "the crow invariant names a jack that does not exist" and "the crow invariant holds with jacks set up and set off".
+
+No table: a jack's source kind (off, mod, pitch, gate, clock) is its param's record, read at each use, and `set_up` is a belief nothing reads back from crow.
+
 ## Owns
 
 `lib/io/crow.lua` (`S.lib.io_crow`, 3.6, design §5):
@@ -19,7 +28,7 @@
 - `M.present()` (`norns.crow.dev ~= nil`), `M.number(value)`, `M.send_now(line)`, `M.send_value(key, line)`, `M.setup()`.
 - `M.on_event(name, fn)`: `fn(...)` for each `^^name(...)` line, set in `norns.crow.events` at once and again after each add; the same name again replaces it. `M.on_setup(name, fn)`, `M.on_gone(name, fn)`: run after each add's setup (and at the start with a crow there), and when crow goes. The ii bus module installs Teletype's handlers through these.
 - For tests: `M.budget_state() -> {sent, pending}` and `M.clocks() -> {flush, outputs = {[n] = id}}` (the handles' ids).
-- The group `strata_crow` (24 params, PSET-only, `add_params()`, called by `lib/params_setup.lua`'s record), the modulation sources `crow1` and `crow2`, the note target `crow`, IO's `crow` section, the start step `io_crow` (92) and the cleanup step `io_crow` (145).
+- The group `strata_crow` (24 params, PSET-only, `add_params()`, called by `lib/params_setup.lua`'s record), the modulation sources `crow1` and `crow2`, the note target `crow`, IO's `crow` section, the start step `io_crow` (92), the cleanup step `io_crow` (145) and the invariant `crow`.
 - Tests: `test/unit/io_crow_test.lua`.
 
 ## Params

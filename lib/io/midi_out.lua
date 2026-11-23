@@ -1023,5 +1023,24 @@ return function(S)
     return nil
   end)
 
+  -- A port's zone owes its setup or its takedown, never both (#935); and
+  -- while the module runs, held_owner[port] is the port's owner exactly
+  -- when that owner is a holder (held_by), its own copy of the claim
+  S.register_invariant("midi out zones", function()
+    for port in pairs(state.setup_due) do
+      if state.takedown_due[port] then return "port " .. port .. " owes both its zone's setup and its takedown" end
+    end
+    if state.stopped then return nil end
+    for port = 1, S.lib.io_ports.PORTS.count do
+      local owner = S.lib.io_ports.owner(port)
+      local expected = owner ~= nil and holders[owner] and owner or nil
+      if state.held_owner[port] ~= expected then
+        return "port " .. port .. " held_owner is " .. tostring(state.held_owner[port]) .. ", its owner "
+          .. tostring(owner)
+      end
+    end
+    return nil
+  end)
+
   return M
 end

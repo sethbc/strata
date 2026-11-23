@@ -12,6 +12,15 @@
 - **The ids**: `"s" .. k` for a step's k-th pitch (`event.pitches`, which already carry the step's pitch lock: played as given), `"m" .. key` for a played note of owner `midi`. A note of any other owner (the sequencer's `seq` notes) is ignored by the hook: the step output carries them, with their gates.
 - **The `targets` step output plays after `voices`**: it is registered at the start step `io_targets` (161), after the sequencer's include registered `voices`.
 
+## Machines
+
+### targets ledger
+- **State:** `sounding[voice][id]` (`{pitch, targets, off_beat}`; `M.sounding(voice)` a copy), the pending `offs`, each naming the record it ends, and the failed targets `failed`.
+- **Invariant:** `targets`: every sounding note names registered targets and at least one; every pending off is for a sounding note, listed once.
+- **Test:** `test/unit/io_targets_test.lua`: "an off goes to the targets its on went to", "every way a note ends sends its off to the targets it started on" and every test of the module, after which the invariant runs.
+
+No table: a note is silent or sounding (with its off pending or not), and Must not break gives each way it ends; a failed target is skipped until the patterns stop or a route changes.
+
 ## Owns
 
 - `lib/io/targets.lua` (`S.lib.io_targets`): `TARGETS` (`order`, `zero_volt_note` 60, `notes_per_volt` 12, and the ids' prefixes and the played owner), `volts(pitch)`, `route_changed(voice)`, `end_target(name)`, `stop_all()`, `sounding(voice)`.

@@ -8,6 +8,15 @@
 - **The `rig` invariant**: every key of `RIG.order` holds a value of its spec, and no other key is held.
 - **Labels are display only**: a choice's spec may carry `labels = {<value> = <text>}`, which only `text(key)` reads (`ii_bus`: `strata leads`, `teletype leads`; `off` has none). `get`, `on_change`, `io.data` and every value keep the value itself, so no reader compares a label.
 
+## Machines
+
+### rig
+- **State:** `values[key]` for each key of `RIG.order` (`M.get(key)`), written only by `set` after `io.data` is written, and by the start step's read.
+- **Invariant:** `rig`: every key of `RIG.order` holds a value of its spec, and no other key is held.
+- **Test:** `test/unit/io_rig_test.lua`: "set validates, writes first and tells its listeners" and "an unreadable or wrong-version io.data is set aside", after which the invariant runs.
+
+No table: each setting is one value of its spec with one writer (`set`, the start step's read), and its listeners hear `(value, previous)` after the change.
+
 ## Owns
 
 - `lib/io/rig.lua` (`S.lib.io_rig`), included directly before `lib/midi_in.lua`.

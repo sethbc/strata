@@ -261,5 +261,18 @@ return function(S)
     },
   })
 
+  -- The feedback clock (#935): it runs exactly while feedback is on and a
+  -- sender is known, and a handle kept is a running clock
+  S.register_invariant("osc", function()
+    local wanted = rig.get("osc_feedback") == "on" and state.sender ~= nil
+    local running = state.clock ~= nil and S.lib.clocks.alive(state.clock)
+    if state.clock ~= nil and not running then return "the feedback clock's handle is kept, its clock stopped" end
+    if running ~= wanted then
+      return "the feedback clock " .. (running and "runs" or "is not running") .. " with feedback "
+        .. tostring(rig.get("osc_feedback")) .. " and the sender " .. tostring(state.sender)
+    end
+    return nil
+  end)
+
   return M
 end

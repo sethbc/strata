@@ -15,13 +15,22 @@
 - **The devices are the registry's**, read at each use (`S.registry.ii_devices`, plan ruling 8): their `ready` and `release` run in registration order, each through `S.lib.ui_frame.contained_call`, so one that raises prints a line and the next still runs.
 - The module never sets a rig value: a layout state reaches the bus row as a user does (`S.lib.pages_io.go_to_row`, the row by its key, then E3) and raises when it cannot (plan ruling 26).
 
+## Machines
+
+### ii lead
+- **State:** `state.leading` (`M.leads()`), `state.owing`, `state.leave_room`, `state.handlers_wait`, with the rig's `ii_bus` and crow's presence (`S.lib.io_crow.present()`); the queue's `state.queue`, `state.pairs`, `state.lines[key]` (`high`, `waiting`), `state.turns[id]` and `state.asking`.
+- **Invariant:** `ii`: never leading while owing; `leave_room` nil outside the leaving sequence (it is set and cleared inside `give_up_lead`); each learned line's `waiting` equal to its sends in the queue (a queued send of a learned pair always has its line), which the drain's assert checked only as a send left; `state.asking` equal to the turns whose `asking` is set.
+- **Test:** `test/unit/io_ii_test.lua`: "the ii invariant names leading while owing", "the ii invariant names leave_room outside the leaving sequence", "the ii invariant names a line whose waiting count is not its sends in the queue", "the ii invariant names an asking count that is not the turns asking" and "the ii invariant holds through a lead, a crow leaving with offs owed and its return".
+
+Its tables are the two below, in their own form, which no test reads yet: a line's state by the queue's events (The queue's states) and the leading flag's changes.
+
 ## Owns
 
 `lib/io/ii.lua` (`S.lib.io_ii`, 3.6, design §6.1, §6.2, §6.4):
 - `M.II = {sends_per_step = 4, queue_max = 48, cleanup_sends = 14, leave_lines = 15, asked_steps = 48, share_factor = 2, note_lines = 3}` (the last three the turns', #710).
 - `M.leads()`, `M.send(device, command, ...)`, `M.send_off(device, command, ...)`, `M.send_direct(device, command, ...)`, `M.queued()`, `M.dropped()`, `M.owed()`, `M.owed_lines()` and `M.lines_kept()` (for tests); `M.stop()`, the cleanup step's body (the structure test watches it).
 - `M.add_params()`: the group `strata_out_ii` (`out ii`) whose count is the sum of the registered devices' `param_count`, then each device's `add_params()` in registration order; no group when the sum is 0. Called by `lib/params_setup.lua`'s `{"out ii", "io_ii"}` record. The devices' own packages (Just Friends, W/, ER-301, TELEXo) add the params.
-- The crow hooks `on_setup("ii", ...)` and `on_gone("ii", ...)`, the events `strata_tt1` to `strata_tt3`, a rig listener on `ii_bus`, an LFO step hook (the queue, and the handlers' wait), IO's `ii` section, the start step `io_ii` (93) and the cleanup step `io_ii` (144).
+- The crow hooks `on_setup("ii", ...)` and `on_gone("ii", ...)`, the events `strata_tt1` to `strata_tt3`, a rig listener on `ii_bus`, an LFO step hook (the queue, and the handlers' wait), IO's `ii` section, the start step `io_ii` (93), the cleanup step `io_ii` (144) and the invariant `ii`.
 - Tests: `test/unit/io_ii_test.lua`. The device packages' tests stand a double in its place with exactly `leads`, `send`, `send_off`, `send_direct` and `add_params`.
 
 ## The bus setting

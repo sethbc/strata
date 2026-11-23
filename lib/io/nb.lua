@@ -249,5 +249,16 @@ return function(S)
     if state.added then stop_chosen() end
   end})
 
+  -- The counts (#935): each player's count of the voices that use it is
+  -- a whole number, never below 0
+  S.register_invariant("nb", function()
+    for key, count in pairs(state.uses) do
+      if type(count) ~= "number" or count % 1 ~= 0 or count < 0 then
+        return "player " .. tostring(key) .. " counts " .. tostring(count) .. " voices"
+      end
+    end
+    return nil
+  end)
+
   return M
 end

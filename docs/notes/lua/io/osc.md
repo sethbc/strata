@@ -9,9 +9,18 @@
 - **A value that arrived is not echoed**: a `/param/<id>` for a watched id sets its `last_sent` to the arrived value and its `arrived` time, and the tick skips an id that arrived within `OSC.echo_seconds` (0.25). An id that is not watched is recorded nowhere, so a sender cannot grow the tables (`M.tracked()` counts the arrivals).
 - **Baseline**: starting the clock records every watched value and the three states as already known, so only changes are sent; `/strata/hello` clears those records, so the next tick sends everything watched (a scene is sent only once `S.current_scene` is set).
 
+## Machines
+
+### osc feedback
+- **State:** `state.sender` (the last sender's host), the rig's `osc_feedback` and the feedback clock's handle `state.clock` (`M.running()`, `M.clock_id()`).
+- **Invariant:** `osc`: the clock runs (`S.lib.clocks.alive`) exactly while feedback is on and a sender is known, and a handle kept is a running clock.
+- **Test:** `test/unit/io_osc_test.lua`: "the osc invariant names a clock that runs without a sender, and a sender with no clock" and "the osc invariant holds as feedback and the sender come and go".
+
+No table: `sync()` compares at use (a rig change, each message with a sender) and starts or stops the clock to match.
+
 ## What it owns
 
-`lib/io/osc.lua` (`S.lib.io_osc`): `M.OSC = {sends_per_tick = 32, feedback_hz = 15, echo_seconds = 0.25, watch}` (`watch` is the starting watch list: the sixteen macros and each voice's `v<i>_mute` and `v<i>_amp`, the params of `tools/touchosc/lib/layout.lua`), `M.running()` and `M.clock_id()`.
+`lib/io/osc.lua` (`S.lib.io_osc`): `M.OSC = {sends_per_tick = 32, feedback_hz = 15, echo_seconds = 0.25, watch}` (`watch` is the starting watch list: the sixteen macros and each voice's `v<i>_mute` and `v<i>_amp`, the params of `tools/touchosc/lib/layout.lua`), `M.running()` and `M.clock_id()`; the invariant `osc`.
 
 | Address in | Does |
 |---|---|

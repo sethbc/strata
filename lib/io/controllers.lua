@@ -539,5 +539,25 @@ return function(S)
     release_kind("faders")
   end)
 
+  -- The ports and the clock (#935): a kind's held port is the rig's port
+  -- for it and owned by it; the echo clock runs exactly while a port is
+  -- set and cleanup has not begun
+  S.register_invariant("controllers", function()
+    for _, kind in ipairs(KINDS) do
+      local port = held[kind]
+      if port ~= nil and (port ~= setting(kind .. "_port") or ports.owner(port) ~= kind) then
+        return kind .. " holds port " .. port .. ", the rig's is " .. tostring(setting(kind .. "_port"))
+          .. ", owned by " .. tostring(ports.owner(port))
+      end
+    end
+    local wanted = not closing and (setting("e16_port") ~= 0 or setting("faders_port") ~= 0)
+    local running = echo_clock ~= nil and S.lib.clocks.alive(echo_clock)
+    if running ~= wanted or (echo_clock ~= nil and not running) then
+      return "the echo clock " .. (echo_clock and (running and "runs" or "is kept stopped") or "is not running")
+        .. (wanted and " with a port set" or " with no port set or cleanup begun")
+    end
+    return nil
+  end)
+
   return M
 end

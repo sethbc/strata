@@ -34,10 +34,60 @@
 - **Params are PSET-only**: none is a scene field, a macro target, an LFO destination, a fader-page param or drawn by a randomize or mutation. The CC slots' sources are kept by key (`S.lib.io_keyed`, plan ruling 24).
 - **Hooks and targets never yield** and never call `S.lib.notes.play`.
 
+## Machines
+
+### midi out
+- **State:** the settled routes `state.config` (what `routed`, the rows and the zones read), the counts `state.counts[port][channel][note]` and the channel use `state.use[port][channel]`.
+- **Invariant:** `midi out`: the settled routes are legal (one MPE voice a port, no plain channel inside a zone), and no count or channel use is below 0.
+- **Test:** `test/unit/io_midi_out_test.lua`: "a second MPE voice on a port, and a plain channel inside a zone, are refused" and every test of the module, after which the invariant runs. The routes' settle has no table: it compares at use (build ruling 25), the pattern its notes above give.
+
+### midi out note
+- **State:** a voice's note records `state.notes[voice][id]`, each `live`, `held` (`record.held`: started while a remote held the port) or `departed` (`record.departed`), and how many ids hold one note; a debt owed to a device is `state.left_with[name][channel][note]`, which no record names.
+- **Invariant:** none: every mix of a record's flags is legal, `held` and `departed` together too (`set_aside` marks a held record departed, and `end_note` returns on either); the counts are `midi out`'s.
+- **Two facts:** `record.departed` means "send nothing more of this" for three causes: its device left (owed to it), a remote claimed the port (its off sent then, owed to none) and, beside `held`, a held note whose device left. `record.device == nil` means the port was empty at the note on: the note reached no device and is owed to none.
+- **Test:** `test/unit/io_midi_out_test.lua`: "midi out note: every cell is decided" and its rows: voice 1 plain on port 3, channel 1, a synth there, step notes of pitch 60 by the ids `s1` and `s2`. `state_of` reads the module's records; a debt is in no state, so each row that leaves one or pays it has a check that plugs the synth in again (it gets the owed off) or ends the ids (they send nothing more).
+
+`the menu closes` is the norns menu opened and closed with the device on port 3, if one is there, moved to port 4 in SYSTEM > DEVICES meanwhile; `a remote claims` is the rig's remote grid port set to 3. Eleven pairs cannot happen and are no rows: `the device arrives` at a live, a held or no note (the device is on its port), `a remote claims` a held note's port (a port has one owner) or a departed note's (a remote claims only a port with a device on it), and `the device leaves` a departed note (it has left).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `live 1` | `its end` | `no note` | `note_off` to the device |
+| `live 1` | `the device leaves` | `departed 1` | nothing sent; the off owed to the device, paid where it next arrives |
+| `live 1` | `a remote claims` | `departed 1` | `note_off` at once, before the remote's ask; owed to none; its end sends nothing |
+| `live 1` | `the menu closes` | `departed 1` | `note_off` to the device at its new port as the close tells its arrival |
+| `live 2` | `its end` | `live 1` | nothing sent; the last id's end sends the off |
+| `live 2` | `the device leaves` | `departed 2` | nothing sent; one off owed (the second on sent an off first) |
+| `live 2` | `a remote claims` | `departed 2` | one `note_off`, then the ask |
+| `live 2` | `the menu closes` | `departed 2` | one `note_off` at the new port |
+| `held 1` | `its end` | `no note` | nothing: it was never sent |
+| `held 1` | `the device leaves` | `held 1` | nothing; the device plugged in again gets the remote's ask alone |
+| `held 1` | `the menu closes` | `held 1` | nothing to the moved device |
+| `held 2` | `its end` | `held 1` | nothing |
+| `held 2` | `the device leaves` | `held 2` | nothing; plugged in again, the ask alone |
+| `held 2` | `the menu closes` | `held 2` | nothing |
+| `departed 1` | `its end` | `no note` | nothing now; the debt stays, and the device's arrival gets its off |
+| `departed 1` | `the device arrives` | `departed 1` | its `note_off` once; the id's end sends nothing |
+| `departed 1` | `the menu closes` | `departed 1` | nothing (the device is on no port); the debt stays |
+| `departed 2` | `its end` | `departed 1` | nothing; the one debt stays |
+| `departed 2` | `the device arrives` | `departed 2` | one `note_off` (the debt is one a note and channel) |
+| `departed 2` | `the menu closes` | `departed 2` | nothing; the debt stays |
+| `no note` | `its end` | `no note` | nothing (an id that never started) |
+| `no note` | `the device leaves` | `no note` | nothing, and nothing owed |
+| `no note` | `a remote claims` | `no note` | the remote's ask alone |
+| `no note` | `the menu closes` | `no note` | nothing |
+
+### midi out zones
+- **State:** per port, `state.setup_due[port]`, `state.takedown_due[port]` and `state.held_owner[port]` against the settled zones (`zones_of(state.config)`) and `S.lib.io_ports.owner(port)`.
+- **Invariant:** `midi out zones`: a port never owes both its zone's setup and its takedown; while the module runs, `held_owner[port]` is the port's owner exactly when that owner is a holder named through `held_by` (a remote grid, a remote arc, midigrid), else nil. After `stop` the holders are not kept (the remote releases at 147, after the module stops at 143).
+- **Two facts:** `held_owner[port]` is a second record of the port's claim (the ports' `owner`), kept so the release of a holder's claim is known from a controller's; the invariant holds the two together.
+- **Test:** `test/unit/io_midi_out_test.lua`: "the midi out zones invariant names a port with its setup and takedown both due" and "the midi out zones invariant names a held owner the ports do not agree with".
+
+Per port, the zone is one of none, set up, setup due or takedown due, each held or free. No table yet: Must not break above gives each change (#772, #788, #789), and its examples are the tests it names.
+
 ## Owns
 
 - `lib/io/midi_out.lua` (`S.lib.io_midi_out`): `MIDI_OUT` (`express_per_step` 24, `cc_per_step` 8, `slots` 8, `master_channel` 1, `master_bend_range` 2, `slide_cc` 74, and the RPN numbers, the bend's center and range, the texts), `add_params()`, `program_change_in(port, value)`, `reconcile_owed()` (the menu-close hook's body), `held_by(owners)` (the claim names that end a port's notes, #769), `stop()`.
-- The note target `midi` (`routed`, `note_on`, `note_off`, `rows`), one LFO step hook (a settle when a route param was noted, then expression, then CC out), a scene-recalled hook (program change out), the PSET hook `io_midi_out` (a settle after every read), the `S.lib.io_ports.on_change` hook `io_midi_out`, the `S.lib.io_ports.on_claim` hook `io_midi_out` (a remote's claim ends the port's notes), a menu-close hook (`reconcile_owed`: the owed offs), IO's `midi` section, the cleanup step `io_midi_out` (143) and the invariant `midi out`.
+- The note target `midi` (`routed`, `note_on`, `note_off`, `rows`), one LFO step hook (a settle when a route param was noted, then expression, then CC out), a scene-recalled hook (program change out), the PSET hook `io_midi_out` (a settle after every read), the `S.lib.io_ports.on_change` hook `io_midi_out`, the `S.lib.io_ports.on_claim` hook `io_midi_out` (a remote's claim ends the port's notes), a menu-close hook (`reconcile_owed`: the owed offs), IO's `midi` section, the cleanup step `io_midi_out` (143) and the invariants `midi out` and `midi out zones`.
 - Its unit tests: `test/unit/io_midi_out_test.lua`; the program change branch of `lib/midi_in.lua` is tested in `test/unit/midi_in_test.lua`. User page: `docs/user/io/midi-out.md`.
 
 ## Params
