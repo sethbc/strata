@@ -182,6 +182,32 @@ test("a recording stops at 10 minutes", function()
   assert_equal(gestures.describe(3), "play 600.0 s", "a loop of 10 minutes")
 end)
 
+-- 3.9 (#870): the 10-minute clock is the clock helper's, so a press that
+-- ends the recording after matron posted the clock's wake and before norns
+-- delivered it retires the clock (S.lib.clocks.stop) instead of canceling
+-- it: the wake reaches a coroutine norns still has, which ends there,
+-- ending the recording no second time
+test("a recording ended as its 10-minute clock wakes prints no clock error", function()
+  local context, S, gestures = loaded()
+  gestures.press(1)
+  hand_edit("reverb_mix")
+  local limit_clock = S.gestures[1].limit_clock
+  assert_true(limit_clock ~= nil, "the first event starts the 10-minute clock")
+  local started_at
+  context.clock.advance_until(limit_clock, function()
+    gestures.press(1)                     -- ends the recording: the loop plays
+    started_at = S.gestures[1].loop_started_at
+    assert_equal(S.gestures[1].limit_clock, nil, "the recorder forgets its 10-minute clock")
+  end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a coroutine norns no longer has" .. (errors[1] and (": " .. errors[1]) or ""))
+  assert_equal(context.clock.threads[limit_clock], nil, "the clock ended at its wake")
+  assert_equal(gestures.state(1), "playing", "the press's loop plays")
+  assert_equal(S.gestures[1].loop_started_at, started_at, "and the clock's wake ended nothing more: the loop was not restarted")
+  assert_equal(S.gestures[1].pattern.count, 1, "with its one event")
+  context.clock.run_for(0.2)
+end)
+
 test("a bar loop's length rounds to whole bars and its events scale with it", function()
   local context, S, gestures = loaded()   -- 120 BPM: a beat is 0.5 s
   params:set("gesture_1_quantize", BAR)
