@@ -243,6 +243,44 @@ test("a tuning whose tones are equal in float32 is refused by Lua (#884)", funct
   end
   assert_equal(t.parse_scl("x\n3\n100.0000001\n100.0000002\n1200.0"), nil, "a Scala file of the same is refused")
   assert_equal(t.parse_scl("x\n2\n1199.99999\n1200.0"), nil, "and one with a last tone at the period in float32")
+  -- tones a double apart that float32 still tells apart (its step at 100
+  -- cents is about 7.6e-6) read and are sent: nothing over-refused
+  context.clear_engine_calls()
+  params:set("tuning_tones", "1200 0 100.0001 100.0002")
+  assert_equal(#sent_tuning(context), 4, "1200 0 100.0001 100.0002 is sent")
+  assert_equal(t.count(), 3, "and is the tuning")
+end)
+
+-- The engine ignores a tone or a period that is not finite (setTuning,
+-- setTuningTone), so a set holding one never completes there and its old
+-- tuning stays: Lua refuses it as the engine does (#884)
+test("a tuning with a tone or a period that is not a number, or infinite, is refused by Lua (#884)", function()
+  local context = load_strata(); finish_startup(context)
+  local t = tuning()
+  local huge = string.rep("1", 400)
+  -- a ratio of two 400-digit integers is inf / inf: NaN cents
+  local files = {
+    {"x\n2\n" .. huge .. "/" .. huge .. "\n1200.0", "a NaN tone"},
+    {"x\n1\n" .. huge .. "/" .. huge, "a NaN period"},
+    {"x\n2\n" .. huge .. ".0\n1200.0", "an infinite tone"},
+    {"x\n2\n1/" .. huge .. "\n1200.0", "a tone of minus infinity"},
+    {"x\n1\n" .. huge .. ".0", "an infinite period"},
+  }
+  for _, case in ipairs(files) do
+    assert_equal(t.parse_scl(case[1]), nil, "a Scala file with " .. case[2] .. " is refused")
+  end
+  assert_equal(t.parse_text("1200 0 " .. huge), nil, "a text with an infinite tone is refused")
+  assert_equal(t.parse_text(huge .. " 0 100"), nil, "a text with an infinite period is refused")
+  use("ji normal")
+  local nan, inf = 0 / 0, math.huge
+  local entries = {{period = 1200, tones = {0, nan}}, {period = 1200, tones = {0, inf}},
+    {period = 1200, tones = {0, -inf}}, {period = nan, tones = {0, 100}}, {period = inf, tones = {0, 100}}}
+  for index, entry in ipairs(entries) do
+    context.clear_engine_calls()
+    t.select({name = "bad " .. index, period = entry.period, tones = entry.tones})
+    assert_equal(#sent_tuning(context), 0, "nothing sent for entry " .. index)
+    assert_equal(t.count(), 12, "the tuning stays ji normal (entry " .. index .. ")")
+  end
 end)
 
 test("the built-ins, in order, ascend from 0 below their period", function()
