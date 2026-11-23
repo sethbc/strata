@@ -554,8 +554,9 @@ end)
 test("the helper's margins are the zones editor's, the macros' and the quantized actions'", function()
   local context, S, clocks = loaded()
   local CLOCKS = S.constants.CLOCKS
-  assert_equal(CLOCKS.sleep_margin, S.lib.ui_zones.ZONES_EDITOR.learn_wake_margin, "a sleep's margin")
-  assert_equal(CLOCKS.sleep_margin, S.lib.macros.MACROS.learn_wake_margin, "the macros' learn margin too")
+  -- 0.1 s: the learn_wake_margin of the zones editor, the macros and the
+  -- matrix, until they moved onto the helper (3.9's 1q)
+  assert_equal(CLOCKS.sleep_margin, 0.1, "a sleep's margin")
   assert_equal(CLOCKS.sync_tolerance, S.lib.quantize.QUANTIZE.wake_tolerance, "a sync's tolerance")
   assert_equal(CLOCKS.sync_epsilon, S.lib.quantize.QUANTIZE.flt_epsilon, "matron's FLT_EPSILON")
 end)

@@ -233,6 +233,25 @@ test("a learn ending as its timeout's resume is posted retires the clock, never 
   assert_equal(clock.threads[retired], nil, "cleanup cancels it")
 end)
 
+-- 3.9 (#870): learn's timeout clock is the clock helper's, which retires it
+test("the zones learn clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context, S, zones = loaded()
+  local double = tap_double(S)
+  zones.learn(1)
+  local id = S.zones_learn_clock
+  context.clock.advance_until(id, function()
+    zones.learn(2)  -- a new learn ends the old one
+    assert_true(S.lib.clocks.retired[id] ~= nil, "the helper retired the old clock: its resume is posted")
+  end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
+  assert_equal(clock.threads[id], nil, "the old clock ended at its wake")
+  assert_equal(S.lib.clocks.retired[id], nil, "and the helper forgot it")
+  assert_equal(zones.learning(), 2, "the newer learn still waits")
+  assert_true(S.zones_learn_clock ~= nil and S.zones_learn_clock ~= id, "on its own clock")
+  assert_equal(double.fn, zones.note, "and its note tap is still set")
+end)
+
 test("K2 closes the editor and SETUP shows again; E1 does nothing while it is open", function()
   local context, S, zones = loaded()
   local page = S.ui_page

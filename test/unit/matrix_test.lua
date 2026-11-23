@@ -999,6 +999,23 @@ test("matrix: learn ending as its timeout's resume is posted retires the clock, 
   assert_equal(clock.threads[retired], nil, "cleanup cancels it")
 end)
 
+-- 3.9 (#870): learn's timeout clock is the clock helper's, which retires it
+test("the matrix learn clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context, S, matrix = loaded()
+  matrix.learn(1)
+  local id = S.matrix_learn_clock
+  context.clock.advance_until(id, function()
+    matrix.learn(4)  -- a new learn ends the old one
+    assert_true(S.lib.clocks.retired[id] ~= nil, "the helper retired the old clock: its resume is posted")
+  end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
+  assert_equal(clock.threads[id], nil, "the old clock ended at its wake")
+  assert_equal(S.lib.clocks.retired[id], nil, "and the helper forgot it")
+  assert_equal(matrix.learning(), 4, "the newer learn still waits")
+  assert_true(S.matrix_learn_clock ~= nil and S.matrix_learn_clock ~= id, "on its own clock")
+end)
+
 -- Every flash learn raises fits the header's flash room
 -- (S.constants.HEADER.flash_width) whole: the refusal, and a learned
 -- destination for the widest routing number and the widest label

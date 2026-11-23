@@ -631,6 +631,26 @@ test("a PSET load or a silent set while the apply clock's resume is posted retir
   assert_equal(clock.threads[retired], nil, "cleanup cancels it")
 end)
 
+-- 3.9 (#870): the apply clock is the clock helper's, which retires it
+test("the macro apply clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context, S, macros = loaded()
+  macros.set_target(1, 1, "reverb_mix", 0, 1)
+  params:set("macro_1", 0.9); settle(context)
+  params:set("macro_1", 0.3)  -- the clock waits for its first apply
+  local id = S.macro_clock
+  context.clock.advance_until(id, function()
+    macros.set_silently(1, 0.3)  -- nothing waits any more: the clock stops
+    assert_true(S.lib.clocks.retired[id] ~= nil, "the helper retired it: its resume is posted")
+  end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
+  assert_equal(clock.threads[id], nil, "it ended at its wake")
+  assert_equal(S.lib.clocks.retired[id], nil, "and the helper forgot it")
+  assert_equal(S.macro_clock, nil, "nothing waits")
+  settle(context)
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "nothing applied")
+end)
+
 test("writing a PSET always writes its side file, so an overwritten PSET never keeps a stale one", function()
   local context, S, macros = loaded()
   local path = context.data_dir .. "strata-02.pset"
@@ -770,6 +790,24 @@ test("learn ending as its timeout's resume is posted retires the clock, never ca
   assert_true(clock.threads[retired] ~= nil, "near its wake the clock is retired, and waits for its wake")
   cleanup()
   assert_equal(clock.threads[retired], nil, "cleanup cancels it")
+end)
+
+-- 3.9 (#870): learn's timeout clock is the clock helper's, which retires it
+test("the macro learn clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context, S, macros = loaded()
+  macros.learn(1, 1)
+  local id = S.macro_learn_clock
+  context.clock.advance_until(id, function()
+    macros.learn(2, 4)  -- a new learn ends the old one
+    assert_true(S.lib.clocks.retired[id] ~= nil, "the helper retired the old clock: its resume is posted")
+  end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
+  assert_equal(clock.threads[id], nil, "the old clock ended at its wake")
+  assert_equal(S.lib.clocks.retired[id], nil, "and the helper forgot it")
+  local m, k = macros.learning()
+  assert_equal(m, 2, "the newer learn still waits"); assert_equal(k, 4)
+  assert_true(S.macro_learn_clock ~= nil and S.macro_learn_clock ~= id, "on its own clock")
 end)
 
 test("the shown bank is shared and changing it sends nothing", function()

@@ -419,6 +419,27 @@ test("a PSET read while the morph clock's resume is posted raises nothing and ap
   assert_near(params:get("reverb_mix"), 0.34, 1e-9, "the next move applies (0.2 + 0.35 x 0.4)")
 end)
 
+-- 3.9 (#870): the morph clock is the clock helper's, which retires it
+test("the morph clock stopped as its wake is posted: no clock error, and nothing more happens", function()
+  local context, S = two_scenes()
+  settle(context, 0.3)
+  params:set("reverb_mix", 0.9)
+  params:write(1)                                                -- the PSET: morph 0.3, reverb 0.9
+  params:set("morph", 0.6)                                       -- a move: the clock waits on its first sleep
+  local id = S.morph_clock
+  context.clock.advance_until(id, function()
+    params:read(1)                                               -- its hook stops the clock
+    assert_true(S.lib.clocks.retired[id] ~= nil, "the helper retired it: its resume is posted")
+  end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
+  assert_equal(clock.threads[id], nil, "it ended at its wake")
+  assert_equal(S.lib.clocks.retired[id], nil, "and the helper forgot it")
+  context.clock.run_for(0.5)
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "nothing applied over the PSET's values")
+  assert_equal(S.morph_clock, nil, "no clock is left")
+end)
+
 -- Scenes 1-4 with routing R1 to v1 size: each corner's {source, depth}
 -- (nil leaves the slot empty). The state is scene 1's
 local function routing_scenes(corners)
