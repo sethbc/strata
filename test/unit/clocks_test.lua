@@ -329,23 +329,29 @@ end)
 -- and its tick posts the resume a tick later, past the whole beat (3.0015).
 -- Matron counts the next sync from its stored landing, 2.9995: 3.9995. The
 -- helper counts from that grid point too, never from the late resume's
--- beat (from which the next landing is a period later, 4.9995)
+-- beat (from which the next landing is a period later, 4.9995). The clock
+-- lands once before the beat moves: matron stores a sync's offset only for
+-- a coroutine that has waited before, so only then does its reschedule
+-- keep the sync's own grid (a first sync's takes the slot's stale offset)
 test("a sync rescheduled by a beat that moved back and resumed a tick late is not counted a period late", function()
   local context, S, clocks = loaded()
   local counts = {runs = 0, ended = 0}
   local offset = 0.9995
-  run_to_beat(context, 5.5)
+  run_to_beat(context, 3.5)
   local handle = clocks.run(function(own)
     while own.sync(1, offset) do counts.runs = counts.runs + 1 end
     counts.ended = counts.ended + 1
   end)
-  assert_near(handle.landing, 6.9995, 1e-9, "its landing")
+  context.clock.advance_until(handle.id)  -- its first landing, 4.9995
+  assert_equal(counts.runs, 1, "the first landing ran")
+  run_to_beat(context, 5.5)
+  assert_near(handle.landing, 5.9995, 1e-9, "waiting at 5.5 for its landing")
   -- rescheduled to 2.9995 (from 1.5: matron's next_clock_beat from 2.5
   -- skips 2.9995, ceil(2.5) + 0.9995 being 3.9995)
   context.clock.set_beat(1.5)
   local tick_beats = h.stubs.MATRON_TICK_SECONDS / clock.get_beat_sec()
   deliver_at_beat(context, 2.9995 + tick_beats)  -- 3.0015: past the whole beat
-  assert_equal(counts.runs, 1, "the rescheduled landing ran")
+  assert_equal(counts.runs, 2, "the rescheduled landing ran")
   assert_near(handle.landing, 3.9995, 1e-9, "the next landing is matron's, counted from 2.9995")
   context.clock.advance_until(handle.id, function()
     assert_near(clock.get_beats(), 3.9995, 1e-6, "matron's next landing")
@@ -353,7 +359,7 @@ test("a sync rescheduled by a beat that moved back and resumed a tick late is no
     assert_true(clock.threads[handle.id] ~= nil, "at its landing it is retired, not canceled")
   end)
   assert_no_clock_error(context, "a rescheduled sync stopped at its next landing")
-  assert_equal(counts.runs, 1, "and its body did not run again")
+  assert_equal(counts.runs, 2, "and its body did not run again")
   assert_equal(counts.ended, 1, "it ended")
 end)
 

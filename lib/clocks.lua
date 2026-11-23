@@ -67,14 +67,16 @@ return function(S)
   -- The beat matron counts a repeated sync's next landing from, once a
   -- sync of `beats` and `offset` (asked at handle.sync_beat, its landing
   -- handle.landing) resumed with the beat `woke`, its tick's. Matron's
-  -- stored landing lies just below woke (a tick posts a sync once the beat
-  -- is past it) and on the sync's grid, k * beats + offset, wherever it
-  -- came from: the helper's landing, or a reschedule by a new clock source
-  -- (the next landing after the new beat), but for a reset's 0. So the
-  -- grid point at most sync_tolerance below woke, where it is no later
-  -- than the landing or the landing was ahead when asked (a reschedule
-  -- forward, #953's comment); 0 for a beat gone back to within the
-  -- tolerance of 0 (a reset); else the lower of the landing and woke
+  -- stored landing normally lies within a tick below woke (a tick posts a
+  -- sync once the beat is past it), on the sync's grid, k * beats +
+  -- offset, when it is the helper's landing or a reschedule's (a new clock
+  -- source: the next landing after the new beat) of a coroutine that had
+  -- waited before, and 0 after a reset. So the grid point at most
+  -- sync_tolerance below woke, where it is no later than the landing or
+  -- the landing was ahead when asked (a reschedule forward, #953's
+  -- comment); 0 for a beat gone back to within the tolerance of 0 (a
+  -- reset); else the lower of the landing and woke. Where it can be a
+  -- period later than matron's: docs/notes/lua/clocks.md
   local function counted_from(handle, woke, beats, offset)
     local landing = handle.landing
     if type(woke) ~= "number" then return landing end
