@@ -539,7 +539,8 @@ return function(S)
   end
 
   -- Apply entries (any subset of scene_entries' output, in its order) as a
-  -- recall does, with S.scene_recall_in_progress set throughout (the
+  -- recall does, with S.scene_recall_in_progress set throughout and put
+  -- back as it was found after (the
   -- v<i>_source and v<i>_type actions then leave the full sync to the end): a param
   -- through set_scene_value, a block through its record's apply, a lock
   -- that changes runs the lock_change hooks (S.registry.lock_change,
@@ -579,9 +580,11 @@ return function(S)
     local state = {blocks = {}, source_changed = {}, type_changed = {}, start_due = {}}
     for _, record in ipairs(scene_blocks()) do state.blocks[record.key] = record end
 
+    -- the flag must not outlive an error in a param action: put it back as
+    -- it was found (an apply inside another leaves the outer one's set,
+    -- #892), then raise the error again, with its traceback
+    local outer_recall = S.scene_recall_in_progress
     S.scene_recall_in_progress = true
-    -- the flag must not outlive an error in a param action: clear it, then
-    -- raise the error again, with its traceback
     local applied, apply_error = xpcall(function()
       for index, entry in ipairs(list) do
         apply_entry(entry, state)
@@ -597,7 +600,7 @@ return function(S)
         end
       end
     end, with_traceback)
-    S.scene_recall_in_progress = false
+    S.scene_recall_in_progress = outer_recall
     -- the scene-applied hooks (S.registry.scene_applied), each contained
     for _, record in ipairs(S.registry.scene_applied) do
       S.lib.ui_frame.contained_call(applied_errors, record.name, "scene applied hook " .. record.name, record.fn)

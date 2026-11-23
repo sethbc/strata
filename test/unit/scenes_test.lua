@@ -1367,6 +1367,32 @@ test("an error during a scene recall clears scene_recall_in_progress and is rais
   assert_equal(voice1_full_syncs(), 1, "a later source switch sends its full sync")
 end)
 
+-- 3.9 (#892): apply_entries puts S.scene_recall_in_progress back as it
+-- found it, so an apply inside another (a param action of the recall that
+-- applies entries of its own) leaves the outer one's flag set
+test("a nested apply leaves the recall flag as it found it", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("reverb_mix", 0.4); capture_scene(1)
+  params:set("reverb_mix", 0.1)
+  local real_action, seen = params:lookup_param("reverb_mix").action, {}
+  params:set_action("reverb_mix", function(value)
+    real_action(value)
+    if #seen == 0 then
+      S.lib.scenes.apply_entries({})                    -- an apply inside the recall's
+      seen[1] = S.scene_recall_in_progress
+    end
+  end)
+  recall_scene(1, 0)
+  assert_equal(seen[1], true, "the outer apply's flag is still set after the inner one")
+  assert_equal(S.scene_recall_in_progress, false, "and cleared once the outer apply ends")
+  -- an apply made while the flag is set leaves it set
+  S.scene_recall_in_progress = true
+  S.lib.scenes.apply_entries({})
+  assert_equal(S.scene_recall_in_progress, true, "an apply leaves a flag it found set")
+  S.scene_recall_in_progress = false
+end)
+
 test("a smooth scene transition reaches the screen and arc on every step and at its end (#11)", function()
   local context = load_strata(); finish_startup(context)
   local arc_hardware = context.arc.plug(1)
