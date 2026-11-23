@@ -2643,9 +2643,9 @@ local UNTABLED_INVARIANTS = {
 -- has one, has the columns State, Event, Next and Effect (h.notes_table
 -- reads the first three). The Invariant line names its invariants in
 -- backticks at its start (`a`, or `a`, `b`, or `a` and `b`, then any text),
--- or says "none" and why. Every registered invariant is named by an entry
--- or listed as untabled, never both; a listed or entered name is a
--- registered one
+-- or says "none" and why. Every registered invariant is named by one entry
+-- (never two) or listed as untabled, never both; a listed or entered name
+-- is a registered one
 local MACHINE_TABLE_HEADER = "| State | Event | Next | Effect |"
 local function machines_problems(files, registered, untabled)
   local problems, entered, known, listed = {}, {}, {}, {}
@@ -2671,6 +2671,9 @@ local function machines_problems(files, registered, untabled)
       end
       if #names == 0 then problem(file.path .. ": " .. entry.name .. "'s Invariant line names no invariant and is not none: " .. rest) end
       for _, name in ipairs(names) do
+        if entered[name] then
+          problem(file.path .. ": " .. entry.name .. ": `" .. name .. "` is entered twice (also in " .. entered[name] .. ")")
+        end
         entered[name] = entered[name] or file.path
         if not known[name] then problem(file.path .. ": " .. entry.name .. " enters `" .. name .. "`, which no module registers") end
       end
@@ -2770,6 +2773,12 @@ test("the Machines check fails an invariant with no entry, a listed name with on
   local short = {path = "docs/notes/lua/w.md", text = "## Must not break\n\n## Machines\n\n### x\n- **Invariant:** `x`\n"}
   local found = check({short}, {"x"}, {})
   assert_true(found:find("no `- **State:**` line", 1, true) and found:find("no `- **Test:**` line", 1, true), "an entry's lines")
+  -- each invariant is entered once: a second entry, in the same file or another, fails
+  assert_true(check({notes(entry("x", "`x`"), entry("y", "`x`"))}, {"x"}, {}):find("`x` is entered twice", 1, true),
+    "a name entered twice in one file")
+  local other = {path = "docs/notes/lua/v.md", text = "## Must not break\n\n## Machines\n\n" .. entry("z", "`a` and `x`")}
+  assert_true(check({notes(entry("x", "`x`")), other}, {"a", "x"}, {}):find("`x` is entered twice", 1, true),
+    "a name entered twice in two files")
 end)
 
 -- The longest a notes file under docs/notes/lua may be, in words as `wc -w`
