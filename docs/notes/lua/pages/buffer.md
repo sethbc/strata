@@ -2,7 +2,7 @@
 
 - While `S.BUFFER_PAGE.file_selector_open` is set, `redraw()` draws the file selector (`fileselect.redraw()`), never the page, so no frame-clock redraw draws over the file list.
 - `buffer_key_release` calls `forget_held_keys()` just before `fileselect.enter`: the selector takes the keys, so a key held then would never be released to the script.
-- K2, ALT+K2 and ALT+K3 act on release, by how long they were held: the dispatcher's press time (`S.lib.ui_keys.held_seconds(n)`, #866; the page keeps no mark of its own), compared with `S.BUFFER_PAGE.hold_seconds` (`ALT_HOLD_SECONDS`, 0.5 s, the other pages' hold). No clock. ALT+K2 and ALT+K3 are the one exception to acting through `alt_action` at the press (design 3.3 §8.1, Question 20): `alt_key` does nothing at the press, `alt_key_release` acts.
+- K2, ALT+K2 and ALT+K3 act on release, by how long they were held: the dispatcher's press time (`S.lib.ui_keys.held_seconds(n)`, #866; the page keeps no mark of its own), compared with `S.BUFFER_PAGE.hold_seconds` (`ALT_HOLD_SECONDS`, 0.5 s, the other pages' hold). No clock. ALT+K2 and ALT+K3 are the one exception to acting through `alt_action` at the press (design 3.3 §8.1, Question 20): the record has no `alt_key` (#959), so the press does nothing (`key()` still marks it an ALT press), and `alt_key_release` acts.
 - An ALT press releases through `alt_key_release`, never `key_release`, so ALT+K2 never opens the file selector or clears the slot, even when K1 comes up first (K1 down, K2 down, K1 up, K2 up). BUFFER never reads `S.key_press_page[2]` to change what K3 does: the K2+K3 save gesture is gone (ALT+K3 saves), and a K2 pressed with ALT is still in `S.key_press_page`.
 - K3 on the `slices` field (the twelfth and last, so the field indices the layout states set, 3 and 10, hold: plan ruling 20) opens the slice editor (`S.lib.ui_slice_editor.open(cursor slot)`, `docs/notes/lua/ui/slice-editor.md`) and records nothing; a slot with no audio flashes `buf <n> empty`, and its hint names no K3 there (`K2:ld/clr`: the final review's Lua B, Minor 3). On every other field K3 records. The arc button records on every field.
 - BUFFER's keys follow the other pages (3.7, plan ruling 31): a quick ALT+K2 is the random draw (`S.lib.files.random_into`), held it fills the empty slots; K2 held clears the slot (`clear_buffer`, no flash); a quick K2 opens the file selector; ALT+K3 as before.
@@ -22,9 +22,29 @@
 - A file name is drawn through `S.lib.ui_text.printable` (accented letters plainly, any other character norns' font lacks as `?`) and cut on the text drawn (#551): the slot rows here, the hint row in `draw_hints`. The slot keeps its real name and path for loading and saving.
 - The `bm` field recalls through `S.lib.positions.recall_bookmark` only when the shown bookmark changes, so turning past 1 or 4 never restarts the scan again. It shows `-` until the selected voice recalls a bookmark, so the first detent either way lands on bookmark 1, and ALT+E3 recalls the bookmark it shows again (1 from `-`), with no jump to a neighbor first (#431). Each recall goes through `S.lib.positions.recall_bookmark_quantized` (3.4, key `bookmark<v>`, label `v<v> bm <n>`): under `quantize_actions` it waits for the beat or bar, the field keeps showing what plays, and while a recall waits the next detent (and ALT+E3) steps from the bookmark that waits (`S.lib.positions.waiting_bookmark`, the field's own or a grid strip key's that replaced it), so a quick turn of three detents lands three bookmarks on, not one. The `start` field moves the start only through `S.lib.buffers.set_start` (it clamps, does nothing while the slot records, and reloads once E3 rests).
 
+## Machines
+
+### file selector
+- **State:** `S.BUFFER_PAGE.file_selector_open`, `file_selector_callback`, `script_key` and `script_enc`: closed (all clear), open (all set: Strata's selector is norns' one selector, and `redraw()` draws it), or superseded (open, while the norns menu's own selector replaced `fileselect.callback`, the one field of norns' that tells them apart).
+- **Invariant:** `file selector`: open exactly while its callback and Strata's saved `key` and `enc` are set (`buffer_key_release` sets the four together, `close_buffer_file_selector` clears them together).
+- **Test:** `test/unit/pages_buffer_test.lua`: "the file selector invariant: open exactly while its callback and the saved key and enc are set" (and "a menu file selector opened over BUFFER K2's gives Strata its keys and page back as the menu closes (#49)").
+
+It stays apart from the name entry (`docs/notes/lua/ui/name-entry.md`): its release runs before norns' `set_mode(false)`, the entry's reconcile after it.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| closed | K2 released before `hold_seconds` | open | `forget_held_keys()`, the four fields set, then `fileselect.enter(_path.audio, callback)` |
+| closed | K2 released held | closed | `clear_buffer(slot)`, no selector |
+| open | a file chosen | closed | `S.lib.files.note_chosen(path)` and `load_buffer(slot, path)`, then the four cleared and a redraw |
+| open | canceled | closed | the four cleared and a redraw; nothing loads |
+| open | `fileselect.enter` raises | closed | Strata's `key` and `enc` back, the four cleared, play mode routed again unless the menu is open, the error raised again |
+| open | the menu opened and closed over it | open | `set_mode(false)`'s `redraw()` draws the list again |
+| open | a PARAMS file param (or TAPE) opens the menu's selector over it | superseded | the menu's callback and handlers in `fileselect`; Strata's callback never comes |
+| superseded | the menu closes | closed | `release_superseded_file_selector()`: Strata's `key` and `enc` back in the globals, the four cleared |
+
 ## Owns
 
-- `lib/pages/buffer.lua` (`S.lib.pages_buffer`): the BUFFER record (`draw`, `hints`, `enc`, `alt_enc`, `key`, `key_release`, `alt_key`, `alt_key_release`, `enter`, `leave`, `animates`, `arc_button`, `layout_states`), `redraw_buffer`; `S.BUFFER_PAGE` (layout, levels, `hold_seconds`, the start steps and the file selector state), `S.buffer_page` (the cursors), the file selector (`close_buffer_file_selector`, `release_superseded_file_selector`, global), `buffer_page_flash` (global, on the shared "hints" flash); `S.lib.pages_buffer.INPUT_METER`, `input_meter_segments(amp)`, `slot_seconds_text(seconds)` and the meter state `S.lib.pages_buffer.meter` (`peak`, `peak_at`, `shown`); no cleanup step (3.4: `input_meter` is `lib/input_level.lua`'s).
+- `lib/pages/buffer.lua` (`S.lib.pages_buffer`): the BUFFER record (`draw`, `hints`, `enc`, `alt_enc`, `key`, `key_release`, `alt_key_release`, `enter`, `leave`, `animates`, `arc_button`, `layout_states`), `redraw_buffer`; `S.BUFFER_PAGE` (layout, levels, `hold_seconds`, the start steps and the file selector state), `S.buffer_page` (the cursors), the file selector (`close_buffer_file_selector`, `release_superseded_file_selector`, global), `buffer_page_flash` (global, on the shared "hints" flash); `S.lib.pages_buffer.INPUT_METER`, `input_meter_segments(amp)`, `slot_seconds_text(seconds)` and the meter state `S.lib.pages_buffer.meter` (`peak`, `peak_at`, `shown`); no cleanup step (3.4: `input_meter` is `lib/input_level.lua`'s).
 - The buffers themselves (`S.buffers`, `load_buffer`, `clear_buffer`, `save_buffer`, `save_buffer_loop`, `buffer_load_failed`, `S.lib.buffers.set_start`, ...) are `lib/buffers.lua`'s (`docs/notes/lua/buffers.md`); recording (`record_buffer`, `S.lib.record.state`) is `lib/record.lua`'s; random files and filling (`S.lib.files`) are `lib/files.lua`'s; peaks, playheads and positions are `lib/waveforms.lua`'s, `lib/playheads.lua`'s and `lib/positions.lua`'s.
 - Its unit tests: `test/unit/pages_buffer_test.lua`. Its rings: `lib/arc/buffer.lua` (`docs/notes/lua/arc-pages.md`).
 

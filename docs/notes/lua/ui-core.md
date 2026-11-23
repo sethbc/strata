@@ -7,6 +7,34 @@
 - The note tap is the MIDI module's (`S.lib.midi_in.set_note_tap(fn | nil)`, package 2b's: while a tap is set, every MIDI note on goes to `fn(note)` first and is consumed when `fn` returns true). The editor sets `M.note` as the tap when a learn starts and `nil` when it ends, and calls it at no other time; a test stands in a double for it, and a layout state a do-nothing function.
 - Note names are norns' own (`musicutil.note_num_to_name(note, true)`, 60 is `C3`: 0 is `C-2`, 127 is `G8`; plan ruling 28), so the editor names notes as every other norns script does. `C#-2` and `learn` are a column's widest texts.
 
+## Machines
+
+The zones editor's entry is here, where its notes are (The zones editor, below); every other part's machines are in its own file under docs/notes/lua/ui/.
+
+### zones editor
+- **State:** `editor = {open, row, column}`, `learning` (`{voice, which, first}` or nil), `learn_clock.handle` (the learn's timeout clock, a clock helper's handle, `docs/notes/lua/clocks.md`) and `tap_set` (local to `lib/ui/zones.lua`), with `S.zones_learn_clock`, that handle's id; read through `S.lib.ui_zones.is_open()` and `learning()`. Closed, open, open with a learn waiting for its low note or its high.
+- **Invariant:** `zones editor`: a learn waits exactly while its clock is pending (its coroutine alive, never a retired one) and the note tap is set, and only while the editor is open; the open editor's owner is the modal one (or lies beneath SEQ's step editor), the closed editor's never; the cursor is on a row and a column.
+- **Test:** `test/unit/ui_zones_test.lua`: "the editor's invariant holds its own owner and a waiting learn's clock" (and "a learn ends after 10 s, at K2 and at cleanup, and the note tap is cleared", "the zones learn clock stopped as its wake is posted: no clock error, and nothing more happens").
+
+Its opens and closes are a row of the owners' table (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner). A learn's end stops its clock through the helper (`S.lib.clocks.stop`: retired, never canceled, once its wake may be posted, #626, #870).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| closed | K3 on SETUP's `mpe & zones` row | open | pushed |
+| open | ALT+K3 on a voice row | learning low | the note tap set, the timeout clock started, `learn v<i> low` in the header |
+| open | K2 (no ALT) | closed | popped |
+| learning low | a note | learning high | the voice's lowest note set; the note taken |
+| learning high | a note | open | the highest set (the two swapped when the second is lower); the learn ends |
+| learning low | `ZONES_EDITOR.learn_seconds` (10 s) | open | the learn ends, the lowest unchanged |
+| learning high | `ZONES_EDITOR.learn_seconds` | open | the learn ends, the lowest kept |
+| learning low | ALT+K3 (a new learn) | learning low | the old learn ended, the new one starts |
+| learning high | ALT+K3 | learning low | as above |
+| learning low | K2 | closed | the learn ends, popped |
+| learning high | K2 | closed | the learn ends, popped |
+| open | cleanup (step 117) | open | nothing waits; the owner stays on the stack (#899) |
+| learning low | cleanup | open | the learn ends, its clock canceled, the tap cleared; the editor stays open (#899) |
+| learning high | cleanup | open | as above |
+
 ## Files
 
 The UI core's notes, one file per part:

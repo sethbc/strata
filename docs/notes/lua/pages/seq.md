@@ -12,6 +12,22 @@
 - The step editor's owner has `animates()` (#592): the frame clock draws every frame while its ALT+K2 is held or the patterns play, over any page, so its `K2:reset` hint and its strip's playhead never wait for an unrelated redraw. Its press time is the modal's (`S.lib.ui_modal.held_seconds(step_editor_owner, 2)`, #866), never a mark of its own: the modal forgets it as the norns menu opens (`forget_held_keys`), at a second open (the owner is popped and pushed again) and when another owner is pushed over the editor, since each takes the release: a press left set would redraw at 15 fps and hold the hint at `K2:reset` until the editor closed.
 - The arc button (`arc_button`) plays/stops, like K2 in the pattern view (design §7 lists SEQ play/stop for the button). The step editor has no button.
 
+## Machines
+
+### step editor
+- **State:** `editor` (local to `lib/pages/seq.lua`): nil while closed, `{voice, step, port}` (and the edit view's row anchor) while open, read through `S.lib.pages_seq.step_editor()`; `replacing`, read through `step_editor_replacing()`, true only around its own pattern replacements (`run_replacement`); its owner is `S.lib.pages_seq.step_editor_owner`.
+- **Invariant:** `step editor`: the editor is open exactly while its owner is the modal one (it is the one owner nothing covers: a second open pops and pushes it again).
+- **Test:** `test/unit/grid_core_test.lua`: "the step editor closes when its grid goes away, changes page or the pattern is replaced" (and "a pattern replaced by the step editor itself keeps it open"; `test/unit/pages_seq_test.lua`: "an ALT+K2 held across a second open of the step editor holds nothing").
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| closed | a grid's step key held `GRID_HOLD.step_edit_seconds` | open | `open_step_editor(voice, step, port)`: pushed over the page or any owner (which forgets its presses), every ring's carried ticks forgotten |
+| open | a step key held on any grid | open | the first popped and the new one pushed (its presses forgotten) |
+| open | K2 (no ALT) | closed | `close_step_editor(port)` at the press |
+| open | its key's release, the end of its gesture, the grid's removal | closed | the grid closes the editor its key opened, never one opened since |
+| open | a pattern replacement of its own (euclid, clear, ALT+K3, ALT+K2) | open | `run_replacement`: `replacing` true around it, so the grid keeps it open |
+| open | ALT+K2 released | open | `S.lib.ui_alt.k2_up(editor_alt, held)` with the modal's `held_seconds` |
+
 ## Owns
 
 - `lib/pages/seq.lua` (`S.lib.pages_seq`): the SEQ record (`S.registry.pages[UI_PAGES.index.SEQ]`) with `draw`, `hints`, `enc`, `key`, `alt_enc`, `alt_key`, `alt_key_release`, `randomize_section`, `alt_hold`, `alt_hold_hint`, `header_status`, `animates`, `arc_button` and `layout_states`; its layout constants are the local `SEQ_PAGE` (the pattern view) and `SEQ_EDIT` (the edit view) tables, its rows `EDIT_ROWS`.

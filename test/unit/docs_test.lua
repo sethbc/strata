@@ -2602,18 +2602,9 @@ end)
 local UNTABLED_INVARIANTS = {
   "midi notes",  -- lib/midi_in.lua
   "scan holds",  -- lib/positions.lua
-  "scenes prompt",  -- lib/pages/scenes.lua
-  "key presses",  -- lib/ui/keys.lua
   "buffer slots",  -- lib/buffers.lua
   "input level",  -- lib/input_level.lua
-  "flash slots",  -- lib/ui/flash.lua
-  "param turn",  -- lib/ui/detent.lua
   "engine budget",  -- lib/engine_sync.lua
-  "modal owner",  -- lib/ui/modal.lua
-  "zones editor",  -- lib/ui/zones.lua
-  "scale editor",  -- lib/ui/scale_editor.lua
-  "voice picker",  -- lib/ui/voice_picker.lua
-  "step editor",  -- lib/pages/seq.lua
   "notes",  -- lib/notes.lua
   "arp",  -- lib/arp.lua
 }

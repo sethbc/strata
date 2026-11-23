@@ -54,6 +54,8 @@ Pitch to volts: a target that takes volts plays MIDI note 60 (middle C) at 0 V, 
 - **K3** - Run the row's action, or open its detail list; when the row is out of view, bring it back instead
 - **ALT+E2** - Select the voice, as on MAIN: the `voice` section shows the selected voice's routes
 
+When the row under the cursor goes away (a device unplugged, a route changed), the cursor moves to the row in its place, and a `>` at the left marks that row until the screen next changes. A turn of E3 or a press of K3 made before the screen shows the move only shows it, and changes nothing.
+
 The arc's four rings on IO are the tape loop's level, speed, feedback and wear (see [the tape loop](../io/tape.md)).
 
 ## Devices and connections

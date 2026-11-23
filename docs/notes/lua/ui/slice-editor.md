@@ -10,10 +10,31 @@
 - The modules it reads (`S.lib.slices`, `S.lib.samples`, `S.lib.waveforms`) are read at each use and never checked to be there: a missing module or function fails loudly. The amount's bounds are the file settings' (`S.lib.samples.SAMPLES.count_min`, `count_max` and `sensitivity_max`, the bounds `S.lib.samples.set` checks): no copies.
 - The hints are one style in every view, the other modal editors' (`<key>:<action>`, K2 and K3 first; #736), each whole on the 128 px hint row in norns.ttf: markers `K2:back K3:add E2:sel E3:move` (125 px; E3 says `move`, as `E2:sel` with `E3:nudge` would be 129), with ALT `K3:delete E2:rows E3:fine` (104); rows `K2:back E2:slices E3:edit` (100), with ALT `E2:row E3:edit` (57). A "hints" flash (BUFFER's, `buffer_page_flash`) shows in their place.
 
+## Machines
+
+### slice editor
+- **State:** `editor = {open, slot, marker, view, row}` and `pending_key` (local to `lib/ui/slice_editor.lua`): closed, or open in the markers view or the rows view (`view`), read through `S.lib.ui_slice_editor.is_open()` and `state()`; `pending_key` is a MIDI key the note hook noted on the key row, until the next 48 Hz step sets it.
+- **Invariant:** `slice editor`: the closed editor's owner is never the modal one, the open editor's is (or lies beneath SEQ's step editor, the one owner a grid can push over it); the open editor's slot has settings (`S.lib.samples.settings`); a key is noted only while it is open.
+- **Test:** `test/unit/ui_slice_editor_test.lua`: "the slice editor invariant: open exactly while its owner is on the stack, on a slot with settings, a noted key only while open" (and "the slot emptied under the editor closes it").
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| closed | K3 on BUFFER's slices field, the slot holding audio | markers | pushed, on marker 1; every ring's carried ticks forgotten |
+| closed | K3 on BUFFER's slices field, the slot empty | closed | `buf <n> empty` flashed, nothing pushed |
+| markers | K2 | closed | popped (ALT+K2 does nothing) |
+| markers | ALT+E2 | rows | on the row last picked |
+| markers | the slot emptied (a bind leaves no settings) | closed | popped |
+| markers | the grid's step editor pushed over it | markers | covered: the controls are the step editor's until it closes |
+| rows | E2 | markers | the picked row kept |
+| rows | ALT+E2 | rows | another row picked |
+| rows | K2 | closed | popped, a noted key forgotten |
+| rows | a MIDI note on the key row | rows | the note noted; the next step sets the key (`S.lib.samples.set`) |
+| rows | the slot emptied | closed | popped, a noted key forgotten |
+
 ## Owns
 
 - `lib/ui/slice_editor.lua` (`S.lib.ui_slice_editor`, 3.7 design §3.7, decision 14): `EDITOR` (the tunables, `layout`, `levels`, `flashes`), `open(slot)`, `close()`, `is_open()`, `state()` (`{slot, marker, view, row}`), `pick_marker(d)`, `pick_row(name)`, `nudge(d, fine)`, `add()`, `delete()`, `turn_row(name, d)`, `amount_range(record?)`, `tempo_range()`, `ring_fractions()`, BUFFER's `slot_text(slot)` and `starts(slot)`, and `owner` (whose `arc_delta` and `arc_redraw` `lib/arc/buffer.lua` sets, `docs/notes/lua/arc-pages.md`). Its unit tests: `test/unit/ui_slice_editor_test.lua` (with `h.slice_doubles`' editor doubles, set as fields of the real `S.lib.slices`, `S.lib.samples` and `S.lib.waveforms`).
-- No clock, cleanup step or registry of its own: a note hook and an `on_step` function.
+- No clock, cleanup step or registry of its own: a note hook, an `on_step` function and the `slice editor` invariant (Machines, above). An open editor stays on the modal stack at cleanup, as the zones editor, the step editor and IO's detail do (#899, for package 6d's step that closes every owner).
 
 ## Views and controls
 

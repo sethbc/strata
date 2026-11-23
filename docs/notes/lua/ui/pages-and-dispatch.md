@@ -9,6 +9,28 @@
 - `redraw()`, `key` and `enc` do nothing until init's first start step sets `S.started` (`START_ORDER.started`, `lib/ui/frame.lua`): norns routes them to the script if its menu closes while the engine loads, before `init` has added the params (#426).
 - A test (`test/unit/ui_detent_test.lua`, #427) scans `strata.lua` and every `lib/` file, comments and strings blanked: no `redraw()` or `arc_redraw()` call outside `lib/ui/frame.lua` (a call through another table, `fileselect.redraw()` or a record's `arc_redraw(port)`, is another function), no assignment to `ui_page` outside `lib/ui/frame.lua` and `lib/ui/keys.lua`, no `alt_key` call through a table outside `lib/ui/alt.lua`, no `draw_hints` call outside `strata.lua` and `lib/ui/header.lua`.
 
+## Machines
+
+### modal owner
+- **State:** `stack` (the pushed owners, the top one last), `pressed[n]` and `pressed_at[n]` (the owner key `n` went down on and when), local to `lib/ui/modal.lua`; read through `S.lib.ui_modal.top()` and `S.lib.ui_modal.held_seconds(owner, n)`. Per owner: off the stack, on top, or covered by another (only SEQ's step editor, which a grid pushes over any owner). Each owner keeps its own open flag beside its place on the stack, held by its own invariant (the owners' table, The modal owner below).
+- **Invariant:** `modal owner`: no owner is on the stack twice, every key down on an owner is on the top one (a push forgets the covered owner's), and a key has a press time exactly while it is down on an owner.
+- **Test:** `test/unit/ui_modal_test.lua`: "held_seconds is nil for an owner that is not on top" (and "a key pressed before the owner was pushed releases into nothing", "a release handler that raises leaves no key held (a modal owner's)").
+
+A push of an owner already on the stack raises, so `on top` + `push` and `covered` + `push` are no rows.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| off | push | on top | the covered owner's presses and the page's forgotten (#866); a redraw |
+| off | pop | off | nothing |
+| on top | pop | off | its presses forgotten: a key still down releases into nothing; a redraw |
+| on top | another owner pushed | covered | its presses forgotten |
+| on top | K2 or K3 down | on top | `key(n, 1)`, the press and its time noted |
+| on top | K2 or K3 up | on top | `key(n, 0)` only if it saw the press (`held_seconds` answers inside it), then the press forgotten, also when it raises |
+| on top | `forget_held_keys` (the menu, the file selector, a name entry) | on top | its presses forgotten |
+| covered | the owner over it popped | on top | nothing comes back: it saw no press since it was covered |
+| covered | pop | off | nothing of its presses was left |
+| covered | K2 or K3 | covered | the top owner's |
+
 ## Pages and dispatch
 
 A page record may also have `animates()`: while it returns true for the shown page, `draw_frame` redraws the screen every frame (`docs/notes/lua/ui/redraws.md`).
@@ -51,6 +73,18 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - An owner's `animates()` is read by the frame clock as a page's is (`docs/notes/lua/ui/redraws.md`, #592): while it is true the screen draws every frame whatever page is underneath; an owner without one leaves the frame to the page's own `animates()`. SEQ's step editor animates while its ALT+K2 is held and while the patterns play.
 - While one is pushed: `enc` ignores E1 and sends E2 and E3 to `owner.enc(n, d)` (never the page's `alt_enc` or `enc`); `key` sets ALT from K1 as always, clears the key's page press marks and hands K2 and K3 to `S.lib.ui_modal.key(n, z)` (never `alt_action`, `key_release` or `alt_key_release`), which sends a press to the top owner's `key(n, 1)`, noting which owner it went to and when (`util.time()`), and a release to `key(n, 0)` only when that owner is still the top one and saw the press (a pop forgets its owner's presses); `redraw` draws the header, the owner's body and hints; `arc_delta`, `arc_key` (presses and releases) and `arc_redraw` (`lib/arc/core.lua`) go to the owner's handlers. No page change happens underneath (#875): in the running script `set_ui_page`'s callers are E1, which an owner ignores, and MOD's K3 (`S.lib.pages_lfo.show_lfo`), a page key the owner takes instead; nothing under `lib/grid/` calls it, and the grid's one effect on the screen is pushing SEQ's step editor.
 - The `modal owner` invariant: no owner is on the stack twice, every key down on an owner is on the top one (a push forgets the covered owner's), and a key has a press time exactly while it is down on an owner.
+
+The owners (3.9, #902): who opens each, what closes it, whether cleanup closes it, and which presses it reads (each through `S.lib.ui_modal.held_seconds(owner, n)`; the others act at the press). Each has an invariant that ties its open flag to the stack: its owner is the modal one while it is open (or beneath SEQ's step editor, which a grid can push over any owner) and never while it is closed.
+
+| Owner | Opened by | Closed by | At cleanup | Presses it reads | Invariant |
+|---|---|---|---|---|---|
+| SEQ's step editor (`lib/pages/seq.lua`) | a grid's held step key (`open_step_editor`, over any owner; a second open replaces the first) | K2; the key's release, the end of its gesture (a grid page change, a half switch, its voice's pattern replaced), a press with no release, the grid's removal (`close_step_editor`) | stays (#899) | ALT+K2's hold (`K2:reset`) | `step editor` |
+| the zones editor (`lib/ui/zones.lua`) | K3 on SETUP's `mpe & zones` row | K2 | stays; its learn ends (step 117, #899) | none | `zones editor` |
+| the voice picker (`lib/ui/voice_picker.lua`) | K3 on VOICE's `preset` row | K2 | closed (step 138) | ALT+K2's hold (clear), ALT+K3's release (the name entry) | `voice picker` |
+| the scale editor (`lib/ui/scale_editor.lua`) | K3 on SETUP's `scale & tuning` row | K2 | closed (step 139) | none | `scale editor` |
+| the factory list (`lib/factory.lua`) | K3 on SETUP's `factory sets` row | K2 | closed (step 116) | none | `factory` |
+| the slice editor (`lib/ui/slice_editor.lua`) | K3 on BUFFER's `slices` field, a slot with audio (a second open replaces the first) | K2; its slot emptied | stays (#899) | none | `slice editor` |
+| IO's detail list (`lib/pages/io.lua`) | K3 on a detail row | K2 | stays (#899) | none | `io detail` |
 
 ## Registering a page
 

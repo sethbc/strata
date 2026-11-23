@@ -535,4 +535,64 @@ test("the amount's bounds are the file settings' own (S.lib.samples.SAMPLES)", f
   assert_equal(editor.EDITOR.sensitivity_max, nil)
 end)
 
+
+-- A registered invariant's check, by its name (nil while it holds)
+local function invariant(S, name)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == name then return record.fn() end
+  end
+  error("no " .. name .. " invariant")
+end
+
+-- The value fn keeps as its upvalue `name` (the editor's private state)
+local function upvalue(fn, name)
+  for index = 1, math.huge do
+    local found, value = debug.getupvalue(fn, index)
+    if found == nil then error("no upvalue " .. name) end
+    if found == name then return value end
+  end
+end
+
+-- 3.9 (#902): the editor is open exactly while its owner is on the modal
+-- stack (the top one, or beneath SEQ's step editor), open only on a slot
+-- with settings, and a MIDI key is noted only while it is open
+test("the slice editor invariant: open exactly while its owner is on the stack, on a slot with settings, a noted key only while open", function()
+  local _, S, _, editor = loaded()
+  local function broken() return invariant(S, "slice editor") or "" end
+  assert_equal(invariant(S, "slice editor"), nil, "closed")
+  editor.open(1)
+  assert_equal(invariant(S, "slice editor"), nil, "open on top")
+  S.lib.pages_seq.open_step_editor(1, 1, 1)
+  assert_equal(invariant(S, "slice editor"), nil, "open beneath SEQ's step editor")
+  S.lib.pages_seq.close_step_editor(1)
+  h.allow_broken_invariants("the test breaks the slice editor invariant on purpose")
+  S.lib.ui_modal.pop(editor.owner)
+  assert_true(broken():find("open but the modal owner", 1, true), "open with its owner off the stack: " .. broken())
+  S.lib.ui_modal.push(editor.owner)
+  local settings = S.lib.samples.settings
+  S.lib.samples.settings = function() return nil end
+  assert_true(broken():find("no settings", 1, true), "open on a slot with no settings: " .. broken())
+  S.lib.samples.settings = settings
+  assert_equal(invariant(S, "slice editor"), nil, "its settings back")
+  -- a key noted (the note hook's heard on the key row), then the editor
+  -- marked closed and its owner popped, the key left noted
+  pick_row(editor, "key")
+  for _, hook in ipairs(S.registry.note_hooks) do
+    if hook.name == "slice editor" then hook.heard(1, 60) end
+  end
+  assert_equal(invariant(S, "slice editor"), nil, "a key noted while open")
+  local state = upvalue(editor.is_open, "editor")
+  state.open = false
+  S.lib.ui_modal.pop(editor.owner)
+  assert_true(broken():find("noted", 1, true), "a key noted with the editor closed: " .. broken())
+  state.open = true
+  S.lib.ui_modal.push(editor.owner)
+  editor.close()
+  assert_equal(invariant(S, "slice editor"), nil, "the close forgets the key")
+  S.lib.ui_modal.push(editor.owner)
+  assert_true(broken():find("closed but its owner", 1, true), "closed with its owner on the stack: " .. broken())
+  S.lib.ui_modal.pop(editor.owner)
+  assert_equal(invariant(S, "slice editor"), nil, "closed and off the stack")
+end)
+
 end
