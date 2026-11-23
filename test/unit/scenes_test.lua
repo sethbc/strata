@@ -969,6 +969,12 @@ local function run_to_end(context)
   while local_value("S").scene_transition_active do wake(context, "scene_transition_clock") end
 end
 
+-- A fade that ended keeps no clock: one stopped as its wake was posted is
+-- retired, and its wake runs no step and no end (the clock helper; "the
+-- fade's clock stopped as its wake is posted", below)
+local IDLE_WAKE_IMPOSSIBLE = "no fade's clock wakes while idle: a clock a recall or a cancel retired"
+  .. " ends at its wake and runs no step and no end"
+
 local LANDING_IMPOSSIBLE = "the landing runs inside one resume of the fade's clock and never yields: only its own sets run"
   .. " inside it, and none of them recalls, steps, ends or cancels a fade, lets go of a voice, captures, edits by hand"
   .. " or moves the morph (the end's row reads the state from inside it)"
@@ -1139,8 +1145,8 @@ h.transition_table({
     end},
   },
   impossible = {
-    {"idle", "step", "no fade clock runs while idle"},
-    {"idle", "end", "no fade clock runs while idle"},
+    {"idle", "step", IDLE_WAKE_IMPOSSIBLE},
+    {"idle", "end", IDLE_WAKE_IMPOSSIBLE},
     {"fading, before the midpoint", "end", "the end follows the twentieth step: a fade before its midpoint steps first"},
     {"landing", "recall, timed", LANDING_IMPOSSIBLE},
     {"landing", "recall, instant", LANDING_IMPOSSIBLE},
