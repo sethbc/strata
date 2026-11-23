@@ -1094,4 +1094,83 @@ test("a load's type stands over a pending type choice", function()
   end
 end)
 
+-- #892: a writer flag restores the value it found, so a write nested in
+-- another (here a randomize inside a randomize's draw) leaves the outer
+-- write's flag set until the outer write ends
+test("a nested undo write leaves the flag as it found it (#892)", function()
+  local context = load_strata(); finish_startup(context)
+  local mutation = local_value("S").lib.mutation
+  local FX = page_index("FX")
+  local nested_ran, after_nested
+  assert_true(mutation.randomize({ page = FX, section = "reverb", draws = {
+    { id = "reverb_mix", draw = function()
+      nested_ran = mutation.randomize({ page = FX, section = "size", draws = {
+        { id = "reverb_size", draw = function() return 0.7 end } } })
+      return 0.45
+    end },
+    { id = "reverb_damp", draw = function() after_nested = local_value("undo_writing"); return 0.3 end },
+  } }), "the outer randomize ran")
+  assert_true(nested_ran, "the nested randomize ran")
+  assert_equal(after_nested, true, "the outer write's flag stands after the nested write")
+  assert_equal(local_value("undo_writing"), false, "and clears when the outer write ends")
+end)
+
+test("a nested drift write leaves the flag as it found it (#892)", function()
+  load_strata()
+  local S = local_value("S")
+  local param = params:lookup_param("v1_grain_pitch")
+  local real_action = param.action
+  local after_nested
+  param.action = function(value)
+    set_drifted_param("v1_buf_pos", 0.5)
+    after_nested = S.drift_writing
+    real_action(value)
+  end
+  set_drifted_param("v1_grain_pitch", 1.2)
+  param.action = real_action
+  assert_equal(after_nested, true, "the outer write's flag stands after the nested write")
+  assert_equal(S.drift_writing, false, "and clears when the outer write ends")
+  -- an error in a nested write puts back the outer write's flag, then the
+  -- outer's own puts back false
+  local position = params:lookup_param("v1_buf_pos")
+  local real_position_action = position.action
+  position.action = function() error("buffer position failed") end
+  local nested_ok
+  param.action = function(value)
+    nested_ok = pcall(set_drifted_param, "v1_buf_pos", 0.25)
+    after_nested = S.drift_writing
+    real_action(value)
+  end
+  set_drifted_param("v1_grain_pitch", 1.3)
+  param.action, position.action = real_action, real_position_action
+  assert_equal(nested_ok, false, "the nested write raised")
+  assert_equal(after_nested, true, "the outer flag after a nested write's error")
+  assert_equal(S.drift_writing, false, "cleared at the outer write's end")
+end)
+
+-- #870: the undo's expiry clock on the clock helper. An edit that ends
+-- the undo as the clock's wake is posted retires the clock: its wake
+-- prints no clock error and clears nothing (a new undo held since stands)
+test("the undo clock stopped as its wake is posted: no clock error, and nothing more happens (#870)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  randomize_voice(1)
+  local expiry_id = local_value("undo_clock")
+  assert_equal(type(expiry_id), "number", "the expiry clock's id")
+  context.clock.advance_until(expiry_id, function()
+    clear_undo()
+    randomize_voice(2)  -- a new undo, held before the old clock's wake is delivered
+  end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 0, "no clock error at the wake: " .. tostring(errors[1]))
+  assert_true(undo_available(2), "the old clock's wake does not end the new undo")
+  assert_true(local_value("undo_clock") ~= expiry_id, "the new undo has its own clock")
+  assert_equal(S.lib.clocks.retired[expiry_id], nil, "the old clock ended at its wake")
+  assert_equal(context.clock.threads[expiry_id], nil, "and is gone")
+  context.clock.run_for(S.constants.UNDO_SECONDS + 0.01)
+  assert_true(not undo_available(2), "the new undo ends at its own time")
+  assert_equal(local_value("undo_clock"), nil, "with its clock")
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+end)
+
 end
