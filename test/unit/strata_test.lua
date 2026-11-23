@@ -418,7 +418,12 @@ end)
 test("the notes model's stream note leaves at its note's rate against the voice's root", function()
   load_strata()
   local S = local_value("S")
-  local model = require("notes_model").new(S.constants)
+  local Model = require("notes_model")
+  -- the root before any rootNote is the one it is given (Lua's NOTES.rate_root_note, the engine's
+  -- noteRateRootNote by a docs test), never a literal of the model's
+  assert_equal(Model.new(S.constants, { rate_root_note = 62 }).voices[0].root, 62, "the root it is given")
+  local model = Model.new(S.constants, S.lib.notes.NOTES)
+  assert_equal(model.voices[6].root, S.lib.notes.NOTES.rate_root_note, "every voice's root: NOTES.rate_root_note")
   local calls = {}  -- one list, as the stub's: the model reads on from where it stopped
   local function call(name, ...) calls[#calls + 1] = { name = name, args = { ... } } end
   call("setNotePool", 4); call("setGrainParam", 0, "rootNote", 57); call("voiceOn", 0)
@@ -493,12 +498,15 @@ local NOTES_WALK_OPS = {
     cuts = "frozen" },
 }
 -- The differences the walk allows while their fault is open (the model's
--- compare names each; 3.9's package 1l found it): old_root, a held buffer or
--- input extra note keeps the rate of the root it started under when the
--- voice's root moves (slot 1's key changes, or a source switch between the
--- input, a voice source and a keyed slot, whose rootNote comes after the
--- switch): the engine keeps a held note's rate and Lua resends none, so the
--- note sounds off its pitch until it is struck again
+-- compare names each; the walks must meet each one, "allowed_<name>" in
+-- reached, so the fault's fix removes it). old_root (#958, found by 3.9's
+-- package 1l): a held buffer or input extra note keeps the rate of the
+-- root it started under when the voice's root moves (slot 1's key changes,
+-- or a source switch between the input, a voice source and a keyed slot,
+-- whose rootNote comes after the switch): the engine keeps a held note's
+-- rate and Lua resends none, so the note sounds off its pitch until it is
+-- struck again. Only where the engine's root is Lua's: a rootNote Lua never
+-- sent is not passed
 local NOTES_WALK_ALLOWED = { old_root = true }
 local NOTES_WALK_CUTS = {}
 for _, op in ipairs(NOTES_WALK_OPS) do
@@ -515,7 +523,7 @@ h.walk({
   steps = 400,
   setup = function(context, random)
     local S = local_value("S")
-    local model = require("notes_model").new(S.constants)
+    local model = require("notes_model").new(S.constants, S.lib.notes.NOTES)
     context.midi.plug(1, "keys")
     for voice = 1, 3 do
       for step = 1, 16 do
@@ -560,9 +568,16 @@ h.walk({
   -- (switches, unfreezes), streams leaving a freeze, a note once a stream
   -- restarted on a buffer or the input (#682's path), cuts, parks, unparks,
   -- a note on a voice source, a note restarted by a type switch (#873)
+  -- and each allowance of NOTES_WALK_ALLOWED was met (allowed_<name>), so the
+  -- fix of its fault must remove it
   reached = { "starts", "restarts", "streams_left", "regrained", "cuts", "parks", "unparks", "voice_sourced",
-    "retyped" },
-  counts = function(state) return state.model.counts end,
+    "retyped", "allowed_old_root" },
+  counts = function(state)
+    local counts = {}
+    for name, count in pairs(state.model.counts) do counts[name] = count end
+    for name in pairs(NOTES_WALK_ALLOWED) do counts["allowed_" .. name] = (state.model.allowed or {})[name] or 0 end
+    return counts
+  end,
 })
 
 end
