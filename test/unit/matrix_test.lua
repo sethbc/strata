@@ -1066,6 +1066,7 @@ local function learning_routing(k, same_clock)
       assert_equal(S.matrix_learn_clock, context.learn_clock, "on the same clock")
     else
       assert_true(S.matrix_learn_clock ~= context.learn_clock, "on a new clock")
+      assert_equal(clock.threads[context.learn_clock], nil, "the old clock canceled")
     end
   end
 end
@@ -1106,7 +1107,11 @@ h.transition_table({
     return local_value("S").lib.matrix.learning() == nil and "idle" or "armed"
   end,
   rows = {
-    { "idle", "learn", "armed", check = function() assert_equal(local_value("S").lib.matrix.learning(), 5) end },
+    { "idle", "learn", "armed", check = function()
+      local S = local_value("S")
+      assert_equal(S.lib.matrix.learning(), 5)
+      assert_true(clock.threads[S.matrix_learn_clock] ~= nil, "its clock runs")
+    end },
     { "idle", "learn of no routing", "idle" },
     { "idle", "a touch of a destination", "idle", check = learned("") },
     { "idle", "a touch of another param", "idle" },
@@ -1116,15 +1121,18 @@ h.transition_table({
     { "idle", "the cleanup step", "idle" },
     { "armed", "learn", "armed", check = learning_routing(5, false) },
     { "armed", "learn of no routing", "armed", check = learning_routing(LEARN_ROUTING, true) },
-    { "armed", "a touch of a destination", "idle", check = function()
+    { "armed", "a touch of a destination", "idle", check = function(context)
       learned("reverb_mix")()
+      assert_equal(clock.threads[context.learn_clock], nil, "the clock canceled")
       assert_equal(local_value("S").lib.ui_flash.text("header"), "R3 > rev mix")
     end },
     { "armed", "a touch of another param", "armed", check = function(context)
       learning_routing(LEARN_ROUTING, true)(context)
       assert_equal(local_value("S").lib.ui_flash.text("header"), "not a destination")
     end },
-    { "armed", "cancel_learn", "idle" },
+    { "armed", "cancel_learn", "idle", check = function(context)
+      assert_equal(clock.threads[context.learn_clock], nil, "the clock canceled")
+    end },
     { "armed", "the timeout", "idle" },
     { "armed", "a page change", "armed", check = learning_routing(LEARN_ROUTING, true) },
     { "armed", "the cleanup step", "idle", check = function(context)

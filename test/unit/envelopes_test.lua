@@ -527,11 +527,32 @@ local function model_hit()
 end
 local function model_param(key) return "v" .. MODEL_VOICE .. "_" .. key end
 local function model_hit_now() local_value("S").lib.engine_sync.retrigger(MODEL_VOICE, 1, "step") end
+-- The defaults as M.shape takes them (decay: another decay), and the
+-- level they give `elapsed` s after a hit from `from`
+local function model_settings(decay, loop)
+  return {attack = 0.005, decay = decay or 0.2, sustain = 0, release = 0.2, curve = -4, loop = loop == true}
+end
+local function model_level(elapsed, decay, loop, from)
+  return local_value("S").lib.envelopes.shape(model_settings(decay, loop), elapsed, 0, from or 0)
+end
+local function model_value() return local_value("S").lib.envelopes.value(MODEL_VOICE) end
+local function hit_now_from(from)
+  return function()
+    local hit = model_hit()
+    assert_equal(hit.time, util.time(), "a hit recorded now")
+    assert_near(hit.from, from, 1e-9, "from " .. from)
+    assert_equal(hit.hold, 0, "with no hold")
+  end
+end
+
+-- running is entered 0.1 s into its run, in the decay, so a hit there
+-- starts from a level above 0
 local function model_enter(state)
   return function(context)
     context.set_time(500)
     if state == "no hit" then return end
     model_hit_now()
+    if state == "running" then context.set_time(500.1) end
     if state == "ended" then context.set_time(501) end
     if state == "looping" then
       params:set(model_param("env_loop"), 2)
@@ -562,40 +583,55 @@ h.transition_table({
     return util.time() - hit.time < run and "running" or "ended"
   end,
   rows = {
-    { "no hit", "a hit", "running" },
+    { "no hit", "a hit", "running", check = hit_now_from(0) },
     { "no hit", "time passes", "no hit" },
-    { "no hit", "the loop on", "looping", check = function()
-      assert_equal(model_hit().time, util.time(), "a hit recorded now")
-    end },
+    { "no hit", "the loop on", "looping", check = hit_now_from(0) },
     { "no hit", "the loop off", "no hit" },
     { "no hit", "a longer decay", "no hit" },
-    { "running", "a hit", "running" },
+    { "running", "a hit", "running", check = function()
+      local level = model_level(0.1)
+      assert_true(level > 0, "the level 0.1 s in is above 0: " .. level)
+      hit_now_from(level)()
+    end },
     { "running", "time passes", "ended", check = function()
-      assert_equal(local_value("S").lib.envelopes.value(MODEL_VOICE), 0, "the level is 0")
+      assert_equal(model_value(), 0, "the level is 0")
     end },
     { "running", "the loop on", "looping", check = function()
       assert_equal(model_hit().time, 500, "the hit runs on")
     end },
     { "running", "the loop off", "running" },
-    { "running", "a longer decay", "running" },
-    { "ended", "a hit", "running" },
-    { "ended", "time passes", "ended" },
-    { "ended", "the loop on", "looping", check = function()
-      assert_equal(model_hit().time, util.time(), "a new hit from 0, now")
+    { "running", "a longer decay", "running", check = function()
+      assert_near(model_value(), model_level(0.1, 5), 1e-9, "the level follows the longer decay")
     end },
+    { "ended", "a hit", "running", check = hit_now_from(0) },
+    { "ended", "time passes", "ended", check = function()
+      assert_equal(model_value(), 0, "the level stays 0")
+    end },
+    { "ended", "the loop on", "looping", check = hit_now_from(0) },
     { "ended", "the loop off", "ended" },
     -- #969 (read in the code, not run on a device): the model reads the
     -- settings live, so a longer time brings an ended run back
     { "ended", "a longer decay", "running", known = 969, check = function()
-      assert_true(local_value("S").lib.envelopes.value(MODEL_VOICE) > 0, "the model's level comes back")
+      assert_true(model_value() > 0, "the model's level comes back")
     end },
-    { "looping", "a hit", "looping" },
-    { "looping", "time passes", "looping" },
+    { "looping", "a hit", "looping", check = function()
+      local level = model_level(0.5, nil, true)
+      assert_true(level > 0, "the level in the third cycle is above 0: " .. level)
+      hit_now_from(level)()
+    end },
+    { "looping", "time passes", "looping", check = function()
+      -- 1.5 s after the hit: 0.065 s into the eighth cycle, in its decay
+      local level = model_level(1.5, nil, true)
+      assert_true(level > 0, "the next cycles play: " .. level)
+      assert_near(model_value(), level, 1e-9, "each cycle again from 0")
+    end },
     { "looping", "the loop on", "looping" },
     { "looping", "the loop off", "running", check = function()
       assert_near(model_hit().time, 500.41, 1e-9, "the hit moved to the third cycle's start")
     end },
-    { "looping", "a longer decay", "looping" },
+    { "looping", "a longer decay", "looping", check = function()
+      assert_near(model_value(), model_level(0.5, 5, true), 1e-9, "the cycle follows the longer decay")
+    end },
   },
 })
 

@@ -1999,9 +1999,15 @@ local function clock_counting(stop)
   return function(context)
     local S = local_value("S")
     context.steps = 0
+    context.clock_id = S.lfo_clock
     S.lib.lfos.on_step(function() context.steps = context.steps + 1 end)
     if stop then S.lib.lfos.stop_clock() end
   end
+end
+-- The clock the state was entered with is gone (canceled)
+local function first_clock_gone(context)
+  assert_true(context.clock_id ~= nil, "the state was entered with a clock")
+  assert_equal(clock.threads[context.clock_id], nil, "the first clock " .. context.clock_id .. " is canceled")
 end
 local function clock_stepped(expected)
   return function(context)
@@ -2044,12 +2050,21 @@ h.transition_table({
     { "stopped", "time passes", "stopped", check = clock_stepped(false) },
     { "stopped", "the cleanup step", "stopped" },
     { "stopped", "stop_clock", "stopped" },
-    { "running", "the start step", "running" },
+    { "running", "the start step", "running", check = function(context)
+      local S = local_value("S")
+      first_clock_gone(context)
+      assert_true(S.lfo_clock ~= context.clock_id, "a new clock")
+      -- one clock: its next wake runs one step (two clocks would run two)
+      context.steps = 0
+      context.clock.advance_until(S.lfo_clock)
+      assert_equal(context.steps, 1, "one step a wake")
+    end },
     { "running", "time passes", "running", check = clock_stepped(true) },
     { "running", "the cleanup step", "stopped", check = function(context)
+      first_clock_gone(context)
       assert_equal(#context.calls_named("stopFastLfo"), 0, "no stopFastLfo (#461)")
     end },
-    { "running", "stop_clock", "stopped" },
+    { "running", "stop_clock", "stopped", check = first_clock_gone },
   },
 })
 
