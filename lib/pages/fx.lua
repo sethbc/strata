@@ -37,8 +37,9 @@ return function(S)
   -- ALT+K3 act on ("filter", "delay", "reverb"); master and shimmer rows
   -- have none. A row's `binary` makes E3 turn it on (up) and off (down);
   -- `synced` names the param the row turns while the delay plays a
-  -- division, the row then showing S.lib.delay_sync.label(). A row's `held`
-  -- names the effect whose freeze marks it `held` after its label (the
+  -- division, the row then showing S.lib.delay_sync.label(). A row's
+  -- `frozen_mark` names the effect whose freeze marks it `held` after its
+  -- label (never delay_sync's `held`, a scene apply's held send; the
   -- delay's time row: a frozen loop keeps the length it froze at, and the
   -- time shown is the one its release plays, #911). A `hold` row
   -- ("freeze", "clear") has no param_id: its param is its effect's in
@@ -56,7 +57,7 @@ return function(S)
       {label = "mix", section = "filter", param_id = "filter_mix", format = percent, effect = "filter"},
       {label = "delay", section = "delay", selectable = false, bypass = "delay", freeze = "delay"},
       {label = "time", section = "delay", param_id = "delay_time", format = "%.3f s", effect = "delay",
-        synced = "delay_division", held = "delay"},
+        synced = "delay_division", frozen_mark = "delay"},
       {label = "fdbk", section = "delay", param_id = "delay_feedback", format = percent, effect = "delay"},
       {label = "level", section = "delay", param_id = "delay_mix", format = percent, effect = "delay"},  -- the return's
       {label = "sync", section = "delay", param_id = "delay_sync", format = on_off, effect = "delay", binary = true},
@@ -83,9 +84,9 @@ return function(S)
     row_level = 4,          -- every other param row
     bypass_text = "byp",    -- right-aligned on a bypassed effect's section row
     frozen_text = "frz",    -- in its place on a frozen one's (a bypass ends a freeze)
-    bypass_level = 4,       -- the level of both, and of held
-    held_text = "held",     -- after a row's label while its `held` effect is frozen (#911)
-    held_gap = 4,           -- px between the label and held
+    bypass_level = 4,       -- the level of both, and of the frozen mark
+    frozen_mark_text = "held",  -- after a row's label while its `frozen_mark` effect is frozen (#911)
+    frozen_mark_gap = 4,    -- px between the label and the frozen mark
     clear_text = "K3",      -- the clear row's value: K3 clears
     unavailable_text = "--",  -- a freeze not offered; the clear of a bypassed delay
     hints = {value = "E3:value", fine = "E3:fine", clear = "K3:clear", freeze = "K3:freeze",
@@ -160,14 +161,15 @@ return function(S)
       end
       return
     end
-    screen.level(selected and FX.selected_level or FX.row_level)
+    local level = selected and FX.selected_level or FX.row_level
+    screen.level(level)
     screen.move(FX.param_x, y)
     screen.text(row.label)
-    if row.held and S.lib.fx_hold.frozen(row.held) then
+    if row.frozen_mark and S.lib.fx_hold.frozen(row.frozen_mark) then
       screen.level(FX.bypass_level)
-      screen.move(FX.param_x + screen.text_extents(row.label) + FX.held_gap, y)
-      screen.text(FX.held_text)
-      screen.level(selected and FX.selected_level or FX.row_level)
+      screen.move(FX.param_x + screen.text_extents(row.label) + FX.frozen_mark_gap, y)
+      screen.text(FX.frozen_mark_text)
+      screen.level(level)
     end
     screen.move(value_right, y)
     screen.text_right(row_value(row))
