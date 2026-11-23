@@ -222,7 +222,7 @@ return function(S)
   -- its handle) and is ended with S.lib.clocks.stop, which retires one
   -- whose wake may be posted (#870): its sleep returns false and fn never
   -- runs. Only cleanup's step cancels them outright
-  local function cancel_hold(port, x, y)
+  local function stop_hold(port, x, y)
     local handle = key_value(hold_clocks, port, x, y)
     if handle == nil then return end
     set_key_value(hold_clocks, port, x, y, nil)
@@ -233,7 +233,7 @@ return function(S)
   -- release, the port's grid.remove and cleanup end it
   function M.on_hold(port, x, y, seconds, fn)
     if M.held(port, x, y) == nil then return end
-    cancel_hold(port, x, y)
+    stop_hold(port, x, y)
     local handle = S.lib.clocks.run(function(hold)
       if not hold.sleep(seconds) then return end
       set_key_value(hold_clocks, port, x, y, nil)
@@ -271,7 +271,7 @@ return function(S)
   local function drop_step_key(port, x, y)
     if key_value(step_keys, port, x, y) == nil then return end
     set_key_value(step_keys, port, x, y, nil)
-    cancel_hold(port, x, y)
+    stop_hold(port, x, y)
     close_step_editor_of(port, x, y)
   end
 
@@ -327,18 +327,19 @@ return function(S)
       for _, key in ipairs(keys) do fn(key[1], key[2]) end
     end
     each_key(step_keys, function(x, y) drop_step_key(port, x, y) end)
-    each_key(hold_clocks, function(x, y) cancel_hold(port, x, y) end)
+    each_key(hold_clocks, function(x, y) stop_hold(port, x, y) end)
     each_key(key_roles, function(x, y) set_key_value(key_roles, port, x, y, nil) end)
   end
 
   -- Forget a port's keys: pending holds (stopped), held, consumed and step
   -- keys (a step editor one of them opened closes), their roles, its layout
-  -- state and its panes
+  -- state and its panes. The port is left with no held keys' table, as a
+  -- port never attached has none (a press makes it again)
   local function forget_port(port)
     local key = step_editor.key
     if key and key.port == port then close_step_editor_of(port, key.x, key.y) end
     M.end_port_holds(port)
-    S.grid_held[port] = {}
+    S.grid_held[port] = nil
     consumed_keys[port] = nil
     step_keys[port] = nil
     port_states[port] = nil
@@ -348,7 +349,7 @@ return function(S)
   local function press_key(port, x, y)
     -- a press with no release before it (a missed event) starts over
     drop_step_key(port, x, y)
-    cancel_hold(port, x, y)
+    stop_hold(port, x, y)
     set_key_value(consumed_keys, port, x, y, nil)
     set_key_value(key_roles, port, x, y, nil)
     set_key_value(S.grid_held, port, x, y, util.time())
@@ -426,7 +427,7 @@ return function(S)
       S.lib.mutation.note_pattern_edit(voice_idx)
       M.consume(port, x, y)
       M.consume(port, held_x, held_y)
-      cancel_hold(port, held_x, held_y)
+      stop_hold(port, held_x, held_y)
       set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, level_key = true})
       return
     end
@@ -769,6 +770,20 @@ return function(S)
     grid_redraw()
   end
 
+  -- A port's grid goes (unplugged, its vport emptied in SYSTEM > DEVICES,
+  -- a virtual grid detached; #932): the attached grid's key handler is
+  -- cleared and its entry, its recorded device and its size go, then the
+  -- port is forgotten (forget_port: its pending holds never fire, no scene
+  -- save from a removed grid), so it keeps no held keys' table
+  local function detach(port)
+    local grid_port = S.grids[port]
+    if grid_port then grid_port.key = nil end
+    S.grids[port] = nil
+    attached_devices[port] = nil
+    GRID_ROTATION.sizes[port] = nil
+    forget_port(port)
+  end
+
   -- Hot-plug. norns passes the raw device here; store its port's vport (as
   -- grid_init does) rather than the device, which has no .device field.
   -- A grid plugged in starts with no held keys, on its start pages. Both handlers
@@ -786,14 +801,7 @@ return function(S)
   local function grid_removed(device)
     local port = device.port
     if not port then return end
-    if S.grids[port] then
-      S.grids[port].key = nil
-      S.grids[port] = nil
-    end
-    attached_devices[port] = nil
-    GRID_ROTATION.sizes[port] = nil
-    -- its pending holds never fire (no scene save from a removed grid)
-    forget_port(port)
+    detach(port)
     request_redraw()
     print("grid " .. port .. " disconnected")
   end
@@ -819,11 +827,7 @@ return function(S)
         attach_grid(port)
         print("grid " .. port .. " connected: " .. grid_port.cols .. "x" .. grid_port.rows)
       elseif attached and grid_port.device == nil then
-        attached.key = nil
-        S.grids[port] = nil
-        attached_devices[port] = nil
-        GRID_ROTATION.sizes[port] = nil
-        forget_port(port)
+        detach(port)
         print("grid " .. port .. " disconnected")
       end
     end
@@ -866,17 +870,12 @@ return function(S)
     return true
   end
 
-  -- A virtual port's grid goes: its held keys and holds are forgotten, its
-  -- key handler cleared, its entry removed. Any other port does nothing
+  -- A virtual port's grid goes (detach): its held keys and holds are
+  -- forgotten, its key handler cleared, its entry removed. Any other port
+  -- does nothing
   function M.detach_virtual(port)
     if not virtual_port(port) then return end
-    local device = S.grids[port]
-    if device then device.key = nil end
-    S.grids[port] = nil
-    attached_devices[port] = nil
-    GRID_ROTATION.sizes[port] = nil
-    forget_port(port)
-    S.grid_held[port] = nil  -- as a port never attached has none
+    detach(port)
   end
 
   -- While grid_key handles a key, grid_redraw() calls from its actions (a
@@ -890,7 +889,7 @@ return function(S)
       press_key(port, x, y)
       if layout then layout.key(port, x, y, 1) end
     else
-      cancel_hold(port, x, y)
+      stop_hold(port, x, y)
       if layout and not M.consumed(port, x, y) then layout.key(port, x, y, 0) end
       release_step_key(port, x, y)
     end
@@ -991,9 +990,10 @@ return function(S)
     norns_grid().remove = function() end
   end)
 
-  -- Only a held key is consumed or waits for a hold; a port has an attached
-  -- device recorded exactly while it is attached (norns' ports and the
-  -- virtual ones), and no grid is on any other port
+  -- Only a held key is a step key, is consumed, waits for a hold or has a
+  -- role; the step editor's key and an open editor agree; a port has an
+  -- attached device recorded exactly while it is attached (norns' ports and
+  -- the virtual ones), and no grid is on any other port
   S.register_invariant("grid keys", function()
     for port in pairs(S.grids) do
       if not grid_port_number(port) then return "a grid is attached on port " .. tostring(port) end
@@ -1007,7 +1007,24 @@ return function(S)
           or " is not attached but has a device recorded")
       end
     end
-    for kind, tables in pairs({consumed = consumed_keys, ["hold pending"] = hold_clocks, ["held in a role"] = key_roles}) do
+    -- 3.9 (#930): the step editor's key is a held step it consumed, and an
+    -- open editor has its key on the editor's port (the grid is its one
+    -- opener while the script runs)
+    local key = step_editor.key
+    if key then
+      local what = "the step editor's key, grid " .. key.port .. " key " .. key.x .. "," .. key.y .. ", is "
+      local entry = key_value(step_keys, key.port, key.x, key.y)
+      if M.held(key.port, key.x, key.y) == nil then return what .. "not held" end
+      if not M.consumed(key.port, key.x, key.y) then return what .. "not consumed" end
+      if entry == nil or entry.level_key then return what .. "no held step" end
+    end
+    local editor = S.lib.pages_seq and S.lib.pages_seq.step_editor()
+    if editor and not (key and key.port == editor.port) then
+      return "the step editor is open for port " .. tostring(editor.port) .. " with no held, consumed step key of that port"
+    end
+    for _, tables_of in ipairs({{"a step key", step_keys}, {"consumed", consumed_keys}, {"hold pending", hold_clocks},
+        {"held in a role", key_roles}}) do
+      local kind, tables = tables_of[1], tables_of[2]
       for port, columns in pairs(tables) do
         for x, rows in pairs(columns) do
           for y in pairs(rows) do

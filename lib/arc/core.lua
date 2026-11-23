@@ -15,9 +15,22 @@ return function(S)
   -- A bipolar ring at exactly 0 lights LED 1 this dim, so it never looks dead
   local ARC_BIPOLAR_ZERO_LEVEL = 3
 
-  -- Arc device (the arc vport from arc.connect); SETUP shows S.arc_connected
+  -- Arc device (the arc vport from arc.connect, or a virtual arc). Whether
+  -- it is connected is M.connected(), read from the device (#932);
+  -- S.arc_connected, which SETUP and VOICE read, is its copy, written only
+  -- from M.connected() (and false at a removal, which norns completes
+  -- after arc.remove returns)
   S.arc_device = nil
   S.arc_connected = false
+
+  -- Whether Strata follows an arc: the followed vport, or virtual arc,
+  -- holds a device
+  function M.connected()
+    return S.arc_device ~= nil and S.arc_device.device ~= nil
+  end
+
+  -- Keep S.arc_connected in step with M.connected()
+  local function note_connection() S.arc_connected = M.connected() end
 
   -- Per key (any string, e.g. "lfo:4"): the ticks a whole-step ring has
   -- turned that are not yet worth a whole step (arc_whole_steps)
@@ -130,7 +143,7 @@ return function(S)
     S.arc_device = device
     S.arc_device.delta = arc_delta
     S.arc_device.key = arc_key
-    S.arc_connected = S.arc_device.device ~= nil
+    note_connection()
   end
 
   local function attach_arc(port) follow_device(arc.connect(port)) end
@@ -204,6 +217,8 @@ return function(S)
     elseif fall_back_to_virtual() then
       print("arc disconnected; following the virtual arc")
     else
+      -- norns empties the removed vport only after arc.remove returns, so
+      -- M.connected() is still true here: false is what it will read
       S.arc_connected = false
       print("arc disconnected")
     end
@@ -223,15 +238,15 @@ return function(S)
         attach_arc(port)
         print("arc connected on port " .. port)
       elseif following_virtual() then
-        S.arc_connected = true
+        note_connection()  -- read from its device (#932), never taken as true
       elseif fall_back_to_virtual() then
         print("arc disconnected; following the virtual arc")
       elseif S.arc_connected then
-        S.arc_connected = false
+        note_connection()
         print("arc disconnected")
       end
     else
-      S.arc_connected = true
+      note_connection()
     end
     request_redraw()  -- the rings of the arc now followed, and SETUP's arc state
   end
@@ -323,8 +338,9 @@ return function(S)
   end)
 
   -- SETUP's "arc: connected" is exactly the followed vport holding a device
+  -- (M.connected())
   S.register_invariant("arc connection", function()
-    local holds_device = S.arc_device ~= nil and S.arc_device.device ~= nil
+    local holds_device = M.connected()
     if S.arc_connected ~= holds_device then
       return "S.arc_connected is " .. tostring(S.arc_connected) .. " but the followed vport "
         .. (holds_device and "holds" or "holds no") .. " device"

@@ -14,7 +14,8 @@
 - **A voice's faders are its records' `fader` groups** (`fader_param_ids`, the groundwork before 3.8): sorted by `rank` stably, so 3.7's faders (the built-in records, rank 0) keep their order and pages and the newer ones follow them; a voice never has more than ten pages (the faders page's line 5 has ten page keys).
 - **Pages are per port and pane** (3.8): `S.grid_panes[port][pane] = {page, side, half}`, read through `page(port, pane)`, `side`, `half` and `view` and set only through `set_page` and `set_half`; a check for a page shown anywhere uses `any_page(n)` or `any_page(n, side)`, and one for the FX page `any_fx_faders()` (`any_page(GRID_PAGES.fx)`). There is no global grid page. `set_page` accepts a page with no record yet (ruling 55), so outside tests keep their redraw gates; only the strips refuse one.
 - **A page change ends only its own pane's keys** (ruling 54): `set_page` and `set_half` call `end_pane_keys(port, pane)`, which ends the step gestures, pending holds and roles of the keys the layout puts in that pane (`layout.pane_at`), never a strip key and never the other pane's, so fill, a tempo repeat, NV and a step held in the other pane go on.
-- Held keys are per port: `S.grid_held[port][x][y]` holds the press time while a key is down. `grid_key` clears a key on its release; `grid.remove` and `grid.add` forget the port's held, consumed and step keys and its panes; cleanup forgets every port's.
+- Held keys are per port: `S.grid_held[port][x][y]` holds the press time while a key is down. `grid_key` clears a key on its release; `grid.remove` and `grid.add` forget the port's held, consumed and step keys and its panes; cleanup forgets every port's. A forgotten port has no held keys' table (`S.grid_held[port]` nil, as a port never attached; a press makes it again).
+- **A port's grid goes through one `detach(port)`** (#932): `grid.remove`, `reconcile_ports`' emptied vport and `detach_virtual` all call it, which clears the attached grid's `key`, its `S.grids` slot, `attached_devices[port]` and its noted size, then forgets the port (`forget_port`). Each caller adds only its own print and redraw.
 - Every other per-grid state a page or the pane engine keeps lives in `port_state(port)` (a page's through `pane.state()`), never in a local or on `S`, so each grid has its own and it goes with the grid.
 - Cleanup leaves nothing of Strata's on the devices (#468): the grids' step clears every attached vport's `key`, puts its grid back to rotation 0 (norns' `grid.cleanup()` keeps a rotation, so the next script would find a turned 128 as an 8x16; the port's setting stays in `grids.data`) before darkening it, and sets norns' own module's `add` and `remove` to no-ops (the arc's and MIDI's steps do the same for theirs), since norns' SLEEP runs only `cleanup()` before it shuts down, so a key pressed meanwhile would start a voice after the voices went off.
 - A delayed key action goes through `on_hold`, never a clock of its own: a new press or the release of the key, a page change on its pane and `grid.remove` of its port stop its hold clock (`S.lib.clocks.stop`, which retires one whose wake may be posted, #870) and cleanup cancels it (`S.lib.clocks.cancel`), so a grid unplugged mid-hold, or turned to another page, never acts and no clock errors.
@@ -30,13 +31,60 @@
 - **norns' own grid module, whatever a mod put in the global `grid`** (#700, `docs/design/3.6-facts/checks.md` §7): the midigrid mod replaces the global with a facade whose `connect` ignores the port and which has no `__newindex`. So for ports 1 to `S.MAX_GRID_PORTS` the core reads `vports[port]` of norns' module (`norns_grid()`: `package.loaded["core/grid"]`, what norns' startup's `grid = require 'core/grid'` loaded, found without naming a mod's field; the global where it is not found, as in the test stubs) and never calls `grid.connect` with a port, and it installs its hot-plug handlers on that module (`grid_added`, `grid_removed`, at include) and makes them no-ops there at cleanup. Never assign `grid.add`, `grid.remove` or read a port's vport through the global. Virtual ports are unchanged; 3.6's remote and midigrid attach call the global `grid.connect()` on purpose.
 - The pane engine's rules are in `docs/notes/lua/grid/pane.md`, each page's in `docs/notes/lua/grid/pages/<page>.md`, each layout's spec in `docs/notes/lua/grid/layout_<size>.md`; the pattern sequencer's in `docs/notes/lua/sequencer.md`.
 
+## Machines
+
+### grid keys
+- **State:** per port and key, `S.grid_held[port][x][y]` (`held`), the pending hold (`hold_clocks`, `hold_pending`), the consumed mark (`consumed_keys`, `consumed`), the role (`key_roles`, `pressed_as`) and the step gesture's entry (`step_keys`), all locals of `lib/grid/core.lua` but the first; the key that opened the step editor (`step_editor.key`) against SEQ's open editor (`S.lib.pages_seq.step_editor()`); per port, `S.grids[port]` and `attached_devices[port]` (States: the attached ports, below). The table follows one step key, whose state is read from `held`, `hold_pending`, `consumed` and the open editor.
+- **Invariant:** `grid keys`: only a held key is a step key, consumed, waiting for a hold or held in a role (#930 added the step keys); the step editor's key is held, consumed and a held step (no level key); an open step editor has its key on the editor's port (the grid is its one opener while the script runs; a test that opens it from Lua breaks this); a port has a device recorded exactly while it is attached, and no grid is on any other port.
+- **Test:** `test/unit/grid_core_test.lua`: "grid keys: every cell is decided" and its rows (a 256 on port 1; the key is (5, 1), voice 1's step 5; the level key (8, 1); the page change sets pane 1 to scenes; the pattern replaced is voice 1's, through `S.lib.sequencer.replace_pattern`), and the invariant's own: "the grid keys invariant fails for a step key that is not held", "the grid keys invariant fails for a step editor key that is not a held, consumed step key" and "the grid keys invariant fails for an open step editor with no held, consumed step key on its port".
+
+Whether a held key is still a step key is no field a reader sees: `waiting` is a held step whose editor hold waits, `dropped` a held key whose gesture ended, and the rows that enter either release the key to show it (a held step's release toggles its step, a dropped key's nothing). Every cell is a row: no pair of these states and events is impossible.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `up` | `press` | `waiting` | the voice's held step, its 0.3 s editor hold armed; its release toggles the step |
+| `up` | `release` | `up` | a release the core never saw pressed does nothing |
+| `up` | `hold time` | `up` | nothing waits |
+| `up` | `page change` | `up` | nothing held |
+| `up` | `level key` | `up` | the other key is the voice's held step itself; step 5 keeps its level |
+| `up` | `pattern replaced` | `up` | nothing held |
+| `up` | `unplug` | `up` | nothing held |
+| `waiting` | `press` | `waiting` | a press with no release before it starts the key over |
+| `waiting` | `release` | `up` | the step toggles (to 15) |
+| `waiting` | `hold time` | `editing` | the step editor opens for it; the key is consumed |
+| `waiting` | `page change` | `dropped` | its pane's keys end: the hold stops, its release toggles nothing |
+| `waiting` | `level key` | `consumed` | the step takes the level key's level (8); both keys consumed, the hold stopped |
+| `waiting` | `pattern replaced` | `dropped` | the voice's step gestures end; its release toggles nothing |
+| `waiting` | `unplug` | `up` | the port is forgotten; the hold never fires |
+| `consumed` | `press` | `waiting` | starts over as a held step |
+| `consumed` | `release` | `up` | nothing toggles |
+| `consumed` | `hold time` | `consumed` | no hold waits |
+| `consumed` | `page change` | `consumed` | the gesture ends; the consumed mark stays |
+| `consumed` | `level key` | `consumed` | the level key pressed again sets the level again |
+| `consumed` | `pattern replaced` | `consumed` | the gesture ends; the consumed mark stays |
+| `consumed` | `unplug` | `up` | the port is forgotten |
+| `editing` | `press` | `waiting` | the editor closes; the key starts over |
+| `editing` | `release` | `up` | the editor closes; nothing toggles |
+| `editing` | `hold time` | `editing` | nothing more waits |
+| `editing` | `page change` | `consumed` | the editor closes; the key stays consumed |
+| `editing` | `level key` | `editing` | the step takes the level; the editor stays open |
+| `editing` | `pattern replaced` | `consumed` | a replacement from outside the editor closes it (ruling 71 keeps it only for the editor's own) |
+| `editing` | `unplug` | `up` | the editor closes with the port |
+| `dropped` | `press` | `waiting` | a held step again |
+| `dropped` | `release` | `up` | nothing toggles |
+| `dropped` | `hold time` | `dropped` | no hold waits |
+| `dropped` | `page change` | `dropped` | nothing more to end |
+| `dropped` | `level key` | `dropped` | the other key is the voice's held step itself; step 5 keeps its level |
+| `dropped` | `pattern replaced` | `dropped` | nothing more to end |
+| `dropped` | `unplug` | `up` | the port is forgotten |
+
 ## Owns
 
 - `lib/grid/core.lua` (`S.lib.grid_core`): the device lifecycle and what every layout and page shares.
   - State on `S`: `S.grids`, `S.MAX_GRID_PORTS`, the grid UI state (`S.grid_panes[port][pane]`, read through `page(port, pane)`, `side`, `half`, `view`; `S.param_page`, `S.grid_voice_select`), the held keys `S.grid_held[port][x][y]` (press time).
   - `GRID_LAYOUT = {fader_rows = 4, fader_width = 16}`, exported as `S.lib.grid_core.GRID_LAYOUT`, which `lib/grid/faders.lua` aliases.
-  - Global functions: `grid_init`, `select_grid_voice` and the norns entry points `grid_key` and `grid_redraw`. `grid_added`/`grid_removed` are installed as `add`/`remove` on norns' own grid module (`norns_grid`). `grid_layout`, `attach_grid`, `attached_devices` and `forget_port` are locals of the constructor.
-  - The shared key helpers on `S.lib.grid_core` (see "Pages, held keys and holds"): `page`, `side`, `half`, `view`, `set_page`, `set_half`, `any_page`, `end_pane_keys`, `held`, `on_hold`, `hold_pending`, `consume`, `consumed`, `port_state`, `existing_port_state`, `level_for_position`, `step_key`, `end_step_gestures`, `end_port_step_gestures`, `end_port_holds`, `press_as`, `pressed_as`, `layout_of`, `any_fx_faders`, `reconcile_ports`, `gesture_key`, `source_key`, `source_level`, `record_key`, `clear_key`, `record_level`, `CLEAR_LEVEL`; `GRID_HOLD` (`lib/constants.lua`). Locals: the keys' roles (`key_roles`), the step editor's key (`step_editor.key`), `drop_step_key`, `release_step_key`, `open_step_editor`, `close_step_editor_of`, `pane_entry`, `start_page`, `pane_count`, `set_pane`, and 3.4's `SHARED_KEYS` (the silenced voice's level, the recorders' clear hold and levels).
+  - Global functions: `grid_init`, `select_grid_voice` and the norns entry points `grid_key` and `grid_redraw`. `grid_added`/`grid_removed` are installed as `add`/`remove` on norns' own grid module (`norns_grid`). `grid_layout`, `attach_grid`, `attached_devices`, `forget_port` and `detach` are locals of the constructor.
+  - The shared key helpers on `S.lib.grid_core` (see "Pages, held keys and holds"): `page`, `side`, `half`, `view`, `set_page`, `set_half`, `any_page`, `end_pane_keys`, `held`, `on_hold`, `hold_pending`, `consume`, `consumed`, `port_state`, `existing_port_state`, `level_for_position`, `step_key`, `end_step_gestures`, `end_port_step_gestures`, `end_port_holds`, `press_as`, `pressed_as`, `layout_of`, `any_fx_faders`, `reconcile_ports`, `gesture_key`, `source_key`, `source_level`, `record_key`, `clear_key`, `record_level`, `CLEAR_LEVEL`; `GRID_HOLD` (`lib/constants.lua`). Locals: the keys' roles (`key_roles`), the step editor's key (`step_editor.key`), `stop_hold` (a key's pending hold stopped, `S.lib.clocks.stop`), `drop_step_key`, `release_step_key`, `open_step_editor`, `close_step_editor_of`, `pane_entry`, `start_page`, `pane_count`, `set_pane`, and 3.4's `SHARED_KEYS` (the silenced voice's level, the recorders' clear hold and levels).
   - The shared levels (see "LEDs"): `LEVELS` (`S.constants.GRID_LEVELS`), `voice_level`, `lock_level`, `play_level`, `scene_recall_level`, `scene_fade_level`, `gesture_level`.
   - The rotation setting (see "Rotation"): `rotation`, `set_rotation`, `MAX_ROTATION`; the locals `GRID_ROTATION`, `read_rotations`, `apply_rotation`, `follow_size`.
   - Cleanup step 170: every pending hold canceled (`S.lib.clocks.cancel`, before the clock helper's own step, 190) and every port's keys forgotten, every attached vport's key handler cleared and its grid put back to rotation 0 and left dark, norns' own module's `add` and `remove` set to no-ops.
@@ -50,11 +98,11 @@ Strata supports several grids at once and arranges its panes for each grid's siz
 - `grid_init()`: reads `grids.data` (the rotations), then connects up to 4 grid ports at init (start step `START_ORDER.grids`).
 - `grid_added(device)`: installed as `add` on norns' own grid module (`norns_grid()`, #700), which norns' hot-plug calls when a grid connects.
 - `grid_key(port, x, y, z)`: norns' key callback (on the vport). It ignores a port with no grid and a key outside the grid, runs the press or release through the layout (`handle_key`) with `grid_redraw()` held (`key_repaint.handling`), then repaints every grid once and requests a screen redraw.
-- `grid_removed(device)`: installed as `remove` on norns' own grid module, which norns' hot-plug calls when a grid disconnects. It clears the vport's `key` handler and the `S.grids` slot, and forgets the port (`forget_port`): its pending holds are stopped, its held, consumed and step keys, its `port_state` and its panes are dropped. `grid_added` forgets the port too, so a grid plugged in starts with no held keys, on its layout's start pages.
+- `grid_removed(device)`: installed as `remove` on norns' own grid module, which norns' hot-plug calls when a grid disconnects. It detaches the port (`detach`: the vport's `key` handler, the `S.grids` slot, the recorded device and the size cleared, then `forget_port`): its pending holds are stopped, its held, consumed and step keys (its held keys' table goes), its `port_state` and its panes are dropped. `grid_added` forgets the port too, so a grid plugged in starts with no held keys, on its layout's start pages.
 - `S.grids` stores the **vport** (norns' `vports[port]`, through `norns_vport`) of each connected grid, indexed by port (1-4). `grid_init`, `grid_added` and `reconcile_ports` go through `attach_grid(port)`, which also records the device the vport holds then (`attached_devices[port]`) and turns the grid to the port's rotation (`apply_rotation`, which notes the size it then reports).
-- `S.lib.grid_core.reconcile_ports()`: SYSTEM > DEVICES moves a grid between ports through norns' `update_devices()` alone, which rewrites the vports' `device`, `cols` and `rows` and the device's `port` but calls neither `grid.add` nor `grid.remove`. So, as the norns menu closes (registered with `S.register_menu_close`), for each port 1..`S.MAX_GRID_PORTS`: a vport holding a device that is not attached, or another device than `attached_devices[port]`, is forgotten and attached, as `grid.add` does; an attached port whose vport is empty loses its `key` handler and its `S.grids` slot and is forgotten, as `grid.remove` does. Then `grid_redraw()` and `request_redraw()` (SETUP counts the grids). A grid moved from port 1 to 2 thus starts on port 2 with no held keys, on its start pages, and port 1 is no longer drawn.
+- `S.lib.grid_core.reconcile_ports()`: SYSTEM > DEVICES moves a grid between ports through norns' `update_devices()` alone, which rewrites the vports' `device`, `cols` and `rows` and the device's `port` but calls neither `grid.add` nor `grid.remove`. So, as the norns menu closes (registered with `S.register_menu_close`), for each port 1..`S.MAX_GRID_PORTS`: a vport holding a device that is not attached, or another device than `attached_devices[port]`, is forgotten and attached, as `grid.add` does; an attached port whose vport is empty is detached (`detach`), as `grid.remove` does. Then `grid_redraw()` and `request_redraw()` (SETUP counts the grids). A grid moved from port 1 to 2 thus starts on port 2 with no held keys, on its start pages, and port 1 is no longer drawn.
 - Why never the raw device: devices have no `.device` field (so `grid_redraw` would skip them), and norns fires both `device.key` and `vports[port].key`, so handlers on both would run every press twice. The arc uses the same vport-only pattern (`attach_arc`).
-- `attach_virtual(port, device) -> boolean` (3.6): `port` one of `S.constants.GRID_PORTS`' values, `device` a table with whole-number `cols` and `rows` (at least 1), a truthy `device` field and the methods `led`, `all`, `refresh` and `rotation`; false for anything else, with nothing attached. It forgets the port's old state (and clears an old device's `key`), stores the device in `S.grids[port]` with `attached_devices[port] = device.device` and its size (so `follow_size` keeps it), sets `device.key` to call `grid_key(port, x, y, z)` and redraws the grids. Its layout is picked by its size, as for any grid; no rotation is applied at attach (cleanup still turns it to 0). `detach_virtual(port)`: its held keys and holds forgotten (`forget_port`, then `S.grid_held[port]` nil, as for a port never attached), `device.key` cleared, the entry removed; any other port does nothing.
+- `attach_virtual(port, device) -> boolean` (3.6): `port` one of `S.constants.GRID_PORTS`' values, `device` a table with whole-number `cols` and `rows` (at least 1), a truthy `device` field and the methods `led`, `all`, `refresh` and `rotation`; false for anything else, with nothing attached. It forgets the port's old state (and clears an old device's `key`), stores the device in `S.grids[port]` with `attached_devices[port] = device.device` and its size (so `follow_size` keeps it), sets `device.key` to call `grid_key(port, x, y, z)` and redraws the grids. Its layout is picked by its size, as for any grid; no rotation is applied at attach (cleanup still turns it to 0). `detach_virtual(port)`: `detach(port)`, as for any grid that goes (its held keys and holds forgotten, `S.grid_held[port]` nil, `device.key` cleared, the entry removed); any other port does nothing.
 
 ## Rotation
 
@@ -96,7 +144,7 @@ Several grids:
 
 ## States: the step-level gesture
 
-The gesture's state is `step_keys[port][x][y]` (local to `lib/grid/core.lua`): `{voice, step, level_key}` for a key pressed through `step_key` and still held, alongside `S.grid_held[port][x][y]` (the press time), the key's pending editor hold (`hold_clocks`), its consumed mark and `step_editor.key` (the key that opened the step editor, or nil). It registers no invariant of its own (the "grid keys" invariant checks that every consumed or pending key is held).
+The gesture's state is `step_keys[port][x][y]` (local to `lib/grid/core.lua`): `{voice, step, level_key}` for a key pressed through `step_key` and still held, alongside `S.grid_held[port][x][y]` (the press time), the key's pending editor hold (`hold_clocks`), its consumed mark and `step_editor.key` (the key that opened the step editor, or nil). It registers no invariant of its own: the `grid keys` invariant (Machines, above) checks that every step key, consumed or pending key is held, that `step_editor.key` is a held, consumed held step and that an open editor has its key on its port.
 
 | State of a key | Fields | Meaning |
 |----------------|--------|---------|
@@ -120,7 +168,7 @@ An entry exists only while its key is held (every release and press clears it). 
 
 ## States: the attached ports
 
-A port's attachment is `S.grids[port]` (the vport, or nil) with `attached_devices[port]` (the device it held when attached), against what the vport holds now (`norns_vport(port).device`). The `attached_devices[port]` entry exists exactly while the port is attached: `attach_grid` sets it, `grid_removed` and `reconcile_ports`' detach clear it, and the `"grid keys"` invariant checks it. Nothing checks the vports against the attachment: they change under the script, inside norns' menu, so the two disagree while the menu is open.
+A port's attachment is `S.grids[port]` (the vport, or nil) with `attached_devices[port]` (the device it held when attached), against what the vport holds now (`norns_vport(port).device`). The `attached_devices[port]` entry exists exactly while the port is attached: `attach_grid` sets it, `detach` (from `grid_removed`, `reconcile_ports` and `detach_virtual`) clears it, and the `grid keys` invariant checks it. Nothing checks the vports against the attachment: they change under the script, inside norns' menu, so the two disagree while the menu is open.
 
 | State of a port | Fields | Meaning |
 |-----------------|--------|---------|
@@ -131,8 +179,8 @@ A port's attachment is `S.grids[port]` (the vport, or nil) with `attached_device
 | Transition | Function |
 |------------|----------|
 | Attach (init, hot-plug, the menu closing) | `attach_grid`, from `grid_init`, `grid_added`, `reconcile_ports` |
-| Detach (unplug, the menu closing) | `grid_removed`, `reconcile_ports` |
-| Attach or detach a virtual grid (ports 5 and 6) | `attach_virtual`, `detach_virtual` |
+| Detach (unplug, the menu closing, a virtual grid leaving) | `detach`, from `grid_removed`, `reconcile_ports` and `detach_virtual` |
+| Attach a virtual grid (ports 5 and 6) | `attach_virtual` |
 
 ## LEDs
 

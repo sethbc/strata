@@ -2606,8 +2606,6 @@ local UNTABLED_INVARIANTS = {
   "midi notes",  -- lib/midi_in.lua
   "scan holds",  -- lib/positions.lua
   "scenes prompt",  -- lib/pages/scenes.lua
-  "grid keys",  -- lib/grid/core.lua
-  "arc connection",  -- lib/arc/core.lua
   "key presses",  -- lib/ui/keys.lua
   "buffer slots",  -- lib/buffers.lua
   "input level",  -- lib/input_level.lua

@@ -431,4 +431,100 @@ test("a virtual arc is followed only while no monome arc is connected", function
   assert_true(monome ~= nil)
 end)
 
+-- 3.9 (#932): whether an arc is connected is read from the followed device
+-- (S.lib.arc_core.connected()); S.arc_connected, which SETUP and VOICE
+-- read, is kept in step with it
+test("connected() reads the followed arc's device, and S.arc_connected follows it", function()
+  local context = load_strata(); finish_startup(context)
+  local S, core = local_value("S"), local_value("S").lib.arc_core
+  local function both(expected, what)
+    assert_equal(core.connected(), expected, what)
+    assert_equal(S.arc_connected, expected, what .. ": S.arc_connected agrees")
+  end
+  both(false, "no arc")
+  context.arc.plug(1); both(true, "an arc on port 1")
+  context.arc.unplug(1); both(false, "unplugged")
+  local device = virtual_arc()
+  core.follow_virtual(device); both(true, "a virtual arc followed")
+  -- a followed virtual arc whose device goes (the remote never does this
+  -- without unfollow_virtual): the menu's close reads the device, where it
+  -- once set S.arc_connected true without looking
+  device.device = nil
+  _menu.set_mode(true); _menu.set_mode(false)
+  both(false, "a followed virtual arc with no device, once the menu closes")
+  device.device = true
+  _menu.set_mode(true); _menu.set_mode(false)
+  both(true, "its device back, once the menu closes")
+end)
+
+-- 3.9: the "arc connection" machine's table (docs/notes/lua/arc-core.md):
+-- which arc Strata follows, a monome arc on port 1 or a virtual one, by
+-- what arrives and leaves. Every row's invariants hold S.arc_connected to
+-- connected(). A virtual arc that waits behind a monome one is a local of
+-- the core no reader sees: the rows that leave it waiting unplug the
+-- monome arc to show it
+local function arc_virtual(context)
+  local device = virtual_arc()
+  device.virtual_for_test = true
+  context.virtuals = context.virtuals or {}
+  table.insert(context.virtuals, device)
+  return device
+end
+local ARC_EVENTS = {
+  ["arc plugged"] = function(context) context.arc.plug(2) end,
+  ["arc unplugged"] = function(context) context.arc.unplug(1) end,
+  -- the arc on port 1, if there is one, moved to port 3 in SYSTEM > DEVICES
+  ["menu move"] = function(context)
+    _menu.set_mode(true)
+    if arc.connect(1).device then context.arc.reassign(1, 3) end
+    _menu.set_mode(false)
+  end,
+  ["virtual arrives"] = function(context) local_value("S").lib.arc_core.follow_virtual(arc_virtual(context)) end,
+  ["virtual leaves"] = function() local_value("S").lib.arc_core.unfollow_virtual() end,
+}
+local function arc_follows(port, what)
+  return function() assert_equal(local_value("S").arc_device, arc.connect(port), what or ("the arc on port " .. port .. " is followed")) end
+end
+h.transition_table({
+  name = "arc connection",
+  notes = {"docs/notes/lua/arc-core.md", "arc connection"},
+  states = {
+    ["none"] = function() end,
+    ["connected"] = function(context) context.arc.plug(1) end,
+    ["virtual"] = ARC_EVENTS["virtual arrives"],
+  },
+  events = ARC_EVENTS,
+  state_of = function()
+    local S = local_value("S")
+    if not S.lib.arc_core.connected() then return "none" end
+    return S.arc_device.virtual_for_test and "virtual" or "connected"
+  end,
+  rows = {
+    {"none", "arc plugged", "connected", check = arc_follows(2)},
+    {"none", "arc unplugged", "none"},
+    {"none", "menu move", "none"},
+    {"none", "virtual arrives", "virtual"},
+    {"none", "virtual leaves", "none"},
+    {"connected", "arc plugged", "connected", check = arc_follows(1, "the arc on port 1 is still followed")},
+    {"connected", "arc unplugged", "none"},
+    {"connected", "menu move", "connected", check = arc_follows(3)},
+    {"connected", "virtual arrives", "connected", check = function(context)
+      context.arc.unplug(1)
+      assert_equal(local_value("S").arc_device, context.virtuals[1], "the virtual arc waited, and is followed once the monome arc leaves")
+    end},
+    {"connected", "virtual leaves", "connected", check = arc_follows(1)},
+    {"virtual", "arc plugged", "connected", check = function(context)
+      arc_follows(2)()
+      assert_equal(context.virtuals[1].delta, nil, "the virtual arc's handler is cleared")
+    end},
+    {"virtual", "arc unplugged", "virtual"},
+    {"virtual", "menu move", "virtual"},
+    {"virtual", "virtual arrives", "virtual", check = function(context)
+      assert_equal(local_value("S").arc_device, context.virtuals[2], "the new virtual arc replaces the old")
+    end},
+    {"virtual", "virtual leaves", "none", check = arc_follows(1, "port 1's vport, holding no arc")},
+  },
+  impossible = {},
+})
+
 end

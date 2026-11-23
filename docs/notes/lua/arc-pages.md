@@ -83,6 +83,15 @@ BUFFER (`ARC_BUFFER_RINGS` and `ARC_BUFFER_ALT_RINGS`, `{voice_key | param_id}` 
 - rings adjust the voice's params whatever its source, drawn at 15 for a buffer-sourced voice, 4 otherwise; ALT ring 4 (a global param) always 12. Record duration and level are on the screen only. The friction ring (ALT ring 3, a global param) follows the voice's level (15 or 4) by design (3.3 design §11); only ALT ring 4 is always 12.
 - The slice editor's rings (3.7, `ARC_SLICE_EDITOR`): `lib/arc/buffer.lua` sets `arc_delta` and `arc_redraw` on the editor's owner (`S.lib.ui_slice_editor.owner`), as `lib/arc/seq.lua` does for the step editor, so they replace BUFFER's rings, ALT included, while it is open. Ring 1 picks a marker, `marker_ticks` (20) ticks a step under `"slice_editor:1"` (`pick_marker`); ring 2 nudges it one nudge a tick (`nudge(delta, S.alt_held)`: 1 ms, with ALT 0.1 ms); ring 3 turns the amount (`turn_row("amount", steps)`, the count 2-64 or the sensitivity 0-100 in a turn, `"slice_editor:3"`); ring 4 the tempo (`turn_row("tempo", steps)`, 20-300 in a turn in 0.1 steps, `"slice_editor:4"`). They are not params, so they step through `arc_whole_steps` and the editor's functions, never `arc_sweep_param`. Drawn at 15 from `ring_fractions()`: ring 1 `(marker - 1) / (markers - 1)` through `arc_ring_fill_position`, ring 2 the marker's frame over the slot's, ring 3 the amount in its range, ring 4 the tempo in 20-300 (dark with no tempo), each through `arc_ring_fill`. The editor's open forgets every carry.
 
+BUFFER's ALT scan hold (`held_voice` in `lib/arc/buffer.lua`, with positions' holder `"arc"`; its invariant is positions' `scan holds`, `docs/notes/lua/positions.md`). The rings never show it; the grid's HD key and the BUFFER page do, and it ends at ALT's release whatever page shows:
+
+| Event | Effect |
+|---|---|
+| The first ALT ring 1 turn | the hold is joined for the selected voice (`held_voice`) |
+| The selected voice changes while ALT is held | the next ALT ring 1 turn lets go of the old voice's hold and joins the selected one's |
+| A voice sync drops the holders (the voice restarted, #238) | the next ALT ring 1 turn joins again (`holds_scan(voice, "arc")` is false), even while a grid holds the voice |
+| ALT released (also when the held keys are forgotten) | the `S.register_alt_release` hook lets go of `held_voice`'s hold, never the then-selected voice's |
+
 SCENES (`arc_scenes_delta`/`arc_scenes_redraw`, `ARC_SCENES`):
 - Ring 1: the scene cursor over E2's 23 stops (slots 1..`NUM_SCENES`, 1-16 in both banks, then the seven `SCENES_FIELDS`), `S.lib.pages_scenes.move_cursor(S.cursors.scene + steps)`, `ARC_SCENES.ticks_per_stop` (10) ticks a stop under `"scenes:1"`, so a turn from slot 8 to 9 shows bank 2. `move_cursor` disarms the overwrite confirmation and clears its prompt, as E2 does (`docs/notes/lua/pages/scenes.md`).
 - Ring 2: `scene_transition_time` through `arc_sweep_param`.
