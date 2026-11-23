@@ -364,25 +364,31 @@ test("a sync rescheduled by a beat that moved back and resumed a tick late is no
 end)
 
 -- #953's comment: a new clock source moves the beat past a waiting sync's
--- landing (4), so matron reschedules it to the next landing after the new
--- beat (8) and counts the next sync from there (12). The helper does too,
--- so a stop at beat 9, three beats from that landing, cancels at once
+-- landing (8), so matron reschedules it to the next landing after the new
+-- beat (12) and counts the next sync from there (16). The helper does too,
+-- so a stop at beat 13, three beats from that landing, cancels at once.
+-- The clock lands once (at 4) before the beat moves, as in the test of a
+-- beat moved back: matron keeps a sync's offset only for a coroutine that
+-- has waited before
 test("a sync rescheduled forward past its landing is counted from its new grid", function()
   local context, S, clocks = loaded()
   local counts = {runs = 0, ended = 0}
   run_to_beat(context, 0.5)
   local handle = repeating(clocks, counts, "sync", 4)
-  context.clock.set_beat(6)  -- rescheduled to 8
+  context.clock.advance_until(handle.id)  -- its first landing, 4
+  assert_equal(counts.runs, 1, "the first landing ran")
+  assert_near(handle.landing, 8, 1e-9, "waiting for its landing at 8")
+  context.clock.set_beat(10)  -- rescheduled to 12
   context.clock.advance_until(handle.id)
-  assert_equal(counts.runs, 1, "the rescheduled landing ran")
-  assert_near(handle.landing, 12, 1e-9, "the next landing is matron's, counted from 8")
-  run_to_beat(context, 9)
+  assert_equal(counts.runs, 2, "the rescheduled landing ran")
+  assert_near(handle.landing, 16, 1e-9, "the next landing is matron's, counted from 12")
+  run_to_beat(context, 13)
   clocks.stop(handle)
   assert_equal(clock.threads[handle.id], nil, "three beats from its landing: canceled at once")
   assert_equal(clocks.retired[handle.id], nil, "and not kept")
-  run_to_beat(context, 12.5)
+  run_to_beat(context, 16.5)
   assert_no_clock_error(context, "a sync rescheduled forward and stopped far from its next landing")
-  assert_equal(counts.runs, 1, "the body did not run again")
+  assert_equal(counts.runs, 2, "the body did not run again")
 end)
 
 -- #954, 1: the harness checks the invariants after a test, by which time a
@@ -485,16 +491,18 @@ end)
 -- as the body raises, and the error is reported as before
 test("a clock whose body raised frees its slot", function()
   local context, S, clocks = loaded()
+  local raised_at  -- where the body raises: its error names that line and nothing else
   local handle = clocks.run(function(own)
     if not own.sleep(0.1) then return end
+    local here = debug.getinfo(1, "Sl")
+    raised_at = here.short_src .. ":" .. (here.currentline + 2)
     error("the body's fault")
   end)
   assert_true(clock.events[handle.id] ~= nil, "its first wait holds a slot")
   context.clock.run_for(0.2)
   local errors = context.clock.take_errors()
   assert_equal(#errors, 1, "the body's error is a clock error")
-  assert_true(errors[1]:find("^[^\n]*clocks_test%.lua:%d+: the body's fault$") ~= nil,
-    "reported as the body raised it: " .. tostring(errors[1]))
+  assert_equal(errors[1], raised_at .. ": the body's fault", "reported as the body raised it, with no other prefix")
   assert_equal(clock.threads[handle.id], nil, "its coroutine is gone from clock.threads")
   assert_equal(clock.events[handle.id], nil, "and its scheduler slot is free")
   assert_true(not clocks.alive(handle), "it is not alive")
