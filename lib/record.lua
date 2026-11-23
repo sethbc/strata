@@ -166,9 +166,18 @@ return function(S)
     S.lib.samples.unbind(slot)
   end
 
-  -- Start the take timer: `seconds` later the take finishes
+  local start_playable_fallback
+
+  -- Start the take timer: `seconds` later the take finishes, or, for a
+  -- playable recording with a length (loop off), its fallback starts
+  -- (#904: the engine ends it there, and its "ended" report may be lost)
   local function start_take_timer(slot, seconds)
+    local take = takes[slot]
     M.run_slot_clock(slot, "take", seconds, function()
+      if take and take.kind == "playable" then
+        if takes[slot] == take then start_playable_fallback(slot, take) end
+        return
+      end
       finish_buffer_take(slot)
       S.lib.buffers.display_changed()
     end)
@@ -195,8 +204,7 @@ return function(S)
     S.lib.samples.bind(slot)
   end
 
-  -- A recording's cancel, from its "canceled" report or (a playable one
-  -- stopped while armed) its fallback
+  -- A recording's cancel, from its "canceled" report
   local function cancel_recording(slot, take)
     local buffer = S.buffers[slot]
     M.cancel_timer(slot)
@@ -219,16 +227,21 @@ return function(S)
     end
   end
 
-  -- K3 on a playable recording (#904): BUFFER_SETTLE.fallback_seconds
-  -- later, with no "ended" or "canceled" report, it ends as the report
-  -- would have (from the last known length; one stopped while armed never
-  -- recorded and is canceled), so K3 is never answered by stopRecord alone
-  -- for good. A K3 while the fallback waits leaves it as it is
-  local function start_playable_fallback(slot, take)
+  -- A playable recording's fallback (#904), started at K3 or when its
+  -- length has run out (a loop has none: K3 only):
+  -- BUFFER_SETTLE.fallback_seconds later, with no "ended" or "canceled"
+  -- report, it ends as a recording that ran, from the last known length,
+  -- so K3 is never answered by stopRecord alone for good. One stopped
+  -- while still armed too: Lua cannot know whether it started (a synced
+  -- one records at its beat while the poll is missing), so the slot is
+  -- taken as recorded into, never left named for a file whose audio may
+  -- have changed (that would lose the dub at the next load; the other way
+  -- costs a save). A K3 while the fallback waits leaves it as it is
+  start_playable_fallback = function(slot, take)
     if M.clock_role(slot) == "fallback" then return end
     M.run_slot_clock(slot, "fallback", BUFFER_SETTLE.fallback_seconds, function()
       if takes[slot] ~= take or not S.buffers[slot].recording then return end
-      if take.phase == "armed" then cancel_recording(slot, take) else end_playable(slot) end
+      end_playable(slot)
       S.lib.buffers.display_changed()
     end)
   end
@@ -316,6 +329,9 @@ return function(S)
         if delay <= 0 then buffer.seconds = 0 end
         -- an armed take's timer starts at its recording report
         if not armed then start_take_timer(slot, seconds) end
+      elseif not loop and not armed then
+        -- a dub's length: its fallback starts where the engine ends it (#904)
+        start_take_timer(slot, seconds)
       end
     end
     S.lib.buffers.display_changed()
@@ -396,8 +412,12 @@ return function(S)
       take.phase = "recording"
       take.started_at = util.time()
       take_started(slot, take)
-      -- (no take timer yet: whatever else the slot's clock is, #870)
-      if take.kind == "take" and M.clock_role(slot) ~= "take" and not buffer.finishing then
+      -- the timer of a take, or of a dub with a length (#904), unless one
+      -- runs or the recording has ended (finishing, or a dub's fallback):
+      -- whatever else the slot's clock is (#870)
+      local role = M.clock_role(slot)
+      if (take.kind == "take" or not take.loop) and role ~= "take" and role ~= "fallback"
+        and not buffer.finishing then
         start_take_timer(slot, take.seconds)
       end
     elseif state_code == STATE_ENDED then
