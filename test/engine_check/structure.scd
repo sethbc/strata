@@ -103,13 +103,16 @@ var engineLeft = { arg target, line;
 // buffer. Before the fix the first raise ended free: every stop below it
 // and every free were skipped.
 var checkFreeContained = {
-    var target = h.startEngine, lines = List.new, raised, areas, left, delayLine;
+    var target = h.startEngine, lines = List.new, raised, areas, left, delayLine, pastStop;
     target.postInvariantWarning = { arg line; lines.add(line) };
     delayLine = target.delayLine;
     areas = target.instVarAt(\areas);
+    // (pastStop: as the engine runs, then as an area's stop meets it, #942)
+    pastStop = [target.tryPerform(\pastStop)];
     target.instVarPut(\areas, areas.select({ arg area; area[\order] < 75 })
         ++ [(name: \checkRaises, order: 75,
-            stop: { Error("check: this area's stop raises").throw }, free: { Error("check: this area's free raises").throw })]
+            stop: { pastStop = pastStop.add(target.tryPerform(\pastStop)); Error("check: this area's stop raises").throw },
+            free: { Error("check: this area's free raises").throw })]
         ++ areas.select({ arg area; area[\order] > 75 }));
     try { h.freeEngine(target) } { arg error; raised = error };
     h.freeEngine(target);  // (the commands back to h.engine, should free have raised)
@@ -122,6 +125,8 @@ var checkFreeContained = {
     check.((lines.size == 2) and: { lines.every({ arg line; line.find("checkRaises").notNil }) }
         and: { lines.any({ arg line; line.find("'s stop raised").notNil }) } and: { lines.any({ arg line; line.find("'s free raised").notNil }) },
         "structure: free reports each area phase that raised, by name (% lines)".format(lines.size));
+    check.((pastStop[0] == false) and: { pastStop[1] == true },
+        "structure: pastStop is false while the engine runs and true once free has begun the stop phase (#942; running, then in an area's stop: %)".format(pastStop));
 };
 
 // No frame the engine's SynthDef functions keep points at a freed frame
@@ -191,6 +196,45 @@ var failingAlloc = {
     Engine_Strata.modelPath = settings[1];
     server.sync;
     (engine: built, raised: raised, lines: lines, group: group, delayLine: delayLine)
+};
+
+// free after an alloc that raised part way through the rings area's
+// allocState (70), with free's two passes over every area (#942): the
+// areas below the rings made their state, the rings a part of theirs (the
+// voice rings' left buffers), the areas above none, and no area started.
+// The voices' stop and the mix area's free meet that (no groups, no mix
+// state) and raise nothing (an area phase that raises is one invariant
+// line, naming its area). No area can be made to raise inside alloc here,
+// so alloc's first steps are run as alloc runs them (the areas, their
+// state, each allocState in order), with a part of the rings' own.
+var checkFreeAfterPartialAlloc = {
+    var group = Group.tail(server), built = Engine_Strata.newCopyArgs, lines = List.new, raised, areas, named;
+    var settings = [Engine_Strata.settingsDir, Engine_Strata.modelPath];
+    built.instVarPut(\context, (server: server, xg: group, out_b: { Error("check: no output bus").throw }));
+    built.instVarPut(\commands, List.new);
+    built.instVarPut(\commandNames, Dictionary.new);
+    built.instVarPut(\pollNames, Set.new);
+    built.postInvariantWarning = { arg line; lines.add(line) };
+    Engine_Strata.settingsDir = h.tempDir +/+ "settings-partial/";
+    Engine_Strata.modelPath = h.tempDir +/+ "no-board-model";
+    try {
+        areas = built.strataAreas;
+        built.instVarPut(\areas, areas);
+        built.instVarPut(\areaState, IdentityDictionary.new);
+        areas.do({ arg area; built.areaState[area[\name]] = IdentityDictionary.new });
+        built.instVarPut(\grainParamHandlers, IdentityDictionary.new);
+        areas.select({ arg area; area[\order] < 70 }).do({ arg area; area[\allocState].value });
+        built.areaState[\rings][\voiceL] = Array.fill(built.numVoices, { Buffer.alloc(server, 64, 1) });
+        built.free;
+    } { arg error; raised = error };
+    Engine_Strata.settingsDir = settings[0];
+    Engine_Strata.modelPath = settings[1];
+    server.sync;
+    named = lines.select({ arg line; ["voices", "mix"].any({ arg name; line.find("the " ++ name ++ " area's").notNil }) });
+    check.(raised.isNil and: { named.isEmpty },
+        "structure: free after an allocState that failed in the rings area raises nothing in voices and mix (#942; raised %, % of % invariant lines name the voices or the mix)".format(
+            raised !? _.errorString, named.size, lines.size));
+    group.free;
 };
 
 // The polls the engine's areas register: every `this.addPoll(\name` in its
@@ -549,6 +593,7 @@ check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other, otherLine) == 
 checkVoiceHit.value;
 checkFreeContained.value;
 checkAllocRolledBack.value;
+checkFreeAfterPartialAlloc.value;
 checkRollbackPolls.value;
 checkDefCallers.value;
 }

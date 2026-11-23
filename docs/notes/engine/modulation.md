@@ -33,7 +33,7 @@
 | `\scatter` | scatter's place: nil, or an Event of its node, `\rate`, `\gains` and `\running` |
 | `\nodeChannels` | each LFO node → the channel it writes, until it ends |
 | `\offsetsIndex` | the control index of the offset node's `offsets` (`setFastOffset` sets one value by index) |
-| `\stopped` | true until `start`, and from `stop`: commands do nothing, and no node's end restarts or zeroes anything |
+| `\stopped` | true until `start` (the area not started yet). While it is, and once the engine is past stop (`pastStop`, from `free`'s stop phase: 3.9, #942, `StrataUtil.sc`; the area's `stop` no longer sets this flag), commands do nothing, and no node's end restarts or zeroes anything |
 | `\received` | per command, the arguments it last took (the continuous ones clipped), for the engine check |
 | `\postIgnored` | nil: an ignored command posts its line; a function takes the line instead (the engine check counts them) |
 

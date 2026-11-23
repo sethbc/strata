@@ -8,18 +8,17 @@
     // The onsets area (order 180). Per slot, the analyzeBuffer commands
     // received (analyses, counted from 1 as Lua counts them); the chunks the
     // passes have read since alloc (chunks, for the check); a wait after
-    // each chunk the check may set (chunkWait, nil on norns); stopped once
-    // the engine frees, so a pass still running reports nothing
+    // each chunk the check may set (chunkWait, nil on norns). Once the
+    // engine is past stop (pastStop, #942) a pass still running reports
+    // nothing
     strataAreaOnsets {
         ^(
             order: 180,
             allocState: {
                 areaState[\onsets][\analyses] = Array.fill(numBuffers, 0);
                 areaState[\onsets][\chunks] = 0;
-                areaState[\onsets][\stopped] = false;
             },
-            addCommands: { this.areaCall(\addOnsetsCommands) },
-            stop: { areaState[\onsets][\stopped] = true }
+            addCommands: { this.areaCall(\addOnsetsCommands) }
         )
     }
 
@@ -76,7 +75,7 @@
     }
 
     reportOnsets { arg index, count, failed;
-        if (areaState[\onsets][\stopped].not) {
+        if (this.pastStop.not) {
             this.bufferOnsetsPoll.update(this.bufferOnsetsValue(index, count, failed));
         };
     }
@@ -111,7 +110,7 @@
     // reports.
     runOnsetPass { arg index, count, change, frames, tempPaths;
         var state = areaState[\onsets], rate = bufferSampleRates[index], strengths, picks, handedOff = false;
-        var current = { (slotChanges[index] == change) and: { state[\analyses][index] == count } and: { state[\stopped].not } };
+        var current = { (slotChanges[index] == change) and: { state[\analyses][index] == count } and: { this.pastStop.not } };
         var deleteTemporary = { tempPaths.do({ arg path; try { if (File.exists(path)) { File.delete(path) } } }) };
         try {
             context.server.sync;

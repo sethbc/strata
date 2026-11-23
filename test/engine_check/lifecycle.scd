@@ -680,6 +680,49 @@ check.((0..(engine.numVoices - 1)).every({ arg voice;
 h.stopAllVoices;
 check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders empties as ring grain synths free");
 
+// A live synth that frees itself is started again (above), but not in a
+// loop (#940; #458 was one at 20 Hz): past restartLimit restarts of a
+// voice's synths in a second the next is refused, with one invariant line,
+// and the voice is left without that synth until its next voiceOn, which
+// starts them as gateVoice starts any synth a voice is missing. The voice
+// (1) runs on its synth source. Its voice, grain and mod synths are freed
+// on the server together, again and again, each round once the engine
+// started them again (the /n_end comes before the sync's reply), until none
+// is left: a real loop turns over at the server's round trip, and three
+// synths a round put more than restartLimit (32, the engine's) self-frees
+// inside the second at the check's rate of a round trip or two a round.
+// 32 are started again and each key's next free is refused: 35 frees, one
+// line.
+{
+    var voice = 1, lines = List.new, limit, live, freed = 0, rounds = 0, left, healed, start, seconds, onServer;
+    var keys = [engine.voiceKey(voice), engine.grainKey(voice), engine.modKey(voice)];
+    limit = if (engine.respondsTo(\restartLimit)) { engine.restartLimit } { 32 };
+    command.(\setGrainSource, voice, 0);
+    command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0); server.sync;
+    engine.postInvariantWarning = { arg line; lines.add(line) };
+    start = Main.elapsedTime;
+    live = { keys.collect({ arg key; engine.synths[key] }).reject(_.isNil) };
+    while { live.value.notEmpty and: { rounds < 20 } } {
+        // each ends without sclang having freed it
+        server.sendBundle(nil, *live.value.collect({ arg synth; freed = freed + 1; [\n_free, synth.nodeID] }));
+        rounds = rounds + 1;
+        server.sync;
+    };
+    seconds = Main.elapsedTime - start;
+    server.sync; 0.05.wait;
+    left = live.value;
+    engine.postInvariantWarning = nil;
+    command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0); server.sync;
+    healed = engine.synths[keys[0]];
+    onServer = healed.notNil and: { synthNodes.(engine.voiceGroup).any({ arg node; node[\id] == healed.nodeID }) }
+        and: { keys.every({ arg key; engine.synths[key].notNil }) };
+    check.((limit == 32) and: { freed == (limit + keys.size) } and: { seconds < 1 } and: { left.isEmpty } and: { lines.size == 1 }
+        and: { lines[0].contains("restart") } and: { onServer },
+        "lifecycle: a voice whose live synth frees itself more than restartLimit times in a second stops restarting, with one invariant line (#940; limit %, freed % in % rounds, % s, left with % synths, % lines, started at the next voiceOn %)".format(
+            limit, freed, rounds, seconds.round(0.01), left.size, lines.size, onServer));
+    h.stopAllVoices;
+}.value;
+
 // Every grain start restarts the scan (design 3.3 §5.1). A slot whose left
 // channel is a staircase of its position and whose right channel is 1, so
 // the left / right ratio of a voice's grains is where they read (with no

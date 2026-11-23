@@ -50,6 +50,11 @@
         // Every voice, grain and mod synth whose start the server has not
         // confirmed yet (/n_go) -> when it was started (watchVoiceSynth, #497)
         areaState[\voices][\unconfirmed] = IdentityDictionary.new;
+        // Per voice, when the engine last started one of its synths again
+        // after it freed itself (voiceSynthFreed, #940): at most
+        // restartLimit + 1 times, pruned past restartWindow, emptied by
+        // every voiceOn (gateVoice)
+        areaState[\voices][\restarts] = Array.fill(numVoices, { List.new(this.restartLimit + 1) });
         // The names setVoiceParam and setGrainParam refuse (#458)
         areaState[\voices][\refusedVoiceParams] = (this.engineOwnedControls ++ this.modSlotControls).as(IdentitySet);
         areaState[\voices][\refusedGrainParams] = (this.engineOwnedControls ++ this.modSlotControls
@@ -301,10 +306,14 @@
     }
 
     // The voices' synths (the effects area has stopped its own), then their
-    // groups
+    // groups. Their onFree starts none again: the engine is past stop
+    // (pastStop, voiceSynthFreed). After an alloc that raised before the
+    // area's state or start (#942), synths and the groups may be nil: Nil
+    // answers do, clear and free, so this raises nothing (the structure
+    // check's "free after an allocState that failed in the rings area")
     stopVoices {
         synths.do({ arg synth; this.sendToSynth(synth.freeMsg); synth.free(false) });
-        synths.clear;  // their onFree must not start them again
+        synths.clear;
         // also frees voices still in their release phase
         voiceGroup.free;
         processGroup.free;

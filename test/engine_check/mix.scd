@@ -437,6 +437,31 @@ var checkBadStage = {
     (probes ++ pathProbes).do(_.free); group.free; server.sync; badBus.free; peakBus.free; pathBadBus.free;
 };
 
+// A stage's replacement whose /s_new fails (no room in the real-time pool)
+// never sends /n_go (#886): without more, the voice's replacing flag stayed
+// set and synths named a node that did not exist, so the voice was silent
+// until the engine reloaded. The failure is made here as the start
+// confirmation's check makes one (lifecycle.scd), by holding the
+// replacement's /s_new back from the bundle. Past startConfirmWait the
+// stage is started again: one stage in the voice's mix group, at its tail,
+// the node synths names, and the flag clear.
+var checkReplacementNeverStarts = {
+    var state = engine.areaState[\mix], key = engine.voiceMixKey(voice), mixGroup = engine.voiceMixGroup(voice);
+    var old = stageOf.(voice), bundle, unstarted, stages, nodes, current;
+    bundle = server.makeBundle(false, { engine.areaCall(\replaceBadVoiceMix, old.nodeID, voice) });
+    unstarted = stageOf.(voice);
+    server.sendBundle(nil, *bundle.reject({ arg msg; (msg[0] == 9) and: { msg[2] == unstarted.nodeID } }));
+    server.sync;
+    (engine.startConfirmWait + 0.2).wait; server.sync;
+    nodes = h.synthTree(mixGroup);
+    stages = nodes.select({ arg node; node.def == \strataVoiceMix });
+    current = stageOf.(voice);
+    check.((unstarted !== old) and: { stages.size == 1 } and: { current.notNil } and: { current !== unstarted }
+        and: { stages[0].id == current.nodeID } and: { nodes.last.id == current.nodeID } and: { state[\replacing][voice].not },
+        "mix: a mix stage whose replacement never starts is started again after the confirm timeout (#886; stages in the group %, the one synths names %, replacing %)".format(
+            stages.size, (stages.size == 1) and: { current.notNil } and: { stages[0].id == current.nodeID }, state[\replacing][voice]));
+};
+
 // The figures and the bound
 var checkFades = {
     [[5000, 0.5, "5 kHz res 0.5", true], [200, 0.9, "200 Hz res 0.9", false]].do({ arg filterSet;
@@ -678,6 +703,7 @@ if (hasStage.not) {
     checkMirror.value;
     checkTap.value;
     checkBadStage.value;
+    checkReplacementNeverStarts.value;
 
     tone.free;
     command.(\setDelay, 0.375, 0.4, 0.0, 0);

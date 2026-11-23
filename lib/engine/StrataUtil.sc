@@ -234,11 +234,24 @@
     // node is still freed before any bus or buffer and nothing an area made
     // is left behind by another's error. free runs it over every area;
     // alloc's rollback over the areas whose start or allocState began.
+    // The stop phase first marks the engine past stop (pastStop), before
+    // any area's stop runs.
     runAreaPhases { arg list, phase;
+        if ((phase == \stop) and: { areaState.notNil }) { areaState[\pastStop] = true };
         list.reverseDo({ arg area;
             try { area[phase].value } { arg error;
                 this.warnInvariant("the % area's % raised: %".format(area[\name], phase, error.errorString));
             };
         });
     }
+
+    // Whether the engine is past stop (#942): true once runAreaPhases has
+    // begun a stop phase (free's, or a rolled-back alloc's), so from before
+    // the first area's stop runs; false from alloc (which makes areaState
+    // anew) until then. The one record of it, areaState[\pastStop]: an area
+    // whose own flag meant the same reads this instead (freeze, onsets;
+    // modulation and envelopes keep theirs only for "not started yet"), and
+    // the voices read it where a synth's end would start it again. No
+    // closure: hits read it hundreds of times a second
+    pastStop { ^areaState.notNil and: { areaState[\pastStop] == true } }
 }

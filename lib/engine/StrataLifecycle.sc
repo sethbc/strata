@@ -146,6 +146,8 @@
         var stillReleasing = { arg key; var synth = releasing[key]; synth.notNil and: { synth.isPlaying } };
         var superseded = List.new, scanRestart = [];
 
+        // a voiceOn starts the count of restarts again (restartAllowed, #940)
+        areaState[\voices][\restarts][voice].clear;
         this.forgetFailedStarts(voice);
 
         if ((grainSource[voice] != 0) and: { stillReleasing.(voiceKey) }) {
@@ -205,9 +207,10 @@
     // until it frees. A released synth is then forgotten. A synth the voice
     // is using frees only if its release ended just as voiceOn re-gated it
     // (the gate arrived too late); it is started again so the voice is
-    // never left without it. free empties synths first, so nothing restarts
-    // when the engine is freed. Until the server's /n_go confirms that it
-    // runs, the synth is kept in unconfirmedStarts with its start time: one
+    // never left without it, at most restartLimit times a second
+    // (restartAllowed, #940). Nothing restarts once the engine is past stop
+    // (pastStop: free's stop phase has begun, #942). Until the server's
+    // /n_go confirms that it runs, the synth is kept in unconfirmedStarts with its start time: one
     // whose /s_new failed never sends /n_go or /n_end (startFailed, #497).
     // (the onFree goes through areaCall: a synth it starts again is watched
     // by a frame its own onFree keeps, whose caller must not be this
@@ -219,7 +222,8 @@
     }
 
     // A voice's synth has freed (watchVoiceSynth): forgotten, and started
-    // again if the voice still uses it
+    // again if the voice still uses it, the engine is not past stop
+    // (pastStop) and the voice's restarts allow it (restartAllowed)
     voiceSynthFreed { arg voice, key, synth;
         if (releasingSynths[voice][key] === synth) { releasingSynths[voice].removeAt(key) };
         fadingSynths[voice].remove(synth);
@@ -227,6 +231,7 @@
         this.forgetGrainReader(synth);
         if (synths[key] === synth) {
             synths.removeAt(key);
+            if (this.pastStop or: { this.restartAllowed(voice, key).not }) { ^this };
             case
             { key == this.voiceKey(voice) } {
                 if (grainSource[voice] == 0) { synths[key] = this.startVoiceSynth(voice) };
@@ -234,6 +239,37 @@
             { key == this.grainKey(voice) } { synths[key] = this.startPlacedGrainSynth(voice) }
             { synths[key] = this.startModSynth(voice) };
         };
+    }
+
+    // The most times one voice's synths are started again after freeing
+    // themselves within restartWindow seconds, between two voiceOns (#940).
+    // A real restart loop (a synth that frees itself as it starts, #458's
+    // ran at 20 Hz) turns over at the server's round trip, a hundred times
+    // a second or more, so 32 stops it within a fraction of a second; a
+    // player trilling a key in release mode meets a late gate a few times
+    // a second, which a lower limit would silence. Every voiceOn starts
+    // the count again
+    restartLimit { ^32 }
+    restartWindow { ^1 }
+
+    // Whether the voice's synth under key, which freed itself while the
+    // voice used it, may be started again: yes while the voice's restarts
+    // within restartWindow number under restartLimit, the time noted. Past
+    // it the restart is refused and the voice left without that synth until
+    // its next voiceOn (gateVoice starts what a voice is missing), with one
+    // invariant line for the run of restarts: the refusal's time is noted
+    // too, so the times number restartLimit + 1 and a later refusal in the
+    // run posts nothing. An inlined while, no closure
+    restartAllowed { arg voice, key;
+        var times = areaState[\voices][\restarts][voice], now = Main.elapsedTime;
+        while { times.notEmpty and: { (now - times[0]) > this.restartWindow } } { times.removeAt(0) };
+        if (times.size < this.restartLimit) { times.add(now); ^true };
+        if (times.size == this.restartLimit) {
+            times.add(now);
+            this.warnInvariant("voice %'s synths freed themselves % times within % s: % is not restarted again until the voice's next start (#940)".format(
+                voice + 1, this.restartLimit + 1, this.restartWindow, key));
+        };
+        ^false
     }
 
     // A new synth playing from now on (register(true), so gateVoice can
