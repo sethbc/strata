@@ -324,6 +324,155 @@ test("a sync whose beat jumped forward retires near or past its landing and is c
   assert_equal(next(clocks.retired), nil, "the retired ones ended at their landings")
 end)
 
+-- #953: a new clock source moves the beat back while a sync waits, so
+-- matron reschedules it to the next landing above the new beat (2.9995)
+-- and its tick posts the resume a tick later, past the whole beat (3.0015).
+-- Matron counts the next sync from its stored landing, 2.9995: 3.9995. The
+-- helper counts from that grid point too, never from the late resume's
+-- beat (from which the next landing is a period later, 4.9995)
+test("a sync rescheduled by a beat that moved back and resumed a tick late is not counted a period late", function()
+  local context, S, clocks = loaded()
+  local counts = {runs = 0, ended = 0}
+  local offset = 0.9995
+  run_to_beat(context, 5.5)
+  local handle = clocks.run(function(own)
+    while own.sync(1, offset) do counts.runs = counts.runs + 1 end
+    counts.ended = counts.ended + 1
+  end)
+  assert_near(handle.landing, 6.9995, 1e-9, "its landing")
+  -- rescheduled to 2.9995 (from 1.5: matron's next_clock_beat from 2.5
+  -- skips 2.9995, ceil(2.5) + 0.9995 being 3.9995)
+  context.clock.set_beat(1.5)
+  local tick_beats = h.stubs.MATRON_TICK_SECONDS / clock.get_beat_sec()
+  deliver_at_beat(context, 2.9995 + tick_beats)  -- 3.0015: past the whole beat
+  assert_equal(counts.runs, 1, "the rescheduled landing ran")
+  assert_near(handle.landing, 3.9995, 1e-9, "the next landing is matron's, counted from 2.9995")
+  context.clock.advance_until(handle.id, function()
+    assert_near(clock.get_beats(), 3.9995, 1e-6, "matron's next landing")
+    clocks.stop(handle)
+    assert_true(clock.threads[handle.id] ~= nil, "at its landing it is retired, not canceled")
+  end)
+  assert_no_clock_error(context, "a rescheduled sync stopped at its next landing")
+  assert_equal(counts.runs, 1, "and its body did not run again")
+  assert_equal(counts.ended, 1, "it ended")
+end)
+
+-- #953's comment: a new clock source moves the beat past a waiting sync's
+-- landing (4), so matron reschedules it to the next landing after the new
+-- beat (8) and counts the next sync from there (12). The helper does too,
+-- so a stop at beat 9, three beats from that landing, cancels at once
+test("a sync rescheduled forward past its landing is counted from its new grid", function()
+  local context, S, clocks = loaded()
+  local counts = {runs = 0, ended = 0}
+  run_to_beat(context, 0.5)
+  local handle = repeating(clocks, counts, "sync", 4)
+  context.clock.set_beat(6)  -- rescheduled to 8
+  context.clock.advance_until(handle.id)
+  assert_equal(counts.runs, 1, "the rescheduled landing ran")
+  assert_near(handle.landing, 12, 1e-9, "the next landing is matron's, counted from 8")
+  run_to_beat(context, 9)
+  clocks.stop(handle)
+  assert_equal(clock.threads[handle.id], nil, "three beats from its landing: canceled at once")
+  assert_equal(clocks.retired[handle.id], nil, "and not kept")
+  run_to_beat(context, 12.5)
+  assert_no_clock_error(context, "a sync rescheduled forward and stopped far from its next landing")
+  assert_equal(counts.runs, 1, "the body did not run again")
+end)
+
+-- #954, 1: the harness checks the invariants after a test, by which time a
+-- clock stopped during a bare wait may have run on to a handle's wait and
+-- ended; the stop is still named until cancel or cleanup clears it
+test("a bare wait's stop is still named after the clock ran on", function()
+  local context, S, clocks = loaded()
+  local invariant = clocks_invariant(S)
+  local worked = 0
+  local handle = clocks.run(function(own)
+    clock.sleep(0.2)  -- the mistake: a wait the handle does not see
+    worked = worked + 1
+    own.sleep(1)
+  end)
+  clocks.stop(handle)
+  context.clock.run_for(0.5)
+  assert_equal(worked, 1, "the body ran on after its bare wait")
+  assert_equal(clock.threads[handle.id], nil, "and ended at its handle's wait")
+  assert_equal(clocks.retired[handle.id], nil, "it is no longer retired")
+  local problem = invariant()
+  assert_true(problem ~= nil and problem:find("outside its handle", 1, true) ~= nil,
+    "the invariant still names the bare wait: " .. tostring(problem))
+  clocks.cancel(handle)
+  assert_equal(invariant(), nil, "cancel clears it")
+  -- and cleanup clears one too
+  local other = clocks.run(function(own)
+    clock.sleep(0.2)
+    own.sleep(1)
+  end)
+  clocks.stop(other)
+  context.clock.run_for(0.5)
+  assert_true(invariant() ~= nil, "a second bare stop is named")
+  cleanup()
+  assert_equal(invariant(), nil, "cleanup clears it")
+  assert_no_clock_error(context, "bare stops")
+end)
+
+-- #954, 2: a body that stops its own handle from inside a coroutine it
+-- resumed runs now (its clock's coroutine is "normal", not suspended):
+-- nothing is retired and its next wait returns false. So does a stop of
+-- a clock waiting on its handle from another clock's body
+test("a body that stops its handle from a coroutine it resumed is no bare wait", function()
+  local context, S, clocks = loaded()
+  local invariant = clocks_invariant(S)
+  local seen = {}
+  local handle = clocks.run(function(own)
+    if not own.sleep(0.1) then return end
+    local inner = coroutine.create(function() clocks.stop(own) end)
+    assert(coroutine.resume(inner))
+    seen.retired = clocks.retired[own.id]
+    seen.problem = invariant()
+    seen.wait = own.sleep(1)
+  end)
+  context.clock.run_for(0.2)
+  assert_equal(seen.retired, nil, "a stop from the body's own run retires nothing")
+  assert_equal(seen.problem, nil, "and is no bare wait")
+  assert_equal(seen.wait, false, "its next wait returns false at once")
+  assert_equal(clock.threads[handle.id], nil, "it ended")
+  -- a stop from another clock's body, of a clock waiting on its handle
+  local counts = {runs = 0, ended = 0}
+  local waiting = repeating(clocks, counts, "sleep", 10)
+  local stopper = clocks.run(function(own)
+    if not own.sleep(0.1) then return end
+    clocks.stop(waiting)
+  end)
+  context.clock.run_for(0.2)
+  assert_equal(clock.threads[waiting.id], nil, "a far wait stopped from another clock is canceled")
+  assert_equal(clock.threads[stopper.id], nil, "the other clock ended")
+  assert_equal(invariant(), nil, "no bare wait")
+  context.clock.run_for(11)
+  assert_no_clock_error(context, "stops from a resumed coroutine and from another clock")
+  assert_equal(counts.runs + counts.ended, 0, "the stopped clock did nothing more")
+end)
+
+-- #954, 2: clock.resume leaves a body that raised in clock.threads, dead;
+-- a stop of it is no bare wait (the body's error is the fault, reported
+-- as a clock error), and nothing is retired
+test("a stop of a handle whose body raised is no bare wait", function()
+  local context, S, clocks = loaded()
+  local invariant = clocks_invariant(S)
+  local handle = clocks.run(function(own)
+    if not own.sleep(0.1) then return end
+    error("the body's fault")
+  end)
+  context.clock.run_for(0.2)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "the body's error is a clock error")
+  assert_true(errors[1]:find("the body's fault", 1, true) ~= nil, "its own: " .. tostring(errors[1]))
+  assert_true(not clocks.alive(handle), "a dead body is not alive")
+  clocks.stop(handle)
+  assert_equal(clocks.retired[handle.id], nil, "nothing retired")
+  assert_equal(invariant(), nil, "no bare wait")
+  context.clock.run_for(1)
+  assert_no_clock_error(context, "a stop of a raised body")
+end)
+
 -- Review of 0b, finding 5: the helper's margins are the ones the zones
 -- editor, the macros' learn and the quantized actions use
 test("the helper's margins are the zones editor's, the macros' and the quantized actions'", function()

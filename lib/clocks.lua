@@ -25,6 +25,12 @@ return function(S)
   -- at that resume, and is forgotten then (or canceled by cancel or cleanup)
   M.retired = {}
 
+  -- The clocks stopped while their body waited outside its handle (a bare
+  -- clock.sleep or clock.sync, a mistake), [id] = handle: kept until cancel
+  -- or cleanup, so the invariant still names one that ran on and ended
+  -- before the harness checks it (#954)
+  M.bare = {}
+
   -- The beat a sync of `beats` and `offset` from beat `from` lands on, as
   -- matron's clock_scheduler_next_clock_beat finds it
   local function next_beat(from, beats, offset)
@@ -58,12 +64,37 @@ return function(S)
     return may_go_on(handle)
   end
 
-  -- Whether the handle's own body runs now: in its first part (no id yet:
-  -- clock.run resumes it before it returns), or its coroutine is the one
-  -- running (clock.threads[id], as lua/core/clock.lua keeps it)
-  local function runs_now(handle)
-    if type(handle.id) ~= "number" or not clock.threads then return true end
-    return coroutine.running() == clock.threads[handle.id]
+  -- The beat matron counts a repeated sync's next landing from, once a
+  -- sync of `beats` and `offset` (asked at handle.sync_beat, its landing
+  -- handle.landing) resumed with the beat `woke`, its tick's. Matron's
+  -- stored landing lies just below woke (a tick posts a sync once the beat
+  -- is past it) and on the sync's grid, k * beats + offset, wherever it
+  -- came from: the helper's landing, or a reschedule by a new clock source
+  -- (the next landing after the new beat), but for a reset's 0. So the
+  -- grid point at most sync_tolerance below woke, where it is no later
+  -- than the landing or the landing was ahead when asked (a reschedule
+  -- forward, #953's comment); 0 for a beat gone back to within the
+  -- tolerance of 0 (a reset); else the lower of the landing and woke
+  local function counted_from(handle, woke, beats, offset)
+    local landing = handle.landing
+    if type(woke) ~= "number" then return landing end
+    if not landing then return woke end
+    if woke < handle.sync_beat and woke <= CLOCKS.sync_tolerance then return 0 end
+    local grid = math.floor((woke - offset) / beats) * beats + offset
+    if woke - grid <= CLOCKS.sync_tolerance and (grid <= landing or landing > handle.sync_beat) then return grid end
+    return math.min(landing, woke)
+  end
+
+  -- Whether a handle's body waits outside its handle: it has started (its
+  -- id known) and its coroutine (clock.threads[id], as lua/core/clock.lua
+  -- keeps it) is suspended though the handle waits on nothing. One that
+  -- runs is not ("running", or "normal" while a coroutine it resumed
+  -- runs), nor one whose body raised ("dead": clock.resume leaves it in
+  -- clock.threads), #954
+  local function waits_bare(handle)
+    if type(handle.id) ~= "number" or not clock.threads then return false end
+    local thread = clock.threads[handle.id]
+    return type(thread) == "thread" and coroutine.status(thread) == "suspended"
   end
 
   -- Start a clock running fn(handle) and return its handle: handle.id is
@@ -91,18 +122,15 @@ return function(S)
       local from = handle.from_beat or now
       handle.waiting, handle.sync_beat = "sync", now
       handle.landing = nil
+      local grid_offset = type(offset) == "number" and offset or 0
       if type(beats) == "number" and beats > 0 then
-        handle.landing = next_beat(from, beats, type(offset) == "number" and offset or 0)
+        handle.landing = next_beat(from, beats, grid_offset)
       end
       local woke = clock.sync(beats, offset)
-      -- that landing, or the beat a reset or a new clock source woke it on
-      -- before it (the resume's beat is a tick after the landing: matron's
-      -- tick posts the beat it reads, #870's review); as lib/gestures.lua
-      if type(woke) == "number" and handle.landing then
-        handle.from_beat = math.min(handle.landing, woke)
-      else
-        handle.from_beat = handle.landing or woke
-      end
+      -- the landing matron stored, worked out from the beat it resumed
+      -- with (a tick after the landing: matron's tick posts the beat it
+      -- reads, #870's review), after a reset or a new clock source too
+      handle.from_beat = counted_from(handle, woke, beats, grid_offset)
       return resumed(handle)
     end
     handle.id = clock.run(function()
@@ -116,16 +144,17 @@ return function(S)
   -- End a handle's clock (nil, a stopped or an ended one: nothing), never
   -- raising: canceled at once while its wait's end is farther off than the
   -- margin, else retired (M.retired), to end at its wake. A clock stopped
-  -- from its own body (it runs now) is neither: its next wait returns false.
-  -- One whose body waits outside its handle (a bare clock.sleep or
-  -- clock.sync, a mistake) is retired, its wait's end not known, and marked
-  -- bare, which the invariant names
+  -- from its own body's run (from a coroutine it resumed, too) is neither:
+  -- its next wait returns false; nor is one whose body raised. One whose
+  -- body waits outside its handle (a bare clock.sleep or clock.sync, a
+  -- mistake) is retired, its wait's end not known, and kept in M.bare,
+  -- which the invariant names
   function M.stop(handle)
     if type(handle) ~= "table" or handle.stopped or handle.ended then return end
     handle.stopped = true
     if handle.waiting == nil then
-      if runs_now(handle) then return end
-      handle.bare = true
+      if not waits_bare(handle) then return end
+      M.bare[handle.id] = handle
       M.retired[handle.id] = handle
     elseif resume_may_be_posted(handle) then
       M.retired[handle.id] = handle
@@ -141,7 +170,7 @@ return function(S)
     if type(handle) ~= "table" then return end
     handle.stopped = true
     if type(handle.id) ~= "number" then return end
-    M.retired[handle.id] = nil
+    M.retired[handle.id], M.bare[handle.id] = nil, nil
     if not handle.ended then clock.cancel(handle.id) end
   end
 
@@ -156,13 +185,14 @@ return function(S)
 
   -- A retired clock is a stopped one that still waits for its wake: its
   -- coroutine is pending until then, and it is forgotten when it ends; none
-  -- was stopped while its body waited outside its handle
+  -- was stopped while its body waited outside its handle, since the last
+  -- cancel or cleanup (M.bare), whether or not it ran on since
   S.register_invariant("clocks", function()
+    for id in pairs(M.bare) do
+      return "clock " .. tostring(id) .. " was stopped while its body waited outside its handle (a bare clock.sleep or clock.sync)"
+    end
     for id, handle in pairs(M.retired) do
       if handle.id ~= id or not handle.stopped then return "retired clock " .. tostring(id) .. " is not a stopped handle's" end
-      if handle.bare then
-        return "clock " .. id .. " was stopped while its body waited outside its handle (a bare clock.sleep or clock.sync)"
-      end
       local thread = clock.threads and clock.threads[id]
       if clock.threads and (type(thread) ~= "thread" or coroutine.status(thread) == "dead") then
         return "retired clock " .. id .. " has gone but is kept"
@@ -171,8 +201,10 @@ return function(S)
   end)
 
   -- Cleanup, the last step (the grids' own step ends their hold clocks
-  -- late): cancel every retired clock still waiting
+  -- late): cancel every retired clock still waiting, and forget the bare
+  -- stops
   S.register_cleanup(S.constants.CLEANUP_ORDER.clocks, function()
+    for id in pairs(M.bare) do M.bare[id] = nil end
     for id in pairs(M.retired) do
       M.retired[id] = nil
       clock.cancel(id)
