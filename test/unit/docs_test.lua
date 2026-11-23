@@ -3627,12 +3627,12 @@ end)
 -- same cases. A changed condition on either side fails, so a new case
 -- reaches the model
 test("the model's kind rule names the engine's cases", function()
-  -- Each branch's condition as its tokens (names, numbers and comparison
-  -- operators, in order) on each side, the lines before the branches first,
-  -- against one expected list a side (the two languages spell their
-  -- operators apart): so any other name (this.<name> or a bare instance
-  -- variable), number or comparison operator in either fails, and each
-  -- side's numbers are the other's
+  -- Each branch's condition as its tokens (names, numbers, comparison
+  -- operators and the minus sign, in order) on each side, the lines before
+  -- the branches first, against one expected list a side (the two languages
+  -- spell their operators apart): so any other name (this.<name> or a bare
+  -- instance variable), number, sign or comparison operator in either
+  -- fails, and each side's numbers are the other's
   local EXPECTED = {
     { kind = "", engine = { "var", "source", "=", "grainSource", "voice" },
       model = { "local", "source", "=", "self", "voices", "voice", "source" } },
@@ -3643,12 +3643,12 @@ test("the model's kind rule names the engine's cases", function()
     { kind = "stream", engine = { "this", "frozenSynthVoice", "voice" }, model = { "self", "frozen_synth_voice", "voice" } },
     { kind = "voice", engine = {}, model = {} },
   }
-  -- names, numbers and comparison operators (runs of = < > ! ~), in order
+  -- names, numbers and operators (runs of = < > ! ~ and the minus sign), in order
   local function tokens(text)
     local list, position = {}, 1
     while true do
       local start, finish = text:find("[%w_]+", position)
-      local operator_start, operator_finish = text:find("[=<>!~]+", position)
+      local operator_start, operator_finish = text:find("[=<>!~%-]+", position)
       if operator_start and (not start or operator_start < start) then start, finish = operator_start, operator_finish end
       if not start then return list end
       list[#list + 1] = text:sub(start, finish)
@@ -3724,10 +3724,16 @@ test("the model's kind rule names the engine's cases", function()
       "if ((source != this.inputSource) or:"), model_text },
     { "the model's buffer bound as >", engine_text, patched(model_text, "if source >= 1 and source <= self.buffers then",
       "if source > 1 and source <= self.buffers then") },
+    { "the engine's buffer bound negated", patched(engine_text, "if (source.inclusivelyBetween(1, numBuffers)) { ^\\buffer };",
+      "if (source.inclusivelyBetween(-1, numBuffers)) { ^\\buffer };"), model_text },
+    { "the model's buffer bound negated", engine_text, patched(model_text, "if source >= 1 and source <= self.buffers then",
+      "if source >= -1 and source <= self.buffers then") },
   }
+  local uncaught = {}
   for _, control in ipairs(controls) do
-    assert_true(#kind_rule_problems(control[2], control[3]) > 0, control[1] .. ": the check fails it")
+    if #kind_rule_problems(control[2], control[3]) == 0 then uncaught[#uncaught + 1] = control[1] end
   end
+  assert_equal(#uncaught, 0, "controls the check does not fail: " .. table.concat(uncaught, "; "))
 end)
 
 end
