@@ -40,27 +40,35 @@ return function(S)
   -- randomize set them, pattern = {voice, steps} (a pattern spec's old steps)
   -- or nil, until_time = util.time() at which it expires}, or nil. undo_clock
   -- wakes at until_time to clear it and ask for a redraw (the ALT hint goes
-  -- back without input). undo_writing is true while a randomize or the undo
-  -- writes, so note_param_edit and note_pattern_edit do not take their
+  -- back without input); it runs on the clock helper (S.lib.clocks, #870):
+  -- undo_handle is its handle and undo_clock its id (the tests read it),
+  -- both nil while none runs. undo_writing is true while a randomize or the
+  -- undo writes, so note_param_edit and note_pattern_edit do not take their
   -- writes for an edit.
   S.undo = nil
+  local undo_handle = nil
   local undo_clock = nil
   local undo_writing = false
 
   -- Run writes (a function setting params) as randomize's or undo's. The flag
-  -- must not outlive an error in a param action (every later edit would keep
-  -- the undo): clear it, then raise the error again, with its traceback
+  -- is put back as it was found, so a write nested in another leaves the
+  -- outer's set (#892), and it must not outlive an error in a param action
+  -- (every later edit would keep the undo): put it back, then raise the
+  -- error again, with its traceback
   local function write_as_undo(writes)
+    local outer = undo_writing
     undo_writing = true
     local written, write_error = xpcall(writes, with_traceback)
-    undo_writing = false
+    undo_writing = outer
     if not written then error(write_error, 0) end
   end
 
+  -- Stop the expiry clock: S.lib.clocks.stop cancels it, or retires it when
+  -- its wake may be posted, and the retired clock's wake then does nothing
   function clear_undo()
-    if undo_clock then
-      clock.cancel(undo_clock)
-      undo_clock = nil
+    if undo_handle then
+      S.lib.clocks.stop(undo_handle)
+      undo_handle, undo_clock = nil, nil
     end
     if S.undo then
       S.undo = nil
@@ -108,11 +116,12 @@ return function(S)
   local function hold_undo(spec, values, ids, pattern, capture)
     S.undo = {page = spec.page, section = spec.section, voice = spec.voice, values = values, ids = ids,
       pattern = pattern, capture = capture, until_time = util.time() + UNDO_SECONDS}
-    undo_clock = clock.run(function()
-      clock.sleep(UNDO_SECONDS)
-      undo_clock = nil  -- first: clear_undo would cancel this clock
+    undo_handle = S.lib.clocks.run(function(handle)
+      if not handle.sleep(UNDO_SECONDS) then return end
+      undo_handle, undo_clock = nil, nil  -- first: clear_undo would stop this clock
       clear_undo()
     end)
+    undo_clock = undo_handle.id
   end
 
   -- A pattern spec: randomize_pattern(voice), its old steps held
@@ -307,13 +316,16 @@ return function(S)
   end
 
   -- Set a param as the drift: its action sees S.drift_writing, so the write is
-  -- not taken as a new center for the walk. The flag must not outlive an
-  -- error in the action (every later edit would be taken for the drift's):
-  -- clear it, then raise the error again, with its traceback
+  -- not taken as a new center for the walk. The flag is put back as it was
+  -- found, so a write nested in another leaves the outer's set (#892), and
+  -- it must not outlive an error in the action (every later edit would be
+  -- taken for the drift's): put it back, then raise the error again, with
+  -- its traceback
   function set_drifted_param(param_id, value)
+    local outer = S.drift_writing
     S.drift_writing = true
     local set, set_error = xpcall(params.set, with_traceback, params, param_id, value)
-    S.drift_writing = false
+    S.drift_writing = outer
     if not set then error(set_error, 0) end
   end
 
@@ -434,6 +446,7 @@ return function(S)
 
   -- cleanup()'s steps: stop the drift, then the mutations, setting their
   -- param to off so param and metro agree, then cancel the undo's expiry clock
+  -- (S.lib.clocks.cancel: a cleanup step's, at once)
   S.register_cleanup(S.constants.CLEANUP_ORDER.drift_metro, function()
     if S.drift_metro then S.drift_metro:stop() end
   end)
@@ -444,10 +457,8 @@ return function(S)
     end
   end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.undo_clock, function()
-    if undo_clock then
-      clock.cancel(undo_clock)
-      undo_clock = nil
-    end
+    S.lib.clocks.cancel(undo_handle)
+    undo_handle, undo_clock = nil, nil
   end)
 
   return M
