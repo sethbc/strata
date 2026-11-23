@@ -675,7 +675,31 @@ test("the delay sync invariant names an unsynced time the engine was never sent,
 ---------------------------------------------------------------------------
 
 local TABLE = {time = 0.6, division = 0.375, moved = 0.45, tempo = 120, moved_tempo = 100,
-  apply_feedback = 0.6, edit_feedback = 0.5, scene_feedback = 0.7}
+  apply_feedback = 0.6, edit_feedback = 0.5, scene_feedback = 0.7, apply_reverb = 0.2}
+
+-- Start a real apply_entries of one continuous entry (param_id at value)
+-- in a coroutine, suspended after the entry's action: it resumes from
+-- end_apply, whose "fail" makes the action raise
+local function start_apply(context, param_id, value)
+  local S = local_value("S")
+  local param = params:lookup_param(param_id)
+  local action = param.action
+  local suspend = true
+  param.action = function(x)
+    action(x)
+    if suspend then
+      suspend = false
+      if coroutine.yield() == "fail" then error("test: the apply fails", 0) end
+    end
+  end
+  context.apply = coroutine.create(function()
+    S.lib.scenes.apply_entries({{kind = "continuous", id = param_id, value = value}})
+  end)
+  local resumed, problem = coroutine.resume(context.apply)
+  assert_true(resumed, "the apply starts: " .. tostring(problem))
+  assert_equal(coroutine.status(context.apply), "suspended", "the apply waits inside its entry")
+  assert_true(S.scene_recall_in_progress, "inside the apply")
+end
 
 local function table_enter(sync, tempo, holding)
   return function(context)
@@ -687,26 +711,7 @@ local function table_enter(sync, tempo, holding)
     lfo_step(context)
     clock.tempo = tempo
     lfo_step(context)
-    if holding then
-      -- a real apply, suspended after its delay_feedback entry's action
-      local param = params:lookup_param("delay_feedback")
-      local action = param.action
-      local suspend = true
-      param.action = function(x)
-        action(x)
-        if suspend then
-          suspend = false
-          if coroutine.yield() == "fail" then error("test: the apply fails", 0) end
-        end
-      end
-      context.apply = coroutine.create(function()
-        S.lib.scenes.apply_entries({{kind = "continuous", id = "delay_feedback", value = TABLE.apply_feedback}})
-      end)
-      local resumed, problem = coroutine.resume(context.apply)
-      assert_true(resumed, "the apply starts: " .. tostring(problem))
-      assert_equal(coroutine.status(context.apply), "suspended", "the apply waits inside its entry")
-      assert_true(S.scene_recall_in_progress, "inside the apply")
-    end
+    if holding then start_apply(context, "delay_feedback", TABLE.apply_feedback) end
     context.clear_engine_calls()
   end
 end
@@ -714,6 +719,11 @@ end
 -- End the suspended apply (fail: its entry's action raises as it resumes);
 -- returns what resume returned
 local function end_apply(context, fail)
+  if context.apply == nil then
+    -- an unheld state: an apply that sets no delay param holds nothing
+    start_apply(context, "reverb_mix", TABLE.apply_reverb)
+    assert_true(not local_value("S").lib.delay_sync.held(), "an apply of reverb_mix holds no delay send")
+  end
   local resumed, problem = coroutine.resume(context.apply, fail and "fail" or nil)
   assert_equal(coroutine.status(context.apply), "dead", "the apply has ended")
   return resumed, problem
@@ -745,8 +755,11 @@ end
 
 -- A row's check from an unheld state: count sends of time (feedback
 -- optional) after the event and its step
-local function sends(count, time, feedback)
-  return function(context) assert_sends(context, count, time, feedback, "after the event") end
+local function sends(count, time, feedback, at_event)
+  return function(context)
+    if at_event then assert_equal(context.before_step, at_event, "setDelay sends at the event, before its step") end
+    assert_sends(context, count, time, feedback, "after the event")
+  end
 end
 
 -- A row's check from a held state: no send while the apply runs, then its
@@ -796,7 +809,11 @@ h.transition_table({
     ["tempo move"] = table_tempo(TABLE.moved_tempo),
     ["modulation of the time"] = function(context) modulate_time(); lfo_step(context) end,
     ["feedback edit"] = function(context) params:set("delay_feedback", TABLE.edit_feedback); lfo_step(context) end,
-    ["sync toggle"] = function(context) params:set("delay_sync", 1 - params:get("delay_sync")); lfo_step(context) end,
+    ["sync toggle"] = function(context)
+      params:set("delay_sync", 1 - params:get("delay_sync"))
+      context.before_step = #delay_calls(context)
+      lfo_step(context)
+    end,
     -- an instant recall of a scene of the delay as it is but its feedback
     -- (from a held state, an apply inside the running one)
     ["recall"] = function(context)
@@ -807,7 +824,11 @@ h.transition_table({
       lfo_step(context)
     end,
     ["tempo to 0"] = table_tempo(0),
-    ["tempo back"] = table_tempo(TABLE.tempo),
+    -- from 0 (a free state is first brought there: a free delay hears neither move)
+    ["tempo back"] = function(context)
+      if clock.tempo ~= 0 then table_tempo(0)(context) end
+      table_tempo(TABLE.tempo)(context)
+    end,
     ["apply ends"] = function(context)
       local resumed, problem = end_apply(context)
       assert_true(resumed, "the apply ends: " .. tostring(problem))
@@ -830,26 +851,34 @@ h.transition_table({
     {"free", "tempo move", "free", check = sends(0)},
     {"free", "modulation of the time", "free", check = sends(1, modulated_time)},
     {"free", "feedback edit", "free", check = sends(1, TABLE.time, TABLE.edit_feedback)},
-    {"free", "sync toggle", "division", check = sends(1, TABLE.division)},
+    {"free", "sync toggle", "division", check = sends(1, TABLE.division, nil, 1)},
     {"free", "recall", "free", check = sends(1, TABLE.time, TABLE.scene_feedback)},
     {"free", "tempo to 0", "free", check = sends(0)},
+    {"free", "tempo back", "free", check = sends(0)},
+    {"free", "apply ends", "free", check = sends(0)},
+    {"free", "apply fails", "free", check = sends(0)},
     {"division", "tempo move", "division", check = sends(1, TABLE.moved)},
     {"division", "modulation of the time", "division", check = sends(0)},
     {"division", "feedback edit", "division", check = sends(1, TABLE.division, TABLE.edit_feedback)},
-    {"division", "sync toggle", "free", check = sends(1, TABLE.time)},
+    {"division", "sync toggle", "free", check = sends(1, TABLE.time, nil, 1)},
     {"division", "recall", "division", check = sends(1, TABLE.division, TABLE.scene_feedback)},
     {"division", "tempo to 0", "synced, no length", check = sends(1, TABLE.time)},
+    {"division", "apply ends", "division", check = sends(0)},
+    {"division", "apply fails", "division", check = sends(0)},
     {"synced, no length", "modulation of the time", "synced, no length", check = sends(1, modulated_time)},
     {"synced, no length", "feedback edit", "synced, no length", check = sends(1, TABLE.time, TABLE.edit_feedback)},
-    {"synced, no length", "sync toggle", "free", check = sends(1, TABLE.time)},
+    {"synced, no length", "sync toggle", "free", check = sends(1, TABLE.time, nil, 1)},
     {"synced, no length", "recall", "synced, no length", check = sends(1, TABLE.time, TABLE.scene_feedback)},
     {"synced, no length", "tempo back", "division", check = sends(1, TABLE.division)},
+    {"synced, no length", "apply ends", "synced, no length", check = sends(0)},
+    {"synced, no length", "apply fails", "synced, no length", check = sends(0)},
     {"free, held", "tempo move", "free, held", check = held_then(TABLE.time, TABLE.apply_feedback)},
     {"free, held", "modulation of the time", "free, held", check = held_then(modulated_time)},
     {"free, held", "feedback edit", "free, held", check = held_then(TABLE.time, TABLE.edit_feedback)},
     {"free, held", "sync toggle", "division, held", check = held_then(TABLE.division)},
     {"free, held", "recall", "free, held", check = held_then(TABLE.time, TABLE.scene_feedback)},
     {"free, held", "tempo to 0", "free, held", check = held_then(TABLE.time)},
+    {"free, held", "tempo back", "free, held", check = held_then(TABLE.time)},
     {"free, held", "apply ends", "free", check = ended(TABLE.time, TABLE.apply_feedback)},
     {"free, held", "apply fails", "free", check = ended(TABLE.time, TABLE.apply_feedback)},
     {"division, held", "tempo move", "division, held", check = held_then(TABLE.moved, TABLE.apply_feedback)},
@@ -870,20 +899,12 @@ h.transition_table({
     {"synced, no length, held", "apply fails", "synced, no length", check = ended(TABLE.time, TABLE.apply_feedback)},
   },
   impossible = {
-    {"free", "tempo back", "the free state is entered at 120 BPM: `tempo back` leaves a tempo of 0"},
-    {"division", "tempo back", "the division state is at 120 BPM: `tempo back` leaves a tempo of 0"},
-    {"free, held", "tempo back", "the free state is entered at 120 BPM: `tempo back` leaves a tempo of 0"},
-    {"division, held", "tempo back", "the division state is at 120 BPM: `tempo back` leaves a tempo of 0"},
-    {"synced, no length", "tempo move", "a tempo of 0 moves only by giving a length again (`tempo back`)"},
-    {"synced, no length", "tempo to 0", "the tempo is 0 already"},
-    {"synced, no length, held", "tempo move", "a tempo of 0 moves only by giving a length again (`tempo back`)"},
-    {"synced, no length, held", "tempo to 0", "the tempo is 0 already"},
-    {"free", "apply ends", "no apply runs: a held send exists only inside one"},
-    {"free", "apply fails", "no apply runs: a held send exists only inside one"},
-    {"division", "apply ends", "no apply runs: a held send exists only inside one"},
-    {"division", "apply fails", "no apply runs: a held send exists only inside one"},
-    {"synced, no length", "apply ends", "no apply runs: a held send exists only inside one"},
-    {"synced, no length", "apply fails", "no apply runs: a held send exists only inside one"},
+    {"division", "tempo back", "a division plays only at a tempo that gives a length (mode()); `tempo back` leaves 0"},
+    {"division, held", "tempo back", "a division plays only at a tempo that gives a length (mode()); `tempo back` leaves 0"},
+    {"synced, no length", "tempo move", "no length is a tempo of 0, which moves only to one with a length (`tempo back`)"},
+    {"synced, no length", "tempo to 0", "no length is a tempo of 0 already"},
+    {"synced, no length, held", "tempo move", "no length is a tempo of 0, which moves only to one with a length (`tempo back`)"},
+    {"synced, no length, held", "tempo to 0", "no length is a tempo of 0 already"},
   },
 })
 

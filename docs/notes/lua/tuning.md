@@ -13,30 +13,36 @@
 ## Machines
 
 ### tuning
-- **State:** three texts: `tuning_tones`' (the param's), `current.text` (the tuning in force, a local of `lib/tuning.lua`, read through `count()`, `period()` and `tones()`) and `engine_text` (the text whose tuning the engine has, `send`'s).
+- **State:** three texts: `tuning_tones`' (the param's), `current.text` (the tuning in force, a local of `lib/tuning.lua`, read through `count()`, `period()` and `tones()`) and `engine_text` (the text whose tuning the engine has, `send`'s); `engine_has_tuning()` says whether the last two agree, the table's two states.
 - **Invariant:** `tuning`: the param's text equals `current.text`, through a refused text too (the action sets the param back, silently). `engine_text` may lag by design: a silent read takes the text and sends nothing.
-- **Test:** `test/unit/tuning_test.lua`: "the tuning invariant holds through a refused text and names a param text the tuning never took".
+- **Test:** `test/unit/tuning_test.lua`: "tuning: every cell is decided" and its rows (both states on ji normal, `engine lags` after a silent read of a 19 equal PSET; each check counts the `setTuning` and `setTuningTone` sends and the tones in force), and "the tuning invariant holds through a refused text and names a param text the tuning never took".
 
-The table has no test of its own; the tests named in Tests below cover its rows by example (#842's silent reads, the refusals, #884's float32). Inside a read the param's text can stand apart from `current.text` until the module's `read` PSET hook takes it, which is why the hook runs at every read.
+Every cell is a row. Inside a read the param's text can stand apart from `current.text` until the module's `read` PSET hook takes it, which is why the hook runs at every read; a silent read of the text in force leaves nothing to take, so the engine keeps the tuning it has.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
 | `engine has it` | `a text that reads` | `engine has it` | `apply_text`: taken and sent (`setTuning`, then every `setTuningTone`), quantized voices snapped |
 | `engine has it` | `a refused text` | `engine has it` | one line, `tuning: <reason>`; the param is set back silently; nothing sent |
-| `engine has it` | `a silent read` | `engine lags` | the hook takes the file's text silently (`apply_text(text, true)`); nothing sent |
-| `engine has it` | `a read` | `engine has it` | a new text runs the action; the same text, nothing |
-| `engine has it` | `select` | `engine has it` | the entry's name and text; a new text runs the action |
+| `engine has it` | `a silent read of another text` | `engine lags` | the hook takes the file's text silently (`apply_text(text, true)`); nothing sent |
+| `engine has it` | `a silent read of the same text` | `engine has it` | nothing: the text is the one in force, and the engine has it |
+| `engine has it` | `a read of another text` | `engine has it` | the text's action takes it and sends it |
+| `engine has it` | `a read of the same text` | `engine has it` | nothing: no action runs for an unchanged text, and the engine has it |
+| `engine has it` | `choosing the tuning in force` | `engine has it` | `select`: the same name and text; nothing sent |
+| `engine has it` | `choosing another tuning` | `engine has it` | `select`: its name, then its text through the action, sent |
 | `engine lags` | `a text that reads` | `engine has it` | taken and sent |
 | `engine lags` | `a refused text` | `engine lags` | one line; the param set back; nothing sent |
-| `engine lags` | `a silent read` | `engine lags` | taken silently again |
-| `engine lags` | `a read` | `engine has it` | the hook sends the tuning in force (`apply_text(current.text)`) |
-| `engine lags` | `select` | `engine has it` | the same text applied (`select`'s own `apply_text`), or a new one through the action |
+| `engine lags` | `a silent read of another text` | `engine lags` | taken silently; nothing sent |
+| `engine lags` | `a silent read of the same text` | `engine lags` | nothing |
+| `engine lags` | `a read of another text` | `engine has it` | the text's action takes it and sends it |
+| `engine lags` | `a read of the same text` | `engine has it` | the hook sends the tuning in force (`apply_text(current.text)`; no action runs for the unchanged text) |
+| `engine lags` | `choosing the tuning in force` | `engine has it` | `select`'s own `apply_text` sends it |
+| `engine lags` | `choosing another tuning` | `engine has it` | its text through the action, sent |
 
 ## lib/tuning.lua (`S.lib.tuning`)
 
 The one tuning (3.8, design §6): a name, its tones in cents above the first (ascending, the first 0) and its period in cents. Included after `lib/loops.lua` and before `lib/variation.lua`; nothing is read at include time but `S.constants`.
 
-**State and readers.** The tuning in force is what `tuning_tones`' text last applied: `count()`, `period()`, `tones()` (a copy) and `name()` (the `tuning_name` param). `scale_active()`; `allowed()` (cents above degree 0, ascending: the tones whose degree's bit of `S.lib.variation.scale_mask()` is set while the scale applies).
+**State and readers.** The tuning in force is what `tuning_tones`' text last applied: `count()`, `period()`, `tones()` (a copy) and `name()` (the `tuning_name` param); `engine_has_tuning()`, whether the engine has it (false after a silent read took a text it was never sent, #842; Machines). `scale_active()`; `allowed()` (cents above degree 0, ascending: the tones whose degree's bit of `S.lib.variation.scale_mask()` is set while the scale applies).
 
 **Keys and pitches.** Degree 0 is key `root_key + root` (60 + the root), at that key's equal-tempered pitch; key k is degree `(k - that key)` modulo the tone count, a period up or down for each wrap, so the root transposes the tuning.
 - `pitch_of_key(key)`: that pitch, a fractional note.
@@ -58,4 +64,4 @@ The one tuning (3.8, design §6): a name, its tones in cents above the first (as
 
 The editor that chooses a tuning is `docs/notes/lua/ui/scale-editor.md`; the engine's table, `docs/notes/engine/tuning.md`; MIDI out's tuned bend, `docs/notes/lua/io/midi_out.md`.
 
-Tests: `test/unit/tuning_test.lua` (the default's exact pitches, `step`, `equal_step`, keys in 19 equal and Partch, the mask, the sends, the text's round trip and refusals, `float32`, a set refused as float32 and one distinct in float32 though close in doubles still read, and a tone or period not finite refused (#884), the built-ins' cents, the Scala reader and a Windows copy, the folder, the PSET round trip, a PSET without the lines, a silent read and a choice after it (#842), the start), the sites in `variation_test.lua`, `sequencer_test.lua` and `io_midi_out_test.lua`, the constants in `docs_test.lua`, and Review Focus 1 in `system_37_test.lua`.
+Tests: `test/unit/tuning_test.lua` (the default's exact pitches, `step`, `equal_step`, keys in 19 equal and Partch, the mask, the sends, the text's round trip and refusals, `float32`, a set refused as float32 and one distinct in float32 though close in doubles still read, and a tone or period not finite refused (#884), the built-ins' cents, the Scala reader and a Windows copy, the folder, the PSET round trip, a PSET without the lines, a silent read and a choice after it (#842), the start, the table `tuning` and its invariant), the sites in `variation_test.lua`, `sequencer_test.lua` and `io_midi_out_test.lua`, the constants in `docs_test.lua`, and Review Focus 1 in `system_37_test.lua`.

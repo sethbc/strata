@@ -597,4 +597,87 @@ test("the tuning invariant holds through a refused text and names a param text t
   params:set("tuning_tones", "1200 0 400 700", true)
   assert_true(tuning_broken() ~= nil, "a text set silently, never taken, is reported")
 end)
+
+---------------------------------------------------------------------------
+-- The table `tuning` (3.9, #915; docs/notes/lua/tuning.md): whether the
+-- engine has the tuning in force, by every way a text reaches tuning_tones.
+-- Both states are on ji normal (12 tones); `engine lags` after a silent
+-- read of a 19 equal PSET. Each row's check counts the setTuning and
+-- setTuningTone sends and the tones in force
+---------------------------------------------------------------------------
+
+local TUNING_TABLE = {five = "1200 0 240 480 720 960", refused = "abc", other = "24 equal", choice = "12 equal"}
+
+local function tuning_enter(lagging)
+  return function(context)
+    util.make_dir(context.data_dir)
+    use(TUNING_TABLE.other)
+    context.other_pset = context.data_dir .. "other.pset"
+    params:write(context.other_pset, "other")
+    use("19 equal")
+    local nineteen = context.data_dir .. "nineteen.pset"
+    params:write(nineteen, "nineteen")
+    use("ji normal")
+    if lagging then params:read(nineteen, true) end
+    context.clear_engine_calls()
+  end
+end
+
+-- A PSET of the session as it is now (the text in force), read back
+local function read_same(silent)
+  return function(context)
+    local path = context.data_dir .. "same.pset"
+    params:write(path, "same")
+    params:read(path, silent)
+  end
+end
+
+-- A row's check: sends setTuning and setTuningTone messages, count tones in force
+local function tuned(sends, count)
+  return function(context)
+    assert_equal(#sent_tuning(context), sends, "setTuning and setTuningTone sends")
+    assert_equal(tuning().count(), count, "the tones in force")
+    assert_equal(params:get("tuning_tones"), tuning().text_of(tuning().period(), tuning().tones()),
+      "tuning_tones holds the tuning in force")
+  end
+end
+
+h.transition_table({
+  name = "tuning",
+  notes = {"docs/notes/lua/tuning.md", "tuning"},
+  states = {
+    ["engine has it"] = tuning_enter(false),
+    ["engine lags"] = tuning_enter(true),
+  },
+  events = {
+    ["a text that reads"] = function() params:set("tuning_tones", TUNING_TABLE.five) end,
+    ["a refused text"] = function() params:set("tuning_tones", TUNING_TABLE.refused) end,
+    ["a silent read of another text"] = function(context) params:read(context.other_pset, true) end,
+    ["a silent read of the same text"] = read_same(true),
+    ["a read of another text"] = function(context) params:read(context.other_pset) end,
+    ["a read of the same text"] = read_same(false),
+    ["choosing the tuning in force"] = function() use(params:get("tuning_name")) end,
+    ["choosing another tuning"] = function() use(TUNING_TABLE.choice) end,
+  },
+  state_of = function() return tuning().engine_has_tuning() and "engine has it" or "engine lags" end,
+  rows = {
+    {"engine has it", "a text that reads", "engine has it", check = tuned(6, 5)},
+    {"engine has it", "a refused text", "engine has it", check = tuned(0, 12)},
+    {"engine has it", "a silent read of another text", "engine lags", check = tuned(0, 24)},
+    {"engine has it", "a silent read of the same text", "engine has it", check = tuned(0, 12)},
+    {"engine has it", "a read of another text", "engine has it", check = tuned(25, 24)},
+    {"engine has it", "a read of the same text", "engine has it", check = tuned(0, 12)},
+    {"engine has it", "choosing the tuning in force", "engine has it", check = tuned(0, 12)},
+    {"engine has it", "choosing another tuning", "engine has it", check = tuned(13, 12)},
+    {"engine lags", "a text that reads", "engine has it", check = tuned(6, 5)},
+    {"engine lags", "a refused text", "engine lags", check = tuned(0, 19)},
+    {"engine lags", "a silent read of another text", "engine lags", check = tuned(0, 24)},
+    {"engine lags", "a silent read of the same text", "engine lags", check = tuned(0, 19)},
+    {"engine lags", "a read of another text", "engine has it", check = tuned(25, 24)},
+    {"engine lags", "a read of the same text", "engine has it", check = tuned(20, 19)},
+    {"engine lags", "choosing the tuning in force", "engine has it", check = tuned(20, 19)},
+    {"engine lags", "choosing another tuning", "engine has it", check = tuned(13, 12)},
+  },
+  impossible = {},
+})
 end

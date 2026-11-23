@@ -498,7 +498,7 @@ local function settle_broken()
   end
 end
 
-test("the type settle invariant names a pending choice whose settle clock was canceled behind its back", function()
+test("the type settle invariant names a pending choice whose settle clock was canceled behind its back, and a settle clock with no choice", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   S.lib.types.turn(2, 1)
@@ -513,6 +513,142 @@ test("the type settle invariant names a pending choice whose settle clock was ca
   h.allow_broken_invariants("the test cancels a settle clock behind the module's back on purpose")
   clock.cancel(S.type_settle_clocks[4])
   assert_true(settle_broken() ~= nil, "a pending choice with no settle clock is reported")
+  S.lib.types.cancel(4)
+  assert_equal(settle_broken(), nil, "the cancel puts it right")
+  -- the other way: a settle clock that lives with no choice pending (the
+  -- module's own table, reached through its reader's upvalue)
+  S.lib.types.turn(5, 1)
+  local pending
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(S.lib.types.pending, index)
+    if name == nil then break end
+    if name == "pending" then pending = value end
+  end
+  assert_true(type(pending) == "table", "the module's pending table")
+  pending[5] = nil
+  assert_true(S.type_settle_clocks[5] ~= nil, "voice 5's settle clock still lives")
+  assert_true(settle_broken() ~= nil, "a settle clock with no choice pending is reported")
 end)
+
+
+---------------------------------------------------------------------------
+-- The table `type settle` (3.9, #914; docs/notes/lua/types.md): voice 1's
+-- pending choice by every site that starts, applies or forgets one. Each
+-- state is entered on VOICE (so leaving it is an event) with voice 1
+-- running on resonator; `pending` is one turn toward fm. Each row's check
+-- asserts the type the voice ends on (a flush applies the choice, a cancel
+-- forgets it) once the settle's time has passed, and the pending choice
+---------------------------------------------------------------------------
+
+local SETTLE = {voice = 1, turned = "fm", own = "resonator", set_by_action = "karplus", set_key = "t"}
+
+local function settle_enter(turned)
+  return function()
+    local S = local_value("S")
+    S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.VOICE)
+    assert_true(S.voices[SETTLE.voice].active, "voice 1 runs")
+    if turned then S.lib.types.turn(SETTLE.voice, 1) end
+  end
+end
+
+-- A PSET of the session as it is, read back (every voice's type unchanged)
+local function settle_pset_read(context)
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "settle.pset"
+  params:write(path, "settle")
+  params:read(path)
+end
+
+-- A factory set of one line that leaves every type as it is, loaded to its end
+local function settle_factory_set(context)
+  local S = local_value("S")
+  local FACTORY = S.lib.factory.FACTORY
+  local folder = norns.state.path .. FACTORY.folder
+  util.make_dir(folder .. SETTLE.set_key)
+  h.write_text(folder .. FACTORY.index, h.tabutil_text({version = FACTORY.index_version,
+    sets = {{key = SETTLE.set_key, name = SETTLE.set_key, version = 1}}}))
+  h.write_text(folder .. SETTLE.set_key .. "/" .. FACTORY.params_file, '"delay_feedback": 0.4\n')
+  assert_true(S.lib.factory.load(SETTLE.set_key), "the set loads")
+  for _ = 1, 1000 do
+    if not S.lib.factory.loading() then return end
+    context.clock.advance()
+  end
+  error("the factory load never ended")
+end
+
+-- A row's check: once the settle's time has passed, voice 1 is on key, with
+-- pending (an index) or nothing pending, and a settle clock exactly then
+local function settles_on(key, pending)
+  return function(context)
+    local S = local_value("S")
+    assert_equal(S.lib.types.pending(SETTLE.voice), pending, "the pending choice")
+    assert_equal(S.type_settle_clocks[SETTLE.voice] ~= nil, pending ~= nil, "a settle clock exactly while one is pending")
+    if pending == nil then
+      context.clock.run_for(S.lib.types.TYPES.settle_seconds * 2)
+      assert_equal(S.lib.types.of(SETTLE.voice).key, key, "the voice's type once the settle's time has passed")
+    else
+      assert_equal(S.lib.types.of(SETTLE.voice).key, key, "the voice's type while the choice waits")
+    end
+  end
+end
+
+h.transition_table({
+  name = "type settle",
+  notes = {"docs/notes/lua/types.md", "type settle"},
+  states = {
+    ["none"] = settle_enter(false),
+    ["pending"] = settle_enter(true),
+  },
+  events = {
+    ["turn"] = function() local_value("S").lib.types.turn(SETTLE.voice, 1) end,
+    ["the settle's wake"] = function(context)
+      local S = local_value("S")
+      context.clock.advance_until(S.type_settle_clocks[SETTLE.voice])
+    end,
+    ["a voice pick"] = function() local_value("S").lib.ui_keys.select_voice_by(1) end,
+    ["leaving VOICE"] = function()
+      local S = local_value("S")
+      S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.MAIN)
+    end,
+    ["the voice's stop"] = function() toggle_voice(SETTLE.voice) end,
+    ["the type action"] = function()
+      params:set("v" .. SETTLE.voice .. "_type", local_value("S").lib.types.record(SETTLE.set_by_action).index)
+    end,
+    ["set"] = function() assert_true(local_value("S").lib.types.set(SETTLE.voice, SETTLE.own), "set") end,
+    ["a recall's type entry"] = function() capture_scene(1); recall_scene(1, 0) end,
+    ["a PSET read"] = settle_pset_read,
+    ["a factory set"] = settle_factory_set,
+    ["cleanup"] = function() cleanup() end,
+  },
+  state_of = function()
+    return local_value("S").lib.types.pending(SETTLE.voice) and "pending" or "none"
+  end,
+  rows = {
+    {"none", "turn", "pending", check = settles_on(SETTLE.own, 2)},
+    {"none", "a voice pick", "none", check = settles_on(SETTLE.own)},
+    {"none", "leaving VOICE", "none", check = settles_on(SETTLE.own)},
+    {"none", "the voice's stop", "none", check = settles_on(SETTLE.own)},
+    {"none", "the type action", "none", check = settles_on(SETTLE.set_by_action)},
+    {"none", "set", "none", check = settles_on(SETTLE.own)},
+    {"none", "a recall's type entry", "none", check = settles_on(SETTLE.own)},
+    {"none", "a PSET read", "none", check = settles_on(SETTLE.own)},
+    {"none", "a factory set", "none", check = settles_on(SETTLE.own)},
+    {"none", "cleanup", "none", check = settles_on(SETTLE.own)},
+    {"pending", "turn", "pending", check = settles_on(SETTLE.own, 3)},
+    {"pending", "the settle's wake", "none", check = settles_on(SETTLE.turned)},
+    {"pending", "a voice pick", "none", check = settles_on(SETTLE.turned)},
+    {"pending", "leaving VOICE", "none", check = settles_on(SETTLE.turned)},
+    {"pending", "the voice's stop", "none", check = settles_on(SETTLE.turned)},
+    {"pending", "the type action", "none", check = settles_on(SETTLE.set_by_action)},
+    {"pending", "set", "none", check = settles_on(SETTLE.own)},
+    {"pending", "a recall's type entry", "none", check = settles_on(SETTLE.own)},
+    {"pending", "a PSET read", "none", check = settles_on(SETTLE.own)},
+    {"pending", "a factory set", "none", check = settles_on(SETTLE.own)},
+    {"pending", "cleanup", "none", check = settles_on(SETTLE.own)},
+  },
+  impossible = {
+    {"none", "the settle's wake", "a settle clock lives exactly while a choice is pending (the invariant): none wakes"},
+  },
+})
 
 end
