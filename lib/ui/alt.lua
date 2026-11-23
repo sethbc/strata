@@ -44,11 +44,10 @@ return function(S)
   -- held there or randomizes the page's section; a longer one runs the
   -- record's alt_hold, or cancels on a page without one. A page's
   -- alt_key_release(2) calls k2_up(record); its ALT+K2 press calls nothing
-  -- (#959). The
-  -- record's randomize_section() returns the spec of the section under its
-  -- cursor (S.lib.mutation.randomize), with "locked" second for a locked
-  -- voice (nothing is randomized, but an undo held there still runs), or
-  -- nil. The press time is the dispatcher's (S.key_press_at, read through
+  -- (#959). The record's randomize_section() returns the spec of the
+  -- section under its cursor (S.lib.mutation.randomize), with "locked"
+  -- second for a locked voice (nothing is randomized, but an undo held
+  -- there still runs), or nil. The press time is the dispatcher's (S.key_press_at, read through
   -- S.lib.ui_keys.held_seconds; #866): this module keeps no mark of its
   -- own, so a page change, the norns menu, the file selector and a modal
   -- push, which forget the press, leave nothing to go stale
