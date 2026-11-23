@@ -213,10 +213,51 @@ test("an onsets file that does not match the slot is ignored", function()
   end
 end)
 
+-- #872: while a pass of the audio the slot holds now is awaited, another
+-- would only run beside it (the engine runs every pass): none is sent
+test("five sensitivity detents while a pass is awaited send no further analyzeBuffer", function()
+  local context, S = sliced(2)
+  S.lib.samples.set(1, "mode", 3)
+  S.lib.slices.make(1)
+  assert_equal(#context.calls_named("analyzeBuffer"), 1, "make with no candidates: one pass")
+  local editor = S.lib.ui_slice_editor
+  h.show_page("BUFFER")
+  assert_true(editor.open(1), "the editor opens on slot 1")
+  editor.pick_row("amount")
+  for _ = 1, 5 do editor.turn_row("amount", 1) end
+  assert_equal(S.lib.samples.settings(1).sensitivity, 55, "each detent was taken")
+  assert_equal(#context.calls_named("analyzeBuffer"), 1, "no pass sent while one is awaited")
+  assert_true(S.lib.slices.analyzing(1), "the first is still awaited")
+  -- its report makes the markers at the sensitivity the detents left
+  answer(context, 1, 1, onsets_text(1, 96000, CANDIDATES.onsets, CANDIDATES.strengths))
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0, 10000, 30000}", "made at sensitivity 55")
+end)
+
+test("a new analysis is sent once the audio's generation moves", function()
+  local context, S = sliced(2)
+  S.lib.samples.set(1, "mode", 3)
+  S.lib.slices.make(1)
+  assert_equal(#context.calls_named("analyzeBuffer"), 1)
+  -- new audio in the slot: the awaited pass is the old audio's
+  settle_load(context, 1, context.audio_dir .. "other.wav", 2)
+  S.lib.samples.set(1, "mode", 3); S.lib.slices.make(1)
+  assert_equal(#context.calls_named("analyzeBuffer"), 2, "a pass for the new audio")
+  -- the old pass's report changes nothing; the new one's makes the markers
+  answer(context, 1, 1, onsets_text(1, 96000, {40000}, {"1.000"}))
+  assert_equal(S.lib.slices.candidates(1), nil, "the old audio's pass is not read")
+  assert_true(S.lib.slices.analyzing(1), "the new one is still awaited")
+  answer(context, 1, 2, onsets_text(1, 96000, CANDIDATES.onsets, CANDIDATES.strengths))
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0, 10000, 30000}", "made from the new audio's pass")
+end)
+
 test("only the newest analysis of a slot is read, and never in the poll's callback", function()
   local context, S = sliced(2)
   S.lib.samples.set(1, "mode", 3)
-  S.lib.slices.analyze(1); S.lib.slices.analyze(1)
+  -- (#872: a second pass is sent only once the slot's audio changed)
+  S.lib.slices.analyze(1)
+  settle_load(context, 1, context.audio_dir .. "other.wav", 2)
+  S.lib.samples.set(1, "mode", 3)
+  S.lib.slices.analyze(1)
   assert_equal(#context.calls_named("analyzeBuffer"), 2)
   assert_equal(context.calls_named("analyzeBuffer")[1].args[1], 0, "engine slot 0")
   -- the first analysis's report: not the newest, so nothing is read
@@ -602,6 +643,19 @@ test("a read that raises prints once and the next report is read", function()
   S.lib.slices.analyze(1)
   answer(context, 1, 2, onsets_text(1, 96000, {30000}, {"1.000"}))
   assert_equal(list_text(S.lib.slices.markers(1)), "{0, 30000}", "the next report was read")
+end)
+
+-- #870: the read clock is the clock helper's; only cleanup ends it, at once
+test("cleanup ends the onsets read clock before it reads", function()
+  local context, S = sliced(2)
+  S.lib.samples.set(1, "mode", 3)
+  S.lib.slices.make(1)
+  write_text(onsets_path(1), onsets_text(1, 96000, CANDIDATES.onsets, CANDIDATES.strengths))
+  context.polls.fire("bufferOnsets", onsets_value(1, 1))  -- the read waits for its clock
+  cleanup()
+  context.clock.run_for(0.05)
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+  assert_equal(S.lib.slices.candidates(1), nil, "nothing was read")
 end)
 
 -- 2b's review, Minor 5: the own note's slice is playing only while its record is held

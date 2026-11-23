@@ -140,9 +140,14 @@ return function(S)
     return true
   end
 
-  -- An analysis of the slot: counted, then sent (its report names its number)
+  -- An analysis of the slot: counted, then sent (its report names its
+  -- number). None while a pass of the audio the slot holds now (its
+  -- generation) is awaited: the engine runs every pass it is sent, so a
+  -- detent of the editor would start another over the whole slot; the
+  -- awaited one makes the markers at the settings it finds (#872)
   function M.analyze(slot)
     if not valid_slot(slot) or S.buffers[slot].seconds <= 0 then return false end
+    if awaited[slot] ~= nil and analysis_generations[slot] == generations[slot] then return true end
     analyses[slot] = analyses[slot] + 1
     awaited[slot] = analyses[slot]
     analysis_generations[slot] = generations[slot]
@@ -302,12 +307,13 @@ return function(S)
 
   -- One clock reads the reports' files, from its first wake on (never in
   -- the poll's callback); it ends when none waits. Each read is contained,
-  -- so one that raises prints once and never leaves the clock recorded
+  -- so one that raises prints once and never leaves the clock recorded.
+  -- reader.clock is the clock helper's handle (#870); only cleanup ends it
   local read_errors = {}
   local function start_reader()
     if reader.clock then return end
-    reader.clock = clock.run(function()
-      clock.sleep(0)
+    reader.clock = S.lib.clocks.run(function(handle)
+      if not handle.sleep(0) then return end
       while true do
         local slot = next(due_reads)
         if not slot then break end
@@ -343,10 +349,8 @@ return function(S)
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.slices_poll, function()
     if reader.poll then reader.poll:stop() end
-    if reader.clock then
-      clock.cancel(reader.clock)
-      reader.clock = nil
-    end
+    S.lib.clocks.cancel(reader.clock)
+    reader.clock = nil
     due_reads = {}
   end)
 
