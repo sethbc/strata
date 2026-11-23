@@ -899,13 +899,19 @@ return function(S)
   -- then does not overwrite buffers.data with the empty paths (#72)
   S.buffers_loaded = false
   -- What is known of buffers.data in this session (as S.scene_file, for
-  -- SETUP's status rows): problem, nil, "unreadable" or "not saved";
-  -- backup, the name an unreadable file was kept under (nil: still in
-  -- place); text, the bytes
+  -- SETUP's status rows): load_problem, nil or "unreadable" (the start's
+  -- read); write_problem, nil or "not saved" (the last write's); problem,
+  -- what SETUP reads, derived and never stored: the write's while one
+  -- failed, else the load's (#868: one field held both, and a good write
+  -- after a failed one lost the set-aside's row); backup, the name an
+  -- unreadable file was kept under (nil: still in place); text, the bytes
   -- last written or found unchanged, which remember compares with, so a
   -- report that changes no path or start costs no file read; save_clock, the
   -- clock of the one pending deferred write (nil when none)
-  S.buffer_file = {problem = nil, backup = nil, text = nil, save_clock = nil}
+  S.buffer_file = setmetatable({load_problem = nil, write_problem = nil, backup = nil, text = nil, save_clock = nil},
+    {__index = function(state, key)
+      if key == "problem" then return rawget(state, "write_problem") or rawget(state, "load_problem") end
+    end})
 
   -- What buffers.data holds: per slot the loaded file or scratch take (a
   -- remembered file that was missing on start is kept: it may be on a drive
@@ -933,15 +939,17 @@ return function(S)
     local value = remembered_buffers()
     local saved, detail = data_files.write(buffer_data_file(), value)
     if not saved then
-      state.problem = "not saved"
+      state.write_problem = "not saved"
       print("error: buffer paths not saved to " .. buffer_data_file() .. " (" .. tostring(detail)
         .. "); the file is as it was")
       request_redraw()
       return false, detail
     end
-    -- a failed write, or an unreadable file still in place, is over
-    if state.problem == "not saved" or (state.problem == "unreadable" and not state.backup) then
-      state.problem = nil
+    -- a failed write is over, and so is an unreadable file still in place
+    -- (this write replaced it); one set aside keeps its row (#868)
+    if state.write_problem ~= nil or (state.load_problem == "unreadable" and not state.backup) then
+      state.write_problem = nil
+      if not state.backup then state.load_problem = nil end
       request_redraw()
     end
     state.text = data_files.encode(value)
@@ -976,7 +984,7 @@ return function(S)
   local function preserve_unloadable_buffer_file()
     local backup = S.lib.scenes.move_aside_unloadable_file(buffer_data_file(), "buffers")
     if not backup then S.buffer_autosave_blocked = true end
-    S.buffer_file.problem, S.buffer_file.backup = "unreadable", backup
+    S.buffer_file.load_problem, S.buffer_file.backup = "unreadable", backup
   end
 
   -- Reload each remembered path that still exists through load_buffer. A
@@ -986,7 +994,7 @@ return function(S)
   local function restore_buffers_from_file()
     S.buffers_restored = 0
     S.buffer_autosave_blocked = false
-    S.buffer_file.problem, S.buffer_file.backup = nil, nil
+    S.buffer_file.load_problem, S.buffer_file.write_problem, S.buffer_file.backup = nil, nil, nil
     -- the file is parsed, never run as Lua (lib/data_files.lua, #464)
     local loaded, problem, detail = S.lib.data_files.read(buffer_data_file())
     if loaded == nil and problem == "missing" then
@@ -1091,7 +1099,7 @@ return function(S)
     -- a file that cannot be read is named on the hint row, as the scenes'
     -- (one text for both: this flash replaces theirs; beside a scenes file
     -- of an older Strata it says "not loaded", true of both files)
-    if S.buffer_file.problem == "unreadable" then
+    if S.buffer_file.load_problem == "unreadable" then
       local scenes_problem = S.scene_file.problem
       local text = (scenes_problem == "unreadable" and "data files unreadable (SETUP)")
         or (scenes_problem == "older" and "data files not loaded (SETUP)") or "buffers unreadable (SETUP)"

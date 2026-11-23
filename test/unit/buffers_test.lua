@@ -2285,6 +2285,43 @@ test("an unreadable buffers.data is named on the hint row at start and kept unde
   assert_equal(S.lib.ui_flash.text("hints"), nil, "for 4 s")
 end)
 
+-- #868: the load's problem and the last write's are two facts; problem,
+-- what SETUP reads, is the write's while one failed, else the load's
+test("a failed write after a set-aside keeps buffers.data's backup row", function()
+  local subdir = "buffers-set-aside-then-write-" .. math.random(1, 1e9)
+  local dir = data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  write_text(dir .. "buffers.data", "return {")
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  local function file_rows()
+    local texts = {}
+    for _, row in ipairs(S.lib.pages_setup.setup_rows()) do
+      if row.text and row.text:find("^buffers ") then texts[#texts + 1] = row.text end
+      if row.text and row.text:find("buffers.data.bak", 1, true) then texts[#texts + 1] = row.text end
+    end
+    return table.concat(texts, "|")
+  end
+  assert_equal(S.buffer_file.load_problem, "unreadable", "set aside at start")
+  assert_equal(S.buffer_file.backup, dir .. "buffers.data.bak")
+  assert_equal(file_rows(), "buffers unreadable, kept|as buffers.data.bak", "SETUP names the backup")
+  -- the card fills: one write fails
+  local restore = watch_writes("buffers.data", { at = "write", after = 40 })
+  load_buffer(1, "/tmp/one.wav")
+  context.clock.run_for(0.11)
+  restore()
+  assert_equal(S.buffer_file.write_problem, "not saved")
+  assert_equal(S.buffer_file.load_problem, "unreadable", "the load's problem stays")
+  assert_equal(S.buffer_file.problem, "not saved", "SETUP reads the write's while it fails")
+  assert_equal(file_rows(), "buffers file not saved")
+  -- the next write works: the backup's row comes back
+  load_buffer(2, "/tmp/two.wav")
+  context.clock.run_for(0.11)
+  assert_equal(S.buffer_file.write_problem, nil, "the write's problem is over")
+  assert_equal(S.buffer_file.problem, "unreadable", "the load's problem again")
+  assert_equal(file_rows(), "buffers unreadable, kept|as buffers.data.bak", "the backup's row is back")
+end)
+
 -- takeWriteFailed (#312): the engine could not write a recording's scratch
 -- take. value = record number * 8 + slot index (engine index), as a float
 local function take_write_failed_value(slot, number) return number * 8.0 + (slot - 1) end
