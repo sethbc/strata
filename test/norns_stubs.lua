@@ -626,6 +626,8 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
   -- an OSC float's value, float32, as the engine hears an "f" argument:
   -- string.pack on Lua 5.3, an ffi float on LuaJIT (which has no string.pack)
   local float32
+  -- each fallback is in the name's own expression, the form the #119 scan
+  -- (structure_test.lua) accepts; the if below picks the ffi on LuaJIT
   local pack_string, unpack_string = string.pack or false, string.unpack or false
   if pack_string then
     float32 = function(value) return (unpack_string("f", pack_string("f", value))) end
@@ -765,13 +767,14 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     end,
     setTuningTone = function(args)
       if not tuning_set then return "setTuningTone with no set begun (setTuning)" end
+      -- the index first, then the cents, in the engine's order
+      local problem = range("index", args[1], 0, tuning_set.count - 1)
+      if problem then return problem end
       local cents = float32(args[2])
       if cents < 0 or cents >= tuning_set.period then
         return heard(args[2], string.format("cents %s is outside 0 to below the period %g", tostring(cents),
           tuning_set.period))
       end
-      local problem = range("index", args[1], 0, tuning_set.count - 1)
-      if problem then return problem end
       local tones = tuning_set.tones
       if tones[args[1] + 1] == nil then tuning_set.received = tuning_set.received + 1 end
       tones[args[1] + 1] = cents

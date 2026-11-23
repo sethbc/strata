@@ -1989,6 +1989,9 @@ test("the engine stub refuses a tuning whose tones are equal in float32", functi
   engine.setTuningTone(2, 100.001)
   engine.setTuningTone(1, 100)
   assert_stub_refuses("the set's tones do not start at 0 and ascend", "setTuningTone", 0, 50)
+  -- the engine checks a tone's index before its cents: with both bad, the index is named
+  engine.setTuning(3, 1200)
+  assert_stub_refuses("index 5 is outside 0..2", "setTuningTone", 5, 5000)
   local calls = #context.engine_calls
   engine.setTuning(3, 1200)
   engine.setTuningTone(0, 0)
