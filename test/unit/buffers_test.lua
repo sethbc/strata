@@ -1377,7 +1377,7 @@ test("a long file's check that outlasts 30 s is still adopted when the engine ap
   assert_equal(buffers[2].name, "long.wav", "the load is still the slot's")
   assert_equal(buffers[2].path, "/tmp/long.wav")
   assert_equal(buffers[2].checking_from, 0, "and still checked"); assert_equal(S.lib.buffers.status(2), "loading")
-  assert_equal(S.lib.ui_flash.text("hints"), "buf 2 still checking", "BUFFER says so")
+  assert_equal(S.lib.ui_flash.text("hints"), "buf 2 still checking K2:ld/clr", "BUFFER says so, and how to leave it")
   assert_equal(told_about(2), 1, "one console line")
   context.clock.run_for(60)
   assert_equal(told_about(2), 1, "once")
@@ -1417,6 +1417,40 @@ test("a long file's check that outlasts 30 s is still adopted when the engine ap
   assert_equal(told_about(5), 1, "its notice started again")
   assert_equal(buffers[5].name, "long.wav", "and changes nothing"); assert_equal(buffers[5].checking_from, 0)
   assert_equal(S.lib.buffers.BUFFER_SETTLE.check_notice_seconds, 30, "the bound is a named setting")
+end)
+
+-- #904: a check the engine never ends is left the way the notice says, a
+-- load or a clear (K2 on BUFFER); either ends the check and leaves no clock
+-- of it
+test("after a check's notice a load or a clear ends the check and leaves no clock of it", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata({ data_subdir = "check_way_out_" .. math.random(1, 1e9) }); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  context.audio.files["/tmp/long.wav"] = {2, 48000 * 400, 48000}
+  show_page("BUFFER")
+  local notice = S.lib.buffers.BUFFER_SETTLE.check_notice_seconds
+  for _, case in ipairs({
+    {"a clear", function(slot) clear_buffer(slot) end, "empty"},
+    {"a load", function(slot) load_buffer(slot, "/tmp/short.wav") end, "loading"},
+  }) do
+    local slot = case[1] == "a clear" and 2 or 3
+    load_buffer(slot, "/tmp/long.wav")
+    assert_equal(S.lib.record.clock_role(slot), "notice", case[1] .. ": the check's notice waits")
+    context.clock.run_for(notice + 0.1)
+    assert_equal(S.lib.ui_flash.text("hints"), "buf " .. slot .. " still checking K2:ld/clr",
+      case[1] .. ": the notice says how to leave the check")
+    assert_true(h.text_width(S.lib.ui_flash.text("hints")) <= 128, "and fits the hint row")
+    assert_equal(S.lib.buffers.status(slot), "loading", case[1] .. ": still checking")
+    case[2](slot)
+    assert_equal(buffers[slot].checking_from, nil, case[1] .. " ends the check")
+    assert_equal(buffers[slot].checking_load, nil)
+    assert_equal(S.lib.buffers.status(slot), case[3])
+    assert_equal(S.lib.record.clock_role(slot), nil, case[1] .. ": no clock of the check")
+    assert_equal(S.buffer_record_clocks[slot], nil)
+    context.clock.run_for(notice + 0.1)
+    assert_equal(buffers[slot].checking_from, nil, case[1] .. ": the check stays over")
+  end
 end)
 
 -- A restored long file whose check outlasts the bound is still the restore's
