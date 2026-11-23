@@ -392,6 +392,175 @@ test("a second freeze key press while its toggle waits takes it back", function(
   assert_true(S.lib.freeze.is_frozen(4), "and freezes at its bar")
 end)
 
+-- 3.9 (#864): the freeze key's machine, voice 3 with quantize_actions on
+-- bar, every state entered at beat 1.5. A waiting key sets the value its
+-- press asked for (the opposite of the freeze at the press), whatever
+-- happened before the bar; a second key takes the waiting set back. Which
+-- value waits is not readable from outside (it is the scheduled closure's),
+-- so the table keeps what each press asked for on the context, and the bar
+-- rows, and the checks of the rows that lead to them, assert what the bar
+-- then sets
+local KEY_VOICE = 3
+local KEY_ID = "v" .. KEY_VOICE .. "_freeze"
+local KEY_ACTION = "freeze" .. KEY_VOICE
+local KEY_BAR = 4  -- quantize_actions' bar, in beats
+
+local function key_state(S) return S.lib.freeze.is_frozen(KEY_VOICE) and "on" or "off" end
+
+local function key_run_to_beat(context, beat)
+  context.clock.run_for((beat - clock.get_beats()) * clock.get_beat_sec())
+end
+
+-- The bar after now, and a little past it
+local function key_bar(context)
+  key_run_to_beat(context, (math.floor(clock.get_beats() / KEY_BAR) + 1) * KEY_BAR + 0.02)
+end
+
+-- A press of voice 3's FZ key, keeping what it asked for: nothing if it took
+-- a waiting set back, else the opposite of the freeze it found
+local function key_press(context)
+  local S = local_value("S")
+  if S.lib.quantize.waiting(KEY_ACTION) then
+    context.asked = nil
+  else
+    context.asked = S.lib.freeze.is_frozen(KEY_VOICE) and 0 or 1
+  end
+  S.lib.freeze.toggle_quantized(KEY_VOICE)
+end
+
+local function key_enter(frozen, press, then_set)
+  return function(context)
+    params:set("quantize_actions", 3)  -- bar
+    key_run_to_beat(context, 1.5)
+    params:set(KEY_ID, frozen)
+    if press then key_press(context) end
+    if then_set ~= nil then params:set(KEY_ID, then_set) end
+  end
+end
+
+-- A row's check: the bar then leaves the voice as `expected`, nothing waiting
+local function then_the_bar(expected)
+  return function(context)
+    key_bar(context)
+    local S = local_value("S")
+    assert_equal(key_state(S), expected, "after the bar")
+    assert_true(not S.lib.quantize.waiting(KEY_ACTION), "nothing waits after the bar")
+  end
+end
+
+h.transition_table({
+  name = "freeze key",
+  notes = {"docs/notes/lua/freeze.md", "freeze key"},
+  states = {
+    ["off"] = key_enter(0),
+    ["on"] = key_enter(1),
+    ["off, freeze waits"] = key_enter(0, true),
+    ["off, unfreeze waits"] = key_enter(1, true, 0),
+    ["on, freeze waits"] = key_enter(0, true, 1),
+    ["on, unfreeze waits"] = key_enter(1, true),
+  },
+  events = {
+    ["key"] = key_press,
+    ["source switch"] = function()
+      local S = local_value("S")
+      local source = params:get("v" .. KEY_VOICE .. "_source")
+      params:set("v" .. KEY_VOICE .. "_source",
+        source == S.constants.SOURCE_INPUT and S.constants.SOURCE_SYNTH or S.constants.SOURCE_INPUT)
+    end,
+    ["hand set 0"] = function() params:set(KEY_ID, 0) end,
+    ["hand set 1"] = function() params:set(KEY_ID, 1) end,
+    -- a scene that holds the voice frozen on the source it has now
+    ["recall"] = function()
+      local S = local_value("S")
+      capture_scene(1)
+      S.scenes[1].data.voices[KEY_VOICE].values.freeze = 1
+      recall_scene(1, 0)
+    end,
+    ["the bar"] = key_bar,
+  },
+  state_of = function(context)
+    local S = local_value("S")
+    local state = key_state(S)
+    if not S.lib.quantize.waiting(KEY_ACTION) then return state end
+    if context.asked == 1 then return state .. ", freeze waits" end
+    if context.asked == 0 then return state .. ", unfreeze waits" end
+    return state .. ", a set waits that no press asked for"
+  end,
+  rows = {
+    {"off", "key", "off, freeze waits"},
+    {"off", "source switch", "off"},
+    {"off", "hand set 0", "off"},
+    {"off", "hand set 1", "on"},
+    {"off", "recall", "on"},
+    {"off", "the bar", "off"},
+    {"on", "key", "on, unfreeze waits"},
+    {"on", "source switch", "off"},
+    {"on", "hand set 0", "off"},
+    {"on", "hand set 1", "on"},
+    {"on", "recall", "on"},
+    {"on", "the bar", "on"},
+    {"off, freeze waits", "key", "off", check = then_the_bar("off")},
+    {"off, freeze waits", "source switch", "off, freeze waits", check = then_the_bar("on")},
+    {"off, freeze waits", "hand set 0", "off, freeze waits", check = then_the_bar("on")},
+    {"off, freeze waits", "hand set 1", "on, freeze waits", check = then_the_bar("on")},
+    {"off, freeze waits", "recall", "on, freeze waits", check = then_the_bar("on")},
+    {"off, freeze waits", "the bar", "on"},
+    {"off, unfreeze waits", "key", "off", check = then_the_bar("off")},
+    {"off, unfreeze waits", "source switch", "off, unfreeze waits", check = then_the_bar("off")},
+    {"off, unfreeze waits", "hand set 0", "off, unfreeze waits", check = then_the_bar("off")},
+    {"off, unfreeze waits", "hand set 1", "on, unfreeze waits", check = then_the_bar("off")},
+    {"off, unfreeze waits", "recall", "on, unfreeze waits", check = then_the_bar("off")},
+    {"off, unfreeze waits", "the bar", "off"},
+    {"on, freeze waits", "key", "on", check = then_the_bar("on")},
+    {"on, freeze waits", "source switch", "off, freeze waits", check = then_the_bar("on")},
+    {"on, freeze waits", "hand set 0", "off, freeze waits", check = then_the_bar("on")},
+    {"on, freeze waits", "hand set 1", "on, freeze waits", check = then_the_bar("on")},
+    {"on, freeze waits", "recall", "on, freeze waits", check = then_the_bar("on")},
+    {"on, freeze waits", "the bar", "on"},
+    {"on, unfreeze waits", "key", "on", check = then_the_bar("on")},
+    {"on, unfreeze waits", "source switch", "off, unfreeze waits", check = then_the_bar("off")},
+    {"on, unfreeze waits", "hand set 0", "off, unfreeze waits", check = then_the_bar("off")},
+    {"on, unfreeze waits", "hand set 1", "on, unfreeze waits", check = then_the_bar("off")},
+    {"on, unfreeze waits", "recall", "on, unfreeze waits", check = then_the_bar("off")},
+    {"on, unfreeze waits", "the bar", "off"},
+  },
+})
+
+-- The issue's sequences (#864), as the player meets them
+test("a waiting freeze key sets the value its press asked for, whatever happened before the bar (#864)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("quantize_actions", 3)  -- bar
+  key_run_to_beat(context, 1.5)
+  -- frozen, the key asks for an unfreeze, a source switch unfreezes now
+  params:set(KEY_ID, 1)
+  S.lib.freeze.toggle_quantized(KEY_VOICE)
+  params:set("v" .. KEY_VOICE .. "_source", S.constants.SOURCE_INPUT)
+  assert_true(not S.lib.freeze.is_frozen(KEY_VOICE), "the switch unfroze the voice")
+  assert_true(S.lib.quantize.waiting(KEY_ACTION), "the key's set still waits")
+  key_bar(context)
+  assert_true(not S.lib.freeze.is_frozen(KEY_VOICE), "the bar leaves the new source unfrozen")
+  -- unfrozen, the key asks for a freeze, a hand set freezes now
+  S.lib.freeze.toggle_quantized(KEY_VOICE)
+  params:set(KEY_ID, 1)
+  key_bar(context)
+  assert_true(S.lib.freeze.is_frozen(KEY_VOICE), "the bar keeps the voice frozen")
+end)
+
+test("a second freeze key takes the waiting set back (#864)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("quantize_actions", 3)  -- bar
+  key_run_to_beat(context, 1.5)
+  S.lib.freeze.toggle_quantized(KEY_VOICE)
+  params:set(KEY_ID, 1)  -- frozen by hand while the freeze waits
+  S.lib.freeze.toggle_quantized(KEY_VOICE)
+  assert_true(not S.lib.quantize.waiting(KEY_ACTION), "the second key takes the waiting set back")
+  assert_true(S.lib.freeze.is_frozen(KEY_VOICE), "and leaves the voice as it is")
+  key_bar(context)
+  assert_true(S.lib.freeze.is_frozen(KEY_VOICE), "the bar sets nothing")
+end)
+
 -- 3.5's freeze-change registry (design §0.1): the param's action runs the
 -- hooks once the value is stored and sent, before its grid redraw
 test("the freeze param runs the freeze-change hooks", function()
