@@ -513,6 +513,17 @@ return function(S)
     end
   end})
 
+  -- 3.9 (#915): tuning_tones' text is the tuning in force's (a refused
+  -- text is set back; a silent read's is taken by the read hook);
+  -- engine_text may lag, by design (a silent read's)
+  S.register_invariant("tuning", function()
+    if not params.lookup["tuning_tones"] then return end
+    local text = params:get("tuning_tones")
+    if text ~= current.text then
+      return "tuning_tones holds " .. tostring(text) .. ", the tuning in force is " .. tostring(current.text)
+    end
+  end)
+
   -- The start makes the tunings folder; it sends nothing (the engine starts
   -- in the default tuning, 3.8 ruling 42)
   S.register_start(S.constants.START_ORDER.tuning, function() util.make_dir(folder()) end)

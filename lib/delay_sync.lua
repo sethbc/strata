@@ -50,15 +50,25 @@ return function(S)
     return seconds, division, halvings
   end
 
+  -- The mode (3.9, #911): "free" (sync off), "division" (synced at a tempo
+  -- that gives a length, then synced_time's seconds, division and
+  -- halvings) or "synced, no length" (synced at a tempo that gives none)
+  local function mode()
+    if not synced() then return "free" end
+    local seconds, division, halvings = synced_time()
+    if seconds then return "division", seconds, division, halvings end
+    return "synced, no length"
+  end
+
   -- The time (s) the delay plays: the synced division's; unsynced,
   -- delay_time as the engine has it (its LFO and matrix offsets included);
   -- synced at a tempo that gives no length, delay_time with its offsets as
   -- they are now, since the modulation's sends were skipped while synced
   -- and the value delivered may be stale (#768)
   function M.time()
-    if not synced() then return engine_param_value("delay_time") end
-    local seconds = synced_time()
-    if seconds then return seconds end
+    local current, seconds = mode()
+    if current == "free" then return engine_param_value("delay_time") end
+    if current == "division" then return seconds end
     return S.lib.engine_sync.with_lfo_offsets("delay_time", params:get("delay_time"))
   end
 
@@ -109,7 +119,7 @@ return function(S)
   -- a synced delay under an LFO or a routing on delay_time sends nothing
   -- and takes no slot of the round robin
   function M.time_unheard()
-    if not (synced() and synced_time()) or last_sent == nil then return false end
+    if mode() ~= "division" or last_sent == nil then return false end
     for _, param_id in ipairs(OTHERS) do
       if last_others[param_id] ~= engine_param_value(param_id) then return false end
     end
@@ -131,6 +141,8 @@ return function(S)
   -- morph write does when the window is full
   local held = false
   function M.hold() held = true end
+  -- Whether a send is held now (true only inside a scene's apply)
+  function M.held() return held end
   S.register_scene_applied({name = "delay sync", fn = function()
     if not held then return end
     held = false
@@ -151,10 +163,22 @@ return function(S)
     local time = M.time()
     local sent = last_sent or param_default("delay_time")
     if math.abs(time - sent) <= M.DELAY.threshold * time then return end
-    if synced() and not synced_time() then
+    if mode() == "synced, no length" then
       S.lib.lfos.mark_due("delay_time", send_time)
     else
       M.resend()
+    end
+  end)
+
+  -- 3.9 (#911): a held send only inside a scene's apply (the scene-applied
+  -- hook flushes it as apply_entries ends); with sync off, once a send has
+  -- gone, the time last sent is the time the delay plays (every change of
+  -- it sends at once). A synced time is not checked: a tempo moves with no
+  -- event this module sees, and the next step catches up
+  S.register_invariant("delay sync", function()
+    if held and not S.scene_recall_in_progress then return "a send is held with no scene applying" end
+    if mode() == "free" and last_sent ~= nil and last_sent ~= M.time() then
+      return "unsynced, the time last sent is " .. tostring(last_sent) .. ", the delay plays " .. tostring(M.time())
     end
   end)
 

@@ -142,6 +142,18 @@ return function(S)
     request_redraw()
   end
 
+  -- 3.9 (#914): a voice has a pending choice exactly while its settle
+  -- clock lives (S.lib.clocks.alive on the handle kept)
+  S.register_invariant("type settle", function()
+    for voice_idx = 1, NUM_VOICES do
+      local alive = S.lib.clocks.alive(settle_handles[voice_idx])
+      if (pending[voice_idx] ~= nil) ~= alive then
+        return "voice " .. voice_idx .. ": pending " .. tostring(pending[voice_idx]) .. ", its settle clock "
+          .. (alive and "lives" or "does not live")
+      end
+    end
+  end)
+
   -- A voice's stop applies its pending choice (ruling 63)
   S.register_voice_stop(function(voice_idx) M.flush(voice_idx) end)
 

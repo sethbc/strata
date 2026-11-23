@@ -575,4 +575,26 @@ test("the start sends no tuning and makes the tunings folder", function()
   assert_equal(#sent_tuning(context), 0, "a default start sends no setTuning or setTuningTone (ruling 42)")
   assert_true(util.file_exists(_path.data .. tuning().TUNING.folder), "the folder exists")
 end)
+
+-- 3.9 (#915): the invariant `tuning`, the param's text equal to the tuning
+-- in force (engine_text may lag, by design: a silent read's)
+local function tuning_broken()
+  for _, line in ipairs(h.check_invariants()) do
+    if line:sub(1, #"tuning: ") == "tuning: " then return line end
+  end
+end
+
+test("the tuning invariant holds through a refused text and names a param text the tuning never took", function()
+  load_strata()
+  assert_equal(tuning_broken(), nil, "at load")
+  params:set("tuning_tones", "1200 0 240 480 720 960")
+  assert_equal(tuning_broken(), nil, "a text that reads")
+  for _, text in ipairs({"abc", "1200 0 100.0000001 100.0000002", "1200 0 nan", "inf 0 100"}) do
+    params:set("tuning_tones", text)
+    assert_equal(tuning_broken(), nil, "a refused text (" .. text .. "): the param is set back")
+  end
+  h.allow_broken_invariants("the test sets the param's text silently on purpose")
+  params:set("tuning_tones", "1200 0 400 700", true)
+  assert_true(tuning_broken() ~= nil, "a text set silently, never taken, is reported")
+end)
 end

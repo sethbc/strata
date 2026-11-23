@@ -628,4 +628,263 @@ test("DELAY.max_seconds equals the engine's limit on setDelay's time", function(
   assert_near(params:get("delay_time"), 0.375, 1e-9, "delay_time's default stays")
 end)
 
+-- The invariant's line for name ("<name>: <message>"), or nil while it holds
+local function broken_line(name)
+  for _, line in ipairs(h.check_invariants()) do
+    if line:sub(1, #name + 2) == name .. ": " then return line end
+  end
+end
+
+test("the delay sync invariant names a held send outside a recall's apply", function()
+  local context, S, delay_sync = loaded()
+  lfo_step(context)
+  assert_equal(broken_line("delay sync"), nil, "it holds at rest")
+  h.allow_broken_invariants("the test holds a send outside an apply on purpose")
+  delay_sync.hold()
+  assert_true(broken_line("delay sync") ~= nil, "a held send with no apply running is reported")
+  assert_true(not S.scene_recall_in_progress, "no apply runs")
+end)
+
+test("the delay sync invariant names an unsynced time the engine was never sent, and leaves a synced one to the step",
+  function()
+    local context, S = loaded()
+    params:set("delay_time", 0.6)
+    lfo_step(context)
+    assert_equal(broken_line("delay sync"), nil, "unsynced, sent: it holds")
+    -- synced, the tempo moves with no event the module sees: legal until the
+    -- next step, so the invariant does not check it
+    params:set("delay_sync", 1)
+    params:set("clock_tempo", 100)
+    assert_equal(broken_line("delay sync"), nil, "a synced time that waits for its step is legal")
+    lfo_step(context)
+    params:set("delay_sync", 0)
+    h.allow_broken_invariants("the test moves the engine's delay_time without its send on purpose")
+    S.engine_param_values.delay_time = 0.9
+    assert_true(broken_line("delay sync") ~= nil, "a free time that differs from the time last sent is reported")
+  end)
+
+---------------------------------------------------------------------------
+-- The table `synced delay` (3.9, #911; docs/notes/lua/delay-sync.md). Every
+-- state is entered on a MIDI clock at 120 BPM (the no-length one at 0),
+-- delay_time 0.6 s (the free and no-length time), 1/8D (0.375 s at 120);
+-- a held state inside a real apply_entries, suspended in a coroutine after
+-- its delay_feedback entry's action (0.6) held the send. Each event fires
+-- its change and then one LFO step; each row's check asserts the setDelay
+-- sends from the event on (their count and the time each carries) and, from
+-- a held state, the one setDelay the apply's end flushes
+---------------------------------------------------------------------------
+
+local TABLE = {time = 0.6, division = 0.375, moved = 0.45, tempo = 120, moved_tempo = 100,
+  apply_feedback = 0.6, edit_feedback = 0.5, scene_feedback = 0.7}
+
+local function table_enter(sync, tempo, holding)
+  return function(context)
+    local S = local_value("S")
+    params:set("clock_source", 2)  -- midi: the tempo is clock.get_tempo()'s (a fresh clock each load)
+    clock.tempo = TABLE.tempo
+    params:set("delay_time", TABLE.time)
+    params:set("delay_sync", sync)
+    lfo_step(context)
+    clock.tempo = tempo
+    lfo_step(context)
+    if holding then
+      -- a real apply, suspended after its delay_feedback entry's action
+      local param = params:lookup_param("delay_feedback")
+      local action = param.action
+      local suspend = true
+      param.action = function(x)
+        action(x)
+        if suspend then
+          suspend = false
+          if coroutine.yield() == "fail" then error("test: the apply fails", 0) end
+        end
+      end
+      context.apply = coroutine.create(function()
+        S.lib.scenes.apply_entries({{kind = "continuous", id = "delay_feedback", value = TABLE.apply_feedback}})
+      end)
+      local resumed, problem = coroutine.resume(context.apply)
+      assert_true(resumed, "the apply starts: " .. tostring(problem))
+      assert_equal(coroutine.status(context.apply), "suspended", "the apply waits inside its entry")
+      assert_true(S.scene_recall_in_progress, "inside the apply")
+    end
+    context.clear_engine_calls()
+  end
+end
+
+-- End the suspended apply (fail: its entry's action raises as it resumes);
+-- returns what resume returned
+local function end_apply(context, fail)
+  local resumed, problem = coroutine.resume(context.apply, fail and "fail" or nil)
+  assert_equal(coroutine.status(context.apply), "dead", "the apply has ended")
+  return resumed, problem
+end
+
+-- Turn LFO 1 on, homed on delay_time (a sine at 5 Hz, depth 100)
+local function modulate_time()
+  local S = local_value("S")
+  assert_true(S.lib.matrix.set_home(1, "delay_time"), "LFO 1's home is delay_time")
+  params:set("strata_lfo1_shape", 1); params:set("strata_lfo1_rate", 5)
+  params:set("strata_lfo1_depth", 100); params:set("strata_lfo1", 1)
+end
+
+local function modulated_time()
+  return local_value("S").lib.engine_sync.with_lfo_offsets("delay_time", params:get("delay_time"))
+end
+
+-- The setDelay sends since the state was entered: count of them, each
+-- carrying time (a number, or a function giving it after the event)
+local function assert_sends(context, count, time, feedback, where)
+  local calls = delay_calls(context)
+  assert_equal(#calls, count, where .. ": setDelay sends")
+  local expected = type(time) == "function" and time() or time
+  for index, call in ipairs(calls) do
+    assert_near(call.args[1], expected, 1e-6, where .. ": send " .. index .. "'s time")
+    if feedback then assert_near(call.args[2], feedback, 1e-6, where .. ": send " .. index .. "'s feedback") end
+  end
+end
+
+-- A row's check from an unheld state: count sends of time (feedback
+-- optional) after the event and its step
+local function sends(count, time, feedback)
+  return function(context) assert_sends(context, count, time, feedback, "after the event") end
+end
+
+-- A row's check from a held state: no send while the apply runs, then its
+-- end (or its failure) flushes one setDelay of time and feedback; a state
+-- held still after the event ends its apply here
+local function held_then(time, feedback)
+  return function(context)
+    local S = local_value("S")
+    assert_sends(context, 0, time, nil, "while the apply runs")
+    if coroutine.status(context.apply) == "suspended" then
+      context.clear_engine_calls()
+      assert_true(end_apply(context), "the apply ends")
+    end
+    assert_true(not S.lib.delay_sync.held(), "nothing held after the apply")
+    assert_sends(context, 1, time, feedback, "the apply's end")
+  end
+end
+
+-- A row's check of the apply's end or failure: the one setDelay it flushed
+-- (of time and feedback), and nothing held
+local function ended(time, feedback)
+  return function(context)
+    assert_true(not local_value("S").lib.delay_sync.held(), "nothing held after the apply")
+    assert_sends(context, 1, time, feedback, "the apply's end")
+  end
+end
+
+local function table_tempo(tempo)
+  return function(context)
+    clock.tempo = tempo
+    lfo_step(context)
+  end
+end
+
+h.transition_table({
+  name = "synced delay",
+  notes = {"docs/notes/lua/delay-sync.md", "synced delay"},
+  states = {
+    ["free"] = table_enter(0, TABLE.tempo),
+    ["division"] = table_enter(1, TABLE.tempo),
+    ["synced, no length"] = table_enter(1, 0),
+    ["free, held"] = table_enter(0, TABLE.tempo, true),
+    ["division, held"] = table_enter(1, TABLE.tempo, true),
+    ["synced, no length, held"] = table_enter(1, 0, true),
+  },
+  events = {
+    ["tempo move"] = table_tempo(TABLE.moved_tempo),
+    ["modulation of the time"] = function(context) modulate_time(); lfo_step(context) end,
+    ["feedback edit"] = function(context) params:set("delay_feedback", TABLE.edit_feedback); lfo_step(context) end,
+    ["sync toggle"] = function(context) params:set("delay_sync", 1 - params:get("delay_sync")); lfo_step(context) end,
+    -- an instant recall of a scene of the delay as it is but its feedback
+    -- (from a held state, an apply inside the running one)
+    ["recall"] = function(context)
+      local S = local_value("S")
+      capture_scene(1)
+      S.scenes[1].data.delay_feedback = TABLE.scene_feedback
+      recall_scene(1, 0)
+      lfo_step(context)
+    end,
+    ["tempo to 0"] = table_tempo(0),
+    ["tempo back"] = table_tempo(TABLE.tempo),
+    ["apply ends"] = function(context)
+      local resumed, problem = end_apply(context)
+      assert_true(resumed, "the apply ends: " .. tostring(problem))
+    end,
+    -- the apply's entry raises: apply_entries puts the flag back, runs the
+    -- scene-applied hooks, then raises the error again
+    ["apply fails"] = function(context)
+      local resumed, problem = end_apply(context, true)
+      assert_true(not resumed, "the apply raised")
+      assert_true(tostring(problem):find("test: the apply fails", 1, true) ~= nil, "its error: " .. tostring(problem))
+    end,
+  },
+  state_of = function()
+    local delay_sync = local_value("S").lib.delay_sync
+    local mode = "free"
+    if params:get("delay_sync") == 1 then mode = delay_sync.playing() and "division" or "synced, no length" end
+    return delay_sync.held() and mode .. ", held" or mode
+  end,
+  rows = {
+    {"free", "tempo move", "free", check = sends(0)},
+    {"free", "modulation of the time", "free", check = sends(1, modulated_time)},
+    {"free", "feedback edit", "free", check = sends(1, TABLE.time, TABLE.edit_feedback)},
+    {"free", "sync toggle", "division", check = sends(1, TABLE.division)},
+    {"free", "recall", "free", check = sends(1, TABLE.time, TABLE.scene_feedback)},
+    {"free", "tempo to 0", "free", check = sends(0)},
+    {"division", "tempo move", "division", check = sends(1, TABLE.moved)},
+    {"division", "modulation of the time", "division", check = sends(0)},
+    {"division", "feedback edit", "division", check = sends(1, TABLE.division, TABLE.edit_feedback)},
+    {"division", "sync toggle", "free", check = sends(1, TABLE.time)},
+    {"division", "recall", "division", check = sends(1, TABLE.division, TABLE.scene_feedback)},
+    {"division", "tempo to 0", "synced, no length", check = sends(1, TABLE.time)},
+    {"synced, no length", "modulation of the time", "synced, no length", check = sends(1, modulated_time)},
+    {"synced, no length", "feedback edit", "synced, no length", check = sends(1, TABLE.time, TABLE.edit_feedback)},
+    {"synced, no length", "sync toggle", "free", check = sends(1, TABLE.time)},
+    {"synced, no length", "recall", "synced, no length", check = sends(1, TABLE.time, TABLE.scene_feedback)},
+    {"synced, no length", "tempo back", "division", check = sends(1, TABLE.division)},
+    {"free, held", "tempo move", "free, held", check = held_then(TABLE.time, TABLE.apply_feedback)},
+    {"free, held", "modulation of the time", "free, held", check = held_then(modulated_time)},
+    {"free, held", "feedback edit", "free, held", check = held_then(TABLE.time, TABLE.edit_feedback)},
+    {"free, held", "sync toggle", "division, held", check = held_then(TABLE.division)},
+    {"free, held", "recall", "free, held", check = held_then(TABLE.time, TABLE.scene_feedback)},
+    {"free, held", "tempo to 0", "free, held", check = held_then(TABLE.time)},
+    {"free, held", "apply ends", "free", check = ended(TABLE.time, TABLE.apply_feedback)},
+    {"free, held", "apply fails", "free", check = ended(TABLE.time, TABLE.apply_feedback)},
+    {"division, held", "tempo move", "division, held", check = held_then(TABLE.moved, TABLE.apply_feedback)},
+    {"division, held", "modulation of the time", "division, held", check = held_then(TABLE.division)},
+    {"division, held", "feedback edit", "division, held", check = held_then(TABLE.division, TABLE.edit_feedback)},
+    {"division, held", "sync toggle", "free, held", check = held_then(TABLE.time)},
+    {"division, held", "recall", "division, held", check = held_then(TABLE.division, TABLE.scene_feedback)},
+    {"division, held", "tempo to 0", "synced, no length, held", check = held_then(TABLE.time)},
+    {"division, held", "apply ends", "division", check = ended(TABLE.division, TABLE.apply_feedback)},
+    {"division, held", "apply fails", "division", check = ended(TABLE.division, TABLE.apply_feedback)},
+    {"synced, no length, held", "modulation of the time", "synced, no length, held", check = held_then(modulated_time)},
+    {"synced, no length, held", "feedback edit", "synced, no length, held",
+      check = held_then(TABLE.time, TABLE.edit_feedback)},
+    {"synced, no length, held", "sync toggle", "free, held", check = held_then(TABLE.time)},
+    {"synced, no length, held", "recall", "synced, no length, held", check = held_then(TABLE.time, TABLE.scene_feedback)},
+    {"synced, no length, held", "tempo back", "division, held", check = held_then(TABLE.division)},
+    {"synced, no length, held", "apply ends", "synced, no length", check = ended(TABLE.time, TABLE.apply_feedback)},
+    {"synced, no length, held", "apply fails", "synced, no length", check = ended(TABLE.time, TABLE.apply_feedback)},
+  },
+  impossible = {
+    {"free", "tempo back", "the free state is entered at 120 BPM: `tempo back` leaves a tempo of 0"},
+    {"division", "tempo back", "the division state is at 120 BPM: `tempo back` leaves a tempo of 0"},
+    {"free, held", "tempo back", "the free state is entered at 120 BPM: `tempo back` leaves a tempo of 0"},
+    {"division, held", "tempo back", "the division state is at 120 BPM: `tempo back` leaves a tempo of 0"},
+    {"synced, no length", "tempo move", "a tempo of 0 moves only by giving a length again (`tempo back`)"},
+    {"synced, no length", "tempo to 0", "the tempo is 0 already"},
+    {"synced, no length, held", "tempo move", "a tempo of 0 moves only by giving a length again (`tempo back`)"},
+    {"synced, no length, held", "tempo to 0", "the tempo is 0 already"},
+    {"free", "apply ends", "no apply runs: a held send exists only inside one"},
+    {"free", "apply fails", "no apply runs: a held send exists only inside one"},
+    {"division", "apply ends", "no apply runs: a held send exists only inside one"},
+    {"division", "apply fails", "no apply runs: a held send exists only inside one"},
+    {"synced, no length", "apply ends", "no apply runs: a held send exists only inside one"},
+    {"synced, no length", "apply fails", "no apply runs: a held send exists only inside one"},
+  },
+})
+
 end
