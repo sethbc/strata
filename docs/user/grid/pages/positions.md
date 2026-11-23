@@ -56,6 +56,6 @@ What side 2 shows (all of a voice's marks dark when it reads no buffer):
 
 ## Held keys
 
-A held key belongs to its pane: changing that pane's page or side, or the 8×8's half, ends it (a held hold lets the scan go, a held store stops storing, a held cell is no loop anchor any more, a held slice ends), while the other pane's keys go on. On the 16×16 both panes can show the page, one on each side: a store held below stores the bookmark pressed below while the top pane shows the cells, and a voice's store or hold held in both panes lasts until the last of them lets go.
+A held key belongs to its pane: changing that pane's page or side, or the 8×8's half, or opening the 8×8's chooser, ends it (a held hold lets the scan go, a held store stops storing, a held cell is no loop anchor any more, a held slice ends), while the other pane's keys go on. On the 16×16 both panes can show the page, one on each side: a store held below stores the bookmark pressed below while the top pane shows the cells, and a voice's store or hold held in both panes lasts until the last of them lets go.
 
 Where it sits: rows 1-7 of the [16×8](../128h.md) and either pane of the [16×16](../256.md) (the bottom pane's lines on rows 9-15), down columns 1-7 of the [8×16](../128v.md) (each voice's cells, and its side-2 keys, down its column), and a half at a time on the [8×8](../64.md): cells 1-8 or 9-16, and on side 2 the marks on the left half, the slots on the right.

@@ -108,9 +108,16 @@ return function(S)
     send_grain(voice_idx, "scrubRate", rate)
   end
 
-  local function cancel_glide_clock(voice_idx)
+  -- End a voice's glide clock (a handle of S.lib.clocks): stopped, so one
+  -- whose wake may be posted retires and ends at that wake (#870); at
+  -- cleanup canceled at once
+  local function stop_glide_clock(voice_idx, at_cleanup)
     if glide_clock[voice_idx] then
-      clock.cancel(glide_clock[voice_idx])
+      if at_cleanup then
+        S.lib.clocks.cancel(glide_clock[voice_idx])
+      else
+        S.lib.clocks.stop(glide_clock[voice_idx])
+      end
       glide_clock[voice_idx] = nil
       fling[voice_idx] = nil
     end
@@ -119,7 +126,7 @@ return function(S)
   -- End a voice's glide at once, and forget its recent ring turns unless
   -- the caller is the next turn
   local function end_glide(voice_idx, keep_turns)
-    cancel_glide_clock(voice_idx)
+    stop_glide_clock(voice_idx)
     if not keep_turns then turns[voice_idx] = nil end
     if glide_rate[voice_idx] ~= 0 then set_scrub_rate(voice_idx, 0) end
   end
@@ -283,22 +290,24 @@ return function(S)
   -- (fling[voice].turned_at) and waits until the ring has stayed still for
   -- SCRUB.release_seconds, then glides; a turn that comes meanwhile (the
   -- glide's rate already set to 0 by scrub_turned) sends it back to
-  -- waiting (`fling`, above). Every sleep is outside the protected call
-  local function glide(voice_idx)
+  -- waiting (`fling`, above). Every sleep is outside the protected call and
+  -- goes through the clock's handle: a stopped glide returns at once,
+  -- touching nothing (a newer glide may own the voice's state by then)
+  local function glide(voice_idx, handle)
     local contained_call = S.lib.ui_frame.contained_call
     local state = fling[voice_idx]
     while true do
       if not state.gliding then
         local remaining = state.turned_at + SCRUB.release_seconds - util.time()
         if remaining > 1e-6 then
-          clock.sleep(remaining)
+          if not handle.sleep(remaining) then return end
         else
           state.gliding = true
           contained_call(glide_errors, voice_idx, "scrub glide", start_glide, voice_idx)
           if glide_rate[voice_idx] == 0 then break end
         end
       else
-        clock.sleep(1 / PLAYHEADS.update_hz)
+        if not handle.sleep(1 / PLAYHEADS.update_hz) then return end
         if state.gliding then
           contained_call(glide_errors, voice_idx, "scrub glide", decay_glide, voice_idx)
           if glide_rate[voice_idx] == 0 then break end
@@ -330,21 +339,33 @@ return function(S)
       fling[voice_idx].turned_at, fling[voice_idx].gliding = now, false
     else
       fling[voice_idx] = {turned_at = now, gliding = false}
-      glide_clock[voice_idx] = clock.run(function() glide(voice_idx) end)
+      glide_clock[voice_idx] = S.lib.clocks.run(function(handle) glide(voice_idx, handle) end)
     end
   end
 
   -- The grid's held keys ----------------------------------------------
 
   -- per port: the record kept in the grid core's port state (so an unplug
-  -- forgets it): {held = {voice, cell, cells, page} (the position key held),
-  -- hold = {[voice] = page}, store = {[voice] = page} (a store key per
-  -- voice), pressed = {[voice] = key},
-  -- bank = {[voice] = the slice bank shown, nil for 1}, slices = {[voice] =
-  -- {[cell] = the slice key held: {n, page, token, released}}}}.
-  -- `records` names each record this module made, to find it again when
-  -- the port's state is gone
+  -- forgets it): {held = {voice, cell, cells, pane, still} (the position
+  -- key held), hold = {[voice] = {[pane] = still}}, store = {[voice] =
+  -- {[pane] = still}} (a store key per voice and pane), pressed = {[voice]
+  -- = key}, bank = {[voice] = the slice bank shown, nil for 1}, slices =
+  -- {[voice] = {[cell] = the slice key held: {n, pane, still, token,
+  -- released}}}}. `still` is the press's own test that its key is still
+  -- held (held_still, below). `records` names each record this module
+  -- made, to find it again when the port's state is gone
   local records = {}
+
+  -- A press's `still` (3.9, #865): the grid page's test that its key is
+  -- still down in the role it was pressed in. The grid core clears a key's
+  -- role at its release, a new press, its pane's page, side or half
+  -- change, the 64's chooser opening (whose keys' releases reach no page)
+  -- and the port's forget, so a record whose still is false has lost its
+  -- release and ends at the next key or tick. A direct call gives none:
+  -- its record ends only at its release or when its port goes (so does
+  -- one given anything but a function)
+  local function held_always() return true end
+  local function held_still(still) return type(still) == "function" and still or held_always end
 
   local function record_of(port)
     local state = S.lib.grid_core.port_state(port)
@@ -418,19 +439,13 @@ return function(S)
 
   local function slice_note_key(port, n) return port * SLICE_ROW.port_key + n end
 
-  -- What the pane a key came from shows (grid_core.view: its page, side
-  -- and half), the tag each press record keeps beside its pane
-  local function view_of(port, pane)
-    return S.lib.grid_core.view(port, pane)
-  end
-
   -- A slice key's press: its slice plays at once, or at the beat or bar
   -- (the position key's quantized action, so a press replaces a waiting
   -- jump or slice of the voice). A cell with no slice does nothing
-  local function press_slice_key(port, voice_idx, cell, pane)
+  local function press_slice_key(port, voice_idx, cell, pane, still)
     local n = first_slice(read_bank(port, voice_idx)) + cell - 1
     if n > slot_slices(voice_idx) then return end
-    local entry = {n = n, pane = pane, view = view_of(port, pane)}
+    local entry = {n = n, pane = pane, still = held_still(still)}
     local note_key = slice_note_key(port, n)
     local _, token = S.lib.quantize.schedule("position" .. voice_idx, function()
       S.lib.slices.play(voice_idx, n, {owner = "grid", key = note_key, velocity = 1})
@@ -471,45 +486,40 @@ return function(S)
     return true
   end
 
-  -- Whether a press record's view (view_of, above) is no longer what its
-  -- pane shows; the record keeps its pane, so the view's text is opaque
-  local function stale_view(port, pane, view)
-    return view ~= view_of(port, pane)
-  end
-
   -- End what a port's record holds that is stale: everything when its grid
-  -- was removed (its state is gone), and each key pressed on a pane that
-  -- no longer shows what it was pressed on (its view: another page, side
-  -- or half)
+  -- was removed (its state is gone), and each key whose `still` says its
+  -- release can no longer come (held_still, above)
   local function end_stale_port(port, record)
     local state = S.lib.grid_core.existing_port_state(port)  -- a gone port gets no state back
     local gone = state == nil or state.positions ~= record
-    -- a voice's hold and store are held per view (both panes of a 256 can
-    -- show them): each stale view leaves, and the key ends with its last
-    local function stale_views(views)
-      for view, pane in pairs(views) do
-        if gone or stale_view(port, pane, view) then views[view] = nil end
+    local function stale(still) return gone or not still() end
+    -- a voice's hold and store are held per pane (both panes of a 256 can
+    -- show them): each stale pane's key leaves, and the key ends with its
+    -- last
+    local function stale_panes(panes)
+      for pane, still in pairs(panes) do
+        if stale(still) then panes[pane] = nil end
       end
-      return next(views) == nil
+      return next(panes) == nil
     end
-    for voice_idx, views in pairs(record.hold) do
-      if stale_views(views) then
+    for voice_idx, panes in pairs(record.hold) do
+      if stale_panes(panes) then
         record.hold[voice_idx] = nil
         M.hold_scan(voice_idx, false, "grid:" .. port)
       end
     end
-    for voice_idx, views in pairs(record.store) do
-      if stale_views(views) then
+    for voice_idx, panes in pairs(record.store) do
+      if stale_panes(panes) then
         record.store[voice_idx] = nil
         record.pressed[voice_idx] = nil
       end
     end
     local held = record.held
-    if held and (gone or stale_view(port, held.pane, held.view)) then record.held = nil end
+    if held and stale(held.still) then record.held = nil end
     -- a slice key whose release can no longer come ends now
     for voice_idx, held in pairs(record.slices) do
       for cell, entry in pairs(held) do
-        if gone or stale_view(port, entry.pane, entry.view) then
+        if stale(entry.still) then
           held[cell] = nil
           end_slice_key(port, voice_idx, entry)
         end
@@ -539,21 +549,21 @@ return function(S)
     return record.store[voice_idx] ~= nil
   end
 
-  -- A key held per view (store, hold): `views` is the record's table for
-  -- the key ({[voice] = {[view] = pane}}, the pane it was pressed on).
-  -- Down adds the view; up removes it and returns true when no view holds
-  -- the voice's key any more
-  local function key_down(views, voice_idx, view, pane)
-    views[voice_idx] = views[voice_idx] or {}
-    views[voice_idx][view] = pane
+  -- A key held per pane (store, hold): `keys` is the record's table for
+  -- the key ({[voice] = {[pane] = still}}, the pane it was pressed on and
+  -- its still). Down adds the pane; up removes it and returns true when no
+  -- pane holds the voice's key any more
+  local function key_down(keys, voice_idx, pane, still)
+    keys[voice_idx] = keys[voice_idx] or {}
+    keys[voice_idx][pane] = held_still(still)
   end
 
-  local function key_up(views, voice_idx, view)
-    local held = views[voice_idx]
+  local function key_up(keys, voice_idx, pane)
+    local held = keys[voice_idx]
     if held == nil then return true end
-    held[view] = nil
+    held[pane] = nil
     if next(held) ~= nil then return false end
-    views[voice_idx] = nil
+    keys[voice_idx] = nil
     return true
   end
 
@@ -563,8 +573,10 @@ return function(S)
   -- respond; a release only ends the hold. On a voice whose row shows
   -- slices (M.slice_row) a key plays its slice of the port's bank instead,
   -- and its release ends it. pane (1 by default) is the grid pane the key
-  -- is on: the press keeps its view, and ends when that pane shows another
-  function M.grid_key(port, voice_idx, cell, cells, z, pane)
+  -- is on; still (optional) is the press's test that its key is still held
+  -- (held_still, above): the press ends at the next key or tick once it
+  -- says false
+  function M.grid_key(port, voice_idx, cell, cells, z, pane, still)
     if not valid_voice(voice_idx) or type(cells) ~= "number" or cells < 1 or cells % 1 ~= 0 then return end
     if type(cell) ~= "number" or cell < 1 or cell > cells or cell % 1 ~= 0 then return end
     if records[port] then end_stale_port(port, records[port]) end
@@ -578,7 +590,7 @@ return function(S)
     end
     if not buffer_voice(voice_idx) then return end
     if cells == SLICE_ROW.bank_size and M.slice_row(voice_idx) then
-      press_slice_key(port, voice_idx, cell, pane or 1)
+      press_slice_key(port, voice_idx, cell, pane or 1, still)
       return
     end
     local record = record_of(port)
@@ -588,19 +600,17 @@ return function(S)
       S.lib.quantize.schedule("position" .. voice_idx, function() M.set_loop(voice_idx, (low - 1) / cells, high / cells) end, "v" .. voice_idx .. " jump")
       return
     end
-    pane = pane or 1
-    record.held = {voice = voice_idx, cell = cell, cells = cells, pane = pane, view = view_of(port, pane)}
+    record.held = {voice = voice_idx, cell = cell, cells = cells, pane = pane or 1, still = held_still(still)}
     S.lib.quantize.schedule("position" .. voice_idx, function() M.jump(voice_idx, (cell - 1) / cells) end, "v" .. voice_idx .. " jump")
   end
 
   -- The strip's keys: 1-4 (recall; with store held, store), "store" and
   -- "hold" (held), "whole" (the loop back to the whole slot). pane (1 by
-  -- default) is the grid pane the key is on, as for grid_key
-  function M.strip_key(port, voice_idx, key, z, pane)
+  -- default) and still (optional) as for grid_key
+  function M.strip_key(port, voice_idx, key, z, pane, still)
     if not valid_voice(voice_idx) then return end
     if records[port] then end_stale_port(port, records[port]) end
     pane = pane or 1
-    local view = view_of(port, pane)
     -- a press on a voice that reads no buffer records nothing (its keys are
     -- dark and do nothing); releases always end what they ended before
     if z == 1 and not buffer_voice(voice_idx) then return end
@@ -630,15 +640,15 @@ return function(S)
       end
     elseif key == "store" then
       if z == 1 then
-        key_down(record_of(port).store, voice_idx, view, pane)
-      elseif records[port] and key_up(records[port].store, voice_idx, view) then
+        key_down(record_of(port).store, voice_idx, pane, still)
+      elseif records[port] and key_up(records[port].store, voice_idx, pane) then
         records[port].pressed[voice_idx] = nil
       end
     elseif key == "hold" then
       if z == 1 then
-        key_down(record_of(port).hold, voice_idx, view, pane)
+        key_down(record_of(port).hold, voice_idx, pane, still)
         M.hold_scan(voice_idx, true, "grid:" .. port)
-      elseif not records[port] or key_up(records[port].hold, voice_idx, view) then
+      elseif not records[port] or key_up(records[port].hold, voice_idx, pane) then
         M.hold_scan(voice_idx, false, "grid:" .. port)
       end
     elseif key == "whole" and z == 1 then
@@ -866,7 +876,7 @@ return function(S)
     scene_ranges = scene_ranges,
     -- a started voice never inherits a glide or a hold
     sync = function(voice_idx)
-      cancel_glide_clock(voice_idx)
+      stop_glide_clock(voice_idx)
       turns[voice_idx] = nil
       glide_rate[voice_idx], scan_hold[voice_idx], holders[voice_idx] = 0, false, {}
       engine.setGrainParam(voice_idx - 1, "scrubRate", 0)
@@ -896,7 +906,7 @@ return function(S)
   -- cleanup: no glide runs on, no scan stays held (every holder lets go)
   S.register_cleanup(S.constants.CLEANUP_ORDER.scrub_glide, function()
     for voice_idx = 1, NUM_VOICES do
-      cancel_glide_clock(voice_idx)
+      stop_glide_clock(voice_idx, true)
       turns[voice_idx] = nil
       if glide_rate[voice_idx] ~= 0 then set_scrub_rate(voice_idx, 0) end
       for holder in pairs(holders[voice_idx]) do M.hold_scan(voice_idx, false, holder) end

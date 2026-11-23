@@ -562,6 +562,94 @@ test("a cell held on the left half ends when the chooser shows the right half; a
   assert_true(not positions.scan_held(1), "nothing held")
 end)
 
+-- #865: while the 64's chooser shows, a pane key's release goes to the
+-- chooser and never reaches the page, and NV coming up with no pick keeps
+-- the view. The chooser opening ends the pane's keys' roles, so each
+-- positions record (its `still`, the role its page pressed it in) ends at
+-- the next key or tick
+local function under_the_chooser(context, left, x, y)
+  left.press(x, y, 1)                    -- the positions key held
+  left.press(1, 8, 1)                    -- NV held
+  context.clock.run_for(0.6)             -- the chooser opens
+  left.press(x, y, 0)                    -- the key comes up under the chooser
+  left.press(1, 8, 0)                    -- NV up, nothing picked: the same view
+end
+
+test("a position cell released under the chooser is ended when the chooser opens: the next tap jumps", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local left = grid_pane(context, "64 left")
+  left.show(S.constants.GRID_PAGES.positions, 1, 1)
+  under_the_chooser(context, left, 3, 1)
+  assert_equal(S.lib.grid_core.view(1, 1), "1:5:1:1", "the same view as before the chooser")
+  left.tap(6, 1)
+  assert_near(params:get("v1_loop_start"), 0, 1e-9, "no stale anchor: the loop start unchanged")
+  assert_near(params:get("v1_loop_length"), 1, 1e-9, "and its length")
+  assert_near(params:get("v1_buf_pos"), 5 / 16, 1e-9, "cell 6 jumped")
+end)
+
+test("HD released under the chooser leaves no scan hold", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local positions = S.lib.positions
+  local left = grid_pane(context, "64 left")
+  left.show(S.constants.GRID_PAGES.positions, 2, 1)
+  under_the_chooser(context, left, MARK_X.hold, 1)
+  context.clock.run_for(0.2)             -- a playhead tick
+  assert_equal(positions.scan_held(1), false, "every key is up: no scan hold")
+  assert_equal(positions.holds_scan(1, "grid:1"), false, "the grid holds nothing")
+  assert_equal(scan_hold_sent(context), 0, "scanHold 0 sent")
+  assert_equal(left.led(MARK_X.hold, 1), positions.LEVELS.key_up, "HD dark again")
+end)
+
+test("a slice key released under the chooser stops", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local doubles = slice_double(S, 1, 20)
+  local left = grid_pane(context, "64 left")
+  left.show(S.constants.GRID_PAGES.positions, 1, 1)
+  under_the_chooser(context, left, 3, 1)
+  assert_equal(doubles.plays[1].n, 3, "the key played slice 3")
+  context.clock.run_for(0.2)             -- a playhead tick
+  assert_equal(#doubles.offs, 1, "its note ended once")
+  assert_equal(doubles.offs[1].voice, 1); assert_equal(doubles.offs[1].key, doubles.plays[1].note.key)
+  left.tap(5, 1)
+  assert_equal(#doubles.offs, 2, "the next key's slice plays and ends at its own release, nothing more")
+end)
+
+test("a 256 with both panes on positions keeps each pane's keys apart", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local positions, pages = S.lib.positions, S.constants.GRID_PAGES
+  local top = grid_pane(context, "256 top")
+  local bottom = grid_pane(context, "256 bottom")
+  top.show(pages.positions, 1); bottom.show(pages.positions, 2)
+  -- a cell held above lives through the lower pane's page change
+  top.press(5, 1, 1)
+  bottom.press(MARK_X.hold, 1, 1)
+  bottom.show(pages.patterns)
+  context.clock.run_for(0.2)
+  assert_equal(positions.scan_held(1), false, "the lower pane's page change ends its hold")
+  top.press(9, 1, 1)
+  assert_near(params:get("v1_loop_start"), 0.25, 1e-9, "the held cell above and cell 9 set the loop")
+  assert_near(params:get("v1_loop_length"), 0.3125, 1e-9)
+  top.press(9, 1, 0); top.press(5, 1, 0)
+  -- HD held in both panes: each pane's release or page change is its own
+  top.show(pages.positions, 2); bottom.show(pages.positions, 2)
+  top.press(MARK_X.hold, 2, 1); bottom.press(MARK_X.hold, 2, 1)
+  bottom.press(MARK_X.hold, 2, 0)
+  context.clock.run_for(0.2)
+  assert_equal(positions.scan_held(2), true, "the lower release leaves the upper pane's hold")
+  bottom.press(MARK_X.hold, 2, 1)
+  top.show(pages.faders)
+  context.clock.run_for(0.2)
+  assert_equal(positions.scan_held(2), true, "the upper page change leaves the lower pane's hold")
+  bottom.press(MARK_X.hold, 2, 0)
+  assert_equal(positions.scan_held(2), false, "the last key up ends it")
+  top.press(MARK_X.hold, 2, 0)  -- the upper key's release, on another page now
+  assert_equal(positions.scan_held(2), false, "and nothing comes back")
+end)
+
 test("64: the positions view is per port", function()
   local context = load_strata(); finish_startup(context)
   local S = buffer_voices(context)

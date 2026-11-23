@@ -56,6 +56,16 @@ For a physical key: the strip; else, on a 64 while the chooser shows, the choose
 
 While NV is held past 0.5 s (`port_state(port).chooser`): column c is page c; row 1 its left half, row 2 its right, rows 3 and 4 side 2's halves. A press sets page, side and half at once (`set_page`, `set_half`: the pane's keys end) and is consumed, so its release does nothing; the chooser stays until NV comes up. LEDs: the shown choice 15, a registered page's other keys 4, a one-sided page's side-2 rows and a page with no record 0 (and dead). Column 8 and rows 5-7 are dark and dead while it shows. The chooser opening ends the pane's held keys, as a page change does.
 
+States, per port (3.9, #865):
+
+| State | Encoding | LED | A pane key | Leaves by |
+|---|---|---|---|---|
+| closed | `port_state(port).chooser` nil, NV in no role | NV `play_level()` | its page's press and release | NV press: armed |
+| armed | NV held in its role `"chooser"`, its `on_hold` pending | unchanged | its page's press and release | NV release before `GRID_HOLD.chooser_seconds` (0.5 s): `pattern_toggle()`, closed; the hold: `end_pane_keys(port, 1)`, open |
+| open | `chooser` true | NV 15, the chooser drawn | a press picks (`chooser_key`, consumed); releases of pane keys reach no page, so anything a page holds ends at opening | NV release: closed, nothing plays; `forget_port` (the grid leaves) |
+
+Since a release under the chooser never reaches its page, a page that keeps a press past its release ties it to the key's role (`pane.press_as`, then `pane.pressed_as` in its `still`), which `end_pane_keys` clears at opening: positions' held keys end so (`docs/notes/lua/positions.md`). NV coming up with no pick, or the same pick, keeps the view, so a page that tested its view would never see the end. A missed NV release leaves the chooser open until the next NV tap, which is visible and heals itself.
+
 ### Fader lines
 
 A page's `faders(pane)` returns `{{line, first, keys, id}, ...}` (keys 16 or 8). A line that fits the pane's shown columns is set and drawn as it is (its key k is `x - first + 1`; on the 128v it runs up, `k = first + keys - x`, row 16 the minimum); a line wider than a 64's half is drawn across the half's eight keys (`k = x - offset`, at 8 keys); an 8-key line on the other half is not shown (its keys reach the page). A press (z 1) runs `set_param_from_column(id, k, keys shown)`; a release does nothing. The draw is a bar at 8 up to `fader_position(id, keys shown)`, 15 there.
