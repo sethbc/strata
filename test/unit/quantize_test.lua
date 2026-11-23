@@ -284,11 +284,21 @@ end)
 -- on bar, a probe key "probe" whose action counts its runs. Each state is
 -- entered at beat 1.5 (retired: the waiting action dropped 1/64 beat before
 -- its bar, within QUANTIZE.wake_tolerance, so its clock is left to its
--- resume). Each row's check runs to past the bar and asserts what ran
+-- resume). M.retired is by clock id, so the table keeps the ids of the
+-- probe key's clocks and reads M.retired for those. Each row's check runs to
+-- past the bar and asserts what ran
 do
   local KEY = "probe"
 
   local function probe(context) return function() context.runs = (context.runs or 0) + 1 end end
+
+  -- Schedule the probe key's action, keeping its clock's id when it waits
+  local function schedule_probe(context, label)
+    local quantize = local_value("S").lib.quantize
+    quantize.schedule(KEY, probe(context), label)
+    context.probe_clocks = context.probe_clocks or {}
+    if quantize.actions[KEY] then context.probe_clocks[quantize.actions[KEY].clock] = true end
+  end
 
   local function near_the_bar(context)
     run_to_beat(context, (math.floor(clock.get_beats() / 4) + 1) * 4 - 1 / 64)
@@ -299,7 +309,7 @@ do
       local quantize = local_value("S").lib.quantize
       params:set("quantize_actions", BAR)
       run_to_beat(context, 1.5)
-      if waits then quantize.schedule(KEY, probe(context), "probe") end
+      if waits then schedule_probe(context, "probe") end
       if retired then
         near_the_bar(context)
         quantize.cancel(KEY)
@@ -308,10 +318,13 @@ do
     end
   end
 
-  local function key_state_of()
+  local function key_state_of(context)
     local quantize = local_value("S").lib.quantize
     if quantize.waiting(KEY) then return "waiting" end
-    return next(quantize.retired) ~= nil and "retired" or "idle"
+    for id in pairs(context.probe_clocks or {}) do
+      if quantize.retired[id] then return "retired" end
+    end
+    return "idle"
   end
 
   -- Past the bar: the action ran `runs` times in all and nothing is left
@@ -331,10 +344,10 @@ do
     notes = {"docs/notes/lua/quantize.md", "quantize"},
     states = {idle = key_state(), waiting = key_state(true), retired = key_state(true, true)},
     events = {
-      ["schedule"] = function(context) local_value("S").lib.quantize.schedule(KEY, probe(context), "probe") end,
+      ["schedule"] = function(context) schedule_probe(context, "probe") end,
       ["schedule, off"] = function(context)
         params:set("quantize_actions", OFF)
-        local_value("S").lib.quantize.schedule(KEY, probe(context))
+        schedule_probe(context)
       end,
       ["cancel"] = function() local_value("S").lib.quantize.cancel(KEY) end,
       ["cancel near the bar"] = function(context)
@@ -346,7 +359,10 @@ do
     },
     state_of = key_state_of,
     rows = {
-      {"idle", "schedule", "waiting", check = after_the_bar(1)},
+      {"idle", "schedule", "waiting", check = function(context)
+        assert_equal(local_value("S").lib.ui_flash.text("header"), "probe at bar", "the header says it waits")
+        after_the_bar(1)(context)
+      end},
       {"idle", "schedule, off", "idle", check = after_the_bar(1)},
       {"idle", "cancel", "idle", check = after_the_bar(0)},
       {"idle", "cancel near the bar", "idle", check = after_the_bar(0)},
@@ -354,7 +370,10 @@ do
       {"idle", "cleanup", "idle", check = after_the_bar(0)},
       {"waiting", "schedule", "waiting", check = after_the_bar(1)},
       {"waiting", "schedule, off", "idle", check = after_the_bar(1)},
-      {"waiting", "cancel", "idle", check = after_the_bar(0)},
+      {"waiting", "cancel", "idle", check = function(context)
+        assert_true(local_value("S").lib.ui_flash.text("header") ~= "probe at bar", "its flash has ended")
+        after_the_bar(0)(context)
+      end},
       {"waiting", "cancel near the bar", "retired", check = after_the_bar(0)},
       {"waiting", "the bar", "idle", check = function(context)
         assert_equal(context.runs, 1, "the action ran at the bar")

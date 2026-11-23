@@ -4463,8 +4463,6 @@ do
     end
   end
 
-  -- math.random(n) answers from RANDOM_DRAWS in turn (folded into 1..n),
-  -- math.random() the real one; put back as missteps_up's is
   -- math.random(n) answers from RANDOM_DRAWS in turn (folded into 1..n);
   -- math.random() answers misstep_draw (as missteps_up's draw), or the real
   -- one without it. Put back as missteps_up's is
@@ -4578,10 +4576,10 @@ do
         "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2", 12)},
       {"random", "length 4", "random", check = plays("5 2 7 4 1 4 3 2 1 2 3 4 1 4 3",
         "1 1 1 1 2 2 2 2 3 3 3 3 4 4 4", 12)},
-      -- today's behavior, reported for an issue (h.transition_table takes
-      -- no known = 0): in ping-pong a misstep that wraps (6 to 1) neither
-      -- turns nor ends the pass, so with every step a misstep it never ends
-      {"missteps", "to ping-pong", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4 5 6 1 2 3 4 5",
+      -- known #970: in ping-pong a misstep takes the place of
+      -- ping_pong_step, so it never turns or ends a pass: with every step a
+      -- misstep, its wrap (6 to 1) crosses the top and the pass never ends
+      {"missteps", "to ping-pong", "missteps", known = 970, check = plays("1 2 3 4 5 6 1 2 3 4 5 6 1 2 3 4 5",
         "1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1", 12)},
       {"missteps", "to random", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4 5 6 1 2 3 4 5",
         "1 1 1 1 1 1 2 2 2 2 2 2 3 3 3 3 3", 12)},
@@ -5055,6 +5053,8 @@ do
       if start == "armed" then pattern_toggle() end
       if start == "playing" then pattern_clock_start() end
       context.clock_before = S.pattern_clock
+      context.clocks_before = {S.pattern_clock}
+      for voice_idx = 1, S.constants.NUM_VOICES do table.insert(context.clocks_before, S.pattern_clocks[voice_idx]) end
     end
   end
 
@@ -5128,7 +5128,26 @@ do
         assert_true(S.lib.sequencer.sounding_step() ~= 1, "and is not started again")
         pattern_clock_stop()
       end},
-      {"playing", "transport start", "playing", check = started_now},
+      -- a followed start retires every clock and cancels none: each still
+      -- runs now and ends at its next wake, within a 16th
+      {"playing", "transport start", "playing", check = function(context)
+        local S = local_value("S")
+        assert_equal(S.lib.sequencer.sounding_step(), 1, "step 1 at once")
+        assert_true(S.pattern_clock ~= context.clock_before, "a new clock plays")
+        assert_equal(#context.clocks_before, S.constants.NUM_VOICES + 1, "the transport's and every voice's clock")
+        for _, id in ipairs(context.clocks_before) do
+          assert_true(context.clock.threads[id] ~= nil, "clock " .. id .. " retired, not canceled")
+        end
+        context.clock.run_for(0.125 + 1e-6)
+        for _, id in ipairs(context.clocks_before) do
+          assert_true(context.clock.threads[id] == nil, "clock " .. id .. " ended at its wake")
+        end
+        assert_equal(#context.clock.take_errors(), 0, "no resume reached a canceled clock")
+        local started = S.pattern_clock
+        the_bar(context)
+        assert_equal(S.pattern_clock, started, "the bar starts nothing again")
+        pattern_clock_stop()
+      end},
       {"playing", "transport stop", "stopped", check = bar_changes_nothing},
       {"playing", "cleanup", "stopped", check = bar_changes_nothing},
     },

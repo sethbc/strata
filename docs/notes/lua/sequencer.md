@@ -137,7 +137,7 @@ Each state is voice 1 alone with every step set, playing: `forward` and `reverse
 | `random` | `to ping-pong` | `ping-pong` | up from 7: `8`, then pass 2 turns down |
 | `random` | `to random` | `random` | no change: five draws, then pass 2 |
 | `random` | `length 4` | `random` | three taken, under 4: one draw of 4, then passes of 4 |
-| `missteps` | `to ping-pong` | `missteps` | a misstep's wrap is no turn: the pass never ends (to be filed) |
+| `missteps` | `to ping-pong` | `missteps` | a misstep's wrap is no turn: the pass never ends (known #970) |
 | `missteps` | `to random` | `missteps` | counts on: `6`, then pass 2 |
 
 ## Owns
@@ -187,7 +187,7 @@ Each state is voice 1 alone with every step set, playing: `forward` and `reverse
 - **The gate**: `gate_seconds(voice, step, hits)` is the step's `gate` (or `v<i>_seq_gate_length`) × the voice's nominal step (`division_beats × beat_seconds_now()`) / hits, clamped to 0.005-120 s; swing never changes it.
 - **Division reset** (`seq_division_reset`, while playing): the transport's next bar (`anchor + 4 m` after its last 16th) becomes the reset beat. A voice whose next tick would pass it waits for the bar instead; one due on the bar starts its position there (`start_position`: its direction's first step, pass 1) with the bar as its new anchor; the transport, at the bar, restarts (`restart_voice`) every voice still on its old anchor (one that was waiting past the bar).
 - **Stop** (`pattern_clock_stop`, also the transport's stop, cleanup step 90 and the error path): every clock ended (`end_clock`), the playheads cleared, the reset and the chain's next link dropped, every override and chord ended, then (when the patterns played) every output's `stop`, and `grid_redraw()`.
-- **States**: the Machines entry `pattern clock`, above. A clock that fails on its first run (which `clock.run` makes at once) leaves its id unrecorded, because `clock.run` re-raises before it returns, and its stop ends the clocks started before it.
+- **States**: the Machines entry `pattern clock`, above; the sounding steps are nil while stopped and before the first step plays. A clock that fails on its first run (which `clock.run` makes at once) leaves its id unrecorded, because `clock.run` re-raises before it returns, and its stop ends the clocks started before it.
 
 ## The chain (design 8.8)
 
