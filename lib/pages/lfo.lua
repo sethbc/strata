@@ -392,12 +392,10 @@ return function(S)
     end
   end
 
-  -- ALT+K2 acts on release (lfo_alt_key_release): the press notes its time.
-  -- ALT+K3 turns the selected LFO on or off
+  -- ALT+K2 acts on release (lfo_alt_key_release): its press time is the
+  -- dispatcher's (S.key_press_at). ALT+K3 turns the selected LFO on or off
   local function lfo_alt_key(n)
-    if n == 2 then
-      S.lib.ui_alt.k2_down()
-    elseif n == 3 then
+    if n == 3 then
       toggle_selected_lfo()
     end
     request_redraw()

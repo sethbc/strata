@@ -4,7 +4,7 @@
 -- strata.lua sets ALT through set(held) and sends ALT+K2/ALT+K3 to
 -- alt_action (global), which runs the page record's alt_key. Fields of this
 -- module's table (S.lib.ui_alt): set, run_release_hooks, and the shared
--- ALT+K2 of the randomizing pages: k2_down, k2_up, k2_held, k2_hint, and
+-- ALT+K2 of the randomizing pages: k2_up, k2_held, k2_hint, and
 -- join, the hint row's parts joined.
 -- S.alt_held and S.key_press_alt live in lib/ui/keys.lua, whose
 -- forget_held_keys clears them.
@@ -43,7 +43,8 @@ return function(S)
   -- a quick press (released within ALT_HOLD_SECONDS) undoes the randomize
   -- held there or randomizes the page's section; a longer one runs the
   -- record's alt_hold, or cancels on a page without one. A page's
-  -- alt_key(2) calls k2_down and its alt_key_release(2) k2_up(record). The
+  -- alt_key_release(2) calls k2_up(record); its ALT+K2 press calls nothing
+  -- (#959). The
   -- record's randomize_section() returns the spec of the section under its
   -- cursor (S.lib.mutation.randomize), with "locked" second for a locked
   -- voice (nothing is randomized, but an undo held there still runs), or
@@ -52,12 +53,6 @@ return function(S)
   -- own, so a page change, the norns menu, the file selector and a modal
   -- push, which forget the press, leave nothing to go stale
   local ALT_HOLD_SECONDS = S.constants.ALT_HOLD_SECONDS
-
-  -- ALT+K2 went down on the page (its alt_key(2)) or on SEQ's step editor:
-  -- key() or the modal has noted the press, so there is nothing to keep
-  -- (key() requests the redraw that shows the held hint)
-  function M.k2_down()
-  end
 
   -- Whether ALT+K2 is down on the page showing: a page change, the norns
   -- menu, the file selector and a modal push forget it (S.key_press_page),

@@ -322,12 +322,11 @@ return function(S)
     end
   end
 
-  -- ALT+K2 acts on release (voice_alt_key_release): the press only notes
-  -- its time. ALT+K3: lock or unlock the voice, at the press
+  -- ALT+K2 acts on release (voice_alt_key_release): its press time is the
+  -- dispatcher's (S.key_press_at). ALT+K3: lock or unlock the voice, at the
+  -- press
   local function voice_alt_key(n)
-    if n == 2 then
-      S.lib.ui_alt.k2_down()
-    elseif n == 3 then
+    if n == 3 then
       toggle_lock(S.selected_voice)
     end
   end

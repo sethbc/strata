@@ -188,8 +188,8 @@ test("an ALT release runs the hooks, from K1 up and from forget_held_keys", func
   assert_equal(calls, 2, "forgetting with ALT not held runs none")
 end)
 
--- #557: the shared ALT+K2 of every randomizing page (S.lib.ui_alt.k2_down,
--- k2_up, k2_hint), acting on release: a quick press randomizes or undoes,
+-- #557: the shared ALT+K2 of every randomizing page (S.lib.ui_alt.k2_up,
+-- k2_hint), acting on release: a quick press randomizes or undoes,
 -- one held ALT_HOLD_SECONDS runs the page's alt_hold
 
 -- Make FX a randomizing test page: ALT+K2 through the shared handler, its
@@ -207,7 +207,7 @@ local function randomizing_fx_record(log)
     end } } }
   end
   record.alt_hold = function() table.insert(log, "alt_hold") end
-  record.alt_key = function(n) if n == 2 then S.lib.ui_alt.k2_down() end end
+  record.alt_key = function() end  -- the press is the dispatcher's (#959)
   record.alt_key_release = function(n) if n == 2 then S.lib.ui_alt.k2_up(record) end end
   record.hints = function(alt_held) return alt_held and S.lib.ui_alt.k2_hint(record) or "plain" end
   record.animates = function() return S.lib.ui_alt.k2_held() end
@@ -373,6 +373,19 @@ test("a held ALT+K2 shows the record's alt_hold_hint", function()
 end)
 
 -- X14's review: k2_hint returns nil where a quick press draws nothing, so
+-- #959: the dispatcher keeps the ALT+K2 press time (S.key_press_at, #866),
+-- so the press calls nothing: no page, nor SEQ's step editor, calls a
+-- k2_down that would note nothing, and S.lib.ui_alt has none
+test("no page's ALT+K2 press calls a function that does nothing (#959)", function()
+  load_strata()
+  assert_equal(local_value("S").lib.ui_alt.k2_down, nil, "S.lib.ui_alt has no k2_down")
+  local callers = {}
+  for _, source in ipairs(h.read_lua_sources()) do
+    if source.text:find("ui_alt%.k2_down") then callers[#callers + 1] = source.path end
+  end
+  assert_equal(table.concat(callers, ", "), "", "no Lua source calls S.lib.ui_alt.k2_down")
+end)
+
 -- every page joins its hint parts through S.lib.ui_alt.join, which leaves a
 -- nil or empty part out; a randomizing page whose quick ALT+K2 draws
 -- nothing still draws a hint row, ALT held or K2 held after K1 let go

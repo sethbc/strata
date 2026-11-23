@@ -300,12 +300,13 @@ return function(S)
     return S.lib.ui_alt.k2_held()
   end
 
-  -- ALT+K2 acts on release: the press notes its time; no hold action.
+  -- ALT+K2 acts on release; the press only redraws (its time is the
+  -- dispatcher's, S.key_press_at); no hold action.
   -- ALT+K3 freezes or releases the cursor row's effect, if it freezes
   -- (fx_hold's toggle; its param's action redraws)
   local function fx_alt_key(n)
     if n == 2 then
-      S.lib.ui_alt.k2_down(); request_redraw()
+      request_redraw()
     elseif n == 3 then
       local effect = cursor_row().effect
       S.lib.fx_hold.toggle(effect)  -- nothing unless S.lib.fx_hold.freezable(effect)
