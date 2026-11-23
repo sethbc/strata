@@ -372,11 +372,10 @@ test("a held ALT+K2 shows the record's alt_hold_hint", function()
   key(2, 0); key(1, 0)
 end)
 
--- X14's review: k2_hint returns nil where a quick press draws nothing, so
 -- #959: the dispatcher keeps the ALT+K2 press time (S.key_press_at, #866),
 -- so the press calls nothing: no page, nor SEQ's step editor, calls a
 -- k2_down that would note nothing, and S.lib.ui_alt has none
-test("no page's ALT+K2 press calls a function that does nothing (#959)", function()
+test("no page calls the press mark that is gone (#959)", function()
   load_strata()
   assert_equal(local_value("S").lib.ui_alt.k2_down, nil, "S.lib.ui_alt has no k2_down")
   local callers = {}
@@ -386,6 +385,7 @@ test("no page's ALT+K2 press calls a function that does nothing (#959)", functio
   assert_equal(table.concat(callers, ", "), "", "no Lua source calls S.lib.ui_alt.k2_down")
 end)
 
+-- X14's review: k2_hint returns nil where a quick press draws nothing, so
 -- every page joins its hint parts through S.lib.ui_alt.join, which leaves a
 -- nil or empty part out; a randomizing page whose quick ALT+K2 draws
 -- nothing still draws a hint row, ALT held or K2 held after K1 let go
