@@ -202,7 +202,7 @@ The engine's rows of a recording (`docs/notes/engine/record.md`, The state table
 | `finishing, stopped armed` | `another load's number` | `finishing, stopped armed` | ignored: sent before the slot's newest load (#578) |
 | `finishing, stopped armed` | `bufferLoadFailed untracked` | `finishing, stopped armed` | ignored: the slot tracks no such load |
 | `finishing, stopped armed` | `takeWriteFailed` | `finishing, stopped armed` | `take_unsaved`: it settles with no path |
-| `finishing, stopped armed` | `the fallback` | `loaded` | settled as `take <n>` on the scratch path from the old audio's length (a fault, its issue to be filed) |
+| `finishing, stopped armed` | `the fallback` | `loaded` | it never started (#974): as its `canceled` and the length after it, from the last known 4 s: `a.wav` back, bound |
 | `loaded` | `load_buffer` | `loading, zero awaited` | `loadBuffer`; the overview forgotten; over audio, it waits for its 0 s (#401) |
 | `loaded` | `clear_buffer` | `empty` | `clearBuffer`; the tracked loads forgotten; unbound |
 | `loaded` | `record_buffer` | `recording` | a replace take, sent at once: unbound, its timer runs; the tracked loads forgotten |
