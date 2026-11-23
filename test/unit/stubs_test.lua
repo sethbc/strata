@@ -2962,4 +2962,278 @@ test("the iii stub has the rest of iii's functions, and below 1.1.0 calls no eve
   assert_equal(old_env.hit, nil, "no event callback runs below 1.1.0")
 end)
 
+---------------------------------------------------------------------------
+-- 3.9's package 0a: the transition tables, the notes' tables and the seeded
+-- walks (h.transition_table, h.notes_table, h.walk; design section 2)
+---------------------------------------------------------------------------
+
+-- The tests `register` adds to the registry, taken out of it again (so the
+-- run does not run them a second time), and what it returned
+local function registered(register)
+  local before = #tests
+  local result = register()
+  local added = {}
+  for index = before + 1, #tests do added[#added + 1] = tests[index] end
+  for index = #tests, before + 1, -1 do tests[index] = nil end
+  return added, result
+end
+
+-- The function of the registered test named `name` among `added`
+local function registered_test(added, name)
+  for _, entry in ipairs(added) do
+    if entry.name == name then return entry.func end
+  end
+  local names = {}
+  for _, entry in ipairs(added) do names[#names + 1] = entry.name end
+  error("no test named '" .. name .. "' among: " .. table.concat(names, " | "), 2)
+end
+
+-- A machine of two states, kept on the context: `a` and `b`, the event `go`
+-- moving a to b and `stay` moving nothing
+local function toy_machine(rows, extra)
+  local spec = {
+    name = "toy",
+    states = {
+      a = function(context) context.toy = "a" end,
+      b = function(context) context.toy = "b" end,
+    },
+    events = {
+      go = function(context) if context.toy == "a" then context.toy = "b" end end,
+      stay = function() end,
+    },
+    state_of = function(context) return context.toy end,
+    rows = rows,
+  }
+  for key, value in pairs(extra or {}) do spec[key] = value end
+  return spec
+end
+
+local TOY_ROWS = {{"a", "go", "b"}, {"a", "stay", "a"}, {"b", "go", "b"}}
+
+test("a transition table with an undecided cell fails, naming the cell", function()
+  local added = registered(function() h.transition_table(toy_machine(TOY_ROWS)) end)
+  local ok, message = run_test(registered_test(added, "toy: every cell is decided"))
+  assert_true(not ok, "the cell b + stay has no row and no impossible entry")
+  assert_true(tostring(message):find("b + stay", 1, true) ~= nil, "the cell is named: " .. tostring(message))
+  assert_true(tostring(message):find("a + go", 1, true) == nil, "a decided cell is not: " .. tostring(message))
+  for _, name in ipairs({"toy: a + go", "toy: a + stay", "toy: b + go"}) do
+    local row_ok, row_message = run_test(registered_test(added, name))
+    assert_true(row_ok, name .. " passes: " .. tostring(row_message))
+  end
+  -- an impossible entry decides the cell
+  added = registered(function()
+    h.transition_table(toy_machine(TOY_ROWS, {impossible = {{"b", "stay", "b stays b by construction"}}}))
+  end)
+  ok, message = run_test(registered_test(added, "toy: every cell is decided"))
+  assert_true(ok, "every cell decided: " .. tostring(message))
+  -- a row whose next state is wrong fails, naming what it found
+  added = registered(function() h.transition_table(toy_machine({{"a", "stay", "b"}})) end)
+  ok, message = run_test(registered_test(added, "toy: a + stay"))
+  assert_true(not ok and tostring(message):find("a", 1, true) ~= nil, "a wrong next fails: " .. tostring(message))
+  assert_true(tostring(message):find("expected b, got a", 1, true) ~= nil, "says what it found: " .. tostring(message))
+  -- a row whose state is not entered fails before its event
+  added = registered(function()
+    local spec = toy_machine({{"a", "go", "b"}})
+    spec.states.a = function(context) context.toy = "b" end
+    h.transition_table(spec)
+  end)
+  ok, message = run_test(registered_test(added, "toy: a + go"))
+  assert_true(not ok and tostring(message):find("entering a", 1, true) ~= nil, "a state not entered: " .. tostring(message))
+  -- a row naming no state or event, a cell decided twice and an impossible
+  -- entry with no reason are named by the cell test
+  added = registered(function()
+    h.transition_table(toy_machine({{"a", "go", "b"}, {"a", "go", "b"}, {"c", "go", "a"}, {"b", "jump", "a"},
+      {"b", "go", "d"}}, {impossible = {{"a", "stay"}, {"b", "stay", "never"}}}))
+  end)
+  ok, message = run_test(registered_test(added, "toy: every cell is decided"))
+  message = tostring(message)
+  for _, part in ipairs({"a + go: decided twice", "no state c", "no event jump", "next state d", "a + stay: no reason"}) do
+    assert_true(not ok and message:find(part, 1, true) ~= nil, "names '" .. part .. "': " .. message)
+  end
+  load_strata()  -- this test leaves nothing broken
+end)
+
+test("a known row passes on the fault and is listed", function()
+  -- the fault: go should move b back to a, but the code leaves it at b
+  local added, result = registered(function()
+    return h.transition_table(toy_machine({{"a", "go", "b"}, {"a", "stay", "a"}, {"b", "go", "b", known = 999},
+      {"b", "stay", "b"}}))
+  end)
+  local ok, message = run_test(registered_test(added, "toy: b + go"))
+  assert_true(ok, "the known row asserts today's next state and passes: " .. tostring(message))
+  assert_true(type(result) == "table" and type(result.known) == "table", "the helper returns its known rows")
+  assert_equal(table.concat(result.known, "; "), "toy: b + go -> b (known #999)", "the known row is listed")
+  ok, message = run_test(registered_test(added, "toy: every cell is decided"))
+  assert_true(ok, "a known row decides its cell: " .. tostring(message))
+  -- a known row's issue is a whole number
+  added = registered(function() h.transition_table(toy_machine({{"a", "go", "b", known = "soon"}})) end)
+  ok, message = run_test(registered_test(added, "toy: every cell is decided"))
+  assert_true(not ok and tostring(message):find("known", 1, true) ~= nil, "a known with no issue: " .. tostring(message))
+  -- a row's check and the invariants run after the event
+  local checked
+  added = registered(function()
+    h.transition_table(toy_machine({{"a", "go", "b", check = function(context) checked = context.toy end}}))
+  end)
+  assert_true(run_test(registered_test(added, "toy: a + go")), "the row passes")
+  assert_equal(checked, "b", "its check ran after the event")
+  added = registered(function()
+    local spec = toy_machine({{"a", "go", "b"}})
+    spec.events.go = function(context) context.toy = "b"; local_value("S").pattern_playing = true end
+    h.transition_table(spec)
+  end)
+  ok, message = run_test(registered_test(added, "toy: a + go"))
+  assert_true(not ok and tostring(message):find("pattern clock", 1, true) ~= nil,
+    "an invariant broken by the event fails the row: " .. tostring(message))
+  load_strata()  -- this test leaves nothing broken
+end)
+
+-- A notes file under data_root holding `text`: its absolute path
+local function notes_file(name, text)
+  local path = data_root .. name
+  h.write_text(path, text)
+  return path
+end
+
+local TOY_NOTES = table.concat({
+  "## Must not break", "", "- nothing", "", "## Machines", "",
+  "### toy", "- **State:** `context.toy`.", "", "| State | Event | Next | Effect |", "|---|---|---|---|",
+  "| `a` | `go` | `b` | moves |", "| a | stay | a | nothing |", "| b | go | %s | nothing |", "",
+}, "\n")
+
+test("a notes table that differs from the rows fails, naming the row", function()
+  local rows = {{"a", "go", "b"}, {"a", "stay", "a"}, {"b", "go", "b"}}
+  local impossible = {{"b", "stay", "b is left by go only"}}
+  local function notes_test(path)
+    local added = registered(function()
+      h.transition_table(toy_machine(rows, {impossible = impossible, notes = {path, "toy"}}))
+    end)
+    return run_test(registered_test(added, "toy: the notes' table equals these rows"))
+  end
+  local ok, message = notes_test(notes_file("toy-same.md", TOY_NOTES:format("b")))
+  assert_true(ok, "the same rows pass: " .. tostring(message))
+  ok, message = notes_test(notes_file("toy-next.md", TOY_NOTES:format("a")))
+  assert_true(not ok, "a different next state fails")
+  assert_true(tostring(message):find("b + go", 1, true) ~= nil, "naming the row: " .. tostring(message))
+  local fewer = TOY_NOTES:format("b"):gsub("| a | stay | a | nothing |\n", "")
+  ok, message = notes_test(notes_file("toy-fewer.md", fewer))
+  assert_true(not ok and tostring(message):find("a + stay", 1, true) ~= nil, "a row the notes lack: " .. tostring(message))
+  local more = TOY_NOTES:format("b") .. ""
+  more = more:gsub("(| b | go | b | nothing |\n)", "%1| b | stay | a | nothing |\n")
+  ok, message = notes_test(notes_file("toy-more.md", more))
+  assert_true(not ok and tostring(message):find("b + stay", 1, true) ~= nil, "a row only the notes have: " .. tostring(message))
+end)
+
+test("notes_table reads the table under its machine's heading and no other", function()
+  local path = notes_file("machines.md", table.concat({
+    "## Must not break", "", "- nothing", "",
+    "```", "### toy", "| State | Event | Next |", "|---|---|---|", "| fenced | e | x |", "```", "",
+    "### other", "", "| State | Event | Next | Effect |", "|---|---|---|---|", "| other | e | x | - |", "",
+    "### toy", "- **Invariant:** none.", "",
+    "| Event | State | Effect | Next |", "|---|---|---|---|",
+    "| `go` | `a` | moves `a` to `b` | `b` |", "| stay | a, waiting | the pipe \\| kept | `a, waiting` |", "",
+    "A second table under the same heading is not read:", "",
+    "| State | Event | Next |", "|---|---|---|", "| second | e | x |", "",
+    "### toy later", "", "| State | Event | Next |", "|---|---|---|", "| later | e | x |", "",
+  }, "\n"))
+  local rows = h.notes_table(path, "toy")
+  local text = {}
+  for _, row in ipairs(rows) do text[#text + 1] = table.concat(row, " / ") end
+  assert_equal(table.concat(text, "; "), "a / go / b; a, waiting / stay / a, waiting",
+    "the rows of the first table under ### toy, its State, Event and Next, backticks stripped")
+  assert_true(not pcall(h.notes_table, path, "missing"), "no heading raises")
+  local bare = notes_file("bare.md", "## Must not break\n\n### toy\n\nno table\n\n### next\n\n| State | Event | Next |\n|---|---|---|\n| x | y | z |\n")
+  assert_true(not pcall(h.notes_table, bare, "toy"), "no table under the heading raises")
+  local columns = notes_file("columns.md", "### toy\n\n| State | Effect |\n|---|---|\n| a | b |\n")
+  assert_true(not pcall(h.notes_table, columns, "toy"), "a table without State, Event and Next raises")
+  local relative = h.notes_table("docs/notes/test-harness/run-and-helpers.md", "The example machine")
+  assert_true(#relative > 0, "a path relative to the repository's root is read")
+end)
+
+test("a walk's failure names its seed, step and ops", function()
+  local added = registered(function()
+    h.walk({
+      name = "toy walk", seeds = {7, 8}, steps = 10,
+      setup = function(context) return {context = context, n = 0} end,
+      ops = {
+        {3, "up", function(state) state.n = state.n + 1 end},
+        {1, "draw", function(state, random) state.drawn = random(5) end},
+      },
+      after = function(state) if state.n == 3 then return {"n reached 3"} end end,
+    })
+  end)
+  assert_equal(#added, 2, "one test a seed, and no reached test without reached")
+  assert_equal(added[1].name .. " | " .. added[2].name, "toy walk (seed 7) | toy walk (seed 8)", "named by seed")
+  local ok, message = run_test(registered_test(added, "toy walk (seed 7)"))
+  message = tostring(message)
+  assert_true(not ok, "the walk fails when after returns a problem")
+  assert_true(message:find("seed 7", 1, true) ~= nil, "names the seed: " .. message)
+  assert_true(message:find("n reached 3", 1, true) ~= nil, "gives the problem: " .. message)
+  local step = tonumber(message:match("step (%d+)"))
+  assert_true(step ~= nil and step >= 3, "names the step: " .. message)
+  local ops = message:match("the ops so far: ([^\n]*)")
+  assert_true(ops ~= nil, "lists the ops so far: " .. message)
+  local names = {}
+  for name in ops:gmatch("[^,%s]+") do names[#names + 1] = name end
+  assert_equal(#names, step, "one name a step")
+  local ups = 0
+  for _, name in ipairs(names) do ups = ups + (name == "up" and 1 or 0) end
+  assert_equal(ups, 3, "three ups by the failing step")
+  assert_equal(names[#names], "up", "the failing step's op last")
+  -- the same seed walks the same ops again
+  local _, again = run_test(registered_test(added, "toy walk (seed 7)"))
+  assert_equal(tostring(again):match("the ops so far: ([^\n]*)"), ops, "a seed replays its walk")
+  -- every invariant runs after each op, and finish after the last
+  added = registered(function()
+    h.walk({
+      name = "breaking walk", seeds = {3}, steps = 5,
+      setup = function() return {steps = 0} end,
+      ops = {{1, "count", function(state)
+        state.steps = state.steps + 1
+        if state.steps == 2 then local_value("S").pattern_playing = true end
+      end}},
+    })
+  end)
+  ok, message = run_test(registered_test(added, "breaking walk (seed 3)"))
+  message = tostring(message)
+  assert_true(not ok and message:find("step 2", 1, true) ~= nil and message:find("pattern clock", 1, true) ~= nil,
+    "an invariant broken at step 2 fails there, naming it: " .. message)
+  added = registered(function()
+    h.walk({
+      name = "ending walk", seeds = {4}, steps = 3,
+      setup = function() return {steps = 0} end,
+      ops = {{1, "count", function(state) state.steps = state.steps + 1 end}},
+      finish = function(state) return {"finished after " .. state.steps} end,
+    })
+  end)
+  ok, message = run_test(registered_test(added, "ending walk (seed 4)"))
+  assert_true(not ok and tostring(message):find("finished after 3", 1, true) ~= nil, "finish's problems fail: " .. tostring(message))
+  load_strata()  -- this test leaves nothing broken
+end)
+
+test("a walk that never reached a counter fails", function()
+  local function reached_walk(name)
+    return registered(function()
+      h.walk({
+        name = name, seeds = {1, 2}, steps = 4,
+        setup = function() return {hits = 0, misses = 0} end,
+        ops = {{1, "hit", function(state) state.hits = state.hits + 1 end}},
+        reached = {"hits", "misses"},
+        counts = function(state) return {hits = state.hits, misses = state.misses} end,
+      })
+    end)
+  end
+  local added = reached_walk("counting walk")
+  assert_equal(#added, 3, "a test a seed, then the reached test")
+  assert_equal(added[3].name, "counting walk: the walks reached every path", "named after the walk")
+  for index = 1, 2 do
+    local ok, message = run_test(added[index].func)
+    assert_true(ok, added[index].name .. ": " .. tostring(message))
+  end
+  local ok, message = run_test(added[3].func)
+  message = tostring(message)
+  assert_true(not ok and message:find("misses", 1, true) ~= nil, "the counter never moved is named: " .. message)
+  assert_true(message:find("hits", 1, true) == nil, "the one that moved is not: " .. message)
+  load_strata()  -- this test leaves nothing broken
+end)
+
 end

@@ -406,29 +406,25 @@ end)
 -- the note cap, scenes captured and recalled, time passing) Lua's view (S.lib.notes' held slots, the own
 -- note's park, the pool, each note's pitch through note_values) must be the
 -- model's, the engine must have refused or ignored nothing, and every
--- invariant must hold
+-- invariant must hold. A walk of h.walk (test/helpers.lua): one test a seed,
+-- and one that the seeds reached every path the model counts
 ---------------------------------------------------------------------------
 
--- MINSTD: the same numbers in Lua and LuaJIT (every product under 2 ^ 53),
--- and none of the script's math.random draws
-local function seeded(seed)
-  local state = seed
-  return function(n)
-    state = (state * 48271) % 2147483647
-    return state % n + 1
-  end
-end
+-- The ops that cut no playing note ("never"), and the one that may cut only
+-- a frozen synth voice's ("frozen"): the model's blind spot (ruling 59)
+local NOTES_WALK_CUTS = {
+  ["note off mode"] = "never", ["voice toggle"] = "never", source = "never", ["note cap"] = "never",
+  panic = "never", scene = "frozen",
+}
 
-test("Lua's held notes agree with a model of the engine's slots over seeded random play (ruling 57)", function()
-  local Model = require("notes_model")
-  local reached = {}  -- the model's paths, summed over the seeds
-  for _, seed in ipairs({ 2026, 15838, 95028, 11 }) do
-    local context = load_strata(); finish_startup(context)
+h.walk({
+  name = "Lua's held notes agree with a model of the engine's slots over seeded random play (ruling 57)",
+  seeds = { 2026, 15838, 95028, 11 },
+  steps = 400,
+  setup = function(context, random)
     local S = local_value("S")
-    local random = seeded(seed)
-    local model = Model.new(S.constants)
+    local model = require("notes_model").new(S.constants)
     context.midi.plug(1, "keys")
-    local sources = { S.constants.SOURCE_SYNTH, S.constants.SOURCE_SYNTH + 1, S.constants.SOURCE_INPUT }
     for voice = 1, 3 do
       for step = 1, 16 do
         if random(3) == 1 then
@@ -439,67 +435,71 @@ test("Lua's held notes agree with a model of the engine's slots over seeded rand
         end
       end
     end
-    local ops = {
-      { 6, function() context.midi.send(1, { type = "note_on", ch = random(3), note = 47 + random(26), vel = 30 + random(97) }) end },
-      { 5, function()
-        local down = {}
-        for channel, channel_notes in pairs(S.midi_state.note_voice) do
-          for note in pairs(channel_notes) do down[#down + 1] = { channel, note } end
-        end
-        table.sort(down, function(a, b) return a[1] * 128 + a[2] < b[1] * 128 + b[2] end)
-        local key = down[random(#down + 1)] or { random(3), 47 + random(26) }
-        context.midi.send(1, { type = "note_off", ch = key[1], note = key[2], vel = 0 })
-      end },
-      { 5, function() context.clock.run_for(0.01 * random(25)) end },
-      { 2, function()  -- two keys, the first lifted: in release mode the own note parks under the second
-        local channel, low = random(3), 47 + random(20)
-        context.midi.send(1, { type = "note_on", ch = channel, note = low, vel = 90 })
-        context.midi.send(1, { type = "note_on", ch = channel, note = low + 1 + random(5), vel = 90 })
-        context.midi.send(1, { type = "note_off", ch = channel, note = low, vel = 0 })
-      end },
-      { 1, function() params:set("midi_note_off", random(2)) end, "never" },
-      { 1, function() if S.pattern_playing then pattern_clock_stop() else pattern_clock_start() end end },
-      { 1, function() toggle_voice(random(3)) end, "never" },
-      { 2, function() params:set("v" .. random(3) .. "_source", sources[random(3)]) end, "never" },
-      { 2, function() params:set("v" .. random(3) .. "_freeze", random(2) - 1) end },
-      { 1, function() S.lib.notes.set_pool(random(7) - 1) end },
-      { 1, function() params:set("v" .. random(3) .. "_note_cap", random(S.constants.NOTE_SLOTS)) end, "never" },
-      { 0.3, function() context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 }) end, "never" },
-      { 1, function() if random(2) == 1 then capture_scene(random(2)) else recall_scene(random(2)) end end, "frozen" },
-    }
-    local total = 0
-    for _, op in ipairs(ops) do total = total + op[1] end
     model:feed(context.engine_calls)  -- every call since the load: the voices' starts, the pool
     S.lib.notes.set_pool(random(7) - 1)
-    for step = 1, 400 do
-      local pick, index = random(1000) * total / 1000, 0
-      repeat index = index + 1; pick = pick - ops[index][1] until pick <= 0 or index == #ops
-      ops[index][2]()
-      model:feed(context.engine_calls)
-      local problems = model:compare(S)
-      -- the blind spot: a playing note cut where the op cuts none (a plain
-      -- switch, a mode, a stop, the cap, a panic), or by a recall on a voice
-      -- that does not end a frozen synth voice (ruling 59)
-      for _, engine_voice in ipairs(model.live_cuts) do
-        local voice = engine_voice + 1
-        local frozen_synth = voice_uses_synth(voice) and S.lib.freeze.is_frozen(voice)
-        if ops[index][3] == "never" or (ops[index][3] == "frozen" and not frozen_synth) then
-          problems[#problems + 1] = "voice " .. voice .. ": a playing note cut by op " .. index
-        end
+    return { context = context, S = S, model = model,
+      sources = { S.constants.SOURCE_SYNTH, S.constants.SOURCE_SYNTH + 1, S.constants.SOURCE_INPUT } }
+  end,
+  ops = {
+    { 6, "note on", function(state, random)
+      state.context.midi.send(1, { type = "note_on", ch = random(3), note = 47 + random(26), vel = 30 + random(97) })
+    end },
+    { 5, "note off", function(state, random)
+      local down = {}
+      for channel, channel_notes in pairs(state.S.midi_state.note_voice) do
+        for note in pairs(channel_notes) do down[#down + 1] = { channel, note } end
       end
-      model.live_cuts = {}
-      for _, broken in ipairs(check_invariants()) do problems[#problems + 1] = "invariant " .. broken end
-      assert_equal(table.concat(problems, "; "), "", "seed " .. seed .. ", step " .. step .. " (op " .. index .. ")")
+      table.sort(down, function(a, b) return a[1] * 128 + a[2] < b[1] * 128 + b[2] end)
+      local key = down[random(#down + 1)] or { random(3), 47 + random(26) }
+      state.context.midi.send(1, { type = "note_off", ch = key[1], note = key[2], vel = 0 })
+    end },
+    { 5, "time", function(state, random) state.context.clock.run_for(0.01 * random(25)) end },
+    { 2, "two keys", function(state, random)  -- two keys, the first lifted: in release mode the own note parks under the second
+      local channel, low = random(3), 47 + random(20)
+      state.context.midi.send(1, { type = "note_on", ch = channel, note = low, vel = 90 })
+      state.context.midi.send(1, { type = "note_on", ch = channel, note = low + 1 + random(5), vel = 90 })
+      state.context.midi.send(1, { type = "note_off", ch = channel, note = low, vel = 0 })
+    end },
+    { 1, "note off mode", function(_, random) params:set("midi_note_off", random(2)) end },
+    { 1, "patterns", function(state)
+      if state.S.pattern_playing then pattern_clock_stop() else pattern_clock_start() end
+    end },
+    { 1, "voice toggle", function(_, random) toggle_voice(random(3)) end },
+    { 2, "source", function(state, random) params:set("v" .. random(3) .. "_source", state.sources[random(3)]) end },
+    { 2, "freeze", function(_, random) params:set("v" .. random(3) .. "_freeze", random(2) - 1) end },
+    { 1, "pool", function(state, random) state.S.lib.notes.set_pool(random(7) - 1) end },
+    { 1, "note cap", function(state, random)
+      params:set("v" .. random(3) .. "_note_cap", random(state.S.constants.NOTE_SLOTS))
+    end },
+    { 0.3, "panic", function(state) state.context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 }) end },
+    { 1, "scene", function(_, random) if random(2) == 1 then capture_scene(random(2)) else recall_scene(random(2)) end end },
+  },
+  after = function(state, op_name)
+    local model = state.model
+    model:feed(state.context.engine_calls)
+    local problems = model:compare(state.S)
+    -- the blind spot: a playing note cut where the op cuts none (a plain
+    -- switch, a mode, a stop, the cap, a panic), or by a recall on a voice
+    -- that does not end a frozen synth voice (ruling 59)
+    for _, engine_voice in ipairs(model.live_cuts) do
+      local voice = engine_voice + 1
+      local frozen_synth = voice_uses_synth(voice) and state.S.lib.freeze.is_frozen(voice)
+      local cuts = NOTES_WALK_CUTS[op_name]
+      if cuts == "never" or (cuts == "frozen" and not frozen_synth) then
+        problems[#problems + 1] = "voice " .. voice .. ": a playing note cut by op " .. op_name
+      end
     end
-    if S.pattern_playing then pattern_clock_stop() end
-    for name, count in pairs(model.counts) do reached[name] = (reached[name] or 0) + count end
-  end
+    model.live_cuts = {}
+    return problems
+  end,
+  finish = function(state)
+    if state.S.pattern_playing then pattern_clock_stop() end
+  end,
   -- the sequences reach every path the model follows: starts, restarts
   -- (switches, unfreezes), streams leaving a freeze, a note once a stream
   -- restarted on a buffer or the input (#682's path), cuts, parks, unparks
-  for _, name in ipairs({ "starts", "restarts", "streams_left", "regrained", "cuts", "parks", "unparks" }) do
-    assert_true((reached[name] or 0) > 0, "the sequences reached " .. name .. " (" .. tostring(reached[name]) .. ")")
-  end
-end)
+  reached = { "starts", "restarts", "streams_left", "regrained", "cuts", "parks", "unparks" },
+  counts = function(state) return state.model.counts end,
+})
 
 end
