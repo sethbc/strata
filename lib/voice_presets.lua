@@ -224,8 +224,9 @@ return function(S)
 
   -- Put back the name the voice's row showed before a load or a copy (a
   -- string, or nil for none): S.lib.mutation.undo's, from the held
-  -- capture's preset_name (#869). A number that is no voice, or a name
-  -- that is no string, changes nothing
+  -- capture's preset_name (#869). It is the undo's alone: no other writer
+  -- calls it (a load, a copy or forget names a voice). A number that is no
+  -- voice, or a name that is no string, changes nothing
   function M.restore_name(voice_idx, name)
     if not valid_voice(voice_idx) or (name ~= nil and type(name) ~= "string") then return end
     loaded[voice_idx] = name

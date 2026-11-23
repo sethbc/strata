@@ -1115,6 +1115,34 @@ test("a nested undo write leaves the flag as it found it (#892)", function()
   assert_equal(local_value("undo_writing"), false, "and clears when the outer write ends")
 end)
 
+-- A new undo stops the expiry clock of the one it replaces, even when that
+-- one was held inside its own write (a nested randomize): an orphaned
+-- clock would clear the new undo at its own, earlier, wake
+test("a new undo stops the clock of the one it replaces, a nested one's too", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local mutation = S.lib.mutation
+  local FX = page_index("FX")
+  local inner_clock
+  assert_true(mutation.randomize({ page = FX, section = "reverb", draws = {
+    { id = "reverb_mix", draw = function()
+      mutation.randomize({ page = FX, section = "size", draws = {
+        { id = "reverb_size", draw = function() return 0.7 end } } })
+      inner_clock = local_value("undo_clock")
+      context.set_time(util.time() + 1)  -- the outer undo is held a second after the inner one
+      return 0.45
+    end },
+  } }), "the outer randomize ran")
+  assert_true(inner_clock ~= nil and inner_clock ~= local_value("undo_clock"), "two clocks were started")
+  assert_equal(context.clock.threads[inner_clock], nil, "the inner undo's clock is stopped as the outer is held")
+  context.clock.run_for(S.constants.UNDO_SECONDS - 0.5)  -- past the inner undo's window, inside the outer's
+  assert_true(mutation.undo_for(FX, "reverb", nil), "the outer undo is still held")
+  assert_true(local_value("undo_clock") ~= nil, "with its clock")
+  context.clock.run_for(1)
+  assert_true(not mutation.undo_for(FX, "reverb", nil), "and ends at its own time")
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+end)
+
 test("a nested drift write leaves the flag as it found it (#892)", function()
   load_strata()
   local S = local_value("S")
