@@ -430,14 +430,21 @@ test("the morph clock stopped as its wake is posted: no clock error, and nothing
   context.clock.advance_until(id, function()
     params:read(1)                                               -- its hook stops the clock
     assert_true(S.lib.clocks.retired[id] ~= nil, "the helper retired it: its resume is posted")
+    -- a move at once: a new clock, and a move waiting that a stopped clock
+    -- running on would find (review of 1q)
+    params:set("morph", 0.35)
   end)
   local errors = context.clock.take_errors()
   assert_equal(#errors, 0, "no resume reaches a canceled clock: " .. table.concat(errors, "; "))
-  assert_equal(clock.threads[id], nil, "it ended at its wake")
+  -- a stopped clock's waits return false at once: one that ran on would
+  -- apply the waiting move at its own wake, before the new clock's tick
+  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "nothing applied at the stopped clock's wake")
+  assert_equal(clock.threads[id], nil, "it ended at its wake, though a move waits")
   assert_equal(S.lib.clocks.retired[id], nil, "and the helper forgot it")
+  assert_true(S.morph_clock ~= nil and S.morph_clock ~= id, "the move waits on its own clock")
   context.clock.run_for(0.5)
-  assert_near(params:get("reverb_mix"), 0.9, 1e-9, "nothing applied over the PSET's values")
-  assert_equal(S.morph_clock, nil, "no clock is left")
+  assert_near(params:get("reverb_mix"), 0.34, 1e-9, "the move applies (0.2 + 0.35 x 0.4)")
+  assert_equal(S.morph_clock, nil, "and the clock rests")
 end)
 
 -- Scenes 1-4 with routing R1 to v1 size: each corner's {source, depth}
