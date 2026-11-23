@@ -20,7 +20,7 @@
 ### ii lead
 - **State:** `state.leading` (`M.leads()`), `state.owing`, `state.leave_room`, `state.handlers_wait`, with the rig's `ii_bus` and crow's presence (`S.lib.io_crow.present()`); the queue's `state.queue`, `state.pairs`, `state.lines[key]` (`high`, `waiting`), `state.turns[id]` and `state.asking`.
 - **Invariant:** `ii`: never leading while owing; `leave_room` nil outside the leaving sequence (it is set and cleared inside `give_up_lead`); each learned line's `waiting` equal to its sends in the queue (a queued send of a learned pair always has its line), which the drain's assert checked only as a send left; `state.asking` equal to the turns whose `asking` is set.
-- **Test:** `test/unit/io_ii_test.lua`: "the ii invariant names leading while owing", "the ii invariant names leave_room outside the leaving sequence", "the ii invariant names a line whose waiting count is not its sends in the queue", "the ii invariant names an asking count that is not the turns asking" and "the ii invariant holds through a lead, a crow leaving with offs owed and its return".
+- **Test:** `test/unit/io_ii_test.lua`: "the ii invariant names leading while owing", "the ii invariant names leave_room outside the leaving sequence", "the ii invariant names a line whose waiting count is not its sends in the queue", "the ii invariant names a line that counts sends waiting when none are queued", "the ii invariant names an asking count that is not the turns asking" and "the ii invariant holds through a lead, a crow leaving with offs owed and its return".
 
 Its tables are the two below, in their own form, which no test reads yet: a line's state by the queue's events (The queue's states) and the leading flag's changes.
 

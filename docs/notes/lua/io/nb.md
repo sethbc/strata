@@ -16,7 +16,7 @@
 ### nb players
 - **State:** `state.chosen[voice]` (the player each voice plays), `state.uses[key]` (the voices choosing it), the global `nb_player_refcounts` (shared with other hosts, taken as at least Strata's own uses) and `state.activations[key]` (nb's default activation clock).
 - **Invariant:** `nb`: each player's count of the voices that use it is a whole number, never below 0.
-- **Test:** `test/unit/io_nb_test.lua`: "the nb invariant names a count below 0" and "the nb invariant holds as voices choose, change and leave players".
+- **Test:** `test/unit/io_nb_test.lua`: "the nb invariant names a count below 0", "the nb invariant names a count that is a fraction", "the nb invariant names a count that is not a number" and "the nb invariant holds as voices choose, change and leave players".
 
 No table: a player is active while its count is above 0, one count up and one down per choice (`choose`), as Must not break gives.
 
