@@ -2594,18 +2594,198 @@ test("state-and-voices.md names every registry", function()
 end)
 
 
-test("state-and-voices.md lists every registered invariant (#470)", function()
-  local notes = read_repo_file("docs/notes/lua/state-and-voices.md")
-  local missing, count = {}, 0
-  for _, source in ipairs(read_lua_sources()) do
-    for name in source.text:gmatch("S%.register_invariant%(\"([^\"]+)\"") do
-      count = count + 1
-      if not notes:find("| `" .. name .. "` |", 1, true) then table.insert(missing, name) end
+-- The registered invariants that have no Machines entry yet (design
+-- section 1, docs/notes/lua/state-and-voices.md, Registering an
+-- invariant), one line a module. A package that enters a machine removes
+-- its names here; a name is never added: an invariant registered from now
+-- on gets its entry in the commit that registers it. The list only shrinks
+local UNTABLED_INVARIANTS = {
+  "scene transition", "scene sequencer",  -- lib/scenes.lua
+  "pattern clock",  -- lib/sequencer.lua
+  "midi ports",  -- lib/io/ports.lua
+  "midi notes",  -- lib/midi_in.lua
+  "scan holds",  -- lib/positions.lua
+  "scenes prompt",  -- lib/pages/scenes.lua
+  "grid keys",  -- lib/grid/core.lua
+  "arc connection",  -- lib/arc/core.lua
+  "key presses",  -- lib/ui/keys.lua
+  "buffer slots",  -- lib/buffers.lua
+  "input level",  -- lib/input_level.lua
+  "flash slots",  -- lib/ui/flash.lua
+  "param turn",  -- lib/ui/detent.lua
+  "engine budget",  -- lib/engine_sync.lua
+  "modal owner",  -- lib/ui/modal.lua
+  "morph clock",  -- lib/morph.lua
+  "quantize",  -- lib/quantize.lua
+  "gesture recorders",  -- lib/gestures.lua
+  "macro apply", "macro learn",  -- lib/macros.lua
+  "matrix learn",  -- lib/matrix.lua
+  "zones editor",  -- lib/ui/zones.lua
+  "scale editor",  -- lib/ui/scale_editor.lua
+  "factory",  -- lib/factory.lua
+  "voice picker",  -- lib/ui/voice_picker.lua
+  "lfo clock",  -- lib/lfos.lua
+  "step editor",  -- lib/pages/seq.lua
+  "notes",  -- lib/notes.lua
+  "arp",  -- lib/arp.lua
+  "rig",  -- lib/io/rig.lua
+  "targets",  -- lib/io/targets.lua
+  "midi out",  -- lib/io/midi_out.lua
+  "remote",  -- lib/io/remote.lua
+}
+
+-- The Machines entries of notes files ({{path, text}}) checked against the
+-- registered invariants (a list of names) and the untabled list: the
+-- problems, sorted. An entry is a `### <machine>` heading inside the
+-- file's `## Machines` section, which is the section right after "Must not
+-- break"; it has a `- **State:**`, a `- **Invariant:**` and a `- **Test:**`
+-- line (a `- **Two facts:**` line is optional), and its first table, if it
+-- has one, has the columns State, Event, Next and Effect (h.notes_table
+-- reads the first three). The Invariant line names its invariants in
+-- backticks at its start (`a`, or `a`, `b`, or `a` and `b`, then any text),
+-- or says "none" and why. Every registered invariant is named by an entry
+-- or listed as untabled, never both; a listed or entered name is a
+-- registered one
+local MACHINE_TABLE_HEADER = "| State | Event | Next | Effect |"
+local function machines_problems(files, registered, untabled)
+  local problems, entered, known, listed = {}, {}, {}, {}
+  for _, name in ipairs(registered) do known[name] = true end
+  local function problem(text) table.insert(problems, text) end
+  for _, file in ipairs(files) do
+    local sections, section, entry, in_fence = 0, nil, nil, false
+    local function close_entry()
+      if not entry then return end
+      for _, label in ipairs({"State", "Invariant", "Test"}) do
+        if not entry.lines[label] then problem(file.path .. ": " .. entry.name .. " has no `- **" .. label .. ":**` line") end
+      end
+      entry = nil
+    end
+    local function invariant_line(rest)
+      if rest:match("^none") then return end
+      local names, cursor = {}, rest
+      while true do
+        local name, after = cursor:match("^`([^`]+)`(.*)$")
+        if not name then break end
+        table.insert(names, name)
+        cursor = after:match("^, (`.*)$") or after:match("^ and (`.*)$") or ""
+      end
+      if #names == 0 then problem(file.path .. ": " .. entry.name .. "'s Invariant line names no invariant and is not none: " .. rest) end
+      for _, name in ipairs(names) do
+        entered[name] = entered[name] or file.path
+        if not known[name] then problem(file.path .. ": " .. entry.name .. " enters `" .. name .. "`, which no module registers") end
+      end
+    end
+    for line in (file.text .. "\n"):gmatch("([^\n]*)\n") do
+      if line:match("^%s*```") then in_fence = not in_fence end
+      local level = not in_fence and line:match("^(#+) ")
+      if level and #level <= 2 then
+        close_entry()
+        sections = sections + 1
+        section = line
+        if line == "## Machines" and sections ~= 2 then
+          problem(file.path .. ": its ## Machines section is not the one right after Must not break")
+        end
+      elseif level and #level == 3 and section == "## Machines" then
+        close_entry()
+        entry = {name = line:sub(5), lines = {}, tabled = false}
+      elseif not in_fence then
+        local label, rest = line:match("^%- %*%*([%a ]+):%*%* ?(.*)$")
+        if label == "Invariant" and not entry then
+          problem(file.path .. ": an Invariant line outside a Machines entry: " .. line)
+        elseif entry and label then
+          entry.lines[label] = true
+          if label == "Invariant" then invariant_line(rest) end
+        elseif entry and not entry.tabled and line:match("^|") then
+          entry.tabled = true
+          if line ~= MACHINE_TABLE_HEADER then
+            problem(file.path .. ": " .. entry.name .. "'s table opens " .. line .. ", not " .. MACHINE_TABLE_HEADER)
+          end
+        end
+      end
+    end
+    close_entry()
+  end
+  for _, name in ipairs(untabled) do
+    listed[name] = true
+    if not known[name] then problem("UNTABLED_INVARIANTS lists `" .. name .. "`, which no module registers") end
+    if entered[name] then problem("`" .. name .. "` has its entry in " .. entered[name] .. ": remove it from UNTABLED_INVARIANTS") end
+  end
+  for _, name in ipairs(registered) do
+    if not entered[name] and not listed[name] then
+      problem("`" .. name .. "` has no Machines entry (an `- **Invariant:**` line under docs/notes/lua/)")
     end
   end
-  table.sort(missing)
-  assert_true(count >= 12, "the code registers its invariants, saw " .. count)
-  assert_true(#missing == 0, "no row in the invariants table for: " .. table.concat(missing, ", "))
+  table.sort(problems)
+  return problems
+end
+
+test("every registered invariant has a Machines entry, and no name listed as untabled has one", function()
+  load_strata()
+  local registered = {}
+  -- the registry, not the source: lib/arp.lua passes its name as ARP.name
+  for _, record in ipairs(local_value("S").registry.invariants) do table.insert(registered, record.name) end
+  assert_true(#registered >= 34, "the script registers its invariants, saw " .. #registered)
+  local files = {}
+  for _, path in ipairs(markdown_files("docs/notes/lua")) do
+    table.insert(files, {path = path, text = read_repo_file(path)})
+  end
+  local problems = machines_problems(files, registered, UNTABLED_INVARIANTS)
+  assert_true(#problems == 0, table.concat(problems, "\n"))
+  -- the convention is written where a worker entering a machine reads it
+  local notes = read_repo_file("docs/notes/lua/state-and-voices.md")
+  local paragraph = notes:match("\n%- %*%*Registering an invariant%*%*.-\n%- %*%*Registering a cleanup step%*%*") or ""
+  for _, part in ipairs({"## Machines", "### <name>", "- **State:**", "- **Invariant:** `<name>`",
+    "- **Two facts:**", "- **Test:**", MACHINE_TABLE_HEADER, "UNTABLED_INVARIANTS"}) do
+    assert_true(paragraph:find(part, 1, true), "Registering an invariant gives the entry's " .. part)
+  end
+end)
+
+test("the Machines check fails an invariant with no entry, a listed name with one and a malformed entry", function()
+  local function entry(name, invariant, table_header)
+    return table.concat({"### " .. name, "- **State:** `S.x`.", "- **Invariant:** " .. invariant,
+      "- **Test:** `test/unit/x_test.lua`: \"x\".", "", table_header or MACHINE_TABLE_HEADER, "|---|---|---|---|"}, "\n")
+  end
+  local function notes(...)
+    return {path = "docs/notes/lua/x.md", text = table.concat({"## Must not break", "- a rule", "## Machines", ...}, "\n\n")}
+  end
+  local function check(files, registered, untabled)
+    return table.concat(machines_problems(files, registered, untabled), "\n")
+  end
+  -- 0b's case: an entry, and the name not listed
+  assert_equal(check({notes(entry("clocks", "`clocks`"))}, {"clocks"}, {}), "", "an entered invariant passes")
+  assert_equal(check({notes(entry("a and b", "`a` and `b` (3.9)"), entry("c", "none: a two-state flag"))}, {"a", "b"}, {}), "",
+    "two names on one line, and none")
+  assert_equal(check({notes()}, {"clocks"}, {"clocks"}), "", "a listed invariant passes")
+  assert_true(check({notes()}, {"clocks"}, {}):find("`clocks` has no Machines entry", 1, true), "neither an entry nor listed")
+  assert_true(check({notes(entry("clocks", "`clocks`"))}, {"clocks"}, {"clocks"}):find("remove it from UNTABLED_INVARIANTS", 1, true),
+    "listed and entered")
+  assert_true(check({notes()}, {}, {"gone"}):find("lists `gone`", 1, true), "a listed name no module registers")
+  assert_true(check({notes(entry("x", "`typo`"))}, {}, {}):find("enters `typo`", 1, true), "an entered name no module registers")
+  assert_true(check({notes(entry("x", "the clock"))}, {}, {}):find("names no invariant", 1, true), "an Invariant line without a name")
+  assert_true(check({notes(entry("x", "`x`", "| From | Event | To |"))}, {"x"}, {}):find("x's table opens", 1, true), "the table's columns")
+  local stray = {path = "docs/notes/lua/y.md", text = "## Must not break\n\n## Owns\n\n- **Invariant:** `x`\n"}
+  assert_true(check({stray}, {"x"}, {}):find("outside a Machines entry", 1, true), "an Invariant line outside the section")
+  local late = {path = "docs/notes/lua/z.md", text = "## Must not break\n\n## Owns\n\n## Machines\n\n" .. entry("x", "`x`")}
+  assert_true(check({late}, {"x"}, {}):find("not the one right after Must not break", 1, true), "Machines after another section")
+  local short = {path = "docs/notes/lua/w.md", text = "## Must not break\n\n## Machines\n\n### x\n- **Invariant:** `x`\n"}
+  local found = check({short}, {"x"}, {})
+  assert_true(found:find("no `- **State:**` line", 1, true) and found:find("no `- **Test:**` line", 1, true), "an entry's lines")
+end)
+
+-- The longest a notes file under docs/notes/lua may be, in words as `wc -w`
+-- counts them (#898: scenes.md, at 11,139, was longer than one read of a
+-- file; the longest after it had 8,499)
+local NOTES_WORD_LIMIT = 9000
+
+test("no file under docs/notes/lua is longer than 9,000 words", function()
+  local long, count = {}, 0
+  for _, path in ipairs(markdown_files("docs/notes/lua")) do
+    count = count + 1
+    local words = select(2, read_repo_file(path):gsub("%S+", ""))
+    if words > NOTES_WORD_LIMIT then table.insert(long, path .. " has " .. words .. " words") end
+  end
+  assert_true(count >= 100, "the check reads the notes, saw " .. count)
+  assert_true(#long == 0, "over " .. NOTES_WORD_LIMIT .. " words: " .. table.concat(long, ", "))
 end)
 
 -- The text of a Markdown section: from the line `heading` to the next

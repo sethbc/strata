@@ -60,9 +60,9 @@ What a recording command, a stop, a load or a clear does to a slot, and what it 
 | # | when the command arrives | command | what the engine does | reports, in order |
 |---|---|---|---|---|
 | 1 | no take | recordBuffer, feedback 0 and loop 0 | a replace take: the slot is emptied at once, or 0.21 s before a delayed start | armed (delay or threshold), bufferState 0 at the preparation, recording, bufferState F, ended |
-| 2 | no take, slot empty or at the server's rate | recordBuffer, feedback > 0 or loop | a playable recording: the slot keeps playing | armed, recording, bufferState max(V, D), ended |
+| 2 | no take, slot empty or at the server's rate | recordBuffer, feedback > 0 or loop | a playable recording: the slot keeps playing | armed, recording, bufferState max(V, D) only when that changes the length (`takeArmed`), ended |
 | 3 | no take, slot holds audio at another rate | recordBuffer, feedback > 0 or loop | a replace take, feedback and loop dropped | as row 1 |
-| 4 | a load taking effect (slot emptied) | recordBuffer | the load is superseded and reports nothing; the take is judged on the empty slot (rows 1 and 2) | as rows 1, 2 |
+| 4 | a load taking effect (slot emptied) | recordBuffer | the load is superseded and reports nothing, but for a read the server fails, which still reports bufferLoadFailed(n, 1) (emptied) when the read ends (`applyLoad`); the take is judged on the empty slot (rows 1 and 2) | as rows 1, 2 (and that bufferLoadFailed among them) |
 | 5 | a long load being checked | recordBuffer | the load is superseded and reports nothing; the take is judged on the audio the slot still holds (rows 1 to 3) | as rows 1 to 3 |
 | 6 | a replace take waiting, unprepared | stopRecord | canceled; the slot is left as it is | canceled, bufferState V |
 | 7 | a replace take prepared, not started | stopRecord | canceled; the slot stays empty | canceled, bufferState 0 |
