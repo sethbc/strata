@@ -100,37 +100,10 @@ local RUN_CALLS_ALLOWED = {
     why = "2b: each voice's start sends the arpeggiator's fold, 0 (design section 4.3)"},
 }
 
--- A call as the fixture writes it: name(args), numbers "%.9g", strings "%q"
-local function call_line(call)
-  local parts = {}
-  for index = 1, #call.args do
-    local value = call.args[index]
-    parts[index] = type(value) == "number" and string.format("%.9g", value) or string.format("%q", tostring(value))
-  end
-  return call.name .. "(" .. table.concat(parts, ", ") .. ")"
-end
-
--- Each run of consecutive setVoiceParam lines of one voice sorted (the
--- order a pairs() loop gives them changes from run to run); nothing else moves
-local function canonical(lines)
-  local out, run, run_key = {}, {}, nil
-  local function flush()
-    table.sort(run)
-    for _, line in ipairs(run) do out[#out + 1] = line end
-    run, run_key = {}, nil
-  end
-  for _, line in ipairs(lines) do
-    local key = line:match("^(setVoiceParam%(%d+),")
-    if key and key == run_key then
-      run[#run + 1] = line
-    else
-      flush()
-      if key then run_key, run[1] = key, line else out[#out + 1] = line end
-    end
-  end
-  flush()
-  return out
-end
+-- A call as the fixture writes it (name(args)), and each run of consecutive
+-- setVoiceParam lines of one voice sorted: test/helpers.lua's, shared with
+-- test/unit/system_38_test.lua
+local call_line, canonical = h.call_line, h.canonical_call_lines
 
 local function lfo_step(context, count)
   for _ = 1, count or 1 do context.clock.advance_until(local_value("S").lfo_clock) end

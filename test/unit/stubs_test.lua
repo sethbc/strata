@@ -3029,8 +3029,9 @@ test("a transition table with an undecided cell fails, naming the cell", functio
   -- a row whose next state is wrong fails, naming what it found
   added = registered(function() h.transition_table(toy_machine({{"a", "stay", "b"}})) end)
   ok, message = run_test(registered_test(added, "toy: a + stay"))
-  assert_true(not ok and tostring(message):find("a", 1, true) ~= nil, "a wrong next fails: " .. tostring(message))
-  assert_true(tostring(message):find("expected b, got a", 1, true) ~= nil, "says what it found: " .. tostring(message))
+  assert_true(not ok, "a wrong next fails")
+  assert_true(tostring(message):find("a + stay: the next state: expected b, got a", 1, true) ~= nil,
+    "names the cell and says what it found: " .. tostring(message))
   -- a row whose state is not entered fails before its event
   added = registered(function()
     local spec = toy_machine({{"a", "go", "b"}})
@@ -3059,8 +3060,13 @@ test("a known row passes on the fault and is listed", function()
     return h.transition_table(toy_machine({{"a", "go", "b"}, {"a", "stay", "a"}, {"b", "go", "b", known = 999},
       {"b", "stay", "b"}}))
   end)
-  local ok, message = run_test(registered_test(added, "toy: b + go"))
+  local ok, message
+  local printed = h.with_known_lines(function() ok, message = run_test(registered_test(added, "toy: b + go")) end)
   assert_true(ok, "the known row asserts today's next state and passes: " .. tostring(message))
+  assert_equal(table.concat(printed, "; "), "toy: b + go -> b (known #999): asserts today's fault",
+    "its test lists it as it passes (taken here instead of printed)")
+  printed = h.with_known_lines(function() run_test(registered_test(added, "toy: a + go")) end)
+  assert_equal(#printed, 0, "a row that is not known lists nothing")
   assert_true(type(result) == "table" and type(result.known) == "table", "the helper returns its known rows")
   assert_equal(table.concat(result.known, "; "), "toy: b + go -> b (known #999)", "the known row is listed")
   ok, message = run_test(registered_test(added, "toy: every cell is decided"))
@@ -3117,8 +3123,7 @@ test("a notes table that differs from the rows fails, naming the row", function(
   local fewer = TOY_NOTES:format("b"):gsub("| a | stay | a | nothing |\n", "")
   ok, message = notes_test(notes_file("toy-fewer.md", fewer))
   assert_true(not ok and tostring(message):find("a + stay", 1, true) ~= nil, "a row the notes lack: " .. tostring(message))
-  local more = TOY_NOTES:format("b") .. ""
-  more = more:gsub("(| b | go | b | nothing |\n)", "%1| b | stay | a | nothing |\n")
+  local more = TOY_NOTES:format("b"):gsub("(| b | go | b | nothing |\n)", "%1| b | stay | a | nothing |\n")
   ok, message = notes_test(notes_file("toy-more.md", more))
   assert_true(not ok and tostring(message):find("b + stay", 1, true) ~= nil, "a row only the notes have: " .. tostring(message))
 end)
@@ -3145,6 +3150,11 @@ test("notes_table reads the table under its machine's heading and no other", fun
   assert_true(not pcall(h.notes_table, bare, "toy"), "no table under the heading raises")
   local columns = notes_file("columns.md", "### toy\n\n| State | Effect |\n|---|---|\n| a | b |\n")
   assert_true(not pcall(h.notes_table, columns, "toy"), "a table without State, Event and Next raises")
+  local short = notes_file("short.md", "### toy\n\n| State | Event | Next |\n|---|---|---|\n| a | go | b |\n| b | go |\n")
+  local short_ok, short_message = pcall(h.notes_table, short, "toy")
+  assert_true(not short_ok and tostring(short_message):find("| b | go |", 1, true) ~= nil
+    and tostring(short_message):find("no Next", 1, true) ~= nil, "a row with too few cells raises, naming it: "
+    .. tostring(short_message))
   local relative = h.notes_table("docs/notes/test-harness/run-and-helpers.md", "The example machine")
   assert_true(#relative > 0, "a path relative to the repository's root is read")
 end)
