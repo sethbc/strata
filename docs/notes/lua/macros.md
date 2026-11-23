@@ -19,6 +19,22 @@
 - **Learn** waits exactly while its timeout clock runs (`S.macro_learn_clock`, the `macro learn` invariant), `MACROS.learn_seconds` (10 s), and cancel_learn ends both. The clock is the clock helper's (#870, `docs/notes/lua/clocks.md`; `S.macro_learn_clock` is its handle's id): its end stops it through the helper, which never cancels it once its resume may be posted (#626): within the helper's margin (`CLOCKS.sleep_margin`, 0.1 s) of the wake it is retired (its wait returns false at its wake and it ends, touching nothing a newer learn armed; the helper's cleanup step cancels a retired one still waiting), and only earlier is it canceled, so a burst of learns holds no clock slots.
 - **Every flash fits the header's flash room** (`S.constants.HEADER.flash_width`, 74 px) whole: `not a target` (54 px), `macros 13-16` (53 px), the widest learned row `M10 > v2 spread` (69 px).
 
+## Machines
+
+### macro apply
+- **State:** the local `applying` (`pending[m]`, a macro waiting for the clock; `last[m]`, its last apply's time) and `apply_clock.handle` (the clock helper's handle; `S.macro_clock` its id while it runs). No accessor names it.
+- **Invariant:** `macro apply`: a macro waits exactly while the apply clock runs, its coroutine is not dead, and a retired clock is never `S.macro_clock`.
+- **Test:** `test/unit/macros_test.lua`: "the macro apply clock stopped as its wake is posted: no clock error, and nothing more happens".
+
+No table (3.9, #948): three states, idle (nothing waits, no clock), waiting (a macro pending, the clock's next tick or its sleep to the next apply due) and applying (inside a tick's pass), with one way in (a macro's action marks it pending and starts the clock if none runs) and the ways out Applying (below) lists: a tick that leaves nothing pending ends the clock; `set_silently`, `apply` and the PSET hook drop what waits and stop the clock through the helper once none is left; cleanup cancels it. A stop from the clock's own body (a target's action) leaves the rest of the pass to the new clock. The audit (`docs/design/3.9-state-machines-facts/lua-scenes.md`, section 11) found no transition fault to hold.
+
+### macro learn
+- **State:** the local `learning` (`{m, k}` while learn waits for a touch) and `learn_clock.handle` (its timeout's handle; `S.macro_learn_clock` its id); `S.lib.macros.learning()` names the macro and row.
+- **Invariant:** `macro learn`: learn waits exactly while its timeout clock runs, and a retired clock is never `S.macro_learn_clock`.
+- **Test:** `test/unit/macros_test.lua`: "the macro learn clock stopped as its wake is posted: no clock error, and nothing more happens".
+
+No table (3.9, #948): two states, idle and waiting, a two-state flag with its clock. `learn(m, k)` arms it (ending one that waits first); a touch of a target, `cancel_learn()` (MOD's K2) and the timeout (`MACROS.learn_seconds`) end it, a touch that is no target flashes `not a target` and it waits on; the header shows it from every page.
+
 ## Owns
 
 `lib/macros.lua` (`S.lib.macros`, 3.4, package 1e, design §4):

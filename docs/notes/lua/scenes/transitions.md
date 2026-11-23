@@ -9,18 +9,39 @@
 ## Machines
 
 ### scene fade
-- **State:** `S.scene_transition_active`, `S.scene_transition_clock`, `SCENE_TRANSITION`'s `next_step_due`, `target`, `previous`, `step` and `released`, `S.current_scene`, and the fade's closure (`targets`, `switches`, `switched`, `released`); `S.lib.scenes.fading_to()` names the scene it goes to, `S.lib.scenes.setting()` whether a step sets its params now (the States table below).
+- **State:** `S.scene_transition_active`, `S.scene_transition_clock`, `SCENE_TRANSITION`'s `next_step_due`, `target`, `previous`, `step` and `released`, `S.current_scene`, and the fade's closure (`targets`, `switches`, `switched`, `released`); `S.lib.scenes.fading_to()` names the scene it goes to, `S.lib.scenes.setting()` whether a scene sets its params now (the States table below). Before or after the midpoint is read from `step` (after it once `2 × step ≥ steps`, where the through-zero switches have run); landing is no flag with `setting()` true, inside the fade's clock (an instant recall's apply reads the same, and the table never asks the state inside one).
 - **Invariant:** `scene transition`: `next_step_due`, `target`, `step` and `released` are set exactly while the flag is, and no clock is kept while idle.
-- **Test:** `test/unit/scenes_test.lua`: "scene fade: fading + hand set".
+- **Two facts:** `S.current_scene` 0 means both that no scene was recalled (the start, a load that zeroes the mark, #518) and that morph holds the sound (its apply sets 0, lib/morph.lua); morph reads the second as `current_scene == 0` with no fade (`taken_over`).
+- **Test:** `test/unit/scenes_test.lua`: "scene fade: fading, before the midpoint + hand set".
 
-The hand set is voice 2's loop start 0.5, then its length 1, by hand. The rows are the hand edit's and the cancel's (3.9, package 1d); the recalls, the steps, the end, `release_voice`, a capture into the target and a morph move, from the States table's states, are not rows yet.
+The table (3.9: package 1d's hand edit and cancel rows, completed by 2c, #948) runs from scene 1 to scene 2 over 4 s (20 steps of 0.2 s): before the midpoint is step 9, after it step 12. Scene 2 holds a matrix routing scenes 1 and 3 lack, so its depth ramps through 0 and the routing switches at the midpoint. The timed and instant recalls are of scene 3; the hand set is voice 2's loop start 0.5, then its length 1; the capture is into scene 2, the fade's target; `release_voice` lets go of voice 2; the morph move sets `morph` to 0.5 and runs its first apply. Every row checks `S.current_scene`, the flag, the clock (live exactly while a fade runs) and that no scene sets after the event. Impossible: a step or the end while idle (no fade clock runs); the end before the midpoint (it follows the twentieth step); every event in the landing, which runs inside one resume of the fade's clock and never yields, so only its own sets run inside it (the end's row reads the state `landing` from inside it, as the landing applies the scene's matrix block, with the target current).
 
 | State | Event | Next | Effect |
 |---|---|---|---|
-| idle | hand set | idle | the length is cut to 0.5, what the start leaves |
+| idle | recall, timed | fading, before the midpoint | scene 3 is current at once, from scene 1; the first step runs inside the recall |
+| idle | recall, instant | idle | scene 3 applied and current |
 | idle | cancel | idle | nothing: the current scene stays |
-| fading | hand set | fading | the length is cut to 0.5 as when idle; it stays 0.5 after a cancel, and a capture holds a pair that fits |
-| fading | cancel | idle | the previous scene is current again; the screen and grids are redrawn |
+| idle | release_voice | idle | nothing: it returns false |
+| idle | capture into the target | idle | scene 2 holds the sound now |
+| idle | hand set | idle | the length is cut to 0.5, what the start leaves |
+| idle | morph move | idle | the morph applies and leaves no scene current (0) |
+| fading, before the midpoint | recall, timed | fading, before the midpoint | superseded: its clock stopped, scene 1 put back, then the fade to scene 3 from it; no routing switched |
+| fading, before the midpoint | recall, instant | idle | superseded; scene 3 applied and current |
+| fading, before the midpoint | step | fading, after it | step 10, f = 0.5: the routing switches, its depth at 0 |
+| fading, before the midpoint | cancel | idle | the previous scene is current again; the screen and grids are redrawn; no routing switched |
+| fading, before the midpoint | release_voice | fading, before the midpoint | voice 2 is left out of the steps and the landing |
+| fading, before the midpoint | capture into the target | fading, before the midpoint | scene 2 is a new table; the fade lands on the one it was recalled with |
+| fading, before the midpoint | hand set | fading, before the midpoint | the length is cut to 0.5 as when idle; it stays 0.5 after a cancel, and a capture holds a pair that fits |
+| fading, before the midpoint | morph move | idle | the morph's apply cancels the fade and leaves no scene current |
+| fading, after it | recall, timed | fading, before the midpoint | superseded, scene 1 put back, the fade to scene 3 from it; the routing the old fade switched stays |
+| fading, after it | recall, instant | idle | superseded; scene 3 applied (its routings) and current |
+| fading, after it | step | fading, after it | the next step; nothing switches again |
+| fading, after it | end | idle | the landing: the target stays current while `recall_scene_instant` applies its exact values and discrete part |
+| fading, after it | cancel | idle | the previous scene is current again, and the routing the midpoint switched stays (a part-faded sound) |
+| fading, after it | release_voice | fading, after it | voice 2 keeps its values through the steps and the landing |
+| fading, after it | capture into the target | fading, after it | the fade lands on the scene as it was recalled |
+| fading, after it | hand set | fading, after it | the length is cut to 0.5 |
+| fading, after it | morph move | idle | the morph's apply cancels the fade and leaves no scene current |
 
 ## Smooth transitions
 
@@ -44,6 +65,9 @@ The hand set is voice 2's loop start 0.5, then its length 1, by hand. The rows a
 |-------|-----|-----|-----|-----|-----|-----|-----|
 | idle | false | nil | nil | nil | nil | nil | the last scene that landed (0 = none) |
 | fading | true | the `util.time()` its next step or end is due | the scene it goes to | the current scene before it | the number of the step applied last (1-20) | its clock (or a lost id, which the sequencer's overrun ends) | `target` |
+| landing | false | nil | nil | nil | nil | nil (the id forgotten, its coroutine still running the landing) | the fade's target, while `recall_scene_instant` applies it (`setting()` true) |
+
+The Machines entry's table splits fading at its midpoint: before it while `2 × step < steps`, after it from the step that reaches f = 0.5, which ran the through-zero switches (the closure's `switched`).
 
 - idle to fading: `recall_scene(n, t)` with `t > 0`, after ending any running transition. Before the first step runs it sets five of the seven columns, in this order: `S.scene_transition_active` (true), `next_step_due` (now), `target` (n), `previous` (`S.current_scene`) and `S.current_scene` (n), so the first step's redraw lights the target. The first step, which runs inside `S.lib.clocks.run` (`clock.run` resumes it before it returns), sets `step` (1) before its redraws. The seventh, `S.scene_transition_clock` (the handle's id), is assigned when `run` returns, after the first step (nil while it runs).
 - fading to fading: each later step sets `step` to its number before its redraws (the only write of `step` outside `end_scene_transition`).

@@ -879,11 +879,10 @@ test("a superseded fade's target stops blinking at once", function()
   assert_equal(scenes.shows_current(3), true, "the previous scene shows steady")
 end)
 
--- 3.9 (#867): the table of the scene fade, its hand-edit rows (package 1d;
--- 2c completes it). A hand edit during a fade is a hand edit: the loop
--- length's filter (lib/loops.lua) stands down only while a recall's apply
--- or a fade step sets the pair (S.lib.scenes.setting()), never for the
--- whole fade. The hand set is voice 2's start 0.5, then its length 1
+-- 3.9 (#867): a hand edit during a fade is a hand edit: the loop length's
+-- filter (lib/loops.lua) stands down only while a recall's apply or a fade
+-- step sets the pair (S.lib.scenes.setting()), never for the whole fade.
+-- The hand set is voice 2's start 0.5, then its length 1
 local function fade_scenes()
   params:set("reverb_mix", 0.6); capture_scene(2)
   params:set("reverb_mix", 0.2); capture_scene(1)
@@ -895,27 +894,192 @@ local function assert_cut_length(what)
   assert_near(params:get("v2_loop_length"), 0.5, 1e-9, what .. ": the length cut to 1 - start")
 end
 
+-- 3.9 (#948; 1d began it with the hand edit's and the cancel's rows, 2c
+-- completes it): the table of the scene fade. Scene 1 (current) holds
+-- reverb 0.2 and voice 2's pan -0.5, scene 2 reverb 0.6, pan 0.5 and
+-- matrix routing 1 from LFO 1 to the delay mix (scene 1's and 3's have
+-- none: a fade from 1 to 2 ramps the routing's depth through 0 and
+-- switches the routing at its midpoint), scene 3 reverb 0.9 and pan 0.8.
+-- A fade takes 4 s, 20 steps of 0.2 s; before the midpoint is step 9 of
+-- the fade to scene 2, after it step 12
+local FADE_TABLE = {seconds = 4, before_step = 9, after_step = 12}
+
+local function fade_table_scenes()
+  local S = local_value("S")
+  params:set("v2_pan", 0.5); params:set("reverb_mix", 0.6)
+  S.lib.matrix.set_routing(1, "lfo1", "delay_mix"); capture_scene(2)
+  S.lib.matrix.set_routing(1, "", "")
+  params:set("v2_pan", 0.8); params:set("reverb_mix", 0.9); capture_scene(3)
+  params:set("v2_pan", -0.5); params:set("reverb_mix", 0.2); capture_scene(1)
+  recall_scene(1, 0)
+end
+
+-- The fade to scene 2, run to the step given
+local function fade_to_step(context, step)
+  fade_table_scenes()
+  recall_scene(2, FADE_TABLE.seconds)
+  for _ = 2, step do wake(context, "scene_transition_clock") end
+end
+
+-- The state the script is in: fading (before or after the midpoint, by
+-- the step applied last), landing (no fade, and a scene setting: inside
+-- the landing's recall_scene_instant), else idle
+local function fade_state()
+  local S = local_value("S")
+  if S.scene_transition_active then
+    local transition = S.SCENE_TRANSITION
+    return transition.step * 2 >= transition.steps and "fading, after it" or "fading, before the midpoint"
+  end
+  if S.lib.scenes.setting() then return "landing" end
+  return "idle"
+end
+
+-- Every row's check: the current scene, the fade flag, the clock (a live
+-- coroutine exactly while a fade runs) and the recall flag put back (no
+-- scene sets after the event)
+local function assert_fade(current, fading, what)
+  local S = local_value("S")
+  assert_equal(S.current_scene, current, what .. ": the current scene")
+  assert_equal(S.scene_transition_active, fading, what .. ": the fade flag")
+  if fading then
+    local thread = clock.threads[S.scene_transition_clock]
+    assert_true(type(thread) == "thread" and coroutine.status(thread) ~= "dead", what .. ": the fade's clock runs")
+  else
+    assert_equal(S.scene_transition_clock, nil, what .. ": no fade clock")
+  end
+  assert_equal(S.lib.scenes.setting(), false, what .. ": no scene is setting (the recall flag is back)")
+end
+
+-- A new fade to scene 3 from scene 1 (the last that landed), at its first
+-- step; the clock of the fade it superseded no longer runs
+local function assert_superseded(context, what)
+  local S = local_value("S")
+  assert_fade(3, true, what)
+  assert_equal(S.SCENE_TRANSITION.target, 3, what .. ": the fade goes to scene 3")
+  assert_equal(S.SCENE_TRANSITION.previous, 1, what .. ": from scene 1, the last that landed")
+  assert_equal(S.SCENE_TRANSITION.step, 1, what .. ": at its first step")
+  local old = context.fade_clock
+  assert_true(old ~= S.scene_transition_clock and (clock.threads[old] == nil or S.lib.clocks.retired[old] ~= nil),
+    what .. ": the old fade's clock was stopped")
+end
+
+local function routing_source() return local_value("S").lib.matrix.routing(1).source end
+
+local function run_to_end(context)
+  while local_value("S").scene_transition_active do wake(context, "scene_transition_clock") end
+end
+
+local LANDING_IMPOSSIBLE = "the landing runs inside one resume of the fade's clock and never yields: only its own sets run"
+  .. " inside it, and none of them recalls, steps, ends or cancels a fade, lets go of a voice, captures, edits by hand"
+  .. " or moves the morph (the end's row reads the state from inside it)"
+
 h.transition_table({
   name = "scene fade",
   states = {
-    idle = function() fade_scenes() end,
-    fading = function(context) fade_scenes(); recall_scene(2, 4); context.clock.run_for(0.3) end,
+    idle = function() fade_table_scenes() end,
+    ["fading, before the midpoint"] = function(context)
+      fade_to_step(context, FADE_TABLE.before_step)
+      context.fade_clock = local_value("S").scene_transition_clock
+    end,
+    ["fading, after it"] = function(context)
+      fade_to_step(context, FADE_TABLE.after_step)
+      context.fade_clock = local_value("S").scene_transition_clock
+    end,
+    -- never entered from outside: every cell of it is impossible
+    landing = function() error("the landing is entered only from inside the fade's clock") end,
   },
   events = {
-    ["hand set"] = function() params:set("v2_loop_start", 0.5); params:set("v2_loop_length", 1) end,
+    ["recall, timed"] = function() recall_scene(3, FADE_TABLE.seconds) end,
+    ["recall, instant"] = function() recall_scene(3, 0) end,
+    step = function(context) wake(context, "scene_transition_clock") end,
+    -- the steps left, then the end; the state read from inside the landing,
+    -- as it applies the matrix's block (the scene's discrete part)
+    ["end"] = function(context)
+      local record
+      for _, block in ipairs(local_value("S").registry.scene_blocks) do
+        if block.key == "matrix" then record = block end
+      end
+      local real_apply = record.apply
+      record.apply = function(value)
+        if not local_value("S").scene_transition_active then
+          context.landing = {state = fade_state(), current = local_value("S").current_scene}
+        end
+        return real_apply(value)
+      end
+      local ran, run_error = pcall(run_to_end, context)
+      record.apply = real_apply
+      if not ran then error(run_error, 0) end
+    end,
     cancel = function() cancel_scene_transition() end,
+    release_voice = function(context) context.released = local_value("S").lib.scenes.release_voice(2) end,
+    ["capture into the target"] = function() capture_scene(2) end,
+    ["hand set"] = function() params:set("v2_loop_start", 0.5); params:set("v2_loop_length", 1) end,
+    ["morph move"] = function(context) params:set("morph", 0.5); context.clock.run_for(0.05) end,
   },
-  state_of = function()
-    return local_value("S").scene_transition_active and "fading" or "idle"
-  end,
+  state_of = fade_state,
   rows = {
-    {"idle", "hand set", "idle", check = function() assert_cut_length("idle") end},
-    {"idle", "cancel", "idle", check = function()
-      assert_equal(local_value("S").current_scene, 1, "the current scene stays")
+    {"idle", "recall, timed", "fading, before the midpoint", check = function()
+      local S = local_value("S")
+      assert_fade(3, true, "a fade from idle")
+      assert_equal(S.SCENE_TRANSITION.previous, 1, "from the current scene")
+      assert_equal(S.SCENE_TRANSITION.step, 1, "its first step ran inside the recall")
     end},
-    {"fading", "hand set", "fading", check = function()
+    {"idle", "recall, instant", "idle", check = function()
+      assert_fade(3, false, "an instant recall")
+      assert_near(params:get("reverb_mix"), 0.9, 1e-9, "scene 3's reverb")
+    end},
+    {"idle", "cancel", "idle", check = function() assert_fade(1, false, "a cancel with no fade") end},
+    {"idle", "release_voice", "idle", check = function(context)
+      assert_equal(context.released, false, "no fade lets go of the voice")
+      assert_fade(1, false, "release_voice with no fade")
+    end},
+    {"idle", "capture into the target", "idle", check = function()
+      assert_fade(1, false, "a capture")
+      assert_near(local_value("S").scenes[2].data.reverb_mix, 0.2, 1e-9, "scene 2 holds the sound now")
+    end},
+    {"idle", "hand set", "idle", check = function()
+      assert_cut_length("idle")
+      assert_fade(1, false, "a hand set")
+    end},
+    {"idle", "morph move", "idle", check = function() assert_fade(0, false, "a morph move") end},
+
+    {"fading, before the midpoint", "recall, timed", "fading, before the midpoint", check = function(context)
+      assert_superseded(context, "a fade superseding one before its midpoint")
+      assert_equal(routing_source(), "", "the superseded fade switched no routing")
+    end},
+    {"fading, before the midpoint", "recall, instant", "idle", check = function()
+      assert_fade(3, false, "an instant recall during a fade")
+      assert_near(params:get("reverb_mix"), 0.9, 1e-9, "scene 3's reverb")
+    end},
+    {"fading, before the midpoint", "step", "fading, after it", check = function()
+      assert_fade(2, true, "the step to the midpoint")
+      assert_equal(local_value("S").SCENE_TRANSITION.step, FADE_TABLE.before_step + 1, "one step")
+      assert_equal(routing_source(), "lfo1", "the midpoint's step switched the routing through 0")
+    end},
+    {"fading, before the midpoint", "cancel", "idle", check = function()
+      assert_fade(1, false, "a cancel before the midpoint")
+      assert_equal(routing_source(), "", "no routing was switched")
+    end},
+    {"fading, before the midpoint", "release_voice", "fading, before the midpoint", check = function(context)
+      assert_equal(context.released, true, "the fade lets go of voice 2")
+      assert_fade(2, true, "release_voice during a fade")
+      local pan = params:get("v2_pan")
+      wake(context, "scene_transition_clock")
+      assert_near(params:get("v2_pan"), pan, 1e-9, "no later step moves voice 2")
+    end},
+    {"fading, before the midpoint", "capture into the target", "fading, before the midpoint", check = function(context)
+      local S = local_value("S")
+      assert_fade(2, true, "a capture into the fade's target")
+      local captured = S.scenes[2].data.reverb_mix
+      run_to_end(context)
+      assert_fade(2, false, "the fade landed")
+      assert_near(params:get("reverb_mix"), 0.6, 1e-9, "on the scene as it was recalled")
+      assert_true(math.abs(captured - 0.6) > 0.01, "not on the capture's " .. captured)
+    end},
+    {"fading, before the midpoint", "hand set", "fading, before the midpoint", check = function()
       local S = local_value("S")
       assert_cut_length("fading")
+      assert_fade(2, true, "a hand set during a fade")
       cancel_scene_transition()
       assert_cut_length("after a cancel")
       -- a capture of a pair set during a fade validates only if it fits
@@ -925,9 +1089,68 @@ h.transition_table({
       assert_true(values.loop_start + values.loop_length <= 1 + S.lib.loops.LOOP.tolerance,
         "and its pair fits: " .. values.loop_start .. " + " .. values.loop_length)
     end},
-    {"fading", "cancel", "idle", check = function()
-      assert_equal(local_value("S").current_scene, 1, "the previous scene is current again")
+    {"fading, before the midpoint", "morph move", "idle", check = function()
+      assert_fade(0, false, "a morph move during a fade")
     end},
+
+    {"fading, after it", "recall, timed", "fading, before the midpoint", check = function(context)
+      assert_superseded(context, "a fade superseding one after its midpoint")
+      assert_equal(routing_source(), "lfo1", "the switch the superseded fade ran stays")
+    end},
+    {"fading, after it", "recall, instant", "idle", check = function()
+      assert_fade(3, false, "an instant recall after the midpoint")
+      assert_equal(routing_source(), "", "scene 3's routings")
+    end},
+    {"fading, after it", "step", "fading, after it", check = function()
+      assert_fade(2, true, "a step after the midpoint")
+      assert_equal(local_value("S").SCENE_TRANSITION.step, FADE_TABLE.after_step + 1, "one step")
+    end},
+    {"fading, after it", "end", "idle", check = function(context)
+      assert_fade(2, false, "the landing")
+      assert_true(context.landing ~= nil, "the landing applied the matrix's block")
+      assert_equal(context.landing.state, "landing", "read from inside the landing")
+      assert_equal(context.landing.current, 2, "with its target current while it applies it")
+      assert_near(params:get("reverb_mix"), 0.6, 1e-9, "the scene's exact reverb")
+      assert_near(params:get("v2_pan"), 0.5, 1e-9, "and voice 2's pan")
+    end},
+    {"fading, after it", "cancel", "idle", check = function()
+      assert_fade(1, false, "a cancel after the midpoint")
+      assert_equal(routing_source(), "lfo1", "the routing the midpoint switched stays")
+    end},
+    {"fading, after it", "release_voice", "fading, after it", check = function(context)
+      assert_equal(context.released, true, "the fade lets go of voice 2")
+      local pan = params:get("v2_pan")
+      run_to_end(context)
+      assert_fade(2, false, "the fade landed")
+      assert_near(params:get("v2_pan"), pan, 1e-9, "without voice 2")
+      assert_near(params:get("reverb_mix"), 0.6, 1e-9, "and with the rest")
+    end},
+    {"fading, after it", "capture into the target", "fading, after it", check = function(context)
+      run_to_end(context)
+      assert_fade(2, false, "the fade landed")
+      assert_near(params:get("reverb_mix"), 0.6, 1e-9, "on the scene as it was recalled")
+    end},
+    {"fading, after it", "hand set", "fading, after it", check = function()
+      assert_cut_length("after the midpoint")
+      assert_fade(2, true, "a hand set after the midpoint")
+    end},
+    {"fading, after it", "morph move", "idle", check = function()
+      assert_fade(0, false, "a morph move after the midpoint")
+    end},
+  },
+  impossible = {
+    {"idle", "step", "no fade clock runs while idle"},
+    {"idle", "end", "no fade clock runs while idle"},
+    {"fading, before the midpoint", "end", "the end follows the twentieth step: a fade before its midpoint steps first"},
+    {"landing", "recall, timed", LANDING_IMPOSSIBLE},
+    {"landing", "recall, instant", LANDING_IMPOSSIBLE},
+    {"landing", "step", LANDING_IMPOSSIBLE},
+    {"landing", "end", LANDING_IMPOSSIBLE},
+    {"landing", "cancel", LANDING_IMPOSSIBLE},
+    {"landing", "release_voice", LANDING_IMPOSSIBLE},
+    {"landing", "capture into the target", LANDING_IMPOSSIBLE},
+    {"landing", "hand set", LANDING_IMPOSSIBLE},
+    {"landing", "morph move", LANDING_IMPOSSIBLE},
   },
   notes = {"docs/notes/lua/scenes/transitions.md", "scene fade"},
 })

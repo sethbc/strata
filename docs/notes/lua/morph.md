@@ -37,6 +37,35 @@
 - The params `morph`, `morph_a` to `morph_d` and `morph_y` are never a scene field, an LFO destination or a macro target (`morph_y` is no LFO destination, so no macro target either; the matrix's destinations leave out `^morph`); the corners take their maximum from `NUM_SCENES`.
 - **An LFO one scene has on and another off** (ruling 30): morph blends the LFO's rate, depth and offset toward the corners' stored values and switches the LFO on or off with the discrete entries, with no fade to 0, for four corners as for two (the same rule; below, Differences from a transition).
 
+## Machines
+
+### morph clock
+- **State:** the local `state`: `moved`, `pending`, `crossing_waits`, `flashed`, `clock` (the clock helper's handle; `S.morph_clock` its id), `crossed_at`, `applied` (corner, values, owned) and the move's `move_held`, `move_scene` and `move_takeovers`; with `S.current_scene` and `S.scene_transition_active` (`taken_over()`). No accessor names the state; `plan_ready()` says whether a plan has two valid corners.
+- **Invariant:** `morph clock`: a move, a value left or a waiting crossing always has a clock to apply it, and that clock's coroutine is not dead.
+- **Test:** `test/unit/morph_test.lua`: "the morph clock stopped as its wake is posted: no clock error, and nothing more happens".
+
+The six states (3.9, #948), a table with no test yet: the examples of `morph_test.lua` cover its rows (Applying, below). Moved and moving both hold `moved`: moved is a move the clock's first tick (`handle.sleep(0)`) applies, moving a move marked while the clock sleeps 1 / `apply_hz` after an apply. Resting is no move waiting with values left (`pending`) or off their exact blend; plan not ready is fewer than `MORPH.min_corners` valid corners, where an apply flashes the first empty corner once per plan (`flashed`) and changes nothing. A recall or a fade changes no field here: the next tick finds it (`move_overtaken`, `taken_over`).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| idle | a move (`morph`, `morph_y`) | moved | the move noted (whether morph held the state, the current scene, the takeover count); the clock started |
+| moved | its first tick | resting | the move applied with the threshold: a fade canceled, the discrete corner and up to 120 values set, no scene current |
+| moved | a recall or a fade, then its tick | idle | the move is overtaken and dropped; nothing took over that morph can rest on, so the clock ends |
+| resting | a move | moving | marked; the clock's next tick applies it |
+| moving | a move | moving | coalesced: the tick applies the latest position |
+| moving | its tick | resting | the move applied |
+| resting | its tick, values left or off their blend | resting | an apply at rest (no threshold) |
+| resting | its tick, nothing left | idle | the clock ends |
+| resting | a recall or a fade, then its tick | idle | the convergence stops: nothing is written |
+| resting | an apply that finds a crossing within `crossing_seconds` of the last | crossing waits | the corner stays; the values still move |
+| crossing waits | its tick after the wait | resting | the corner the position calls for then is applied |
+| crossing waits | a recall or a fade, then its tick | idle | the waiting crossing is dropped |
+| idle | a move with the plan not ready | plan not ready | the clock started |
+| plan not ready | its tick | idle | the first empty corner flashes once per plan; nothing changes and the clock ends |
+| any but idle | a PSET read | idle | the clock stopped through the helper, what was applied forgotten |
+| any but idle | an apply that raises | idle | the clock forgets its id first, what was applied is forgotten, the error raised again |
+| any but idle | cleanup step 112 | idle | the clock canceled at once (the one cancel) |
+
 ## Owns
 
 `lib/morph.lua` (`S.lib.morph`, 3.4, packages 1g and 3a, design §5.1-§5.5):

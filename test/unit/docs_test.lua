@@ -2600,7 +2600,6 @@ end)
 -- its names here; a name is never added: an invariant registered from now
 -- on gets its entry in the commit that registers it. The list only shrinks
 local UNTABLED_INVARIANTS = {
-  "scene sequencer",  -- lib/scenes.lua
   "midi ports",  -- lib/io/ports.lua
   "midi notes",  -- lib/midi_in.lua
   "scan holds",  -- lib/positions.lua
@@ -2612,13 +2611,9 @@ local UNTABLED_INVARIANTS = {
   "param turn",  -- lib/ui/detent.lua
   "engine budget",  -- lib/engine_sync.lua
   "modal owner",  -- lib/ui/modal.lua
-  "morph clock",  -- lib/morph.lua
-  "gesture recorders",  -- lib/gestures.lua
-  "macro apply", "macro learn",  -- lib/macros.lua
   "matrix learn",  -- lib/matrix.lua
   "zones editor",  -- lib/ui/zones.lua
   "scale editor",  -- lib/ui/scale_editor.lua
-  "factory",  -- lib/factory.lua
   "voice picker",  -- lib/ui/voice_picker.lua
   "lfo clock",  -- lib/lfos.lua
   "step editor",  -- lib/pages/seq.lua

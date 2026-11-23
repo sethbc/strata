@@ -12,6 +12,15 @@
 - A key matches `FACTORY.key_pattern` (`^[%w_%-]+$`): `util.make_dir` runs `mkdir -p` unquoted on norns, so a key is a safety rule. A slot line names a bare file of the set's `audio/` (no `/`, no `..`).
 - A version is compared only with `FACTORY_DATA_VERSION`, `FACTORY_FORMAT_FLOOR`, `FACTORY_INDEX_DATA_VERSION` or `FACTORY_SET_DATA_VERSION`.
 
+## Machines
+
+### factory load
+- **State:** `S.factory_clock` (the load's clock while it runs; `S.lib.factory.loading()` says whether one does), the marker `factory.data`'s `pending` and `loaded` (across starts), and SETUP's list, the local `list` (`open`, `cursor`, `sets`, `armed_until`) with its modal owner.
+- **Invariant:** `factory`: the load's clock, while set, is a live coroutine; the list is open exactly while its owner is the modal top (or beneath SEQ's step editor); an open list's cursor is on one of its sets.
+- **Test:** `test/unit/factory_test.lua`: "a second load while one runs is refused".
+
+No table (3.9, #948): a load is one clock (idle, then loading until its steps end, a step refuses or cleanup cancels it; a second `load` meanwhile is refused), and the marker's pending and loaded are written at its first-run start and at its whole end (Must not break, above); the list is open or closed, with its two-press prompt. The audit (`docs/design/3.9-state-machines-facts/lua-scenes.md`, section 14) found no transition fault to hold; the marker's states by start are the start step's rules (ruling 51, above).
+
 ## lib/factory.lua (`S.lib.factory`)
 
 Included at the end of the data modules, after `lib/voice_presets.lua` and `lib/fx_hold.lua`, before `lib/params_setup.lua`; it reads every other module at call time. 3.8 builds and tests the mechanism and ships no set: there is no `factory/` folder in the script, so `sets()` is empty and no start finds an index.

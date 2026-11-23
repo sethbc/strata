@@ -20,6 +20,35 @@
 - A draws spec of a locked voice (`S.locked[spec.voice]`), or one with no draws, returns false before anything is drawn, stored or cleared. A locked voice can still be edited. A pattern spec randomizes a locked voice's pattern, as SEQ always has: the lock covers params, not patterns.
 - The undo's expiry clock runs on the clock helper (`S.lib.clocks`, #870; `docs/notes/lua/clocks.md`): its one wait is `if not handle.sleep(UNDO_SECONDS) then return end`. Every `clear_undo` stops it (`S.lib.clocks.stop`: canceled, or retired when its wake may be posted, so an edit as the window ends prints no clock error and the retired wake clears nothing, not a new undo held since); the clock sets `undo_handle` and `undo_clock` to nil before it clears the undo, so it never stops itself; `hold_undo` stops a clock still running before its replacement starts (an undo held inside another's write, a nested randomize), so no orphaned clock clears the new undo at its own wake. `undo_clock` is the handle's id, which the tests read; cleanup step 85 ends it with `S.lib.clocks.cancel`.
 
+## Machines
+
+### randomize undo
+- **State:** `S.undo` (`{page, section, voice, values, ids, pattern, capture, until_time}` or nil), the expiry clock (the local `undo_handle`, its id `undo_clock`) and the local `undo_writing`; `S.lib.mutation.undo_for(page, section, voice)` says whether a quick ALT+K2 there would undo.
+- **Invariant:** none: no invariant is registered for it (the audit, `docs/design/3.9-state-machines-facts/lua-scenes.md` section 12, found no transition fault); the held undo and its clock are set and cleared together by `hold_undo` and `clear_undo`, except at cleanup, which cancels the clock and leaves `S.undo` as the script ends.
+- **Test:** `test/unit/mutation_test.lua`: "a randomize of another voice, a recall or a mutation of the voice clears the undo".
+
+The four states (3.9, #948), a table with no test yet: the examples of `mutation_test.lua` cover its rows (Randomize and its undo, below). Held draws is a draws spec's `values` and `ids`; held pattern a pattern spec's `pattern`; held voice capture a voice preset's load or copy (`hold_voice`, its `capture`). A held state lasts `UNDO_SECONDS` (5 s).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| none | a randomize of draws | held draws | the old values held before the first set; the clock started |
+| none | a randomize of a locked voice, or of no draws | none | it returns false and changes nothing |
+| none | a pattern randomize | held pattern | the voice's old steps held |
+| none | a voice preset's load or copy | held voice capture | the voice's sound from before it held |
+| none | undo | none | it returns false |
+| held draws, held pattern or held voice capture | a randomize of draws, a pattern randomize or a preset's load | held draws, held pattern or held voice capture | the earlier undo ends first; the new one replaces it |
+| held draws, held pattern or held voice capture | a randomize of a locked voice, or of no draws | unchanged | the earlier undo stays |
+| held draws | undo | none | every held value put back, in the order the randomize set them |
+| held pattern | undo | none | the old steps put back through `replace_pattern` |
+| held voice capture | undo | none | the capture's type and values applied through `apply_voice`, the preset row's name put back (#869) |
+| held draws or held voice capture | an edit of a held param | none | `note_param_edit` ends it (never the drift's or the undo's own writes) |
+| held draws or held voice capture | an edit of another param | unchanged | nothing |
+| held pattern | an edit of that voice's pattern | none | `note_pattern_edit` ends it |
+| held draws, held pattern or held voice capture | a mutation step that changes a param of the undo's voice | none | `set_mutated_param` ends it |
+| held draws, held pattern or held voice capture | the window ends (the clock's wake) | none | the undo cleared and the redraw asked for: the ALT hint goes back |
+| held draws, held pattern or held voice capture | a scene recall (an instant one, a fade's start or its landing) | none | `clear_undo` |
+| any | cleanup step 85 | unchanged | the clock canceled at once; `S.undo` is left, the script ending |
+
 ## Owns
 
 `lib/mutation.lua` (`S.lib.mutation`):
