@@ -3,9 +3,11 @@
 -- compare Lua's held notes with what the engine holds. It follows the notes
 -- area's rules as docs/notes/engine/notes.md states them (and the freeze
 -- area's, for a synth voice's streams), fed the engine calls the stub
--- records: noteOn, noteOff, setNotePool, voiceOn, voiceOff, setGrainSource
--- and the freeze grain param. Per engine voice: running, its source, its
--- freeze, the own note's park and, per extra slot, its state (empty, live,
+-- records: noteOn, noteOff, setNotePool, voiceOn, voiceOff, setGrainSource,
+-- setVoiceType and the freeze, freezeMode and rootNote grain params (3.9,
+-- #873: 3.8's voice sources and types, 3.7's per-voice root). Per engine
+-- voice: running, its source (a voice source's notes are \input's), its
+-- type, its root, its freeze, the own note's park and, per extra slot, its state (empty, live,
 -- releasing), kind (voice, buffer, input, stream), note, freq, rate and
 -- start order. A releasing note never ends on its own here (its release
 -- time is the engine's); that only makes more of them to cut. What the
@@ -20,15 +22,23 @@
 local Model = {}
 Model.__index = Model
 
--- constants: S.constants (NUM_VOICES, NOTE_SLOTS, NUM_BUFFERS); the
--- engine's input source is NUM_BUFFERS + 1, its rate root 60
+-- constants: S.constants (NUM_VOICES, NOTE_SLOTS, NUM_BUFFERS,
+-- SOURCE_INPUT, SOURCE_VOICE_FIRST); an engine source is the Lua option
+-- less one (the input NUM_BUFFERS + 1, voice j's ring SOURCE_VOICE_FIRST +
+-- j - 2). Each voice's root starts at the engine's noteRateRootNote (60)
+-- and its type at its own index (StrataVoices.sc's alloc)
+local RATE_ROOT_NOTE = 60
+
 function Model.new(constants)
-  local model = setmetatable({pool = 0, order = 0, errors = {}, voices = {}, input = constants.NUM_BUFFERS + 1,
+  local model = setmetatable({pool = 0, order = 0, errors = {}, voices = {}, input = constants.SOURCE_INPUT - 1,
+    voice_first = constants.SOURCE_VOICE_FIRST - 1, voice_count = constants.NUM_VOICES,
     slots = constants.NOTE_SLOTS, buffers = constants.NUM_BUFFERS, read = 0,
     -- how often each path ran, so a test can tell its sequence reached them
-    counts = {starts = 0, restarts = 0, streams_left = 0, cuts = 0, parks = 0, unparks = 0, regrained = 0}, live_cuts = {}}, Model)
+    counts = {starts = 0, restarts = 0, streams_left = 0, cuts = 0, parks = 0, unparks = 0, regrained = 0,
+      voice_sourced = 0, retyped = 0}, live_cuts = {}}, Model)
   for voice = 0, constants.NUM_VOICES - 1 do
-    local state = {running = false, source = 0, frozen = false, own = {parked = false}, extra = {}}
+    local state = {running = false, source = 0, frozen = false, root = RATE_ROOT_NOTE, type = voice,
+      own = {parked = false}, extra = {}}
     for slot = 1, constants.NOTE_SLOTS - 1 do state.extra[slot] = {state = "empty"} end
     model.voices[voice] = state
   end
@@ -37,14 +47,32 @@ end
 
 function Model:error(text) table.insert(self.errors, text) end
 
-local function absolute_rate(note) return math.min(4, math.max(0.25, 2 ^ ((note - 60) / 12))) end
+-- absoluteNoteRate: a note's rate against the voice's root (its rootNote,
+-- 60 until Lua sends one; 3.7)
+function Model:absolute_rate(voice, note)
+  return math.min(4, math.max(0.25, 2 ^ ((note - self.voices[voice].root) / 12)))
+end
 
--- What the voice's next extra note is (noteKindFor)
-function Model:kind_for(voice)
+-- voiceSource: an engine source that reads a voice's output ring (3.8)
+function Model:voice_source(source)
+  return source >= self.voice_first and source < self.voice_first + self.voice_count
+end
+
+-- frozenSynthVoice: a frozen voice on its synth source
+function Model:frozen_synth_voice(voice)
   local state = self.voices[voice]
-  if state.source == self.input then return "input" end
-  if state.source >= 1 and state.source <= self.buffers then return "buffer" end
-  if state.frozen then return "stream" end
+  return state.source == 0 and state.frozen
+end
+
+-- What the voice's next extra note is: noteKindFor's branches in its order
+-- (a docs test compares them: "the model's kind rule names the engine's
+-- cases"); a voice source's notes are grains of a ring another writer
+-- writes, as the input's
+function Model:kind_for(voice)
+  local source = self.voices[voice].source
+  if source == self.input or self:voice_source(source) then return "input" end
+  if source >= 1 and source <= self.buffers then return "buffer" end
+  if self:frozen_synth_voice(voice) then return "stream" end
   return "voice"
 end
 
@@ -82,12 +110,14 @@ function Model:start(voice, record, order)
   self.order = self.order + 1
   self.counts[order and "restarts" or "starts"] = self.counts[order and "restarts" or "starts"] + 1
   record.state, record.kind, record.order = "live", self:kind_for(voice), order or self.order
+  if self:voice_source(self.voices[voice].source) then self.counts.voice_sourced = self.counts.voice_sourced + 1 end
   return true
 end
 
--- leaveStream (ruling 53): a ring-stream note's rate becomes its note's
-local function leave_stream(record)
-  if record.kind == "stream" then record.rate = absolute_rate(record.note) end
+-- leaveStream (ruling 53): a ring-stream note's rate becomes its note's,
+-- against the voice's root
+function Model:leave_stream(voice, record)
+  if record.kind == "stream" then record.rate, record.root = self:absolute_rate(voice, record.note), self.voices[voice].root end
 end
 
 -- restartNotes (a running voice's switch) and notesUnfrozen (only the
@@ -99,7 +129,7 @@ function Model:restart(voice, streams_only)
       local was_live = record.state == "live"
       cut(record)
       if record.kind == "stream" then self.counts.streams_left, record.streamed = self.counts.streams_left + 1, true end
-      leave_stream(record)
+      self:leave_stream(voice, record)
       if was_live then self:start(voice, record, record.order) end
       -- a note once a stream, now on a buffer or the input: its rate is its note's
       if was_live and record.streamed and record.kind ~= "voice" and record.kind ~= "stream" then
@@ -134,10 +164,39 @@ Model.commands.setGrainSource = function(self, voice, source)
   end
 end
 
--- the freeze param: freezeVoice (frozen on another source first unfrozen,
+-- setVoiceType (3.8): a new type is kept; on a running synth voice
+-- (switchVoiceType) each live note of kind voice is cut and restarts on the
+-- new def, keeping its order (restartVoiceNotes: startNoteSynth takes its
+-- kind again, so on a frozen synth voice it restarts as a stream); a
+-- releasing note and a stream are left as they are. A spectral freeze's
+-- wait for the unfreeze is not followed: a spectral freeze mode is an error
+-- (the walk runs the hold freeze)
+Model.commands.setVoiceType = function(self, voice, voice_type)
+  local state = self.voices[voice]
+  if voice_type == state.type then return end
+  state.type = voice_type
+  if not state.running or state.source ~= 0 then return end
+  for _, record in ipairs(state.extra) do
+    if record.state == "live" and record.kind == "voice" then
+      local order = record.order
+      cut(record)
+      self:start(voice, record, order)
+      self.counts.retyped = self.counts.retyped + 1
+    end
+  end
+end
+
+-- the grain params the model follows: rootNote (3.7, kept per voice for
+-- absoluteNoteRate), freezeMode (a spectral one is an error, above) and
+-- the freeze: freezeVoice (frozen on another source first unfrozen,
 -- with no note moved), or unfreezeWithControl (a frozen synth voice's
 -- streams restarted as voice synths)
 Model.commands.setGrainParam = function(self, voice, name, value)
+  if name == "rootNote" then self.voices[voice].root = value; return end
+  if name == "freezeMode" then
+    if value >= 0.5 then self:error("voice " .. voice .. ": a spectral freeze mode, which the model does not follow") end
+    return
+  end
   if name ~= "freeze" then return end
   local state = self.voices[voice]
   if value > 0.5 then
@@ -159,7 +218,8 @@ Model.commands.noteOn = function(self, voice, slot, note, freq, rate)
   end
   if not state.running then return self:error("an extra noteOn to stopped voice " .. voice .. " (ignored)") end
   local record = state.extra[slot]
-  record.note, record.freq, record.rate = note, freq, rate
+  -- (root: the voice's root when the rate was set, for compare's allowance)
+  record.note, record.freq, record.rate, record.root = note, freq, rate, state.root
   if record.state == "releasing" then cut(record) end
   if record.state == "empty" and not self:start(voice, record) then
     self:error("voice " .. voice .. " slot " .. slot .. ": refused, the pool of " .. self.pool .. " is full of live notes")
@@ -206,9 +266,24 @@ end
 -- S.lib.notes' held extra notes are the engine's live ones, each of the kind
 -- the voice's state makes and at the pitch note_values gives it; a running
 -- voice's own note is parked in both or neither; the pools agree, and live
--- and releasing notes stay within the engine's
-function Model:compare(S)
+-- and releasing notes stay within the engine's.
+-- allow (optional): the named differences a test allows while their fault
+-- is open, each counted in model.allowed[<name>] when it is met:
+-- old_root, a held buffer or input note playing its pitch against the root
+-- its rate was set under (record.root), where the voice's root has moved
+-- since (a key change, a source switch to another root: the engine keeps a
+-- held note's rate, and Lua resends none)
+function Model:compare(S, allow)
   local problems, notes = {}, S.lib.notes
+  allow = allow or {}
+  self.allowed = self.allowed or {}
+  local function allowed(name) self.allowed[name] = (self.allowed[name] or 0) + 1 end
+  local function old_root(voice_idx, record, pitch)
+    if record.kind ~= "buffer" and record.kind ~= "input" then return false end
+    if record.root == nil or record.root == S.lib.samples.rate_root(voice_idx) then return false end
+    local rate = math.min(4, math.max(0.25, 2 ^ ((pitch - record.root) / 12)))
+    return math.abs(record.rate - rate) <= 1e-6
+  end
   local function problem(text) table.insert(problems, text) end
   if notes.pool() ~= self.pool then problem("pool: Lua " .. notes.pool() .. ", engine " .. self.pool) end
   if self:held_count() > self.pool then problem(self:held_count() .. " live and releasing notes past the pool") end
@@ -231,7 +306,10 @@ function Model:compare(S)
         if record.kind ~= kind then problem(where .. ": a " .. record.kind .. " note on a " .. kind .. " voice") end
         local engine_value, lua_value = record.rate, values.rate
         if record.kind == "voice" then engine_value, lua_value = record.freq, values.freq end
-        if math.abs(engine_value - lua_value) > 1e-6 then
+        local differs = math.abs(engine_value - lua_value) > 1e-6
+        if differs and allow.old_root and old_root(voice_idx, record, used.pitch) then
+          allowed("old_root")
+        elseif differs then
           problem(string.format("%s: plays %.6f, Lua's note_values %.6f", where, engine_value, lua_value))
         end
       end

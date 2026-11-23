@@ -402,13 +402,42 @@ end)
 -- of the notes area (test/notes_model.lua), fed every engine call the stub
 -- records, follows the engine's rules; after every step of a seeded random
 -- sequence (MIDI notes, the note off modes, a panic, patterns with chords,
--- the voices started and stopped, sources switched, freezes, the pool and
+-- the voices started and stopped, sources switched (3.8's voice sources
+-- among them), types switched, slot 1's key moved, freezes, the pool and
 -- the note cap, scenes captured and recalled, time passing) Lua's view (S.lib.notes' held slots, the own
 -- note's park, the pool, each note's pitch through note_values) must be the
 -- model's, the engine must have refused or ignored nothing, and every
 -- invariant must hold. A walk of h.walk (test/helpers.lua): one test a seed,
 -- and one that the seeds reached every path the model counts
 ---------------------------------------------------------------------------
+
+-- 3.9 (#873): the model follows the engine's per-voice root (3.7's
+-- rootNote, absoluteNoteRate): a ring-stream note that leaves the stream
+-- takes its note's rate against the voice's root, not 60. Lua sends a
+-- synth voice's root as 60, so the walk never shows it; fed by hand here
+test("the notes model's stream note leaves at its note's rate against the voice's root", function()
+  load_strata()
+  local S = local_value("S")
+  local model = require("notes_model").new(S.constants)
+  local calls = {}  -- one list, as the stub's: the model reads on from where it stopped
+  local function call(name, ...) calls[#calls + 1] = { name = name, args = { ... } } end
+  call("setNotePool", 4); call("setGrainParam", 0, "rootNote", 57); call("voiceOn", 0)
+  call("setGrainParam", 0, "freeze", 1); call("noteOn", 0, 1, 69, 440, 1.5, 1); call("setGrainSource", 0, 1)
+  model:feed(calls)
+  local record = model.voices[0].extra[1]
+  assert_equal(record.kind, "buffer", "restarted on slot 1")
+  assert_near(record.rate, 2, 1e-9, "69 over the root 57: rate 2")
+  assert_equal(#model.errors, 0, "nothing refused")
+  -- and a type switch restarts a live voice note on a running synth voice
+  call("setGrainSource", 0, 0); call("noteOn", 0, 2, 64, 329.6, 1, 1); call("setVoiceType", 0, 3)
+  model:feed(calls)
+  assert_equal(model.counts.retyped, 2, "both voice notes restarted on the new type")
+  assert_equal(model.voices[0].extra[1].state, "live", "still live")
+  assert_equal(model.voices[0].extra[2].state, "live", "still live")
+  call("setVoiceType", 0, 3)
+  model:feed(calls)
+  assert_equal(model.counts.retyped, 2, "the same type: no restart")
+end)
 
 -- An op's cuts: "never" for the ops that cut no playing note, "frozen" for
 -- the one that may cut only a frozen synth voice's: the model's blind spot
@@ -440,8 +469,19 @@ local NOTES_WALK_OPS = {
     if state.S.pattern_playing then pattern_clock_stop() else pattern_clock_start() end
   end },
   { 1, "voice toggle", function(_, random) toggle_voice(random(3)) end, cuts = "never" },
-  { 2, "source", function(state, random) params:set("v" .. random(3) .. "_source", state.sources[random(3)]) end,
+  { 2, "source", function(state, random)
+    local voice, source = random(3), state.sources[random(#state.sources)]
+    -- 3.8's voice source: another voice's output ring (voice v reads voice v % 3 + 1)
+    if source == "another voice" then source = state.S.constants.SOURCE_VOICE_FIRST + voice % 3 end
+    params:set("v" .. voice .. "_source", source)
+  end, cuts = "never" },
+  -- 3.8's type switch: a running synth voice's live voice notes restart on the new def
+  { 1, "type", function(state, random) params:set("v" .. random(3) .. "_type", random(#state.S.lib.types.list())) end,
     cuts = "never" },
+  -- 3.7's root: slot 1's file's key (rootNote, the note that plays rate 1 on a voice reading it), or none (60)
+  { 1, "root", function(state, random)
+    state.S.lib.samples.set(1, "key", random(4) > 1 and 47 + random(26) or nil)
+  end, cuts = "never" },
   { 2, "freeze", function(_, random) params:set("v" .. random(3) .. "_freeze", random(2) - 1) end },
   { 1, "pool", function(state, random) state.S.lib.notes.set_pool(random(7) - 1) end },
   { 1, "note cap", function(state, random)
@@ -452,6 +492,14 @@ local NOTES_WALK_OPS = {
   { 1, "scene", function(_, random) if random(2) == 1 then capture_scene(random(2)) else recall_scene(random(2)) end end,
     cuts = "frozen" },
 }
+-- The differences the walk allows while their fault is open (the model's
+-- compare names each; 3.9's package 1l found it): old_root, a held buffer or
+-- input extra note keeps the rate of the root it started under when the
+-- voice's root moves (slot 1's key changes, or a source switch between the
+-- input, a voice source and a keyed slot, whose rootNote comes after the
+-- switch): the engine keeps a held note's rate and Lua resends none, so the
+-- note sounds off its pitch until it is struck again
+local NOTES_WALK_ALLOWED = { old_root = true }
 local NOTES_WALK_CUTS = {}
 for _, op in ipairs(NOTES_WALK_OPS) do
   if op.cuts ~= nil and op.cuts ~= "never" and op.cuts ~= "frozen" then
@@ -479,16 +527,18 @@ h.walk({
         end
       end
     end
+    -- slot 1 holds a file, so its key (the root op) is a rootNote other than 60
+    load_buffer(1, "/tmp/keyed.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
     model:feed(context.engine_calls)  -- every call since the load: the voices' starts, the pool
     S.lib.notes.set_pool(random(7) - 1)
     return { context = context, S = S, model = model,
-      sources = { S.constants.SOURCE_SYNTH, S.constants.SOURCE_SYNTH + 1, S.constants.SOURCE_INPUT } }
+      sources = { S.constants.SOURCE_SYNTH, S.constants.SOURCE_SYNTH + 1, S.constants.SOURCE_INPUT, "another voice" } }
   end,
   ops = NOTES_WALK_OPS,
   after = function(state, op_name)
     local model = state.model
     model:feed(state.context.engine_calls)
-    local problems = model:compare(state.S)
+    local problems = model:compare(state.S, NOTES_WALK_ALLOWED)
     -- the blind spot: a playing note cut where the op cuts none (a plain
     -- switch, a mode, a stop, the cap, a panic), or by a recall on a voice
     -- that does not end a frozen synth voice (ruling 59)
@@ -508,8 +558,10 @@ h.walk({
   end,
   -- the sequences reach every path the model follows: starts, restarts
   -- (switches, unfreezes), streams leaving a freeze, a note once a stream
-  -- restarted on a buffer or the input (#682's path), cuts, parks, unparks
-  reached = { "starts", "restarts", "streams_left", "regrained", "cuts", "parks", "unparks" },
+  -- restarted on a buffer or the input (#682's path), cuts, parks, unparks,
+  -- a note on a voice source, a note restarted by a type switch (#873)
+  reached = { "starts", "restarts", "streams_left", "regrained", "cuts", "parks", "unparks", "voice_sourced",
+    "retyped" },
   counts = function(state) return state.model.counts end,
 })
 
