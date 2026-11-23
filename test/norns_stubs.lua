@@ -1667,6 +1667,11 @@ local function make_clock(util)
   -- events in slot order, so slots order the events due at the same moment
   local clock = { threads = {}, sleep_log = {}, events = {}, slots = {}, tempo = 120 }
   local next_id, schedule_order = 1, 0
+  -- slot_offsets[n] is the sync_beat_offset matron's event slot n holds: a
+  -- field of the slot, not of its coroutine, so it outlives the coroutine
+  -- (clock_scheduler_clear frees the slot and keeps it); nil (0) in a slot
+  -- never used, as matron's static array starts zeroed
+  local slot_offsets = {}
   -- the internal clock's beat timeline: beat_reference.beat at
   -- beat_reference.time, then one beat per 60 / clock.tempo seconds. A tempo
   -- change (clock.internal.set_tempo) keeps the beat, as matron's internal
@@ -1722,8 +1727,12 @@ local function make_clock(util)
     local previous = clock.events[coro_id]
     local from = (previous and previous.type == SCHEDULE_SYNC) and previous.sync_beat or beats_at(util.time())
     local event = ready_event(coro_id, SCHEDULE_SYNC)
-    -- its beats and offset, as matron keeps them for a reschedule (set_beat)
-    event.sync_period, event.sync_offset = sync_beat, offset
+    -- its beats, and the slot's offset, as matron keeps them for a
+    -- reschedule (set_beat): a coroutine holding its slot stores its offset;
+    -- a first wait (matron's new-slot branch) lands with its own offset but
+    -- leaves the slot's as it was (#957)
+    if previous then slot_offsets[event.slot] = offset end
+    event.sync_period = sync_beat
     event.sync_beat = next_clock_beat(from, sync_beat, offset)
   end
 
@@ -2115,14 +2124,15 @@ local function make_clock(util)
   -- crow's input division too, clock_reschedule_sync_events_from_source):
   -- every waiting sync is rescheduled from the new beat
   -- (clock_scheduler_reschedule_sync_events: the next multiple of its beats
-  -- after it, plus its offset), so its coroutine wakes there and counts its
-  -- next sync on from that beat
+  -- after it, plus its slot's offset, which a first sync never stored:
+  -- slot_offsets), so its coroutine wakes there and counts its next sync on
+  -- from that beat
   function clock.set_beat(beat)
     beat = check_number(beat, 1, "set_beat")
     beat_reference.beat, beat_reference.time = beat, util.time()
     for _, event in pairs(clock.events) do
       if event.ready and event.type == SCHEDULE_SYNC then
-        event.sync_beat = next_clock_beat(beat, event.sync_period, event.sync_offset)
+        event.sync_beat = next_clock_beat(beat, event.sync_period, slot_offsets[event.slot] or 0)
         event.scheduled_at, event.scheduled_beat = util.time(), beat
       end
     end
