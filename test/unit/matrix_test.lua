@@ -1044,6 +1044,95 @@ test("the invariant matrix learn fails for learn waiting with no clock and for a
   assert_equal(check(), nil, "idle again: it holds")
 end)
 
+-- The machine `matrix learn` (docs/notes/lua/matrix.md, Machines): armed
+-- is learn waiting (S.lib.matrix.learning()); armed for routing 3, whose
+-- source is set so a learned destination completes it
+local LEARN_ROUTING = 3
+local function learn_enter(armed)
+  return function(context)
+    local S = local_value("S")
+    S.lib.matrix.set_routing(LEARN_ROUTING, "macro1", "")
+    if armed then
+      assert_true(S.lib.matrix.learn(LEARN_ROUTING), "armed")
+      context.learn_clock = S.matrix_learn_clock
+    end
+  end
+end
+local function learning_routing(k, same_clock)
+  return function(context)
+    local S = local_value("S")
+    assert_equal(S.lib.matrix.learning(), k, "learn waits for routing " .. k)
+    if same_clock then
+      assert_equal(S.matrix_learn_clock, context.learn_clock, "on the same clock")
+    else
+      assert_true(S.matrix_learn_clock ~= context.learn_clock, "on a new clock")
+    end
+  end
+end
+local function learned(dest)
+  return function() assert_equal(local_value("S").lib.matrix.routing(LEARN_ROUTING).dest, dest, "routing 3's destination") end
+end
+local function step_fn(steps, order)
+  for _, record in ipairs(steps) do
+    if record.order == order then return record.fn end
+  end
+  error("no step at order " .. tostring(order))
+end
+
+h.transition_table({
+  name = "matrix learn",
+  notes = { "docs/notes/lua/matrix.md", "matrix learn" },
+  states = { idle = learn_enter(false), armed = learn_enter(true) },
+  events = {
+    ["learn"] = function() local_value("S").lib.matrix.learn(5) end,
+    ["learn of no routing"] = function()
+      assert_equal(local_value("S").lib.matrix.learn(local_value("S").constants.MATRIX_SLOTS + 1), false, "refused")
+    end,
+    ["a touch of a destination"] = function() enc_param_delta(3, "reverb_mix", 1) end,
+    ["a touch of another param"] = function() enc_param_delta(3, "strata_lfo1_depth", 1) end,
+    ["cancel_learn"] = function() local_value("S").lib.matrix.cancel_learn() end,
+    ["the timeout"] = function(context) context.clock.run_for(10.1) end,
+    ["a page change"] = function()
+      local S = local_value("S")
+      local index = S.constants.UI_PAGES.index
+      S.lib.ui_keys.set_ui_page(S.ui_page == index.FX and index.MAIN or index.FX)
+    end,
+    ["the cleanup step"] = function()
+      local S = local_value("S")
+      step_fn(S.registry.cleanup, S.constants.CLEANUP_ORDER.matrix)()
+    end,
+  },
+  state_of = function()
+    return local_value("S").lib.matrix.learning() == nil and "idle" or "armed"
+  end,
+  rows = {
+    { "idle", "learn", "armed", check = function() assert_equal(local_value("S").lib.matrix.learning(), 5) end },
+    { "idle", "learn of no routing", "idle" },
+    { "idle", "a touch of a destination", "idle", check = learned("") },
+    { "idle", "a touch of another param", "idle" },
+    { "idle", "cancel_learn", "idle" },
+    { "idle", "the timeout", "idle" },
+    { "idle", "a page change", "idle" },
+    { "idle", "the cleanup step", "idle" },
+    { "armed", "learn", "armed", check = learning_routing(5, false) },
+    { "armed", "learn of no routing", "armed", check = learning_routing(LEARN_ROUTING, true) },
+    { "armed", "a touch of a destination", "idle", check = function()
+      learned("reverb_mix")()
+      assert_equal(local_value("S").lib.ui_flash.text("header"), "R3 > rev mix")
+    end },
+    { "armed", "a touch of another param", "armed", check = function(context)
+      learning_routing(LEARN_ROUTING, true)(context)
+      assert_equal(local_value("S").lib.ui_flash.text("header"), "not a destination")
+    end },
+    { "armed", "cancel_learn", "idle" },
+    { "armed", "the timeout", "idle" },
+    { "armed", "a page change", "armed", check = learning_routing(LEARN_ROUTING, true) },
+    { "armed", "the cleanup step", "idle", check = function(context)
+      assert_equal(clock.threads[context.learn_clock], nil, "its clock canceled outright")
+    end },
+  },
+})
+
 -- Every flash learn raises fits the header's flash room
 -- (S.constants.HEADER.flash_width) whole: the refusal, and a learned
 -- destination for the widest routing number and the widest label

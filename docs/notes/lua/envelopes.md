@@ -12,43 +12,57 @@
 ## Machines
 
 ### envelope model
-- **State:** per voice, the local `hits[v]` (nil before its first hit, else `{time, from, hold}`) and `looping[v]` (the loop as its action last set it); the settings are read from `S.voices[v].values` at each use (`settings`). The state is `no hit`, `running` (loop on, or less time since the hit than the run: attack, decay and, with a sustain above 0, the hold and the release) or `ended`, derived when read; `S.lib.envelopes.value(v)` is the level.
+- **State:** per voice, the local `hits[v]` (nil before its first hit, else `{time, from, hold}`) and `looping[v]` (the loop as its action last set it, which the stored `env_loop` equals); the settings are read from `S.voices[v].values` at each use (`settings`). The state is derived when read: `no hit`, `running` (the loop off, less time since the hit than its run: attack, decay and, with a sustain above 0, the hold and the release), `ended`, or `looping` (the loop on, which always holds a hit: turning it on records one); `S.lib.envelopes.value(v)` is the level.
 - **Invariant:** none: every pair of a hit and the loop flag is legal, and the level is computed from them when read.
-- **Test:** `test/unit/envelopes_test.lua`: "sustain 0 is attack and decay; a new hit starts from the level it is at; loop starts again", "turning loop off finishes the cycle it is in, as the engine does".
+- **Test:** `test/unit/envelopes_test.lua`: "envelope model: every cell is decided" and its rows (voice 3 at the defaults, a run of 0.205 s; the state read from the module's `hits` and the stored settings; `looping` entered in its third cycle), "turning loop off finishes the cycle it is in, as the engine does".
+
+Every cell is a row. A silent PSET read is no event of its own here: the `voice_params` hook, the last PSET hook (#951), sets each envelope param the read moved with its action, so the read reaches the model as the rows' `the loop on`, `the loop off` and a changed time do.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
-| `no hit` | a hit (`voice_hit`) | `running` | from 0, with the hit's hold |
-| `running` | a hit | `running` | a new run from the level it is at, as `EnvGen` does |
-| `ended` | a hit | `running` | a new run from 0 |
-| `running` | its run's end, the loop off | `ended` | the level 0 |
-| `running` | its cycle's end, the loop on | `running` | again from 0, with the same hold |
-| `no hit` | the loop turned on | `running` | a hit recorded now, from 0, with no hold, as the engine's node starts at once |
-| `ended` | the loop turned on | `running` | the same |
-| `running` | the loop turned on | `running` | it runs on, then loops |
-| `running` | the loop turned off, in its first cycle | `running` | the hit runs on |
-| `running` | the loop turned off, in a later cycle | `running` | the hit moved to the cycle's start (from 0, the same hold), so the cycle finishes as the engine's does |
-| `no hit` | the loop turned off | `no hit` | nothing |
-| `ended` | the loop turned off | `ended` | nothing (it was off) |
-| `running` | a time, the sustain or the curve changed | `running` or `ended` | the level follows the new settings at once (read when used) |
-| `ended` | a time or the sustain changed | `ended`, or `running` when the new run outlasts the time since the hit | the level follows the new settings at once (read when used) |
-| any | a silent PSET read | as the read's settings give | the `voice_params` hook sets each changed envelope param with its action (above) |
+| `no hit` | `a hit` | `running` | from 0, with the hit's hold |
+| `no hit` | `time passes` | `no hit` | nothing |
+| `no hit` | `the loop on` | `looping` | a hit recorded now, from 0, with no hold, as the engine's node starts at once |
+| `no hit` | `the loop off` | `no hit` | nothing |
+| `no hit` | `a longer decay` | `no hit` | nothing |
+| `running` | `a hit` | `running` | a new run from the level it is at, as `EnvGen` does |
+| `running` | `time passes` | `ended` | its run's end: the level 0 |
+| `running` | `the loop on` | `looping` | the hit runs on, then loops |
+| `running` | `the loop off` | `running` | nothing (it was off) |
+| `running` | `a longer decay` | `running` | the level follows the new settings at once (read when used) |
+| `ended` | `a hit` | `running` | a new run from 0 |
+| `ended` | `time passes` | `ended` | the level stays 0 |
+| `ended` | `the loop on` | `looping` | a new hit now, from 0, with no hold |
+| `ended` | `the loop off` | `ended` | nothing (it was off) |
+| `ended` | `a longer decay` | `running` | known #969 (read in the code, not run): the model reads the settings live, so a run longer than the time since the hit brings it back, which the engine's ended node may not do |
+| `looping` | `a hit` | `looping` | a new run from the level it is at, looping |
+| `looping` | `time passes` | `looping` | each cycle again from 0, with the same hold |
+| `looping` | `the loop on` | `looping` | nothing (it was on) |
+| `looping` | `the loop off` | `running` | in its first cycle the hit runs on; in a later one the hit moves to the cycle's start (from 0, the same hold), so the cycle finishes as the engine's does |
+| `looping` | `a longer decay` | `looping` | the cycle follows the new settings at once |
 
 ### envelope route
 - **State:** per route k, the send budget's record under `env route <k>` (`S.lib.engine_sync.expected_value`): nil (never sent), a settings table (the engine has or will have the node so), or `false` (a stop was handed on). The module keeps no record of its own; what the route should carry is `route_want(k)`, a pure read of the routing and its source voice's settings, and `S.lib.envelopes.owns(k)` says whether it is the engine's.
 - **Invariant:** none: the record is what was handed on, and the step's compare brings it to the routing.
 - **Two facts:** nil and `false` both mean "no node": nil that nothing was ever sent, `false` that a stop was.
-- **Test:** `test/unit/envelopes_test.lua`: "a routing from an envelope to a fast destination is the engine's", "turning the routing off, to a Lua destination or to another source stops its route", "with no envelope routed nothing is sent".
+- **Test:** `test/unit/envelopes_test.lua`: "envelope route: every cell is decided" and its rows (route 3, from `env2` to voice 5's cutoff at 50 %; each event is a change and two LFO steps; the state read from the budget's record), "a routing from an envelope to a fast destination is the engine's", "turning the routing off, to a Lua destination or to another source stops its route", "with no envelope routed nothing is sent".
+
+Every cell is a row. `route it` makes the routing owned (set and on); `unroute it` turns it off, as a Lua destination, another source, depth 0 or a cleared routing would; `a setting changed` is a param of the source voice, as the depth, the destination or the source voice would be.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
-| `nil` | a step, the routing owned | `settings` | marked due; the round robin's send hands a copy to the budget, whose sender sends `setFastEnv` |
-| `nil` | a step, not owned | `nil` | nothing |
-| `settings` | a step, owned with other settings (a param of the source voice, the depth, the destination, the source voice) | `settings` | marked due; `setFastEnv` again (the engine moves the node) |
-| `settings` | a step, owned with the same settings | `settings` | nothing |
-| `settings` | a step, no longer owned | `false` | marked due; `stopFastEnv` once |
-| `false` | a step, owned again | `settings` | marked due; `setFastEnv` |
-| `false` | a step, not owned | `false` | nothing |
+| `nil` | `route it` | `settings` | marked due; the round robin's send hands a copy to the budget, whose sender sends `setFastEnv` |
+| `nil` | `a step` | `nil` | nothing |
+| `nil` | `a setting changed` | `nil` | nothing: no routing owns the route |
+| `nil` | `unroute it` | `nil` | nothing: no stop is sent for a route that never had settings |
+| `settings` | `route it` | `settings` | nothing: the same settings |
+| `settings` | `a step` | `settings` | nothing |
+| `settings` | `a setting changed` | `settings` | marked due; `setFastEnv` again (the engine moves the node) |
+| `settings` | `unroute it` | `false` | marked due; `stopFastEnv` once |
+| `false` | `route it` | `settings` | marked due; `setFastEnv` |
+| `false` | `a step` | `false` | nothing |
+| `false` | `a setting changed` | `false` | nothing |
+| `false` | `unroute it` | `false` | nothing: the stop went once |
 
 ## Owns
 

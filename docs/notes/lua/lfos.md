@@ -30,26 +30,30 @@
 ### lfo clock
 - **State:** `S.lfo_clock` (the clock's id), the module's `clock_runs`, and the clock's coroutine in `clock.threads`: running from the start step `lfo_clock` (125) to the cleanup step `lfos` (120) or `stop_clock()`, else stopped.
 - **Invariant:** `lfo clock`: the clock runs exactly while `clock_runs` is set, its coroutine alive (one canceled or ended behind the module's back breaks it).
-- **Test:** `test/unit/lfos_test.lua`: "the LFO clock invariant holds from the start step to cleanup".
+- **Test:** `test/unit/lfos_test.lua`: "lfo clock: every cell is decided" and its rows (each state counts the steps a hook sees from then on; the state is read from `S.lfo_clock` and `clock.threads`), and "the LFO clock invariant holds from the start step to cleanup".
 
-`lib/lfos.lua` cancels its clock only as the script starts or ends (the start step, cleanup and a test's `stop_clock`), when no resume can go astray: it is one of the nine files that keep `clock.cancel` and do not use the clock helper (`docs/notes/lua/clocks.md`).
+`lib/lfos.lua` cancels its clock only as the script starts or ends (the start step, cleanup and a test's `stop_clock`), when no resume can go astray: it is one of the nine files that keep `clock.cancel` and do not use the clock helper (`docs/notes/lua/clocks.md`). Every cell is a row.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
-| `stopped` | the start step `lfo_clock` | `running` | the global destinations checked, then a clock that sleeps `1 / LFO.step_hz` s and runs a step (one already kept is canceled first, which a normal init never meets) |
-| `running` | its wake | `running` | one step (the step pipeline, below) |
-| `running` | the cleanup step `lfos` | `stopped` | `stop_clock()` cancels it; nothing waits in the round robin, every direct destination is given back, the engine copies are forgotten and no `stopFastLfo` is sent (#461) |
-| `running` | `stop_clock()` (a test that wants a quiet scheduler) | `stopped` | canceled; the round robin keeps what waits |
+| `stopped` | `the start step` | `running` | the global destinations checked, then a clock that sleeps `1 / LFO.step_hz` s and runs a step |
+| `stopped` | `time passes` | `stopped` | no step runs |
+| `stopped` | `the cleanup step` | `stopped` | nothing to cancel; the round robin is emptied and every direct destination given back |
+| `stopped` | `stop_clock` | `stopped` | nothing |
+| `running` | `the start step` | `running` | the kept clock canceled and a new one started (a normal init never meets this) |
+| `running` | `time passes` | `running` | one step at each wake (the step pipeline, below) |
+| `running` | `the cleanup step` | `stopped` | `stop_clock()` cancels it; nothing waits in the round robin, every direct destination is given back, the engine copies are forgotten and no `stopFastLfo` is sent (#461) |
+| `running` | `stop_clock` | `stopped` | canceled; the round robin keeps what waits |
 
 ### LFO place
 - **State:** derived at every step from three facts, never stored: the on param (`strata_lfo<n>`), the depth param and the kind of the home's entry (`S.lib.lfos.destination(n)`: `fast`, a direct destination's key, any other). What was handed on is beside it: `state[n].engine` (the engine's copy), `direct.held[n]` and the matrix's `held` (`docs/notes/lua/matrix.md`, matrix holding). No accessor names the place yet (package 4c's `place(n)`); `is_engine_run(n)`, `engine_playing(n)`, `home_m(n) ~= nil`, `owns(n, id)` and `modulates(id)` each answer a part.
 - **Invariant:** none: every combination of the three is a place the next step converges to, and a stored place would be a second record of the params (the clock's invariant is `lfo clock`).
 - **Two facts:** the depth param at 0 is both an amount and "no engine node" (the node stops, and a depth swept through 0 starts it again with a sync; the fade's `stop_target` and a home's ramp through 0 rely on it); `state[n].engine` is both "a node exists" and the settings last sent to it; `home_m(n)` is nil for "does not play" (off, or the depth param 0) and 0 for "plays at 0" (the matrix adds nothing either way, and a direct destination stays held).
-- **Test:** `test/unit/lfos_test.lua`: "an LFO on a fast destination runs in the engine", "engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step and the budget's count (#633)", "a silent PSET read reaches a running engine LFO's offset and phase at the next step, once (#634)", "an LFO turned off gives its Lua destination back at the next step, once" and the recall tests ("a recall that changes every LFO setting sends nothing at once, then one setFastLfo and its sync"); package 3c's modulation walk checks the places against a model.
+- **Test:** `test/unit/lfos_test.lua`: "an LFO on a fast destination runs in the engine", "engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step and the budget's count (#633)", "a silent PSET read reaches a running engine LFO's offset and phase at the next step, once (#634)", "an LFO turned off gives its Lua destination back at the next step, once" and the recall tests ("a recall that changes every LFO setting sends nothing at once, then one setFastLfo and its sync").
 
 The five places: `off` (the on param 0: nothing held); `idle` (on, at depth 0 or with its home none or unknown: nothing held); `engine` (on, depth above 0, a fast home: `state[n].engine` holds the node's settings); `direct` (on, depth above 0, a macro: `direct.held[n]` is its id); `matrix` (on, depth above 0, any other home: the matrix sums it into `held.lua[id]`, or `held.fast[id]` for a `v<i>_main` that resolves to a fast param, ruling 16). A transient of one step is legal: `state[n].engine` kept while the params no longer play in the engine (a silent read, a scene's apply), until the step stops the node.
 
-The table is the cause-to-path table: what each cause sends and when, at once (in the action), at the next step outside the round robin (uncounted, at most one send an LFO a step), or at the next step through the round robin (`mark_due`) and the send budget.
+No `h.transition_table` holds this table (design section 5 makes it a smaller entry, a table and no test): a place is derived from params many writers move, its causes reach the engine, the matrix and the macros, and most of its cells are paths in time rather than a next state; the modulation walk (package 3c) checks the places against a model fed by the engine calls. The table is the cause-to-path table: what each cause sends and when, at once (in the action), at the next step outside the round robin (uncounted, at most one send an LFO a step), or at the next step through the round robin (`mark_due`) and the send budget.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
@@ -98,23 +102,30 @@ The table is the cause-to-path table: what each cause sends and when, at once (i
 | `hooks` | each hook, in registration order | `drain` | contained (`LFO step hook`); a hook marks sends, the matrix's sums its routings and homes |
 | `drain` | the round robin's turn | `asleep` | at most `LFO.sends_per_step` (12) due keys that reach the engine, each inside `deferrable` |
 
-The hooks run in this order on this build: `midi_in`, `scan`, `conditions`, `macros`, `random_sequences`, `envelopes`, `matrix`, `expression`, `slices`, `io/targets`, `io/midi_out`, `io/crow`, `io/ii`, `delay_sync`, `ui/slice_editor` (all registered at include time), then the notes flush (`START_ORDER.notes_load`, 109) and the arp's shuffle (`START_ORDER.arp`, 112). Four relations matter, and the test holds them: the macros', the envelopes' and the random sequences' hooks run before the matrix's (each hands the matrix what it sums in the same step; moving one after it lags every routing it feeds by a step, 21 ms), and the notes flush runs after every hook registered at include time (`lib/expression.lua`'s marks are sent in the same step). The arp's shuffle runs after the flush; it sends the arp's lists (counted with `count_sends`), never a note's expression, so its place there costs nothing.
+The hooks run in this order on this build: `midi_in`, `scan`, `conditions`, `macros`, `random_sequences`, `envelopes`, `matrix`, `expression`, `slices`, `io/targets`, `io/midi_out`, `io/crow`, `io/ii`, `delay_sync`, `ui/slice_editor` (all registered at include time), then the notes flush (`START_ORDER.notes_load`, 109) and the arp's shuffle (`START_ORDER.arp`, 112). No `h.transition_table` holds the phases' table (design section 5 makes it a smaller entry, a table and no test): a step runs its phases in one call, so no event can find it between two; the hooks' order is held by the test named, and the modulation walk (package 3c) runs whole steps. Four relations matter, and the test holds them: the macros', the envelopes' and the random sequences' hooks run before the matrix's (each hands the matrix what it sums in the same step; moving one after it lags every routing it feeds by a step, 21 ms), and the notes flush runs after every hook registered at include time (`lib/expression.lua`'s marks are sent in the same step). The arp's shuffle runs after the flush; it sends the arp's lists (counted with `count_sends`), never a note's expression, so its place there costs nothing.
 
 ### round robin
 - **State:** the local `queue`: `keys` (every key in the order first marked, never removed), `known[key]`, `due[key]` (the send waiting, or nil) and `cursor` (where the next drain starts). Per key: `unknown`, `known` (no send waiting) or `due`.
 - **Invariant:** none: every combination of the fields is legal; a key once known stays known.
 - **Two facts:** a key's place in `keys` is both that it is known and its turn in the round robin's order of fairness.
-- **Test:** `test/unit/lfos_test.lua`: "at most 12 sends a step, round robin, and every due key within two steps", "a stopped voice's due sends take none of a step's 12; a running voice's stay capped at 12 (#644)"; `test/unit/engine_sync_test.lua`: "a keyed id holds a space and none starts v<i>_".
+- **Test:** `test/unit/lfos_test.lua`: "round robin: every cell is decided" and its rows (one key's state, read from the module's `queue`, with twelve filler keys that reach the engine known ahead of it and the drain starting at the first, so `a full step` is one whose twelve fillers are all due), "at most 12 sends a step, round robin, and every due key within two steps", "a stopped voice's due sends take none of a step's 12; a running voice's stay capped at 12 (#644)"; `test/unit/engine_sync_test.lua`: "a keyed id holds a space and starts v<i>_ only as its voice's gated sender".
+
+Every cell is a row. One more way out of `due` is not in the table, since no outside key meets it: an LFO's own keys (`lfo<n> engine`, `lfo<n> sync`) are withdrawn by `send_fast_lfo` and a stop (`reconcile_engine`); every other module's send reads its state when it runs, so it is never withdrawn.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
-| `unknown` | `mark_due(key, send)` | `due` | appended to `keys`, after every key known |
-| `known` | `mark_due(key, send)` | `due` | the send waits for its turn; the key keeps its place |
-| `due` | `mark_due(key, send)` | `due` | the newer send replaces the one waiting, in the same place |
-| `due` | its turn in the drain | `known` | sent inside `deferrable`; it takes one of the step's 12 only when `S.lib.engine_sync.reaches_engine(key)` (#644) |
-| `due` | the drain's 12 are taken before its turn | `due` | it waits; the next step's drain starts where this one stopped |
-| `due` | withdrawn: an LFO's own key, by `send_fast_lfo` or a stop (`reconcile_engine`), and every key at cleanup | `known` | `due[key] = nil`; every other module's send reads its state when it runs, so it is never withdrawn |
-| `known` | the drain passes it | `known` | nothing, and no slot taken |
+| `unknown` | `mark_due` | `due` | appended to `keys`, after every key known |
+| `unknown` | `a step` | `unknown` | nothing |
+| `unknown` | `a full step` | `unknown` | nothing |
+| `unknown` | `the cleanup step` | `unknown` | nothing |
+| `known` | `mark_due` | `due` | the send waits for its turn; the key keeps its place |
+| `known` | `a step` | `known` | passed over, taking no slot |
+| `known` | `a full step` | `known` | passed over |
+| `known` | `the cleanup step` | `known` | nothing waits |
+| `due` | `mark_due` | `due` | the newer send replaces the one waiting, in the same place |
+| `due` | `a step` | `known` | sent inside `deferrable`; it takes one of the step's 12 only when `S.lib.engine_sync.reaches_engine(key)` (#644) |
+| `due` | `a full step` | `due` | the 12 are taken before its turn: it waits, and the next step's drain starts with it |
+| `due` | `the cleanup step` | `known` | withdrawn (`queue.due = {}`): it is never sent |
 
 A key is a param id (a Lua destination's, shared by the LFOs, the matrix and the macros: one send carries every layer) or a keyed id that no param holds. A keyed id holds a space (no param id can be it) and does not start `v<i>_`, so a voice's sync (`forget_sent_voice_values`, `docs/notes/lua/engine-sync.md`) keeps the value it recorded: `lfo<n> engine`, `lfo<n> sync`, `matrix fast <voice> <destination>`, `env route <k>`, `delay sync`. A voice's own keyed ids (`lib/scan.lua`'s `v<i>_follow rate` and `v<i>_scan sync`, senders gated on the voice) start `v<i>_` on purpose: the voice's sync and start drop a value of theirs. The value `lfo<n> engine` and `lfo<n> sync` hand to the budget (the depth / 100, the phase) is read by nothing (#928): the senders read the LFO when they deliver, and the value is there for the budget, which keeps a waiting send as its key's value.
 

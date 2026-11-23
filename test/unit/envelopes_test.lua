@@ -511,4 +511,157 @@ test("MOD's ALT hint names E3:fine on an envelope's control rows, not on loop", 
   key(1, 0)
 end)
 
+-- The machine `envelope model` (docs/notes/lua/envelopes.md, Machines):
+-- voice 3's last hit (the module's hits, value's upvalue) and its stored
+-- loop: no hit, running (the loop off, less time since the hit than the
+-- run), ended, or looping (the loop on). The defaults: attack 0.005 s,
+-- decay 0.2 s, sustain 0, so a run is 0.205 s
+local MODEL_VOICE = 3
+local function model_hit()
+  local envelopes = local_value("S").lib.envelopes
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(envelopes.value, index)
+    if name == nil then error("value keeps no hits") end
+    if name == "hits" then return value[MODEL_VOICE] end
+  end
+end
+local function model_param(key) return "v" .. MODEL_VOICE .. "_" .. key end
+local function model_hit_now() local_value("S").lib.engine_sync.retrigger(MODEL_VOICE, 1, "step") end
+local function model_enter(state)
+  return function(context)
+    context.set_time(500)
+    if state == "no hit" then return end
+    model_hit_now()
+    if state == "ended" then context.set_time(501) end
+    if state == "looping" then
+      params:set(model_param("env_loop"), 2)
+      context.set_time(500.5)  -- the third cycle (0.41 to 0.615 s)
+    end
+  end
+end
+
+h.transition_table({
+  name = "envelope model",
+  notes = { "docs/notes/lua/envelopes.md", "envelope model" },
+  states = { ["no hit"] = model_enter("no hit"), running = model_enter("running"), ended = model_enter("ended"),
+    looping = model_enter("looping") },
+  events = {
+    ["a hit"] = model_hit_now,
+    ["time passes"] = function(context) context.set_time(util.time() + 1) end,
+    ["the loop on"] = function() params:set(model_param("env_loop"), 2) end,
+    ["the loop off"] = function() params:set(model_param("env_loop"), 1) end,
+    ["a longer decay"] = function() params:set(model_param("env_decay"), 5) end,
+  },
+  state_of = function()
+    local values = local_value("S").voices[MODEL_VOICE].values
+    local hit = model_hit()
+    if hit == nil then return "no hit" end
+    if values.env_loop == 2 then return "looping" end
+    local held = values.env_sustain > 0
+    local run = values.env_attack + values.env_decay + (held and (hit.hold + values.env_release) or 0)
+    return util.time() - hit.time < run and "running" or "ended"
+  end,
+  rows = {
+    { "no hit", "a hit", "running" },
+    { "no hit", "time passes", "no hit" },
+    { "no hit", "the loop on", "looping", check = function()
+      assert_equal(model_hit().time, util.time(), "a hit recorded now")
+    end },
+    { "no hit", "the loop off", "no hit" },
+    { "no hit", "a longer decay", "no hit" },
+    { "running", "a hit", "running" },
+    { "running", "time passes", "ended", check = function()
+      assert_equal(local_value("S").lib.envelopes.value(MODEL_VOICE), 0, "the level is 0")
+    end },
+    { "running", "the loop on", "looping", check = function()
+      assert_equal(model_hit().time, 500, "the hit runs on")
+    end },
+    { "running", "the loop off", "running" },
+    { "running", "a longer decay", "running" },
+    { "ended", "a hit", "running" },
+    { "ended", "time passes", "ended" },
+    { "ended", "the loop on", "looping", check = function()
+      assert_equal(model_hit().time, util.time(), "a new hit from 0, now")
+    end },
+    { "ended", "the loop off", "ended" },
+    -- #969 (read in the code, not run on a device): the model reads the
+    -- settings live, so a longer time brings an ended run back
+    { "ended", "a longer decay", "running", known = 969, check = function()
+      assert_true(local_value("S").lib.envelopes.value(MODEL_VOICE) > 0, "the model's level comes back")
+    end },
+    { "looping", "a hit", "looping" },
+    { "looping", "time passes", "looping" },
+    { "looping", "the loop on", "looping" },
+    { "looping", "the loop off", "running", check = function()
+      assert_near(model_hit().time, 500.41, 1e-9, "the hit moved to the third cycle's start")
+    end },
+    { "looping", "a longer decay", "looping" },
+  },
+})
+
+-- The machine `envelope route` (docs/notes/lua/envelopes.md, Machines):
+-- route 3 by what the send budget holds for `env route 3`: nil, a
+-- settings table, or false (a stop handed on). The routing is env2 to
+-- voice 5's cutoff at 50 %
+local ROUTE_KEY = "env route 3"
+local function route_steps(context) lfo_step(context, 2) end
+local function route_it(context)
+  route(local_value("S"), 3, "env2", "v5_filter_freq", 50)
+  set_binary_param("matrix_3", 1)
+  route_steps(context)
+end
+local function unroute_it(context)
+  set_binary_param("matrix_3", 0)
+  route_steps(context)
+end
+local function route_enter(state)
+  return function(context)
+    if state ~= "nil" then route_it(context) end
+    if state == "false" then unroute_it(context) end
+    context.clear_engine_calls()
+  end
+end
+local function route_calls(set, stop)
+  return function(context)
+    assert_equal(#context.calls_named("setFastEnv"), set, "setFastEnv sent " .. set)
+    assert_equal(#context.calls_named("stopFastEnv"), stop, "stopFastEnv sent " .. stop)
+  end
+end
+
+h.transition_table({
+  name = "envelope route",
+  notes = { "docs/notes/lua/envelopes.md", "envelope route" },
+  states = { ["nil"] = route_enter("nil"), settings = route_enter("settings"), ["false"] = route_enter("false") },
+  events = {
+    ["route it"] = route_it,
+    ["a step"] = route_steps,
+    ["a setting changed"] = function(context)
+      params:set("v2_env_attack", 0.3)
+      route_steps(context)
+    end,
+    ["unroute it"] = unroute_it,
+  },
+  state_of = function()
+    local had = local_value("S").lib.engine_sync.expected_value(ROUTE_KEY)
+    if had == nil then return "nil" end
+    if had == false then return "false" end
+    if type(had) == "table" then return "settings" end
+    return "a record of another kind"
+  end,
+  rows = {
+    { "nil", "route it", "settings", check = route_calls(1, 0) },
+    { "nil", "a step", "nil", check = route_calls(0, 0) },
+    { "nil", "a setting changed", "nil", check = route_calls(0, 0) },
+    { "nil", "unroute it", "nil", check = route_calls(0, 0) },
+    { "settings", "route it", "settings", check = route_calls(0, 0) },
+    { "settings", "a step", "settings", check = route_calls(0, 0) },
+    { "settings", "a setting changed", "settings", check = route_calls(1, 0) },
+    { "settings", "unroute it", "false", check = route_calls(0, 1) },
+    { "false", "route it", "settings", check = route_calls(1, 0) },
+    { "false", "a step", "false", check = route_calls(0, 0) },
+    { "false", "a setting changed", "false", check = route_calls(0, 0) },
+    { "false", "unroute it", "false", check = route_calls(0, 0) },
+  },
+})
+
 end
