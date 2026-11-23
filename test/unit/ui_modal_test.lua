@@ -229,6 +229,7 @@ test("a release handler that raises leaves no key held (a modal owner's)", funct
   local ok, message = pcall(key, 3, 0)
   assert_true(not ok, "the error reaches the caller")
   assert_true(tostring(message):find("owner release failed", 1, true) ~= nil, "with its message: " .. tostring(message))
+  assert_true(tostring(message):find("stack traceback:", 1, true) ~= nil, "and the traceback from where it raised")
   assert_equal(modal.held_seconds(owner, 3), nil, "the key reads as up")
   modal.pop(owner)
 end)

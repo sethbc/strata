@@ -491,6 +491,7 @@ test("a release handler that raises leaves no key held (a page's, through key())
     if alt then key(1, 0) end
     assert_true(not ok, "the error reaches the caller")
     assert_true(tostring(message):find("release failed", 1, true) ~= nil, "with its message: " .. tostring(message))
+    assert_true(tostring(message):find("stack traceback:", 1, true) ~= nil, "and the traceback from where it raised")
     assert_equal(S.key_press_page[2], nil, "no press page is left")
     assert_equal(S.key_press_at[2], nil, "no press time is left")
     assert_equal(S.key_press_alt[2], nil, "no ALT mark is left")
