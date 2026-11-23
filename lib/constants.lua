@@ -284,6 +284,7 @@ local CLEANUP_ORDER = {
   voices_off = 160,         -- lib/engine_sync.lua: a voiceOff per running voice (reaches no handler on norns)
   grids_dark = 170,         -- lib/grid/core.lua
   arc_dark = 180,           -- lib/arc/core.lua
+  clocks = 190,             -- lib/clocks.lua: the clock helper's retired clocks canceled, after every other step (3.9)
 }
 
 return {
@@ -348,6 +349,13 @@ return {
   -- messages_per_window sends per window_seconds; a deferrable send past it
   -- waits for the next window
   ENGINE_BUDGET = {messages_per_window = 150, window_seconds = 0.1},
+  -- 3.9 (design section 3, #870): the clock helper (lib/clocks.lua) cancels
+  -- a stopped clock only while its wait's end is farther off than these:
+  -- sleep_margin seconds before a sleep's wake (lib/ui/zones.lua's
+  -- learn_wake_margin), sync_tolerance beats before a sync's landing (a
+  -- tick's jitter, lib/quantize.lua's wake_tolerance); sync_epsilon is
+  -- matron's FLT_EPSILON, with which it finds that landing
+  CLOCKS = {sleep_margin = 0.1, sync_tolerance = 1 / 32, sync_epsilon = 2 ^ -23},
   -- 3.7 (design §0.6): the tempo divisions the delay and the random
   -- sequences share, each name's length in beats (a beat a quarter note)
   DIVISIONS = {

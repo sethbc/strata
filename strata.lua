@@ -46,6 +46,7 @@ local E1_TICKS_PER_PAGE = S.constants.E1_TICKS_PER_PAGE
 -- one's notes file). Each constructor's table is S.lib.<name> (lib/<dir>/<file>.lua:
 -- S.lib.<dir>_<file>); a module adds its records to S.registry (pages,
 -- params, grid layouts, cleanup steps) as it loads.
+S.lib.clocks = include("lib/clocks")(S)
 S.lib.voices = include("lib/voices")(S)
 S.lib.grain = include("lib/grain")(S)
 S.lib.types = include("lib/types")(S)
