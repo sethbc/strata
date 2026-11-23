@@ -462,6 +462,49 @@ var checkReplacementNeverStarts = {
             stages.size, (stages.size == 1) and: { current.notNil } and: { stages[0].id == current.nodeID }, state[\replacing][voice]));
 };
 
+// ... and one that fails twice (#886): a restarted stage whose /s_new fails
+// too is started again after its own confirm timeout, so a voice left with
+// no stage is retried until a start succeeds (nothing else would bring it
+// back). The replacement's /s_new and then the restart's are held back
+// from their bundles (the restart, restartVoiceMix, run here as its
+// confirm timeout runs it, a little before the replacement's own timeout,
+// which then finds the restart in its place and does nothing); the third
+// start succeeds. A filterFreq sent inside the window is kept and is on the
+// stage that starts: the check holds the window's /n_set back from the
+// server, which would only print a FAILURE line for a node it never made
+// and ignore it. Never two stages of the voice in its group meanwhile.
+var checkReplacementFailsTwice = {
+    var state = engine.areaState[\mix], key = engine.voiceMixKey(voice), mixGroup = engine.voiceMixGroup(voice);
+    var old = stageOf.(voice), held = { arg bundle, synth; bundle.reject({ arg msg; synth.notNil and: { [9, 15].includes(msg[0]) } and: { msg[1 + (msg[0] == 9).binaryValue] == synth.nodeID } }) };
+    var stageCount = { h.synthTree(mixGroup).count({ arg node; node.def == \strataVoiceMix }) };
+    var bundle, first, second, counts = List.new, current, nodes, freq = 3210.0, kept;
+    bundle = server.makeBundle(false, { engine.areaCall(\replaceBadVoiceMix, old.nodeID, voice) });
+    first = stageOf.(voice);
+    server.sendBundle(nil, *held.(bundle, first));
+    server.sync; counts.add(stageCount.value);
+    bundle = server.makeBundle(false, { command.(\setGrainParam, voice, \filterFreq, freq) });
+    server.sendBundle(nil, *held.(bundle, first));
+    server.sync;
+    bundle = server.makeBundle(false, { engine.areaCall(\restartVoiceMix, voice, [old], first) });
+    second = stageOf.(voice);
+    server.sendBundle(nil, *held.(bundle, second));
+    server.sync; counts.add(stageCount.value);
+    (engine.startConfirmWait * 0.5).wait; server.sync; counts.add(stageCount.value);
+    (engine.startConfirmWait * 0.5 + 0.2).wait; server.sync;
+    nodes = h.synthTree(mixGroup);
+    counts.add(stageCount.value);
+    current = stageOf.(voice);
+    kept = current !? { getControl.(current, \filterFreq) };
+    check.((second !== first) and: { current.notNil } and: { current !== second } and: { current !== first }
+        and: { nodes.last.id == current.nodeID } and: { counts.every({ arg count; count <= 1 }) } and: { counts.last == 1 }
+        and: { state[\replacing][voice].not },
+        "mix: a restarted stage that never starts either is started again, the third start succeeding, never two stages of the voice (#886; stages after each step %, replacing %)".format(
+            counts.asArray, state[\replacing][voice]));
+    check.(kept.notNil and: { (kept - freq).abs < 0.01 },
+        "mix: a value sent while the stage's replacement is unconfirmed is on the stage that starts (#886; filterFreq %)".format(kept));
+    command.(\setGrainParam, voice, \filterFreq, 5000);
+};
+
 // The figures and the bound
 var checkFades = {
     [[5000, 0.5, "5 kHz res 0.5", true], [200, 0.9, "200 Hz res 0.9", false]].do({ arg filterSet;
@@ -704,6 +747,7 @@ if (hasStage.not) {
     checkTap.value;
     checkBadStage.value;
     checkReplacementNeverStarts.value;
+    checkReplacementFailsTwice.value;
 
     tone.free;
     command.(\setDelay, 0.375, 0.4, 0.0, 0);

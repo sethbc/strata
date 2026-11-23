@@ -682,44 +682,51 @@ check.(h.waitFor({ engine.ringReaders.isEmpty }, 3), "lifecycle: ringReaders emp
 
 // A live synth that frees itself is started again (above), but not in a
 // loop (#940; #458 was one at 20 Hz): past restartLimit restarts of a
-// voice's synths in a second the next is refused, with one invariant line,
-// and the voice is left without that synth until its next voiceOn, which
-// starts them as gateVoice starts any synth a voice is missing. The voice
-// (1) runs on its synth source. Its voice, grain and mod synths are freed
-// on the server together, again and again, each round once the engine
-// started them again (the /n_end comes before the sync's reply), until none
-// is left: a real loop turns over at the server's round trip, and three
-// synths a round put more than restartLimit (32, the engine's) self-frees
-// inside the second at the check's rate of a round trip or two a round.
-// 32 are started again and each key's next free is refused: 35 frees, one
-// line.
+// voice's synths within restartWindow the next is refused, with one
+// invariant line for the run, and the voice is left without that synth
+// until its next voiceOn, which starts them as gateVoice starts any synth
+// a voice is missing and starts the count again. The rule is driven from
+// the voice's own restart times (areaState[\voices][\restarts]), set here,
+// so nothing rests on how many round trips fit in a second: first,
+// restartLimit restarts older than the window, which no longer count (the
+// restart is allowed and they are dropped: without the pruning it would be
+// refused); then a run of restartLimit - 1 restarts just now, and the
+// voice's voice, grain and mod synths freed on the server together (one
+// restart, two refusals, one line). The voice (1) runs on its synth source.
 {
-    var voice = 1, lines = List.new, limit, live, freed = 0, rounds = 0, left, healed, start, seconds, onServer;
-    var keys = [engine.voiceKey(voice), engine.grainKey(voice), engine.modKey(voice)];
+    var voice = 1, lines = List.new, limit, window, times, keys, live, old, pruned, restarted, left, healed, onServer, cleared;
+    keys = [engine.voiceKey(voice), engine.grainKey(voice), engine.modKey(voice)];
+    live = { keys.collect({ arg key; engine.synths[key] }).reject(_.isNil) };
     limit = if (engine.respondsTo(\restartLimit)) { engine.restartLimit } { 32 };
+    window = if (engine.respondsTo(\restartWindow)) { engine.restartWindow } { 1 };
+    times = engine.areaState[\voices][\restarts] !? { arg all; all[voice] };
     command.(\setGrainSource, voice, 0);
     command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0); server.sync;
     engine.postInvariantWarning = { arg line; lines.add(line) };
-    start = Main.elapsedTime;
-    live = { keys.collect({ arg key; engine.synths[key] }).reject(_.isNil) };
-    while { live.value.notEmpty and: { rounds < 20 } } {
-        // each ends without sclang having freed it
-        server.sendBundle(nil, *live.value.collect({ arg synth; freed = freed + 1; [\n_free, synth.nodeID] }));
-        rounds = rounds + 1;
-        server.sync;
-    };
-    seconds = Main.elapsedTime - start;
-    server.sync; 0.05.wait;
+    // restarts older than the window: the voice synth is started again
+    old = engine.synths[keys[0]];
+    times !? { times.clear; limit.do({ times.add(Main.elapsedTime - window - 0.5) }) };
+    server.sendMsg(\n_free, old.nodeID);  // ends without sclang having freed it
+    server.sync; 0.02.wait; server.sync;  // (the /n_end comes before the sync's reply)
+    restarted = engine.synths[keys[0]];
+    pruned = [restarted.notNil and: { restarted !== old }, lines.size, times !? _.size];
+    // restartLimit - 1 restarts just now: one more is started, the others refused
+    times !? { times.clear; (limit - 1).do({ times.add(Main.elapsedTime) }) };
+    server.sendBundle(nil, *live.value.collect({ arg synth; [\n_free, synth.nodeID] }));
+    server.sync; 0.02.wait; server.sync;
     left = live.value;
     engine.postInvariantWarning = nil;
     command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0); server.sync;
+    cleared = times.notNil and: { times.isEmpty };
     healed = engine.synths[keys[0]];
     onServer = healed.notNil and: { synthNodes.(engine.voiceGroup).any({ arg node; node[\id] == healed.nodeID }) }
         and: { keys.every({ arg key; engine.synths[key].notNil }) };
-    check.((limit == 32) and: { freed == (limit + keys.size) } and: { seconds < 1 } and: { left.isEmpty } and: { lines.size == 1 }
-        and: { lines[0].contains("restart") } and: { onServer },
-        "lifecycle: a voice whose live synth frees itself more than restartLimit times in a second stops restarting, with one invariant line (#940; limit %, freed % in % rounds, % s, left with % synths, % lines, started at the next voiceOn %)".format(
-            limit, freed, rounds, seconds.round(0.01), left.size, lines.size, onServer));
+    check.((limit == 32) and: { window == 1 } and: { pruned == [true, 0, 1] },
+        "lifecycle: restarts older than restartWindow no longer count: a voice with restartLimit of them restarts its synth (#940; restarted, invariant lines, restart times kept: %)".format(
+            pruned));
+    check.((left.size == 1) and: { lines.size == 1 } and: { lines[0].contains("restart") } and: { onServer } and: { cleared },
+        "lifecycle: a voice whose live synth frees itself more than restartLimit times in a second stops restarting, with one invariant line (#940; of three freed, % started again, % lines, started at the next voiceOn %, its count started again %)".format(
+            left.size, lines.size, onServer, cleared));
     h.stopAllVoices;
 }.value;
 
