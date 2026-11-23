@@ -226,4 +226,113 @@ test("the invariant fails for a retired handle whose coroutine is dead and still
   assert_equal(invariant(), nil, "forgotten")
 end)
 
+-- Run the clocks one scheduler step with the time at `beat` (later than
+-- every pending wake-up): each resume is posted with that beat, as matron's
+-- tick posts the beat it reads, a tick after a sync's landing on a device
+-- (the stub's advance_until and run_for resume a sync with its landing)
+local function deliver_at_beat(context, beat)
+  context.set_time(util.time() + (beat - clock.get_beats()) * clock.get_beat_sec())
+  context.clock.advance()
+end
+
+-- Review of 0b, finding 1: matron counts a sync from the landing of the
+-- coroutine's last (clock_scheduler.cc's schedule_sync), not from the beat
+-- its tick posted the resume with; with an offset just under a period the
+-- two land a period apart
+test("a repeated sync resumed a tick after its landing counts its next landing from that landing, as matron does", function()
+  local context, S, clocks = loaded()
+  local counts = {runs = 0, ended = 0}
+  local offset = 0.9995  -- each landing just under a whole beat: 2.9995, 3.9995
+  run_to_beat(context, 1.5)
+  local handle = clocks.run(function(own)
+    while own.sync(1, offset) do counts.runs = counts.runs + 1 end
+    counts.ended = counts.ended + 1
+  end)
+  local tick_beats = h.stubs.MATRON_TICK_SECONDS / clock.get_beat_sec()
+  deliver_at_beat(context, 2.9995 + tick_beats)  -- past 3: the next whole beat
+  assert_equal(counts.runs, 1, "the first landing ran")
+  context.clock.advance_until(handle.id, function()
+    -- delivered at its tick: up to a tick after the landing
+    assert_near(clock.get_beats(), 3.9995 + tick_beats / 2, tick_beats / 2 + 1e-6,
+      "matron's next landing is a beat on, from 2.9995")
+    clocks.stop(handle)
+    assert_true(clock.threads[handle.id] ~= nil, "at its landing it is retired, not canceled")
+  end)
+  assert_no_clock_error(context, "a repeated sync stopped at a landing after a late resume")
+  assert_equal(counts.runs, 1, "and its body did not run again")
+  assert_equal(counts.ended, 1, "it ended")
+end)
+
+-- Review of 0b, finding 3: a body that waits on a bare clock.sleep or
+-- clock.sync is not told of a stop; a stop then retires it (it cannot know
+-- the wait's end) and the invariant names the mistake
+test("a stop while the body waits outside its handle retires it and the invariant names it", function()
+  local context, S, clocks = loaded()
+  local invariant = clocks_invariant(S)
+  local handle = clocks.run(function(own)
+    clock.sleep(10)  -- the mistake: a wait the handle does not see
+    own.sleep(1)
+  end)
+  clocks.stop(handle)
+  assert_true(clock.threads[handle.id] ~= nil, "not canceled: its wait's end is not known")
+  assert_equal(clocks.retired[handle.id], handle, "retired")
+  local problem = invariant()
+  assert_true(problem ~= nil and problem:find("outside its handle", 1, true) ~= nil,
+    "the invariant names a wait outside the handle: " .. tostring(problem))
+  clocks.cancel(handle)
+  assert_equal(invariant(), nil, "canceled and forgotten")
+  -- a body that stops its own clock after a wait (its id known) is not that
+  -- mistake: its next wait returns false at once
+  local waits = {}
+  local own = clocks.run(function(self_handle)
+    self_handle.sleep(0.5)
+    clocks.stop(self_handle)
+    table.insert(waits, self_handle.sleep(1))
+  end)
+  context.clock.run_for(0.6)
+  assert_equal(tostring(waits[1]), "false", "its next wait returns false")
+  assert_equal(clocks.retired[own.id], nil, "nothing retired")
+  assert_equal(clock.threads[own.id], nil, "it ended")
+  assert_equal(invariant(), nil, "the invariant holds")
+  assert_no_clock_error(context, "stops outside and inside a body")
+end)
+
+-- Review of 0b, finding 6: a new clock source moves the beat on while a
+-- sync waits (context.clock.set_beat, matron's reschedule: the next landing
+-- after the new beat). The sync's landing is then the one it had or one
+-- already passed, so a stop retires near it or past it and cancels far
+-- from it, raising nothing
+test("a sync whose beat jumped forward retires near or past its landing and is canceled far from it", function()
+  local context, S, clocks = loaded()
+  local counts = {runs = 0, ended = 0}
+  run_to_beat(context, 0.5)
+  local near = repeating(clocks, counts, "sync", 4)
+  context.clock.set_beat(3.99)
+  clocks.stop(near)
+  assert_equal(clocks.retired[near.id], near, "jumped to just before its landing: retired")
+  local past = repeating(clocks, counts, "sync", 4)
+  context.clock.set_beat(6)
+  clocks.stop(past)
+  assert_equal(clocks.retired[past.id], past, "jumped past its landing (rescheduled to 8): retired")
+  local far = repeating(clocks, counts, "sync", 4)
+  context.clock.set_beat(6.5)
+  clocks.stop(far)
+  assert_equal(clock.threads[far.id], nil, "1.5 beats from its landing: canceled at once")
+  run_to_beat(context, 8.1)
+  assert_no_clock_error(context, "stops after forward jumps")
+  assert_equal(counts.runs, 0, "no body ran again")
+  assert_equal(next(clocks.retired), nil, "the retired ones ended at their landings")
+end)
+
+-- Review of 0b, finding 5: the helper's margins are the ones the zones
+-- editor, the macros' learn and the quantized actions use
+test("the helper's margins are the zones editor's, the macros' and the quantized actions'", function()
+  local context, S, clocks = loaded()
+  local CLOCKS = S.constants.CLOCKS
+  assert_equal(CLOCKS.sleep_margin, S.lib.ui_zones.ZONES_EDITOR.learn_wake_margin, "a sleep's margin")
+  assert_equal(CLOCKS.sleep_margin, S.lib.macros.MACROS.learn_wake_margin, "the macros' learn margin too")
+  assert_equal(CLOCKS.sync_tolerance, S.lib.quantize.QUANTIZE.wake_tolerance, "a sync's tolerance")
+  assert_equal(CLOCKS.sync_epsilon, S.lib.quantize.QUANTIZE.flt_epsilon, "matron's FLT_EPSILON")
+end)
+
 end

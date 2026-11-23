@@ -44,12 +44,26 @@ return function(S)
     return handle.landing == nil or now < handle.sync_beat or handle.landing - now <= CLOCKS.sync_tolerance
   end
 
-  -- After a wait: false (and the handle forgotten) once it was stopped
-  local function resumed(handle)
-    handle.waiting = nil
+  -- Whether a stopped handle may wait on: false (and the handle forgotten,
+  -- if it was retired) once it was stopped
+  local function may_go_on(handle)
     if not handle.stopped then return true end
     if handle.id then M.retired[handle.id] = nil end
     return false
+  end
+
+  -- After a wait: whether the body goes on (false once it was stopped)
+  local function resumed(handle)
+    handle.waiting = nil
+    return may_go_on(handle)
+  end
+
+  -- Whether the handle's own body runs now: in its first part (no id yet:
+  -- clock.run resumes it before it returns), or its coroutine is the one
+  -- running (clock.threads[id], as lua/core/clock.lua keeps it)
+  local function runs_now(handle)
+    if type(handle.id) ~= "number" or not clock.threads then return true end
+    return coroutine.running() == clock.threads[handle.id]
   end
 
   -- Start a clock running fn(handle) and return its handle: handle.id is
@@ -63,17 +77,17 @@ return function(S)
     if type(fn) ~= "function" then error("clocks.run: a clock's body is a function", 2) end
     local handle = {stopped = false, ended = false}
     function handle.sleep(seconds)
-      if handle.stopped then return false end
+      if not may_go_on(handle) then return false end
       handle.waiting, handle.from_beat = "sleep", nil
       handle.wake = util.time() + (type(seconds) == "number" and math.max(seconds, 0) or 0)
       clock.sleep(seconds)
       return resumed(handle)
     end
     function handle.sync(beats, offset)
-      if handle.stopped then return false end
+      if not may_go_on(handle) then return false end
       local now = clock.get_beats()
-      -- matron counts a sync from the beat of the coroutine's last, when its
-      -- last wait was one (the beat it resumed with stands for it)
+      -- matron counts a sync from the landing of the coroutine's last, when
+      -- its last wait was one (clock_scheduler.cc)
       local from = handle.from_beat or now
       handle.waiting, handle.sync_beat = "sync", now
       handle.landing = nil
@@ -81,7 +95,14 @@ return function(S)
         handle.landing = next_beat(from, beats, type(offset) == "number" and offset or 0)
       end
       local woke = clock.sync(beats, offset)
-      handle.from_beat = type(woke) == "number" and woke or handle.landing
+      -- that landing, or the beat a reset or a new clock source woke it on
+      -- before it (the resume's beat is a tick after the landing: matron's
+      -- tick posts the beat it reads, #870's review); as lib/gestures.lua
+      if type(woke) == "number" and handle.landing then
+        handle.from_beat = math.min(handle.landing, woke)
+      else
+        handle.from_beat = handle.landing or woke
+      end
       return resumed(handle)
     end
     handle.id = clock.run(function()
@@ -95,12 +116,18 @@ return function(S)
   -- End a handle's clock (nil, a stopped or an ended one: nothing), never
   -- raising: canceled at once while its wait's end is farther off than the
   -- margin, else retired (M.retired), to end at its wake. A clock stopped
-  -- from its own body (it runs now) is neither: its next wait returns false
+  -- from its own body (it runs now) is neither: its next wait returns false.
+  -- One whose body waits outside its handle (a bare clock.sleep or
+  -- clock.sync, a mistake) is retired, its wait's end not known, and marked
+  -- bare, which the invariant names
   function M.stop(handle)
     if type(handle) ~= "table" or handle.stopped or handle.ended then return end
     handle.stopped = true
-    if handle.waiting == nil or type(handle.id) ~= "number" then return end
-    if resume_may_be_posted(handle) then
+    if handle.waiting == nil then
+      if runs_now(handle) then return end
+      handle.bare = true
+      M.retired[handle.id] = handle
+    elseif resume_may_be_posted(handle) then
       M.retired[handle.id] = handle
     else
       clock.cancel(handle.id)
@@ -128,10 +155,14 @@ return function(S)
   end
 
   -- A retired clock is a stopped one that still waits for its wake: its
-  -- coroutine is pending until then, and it is forgotten when it ends
+  -- coroutine is pending until then, and it is forgotten when it ends; none
+  -- was stopped while its body waited outside its handle
   S.register_invariant("clocks", function()
     for id, handle in pairs(M.retired) do
       if handle.id ~= id or not handle.stopped then return "retired clock " .. tostring(id) .. " is not a stopped handle's" end
+      if handle.bare then
+        return "clock " .. id .. " was stopped while its body waited outside its handle (a bare clock.sleep or clock.sync)"
+      end
       local thread = clock.threads and clock.threads[id]
       if clock.threads and (type(thread) ~= "thread" or coroutine.status(thread) == "dead") then
         return "retired clock " .. id .. " has gone but is kept"
