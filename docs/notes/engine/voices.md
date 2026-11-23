@@ -68,6 +68,29 @@ The check (`test/engine_check/voices.scd`): the note controls' neutral defaults 
   - **freq_amt**: Frequency modulation depth (-2 to 2, bipolar)
 - **speed**: Modulation signal LFO speed (0.1 to 50 Hz, shared across all slots). The engine keeps each voice's last `setModSpeed` in `modSpeeds[voice]` (nil until one arrives) and passes it (`modSpeedPairs`) to every `\strataMod` it starts or re-gates, so a mod synth `onFree` restarts (re-gated just as its release ended) runs at the voice's speed, not the SynthDef default of 10
 
+## The engine's states Lua cannot see
+
+Lua keeps its own record of each voice (`S.voices`, the params) and hears from the engine only through the polls (`docs/notes/engine/buffers.md`, Polls). These are the states the engine can be in that Lua's record does not show, and what tells Lua (or the player) that each ended. None needs a report beyond what it has: a new poll would earn its place only for a failed start, which needs the real-time pool exhausted and is measured on a device first (#939).
+
+| Engine state | What tells Lua it ended |
+|---|---|
+| a voice releasing (its tail, up to `releaseTimeRange`'s 30 s; `docs/notes/engine/lifecycle.md`) | nothing: Lua's `active` is false from the `voiceOff` on, and a `voiceOn` re-gates what still releases |
+| fading and cutting synths (a switch's, a type change's) | nothing, and nothing is needed: they end within `grainRelease` or `switchCutTime` |
+| a failed start: a voice, grain or mod synth whose `/s_new` the server refused, the voice silent while Lua shows it running | nothing; it ends at the voice's next `voiceOn` (`forgetFailedStarts`), which Lua sends only from a stop and a start (#939 holds a report for a device) |
+| a synth that freed itself while the voice used it (a late gate), started again; past `restartLimit` restarts in `restartWindow` between two `voiceOn`s, refused, the voice left without that synth (#940) | nothing for a restart (harmless); a refusal posts one `Strata invariant broken` line and ends at the voice's next `voiceOn` |
+| a freeze's copy pending, or late (`docs/notes/engine/freeze.md`, State by event) | a console line only, once the copy is late twice (`copyLateLineAttempt`); `[F]` already shows the freeze |
+| a freeze the engine abandoned (its copy never in, or its span refused) | `freezeEnded` (#858), the only freeze report: Lua sets `v<i>_freeze` 0 with no unfreeze sent back |
+| a stopped voice's freeze, a stale one included (frozen on a source changed while stopped) | nothing; the next start's `freeze`, sent before `voiceOn`, puts it right |
+| a type switch waiting under a spectral freeze | nothing; derived on both sides (`docs/notes/engine/types.md`), and the user pages say so |
+| an extra note's slot releasing (its tail still counts in the pool) | nothing; Lua counts its held notes on its own |
+| an extra note refused, the pool full of live notes | a console line (`noteOn ignored: the pool of n is full of live notes`); Lua's count never sends one |
+| a failed extra note start | nothing; it heals at the slot's next note and before any count of the pool (`forgetFailedNoteStarts`, `makeNoteRoom`) |
+| a voice's mix stage replaced after bad values, and a replacement that never started, started again (#886) | a console line for each (`mix stage reset (bad values)`, `mix stage started again`); `docs/notes/engine/mix.md` |
+| a one-shot scan ended (the voice's level 0 until its next hit) | nothing; Lua's playhead estimates it (`docs/notes/lua/playheads.md`) |
+| a guarded command ignored | one console line naming the command |
+
+The unfreeze a source switch makes is written twice, in the engine (`replaceGrainSynth`'s `unfreezeVoice`) and in Lua's `source_change` hook, and no report passes between them: a change to one is made to the other (#690 lived in that seam). A slot live with no synth is no state of this table: no command leaves one, and the engine posts one `Strata invariant broken` line if a command meets one (#941, `docs/notes/engine/notes.md`). Once `free` has begun its stop phase (`pastStop`) Lua is ending the engine itself.
+
 ## Voice SynthDefs
 
 **Modulation Signal Clamping (v2.0+, frequency floor in v2.1)**:

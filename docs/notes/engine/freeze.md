@@ -47,6 +47,58 @@ Methods: `spectralFrames` (2048), `spectralDither` (0.00001), `freezeLeaveSecond
 
 Both controls come through `setGrainParam`: `freeze` 0 (unfrozen) or 1 (frozen), `freezeMode` 0 (hold) or 1 (spectral).
 
+## State by event
+
+A voice's freeze, running or stopped (a freeze acts on a stopped voice too: its ring writer and its copy ring are persistent). The states, read from `areaState[\freeze]` and the nodes:
+- **unfrozen**: `\frozen` false (`\mode` and `\source` nil, `\copied` false), the kept `freeze` 0.
+- **hold on synth**: frozen with `\source` 0 and `\mode` `\hold`: the voice's ring writer paused.
+- **spectral on synth**: `\source` 0, `\mode` `\spectral` (high tier): the ring writer replaced by `\strataRingWriteSpectral`. A type switch made meanwhile waits (`voiceTypeWaits`, derived: [types.md](types.md)).
+- **hold on slot**: `\source` a slot (always `\hold`): the grain synths' `freeze` 1 stops the scan.
+- **copy pending**: `\source` the input or a voice source, `\copied` false, the copy's routine current (the readers it faded at `ringLevel 0`), in hold or spectral.
+- **copy held**: `\copied` true, `\mode` `\hold`: the voice's ring grain synths read the copy ring.
+- **copy held, spectral**: `\copied` true, `\mode` `\spectral`, and the copy writer (`copyWrite<i>`) writing the source into the copy ring.
+- **stale**: any of the frozen states on a `\source` that is no longer `grainSource[voice]`: the source was changed while the voice was stopped, which changes no freeze. A start ends it: Lua sends `freeze` before `voiceOn` (#325).
+
+Four readers derive the kind of freeze from different fields (`frozenOnInput`: the frozen source; `spectralHoldsVoice`: the mode and the frozen source; `readsInputCopy`: both sources and `\copied`; the notes area's `frozenSynthVoice`: `grainSource` and `\frozen`, never the frozen source). They agree in every state but stale, where `frozenSynthVoice` takes a stale freeze of a voice now on its synth source for a synth freeze (#887, read in the code, unreachable from Lua's order).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| unfrozen | `freeze` 1, synth source, hold | hold on synth | `\frozen`, `\mode`, `\source` set; the kept `freeze` 1; `ringChanges[voice]` bumped; the writer paused (`/n_run 0`); then `setGrainParam` keeps the control and sends it to the grain synths (`setGrainSynths`) |
+| unfrozen | `freeze` 1, synth source, spectral (high tier) | spectral on synth | as the hold's, the writer replaced by `\strataRingWriteSpectral` from its head (`replaceRingWriter`, `resume` 1; not past stop) |
+| unfrozen | `freeze` 1, a slot | hold on slot | as the hold's, no writer touched: the grain synths' `freeze` stops their scan (`scanRate`); spectral asked holds (`freezeModeFor`) |
+| unfrozen | `freeze` 1, the input or a voice source | copy pending | as the hold's; the copy counted (`\copies`), the copy ring's readers faded (`\faded`) and the copy's routine forked: at once with no reader, after `bufferFadeWait` with one |
+| unfrozen | `freeze` 0 | unfrozen | the kept `freeze` set and sent to the grain synths (`unfreezeWithControl`); nothing else |
+| unfrozen | `freezeMode` | unfrozen | kept only |
+| unfrozen | `setGrainSource` | unfrozen | the lifecycle's rows only |
+| a frozen state | `freeze` 1, the same source and mode | the same | nothing, `ringChanges` unchanged; copy held (either mode): the live grain synths pointed at the copy again (`pointAtCopyRing`); copy pending: the copy goes on |
+| stale | `freeze` 1 | as from unfrozen, on the voice's source | the old freeze undone first (`unfreezeVoice`, on its own source: a paused writer resumed, a spectral one replaced, a copy writer freed, the copy's readers set back to its ring) |
+| hold on synth | `freeze` 0 | unfrozen | one bundle (`unfreezeWithControl`): the writer resumed from its own phase, the kept `freeze` 0 sent, `notesUnfrozen` (the own grain synth's `noteRate` 1 and park open, ring-stream notes restarted as voice synths: [notes.md](notes.md)) |
+| spectral on synth | `freeze` 0 | unfrozen | one bundle: the writer replaced by `\strataRingWrite` (`resume` 1), then a waiting type switch made (`applyWaitingVoiceType`), the kept `freeze` 0 sent, `notesUnfrozen` |
+| hold on slot | `freeze` 0 | unfrozen | the kept `freeze` 0 sent: the scan goes on |
+| copy pending | `freeze` 0 | unfrozen | `ringChanges` bumped, so the routine runs no further step (no copy, no abandon) and gives its faded readers `ringLevel 1` back as it ends; the kept `freeze` 0 sent |
+| copy held | `freeze` 0 | unfrozen | one bundle: the readers set back to the source's ring (`returnToInputRing`: the input ring at the voice's history, a voice source's output ring at 0), still counted as the copy ring's readers for `freezeLeaveSeconds`; the kept `freeze` 0 sent. The copy stays in the copy ring until the next copy |
+| copy held, spectral | `freeze` 0 | unfrozen | as copy held's, and the copy writer freed (`stopCopyWriter`, quietly) |
+| stale | `freeze` 0 | unfrozen | the old freeze undone on its own source; `notesUnfrozen` runs when the voice is now on its synth source (`frozenSynthVoice`, #887) |
+| hold on synth | `freezeMode` 1 (high tier) | spectral on synth | one bundle (#834): the writer resumed, then replaced by the spectral writer |
+| spectral on synth | `freezeMode` 0 | hold on synth | one bundle (#834): the writer replaced by a plain one, a waiting type switch made, the new writer paused, so it never writes a block into the held ring |
+| copy pending or copy held, hold | `freezeMode` 1 (high tier) | copy pending, spectral | one bundle: the readers set back, then a new copy of the source from now (a refreeze) |
+| copy pending or copy held, spectral | `freezeMode` 0 | copy pending, hold | one bundle: the copy writer freed, the readers set back, a new copy from now |
+| a frozen state | `freezeMode` to the mode it has (or spectral on the standard tier, or on a slot) | the same | kept only |
+| a frozen state | `setGrainSource`, a running voice | unfrozen | `switchGrainSynth` calls `unfreezeVoice` first (the old freeze undone on its own source; a spectral one's waiting type switch is not made, since `applyWaitingVoiceType` finds the voice off its synth source or with no voice synth: the voice synth fades and a return to the synth starts the type's def); the kept `freeze` 0 is not sent (the old grain synth fades), so the new grain synth starts unfrozen; Lua's `source_change` hook then sets `v<i>_freeze` 0 |
+| a frozen state | `setGrainSource`, a stopped voice | stale (or no longer stale, back on the frozen source) | nothing: a paused writer stays paused, a copy goes on |
+| copy pending | the copy lands in its room (`copyOnTime`) | copy held, or copy held, spectral | `holdCopyRing`: the copy ring's phase bus to 0, the copy writer started for spectral (none past stop), `\copied`, the live grain synths and live grain notes pointed at the copy (`pointAtCopyRing`, each counted in `\inputReaders`); the faded readers get `ringLevel 1` back |
+| copy pending | an attempt late, or the server gave no head, attempts left | copy pending | the copy made again from a fresh read point; one console line at the second late copy (`copyLateLineAttempt`; an attempt with no head is no late copy, #835) |
+| copy pending | the span refused, or `copyAttempts` (8) spent | unfrozen | `abandonCopy`: one console line, `unfreezeWithControl(voice, 0)`, `\ended` counted and reported on `freezeEnded` (#858: Lua sets `v<i>_freeze` 0 with no unfreeze sent back); the faded readers get `ringLevel 1` back |
+| copy pending, copy held (either mode), stale on a copy | `history` | the same | kept, not sent (the freeze's wrap of the grains area's handler): history is 0 inside the copy, and the unfreeze sets the readers back at the kept history |
+| any | `voiceOff` | the same | nothing: a stopped voice stays frozen, and a copy goes on and can land while the voice is stopped |
+| any | `voiceOn` | the same | nothing to the freeze: the grain synth it starts or re-gates takes the kept `freeze` and reads `grainReadPairs` (the copy, once held on the same source), so a late-gate restart does too |
+| spectral on synth | `setVoiceType`, a running voice | the same (the switch waits) | the type recorded, the voice synth left running: the unfreeze makes the switch ([types.md](types.md)) |
+| spectral on synth | `setVoiceType`, a stopped voice | the same | the type recorded; the next `voiceOn` cuts the releasing voice synth and starts the type's def under the freeze ([types.md](types.md)) |
+| hold on synth | `setVoiceType`, a running voice | the same | the switch made at once (the lifecycle's row); the writer and its held ring are untouched |
+| any | the engine past stop (`free`'s stop phase) | the same | a pending copy runs no further step (`current` reads `pastStop`); no copy writer starts and no ring writer is replaced; the area's `stop` frees the copy writers (`stopCopyWriters`), the rings area's the ring writers |
+
+The copy's events (it lands, it is late, it is abandoned) happen only in copy pending: a copy whose freeze ended, or that a later copy replaced, runs none of its steps (`current`: `\copies` and `ringChanges[voice]` unchanged and the engine not past stop). The states the keys can hold and no event makes: `\copied` on a synth source or a slot; a copy writer with `\mode` `\hold`; a `\mode` with `\frozen` false; spectral on the standard tier (`freezeModeFor` gives hold there).
+
 ## What a ring grain synth reads
 
 `grainReadPairs(voice)` is the one answer, as `\strataGrainRing` controls `[\bufL, bufnum, \bufR, bufnum, \phaseBus, index, \history, seconds]`:
