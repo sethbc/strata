@@ -206,6 +206,45 @@ test("tuning_tones' text round-trips", function()
   end
 end)
 
+-- The engine hears each tone and the period as an OSC float, float32
+-- (#884): exact float32 values, so the test needs no pack of its own
+test("float32 rounds a number as an OSC float carries it, on Lua 5.3 and LuaJIT alike", function()
+  load_strata()
+  local float32 = tuning().float32
+  assert_equal(float32(100), 100, "a whole number stays")
+  assert_equal(float32(100.0000001), 100, "100.0000001 is 100")
+  assert_equal(float32(100.0000002), 100, "100.0000002 is 100")
+  assert_equal(float32(1199.99999), 1200, "1199.99999 is 1200")
+  assert_equal(float32(4500.0002), 4500, "4500.0002 is 4500")
+  assert_equal(float32(0.1), 0.100000001490116119384765625, "0.1 is float32's nearest")
+  assert_equal(float32(16777217), 16777216, "a tie goes to the even")
+  assert_equal(float32(-0.75), -0.75, "a negative number stays")
+end)
+
+test("a tuning whose tones are equal in float32 is refused by Lua (#884)", function()
+  local context = load_strata(); finish_startup(context)
+  local t = tuning()
+  use("ji normal")
+  local kept = params:get("tuning_tones")
+  -- each ascends below its period in doubles; the engine hears two equal
+  -- tones, or a last tone at the period, and keeps its tuning
+  local bad = {"1200 0 100.0000001 100.0000002", "1200 0 1199.99999", "4800 0 4500.0001 4500.0002",
+    "4800 0 4799.9999"}
+  for _, text in ipairs(bad) do
+    assert_equal(t.parse_text(text), nil, text .. " does not read")
+    local from = #context.printed + 1
+    context.clear_engine_calls()
+    params:set("tuning_tones", text)
+    assert_equal(#context.printed - from + 1, 1, "one line for " .. text)
+    assert_true(context.printed[from]:match("^tuning: ") ~= nil, "the line starts tuning: (" .. tostring(context.printed[from]) .. ")")
+    assert_equal(params:get("tuning_tones"), kept, "the param is set back: " .. text)
+    assert_equal(#sent_tuning(context), 0, "nothing sent for " .. text)
+    assert_equal(t.count(), 12, "the tuning stays ji normal")
+  end
+  assert_equal(t.parse_scl("x\n3\n100.0000001\n100.0000002\n1200.0"), nil, "a Scala file of the same is refused")
+  assert_equal(t.parse_scl("x\n2\n1199.99999\n1200.0"), nil, "and one with a last tone at the period in float32")
+end)
+
 test("the built-ins, in order, ascend from 0 below their period", function()
   load_strata()
   local t = tuning()
