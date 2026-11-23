@@ -12,24 +12,30 @@
 ### key presses
 - **State:** per key (2, 3) on the page: `S.key_press_page[n]`, `S.key_press_at[n]` and `S.key_press_alt[n]` (`lib/ui/keys.lua`, set by `key()` in `strata.lua`), read through `S.lib.ui_keys.held_seconds(n)` (and `S.lib.ui_alt.k2_held()` for ALT+K2); `S.alt_held` beside them. Up, down plain, down ALT; the States section below gives each state's fields. A key down on a modal owner is the `modal owner` machine's (`docs/notes/lua/ui/pages-and-dispatch.md`), never this one's: while an owner is pushed `key()` takes the page's key to up.
 - **Invariant:** `key presses`: an ALT press has a press page, and a key has a press page exactly while it has a press time.
-- **Test:** `test/unit/ui_alt_test.lua`: "a key held across a page change, the menu and a covering owner reads nil" (and "a release handler that raises leaves no key held (a page's, through key())"); the invariant runs after every unit test.
+- **Test:** `test/unit/ui_test.lua`: "key presses: every cell is decided" and its rows (K2 on FX, whose `key`, `key_release`, `alt_key` and `alt_key_release` are probes that log whether `held_seconds` answered; the release after a loss is pressed on FX again); the invariant runs after every unit test.
 
-Each event from each state is a row; `up` + `release` is a press forgotten while the physical key stayed down.
+Every cell is a row. `press` is K2 down as ALT stands (held in `down ALT`); `ALT press` is K1 down, then K2. A press of a key already down does not come from norns, which sends a key's press only after its release; the rows say what `key()` would do with one. `up` + `release` is a press forgotten while the physical key stayed down.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
-| up | press, ALT up | down plain | the page and time noted; the record's `key(n)` |
-| up | press, ALT held | down ALT | the page and time noted, the ALT mark; `alt_action(page, n)` (BUFFER has no `alt_key`: nothing at the press) |
+| up | press | down plain | the page and time noted; the record's `key(n)` (which reads `held_seconds`) |
+| up | ALT press | down ALT | the page and time noted, the ALT mark; `alt_action(page, n)` (BUFFER has no `alt_key`: nothing at the press) |
 | up | release | up | nothing (a press the page never saw, or forgot, releases into nothing) |
-| up | page change, modal push, `forget_held_keys` | up | nothing |
-| down plain | release on the page it went down on | up | `key_release(n)` (reads `held_seconds`), then the marks cleared, also when it raises |
-| down plain | page change | up | `set_ui_page` forgets it (#234) |
-| down plain | modal push | up | `S.lib.ui_modal.push` forgets it (#866) |
-| down plain | `forget_held_keys` (the menu, the file selector, a name entry) | up | forgotten, ALT too |
-| down ALT | release on the page it went down on | up | `alt_key_release(n)` (even with K1 up first), then the marks cleared, also when it raises |
-| down ALT | page change | up | forgotten; no ALT-release hook runs (K1 is still down) |
-| down ALT | modal push | up | forgotten |
-| down ALT | `forget_held_keys` | up | forgotten, `S.alt_held` false and the ALT-release hooks run |
+| up | page change | up | nothing |
+| up | modal push | up | nothing |
+| up | forget_held_keys | up | nothing |
+| down plain | press | down plain | noted again; `key(n)` again |
+| down plain | ALT press | down ALT | marked an ALT press; `alt_action(page, n)` |
+| down plain | release | up | `key_release(n)` (reads `held_seconds`), then the marks cleared, also when it raises |
+| down plain | page change | up | `set_ui_page` forgets it (#234): its release runs nothing |
+| down plain | modal push | up | `S.lib.ui_modal.push` forgets it (#866): its release runs nothing |
+| down plain | forget_held_keys | up | forgotten (the menu, the file selector, a name entry), ALT too |
+| down ALT | press | down ALT | noted again (ALT is held); `alt_action(page, n)` again |
+| down ALT | ALT press | down ALT | as `press` |
+| down ALT | release | up | `alt_key_release(n)` (even with K1 up first), then the marks cleared, also when it raises |
+| down ALT | page change | up | forgotten; ALT stays held and no ALT-release hook runs (K1 is still down) |
+| down ALT | modal push | up | forgotten; ALT stays held |
+| down ALT | forget_held_keys | up | forgotten, `S.alt_held` false and the ALT-release hooks run |
 
 ## States
 

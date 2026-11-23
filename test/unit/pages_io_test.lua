@@ -760,14 +760,16 @@ test("the io detail invariant: the detail is open exactly while its owner is on 
   S.lib.pages_seq.close_step_editor(1)
   h.allow_broken_invariants("the test breaks the io detail invariant on purpose")
   S.lib.ui_modal.pop(owner)
-  assert_true(invariant(S, "io detail") ~= nil, "open with its owner off the stack is reported")
+  local problem = invariant(S, "io detail") or ""
+  assert_true(problem:find("open but the modal owner", 1, true), "open with its owner off the stack is reported: " .. problem)
   S.lib.ui_modal.push(owner)
   assert_equal(invariant(S, "io detail"), nil, "back on the stack")
   tap(2)
   assert_equal(S.lib.ui_modal.top(), nil, "K2 closes it")
   assert_equal(invariant(S, "io detail"), nil, "closed by K2")
   S.lib.ui_modal.push(owner)
-  assert_true(invariant(S, "io detail") ~= nil, "closed with its owner on the stack is reported")
+  problem = invariant(S, "io detail") or ""
+  assert_true(problem:find("closed but its owner", 1, true), "closed with its owner on the stack is reported: " .. problem)
   S.lib.ui_modal.pop(owner)
 end)
 
@@ -790,9 +792,12 @@ test("IO's leave closes no detail: a page change cannot happen under an owner", 
   assert_equal(S.lib.ui_modal.top(), nil, "K2 closes it")
   redraw()
   assert_screen_layout(context, "IO after its detail closed")
+  -- every file that names the function, a call or a bare reference (an
+  -- alias such as local f = S.lib.ui_keys.set_ui_page), comments and
+  -- strings blanked
   local callers = {}
   for _, source in ipairs(h.read_lua_sources()) do
-    if source.path ~= "lib/ui/keys.lua" and h.sync_check.sanitize_lua(source.text):find("set_ui_page%s*%(") then
+    if source.path ~= "lib/ui/keys.lua" and h.sync_check.sanitize_lua(source.text):find("%f[%w_]set_ui_page%f[^%w_]") then
       callers[#callers + 1] = source.path
     end
   end

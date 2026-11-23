@@ -9,14 +9,14 @@
 
 ## Machines
 
-The zones editor's entry is here, where its notes are (The zones editor, below); every other part's machines are in its own file under docs/notes/lua/ui/.
+The zones editor has no topic file, so its entry is in this index, where its notes are (The zones editor, below); every other part's machines are in its own file under docs/notes/lua/ui/.
 
 ### zones editor
 - **State:** `editor = {open, row, column}`, `learning` (`{voice, which, first}` or nil), `learn_clock.handle` (the learn's timeout clock, a clock helper's handle, `docs/notes/lua/clocks.md`) and `tap_set` (local to `lib/ui/zones.lua`), with `S.zones_learn_clock`, that handle's id; read through `S.lib.ui_zones.is_open()` and `learning()`. Closed, open, open with a learn waiting for its low note or its high.
 - **Invariant:** `zones editor`: a learn waits exactly while its clock is pending (its coroutine alive, never a retired one) and the note tap is set, and only while the editor is open; the open editor's owner is the modal one (or lies beneath SEQ's step editor), the closed editor's never; the cursor is on a row and a column.
 - **Test:** `test/unit/ui_zones_test.lua`: "the editor's invariant holds its own owner and a waiting learn's clock" (and "a learn ends after 10 s, at K2 and at cleanup, and the note tap is cleared", "the zones learn clock stopped as its wake is posted: no clock error, and nothing more happens").
 
-Its opens and closes are a row of the owners' table (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner). A learn's end stops its clock through the helper (`S.lib.clocks.stop`: retired, never canceled, once its wake may be posted, #626, #870).
+No test runs this table: it is one of the design's modal owners (its section 5, a table and no test). It lists the events that open or close the editor or start or end a learn; every other key or turn (E2's row, E3's value, K3's column on a voice row, ALT+K3 off a voice row) is the editor's own editing and leaves its state as it was, and a cleanup of a closed editor does nothing. Its opens and closes are a row of the owners' table (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner). A learn's end stops its clock through the helper (`S.lib.clocks.stop`: retired, never canceled, once its wake may be posted, #626, #870).
 
 | State | Event | Next | Effect |
 |---|---|---|---|

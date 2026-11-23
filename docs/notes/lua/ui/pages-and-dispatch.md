@@ -16,7 +16,7 @@
 - **Invariant:** `modal owner`: no owner is on the stack twice, every key down on an owner is on the top one (a push forgets the covered owner's), and a key has a press time exactly while it is down on an owner.
 - **Test:** `test/unit/ui_modal_test.lua`: "held_seconds is nil for an owner that is not on top" (and "a key pressed before the owner was pushed releases into nothing", "a release handler that raises leaves no key held (a modal owner's)").
 
-A push of an owner already on the stack raises, so `on top` + `push` and `covered` + `push` are no rows.
+No test runs this table: the modal owners are the design's (its section 5, a table and no test). A push of an owner already on the stack raises, so `on top` + `push` and `covered` + `push` are no rows.
 
 | State | Event | Next | Effect |
 |---|---|---|---|

@@ -639,4 +639,98 @@ test("the scenes prompt invariant holds the name entry's slot to its callback", 
   assert_equal(invariant(), nil, "it holds once the entry has called back")
 end)
 
+-- 3.9 (#902): the overwrite confirmation of the scenes prompt as a table.
+-- Each row's script: SCENES shown, slot 1 holding a scene with the cursor
+-- on it, the clock at 100 s. The state reads the script:
+-- S.scenes_page.armed_slot and armed_until against S.cursors.scene and
+-- util.time()
+local PROMPT_PAST_ARMING = 2.5  -- past SCENES_PAGE.arm_seconds (2 s)
+
+local function prompt_script(context)
+  local S = local_value("S")
+  show_page("SCENES")
+  context.set_time(100)
+  capture_scene(1)
+  S.lib.pages_scenes.move_cursor(1)
+  context.first = scene_data(S, 1)
+end
+
+local function then_saved(context)
+  local S = local_value("S")
+  assert_true(S.scenes[1].populated and scene_data(S, 1) ~= context.first, "slot 1 saved")
+end
+
+local function then_not_saved(context)
+  assert_equal(scene_data(local_value("S"), 1), context.first, "nothing saved")
+end
+
+h.transition_table({
+  name = "scenes prompt",
+  notes = {"docs/notes/lua/pages/scenes.md", "scenes prompt"},
+  states = {
+    ["idle"] = prompt_script,
+    ["armed"] = function(context) prompt_script(context); alt_tap(3) end,
+    ["lapsed"] = function(context)
+      prompt_script(context); alt_tap(3); context.set_time(100 + PROMPT_PAST_ARMING)
+    end,
+  },
+  events = {
+    ["ALT+K3 on a populated slot"] = function() alt_tap(3) end,
+    ["ALT+K3 under a covering hints flash"] = function()
+      local_value("S").lib.ui_flash.start("hints", "cover")
+      alt_tap(3)
+    end,
+    -- the cursor's slot left empty as a scenes load leaves a slot its
+    -- file lacks (lib/scenes.lua's empty scene), then ALT+K3
+    ["the slot emptied, then ALT+K3"] = function()
+      local S = local_value("S")
+      S.scenes[S.cursors.scene] = {name = "", populated = false, data = {}}
+      alt_tap(3)
+    end,
+    ["move_cursor"] = function() local_value("S").lib.pages_scenes.move_cursor(2) end,
+    ["the arming time passes"] = function(context)
+      context.set_time(util.time() + PROMPT_PAST_ARMING)
+    end,
+    ["the cursor set directly"] = function() local_value("S").cursors.scene = 2 end,
+    ["a frame"] = function(context)
+      local S = local_value("S")
+      context.animated = S.registry.pages[S.constants.UI_PAGES.index.SCENES].animates()
+    end,
+  },
+  state_of = function()
+    local S = local_value("S")
+    local state = S.scenes_page
+    if state.armed_slot == nil then return "idle" end
+    if state.armed_slot == S.cursors.scene and util.time() < state.armed_until then return "armed" end
+    return "lapsed"
+  end,
+  rows = {
+    {"idle", "ALT+K3 on a populated slot", "armed", check = then_not_saved},
+    {"idle", "ALT+K3 under a covering hints flash", "armed", check = then_not_saved},
+    {"idle", "the slot emptied, then ALT+K3", "idle", check = then_saved},
+    {"idle", "move_cursor", "idle"},
+    {"idle", "the arming time passes", "idle"},
+    {"idle", "the cursor set directly", "idle"},
+    {"idle", "a frame", "idle", check = function(context) assert_equal(context.animated, false) end},
+    {"armed", "ALT+K3 on a populated slot", "idle", check = then_saved},
+    {"armed", "the slot emptied, then ALT+K3", "idle", check = then_saved},
+    {"armed", "ALT+K3 under a covering hints flash", "armed", check = then_not_saved},
+    {"armed", "move_cursor", "idle", check = then_not_saved},
+    {"armed", "the arming time passes", "lapsed"},
+    {"armed", "the cursor set directly", "lapsed", check = function()
+      local S = local_value("S")
+      local hints = S.registry.pages[S.constants.UI_PAGES.index.SCENES].hints(false)
+      assert_true(hints ~= prompt(1) and hints ~= prompt(2), "the hint row no longer asks: " .. hints)
+    end},
+    {"armed", "a frame", "armed", check = function(context) assert_equal(context.animated, true) end},
+    {"lapsed", "ALT+K3 on a populated slot", "armed", check = then_not_saved},
+    {"lapsed", "ALT+K3 under a covering hints flash", "armed", check = then_not_saved},
+    {"lapsed", "the slot emptied, then ALT+K3", "idle", check = then_saved},
+    {"lapsed", "move_cursor", "idle"},
+    {"lapsed", "the arming time passes", "lapsed"},
+    {"lapsed", "the cursor set directly", "lapsed"},
+    {"lapsed", "a frame", "idle", check = function(context) assert_equal(context.animated, true, "true once") end},
+  },
+})
+
 end

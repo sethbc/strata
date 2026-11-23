@@ -16,7 +16,7 @@
 - **Invariant:** `voice picker`: the open picker's owner is the modal one (or lies beneath SEQ's step editor), the closed picker's never; its cursor is a row of its list; `k3_slot` is nil while it is closed.
 - **Test:** `test/unit/ui_voice_picker_test.lua`: "an owner covered while ALT+K3 is down forgets the press: a later plain K3 tap opens no name entry" (and "an owner covered while ALT+K2 is down shows its plain hint and does not animate", "cleanup closes the picker").
 
-Its opens and closes are a row of the owners' table (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner); its keys:
+No test runs this table: it is one of the design's modal owners (its section 5, a table and no test). It lists the events that open or close the picker and the keys that act on a row; E2 (the cursor) and E3 (nothing) are its own editing and leave it open, and a cleanup of a closed picker does nothing. Its opens and closes are a row of the owners' table (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner).
 
 | State | Event | Next | Effect |
 |---|---|---|---|
