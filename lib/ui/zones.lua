@@ -19,15 +19,14 @@ return function(S)
   local field_list = S.lib.ui_field_list
   local musicutil = require "musicutil"
 
-  -- The editor's tunables and layout: learn's timeout and the margin before
-  -- its wake inside which the clock is retired, not canceled (#626, as
-  -- MOD's learn); six rows from y 18, 7 px apart, as SETUP's; a voice row's
-  -- columns (the label at x 0, the zone from zone_x, the lowest note
+  -- The editor's tunables and layout: learn's timeout (its clock is the
+  -- clock helper's, #870); six rows from y 18, 7 px apart, as SETUP's; a
+  -- voice row's columns (the label at x 0, the zone from zone_x, the lowest note
   -- right-aligned at low_right, the highest at value_right, where a count
   -- row's value goes; the scroll marker owns x 127); the levels (the
   -- cursor's column, the rest of its row, the other rows); the notes a zone
   -- range holds
-  local ZONES_EDITOR = {learn_seconds = 10, learn_wake_margin = 0.1,
+  local ZONES_EDITOR = {learn_seconds = 10,
     visible = 6, first_y = 18, spacing = 7, zone_x = 20, low_right = 94, value_right = 124,
     levels = {selected = 15, row = 8, other = 4},
     columns = {"zone", "low", "high"}, column_params = {zone = "", low = "_low", high = "_high"},
@@ -49,12 +48,11 @@ return function(S)
   local editor = {open = false, row = 1, column = 1}
   -- {voice, which = "low" | "high", first} while learn waits for a note
   local learning = nil
-  -- Learn's timeout clock (S.zones_learn_clock while learn waits): its end
-  -- never cancels it once norns may have posted its resume (#626): within
-  -- learn_wake_margin of its wake it is retired (its token goes old, and at
-  -- its wake it ends, touching nothing a newer learn armed; retired[id]
-  -- until then, which cleanup cancels)
-  local learn_clock = {token = 0, retired = {}, wake = -math.huge}
+  -- Learn's timeout clock's handle (S.lib.clocks, #870; S.zones_learn_clock
+  -- is its id while learn waits): its end stops it through the helper,
+  -- which never cancels it once norns may have posted its resume (#626) but
+  -- retires it, and at its wake it ends, touching nothing a newer learn armed
+  local learn_clock = {handle = nil}
   S.zones_learn_clock = nil
   -- whether the editor's M.note is the MIDI module's note tap now (set
   -- when a learn starts, cleared when it ends)
@@ -84,14 +82,9 @@ return function(S)
   -- End the learn waiting (none: nothing): its clock canceled or retired,
   -- the note tap cleared
   function M.cancel_learn()
-    if S.zones_learn_clock then
-      if util.time() < learn_clock.wake - ZONES_EDITOR.learn_wake_margin then
-        clock.cancel(S.zones_learn_clock)  -- its resume cannot be posted yet
-      else
-        learn_clock.retired[S.zones_learn_clock] = true
-      end
-      learn_clock.token = learn_clock.token + 1
-      S.zones_learn_clock = nil
+    if learn_clock.handle then
+      S.lib.clocks.stop(learn_clock.handle)
+      learn_clock.handle, S.zones_learn_clock = nil, nil
     end
     if learning then
       learning = nil
@@ -108,19 +101,14 @@ return function(S)
     if not editor.open or not whole_in(voice, 1, NUM_VOICES) then return false end
     M.cancel_learn()
     learning = {voice = voice, which = "low"}
-    learn_clock.token = learn_clock.token + 1
-    local token, id = learn_clock.token, nil
-    learn_clock.wake = util.time() + ZONES_EDITOR.learn_seconds
-    id = clock.run(function()
-      clock.sleep(ZONES_EDITOR.learn_seconds)
-      learn_clock.retired[id] = nil
-      if token ~= learn_clock.token then return end
-      S.zones_learn_clock = nil
+    local started = S.lib.clocks.run(function(handle)
+      if not handle.sleep(ZONES_EDITOR.learn_seconds) then return end
+      learn_clock.handle, S.zones_learn_clock = nil, nil
       learning = nil
       set_tap(nil)
       request_redraw()
     end)
-    S.zones_learn_clock = id
+    learn_clock.handle, S.zones_learn_clock = started, started.id
     set_tap(M.note)
     request_redraw()
     return true
@@ -269,18 +257,17 @@ return function(S)
     return editor.open
   end
 
-  -- Cleanup ends a learn waiting (its clock canceled, the tap cleared) and
-  -- cancels every retired clock still waiting
+  -- Cleanup ends a learn waiting (its clock canceled, the tap cleared; the
+  -- helper's own step, the last, cancels what it retired)
   S.register_cleanup(S.constants.CLEANUP_ORDER.zones_learn, function()
+    S.lib.clocks.cancel(learn_clock.handle)
     M.cancel_learn()
-    for id in pairs(learn_clock.retired) do clock.cancel(id) end
-    learn_clock.retired = {}
   end)
 
   -- Learn waits exactly while its timeout clock is pending (its coroutine
   -- alive) and the note tap is the editor's, and only while the editor is
-  -- open; a retired clock is never S.zones_learn_clock and is forgotten
-  -- when it ends; the closed editor's owner is never the modal one, the
+  -- open; a retired clock (the helper's) is never S.zones_learn_clock; the
+  -- closed editor's owner is never the modal one, the
   -- open editor's own owner is (or is beneath SEQ's step editor); the
   -- cursor is on a row and a column
   S.register_invariant("zones editor", function()
@@ -295,11 +282,8 @@ return function(S)
       return "learn waits: " .. tostring(learning ~= nil) .. ", but the note tap is " .. (tap_set and "set" or "not set")
     end
     if learning and not editor.open then return "learn waits with the editor closed" end
-    for id in pairs(learn_clock.retired) do
-      local thread = clock.threads and clock.threads[id]
-      if id == S.zones_learn_clock or (clock.threads and (type(thread) ~= "thread" or coroutine.status(thread) == "dead")) then
-        return "the retired learn clock " .. id .. " is still the learn clock or has gone but is kept"
-      end
+    if S.zones_learn_clock and S.lib.clocks.retired[S.zones_learn_clock] then
+      return "the retired learn clock " .. S.zones_learn_clock .. " is still the learn clock"
     end
     local top = S.lib.ui_modal.top()
     if not editor.open and top == owner then return "the editor is closed but its owner is the modal one" end

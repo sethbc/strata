@@ -58,8 +58,8 @@ return function(S)
   -- current scene then and the scenes' takeover count (a recall or fade
   -- after the move wins over it); pending: the last apply left values for
   -- the next one; flashed: the plan's empty corner has flashed; clock: the
-  -- running clock's own token (a clock whose token is gone was retired: it
-  -- ends at its next wake and applies nothing); crossed_at: when the last
+  -- running clock's handle (S.lib.clocks, #870; a stopped one ends at its
+  -- next wake and applies nothing); crossed_at: when the last
   -- crossing's discrete switch was applied (util.time()); crossing_waits:
   -- the last apply found a crossing it could not apply yet (#653)
   local state = {plan = nil, applied = {values = {}, owned = {}, cursor = 1}, moved = false, move_held = false,
@@ -690,14 +690,13 @@ return function(S)
     return more
   end
 
-  -- End the clock: forget it and what waits (a retired clock ends at its
-  -- next wake, applying nothing). cancel: also cancel its coroutine, only
-  -- where no resume of it can be waiting to be delivered (cleanup: the
-  -- script is ending); a PSET load retires it, since matron may have posted
-  -- its resume while Lua read the PSET, and norns' clock.resume raises on a
-  -- canceled coroutine (#626)
+  -- End the clock: forget it and what waits. cancel: cancel it at once
+  -- (cleanup: the script is ending); else it is stopped through the clock
+  -- helper (a PSET load), which retires it, since matron may have posted
+  -- its resume while Lua read the PSET and norns' clock.resume raises on a
+  -- canceled coroutine (#626): it ends at its next wake, applying nothing
   local function stop_clock(cancel)
-    if cancel and S.morph_clock then clock.cancel(S.morph_clock) end
+    if cancel then S.lib.clocks.cancel(state.clock) else S.lib.clocks.stop(state.clock) end
     S.morph_clock, state.clock = nil, nil
     state.moved, state.pending, state.crossing_waits = false, false, false
   end
@@ -719,17 +718,14 @@ return function(S)
   -- The clock runs while a move waits or values are left: its first apply
   -- on the next tick, then one each 1 / apply_hz while the morph moves, and
   -- at rest more while values are left or off their exact blend, unless a
-  -- recall took over. It checks its token after each wait: retired
-  -- (stop_clock), it ends at once and touches nothing of a newer clock's.
-  -- An error in an apply ends the clock (it forgets its own id first) and
-  -- is raised again
+  -- recall took over. Stopped (stop_clock), its wait returns false and it
+  -- ends at once, touching nothing of a newer clock's. An error in an
+  -- apply ends the clock (it forgets its own id first) and is raised again
   local function start_clock()
     if S.morph_clock then return end
-    local token = {}
-    state.clock = token
-    S.morph_clock = clock.run(function()
-      clock.sleep(0)
-      while state.clock == token do
+    local started = S.lib.clocks.run(function(handle)
+      if not handle.sleep(0) then return end
+      while state.clock == handle do
         local kind = next_apply()
         if not kind then break end
         state.moved = false
@@ -741,13 +737,14 @@ return function(S)
           error(result, 0)
         end
         state.pending = result
-        clock.sleep(1 / MORPH.apply_hz)
+        if not handle.sleep(1 / MORPH.apply_hz) then return end
       end
-      if state.clock == token then
+      if state.clock == handle then
         S.morph_clock, state.clock = nil, nil
         state.pending = false
       end
     end)
+    state.clock, S.morph_clock = started, started.id
   end
 
   -- The morph and morph_y actions: mark a move (and whether morph held the
@@ -778,7 +775,7 @@ return function(S)
   end
 
   -- A PSET load sets the morph and morph_y (their actions start the clock)
-  -- with the PSET's own values: nothing applies (the clock is retired, so
+  -- with the PSET's own values: nothing applies (the clock is stopped, so
   -- a resume already posted ends it without an apply), and the next move
   -- starts again from the loaded state
   S.register_pset_hook({name = "morph", read = function()

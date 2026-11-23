@@ -36,7 +36,6 @@ return function(S)
   local MACROS = {
     apply_hz = 30,
     learn_seconds = 10,
-    learn_wake_margin = 0.1,  -- s before its wake a learn clock is still canceled (#626)
     save_delay = 0.1,  -- s from a change of the targets to the live file's write
     banks = math.floor(NUM_MACROS / MACRO_BANK_SIZE),
     epsilon = 1e-9,
@@ -297,33 +296,25 @@ return function(S)
   -- pending[m]: macro m waits for the clock; last[m]: its last apply's time
   local applying = {pending = {}, last = {}}
   local apply_errors = {}
-  -- The apply clock is never canceled while norns may have posted its
-  -- resume (#626: norns delivers every resume it posted, and clock.resume
-  -- raises for a coroutine it no longer has, which maiden prints): it is
-  -- retired instead. token rises with each start and each retire, and a
-  -- clock whose token is old ends at its next wake, doing nothing;
-  -- retired[id] while such a clock waits for that wake. Only cleanup
-  -- cancels
-  local apply_clock = {token = 0, retired = {}}
+  -- The apply clock's handle (S.lib.clocks, #870; S.macro_clock is its id
+  -- while it runs): stopped through the helper, which never cancels it
+  -- while norns may have posted its resume (#626) but retires it, to end at
+  -- its next wake (1 / apply_hz at the most) doing nothing
+  local apply_clock = {handle = nil}
 
   local function any_pending() return next(applying.pending) ~= nil end
 
-  -- Retire the apply clock: it is no longer S.macro_clock, and it ends at
-  -- its next wake (1 / apply_hz at the most)
+  -- Stop the apply clock: it is no longer S.macro_clock
   local function stop_clock()
-    if S.macro_clock then
-      apply_clock.retired[S.macro_clock] = true
-      apply_clock.token = apply_clock.token + 1
-      S.macro_clock = nil
-    end
+    S.lib.clocks.stop(apply_clock.handle)
+    apply_clock.handle, S.macro_clock = nil, nil
   end
 
-  -- Cleanup's: cancel the apply clock and every retired one still waiting
+  -- Cleanup's: cancel the apply clock (the helper's own step cancels what
+  -- it retired)
   local function cancel_clocks()
-    if S.macro_clock then clock.cancel(S.macro_clock) end
-    for id in pairs(apply_clock.retired) do clock.cancel(id) end
-    S.macro_clock, apply_clock.retired = nil, {}
-    apply_clock.token = apply_clock.token + 1
+    S.lib.clocks.cancel(apply_clock.handle)
+    apply_clock.handle, S.macro_clock = nil, nil
   end
 
   -- Drop macro m's waiting apply (every macro's when m is nil); the clock
@@ -361,15 +352,14 @@ return function(S)
   -- The one clock for every macro: from its next tick, each waiting macro
   -- applies once 1 / apply_hz has passed since its last apply; it sleeps to
   -- the next one due and ends when none waits, or at the first wake after
-  -- it was retired (its token checked after each wait). An apply that
-  -- raises prints once and the others go on
+  -- it was stopped (its wait returns false; stopped from its own body, it
+  -- is no longer the apply clock's handle). An apply that raises prints
+  -- once and the others go on
   local function start_clock()
     if S.macro_clock then return end
-    apply_clock.token = apply_clock.token + 1
-    local token, id = apply_clock.token, nil
-    id = clock.run(function()
-      clock.sleep(0)
-      while token == apply_clock.token and any_pending() do
+    local started = S.lib.clocks.run(function(handle)
+      if not handle.sleep(0) then return end
+      while handle == apply_clock.handle and any_pending() do
         local now, next_due = util.time(), nil
         for m = 1, NUM_MACROS do
           if applying.pending[m] then
@@ -381,12 +371,11 @@ return function(S)
             end
           end
         end
-        if next_due then clock.sleep(math.max(0, next_due - util.time())) end
+        if next_due and not handle.sleep(math.max(0, next_due - util.time())) then return end
       end
-      if token == apply_clock.token then S.macro_clock = nil end
-      apply_clock.retired[id] = nil
+      if handle == apply_clock.handle then apply_clock.handle, S.macro_clock = nil, nil end
     end)
-    S.macro_clock = id
+    apply_clock.handle, S.macro_clock = started, started.id
   end
 
   local function mark_pending(m)
@@ -548,23 +537,17 @@ return function(S)
   ---------------------------------------------------------------------------
 
   local learning = nil  -- {m, k} while learn waits for a touch
-  -- Learn ending never cancels its timeout clock once norns may have posted
-  -- its resume (#626, as the apply clock): within learn_wake_margin of its
-  -- wake (at wake) the clock is retired, its token goes old and at its wake
-  -- it ends, touching nothing a newer learn armed (retired[id] until then,
-  -- which cleanup cancels); earlier it is canceled, so a burst of learns
-  -- never fills matron's 100 clock slots with 10 s sleeps
-  local learn_clock = {token = 0, retired = {}, wake = -math.huge}
+  -- Learn's timeout clock's handle (S.lib.clocks, #870; S.macro_learn_clock
+  -- is its id while learn waits): learn ending stops it through the helper,
+  -- which retires it near its wake (#626; at its wake it ends, touching
+  -- nothing a newer learn armed) and cancels it earlier, so a burst of
+  -- learns never fills matron's 100 clock slots with 10 s sleeps
+  local learn_clock = {handle = nil}
 
   function M.cancel_learn()
-    if S.macro_learn_clock then
-      if util.time() < learn_clock.wake - MACROS.learn_wake_margin then
-        clock.cancel(S.macro_learn_clock)  -- its resume cannot be posted yet
-      else
-        learn_clock.retired[S.macro_learn_clock] = true
-      end
-      learn_clock.token = learn_clock.token + 1
-      S.macro_learn_clock = nil
+    if learn_clock.handle then
+      S.lib.clocks.stop(learn_clock.handle)
+      learn_clock.handle, S.macro_learn_clock = nil, nil
     end
     if learning then
       learning = nil
@@ -580,18 +563,13 @@ return function(S)
     if not (is_index(m, NUM_MACROS) and is_index(k, MACRO_TARGETS)) then return false end
     M.cancel_learn()
     learning = {m = m, k = k}
-    learn_clock.token = learn_clock.token + 1
-    local token, id = learn_clock.token, nil
-    learn_clock.wake = util.time() + MACROS.learn_seconds
-    id = clock.run(function()
-      clock.sleep(MACROS.learn_seconds)
-      learn_clock.retired[id] = nil
-      if token ~= learn_clock.token then return end
-      S.macro_learn_clock = nil
+    local started = S.lib.clocks.run(function(handle)
+      if not handle.sleep(MACROS.learn_seconds) then return end
+      learn_clock.handle, S.macro_learn_clock = nil, nil
       learning = nil
       request_redraw()
     end)
-    S.macro_learn_clock = id
+    learn_clock.handle, S.macro_learn_clock = started, started.id
     request_redraw()
     return true
   end
@@ -754,19 +732,18 @@ return function(S)
   end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.macros_save, files.save_now)
 
-  -- Cleanup cancels the apply clock and every retired one (nothing waiting
-  -- is applied) and learn
+  -- Cleanup cancels the apply clock (nothing waiting is applied) and
+  -- learn's (the helper's own step, the last, cancels what it retired)
   S.register_cleanup(S.constants.CLEANUP_ORDER.macros, function()
     applying.pending = {}
     cancel_clocks()
+    S.lib.clocks.cancel(learn_clock.handle)
     M.cancel_learn()
-    for id in pairs(learn_clock.retired) do clock.cancel(id) end
-    learn_clock.retired = {}
   end)
 
   -- A macro waits exactly while the apply clock runs, and that clock is a
-  -- live coroutine; a retired clock is never S.macro_clock and is
-  -- forgotten when it ends
+  -- live coroutine; a retired clock (the helper's, which the "clocks"
+  -- invariant holds) is never S.macro_clock
   S.register_invariant("macro apply", function()
     if any_pending() ~= (S.macro_clock ~= nil) then
       return "a macro waits: " .. tostring(any_pending()) .. ", but the clock is " .. tostring(S.macro_clock)
@@ -775,26 +752,19 @@ return function(S)
     if S.macro_clock and type(thread) == "thread" and coroutine.status(thread) == "dead" then
       return "the macro clock " .. tostring(S.macro_clock) .. " has ended"
     end
-    for id in pairs(apply_clock.retired) do
-      if id == S.macro_clock then return "the macro clock " .. id .. " is retired but still the apply clock" end
-      thread = clock.threads and clock.threads[id]
-      if clock.threads and (type(thread) ~= "thread" or coroutine.status(thread) == "dead") then
-        return "the retired macro clock " .. id .. " has gone but is kept"
-      end
+    if S.macro_clock and S.lib.clocks.retired[S.macro_clock] then
+      return "the macro clock " .. S.macro_clock .. " is retired but still the apply clock"
     end
   end)
 
-  -- Learn waits exactly while its timeout clock runs; a retired one is
-  -- never S.macro_learn_clock and is forgotten when it ends
+  -- Learn waits exactly while its timeout clock runs; a retired one (the
+  -- helper's) is never S.macro_learn_clock
   S.register_invariant("macro learn", function()
     if (learning ~= nil) ~= (S.macro_learn_clock ~= nil) then
       return "learn waits: " .. tostring(learning ~= nil) .. ", but its clock is " .. tostring(S.macro_learn_clock)
     end
-    for id in pairs(learn_clock.retired) do
-      local thread = clock.threads and clock.threads[id]
-      if id == S.macro_learn_clock or (clock.threads and (type(thread) ~= "thread" or coroutine.status(thread) == "dead")) then
-        return "the retired learn clock " .. id .. " is still the learn clock or has gone but is kept"
-      end
+    if S.macro_learn_clock and S.lib.clocks.retired[S.macro_learn_clock] then
+      return "the retired learn clock " .. S.macro_learn_clock .. " is still the learn clock"
     end
   end)
 

@@ -46,7 +46,6 @@ return function(S)
     note_slot = 0,
     extra_key = "matrix",
     learn_seconds = 10,
-    learn_wake_margin = 0.1,  -- s before its wake a learn clock is still canceled (#626)
     save_delay = 0.1,
     max_text = 32,
     data_version = 2,                   -- 2: the LFOs' home routings (the groundwork before 3.8)
@@ -700,25 +699,19 @@ return function(S)
   ---------------------------------------------------------------------------
 
   local learning = nil  -- {k} while learn waits for a touch
-  -- Learn ending never cancels its timeout clock once norns may have posted
-  -- its resume (#626: norns delivers every resume it posted, and
-  -- clock.resume raises for a coroutine it no longer has): within
-  -- learn_wake_margin of its wake (at wake) the clock is retired, its token
-  -- goes old and at its wake it ends, touching nothing a newer learn armed
-  -- (retired[id] until then, which cleanup cancels); earlier it is
-  -- canceled, so a burst of learns never fills matron's 100 clock slots
-  -- with 10 s sleeps
-  local learn_clock = {token = 0, retired = {}, wake = -math.huge}
+  -- Learn's timeout clock's handle (S.lib.clocks, #870;
+  -- S.matrix_learn_clock is its id while learn waits): learn ending stops
+  -- it through the helper, which retires it near its wake (#626: norns
+  -- delivers every resume it posted, and clock.resume raises for a
+  -- coroutine it no longer has; at its wake it ends, touching nothing a
+  -- newer learn armed) and cancels it earlier, so a burst of learns never
+  -- fills matron's 100 clock slots with 10 s sleeps
+  local learn_clock = {handle = nil}
 
   function M.cancel_learn()
-    if S.matrix_learn_clock then
-      if util.time() < learn_clock.wake - MATRIX.learn_wake_margin then
-        clock.cancel(S.matrix_learn_clock)  -- its resume cannot be posted yet
-      else
-        learn_clock.retired[S.matrix_learn_clock] = true
-      end
-      learn_clock.token = learn_clock.token + 1
-      S.matrix_learn_clock = nil
+    if learn_clock.handle then
+      S.lib.clocks.stop(learn_clock.handle)
+      learn_clock.handle, S.matrix_learn_clock = nil, nil
     end
     if learning then
       learning = nil
@@ -734,18 +727,13 @@ return function(S)
     if not is_index(k) then return false end
     M.cancel_learn()
     learning = {k = k}
-    learn_clock.token = learn_clock.token + 1
-    local token, id = learn_clock.token, nil
-    learn_clock.wake = util.time() + MATRIX.learn_seconds
-    id = clock.run(function()
-      clock.sleep(MATRIX.learn_seconds)
-      learn_clock.retired[id] = nil
-      if token ~= learn_clock.token then return end
-      S.matrix_learn_clock = nil
+    local started = S.lib.clocks.run(function(handle)
+      if not handle.sleep(MATRIX.learn_seconds) then return end
+      learn_clock.handle, S.matrix_learn_clock = nil, nil
       learning = nil
       request_redraw()
     end)
-    S.matrix_learn_clock = id
+    learn_clock.handle, S.matrix_learn_clock = started, started.id
     request_redraw()
     return true
   end
@@ -865,26 +853,22 @@ return function(S)
   -- nothing: norns has freed the engine by then (#461), and the LFOs' step
   -- gives their direct destinations back
   S.register_cleanup(S.constants.CLEANUP_ORDER.matrix, function()
+    S.lib.clocks.cancel(learn_clock.handle)  -- the helper's own step cancels what it retired
     M.cancel_learn()
-    for id in pairs(learn_clock.retired) do clock.cancel(id) end
-    learn_clock.retired = {}
     for id in pairs(held.lua) do S.lib.engine_sync.set_extra_offset(MATRIX.extra_key, id, nil) end
     for _, part in ipairs({"lua", "fast", "fast_want", "fast_extras"}) do
       held[part] = {}
     end
   end)
 
-  -- Learn waits exactly while its timeout clock runs; a retired one is
-  -- never S.matrix_learn_clock and is forgotten when it ends
+  -- Learn waits exactly while its timeout clock runs; a retired one (the
+  -- helper's) is never S.matrix_learn_clock
   S.register_invariant("matrix learn", function()
     if (learning ~= nil) ~= (S.matrix_learn_clock ~= nil) then
       return "learn waits: " .. tostring(learning ~= nil) .. ", but its clock is " .. tostring(S.matrix_learn_clock)
     end
-    for id in pairs(learn_clock.retired) do
-      local thread = clock.threads and clock.threads[id]
-      if id == S.matrix_learn_clock or (clock.threads and (type(thread) ~= "thread" or coroutine.status(thread) == "dead")) then
-        return "the retired learn clock " .. id .. " is still the learn clock or has gone but is kept"
-      end
+    if S.matrix_learn_clock and S.lib.clocks.retired[S.matrix_learn_clock] then
+      return "the retired learn clock " .. S.matrix_learn_clock .. " is still the learn clock"
     end
   end)
 
