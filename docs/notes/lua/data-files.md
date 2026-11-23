@@ -21,31 +21,7 @@
 - **Two facts:** a side file's `live.loaded` is false both before the start step read it and after a read that could neither use the file nor set it aside; either way nothing writes it, which is what the field guards, so the two are never told apart.
 - **Test:** `test/unit/side_files_test.lua`: "side files: a live file that can be neither used nor set aside is never written over (#590)".
 
-The six states every live file goes through (3.9, #948): unread before its start step, then what the read found (ok, missing, set aside as `<file>.bak`, or unusable in place: it could be neither used nor set aside), then closed once the cleanup step wrote it. The rules differ by file (the second table, a row a file and a column a state); converging them is a design decision, not this table's. No test reads either table: each module's tests cover its own file.
-
-| State | Event | Next | Effect |
-|---|---|---|---|
-| unread | the start step finds a usable file | ok | its data loaded |
-| unread | the start step finds no file | missing | the defaults |
-| unread | the start step finds an unusable file it sets aside | set aside | one console line naming the backup; the defaults |
-| unread | the start step finds an unusable file it cannot set aside | unusable in place | one console line; the defaults; the file's writes are its row's below |
-| ok, missing or set aside | a change the file holds | ok | written (at once, or once a burst ends: its row) |
-| unusable in place | a change the file holds | unusable in place or ok | its row: never written, or written over |
-| ok, missing, set aside or unusable in place | the cleanup step | closed | written once more, where its row says so |
-
-The files' states, a row a file (the live files in data/strata/; a PSET's side files are always written, and a factory set's files are read only, never set aside: `read_only`, below):
-
-| File | unread | ok | missing | set aside | unusable in place | closed |
-|---|---|---|---|---|---|---|
-| `scenes.data` | `S.scenes_loaded` false: neither a scene save's write nor cleanup writes it (#72) | written at each scene save and by cleanup step 30 | as ok: the first save writes it | as ok; SETUP keeps its "kept as" row (`S.scene_file.backup`) | `S.scene_autosave_blocked`: a scene save and cleanup skip it (the scenes are unsaved); an explicit save (SETUP, PARAMS' `save_scenes`) writes over it and lifts the block | cleanup's write; nothing marks it closed |
-| `buffers.data` | `S.buffers_loaded` false: no write | written 0.1 s after a change of the slots' paths or starts, and by cleanup | as ok | as ok; SETUP's row | `S.buffer_autosave_blocked`: never written this session | cleanup's write, its timed write canceled first; nothing marks it closed |
-| `macros.data`, `matrix.data`, `gestures.data`, `sequences.data` | `live.loaded` false: no write | written `save_delay` after a change (0.1 s; the sequences 0.5 s), one write a burst, and by its cleanup step (`save_now`) | as ok | as ok | `live.loaded` false: never written this session, with one console line | `live.closed`: no timed write starts after cleanup's write |
-| `samples.data` | `store.started` false: no write | written 0.1 s after a record changes, and by cleanup | as ok | as ok | `store.blocked`: never written this session | cleanup's write; nothing marks it closed |
-| `voices.data` | `store.started` false: a save is refused | written at each preset save and clear; a file read with damaged presets is set aside before the first write drops them (#848) | as ok | as ok | `store.blocked`: every save refused this session | no cleanup write |
-| `io.data` | `started` false: cleanup writes nothing (a set still writes) | written before each set takes effect, and by cleanup | as ok | as ok | the next set, or cleanup, writes over it | cleanup's write |
-| `grids.data` | read at the grid's start step | written before each rotation set takes effect | as ok | as ok | the next rotation set writes over it | no cleanup write |
-| `notes.data` | read at the start step `notes_load` | written before each pool set takes effect | as ok | as ok | the next pool set writes over it | no cleanup write |
-| `factory.data` | read only when the script's folder holds an index (no 3.8 start does) | written at a first run's start (`pending`) and at a whole load's end | written at the start step (`loaded = {}`, or a first run's `pending`) | the start step writes `loaded = {}` (a damaged marker loads no set) | the start step writes over it (`loaded = {}`) | no cleanup write |
+Six states every live file goes through (3.9, #948): unread, before its start step reads it; then what the read found, ok (its data loaded), missing (the defaults), set aside (unusable, renamed to `<file>.bak` with one console line, the defaults) or unusable in place (unusable and not renamed: one console line, the defaults); then closed, once the cleanup step has written it. From ok, missing or set aside a change the file holds writes it (ok); from unusable in place the file's own rule decides whether anything writes it in the session. No table: the rules differ by file and no test runs them (converging them is a design decision); each file's states are in Each file's states, below, a row a file and a column a state.
 
 ## lib/data_files.lua (`S.lib.data_files`)
 
@@ -77,6 +53,22 @@ Cost: `encode` gives the same bytes as #301's prototype but without its cache of
 Cost: decoding a scenes file of eight full scenes (about 97 KB) takes about 6 ms on a desktop with Lua 5.3, against about 1 ms for `tab.load` (a device is several times slower), once at start and once per `load scenes`. The largest file 3.4 writes (7394 tables, 1.02 MB; built as `matrix_test.lua` builds it) reads in 84-86 ms on Lua 5.3 and 28-34 ms on LuaJIT (`read`, CPU time, 14 runs each on a desktop, 3.4's review). Measured with the collector stopped, at `max_tables` 32768: 4 MB texts of empty tables, of one-entry tables or of one-reference tables give up at table 32769. They allocate 2.25, 2.75 and 2.75 MB on Lua 5.3 (72 to 88 bytes a table) in 30, 56 and 67 ms, and 2.26, 3.01 and 3.02 MB on LuaJIT in 8, 17 and 23 ms, so a hostile text costs less than the largest real file. A 4 MB string of `\0` escapes allocates about 6 MB (9 MB on LuaJIT).
 
 Tests: `test/unit/data_files_test.lua` (the writer: `encode`'s layout against a literal and the same bytes for keys set in two orders, read back by the stub's `tab.load` and `decode`; `write`'s `"unchanged"` opening nothing, a write, flush or close that fails leaving the file byte for byte and no `.part`, a rename and a folder that fail; `set_aside` never replacing a backup and refusing when all nine names are taken. The reader: eleven texts that are code, a loop, a value built by a call, a missing reference, a truncated file, trailing code, an empty text and a binary chunk header, through `decode` and `read`, with nothing run; the round trip against the stub's `tab.save` and `tab.load`, and the `\n` and `\r` escapes by hand; `max_tables`, its margin over `largest_scenes_tables`, and the heap a hostile 4 MB text costs; `read`'s outcomes and `max_bytes`; a scenes and a buffers file holding code at start). `test/unit/structure_test.lua` checks that nothing in the script uses `tab.load`, `tab.save` or a chunk loader, and observes `write` in the cleanup steps and `read` in the start steps. The callers' tests are in `scenes_test.lua`, `buffers_test.lua` and `pages_setup_test.lua`.
+
+### Each file's states
+
+The states of the Machines entry `data files` (above), by file. A row a file (the live files in data/strata/; a PSET's side files are always written, and a factory set's files are read only, never set aside: `read_only`, below):
+
+| File | unread | ok | missing | set aside | unusable in place | closed |
+|---|---|---|---|---|---|---|
+| `scenes.data` | `S.scenes_loaded` false: neither a scene save's write nor cleanup writes it (#72) | written at each scene save and by cleanup step 30 | as ok: the first save writes it | as ok; SETUP keeps its "kept as" row (`S.scene_file.backup`) | `S.scene_autosave_blocked`: a scene save and cleanup skip it (the scenes are unsaved); an explicit save (SETUP, PARAMS' `save_scenes`) writes over it and lifts the block | cleanup's write; nothing marks it closed |
+| `buffers.data` | `S.buffers_loaded` false: no write | written 0.1 s after a change of the slots' paths or starts, and by cleanup | as ok | as ok; SETUP's row | `S.buffer_autosave_blocked`: never written this session | cleanup's write, its timed write canceled first; nothing marks it closed |
+| `macros.data`, `matrix.data`, `gestures.data`, `sequences.data` | `live.loaded` false: no write | written `save_delay` after a change (0.1 s; the sequences 0.5 s), one write a burst, and by its cleanup step (`save_now`) | as ok | as ok | `live.loaded` false: never written this session, with one console line | `live.closed`: no timed write starts after cleanup's write |
+| `samples.data` | `store.started` false: no write | written 0.1 s after a record changes, and by cleanup | as ok | as ok | `store.blocked`: never written this session | cleanup's write; nothing marks it closed |
+| `voices.data` | `store.started` false: a save is refused | written at each preset save and clear; a file read with damaged presets is set aside before the first write drops them (#848) | as ok | as ok | `store.blocked`: every save refused this session | no cleanup write |
+| `io.data` | `started` false: cleanup writes nothing (a set still writes) | written before each set takes effect, and by cleanup | as ok | as ok | the next set, or cleanup, writes over it | cleanup's write |
+| `grids.data` | read at the grid's start step | written before each rotation set takes effect | as ok | as ok | the next rotation set writes over it | no cleanup write |
+| `notes.data` | read at the start step `notes_load` | written before each pool set takes effect | as ok | as ok | the next pool set writes over it | no cleanup write |
+| `factory.data` | read only when the script's folder holds an index (no 3.8 start does) | written at a first run's start (`pending`) and at a whole load's end | written at the start step (`loaded = {}`, or a first run's `pending`) | the start step writes `loaded = {}` (a damaged marker loads no set) | the start step writes over it (`loaded = {}`) | no cleanup write |
 
 ## Side files: lib/side_files.lua (`S.lib.side_files`)
 

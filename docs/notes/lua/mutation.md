@@ -27,27 +27,7 @@
 - **Invariant:** none: no invariant is registered for it (the audit, `docs/design/3.9-state-machines-facts/lua-scenes.md` section 12, found no transition fault); the held undo and its clock are set and cleared together by `hold_undo` and `clear_undo`, except at cleanup, which cancels the clock and leaves `S.undo` as the script ends.
 - **Test:** `test/unit/mutation_test.lua`: "a randomize of another voice, a recall or a mutation of the voice clears the undo".
 
-The four states (3.9, #948), a table with no test yet: the examples of `mutation_test.lua` cover its rows (Randomize and its undo, below). Held draws is a draws spec's `values` and `ids`; held pattern a pattern spec's `pattern`; held voice capture a voice preset's load or copy (`hold_voice`, its `capture`). A held state lasts `UNDO_SECONDS` (5 s).
-
-| State | Event | Next | Effect |
-|---|---|---|---|
-| none | a randomize of draws | held draws | the old values held before the first set; the clock started |
-| none | a randomize of a locked voice, or of no draws | none | it returns false and changes nothing |
-| none | a pattern randomize | held pattern | the voice's old steps held |
-| none | a voice preset's load or copy | held voice capture | the voice's sound from before it held |
-| none | undo | none | it returns false |
-| held draws, held pattern or held voice capture | a randomize of draws, a pattern randomize or a preset's load | held draws, held pattern or held voice capture | the earlier undo ends first; the new one replaces it |
-| held draws, held pattern or held voice capture | a randomize of a locked voice, or of no draws | unchanged | the earlier undo stays |
-| held draws | undo | none | every held value put back, in the order the randomize set them |
-| held pattern | undo | none | the old steps put back through `replace_pattern` |
-| held voice capture | undo | none | the capture's type and values applied through `apply_voice`, the preset row's name put back (#869) |
-| held draws or held voice capture | an edit of a held param | none | `note_param_edit` ends it (never the drift's or the undo's own writes) |
-| held draws or held voice capture | an edit of another param | unchanged | nothing |
-| held pattern | an edit of that voice's pattern | none | `note_pattern_edit` ends it |
-| held draws, held pattern or held voice capture | a mutation step that changes a param of the undo's voice | none | `set_mutated_param` ends it |
-| held draws, held pattern or held voice capture | the window ends (the clock's wake) | none | the undo cleared and the redraw asked for: the ALT hint goes back |
-| held draws, held pattern or held voice capture | a scene recall (an instant one, a fade's start or its landing) | none | `clear_undo` |
-| any | cleanup step 85 | unchanged | the clock canceled at once; `S.undo` is left, the script ending |
+Four states (3.9, #948): none; held draws (a draws spec's `values` and `ids`); held pattern (a pattern spec's `pattern`); held voice capture (a voice preset's load or copy, `hold_voice`'s `capture`). No table: every event leads from any state to the same few ends, which Randomize and its undo (below) lists as rules: a randomize, a pattern randomize or a preset's load replaces whatever is held with its own (a randomize that changes nothing, of a locked voice or of no draws, leaves the earlier undo); an undo within `UNDO_SECONDS` puts back what is held and leaves none; an edit of a held param, a pattern edit of the held voice, a mutation step that changes a param of the undo's voice, the window's end and a scene recall each leave none.
 
 ## Owns
 
