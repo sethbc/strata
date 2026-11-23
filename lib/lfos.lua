@@ -603,7 +603,11 @@ return function(S)
   -- waited for the next window is never an older one) and send nothing once
   -- its node has gone. The round robin's sends, made once per LFO, hand the
   -- key to S.lib.engine_sync.send_engine_value inside deferrable: counted,
-  -- and past the budget waiting for the next window
+  -- and past the budget waiting for the next window. The value each hands
+  -- on (the depth / 100, the phase) is read by nothing (#928): the senders
+  -- read the LFO when they deliver. It is there for the budget, which keeps
+  -- a waiting send as its key's value (nil would be no send waiting) and
+  -- records a delivered one in S.engine_param_values
   local function sync_key(n) return "lfo" .. n .. " sync" end
   local function has_node(n) return engine_playing(n) and state[n].engine ~= nil end
   local engine_sends, sync_sends = {}, {}
@@ -632,14 +636,15 @@ return function(S)
 
   -- Bring the engine to LFO n's settings: a start, a stop, a new voice,
   -- destination or shape, a hand edit (edited) or a clocked LFO's new tempo
-  -- at once, outside the round robin (at most one send per LFO a step); an
-  -- edit by a deferrable source (deferred: a macro, morph, gesture playback,
-  -- a fade), a modulated rate past engine_rate_threshold, a depth past
-  -- send_threshold and an offset that moved (a silent read sets it without
-  -- its action, #634) through the round robin and the send budget; then the
-  -- sync a start, a restart, a shape or phase change or a bar asked for, at
-  -- once, or through the round robin for a phase param that moved without a
-  -- hand edit (a deferrable source's, a silent read's)
+  -- at once, outside the round robin (at most one send per LFO a step; a
+  -- scene fade's step is a hand edit here: it sets its params outside
+  -- deferrable, #875); an edit by a deferrable source (deferred: a macro,
+  -- morph, gesture playback), a modulated rate past engine_rate_threshold,
+  -- a depth past send_threshold and an offset that moved (a silent read
+  -- sets it without its action, #634) through the round robin and the send
+  -- budget; then the sync a start, a restart, a shape or phase change or a
+  -- bar asked for, at once, or through the round robin for a phase param
+  -- that moved without a hand edit (a deferrable source's, a silent read's)
   local function reconcile_engine(n)
     local st = state[n]
     if not engine_playing(n) then
@@ -873,10 +878,11 @@ return function(S)
 
   -- A control param's edit (rate, depth, offset, phase, mod amounts): the
   -- next step sends it (a control param's action never calls the engine),
-  -- at once for a hand edit; an edit made while S.deferrable_write is set
-  -- (a macro apply, morph, gesture playback, a fade) through the round robin
-  -- and the send budget (#633), a phase edit as a sync alone (its param
-  -- moved from phase_seen: reconcile_engine)
+  -- at once for a hand edit (and a scene fade's step, which sets its params
+  -- outside deferrable, #875); an edit made while S.deferrable_write is set
+  -- (a macro apply, morph, gesture playback) through the round robin and
+  -- the send budget (#633), a phase edit as a sync alone (its param moved
+  -- from phase_seen: reconcile_engine)
   local function edited(n, sync)
     local st = state[n]
     if S.deferrable_write then

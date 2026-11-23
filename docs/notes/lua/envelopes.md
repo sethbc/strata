@@ -9,6 +9,47 @@
 - **`shape` is the engine's shape**: `\strataEnvelope`'s segments (attack from the level at the hit to 1, decay to the sustain, the hold, release to 0, each `from + (to - from) × (1 - exp(curve × t / T)) / (1 - exp(curve))`, a line at curve 0), with sustain 0 holding and releasing in no time, and a loop that starts again from 0 with the same hold. A change to the def's shape changes this function in the same change.
 - **The six params are scene fields that default to the engine def's values** (`docs/notes/engine/envelopes.md`, `\strataEnvelope`'s arguments): a scene saved before them loads every envelope as 3.7 starts. They are never VOICE rows, faders, a randomize's or a mutation's (`fader = false`, no `voice_rows`, no `randomize`: plan ruling 35).
 
+## Machines
+
+### envelope model
+- **State:** per voice, the local `hits[v]` (nil before its first hit, else `{time, from, hold}`) and `looping[v]` (the loop as its action last set it); the settings are read from `S.voices[v].values` at each use (`settings`). The state is `no hit`, `running` (loop on, or less time since the hit than the run: attack, decay and, with a sustain above 0, the hold and the release) or `ended`, derived when read; `S.lib.envelopes.value(v)` is the level.
+- **Invariant:** none: every pair of a hit and the loop flag is legal, and the level is computed from them when read.
+- **Test:** `test/unit/envelopes_test.lua`: "sustain 0 is attack and decay; a new hit starts from the level it is at; loop starts again", "turning loop off finishes the cycle it is in, as the engine does".
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `no hit` | a hit (`voice_hit`) | `running` | from 0, with the hit's hold |
+| `running` | a hit | `running` | a new run from the level it is at, as `EnvGen` does |
+| `ended` | a hit | `running` | a new run from 0 |
+| `running` | its run's end, the loop off | `ended` | the level 0 |
+| `running` | its cycle's end, the loop on | `running` | again from 0, with the same hold |
+| `no hit` | the loop turned on | `running` | a hit recorded now, from 0, with no hold, as the engine's node starts at once |
+| `ended` | the loop turned on | `running` | the same |
+| `running` | the loop turned on | `running` | it runs on, then loops |
+| `running` | the loop turned off, in its first cycle | `running` | the hit runs on |
+| `running` | the loop turned off, in a later cycle | `running` | the hit moved to the cycle's start (from 0, the same hold), so the cycle finishes as the engine's does |
+| `no hit` | the loop turned off | `no hit` | nothing |
+| `ended` | the loop turned off | `ended` | nothing (it was off) |
+| `running` | a time, the sustain or the curve changed | `running` or `ended` | the level follows the new settings at once (read when used) |
+| `ended` | a time or the sustain changed | `ended`, or `running` when the new run outlasts the time since the hit | the level follows the new settings at once (read when used) |
+| any | a silent PSET read | as the read's settings give | the `voice_params` hook sets each changed envelope param with its action (above) |
+
+### envelope route
+- **State:** per route k, the send budget's record under `env route <k>` (`S.lib.engine_sync.expected_value`): nil (never sent), a settings table (the engine has or will have the node so), or `false` (a stop was handed on). The module keeps no record of its own; what the route should carry is `route_want(k)`, a pure read of the routing and its source voice's settings, and `S.lib.envelopes.owns(k)` says whether it is the engine's.
+- **Invariant:** none: the record is what was handed on, and the step's compare brings it to the routing.
+- **Two facts:** nil and `false` both mean "no node": nil that nothing was ever sent, `false` that a stop was.
+- **Test:** `test/unit/envelopes_test.lua`: "a routing from an envelope to a fast destination is the engine's", "turning the routing off, to a Lua destination or to another source stops its route", "with no envelope routed nothing is sent".
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `nil` | a step, the routing owned | `settings` | marked due; the round robin's send hands a copy to the budget, whose sender sends `setFastEnv` |
+| `nil` | a step, not owned | `nil` | nothing |
+| `settings` | a step, owned with other settings (a param of the source voice, the depth, the destination, the source voice) | `settings` | marked due; `setFastEnv` again (the engine moves the node) |
+| `settings` | a step, owned with the same settings | `settings` | nothing |
+| `settings` | a step, no longer owned | `false` | marked due; `stopFastEnv` once |
+| `false` | a step, owned again | `settings` | marked due; `setFastEnv` |
+| `false` | a step, not owned | `false` | nothing |
+
 ## Owns
 
 `lib/envelopes.lua` (`S.lib.envelopes`, 3.7 package 2f, design §7, decision 4), included after `lib/random_sequences.lua` and before `lib/matrix.lua`:
@@ -27,7 +68,7 @@ The hook keeps, per voice, the last hit: `util.time()`, the level `value` had at
 
 The matrix reads `value` through the source (`S.lib.mod_sources.normalized`, unipolar) at each 48 Hz step for a Lua destination: exact for slow envelopes, coarse under about 50 ms (a step is about 21 ms, and the Lua path lags the value it sends). The model and the engine differ where `docs/notes/engine/envelopes.md` (Hits) says: a start its retrigger follows is one hit here and two there, chord notes are hits only there, and a start Lua rolls back fires the engine's routes only.
 
-The loop's changes (the `env_loop` action, kept per voice in `looping`; a set to the value it has changes nothing): turning it on with no hit, or once the last hit's envelope has ended, records a hit with no hold from 0, so the model runs from then, as the engine's node starts at once; a running envelope runs on and then loops. Turning it off mid-loop moves the hit to the start of the cycle it is in (from 0, the same hold), so the model finishes that cycle as the engine's `EnvGen` does; in the first cycle the hit runs on as it is. The action writes `env_loop`'s stored value (`S.voices[v].values`, which `add_voice_param`'s action sets) and `looping` together, and the model and the node read the same stored flag (`settings`). A silent PSET read (`params:read(n, true)`, which `docs/notes/lua/lfos.md` and `docs/notes/lua/scatter.md` handle; norns' PSET menu reads with actions) runs no action: the stored value, `looping` and the routes keep what the last action set, so the model and the node still agree with each other, and they follow the param again at its next set with its action (#875).
+The loop's changes (the `env_loop` action, kept per voice in `looping`; a set to the value it has changes nothing): turning it on with no hit, or once the last hit's envelope has ended, records a hit with no hold from 0, so the model runs from then, as the engine's node starts at once; a running envelope runs on and then loops. Turning it off mid-loop moves the hit to the start of the cycle it is in (from 0, the same hold), so the model finishes that cycle as the engine's `EnvGen` does; in the first cycle the hit runs on as it is. The action writes `env_loop`'s stored value (`S.voices[v].values`, which `add_voice_param`'s action sets) and `looping` together, and the model and the node read the same stored flag (`settings`). A silent PSET read (`params:read(n, true)`, a script's or a mod's; norns' PSET menu reads with actions) runs no action as it reads; then the `voice_params` hook, the last PSET hook (#951, `docs/notes/lua/params.md`), sets each envelope param whose stored value is not the read's with its action, as a read with actions would: the stored value, `looping` and the routes follow the file, so the model and the node agree (#875).
 
 ## The routes
 

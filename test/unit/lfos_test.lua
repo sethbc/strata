@@ -579,9 +579,10 @@ test("a tempo change resends every clocked engine LFO's rate in its step, ahead 
   end
 end)
 
--- #633: a deferrable source (a macro, morph, gesture playback, a fade)
--- moving an engine LFO's control params sends through the round robin and
--- the send budget; a hand edit still goes at the next step, uncapped
+-- #633: a deferrable source (a macro, morph, gesture playback) moving an
+-- engine LFO's control params sends through the round robin and the send
+-- budget; a hand edit still goes at the next step, uncapped, and so does a
+-- scene fade's step, which sets its params outside deferrable (#875)
 test("engine LFOs a macro moves at 30 Hz stay inside the round robin's 12 a step and the budget's count (#633)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
@@ -1909,6 +1910,50 @@ test("the LFO scene fields: per LFO in recall order, the state last, with the ra
     broken.data[id] = bad
     assert_true(not validate_scene(broken), id .. " = " .. bad .. " is refused")
   end
+end)
+
+-- #928: the step's hooks run in the order they were registered (the
+-- include order in strata.lua, then the start steps'), and four relations
+-- of that order matter: the macros', the envelopes' and the random
+-- sequences' hooks hand the matrix what it sums in the same step, and the
+-- notes flush sends in the same step what every hook before it marked
+-- (lib/expression.lua's among them). The list is read from the module
+-- (on_step's upvalue), each hook named by the file that defined it
+test("the step hooks run macros, envelopes and random sequences before the matrix, and the notes flush last", function()
+  load_strata()
+  local S = local_value("S")
+  local hooks
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(S.lib.lfos.on_step, index)
+    if name == nil then break end
+    if name == "step_hooks" then hooks = value end
+  end
+  assert_true(type(hooks) == "table" and #hooks > 0, "on_step keeps its hooks in step_hooks")
+  local files, position = {}, {}
+  for index, fn in ipairs(hooks) do
+    local file = debug.getinfo(fn, "S").source:match("(lib/.+%.lua)$") or "?"
+    files[index] = file
+    assert_true(position[file] == nil, file .. " registers one step hook, saw two (" .. tostring(position[file]) .. ", "
+      .. index .. ")")
+    position[file] = index
+  end
+  local order = table.concat(files, ", ")
+  for _, file in ipairs({ "lib/macros.lua", "lib/envelopes.lua", "lib/random_sequences.lua", "lib/matrix.lua",
+    "lib/expression.lua", "lib/notes.lua", "lib/arp.lua" }) do
+    assert_true(position[file] ~= nil, file .. " has a step hook: " .. order)
+  end
+  for _, file in ipairs({ "lib/macros.lua", "lib/envelopes.lua", "lib/random_sequences.lua" }) do
+    assert_true(position[file] < position["lib/matrix.lua"], file .. "'s hook runs before the matrix's: " .. order)
+  end
+  -- the flush is last but for the arp's shuffle, which joins from a later
+  -- start step (START_ORDER.arp after notes_load) and sends the arp's
+  -- lists, never a note's expression
+  for index, file in ipairs(files) do
+    if file ~= "lib/notes.lua" and file ~= "lib/arp.lua" then
+      assert_true(index < position["lib/notes.lua"], file .. "'s hook runs before the notes flush: " .. order)
+    end
+  end
+  assert_equal(position["lib/arp.lua"], #files, "the arp's shuffle is the one hook after the flush: " .. order)
 end)
 
 test("the LFO clock invariant holds from the start step to cleanup", function()
