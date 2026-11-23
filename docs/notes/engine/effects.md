@@ -19,7 +19,7 @@
 - **One audio-rate `LocalIn` a SynthDef** (SuperCollider's `LocalIn` help: a def holds at most one): a def's feedback paths (the delay's two lines, the FDN's eight and its shimmer loop's two, FreeVerb2's shimmer loop) widen its one `LocalIn`/`LocalOut` pair, never add a second (#777).
 - **Shimmer 0 is each effect without it, bit for bit** (3.8's shimmer, `docs/notes/engine/shimmer.md`): the delay's feedback blend adds an exact 0 and each reverb's loop is an exact 0 into its input; `shimmer` and `shimmerRatio` are kept with each effect's other controls, through a bypass.
 - **Ping-pong at 0 is 3.6's graph, exactly** (3.7): `pingPong` (default 0, `pingPong.clip(0, 1).lag(0.05)`) only crossfades the two existing lines' inputs: no new line. `setDelay`'s four values are kept together, so a lift re-creates the node with the kept `pingPong`.
-- **The freeze and the clear** (3.8) are `\strataDelay`'s `frozen` and `t_clear` (`setDelayFreeze`, `clearDelay`): `frozen` is kept with `setDelay`'s four and passed by `startDelay`, `t_clear` never; a freeze never goes through `setDelay`'s feedback, and a clear never zeroes the line. `docs/notes/engine/delay.md`.
+- **The freeze and the clear** (3.8) are `\strataDelay`'s `frozen` and `t_clear` (`setDelayFreeze`, `clearDelay`): `frozen` is kept with `setDelay`'s four and passed by `startDelay`, but a bypass's free sets the kept value to 0 with the line it empties and a freeze sent while no node runs keeps 0, so a lift never starts a frozen node (#889); `t_clear` is never kept; a freeze never goes through `setDelay`'s feedback, and a clear never zeroes the line. `docs/notes/engine/delay.md`.
 
 ## The mix area
 

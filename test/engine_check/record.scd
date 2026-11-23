@@ -66,6 +66,18 @@ var slotEvents = { arg slot, start;
 };
 // The events from the slot's first 'canceled' on (empty if none)
 var fromCanceled = { arg events; events.indexOf('canceled') !? { arg at; events.drop(at) } ? [] };
+// true when a slot's events (slotEvents) end a take kept through a bad load
+// (#890): a 'loadFailed', then 'ended', the last length between them the
+// slot's seconds now (its frames, the take's: the later bufferState that
+// settles Lua on the take), and nothing canceled
+var endsAfterFailure = { arg events, slot;
+    var failed = events.detectIndex({ arg event; event.asString.beginsWith("loadFailed") });
+    var after = if (failed.notNil) { events.drop(failed + 1) } { [] };
+    var ended = after.indexOf('ended');
+    var lengths = if (ended.notNil) { after.keep(ended).select({ arg event; event.asString.beginsWith("length") }) } { [] };
+    ended.notNil and: { lengths.notEmpty } and: { lengths.last == ("length " ++ engine.bufferStateSeconds(slot)).asSymbol }
+        and: { events.includes('canceled').not }
+};
 // A peaks file's frames line, or nil when there is no file
 var peaksFileFrames = { arg path;
     var frames;
@@ -832,6 +844,9 @@ test.("record: a bad load, a clear and a new recording while a one-shot take is 
         and: { results[0][\events].includes('canceled').not },
         "record: a bad load, a clear and a new recording while a one-shot take is ending: the take completes and reports ended (all ending %: %)".format(
             ending, results.collect({ arg each; [each[\event], each[\reports], each[\frames], each[\events]] })));
+    check.(ending and: { results[0][\frames] == frames } and: { endsAfterFailure.(results[0][\events], 5) },
+        "record: a bad load while a one-shot take is ending leaves the take whole: after the failure its length, then ended, and the slot holds its % frames (% frames, reports %)".format(
+            frames, results[0][\frames], results[0][\events]));
     slots.do({ arg slot; h.command(\clearBuffer, slot) });
     server.sync;
 });
@@ -857,8 +872,8 @@ test.("record: a bad load while a stopped take awaits its frame count: the take 
     responder.free;
     events = slotEvents.(5, start);
     check.((phase == [true, true, true]) and: { reportsFor.(5).select({ arg report; report[1] == number }).last == [5, number, 2] }
-        and: { events.includes('canceled').not } and: { engine.bufferFrames[5] > 0 },
-        "record: a bad load while a stopped take awaits its frame count: the take completes and reports ended (synth freed, count awaited, take kept: %; % frames; reports %)".format(
+        and: { events.includes('canceled').not } and: { engine.bufferFrames[5] > 0 } and: { endsAfterFailure.(events, 5) },
+        "record: a bad load while a stopped take awaits its frame count: the take completes and reports ended, its length after the failure and the slot's frames its own (synth freed, count awaited, take kept: %; % frames; reports %)".format(
             phase, engine.bufferFrames[5], events));
     reset.(5);
 });

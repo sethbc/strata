@@ -313,9 +313,13 @@
                 decodes = this.fileDecodes(file, frames, true, peaks, { load > this.loadsSuperseded(index) });
                 this.loadCheckFaultHook.value(index, load);
             } { arg error;
-                // (never posted with the word the engine check fails on: the check injects this)
+                // the error's class and what it says (never its errorString,
+                // which begins with the word the engine check fails on: the
+                // check injects this); a thrown object that is no Exception
+                // has no what
                 failed = true;
-                damaged = "sound file " ++ path ++ " could not be checked (" ++ error.class.name ++ ")";
+                damaged = "sound file % could not be checked (%: %)".format(path, error.class.name,
+                    error.tryPerform(\what) ? "no message");
             };
             try { file.close };
             if (load > this.loadsSuperseded(index)) {
