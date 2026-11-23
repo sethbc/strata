@@ -396,41 +396,22 @@ test("both layouts are committed", function()
 end)
 
 
--- A registered invariant's function, and an upvalue of it (the module's
--- own locals, which the tests below break on purpose)
-local function invariant_fn(S, name)
-  for _, record in ipairs(S.registry.invariants) do
-    if record.name == name then return record.fn end
-  end
-  error("no invariant " .. name)
-end
-
-local function upvalue_index(fn, wanted)
-  for index = 1, math.huge do
-    local name = debug.getupvalue(fn, index)
-    if name == nil then break end
-    if name == wanted then return index end
-  end
-  error("no upvalue " .. wanted)
-end
-
-local function upvalue(fn, wanted) return select(2, debug.getupvalue(fn, upvalue_index(fn, wanted))) end
-
 -- The invariant `osc` (#935): the feedback clock runs exactly while
--- feedback is on and a sender is known
+-- feedback is on and a sender is known. The test that breaks it reaches
+-- the module's state through h.registered_invariant
 test("the osc invariant holds as feedback and the sender come and go", function()
   local context, S = started()
-  local fn = invariant_fn(S, "osc")
-  assert_equal(fn(), nil, "no feedback, no clock")
+  local invariant = h.registered_invariant("osc")
+  assert_equal(invariant.check(), nil, "no feedback, no clock")
   S.lib.io_rig.set("osc_feedback", "on")
-  assert_equal(fn(), nil, "feedback on, no sender: no clock")
+  assert_equal(invariant.check(), nil, "feedback on, no sender: no clock")
   context.osc.receive("/strata/hello", {}, SENDER)
-  assert_equal(fn(), nil, "a sender: the clock runs")
+  assert_equal(invariant.check(), nil, "a sender: the clock runs")
   S.lib.io_rig.set("osc_feedback", "off")
-  assert_equal(fn(), nil, "feedback off: the clock stopped")
+  assert_equal(invariant.check(), nil, "feedback off: the clock stopped")
   S.lib.io_rig.set("osc_feedback", "on")
   cleanup()
-  assert_equal(fn(), nil, "after cleanup: no sender, no clock")
+  assert_equal(invariant.check(), nil, "after cleanup: no sender, no clock")
 end)
 
 test("the osc invariant names a clock that runs without a sender, and a sender with no clock", function()
@@ -438,16 +419,16 @@ test("the osc invariant names a clock that runs without a sender, and a sender w
   S.lib.io_rig.set("osc_feedback", "on")
   context.osc.receive("/strata/hello", {}, SENDER)
   h.allow_broken_invariants("the test breaks the osc invariant on purpose")
-  local fn = invariant_fn(S, "osc")
-  local state = upvalue(fn, "state")
+  local invariant = h.registered_invariant("osc")
+  local state = invariant.upvalue("state")
   local sender = state.sender
   state.sender = nil
-  assert_true(fn() ~= nil, "a clock with no sender is reported")
+  assert_true(invariant.check() ~= nil, "a clock with no sender is reported")
   state.sender = sender
   S.lib.clocks.stop(state.clock)
-  assert_true(fn() ~= nil, "a stopped clock kept under feedback and a sender is reported")
+  assert_true(invariant.check() ~= nil, "a stopped clock kept under feedback and a sender is reported")
   state.clock = nil
-  assert_true(fn() ~= nil, "no clock under feedback and a sender is reported")
+  assert_true(invariant.check() ~= nil, "no clock under feedback and a sender is reported")
 end)
 
 end

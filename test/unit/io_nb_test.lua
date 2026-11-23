@@ -701,44 +701,46 @@ test("two Strata voices on a player another host holds neither activate nor deac
 end)
 
 
--- A registered invariant's function, and an upvalue of it (the module's
--- own locals, which the tests below break on purpose)
-local function invariant_fn(S, name)
-  for _, record in ipairs(S.registry.invariants) do
-    if record.name == name then return record.fn end
-  end
-  error("no invariant " .. name)
-end
-
-local function upvalue_index(fn, wanted)
-  for index = 1, math.huge do
-    local name = debug.getupvalue(fn, index)
-    if name == nil then break end
-    if name == wanted then return index end
-  end
-  error("no upvalue " .. wanted)
-end
-
-local function upvalue(fn, wanted) return select(2, debug.getupvalue(fn, upvalue_index(fn, wanted))) end
-
 -- The invariant `nb` (#935): each player's count of the voices using it is
--- never below 0
+-- a whole number, never below 0. Each test that breaks it reaches the
+-- module's state through h.registered_invariant
 test("the nb invariant holds as voices choose, change and leave players", function()
-  local _, S = started({ { "alpha", ALL }, { "beta", ALL } })
-  local fn = invariant_fn(S, "nb")
+  started({ { "alpha", ALL }, { "beta", ALL } })
+  local invariant = h.registered_invariant("nb")
   choose(1, "alpha"); choose(2, "alpha"); choose(3, "beta")
-  assert_equal(fn(), nil, "two on alpha, one on beta")
+  assert_equal(invariant.check(), nil, "two on alpha, one on beta")
   choose(1, "beta"); choose(2, "none"); choose(3, "none")
-  assert_equal(fn(), nil, "one on beta")
+  assert_equal(invariant.check(), nil, "one on beta")
 end)
 
 test("the nb invariant names a count below 0", function()
-  local _, S = started({ { "alpha", ALL } })
+  started({ { "alpha", ALL } })
   choose(1, "alpha")
   h.allow_broken_invariants("the test breaks the nb invariant on purpose")
-  local fn = invariant_fn(S, "nb")
-  upvalue(fn, "state").uses.alpha = -1
-  local answer = fn()
+  local invariant = h.registered_invariant("nb")
+  invariant.upvalue("state").uses.alpha = -1
+  local answer = invariant.check()
+  assert_true(answer ~= nil and answer:find("alpha", 1, true) ~= nil, "alpha is named: " .. tostring(answer))
+end)
+
+test("the nb invariant names a count that is a fraction", function()
+  started({ { "alpha", ALL } })
+  choose(1, "alpha")
+  h.allow_broken_invariants("the test breaks the nb invariant on purpose")
+  local invariant = h.registered_invariant("nb")
+  invariant.upvalue("state").uses.alpha = 0.5
+  local answer = invariant.check()
+  assert_true(answer ~= nil and answer:find("alpha", 1, true) ~= nil, "alpha is named: " .. tostring(answer))
+end)
+
+test("the nb invariant names a count that is not a number", function()
+  started({ { "alpha", ALL } })
+  choose(1, "alpha")
+  h.allow_broken_invariants("the test breaks the nb invariant on purpose")
+  local invariant = h.registered_invariant("nb")
+  invariant.upvalue("state").uses.alpha = "one"
+  local ok, answer = pcall(invariant.check)
+  assert_true(ok, "the check answers, it does not raise: " .. tostring(answer))
   assert_true(answer ~= nil and answer:find("alpha", 1, true) ~= nil, "alpha is named: " .. tostring(answer))
 end)
 

@@ -17,7 +17,7 @@
 ### crow jacks
 - **State:** `state.set_up[kind][n]` (`input` 1 to 2, `output` 1 to 4): nil, never sent since crow's last reset; true, a setting sent; false, its off line sent (both nil and false send no off line); reset at each add (`crow.reset()`). Beside it `state.owners` (norns' clock's jacks, compared at each step by `follow_owners`) and `state.clocks[n]` (a clock output's handle).
 - **Invariant:** `crow`: `set_up` names only jacks that exist, each true or false.
-- **Test:** `test/unit/io_crow_test.lua`: "the crow invariant names a jack that does not exist" and "the crow invariant holds with jacks set up and set off".
+- **Test:** `test/unit/io_crow_test.lua`: "the crow invariant names a jack that does not exist", "the crow invariant names a jack whose key is not a number", "the crow invariant names a set_up value that is neither true nor false" and "the crow invariant holds with jacks set up and set off".
 
 No table: a jack's source kind (off, mod, pitch, gate, clock) is its param's record, read at each use, and `set_up` is a belief nothing reads back from crow.
 

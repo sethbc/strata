@@ -681,63 +681,76 @@ test("the layout states find their row by key among other sections' rows", funct
 end)
 
 
--- A registered invariant's function, and an upvalue of it (the module's
--- own locals, which the tests below break on purpose)
-local function invariant_fn(S, name)
-  for _, record in ipairs(S.registry.invariants) do
-    if record.name == name then return record.fn end
-  end
-  error("no invariant " .. name)
-end
-
-local function upvalue_index(fn, wanted)
-  for index = 1, math.huge do
-    local name = debug.getupvalue(fn, index)
-    if name == nil then break end
-    if name == wanted then return index end
-  end
-  error("no upvalue " .. wanted)
-end
-
-local function upvalue(fn, wanted) return select(2, debug.getupvalue(fn, upvalue_index(fn, wanted))) end
-
 -- The invariant `controllers` (#935): a kind's held port is the rig's port
 -- for it and owned by it; the echo clock runs exactly while a port is set
--- and cleanup has not begun
+-- and cleanup has not begun. Each test that breaks it reaches the module's
+-- locals through h.registered_invariant
 test("the controllers invariant holds as the ports are set, let go and cleaned up", function()
   local context, S = loaded()
-  local fn = invariant_fn(S, "controllers")
-  assert_equal(fn(), nil, "no port set, no clock")
+  local invariant = h.registered_invariant("controllers")
+  assert_equal(invariant.check(), nil, "no port set, no clock")
   local rig = rig_with(context, S, {faders = true})
-  assert_equal(fn(), nil, "both held, the clock running")
+  assert_equal(invariant.check(), nil, "both held, the clock running")
   assert_true(rig.set("faders_port", 0))
   assert_true(rig.set("e16_port", 0))
-  assert_equal(fn(), nil, "both let go, the clock stopped")
+  assert_equal(invariant.check(), nil, "both let go, the clock stopped")
   assert_true(rig.set("e16_port", E16_PORT))
   cleanup()
-  assert_equal(fn(), nil, "after cleanup: nothing held, no clock")
+  assert_equal(invariant.check(), nil, "after cleanup: nothing held, no clock")
 end)
 
-test("the controllers invariant names a held port its kind does not own", function()
+test("the controllers invariant names a held port that is not the rig's", function()
   local context, S = loaded()
   rig_with(context, S)
   h.allow_broken_invariants("the test breaks the controllers invariant on purpose")
-  local fn = invariant_fn(S, "controllers")
-  upvalue(fn, "held").faders = 9
-  local answer = fn()
+  local invariant = h.registered_invariant("controllers")
+  invariant.upvalue("held").faders = 9
+  local answer = invariant.check()
   assert_true(answer ~= nil and answer:find("faders", 1, true) ~= nil, "faders is named: " .. tostring(answer))
+end)
+
+test("the controllers invariant names a held port its kind no longer owns", function()
+  local context, S = loaded()
+  rig_with(context, S)
+  h.allow_broken_invariants("the test breaks the controllers invariant on purpose")
+  local invariant = h.registered_invariant("controllers")
+  -- the rig's port still held, but its claim let go behind the module's back
+  S.lib.io_ports.release(E16_PORT, "e16")
+  assert_equal(invariant.upvalue("held").e16, E16_PORT, "still recorded as held at the rig's port")
+  local answer = invariant.check()
+  assert_true(answer ~= nil and answer:find("e16", 1, true) ~= nil, "e16 is named: " .. tostring(answer))
 end)
 
 test("the controllers invariant names a set port with no echo clock", function()
   local context, S = loaded()
   rig_with(context, S)
   h.allow_broken_invariants("the test breaks the controllers invariant on purpose")
-  local fn = invariant_fn(S, "controllers")
-  local index = upvalue_index(fn, "echo_clock")
-  S.lib.clocks.stop(select(2, debug.getupvalue(fn, index)))
-  assert_true(fn() ~= nil, "the clock stopped under a set port is reported")
-  debug.setupvalue(fn, index, nil)
-  assert_true(fn() ~= nil, "no clock under a set port is reported")
+  local invariant = h.registered_invariant("controllers")
+  S.lib.clocks.stop(invariant.upvalue("echo_clock"))
+  assert_true(invariant.check() ~= nil, "the clock stopped under a set port is reported")
+  invariant.set("echo_clock", nil)
+  assert_true(invariant.check() ~= nil, "no clock under a set port is reported")
+end)
+
+test("the controllers invariant names an echo clock that runs with no port set", function()
+  local context, S = loaded()
+  local invariant = h.registered_invariant("controllers")
+  h.allow_broken_invariants("the test breaks the controllers invariant on purpose")
+  local stray = S.lib.clocks.run(function(handle) while handle.sleep(1) do end end)
+  invariant.set("echo_clock", stray)
+  local answer = invariant.check()
+  S.lib.clocks.stop(stray)
+  assert_true(answer ~= nil, "a running clock with no port set is reported")
+end)
+
+test("the controllers invariant names an echo clock that runs once cleanup has begun", function()
+  local context, S = loaded()
+  rig_with(context, S)
+  h.allow_broken_invariants("the test breaks the controllers invariant on purpose")
+  local invariant = h.registered_invariant("controllers")
+  invariant.set("closing", true)
+  local answer = invariant.check()
+  assert_true(answer ~= nil, "a running clock after cleanup began is reported")
 end)
 
 -- #972: after cleanup the rig listeners are still registered; a rig change
@@ -752,7 +765,7 @@ test("a rig change after cleanup claims no controller port and starts no echo cl
   assert_equal(S.lib.io_ports.owner(E16_PORT), nil, "the E16's port is not claimed")
   assert_equal(S.lib.io_ports.owner(FADERS_PORT), nil, "nor the faders'")
   assert_equal(S.lib.io_controllers.clock_id(), nil, "no echo clock")
-  assert_equal(invariant_fn(S, "controllers")(), nil, "the controllers invariant holds")
+  assert_equal(h.registered_invariant("controllers").check(), nil, "the controllers invariant holds")
 end)
 
 end

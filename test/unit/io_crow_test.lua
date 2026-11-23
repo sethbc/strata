@@ -616,53 +616,52 @@ test("the crow section shows presence, the jacks and an approximate mark", funct
 end)
 
 
--- A registered invariant's function, and an upvalue of it (the module's
--- own locals, which the tests below break on purpose)
-local function invariant_fn(S, name)
-  for _, record in ipairs(S.registry.invariants) do
-    if record.name == name then return record.fn end
-  end
-  error("no invariant " .. name)
-end
-
-local function upvalue_index(fn, wanted)
-  for index = 1, math.huge do
-    local name = debug.getupvalue(fn, index)
-    if name == nil then break end
-    if name == wanted then return index end
-  end
-  error("no upvalue " .. wanted)
-end
-
-local function upvalue(fn, wanted) return select(2, debug.getupvalue(fn, upvalue_index(fn, wanted))) end
-
 -- The invariant `crow` (#935): set_up names only jacks that exist (inputs
--- 1 and 2, outputs 1 to 4), each true (a setting sent) or false (its off line)
+-- 1 and 2, outputs 1 to 4), each true (a setting sent) or false (its off
+-- line). Each test that breaks it reaches the module's state through
+-- h.registered_invariant
 test("the crow invariant holds with jacks set up and set off", function()
-  local context, S = started()
+  local context = started()
   context.crow.plug()
   params:set("crow_in1_mode", option("crow_in1_mode", "trigger"))
   params:set("crow_out2_source", option("crow_out2_source", "v1 gate"))
   params:set("crow_in1_mode", option("crow_in1_mode", "off"))
-  assert_equal(invariant_fn(S, "crow")(), nil, "input 1 set off, output 2 set up")
+  assert_equal(h.registered_invariant("crow").check(), nil, "input 1 set off, output 2 set up")
 end)
 
 test("the crow invariant names a jack that does not exist", function()
-  local context, S = started()
+  local context = started()
   context.crow.plug()
   h.allow_broken_invariants("the test breaks the crow invariant on purpose")
-  local fn = invariant_fn(S, "crow")
-  local set_up = upvalue(fn, "state").set_up
+  local invariant = h.registered_invariant("crow")
+  local set_up = invariant.upvalue("state").set_up
   set_up.output[5] = true
-  local answer = fn()
+  local answer = invariant.check()
   assert_true(answer ~= nil and answer:find("output 5", 1, true) ~= nil, "output 5 is named: " .. tostring(answer))
   set_up.output[5] = nil
   set_up.input[0] = false
-  answer = fn()
+  answer = invariant.check()
   assert_true(answer ~= nil and answer:find("input 0", 1, true) ~= nil, "input 0 is named: " .. tostring(answer))
-  set_up.input[0] = nil
-  set_up.input[1] = "yes"
-  assert_true(fn() ~= nil, "a value that is neither true nor false is reported")
+end)
+
+test("the crow invariant names a jack whose key is not a number", function()
+  local context = started()
+  context.crow.plug()
+  h.allow_broken_invariants("the test breaks the crow invariant on purpose")
+  local invariant = h.registered_invariant("crow")
+  invariant.upvalue("state").set_up.output["out"] = true
+  local ok, answer = pcall(invariant.check)
+  assert_true(ok, "the check answers, it does not raise: " .. tostring(answer))
+  assert_true(answer ~= nil and answer:find("output out", 1, true) ~= nil, "the key is named: " .. tostring(answer))
+end)
+
+test("the crow invariant names a set_up value that is neither true nor false", function()
+  local context = started()
+  context.crow.plug()
+  h.allow_broken_invariants("the test breaks the crow invariant on purpose")
+  local invariant = h.registered_invariant("crow")
+  invariant.upvalue("state").set_up.input[1] = "yes"
+  assert_true(invariant.check() ~= nil, "a value that is neither true nor false is reported")
 end)
 
 end

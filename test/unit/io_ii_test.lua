@@ -1488,6 +1488,16 @@ test("the ii invariant names a line whose waiting count is not its sends in the 
   assert_true(ii_invariant(S) ~= nil, "a waiting send of a learned pair with no line is reported")
 end)
 
+test("the ii invariant names a line that counts sends waiting when none are queued", function()
+  local _, S = leading_with_lines()
+  h.allow_broken_invariants("the test breaks the ii invariant on purpose")
+  local state = ii_state(S)
+  -- the queue emptied without forget_lines: each line still counts its send
+  state.queue = {}
+  local answer = ii_invariant(S)
+  assert_true(answer ~= nil and answer:find("probe", 1, true) ~= nil, "the line is named: " .. tostring(answer))
+end)
+
 test("the ii invariant names an asking count that is not the turns asking", function()
   local _, S = leading_with_lines()
   h.allow_broken_invariants("the test breaks the ii invariant on purpose")

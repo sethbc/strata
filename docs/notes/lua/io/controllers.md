@@ -21,7 +21,7 @@
 ### controllers
 - **State:** `held[kind]` (the port each of `e16` and `faders` holds and listens on), the echo clock's handle `echo_clock` (`M.clock_id()`), `closing` (cleanup has begun), against the rig's `e16_port` and `faders_port` and `S.lib.io_ports.owner(port)`.
 - **Invariant:** `controllers`: a kind's held port is the rig's port for it and owned by that kind; the echo clock runs (`S.lib.clocks.alive`) exactly while a port is set and cleanup has not begun.
-- **Test:** `test/unit/io_controllers_test.lua`: "the controllers invariant names a held port its kind does not own", "the controllers invariant names a set port with no echo clock" and "the controllers invariant holds as the ports are set, let go and cleaned up".
+- **Test:** `test/unit/io_controllers_test.lua`: "the controllers invariant names a held port that is not the rig's", "the controllers invariant names a held port its kind no longer owns", "the controllers invariant names a set port with no echo clock", "the controllers invariant names an echo clock that runs with no port set", "the controllers invariant names an echo clock that runs once cleanup has begun", "the controllers invariant holds as the ports are set, let go and cleaned up" and "a rig change after cleanup claims no controller port and starts no echo clock (#972)".
 
 No table: `refresh(kind)` compares the rig's port with `held` at each change (a rig change, a release by another owner), and each fader's pickup is its own small state (Must not break).
 

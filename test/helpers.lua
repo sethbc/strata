@@ -211,6 +211,33 @@ local function allow_broken_invariants(reason)
   invariant_check.allowed = reason
 end
 
+-- One registered invariant of the script loaded last, for a test that
+-- breaks it on purpose: {check = its function (nil while it holds),
+-- upvalue(name) (the value of its function's upvalue of that name: the
+-- owning module's own locals), set(name, value)}. Raises naming the
+-- invariant, or the upvalue, when there is none
+local function registered_invariant(name)
+  local S = shared_state()
+  local registry = type(S) == "table" and type(S.registry) == "table" and S.registry.invariants or {}
+  for _, record in ipairs(registry) do
+    if record.name == name then
+      local fn = record.fn
+      local function index_of(wanted)
+        for index = 1, math.huge do
+          local found = debug.getupvalue(fn, index)
+          if found == nil then break end
+          if found == wanted then return index end
+        end
+        error("the invariant " .. name .. " has no upvalue " .. tostring(wanted), 3)
+      end
+      return {check = fn,
+        upvalue = function(wanted) return (select(2, debug.getupvalue(fn, index_of(wanted)))) end,
+        set = function(wanted, value) debug.setupvalue(fn, index_of(wanted), value) end}
+    end
+  end
+  error("no invariant " .. tostring(name), 2)
+end
+
 -- Run one test function: ok, or false and the error. Errors the scheduler
 -- reported while resuming a clock (norns prints them and keeps running)
 -- fail the test unless it claimed them (clock.take_errors); when the test
@@ -1678,7 +1705,7 @@ local UNIT_FILE_SECONDS = {
   ["io_ii_test.lua"] = 3,
   ["io_jf_test.lua"] = 1,
   ["io_keyed_test.lua"] = 1,
-  ["io_midi_out_test.lua"] = 5,
+  ["io_midi_out_test.lua"] = 11,
   ["io_nb_test.lua"] = 2,
   ["io_osc_test.lua"] = 1,
   ["io_ports_test.lua"] = 1,
@@ -1832,6 +1859,7 @@ return {
   run_test = run_test,
   claim_script_errors = claim_script_errors,
   check_invariants = check_invariants,
+  registered_invariant = registered_invariant,
   allow_broken_invariants = allow_broken_invariants,
   with_failing_setting_write = with_failing_setting_write,
   assert_true = assert_true,
