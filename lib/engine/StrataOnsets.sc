@@ -103,13 +103,15 @@
     }
 
     // Inside a routine. Every step runs only while nothing changed the slot
-    // (slotChanges: a load, a clear or a recording sent meanwhile wins) and
-    // the engine runs; else the temporary files are deleted and the
-    // analysis reports failed. An sclang error ends it the same way. Once
-    // the file's rename is under way (writeOnsetsFile), the rename reports.
+    // (slotChanges: a load, a clear or a recording sent meanwhile wins), no
+    // newer analyzeBuffer of the slot came (analyses: the newer pass wins,
+    // #872) and the engine runs; else the temporary files are deleted and
+    // the analysis reports failed. An sclang error ends it the same way.
+    // Once the file's rename is under way (writeOnsetsFile), the rename
+    // reports.
     runOnsetPass { arg index, count, change, frames, tempPaths;
         var state = areaState[\onsets], rate = bufferSampleRates[index], strengths, picks, handedOff = false;
-        var current = { (slotChanges[index] == change) and: { state[\stopped].not } };
+        var current = { (slotChanges[index] == change) and: { state[\analyses][index] == count } and: { state[\stopped].not } };
         var deleteTemporary = { tempPaths.do({ arg path; try { if (File.exists(path)) { File.delete(path) } } }) };
         try {
             context.server.sync;
@@ -242,7 +244,9 @@
     // (renameIntoPlace, the waveform area's mover), whose end reports:
     // written once the file is in place, failed when the rename failed or
     // the slot changed meanwhile (a file renamed into place after a change
-    // is deleted: it describes audio the slot no longer holds). Returns
+    // is deleted, as it describes audio the slot no longer holds, but only
+    // while this pass is the slot's newest analysis: once a newer one has
+    // come, the path may hold its file, #888). Returns
     // whether the rename is under way; false, reporting nothing, when the
     // .part cannot be written, a folder is in the way or the slot changed.
     writeOnsetsFile { arg index, count, frames, rate, picks, change;
@@ -262,7 +266,7 @@
         this.renameIntoPlace(partPath, path, { arg moved;
             var kept = moved and: { slotChanges[index] == change };
             if (moved.not) { postln("strata: cannot move " ++ partPath ++ " to " ++ path) };
-            if (moved and: { kept.not }) { try { File.delete(path) } };
+            if (moved and: { kept.not } and: { areaState[\onsets][\analyses][index] == count }) { try { File.delete(path) } };
             this.reportOnsets(index, count, kept.not);
         });
         ^true
