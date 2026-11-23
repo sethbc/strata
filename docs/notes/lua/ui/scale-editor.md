@@ -15,7 +15,7 @@
 - **Invariant:** `scale editor`: the open editor's owner is the modal one (or lies beneath SEQ's step editor), the closed editor's never; its cursor is on a row and a class; a pending choice is one of the choices.
 - **Test:** `test/unit/ui_scale_editor_test.lua`: "SETUP's scale & tuning row opens the editor; K2 closes it" (and "the tuning row: E3 moves a dim pending choice and K3 applies it; a refused file says why", "cleanup closes the editor and clears the note tap").
 
-Its opens and closes are a row of the owners' table (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner):
+No test runs this table: it is one of the design's modal owners (its section 5, a table and no test). It lists the events that open or close the editor and those that set or apply a pending choice; every other key or turn (E2's row, E3 on the root, the scale or the class cursor) is its own editing and leaves it open, and a cleanup of a closed editor does nothing. Its opens and closes are a row of the owners' table (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner).
 
 | State | Event | Next | Effect |
 |---|---|---|---|

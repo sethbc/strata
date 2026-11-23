@@ -23,7 +23,7 @@
 - **Invariant:** `io detail`: the list is open exactly while its owner is the modal one, or beneath SEQ's step editor (the one owner a grid can push over it); closed, its owner is never the modal one.
 - **Test:** `test/unit/pages_io_test.lua`: "the io detail invariant: the detail is open exactly while its owner is on the stack" (and "IO's leave closes no detail: a page change cannot happen under an owner").
 
-No page change happens while it is open (E1 does nothing under an owner, and the page's keys never run), so a page change from open is no row.
+No test runs this table: it is one of the design's modal owners (its section 5, a table and no test). It lists the events that open or close the list; E2 (its cursor) and E3 (the field's value) are its own editing and leave it open. No page change happens while it is open (E1 does nothing under an owner, and the page's keys never run), so a page change from open is no row. A cleanup leaves it as it is (#899).
 
 | State | Event | Next | Effect |
 |---|---|---|---|
@@ -37,6 +37,8 @@ No page change happens while it is open (E1 does nothing under an owner, and the
 - **State:** `view = {tail, pinned, anchor, index, unseen}` (local to `lib/pages/io.lua`) and `S.io_cursor`: in view; scrolled past the cursor's row (`tail > 0`); pinned (`pinned`, a section `show_section` put at the top); unseen (`unseen`, the cursor fell to another row that no draw has shown). `hidden(rows)` names the scrolled view and a pinned one without the cursor's row.
 - **Invariant:** none: any mix of the three is legal (unseen comes over any view, and a draw ends it leaving the view as it was), and the cursor resting on a selectable row is `S.lib.ui_field_list.clamp`'s.
 - **Test:** `test/unit/pages_io_test.lua`: "IO marks the row its cursor is on when that row is unseen" (and "E3 and K3 on a row that has gone only move the cursor", "leaving IO ends a pinned view").
+
+No test runs this table: IO's view is one of the design's smaller entries (its section 5, a table and no test). It lists the keys and the events that move the view; ALT+E2 (the voice) leaves the view as it was, and ALT+E3 acts as E3 does here (finely on a rig row).
 
 | State | Event | Next | Effect |
 |---|---|---|---|

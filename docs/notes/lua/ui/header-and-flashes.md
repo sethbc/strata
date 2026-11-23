@@ -13,7 +13,7 @@
 - **Invariant:** `flash slots`: a slot showing a text has the clock that ends it (so a lapsed or hidden text always goes).
 - **Test:** `test/unit/ui_header_test.lua`: "a new flash replaces the running one and its clock" (and "a hints flash shows only on its owning page", "a nil flash text ends the flash instead of showing nil").
 
-A standing notice (`add_notice`) has no state here: it follows its own module's. Idle has no clock to wake, so `idle` + `the clock wakes` is no row.
+No test runs this table: a flash slot is one of the design's smaller entries (its section 5, a table and no test). A standing notice (`add_notice`) has no state here: it follows its own module's. Idle has no clock to wake, so `idle` + `the clock wakes` is no row.
 
 | State | Event | Next | Effect |
 |---|---|---|---|

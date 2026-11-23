@@ -16,24 +16,35 @@
 ## Machines
 
 ### scenes prompt
-- **State:** `S.scenes_page.armed_slot` and `armed_until` (the overwrite confirmation: idle, armed, lapsed, read through the page's local `armed()`), and `S.scenes_page.naming` beside the page's `name_entry` (an `S.lib.ui_name_entry` entry: closed, or naming, open for a slot). The two parts are independent; the States section below gives each state's fields.
+- **State:** the overwrite confirmation, `S.scenes_page.armed_slot` and `armed_until` against `S.cursors.scene` and `util.time()` (read through the page's local `armed()`): idle (no slot), armed (the cursor's slot, before `armed_until`), lapsed (a slot, but the cursor elsewhere or the time passed); the States section below gives each state's fields. Beside it, `S.scenes_page.naming`, the slot the page's name entry is open for: that entry's own machine (`S.lib.ui_name_entry`, `docs/notes/lua/ui/name-entry.md`), which `naming` follows (set as it opens, cleared by its callback or its reconcile), so it has no table here.
 - **Invariant:** `scenes prompt`: `armed_slot` and `naming` are each nil or a slot in 1..`NUM_SCENES`, and `naming` is set exactly while the page keeps an open entry's callback.
-- **Test:** `test/unit/pages_scenes_test.lua`: "the scenes prompt invariant holds the name entry's slot to its callback" (and "the overwrite prompt is the page's hint while armed and lapses after 2 s", "a name entry the norns menu took over is forgotten when the menu closes").
+- **Test:** `test/unit/pages_scenes_test.lua`: "scenes prompt: every cell is decided" and its rows (SCENES shown, slot 1 holding a scene with the cursor on it, the clock at 100 s; lapsed is armed with 2.5 s passed); "the scenes prompt invariant holds the name entry's slot to its callback".
+
+Every cell is a row. `the slot emptied, then ALT+K3` empties the cursor's slot as a scenes load does for a slot its file lacks; `a frame` is the frame clock's read of the page's `animates()`.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
 | idle | ALT+K3 on a populated slot | armed | `armed_slot` the slot, `armed_until` now + 2 s; the hint row asks |
-| idle | ALT+K3 on an empty slot | idle | saved at once |
-| armed | ALT+K3 again, no hints flash covering it | idle | `disarm()`, then `S.lib.scenes.save(slot)` |
-| armed | ALT+K3 again under a covering hints flash | armed | armed again, nothing saved |
-| armed | `move_cursor` moves the cursor | idle | `disarm()` |
-| armed | 2 s pass, or `S.cursors.scene` set directly | lapsed | no function runs |
-| lapsed | the next frame on SCENES (`animates`) | idle | `disarm()`, the prompt off the hint row |
-| lapsed | ALT+K3 on a populated slot | armed | armed for that slot |
-| closed | ALT+K2 released on a slot | naming | `naming` the slot, then the entry's `open` (`forget_held_keys()`, `textentry.enter`) |
-| naming | OK or a K2 release (the entry's callback) | closed | OK names the slot; `naming` cleared |
-| naming | the menu's own entry replaced `textentry.callback` | closed | `reconcile_name_entry`: Strata's key and enc back, `naming` cleared |
-| naming | the menu opened and closed over it | naming | the entry drawn again |
+| idle | ALT+K3 under a covering hints flash | armed | as above (nothing to confirm yet) |
+| idle | the slot emptied, then ALT+K3 | idle | saved at once |
+| idle | move_cursor | idle | the cursor moves |
+| idle | the arming time passes | idle | nothing |
+| idle | the cursor set directly | idle | nothing |
+| idle | a frame | idle | `animates()` false |
+| armed | ALT+K3 on a populated slot | idle | `disarm()`, then `S.lib.scenes.save(slot)` |
+| armed | the slot emptied, then ALT+K3 | idle | `disarm()`, then saved |
+| armed | ALT+K3 under a covering hints flash | armed | armed again for 2 s, nothing saved (never save without the prompt on screen) |
+| armed | move_cursor | idle | `disarm()`, nothing saved |
+| armed | the arming time passes | lapsed | no function runs |
+| armed | the cursor set directly | lapsed | no function runs |
+| armed | a frame | armed | `animates()` true |
+| lapsed | ALT+K3 on a populated slot | armed | armed for the cursor's slot, nothing saved |
+| lapsed | ALT+K3 under a covering hints flash | armed | as above |
+| lapsed | the slot emptied, then ALT+K3 | idle | `disarm()`, then saved |
+| lapsed | move_cursor | idle | `disarm()` |
+| lapsed | the arming time passes | lapsed | nothing |
+| lapsed | the cursor set directly | lapsed | nothing |
+| lapsed | a frame | idle | `animates()` disarms and returns true once, for the frame that takes the prompt off |
 
 ## Owns
 

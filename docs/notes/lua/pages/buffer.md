@@ -29,7 +29,7 @@
 - **Invariant:** `file selector`: open exactly while its callback and Strata's saved `key` and `enc` are set (`buffer_key_release` sets the four together, `close_buffer_file_selector` clears them together).
 - **Test:** `test/unit/pages_buffer_test.lua`: "the file selector invariant: open exactly while its callback and the saved key and enc are set" (and "a menu file selector opened over BUFFER K2's gives Strata its keys and page back as the menu closes (#49)").
 
-It stays apart from the name entry (`docs/notes/lua/ui/name-entry.md`): its release runs before norns' `set_mode(false)`, the entry's reconcile after it.
+No test runs this table: the file selector is one of the design's smaller entries (its section 5, a table and no test). It stays apart from the name entry (`docs/notes/lua/ui/name-entry.md`): its release runs before norns' `set_mode(false)`, the entry's reconcile after it.
 
 | State | Event | Next | Effect |
 |---|---|---|---|

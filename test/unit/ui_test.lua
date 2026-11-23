@@ -714,4 +714,111 @@ test("the flash clock stopped as its wake is posted: no clock error, and nothing
   assert_equal(flash.text("hints"), nil, "no hints flash shows")
 end)
 
+-- 3.9 (#902): the key presses machine (lib/ui/keys.lua, set by key() in
+-- strata.lua) as a table, per key (K2 here) on a page whose handlers are
+-- probes (FX's record, its key, key_release, alt_key and alt_key_release
+-- replaced by loggers on the fresh script each row loads; each logs
+-- whether held_seconds answered inside it). The states read the script's
+-- marks: S.key_press_page[2] and S.key_press_alt[2]
+local KEYS_PAGE = "FX"
+
+local function keys_probe(context)
+  local S = local_value("S")
+  show_page(KEYS_PAGE)
+  context.log = {}
+  local record = S.registry.pages[S.constants.UI_PAGES.index[KEYS_PAGE]]
+  for _, name in ipairs({"key", "key_release", "alt_key", "alt_key_release"}) do
+    record[name] = function(n)
+      local held = S.lib.ui_keys.held_seconds(n)
+      table.insert(context.log, name .. " " .. n .. (held and " held" or ""))
+    end
+  end
+end
+
+local function keys_log(context) return table.concat(context.log, ", ") end
+
+-- After a loss (a page change, a push, forget_held_keys), the physical
+-- key's release runs nothing on the page
+local function then_release_runs_nothing(context)
+  context.log = {}
+  key(2, 0)
+  assert_equal(keys_log(context), "", "the release after the loss runs nothing")
+end
+
+local function then_logged(expected)
+  return function(context) assert_equal(keys_log(context), expected, "the page's handlers") end
+end
+
+local function back_on_the_page()
+  local S = local_value("S")
+  S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index[KEYS_PAGE])
+end
+
+h.transition_table({
+  name = "key presses",
+  notes = {"docs/notes/lua/ui/alt-and-keys.md", "key presses"},
+  states = {
+    ["up"] = function(context) keys_probe(context) end,
+    ["down plain"] = function(context) keys_probe(context); key(2, 1); context.log = {} end,
+    ["down ALT"] = function(context) keys_probe(context); key(1, 1); key(2, 1); context.log = {} end,
+  },
+  events = {
+    ["press"] = function() key(2, 1) end,
+    ["ALT press"] = function() key(1, 1); key(2, 1) end,
+    ["release"] = function() key(2, 0) end,
+    ["page change"] = function()
+      local S = local_value("S")
+      S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.SETUP)
+    end,
+    ["modal push"] = function(context)
+      context.owner = {draw = function() end}
+      local_value("S").lib.ui_modal.push(context.owner)
+    end,
+    ["forget_held_keys"] = function() forget_held_keys() end,
+  },
+  state_of = function()
+    local S = local_value("S")
+    if S.key_press_page[2] == nil then return "up" end
+    return S.key_press_alt[2] and "down ALT" or "down plain"
+  end,
+  rows = {
+    {"up", "press", "down plain", check = then_logged("key 2 held")},
+    {"up", "ALT press", "down ALT", check = then_logged("alt_key 2 held")},
+    {"up", "release", "up", check = then_logged("")},
+    {"up", "page change", "up"},
+    {"up", "modal push", "up"},
+    {"up", "forget_held_keys", "up"},
+    {"down plain", "press", "down plain", check = then_logged("key 2 held")},
+    {"down plain", "ALT press", "down ALT", check = then_logged("alt_key 2 held")},
+    {"down plain", "release", "up", check = then_logged("key_release 2 held")},
+    {"down plain", "page change", "up", check = function(context)
+      back_on_the_page()
+      then_release_runs_nothing(context)
+    end},
+    {"down plain", "modal push", "up", check = function(context)
+      local_value("S").lib.ui_modal.pop(context.owner)
+      then_release_runs_nothing(context)
+    end},
+    {"down plain", "forget_held_keys", "up", check = then_release_runs_nothing},
+    {"down ALT", "press", "down ALT", check = then_logged("alt_key 2 held")},
+    {"down ALT", "ALT press", "down ALT", check = then_logged("alt_key 2 held")},
+    {"down ALT", "release", "up", check = then_logged("alt_key_release 2 held")},
+    {"down ALT", "page change", "up", check = function(context)
+      assert_true(local_value("S").alt_held, "ALT stays held (K1 is still down)")
+      back_on_the_page()
+      then_release_runs_nothing(context)
+    end},
+    {"down ALT", "modal push", "up", check = function(context)
+      local S = local_value("S")
+      assert_true(S.alt_held, "ALT stays held")
+      S.lib.ui_modal.pop(context.owner)
+      then_release_runs_nothing(context)
+    end},
+    {"down ALT", "forget_held_keys", "up", check = function(context)
+      assert_true(not local_value("S").alt_held, "ALT is forgotten too")
+      then_release_runs_nothing(context)
+    end},
+  },
+})
+
 end

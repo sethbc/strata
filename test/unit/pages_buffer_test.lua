@@ -2128,18 +2128,28 @@ test("the file selector invariant: open exactly while its callback and the saved
   context.fileselect.last.callback("cancel")
   assert_equal(invariant(S, "file selector"), nil, "closed again by its callback")
   h.allow_broken_invariants("the test breaks the file selector invariant on purpose")
-  page.file_selector_open = true
-  assert_true(invariant(S, "file selector") ~= nil, "open with no callback is reported")
-  page.file_selector_callback = function() end
-  assert_true(invariant(S, "file selector") ~= nil, "open with no saved key and enc is reported")
-  page.script_key = key
-  assert_true(invariant(S, "file selector") ~= nil, "open with no saved enc is reported")
-  page.script_enc = enc
+  local kept = {file_selector_callback = function() end, script_key = key, script_enc = enc}
+  local function open_with_all()
+    page.file_selector_open = true
+    for field, value in pairs(kept) do page[field] = value end
+  end
+  open_with_all()
   assert_equal(invariant(S, "file selector"), nil, "open with all three holds")
+  -- each field alone: open with it missing, then closed with it alone set
+  for _, field in ipairs({"file_selector_callback", "script_key", "script_enc"}) do
+    open_with_all()
+    page[field] = nil
+    local problem = invariant(S, "file selector") or ""
+    assert_true(problem:find("open but " .. field, 1, true), "open with no " .. field .. " is reported: " .. problem)
+    close_buffer_file_selector()
+    page[field] = kept[field]
+    problem = invariant(S, "file selector") or ""
+    assert_true(problem:find("closed but " .. field, 1, true), "closed with " .. field .. " set is reported: " .. problem)
+    page[field] = nil
+  end
   page.file_selector_open = 1
-  assert_true(invariant(S, "file selector") ~= nil, "an open flag that is no boolean is reported")
-  page.file_selector_open = false
-  assert_true(invariant(S, "file selector") ~= nil, "closed with a callback and saved handlers is reported")
+  local problem = invariant(S, "file selector") or ""
+  assert_true(problem:find("file_selector_open is 1", 1, true), "an open flag that is no boolean is reported: " .. problem)
   close_buffer_file_selector()
   assert_equal(invariant(S, "file selector"), nil, "the close clears all four")
 end)
