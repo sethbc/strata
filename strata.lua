@@ -293,7 +293,8 @@ end
 -- does nothing when it comes up): an ALT press's to alt_key_release, even
 -- if K1 came up first, any other's to key_release (if the record has them);
 -- the marks are cleared after it, so the release reads how long the key
--- was held (S.lib.ui_keys.held_seconds, #866). While a modal owner is
+-- was held (S.lib.ui_keys.held_seconds, #866), and cleared too when it
+-- raises (the error is raised again after). While a modal owner is
 -- pushed, K2 and K3 go to S.lib.ui_modal.key instead (a press to the
 -- owner's key(n, 1), a release to its key(n, 0) only if it saw the press),
 -- and the page forgets the key (a press it saw releases into nothing)
@@ -320,14 +321,17 @@ function key(n, z)
   else
     local press_page, alt_press = S.key_press_page[n], S.key_press_alt[n]
     local record = S.registry.pages[S.ui_page]
+    local released, release_error = true, nil
     if press_page == S.ui_page then
       local release = record.key_release
       if alt_press then release = record.alt_key_release end
-      if release then release(n) end
+      if release then released, release_error = pcall(release, n) end
     end
+    -- forgotten even when the release raised, which is then raised again
     S.key_press_page[n] = nil
     S.key_press_at[n] = nil
     S.key_press_alt[n] = nil
+    if not released then error(release_error, 0) end
   end
   request_redraw()
 end

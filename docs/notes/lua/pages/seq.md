@@ -15,7 +15,7 @@
 ## Owns
 
 - `lib/pages/seq.lua` (`S.lib.pages_seq`): the SEQ record (`S.registry.pages[UI_PAGES.index.SEQ]`) with `draw`, `hints`, `enc`, `key`, `alt_enc`, `alt_key`, `alt_key_release`, `randomize_section`, `alt_hold`, `alt_hold_hint`, `header_status`, `animates`, `arc_button` and `layout_states`; its layout constants are the local `SEQ_PAGE` (the pattern view) and `SEQ_EDIT` (the edit view) tables, its rows `EDIT_ROWS`.
-- The module's fields: `open_step_editor(voice, step, port)`, `close_step_editor(port)`, `step_editor()`, `step_editor_replacing()` (the grids'), `step_editor_owner` (the modal owner, whose ring fields `lib/arc/seq.lua` sets), and for the rings `turn_step(voice, step, key, d, opts)`, `lock_param_id(voice, key)` and `has_bookmarks(voice)`; `forget_editor_k2_press()`, its menu-close hook.
+- The module's fields: `open_step_editor(voice, step, port)`, `close_step_editor(port)`, `step_editor()`, `step_editor_replacing()` (the grids'), `step_editor_owner` (the modal owner, whose ring fields `lib/arc/seq.lua` sets), and for the rings `turn_step(voice, step, key, d, opts)`, `lock_param_id(voice, key)` and `has_bookmarks(voice)`.
 - The step editor owner's `animates` (the frame clock reads a pushed owner's, `docs/notes/lua/ui/redraws.md`, #592). The `step editor` invariant. Its unit tests: `test/unit/pages_seq_test.lua`; the rings' in `test/unit/arc_pages_test.lua`. Its step cursor is `S.cursors.seq_step` (`lib/ui/cursors.lua`); the row is `S.selected_voice`. The edit view's row cursors (SEQ's and the step editor's) are local: each an anchor, the row key it was put on and its index, so a row that comes or goes (bookmark) never moves it to another row.
 
 ## The pattern view

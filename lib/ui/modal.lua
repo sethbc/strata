@@ -89,7 +89,8 @@ return function(S)
   -- K2 or K3 (z 1 down, 0 up) while an owner is pushed (strata.lua's key):
   -- a press goes to the top owner's key(n, 1), a release to its key(n, 0)
   -- only when that owner saw the press; the press is forgotten after the
-  -- release, so the owner's release reads held_seconds
+  -- release, so the owner's release reads held_seconds, and also when the
+  -- release raises (the error is raised again after)
   function M.key(n, z)
     local owner = M.top()
     if not owner then return end
@@ -98,8 +99,10 @@ return function(S)
       if owner.key then owner.key(n, 1) end
     else
       local press_owner = pressed[n]
-      if press_owner == owner and owner.key then owner.key(n, 0) end
+      local released, release_error = true, nil
+      if press_owner == owner and owner.key then released, release_error = pcall(owner.key, n, 0) end
       pressed[n], pressed_at[n] = nil, nil
+      if not released then error(release_error, 0) end
     end
   end
 

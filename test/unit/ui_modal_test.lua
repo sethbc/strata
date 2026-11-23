@@ -214,4 +214,23 @@ test("held_seconds is nil for an owner that is not on top", function()
   modal.pop(lower)
 end)
 
+
+-- 1c's review: the modal runs an owner's release before it forgets the
+-- press; a release that raises still forgets it, and the error still
+-- reaches the caller
+test("a release handler that raises leaves no key held (a modal owner's)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local modal = S.lib.ui_modal
+  local owner = logging_owner({})
+  owner.key = function(_, z) if z == 0 then error("owner release failed") end end
+  modal.push(owner)
+  key(3, 1)
+  local ok, message = pcall(key, 3, 0)
+  assert_true(not ok, "the error reaches the caller")
+  assert_true(tostring(message):find("owner release failed", 1, true) ~= nil, "with its message: " .. tostring(message))
+  assert_equal(modal.held_seconds(owner, 3), nil, "the key reads as up")
+  modal.pop(owner)
+end)
+
 end
