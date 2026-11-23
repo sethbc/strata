@@ -65,7 +65,7 @@ return function(S)
   -- next_index (the event it plays next); length_seconds (a free loop's),
   -- loop_started_at (util.time() its current pass began), first_event_at,
   -- limit_run (the 10-minute stop's handle while it records) and
-  -- limit_clock (its id), and overdubbing
+  -- overdubbing
   S.gestures = {}
   S.gesture_playing = false  -- set while a recorder's playback sets a param
   for k = 1, NUM_GESTURES do
@@ -297,7 +297,7 @@ return function(S)
   -- nothing; from its own body (its wake ends the recording), neither
   local function cancel_limit_clock(recorder)
     local run = recorder.limit_run
-    recorder.limit_run, recorder.limit_clock = nil, nil
+    recorder.limit_run = nil
     S.lib.clocks.stop(run)
   end
 
@@ -351,11 +351,10 @@ return function(S)
     recorder.pattern:watch(event)
     if recorder.pattern.count == 1 then
       recorder.first_event_at = util.time()
-      local run = S.lib.clocks.run(function(handle)
+      recorder.limit_run = S.lib.clocks.run(function(handle)
         if not handle.sleep(GESTURES.max_seconds) then return end
         finish_recording(k, true)
       end)
-      recorder.limit_run, recorder.limit_clock = run, run.id
     end
     if recorder.pattern.count >= GESTURES.max_events then
       finish_recording(k, true)
@@ -768,17 +767,15 @@ return function(S)
       if (recorder.run ~= nil) ~= (recorder.clock ~= nil) or (recorder.run and recorder.run.id ~= recorder.clock) then
         return "G" .. k .. "'s run and clock are out of step"
       end
-      local limit_run = recorder.limit_run
-      if (limit_run ~= nil) ~= (recorder.limit_clock ~= nil)
-        or (limit_run and (limit_run.id ~= recorder.limit_clock or not S.lib.clocks.alive(limit_run))) then
-        return "G" .. k .. "'s 10-minute clock is not its live handle's"
+      if recorder.limit_run and not S.lib.clocks.alive(recorder.limit_run) then
+        return "G" .. k .. "'s 10-minute clock " .. tostring(recorder.limit_run.id) .. " no longer runs"
       end
       local metro_runs, clock_runs = pattern.play == 1, recorder.clock ~= nil
       if metro_runs and clock_runs then return "G" .. k .. " plays on its metro and its clock" end
       if (metro_runs or clock_runs) ~= playing then return "G" .. k .. " is " .. recorder.state .. " but its playback runs: "
         .. tostring(metro_runs or clock_runs) end
       if playing and clock_runs ~= (recorder.offsets ~= nil) then return "G" .. k .. " plays the wrong way for its loop" end
-      if (recorder.limit_clock ~= nil) ~= (recorder.state == "recording" and pattern.count > 0) then
+      if (recorder.limit_run ~= nil) ~= (recorder.state == "recording" and pattern.count > 0) then
         return "G" .. k .. "'s 10-minute clock is out of step"
       end
       if recorder.overdubbing and not playing then return "G" .. k .. " overdubs but does not play" end

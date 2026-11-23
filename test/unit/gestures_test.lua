@@ -186,26 +186,30 @@ end)
 -- ends the recording after matron posted the clock's wake and before norns
 -- delivered it retires the clock (S.lib.clocks.stop) instead of canceling
 -- it: the wake reaches a coroutine norns still has, which ends there,
--- ending the recording no second time
+-- ending the recording no second time (a second end would restart the
+-- loop, whose first event plays at once and sets its param back)
 test("a recording ended as its 10-minute clock wakes prints no clock error", function()
   local context, S, gestures = loaded()
   gestures.press(1)
   hand_edit("reverb_mix")
-  local limit_clock = S.gestures[1].limit_clock
-  assert_true(limit_clock ~= nil, "the first event starts the 10-minute clock")
-  local started_at
+  local recorded = params:get("reverb_mix")
+  local limit_run = S.gestures[1].limit_run
+  assert_true(limit_run ~= nil, "the first event starts the 10-minute clock")
+  local limit_clock = limit_run.id
+  local by_hand
   context.clock.advance_until(limit_clock, function()
-    gestures.press(1)                     -- ends the recording: the loop plays
-    started_at = S.gestures[1].loop_started_at
-    assert_equal(S.gestures[1].limit_clock, nil, "the recorder forgets its 10-minute clock")
+    gestures.press(1)                     -- ends the recording: the loop plays its event
+    assert_equal(S.gestures[1].limit_run, nil, "the recorder forgets its 10-minute clock")
+    hand_edit("reverb_mix", 5)            -- a hand edit after the press, which the loop takes back only at its next pass
+    by_hand = params:get("reverb_mix")
   end)
+  assert_true(by_hand ~= recorded, "the hand edit moved the param off the recorded value")
   local errors = context.clock.take_errors()
   assert_equal(#errors, 0, "no resume reaches a coroutine norns no longer has" .. (errors[1] and (": " .. errors[1]) or ""))
   assert_equal(context.clock.threads[limit_clock], nil, "the clock ended at its wake")
   assert_equal(gestures.state(1), "playing", "the press's loop plays")
-  assert_equal(S.gestures[1].loop_started_at, started_at, "and the clock's wake ended nothing more: the loop was not restarted")
+  assert_equal(params:get("reverb_mix"), by_hand, "the clock's wake ended nothing more: no restarted loop set the param back")
   assert_equal(S.gestures[1].pattern.count, 1, "with its one event")
-  context.clock.run_for(0.2)
 end)
 
 test("a bar loop's length rounds to whole bars and its events scale with it", function()
