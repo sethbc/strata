@@ -298,20 +298,39 @@
             if (decodes.not) { ^this.rejectLoad(index, load, damaged) };
             ^this.applyLoad(index, load, path, frames, rightChannel, sampleRate, startFrame, peaks)
         };
-        // a long file: whatever the check finds, the recording is over (Lua's load_buffer ends it)
-        canceled = this.slotRecording(index);
+        // a long file: whatever the check finds, the recording is over
+        // (Lua's load_buffer ends it), but for a take that is ending, which
+        // completes (takeEnding, #890)
+        canceled = this.slotRecording(index) and: { this.takeEnding(index).not };
         if (canceled) { this.cancelSlotRecording(index, load - 1) };
-        // (stops at the first chunk after something supersedes the load, #375)
+        // (stops at the first chunk after something supersedes the load,
+        // #375). An sclang error in the check still ends the load (#885):
+        // the file closed, and a load not superseded meanwhile is rejected,
+        // its bufferLoadFailed naming its number
         fork({
-            decodes = this.fileDecodes(file, frames, true, peaks, { load > this.loadsSuperseded(index) });
-            file.close;
+            var failed = false;
+            try {
+                decodes = this.fileDecodes(file, frames, true, peaks, { load > this.loadsSuperseded(index) });
+                this.loadCheckFaultHook.value(index, load);
+            } { arg error;
+                // (never posted with the word the engine check fails on: the check injects this)
+                failed = true;
+                damaged = "sound file " ++ path ++ " could not be checked (" ++ error.class.name ++ ")";
+            };
+            try { file.close };
             if (load > this.loadsSuperseded(index)) {
-                if (decodes) { this.areaCall(\applyLoad, index, load, path, frames, rightChannel, sampleRate, startFrame, peaks) } {
-                    this.rejectLoad(index, load, damaged, canceled)
-                };
+                if (failed.not and: { decodes }) {
+                    this.areaCall(\applyLoad, index, load, path, frames, rightChannel, sampleRate, startFrame, peaks)
+                } { this.rejectLoad(index, load, damaged, canceled) };
             };
         }, SystemClock);
     }
+
+    // A test hook (nil on norns): a function a long load's check calls in
+    // its routine, after the file's chunks, with the slot and the load's
+    // number, so the engine check can throw inside the check (#885)
+    loadCheckFaultHook { ^areaState[\buffers][\loadCheckFaultHook] }
+    loadCheckFaultHook_ { arg hook; areaState[\buffers][\loadCheckFaultHook] = hook }
 
     // The most frames loadSlot checks at once (standardBufferSeconds at the
     // server rate: about 9 ms for a FLAC on a desktop); longer files are
@@ -323,9 +342,11 @@
     // that takes effect every earlier one (slotChanged)
     loadsSuperseded { arg index; ^areaState[\buffers][\loadsSuperseded][index] }
 
-    // A load that passed its checks takes effect: it cancels a recording,
-    // supersedes every earlier load and empties the slot at once. The file's
-    // sample rate becomes the slot's bufRateScale, so it plays at pitch.
+    // A load that passed its checks takes effect: it cancels a recording
+    // (a take that is ending is reported ended: stopRecording), supersedes
+    // every earlier load and empties the slot at once. The file's sample
+    // rate becomes the slot's bufRateScale with its length, so it plays at
+    // pitch.
     // The voices reading the slot fade out first (afterSlotFade): the slot
     // reads 0 frames until the reads have completed (a sync after them),
     // then its length and rate reach the grain synths and the poll, only if
@@ -342,8 +363,9 @@
         change = this.slotChanged(index, load);
         bufferFrames[index] = 0;
         // an empty slot is at the server's rate: a recording sent before the
-        // reads end is judged by what the slot holds, nothing (#374; with 0
-        // frames slotLengthPairs sends no rate, so fading grains keep theirs)
+        // length is reported is judged by what the slot holds, nothing (#374,
+        // #946; with 0 frames slotLengthPairs sends no rate, so fading
+        // grains keep theirs)
         bufferSampleRates[index] = context.server.sampleRate;
         // (3.7: the new audio plays at gain 1 until Lua sends its own)
         this.setSlotGainValue(index, 1);
@@ -375,13 +397,16 @@
                     };
                     bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, true));
                 } {
+                    // the file's rate goes to the peaks file and becomes the
+                    // slot's with its frames, so the slot is never at the
+                    // file's rate with 0 frames (#946)
                     if (slotChanges[index] == change) {
-                        bufferSampleRates[index] = sampleRate;
                         this.storeSlotPeaks(index, peaks);
                         this.areaCall(\writeSlotPeaks, index, frames, {
+                            bufferSampleRates[index] = sampleRate;
                             bufferFrames[index] = frames;
                             this.bufferChanged(index);
-                        });
+                        }, nil, sampleRate);
                     };
                 };
             }, SystemClock);
@@ -389,10 +414,9 @@
     }
 
     // A load whose file cannot be used leaves the slot as it is, except that
-    // it cancels a recording in progress or waiting to start, or one stopped
-    // early whose frame count has not arrived yet (stopReplies; the slot
-    // change drops that reply), as Lua's load_buffer expects: that take
-    // never completes, so it is never adopted under the bad file's name.
+    // it cancels a recording in progress (its stop fade included) or
+    // waiting to start, as Lua's load_buffer expects: that take never
+    // completes, so it is never adopted under the bad file's name.
     // The canceled take leaves the slot as it left it: untouched before its
     // preparation (a synced replace take still waiting keeps the slot's
     // audio, #311), empty after it; "canceled" is followed by the slot's
@@ -400,9 +424,12 @@
     // bufferLoadFailed poll reports the failure (load is the slot's load
     // number), so Lua puts back what the slot held (its bufferState reports
     // cannot tell a rejected load over audio from a good one).
+    // A take that is ending (its record synth freed, its frame count or
+    // peaks file awaited: takeEnding) is not canceled, whichever kind it is,
+    // and completes after the failure (#890).
     // canceled: a long file's command already canceled the slot's recording
     rejectLoad { arg index, load, reason, canceled = false;
-        var recording = this.slotRecording(index);
+        var recording = this.slotRecording(index) and: { this.takeEnding(index).not };
         postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
             ++ (if (recording or: { canceled }) { " recording canceled" } { " unchanged" }));
         if (recording) { this.cancelSlotRecording(index) };

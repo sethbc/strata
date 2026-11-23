@@ -282,12 +282,15 @@
 
     // Free a recording now and forget it. A recording canceled by a load,
     // clear or a newer recording (including one still waiting to start, or
-    // in its stop fade) reports "canceled"; a take whose frame count or
-    // peaks are still awaited is dropped with it (slotChanges). It leaves
-    // the slot as the take left it; each caller then reports the slot's
-    // length (bufferChanged), so Lua learns which
+    // in its stop fade) reports "canceled". A take that is ending
+    // (takeEnding: its synth has freed, its frame count or peaks are still
+    // awaited) recorded all it was going to: it reports "ended" (#890), and
+    // the steps it had left are dropped with the caller's slot change
+    // (slotChanges). It leaves the slot as the take left it; each caller
+    // then reports the slot's length (bufferChanged), so Lua learns which
     stopRecording { arg index;
         var synth = recordSynths[index], state = areaState[\record], take = state[\takes][index];
+        var ending = this.takeEnding(index);
         recordSynths[index] = nil;
         if (take.notNil) {
             state[\takes][index] = nil;
@@ -296,7 +299,7 @@
             // never armed: the slot keeps its length, so it gets back the
             // overview the take's start had put on the record length (#313)
             if (take[\started].not and: { take[\peaksBefore].notNil }) { this.storeSlotPeaks(index, take[\peaksBefore]) };
-            this.reportRecordState(index, take[\number], 3);
+            this.reportRecordState(index, take[\number], if (ending) { 2 } { 3 });
         };
         // its take may have just completed (sendToSynth); free(false) marks
         // it freed. The head goes back to idle after the free (in order on
@@ -313,6 +316,16 @@
     // stopRecord ended still awaits its frame count (stopReplies)
     slotRecording { arg index;
         ^recordSynths[index].notNil or: { stopReplies[index].notNil }
+    }
+
+    // true while the slot's take is ending (#890): its record synth has
+    // freed (a one-shot at its length, a stop's fade; recordSynthFreed) and
+    // the take still waits for its frame count or its peaks file (endTake).
+    // Read from the two records, never kept: the take is in takes and its
+    // synth no longer in recordSynths (every other phase has it there, from
+    // recordSlot until the free)
+    takeEnding { arg index;
+        ^areaState[\record][\takes][index].notNil and: { recordSynths[index].isNil }
     }
 
     // A load cancels the slot's recording: it never completes, and the slot

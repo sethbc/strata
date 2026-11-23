@@ -64,12 +64,14 @@
     // function, while it answers true: a playable recording's arming, whose
     // take a stop may change meanwhile). A failed write posts why and
     // still runs action: a waveform is a view, never a reason to hold up
-    // audio. rate is the slot's own, so frames / rate is what bufferState
-    // reports at any file rate. What the file holds is kept (written), so a
-    // refresh can tell when it would write the same (peaksUnchanged).
-    writeSlotPeaks { arg index, frames, action, current;
+    // audio. rate is the slot's own unless given (a load gives its file's,
+    // which the slot takes with its frames in action, #946), so frames /
+    // rate is what bufferState reports at any file rate. What the file holds
+    // is kept (written), so a refresh can tell when it would write the same
+    // (peaksUnchanged).
+    writeSlotPeaks { arg index, frames, action, current, rate;
         var state = areaState[\waveform], change = slotChanges[index], path = this.peaksPath(index).standardizePath;
-        var generation, partPath, content = this.peaksContent(index, frames);
+        var generation, partPath, content = this.peaksContent(index, frames, rate);
         var finish = { arg written;
             if (written.not) { postln("strata: cannot write " ++ path) };
             state[\written][index] = if (written) { content };
@@ -277,11 +279,12 @@
 
     // What a slot's peaks file of `frames` would hold, but its generation:
     // the frames and rate lines, then the values as the file writes them
-    // (three decimals), from sclang's copy of the overview. Two files with
-    // the same content draw the same waveform
-    peaksContent { arg index, frames;
+    // (three decimals), from sclang's copy of the overview, at rate (the
+    // slot's own unless given). Two files with the same content draw the
+    // same waveform
+    peaksContent { arg index, frames, rate;
         var peaks = areaState[\waveform][\peaks][index].asArray.collect({ arg value; this.peakText(value) });
-        ^["frames %\nrate %\n".format(frames.asInteger, bufferSampleRates[index].round.asInteger), "peaks " ++ peaks.join(" ")]
+        ^["frames %\nrate %\n".format(frames.asInteger, (rate ? bufferSampleRates[index]).round.asInteger), "peaks " ++ peaks.join(" ")]
     }
 
     // true when the slot's peaks file is there and holds what one of

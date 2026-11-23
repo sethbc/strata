@@ -776,16 +776,17 @@ test.("record: a recording sent while a load is in flight is judged on the empty
     check.((kind == \playable) and: { loop == 1 } and: { rate == sampleRate },
         "record: a recording sent while a load is in flight is judged on the empty slot (kind %, loop %, rate %)".format(kind, loop, rate));
 });
-// ... also in the last step of a load taking effect: the reads are done and
-// the slot has the file's rate, its length still to come once its peaks
-// file is in place. The peaks mover, stopped, holds that step open (for up
-// to peaksMoverTimeout), so the recording lands in it
+// ... also in the last step of a load taking effect: the reads are done,
+// its length (and, since #946, the file's rate with it) still to come once
+// its peaks file is in place, the slot empty at the server's rate. The
+// peaks mover, stopped, holds that step open (for up to
+// peaksMoverTimeout), so the recording lands in it
 test.("record: a recording sent while a load's peaks file is written is judged on the empty slot", {
     var path = h.tempDir +/+ "cd-rate-peaks.wav", mover = engine.areaState[\waveform][\mover], take, kind, loop, rate, frames;
     h.writeTestFile(path, 44100, 22050, [0.25, 0.25]);
     ("kill -STOP " ++ mover[\pid]).systemCmd;
     h.command(\loadBuffer, 4, path, 0);
-    h.waitFor({ engine.bufferSampleRates[4] == 44100 }, 0.8);
+    h.waitFor({ mover[\pending] > 0 }, 0.8);
     rate = engine.bufferSampleRates[4];
     frames = engine.bufferFrames[4];
     record.(4, 0.2, 1.0, 0.5, 0, 0, 1);
@@ -796,9 +797,70 @@ test.("record: a recording sent while a load's peaks file is written is judged o
     h.command(\stopRecord, 4);
     waitDone.(4, 2);
     h.waitFor({ mover[\pending] == 0 }, 3);
-    check.((rate == 44100) and: { frames == 0 } and: { kind == \playable } and: { loop == 1 },
+    check.((rate == sampleRate) and: { frames == 0 } and: { kind == \playable } and: { loop == 1 },
         "record: a recording sent while a load's peaks file is written is judged on the empty slot (rate %, % frames, kind %, loop %)".format(
             rate, frames, kind, loop));
+});
+// #890: a take that is ending (its record synth freed, its peaks file or
+// its frame count still awaited) completes, whatever arrives then: a bad
+// load, a clear or a new recording reports it ended, never canceled. The
+// peaks mover, stopped, holds a one-shot's ending open (for up to
+// peaksMoverTimeout) while the command lands in it: three takes at once,
+// one a slot (5, 6, 7: the bad load, the clear, the new recording)
+test.("record: a bad load, a clear and a new recording while a one-shot take is ending: the take completes and reports ended", {
+    var mover = engine.areaState[\waveform][\mover], frames = (0.05 * sampleRate).round.asInteger;
+    var slots = [5, 6, 7], events = [\badLoad, \clear, \record], start, numbers, ending, results;
+    slots.do({ arg slot; h.command(\clearBuffer, slot) });
+    server.sync;
+    start = nowMessages.value;
+    ("kill -STOP " ++ mover[\pid]).systemCmd;
+    slots.do({ arg slot; record.(slot, 0.05) });
+    numbers = slots.collect({ arg slot; state[\recordCounts][slot] });
+    ending = h.waitFor({ slots.every({ arg slot; engine.recordSynths[slot].isNil and: { state[\takes][slot].notNil } }) }, 2);
+    h.command(\loadBuffer, 5, h.tempDir +/+ "missing.wav", 0);
+    h.command(\clearBuffer, 6);
+    record.(7, 0.05);
+    ("kill -CONT " ++ mover[\pid]).systemCmd;
+    slots.do({ arg slot; waitDone.(slot, 3) });
+    h.waitFor({ mover[\pending] == 0 }, 3);
+    results = slots.collect({ arg slot, index;
+        (event: events[index], frames: engine.bufferFrames[slot], events: slotEvents.(slot, start),
+            reports: reportsFor.(slot).select({ arg report; report[1] == numbers[index] }).collect({ arg report; report[2] }))
+    });
+    check.(ending and: { results.every({ arg each; each[\reports] == [1, 2] }) }
+        and: { results[0][\frames] == frames } and: { results[1][\frames] == 0 } and: { results[2][\frames] == frames }
+        and: { results[0][\events].includes('canceled').not },
+        "record: a bad load, a clear and a new recording while a one-shot take is ending: the take completes and reports ended (all ending %: %)".format(
+            ending, results.collect({ arg each; [each[\event], each[\reports], each[\frames], each[\events]] })));
+    slots.do({ arg slot; h.command(\clearBuffer, slot) });
+    server.sync;
+});
+// ... and a stopped replace take whose frame count is still awaited (the
+// engine's /n_end handler has asked for it, its reply not read yet): the
+// bad load comes from a responder that runs after that handler
+test.("record: a bad load while a stopped take awaits its frame count: the take completes and reports ended", {
+    var start, number, node, phase, events, responder;
+    reset.(5);
+    record.(5, 1.0);
+    h.waitFor({ state[\takes][5] !? { arg take; take[\started] } ? false }, 2);
+    number = state[\recordCounts][5];
+    node = engine.recordSynths[5].nodeID;
+    start = nowMessages.value;
+    responder = OSCFunc({ arg msg;
+        if ((msg[1] == node) and: { phase.isNil }) {
+            phase = [engine.recordSynths[5].isNil, engine.stopReplies[5].notNil, state[\takes][5].notNil];
+            h.command(\loadBuffer, 5, h.tempDir +/+ "missing.wav", 0);
+        };
+    }, '/n_end', server.addr);
+    h.command(\stopRecord, 5);
+    waitDone.(5, 3);
+    responder.free;
+    events = slotEvents.(5, start);
+    check.((phase == [true, true, true]) and: { reportsFor.(5).select({ arg report; report[1] == number }).last == [5, number, 2] }
+        and: { events.includes('canceled').not } and: { engine.bufferFrames[5] > 0 },
+        "record: a bad load while a stopped take awaits its frame count: the take completes and reports ended (synth freed, count awaited, take kept: %; % frames; reports %)".format(
+            phase, engine.bufferFrames[5], events));
+    reset.(5);
 });
 test.("record: a load sent during a synced take's wait drops its preparation", {
     var path = writeLevelFile.("slot.wav", 1, 0.3), nodes;
