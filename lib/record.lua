@@ -226,9 +226,11 @@ return function(S)
     set_buffer_file_param(slot, _path.audio)
     S.lib.waveforms.stale(slot)
     -- 3.7: a take now, its settings a copy of the file's it was
-    -- recorded over (a synced one's tempo the clock's at its start)
+    -- recorded over (a synced one's tempo the clock's at its start);
+    -- bound only when it holds audio, since the binding names the audio
+    -- that plays (#975: a dub of an empty slot that ends from 0 s)
     S.lib.samples.take_from_file(slot, M.synced_tempo(slot))
-    S.lib.samples.bind(slot)
+    if buffer.loaded then S.lib.samples.bind(slot) else S.lib.samples.unbind(slot) end
   end
 
   -- A recording's cancel, from its "canceled" report (or a replace take's

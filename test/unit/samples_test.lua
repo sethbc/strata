@@ -860,4 +860,22 @@ h.transition_table({
   },
 })
 
+
+-- 3.9 (#975): a dub into an empty slot that ends with no length known (its
+-- fallback, no bufferState report) leaves the slot empty, and binds
+-- nothing: the binding names the audio that plays
+test("a dub that leaves its slot empty binds nothing (#975)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("record_feedback", 50)
+  record_buffer(3)
+  record_buffer(3)                       -- K3: the fallback starts
+  wake_buffer_clock(context, 3)          -- no report: it ends from 0 s
+  params:set("record_feedback", 0)
+  assert_equal(S.lib.buffers.status(3), "empty", "0 s known: the slot is empty")
+  assert_equal(S.buffers[3].name, "take 3", "a take with no length")
+  assert_true(not samples().is_bound(3), "and unbound")
+  assert_equal(table.concat(h.check_invariants(), "; "), "", "every invariant holds")
+end)
+
 end
