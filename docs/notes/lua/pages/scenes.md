@@ -13,6 +13,28 @@
 - The name entry is norns' `textentry`, opened through `S.lib.ui_name_entry` (the voice picker's too, #849; `docs/notes/lua/ui/name-entry.md`), with no modal owner: it takes the global `key`, `enc` and `redraw` itself (from play mode) and cancels on a K2 release, so it opens on ALT+K2's release (`alt_key_release`), never the press (the release would cancel it at once), after `forget_held_keys()` (K1's release goes to the entry, so ALT must not stay held). `S.scenes_page.naming` is the slot while an entry is open and nil otherwise: set as it opens, cleared by the entry's callback, which names the slot through `S.lib.scenes.set_name` (a cancel's nil keeps the old name), or by the menu-close hook below. A callback that is no longer the open entry's does nothing.
 - `S.lib.pages_scenes.reconcile_name_entry` (a `menu_close` hook, run after every `set_mode(false)`) runs the entry's `reconcile()`: a menu that took the one textentry over forgets the entry (Strata's key and enc back, `naming` cleared through the entry's `on_close`, play mode routed to them), and a menu that came and went over it hands the entry the screen back (`docs/notes/lua/ui/name-entry.md` says how).
 
+## Machines
+
+### scenes prompt
+- **State:** `S.scenes_page.armed_slot` and `armed_until` (the overwrite confirmation: idle, armed, lapsed, read through the page's local `armed()`), and `S.scenes_page.naming` beside the page's `name_entry` (an `S.lib.ui_name_entry` entry: closed, or naming, open for a slot). The two parts are independent; the States section below gives each state's fields.
+- **Invariant:** `scenes prompt`: `armed_slot` and `naming` are each nil or a slot in 1..`NUM_SCENES`, and `naming` is set exactly while the page keeps an open entry's callback.
+- **Test:** `test/unit/pages_scenes_test.lua`: "the scenes prompt invariant holds the name entry's slot to its callback" (and "the overwrite prompt is the page's hint while armed and lapses after 2 s", "a name entry the norns menu took over is forgotten when the menu closes").
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| idle | ALT+K3 on a populated slot | armed | `armed_slot` the slot, `armed_until` now + 2 s; the hint row asks |
+| idle | ALT+K3 on an empty slot | idle | saved at once |
+| armed | ALT+K3 again, no hints flash covering it | idle | `disarm()`, then `S.lib.scenes.save(slot)` |
+| armed | ALT+K3 again under a covering hints flash | armed | armed again, nothing saved |
+| armed | `move_cursor` moves the cursor | idle | `disarm()` |
+| armed | 2 s pass, or `S.cursors.scene` set directly | lapsed | no function runs |
+| lapsed | the next frame on SCENES (`animates`) | idle | `disarm()`, the prompt off the hint row |
+| lapsed | ALT+K3 on a populated slot | armed | armed for that slot |
+| closed | ALT+K2 released on a slot | naming | `naming` the slot, then the entry's `open` (`forget_held_keys()`, `textentry.enter`) |
+| naming | OK or a K2 release (the entry's callback) | closed | OK names the slot; `naming` cleared |
+| naming | the menu's own entry replaced `textentry.callback` | closed | `reconcile_name_entry`: Strata's key and enc back, `naming` cleared |
+| naming | the menu opened and closed over it | naming | the entry drawn again |
+
 ## Owns
 
 - `lib/pages/scenes.lua` (`S.lib.pages_scenes`): the SCENES record with draw, hints, enc, alt_enc, key, alt_key, alt_key_release, `arc_button`, `animates` and `layout_states` (every slot and field as cursor, all populated and every slot named with 12 `W`s, the widest name, sequencer on; `armed` and `armed with ALT`: slot 16 armed through `S.scenes_page`, the second with K1 held, since the renders draw each state with ALT up; `sequencer in bank 2`: the mark on slot 12; `S16 current beside REC`: the header's widest scene beside `REC`); `move_cursor(slot)` and `reconcile_name_entry()` (fields of `S.lib.pages_scenes`); its menu-close hook. Its tests: `test/unit/pages_scenes_test.lua` (the name entry through `test/stub_textentry.lua`, `docs/notes/test-harness/stubs.md`).

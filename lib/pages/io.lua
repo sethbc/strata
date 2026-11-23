@@ -26,6 +26,10 @@ return function(S)
     title_level = 10,     -- a title and its status
     note_level = 4,       -- a status row
     texts = {empty = "no sections", error = "error", not_saved = "setting not saved"},
+    -- the draw that first shows the cursor on a row it fell to (its own
+    -- row went: view.unseen) marks that row at x 0, before its label at
+    -- row_indent (#902)
+    unseen_mark = ">",
     -- what each row kind needs: its fields and their types ("function" or
     -- "string"; "text" a string or a function)
     kinds = {
@@ -288,9 +292,22 @@ return function(S)
     end
   end
 
-  local function draw_list(rows, cursor, tail)
+  -- The unseen mark beside the row at y (the cursor's, in the draw that
+  -- first shows it)
+  local function draw_unseen_mark(y)
+    screen.level(15)
+    screen.move(0, y)
+    screen.text(IO_PAGE.unseen_mark)
+  end
+
+  -- The list from cursor (scrolled tail rows past it), marked_row (or nil)
+  -- with the unseen mark
+  local function draw_list(rows, cursor, tail, marked_row)
     field_list.draw(rows, cursor, {visible = IO_PAGE.visible, first_y = IO_PAGE.first_y, spacing = IO_PAGE.spacing,
-      value_right = IO_PAGE.value_right, tail = tail}, draw_row)
+      value_right = IO_PAGE.value_right, tail = tail}, function(row, y, selected, value_right)
+      draw_row(row, y, selected, value_right)
+      if row == marked_row then draw_unseen_mark(y) end
+    end)
   end
 
   local function redraw_io()
@@ -301,21 +318,23 @@ return function(S)
       screen.text(IO_PAGE.texts.empty)
       return
     end
-    cursor_row(rows)
-    view.unseen = false  -- this draw shows the cursor's row
+    local cursor_entry = cursor_row(rows)
+    -- this draw shows the cursor's row, marked when it was unseen
+    local marked_row = view.unseen and cursor_entry or nil
+    view.unseen = false
     local title = pinned_title(rows)
     if title then
       -- the view from the pinned title: field_list.draw shows the row after
       -- the title as if it held the cursor (so the title is the row above,
       -- at the top), and the real cursor's row is the one lit
-      local cursor_entry = rows[S.io_cursor]
       field_list.draw(rows, title + 1, {visible = IO_PAGE.visible, first_y = IO_PAGE.first_y,
         spacing = IO_PAGE.spacing, value_right = IO_PAGE.value_right, tail = 0}, function(row, y, _, value_right)
-        draw_row(row, y, row == cursor_entry and row.selectable, value_right)
+        draw_row(row, y, row == cursor_entry, value_right)
+        if row == marked_row then draw_unseen_mark(y) end
       end)
       return
     end
-    draw_list(rows, S.io_cursor, view.tail)
+    draw_list(rows, S.io_cursor, view.tail, marked_row)
   end
 
   -- The detail list (a detail row's K3): its label as a title, then its
@@ -557,12 +576,24 @@ return function(S)
   local own_layout_states = #layout_states
   S.registry.pages[UI_PAGES.index.IO] = {name = "IO", draw = redraw_io, hints = io_hints, enc = io_enc,
     alt_enc = io_alt_enc, key = io_key, layout_states = layout_states,
-    -- leaving closes a detail list and ends a pinned view, so the next
-    -- visit opens on the cursor's row
+    -- leaving ends a pinned view, so the next visit opens on the cursor's
+    -- row. It closes no detail list: no page change happens under a modal
+    -- owner (#899)
     leave = function()
-      close_detail()
       view.pinned = nil
     end}
+
+  -- 3.9 (#902): the detail list is open (detail.owner set) exactly while
+  -- its owner is the modal one, or beneath SEQ's step editor (the one owner
+  -- a grid can push over it); closed, its owner is never the modal one
+  S.register_invariant("io detail", function()
+    local top = S.lib.ui_modal.top()
+    if detail.owner == nil and top == detail_owner then return "the detail is closed but its owner is the modal one" end
+    if detail.owner ~= nil and top ~= detail_owner
+      and not (top == S.lib.pages_seq.step_editor_owner and S.lib.pages_seq.step_editor()) then
+      return "the detail is open but the modal owner is " .. tostring(top) .. ", not its own"
+    end
+  end)
 
   -- init's start step: after the page's own, per registered section, in the page's order, a
   -- state with it at the top of the list, then each of its own states run

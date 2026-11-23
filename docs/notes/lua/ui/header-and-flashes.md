@@ -6,6 +6,33 @@
 - Status indicators use brackets (`[M]`, `[L]`, `[T]`, `[F]`). Screen levels: 15 bright, 4 dim, 1-2 subtle. Two marks are unbracketed: the play triangle while the patterns play, and (3.8) FX's page dot standing as a bar, whose rules follow: it is FX's own dot, its x always the dot's (`dots_x`, `dot_spacing`, `UI_PAGES.index.FX`; no x of its own), shows only while `S.lib.fx_hold.any_frozen()`, keeps 1 px clear of every other header rect and text, and goes with the dots under a header flash (a test runs every page; `assert_screen_layout` expects the bar at FX's dot exactly while something is frozen, and takes every header rect over the dots' span as a dot, so a rect of another shape there fails).
 - `draw_hints` draws its text as norns' font can (`S.lib.ui_text.printable`: a flash naming a file with accented letters shows them plainly, never as gaps, #551) and cuts it to the screen's 128 px (`fit_text`, on the text it draws), so a flash naming a long file or folder never leaves the screen; the flash itself keeps its whole text. Only a changed text is measured again. `S.lib.ui_header.hint_fits(text)` says whether the row draws a text whole, under the same two steps (#432).
 
+## Machines
+
+### flash slots
+- **State:** per slot (`"header"`, `"hints"`), `S.lib.ui_flash.slots[slot]` (`text`, `ends_at`, `page`, `clock`, the id of the clock helper's handle kept in the module's local `handles`), read through `S.lib.ui_flash.text(slot)`: idle (no text); showing (a text before `ends_at`, its page up or none); hidden (a text before `ends_at` for a page that is not up); lapsed (`ends_at` passed, the clock not yet woken). Only showing gives the flash's text: the other three give the slot's standing notice, or nil.
+- **Invariant:** `flash slots`: a slot showing a text has the clock that ends it (so a lapsed or hidden text always goes).
+- **Test:** `test/unit/ui_header_test.lua`: "a new flash replaces the running one and its clock" (and "a hints flash shows only on its owning page", "a nil flash text ends the flash instead of showing nil").
+
+A standing notice (`add_notice`) has no state here: it follows its own module's. Idle has no clock to wake, so `idle` + `the clock wakes` is no row.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| idle | `start(slot, text, seconds, page)`, its page up or none | showing | text, page and `ends_at` stored; a clock sleeps `seconds`; a redraw |
+| idle | `start` for a page that is not up | hidden | as above |
+| idle | `start(slot, nil)` or `cancel_all` | idle | a redraw only (`start`) |
+| showing | `start` | showing (or hidden, for a page not up) | the running clock stopped (`S.lib.clocks.stop`: retired when its wake may be posted, #870), then the new text and clock |
+| showing | `start(slot, nil)` or `cancel_all` | idle | the clock stopped, the text cleared |
+| showing | a page change away from its page | hidden | nothing runs: `text()` reads the page |
+| showing | `ends_at` passes | lapsed | nothing runs: `text()` reads the time |
+| showing | the clock wakes (a little early) | idle | the text cleared, a redraw |
+| hidden | a page change to its page | showing | nothing runs |
+| hidden | `ends_at` passes | lapsed | nothing runs |
+| hidden | the clock wakes | idle | the text cleared, a redraw |
+| hidden | `start`, `start(slot, nil)` or `cancel_all` | as from showing | as from showing |
+| lapsed | the clock wakes | idle | the text cleared, a redraw |
+| lapsed | `start`, `start(slot, nil)` or `cancel_all` | as from showing | as from showing |
+| any | cleanup (step 140) | idle | `cancel_all(S.lib.clocks.cancel)` |
+
 ## Header and flashes
 
 `draw_header()` (`lib/ui/header.lua`), y=8, positions in `S.constants.HEADER`:

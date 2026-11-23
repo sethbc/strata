@@ -9,6 +9,25 @@
 - **Its hint row shows a flash first**: under a modal owner `redraw()` takes the hints from the owner, so `hints` returns `S.lib.ui_flash.text("hints")` while one shows (a refused load or save, flashed by `S.lib.voice_presets` with VOICE's page).
 - **ALT+K2's clear decides at the release**, by how long it was held: `hold_seconds` or more on a filled slot clears it (`S.lib.voice_presets.clear`); a quick press does nothing. The owner `animates` while K2 is down (`held_seconds` answers: a plain K2 closes the picker at the press, so a K2 it holds is an ALT+K2), so the hint turns from `K2:hold` to `K2:clear` at the hold time.
 
+## Machines
+
+### voice picker
+- **State:** `picker = {open, voice, cursor, tail, k3_slot}` (local to `lib/ui/voice_picker.lua`), read through `S.lib.ui_voice_picker.is_open()`; its presses are the modal's (`S.lib.ui_modal.held_seconds(owner, n)`), `k3_slot` data read only while K3's press is still the picker's. Its name entry is `S.lib.ui_name_entry`'s machine (`docs/notes/lua/ui/name-entry.md`).
+- **Invariant:** `voice picker`: the open picker's owner is the modal one (or lies beneath SEQ's step editor), the closed picker's never; its cursor is a row of its list; `k3_slot` is nil while it is closed.
+- **Test:** `test/unit/ui_voice_picker_test.lua`: "an owner covered while ALT+K3 is down forgets the press: a later plain K3 tap opens no name entry" (and "an owner covered while ALT+K2 is down shows its plain hint and does not animate", "cleanup closes the picker").
+
+Its opens and closes are a row of the owners' table (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner); its keys:
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| closed | K3 on VOICE's `preset` row | open | pushed for the selected voice, the cursor where it was left |
+| open | K2 (no ALT) | closed | popped at the press |
+| open | K3 (no ALT) | open | a voice's sound copied or a slot's preset loaded, `loaded <name>` flashed |
+| open | ALT+K3 released on a slot, its press the picker's | open | the name entry opens (it takes the keys until it closes) |
+| open | ALT+K2 released held `hold_seconds` on a filled slot | open | the slot cleared; quicker, nothing |
+| open | the grid's step editor pushed over it | open | its presses forgotten: no later release acts on them (#866) |
+| open | cleanup (step 138) | closed | popped |
+
 ## lib/ui/voice_picker.lua (`S.lib.ui_voice_picker`)
 
 Opened by K3 on VOICE's `preset` row (`lib/pages/voice.lua`) for the selected voice. Fields: `open(voice_idx)`, `close()`, `is_open()`, `reconcile_name_entry()` (its menu-close hook) and `VOICE_PICKER` (the layout and texts). Its cleanup step (`CLEANUP_ORDER.voice_picker`, 138) closes an open picker, so its owner is not left on the modal stack.

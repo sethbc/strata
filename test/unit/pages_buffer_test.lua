@@ -2107,4 +2107,76 @@ test("a K2 held on BUFFER across a covering owner is forgotten: no clear, no sel
   assert_equal(context.fileselect.last, nil, "and opens no selector")
 end)
 
+-- A registered invariant's check, by its name (nil while it holds)
+local function invariant(S, name)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == name then return record.fn() end
+  end
+  error("no " .. name .. " invariant")
+end
+
+-- 3.9 (#902): the file selector is open exactly while its callback and
+-- Strata's saved key and enc are set
+test("the file selector invariant: open exactly while its callback and the saved key and enc are set", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local page = S.BUFFER_PAGE
+  assert_equal(invariant(S, "file selector"), nil, "closed, with nothing kept")
+  tap(2)
+  assert_true(page.file_selector_open, "a quick K2 opens the selector")
+  assert_equal(invariant(S, "file selector"), nil, "open, with its callback and Strata's key and enc")
+  context.fileselect.last.callback("cancel")
+  assert_equal(invariant(S, "file selector"), nil, "closed again by its callback")
+  h.allow_broken_invariants("the test breaks the file selector invariant on purpose")
+  page.file_selector_open = true
+  assert_true(invariant(S, "file selector") ~= nil, "open with no callback is reported")
+  page.file_selector_callback = function() end
+  assert_true(invariant(S, "file selector") ~= nil, "open with no saved key and enc is reported")
+  page.script_key = key
+  assert_true(invariant(S, "file selector") ~= nil, "open with no saved enc is reported")
+  page.script_enc = enc
+  assert_equal(invariant(S, "file selector"), nil, "open with all three holds")
+  page.file_selector_open = 1
+  assert_true(invariant(S, "file selector") ~= nil, "an open flag that is no boolean is reported")
+  page.file_selector_open = false
+  assert_true(invariant(S, "file selector") ~= nil, "closed with a callback and saved handlers is reported")
+  close_buffer_file_selector()
+  assert_equal(invariant(S, "file selector"), nil, "the close clears all four")
+end)
+
+-- #959: BUFFER's ALT keys act at their release alone, so the record has no
+-- alt_key (key() marks an ALT press and routes its release to
+-- alt_key_release whether or not the page has one), and no function of the
+-- page is empty
+test("BUFFER has no alt_key: its ALT keys act at the release alone, and no function of the page is empty", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  local record = S.registry.pages[S.constants.UI_PAGES.index.BUFFER]
+  assert_equal(record.alt_key, nil, "the record has no alt_key")
+  assert_true(record.alt_key_release ~= nil, "it acts in alt_key_release")
+  local randoms = {}
+  S.lib.files.random_into = function(slot) table.insert(randoms, slot); return true end
+  load_buffer(1, "/tmp/a.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 4))
+  context.clear_engine_calls(); context.fileselect.last = nil
+  context.set_time(100); key(1, 1); key(2, 1)
+  assert_equal(#randoms, 0, "ALT+K2's press does nothing")
+  assert_equal(S.key_press_alt[2], true, "the press is marked an ALT press")
+  context.set_time(100.2); key(2, 0)
+  assert_equal(table.concat(randoms, " "), "1", "ALT+K2's release loads a random file")
+  key(3, 1)
+  assert_equal(#context.calls_named("saveBuffer"), 0, "ALT+K3's press saves nothing")
+  assert_equal(#context.calls_named("recordBuffer"), 0, "nor records (the page's key never runs)")
+  context.set_time(100.4); key(3, 0); key(1, 0)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "ALT+K3's release saves")
+  assert_equal(context.fileselect.last, nil, "no ALT key opened the selector")
+  local source
+  for _, file in ipairs(h.read_lua_sources()) do
+    if file.path == "lib/pages/buffer.lua" then source = h.sync_check.sanitize_lua(file.text) end
+  end
+  assert_true(source ~= nil, "the page's source is read")
+  local empty = {}
+  for name in source:gmatch("function%s+([%w_.:]*)%s*%([^)]*%)%s*end") do empty[#empty + 1] = name end
+  assert_equal(#empty, 0, "empty functions in lib/pages/buffer.lua: " .. table.concat(empty, ", "))
+end)
+
 end

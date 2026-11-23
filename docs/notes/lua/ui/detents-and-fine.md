@@ -3,6 +3,15 @@
 - Never call `params:delta` from an encoder or a ring: a page's `enc` calls `enc_param_delta(n, id, d)` for every param edit, a ring `arc_sweep_param` or `delta_with_detent` (a test checks `lib/pages/` and `lib/arc/`). Fine adjustment is ALT+E3 only, never ALT+E2 or the arc. A change that reaches or crosses 0 on a range through 0 lands on exactly 0, whatever the size of the delta (an accelerated encoder delta of 2-5 included), and holds there for 3 detents or 24 ticks, but only within `DETENT.hold_seconds` (1 s) of reaching 0: a hold never outlives that, so one left from an old turn never swallows a later detent.
 - Every change `delta_with_detent` applies is a turn, marked through `S.lib.ui_detent.as_turn` (#318), so a param filter (the quantized `freq`'s) moves its shadow; the detent's own `params:set(id, 0)` is a set. `S.turning_param` is nil between events (the `param turn` invariant), and an error in a param action never leaves it set.
 
+## Machines
+
+### param turn
+- **State:** `S.turning_param` (`lib/ui/detent.lua`): nil between events, or the id of the param a turn is setting right now, set and put back only by `S.lib.ui_detent.as_turn(param_id, fn)`.
+- **Invariant:** `param turn`: `S.turning_param` is nil between events (an error in a param action never leaves it set).
+- **Test:** `test/unit/variation_test.lua`: "the PARAMS menu's own delta turns a quantized freq by scale tones" (and `test/unit/mutation_test.lua`: "mutation steps walk a quantized freq by scale tones (#318)"), each ending with no turn marked; the invariant runs after every unit test.
+
+No table: a two-state mark with one writer, which puts back the mark it found (a turn inside a turn restores the outer one) whether `fn` returns or raises. The holds at 0 (`detent_holds`) are another state with no illegal mix and expire lazily, at the next turn.
+
 ## Center detents and fine adjustment
 
 `lib/ui/detent.lua` (`S.lib.ui_detent`), with `param_spans_zero` and `param_default` in `lib/ui/params.lua`. Every encoder and ring change of a param goes through `delta_with_detent(param_id, d, opts)` (global); never `params:delta`.

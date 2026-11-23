@@ -808,13 +808,11 @@ return function(S)
   end
 
   -- ALT+K2 and ALT+K3 act on release (design 3.3 section 8.1, the one
-  -- exception to acting through alt_action at the press): the press does
-  -- nothing here (key() notes its time). An ALT press releases through
-  -- alt_key_release, never key_release, so ALT+K2 never opens the file
-  -- selector, even when K1 comes up first
-  local function buffer_alt_key()
-  end
-
+  -- exception to acting through alt_action at the press): the record has
+  -- no alt_key, so the press does nothing (key() notes its time and marks
+  -- it an ALT press, #959). An ALT press releases through alt_key_release,
+  -- never key_release, so ALT+K2 never opens the file selector, even when
+  -- K1 comes up first.
   -- ALT+K2 released: a random file into the cursor slot, or held, fill
   -- every empty slot (3.7, plan ruling 31: as ALT+K2 randomizes on the
   -- other pages); ALT+K3 released: save the cursor slot, or held, its loop
@@ -903,6 +901,19 @@ return function(S)
     key, enc = PAGE.script_key, PAGE.script_enc
     close_buffer_file_selector()
   end
+
+  -- 3.9 (#902): the selector is open exactly while its callback and
+  -- Strata's saved key and enc are set (buffer_key_release sets the four
+  -- together, close_buffer_file_selector clears them together)
+  S.register_invariant("file selector", function()
+    local open = PAGE.file_selector_open
+    if open ~= true and open ~= false then return "file_selector_open is " .. tostring(open) end
+    for _, field in ipairs({"file_selector_callback", "script_key", "script_enc"}) do
+      if (PAGE[field] ~= nil) ~= open then
+        return "the selector is " .. (open and "open" or "closed") .. " but " .. field .. " is " .. tostring(PAGE[field])
+      end
+    end
+  end)
 
   ---------------------------------------------------------------------------
   -- The states the layout tests and the page renders draw (each on a fresh
@@ -1194,7 +1205,7 @@ return function(S)
   -- are lib/arc/buffer.lua's; its arc button records, as K3 does
   S.registry.pages[BUFFER_INDEX] = {name = "BUFFER", draw = redraw_buffer, hints = buffer_hints,
     enc = buffer_enc, alt_enc = buffer_alt_enc, key = buffer_key, key_release = buffer_key_release,
-    alt_key = buffer_alt_key, alt_key_release = buffer_alt_key_release, enter = start_input_meter,
+    alt_key_release = buffer_alt_key_release, enter = start_input_meter,
     animates = buffer_animates,
     arc_button = record_cursor_slot, layout_states = layout_states}
 

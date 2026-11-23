@@ -8,6 +8,24 @@
 - **A refused file's reason shows on the editor's own hint row, and no other flash does**: under a modal owner `redraw()` takes the hints from the owner, never from the "hints" flash, so the owner's `hints` returns `S.lib.ui_flash.text("hints")` while it is the reason the editor flashed (`editor.reason`, dropped at open and close; the flash itself, started with SETUP's page, ends on its clock). Another module's hints flash, unscoped (a scenes or buffers load's) or SETUP's, never covers the editor's keys (#843).
 - **Cleanup closes an open editor** (`CLEANUP_ORDER.scale_editor`, 139): its owner leaves the modal stack and the note tap is cleared, as the factory list's step closes it (#847).
 
+## Machines
+
+### scale editor
+- **State:** `editor = {open, row, class, choices, pending, reason}` (local to `lib/ui/scale_editor.lua`), read through `S.lib.ui_scale_editor.is_open()`; `pending` is the tuning row's dim choice, `reason` a refused file's flash; the note tap (`S.lib.midi_in.set_note_tap`) is the editor's while it is open.
+- **Invariant:** `scale editor`: the open editor's owner is the modal one (or lies beneath SEQ's step editor), the closed editor's never; its cursor is on a row and a class; a pending choice is one of the choices.
+- **Test:** `test/unit/ui_scale_editor_test.lua`: "SETUP's scale & tuning row opens the editor; K2 closes it" (and "the tuning row: E3 moves a dim pending choice and K3 applies it; a refused file says why", "cleanup closes the editor and clears the note tap").
+
+Its opens and closes are a row of the owners' table (`docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner):
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| closed | K3 on SETUP's `scale & tuning` row | open | the tuning choices listed, nothing pending, the note tap set, pushed |
+| open | E3 on the tuning row | open | a pending choice (drawn dim), nothing sent |
+| open | K3 on the tuning row with a choice pending | open | applied through `S.lib.tuning.select`, nothing pending |
+| open | K3 on the notes row, or a MIDI note | open | the class toggled |
+| open | K2 (no ALT) | closed | the tap cleared, the pending choice and reason dropped, popped |
+| open | cleanup (step 139) | closed | as K2 |
+
 ## lib/ui/scale_editor.lua (`S.lib.ui_scale_editor`)
 
 Opened from SETUP's `scale & tuning` row (K3; an action row appended after `transport`, 3.8 ruling 44). Fields: `open`, `close`, `is_open`, `note(key)` (the tap) and `SCALE_EDITOR` (the layout); its cleanup step (139) closes it.

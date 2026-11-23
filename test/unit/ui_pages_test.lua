@@ -229,7 +229,8 @@ test("with ALT held no page's hint names a key that does nothing (#419)", functi
       local hint = record.hints(true) or ""
       for _, key_name in ipairs({"K2", "K3"}) do
         if hint:find(key_name .. ":", 1, true) then
-          assert_true(record.alt_key ~= nil, name .. " names " .. key_name .. " with ALT held ('" .. hint
+          -- BUFFER's ALT keys act at the release alone (no alt_key, #959)
+          assert_true(record.alt_key ~= nil or record.alt_key_release ~= nil, name .. " names " .. key_name .. " with ALT held ('" .. hint
             .. "') but has no ALT key action")
           if key_name == "K3" and name ~= "BUFFER" then
             if name == "SEQ" then S.patterns[S.selected_voice][1] = 5 end  -- ALT+K3 clears: give it a step

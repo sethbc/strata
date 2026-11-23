@@ -725,4 +725,148 @@ test("no layout state's hint row is cut by the page", function()
   assert_equal(#cut, 0, "hint rows cut: " .. table.concat(cut, "; "))
 end)
 
+-- A registered invariant's check, by its name (nil while it holds)
+local function invariant(S, name)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == name then return record.fn() end
+  end
+  error("no " .. name .. " invariant")
+end
+
+-- One section with a detail row, the cursor on it
+local function with_detail(S)
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    return {
+      { label = "cc 1", kind = "detail", text = function() return "ch 3" end, fields = {
+        { label = "port", kind = "rig", key = "faders_port" } } },
+    }
+  end })
+  show_page("IO")
+end
+
+-- 3.9 (#902): the detail list is open exactly while its owner is on the
+-- modal stack (the top one, or beneath SEQ's step editor, which a grid can
+-- push over any owner)
+test("the io detail invariant: the detail is open exactly while its owner is on the stack", function()
+  local _, S = loaded()
+  with_detail(S)
+  assert_equal(invariant(S, "io detail"), nil, "closed, its owner not pushed")
+  tap(3)
+  local owner = S.lib.ui_modal.top()
+  assert_true(owner ~= nil, "K3 opens the detail")
+  assert_equal(invariant(S, "io detail"), nil, "open, its owner on top")
+  S.lib.pages_seq.open_step_editor(1, 1, 1)
+  assert_equal(invariant(S, "io detail"), nil, "open beneath SEQ's step editor")
+  S.lib.pages_seq.close_step_editor(1)
+  h.allow_broken_invariants("the test breaks the io detail invariant on purpose")
+  S.lib.ui_modal.pop(owner)
+  assert_true(invariant(S, "io detail") ~= nil, "open with its owner off the stack is reported")
+  S.lib.ui_modal.push(owner)
+  assert_equal(invariant(S, "io detail"), nil, "back on the stack")
+  tap(2)
+  assert_equal(S.lib.ui_modal.top(), nil, "K2 closes it")
+  assert_equal(invariant(S, "io detail"), nil, "closed by K2")
+  S.lib.ui_modal.push(owner)
+  assert_true(invariant(S, "io detail") ~= nil, "closed with its owner on the stack is reported")
+  S.lib.ui_modal.pop(owner)
+end)
+
+-- #899: no page change happens under a modal owner, so IO's leave closes
+-- no detail: E1 under the open detail leaves the page and the list as they
+-- are, and the page's leave, run as a page change would, keeps the list.
+-- Only E1, MOD's K3 (a page key) and a layout state change the page
+test("IO's leave closes no detail: a page change cannot happen under an owner", function()
+  local context, S = loaded()
+  with_detail(S)
+  tap(3)
+  local owner = S.lib.ui_modal.top()
+  assert_true(owner ~= nil, "K3 opens the detail")
+  enc(1, -1); enc(1, 1); enc(1, -3)
+  assert_equal(S.ui_page, S.constants.UI_PAGES.index.IO, "E1 under the detail changes no page")
+  assert_equal(S.lib.ui_modal.top(), owner, "and the detail stays open")
+  S.registry.pages[S.constants.UI_PAGES.index.IO].leave()
+  assert_equal(S.lib.ui_modal.top(), owner, "IO's leave closes no detail")
+  tap(2)
+  assert_equal(S.lib.ui_modal.top(), nil, "K2 closes it")
+  redraw()
+  assert_screen_layout(context, "IO after its detail closed")
+  local callers = {}
+  for _, source in ipairs(h.read_lua_sources()) do
+    if source.path ~= "lib/ui/keys.lua" and h.sync_check.sanitize_lua(source.text):find("set_ui_page%s*%(") then
+      callers[#callers + 1] = source.path
+    end
+  end
+  table.sort(callers)
+  assert_equal(table.concat(callers, " "), "lib/io/wtape.lua lib/pages/lfo.lua strata.lua",
+    "set_ui_page's callers: E1, MOD's K3 (show_lfo) and W/ tape's layout state")
+end)
+
+-- The texts drawn at x 0 on a row (the unseen mark's place; titles too)
+local function texts_at_left(context, y)
+  local found = {}
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.x == 0 and entry.y == y and entry.align == "left" then found[#found + 1] = entry.text end
+  end
+  return table.concat(found, " ")
+end
+
+local function row_y(context, label)
+  local entry = text_entry(context, label)
+  return entry and entry.y
+end
+
+-- #902: the draw that first shows the cursor on a row it fell to (its own
+-- row went) marks that row, so the player sees the cursor moved before E3
+-- or K3 acts there; the next draw has no mark
+test("IO marks the row its cursor is on when that row is unseen", function()
+  local context, S = loaded()
+  local gone = nil
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    local rows = {}
+    for _, row in ipairs({
+      { label = "rate", kind = "param", param_id = "mutation_rate" },
+      { label = "prob", kind = "param", param_id = "mutation_probability" },
+      { label = "amount", kind = "param", param_id = "mutation_amount" },
+    }) do
+      if row.label ~= gone then rows[#rows + 1] = row end
+    end
+    return rows
+  end })
+  local mark = S.lib.pages_io.IO_PAGE.unseen_mark
+  assert_equal(mark, ">", "the mark")
+  show_page("IO")
+  enc(2, 1); redraw()
+  assert_equal(current_row(S).label, "prob")
+  assert_equal(texts_at_left(context, row_y(context, "prob")), "", "a row in view has no mark")
+  -- the row goes; the next draw shows the cursor on the row in its place
+  gone = "prob"
+  redraw()
+  assert_equal(current_row(S).label, "amount", "the cursor on the row in its place")
+  assert_equal(texts_at_left(context, row_y(context, "amount")), mark, "that row is marked")
+  assert_screen_layout(context, "IO marking the cursor's unseen row")
+  redraw()
+  assert_equal(texts_at_left(context, row_y(context, "amount")), "", "the next draw has no mark")
+  -- E3 before the draw: it only moves the cursor, and the draw marks the row
+  gone = nil; redraw(); enc(2, -1); redraw()
+  assert_equal(current_row(S).label, "prob")
+  gone = "prob"
+  local amount = params:get("mutation_amount")
+  enc(3, 1)
+  assert_equal(params:get("mutation_amount"), amount, "E3 edited nothing")
+  redraw()
+  assert_equal(texts_at_left(context, row_y(context, "amount")), mark, "the draw after E3 marks the row")
+  -- under a pinned view too (show_section pins it; a cursor set from
+  -- outside is taken where it is)
+  gone = nil
+  S.lib.pages_io.show_section("voice")
+  S.io_cursor = 3
+  redraw()
+  assert_equal(current_row(S).label, "prob")
+  gone = "prob"
+  redraw()
+  assert_equal(current_row(S).label, "amount")
+  assert_equal(texts_at_left(context, row_y(context, "amount")), mark, "marked in the pinned view")
+  assert_screen_layout(context, "IO marking the cursor's unseen row in a pinned view")
+end)
+
 end

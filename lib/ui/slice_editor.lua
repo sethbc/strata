@@ -623,6 +623,24 @@ return function(S)
     end
   end)
 
+  -- 3.9 (#902): the closed editor's owner is never the modal one; the open
+  -- editor's is (or is beneath SEQ's step editor, the one owner a grid can
+  -- push over it); the open editor's slot has settings (the bind listener
+  -- closes it when they go); a MIDI key is noted only while it is open
+  S.register_invariant("slice editor", function()
+    local top = S.lib.ui_modal.top()
+    if not editor.open and top == owner then return "the editor is closed but its owner is the modal one" end
+    if editor.open and top ~= owner and not (top == S.lib.pages_seq.step_editor_owner and S.lib.pages_seq.step_editor()) then
+      return "the editor is open but the modal owner is " .. tostring(top) .. ", not its own"
+    end
+    if editor.open and not settings(editor.slot) then
+      return "the editor is open on slot " .. tostring(editor.slot) .. ", which has no settings"
+    end
+    if not editor.open and pending_key ~= nil then
+      return "a MIDI key " .. tostring(pending_key) .. " is noted with the editor closed"
+    end
+  end)
+
   ---------------------------------------------------------------------------
   -- BUFFER's slices field and waveform marks
   ---------------------------------------------------------------------------
