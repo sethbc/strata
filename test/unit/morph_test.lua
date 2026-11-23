@@ -481,6 +481,81 @@ test("a morph clock stopped from its own body applies nothing of the new clock's
   assert_equal(#context.clock.take_errors(), 0, "no clock error")
 end)
 
+-- The morph's own state (its constructor's local `state`), read through
+-- an upvalue of S.lib.morph.corner: what the clock leaves for the next apply
+local function morph_state(S)
+  local index = 1
+  while true do
+    local name, value = debug.getupvalue(S.lib.morph.corner, index)
+    if name == nil then return nil end
+    if name == "state" then return value end
+    index = index + 1
+  end
+end
+
+-- The morph's first set (S.lib.scenes.set_value) runs the PSET hook's stop
+-- from the clock's own body and moves the morph to `position` (a new clock,
+-- a move waiting); the next set after it raises, with `raise`. No shipped
+-- action does this; the test stands in for one (review of 1q)
+local function stop_from_own_set(S, position, raise)
+  local set_value, stopped, raised = S.lib.scenes.set_value, false, not raise
+  S.lib.scenes.set_value = function(id, value)
+    if not stopped then
+      stopped = true
+      for _, hook in ipairs(S.registry.pset_hooks) do
+        if hook.name == "morph" then hook.read() end
+      end
+      params:set("morph", position)
+    elseif not raised then
+      raised = true
+      error("a target raised", 0)
+    end
+    return set_value(id, value)
+  end
+end
+
+-- More values than one apply sets: the stopped clock's apply leaves some,
+-- which are its own and not the new clock's
+test("a morph clock stopped from its own body leaves the new clock's pending its own", function()
+  local context, S = scrambled_scenes()
+  local state = morph_state(S)
+  stop_from_own_set(S, 0.8)
+  params:set("morph", 0.5)  -- a move: the clock waits on its first sleep
+  local id = S.morph_clock
+  context.clock.advance_until(id, function() end)
+  assert_equal(clock.threads[id], nil, "the stopped clock ended")
+  assert_true(S.morph_clock ~= nil and S.morph_clock ~= id, "the new move waits on its own clock")
+  assert_equal(state.moved, true, "the new move waits")
+  assert_equal(state.pending, false, "and nothing the stopped clock's apply left is the new clock's")
+  context.clock.run_for(2)
+  assert_equal(S.morph_clock, nil, "the new clock applied the move and rests")
+  assert_near(params:get("reverb_mix"), 0.74, 1e-9, "the new position's (0.1 + 0.8 x 0.8)")
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+end)
+
+-- An apply that raises after the stop ends the stopped clock and is raised
+-- again, and leaves the new clock the morph's clock
+test("a morph clock stopped from its own body that then raises leaves the new clock running", function()
+  local context, S = scrambled_scenes()
+  local state = morph_state(S)
+  stop_from_own_set(S, 0.8, true)
+  params:set("morph", 0.5)  -- a move: the clock waits on its first sleep
+  local id = S.morph_clock
+  context.clock.advance_until(id, function() end)
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "the stopped clock's apply raised: " .. table.concat(errors, "; "))
+  assert_true(errors[1]:find("a target raised", 1, true) ~= nil, "its error, raised again: " .. errors[1])
+  -- (a clock whose body raised stays in clock.threads, dead, as norns' clock.resume leaves it)
+  local thread = clock.threads[id]
+  assert_true(thread == nil or coroutine.status(thread) == "dead", "the stopped clock ended")
+  assert_true(S.morph_clock ~= nil and S.morph_clock ~= id, "the new clock is still the morph's clock")
+  assert_equal(state.moved, true, "with the new move waiting")
+  context.clock.run_for(2)
+  assert_equal(S.morph_clock, nil, "the new clock applied the move and rests")
+  assert_near(params:get("reverb_mix"), 0.74, 1e-9, "the new position's (0.1 + 0.8 x 0.8)")
+  assert_equal(#context.clock.take_errors(), 0, "no other clock error")
+end)
+
 -- Scenes 1-4 with routing R1 to v1 size: each corner's {source, depth}
 -- (nil leaves the slot empty). The state is scene 1's
 local function routing_scenes(corners)
