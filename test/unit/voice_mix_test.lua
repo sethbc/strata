@@ -438,7 +438,7 @@ test("a solo silences every voice that is not soloed", function()
   assert_equal(sent[2], nil, "the soloed voice was not silenced")
   assert_equal(sent[4], nil, "voice 4 was muted already")
   for voice_idx = 5, S.constants.NUM_VOICES do assert_equal(sent[voice_idx], 1, "stopped voice " .. voice_idx .. " too (#640)") end
-  assert_equal(sent.count, 5)
+  assert_equal(sent.count, S.constants.NUM_VOICES - 2, "every voice but the soloed and the muted")
   context.clear_engine_calls()
   params:set("v4_solo", 1)  -- voice 4 is muted and soloed: still silenced
   assert_equal(mutes_sent(context).count, nil, "a muted voice stays silenced when soloed")

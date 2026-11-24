@@ -58,7 +58,7 @@ test("64 row 8 columns 2-8 toggle voices 1-7", function()
     assert_equal(device:get_led(voice_idx + 1, 8), voices[voice_idx].active and 12 or 2,
       "voice " .. voice_idx .. " LED (the shared levels, #526)")
   end
-  assert_true(voices[7].active, "voice 7 is reachable")
+  assert_true(voices[local_value("S").constants.NUM_VOICES].active, "the last voice is reachable")
 end)
 
 test("64 NV: a tap plays or stops on release, the chooser shows the right half", function()

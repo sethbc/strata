@@ -192,66 +192,98 @@ test("clock.cancel is called only in lib/clocks.lua and the listed files, as oft
   assert_equal(#problems, 0, table.concat(problems, "\n"))
 end)
 
--- 3.9 (#1013): a unit test counts voices from S.constants.NUM_VOICES (a
--- loaded script's) or h.voice_count() (no load), never a bare 7, so the
--- tests check every voice if the count changes. These files keep loops
--- ending at a bare 7 that count something else, as often as listed, each
--- with its reason; the list only shrinks
+-- 3.9 (#1013): a test counts voices from S.constants.NUM_VOICES (a loaded
+-- script's) or h.voice_count() (no load), never a bare 7, so the tests
+-- check every voice if the count changes. The scan reads every Lua file of
+-- the harness and the unit tests (test/*.lua, test/unit/*_test.lua). These
+-- files keep loops ending at a bare 7 that count something else, as often
+-- as listed, each with its reason; the list only shrinks. Its limits, as
+-- BARE_CANCEL_FILES': a count per file, so a voice loop that takes the
+-- place of a listed loop removed in the same change is not seen, and a new
+-- loop of another kind is written from a named constant, not listed
 local SEVEN_LOOP_FILES = {
   ["test/unit/grid_pane_test.lua"] = { 4, "a pane's lines 1-7 (and 5-7 of a 64's half): coordinates" },
   ["test/unit/grid_pages_scenes_test.lua"] = { 1, "the corner keys 5-7 of line 7: coordinates" },
   ["test/unit/io_ii_test.lua"] = { 7, "a device's ports and outputs 1-7 (ER-301, TELEXo, a gate device)" },
   ["test/unit/sequencer_test.lua"] = { 1, "k, the steps played before a direction change" },
-  ["test/unit/pages_seq_test.lua"] = { 1, "a step's seven notes" },
 }
 
--- Every for loop ending at a bare 7 (for <name> = <start>, 7 do) in the
--- given sources, counted by file, comments and strings left out
+-- Every numeric for loop ending at a bare 7 (for <name> = <start>, 7 do,
+-- with or without a step) in the given sources, counted by file, comments
+-- and strings left out
 local function seven_loop_counts(sources)
   local counts = {}
   for _, source in ipairs(sources) do
     local sanitized = sync_check.sanitize_lua(source.text)
-    for _ in sanitized:gmatch("%f[%w_]for%s+[%a_][%w_]*%s*=%s*[^,\n]-,%s*7%s*do%f[^%w_]") do
-      counts[source.path] = (counts[source.path] or 0) + 1
+    for range in sanitized:gmatch("%f[%w_]for%s+[%a_][%w_]*%s*=([^\n]-)%f[%w_]do%f[^%w_]") do
+      if range:match("^[^,]*,%s*7%s*$") or range:match("^[^,]*,%s*7%s*,") then
+        counts[source.path] = (counts[source.path] or 0) + 1
+      end
     end
   end
   return counts
 end
 
-test("no unit test counts voices with a bare 7 (#1013)", function()
-  -- the scanner itself: the two faults of #1013's guard are found
-  local counts = seven_loop_counts({ { path = "test/unit/x_test.lua", text = table.concat({
-    "for voice_idx = 1, 7 do end",
-    'for i = 1, 7 do params:set("v" .. i .. "_amp", 0) end',
-    "for voice=3,7 do end",
-    '-- for v = 1, 7 do in a comment; "for v = 1, 7 do" in a string',
-    "for v = 1, NUM_VOICES do end; for v = 1, 17 do end; for v = 1, 70 do end",
-    "for x = first, first + 7 do end; for _, v in ipairs(list) do end",
-  }, "\n") } })
-  assert_equal(counts["test/unit/x_test.lua"], 3, "each loop ending at 7 is found; comments, strings and other ends are not")
-  local sources = {}
-  for _, name in ipairs(h.unit_files(repo_root .. "/test/unit")) do
-    local path = "test/unit/" .. name
-    local file = assert(io.open(repo_root .. "/" .. path, "r"))
-    table.insert(sources, { path = path, text = file:read("*a") })
-    file:close()
-  end
-  counts = seven_loop_counts(sources)
+-- The problems of counts against a list of {count, reason} by path: a
+-- count that differs from its file's line (none listed included), a line
+-- whose file has no such loop, a line with no reason
+local function seven_loop_problems(counts, listed_files)
   local problems = {}
   for path, count in pairs(counts) do
-    local listed = SEVEN_LOOP_FILES[path] and SEVEN_LOOP_FILES[path][1]
+    local listed = listed_files[path] and listed_files[path][1]
     if listed ~= count then
       table.insert(problems, path .. " has " .. count .. " loops ending at a bare 7, listed " .. tostring(listed)
         .. ": count voices from S.constants.NUM_VOICES or h.voice_count()")
     end
   end
-  for path, entry in pairs(SEVEN_LOOP_FILES) do
-    assert_true(type(entry[2]) == "string" and #entry[2] > 0, path .. " gives its reason")
+  for path, entry in pairs(listed_files) do
+    if type(entry[2]) ~= "string" or #entry[2] == 0 then table.insert(problems, path .. " gives no reason") end
     if not counts[path] then
       table.insert(problems, path .. " is listed for " .. entry[1] .. " but has no such loop: remove its line")
     end
   end
   table.sort(problems)
+  return problems
+end
+
+test("no unit test counts voices with a bare 7 (#1013)", function()
+  -- the scanner itself: the two faults of #1013's guard are found, a step too
+  local counts = seven_loop_counts({ { path = "test/unit/x_test.lua", text = table.concat({
+    "for voice_idx = 1, 7 do end",
+    'for i = 1, 7 do params:set("v" .. i .. "_amp", 0) end',
+    "for voice=3,7 do end",
+    "for v = 1, 7, 1 do end",
+    '-- for v = 1, 7 do in a comment; "for v = 1, 7 do" in a string',
+    "for v = 1, NUM_VOICES do end; for v = 1, 17 do end; for v = 1, 70 do end",
+    "for x = first, first + 7 do end; for _, v in ipairs(list) do end; for v = 7, 1, -1 do end",
+  }, "\n") } })
+  assert_equal(counts["test/unit/x_test.lua"], 4, "each loop ending at 7 is found; comments, strings and other ends are not")
+  -- the comparison itself
+  local controls = seven_loop_problems({ ["a"] = 2, ["b"] = 1, ["c"] = 1 },
+    { ["a"] = { 1, "why" }, ["c"] = { 1, "why" }, ["d"] = { 1, "why" }, ["e"] = { 1, "" } })
+  assert_equal(table.concat(controls, "\n"), table.concat({
+    "a has 2 loops ending at a bare 7, listed 1: count voices from S.constants.NUM_VOICES or h.voice_count()",
+    "b has 1 loops ending at a bare 7, listed nil: count voices from S.constants.NUM_VOICES or h.voice_count()",
+    "d is listed for 1 but has no such loop: remove its line",
+    "e gives no reason",
+    "e is listed for 1 but has no such loop: remove its line",
+  }, "\n"), "listed 1 with 2, an unlisted file, a line with no loop and one with no reason each fail; c passes")
+  local sources = {}
+  local function add(path)
+    local file = assert(io.open(repo_root .. "/" .. path, "r"))
+    table.insert(sources, { path = path, text = file:read("*a") })
+    file:close()
+  end
+  local listing = assert(io.popen("ls -1 " .. h.shell_quote(repo_root .. "/test")))
+  for name in listing:read("*a"):gmatch("[^\n]+") do
+    if name:match("%.lua$") then add("test/" .. name) end
+  end
+  listing:close()
+  local harness = {}
+  for _, source in ipairs(sources) do harness[source.path] = true end
+  assert_true(harness["test/helpers.lua"] and harness["test/norns_stubs.lua"], "the harness's files are read")
+  for _, name in ipairs(h.unit_files(repo_root .. "/test/unit")) do add("test/unit/" .. name) end
+  local problems = seven_loop_problems(seven_loop_counts(sources), SEVEN_LOOP_FILES)
   assert_equal(#problems, 0, table.concat(problems, "\n"))
 end)
 
