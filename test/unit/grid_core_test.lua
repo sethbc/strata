@@ -1088,6 +1088,27 @@ test("every layout lights voice, play and page keys at the core's shared levels"
     and levels.side_two ~= levels.page_shown, "each pair is two levels")
 end)
 
+-- #879: an overdub records every hand edit into the loop, so the key says
+-- it: steady (never the waiting blink), between playing and recording
+test("the recorder's grid key has its own level while overdub is on (#879)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local core, gestures = S.lib.grid_core, S.lib.gestures
+  gestures.press(1); enc_param_delta(3, "reverb_mix", 1); context.clock.run_for(1); gestures.press(1)
+  assert_equal(core.gesture_level(1), 10, "playing at 10")
+  gestures.overdub(1)
+  local overdubbing = core.gesture_level(1)
+  assert_equal(overdubbing, 13, "overdubbing at 13")
+  context.clock.run_for(1)
+  assert_equal(core.gesture_level(1), overdubbing, "steady: no blink")
+  gestures.press(2)
+  assert_equal(core.gesture_level(2), 15, "recording at 15, told from the overdub")
+  assert_equal(core.gesture_level(1), 10, "the recording ended G1's overdub: playing at 10 again")
+  gestures.clear(2)
+  gestures.overdub(1); gestures.overdub(1)
+  assert_equal(core.gesture_level(1), 10, "ALT+K3 again: 10")
+end)
+
 -- #451: a grid page outside the layouts is named (S.constants.GRID_PAGES),
 -- never a bare number that a renumbered page would leave behind
 test("no any_page call outside lib/grid/ names its page with a bare number", function()

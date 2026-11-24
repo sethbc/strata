@@ -509,6 +509,24 @@ test("the recorder keys act at their release, two at once each at its own, and a
   end, {{9, 7}})
 end)
 
+-- #879: an overdubbing recorder's key has its own level, 13, between
+-- playing's 10 and recording's 15, back to 10 when the overdub ends
+test("a recorder's key on line 7 shows its overdub (#879)", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local gestures = S.lib.gestures
+    pane.tap(9, 7)
+    pane.tap(fader_x(pane, shown_keys(pane)), 4)  -- the morph to 1, recorded
+    context.clock.run_for(0.5)
+    pane.tap(9, 7)
+    assert_equal(pane.led(9, 7), 10, arrangement .. ": playing at 10")
+    gestures.overdub(1)
+    assert_equal(pane.led(9, 7), 13, arrangement .. ": overdubbing at 13")
+    gestures.overdub(1)
+    assert_equal(pane.led(9, 7), 10, arrangement .. ": the overdub ended: 10 again")
+    gestures.clear(1)
+  end, {{9, 7}})
+end)
+
 -- A release acts only for the key pressed in its role
 test("a step key held into the scenes page is no recorder key at its release", function()
   each_arrangement(function(_, S, pane, arrangement)

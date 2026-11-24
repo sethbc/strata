@@ -465,7 +465,14 @@ return function(S)
     return S.gestures[k].state
   end
 
-  -- "empty", "rec 3.2 s", "play 2 bars", "stop 5.0 s"
+  -- Whether recorder k overdubs (#879: its row, its ALT hint and its grid
+  -- key show it); false for a recorder out of range
+  function M.overdubbing(k)
+    return valid(k) and S.gestures[k].overdubbing or false
+  end
+
+  -- "empty", "rec 3.2 s", "play 2 bars", "stop 5.0 s"; a loop that
+  -- overdubs ends " dub" ("play 2.5 s dub", #879)
   function M.describe(k)
     if not valid(k) then return "" end
     local recorder = S.gestures[k]
@@ -474,12 +481,13 @@ return function(S)
       return string.format("rec %.1f s", recorder.first_event_at and util.time() - recorder.first_event_at or 0)
     end
     local verb = recorder.state == "playing" and "play" or "stop"
+    local dub = M.overdubbing(k) and " dub" or ""
     if recorder.offsets then
       local unit = recorder.quantize
       local count = recorder.length_beats / GESTURES.unit_beats[unit]
-      return string.format("%s %d %s", verb, count, GESTURES.unit_names[unit][count == 1 and 1 or 2])
+      return string.format("%s %d %s%s", verb, count, GESTURES.unit_names[unit][count == 1 and 1 or 2], dub)
     end
-    return string.format("%s %.1f s", verb, recorder.length_seconds or 0)
+    return string.format("%s %.1f s%s", verb, recorder.length_seconds or 0, dub)
   end
 
   -- The loop's phase, 0..1 (0 when it does not play): a free loop's from
@@ -719,7 +727,8 @@ return function(S)
 
   -- The modulation sources (design §10.1): each recorder's loop phase, and
   -- MOD's row actions (E3 the quantize, K3 the press, ALT+K2 held clear,
-  -- ALT+K3 overdub)
+  -- ALT+K3 overdub: K3:dub on a playing recorder, K3:dub off while it
+  -- overdubs, #879)
   local PRESS_HINTS = {empty = "K3:rec", recording = "K3:play", playing = "K3:stop", stopped = "K3:play"}
   for k = 1, NUM_GESTURES do
     S.register_mod_source({
@@ -736,7 +745,10 @@ return function(S)
           if n == 2 then M.clear(k) elseif n == 3 then M.overdub(k) end
         end,
         hints = function(alt)
-          if alt then return S.gestures[k].state == "playing" and "K3:dub" or "" end
+          if alt then
+            if S.gestures[k].state ~= "playing" then return "" end
+            return M.overdubbing(k) and "K3:dub off" or "K3:dub"
+          end
           return PRESS_HINTS[S.gestures[k].state] .. " E3:quant"
         end,
       },

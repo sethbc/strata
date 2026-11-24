@@ -21,7 +21,7 @@ The sixteen scenes, the morph, the scene sequencer and the gesture recorders, on
 - **SQ** (line 7, key 1) starts or stops the scene sequencer: 15 while it runs, 4 while it does not. A MIDI controller mapped to it in PARAMETERS > MAP follows
 - **SV** (line 7, key 2): 15 while held, 4 otherwise
 - **cA-cD** (line 7, keys 4-7) pick the corner line 3 shows and sets: the picked one 15, the others 4. Each grid keeps its own pick
-- **G1-G4** (line 7, keys 9-12) are the gesture recorders: a tap presses the recorder as you let go (empty → recording → playing → stopped → playing), and held half a second it clears the recorder (the key lights nothing more while the hold runs), and letting go then does nothing. Two held at once each act as each is let go. 2 empty, 5 stopped, 10 playing, 15 recording ([Gesture recorders](../../modulation.md))
+- **G1-G4** (line 7, keys 9-12) are the gesture recorders: a tap presses the recorder as you let go (empty → recording → playing → stopped → playing), and held half a second it clears the recorder (the key lights nothing more while the hold runs), and letting go then does nothing. Two held at once each act as each is let go. 2 empty, 5 stopped, 10 playing, 13 overdubbing (ALT+K3 on its MOD row), 15 recording ([Gesture recorders](../../modulation.md))
 - Keys 3, 8 and 13-16 of line 7 are dark and do nothing
 
 What the scene keys show (lines 1 and 2): a recall key 15 for the current scene (a scene a crossfade is heading for blinks until it lands), 10 for the scene the running sequencer recalls next, 8 for another saved scene, 2 for an empty slot; a fade key 6 saved, 2 empty; both keys of a scene whose recall waits for its beat or bar blink between 15 and 2.

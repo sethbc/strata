@@ -485,7 +485,7 @@ return function(S)
   local SHARED_KEYS = {
     voice_silenced = 6,
     gesture_clear_seconds = GRID_HOLD.action_hold_seconds,
-    gesture_levels = {empty = 2, stopped = 5, playing = 10, recording = 15},
+    gesture_levels = {empty = 2, stopped = 5, playing = 10, overdubbing = 13, recording = 15},
   }
 
   -- 12 running, 6 running but silenced, 2 stopped
@@ -520,10 +520,15 @@ return function(S)
     end
   end
 
-  -- Its LED: empty 2, stopped 5, playing 10, recording 15 (0 for no recorder)
+  -- Its LED: empty 2, stopped 5, playing 10, overdubbing 13 (steady,
+  -- never the waiting blink: an overdub records like a recording, #879),
+  -- recording 15 (0 for no recorder). An overdub's start and end repaint
+  -- through the recorder's own redraw
   function M.gesture_level(k)
     if not whole_number_in(k, 1, S.constants.NUM_GESTURES) then return 0 end
-    return SHARED_KEYS.gesture_levels[S.lib.gestures.state(k)] or 0
+    local levels = SHARED_KEYS.gesture_levels
+    if S.lib.gestures.overdubbing(k) then return levels.overdubbing end
+    return levels[S.lib.gestures.state(k)] or 0
   end
 
   function M.lock_level(voice_idx)

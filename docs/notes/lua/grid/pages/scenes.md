@@ -27,7 +27,7 @@
 | 7 | 1 SQ | `scene_sequencer_enabled` toggled (`set_binary_param`) | - | 15 / 4 (`GRID_LEVELS.picked`, `unpicked`) |
 | 7 | 2 SV (16 on a half pane showing 9-16) | `pane.press_as(x, 7, "save")` | its role ends | 15 held in its role, 4 |
 | 7 | 4-7 cA-cD | `corner = x - 3` | - | 15 picked, 4 |
-| 7 | 9-12 G1-G4 | `pane.gesture_key(x, 7, 1, x - 8)` | `gesture_key(.., 0, ..)`: acts in its role; a 0.5 s hold clears | `gesture_level` 2 / 5 / 10 / 15 |
+| 7 | 9-12 G1-G4 | `pane.gesture_key(x, 7, 1, x - 8)` | `gesture_key(.., 0, ..)`: acts in its role; a 0.5 s hold clears | `gesture_level` 2 / 5 / 10 / 15, 13 overdubbing |
 | 7 | 3, 8, 13-15, 16 on a full pane | nothing | | 0 |
 
 The corner letters are `S.lib.morph.MORPH.corners`, read at each use. Turned (the 128v), the lines run down columns 1-7 and the faders up them; on a 64's halves scenes 1-8, SQ, SV and the corners are on the left, scenes 9-16 and the recorders on the right, and the fader lines are drawn across the half's eight keys. A key of line 6 repaints the grid once (#161): the length's action calls `grid_redraw()`, which waits while `grid_key` handles the key.
