@@ -18,14 +18,18 @@ return function(S)
   local SOURCE_VOICE_FIRST = S.constants.SOURCE_VOICE_FIRST
 
   -- The columns (pane coordinates: voice j at x j, then the input, then
-  -- slot n at slot_column + n), the levels, and the blink of a voice that
-  -- reads its own output (blink_seconds each of on and off)
+  -- slot n at slot_column + n), the levels, the blink of a voice that
+  -- reads its own output (blink_seconds each of on and off), and the slow
+  -- blink of a slot whose remembered file was not found on start
+  -- (slot_missing and slot_missing_off for missing_blink_seconds each,
+  -- #1026)
   local SOURCES_PAGE = {
     input_column = NUM_VOICES + 1,
     slot_column = NUM_VOICES + 1,
     blink_seconds = 0.5,
+    missing_blink_seconds = 1,
     levels = {selected = 15, blink_off = 6, other = 4, voice_running = 4, voice_stopped = 2,
-      slot_free = 2, slot_audio = 4, channels = {15, 11, 7}},
+      slot_free = 2, slot_audio = 4, slot_missing = 4, slot_missing_off = 0, channels = {15, 11, 7}},
   }
   M.SOURCES_PAGE = SOURCES_PAGE
 
@@ -65,6 +69,20 @@ return function(S)
   -- The blink's phase: 0 lit, 1 dim, each blink_seconds
   local function blink_phase()
     return math.floor(util.time() / SOURCES_PAGE.blink_seconds) % 2
+  end
+
+  -- The missing blink's phase: 0 lit, 1 dark, each missing_blink_seconds
+  local function missing_phase()
+    return math.floor(util.time() / SOURCES_PAGE.missing_blink_seconds) % 2
+  end
+
+  local function is_missing(slot) return S.lib.buffers.status(slot) == "missing" end
+
+  local function any_missing()
+    for slot = 1, NUM_BUFFERS do
+      if is_missing(slot) then return true end
+    end
+    return false
   end
 
   local function any_reads_itself()
@@ -115,6 +133,7 @@ return function(S)
 
   local function slot_level(slot, current)
     if current == SOURCE_SYNTH + slot then return levels.selected end
+    if is_missing(slot) then return missing_phase() == 0 and levels.slot_missing or levels.slot_missing_off end
     return S.lib.buffers.is_free(slot) and levels.slot_free or levels.slot_audio
   end
 
@@ -130,11 +149,12 @@ return function(S)
   end
 
   -- What the drift tick's follow compares: the blink's phase while a voice
-  -- reads its own output (so the blink costs nothing while none does), and
-  -- each voice's input channel (its param redraws no grid). The sources,
-  -- the slots and the voices' running redraw the grids themselves
+  -- reads its own output and the missing blink's while a slot is missing
+  -- (so each costs nothing while nothing shows it), and each voice's input
+  -- channel (its param redraws no grid). The sources, the slots and the
+  -- voices' running redraw the grids themselves
   local function signature()
-    local parts = {any_reads_itself() and blink_phase() or "-"}
+    local parts = {any_reads_itself() and blink_phase() or "-", any_missing() and missing_phase() or "-"}
     for voice_idx = 1, NUM_VOICES do parts[#parts + 1] = tostring(channel_of(voice_idx)) end
     return table.concat(parts, ",")
   end
