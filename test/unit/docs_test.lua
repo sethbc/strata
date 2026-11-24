@@ -2154,7 +2154,11 @@ end
 -- there or under /etc/apt/, in a command that does not only read), a cd or
 -- pushd into either (past its options, as into /etc/apt/), an assignment
 -- of such a path, and APT::Key:: and Acquire::gpgv (how gpgv checks a
--- list's signature)
+-- list's signature). #1024's review: gpg's home folder (--homedir,
+-- GNUPGHOME) is written as its keyring is, a read that imports
+-- (--auto-key-retrieve, --auto-key-import) writes, a long option is read
+-- by any start of it, Acquire::Min-ValidTime is refused, and a relative
+-- path is resolved from the folder cd, pushd and popd leave
 CI_WORKFLOW.UBUNTU_ONLY = CI_WORKFLOW.LIST_UPDATE:match("\n(ubuntu_only=[^\n]*)\n")
 CI_WORKFLOW.MIRRORS = CI_WORKFLOW.LIST_UPDATE:match("\n(mirrors=[^\n]*)\n")
 CI_WORKFLOW.REORDER = CI_WORKFLOW.LIST_UPDATE:match("\n%s*(sudo sed %-i [^\n]*)\n")
@@ -2192,6 +2196,83 @@ end
 CI_WORKFLOW.GPG_READS = { ["--verify"] = true, ["--list-keys"] = true, ["-k"] = true, ["--list-public-keys"] = true,
   ["--list-sigs"] = true, ["--check-sigs"] = true, ["--fingerprint"] = true, ["--list-packets"] = true, ["--export"] = true,
   ["--show-keys"] = true }
+-- #1024's review: whether a word is the long option `option` or a start of
+-- it (gpg and getopt_long take an unambiguous start; an ambiguous one is an
+-- error of the tool's, so counting it too refuses nothing that runs), with
+-- or without an attached =value
+function CI_WORKFLOW.long_option(word, option)
+  local name = word:match("^(%-%-[^=]+)")
+  return name ~= nil and #name >= 3 and option:sub(1, #name) == name
+end
+-- #1024's review: a written word as a path from the folder `here` (false:
+-- not known), its option (--name=, of=, an attached -t) dropped, with . and
+-- .. folded; nil for a path it cannot place (one through a variable or ~,
+-- or a relative one from a folder not known)
+function CI_WORKFLOW.resolved(word, here)
+  local path = word:gsub("['\"]", ""):gsub("^%-%-[^=]*=", ""):gsub("^of=", ""):gsub("^%-%a", "")
+  if path == "" or path:match("^[$~]") then return nil end
+  if not path:match("^/") then
+    if not here then return nil end
+    path = here .. "/" .. path
+  end
+  local parts = {}
+  for part in path:gmatch("[^/]+") do
+    if part == ".." then parts[#parts] = nil
+    elseif part ~= "." then parts[#parts + 1] = part end
+  end
+  return "/" .. table.concat(parts, "/")
+end
+-- #1024's review: the folder a step's script is in, followed through cd,
+-- pushd and popd in the script's order: `place` holds here (false when not
+-- known: the step starts in the workspace), pushd's stack below it and the
+-- folder cd - returns to. For a cd or pushd it returns the folder word and
+-- that folder resolved from where the command ran
+function CI_WORKFLOW.follow_folder(words, place)
+  local tool = words[1]
+  if tool ~= "cd" and tool ~= "pushd" and tool ~= "popd" then return nil end
+  -- options (-P, -L, -e, -@, -n; -- ends them), a +N or -N stack entry
+  -- (pushd and popd), then the folder
+  local stay, entry, operand, index = false, nil, nil, 2
+  while words[index] do
+    local word = words[index]
+    if word == "--" then operand = words[index + 1]; break
+    elseif tool ~= "cd" and word:match("^[+-]%d+$") then entry = word
+    elseif word:match("^%-.") then stay = stay or word:find("n", 2, true) ~= nil
+    else operand = word; break end
+    index = index + 1
+  end
+  local before, list = place.here, { place.here }
+  for _, folder in ipairs(place.stack) do list[#list + 1] = folder end
+  -- the place of a +N (from the top) or -N (from the bottom) entry in list
+  local at = entry and (entry:sub(1, 1) == "+" and tonumber(entry:sub(2)) + 1 or #list - tonumber(entry:sub(2)))
+  local folder = false
+  if operand == "-" and tool == "cd" then folder = place.previous
+  elseif operand then folder = CI_WORKFLOW.resolved(operand, place.here) or false end
+  local function set(new)
+    place.here, place.stack = new[1], {}
+    for i = 2, #new do place.stack[#place.stack + 1] = new[i] end
+  end
+  if tool == "cd" then
+    place.here = folder
+  elseif tool == "pushd" and operand then
+    if stay then table.insert(place.stack, 1, folder)
+    else table.insert(place.stack, 1, place.here); place.here = folder end
+  elseif tool == "pushd" and at then
+    if list[at] ~= nil and not stay then
+      local rotated = {}
+      for i = 0, #list - 1 do rotated[#rotated + 1] = list[(at - 1 + i) % #list + 1] end
+      set(rotated)
+    end
+  elseif tool == "pushd" then
+    if #list > 1 and not stay then list[1], list[2] = list[2], list[1]; set(list) end
+  else
+    at = at or (stay and 2 or 1)
+    if list[at] ~= nil and #list > 1 then table.remove(list, at); set(list) end
+  end
+  if place.here ~= before then place.previous = before end
+  if tool ~= "popd" and operand then return operand, folder end
+  return nil
+end
 -- #1011: the words a command writes to: its redirections' files, and a
 -- writing command's targets (its name found past env assignments and the
 -- wrappers that run another command)
@@ -2213,9 +2294,13 @@ function CI_WORKFLOW.written_words(command)
   -- CI_WORKFLOW.commands strips a leading sudo but not its options, and no
   -- command starts with a -
   local at = past_sudo_options(1)
+  -- #1024's review: gpg's home folders set past sudo or env (GNUPGHOME=)
+  local homes = {}
   while words[at] do
     local word = words[at]
-    if word:match("^[%a_][%w_]*=") then at = at + 1
+    if word:match("^[%a_][%w_]*=") then
+      if word:match("^GNUPGHOME=") then homes[#homes + 1] = word end
+      at = at + 1
     elseif word == "env" or word == "command" or word == "exec" or word == "nohup" or word == "nice"
         or word == "xargs" or word == "stdbuf" or word == "timeout" then
       at = at + 1
@@ -2225,6 +2310,18 @@ function CI_WORKFLOW.written_words(command)
     else break end
   end
   local name, rest, operands = words[at] or "", {}, {}
+  -- #1024's review: the path given to one of `options` (any start of it,
+  -- CI_WORKFLOW.long_option), attached (=) or as the next word
+  local function paths_of(options)
+    for index, word in ipairs(rest) do
+      for _, option in ipairs(options) do
+        if CI_WORKFLOW.long_option(word, option) then
+          targets[#targets + 1] = word:find("=", 1, true) and word or (rest[index + 1] or "")
+          break
+        end
+      end
+    end
+  end
   for index = at + 1, #words do
     rest[#rest + 1] = words[index]
     if not words[index]:match("^%-") then operands[#operands + 1] = words[index] end
@@ -2233,13 +2330,14 @@ function CI_WORKFLOW.written_words(command)
     for _, word in ipairs(operands) do targets[#targets + 1] = word end
   elseif name == "cp" or name == "mv" or name == "install" or name == "ln" then
     for index, word in ipairs(rest) do
-      if word == "-t" or word == "--target-directory" then targets[#targets + 1] = rest[index + 1] or ""
-      elseif word:match("^%-%-target%-directory=") or word:match("^%-t.") then targets[#targets + 1] = word end
+      if word == "-t" then targets[#targets + 1] = rest[index + 1] or ""
+      elseif word:match("^%-t.") then targets[#targets + 1] = word end
     end
+    paths_of({ "--target-directory" })
     targets[#targets + 1] = operands[#operands]
   elseif name == "sed" then
     for _, word in ipairs(rest) do
-      if word:match("^%-%a*i") or word:match("^%-%-in%-place") then
+      if word:match("^%-%a*i") or CI_WORKFLOW.long_option(word, "--in-place") then
         for _, operand in ipairs(operands) do targets[#targets + 1] = operand end
         break
       end
@@ -2250,19 +2348,30 @@ function CI_WORKFLOW.written_words(command)
     end
   elseif name == "curl" or name == "wget" or name == "gpg" then
     for index, word in ipairs(rest) do
-      if word == "-o" or word == "-O" or word == "--output" or word == "--output-document" then targets[#targets + 1] = rest[index + 1] or ""
-      elseif word:match("^%-%-output") or word:match("^%-[oO].") then targets[#targets + 1] = word end
+      if word == "-o" or word == "-O" then targets[#targets + 1] = rest[index + 1] or ""
+      elseif word:match("^%-[oO].") then targets[#targets + 1] = word end
     end
+    paths_of({ "--output", "--output-document", "--output-dir", "--output-file" })
   end
   -- #1024: gpg's keyring (--keyring, --primary-keyring) is written by any
-  -- command of gpg's but those that only read (gpg takes one command)
-  local reads = name ~= "gpg"
-  for _, word in ipairs(rest) do
-    if CI_WORKFLOW.GPG_READS[word] then reads = true end
-  end
-  for index, word in ipairs(reads and {} or rest) do
-    if word == "--keyring" or word == "--primary-keyring" then targets[#targets + 1] = rest[index + 1] or ""
-    elseif word:match("^%-%-keyring=") or word:match("^%-%-primary%-keyring=") then targets[#targets + 1] = word end
+  -- command of gpg's but those that only read (gpg takes one command); so
+  -- is its home folder (--homedir, GNUPGHOME), which holds a keyring named
+  -- without a slash (gpg(1)). #1024's review: a read that imports the key
+  -- it fetches or finds (--auto-key-retrieve, --auto-key-import, the
+  -- keyserver option auto-key-retrieve) writes too
+  if name == "gpg" then
+    local reads = false
+    for _, word in ipairs(rest) do
+      if CI_WORKFLOW.GPG_READS[word] then reads = true end
+    end
+    for _, word in ipairs(rest) do
+      if CI_WORKFLOW.long_option(word, "--auto-key-retrieve") or CI_WORKFLOW.long_option(word, "--auto-key-import")
+          or word:find("auto-key-retrieve", 1, true) then reads = false end
+    end
+    if not reads then
+      for _, home in ipairs(homes) do targets[#targets + 1] = home end
+      paths_of({ "--keyring", "--primary-keyring", "--homedir" })
+    end
   end
   return targets
 end
@@ -2279,7 +2388,7 @@ function CI_WORKFLOW.apt_weakenings(workflow)
     local reads_ubuntu = trimmed == CI_WORKFLOW.UBUNTU_ONLY
     for _, word in ipairs({ "allowunauthenticated", "allowinsecurerepositories", "allowdowngradetoinsecurerepositories",
         "allowweakrepositories", "checkvaliduntil", "checkdate", "forceyes", "verifypeer", "verifyhost", "trusted=yes",
-        "sources.list", "dir::etc::source", "trusted", "aptkey", "apt::key::", "acquire::gpgv" }) do
+        "sources.list", "dir::etc::source", "trusted", "aptkey", "apt::key::", "acquire::gpgv", "minvalidtime" }) do
       if plain:find(word, 1, true) and not (reads_ubuntu and (word == "sources.list" or word == "dir::etc::source")) then
         found[#found + 1] = word .. ": " .. trimmed
       end
@@ -2317,6 +2426,8 @@ function CI_WORKFLOW.apt_weakenings(workflow)
   end
   for _, job in ipairs(CI_WORKFLOW.jobs(workflow)) do
     for _, step in ipairs(job.steps) do
+      -- #1024's review: the folder the step's script is in
+      local place = { here = false, stack = {}, previous = false }
       for _, line in ipairs(CI_WORKFLOW.script(step)) do
         local paths = {}
         local packages = line:match("^%s*packages=%((.*)%)%s*$")
@@ -2348,24 +2459,19 @@ function CI_WORKFLOW.apt_weakenings(workflow)
               break
             end
           end
-          -- #1024: the folder past cd's and pushd's options (-P, -L, -e,
-          -- -@, -n, a +N or -N stack entry; -- ends them)
-          local folder
-          if words[1] == "cd" or words[1] == "pushd" then
-            folder = 2
-            while words[folder] and (words[folder]:match("^%-.") or words[folder]:match("^%+%d")) do
-              folder = folder + 1
-              if words[folder - 1] == "--" then break end
-            end
-            folder = words[folder]
-          end
-          if folder and CI_WORKFLOW.names_apt_config(folder, assigned) then
+          -- #1024: the folder a cd or pushd names, past its options;
+          -- #1024's review: and resolved from the folder it ran in
+          local folder, resolved = CI_WORKFLOW.follow_folder(words, place)
+          resolved = resolved or ""
+          if folder and (CI_WORKFLOW.names_apt_config(folder, assigned) or CI_WORKFLOW.names_apt_config(resolved, {})) then
             found[#found + 1] = "a change into apt's configuration folder: " .. trimmed
           end
-          if folder and CI_WORKFLOW.names_apt_trust(folder, assigned_trust) then
+          if folder and (CI_WORKFLOW.names_apt_trust(folder, assigned_trust) or CI_WORKFLOW.names_apt_trust(resolved, {})) then
             found[#found + 1] = "a change into apt's keyrings or lists: " .. trimmed
           end
+          -- a write's target as written, and resolved from the step's folder
           local written = reorder and {} or CI_WORKFLOW.written_words(command)
+          for index = 1, #written do written[#written + 1] = CI_WORKFLOW.resolved(written[index], place.here) end
           for _, target in ipairs(written) do
             if CI_WORKFLOW.names_apt_config(target, assigned) then
               found[#found + 1] = "a write into apt's configuration: " .. trimmed
@@ -2516,6 +2622,53 @@ function CI_WORKFLOW.relocation_cases()
     { name = "a pushd -n into /etc/apt/", expect = "a change into apt's configuration folder: pushd -n /etc/apt", edits = before_install("pushd -n /etc/apt", "popd") },
     { name = "a cd -P -e -- into /usr/share/keyrings/", expect = "a change into apt's keyrings or lists: cd -P -e -- /usr/share/keyrings",
       edits = before_install("cd -P -e -- /usr/share/keyrings", "echo x > x.gpg", "cd -") },
+    -- #1024's review: gpg's home folder holds a --keyring named without a
+    -- slash, so --homedir and GNUPGHOME are written too
+    { name = "gpg --homedir with a keyring named in it", expect = trust .. "sudo gpg --homedir /usr/share/keyrings",
+      edits = instead("sudo gpg --homedir /usr/share/keyrings --no-default-keyring --keyring ubuntu-archive-keyring.gpg --import k.asc") },
+    { name = "gpg --homedir=", expect = trust .. "gpg --homedir=",
+      edits = instead("gpg --homedir=/usr/share/keyrings --no-default-keyring --keyring ubuntu-archive-keyring.gpg --import k.asc") },
+    { name = "GNUPGHOME past sudo", expect = trust .. "sudo GNUPGHOME=",
+      edits = instead("sudo GNUPGHOME=/usr/share/keyrings gpg --no-default-keyring --keyring ubuntu-archive-keyring.gpg --import k.asc") },
+    { name = "GNUPGHOME past env", expect = trust .. "env GNUPGHOME=",
+      edits = instead("env GNUPGHOME=/usr/share/keyrings gpg --no-default-keyring --keyring ubuntu-archive-keyring.gpg --import k.asc") },
+    -- a read that imports what it fetches or finds
+    { name = "gpg --verify with --auto-key-retrieve", expect = trust .. "gpg --no-default-keyring",
+      edits = instead("gpg --no-default-keyring --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --auto-key-retrieve --verify x.sig x") },
+    { name = "gpg --verify with --keyserver-options auto-key-retrieve", expect = trust .. "gpg --keyserver-options",
+      edits = instead("gpg --keyserver-options auto-key-retrieve --no-default-keyring --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --verify x.sig x") },
+    { name = "gpg --list-keys with --auto-key-import", expect = trust .. "gpg --auto-key-import",
+      edits = instead("gpg --auto-key-import --no-default-keyring --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --list-keys") },
+    -- long options abbreviated (gpg and getopt_long take any unambiguous start)
+    { name = "gpg --keyr", expect = trust .. "gpg --no-default-keyring --keyr",
+      edits = instead("gpg --no-default-keyring --keyr /usr/share/keyrings/x.gpg --import k.asc") },
+    { name = "gpg --homed=", expect = trust .. "gpg --homed=", edits = instead("gpg --homed=/usr/share/keyrings --keyring x.gpg --import k.asc") },
+    { name = "gpg --dearmor --out", expect = trust .. "gpg --dearmor --out", edits = instead("gpg --dearmor --out /usr/share/keyrings/x.gpg k.asc") },
+    { name = "cp --target=", expect = write .. "sudo cp --target=", edits = instead('sudo cp --target=/etc/apt/apt.conf.d "$RUNNER_TEMP/x.conf"') },
+    { name = "sed --in-pl", expect = write .. "sudo sed --in-pl", edits = instead("sudo sed --in-pl 's/^/#/' /etc/apt/apt.conf.d/70debconf") },
+    -- --primary-keyring, both forms
+    { name = "gpg --primary-keyring", expect = trust .. "gpg --primary-keyring /usr",
+      edits = instead("gpg --primary-keyring /usr/share/keyrings/x.gpg --import k.asc") },
+    { name = "gpg --primary-keyring=", expect = trust .. "gpg --primary-keyring=",
+      edits = instead("gpg --primary-keyring=/usr/share/keyrings/x.gpg --recv-keys 0123456789ABCDEF") },
+    -- Acquire::Min-ValidTime keeps a Release file valid past its Valid-Until
+    { name = "Acquire::Min-ValidTime", expect = "minvalidtime: sudo apt-get", edits = on_install("-o Acquire::Min-ValidTime=86400") },
+    -- a relative write, resolved against the folder cd, pushd and popd leave
+    { name = "a cd into /var/lib/apt/, then lists/", expect = trust .. "echo x > lists/x_Packages",
+      edits = before_install("cd /var/lib/apt", "echo x > lists/x_Packages", "cd -") },
+    { name = "a cd into /usr/share/, then keyrings/", expect = trust .. "echo x | sudo tee keyrings/x.gpg",
+      edits = before_install("cd /usr/share", "echo x | sudo tee keyrings/x.gpg", "cd -") },
+    { name = "a cd into /etc/, then apt/", expect = write .. "echo x > apt/preferences.d/x",
+      edits = before_install("cd /etc", "echo x > apt/preferences.d/x", "cd -") },
+    { name = "a write through ..", expect = trust .. "echo x > ../keyrings/x.gpg",
+      edits = before_install("cd /usr/share/doc", "echo x > ../keyrings/x.gpg", "cd -") },
+    { name = "a relative cd", expect = "a change into apt's keyrings or lists: cd /usr/share && cd keyrings", edits = before_install("cd /usr/share && cd keyrings", "cd -") },
+    { name = "cd - back to /usr/share/", expect = trust .. "echo x > keyrings/x.gpg",
+      edits = before_install("cd /usr/share", "cd /tmp", "cd -", "echo x > keyrings/x.gpg") },
+    { name = "popd back to /usr/share/", expect = trust .. "echo x > keyrings/x.gpg",
+      edits = before_install("pushd /usr/share", "pushd /tmp", "popd", "echo x > keyrings/x.gpg", "popd") },
+    { name = "pushd +1 to a folder pushed with -n", expect = trust .. "echo x > keyrings/x.gpg",
+      edits = before_install("pushd -n /usr/share", "pushd +1", "echo x > keyrings/x.gpg", "popd") },
   }
 end
 
@@ -2764,6 +2917,7 @@ test("the workflow refuses every weakening of apt's checks and every install of 
     .. "          cp /etc/apt/apt-mirrors.txt \"$RUNNER_TEMP/\"\n          sudo apt-get -o Dir::State::status=/tmp/s check\n"
     .. "          sudo apt-get -o Acquire::Retries=1 check\n          cp /usr/share/keyrings/ubuntu-archive-keyring.gpg \"$RUNNER_TEMP/\"\n"
     .. "          gpg --no-default-keyring --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --verify x.sig x\n"
+    .. "          cd /usr/share/doc\n          cd /tmp\n          echo x > ../keyrings/x.gpg\n          cd \"$RUNNER_TEMP\"\n          echo x > keyrings/x.gpg\n"
   for _, cache in ipairs(CI_WORKFLOW.CACHES) do
     assert_equal(table.concat(CI_WORKFLOW.apt_weakenings(CI_WORKFLOW.mutated(workflow, install, passes .. install, cache.job)), " | "), "",
       "the weakenings of " .. cache.where .. " with python3 -c, git -C, a read under /etc/apt/, Dir::State, Acquire::Retries and reads under /usr/share/keyrings/")
