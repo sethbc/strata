@@ -50,7 +50,7 @@
                 },
                 freezeMode: { arg voice, value; this.areaCall(\setFreezeMode, voice, value); false }
             ),
-            stop: { this.areaCall(\stopCopyWriters) },
+            stop: { this.areaCall(\stopCopyWriters); this.areaCall(\forgetWriterStarts) },
             free: { this.areaCall(\freeSpectralBuffers) },
             effectKeys: this.copyWriterKeys
         )
@@ -67,6 +67,9 @@
     // set back); pruned when a synth frees (forgetInputReader).
     // \spectralBuffers: on the high tier, each voice's [left, right] FFT
     // buffers for its spectral writer (see addFreezeDefs), else empty.
+    // \writerStarts: per voice, the /n_go responder of the ring writer
+    // replaceRingWriter made last while that /n_go has not come, else nil
+    // (watchWriterStart, #1000).
     // \ended: per voice, the freezes the engine ended on its own
     // (abandonCopy), counted from 1 as the freezeEnded poll reports them.
     allocFreezeState {
@@ -82,6 +85,7 @@
         state[\faded] = Array.fill(numVoices, { IdentitySet.new });
         state[\inputReaders] = IdentityDictionary.new;
         state[\ended] = Array.fill(numVoices, 0);
+        state[\writerStarts] = Array.newClear(numVoices);
         // Inside a frozen input copy history is 0: a history change is kept
         // (it applies again on unfreeze) but not sent while the voice is
         // frozen on the input. The grains area's handler does the rest.
@@ -107,10 +111,13 @@
     // The FFT buffers are the voice's \spectralBuffers (fftL, fftR), never
     // a LocalBuf: building a LocalBuf into this def corrupts sclang 3.13's
     // garbage collector (norns' version), which then aborts sclang a little
-    // later. A voice's pair serves one node at a time: its synth freeze's
-    // writer (Synth.replace of its ring writer) or its input freeze's copy
-    // writer (startCopyWriter), and an unfreeze frees the one before the
-    // other can start.
+    // later. A voice's pair serves one running node at a time: its synth
+    // freeze's writer (Synth.replace of its ring writer) or its input
+    // freeze's copy writer (startCopyWriter), and an unfreeze frees the one
+    // before the other can start. A burst of changes in one block can make
+    // and replace several of a voice's writers before any is calculated;
+    // the ones replaced never construct their units (scsynth runs a node's
+    // constructors at its first block), so they never touch the pair.
     addFreezeDefs {
         var window = this.spectralFrames;
         if (tier != \high) { ^this };
@@ -314,27 +321,86 @@
     // voice's hold and spectral freeze only: an input freeze never touches
     // the voice's writer
     pauseRingWriter { arg voice;
-        this.ringWriterFor(voice) !? { arg writer; writer.run(false) };
+        this.runRingWriter(voice, false);
     }
 
     resumeRingWriter { arg voice;
-        this.ringWriterFor(voice) !? { arg writer; writer.run(true) };
+        this.runRingWriter(voice, true);
+    }
+
+    // A hold's pause or its run: /n_run only to a writer that has had its
+    // first block (no /n_go awaited: watchWriterStart). scsynth runs a
+    // node's unit constructors at its first block, and its Node_SetRun
+    // breaks on a node still waiting for it (#1000, 3.13 and 3.14.1 alike):
+    // a pause there leaves the node to construct itself paused, a run after
+    // that pause is ignored (the writer stayed paused, the voice's ring held
+    // though unfrozen), and a second pause skips the constructors, so the
+    // run after it calculated units never constructed and crashed scsynth.
+    // A writer still waiting is replaced instead, by one made paused or
+    // running: its one /n_run before its first block, if any, is the pause
+    // in its own /s_new's packet, which scsynth honors
+    runRingWriter { arg voice, run;
+        var writer = this.ringWriterFor(voice);
+        if (writer.isNil) { ^this };
+        if (areaState[\freeze][\writerStarts][voice].isNil) { writer.run(run) } {
+            this.replaceRingWriter(voice, \strataRingWrite, granBuses[voice], run)
+        };
     }
 
     // Replace the voice's ring writer with one of defName reading the bus
     // in (Synth.replace frees the old one in the same server step); the new
     // one carries on from the old one's head (resume 1: ringWritePhase). A
-    // synth voice's spectral freeze and its unfreeze only
-    replaceRingWriter { arg voice, defName, in;
+    // synth voice's spectral freeze and its unfreeze, and a hold's pause or
+    // run of a writer still waiting for its first block (runRingWriter).
+    // run false makes it paused: its /n_run 0 in the replace's packet (a
+    // caller's bundle, or one of its own). A replace is safe whatever the
+    // old writer's state: one never calculated is freed without its
+    // destructors, as scsynth frees a node that never constructed its units
+    replaceRingWriter { arg voice, defName, in, run = true;
         var key = this.ringWriterKeys[voice], old = synths[key], ring = this.ringBuffersFor(voice, 0);
-        var args = [\in, in, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2], \resume, 1], fft;
+        var args = [\in, in, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2], \resume, 1], fft, server = context.server, replace;
         if (old.isNil or: { this.pastStop }) { ^this };
         if (defName == \strataRingWriteSpectral) {
             fft = areaState[\freeze][\spectralBuffers][voice];
             if (fft.isNil) { ^this };
             args = args ++ [\fftL, fft[0], \fftR, fft[1]];
         };
-        synths[key] = Synth.replace(old, defName, args);
+        replace = {
+            synths[key] = Synth.replace(old, defName, args);
+            if (run.not) { synths[key].run(false) };
+        };
+        if (run or: { server.addr.hasBundle }) { replace.value } { server.makeBundle(nil, replace) };
+        this.areaCall(\watchWriterStart, voice, synths[key]);
+    }
+
+    // The voice's new ring writer has had its first block once its /n_go
+    // has come: the server performs what it receives at the start of a
+    // callback and calculates after, so whatever sclang sends once that
+    // reply to the callback that made the node is in is performed in a
+    // later callback, after the node's first block.
+    // Until then areaState[\freeze][\writerStarts][voice] holds the
+    // responder, and runRingWriter replaces the writer rather than send it
+    // a run. The responder goes with that /n_go, the voice's next replace
+    // (forgetWriterStart) and the area's stop (forgetWriterStarts), never
+    // with a timer: a writer whose /s_new found no room sends no /n_go, and
+    // its voice's next pause or run is a replace
+    watchWriterStart { arg voice, writer;
+        var starts = areaState[\freeze][\writerStarts], watch;
+        this.forgetWriterStart(voice);
+        watch = OSCFunc({ if (starts[voice] === watch) { starts[voice] = nil } },
+            '/n_go', context.server.addr, argTemplate: [writer.nodeID]).oneShot;
+        starts[voice] = watch;
+    }
+
+    // The voice's writer's /n_go responder freed, if it has one
+    forgetWriterStart { arg voice;
+        var starts = areaState[\freeze][\writerStarts];
+        starts[voice] !? { arg watch; watch.free };
+        starts[voice] = nil;
+    }
+
+    forgetWriterStarts {
+        numVoices.do({ arg voice; this.forgetWriterStart(voice) });
     }
 
     freeSpectralBuffers {
