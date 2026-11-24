@@ -37,7 +37,7 @@ No test runs this table: it is one of the design's modal owners (its section 5, 
 ## Owns
 
 - `lib/ui/slice_editor.lua` (`S.lib.ui_slice_editor`, 3.7 design §3.7, decision 14): `EDITOR` (the tunables, `layout`, `levels`, `flashes`), `open(slot)`, `close()`, `is_open()`, `state()` (`{slot, marker, view, row}`), `pick_marker(d)`, `pick_row(name)`, `nudge(d, fine)`, `add()`, `delete()`, `turn_row(name, d)`, `amount_range(record?)`, `tempo_range()`, `ring_fractions()`, BUFFER's `slot_text(slot)` and `starts(slot)`, and `owner` (whose `arc_delta` and `arc_redraw` `lib/arc/buffer.lua` sets, `docs/notes/lua/arc-pages.md`). Its unit tests: `test/unit/ui_slice_editor_test.lua` (with `h.slice_doubles`' editor doubles, set as fields of the real `S.lib.slices`, `S.lib.samples` and `S.lib.waveforms`).
-- No clock, cleanup step or registry of its own: a note hook, an `on_step` function and the `slice editor` invariant (Machines, above). Its owner's record names it `SLICE`, the header's title while it is on top (#901), and its `close` is `M.close`, which cleanup's `modal_owners` step (141, `S.lib.ui_modal.close_all`) calls for an open editor (#899).
+- No clock, cleanup step or registry of its own: a note hook, an `on_step` function and the `slice editor` invariant (Machines, above). Its owner's record names it `SLICE`, the header's title while it is on top (#901), and its `close` calls `M.close` (looked up at the call), which cleanup's `modal_owners` step (141, `S.lib.ui_modal.close_all`) calls for an open editor (#899).
 
 ## Views and controls
 

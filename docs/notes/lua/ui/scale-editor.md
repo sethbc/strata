@@ -28,7 +28,7 @@ No test runs this table: it is one of the design's modal owners (its section 5, 
 
 ## lib/ui/scale_editor.lua (`S.lib.ui_scale_editor`)
 
-Opened from SETUP's `scale & tuning` row (K3; an action row appended after `transport`, 3.8 ruling 44). Fields: `open`, `close`, `is_open`, `note(key)` (the tap) and `SCALE_EDITOR` (the layout); its cleanup step (139) closes it (the modal's step 141 then finds it closed). Its owner's record names it `SCALE`, the header's title while it is on top (#901), and its `close` is `M.close`.
+Opened from SETUP's `scale & tuning` row (K3; an action row appended after `transport`, 3.8 ruling 44). Fields: `open`, `close`, `is_open`, `note(key)` (the tap) and `SCALE_EDITOR` (the layout); its cleanup step (139) closes it (the modal's step 141 then finds it closed). Its owner's record names it `SCALE`, the header's title while it is on top (#901), and its `close` calls `M.close` (looked up at the call).
 
 Rows, top to bottom, six visible from y 18, 7 px apart, values right-aligned at x 124 (`S.lib.ui_field_list.draw`, as SETUP's and the zones editor's):
 

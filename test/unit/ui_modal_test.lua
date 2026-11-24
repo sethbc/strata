@@ -316,4 +316,35 @@ test("close_all closes every owner from the top down", function()
   assert_true(said:find("STUCK", 1, true) ~= nil, "a line names it: " .. said)
 end)
 
+-- 6d's review: a close that raises is contained (cleanup() runs its steps
+-- without a pcall, so a raise would skip steps 142-190): one console line
+-- names the owner, it is popped, the owner beneath still closes, and the
+-- cleanup steps after 141 still run
+test("a close that raises is contained: the owner beneath closes and the later cleanup steps run", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local modal = S.lib.ui_modal
+  local below_closed = false
+  local below
+  below = test_owner{name = "BELOW", close = function() below_closed = true; modal.pop(below) end}
+  local raising = test_owner{name = "RAISE", close = function() error("close failed probe") end}
+  modal.push(below); modal.push(raising)
+  local targets_stopped = false
+  local real_stop_all = S.lib.io_targets.stop_all
+  S.lib.io_targets.stop_all = function(...) targets_stopped = true; return real_stop_all(...) end
+  local printed_before = #context.printed
+  local ok, problem = pcall(cleanup)
+  S.lib.io_targets.stop_all = real_stop_all
+  assert_true(ok, "cleanup runs through: " .. tostring(problem))
+  assert_equal(modal.top(), nil, "the stack is empty")
+  assert_true(below_closed, "the owner beneath still closes")
+  assert_true(targets_stopped, "step 142 (io_targets) still runs")
+  local lines = {}
+  for index = printed_before + 1, #context.printed do
+    if context.printed[index]:find("RAISE", 1, true) then lines[#lines + 1] = context.printed[index] end
+  end
+  assert_equal(#lines, 1, "one console line names it: " .. table.concat(lines, " / "))
+  h.claim_script_errors(context, 1, "strata: the modal owner RAISE's close failed: ", "close failed probe")
+end)
+
 end

@@ -107,16 +107,24 @@ return function(S)
   end
 
   -- Close every owner still open, from the top down (the step editor, which
-  -- a grid can push over any owner, first), each through its own close; one
-  -- its close leaves on the stack is popped with a console line, so the
-  -- stack is empty after it
+  -- a grid can push over any owner, first), each through its own close,
+  -- contained (S.lib.ui_frame.contained_call: cleanup() runs its steps with
+  -- no pcall, so a close that raised would skip every later step); one its
+  -- close leaves on the stack, or whose close raised, is popped with one
+  -- console line, so the stack is empty after it
+  local close_errors = {}
   function M.close_all()
     local open = {}
     for index = #stack, 1, -1 do open[#open + 1] = stack[index] end
     for _, owner in ipairs(open) do
-      if index_of(owner) then owner.close() end
+      local closed = true
       if index_of(owner) then
-        print("strata: the modal owner " .. owner.name .. " stayed open after its close; popped")
+        closed = S.lib.ui_frame.contained_call(close_errors, owner.name, "the modal owner " .. owner.name .. "'s close",
+          owner.close)
+      end
+      if index_of(owner) then
+        -- a close that raised has printed its line already
+        if closed then print("strata: the modal owner " .. owner.name .. " stayed open after its close; popped") end
         M.pop(owner)
       end
     end
