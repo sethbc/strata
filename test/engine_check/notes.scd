@@ -884,7 +884,10 @@ checkPoolFull = {
 // at its start, by the voice's source and freeze (a slot's \buffer; the
 // input's or a voice source's \input; a frozen synth voice's \stream; any
 // other synth voice's \voice), of that kind's def (\strataGrainBuf,
-// \strataGrainRing, the voice's type's def). The run must start notes of
+// \strataGrainRing, the voice's type's def). The source, the freeze and the
+// type are the run's own record of its commands (every voice unfrozen at the
+// start; a freeze sets it, a switch to another source ends it, as every
+// voice runs throughout), never read from the engine. The run must start notes of
 // all four kinds and restart some (a new synth in a slot whose last one the
 // same command cut). At the end the note synths the server runs (one
 // /g_queryTree) are exactly those the slots hold, none held twice
@@ -897,16 +900,25 @@ checkPoolRandom = {
     var lastSynths = Array.fill(engine.numVoices, { Array.newClear(engine.noteSlots) }), slotFailure, slotFailures = 0;
     var kinds = IdentityDictionary.new, restarts = 0, kindNow, defOf, checkSlots;
     var types = (0 .. (engine.numVoices - 1)).collect({ arg voice; engine.voiceType(voice) });
-    // the kind a voice's note starts as, by its source and freeze
+    // the run's record of its commands: each voice's source, freeze and type
+    var sourceOf = sources.copy, frozenOf = Array.fill(engine.numVoices, false), typeOf = types.copy, follow;
+    follow = { arg message;
+        var voice = message[1];
+        switch (message[0])
+        { \setGrainSource } { if (message[2] != sourceOf[voice]) { frozenOf[voice] = false }; sourceOf[voice] = message[2] }
+        { \setGrainParam } { if (message[2] == \freeze) { frozenOf[voice] = message[3] > 0 } }
+        { \setVoiceType } { typeOf[voice] = message[2] };
+    };
+    // the kind a voice's note starts as, by the run's record of its source and freeze
     kindNow = { arg voice;
-        var source = engine.grainSource[voice];
+        var source = sourceOf[voice];
         case
-        { (source == engine.inputSource) or: { source >= engine.voiceSourceFirst } } { \input }
-        { source.inclusivelyBetween(1, engine.numBuffers) } { \buffer }
-        { engine.areaState[\freeze][\frozen][voice] } { \stream }
+        { [1, 2].includes(source) } { \buffer }
+        { source != 0 } { \input }
+        { frozenOf[voice] } { \stream }
         { \voice }
     };
-    defOf = { arg kind, voice; switch (kind, \voice, { engine.voiceDefFor(voice) }, \buffer, { \strataGrainBuf }, { \strataGrainRing }) };
+    defOf = { arg kind, voice; switch (kind, \voice, { engine.voiceTypeDefs[typeOf[voice]] }, \buffer, { \strataGrainBuf }, { \strataGrainRing }) };
     // every extra slot after a command: the first problem kept
     checkSlots = { arg index, message;
         engine.numVoices.do({ arg voice;
@@ -937,6 +949,7 @@ checkPoolRandom = {
         if (engine.bufferFrames[slot] == 0) { command.(\loadBuffer, slot, h.stereoPath, 0); h.waitFor({ engine.bufferFrames[slot] > 0 }, 3) };
     });
     sources.do({ arg source, voice;
+        command.(\setGrainParam, voice, \freeze, 0.0);
         command.(\setGrainSource, voice, source);
         command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0);
     });
@@ -945,7 +958,7 @@ checkPoolRandom = {
     withIgnoredLines.(List.new, {
         2000.do({ arg index;
             var draw = random.next, voice = (random.next * 7).floor.asInteger.min(6), slot = (random.next * 7).floor.asInteger.min(6) + 1;
-            var send = { arg ... message; command.(*message); checkSlots.(index, message) };
+            var send = { arg ... message; follow.(message); command.(*message); checkSlots.(index, message) };
             case
             { draw < 0.45 } { playNote.(voice, slot, 0.5 + random.next, 1.0, 110.0 + (random.next * 400)); checkSlots.(index, [\noteOn, voice, slot]) }
             { draw < 0.65 } { send.(\noteOff, voice, slot, 0) }
