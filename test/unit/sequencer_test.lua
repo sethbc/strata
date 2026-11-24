@@ -4722,6 +4722,71 @@ do
     assert_equal(table.concat(played.passes, " "), "1 1 1 1 1 1 2 2 2 3 3 3 3", "the pass of each")
   end)
 
+  -- #961, fix round 1 (coverage): one misstep from a step past the length
+  -- goes to the nearest step inside in every direction, whatever the
+  -- direction's own move: up wraps to 1, down lands on the length's last
+  -- step. Each case: a direction and length, its plain steps, the cut, the
+  -- plain steps after it, one misstep (up 0.75, down 0.25), then plain steps
+  test("position and pass: one misstep from past the length, in forward, reverse and random", function()
+    local cases = {
+      -- the cut applies at once (three taken, under 4); up from 6, then pass 2 at 4
+      {"reverse", 8, 3, 0, 0.75, 2, "8 7 6 1 4 3", "1 1 1 1 2 2"},
+      {"reverse", 8, 3, 0, 0.25, 2, "8 7 6 4 4 3", "1 1 1 1 2 2"},
+      -- draws 5 2 7, the cut at once; from 7, then pass 2's draws 4 1
+      {"random", 8, 3, 0, 0.75, 2, "5 2 7 1 4 1", "1 1 1 1 2 2"},
+      {"random", 8, 3, 0, 0.25, 2, "5 2 7 4 4 1", "1 1 1 1 2 2"},
+      -- the cut waits for the pass of 6; down from 6 starts pass 2 at 4
+      {"forward", 6, 5, 1, 0.25, 2, "1 2 3 4 5 6 4 1 2", "1 1 1 1 1 1 2 2 2"},
+    }
+    for _, case in ipairs(cases) do
+      local direction, length, before, after, draw, more, steps, passes = table.unpack(case)
+      local context = load_strata(); finish_startup(context)
+      local S = local_value("S")
+      voice_1_only(S, length)
+      params:set("v1_seq_direction", DIRECTION[direction])
+      random_draws(context, draw)
+      local played = pass_output(S)
+      pattern_clock_start()
+      run_steps(context, before)
+      params:set("v1_seq_length", 4)
+      run_steps(context, after)
+      params:set("v1_seq_misstep", 100)
+      run_steps(context, 1)
+      params:set("v1_seq_misstep", 0)
+      run_steps(context, more)
+      pattern_clock_stop()
+      math.random = context.real_random
+      local what = direction .. ", a misstep " .. (draw > 0.5 and "up" or "down")
+      assert_equal(table.concat(played.steps, " "), steps, what .. ": the steps")
+      assert_equal(table.concat(played.passes, " "), passes, what .. ": the passes")
+    end
+  end)
+
+  -- #970, fix round 1: a misstep up on ping-pong's leg down never applies a
+  -- shorter length that waits (the leg down applies it at its turn at 1,
+  -- ruling 28): from 4, with 8 cut to 4, it plays 5 on the same pass, then
+  -- the leg goes on down to 1 and turns at 4
+  test("position and pass: a ping-pong misstep up on the leg down leaves a waiting length to the turn at 1", function()
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    voice_1_only(S, 8)
+    params:set("v1_seq_direction", DIRECTION["ping-pong"])
+    missteps_up(context, 0.75)
+    local played = pass_output(S)
+    pattern_clock_start()
+    run_steps(context, 12)  -- 1 .. 8 7 6 5 4
+    params:set("v1_seq_length", 4)
+    params:set("v1_seq_misstep", 100)
+    run_steps(context, 1)   -- one misstep up
+    params:set("v1_seq_misstep", 0)
+    run_steps(context, 8)
+    pattern_clock_stop()
+    math.random = context.real_random
+    assert_equal(table.concat(played.steps, " "), "1 2 3 4 5 6 7 8 7 6 5 4 5 4 3 2 1 2 3 4 3", "the steps")
+    assert_equal(table.concat(played.passes, " "), "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 3 3 3 4",
+      "the pass ends at 1, not at the misstep")
+  end)
+
   -- #970: a misstep in ping-pong at a length of 1 turns nothing (each step
   -- is a pass, as without it), so its drawn way never stays: at a longer
   -- length the leg goes up from 1 on the same pass

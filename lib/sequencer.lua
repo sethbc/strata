@@ -1181,14 +1181,16 @@ return function(S)
   -- at (the leg stands on it or below it), applies at once; else the leg
   -- ends at its own top, or goes on down to 1, and the new length applies
   -- at the turn, as reverse does (#743). The leg down turns at 1, which
-  -- every length holds. A length of 1 stays on 1, each step a pass.
+  -- every length holds. A length of 1 stays on 1, each step a pass. way is
+  -- the step's own way (a misstep's, #970; the heading otherwise): the
+  -- length is the leg's to apply (state.heading's), the turn the step's.
   -- Returns the step and whether the pass ended
-  local function ping_pong_step(state, last, length)
+  local function ping_pong_step(state, last, length, way)
     if length <= 1 then return 1, true end
     if length > state.pass_length or (state.heading > 0 and last <= length) then state.pass_length = length end
-    local turned = (state.heading > 0 and last >= state.pass_length) or (state.heading < 0 and last <= 1)
-    if turned then state.heading, state.pass_length = -state.heading, length end
-    return util.clamp(last + state.heading, 1, state.pass_length), turned
+    local turned = (way > 0 and last >= state.pass_length) or (way < 0 and last <= 1)
+    if turned then state.heading, state.pass_length = -way, length end
+    return util.clamp(last + (turned and state.heading or way), 1, state.pass_length), turned
   end
 
   -- The voice's step at its tick, and its position moved on by its
@@ -1237,13 +1239,10 @@ return function(S)
       local missed = chance > 0 and math.random() * SEQ.max_misstep < chance and (math.random() < 0.5 and -1 or 1)
       if way == SEQ.ping_pong then
         -- a misstep is a ping-pong step its own way (#970): at an end it
-        -- turns and ends the pass; elsewhere (and on a length of 1, which
-        -- never turns) the heading stays
-        local heading = state.heading
-        state.heading = missed or heading
-        step, pass_ended = ping_pong_step(state, last, length)
+        -- turns and ends the pass; elsewhere the heading stays, and a
+        -- waiting length is the leg's to apply, never the misstep's
+        step, pass_ended = ping_pong_step(state, last, length, missed or state.heading)
         if pass_ended then state.taken, state.pass_length = 0, length end
-        if not pass_ended or length <= 1 then state.heading = heading end
       elseif missed then
         -- a neighbor of last, in 1..pass_length: past the top wraps to 1,
         -- past the bottom to the top; from above the length (#961) the
