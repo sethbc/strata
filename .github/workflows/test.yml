@@ -44,11 +44,14 @@ jobs:
   # machine's time (docs/checks.md, The Lua jobs and their times)
   lua-suite:
     name: lua (${{ matrix.lua }}, ${{ matrix.shard }})
-    # A shard of the suite on 4 cores, plus about 1 minute for checkout and
-    # the install. 10 covers the whole suite's 7 to 10 minutes there (#991:
-    # what one shard took before the suite was split) with room for a
-    # shard; the default is 360
-    timeout-minutes: 10
+    # A shard of the suite on 4 cores (121 to 471 s), plus the setup: under
+    # half a minute on a fast mirror, up to about 2.5 minutes on a slow one
+    # (the list's apt-get update, #993). 12 covers the slowest suite measured
+    # (471 s, run 45320574628) after a slow mirror's setup, on a cache hit
+    # (about 642 s) and on a miss (about 707 s): docs/checks.md, Installs.
+    # Balancing the Lua suite's shards (about 315 s against 140 s) gives it
+    # real room; the default is 360
+    timeout-minutes: 12
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -70,10 +73,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-        # 7 s at most in four runs of four jobs (#993). Every step before
-        # the suite has a limit of its own, and those limits (9 minutes) and
-        # a minute for the runner's own steps fit the job's 10, so a hung
-        # step of the setup fails by its own name (docs/checks.md, Installs)
+        # 7 s at most in 32 jobs (#993). Every step before the suite has a
+        # limit of its own, and those limits (9 minutes) and a minute for the
+        # runner's own steps fit inside the job's 12, so a hung step of the
+        # setup fails by its own name (docs/checks.md, Installs)
         timeout-minutes: 1
 
       # Both on each runner, as the one job before had them (Lua 5.3's
