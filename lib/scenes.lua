@@ -197,10 +197,21 @@ return function(S)
   -- Set a param as a scene sets it: a binary through set_binary_param
   -- (lib/ui/params.lua), so a controller mapped to it in PARAMS > MAP
   -- follows (norns' Binary:set sends no CC, #538); any other through
-  -- params:set, whose own set sends the map's CC
+  -- params:set, whose own set sends the map's CC. A control param that
+  -- already holds the value (its get(), the spec's map of its raw value,
+  -- is the value) is set to the raw value it holds: no action runs and
+  -- nothing is sent, but norns still sends the map's CC. A scene holds a
+  -- param's get(), and an exponential spec's unmap of it can land an ulp
+  -- from the raw value in force, which params:set would take for a change
+  -- (#977: a recall of the state in force resent freq, scaleNote,
+  -- attackTime and releaseTime an ulp off, and a loop of capture and
+  -- recall crept)
   local function set_scene_param(param_id, value)
-    if params:lookup_param(param_id).t == params.tBINARY then
+    local param = params:lookup_param(param_id)
+    if param.t == params.tBINARY then
       set_binary_param(param_id, value)
+    elseif param.t == params.tCONTROL and param:get() == value then
+      params:set_raw(param_id, params:get_raw(param_id))
     else
       params:set(param_id, value)
     end
