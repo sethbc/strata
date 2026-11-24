@@ -294,6 +294,7 @@
         recordSynths[index] = nil;
         if (take.notNil) {
             state[\takes][index] = nil;
+            this.forgetTakeStart(take);
             // a stop that was sent but never armed leaves no frame count to await
             if (stopReplies[index] == take[\change]) { stopReplies[index] = nil };
             // never armed: the slot keeps its length, so it gets back the
@@ -581,18 +582,29 @@
     // block, late it runs at once, and after an honored first run it does
     // nothing. Sent through sendToSynth, with the time left to the take's
     // start, only while the slot (slotChanges: a stop, load, clear or
-    // recording changes it) and the take are what sendTake left. A node
-    // whose /s_new failed sends no /n_go: the responder goes after
-    // startConfirmWait
+    // recording changes it) and the take are what sendTake left. The
+    // responder is the take's (take[\startWatch]) and goes with the first
+    // of its /n_go, the take's arming (takeArmed), a stop (stopRecordSlot),
+    // its record synth's end (recordSynthFreed) and the take's end or
+    // cancel (stopRecording, which every load, clear and recording runs),
+    // so no timer can drop it while the take still waits: a node whose
+    // /s_new failed sends no /n_go, and its responder stays until such a
+    // command
     watchTakeStart { arg index, take, synth;
-        var change = slotChanges[index], state = areaState[\record], server = context.server, started;
-        started = OSCFunc({
+        var change = slotChanges[index], state = areaState[\record], server = context.server;
+        take[\startWatch] = OSCFunc({
             var wait = take[\startAt] - thisThread.seconds;
+            take[\startWatch] = nil;
             if ((slotChanges[index] == change) and: { state[\takes][index] === take } and: { recordSynths[index] === synth }) {
                 server.makeBundle(if (wait > 0) { wait }, { this.sendToSynth(synth.runMsg(true)) });
             };
         }, '/n_go', server.addr, argTemplate: [synth.nodeID]).oneShot;
-        SystemClock.sched(this.startConfirmWait, { started.free; nil });
+    }
+
+    // A take's second-run responder (watchTakeStart) freed, if it has one
+    forgetTakeStart { arg take;
+        take[\startWatch] !? { arg watch; watch.free };
+        take[\startWatch] = nil;
     }
 
     postRecordLate { arg index, milliseconds;
@@ -611,6 +623,7 @@
         var length;
         if (take[\started]) { ^this };
         take[\started] = true;
+        this.forgetTakeStart(take);
         this.reportRecordState(index, take[\number], 1);
         if ((take[\kind] == \playable) and: { slotChanges[index] == take[\change] }) {
             length = bufferFrames[index].max(take[\frames]);
@@ -672,6 +685,7 @@
     // here, so it includes the fade.
     recordSynthFreed { arg index, take;
         var change = take[\change];
+        this.forgetTakeStart(take);
         if (recordSynths[index] !== take[\synth]) {
             if (recordSynths[index].isNil) { this.slotHeadBus(index).setn([-1, 0]) };
             ^this
@@ -780,6 +794,8 @@
             ^this
         };
         take[\stopping] = true;
+        // no second run for a stopped take (#981)
+        this.forgetTakeStart(take);
         change = this.slotChanged(index);
         take[\change] = change;
         if (take[\kind] == \replace) { stopReplies[index] = change };
