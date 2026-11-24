@@ -389,11 +389,14 @@ return function(S)
   end
 
   -- The name a row draws, uncut: the slot's own, a missing slot's
-  -- remembered file (S.lib.buffers.missing_file, #877), else nil ("-")
+  -- remembered file (S.lib.buffers.missing_file, #877), else nil ("-"; a
+  -- remembered path with no file name after its last "/" too)
   local function slot_shown_name(slot, buffer)
     if slot_has_name(buffer) then return buffer.name end
     local missing = S.lib.buffers.missing_file(slot)
-    return missing and (missing:match("[^/]*$") or missing) or nil
+    local file = missing and missing:match("[^/]*$")
+    if file == nil or file == "" then return nil end
+    return file
   end
 
   -- The voices reading a slot ("v2 v6"), cut to max_width a whole voice at
@@ -831,7 +834,7 @@ return function(S)
     local sent, reason
     if loop then sent, reason = save_buffer_loop(slot) else sent, reason = save_buffer(slot) end
     if sent then
-      buffer_page_flash("saving buf " .. slot .. (loop and " loop" or ""))
+      buffer_page_flash(S.lib.buffers.saving_flash_text(slot, loop))
     elseif reason == "busy" then
       header_flash("buf " .. slot .. " busy")   -- a refusal: the header's (#878)
     elseif reason == "empty" then
