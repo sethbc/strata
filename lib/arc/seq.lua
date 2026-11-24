@@ -34,16 +34,12 @@ return function(S)
     editor_off_level = 4,
   }
 
-  -- The step ring 2's carried ticks were turned on ("<voice>:<step>"), so
-  -- they never set another step
-  local level_target = nil
-
   local function cursor_step()
     return util.clamp(S.cursors.seq_step, 1, PATTERN_LENGTH)
   end
 
-  local function ring_steps(n, delta)
-    return arc_whole_steps("seq:" .. n, delta, ARC_SEQ.ticks[n])
+  local function ring_steps(n, delta, context)
+    return arc_whole_steps("seq:" .. n, delta, ARC_SEQ.ticks[n], context)
   end
 
   local function set_step_level(steps)
@@ -60,12 +56,9 @@ return function(S)
       local steps = ring_steps(n, delta)
       if steps ~= 0 then S.lib.ui_cursors.move("seq_step", steps) end
     elseif n == 2 then
-      local target = S.selected_voice .. ":" .. cursor_step()
-      if level_target ~= target then
-        forget_arc_ticks("seq:2")
-        level_target = target
-      end
-      local steps = ring_steps(n, delta)
+      -- the carry belongs to the step it was turned on ("<voice>:<step>"),
+      -- so it never sets another step
+      local steps = ring_steps(n, delta, S.selected_voice .. ":" .. cursor_step())
       if steps ~= 0 then set_step_level(steps) end
     elseif n == 3 then
       local steps = ring_steps(n, delta)
@@ -96,17 +89,10 @@ return function(S)
 
   -- The step editor's rings -------------------------------------------------
 
-  -- Per carry key: the "<voice>:<step>" its ticks were turned on, so a step
-  -- the editor moved to never takes another's carried ticks
-  local editor_targets = {}
-
+  -- A carry belongs to the "<voice>:<step>" its ticks were turned on, so a
+  -- step the editor moved to never takes another's carried ticks
   local function editor_steps(carry, voice_idx, step, delta, ticks_per_step)
-    local target = voice_idx .. ":" .. step
-    if editor_targets[carry] ~= target then
-      forget_arc_ticks(carry)
-      editor_targets[carry] = target
-    end
-    return arc_whole_steps(carry, delta, ticks_per_step)
+    return arc_whole_steps(carry, delta, ticks_per_step, voice_idx .. ":" .. step)
   end
 
   -- Plain rings 1-3 move their lock by delta / ARC_TICKS_PER_SWEEP of its

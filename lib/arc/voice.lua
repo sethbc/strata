@@ -20,10 +20,6 @@ return function(S)
     level = 12,
   }
 
-  -- Per ring: the param id its carried ticks were turned on, so they never
-  -- step another row (another group or another voice)
-  local carried_param = {}
-
   -- The rows and the row indices rings 1-4 edit. The rows can change under
   -- the cursor (a source change, another selected voice) before the next
   -- frame: the cursor module's sync puts it back on its anchored param (or
@@ -43,12 +39,9 @@ return function(S)
       arc_sweep_param(row.param_id, delta)
       return
     end
-    local ticks_key = "voice:" .. n
-    if carried_param[n] ~= row.param_id then
-      forget_arc_ticks(ticks_key)
-      carried_param[n] = row.param_id
-    end
-    local steps = arc_whole_steps(ticks_key, delta, ARC_VOICE.ticks_per_step)
+    -- the carry belongs to the row's param, so it never steps another row
+    -- (another group or another voice)
+    local steps = arc_whole_steps("voice:" .. n, delta, ARC_VOICE.ticks_per_step, row.param_id)
     if steps == 0 then return end
     if row.kind == S.lib.ui_voice_rows.TYPE_KIND then
       -- the type row (3.8): its pending choice, applied once the ring rests

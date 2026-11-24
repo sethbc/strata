@@ -104,17 +104,30 @@ return function(S)
     end
   end
 
+  -- Per key: the context its carried ticks were turned in (arc_whole_steps'
+  -- context, any value compared with ==; nil for a ring that passes none).
+  -- One entry a key, so it stays as small as S.arc_ticks
+  local carry_contexts = {}
+
   -- Whole steps in a ring's carried ticks plus delta, for rings that step
   -- whole values (ticks_per_step ticks a step); the rest is kept under key
-  -- for the next turn. A page change forgets every key's carry (set_ui_page)
-  function arc_whole_steps(key, delta, ticks_per_step)
+  -- for the next turn. Carried ticks belong to what they were turned on
+  -- (#933): context names it (a param, a "<voice>:<step>", a view), and
+  -- ticks carried under another context are forgotten before delta is
+  -- added. A page change forgets every key's carry (set_ui_page)
+  function arc_whole_steps(key, delta, ticks_per_step, context)
+    if carry_contexts[key] ~= context then
+      S.arc_ticks[key] = nil
+      carry_contexts[key] = context
+    end
     local ticks = (S.arc_ticks[key] or 0) + delta
     local steps = ticks >= 0 and math.floor(ticks / ticks_per_step) or -math.floor(-ticks / ticks_per_step)
     S.arc_ticks[key] = ticks - steps * ticks_per_step
     return steps
   end
 
-  -- Forget the carried ticks of key, or of every key when key is nil
+  -- Forget the carried ticks of key, or of every key when key is nil (a
+  -- context kept for a key holds nothing once its ticks are gone)
   function forget_arc_ticks(key)
     if key == nil then
       S.arc_ticks = {}
