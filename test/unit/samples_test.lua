@@ -266,6 +266,25 @@ test("an unreadable samples.data is set aside and the slots still load", functio
   end
 end)
 
+-- 3.9 (#906): the writer's gate, as buffers.data's: a samples.data that can
+-- be neither used nor set aside is written over neither by a timed write
+-- nor at cleanup
+test("a samples.data that cannot be set aside is never written over", function()
+  local subdir = "samples-unmovable-" .. math.random(1, 1e9)
+  local dir = h.data_root .. subdir .. "/strata/"
+  -- every backup name is taken (by a folder): the file cannot be moved aside
+  os.execute("mkdir -p '" .. dir .. "samples.data.bak'")
+  for number = 2, 9 do os.execute("mkdir -p '" .. dir .. "samples.data.bak." .. number .. "'") end
+  write_text(dir .. "samples.data", "{ not lua")
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  settle_load(context, 1, context.audio_dir .. "a.wav", 4)
+  assert_true(samples().set(1, "tempo", 99), "the store works")
+  context.clock.run_for(0.2)
+  assert_equal(file_text(dir .. "samples.data"), "{ not lua", "no timed write over it")
+  cleanup()
+  assert_equal(file_text(dir .. "samples.data"), "{ not lua", "nor at cleanup")
+end)
+
 test("damaged samples.data entries are left out with one console line naming how many", function()
   local subdir = "samples-damaged-" .. math.random(1, 1e9)
   local dir = h.data_root .. subdir .. "/strata/"

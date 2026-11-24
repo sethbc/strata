@@ -130,17 +130,18 @@ end)
 -- one whose resume may be posted (#626). These files still call
 -- clock.cancel themselves, as often as listed; each moves onto the helper
 -- in the package that owns it and removes its line, so the list only
--- shrinks
+-- shrinks (empty since 4g, #906: buffers.data's save clock is the side
+-- files' writer's)
 local BARE_CANCEL_FILES = {
-  ["lib/buffers.lua"] = 1,
 }
--- The files that keep their clock.cancel: the first nine cancel a clock
--- only as the script starts or ends, when no resume can go astray; the
--- sequencer and the quantized actions keep their own rule, ruled on and
--- tested apart (plan ruling 2)
+-- The files that keep their clock.cancel: the first eight cancel a clock
+-- only as the script starts or ends, when no resume can go astray (the side
+-- files' writer cancels its timed write at cleanup only, for buffers.data
+-- and samples.data too since #906); the sequencer and the quantized actions
+-- keep their own rule, ruled on and tested apart (plan ruling 2)
 local EDGE_CANCEL_FILES = {
   ["strata.lua"] = 1, ["lib/ui/frame.lua"] = 1, ["lib/lfos.lua"] = 2, ["lib/engine_sync.lua"] = 1,
-  ["lib/playheads.lua"] = 1, ["lib/waveforms.lua"] = 1, ["lib/samples.lua"] = 1, ["lib/side_files.lua"] = 1,
+  ["lib/playheads.lua"] = 1, ["lib/waveforms.lua"] = 1, ["lib/side_files.lua"] = 1,
   ["lib/factory.lua"] = 1,
   ["lib/sequencer.lua"] = 2, ["lib/quantize.lua"] = 3,
 }

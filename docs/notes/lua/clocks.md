@@ -9,7 +9,7 @@
 - **`cancel(handle)` is for cleanup steps only**: it cancels at once, whatever the wait, which is safe only when norns ends every clock anyway. The cleanup-order test sees a step through its `clock.cancel`.
 - **The helper's cleanup step is the last of all** (`CLEANUP_ORDER.clocks`, 190): a step before it can still retire a clock (the grids' own step, 170, ends their hold clocks).
 - **`handle.id` is not known inside the body before its first wait** (`clock.run` resumes the coroutine before it returns). A module keeps the handle; where its tests read `S.<name>_clock`, it sets that to `handle.id` once `run` has returned, and to nil at a stop.
-- `clock.cancel` is called only in `lib/clocks.lua` and the files `test/unit/structure_test.lua` lists, as often as listed: `BARE_CANCEL_FILES` (the nineteen that move onto the helper, each in the package that owns it, which removes its line) and `EDGE_CANCEL_FILES` (the nine that cancel only as the script starts or ends, and `lib/sequencer.lua` and `lib/quantize.lua`, which keep their own rule). The first list only shrinks.
+- `clock.cancel` is called only in `lib/clocks.lua` and the files `test/unit/structure_test.lua` lists, as often as listed: `BARE_CANCEL_FILES` (the nineteen that move onto the helper, each in the package that owns it, which removes its line) and `EDGE_CANCEL_FILES` (the eight that cancel only as the script starts or ends, and `lib/sequencer.lua` and `lib/quantize.lua`, which keep their own rule). The first list only shrinks.
 
 ## Machines
 

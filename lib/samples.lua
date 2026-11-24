@@ -113,7 +113,9 @@ return function(S)
   -- What is known: the files' entries {path, start, used, settings}, a
   -- take's record per slot, what each slot is bound to (OWN: the slot's
   -- own record; an entry: that file's; nil: unbound), the listeners, the
-  -- counter `used` takes its stamps from, and the file's state
+  -- counter `used` takes its stamps from, and the file's state: started
+  -- (the start step ran), blocked (an unusable file could not be set
+  -- aside), and the writer's text and clock (3.9, #906)
   local OWN = {}
   local entries = {}
   local own = {}
@@ -173,29 +175,18 @@ return function(S)
     return {version = SAMPLES.version, files = files}
   end
 
-  local function write()
-    if not store.started or store.blocked then return end
-    util.make_dir(S.lib.scenes.scene_data_dir)
-    local value = stored_value()
-    local written, problem = S.lib.data_files.write(samples_path(), value)
-    if not written then
-      print("strata: " .. SAMPLES.file .. " not saved: " .. tostring(problem))
-      return
-    end
-    store.text = S.lib.data_files.encode(value)
-  end
-
-  -- One write save_delay s after the first change of a burst, when what
+  -- samples.data's writer (3.9, #906): the side files' one debounced
+  -- writer (S.lib.side_files.writer). It may write once the start step ran
+  -- and unless the file could not be set aside; a timed write waits
+  -- save_delay s after the first change of a burst and runs only when what
   -- the file would hold differs from what was last written
-  local function schedule_save()
-    if not store.started or store.blocked or store.save_clock then return end
-    if S.lib.data_files.encode(stored_value()) == store.text then return end
-    store.save_clock = clock.run(function()
-      clock.sleep(SAMPLES.save_delay)
-      store.save_clock = nil
-      write()
-    end)
-  end
+  local writer = S.lib.side_files.writer({name = "samples", path = samples_path, value = stored_value,
+    holder = store, clock_field = "save_clock", text_field = "text", save_delay = SAMPLES.save_delay,
+    may_write = function() return store.started and not store.blocked end,
+    report = function(written, problem)
+      if not written then print("strata: " .. SAMPLES.file .. " not saved: " .. tostring(problem)) end
+    end})
+  local schedule_save = writer.save
 
   -- A record changed: its file is written (a take's: buffers.data)
   local function changed(slot)
@@ -527,11 +518,7 @@ return function(S)
   -- The cleanup step: the waiting write is canceled and the file written
   -- (skipped if the start step never ran, or the file could not be moved)
   S.register_cleanup(S.constants.CLEANUP_ORDER.samples_save, function()
-    if store.save_clock then
-      clock.cancel(store.save_clock)
-      store.save_clock = nil
-    end
-    write()
+    writer.save_now()
   end)
 
   return M

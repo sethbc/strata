@@ -2238,6 +2238,140 @@ test("a buffer's file is remembered when it loads, not only at exit; reports tha
   assert_equal(#data_writes(opened), 0, "an unchanged buffers.data is not rewritten at exit")
 end)
 
+-- 3.9 (#906): buffers.data and samples.data are written by the side files'
+-- writer (lib/side_files.lua's writer, as the macros', the matrix's, the
+-- gestures' and the sequences' live files are), with the bytes 3.8 wrote:
+-- one write after a burst of changes, one at cleanup
+-- What 3.8.0 wrote for the burst below (slot 1 /tmp/one-writer-a.wav, its
+-- file at tempo 99, and slot 2 /tmp/one-writer-b.wav), and at cleanup (slot
+-- 3 /tmp/one-writer-c.wav too, the file at tempo 100)
+local ONE_WRITER = {
+  buffers_burst = [[return {
+-- Table: {1}
+{
+   ["paths"]={2},
+   ["settings"]={3},
+   ["starts"]={4},
+   ["version"]=3,
+},
+-- Table: {2}
+{
+   "/tmp/one-writer-a.wav",
+   "/tmp/one-writer-b.wav",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+},
+-- Table: {3}
+{
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+   false,
+},
+-- Table: {4}
+{
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+},
+}]],
+  samples_burst = [[return {
+-- Table: {1}
+{
+   ["files"]={2},
+   ["version"]=1,
+},
+-- Table: {2}
+{
+   {3},
+},
+-- Table: {3}
+{
+   ["path"]="/tmp/one-writer-a.wav",
+   ["settings"]={4},
+   ["start"]=0,
+   ["used"]=1,
+},
+-- Table: {4}
+{
+   ["count"]=8,
+   ["edited"]=false,
+   ["mode"]=1,
+   ["normalize"]=false,
+   ["sensitivity"]=50,
+   ["tempo"]=99,
+},
+}]],
+}
+ONE_WRITER.buffers_cleanup = ONE_WRITER.buffers_burst:gsub('"/tmp/one%-writer%-b%.wav",\n   "",',
+  '"/tmp/one-writer-b.wav",\n   "/tmp/one-writer-c.wav",')
+ONE_WRITER.samples_cleanup = ONE_WRITER.samples_burst:gsub('%["tempo"%]=99', '["tempo"]=100')
+
+test("buffers.data and samples.data are written by the side files' writer (#906)", function()
+  local subdir = "one-writer-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  local folder = context.data_dir .. "strata/"
+  context.clock.run_for(1)  -- the start's own writes are over
+  -- per file: the file each data_files.write of it was called from
+  local callers = { ["buffers.data"] = {}, ["samples.data"] = {} }
+  local real_write = S.lib.data_files.write
+  S.lib.data_files.write = function(path, value)
+    local list = callers[path:match("[^/]*$")]
+    if list then table.insert(list, (debug.getinfo(2, "S").source:match("lib/[%w_/]+%.lua$")) or "?") end
+    return real_write(path, value)
+  end
+  local restore, opened = watch_writes(".data")
+  local function opens(name)
+    local count = 0
+    for _, path in ipairs(opened) do if path:match("[^/]*$") == name .. ".part" then count = count + 1 end end
+    return count
+  end
+  local ok, problem = pcall(function()
+    -- a burst inside 0.1 s: two loads and a file's tempo
+    load_buffer(1, "/tmp/one-writer-a.wav"); state_report(context, 1, 1, 4)
+    load_buffer(2, "/tmp/one-writer-b.wav"); state_report(context, 2, 1, 4)
+    assert_true(S.lib.samples.set(1, "tempo", 99), "slot 1's file takes a tempo")
+    assert_equal(opens("buffers.data") + opens("samples.data"), 0, "nothing is written inside the burst")
+    context.clock.run_for(0.2)
+    assert_equal(opens("buffers.data"), 1, "buffers.data: one write after the burst")
+    assert_equal(opens("samples.data"), 1, "samples.data: one write after the burst")
+    assert_equal(file_text(folder .. "buffers.data"), ONE_WRITER.buffers_burst, "buffers.data: 3.8's bytes")
+    assert_equal(file_text(folder .. "samples.data"), ONE_WRITER.samples_burst, "samples.data: 3.8's bytes")
+    -- changes that wait at cleanup: written once each, by the cleanup steps
+    load_buffer(3, "/tmp/one-writer-c.wav"); state_report(context, 3, 1, 4)
+    assert_true(S.lib.samples.set(1, "tempo", 100))
+    cleanup()
+    assert_equal(opens("buffers.data"), 2, "buffers.data: one write at cleanup")
+    assert_equal(opens("samples.data"), 2, "samples.data: one write at cleanup")
+    assert_equal(file_text(folder .. "buffers.data"), ONE_WRITER.buffers_cleanup, "buffers.data at cleanup")
+    assert_equal(file_text(folder .. "samples.data"), ONE_WRITER.samples_cleanup, "samples.data at cleanup")
+    assert_true(S.buffer_file.save_clock == nil, "no timed write is left")
+    context.clock.run_for(1)
+    assert_equal(opens("buffers.data") + opens("samples.data"), 4, "nothing is written after cleanup")
+    for name, list in pairs(callers) do
+      assert_equal(table.concat(list, " "), "lib/side_files.lua lib/side_files.lua",
+        name .. ": each write is the side files' writer's")
+    end
+  end)
+  restore()
+  S.lib.data_files.write = real_write
+  if not ok then error(problem, 0) end
+end)
+
 -- 3.7 (design decision 21): buffers.data's floor is version 2 (3.3's);
 -- an older file is set aside to its first free backup name, never converted
 test("a version 1 buffers.data is set aside; a version 2 loads", function()
