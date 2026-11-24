@@ -266,8 +266,8 @@ return function(S)
   owner = {draw = draw, hints = hints, enc = enc, key = key}
 
   -- Open the editor over the page (from SETUP's scale & tuning row): the
-  -- tuning row's choices listed once, nothing pending, the note tap taken (refused while another owner holds it);
-  -- already open, nothing
+  -- tuning row's choices listed once, nothing pending, the note tap taken
+  -- (refused while another owner holds it); already open, nothing
   function M.open()
     if editor.open then return end
     editor.open = true

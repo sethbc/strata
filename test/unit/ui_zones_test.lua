@@ -208,10 +208,12 @@ test("a learn ends after 10 s, at K2 and at cleanup, and the note tap is cleared
 end)
 
 -- 3.9 (#900): the tap has an owner, so the scale editor can neither take
--- nor clear the learn's. The scale editor opened over the editor while a
--- learn waits (its open asks for the tap and is refused), then closed (its
--- clear names its own owner and does nothing): the learn's real tap takes
--- the next MIDI note
+-- nor clear the learn's. This tests the API's refusal: no player can open
+-- the scale editor over the zones editor (SETUP's keys do not run under a
+-- modal owner), so the test calls its open and close directly while a
+-- learn waits (the open asks for the tap and is refused, the close's clear
+-- names its own owner and does nothing): the learn's real tap takes the
+-- next MIDI note
 test("the zones learn's tap is not cleared by the scale editor", function()
   local context, S, zones = loaded()
   local midi_in = S.lib.midi_in

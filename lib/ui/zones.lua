@@ -8,8 +8,8 @@
 -- 60 is C3). E2 the row, K3 the next column on a voice row, E3 the value
 -- under the cursor, K2 closes; ALT+K3 on a voice row learns its range: the
 -- next two notes played (through the MIDI module's note tap,
--- S.lib.midi_in.set_note_tap, ZONES_EDITOR.tap_owner its owner) are its lowest and highest, with a header
--- notice and a 10 s timeout, as MOD's learn has. Fields of this module's
+-- S.lib.midi_in.set_note_tap, ZONES_EDITOR.tap_owner its owner) are its
+-- lowest and highest, with a header notice and a 10 s timeout, as MOD's learn has. Fields of this module's
 -- table: open, close, is_open, learn, cancel_learn, learning, note,
 -- ZONES_EDITOR. See docs/notes/lua/ui-core.md (The zones editor).
 
