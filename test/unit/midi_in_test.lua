@@ -1905,6 +1905,18 @@ test("a held-back stop is cleared by the voice's stop and by a key down (#913)",
   assert_true(S.voices[1].active, "the slices' ends stop nothing while a key is down")
 end)
 
+-- 3.9 (#909): the grain-restart hook clears the held-back stop only at a
+-- start (its reason "start"): a running voice's source switch runs the
+-- hook with "source" and leaves the stop held back, so the voice still
+-- stops once nothing plays to its end
+test("a held-back stop outlives a running voice's source switch", function()
+  local context, S = held_back(2)
+  params:set("v1_source", 3)
+  assert_true(S.voices[1].active, "the switch stops nothing")
+  context.clock.run_for(1)
+  assert_true(not S.voices[1].active, "the held-back stop is done once nothing plays to its end")
+end)
+
 -- 2b's review, the controller's ruling: the note hooks' heard hears every
 -- MIDI note a voice receives, a note outside its slices included, and starts nothing
 test("the heard note hook hears every note a voice receives, outside its slices too", function()

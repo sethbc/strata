@@ -325,6 +325,8 @@ return function(S)
       for _, key in ipairs(voice_level_fader_keys(voice_idx)) do keys[#keys + 1] = key end
       return keys
     end
+    -- the source-change hooks' last printed errors, by hook (contained_call)
+    local source_change_errors = {}
     local grain_record
     grain_record = {
       name = "grain",
@@ -345,9 +347,13 @@ return function(S)
             -- the registered hooks (S.registry.source_change), before the
             -- sync, so it sends what they set (freeze cleared, never the old
             -- freeze first); a scene recall sets every value itself, so they
-            -- never run during one
+            -- never run during one. Each is contained (#910): one that raises
+            -- is printed once per distinct message, and the next and the sync
+            -- still run
             if not S.scene_recall_in_progress then
-              for _, hook in ipairs(S.registry.source_change) do hook(voice_idx, x) end
+              for index, hook in ipairs(S.registry.source_change) do
+                S.lib.ui_frame.contained_call(source_change_errors, index, "source change hook", hook, voice_idx, x)
+              end
             end
             -- a scene recall syncs once, after it has set every param
             if S.voices[voice_idx].active and not S.scene_recall_in_progress then

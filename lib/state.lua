@@ -38,7 +38,7 @@ return function()
     param_filters = {}, -- per voice param key: fn(voice_idx, value, previous, turned) -> value
     lfo_destinations = {},  -- per-voice LFO destinations {label, suffix}, each in its voice's group
     fx_params = {},     -- fx group records {name, count, add}, after the group's own params
-    grain_restart = {}, -- fn(voice_idx), run by lib/engine_sync.lua after a voiceOn and a running voice's source switch
+    grain_restart = {}, -- fn(voice_idx, reason), run by lib/engine_sync.lua after a voiceOn ("start") and a running voice's source switch ("source")
     alt_release = {},   -- fn(), run when ALT goes from held to not held
     menu_close = {},    -- fn(), run after the norns menu closes (lib/ui/menu_watch.lua)
     invariants = {},    -- {name, fn} records, checked by the test harness after every unit test
