@@ -40,7 +40,7 @@ function Model.new(constants, notes)
     slots = constants.NOTE_SLOTS, buffers = constants.NUM_BUFFERS, read = 0,
     -- how often each path ran, so a test can tell its sequence reached them
     counts = {starts = 0, restarts = 0, streams_left = 0, cuts = 0, parks = 0, unparks = 0, regrained = 0,
-      voice_sourced = 0, retyped = 0}, live_cuts = {}}, Model)
+      voice_sourced = 0, retyped = 0, rerooted = 0}, live_cuts = {}}, Model)
   for voice = 0, constants.NUM_VOICES - 1 do
     local state = {running = false, source = 0, frozen = false, root = root, type = voice,
       own = {parked = false}, extra = {}}
@@ -125,7 +125,22 @@ end
 -- leaveStream (ruling 53): a ring-stream note's rate becomes its note's,
 -- against the voice's root
 function Model:leave_stream(voice, record)
-  if record.kind == "stream" then record.rate, record.root = self:absolute_rate(voice, record.note), self.voices[voice].root end
+  if record.kind == "stream" then record.rate = self:absolute_rate(voice, record.note) end
+end
+
+-- notesFollowRoot (3.9, #958): a root that moves re-derives each live
+-- buffer or input note's rate from its note against the new root; a voice
+-- or stream note, and a releasing one, keep theirs
+function Model:follow_root(voice, root)
+  local state = self.voices[voice]
+  if root == state.root then return end
+  state.root = root
+  for _, record in ipairs(state.extra) do
+    if record.state == "live" and (record.kind == "buffer" or record.kind == "input") then
+      record.rate = self:absolute_rate(voice, record.note)
+      self.counts.rerooted = self.counts.rerooted + 1
+    end
+  end
 end
 
 -- restartNotes (a running voice's switch) and notesUnfrozen (only the
@@ -195,12 +210,13 @@ Model.commands.setVoiceType = function(self, voice, voice_type)
 end
 
 -- the grain params the model follows: rootNote (3.7, kept per voice for
--- absoluteNoteRate), freezeMode (a spectral one is an error, above) and
+-- absoluteNoteRate; 3.9: a moved one re-derives the held notes' rates,
+-- follow_root), freezeMode (a spectral one is an error, above) and
 -- the freeze: freezeVoice (frozen on another source first unfrozen,
 -- with no note moved), or unfreezeWithControl (a frozen synth voice's
 -- streams restarted as voice synths)
 Model.commands.setGrainParam = function(self, voice, name, value)
-  if name == "rootNote" then self.voices[voice].root = value; return end
+  if name == "rootNote" then self:follow_root(voice, value); return end
   if name == "freezeMode" then
     if value >= 0.5 then self:error("voice " .. voice .. ": a spectral freeze mode, which the model does not follow") end
     return
@@ -226,8 +242,7 @@ Model.commands.noteOn = function(self, voice, slot, note, freq, rate)
   end
   if not state.running then return self:error("an extra noteOn to stopped voice " .. voice .. " (ignored)") end
   local record = state.extra[slot]
-  -- (root: the voice's root when the rate was set, for compare's allowance)
-  record.note, record.freq, record.rate, record.root = note, freq, rate, state.root
+  record.note, record.freq, record.rate = note, freq, rate
   if record.state == "releasing" then cut(record) end
   if record.state == "empty" and not self:start(voice, record) then
     self:error("voice " .. voice .. " slot " .. slot .. ": refused, the pool of " .. self.pool .. " is full of live notes")
@@ -276,27 +291,11 @@ end
 -- voice's own note is parked in both or neither; the pools agree, and live
 -- and releasing notes stay within the engine's.
 -- allow (optional): the named differences a test allows while their fault
--- is open, each counted in model.allowed[<name>] when it is met:
--- old_root (#958), a held buffer or input note playing its pitch against
--- the root its rate was set under (record.root), where the voice's root has
--- moved since and the engine's root is Lua's now (a key change, a source
--- switch to another root: the engine keeps a held note's rate, and Lua
--- resends none)
+-- is open, each counted in model.allowed[<name>] when it is met (none is
+-- named now: 3.9's old_root went with #958's fix)
 function Model:compare(S, allow)
   local problems, notes = {}, S.lib.notes
-  allow = allow or {}
   self.allowed = self.allowed or {}
-  local function allowed(name) self.allowed[name] = (self.allowed[name] or 0) + 1 end
-  -- (the engine's root now must be Lua's: a rootNote Lua never sent is
-  -- another fault, never passed here)
-  local function old_root(voice_idx, record, pitch)
-    if record.kind ~= "buffer" and record.kind ~= "input" then return false end
-    local lua_root = S.lib.samples.rate_root(voice_idx)
-    if self.voices[voice_idx - 1].root ~= lua_root then return false end
-    if record.root == nil or record.root == lua_root then return false end
-    local rate = self:clip_rate(2 ^ ((pitch - record.root) / 12))
-    return math.abs(record.rate - rate) <= 1e-6
-  end
   local function problem(text) table.insert(problems, text) end
   if notes.pool() ~= self.pool then problem("pool: Lua " .. notes.pool() .. ", engine " .. self.pool) end
   if self:held_count() > self.pool then problem(self:held_count() .. " live and releasing notes past the pool") end
@@ -319,10 +318,7 @@ function Model:compare(S, allow)
         if record.kind ~= kind then problem(where .. ": a " .. record.kind .. " note on a " .. kind .. " voice") end
         local engine_value, lua_value = record.rate, values.rate
         if record.kind == "voice" then engine_value, lua_value = record.freq, values.freq end
-        local differs = math.abs(engine_value - lua_value) > 1e-6
-        if differs and allow.old_root and old_root(voice_idx, record, used.pitch) then
-          allowed("old_root")
-        elseif differs then
+        if math.abs(engine_value - lua_value) > 1e-6 then
           problem(string.format("%s: plays %.6f, Lua's note_values %.6f", where, engine_value, lua_value))
         end
       end

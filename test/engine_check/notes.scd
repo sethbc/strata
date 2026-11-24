@@ -25,7 +25,7 @@ var checkSourceSwitch, checkBufferLoad, checkInputFreeze;
 var checkFrozenNotes, checkSpectralNotes;
 var wireMessages, sentCount, startValue, checkParkThroughFreeze, checkSilentRestarts, checkOwnNoteOnAccent;
 var withheldNote, checkFailedStartRoom, checkFreedLeaveWatchers, checkRestartPitches, checkExtraNoteGate;
-var checkNoteRegion, checkRootNote, checkLiveWithoutSynth;
+var checkNoteRegion, checkRootNote, checkLiveWithoutSynth, checkHeldNoteRoot, checkStreamNoteRoot;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -277,6 +277,80 @@ checkRootNote = {
         and: { state[\rootNotes][voice] == 57 } and: { engine.grainControls[voice][\rootNote].isNil },
         "notes: a non-finite rootNote is ignored with one line and the root note stays (lines %; kept %)".format(
             lines.asArray, state[\rootNotes][voice]));
+    command.(\setGrainParam, voice, \rootNote, 60.0);
+    h.stopAllVoices;
+};
+
+// 3.9 (#958): a rootNote that moves the voice's root re-derives each held
+// buffer or input extra note's rate from its kept note (absoluteNoteRate)
+// and sets it on the note's synth, with no node created, cut or struck:
+// buffer voice 1 holds notes 64 and 67 and input voice 2 note 64 at root
+// 60, then each root moves by 9. A rootNote of the root the voice has
+// sends nothing, and a synth voice's note (it plays its freq) is untouched
+checkHeldNoteRoot = {
+    var buffer = 1, input = 2, synthVoice = 3, pitches = [64, 67], before, kept, bundle, again, synthNote, rates, shifts;
+    var heldSynths = { [slotSynth.(buffer, 1), slotSynth.(buffer, 2), slotSynth.(input, 1)] };
+    var root = 69;
+    command.(\setNotePool, 8);
+    startBufferVoice.(buffer);
+    startInputVoice.(input);
+    startSynthVoice.(synthVoice);
+    pitches.do({ arg pitch, index; playNote.(buffer, index + 1, 2 ** ((pitch - 60) / 12), 1.0, pitch.midicps, pitch.asFloat) });
+    playNote.(input, 1, 2 ** ((64 - 60) / 12), 1.0, 64.midicps, 64.0);
+    playNote.(synthVoice, 1, 1.0, 1.0, 64.midicps, 64.0);
+    server.sync; 0.05.wait;
+    kept = heldSynths.value;
+    synthNote = slotSynth.(synthVoice, 1);
+    before = h.synthNames(h.context.xg).size;
+    bundle = server.makeBundle(nil, {
+        [buffer, input, synthVoice].do({ arg voice; command.(\setGrainParam, voice, \rootNote, root.asFloat) });
+    });
+    server.sync; 0.05.wait;
+    rates = [1, 2].collect({ arg slot; controlOf.(slotSynth.(buffer, slot), \bufRate) });
+    shifts = [controlOf.(slotSynth.(input, 1), \pitchShift)];
+    check.(kept.every(_.notNil) and: { heldSynths.value.every({ arg synth, index; synth === kept[index] }) }
+        and: { h.synthNames(h.context.xg).size == before } and: { bundle.every({ arg msg; (msg[0] != 9) and: { msg[0] != '/s_new' } }) }
+        and: { rates.every({ arg rate, index; near.(rate, 2 ** ((pitches[index] - root) / 12)) }) }
+        and: { near.(shifts[0], 2 ** ((64 - root) / 12)) }
+        and: { [1, 2].every({ arg slot; near.(slotRecord.(buffer, slot)[\rate], 2 ** ((pitches[slot - 1] - root) / 12)) }) }
+        and: { sentSets.(bundle, synthNote).isEmpty },
+        "notes: a held buffer or input note follows its voice's root, by a set on its own synth (#958; bufRate % against %, pitchShift % against %, the same synths %, nodes % then %, sets to the synth voice's note %)".format(
+            rates.collect({ arg rate; rate !? { rate.round(0.0001) } }), pitches.collect({ arg pitch; (2 ** ((pitch - root) / 12)).round(0.0001) }),
+            shifts, (2 ** ((64 - root) / 12)).round(0.0001), heldSynths.value.collect({ arg synth, index; synth === kept[index] }),
+            before, h.synthNames(h.context.xg).size, sentSets.(bundle, synthNote).size));
+    again = server.makeBundle(nil, { command.(\setGrainParam, buffer, \rootNote, root.asFloat) });
+    check.(kept.every({ arg synth; sentSets.(again, synth).isEmpty }),
+        "notes: a rootNote of the root the voice has sends its held notes nothing (#958; % messages)".format(again.size));
+    [buffer, input, synthVoice].do({ arg voice; command.(\setGrainParam, voice, \rootNote, 60.0) });
+    h.stopAllVoices;
+};
+
+// The sub-case of #958: a frozen synth voice's chord, switched to a keyed
+// slot, leaves its stream at the root the voice had (leaveStream: Lua's
+// rootNote comes after setGrainSource); once rootNote 51 arrives each note
+// plays its pitch against 51, on the synths the switch started
+checkStreamNoteRoot = {
+    var voice = 3, reference = 45, pitches = [52, 57, 64], slots = [1, 2, 3], switched, after, kept;
+    command.(\setNotePool, 8);
+    if (engine.bufferFrames[0] == 0) { command.(\loadBuffer, 0, h.stereoPath, 0); h.awaitLoad(0) };
+    startSynthVoice.(voice);
+    command.(\setGrainParam, voice, \freeze, 1.0); server.sync;
+    pitches.do({ arg pitch, index;
+        playNote.(voice, slots[index], 2 ** ((pitch - reference) / 12), 1.0, pitch.midicps, pitch.asFloat) });
+    server.sync;
+    command.(\setGrainSource, voice, 1);
+    server.sync; 0.05.wait;
+    switched = slots.collect({ arg slot; controlOf.(slotSynth.(voice, slot), \bufRate) });
+    kept = slots.collect({ arg slot; slotSynth.(voice, slot) });
+    command.(\setGrainParam, voice, \rootNote, 51.0);
+    server.sync; 0.05.wait;
+    after = slots.collect({ arg slot; controlOf.(slotSynth.(voice, slot), \bufRate) });
+    check.(switched.every({ arg rate, index; near.(rate, 2 ** ((pitches[index] - 60) / 12)) })
+        and: { after.every({ arg rate, index; near.(rate, 2 ** ((pitches[index] - 51) / 12)) }) }
+        and: { slots.every({ arg slot, index; kept[index].notNil and: { slotSynth.(voice, slot) === kept[index] } }) },
+        "notes: a stream note that left a frozen voice for a keyed slot plays against the slot's root once rootNote arrives (#958; bufRate % at the switch, % after rootNote 51, against %)".format(
+            switched.collect({ arg rate; rate !? { rate.round(0.0001) } }), after.collect({ arg rate; rate !? { rate.round(0.0001) } }),
+            pitches.collect({ arg pitch; (2 ** ((pitch - 51) / 12)).round(0.0001) })));
     command.(\setGrainParam, voice, \rootNote, 60.0);
     h.stopAllVoices;
 };
@@ -1731,8 +1805,10 @@ if (area.isNil or: { state.isNil }) {
     checkRestartPitches.value;
     checkExtraNoteGate.value;
     h.stopAllVoices;
-    // 3.7's rootNote
+    // 3.7's rootNote, and a held note's rate when it moves (#958)
     checkRootNote.value;
+    checkHeldNoteRoot.value;
+    checkStreamNoteRoot.value;
     // failed starts
     checkFailedStartRoom.value;
     checkFreedLeaveWatchers.value;
