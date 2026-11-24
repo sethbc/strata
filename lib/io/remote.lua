@@ -210,9 +210,10 @@ return function(S)
 
   function M.clock_id() return draw.clock and draw.clock.id end
 
-  -- Whether the start step has run and the cleanup step has not begun (it
-  -- clears the flag before it lets any port go): a holder's release seen
-  -- with this false is cleanup's (MIDI out's settled hook, #1010)
+  -- Whether the start step has run and the closing step (143, #1033) has
+  -- not, which clears the flag before any cleanup step lets a port go: a
+  -- holder's release seen with this false is cleanup's (MIDI out's settled
+  -- hook, #1010)
   function M.started() return state.started end
 
   -- Whether this module holds the port (a remote grid's or arc's, or one
@@ -600,11 +601,16 @@ return function(S)
     if rig.get("midi_grid") == "on" then midigrid_connect() end
   end)
 
-  -- The cleanup step: the clock ended, CC 4 = 0 to each device, everything
-  -- detached and released, before MIDI out's step (#1010: the release pays
-  -- what MIDI out owes a device on a held port)
+  -- The closing step: the started flag down before the controllers' step
+  -- (146) lets their ports go, so a kind waiting in use on one takes
+  -- nothing as the script stops, and no claim hook hands the remote a port
+  -- during cleanup (#1033)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.io_remote_closing, function() state.started = false end)
+
+  -- The cleanup step, with the flag already down: the clock ended, CC 4 = 0
+  -- to each device, everything detached and released, before MIDI out's
+  -- step (#1010: the release pays what MIDI out owes a device on a held port)
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_remote, function()
-    state.started = false
     if draw.clock then
       S.lib.clocks.cancel(draw.clock)
       draw.clock = nil

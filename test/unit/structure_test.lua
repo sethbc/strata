@@ -967,7 +967,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "engine budget",
   "buffer start reload", "buffer polls and timers", "slices poll", "record poll", "freeze poll", "input meter", "voice picker", "scale editor", "flashes", "modal owners",
   "targets ended",
-  "ii stopped", "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler", "midi out",
+  "remote closing", "ii stopped", "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler", "midi out",
   "midi ports", "voices off", "grids dark", "arc dark", "clocks" }
 
 test("cleanup runs every registered step in today's order", function()
@@ -1115,6 +1115,15 @@ test("cleanup runs every registered step in today's order", function()
 
   assert_equal(type(S.register_cleanup), "function", "S.register_cleanup")
   local registered = S.registry.cleanup
+  -- the remote's started flag going down: its closing step's one effect (#1033)
+  for _, record in ipairs(registered) do
+    local step = record.fn
+    record.fn = function(...)
+      local was = S.lib.io_remote.started()
+      step(...)
+      if was and not S.lib.io_remote.started() then observe("remote closing") end
+    end
+  end
   for _, record in ipairs(registered) do
     local step = record.fn
     record.fn = function(...) table.insert(log, "|"); return step(...) end
