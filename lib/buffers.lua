@@ -53,10 +53,11 @@ return function(S)
   -- reports how it ended (buffer_save_result).
   -- checking_from is the length shown before a load the engine checks in a
   -- routine first (a long file on a high tier), while it checks (nil
-  -- otherwise): until a report differs from it, the poll leaves the load
-  -- unsettled and the BUFFER page shows "..." for the length. checking_load
-  -- is that load's number; if no differing report comes within
-  -- BUFFER_SETTLE.check_notice_seconds, the player is told once
+  -- otherwise): until the load's own 0 s (or, for a check a later load's
+  -- failure gave back, any report of that later load, #983), the poll
+  -- leaves the load unsettled and the BUFFER page shows "..." for the
+  -- length. checking_load is that load's number; if no report ends the
+  -- check within BUFFER_SETTLE.check_notice_seconds, the player is told once
   -- (start_check_notice) and the load stays the slot's until the engine
   -- answers (#317).
   -- kept_state is what a canceled replace take had replaced, from its
@@ -542,7 +543,9 @@ return function(S)
     buffer.missing_path = nil
     buffer.start, buffer.sent_start = start, start
     buffer.sample_rate, buffer.file_seconds = file_length(path)
-    -- (without the bufferState poll no report could ever end a check)
+    -- (without the bufferState poll no report could ever end a check; the
+    -- engine names no load in its check, so its reports of the old audio
+    -- meanwhile name the load before this one and never act, #983)
     buffer.checking_from = (S.buffer_polls.state ~= nil and checked_before_load(path, start)) and buffer.seconds or nil
     buffer.checking_load = buffer.checking_from ~= nil and buffer.loads_sent or nil
     if buffer.checking_load then start_check_notice(slot, buffer.checking_load) end
@@ -778,9 +781,11 @@ return function(S)
   -- 1) + slot index) * BUFFER_STATE_STRIDE + seconds (#578). The load
   -- number is the loadBuffer commands the engine had received for the slot
   -- when it sent the report, modulo BUFFER_STATE_LOADS, whatever change the
-  -- report is of; load_buffer counts the same commands (loads_sent). A
-  -- report with another number was sent before the engine had the slot's
-  -- newest load: it tells what that load replaces, so it is ignored, and
+  -- report is of, but never a load still in its check, nor any after it
+  -- (#983: the reports then name the load before it); load_buffer counts
+  -- the same commands (loads_sent). A report with another number was sent
+  -- before the engine had the slot's newest load, or before its check
+  -- ended: it tells what that load replaces, so it is ignored, and
   -- two quick loads never show the first one's length or status. A clear,
   -- a recording or a failed load sent since reaches the engine after that
   -- load, so its reports (and the periodic ones after it) carry its number.
@@ -796,10 +801,10 @@ return function(S)
   -- load that settled empty (a periodic 0 before a slow take or file read
   -- completed) is adopted when audio is reported later, as long as nothing
   -- else (load, clear, a new recording) happened in the slot since. A load
-  -- the engine is still checking (checking_from) settles nothing until a
-  -- report differs from the length shown before it: the 0 s of the load
-  -- taking effect (its read then settles as any load's), or, over an empty
-  -- slot, its new length.
+  -- the engine is still checking (checking_from) settles nothing until its
+  -- own 0 s, the load taking effect (its read then settles as any load's),
+  -- or, for a check a later load's failure gave back, the first report
+  -- that names that later load (#983).
   local function buffer_state_changed(value)
     local cell = math.floor(value / BUFFER_STATE_STRIDE)
     local engine_slot = cell % (NUM_BUFFERS + 1)
@@ -833,7 +838,15 @@ return function(S)
       S.lib.waveforms.stale(slot)
     end
     if buffer.checking_from ~= nil then
-      if seconds == buffer.checking_from then
+      -- the engine names no load still in its check (#983), so this report
+      -- comes after the checked load's outcome. Under its own number
+      -- (checking_load, the newest) only its 0 s says it took effect: any
+      -- other length is the slot's old audio, reported at its rejection,
+      -- whose failure report undoes it. Under a later load's number (that
+      -- load's failure gave the check back) every load up to it has an
+      -- outcome: the checked one took effect, its 0 s perhaps sent before
+      -- the later load reached the engine, or its failure is still to come
+      if buffer.checking_load == buffer.loads_sent and has_audio then
         if changed then request_redraw() end
         return
       end
