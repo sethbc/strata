@@ -444,7 +444,7 @@ test("an LFO on a fast destination runs in the engine", function()
     assert_equal(call.args[3], destination, label .. ": its destination")
     params:set(lfo_id(2), 0)
   end
-  -- depth 0 keeps the node, at depth 0 (#925: its offset alone, its phase
+  -- depth 0 keeps the node, at depth 0 (#925: it plays nothing, its phase
   -- running on), where a Lua destination is restored
   aim(1, "v3 pitch"); params:set(lfo_id(1), 1)
   context.clear_engine_calls()
@@ -2307,7 +2307,8 @@ test("a depth swept through 0 sends no stopFastLfo and no syncFastLfo (#925)", f
   local S = local_value("S")
   S.drift_metro:stop()  -- the drift's own sends are never deferred
   aim(1, "v3 pitch")
-  params:set(lfo_id(1, "rate"), 0.25); params:set(lfo_id(1, "depth"), 30); params:set(lfo_id(1), 1)
+  params:set(lfo_id(1, "rate"), 0.25); params:set(lfo_id(1, "depth"), 30); params:set(lfo_id(1, "offset"), 20)
+  params:set(lfo_id(1), 1)
   assert_true(S.lib.macros.set_target(1, 1, lfo_id(1, "depth"), 0, 1), "macro 1 row 1 on LFO 1's depth")
   params:set("macro_1", 0.3); context.clock.run_for(0.5)
   assert_equal(params:get(lfo_id(1, "depth")), 30, "the macro holds the depth at 30")
@@ -2318,21 +2319,26 @@ test("a depth swept through 0 sends no stopFastLfo and no syncFastLfo (#925)", f
   context.clock.run_for(0.5)
   assert_equal(#calls_with(context, "stopFastLfo", 0), 0, "the node is never stopped")
   assert_equal(#calls_with(context, "syncFastLfo", 0), 0, "nor synced again: its phase runs on")
+  local sets = calls_with(context, "setFastLfo", 0)
   local depths, zero_at = {}, nil
-  for index, call in ipairs(calls_with(context, "setFastLfo", 0)) do
+  for index, call in ipairs(sets) do
     depths[index] = call.args[6]
     if call.args[6] == 0 and not zero_at then zero_at = index end
   end
   assert_true(zero_at ~= nil, "a setFastLfo at depth 0 between: " .. table.concat(depths, " "))
   assert_true(zero_at < #depths, "the depth 0 is between the sweep's ends")
+  -- at depth 0 the kept node plays nothing: offset 0, as a Lua home's
+  -- restore and a 3.8.0 stopped node give (the review's ruling)
+  assert_near(sets[zero_at].args[7], 0, 1e-9, "the depth-0 send carries offset 0")
   assert_near(depths[#depths], 0.3, 1e-9, "and the last at 30 %")
+  assert_near(sets[#sets].args[7], 0.4, 1e-9, "with the LFO's offset back (2 x 20 / 100)")
 end)
 
 test("an on LFO at depth 0 starts a node on a fast home, and a silent depth of 0 keeps one (#925)", function()
   local context = load_strata(); finish_startup(context)
   local lfos = local_value("S").lib.lfos
   aim(1, "rev mix")
-  params:set(lfo_id(1, "depth"), 0); params:set(lfo_id(1), 1)
+  params:set(lfo_id(1, "offset"), -30); params:set(lfo_id(1, "depth"), 0); params:set(lfo_id(1), 1)
   lfo_step(context)
   assert_equal(lfos.place(1), "idle", "on, at depth 0")
   context.clear_engine_calls()
@@ -2341,9 +2347,12 @@ test("an on LFO at depth 0 starts a node on a fast home, and a silent depth of 0
   for _, call in ipairs(context.engine_calls) do table.insert(names, call.name) end
   assert_equal(table.concat(names, " "), "setFastLfo syncFastLfo", "a fast home: its node at once, synced")
   assert_near(context.engine_calls[1].args[6], 0, 1e-9, "at depth 0")
-  assert_equal(lfos.place(1), "idle", "still idle: it plays its offset alone")
+  assert_near(context.engine_calls[1].args[7], 0, 1e-9, "and offset 0: a node at depth 0 plays nothing")
+  assert_equal(lfos.place(1), "idle", "still idle: its node plays nothing")
   -- a silent set of the depth to 0 on a playing node: the round robin's setFastLfo at depth 0
+  context.clear_engine_calls()
   params:set(lfo_id(1, "depth"), 40); lfo_step(context)
+  assert_near(calls_with(context, "setFastLfo", 0)[1].args[7], -0.6, 1e-9, "a depth above 0: the LFO's offset again")
   context.clear_engine_calls()
   params:set(lfo_id(1, "depth"), 0, true)
   assert_equal(#context.engine_calls, 0, "nothing at the silent set")
@@ -2353,8 +2362,74 @@ test("an on LFO at depth 0 starts a node on a fast home, and a silent depth of 0
   local sets = calls_with(context, "setFastLfo", 0)
   assert_equal(#sets, 1, "one setFastLfo")
   assert_near(sets[1].args[6], 0, 1e-9, "at depth 0")
+  assert_near(sets[1].args[7], 0, 1e-9, "and offset 0")
   assert_equal(delivered["lfo1 engine"], 0, "through the round robin and the budget (lfo1 engine)")
   assert_equal(#context.calls_named("stopFastLfo") + #context.calls_named("syncFastLfo"), 0, "no stop, no sync")
+end)
+
+test("an idle LFO's kept node stops at once when it is turned off or its home leaves the fast kind (#925)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfos = local_value("S").lib.lfos
+  local function idle_on_fast()
+    aim(1, "v3 pitch"); params:set(lfo_id(1, "depth"), 0); params:set(lfo_id(1), 1)
+    lfo_step(context)
+    assert_equal(lfos.place(1), "idle", "idle, its node kept")
+    context.clear_engine_calls()
+  end
+  idle_on_fast()
+  params:set(lfo_id(1), 0)
+  assert_equal(#calls_with(context, "stopFastLfo", 0), 1, "turned off: stopFastLfo at once")
+  for _, label in ipairs({ "rev mix", "macro 1" }) do
+    idle_on_fast()
+    aim(1, label)
+    assert_equal(#calls_with(context, "stopFastLfo", 0), 1, "its home to " .. label .. ": stopFastLfo at once")
+    assert_equal(#context.calls_named("setFastLfo"), 0, label .. ": nothing else")
+    lfo_step(context, 2)
+    assert_equal(#calls_with(context, "stopFastLfo", 0), 1, label .. ": once")
+  end
+end)
+
+-- The walks never met a clocked node at depth 0 in a bar's step (fix
+-- round 1's count: bar_sync 13 times over the four seeds, none at depth
+-- 0), so this holds it: the kept node is lined up with the clock as a
+-- playing one is (keeps_node), so its phase is right when the depth rises
+test("a clocked LFO's node kept at depth 0 still resyncs once a bar (#925)", function()
+  local context = load_strata(); finish_startup(context)
+  local beats = clock.get_beats()
+  context.set_time(util.time() + (math.ceil(beats / 4) * 4 + 0.5 - beats) * clock.get_beat_sec())
+  params:set(lfo_id(1, "mode"), option_index(lfo_id(1, "mode"), "clocked"))
+  params:set(lfo_id(1, "division"), option_index(lfo_id(1, "division"), "1"))
+  aim(1, "v3 pitch")
+  params:set(lfo_id(1, "depth"), 0); params:set(lfo_id(1), 1)
+  assert_equal(local_value("S").lib.lfos.place(1), "idle", "on, at depth 0, its node kept")
+  context.clear_engine_calls()
+  context.clock.run_for(8 * clock.get_beat_sec())
+  assert_equal(#calls_with(context, "syncFastLfo", 0), 2, "two bars, two syncs")
+  assert_equal(#calls_with(context, "stopFastLfo", 0), 0, "and no stop")
+end)
+
+test("a home's ramp through 0 between two fast destinations moves the kept node, its phase kept (#925)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set(lfo_id(1, "rate"), 0.25); params:set(lfo_id(1, "depth"), 40); params:set(lfo_id(1), 1)
+  aim(1, "v2 size"); capture_scene(2)
+  aim(1, "v3 pitch"); capture_scene(1)
+  lfo_step(context)
+  context.clear_engine_calls()
+  recall_scene(2, 2)   -- a 2 s fade: the depth ramps to 0, the home switches at the middle, the depth comes back
+  assert_true(S.scene_transition_active, "the fade runs")
+  context.clock.run_for(2.5)
+  assert_equal(S.lib.matrix.home(1), "v2_grain_size", "the home switched")
+  assert_equal(#calls_with(context, "stopFastLfo", 0), 0, "the node is never stopped")
+  assert_equal(#calls_with(context, "syncFastLfo", 0), 0, "nor synced: its phase runs on")
+  local moved
+  for _, call in ipairs(calls_with(context, "setFastLfo", 0)) do
+    if call.args[2] == 1 and call.args[3] == 2 then moved = moved or call end
+  end
+  assert_true(moved ~= nil, "a setFastLfo on the running node with v2 size")
+  assert_near(moved.args[6], 0, 1e-9, "sent at the ramp's 0")
+  local last = calls_with(context, "setFastLfo", 0)[#calls_with(context, "setFastLfo", 0)]
+  assert_near(last.args[6], 0.4, 1e-9, "and the depth back up")
 end)
 
 test("a silent turn-on starts at the phase param (#925)", function()

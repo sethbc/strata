@@ -493,7 +493,7 @@ return function(S)
   end
 
   -- Whether LFO n has an engine node: on, with a fast home, at any depth
-  -- (#925: at depth 0 the node plays its offset alone, and a depth swept
+  -- (#925: at depth 0 the node plays nothing, its offset sent as 0 too, engine_want; a depth swept
   -- through 0 keeps its phase). A node is stopped only when the LFO is
   -- turned off or its home leaves the fast kind
   local function keeps_node(n)
@@ -620,11 +620,19 @@ return function(S)
   end
   M.engine_playing = engine_playing  -- MAIN's ~ (lib/pages/main.lua) reads this one answer
 
+  -- The settings LFO n's node should have. At a depth param of 0 its
+  -- offset is 0 too (fix round 1 of #925): the kept node then plays
+  -- nothing, as a Lua or direct home's home_m does (nil) and as 3.8.0's
+  -- stopped node did, so a saved state sounds the same; a depth above 0
+  -- brings the LFO's offset back
   local function engine_want(n)
     local st, fast = state[n], destination_of(n).fast
+    local offset = 0
+    if params:get(param_id(n, "depth")) > 0 then
+      offset = util.clamp(2 * params:get(param_id(n, "offset")) / 100, -2, 2)
+    end
     return {voice = fast.voice, destination = fast.destination, shape = params:get(param_id(n, "shape")) - 1,
-      rate = st.rate, depth = st.depth / 100, base = st.base,
-      offset = util.clamp(2 * params:get(param_id(n, "offset")) / 100, -2, 2)}
+      rate = st.rate, depth = st.depth / 100, base = st.base, offset = offset}
   end
 
   local function send_fast_lfo(n, want)
