@@ -810,4 +810,36 @@ test("a cell or scene wait with no pane on its page repaints no grid", function(
   S.lib.quantize.cancel("scene"); S.lib.quantize.cancel("position1")
 end)
 
+
+-- #876 review, round 2: the FZ key is the voices page's alone, so a
+-- freeze wait repaints no grid while no pane shows voices; once a pane
+-- does, it repaints at each phase. (The play key is on every layout's
+-- strip, shown whatever page a pane shows, so its wait always counts)
+test("a freeze wait with no pane on voices repaints no grid", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local tick = 1 / S.constants.PLAYHEADS.update_hz
+  local pages = S.constants.GRID_PAGES
+  local pane = grid_pane(context, "128h")
+  pane.show(pages.patterns)
+  local device = pane.device
+  params:set("quantize_actions", 3)  -- bar
+  local function repaints_over(ticks)
+    local before = device.refresh_count
+    context.clock.run_for(tick * ticks)
+    return device.refresh_count - before
+  end
+  assert_equal(repaints_over(8), 0, "nothing waits: no repaint")
+  -- just past a bar, so the next lies two seconds ahead (both windows below)
+  local beats = clock.get_beats()
+  context.clock.run_for((math.floor(beats / 4) * 4 + 4.1 - beats) * clock.get_beat_sec())
+  S.lib.freeze.toggle_quantized(2)
+  assert_true(S.lib.quantize.waiting("freeze2"), "voice 2's set waits")
+  assert_equal(repaints_over(8), 0, "no pane shows voices: the wait repaints no grid")
+  pane.show(pages.voices)
+  assert_true(repaints_over(8) >= 2, "a pane shows voices: the wait repaints at each phase")
+  assert_true(S.lib.quantize.waiting("freeze2"), "and the set still waits")
+  S.lib.quantize.cancel("freeze2")
+end)
+
 end
