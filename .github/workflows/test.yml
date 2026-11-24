@@ -45,10 +45,11 @@ jobs:
   lua-suite:
     name: lua (${{ matrix.lua }}, ${{ matrix.shard }})
     # A shard of the suite on 4 cores (121 to 471 s), plus the setup: under
-    # half a minute on a fast mirror, up to about 2.5 minutes on a slow one
-    # (the list's apt-get update, #993). 12 covers the slowest suite measured
-    # (471 s, run 45320574628) after a slow mirror's setup, on a cache hit
-    # (about 642 s) and on a miss (about 707 s): docs/checks.md, Installs.
+    # half a minute on a fast mirror; on a slow one, with the list's apt-get
+    # update to its 45 s, its kill and its retry to 60 s (#999), about 153 s
+    # on a cache hit and 218 s on a miss. 12 covers the slowest suite
+    # measured (471 s, run 45320574628) after that setup, on a hit (about
+    # 624 s) and on a miss (about 689 s): docs/checks.md, Installs.
     # The shards weigh the same; shard 1's time is ui_layout_test.lua's
     # alone, so splitting that file (another change) shortens it, and no
     # UNIT_FILE_SECONDS change does. The default is 360
@@ -92,12 +93,29 @@ jobs:
       # cache entry after that list
       - name: List Lua 5.3 and LuaJIT's packages
         id: packages
-        # its apt-get update reads the mirrors: 1 to 19 s on a fast one, 73
-        # to 131 s on a slow one (#993)
+        # its apt-get update reads the mirrors: 1 to 34 s on a fast one, 73
+        # to 155 s on a slow one or no end at all (#993, #999). So it runs
+        # under timeout 45 and, killed or failed, once more under timeout 60
+        # with https://archive.ubuntu.com first, the install's own reorder:
+        # 115 s at most with the apt-cache work (about 3 s) when the retry
+        # succeeds, and both tries unfinished fail by the ::error:: line
         timeout-minutes: 3
         run: |
           set -o pipefail
-          sudo apt-get $APT_NETWORK_OPTIONS update
+          mirrors=/etc/apt/apt-mirrors.txt
+          status=0
+          sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update || status=$?
+          if [ "$status" -ne 0 ] && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
+            echo "::warning::apt's update failed or was unfinished after 45 s (exit $status): trying https://archive.ubuntu.com first"
+            sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
+            cat "$mirrors"
+            status=0
+            sudo timeout --kill-after=5 60 apt-get $APT_NETWORK_OPTIONS update || status=$?
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::apt's lists did not update (exit $status; 124 or 137: too slow). Nothing was installed or checked: rerun this job"
+            exit 1
+          fi
           : > "$RUNNER_TEMP/empty-status"
           nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
           apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s lua5.3 luajit \
@@ -310,12 +328,28 @@ jobs:
       # makes a new key, and the old entry ages out
       - name: List SuperCollider and JACK's packages
         id: packages
-        # 7 to 103 s in five runs: its apt-get update reads the mirrors whose
-        # slowness #785 met, so the install's 4 minutes
+        # 7 to 103 s in five runs, and up to 155 s or no end at all on a slow
+        # mirror (#999): its apt-get update reads the mirrors whose slowness
+        # #785 met. As the Lua job's list: timeout 45, then once more under
+        # timeout 60 with https://archive.ubuntu.com first, 115 s at most when
+        # the retry succeeds (about 4 s of apt-cache work), inside the 4 minutes
         timeout-minutes: 4
         run: |
           set -o pipefail
-          sudo apt-get $APT_NETWORK_OPTIONS update
+          mirrors=/etc/apt/apt-mirrors.txt
+          status=0
+          sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update || status=$?
+          if [ "$status" -ne 0 ] && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
+            echo "::warning::apt's update failed or was unfinished after 45 s (exit $status): trying https://archive.ubuntu.com first"
+            sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
+            cat "$mirrors"
+            status=0
+            sudo timeout --kill-after=5 60 apt-get $APT_NETWORK_OPTIONS update || status=$?
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::apt's lists did not update (exit $status; 124 or 137: too slow). Nothing was installed or checked: rerun this job"
+            exit 1
+          fi
           : > "$RUNNER_TEMP/empty-status"
           nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
           apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s jackd2 \

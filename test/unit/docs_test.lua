@@ -1533,20 +1533,24 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
         .. " s for the runner's own steps (" .. total .. " s) fit its " .. job.minutes .. " minutes")
       -- A hit and a miss on a slow mirror, each with the slowest suite
       -- measured, fit the job's limit: the measured times of
-      -- CI_WORKFLOW.SECONDS.lua, and from the workflow the install's two
-      -- tries (on a miss, the first to its timeout and its kill, the second
-      -- to its timeout, then the refill and the unpacking) and the restore's
-      -- limit (a hit whose restore hangs to it still fits). Not covered,
-      -- each a fault on top of the slowest mirror and suite seen: on a miss,
-      -- a cache service that hangs both the restore and the save to their
-      -- limits (they only warn), or a list that runs to its own limit.
+      -- CI_WORKFLOW.SECONDS.lua, and from the workflow the list's two
+      -- updates (#999: in both paths the first to its timeout and its kill,
+      -- the second to its timeout, then the list's apt-cache work), the
+      -- install's two tries (on a miss, the first to its timeout and its
+      -- kill, the second to its timeout, then the refill and the unpacking)
+      -- and the restore's limit (a hit whose restore hangs to it still
+      -- fits). Not covered, each a fault on top of the slowest mirror and
+      -- suite seen: on a miss, a cache service that hangs both the restore
+      -- and the save to their limits (they only warn), or a list whose
+      -- apt-cache work hangs to the step's own limit.
       -- The shards weigh the same: shard 1's time is ui_layout_test.lua's
       -- alone, so no UNIT_FILE_SECONDS change shortens it; splitting that
       -- file, another change, does
-      local lua, limit, install, restore = CI_WORKFLOW.SECONDS.lua, job.minutes * 60, nil, nil
+      local lua, limit, install, restore, list = CI_WORKFLOW.SECONDS.lua, job.minutes * 60, nil, nil, nil
       for _, step in ipairs(job.steps) do
         if step.name == "Install Lua 5.3 and LuaJIT" then install = step end
         if step.uses and step.uses:match("^actions/cache/restore@") then restore = step end
+        if step.id == "packages" then list = step end
       end
       local tries = {}
       for kill, seconds in (install and install.text or ""):gmatch("sudo timeout %-%-kill%-after=(%d+) (%d+) apt%-get ") do
@@ -1554,7 +1558,10 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
       end
       assert_equal(#tries, 2, "the Lua install's download runs under a limit, and once more")
       assert_true(restore and restore.minutes, "the Lua job's restore has a limit")
-      local before = lua.checkout + lua.slow_list
+      local updates = CI_WORKFLOW.update_tries(list)
+      assert_equal(#updates, 2, "the Lua list's apt-get update runs under a limit, and once more (#999)")
+      local slow_list = (updates[1] and updates[1].seconds + updates[1].kill + updates[2].seconds or 0) + CI_WORKFLOW.SECONDS.list_work
+      local before = lua.checkout + slow_list
       local after = lua.after_downloads
       local hit = before + lua.restore + after + lua.suite + lua.runner_steps
       local hung_hit = before + restore.minutes * 60 + after + lua.suite + lua.runner_steps
@@ -1584,8 +1591,10 @@ end)
 -- before its packages were kept) where a figure says so, the others
 -- allowances: the checkout 7 s at most; on a slow mirror the install's
 -- `apt-get update` took 131 s from the step's start (run 45318610201,
--- 13.4 MB at 114 kB/s), so the list 133 s with its apt-cache work; the
--- restore and the save of an entry under a megabyte are allowed 10 s each
+-- 13.4 MB at 114 kB/s); #999: the list's updates now run under limits the
+-- workflow sets, and its apt-cache work after the update took 2.1 to
+-- 2.6 s (run 45327275355's Lua jobs; 3.2 to 4.2 s in the engine shards'
+-- lists), allowed 5; the restore and the save of an entry under a megabyte are allowed 10 s each
 -- (the shard's 111 MB restore took 10 s at most); the refill and the
 -- unpacking 15 s (a fast mirror's whole install, its update and download
 -- included, took 9 to 11 s); the runner's own steps 3 s at most, allowed 6
@@ -1593,9 +1602,18 @@ end)
 -- main, lua (luajit, 1/2) on 4 cores: "60 unit files in 4 processes,
 -- 470 s"; shard 1 took 264 to 331 s in every other job, shard 2 121 to
 -- 222 s)
-CI_WORKFLOW.SECONDS = { after_downloads = 60, runner_steps = 60,
-  lua = { checkout = 7, slow_list = 133, restore = 10, save = 10, after_downloads = 15, runner_steps = 6, suite = 471 } }
+CI_WORKFLOW.SECONDS = { after_downloads = 60, runner_steps = 60, list_work = 5,
+  lua = { checkout = 7, restore = 10, save = 10, after_downloads = 15, runner_steps = 6, suite = 471 } }
 
+-- #999: a list step's `apt-get update` runs, each with its limit and its
+-- kill-after in seconds, in the order of the step's text (empty without a step)
+function CI_WORKFLOW.update_tries(step)
+  local tries = {}
+  for kill, seconds in (step and step.text or ""):gmatch("sudo timeout %-%-kill%-after=(%d+) (%d+) apt%-get %$APT_NETWORK_OPTIONS update") do
+    tries[#tries + 1] = { kill = tonumber(kill), seconds = tonumber(seconds) }
+  end
+  return tries
+end
 -- #993: where a job's text is in the workflow's: from the newline before its
 -- key line (`  <job>:`) to the newline before the next job's, or the end
 function CI_WORKFLOW.job_span(text, job)
@@ -1700,9 +1718,34 @@ end
 -- nothing before the loop can shadow a command it runs (a function, an
 -- alias or a PATH of its own for sha512sum)
 -- #993: the Lua jobs keep their two packages by the same pieces, with their
--- own package names, kept folder and list (CI_WORKFLOW.CACHES)
+-- own package names, kept folder and list (CI_WORKFLOW.CACHES).
+-- #999: the list step's start, the same in both jobs (from the script's
+-- first line, which it must be, to the update's last check): the update
+-- runs under a limit, and when it is killed or fails it runs once more
+-- with https://archive.ubuntu.com first in the runner's mirror list, by
+-- the download retry's own sed; when neither try updates the lists, the
+-- step fails by its ::error:: line before any list is read. So the SHA512
+-- list is always made from lists this job's update fetched
+CI_WORKFLOW.LIST_UPDATE = [==[
+set -o pipefail
+mirrors=/etc/apt/apt-mirrors.txt
+status=0
+sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update || status=$?
+if [ "$status" -ne 0 ] && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
+  echo "::warning::apt's update failed or was unfinished after 45 s (exit $status): trying https://archive.ubuntu.com first"
+  sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
+  cat "$mirrors"
+  status=0
+  sudo timeout --kill-after=5 60 apt-get $APT_NETWORK_OPTIONS update || status=$?
+fi
+if [ "$status" -ne 0 ]; then
+  echo "::error::apt's lists did not update (exit $status; 124 or 137: too slow). Nothing was installed or checked: rerun this job"
+  exit 1
+fi
+]==]
 CI_WORKFLOW.PINNED = {}
 CI_WORKFLOW.PINNED["engine-shard"] = {
+  { name = "list step's update", step = "list", first = "set -o pipefail", from_start = true, text = CI_WORKFLOW.LIST_UPDATE },
   { name = "install step's start", step = "install", first = 'echo "jackd2 ', from_start = true, text = [==[
 echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections
 packages=(jackd2 "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION")
@@ -1736,6 +1779,7 @@ done < "$RUNNER_TEMP/sc-packages.sha512"
 ]==] },
 }
 CI_WORKFLOW.PINNED["lua-suite"] = {
+  { name = "list step's update", step = "list", first = "set -o pipefail", from_start = true, text = CI_WORKFLOW.LIST_UPDATE },
   { name = "install step's start", step = "install", first = "packages=", from_start = true, text = [==[
 packages=(lua5.3 luajit)
 debs="$RUNNER_TEMP/lua-debs"
@@ -2288,7 +2332,7 @@ test("the workflow refuses every weakening of apt's checks and every install of 
     { name = "Verify-Peer=false", expect = "Verify-Peer", edits = on_install("-o Acquire::https::Verify-Peer=false") },
     { name = "Verify-Host=false", expect = "Verify-Host", edits = on_install("-o Acquire::https::Verify-Host=false") },
     { name = "--allow-insecure-repositories", expect = "--allow-insecure-repositories",
-      edits = { "          sudo apt-get $APT_NETWORK_OPTIONS update\n          : >", "          sudo apt-get $APT_NETWORK_OPTIONS --allow-insecure-repositories update\n          : >" } },
+      edits = { "sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update", "sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS --allow-insecure-repositories update" } },
     { name = "AllowWeakRepositories", expect = "AllowWeakRepositories", edits = on_install("-o Acquire::AllowWeakRepositories=true") },
     { name = "Check-Date", expect = "Check-Date", edits = on_install("-o Acquire::Check-Date=false") },
     { name = "apt-get install of ./x.deb", expect = "./x.deb", edits = instead("sudo apt-get $APT_NETWORK_OPTIONS install -y ./x.deb") },
@@ -2504,6 +2548,63 @@ test("a slow mirror ends a job's download early and tries archive.ubuntu.com, ap
   -- --install, sources.list) is in CI_WORKFLOW.apt_weakenings, with #786's
   assert_equal(table.concat(CI_WORKFLOW.apt_weakenings(workflow), " | "), "",
     "the workflow never weakens apt's checks or changes its sources")
+end)
+
+-- #999: a slow mirror stalls the list step's `apt-get update` too (73 to
+-- 155 s seen, and twice no end before the step's own limit: #986's run on
+-- f003baff, #1004's first attempt), and the cache cannot spare it: the
+-- SHA512 list must come from lists this job fetched. So in both jobs the
+-- update runs under `timeout` with a kill-after, and when it is killed or
+-- fails it runs once more after the download retry's own sed has put
+-- https://archive.ubuntu.com first; when neither try updates the lists the
+-- step fails by its ::error:: line, inside its own limit, before the list
+-- is made. The piece is pinned verbatim in both jobs (CI_WORKFLOW.LIST_UPDATE)
+test("a list step's apt-get update runs under a limit, then once more with archive.ubuntu.com first, in both jobs (#999)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  assert_equal(table.concat(CI_WORKFLOW.cache_problems(workflow), " | "), "", "the workflow's cache problems")
+  local sed = "sudo sed -i -E '/^https:\\/\\/archive\\.ubuntu\\.com\\/ubuntu\\//! s/priority:[0-9]+/priority:9/' \"$mirrors\""
+  for _, cache in ipairs(CI_WORKFLOW.CACHES) do
+    local job, at = CI_WORKFLOW.cache_steps(workflow, cache)
+    local list, install = job and at.list and job.steps[at.list], job and at.install and job.steps[at.install]
+    assert_true(list and install, cache.where .. " has its list and install steps")
+    local updates, calls = CI_WORKFLOW.update_tries(list), 0
+    for _, line in ipairs(CI_WORKFLOW.script(list)) do
+      if line:find("apt%-get [^\n]-update") then calls = calls + 1 end
+    end
+    assert_equal(#updates, 2, cache.where .. ": the list's update runs under a limit, and once more after the mirrors are reordered")
+    assert_equal(calls, #updates, cache.where .. ": every apt-get update of the list is one of its two tries under timeout")
+    assert_true(updates[1].seconds <= 60, cache.where .. ": the first update gives up within a minute (a fast mirror's took 4 to 34 s): "
+      .. updates[1].seconds)
+    -- the reorder is the download retry's own line, between the two tries
+    local first, second = list.text:find("sudo timeout", 1, true), select(2, list.text:find("sudo timeout.-sudo timeout"))
+    local reorder = list.text:find(sed, 1, true)
+    assert_true(reorder ~= nil and first < reorder and reorder < second, cache.where .. ": the list's retry reorders the mirrors between its tries")
+    assert_true(install.text:find(sed, 1, true) ~= nil, cache.where .. ": the reorder is the install's own sed")
+    -- both tries to their limits and kills and the apt-cache work fit the
+    -- step's limit, so a list that never updates fails by its own line
+    local worst = updates[1].seconds + updates[1].kill + updates[2].seconds + updates[2].kill + CI_WORKFLOW.SECONDS.list_work
+    assert_true(worst < list.minutes * 60, cache.where .. ": both updates to their kills (" .. worst .. " s) fit the list's "
+      .. list.minutes .. " minutes")
+    local failed, made = list.text:find("::error::apt's lists did not update", 1, true), list.text:find(': > "$RUNNER_TEMP/empty-status"', 1, true)
+    assert_true(failed and made and failed < made, cache.where .. ": a list that did not update fails before the SHA512 list is made")
+  end
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, {
+    { name = "the Lua list's update with no limit", job = "lua-suite",
+      expect = "lua-suite: the list step's update differs from its pinned text at line 4:",
+      edits = { "sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update", "sudo apt-get $APT_NETWORK_OPTIONS update" } },
+    { name = "the shard's retry only on a kill", job = "engine-shard",
+      expect = "engine-shard: the list step's update differs from its pinned text at line 5:",
+      edits = { 'if [ "$status" -ne 0 ] && grep', 'if { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; } && grep' } },
+    { name = "the Lua list going on after neither update", job = "lua-suite",
+      expect = "lua-suite: the list step's update differs from its pinned text at line 14:",
+      edits = { "            exit 1\n          fi\n          : > ", "            true\n          fi\n          : > " } },
+    { name = "the shard's list with a line inside its update", job = "engine-shard",
+      expect = "engine-shard: the list step's update differs from its pinned text at line 2:",
+      edits = { "          set -o pipefail\n          mirrors=", "          set -o pipefail\n          true\n          mirrors=" } },
+    { name = "the Lua list's lists restored before the update", job = "lua-suite",
+      expect = "lua-suite: the list step's update is not the script's first line: line 1 is `sudo cp -r \"$RUNNER_TEMP/lists\" /var/lib/apt/`",
+      edits = { "          set -o pipefail\n          mirrors=", "          sudo cp -r \"$RUNNER_TEMP/lists\" /var/lib/apt/\n          set -o pipefail\n          mirrors=" } },
+  })
 end)
 
 -- The SuperCollider 3.13 image (test/run_engine_check_313.sh) runs what CI
