@@ -379,6 +379,30 @@ test("a grain restart runs the hooks after voiceOn and after a running voice's s
   assert_equal(table.concat(log, ","), "1,1", "a stopped voice's change runs none")
 end)
 
+-- 3.9 (#909): a grain-restart hook is told why it runs, so none reads
+-- voice.active to tell a start from a switch
+test("a grain-restart hook hears start at a voiceOn and source at a running switch", function()
+  local log = {}
+  local context = load_strata({ before_init = function()
+    local_value("S").register_grain_restart(function(voice_idx, reason)
+      log[#log + 1] = voice_idx .. ":" .. tostring(reason)
+    end)
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  for voice_idx = 1, 2 do
+    if S.voices[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  for index in pairs(log) do log[index] = nil end
+  toggle_voice(1)
+  assert_equal(table.concat(log, " "), "1:start", "a start's hooks hear start")
+  params:set("v1_source", 2)
+  assert_equal(table.concat(log, " "), "1:start 1:source", "a running voice's switch's hear source")
+  toggle_voice(1); toggle_voice(1)
+  assert_equal(table.concat(log, " "), "1:start 1:source 1:start", "a restart on the new source hears start")
+end)
+
+
 -- 3.4's base override, extra offsets and send budget (design §0.1)
 
 -- The values of every setGrainParam(voice_idx - 1, name, value) sent, in order
@@ -1324,6 +1348,68 @@ test("a raising voice-stop hook is reported and skipped on every stop path", fun
   assert_equal(table.concat(log, " "), table.concat(running, " "), "the good hook runs for each")
   assert_true(later_step_ran, "the cleanup steps after the voices' still run")
   h.claim_script_errors(context, #running, "strata: voice stop hook failed: ", "stop hook boom " .. running[#running])
+end)
+
+-- 3.9 (#910): the hooks a source switch runs are contained, as the
+-- voice-stop hooks are. A switch of voice 1 to buffer 1, then to buffer 2,
+-- with hooks(S) registered before init: its engine calls and the printed
+-- script errors (claimed)
+local function source_switch(hooks)
+  local context = load_strata({ before_init = function() hooks(local_value("S")) end })
+  finish_startup(context)
+  local S = local_value("S")
+  if not S.voices[1].active then toggle_voice(1) end
+  context.take_script_errors()
+  context.clear_engine_calls()
+  local switched, switch_error = pcall(params.set, params, "v1_source", 2)
+  assert_true(switched, "the switch completes: " .. tostring(switch_error))
+  local first = call_lines(context.engine_calls)
+  local first_errors = context.take_script_errors()
+  context.clear_engine_calls()
+  switched, switch_error = pcall(params.set, params, "v1_source", 3)
+  assert_true(switched, "the second switch completes: " .. tostring(switch_error))
+  return first, first_errors, call_lines(context.engine_calls), context.take_script_errors()
+end
+
+test("a grain-restart hook that raises at a source switch leaves the sync sent and prints one line", function()
+  local heard = {}
+  local plain, _, plain_again = source_switch(function(S)
+    S.register_grain_restart(function() end)
+  end)
+  local sent, errors, sent_again, errors_again = source_switch(function(S)
+    S.register_grain_restart(function(voice_idx, reason)
+      if reason == "source" then error("restart hook boom " .. voice_idx) end
+    end)
+    S.register_grain_restart(function(voice_idx, reason)
+      if voice_idx == 1 then heard[#heard + 1] = voice_idx .. ":" .. tostring(reason) end  -- the start runs voice 2 too
+    end)
+  end)
+  assert_true(plain:find("setGrainParam", 1, true) ~= nil, "a switch's sync sends the voice's values")
+  assert_equal(sent, plain, "the switch sends what it sends with no hook raising: the source, then the sync")
+  assert_equal(#errors, 1, "one line printed: " .. table.concat(errors, "\n"))
+  assert_true(errors[1]:find("strata: grain restart hook failed: ", 1, true) == 1, errors[1])
+  assert_true(errors[1]:find("restart hook boom 1", 1, true) ~= nil, errors[1])
+  assert_equal(sent_again, plain_again, "the next switch sends its sync too")
+  assert_equal(#errors_again, 0, "the same error is not printed again")
+  assert_equal(table.concat(heard, " "), "1:start 1:source 1:source", "the next hook still runs")
+end)
+
+test("a source-change hook that raises does not stop the next", function()
+  local heard = {}
+  local plain, _, plain_again = source_switch(function(S)
+    S.register_source_change(function() end)
+  end)
+  local sent, errors, sent_again, errors_again = source_switch(function(S)
+    S.register_source_change(function(voice_idx) error("source hook boom " .. voice_idx) end)
+    S.register_source_change(function(voice_idx, source) heard[#heard + 1] = voice_idx .. ":" .. source end)
+  end)
+  assert_equal(sent, plain, "the switch sends what it sends with no hook raising: the source, then the sync")
+  assert_equal(#errors, 1, "one line printed: " .. table.concat(errors, "\n"))
+  assert_true(errors[1]:find("strata: source change hook failed: ", 1, true) == 1, errors[1])
+  assert_true(errors[1]:find("source hook boom 1", 1, true) ~= nil, errors[1])
+  assert_equal(sent_again, plain_again, "the next switch sends its sync too")
+  assert_equal(#errors_again, 0, "the same error is not printed again")
+  assert_equal(table.concat(heard, " "), "1:2 1:3", "the next hook runs at each switch")
 end)
 
 -- count_sends (design §6.4): messages sent outside the budget's own path

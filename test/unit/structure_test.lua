@@ -191,6 +191,84 @@ test("clock.cancel is called only in lib/clocks.lua and the listed files, as oft
   assert_equal(#problems, 0, table.concat(problems, "\n"))
 end)
 
+-- 3.9 (#909): a grain-restart hook is told its reason ("start" or
+-- "source"), so none reads voice.active to tell a start from a switch.
+-- Each S.register_grain_restart(...) in the script's Lua files, comments
+-- and strings left out: its hook's body (a function written in the call,
+-- or the named local function of the same file), from its first line to
+-- the line at the same indentation that begins with end, or the one line
+-- when the call ends on it. Returns the hooks found (file and line) and
+-- the ones whose body reads .active
+local function grain_restart_hook_reads(sources)
+  local hooks, reads = {}, {}
+  for _, source in ipairs(sources) do
+    local lines = {}
+    for line in (sync_check.sanitize_lua(source.text) .. "\n"):gmatch("([^\n]*)\n") do lines[#lines + 1] = line end
+    local function body_from(first)
+      local indent = lines[first]:match("^(%s*)")
+      if lines[first]:match("end%s*%)%s*$") then return { lines[first] } end
+      local body = { lines[first] }
+      for number = first + 1, #lines do
+        body[#body + 1] = lines[number]
+        if lines[number]:match("^(%s*)") == indent and lines[number]:match("^%s*end%f[^%w_]") then break end
+      end
+      return body
+    end
+    for number, line in ipairs(lines) do
+      local argument = line:match("register_grain_restart%s*%(%s*([%w_]+)")
+      if argument and not line:match("function%s+[%w_.:]*register_grain_restart") then
+        local first = number
+        if argument ~= "function" then
+          first = nil
+          for at, other in ipairs(lines) do
+            if other:match("^%s*local%s+function%s+" .. argument .. "%s*%(") then first = at end
+          end
+        end
+        local where = source.path .. ":" .. number
+        hooks[#hooks + 1] = where
+        if not first then
+          reads[#reads + 1] = where .. " (its function " .. argument .. " is not a local function of the file)"
+        elseif table.concat(body_from(first), "\n"):find("%.active%f[^%w_]") then
+          reads[#reads + 1] = where
+        end
+      end
+    end
+  end
+  return hooks, reads
+end
+
+test("no grain-restart hook reads voice.active", function()
+  -- the scanner itself
+  local hooks, reads = grain_restart_hook_reads({ { path = "lib/x.lua", text = table.concat({
+    "S.register_grain_restart(function(v) settle(v) end)",
+    "S.register_grain_restart(function(v, reason)",
+    "  if not S.voices[v].active then x() end",
+    "end)",
+    "local function named(v)",
+    "  y(v) -- S.voices[v].active in a comment",
+    "end",
+    "S.register_grain_restart(named)",
+    "S.register_grain_restart(function(v) z(S.voices[v].active) end)",
+    "  S.register_grain_restart(function(v)",
+    "    if reason == 'start' then q() end",
+    "  end)",
+    "w = S.voices[1].active",
+    "function M.register_grain_restart(fn) end",
+  }, "\n") } })
+  assert_equal(table.concat(hooks, " "), "lib/x.lua:1 lib/x.lua:2 lib/x.lua:8 lib/x.lua:9 lib/x.lua:10",
+    "every registration is found, the register function's own definition not")
+  assert_equal(table.concat(reads, " "), "lib/x.lua:2 lib/x.lua:9",
+    "a body that reads .active is found; a comment and the code after a body are not")
+  hooks, reads = grain_restart_hook_reads(read_lua_sources())
+  local files = {}
+  for _, where in ipairs(hooks) do files[where:match("^(.-):")] = true end
+  for _, path in ipairs({ "lib/notes.lua", "lib/midi_in.lua", "lib/scan.lua", "lib/playheads.lua", "lib/positions.lua" }) do
+    assert_true(files[path], path .. "'s grain-restart hook is found")
+  end
+  assert_true(#hooks >= 7, "the script's seven hooks are found: " .. table.concat(hooks, " "))
+  assert_equal(#reads, 0, "a grain-restart hook reads its reason, never .active: " .. table.concat(reads, " "))
+end)
+
 -- 3.7 (design decision 21): a data file is loaded from its format floor
 -- (SCENE_FORMAT_FLOOR, BUFFER_FORMAT_FLOOR) to the build's version, and set
 -- aside otherwise; no code converts a particular older version. The scan

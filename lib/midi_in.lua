@@ -341,8 +341,8 @@ return function(S)
     end
   end)
   S.register_voice_stop(function(voice_idx) stop_pending[voice_idx] = nil end)
-  S.register_grain_restart(function(voice_idx)
-    if not S.voices[voice_idx].active then stop_pending[voice_idx] = nil end  -- a start
+  S.register_grain_restart(function(voice_idx, reason)
+    if reason == "start" then stop_pending[voice_idx] = nil end
   end)
 
   -- Whether a note is no slice of a voice that takes slice notes: it does
@@ -589,11 +589,11 @@ return function(S)
 
   -- Listen for MIDI from init on
   S.register_start(S.constants.START_ORDER.midi, function()
-    -- every start (the voice is not yet active when the hook runs) clears the
-    -- flag; midi_note_on sets it after its own start. A running voice's source
-    -- change runs the hook too and leaves the flag.
-    S.register_grain_restart(function(voice_idx)
-      if not S.voices[voice_idx].active then S.midi_state.started[voice_idx] = nil end
+    -- every start (the hook's reason "start") clears the flag; midi_note_on
+    -- sets it after its own start. A running voice's source change runs the
+    -- hook too (reason "source") and leaves the flag.
+    S.register_grain_restart(function(voice_idx, reason)
+      if reason == "start" then S.midi_state.started[voice_idx] = nil end
     end)
     for port = 1, S.lib.io_ports.PORTS.count do port_names[port] = S.lib.io_ports.device(port) end
     S.lib.io_ports.on_change("midi_in", port_changed)

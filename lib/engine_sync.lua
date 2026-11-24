@@ -585,8 +585,23 @@ return function(S)
   -- (lives in this load's constructor, on the fresh S: a script reload resets it)
   local sent_sources = {}
 
-  local function run_grain_restart_hooks(voice_idx)
-    for _, hook in ipairs(S.registry.grain_restart) do hook(voice_idx) end
+  -- The grain-restart hooks, each told the voice and why it runs (#909):
+  -- reason "start" (start_voice, after its voiceOn, the voice not yet
+  -- marked running) or "source" (a running voice's source switch). A
+  -- hook reads the reason, never voice.active (a structure test). At a
+  -- switch each is contained, as the voice-stop hooks are (#910): one that
+  -- raises is printed once per distinct message and the next still runs,
+  -- so the switch's sync is still sent. A start runs them bare, inside its
+  -- own rollback (#382), so a raise there undoes the start and is raised
+  local grain_restart_errors = {}
+  local function run_grain_restart_hooks(voice_idx, reason)
+    for index, hook in ipairs(S.registry.grain_restart) do
+      if reason == "start" then
+        hook(voice_idx, reason)
+      else
+        S.lib.ui_frame.contained_call(grain_restart_errors, index, "grain restart hook", hook, voice_idx, reason)
+      end
+    end
   end
 
   -- Every engine.setGrainSource goes through here, so the remembered source
@@ -597,7 +612,7 @@ return function(S)
     engine.setGrainSource(voice_idx - 1, source - 1)
     local changed = sent_sources[voice_idx] ~= source
     sent_sources[voice_idx] = source
-    if changed and S.voices[voice_idx].active then run_grain_restart_hooks(voice_idx) end
+    if changed and S.voices[voice_idx].active then run_grain_restart_hooks(voice_idx, "source") end
   end
 
   -- 3.8 (package 0d): the one caller of engine.setVoiceType: the voice's
@@ -768,8 +783,8 @@ return function(S)
   -- override and extra offsets (start_value: a step's locks and note, set
   -- before the start, #632), so the first grain plays them too. voiceOn
   -- carries the values just sent, and every part's voice-level entries follow it.
-  -- The grain-restart hooks run after voiceOn, before the voice is marked
-  -- running (lib/midi_in.lua's relies on it). A send that raises before
+  -- The grain-restart hooks run after voiceOn, told "start", before the
+  -- voice is marked running. A send that raises before
   -- voiceOn has started nothing; once voiceOn is sent, a hook or a send
   -- that raises sends voiceOff and raises the error again, so the engine
   -- and voice.active always agree (#382). A start that took effect is a
@@ -798,7 +813,7 @@ return function(S)
       value("grain_pitch", stored("grain_pitch")))
     local started, start_error = xpcall(function()
       -- voiceOn built the synths for the source the engine has recorded
-      run_grain_restart_hooks(voice_idx)
+      run_grain_restart_hooks(voice_idx, "start")
       send_parts(voice_idx, parts, "voice_level", carried)
     end, with_traceback)
     if not started then

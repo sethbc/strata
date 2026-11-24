@@ -1535,6 +1535,29 @@ test("own_only takes the own note, and the own region is sent only when it chang
   assert_equal(notes.own_region(3)[1], 0.25)
 end)
 
+-- 3.9 (#909): the grain-restart hook tells a running voice's switch from a
+-- start by its reason: a switch ends the voice's regions (they were the
+-- old slot's), a start keeps the own region its sync sends
+test("a running voice's source switch ends its regions, a start keeps its own", function()
+  local context = load_strata()
+  local S = started(context)
+  local notes = S.lib.notes
+  params:set("v1_source", 2)
+  notes.set_own_region(1, { 0.5, 0.25 })
+  assert_equal(play(context, 1, 2, 64, { extra_only = true, region = { 0.25, 0.25 } }), 2, "an extra note with a region")
+  context.clear_engine_calls()
+  params:set("v1_source", 3)
+  assert_equal(notes.own_region(1), nil, "the switch forgets the own region")
+  local released = {}
+  for _, call in ipairs(context.calls_named("noteOff")) do released[#released + 1] = call_text(call) end
+  assert_equal(table.concat(released, " "), "noteOff(0, 1, 0)", "and releases the extra note with a region")
+  assert_equal(notes.find(1, "midi", 2), nil, "which is forgotten")
+  notes.set_own_region(3, { 0.25, 0.25 })
+  toggle_voice(3)
+  assert_true(S.voices[3].active, "voice 3 starts")
+  assert_equal(notes.own_region(3)[1], 0.25, "a start keeps the own region it starts with")
+end)
+
 test("the grid owns notes of its own, and a steal of the owner's kind takes its slot", function()
   local context = load_strata()
   local S = started(context)

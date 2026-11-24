@@ -1056,8 +1056,8 @@ return function(S)
     return taken
   end
 
-  -- Every start (after its voiceOn, the voice not yet marked running) and
-  -- every running voice's source change, a recall's included: a fresh
+  -- Every start (reason "start": after its voiceOn) and every running
+  -- voice's source change (reason "source"), a recall's included: a fresh
   -- freeze reference. At a start only, a frozen synth voice's own note gets
   -- its rate on the new own grain synth: noteOn on slot 0 from slot 1's held
   -- note, a quiet note whose caller starts the voice now (a play that starts
@@ -1068,16 +1068,16 @@ return function(S)
   -- source's; a recall's switch is settled at the recall's end, below). With
   -- the voice-stop hook this covers every start and source change: a stopped
   -- voice's switch runs no hook, and a stopped voice keeps no reference
-  S.register_grain_restart(function(voice)
+  S.register_grain_restart(function(voice, reason)
     refresh_reference(voice, true)
     -- 3.7: a running voice's source switch: its regions were the old
     -- slot's (the sync that follows sends the own region's clear)
-    if S.voices[voice].active then
+    if reason == "source" then
       own_regions[voice] = nil
       end_extra_regions(voice)
     end
     local record = slots[voice][1]
-    if not S.voices[voice].active and record and record.held and frozen_synth(voice) then
+    if reason == "start" and record and record.held and frozen_synth(voice) then
       send_note_on(voice, 1, record)
       count(1)
     end
