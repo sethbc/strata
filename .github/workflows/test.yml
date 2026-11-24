@@ -70,19 +70,124 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+        # 7 s at most in four runs of four jobs (#993). Every step before
+        # the suite has a limit of its own, and those limits (9 minutes) and
+        # a minute for the runner's own steps fit the job's 10, so a hung
+        # step of the setup fails by its own name (docs/checks.md, Installs)
+        timeout-minutes: 1
 
       # Both on each runner, as the one job before had them (Lua 5.3's
-      # global-reference checks need its luac5.3; LuaJIT skips them)
-      # A slow mirror fails this step by its own name, not the job at its
-      # limit (#785); it takes under a minute
-      - name: Install Lua 5.3 and LuaJIT
+      # global-reference checks need its luac5.3; LuaJIT skips them).
+      # Their package files are kept between runs as the engine shards keep
+      # theirs, by the same steps and checks under a key of their own (#993:
+      # on the runners whose mirror was slow, the install's apt-get update
+      # took up to 131 s and its 751 kB download up to 63 s, and four jobs
+      # were stopped at the install's 3 minutes with no test run). This step
+      # lists every file the two packages need on a system with nothing
+      # installed, each with its SHA512 from apt's lists, and names the
+      # cache entry after that list
+      - name: List Lua 5.3 and LuaJIT's packages
+        id: packages
+        # its apt-get update reads the mirrors: 1 to 19 s on a fast one, 73
+        # to 131 s on a slow one (#993)
         timeout-minutes: 3
         run: |
+          set -o pipefail
           sudo apt-get $APT_NETWORK_OPTIONS update
-          sudo apt-get $APT_NETWORK_OPTIONS install -y lua5.3 luajit
+          : > "$RUNNER_TEMP/empty-status"
+          nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
+          apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s lua5.3 luajit \
+            | awk '/^Inst / { for (i = 3; i <= NF; i++) if (substr($i, 1, 1) == "(") { print $2 "=" substr($i, 2); break } }' \
+            > "$RUNNER_TEMP/lua-install.txt"
+          xargs apt-cache "${nothing_installed[@]}" show < "$RUNNER_TEMP/lua-install.txt" \
+            | awk -v native="$(dpkg --print-architecture)" \
+                '/^Package: / { p = $2 } /^Version: / { v = $2 } /^Architecture: / { a = $2 } /^SHA512: / { s = $2 }
+                 /^$/ { if (s != "" && (a == native || a == "all")) { gsub(/:/, "%3a", v); print s "  " p "_" v "_" a ".deb" }; p = v = a = s = "" }' \
+            | sort -u > "$RUNNER_TEMP/lua-packages.sha512"
+          if [ "$(wc -l < "$RUNNER_TEMP/lua-packages.sha512")" -lt "$(wc -l < "$RUNNER_TEMP/lua-install.txt")" ]; then
+            echo "a package has no SHA512 in apt's lists"; exit 1
+          fi
+          prefix="lua-debs-$ImageOS-$RUNNER_ARCH-"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          echo "key=$prefix$(sha256sum < "$RUNNER_TEMP/lua-packages.sha512" | cut -c1-64)" >> "$GITHUB_OUTPUT"
+          echo "$(wc -l < "$RUNNER_TEMP/lua-packages.sha512") package files in the list"
+
+      # Read as the engine shards' entry is (docs/checks.md, Installs): what
+      # main's runs saved and what this pull request's runs saved. A miss,
+      # or a restore that fails or times out, only means apt downloads the
+      # files. The entry is under a megabyte
+      - name: Restore Lua 5.3 and LuaJIT's packages
+        id: restore
+        # The engine shards' release (#533)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1
+        with:
+          path: ${{ runner.temp }}/lua-debs
+          key: ${{ steps.packages.outputs.key }}
+          restore-keys: ${{ steps.packages.outputs.prefix }}
+
+      # As the engine shards install: a kept file reaches apt only when its
+      # SHA512 is the one apt's lists give, apt downloads what the cache
+      # lacks, a download unfinished after 20 s (a normal one takes a second)
+      # runs again with https://archive.ubuntu.com first, and the kept folder
+      # is then refilled with the list's files for the save below
+      - name: Install Lua 5.3 and LuaJIT
+        # The slowest install that succeeds: 20 s and 5 to kill the first
+        # try, 30 and 5 for the second, then the refill and the unpacking
+        # (a second or two): under 70 s, inside its 2 minutes
+        timeout-minutes: 2
+        run: |
+          packages=(lua5.3 luajit)
+          debs="$RUNNER_TEMP/lua-debs"
+          archives=/var/cache/apt/archives
+          mirrors=/etc/apt/apt-mirrors.txt
+          mkdir -p "$debs"
+          kept=0
+          while read -r sum name; do
+            if [ -f "$debs/$name" ] && echo "$sum  $debs/$name" | sha512sum --check --status; then
+              sudo cp "$debs/$name" "$archives/"
+              kept=$((kept + 1))
+            fi
+          done < "$RUNNER_TEMP/lua-packages.sha512"
+          echo "$kept package files from the cache, each matching apt's lists"
+          status=0
+          sudo timeout --kill-after=5 20 apt-get $APT_NETWORK_OPTIONS install -y --download-only "${packages[@]}" || status=$?
+          if { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; } && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
+            echo "::warning::apt's first mirror is slow (download unfinished after 20 s): trying https://archive.ubuntu.com first"
+            sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
+            cat "$mirrors"
+            status=0
+            sudo timeout --kill-after=5 30 apt-get $APT_NETWORK_OPTIONS install -y --download-only "${packages[@]}" || status=$?
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the packages did not download (exit $status; 124 or 137: too slow). The Lua suite never ran: rerun this job"
+            exit 1
+          fi
+          rm -f -- "$debs"/*.deb
+          while read -r sum name; do
+            if [ -f "$archives/$name" ]; then cp "$archives/$name" "$debs/"; fi
+          done < "$RUNNER_TEMP/lua-packages.sha512"
+          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"
+
+      # Kept by the step right after the install when the key was not an
+      # exact hit: the four jobs of a run try the one key, the first saves
+      # it and the others only log that it is taken
+      - name: Keep Lua 5.3 and LuaJIT's packages
+        if: steps.restore.outputs.cache-hit != 'true'
+        # The restore's release (#533)
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        timeout-minutes: 1
+        with:
+          path: ${{ runner.temp }}/lua-debs
+          key: ${{ steps.packages.outputs.key }}
 
       # The run's processes are the runner's cores: the log says how many
       - name: The runner's cores
+        timeout-minutes: 1
         run: nproc
 
       - name: Behavior tests
