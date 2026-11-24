@@ -11,7 +11,7 @@
 
 ### key presses
 - **State:** per key (2, 3) on the page: `S.key_press_page[n]`, `S.key_press_at[n]` and `S.key_press_alt[n]` (`lib/ui/keys.lua`, set by `key()` in `strata.lua`), read through `S.lib.ui_keys.held_seconds(n)` (and `S.lib.ui_alt.k2_held()` for ALT+K2); `S.alt_held` beside them. Up, down plain, down ALT; the States section below gives each state's fields. A key down on a modal owner is the `modal owner` machine's (`docs/notes/lua/ui/pages-and-dispatch.md`), never this one's: while an owner is pushed `key()` takes the page's key to up.
-- **Invariant:** `key presses`: an ALT press has a press page, and a key has a press page exactly while it has a press time.
+- **Invariant:** `key presses`: an ALT press has a press page, a key has a press page exactly while it has a press time, and a press page is the page shown (#989; `set_ui_page` forgets the presses, #234).
 - **Test:** `test/unit/ui_test.lua`: "key presses: every cell is decided" and its rows (K2 on FX, whose `key`, `key_release`, `alt_key` and `alt_key_release` are probes that log whether `held_seconds` answered; the release after a loss is pressed on FX again); the invariant runs after every unit test.
 
 Every cell is a row. `press` is K2 down as ALT stands (held in `down ALT`); `ALT press` is K1 down, then K2. A press of a key already down does not come from norns, which sends a key's press only after its release; the rows say what `key()` would do with one. `up` + `release` is a press forgotten while the physical key stayed down.
@@ -39,7 +39,7 @@ Every cell is a row. `press` is K2 down as ALT stands (held in `down ALT`); `ALT
 
 ## States
 
-The fields: `S.key_press_page[n]` (the page key `n` went down on, nil when up), `S.key_press_at[n]` (when it went down, nil when up), `S.key_press_alt[n]` (true for an ALT press) and `S.alt_held` (K1 held). The "key presses" invariant checks that an ALT press has a press page and that a key has a press page exactly while it has a press time.
+The fields: `S.key_press_page[n]` (the page key `n` went down on, nil when up), `S.key_press_at[n]` (when it went down, nil when up), `S.key_press_alt[n]` (true for an ALT press) and `S.alt_held` (K1 held). The "key presses" invariant checks that an ALT press has a press page, that a key has a press page exactly while it has a press time, and that a press page is the page shown.
 
 | Per key (2, 3) | `key_press_page[n]` | `key_press_at[n]` | `key_press_alt[n]` |
 |----------------|---------------------|-------------------|--------------------|

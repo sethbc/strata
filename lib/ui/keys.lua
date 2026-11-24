@@ -104,13 +104,18 @@ return function(S)
   M.set_ui_page = set_ui_page
 
   -- An ALT press is a held key: it has the page it went down on; a held
-  -- key has its press time, and only a held key has one
+  -- key has its press time, and only a held key has one; a held key's
+  -- page is the page shown (set_ui_page forgets the presses, #234, #989)
   S.register_invariant("key presses", function()
     for n in pairs(S.key_press_alt) do
       if S.key_press_page[n] == nil then return "key " .. tostring(n) .. " is an ALT press with no press page" end
     end
     for n in pairs(S.key_press_page) do
       if S.key_press_at[n] == nil then return "key " .. tostring(n) .. " is held with no press time" end
+      if S.key_press_page[n] ~= S.ui_page then
+        return "key " .. tostring(n) .. " is held on page " .. tostring(S.key_press_page[n])
+          .. ", not the page shown, " .. tostring(S.ui_page)
+      end
     end
     for n in pairs(S.key_press_at) do
       if S.key_press_page[n] == nil then return "key " .. tostring(n) .. " has a press time with no press page" end
