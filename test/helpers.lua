@@ -1725,6 +1725,7 @@ local UNIT_FILE_SECONDS = {
   ["matrix_test.lua"] = 5,
   ["midi_in_test.lua"] = 5,
   ["mod_sources_test.lua"] = 1,
+  ["modulation_walk_test.lua"] = 4,
   ["morph_test.lua"] = 3,
   ["mpe_test.lua"] = 1,
   ["mutation_test.lua"] = 21,
