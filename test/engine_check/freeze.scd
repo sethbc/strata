@@ -1053,6 +1053,102 @@ server.sync;
 check.(other.synths[other.copyWriterKeys[2]].isNil and: { writerNodes.value.count({ arg node; node.def == \strataRingWriteSpectral }) == 0 }
     and: { writerNodes.value.size == (other.numVoices + 1) },
     "freeze: an unfreeze frees the spectral copy writer (no copyWrite node, one writer per ring)");
+// The freeze's kinds (#887): each state of the freeze's table reached by
+// commands on the high engine (spectral there), and what the four readers
+// of the kind answer in it: [frozenOnInput, spectralHoldsVoice,
+// readsInputCopy, frozenSynthVoice]. A copy is caught pending straight
+// after its freeze (its routine runs only once the check yields) and held
+// once \copied. The stale states are a frozen voice moved to another
+// source while stopped (no switch unfreezes it); in them frozenSynthVoice
+// is judged apart: a voice frozen on a slot or on its input and moved to
+// its synth holds no ring of its own, so it is no frozen synth voice (the
+// one answer #887 changes), and neither is a synth freeze moved to a slot
+{
+    var run = otherCommand, rows = List.new(14), expected, first = other.voiceSourceFirst, answers, record;
+    var start = { arg voice, source, mode;
+        run.(\setGrainSource, voice, source);
+        run.(\setGrainParam, voice, \freezeMode, mode);
+        run.(\voiceOn, voice, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+    };
+    var moveStopped = { arg voice, source; run.(\voiceOff, voice); run.(\setGrainSource, voice, source) };
+    answers = { arg voice; [other.frozenOnInput(voice), other.spectralHoldsVoice(voice), other.readsInputCopy(voice),
+        other.frozenSynthVoice(voice)] };
+    record = { arg label, voice;
+        rows.add([label, answers.(voice), other.tryPerform(\freezeKind, voice), other.tryPerform(\freezeStale, voice)]) };
+    start.(0, 0, 0.0);
+    record.(\unfrozen, 0);
+    run.(\setGrainParam, 0, \freeze, 1.0);
+    record.(\holdSynth, 0);
+    moveStopped.(0, 1);
+    record.(\staleSynthOnSlot, 0);
+    start.(1, 0, 1.0);
+    run.(\setGrainParam, 1, \freeze, 1.0);
+    record.(\spectralSynth, 1);
+    moveStopped.(1, other.inputSource);
+    record.(\staleSpectralOnInput, 1);
+    start.(3, 1, 0.0);
+    run.(\setGrainParam, 3, \freeze, 1.0);
+    record.(\holdSlot, 3);
+    moveStopped.(3, 0);
+    record.(\staleSlotOnSynth, 3);
+    start.(4, other.inputSource, 0.0);
+    run.(\setGrainParam, 4, \freeze, 1.0);
+    record.(\copyPending, 4);
+    start.(5, other.inputSource, 1.0);
+    run.(\setGrainParam, 5, \freeze, 1.0);
+    record.(\copyPendingSpectral, 5);
+    run.(\setGrainSource, 6, first);
+    run.(\setGrainParam, 6, \freezeMode, 0.0);
+    run.(\setGrainParam, 6, \freeze, 1.0);
+    record.(\copyPendingVoiceSource, 6);
+    ok = h.waitFor({ [4, 5, 6].every({ arg voice; other.areaState[\freeze][\copied][voice] }) }, 2);
+    record.(\copyHeld, 4);
+    record.(\copyHeldSpectral, 5);
+    record.(\copyHeldVoiceSource, 6);
+    moveStopped.(4, 0);
+    record.(\staleCopyOnSynth, 4);
+    // [state, [frozenOnInput, spectralHoldsVoice, readsInputCopy,
+    // frozenSynthVoice (nil: judged apart, below)], freezeKind, freezeStale]
+    expected = [
+        [\unfrozen, [false, false, false, false], \none, false],
+        [\holdSynth, [false, false, false, true], \holdSynth, false],
+        [\staleSynthOnSlot, [false, false, false, nil], \holdSynth, true],
+        [\spectralSynth, [false, true, false, true], \spectralSynth, false],
+        [\staleSpectralOnInput, [false, true, false, false], \spectralSynth, true],
+        [\holdSlot, [false, false, false, false], \holdSlot, false],
+        [\staleSlotOnSynth, [false, false, false, nil], \holdSlot, true],
+        [\copyPending, [true, false, false, false], \copyPending, false],
+        [\copyPendingSpectral, [true, false, false, false], \copyPending, false],
+        [\copyPendingVoiceSource, [true, false, false, false], \copyPending, false],
+        [\copyHeld, [true, false, true, false], \copyHeld, false],
+        [\copyHeldSpectral, [true, false, true, false], \copyHeld, false],
+        [\copyHeldVoiceSource, [true, false, true, false], \copyHeld, false],
+        [\staleCopyOnSynth, [true, false, false, nil], \copyHeld, true]
+    ];
+    readings = [rows.asArray, expected].flop.reject({ arg pair;
+        (pair[0][0] == pair[1][0]) and: { [pair[0][1], pair[1][1]].flop.every({ arg each; each[1].isNil or: { each[0] == each[1] } }) }
+    }).collect({ arg pair; pair[0].keep(2) });
+    check.(ok and: { other.synths[other.copyWriterKeys[5]].notNil } and: { rows.size == expected.size } and: { readings.isEmpty },
+        "freeze: the four readers of the freeze's kind answer as its state table says in each state, reached by commands (copies in %; [state, answers] not as expected %)".format(
+            ok, readings));
+    // #887: frozenSynthVoice in the stale states but the spectral one's
+    readings = rows.select({ arg row; [\staleSynthOnSlot, \staleSlotOnSynth, \staleCopyOnSynth].includes(row[0]) })
+        .collect({ arg row; [row[0], row[1][3]] });
+    check.((readings.size == 3) and: { readings.every({ arg each; each[1] == false }) },
+        "freeze: a stopped voice frozen on one source and moved to another is no frozen synth voice: a synth freeze moved to a slot, a slot's or an input copy's moved to the synth (#887: [state, frozenSynthVoice] %)".format(readings));
+    // the kind and the staleness by name (freezeKind, freezeStale)
+    readings = [rows.asArray, expected].flop.reject({ arg pair; (pair[0][2] == pair[1][2]) and: { pair[0][3] == pair[1][3] } })
+        .collect({ arg pair; [pair[0][0], pair[0][2], pair[0][3]] });
+    check.(readings.isEmpty,
+        "freeze: freezeKind names what is frozen and freezeStale whether the voice has left the source it froze, in each state (#887: [state, kind, stale] not as expected %)".format(readings));
+    [0, 1, 3, 4, 5, 6].do({ arg voice;
+        run.(\setGrainParam, voice, \freeze, 0.0);
+        run.(\voiceOff, voice);
+        run.(\setGrainSource, voice, 0);
+        run.(\setGrainParam, voice, \freezeMode, 0.0);
+    });
+    server.sync;
+}.value;
 // free with a spectral copy writer running (#503; voice 2, still on the
 // input, freezeMode 1). The freeze area's own stop frees the writer: run
 // here alone, before any other area's stop (free runs the voices area's
