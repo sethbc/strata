@@ -87,9 +87,10 @@ return function(S)
     return remote ~= nil and remote.holds ~= nil and remote.holds(port) == true
   end
 
-  -- The remote's started flag down (S.lib.io_remote.started()): its
-  -- cleanup step is letting its ports go, or has (#1010). It is down before
-  -- its start step too, inside init, where no port settles
+  -- The remote's started flag down (S.lib.io_remote.started()): from its
+  -- closing step (143, #1033), before any cleanup step lets a port go
+  -- (#1010). It is down before its start step too, inside init, where no
+  -- port settles
   local function remote_stopped()
     local remote = S.lib.io_remote
     return remote ~= nil and remote.started ~= nil and remote.started() == false
@@ -654,10 +655,10 @@ return function(S)
   -- then a setup due, goes once to a device there that nothing holds; while
   -- held each stays due; with no device each is dropped (the next arrival
   -- marks the setup again) (#772, #788). Once the remote has stopped
-  -- (S.lib.io_remote.started() false: its cleanup step, which comes before
-  -- this module's, is letting its ports go) the debts and a takedown due are
-  -- paid, but no setup goes: this module's own step takes the zone down
-  -- next (#1010)
+  -- (S.lib.io_remote.started() false: from its closing step, 143, #1033,
+  -- before the controllers' and the remote's releases at 146 and 147) the
+  -- debts and a takedown due are paid, but no setup goes: this module's own
+  -- step takes the zone down next (#1010)
   S.lib.io_ports.on_settled("io_midi_out", function(port)
     if state.stopped or remote_holds(port) then return end
     -- a debt kept while a remote held the port (#996), before any zone message
