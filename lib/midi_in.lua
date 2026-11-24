@@ -8,8 +8,8 @@
 -- (S.lib.expression). It listens, and hears of devices and claims,
 -- through S.lib.io_ports (lib/io/ports.lua), never on a port another name
 -- claims. The note tap the zones editor learns through and the scale
--- editor toggles its classes through (one owner at a time), and the key and bend state (S.midi_device,
--- S.midi_state). The functions stay global. The MIDI constants are a
+-- editor toggles its classes through (one owner at a time), and the key
+-- and bend state (S.midi_device, S.midi_state). The functions stay global. The MIDI constants are a
 -- field of this module's table (S.lib.midi_in.MIDI) for the MIDI params in
 -- lib/params_setup.lua. Registers the cleanup step that detaches MIDI.
 -- See docs/notes/lua/midi.md.

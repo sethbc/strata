@@ -165,13 +165,18 @@ end)
 -- 3.9 (#900): the tap is set once, at open; no draw sets it (a reset tells
 -- the editor, which takes it back then)
 test("the scale editor sets its note tap at open and at no draw", function()
-  local context, S = loaded()
+  local context, S, editor = loaded()
   local sets = 0
   local real_set = S.lib.midi_in.set_note_tap
   S.lib.midi_in.set_note_tap = function(...) sets = sets + 1; return real_set(...) end
+  editor.close()
+  assert_equal(S.lib.midi_in.note_tap_owner(), nil, "closed: the tap is cleared")
+  editor.open()
+  assert_equal(sets, 1, "the open sets the tap")
+  assert_equal(S.lib.midi_in.note_tap_owner(), editor.SCALE_EDITOR.tap_owner, "under the editor's owner")
   for _ = 1, 3 do request_redraw(); next_frame(context) end
   S.lib.midi_in.set_note_tap = real_set
-  assert_equal(sets, 0, "no draw sets the tap")
+  assert_equal(sets, 1, "no draw sets the tap")
 end)
 
 test("in 19 equal the scale and notes rows show -- and change nothing", function()
