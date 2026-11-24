@@ -1565,14 +1565,16 @@ local AREA_HOOKS = { "allocState", "addDefs", "addCommands", "start", "stop", "f
 -- six are the commands' (loadBuffer, clearBuffer, saveBuffer, recordBuffer,
 -- stopRecord, setBypass); the fifth line's three are the onsets pass's
 -- (analyzeBuffer's analyzeSlot, its fork's runOnsetPass and writeOnsetsFile);
--- the last two are the mix stage's replacement (the bad-values reply's
--- replaceBadVoiceMix, and restartVoiceMix from its confirm timeout, #886)
+-- the sixth line's two are the mix stage's replacement (the bad-values reply's
+-- replaceBadVoiceMix, and restartVoiceMix from its confirm timeout, #886);
+-- the last is recordBuffer's take, also started from a take's end (#966)
 local AREA_CALL_METHODS = { "ringGrainReader", "slotGrainReader", "recordSynthFreed", "ringHeadFrame", "gateVoice",
   "replaceVoiceType", "switchVoiceType",
   "voiceSynthFreed", "prepareTake", "startFastLfo", "watchFastLfo", "watchFastEnv",
   "loadSlot", "clearSlot", "saveSlot", "recordSlot", "stopRecordSlot", "setEffectBypass",
   "analyzeSlot", "runOnsetPass", "writeOnsetsFile",
-  "replaceBadVoiceMix", "restartVoiceMix" }
+  "replaceBadVoiceMix", "restartVoiceMix",
+  "beginRecording" }
 -- the calls that hand a function to something that runs it later (the
 -- class library's and the engine's own): a method that makes one keeps its
 -- frame past its return

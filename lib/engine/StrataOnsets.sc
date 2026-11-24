@@ -81,7 +81,8 @@
     }
 
     // analyzeBuffer: count the analysis, refuse at once a slot with no
-    // audio or one that records, else have the server write both channels'
+    // audio, one that records or one whose take is ending (takeEnding: its
+    // length may not be announced yet, #966), else have the server write both channels'
     // valid region to temporary float files and run the pass on them in a
     // routine (runOnsetPass), as a save's first stage does (writeSlot)
     analyzeSlot { arg index;
@@ -90,7 +91,7 @@
         count = state[\analyses][index] + 1;
         state[\analyses][index] = count;
         frames = bufferFrames[index];
-        if ((frames < 1) or: { this.slotRecording(index) }) { ^this.reportOnsets(index, count, true) };
+        if ((frames < 1) or: { this.slotRecording(index) } or: { this.takeEnding(index) }) { ^this.reportOnsets(index, count, true) };
         change = slotChanges[index];
         // deleteStaleParts' pattern (strata-buf*-*.wav) matches these names
         tempPaths = ["L", "R"].collect({ arg side;

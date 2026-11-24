@@ -804,6 +804,12 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
             holdMover.value; replaceTake.value; reachPhase.(\ending); fire.value }, release: freeMover),
         endingPlayable: (phase: \ending, about: "a playable recording ending, its peaks file held", reach: { arg fire;
             load.(audioPath); holdMover.value; playableTake.value; reachPhase.(\ending); fire.value }, release: freeMover),
+        // (#966: the recording waits for the take's end, kept in the
+        // take's queued; the ending take's record number reads -1, the
+        // queued recording's 0)
+        endingQueued: (phase: \ending, about: "a replace take ending, its peaks file held, a playable recording queued behind it", reach: { arg fire, begin;
+            holdMover.value; replaceTake.value; reachPhase.(\ending); begin.value; playableTake.value; fire.value }, release: freeMover,
+            holds: { state[\takes][slot] !? { arg take; take[\queued].notNil } ? false }, reached: []),
         // (the command sent from a /n_end responder that runs after the
         // engine's own, which has asked for the frame count)
         endingStopped: (phase: \ending, about: "a stopped replace take, its frame count awaited", reach: { arg fire;
@@ -886,10 +892,18 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
             events: ['ended 0', 'length 0.0'], frames: 0),
         (row: 15, state: \endingReplace, does: "recordBuffer, feedback 0 and loop 0", command: replaceTake,
             events: ['ended 0', 'length 0.0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
-        // #966: judged on the empty slot, the playable recording zeroes the
-        // take it reports ended (Lua cannot send this today)
+        // #966: the playable recording waits for the replace take's end
+        // and is judged on its frames (Lua cannot send this today)
         (row: 15, state: \endingReplace, does: "recordBuffer, feedback > 0", command: playableTake,
-            events: ['ended 0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames, known: 966),
+            events: ['length 0.05', 'ended 0', 'recording 1', 'ended 1'], frames: takeFrames),
+        (row: 15, state: \endingQueued, does: "clearBuffer", command: clearSlot,
+            events: ['ended -1', 'canceled 0', 'length 0.0'], frames: 0),
+        (row: 15, state: \endingQueued, does: "recordBuffer, feedback > 0", command: playableTake,
+            events: ['canceled 0', 'length 0.05', 'ended -1', 'recording 1', 'ended 1'], frames: takeFrames),
+        (row: 14, state: \endingQueued, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['loadFailed 1 0', 'length 0.05', 'ended -1', 'recording 0', 'ended 0'], frames: takeFrames),
+        (row: 17, state: \endingQueued, does: "stopRecord", command: stopTake,
+            events: ['canceled 0', 'length 0.0', 'length 0.05', 'ended -1'], frames: takeFrames),
         (row: 15, state: \endingPlayable, does: "clearBuffer", command: clearSlot,
             events: ['ended 0', 'length 0.0'], frames: 0),
         (row: 15, state: \endingStopped, does: "clearBuffer", command: clearSlot,
@@ -904,10 +918,12 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
             events: ['canceled 0', 'recording 1', 'ended 1'], frames: levelFrames)
     ];
     // The slot's reports after a mark (up to the mark until, when given),
-    // as the rows write them (nil when the mark has not arrived)
+    // as the rows write them (nil when either mark has not arrived: the row
+    // then fails, naming its missing mark)
     var markAt = { arg mark; h.pollMessages.array.detectIndex({ arg msg; (msg[1] == markIndex) and: { msg[2] == mark } }) };
     var walkEvents = { arg mark, records, loads, until;
-        var start = markAt.(mark), stop = until !? { markAt.(until) } ? h.pollMessages.size, stride = engine.numBuffers, lengthStride = engine.bufferStateStride, events = List.new(64);
+        var start = markAt.(mark), stop = if (until.isNil) { h.pollMessages.size } { markAt.(until) };
+        var stride = engine.numBuffers, lengthStride = engine.bufferStateStride, events = List.new(64);
         var stateIndex = CronePollRegistry.getPollFromName(\recordState).index;
         var lengthIndex = CronePollRegistry.getPollFromName(\bufferState).index;
         var failedIndex = CronePollRegistry.getPollFromName(\bufferLoadFailed).index;
@@ -933,7 +949,7 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
     };
     var walkRow = { arg row;
         var entry = walkStates[row[\state]], phase, mark, records, loads, quiet, events, frames, sample, left, passed;
-        var held, reachMark, reachRecords, reachLoads, reachedEvents, fading, reachedState;
+        var held, reachMark, reachRecords, reachLoads, reachedEvents, fading, reachedState, unmarked;
         var begin = {
             marks = marks + 1;
             reachMark = marks;
@@ -964,16 +980,21 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
         left = h.synthNames(state[\tapGroup]).includes(\strataRecord) or: { engine.stopReplies[slot].notNil } or: { engine.slotRecording(slot) };
         events = mark !? { walkEvents.(mark, records, loads) };
         reachedEvents = reachMark !? { walkEvents.(reachMark, reachRecords, reachLoads, mark) };
+        // a mark that never arrived fails the row by name
+        unmarked = case
+        { mark.isNil } { "the command was never sent; " }
+        { markAt.(mark).isNil } { "the command's mark % never arrived; ".format(mark) }
+        { reachMark.notNil and: { markAt.(reachMark).isNil } } { "the state's mark % never arrived; ".format(reachMark) };
         reachedState = (phase == entry[\phase]) and: { held == true }
             and: { entry[\reached].isNil or: { reachedEvents == entry[\reached] } };
         frames = engine.bufferFrames[slot];
         sample = row[\kept] !? { h.bufferSample(engine.buffersL[slot], 100) };
-        passed = reachedState and: { (fading ? 0) == 0 } and: { quiet } and: { left.not } and: { walkMatches.(events, row[\events]) }
+        passed = unmarked.isNil and: { reachedState } and: { (fading ? 0) == 0 } and: { quiet } and: { left.not } and: { walkMatches.(events, row[\events]) }
             and: { if (row[\frames] == \held) { frames > 0 } { frames == row[\frames] } }
             and: { row[\kept].isNil or: { (sample - row[\kept]).abs < 1e-4 } };
-        check.(passed, "record: the state table's row % (%; %)%: %, % frames% (%phase %, reports %, % frames, sample %%%)".format(
+        check.(passed, "record: the state table's row % (%; %)%: %, % frames% (%%phase %, reports %, % frames, sample %%%)".format(
             row[\row], entry[\about], row[\does], row[\known] !? { arg issue; " (known, #%)".format(issue) } ? "",
-            row[\events].join(", "), row[\frames], row[\kept] !? { arg level; ", the audio kept" } ? "",
+            row[\events].join(", "), row[\frames], row[\kept] !? { arg level; ", the audio kept" } ? "", unmarked ? "",
             if (reachedState) { reachedEvents !? { arg each; "reached with %; ".format(each) } ? "" } { "the state not reached: % held %, its reports %; ".format(entry[\about], held, reachedEvents) },
             phase, events, frames, sample ? "not read", if (quiet and: { left.not }) { "" } { ", a take or a rename left" },
             fading !? { arg count; ", % record synths right after the command".format(count) } ? ""));
@@ -994,6 +1015,41 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
         try { walkRow.(row) } { arg error;
             freeMover.value;
             check.(false, "record: the state table's row % (threw %)".format(row[\row], error.errorString)) };
+    });
+    // #966: row 15's playable recording keeps the replace take's audio.
+    // The take records a level of 0.5 (the stopped peaks mover holding its
+    // end open), the input then falls silent, and a playable recording of
+    // feedback 1 sent while the take ends keeps the old audio whole: the
+    // take's frames are there once both have settled, its reports first
+    test.("record: a playable recording sent while a replace take is ending leaves the take's audio (#966)", {
+        var source, mark, records, events, sample, phase;
+        clearSlot.value;
+        soon.({ mover[\pending] == 0 });
+        source = Synth(\strataCheckLevelSource, [\out, engine.inputBus, \level, 0.5], inputSynth, \addBefore);
+        server.sync;
+        holdMover.value;
+        protect {
+            replaceTake.value;
+            reachPhase.(\ending);
+            phase = walkPhase.(slot);
+            source.free;
+            server.sync;
+            marks = marks + 1;
+            mark = marks;
+            NetAddr.localAddr.sendMsg('/poll/value', markIndex, mark);
+            records = state[\recordCounts][slot];
+            record.(slot, 0.05, 1.0, 1.0);
+        } { freeMover.value };
+        soon.({ engine.recordSynths[slot].isNil and: { state[\takes][slot].isNil } and: { mover[\pending] == 0 } });
+        0.05.wait;
+        events = walkEvents.(mark, records, engine.bufferLoads[slot]);
+        sample = h.bufferSample(engine.buffersL[slot], (takeFrames / 2).asInteger);
+        check.((phase == \ending) and: { events == ['length 0.05', 'ended 0', 'recording 1', 'ended 1'] }
+            and: { engine.bufferFrames[slot] == takeFrames } and: { (sample - 0.5).abs < 1e-4 },
+            "record: a playable recording sent while a replace take is ending leaves the take's audio (#966; phase %, reports %, % frames, sample %)".format(
+                phase, events, engine.bufferFrames[slot], sample));
+        clearSlot.value;
+        server.sync;
     });
     poll.stop; poll.setTime(period); poll.start;
     // Not a row of the table, but row 4's first guard (#374): a load that
