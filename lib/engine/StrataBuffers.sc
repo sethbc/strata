@@ -123,8 +123,9 @@
         // when the server's read fails after the slot was zeroed, once the
         // reads are done (the slot is then emptied). It names the slot, that
         // slot's load number and whether the slot was emptied
-        // (bufferLoadFailedValue: emptied by this load's read, with nothing
-        // changing it since, #1035), so Lua undoes exactly that load and
+        // (bufferLoadFailedValue: emptied when this load zeroed the slot, its
+        // read failed and nothing called slotChanged since, #1035), so Lua
+        // undoes exactly that load and
         // never a later one. Not periodic; a value request resends the last
         // report (Lua ignores a repeat).
         bufferLoadFailedPoll = this.addPoll(\bufferLoadFailed, { bufferLoadFailedPoll.value ? 0.0 }, false);
@@ -209,10 +210,11 @@
     // (load * 2 + emptied) * numBuffers + slot index, where load is the
     // slot's load number (counted from 1) and emptied is 1 when the failed
     // load left the slot empty (the server's read failed after the zeroing)
-    // and nothing has changed the slot since (slotChanges: no later load
-    // took effect, no clear or recording, #1035), 0 when it left the slot
-    // as it was or a later change decides it. Exact for the first 2^20 loads of a
-    // slot (a float32 holds integers exactly up to 2^24).
+    // and nothing has called slotChanged since (a later load taking effect,
+    // a clear, a recording, a stop, a load canceling a recording, #1035), 0
+    // when it left the slot as it was or such a change decides it. Exact
+    // for the first 2^20 loads of a slot (a float32 holds integers exactly
+    // up to 2^24).
     bufferLoadFailedValue { arg index, load, emptied;
         ^((((load * 2) + emptied.binaryValue) * numBuffers) + index).asFloat
     }
@@ -387,8 +389,9 @@
     // that fails (/fail for /b_readChannel: the file vanished, or became
     // unreadable, after the checks) leaves the slot zeroed, so it stays
     // empty and the load is reported as failed with the slot emptied; or,
-    // when a later load, clear or recording changed the slot meanwhile
-    // (slotChanges), as failed with the slot not emptied, the later change
+    // when anything called slotChanged meanwhile (a later load taking
+    // effect, a clear, a recording, a stop, a load canceling a recording),
+    // as failed with the slot not emptied, the later change
     // deciding what it holds: so an emptied report says the slot is empty
     // with no load applied since, which Lua relies on to undo a load it no
     // longer tracks (#1035).
@@ -428,11 +431,12 @@
                 context.server.sync;  // answered once both reads are done (after any /fail)
                 failWatcher.free;
                 if (readFailed) {
-                    postln("strata: the server could not read sound file " ++ path ++ "; buffer " ++ (index + 1) ++ " emptied");
-                    // emptied only while nothing has changed the slot
-                    // since: a later load, clear or recording decides it
-                    // (#1035)
+                    // emptied only while nothing has called slotChanged
+                    // since: a later load, clear, recording or stop
+                    // decides what the slot holds (#1035)
                     emptied = slotChanges[index] == change;
+                    postln("strata: the server could not read sound file " ++ path ++ "; buffer " ++ (index + 1)
+                        ++ (if (emptied) { " emptied" } { " changed since by a later command" }));
                     if (emptied) {
                         bufferSampleRates[index] = context.server.sampleRate;
                         this.clearSlotPeaks(index);

@@ -949,26 +949,24 @@ return function(S)
         break
       end
     end
+    -- A failure with no entry, in a slot that tracks no load: the failures
+    -- of every later load gave back a load whose own entry the bound pushed
+    -- out, and that load's failure empties the slot as a tracked one's
+    -- does. (#980's twin) A restore's: its load (load 1, init's first of
+    -- the slot) is the only one whose outcome is still to come, so this is
+    -- its failure (a repeated report of a later one's names another
+    -- number), and a restore loads into the empty slot of a fresh script.
+    -- (#1035) A plain load's, awaiting its read, on an emptied report:
+    -- the engine's slot is empty with no load applied since (every later
+    -- load was rejected), whichever load the report names
+    local forgotten_restore = buffer.restoring and load_number == 1
+    local forgotten_load = emptied and buffer.confirm_since ~= nil and not buffer.restoring
+      and buffer.checking_from == nil and not buffer.recording and not buffer.finishing
     local failed, left
     if found then
       failed = table.remove(pending, found)
       left = emptied and empty_buffer_state(false) or resolve_previous(slot, failed.previous)
-    elseif #pending == 0 and buffer.restoring and load_number == 1 then
-      -- (#980's twin) a restore that tracks no load was given back by the
-      -- failures of every later one, its own load pushed out of the list:
-      -- that load (load 1, init's first of the slot) is the only one whose
-      -- outcome is still to come, so this is its failure (a repeated report
-      -- of a later one's names another number), and it leaves what a
-      -- tracked restore's leaves (a restore loads into the empty slot of a
-      -- fresh script)
-      failed, left = {path = buffer.path}, empty_buffer_state(false)
-    elseif emptied and #pending == 0 and buffer.confirm_since ~= nil and not buffer.restoring
-        and buffer.checking_from == nil and not buffer.recording and not buffer.finishing then
-      -- (#1035) a plain load given back by the failures of every later
-      -- one, its own pushed out of the list, awaiting its read: an emptied
-      -- report says the engine's slot is empty with no load applied since
-      -- (every later load was rejected), whichever load it names, so the
-      -- slot is empty as a tracked load's emptied failure leaves it
+    elseif #pending == 0 and (forgotten_restore or forgotten_load) then
       failed, left = {path = buffer.path}, empty_buffer_state(false)
     else
       return
