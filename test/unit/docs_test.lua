@@ -1606,10 +1606,12 @@ CI_WORKFLOW.SECONDS = { after_downloads = 60, runner_steps = 60, list_work = 5,
   lua = { checkout = 7, restore = 10, save = 10, after_downloads = 15, runner_steps = 6, suite = 471 } }
 
 -- #999: a list step's `apt-get update` runs, each with its limit and its
--- kill-after in seconds, in the order of the step's text (empty without a step)
+-- kill-after in seconds, in the order of the step's text (empty without a
+-- step). #1005: with any options between the network options and update
+-- (the pinned piece says which)
 function CI_WORKFLOW.update_tries(step)
   local tries = {}
-  for kill, seconds in (step and step.text or ""):gmatch("sudo timeout %-%-kill%-after=(%d+) (%d+) apt%-get %$APT_NETWORK_OPTIONS update") do
+  for kill, seconds in (step and step.text or ""):gmatch("sudo timeout %-%-kill%-after=(%d+) (%d+) apt%-get %$APT_NETWORK_OPTIONS [^\n]-update") do
     tries[#tries + 1] = { kill = tonumber(kill), seconds = tonumber(seconds) }
   end
   return tries
@@ -1725,23 +1727,45 @@ end
 -- with https://archive.ubuntu.com first in the runner's mirror list, by
 -- the download retry's own sed; when neither try updates the lists, the
 -- step fails by its ::error:: line before any list is read. So the SHA512
--- list is always made from lists this job's update fetched
+-- list is always made from lists this job's update fetched.
+-- #1005: apt-get update exits 0 when a list fails with only a warning
+-- (`W: Failed to fetch`), and leaves the old list in place. So both tries
+-- read Ubuntu's sources file alone (the runner's third-party sources, which
+-- these jobs install nothing from, fail nothing) with --error-on=any, so a
+-- list of Ubuntu's that did not download exits 100, gets the retry through
+-- the reorder and then fails by the ::error:: line; --no-list-cleanup
+-- leaves the other sources' lists as they were. A sources file that is
+-- missing or names nothing makes an update that reads nothing and exits 0,
+-- so the step then checks that what the update read holds Ubuntu's main
+-- and universe lists for the runner's release, and fails by its own
+-- ::error:: line if not. (Whether a list is newer than the step's start
+-- cannot tell: a list that was already current is a Hit, and apt leaves
+-- its file's time as it was.)
 CI_WORKFLOW.LIST_UPDATE = [==[
 set -o pipefail
 mirrors=/etc/apt/apt-mirrors.txt
+ubuntu_only=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
 status=0
-sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update || status=$?
+sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any --no-list-cleanup update || status=$?
 if [ "$status" -ne 0 ] && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
   echo "::warning::apt's update failed or was unfinished after 45 s (exit $status): trying https://archive.ubuntu.com first"
   sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
   cat "$mirrors"
   status=0
-  sudo timeout --kill-after=5 60 apt-get $APT_NETWORK_OPTIONS update || status=$?
+  sudo timeout --kill-after=5 60 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any --no-list-cleanup update || status=$?
 fi
 if [ "$status" -ne 0 ]; then
-  echo "::error::apt's lists did not update (exit $status; 124 or 137: too slow). Nothing was installed or checked: rerun this job"
+  echo "::error::apt's lists did not update (exit $status; 124 or 137: too slow; 100: a list of Ubuntu's did not download, apt's E: lines above name it). Nothing was installed or checked: rerun this job"
   exit 1
 fi
+release=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release) || release=
+targets=$(apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" indextargets --format '$(RELEASE) $(COMPONENT) $(CREATED_BY)') || targets=
+for component in main universe; do
+  if ! grep -qx "$release $component Packages" <<< "$targets"; then
+    echo "::error::Ubuntu's $release $component list is not among the lists the update read: the SHA512 list would come from a stale one. Nothing was installed or checked"
+    exit 1
+  fi
+done
 ]==]
 CI_WORKFLOW.PINNED = {}
 CI_WORKFLOW.PINNED["engine-shard"] = {
@@ -2062,14 +2086,22 @@ end
 -- hyphens or underscores, so an option and its setting are one word), a
 -- change of the sources, and an install that names a file, which takes the
 -- file as it is, not as apt's lists give it
+-- #1005: the one line that may name Ubuntu's sources file is the list
+-- step's ubuntu_only, exactly as pinned (CI_WORKFLOW.LIST_UPDATE): it only
+-- points the update at the file, read as it is, and names no variable a
+-- later line could write through
+CI_WORKFLOW.UBUNTU_ONLY = CI_WORKFLOW.LIST_UPDATE:match("\n(ubuntu_only=[^\n]*)\n")
 function CI_WORKFLOW.apt_weakenings(workflow)
   local found = {}
   for line in (workflow .. "\n"):gmatch("([^\n]*)\n") do
     local plain = line:lower():gsub("[-_]", "")
+    local reads_ubuntu = line:match("^%s*(.-)%s*$") == CI_WORKFLOW.UBUNTU_ONLY
     for _, word in ipairs({ "allowunauthenticated", "allowinsecurerepositories", "allowdowngradetoinsecurerepositories",
         "allowweakrepositories", "checkvaliduntil", "checkdate", "forceyes", "verifypeer", "verifyhost", "trusted=yes",
         "sources.list" }) do
-      if plain:find(word, 1, true) then found[#found + 1] = word .. ": " .. line:match("^%s*(.-)%s*$") end
+      if plain:find(word, 1, true) and not (reads_ubuntu and word == "sources.list") then
+        found[#found + 1] = word .. ": " .. line:match("^%s*(.-)%s*$")
+      end
     end
     for _, words in ipairs({ "dpkg -i", "dpkg --install", "dpkg --unpack" }) do
       if line:find(words, 1, true) then found[#found + 1] = words .. ": " .. line:match("^%s*(.-)%s*$") end
@@ -2332,7 +2364,7 @@ test("the workflow refuses every weakening of apt's checks and every install of 
     { name = "Verify-Peer=false", expect = "Verify-Peer", edits = on_install("-o Acquire::https::Verify-Peer=false") },
     { name = "Verify-Host=false", expect = "Verify-Host", edits = on_install("-o Acquire::https::Verify-Host=false") },
     { name = "--allow-insecure-repositories", expect = "--allow-insecure-repositories",
-      edits = { "sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update", "sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS --allow-insecure-repositories update" } },
+      edits = { '45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}"', '45 apt-get $APT_NETWORK_OPTIONS --allow-insecure-repositories "${ubuntu_only[@]}"' } },
     { name = "AllowWeakRepositories", expect = "AllowWeakRepositories", edits = on_install("-o Acquire::AllowWeakRepositories=true") },
     { name = "Check-Date", expect = "Check-Date", edits = on_install("-o Acquire::Check-Date=false") },
     { name = "apt-get install of ./x.deb", expect = "./x.deb", edits = instead("sudo apt-get $APT_NETWORK_OPTIONS install -y ./x.deb") },
@@ -2347,6 +2379,13 @@ test("the workflow refuses every weakening of apt's checks and every install of 
     { name = "dpkg --install", expect = "dpkg --install", edits = instead('sudo dpkg --install "$debs"/*.deb') },
     { name = "dpkg -i", expect = "dpkg -i", edits = instead('sudo dpkg -i "$debs"/*.deb') },
     { name = "dpkg --unpack", expect = "dpkg --unpack", edits = instead('sudo dpkg --unpack "$debs"/*.deb') },
+    -- #1005: the list step's ubuntu_only names Ubuntu's sources file, and
+    -- only that line, exactly as pinned, may: a write to the file, or the
+    -- line with anything added, is still refused
+    { name = "a write to Ubuntu's sources file", expect = "sources.list: echo",
+      edits = instead('echo "Types: deb" | sudo tee -a /etc/apt/sources.list.d/ubuntu.sources') },
+    { name = "the list's ubuntu_only reading a second file", expect = "sources.list: ubuntu_only=(",
+      edits = { "-o Dir::Etc::sourceparts=-)", "-o Dir::Etc::sourceparts=- -o Dir::Etc::sourcelist=/etc/apt/sources.list)" } },
   }
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, cases, "engine-shard")
 end)
@@ -2596,20 +2635,91 @@ test("a list step's apt-get update runs under a limit, then once more with archi
   end
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, {
     { name = "the Lua list's update with no limit", job = "lua-suite",
-      expect = "lua-suite: the list step's update differs from its pinned text at line 4:",
-      edits = { "sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update", "sudo apt-get $APT_NETWORK_OPTIONS update" } },
+      expect = "lua-suite: the list step's update differs from its pinned text at line 5:",
+      edits = { 'sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}"', 'sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}"' } },
     { name = "the shard's retry only on a kill", job = "engine-shard",
-      expect = "engine-shard: the list step's update differs from its pinned text at line 5:",
+      expect = "engine-shard: the list step's update differs from its pinned text at line 6:",
       edits = { 'if [ "$status" -ne 0 ] && grep', 'if { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; } && grep' } },
     { name = "the Lua list going on after neither update", job = "lua-suite",
-      expect = "lua-suite: the list step's update differs from its pinned text at line 14:",
-      edits = { "            exit 1\n          fi\n          : > ", "            true\n          fi\n          : > " } },
+      expect = "lua-suite: the list step's update differs from its pinned text at line 15:",
+      edits = { "            exit 1\n          fi\n          release=", "            true\n          fi\n          release=" } },
     { name = "the shard's list with a line inside its update", job = "engine-shard",
       expect = "engine-shard: the list step's update differs from its pinned text at line 2:",
       edits = { "          set -o pipefail\n          mirrors=", "          set -o pipefail\n          true\n          mirrors=" } },
     { name = "the Lua list's lists restored before the update", job = "lua-suite",
       expect = "lua-suite: the list step's update is not the script's first line: line 1 is `sudo cp -r \"$RUNNER_TEMP/lists\" /var/lib/apt/`",
       edits = { "          set -o pipefail\n          mirrors=", "          sudo cp -r \"$RUNNER_TEMP/lists\" /var/lib/apt/\n          set -o pipefail\n          mirrors=" } },
+  })
+end)
+
+-- #1005: apt-get update exits 0 when a list fails with only a warning
+-- (`W: Failed to fetch ...`, `W: Some index files failed to download`),
+-- and the old list stays: the SHA512 list would come from it. So in both
+-- jobs both tries read Ubuntu's sources file alone with --error-on=any (a
+-- list of Ubuntu's that did not download exits 100, so it gets the retry
+-- through the reorder, then the ::error:: line) and --no-list-cleanup (the
+-- runner's third-party sources are neither read nor emptied, so they fail
+-- nothing); then the step checks that what the update read holds Ubuntu's
+-- main and universe lists for the runner's release, so a sources file that
+-- is missing or names nothing, which apt reads as nothing to update and
+-- exit 0, fails by its own ::error:: line before the SHA512 list is made
+test("a list step's update reads Ubuntu's sources alone, fails on any of their errors, and checks it read main and universe, in both jobs (#1005)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  assert_equal(table.concat(CI_WORKFLOW.cache_problems(workflow), " | "), "", "the workflow's cache problems")
+  assert_equal(CI_WORKFLOW.UBUNTU_ONLY,
+    "ubuntu_only=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)",
+    "the update reads Ubuntu's sources file and no sources.list.d part")
+  for _, cache in ipairs(CI_WORKFLOW.CACHES) do
+    local job, at = CI_WORKFLOW.cache_steps(workflow, cache)
+    local list = job and at.list and job.steps[at.list]
+    assert_true(list ~= nil, cache.where .. " has its list step")
+    local strict, tries = 0, 0
+    for _, line in ipairs(CI_WORKFLOW.script(list)) do
+      if line:find("apt%-get [^\n]-update") then
+        tries = tries + 1
+        if line:find('apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any --no-list-cleanup update', 1, true) then
+          strict = strict + 1
+        end
+      end
+    end
+    assert_equal(tries, 2, cache.where .. ": the list's update tries")
+    assert_equal(strict, tries, cache.where .. ": every update of the list reads Ubuntu's sources alone, fails on any of their errors and empties no other list")
+    local read = list.text:find("for component in main universe; do", 1, true)
+    local stale = list.text:find("::error::Ubuntu's $release $component list is not among the lists the update read", 1, true)
+    local updated = list.text:find("::error::apt's lists did not update", 1, true)
+    local made = list.text:find(': > "$RUNNER_TEMP/empty-status"', 1, true)
+    assert_true(updated and read and stale and made and updated < read and read < stale and stale < made,
+      cache.where .. ": after the update, a list of main or universe the update did not read fails the step before the SHA512 list is made")
+  end
+  -- the check, lines 17 to the piece's end, as the workflow indents it
+  local check, number = {}, 0
+  for line in CI_WORKFLOW.LIST_UPDATE:gmatch("([^\n]*)\n") do
+    number = number + 1
+    if number >= 17 then check[#check + 1] = "          " .. line .. "\n" end
+  end
+  check = table.concat(check)
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, {
+    { name = "the Lua list's update reading every source", job = "lua-suite",
+      expect = "lua-suite: the list step's update differs from its pinned text at line 3:",
+      edits = { " -o Dir::Etc::sourceparts=-)", ")" } },
+    { name = "the shard's update trusting a warning", job = "engine-shard",
+      expect = "engine-shard: the list step's update differs from its pinned text at line 5:",
+      edits = { '45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any ', '45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" ' } },
+    { name = "the Lua list's retry trusting a warning", job = "lua-suite",
+      expect = "lua-suite: the list step's update differs from its pinned text at line 11:",
+      edits = { '60 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any ', '60 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" ' } },
+    { name = "the shard's update emptying the third-party lists", job = "engine-shard",
+      expect = "engine-shard: the list step's update differs from its pinned text at line 5:",
+      edits = { '45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any --no-list-cleanup update', '45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any update' } },
+    { name = "the shard's list with no check of what the update read", job = "engine-shard",
+      expect = { "engine-shard: the list step's update differs from its pinned text at line 17:", 'found `: > "$RUNNER_TEMP/empty-status"`' },
+      edits = { check, "" } },
+    { name = "the Lua list checking main alone", job = "lua-suite",
+      expect = "lua-suite: the list step's update differs from its pinned text at line 19:",
+      edits = { "for component in main universe; do", "for component in main; do" } },
+    { name = "the shard's list going on after a stale list", job = "engine-shard",
+      expect = "engine-shard: the list step's update differs from its pinned text at line 22:",
+      edits = { "              exit 1\n            fi\n          done\n", "              true\n            fi\n          done\n" } },
   })
 end)
 
