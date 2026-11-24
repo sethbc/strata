@@ -5376,4 +5376,78 @@ test("play_state names stopped, armed and playing", function()
   assert_equal(seq.play_state(), "stopped")
 end)
 
+-- #921: the three readers SEQ draws, each read through its own way in. The
+-- stub clock runs at 120 BPM: a bar (4 beats) is 2 s
+test("reset_armed, chain_place and failed_outputs read the sequencer's state", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  -- the division reset: armed by the trigger while playing, until its bar
+  S.patterns[1][1] = 15
+  params:set("seq_division_reset", 1)
+  assert_equal(seq.reset_armed(), false, "stopped: the trigger arms nothing")
+  pattern_clock_start()
+  context.clock.run_for(0.8)
+  assert_equal(seq.reset_armed(), false, "playing, no reset asked for")
+  params:set("seq_division_reset", 1)
+  assert_equal(seq.reset_armed(), true, "the reset waits for the bar")
+  context.clock.run_for(1.2 - 0.01)
+  assert_equal(seq.reset_armed(), true, "still waiting just before the bar")
+  context.clock.run_for(0.02)
+  assert_equal(seq.reset_armed(), false, "the bar took it")
+  params:set("seq_division_reset", 1)
+  pattern_clock_stop()
+  assert_equal(seq.reset_armed(), false, "a stop drops it")
+  -- the chain: its scene and the whole bars to its next link
+  clear_pattern(1); S.patterns[1][1] = 15; capture_scene(1)
+  clear_pattern(1); S.patterns[1][3] = 15; capture_scene(2)
+  params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 2); params:set("seq_chain_bars", 2)
+  assert_equal(seq.chain_place(), nil, "the chain off: no place")
+  pattern_clock_start()
+  assert_equal(seq.chain_place(), nil, "the chain off while playing: no place")
+  pattern_clock_stop()
+  params:set("seq_chain", 1)
+  assert_equal(seq.chain_place(), nil, "the chain on, stopped: no place")
+  pattern_clock_start()
+  local slot, bars = seq.chain_place()
+  assert_equal(slot, 1, "a start links the range's first scene")
+  assert_equal(bars, 2, "two bars to the next link")
+  context.clock.run_for(2.0 + 0.01)
+  slot, bars = seq.chain_place()
+  assert_equal(slot, 1, "still on scene 1 a bar on"); assert_equal(bars, 1, "one bar to go")
+  context.clock.run_for(2.0)
+  slot, bars = seq.chain_place()
+  assert_equal(slot, 2, "the link moved to scene 2"); assert_equal(bars, 2, "two bars to the next")
+  pattern_clock_stop()
+  assert_equal(seq.chain_place(), nil, "a stop: no place")
+  -- the chain switched on while playing: no scene linked yet, the next bar's link
+  params:set("seq_chain", 0)
+  pattern_clock_start()
+  context.clock.run_for(0.3)
+  params:set("seq_chain", 1)
+  slot, bars = seq.chain_place()
+  assert_equal(slot, nil, "no scene linked yet"); assert_equal(bars, 1, "it links at the next bar")
+  params:set("seq_chain", 0)
+  assert_equal(seq.chain_place(), nil, "the chain off: no place")
+  pattern_clock_stop()
+  -- a failed output: skipped since the last start, by name, sorted
+  local failing = true
+  local function broken(name)
+    S.register_step_output({name = name, play = function() if failing then error("boom") end end})
+  end
+  broken("zeta"); broken("alpha")
+  assert_equal(table.concat(seq.failed_outputs(), " "), "", "none before a start")
+  local real_print = _G.print
+  _G.print = function() end
+  pattern_clock_start()
+  context.clock.run_for(0.3)
+  _G.print = real_print
+  assert_equal(table.concat(seq.failed_outputs(), " "), "alpha zeta", "both failed, sorted")
+  pattern_clock_stop()
+  assert_equal(table.concat(seq.failed_outputs(), " "), "alpha zeta", "a stop keeps them")
+  failing = false
+  pattern_clock_start()
+  assert_equal(table.concat(seq.failed_outputs(), " "), "", "a start plays them again")
+  pattern_clock_stop()
+end)
+
 end

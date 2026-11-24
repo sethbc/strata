@@ -52,6 +52,12 @@ return function(S)
     -- 3.9 (#931): after a connected grid's size with no layout
     -- (S.lib.grid_core.layout_of)
     no_layout = " no layout",
+    -- 3.9 (#921): the transport row's value while seq_follow_transport is on
+    -- and nothing follows (the internal clock: S.lib.sequencer.follows_transport),
+    -- and the status row of the count's offset (S.lib.sequencer.count_offset,
+    -- in beats) while the patterns play with one
+    follow_inactive = "follow [int]",
+    count_offset_format = "count offset: %+.2f beats",
     -- a grid port's rotation field (kind "rotation", #323): its setting
     -- (S.lib.grid_core.rotation, 0-3) shown in degrees; the fields, one per
     -- port, are made at the first look (grid core sets S.MAX_GRID_PORTS)
@@ -89,8 +95,11 @@ return function(S)
       M.flash(SETUP_PAGE.load_texts[outcome],
         outcome == "confirm" and S.lib.scenes.SCENE_LOAD.confirm_seconds or nil)
     end},
-    -- 3.4: the patterns follow the clock's transport (lib/sequencer.lua)
-    {label = "transport", kind = "param", param_id = "seq_follow_transport", binary = {[0] = "off", [1] = "follow"}},
+    -- 3.4: the patterns follow the clock's transport (lib/sequencer.lua);
+    -- 3.9 (#921): "follow [int]" while on and the clock is internal (inactive)
+    {label = "transport", kind = "param", param_id = "seq_follow_transport", binary = {[0] = "off", [1] = "follow"},
+      inactive = function() return not S.lib.sequencer.follows_transport() end,
+      inactive_text = SETUP_PAGE.follow_inactive},
     -- 3.8: the scale and tuning editor (S.lib.ui_scale_editor, a modal
     -- owner), appended after transport (ruling 44)
     {label = "scale & tuning", kind = "action", hint = "open", run = function() S.lib.ui_scale_editor.open() end},
@@ -255,6 +264,14 @@ return function(S)
     end
     add_rotation_rows(rows)
     add_performance_rows(rows)
+    -- #921: the sequencer's count ahead of (or behind) the clock's after a
+    -- transport start the patterns did not follow; the next start drops it,
+    -- so it shows only while they play. The first status line, so the view
+    -- on the last field shows it
+    local offset = S.lib.sequencer.count_offset()
+    if S.pattern_playing and offset ~= 0 then
+      table.insert(rows, {selectable = false, text = string.format(SETUP_PAGE.count_offset_format, offset)})
+    end
     table.insert(rows, {selectable = false, text = S.performance.tier == "high"
       and string.format("running: high, %d s", S.performance.buffer_seconds) or "running: standard"})
     local running_note = S.lib.performance.running_note()
@@ -287,7 +304,11 @@ return function(S)
       return field.key == "buffer_seconds" and (value .. " s") or value
     end
     if field.format then return string.format(field.format, params:get(field.param_id)) end
-    if field.binary then return field.binary[params:get(field.param_id)] end
+    if field.binary then
+      local value = params:get(field.param_id)
+      if value == 1 and field.inactive and field.inactive() then return field.inactive_text end
+      return field.binary[value]
+    end
     if field.param_id == "mutation_enabled" then return params:get(field.param_id) == 1 and "on" or "off" end
     return params:string(field.param_id)
   end
@@ -569,6 +590,18 @@ return function(S)
     layout_states = {
       {name = "scrolled to the start", setup = function() enc(2, -20) end},
       {name = "scrolled to the end", setup = function() enc(2, 20) end},
+      -- 3.9 (#921): the transport row inactive on the internal clock, and
+      -- the count's offset after an unfollowed reset, at the last field
+      {name = "transport follow on the internal clock", setup = function()
+        enc(2, -20); enc(2, 11)  -- the transport row
+      end},
+      {name = "count offset after an unfollowed reset", setup = function(context)
+        S.patterns[1][1] = S.constants.MAX_STEP_LEVEL
+        pattern_clock_start()
+        context.clock.run_for(1.3)
+        context.clock.transport_start()
+        enc(2, 20)
+      end},
       {name = "two grids scrolled to the end", setup = function(context)
         plug_grids(context); context.arc.plug(1); enc(2, 20)
       end},

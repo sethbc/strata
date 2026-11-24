@@ -3,7 +3,9 @@
 -- views. The pattern view: one row per voice (its number, sixteen cells at
 -- the steps' levels, the steps past the voice's length as dots, a mark on
 -- a gated voice, + or - for running), each row's playing column its own
--- voice's sounding step, a step cursor on the selected voice's row. E2
+-- voice's sounding step, a step cursor on the selected voice's row, and
+-- a status line under the rows (the chain's place, an armed division
+-- reset, the step outputs that failed: S.lib.sequencer's readers). E2
 -- moves the step, E3 sets its level, K2 plays/stops, K3 turns the step on
 -- or off; ALT+E2 moves to another voice's row (the selected voice
 -- follows), ALT+E3 the tempo, ALT+K2 randomizes (on release, again within
@@ -35,7 +37,8 @@ return function(S)
   local field_list = S.lib.ui_field_list
   local fit_text = S.lib.ui_text.fit_text
 
-  -- The pattern view (design §5): rows 6 px apart from y 13, each the
+  -- The pattern view (design §5): rows 5 px apart from y 13 (6 px before
+  -- 3.9's status line, #921), each the
   -- voice's number at x 0 (baseline text_offset below the row's top), 16
   -- cells of 4x4 px, 6 px apart from x 10, and + or - right-aligned at 127.
   -- An empty step is an outline at empty_level, so a level-1 step never
@@ -44,7 +47,7 @@ return function(S)
   -- 6x6 outline at 15. A step past the voice's length is a 1x1 dot at
   -- dot_level, dot_offset into its cell; a gated voice's row shows
   -- gate_mark right-aligned at gate_right (3.4)
-  local SEQ_PAGE = {rows_y = 13, row_spacing = 6, label_x = 0, text_offset = 5, cells_x = 10,
+  local SEQ_PAGE = {rows_y = 13, row_spacing = 5, label_x = 0, text_offset = 5, cells_x = 10,
     cell_spacing = 6, cell_size = 4, state_right = 127, empty_level = 1, playing_outline_level = 4,
     playing_boost = 4, cursor_level = 15, label_level = 4, selected_label_level = 15,
     dot_offset = 1, dot_level = 1, gate_mark = "G", gate_right = 121,
@@ -53,7 +56,16 @@ return function(S)
     -- row (a capital reads as MAIN's [F], frozen), 4 px from x 108, three
     -- blank columns after step 16's cursor (to 104) and a space (4 px)
     -- before the G (from 116; #735: "fill" would touch it)
-    fill_mark = "f", fill_x = 108, fill_level = 15}
+    fill_mark = "f", fill_x = 108, fill_level = 15,
+    -- 3.9 (#921): the status line at status_x, baseline status_y, between
+    -- the last row (its text on y 43-47) and the hint row (57-61), within
+    -- status_right: the chain's place, an armed division reset and the step
+    -- outputs that failed since the last start, each in brackets, a space
+    -- apart, left to right; nothing while none holds. The long forms while
+    -- they fit, else the short ones (bars as "b", the reset's "at bar"
+    -- dropped), the outputs' names cut to the room left
+    status_x = 0, status_y = 55, status_right = 128, status_level = 10,
+    chain_none = "chain [none]", reset_long = "[reset at bar]", reset_short = "[reset]"}
 
   -- The edit view (design 8.6): "v<voice> step <n>" at 0,line_y and a strip
   -- of the voice's steps (cells strip_cell px, strip_spacing apart from
@@ -179,6 +191,53 @@ return function(S)
     screen.fill()
   end
 
+  -- The chain's mark (#921): "[S<slot> <n> bars]" ("1 bar"; short
+  -- "[S<slot> <n>b]"), "[chain <n> bars]" before its first link, "chain
+  -- [none]" with no playable scene in its range (SCENES' "seq on [none]"
+  -- form); nil while the chain has no place (off, or the patterns stop)
+  local function chain_mark(short)
+    local sequencer = S.lib.sequencer
+    local slot, bars = sequencer.chain_place()
+    if not bars then return nil end
+    if not slot and #S.lib.scenes.playable_slots(params:get("seq_chain_from"), params:get("seq_chain_scenes")) == 0 then
+      return SEQ_PAGE.chain_none
+    end
+    local name = slot and ("S" .. slot) or "chain"
+    if short then return "[" .. name .. " " .. bars .. "b]" end
+    return "[" .. name .. " " .. bars .. (bars == 1 and " bar]" or " bars]")
+  end
+
+  -- The status line's text (#921), or nil while none of its three holds:
+  -- the long forms when the line fits them, else the short ones, the failed
+  -- outputs' names (sorted, space-separated) or, when they do not fit, the
+  -- first cut to the room left and "+<n>" for the others
+  function M.status_text()
+    local sequencer = S.lib.sequencer
+    local failed = sequencer.failed_outputs()
+    local function line(short)
+      local parts = {}
+      parts[#parts + 1] = chain_mark(short)
+      if sequencer.reset_armed() then
+        parts[#parts + 1] = short and SEQ_PAGE.reset_short or SEQ_PAGE.reset_long
+      end
+      if #failed > 0 then
+        local before = #parts > 0 and (table.concat(parts, " ") .. " ") or ""
+        local room = SEQ_PAGE.status_right - SEQ_PAGE.status_x - screen.text_extents(before .. "[ off]")
+        local names = table.concat(failed, " ")
+        if short and screen.text_extents(names) > room then
+          -- the first name cut, and how many more there are
+          local more = #failed > 1 and (" +" .. (#failed - 1)) or ""
+          names = fit_text(failed[1], room - screen.text_extents(more)):gsub("%s+$", "") .. more
+        end
+        parts[#parts + 1] = "[" .. names .. " off]"
+      end
+      return #parts > 0 and table.concat(parts, " ") or nil
+    end
+    local long = line(false)
+    if long == nil or screen.text_extents(long) <= SEQ_PAGE.status_right - SEQ_PAGE.status_x then return long end
+    return line(true)
+  end
+
   local function redraw_pattern_view()
     for voice_idx = 1, NUM_VOICES do
       local y = SEQ_PAGE.rows_y + (voice_idx - 1) * SEQ_PAGE.row_spacing
@@ -218,6 +277,13 @@ return function(S)
     screen.rect(SEQ_PAGE.cells_x + (cursor_step() - 1) * SEQ_PAGE.cell_spacing - 1, cursor_y - 1,
       SEQ_PAGE.cell_size + 2, SEQ_PAGE.cell_size + 2)
     screen.stroke()
+
+    local status = M.status_text()
+    if status then
+      screen.level(SEQ_PAGE.status_level)
+      screen.move(SEQ_PAGE.status_x, SEQ_PAGE.status_y)
+      screen.text(status)
+    end
   end
 
   -- Step attributes -------------------------------------------------------
@@ -1039,6 +1105,38 @@ return function(S)
     S.lib.sequencer.set_step_attr(voice_idx, step, "notes", notes)
   end
 
+  -- #921's status line: a step output that fails at its first hit (a
+  -- registered one with a long name, or Strata's targets output made to
+  -- fail), its maiden line kept off the test run's output
+  local function failing_output(name)
+    local record
+    for _, output in ipairs(S.registry.step_outputs) do
+      if output.name == name then record = output end
+    end
+    local function fail() error("layout state") end
+    if not record then
+      record = {name = name, play = fail}
+      S.register_step_output(record)
+    end
+    record.available = nil
+    record.play = fail
+  end
+  local function quietly(fn)
+    local real_print = print
+    print = function() end
+    fn()
+    print = real_print
+  end
+  -- the chain on S16 at 16 bars (its widest), just started
+  local function chain_on_s16()
+    S.patterns[1][1] = MAX_STEP_LEVEL
+    capture_scene(S.constants.NUM_SCENES)
+    params:set("seq_chain_from", S.constants.NUM_SCENES)
+    params:set("seq_chain_scenes", 1)
+    params:set("seq_chain_bars", S.lib.sequencer.SEQ.max_chain_bars)
+    params:set("seq_chain", 1)
+  end
+
   local layout_states = {
     {name = "cursor-v1-s1", setup = show_cursor(1, 1)},
     {name = "cursor-v1-s16", setup = show_cursor(1, PATTERN_LENGTH)},
@@ -1093,6 +1191,34 @@ return function(S)
     {name = "fill held, ungated", setup = function()
       show_cursor(1, PATTERN_LENGTH)()
       S.lib.conditions.hold_fill("layout", true)
+    end},
+    -- #921: the status line, each mark at its widest, then all three
+    {name = "chain on S16 at 16 bars", setup = function()
+      chain_on_s16()
+      show_cursor(NUM_VOICES, PATTERN_LENGTH)()
+      pattern_toggle()
+    end},
+    {name = "chain with no scene to link", setup = function()
+      params:set("seq_chain", 1)
+      pattern_toggle()
+    end},
+    {name = "division reset armed", setup = function(context)
+      show_cursor(NUM_VOICES, PATTERN_LENGTH)()
+      pattern_toggle()
+      context.clock.run_for(0.3)
+      params:set("seq_division_reset", 1)
+    end},
+    {name = "a step output with a long name failed", setup = function()
+      S.patterns[1][1] = MAX_STEP_LEVEL
+      failing_output("an output with a very long name")
+      quietly(pattern_toggle)
+    end},
+    {name = "chain, reset and a failed output at once", setup = function(context)
+      chain_on_s16()
+      failing_output("targets")
+      show_cursor(NUM_VOICES, PATTERN_LENGTH)()
+      quietly(pattern_toggle)
+      params:set("seq_division_reset", 1)
     end},
     -- the pattern view's widest ALT hint: K2:edit K3:clr E3:bpm
     {name = "pattern view, ALT+K2 held: K2:edit", setup = function(context)
