@@ -558,7 +558,7 @@
                     this.holdCopyRing(voice);
                     landed = true;
                 } {
-                    // a head read the server never answered (ringHeadFrame's
+                    // a head read the server never answered (headReadSeconds,
                     // 1 s): no copy was made or none could be judged
                     if (current.value and: { refused.not }) {
                         if (head.isNil or: { after.isNil }) { missing = missing + 1 } {
