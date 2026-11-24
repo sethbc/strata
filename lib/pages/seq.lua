@@ -986,6 +986,10 @@ return function(S)
   -- S.lib.ui_alt.k2_held(), whose press marks the opening forgets too
 
   editor_owner = {
+    -- STEP in the header while it is on top (#901); close as K2, for the
+    -- port that opened it (#899)
+    name = "STEP",
+    close = function() if editor then M.close_step_editor(editor.port) end end,
     draw = function() if editor then draw_edit_view(views.editor) end end,
     hints = function(alt_held)
       if editor == nil then return "" end

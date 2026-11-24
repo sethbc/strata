@@ -8,7 +8,7 @@ Each section starts with a title line: its name at the left and, at the right, w
 - **a value** - a setting saved with a PSET, or a rig setting (below); E3 changes it, and the value shows at the right
 - **an action** - K3 does what the hint row names (`K3:rescan` on the `remote` section's rescan row, ...); the right side shows what it last did
 - **a status line** - text only, dim, which the cursor skips
-- **a detail** - a row with its own short list (a CC slot's four settings, for example): K3 opens the list, E2 moves in it, E3 changes the setting under the cursor, K2 closes it
+- **a detail** - a row with its own short list (a CC slot's four settings, for example): K3 opens the list, E2 moves in it, E3 changes the setting under the cursor, K2 closes it. While the list is open the header reads `IO+` in place of `IO`
 
 If a section cannot draw itself, its title shows `error` and the other sections carry on.
 

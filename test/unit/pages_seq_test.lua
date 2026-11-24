@@ -1112,7 +1112,7 @@ test("open_step_editor shows the editor over any page and close_step_editor retu
   assert_equal(pages_seq.open_step_editor(3, 5, 1), true)
   context.screen.clear(); redraw()
   assert_true(h.screen_shows(context, "v3 step 5"), "the screen shows the editor")
-  assert_equal(context.screen.texts[1].text, "MAIN", "under MAIN's header")
+  assert_equal(context.screen.texts[1].text, "STEP", "the header names the step editor over MAIN (#901)")
   local editor = pages_seq.step_editor()
   assert_equal(editor.voice, 3); assert_equal(editor.step, 5); assert_equal(editor.port, 1)
   assert_equal((cursor_row(context)), "level", "it opens on the step's level")

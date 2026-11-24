@@ -609,7 +609,9 @@ return function(S)
     return true
   end
 
-  owner = {draw = draw, hints = hints, enc = enc, key = key, animates = animates}
+  -- SETS in the header while it is on top (#901); close as K2 (#899)
+  owner = {name = "SETS", close = function() M.close_list() end,
+    draw = draw, hints = hints, enc = enc, key = key, animates = animates}
 
   -- Open the list over SETUP (its factory sets row): the index's sets, read
   -- now; already open, nothing

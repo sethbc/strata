@@ -36,7 +36,7 @@ The arc's rings are off on this page. MIDI is described in [MIDI Input](../midi.
 
 ## MPE and zones
 
-K3 on **mpe & zones** opens an editor over the page (PARAMETERS > midi and > zones hold the same settings):
+K3 on **mpe & zones** opens an editor over the page (PARAMETERS > midi and > zones hold the same settings); while it is open the header reads `ZONES` in place of the page's name:
 
 ```
 SETUP ·········
@@ -60,7 +60,7 @@ K2:back E3:value
 
 ## Scale and tuning
 
-K3 on **scale & tuning** opens an editor over the page (PARAMETERS > scale holds the same settings):
+K3 on **scale & tuning** opens an editor over the page (PARAMETERS > scale holds the same settings); while it is open the header reads `SCALE` in place of the page's name:
 
 ```
 SETUP ·········
@@ -83,7 +83,7 @@ See [Tunings](../voices-and-grains.md#tunings).
 
 ## Factory sets
 
-K3 on **factory sets** opens a list of the sets that came with Strata: each a name and its version (`dusk  v1`). Strata 3.8 ships none, so the list says `none`.
+K3 on **factory sets** opens a list of the sets that came with Strata: each a name and its version (`dusk  v1`). Strata 3.8 ships none, so the list says `none`. While it is open the header reads `SETS` in place of the page's name.
 
 - **E2** - move between the sets
 - **K3** - load the set under the cursor. While a scene of this session is not on disk the first K3 only shows `K3 again: drop unsaved`, and a second K3 within 2 seconds loads, as **load scenes** asks. While a set is still loading K3 only shows `loading`

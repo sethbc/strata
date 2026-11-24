@@ -711,7 +711,8 @@ test("go_to_row refuses to move when the page, a list or ALT is in the way", fun
   assert_equal(S.lib.ui_modal.top(), nil, "closed by its own K2")
   -- another owner's list over the page: E2 would go to it
   local other_turns = 0
-  local other = { draw = function() end, enc = function() other_turns = other_turns + 1 end }
+  local other = { name = "PROBE", draw = function() end, enc = function() other_turns = other_turns + 1 end }
+  other.close = function() S.lib.ui_modal.pop(other) end
   S.lib.ui_modal.push(other)
   refused("another owner's list", "probe layout: a list is open over the page")
   assert_equal(S.lib.ui_modal.top(), other, "that list is still open")

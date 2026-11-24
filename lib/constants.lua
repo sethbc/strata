@@ -274,6 +274,7 @@ local CLEANUP_ORDER = {
   voice_picker = 138,       -- lib/ui/voice_picker.lua: an open picker closed (3.8)
   scale_editor = 139,       -- lib/ui/scale_editor.lua: an open editor closed, its note tap cleared (3.8)
   ui_flash = 140,           -- lib/ui/flash.lua: the header's and hint row's flash clocks
+  modal_owners = 141,       -- lib/ui/modal.lua: every owner still open closed from the top down (3.9, #899)
   io_targets = 142,         -- lib/io/targets.lua: every target note ended at once (3.6)
   io_ii = 144,              -- lib/io/ii.lua: while Strata leads, the waiting offs sent, each ii device released (3.6)
   io_crow = 145,            -- lib/io/crow.lua: outputs to 0 V, inputs off, its clocks ended, the hot-plug handlers idle (3.6)

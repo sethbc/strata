@@ -47,7 +47,7 @@ A step can hold a chord of up to 8 notes (scenes and the chain keep them), one r
 
 ## The step editor
 
-Holding a step key on a grid opens the same edit view for that voice and step over whichever page is showing (see [Grid](../grid.md)). E2, E3, K2, K3 and their ALT layer work as above, on that voice and step; E1 does nothing while it is open, and K2 closes it, as letting go of the grid key does. The arc's rings edit the step while it is open:
+Holding a step key on a grid opens the same edit view for that voice and step over whichever page is showing (see [Grid](../grid.md)). E2, E3, K2, K3 and their ALT layer work as above, on that voice and step; E1 does nothing while it is open, and K2 closes it, as letting go of the grid key does. While it is open the header reads `STEP` in place of the page's name, and the page's name again once it closes. The arc's rings edit the step while it is open:
 
 - **Ring 1** - `pos`, **ring 2** - `pitch`, **ring 3** - `size` (a full turn for the whole range; from `off` at the voice's own value, and turning below the start of the range sets it `off`)
 - **Ring 4** - `prob` (whole percents, a full turn for 0-100 %)

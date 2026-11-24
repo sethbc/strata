@@ -602,7 +602,8 @@ return function(S)
     return SAMPLES.tempo_min, SAMPLES.tempo_max, EDITOR.tempo_step
   end
 
-  owner = {draw = draw, hints = hints, enc = enc, key = key, animates = animates}
+  -- SLICE in the header while it is on top (#901); close as K2 (#899)
+  owner = {name = "SLICE", close = M.close, draw = draw, hints = hints, enc = enc, key = key, animates = animates}
   M.owner = owner
 
   -- While the key row is picked, a MIDI note sets the key to its number:

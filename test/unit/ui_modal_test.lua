@@ -10,9 +10,21 @@ local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
 local load_strata, local_value, finish_startup, show_page = h.load_strata, h.local_value, h.finish_startup, h.show_page
 local hint_text, screen_shows = h.hint_text, h.screen_shows
 
+-- 3.9 (#901, #899): every owner's record has a name (at most 5
+-- characters, the header's title while it is on top) and a close (as its
+-- own K2: here, a pop). A test owner: fields, with the name PROBE and that
+-- close unless given
+local function test_owner(fields)
+  local owner = fields or {}
+  if owner.draw == nil then owner.draw = function() end end
+  if owner.name == nil then owner.name = "PROBE" end
+  if owner.close == nil then owner.close = function() local_value("S").lib.ui_modal.pop(owner) end end
+  return owner
+end
+
 -- An owner that logs what reaches it and draws "probe body"
 local function logging_owner(log)
-  return {
+  return test_owner{
     draw = function() screen.level(15); screen.move(10, 30); screen.text("probe body") end,
     hints = function(alt_held) return alt_held and "probe alt" or "probe hints" end,
     enc = function(n, d) log[#log + 1] = "enc " .. n .. " " .. d end,
@@ -56,7 +68,8 @@ test("a pushed owner takes E2, E3, K2, K3, the screen and the arc, and E1 does n
   assert_equal(take(log), "key 2 1, key 2 0", "ALT+K2 goes to the owner too, never to alt_action")
 
   redraw()
-  assert_true(screen_shows(context, "FX"), "the header still shows")
+  assert_true(screen_shows(context, "PROBE"), "the header names the owner (#901)")
+  assert_true(not screen_shows(context, "FX"), "in the page's title's place")
   assert_true(screen_shows(context, "probe body"), "the owner draws the body")
   assert_equal(hint_text(context), "probe alt", "and its hints, with ALT held")
   key(1, 0)
@@ -117,7 +130,7 @@ end)
 test("pop of an owner that is not pushed does nothing", function()
   load_strata()
   local modal = local_value("S").lib.ui_modal
-  local first, second, other = { draw = function() end }, { draw = function() end }, { draw = function() end }
+  local first, second, other = test_owner(), test_owner(), test_owner()
   modal.push(first); modal.push(second)
   modal.pop(other)
   assert_equal(modal.top(), second, "an owner not on the stack: nothing")
@@ -132,10 +145,10 @@ end)
 test("push needs an owner with a draw function, once", function()
   load_strata()
   local modal = local_value("S").lib.ui_modal
-  assert_true(not pcall(modal.push, {}), "an owner draws")
-  assert_true(not pcall(modal.push, { draw = function() end, enc = 1 }), "enc is a function")
+  assert_true(not pcall(modal.push, test_owner{draw = false}), "an owner draws")
+  assert_true(not pcall(modal.push, test_owner{enc = 1}), "enc is a function")
   assert_true(not pcall(modal.push, "owner"), "an owner is a table")
-  local owner = { draw = function() end }
+  local owner = test_owner()
   modal.push(owner)
   assert_true(not pcall(modal.push, owner), "an owner on the stack is not pushed again")
   modal.pop(owner)
@@ -159,13 +172,13 @@ test("an owner's animates draws every frame over a page that does not; one witho
   show_page("MAIN")  -- its record has no animates
   assert_equal(frames_drawn(3), 0, "MAIN alone draws no frame unasked")
   local animating = true
-  local owner = { draw = function() end, animates = function() return animating end }
+  local owner = test_owner{animates = function() return animating end}
   modal.push(owner)
   assert_equal(frames_drawn(3), 3, "an owner that animates: every frame draws")
   animating = false
   assert_equal(frames_drawn(3), 0, "once it stops, no frame draws unasked")
   modal.pop(owner)
-  local plain = { draw = function() end }
+  local plain = test_owner()
   modal.push(plain)
   assert_equal(frames_drawn(3), 0, "an owner without animates over MAIN: no frame draws")
   modal.pop(plain)
@@ -175,7 +188,7 @@ test("an owner's animates draws every frame over a page that does not; one witho
   assert_equal(frames_drawn(3), 3, "over SEQ playing, the page's animates still draws every frame")
   modal.pop(plain)
   pattern_toggle()
-  local ok = pcall(modal.push, { draw = function() end, animates = true })
+  local ok = pcall(modal.push, test_owner{animates = true})
   assert_true(not ok, "an owner's animates is a function")
 end)
 
@@ -232,6 +245,75 @@ test("a release handler that raises leaves no key held (a modal owner's)", funct
   assert_true(tostring(message):find("stack traceback:", 1, true) ~= nil, "and the traceback from where it raised")
   assert_equal(modal.held_seconds(owner, 3), nil, "the key reads as up")
   modal.pop(owner)
+end)
+
+
+-- 3.9 (#901, #899): push checks the record's name (the header's title
+-- while it is on top: a non-empty string of at most 5 characters) and its
+-- close (a function)
+test("push refuses an owner with no name, a longer name or no close", function()
+  load_strata()
+  local modal = local_value("S").lib.ui_modal
+  local function refused(owner, why)
+    local ok, message = pcall(modal.push, owner)
+    assert_true(not ok, why)
+    assert_equal(modal.top(), nil, why .. ": nothing is pushed")
+    return tostring(message)
+  end
+  local message = refused({draw = function() end, close = function() end}, "no name")
+  assert_true(message:find("name", 1, true) ~= nil, "the error names the name: " .. message)
+  refused(test_owner{name = ""}, "an empty name")
+  refused(test_owner{name = "SCALES"}, "a name of six characters")
+  refused(test_owner{name = 5}, "a name that is no string")
+  message = refused({draw = function() end, name = "PROBE"}, "no close")
+  assert_true(message:find("close", 1, true) ~= nil, "the error names the close: " .. message)
+  refused(test_owner{close = true}, "a close that is no function")
+  local owner = test_owner{name = "SCALE"}
+  modal.push(owner)
+  assert_equal(modal.top(), owner, "a name of five characters and a close: pushed")
+  modal.pop(owner)
+end)
+
+test("top_name names the top owner, nil with none", function()
+  load_strata()
+  local modal = local_value("S").lib.ui_modal
+  assert_equal(modal.top_name(), nil, "no owner: nil")
+  local lower, upper = test_owner{name = "LOW"}, test_owner{name = "UP"}
+  modal.push(lower)
+  assert_equal(modal.top_name(), "LOW", "one owner: its name")
+  modal.push(upper)
+  assert_equal(modal.top_name(), "UP", "the top one's")
+  modal.pop(upper)
+  assert_equal(modal.top_name(), "LOW", "popped: the one beneath")
+  modal.pop(lower)
+  assert_equal(modal.top_name(), nil, "none again: nil")
+end)
+
+-- close_all (cleanup's modal_owners step) calls each owner's close from the
+-- top down; an owner its close leaves on the stack is popped with a line,
+-- so the steps after it run and the stack is empty
+test("close_all closes every owner from the top down", function()
+  local context = load_strata()
+  local modal = local_value("S").lib.ui_modal
+  local closed = {}
+  local function closing(name)
+    local owner
+    owner = test_owner{name = name, close = function() closed[#closed + 1] = name; modal.pop(owner) end}
+    return owner
+  end
+  modal.push(closing("ONE")); modal.push(closing("TWO")); modal.push(closing("THREE"))
+  modal.close_all()
+  assert_equal(table.concat(closed, " "), "THREE TWO ONE", "each close, from the top down")
+  assert_equal(modal.top(), nil, "the stack is empty")
+  modal.close_all()
+  assert_equal(#closed, 3, "with none open: nothing")
+  local stuck = test_owner{name = "STUCK", close = function() end}
+  modal.push(closing("BELOW")); modal.push(stuck)
+  modal.close_all()
+  assert_equal(modal.top(), nil, "an owner its close left on the stack is popped")
+  assert_equal(closed[#closed], "BELOW", "and the one beneath it still closes")
+  local said = table.concat(context.printed or {}, "\n")
+  assert_true(said:find("STUCK", 1, true) ~= nil, "a line names it: " .. said)
 end)
 
 end

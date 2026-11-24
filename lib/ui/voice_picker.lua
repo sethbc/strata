@@ -213,7 +213,9 @@ return function(S)
     request_redraw()
   end
 
-  owner = {draw = draw, hints = hints, enc = enc_handler, key = key_handler, animates = animates}
+  -- PICK in the header while it is on top (#901); close as K2 (#899)
+  owner = {name = "PICK", close = function() M.close() end,
+    draw = draw, hints = hints, enc = enc_handler, key = key_handler, animates = animates}
 
   -- Open the picker over VOICE for voice_idx (K3 on its preset row): the
   -- cursor where it was left; already open, nothing

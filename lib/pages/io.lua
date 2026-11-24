@@ -372,6 +372,10 @@ return function(S)
   end
 
   local detail_owner = {
+    -- IO+ in the header while it is on top, so it never reads as the page
+    -- beneath (#901); close as K2 (#899)
+    name = "IO+",
+    close = close_detail,
     draw = function()
       local rows = detail_rows()
       detail.cursor = field_list.clamp(rows, detail.cursor)
