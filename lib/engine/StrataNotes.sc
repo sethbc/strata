@@ -45,6 +45,25 @@
         if (record[\kind] == \stream) { record[\rate] = this.absoluteNoteRate(record[\note], voice) };
     }
 
+    // 3.9 (#958): the voice's root moved (rootNote): each held (live)
+    // buffer or input extra note's kept rate becomes its kept note's
+    // against the new root (absoluteNoteRate, as a note leaving a stream),
+    // set on its synth with its pitch pairs (a buffer note's bufRate and
+    // scaleNote, an input note's pitchShift) in one plain send: no node is
+    // created, cut or struck. A synth voice's note (its freq) and a stream
+    // note (against the freeze reference only Lua holds) are left alone, and
+    // a releasing note keeps its tail. A pitch Lua clamped to 0-127 for
+    // noteOn is derived from the clamped note (#1002)
+    notesFollowRoot { arg voice;
+        var held = areaState[\notes][\slots][voice].copyToEnd(1).select({ arg record;
+            (record[\state] == \live) and: { record[\synth].notNil } and: { #[\buffer, \input].includes(record[\kind]) }
+        });
+        held.do({ arg record; record[\rate] = this.absoluteNoteRate(record[\note], voice) });
+        if (held.notEmpty) {
+            this.sendToSynth(*held.collect({ arg record; record[\synth].setMsg(*this.notePitchPairs(voice, record)) }));
+        };
+    }
+
     // The notes area (order 170): the last in alloc's order, the first in
     // free's, so its stop frees the note synths before the voices' groups go
     strataAreaNotes {
@@ -54,14 +73,18 @@
             addCommands: { this.areaCall(\addNoteCommands) },
             stop: { this.areaCall(\stopNotes) },
             // 3.7's rootNote (design §4.3): handled here, kept per voice and
-            // sent to no synth (absoluteNoteRate reads it)
+            // sent to no synth as itself (absoluteNoteRate reads it); 3.9
+            // (#958): a root that moves re-derives the voice's held buffer
+            // and input notes' rates (notesFollowRoot)
             grainParamHandlers: (
                 rootNote: { arg voice, value;
                     // (a non-finite one is ignored with one line, 3.5's
                     // rule: it would reach a note's rate through
                     // absoluteNoteRate)
-                    if (this.fastModValuesFinite(\setGrainParam, [[\rootNote, value]])) {
-                        areaState[\notes][\rootNotes][voice] = value
+                    if (this.fastModValuesFinite(\setGrainParam, [[\rootNote, value]])
+                        and: { value != areaState[\notes][\rootNotes][voice] }) {
+                        areaState[\notes][\rootNotes][voice] = value;
+                        this.areaCall(\notesFollowRoot, voice);
                     };
                     true
                 }

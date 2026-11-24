@@ -450,6 +450,34 @@ test("the notes model's stream note leaves at its note's rate against the voice'
   assert_equal(model.counts.retyped, 2, "the same type: no restart")
 end)
 
+-- 3.9 (#958): the model follows the engine's notesFollowRoot: a moved root
+-- re-derives each live buffer or input note's rate from its note; a voice
+-- note, a releasing note and a root sent again keep theirs
+test("the notes model's held buffer and input notes follow a moved root", function()
+  load_strata()
+  local S = local_value("S")
+  local model = require("notes_model").new(S.constants, S.lib.notes.NOTES)
+  local calls = {}
+  local function call(name, ...) calls[#calls + 1] = { name = name, args = { ... } } end
+  local input = S.constants.SOURCE_INPUT - 1
+  call("setNotePool", 8)
+  call("setGrainSource", 0, 1); call("voiceOn", 0); call("noteOn", 0, 1, 64, 329.6, 2 ^ (4 / 12), 1)
+  call("noteOn", 0, 2, 67, 392, 2 ^ (7 / 12), 1); call("noteOff", 0, 2, 0)
+  call("setGrainSource", 1, input); call("voiceOn", 1); call("noteOn", 1, 1, 72, 523.3, 2, 1)
+  call("voiceOn", 2); call("noteOn", 2, 1, 64, 329.6, 1, 1)
+  call("setGrainParam", 0, "rootNote", 69); call("setGrainParam", 1, "rootNote", 48); call("setGrainParam", 2, "rootNote", 69)
+  model:feed(calls)
+  assert_near(model.voices[0].extra[1].rate, 2 ^ (-5 / 12), 1e-9, "a buffer note: 64 against 69")
+  assert_near(model.voices[0].extra[2].rate, 2 ^ (7 / 12), 1e-9, "a releasing note keeps its rate")
+  assert_near(model.voices[1].extra[1].rate, 4, 1e-9, "an input note: 72 against 48, clipped to 4")
+  assert_near(model.voices[2].extra[1].rate, 1, 1e-9, "a synth voice's note keeps its rate")
+  assert_equal(model.counts.rerooted, 2, "two notes re-derived")
+  call("setGrainParam", 0, "rootNote", 69)
+  model:feed(calls)
+  assert_equal(model.counts.rerooted, 2, "the same root: nothing re-derived")
+  assert_equal(#model.errors, 0, "nothing refused")
+end)
+
 -- An op's cuts: "never" for the ops that cut no playing note, "frozen" for
 -- the one that may cut only a frozen synth voice's: the model's blind spot
 -- (ruling 59). Kept on the op itself (`cuts`), so a renamed op keeps it;
@@ -505,15 +533,13 @@ local NOTES_WALK_OPS = {
 }
 -- The differences the walk allows while their fault is open (the model's
 -- compare names each; the walks must meet each one, "allowed_<name>" in
--- reached, so the fault's fix removes it). old_root (#958, found by 3.9's
--- package 1l): a held buffer or input extra note keeps the rate of the
--- root it started under when the voice's root moves (slot 1's key changes,
--- or a source switch between the input, a voice source and a keyed slot,
--- whose rootNote comes after the switch): the engine keeps a held note's
--- rate and Lua resends none, so the note sounds off its pitch until it is
--- struck again. Only where the engine's root is Lua's: a rootNote Lua never
--- sent is not passed
-local NOTES_WALK_ALLOWED = { old_root = true }
+-- reached, so the fault's fix removes it). None is open: 3.9's #958 (a
+-- held buffer or input note at its old root's rate) is fixed, the engine
+-- deriving each held note's rate again at a rootNote; its edge, #1002 (a
+-- pitch outside 0-127, whose rate the engine derives from the clamped
+-- note), needs a root outside 24-103 the walk never draws (slot 1's keys
+-- are 48-72, the MIDI keys 48-73 in twelve equal steps)
+local NOTES_WALK_ALLOWED = {}
 local NOTES_WALK_CUTS = {}
 for _, op in ipairs(NOTES_WALK_OPS) do
   if op.cuts ~= nil and op.cuts ~= "never" and op.cuts ~= "frozen" then
@@ -577,7 +603,7 @@ h.walk({
   -- and each allowance of NOTES_WALK_ALLOWED was met (allowed_<name>), so the
   -- fix of its fault must remove it
   reached = { "starts", "restarts", "streams_left", "regrained", "cuts", "parks", "unparks", "voice_sourced",
-    "retyped", "allowed_old_root" },
+    "retyped", "rerooted" },
   counts = function(state)
     local counts = {}
     for name, count in pairs(state.model.counts) do counts[name] = count end
