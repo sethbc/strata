@@ -553,8 +553,10 @@ return function(S)
     return util.time() < list.armed_until
   end
 
+  -- Under ALT K3 does nothing (key), so the armed prompt, which names K3,
+  -- shows with ALT up only (#897 review)
   local function hints(alt_held)
-    if armed() then return S.lib.pages_setup.SETUP_PAGE.load_texts.confirm end  -- load scenes' prompt
+    if armed() and not alt_held then return S.lib.pages_setup.SETUP_PAGE.load_texts.confirm end  -- load scenes' prompt
     local flash = S.lib.ui_flash.text("hints")
     if flash then return flash end
     if #list.sets == 0 then return alt_held and "" or "K2:back" end
