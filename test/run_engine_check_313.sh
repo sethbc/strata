@@ -1,8 +1,10 @@
 #!/bin/sh
-# Run the engine check on SuperCollider 3.13 (norns' version, CI's pin) in
-# Docker, any number of times, several at once. Each container has its own
-# network, so parallel containers never share a scsynth or sclang port
-# (local sclang runs exhaust the language ports past a few at once).
+# Run the engine check in Docker on SuperCollider 3.13 (norns' version, CI's
+# pin; the default) or, with -s 3.14, on 3.14.1 (the local machines'
+# version, #1039), any number of times, several at once. Each container
+# has its own network, so parallel containers never share a scsynth or
+# sclang port (local sclang runs exhaust the language ports past a few at
+# once).
 #
 # A full run is CI's: the shards of .github/workflows/test.yml's engine-shard
 # matrix (its areas list, one "- a,b,c" item a shard), each in a container,
@@ -12,16 +14,24 @@
 # the two cannot drift. A run passes only when every one of its shards
 # passed.
 #
-# usage: [STRATA_ENGINE_CHECK_AREAS=files] test/run_engine_check_313.sh [-n runs] [-j parallel] [-o log_dir] [-1] [-l] [-c] [path/to/norns]
+# usage: [STRATA_ENGINE_CHECK_AREAS=files] test/run_engine_check_313.sh [-s version] [-n runs] [-j parallel] [-o log_dir] [-1] [-l] [-c] [path/to/norns]
+#   -s  the SuperCollider the containers run: 3.13 (default; the image
+#       strata-sc313, from test/docker/sc313) or 3.14 (3.14.1: strata-sc314,
+#       from test/docker/sc314, built in test/docker to share sc313's
+#       check.sh); anything else is refused with the usage line. Every other
+#       option works the same under either, and CI never passes it
 #   -n  how many runs (default 1)
 #   -j  how many containers run at once (default 1): shards of one run and
 #       of different runs alike
 #   -o  the folder for the logs (created if missing; default a new
-#       ${TMPDIR:-/tmp}/strata-sc313-logs.XXXXXX). A sharded run <i>'s
+#       ${TMPDIR:-/tmp}/strata-sc313-logs.XXXXXX, or strata-sc314-logs
+#       under -s 3.14). A sharded run <i>'s
 #       shard writes run-<i>-<shard>.log and run-<i>-<shard>.status there,
 #       the shard's commas written as _ (run-3-voices_freeze_grains.log); a
-#       run in one container writes run-<i>.log and run-<i>.status. Nothing
-#       in it is ever deleted.
+#       run in one container writes run-<i>.log and run-<i>.status. Each
+#       log's first line names the version and image it ran ("strata engine
+#       check on SuperCollider 3.14 (image strata-sc314)"). Nothing in it is
+#       ever deleted.
 #   -1  runs each full run in one container, every area in one sclang, as
 #       before #581 (for studying #131)
 #   -l  prints the shards a sharded run would use, one a line, and starts
@@ -37,16 +47,19 @@
 #   applies to each container: each shard of a sharded run),
 #   STRATA_SOAK_ROUNDS and STRATA_SOAK_SECONDS pass through to every
 #   container.
-#   STRATA_SC313_IMAGE names the image (default strata-sc313).
-#   STRATA_SC313_MEMORY is each container's memory cap (default 8g: a
-#   healthy run of every area peaked at 1.42 GiB, sampled every 3 s, #544). A run sclang's collector sends out of
+#   STRATA_SC313_IMAGE names the 3.13 image (default strata-sc313), and
+#   STRATA_SC314_IMAGE the 3.14 one (default strata-sc314).
+#   STRATA_SC313_MEMORY is each container's memory cap, under either
+#   version (default 8g: a healthy run of every area peaked at 1.42 GiB,
+#   sampled every 3 s, #544). A run sclang's collector sends out of
 #   control is killed inside its container, not by the machine's own
 #   out-of-memory killer.
 #
-# The image is built from test/docker/sc313/ when it is missing or that
-# folder's files changed (the image's strata.dockerfile-sha256 label holds
-# their hash), so a fresh machine needs no manual step; the one-time build
-# takes about a minute (it downloads Ubuntu's SuperCollider and JACK).
+# The image is built from its Dockerfile when it is missing or its sources
+# changed (the Dockerfile and test/docker/sc313/check.sh; the image's
+# strata.dockerfile-sha256 label holds their hash), so a fresh machine needs
+# no manual step; the one-time build takes about a minute (it downloads
+# Ubuntu's SuperCollider and JACK).
 #
 # Each container ends in one of six ways (#545, #687), the worst first:
 # collector failure (the log holds the collector's count-error lines, the
@@ -69,28 +82,49 @@ set -eu
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
-docker_dir=$script_dir/docker/sc313
 workflow=$repo_root/.github/workflows/test.yml
-image=${STRATA_SC313_IMAGE:-strata-sc313}
+usage="usage: $0 [-s version] [-n runs] [-j parallel] [-o log_dir] [-1] [-l] [-c] [path/to/norns]"
 
+version=3.13
 runs=1
 parallel=1
 log_dir=
 classify_only=
 list_only=
 one_process=
-while getopts n:j:o:cl1 flag; do
+while getopts s:n:j:o:cl1 flag; do
   case $flag in
+    s) version=$OPTARG ;;
     n) runs=$OPTARG ;;
     j) parallel=$OPTARG ;;
     o) log_dir=$OPTARG ;;
     c) classify_only=1 ;;
     l) list_only=1 ;;
     1) one_process=1 ;;
-    *) echo "usage: $0 [-n runs] [-j parallel] [-o log_dir] [-1] [-l] [-c] [path/to/norns]" >&2; exit 2 ;;
+    *) echo "$usage" >&2; exit 2 ;;
   esac
 done
 shift $((OPTIND - 1))
+
+# The version's image: its part of a container's or log folder's name, the
+# image's name, its Dockerfile and its build's context.
+# Both images run sc313's check.sh, so it is in both hashes (#1039)
+check_script=$script_dir/docker/sc313/check.sh
+case $version in
+  3.13)
+    version_name=sc313
+    image=${STRATA_SC313_IMAGE:-strata-sc313}
+    dockerfile=$script_dir/docker/sc313/Dockerfile
+    build_context=$script_dir/docker/sc313
+    ;;
+  3.14)
+    version_name=sc314
+    image=${STRATA_SC314_IMAGE:-strata-sc314}
+    dockerfile=$script_dir/docker/sc314/Dockerfile
+    build_context=$script_dir/docker
+    ;;
+  *) echo "-s takes 3.13 or 3.14, got \"$version\"" >&2; echo "$usage" >&2; exit 2 ;;
+esac
 norns_dir=${1:-${NORNS_DIR:-$HOME/src/norns}}
 
 memory_cap=${STRATA_SC313_MEMORY:-8g}
@@ -163,16 +197,17 @@ launch_runs() {
 
   # The hash of the image's sources, kept as a label on the image
   if command -v sha256sum > /dev/null 2>&1; then
-    sources_hash=$(cat "$docker_dir/Dockerfile" "$docker_dir/check.sh" | sha256sum | cut -c 1-64)
+    sources_hash=$(cat "$dockerfile" "$check_script" | sha256sum | cut -c 1-64)
   else
-    sources_hash=$(cat "$docker_dir/Dockerfile" "$docker_dir/check.sh" | shasum -a 256 | cut -c 1-64)
+    sources_hash=$(cat "$dockerfile" "$check_script" | shasum -a 256 | cut -c 1-64)
   fi
   built_hash=$(docker image inspect -f '{{ index .Config.Labels "strata.dockerfile-sha256" }}' "$image" 2> /dev/null || true)
   if [ "$built_hash" != "$sources_hash" ]; then
-    echo "building $image from test/docker/sc313 (about a minute, once)"
-    docker build --label "strata.dockerfile-sha256=$sources_hash" -t "$image" "$docker_dir"
+    echo "building $image from ${dockerfile#"$repo_root"/} (about a minute, once)"
+    docker build --label "strata.dockerfile-sha256=$sources_hash" -t "$image" -f "$dockerfile" "$build_context"
   fi
 
+  echo "SuperCollider $version (image $image)"
   if [ -n "$sharded" ]; then
     echo "areas: all, in the workflow's shards ($(echo $shards)), one container each; $runs run(s), $parallel container(s) at once"
   else
@@ -192,7 +227,7 @@ launch_runs() {
 
 # The containers this start launched, named after this script's PID so an
 # interrupt stops only its own
-container_name() { echo "strata-sc313-$$-$1"; }
+container_name() { echo "strata-$version_name-$$-$1"; }
 started_names=
 stop_containers() {
   for name in $started_names; do
@@ -234,13 +269,14 @@ run_one() {
   set +e
   if [ -n "$2" ]; then areas="STRATA_ENGINE_CHECK_AREAS=$2"; else areas=STRATA_ENGINE_CHECK_AREAS; fi
   began=$(date +%s)
+  echo "strata engine check on SuperCollider $version (image $image)" > "$log_dir/run-$1.log"
   # --memory and --memory-swap alike: the cap holds without swap (#544)
   docker run --rm --name "$(container_name "$1")" \
     --memory="$memory_cap" --memory-swap="$memory_cap" \
     --user "$(id -u):$(id -g)" -e HOME=/tmp -e XDG_RUNTIME_DIR=/tmp \
     -e "$areas" -e ENGINE_CHECK_TIMEOUT -e STRATA_SOAK_ROUNDS -e STRATA_SOAK_SECONDS \
     -v "$repo_root:/src:ro" -v "$norns_dir:/norns:ro" \
-    "$image" check > "$log_dir/run-$1.log" 2>&1
+    "$image" check >> "$log_dir/run-$1.log" 2>&1
   status=$?
   echo "strata container seconds: $(( $(date +%s) - began ))" >> "$log_dir/run-$1.log"
   echo "$status" > "$log_dir/run-$1.status"
@@ -254,7 +290,7 @@ if [ -n "$classify_only" ]; then
   fi
   log_dir=$(cd "$log_dir" && pwd)
 elif [ -z "$log_dir" ]; then
-  log_dir=$(mktemp -d "${TMPDIR:-/tmp}/strata-sc313-logs.XXXXXX")
+  log_dir=$(mktemp -d "${TMPDIR:-/tmp}/strata-$version_name-logs.XXXXXX")
 else
   mkdir -p -- "$log_dir"
   log_dir=$(cd "$log_dir" && pwd)
