@@ -1717,6 +1717,7 @@ local UNIT_FILE_SECONDS = {
   ["io_tape_test.lua"] = 1,
   ["io_targets_test.lua"] = 1,
   ["io_txo_test.lua"] = 2,
+  ["io_walk_test.lua"] = 2,
   ["io_wsyn_test.lua"] = 1,
   ["io_wtape_test.lua"] = 1,
   ["lfos_test.lua"] = 4,
