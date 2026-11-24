@@ -823,4 +823,22 @@ h.transition_table({
   },
 })
 
+-- 3.9 (#989): a press mark names the page shown, so a set_ui_page that
+-- kept a held key's mark (#234's fault) breaks the invariant in every test
+test("the key presses invariant fails on a press mark of another page", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page(KEYS_PAGE)
+  key(2, 1)
+  local invariant = h.registered_invariant("key presses")
+  assert_equal(invariant.check(), nil, "K2 down on " .. KEYS_PAGE .. " holds")
+  h.allow_broken_invariants("the test breaks the key presses invariant on purpose")
+  local other = S.constants.UI_PAGES.index.SETUP
+  S.key_press_page[2] = other
+  local answer = invariant.check()
+  local expected = "key 2 is held on page " .. other .. ", not the page shown, " .. S.ui_page
+  assert_equal(answer, expected, "the invariant names the key and both pages")
+  key(2, 0)
+end)
+
 end
