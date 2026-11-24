@@ -730,6 +730,27 @@ test("a canceled fade leaves the previous scene current", function()
   assert_equal(local_value("SCENE_TRANSITION").target, nil, "no target after the load")
 end)
 
+-- The fade's stop goes straight to the clock helper (#962 fixed there): a
+-- fade whose clock was lost past its next wake (its wake may look posted)
+-- is canceled and superseded without a retired or bare clock left behind
+test("a fade whose clock has gone stops through the clock helper with no broken invariant (#962)", function()
+  for _, way in ipairs({ "canceled", "superseded" }) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    capture_freq_scenes()
+    recall_scene(1, 0); recall_scene(2, 4)
+    local id = local_value("scene_transition_clock")
+    assert_true(type(id) == "number", way .. ": the fade's clock runs")
+    clock.cancel(id)                                               -- its clock is lost
+    context.clock.run_for(0.5, 0.001)                              -- past the wake it waited for
+    if way == "canceled" then cancel_scene_transition() else recall_scene(3, 0) end
+    assert_equal(S.scene_transition_active, false, way .. ": the fade has ended")
+    assert_equal(S.lib.clocks.retired[id], nil, way .. ": the gone clock is not retired")
+    assert_equal(S.lib.clocks.bare[id], nil, way .. ": nor marked bare")
+    assert_equal(table.concat(h.check_invariants(), "; "), "", way .. ": every invariant holds")
+  end
+end)
+
 test("a fade superseded by a fade that fails goes back to the last scene that landed", function()
   local context = load_strata(); finish_startup(context)
   capture_freq_scenes()
