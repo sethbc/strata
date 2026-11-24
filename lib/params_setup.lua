@@ -35,6 +35,13 @@ return function(S)
   S.fx_last_mix = {filter = 1}
   local filter_mix_before = 0  -- the filter mix before its last change (the param's default)
 
+  -- The filter mix moved to x: a rise is the mix K3 brings back. filter_mix's
+  -- action, and the engine params' PSET hook after a silent read (#965)
+  local function filter_mix_moved(x)
+    if x > filter_mix_before then S.fx_last_mix.filter = x end
+    filter_mix_before = x
+  end
+
   -- FX's K3 on a filter row: a mix above 0 becomes 0 (remembering it), a mix
   -- of 0 becomes the restore mix
   function M.toggle_filter_mix()
@@ -581,8 +588,7 @@ return function(S)
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0),  -- 0 = bypass
       action = function(x)
         -- a rise (E3, PARAMS, a scene, a PSET) is the mix K3 brings back
-        if x > filter_mix_before then S.fx_last_mix.filter = x end
-        filter_mix_before = x
+        filter_mix_moved(x)
         send_param_to_engine("filter_mix", x)
       end
     }
@@ -943,6 +949,86 @@ return function(S)
     end
     return nil
   end
+
+  -- After a silent PSET read the engine follows every param too (#965,
+  -- decided 2026-11-23): each engine sender whose params the read changed
+  -- is sent once, through the param's own sender. SILENT_READ.same_send:
+  -- the senders that only run another id's (lib/delay_sync.lua's three run
+  -- delay_time's: one setDelay for all six)
+  local SILENT_READ = {same_send = {delay_sync = "delay_time", delay_division = "delay_time",
+    delay_pingpong = "delay_time"}}
+
+  -- Whether the engine params' hook follows param: one with an engine
+  -- sender that a PSET loads (M.load_default: never a trigger or a param
+  -- saved off), but a per-voice param (the voice_params hook's), scatter's
+  -- (its own hook sends setScatter after every silent read) and a macro's
+  -- (its sender is an LFO's move of the targets' engine values, never a
+  -- send of the macro: the targets' own lines load them)
+  local function engine_follows(param)
+    local id = param.id
+    if type(id) ~= "string" or S.engine_senders[id] == nil or M.load_default(param) == nil then return false end
+    if voice_stored_value(id) ~= nil or S.engine_senders[id] == S.engine_senders.scatter then return false end
+    return not id:match("^macro_%d+$")
+  end
+
+  -- The value the engine has for param: what its sender last sent (or holds
+  -- back: expected_value), else its start, the load default, as no start
+  -- step sends a param that is not a voice's: as the param holds it (a
+  -- control keeps its raw position, so its default reads back through the
+  -- controlspec, 5000 Hz as 4999.9999999999973)
+  local function engine_has(param)
+    local sync = S.lib.engine_sync
+    local value = sync.expected_value(param.id)
+    if value ~= nil then return value end
+    local default = M.load_default(param)
+    if param.t == params.tCONTROL then default = param.controlspec:map(param.controlspec:unmap(default)) end
+    return sync.with_lfo_offsets(param.id, default)
+  end
+
+  -- The hook (registered before voice_params, the last): every followed
+  -- param whose value, as modulated, is not what the engine has joins its
+  -- sender's group; each group's values are recorded as sent and the
+  -- sender runs once (send_param_to_engine of its first id: a command of
+  -- several params reads the others through engine_param_value), in param
+  -- order, after fx_hold's release of a freeze the read left bypassed. The
+  -- filter's restore mix follows as filter_mix's action has it. The scale
+  -- keeps no record of what the engine has (the controller's ruling: one
+  -- message is cheaper than a second record), so it is sent every time, as
+  -- the scale's and the root's actions send it: setScale, each running
+  -- voice's scaleNote and each running chord's intervals. The tuning's own
+  -- hook sends the tuning (lib/tuning.lua)
+  S.register_pset_hook({name = "engine_params", read = function(path_base, number, pset_path, silent)
+    if not silent then return end
+    local sync, groups = S.lib.engine_sync, {}
+    for _, param in ipairs(params.params) do
+      if engine_follows(param) then
+        local value = sync.with_lfo_offsets(param.id, params:get(param.id))
+        if value ~= engine_has(param) then
+          local sender = S.engine_senders[SILENT_READ.same_send[param.id] or param.id]
+          local group = groups[sender]
+          if not group then
+            group = {}
+            groups[sender] = group
+            groups[#groups + 1] = group
+          end
+          group[#group + 1] = {id = param.id, value = value}
+        end
+      end
+    end
+    for _, group in ipairs(groups) do
+      for _, changed in ipairs(group) do S.engine_param_values[changed.id] = changed.value end
+      send_param_to_engine(group[1].id, params:get(group[1].id))
+    end
+    if params:get("filter_mix") ~= filter_mix_before then filter_mix_moved(params:get("filter_mix")) end
+    local variation = S.lib.variation
+    variation.send_scale()
+    for voice_idx = 1, NUM_VOICES do
+      variation.send_scale_note(voice_idx)
+      if S.voices[voice_idx].values.intervals == variation.VARIATION.set_index.chord then
+        variation.send_intervals(voice_idx)
+      end
+    end
+  end})
 
   -- After a silent PSET read (#951, the controller's rulings 1 and 2), the
   -- per-voice params end where a read with actions of the file leaves

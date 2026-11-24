@@ -23,12 +23,12 @@
 | running | freeze (`toggle`, E3, PARAMS, a MIDI map, the grid's DF) | frozen | `setDelayFreeze(1)` |
 | running | clear | running | `clearDelay()` |
 | running | bypass | bypassed | `setBypass(0, 1)` |
-| running | a silent PSET read that bypasses | bypassed | nothing (a silent read sends nothing, and the read hook has no freeze to release) |
+| running | a silent PSET read that bypasses | bypassed | `setBypass(0, 1)`, from the engine params' read hook (#965; this hook has no freeze to release) |
 | running | a PSET read that leaves the delay running | running | no `setDelayFreeze` |
 | frozen | release | running | `setDelayFreeze(0)` |
 | frozen | clear | running | `setDelayFreeze(0)`, then `clearDelay()` (#912) |
 | frozen | bypass (a key, PARAMS, a MIDI map, a PSET read with actions) | bypassed | `setDelayFreeze(0)`, then `setBypass(0, 1)` |
-| frozen | a silent PSET read that bypasses | bypassed | the read hook's `setDelayFreeze(0)` (#883) |
+| frozen | a silent PSET read that bypasses | bypassed | the read hook's `setDelayFreeze(0)` (#883), then the engine params' hook's `setBypass(0, 1)` (#965) |
 | frozen | a PSET read that leaves the delay running | frozen | no `setDelayFreeze` |
 | bypassed | freeze | bypassed | refused: the param back to 0 and one `setDelayFreeze(0)`; `toggle` does nothing |
 | bypassed | clear | bypassed | `clearDelay()`, which the engine ignores while bypassed (FX's clear row is the lift there) |

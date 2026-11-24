@@ -100,7 +100,7 @@ return function(S)
   -- The tuning in force: what tuning_tones' text last applied (text, as
   -- the param held it). engine_text: the text whose tuning the engine has
   -- (send's; the default's at the start, 3.8 ruling 42), which a silent
-  -- read leaves as it was (#842)
+  -- read's hook brings to the text it takes (#842, #965)
   local current = {period = TUNING.default.period, tones = {}, text = TUNING.default_text}
   for index, cents in ipairs(TUNING.default.tones) do current.tones[index] = cents end
   local engine_text = TUNING.default_text
@@ -110,8 +110,8 @@ return function(S)
   ---------------------------------------------------------------------------
 
   function M.name() return params:get("tuning_name") end
-  -- Whether the engine has the tuning in force (false after a silent read
-  -- took a text it was never sent, #842)
+  -- Whether the engine has the tuning in force (false only inside a
+  -- silent read, until its hook sends what it took: #842, #965)
   function M.engine_has_tuning() return engine_text == current.text end
   function M.count() return #current.tones end
   function M.period() return current.period end
@@ -483,10 +483,11 @@ return function(S)
   end
 
   -- Every read first brings the tuning to tuning_tones' text when the read
-  -- left the two apart (a silent read runs no action, #842), honoring its
-  -- silent flag, so tuning_name names the tuning in force; a read that is
-  -- not silent also sends it when the engine lacks it (a silent read's
-  -- left it so, and a later read of the same text runs no action). Then: a PSET
+  -- left the two apart (a silent read runs no action, #842), so
+  -- tuning_name names the tuning in force, and sends it as the text's
+  -- action would, a silent read's too (#965: the engine follows); a read
+  -- that is not silent also sends it when the engine lacks it (a guard: no
+  -- event leaves it so since #965). Then: a PSET
   -- without the tuning lines (3.7's) is read over the session's
   -- tuning: its voices' freq lines are set, and snapped, in that tuning,
   -- and only then does the read give the tuning its default. So when that
@@ -499,7 +500,13 @@ return function(S)
   S.register_pset_hook({name = "tuning", read = function(path_base, number, pset_path, silent)
     local tones_text = params:get("tuning_tones")
     if tones_text ~= current.text then
-      M.apply_text(tones_text, silent)
+      -- a silent read's text is taken, then sent with every chord resent
+      -- and every quantized voice snapped, as its action would (#965)
+      if M.apply_text(tones_text, silent) and silent then
+        M.send()
+        S.lib.variation.tuning_changed()
+        request_redraw()
+      end
     elseif not silent and engine_text ~= current.text then
       M.apply_text(current.text)
     end
@@ -518,7 +525,7 @@ return function(S)
 
   -- 3.9 (#915): tuning_tones' text is the tuning in force's (a refused
   -- text is set back; a silent read's is taken by the read hook);
-  -- engine_text may lag, by design (a silent read's)
+  -- engine_text lags only inside a silent read, until the hook sends
   S.register_invariant("tuning", function()
     if not params.lookup["tuning_tones"] then return end
     local text = params:get("tuning_tones")
