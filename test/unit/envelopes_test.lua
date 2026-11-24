@@ -471,6 +471,50 @@ test("turning loop off finishes the cycle it is in, as the engine does", functio
   assert_equal(envelopes.value(3), 0, "an ended envelope stays at 0")
 end)
 
+-- #969: with the loop off, an envelope whose run has ended reads 0 until
+-- its next hit, whatever its times are set to after: by hand, silently
+-- (which the model never reads: the stored value moves only with the
+-- action) or through a silent PSET read (whose hook sets each moved param
+-- with its action)
+test("a silent raise of a time after the end leaves the level at 0", function()
+  local context, S, envelopes = loaded()
+  local path = context.data_dir .. "strata-01.pset"
+  params:set("v3_env_decay", 5)
+  params:write(path)
+  params:set("v3_env_decay", 0.2)
+  context.set_time(600)
+  S.lib.engine_sync.retrigger(3, 1, "step")
+  context.set_time(601)
+  assert_equal(envelopes.value(3), 0, "the 0.205 s run has ended")
+  params:set("v3_env_release", 5, true)
+  params:set("v3_env_sustain", 0.5, true)
+  assert_equal(envelopes.value(3), 0, "a silent set leaves it ended")
+  params:read(path, true)
+  assert_equal(S.voices[3].values.env_decay, params:get("v3_env_decay"), "the read's decay is stored")
+  assert_true(params:get("v3_env_decay") > 4.9, "a decay of 5 s")
+  assert_equal(envelopes.value(3), 0, "a silent PSET read with a longer decay leaves it ended")
+  params:set("v3_env_attack", 3)
+  assert_equal(envelopes.value(3), 0, "a longer attack by hand leaves it ended")
+  -- the next hit runs, from 0, with the times now set
+  S.lib.engine_sync.retrigger(3, 1, "step")
+  context.set_time(602)
+  local now_set = {attack = params:get("v3_env_attack"), decay = params:get("v3_env_decay"), sustain = 0,
+    release = 0.2, curve = -4, loop = false}
+  assert_near(envelopes.value(3), envelopes.shape(now_set, 1, 0, 0), 1e-9, "the next hit runs from 0")
+end)
+
+test("an ended envelope whose times were raised starts again when the loop goes on", function()
+  local context, S, envelopes = loaded()
+  context.set_time(700)
+  S.lib.engine_sync.retrigger(3, 1, "step")
+  context.set_time(701)
+  params:set("v3_env_decay", 5)
+  assert_equal(envelopes.value(3), 0, "ended")
+  params:set("v3_env_loop", 2)
+  context.set_time(701.5)
+  assert_true(envelopes.value(3) > 0, "the loop starts it at once, from 0: " .. envelopes.value(3))
+end)
+
 test("a step resolves each envelope routing once and owns needs no second resolution", function()
   local context, S, envelopes = loaded()
   route(S, 3, "env2", "v5_filter_freq", 50)
@@ -578,6 +622,7 @@ h.transition_table({
     local hit = model_hit()
     if hit == nil then return "no hit" end
     if values.env_loop == 2 then return "looping" end
+    if hit.ended then return "ended" end
     local held = values.env_sustain > 0
     local run = values.env_attack + values.env_decay + (held and (hit.hold + values.env_release) or 0)
     return util.time() - hit.time < run and "running" or "ended"
@@ -609,10 +654,10 @@ h.transition_table({
     end },
     { "ended", "the loop on", "looping", check = hit_now_from(0) },
     { "ended", "the loop off", "ended" },
-    -- #969 (read in the code, not run on a device): the model reads the
-    -- settings live, so a longer time brings an ended run back
-    { "ended", "a longer decay", "running", known = 969, check = function()
-      assert_true(model_value() > 0, "the model's level comes back")
+    -- #969: an ended run stays ended, as the engine's done EnvGen holds
+    -- its end, however long the run is set after
+    { "ended", "a longer decay", "ended", check = function()
+      assert_equal(model_value(), 0, "the level stays 0")
     end },
     { "looping", "a hit", "looping", check = function()
       local level = model_level(0.5, nil, true)
