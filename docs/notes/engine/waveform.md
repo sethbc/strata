@@ -55,6 +55,28 @@ One shell per engine renames every `.part` the engine writes after alloc: the pe
 
 Measured after (3.13 in Docker, x86): `writeSlotPeaks`' synchronous part 0.46 ms median, 0.71 ms at most (before: 4.1-5.6 ms); during a loop recording, a 1 ms `SystemClock` task's longest gap 1.57 ms (baseline 1.12 ms; before: 4.1-5.9 ms); a message sent as a refresh starts is handled within 0.84 ms (before: 5.56 ms).
 
+## A rename's states
+
+The mover itself is in one of four, read from its Event (`alive`, `exited`, `freed`, `pending`) and `/proc`: in use (`alive`, fewer than `peaksMoverBacklog` renames unacknowledged); full (`pending` at the backlog: a write renames by subprocess, the mover stays in use); gone (`exited` set by its exit action, or `alive` cleared once `peaksMoverGone` finds no `/proc/<pid>` at a timeout); freed (`stopPeaksMover`: its polls stop). A stopped or slow mover is still in use: only a gone one stops its use.
+
+A rename (`renameIntoPlace`) is in one of five, from its own flags (`finished`, `moverFailed`) and its files (the acknowledgment and the failure file): queued to the mover (counted in `pending`, polled every `peaksMoverPollStep`), by subprocess (an `mv -f` through `unixCmd`), by subprocess with the mover's acknowledgment still awaited (polled every `peaksMoverSlowPollStep`), ended (its `finish` run, once), and dropped (the engine freed). Never a name of its own.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| (the call) | the mover in use, no newline in the paths, the FIFO written | queued | `pending` + 1 |
+| (the call) | no mover, the backlog full, a newline in a path, or the FIFO's write throwing | by subprocess | `renameBySubprocess` |
+| queued | the acknowledgment | ended | the file deleted, `pending` - 1, `finish(true)` |
+| queued | the failure file (the mover's `mv` failed, the `.part` deleted) | ended | the file deleted, `pending` - 1, `finish(false)` |
+| queued | the mover exited | by subprocess | `pending` - 1 |
+| queued | `peaksMoverTimeout` (1 s) without either | by subprocess, the acknowledgment awaited | the mover marked not alive when it is gone; the fallback's `mv` |
+| by subprocess | the `mv`'s exit: 0 | ended | `finish(true)` |
+| by subprocess | the `mv`'s exit: failed, the `.part` there | ended | the `.part` deleted, `finish(false)` |
+| by subprocess | the `mv`'s exit: failed, the `.part` gone (the mover took it) | ended | `finish` true unless the mover left a failure file, or the poll consumed one (`partGone`) |
+| by subprocess, the acknowledgment awaited | the acknowledgment or the failure file | (the fallback's `finish` already run or to run, once) | the file deleted, `pending` - 1 |
+| queued, awaited | the engine freed (`freed`) | dropped | the poll stops; a queued rename's `finish` never runs (the one known limit, The mover above) |
+
+`finish` runs once per write whichever way it ends (`finished`), and a write renamed by subprocess while the mover still holds it stays in `pending`, so a stuck mover fills the backlog and later writes skip it. The files area's own write (`writeSlot`) waits for an older rename to the same path before its own (`pathRenames`, `docs/notes/engine/files.md`, A write's states), so renames land in write order whatever carries them; two peaks writes to one slot are not so ordered (The file, above).
+
 ## Checks
 
 `test/engine_check/waveform.scd`: `shrunkPeaks` on a longer length (#313), a load's peaks against a file of known per-bin maxima (short, and long through the yielding check, both from a start past a loud prefix), the record take's spread over 64, the file's format and rising generation, the order of file and report (an `OSCFunc` on `/poll/value`), a slot change during a write dropping its action, the settings folder, the rename (a hard link keeps the old text), a clear, a stale `.part`, a failed write, the mover (its FIFO's name gone; a write through it; a failed `mv` through it finishing once with false and leaving no file; the same failed `mv` by a mover stopped past its timeout, whose fallback `mv` (an `mv` on `PATH` that sleeps 1 s first) runs after the mover has failed and deleted the `.part`, still finishing once with false; a stopped mover's write renaming by subprocess with one action while the mover stays in use and is used again once it catches up; a killed mover's exit action; close-on-exec, freeing one engine ending its mover while another engine's runs; a mover that never removes the name given up at alloc, through an `sh` on `PATH` that sleeps first; alloc's wait in a `fork` 1.5 s behind schedule keeping a mover that opens after 0.5 s), a failed load, a 22050 Hz file, a 10-frame file, and three 300 s load-and-save pairs on a high engine (about 2.4 s each in Docker; run on 3.13 too).
