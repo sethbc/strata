@@ -803,6 +803,102 @@ test("started() is true from the start step, and false through the cleanup step'
   assert_equal(table.concat(seen, ","), "3 false", "port 3 released at cleanup, with started() already false")
 end)
 
+-- #1033: each cleanup step wrapped, so what device got and each release
+-- told to the claim hooks read by the step's order. Returns the lines by
+-- order, the releases told ("<port>@<order>") and the lines' count
+local function cleanup_by_step(S, device)
+  local by_step, released, logged, current = {}, {}, 0, nil
+  for _, record in ipairs(S.registry.cleanup) do
+    local step_fn, order = record.fn, record.order
+    record.fn = function(...)
+      local before = #device.sent
+      current = order
+      step_fn(...)
+      current = nil
+      for index = before + 1, #device.sent do
+        local text = text_of(device.sent[index])
+        by_step[order] = by_step[order] and (by_step[order] .. "|" .. text) or text
+        logged = logged + 1
+      end
+    end
+  end
+  S.lib.io_ports.on_claim("io_remote_test", function(port, owner)
+    if owner == nil then released[#released + 1] = port .. "@" .. tostring(current) end
+  end)
+  return by_step, released, function() return logged end
+end
+
+-- #1033: a remote waiting `in use` on a controller's port takes nothing as
+-- the controllers' cleanup step (146) lets the port go: the remote's flag
+-- is down from its closing step (143), before any port is freed
+test("a remote waiting on a controller's port sends nothing when the controllers' cleanup lets it go (#1033)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "iii grid")
+  set_rig(S, "e16_port", 3)
+  assert_equal(S.lib.io_ports.owner(3), "e16", "the E16 claims port 3 first")
+  set_rig(S, "remote_grid_port", 3)
+  assert_equal(S.lib.io_remote.status("grid"), "in use", "the remote grid waits on the E16's port")
+  local before = #device.sent
+  local by_step, released, logged = cleanup_by_step(S, device)
+  cleanup()
+  assert_equal(logged(), #device.sent - before, "every line port 3 got at cleanup was sent inside a step")
+  for order, text in pairs(by_step) do
+    for _, bytes in ipairs({cc_bytes(2, 0, 1), cc_bytes(4, 0, 1)}) do
+      assert_true(not ("|" .. text .. "|"):find("|" .. text_of(bytes) .. "|", 1, true),
+        "the remote sends port 3 nothing at step " .. order .. ": " .. text)
+    end
+  end
+  assert_equal(S.lib.io_ports.owner(3), nil, "the remote holds no port after cleanup")
+  assert_equal(table.concat(released, ","), "3@" .. S.constants.CLEANUP_ORDER.io_controllers,
+    "the controllers' release told the claim hooks port 3 is free, once, at their step")
+end)
+
+-- #1033, the other way round (#1010's criterion 3): the remote's release
+-- comes after the controllers' closing (146), so an E16 waiting on the
+-- remote's port takes nothing at cleanup and sends it no labels
+test("an E16 waiting on a remote's port takes nothing as the remote's cleanup lets it go (#1033)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "iii grid")
+  set_rig(S, "remote_grid_port", 3)
+  assert_equal(S.lib.io_ports.owner(3), "remote grid", "the remote claims port 3 first")
+  set_rig(S, "e16_port", 3)
+  assert_equal(S.lib.io_ports.owner(3), "remote grid", "the E16 waits on the remote's port")
+  local before = #device.sent
+  local by_step, released, logged = cleanup_by_step(S, device)
+  cleanup()
+  assert_equal(logged(), #device.sent - before, "every line port 3 got at cleanup was sent inside a step")
+  for order, text in pairs(by_step) do
+    assert_true(false, "port 3 gets nothing at cleanup (no hello was answered): step " .. order .. ": " .. text)
+  end
+  assert_equal(S.lib.io_ports.owner(3), nil, "nothing holds port 3 after cleanup")
+  assert_equal(table.concat(released, ","), "3@" .. S.constants.CLEANUP_ORDER.io_remote,
+    "the remote's release told the claim hooks port 3 is free, once, at its step")
+end)
+
+-- #1033: the flag is down from 143, so MIDI out's settled hook sends no
+-- zone setup at the controllers' release (146) either; none is due there,
+-- since a setup stays due only on a port a remote holds and the E16's is
+-- not one (it got its setup as its route settled). The zone is taken down
+-- at MIDI out's own step (151), as before
+test("the controllers' release at cleanup skips no zone setup MIDI out owes (#1033)", function()
+  local context, S = started()
+  local device = context.midi.plug(3, "synth")
+  set_rig(S, "e16_port", 3)
+  assert_equal(S.lib.io_ports.owner(3), "e16", "the E16 holds port 3")
+  params:set("v1_out_port", 3)
+  params:set("v1_out_mode", 2)  -- mpe
+  context.clock.advance_until(S.lfo_clock)  -- the route settles: its setup goes to the E16's port
+  assert_true(has(device.sent, cc_bytes(100, 6, 1)), "the zone's setup went to the E16's port")
+  local by_step = cleanup_by_step(S, device)
+  cleanup()
+  local order = S.constants.CLEANUP_ORDER
+  assert_equal(by_step[order.io_controllers], nil, "no setup, nor anything else, at the controllers' release")
+  assert_equal(by_step[order.io_midi_out], "176 101 0|176 100 6|176 6 0", "the zone taken down at MIDI out's step")
+  for step_order, text in pairs(by_step) do
+    assert_true(step_order == order.io_midi_out, "port 3 gets nothing at step " .. step_order .. ": " .. text)
+  end
+end)
+
 test("the scripts and the module agree end to end", function()
   local context, S = started()
   local iii = require("stub_iii")
