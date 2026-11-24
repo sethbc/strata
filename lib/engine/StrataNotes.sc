@@ -34,9 +34,9 @@
     // ring-stream note's kept rate is against the freeze reference instead,
     // which only Lua holds, so a note that leaves the stream takes this from
     // its kept note (ruling 46's note put to use). 3.9 (#1002): the note is
-    // the pitch Lua played, clipped by noteOn only past every root's 24
-    // semitones (-24 to 151), where the rate clips too, so this is Lua's
-    // rate exactly
+    // the pitch Lua played, clipped by noteOn only past the 24 semitones of
+    // every root Lua sends (0-127: -24 to 151), where the rate clips too, so
+    // at those roots this is Lua's rate exactly
     absoluteNoteRate { arg note, voice;
         ^(2 ** ((note - areaState[\notes][\rootNotes][voice]) / 12)).clip(0.25, 4)
     }
@@ -692,12 +692,13 @@
         var lastVoice = numVoices - 1, lastSlot = this.noteSlots - 1;
 
         // Start voice's slot: note -24 to 151 (3.9, #1002: Lua's
-        // NOTES.note_range, every root 0-127 widened by the rate's 24
-        // semitones each way, so absoluteNoteRate gives Lua's rate), freq
-        // 8-20000 Hz, rate 0.25-4, velocity 0-1. The engine keeps note in the slot's
-        // record (ruling 46): a ring-stream note leaving the stream takes its
-        // rate from it (leaveStream, ruling 53); a buffer note's scaleNote
-        // comes from the voice's reference note and its rate (noteScaleNote).
+        // NOTES.note_range, the roots Lua sends, 0-127, widened by the rate's
+        // 24 semitones each way, so absoluteNoteRate gives Lua's rate), freq
+        // 8-20000 Hz, rate 0.25-4, velocity 0-1. The engine keeps note in
+        // the slot's record (ruling 46): a ring-stream note leaving the
+        // stream takes its rate from it (leaveStream, ruling 53); a buffer
+        // note's scaleNote comes from the voice's reference note and its rate
+        // (noteScaleNote).
         // A tuning (3.8) needs nothing here: Lua sends each note's tuned pitch
         this.addCommand(\noteOn, "iiffff", { arg msg;
             var voice = msg[1], slot = msg[2], note, freq, rate, velocity;
