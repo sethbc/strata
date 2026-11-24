@@ -253,6 +253,25 @@ test("arc FX ring 3 turns the delay's division while it is synced, and shows it"
   assert_equal(params:get("delay_division"), 7)
 end)
 
+-- #933: ring 3's carry belongs to the division it was turned on (its
+-- context), so an unsynced sweep of delay_time between neither takes it
+-- nor forgets it
+test("arc FX ring 3's carry belongs to the division across an unsynced turn", function()
+  local context = load_strata()
+  context.arc.plug(1)
+  show_page("FX")
+  params:set("delay_sync", 1)
+  context.arc.turn(1, 3, 15)
+  assert_equal(params:get("delay_division"), 7, "15 ticks carried on the division")
+  params:set("delay_sync", 0)
+  local time = params:get("delay_time")
+  context.arc.turn(1, 3, 5)
+  assert_true(params:get("delay_time") > time, "unsynced, the turn sweeps delay_time")
+  params:set("delay_sync", 1)
+  context.arc.turn(1, 3, 5)
+  assert_equal(params:get("delay_division"), 8, "the division's own 15 carried ticks and 5 more")
+end)
+
 -- the setGrainParam sends of one name: {voice, value}
 local function grain_sends(context, name)
   local sent = {}
@@ -809,6 +828,38 @@ test("VOICE rings follow the cursor's group of four", function()
   assert_equal(params:get("v2_mod_source_1"), other, "voice 1's carried ticks never step voice 2")
   context.arc.turn(1, ring, 15)
   assert_equal(params:get("v2_mod_source_1"), other + 1, "20 of its own ticks do")
+end)
+
+-- #933: one ring, two params. Ring 3 is the grain mode in its group of four
+-- and the grain cloud in the next, so its carry (under "voice:3") belongs to
+-- the param it was turned on
+test("a VOICE ring's ticks carried on one row never step the row the cursor moves to", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  S.selected_voice = 1
+  show_page("VOICE")
+  local function ring_on(param_id)
+    local rows = voice_page_rows(1)
+    for index, row in ipairs(rows) do
+      if row.param_id == param_id then place_voice_cursor(index) end
+    end
+    local rows_now = voice_page_rows(1)
+    local _, row_indices = voice_page_group(rows_now, S.cursors.voice)
+    for ring, index in ipairs(row_indices) do
+      if rows_now[index].param_id == param_id then return ring end
+    end
+  end
+  assert_equal(ring_on("v1_grain_mode"), 3, "the grain mode is on ring 3")
+  local mode, cloud = params:get("v1_grain_mode"), params:get("v1_grain_cloud")
+  context.arc.turn(1, 3, 10)
+  assert_equal(params:get("v1_grain_mode"), mode, "half a step on the grain mode")
+  assert_equal(ring_on("v1_grain_cloud"), 3, "the grain cloud is on ring 3 in the next group")
+  context.arc.turn(1, 3, 10)
+  assert_equal(params:get("v1_grain_cloud"), cloud, "half a step more: the mode's ticks do not step the cloud")
+  context.arc.turn(1, 3, 10)
+  assert_equal(params:get("v1_grain_cloud"), cloud + 1, "20 of its own ticks do")
+  assert_equal(params:get("v1_grain_mode"), mode, "and the mode never moved")
 end)
 
 -- 3.8 (package 0d): a ring on the type row moves its pending choice, a

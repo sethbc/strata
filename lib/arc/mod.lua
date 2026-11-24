@@ -37,15 +37,10 @@ return function(S)
   local function mod_page() return S.lib.pages_mod end
   local function depth_id(k) return "matrix_" .. k .. "_depth" end
 
-  -- The context each carry was turned in: a carry turned in another is
-  -- forgotten before it counts
-  local carried_in = {}
+  -- A carry belongs to the context it was turned in: one turned in another
+  -- is forgotten before it counts (arc_whole_steps)
   local function carried_steps(carry, context, delta)
-    if carried_in[carry] ~= context then
-      forget_arc_ticks(carry)
-      carried_in[carry] = context
-    end
-    return arc_whole_steps(carry, delta, ARC_MOD.ticks_per_step)
+    return arc_whole_steps(carry, delta, ARC_MOD.ticks_per_step, context)
   end
 
   -- The first routing of the cursor's set of four
