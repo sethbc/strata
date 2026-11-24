@@ -38,13 +38,13 @@ A grid of any other size stays dark. SETUP's rotation fields turn any grid a qua
 64 row 8    NV O1 O2 O3 O4 O5 O6 O7
 ```
 
-- **PL** plays or stops the patterns: 15 while playing, 4 while stopped
+- **PL** plays or stops the patterns: 15 while playing, 4 while stopped; a start that waits for its beat or bar (quantize actions) blinks the key between 15 and 2, and a second press before then takes it back
 - **FL** holds fill while it is down: 15 while fill is on, however it was turned on ([Fill](sequencer.md#fill)). A page change leaves it held; unplugging the grid ends it
 - **P1-P7** show a page on the strip's pane (row 16's on the 256's bottom pane): the shown page 15, the others 2. The lit key pressed again shows the page's second side, where it has one, and lights 10 there
 - **O1-O7** start or stop a voice: 12 running, 6 running but silenced (muted, or another voice soloed), 2 stopped
 - **T- T+** (the 256's row 16) set the tempo down or up by 1 BPM and show it in the header; held, they repeat after half a second, ten times a second, until you let go
 - **M1-M7** (the 256's row 16) mute or unmute a voice: 15 muted, 4 not
-- **NV** (the 8×8's): a tap plays or stops the patterns as you let go; held half a second it shows the chooser (see [8×8](grid/64.md)), and letting go then only closes it
+- **NV** (the 8×8's): a tap plays or stops the patterns as you let go, lit as PL is (blinking while a start waits); held half a second it shows the chooser (see [8×8](grid/64.md)), and letting go then only closes it
 
 ## Holds and Two-Key Gestures
 
@@ -53,6 +53,8 @@ Strata knows which keys of each grid are held, so a key can act on a hold, and a
 - **A step key toggles when you let go** (since 3.4): a tap turns its step on or off as the key comes up, not as it goes down, so you can hold a step to edit it without changing it first
 - **Hold a step to edit it** - a step key held for 0.3 s opens the step editor for that voice and step on the screen, whatever page it shows: the encoders and the arc edit the step there (see [SEQ](pages/seq.md)). Let go of the key to close it and go back to the page; the step is not toggled. Another key of the same voice still sets the held step's level meanwhile. The editor's own clear, Euclidean fill, randomize and undo keep it open. A page change on that pane, a half change on the 8×8 (or its chooser opening), unplugging the grid or anything else that replaces the voice's pattern (a clear, a randomize, a scene recall, the scene sequencer's next scene, a chain link: while the chain plays, the editor stays open at most until the next link, one bar at chain bars 1) closes the editor too, and the key's release then does nothing
 - **Setting a step's level** - hold a step key and press another key of the same voice: the held step's level becomes that key's share of 15 along the voice's keys (key 16 = 15, key 8 = 8, key 1 = 1; on the 8×8, key 8 of the half = 15 and key 4 = 8; on the 8×16, down the voice's column). The second key does not toggle its own step. Press more keys while still holding to try other levels: every further key of that voice sets the held step's level for as long as the first key stays down, and a key that set a level never takes one itself. On the 16×16 a voice's keys in both panes count as one: a voice has one held step on a grid. Clearing, randomizing or pasting the voice's pattern, recalling a scene (the scene sequencer's next scene too), a chain link, changing the pane's page or switching the 8×8's half ends the level setting: the held key's release changes nothing, and the next key turns its own step on or off. Only the step editor's own clear, fill, randomize and undo leave the key that opened it as the held step
+- **A hold lights nothing until it acts**: a step held for its editor (0.3 s), a recorder key held to clear (half a second), CL and RN, and NV held for the chooser look like a press until their time is up
+- **A key whose action waits blinks**: with quantize actions on beat or bar, a key whose action waits for the next beat or bar blinks between 15 and 2 until it acts: the play key, a voice's FZ, a scene's keys, a position cell and a bookmark key
 - Unplugging a grid (or leaving the script) while a key is held cancels its hold: nothing happens at its hold or its release, a step editor it opened closes, and a held FL lets fill go
 - **Changing a pane's page ends what its held keys were doing**: a key of that pane still held when it shows another page does nothing at its hold or its release (a step does not toggle and its editor closes). The other pane's keys and the strips' keys go on: a held FL keeps fill on, a held tempo key keeps repeating. Another grid's page change leaves this grid's keys alone
 

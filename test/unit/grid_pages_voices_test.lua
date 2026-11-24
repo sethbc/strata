@@ -215,7 +215,10 @@ test("freeze waits for the beat", function()
     pane.tap(KEY.freeze, 2)
     assert_equal(frozen(2), 0, arrangement .. ": FZ waits")
     assert_equal(S.lib.ui_flash.text("header"), "v2 frz at beat", arrangement .. ": and says so")
-    assert_equal(pane.led(KEY.freeze, 2), 3, arrangement .. ": the key shows the state, not the wait")
+    -- #876: the key shows the wait (it blinks), no longer the state
+    local LEVELS = S.lib.positions.LEVELS
+    local waiting = pane.led(KEY.freeze, 2)
+    assert_true(waiting == LEVELS.waiting_high or waiting == LEVELS.waiting_low, arrangement .. ": the key shows the wait")
     pane.tap(KEY.freeze, 5)
     context.clock.run_for(0.1)
     pane.tap(KEY.freeze, 5)  -- a second press while it waits takes it back (#625)
@@ -774,6 +777,44 @@ test("keys off the page's lines and columns do nothing, and no grid raises nothi
   params:set("v2_mute", 1); toggle_lock(2)
   drift_update()
   assert_equal(S.lib.grid_pane.signature(), nil, "no pane: no signature")
+end)
+
+
+-- #876: a freeze set that waits for its bar blinks its FZ key between the
+-- waiting levels, as a waiting bookmark does (#593); the other voices' keys
+-- stay as they are, a second press takes the set back (the key shows the
+-- state again), and the bar's set shows steady
+test("a voice's FZ key blinks while its set waits", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local LEVELS = S.lib.positions.LEVELS
+    local tick = 1 / S.constants.PLAYHEADS.update_hz
+    local function seen_over(ticks, voice_idx)
+      local seen = {}
+      for _ = 1, ticks do
+        context.clock.run_for(tick)
+        seen[pane.led(KEY.freeze, voice_idx)] = true
+      end
+      return seen
+    end
+    params:set("quantize_actions", 3)  -- bar
+    context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+    pane.tap(KEY.freeze, 2)
+    local seen = {}
+    for _ = 1, 12 do
+      context.clock.run_for(tick)
+      seen[pane.led(KEY.freeze, 2)] = true
+      assert_equal(pane.led(KEY.freeze, 3), 3, arrangement .. ": voice 3's key stays unfrozen")
+    end
+    assert_true(seen[LEVELS.waiting_high] and seen[LEVELS.waiting_low], arrangement .. ": voice 2's FZ blinks")
+    assert_equal(frozen(2), 0, arrangement .. ": not frozen yet")
+    pane.tap(KEY.freeze, 2)
+    assert_equal(pane.led(KEY.freeze, 2), 3, arrangement .. ": taken back: the key shows the state")
+    pane.tap(KEY.freeze, 2)
+    context.clock.run_for((4.05 - clock.get_beats()) * clock.get_beat_sec())
+    assert_equal(frozen(2), 1, arrangement .. ": the bar froze voice 2")
+    seen = seen_over(8, 2)
+    assert_true(seen[15] and not seen[LEVELS.waiting_low], arrangement .. ": frozen, steady at 15")
+  end, {{KEY.freeze, 1}})
 end)
 
 end

@@ -5355,4 +5355,25 @@ test("a start with the chain on can be undone: the live patterns are back (#922)
   pattern_clock_stop()
 end)
 
+
+-- #876: the patterns' play state, the one reader SEQ's hint and the grid's
+-- play key share: stopped, armed (a start waits for the quantizer) or
+-- playing
+test("play_state names stopped, armed and playing", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  assert_equal(seq.play_state(), "stopped")
+  params:set("quantize_actions", 3)  -- bar
+  context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+  pattern_toggle()
+  assert_equal(seq.play_state(), "armed", "a start waits for the bar")
+  pattern_toggle()
+  assert_equal(seq.play_state(), "stopped", "taken back")
+  pattern_toggle()
+  context.clock.run_for((4.05 - clock.get_beats()) * clock.get_beat_sec())
+  assert_equal(seq.play_state(), "playing", "the bar started it")
+  pattern_clock_stop()
+  assert_equal(seq.play_state(), "stopped")
+end)
+
 end

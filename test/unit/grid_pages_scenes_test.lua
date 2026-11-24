@@ -636,4 +636,55 @@ test("with fewer scenes than keys, line 7 keeps its sixteen keys and the scene l
   assert_true(S.current_scene ~= 12, "nor a scene key")
 end)
 
+
+-- #876: a scene recall that waits for its bar blinks its scene's keys
+-- (recall and fade) between the waiting levels, as a waiting bookmark does
+-- (#593), from a grid key or SCENES' own keys; another scene's keys stay
+-- as they are, and the bar's recall shows the current scene steady
+test("a scene key blinks while its recall waits", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local core = S.lib.grid_core
+    local LEVELS = S.lib.positions.LEVELS
+    local tick = 1 / S.constants.PLAYHEADS.update_hz
+    local first = shown_columns(pane)
+    local slot, other = first + 1, first + 2
+    capture_scene(slot); capture_scene(other)
+    local function watch(ticks)
+      local seen = {recall = {}, fade = {}}
+      for _ = 1, ticks do
+        context.clock.run_for(tick)
+        seen.recall[pane.led(slot, 1)] = true
+        seen.fade[pane.led(slot, 2)] = true
+        assert_equal(pane.led(other, 1), core.scene_recall_level(other), arrangement .. ": the other scene's key is steady")
+      end
+      return seen
+    end
+    params:set("scene_transition_time", 0)
+    params:set("quantize_actions", 3)  -- bar
+    context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+    pane.tap(slot, 1)
+    assert_equal(S.lib.quantize.waiting_detail("scene"), slot, arrangement .. ": the recall keeps its slot")
+    local seen = watch(12)
+    for _, line in ipairs({"recall", "fade"}) do
+      assert_true(seen[line][LEVELS.waiting_high] and seen[line][LEVELS.waiting_low], arrangement .. ": the " .. line .. " key blinks")
+    end
+    context.clock.run_for((4.05 - clock.get_beats()) * clock.get_beat_sec())
+    assert_equal(S.current_scene, slot, arrangement .. ": the bar recalled it")
+    seen = watch(8)
+    assert_true(seen.recall[15] and not seen.recall[LEVELS.waiting_low], arrangement .. ": current, steady at 15")
+    -- SCENES' K3 on the other slot: its grid keys blink
+    h.show_page("SCENES")
+    S.lib.pages_scenes.move_cursor(other)
+    key(3, 1); key(3, 0)
+    assert_equal(S.lib.quantize.waiting_detail("scene"), other, arrangement .. ": SCENES' recall keeps its slot")
+    local blinked = {}
+    for _ = 1, 12 do
+      context.clock.run_for(tick)
+      blinked[pane.led(other, 1)] = true
+    end
+    assert_true(blinked[LEVELS.waiting_high] and blinked[LEVELS.waiting_low], arrangement .. ": SCENES' wait blinks the grid key")
+    S.lib.quantize.cancel("scene")
+  end)
+end)
+
 end

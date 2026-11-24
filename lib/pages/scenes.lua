@@ -276,7 +276,7 @@ return function(S)
   -- quantizer (design §8.9): at once, or (with quantize_actions) at the next
   -- beat or bar. recall_scene is looked up when it runs (tests replace it)
   local function recall_quantized(slot, transition_time)
-    S.lib.quantize.schedule("scene", function() recall_scene(slot, transition_time) end, "S" .. slot)
+    S.lib.quantize.schedule("scene", function() recall_scene(slot, transition_time) end, "S" .. slot, slot)
   end
 
   local function scenes_key(n)

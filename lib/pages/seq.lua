@@ -708,6 +708,11 @@ return function(S)
     if edit_open then draw_edit_view(views.page) else redraw_pattern_view() end
   end
 
+  -- K2's word in the pattern view's hint, by the play state
+  -- (S.lib.sequencer.play_state): a press while a start waits takes it
+  -- back (#876)
+  local SEQ_K2_HINTS = {stopped = "play", armed = "cancel", playing = "stop"}
+
   -- The hint row (redraw() draws it after the page). K1 let go while
   -- ALT+K2 is down: K2's hint alone, since its release still acts
   local function seq_hints(alt_held)
@@ -717,7 +722,7 @@ return function(S)
     end
     if alt_held then return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record), "K3:clr E3:bpm") end
     if S.lib.ui_alt.k2_held() then return S.lib.ui_alt.join(S.lib.ui_alt.k2_hint(record)) end
-    return "K2:" .. (S.pattern_playing and "stop" or "play") .. " K3:step E3:level"
+    return "K2:" .. SEQ_K2_HINTS[S.lib.sequencer.play_state()] .. " K3:step E3:level"
   end
 
   local function seq_enc(n, d)
@@ -1052,6 +1057,11 @@ return function(S)
     end},
     {name = "tempo-300", setup = function()
       params:set("tempo", 300)
+      pattern_toggle()
+    end},
+    -- #876: a start waits for the bar, K2:cancel in the hint
+    {name = "start waits for the bar", setup = function()
+      params:set("quantize_actions", 3)  -- bar
       pattern_toggle()
     end},
     -- 3.4: short voices, gated voices one under another, and their own

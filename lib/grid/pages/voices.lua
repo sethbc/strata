@@ -120,13 +120,20 @@ return function(S)
     return copy.voice == voice_idx and levels.copied or levels.target
   end
 
+  -- FZ: frozen or not, blinking while the voice's freeze set waits for
+  -- the quantizer (S.lib.freeze.toggle_quantized's key freeze<v>, #876)
+  local function freeze_level(voice_idx)
+    if S.lib.quantize.waiting("freeze" .. voice_idx) then return S.lib.grid_core.waiting_level() end
+    return S.lib.freeze.is_frozen(voice_idx) and levels.freeze_on or levels.freeze_off
+  end
+
   local function redraw(pane, led)
     local state = pane.state()
     for voice_idx = 1, NUM_VOICES do
       led(keys.mute, voice_idx, is_on(param_of(voice_idx, "mute")) and levels.on or levels.off)
       led(keys.solo, voice_idx, is_on(param_of(voice_idx, "solo")) and levels.on or levels.off)
       led(keys.lock, voice_idx, S.lib.grid_core.lock_level(voice_idx))
-      led(keys.freeze, voice_idx, S.lib.freeze.is_frozen(voice_idx) and levels.freeze_on or levels.freeze_off)
+      led(keys.freeze, voice_idx, freeze_level(voice_idx))
       for _, x in ipairs(HOLD_KEYS) do
         led(x, voice_idx, pane.hold_pending(x, voice_idx) and levels.pending or levels.idle)
       end

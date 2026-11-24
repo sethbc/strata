@@ -44,7 +44,7 @@ For a physical key: the strip; else, on a 64 while the chooser shows, the choose
 
 | Key | Press | Hold / release | LED |
 |---|---|---|---|
-| PL | `pattern_toggle()` | - | `play_level()` 15 / 4 |
+| PL | `pattern_toggle()` | - | `play_level()` 15 / 4, blinking while a start waits (#876) |
 | FL | `press_as(.., "fill")`, `S.lib.conditions.hold_fill("grid:" .. port, true, still)`, `still` true while the key is held in its role | release: `hold_fill(holder, false)`; never ended by a page change | 15 while `fill()`, 4 |
 | P1-P7 | no record: nothing; not shown: `set_page(port, n, pane, 1)`; shown with `sides` 2: the other side | - | 0 no record; shown 15 (side 2: `side_two` 10); other 2 |
 | O1-O7 | `toggle_voice(v)` | - | `voice_level(v)` 12 / 6 / 2 |

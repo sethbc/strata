@@ -531,20 +531,76 @@ return function(S)
     return S.locked[voice_idx] and LEVELS.locked or LEVELS.unlocked
   end
 
+  -- The waiting blink (#876, the one rule #593's bookmark keys began): a
+  -- key whose quantized action waits alternates between S.lib.positions'
+  -- LEVELS.waiting_high and waiting_low (15 and 2), each for waiting_ticks
+  -- (4) of the playheads' 15 Hz ticks, which blink_tick counts. ticks: the
+  -- ticks counted; shown: the signature of the waits the core's keys show
+  -- at the last tick (nil while none waits)
+  local blink = {ticks = 0, shown = nil}
+
+  -- The blink's level at tick `now` (the ticks counted so far by default)
+  function M.waiting_level(now)
+    local levels = S.lib.positions.LEVELS
+    now = now or blink.ticks
+    return math.floor(now / levels.waiting_ticks) % levels.waiting_phases == 0 and levels.waiting_high
+      or levels.waiting_low
+  end
+
+  -- What the waits the core's keys show come to: the play key's start, a
+  -- scene key's recall (its slot), each voice's freeze key and the cell of
+  -- a voice's jump or loop, with the blink's level; nil when none waits.
+  -- A bookmark key's wait is positions' (its display signature)
+  local function blink_signature()
+    local quantize = S.lib.quantize
+    local parts = {}
+    if S.lib.sequencer.play_state() == "armed" then parts[#parts + 1] = "play" end
+    local scene = quantize.waiting_detail("scene")
+    if scene ~= nil then parts[#parts + 1] = "scene " .. tostring(scene) end
+    for voice_idx = 1, NUM_VOICES do
+      if quantize.waiting("freeze" .. voice_idx) then parts[#parts + 1] = "freeze " .. voice_idx end
+      local position = quantize.waiting_detail("position" .. voice_idx)
+      if type(position) == "table" then parts[#parts + 1] = "cell " .. voice_idx .. ":" .. tostring(position.cell) end
+    end
+    if #parts == 0 then return nil end
+    parts[#parts + 1] = M.waiting_level()
+    return table.concat(parts, ",")
+  end
+
+  -- The playheads' tick (lib/playheads.lua): counts a tick and repaints
+  -- the grids when what the waiting keys show changed (a phase of the
+  -- blink, a wait begun, ended or moved, wherever it was started or
+  -- taken back), once more when the last one ends; while none waits it
+  -- repaints nothing. No param action repaints for a wait
+  function M.blink_tick()
+    blink.ticks = blink.ticks + 1
+    local signature = blink_signature()
+    if signature ~= blink.shown then grid_redraw() end
+    blink.shown = signature
+  end
+
+  -- The play key (PL, and NV while the 64's chooser is not shown): playing,
+  -- stopped, or blinking while a start waits (S.lib.sequencer.play_state)
   function M.play_level()
-    return S.pattern_playing and LEVELS.playing or LEVELS.stopped
+    local state = S.lib.sequencer.play_state()
+    if state == "armed" then return M.waiting_level() end
+    return state == "playing" and LEVELS.playing or LEVELS.stopped
   end
 
   -- The scene keys' levels, one rule for every layout with a scenes page
   -- (#452): a recall key 8 for a saved scene, 2 for an empty slot, 10 for
   -- the slot the running sequencer recalls next (#303), 15 for the current
   -- scene, which wins (S.lib.scenes.shows_current: the scene a fade goes to
-  -- blinks, #254); a fade key 6 saved, 2 empty. A slot outside
-  -- 1..NUM_SCENES is 0
+  -- blinks, #254); a fade key 6 saved, 2 empty. Both keys of the scene a
+  -- quantized recall waits for (its slot, the action's detail) blink
+  -- before all of these (#876). A slot outside 1..NUM_SCENES is 0
   local SCENE_LEVELS = {saved = 8, empty = 2, next = 10, current = 15, fade_saved = 6}
+
+  local function scene_waits(slot) return S.lib.quantize.waiting_detail("scene") == slot end
 
   function M.scene_recall_level(slot)
     if not whole_number_in(slot, 1, S.constants.NUM_SCENES) then return 0 end
+    if scene_waits(slot) then return M.waiting_level() end
     if S.lib.scenes.shows_current(slot) then return SCENE_LEVELS.current end
     if slot == S.lib.scenes.sequencer_next_slot() then return SCENE_LEVELS.next end
     return S.scenes[slot].populated and SCENE_LEVELS.saved or SCENE_LEVELS.empty
@@ -552,6 +608,7 @@ return function(S)
 
   function M.scene_fade_level(slot)
     if not whole_number_in(slot, 1, S.constants.NUM_SCENES) then return 0 end
+    if scene_waits(slot) then return M.waiting_level() end
     return S.scenes[slot].populated and SCENE_LEVELS.fade_saved or SCENE_LEVELS.empty
   end
 

@@ -2,14 +2,16 @@
 -- The quantized-action scheduler (3.4, design §8.9), S.lib.quantize: a user
 -- action that may wait for the next beat or bar (a scene recall, a freeze
 -- toggle, a bookmark recall or position jump, the pattern start) goes
--- through schedule(key, fn, label). The quantize_actions param (off, beat,
--- bar) says how long: off runs fn at once, beat and bar wait on a clock for
--- the next beat or bar (clock.sync), a new action of the same key replacing
--- the waiting one (cancel(key) drops one: a toggle pressed again), and the
--- header flashes "<label> at <beat|bar>" while it waits. The param is the
--- fifth of the strata_seq group, which lib/sequencer.lua's add_params sizes
--- with PARAM_COUNT and fills by calling add_params. Registers the cleanup
--- step CLEANUP_ORDER.quantize and the "quantize" invariant.
+-- through schedule(key, fn, label, detail). The quantize_actions param
+-- (off, beat, bar) says how long: off runs fn at once, beat and bar wait on
+-- a clock for the next beat or bar (clock.sync), a new action of the same
+-- key replacing the waiting one (cancel(key) drops one: a toggle pressed
+-- again), and the header flashes "<label> at <beat|bar>" while it waits
+-- (waiting_detail(key) is what it waits for, the grid's blink). The param
+-- is the fifth of the strata_seq group, which lib/sequencer.lua's
+-- add_params sizes with PARAM_COUNT and fills by calling add_params.
+-- Registers the cleanup step CLEANUP_ORDER.quantize and the "quantize"
+-- invariant.
 
 return function(S)
   local M = {}
@@ -28,8 +30,8 @@ return function(S)
 
   -- The waiting actions, by key: {clock = the coroutine that waits, flash =
   -- the header text it shows, or nil, token = its number, sync_beat = the
-  -- beat it synced at, landing = the beat its sync lands on}. Tests read
-  -- the clocks here
+  -- beat it synced at, landing = the beat its sync lands on, detail = what
+  -- the action is for, or nil}. Tests read the clocks here
   M.actions = {}
   -- The clocks of dropped actions whose resume matron may have posted,
   -- [id] = true: each ends at that resume, doing nothing (#626)
@@ -90,9 +92,12 @@ return function(S)
   -- waits, ending when fn runs or the action is dropped, #631; another
   -- flash can take its place). Returns whether fn ran at once and, for an
   -- action that waits, its token (waiting(key, token) tells whether that
-  -- one still waits). A waiting fn that raises prints "strata: quantized
-  -- <key> failed: <error>"
-  function M.schedule(key, fn, label)
+  -- one still waits). detail (optional, any value) is what the action is
+  -- for, kept while it waits (waiting_detail): a scene recall's slot, a
+  -- jump's or a loop's {voice, cell}, a bookmark recall's number, by which
+  -- the grid's waiting keys blink (#876). A waiting fn that raises prints
+  -- "strata: quantized <key> failed: <error>"
+  function M.schedule(key, fn, label, detail)
     if type(key) ~= "string" or key == "" then error("quantize.schedule: a key is a string", 2) end
     if type(fn) ~= "function" then error("quantize.schedule: an action is a function", 2) end
     cancel(key)
@@ -106,7 +111,7 @@ return function(S)
     -- the clock's first wait is this sync, so matron counts it from now
     local now = clock.get_beats()
     local action = {flash = label and (tostring(label) .. " at " .. waits) or nil, token = last_token,
-      sync_beat = now, landing = math.ceil((now + QUANTIZE.flt_epsilon) / beats) * beats}
+      sync_beat = now, landing = math.ceil((now + QUANTIZE.flt_epsilon) / beats) * beats, detail = detail}
     action.clock = clock.run(function()
       clock.sync(beats)
       if M.actions[key] ~= action then
@@ -128,6 +133,13 @@ return function(S)
   function M.waiting(key, token)
     local action = M.actions[key]
     return action ~= nil and (token == nil or action.token == token)
+  end
+
+  -- The detail schedule kept for the action of this key that waits (nil
+  -- when none waits, or it was given none)
+  function M.waiting_detail(key)
+    local action = M.actions[key]
+    return action and action.detail
   end
 
   -- The scheduler's params, PARAM_COUNT of them: quantize_actions

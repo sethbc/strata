@@ -736,4 +736,44 @@ test("the slice rows repaint from the playhead clock when a slice starts or ends
   assert_equal(pane.led(2, 1), 15, "and its key, on side 2")
 end)
 
+
+-- #876: a jump or a two-key loop that waits for its bar blinks the cell
+-- pressed (a loop's second key) between the waiting levels, as a waiting
+-- bookmark does (#593); the bar's jump shows steady
+test("a position cell blinks while its jump or loop waits", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local LEVELS = S.lib.positions.LEVELS
+  local tick = 1 / S.constants.PLAYHEADS.update_hz
+  local pane = grid_pane(context, "256 top")
+  pane.show(S.constants.GRID_PAGES.positions)
+  local function seen_over(ticks, x, y)
+    local seen = {}
+    for _ = 1, ticks do
+      context.clock.run_for(tick)
+      seen[pane.led(x, y)] = true
+    end
+    return seen
+  end
+  params:set("quantize_actions", 3)  -- bar
+  context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+  pane.tap(9, 1)
+  local detail = S.lib.quantize.waiting_detail("position1")
+  assert_true(detail and detail.voice == 1 and detail.cell == 9, "the jump keeps its voice and cell")
+  local seen = seen_over(12, 9, 1)
+  assert_true(seen[LEVELS.waiting_high] and seen[LEVELS.waiting_low], "the jump's cell blinks")
+  assert_true(not seen_over(4, 9, 2)[LEVELS.waiting_low], "voice 2's cell does not")
+  context.clock.run_for((4.05 - clock.get_beats()) * clock.get_beat_sec())
+  seen = seen_over(8, 9, 1)
+  assert_true(seen[LEVELS.playhead] and not seen[LEVELS.waiting_low], "the jump landed: the head, steady")
+  -- a loop: cell 3 held, cell 12 pressed
+  pane.press(3, 2, 1); pane.press(12, 2, 1)
+  pane.press(12, 2, 0); pane.press(3, 2, 0)
+  detail = S.lib.quantize.waiting_detail("position2")
+  assert_true(detail and detail.voice == 2 and detail.cell == 12, "the loop keeps its voice and pressed cell")
+  seen = seen_over(12, 12, 2)
+  assert_true(seen[LEVELS.waiting_high] and seen[LEVELS.waiting_low], "the loop's cell blinks")
+  S.lib.quantize.cancel("position2")
+end)
+
 end

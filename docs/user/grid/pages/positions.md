@@ -16,6 +16,7 @@ What the cells show, brightest first:
 - the playhead, where the voice's grains start, at 15 (a stopped voice shows where it will start)
 - the record head, at 13, while the buffer records without emptying (an overdub or a loop recording)
 - a held cell, at 11
+- the cell of a jump or a two-key loop (its second key) that waits for its beat or bar, once you let go, blinking between 15 and 2 until it lands
 - the cells inside the loop at 4 to 8 and those outside it at 1 to 3, brighter where the buffer's audio is louder, so the line draws the waveform
 - a voice that reads no buffer, or whose buffer is empty, has a dark line
 
