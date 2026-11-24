@@ -4432,9 +4432,11 @@ test("a Whole Tone degree from an off-scale voice walks the scale, as 3.7", func
   assert_near(seq.degree_semitones(1, 1), 1.7, 1e-6, "from 60.3, degree 1 is D: 1.7 semitones up")
 end)
 
--- 3.9 (#874, #920; design "Calls made in this design", ruling B2): a voice's
--- position and pass. A direction change ends the pass where the new
--- direction wraps; a misstep wraps by the pass's own length. Each state is
+-- 3.9 (#874, #920, #961, #970; design "Calls made in this design", ruling
+-- B2): a voice's position and pass. A direction change ends the pass where
+-- the new direction wraps; a misstep wraps by the pass's own length, from a
+-- step past it to the nearest step inside (#961), and in ping-pong is a
+-- step of the ping-pong, turning and ending the pass at an end (#970). Each state is
 -- voice 1 alone, every step set, playing; each row's check runs the steps
 -- after the event and reads the steps played and the pass each played on
 do
@@ -4516,6 +4518,12 @@ do
         random_draws(context, 0.75)
         playing(context, 6, "forward", 5)
       end,
+      -- reverse at length 8, every step a misstep down: 8 7 6
+      ["reverse missteps"] = function(context)
+        params:set("v1_seq_misstep", 100)
+        random_draws(context, 0.25)
+        playing(context, 8, "reverse", 3)
+      end,
     },
     events = {
       ["to forward"] = function() params:set("v1_seq_direction", DIRECTION.forward) end,
@@ -4528,7 +4536,9 @@ do
     state_of = function()
       local S = local_value("S")
       if not S.pattern_playing then return "stopped" end
-      if params:get("v1_seq_misstep") > 0 then return "missteps" end
+      if params:get("v1_seq_misstep") > 0 then
+        return params:get("v1_seq_direction") == DIRECTION.reverse and "reverse missteps" or "missteps"
+      end
       return params:string("v1_seq_direction")
     end,
     rows = {
@@ -4545,14 +4555,12 @@ do
       {"ping-pong", "length 4", "ping-pong", check = plays("1 2 3 4 5 6 7 8 7 6 5 4 3 2 1 2 3 4 3 2 1 2 3",
         "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 3 3 3 4 4 4 5 5", 12)},
       -- a misstep wraps by the pass's length: the sixth step by 6, the
-      -- steps of the next pass by 4. Known #961: the seventh, a misstep up
-      -- from 6 at the start of a pass of 4, lands on 3 (neither next to 6
-      -- nor the wrap's 1)
-      {"missteps", "length 4", "missteps", check = plays("1 2 3 4 5 6 3 4 1 2", "1 1 1 1 1 1 2 2 2 2", 5),
-        known = 961},
+      -- steps of the next pass by 4; the seventh, a misstep up from 6, past
+      -- the pass of 4, wraps to 1 (#961)
+      {"missteps", "length 4", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 2 2 2 2", 5)},
       {"missteps", "to forward", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 2 2 2 2", 5)},
       -- reverse's count: the steps left to step 1 (four), each a misstep up
-      {"missteps", "to reverse", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 1 1 1 2", 5)},
+      {"missteps", "to reverse", "reverse missteps", check = plays("1 2 3 4 5 6 1 2 3 4", "1 1 1 1 1 1 1 1 1 2", 5)},
       {"forward", "to ping-pong", "ping-pong", check = plays("1 2 3 4 5 6 7 8 7 6 5 4 3 2 1",
         "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2", 12)},
       {"forward", "to random", "random", check = plays("1 2 3 5 2 7 4 1 8 3 6 5 2 7 4",
@@ -4576,22 +4584,38 @@ do
         "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2", 12)},
       {"random", "length 4", "random", check = plays("5 2 7 4 1 4 3 2 1 2 3 4 1 4 3",
         "1 1 1 1 2 2 2 2 3 3 3 3 4 4 4", 12)},
-      -- known #970: in ping-pong a misstep takes the place of
-      -- ping_pong_step, so it never turns or ends a pass: with every step a
-      -- misstep, its wrap (6 to 1) crosses the top and the pass never ends
-      {"missteps", "to ping-pong", "missteps", known = 970, check = plays("1 2 3 4 5 6 1 2 3 4 5 6 1 2 3 4 5",
-        "1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1", 12)},
+      -- in ping-pong a misstep is a ping-pong step (#970): a misstep up at
+      -- the top (6) turns down to 5 and ends the pass, as a plain step there
+      -- does; the next misstep up, from 5, keeps the way down
+      {"missteps", "to ping-pong", "missteps", check = plays("1 2 3 4 5 6 5 6 5 6 5 6 5 6 5 6 5",
+        "1 1 1 1 1 1 2 2 3 3 4 4 5 5 6 6 7", 12)},
       {"missteps", "to random", "missteps", check = plays("1 2 3 4 5 6 1 2 3 4 5 6 1 2 3 4 5",
         "1 1 1 1 1 1 2 2 2 2 2 2 3 3 3 3 3", 12)},
+      -- a misstep down from 6, past the length applied at once, lands on
+      -- the length's last step, 4 (#961); then passes of 4, down and wrapping
+      {"reverse missteps", "length 4", "reverse missteps", check = plays("8 7 6 4 3 2 1 4 3 2",
+        "1 1 1 1 2 2 2 2 3 3")},
+      -- forward's count becomes 6: two missteps down (5 4), then pass 2
+      {"reverse missteps", "to forward", "missteps", check = plays("8 7 6 5 4 3 2 1 8 7", "1 1 1 1 1 2 2 2 2 2")},
+      {"reverse missteps", "to reverse", "reverse missteps", check = plays("8 7 6 5 4 3 2 1 8 7",
+        "1 1 1 1 1 1 1 1 2 2")},
+      -- a misstep down at the bottom (1) turns up to 2 and ends the pass
+      -- (#970); each misstep down from 2 keeps the way up
+      {"reverse missteps", "to ping-pong", "missteps", check = plays("8 7 6 5 4 3 2 1 2 1 2 1 2 1 2",
+        "1 1 1 1 1 1 1 1 2 2 3 3 4 4 5", 12)},
+      {"reverse missteps", "to random", "missteps", check = plays("8 7 6 5 4 3 2 1 8 7 6 5 4 3 2",
+        "1 1 1 1 1 1 1 1 2 2 2 2 2 2 2", 12)},
     },
-    notes = {"docs/notes/lua/sequencer.md", "position and pass"},
+    notes = {"docs/notes/lua/sequencer/pass.md", "position and pass"},
   })
 
   -- The rule's closed forms at every count of steps taken, 1 to 7, at
   -- length 8 (design section 5): forward for k steps, then reverse, plays
   -- k - 1 down to 1 and pass 2 from 8; reverse for k, then forward, plays
   -- 10 - k up to 8 and pass 2 from 1; a length of 4 applies at once under
-  -- 4 steps taken and at the pass's end from 4 on
+  -- 4 steps taken and at the pass's end from 4 on; with every step a
+  -- misstep (#961), forward up then 6 plays as forward, and reverse down
+  -- then 4 under 4 steps taken goes on from 4, the length's last step
   test("position and pass: a direction change and a shorter length at every count of steps taken", function()
     -- from up to to, or down with by -1 (empty when it is passed already)
     local function range(from, to, by)
@@ -4606,21 +4630,28 @@ do
       end
       return list
     end
-    local function run(direction, taken, event, more)
+    -- draw: every step a misstep, up (0.75) or down (0.25); nil for none
+    local function run(direction, taken, event, more, draw)
       local context = load_strata(); finish_startup(context)
       local S = local_value("S")
       voice_1_only(S, 8)
       params:set("v1_seq_direction", DIRECTION[direction])
+      if draw then
+        params:set("v1_seq_misstep", 100)
+        missteps_up(context, draw)
+      end
       local played = pass_output(S)
       pattern_clock_start()
       run_steps(context, taken)
       event()
       run_steps(context, more)
       pattern_clock_stop()
+      if draw then math.random = context.real_random end
       return played
     end
     local function to(direction) return function() params:set("v1_seq_direction", DIRECTION[direction]) end end
     local function length_4() params:set("v1_seq_length", 4) end
+    local function length_6() params:set("v1_seq_length", 6) end
     -- each case: its first pass's steps, then pass 2's first two
     local cases = {}
     for k = 1, 7 do
@@ -4628,14 +4659,21 @@ do
       table.insert(cases, {"reverse", k, "to forward", to("forward"), joined(range(8, 9 - k, -1), range(10 - k, 8)), {1, 2}})
       table.insert(cases, {"forward", k, "length 4", length_4, range(1, k < 4 and 4 or 8), {1, 2}})
       table.insert(cases, {"reverse", k, "length 4", length_4, range(8, k < 4 and 5 or 1, -1), {4, 3}})
+      -- every step a misstep (#961): up, a step past the new length wraps
+      -- to 1, as forward does; down, it lands on the length's last step
+      table.insert(cases, {"forward", k, "length 6", length_6, range(1, k < 6 and 6 or 8), {1, 2}, 0.75})
+      table.insert(cases, {"reverse", k, "length 4", length_4,
+        k < 4 and joined(range(8, 9 - k, -1), range(4, k + 1, -1)) or range(8, 1, -1),
+        k < 4 and {k, k > 1 and k - 1 or 4} or {4, 3}, 0.25})
     end
     for _, case in ipairs(cases) do
       local first, second = case[5], case[6]
-      local played = run(case[1], case[2], case[4], #first - case[2] + #second)
+      local played = run(case[1], case[2], case[4], #first - case[2] + #second, case[7])
       local steps, passes = {}, {}
       for index = 1, #first do steps[#steps + 1], passes[#passes + 1] = first[index], 1 end
       for index = 1, #second do steps[#steps + 1], passes[#passes + 1] = second[index], 2 end
-      local what = case[1] .. " for " .. case[2] .. ", then " .. case[3]
+      local what = case[1] .. (case[7] and (case[7] > 0.5 and " missteps up" or " missteps down") or "")
+        .. " for " .. case[2] .. ", then " .. case[3]
       assert_equal(table.concat(played.steps, " "), table.concat(steps, " "), what .. ": the steps")
       assert_equal(table.concat(played.passes, " "), table.concat(passes, " "), what .. ": the passes")
     end
@@ -4682,6 +4720,28 @@ do
     math.random = context.real_random
     assert_equal(table.concat(played.steps, " "), "1 6 5 4 3 2 4 3 2 1 4 3 2", "missteps then a shorter length")
     assert_equal(table.concat(played.passes, " "), "1 1 1 1 1 1 2 2 2 3 3 3 3", "the pass of each")
+  end)
+
+  -- #970: a misstep in ping-pong at a length of 1 turns nothing (each step
+  -- is a pass, as without it), so its drawn way never stays: at a longer
+  -- length the leg goes up from 1 on the same pass
+  test("position and pass: a ping-pong misstep at a length of 1 leaves the heading up", function()
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    voice_1_only(S, 1)
+    params:set("v1_seq_direction", DIRECTION["ping-pong"])
+    params:set("v1_seq_misstep", 100)
+    missteps_up(context, 0.25)
+    local played = pass_output(S)
+    pattern_clock_start()
+    run_steps(context, 3)
+    params:set("v1_seq_misstep", 0)
+    voice_1_only(S, 8)
+    run_steps(context, 3)
+    pattern_clock_stop()
+    math.random = context.real_random
+    assert_equal(table.concat(played.steps, " "), "1 1 1 2 3 4", "the steps")
+    assert_equal(table.concat(played.passes, " "), "1 2 3 3 3 3", "the leg up goes on in pass 3")
   end)
 end
 
