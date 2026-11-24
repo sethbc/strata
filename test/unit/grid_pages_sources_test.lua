@@ -31,7 +31,8 @@ local function channel(voice_idx) return params:get("v" .. voice_idx .. "_input_
 -- the own column 15 on the synth, its own output 15 / 6 by the blink's
 -- phase (0.5 s each), else 4; another voice's 15 read, else 4 running
 -- and 2 stopped; the input 15 / 11 / 7 by its channel, else 4; a slot 15
--- read, 2 free and 4 holding audio
+-- read, 2 free, 4 holding audio, and 4 / 0 by the missing blink's phase
+-- (1 s each) while its remembered file was not found (#1026)
 local function expected_level(S, voice_idx, x)
   local c = S.constants
   local read = source(voice_idx)
@@ -51,6 +52,9 @@ local function expected_level(S, voice_idx, x)
     return ({15, 11, 7})[channel(voice_idx)]
   end
   if read == c.SOURCE_SYNTH + x - SLOT_X then return 15 end
+  if S.lib.buffers.status(x - SLOT_X) == "missing" then
+    return math.floor(util.time()) % 2 == 0 and 4 or 0
+  end
   return S.lib.buffers.is_free(x - SLOT_X) and 2 or 4
 end
 
@@ -86,6 +90,38 @@ local function each_arrangement(body, needs)
     for _, key in ipairs(needs or {}) do shown = shown and pane.shows(key[1], key[2]) end
     if shown then
       pane.show(S.constants.GRID_PAGES.sources)
+      body(context, S, pane, arrangement)
+    end
+  end
+end
+
+-- The slot a start finds missing in each_missing_arrangement
+local MISSING_SLOT = 5
+
+-- Each arrangement that shows the slot keys on a start whose remembered
+-- file for MISSING_SLOT is not found (a slot made missing the way a start
+-- makes it, as buffers_test.lua does), its pane on the sources page, slot
+-- 3 holding audio and slot 4 free
+local function each_missing_arrangement(body)
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local subdir = "sources-missing-" .. math.random(1, 1e9)
+    local context = load_strata({data_subdir = subdir})
+    util.make_dir(context.data_dir .. "strata/")
+    local paths, starts = {}, {}
+    for slot = 1, MISSING_SLOT do paths[slot], starts[slot] = "", 0 end
+    paths[MISSING_SLOT] = context.audio_dir .. "gone.wav"
+    local file = assert(io.open(context.data_dir .. "strata/buffers.data", "w"))
+    file:write(h.tabutil_text({version = 2, paths = paths, starts = starts})); file:close()
+    context = load_strata({data_subdir = subdir}); finish_startup(context)
+    local S = local_value("S")
+    local pane = grid_pane(context, arrangement)
+    if pane.shows(SLOT_X + 3, 1) and pane.shows(SLOT_X + MISSING_SLOT, 1) then
+      pane.show(S.constants.GRID_PAGES.sources)
+      load_buffer(3, "/tmp/a.wav")
+      context.polls.fire("bufferState", context.polls.buffer_state_value(3, 1, 12.5))
+      assert_equal(S.lib.buffers.status(MISSING_SLOT), "missing", arrangement .. ": the start finds slot 5 missing")
+      assert_equal(S.lib.buffers.status(4), "empty", arrangement .. ": slot 4 free")
+      assert_equal(S.lib.buffers.status(3), "loaded", arrangement .. ": slot 3 holds audio")
       body(context, S, pane, arrangement)
     end
   end
@@ -312,6 +348,99 @@ test("a loading or recording slot's key is at 4, not 2", function()
     end
     assert_page_lights(S, pane, arrangement)
   end, {{SLOT_X + 3, 1}, {SLOT_X + 5, 1}})
+end)
+
+-- #1026: a missing slot (its remembered file not found on start) blinks
+-- slowly, 4 and 0 for missing_blink_seconds (1 s) each: told from a free
+-- slot (2, steady) and from one holding audio (4, steady)
+test("a missing slot's key is told from a free one and from one holding audio (#1026)", function()
+  each_missing_arrangement(function(context, S, pane, arrangement)
+    local page = S.lib.grid_pages_sources.SOURCES_PAGE
+    assert_equal(page.missing_blink_seconds, 1, arrangement .. ": the blink's half period is the page's")
+    assert_equal(page.levels.slot_missing, 4, arrangement .. ": lit at a slot's audio level")
+    assert_equal(page.levels.slot_missing_off, 0, arrangement .. ": and dark")
+    params:set("v2_source", S.constants.SOURCE_SYNTH + MISSING_SLOT)  -- voice 2 reads the missing slot
+    local missing_x = SLOT_X + MISSING_SLOT
+    for _, time in ipairs({100, 100.5, 101, 101.5, 102}) do
+      context.set_time(time)
+      grid_redraw()
+      local lit = math.floor(time) % 2 == 0
+      for voice_idx = 1, S.constants.NUM_VOICES do
+        local line = arrangement .. " at " .. time .. ": line " .. voice_idx
+        if voice_idx == 2 then
+          assert_equal(pane.led(missing_x, voice_idx), 15, line .. ": the voice reading it lights it 15")
+        else
+          assert_equal(pane.led(missing_x, voice_idx), lit and 4 or 0, line .. ": the missing slot")
+        end
+        assert_equal(pane.led(SLOT_X + 4, voice_idx), 2, line .. ": the free slot, steady")
+        assert_equal(pane.led(SLOT_X + 3, voice_idx), 4, line .. ": the slot holding audio, steady")
+      end
+      assert_page_lights(S, pane, arrangement .. " at " .. time)
+    end
+  end)
+end)
+
+test("the missing blink costs nothing while no slot is missing", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local record = S.registry.grid_pages[S.constants.GRID_PAGES.sources]
+    context.set_time(300)
+    local first = record.signature(pane)
+    context.set_time(301)
+    assert_equal(record.signature(pane), first, arrangement .. ": no slot missing: the signature carries no phase")
+    drift_update()
+    local before = pane.device.refresh_count
+    for step = 1, 8 do
+      context.set_time(301 + step * 0.5)
+      drift_update()
+    end
+    assert_equal(pane.device.refresh_count - before, 0, arrangement .. ": idle ticks repaint nothing")
+  end)
+  each_missing_arrangement(function(context, S, pane, arrangement)
+    local record = S.registry.grid_pages[S.constants.GRID_PAGES.sources]
+    context.set_time(300)
+    local first = record.signature(pane)
+    context.set_time(300.5)
+    assert_equal(record.signature(pane), first, arrangement .. ": the same phase, the same signature")
+    context.set_time(301)
+    assert_true(record.signature(pane) ~= first, arrangement .. ": a slot missing: the signature carries the phase")
+    drift_update()
+    local before = pane.device.refresh_count
+    context.set_time(302)
+    drift_update()
+    assert_true(pane.device.refresh_count > before, arrangement .. ": a phase change repaints within a tick")
+    assert_equal(pane.led(SLOT_X + MISSING_SLOT, 1), 4, arrangement .. ": lit again")
+  end)
+end)
+
+test("a load or a clear of the missing slot ends it", function()
+  each_missing_arrangement(function(context, S, pane, arrangement)
+    local record = S.registry.grid_pages[S.constants.GRID_PAGES.sources]
+    local missing_x = SLOT_X + MISSING_SLOT
+    context.set_time(201)
+    grid_redraw()
+    assert_equal(pane.led(missing_x, 1), 0, arrangement .. ": missing, in the dark phase")
+    load_buffer(MISSING_SLOT, "/tmp/b.wav")
+    assert_equal(S.lib.buffers.status(MISSING_SLOT), "loading", arrangement .. ": a load")
+    assert_equal(pane.led(missing_x, 1), 4, arrangement .. ": loading: 4 at once")
+    context.set_time(202)
+    local loading = record.signature(pane)
+    context.set_time(203)
+    assert_equal(record.signature(pane), loading, arrangement .. ": no slot missing: no phase")
+    clear_buffer(MISSING_SLOT)
+    assert_equal(pane.led(missing_x, 1), 2, arrangement .. ": cleared: free, 2")
+  end)
+  each_missing_arrangement(function(context, S, pane, arrangement)
+    local missing_x = SLOT_X + MISSING_SLOT
+    context.set_time(201)
+    grid_redraw()
+    assert_equal(pane.led(missing_x, 1), 0, arrangement .. ": missing, in the dark phase")
+    clear_buffer(MISSING_SLOT)
+    assert_equal(S.lib.buffers.status(MISSING_SLOT), "empty", arrangement .. ": a clear forgets the file")
+    assert_equal(pane.led(missing_x, 1), 2, arrangement .. ": free, 2 at once")
+    context.set_time(202)
+    grid_redraw()
+    assert_equal(pane.led(missing_x, 1), 2, arrangement .. ": and steady")
+  end)
 end)
 
 -- Unmentioned case (the brief's): a slot cleared while a voice reads it
