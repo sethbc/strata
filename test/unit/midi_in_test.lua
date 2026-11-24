@@ -2258,14 +2258,14 @@ end
 
 -- A row's check: what its Effect cell claims. running, started (true or
 -- false); sounding and gone (notes MIDI's allocator records hold, or do
--- not); down and up (keys); sent (the engine calls since the event, those
--- in sent_only if given); lists (each down key's note on lists the voice);
+-- not); down and up (keys); sent (every engine call since the event, none
+-- filtered out); lists (each down key's note on lists the voice);
 -- mark (false: no held-back stop); after (a function of context and S, run last)
 local function midi_notes_checks(want)
   return function(context)
     local S = local_value("S")
     local voice, channel = MIDI_NOTES.voice, MIDI_NOTES.channel
-    if want.sent ~= nil then assert_equal(call_names(context, want.sent_only), want.sent, "the messages sent") end
+    if want.sent ~= nil then assert_equal(call_names(context), want.sent, "the messages sent") end
     if want.running ~= nil then
       assert_equal(S.voices[voice].active, want.running, want.running and "the voice runs" or "the voice is stopped")
     end
@@ -2298,8 +2298,6 @@ local stopped_under_keys = function(context, S)
   lift_all(context)
   assert_equal(call_names(context), "", "the keys' offs send nothing")
 end
-
-local NO_NOTE_SENT = { noteOff = true, voiceOff = true }
 
 h.transition_table({
   name = "midi notes",
@@ -2356,7 +2354,7 @@ h.transition_table({
     {"no key", "latch set, then the LFO step", "no key", check = midi_notes_checks({running = true})},
     {"keys down", "key down", "keys down", check = midi_notes_checks({down = {36, 37, 38}, sounding = {38}})},
     {"keys down", "key up, others down", "keys down",
-      check = midi_notes_checks({sent = "", sent_only = NO_NOTE_SENT, up = {37}, sounding = {37}, running = true})},
+      check = midi_notes_checks({sent = "", up = {37}, sounding = {37}, running = true})},
     {"keys down", "last key up, nothing plays to its end", "no key", check = midi_notes_checks({running = false, started = false})},
     {"keys down", "last key up, a note plays to its end", "stop held back",
       check = midi_notes_checks({running = true, sounding = {36, 37}})},
@@ -2442,7 +2440,7 @@ h.transition_table({
     {"no key", "the LFO step", "no key", check = midi_notes_checks({running = true, sounding = {60}})},
     {"keys down", "key down", "keys down", check = midi_notes_checks({down = {60, 64, 67}, sounding = {60, 64, 67}})},
     {"keys down", "key up, others down", "keys down",
-      check = midi_notes_checks({sent = "", sent_only = NO_NOTE_SENT, up = {64}, sounding = {64}})},
+      check = midi_notes_checks({sent = "", up = {64}, sounding = {64}})},
     {"keys down", "last key up", "no key", check = midi_notes_checks({running = true, sounding = {60, 64}, started = true})},
     {"keys down", "the voice's stop", "keys down",
       check = midi_notes_checks({running = false, down = {60, 64}, after = stopped_under_keys})},
