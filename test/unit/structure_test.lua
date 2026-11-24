@@ -3442,9 +3442,9 @@ test("the Docker script's -s picks the image, its sources, its containers' names
   fake:close()
   local norns = shell_quote(root .. "/norns")
   local cases = {
-    { arguments = "", folder = "default", version = "3.13", image = "strata-sc313", dockerfile = "/test/docker/sc313/Dockerfile", context = "/test/docker/sc313" },
-    { arguments = "-s 3.13", folder = "313", version = "3.13", image = "strata-sc313", dockerfile = "/test/docker/sc313/Dockerfile", context = "/test/docker/sc313" },
-    { arguments = "-s 3.14", folder = "314", version = "3.14", image = "strata-sc314", dockerfile = "/test/docker/sc314/Dockerfile", context = "/test/docker" },
+    { arguments = "", folder = "default", version = "3.13.0 (option -s 3.13,", image = "strata-sc313", dockerfile = "/test/docker/sc313/Dockerfile", context = "/test/docker/sc313" },
+    { arguments = "-s 3.13", folder = "313", version = "3.13.0 (option -s 3.13,", image = "strata-sc313", dockerfile = "/test/docker/sc313/Dockerfile", context = "/test/docker/sc313" },
+    { arguments = "-s 3.14", folder = "314", version = "3.14.1 (option -s 3.14,", image = "strata-sc314", dockerfile = "/test/docker/sc314/Dockerfile", context = "/test/docker" },
   }
   for _, case in ipairs(cases) do
     os.remove(root .. "/docker-run.txt"); os.remove(root .. "/docker-build.txt")
@@ -3464,7 +3464,7 @@ test("the Docker script's -s picks the image, its sources, its containers' names
     end
     for _, stem in ipairs({ "1-alpha", "1-beta_gamma" }) do
       local lines = read_lines(logs .. "/run-" .. stem .. ".log")
-      assert_equal(lines[1], "strata engine check on SuperCollider " .. case.version .. " (image " .. case.image .. ")", case.folder .. ": run-" .. stem .. ".log names its version first")
+      assert_equal(lines[1], "strata engine check on SuperCollider " .. case.version .. " image " .. case.image .. ")", case.folder .. ": run-" .. stem .. ".log names its version first")
     end
   end
   -- a default log folder is named by its version

@@ -3308,6 +3308,12 @@ test("the 3.14.1 Docker image pins a 3.14.1 package, the one docs/checks.md name
   assert_true(version:match("^%d+:3%.14%.1[+~]") ~= nil, "the pin is a 3.14.1 package: " .. version)
   assert_true(dockerfile:find("\"supercollider-language=$SC_APT_VERSION\" \"supercollider-server=$SC_APT_VERSION\"", 1, true) ~= nil,
     "the image installs both packages at the pin")
+  -- check.sh waits on jack_lsp, which 26.10's jackd2 no longer carries:
+  -- jack-example-tools does
+  local install = dockerfile:match("\n%s*&&%s*apt%-get install ([^\n]*)")
+  assert_true(install ~= nil and (" " .. install .. " "):find(" jack%-example%-tools ") ~= nil,
+    "the image installs jack-example-tools, for check.sh's jack_lsp")
+  assert_true(read_repo_file("test/docker/sc313/check.sh"):find("jack_lsp", 1, true) ~= nil, "check.sh waits on jack_lsp")
   local checks = read_repo_file("docs/checks.md")
   assert_true(checks:find("SuperCollider 3.14.1 `" .. version .. "` (Ubuntu " .. release .. "'s package", 1, true) ~= nil,
     "docs/checks.md names the 3.14.1 pin and its Ubuntu release")

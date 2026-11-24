@@ -29,9 +29,9 @@
 #       shard writes run-<i>-<shard>.log and run-<i>-<shard>.status there,
 #       the shard's commas written as _ (run-3-voices_freeze_grains.log); a
 #       run in one container writes run-<i>.log and run-<i>.status. Each
-#       log's first line names the version and image it ran ("strata engine
-#       check on SuperCollider 3.14 (image strata-sc314)"). Nothing in it is
-#       ever deleted.
+#       log's first line names the release, option and image it ran
+#       ("strata engine check on SuperCollider 3.14.1 (option -s 3.14, image
+#       strata-sc314)"). Nothing in it is ever deleted.
 #   -1  runs each full run in one container, every area in one sclang, as
 #       before #581 (for studying #131)
 #   -l  prints the shards a sharded run would use, one a line, and starts
@@ -106,18 +106,21 @@ while getopts s:n:j:o:cl1 flag; do
 done
 shift $((OPTIND - 1))
 
-# The version's image: its part of a container's or log folder's name, the
-# image's name, its Dockerfile and its build's context.
+# The version's image: the release it runs, its part of a container's or
+# log folder's name, the image's name, its Dockerfile and its build's
+# context.
 # Both images run sc313's check.sh, so it is in both hashes (#1039)
 check_script=$script_dir/docker/sc313/check.sh
 case $version in
   3.13)
+    release=3.13.0
     version_name=sc313
     image=${STRATA_SC313_IMAGE:-strata-sc313}
     dockerfile=$script_dir/docker/sc313/Dockerfile
     build_context=$script_dir/docker/sc313
     ;;
   3.14)
+    release=3.14.1
     version_name=sc314
     image=${STRATA_SC314_IMAGE:-strata-sc314}
     dockerfile=$script_dir/docker/sc314/Dockerfile
@@ -207,7 +210,7 @@ launch_runs() {
     docker build --label "strata.dockerfile-sha256=$sources_hash" -t "$image" -f "$dockerfile" "$build_context"
   fi
 
-  echo "SuperCollider $version (image $image)"
+  echo "SuperCollider $release (option -s $version, image $image)"
   if [ -n "$sharded" ]; then
     echo "areas: all, in the workflow's shards ($(echo $shards)), one container each; $runs run(s), $parallel container(s) at once"
   else
@@ -269,7 +272,7 @@ run_one() {
   set +e
   if [ -n "$2" ]; then areas="STRATA_ENGINE_CHECK_AREAS=$2"; else areas=STRATA_ENGINE_CHECK_AREAS; fi
   began=$(date +%s)
-  echo "strata engine check on SuperCollider $version (image $image)" > "$log_dir/run-$1.log"
+  echo "strata engine check on SuperCollider $release (option -s $version, image $image)" > "$log_dir/run-$1.log"
   # --memory and --memory-swap alike: the cap holds without swap (#544)
   docker run --rm --name "$(container_name "$1")" \
     --memory="$memory_cap" --memory-swap="$memory_cap" \
