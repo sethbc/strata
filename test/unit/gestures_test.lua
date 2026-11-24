@@ -455,6 +455,65 @@ test("overdub adds events to a playing loop, free and quantized", function()
   assert_near(params:get("v1_grain_size"), edited, 1e-9, "where it plays at beat 1")
 end)
 
+-- #879: an overdub records every hand edit into the loop, so the row says
+-- it, and stops saying it at each of its ends
+test("describe says dub while overdub is on (#879)", function()
+  local context, S, gestures = loaded()
+  params:set("reverb_mix", 0.3)
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}, {1, "reverb_mix", 1}}, 1.5)  -- 2.5 s
+  assert_equal(gestures.describe(1), "play 2.5 s")
+  gestures.overdub(1)
+  assert_equal(gestures.describe(1), "play 2.5 s dub", "a free loop's overdub")
+  gestures.overdub(1)
+  assert_equal(gestures.describe(1), "play 2.5 s", "ALT+K3 again ends it")
+  gestures.overdub(1)
+  gestures.press(1)
+  assert_equal(gestures.describe(1), "stop 2.5 s", "a stop ends it")
+  gestures.press(1); gestures.overdub(1)
+  assert_equal(gestures.describe(1), "play 2.5 s dub")
+  gestures.press(2)
+  assert_equal(gestures.describe(1), "play 2.5 s", "another recorder's recording ends it")
+  gestures.clear(2)
+
+  params:set("gesture_3_quantize", BAR)
+  record(context, gestures, 3, {{0.1, "reverb_mix", 1}}, 3.8)   -- 7.6 beats: 2 bars
+  assert_equal(gestures.describe(3), "play 2 bars")
+  gestures.overdub(3)
+  assert_equal(gestures.describe(3), "play 2 bars dub", "a quantized loop's overdub")
+  gestures.overdub(3)
+  assert_equal(gestures.describe(3), "play 2 bars", "and its end")
+
+  local max_events = gestures.GESTURES.max_events
+  gestures.overdub(1)
+  assert_equal(gestures.describe(1), "play 2.5 s dub")
+  for n = 1, max_events do
+    if not S.gestures[1].overdubbing then break end
+    context.set_time(util.time() + 0.001)
+    hand_edit("delay_mix", n % 2 == 1 and 1 or -1)
+  end
+  assert_equal(S.gestures[1].pattern.count, max_events, "the cap")
+  assert_equal(gestures.describe(1), "play 2.5 s", "the 1024-event cap ends it")
+  context.clock.run_for(0.1)
+end)
+
+test("overdubbing(k) follows the recorder's overdub, false out of range", function()
+  local context, S, gestures = loaded()
+  assert_equal(gestures.overdubbing(1), false, "an empty recorder")
+  record(context, gestures, 1, {{0.1, "reverb_mix", 1}}, 1)
+  assert_equal(gestures.overdubbing(1), false, "a playing one without overdub")
+  gestures.overdub(1)
+  assert_equal(gestures.overdubbing(1), true, "ALT+K3: on")
+  assert_equal(gestures.overdubbing(2), false, "another recorder")
+  gestures.overdub(1)
+  assert_equal(gestures.overdubbing(1), false, "ALT+K3 again: off")
+  gestures.overdub(1); gestures.press(1)
+  assert_equal(gestures.overdubbing(1), false, "a stop ends it")
+  for _, bad in ipairs({0, S.constants.NUM_GESTURES + 1, 1.5, "1", false}) do
+    assert_equal(gestures.overdubbing(bad), false, "recorder " .. tostring(bad) .. " is none")
+  end
+  assert_equal(gestures.overdubbing(nil), false, "nor is nil")
+end)
+
 test("playback is deferrable and is not recorded", function()
   local context, S, gestures = loaded()
   params:set("reverb_mix", 0.3)

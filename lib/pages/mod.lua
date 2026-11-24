@@ -1401,8 +1401,10 @@ return function(S)
         range = {-1, 1}, value = function() return 0 end, describe = function() return string.rep("W", 30) end})
     end),
     -- ALT+K2 held on a row that randomizes (K2:cancel E3:fine), on a
-    -- playing recorder (K2:clear K3:dub); ALT's widest list hint, with
-    -- the shown bank's macros (E2:bank E3:fine), is drawn by every state
+    -- playing recorder (K2:clear K3:dub) and on an overdubbing one at its
+    -- widest row (play 600.0 s dub; K2:clear K3:dub off, #879); ALT's
+    -- widest list hint, with the shown bank's macros (E2:bank E3:fine),
+    -- is drawn by every state
     {name = "ALT+K2 held past the hold time", setup = function(context)
       M.place("scatter_depth")
       key(1, 1); key(2, 1)
@@ -1411,6 +1413,14 @@ return function(S)
     {name = "ALT+K2 held on a playing recorder", setup = function(context)
       every_recorder_state(context)
       M.place("source:gesture2")
+      key(1, 1); key(2, 1)
+      context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
+    end},
+    {name = "ALT+K2 held on an overdubbing recorder, its 10-minute loop", setup = function(context)
+      local gestures = S.lib.gestures
+      gestures.press(1); hand_edit(); context.clock.run_for(gestures.GESTURES.max_seconds)
+      gestures.overdub(1)
+      M.place("source:gesture1")
       key(1, 1); key(2, 1)
       context.clock.run_for(S.constants.ALT_HOLD_SECONDS)
     end},

@@ -17,7 +17,7 @@
 ## Machines
 
 ### gesture recorder
-- **State:** `S.gestures[k].state` (`empty`, `recording`, `playing`, `stopped`), the one stored state, with `overdubbing` (only while playing), `run` and `clock` (a quantized loop's), `limit_run` (the 10-minute clock) and the pattern's `rec`, `play` and metro; `S.lib.gestures.state(k)` names it, and every writer of it is one of `press`, `clear`, `set_playing` (the play param's action), `finish_recording`, `fail`, `load_record` and `stop_all`.
+- **State:** `S.gestures[k].state` (`empty`, `recording`, `playing`, `stopped`), the one stored state, with `overdubbing` (only while playing; `S.lib.gestures.overdubbing(k)` reads it, and the grid core reads it there, #879), `run` and `clock` (a quantized loop's), `limit_run` (the 10-minute clock) and the pattern's `rec`, `play` and metro; `S.lib.gestures.state(k)` names it, and every writer of it is one of `press`, `clear`, `set_playing` (the play param's action), `finish_recording`, `fail`, `load_record` and `stop_all`.
 - **Invariant:** `gesture recorders`: at most one recorder records; a recorder's clock or metro runs exactly while it plays, its run with it; its 10-minute clock runs exactly while it records an event or more; it overdubs only while it plays; it is empty exactly when it holds no event and does not record; its play param is 1 exactly while it plays; its clocks are live handles of the clock helper.
 - **Test:** `test/unit/gestures_test.lua`: "gesture recorder: recording + the limit".
 
@@ -67,7 +67,7 @@ The table (3.9, #948) is recorder 1's, with a free loop of one reverb edit (on i
 - `S.gestures[k]` for k in 1..`NUM_GESTURES` (4): `pattern` (a pattern of norns' `pattern_time` library, `require "pattern_time"`, made at include time: its `event` list and `count` always, its `time` list for a free loop), `state` (`empty`, `recording`, `playing`, `stopped`), `quantize` (`free`, `beat`, `bar`), and for a quantized loop `offsets` (each event's beats from the loop's start) and `length_beats`; `run` (the quantized loop's clock-helper handle while it plays) and `clock` (its id), `loop_start` and `next_index` (its pass), `length_seconds` (a free loop's), `loop_started_at`, `first_event_at`, `limit_run` (the 10-minute stop's clock-helper handle while it records; its id is `limit_run.id`) and `overdubbing`.
 - `S.gesture_playing`: true while a playback sets a param.
 - `S.gesture_save_clock`: the live file's timed write while it waits (#651).
-- `press(k)`, `clear(k)`, `overdub(k)`, `state(k)`, `describe(k)`, `phase(k)`, `add_params()`, `GESTURES` (the tunables).
+- `press(k)`, `clear(k)`, `overdub(k)`, `state(k)`, `overdubbing(k)` (the field, false for a recorder out of range), `describe(k)`, `phase(k)`, `add_params()`, `GESTURES` (the tunables).
 - The group `strata_gestures` (8 params), the scene fields `gesture_<k>_play`, the PSET hook `gestures`, the start step `gestures_load` (107), the cleanup steps `gestures_save` (34) and `gestures` (95), the modulation sources `gesture1`..`gesture4`.
 - Its tests: `test/unit/gestures_test.lua`. The harness's pattern_time is `test/stub_pattern_time.lua` (`docs/notes/test-harness/stubs.md`).
 
@@ -75,7 +75,7 @@ The table (3.9, #948) is recorder 1's, with a free loop of one reverb edit (on i
 
 `press(k)` (MOD's K3 and the grids): empty → recording (from its first event: a silent lead-in is not part of the loop) → playing (a free loop at once, its first event first; a quantized loop from its next beat or bar) → stopped → playing. A recording with no event goes back to empty. `clear(k)` stops and empties it. `overdub(k)` toggles overdub on a playing recorder: a free loop through pattern_time's `set_overdub` (its `overdub_event` splits the gap the hand edit falls in), a quantized one by inserting the event into the beat list at `(clock.get_beats() - loop_start) mod length_beats`, kept sorted, and moving `next_index` past it so this pass does not play it again (an edit before the first pass starts is not taken). A bad index does nothing.
 
-`describe(k)`: `empty`, `rec 3.2 s` (seconds since the first event, `rec 0.0 s` before it), `play 2.5 s` or `stop 2.5 s` (a free loop's length), `play 3 bars`, `play 1 bar`, `play 4 beats` (a quantized loop's).
+`describe(k)`: `empty`, `rec 3.2 s` (seconds since the first event, `rec 0.0 s` before it), `play 2.5 s` or `stop 2.5 s` (a free loop's length), `play 3 bars`, `play 1 bar`, `play 4 beats` (a quantized loop's); a loop that overdubs ends ` dub` (`play 2.5 s dub`, `play 2 bars dub`, #879), so a player on another page sees that every hand edit goes into it, and each end of the overdub (ALT+K3 again, a stop, another recorder's recording, the 1024-event cap) takes it away with its redraw (`changed(k)`).
 
 ## Quantization
 
@@ -92,4 +92,4 @@ The table (3.9, #948) is recorder 1's, with a free loop of one reverb edit (on i
 
 ## Sources
 
-`gesture1`..`gesture4` (`S.register_mod_source`, section `gestures`, name `G<k>`, range 0..1): the loop's phase (a free loop's from the time its pass began, `loop_started_at`; a quantized one's from its pass's start beat), 0 while it does not play or before its first pass; `describe` is `describe(k)`. The row (MOD's, 2a): E3 steps the quantize (`enc_param_delta`), K3 presses, `alt_press(2)` (ALT+K2 held) clears, `alt_press(3)` (ALT+K3) toggles overdub; hints `K3:rec E3:quant` (`K3:play`, `K3:stop` by state), and `K3:dub` under ALT while it plays.
+`gesture1`..`gesture4` (`S.register_mod_source`, section `gestures`, name `G<k>`, range 0..1): the loop's phase (a free loop's from the time its pass began, `loop_started_at`; a quantized one's from its pass's start beat), 0 while it does not play or before its first pass; `describe` is `describe(k)`. The row (MOD's, 2a): E3 steps the quantize (`enc_param_delta`), K3 presses, `alt_press(2)` (ALT+K2 held) clears, `alt_press(3)` (ALT+K3) toggles overdub; hints `K3:rec E3:quant` (`K3:play`, `K3:stop` by state), and under ALT `K3:dub` while it plays, `K3:dub off` while it overdubs (#879).
