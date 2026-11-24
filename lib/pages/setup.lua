@@ -43,10 +43,10 @@ return function(S)
       -- 3.9 (#895): any other data file's note while it is still in place
       -- (whether a later change writes over it is the file's own rule,
       -- docs/notes/lua/data-files.md)
-      left_note = "left in place"},
-    -- the data files whose rows are their own (S.scene_file, S.buffer_file),
-    -- in Strata's data folder: S.lib.data_files.problems() rows skip them
-    own_rows = {"scenes.data", "buffers.data"},
+      left_note = "left in place",
+      -- a file that parsed and was set aside by its reader (refused whole,
+      -- or voices.data's damaged presets kept while its good ones loaded)
+      damaged_kept = " damaged, kept", damaged = " file damaged"},
     data_suffix = "%.data$",  -- left off a file's name in its row's label
     -- 3.9 (#931): after a connected grid's size with no layout
     -- (S.lib.grid_core.layout_of)
@@ -176,31 +176,31 @@ return function(S)
 
   -- 3.9 (#895): a row (and its note row) for every other data file with a
   -- problem, as S.lib.data_files.problems() lists them (the live
-  -- gestures.data, a PSET's side file, grids.data, ...), in the order
-  -- found: "<name> unreadable, kept" and "as <backup>"; "<name> file
-  -- unreadable" and "left in place"; "<name> file not saved". The name is
-  -- the file's without ".data", cut to fit the row
+  -- gestures.data, a PSET's side file, grids.data, ...; never the scenes'
+  -- or buffers' file, whose records are their own), in problems()' order:
+  -- "<name> unreadable, kept" (it could not be parsed) or "<name>
+  -- damaged, kept" (it parsed and its reader set it aside) and "as
+  -- <backup>"; "<name> file unreadable" or "<name> file damaged" and "left
+  -- in place"; "<name> file not saved". The name is the file's without
+  -- ".data", cut to fit the row
   local function add_other_file_rows(rows)
     local texts, text = SETUP_PAGE.file_texts, S.lib.ui_text
-    local own = {}
-    for _, file in ipairs(SETUP_PAGE.own_rows) do own[S.lib.scenes.scene_data_dir .. file] = true end
     for _, entry in ipairs(S.lib.data_files.problems()) do
-      if not own[entry.file] then
-        local name = entry.file:match("[^/]*$"):gsub(SETUP_PAGE.data_suffix, "")
-        local suffix, note
-        if entry.problem == "not saved" then
-          suffix = texts["not saved"]
-        elseif entry.backup then
-          suffix, note = texts.kept, texts.kept_note .. entry.backup:match("[^/]*$")
-        else
-          suffix, note = texts.unreadable, texts.left_note
-        end
-        local room = SETUP_PAGE.value_right - screen.text_extents(suffix)
-        local shown = text.fit_text(name, room):gsub("%s+$", "")  -- no space left at the cut
-        table.insert(rows, {selectable = false, text = shown .. suffix})
-        if note then
-          table.insert(rows, note_row(text.fit_text(note, SETUP_PAGE.value_right - SETUP_PAGE.note_indent)))
-        end
+      local name = entry.file:match("[^/]*$"):gsub(SETUP_PAGE.data_suffix, "")
+      local damaged = entry.problem == "damaged"
+      local suffix, note
+      if entry.problem == "not saved" then
+        suffix = texts["not saved"]
+      elseif entry.backup then
+        suffix, note = damaged and texts.damaged_kept or texts.kept, texts.kept_note .. entry.backup:match("[^/]*$")
+      else
+        suffix, note = damaged and texts.damaged or texts.unreadable, texts.left_note
+      end
+      local room = SETUP_PAGE.value_right - screen.text_extents(suffix)
+      local shown = text.fit_text(name, room):gsub("%s+$", "")  -- no space left at the cut
+      table.insert(rows, {selectable = false, text = shown .. suffix})
+      if note then
+        table.insert(rows, note_row(text.fit_text(note, SETUP_PAGE.value_right - SETUP_PAGE.note_indent)))
       end
     end
   end
@@ -611,6 +611,12 @@ return function(S)
         end
         data_files.set_aside(folder .. "gestures.data", ".bak")
         data_files.write(folder .. "missing folder/matrix.data", {version = 1})
+        -- one that parsed and was set aside by its reader: damaged
+        local handle = io.open(folder .. "voices.data", "w")
+        handle:write(data_files.encode({version = 1}))
+        handle:close()
+        data_files.read(folder .. "voices.data")
+        data_files.set_aside(folder .. "voices.data", ".bak")
         enc(2, 60)
       end},
       -- 3.9 (#931): four grids, two of sizes with no layout
