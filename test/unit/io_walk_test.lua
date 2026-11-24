@@ -7,14 +7,17 @@
 -- and plug the synths (a namesake of synth a among them), move one in
 -- SYSTEM > DEVICES with the menu's close, let a remote grid or arc claim
 -- and release a port, change a route and stop the patterns. The oracle is
--- per device in the MIDI stub: never more note offs than note ons for a
--- channel and note, nothing of MIDI out's to a port while a remote holds
--- it, a claim leaves its device sounding nothing, a menu visit that leaves
--- a device on its port cuts no note a voice holds there, and at the end,
--- after cleanup(), every device has had as many offs as ons. Its
--- allowances, each counted (a walk that never meets one fails): the two
--- edges docs/notes/lua/io/midi_out.md documents (namesake, away_cut), and
--- stranded, a fault the walk found (mark_stranded, below)
+-- per device in the MIDI stub, and decided from the walk's own log (what
+-- each device got, at which port, and the claims, moves and keys the walk
+-- made), never from the modules' state: never more note offs than note
+-- ons for a channel and note, nothing of MIDI out's to a port a remote
+-- holds, the remote's holds agreeing with the walk's claims, a claim
+-- leaves its device sounding nothing, a menu's close sends a device that
+-- ends the visit on its port no off but where its note's port was played
+-- on while it was away, and at the end, after cleanup(), every device has
+-- had as many offs as ons. Its allowances, each counted (a walk that never
+-- meets one fails): the two edges docs/notes/lua/io/midi_out.md documents
+-- (namesake, away_cut), and stranded, #988 (mark_stranded, below)
 -- Run alone: lua test/run.lua io_walk
 
 return function(h)
@@ -33,27 +36,20 @@ local WALK = {
   place_from = 7,     -- the end check puts a device on no port at the first free port from 7
   mode_mpe = 2,       -- v<i>_out_mode: plain, mpe
   note_off_modes = 2, -- midi_note_off: latch, release
+  -- the rig's remote ports, in lib/io/remote.lua's KINDS order (the grid
+  -- claims a port both name first)
+  rig_kinds = {"remote_grid_port", "remote_arc_port"},
 }
 
--- lib/io/midi_out.lua's own state table (an upvalue of its stop), as the
--- table `midi out note` of io_midi_out_test.lua reads it
-local function midi_out_state(S)
-  for index = 1, math.huge do
-    local name, value = debug.getupvalue(S.lib.io_midi_out.stop, index)
-    if name == nil then break end
-    if name == "state" then return value end
-  end
-  error("io_midi_out has no state upvalue")
-end
-
--- The module that sent: the innermost lib/ file on the stack ("io/midi_out",
--- "io/remote"), or "test"
-local function sender()
+-- The module that sent: the innermost frame whose source is a file under
+-- the script's lib/ folder, from the repository's root as the includes
+-- name it ("io/midi_out", "io/remote"), or "test"
+local function sender(state)
+  local prefix = state.lib_prefix
   for level = 3, 60 do
     local info = debug.getinfo(level, "S")
     if not info then break end
-    local module = info.source:match("/lib/(.-)%.lua$")
-    if module then return module end
+    if info.source:sub(1, #prefix) == prefix then return (info.source:sub(#prefix + 1):gsub("%.lua$", "")) end
   end
   return "test"
 end
@@ -73,6 +69,10 @@ local function open_total(device)
   return total
 end
 
+local function is_stranded(device, channel, note)
+  return device.stranded[channel] ~= nil and device.stranded[channel][note] == true
+end
+
 -- A note off on a device: it closes one of the device's own note ons, or,
 -- with none open there, the allowance `namesake` (midi_out.md, "Two edges
 -- stay"): owed offs are kept by the device's name, so a device of the same
@@ -82,7 +82,7 @@ local function heard_off(state, device, channel, note)
   local open = ledger(device, channel)
   if (open[note] or 0) > 0 then
     open[note] = open[note] - 1
-    if open[note] == 0 and device.stranded and device.stranded[channel] then device.stranded[channel][note] = nil end
+    if open[note] == 0 and device.stranded[channel] then device.stranded[channel][note] = nil end
     return
   end
   for _, other in ipairs(state.devices) do
@@ -98,37 +98,13 @@ local function heard_off(state, device, channel, note)
   problem(state, device.label .. ": note_off " .. note .. " ch " .. channel .. " beyond its note ons")
 end
 
--- The allowance `stranded`, a fault the walk found (no documented edge): a
--- note sent mid-menu to a device at a port it visits, the device moved on
--- (or back) before the close. The close tells only the ports whose device
--- changed over the visit, so a port empty before and after is told nothing
--- and the note's record stays live, naming the device, on a port it has
--- left; the note's end (or any note on that port) sets it aside, owed to
--- the device, which gets the off only at its next arrival or the next
--- menu close. After each close the walk marks each such record's channel
--- and note on its device: one note on held open there is allowed until
--- the device has its off
-local function mark_stranded(state)
-  for _, voice_notes in pairs(midi_out_state(state.S).notes) do
-    for _, record in pairs(voice_notes) do
-      for _, device in ipairs(state.devices) do
-        if not record.departed and not record.held and device.stub and device.stub.port
-          and record.device == device.name and record.port ~= device.stub.port then
-          device.stranded[record.channel] = device.stranded[record.channel] or {}
-          device.stranded[record.channel][record.note] = true
-        end
-      end
-    end
-  end
-end
-
 -- The notes a device still sounds, a problem `why`, but one note on a
 -- stranded channel and note (counted)
 local function still_sounding(state, device, why)
   local found = {}
   for channel, notes in pairs(device.open) do
     for note, count in pairs(notes) do
-      if count == 1 and device.stranded[channel] and device.stranded[channel][note] then
+      if count == 1 and is_stranded(device, channel, note) then
         state.counts.allowed_stranded = state.counts.allowed_stranded + 1
       elseif count ~= 0 then
         found[#found + 1] = "note " .. note .. " ch " .. channel .. " (" .. count .. ")"
@@ -139,20 +115,54 @@ local function still_sounding(state, device, why)
   if #found > 0 then problem(state, device.label .. ": " .. why .. ": " .. table.concat(found, ", ")) end
 end
 
--- Every message a device's stub gets is logged, with the port, whether a
--- remote held it and the module that sent it; MIDI out's notes go to the
--- device's own ledger
+local function vports(state) return state.context.midi.vports end
+
+local function device_at(state, port)
+  for _, device in ipairs(state.devices) do
+    if device.stub and device.stub.port == port then return device end
+  end
+end
+
+-- The walk's own record of the remotes' claims: state.rig[kind] is the
+-- port the walk set (the rig's), state.claimed[kind] the port it holds.
+-- A kind holds its rig port from the moment a telling finds a device there
+-- that the other kind does not hold (its set, the device's arrival, the
+-- other's release) until the device there is told gone (an unplug, or a
+-- menu's close finding another holder) or the rig moves it
+local function held(state, port)
+  for _, kind in ipairs(WALK.rig_kinds) do
+    if state.claimed[kind] == port then return true end
+  end
+  return false
+end
+
+local function connect_all(state)
+  for _, kind in ipairs(WALK.rig_kinds) do
+    local port = state.rig[kind]
+    if state.claimed[kind] == nil and port > 0 and device_at(state, port) and not held(state, port) then
+      state.claimed[kind] = port
+    end
+  end
+end
+
+local function let_go(state, port)
+  for _, kind in ipairs(WALK.rig_kinds) do
+    if state.claimed[kind] == port then state.claimed[kind] = nil end
+  end
+end
+
+-- Every message a device's stub gets is logged, with the port and the
+-- module that sent it; MIDI out's notes go to the device's own ledger, and
+-- one of its messages to a port the walk's claims hold is a problem
 local function watch(state, device, stub)
   local send = stub.send
   stub.send = function(self, data)
     send(self, data)
     local msg = state.context.midi.to_msg(self.sent[#self.sent])
-    local port = self.port
-    local held = port ~= nil and state.S.lib.io_remote.holds(port)
-    local from = sender()
+    local port, from = self.port, sender(state)
     device.log[#device.log + 1] = {msg = msg, port = port, from = from}
     if from == "io/remote" then return end
-    if held then
+    if port ~= nil and held(state, port) then
       problem(state, device.label .. ": " .. tostring(msg.type) .. " from " .. from .. " to port " .. port
         .. ", which a remote holds")
     end
@@ -164,8 +174,6 @@ local function watch(state, device, stub)
     end
   end
 end
-
-local function vports(state) return state.context.midi.vports end
 
 -- Where norns puts an arriving device (lua/core/midi.lua's Midi.new and
 -- update_devices): the port whose vport has its name, else the first
@@ -180,7 +188,8 @@ local function arrival_port(state, name)
 end
 
 -- The device plugged in where norns puts it, watched from its arrival on
--- (the arrival pays its owed offs inside midi.add)
+-- (the arrival pays its owed offs inside midi.add); a remote whose rig
+-- port it is claims it once it has arrived
 local function plug(state, device)
   local midi = state.context.midi
   local add = midi.add
@@ -192,6 +201,13 @@ local function plug(state, device)
   midi.add = add
   if not ok then error(result, 0) end
   device.stub = result
+  connect_all(state)
+end
+
+local function unplug(state, device)
+  let_go(state, device.stub.port)
+  state.context.midi.unplug(device.stub.port)
+  device.stub = nil
 end
 
 local function connected(state, device)
@@ -222,9 +238,28 @@ local function synth_ports(state)
   return ports
 end
 
+-- Each port's device (its label), 1 to 16
+local function holders(state)
+  local found = {}
+  for port = 1, #vports(state) do
+    local device = device_at(state, port)
+    found[port] = device and device.label or false
+  end
+  return found
+end
+
+local function log_marks(state)
+  local marks = {}
+  for _, device in ipairs(state.devices) do marks[device.label] = #device.log end
+  return marks
+end
+
+-- A key on a random channel (voice 1 to 3), and its channel
 local function key_down(state, random)
-  state.context.midi.send(WALK.keys.port, {type = "note_on", ch = random(#WALK.routes),
+  local channel = random(#WALK.routes)
+  state.context.midi.send(WALK.keys.port, {type = "note_on", ch = channel,
     note = WALK.keys.first + random(WALK.keys.span), vel = 30 + random(97)})
+  return channel
 end
 
 local function key_up(state, random)
@@ -235,54 +270,10 @@ local function key_up(state, random)
   table.sort(down, function(x, y) return x[1] * 128 + x[2] < y[1] * 128 + y[2] end)
   local key = down[random(#down + 1)] or {random(#WALK.routes), WALK.keys.first + random(WALK.keys.span)}
   state.context.midi.send(WALK.keys.port, {type = "note_off", ch = key[1], note = key[2], vel = 0})
+  return key[1]
 end
 
 local function settled(state) state.context.clock.advance_until(state.S.lfo_clock) end
-
--- The live note records of MIDI out, as a set
-local function live_records(state)
-  local live = {}
-  for _, notes in pairs(midi_out_state(state.S).notes) do
-    for _, record in pairs(notes) do
-      if not record.departed and not record.held then live[record] = true end
-    end
-  end
-  return live
-end
-
--- The allowance `away_cut` (midi_out.md, "Two edges stay"): a note still
--- held on a port that was settled while its device was away (a note on the
--- port starting or ending while the menu was open) is set aside, so the
--- close cuts it when the device is back on its port, though the voice
--- still holds it. Every other off the close sends a device that ends the
--- visit on its port, for a note a voice still holds, is a problem
-local function check_close(state, starts, moved, marks, live_at_open)
-  local notes = midi_out_state(state.S).notes
-  local ends = synth_ports(state)
-  for _, device in ipairs(state.devices) do
-    local port = starts[device.label]
-    if port and ends[device.label] == port then
-      for index = marks[device.label] + 1, #device.log do
-        local entry = device.log[index]
-        if entry.from ~= "io/remote" and entry.msg.type == "note_off" then
-          for _, voice_notes in pairs(notes) do
-            for _, record in pairs(voice_notes) do
-              if record.device == device.name and record.port == port and record.channel == entry.msg.ch
-                and record.note == entry.msg.note then
-                if record.departed and moved[device.label] and live_at_open[record] then
-                  state.counts.allowed_away_cut = state.counts.allowed_away_cut + 1
-                else
-                  problem(state, device.label .. ": the menu's close cut note " .. record.note .. " ch "
-                    .. record.channel .. ", which voice " .. record.voice .. " holds, on the port it never left")
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-  end
-end
 
 local function pick(list, random) return list[random(#list)] end
 
@@ -294,24 +285,133 @@ local function on_port(state)
   return list
 end
 
-local function device_at(state, port)
-  for _, device in ipairs(state.devices) do
-    if device.stub and device.stub.port == port then return device end
+-- The last note on from MIDI out to the device for channel and note in
+-- its log before index, and where it is in the log
+local function last_on(device, channel, note, before)
+  for index = before - 1, 1, -1 do
+    local entry = device.log[index]
+    if entry.from == "io/midi_out" and entry.msg.type == "note_on" and entry.msg.ch == channel
+      and entry.msg.note == note then
+      return entry, index
+    end
   end
+end
+
+-- A menu visit: the walk's record of it (the holders, ports and log marks
+-- at its open; each key played while it was open, with where every device
+-- was then)
+local function open_menu(state)
+  _menu.set_mode(true)
+  return {holders = holders(state), starts = synth_ports(state), marks = log_marks(state), keys = {}}
+end
+
+local function play_in_menu(state, visit, random)
+  if random(2) == 1 then key_down(state, random) else key_up(state, random) end
+  visit.keys[#visit.keys + 1] = {ports = synth_ports(state), marks = log_marks(state)}
+end
+
+-- Whether a key was played while the menu was open, after the log's index
+-- (the note's on), while the device was not on port: a key's start or end
+-- settles its voice's port, and may end a note on any port (a played
+-- note takes the oldest of the shared pool's)
+local function played_while_away(visit, device, port, after)
+  for _, key in ipairs(visit.keys) do
+    if key.ports[device.label] ~= port and key.marks[device.label] >= after then return true end
+  end
+  return false
+end
+
+-- A menu's close sends a device that ends the visit on the port it began
+-- it on a note off only for a note it got at another port that the close
+-- tells gone (that port's holder changed over the visit), or under an
+-- allowance: `away_cut` (midi_out.md, "Two edges stay": a note on a port
+-- that was settled while its device was away, by a key played while the
+-- menu was open, is set aside, so the close cuts it when the device is
+-- back, though the voice may still hold it) or `stranded` (#988: a
+-- stranded note's off, paid at a later close)
+local function check_close(state, visit, now, close_marks, stranded_before)
+  local ends = synth_ports(state)
+  for _, device in ipairs(state.devices) do
+    local start = visit.starts[device.label]
+    if start and ends[device.label] == start then
+      for index = close_marks[device.label] + 1, #device.log do
+        local entry = device.log[index]
+        local channel, note = entry.msg.ch, entry.msg.note
+        if entry.from == "io/midi_out" and entry.msg.type == "note_off" then
+          local on, at = last_on(device, channel, note, close_marks[device.label] + 1)
+          if on and on.port ~= start and now[on.port] ~= visit.holders[on.port] then
+            state.counts.told_gone = state.counts.told_gone + 1
+          elseif stranded_before[device.label][channel .. " " .. note] then
+            state.counts.allowed_stranded = state.counts.allowed_stranded + 1
+          elseif on and played_while_away(visit, device, on.port, at) then
+            state.counts.allowed_away_cut = state.counts.allowed_away_cut + 1
+          else
+            problem(state, device.label .. ": the menu's close sent note_off " .. note .. " ch " .. channel
+              .. " to it on port " .. start .. ", which it ended the visit on, though it got the note on port "
+              .. (on and tostring(on.port) or "(none)") .. ", which the close tells nothing, and no key was played"
+              .. " while it was away from there")
+          end
+        end
+      end
+    end
+  end
+end
+
+-- The allowance `stranded`, #988 (a fault the walk found, no documented
+-- edge): a note sent mid-menu to a device at a port it visits, the device
+-- moved on (or back) before the close. The close tells only the ports
+-- whose device changed over the visit, so a port whose holder at the close
+-- is its holder at the open is told nothing and the note stays on a port
+-- its device has left; its end (or any note on that port) sets it aside,
+-- owed to the device, which gets the off only at its next arrival or the
+-- next menu close. Decided from the walk's own log: a note on sent to the
+-- device mid-visit at port P, still open at the close, with the device not
+-- on P at the close and P's holder at the close its holder at the open.
+-- One note held open there is allowed until the device has its off
+local function mark_stranded(state, visit, now)
+  for _, device in ipairs(state.devices) do
+    local at = device.stub and device.stub.port
+    for index = visit.marks[device.label] + 1, #device.log do
+      local entry = device.log[index]
+      local port, channel, note = entry.port, entry.msg.ch, entry.msg.note
+      if entry.from == "io/midi_out" and entry.msg.type == "note_on" and port ~= nil and at ~= port
+        and now[port] == visit.holders[port] and (ledger(device, channel)[note] or 0) > 0 then
+        device.stranded[channel] = device.stranded[channel] or {}
+        device.stranded[channel][note] = true
+      end
+    end
+  end
+end
+
+-- The menu closed: a claimed port whose holder changed over the visit is
+-- told gone (its claim ends inside the close), a rig port that has a
+-- device after it is claimed; then the close's check and the stranded marks
+local function close_menu(state, visit)
+  local now = holders(state)
+  for _, kind in ipairs(WALK.rig_kinds) do
+    local port = state.claimed[kind]
+    if port and now[port] ~= visit.holders[port] then state.claimed[kind] = nil end
+  end
+  local stranded_before = {}
+  for _, device in ipairs(state.devices) do
+    local copy = {}
+    for channel, notes in pairs(device.stranded) do
+      for note in pairs(notes) do copy[channel .. " " .. note] = true end
+    end
+    stranded_before[device.label] = copy
+  end
+  local close_marks = log_marks(state)
+  _menu.set_mode(false)
+  connect_all(state)
+  check_close(state, visit, now, close_marks, stranded_before)
+  mark_stranded(state, visit, now)
 end
 
 -- The menu opened, a synth moved to another port of 1 to 5 (a synth there
 -- left on no port), maybe a synth on no port given one, keys played while
 -- it is open, maybe the synth moved back, and the menu closed
 local function menu_visit(state, random)
-  local starts, moved, marks = synth_ports(state), {}, {}
-  local live_at_open = live_records(state)
-  local function note_moves()
-    for label, port in pairs(synth_ports(state)) do
-      if port ~= starts[label] then moved[label] = true end
-    end
-  end
-  _menu.set_mode(true)
+  local visit = open_menu(state)
   local candidates = on_port(state)
   local mover = #candidates > 0 and pick(candidates, random)
   local from = mover and mover.stub.port
@@ -319,32 +419,26 @@ local function menu_visit(state, random)
     local to = random(WALK.move_ports - 1)
     if to >= from then to = to + 1 end
     place(state, mover, to)
-    note_moves()
   end
   for _, device in ipairs(state.devices) do
     if connected(state, device) and device.stub.port == nil and random(2) == 1 then
-      place(state, device, random(WALK.move_ports)); note_moves()
+      place(state, device, random(WALK.move_ports))
     end
   end
-  for _ = 1, random(4) - 1 do
-    if random(2) == 1 then key_down(state, random) else key_up(state, random) end
-  end
-  if mover and random(3) > 1 and mover.stub.port ~= from then place(state, mover, from); note_moves() end
-  for _, device in ipairs(state.devices) do marks[device.label] = #device.log end
-  _menu.set_mode(false)
-  check_close(state, starts, moved, marks, live_at_open)
-  mark_stranded(state)
+  for _ = 1, random(5) - 1 do play_in_menu(state, visit, random) end
+  if mover and random(3) > 1 and mover.stub.port ~= from then place(state, mover, from) end
+  close_menu(state, visit)
 end
 
-local RIG_KINDS = {"remote_grid_port", "remote_arc_port"}
-
 local function claim(state, random)
-  local remote, port = state.S.lib.io_remote, random(WALK.move_ports)
+  local kind, port = pick(WALK.rig_kinds, random), random(WALK.move_ports)
   local device = device_at(state, port)
-  local was_held = remote.holds(port)
+  local was_held = held(state, port)
   local sounding = device and open_total(device) or 0
-  state.S.lib.io_rig.set(pick(RIG_KINDS, random), port)
-  if device and not was_held and remote.holds(port) then
+  state.claimed[kind] = nil  -- the rig moves it: its old port is let go inside the set
+  if state.S.lib.io_rig.set(kind, port) then state.rig[kind] = port end
+  connect_all(state)
+  if device and not was_held and held(state, port) then
     if sounding > 0 then state.counts.claim_sounding = state.counts.claim_sounding + 1 end
     still_sounding(state, device, "a remote's claim of port " .. port .. " left sounding")
   end
@@ -365,15 +459,18 @@ local function got_setup(device, first)
 end
 
 local function release(state, random)
-  local marks = {}
-  for _, device in ipairs(state.devices) do marks[device] = #device.log + 1 end
-  local set = {}
-  for _, kind in ipairs(RIG_KINDS) do
-    if state.S.lib.io_rig.get(kind) > 0 then set[#set + 1] = kind end
+  local marks, set = log_marks(state), {}
+  for _, kind in ipairs(WALK.rig_kinds) do
+    if state.rig[kind] > 0 then set[#set + 1] = kind end
   end
-  state.S.lib.io_rig.set(pick(#set > 0 and set or RIG_KINDS, random), 0)
+  local kind = pick(#set > 0 and set or WALK.rig_kinds, random)
+  state.claimed[kind] = nil
+  if state.S.lib.io_rig.set(kind, 0) then state.rig[kind] = 0 end
+  connect_all(state)  -- the other kind, if its rig names the port, takes it straight back
   for _, device in ipairs(state.devices) do
-    if got_setup(device, marks[device]) then state.counts.setup_after_release = state.counts.setup_after_release + 1 end
+    if got_setup(device, marks[device.label] + 1) then
+      state.counts.setup_after_release = state.counts.setup_after_release + 1
+    end
   end
 end
 
@@ -402,8 +499,7 @@ local OPS = {
     if #candidates == 0 then return end
     local device = pick(candidates, random)
     if open_total(device) > 0 then state.counts.outlived = state.counts.outlived + 1 end
-    state.context.midi.unplug(device.stub.port)
-    device.stub = nil
+    unplug(state, device)
   end},
   {2, "plug", function(state, random)
     local candidates = {}
@@ -416,7 +512,7 @@ local OPS = {
     end
     if #candidates > 0 then plug(state, pick(candidates, random)) end
   end},
-  {1.5, "menu", menu_visit},
+  {2, "menu", menu_visit},
   {1.5, "claim", claim},
   {1.5, "release", release},
   {2, "route", function(state, random)
@@ -426,21 +522,23 @@ local OPS = {
 }
 
 -- The end check: every device on a port again (a device on no port given
--- a free one in the menu, the namesake unplugged so synth a can return,
--- the synths plugged in), then cleanup(); every device has had as many
--- note offs as note ons, but for the allowances
+-- a free one in the menu, opened only for it; the namesake unplugged so
+-- synth a can return; the synths plugged in), then cleanup(); every device
+-- has had as many note offs as note ons, but for the allowances
 local function finish(state)
-  local free = WALK.place_from
-  _menu.set_mode(true)
+  local free, away = WALK.place_from, {}
   for _, device in ipairs(state.devices) do
-    if device.stub and device.stub.port == nil then
+    if device.stub and device.stub.port == nil then away[#away + 1] = device end
+  end
+  if #away > 0 then
+    local visit = open_menu(state)
+    for _, device in ipairs(away) do
       while vports(state)[free].device ~= nil or vports(state)[free].name ~= "none" do free = free + 1 end
       place(state, device, free)
     end
+    close_menu(state, visit)
   end
-  _menu.set_mode(false)
-  mark_stranded(state)
-  if state.twin.stub then state.context.midi.unplug(state.twin.stub.port); state.twin.stub = nil end
+  if state.twin.stub then unplug(state, state.twin) end
   for _, device in ipairs(state.devices) do
     if device ~= state.twin and device.stub == nil then plug(state, device) end
   end
@@ -458,8 +556,8 @@ end
 -- is credited to a namesake only while that namesake is unplugged and has
 -- the note open
 h.test("the devices walk's ledger names an off beyond its ons and credits a namesake only while it is away", function()
-  local a = {label = "a", name = "synth a", open = {}, log = {}}
-  local twin = {label = "twin", name = "synth a", open = {}, log = {}}
+  local a = {label = "a", name = "synth a", open = {}, log = {}, stranded = {}}
+  local twin = {label = "twin", name = "synth a", open = {}, log = {}, stranded = {}}
   local state = {devices = {a, twin}, problems = {}, counts = {allowed_namesake = 0}}
   ledger(a, 1)[60] = 1
   heard_off(state, twin, 1, 60)
@@ -480,9 +578,16 @@ h.walk({
   steps = 400,
   setup = function(context, random)
     local S = local_value("S")
-    local state = {context = context, S = S, devices = {}, problems = {},
+    local state = {context = context, S = S, devices = {}, problems = {}, rig = {}, claimed = {},
+      lib_prefix = "@" .. h.repo_root .. "/lib/",
       counts = {outlived = 0, claim_sounding = 0, setup_after_release = 0, allowed_namesake = 0, allowed_away_cut = 0,
-        allowed_stranded = 0}}
+        allowed_stranded = 0, told_gone = 0}}
+    -- the includes' chunk names start at the repository's root
+    local source = debug.getinfo(S.lib.io_midi_out.stop, "S").source
+    if source ~= state.lib_prefix .. "io/midi_out.lua" then
+      error("the devices walk: lib/io/midi_out.lua is " .. source .. ", not under " .. state.lib_prefix)
+    end
+    for _, kind in ipairs(WALK.rig_kinds) do state.rig[kind] = S.lib.io_rig.get(kind) end
     for _, synth in ipairs(WALK.synths) do
       state.devices[#state.devices + 1] = {label = synth.label, name = synth.name, open = {}, log = {}, stranded = {}}
     end
@@ -516,16 +621,26 @@ h.walk({
     return state
   end,
   ops = OPS,
+  -- the problems the op's messages raised, and the remote's holds against
+  -- the walk's own record of the claims
   after = function(state)
     local problems = state.problems
     state.problems = {}
+    for port = 1, #vports(state) do
+      local holds = state.S.lib.io_remote.holds(port)
+      if holds ~= held(state, port) then
+        problems[#problems + 1] = "port " .. port .. ": the remote " .. (holds and "holds" or "does not hold")
+          .. " it, the walk's claims say " .. (holds and "not" or "held")
+      end
+    end
     return problems
   end,
   finish = finish,
   -- a note that outlived its device (unplugged while it sounded), a
   -- remote's claim of a port with a note sounding, a zone's setup after a
-  -- remote let its port go, and each allowance met
-  reached = {"outlived", "claim_sounding", "setup_after_release", "allowed_namesake", "allowed_away_cut",
+  -- remote let its port go, a close's off for a note at a port it tells
+  -- gone, and each allowance met
+  reached = {"outlived", "claim_sounding", "setup_after_release", "told_gone", "allowed_namesake", "allowed_away_cut",
     "allowed_stranded"},
   counts = function(state) return state.counts end,
 })
