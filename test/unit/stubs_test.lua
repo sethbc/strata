@@ -1117,6 +1117,63 @@ test("stub fileselect, musicutil, polls and audio path", function()
   assert_equal(number_type(values[2]), "float", "a whole poll value arrives as a float")
 end)
 
+-- lib/fileselect.lua's fs.enter (#985): from play mode it keeps the globals
+-- key, enc, redraw and refresh and puts its own key and enc there, routed
+-- by norns.menu.init(); from the menu it swaps the menu's key and page
+-- encoder through norns.menu.set. fs.exit puts back what enter kept before
+-- its callback runs. The stub's own key and enc record what they get
+test("the stub's file selector takes key and enc until it closes, from play mode and from the menu", function()
+  local context = load_strata(); finish_startup(context)
+  local fileselect = require("fileselect")
+  local heard = {}
+  local function recorder(name) return function(n, value) heard[#heard + 1] = name .. " " .. n .. " " .. value end end
+  -- from play mode: the script's key and enc are recorders, routed as
+  -- set_mode(false) routes the globals
+  local script_key, script_enc = recorder("script key"), recorder("script enc")
+  key, enc = script_key, script_enc
+  norns.menu.init()
+  local seen_in_callback
+  fileselect.enter(_path.audio, function(path)
+    seen_in_callback = { path = path, key = key, enc = enc, menu_key = _menu.key, encoders = norns.encoders.callback }
+  end)
+  assert_true(key ~= script_key and enc ~= script_enc, "the open selector holds the key and enc globals")
+  fileselect.inputs = {}
+  _menu.key(2, 1); _menu.key(2, 0); norns.encoders.callback(2, 1); key(3, 1); enc(3, -1)
+  assert_equal(#heard, 0, "nothing pressed or turned under the selector reaches the script: " .. table.concat(heard, ", "))
+  assert_equal(#fileselect.inputs, 5, "the selector gets every key and turn")
+  assert_equal(table.concat(fileselect.inputs[1], " "), "key 2 1")
+  assert_equal(table.concat(fileselect.inputs[3], " "), "enc 2 1")
+  fileselect.close("/x.wav")
+  assert_equal(seen_in_callback.path, "/x.wav")
+  assert_equal(seen_in_callback.key, script_key, "the script's key is back before the callback runs")
+  assert_equal(seen_in_callback.enc, script_enc, "and its enc")
+  assert_equal(seen_in_callback.menu_key, script_key, "play mode routes the keys to it again")
+  assert_equal(seen_in_callback.encoders, script_enc, "and the encoders")
+  _menu.key(2, 1); norns.encoders.callback(2, 1)
+  assert_equal(table.concat(heard, ", "), "script key 2 1, script enc 2 1", "after close the script hears them")
+  -- from the menu (a PARAMS file param): the menu's key and page encoder
+  -- go to the selector, the globals stay the script's
+  heard = {}
+  _menu.set_mode(true)
+  local menu_key, menu_enc = recorder("menu key"), recorder("menu enc")
+  _menu.key, _menu.penc = menu_key, menu_enc
+  local menu_seen
+  fileselect.enter(_path.audio, function(path) menu_seen = { path = path, key = _menu.key, penc = _menu.penc } end)
+  assert_equal(key, script_key, "from the menu the key global stays the script's")
+  assert_equal(enc, script_enc, "and the enc global")
+  fileselect.inputs = {}
+  _menu.key(3, 1); _menu.key(3, 0); norns.encoders.callback(2, 1)
+  assert_equal(#heard, 0, "nothing reaches the menu's page or the script: " .. table.concat(heard, ", "))
+  assert_equal(#fileselect.inputs, 3, "the selector gets the menu's keys and turns")
+  fileselect.close()
+  assert_equal(menu_seen.path, "cancel")
+  assert_equal(menu_seen.key, menu_key, "the menu's key is back before the callback runs")
+  assert_equal(menu_seen.penc, menu_enc, "and its page encoder")
+  _menu.key(2, 1); norns.encoders.callback(3, 1)
+  assert_equal(table.concat(heard, ", "), "menu key 2 1, menu enc 3 1", "after close the menu hears them")
+  _menu.set_mode(false)
+end)
+
 -- lua/core/menu.lua's set_mode: menu mode puts norns.none in redraw and
 -- refresh and routes the encoders to the menu; play mode puts back the
 -- redraw and refresh Script.load stored (norns.script), routes _menu.key and

@@ -196,7 +196,7 @@ test("K2 released loads into the cursor slot", function()
   key(2, 0)
   assert_true(context.fileselect.last ~= nil, "K2's release opens the file browser")
   assert_equal(context.fileselect.last.folder, _path.audio, "in the audio folder")
-  context.fileselect.last.callback("/tmp/b.wav")
+  context.fileselect.close("/tmp/b.wav")
   local loads = context.calls_named("loadBuffer")
   assert_equal(#loads, 1, "the choice loads")
   assert_equal(loads[1].args[1], 3, "into slot 4 (engine slot 3)")
@@ -204,7 +204,7 @@ test("K2 released loads into the cursor slot", function()
   assert_equal(local_value("S").lib.files.last_folder, "/tmp/", "the chosen file's folder is the next random folder")
   -- a canceled choice loads nothing
   tap(2); context.clear_engine_calls()
-  context.fileselect.last.callback("cancel")
+  context.fileselect.close()
   assert_equal(#context.calls_named("loadBuffer"), 0, "cancel loads nothing")
   -- K3 while K2 is held records and does not stop K2's release opening the browser
   context.fileselect.last = nil
@@ -754,8 +754,9 @@ test("a menu file selector opened over BUFFER K2's gives Strata its keys and pag
   local selector = context.fileselect
   local script_key, script_enc = key, enc
   -- norns' fs.enter, from play mode, puts its own key and enc handlers in
-  -- the globals before norns.menu.init() routes them (the stub does not):
-  -- only fs.exit for this selector restores them
+  -- the globals before norns.menu.init() routes them (the stub's does too,
+  -- #985; these stand-ins tell them apart): only fs.exit for this selector
+  -- restores them
   local selector_key, selector_enc = function() end, function() end
   local function open_strata_selector()
     tap(2); assert_true(page.file_selector_open, "K2 opens the selector")
