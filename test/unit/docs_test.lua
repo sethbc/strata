@@ -3664,15 +3664,16 @@ end)
 
 
 -- The Machines entries of notes files ({{path, text}}) checked against the
--- registered invariants (a list of names): the problems, sorted. An entry is a `### <machine>` heading inside the
--- file's `## Machines` section, which is the section right after "Must not
--- break"; it has a `- **State:**`, a `- **Invariant:**` and a `- **Test:**`
--- line (a `- **Two facts:**` line is optional), and its first table, if it
--- has one, has the columns State, Event, Next and Effect (h.notes_table
--- reads the first three). The Invariant line names its invariants in
--- backticks at its start (`a`, or `a`, `b`, or `a` and `b`, then any text),
--- or says "none" and why. Every registered invariant is named by one entry
--- (never two), and an entered name is a registered one
+-- registered invariants (a list of names): the problems, sorted. An entry
+-- is a `### <machine>` heading inside the file's `## Machines` section,
+-- which is the section right after "Must not break"; it has a
+-- `- **State:**`, a `- **Invariant:**` and a `- **Test:**` line (a
+-- `- **Two facts:**` line is optional), and its first table, if it has
+-- one, has the columns State, Event, Next and Effect (h.notes_table reads
+-- the first three). The Invariant line names its invariants in backticks
+-- at its start (`a`, or `a`, `b`, or `a` and `b`, then any text), or says
+-- "none" and why. Every registered invariant is named by one entry (never
+-- two), and an entered name is a registered one
 local MACHINE_TABLE_HEADER = "| State | Event | Next | Effect |"
 local function machines_problems(files, registered)
   local problems, entered, known = {}, {}, {}
