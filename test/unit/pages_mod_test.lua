@@ -638,6 +638,7 @@ end)
 -- corner's scene and moves an axis, as on A, B and morph
 test("the morph section shows C, D and y", function()
   local context, S = loaded()
+  capture_scene(1); capture_scene(2)  -- A and B hold scenes: the morph is ready (#896)
   S.lib.scenes.set_name(3, "dusk")
   params:set("morph_d", 12); params:set("morph_y", 0.35)
   place(S, "morph_c")
@@ -1164,6 +1165,42 @@ test("a kept unknown home is named, not none", function()
   assert_true(row_text(context, list_row(context, "L2").y, ROW_LABEL_X):find("none", 1, true) ~= nil,
     "no home still reads none")
   assert_screen_layout(context, "an unknown home")
+end)
+
+
+-- #896 (3.9, package 5d): with fewer than two corners set the morph does
+-- nothing, so its rows say so where the morph is drawn: each empty
+-- corner's row ([empty], right) and the morph row (what it needs), read
+-- from the morph's own plan_ready(); with two set nothing changes
+test("the morph says it has fewer than two corners", function()
+  local context, S = loaded()
+  assert_true(not S.lib.morph.plan_ready(), "no corner holds a scene at the start")
+  place(S, "morph_a")
+  assert_equal(row_text(context, list_row(context, "A").y, ROW_LABEL_X), "A S1  [empty]", "A's scene is empty")
+  assert_equal(row_text(context, list_row(context, "B").y, ROW_LABEL_X), "B S2  [empty]", "and B's")
+  place(S, "morph")
+  assert_equal(row_text(context, list_row(context, "morph").y, ROW_LABEL_X), "morph [need 2]  0%",
+    "the morph row says what it lacks")
+  assert_screen_layout(context, "the morph with no corner")
+  capture_scene(1)
+  place(S, "morph_a")
+  assert_equal(row_text(context, list_row(context, "A").y, ROW_LABEL_X), "A  S1", "A holds a scene")
+  assert_equal(row_text(context, list_row(context, "B").y, ROW_LABEL_X), "B S2  [empty]", "one corner is not enough")
+  capture_scene(2)
+  assert_true(S.lib.morph.plan_ready(), "two corners")
+  place(S, "morph_a")
+  assert_equal(row_text(context, list_row(context, "A").y, ROW_LABEL_X), "A  S1", "nothing changes with two")
+  assert_equal(row_text(context, list_row(context, "B").y, ROW_LABEL_X), "B  S2")
+  assert_equal(row_text(context, list_row(context, "C").y, ROW_LABEL_X), "C  S3", "C empty, but the morph is ready")
+  place(S, "morph")
+  assert_equal(row_text(context, list_row(context, "morph").y, ROW_LABEL_X), "morph  0%", "the morph row as before")
+  -- the page reads the morph's answer, never a copy of its own
+  local real = S.lib.morph.plan_ready
+  S.lib.morph.plan_ready = function() return false end
+  redraw()
+  assert_equal(row_text(context, list_row(context, "morph").y, ROW_LABEL_X), "morph [need 2]  0%",
+    "the row follows plan_ready")
+  S.lib.morph.plan_ready = real
 end)
 
 end
