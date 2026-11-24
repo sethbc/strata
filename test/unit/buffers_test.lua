@@ -1643,6 +1643,30 @@ test("a long file that fails its check while a synced take waits puts the slot b
   context.polls.fire("recordState", 58); state_report(context, 3, 3, 8)
   assert_equal(buffers[3].name, "old.wav", "not a load the take superseded"); assert_true(buffers[3].loaded)
   assert_equal(buffers[3].checking_from, nil); assert_equal(S.lib.buffers.status(3), "loaded")
+  -- #983: a replace take armed by a threshold (prepared at its send: 0 s),
+  -- canceled by a long file whose check is rejected. The cancel's length
+  -- comes under load 1 (load 2 is in its check); the rejection reports
+  -- the 0 s the cancel left under load 2, which ends the check for a
+  -- moment, then fails: the prepared take had emptied the slot, so it
+  -- comes back empty, its take still adoptable
+  local function record_report(slot, state)
+    context.polls.fire("recordState", (buffers[slot].records_sent * 4 + state) * local_value("NUM_BUFFERS") + slot - 1)
+  end
+  load_buffer(4, "/tmp/old.wav"); state_report(context, 4, 1, 8)
+  params:set("record_sync", 1); params:set("record_threshold", 2)
+  record_buffer(4); record_report(4, 0)                              -- armed, prepared: 0 s
+  params:set("record_threshold", 0)
+  load_buffer(4, "/tmp/long.wav")                                    -- load 2
+  assert_equal(buffers[4].checking_from, 0, "checked from the prepared take's 0 s")
+  record_report(4, 3); state_report(context, 4, 1, 0)                -- the command's cancel, under load 1
+  assert_equal(buffers[4].checking_from, 0, "the cancel's length does not end the check")
+  state_report(context, 4, 2, 0)                                     -- the rejection's 0 s, under load 2
+  assert_equal(buffers[4].checking_from, nil, "the 0 s under the load's own number ends the check")
+  assert_equal(S.lib.buffers.status(4), "loading", "for a moment")
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, 2))
+  assert_equal(S.lib.buffers.status(4), "empty", "the prepared take had emptied the slot")
+  assert_equal(buffers[4].name, "empty"); assert_equal(buffers[4].path, nil)
+  assert_equal(buffers[4].settled_empty, "take", "the take stays adoptable")
 end)
 
 test("a standard tier never checks a load, whatever the file", function()
