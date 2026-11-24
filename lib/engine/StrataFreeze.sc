@@ -69,8 +69,10 @@
     // buffers for its spectral writer (see addFreezeDefs), else empty.
     // \writerStarts: per voice, while the /n_go of the ring writer
     // replaceRingWriter made last, or the rings area's start made (#1018),
-    // has not come, (watch: its responder, run: whether it was made
-    // running), else nil (watchWriterStart, #1000).
+    // has not come, (watch: its responder, judge: its timer, writer: it,
+    // run: whether it was made running, old: the writer it replaced, before:
+    // the entry of that writer, if it was still waiting), else nil
+    // (watchWriterStart, #1000; judgeWriterStart, #1019).
     // \headTimers: the timeouts of the head reads waiting for the server
     // (ringHeadFrame, one Routine each, out once its read ends, #1014).
     // \ended: per voice, the freezes the engine ended on its own
@@ -411,7 +413,7 @@
             if (run.not) { synths[key].run(false) };
         };
         if (run or: { server.addr.hasBundle }) { replace.value } { server.makeBundle(nil, replace) };
-        this.areaCall(\watchWriterStart, voice, synths[key], run);
+        this.areaCall(\watchWriterStart, voice, synths[key], run, old);
     }
 
     // The voice's new ring writer (a replace's, or the first, made by the
@@ -423,23 +425,90 @@
     // Until then areaState[\freeze][\writerStarts][voice] holds the
     // responder and the run state the writer was made in (watch, run), and
     // runRingWriter replaces the writer rather than send it a run (or, made
-    // in the state asked for, leaves it). The responder goes with that /n_go, the voice's next replace
-    // (forgetWriterStart) and the area's stop (forgetWriterStarts), never
-    // with a timer: a writer whose /s_new found no room sends no /n_go, and
-    // its voice's next pause or run is a replace
-    watchWriterStart { arg voice, writer, run;
-        var starts = areaState[\freeze][\writerStarts], entry = (run: run);
+    // in the state asked for, leaves it). The responder and the timer go
+    // with that /n_go, the voice's next replace (forgetWriterStart), the
+    // timer's judgment and the area's stop (forgetWriterStarts). A writer
+    // whose /s_new failed (no room in the real-time pool) sends no /n_go:
+    // its timer judges it at startConfirmWait (judgeWriterStart, #1019).
+    // old: the writer it replaces (nil for a first writer). Every writer is
+    // in the NodeWatcher, so its isPlaying says whether its /n_go has come
+    // and no /n_end since, which the judgment reads of an old writer
+    watchWriterStart { arg voice, writer, run, old;
+        var starts = areaState[\freeze][\writerStarts], entry = (run: run, writer: writer, old: old, before: starts[voice]);
         this.forgetWriterStart(voice);
-        entry[\watch] = OSCFunc({ if (starts[voice] === entry) { starts[voice] = nil } },
+        NodeWatcher.register(writer, false);
+        entry[\watch] = OSCFunc({ if (starts[voice] === entry) { this.forgetWriterStart(voice) } },
             '/n_go', context.server.addr, argTemplate: [writer.nodeID]).oneShot;
+        entry[\judge] = Routine({
+            this.startConfirmWait.wait;
+            // (out of reach of forgetWriterStart before the judging: a Routine never stops itself)
+            entry[\judge] = nil;
+            this.areaCall(\judgeWriterStart, voice, entry);
+        });
         starts[voice] = entry;
+        entry[\judge].play(SystemClock);
     }
 
-    // The voice's writer's /n_go responder freed, if it has one
+    // The voice's writer's /n_go responder freed and its timer stopped, if
+    // it has them (its entry kept as a later entry's before)
     forgetWriterStart { arg voice;
         var starts = areaState[\freeze][\writerStarts];
-        starts[voice] !? { arg entry; entry[\watch].free };
+        starts[voice] !? { arg entry;
+            entry[\watch].free;
+            entry[\judge] !? { arg judge; judge.stop; entry[\judge] = nil };
+        };
         starts[voice] = nil;
+    }
+
+    // A writer still unconfirmed at its timer (watchWriterStart), after a
+    // sync (serverAnswers; nothing judged without its answer), still the
+    // voice's latest and the engine not past stop: its /s_new failed, and
+    // the record forgets it with no message to it (#1019). A failed
+    // Synth.replace replaced nothing, so the writer it would have replaced
+    // still runs: the record names the newest writer before it the server
+    // still has (liveWriterBefore), so one writer a voice stays tracked and
+    // the freeze area's stop frees it; a voice with none (its first writer
+    // failed) has no writer, and a pause, run or replace of it does nothing
+    // (runRingWriter, replaceRingWriter). The writer named is set to the
+    // state the failed one was made in (/n_run: it has had its first block,
+    // its /n_go having come), paused if the failed one was of another def (a
+    // spectral writer that never started: the ring holds, as a hold does)
+    judgeWriterStart { arg voice, entry;
+        var starts = areaState[\freeze][\writerStarts], key = this.ringWriterKeys[voice], writer = entry[\writer], live;
+        if (this.pastStop or: { starts[voice] !== entry }) { ^this };
+        if (this.serverAnswers.not) { ^this };
+        if (this.pastStop or: { starts[voice] !== entry }) { ^this };
+        this.forgetWriterStart(voice);
+        if (synths[key] !== writer) { NodeWatcher.unregister(writer); ^this };
+        live = this.liveWriterBefore(entry);
+        // the chain's writers the server never had (or freed) leave the NodeWatcher
+        this.forgetDeadWriters(entry);
+        if (live.isNil) { synths.removeAt(key); ^this };
+        synths[key] = live;
+        live.run(entry[\run] and: { live.defName.asSymbol == writer.defName.asSymbol });
+    }
+
+    // The newest writer an entry's chain replaced that the server still has
+    // (its /n_go came and no /n_end: isPlaying), or nil. A replace of a
+    // writer still waiting keeps that writer's entry as before, so a chain
+    // of failed replaces reaches back to the last one that started
+    liveWriterBefore { arg entry;
+        var each = entry;
+        while { each.notNil } {
+            if (each[\old].notNil and: { each[\old].isPlaying }) { ^each[\old] };
+            each = each[\before];
+        };
+        ^nil
+    }
+
+    // Every writer of an entry's chain that is not playing, out of the
+    // NodeWatcher (judgeWriterStart: none of them will ever send /n_go)
+    forgetDeadWriters { arg entry;
+        var each = entry;
+        while { each.notNil } {
+            if (each[\writer].isPlaying.not) { NodeWatcher.unregister(each[\writer]) };
+            each = each[\before];
+        };
     }
 
     forgetWriterStarts {

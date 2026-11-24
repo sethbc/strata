@@ -28,7 +28,7 @@ var periodSlack = 0.06;
 var probeGroup, quietBus, nowBus, clockBus, readOut, rectEnv, timecode, started;
 var timeReads, startTimecodeVoice, now, phaseMoves, grainOf, fadingRingReader, voiceRing, inputRing, copyRing;
 var readings, frozenAt, live, fading, ok, savedFadeWait = engine.bufferFadeWait;
-var rampPath, rampFile, other, otherCommand, writerNodes, root, write, high, toggles, readyContext;
+var rampPath, rampFile, other, otherCommand, writerNodes, root, write, high, toggles, readyContext, holdingBack;
 var old, readsCopy, restartGrain, startInput, attempt, precondition;
 var tone, meters, peaksOver, sentDuring, inOneBundle, ringPeak, writerBefore, kept, fails, failWatcher, standard;
 var gapLimitSeconds = 0.05, block = server.options.blockSize, headStepFrames = server.options.blockSize;
@@ -1213,7 +1213,7 @@ check.((kept.size == (2 * other.numVoices)) and: { kept.every({ arg buffer; buff
     "freeze: free frees the high tier's FFT buffers (% of % freed)".format(
         kept.count({ arg buffer; buffer.bufnum.isNil }), kept.size));
 
-// ---- a freeze at the engine's start (#1018) ----
+// ---- a freeze at the engine's start (#1018), a writer's failed start (#1019) ----
 // The rings area makes the first ring writers at the engine's start, and
 // the engine reports itself ready with no sync after them, so a freeze
 // Lua sends at once can reach a first writer before its first block, where
@@ -1223,13 +1223,58 @@ check.((kept.size == (2 * other.numVoices)) and: { kept.every({ arg buffer; buff
 // its commands run inside its ready callback, as early as any can; #503's
 // check below then uses it): voice 1's (engine voice 0's) hold, unfreeze
 // and hold again at that instant, with no yield; then, its ring held, the
-// unfreeze. The ring is held, then moves, and the server answers. Judged
-// by the check's own record of what it sent (the hold last, then the
-// release) against the writer's phase bus. Before #1018 the server crashed
-// at the release; a single hold at the ready instant, released later,
-// passed on that engine too (its run reached a node past its first block)
+// unfreeze. The ring is held, then moves, the server answers, and the
+// engine keeps one writer a voice (replace, never stack). Judged by the
+// check's own record of what it sent (the hold last, then the release)
+// against the writer's phase bus. Before #1018 the server crashed at the
+// release; a single hold at the ready instant, released later, passed on
+// that engine too (its run reached a node past its first block).
+// In the same callback, #1019's writers: a replace whose /s_new fails
+// (held back from its packet, as the #497 checks hold a grain synth's,
+// with the /n_run in it, so the server sees neither and posts nothing).
+// Voice 4 (engine voice 3): a hold, whose paused replace is held back;
+// voice 5 (engine voice 4): a hold and an unfreeze, both replaces held
+// back (the second replaces the first, which never existed). Past twice
+// startConfirmWait, with no command, each voice's record names its old
+// writer, which still runs on the server (the replace never happened),
+// and no \writerStarts entry is left: voice 4's paused (its hold kept,
+// the ring held), voice 5's writing; then voice 4's unfreeze moves its
+// ring; and from the callback to the end no message names a held-back
+// writer (judged against the check's own list of the node ids it held
+// back). Before #1019 voice 4's record kept the dead writer, and its
+// unfreeze replaced a node the server never had
 {
     var root = h.tempDir +/+ "freeze-ready/", done = Condition(false), saved, phase, held, moved, answered, start = Main.elapsedTime;
+    var heldBack = List.new(8), deadMessages = List.new(8), realAddr = server.addr, writersOf, liveRecord, readings1019;
+    // the writers under voiceGroup, as the server has them
+    writersOf = { h.synthTree(other.voiceGroup).select({ arg node; [\strataRingWrite, \strataRingWriteSpectral].includes(node.def) }) };
+    // the voice's record names a writer the server has
+    liveRecord = { arg voice, nodes;
+        var writer = other.ringWriterFor(voice);
+        writer.notNil and: { nodes.any({ arg node; node.id == writer.nodeID }) }
+    };
+    // what reaches the server while function runs, but each writer's
+    // /s_new (and any /n_run to it), whose node id goes on heldBack
+    holdingBack = { arg function;
+        var keep = { arg msgs;
+            msgs.reject({ arg msg;
+                var name = msg[0].asString;
+                if (["9", "/s_new", "s_new"].includesEqual(name) and: { msg[1].asSymbol == \strataRingWrite }) {
+                    heldBack.add(msg[2]); true
+                } { ["12", "/n_run", "n_run"].includesEqual(name) and: { heldBack.includes(msg[1]) } }
+            })
+        };
+        protect {
+            server.addr = (
+                addr: realAddr.addr, port: realAddr.port, isLocal: realAddr.isLocal, hostname: realAddr.hostname,
+                socket: realAddr.socket, hasBundle: false,
+                sendMsg: { arg self ... msg; var kept = keep.([msg]); if (kept.notEmpty) { realAddr.sendMsg(*kept[0]) } },
+                sendBundle: { arg self, time ... msgs; var kept = keep.(msgs); if (kept.notEmpty) { realAddr.sendBundle(time, *kept) } },
+                sendClumpedBundles: { arg self, time ... msgs; var kept = keep.(msgs); if (kept.notEmpty) { realAddr.sendClumpedBundles(time, *kept) } }
+            );
+            function.value;
+        } { server.addr = realAddr };
+    };
     File.mkdir(root);
     readyContext = CroneAudioContext.new(server);
     readyContext.out_b = Bus.audio(server, 2);  // keep it silent
@@ -1242,57 +1287,101 @@ check.((kept.size == (2 * other.numVoices)) and: { kept.every({ arg buffer; buff
     otherCommand = { arg name ... args;
         other.commands.detect({ arg each; each.name == name }).oscdef.func.value([("/command/" ++ name).asSymbol] ++ args)
     };
+    other = nil;
     Engine_Strata.new(readyContext, { arg built;
         other = built;
         [1.0, 0.0, 1.0].do({ arg value; otherCommand.(\setGrainParam, 0, \freeze, value) });
+        holdingBack.({ otherCommand.(\setGrainParam, 3, \freeze, 1.0) });
+        holdingBack.({ otherCommand.(\setGrainParam, 4, \freeze, 1.0); otherCommand.(\setGrainParam, 4, \freeze, 0.0) });
+        start = Main.elapsedTime;
         done.test = true; done.signal;
     });
     h.awaitReply(done, 30);
     Engine_Strata.settingsDir = saved[0];
     Engine_Strata.modelPath = saved[1];
-    server.sync; 0.1.wait;
-    phase = other.areaState[\rings][\phaseBuses][0];
-    held = phaseMoves.(phase).not;
-    otherCommand.(\setGrainParam, 0, \freeze, 0.0);
-    server.sync; 0.1.wait;
-    moved = phaseMoves.(phase);
-    answered = h.readBusValue(phase).notNil;
-    check.(held and: { moved } and: { answered },
-        "freeze: a hold, unfreeze and hold sent as the engine reports itself ready hold the first writer's ring, and the unfreeze after moves it, the server answering (#1018: held %, moved %, answered %; % s with the engine's build)".format(
-            held, moved, answered, (Main.elapsedTime - start).round(0.01)));
-}.value;
+    if (other.isNil) {
+        check.(false, "freeze: the second standard engine reports itself ready within 30 s (#1018)");
+    } {
+        // every message from here on, passed on; those naming a held-back
+        // writer kept (a /s_new as its node or its target, any other as its
+        // first argument)
+        server.addr = (
+            addr: realAddr.addr, port: realAddr.port, isLocal: realAddr.isLocal, hostname: realAddr.hostname,
+            socket: realAddr.socket, hasBundle: false,
+            noteDead: { arg self, msgs;
+                msgs.do({ arg msg;
+                    var ids = if (["9", "/s_new", "s_new"].includesEqual(msg[0].asString)) { [msg[2], msg[4]] } { [msg[1]] };
+                    if (ids.any({ arg id; heldBack.includes(id) })) { deadMessages.add(msg) };
+                })
+            },
+            sendMsg: { arg self ... msg; self.noteDead([msg]); realAddr.sendMsg(*msg) },
+            sendBundle: { arg self, time ... msgs; self.noteDead(msgs); realAddr.sendBundle(time, *msgs) },
+            sendClumpedBundles: { arg self, time ... msgs; self.noteDead(msgs); realAddr.sendClumpedBundles(time, *msgs) }
+        );
+        protect {
+            0.1.wait;
+            phase = other.areaState[\rings][\phaseBuses][0];
+            held = phaseMoves.(phase).not;
+            otherCommand.(\setGrainParam, 0, \freeze, 0.0);
+            0.1.wait;
+            moved = phaseMoves.(phase);
+            answered = h.readBusValue(phase).notNil;
+            check.(held and: { moved } and: { answered } and: { writersOf.value.size == (other.numVoices + 1) },
+                "freeze: a hold, unfreeze and hold sent as the engine reports itself ready hold the first writer's ring, and the unfreeze after moves it, the server answering, one writer a voice (#1018: held %, moved %, answered %, writers %; % s with the engine's build)".format(
+                    held, moved, answered, writersOf.value.size, (Main.elapsedTime - start).round(0.01)));
+            // (#1019) past twice startConfirmWait from the callback, with no command
+            (((2 * other.startConfirmWait) + 0.25) - (Main.elapsedTime - start)).max(0).wait;
+            readings1019 = [
+                heldBack.size,
+                [3, 4].collect({ arg voice; liveRecord.(voice, writersOf.value) }),
+                [3, 4].collect({ arg voice; other.areaState[\freeze][\writerStarts][voice].isNil }),
+                phaseMoves.(other.areaState[\rings][\phaseBuses][3]).not,
+                phaseMoves.(other.areaState[\rings][\phaseBuses][4])
+            ];
+            otherCommand.(\setGrainParam, 3, \freeze, 0.0);
+            0.1.wait;
+            readings1019 = readings1019 ++ [phaseMoves.(other.areaState[\rings][\phaseBuses][3]), writersOf.value.size];
+        } { server.addr = realAddr };
+        check.((readings1019[0] == 3) and: { readings1019[1] == [true, true] } and: { readings1019[2] == [true, true] }
+            and: { readings1019[3] } and: { readings1019[4] } and: { readings1019[5] } and: { readings1019[6] == (other.numVoices + 1) }
+            and: { deadMessages.isEmpty },
+            "freeze: a writer whose /s_new failed is in no record past startConfirmWait: its voice's record names the old writer, which still runs, held or writing as asked, one writer a voice, and no message names it (#1019: held back %, records live %, no start waiting %, the held ring still %, the other moving %, the unfreeze moves it %, writers %, messages naming a held-back writer %)".format(
+                *(readings1019 ++ [deadMessages.collect({ arg msg; msg.copyRange(0, 4) })])));
 
-// ---- free with an input copy waiting for its fade (#503) ----
-// The second standard engine with bufferFadeWait 1 s: an input voice frozen,
-// unfrozen and frozen again at once (its live grain synth still reads the
-// old copy, so the second copy waits), then the engine freed inside the
-// wait: the copy never runs against the freed rings and buses (no server
-// failure, no error, \copied false)
-other.bufferFadeWait = 1.0;
-otherCommand.(\setGrainSource, 2, other.inputSource);
-otherCommand.(\voiceOn, 2, 100.0, 0.2, 0.0, 0.1, 10.0, 1.0);
-server.sync; 0.2.wait;
-otherCommand.(\setGrainParam, 2, \freeze, 1.0);
-ok = h.waitFor({ other.areaState[\freeze][\copied][2] }, 0.5);
-otherCommand.(\setGrainParam, 2, \freeze, 0.0);
-otherCommand.(\setGrainParam, 2, \freeze, 1.0);
-readings = [ok, other.areaState[\freeze][\faded][2].notEmpty, other.areaState[\freeze][\copied][2].not];
-fails = List.new(8);
-failWatcher = OSCFunc({ arg msg; fails.add(msg.copyRange(1, 2)) }, '/fail', server.addr);
-h.freeEngine(other);
-1.5.wait; server.sync;
-failWatcher.free;
-check.(readings.every({ arg value; value == true }) and: { other.areaState[\freeze][\copied][2].not } and: { fails.isEmpty },
-    "freeze: free with an input copy waiting for its fade runs none of it (copied, waiting, not copied: %; copied after the free %; server failures %)".format(
-        readings, other.areaState[\freeze][\copied][2], fails));
-// The context's analysis synths (CroneAudioContext makes them after its
-// groups, not in them) are freed with the groups, before the buses they
-// write: a bus freed under a running writer is handed to a later area
-// (the record area's guard bus, run after this area, was overwritten so)
-(readyContext.amp_in_s ++ readyContext.amp_out_s ++ readyContext.pitch_in_s).do(_.free);
-[readyContext.ig, readyContext.xg, readyContext.og].do(_.free);
+        // ---- free with an input copy waiting for its fade (#503) ----
+        // The second standard engine with bufferFadeWait 1 s: an input voice frozen,
+        // unfrozen and frozen again at once (its live grain synth still reads the
+        // old copy, so the second copy waits), then the engine freed inside the
+        // wait: the copy never runs against the freed rings and buses (no server
+        // failure, no error, \copied false)
+        other.bufferFadeWait = 1.0;
+        otherCommand.(\setGrainSource, 2, other.inputSource);
+        otherCommand.(\voiceOn, 2, 100.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+        server.sync; 0.2.wait;
+        otherCommand.(\setGrainParam, 2, \freeze, 1.0);
+        ok = h.waitFor({ other.areaState[\freeze][\copied][2] }, 0.5);
+        otherCommand.(\setGrainParam, 2, \freeze, 0.0);
+        otherCommand.(\setGrainParam, 2, \freeze, 1.0);
+        readings = [ok, other.areaState[\freeze][\faded][2].notEmpty, other.areaState[\freeze][\copied][2].not];
+        fails = List.new(8);
+        failWatcher = OSCFunc({ arg msg; fails.add(msg.copyRange(1, 2)) }, '/fail', server.addr);
+        h.freeEngine(other);
+        1.5.wait; server.sync;
+        failWatcher.free;
+        check.(readings.every({ arg value; value == true }) and: { other.areaState[\freeze][\copied][2].not } and: { fails.isEmpty },
+            "freeze: free with an input copy waiting for its fade runs none of it (copied, waiting, not copied: %; copied after the free %; server failures %)".format(
+                readings, other.areaState[\freeze][\copied][2], fails));
+    };
+    // The context's analysis synths (CroneAudioContext makes them after its
+    // groups, not in them) are freed with the groups, before the buses they
+    // write: a bus freed under a running writer is handed to a later area
+    // (the record area's guard bus, run after this area, was overwritten so)
+    (readyContext.amp_in_s ++ readyContext.amp_out_s ++ readyContext.pitch_in_s).do(_.free);
+    [readyContext.ig, readyContext.xg, readyContext.og].do(_.free);
+    server.sync;
+    (readyContext.in_b ++ readyContext.amp_in_b ++ readyContext.amp_out_b ++ readyContext.pitch_in_b ++ [readyContext.out_b]).do(_.free);
+}.value;
 server.sync;
-(readyContext.in_b ++ readyContext.amp_in_b ++ readyContext.amp_out_b ++ readyContext.pitch_in_b ++ [readyContext.out_b]).do(_.free);
 
 probeGroup.free;
 [quietBus, nowBus, clockBus, readOut].do(_.free);

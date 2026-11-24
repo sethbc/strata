@@ -265,11 +265,11 @@ jobs:
   # types 171, variation 136, memory 127, effects 127, record 125, lifecycle 116, loops 100, buffers 92,
   # modulation 90, outrings 89, notes 87, voices 75, mix 73, rings 70, freeze 70, grains 49, shimmer 40,
   # files 26, waveform 26, positions 24, delay 23, envelopes 15, tuning 9, performance 8, onsets 7,
-  # structure 6: 1784 s in all. The slowest shard is buffers, loops and types, about 363 s of
+  # structure 6: 1786 s in all. The slowest shard is buffers, loops and types, about 363 s of
   # areas, under each shard's 570 s; mix, variation, grains, structure and performance take about
   # 272 s, effects, voices and outrings 291 s, lifecycle, files, positions and notes 256 s, record,
   # waveform, onsets, delay and shimmer 221 s, memory and rings 197 s, and modulation, freeze,
-  # envelopes and tuning 184 s. In that run every shard passed.
+  # envelopes and tuning 186 s. In that run every shard passed.
   # memory runs first in its shard (areaOrder), so CI's memory figures are the area's alone.
   # Since #652 the areas no longer depend on each other's order, so the grouping is a
   # choice for the times alone; files and structure share no shard only because this

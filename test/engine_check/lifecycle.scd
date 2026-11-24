@@ -497,23 +497,25 @@ var checkFailedStartSwitches = { arg voice, before;
 
 // ... and one the engine judges itself (#1019): past startConfirmWait, with
 // no command to the voice, a synth whose /s_new failed is in none of the
-// engine's records. Three running voices, each switched from the input to
-// the synth source with its new grain synth's /s_new on a def the server
-// does not have (the switch's packets sent with that message's def
-// renamed, behind /error -1, so the server posts no FAILURE line): the
-// first then left running, the second stopped at once (its failed synth
-// releasing), the third switched to the input and back at once (fading,
-// then cutting). Then twice startConfirmWait and a quarter of a second more, no
-// command, and the records read (the voice's live keys, its releasing,
-// fading and cutting sets, ringReaders, grainSlots, the freeze area's
-// inputReaders, unconfirmedStarts), each judged against the synth the
-// check itself renamed; past twice startConfirmWait, the bookkeeping
-// sweep's unconfirmed starts too. The server posts one "SynthDef
-// strataCheckNoSuchDef not found" line a voice (scsynth prints it
-// whatever /error says; the runner fails on none of it). Each voice is
-// then put back as it was
+// engine's records, whatever its kind. Each failure is made by holding the
+// synth's /s_new back from what the engine sends (as the #497 checks do,
+// with any later message to that node in the same packets, so the server
+// sees none of it and posts nothing). Three running voices, each switched
+// from the input to the synth source with its new grain synth held back:
+// the first then left running, the second stopped at once (its failed
+// synth releasing), the third switched to the input and back at once
+// (fading, then cutting). The first also loses its voice synth and its mod
+// synth behind sclang's back (an /n_free), and the restart of each is held
+// back; the third, on a pool of one, starts an extra note whose synth is
+// held back. Then twice startConfirmWait and a quarter of a second more,
+// no command, and the records read (the voice's live keys, its releasing,
+// fading and cutting sets, its note slots, ringReaders, grainSlots, the
+// freeze area's inputReaders, unconfirmedStarts), each judged against the
+// synths the check itself held back; past twice startConfirmWait, the
+// bookkeeping sweep's unconfirmed starts too. Each voice and the pool are
+// then put back as they were
 var checkFailedStartJudged = { arg voices, before;
-    var failed = Array.newClear(voices.size), kept, swept, realAddr = server.addr, start = Main.elapsedTime;
+    var failed = List.new(8), kept, swept, realAddr = server.addr, start = Main.elapsedTime, pool = engine.areaState[\notes][\pool];
     var running = voices.collect({ arg voice; engine.voiceRunning(voice) }), sources = voices.collect({ arg voice; engine.grainSource[voice] });
     var heldBy = { arg voice, synth;
         var records = List.new;
@@ -521,30 +523,45 @@ var checkFailedStartJudged = { arg voices, before;
         if (engine.releasingSynths[voice].values.includes(synth)) { records.add(\releasing) };
         if (engine.fadingSynths[voice].includes(synth)) { records.add(\fading) };
         if (engine.cuttingSynths[voice].includes(synth)) { records.add(\cutting) };
+        if (engine.areaState[\notes][\slots][voice].any({ arg record; record.notNil
+            and: { (record[\synth] === synth) or: { record[\cutting] === synth } } })) { records.add(\noteSlot) };
         if (engine.ringReaders[synth].notNil) { records.add(\ringReader) };
         if (engine.grainSlots[synth].notNil) { records.add(\grainSlot) };
         if (engine.areaState[\freeze][\inputReaders][synth].notNil) { records.add(\inputReader) };
         if (engine.unconfirmedStarts[synth].notNil) { records.add(\unconfirmed) };
         records.asArray
     };
-    // every \strataGrainRing /s_new the function sends, on the missing def
-    var failing = { arg function;
-        var rename = { arg msgs;
-            var renamed = false;
-            msgs = msgs.collect({ arg msg;
-                if ((msg[0] == 9) and: { msg[1].asSymbol == \strataGrainRing }) { renamed = true; msg.copy.put(1, \strataCheckNoSuchDef) } { msg } });
-            if (renamed) { [['/error', -1]] ++ msgs } { msgs }
+    // what the function sends, but every /s_new of one of defs (and any
+    // later message to that node)
+    var failing = { arg defs, function;
+        var heldBack = List.new(4);
+        var keep = { arg msgs;
+            msgs.reject({ arg msg;
+                var name = msg[0].asString;
+                if (["9", "/s_new", "s_new"].includesEqual(name)) {
+                    if (defs.includes(msg[1].asSymbol)) { heldBack.add(msg[2]); true } { heldBack.includes(msg[4]) }
+                } { (name.beginsWith("/n_") or: { msg[0].isNumber and: { msg[0].inclusivelyBetween(10, 19) } }) and: { heldBack.includes(msg[1]) } }
+            })
         };
         protect {
             server.addr = (
                 addr: realAddr.addr, port: realAddr.port, isLocal: realAddr.isLocal, hostname: realAddr.hostname,
                 socket: realAddr.socket, hasBundle: false,
-                sendMsg: { arg self ... msg; realAddr.sendBundle(nil, *rename.([msg])) },
-                sendBundle: { arg self, time ... msgs; realAddr.sendBundle(time, *rename.(msgs)) },
-                sendClumpedBundles: { arg self, time ... msgs; realAddr.sendClumpedBundles(time, *rename.(msgs)) }
+                sendMsg: { arg self ... msg; var kept = keep.([msg]); if (kept.notEmpty) { realAddr.sendMsg(*kept[0]) } },
+                sendBundle: { arg self, time ... msgs; var kept = keep.(msgs); if (kept.notEmpty) { realAddr.sendBundle(time, *kept) } },
+                sendClumpedBundles: { arg self, time ... msgs; var kept = keep.(msgs); if (kept.notEmpty) { realAddr.sendClumpedBundles(time, *kept) } }
             );
             function.value;
         } { server.addr = realAddr };
+    };
+    // a synth of the voice freed behind sclang's back, its restart held back
+    var restartFailing = { arg voice, key, def, label;
+        var synth = engine.synths[key];
+        failing.([def], {
+            server.sendMsg('/n_free', synth.nodeID);
+            h.waitFor({ engine.synths[key] !== synth }, 1);
+        });
+        failed.add([voice, engine.synths[key], label]);
     };
     voices.do({ arg voice;
         if (engine.voiceRunning(voice).not) { command.(\voiceOn, voice, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0) };
@@ -552,23 +569,32 @@ var checkFailedStartJudged = { arg voices, before;
     });
     server.sync;
     voices.do({ arg voice, index;
-        failing.({ command.(\setGrainSource, voice, 0) });
-        failed[index] = engine.synths[engine.grainKey(voice)];
+        failing.([\strataGrainRing], { command.(\setGrainSource, voice, 0) });
+        failed.add([voice, engine.synths[engine.grainKey(voice)], [\grainLive, \grainReleasing, \grainCutting][index]]);
     });
     server.sync;
+    restartFailing.(voices[0], engine.voiceKey(voices[0]), engine.voiceDefFor(voices[0]), \voiceSynth);
+    restartFailing.(voices[0], engine.modKey(voices[0]), \strataMod, \modSynth);
     command.(\voiceOff, voices[1]);
     [9, 0].do({ arg source; command.(\setGrainSource, voices[2], source); server.sync });
-    kept = voices.collect({ arg voice, index; heldBy.(voice, failed[index]) });
+    command.(\setNotePool, 1);
+    failing.([engine.voiceDefFor(voices[2]), \strataGrainRing, \strataGrainBuf], {
+        command.(\noteOn, voices[2], 1, 64.0, 329.63, 1.0, 0.8) });
+    failed.add([voices[2], engine.noteRecord(voices[2], 1)[\synth], \note]);
+    server.sync;
+    kept = failed.collect({ arg each; [each[2], each[1].notNil and: { heldBy.(each[0], each[1]).notEmpty }] });
     // (past twice startConfirmWait, so the sweep's condition of #1019 is
     // read too; its line shown without the runner's prefix)
     ((2 * engine.startConfirmWait) + 0.25).wait;
     server.sync;
-    kept = [kept, voices.collect({ arg voice, index; heldBy.(voice, failed[index]) })];
+    kept = [kept, failed.collect({ arg each; [each[2], each[1] !? { arg synth; heldBy.(each[0], synth) }] })];
     swept = h.sweepLines(engine, "lifecycle's #1019 check").select({ arg line; line.contains("a start unconfirmed") })
         .collect({ arg line; line.replace("Strata invariant broken: ", "") });
-    check.(kept[0].every(_.notEmpty) and: { kept[1].every(_.isEmpty) } and: { swept.isEmpty },
-        "lifecycle: a synth whose /s_new failed is in no record past startConfirmWait, with no command sent: left running, stopped, switched away twice (#1019; held before the wait %, after it %; the sweep's unconfirmed starts %)".format(
+    check.((failed.size == 6) and: { kept[0].every({ arg each; each[1] }) } and: { kept[1].every({ arg each; each[1] == [] }) } and: { swept.isEmpty },
+        "lifecycle: a synth whose /s_new failed is in no record past startConfirmWait, with no command sent: a grain synth left running, stopped and switched away twice, a voice and a mod synth restarted, an extra note (#1019; held before the wait %, the records after it %; the sweep's unconfirmed starts %)".format(
             kept[0], kept[1], swept));
+    command.(\noteOff, voices[2], 1, 1);
+    command.(\setNotePool, pool);
     voices.do({ arg voice, index;
         command.(\voiceOn, voice, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0);
         command.(\setGrainSource, voice, sources[index]);
