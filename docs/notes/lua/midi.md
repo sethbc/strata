@@ -26,38 +26,73 @@
 ## Machines
 
 ### midi notes
-- **State:** per voice, the keys down on it (`S.midi_state.held[voice]`, each `channel * 128 + note`, mirrored by `S.midi_state.note_voice[channel][note]`, the list of voices the note's note on played), whether a MIDI note started it (`S.midi_state.started[voice]`) and whether its release-mode stop is held back (`stop_pending[voice]`, a local). The states below are a voice's: `no key` (nothing held, no mark), `keys down` and `stop held back` (no key down, the mark set, the voice running while a note of it plays to its end, `S.lib.notes.plays_to_end`).
+- **State:** per voice, the keys down on it (`S.midi_state.held[voice]`, each `channel * 128 + note`, mirrored by `S.midi_state.note_voice[channel][note]`, the list of voices the note's note on played), whether a MIDI note started it (`S.midi_state.started[voice]`) and whether its release-mode stop is held back (`stop_pending[voice]`, a local). The states below are a voice's: `no key` (nothing held, no mark), `keys down` and `stop held back` (no key down, the mark set, the voice running while a note of it plays to its end, `S.lib.notes.plays_to_end`). This entry's table is release mode's (`midi_note_off` `release`); latch's is the next entry's.
 - **Invariant:** `midi notes`: a key is down on a voice exactly while some channel's note on lists the voice for it (each list non-empty, its voices valid and distinct); `started` holds only `true` for a valid voice; `stop_pending` marks only a running voice with no key down (3.9, #913).
-- **Test:** `test/unit/midi_in_test.lua`: "the midi notes invariant holds a held-back stop to a running voice with no key down (#913)", "a held-back stop is cleared by the voice's stop and by a key down (#913)", "a release-mode voice held back by another owner's one-shot slice stops when the last ends", "a release-mode voice restarted right after its last key stopped it keeps running", "latch: a panic CC stops a voice a released key started, never one started elsewhere (#529)"; the source switch's three rows (#1009): "the midi notes table: no key + a running voice's source switch keeps started", "the midi notes table: keys down + a running voice's source switch keeps the keys", "a held-back stop outlives a running voice's source switch".
+- **Test:** `test/unit/midi_in_test.lua`: the `midi notes` transition table (`h.transition_table`, this table) and the `midi notes, latch` one (the next entry's); beside them "the midi notes invariant holds a held-back stop to a running voice with no key down (#913)", "a held-back stop is cleared by the voice's stop and by a key down (#913)", "a release-mode voice held back by another owner's one-shot slice stops when the last ends", "a release-mode voice restarted right after its last key stopped it keeps running", "release: each key's note ends with its key, the own note parks, the voice stops with the last", "latch: a panic CC stops a voice a released key started, never one started elsewhere (#529)"; the source switch's three rows (#1009): "the midi notes table: no key + a running voice's source switch keeps started", "the midi notes table: keys down + a running voice's source switch keeps the keys", "a held-back stop outlives a running voice's source switch".
 
-No test runs this table: #1028 splits it by note off mode so that an `h.transition_table` can. Its states do not fix the mode. `no key` and `keys down` hold in either note off mode and their rows depend on it (`last key up, release` and `last key up, latch` from `keys down`); `stop held back` holds in release mode only (only a release-mode lift sets the mark, and the LFO step drops it once latch is in force). A change of mode is itself a reset (the `midi_note_off` action calls `reset_midi_input`), so no state function could enter `keys down` in the mode each event needs without a silent param set no player can make (3.9, #1009). The tests named above run these rows: `keys down` + `last key up, release` ("a release-mode voice restarted right after its last key stopped it keeps running"); `keys down` + `last key up, release, a note plays to its end`, and `stop held back` + `the LFO step, a note still plays to its end` and + `the LFO step, nothing plays to its end` ("a release-mode voice held back by another owner's one-shot slice stops when the last ends"); `stop held back` + `key down` and + `the voice's stop` ("a held-back stop is cleared by the voice's stop and by a key down (#913)"); `no key` + `a panic`, in latch ("latch: a panic CC stops a voice a released key started, never one started elsewhere (#529)"); and the three rows of `a running voice's source switch`, each its own test. The invariant's test checks the mark's line, not a row. No named test runs the other rows.
+The table is split by note off mode, each part run by an `h.transition_table` (3.9, #1028): a row's outcome depends on the mode (the last key's lift stops the voice in release mode and latches its notes in latch), and a change of mode is itself a reset (the `midi_note_off` action calls `reset_midi_input`), so each table's states set the mode first and then enter the state, as the note tap's states set the channel mode first. The rows the two modes share are in both tables. Here each state is voice 1's (the selected voice, which channel 1's notes play), in release mode: `no key` is the voice the start-up runs, which no MIDI note started; `keys down` two keys (36, then 37) that started the stopped voice; `stop held back` one key that started it, lifted while its slice plays to its end. The voice plays one-shot slices (each 0.5 s) so that a note can play to its end: a lift never cuts a slice short, so `last key up, nothing plays to its end` holds the keys past their slices' ends before they lift, and `the LFO step, a note still plays to its end` plays a grid key's slice first; a `last key up` lifts the other key first, then the last. On a synth voice a key's lift under others ends its note instead (the own note parks under the others), which the named test "release: each key's note ends with its key, the own note parks, the voice stops with the last" runs. `latch set, then the LFO step` is the mark's drop: the change is a reset (latch's: MIDI's notes forgotten, no voice stopped), then the step. Impossible: a key up in `no key` and in `stop held back` (no key is down: the mark is set only with none down). The invariant's test checks the mark's line, not a row.
 
-A reset is `release_held_notes` (from `reset_midi_input`: a port or channel mode change, a note off change, the selected port's device gone, moved or claimed; and the MPE layout hook in the MPE modes); a panic is CC 123 or 120. `started` runs beside the table: set by `midi_note_on` when its play started a stopped voice, cleared by the grain-restart hook at every start, by `midi_note_off_for`'s stop and by the panic, which also stops every voice it holds. The mark's four clearers are a key down, the voice's stop (the voice-stop hook), its start (the grain-restart hook, reason `"start"`; a stopped voice holds no mark already, so this one only guards; a running voice's source switch, reason `"source"`, leaves the mark, test "a held-back stop outlives a running voice's source switch") and the LFO step, which stops the voice once no note of it plays to its end, or drops the mark once the voice no longer runs in release mode with no key down. Impossible: `stop held back` with a start (the voice runs; a stop first clears the mark).
+A reset is `release_held_notes` (from `reset_midi_input`: a port or channel mode change, a note off change, the selected port's device gone, moved or claimed; and the MPE layout hook in the MPE modes); a panic is CC 123 or 120. `started` runs beside the table: set by `midi_note_on` when its play started a stopped voice, cleared by the grain-restart hook at every start, by `midi_note_off_for`'s stop and by the panic, which also stops every voice it holds. The mark's four clearers are a key down, the voice's stop (the voice-stop hook), its start (the grain-restart hook, reason `"start"`; a stopped voice holds no mark already, so this one only guards; a running voice's source switch, reason `"source"`, leaves the mark, test "a held-back stop outlives a running voice's source switch") and the LFO step, which stops the voice once no note of it plays to its end, or drops the mark once the voice no longer runs in release mode with no key down. A panic stops only a voice a MIDI note started (or one with a key down), so on a voice started elsewhere a held-back stop outlives it, for the LFO step. Impossible: `stop held back` with a start (the voice runs; a stop first clears the mark).
 
 | State | Event | Next | Effect |
 |---|---|---|---|
-| `no key` | `key down` | `keys down` | the key is held and its note plays; a stopped voice starts (`started` set) |
-| `no key` | `the voice's stop` | `no key` | nothing of MIDI's |
-| `no key` | `a reset` | `no key` | nothing held: nothing sent |
-| `no key` | `a panic` | `no key` | a voice MIDI started stops |
-| `no key` | `a running voice's source switch` | `no key` | nothing of MIDI's: `started` kept, so the panic still stops a voice MIDI started |
-| `keys down` | `key down` | `keys down` | another key held; latch's first key of a chord replaced the last chord |
-| `keys down` | `key up, others down` | `keys down` | release: its note ends (the own note parks); latch: the note latches |
-| `keys down` | `last key up, release` | `no key` | the voice stops (`midi_note_off_for`), `started` cleared |
-| `keys down` | `last key up, release, a note plays to its end` | `stop held back` | the mark set; the note plays on |
-| `keys down` | `last key up, latch` | `no key` | the notes latch and sound on |
+| `no key` | `key down` | `keys down` | the key is held and its slice plays; `started` stays unset (the voice already ran) |
+| `no key` | `the voice's stop` | `no key` | the voice stops |
+| `no key` | `a reset` | `no key` | nothing held: nothing sent, the voice runs on |
+| `no key` | `a panic` | `no key` | the voice runs on: no MIDI note started it |
+| `no key` | `a running voice's source switch` | `no key` | the voice runs on; `started` stays unset |
+| `no key` | `the LFO step, nothing plays to its end` | `no key` | no mark: the voice runs on |
+| `no key` | `the LFO step, a note still plays to its end` | `no key` | no mark: the voice runs on |
+| `no key` | `latch set, then the LFO step` | `no key` | the voice runs on |
+| `keys down` | `key down` | `keys down` | another key held, its slice plays |
+| `keys down` | `key up, others down` | `keys down` | its one-shot slice plays on to its end: nothing sent, the voice runs on |
+| `keys down` | `last key up, nothing plays to its end` | `no key` | the voice stops (`midi_note_off_for`), `started` cleared |
+| `keys down` | `last key up, a note plays to its end` | `stop held back` | the mark set; the voice runs on and its slices play on |
 | `keys down` | `the voice's stop` | `keys down` | its notes forgotten; the keys stay down, their offs send nothing |
-| `keys down` | `a reset` | `no key` | every key released; in release mode the voice stops |
-| `keys down` | `a panic` | `no key` | every key released and the voice stopped |
-| `keys down` | `a running voice's source switch` | `keys down` | the keys, their note ons' lists and `started` kept; the lifts act as before (release: the last stops the voice) |
+| `keys down` | `a reset` | `no key` | every key released and the voice stopped, `started` cleared |
+| `keys down` | `a panic` | `no key` | every key released and the voice stopped, `started` cleared |
+| `keys down` | `a running voice's source switch` | `keys down` | the voice runs on; the keys, their note ons' lists and `started` kept |
+| `keys down` | `the LFO step, nothing plays to its end` | `keys down` | the keys stay down, the voice runs on |
+| `keys down` | `the LFO step, a note still plays to its end` | `keys down` | the keys stay down, the voice runs on |
+| `keys down` | `latch set, then the LFO step` | `no key` | every key released and MIDI's notes forgotten; the voice runs on |
 | `stop held back` | `key down` | `keys down` | the mark goes: the new key's lift decides again |
-| `stop held back` | `the LFO step, nothing plays to its end` | `no key` | the voice stops |
-| `stop held back` | `the LFO step, a note still plays to its end` | `stop held back` | it waits |
-| `stop held back` | `the LFO step, latch since` | `no key` | the mark dropped; the voice runs on |
-| `stop held back` | `the voice's stop` | `no key` | the mark goes |
-| `stop held back` | `a reset` | `stop held back` | MIDI's notes forgotten (its slice playing to its end too); the LFO step then stops the voice once no other owner's note plays to its end |
-| `stop held back` | `a running voice's source switch` | `stop held back` | the mark kept (the hook's reason `"source"`); the LFO step stops the voice once nothing plays to its end |
-| `stop held back` | `a panic` | `no key` | a voice MIDI started stops, which clears the mark (one started elsewhere keeps it for the LFO step) |
+| `stop held back` | `the voice's stop` | `no key` | the mark goes with the stop |
+| `stop held back` | `a reset` | `stop held back` | MIDI's notes forgotten (its slice playing to its end too), the voice runs on; the next LFO step stops it |
+| `stop held back` | `a panic` | `no key` | the voice MIDI started stops, which clears the mark; `started` cleared |
+| `stop held back` | `a running voice's source switch` | `stop held back` | the mark kept (the hook's reason `"source"`): the voice runs on, and stops once nothing plays to its end |
+| `stop held back` | `the LFO step, nothing plays to its end` | `no key` | the voice stops (`midi_note_off_for`), `started` cleared |
+| `stop held back` | `the LFO step, a note still plays to its end` | `stop held back` | it waits: the voice runs on |
+| `stop held back` | `latch set, then the LFO step` | `no key` | the mark dropped; the voice runs on |
+
+### midi notes, latch
+- **State:** the `midi notes` entry's state, in latch mode (`midi_note_off` `latch`): `no key`, `keys down` and `stop held back`, which only a release-mode lift sets, so latch holds it only from a change to latch until the next LFO step drops the mark.
+- **Invariant:** none: the `midi notes` entry above enters it.
+- **Test:** `test/unit/midi_in_test.lua`: the `midi notes, latch` transition table (`h.transition_table`, this table); beside it "latch: lifting changes nothing, and the next chord's first key replaces the chord", "a reset under latch forgets MIDI's notes and leaves another owner's playing", "latch: a panic CC stops a voice a released key started, never one started elsewhere (#529)", "the midi notes table: no key + a running voice's source switch keeps started", "on an overlap one-shot voice sequential slice taps ring over each other in every note-off mode".
+
+Each state is voice 1's and sets latch first, but `stop held back`: that is the release table's state, then latch set (the change is a reset, which forgets MIDI's notes and leaves the mark). In `no key` a released key's note (60) started the voice and sounds on, latched; in `keys down` two keys (60, then 64) started it; both on its synth source. In `stop held back` it plays one-shot slices, as in the release table. The release table's events that only release mode has are not here: every lift latches (`last key up` lifts the other key first, then the last), and the LFO step has only a mark to drop, so it is one event. On a voice of one-shot slices the next chord leaves the last chord's slices playing to their ends (the final review's I-1), which "on an overlap one-shot voice sequential slice taps ring over each other in every note-off mode" runs. Impossible: a key up in `no key` and in `stop held back` (no key is down: the mark is set only with none down).
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `no key` | `key down` | `keys down` | the last chord's note released first (the next chord replaces the last); the key held, its note plays |
+| `no key` | `the voice's stop` | `no key` | the voice stops; its latched note forgotten |
+| `no key` | `a reset` | `no key` | MIDI's latched note forgotten: nothing sent, the voice sounds on |
+| `no key` | `a panic` | `no key` | the voice MIDI started stops, `started` cleared |
+| `no key` | `a running voice's source switch` | `no key` | the voice runs on, `started` kept: a panic still stops it |
+| `no key` | `the LFO step` | `no key` | the latched note sounds on, the voice runs on |
+| `keys down` | `key down` | `keys down` | another key held, its note plays; the chord's notes play on |
+| `keys down` | `key up, others down` | `keys down` | the note latches: it sounds on, nothing sent |
+| `keys down` | `last key up` | `no key` | the notes latch and sound on; the voice runs on, `started` kept |
+| `keys down` | `the voice's stop` | `keys down` | its notes forgotten; the keys stay down, their offs send nothing |
+| `keys down` | `a reset` | `no key` | every key released and MIDI's notes forgotten; the voice runs on |
+| `keys down` | `a panic` | `no key` | every key released and the voice stopped, `started` cleared |
+| `keys down` | `a running voice's source switch` | `keys down` | the voice runs on; the keys, their note ons' lists and `started` kept |
+| `keys down` | `the LFO step` | `keys down` | the keys stay down, the voice runs on |
+| `stop held back` | `key down` | `keys down` | the mark goes |
+| `stop held back` | `the voice's stop` | `no key` | the mark goes with the stop |
+| `stop held back` | `a reset` | `stop held back` | the mark kept for the LFO step; the voice runs on |
+| `stop held back` | `a panic` | `no key` | the voice MIDI started stops, which clears the mark; `started` cleared |
+| `stop held back` | `a running voice's source switch` | `stop held back` | the mark kept; the voice runs on |
+| `stop held back` | `the LFO step` | `no key` | the mark dropped; the voice runs on |
 
 ### note tap
 - **State:** `note_tap` (a local: nil, or the function every note on goes to first) and `note_tap_owner` (its owner's name, nil exactly while `note_tap` is; 3.9, #900), set with `M.set_note_tap(owner, fn)` and cleared with `M.clear_note_tap(owner)` by its two owners, SETUP's zones editor's learn (`lib/ui/zones.lua`, `ZONES_EDITOR.tap_owner`) and the scale editor (`lib/ui/scale_editor.lua`, `SCALE_EDITOR.tap_owner`), and read through `M.note_tap_owner()`. States: `none` and `set` (an owner, the holder, holds it).
