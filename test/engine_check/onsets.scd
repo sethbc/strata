@@ -536,20 +536,24 @@ var checkRefusedEnding = {
 };
 
 // A 16 s pass on the standard tier, timed; then a 300 s pass on a high
-// engine: a message sent every 10 ms while it runs is each handled within
-// one of the pass's chunks of its send (an OSC message waits for the
-// language lock, which the pass holds for one chunk at most), counted with
-// the area's chunks, not timed, so a loaded machine cannot fail it (#964);
-// and it keeps the 63 of a click every 1000 frames. The messages go from
-// the check's routine, which runs during the pass only when the pass
-// yields: some must be sent between the pass's first chunk and its last
-// (a pass that never yields would let none be sent then, each sent before
-// or after it handled at once)
+// engine: a message sent every 10 ms while it runs is handled within a few
+// of the pass's chunks of its send, counted with the area's chunks, not
+// timed (#964), and it keeps the 63 of a click every 1000 frames. An OSC
+// message waits for the language lock, which the pass gives up after each
+// chunk for at least commandGap (0.2 ms): sclang's network thread takes it
+// then if the OS has run it by that time, which an idle machine always
+// does (one chunk at most here), and a loaded one may not, so the check
+// accepts up to chunkAllowance (8 of the pass's 879), never a clock. What
+// fails a pass that never yields is the other condition: the messages go
+// from the check's routine, which runs during the pass only when the pass
+// yields, so some must be sent between the pass's first chunk and its last
+// (with no yield none is, and each sent before or after it is handled at
+// once)
 var checkLong = {
     var period = [0.9] ++ Array.fill(999, 0), write, standardRun, longRun, highEngine, slot = 0;
     var shortPath = scratchRoot +/+ "onsets-16.wav", longPath = highRoot +/+ "onsets-300.wav";
     var capacity = 20000, sentAt = Array.newClear(capacity), latency = Signal.newClear(capacity), sent = 0, heard = 0, ping;
-    var sentChunk = Array.newClear(capacity), heardChunks = Array.newClear(capacity), chunksOf, firstChunk, lastChunk, during, late;
+    var sentChunk = Array.newClear(capacity), heardChunks = Array.newClear(capacity), chunksOf, firstChunk, lastChunk, during, late, chunkAllowance = 8;
     write = { arg path, seconds;
         var file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
         file.openWrite(path);
@@ -592,11 +596,11 @@ var checkLong = {
         ping.free;
         // sent after the pass's first chunk and before its last
         during = sentChunk.copyRange(0, (sent - 1).max(0)).count({ arg each; each.notNil and: { each > firstChunk } and: { each < lastChunk } });
-        late = heardChunks.copyRange(0, (sent - 1).max(0)).count({ arg each; each.isNil or: { each > 1 } });
+        late = heardChunks.copyRange(0, (sent - 1).max(0)).count({ arg each; each.isNil or: { each > chunkAllowance } });
         check.((longRun[\failed] == false) and: { heard == sent } and: { sent > 10 } and: { late == 0 } and: { during > 0 }
             and: { onsetFrames.(readOnsets.(onsetsFile.(highEngine, slot))).size == engine.onsetCandidates },
-            "onsets: a 300 s slot's pass yields to commands, each message handled within a chunk of its send (#964; % s, % chunks; % messages, % sent during the chunks, % heard, % after more than one chunk, the most chunks %; the slowest handled in % ms)".format(
-                longRun[\seconds] !? { arg each; each.round(0.01) }, lastChunk - firstChunk, sent, during, heard, late,
+            "onsets: a 300 s slot's pass yields to commands, each message handled within a few chunks of its send (#964; % s, % chunks; % messages, % sent during the chunks, % heard, % after more than % chunks, the most chunks %; the slowest handled in % ms)".format(
+                longRun[\seconds] !? { arg each; each.round(0.01) }, lastChunk - firstChunk, sent, during, heard, late, chunkAllowance,
                 heardChunks.copyRange(0, (sent - 1).max(0)).select(_.notNil).maxItem,
                 (latency.copyRange(0, (sent - 1).max(0)).peak * 1000).round(0.01)));
         h.commandTo(highEngine, \clearBuffer, slot); server.sync;
