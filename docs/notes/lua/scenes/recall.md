@@ -1,7 +1,7 @@
 ## Must not break
 
 - A recall is one list: `recall_scene_instant` is `S.lib.scenes.apply_entries(S.lib.scenes.scene_entries(scene_data))`, and `scene_transition_targets` is the continuous entries of `scene_entries`. Their sends, in order, are 3.3.2's, plus what the lock hooks send for a lock the recall changes (scatter's `setScatter`, `docs/notes/lua/scatter.md`): a test compares both against verbatim copies of the merged functions, the recall's with the lock hooks added and both re-based on the format 10 voice (its values in recall order; its type entry follows the source), for every voice state and source (`test/unit/scenes_test.lua`). A change to what a recall sets goes in `scene_entries` or `apply_entries`, never beside them, so morph (which applies the same lists) follows.
-- A recall's lock entries run every `S.registry.lock_change` hook, `fn(voice_idx, locked)`, for each voice whose lock it changes, after setting `S.locked[voice_idx]`, as `toggle_lock` does (3.4's 0a); a voice whose lock stays runs none.
+- A recall's lock entries go through the lock's one setter, `S.lib.engine_sync.set_locked(voice_idx, locked)` (3.9, #917), as `toggle_lock` does: it sets `S.locked[voice_idx]` and runs every `S.registry.lock_change` hook, `fn(voice_idx, locked)`, for each voice whose lock it changes (3.4's 0a); a voice whose lock stays runs none. Each hook is contained (#910): one that raises is printed once and the recall applies its later entries.
 - Every `S.registry.scene_applied` hook (3.7, `S.register_scene_applied({name, fn})`) runs once per `apply_entries` call, contained, right after it puts `S.scene_recall_in_progress` back (cleared, but inside another apply), before the source syncs and before an error is raised again: an instant recall, a fade's landing and morph's discrete entries.
 - Every `S.registry.scene_recalled` hook (3.6's 0a, `S.register_scene_recalled`) runs once per recall, contained (`S.lib.ui_frame.contained_call`, `strata: scene recalled hook <n> failed: ` once per message), with `(scene_num)`: at an instant recall once its entries applied and the scene is current (in `recall_scene_instant`, after `S.current_scene` is set), or at a fade's first step once it ran; a fade's landing passes `recall_scene_instant` its fourth argument `landing = true` and tells nothing again. A refused recall (out of range, empty, invalid), an instant recall whose apply raises and a fade whose first step raises tell nothing; a fade that fails later (a step, or its landing) or is superseded has told already, at its first step, so a hook must never assume the scene landed. The scene sequencer's recalls go through `recall_scene` and tell the same way. The targets send their program changes from it.
 - A block's `through_zero` plays only in a fade (and morph): an instant recall, and a fade's end, apply the block's value through its `apply` and never ask it.
@@ -42,7 +42,7 @@ end
 Voice activation:
 - checks whether a voice's state needs to change (on → off or off → on);
 - starts and stops voices with `toggle_voice()`;
-- restores lock states (stored as `locked`) with the scene, running the `lock_change` hooks for each voice whose lock changed.
+- restores lock states (stored as `locked`) with the scene through `S.lib.engine_sync.set_locked`, which runs the `lock_change` hooks, contained, for each voice whose lock changed.
 
 Patterns:
 - restored after all parameter changes, each voice's through `S.lib.sequencer.replace_pattern` (which ends a step held on the grid, #242);
@@ -61,7 +61,7 @@ Every list of one scene is in one order, the same on Lua 5.3 and LuaJIT. The ord
 
 `S.lib.scenes.apply_entries(entries, opts)` applies a list (any subset of `scene_entries`' output, in its order) as a recall does:
 - `S.scene_recall_in_progress` is set for the whole list and put back as it was found after it (3.9, #892: an apply inside another, a param action's, leaves the outer one's set; after an error too);
-- a param through `set_scene_value` (its field's `set`, else `set_scene_param`); a block through its record's `apply(value)`; a lock by setting `S.locked[voice]`, then, when it changed, the `lock_change` hooks; a pattern through `S.lib.sequencer.replace_pattern`;
+- a param through `set_scene_value` (its field's `set`, else `set_scene_param`); a block through its record's `apply(value)`; a lock through `S.lib.engine_sync.set_locked(voice, value)` (which, when it changed, runs the `lock_change` hooks, contained); a pattern through `S.lib.sequencer.replace_pattern`;
 - a voice whose `active` entry stops it is stopped there (before its source and params); one it starts is started after its last entry in the list, its pattern aside (patterns follow every voice's entries), so `toggle_voice` syncs what was applied;
 - a `v<i>_source` entry that changes the source marks the voice; afterward each running voice so marked (and not started by the list) gets one `sync_voice_values_to_engine`;
 - an error in an action: the flag is cleared, the syncs run, and the error is raised again with its traceback (`with_traceback`), as below;

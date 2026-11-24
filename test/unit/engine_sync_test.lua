@@ -1269,6 +1269,107 @@ test("toggle_lock runs the lock hooks with the voice and its new state", functio
   assert_equal(#log, 2, "an ignored voice runs none")
 end)
 
+-- #917: the lock has one writer, S.lib.engine_sync.set_locked; the table is
+-- otherwise only built (lib/voices.lua, S.locked[i] = false). An assignment
+-- to S.locked[...] anywhere else in lib/ or strata.lua is named
+test("S.locked is assigned only in set_locked and at its initialization (#917)", function()
+  local others, setter_sites, init_sites = {}, 0, 0
+  for _, source in ipairs(h.read_lua_sources()) do
+    if source.path:match("^lib/") or source.path == "strata.lua" then
+      local setter_first, setter_last
+      local line_number = 0
+      for line in (source.text .. "\n"):gmatch("([^\n]*)\n") do
+        line_number = line_number + 1
+        local code = line:gsub("%-%-.*", "")
+        if source.path == "lib/engine_sync.lua" then
+          if code:find("^  function M%.set_locked%(") then setter_first = line_number end
+          if setter_first and not setter_last and line_number > setter_first and code:find("^  end%s*$") then
+            setter_last = line_number
+          end
+        end
+        if code:find("S%.locked%[[^%]]*%]%s*=[^=]") or code:find("S%.locked%s*=[^=]") then
+          local in_setter = setter_first and not setter_last
+          if in_setter then
+            setter_sites = setter_sites + 1
+          elseif source.path == "lib/voices.lua" and (code:find("S%.locked%[i%] = false") or code:find("S%.locked = {}")) then
+            init_sites = init_sites + 1
+          else
+            others[#others + 1] = source.path .. ":" .. line_number
+          end
+        end
+      end
+    end
+  end
+  assert_equal(table.concat(others, " "), "", "S.locked is assigned outside set_locked")
+  assert_equal(setter_sites, 1, "set_locked assigns the lock once")
+  assert_equal(init_sites, 2, "lib/voices.lua builds the table (S.locked = {}, then each voice false)")
+end)
+
+-- #917: set_locked(voice_idx, locked) sets the lock and runs the hooks only
+-- when that changed it, in registration order, after the change; a voice
+-- outside 1..NUM_VOICES or a value that is no boolean does nothing
+test("set_locked runs the lock hooks once, only on a change, and refuses a bad voice or value", function()
+  local log = {}
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_lock_change(function(voice_idx, locked)
+      log[#log + 1] = "a" .. voice_idx .. ":" .. tostring(locked) .. ":" .. tostring(S.locked[voice_idx])
+    end)
+    S.register_lock_change(function(voice_idx, locked) log[#log + 1] = "b" .. voice_idx .. ":" .. tostring(locked) end)
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  local NUM_VOICES = S.constants.NUM_VOICES
+  local set_locked = S.lib.engine_sync.set_locked
+  set_locked(3, true)
+  assert_equal(table.concat(log, " "), "a3:true:true b3:true", "a change runs each hook once, in order, after it")
+  set_locked(3, true)
+  assert_equal(#log, 2, "the same value again runs none")
+  set_locked(3, false)
+  assert_equal(table.concat(log, " ", 3), "a3:false:false b3:false", "unlocking runs them with false")
+  set_locked(NUM_VOICES, true)
+  assert_true(S.locked[NUM_VOICES] == true, "the last voice locks")
+  log = {}
+  local before = {}
+  for voice_idx = 1, NUM_VOICES do before[voice_idx] = S.locked[voice_idx] end
+  for _, bad in ipairs({ {0, true}, {NUM_VOICES + 1, true}, {1.5, true}, {"2", true}, {nil, true},
+    {2, nil}, {2, 1}, {2, "true"}, {math.huge, true}, {0 / 0, true} }) do
+    set_locked(bad[1], bad[2])
+  end
+  assert_equal(#log, 0, "a bad voice or value runs no hook")
+  for voice_idx = 1, NUM_VOICES do
+    assert_equal(S.locked[voice_idx], before[voice_idx], "voice " .. voice_idx .. "'s lock unchanged")
+  end
+  local count = 0
+  for _ in pairs(S.locked) do count = count + 1 end
+  assert_equal(count, NUM_VOICES, "a bad voice never grows the table")
+end)
+
+-- #910: the lock-change hooks are contained, as the other hooks are: one
+-- that raises is printed once per distinct message and the next still runs
+test("a lock-change hook that raises does not stop the next, and its error prints once (#910)", function()
+  local heard = {}
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_lock_change(function() error("lock hook boom") end)
+    S.register_lock_change(function(voice_idx, locked) heard[#heard + 1] = voice_idx .. ":" .. tostring(locked) end)
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  context.take_script_errors()
+  local locked_ok, lock_error = pcall(S.lib.engine_sync.set_locked, 2, true)
+  assert_true(locked_ok, "the lock completes: " .. tostring(lock_error))
+  assert_true(S.locked[2] == true, "the lock is set")
+  local toggled, toggle_error = pcall(toggle_lock, 2)
+  assert_true(toggled, "toggle_lock completes: " .. tostring(toggle_error))
+  assert_true(S.locked[2] == false, "and unset")
+  assert_equal(table.concat(heard, " "), "2:true 2:false", "the next hook runs at each change")
+  local errors = context.take_script_errors()
+  assert_equal(#errors, 1, "one line for two raises of one message: " .. table.concat(errors, "\n"))
+  assert_true(errors[1]:find("strata: lock change hook failed: ", 1, true) == 1, errors[1])
+  assert_true(errors[1]:find("lock hook boom", 1, true) ~= nil, errors[1])
+end)
+
 -- 3.5's voice-stop registry (design §0.1): every engine.voiceOff the
 -- script sends is followed by the hooks, with the voice's index
 test("every voice stop runs the voice-stop hooks", function()

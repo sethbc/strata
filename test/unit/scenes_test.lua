@@ -5218,4 +5218,40 @@ test("six rounds of capture and recall leave attackTime and releaseTime where th
   assert_equal(sends, 0, "no round sent anything")
 end)
 
+-- #910, #917: a recall's lock goes through S.lib.engine_sync.set_locked, so
+-- its hooks are contained: one that raises is printed once, the next still
+-- runs and the recall applies the entries after the lock (the next voice's
+-- values, the patterns)
+test("a recall's lock change runs the hooks contained (#910)", function()
+  local heard = {}
+  local context = load_strata({ before_init = function()
+    local S = local_value("S")
+    S.register_lock_change(function() error("scene lock hook boom") end)
+    S.register_lock_change(function(voice_idx, locked) heard[#heard + 1] = voice_idx .. ":" .. tostring(locked) end)
+  end })
+  finish_startup(context)
+  local S = local_value("S")
+  local NUM_VOICES = S.constants.NUM_VOICES
+  params:set("v3_grain_size", 0.4)
+  toggle_pattern_step(NUM_VOICES, 5)
+  local captured_step = local_value("patterns")[NUM_VOICES][5]
+  S.locked[2] = true  -- the scene holds voice 2 locked; no hook runs here
+  capture_scene(1)
+  S.locked[2] = false
+  params:set("v3_grain_size", 0.1)
+  toggle_pattern_step(NUM_VOICES, 5)
+  context.take_script_errors()
+  heard = {}
+  local recalled, recall_error = pcall(recall_scene, 1, 0)
+  assert_true(recalled, "the recall completes: " .. tostring(recall_error))
+  assert_true(S.locked[2] == true, "the scene's lock is set")
+  assert_equal(table.concat(heard, " "), "2:true", "the next hook runs, once")
+  assert_near(params:get("v3_grain_size"), 0.4, 1e-6, "the next voice's values are applied")
+  assert_equal(local_value("patterns")[NUM_VOICES][5], captured_step, "the patterns are applied")
+  local errors = context.take_script_errors()
+  assert_equal(#errors, 1, "one line printed: " .. table.concat(errors, "\n"))
+  assert_true(errors[1]:find("strata: lock change hook failed: ", 1, true) == 1, errors[1])
+  assert_true(errors[1]:find("scene lock hook boom", 1, true) ~= nil, errors[1])
+end)
+
 end
