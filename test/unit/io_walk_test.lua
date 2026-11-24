@@ -18,7 +18,7 @@
 -- device has had as many offs as ons. Its allowances, each counted (a walk
 -- that never meets one fails): the two edges docs/notes/lua/io/midi_out.md
 -- documents (namesake, away_cut), and two faults the walk found: stranded
--- (#988, mark_stranded) and held_dropped (mark_held_dropped, below)
+-- (#988, mark_stranded) and held_dropped (#996, mark_held_dropped)
 -- Run alone: lua test/run.lua io_walk
 
 return function(h)
@@ -37,6 +37,8 @@ local WALK = {
   place_from = 7,     -- the end check puts a device on no port at the first free port from 7
   mode_mpe = 2,       -- v<i>_out_mode: plain, mpe
   note_off_modes = 2, -- midi_note_off: latch, release
+  note_off_release = 2,
+  cut = 1,            -- engine.noteOff's third argument: 1 cuts
   -- the rig's remote ports, in lib/io/remote.lua's KINDS order (the grid
   -- claims a port both name first)
   rig_kinds = {"remote_grid_port", "remote_arc_port"},
@@ -287,8 +289,8 @@ local function log_marks(state)
 end
 
 -- A key on a random channel (voice 1 to 3), and its channel
-local function key_down(state, random)
-  local channel = random(#WALK.routes)
+local function key_down(state, random, channel)
+  channel = channel or random(#WALK.routes)
   state.context.midi.send(WALK.keys.port, {type = "note_on", ch = channel,
     note = WALK.keys.first + random(WALK.keys.span), vel = 30 + random(97)})
   return channel
@@ -338,30 +340,37 @@ local function open_menu(state)
   return {holders = holders(state), starts = synth_ports(state), marks = log_marks(state), keys = {}}
 end
 
--- A key played while the menu is open: where every device was then, the
--- port its voice (its channel) is routed to, and whether it is a key down
--- that found the shared pool full, so its note takes the oldest held extra
--- note anywhere (lib/notes.lua's play: "the oldest held extra note
--- anywhere is cut"); a key up that releases no held key ends nothing
-local function play_in_menu(state, visit, random)
-  local notes = state.S.lib.notes
-  local full = notes.pool_used() >= notes.pool()
-  local down = random(2) == 1
-  local channel, ended
-  if down then channel = key_down(state, random) else channel, ended = key_up(state, random) end
-  visit.keys[#visit.keys + 1] = {ports = synth_ports(state), marks = log_marks(state),
-    route = (down or ended) and params:get("v" .. channel .. "_out_port") or nil, steals = down and full}
+-- A key played while the menu is open: where every device was then, and
+-- the ports of the voices whose notes it started or ended there. Its own
+-- voice's (its channel's) route, but for a key up that ends nothing: one
+-- that releases no held key, or any key up with the note off mode latch
+-- (lib/midi_in.lua's end_key keeps a latched note sounding). And the route
+-- of each voice the engine was told to cut a note of during the key (a
+-- full pool's oldest held extra note anywhere, lib/notes.lua's play, or the
+-- voice's note cap): the walk reads the engine stub's calls, not a module
+local function play_in_menu(state, visit, random, toward, key_is_down)
+  local calls = state.context.engine_calls
+  local first = #calls + 1
+  local down = key_is_down or random(2) == 1
+  local channel, released
+  if down then channel = key_down(state, random, toward) else channel, released = key_up(state, random) end
+  local routes = {}
+  local function route_of(voice) routes[params:get("v" .. voice .. "_out_port")] = true end
+  if down or (released and params:get("midi_note_off") == WALK.note_off_release) then route_of(channel) end
+  for index = first, #calls do
+    local call = calls[index]
+    if call.name == "noteOff" and call.args[3] == WALK.cut then route_of(call.args[1] + 1) end
+  end
+  visit.keys[#visit.keys + 1] = {ports = synth_ports(state), marks = log_marks(state), routes = routes}
 end
 
 -- Edge 1's condition, from the walk's own keys: a key played while the
 -- menu was open, after the log's index (the note's on), while the device
--- was away from its start port, whose voice is routed to that port (its
--- note's start or end settles the port) or whose note took the full
--- pool's oldest (which may end a note on that port)
+-- was away from its start port, that started or ended a note of a voice
+-- routed to that port (which settles the port)
 local function played_while_away(visit, device, start, after)
   for _, key in ipairs(visit.keys) do
-    if key.ports[device.label] ~= start and key.marks[device.label] >= after
-      and (key.route == start or key.steals) then
+    if key.ports[device.label] ~= start and key.marks[device.label] >= after and key.routes[start] then
       return true
     end
   end
@@ -437,23 +446,27 @@ local function mark_stranded(state, visit, now)
   end
 end
 
--- The allowance `held_dropped` (a fault the walk found, no documented
+-- The allowance `held_dropped` (#996, a fault the walk found, no documented
 -- edge): the close pays a device's owed offs where it is (MIDI out's
 -- reconcile_owed takes the debt), and sends nothing to a port a remote
--- holds, so a device that ends the visit on a held port loses the offs of
--- the notes it got at another port while that port was free and that the
--- close owes it (that port told gone, or settled by a key while the
--- device was away): they sound on until the device is told the note again.
--- Decided from the walk's own log and claims: a note open on such a device
--- whose last on came at another port the close owes it
+-- holds, so a device on a held port at the visit's open and its close
+-- loses the offs of the notes it got in the visit at another port while
+-- that port was free and that the close owes it (that port told gone, or
+-- settled by a key while the device was away): they sound on until the
+-- device is told the note again. Decided from the walk's own log and
+-- claims: a note open on such a device whose last on came in the visit at
+-- another port the close owes it
 local function mark_held_dropped(state, visit, now, close_marks)
   for _, device in ipairs(state.devices) do
     local at = device.stub and device.stub.port
-    if at and held(state, at) then
+    -- on the held port at the open as at the close (a holder that changes
+    -- is told: the claim ends and the arrival pays before the remote claims
+    -- again), and the note's on inside the visit
+    if at and held(state, at) and visit.starts[device.label] == at then
       for channel, notes in pairs(device.open) do
         for note, count in pairs(notes) do
           local on, index = last_on(device, channel, note, close_marks[device.label] + 1)
-          if count > 0 and on and on.port ~= at
+          if count > 0 and on and on.port ~= at and index > visit.marks[device.label]
             and (told_gone(visit, now, on.port) or played_while_away(visit, device, on.port, index)) then
             excuse(device, channel, note, "held_dropped")
           end
@@ -501,6 +514,13 @@ local function menu_visit(state, random)
   if mover then
     local to = random(WALK.move_ports - 1)
     if to >= from then to = to + 1 end
+    -- half the time onto another synth's port, which leaves that synth on
+    -- no port, so the close tells the port gone if the mover goes back
+    local others = {}
+    for _, device in ipairs(on_port(state)) do
+      if device ~= mover and device.stub.port <= WALK.move_ports then others[#others + 1] = device.stub.port end
+    end
+    if #others > 0 and random(2) == 1 then to = pick(others, random) end
     place(state, mover, to)
   end
   for _, device in ipairs(state.devices) do
@@ -508,13 +528,57 @@ local function menu_visit(state, random)
       place(state, device, random(WALK.move_ports))
     end
   end
-  for _ = 1, random(5) - 1 do play_in_menu(state, visit, random) end
+  -- the keys go half the time to a voice routed to the mover's new port,
+  -- when one is: notes the moved synth gets where it visits
+  local toward
+  for voice = 1, #WALK.routes do
+    if mover and mover.stub.port and params:get("v" .. voice .. "_out_port") == mover.stub.port then toward = voice end
+  end
+  for _ = 1, random(5) - 1 do play_in_menu(state, visit, random, random(2) == 1 and toward or nil) end
   if mover and random(3) > 1 and mover.stub.port ~= from then place(state, mover, from) end
   close_menu(state, visit)
 end
 
+-- A held synth's visit: a synth on a port the walk's claims hold moved, in
+-- the menu, to the port a voice is routed to (a synth there left on no
+-- port), a key played on that voice, the synth moved back, the close: the
+-- close owes it the note (that port told gone when a synth was there), on
+-- the held port it came back to (#996)
+local function held_visit(state, random)
+  local movers = {}
+  for _, device in ipairs(on_port(state)) do
+    if held(state, device.stub.port) then movers[#movers + 1] = device end
+  end
+  if #movers == 0 then return end
+  local mover = pick(movers, random)
+  local from, targets = mover.stub.port, {}
+  for voice = 1, #WALK.routes do
+    local port = params:get("v" .. voice .. "_out_port")
+    if port > 0 and port ~= from and not held(state, port) then targets[#targets + 1] = {voice = voice, port = port} end
+  end
+  if #targets == 0 then return end
+  local target = pick(targets, random)
+  local visit = open_menu(state)
+  place(state, mover, target.port)
+  play_in_menu(state, visit, random, target.voice, true)
+  place(state, mover, from)
+  close_menu(state, visit)
+end
+
+-- The port of a voice in MPE mode (its zone's), or nil
+local function zone_port(state)
+  for voice = 1, #WALK.routes do
+    local port = params:get("v" .. voice .. "_out_port")
+    if params:get("v" .. voice .. "_out_mode") == WALK.mode_mpe and port > 0 then return port end
+  end
+end
+
+-- The rig's grid or arc port set to one of 1 to 5, half the time the MPE
+-- zone's, so its release sends the zone's setup
 local function claim(state, random)
   local kind, port = pick(WALK.rig_kinds, random), random(WALK.move_ports)
+  local zone = zone_port(state)
+  if zone and random(2) == 1 then port = zone end
   local device = device_at(state, port)
   local was_held = held(state, port)
   local sounding = device and open_total(device) or 0
@@ -600,6 +664,7 @@ local OPS = {
     if #candidates > 0 then plug(state, pick(candidates, random)) end
   end},
   {2, "menu", menu_visit},
+  {1, "held visit", held_visit},
   {1.5, "claim", claim},
   {1.5, "release", release},
   {2, "route", function(state, random)
@@ -657,6 +722,26 @@ h.test("the devices walk's ledger names an off beyond its ons and credits a name
   h.assert_equal(#state.problems, 1, "an off beyond the twin's ons, a plugged in: " .. tostring(state.problems[1]))
   heard_off(state, a, 2, 62)
   h.assert_equal(#state.problems, 2, "an off a device never had the on of")
+end)
+
+-- The allowance held_dropped is #996's case alone: a device on the held
+-- port at the visit's open as at its close, with the note's on inside the
+-- visit at a port the close tells gone. A device that came to the held
+-- port in the visit (its arrival pays before the remote claims again), or
+-- a note hung before the visit, is not excused
+h.test("the devices walk excuses a note as held_dropped only where #996 drops it", function()
+  local function excused_when(start_port, on_inside_visit)
+    local device = {label = "a", name = "synth a", open = {[1] = {[60] = 1}}, stranded = {}, stub = {port = 3},
+      log = {{from = "io/midi_out", port = 1, msg = {type = "note_on", ch = 1, note = 60}}}}
+    local state = {devices = {device}, claimed = {remote_grid_port = 3}}
+    local visit = {starts = {a = start_port}, marks = {a = on_inside_visit and 0 or 1},
+      holders = {[1] = "b", [3] = "a"}, keys = {}}
+    mark_held_dropped(state, visit, {[1] = false, [3] = "a"}, {a = 1})
+    return excused(device, 1, 60)
+  end
+  h.assert_equal(excused_when(3, true), "held_dropped", "on the held port all the visit, the note got in it")
+  h.assert_equal(excused_when(4, true), nil, "the device came to the held port in the visit")
+  h.assert_equal(excused_when(3, false), nil, "the note's on came before the visit")
 end)
 
 h.walk({
