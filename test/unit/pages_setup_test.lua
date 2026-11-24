@@ -501,6 +501,7 @@ end
 test("SETUP's transport row shows follow or off and E3 turns following the transport off and on", function()
   local context = load_strata(); finish_startup(context)
   show_page("SETUP")
+  params:set("clock_source", 2)  -- MIDI: an external source, which the patterns follow (#921)
   cursor_on("transport"); redraw()
   assert_equal(params:get("seq_follow_transport"), 1, "on by default")
   assert_equal(value_beside(context, "transport"), "follow", "shown as follow")
@@ -512,6 +513,58 @@ test("SETUP's transport row shows follow or off and E3 turns following the trans
   assert_equal(params:get("seq_follow_transport"), 1, "E3 right: on again")
   assert_equal(value_beside(context, "transport"), "follow", "follow again")
   assert_screen_layout(context, "SETUP transport row")
+end)
+
+-- #921: on the internal clock nothing follows the transport, whatever the
+-- param: the row reads "follow [int]" (the param on, inactive) until an
+-- external source is chosen
+test("SETUP shows follow as inactive on the internal clock", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("SETUP")
+  cursor_on("transport")
+  assert_equal(params:get("clock_source"), 1, "the internal clock by default")
+  assert_equal(S.lib.sequencer.follows_transport(), false, "nothing follows")
+  redraw()
+  assert_equal(value_beside(context, "transport"), "follow [int]", "on, inactive on the internal clock")
+  assert_screen_layout(context, "SETUP transport row on the internal clock")
+  for _, source in ipairs({2, 3, 4}) do  -- MIDI, Link, crow
+    params:set("clock_source", source)
+    redraw()
+    assert_equal(value_beside(context, "transport"), "follow", "followed on source " .. source)
+  end
+  params:set("seq_follow_transport", 0); redraw()
+  assert_equal(value_beside(context, "transport"), "off", "off on an external source")
+  params:set("clock_source", 1); redraw()
+  assert_equal(value_beside(context, "transport"), "off", "off on the internal clock")
+end)
+
+-- #921: a transport start the patterns do not follow (here the internal
+-- clock's reset) leaves the sequencer's count ahead of the clock's
+-- (S.lib.sequencer.count_offset, ruling 47): a status row shows it while the
+-- patterns play, in beats, from the next frame; a stop or a start drops it
+test("SETUP shows the count's offset when an unfollowed reset left one", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local seq = S.lib.sequencer
+  local function offset_row()
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text:find("^count offset") then return entry.text end
+    end
+  end
+  show_page("SETUP")
+  enc(2, 60)  -- the status lines
+  S.patterns[1][1] = 15
+  pattern_clock_start()
+  context.clock.run_for(1.3)
+  redraw()
+  assert_equal(offset_row(), nil, "no offset: no row")
+  h.assert_drawn_on_next_frame(context, nil, "an unfollowed reset", function() context.clock.transport_start() end)
+  assert_true(seq.count_offset() ~= 0, "the count kept its own place")
+  assert_equal(offset_row(), string.format("count offset: %+.2f beats", seq.count_offset()), "shown in beats")
+  assert_screen_layout(context, "SETUP with a count offset")
+  h.assert_drawn_on_next_frame(context, nil, "a stop", function() pattern_clock_stop() end)
+  assert_equal(offset_row(), nil, "stopped: the next start counts from the clock, so no row")
 end)
 
 test("K3 on save scenes and load scenes says what it did on SETUP's hint row (#463)", function()

@@ -1575,6 +1575,32 @@ return function(S)
     return S.lib.quantize.waiting("patterns") and "armed" or "stopped"
   end
 
+  -- #921: the three states SEQ's status line shows, read from the fields
+  -- that hold them (nothing stored). Whether a division reset waits for its
+  -- bar (play.reset_beat: set by seq_division_reset while the patterns
+  -- play, cleared by its bar, a start and a stop)
+  function M.reset_armed() return play.reset_beat ~= nil end
+
+  -- The chain's place: the scene it linked last (nil before its first link,
+  -- or with no playable scene in its range) and the whole bars to its next
+  -- link (the bar in progress counts: 1 just before it), the sequencer's
+  -- count being the clock's beats plus play.offset. nil, nil while the chain
+  -- is off or the patterns stop (chain.next_beat is nil then)
+  function M.chain_place()
+    if not (S.pattern_playing and chain.next_beat) then return nil, nil end
+    local beats_left = chain.next_beat - (clock.get_beats() + play.offset)
+    return chain.current, math.max(1, math.ceil(beats_left / SEQ.bar_beats - SEQ.flt_epsilon))
+  end
+
+  -- The step outputs skipped since the last start (play.failed: each failed
+  -- once, printed to maiden), their names sorted
+  function M.failed_outputs()
+    local names = {}
+    for name in pairs(play.failed) do names[#names + 1] = name end
+    table.sort(names)
+    return names
+  end
+
   -- Start (or start again) the patterns now: every voice and the transport
   -- at step 1 on this beat, a running chain at its first scene (the
   -- patterns it replaces held by the undo on SEQ, #922), and every
@@ -1619,6 +1645,9 @@ return function(S)
     end_all_overrides()
     if was_playing then stop_outputs() end
     grid_redraw()
+    -- the header's play mark, SEQ's status line and SETUP's count offset,
+    -- whoever stopped them (#921)
+    request_redraw()
   end
 
   -- The params ----------------------------------------------------------
@@ -1765,6 +1794,7 @@ return function(S)
       request_redraw()
     else
       play.keep_count()
+      request_redraw()  -- SETUP's count offset (#921)
     end
     if transport.previous_start then transport.previous_start() end
   end

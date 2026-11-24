@@ -9,9 +9,9 @@ local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.as
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local show_page, hint_text, tap, assert_screen_layout = h.show_page, h.hint_text, h.tap, h.assert_screen_layout
 
--- The layout the brief fixes: cells 4x4 px, 6 px apart from x 10; rows 6 px
--- apart from y 13
-local CELLS_X, CELL_SPACING, CELL_SIZE, ROWS_Y, ROW_SPACING = 10, 6, 4, 13, 6
+-- The layout the brief fixes: cells 4x4 px, 6 px apart from x 10; rows 5 px
+-- apart from y 13 (#921: 6 px before, the status line took the room)
+local CELLS_X, CELL_SPACING, CELL_SIZE, ROWS_Y, ROW_SPACING = 10, 6, 4, 13, 5
 
 local function cell_x(step) return CELLS_X + (step - 1) * CELL_SPACING end
 local function row_y(voice_idx) return ROWS_Y + (voice_idx - 1) * ROW_SPACING end
@@ -1434,6 +1434,133 @@ test("SEQ's hint follows a start begun or taken back from a grid or the arc", fu
   context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
   context.clock.run_for(frame * 2)
   assert_equal(hint_text(context), "K2:play K3:step E3:level", "the arc's take-back shows")
+end)
+
+-- #921: the pattern view's status line, at y 55 between the last row and
+-- the hint row: the chain's place, an armed division reset and the step
+-- outputs that failed, left to right. Its text, or nil while none holds
+local STATUS_Y = 55
+local function status_text(context)
+  context.screen.clear(); redraw()
+  local found
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == STATUS_Y then
+      assert_true(found == nil, "one status string")
+      found = entry
+    end
+  end
+  if found then assert_equal(found.x, 0, "the status line starts at x 0") end
+  return found and found.text
+end
+
+-- The status line as the next frame draws it, after change() (a change
+-- the page shows must ask for a redraw: SEQ does not animate once stopped)
+local function status_after(context, where, change)
+  h.assert_drawn_on_next_frame(context, nil, where, change)
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == STATUS_Y then return entry.text end
+  end
+end
+
+-- The real targets output made to fail at its first hit
+local function break_targets(S)
+  for _, output in ipairs(S.registry.step_outputs) do
+    if output.name == "targets" then
+      output.available = nil
+      output.play = function() error("boom") end
+    end
+  end
+end
+
+test("SEQ shows an armed division reset", function()
+  local context, S = started_on_seq()
+  S.patterns[1][1] = 15
+  assert_equal(status_text(context), nil, "stopped: nothing")
+  params:set("seq_division_reset", 1)
+  assert_equal(status_text(context), nil, "a reset asked for while stopped arms nothing")
+  tap(2)
+  context.clock.run_for(0.3)
+  assert_equal(status_text(context), nil, "playing, nothing waits")
+  params:set("seq_division_reset", 1)
+  assert_equal(status_text(context), "[reset at bar]", "the reset waits for its bar")
+  assert_screen_layout(context, "SEQ with a reset armed")
+  context.clock.run_for(1.7 + 0.01)  -- the bar: 2 s after the start
+  assert_equal(status_text(context), nil, "the bar took it")
+  params:set("seq_division_reset", 1)
+  assert_equal(status_text(context), "[reset at bar]", "armed again")
+  -- a stop from anywhere (here the sequencer's own) clears it on the next frame
+  assert_equal(status_after(context, "a stop", function() pattern_clock_stop() end), nil, "a stop drops it")
+end)
+
+test("SEQ shows the chain's scene and the bars to its next link", function()
+  local context, S = started_on_seq()
+  S.patterns[1][1] = 15; capture_scene(16)
+  params:set("seq_chain_from", 16); params:set("seq_chain_scenes", 1); params:set("seq_chain_bars", 16)
+  params:set("seq_chain", 1)
+  assert_equal(status_text(context), nil, "the chain on but stopped: nothing")
+  tap(2)
+  assert_equal(status_text(context), "[S16 16 bars]", "a start links S16, 16 bars to the next link")
+  context.clock.run_for(2.0 + 0.01)
+  assert_equal(status_text(context), "[S16 15 bars]", "a bar on: 15 to go")
+  context.clock.run_for(28.0)  -- 2 s before the link at 16 bars (32 s)
+  assert_equal(status_text(context), "[S16 1 bar]", "one bar, singular")
+  -- the link's step 1 fails the targets output
+  break_targets(S)
+  local real_print = _G.print
+  _G.print = function() end
+  context.clock.run_for(2.0)
+  _G.print = real_print
+  assert_equal(status_text(context), "[S16 16 bars] [targets off]", "linked again, 16 bars ahead; targets off")
+  -- all three at once, at their widest: the short forms, still on one line
+  params:set("seq_division_reset", 1)
+  assert_equal(status_text(context), "[S16 16b] [reset] [targets off]", "the three at once")
+  assert_screen_layout(context, "SEQ with the chain, a reset and a failed output")
+  -- a chain with no scene to link
+  context.clock.run_for(2.0)
+  params:set("seq_chain_from", 15)  -- an empty slot, the range's only one
+  params:set("seq_chain", 0); params:set("seq_chain", 1)
+  assert_equal(status_text(context), "chain [none] [targets off]", "no playable scene in the range")
+  params:set("seq_chain_from", 16)
+  assert_equal(status_text(context), "[chain 1 bar] [targets off]", "a scene to link at the next bar")
+  -- a stop clears the chain's place on the next frame; the failed output stays
+  assert_equal(status_after(context, "a stop", function() pattern_clock_stop() end), "[targets off]",
+    "stopped: the chain's place goes")
+end)
+
+test("SEQ names a step output that failed, until the next start", function()
+  local context, S = started_on_seq()
+  S.patterns[1][1] = 15
+  local failing = true
+  S.register_step_output({name = "a very long output name for the screen",
+    play = function() if failing then error("boom") end end})
+  local real_print = _G.print
+  _G.print = function() end
+  tap(2)
+  context.clock.run_for(0.3)
+  _G.print = real_print
+  local one = status_text(context)
+  assert_true(one:find("^%[a very long output") ~= nil and one:find(" off%]$") ~= nil, "named, cut to fit: " .. one)
+  assert_true(h.text_width(one) <= 128, "within the screen")
+  assert_screen_layout(context, "SEQ with a long output name")
+  break_targets(S)
+  _G.print = function() end
+  context.clock.run_for(2.0)  -- step 1 again
+  _G.print = real_print
+  local both = status_text(context)
+  assert_true(both:find("^%[a very long output") ~= nil and both:find(" %+1 off%]$") ~= nil,
+    "the first, cut to fit, and one more: " .. both)
+  assert_true(h.text_width(both) <= 128, "within the screen")
+  assert_screen_layout(context, "SEQ with two failed outputs")
+  tap(2)
+  assert_equal(status_text(context), both, "a stop keeps them shown")
+  failing = false
+  S.patterns[1][1] = 15
+  for _, output in ipairs(S.registry.step_outputs) do
+    if output.name == "targets" then output.play = function() end end
+  end
+  tap(2)
+  assert_equal(status_text(context), nil, "a start plays them again")
+  tap(2)
 end)
 
 end
