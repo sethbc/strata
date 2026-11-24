@@ -970,35 +970,39 @@ return function(S)
     return {version = BUFFER_DATA_VERSION, paths = paths, starts = starts, settings = settings}
   end
 
-  -- Write the paths: true and "written" or "unchanged", or false and why
-  -- (the file is then as it was, whole). As the scenes' save: a checked
-  -- .part renamed over buffers.data (S.lib.data_files.write, #301)
-  function save_buffers_to_disk()
-    local data_files = S.lib.data_files
-    if util.file_exists(S.lib.scenes.scene_data_dir) == false then
-      util.make_dir(S.lib.scenes.scene_data_dir)
-    end
+  -- buffers.data's writer (3.9, #906): the side files' one debounced writer
+  -- (S.lib.side_files.writer), its clock in S.buffer_file.save_clock and
+  -- the text last written in S.buffer_file.text. It may write once the
+  -- restore at start has run and unless an unloadable file is still in
+  -- place. Each write's outcome sets SETUP's fields: a failure the write's
+  -- problem, a write that works clears it, and an unreadable file still in
+  -- place (this write replaced it); one set aside keeps its row (#868)
+  local function report_buffers_write(written, detail, path)
     local state = S.buffer_file
-    local value = remembered_buffers()
-    local saved, detail = data_files.write(buffer_data_file(), value)
-    if not saved then
+    if not written then
       state.write_problem = "not saved"
-      print("error: buffer paths not saved to " .. buffer_data_file() .. " (" .. tostring(detail)
-        .. "); the file is as it was")
+      print("error: buffer paths not saved to " .. path .. " (" .. tostring(detail) .. "); the file is as it was")
       request_redraw()
-      return false, detail
+      return
     end
-    -- a failed write is over, and so is an unreadable file still in place
-    -- (this write replaced it); one set aside keeps its row (#868)
     if state.write_problem ~= nil or (state.load_problem == "unreadable" and not state.backup) then
       state.write_problem = nil
       if not state.backup then state.load_problem = nil end
       request_redraw()
     end
-    state.text = data_files.encode(value)
     S.buffer_autosave_blocked = false
-    if detail == "written" then print("buffer paths saved to " .. buffer_data_file()) end
-    return true, detail
+    if detail == "written" then print("buffer paths saved to " .. path) end
+  end
+  local buffers_writer = S.lib.side_files.writer({name = "buffers", path = buffer_data_file,
+    value = remembered_buffers, holder = S.buffer_file, clock_field = "save_clock", text_field = "text",
+    save_delay = BUFFER_DATA_SAVE.delay, report = report_buffers_write,
+    may_write = function() return S.buffers_loaded and not S.buffer_autosave_blocked end})
+
+  -- Write the paths now: true and "written" or "unchanged", or false and
+  -- why (the file is then as it was, whole). As the scenes' save: a checked
+  -- .part renamed over buffers.data (S.lib.data_files.write, #301)
+  function save_buffers_to_disk()
+    return buffers_writer.write()
   end
 
   -- The slots changed (buffer_display_changed, a bufferState report that
@@ -1007,21 +1011,11 @@ return function(S)
   -- and unless an unloadable file is still in place. The restore's own
   -- loads write nothing (S.buffers_loaded is false until it ends), nor do
   -- set_start's detents (the reload they schedule does). A failed write is
-  -- tried again at the next change and at exit
+  -- tried again at the next change and at exit. #566: one write
+  -- BUFFER_DATA_SAVE.delay s after the first change of a burst, carrying
+  -- the newest state; never inside a poll callback (the writer's save)
   remember = function()
-    if not S.buffers_loaded or S.buffer_autosave_blocked then return end
-    if S.buffer_file.save_clock then return end
-    if S.lib.data_files.encode(remembered_buffers()) == S.buffer_file.text then return end
-    -- #566: one write BUFFER_DATA_SAVE.delay s after the first change of a
-    -- burst, carrying the newest state; never inside a poll callback
-    S.buffer_file.save_clock = clock.run(function()
-      clock.sleep(BUFFER_DATA_SAVE.delay)
-      S.buffer_file.save_clock = nil
-      if S.buffers_loaded and not S.buffer_autosave_blocked
-        and S.lib.data_files.encode(remembered_buffers()) ~= S.buffer_file.text then
-        save_buffers_to_disk()
-      end
-    end)
+    buffers_writer.save()
   end
 
   local function preserve_unloadable_buffer_file()
@@ -1156,14 +1150,13 @@ return function(S)
   -- and could not be moved aside), and later stop the polls and the
   -- recording timers (the engine finishes or frees any recording itself)
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_paths_save, function()
-    if S.buffer_file.save_clock then clock.cancel(S.buffer_file.save_clock); S.buffer_file.save_clock = nil end
     if not S.buffers_loaded then
       print("buffer paths not auto-saved: they were not loaded from " .. buffer_data_file() .. " in this session")
     elseif S.buffer_autosave_blocked then
       print("buffer paths not auto-saved: " .. buffer_data_file() .. " could not be loaded")
-    else
-      save_buffers_to_disk()
     end
+    -- the timed write canceled, and the paths written while they may be
+    buffers_writer.save_now()
   end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_start_reload, function()
     -- a canceled reload's untried start goes back to what plays (after the save above)

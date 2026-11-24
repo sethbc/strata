@@ -408,4 +408,102 @@ test("a floor above the version is refused", function()
   assert_true(pcall(probe, S, { version = 2, floor = 2 }), "a floor at the version is taken")
 end)
 
+-- 3.9 (#906): the one debounced writer every live file's timed write runs
+-- on (the side files' live files, buffers.data and samples.data). A probe
+-- file's writer: its data, whether it may be written, and each report
+local function probe_writer(S, path, options)
+  local state = { n = 0, allowed = true, holder = {}, reports = {} }
+  local spec = {
+    name = "probe", path = path, holder = state.holder, clock_field = "save_clock", text_field = "text",
+    save_delay = 0.1,
+    value = function() return { version = 1, n = state.n } end,
+    may_write = function() return state.allowed end,
+    report = function(written, detail, written_path)
+      table.insert(state.reports, tostring(written) .. " " .. tostring(detail) .. " " .. written_path:match("[^/]*$"))
+    end,
+  }
+  for key, value in pairs(options or {}) do spec[key] = value end
+  return S.lib.side_files.writer(spec), state
+end
+
+test("the writer: one timed write a burst, only while the file may be written and its text changed", function()
+  local context, S = loaded()
+  local path = context.data_dir .. "strata/writer.probe.data"
+  local writer, state = probe_writer(S, path)
+  local count = counting_writes(S, path)
+  local ok, problem = pcall(function()
+    state.allowed = false
+    writer.save()
+    assert_equal(state.holder.save_clock, nil, "a file that may not be written: no timed write")
+    state.allowed = true
+    state.holder.text = S.lib.data_files.encode({ version = 1, n = 0 })  -- what the start found
+    writer.save()
+    assert_equal(state.holder.save_clock, nil, "the text the file holds: no timed write")
+    for step = 1, 5 do state.n = step; writer.save() end
+    assert_true(state.holder.save_clock ~= nil, "one clock waits in the holder")
+    context.clock.run_for(0.05)
+    assert_equal(count.writes, 0, "nothing is written during the delay")
+    context.clock.run_for(0.1)
+    assert_equal(count.writes, 1, "one write after it")
+    assert_equal(state.holder.save_clock, nil, "and the clock is gone")
+    assert_equal(S.lib.data_files.read(path).n, 5, "with the newest data")
+    assert_equal(state.holder.text, S.lib.data_files.encode({ version = 1, n = 5 }), "the text kept is what it wrote")
+    assert_equal(table.concat(state.reports, ", "), "true written writer.probe.data", "reported once")
+    -- a change undone inside the delay, and one the file may no longer take when it ends: no write
+    state.n = 6; writer.save(); state.n = 5
+    context.clock.run_for(0.2)
+    state.n = 7; writer.save(); state.allowed = false
+    context.clock.run_for(0.2)
+    assert_equal(count.writes, 1, "neither is written")
+    -- write: at once, whatever may_write says
+    assert_equal(writer.write(), true, "written at once")
+    assert_equal(count.writes, 2); assert_equal(S.lib.data_files.read(path).n, 7)
+    -- save_now: the timed write canceled, the file written at once while it may be, and no timed write after
+    state.allowed = true
+    state.n = 8; writer.save()
+    assert_equal(writer.save_now(), true)
+    assert_equal(count.writes, 3, "written at once"); assert_equal(S.lib.data_files.read(path).n, 8)
+    assert_equal(state.holder.save_clock, nil, "the timed write is canceled")
+    state.n = 9; writer.save()
+    assert_equal(state.holder.save_clock, nil, "no timed write after save_now")
+    context.clock.run_for(0.2)
+    assert_equal(count.writes, 3, "and nothing written")
+  end)
+  count.stop()
+  if not ok then error(problem, 0) end
+end)
+
+test("the writer: save_now writes nothing while the file may not be written; a failed write keeps the text", function()
+  local context, S = loaded()
+  local path = context.data_dir .. "strata/failing.probe.data"
+  local writer, state = probe_writer(S, path)
+  state.n = 1; writer.save()
+  state.allowed = false
+  assert_equal(writer.save_now(), false, "not written")
+  assert_equal(state.holder.save_clock, nil, "the timed write is canceled")
+  assert_true(not util.file_exists(path), "no file")
+  assert_equal(#state.reports, 0, "nothing to report")
+  writer, state = probe_writer(S, path)
+  util.make_dir(context.data_dir .. "strata/")
+  os.execute("mkdir -p '" .. path .. ".part/inside'")  -- the .part is a folder: the write fails
+  state.n = 2
+  local written, detail = writer.write()
+  assert_equal(written, false); assert_true(detail ~= nil, "with why")
+  assert_equal(state.holder.text, nil, "a failed write keeps no text")
+  assert_equal(tostring(state.reports[1]):match("^false "), "false ", "reported as failed: " .. tostring(state.reports[1]))
+end)
+
+test("the writer: a spec is checked when it is made", function()
+  local _, S = loaded()
+  for _, field in ipairs({ "name", "path", "value", "holder", "clock_field", "may_write" }) do
+    local ok, problem = pcall(probe_writer, S, "/tmp/x", { [field] = false })
+    assert_true(not ok and tostring(problem):find(field, 1, true) ~= nil, field .. " is required: " .. tostring(problem))
+  end
+  for _, field in ipairs({ "text_field", "save_delay", "report" }) do
+    assert_true(pcall(probe_writer, S, "/tmp/x", { [field] = false }), field .. " may be left out")
+  end
+  local writer = probe_writer(S, "/tmp/x", { save_delay = false })
+  assert_true(not pcall(writer.save), "no timed write without a delay")
+end)
+
 end
