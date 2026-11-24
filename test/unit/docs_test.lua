@@ -1375,6 +1375,47 @@ test("every action the workflow uses is pinned by a full commit, its version in 
   assert_equal(table.concat(CI_WORKFLOW.unpinned_actions(workflow), " | "), "", "the workflow's unpinned actions")
 end)
 
+-- What is wrong with .github/dependabot.yml's text: it moves the action pins
+-- above (#533) and nothing else, every action in one pull request (so the
+-- cache steps stay one release of actions/cache), and never the Docker
+-- image, whose Ubuntu must stay the runner's (the image's pins test)
+function CI_WORKFLOW.dependabot_problems(text)
+  local problems, ecosystems = {}, {}
+  for ecosystem in text:gmatch("package%-ecosystem:%s*\"?([%w_%-]+)\"?") do ecosystems[#ecosystems + 1] = ecosystem end
+  if not text:match("^version:%s*2%s*\n") then problems[#problems + 1] = "not version 2" end
+  if table.concat(ecosystems, " ") ~= "github-actions" then
+    problems[#problems + 1] = "ecosystems: " .. table.concat(ecosystems, " ")
+  end
+  if not text:match("\n%s+directory:%s*\"/\"%s*\n") then problems[#problems + 1] = "no directory \"/\"" end
+  if not text:match("\n%s+interval:%s*\"?monthly\"?%s*\n") then problems[#problems + 1] = "not monthly" end
+  if not text:match("\n%s+groups:%s*\n%s+[%w_%-]+:%s*\n%s+patterns:%s*\n%s+%-%s*\"%*\"%s*\n") then
+    problems[#problems + 1] = "the actions are not one group"
+  end
+  if not text:match("\n%s+prefix:%s*\"ci\"%s*\n") then problems[#problems + 1] = "the commits are not ci:" end
+  return problems
+end
+
+test("Dependabot moves only the action pins, every action in one pull request (#533)", function()
+  local good = table.concat({
+    "version: 2", "updates:", "  - package-ecosystem: \"github-actions\"", "    directory: \"/\"",
+    "    schedule:", "      interval: \"monthly\"", "    groups:", "      actions:", "        patterns:",
+    "          - \"*\"", "    commit-message:", "      prefix: \"ci\"", "",
+  }, "\n")
+  assert_equal(table.concat(CI_WORKFLOW.dependabot_problems(good), " | "), "", "a good file passes")
+  local docker = good .. "  - package-ecosystem: \"docker\"\n    directory: \"/test/docker/sc313\"\n"
+  assert_equal(table.concat(CI_WORKFLOW.dependabot_problems(docker), " | "), "ecosystems: github-actions docker",
+    "the Docker image is refused")
+  local ungrouped = good:gsub("    groups:\n      actions:\n        patterns:\n          %- \"%*\"\n", "")
+  assert_equal(table.concat(CI_WORKFLOW.dependabot_problems(ungrouped), " | "), "the actions are not one group",
+    "actions in separate pull requests are refused")
+  local weekly = good:gsub("monthly", "weekly")
+  assert_equal(table.concat(CI_WORKFLOW.dependabot_problems(weekly), " | "), "not monthly", "another interval is refused")
+  local file = io.open(repo_root .. "/.github/dependabot.yml", "r")
+  assert_true(file ~= nil, ".github/dependabot.yml exists")
+  local text = file:read("*a"); file:close()
+  assert_equal(table.concat(CI_WORKFLOW.dependabot_problems(text), " | "), "", ".github/dependabot.yml's problems")
+end)
+
 -- What is wrong with a shard list's text (the items between the brackets
 -- of lua-suite's `shard: [...]` line): an item that is not "K/N", counts
 -- that differ, a shard missing or repeated. Empty when it is 1/N .. N/N
