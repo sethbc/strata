@@ -773,7 +773,13 @@ check.(high and: { toggles.every(_.value) } and: { other.areaState[\freeze][\fro
 // (its run), a hold freeze (a second pause) and an unfreeze (its run). Judged
 // by what the engine sent: each writer the burst makes gets one /n_run at
 // most, in its /s_new's packet; and by the test's own record (the voice
-// unfrozen at the end): the voice's one writer, a plain one, writes
+// unfrozen at the end): the voice's one writer, a plain one, writes. The
+// burst never yields, so no /n_go comes in the middle of it and every writer
+// it touches is one still waiting for its first block (the replace path): a
+// writer that has started and is then paused or run inside a burst is the
+// issue's reproducer's case (4000 draws with a sync every 10 commands, run on
+// the fixed engine for #1000 three times on 3.14.1 and three on 3.13, not in
+// this area: it takes about 19 s, more than the check's room for #1000)
 otherCommand.(\setGrainParam, 0, \freeze, 1.0);
 server.sync; 0.1.wait;
 precondition = other.spectralHoldsVoice(0);
