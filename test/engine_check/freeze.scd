@@ -762,6 +762,52 @@ toggles = 20.collect({ arg index;
 });
 check.(high and: { toggles.every(_.value) } and: { other.areaState[\freeze][\frozen][0].not },
     "freeze: spectral writer replacement leaves one writer per voice (high %, 20 toggles: %)".format(high, toggles));
+// #1000: scsynth's Node_SetRun pauses a node that has not had its first
+// block by setting Graph_NullFirstCalc (its constructors run at that
+// block), but a second pause there sets Node_NullCalc, so the constructors
+// never run and a later run calculates units never constructed (scsynth
+// crashed, 3.14.1 and 3.13 alike); a run there is ignored (the writer stays
+// paused). The smallest burst that crashed it, sent without a yield (one
+// block) from a settled spectral freeze of voice 1 (engine voice 0): the mode
+// to hold (the writer's replace and the new writer's pause), an unfreeze
+// (its run), a hold freeze (a second pause) and an unfreeze (its run). Judged
+// by what the engine sent: each writer the burst makes gets one /n_run at
+// most, in its /s_new's packet; and by the test's own record (the voice
+// unfrozen at the end): the voice's one writer, a plain one, writes
+otherCommand.(\setGrainParam, 0, \freeze, 1.0);
+server.sync; 0.1.wait;
+precondition = other.spectralHoldsVoice(0);
+kept = sentDuring.({
+    otherCommand.(\setGrainParam, 0, \freezeMode, 0.0);
+    otherCommand.(\setGrainParam, 0, \freeze, 0.0);
+    otherCommand.(\setGrainParam, 0, \freeze, 1.0);
+    otherCommand.(\setGrainParam, 0, \freeze, 0.0);
+});
+server.sync; 0.1.wait;
+readings = (
+    // [node, its /s_new's packet index, the packet index of each /n_run to it]
+    runs: { var made = IdentityDictionary.new, runs = IdentityDictionary.new;
+        kept.do({ arg packet, index;
+            packet.do({ arg msg;
+                var name = msg[0].asString;
+                if (["9", "/s_new", "s_new"].includesEqual(name)) { made[msg[2]] = index };
+                if (["12", "/n_run", "n_run"].includesEqual(name)) { runs[msg[1]] = (runs[msg[1]] ? []) ++ [index] };
+            });
+        });
+        made.keys.asArray.sort.collect({ arg node; [node, made[node], runs[node] ? []] })
+    }.value,
+    nodes: writerNodes.value
+);
+ok = readings[\runs].notEmpty and: { readings[\runs].every({ arg each; (each[2].size <= 1) and: { each[2].every({ arg index; index == each[1] }) } }) };
+check.(high and: { precondition } and: { ok } and: { other.areaState[\freeze][\frozen][0].not }
+    and: { readings[\nodes].size == (other.numVoices + 1) }
+    and: { readings[\nodes].every({ arg node; node.def == \strataRingWrite }) }
+    and: { other.ringWriterFor(0).defName.asSymbol == \strataRingWrite }
+    and: { phaseMoves.(other.areaState[\rings][\phaseBuses][0]) },
+    "freeze: a burst of freezeMode and freeze changes in one block from a spectral freeze sends each new writer one /n_run at most, in its /s_new's packet, and leaves the unfrozen voice's one plain writer writing (#1000: spectral before %, [writer, its packet, its runs' packets] %, writers %)".format(
+        precondition, readings[\runs], readings[\nodes].collect({ arg node; [node.id, node.def] })));
+otherCommand.(\setGrainParam, 0, \freezeMode, 1.0);
+server.sync;
 // #801: a writer that replaces another goes on from the write head. A
 // writer reports on its phase bus the frame it writes at the start of each
 // block. On SuperCollider 3.13 a replaced writer used to start at frame 0

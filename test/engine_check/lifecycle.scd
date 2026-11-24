@@ -292,22 +292,28 @@ var walkOwnSynths = { arg target, seed, steps, voices, pool;
     (failure: failure, reached: reached, ignored: ignored, syncs: syncs, running: running, sources: sourceOf)
 };
 
-// The walk on a standard engine of its own, voices 0-2 on their own types,
-// slots 1 and 2 loaded and a pool of 6 extra notes for their nine extra
-// slots: 2000 commands of one seed, which must reach the rows it names. Not
-// on a high engine, though the spectral freeze and the type switch that
-// waits for its unfreeze exist only there: a synth voice's spectral freeze
-// toggled in bursts (freeze and freezeMode, ten commands between syncs)
-// crashes scsynth, 3.14.1 and 3.13 alike, within a thousand commands (a
-// general protection fault in libscsynth; with a sync every two commands
-// 4000 pass, and a high engine's walk with freezeMode always 0 passes), so
-// the walk would crash the check (https://github.com/sethbc/strata/issues/1000).
-// Its freezeMode commands only store the mode here
+// The walk on a high engine of its own (a Pi 4's settings, as the
+// reproducer of #1000 made them), voices 0-2 on their own types, slots 1 and
+// 2 loaded and a pool of 6 extra notes for their nine extra slots: 2000
+// commands of one seed, which must reach the rows it names, the spectral
+// rows among them (a type switch waiting for a spectral freeze's unfreeze,
+// applied at it, and #979's switch of a stopped voice under one), which only
+// a high engine has. Its freeze and freezeMode commands come in bursts
+// between syncs, as a mapped controller or a scene sends them: before #1000's
+// fix such a burst paused a ring writer twice before its first block, which
+// skipped its constructors, and the run after crashed scsynth
+// (https://github.com/sethbc/strata/issues/1000)
 var checkSynthSetWalk = { arg seed;
     var steps = 2000, voices = [0, 1, 2], pool = 6;
-    var rows = [\regated, \superseded, \cutAtStart, \released, \switched, \typeSwitched, \frozen, \noteLive];
+    var rows = [\regated, \superseded, \cutAtStart, \released, \switched, \typeSwitched, \frozen, \noteLive,
+        \typeWaiting, \waitingApplied, \typeStoppedSpectral];
+    var root = h.tempDir +/+ "walk-high", write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
     var target, result, start, seconds, missing, endProblems;
-    target = h.startEngine;
+    File.mkdir(root);
+    write.(root +/+ "performance.data", "performance high\nbuffer_seconds 16\n");
+    write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
+    write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
+    target = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
     [0, 1].do({ arg slot; h.commandTo(target, \loadBuffer, slot, h.stereoPath, 0) });
     h.waitFor({ [0, 1].every({ arg slot; target.bufferFrames[slot] > 0 }) }, 3);
     h.commandTo(target, \setNotePool, pool);
@@ -321,9 +327,7 @@ var checkSynthSetWalk = { arg seed;
         "lifecycle: a seeded walk of % commands (seed %, % tier, % s, % syncs, % ignored) keeps every voice's synth sets as the table has them after each (first failure at step %, the last commands %: %; rows reached %, never reached %; at the end %)".format(
             steps, seed, target.tier, seconds.round(0.01), result[\syncs], result[\ignored], result[\failure] !? { arg failure; failure[0] },
             result[\failure] !? { arg failure; failure[1] }, result[\failure] !? { arg failure; failure[2] },
-            // (the last three, the spectral rows, are 0 on a standard engine: #1000,
-            // https://github.com/sethbc/strata/issues/1000, keeps the walk off a high one)
-            (rows ++ [\typeWaiting, \waitingApplied, \typeStoppedSpectral]).collect({ arg name; [name, result[\reached][name] ? 0] }), missing, endProblems));
+            rows.collect({ arg name; [name, result[\reached][name] ? 0] }), missing, endProblems));
     h.stopAllVoices(target);
     h.freeEngine(target);
     server.sync;
@@ -822,7 +826,7 @@ check.(synthNames.(context.xg).size == before, "switching back to the synth rest
 
 checkSupersededAtStart.(3, before);
 checkStopStartCycles.(3);
-checkSynthSetWalk.(1);
+checkSynthSetWalk.(9);
 checkInvariantWarnings.(3, before);
 checkQuietNodeSends.(3, before);
 checkFailedStarts.(5, before);
