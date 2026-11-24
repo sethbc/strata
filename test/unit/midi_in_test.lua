@@ -2108,6 +2108,49 @@ test("a held-back stop outlives a running voice's source switch", function()
   assert_true(not S.voices[1].active, "the held-back stop is done once nothing plays to its end")
 end)
 
+-- 3.9 (#1009): the midi notes table's event "a running voice's source
+-- switch" (the grain-restart hooks' reason "source"), one test a state
+-- (docs/notes/lua/midi.md, Machines, midi notes; the table's third row is
+-- "a held-back stop outlives a running voice's source switch", above).
+-- no key: a voice a released key started (latch) switches source; nothing
+-- of MIDI's changes: no key, no mark, and it stays the panic's
+test("the midi notes table: no key + a running voice's source switch keeps started", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  press(context, 3, 60)
+  assert_true(S.voices[3].active and S.midi_state.started[3], "a released key's note started voice 3")
+  assert_equal(next(S.midi_state.held[3]), nil, "no key")
+  params:set("v3_source", 2)
+  assert_true(S.voices[3].active, "the switch stops nothing")
+  assert_equal(next(S.midi_state.held[3]), nil, "still no key")
+  assert_equal(S.midi_state.started[3], true, "started kept")
+  assert_equal(midi_notes_invariant(S), nil)
+  context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = 1 })
+  assert_true(not S.voices[3].active, "the panic still stops it")
+end)
+
+-- keys down: two keys down on a release-mode voice MIDI started; its source
+-- switch keeps both keys, their lists and started, and the lifts act as
+-- before: the first releases its note, the last stops the voice
+test("the midi notes table: keys down + a running voice's source switch keeps the keys", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  params:set("midi_note_off", 2)
+  note_on(context, 3, 60); note_on(context, 3, 64)
+  assert_true(S.voices[3].active and S.midi_state.started[3], "the keys started voice 3")
+  params:set("v3_source", 2)
+  assert_true(S.voices[3].active, "the switch stops nothing")
+  assert_true(S.midi_state.held[3][key_of(3, 60)] and S.midi_state.held[3][key_of(3, 64)], "both keys still down")
+  assert_equal(S.midi_state.note_voice[3][64][1], 3, "their note ons still list the voice")
+  assert_equal(S.midi_state.started[3], true, "started kept")
+  assert_equal(midi_notes_invariant(S), nil)
+  note_off(context, 3, 64)
+  assert_true(S.voices[3].active, "a key up, another down: the voice runs on")
+  note_off(context, 3, 60)
+  assert_true(not S.voices[3].active, "the last key up stops it, in release mode")
+  assert_equal(S.midi_state.started[3], nil, "and clears started")
+end)
+
 -- 2b's review, the controller's ruling: the note hooks' heard hears every
 -- MIDI note a voice receives, a note outside its slices included, and starts nothing
 test("the heard note hook hears every note a voice receives, outside its slices too", function()
