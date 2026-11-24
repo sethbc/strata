@@ -1486,4 +1486,38 @@ test("corners of one type blend their synth keys as today", function()
   assert_equal(S.lib.types.of(1).key, "resonator", "the type never moves")
 end)
 
+
+-- #869 (P10's second half): a morph that sets a voice's values sets its
+-- sound anew, so VOICE's preset row stops naming the preset it loaded
+-- (S.lib.voice_presets.forget); a voice the morph leaves alone keeps its name
+test("a morph that resets a voice's values empties its preset row's name", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local presets = S.lib.voice_presets
+  params:set("v1_freq", 330)
+  assert_true(presets.save(1, 1, "glass"), "saved")
+  -- voice 1 differs in a continuous value, voice 5 in a discrete one only,
+  -- voice 6 in whether it runs (no param, the same sound)
+  assert_true(not S.voices[6].active, "voice 6 is stopped")
+  toggle_voice(6)
+  params:set("v1_freq", 220); params:set("v5_grain_mode", 2); capture_scene(2)
+  toggle_voice(6)
+  params:set("v1_freq", 440); params:set("v5_grain_mode", 1); capture_scene(1)
+  assert_true(presets.load(1, 1), "loaded into voice 1")
+  assert_true(presets.load(4, 1), "and into voice 4, which both scenes hold alike")
+  assert_true(presets.load(5, 1), "and into voice 5")
+  assert_true(presets.load(6, 1), "and into voice 6")
+  params:set("v5_grain_mode", 1)  -- the scenes' mode A, so the morph's switch to B sets it
+  assert_equal(presets.loaded_name(1), "glass", "voice 1's row names it")
+  settle(context, 1)
+  assert_near(params:get("v1_freq"), 220, 1e-9, "the morph set voice 1's freq to B's")
+  assert_equal(params:get("v5_grain_mode"), 2, "and voice 5's grain mode to B's")
+  assert_equal(presets.loaded_name(1), nil, "voice 1's row names no preset")
+  assert_equal(presets.loaded_name(5), nil, "nor voice 5's, set by a discrete entry alone")
+  assert_equal(presets.loaded_name(4), "glass", "voice 4's, untouched by the morph, keeps its name")
+  assert_true(S.voices[6].active, "the morph started voice 6")
+  assert_equal(presets.loaded_name(6), "glass", "which keeps its name: its sound is unchanged")
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+end)
+
 end

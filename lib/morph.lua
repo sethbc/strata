@@ -600,9 +600,28 @@ return function(S)
     return false
   end
 
+  -- A morph that sets a voice's params sets its sound anew, and no recall
+  -- tells the presets (#869): each voice that one of these entries or
+  -- items sets a param of (an id with a voice: its source, its type, a
+  -- scene key) forgets the preset name VOICE's row shows for it, before the
+  -- sets. A voice's active state, lock and pattern name no param
+  local function forget_presets(entries)
+    local forgotten = {}
+    for _, entry in ipairs(entries) do
+      local voice = entry.voice
+      if entry.id and voice and not forgotten[voice] then
+        forgotten[voice] = true
+        S.lib.voice_presets.forget(voice)
+      end
+    end
+  end
+
   -- Each value as a transition's step sets it (S.lib.scenes.set_value,
   -- no recall flag: a quantized freq snaps)
   local function set_values(writes)
+    local items = {}
+    for index, write in ipairs(writes) do items[index] = write.item end
+    forget_presets(items)
     for _, write in ipairs(writes) do S.lib.scenes.set_value(write.item.id, write.value) end
   end
 
@@ -642,16 +661,20 @@ return function(S)
     if crossed then cross(plan, from, corner, counting) end
     state.applied.corner = corner
     local entries = discrete_writes(plan, corner, from, counting)
-    if #entries > 0 then S.lib.scenes.apply_entries(entries, {only = "discrete"}) end
+    if #entries > 0 then
+      forget_presets(entries)
+      S.lib.scenes.apply_entries(entries, {only = "discrete"})
+    end
     local writes, more = continuous_writes(plan, corner, weights, counting, exact)
     set_values(writes)
     return more
   end
 
   -- Something else set the state since morph's last apply: a recall or a
-  -- transition (morph leaves no scene current)
+  -- transition, which the scenes say holds the sound (#894: morph's apply
+  -- releases it, so no scene holds it after one)
   local function taken_over()
-    return S.current_scene ~= 0 or S.scene_transition_active
+    return S.lib.scenes.held_by_scene()
   end
 
   -- A recall or a fade came after the latest move: something took over
@@ -667,8 +690,9 @@ return function(S)
   -- One apply of the morph's position (exact: at rest, below). With fewer
   -- than two valid corners it flashes the first empty one once per plan
   -- (named by S.lib.scenes.label, #641) and changes nothing. Otherwise it
-  -- cancels a running transition, writes inside deferrable, leaves no
-  -- scene current and redraws. A move made after a recall starts again
+  -- releases the scenes' hold (S.lib.scenes.release_current: a running
+  -- transition canceled, no scene current), writes inside deferrable and
+  -- redraws. A move made after a recall starts again
   -- from the recalled state, as after a plan change. Returns whether
   -- values are left
   local function apply_position(exact)
@@ -681,10 +705,9 @@ return function(S)
       return false
     end
     if taken_over() then forget_applied() end
-    cancel_scene_transition()
+    S.lib.scenes.release_current()
     local weights, more = weights_of(plan), false
     S.lib.engine_sync.deferrable(function() more = write_position(plan, weights, exact) end)
-    S.current_scene = 0
     request_redraw()
     grid_redraw()
     return more

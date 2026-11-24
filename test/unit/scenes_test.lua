@@ -3662,6 +3662,131 @@ test("takeovers counts every recall and every transition started", function()
   assert_equal(scenes.takeovers(), count + 3, "nor an invalid scene's")
 end)
 
+-- 3.9 (#894): who holds the sound. held_by_scene() is true while a scene
+-- is current or a fade runs; release_current() leaves no scene current
+-- and cancels a running fade as cancel_scene_transition does (morph's
+-- apply calls it, and morph no longer writes S.current_scene)
+test("held_by_scene and release_current: a scene holds the sound until it is released", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local scenes = S.lib.scenes
+  assert_true(not scenes.held_by_scene(), "nothing recalled at the start")
+  params:set("reverb_mix", 0.6); capture_scene(2)
+  params:set("reverb_mix", 0.2); capture_scene(1)
+  recall_scene(1, 0)
+  assert_true(scenes.held_by_scene(), "a recalled scene holds the sound")
+  scenes.release_current()
+  assert_equal(S.current_scene, 0, "released: no scene is current")
+  assert_true(not scenes.held_by_scene(), "and none holds the sound")
+  recall_scene(2, 2)
+  context.clock.run_for(0.5)
+  assert_true(S.scene_transition_active, "a fade runs")
+  assert_true(scenes.held_by_scene(), "a fade holds the sound")
+  local mix = params:get("reverb_mix")
+  scenes.release_current()
+  assert_true(not S.scene_transition_active and S.scene_transition_clock == nil, "the fade is canceled")
+  assert_equal(S.current_scene, 0, "and no scene is current, not the fade's previous one")
+  assert_true(not scenes.held_by_scene(), "nothing holds the sound")
+  context.clock.run_for(3)
+  assert_equal(params:get("reverb_mix"), mix, "the canceled fade sets nothing more")
+  assert_equal(S.current_scene, 0, "nor lands")
+  assert_equal(#context.clock.take_errors(), 0, "no clock error")
+  scenes.release_current()
+  assert_equal(S.current_scene, 0, "a release with nothing held changes nothing")
+end)
+
+-- The places in a Lua source that assign S.current_scene (`S.current_scene =`,
+-- in a target list, by its key or by rawset; never `==`), each as
+-- "<line>: <the functions around it, outermost first>"
+local function current_scene_assignments(text)
+  local code = h.sync_check.sanitize_lua(text)
+  local events = {}
+  for at, word in code:gmatch("()%f[%w_]([%a_][%w_]*)") do
+    if word == "function" or word == "do" or word == "if" or word == "repeat" or word == "end" or word == "until" then
+      table.insert(events, {at = at, word = word})
+    end
+  end
+  for index, pattern in ipairs({"()S%.current_scene%s*=()", "()S%.current_scene%s*,[%w_%.%[%] \t,]-=()"}) do
+    for at, after in code:gmatch(pattern) do
+      local before = code:sub(1, at - 1):match("(%S)%s*$")
+      local read = index == 2 and (before == "{" or before == "(" or before == "=")
+      if code:sub(after, after) ~= "=" and not read then table.insert(events, {at = at, assignment = true}) end
+    end
+  end
+  table.sort(events, function(a, b) return a.at < b.at end)
+  local blocks, found = {}, {}
+  for _, event in ipairs(events) do
+    if event.assignment then
+      local names = {}
+      for _, block in ipairs(blocks) do
+        if block ~= true then table.insert(names, block) end
+      end
+      local _, line = code:sub(1, event.at):gsub("\n", "")
+      table.insert(found, (line + 1) .. ": " .. (#names > 0 and table.concat(names, " > ") or "main chunk"))
+    elseif event.word == "function" then
+      local own = code:match("^function%s+([%w_%.:]+)%s*%(", event.at)
+      local before = code:sub(math.max(1, event.at - 80), event.at - 1)
+      local name = own and own:match("([%w_]+)$") or before:match("([%w_]+)%s*=%s*$")
+        or (before:match("%f[%w_]return%s*$") and "constructor") or "function"
+      table.insert(blocks, name)
+    elseif event.word == "end" or event.word == "until" then
+      table.remove(blocks)
+    else
+      table.insert(blocks, true)
+    end
+  end
+  return found
+end
+
+-- The one file that owns the mark, and the function whose states set it
+-- for the page renders and the layout tests (lib/pages/scenes.lua's)
+local CURRENT_SCENE_OWNER, CURRENT_SCENE_LAYOUT = "lib/scenes.lua", "layout_states"
+
+test("S.current_scene is assigned only in lib/scenes.lua and in layout states", function()
+  local problems, owner_sites, layout_sites = {}, 0, 0
+  for _, source in ipairs(h.read_lua_sources()) do
+    -- (sanitize_lua blanks a string's contents: a key is found in the text)
+    if source.text:find("S%[%s*[\"']current_scene[\"']%s*%]%s*=[^=]")
+      or source.text:find("rawset%(%s*S%s*,%s*[\"']current_scene") then table.insert(problems, source.path .. ": S.current_scene assigned by its key") end
+    for _, site in ipairs(current_scene_assignments(source.text)) do
+      local chain = " > " .. site:match("^%d+: (.*)$") .. " > "
+      if source.path == CURRENT_SCENE_OWNER then
+        owner_sites = owner_sites + 1
+      elseif chain:find(" > " .. CURRENT_SCENE_LAYOUT .. " > ", 1, true) then
+        layout_sites = layout_sites + 1
+      else
+        table.insert(problems, source.path .. ":" .. site)
+      end
+    end
+  end
+  table.sort(problems)
+  assert_true(#problems == 0, "S.current_scene assigned outside lib/scenes.lua and the layout states:\n"
+    .. table.concat(problems, "\n"))
+  assert_true(owner_sites > 0, "the scan finds lib/scenes.lua's own assignments")
+  assert_true(layout_sites > 0, "and the layout states'")
+end)
+
+test("the current scene scan finds an assignment's functions and skips comments, strings and comparisons", function()
+  local found = current_scene_assignments(table.concat({
+    "return function(S)",
+    "  -- S.current_scene = 2 (a comment)",
+    "  local text = \"S.current_scene = 3\"",
+    "  if S.current_scene == 1 then end",
+    "  S.current_scene = 1",
+    "  S.current_scene, other = 5, 6",
+    "  f(S.current_scene, x == 1)",
+    "  local function layout_states()",
+    "    local function populate() S.current_scene = 3 end",
+    "  end",
+    "  local function apply() for i = 1, 2 do S.current_scene = i end end",
+    "  return M",
+    "end",
+  }, "\n"))
+  assert_equal(table.concat(found, "; "),
+    "5: constructor; 6: constructor; 9: constructor > layout_states > populate; 11: constructor > apply",
+    "the sites")
+end)
+
 -- 3.6 (design §0.1): the scene-recalled hook, for the targets' program changes
 test("the recalled hook runs once per recall", function()
   local context = load_strata(); finish_startup(context)

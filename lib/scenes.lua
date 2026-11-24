@@ -23,7 +23,8 @@
 -- S.SCENE_BLOCK_DEFAULTS, S.SCENE_TRANSITION) and the scene state live on S;
 -- scene_data_dir, move_aside_unloadable_file and SCENE_LOAD are fields of
 -- this module's table (S.lib.scenes) for lib/buffers.lua, and revision(slot)
--- and takeovers() for morph. Registers its three
+-- and takeovers(), held_by_scene() and release_current() for morph (who
+-- holds the sound, #894). Registers its three
 -- cleanup steps (saving the scenes, the sequencer, the transition) and the
 -- transition's invariant.
 
@@ -421,6 +422,25 @@ return function(S)
 
   function cancel_scene_transition()
     end_scene_transition("canceled")
+  end
+
+  -- Who holds the sound (3.9, #894): a scene, while one is current or a
+  -- fade runs (a fade keeps its target current from its start, so the
+  -- second term never decides alone: a bound, which no event can fail).
+  -- Otherwise nothing recalled holds it (the start, a load that zeroed the
+  -- mark, #518, or a release: morph's apply)
+  function M.held_by_scene()
+    return S.current_scene ~= 0 or S.scene_transition_active
+  end
+
+  -- No scene is current from now: a running fade is canceled as
+  -- cancel_scene_transition cancels it (its previous scene current again,
+  -- the screen and grids redrawn), then the mark is cleared. Morph's apply
+  -- calls it before it writes, and is the one module outside this file
+  -- that ends a scene's hold
+  function M.release_current()
+    cancel_scene_transition()
+    S.current_scene = 0
   end
 
   -- True while a fade step sets its params (its loop of sets and its
