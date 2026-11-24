@@ -1,0 +1,59 @@
+## Must not break
+
+- This file holds the pattern sequencer's position, direction, pass and misstep (`take_position`, `start_position` and `ping_pong_step` in `lib/sequencer.lua`); the rest of the sequencer, and the rules that span it, are in `docs/notes/lua/sequencer.md`.
+- **Skipped ticks advance by `take_position`**, the same function a played step takes, so a misstep's and a random direction's draws are consumed and the pass count moves exactly as uninterrupted play would; they test, draw no probability and record nothing.
+- **Every site where a voice's position starts calls `start_position`** (`voice_clock`, so a pattern start and `restart_voice`; `take_tick`'s division reset; `end_clocks`, so a stop): no step taken and `S.lib.conditions.start` (pass 1, no outcome). A chain link and a scene recall keep the position and the pass.
+- **A direction change ends the pass where the new direction wraps** (3.9, #874, ruling B2), so the pass count moves at the wrap: to forward the count becomes the position, to reverse the steps left to step 1, and the pass ends where forward starts again at 1 or reverse at its length. **No pass is held open, and the count moves once at its end**: forward, reverse and random end theirs after `pass_length` steps taken; ping-pong ends its at each turn, and every step that meets an end, a misstep included, turns there. What a pass does not promise is that no step repeats in it: a direction change turns back over steps the pass has played (`1 2 3 2 1`, `8 7 6 7 8`, random then reverse `5 2 7 6 5`), ping-pong goes on its own heading after reverse or random, and a misstep moves either way (#970's review).
+- **A misstep wraps by the pass's own length** (#920) until the pass ends, never by a shorter length that waits. **From a step past that length** (a shorter length taking effect at a pass's end, a reverse pass cut mid-pass) **it goes to the nearest step inside** (#961, the maintainer's decision of 2026-11-23): up wraps to step 1, down lands on the length's last step; it never jumps to a step that is neither.
+- **In ping-pong a misstep is a ping-pong step** (#970, the controller's ruling): `ping_pong_step` takes it in its drawn way, so one that crosses an end turns and ends the pass there, as a plain step at that end does, and one that does not leaves the heading as it was. No misstep keeps a ping-pong pass from turning at its ends.
+- A pattern with misstep 0 steps exactly as before these rules (3.8.0's order, "a default start sends what 3.8.0 sent"); the draws are `docs/notes/lua/sequencer.md`'s rule "Conditions and directions draw only where 3.6 drew".
+
+## Machines
+
+### position and pass
+- **State:** each voice's `play.voices[voice]` (local): `last` (the step taken last, nil at a start), `taken` (the steps taken in the pass), `pass_length`, `heading` (ping-pong's way) and `way` (the direction of the step taken last, 3.9), all set by `start_position` and moved by `take_position` (and `ping_pong_step`); `way` is the pass's own state, not a second record of the param: it is a past value of `v<i>_seq_direction`, which no other field of the pass can give back once the param has changed; the pass number is `S.lib.conditions.pass(voice)`. No accessor names it: the state is the voice's `v<i>_seq_direction` while the patterns play, with `missteps` for a voice whose `v<i>_seq_misstep` is above 0 and `reverse missteps` for one in reverse.
+- **Invariant:** none: every combination of the fields is one the next step can take on from (a reverse pass cut mid-pass may stand above its length, ruled to stand in 3.7); the play state's is `pattern clock`'s.
+- **Test:** `test/unit/sequencer_test.lua`: "position and pass: reverse + to forward" (one test a row), "position and pass: a direction change and a shorter length at every count of steps taken" (the rule's closed forms, counts 1 to 7, with every step a misstep up or down too), "position and pass: a ping-pong misstep at a length of 1 leaves the heading up", and "the pass count moves once a wrap: a 1:2 step plays on every second pass through a direction change".
+
+Each state is voice 1 alone with every step set, playing: `forward` and `reverse` at length 8 after three steps (`1 2 3`, `8 7 6`), `ping-pong` at length 8 after eleven (`1 2 3 4 5 6 7 8 7 6 5`), `random` at length 8 after three (its draws stubbed, `5 2 7 4 1 8 3 6` in turn), `missteps` forward at length 6 after five with every step a misstep up (`1 2 3 4 5`), `reverse missteps` reverse at length 8 after three with every step a misstep down (`8 7 6`). The rule (in `take_position`): a pass still ends by its count of steps taken; at a step whose direction is not `way`, `taken` becomes `last` when the new direction is forward and `pass_length - last + 1` when it is reverse, so the count runs out exactly at the wrap; a change to ping-pong or random counts on, ping-pong on its own heading. Every cell is a row.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `forward` | `to forward` | `forward` | no change: `4 5 6 7 8`, then pass 2 at `1` |
+| `forward` | `to reverse` | `reverse` | the count becomes 6: `2 1`, then pass 2 at `8 7 6 5 4` |
+| `forward` | `length 4` | `forward` | three taken, under 4: the length applies at once, `4`, then `1 2 3 4` |
+| `reverse` | `to forward` | `forward` | the count becomes 6: `7 8`, then pass 2 at `1 2 3 4 5` |
+| `reverse` | `to reverse` | `reverse` | no change: `5 4 3 2 1`, then pass 2 at `8` |
+| `reverse` | `length 4` | `reverse` | the length applies at once from 6: `5`, then `4 3 2 1` (3.7's ruling) |
+| `ping-pong` | `to forward` | `forward` | the count becomes 5: `6 7 8`, then pass 3 at `1` |
+| `ping-pong` | `to reverse` | `reverse` | the count becomes 4: `4 3 2 1`, then pass 3 at `8` |
+| `ping-pong` | `length 4` | `ping-pong` | the leg down goes on to `1`, then turns at 4: `2 3 4 3 2 1` |
+| `missteps` | `length 4` | `missteps` | the length waits: the sixth step wraps by 6 (`6`); the seventh, a misstep up from 6, past the pass of 4, wraps to `1` (#961), then `2 3 4` |
+| `missteps` | `to forward` | `missteps` | no change: `6`, then pass 2 at `1` |
+| `missteps` | `to reverse` | `reverse missteps` | the count becomes 2 (four steps left to step 1), each step a misstep up: `6 1 2 3`, then pass 2 |
+| `forward` | `to ping-pong` | `ping-pong` | counts on: `4 .. 8`, then pass 2 turns down |
+| `forward` | `to random` | `random` | counts on: five draws, then pass 2 |
+| `reverse` | `to ping-pong` | `ping-pong` | its heading is still up: `7 8`, then pass 2 turns down |
+| `reverse` | `to random` | `random` | counts on: five draws, then pass 2 |
+| `ping-pong` | `to ping-pong` | `ping-pong` | no change: `4 3 2 1`, then pass 3 |
+| `ping-pong` | `to random` | `random` | counts on from 3: five draws, then pass 3 |
+| `random` | `to forward` | `forward` | the count becomes 7: `8`, then pass 2 at `1` |
+| `random` | `to reverse` | `reverse` | the count becomes 2: `6 5 4 3 2 1`, then pass 2 at `8` |
+| `random` | `to ping-pong` | `ping-pong` | up from 7: `8`, then pass 2 turns down |
+| `random` | `to random` | `random` | no change: five draws, then pass 2 |
+| `random` | `length 4` | `random` | three taken, under 4: one draw of 4, then passes of 4 |
+| `missteps` | `to ping-pong` | `missteps` | a misstep is a ping-pong step (#970): up from `6`, the top, it turns to `5` and ends the pass; up from 5 to `6`, the way still down; a pass each turn: `6 5 6 5 ...` |
+| `missteps` | `to random` | `missteps` | counts on: `6`, then pass 2 |
+| `reverse missteps` | `length 4` | `reverse missteps` | three taken, under 4: the length applies at once; a misstep down from 6, past it, lands on `4` (#961), then passes of 4: `3 2 1 4` |
+| `reverse missteps` | `to forward` | `missteps` | the count becomes 6: `5 4`, then pass 2 at `3` |
+| `reverse missteps` | `to reverse` | `reverse missteps` | no change: `5 4 3 2 1`, then pass 2 at `8`, the wrap down from 1 |
+| `reverse missteps` | `to ping-pong` | `missteps` | the heading is up; each misstep down keeps it: `5 4 3 2 1`; down from `1`, the bottom, it turns to `2` and ends the pass (#970); a pass each turn: `1 2 1 2 ...` |
+| `reverse missteps` | `to random` | `missteps` | counts on: `5 4 3 2 1`, then pass 2 at `8` |
+
+## How it works
+
+- **Position** (3.7, design §5.5): `take_position` moves a voice by its `seq_direction`, from the step it took last (`state.last`, nil at a start: then the direction's first step, forward 1, reverse the length, ping-pong 1, random a draw). Forward: the next step; reverse: the one before; ping-pong (`state.heading`): up to the length, then down to 1, no end played twice (`1 2 3 4 3 2 1 2`), a length of 1 staying on 1; random: `math.random(length)` each time.
+- **A misstep**: with `seq_misstep` percent (one `math.random()` draw, made only when it is above 0) the move is one step up or down instead (a second draw, below 0.5 down). In forward, reverse and random it is a neighbor of `last` in 1..`pass_length`, the pass's own length (3.9, #920: a shorter length that waits for the pass's end applies to missteps from the next pass, as to every other step): past the top it wraps to 1, past the bottom to `pass_length`, and from a step above `pass_length` (#961) it goes to the nearest step inside, 1 up and `pass_length` down (with length 6 cut to 4, a misstep up from 6 plays 1, one down plays 4). In ping-pong (#970) `take_position` sets `state.heading` to the drawn way for the step and calls `ping_pong_step`: at an end the step turns there and ends the pass, the heading the turn's; elsewhere the heading goes back to what it was, so the leg goes on its way after the misstep.
+- **A pass** is `pass_length` steps taken (`state.taken`) in forward, reverse and random, and ends at each turn in ping-pong. **A direction change** (3.9, #874) ends the pass where the new direction wraps: at the first step taken in a direction other than the last step's (`state.way`), the count becomes the position (`last`) for forward and the steps left to step 1 (`pass_length - last + 1`) for reverse, so reverse for three steps then forward plays `8 7 6 7 8 | 1 2 3 4 5`; a change to ping-pong or random counts on (Machines, position and pass). A length change applies at once while fewer steps than the new length have been taken, at the pass's end otherwise (the pass finishes first): with forward and no misstep this is exactly 3.6's wrap.
+- **Ping-pong's length** (`ping_pong_step`, #743, ruling 28): a longer length applies at once, and so does a shorter one the leg up can still turn at (the step taken last at or below it: standing on 4, a cut to 4 turns there); otherwise the leg ends at the pass's own top, or goes on down to 1, and the new length applies at that turn (`pass_length` is the leg's top): 8 to 4 after four steps up (standing on 4) goes on `3 2 1`, after five `6 7 8 4 3 2`, after three steps down `6 5 4 3 2 1`. The leg down turns at 1, which every length holds, so it has no such case.
+- **A pass's end**: `S.lib.conditions.next_pass(voice)` runs, forward starts again at 1 and reverse at the new length (a misstep instead moves from `last`), and a voice holding overrides or a chord with no set step inside its length (`has_set_step`) ends them. `sounding_step(voice)` is the step played last (`S.pattern_sounding_steps[voice]`), whatever the direction.

@@ -1206,7 +1206,10 @@ return function(S)
   -- so it runs out at the wrap; to ping-pong or random it counts on. A
   -- misstep (seq_misstep percent, one draw made only above 0) moves one
   -- step up or down (a second draw), wrapping by the pass's length (#920),
-  -- instead of the direction's move. Forward with misstep 0 draws nothing
+  -- instead of the direction's move: from a step past that length, to the
+  -- nearest step inside (#961); in ping-pong, as a ping-pong step that way,
+  -- turning and ending the pass at an end (#970). Forward with misstep 0
+  -- draws nothing
   local function take_position(voice_idx)
     local state = play.voices[voice_idx]
     local length = voice_length(voice_idx)
@@ -1231,15 +1234,27 @@ return function(S)
         end
       end
       local chance = misstep(voice_idx)
-      if chance > 0 and math.random() * SEQ.max_misstep < chance then
-        step = (last - 1 + (math.random() < 0.5 and -1 or 1)) % state.pass_length + 1
+      local missed = chance > 0 and math.random() * SEQ.max_misstep < chance and (math.random() < 0.5 and -1 or 1)
+      if way == SEQ.ping_pong then
+        -- a misstep is a ping-pong step its own way (#970): at an end it
+        -- turns and ends the pass; elsewhere (and on a length of 1, which
+        -- never turns) the heading stays
+        local heading = state.heading
+        state.heading = missed or heading
+        step, pass_ended = ping_pong_step(state, last, length)
+        if pass_ended then state.taken, state.pass_length = 0, length end
+        if not pass_ended or length <= 1 then state.heading = heading end
+      elseif missed then
+        -- a neighbor of last, in 1..pass_length: past the top wraps to 1,
+        -- past the bottom to the top; from above the length (#961) the
+        -- nearest step inside, 1 up and the length's last step down
+        local neighbor = last + missed
+        step = neighbor < 1 and state.pass_length or neighbor > state.pass_length
+          and (missed > 0 and 1 or state.pass_length) or neighbor
       elseif way == SEQ.forward then
         step = (pass_ended or last + 1 > state.pass_length) and 1 or last + 1
       elseif way == SEQ.reverse then
         step = (pass_ended or last - 1 < 1) and state.pass_length or last - 1
-      elseif way == SEQ.ping_pong then
-        step, pass_ended = ping_pong_step(state, last, length)
-        if pass_ended then state.taken, state.pass_length = 0, length end
       else
         step = math.random(length)
       end
