@@ -1068,6 +1068,15 @@ local function call_names(calls)
   return table.concat(names, " ")
 end
 
+-- The interval1..8 and intervalCount setGrainParam calls among calls
+local function interval_sends(context)
+  local intervals = 0
+  for _, call in ipairs(context.engine_calls) do
+    if call.name == "setGrainParam" and tostring(call.args[2]):match("^interval") then intervals = intervals + 1 end
+  end
+  return intervals
+end
+
 -- What the engine holds after both reads, command by command; leave: the
 -- commands left out (scatter's setScatter: its own hook sends it after a
 -- silent read, lib/scatter.lua)
@@ -1126,18 +1135,46 @@ test("a silent read of a PSET equal to the state sends only scatter's setScatter
   local note = context.engine_calls[#context.engine_calls]
   assert_equal(note.args[1] .. " " .. note.args[2], "1 scaleNote", "its scaleNote")
   assert_true(S.voices[2].active, "the voice still runs")
-  -- a running chord voice's intervals, computed from the scale, once (fix
-  -- round 1: S.lib.arp's send-if-changed is local to lib/arp.lua, so the
-  -- scale's sends resend the list once a silent read, never twice)
+  -- a running chord voice's intervals, computed from the scale, only if
+  -- they changed (#994: the hook sends through S.lib.arp.send_if_changed,
+  -- so an unchanged list the engine holds is not resent)
   params:set("v2_intervals", S.lib.variation.VARIATION.set_index.chord)
   params:write(path, "equal")
   context.clear_engine_calls()
   params:read(path, true)
-  local intervals = 0
-  for _, call in ipairs(context.engine_calls) do
-    if call.name == "setGrainParam" and tostring(call.args[2]):match("^interval") then intervals = intervals + 1 end
+  assert_equal(interval_sends(context), 0, "the chord's list the engine holds: none sent")
+  assert_equal(call_names(context.engine_calls), "setGrainParam setScale setScatter", "only the scaleNote beside them")
+end)
+
+-- #994: a silent read whose scale moves a running chord voice's list sends
+-- the list once (each interval and the count), as the scale's action would
+test("a silent read whose scale moves a running chord's list sends it once (#994)", function()
+  local context = load_strata({ data_subdir = "pset_engine_chord_moved" }); finish_startup(context)
+  local S = local_value("S")
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "chord.pset"
+  for voice_idx = 1, 7 do
+    if S.voices[voice_idx].active then toggle_voice(voice_idx) end
   end
-  assert_equal(intervals, S.lib.variation.VARIATION.max_intervals + 1, "the chord's list once: each interval and the count")
+  toggle_voice(2)
+  params:set("v2_intervals", S.lib.variation.VARIATION.set_index.chord)
+  params:set("scale", 3)
+  params:write(path, "chord")
+  local held = S.lib.arp.list(2, S.lib.variation.interval_set(2))
+  params:set("scale", 1)
+  assert_true(table.concat(S.lib.arp.list(2, S.lib.variation.interval_set(2)), ",") ~= table.concat(held, ","),
+    "the session's scale gives another list")
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(interval_sends(context), S.lib.variation.VARIATION.max_intervals + 1,
+    "the moved list once: each interval and the count")
+  local sent = {}
+  for index = 1, #held do
+    for _, call in ipairs(context.engine_calls) do
+      if call.name == "setGrainParam" and call.args[2] == "interval" .. index then sent[index] = call.args[3] end
+    end
+  end
+  assert_equal(table.concat(sent, ","), table.concat(held, ","), "the file's scale's list")
 end)
 
 -- Turning delay sync off sends under delay_time's sender and records the

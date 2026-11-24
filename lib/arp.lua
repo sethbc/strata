@@ -137,8 +137,10 @@ return function(S)
 
   -- The list again to a running voice when it differs from the one the
   -- engine was last sent: interval1..8 and intervalCount
-  -- (S.lib.variation.send_intervals), counted in the engine budget's window
-  local function send_if_changed(voice)
+  -- (S.lib.variation.send_intervals), counted in the engine budget's window.
+  -- Public for the silent PSET read's hook (lib/params_setup.lua, #994)
+  function M.send_if_changed(voice)
+    if not valid_voice(voice) then return end
     pending[voice] = nil
     if not S.voices[voice].active then return end
     local list = M.list(voice, S.lib.variation.interval_set(voice))
@@ -148,6 +150,7 @@ return function(S)
     S.lib.variation.send_intervals(voice)
     S.lib.engine_sync.count_sends(ARP.max_steps + 1)
   end
+  local send_if_changed = M.send_if_changed
 
   -- The held chord changed: its list goes at the next LFO step, once for
   -- every key of a burst or a step's chord, and only if it differs

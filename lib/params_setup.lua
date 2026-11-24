@@ -998,10 +998,11 @@ return function(S)
   -- the scale's and the root's actions send it: setScale, the quantized
   -- voices' stored freqs snapped (#995, as the tuning's hook snaps them),
   -- each running
-  -- voice's scaleNote and each running chord's intervals, once a read (the
-  -- tuning's hook, which sends the tuning, leaves the chords here; a voice
-  -- whose interval set the read changed gets its list from voice_params'
-  -- action instead; S.lib.arp's send-if-changed is its own local)
+  -- voice's scaleNote and each running chord's intervals, once a read and
+  -- only if they changed (the tuning's hook, which sends the tuning, leaves
+  -- the chords here; a voice whose interval set the read changed gets its
+  -- list from voice_params' action instead; S.lib.arp.send_if_changed
+  -- compares with the list the engine was last sent, #994)
   S.register_pset_hook({name = "engine_params", read = function(path_base, number, pset_path, silent)
     if not silent then return end
     local sync, groups = S.lib.engine_sync, {}
@@ -1042,7 +1043,7 @@ return function(S)
       variation.send_scale_note(voice_idx)
       local intervals = S.voices[voice_idx].values.intervals
       if intervals == variation.VARIATION.set_index.chord and params:get("v" .. voice_idx .. "_intervals") == intervals then
-        variation.send_intervals(voice_idx)
+        S.lib.arp.send_if_changed(voice_idx)
       end
     end
   end})
