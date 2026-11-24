@@ -390,9 +390,10 @@ checkStreamNoteRoot = {
 };
 
 // 3.9 (#1002): a note outside 0-127 keeps its rate. noteOn's note carries
-// the pitch Lua played, clipped to -24 to 151 (every root, 0-127, widened
-// by the rate's 24 semitones each way), so the rate the engine derives from
-// it (absoluteNoteRate) is note_values' rate. Each pitch, 132 against root
+// the pitch Lua played, clipped to -24 to 151 (every root Lua sends,
+// 0-127, widened by the rate's 24 semitones each way), so the rate the
+// engine derives from it (absoluteNoteRate) is note_values' rate. The pool
+// ends as the check found it. Each pitch, 132 against root
 // 110 and -5 against root 10, through both derivations: a held note at a
 // moved root (notesFollowRoot: the issue's example, 132 held on the input,
 // then the voice switched to a slot whose key is 110; and -5 held on a
@@ -400,7 +401,7 @@ checkStreamNoteRoot = {
 // for a buffer at the voice's root (leaveStream). 3.563595 and 0.420448 are
 // Lua's; from a note clipped to 0-127 the engine gave 2.669680 and 0.561231
 checkNoteRange = {
-    var input = 1, buffer = 2, stream = [3, 4], high = 132, low = -5, problems = List.new;
+    var input = 1, buffer = 2, stream = [3, 4], high = 132, low = -5, problems = List.new, pool = state[\pool];
     var expected = { arg pitch, root; (2 ** ((pitch - root) / 12)).clip(0.25, 4) };
     // the slot's kept rate and its synth's bufRate, against Lua's rate
     var agrees = { arg what, voice, rate;
@@ -438,6 +439,7 @@ checkNoteRange = {
         "notes: a note outside 0-127 keeps Lua's rate at a moved root and leaving a stream (#1002; problems %)".format(problems.asArray));
     ([input, buffer] ++ stream).do({ arg voice; command.(\setGrainParam, voice, \rootNote, 60.0) });
     h.stopAllVoices;
+    command.(\setNotePool, pool);
 };
 
 // Each command, with valid arguments, to a running voice with the pool
