@@ -417,7 +417,7 @@ test("problems() keeps a set-aside's backup, a failed write and a write over an 
   assert_equal(problem_of(data_files, kept), nil, "a good read is no problem")
   assert_equal(data_files.set_aside(kept, ".bak"), kept .. ".bak")
   assert_equal(problem_of(data_files, kept).backup, kept .. ".bak", "set aside: kept as its backup")
-  assert_equal(problem_of(data_files, kept).problem, "damaged", "it read, and its reader refused it")
+  assert_equal(problem_of(data_files, kept).problem, "set aside", "it read, and its reader set it aside")
   -- a good write then keeps the set-aside's row (#868's rule)
   assert_true(data_files.write(kept, { version = 1 }))
   assert_equal(problem_of(data_files, kept).backup, kept .. ".bak", "the set-aside's row stays")

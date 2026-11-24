@@ -853,7 +853,7 @@ end)
 -- 5f's review: the scenes' and buffers' files have their own records
 -- (S.scene_file, S.buffer_file), so S.lib.data_files keeps none of them; a
 -- scenes file below the floor reads fine and is then set aside, which
--- data_files would call damaged though it is only older
+-- data_files would record though its own record says older
 test("a scenes file below the floor and an unreadable buffers file leave problems() empty; SETUP says older", function()
   local subdir = "setup-own-records-" .. math.random(1, 1e9)
   local dir = h.data_root .. subdir .. "/strata/"
@@ -866,16 +866,17 @@ test("a scenes file below the floor and an unreadable buffers file leave problem
   assert_equal(#S.lib.data_files.problems(), 0, "no record of either file in data_files")
   local texts = status_texts()
   assert_true(texts:find("scenes older, kept|as scenes.data.bak|buffers unreadable, kept", 1, true) ~= nil, texts)
-  assert_true(not texts:find("damaged", 1, true), texts)
+  assert_true(not texts:find("set aside", 1, true), texts)
   -- a write of either is not kept there either
   S.lib.scenes.save(1)
   assert_equal(#S.lib.data_files.problems(), 0, "a scenes write keeps no record in data_files")
 end)
 
 -- 5f's review: a voices.data read with damaged presets loads its good
--- ones; its first save sets it aside (#848). Its row says damaged, not
--- unreadable, and a failed write before it does not hide the set-aside
-test("a partly damaged voices.data reads damaged, kept after its first save, even after a failed write", function()
+-- ones; its first save sets it aside (#848). Its row says set aside (not
+-- unreadable, and no cause it may not have), and a failed write before it
+-- does not hide the set-aside
+test("a partly damaged voices.data reads set aside after its first save, even after a failed write", function()
   local subdir = "setup-voices-damaged-" .. math.random(1, 1e9)
   local dir = h.data_root .. subdir .. "/strata/"
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)
@@ -895,11 +896,31 @@ test("a partly damaged voices.data reads damaged, kept after its first save, eve
   h.remove_tree(dir .. "voices.data.part")
   assert_true(presets.save(4, 3, "third"), "the next save writes")
   local texts = status_texts()
-  assert_true(texts:find("voices damaged, kept|as voices.data.bak", 1, true) ~= nil, texts)
+  assert_true(texts:find("voices set aside|as voices.data.bak", 1, true) ~= nil, texts)
   assert_true(not texts:find("not saved", 1, true), texts)
   show_page("SETUP"); enc(2, 60); redraw()
-  assert_true(screen_shows(context, "voices damaged, kept"), "drawn")
+  assert_true(screen_shows(context, "voices set aside"), "drawn")
   assert_screen_layout(context, "SETUP a partly damaged voices.data")
+end)
+
+-- 5f's review, round 2: a side file refused only for its version (a newer
+-- Strata's) is not damaged; its row names no cause: set aside, or not
+-- moved while it is still in place
+test("a side file of another version reads set aside, or not moved, and never names a cause", function()
+  local subdir = "setup-other-version-" .. math.random(1, 1e9)
+  local dir = h.data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  write_text(dir .. "gestures.data", h.tabutil_text({ version = 99 }))
+  write_text(dir .. "macros.data", h.tabutil_text({ version = 99 }))
+  os.execute("mkdir -p '" .. dir .. "macros.data.bak'")
+  for number = 2, 9 do os.execute("mkdir -p '" .. dir .. "macros.data.bak." .. number .. "'") end
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local texts = status_texts()
+  assert_true(texts:find("gestures set aside|as gestures.data.bak", 1, true) ~= nil, "moved: " .. texts)
+  assert_true(texts:find("macros file not moved|left in place", 1, true) ~= nil, "in place: " .. texts)
+  assert_true(not texts:find("damaged", 1, true) and not texts:find("unreadable", 1, true), texts)
+  show_page("SETUP"); enc(2, 60); redraw()
+  assert_screen_layout(context, "SETUP a side file of another version")
 end)
 
 -- 3.9 (#931): a size with no layout is dark and dead; SETUP says so

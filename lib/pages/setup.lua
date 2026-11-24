@@ -44,9 +44,10 @@ return function(S)
       -- (whether a later change writes over it is the file's own rule,
       -- docs/notes/lua/data-files.md)
       left_note = "left in place",
-      -- a file that parsed and was set aside by its reader (refused whole,
-      -- or voices.data's damaged presets kept while its good ones loaded)
-      damaged_kept = " damaged, kept", damaged = " file damaged"},
+      -- a file that parsed and was set aside by its reader, which names no
+      -- cause (another version, a refused shape, or voices.data's damaged
+      -- presets kept while its good ones loaded): moved, or not moved
+      set_aside = " set aside", not_moved = " file not moved"},
     data_suffix = "%.data$",  -- left off a file's name in its row's label
     -- 3.9 (#931): after a connected grid's size with no layout
     -- (S.lib.grid_core.layout_of)
@@ -178,23 +179,23 @@ return function(S)
   -- problem, as S.lib.data_files.problems() lists them (the live
   -- gestures.data, a PSET's side file, grids.data, ...; never the scenes'
   -- or buffers' file, whose records are their own), in problems()' order:
-  -- "<name> unreadable, kept" (it could not be parsed) or "<name>
-  -- damaged, kept" (it parsed and its reader set it aside) and "as
-  -- <backup>"; "<name> file unreadable" or "<name> file damaged" and "left
-  -- in place"; "<name> file not saved". The name is the file's without
+  -- "<name> unreadable, kept" (it could not be parsed) or "<name> set
+  -- aside" (it parsed and its reader set it aside) and "as <backup>";
+  -- "<name> file unreadable" or "<name> file not moved" and "left in
+  -- place"; "<name> file not saved". The name is the file's without
   -- ".data", cut to fit the row
   local function add_other_file_rows(rows)
     local texts, text = SETUP_PAGE.file_texts, S.lib.ui_text
     for _, entry in ipairs(S.lib.data_files.problems()) do
       local name = entry.file:match("[^/]*$"):gsub(SETUP_PAGE.data_suffix, "")
-      local damaged = entry.problem == "damaged"
+      local parsed = entry.problem == "set aside"
       local suffix, note
       if entry.problem == "not saved" then
         suffix = texts["not saved"]
       elseif entry.backup then
-        suffix, note = damaged and texts.damaged_kept or texts.kept, texts.kept_note .. entry.backup:match("[^/]*$")
+        suffix, note = parsed and texts.set_aside or texts.kept, texts.kept_note .. entry.backup:match("[^/]*$")
       else
-        suffix, note = damaged and texts.damaged or texts.unreadable, texts.left_note
+        suffix, note = parsed and texts.not_moved or texts.unreadable, texts.left_note
       end
       local room = SETUP_PAGE.value_right - screen.text_extents(suffix)
       local shown = text.fit_text(name, room):gsub("%s+$", "")  -- no space left at the cut
@@ -611,7 +612,7 @@ return function(S)
         end
         data_files.set_aside(folder .. "gestures.data", ".bak")
         data_files.write(folder .. "missing folder/matrix.data", {version = 1})
-        -- one that parsed and was set aside by its reader: damaged
+        -- one that parsed and was set aside by its reader: set aside
         local handle = io.open(folder .. "voices.data", "w")
         handle:write(data_files.encode({version = 1}))
         handle:close()
