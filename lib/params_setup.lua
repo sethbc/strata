@@ -995,7 +995,9 @@ return function(S)
   -- filter's restore mix follows as filter_mix's action has it. The scale
   -- keeps no record of what the engine has (the controller's ruling: one
   -- message is cheaper than a second record), so it is sent every time, as
-  -- the scale's and the root's actions send it: setScale, each running
+  -- the scale's and the root's actions send it: setScale, the quantized
+  -- voices' stored freqs snapped (#995, as the tuning's hook snaps them),
+  -- each running
   -- voice's scaleNote and each running chord's intervals, once a read (the
   -- tuning's hook, which sends the tuning, leaves the chords here; a voice
   -- whose interval set the read changed gets its list from voice_params'
@@ -1025,6 +1027,17 @@ return function(S)
     if params:get("filter_mix") ~= filter_mix_before then filter_mix_moved(params:get("filter_mix")) end
     local variation = S.lib.variation
     variation.send_scale()
+    -- the scale's and the root's actions snap every quantized voice's
+    -- stored freq ahead of the voices' lines (#995): snapped here, then
+    -- each freq the read left goes back, silently, for voice_params to set
+    -- through its filter, as the tuning's hook does (lib/tuning.lua)
+    local read_freqs = {}
+    for voice_idx = 1, NUM_VOICES do read_freqs[voice_idx] = params:get("v" .. voice_idx .. "_freq") end
+    variation.snap_quantized_freqs()
+    for voice_idx, freq in ipairs(read_freqs) do
+      local id = "v" .. voice_idx .. "_freq"
+      if params:get(id) ~= freq then params:set(id, freq, true) end
+    end
     for voice_idx = 1, NUM_VOICES do
       variation.send_scale_note(voice_idx)
       local intervals = S.voices[voice_idx].values.intervals

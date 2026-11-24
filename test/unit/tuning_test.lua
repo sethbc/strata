@@ -628,18 +628,24 @@ test("a silent read of a quantized freq off its PSET's tuning snaps it as a read
     end
     h.write_text(path, table.concat(lines))
     params:read(path, silent)
-    return params:get("v2_freq"), S.voices[2].values.freq, S
+    local engine_freq
+    for _, call in ipairs(context.engine_calls) do
+      if call.name == "setVoiceParam" and call.args[1] == 1 and call.args[2] == "freq" then engine_freq = call.args[3] end
+    end
+    return params:get("v2_freq"), S.voices[2].values.freq, S, engine_freq
   end
   local lines = {
     ["450 Hz"] = function() return "450.0" end,
     ["the session's freq"] = function(S) return string.format("%.17g", S.voices[2].values.freq) end,
   }
   for what, freq_line in pairs(lines) do
-    local actions_param, actions_stored = read(false, freq_line)
-    local silent_param, silent_stored, S = read(true, freq_line)
+    local actions_param, actions_stored, _, actions_engine = read(false, freq_line)
+    local silent_param, silent_stored, S, silent_engine = read(true, freq_line)
     assert_near(silent_param, actions_param, 1e-9, what .. ": the silent read's freq is a read with actions'")
     assert_near(silent_stored, actions_stored, 1e-9, what .. ": and stored the same")
     assert_near(silent_stored, silent_param, 1e-9, what .. ": stored as the param holds it")
+    assert_near(silent_engine, actions_engine, 1e-9, what .. ": and the engine holds the same freq")
+    assert_near(silent_engine, silent_param, 1e-9, what .. ": the freq the param holds")
     assert_true(S.voices[2].active, "voice 2 runs")
     if what == "450 Hz" then
       assert_true(math.abs(actions_param - 450) > 1e-6, "a read with actions snaps 450 Hz to a tone of 19 equal")
