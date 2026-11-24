@@ -3,4 +3,4 @@
 - SETUP's `transport` row reads `follow [int]` on the internal clock, where nothing follows the transport, and a status line shows the patterns' count offset (`count offset: +3.50 beats`) while they play on their own count after a transport start they did not follow.
 
 ### Fixed
-- The screen redraws when the patterns stop from anywhere (a transport stop, a scene, a grid key) and when a transport start they do not follow moves their count.
+- The screen redraws when the patterns stop from anywhere (a transport stop, a scene, a grid key) and when their count is kept through a transport start they do not follow or another jump of the clock's beat (a new clock source).

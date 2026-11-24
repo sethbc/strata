@@ -1520,7 +1520,15 @@ test("SEQ shows the chain's scene and the bars to its next link", function()
   params:set("seq_chain_from", 15)  -- an empty slot, the range's only one
   params:set("seq_chain", 0); params:set("seq_chain", 1)
   assert_equal(status_text(context), "chain [none] [targets off]", "no playable scene in the range")
+  -- #921 review: with a reset too, each chain mark's short form keeps targets whole
+  params:set("seq_division_reset", 1)
+  assert_equal(status_text(context), "[chain -] [reset] [targets off]", "none, a reset and targets: short")
+  assert_screen_layout(context, "SEQ with no scene to link, a reset and a failed output")
   params:set("seq_chain_from", 16)
+  assert_equal(status_text(context), "[S- 1b] [reset] [targets off]", "before the first link, short")
+  assert_screen_layout(context, "SEQ before the chain's first link, a reset and a failed output")
+  context.clock.run_for(2.0)  -- past the reset's bar
+  params:set("seq_chain", 0); params:set("seq_chain", 1)
   assert_equal(status_text(context), "[chain 1 bar] [targets off]", "a scene to link at the next bar")
   -- a stop clears the chain's place on the next frame; the failed output stays
   assert_equal(status_after(context, "a stop", function() pattern_clock_stop() end), "[targets off]",
@@ -1560,6 +1568,25 @@ test("SEQ names a step output that failed, until the next start", function()
   end
   tap(2)
   assert_equal(status_text(context), nil, "a start plays them again")
+  tap(2)
+end)
+
+-- #921 review: a cut name never ends in a lone letter of a cut word
+test("a failed output's name is cut with no lone letter left", function()
+  local context, S = started_on_seq()
+  S.patterns[1][1] = 15
+  S.register_step_output({name = "an output with a very long name", play = function() error("boom") end})
+  local real_print = _G.print
+  _G.print = function() end
+  tap(2)
+  context.clock.run_for(0.3)
+  _G.print = real_print
+  assert_equal(status_text(context), "[an output with a very off]", "the cut 'l' of long dropped")
+  assert_equal(S.lib.pages_seq.cut_name("abc defgh", h.text_width("abc d")), "abc", "a one-letter fragment goes")
+  assert_equal(S.lib.pages_seq.cut_name("abc defgh", h.text_width("abc de")), "abc de", "two letters stay")
+  assert_equal(S.lib.pages_seq.cut_name("abc a defgh", h.text_width("abc a ")), "abc a", "a whole one-letter word stays")
+  assert_equal(S.lib.pages_seq.cut_name("abcdef", h.text_width("a")), "", "a name cut to one letter: nothing")
+  assert_equal(S.lib.pages_seq.cut_name("abc", h.text_width("abc")), "abc", "a name that fits is whole")
   tap(2)
 end)
 
