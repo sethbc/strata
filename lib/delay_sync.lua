@@ -198,10 +198,12 @@ return function(S)
         action = function(x)
           -- turning sync off sends delay_time with its offsets as they are
           -- now: a synced delay's modulation sends were skipped (#741), so
-          -- the value last delivered may be stale
+          -- the value last delivered may be stale; that send carries the
+          -- sync off, so the sync's own record is set too (#987)
           if x == 1 then
             send_param_to_engine("delay_sync", x)
           else
+            S.lib.engine_sync.record_as_sent("delay_sync", S.lib.engine_sync.with_lfo_offsets("delay_sync", x))
             send_param_to_engine("delay_time", params:get("delay_time"))
           end
           shown_changed()
