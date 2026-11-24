@@ -1543,9 +1543,9 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
       -- suite seen: on a miss, a cache service that hangs both the restore
       -- and the save to their limits (they only warn), or a list whose
       -- apt-cache work hangs to the step's own limit.
-      -- The shards weigh the same: shard 1's time is ui_layout_test.lua's
-      -- alone, so no UNIT_FILE_SECONDS change shortens it; splitting that
-      -- file, another change, does
+      -- The 471 s is shard 1's before #1001, when its time was
+      -- ui_layout_test.lua's alone; #1001 split that file across both
+      -- shards, and the job's limit stays until runs on the split rule on it
       local lua, limit, install, restore, list = CI_WORKFLOW.SECONDS.lua, job.minutes * 60, nil, nil, nil
       for _, step in ipairs(job.steps) do
         if step.name == "Install Lua 5.3 and LuaJIT" then install = step end
