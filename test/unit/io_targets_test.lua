@@ -681,8 +681,9 @@ end)
 
 
 -- #973: the voice section's state for IO's mark of a cursor that moved by
--- itself: ALT+E2 takes voice 1's jf row away, and the draw marks the row
--- the cursor fell to (at the row indent, its label moved right)
+-- itself: the layout probe's device row goes (as a target's row would when
+-- its device leaves), the cursor falls to the probe's row before it, and the
+-- draw marks it (at the row indent, its label moved right)
 test("the voice section's moved-cursor state ends with the cursor's row marked", function()
   local context, S = started()
   local state
@@ -694,8 +695,11 @@ test("the voice section's moved-cursor state ends with the cursor's row marked",
   state.setup(context); redraw()
   local page = S.lib.pages_io.IO_PAGE
   local row = S.lib.pages_io.rows()[S.io_cursor]
-  assert_equal(S.selected_voice, 2, "voice 2 selected")
-  assert_equal(row.param_id, "v2_out_jf", "the cursor fell to voice 2's row in its place")
+  assert_equal(S.selected_voice, 1, "no voice change: the fall is the row's")
+  assert_equal(row.section .. " " .. tostring(row.id), "voice probe", "the cursor fell to the probe's row before")
+  for _, entry in ipairs(S.lib.pages_io.rows()) do
+    assert_true(entry.id ~= "probe device", "the device's row is gone")
+  end
   local mark, label
   for _, entry in ipairs(context.screen.texts) do
     if entry.text == page.unseen_mark and entry.x == page.row_indent then mark = entry end
