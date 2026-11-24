@@ -306,12 +306,13 @@
         };
     }
 
-    // A start still unconfirmed at its timer (watchStart): a sync first, so
-    // a /n_go the server sent before it (sclang busy at the timer, a loaded
-    // server) is handled before the judgment (the server answers a /sync
-    // after every reply it sent before it); then, still unconfirmed and
-    // the engine not past stop (pastStop), it failed and every record
-    // forgets it now, as forgetFailedStarts does at a command: out of
+    // A start still unconfirmed at its timer (watchStart): a sync first
+    // (serverAnswers), so a /n_go the server sent before it (sclang busy at
+    // the timer, a loaded server) is handled before the judgment (the server
+    // answers a /sync after every reply it sent before it), and nothing is
+    // judged if the server does not answer; then, still unconfirmed and the
+    // engine not past stop (pastStop), it failed and every record forgets it
+    // now, as forgetFailedStarts does at a command: out of
     // synths under any key first, so its onFree starts nothing again, then
     // endFailedStart (freed quietly, out of the NodeWatcher, its onFree run:
     // the voice's releasing, fading and cutting sets, ringReaders,
@@ -320,7 +321,7 @@
     // missing (gateVoice)
     startJudged { arg synth;
         if (this.pastStop or: { this.unconfirmedStarts[synth].isNil }) { ^this };
-        context.server.sync;
+        if (this.serverAnswers.not) { ^this };
         if (this.pastStop or: { this.unconfirmedStarts[synth].isNil }) { ^this };
         synths.keys.asArray.do({ arg key; if (synths[key] === synth) { synths.removeAt(key) } });
         this.endFailedStart(synth);
@@ -337,6 +338,25 @@
     // Seconds a new synth has for the server's /n_go (a reply within a
     // control block or two) before it counts as never started
     startConfirmWait { ^0.5 }
+
+    // Whether the server answers a /sync within judgeSyncSeconds (inside a
+    // routine): the replies it sent before the /sync are handled by then. Its
+    // /synced responder and its timer are freed on both paths, so a server
+    // that never answers leaves neither behind (a start's judgment, #1019)
+    serverAnswers {
+        var condition = Condition(false), server = context.server, id = UniqueID.next, answered = false, reply, timer;
+        reply = OSCFunc({ answered = true; condition.test = true; condition.signal }, '/synced', server.addr, argTemplate: [id]).oneShot;
+        timer = Routine({ this.judgeSyncSeconds.wait; condition.test = true; condition.signal });
+        server.sendMsg('/sync', id);
+        timer.play(SystemClock);
+        condition.wait;
+        timer.stop;
+        reply.free;
+        ^answered
+    }
+
+    // How long a start's judgment waits for the server's /synced (s)
+    judgeSyncSeconds { ^1 }
 
     // A synth the voice started whose /n_go has not come within
     // startConfirmWait: its /s_new failed on the server (no room in the
