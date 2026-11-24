@@ -1291,7 +1291,7 @@ test("every CI job has a timeout", function()
   end
   -- lua-suite runs one shard of a Lua suite a runner, in parallel on its
   -- cores (3.8's package x5); lua gathers them, as engine gathers the shards
-  local expected = { ["lua-suite"] = 10, lua = 5, ["engine-shard"] = 37, engine = 5 }
+  local expected = { ["lua-suite"] = 12, lua = 5, ["engine-shard"] = 37, engine = 5 }
   for _, name in ipairs(order) do
     assert_true(jobs[name].minutes ~= nil, "job " .. name .. " has a timeout-minutes at its own indent")
     assert_true(expected[name] ~= nil, "job " .. name .. " has no expected timeout in this test")
@@ -1531,11 +1531,38 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
       assert_equal(table.concat(unlimited, ", "), "", "the Lua job's steps before the suite with no timeout-minutes of their own")
       assert_true(total <= job.minutes * 60, "the Lua job's setup limits and " .. CI_WORKFLOW.SECONDS.runner_steps
         .. " s for the runner's own steps (" .. total .. " s) fit its " .. job.minutes .. " minutes")
-      -- a slow mirror's list, a cached install and the slowest shard
-      -- measured fit the job's limit with room
-      local lua = CI_WORKFLOW.SECONDS.lua
-      assert_true(lua.checkout + lua.slow_list + lua.restore + lua.cached_install + lua.slowest_shard <= job.minutes * 60,
-        "a slow mirror's setup and the slowest shard fit the Lua job's " .. job.minutes .. " minutes")
+      -- A hit and a miss on a slow mirror, each with the slowest suite
+      -- measured, fit the job's limit: the measured times of
+      -- CI_WORKFLOW.SECONDS.lua, and from the workflow the install's two
+      -- tries (on a miss, the first to its timeout and its kill, the second
+      -- to its timeout, then the refill and the unpacking) and the restore's
+      -- limit (a hit whose restore hangs to it still fits). Not covered,
+      -- each a fault on top of the slowest mirror and suite seen: on a miss,
+      -- a cache service that hangs both the restore and the save to their
+      -- limits (they only warn), or a list that runs to its own limit. What
+      -- gives the limit real room is balancing the two shards (about 315 s
+      -- against 140 s) through UNIT_FILE_SECONDS, a later change
+      local lua, limit, install, restore = CI_WORKFLOW.SECONDS.lua, job.minutes * 60, nil, nil
+      for _, step in ipairs(job.steps) do
+        if step.name == "Install Lua 5.3 and LuaJIT" then install = step end
+        if step.uses and step.uses:match("^actions/cache/restore@") then restore = step end
+      end
+      local tries = {}
+      for kill, seconds in (install and install.text or ""):gmatch("sudo timeout %-%-kill%-after=(%d+) (%d+) apt%-get ") do
+        tries[#tries + 1] = { kill = tonumber(kill), seconds = tonumber(seconds) }
+      end
+      assert_equal(#tries, 2, "the Lua install's download runs under a limit, and once more")
+      assert_true(restore and restore.minutes, "the Lua job's restore has a limit")
+      local before = lua.checkout + lua.slow_list
+      local after = lua.after_downloads
+      local hit = before + lua.restore + after + lua.suite + lua.runner_steps
+      local hung_hit = before + restore.minutes * 60 + after + lua.suite + lua.runner_steps
+      local miss = before + lua.restore + tries[1].seconds + tries[1].kill + tries[2].seconds + after + lua.save
+        + lua.suite + lua.runner_steps
+      for _, path in ipairs({ { "a hit", hit }, { "a hit whose restore hangs to its limit", hung_hit }, { "a miss", miss } }) do
+        assert_true(path[2] <= limit, path[1] .. " on a slow mirror with the slowest suite measured (" .. lua.suite .. " s) takes "
+          .. path[2] .. " s, over the Lua job's " .. job.minutes .. " minutes")
+      end
     end
   end
   assert_true(installing["lua-suite"] and installing["engine-shard"], "both the Lua suites and the engine shards install with apt-get")
@@ -1551,14 +1578,22 @@ end)
 -- complete job), which no limit can name, took 6 s at most together in
 -- five runs of seven shards (44367155756 to 44385889124); the allowance is
 -- a minute.
--- #993: the Lua job's measured times (runs 45317374513, 45318610201,
--- 45318613190 and 45320574628, four jobs each, before its packages were
--- kept): the checkout 7 s at most; on a slow mirror its install's
--- `apt-get update` alone took 131 s (13.4 MB at 114 kB/s), the list step's
--- allowance 150 s; a restore and a cached install of its few files are
--- allowed 10 s and 20 s; the slowest shard's Behavior tests took 331 s
+-- #993: the Lua job's times, measured in 32 jobs of runs 45317374513,
+-- 45318591229, 45318610201, 45318613190 and 45320574628 (every attempt,
+-- before its packages were kept) where a figure says so, the others
+-- allowances: the checkout 7 s at most; on a slow mirror the install's
+-- `apt-get update` took 131 s from the step's start (run 45318610201,
+-- 13.4 MB at 114 kB/s), so the list 133 s with its apt-cache work; the
+-- restore and the save of an entry under a megabyte are allowed 10 s each
+-- (the shard's 111 MB restore took 10 s at most); the refill and the
+-- unpacking 15 s (a fast mirror's whole install, its update and download
+-- included, took 9 to 11 s); the runner's own steps 3 s at most, allowed 6
+-- as the shard's measure; the slowest suite 471 s (run 45320574628 on
+-- main, lua (luajit, 1/2) on 4 cores: "60 unit files in 4 processes,
+-- 470 s"; shard 1 took 264 to 331 s in every other job, shard 2 121 to
+-- 222 s)
 CI_WORKFLOW.SECONDS = { after_downloads = 60, runner_steps = 60,
-  lua = { checkout = 10, slow_list = 150, restore = 10, cached_install = 20, slowest_shard = 331 } }
+  lua = { checkout = 7, slow_list = 133, restore = 10, save = 10, after_downloads = 15, runner_steps = 6, suite = 471 } }
 
 -- #993: where a job's text is in the workflow's: from the newline before its
 -- key line (`  <job>:`) to the newline before the next job's, or the end
@@ -2342,7 +2377,7 @@ test("a kept package reaches apt only through the hash check in the Lua jobs too
     { name = "a line above the install's first", expect = "lua-suite: the install step's start is not the script's first line: line 1 is `set +o errexit`",
       edits = { first, "          set +o errexit\n" .. first } },
     { name = "PATH in the Lua job's env", expect = "lua-suite: PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
-      edits = { "    timeout-minutes: 10\n    runs-on: ubuntu-24.04\n", "    timeout-minutes: 10\n    runs-on: ubuntu-24.04\n    env:\n      PATH: /tmp/shadow:/usr/bin:/bin\n" } },
+      edits = { "    timeout-minutes: 12\n    runs-on: ubuntu-24.04\n", "    timeout-minutes: 12\n    runs-on: ubuntu-24.04\n    env:\n      PATH: /tmp/shadow:/usr/bin:/bin\n" } },
     { name = "a directory added to GITHUB_PATH in the list step",
       expect = 'lua-suite: GITHUB_PATH is written (its directories come first in PATH for every later step): echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"',
       edits = { '          prefix="lua-debs-', '          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"\n          prefix="lua-debs-' } },
