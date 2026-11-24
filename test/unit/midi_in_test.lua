@@ -282,7 +282,7 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
   local midi_state = local_value("midi_state")
   context.grid.plug(1, 16, 16)
   params:set("midi_note_off", 2)
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     if voices[voice_idx].active then toggle_voice(voice_idx) end
   end
   capture_scene(1)   -- every voice off
@@ -317,7 +317,7 @@ test("a MIDI-held voice stopped another way: its note off changes nothing and le
     local locked = deep_copy(local_value("locked"))
     context.midi.send(1, { type = "note_off", note = 60, vel = 0, ch = voice_idx })
     assert_equal(#context.engine_calls, 0, stopper.name .. ": the note off sends nothing")
-    for other = 1, 7 do
+    for other = 1, local_value("S").constants.NUM_VOICES do
       assert_true(not voices[other].active, stopper.name .. ": voice " .. other .. " still off")
       assert_equal(local_value("locked")[other], locked[other], stopper.name .. ": voice " .. other .. " lock unchanged")
     end

@@ -1207,7 +1207,7 @@ end)
 -- a voice of it)
 local HOLDS = {
   chain = function(S)
-    for voice_idx = 1, 7 do
+    for voice_idx = 1, S.constants.NUM_VOICES do
       for step = 1, 16 do S.patterns[voice_idx][step] = 0 end
     end
     S.patterns[1][1] = 15

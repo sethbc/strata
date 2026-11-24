@@ -192,6 +192,69 @@ test("clock.cancel is called only in lib/clocks.lua and the listed files, as oft
   assert_equal(#problems, 0, table.concat(problems, "\n"))
 end)
 
+-- 3.9 (#1013): a unit test counts voices from S.constants.NUM_VOICES (a
+-- loaded script's) or h.voice_count() (no load), never a bare 7, so the
+-- tests check every voice if the count changes. These files keep loops
+-- ending at a bare 7 that count something else, as often as listed, each
+-- with its reason; the list only shrinks
+local SEVEN_LOOP_FILES = {
+  ["test/unit/grid_pane_test.lua"] = { 4, "a pane's lines 1-7 (and 5-7 of a 64's half): coordinates" },
+  ["test/unit/grid_pages_scenes_test.lua"] = { 1, "the corner keys 5-7 of line 7: coordinates" },
+  ["test/unit/io_ii_test.lua"] = { 7, "a device's ports and outputs 1-7 (ER-301, TELEXo, a gate device)" },
+  ["test/unit/sequencer_test.lua"] = { 1, "k, the steps played before a direction change" },
+  ["test/unit/pages_seq_test.lua"] = { 1, "a step's seven notes" },
+}
+
+-- Every for loop ending at a bare 7 (for <name> = <start>, 7 do) in the
+-- given sources, counted by file, comments and strings left out
+local function seven_loop_counts(sources)
+  local counts = {}
+  for _, source in ipairs(sources) do
+    local sanitized = sync_check.sanitize_lua(source.text)
+    for _ in sanitized:gmatch("%f[%w_]for%s+[%a_][%w_]*%s*=%s*[^,\n]-,%s*7%s*do%f[^%w_]") do
+      counts[source.path] = (counts[source.path] or 0) + 1
+    end
+  end
+  return counts
+end
+
+test("no unit test counts voices with a bare 7 (#1013)", function()
+  -- the scanner itself: the two faults of #1013's guard are found
+  local counts = seven_loop_counts({ { path = "test/unit/x_test.lua", text = table.concat({
+    "for voice_idx = 1, 7 do end",
+    'for i = 1, 7 do params:set("v" .. i .. "_amp", 0) end',
+    "for voice=3,7 do end",
+    '-- for v = 1, 7 do in a comment; "for v = 1, 7 do" in a string',
+    "for v = 1, NUM_VOICES do end; for v = 1, 17 do end; for v = 1, 70 do end",
+    "for x = first, first + 7 do end; for _, v in ipairs(list) do end",
+  }, "\n") } })
+  assert_equal(counts["test/unit/x_test.lua"], 3, "each loop ending at 7 is found; comments, strings and other ends are not")
+  local sources = {}
+  for _, name in ipairs(h.unit_files(repo_root .. "/test/unit")) do
+    local path = "test/unit/" .. name
+    local file = assert(io.open(repo_root .. "/" .. path, "r"))
+    table.insert(sources, { path = path, text = file:read("*a") })
+    file:close()
+  end
+  counts = seven_loop_counts(sources)
+  local problems = {}
+  for path, count in pairs(counts) do
+    local listed = SEVEN_LOOP_FILES[path] and SEVEN_LOOP_FILES[path][1]
+    if listed ~= count then
+      table.insert(problems, path .. " has " .. count .. " loops ending at a bare 7, listed " .. tostring(listed)
+        .. ": count voices from S.constants.NUM_VOICES or h.voice_count()")
+    end
+  end
+  for path, entry in pairs(SEVEN_LOOP_FILES) do
+    assert_true(type(entry[2]) == "string" and #entry[2] > 0, path .. " gives its reason")
+    if not counts[path] then
+      table.insert(problems, path .. " is listed for " .. entry[1] .. " but has no such loop: remove its line")
+    end
+  end
+  table.sort(problems)
+  assert_equal(#problems, 0, table.concat(problems, "\n"))
+end)
+
 -- 3.9 (#909): a grain-restart hook is told its reason ("start" or
 -- "source"), so none reads voice.active to tell a start from a switch.
 -- Each S.register_grain_restart(...) in the script's Lua files, comments

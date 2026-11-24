@@ -55,7 +55,7 @@ test("MAIN voice list entries read <n><+|-> <name> with [L]", function()
   assert_equal(entries[3], "3- fold [L]", "voice 3 is stopped and locked")
   assert_equal(entries[7], "7- ring", "voice 7 is stopped")
   -- the widest entry ends left of the divider
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     if not local_value("voices")[voice_idx].active then toggle_voice(voice_idx) end
     if not local_value("locked")[voice_idx] then toggle_lock(voice_idx) end
   end
@@ -83,7 +83,7 @@ test("the voice list marks a silenced voice m and a soloed one s, inside the lis
   assert_equal(local_value("voice_list").entries[3], "3x fold", "a stopped muted voice is x (#918)")
   params:set("v2_solo", 0)
   assert_equal(local_value("voice_list").entries[1], "1+ reso")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     if not local_value("voices")[voice_idx].active then toggle_voice(voice_idx) end
     toggle_lock(voice_idx)
     params:set("v" .. voice_idx .. "_mute", 1)
@@ -97,7 +97,7 @@ test("the voice list shows four voices and never scrolls past an end", function(
   local context = load_strata(); finish_startup(context)
   show_page("MAIN")
   local entries = local_value("voice_list").entries
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     select_voice(voice_idx)
     redraw()
     local rows = list_rows(context)
@@ -565,11 +565,11 @@ test("MAIN voice list fits its column for every voice, state and selection (#23)
     { active = true, locked = false }, { active = true, locked = true } }
   local entries_by_state = {}
   for state_idx, state in ipairs(states) do
-    for voice_idx = 1, 7 do
+    for voice_idx = 1, local_value("S").constants.NUM_VOICES do
       if voices[voice_idx].active ~= state.active then toggle_voice(voice_idx) end
       if (locked[voice_idx] or false) ~= state.locked then toggle_lock(voice_idx) end
     end
-    for voice_idx = 1, 7 do
+    for voice_idx = 1, local_value("S").constants.NUM_VOICES do
       select_voice(voice_idx)
       show_page("MAIN")
       local where = string.format("MAIN, voice %d, active %s, locked %s", voice_idx,
@@ -586,7 +586,7 @@ test("MAIN voice list fits its column for every voice, state and selection (#23)
     end
     entries_by_state[state_idx] = local_value("voice_list").entries
   end
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     local stopped, stopped_locked = entries_by_state[1][voice_idx], entries_by_state[2][voice_idx]
     local running, running_locked = entries_by_state[3][voice_idx], entries_by_state[4][voice_idx]
     assert_true(stopped ~= running, "running and stopped entries differ: " .. stopped)
@@ -604,7 +604,7 @@ end)
 test("MAIN fields fit at their widest values for every voice and source", function()
   local context = load_strata(); finish_startup(context)
   for _, source in ipairs({ 1, 9, 10 }) do
-    for voice_idx = 1, 7 do
+    for voice_idx = 1, local_value("S").constants.NUM_VOICES do
       select_voice(voice_idx)
       params:set("v" .. voice_idx .. "_source", source)
       params:set("v" .. voice_idx .. "_grain_mode", 2)
@@ -632,7 +632,7 @@ test("main_param_id and main_param_entry's label name each voice's E3 and arc ri
     pulse = "width", karplus = "decay", ring = "ratio" }
   local voices = local_value("voices")
   local _, set_selected = find_upvalue("selected_voice")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     local key_name = expected[voices[voice_idx].name]
     local param_id = "v" .. voice_idx .. "_" .. key_name
     assert_equal(main_param_id(voice_idx), param_id, "main param id of voice " .. voice_idx)
@@ -685,7 +685,7 @@ test("MAIN layout holds for buffer- and input-sourced voices", function()
   local context = load_strata(); finish_startup(context)
   local _, set_selected = find_upvalue("selected_voice")
   for _, source in ipairs({ 9, 10 }) do
-    for voice_idx = 1, 7 do
+    for voice_idx = 1, local_value("S").constants.NUM_VOICES do
       set_selected(voice_idx)
       params:set("v" .. voice_idx .. "_source", source)
       params:set("v" .. voice_idx .. "_buf_pos", 1)
@@ -745,7 +745,7 @@ test("MAIN's layout states cover every voice locked, running, triggered and froz
   S = local_value("S")
   show_page("MAIN")
   S.registry.pages[S.constants.UI_PAGES.index.MAIN].layout_states[1].setup(context)
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     assert_true(S.voices[voice_idx].active and S.locked[voice_idx], "voice " .. voice_idx .. " running and locked")
     assert_equal(params:get("v" .. voice_idx .. "_grain_mode"), 2, "voice " .. voice_idx .. " triggered")
     assert_true(S.lib.freeze.is_frozen(voice_idx), "voice " .. voice_idx .. " frozen")

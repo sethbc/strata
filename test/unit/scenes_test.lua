@@ -37,7 +37,7 @@ test("scene capture -> change -> recall restores every voice", function()
   local voices = local_value("voices")
   local locked = local_value("locked")
   local patterns = local_value("patterns")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     assert_voice_matches(voice_idx, voices[voice_idx], captured.voices[voice_idx])
     assert_equal(locked[voice_idx], captured.locked[voice_idx], "voice " .. voice_idx .. " locked")
     for step = 1, 16 do
@@ -1475,7 +1475,7 @@ test("scene recall: one full sync per voice whose source changed, after its para
   local function assert_engine_has_lua_state(context, where)
     local voices = local_value("voices")
     local master = params:get("master_density")
-    for voice_idx = 1, 7 do
+    for voice_idx = 1, local_value("S").constants.NUM_VOICES do
       local voice = voices[voice_idx]
       if voice.active then
         local label = where .. ": voice " .. voice_idx .. " "
@@ -1556,7 +1556,7 @@ test("scene recall: one full sync per voice whose source changed, after its para
     local where = transition_time == 0 and "instant recall" or "smooth transition"
     local context = load_strata(); finish_startup(context)
     local voices = local_value("voices")
-    for voice_idx = 1, 7 do
+    for voice_idx = 1, local_value("S").constants.NUM_VOICES do
       if voices[voice_idx].active ~= (voice_idx <= 3) then toggle_voice(voice_idx) end
     end
     scramble_state(11)
@@ -1780,7 +1780,7 @@ test("transition skips discrete voice fields; scenes keep source and buffer para
     scene.data.voices[2].source = bad
     assert_true(not validate_scene(scene), "source " .. tostring(bad) .. " rejected")
   end
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     scene.data.voices[voice_idx].source = nil
     for _, key in ipairs({ "buf_pos", "buf_rate", "buf_scan" }) do scene.data.voices[voice_idx].values[key] = nil end
   end
@@ -2737,7 +2737,7 @@ local function prepare_recall_run(run)
   end
   scramble_state(100 + run)
   params:set("reverb_mix", 0.62); params:set("filter_type", 2); params:set("strata_lfo1", 0)
-  for voice = 1, 7 do
+  for voice = 1, S.constants.NUM_VOICES do
     local plan = recall_combination(((run - 1) * 7 + voice - 1) % 24)
     params:set("v" .. voice .. "_source", plan.scene_source)
     set_active(voice, plan.scene_active)
@@ -2747,7 +2747,7 @@ local function prepare_recall_run(run)
   capture_scene(1)
   scramble_state(200 + run)
   params:set("reverb_mix", 0.15); params:set("filter_type", 1); params:set("strata_lfo1", 1)
-  for voice = 1, 7 do
+  for voice = 1, S.constants.NUM_VOICES do
     local plan = recall_combination(((run - 1) * 7 + voice - 1) % 24)
     params:set("v" .. voice .. "_source", plan.now_source)
     set_active(voice, plan.now_active)
@@ -3612,7 +3612,7 @@ test("per-voice param entries carry their voice and global ones do not", functio
     end
   end
   assert_equal(global_count, #S.SCENE_GLOBAL_PARAMS, "every global is listed")
-  for voice = 1, 7 do assert_true((per_voice[voice] or 0) > 10, "voice " .. voice .. "'s params are listed") end
+  for voice = 1, S.constants.NUM_VOICES do assert_true((per_voice[voice] or 0) > 10, "voice " .. voice .. "'s params are listed") end
 end)
 
 test("a global entry whose id starts with v1_ is not treated as voice 1's", function()

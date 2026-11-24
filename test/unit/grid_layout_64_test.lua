@@ -51,7 +51,7 @@ test("64 row 8 columns 2-8 toggle voices 1-7", function()
   local context = load_strata(); finish_startup(context)
   local device = context.grid.plug(1, 8, 8)
   local voices = local_value("voices")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     local was_active = voices[voice_idx].active
     tap(context, 1, voice_idx + 1, 8)
     assert_true(voices[voice_idx].active ~= was_active, "(" .. (voice_idx + 1) .. ",8) toggles voice " .. voice_idx)

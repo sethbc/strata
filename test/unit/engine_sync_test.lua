@@ -14,7 +14,7 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
   finish_startup(context)
   local voices = local_value("voices")
   -- turn everything off, then edit every voice while it is off
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     if voices[voice_idx].active then toggle_voice(voice_idx) end
   end
   params:set("master_density", 1.5)
@@ -25,7 +25,7 @@ test("starting a voice sends its complete state to the engine (C1, C2)", functio
     assert_equal(call.name, "setGrainSource", "edits to stopped voices are not sent")
   end
 
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     context.clear_engine_calls()
     toggle_voice(voice_idx)
     local voice = voices[voice_idx]
@@ -100,11 +100,11 @@ end)
 test("a start sends the source and every grain value before voiceOn, the voice-level values after", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     if voices[voice_idx].active then toggle_voice(voice_idx) end
   end
   scramble_state(42)
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     context.clear_engine_calls()
     toggle_voice(voice_idx)
     local calls, voice_on = context.engine_calls, nil
@@ -229,7 +229,7 @@ test("the largest grain overlap Lua can send fits the engine's maxGrains", funct
   local max_grains = tonumber(source:match("var <>maxGrains = (%d+);"))
   assert_true(max_grains ~= nil, "the engine declares var <>maxGrains = <n>;")
   local master_max = params:lookup_param("master_density").controlspec.maxval
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     local size_max = params:lookup_param("v" .. voice_idx .. "_grain_size").controlspec.maxval
     local density_max = params:lookup_param("v" .. voice_idx .. "_grain_density").controlspec.maxval
     -- a GrainIn/GrainBuf runs at most maxGrains - 1 grains and drops the rest

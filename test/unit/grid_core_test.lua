@@ -2042,7 +2042,7 @@ test("a loop fader appears only on a buffer voice", function()
     local ids = table.concat(fader_param_ids(voice), ",")
     return ids:find("_loop_start", 1, true) ~= nil, ids:find("_loop_length", 1, true) ~= nil
   end
-  for voice = 1, 7 do
+  for voice = 1, local_value("S").constants.NUM_VOICES do
     for _, source in ipairs({ 1, 2, 9, 10 }) do
       params:set("v" .. voice .. "_source", source)
       local start, length = has_loop(voice)

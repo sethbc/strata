@@ -668,7 +668,7 @@ test("the 64's halves: left p1-p8 and types 1-8, right p9-p10, the banks and typ
   -- left
   assert_equal(pane.led(1, LINE.pages), 15, "left: p1 shown")
   for x = 2, 8 do assert_equal(pane.led(x, LINE.pages), 4, "left: p" .. x) end
-  for x = 1, 7 do assert_equal(pane.led(x, LINE.voices), x == 1 and 15 or 4, "left: V" .. x) end
+  for x = 1, S.constants.NUM_VOICES do assert_equal(pane.led(x, LINE.voices), x == 1 and 15 or 4, "left: V" .. x) end
   assert_equal(pane.led(8, LINE.voices), 0, "left: line 7 key 8 dark")
   check_types(1, #real_list())
   pane.tap(8, 1)

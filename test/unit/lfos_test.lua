@@ -684,7 +684,7 @@ test("the destinations are none, the globals, each voice's together, then the ma
   local destinations = local_value("LFO_DESTINATIONS")
   local expected = { "none" }
   for _, label in ipairs(GLOBAL_LABELS) do expected[#expected + 1] = label end
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     for _, suffix in ipairs(VOICE_SUFFIXES) do expected[#expected + 1] = "v" .. voice_idx .. " " .. suffix end
   end
   for m = 1, 16 do expected[#expected + 1] = "macro " .. m end
@@ -849,7 +849,7 @@ test("a destination registered after init's list joins its voice's group", funct
   end })
   local S = local_value("S")
   local destinations = local_value("LFO_DESTINATIONS")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     local amp, probe = destination_index("v" .. voice_idx .. " amp"), destination_index("v" .. voice_idx .. " probe")
     assert_equal(probe, amp + 1, "v" .. voice_idx .. " probe follows the voice's other registered ones")
     assert_equal(destinations[probe].group, "voice " .. voice_idx)
@@ -1744,7 +1744,7 @@ end)
 test("every control param with a sender sends its LFO-offset value; one without a sender never calls the engine", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     if not local_value("voices")[voice_idx].active then toggle_voice(voice_idx) end
   end
   local function signature(calls)

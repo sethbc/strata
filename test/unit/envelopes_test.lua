@@ -151,9 +151,9 @@ end)
 
 test("each voice's envelope follows its own hits", function()
   local context, S, envelopes = loaded()
-  for v = 1, 7 do set_envelope(v, 0.1, 0.1, 0.5, 0.1, 0, false) end
+  for v = 1, S.constants.NUM_VOICES do set_envelope(v, 0.1, 0.1, 0.5, 0.1, 0, false) end
   context.set_time(300)
-  for v = 1, 7 do assert_equal(envelopes.value(v), 0, "voice " .. v .. " has had no hit") end
+  for v = 1, S.constants.NUM_VOICES do assert_equal(envelopes.value(v), 0, "voice " .. v .. " has had no hit") end
   local sync = S.lib.engine_sync
   -- a step on voice 3
   sync.retrigger(3, 1, "step")
@@ -198,7 +198,7 @@ end)
 test("the seven are sources with six fields each", function()
   local _, S, envelopes = loaded()
   local sources = S.lib.mod_sources
-  for v = 1, 7 do
+  for v = 1, S.constants.NUM_VOICES do
     local record = sources.get("env" .. v)
     assert_true(record ~= nil, "env" .. v .. " is a source")
     assert_equal(record.name, "EN" .. v)
@@ -389,7 +389,7 @@ end)
 test("with no envelope routed nothing is sent", function()
   local context, S = loaded()
   context.clear_engine_calls()
-  for v = 1, 7 do S.lib.engine_sync.retrigger(v, 1, "step") end
+  for v = 1, S.constants.NUM_VOICES do S.lib.engine_sync.retrigger(v, 1, "step") end
   params:set("v2_env_attack", 1)
   params:set("v3_env_loop", 2)
   route(S, 1, "lfo1", "v5_filter_freq", 50)

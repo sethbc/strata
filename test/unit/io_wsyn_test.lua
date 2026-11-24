@@ -51,7 +51,7 @@ test("with defaults nothing is sent", function()
   local context, S, log = started()
   context.clock.run_for(1)
   assert_equal(#log, 0, "no ii call")
-  for voice = 1, 7 do
+  for voice = 1, S.constants.NUM_VOICES do
     assert_equal(params:get("v" .. voice .. "_out_wsyn"), 0, "v" .. voice .. " is off")
     assert_equal(target_of(S).routed(voice), false, "v" .. voice .. " is not routed")
   end
