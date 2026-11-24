@@ -59,6 +59,8 @@ function Model.new(constants, engine)
     model.offsets[voice] = {}
     for destination = 0, engine.num_fast_destinations - 1 do model.offsets[voice][destination] = 0 end
   end
+  -- a running node set to depth 0, kept (#925: its offset alone)
+  model.counts.lfo_at_zero = 0
   return model
 end
 
@@ -116,6 +118,7 @@ function RECEIVERS.setFastLfo(self, args)
   if running then
     self.counts.lfo_replaced = self.counts.lfo_replaced + 1
     if running.voice ~= voice or running.destination ~= destination then self.counts.lfo_moved = self.counts.lfo_moved + 1 end
+    if node.depth == 0 and running.depth > 0 then self.counts.lfo_at_zero = self.counts.lfo_at_zero + 1 end
   else
     self.counts.lfo_started = self.counts.lfo_started + 1
   end
@@ -277,10 +280,12 @@ local function lfo_want(S, n)
     offset = math.min(ENGINE.offset[2], math.max(ENGINE.offset[1], 2 * params:get(lfo_id(n, "offset")) / 100)) }
 end
 
--- The (voice, destination) LFO n's params play in the engine: on, its depth
--- param above 0, its home a fast destination's fixed param; else nil
+-- The (voice, destination) of LFO n's node as its params imply it: on, its
+-- home a fast destination's fixed param, at any depth (#925: an on LFO
+-- with a fast home has a node, which plays its offset alone at depth 0);
+-- else nil
 local function lfo_place(S, n)
-  if params:get(lfo_id(n)) ~= 1 or params:get(lfo_id(n, "depth")) <= 0 then return nil end
+  if params:get(lfo_id(n)) ~= 1 then return nil end
   return S.lib.lfos.fast_destination(S.lib.matrix.home(n) or "")
 end
 
@@ -401,9 +406,10 @@ function Model:differ(problems, allow, name, text)
   problems[#problems + 1] = text
 end
 
--- The LFOs: an LFO the params play has a node with its settings (the rate
--- within LFO.engine_rate_threshold, the depth and offset within
--- LFO.send_threshold: what Lua resends past), and no other LFO has one
+-- The LFOs: an on LFO with a fast home (lfo_place, at any depth) has a
+-- node with its settings (the rate within LFO.engine_rate_threshold, the
+-- depth and offset within LFO.send_threshold: what Lua resends past), and
+-- no other LFO has one
 function Model:compare_lfos(S, problems, allow)
   local LFO = S.lib.lfos.LFO
   for n = 1, self.lfo_count do

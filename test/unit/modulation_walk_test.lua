@@ -558,13 +558,15 @@ h.walk({
     return problems
   end,
   -- the sequences reach every path: a node started, stopped and replaced
-  -- (moved to another voice or destination too), a home moved between the
+  -- (moved to another voice or destination too, and kept as its depth
+  -- reached 0, #925), a home moved between the
   -- engine and Lua, recalls, fades and a fade crossed by a recall, a
   -- recall of the state in force, silent sets, a macro on a depth, routes
   -- set, moved and stopped, channels sent, envelopes seen ended, idle steps
   -- that sent nothing, and each allowance of WALK_ALLOWED and the walk's
   -- (allowed_<name>), so a fault's fix must remove its allowance
-  reached = { "lfo_started", "lfo_stopped", "lfo_replaced", "lfo_moved", "home_engine_lua", "recalls", "fades",
+  reached = { "lfo_started", "lfo_stopped", "lfo_replaced", "lfo_moved", "lfo_at_zero",
+    "home_engine_lua", "recalls", "fades",
     "fades_crossed", "unchanged_recalls", "silent_sets", "macro_depths", "routes_set", "routes_moved", "routes_stopped",
     "offsets_sent", "envelopes_ended", "idle_quiet", "allowed_waiting", "allowed_ended_runs_again",
     "allowed_bar_sync", "allowed_moving_send" },

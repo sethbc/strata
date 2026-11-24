@@ -226,12 +226,6 @@ return function(S)
   end
   M.destination = destination_of
 
-  -- Whether LFO n runs in the engine when it plays: its destination is
-  -- fast. Its label then shows "~"
-  function M.is_engine_run(n)
-    return destination_of(n).fast ~= nil
-  end
-
   function M.label(n)
     local destination = destination_of(n)
     return destination.label .. (destination.fast and "~" or "")
@@ -249,7 +243,8 @@ return function(S)
   end
 
   -- Per LFO, the clock's state: the free phase (position, 0..1, before the
-  -- phase param) and when it was last advanced; a clocked LFO's phase
+  -- phase param) and when it was last advanced (nil once a step found it
+  -- off, until it starts); a clocked LFO's phase
   -- offset (cycles its rate modulation added) and the beats it was last
   -- read at; the phase and value of the last step; the random shapes' two
   -- draws (from, to: a cycle goes from one to the other); the rate and
@@ -462,6 +457,49 @@ return function(S)
     return false
   end
 
+  ---------------------------------------------------------------------------
+  -- An LFO's place (3.9, #925): where it plays, derived each time from its
+  -- on param, its depth param and its home's kind, never stored
+  ---------------------------------------------------------------------------
+
+  -- The kind of LFO n's home, whatever its on and depth: "engine" (a fast
+  -- entry: its node), "direct" (a macro, handed over in its step),
+  -- "matrix" (any other: the matrix's sum, a v<i>_main among them) or
+  -- "none" (none, or a key this build lacks, which reads as none)
+  local function home_kind(n)
+    local destination = destination_of(n)
+    if destination.fast then return "engine" end
+    if destination.key == "none" then return "none" end
+    if direct.known[destination.key] then return "direct" end
+    return "matrix"
+  end
+
+  -- Where LFO n plays now: "off" (its on param 0), "idle" (on, at depth 0
+  -- or on no home), else its home's kind: "engine", "direct" or "matrix";
+  -- nil for no LFO n
+  local function place(n)
+    if type(n) ~= "number" or n < 1 or n > NUM_LFOS or n % 1 ~= 0 then return nil end
+    if not is_on(n) then return "off" end
+    local kind = home_kind(n)
+    if kind == "none" or params:get(param_id(n, "depth")) <= 0 then return "idle" end
+    return kind
+  end
+  M.place = place
+
+  -- Whether LFO n runs in the engine when it plays: its home is fast. Its
+  -- label then shows "~"
+  function M.is_engine_run(n)
+    return home_kind(n) == "engine"
+  end
+
+  -- Whether LFO n has an engine node: on, with a fast home, at any depth
+  -- (#925: at depth 0 the node plays its offset alone, and a depth swept
+  -- through 0 keeps its phase). A node is stopped only when the LFO is
+  -- turned off or its home leaves the fast kind
+  local function keeps_node(n)
+    return is_on(n) and home_kind(n) == "engine"
+  end
+
   -- Whether LFO n's home routing to id is this module's to play: its home
   -- is fast and resolves to id (its engine node), or id is a direct
   -- destination (a macro, handed over in its step). Whatever its on/off
@@ -469,8 +507,7 @@ return function(S)
   function M.owns(n, id)
     if type(n) ~= "number" or n < 1 or n > NUM_LFOS or n % 1 ~= 0 or id == nil then return false end
     if direct.known[id] then return true end
-    local destination = destination_of(n)
-    return destination.fast ~= nil and destination.resolve() == id
+    return home_kind(n) == "engine" and destination_of(n).resolve() == id
   end
 
   -- The offset of a Lua destination for m half ranges (the matrix's too)
@@ -577,9 +614,9 @@ return function(S)
   local function engine_key(n) return "lfo" .. n .. " engine" end
 
   -- Whether LFO n plays in the engine now: on, on a fast destination, at a
-  -- depth above 0
+  -- depth above 0 (its place). Its node is kept at depth 0 too (keeps_node)
   local function engine_playing(n)
-    return is_on(n) and M.is_engine_run(n) and params:get(param_id(n, "depth")) > 0
+    return place(n) == "engine"
   end
   M.engine_playing = engine_playing  -- MAIN's ~ (lib/pages/main.lua) reads this one answer
 
@@ -609,7 +646,7 @@ return function(S)
   -- a waiting send as its key's value (nil would be no send waiting) and
   -- records a delivered one in S.engine_param_values
   local function sync_key(n) return "lfo" .. n .. " sync" end
-  local function has_node(n) return engine_playing(n) and state[n].engine ~= nil end
+  local function has_node(n) return keeps_node(n) and state[n].engine ~= nil end
   local engine_sends, sync_sends = {}, {}
   for n = 1, NUM_LFOS do
     S.engine_senders[engine_key(n)] = function()
@@ -634,7 +671,8 @@ return function(S)
       and math.abs(want.base - sent.base) > sent.base * LFO.engine_rate_threshold
   end
 
-  -- Bring the engine to LFO n's settings: a start, a stop, a new voice,
+  -- Bring the engine to LFO n's settings (a node while keeps_node: on,
+  -- with a fast home, at any depth, #925): a start, a stop, a new voice,
   -- destination or shape, a hand edit (edited) or a clocked LFO's new tempo
   -- at once, outside the round robin (at most one send per LFO a step; a
   -- scene fade's step is a hand edit here: it sets its params outside
@@ -647,7 +685,7 @@ return function(S)
   -- that moved without a hand edit (a deferrable source's, a silent read's)
   local function reconcile_engine(n)
     local st = state[n]
-    if not engine_playing(n) then
+    if not keeps_node(n) then
       if st.engine then engine.stopFastLfo(n - 1) end
       st.engine, st.edited, st.sync_due, st.deferred, st.phase_seen = nil, false, false, false, nil
       queue.due[engine_key(n)], queue.due[sync_key(n)] = nil, nil
@@ -693,18 +731,45 @@ return function(S)
     return step.beats
   end
 
+  -- LFO n starts (its on action, or the first step that finds it on after
+  -- a step found it off: a silent read turned it on, #925): its phase at
+  -- the phase param (a free LFO's position at 0, from now), the random
+  -- shapes draw afresh, and its engine node is synced to that phase
+  local function start_lfo(n, now)
+    local st = state[n]
+    st.position, st.last_time, st.clocked_offset, st.last_beats = 0, now, 0, nil
+    st.stepped = false
+    local shape = params:string(param_id(n, "shape"))
+    if shape == "drunk" then
+      st.from, st.to = 0.5, 0.5
+    elseif LFO.random_shapes[shape] then
+      st.from, st.to = math.random(), math.random()
+    end
+    st.phase = M.phase(n)
+    st.value = 2 * lfo_u(n, st.phase) - 1
+    evaluate(n)
+    st.bar = is_clocked(n) and math.floor(clock.get_beats() / LFO.bar_beats) or nil
+    st.sync_due = true   -- a restart of a running engine LFO (a bang, #251) moves its phase too
+  end
+
   -- One step of LFO n: its phase advances (a free one by the rate it
   -- played since the last step, a clocked one from the beats), a wrap
   -- draws a random shape's next value, then its value, its rate and depth,
-  -- and its destination's send (Lua) or the engine's settings
+  -- and its destination's send (Lua) or the engine's settings. An off LFO
+  -- forgets when it was last advanced (last_time nil until it starts), so
+  -- the first step that finds it on without its action starts it; the
+  -- edits Lua has no node to send (edited, deferred) are dropped on an
+  -- off or Lua-run LFO (#925)
   local function step_lfo(n, now, step)
     local st = state[n]
     if not is_on(n) then
-      st.value = 0
+      st.value, st.last_time = 0, nil
       release_direct(n)
       if st.engine then reconcile_engine(n) end
+      st.edited, st.deferred = false, false
       return
     end
+    if st.last_time == nil then start_lfo(n, now) end
     local previous = st.phase
     local offset = params:get(param_id(n, "phase")) / 100
     local phase
@@ -728,7 +793,7 @@ return function(S)
     st.stepped = true
     evaluate(n)
     if M.is_engine_run(n) then
-      if is_clocked(n) and engine_playing(n) then
+      if is_clocked(n) and keeps_node(n) then
         local bar = math.floor(read_beats(step) / LFO.bar_beats)
         if step.fell or (st.bar ~= nil and bar ~= st.bar) then st.sync_due = true end
         st.bar = bar
@@ -737,6 +802,7 @@ return function(S)
       reconcile_engine(n)
     else
       if st.engine then reconcile_engine(n) end
+      st.edited, st.deferred = false, false
       step_direct(n)
     end
   end
@@ -832,19 +898,7 @@ return function(S)
   local function turned(n, on)
     local st = state[n]
     if on then
-      st.position, st.last_time, st.clocked_offset, st.last_beats = 0, util.time(), 0, nil
-      st.stepped = false
-      local shape = params:string(param_id(n, "shape"))
-      if shape == "drunk" then
-        st.from, st.to = 0.5, 0.5
-      elseif LFO.random_shapes[shape] then
-        st.from, st.to = math.random(), math.random()
-      end
-      st.phase = M.phase(n)
-      st.value = 2 * lfo_u(n, st.phase) - 1
-      evaluate(n)
-      st.bar = is_clocked(n) and math.floor(clock.get_beats() / LFO.bar_beats) or nil
-      st.sync_due = true   -- a restart of a running engine LFO (a bang, #251) moves its phase too
+      start_lfo(n, util.time())
     else
       release_direct(n)
       st.value, st.stepped = 0, false

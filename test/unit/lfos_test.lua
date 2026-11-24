@@ -444,15 +444,19 @@ test("an LFO on a fast destination runs in the engine", function()
     assert_equal(call.args[3], destination, label .. ": its destination")
     params:set(lfo_id(2), 0)
   end
-  -- depth 0 stops it, as it restores a Lua destination
+  -- depth 0 keeps the node, at depth 0 (#925: its offset alone, its phase
+  -- running on), where a Lua destination is restored
   aim(1, "v3 pitch"); params:set(lfo_id(1), 1)
   context.clear_engine_calls()
   params:set(lfo_id(1, "depth"), 0); lfo_step(context)
-  assert_equal(#calls_with(context, "stopFastLfo", 0), 1, "depth 0 stops the engine LFO")
+  assert_equal(#calls_with(context, "stopFastLfo", 0), 0, "depth 0 keeps the engine LFO's node")
+  assert_equal(#calls_with(context, "setFastLfo", 0), 1, "and sets it")
+  assert_near(calls_with(context, "setFastLfo", 0)[1].args[6], 0, 1e-9, "to depth 0")
   context.clear_engine_calls()
   params:set(lfo_id(1, "depth"), 30); lfo_step(context)
-  assert_equal(#context.calls_named("setFastLfo"), 1, "a depth again starts it")
+  assert_equal(#context.calls_named("setFastLfo"), 1, "a depth again sets it")
   assert_near(context.calls_named("setFastLfo")[1].args[6], 0.3, 1e-9)
+  assert_equal(#context.calls_named("syncFastLfo"), 0, "with no sync: the node was kept")
   -- a shape change replaces the node: setFastLfo with the shape, then a sync
   context.clear_engine_calls()
   params:set(lfo_id(1, "shape"), option_index(lfo_id(1, "shape"), "drunk"))
@@ -2278,6 +2282,223 @@ test("a voice start carries a Lua home's offset", function()
   end
   assert_equal(after, 1, "and the steps after it send nothing more")
   assert_true(S.voices[2].active)
+end)
+
+---------------------------------------------------------------------------
+-- An LFO's place (3.9's package 4c, #925): off, idle, engine, direct or
+-- matrix, from the on param, the depth and the home's kind; an on LFO
+-- with a fast home keeps its node at depth 0
+---------------------------------------------------------------------------
+
+-- LFO n's state record (an upvalue of effective_rate), read only
+local function lfo_state(n)
+  local lfos = local_value("S").lib.lfos
+  local index = 1
+  while true do
+    local name, value = debug.getupvalue(lfos.effective_rate, index)
+    if not name then error("no state upvalue") end
+    if name == "state" then return value[n] end
+    index = index + 1
+  end
+end
+
+test("a depth swept through 0 sends no stopFastLfo and no syncFastLfo (#925)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  S.drift_metro:stop()  -- the drift's own sends are never deferred
+  aim(1, "v3 pitch")
+  params:set(lfo_id(1, "rate"), 0.25); params:set(lfo_id(1, "depth"), 30); params:set(lfo_id(1), 1)
+  assert_true(S.lib.macros.set_target(1, 1, lfo_id(1, "depth"), 0, 1), "macro 1 row 1 on LFO 1's depth")
+  params:set("macro_1", 0.3); context.clock.run_for(0.5)
+  assert_equal(params:get(lfo_id(1, "depth")), 30, "the macro holds the depth at 30")
+  context.clear_engine_calls()
+  for _, value in ipairs({ 0.2, 0.1, 0, 0.1, 0.2, 0.3 }) do
+    params:set("macro_1", value); context.clock.run_for(0.2)
+  end
+  context.clock.run_for(0.5)
+  assert_equal(#calls_with(context, "stopFastLfo", 0), 0, "the node is never stopped")
+  assert_equal(#calls_with(context, "syncFastLfo", 0), 0, "nor synced again: its phase runs on")
+  local depths, zero_at = {}, nil
+  for index, call in ipairs(calls_with(context, "setFastLfo", 0)) do
+    depths[index] = call.args[6]
+    if call.args[6] == 0 and not zero_at then zero_at = index end
+  end
+  assert_true(zero_at ~= nil, "a setFastLfo at depth 0 between: " .. table.concat(depths, " "))
+  assert_true(zero_at < #depths, "the depth 0 is between the sweep's ends")
+  assert_near(depths[#depths], 0.3, 1e-9, "and the last at 30 %")
+end)
+
+test("an on LFO at depth 0 starts a node on a fast home, and a silent depth of 0 keeps one (#925)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfos = local_value("S").lib.lfos
+  aim(1, "rev mix")
+  params:set(lfo_id(1, "depth"), 0); params:set(lfo_id(1), 1)
+  lfo_step(context)
+  assert_equal(lfos.place(1), "idle", "on, at depth 0")
+  context.clear_engine_calls()
+  aim(1, "v3 pitch")
+  local names = {}
+  for _, call in ipairs(context.engine_calls) do table.insert(names, call.name) end
+  assert_equal(table.concat(names, " "), "setFastLfo syncFastLfo", "a fast home: its node at once, synced")
+  assert_near(context.engine_calls[1].args[6], 0, 1e-9, "at depth 0")
+  assert_equal(lfos.place(1), "idle", "still idle: it plays its offset alone")
+  -- a silent set of the depth to 0 on a playing node: the round robin's setFastLfo at depth 0
+  params:set(lfo_id(1, "depth"), 40); lfo_step(context)
+  context.clear_engine_calls()
+  params:set(lfo_id(1, "depth"), 0, true)
+  assert_equal(#context.engine_calls, 0, "nothing at the silent set")
+  local delivered = local_value("S").engine_param_values
+  delivered["lfo1 engine"] = nil   -- the send budget records what it delivers under the LFO's key
+  lfo_step(context, 2)
+  local sets = calls_with(context, "setFastLfo", 0)
+  assert_equal(#sets, 1, "one setFastLfo")
+  assert_near(sets[1].args[6], 0, 1e-9, "at depth 0")
+  assert_equal(delivered["lfo1 engine"], 0, "through the round robin and the budget (lfo1 engine)")
+  assert_equal(#context.calls_named("stopFastLfo") + #context.calls_named("syncFastLfo"), 0, "no stop, no sync")
+end)
+
+test("a silent turn-on starts at the phase param (#925)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfos = local_value("S").lib.lfos
+  -- a free LFO run for a while, then turned off by hand: its position is stale
+  aim(1, "v3 pitch")
+  params:set(lfo_id(1, "rate"), 0.3); params:set(lfo_id(1, "phase"), 0); params:set(lfo_id(1), 1)
+  context.clock.run_for(1.23)
+  params:set(lfo_id(1), 0)
+  context.clock.run_for(2.5)
+  context.clear_engine_calls()
+  params:set(lfo_id(1), 1, true)   -- a silent PSET read's set
+  lfo_step(context)
+  assert_near(lfos.phase(1), 0, 1e-9, "the step after the silent turn-on is at the phase param")
+  local syncs = calls_with(context, "syncFastLfo", 0)
+  assert_equal(#syncs, 1, "the node starts and is synced once")
+  assert_near(syncs[1].args[2], 0, 1e-9, "to the phase param")
+  -- with a phase param, and a Lua-run LFO
+  aim(2, "rev mix")
+  params:set(lfo_id(2, "rate"), 0.3); params:set(lfo_id(2, "phase"), 25); params:set(lfo_id(2), 1)
+  context.clock.run_for(1.7)
+  params:set(lfo_id(2), 0)
+  context.clock.run_for(1)
+  params:set(lfo_id(2), 1, true)
+  lfo_step(context)
+  assert_near(lfos.phase(2), 0.25, 1e-9, "a Lua-run LFO's too")
+end)
+
+test("edited and deferred are cleared on an LFO Lua runs or that is off (#925)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  aim(1, "rev mix"); params:set(lfo_id(1), 1)
+  lfo_step(context)
+  params:set(lfo_id(1, "rate"), 2)
+  S.lib.engine_sync.deferrable(function() params:set(lfo_id(1, "depth"), 60) end)
+  assert_true(lfo_state(1).edited and lfo_state(1).deferred, "the hand edit and the deferrable one mark it")
+  lfo_step(context)
+  assert_true(not lfo_state(1).edited, "a Lua-run LFO's step clears edited")
+  assert_true(not lfo_state(1).deferred, "and deferred")
+  params:set(lfo_id(1), 0)
+  params:set(lfo_id(1, "rate"), 1)
+  S.lib.engine_sync.deferrable(function() params:set(lfo_id(1, "depth"), 50) end)
+  assert_true(lfo_state(1).edited and lfo_state(1).deferred, "an off LFO's edits mark it too")
+  lfo_step(context)
+  assert_true(not lfo_state(1).edited and not lfo_state(1).deferred, "and its step clears them")
+end)
+
+-- #929, a call of the design (they stay two): an engine-run LFO with a
+-- random shape draws its values in the engine, which Lua never sends; its
+-- dot and an R routing from it read Lua's own draws
+test("an R routing from an engine-run random LFO plays Lua's draws, never the engine's (#929)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  aim(1, "v3 pitch")
+  params:set(lfo_id(1, "shape"), option_index(lfo_id(1, "shape"), "s&h"))
+  params:set(lfo_id(1, "rate"), 2); params:set(lfo_id(1), 1)
+  assert_true(S.lib.matrix.set_routing(1, "lfo1", "v3_grain_size"), "R1 from L1 to v3 size")
+  params:set("matrix_1_depth", 100); params:set("matrix_1", 1)
+  lfo_step(context, 2)
+  context.clear_engine_calls()
+  local values, offsets = {}, {}
+  for _ = 1, 96 do   -- two seconds: four cycles, four of Lua's draws
+    lfo_step(context)
+    local value = S.lib.lfos.value(1)
+    if values[#values] ~= value then values[#values + 1] = value end
+  end
+  for _, call in ipairs(context.calls_named("setFastOffset")) do
+    if call.args[1] == 2 and call.args[3] == 2 then offsets[#offsets + 1] = call.args[4] end
+  end
+  assert_true(#values >= 4, "Lua drew a new value each cycle: " .. #values)
+  assert_equal(#context.calls_named("setFastLfo") + #context.calls_named("syncFastLfo"), 0,
+    "the engine's node draws its own: none of Lua's draws is sent to it")
+  assert_true(#offsets >= 3, "the routing sends the channel as Lua's value moves: " .. #offsets)
+  assert_near(offsets[#offsets], S.lib.lfos.value(1), 1e-9, "the routing's offset is Lua's draw (depth 100 %)")
+end)
+
+-- Each case: how LFO 1 is set (its home's label, on, depth), its place,
+-- and the three answers as 3.8.0's code gave them (engine_playing: on, a
+-- fast home, depth above 0; is_engine_run: a fast home; owns(1, id): id a
+-- macro, or a fast home that resolves to id)
+local PLACE_CASES = {
+  { label = "v3 pitch", on = 0, depth = 30, place = "off", playing = false, engine_run = true,
+    owns = { v3_grain_pitch = true, reverb_mix = false, macro_1 = true } },
+  { label = "v3 pitch", on = 1, depth = 0, place = "idle", playing = false, engine_run = true,
+    owns = { v3_grain_pitch = true, reverb_mix = false, macro_1 = true } },
+  { label = "none", on = 1, depth = 30, place = "idle", playing = false, engine_run = false,
+    owns = { v3_grain_pitch = false, reverb_mix = false, macro_1 = true } },
+  { label = "v3 pitch", on = 1, depth = 30, place = "engine", playing = true, engine_run = true,
+    owns = { v3_grain_pitch = true, v3_grain_size = false, reverb_mix = false, macro_1 = true } },
+  { label = "macro 1", on = 1, depth = 30, place = "direct", playing = false, engine_run = false,
+    owns = { v3_grain_pitch = false, reverb_mix = false, macro_1 = true } },
+  { label = "macro 1", on = 1, depth = 0, place = "idle", playing = false, engine_run = false,
+    owns = { macro_1 = true } },
+  { label = "rev mix", on = 1, depth = 30, place = "matrix", playing = false, engine_run = false,
+    owns = { v3_grain_pitch = false, reverb_mix = false, macro_1 = true } },
+  { label = "rev mix", on = 0, depth = 30, place = "off", playing = false, engine_run = false,
+    owns = { reverb_mix = false } },
+  { label = "v3 main", on = 1, depth = 30, place = "matrix", playing = false, engine_run = false,
+    owns = { v3_grain_density = false, v3_buf_pos = false, macro_1 = true } },
+}
+
+local function set_place_case(case)
+  if case.label == "none" then aim_index(1, 1) else aim(1, case.label) end
+  params:set(lfo_id(1, "depth"), case.depth)
+  params:set(lfo_id(1), case.on)
+end
+
+test("place answers each of its five values (#925)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local lfos = S.lib.lfos
+  local seen = {}
+  for _, case in ipairs(PLACE_CASES) do
+    set_place_case(case)
+    lfo_step(context)
+    assert_equal(lfos.place(1), case.place, case.label .. ", on " .. case.on .. ", depth " .. case.depth)
+    seen[case.place] = true
+  end
+  for _, name in ipairs({ "off", "idle", "engine", "direct", "matrix" }) do
+    assert_true(seen[name], "the cases reach " .. name)
+  end
+  -- a home key this build lacks plays nowhere (a PSET's or a scene's, kept: ruling 19)
+  params:set(lfo_id(1), 1); params:set(lfo_id(1, "depth"), 30)
+  S.matrix[S.lib.matrix.home_slot(1)].dest = "v9_no_such_param"
+  assert_equal(lfos.place(1), "idle", "an unknown home key: idle")
+  assert_equal(lfos.place(0), nil, "LFO 0 has no place")
+  assert_equal(lfos.place(S.constants.NUM_LFOS + 1), nil, "nor LFO 7")
+end)
+
+test("engine_playing, is_engine_run and owns answer as before in each place (#925)", function()
+  local context = load_strata(); finish_startup(context)
+  local lfos = local_value("S").lib.lfos
+  for _, case in ipairs(PLACE_CASES) do
+    set_place_case(case)
+    lfo_step(context)
+    local where = case.label .. ", on " .. case.on .. ", depth " .. case.depth .. " (" .. case.place .. ")"
+    assert_equal(lfos.place(1), case.place, where)
+    assert_equal(lfos.engine_playing(1), case.playing, where .. ": engine_playing")
+    assert_equal(lfos.is_engine_run(1), case.engine_run, where .. ": is_engine_run")
+    for id, owned in pairs(case.owns) do
+      assert_equal(lfos.owns(1, id), owned, where .. ": owns " .. id)
+    end
+  end
 end)
 
 end
