@@ -27,7 +27,7 @@ test("the modulation model follows the engine's LFO nodes, channels, routes and 
   load_strata()
   local S = local_value("S")
   local Model = require("modulation_model")
-  local model = Model.new(S.constants)
+  local model = Model.new(S.constants, h.engine_spec)
   local calls, call = call_list()
   call("setFastLfo", 0, 1, 0, 2, 0.5, 0.25, 0)
   model:feed(calls)
@@ -73,7 +73,7 @@ test("the modulation model's compare names where the engine differs from what th
   local context = load_strata()
   finish_startup(context)
   local S = local_value("S")
-  local model = require("modulation_model").new(S.constants)
+  local model = require("modulation_model").new(S.constants, h.engine_spec)
   model:feed(context.engine_calls)
   assert_equal(#model:compare(S), 0, "a fresh script: " .. table.concat(model:compare(S), "; "))
   S.lib.matrix.set_home(1, "v2_grain_pitch")
@@ -108,6 +108,59 @@ test("the modulation model's compare names where the engine differs from what th
   assert_true(contains(problems, "route 8"), "the route is named: " .. table.concat(problems, "; "))
 end)
 
+-- The guards are the engine's own numbers (h.engine_spec, read from its
+-- source): a note slot is ignored past fastModNoteSlots - 1, not past 0
+test("the modulation model guards a channel's note slot by the engine's fastModNoteSlots", function()
+  load_strata()
+  local S = local_value("S")
+  local spec = {}
+  for key, value in pairs(h.engine_spec) do spec[key] = value end
+  spec.fast_mod_note_slots = 2
+  local model = require("modulation_model").new(S.constants, spec)
+  local calls, call = call_list()
+  call("setFastOffset", 1, 1, 2, 0.25); call("setFastOffset", 1, 2, 2, 0.5)
+  model:feed(calls)
+  assert_equal(#model.errors, 1, "slot 1 taken, slot 2 ignored: " .. table.concat(model.errors, "; "))
+  assert_true(model.errors[1]:find("noteSlot 2", 1, true) ~= nil, "the ignored slot is named: " .. model.errors[1])
+  assert_true(not pcall(require("modulation_model").new, S.constants), "the engine's numbers are required")
+end)
+
+-- An LFO whose rate and depth follow a lower LFO: the model works out the
+-- rate and depth it plays itself (design 3.4 §2.4), never from Lua's own
+-- evaluation (effective_rate, effective_depth)
+test("the modulation model works out an LFO's modulated rate and depth itself", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local model = require("modulation_model").new(S.constants, h.engine_spec)
+  -- LFO 1 a square held at its top (value +1), aimed at nothing
+  params:set("strata_lfo1_shape", 3); params:set("strata_lfo1_rate", 0.003); params:set("strata_lfo1", 1)
+  -- LFO 2 on voice 2's pitch, its rate up and its depth down by LFO 1
+  S.lib.matrix.set_home(2, "v2_grain_pitch")
+  params:set("strata_lfo2_rate", 2); params:set("strata_lfo2_depth", 40)
+  params:set("strata_lfo2_rate_mod", 2); params:set("strata_lfo2_rate_mod_amt", 50)
+  params:set("strata_lfo2_depth_mod", 2); params:set("strata_lfo2_depth_mod_amt", -50)
+  params:set("strata_lfo2", 1)
+  for _ = 1, 3 do context.clock.advance_until(S.lfo_clock) end
+  model:feed(context.engine_calls)
+  assert_true(math.abs(model.lfos[1].rate - 4) < 0.02, "2 Hz x 4 ^ 0.5: " .. model.lfos[1].rate)
+  assert_true(math.abs(model.lfos[1].depth - 0.2) < 0.002, "40 % x (1 - 0.5): " .. model.lfos[1].depth)
+  local lfos = S.lib.lfos
+  local effective_rate, effective_depth = lfos.effective_rate, lfos.effective_depth
+  lfos.effective_rate = function() error("the model read Lua's effective_rate") end
+  lfos.effective_depth = function() error("the model read Lua's effective_depth") end
+  local ran, problems = pcall(model.compare, model, S)
+  lfos.effective_rate, lfos.effective_depth = effective_rate, effective_depth
+  assert_true(ran, "compare reads neither: " .. tostring(problems))
+  assert_equal(#problems, 0, "the modulated LFO agrees: " .. table.concat(problems, "; "))
+  -- and a node that kept the unmodulated rate is named
+  local calls, call = call_list()
+  for _, entry in ipairs(context.engine_calls) do calls[#calls + 1] = entry end
+  call("setFastLfo", 1, 1, 0, 0, 2, 0.2, 0)
+  model:feed(calls)
+  assert_true(contains(model:compare(S), "LFO 2: rate"), "the unmodulated rate is named")
+end)
+
 ---------------------------------------------------------------------------
 -- The walk (design section 6, #916): the LFOs turned on and off, their
 -- depth, home, shape and mode set by hand and silently, routings set and
@@ -130,8 +183,10 @@ local Model = require("modulation_model")
 -- follows); ended_runs_again, #969, a fault whose fix removes it: an
 -- envelope (loop off) whose run ended runs again in Lua's model when one
 -- of its times is raised past the time since its hit, which the engine's
--- ended EnvGen does not. A third, ulp_resend (#977), is the recall's
--- (needless_sends, below)
+-- ended EnvGen does not, and only when a time was raised since the end
+-- was seen. Three more are the walk's own, counted in state.allowed:
+-- ulp_resend (#977), the recall's (needless_sends, below); bar_sync and
+-- moving_send, the idle step's (idle_step, below)
 local WALK_ALLOWED = { waiting = true, ended_runs_again = true }
 
 -- The commands that start, move or stop a modulation node, which an idle
@@ -145,28 +200,21 @@ local function pick(random, list) return list[random(#list)] end
 -- A recall's send that only repeats the last one of its kind but for
 -- rounding (#977, package 2b: norns' Control:set_raw runs the action on any
 -- change of the raw value, and a recalled value maps to a raw value an ulp
--- or so from the one in force): the same command, and for a voice's
--- setVoiceParam or setGrainParam the same voice and param, every argument
--- equal to the last such call's or within Model.ENGINE.ulp of it
+-- or so from the one in force): a voice's setVoiceParam or setGrainParam
+-- (the one value a call: the commands #977 resends), the same voice and
+-- param as the last such call, its value within Model.ENGINE.ulp of that
+-- call's and not equal to it. An exact repeat is no rounding: it is a
+-- needless send (an action banged at every recall), never this allowance
+local ROUNDING_KINDS = { setVoiceParam = true, setGrainParam = true }
+
 local function same_but_rounding(entry, earlier)
-  if entry.name ~= earlier.name or #entry.args ~= #earlier.args then return false end
-  for index, value in ipairs(entry.args) do
-    local other = earlier.args[index]
-    if type(value) == "number" and type(other) == "number" then
-      if math.abs(value - other) > Model.ENGINE.ulp * math.max(1, math.abs(other)) then return false end
-    elseif value ~= other then
-      return false
-    end
-  end
-  return true
+  local value, other = entry.args[3], earlier.args[3]
+  if type(value) ~= "number" or type(other) ~= "number" or value == other then return false end
+  return math.abs(value - other) <= Model.ENGINE.ulp * math.max(1, math.abs(other))
 end
 
 local function same_kind(entry, earlier)
-  if entry.name ~= earlier.name then return false end
-  if entry.name == "setVoiceParam" or entry.name == "setGrainParam" then
-    return entry.args[1] == earlier.args[1] and entry.args[2] == earlier.args[2]
-  end
-  return true
+  return entry.name == earlier.name and entry.args[1] == earlier.args[1] and entry.args[2] == earlier.args[2]
 end
 
 -- The calls from index `from` on that are not a rounding resend of the last
@@ -176,7 +224,7 @@ local function needless_sends(state, from)
   local calls, found = state.context.engine_calls, {}
   for index = from + 1, #calls do
     local entry, resend = calls[index], false
-    for earlier = index - 1, 1, -1 do
+    for earlier = index - 1, ROUNDING_KINDS[entry.name] and 1 or index, -1 do
       if same_kind(entry, calls[earlier]) then
         resend = same_but_rounding(entry, calls[earlier])
         break
@@ -333,6 +381,20 @@ local MODULATION_WALK_OPS = {
     settle_macros(state)
     count(state, "bursts")
   end },
+  -- an LFO made clocked, then the clock brought to the step before a bar,
+  -- so the op's step falls before the bar and the idle step after it
+  { 1, "to a bar", function(state, random)
+    local S, context = state.S, state.context
+    local LFO = S.lib.lfos.LFO
+    params:set(lfo_param(walk_lfo(random), "mode"), 2)
+    context.clock.advance_until(S.lfo_clock)
+    local step, per_second = 1 / LFO.step_hz, clock.get_tempo() / 60
+    local beats_then = clock.get_beats() + step * per_second
+    local bar = (math.floor(beats_then / LFO.bar_beats) + 1) * LFO.bar_beats
+    local bar_time = util.time() + (bar - clock.get_beats()) / per_second
+    while util.time() + 2 * step < bar_time do context.clock.advance_until(S.lfo_clock) end
+    count(state, "bars")
+  end },
   { 1, "scatter", function(state, random)
     params:set(pick(random, { "scatter", "scatter_depth", "scatter_pos", "scatter_size" }),
       random(2) == 1 and random(2) - 1 or random(60))
@@ -347,46 +409,107 @@ local function source_values(S)
   return values
 end
 
-local function moved(before, after)
+-- The source keys whose value differs between two readings
+local function moved_keys(before, after)
+  local keys, any = {}, false
   for key, value in pairs(after) do
-    if before[key] ~= value then return true end
+    if before[key] ~= value then keys[key], any = true, true end
   end
-  return false
+  return keys, any
+end
+
+-- Every engine sender (S.engine_senders, the one way a param's value
+-- reaches the engine: lib/engine_sync.lua's deliver) wrapped, from the
+-- walk's setup, so a step's calls can be told apart by the param whose
+-- send made them: state.sender_windows gets {id, first, last} (the engine
+-- calls the sender made, outermost senders only) while state.recording.
+-- The wrappers call the sender they replace and change nothing else; a
+-- sender registered later is wrapped as it is set
+local function wrap_senders(state)
+  local senders, depth = state.S.engine_senders, 0
+  local function pack(...) return { n = select("#", ...), ... } end
+  local function wrap(id, send)
+    return function(...)
+      if not state.recording or depth > 0 then return send(...) end
+      local first = #state.context.engine_calls + 1
+      depth = depth + 1
+      local results = pack(pcall(send, ...))
+      depth = depth - 1
+      state.sender_windows[#state.sender_windows + 1] = { id = id, first = first, last = #state.context.engine_calls }
+      if not results[1] then error(results[2], 0) end
+      return (table.unpack or unpack)(results, 2, results.n)
+    end
+  end
+  for id, send in pairs(senders) do rawset(senders, id, wrap(id, send)) end
+  setmetatable(senders, { __newindex = function(t, id, send)
+    rawset(t, id, type(send) == "function" and wrap(id, send) or send)
+  end })
 end
 
 -- The idle step: with nothing waiting (the round robin, the budget, a fade,
--- the macros), a step with no op since the last sends nothing, but a
--- clocked engine LFO's bar sync and, while a source moved in the step, a
--- moved value (a Lua destination's; a channel's offset only when it moves
--- the channel by LFO.send_threshold, or to 0: what the matrix sends past,
--- since nothing waits); never a node's start, move or stop
+-- the macros), a step with no op since the last sends nothing but two
+-- named allowances, each counted (state.allowed): bar_sync, a clocked
+-- engine LFO's syncFastLfo in a step that crossed a bar (LFO.bar_beats) or
+-- in which the beats fell; moving_send, while sources moved in the step, a
+-- send of a param a moved source reaches (Model.reached_ids: every call it
+-- makes, by the sender windows) or a channel's offset that moves the
+-- channel by LFO.send_threshold, or to 0 (what the matrix sends past,
+-- since nothing waits). Any other call is needless: a node's start, move
+-- or stop, a sync off a bar, a param no moved source reaches, a call no
+-- sender made, a channel resent unchanged
 local function idle_step(state)
   local S, context = state.S, state.context
+  local LFO = S.lib.lfos.LFO
   local busy = Model.anything_waiting(S) or S.scene_transition_active or S.macro_clock ~= nil
-  local before, from = source_values(S), #context.engine_calls
+  local before, from, beats = source_values(S), #context.engine_calls, clock.get_beats()
+  state.sender_windows, state.recording = {}, true
   context.clock.advance_until(S.lfo_clock)
+  state.recording = false
   if busy then
     count(state, "idle_busy")
     return {}
   end
-  local source_moved, problems = moved(before, source_values(S)), {}
-  local sent, offsets, threshold = 0, {}, S.lib.lfos.LFO.send_threshold
-  local function needless(entry)
+  local moved, source_moved = moved_keys(before, source_values(S))
+  local reached = Model.reached_ids(S, moved)
+  local now_beats = clock.get_beats()
+  local bar_crossed = now_beats < beats or math.floor(now_beats / LFO.bar_beats) ~= math.floor(beats / LFO.bar_beats)
+  local problems, sent, offsets = {}, 0, {}
+  local by_call = {}   -- engine call index -> the sender window's id that made it
+  for _, window in ipairs(state.sender_windows) do
+    for index = window.first, window.last do by_call[index] = window.id end
+  end
+  local function allow(name) state.allowed[name] = (state.allowed[name] or 0) + 1 end
+  local function needless(entry, why)
     problems[#problems + 1] = "an idle step sent " .. entry.name .. "(" .. table.concat(entry.args, ", ") .. ")"
+      .. (why and (": " .. why) or "")
   end
   for index = from + 1, #context.engine_calls do
     local entry = context.engine_calls[index]
     local lfo = entry.name == "syncFastLfo" and entry.args[1] + 1
-    if lfo and params:get(lfo_param(lfo, "mode")) == 2 then
-      count(state, "idle_bar_syncs")
-    elseif NODE_COMMANDS[entry.name] or not source_moved then
+    if lfo then
+      if bar_crossed and params:get(lfo_param(lfo, "mode")) == 2 and state.model.lfos[lfo - 1] then
+        allow("bar_sync")
+      else
+        needless(entry, bar_crossed and "not a clocked LFO's node" or "no bar crossed")
+      end
+    elseif NODE_COMMANDS[entry.name] then
       needless(entry)
+    elseif not source_moved then
+      needless(entry, "no source moved")
     elseif entry.name == "setFastOffset" then
       local key = entry.args[1] .. " " .. entry.args[3]
       local had = offsets[key] or state.model.offsets[entry.args[1]][entry.args[3]]
       local value = entry.args[4]
-      if math.abs(value - had) < threshold and not (value == 0 and had ~= 0) then needless(entry) end
+      if math.abs(value - had) < LFO.send_threshold and not (value == 0 and had ~= 0) then
+        needless(entry, "the channel did not move")
+      else
+        allow("moving_send")
+      end
       offsets[key] = value
+    elseif by_call[index] and reached[by_call[index]] then
+      allow("moving_send")
+    else
+      needless(entry, by_call[index] and ("no moved source reaches " .. by_call[index]) or "no param's sender made it")
     end
     sent = sent + 1
   end
@@ -401,7 +524,7 @@ h.walk({
   setup = function(context, random)
     local S = local_value("S")
     local constants = S.constants
-    local state = { context = context, S = S, model = Model.new(constants), counts = {}, allowed = {}, problems = {},
+    local state = { context = context, S = S, model = Model.new(constants, h.engine_spec), counts = {}, allowed = {}, problems = {},
       voices = 3, scenes = 3, unchanged_scene = 4, routing_slots = 6, fade_seconds = 2,
       source_options = { constants.SOURCE_SYNTH, constants.SOURCE_SYNTH + 1, constants.SOURCE_INPUT, "another voice" } }
     -- the walk's homes, routing sources and destinations: voices 1-3's, a
@@ -438,7 +561,7 @@ h.walk({
       params:set(lfo_param(n, "rate"), S.lib.lfos.LFO.min_hz)
       params:set(lfo_param(n, "division"), #S.lib.lfos.LFO.divisions)
     end
-    toggle_voice(1)
+    toggle_voice(1)  -- voice 1 runs from init and voice 2 from the start-up: the walk starts with voice 2 alone
     -- three scenes, each with a few LFOs on homes of their own
     for scene = 1, state.scenes do
       for n = 1, constants.NUM_LFOS do
@@ -451,6 +574,7 @@ h.walk({
     end
     context.clock.advance_until(S.lfo_clock)
     state.model:feed(context.engine_calls)
+    wrap_senders(state)
     return state
   end,
   ops = MODULATION_WALK_OPS,
@@ -476,13 +600,15 @@ h.walk({
   reached = { "lfo_started", "lfo_stopped", "lfo_replaced", "lfo_moved", "home_engine_lua", "recalls", "fades",
     "fades_crossed", "unchanged_recalls", "silent_sets", "macro_depths", "routes_set", "routes_moved", "routes_stopped",
     "offsets_sent", "envelopes_ended", "idle_quiet", "allowed_waiting", "allowed_ended_runs_again",
-    "allowed_ulp_resend" },
+    "allowed_ulp_resend", "allowed_bar_sync", "allowed_moving_send" },
   counts = function(state)
     local counts = {}
     for name, value in pairs(state.model.counts) do counts[name] = value end
     for name, value in pairs(state.counts) do counts[name] = value end
     for name in pairs(WALK_ALLOWED) do counts["allowed_" .. name] = state.model.allowed[name] or 0 end
-    counts.allowed_ulp_resend = state.allowed.ulp_resend or 0
+    for _, name in ipairs({ "ulp_resend", "bar_sync", "moving_send" }) do
+      counts["allowed_" .. name] = state.allowed[name] or 0
+    end
     return counts
   end,
 })
