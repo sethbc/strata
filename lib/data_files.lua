@@ -300,16 +300,27 @@ return function(S)
 
   -- What is known of each data file this session (3.9, #895, plan ruling
   -- 8: every data file is read and written here, so its problem is kept
-  -- here and no reader changes), by path: load_problem, nil or
-  -- "unreadable" (the last read found a file it could not use, or the file
-  -- was set aside after a read); backup, the name it was set aside under
-  -- (nil: still in place); write_problem, nil or "not saved" (the last
-  -- write failed); written, whether a write came after the last read (a
-  -- set_aside then keeps a file on purpose, as the scenes before a PSET
-  -- load do, and is no problem). order: the paths in the order first kept
-  local known = {records = {}, order = {}}
+  -- here and no reader changes), by path: load_problem, nil, "unreadable"
+  -- (the last read could not parse it) or "damaged" (it parsed, and its
+  -- reader set it aside: refused whole, or, voices.data, its damaged
+  -- presets kept, #848); backup, the name it was set aside under (nil:
+  -- still in place); write_problem, nil or "not saved" (the last write
+  -- failed); written, whether a write that worked came after the last read
+  -- (a set_aside then keeps a file on purpose, as the scenes before a PSET
+  -- load do, and is no problem). order: the paths in the order each was
+  -- first read, written or set aside. The files whose modules keep their own record (own_records, in
+  -- Strata's data folder: S.scene_file, S.buffer_file) get none here (one
+  -- fact, one record)
+  local known = {records = {}, order = {}, own_records = {"scenes.data", "buffers.data"}}
 
+  -- path's record, made at its first use; nil for a file whose module
+  -- keeps its own (the folder is the scenes' scene_data_dir, read at call
+  -- time: lib/scenes.lua loads after this module)
   local function record_of(path)
+    local scenes = S.lib.scenes
+    for _, file in ipairs(known.own_records) do
+      if scenes and path == scenes.scene_data_dir .. file then return nil end
+    end
     local record = known.records[path]
     if not record then
       record = {}
@@ -319,20 +330,27 @@ return function(S)
     return record
   end
 
-  -- A read's outcome: one that could not use the file keeps it as
-  -- unreadable and in place; any other (a value, or no file) ends the
-  -- file's problems, as a scenes load does
+  -- A read's outcome: one that could not parse the file keeps it as
+  -- unreadable and in place; a value ends the file's problems, as a scenes
+  -- load does; no file keeps a set-aside's row (its backup is still on the
+  -- card, as a write keeps it, #868's rule) and ends any other
   local function note_read(path, problem)
     local record = record_of(path)
+    if not record then return end
+    record.write_problem, record.written = nil, false
+    if problem == "missing" and record.backup then return end
     record.load_problem = problem == "unreadable" and "unreadable" or nil
-    record.backup, record.write_problem, record.written = nil, nil, false
+    record.backup = nil
   end
 
-  -- The files with a problem, in the order first found: a list of
-  -- {file = <path>, problem = "not saved" (the last write failed) or
-  -- "unreadable" (the last read could not use it), backup = <the name it
-  -- was set aside under>, or nil while it is in place}. A copy; SETUP draws
-  -- a row for each (lib/pages/setup.lua)
+  -- The files with a problem, in the order each was first read, written or
+  -- set aside (the start steps read most of them first): a list of
+  -- {file = <path>, problem = "not saved" (the last write failed),
+  -- "unreadable" (the last read could not parse it) or "damaged" (it
+  -- parsed and its reader set it aside), backup = <the name it was set
+  -- aside under>, or nil while it is in place}. A copy; SETUP draws a row
+  -- for each (lib/pages/setup.lua). Never scenes.data or buffers.data in
+  -- Strata's data folder, whose modules keep their own records
   function M.problems()
     local list = {}
     for _, path in ipairs(known.order) do
@@ -402,12 +420,12 @@ return function(S)
   -- (this write replaced it); one set aside keeps its row (#868's rule)
   local function note_write(path, done)
     local record = record_of(path)
-    record.written = true
+    if not record then return end
     if not done then
       record.write_problem = "not saved"
       return
     end
-    record.write_problem = nil
+    record.written, record.write_problem = true, nil
     if not record.backup then record.load_problem = nil end
   end
 
@@ -442,13 +460,15 @@ return function(S)
   -- Move path out of the way, to its first free backup name: that name, or
   -- nil and why (every name taken, or the rename failed; path is then still
   -- in place). A file set aside after its read (its reader could not use
-  -- it) is kept as unreadable (problems()): under its backup's name, or in
-  -- place when it could not be moved; one this session wrote since is
-  -- kept on purpose and is no problem
+  -- it) is kept (problems()), under its backup's name or in place when it
+  -- could not be moved: unreadable when the read could not parse it,
+  -- damaged when it parsed; one this session wrote since (a write that
+  -- worked) is kept on purpose and is no problem
   local function note_set_aside(path, backup)
     local record = record_of(path)
-    if record.written then return end
-    record.load_problem, record.backup = "unreadable", backup
+    if not record or record.written then return end
+    record.load_problem = record.load_problem == "unreadable" and "unreadable" or "damaged"
+    record.backup = backup
   end
 
   function M.set_aside(path, suffix)

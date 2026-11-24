@@ -850,6 +850,58 @@ test("an unusable file has a row under each of the three rules", function()
   assert_true(texts:find("macros file unreadable|left in place", 1, true) ~= nil, "still in place: " .. texts)
 end)
 
+-- 5f's review: the scenes' and buffers' files have their own records
+-- (S.scene_file, S.buffer_file), so S.lib.data_files keeps none of them; a
+-- scenes file below the floor reads fine and is then set aside, which
+-- data_files would call damaged though it is only older
+test("a scenes file below the floor and an unreadable buffers file leave problems() empty; SETUP says older", function()
+  local subdir = "setup-own-records-" .. math.random(1, 1e9)
+  local dir = h.data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  write_text(dir .. "scenes.data", h.tabutil_text({ version = 8, scenes = {} }))
+  write_text(dir .. "buffers.data", "return {")
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  assert_true(util.file_exists(dir .. "scenes.data.bak"), "the scenes file was set aside")
+  assert_equal(#S.lib.data_files.problems(), 0, "no record of either file in data_files")
+  local texts = status_texts()
+  assert_true(texts:find("scenes older, kept|as scenes.data.bak|buffers unreadable, kept", 1, true) ~= nil, texts)
+  assert_true(not texts:find("damaged", 1, true), texts)
+  -- a write of either is not kept there either
+  S.lib.scenes.save(1)
+  assert_equal(#S.lib.data_files.problems(), 0, "a scenes write keeps no record in data_files")
+end)
+
+-- 5f's review: a voices.data read with damaged presets loads its good
+-- ones; its first save sets it aside (#848). Its row says damaged, not
+-- unreadable, and a failed write before it does not hide the set-aside
+test("a partly damaged voices.data reads damaged, kept after its first save, even after a failed write", function()
+  local subdir = "setup-voices-damaged-" .. math.random(1, 1e9)
+  local dir = h.data_root .. subdir .. "/strata/"
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S0 = local_value("S")
+  local presets = S0.lib.voice_presets
+  assert_true(presets.save(2, 1, "good"), "a good preset")
+  assert_true(presets.save(3, 2, "bad"), "one to damage")
+  local value = S0.lib.data_files.read(dir .. "voices.data")
+  value.presets[2].name = 7
+  assert_true(S0.lib.data_files.write(dir .. "voices.data", value), "damaged")
+  context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  presets = S.lib.voice_presets
+  os.execute("mkdir -p '" .. dir .. "voices.data.part/inside'")  -- the .part is a folder: the write fails
+  assert_true(not presets.save(4, 3, "third"), "the save is refused")
+  assert_true(status_texts():find("voices file not saved", 1, true) ~= nil, status_texts())
+  h.remove_tree(dir .. "voices.data.part")
+  assert_true(presets.save(4, 3, "third"), "the next save writes")
+  local texts = status_texts()
+  assert_true(texts:find("voices damaged, kept|as voices.data.bak", 1, true) ~= nil, texts)
+  assert_true(not texts:find("not saved", 1, true), texts)
+  show_page("SETUP"); enc(2, 60); redraw()
+  assert_true(screen_shows(context, "voices damaged, kept"), "drawn")
+  assert_screen_layout(context, "SETUP a partly damaged voices.data")
+end)
+
 -- 3.9 (#931): a size with no layout is dark and dead; SETUP says so
 test("a grid of a size with no layout reads no layout on SETUP", function()
   local context = load_strata(); finish_startup(context)

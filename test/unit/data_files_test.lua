@@ -382,7 +382,7 @@ test("a backup never replaces an earlier one", function()
 end)
 
 -- 3.9 (#895, ruling 8): read, set_aside and write keep each file's problem,
--- and problems() lists them for SETUP, in the order first found
+-- and problems() lists them for SETUP, in the order each was first touched
 local function problem_of(data_files, path)
   for _, entry in ipairs(data_files.problems()) do
     if entry.file == path then return entry end
@@ -417,7 +417,7 @@ test("problems() keeps a set-aside's backup, a failed write and a write over an 
   assert_equal(problem_of(data_files, kept), nil, "a good read is no problem")
   assert_equal(data_files.set_aside(kept, ".bak"), kept .. ".bak")
   assert_equal(problem_of(data_files, kept).backup, kept .. ".bak", "set aside: kept as its backup")
-  assert_equal(problem_of(data_files, kept).problem, "unreadable")
+  assert_equal(problem_of(data_files, kept).problem, "damaged", "it read, and its reader refused it")
   -- a good write then keeps the set-aside's row (#868's rule)
   assert_true(data_files.write(kept, { version = 1 }))
   assert_equal(problem_of(data_files, kept).backup, kept .. ".bak", "the set-aside's row stays")
@@ -430,9 +430,15 @@ test("problems() keeps a set-aside's backup, a failed write and a write over an 
   assert_equal(problem_of(data_files, in_place).problem, "not saved", "the write's problem shows first")
   assert_true(data_files.write(in_place, { version = 1 }))
   assert_equal(problem_of(data_files, in_place), nil, "written over: no row")
-  -- the order first found
-  local listed = data_files.problems()
-  assert_equal(listed[#listed].file, kept)
+  -- the order each was first touched: three files with a problem, kept first, then
+  -- unparsed, then failed (whose failed write comes after the others' reads)
+  local unparsed, failed = context.data_dir .. "unparsed.data", context.data_dir .. "no/such/failed.data"
+  write_text(unparsed, "return {")
+  data_files.read(unparsed)
+  assert_equal(data_files.write(failed, { version = 1 }), false)
+  local order = {}
+  for _, entry in ipairs(data_files.problems()) do order[#order + 1] = entry.file end
+  assert_equal(table.concat(order, "|"), table.concat({ kept, unparsed, failed }, "|"), "the order first touched")
   -- a file this session wrote, then set aside on purpose (the live scenes
   -- kept before a PSET load): no problem
   local mine = context.data_dir .. "mine.data"
@@ -442,5 +448,37 @@ test("problems() keeps a set-aside's backup, a failed write and a write over an 
   -- problems() is a copy: changing it changes nothing kept
   data_files.problems()[1].backup = "x"
   assert_equal(problem_of(data_files, kept).backup, kept .. ".bak")
+end)
+
+-- 5f's review: a missing read keeps a set-aside's row, as a write does
+-- (#868's rule), so a probe read or a PSET reload does not drop it while
+-- the backup is on the card; and only a write that worked makes a later
+-- set_aside a file kept on purpose
+test("a missing read keeps a set-aside's row; a failed write leaves the next set_aside recorded", function()
+  local context = load_strata()
+  local data_files = local_value("S").lib.data_files
+  local side = context.data_dir .. "probe.gestures.data"
+  write_text(side, "return {")
+  data_files.read(side)
+  assert_equal(data_files.set_aside(side, ".bak"), side .. ".bak")
+  assert_equal(select(2, data_files.read(side)), "missing")
+  local entry = problem_of(data_files, side)
+  assert_true(entry ~= nil, "the set-aside's row stays after a missing read")
+  assert_equal(entry.backup, side .. ".bak"); assert_equal(entry.problem, "unreadable")
+  -- a good read still ends it
+  write_text(side, data_files.encode({ version = 1 }))
+  data_files.read(side)
+  assert_equal(problem_of(data_files, side), nil, "a good read ends the row")
+  -- read well, a write that fails, then set aside: a problem, with its backup
+  local presets = context.data_dir .. "presets.data"
+  write_text(presets, data_files.encode({ version = 1 }))
+  data_files.read(presets)
+  local restore = watch_writes("presets.data", { at = "write", after = 0 })
+  assert_equal(data_files.write(presets, { version = 2 }), false)
+  restore()
+  assert_equal(data_files.set_aside(presets, ".bak"), presets .. ".bak")
+  entry = problem_of(data_files, presets)
+  assert_true(entry ~= nil and entry.backup == presets .. ".bak", "a failed write is no write of this session's")
+  assert_equal(entry.problem, "not saved", "the write's problem shows first")
 end)
 end
