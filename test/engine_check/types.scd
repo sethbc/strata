@@ -551,6 +551,42 @@ server.sync;
                 waited, now !? { now.defName }, held, kills.(units), tracked, onServer));
         settle.value;
 
+        // "types: a type switch sent to a stopped, spectral-frozen voice"
+        // (#979): voiceOff, then setVoiceType while the Resonator releases,
+        // then voiceOn. The switch only records the type (no node: the
+        // voice has no live voice synth); the start cuts the releasing
+        // Resonator (gateVoice's rule) and starts the type's def, and the
+        // freeze holds throughout (frozen spectral, the ring's writer the
+        // same spectral node). Two voice synths at most, tracked after each
+        // command and on the server after each sync
+        old = freezeSpectral.value;
+        tracked = 0; onServer = 0;
+        held = target.ringWriterFor(voice);
+        run.(\voiceOff, voice);
+        bound.value;
+        server.sync; onServer = max(onServer, serverVoiceSynths.(target, voice));
+        units = h.wireUnits({ run.(\setVoiceType, voice, 1) });
+        bound.value;
+        waited = [target.synths[key].isNil, target.releasingSynths[voice][key] === old, target.voiceType(voice) == 1,
+            target.cuttingSynths[voice].isEmpty, units.flatten(1).isEmpty];
+        server.sync; onServer = max(onServer, serverVoiceSynths.(target, voice));
+        run.(\voiceOn, voice, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+        bound.value;
+        now = target.synths[key];
+        // read at once: the cut ends within switchCutTime (50 ms), about a
+        // sync and a tree query
+        units = [target.cuttingSynths[voice].includes(old), target.releasingSynths[voice][key].isNil];
+        server.sync; onServer = max(onServer, serverVoiceSynths.(target, voice));
+        check.(waited.every(_.value) and: { now.notNil } and: { now !== old } and: { now.defName.asSymbol == \strataFM }
+            and: { units.every(_.value) }
+            and: { target.areaState[\freeze][\frozen][voice] } and: { target.spectralHoldsVoice(voice) }
+            and: { target.ringWriterFor(voice) === held } and: { held.defName.asSymbol == \strataRingWriteSpectral }
+            and: { tracked <= 2 } and: { onServer <= 2 },
+            "types: a type switch sent to a stopped, spectral-frozen voice is recorded, and its start cuts the releasing voice synth and starts the type's def under the freeze (#979: at the switch [no live voice synth, the Resonator releasing, type 1, none cutting, nothing sent] %; then %, the Resonator [cutting, no longer releasing] %, frozen % spectral %, the same writer %; voice synths at most % tracked and % on the server)".format(
+                waited, now !? { now.defName }, units, target.areaState[\freeze][\frozen][voice],
+                target.spectralHoldsVoice(voice), target.ringWriterFor(voice) === held, tracked, onServer));
+        settle.value;
+
         // freezeMode 0 while frozen: the voice freezes again in hold
         // (setFreezeMode: unfreeze, then freeze), and that unfreeze applies
         // the switch: hold switches at once
