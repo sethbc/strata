@@ -378,16 +378,23 @@ function Walk.clock(state, seconds)
     group[#group + 1] = event
   end
   -- `possible`, while a tie leaves the editor's key to the code: the keys
-  -- (entries, or false for none) the editor may be open for. A group of
-  -- holds alone opens one of them, whatever their order; a group with a
-  -- replacement or NV's hold may also have closed it, or kept the one before
-  -- it; a key whose gesture ended can be none of them. nil: no doubt
+  -- (entries, or false for none) the editor may be open for, each once,
+  -- over every order of the group's events. A held step whose hold is due
+  -- (its gesture standing as the group starts) may be the last to open
+  -- it, unless its gesture ended; the editor from before stays only when
+  -- every due hold's gesture may end before it fires; none is a result
+  -- only when an event of the group ends the gesture of a key the editor
+  -- may be open for (a replacement, NV's hold). nil: no doubt
   local possible, editor_before = nil, model.editor
   for _, group in ipairs(groups) do
-    local fired, closes = {}, false
+    local due = {}
+    for _, event in ipairs(group) do
+      if event.entry and event.entry.kind == "step" and event.entry.deadline and not event.entry.dropped then
+        due[#due + 1] = event.entry
+      end
+    end
     for _, event in ipairs(group) do
       if event.voice then
-        closes = true
         Model.replaced(model, event.voice)
       elseif event.entry.deadline then
         local entry = event.entry
@@ -396,44 +403,37 @@ function Walk.clock(state, seconds)
         if entry.kind == "step" and not entry.dropped then
           entry.consumed = true
           model.editor = entry
-          fired[#fired + 1] = entry
         elseif entry.kind == "nv" then
-          closes = true
           model.chooser = true
           Model.end_pane(model, 1)
         end
       end
     end
-    if #group > 1 then
-      state.counts.tied = state.counts.tied + 1
+    -- a tie, or any group after one (a group of one in no doubt narrows
+    -- the set by the same rule)
+    if #group > 1 or possible then
+      if #group > 1 then state.counts.tied = state.counts.tied + 1 end
       local before = possible or { editor_before or false }
       local next_possible = {}
       local function add(entry)
-        if entry and entry.dropped then return end
         for _, known in ipairs(next_possible) do
           if known == entry then return end
         end
         next_possible[#next_possible + 1] = entry
       end
-      for _, entry in ipairs(fired) do add(entry) end
-      if closes or #fired == 0 then
-        for _, entry in ipairs(before) do add(entry) end
-        add(false)
+      local every_due_ended, some_ended = true, false
+      for _, entry in ipairs(due) do
+        if entry.dropped then some_ended = true else every_due_ended = false; add(entry) end
       end
-      possible = next_possible
-    elseif possible then
-      -- after a tie, one event in no doubt: a hold opens its key's editor, a
-      -- replacement or NV's hold ends what it ends
-      if #fired == 1 then
-        possible = { fired[1] }
-      else
-        local kept = {}
-        for _, entry in ipairs(possible) do
-          if entry and entry.dropped then entry = false end
-          kept[#kept + 1] = entry
+      for _, entry in ipairs(before) do
+        if entry and entry.dropped then
+          some_ended = true
+        elseif every_due_ended then
+          add(entry)
         end
-        possible = kept
       end
+      if some_ended then add(false) end
+      possible = next_possible
     end
     editor_before = model.editor
   end
@@ -788,6 +788,43 @@ h.test("the grid walk's tie: the editor is open for one of the keys whose holds 
     else
       h.assert_equal(table.concat(problems, "; "), "", "the editor the code opened is one of the two")
       h.assert_true(h.shown_step_editor() == "1 5 1" or h.shown_step_editor() == "2 6 1", "open for one of them")
+    end
+  end
+end)
+
+-- A tie that can leave no editor closed: voice 3's step holds the editor;
+-- two held steps of voices 1 and 2 pressed at one instant have their
+-- patterns replaced at one instant (a tie of replacements, neither the
+-- editor's voice) before their holds come due (a tie of holds whose
+-- gestures ended). Neither tie can close voice 3's editor, so its editor
+-- closed behind the model's back is named, and the set names each key once
+h.test("the grid walk's tie: no editor is allowed only where an event of the tie can leave none", function()
+  for _, close in ipairs({ false, true }) do
+    local context = h.load_strata()
+    h.finish_startup(context)
+    local state = walk_state(context, "128h", function() return 0 end)
+    local S = state.S
+    run_op(state, Walk.press, 1, 3)
+    run_op(state, Walk.clock, 0.4)
+    h.assert_equal(h.shown_step_editor(), "3 1 1", "voice 3's step 1 holds the editor")
+    run_op(state, Walk.press, 5, 1)
+    run_op(state, Walk.press, 6, 2)
+    local problems = run_op(state, function(walk_now)
+      clock.run(function()
+        clock.sleep(0.1)
+        S.lib.sequencer.replace_pattern(1, {})
+        S.lib.sequencer.replace_pattern(2, {})
+      end)
+      Walk.clock(walk_now, 0.4)
+      if close then S.lib.pages_seq.close_step_editor(WALK.port) end  -- behind the model's back
+    end)
+    h.assert_equal(state.counts.tied, 2, "the replacements were one tie, the holds another")
+    if close then
+      h.assert_equal(table.concat(problems, "; "), "step editor: after a tie, open none, not one of 3 1; "
+        .. "step editor: expected 3 1 1, open none", "an editor closed where no event could close it is named")
+    else
+      h.assert_equal(table.concat(problems, "; "), "", "voice 3's editor stays")
+      h.assert_equal(h.shown_step_editor(), "3 1 1", "still open")
     end
   end
 end)
