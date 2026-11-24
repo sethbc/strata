@@ -1,0 +1,17 @@
+version: 2
+# Dependabot moves the workflow's action pins (each a full commit with its
+# version in a comment, #533) in one pull request a month: every action is
+# one group, so the cache steps stay one release of actions/cache (a docs
+# test). The Docker image (test/docker/sc313) is left out: its Ubuntu must
+# stay the runner's. test/unit/docs_test.lua checks this file.
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
