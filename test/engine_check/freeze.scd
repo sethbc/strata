@@ -35,7 +35,7 @@ var gapLimitSeconds = 0.05, block = server.options.blockSize, headStepFrames = s
 // the least a hold's 0.3 s pause keeps its head still at once (s): the
 // pause less the commands' slack on either side
 var holdStillSeconds = 0.3 - (2 * 0.06);
-var steps, stepBus, stepProbe, gapBus, gapProbe, copyHead, copiedAt, writerNow, writers;
+var steps, stepBus, stepProbe, gapBus, gapProbe, copyHead, copiedAt, writerNow, writers, holdHead, headResponders;
 
 // A grain synth's reads while seconds pass: [largest lookback, smallest
 // lookback, largest read, smallest read, seconds with a grain]. Reads only
@@ -722,6 +722,45 @@ timecode.free;
 h.stopAllVoices;
 engine.numVoices.do({ arg voice; command.(\setGrainParam, voice, \freeze, 0.0); command.(\setGrainParam, voice, \freezeMode, 0.0) });
 server.sync;
+
+// ---- A ring head read that times out frees its responder (#1014) ----
+// The server's reply to a head read of the input ring's phase bus is held
+// in sclang (holdHead, outrings.scd's method, #998): the filter that
+// stands in for the default OSC dispatcher keeps the first /c_set of that
+// bus and lets it go only when the hold ends, so the read gives up at its
+// 1 s whatever the machine's speed. Counted before the hold ends (the held
+// reply would free a responder still waiting for it): no /c_set responder
+// of that bus is left registered
+holdHead = { arg index, body;
+    var dispatcher = OSCFunc.defaultDispatcher, held, filter, keeper;
+    // a responder of its own keeps the dispatcher registered while the
+    // filter stands in for it (one left with none unregisters itself)
+    keeper = OSCFunc({}, '/strataCheckHoldHead', server.addr);
+    filter = { arg msg, time, addr, recvPort;
+        if (held.isNil and: { msg[0] == '/c_set' } and: { msg[1] == index } and: { addr == server.addr }) {
+            held = [msg, time, addr, recvPort]
+        } { dispatcher.value(msg, time, addr, recvPort) }
+    };
+    thisProcess.replaceOSCRecvFunc(dispatcher, filter);
+    protect { body.value } {
+        thisProcess.replaceOSCRecvFunc(filter, dispatcher);
+        held !? { dispatcher.value(*held) };
+        keeper.free;
+    };
+};
+headResponders = { arg index;
+    AbstractResponderFunc.allFuncProxies.values.flat.count({ arg each;
+        each.isKindOf(OSCFunc) and: { each.path == '/c_set' } and: { each.argTemplate == [index] } })
+};
+readings = [headResponders.(inputRing[2].index)];
+holdHead.(inputRing[2].index, {
+    readings = readings ++ [engine.areaCall(\ringHeadFrame, inputRing[2]), headResponders.(inputRing[2].index)];
+});
+server.sync;
+readings = readings ++ [headResponders.(inputRing[2].index)];
+check.((readings[0] == 0) and: { readings[1].isNil } and: { readings[2] == 0 } and: { readings[3] == 0 },
+    "freeze: a ring head read whose reply is held past its 1 s gives up and frees its responder (#1014: /c_set responders on the bus before %, the read's answer %, responders once it gave up %, after the hold %)".format(
+        readings[0], readings[1], readings[2], readings[3]));
 
 // ---- Spectral writers (a high engine) ----
 root = h.tempDir +/+ "freeze-high/";

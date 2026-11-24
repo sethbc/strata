@@ -670,12 +670,18 @@
 
     // A ring writer's frame now (on its phase bus: the input writer's, or a
     // read voice's output ring writer's), inside a routine; nil if the
-    // server does not answer
+    // server does not answer within 1 s. The reply's responder is its own
+    // (Bus.get's could not be freed), a one-shot of the bus's /c_set, and
+    // is freed on both paths, the reply and the timeout (#1014), so a server
+    // that never answers leaves none behind
     ringHeadFrame { arg bus;
-        var condition = Condition(false), value;
-        bus.get({ arg frame; value = frame; condition.test = true; condition.signal });
+        var condition = Condition(false), value, server = context.server, reply;
+        reply = OSCFunc({ arg msg; value = msg[2]; condition.test = true; condition.signal },
+            '/c_set', server.addr, argTemplate: [bus.index]).oneShot;
+        server.listSendMsg([\c_get, bus.index]);
         SystemClock.sched(1, { condition.test = true; condition.signal; nil });
         condition.wait;
+        reply.free;
         ^value
     }
 
