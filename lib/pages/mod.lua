@@ -717,7 +717,15 @@ return function(S)
         end}
       end
     end
-    if #draws == 0 then return nil end
+    if #draws == 0 then
+      -- nothing to randomize, but a learn's undo held here is still reached
+      -- (#927: a learn that left its routing incomplete); else no spec, so
+      -- the hint keeps the hold's K2:clear
+      if S.lib.mutation.undo_for(UI_PAGES.index.MOD, "matrix", nil) then
+        return {page = UI_PAGES.index.MOD, section = "matrix", voice = nil, draws = {}}
+      end
+      return nil
+    end
     return {page = UI_PAGES.index.MOD, section = "matrix", voice = nil, draws = draws}
   end
 
