@@ -158,7 +158,7 @@ test("feedback sends at most 32 a tick, newest values, none lost", function()
   for v = 1, local_value("S").constants.NUM_VOICES do params:set("v" .. v .. "_amp", 0.3 + v / 100); params:set("v" .. v .. "_mute", 1) end
   params:set("v1_freq", 300); params:set("v1_freq", 310)
   for v = 2, local_value("S").constants.NUM_VOICES do params:set("v" .. v .. "_freq", 200 + v) end
-  local changed = 16 + 14 + 7
+  local changed = 16 + 3 * local_value("S").constants.NUM_VOICES  -- the macros; each voice's amp, mute and freq
   clear(context)
   -- the clock sleeps 1/15 s between ticks: the first tick falls inside this step
   context.clock.run_for(1 / 15 + 0.001)

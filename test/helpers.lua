@@ -1358,7 +1358,7 @@ end
 -- Put every voice into a distinctive, non-default state through params
 local function scramble_state(seed)
   math.randomseed(seed)
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     -- source first: randomize_voice then picks buffer or synth params
     params:set("v" .. voice_idx .. "_source", math.random(1, 10))
     randomize_voice(voice_idx)

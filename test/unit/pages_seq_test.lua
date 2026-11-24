@@ -733,14 +733,16 @@ test("a one-note step shows add note, and the cursor stays on the notes when the
   alt_step(1)
   assert_equal(S.cursors.seq_step, 2)
   assert_equal((cursor_row(context)), "note", "a step with no notes: the note row")
-  local seven = {}
-  for index = 1, 7 do seven[index] = index end
+  -- a step one note short of a full chord (SEQ.max_step_notes), then a full one
+  local most, seven, eight = seq.SEQ.max_step_notes, {}, {}
+  for index = 1, most - 1 do seven[index] = index end
+  for index = 1, most do eight[index] = index end
   seq.set_step_attr(1, 1, "notes", seven)
-  seq.set_step_attr(1, 2, "notes", {1, 2, 3, 4, 5, 6, 7, 8})
+  seq.set_step_attr(1, 2, "notes", eight)
   alt_step(-1)
   go_to(context, "add note")
   alt_step(1)
-  assert_equal((cursor_row(context)), "note 8", "eight notes: the last note row")
+  assert_equal((cursor_row(context)), "note " .. most, "a full chord: the last note row")
 end)
 
 test("SEQ's layout states count a full chord as the sequencer's most notes", function()

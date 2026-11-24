@@ -159,7 +159,9 @@ test("each voice's envelope follows its own hits", function()
   sync.retrigger(3, 1, "step")
   context.set_time(300.05)
   assert_near(envelopes.value(3), 0.5, 1e-9, "a step fires voice 3's")
-  for _, v in ipairs({1, 2, 4, 5, 6, 7}) do assert_equal(envelopes.value(v), 0, "not voice " .. v .. "'s") end
+  for v = 1, S.constants.NUM_VOICES do
+    if v ~= 3 then assert_equal(envelopes.value(v), 0, "not voice " .. v .. "'s") end
+  end
   -- a MIDI note on voice 4 (its channel, 4), through lib/midi_in.lua
   assert_true(not S.voices[4].active, "voice 4 is stopped: the note starts it")
   context.midi.send(1, {type = "note_on", note = 60, vel = 100, ch = 4})
@@ -192,7 +194,7 @@ test("each voice's envelope follows its own hits", function()
   context.set_time(302.05)
   assert_near(envelopes.value(2), 0.5, 1e-9, "a chord step fires voice 2's once")
   assert_equal(envelopes.value(0), 0, "no voice 0")
-  assert_equal(envelopes.value(8), 0, "no voice 8")
+  assert_equal(envelopes.value(S.constants.NUM_VOICES + 1), 0, "no voice past the last")
 end)
 
 test("the seven are sources with six fields each", function()

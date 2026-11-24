@@ -691,7 +691,8 @@ test("the destinations are none, the globals, each voice's together, then the ma
   local labels = {}
   for index, destination in ipairs(destinations) do labels[index] = destination.label end
   assert_equal(table.concat(labels, ","), table.concat(expected, ","), "the whole list, in order")
-  assert_equal(#destinations, 136, "1 + 14 + 7 x 15 + 16: today's destinations, each once")
+  assert_equal(#destinations, 1 + 14 + S.constants.NUM_VOICES * 15 + 16,
+    "1 + 14 + NUM_VOICES x 15 + 16 (136): today's destinations, each once")
   -- an LFO's destination is its home routing (the groundwork before 3.8):
   -- entry index's home id is its key ("" for none), and back
   assert_equal(params.lookup[lfo_id(6, "dest")], nil, "no destination param")
@@ -854,7 +855,7 @@ test("a destination registered after init's list joins its voice's group", funct
     assert_equal(probe, amp + 1, "v" .. voice_idx .. " probe follows the voice's other registered ones")
     assert_equal(destinations[probe].group, "voice " .. voice_idx)
     assert_equal(destinations[probe].key, "v" .. voice_idx .. "_freq")
-    if voice_idx < 7 then assert_equal(destinations[probe + 1].label, "v" .. (voice_idx + 1) .. " main") end
+    if voice_idx < S.constants.NUM_VOICES then assert_equal(destinations[probe + 1].label, "v" .. (voice_idx + 1) .. " main") end
   end
   local gprobe = destination_index("gprobe")
   assert_equal(gprobe, destination_index("shim rev") + 1, "a registered global joins the globals (after 2a's shim rev)")

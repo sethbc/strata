@@ -2738,7 +2738,7 @@ local function prepare_recall_run(run)
   scramble_state(100 + run)
   params:set("reverb_mix", 0.62); params:set("filter_type", 2); params:set("strata_lfo1", 0)
   for voice = 1, S.constants.NUM_VOICES do
-    local plan = recall_combination(((run - 1) * 7 + voice - 1) % 24)
+    local plan = recall_combination(((run - 1) * S.constants.NUM_VOICES + voice - 1) % 24)
     params:set("v" .. voice .. "_source", plan.scene_source)
     set_active(voice, plan.scene_active)
     if voice % 2 == 1 then toggle_lock(voice) end
@@ -2748,7 +2748,7 @@ local function prepare_recall_run(run)
   scramble_state(200 + run)
   params:set("reverb_mix", 0.15); params:set("filter_type", 1); params:set("strata_lfo1", 1)
   for voice = 1, S.constants.NUM_VOICES do
-    local plan = recall_combination(((run - 1) * 7 + voice - 1) % 24)
+    local plan = recall_combination(((run - 1) * S.constants.NUM_VOICES + voice - 1) % 24)
     params:set("v" .. voice .. "_source", plan.now_source)
     set_active(voice, plan.now_active)
     if voice <= 2 then toggle_lock(voice) end
