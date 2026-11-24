@@ -253,10 +253,9 @@ test("arc FX ring 3 turns the delay's division while it is synced, and shows it"
   assert_equal(params:get("delay_division"), 7)
 end)
 
--- #933: ring 3's carry belongs to the division it was turned on (its
--- context), so an unsynced sweep of delay_time between neither takes it
--- nor forgets it
-test("arc FX ring 3's carry belongs to the division across an unsynced turn", function()
+-- ring 3's carry belongs to the division alone: a turn while the delay is
+-- unsynced sweeps delay_time and forgets it
+test("arc FX ring 3's unsynced turn forgets the division's carry", function()
   local context = load_strata()
   context.arc.plug(1)
   show_page("FX")
@@ -269,7 +268,9 @@ test("arc FX ring 3's carry belongs to the division across an unsynced turn", fu
   assert_true(params:get("delay_time") > time, "unsynced, the turn sweeps delay_time")
   params:set("delay_sync", 1)
   context.arc.turn(1, 3, 5)
-  assert_equal(params:get("delay_division"), 8, "the division's own 15 carried ticks and 5 more")
+  assert_equal(params:get("delay_division"), 7, "the carry is gone: 5 ticks step nothing")
+  context.arc.turn(1, 3, 15)
+  assert_equal(params:get("delay_division"), 8, "20 of the division's own ticks step it")
 end)
 
 -- the setGrainParam sends of one name: {voice, value}
@@ -819,10 +820,13 @@ test("VOICE rings follow the cursor's group of four", function()
   local source = params:get("v1_mod_source_1")
   context.arc.turn(1, ring, 45)
   assert_equal(params:get("v1_mod_source_1"), source + 2, "45 ticks: two whole steps")
-  -- the carry belongs to its param: another voice's row never takes it
-  context.arc.turn(1, ring, 10)   -- 15 carried for v1_mod_source_1
+  -- the carry belongs to its param: another voice's row on the same ring
+  -- never takes it (voice 1's second mod source and voice 2's first share a
+  -- ring, since voice 2's rows sit one place earlier)
+  ring = ring_of("v1_mod_source_2")
+  context.arc.turn(1, ring, 15)   -- 15 carried for v1_mod_source_2
   S.selected_voice = 2
-  ring = ring_of("v2_mod_source_1")
+  assert_equal(ring_of("v2_mod_source_1"), ring, "voice 2's first mod source is on the same ring")
   local other = params:get("v2_mod_source_1")
   context.arc.turn(1, ring, 5)
   assert_equal(params:get("v2_mod_source_1"), other, "voice 1's carried ticks never step voice 2")
