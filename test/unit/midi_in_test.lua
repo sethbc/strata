@@ -1873,8 +1873,9 @@ end)
 
 -- Voice 1 (running) reading buffer 1: 2 s (96000 frames, its peaks read)
 -- cut in 4 equal slices, v1_slices at option (1 off, 2 one, 3 overlap)
-local function sliced_voice(option)
-  local context = load_strata(); finish_startup(context)
+-- Voice 1 on buffer slot 1 (a 2 s file) in four slices, notes 36 to 39,
+-- under v1_slices' option, in context's script
+local function slice_voice_one(context, option)
   local S = local_value("S")
   load_buffer(1, context.audio_dir .. "loop.wav")
   context.polls.fire("bufferState", context.polls.buffer_state_value(1, S.buffers[1].loads_sent, 2))
@@ -1890,7 +1891,12 @@ local function sliced_voice(option)
   assert_equal(S.lib.slices.count(1), 4, "four slices")
   params:set("v1_slices", option)
   context.clear_engine_calls()
-  return context, S
+  return S
+end
+
+local function sliced_voice(option)
+  local context = load_strata(); finish_startup(context)
+  return context, slice_voice_one(context, option)
 end
 
 test("note 36 plays slice 1 at the voice's own pitch, and a note outside the slices does nothing", function()
@@ -2150,6 +2156,315 @@ test("the midi notes table: keys down + a running voice's source switch keeps th
   assert_true(not S.voices[3].active, "the last key up stops it, in release mode")
   assert_equal(S.midi_state.started[3], nil, "and clears started")
 end)
+
+-- 3.9 (#1028): the midi notes tables (docs/notes/lua/midi.md, Machines,
+-- midi notes for release mode and midi notes, latch), one a note off mode:
+-- a row's outcome depends on the mode, and a change of mode is a reset, so
+-- each state sets midi_note_off first, then enters the state (latch's stop
+-- held back alone sets latch last: the mark is set in release mode and
+-- outlives the change until the next LFO step). Every state is voice 1's,
+-- the selected voice, which channel 1's notes play (per voice). The release
+-- table's voice plays one-shot slices (notes 36 to 39, each 0.5 s) so that
+-- a note can play to its end; the latch table's is a synth voice (60, 64,
+-- 67) but in stop held back, where the slices hold the stop back first.
+-- A state keeps on context the notes down in the order pressed (down), the
+-- next key's note (next_note) and the source a switch picks (switch_to)
+local MIDI_NOTES = { voice = 1, channel = 1, grid_slice = 3, grid_key = 103, past_the_slices = 1 }
+
+local function set_note_off(mode) params:set("midi_note_off", option_index("midi_note_off", mode)) end
+
+-- Whether voice's release-mode stop is held back: stop_pending, a local of
+-- lib/midi_in.lua that its midi notes invariant reads (the module has no reader)
+local function held_back_mark(S, voice)
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "midi notes" then
+      local index = 1
+      while true do
+        local name, value = debug.getupvalue(record.fn, index)
+        if not name then break end
+        if name == "stop_pending" then return value[voice] == true end
+        index = index + 1
+      end
+    end
+  end
+  error("the midi notes invariant reads no stop_pending")
+end
+
+local function midi_notes_state()
+  local S = local_value("S")
+  local keys, mark = next(S.midi_state.held[MIDI_NOTES.voice]) ~= nil, held_back_mark(S, MIDI_NOTES.voice)
+  if keys and mark then return "keys down and the held-back stop both" end
+  return keys and "keys down" or mark and "stop held back" or "no key"
+end
+
+local function midi_notes_voice_stopped(S)
+  if S.voices[MIDI_NOTES.voice].active then toggle_voice(MIDI_NOTES.voice) end
+end
+
+-- The release table's voice: one-shot slices (a quarter of the 2 s file in
+-- 0.5 s), release mode set first
+local function release_slices(context)
+  set_note_off("release")
+  local S = slice_voice_one(context, 3)
+  function S.lib.scan.pass_seconds(_, fraction) return fraction * 2 end
+  context.switch_to = params:get("v" .. MIDI_NOTES.voice .. "_source") + 1
+  return S
+end
+
+-- The voice stopped, then started by its keys: notes pressed and held
+local function midi_notes_press(context, notes)
+  midi_notes_voice_stopped(local_value("S"))
+  context.down = {}
+  for _, note in ipairs(notes) do
+    note_on(context, MIDI_NOTES.channel, note)
+    context.down[#context.down + 1] = note
+  end
+end
+
+-- A release-mode stop held back: the voice started by note 36, whose
+-- one-shot slice plays on after its key lifts
+local function held_back_stop(context)
+  release_slices(context)
+  midi_notes_press(context, { 36 })
+  note_off(context, MIDI_NOTES.channel, 36)
+  context.down, context.next_note = {}, 37
+end
+
+local function lift_all(context)
+  for index = #context.down, 1, -1 do note_off(context, MIDI_NOTES.channel, context.down[index]) end
+end
+
+-- The events both tables share
+local function midi_notes_events(own)
+  local events = {
+    ["key down"] = function(context) note_on(context, MIDI_NOTES.channel, context.next_note) end,
+    ["key up, others down"] = function(context) note_off(context, MIDI_NOTES.channel, context.down[#context.down]) end,
+    ["the voice's stop"] = function()
+      assert_true(local_value("S").voices[MIDI_NOTES.voice].active, "the voice runs before its stop")
+      toggle_voice(MIDI_NOTES.voice)
+    end,
+    ["a reset"] = function() reset_midi_input() end,
+    ["a panic"] = function(context)
+      context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = MIDI_NOTES.channel })
+    end,
+    ["a running voice's source switch"] = function(context)
+      assert_true(local_value("S").voices[MIDI_NOTES.voice].active, "the voice runs before its switch")
+      params:set("v" .. MIDI_NOTES.voice .. "_source", context.switch_to)
+    end,
+  }
+  for name, fn in pairs(own) do events[name] = fn end
+  return events
+end
+
+-- A row's check: what its Effect cell claims. running, started (true or
+-- false); sounding and gone (notes MIDI's allocator records hold, or do
+-- not); down and up (keys); sent (the engine calls since the event, those
+-- in sent_only if given); lists (each down key's note on lists the voice);
+-- mark (false: no held-back stop); after (a function of context and S, run last)
+local function midi_notes_checks(want)
+  return function(context)
+    local S = local_value("S")
+    local voice, channel = MIDI_NOTES.voice, MIDI_NOTES.channel
+    if want.sent ~= nil then assert_equal(call_names(context, want.sent_only), want.sent, "the messages sent") end
+    if want.running ~= nil then
+      assert_equal(S.voices[voice].active, want.running, want.running and "the voice runs" or "the voice is stopped")
+    end
+    if want.started ~= nil then assert_equal(S.midi_state.started[voice] == true, want.started, "started") end
+    for _, note in ipairs(want.sounding or {}) do
+      assert_true(S.lib.notes.find(voice, "midi", key_of(channel, note)) ~= nil, "MIDI's note " .. note .. " plays")
+    end
+    for _, note in ipairs(want.gone or {}) do
+      assert_equal(S.lib.notes.find(voice, "midi", key_of(channel, note)), nil, "MIDI's note " .. note .. " is gone")
+    end
+    for _, note in ipairs(want.down or {}) do
+      assert_true(S.midi_state.held[voice][key_of(channel, note)], "key " .. note .. " is down")
+      if want.lists then
+        assert_equal(S.midi_state.note_voice[channel][note][1], voice, "key " .. note .. "'s note on lists the voice")
+      end
+    end
+    for _, note in ipairs(want.up or {}) do
+      assert_equal(S.midi_state.held[voice][key_of(channel, note)], nil, "key " .. note .. " is up")
+    end
+    if want.mark ~= nil then assert_equal(held_back_mark(S, voice), want.mark, "the held-back stop") end
+    if want.after then want.after(context, S) end
+  end
+end
+
+-- keys down + the voice's stop, in both modes: the notes forgotten, the
+-- keys kept, and their offs send nothing
+local stopped_under_keys = function(context, S)
+  assert_equal(S.lib.notes.held(MIDI_NOTES.voice), 0, "the stop forgot the voice's notes")
+  context.clear_engine_calls()
+  lift_all(context)
+  assert_equal(call_names(context), "", "the keys' offs send nothing")
+end
+
+local NO_NOTE_SENT = { noteOff = true, voiceOff = true }
+
+h.transition_table({
+  name = "midi notes",
+  notes = {"docs/notes/lua/midi.md", "midi notes"},
+  states = {
+    -- the voice runs from the start-up, which no MIDI note started
+    ["no key"] = function(context)
+      local S = release_slices(context)
+      assert_true(S.voices[MIDI_NOTES.voice].active and not S.midi_state.started[MIDI_NOTES.voice],
+        "the start-up runs the voice, which no MIDI note started")
+      context.down, context.next_note = {}, 36
+      context.clear_engine_calls()
+    end,
+    ["keys down"] = function(context)
+      release_slices(context)
+      midi_notes_press(context, { 36, 37 })
+      context.next_note = 38
+      context.clear_engine_calls()
+    end,
+    ["stop held back"] = function(context)
+      held_back_stop(context)
+      context.clear_engine_calls()
+    end,
+  },
+  events = midi_notes_events({
+    ["last key up, nothing plays to its end"] = function(context)
+      context.clock.run_for(MIDI_NOTES.past_the_slices)  -- the keys held past their slices' ends
+      lift_all(context)
+    end,
+    ["last key up, a note plays to its end"] = function(context) lift_all(context) end,
+    ["the LFO step, nothing plays to its end"] = function(context)
+      context.clock.run_for(MIDI_NOTES.past_the_slices)  -- every slice ends at its time, the LFO steps run
+    end,
+    ["the LFO step, a note still plays to its end"] = function(context)
+      local S = local_value("S")
+      assert_true(S.lib.slices.play(MIDI_NOTES.voice, MIDI_NOTES.grid_slice,
+        { owner = "grid", key = MIDI_NOTES.grid_key, velocity = 0.5 }), "a grid key's one-shot slice")
+      lfo_step(context)
+    end,
+    ["latch set, then the LFO step"] = function(context)
+      set_note_off("latch")
+      lfo_step(context)
+    end,
+  }),
+  state_of = midi_notes_state,
+  rows = {
+    {"no key", "key down", "keys down", check = midi_notes_checks({down = {36}, sounding = {36}, started = false})},
+    {"no key", "the voice's stop", "no key", check = midi_notes_checks({running = false})},
+    {"no key", "a reset", "no key", check = midi_notes_checks({sent = "", running = true})},
+    {"no key", "a panic", "no key", check = midi_notes_checks({running = true})},
+    {"no key", "a running voice's source switch", "no key", check = midi_notes_checks({running = true, started = false})},
+    {"no key", "the LFO step, nothing plays to its end", "no key", check = midi_notes_checks({running = true})},
+    {"no key", "the LFO step, a note still plays to its end", "no key", check = midi_notes_checks({running = true})},
+    {"no key", "latch set, then the LFO step", "no key", check = midi_notes_checks({running = true})},
+    {"keys down", "key down", "keys down", check = midi_notes_checks({down = {36, 37, 38}, sounding = {38}})},
+    {"keys down", "key up, others down", "keys down",
+      check = midi_notes_checks({sent = "", sent_only = NO_NOTE_SENT, up = {37}, sounding = {37}, running = true})},
+    {"keys down", "last key up, nothing plays to its end", "no key", check = midi_notes_checks({running = false, started = false})},
+    {"keys down", "last key up, a note plays to its end", "stop held back",
+      check = midi_notes_checks({running = true, sounding = {36, 37}})},
+    {"keys down", "the voice's stop", "keys down",
+      check = midi_notes_checks({running = false, down = {36, 37}, after = stopped_under_keys})},
+    {"keys down", "a reset", "no key", check = midi_notes_checks({running = false, started = false})},
+    {"keys down", "a panic", "no key", check = midi_notes_checks({running = false, started = false})},
+    {"keys down", "a running voice's source switch", "keys down",
+      check = midi_notes_checks({running = true, down = {36, 37}, lists = true, started = true})},
+    {"keys down", "the LFO step, nothing plays to its end", "keys down", check = midi_notes_checks({running = true, down = {36, 37}})},
+    {"keys down", "the LFO step, a note still plays to its end", "keys down", check = midi_notes_checks({running = true, down = {36, 37}})},
+    {"keys down", "latch set, then the LFO step", "no key", check = midi_notes_checks({running = true, gone = {36, 37}})},
+    {"stop held back", "key down", "keys down", check = midi_notes_checks({down = {37}, mark = false})},
+    {"stop held back", "the voice's stop", "no key", check = midi_notes_checks({running = false})},
+    {"stop held back", "a reset", "stop held back", check = midi_notes_checks({running = true, gone = {36},
+      after = function(context, S)
+        lfo_step(context)
+        assert_true(not S.voices[MIDI_NOTES.voice].active, "the next LFO step stops the voice")
+      end})},
+    {"stop held back", "a panic", "no key", check = midi_notes_checks({running = false, started = false})},
+    {"stop held back", "a running voice's source switch", "stop held back", check = midi_notes_checks({running = true,
+      after = function(context, S)
+        context.clock.run_for(MIDI_NOTES.past_the_slices)
+        assert_true(not S.voices[MIDI_NOTES.voice].active, "stopped once nothing plays to its end")
+      end})},
+    {"stop held back", "the LFO step, nothing plays to its end", "no key", check = midi_notes_checks({running = false, started = false})},
+    {"stop held back", "the LFO step, a note still plays to its end", "stop held back", check = midi_notes_checks({running = true})},
+    {"stop held back", "latch set, then the LFO step", "no key", check = midi_notes_checks({running = true})},
+  },
+  impossible = {
+    {"no key", "key up, others down", "no key is down to lift"},
+    {"no key", "last key up, nothing plays to its end", "no key is down to lift"},
+    {"no key", "last key up, a note plays to its end", "no key is down to lift"},
+    {"stop held back", "key up, others down", "no key is down: the mark is set only with none down"},
+    {"stop held back", "last key up, nothing plays to its end", "no key is down: the mark is set only with none down"},
+    {"stop held back", "last key up, a note plays to its end", "no key is down: the mark is set only with none down"},
+  },
+})
+
+h.transition_table({
+  name = "midi notes, latch",
+  notes = {"docs/notes/lua/midi.md", "midi notes, latch"},
+  states = {
+    -- a released key started the voice: its note sounds on, latched
+    ["no key"] = function(context)
+      set_note_off("latch")
+      midi_notes_voice_stopped(local_value("S"))
+      press(context, MIDI_NOTES.channel, 60)
+      context.down, context.next_note = {}, 64
+      context.switch_to = params:get("v" .. MIDI_NOTES.voice .. "_source") + 1
+      context.clear_engine_calls()
+    end,
+    ["keys down"] = function(context)
+      set_note_off("latch")
+      midi_notes_press(context, { 60, 64 })
+      context.next_note = 67
+      context.switch_to = params:get("v" .. MIDI_NOTES.voice .. "_source") + 1
+      context.clear_engine_calls()
+    end,
+    -- a release-mode stop held back, then latch set: the mark lasts until the next LFO step
+    ["stop held back"] = function(context)
+      held_back_stop(context)
+      set_note_off("latch")
+      context.clear_engine_calls()
+    end,
+  },
+  events = midi_notes_events({
+    ["last key up"] = function(context) lift_all(context) end,
+    ["the LFO step"] = function(context) lfo_step(context) end,
+  }),
+  state_of = midi_notes_state,
+  rows = {
+    {"no key", "key down", "keys down", check = midi_notes_checks({gone = {60}, down = {64}, sounding = {64}})},
+    {"no key", "the voice's stop", "no key", check = midi_notes_checks({running = false,
+      after = function(_, S) assert_equal(S.lib.notes.held(MIDI_NOTES.voice), 0, "its latched note forgotten") end})},
+    {"no key", "a reset", "no key", check = midi_notes_checks({sent = "", running = true, gone = {60}})},
+    {"no key", "a panic", "no key", check = midi_notes_checks({running = false, started = false})},
+    {"no key", "a running voice's source switch", "no key", check = midi_notes_checks({running = true, started = true,
+      after = function(context, S)
+        context.midi.send(1, { type = "cc", cc = 123, val = 0, ch = MIDI_NOTES.channel })
+        assert_true(not S.voices[MIDI_NOTES.voice].active, "a panic still stops it")
+      end})},
+    {"no key", "the LFO step", "no key", check = midi_notes_checks({running = true, sounding = {60}})},
+    {"keys down", "key down", "keys down", check = midi_notes_checks({down = {60, 64, 67}, sounding = {60, 64, 67}})},
+    {"keys down", "key up, others down", "keys down",
+      check = midi_notes_checks({sent = "", sent_only = NO_NOTE_SENT, up = {64}, sounding = {64}})},
+    {"keys down", "last key up", "no key", check = midi_notes_checks({running = true, sounding = {60, 64}, started = true})},
+    {"keys down", "the voice's stop", "keys down",
+      check = midi_notes_checks({running = false, down = {60, 64}, after = stopped_under_keys})},
+    {"keys down", "a reset", "no key", check = midi_notes_checks({running = true, gone = {60, 64}})},
+    {"keys down", "a panic", "no key", check = midi_notes_checks({running = false, started = false})},
+    {"keys down", "a running voice's source switch", "keys down",
+      check = midi_notes_checks({running = true, down = {60, 64}, lists = true, started = true})},
+    {"keys down", "the LFO step", "keys down", check = midi_notes_checks({running = true, down = {60, 64}})},
+    {"stop held back", "key down", "keys down", check = midi_notes_checks({down = {37}, mark = false})},
+    {"stop held back", "the voice's stop", "no key", check = midi_notes_checks({running = false})},
+    {"stop held back", "a reset", "stop held back", check = midi_notes_checks({running = true})},
+    {"stop held back", "a panic", "no key", check = midi_notes_checks({running = false, started = false})},
+    {"stop held back", "a running voice's source switch", "stop held back", check = midi_notes_checks({running = true})},
+    {"stop held back", "the LFO step", "no key", check = midi_notes_checks({running = true})},
+  },
+  impossible = {
+    {"no key", "key up, others down", "no key is down to lift"},
+    {"no key", "last key up", "no key is down to lift"},
+    {"stop held back", "key up, others down", "no key is down: the mark is set only with none down"},
+    {"stop held back", "last key up", "no key is down: the mark is set only with none down"},
+  },
+})
 
 -- 2b's review, the controller's ruling: the note hooks' heard hears every
 -- MIDI note a voice receives, a note outside its slices included, and starts nothing
