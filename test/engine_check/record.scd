@@ -699,9 +699,10 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
 // the slot's loads before the command (1 the command's) and its emptied
 // bit. 'length F' is any length above 0 that the slot holds when the row
 // ends (a stopped take's frame count). Rows 5 and 16 need a long file's
-// check, which only a high engine runs (buffers.scd's checkLongSlots), and
-// row 4's failed server read a file that vanishes between the check and the
-// read: they are not walked here. An entry whose behavior is an open
+// check, which only a high engine runs: they run after the walk, on a high
+// engine of its own, through the same marks (#982). Row 4's failed server
+// read needs a file that vanishes between the check and the read: it is
+// not walked. An entry whose behavior is an open
 // issue's carries known: <issue>, asserting what the engine does today
 {
     var slot = 4, levelFrames = (0.5 * sampleRate).round.asInteger, takeFrames = (0.05 * sampleRate).round.asInteger;
@@ -1050,6 +1051,106 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
                 phase, events, engine.bufferFrames[slot], sample));
         clearSlot.value;
         server.sync;
+    });
+    // Rows 5 and 16, a long file's check (#982): only a high engine checks
+    // a file in a routine (one longer than standardBufferSeconds at the
+    // server's rate), so they run on a high engine of the walk's own (60 s
+    // slots) with a 17 s file. Its reports reach the same polls, so they
+    // arrive among the walk's, after the same marks, and are read as the
+    // walk reads them. Row 16 both ways: the take completing during the
+    // check (the check's routine held, through loadCheckFaultHook, until
+    // the take has ended) and the load taking effect while the take still
+    // ends (the stopped peaks mover holding the take's end open); row 5
+    // with a replace take and a playable recording sent in the same tick as
+    // the long load, over the slot's audio
+    test.("record: the state table's rows 5 and 16 on a high engine (#982)", {
+        var root = h.tempDir +/+ "walk-high", longPath = h.tempDir +/+ "walk-long.wav", other, otherMover, results = List.new(4);
+        var write = { arg path, text; File.use(path, "w", { arg file; file.write(text) }) };
+        var longFrames = (17 * sampleRate).round.asInteger;
+        var otherState, otherPhase, otherQuiet, otherLoaded, longRow;
+        File.mkdir(root);
+        write.(root +/+ "performance.data", "performance high\nbuffer_seconds 60\n");
+        write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
+        write.(root +/+ "meminfo", "MemTotal:        8000000 kB\nMemFree:         6000000 kB\nMemAvailable:    7000000 kB\n");
+        h.writeTestFile(longPath, sampleRate, longFrames, [0.3, 0.3]);
+        other = h.startEngine((settingsDir: root, modelPath: root +/+ "model", meminfoPath: root +/+ "meminfo"));
+        otherState = other.areaState[\record];
+        otherMover = other.areaState[\waveform][\mover];
+        otherPhase = {
+            var take = otherState[\takes][slot], synth = other.recordSynths[slot];
+            case { take.isNil } { if (synth.isNil) { \none } { \orphan } } { synth.isNil } { \ending } { \taking }
+        };
+        otherQuiet = { other.recordSynths[slot].isNil and: { otherState[\takes][slot].isNil } and: { otherMover[\pending] == 0 } };
+        otherLoaded = { (other.loadsSuperseded(slot) >= other.bufferLoads[slot]) and: { other.bufferFrames[slot] > 0 } };
+        // one row: reach runs from a cleared slot and returns the phase
+        // before the command, which fire sends after a mark; settle waits
+        // for the row's end; the reports and frames are compared as the
+        // walk compares them
+        longRow = { arg number, about, phaseWanted, events, frames, reach, fire, settle;
+            var phase, mark, records, loads, got, quiet;
+            h.commandTo(other, \clearBuffer, slot);
+            soon.({ otherMover[\pending] == 0 });
+            phase = reach.value;
+            marks = marks + 1;
+            mark = marks;
+            NetAddr.localAddr.sendMsg('/poll/value', markIndex, mark);
+            records = otherState[\recordCounts][slot];
+            loads = other.bufferLoads[slot];
+            fire.value;
+            settle.value;
+            quiet = soon.({ otherQuiet.value });
+            0.05.wait;
+            got = walkEvents.(mark, records, loads);
+            check.((phase == phaseWanted) and: { quiet } and: { walkMatches.(got, events) } and: { other.bufferFrames[slot] == frames },
+                "record: the state table's row % on a high engine (%): %, % frames (phase %, reports %, % frames%)".format(
+                    number, about, events.join(", "), frames, phase, got, other.bufferFrames[slot], if (quiet) { "" } { ", a take or a rename left" }));
+            results.add(number);
+        };
+        protect {
+            longRow.(16, "a replace take ending; a long good file, the take completing during the check", \ending,
+                ['length 0.05', 'ended 0', 'length 0.0', 'length 17.0'], longFrames,
+                {
+                    other.loadCheckFaultHook = { arg index; if (index == slot) { soon.({ other.takeEnding(slot).not }) } };
+                    ("kill -STOP " ++ otherMover[\pid]).systemCmd;
+                    h.commandTo(other, \recordBuffer, slot, 0.05, 1.0, 0, 0, 0, 0, 0);
+                    soon.({ otherPhase.value == \ending });
+                    otherPhase.value
+                },
+                { h.commandTo(other, \loadBuffer, slot, longPath, 0); ("kill -CONT " ++ otherMover[\pid]).systemCmd },
+                { soon.({ otherLoaded.value }); other.loadCheckFaultHook = nil });
+            longRow.(16, "a replace take ending; a long good file taking effect while the take still ends", \ending,
+                ['ended 0', 'length 0.0', 'length 17.0'], longFrames,
+                {
+                    ("kill -STOP " ++ otherMover[\pid]).systemCmd;
+                    h.commandTo(other, \recordBuffer, slot, 0.05, 1.0, 0, 0, 0, 0, 0);
+                    soon.({ otherPhase.value == \ending });
+                    otherPhase.value
+                },
+                { h.commandTo(other, \loadBuffer, slot, longPath, 0) },
+                {
+                    // the load takes effect (its stopRecording forgets the take) before the mover goes on
+                    soon.({ otherState[\takes][slot].isNil });
+                    ("kill -CONT " ++ otherMover[\pid]).systemCmd;
+                    soon.({ otherLoaded.value });
+                });
+            longRow.(5, "a long load being checked; recordBuffer, feedback 0 and loop 0", \none,
+                ['length 0.0', 'recording 1', 'length 0.05', 'ended 1'], takeFrames,
+                { h.commandTo(other, \loadBuffer, slot, audioPath, 0); soon.({ otherLoaded.value }); otherPhase.value },
+                { h.commandTo(other, \loadBuffer, slot, longPath, 0); h.commandTo(other, \recordBuffer, slot, 0.05, 1.0, 0, 0, 0, 0, 0) },
+                { 0.1.wait });
+            longRow.(5, "a long load being checked; recordBuffer, feedback > 0", \none,
+                ['recording 1', 'ended 1'], levelFrames,
+                { h.commandTo(other, \loadBuffer, slot, audioPath, 0); soon.({ otherLoaded.value }); otherPhase.value },
+                { h.commandTo(other, \loadBuffer, slot, longPath, 0); h.commandTo(other, \recordBuffer, slot, 0.05, 1.0, 0.5, 0, 0, 0, 0) },
+                { 0.1.wait });
+        } {
+            other.loadCheckFaultHook = nil;
+            ("kill -CONT " ++ otherMover[\pid]).systemCmd;
+            h.freeEngine(other);
+            File.delete(longPath);
+        };
+        check.(results.asArray == [16, 16, 5, 5],
+            "record: the high engine's long rows all ran (rows %)".format(results.asArray));
     });
     poll.stop; poll.setTime(period); poll.start;
     // Not a row of the table, but row 4's first guard (#374): a load that
