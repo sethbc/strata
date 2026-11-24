@@ -123,9 +123,10 @@
         // when the server's read fails after the slot was zeroed, once the
         // reads are done (the slot is then emptied). It names the slot, that
         // slot's load number and whether the slot was emptied
-        // (bufferLoadFailedValue), so Lua undoes exactly that load and never
-        // a later one. Not periodic; a value request resends the last report
-        // (Lua ignores a repeat).
+        // (bufferLoadFailedValue: emptied by this load's read, with nothing
+        // changing it since, #1035), so Lua undoes exactly that load and
+        // never a later one. Not periodic; a value request resends the last
+        // report (Lua ignores a repeat).
         bufferLoadFailedPoll = this.addPoll(\bufferLoadFailed, { bufferLoadFailedPoll.value ? 0.0 }, false);
     }
 
@@ -207,8 +208,10 @@
     // One float, as bufferState (matron's /poll/value is typed "if"):
     // (load * 2 + emptied) * numBuffers + slot index, where load is the
     // slot's load number (counted from 1) and emptied is 1 when the failed
-    // load left the slot empty (the server's read failed after the zeroing),
-    // 0 when it left the slot as it was. Exact for the first 2^20 loads of a
+    // load left the slot empty (the server's read failed after the zeroing)
+    // and nothing has changed the slot since (slotChanges: no later load
+    // took effect, no clear or recording, #1035), 0 when it left the slot
+    // as it was or a later change decides it. Exact for the first 2^20 loads of a
     // slot (a float32 holds integers exactly up to 2^24).
     bufferLoadFailedValue { arg index, load, emptied;
         ^((((load * 2) + emptied.binaryValue) * numBuffers) + index).asFloat
@@ -383,7 +386,12 @@
     // nothing else changed the slot meanwhile (slotChanges). A server read
     // that fails (/fail for /b_readChannel: the file vanished, or became
     // unreadable, after the checks) leaves the slot zeroed, so it stays
-    // empty and the load is reported as failed with the slot emptied.
+    // empty and the load is reported as failed with the slot emptied; or,
+    // when a later load, clear or recording changed the slot meanwhile
+    // (slotChanges), as failed with the slot not emptied, the later change
+    // deciding what it holds: so an emptied report says the slot is empty
+    // with no load applied since, which Lua relies on to undo a load it no
+    // longer tracks (#1035).
     // A load that read its frames sets the slot's peaks and writes its peaks
     // file first, and reports its length once the file is in place, so every
     // bufferState report that announces audio finds it there.
@@ -416,16 +424,21 @@
             buffersL[index].readChannel(path.standardizePath, startFrame, frames, 0, false, [0]);
             buffersR[index].readChannel(path.standardizePath, startFrame, frames, 0, false, [rightChannel]);
             fork({
+                var emptied;
                 context.server.sync;  // answered once both reads are done (after any /fail)
                 failWatcher.free;
                 if (readFailed) {
                     postln("strata: the server could not read sound file " ++ path ++ "; buffer " ++ (index + 1) ++ " emptied");
-                    if (slotChanges[index] == change) {
+                    // emptied only while nothing has changed the slot
+                    // since: a later load, clear or recording decides it
+                    // (#1035)
+                    emptied = slotChanges[index] == change;
+                    if (emptied) {
                         bufferSampleRates[index] = context.server.sampleRate;
                         this.clearSlotPeaks(index);
                         this.bufferChanged(index);
                     };
-                    bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, true));
+                    bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, emptied));
                 } {
                     // the file's rate goes to the peaks file and becomes the
                     // slot's with its frames, so the slot is never at the

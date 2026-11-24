@@ -201,21 +201,36 @@ var checkFilePitch = {
 
 // Two back-to-back loads into a slot no voice plays both read at once: a
 // /fail for the first one's file (simulated here, as the server sends it)
-// fails only that load, never the second one's good read of another file
+// fails only that load, never the second one's good read of another file.
+// The failure says the slot was emptied only while nothing has changed it
+// since (#1035): a failed read alone is emptied, the first of the two is
+// not, the second load having taken effect after it
 var checkReadFailureMatching = { arg stereoPath, monoPath;
-    var firstPath = scratchRoot +/+ "first-of-two.wav", before, firstLoad;
+    var firstPath = scratchRoot +/+ "first-of-two.wav", before, firstLoad, alone, aloneLoad;
+    var failRead = { thisProcess.recvOSCmessage(0, server.addr, NetAddr.langPort, ['/fail', '/b_readChannel',
+        "File '" ++ firstPath.standardizePath ++ "' could not be opened: System error : No such file or directory.\n",
+        engine.buffersL[5].bufnum]) };
     File.delete(firstPath); File.copy(monoPath, firstPath);
+    before = loadFailures.value.size;
+    command.(\loadBuffer, 5, firstPath, 0);
+    aloneLoad = engine.bufferLoads[5];
+    failRead.value;
+    waitFor.({ loadFailures.value.size > before });
+    alone = loadFailures.value.drop(before);
     before = loadFailures.value.size;
     command.(\loadBuffer, 5, firstPath, 0);
     firstLoad = engine.bufferLoads[5];
     command.(\loadBuffer, 5, stereoPath, 0);
-    thisProcess.recvOSCmessage(0, server.addr, NetAddr.langPort, ['/fail', '/b_readChannel',
-        "File '" ++ firstPath.standardizePath ++ "' could not be opened: System error : No such file or directory.\n",
-        engine.buffersL[5].bufnum]);
+    failRead.value;
     h.awaitLoad(5);
     waitFor.({ loadFailures.value.size > before });
-    check.(loadFailures.value.drop(before) == [((firstLoad * 2) + 1) * engine.numBuffers + 5],
+    check.(loadFailures.value.drop(before).collect({ arg value; ((value - 5) / (engine.numBuffers * 2)).floor }) == [firstLoad],
         "a /fail names its file: only the first of two loads fails (got %)".format(loadFailures.value.drop(before)));
+    check.((alone == [((aloneLoad * 2) + 1) * engine.numBuffers + 5])
+        and: { loadFailures.value.drop(before) == [(firstLoad * 2) * engine.numBuffers + 5] },
+        "a failed server read reports the slot emptied only while nothing has changed it since (#1035): alone % (expected %), superseded % (expected %)".format(
+            alone, [((aloneLoad * 2) + 1) * engine.numBuffers + 5],
+            loadFailures.value.drop(before), [(firstLoad * 2) * engine.numBuffers + 5]));
     check.(engine.bufferFrames[5] == 11025, "the second load's good read is kept (% frames)".format(engine.bufferFrames[5]));
     File.delete(firstPath);
 };
