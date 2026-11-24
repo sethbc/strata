@@ -3049,4 +3049,27 @@ test("load failed, take not saved and a save's failure flash on every page", fun
   end
 end)
 
+-- #878 review: a save's failure ends only its own saving flash in the hint
+-- row, never another the player raised since (a random file into slot 2)
+test("a save's failure ends only its own saving flash", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S, buffers = local_value("S"), local_value("buffers")
+  local folder = context.audio_dir .. "fail-flash/"
+  util.make_dir(folder); io.open(folder .. "pad.wav", "w"):close()
+  S.lib.files.note_chosen(folder .. "x.wav")
+  load_buffer(1, "/tmp/keep.wav"); state_report(context, 1, 1, 4)
+  key(1, 1); h.tap(3); key(1, 0)                     -- ALT+K3: save slot 1
+  assert_equal(S.lib.ui_flash.text("hints"), "saving buf 1")
+  assert_true(S.lib.files.random_into(2), "a random file into slot 2")
+  assert_equal(S.lib.ui_flash.text("hints"), "buf 2: pad.wav")
+  context.polls.fire("bufferSaveResult", save_result_value(1, buffers[1].saves_sent, true)); next_frame(context)
+  assert_equal(S.lib.ui_flash.text("header"), "buf 1 save failed", "the failure in the header")
+  assert_equal(S.lib.ui_flash.text("hints"), "buf 2: pad.wav", "slot 2's flash stays")
+  -- its own saving flash still showing ends with it (a loop save too)
+  key(1, 1); key(3, 1); context.set_time(util.time() + 0.7); key(3, 0); key(1, 0)
+  assert_equal(S.lib.ui_flash.text("hints"), "saving buf 1 loop")
+  context.polls.fire("bufferSaveResult", save_result_value(1, buffers[1].saves_sent, true)); next_frame(context)
+  assert_equal(S.lib.ui_flash.text("hints"), nil, "its own saving flash ends")
+end)
+
 end

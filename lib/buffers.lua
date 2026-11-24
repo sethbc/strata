@@ -740,10 +740,11 @@ return function(S)
       if save.settings then S.lib.samples.store_file(save.path, save.settings) end
     end
     -- (a failure in the header, on every page, and the hint row's saving
-    -- flash it answers ends; a file written in BUFFER's hint row, #878)
+    -- flash it answers ends, never another flash raised since; a file
+    -- written in BUFFER's hint row, #878)
     if save.number == buffer.saves_sent and failed then
       header_flash("buf " .. slot .. " save failed")
-      buffer_page_flash(nil)
+      if S.lib.ui_flash.text("hints") == M.saving_flash_text(slot, save.loop) then buffer_page_flash(nil) end
     elseif save.number == buffer.saves_sent then
       buffer_page_flash("saved buf " .. slot .. (save.loop and " loop" or ""))
     end
@@ -1298,6 +1299,13 @@ return function(S)
   function M.saving(slot)
     slot = slot_index(slot)
     return slot ~= nil and S.buffer_polls.save_result ~= nil and #S.buffers[slot].pending_saves > 0
+  end
+
+  -- The hint row's flash for a save of the slot sent (`loop`: its loop
+  -- region): BUFFER's ALT+K3 raises it, and the save's failure ends it
+  -- only while it still shows (#878)
+  function M.saving_flash_text(slot, loop)
+    return "saving buf " .. slot .. (loop and " loop" or "")
   end
 
   -- The remembered file of a "missing" slot (its path, found missing on
