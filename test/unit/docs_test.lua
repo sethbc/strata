@@ -2248,28 +2248,32 @@ function CI_WORKFLOW.follow_folder(words, place)
   local folder = false
   if operand == "-" and tool == "cd" then folder = place.previous
   elseif operand then folder = CI_WORKFLOW.resolved(operand, place.here) or false end
+  -- moved: the command changes folder (bash then sets OLDPWD, the folder
+  -- cd - returns to, even when the new folder is the old one)
+  local moved = false
   local function set(new)
     place.here, place.stack = new[1], {}
     for i = 2, #new do place.stack[#place.stack + 1] = new[i] end
   end
   if tool == "cd" then
-    place.here = folder
+    place.here, moved = folder, true
   elseif tool == "pushd" and operand then
     if stay then table.insert(place.stack, 1, folder)
-    else table.insert(place.stack, 1, place.here); place.here = folder end
+    else table.insert(place.stack, 1, place.here); place.here, moved = folder, true end
   elseif tool == "pushd" and at then
     if list[at] ~= nil and not stay then
       local rotated = {}
       for i = 0, #list - 1 do rotated[#rotated + 1] = list[(at - 1 + i) % #list + 1] end
       set(rotated)
+      moved = true
     end
   elseif tool == "pushd" then
-    if #list > 1 and not stay then list[1], list[2] = list[2], list[1]; set(list) end
+    if #list > 1 and not stay then list[1], list[2] = list[2], list[1]; set(list); moved = true end
   else
     at = at or (stay and 2 or 1)
-    if list[at] ~= nil and #list > 1 then table.remove(list, at); set(list) end
+    if list[at] ~= nil and #list > 1 then table.remove(list, at); set(list); moved = at == 1 end
   end
-  if place.here ~= before then place.previous = before end
+  if moved then place.previous = before end
   if tool ~= "popd" and operand then return operand, folder end
   return nil
 end
@@ -2669,6 +2673,13 @@ function CI_WORKFLOW.relocation_cases()
       edits = before_install("pushd /usr/share", "pushd /tmp", "popd", "echo x > keyrings/x.gpg", "popd") },
     { name = "pushd +1 to a folder pushed with -n", expect = trust .. "echo x > keyrings/x.gpg",
       edits = before_install("pushd -n /usr/share", "pushd +1", "echo x > keyrings/x.gpg", "popd") },
+    -- #1024's re-review: every cd sets the folder cd - returns to (bash's
+    -- OLDPWD), into the same folder too, and so does a pushd that changes
+    -- folder
+    { name = "cd - after a cd into the same folder", expect = trust .. "echo x > keyrings/x.gpg",
+      edits = before_install("cd /tmp", "cd /usr/share", "cd /usr/share", "cd -", "echo x > keyrings/x.gpg") },
+    { name = "cd - after a pushd into the same folder", expect = trust .. "echo x > keyrings/x.gpg",
+      edits = before_install("cd /tmp", "cd /usr/share", "pushd /usr/share", "cd -", "echo x > keyrings/x.gpg") },
   }
 end
 
