@@ -162,17 +162,6 @@ local STATES = {
     S_().performance.buffer_seconds = HIGH_SECONDS
     restore(context, kept_path(context), true, true)
   end,
-  -- the restore's check, then four bad loads (the fourth pushes the
-  -- restore's own out of the list, BUFFER_SETTLE.tracked_loads), failing
-  -- in the order sent: the last one's undo gives the check back, with no
-  -- load tracked, the restore's load forgotten in flight
-  ["loading, checking, restoring, no load tracked"] = function(context)
-    S_().performance.buffer_seconds = HIGH_SECONDS
-    restore(context, kept_path(context), true, true)
-    for index = 2, 5 do load_buffer(SLOT, "/tmp/bad" .. index .. ".wav") end
-    for number = 2, 5 do load_failed(context, number) end
-    context.forgotten_load = 1
-  end,
   ["armed, unprepared"] = function(context)
     prelude(context); load_file(context)
     with_params({record_sync = 2}, function() record_buffer(SLOT) end)
@@ -269,8 +258,9 @@ local function state_of()
     local unlisted = #slot.pending_loads == 0 and ", no load tracked" or ""
     if slot.checking_from ~= nil then
       -- a check over an empty slot waits for a length other than 0 s; a
-      -- restore's check over audio is no state of the table (the notes say
-      -- why), so its name is none of STATES
+      -- restore's check over audio, and one with no load tracked (#980), are
+      -- no states of the table (the notes say why), so their names are none
+      -- of STATES
       if slot.restoring then
         return slot.checking_from == 0 and ("loading, checking, restoring" .. unlisted)
           or "loading, checking over audio, restoring"
@@ -470,24 +460,6 @@ local ROWS = {
   {"loading, checking, restoring", "another load's number", "loading, checking, restoring"},
   {"loading, checking, restoring", "bufferLoadFailed newest", "empty", check = no_clock},
   {"loading, checking, restoring", "the notice", "loading, checking, restoring", check = noticed},
-
-  -- the restore's check given back by the last of four failed loads; its
-  -- own load forgotten (it fell out of the tracked list)
-  {"loading, checking, restoring, no load tracked", "load_buffer", "loading", check = no_clock},
-  {"loading, checking, restoring, no load tracked", "clear_buffer", "empty", check = no_clock},
-  {"loading, checking, restoring, no load tracked", "record_buffer", "recording"},
-  {"loading, checking, restoring, no load tracked", "bufferState audio", "loaded", check = restored},
-  {"loading, checking, restoring, no load tracked", "bufferState 0 s", "loading, checking, restoring, no load tracked",
-    check = then_settles("loading, checking, restoring, no load tracked")},
-  {"loading, checking, restoring, no load tracked", "another load's number",
-    "loading, checking, restoring, no load tracked"},
-  -- #980: the checked load's own failure finds nothing to undo: the slot
-  -- checks on until a report differs, or the player loads or clears (its
-  -- notice)
-  {"loading, checking, restoring, no load tracked", "bufferLoadFailed untracked",
-    "loading, checking, restoring, no load tracked", known = 980, check = role("notice")},
-  {"loading, checking, restoring, no load tracked", "the notice", "loading, checking, restoring, no load tracked",
-    check = noticed},
 
   -- armed: take 2, a replace take synced (unprepared), one by a threshold
   -- (prepared at the send) or a dub by a threshold (stopped: K3 since)
@@ -698,7 +670,6 @@ end
 local REPORTS = {"recordState armed", "recordState recording", "recordState ended", "recordState canceled"}
 local TAKES = {"armed, unprepared", "armed, prepared", "armed, playable", "armed, playable, stopped", "recording",
   "dub", "dub, stopped", "loop", "loop, stopped", "finishing, recorded", "finishing, stopped armed"}
-local CHECKED_RESTORES = {"loading, checking, restoring", "loading, checking, restoring, no load tracked"}
 
 -- Each reason is a fact of the code (lib/buffers.lua, lib/record.lua, the
 -- engine's record.md and buffers.md), true by every way into the state: a
@@ -715,8 +686,8 @@ impossible(all_but("finishing, recorded", "finishing, stopped armed", "armed, pl
   "the fallback runs only after a take ends or stops: finish_buffer_take (finishing) or start_playable_fallback"
   .. " (a playable recording stopped by K3 or its length); the report, load, clear or recording that ends the"
   .. " take ends it")
-impossible(all_but("loading, checking", "loading, checking, empty before", "loading, checking, restoring",
-    "loading, checking, restoring, no load tracked"), {"the notice"},
+impossible(all_but("loading, checking", "loading, checking, empty before", "loading, checking, restoring"),
+  {"the notice"},
   "a check's notice clock runs only while the slot checks a load (the \"buffer slots\" invariant: a load, a"
   .. " clear, a recording, the check's end and a failure whose undo gives back no check each end it)")
 
@@ -735,7 +706,7 @@ impossible({"loading, restoring, no load tracked"}, REPORTS,
   .. " reported after #974's fallback, 5 s after the stop and so past confirm_seconds of the restore's"
   .. " confirm_since, and settles it unsettled; so at 0 s with no load tracked the restore came back through"
   .. " failed loads alone, the restore's own forgotten among them")
-impossible(CHECKED_RESTORES, REPORTS,
+impossible({"loading, checking, restoring"}, REPORTS,
   "no recording since the start: a recording ends the check, and what a canceled take gives back is never"
   .. " a check (state_before_take passes over every load still checked)")
 impossible({"empty, kept state awaited"}, REPORTS,
@@ -765,8 +736,8 @@ impossible({"loop"}, {"recordState ended"},
   .. " starts its fallback (the state is then loop, stopped); a load or a clear cancels it (\"canceled\")")
 
 -- takeWriteFailed, of the newest recording
-impossible({"missing", "loading, restoring", "loading, restoring, no load tracked", "loading, checking, restoring",
-    "loading, checking, restoring, no load tracked"}, {"takeWriteFailed"},
+impossible({"missing", "loading, restoring", "loading, restoring, no load tracked", "loading, checking, restoring"},
+  {"takeWriteFailed"},
   "no recording since the start (the recordState reports' reasons above), so no scratch write")
 impossible({"empty, kept state awaited"}, {"takeWriteFailed"},
   "the newest recording was canceled, and the engine writes only a take that ended (endTake)")
@@ -780,11 +751,10 @@ impossible({"empty", "empty, kept state awaited", "empty, adoptable"},
   "no tracked load's failure can still come: a clear, a recording and a take's end empty the list; a failure"
   .. " that empties the slot comes after the failures of the loads before it (the server reads a slot's files"
   .. " in order), and one that gives back an empty slot only once every later load has failed")
-impossible({"missing", "loading, restoring, no load tracked", "loading, restoring, no load tracked, audio known",
-    "loading, checking, restoring, no load tracked"},
+impossible({"missing", "loading, restoring, no load tracked", "loading, restoring, no load tracked, audio known"},
   {"bufferLoadFailed newest", "bufferLoadFailed older"},
   "no load is tracked: none at the start, and a failed load gives back the missing path only once every"
-  .. " later load has failed (the three no-load states are named for it)")
+  .. " later load has failed (the two no-load states are named for it)")
 impossible({"loading, restoring, no load tracked, audio known"}, {"bufferLoadFailed untracked"},
   "no load the slot sent can still fail untracked: the restore's own took effect (the known length is its"
   .. " audio, reported while the take was armed), the recording emptied the list, and every load since has"
@@ -793,9 +763,13 @@ impossible({"loading, restoring, no load tracked, audio known"}, {"bufferLoadFai
 impossible({"loading, restoring", "loading, checking, restoring"}, {"bufferLoadFailed older"},
   "a restoring slot tracks at most the restore's own load: a failed later load gives back the state from"
   .. " before it, with only the loads before it")
-impossible({"loading, restoring", "loading, checking, restoring"}, {"bufferLoadFailed untracked"},
+impossible({"loading, restoring"}, {"bufferLoadFailed untracked"},
   "every load since the restore's has failed or is tracked: four newer ones would push the restore's own"
-  .. " out of the list first (the no-load states), and a clear or a recording ends the restore")
+  .. " out of the list first (the no-load state), and a clear or a recording ends the restore")
+impossible({"loading, checking, restoring"}, {"bufferLoadFailed untracked"},
+  "every load since the restore's has failed or is tracked, and so is the restore's own: a load being"
+  .. " checked is never dropped from the tracked list while it is (#980), and a clear or a recording ends"
+  .. " the restore")
 impossible({"missing"}, {"bufferLoadFailed untracked"},
   "every load sent since the slot was missing has reported its failure (only that gives the missing path"
   .. " back), and none came before it")
