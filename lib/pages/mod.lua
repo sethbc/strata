@@ -56,6 +56,8 @@ return function(S)
     hint_width = 128,     -- the hint row's width (lib/ui/header.lua's HINT_ROW_WIDTH), which K3:edit shares
     random = {depth = {0, 30}, rate = {0.02, 0.5}, matrix = {-50, 50}},
     no_home = "none",
+    empty_corner = "[empty]",              -- a corner's value while the morph is not ready (#896)
+    morph_needs = "[need %d]",             -- the morph row's text then, with MORPH.min_corners
   }
   S.MOD_PAGE = MOD_PAGE
 
@@ -813,6 +815,22 @@ return function(S)
     return matrix.home(n) .. rest
   end
 
+  -- While the morph has fewer than MORPH.min_corners corners holding a
+  -- scene (#896: S.lib.morph.plan_ready(), its own answer), a corner whose
+  -- slot is empty shows its label as text and [empty] as its value, and the
+  -- morph row says what it needs; with enough corners nothing changes.
+  -- Returns the row's text and value then, else nil
+  local MORPH_CORNERS = {morph_a = true, morph_b = true, morph_c = true, morph_d = true}
+  local function morph_unready_parts(row)
+    if not (MORPH_CORNERS[row.id] or row.id == "morph") or S.lib.morph.plan_ready() then return nil end
+    if row.id == "morph" then
+      return string.format(MOD_PAGE.morph_needs, S.lib.morph.MORPH.min_corners), row.value()
+    end
+    local slot = params:get(row.param_id)
+    if S.scenes[slot] and S.scenes[slot].populated then return nil end
+    return S.lib.scenes.label(slot), MOD_PAGE.empty_corner
+  end
+
   -- A list row's label, text (left), value (right) and whether it is dim:
   -- a routing or an L row while it moves nothing (S.lib.matrix.status)
   local function row_parts(row)
@@ -820,6 +838,8 @@ return function(S)
       local macros = S.lib.macros.bank_macros(S.lib.macros.bank())
       return row.label, nil, S.lib.macros.bank() .. "  M" .. macros[1] .. "-M" .. macros[#macros], false
     elseif row.kind == "param" then
+      local text, value = morph_unready_parts(row)
+      if text then return row.label, text, value, false end
       return row.label, nil, row.value(), false
     elseif row.kind == "toggle" then
       return row.label, nil, on_text(row.param_id), false
@@ -1349,6 +1369,9 @@ return function(S)
       S.lib.scenes.set_name(16, "WWWWWWWWWWWW"); params:set("morph_a", 16); params:set("morph_b", 15)
     end),
     state("morph at 100%", "morph", function() params:set("morph", 1) end),
+    state("morph with one corner, three empty twelve-letter names", "morph", function()
+      widest_corners(); capture_scene(S.constants.NUM_SCENES); params:set("morph", 1)
+    end),
     state("morph C, four twelve-letter scene names", "morph_c", widest_corners),
     state("morph y at 100%, four twelve-letter scene names", "morph_y", function()
       widest_corners(); params:set("morph", 1); params:set("morph_y", 1)
