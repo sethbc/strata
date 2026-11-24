@@ -154,10 +154,12 @@
     // voice's ring)
     grainNoteKinds { ^#[\buffer, \input, \stream] }
 
-    // Whether the voice is a frozen synth voice: on its synth source, its
-    // ring held (the freeze area's)
+    // Whether the voice is a frozen synth voice: its ring held (the freeze
+    // area's synth kinds) and still on its synth source (not stale, #887: a
+    // voice frozen on a slot or its input and moved to its synth while
+    // stopped holds no ring)
     frozenSynthVoice { arg voice;
-        ^(grainSource[voice] == 0) and: { areaState[\freeze][\frozen][voice] }
+        ^#[\holdSynth, \spectralSynth].includes(this.freezeKind(voice)) and: { this.freezeStale(voice).not }
     }
 
     // Live and releasing extra notes, across every voice: what the pool bounds

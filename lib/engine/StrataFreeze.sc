@@ -171,12 +171,37 @@
         ^(source == this.inputSource) or: { this.voiceSource(source) }
     }
 
+    // What the voice's freeze holds (3.9, #887), from \frozen, \mode,
+    // \source and \copied alone: \none; a synth voice's ring, \holdSynth
+    // (its writer paused) or \spectralSynth (a spectral writer); \holdSlot
+    // (a slot's scan stopped); a copy source's (the input or a voice
+    // source), \copyPending (the copy's routine still running) or \copyHeld
+    // (the copy in its copy ring, either mode). The four readers of the
+    // kind (frozenOnInput, spectralHoldsVoice, readsInputCopy and the notes
+    // area's frozenSynthVoice) are written over it and freezeStale, and
+    // read no key of their own
+    freezeKind { arg voice;
+        var state = areaState[\freeze], source;
+        if (this.validVoice(voice).not or: { state[\frozen][voice].not }) { ^\none };
+        source = state[\source][voice];
+        if (source == 0) { ^if (state[\mode][voice] == \spectral) { \spectralSynth } { \holdSynth } };
+        if (this.freezesByCopy(source)) { ^if (state[\copied][voice]) { \copyHeld } { \copyPending } };
+        ^\holdSlot
+    }
+
+    // Whether the voice is frozen on a source it no longer has (its source
+    // changed while it was stopped, which unfreezes nothing; a start's
+    // freeze, sent before its voiceOn, ends it)
+    freezeStale { arg voice;
+        ^(this.freezeKind(voice) != \none) and: { areaState[\freeze][\source][voice] != grainSource[voice] }
+    }
+
     // Whether the voice is frozen with a copy (of the input ring or, 3.8, of
     // a read voice's output ring; or a spectral writer of the input or of
-    // the read voice's tap) as what its grains read: its history is then 0
+    // the read voice's tap) as what its grains read: its history is then 0.
+    // Pending or held, stale or not
     frozenOnInput { arg voice;
-        var state = areaState[\freeze];
-        ^this.validVoice(voice) and: { state[\frozen][voice] } and: { this.freezesByCopy(state[\source][voice]) }
+        ^#[\copyPending, \copyHeld].includes(this.freezeKind(voice))
     }
 
     // Whether the voice's ring is held by a spectral writer of its voice bus
@@ -184,8 +209,7 @@
     // spectrum's phases from the voice synth, so a type switch waits for the
     // unfreeze (setVoiceType, docs/notes/engine/types.md)
     spectralHoldsVoice { arg voice;
-        var state = areaState[\freeze];
-        ^(state[\mode][voice] == \spectral) and: { state[\source][voice] == 0 }
+        ^this.freezeKind(voice) == \spectralSynth
     }
 
     // The mode a freeze of the voice uses: spectral only on the high tier,
@@ -221,8 +245,9 @@
 
     // Freeze a voice's source (the freeze grain param). A voice already
     // frozen on this source in this mode keeps its freeze; its live grain
-    // synth is only pointed at the copy again (Lua resends freeze after
-    // voiceOn; the grain synth voiceOn starts or re-gates already reads it:
+    // synth is only pointed at the copy again (a start sends freeze before
+    // its voiceOn, #325, and a voice sync sends it again after the source;
+    // the grain synth voiceOn starts or re-gates already reads the copy:
     // grainReadPairs). Frozen on another source or mode (the source changed
     // while the voice was stopped), it is unfrozen first. Each freeze is a
     // ring change, so a copy still waiting for an earlier freeze never runs.
@@ -741,13 +766,10 @@
         ([synth] ++ this.noteSynths(voice, \grain)).do({ arg each; this.noteInputReader(voice, each) });
     }
 
-    // Whether the voice's grain synth reads its copy: the voice is on the
-    // input or a voice source, frozen with a copy of that very source, and
-    // the copy is in its copy ring
+    // Whether the voice's grain synth reads its copy: the copy is in its
+    // copy ring (\copyHeld) and the voice is still on the source it froze
     readsInputCopy { arg voice;
-        ^this.freezesByCopy(grainSource[voice]) and: { this.frozenOnInput(voice) }
-            and: { areaState[\freeze][\source][voice] == grainSource[voice] }
-            and: { areaState[\freeze][\copied][voice] }
+        ^(this.freezeKind(voice) == \copyHeld) and: { this.freezeStale(voice).not }
     }
 
     // A ring's [left, right] buffers for the voice's input channel (3.8:
