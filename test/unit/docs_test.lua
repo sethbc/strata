@@ -1778,11 +1778,11 @@ debs="$RUNNER_TEMP/sc-debs"
   { name = "making of the SHA512 list", step = "list", first = ": > ", text = [==[
 : > "$RUNNER_TEMP/empty-status"
 nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
-apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s jackd2 \
+apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" "${nothing_installed[@]}" install -s jackd2 \
     "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION" \
   | awk '/^Inst / { for (i = 3; i <= NF; i++) if (substr($i, 1, 1) == "(") { print $2 "=" substr($i, 2); break } }' \
   > "$RUNNER_TEMP/sc-install.txt"
-xargs apt-cache "${nothing_installed[@]}" show < "$RUNNER_TEMP/sc-install.txt" \
+xargs apt-cache "${ubuntu_only[@]}" "${nothing_installed[@]}" show < "$RUNNER_TEMP/sc-install.txt" \
   | awk -v native="$(dpkg --print-architecture)" \
       '/^Package: / { p = $2 } /^Version: / { v = $2 } /^Architecture: / { a = $2 } /^SHA512: / { s = $2 }
        /^$/ { if (s != "" && (a == native || a == "all")) { gsub(/:/, "%3a", v); print s "  " p "_" v "_" a ".deb" }; p = v = a = s = "" }' \
@@ -1811,10 +1811,10 @@ debs="$RUNNER_TEMP/lua-debs"
   { name = "making of the SHA512 list", step = "list", first = ": > ", text = [==[
 : > "$RUNNER_TEMP/empty-status"
 nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
-apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s lua5.3 luajit \
+apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" "${nothing_installed[@]}" install -s lua5.3 luajit \
   | awk '/^Inst / { for (i = 3; i <= NF; i++) if (substr($i, 1, 1) == "(") { print $2 "=" substr($i, 2); break } }' \
   > "$RUNNER_TEMP/lua-install.txt"
-xargs apt-cache "${nothing_installed[@]}" show < "$RUNNER_TEMP/lua-install.txt" \
+xargs apt-cache "${ubuntu_only[@]}" "${nothing_installed[@]}" show < "$RUNNER_TEMP/lua-install.txt" \
   | awk -v native="$(dpkg --print-architecture)" \
       '/^Package: / { p = $2 } /^Version: / { v = $2 } /^Architecture: / { a = $2 } /^SHA512: / { s = $2 }
        /^$/ { if (s != "" && (a == native || a == "all")) { gsub(/:/, "%3a", v); print s "  " p "_" v "_" a ".deb" }; p = v = a = s = "" }' \
@@ -2086,9 +2086,10 @@ end
 -- hyphens or underscores, so an option and its setting are one word), a
 -- change of the sources, and an install that names a file, which takes the
 -- file as it is, not as apt's lists give it
--- #1005: the one line that may name Ubuntu's sources file is the list
--- step's ubuntu_only, exactly as pinned (CI_WORKFLOW.LIST_UPDATE): it only
--- points the update at the file, read as it is, and names no variable a
+-- #1005: the one line that may name Ubuntu's sources file, or set apt's
+-- sources (Dir::Etc::sourcelist, Dir::Etc::sourceparts, any case), is the
+-- list step's ubuntu_only, exactly as pinned (CI_WORKFLOW.LIST_UPDATE): it
+-- only points apt at the file, read as it is, and names no variable a
 -- later line could write through
 CI_WORKFLOW.UBUNTU_ONLY = CI_WORKFLOW.LIST_UPDATE:match("\n(ubuntu_only=[^\n]*)\n")
 function CI_WORKFLOW.apt_weakenings(workflow)
@@ -2098,8 +2099,8 @@ function CI_WORKFLOW.apt_weakenings(workflow)
     local reads_ubuntu = line:match("^%s*(.-)%s*$") == CI_WORKFLOW.UBUNTU_ONLY
     for _, word in ipairs({ "allowunauthenticated", "allowinsecurerepositories", "allowdowngradetoinsecurerepositories",
         "allowweakrepositories", "checkvaliduntil", "checkdate", "forceyes", "verifypeer", "verifyhost", "trusted=yes",
-        "sources.list" }) do
-      if plain:find(word, 1, true) and not (reads_ubuntu and word == "sources.list") then
+        "sources.list", "dir::etc::source" }) do
+      if plain:find(word, 1, true) and not (reads_ubuntu and (word == "sources.list" or word == "dir::etc::source")) then
         found[#found + 1] = word .. ": " .. line:match("^%s*(.-)%s*$")
       end
     end
@@ -2386,8 +2387,17 @@ test("the workflow refuses every weakening of apt's checks and every install of 
       edits = instead('echo "Types: deb" | sudo tee -a /etc/apt/sources.list.d/ubuntu.sources') },
     { name = "the list's ubuntu_only reading a second file", expect = "sources.list: ubuntu_only=(",
       edits = { "-o Dir::Etc::sourceparts=-)", "-o Dir::Etc::sourceparts=- -o Dir::Etc::sourcelist=/etc/apt/sources.list)" } },
+    { name = "the list's ubuntu_only reading parts from another folder", expect = "dir::etc::source: ubuntu_only=(",
+      edits = { "-o Dir::Etc::sourceparts=-)", "-o Dir::Etc::sourceparts=/tmp/parts)" } },
+    { name = "the install reading another sources file", expect = "dir::etc::source: sudo apt-get",
+      edits = on_install("-o Dir::Etc::SourceList=/tmp/x.list") },
+    { name = "the install reading another parts folder", expect = "dir::etc::source: sudo apt-get",
+      edits = on_install("-o dir::etc::sourceparts=/tmp/parts") },
   }
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, cases, "engine-shard")
+  -- the pinned ubuntu_only line itself, as the workflow indents it, passes
+  assert_equal(table.concat(CI_WORKFLOW.apt_weakenings("          " .. CI_WORKFLOW.UBUNTU_ONLY .. "\n"), " | "), "",
+    "the weakenings of the pinned ubuntu_only line")
 end)
 
 -- #786: the save is the step right after the install, and runs only when the
@@ -2439,7 +2449,7 @@ test("a kept package reaches apt only through the hash check in the Lua jobs too
         '            fi\n          done < "$debs/sums.sha512"\n          echo "$kept' } },
     { name = "the list's sums not apt's", expect = { "lua-suite: the " .. list .. " differs from its pinned text at line 8:", "/^SHA256: /" },
       edits = { "/^SHA512: / { s = $2 }", "/^SHA256: / { s = $2 }" } },
-    { name = "the list made against the image's own dpkg status", expect = differs(list, 3, "apt-get $APT_NETWORK_OPTIONS install -s lua5.3 luajit \\"),
+    { name = "the list made against the image's own dpkg status", expect = differs(list, 3, "apt-get $APT_NETWORK_OPTIONS \"${ubuntu_only[@]}\" install -s lua5.3 luajit \\"),
       edits = { '"${nothing_installed[@]}" install -s lua5.3', "install -s lua5.3" } },
     { name = "an unchecked mv", expect = reach .. 'sudo mv "$debs"/*.deb "$archives/"', edits = added('sudo mv "$debs"/*.deb "$archives/"') },
     { name = "a copy in the suite's step", expect = reach .. 'sudo cp "$RUNNER_TEMP"/lua-debs/*.deb /var/cache/apt/archives/',
@@ -2714,9 +2724,18 @@ test("a list step's update reads Ubuntu's sources alone, fails on any of their e
     { name = "the shard's list with no check of what the update read", job = "engine-shard",
       expect = { "engine-shard: the list step's update differs from its pinned text at line 17:", 'found `: > "$RUNNER_TEMP/empty-status"`' },
       edits = { check, "" } },
+    { name = "the Lua list with no check of what the update read", job = "lua-suite",
+      expect = { "lua-suite: the list step's update differs from its pinned text at line 17:", 'found `: > "$RUNNER_TEMP/empty-status"`' },
+      edits = { check, "" } },
     { name = "the Lua list checking main alone", job = "lua-suite",
       expect = "lua-suite: the list step's update differs from its pinned text at line 19:",
       edits = { "for component in main universe; do", "for component in main; do" } },
+    { name = "the Lua list's packages read from every source's lists", job = "lua-suite",
+      expect = { "lua-suite: the making of the SHA512 list differs from its pinned text at line 3:", "found `apt-get $APT_NETWORK_OPTIONS \"${nothing_installed[@]}\" install -s" },
+      edits = { 'apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" "${nothing_installed[@]}" install -s', 'apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s' } },
+    { name = "the shard's sums read from every source's lists", job = "engine-shard",
+      expect = { "engine-shard: the making of the SHA512 list differs from its pinned text at line 7:", "found `xargs apt-cache \"${nothing_installed[@]}\" show" },
+      edits = { 'xargs apt-cache "${ubuntu_only[@]}" "${nothing_installed[@]}" show', 'xargs apt-cache "${nothing_installed[@]}" show' } },
     { name = "the shard's list going on after a stale list", job = "engine-shard",
       expect = "engine-shard: the list step's update differs from its pinned text at line 22:",
       edits = { "              exit 1\n            fi\n          done\n", "              true\n            fi\n          done\n" } },
