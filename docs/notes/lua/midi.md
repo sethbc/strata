@@ -78,7 +78,7 @@ Its clearers are its owner (`set_note_tap(nil)`, the tap itself included, from t
 - **Invariant:** none here: a port's listeners and its owner are the `midi ports` machine's (`lib/io/ports.lua`), which holds that its event and its listeners agree.
 - **Test:** `test/unit/midi_in_test.lua`: "MIDI in leaves a claimed port alone", "the MIDI port moved onto a claimed port listens to nothing until the claim is released", "MIDI device param, hot-plug and the SETUP page", "a MIDI device moved off the selected port in SYSTEM > DEVICES gives up the notes it held".
 
-A claim releases every MIDI note and resets the master bend ranges, as a port change does; its release listens again and resets nothing. SETUP's `midi` row names a claimed port's owner (`docs/notes/lua/pages/setup.md`); nothing on IO says the keyboard is not heard (#913's mark is package 5c's). Nothing happens in `ended`: every handler is gone (`lib/io/ports.lua`'s step after this one hands hot-plug back).
+A claim releases every MIDI note and resets the master bend ranges, as a port change does; its release listens again and resets nothing. SETUP's `midi` row names a claimed port's owner (`docs/notes/lua/pages/setup.md`); IO's `midi` section shows a `midi in <port> (<owner>)` status row while the port is claimed, so the keyboard not being heard is said there too (#913, `docs/notes/lua/io/midi_out.md`). Nothing happens in `ended`: every handler is gone (`lib/io/ports.lua`'s step after this one hands hot-plug back).
 
 | State | Event | Next | Effect |
 |---|---|---|---|

@@ -634,4 +634,49 @@ test("the voice section's status state shows the title with the probe's mark", f
   assert_screen_layout(context, "IO voice section status state")
 end)
 
+
+-- #880 (5c): a target that raised is skipped until the patterns stop or a
+-- route changes; its rows in the voice section say so until then
+test("a failed target's row is marked until the patterns stop", function()
+  local context, S, targets = started()
+  local broken = true
+  local a = recording_target(S, "a", {
+    rows = function() return { { label = "a out", kind = "action", hint = "go", run = function() end, id = "a" },
+      { kind = "status", text = "a note" } } end,
+    note_on = function(...) if broken then error("probe target") end end })
+  recording_target(S, "b", {
+    rows = function() return { { label = "b out", kind = "action", hint = "go", run = function() end, id = "b" } } end })
+  local function voice_row(id)
+    for _, row in ipairs(S.lib.pages_io.rows()) do
+      if row.section == "voice" and row.id == id then return row end
+    end
+  end
+  assert_equal(targets.TARGETS.failed_mark, "[error]", "the mark")
+  a.routes[1] = true
+  one_step(S, 15)
+  assert_equal(voice_row("a").mark_shown, nil, "not failed: no mark")
+  pattern_clock_start()
+  context.clock.run_for(0.01)
+  h.claim_script_errors(context, 1, "strata: target a failed: ", "probe target")
+  assert_equal(voice_row("a").mark_shown, "[error]", "a's row is marked")
+  assert_equal(voice_row("b").mark_shown, nil, "b's is not")
+  assert_equal(voice_row("a").shown, nil, "the row's own text as it gave it")
+  show_page("IO"); S.lib.pages_io.go_to_row("targets test", "voice", { id = "a" }); redraw()
+  assert_true(h.screen_shows(context, "[error]"), "on the screen")
+  assert_screen_layout(context, "IO, a failed target")
+  context.clock.run_for(STEP_SECONDS)
+  assert_equal(voice_row("a").mark_shown, "[error]", "still skipped, still marked")
+  pattern_clock_stop()
+  assert_equal(voice_row("a").mark_shown, nil, "the patterns stopped: the mark ends")
+  -- a route change ends it too
+  pattern_clock_start()
+  context.clock.run_for(0.01)
+  h.claim_script_errors(context, 1, "strata: target a failed: ", "probe target")
+  assert_equal(voice_row("a").mark_shown, "[error]", "failed again")
+  targets.route_changed(4)
+  assert_equal(voice_row("a").mark_shown, nil, "a route changed: the mark ends")
+  pattern_clock_stop()
+  broken = false
+end)
+
 end

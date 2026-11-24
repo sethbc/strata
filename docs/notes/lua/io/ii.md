@@ -62,7 +62,7 @@ The leading flag's changes:
 |---|---|
 | The leaving sequence (the rig leaves `strata`, or cleanup), the flag still set | `end_target` for each device (its offs join by the table above); the waiting offs in order: the first 14 sent, the rest owed; the waiting sends dropped; the releases' lines while the total is at most 15, the rest dropped; the flag cleared; the queue, pairs and lines forgotten |
 | crow leaves while Strata leads | the waiting offs owed; the queue dropped, every `w` to 0; `high` kept; the flag cleared; `owing` set |
-| Strata takes the lead | the flag set; pairs and lines forgotten; each device's `ready`; the owed offs queued (never refused or dropped); the store emptied; `owing` cleared |
+| Strata takes the lead | the flag set; pairs and lines forgotten; `dropped` back to 0 (#937); each device's `ready`; the owed offs queued (never refused or dropped); the store emptied; `owing` cleared |
 
 While Strata does not lead, `send` and `send_direct` return false and send nothing; `send_off` returns false, and while `owing` it owes the off unless its line is known low. At crow's leaving, by the line's state: high, its note's off comes later and is owed (crow away) or is the new lead's first off (crow back); unknown or a pair never learned, its off is owed (a needed or a harmless low); an off waiting, owed at once; low with a send waiting, that send never went, so its off is not owed.
 
@@ -82,4 +82,4 @@ Each event goes to `S.lib.io_actions` (`docs/notes/lua/io/actions.md`), which ch
 
 ## The section
 
-IO's `ii` section has one `rig` row, `bus leader`, on `ii_bus`, reading `off`, `strata leads` or `teletype leads` (the rig spec's display labels, `S.lib.io_rig.text`; `docs/notes/lua/io/rig.md`). Its title shows `[--]` without a crow, else `<n> dropped` once the queue has dropped any (the count is the session's). Layout states: without a crow; a crow with the bus off; Strata leads; Teletype leads; messages dropped.
+IO's `ii` section has one `rig` row, `bus leader`, on `ii_bus`, reading `off`, `strata leads` or `teletype leads` (the rig spec's display labels, `S.lib.io_rig.text`; `docs/notes/lua/io/rig.md`). Its title shows, joined by a space, `[--]` without a crow, `<n> owed` while offs are owed to the next lead (`M.owed()`, #880: with the bus off or Teletype's too, where nothing lowers them), and `<n> dropped` once the queue has dropped any since the last lead (`take_lead` sets the count back to 0, and it stays after the lead ends, #937). Layout states: without a crow; a crow with the bus off; Strata leads; Teletype leads; messages dropped; an off owed (a gate high as crow left, the bus turned off, crow back: `1 owed`).

@@ -2627,4 +2627,80 @@ test("the midi out zones invariant leaves the holders alone once the module has 
   assert_equal(invariant_answer(S, "midi out zones"), nil, "stopped: the holders are not kept")
 end)
 
+
+-- #880, #913 (5c): what IO shows of a port another owner holds. The rows
+-- of a section as the page builds them, and the voice section's midi row
+local function io_rows(S, section_name)
+  local rows = {}
+  for _, row in ipairs(S.lib.pages_io.rows()) do
+    if row.section == section_name and row.kind ~= "title" then rows[#rows + 1] = row end
+  end
+  return rows
+end
+
+local function voice_midi_row(S)
+  for _, row in ipairs(io_rows(S, "voice")) do
+    if row.id == "midi" then return row end
+  end
+end
+
+-- #880: a voice routed to a port a remote holds plays nothing there, so its
+-- row says so beside the route, and only while the port is held
+test("a voice's row whose port a remote holds is marked", function()
+  local context, S, out = started()
+  context.midi.plug(3, "synth")
+  params:set("v1_out_port", 3)
+  context.clock.advance_until(S.lfo_clock)
+  assert_equal(voice_midi_row(S).shown, "port 3  ch 1", "the route")
+  assert_equal(voice_midi_row(S).mark_shown, nil, "a free port: no mark")
+  assert_true(S.lib.io_rig.set("remote_grid_port", 3), "a remote grid on port 3")
+  assert_true(S.lib.io_remote.holds(3), "the remote holds the port")
+  assert_equal(voice_midi_row(S).shown, "port 3  ch 1", "the route as set")
+  assert_equal(out.MIDI_OUT.held, "[held]", "the mark")
+  assert_equal(voice_midi_row(S).mark_shown, out.MIDI_OUT.held, "marked held")
+  h.show_page("IO"); redraw()
+  assert_true(h.screen_shows(context, "[held]"), "the mark on the screen")
+  h.assert_screen_layout(context, "IO, a voice's port held")
+  -- another voice, routed elsewhere, is not marked
+  params:set("v2_out_port", 2)
+  S.lib.ui_keys.select_voice_by(1)
+  context.clock.advance_until(S.lfo_clock)
+  assert_equal(voice_midi_row(S).mark_shown, nil, "voice 2's port 2 is free")
+  S.lib.ui_keys.select_voice_by(-1)
+  assert_true(S.lib.io_rig.set("remote_grid_port", 0), "the remote lets the port go")
+  assert_equal(voice_midi_row(S).mark_shown, nil, "the port free: no mark")
+end)
+
+-- #913: the port Strata's MIDI input listens to (SETUP's midi device) is
+-- not heard while another owner claims it; IO's midi section says so
+test("a port the player plays from that another owner holds is marked", function()
+  local context, S = started()
+  context.midi.plug(3, "keys")
+  params:set("midi_device", 3)
+  local function in_rows()
+    local found = {}
+    for _, row in ipairs(io_rows(S, "midi")) do
+      if row.id == "midi in" then found[#found + 1] = row end
+    end
+    return found
+  end
+  assert_equal(#in_rows(), 0, "a port nobody holds: no row")
+  assert_true(S.lib.io_rig.set("remote_grid_port", 3), "a remote grid on port 3")
+  local rows = in_rows()
+  assert_equal(#rows, 1, "one row")
+  assert_equal(rows[1].kind, "status", "a status row, never selectable")
+  assert_equal(rows[1].shown, "midi in 3 (remote grid)", "the port and its owner")
+  assert_equal(io_rows(S, "midi")[1].id, "midi in", "first in the section, so its top shows it")
+  h.show_page("IO"); S.lib.pages_io.show_section("midi"); redraw()
+  assert_true(h.screen_shows(context, "midi in 3 (remote grid)"), "on the screen")
+  h.assert_screen_layout(context, "IO, the input's port held")
+  -- another port held is not the one played from
+  context.midi.plug(5, "remote")
+  assert_true(S.lib.io_rig.set("remote_grid_port", 5), "the remote on port 5")
+  assert_equal(S.lib.io_ports.owner(5), "remote grid", "port 5 claimed")
+  assert_equal(#in_rows(), 0, "port 3 free again: no row")
+  params:set("midi_device", 5)
+  assert_equal(in_rows()[1].shown, "midi in 5 (remote grid)", "the input moved to the held port")
+end)
+
 end

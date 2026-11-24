@@ -148,4 +148,33 @@ test("without the ii module the device does nothing and the page draws", functio
   local ok, problem = pcall(redraw)
   assert_true(ok, tostring(problem))
 end)
+
+-- #937 (5c): a route set while Strata does not lead the ii bus (no crow, the
+-- bus off or Teletype's) plays nothing; its row in IO's voice section says
+-- so. The real ii module here, with the crow stub
+test("an ii route is marked while Strata does not lead", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function row()
+    for _, entry in ipairs(S.lib.pages_io.rows()) do
+      if entry.section == "voice" and entry.param_id == "v1_out_wsyn" then return entry end
+    end
+  end
+  assert_equal(local_value("S").lib.io_wsyn.WSYN.idle_mark, "[idle]", "the mark")
+  assert_equal(row().mark_shown, nil, "a route not set: no mark, whoever leads")
+  params:set("v1_out_wsyn", 1)
+  assert_equal(row().mark_shown, "[idle]", "set, with no crow")
+  context.crow.plug()
+  assert_equal(row().mark_shown, "[idle]", "set, the bus off")
+  assert_true(S.lib.io_rig.set("ii_bus", "strata"), "Strata leads")
+  assert_equal(row().mark_shown, nil, "Strata leads: no mark")
+  assert_true(S.lib.io_rig.set("ii_bus", "teletype"), "Teletype leads")
+  assert_equal(row().mark_shown, "[idle]", "Teletype leads: marked")
+  h.show_page("IO"); S.lib.pages_io.go_to_row("wsyn", "voice", {param_id = "v1_out_wsyn"}); redraw()
+  assert_true(h.screen_shows(context, "[idle]"), "on the screen")
+  h.assert_screen_layout(context, "IO, an idle wsyn route")
+  params:set("v1_out_wsyn", 0)
+  assert_equal(row().mark_shown, nil, "the route off: no mark")
+end)
+
 end

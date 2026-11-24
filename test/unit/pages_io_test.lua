@@ -89,6 +89,52 @@ test("a title row shows its section's status at the right", function()
   assert_screen_layout(context, "IO with a status")
 end)
 
+-- 5c (#880, #913, #937): a row's mark (a held port, a failed target, an
+-- idle ii route) is drawn at the right, its value moved left of it and cut
+-- to the room left, so the mark always shows; a row without one is as before
+test("a row's mark shows at the right, its value before it", function()
+  local context, S = loaded()
+  local marked = true
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    return {
+      { label = "route", kind = "param", param_id = "mutation_rate", format = "%.1f s",
+        mark = function() return marked and "[held]" or nil end },
+      { label = "long", kind = "action", hint = "go", run = function() end, mark = "[error]",
+        text = function() return "a value far too long to fit beside its label and its mark" end },
+      { label = "plain", kind = "param", param_id = "mutation_rate", format = "%.1f s" },
+    }
+  end })
+  local rows = S.lib.pages_io.rows()
+  assert_equal(rows[2].mark_shown, "[held]", "a function's mark")
+  assert_equal(rows[3].mark_shown, "[error]", "a string's mark")
+  assert_equal(rows[4].mark_shown, nil, "no mark")
+  show_page("IO"); redraw()
+  local gap = S.lib.pages_io.IO_PAGE.value_gap
+  local mark = text_entry(context, "[held]")
+  assert_true(mark ~= nil, "the mark is drawn")
+  assert_equal(mark.align, "right"); assert_equal(mark.x, 124, "ending at value_right")
+  local value = text_entry(context, string.format("%.1f s", params:get("mutation_rate")))
+  local values = {}
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == mark.y and entry.align == "right" and entry ~= mark then values[#values + 1] = entry end
+  end
+  assert_equal(#values, 1, "one value on the marked row")
+  assert_equal(values[1].x, 124 - screen.text_extents("[held]") - gap, "the value ends a gap before the mark")
+  assert_true(value ~= nil, "the value is drawn")
+  local long_mark = text_entry(context, "[error]")
+  assert_true(long_mark ~= nil, "a long value never hides the mark")
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == long_mark.y and entry.align == "right" and entry ~= long_mark then
+      assert_true(entry.x - screen.text_extents(entry.text) >= 4 + screen.text_extents("long") + gap,
+        "the long value is cut to the room the label and the mark leave")
+    end
+  end
+  assert_screen_layout(context, "IO with marked rows")
+  marked = false
+  redraw()
+  assert_true(text_entry(context, "[held]") == nil, "the mark goes with its fact")
+end)
+
 test("E2 moves over the selectable rows and K2 jumps a section", function()
   local context, S = loaded()
   S.register_io_section({ name = "voice", title = "voice", rows = function()

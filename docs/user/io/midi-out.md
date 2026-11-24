@@ -14,7 +14,7 @@ On IO, the `voice` section shows the selected voice's `midi` row (ALT+E2 selects
 - **mode**: `plain` or `mpe`
 - **members**: 1 to 15 (15 by default), the member channels of an MPE voice
 
-The row reads `off`, `port 2  ch 3` or `port 2  mpe 15`.
+The row reads `off`, `port 2  ch 3` or `port 2  mpe 15`. While a remote grid, a remote arc or `midi grid` holds the voice's port, the row shows `[held]` at its right: the voice sends nothing there until the port is let go.
 
 ### Plain
 
@@ -47,6 +47,8 @@ Both start off; the five rows are at the end of IO's `midi` section:
 - **pc out**: each scene recall sends program change scene - 1 on **pc out port** and **pc out channel**. A recall a program change asked for is not sent back to the port it came from, even when it waits for the beat or bar and other scenes are recalled meanwhile. If that waiting recall never happens (another scene key replaced it), the next recall of its scene sends nothing to that port, once.
 
 The section's title line shows `[--]` while a port some setting sends on has no device.
+
+While something else claims the port you play Strata from (the `midi device` port in PARAMETERS > midi: a remote grid, a remote arc, `midi grid` or a controller), the notes you play there are not heard, and the section's first line says so in dim text, naming the port and its owner: `midi in 3 (remote grid)`. It goes once the port is let go or you pick another.
 
 ## Sources
 

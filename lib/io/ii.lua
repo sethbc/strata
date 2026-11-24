@@ -38,7 +38,7 @@ return function(S)
   local SPEC = {
     bus_key = "ii_bus",
     group = {id = "strata_out_ii", name = "out ii"}, unused_name = "unused",
-    absent = "[--]", dropped = " dropped", row_label = "bus leader",
+    absent = "[--]", dropped = " dropped", owed = " owed", row_label = "bus leader",
     -- Teletype's CROW.C1 to C3 (crow-ii.md §3): each a crow-side function
     -- that tells norns one fixed event; never call4, never a query
     handlers = {
@@ -96,6 +96,8 @@ return function(S)
     return "ii." .. device .. "." .. command .. "(" .. table.concat(args, ", ") .. ")"
   end
 
+  -- A refused send, counted for IO's title until the next lead starts the
+  -- count again (#937): the drops of the last lead, kept after it ends
   local function count_drop()
     state.dropped = state.dropped + 1
     request_redraw()
@@ -450,14 +452,16 @@ return function(S)
     end
   end
 
-  -- Strata leads: the flag set, a new lead knowing nothing of the lines,
-  -- then each device made ready, then the owed offs queued (never refused
-  -- or dropped) and the store emptied. Once only: a second crow plugged in
+  -- Strata leads: the flag set, a new lead knowing nothing of the lines
+  -- and having dropped nothing (the count is the lead's, #937), then each
+  -- device made ready, then the owed offs queued (never refused or
+  -- dropped) and the store emptied. Once only: a second crow plugged in
   -- calls norns.crow.add again with no remove, and its setup leaves the
   -- lead and the queue as they are
   local function take_lead()
     if state.leading then return end
     state.leading = true
+    state.dropped = 0
     forget_lines()
     forget_turns()
     call_devices("ready")
@@ -672,10 +676,14 @@ return function(S)
 
   S.register_io_section({name = "ii", title = "ii",
     rows = function() return {{label = SPEC.row_label, kind = "rig", key = SPEC.bus_key}} end,
+    -- no crow, the offs owed to the next lead (#880) and the lead's drops
+    -- (#937), each while it holds
     status = function()
-      if not present() then return SPEC.absent end
-      if state.dropped > 0 then return state.dropped .. SPEC.dropped end
-      return nil
+      local parts = {}
+      if not present() then parts[#parts + 1] = SPEC.absent end
+      if #state.owed.order > 0 then parts[#parts + 1] = #state.owed.order .. SPEC.owed end
+      if state.dropped > 0 then parts[#parts + 1] = state.dropped .. SPEC.dropped end
+      return #parts > 0 and table.concat(parts, " ") or nil
     end,
     layout_states = {
       layout_state("without a crow"),
@@ -683,6 +691,17 @@ return function(S)
       layout_state("Strata leads", "strata"),
       layout_state("Teletype leads", "teletype"),
       layout_state("messages dropped", "strata", II.queue_max + 2),
+      -- an off owed (#880): a gate high as crow left, then the bus off, crow back
+      {name = "an off owed", setup = function(context)
+        context.crow.plug()
+        turn_bus("strata")
+        M.send("er301", "tr", 1, 1)
+        context.clock.advance_until(S.lfo_clock)
+        context.crow.unplug()
+        M.send_off("er301", "tr", 1, 0)
+        turn_bus("off")
+        context.crow.plug()
+      end},
     }})
 
   ---------------------------------------------------------------------------

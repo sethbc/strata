@@ -38,6 +38,11 @@ The e16 and faders rows (and their channel, cc, encoding and hires rows) are all
 
 The `voice` section comes first. Its title names the selected voice (`voice 3`); ALT+E2 selects another. Under it, each external instrument a voice can play adds its routes for that voice: `midi` (a detail list: port, channel, mode, members), `jf` and `jf level`, `w/ syn` and `w/ level`, `er-301`, `txo` (a detail list), `txo attack` and `txo decay`, and `nb`, in that order (a line `nb mods send on their own` follows `nb` while any voice has an nb player). crow's outputs follow a voice's pitch or gate from the `crow` section, so crow adds no row here. A mark at the right of the title tells you when a route needs attention (`[!]`, see [nb voices](../io/nb.md)).
 
+A route that is set but plays nothing says so at the right of its row, beside its value:
+- `[held]`: the voice's MIDI port is held by a remote grid, a remote arc or `midi grid` (see [MIDI out](../io/midi-out.md))
+- `[idle]`: an ii route (`jf`, `w/ syn`, `er-301`) while Strata does not lead the ii bus (see [the ii bus](../io/ii.md))
+- `[error]`: the instrument's part of Strata failed (the console names it) and is skipped for new notes until you stop the patterns or change a route
+
 What a routed voice plays on its targets:
 - **its pattern steps**: each step plays the step's pitches (the chord's notes, or the voice's own pitch, moved by the step's pitch lock) at the step's level, and each note ends just before the step's gate does (30 ms early, or half the note for a very short one), so a gate or trigger input sees a low before the next step raises it; a ratchet's next hit ends the note before it plays again
 - **its played notes**: each MIDI note you play on the voice, held for as long as you hold it (or latch it), with its bend, pressure and slide where the target takes them

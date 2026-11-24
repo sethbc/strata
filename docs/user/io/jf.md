@@ -6,7 +6,7 @@ It is off by default: with the routes off Strata sends Just Friends nothing.
 
 ## What you need
 
-- crow on the ii bus, and the `bus leader` row of IO's `ii` section set to `strata leads` (a rig setting), so that Strata leads the bus. A route does nothing while Strata does not lead.
+- crow on the ii bus, and the `bus leader` row of IO's `ii` section set to `strata leads` (a rig setting), so that Strata leads the bus. A route does nothing while Strata does not lead, and its `jf` row then shows `[idle]` at its right.
 - Just Friends' SPEED switch at sound (not shape). When Strata starts leading it sends `mode 1`, which picks Synthesis from that switch; with the switch at shape, Just Friends enters Geode instead. When Strata stops leading it sends `mode 0`.
 
 ## The settings

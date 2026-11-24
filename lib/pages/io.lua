@@ -25,6 +25,7 @@ return function(S)
     value_gap = 4,        -- the least space between a label and its value (a longer value is cut)
     title_level = 10,     -- a title and its status
     note_level = 4,       -- a status row
+    mark_level = 15,      -- a row's mark (its optional `mark`: a held port, a failed target, an idle route)
     texts = {empty = "no sections", error = "error", not_saved = "setting not saved"},
     -- the draw that first shows the cursor on a row it fell to (its own
     -- row went: view.unseen) marks that row at x 0, before its label at
@@ -107,6 +108,9 @@ return function(S)
     if row.id ~= nil and type(row.id) ~= "string" and type(row.id) ~= "number" then
       error("an id is a string or a number", 0)
     end
+    if row.mark ~= nil and type(row.mark) ~= "string" and type(row.mark) ~= "function" then
+      error("a mark is a string or a function", 0)
+    end
     local entry = {}
     for field, value in pairs(row) do entry[field] = value end
     entry.section = section_name
@@ -114,6 +118,8 @@ return function(S)
     if row.kind == "param" then entry.shown = param_text(row)
     elseif row.kind == "rig" then entry.shown = S.lib.io_rig.text(row.key)
     else entry.shown = text_of(row.text) end
+    -- the mark it shows now, read at each rebuild as the rest is (nil: none)
+    if row.mark ~= nil and row.kind ~= "status" then entry.mark_shown = text_of(row.mark) end
     return entry
   end
 
@@ -260,7 +266,9 @@ return function(S)
 
   -- Draw one row at y: a title at x 0 with its status right-aligned; a
   -- status row's text; any other row's label at row_indent, its value
-  -- right-aligned at value_right and cut to the room the label leaves
+  -- right-aligned at value_right and cut to the room the label leaves. A
+  -- row's mark is right-aligned at value_right, its value then ending a
+  -- gap before it and the label cut to leave the mark its room
   local function draw_row(row, y, selected, value_right)
     local cut = S.lib.ui_text.fit_text
     if row.kind == "title" then
@@ -282,12 +290,20 @@ return function(S)
       screen.text(cut(row.shown or "", value_right - x))
       return
     end
+    local right = value_right
+    if row.mark_shown and row.mark_shown ~= "" then
+      screen.level(IO_PAGE.mark_level)
+      screen.move(value_right, y)
+      screen.text_right(row.mark_shown)
+      right = value_right - screen.text_extents(row.mark_shown) - IO_PAGE.value_gap
+      screen.move(x, y)
+    end
     screen.level(selected and 15 or 4)
-    local label = cut(row.label, value_right - x)
+    local label = cut(row.label, right - x)
     screen.text(label)
     if row.shown and row.shown ~= "" then
-      local room = value_right - x - screen.text_extents(label) - IO_PAGE.value_gap
-      screen.move(value_right, y)
+      local room = right - x - screen.text_extents(label) - IO_PAGE.value_gap
+      screen.move(right, y)
       screen.text_right(cut(row.shown, room))
     end
   end
