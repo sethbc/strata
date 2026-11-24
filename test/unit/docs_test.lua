@@ -2091,20 +2091,30 @@ end
 -- list step's ubuntu_only, exactly as pinned (CI_WORKFLOW.LIST_UPDATE): it
 -- only points apt at the file, read as it is, and names no variable a
 -- later line could write through
--- #1011: and what points apt at other configuration, keyrings or sources:
--- Dir::Etc and Dir= (apt.conf(5): they move the whole configuration, its
--- trusted keys and sources included; Dir::State, which the SHA512 list's
--- making sets, is not one of them), the word trusted (Dir::Etc::trusted,
--- trustedparts, a deb822 Trusted: yes), APT_CONFIG and apt's own -c or
+-- #1011: and what points apt at other configuration, keyrings, lists or
+-- sources: every Dir:: setting but Dir::State::status, which the SHA512
+-- list's making sets (apt.conf(5): Dir::Etc moves the configuration, its
+-- keys and sources included, Dir::State its lists, Dir::Bin its methods,
+-- gpgv's among them), Dir= (with an attached -o too), the word trusted
+-- (Dir::Etc::trusted, trustedparts, a deb822 Trusted: yes), apt-key (it
+-- writes /etc/apt/trusted.gpg), APT_CONFIG and apt's own -c or
 -- --config-file (in a command of apt's alone: python3 -c and git -C are
--- not), apt's nested syntax (Dir {, Etc {) and any write under /etc/apt/ or
+-- not), apt's nested syntax (Dir {, Etc {), any write under /etc/apt/ or
 -- of a file named apt.conf* (a redirection, tee, cp, mv, install, ln,
--- sed -i, dd of= or a download's -o, also through a variable assigned such
--- a path), but the mirror reorder (#999), the one write the workflow makes
+-- sed -i, dd of= or a download's -o, past sudo and its options, also
+-- through a variable assigned such a path), a cd or pushd into /etc/apt/,
+-- and an assignment of such a path but the pinned ubuntu_only and mirrors=
+-- lines; but the mirror reorder (#999), the one write the workflow makes
 -- there, exactly as pinned: a line, not a step, is let through, so a write
 -- added beside the reorder is still refused
 CI_WORKFLOW.UBUNTU_ONLY = CI_WORKFLOW.LIST_UPDATE:match("\n(ubuntu_only=[^\n]*)\n")
+CI_WORKFLOW.MIRRORS = CI_WORKFLOW.LIST_UPDATE:match("\n(mirrors=[^\n]*)\n")
 CI_WORKFLOW.REORDER = CI_WORKFLOW.LIST_UPDATE:match("\n%s*(sudo sed %-i [^\n]*)\n")
+-- sudo's options that take a value (sudo(8)), skipped with it
+CI_WORKFLOW.SUDO_VALUES = { ["-u"] = true, ["-g"] = true, ["-p"] = true, ["-C"] = true, ["-D"] = true, ["-r"] = true,
+  ["-t"] = true, ["-T"] = true, ["-U"] = true, ["-R"] = true, ["--user"] = true, ["--group"] = true, ["--prompt"] = true,
+  ["--close-from"] = true, ["--chdir"] = true, ["--role"] = true, ["--type"] = true, ["--command-timeout"] = true,
+  ["--other-user"] = true, ["--chroot"] = true }
 -- #1011: whether a word names a file of apt's configuration: a path under
 -- /etc/apt/ (with doubled slashes or ./ folded), a file named apt.conf*, or
 -- a variable assigned one (`assigned`)
@@ -2124,7 +2134,19 @@ function CI_WORKFLOW.written_words(command)
   for target in command:gmatch(">>?%s*([^%s>&][^%s]*)") do targets[#targets + 1] = target end
   local words = {}
   for word in command:gmatch("%S+") do words[#words + 1] = (word:gsub("^['\"]+", "")) end
-  local at = 1
+  -- sudo's options (and their values) from `at` on
+  local function past_sudo_options(at)
+    while words[at] and words[at]:match("^%-") do
+      local option = words[at]
+      at = at + 1
+      if option == "--" then break end
+      if CI_WORKFLOW.SUDO_VALUES[option] then at = at + 1 end
+    end
+    return at
+  end
+  -- CI_WORKFLOW.commands strips a leading sudo but not its options, and no
+  -- command starts with a -
+  local at = past_sudo_options(1)
   while words[at] do
     local word = words[at]
     if word:match("^[%a_][%w_]*=") then at = at + 1
@@ -2133,6 +2155,7 @@ function CI_WORKFLOW.written_words(command)
       at = at + 1
       while words[at] and words[at]:match("^%-") do at = at + 1 end
       if word == "timeout" and words[at] and words[at]:match("^%d") then at = at + 1 end
+    elseif word == "sudo" then at = past_sudo_options(at + 1)
     else break end
   end
   local name, rest, operands = words[at] or "", {}, {}
@@ -2178,13 +2201,20 @@ function CI_WORKFLOW.apt_weakenings(workflow)
     local reads_ubuntu = trimmed == CI_WORKFLOW.UBUNTU_ONLY
     for _, word in ipairs({ "allowunauthenticated", "allowinsecurerepositories", "allowdowngradetoinsecurerepositories",
         "allowweakrepositories", "checkvaliduntil", "checkdate", "forceyes", "verifypeer", "verifyhost", "trusted=yes",
-        "sources.list", "dir::etc::source", "dir::etc", "trusted" }) do
-      if plain:find(word, 1, true) and not (reads_ubuntu and (word == "sources.list" or word:match("^dir::etc"))) then
+        "sources.list", "dir::etc::source", "trusted", "aptkey" }) do
+      if plain:find(word, 1, true) and not (reads_ubuntu and (word == "sources.list" or word == "dir::etc::source")) then
         found[#found + 1] = word .. ": " .. trimmed
       end
     end
-    -- Dir= as a word of its own (a NORNS_DIR= is not apt's)
-    if plain:find("%f[%w]dir=") then found[#found + 1] = "dir=: " .. trimmed end
+    for at in plain:gmatch("()dir::") do
+      if not reads_ubuntu and plain:sub(at, at + #"dir::state::status" - 1) ~= "dir::state::status" then
+        found[#found + 1] = "a Dir:: setting (but Dir::State::status): " .. trimmed
+        break
+      end
+    end
+    -- Dir= as a word of its own (a NORNS_DIR= is not apt's), or after an
+    -- attached -o
+    if plain:find("%f[%w]dir=") or line:lower():find("%-o['\"]?dir=") then found[#found + 1] = "dir=: " .. trimmed end
     if line:find("APT_CONFIG", 1, true) then found[#found + 1] = "APT_CONFIG: " .. trimmed end
     for _, block in ipairs({ "Dir {", "Etc {" }) do
       if plain:find("%f[%w]" .. block:lower():gsub(" ", "%%s*")) then
@@ -2196,7 +2226,12 @@ function CI_WORKFLOW.apt_weakenings(workflow)
     end
     local name, value = trimmed:match("^export%s+([%a_][%w_]*)=(.*)$")
     if not name then name, value = trimmed:match("^([%a_][%w_]*)[=:]%s*(.*)$") end
-    if name and CI_WORKFLOW.names_apt_config(value, {}) then assigned[name] = true end
+    if name and CI_WORKFLOW.names_apt_config(value, {}) then
+      assigned[name] = true
+      if not reads_ubuntu and trimmed ~= CI_WORKFLOW.MIRRORS then
+        found[#found + 1] = "an assignment of a path of apt's configuration: " .. trimmed
+      end
+    end
   end
   for _, job in ipairs(CI_WORKFLOW.jobs(workflow)) do
     for _, step in ipairs(job.steps) do
@@ -2230,6 +2265,9 @@ function CI_WORKFLOW.apt_weakenings(workflow)
               found[#found + 1] = "a configuration file for apt (-c, --config-file): " .. trimmed
               break
             end
+          end
+          if (words[1] == "cd" or words[1] == "pushd") and words[2] and CI_WORKFLOW.names_apt_config(words[2], assigned) then
+            found[#found + 1] = "a change into apt's configuration folder: " .. trimmed
           end
           for _, target in ipairs(reorder and {} or CI_WORKFLOW.written_words(command)) do
             if CI_WORKFLOW.names_apt_config(target, assigned) then
@@ -2284,12 +2322,14 @@ function CI_WORKFLOW.relocation_cases()
   local parts = "-o Dir::Etc::sourceparts=-)"
   local list_retry = "priority:9/' \"$mirrors\"\n            cat \"$mirrors\"\n            status=0\n            sudo timeout --kill-after=5 60 "
   local write = "a write into apt's configuration: "
+  local dir = "a Dir:: setting (but Dir::State::status): "
+  local kept_line = "          echo \"$kept package files from the cache, each matching apt's lists\"\n"
   return {
     -- the whole configuration moved (apt.conf(5): Dir, Dir::Etc)
     { name = "-o Dir=", expect = "dir=: sudo apt-get", edits = on_install("-o Dir=/tmp/apt") },
-    { name = "-o Dir::Etc=", expect = "dir::etc: sudo apt-get", edits = on_install("-o Dir::Etc=/tmp/etc") },
-    { name = "Dir::Etc::parts, quoted, any case", expect = "dir::etc: sudo apt-get", edits = on_install('-o "dir::etc::parts=/tmp/conf.d"') },
-    { name = "the list's ubuntu_only moving Dir::Etc", expect = "dir::etc: ubuntu_only=(", edits = { parts, "-o Dir::Etc::sourceparts=- -o Dir::Etc=/tmp/etc)" } },
+    { name = "-o Dir::Etc=", expect = dir .. "sudo apt-get", edits = on_install("-o Dir::Etc=/tmp/etc") },
+    { name = "Dir::Etc::parts, quoted, any case", expect = dir .. "sudo apt-get", edits = on_install('-o "dir::etc::parts=/tmp/conf.d"') },
+    { name = "the list's ubuntu_only moving Dir::Etc", expect = dir .. "ubuntu_only=(", edits = { parts, "-o Dir::Etc::sourceparts=- -o Dir::Etc=/tmp/etc)" } },
     { name = "the list's ubuntu_only moving Dir", expect = "dir=: ubuntu_only=(", edits = { parts, "-o Dir::Etc::sourceparts=- -o Dir=/tmp/apt)" } },
     -- other keyrings, and a deb822 source trusted unsigned
     { name = "Dir::Etc::trusted", expect = "trusted: sudo apt-get", edits = on_install("-o Dir::Etc::trusted=/tmp/k.gpg") },
@@ -2323,6 +2363,24 @@ function CI_WORKFLOW.relocation_cases()
       edits = { list_retry, "priority:9/' \"$mirrors\" /etc/apt/apt.conf.d/70debconf\n            cat \"$mirrors\"\n            status=0\n            sudo timeout --kill-after=5 60 " } },
     { name = "a tee in the list step beside the reorder", expect = write .. "echo 'Acquire::Retries",
       edits = { list_retry, "priority:9/' \"$mirrors\"\n            echo 'Acquire::Retries \"0\";' | sudo tee /etc/apt/apt.conf.d/99x\n            cat \"$mirrors\"\n            status=0\n            sudo timeout --kill-after=5 60 " } },
+    -- #1011's review: a write through sudo with its options, or under a
+    -- wrapper before sudo
+    { name = "a tee under sudo -E", expect = write .. "echo x | sudo -E tee", edits = instead("echo x | sudo -E tee /etc/apt/apt.conf.d/x") },
+    { name = "a cp under sudo -u root", expect = write .. "sudo -u root cp", edits = instead('sudo -u root cp "$RUNNER_TEMP/x" /etc/apt/apt.conf.d/') },
+    { name = "a tee under timeout and sudo", expect = write .. "echo x | timeout 45 sudo tee", edits = instead("echo x | timeout 45 sudo tee /etc/apt/x") },
+    -- an attached -o, and every Dir:: but Dir::State::status
+    { name = "an attached -oDir=", expect = "dir=: sudo apt-get", edits = on_install("-oDir=/tmp/apt") },
+    { name = "Dir::State::lists", expect = dir .. "sudo apt-get", edits = on_install("-o Dir::State::lists=/tmp/lists") },
+    { name = "Dir::State=", expect = dir .. "sudo apt-get", edits = on_install("-o Dir::State=/tmp/state") },
+    { name = "Dir::Bin::Methods", expect = dir .. "sudo apt-get", edits = on_install("-o Dir::Bin::Methods=/tmp/methods") },
+    { name = "an attached -oDir::State::lists", expect = dir .. "sudo apt-get", edits = on_install("-oDir::State::lists=/tmp/lists") },
+    -- the mirror list's name moved before the install's reorder
+    { name = "the mirror list's variable reassigned", expect = "an assignment of a path of apt's configuration: mirrors=/etc/apt/apt.conf.d/70debconf",
+      edits = { kept_line, kept_line .. "          mirrors=/etc/apt/apt.conf.d/70debconf\n" } },
+    -- apt-key writes /etc/apt/trusted.gpg; a cd into /etc/apt/ makes a write relative
+    { name = "apt-key", expect = "aptkey: curl", edits = instead("curl -fsSL https://example.com/k.asc | sudo apt-key add -") },
+    { name = "a cd into /etc/apt/", expect = "a change into apt's configuration folder: cd /etc/apt", edits = before_install("cd /etc/apt/apt.conf.d", "echo x > 99x", "cd -") },
+    { name = "a pushd into /etc/apt/", expect = "a change into apt's configuration folder: pushd /etc/apt", edits = before_install("pushd /etc/apt", "popd") },
     -- apt's nested syntax, in a file written anywhere
     { name = "a heredoc of nested settings on one line", expect = "apt's nested configuration (Dir {): Dir {",
       edits = before_install("cat > \"$RUNNER_TEMP/x\" <<'EOF'", 'Dir { Etc { SourceList "/tmp/x"; }; };', "EOF") },
