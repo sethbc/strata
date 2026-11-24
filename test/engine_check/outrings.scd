@@ -633,7 +633,10 @@ lateCopyChecks = {
     // where a queue of server work sized by a timing came apart from it
     // under load. Every other message passes. The second attempt's read is
     // answered by its own reply (Bus.get matches by index, so the first
-    // read's responder hears it too and goes), and its copy lands
+    // read's responder hears it too and goes), and the check's step before
+    // that copy's message waits late, so it is a late copy, and the third
+    // lands: one late copy, no line (a missing head counted as late would
+    // make two, and the line)
     holdHead = { arg body;
         var dispatcher = OSCFunc.defaultDispatcher, index = outRing.(2)[2].index, held, filter, keeper;
         // a responder of its own keeps the dispatcher registered while the
@@ -653,21 +656,21 @@ lateCopyChecks = {
     };
     (engine.freezeLeaveSeconds + 0.1).wait;
     lines.clear; attempts.clear;
-    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt) };
+    engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt); if (attempt == 2) { late.wait } };
     holdHead.({
         command.(\setGrainParam, 3, \freeze, 1.0);
-        h.waitFor({ freeze[\copied][3] }, 5);
+        h.waitFor({ freeze[\copied][3] }, late + 5);
     });
     engine.beforeCopyHook = nil;
     server.sync;
     check.(freeze[\copied][3] and: { attempts.notEmpty } and: { attempts.first >= 2 } and: { lines.isEmpty },
-        "outrings: a copy whose head the server did not give within 1 s (its queue held 1.5 s) is made again, and the missing head is no late copy: no late line (attempts with a head %, lines %)".format(
+        "outrings: a copy whose head the server did not give within 1 s (its reply held until the engine gave up) is made again, and the missing head is no late copy: no late line (attempts with a head %, lines %)".format(
             attempts, lines));
     command.(\setGrainParam, 3, \freeze, 0.0);
     // the bound spent on a missing head (a bound of 1): the hold is
     // abandoned with a line that says the server gave no head, not that a
     // copy was late. The held reply goes when the hold ends, so the timed
-    // out read's responder hears it and is freed (no check counts it)
+    // out read's responder hears it and is freed: none is left waiting
     (engine.freezeLeaveSeconds + 0.1).wait;
     lines.clear; attempts.clear;
     endedBefore = endedCount.(3);
@@ -685,6 +688,10 @@ lateCopyChecks = {
         and: { lines.first.contains("late").not } and: { endedReport.(3, endedBefore + 1) },
         "outrings: a hold whose one attempt got no head from the server is abandoned with a line that says so, and reported (attempts with a head %, [frozen, copied, freeze] %, lines %, ended % then %)".format(
             attempts, frozenState.(3), lines, endedBefore, endedCount.(3)));
+    values = AbstractResponderFunc.allFuncProxies.values.flat.select({ arg each;
+        each.isKindOf(OSCFunc) and: { each.path == '/c_set' } and: { each.argTemplate == [outRing.(2)[2].index] } }).size;
+    check.(values == 0,
+        "outrings: a held head reply goes when its hold ends, so no responder of the timed-out read is left waiting for it (/c_set responders on the bus left %)".format(values));
     // a switch during a late copy's third attempt cancels it: no copy, no
     // abandon (the one line is the late one), no freezeEnded report
     lines.clear; attempts.clear;
