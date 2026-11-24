@@ -799,7 +799,7 @@ var pollsMoved = {
     }).collect({ arg entry; entry[0].name })
 };
 
-// The bookkeeping sweep (#943, design section 6): six conditions on an
+// The bookkeeping sweep (#943, design section 6): seven conditions on an
 // engine's records, read after every area (finishArea) from sclang's own
 // state alone: no wait, no server round trip, no message. Each is [its
 // line, a function of the engine giving what breaks it (slots, effects,
@@ -859,6 +859,16 @@ var sweepConditions = [
         var takes = target.areaState[\record][\takes], announced = target.areaState[\buffers][\announced];
         slotsWhere.(target, { arg slot; takes[slot].isNil and: { target.slotRecording(slot).not }
             and: { announced[slot] != target.bufferStateSeconds(slot) } })
+    }],
+    // #1019: a start the server never confirmed is judged by its own timer
+    // startConfirmWait after it (watchStart), and every record forgets it
+    // then; one still unconfirmed past twice that is one no timer judged
+    // (the second startConfirmWait: the timer's wake and its sync, a
+    // backstop only)
+    ["a start unconfirmed past twice startConfirmWait", { arg target;
+        var now = Main.elapsedTime, limit = 2 * target.startConfirmWait;
+        var old = target.unconfirmedStarts.values.select({ arg since; (now - since) > limit });
+        if (old.isEmpty) { nil } { "% starts, the oldest % s".format(old.size, (now - old.minItem).round(0.01)) }
     }]
 ];
 // The sweep's lines for an engine, one a broken condition, in the order
@@ -930,6 +940,10 @@ var checkSweep = {
         announced[3] = length + 1 }, { announced[3] = length });
     shows.(nil, "an announced length apart from the slot's while its take is live", {
         announced[3] = length + 1; takes[3] = (stopping: false) }, { announced[3] = length; takes[3] = nil });
+    shows.(6, "a start unconfirmed for 10 s", {
+        engine.unconfirmedStarts[stand] = Main.elapsedTime - 10 }, { engine.unconfirmedStarts.removeAt(stand) });
+    shows.(nil, "a start unconfirmed for startConfirmWait", {
+        engine.unconfirmedStarts[stand] = Main.elapsedTime - engine.startConfirmWait }, { engine.unconfirmedStarts.removeAt(stand) });
 };
 
 // After each area: the engine's records sweep clean (sweepBookkeeping, on
@@ -1098,6 +1112,8 @@ runChecks = {
             commandTo: { arg self, target, name ... args; commandTo.(target, name, *args) },
             formatOf: { arg self, name; formatOf.(name) },
             awaitReply: { arg self, condition, timeout = 5; awaitReply.(condition, timeout) },
+            // the bookkeeping sweep's lines for an engine now (#943, #1019)
+            sweepLines: { arg self, target, area; sweepLines.(target, area) },
             waitFor: { arg self, condition, timeout = 3; waitFor.(condition, timeout) },
             // a load into a slot (its newest unless load names one) in
             // place on target (h.engine unless given), or a FAIL line
