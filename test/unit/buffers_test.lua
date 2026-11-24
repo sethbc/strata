@@ -3104,6 +3104,137 @@ test("a superseded load's late failure leaves the load that superseded it (#1035
   end
 end)
 
+-- #1040 (1): #1035's sequence, but a.wav's read fails more than
+-- confirm_seconds after its load: a 0 s report under the newest load's
+-- number has settled the given-back a.wav `unsettled` first. Its own late
+-- failure (emptied 1) still empties the slot, as it does before the settle
+test("a plain load forgotten and settled unsettled is undone by its own late failure (#1040)", function()
+  local subdir = "forgotten-settled-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  load_buffer(3, "/tmp/a.wav")
+  for number = 2, tracked + 1 do load_buffer(3, "/tmp/missing" .. number .. ".wav") end
+  for number = 2, tracked + 1 do context.polls.fire("bufferLoadFailed", load_failed_value(3, number)) end
+  assert_equal(#buffers[3].pending_loads, 0, "a.wav given back, its own load forgotten in flight")
+  context.set_time(util.time() + 2); state_report(context, 3, buffers[3].loads_sent, 0)
+  assert_equal(S.lib.buffers.status(3), "unsettled", "a 0 s past confirm_seconds settles a.wav unsettled")
+  assert_equal(buffers[3].confirm_since, nil); assert_equal(buffers[3].settled_empty, "load")
+  context.clock.run_for(0.11)
+  local path = context.data_dir .. "strata/buffers.data"
+  local restore, opened = watch_writes("buffers.data")
+  context.polls.fire("bufferLoadFailed", load_failed_value(3, 1, true))
+  assert_equal(S.lib.buffers.status(3), "empty", "a.wav's own failure empties the slot")
+  assert_equal(buffers[3].name, "empty"); assert_equal(buffers[3].path, nil)
+  assert_equal(buffers[3].settled_empty, false, "nothing left to adopt")
+  assert_equal(params:get("buf3_file"), _path.audio, "the file param is back at its starting folder")
+  assert_equal(S.lib.ui_flash.text("header"), "buf 3 load failed", "the header says so (#878)")
+  context.clock.run_for(0.11)
+  restore()
+  assert_true(#data_writes(opened) > 0, "buffers.data is written")
+  assert_equal(S.lib.data_files.read(path).paths[3], "", "and no longer names a.wav")
+  state_report(context, 3, buffers[3].loads_sent, 3)
+  assert_equal(S.lib.buffers.status(3), "empty", "a later report of audio adopts nothing")
+end)
+
+-- #1040 (2): a.wav (load m) pushed out of the tracked loads while the load
+-- sent right after it is still tracked, the oldest: a.wav's own failure
+-- (emptied 1) is spliced into that load's `previous`, as a tracked one's
+-- is, so once every later load has failed the slot is empty, never
+-- `unsettled` under a.wav's name. Two ways: four missing files sent
+-- inside one report's round trip (their rejections come after a.wav's
+-- failure); and, in the next test, a long checked file then four missing
+-- ones, all inside a.wav's fade and read (their rejections come first,
+-- giving the check back; then a.wav's failure; then the check's)
+test("a plain load pushed out while the next is still tracked is undone by its own failure (#1040)", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  load_buffer(1, "/tmp/a.wav")
+  for number = 2, tracked + 1 do load_buffer(1, "/tmp/missing" .. number .. ".wav") end
+  assert_equal(buffers[1].pending_loads[1].number, 2, "a.wav's load pushed out, the next one the oldest")
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 1, true))
+  assert_equal(buffers[1].path, "/tmp/missing" .. (tracked + 1) .. ".wav", "the newest load is still shown")
+  for number = 2, tracked + 1 do context.polls.fire("bufferLoadFailed", load_failed_value(1, number)) end
+  assert_equal(S.lib.buffers.status(1), "empty", "round trip: the slot is empty once every later load has failed")
+  assert_equal(buffers[1].path, nil); assert_equal(params:get("buf1_file"), _path.audio)
+  context.set_time(util.time() + 2); state_report(context, 1, buffers[1].loads_sent, 0)
+  assert_equal(S.lib.buffers.status(1), "empty", "round trip: a later 0 s settles nothing")
+end)
+
+test("a plain load pushed out by a checked load and four rejected ones is undone by its own failure (#1040)", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  context.audio.files["/tmp/long1.wav"] = {2, 48000 * 120, 48000}
+  load_buffer(2, "/tmp/a.wav")
+  load_buffer(2, "/tmp/long1.wav")
+  assert_equal(buffers[2].checking_load, 2, "long1 is checked")
+  for number = 3, tracked + 2 do load_buffer(2, "/tmp/missing" .. number .. ".wav") end
+  for number = 3, tracked + 2 do context.polls.fire("bufferLoadFailed", load_failed_value(2, number)) end
+  assert_equal(buffers[2].checking_load, 2, "the last rejection gives long1's check back")
+  assert_equal(#buffers[2].pending_loads, 1, "long1 alone is tracked: a.wav's load was pushed out")
+  context.polls.fire("bufferLoadFailed", load_failed_value(2, 1, true))
+  assert_equal(buffers[2].checking_load, 2, "a.wav's failure leaves long1's check running")
+  context.polls.fire("bufferLoadFailed", load_failed_value(2, 2))
+  assert_equal(S.lib.buffers.status(2), "empty", "checked: long1's failure gives back the empty slot")
+  assert_equal(buffers[2].path, nil); assert_equal(params:get("buf2_file"), _path.audio)
+  assert_equal(S.lib.record.clock_role(2), nil, "no notice left")
+end)
+
+-- #1040 (2), what the rule refuses. Its splice is exact only for the load
+-- sent right after the failed one, over the failed load's own state:
+-- (a) 6m's sequence: a.wav, b.wav (good, taking effect after a.wav's
+-- read failed, so a.wav's failure is emptied), then four missing files:
+-- b.wav's load is the one pushed out last, so a.wav's failure names a
+-- load two below the oldest tracked and changes nothing; b.wav comes back
+-- and its own audio settles it. (b) a replace take recorded and stopped
+-- between a.wav and the next load (the engine had both after a.wav's
+-- read failed): that load replaced the take, which can still complete
+-- (#890), so its `previous` stays the adoptable empty slot. (c) a.wav's
+-- failure not emptied (b.wav took effect first): nothing changes, no flash
+test("a forgotten load's failure is spliced only into the load sent right after it, over its own state (#1040)", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  -- (a)
+  load_buffer(1, "/tmp/a.wav"); load_buffer(1, "/tmp/b.wav")
+  for number = 3, tracked + 2 do load_buffer(1, "/tmp/missing" .. number .. ".wav") end
+  assert_equal(buffers[1].pending_loads[1].number, 3, "a.wav's and b.wav's loads pushed out")
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 1, true))
+  for number = 3, tracked + 2 do context.polls.fire("bufferLoadFailed", load_failed_value(1, number)) end
+  assert_equal(S.lib.buffers.status(1), "loading", "(a): b.wav comes back, awaiting its read")
+  assert_equal(buffers[1].path, "/tmp/b.wav", "(a)")
+  state_report(context, 1, buffers[1].loads_sent, 3)
+  assert_equal(S.lib.buffers.status(1), "loaded", "(a): b.wav's own audio settles it")
+  -- (b)
+  load_buffer(2, "/tmp/a.wav")
+  record_buffer(2); record_buffer(2)                                  -- a replace take, stopped: finishing
+  assert_true(buffers[2].finishing, "(b): the take is finishing")
+  load_buffer(2, "/tmp/missing.wav")
+  assert_equal(buffers[2].pending_loads[1].number, 2, "(b): the take emptied the list; the next load is the oldest")
+  context.polls.fire("bufferLoadFailed", load_failed_value(2, 1, true))
+  context.polls.fire("bufferLoadFailed", load_failed_value(2, 2))
+  assert_equal(S.lib.buffers.status(2), "empty", "(b): the missing file's failure gives back the take's empty slot")
+  assert_equal(buffers[2].settled_empty, "take", "(b): adoptable")
+  state_report(context, 2, buffers[2].loads_sent, 2)
+  assert_equal(S.lib.buffers.status(2), "loaded", "(b): the take completed: adopted")
+  assert_equal(buffers[2].name, "take 2", "(b)")
+  -- (c)
+  load_buffer(3, "/tmp/a.wav"); load_buffer(3, "/tmp/b.wav")
+  for number = 3, tracked + 1 do load_buffer(3, "/tmp/missing" .. number .. ".wav") end
+  for number = 3, tracked + 1 do context.polls.fire("bufferLoadFailed", load_failed_value(3, number)) end
+  assert_equal(buffers[3].pending_loads[1].number, 2, "(c): b.wav's load is the oldest tracked")
+  context.set_time(util.time() + 2)   -- the failures' flashes have lapsed
+  context.polls.fire("bufferLoadFailed", load_failed_value(3, 1, false))
+  assert_equal(S.lib.ui_flash.text("header"), nil, "(c): no flash")
+  assert_equal(buffers[3].pending_loads[1].previous.path, "/tmp/a.wav", "(c): b.wav's load still replaced a.wav")
+  state_report(context, 3, buffers[3].loads_sent, 3)
+  assert_equal(S.lib.buffers.status(3), "loaded", "(c): b.wav's own audio settles it")
+end)
+
 -- #1016: a synced replace take armed over a.wav; long1.wav (checked)
 -- cancels it at its command; bad.wav fails at once, giving long1's check
 -- back; then long1's check fails. The engine's rejection re-reports the

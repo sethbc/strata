@@ -921,7 +921,9 @@ return function(S)
   -- it since (#1035). The failed load is undone only while the slot still
   -- tracks it (pending_loads), or when it is a restore's own that the bound
   -- pushed out (#980), or, emptied, when the slot tracks no load and awaits
-  -- a plain load's read (#1035: the engine's slot is then empty): the
+  -- a plain load's read or settled it unsettled (#1035, #1040: the
+  -- engine's slot is then empty), or when it is the load just before the
+  -- oldest tracked one, which was sent over its state (#1040): the
   -- newest load gives the slot the state the failed load left (the state it
   -- replaced: name, path, the file param, settled or not, from
   -- buffer_state_before_load; or an empty slot), so the bad path is never
@@ -956,23 +958,36 @@ return function(S)
     -- the slot) is the only one whose outcome is still to come, so this is
     -- its failure (a repeated report of a later one's names another
     -- number), and a restore loads into the empty slot of a fresh script.
-    -- (#1035) A plain load's, awaiting its read, on an emptied report:
-    -- the engine's slot is empty with no load applied since (every later
-    -- load was rejected), whichever load the report names
+    -- (#1035) A plain load's, awaiting its read or (#1040) settled
+    -- `unsettled` since, on an emptied report: the engine's slot is empty
+    -- with no load applied since (every later load was rejected),
+    -- whichever load the report names
     local forgotten_restore = buffer.restoring and load_number == 1
-    local forgotten_load = emptied and buffer.confirm_since ~= nil and not buffer.restoring
-      and buffer.checking_from == nil and not buffer.recording and not buffer.finishing
-    local failed, left
+    local forgotten_load = emptied and (buffer.confirm_since ~= nil or buffer.settled_empty == "load")
+      and not buffer.restoring and buffer.checking_from == nil and not buffer.recording and not buffer.finishing
+    -- (#1040) A failure with no entry, emptied, of the load just before
+    -- the oldest tracked one, which was sent over that load's own state
+    -- (a load awaiting its outcome: a clear or a recording between leaves
+    -- no confirm_since, and a take may still complete, #890): spliced in
+    -- as a tracked failure is. The engine's slot was empty when that next
+    -- load reached it, and nothing between changed it
+    local next_load = pending[1]
+    local below_oldest = not found and emptied and next_load ~= nil and next_load.number == load_number + 1
+      and next_load.previous.confirm_since ~= nil
+    local failed, left, heir
     if found then
       failed = table.remove(pending, found)
       left = emptied and empty_buffer_state(false) or resolve_previous(slot, failed.previous)
+      heir = pending[found]
+    elseif below_oldest then
+      failed, left, heir = {path = next_load.previous.path}, empty_buffer_state(false), next_load
     elseif #pending == 0 and (forgotten_restore or forgotten_load) then
       failed, left = {path = buffer.path}, empty_buffer_state(false)
     else
       return
     end
-    if found and found <= #pending then
-      pending[found].previous = left
+    if heir then
+      heir.previous = left
     else
       -- buffers_restored needs no undo: a restore loads into a slot that is empty at start, so no report of old audio counted it
       apply_buffer_state(slot, left)

@@ -31,8 +31,8 @@ end
 local function record_report(context, state)
   context.polls.fire("recordState", ((buffer().records_sent * 4) + state) * num_buffers() + SLOT - 1)
 end
-local function load_failed(context, load_number)
-  context.polls.fire("bufferLoadFailed", (load_number * 2) * num_buffers() + SLOT - 1)
+local function load_failed(context, load_number, emptied)
+  context.polls.fire("bufferLoadFailed", (load_number * 2 + (emptied and 1 or 0)) * num_buffers() + SLOT - 1)
 end
 local function later(context) context.set_time(util.time() + LATER) end
 
@@ -119,6 +119,19 @@ local STATES = {
   ["loading"] = function(context)
     prelude(context)
     load_buffer(SLOT, "/tmp/a.wav"); load_buffer(SLOT, "/tmp/b.wav")
+  end,
+  -- a.wav, then four missing files (the fourth pushes a.wav's load out of
+  -- the list), rejected in the order sent: the last one's undo gives
+  -- a.wav back, awaiting its read, with no load tracked. The rejections
+  -- changed nothing, so a.wav's own failure, if its read fails, is
+  -- emptied (#1035)
+  ["loading, no load tracked"] = function(context)
+    prelude(context)
+    load_buffer(SLOT, "/tmp/a.wav")
+    local first = buffer().loads_sent + 1
+    for number = first, first + 3 do load_buffer(SLOT, "/tmp/missing" .. number .. ".wav") end
+    for number = first, first + 3 do load_failed(context, number) end
+    context.forgotten_load, context.forgotten_emptied = first - 1, true
   end,
   ["loading, zero awaited"] = function(context)
     prelude(context); load_file(context)
@@ -249,8 +262,11 @@ local EVENTS = {
     load_failed(context, pending[#pending - 1].number)
   end,
   -- a load the slot does not track: the prelude's, forgotten in flight,
-  -- or the one a state's own way in forgot
-  ["bufferLoadFailed untracked"] = function(context) load_failed(context, context.forgotten_load or LOST_LOAD) end,
+  -- or the one a state's own way in forgot, emptied where that way in
+  -- leaves the engine no other answer
+  ["bufferLoadFailed untracked"] = function(context)
+    load_failed(context, context.forgotten_load or LOST_LOAD, context.forgotten_emptied)
+  end,
   ["takeWriteFailed"] = function(context)
     context.polls.fire("takeWriteFailed", buffer().records_sent * num_buffers() + SLOT - 1)
   end,
@@ -270,8 +286,8 @@ local function state_of()
     if slot.settled_empty == "take" then return "empty, adoptable" end
     return "empty"
   elseif status == "loading" then
-    -- a restore that tracks no load: its own was forgotten, or a recording
-    -- emptied the list before what it replaced came back
+    -- a load that tracks no load: its own was forgotten, or (a restore)
+    -- a recording emptied the list before what it replaced came back
     local unlisted = #slot.pending_loads == 0 and ", no load tracked" or ""
     if slot.checking_from ~= nil then
       -- a check over an empty slot waits for a length other than 0 s; a
@@ -293,7 +309,7 @@ local function state_of()
       local known = (unlisted ~= "" and slot.seconds > 0) and ", audio known" or ""
       return "loading, restoring" .. unlisted .. known
     end
-    return slot.awaiting_zero and "loading, zero awaited" or "loading"
+    return slot.awaiting_zero and "loading, zero awaited" or ("loading" .. unlisted)
   elseif status == "armed" then
     if take.kind == "playable" then return stopped and "armed, playable, stopped" or "armed, playable" end
     -- a replace take's slot is prepared once the engine has emptied it
@@ -395,8 +411,35 @@ local ROWS = {
   {"loading", "another load's number", "loading"},
   {"loading", "bufferLoadFailed newest", "loading", check = named("a.wav")},
   {"loading", "bufferLoadFailed older", "loading", check = named("b.wav")},
-  {"loading", "bufferLoadFailed untracked", "loading"},
+  -- emptied too: lost.wav is the load before a.wav, the oldest tracked,
+  -- but a.wav was sent after the clear, not over lost.wav's state (#1040)
+  {"loading", "bufferLoadFailed untracked", "loading", check = function(context)
+    load_failed(context, LOST_LOAD, true)
+    assert_equal(state_of(), "loading", "emptied: the state"); named("b.wav")()
+    assert_equal(buffer().pending_loads[1].previous.confirm_since, nil, "a.wav's load replaced the cleared slot")
+    assert_equal(S_().lib.ui_flash.text("header"), nil, "no flash")
+  end},
   {"loading", "takeWriteFailed", "loading"},
+
+  -- a.wav given back by the last of four rejected loads; its own load forgotten
+  {"loading, no load tracked", "load_buffer", "loading"},
+  {"loading, no load tracked", "clear_buffer", "empty"},
+  {"loading, no load tracked", "record_buffer", "recording"},
+  {"loading, no load tracked", "bufferState audio", "loaded", check = named("a.wav")},
+  -- #1040: settled unsettled, a.wav's own emptied failure still empties it
+  {"loading, no load tracked", "bufferState 0 s", "loading, no load tracked", check = function(context)
+    ZERO_SETTLES(context)
+    load_failed(context, context.forgotten_load, true)
+    assert_equal(state_of(), "empty", "then a.wav's emptied failure"); assert_equal(buffer().path, nil, "no path")
+  end},
+  {"loading, no load tracked", "another load's number", "loading, no load tracked"},
+  -- #1035: a.wav's own failure, emptied: the engine's slot is empty
+  {"loading, no load tracked", "bufferLoadFailed untracked", "empty", check = function()
+    assert_equal(buffer().path, nil, "no path"); assert_equal(buffer().confirm_since, nil, "awaits nothing")
+    assert_equal(params:get("buf" .. SLOT .. "_file"), _path.audio, "the file param at its folder")
+    no_clock(); unbound()
+  end},
+  {"loading, no load tracked", "takeWriteFailed", "loading, no load tracked"},
 
   {"loading, zero awaited", "load_buffer", "loading, zero awaited"},
   {"loading, zero awaited", "clear_buffer", "empty"},
@@ -724,7 +767,7 @@ local ROWS = {
 }
 -- the reports of a take a load, a clear or a settle left, in the states
 -- that hold no take of their own
-for _, state in ipairs({"empty", "loading", "loading, zero awaited", "loading, checking",
+for _, state in ipairs({"empty", "loading", "loading, no load tracked", "loading, zero awaited", "loading, checking",
     "loading, checking, empty before", "loading, checking, given back", "loading, checking, empty before, given back",
     "loading, restoring, no load tracked, audio known", "loaded", "unsettled"}) do
   late_reports(ROWS, state)
@@ -834,10 +877,11 @@ impossible({"empty", "empty, kept state awaited", "empty, adoptable"},
   "no tracked load's failure can still come: a clear, a recording and a take's end empty the list; a failure"
   .. " that empties the slot comes after the failures of the loads before it (the server reads a slot's files"
   .. " in order), and one that gives back an empty slot only once every later load has failed")
-impossible({"missing", "loading, restoring, no load tracked", "loading, restoring, no load tracked, audio known"},
+impossible({"missing", "loading, no load tracked", "loading, restoring, no load tracked",
+    "loading, restoring, no load tracked, audio known"},
   {"bufferLoadFailed newest", "bufferLoadFailed older"},
   "no load is tracked: none at the start, and a failed load gives back the missing path only once every"
-  .. " later load has failed (the two no-load states are named for it)")
+  .. " later load has failed (the three no-load states are named for it)")
 impossible({"loading, restoring, no load tracked, audio known"}, {"bufferLoadFailed untracked"},
   "no load the slot sent can still fail untracked: the restore's own took effect (the known length is its"
   .. " audio, reported while the take was armed), the recording emptied the list, and every load since has"
